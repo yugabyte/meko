@@ -2,68 +2,63 @@
 
 Part of the [AgentK design](../design.md).
 
-The terminal is a shell running as your Unix user, so the web login protects the same thing as
-your SSH key. Each install serves exactly one owner. Sharing the app means other people install
-their own copy.
+The terminal is a shell running as your Unix user, so whoever can open AgentK can do what your SSH
+key can. Each install serves exactly one owner. Sharing the app means other people install their
+own copy.
 
-- **Local or remote access.** The installer asks which you want. *Local* listens on 127.0.0.1
-  only, over plain HTTP with no login: a request needs no cookie when the server listens only on
-  loopback, the connection comes from loopback, and its `Host` header is `localhost`, `127.0.0.1`
-  or `[::1]` (so a DNS-rebound page, which sends its own host name, gets nothing), with no
-  `Forwarded`/`X-Forwarded-*`/`X-Real-IP` header from a proxy, and the browser doesn't mark it as
-  sent by another site (`Sec-Fetch-Site` other than `same-origin` or `none`, or an `Origin` that
-  isn't this one). That last check does the SameSite=Strict cookie's job: an `<img>` on another
-  site gets a 401, not an answer it could time. An existing login is kept for a later switch to
-  remote; the server's startup log says it isn't needed meanwhile. *Remote*
-  listens on every address (`0.0.0.0`), over HTTPS with a login, and then the login is required
-  even from localhost, so an SSH tunnel or a reverse proxy on the host can't skip it. The default
-  is remote over SSH or on Linux with no display, and local otherwise. Local access trusts
-  everything that can connect to 127.0.0.1, every user of the computer and any reverse proxy on it
-  included: on a shared host, or behind a proxy, choose remote.
-- **First run.** With remote access, the installer prints a one-time setup link:
-  `https://host:7777/setup?token=…`. You open it, choose a username (up to 64 letters, digits,
-  `.`, `@`, `-` or `_`: most email addresses work, but not ones with `+`) and password, and can
-  optionally enrol TOTP. The token stops working after it is used. With local access it prints
-  the address instead; `agentk setup-link` still makes a login for a later switch to remote.
-- **Forgot password.** The sign-in screen's **Forgot password?** says how to get back in: run
-  `agentk setup-link` on the host and open the link it prints. There is no email or
-  self-service reset in the browser, on purpose: the one login guards a shell on the host, so a
-  reset needs someone who can already run commands there. While a link is outstanding the setup
-  screen shows (`AuthStatus.reset` says it replaces an existing login, so it reads **Reset your
-  login**); using it replaces the username and password, turns off TOTP and signs out every
-  browser. A valid link works even while sign-in is rate limited, so a locked-out owner can use
-  it at once. A browser that is still signed in keeps working until then and doesn't see the setup
-  screen. Projects and sessions are untouched.
-- **Sessions.** Passwords are hashed with scrypt. After login you get an `HttpOnly`,
-  `SameSite=Strict` cookie (`Secure` over HTTPS) that lasts 14 days, renewed as you use the app.
-  Changing the password signs out every other browser. Access checks key on the route a request
-  matched, so an encoded path (`/%61pi/…`) gets the same checks as `/api/…`. The API only takes
-  JSON bodies, so a plain HTML form can't post to it; the routes that take a file (pasted images and files,
-  knowledge-base uploads) parse `image/*` or `application/octet-stream`, types a form can't send,
-  each only in its own scope. Every WebSocket upgrade checks the cookie (or
-  local access) and refuses a cross-origin `Origin` header; open sockets close (code 4401) when their login is signed
-  out, and the server pings them every 30 seconds to drop ones whose network went away. The page
-  checks its events socket too, since a phone often never hears that the server dropped it: after
-  30 seconds without a message, and whenever the page is shown again or comes back online, it sends
-  a `ping`, and opens a new socket (which starts with the current state) if no `pong` comes back
-  within 5 seconds, or at once if the socket is already closing. A new socket gets 10 seconds to
+- **Meko is the front door.** AgentK doesn't listen on the network and has no login of its own.
+  Its server listens only on a unix socket (`Paths.webSock`, `web.sock` in its home, or in its
+  private socket folder in the temp dir when that path is too long), in a folder only you can open,
+  and lets in every request that arrives there. The Meko on this computer serves it to browsers at
+  `/ext/agentk/` on its web listener (`:7777`), with the path stripped, after its own sign-in
+  ([Meko's web.md](../../../../backend/docs/web.md)):
+  - **Local access** (Meko's `[web] access = "local"`): Meko listens on 127.0.0.1 over plain HTTP,
+    and a request from this computer needs no login: a loopback peer, a `Host` of `localhost`,
+    `127.0.0.1` or `[::1]` (so a DNS-rebound page, which sends its own host name, gets nothing), no
+    `Forwarded`/`X-Forwarded-*`/`X-Real-IP` header from a proxy, and nothing saying another site sent
+    it (`Sec-Fetch-Site` other than `same-origin` or `none`, or an `Origin` that isn't this one).
+    It trusts everything that can connect to 127.0.0.1, every user of the computer and any tunnel or
+    proxy on it included: on a shared host, choose remote.
+  - **Remote access** (`"remote"`): Meko listens on every address over HTTPS, with its own
+    certificate or a self-signed one (`meko status` shows its fingerprint), and every browser signs
+    in with the owner's username and password and, if turned on, a code from an authenticator app.
+    The session is Meko's `meko_session` cookie: HttpOnly, SameSite=Strict, Secure, 14 days,
+    renewed as you use the app. `meko setup_link` on the host prints a one-time link that creates
+    the login, or replaces a lost one (turning the authenticator off and signing every browser out):
+    there's no email or self-service reset, on purpose, since a reset needs someone who can already
+    run commands on the host. Failed sign-ins are rate-limited by Meko (5 per 15 minutes from one
+    address or IPv6 /64, 50 across all clients), and a code works once. Signing out, changing the
+    password or a new login closes the terminals and event sockets the session opened.
+- **What reaches AgentK.** Meko passes the browser's `Host` and `Origin` on as they are, drops its
+  cookie, and adds no forwarding headers. AgentK refuses a write (any `/api/*` request but GET) or a
+  WebSocket upgrade whose `Origin` isn't the page's own (403, or close code 1008), so another site's
+  page can't act through a browser Meko let in. The API only takes JSON bodies, so a plain HTML form
+  can't post to it; the routes that take a file (pasted images and files, knowledge-base uploads)
+  parse `image/*` or `application/octet-stream`, types a form can't send, each only in its own
+  scope. The server pings every socket every 30 seconds to drop ones whose network went away. The
+  page checks its events socket too, since a phone often never hears that the server dropped it:
+  after 30 seconds without a message, and whenever the page is shown again or comes back online, it
+  sends a `ping`, and opens a new socket (which starts with the current state) if no `pong` comes
+  back within 5 seconds, or at once if the socket is already closing. A new socket gets 10 seconds to
   open and 30 more for its first state. Each of these deadlines that passes doubles the next ones
-  (up to 8 times), so a slow link whose snapshots take longer still gets through; a quick answer
-  to a ping sets them back (`src/web/events.ts`). A browser
-  that falls behind doesn't make the server buffer without limit: its terminal stops reading from
-  the session host until it catches up (the host skips a viewer that stops reading and sends it the
-  screen afresh once it does; Claude never waits on a viewer), and it skips state snapshots
-  until it has drained, then gets the current one.
-- **TLS is mandatory.** Any address other than localhost requires HTTPS. You can point it at your
-  own certificate from the corp CA, or let it generate a self-signed pair; `agentk status`
-  shows its fingerprint so you can trust it once on your laptop. The self-signed pair lasts 825 days and is made again
-  at startup once it's within 30 days of expiring (trust the new fingerprint then). No HSTS header
-  is sent: it would apply to every port of the host, including your other dev servers.
-- **Guard rails.** Failed logins are rate-limited: 5 per 15 minutes from one address (one /64 for
-  IPv6, since a client usually holds a whole one), and 50 across all clients, after which everyone
-  waits (`agentk setup-link` on the host still gets you in). A wrong username takes as long
-  to refuse as a wrong password. A TOTP code works once. There is an
-  audit log of logins, failed logins, account changes and Meko settings changes. The Meko key is
+  (up to 8 times), so a slow link whose snapshots take longer still gets through; a quick answer to
+  a ping sets them back (`src/web/events.ts`). A browser that falls behind doesn't make the server
+  buffer without limit: its terminal stops reading from the session host until it catches up (the
+  host skips a viewer that stops reading and sends it the screen afresh once it does; Claude never
+  waits on a viewer), and it skips state snapshots until it has drained, then gets the current one.
+  When Meko says a request isn't signed in (a 401, or a socket it refused), the page goes to Meko's
+  sign-in with remote access, and keeps retrying with local access.
+- **The handoff.** At each of its starts Meko runs `agentk _handoff --json` (`handoff.ts`), which
+  says where the socket is and, for an install that served browsers itself (on port 7777, over
+  HTTPS with its own login), its old `[server]` bind and port, its certificate (self-signed in
+  `certs/`, or `[tls]`'s) and its login (`owner` in `state.db`). Meko takes those over once, copying
+  what it doesn't have yet, so the same URL, certificate fingerprint, password and authenticator
+  keep working. Nothing else in AgentK reads them any more. `state.db` is read read-only, the one
+  read outside the server's lease, and only on the host whose server holds it: `_handoff` refuses
+  while the home's server runs on another host, whose socket this host can't reach anyway. On
+  shutdown the server removes `web.sock` only while it's still the file it bound (`socketId`), as it
+  does the hook socket: after a lost lease another server may have bound its own.
+- **Guard rails.** There is an audit log of Meko settings changes. The Meko key is
   write-only from the browser's side: no response carries it, and a saved key goes only where it
   already goes (the MCP server and API URL in use) or to Meko Cloud. A change on the Meko tab that
   would send it to another server (the MCP, web app or API URL) is refused until the key is typed
@@ -71,8 +66,8 @@ their own copy.
   server and read the key off it. The Meko on this computer's client token, which AgentK uses when
   no key is set, is read from Meko (`meko token --json`), held in memory, never written to
   `config.toml`, and sent only to that Meko: no configured MCP URL takes it, and a web app or API URL
-  from config or the environment is used with it only on that Meko's own origin. Hooks use the local unix socket with a per-session
-  token, never the network port. The Design-stage edit guard asks the server over the same socket;
+  from config or the environment is used with it only on that Meko's own origin. Hooks use their
+  own unix socket with a per-session token, never the web socket. The Design-stage edit guard asks the server over the same socket;
   if it gets no answer it lets the edit go ahead, so Claude is never stuck.
 - **The page's policy.** Every app page carries a Content-Security-Policy (`appCsp()` in
   `server.ts`) that keeps out images from anywhere but the server, `data:`, `blob:` and GitHub (a
@@ -82,7 +77,8 @@ their own copy.
   takes the page's policy on top of its own, and Artifacts run inline scripts and scripts from two
   CDNs (`design-frame.ts`). Markdown is sanitized (DOMPurify) and the frame runs without
   `allow-same-origin`, so scripts are kept out by those instead.
-- **Files on disk.** `state.db` (the password hash, the TOTP secret, hook tokens) is owner-only
+- **Files on disk.** `state.db` (hook tokens, and an older install's password hash and TOTP secret,
+  kept for Meko's handoff) is owner-only
   (0600) whatever folder it's in, and so are its `-wal` and `-shm` files, which SQLite gives the
   database's mode, and so are the snapshots the updater takes before an update
   (`state.db.bak-<version>`); ones made before this are fixed when the server opens the database.
@@ -115,7 +111,7 @@ answers Claude Code's folder-trust question for worktrees):
   session's head has been checked, it's treated as untrusted here.
 - OpenCode starts with `OPENCODE_DISABLE_PROJECT_CONFIG=1`, which leaves out the worktree's
   `opencode.json(c)` and `.opencode/` folders: its plugins (code OpenCode would run), agents,
-  commands and MCP servers (checked against OpenCode 1.19.4's source). AgentK's own plugin and
+  commands and MCP servers (checked against OpenCode 1.19.4's and 2.1.4's source). AgentK's own plugin and
   config still load, from the session's environment.
 - Kiro has no way to leave a workspace's config out, and uses a workspace agent named `agentk`
   over AgentK's (checked with kiro-cli 2.32). An untrusted session on Kiro doesn't start while the

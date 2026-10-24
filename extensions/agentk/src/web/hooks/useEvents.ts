@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AppState } from '../../shared/types';
-import { api, checkLogin, wsUrl, WS_UNAUTHORIZED } from '../api';
+import { api, wsUrl } from '../api';
+import { checkSignIn, WS_UNAUTHORIZED } from '../signin';
 import { EventsConnection, type Conn } from '../events';
 import { knowledgeNotice } from '../knowledge';
 import { peekTerminal } from '../terminals';
@@ -45,7 +46,7 @@ export function useEvents(
         if (!stopped) setState((cur) => cur ?? s);
       })
       .catch(() => {
-        /* the socket will deliver state, or the 401 handler takes over */
+        /* the socket will deliver state, or checkSignIn takes over on a 401 */
       });
 
     const events = new EventsConnection({
@@ -58,7 +59,7 @@ export function useEvents(
         // How a file added to the knowledge base indexed: said in its session's terminal, if this page has it.
         else peekTerminal(ev.sessionId)?.showNotice(knowledgeNotice(ev), 8000);
       },
-      checkLogin,
+      checkSignIn,
       unauthorized: WS_UNAUTHORIZED,
     });
     events.start();

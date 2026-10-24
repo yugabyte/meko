@@ -24,7 +24,7 @@ reports.
   hosts sharing a home count once), the version and update channel, platform, CPU, Node and
   Claude Code versions (`claude --version`; `''` when it can't be read; Kiro CLI's too, as `kiro`, while Kiro is on, and OpenCode's, as `opencode`, while it's on; our version or
   Node's, when the collector wouldn't keep it, such as a `git describe` build or a Node nightly, is
-  cut to its leading numbers, else `0.0.0`), local or remote access, the service manager, whether there's a Meko (and where its key comes from:
+  cut to its leading numbers, else `0.0.0`), `access: meko` (the Meko on this computer serves AgentK; older versions sent `local` or `remote`), the service manager, whether there's a Meko (and where its key comes from:
   `config`, `env`, `claude`, `local` for the Meko on this computer, or `none`; and the
   sharing: `api` when AgentK can share through Meko's API, `none` when there's no Meko or its API URL
   isn't known), and the UTC day of the first

@@ -1,5 +1,5 @@
 // Meko's providers for mem0: a vector store and a history store over the Go server's store
-// API, the embedder, and an LLM that refuses (no extraction in this milestone). mem0 builds its
+// API, the embedder, and an LLM that refuses (extraction isn't built yet). mem0 builds its
 // providers by name in fixed switch statements, so register() wraps the exported factories'
 // create methods; mem0 looks them up at call time, so this needs no fork or patch.
 import {
@@ -176,7 +176,7 @@ export class MekoHistory {
 
   close(): void {}
 
-  // Extraction reads earlier turns from the Go server's messages; it comes in a later milestone.
+  // Extraction will read earlier turns from the Go server's messages; it isn't built yet.
   async saveMessages(): Promise<void> {}
 
   async getLastMessages(): Promise<Array<{ role: string; content: string; createdAt: string }>> {

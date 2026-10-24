@@ -94,7 +94,7 @@ const at = (iso: string) => Date.parse(iso);
 
 const INSTALL: CallHomeInstall = {
   version: '0.20260928.0', channel: 'stable', platform: 'linux', arch: 'x64', node: '22.18.0', claudeCode: '2.4.1',
-  access: 'remote', service: 'none', meko: { enabled: true, keySource: 'claude', sharing: 'api' }, firstDay: '2026-07-02',
+  access: 'meko', service: 'none', meko: { enabled: true, keySource: 'claude', sharing: 'api' }, firstDay: '2026-07-02',
 };
 const INSTALL_ID = '5f0c7a8e-3b1d-4c2e-9f6a-1b2c3d4e5f60';
 
@@ -561,9 +561,8 @@ describe('what the report says about the install', () => {
     return a;
   };
 
-  it("reads the agents' versions, and Meko and access from the config", async () => {
+  it("reads the agents' versions and Meko from the config, and says Meko serves AgentK", async () => {
     const cfg = structuredClone(DEFAULT_CONFIG);
-    cfg.server.bind = '127.0.0.1';
     cfg.meko.apiKey = 'key';
     cfg.update.channel = 'prerelease';
     const facts = await installFacts({
@@ -571,7 +570,7 @@ describe('what the report says about the install', () => {
     });
     expect(facts).toMatchObject({
       version: '0.20260928.0', channel: 'prerelease', platform: process.platform, arch: process.arch, node: process.versions.node,
-      claudeCode: '2.4.1', opencode: '1.19.4', access: 'local', meko: { enabled: true, keySource: 'config', sharing: 'api' }, firstDay: '2026-09-28',
+      claudeCode: '2.4.1', opencode: '1.19.4', access: 'meko', meko: { enabled: true, keySource: 'config', sharing: 'api' }, firstDay: '2026-09-28',
     });
     // A self-hosted Meko with no web app or API URL set: AgentK can't share.
     cfg.meko.url = 'https://meko.example.com/mcp';
@@ -598,7 +597,7 @@ describe('what the report says about the install', () => {
     const facts = await installFacts({ config: cfg, version: 'not a version!', firstDay: '2026-09-28', probe: probe({ claude: 'no digits here' }) });
     expect(facts).not.toHaveProperty('tmux');
     expect(facts).not.toHaveProperty('opencode');
-    expect(facts).toMatchObject({ version: '0.0.0', claudeCode: '', access: 'remote', meko: { enabled: false, keySource: 'none', sharing: 'none' } });
+    expect(facts).toMatchObject({ version: '0.0.0', claudeCode: '', meko: { enabled: false, keySource: 'none', sharing: 'none' } });
   });
 
   it('reads the collector URL a release build carries', () => {

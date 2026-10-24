@@ -118,11 +118,12 @@ stateDiagram-v2
 - **Stage prompts.** Each stage's instructions to Claude come from a template. The defaults are
   built in (`src/server/prompts.ts`), and a repo can override any of them (a stage, or `explore`, `approved`,
   `design-answers`, `approved-answers`, `review`, `review-people`, `review-held`, `conflicts`, `ci`, `continue`, `comments`, `moved`, `move-design`, `move-code`, `instructions`, `attached`,
-  `review-pr`, `review-pr-update`, `review-pr-design`, `review-pr-comments`, `learn`) with `.agent-k/stages/<name>.md`.
+  `review-pr`, `review-pr-update`, `review-pr-design`, `review-pr-comments`, `learn`, `seed`) with `.agent-k/stages/<name>.md`.
   A session on a public repo's PR head (a review, or a task on someone's PR) doesn't use them: the PR's author could have
   written them (see [Code from public repos](security.md#code-from-public-repos)).
   Lines AgentK adds in code (the Meko recall steps, the saving rule appended to `explore` and
-  `learn`, and the design's lines: see [The design after approval](#the-design-after-approval) and
+  `learn`, the seeding rule appended to `seed` (a learn session's, see
+  [Learn sessions](recall-and-learn.md#learn-sessions)), and the design's lines: see [The design after approval](#the-design-after-approval) and
   [Reviewing a PR](review-pr.md)) are added to a repo's own prompt too. This lets a team
   change how designs are written or PRs described without changing AgentK. Review comments
   from the Changes panel go out through the `comments` template (`{{count}}` and `{{comments}}`),

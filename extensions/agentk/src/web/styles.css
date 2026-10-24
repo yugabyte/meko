@@ -117,6 +117,13 @@ body,
   height: 100%;
   margin: 0;
 }
+/* iOS enlarges small text in wide blocks (a diff's long rows) when it lays them out again, such as
+   a Changes file scrolled back into view (content-visibility). The layout is already phone-sized.
+   100%, not none, so Safari's own text size setting still works. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
 body {
   background: var(--bg);
   color: var(--ink);
@@ -392,9 +399,19 @@ textarea.input {
   gap: 6px;
 }
 /* Where a new session starts: pills like the stage bar's steps, joined by lines (dotted from
-   Explore), then "or" and Review a PR. One row on a desktop, one column on a phone. */
+   Explore), then "or" and Review a PR, and "or" and Learn the project when it's offered. One row on
+   a desktop, where "or Learn the project" wraps to a second row as one when the row runs out of
+   room; one column on a phone. */
 .starts {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  row-gap: 8px;
+}
+/* "or Learn the project", kept together when it wraps to the next row. */
+.start-alt {
+  flex: none;
+  display: inline-flex;
   align-items: center;
 }
 .start {
@@ -1111,7 +1128,7 @@ textarea.input {
   font-size: 10.5px;
   padding-left: 54px;
 }
-/* Kiro's own bonus and overage lines, quoted under what AgentK read from them. */
+/* Kiro's own bonus and overage lines, quoted under what AgentK read unless that already states the whole line. */
 .lim-said {
   font-family: var(--mono);
   font-size: 10.5px;
@@ -2334,6 +2351,10 @@ div[id^='dak-mermaid-'] .label {
 .dialog.wide {
   width: min(780px, 100%);
 }
+/* Focused itself only to keep focus off what's behind it (Dialog), so no ring. */
+.dialog:focus-visible {
+  outline: none;
+}
 .dialog-hd {
   display: flex;
   align-items: center;
@@ -3334,88 +3355,6 @@ div[id^='dak-mermaid-'] .label {
 .kv dd {
   margin: 0;
 }
-.totp-enroll {
-  display: flex;
-  gap: 16px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-.qr {
-  width: 168px;
-  height: 168px;
-  background: #fff;
-  padding: 8px;
-  border-radius: 8px;
-}
-.qr svg {
-  width: 100%;
-  height: 100%;
-}
-.secret {
-  font-size: 13px;
-  word-break: break-all;
-  background: var(--sunk);
-  padding: 6px 8px;
-  border-radius: 6px;
-}
-
-/* ---------- Auth ---------- */
-/* Scrolls itself, not the page: trackAppHeight() puts the page's scroll back at the top (for the
-   app, which is pinned to the visible viewport), which undid the browser's scroll to a focused
-   field and kept a tall card from scrolling at all. */
-.auth-page {
-  position: fixed;
-  inset: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  display: grid;
-  place-items: center;
-  padding: calc(24px + env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-right, 0px))
-    calc(24px + env(safe-area-inset-bottom, 0px)) calc(16px + env(safe-area-inset-left, 0px));
-}
-.auth-page .field {
-  scroll-margin: 16px;
-}
-.auth-card {
-  width: min(400px, 100%);
-  background: var(--surface);
-  border: 1px solid var(--rule);
-  border-radius: 14px;
-  box-shadow: var(--shadow);
-  padding: 28px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.auth-brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 6px;
-}
-.auth-forgot {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  border-top: 1px solid var(--rule);
-  padding-top: 14px;
-}
-.auth-card > .link-btn {
-  align-self: flex-start;
-}
-.auth-cmd {
-  align-self: flex-start;
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  background: var(--sunk);
-  padding: 6px 8px;
-  border-radius: 6px;
-}
-.brand-name {
-  font-family: var(--display);
-  font-weight: 700;
-  font-size: 18px;
-}
 
 .toast {
   position: fixed;
@@ -3554,10 +3493,20 @@ div[id^='dak-mermaid-'] .label {
   color: var(--warn);
   font-size: 10px;
 }
+/*
+ * The browser lays out and paints a file only once it comes near the screen, so a long branch opens
+ * fast; every file stays in the DOM, so jumps, find in page and comments work. Until then it
+ * assumes the header plus the rows the file will draw (--chg-rows, set by FileSection), and once
+ * drawn it remembers the real height (auto).
+ */
 .chg-file {
+  --chg-head: 32px;
+  --chg-row: 17.4px;
   border: 1px solid var(--rule);
   border-radius: 8px;
   margin-bottom: 12px;
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto calc(var(--chg-head) + var(--chg-rows, 0) * var(--chg-row));
 }
 .chg-note {
   margin: 0;
@@ -3801,9 +3750,10 @@ div[id^='dak-mermaid-'] .label {
   padding: 0 0 0 4px;
   user-select: none;
 }
+/* An inline-block, not a grid: there's one on every row, and a grid each costs layout on long diffs. */
 .cmt-add {
-  display: inline-grid;
-  place-items: center;
+  display: inline-block;
+  vertical-align: top;
   width: 16px;
   height: 16px;
   padding: 0;
@@ -3811,7 +3761,8 @@ div[id^='dak-mermaid-'] .label {
   border-radius: 4px;
   background: var(--accent);
   color: var(--accent-ink);
-  font: 600 12px/1 var(--body);
+  font: 600 12px/16px var(--body);
+  text-align: center;
   cursor: pointer;
   opacity: 0;
 }
@@ -5053,6 +5004,24 @@ div[id^='dak-mermaid-'] .label {
     min-height: 36px;
   }
 }
+/* The New session dialog's offer of a learn session for a project whose datapack is empty. */
+.ns-learn-offer {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-size: 13px;
+}
+/* A learn session's months of PRs: a short number field, then its unit. */
+.ns-learn-months {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ns-learn-months .input {
+  width: 6em;
+}
 /* The New session dialog's images for the first prompt: Add image (just its icon), then the held ones. */
 .ns-images {
   display: flex;
@@ -5203,14 +5172,21 @@ div[id^='dak-mermaid-'] .label {
     display: none;
   }
   /* Always shown on touch, so kept small and quiet: a faint 16px + that fills in on the picked
-     lines. The button stays 22px (the padding isn't painted), so rows keep their height for taps. */
+     lines. The button is 22px tall (the padding isn't painted), so rows keep their height for taps,
+     and 40px wide over the gutter and line numbers (its side margins give that width back), only as
+     tall as the row, so rows don't steal each other's taps. Positioned, so it's above the numbers. */
+  .chg-file {
+    --chg-row: 22px;
+  }
   .cmt-add {
     position: relative;
     opacity: 1;
-    width: 22px;
+    width: 40px;
     height: 22px;
-    padding: 3px;
-    border-radius: 7px;
+    margin: 0 -14px 0 -4px;
+    padding: 3px 17px 3px 7px;
+    /* The painted square's corners stay 4px round: each radius is 4px plus the padding beside it. */
+    border-radius: 11px 21px 21px 11px / 7px;
     background: var(--accent-soft);
     background-clip: content-box;
     color: var(--accent);
@@ -5218,12 +5194,6 @@ div[id^='dak-mermaid-'] .label {
   .diff tr.picked .cmt-add {
     background-color: var(--accent);
     color: var(--accent-ink);
-  }
-  /* A 40px-wide tap area over the gutter and line numbers; only as tall as the row, so rows don't steal each other's taps. */
-  .cmt-add::before {
-    content: '';
-    position: absolute;
-    inset: 0 -14px 0 -4px;
   }
 }
 
@@ -5418,6 +5388,9 @@ div[id^='dak-mermaid-'] .label {
   .chg-file-hd {
     grid-template-columns: 12px auto minmax(0, 1fr) auto;
     row-gap: 4px;
+  }
+  .chg-file {
+    --chg-head: 64px;
   }
   .chg-file-hd .chg-file-path {
     grid-column: 3 / -1;
@@ -5616,20 +5589,6 @@ div[id^='dak-mermaid-'] .label {
   .dp-row > .mono + .tag {
     margin-left: 24px;
   }
-  /* On the visible viewport, like the app, so the fields scroll above the on-screen keyboard. */
-  .auth-page {
-    bottom: auto;
-    top: var(--app-top, 0px);
-    height: var(--app-h, 100dvh);
-  }
-  /* The keyboard covers the home indicator, so nothing needs to clear it. */
-  html.kb-open .auth-page {
-    padding-bottom: 24px;
-  }
-  .auth-card {
-    padding: 22px;
-  }
-
   /* Toasts drop in under the app bar, clear of the compose box and keyboard. */
   .toast {
     top: calc(56px + env(safe-area-inset-top, 0px));
@@ -5653,6 +5612,8 @@ div[id^='dak-mermaid-'] .label {
   .starts {
     flex-direction: column;
     align-items: flex-start;
+    /* The desktop's gap between wrapped rows would part each pill from its line here. */
+    row-gap: 0;
   }
   .start {
     min-height: 40px;
@@ -5683,6 +5644,9 @@ div[id^='dak-mermaid-'] .label {
     flex: 1;
     height: 1px;
     background: var(--rule);
+  }
+  .start-alt {
+    display: contents;
   }
 }
 /* The PR picker in the New session dialog. */

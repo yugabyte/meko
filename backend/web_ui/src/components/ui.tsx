@@ -1,4 +1,5 @@
-// The UI's small primitives: button, card, badge, input, spinner, empty and error states.
+// The UI's small primitives: button, card, badge, input and its labelled field, spinner, empty and
+// error states.
 
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
 import { AlertCircle, Loader2 } from "lucide-react";
@@ -44,6 +45,16 @@ export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputEleme
       )}
       {...rest}
     />
+  );
+}
+
+export function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
+  return (
+    <label className="block space-y-1">
+      <span className="block text-sm font-medium">{label}</span>
+      {children}
+      {hint && <span className="block text-xs text-muted-foreground">{hint}</span>}
+    </label>
   );
 }
 

@@ -64,7 +64,7 @@ func Describe(d store.Datapack, userID string, c memory.DatapackCounts) Datapack
 }
 
 // Conversation is a conversation as conversation_create, _update and _get return it. AppID is
-// Cloud's Langfuse app, which Meko has none of.
+// Cloud's, and always null here.
 type Conversation struct {
 	ID           string         `json:"id"`
 	AgentID      string         `json:"agent_id"`

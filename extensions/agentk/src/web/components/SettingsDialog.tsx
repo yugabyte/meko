@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type MutableRefObject, type ReactNode } from 'react';
 import type {
-  AuthStatus,
   HarnessStatus,
   LocalMekoState,
   MekoKeySource,
@@ -8,13 +7,13 @@ import type {
   MekoStatus,
   Settings,
   SettingsUpdate,
-  TotpEnrollResponse,
   UpdateStatus,
 } from '../../shared/types';
 import { HARNESS_CAPS, HARNESS_IDS, type HarnessId } from '../../shared/harnesses';
 import { api, errorMessage } from '../api';
 import { AUTO_SAVE_IDLE, autoSave, settle, type AutoSaveStatus } from '../autosave';
 import { saveRailSessions, useRailSessions } from '../rail';
+import type { MekoAuth } from '../signin';
 import { harnessLogosToggle } from '../toggle';
 import { claudeUpdateText, cx, defaultAgentChoice, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
 import { AgentLabel, AgentPicker, Busy, ConfirmButton, Dialog, ErrorText, Field } from './common';
@@ -27,7 +26,7 @@ const TABS: Tab[] = ['general', 'harness', 'meko', 'account', 'updates'];
 const TAB_LABEL: Record<Tab, string> = { general: 'General', harness: 'Harness', meko: 'Meko', account: 'Account', updates: 'Updates' };
 
 export function SettingsDialog({
-  auth,
+  mekoAuth,
   update,
   meko,
   harnesses,
@@ -37,7 +36,8 @@ export function SettingsDialog({
   onClose,
   onWhatsNew,
 }: {
-  auth: AuthStatus;
+  /** What Meko, which signs people in to AgentK, says about this browser (null without Meko). */
+  mekoAuth: MekoAuth | null;
   update: UpdateStatus;
   meko: MekoStatus;
   /** The coding agents sessions can run on (`AppState.harnesses`). */
@@ -108,7 +108,7 @@ export function SettingsDialog({
       )}
       {tab === 'account' && (
         <div className="stack">
-          {auth.localAccess ? <LocalAccessNote /> : <AccountTab auth={auth} />}
+          <AccountTab auth={mekoAuth} />
           <UsageStatsCheck />
         </div>
       )}
@@ -426,15 +426,10 @@ function GeneralTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObje
           {...saveOn('serverName')}
         />
       </Field>
-      <div className="fields">
-        <Field label="Listen address">
-          <input id="set-bind" className="input mono" value={s.bind} readOnly disabled />
-        </Field>
-        <Field label="Port">
-          <input id="set-port" className="input mono" value={s.port} readOnly disabled />
-        </Field>
-      </div>
-      <p className="hint">Change the address and port in config.toml, then restart the server.</p>
+      <p className="hint">
+        Meko serves AgentK. Who can reach it, and on which port, are set in Meko’s config.toml, in its{' '}
+        <code>[web]</code> table.
+      </p>
     </div>
   );
 }
@@ -446,7 +441,10 @@ function harnessNote(id: HarnessId, h: HarnessStatus | undefined): ReactNode {
     if (!h.checked) return <Busy label="Looking for it" />;
     return `⚠️ ${HARNESS_CAPS[id].label} didn't answer --version here. Install it and run ${HARNESS_CAPS[id].login}, or set [${id}] command in config.toml, then check again.`;
   }
-  if (!h.available) return `Version ${h.version}; AgentK needs ${h.minVersion} or later. Update it, then check again.`;
+  if (!h.available) {
+    const upgrade = HARNESS_CAPS[id].upgrade;
+    return `Version ${h.version}; AgentK needs ${h.minVersion} or later. ${upgrade ? `Run ${upgrade}` : 'Update it'}, then check again.`;
+  }
   return `Version ${h.version}.`;
 }
 
@@ -641,6 +639,27 @@ export function AgentSettings({
           </span>
         )}
       </div>
+      {id === 'opencode' && enabled && (
+        <div className="field">
+          <label className="check">
+            <input
+              id="set-opencode-tracking"
+              type="checkbox"
+              checked={s.opencodeDisableTracking}
+              onChange={(e) => onChange({ opencodeDisableTracking: e.target.checked })}
+            />
+            <span>Turn off OpenCode's tracking</span>
+          </label>
+          <span className="hint">
+            {s.opencodeDisableTracking ? 'OpenCode sessions and Ask AgentK' : 'When on, OpenCode sessions and Ask AgentK'} send no telemetry, skip
+            OpenCode's update check and hide OpenCode Zen's free models, whose providers may train on your prompts. Commands the agent runs in a
+            session don't export OpenTelemetry either.{' '}
+            {s.opencodeDisableTracking &&
+              'Your prompts and code still go to the model you pick: for code that must not leave this computer, use a local model such as Ollama or LM Studio. '}
+            Takes effect when a session next starts or resumes.
+          </span>
+        </div>
+      )}
       {id === 'kiro' && enabled && (
         <div className="field">
           <label className="check">
@@ -1007,193 +1026,23 @@ function UsageStatsCheck() {
   );
 }
 
-function LocalAccessNote() {
+/** Signing in is Meko's: its account settings hold the password and two-step sign-in. */
+function AccountTab({ auth }: { auth: MekoAuth | null }) {
   return (
     <div className="stack">
-      <h3>No sign-in needed</h3>
+      <h3>Sign-in</h3>
       <p className="muted">
-        AgentK only listens on this computer, so it opens without a username and password. To reach it from other
-        devices, rerun <code>agentk install</code> and choose remote access: that turns on HTTPS and a login.
+        {auth?.access === 'local' ? (
+          <>
+            Meko opens AgentK on this computer without a sign-in. To reach it from other devices, set{' '}
+            <code>access = "remote"</code> in the <code>[web]</code> table of Meko’s config.toml: then Meko asks for a
+            username and password.
+          </>
+        ) : (
+          'Meko signs you in to AgentK.'
+        )}{' '}
+        Set your password and two-step sign-in in <a href="/account">Meko’s account settings</a>.
       </p>
-    </div>
-  );
-}
-
-function AccountTab({ auth }: { auth: AuthStatus }) {
-  const [current, setCurrent] = useState('');
-  const [next, setNext] = useState('');
-  const [confirm, setConfirm] = useState('');
-  const [pwMsg, setPwMsg] = useState<string | null>(null);
-  const [pwErr, setPwErr] = useState<string | null>(null);
-  const [pwBusy, setPwBusy] = useState(false);
-
-  // The login-time auth status goes stale once two-step sign-in is turned on or off, so ask again.
-  const [totpOn, setTotpOn] = useState<boolean | null>(null);
-  const [enroll, setEnroll] = useState<TotpEnrollResponse | null>(null);
-  const [code, setCode] = useState('');
-  const [totpErr, setTotpErr] = useState<string | null>(null);
-  const [totpMsg, setTotpMsg] = useState<string | null>(null);
-  const [totpBusy, setTotpBusy] = useState(false);
-
-  useEffect(() => {
-    let live = true;
-    api
-      .authStatus()
-      .then((a) => live && setTotpOn(a.totpEnabled))
-      .catch(() => live && setTotpOn(auth.totpEnabled));
-    return () => {
-      live = false;
-    };
-  }, [auth.totpEnabled]);
-
-  const changePw = async (e: FormEvent) => {
-    e.preventDefault();
-    if (pwBusy) return;
-    setPwErr(null);
-    setPwMsg(null);
-    if (next.length < 12) return setPwErr('Use at least 12 characters.');
-    if (next !== confirm) return setPwErr('The two new passwords don’t match.');
-    setPwBusy(true);
-    try {
-      await api.changePassword(current, next);
-      setCurrent('');
-      setNext('');
-      setConfirm('');
-      setPwMsg('Password changed.');
-    } catch (err) {
-      setPwErr(errorMessage(err));
-    } finally {
-      setPwBusy(false);
-    }
-  };
-
-  const startEnroll = async () => {
-    if (totpBusy) return;
-    setTotpErr(null);
-    setTotpBusy(true);
-    try {
-      setEnroll(await api.totpEnroll());
-    } catch (err) {
-      setTotpErr(errorMessage(err));
-    } finally {
-      setTotpBusy(false);
-    }
-  };
-
-  const confirmTotp = async (e: FormEvent) => {
-    e.preventDefault();
-    if (totpBusy) return;
-    setTotpErr(null);
-    setTotpBusy(true);
-    try {
-      if (totpOn) {
-        await api.totpDisable(code);
-        setTotpOn(false);
-        setTotpMsg('Two-step sign-in is off.');
-      } else {
-        await api.totpConfirm(code);
-        setTotpOn(true);
-        setEnroll(null);
-        setTotpMsg('Two-step sign-in is on.');
-      }
-      setCode('');
-    } catch (err) {
-      setTotpErr(errorMessage(err));
-    } finally {
-      setTotpBusy(false);
-    }
-  };
-
-  return (
-    <div className="stack">
-      <form className="stack" onSubmit={changePw}>
-        <h3>Change password</h3>
-        <Field label="Current password">
-          <input
-            id="acc-current"
-            className="input"
-            type="password"
-            autoComplete="current-password"
-            value={current}
-            onChange={(e) => setCurrent(e.target.value)}
-          />
-        </Field>
-        <div className="fields">
-          <Field label="New password">
-            <input
-              id="acc-next"
-              className="input"
-              type="password"
-              autoComplete="new-password"
-              value={next}
-              onChange={(e) => setNext(e.target.value)}
-            />
-          </Field>
-          <Field label="Confirm new password">
-            <input
-              id="acc-confirm"
-              className="input"
-              type="password"
-              autoComplete="new-password"
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-            />
-          </Field>
-        </div>
-        <ErrorText error={pwErr} />
-        {pwMsg && <p className="ok-text">{pwMsg}</p>}
-        <div>
-          <button className="btn primary" disabled={!current || !next || pwBusy}>
-            {pwBusy ? <Busy label="Changing" /> : 'Change password'}
-          </button>
-        </div>
-      </form>
-
-      <div className="stack">
-        <h3>Two-step sign-in</h3>
-        <p className="muted">
-          {totpOn === null
-            ? <Busy label="Checking" />
-            : totpOn
-              ? 'On. Sign-in asks for a code from your authenticator app.'
-              : 'Off. Add a code from an authenticator app to every sign-in.'}
-        </p>
-        {totpOn === false && !enroll && (
-          <div>
-            <button className="btn" disabled={totpBusy} onClick={startEnroll}>
-              Set up authenticator
-            </button>
-          </div>
-        )}
-        {enroll && !totpOn && (
-          <div className="totp-enroll">
-            <div className="qr" dangerouslySetInnerHTML={{ __html: enroll.qrSvg }} />
-            <div className="stack">
-              <p>Scan the code with your authenticator app, or enter this key:</p>
-              <code className="secret">{enroll.secret}</code>
-            </div>
-          </div>
-        )}
-        {(enroll || totpOn) && (
-          <form className="filter-row" onSubmit={confirmTotp}>
-            <input
-              id="acc-totp"
-              className="input mono"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              placeholder="6-digit code"
-              maxLength={6}
-              value={code}
-              onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
-            />
-            <button className={cx('btn', totpOn ? 'danger' : 'primary')} disabled={code.length !== 6 || totpBusy}>
-              {totpOn ? 'Turn off' : 'Confirm'}
-            </button>
-          </form>
-        )}
-        <ErrorText error={totpErr} />
-        {totpMsg && <p className="ok-text">{totpMsg}</p>}
-      </div>
     </div>
   );
 }

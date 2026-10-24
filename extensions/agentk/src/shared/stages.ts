@@ -1,8 +1,34 @@
-import { KIND_STAGES, STAGE_LABELS, type MoveTarget, type SessionKind, type Stage, type StoredKind } from './types.js';
+import { HARNESS_CAPS, harnessOf } from './harnesses.js';
+import {
+  KIND_STAGES, STAGE_LABELS, type MoveTarget, type Session, type SessionKind, type Stage, type StartupStep, type StoredKind,
+} from './types.js';
 
 /** A session's kind as stored and sent (`Session.kind`), as the rules use it: `task` or `review-pr`. */
 export function kindOf(kind: StoredKind | SessionKind): SessionKind {
   return kind === 'review-pr' ? 'review-pr' : 'task';
+}
+
+/**
+ * The steps the Starting view lists for a session, naming the agent it runs on: no worktree step
+ * when it resumes, and no prompt step when it has no first prompt.
+ */
+export function startupSteps(s: Pick<Session, 'harness' | 'kind' | 'startup'>): { step: StartupStep; label: string }[] {
+  const st = s.startup;
+  const steps: { step: StartupStep; label: string }[] = [];
+  if (!st?.resumed) {
+    steps.push({
+      step: 'worktree',
+      label: kindOf(s.kind) === 'review-pr'
+        ? 'Fetching the PR and its design, and preparing the worktree'
+        : 'Updating the base branch and preparing the worktree',
+    });
+  }
+  steps.push(
+    { step: 'launch', label: `Starting ${HARNESS_CAPS[harnessOf(s.harness)].label}` },
+    { step: 'loading', label: 'Loading plugins, MCP servers and hooks' },
+  );
+  if (!st || st.hasPrompt) steps.push({ step: 'prompt', label: 'Sending your task' });
+  return steps;
 }
 
 /** The stages a session can be moved to by hand, in stage bar order. */

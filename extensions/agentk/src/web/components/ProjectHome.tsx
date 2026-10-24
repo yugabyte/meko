@@ -12,7 +12,7 @@ import {
 } from '../../shared/types';
 import { LOGIN_PLACEHOLDER, expandBranchPrefix } from '../../shared/branches';
 import { api, errorMessage } from '../api';
-import { useIsMobile } from '../hooks/useMedia';
+import { useIsMobile, useTouch } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { cx, shortTime } from '../util';
 import { Busy, ConfirmButton, DatapackName, ErrorText, Field } from './common';
@@ -36,6 +36,7 @@ export function ProjectHomeView({
   ghLogin,
   onMenu,
   onBack,
+  onLearn,
   onError,
 }: {
   project: ProjectWithSessions;
@@ -51,6 +52,8 @@ export function ProjectHomeView({
   /** Opens the projects drawer (phone layout). */
   onMenu: () => void;
   onBack: () => void;
+  /** Opens the New session dialog on Learn the project, offered while the dedicated datapack is empty. */
+  onLearn: () => void;
   onError: (m: string) => void;
 }) {
   const mobile = useIsMobile();
@@ -195,6 +198,14 @@ export function ProjectHomeView({
                 )}
               </div>
             )}
+            {mekoConfigured && dedicated && home && !home.hasLearnSession && dedicated.memoryCount === 0 && dedicated.knowledgeCount === 0 && (
+              <div className="dp-none">
+                <span className="muted">This datapack is empty.</span>
+                <button className="btn small" id="home-learn" onClick={onLearn}>
+                  Learn the project
+                </button>
+              </div>
+            )}
             {mekoConfigured && <AttachDatapack
               attached={new Set(project.datapacks.map((d) => d.id))}
               onAttach={async (d) => {
@@ -321,6 +332,8 @@ function AttachDatapack({
   attached: Set<string>;
   onAttach: (d: MekoDatapack) => Promise<void>;
 }) {
+  // On touch, the keyboard comes up only when a field is tapped.
+  const touch = useTouch();
   const [open, setOpen] = useState(false);
   const [all, setAll] = useState<MekoDatapack[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -355,7 +368,7 @@ function AttachDatapack({
           placeholder="Search your datapacks…"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          autoFocus
+          autoFocus={!touch}
         />
         <button className="btn ghost" onClick={() => setOpen(false)}>
           Done

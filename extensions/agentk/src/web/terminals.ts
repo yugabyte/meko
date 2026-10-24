@@ -6,7 +6,8 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import type { WebglAddon } from '@xterm/addon-webgl';
 import { MAX_PASTE_BYTES, SCREEN_IDLE_MS, type ScreenName, type ScreenState, type TermClientMessage, type TermServerMessage } from '../shared/types';
-import { api, checkLogin, errorMessage, wsUrl, WS_UNAUTHORIZED } from './api';
+import { api, errorMessage, wsUrl } from './api';
+import { checkSignIn, WS_ABNORMAL, WS_UNAUTHORIZED } from './signin';
 import { copyText, decodeOsc52, pastedFiles, readClipboardImages } from './clipboard';
 import { HeldImages, type HeldImage } from './heldImages';
 import { isPastableImage, mekoPlan, mekoSummary, pickFiles, type MekoResult } from './knowledge';
@@ -699,9 +700,12 @@ class SessionTerminal {
       if (this.openedAt && Date.now() - this.openedAt >= STABLE_MS) this.attempt = 0;
       this.openedAt = 0;
       if (this.conn !== 'ended') this.setConn('closed');
-      // Logged out, password changed or login expired: the 401 handler shows the login screen.
-      if (ev.code === WS_UNAUTHORIZED) void checkLogin().then((ok) => ok && this.retry());
-      else this.retry();
+      // Signed out, or the sign-in expired: checkSignIn goes to Meko's sign-in screen.
+      if (WS_UNAUTHORIZED.includes(ev.code)) void checkSignIn().then((ok) => ok && this.retry());
+      else {
+        if (ev.code === WS_ABNORMAL) void checkSignIn();
+        this.retry();
+      }
     };
     ws.onerror = () => ws.close();
   }
@@ -1190,10 +1194,6 @@ export function disposeTerminal(sessionId: string) {
 /** Drop terminals whose sessions no longer exist or were archived. */
 export function pruneTerminals(liveIds: Set<string>) {
   for (const id of [...cache.keys()]) if (!liveIds.has(id)) disposeTerminal(id);
-}
-
-export function disposeAllTerminals() {
-  for (const id of [...cache.keys()]) disposeTerminal(id);
 }
 
 export function terminalFontSize(): number {

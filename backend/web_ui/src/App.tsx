@@ -1,12 +1,12 @@
-// The app shell: checks access, loads the datapacks, and shows the open datapack's tab beside the
-// sidebar.
+// The app shell, once the gate (Gate.tsx) let this browser in: loads the datapacks, and shows the
+// open datapack's tab, or the Status or Account page, beside the sidebar.
 
 import { useCallback, useEffect, useState } from "react";
 import { Database } from "lucide-react";
-import { api, ApiError } from "./lib/api";
+import { api } from "./lib/api";
 import { href, navigate, useRoute } from "./lib/route";
 import { applyTheme, initialTheme, type Theme } from "./lib/theme";
-import { clearToken } from "./lib/token";
+import type { AuthStatus } from "./lib/types";
 import { useLoad } from "./lib/useLoad";
 import { useShortcuts } from "./lib/useShortcuts";
 import { DatapackHeader } from "./components/DatapackHeader";
@@ -17,14 +17,14 @@ import { ConnectPage } from "./pages/ConnectPage";
 import { ConversationsPage } from "./pages/ConversationsPage";
 import { KnowledgePage } from "./pages/KnowledgePage";
 import { MemoriesPage } from "./pages/MemoriesPage";
-import { NoAccessPage } from "./pages/NoAccessPage";
+import { AccountPage } from "./pages/AccountPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { ArtifactsPage } from "./pages/ArtifactsPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { SearchPage } from "./pages/SearchPage";
 import { StatusPage } from "./pages/StatusPage";
 
-export default function App() {
+export default function App({ auth, onAuthChanged }: { auth: AuthStatus; onAuthChanged: () => void }) {
   const [theme, setTheme] = useState<Theme>(initialTheme);
   useEffect(() => applyTheme(theme), [theme]);
 
@@ -39,17 +39,13 @@ export default function App() {
   const reloadCurrent = current.reload;
   const onChanged = useCallback(() => reloadCurrent(), [reloadCurrent]);
 
-  if (list.error instanceof ApiError && list.error.status === 401) {
-    clearToken();
-    return <NoAccessPage />;
-  }
-
   return (
     <div className="flex h-screen overflow-hidden">
       <Sidebar
         datapacks={list.data ?? []}
         activeId={route.view ? undefined : activeId}
-        statusOpen={route.view === "status"}
+        view={route.view}
+        auth={auth}
         version={health.data?.version}
         theme={theme}
         onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
@@ -63,6 +59,10 @@ export default function App() {
           {route.view === "status" ? (
             <div className="p-8">
               <StatusPage />
+            </div>
+          ) : route.view === "account" ? (
+            <div className="p-4 sm:p-8">
+              <AccountPage auth={auth} onChanged={onAuthChanged} />
             </div>
           ) : list.loading && !list.data ? (
             <Loading />

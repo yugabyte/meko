@@ -111,6 +111,13 @@ on the events socket, which may be slow or reconnecting. A push without it may b
 snapshot, or mean it was closed meanwhile: the UI asks `GET /api/projects/:id`, and a 404 drops it
 (the dialog then closes, as it does for any project closed under it). Closing it leaves the project's empty view with its **New session** button.
 
+**A learn session first, for an empty datapack.** The open's reply (`OpenedProject`, from
+`Projects.open()`) says whether the project's dedicated datapack is empty (`datapackEmpty`): true
+for one the open made, and for an existing one that `datapack_describe` (5 seconds) says has no
+memories and no knowledge. Meko failing or slow there costs only the offer, never the open. When it's
+empty, the New session dialog opens on **Learn the project** (below), with a line saying the
+datapack is empty, rather than on Design or Review a PR.
+
 ## New session
 
 You give it a name, where to start and, optionally, a first prompt. Every task runs on one
@@ -129,6 +136,7 @@ the first prompt, unless the prompt already starts with it), so the prompt needn
 | **1 Design** (the default) | Normal tasks: a design for you to approve, then code, PR, review and merge | `design`; with no first prompt the name is the task |
 | **2 Code** | Small tasks: straight to code, then PR, review and merge | `code`; with no first prompt the name is the task |
 | **Review a PR** (`kind: 'review-pr'`) | Reviewing someone else's PR, with AgentK assisting | `review-pr`; it stays in Reviewing PR until you **Close review** (see [Reviewing a PR](review-pr.md)) |
+| **Learn the project** (`learn`) | Seeding the project's datapack from the repo and its PRs; offered only with Meko on and a dedicated datapack | `seed`; it closes by itself when done (see [Learn sessions](recall-and-learn.md#learn-sessions)) |
 
 A task can't start at PR & Review: it gets there through **Open PR** or a move. A session is a
 task or a Review a PR (`kindOf()` in `src/shared/stages.ts`). `sessions.kind` and `Session.kind`

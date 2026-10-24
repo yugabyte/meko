@@ -2,12 +2,13 @@ import { Fragment, useEffect, useRef, useState, type KeyboardEvent as ReactKeybo
 import { HARNESS_CAPS, harnessOf, type HarnessId } from '../../shared/harnesses';
 import { KIND_LABELS, KIND_STAGES, START_HINTS, START_STAGES, STAGE_LABELS } from '../../shared/types';
 import type { StartStage } from '../../shared/types';
+import { appUrl } from '../base';
 import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkKeyframes, blinkOffsetMs, totalUnits, type BlinkRun } from '../blink';
-import { useMedia } from '../hooks/useMedia';
+import { matches, TOUCH_QUERY, useMedia } from '../hooks/useMedia';
 import { TUNE, typingKeyframes, typingLoopMs } from '../typing';
 import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, cx, elapsedText, instructionsBlocker, isSubmitKey, mekoDatapackUrl } from '../util';
 
-const HARNESS_LOGOS: Record<HarnessId, string> = { claude: '/harness-claude.svg', opencode: '/harness-opencode.svg', kiro: '/harness-kiro.svg' };
+const HARNESS_LOGOS: Record<HarnessId, string> = { claude: appUrl('/harness-claude.svg'), opencode: appUrl('/harness-opencode.svg'), kiro: appUrl('/harness-kiro.svg') };
 
 /**
  * A harness's logo: beside a session's name in the tabs and the rail, while open sessions run on
@@ -169,7 +170,9 @@ export function Dialog({
   const ref = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
-  // Focus the first control once on open; Escape closes; Tab stays inside.
+  // Focus the first control once on open; Escape closes; Tab stays inside. On touch, focusing a
+  // field would bring up the keyboard before you've tapped it, so only an enabled main button takes
+  // focus. With none, the dialog itself does, so focus never stays behind it (on the terminal).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -181,7 +184,10 @@ export function Dialog({
     window.addEventListener('keydown', onKey, true);
     const root = ref.current;
     if (root && !root.contains(document.activeElement)) {
-      root.querySelector<HTMLElement>('input:not([disabled]), textarea, select, button.primary')?.focus();
+      const first = root.querySelector<HTMLElement>(
+        matches(TOUCH_QUERY) ? 'button.primary:not([disabled])' : 'input:not([disabled]), textarea, select, button.primary:not([disabled])',
+      );
+      (first ?? root).focus();
     }
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
@@ -191,6 +197,7 @@ export function Dialog({
         className={cx('dialog', wide && 'wide', className)}
         role="dialog"
         aria-modal="true"
+        tabIndex={-1}
         ref={ref}
         onKeyDown={(e) => {
           // Ctrl+Enter presses the main button, as a click would (nothing while it's disabled). Bubbling
@@ -485,23 +492,26 @@ export function Ring({ arc, px, box, r, stroke, className, children }: {
   );
 }
 
-/** A choice in the New session dialog: the stage a task starts at, or a Review a PR. */
-export type StartChoice = StartStage | 'review-pr';
+/** A choice in the New session dialog: the stage a task starts at, a Review a PR, or a learn session. */
+export type StartChoice = StartStage | 'review-pr' | 'learn';
 
-const START_CHOICES: StartChoice[] = [...START_STAGES, 'review-pr'];
+/** A learn session's name in the start picker, and the session's name when none is typed. */
+export const LEARN_LABEL = 'Learn the project';
 
 /**
  * Where a new session starts: the stages a task can start at as pills joined like the stage bar
- * (dotted from Explore, which is optional), then "or" and Review a PR. A radio group (arrow keys
- * move the choice); `id` prefixes the element ids.
+ * (dotted from Explore, which is optional), then "or" and Review a PR, and with `learn` (Meko on and
+ * a dedicated datapack) "or" and Learn the project. A radio group (arrow keys move the choice); `id`
+ * prefixes the element ids.
  */
-export function StartPicker({ id, value, onChange }: { id: string; value: StartChoice; onChange: (c: StartChoice) => void }) {
+export function StartPicker({ id, value, learn = false, onChange }: { id: string; value: StartChoice; learn?: boolean; onChange: (c: StartChoice) => void }) {
   const refs = useRef<Partial<Record<StartChoice, HTMLButtonElement | null>>>({});
+  const choices: StartChoice[] = [...START_STAGES, 'review-pr', ...(learn ? ['learn' as const] : [])];
   const onKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
     if (!step) return;
     e.preventDefault();
-    const next = START_CHOICES[(START_CHOICES.indexOf(value) + step + START_CHOICES.length) % START_CHOICES.length];
+    const next = choices[(choices.indexOf(value) + step + choices.length) % choices.length];
     onChange(next);
     refs.current[next]?.focus();
   };
@@ -511,16 +521,8 @@ export function StartPicker({ id, value, onChange }: { id: string; value: StartC
         Where do you want to start?
       </span>
       <div className="starts" role="radiogroup" aria-labelledby={`${id}-label`} aria-describedby={`${id}-hint`} onKeyDown={onKey}>
-        {START_CHOICES.map((c, i) => (
-          <Fragment key={c}>
-            {i > 0 &&
-              (c === 'review-pr' ? (
-                <span className="start-or" aria-hidden="true">
-                  or
-                </span>
-              ) : (
-                <span className={cx('start-link', i === 1 && 'dotted')} aria-hidden="true" />
-              ))}
+        {choices.map((c, i) => {
+          const button = (
             <button
               id={`${id}-${c}`}
               ref={(el) => {
@@ -533,11 +535,31 @@ export function StartPicker({ id, value, onChange }: { id: string; value: StartC
               className={cx('start', c === value && 'on')}
               onClick={() => onChange(c)}
             >
-              {c !== 'review-pr' && <span className="n">{KIND_STAGES.task.indexOf(c)}</span>}
-              {c === 'review-pr' ? KIND_LABELS['review-pr'] : STAGE_LABELS[c]}
+              {c !== 'review-pr' && c !== 'learn' && <span className="n">{KIND_STAGES.task.indexOf(c)}</span>}
+              {c === 'review-pr' ? KIND_LABELS['review-pr'] : c === 'learn' ? LEARN_LABEL : STAGE_LABELS[c]}
             </button>
-          </Fragment>
-        ))}
+          );
+          const or = (
+            <span className="start-or" aria-hidden="true">
+              or
+            </span>
+          );
+          // "or Learn the project" wraps as one, when the row runs out of room.
+          if (c === 'learn') {
+            return (
+              <span key={c} className="start-alt">
+                {or}
+                {button}
+              </span>
+            );
+          }
+          return (
+            <Fragment key={c}>
+              {i > 0 && (c === 'review-pr' ? or : <span className={cx('start-link', i === 1 && 'dotted')} aria-hidden="true" />)}
+              {button}
+            </Fragment>
+          );
+        })}
       </div>
       <span className="hint" id={`${id}-hint`}>
         {START_HINTS[value]}

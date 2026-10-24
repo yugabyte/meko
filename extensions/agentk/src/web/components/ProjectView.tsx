@@ -650,7 +650,12 @@ function StageBar({
   switch (session.stage) {
     case 'explore':
       reason = midTurn ? 'Wait for AgentK to finish its turn.' : null;
-      gate = (
+      // A learn session closes by itself once it's done (it can still be moved from the stage bar).
+      gate = session.purpose === 'learn' ? (
+        <span className="gate-pill" title="AgentK closes this session once it has saved what it learned">
+          Learning the project
+        </span>
+      ) : (
         <button
           className="gate"
           disabled={blocked || !!reason}

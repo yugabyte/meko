@@ -47,7 +47,7 @@ export CC=/opt/rh/gcc-toolset-13/root/usr/bin/gcc CXX=/opt/rh/gcc-toolset-13/roo
 npm ci
 npm run typecheck && npm run lint && npm test   # run all three before every commit
 npm run build                                   # dist/server + dist/web
-npm run dev                                     # API on 127.0.0.1:7777, Vite on :5173; state in ./.dev-home (AK_DEV_HOME to change)
+npm run dev                                     # the server on ./.dev-home/web.sock, Vite on :5173 proxying to it; state in ./.dev-home (AK_DEV_HOME to change)
 ```
 
 ## Map
@@ -61,20 +61,20 @@ agents should read it before changing code there.
 | `src/shared/types.ts` | The API contract: every REST route, WebSocket message and shared type. Change it first. |
 | `src/server/` | The server, the session host (`host/`) and the CLI. A row per module is in [src/server/AGENTS.md](src/server/AGENTS.md). |
 | `src/web/` | The React + xterm.js UI. A row per module, and the rules every UI change follows (it must work on a phone), are in [src/web/AGENTS.md](src/web/AGENTS.md) and [src/web/REVIEW.md](src/web/REVIEW.md). |
-| `src/shared/harnesses.ts` | The harnesses a session can run on (`claude`, `opencode`, `kiro`, in the order every list shows them), their labels, sign-in commands and what each can do (`HARNESS_CAPS`: the mod, Artifacts, tokens or credits, whether a by-model row names it, the oldest version sessions start on), which the server and the UI both gate on; `harnessOf()` reads a stored id. |
+| `src/shared/harnesses.ts` | The harnesses a session can run on (`claude`, `opencode`, `kiro`, in the order every list shows them), their labels, sign-in commands and what each can do (`HARNESS_CAPS`: the mod, Artifacts, tokens or credits, whether a by-model row names it, the oldest version sessions start on, and the command that upgrades one older when its own update can't), which the server and the UI both gate on; `harnessOf()` reads a stored id. |
 | `src/shared/decisions.ts` | A design's Key Design Decisions (KDDs, `DesignQuestion`): numbering questions Q1… and AgentK's own decisions D1… (`decisionNumbers`), which the user can answer (`answerable`: an open question, or a decision to change), and the marker a design puts after a decision that rests on Meko (`MEKO_SOURCE_MARK`, `MEKO_SOURCE_CLASS`). Used by the server (the prompts), the Questions tab and the design panel (`design-frame.ts`). |
-| `src/shared/stages.ts` | The rules for moving a session by hand: where a task can move, what can't be moved, where the move dialog starts, the prompt each move sends by default, what a move does in words, skipped steps, and `stepOf` (the PR stage shows as PR & Review). Used by the server and the move dialog. |
+| `src/shared/stages.ts` | The rules for moving a session by hand: where a task can move, what can't be moved, where the move dialog starts, the prompt each move sends by default, what a move does in words, skipped steps, and `stepOf` (the PR stage shows as PR & Review). Used by the server and the move dialog. Also the Starting view's steps, which name the session's agent (`startupSteps()`). |
 | `src/shared/datapacks.ts` | Project datapack names (`adlc/proj/<repo>/<project>`), the description AgentK writes on them (remote credentials stripped), matching one to a local repo, and the remote helpers `git.ts` uses too. Used by the server and the web UI. |
 | `src/shared/branches.ts` | The branch prefix setting's `{login}` (`expandBranchPrefix`: gh's login, or left out with its joiner when gh can't say) and the default, `ak_{login}/`. Used by the server and the web UI. |
 | `src/shared/termreports.ts` | Telling a terminal's answers to a program's queries from typing (`isTerminalReport`): the browser terminal and `agentk attach` drop them, since the session host answers them. Also mouse motion with no button held and focus reports (`isPassiveReport`), which don't count as using a screen (`src/server/screens.ts`). |
 | `src/shared/emails.ts` | The email check, the parsing of a list of emails for the Share dialog (commas, semicolons, whitespace, `Name <address>`), pasting into its field and picking a suggested address (`typedEntry`, `pickEmail`, `suggestContacts`), and the most one invite can send to. Used by the server and the web UI. |
-| `src/shared/mekourls.ts` | Meko Cloud's MCP and web app URLs, the web app that goes with an MCP URL (`mekoWebUrl`), and a datapack's share link on it (`shareLinkUrl`, and `shareLinkToken`, which reads a pasted one only from that web app). Used by the server and the web UI, so the Meko tab's sign-up links match what the server works out, and Ask AgentK offers to join only the links the server will. |
+| `src/shared/mekourls.ts` | Meko Cloud's MCP and web app URLs, the command that installs Meko on this computer (`MEKO_INSTALL_COMMAND`, for the banner shown while there's none), the web app that goes with an MCP URL (`mekoWebUrl`), and a datapack's share link on it (`shareLinkUrl`, and `shareLinkToken`, which reads a pasted one only from that web app). Used by the server and the web UI, so the Meko tab's sign-up links match what the server works out, and Ask AgentK offers to join only the links the server will. |
 | `src/shared/pricing.ts` | Anthropic API list prices per model and the cost of a set of tokens (cache writes by duration). |
 | `src/mod/agentk/` | AgentK's mod: a Claude Code plugin of function hooks loaded into every session with `--plugin-dir`. It polls the hook socket for AgentK's prompts and submits them as the user's, reports the context fill and plan limits after each turn, forwards Claude's `AskUserQuestion` calls to AgentK while the terminal's dialog stays open (the first answer wins), reports when each of Claude's Meko tool calls starts and ends (for the session's dot, and with the call's content for the Meko call log while the project keeps one), reports a turn you interrupt (Ctrl+C, Esc: no `Stop` hook fires, `/mod/turn`), gives Claude the `design_questions` tool, runs learn steps (`$.model.fork`, then `$.model.complete` for the duplicate check), and registers `/agentk_learn`. Compiled by Claude Code against its own declarations, not by the repo's tsc; checked with `claude plugin validate` / `claude plugin test src/mod/agentk` (`test/unit/mod.test.ts`, skipped without Claude Code). |
 | `src/tools/skill/SKILL.md` | The skill for AgentK's session tools (the `agentk_sessions` MCP server, `src/server/mcp.ts`): how an agent opens projects, starts sessions (from GitHub issues and PRs too), moves them and opens another session's PR. Its one source; the server copies it for every harness (`writeToolFiles` in `src/server/tools.ts`), and the build into `dist/tools`. See [docs/design/tools.md](docs/design/tools.md). |
 | `scripts/install.sh` | The installer: stops early where AgentK is already installed (unless `--reinstall`), installs missing tools (git, curl, gh, and a coding agent when none of Claude Code, OpenCode and Kiro CLI is there: it asks which, OpenCode second, or `--agent`) after asking, checks each agent's sign-in, downloads and verifies the newest AgentK release (found by its tag, `agentk-v…` or `v…`: the repo's latest release is Meko's), or takes a local one with `--tarball` (a file, or a folder holding one per platform), then runs `agentk install`. `scripts/offline-bundle.sh` packs a release and its installer into one file for people without access to the repo ([releases](docs/design/releases.md)). Tested against stub tools in `test/unit/install-script.test.ts`. |
 | `packaging/`, `scripts/`, `.github/` | Launcher wrapper, systemd and launchd templates, install and release scripts, and (at the repo root, running from `extensions/agentk`) CI and releases (Linux and macOS) and Dependabot (`dependabot.yml`). The repo root's `scripts/check-title.sh` holds the commit subject and PR title rules, and `scripts/release/release-notes.sh` decides which types and components release each product (AgentK or Meko, `--product`; `scripts/release/product.sh` names each one's tags and components); their type lists are the ones the tests check (the docs, the commit skill and What's new's `RELEASE_TYPES` in `src/server/releasenotes.ts` repeat them, so change those too), and both scripts are tested in `test/unit/check-title.test.ts` and against Dependabot's prefixes in `test/unit/dependabot.test.ts`; `test/unit/release-scripts.test.ts` tests what each product counts (versions, notes, pruning). The repo root's `scripts/ci-scope.sh` decides which components' CI jobs a PR runs; `test/unit/ci-scope.test.ts` tests it, checks that every root file a test here reads (`../../../../…`) runs AgentK's job, and that the `CI gate` job needs every other job. |
-| `test/` | Unit tests, and integration tests against a real session host (in the test process) and git with a stub `claude` (`test/fixtures/fake-claude.mjs`), and stubs of `kiro-cli` and `opencode` (`fake-kiro.mjs`; `fake-opencode.mjs`, which runs AgentK's real OpenCode plugin). |
+| `test/` | Unit tests, and integration tests against a real session host (in the test process) and git with a stub `claude` (`test/fixtures/fake-claude.mjs`), and stubs of `kiro-cli` and `opencode` (`fake-kiro.mjs`; `fake-opencode.mjs`, which runs AgentK's real OpenCode plugin as OpenCode 2 does). |
 | `docs/` | The design: [docs/design.md](docs/design.md) is its index (the decisions so far, and which part covers what), with one file per area under `docs/design/`. Also the usage report's schema (`call-home-report.schema.json`) and the screenshots. |
 
 ## Invariants (don't break these)
@@ -94,14 +94,14 @@ agents should read it before changing code there.
    pane is relaunched with `claude --resume`; auto-continue is guarded (once per 15 minutes; after two
    auto-continues in an hour the next one is parked). Archive and project delete wait for a session
    that is still starting; `launch()` never replaces a live pane.
-3. **Everything behind login.** Every `/api/*` route except `auth/status|setup|login` requires the
-   session cookie, and every WebSocket checks the cookie and refuses a cross-origin `Origin`. The
-   one exception is local access (`localAccess()` in `auth.ts`): with the server listening only on
-   loopback, a same-site loopback request whose `Host` is localhost needs no cookie. A network bind always
-   requires the login, even from localhost. Access
-   checks key on the matched route (`req.routeOptions.url`), never the raw URL, which can be
-   percent-encoded. Hooks use the unix socket with a
-   per-session token, never the network port.
+3. **Only through Meko.** The server listens on nothing but its unix socket (`Paths.webSock`, in a
+   folder only the user can open) and has no login of its own: the Meko on this computer serves it
+   to browsers at `/ext/agentk/` after its own sign-in (local access, or the owner's login), and
+   every request on the socket is let in. Never add a TCP listener, a login, or a route that trusts
+   a header to say who sent it. Writes and WebSocket upgrades refuse an `Origin` that isn't the
+   page's own (Meko passes the browser's `Host` and `Origin` on unchanged), keyed on the matched
+   route (`req.routeOptions.url`), never the raw URL, which can be percent-encoded. Hooks use their
+   own unix socket with a per-session token.
 4. **No shell interpolation of user input.** Use `execFile`/`spawn` with argument arrays. The only
    shell text we generate is the launcher script, and every value in it goes through `shq()`.
 5. **Migrations are append-only.** Add a new entry to `MIGRATIONS` in `db.ts`; never edit a shipped one.
@@ -147,8 +147,7 @@ agents should read it before changing code there.
   folder. `npm run typecheck` covers the tests too (`tsconfig.test.json`).
 - Commits and PR titles: `<type>(<component>[/<area>])[!]: <summary>` with one of nine types and,
   for AgentK, the component `agentk` (`feat(agentk/web): …`), checked by
-  the repo root's `scripts/check-title.sh`, and **no agent attribution** (see the repo root's
-  `.claude/skills/commit/SKILL.md`).
+  the repo root's `scripts/check-title.sh` (see the repo root's `.claude/skills/commit/SKILL.md`).
   `feat`/`fix`/`perf`/`deps` commits trigger a release (`0.YYYYMMDD.N`) when pushed to `main`;
   `ci`/`test`/`docs`/`nit`/`chore` don't. PRs are squash-merged, so the PR title is the subject;
   the `PR title` workflow (`pr-title.yml`) checks it. Changes reach `main` only through PRs that

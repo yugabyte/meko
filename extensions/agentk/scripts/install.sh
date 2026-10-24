@@ -28,8 +28,8 @@
 #                       without access to the repo (scripts/offline-bundle.sh)
 #   --print-home        print the folder AgentK is (or would be) installed in, and stop
 #   anything else       forwarded to `agentk install`
-#                       (--non-interactive, --repos-root, --meko-key, --meko-url, --bind, --port,
-#                       --no-service); without a Meko Cloud key, AgentK uses the Meko running on
+#                       (--non-interactive, --repos-root, --meko-key, --meko-url, --no-service);
+#                       Meko must be installed first: it serves AgentK to browsers. Without a Meko Cloud key, AgentK uses the Meko running on
 #                       this computer (Enter at the key prompt)
 #
 # Missing tools are installed with Homebrew on macOS and the system package manager on Linux
@@ -291,7 +291,7 @@ if ! $reinstall && ! $deps_only && ! $setup_flags && [ -x "$ak_home/app/current/
     say ""
     say "  AgentK is already installed, so nothing was changed."
     row "Status" "$cmd status"
-    row "Setup" "$cmd install   (the repos folder, access, port, Meko, or the services again)"
+    row "Setup" "$cmd install   (the repos folder, Meko, or the services again)"
     if [ -n "$tarball_file" ]; then
       # An offline install: no download to offer, and no updates (it can't reach the repo).
       row "Update" "install a newer offline bundle the same way"
@@ -419,7 +419,7 @@ fi
 $claude_install && plan="$plan
       curl -fsSL https://claude.ai/install.sh | bash      (Claude Code, into ~/.local/bin)"
 $opencode_install && plan="$plan
-      curl -fsSL https://opencode.ai/install | bash      (OpenCode, into ~/.opencode/bin)"
+      curl -fsSL https://opencode.ai/v2/install | bash   (OpenCode 2, into ~/.opencode/bin)"
 $kiro_install && plan="$plan
       curl -fsSL https://cli.kiro.dev/install | bash      (Kiro CLI, into ~/.local/bin)"
 
@@ -520,7 +520,8 @@ if [ -n "$plan" ]; then
     command -v bash >/dev/null 2>&1 || die "OpenCode's installer needs bash, which wasn't found. Install OpenCode yourself: https://opencode.ai"
     # Saved first rather than piped, so a failed download isn't mistaken for a finished install.
     oc_tmp=$(mktemp -d)
-    { curl -fsSL -o "$oc_tmp/install" https://opencode.ai/install && bash "$oc_tmp/install" </dev/null; } ||
+    # opencode.ai/install is OpenCode 1's, which AgentK doesn't run.
+    { curl -fsSL -o "$oc_tmp/install" https://opencode.ai/v2/install && bash "$oc_tmp/install" </dev/null; } ||
       { rm -rf "$oc_tmp"; die "OpenCode's installer failed (see the output above). Install it yourself: https://opencode.ai"; }
     rm -rf "$oc_tmp"
   fi
@@ -556,23 +557,20 @@ if command -v claude >/dev/null 2>&1; then
   fi
 fi
 # OpenCode needs a model provider: one signed in with `opencode auth login`, or a provider's key in
-# the environment, which `opencode auth list` names under Environment.
+# the environment, which `opencode auth list` lists too. Both run on a server of their own
+# (--standalone): OpenCode 2's shared background service has another environment, and AgentK never
+# starts it.
 if has_opencode; then
   agents="${agents:+$agents, }OpenCode"
   oc=opencode; command -v opencode >/dev/null 2>&1 || oc="$opencode_bin/opencode"
-  oc_auth=$("$oc" auth list </dev/null 2>/dev/null || true)
+  oc_auth=$("$oc" auth list --standalone </dev/null 2>/dev/null || true)
   case $oc_auth in
-    *[!0-9]"0 credentials"*)
-      case $oc_auth in
-        *"environment variable"*) ;;
-        *)
-          if $interactive && ask "  OpenCode has no model provider signed in. Sign in now (opencode auth login)?"; then
-            "$oc" auth login </dev/tty || warn "OpenCode" "sign-in didn't finish; run 'opencode auth login' later"
-          else
-            warn "OpenCode" "no model provider signed in: run 'opencode auth login' before starting sessions"
-          fi
-          ;;
-      esac
+    *"No authenticated integrations"*)
+      if $interactive && ask "  OpenCode has no model provider signed in. Sign in now (opencode auth login)?"; then
+        "$oc" auth login --standalone </dev/tty || warn "OpenCode" "sign-in didn't finish; run 'opencode auth login' later"
+      else
+        warn "OpenCode" "no model provider signed in: run 'opencode auth login' before starting sessions"
+      fi
       ;;
   esac
 fi

@@ -1,10 +1,11 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ClosedProject, DatapackChoice, DatapackInvite, MekoDatapack, Project, RepoInfo } from '../../shared/types';
+import type { ClosedProject, DatapackChoice, DatapackInvite, MekoDatapack, OpenedProject, Project, RepoInfo } from '../../shared/types';
 import { newRepoNameProblem } from '../../shared/types';
 import {
   canonicalRepoName, defaultProjectDatapackName, isProjectDatapack, matchRepo, parseProjectDatapack, remoteFromDescription, remoteRepoName,
 } from '../../shared/datapacks';
 import { api, errorCode, errorMessage } from '../api';
+import { useTouch } from '../hooks/useMedia';
 import { cx, relativeTime } from '../util';
 import { Busy, Dialog, ErrorText, Field } from './common';
 
@@ -65,8 +66,11 @@ export function NewProjectDialog({
   /** A share to start with chosen (Open as project on its banner). */
   initialInvite?: DatapackInvite | null;
   onClose: () => void;
-  onCreated: (p: Project) => void;
+  /** `datapackEmpty`: the project's datapack is empty, so a learn session is offered first. */
+  onCreated: (p: OpenedProject) => void;
 }) {
+  // On touch, the keyboard comes up only when a field is tapped.
+  const touch = useTouch();
   const [repos, setRepos] = useState<RepoInfo[] | null>(null);
   const [roots, setRoots] = useState<string[]>([]);
   const [cloneInto, setCloneInto] = useState('');
@@ -455,7 +459,7 @@ export function NewProjectDialog({
               placeholder="Search datapacks…"
               value={dpFilter}
               onChange={(e) => setDpFilter(e.target.value)}
-              autoFocus
+              autoFocus={!touch}
             />
             <div className="dp-list" role="listbox" aria-label="Datapacks">
               {dpError && <p className="error-text pad">{dpError}</p>}

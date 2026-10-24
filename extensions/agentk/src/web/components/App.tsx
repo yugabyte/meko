@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import type { AppState, AuthStatus, CreateSessionRequest, DatapackInvite, FailedStart, Project, ProjectWithSessions, Session } from '../../shared/types';
+import type { AppState, CreateSessionRequest, DatapackInvite, FailedStart, Project, ProjectWithSessions, Session } from '../../shared/types';
 import { api, ApiError, errorMessage } from '../api';
+import { appUrl } from '../base';
 import { approveDesign, settleApprovals } from '../design-answers';
 import { useEvents, type InviteEvent, type NotifyEvent } from '../hooks/useEvents';
 import { useIsMobile } from '../hooks/useMedia';
@@ -9,6 +10,7 @@ import { installPrompting } from '../installapp';
 import { navigate, useRoute } from '../router';
 import { notifyLeader } from '../notifyLeader';
 import { railHiddenSaved, railWidthSaved, saveRailHidden, saveRailWidth, sessionTabsShown, useRailSessions } from '../rail';
+import { canSignOut, signOut, type MekoAuth } from '../signin';
 import { harnessLogosToggle } from '../toggle';
 import { pruneTerminals } from '../terminals';
 import { useTheme } from '../theme';
@@ -52,9 +54,10 @@ type Modal =
   | { kind: 'new-project'; invite?: DatapackInvite }
   /**
    * `fresh`: the project was just opened, so a Review a PR is offered first when it has PRs to review.
+   * `learn`: start on Learn the project (the project was just opened on an empty datapack, or its home offered it).
    * `retry`: a failed start to try again, filling the dialog in. `initial`: a task Ask AgentK proposed, to change before it starts.
    */
-  | { kind: 'new-session'; projectId: string; fresh?: boolean; retry?: FailedStart; initial?: CreateSessionRequest }
+  | { kind: 'new-session'; projectId: string; fresh?: boolean; learn?: boolean; retry?: FailedStart; initial?: CreateSessionRequest }
   /** The project on screen lost its last open session: offer to close it. */
   | { kind: 'close-project'; projectId: string }
   | { kind: 'settings'; tab?: SettingsTab }
@@ -84,7 +87,7 @@ async function showNotification(
   data: Record<string, string>,
   onClick: () => void,
 ): Promise<void> {
-  const options = { body: n.body, icon: '/logo.png', tag };
+  const options = { body: n.body, icon: appUrl('/logo.png'), tag };
   const reg = await navigator.serviceWorker?.getRegistration().catch(() => undefined);
   if (reg?.active) {
     try {
@@ -123,7 +126,8 @@ if (typeof window !== 'undefined') {
   if (document.hasFocus()) notifier.claim();
 }
 
-export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () => void }) {
+/** `mekoAuth`: what Meko, which signs people in to AgentK, says about this browser (null without Meko). */
+export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
   const route = useRoute();
   const [theme, cycleTheme] = useTheme();
   const [modal, setModal] = useState<Modal>({ kind: 'none' });
@@ -382,15 +386,6 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
     hideToastLater();
   }, [hideToastLater]);
 
-  const logout = async () => {
-    try {
-      await api.logout();
-    } catch {
-      /* ignore */
-    }
-    onLoggedOut();
-  };
-
   // One PATCH: the server moves the project to that index and renumbers the rest.
   const moveProject = async (id: string, index: number) => {
     try {
@@ -500,7 +495,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           navigate({ view: 'usage' }, { replace: isDrawerEntry() });
           closeDrawer();
         }}
-        username={state.username || auth.username || ''}
+        username={state.username}
         serverName={state.serverName ?? ''}
         serverHost={state.serverHost ?? ''}
         version={state.version}
@@ -525,7 +520,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
         onNewProject={fromDrawer(() => setModal({ kind: 'new-project' }))}
         onSettings={fromDrawer(() => setModal({ kind: 'settings' }))}
         onPalette={fromDrawer(() => setModal({ kind: 'palette' }))}
-        onLogout={auth.localAccess ? undefined : fromDrawer(logout)}
+        onLogout={canSignOut(mekoAuth) ? fromDrawer(() => void signOut()) : undefined}
         onReorder={moveProject}
         onResize={mobile ? undefined : setRailWidth}
         onHide={mobile ? undefined : () => toggleRail(true)}
@@ -567,6 +562,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             ghLogin={state.ghLogin ?? null}
             onMenu={openDrawer}
             onBack={() => goProject(currentProject)}
+            onLearn={() => setModal({ kind: 'new-session', projectId: currentProject.id, learn: true })}
             onError={showToast}
           />
         ) : currentProject ? (
@@ -590,7 +586,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           <>
             {mobile && <TopBar onMenu={openDrawer} title="AgentK" />}
             <div className="empty-main">
-              <img src="/logo.png" alt="" width={96} height={96} />
+              <img src={appUrl('/logo.png')} alt="" width={96} height={96} />
               <h2>No projects yet</h2>
               <p className="muted">
                 A project is an effort to build or improve a feature, product or service, worked on in one of your git repos. Each task you start in it gets its own worktree and Claude session.
@@ -612,7 +608,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           onCreated={(p) => {
             // Straight on to the project's first session.
             setOpened(p);
-            setModal({ kind: 'new-session', projectId: p.id, fresh: true });
+            setModal({ kind: 'new-session', projectId: p.id, fresh: true, learn: p.datapackEmpty });
             navigate({ view: 'project', projectId: p.id, sessionId: null });
           }}
         />
@@ -623,6 +619,8 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           ghLogin={state.ghLogin ?? null}
           harnesses={state.harnesses ?? []}
           fresh={modal.kind === 'new-session' && !!modal.fresh}
+          mekoOn={state.meko.configured}
+          learnFirst={modal.kind === 'new-session' && !!modal.learn}
           initial={modal.kind === 'new-session' ? (modal.retry?.request ?? modal.initial) : undefined}
           onClose={() => setModal({ kind: 'none' })}
           onCreated={(s) => {
@@ -657,7 +655,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
       {openPrSession && <OpenPrDialog key={openPrSession.id} session={openPrSession} onClose={() => setModal({ kind: 'none' })} />}
       {renameSession && <RenameSessionDialog key={renameSession.id} session={renameSession} onClose={() => setModal({ kind: 'none' })} />}
       {modal.kind === 'settings' && (
-        <SettingsDialog auth={auth} update={state.update} meko={state.meko} harnesses={state.harnesses ?? []} twoAgents={twoAgents} serverName={state.serverName} initialTab={modal.tab} onClose={() => setModal({ kind: 'none' })} onWhatsNew={(from, to) => setModal({ kind: 'whats-new', from, to })} />
+        <SettingsDialog mekoAuth={mekoAuth} update={state.update} meko={state.meko} harnesses={state.harnesses ?? []} twoAgents={twoAgents} serverName={state.serverName} initialTab={modal.tab} onClose={() => setModal({ kind: 'none' })} onWhatsNew={(from, to) => setModal({ kind: 'whats-new', from, to })} />
       )}
       {modal.kind === 'whats-new' && <WhatsNewDialog from={modal.from} to={modal.to} onClose={() => setModal({ kind: 'none' })} />}
       {modal.kind === 'palette' && (

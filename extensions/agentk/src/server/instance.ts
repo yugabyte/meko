@@ -62,7 +62,7 @@ export const defaultDeps = (): InstanceDeps => ({
 export class InstanceBusyError extends Error {
   constructor(readonly lease: Lease, home: string) {
     super(
-      `AgentK is already running for ${home} on ${lease.host} (pid ${lease.pid}, port ${lease.port}). ` +
+      `AgentK is already running for ${home} on ${lease.host} (pid ${lease.pid}${lease.port ? `, port ${lease.port}` : ''}). ` +
         `Only one server may use an AgentK home at a time. Stop it there first.`,
     );
   }

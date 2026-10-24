@@ -614,6 +614,10 @@ const MIGRATIONS: string[] = [
   UPDATE sessions SET position = (SELECT COUNT(*) FROM sessions o WHERE o.project_id = sessions.project_id
     AND (o.created_at < sessions.created_at OR (o.created_at = sessions.created_at AND o.id < sessions.id)));
   `,
+  // 40: purpose: what a session is for beyond its kind ('learn': a learn session, SessionPurpose); NULL for the rest.
+  `
+  ALTER TABLE sessions ADD COLUMN purpose TEXT;
+  `,
 ];
 
 export function openDb(path: string): Db {

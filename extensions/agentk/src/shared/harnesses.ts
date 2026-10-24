@@ -32,6 +32,11 @@ export interface HarnessCaps {
   userModels: boolean;
   /** The oldest version sessions start on (the one its hooks and files were checked against), or null for any. */
   minVersion: string | null;
+  /**
+   * The command that brings a version older than `minVersion` up to it, when its own update can't
+   * (OpenCode 1's `opencode upgrade` stays on 1.x), for what Settings and the installer say.
+   */
+  upgrade?: string;
   /** What it loads before it takes a session's first prompt, for the Starting view: "Kiro loads <this> first". */
   loads: string;
 }
@@ -40,7 +45,7 @@ export const HARNESS_CAPS: Record<HarnessId, HarnessCaps> = {
   claude: { label: 'Claude Code', short: 'Claude', login: 'claude auth login', mod: true, artifacts: true, usage: 'tokens', labelModels: false,
     userModels: false, minVersion: null, loads: 'its plugins, MCP servers and startup hooks' },
   opencode: { label: 'OpenCode', short: 'OpenCode', login: 'opencode auth login', mod: false, artifacts: false, usage: 'tokens', labelModels: true,
-    userModels: true, minVersion: '1.19.4', loads: 'its plugins and MCP servers' },
+    userModels: true, minVersion: '2.0.0', upgrade: 'opencode upgrade --major', loads: 'its plugins and MCP servers' },
   kiro: { label: 'Kiro', short: 'Kiro', login: 'kiro-cli login', mod: false, artifacts: false, usage: 'credits', labelModels: true,
     userModels: false, minVersion: '2.32.0', loads: 'its agent and MCP servers' },
 };

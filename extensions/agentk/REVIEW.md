@@ -16,6 +16,11 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Server restarts and updates leave running sessions untouched. The one exception is the
       one-time move of an older home into Meko's data folder (`src/server/movehome.ts`, AGENTS.md
       invariant 1), and nothing else may start it or end sessions the same way.
+- [ ] For a home already in a Meko data folder, `uninstall`, `start`, `stop`, `status` and
+      `_handoff` refuse a `MEKO_HOME` that names another folder (`refuseOtherMeko`, checked in
+      `main()`), so a Meko for another folder can't stop or uninstall it, or serve it and take its
+      old login. A home that hasn't moved there yet isn't
+      covered: another Meko's commands still act on it.
 - [ ] `recover()` / `reconcile()` stay idempotent: live panes are left alone, missing panes are resumed,
       and sessions still being created or launched are skipped (so Claude never starts twice).
 - [ ] Nothing respawns a live pane, and a session host error other than "no host" is never read as
@@ -66,7 +71,12 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       conversation: worktrees are pooled, and Kiro keeps earlier sessions' under the same folder.
       Nothing is written to the user's OpenCode config: AgentK's plugin and Meko server reach only
       AgentK's sessions, through their environment (`OPENCODE_CONFIG_CONTENT`, `OPENCODE_CONFIG`), and
-      a secret (Meko's key) goes in an owner-only file, never the session's environment.
+      a secret (Meko's key) goes in an owner-only file, never the session's environment. Every
+      OpenCode command AgentK runs that needs a server (the session's TUI, `run`, `session`, `auth`)
+      passes `--standalone`: OpenCode 2's shared background service has another environment, and
+      must never be started with a session's. Only `--version` and `upgrade` go without it: they're
+      one-shot commands in the server's own environment that neither start nor reach a server. A plugin folder a session
+      loaded is never written again (OpenCode reloads a plugin whose files change).
       No harness is assumed installed, Claude Code included: AgentK starts, and every feature that
       needs an agent asks the registry for an available one (`Harnesses.defaultFor`/`pick`) and
       says what to install when there's none, rather than running `claude` regardless.
@@ -83,15 +93,15 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 
 ## 2. Security
 
-- [ ] New `/api/*` routes require login unless they're one of the three public auth routes, or the
-      request has local access (`localAccess()`: loopback bind, loopback peer, localhost `Host`,
-      no forwarding headers, not cross-site by `Sec-Fetch-Site` or `Origin`). Nothing widens local
-      access to a network bind, another `Host`, a forwarded address, or a request from another site. Access
-      checks key on the matched route, never the raw URL (the router decodes `/%61pi/`).
+- [ ] The server listens only on its unix socket and has no login of its own: Meko signs people in
+      and serves AgentK at `/ext/agentk/` (AGENTS.md invariant 3). Nothing adds a TCP listener, a
+      login, or trust in a forwarding header. Access checks key on the matched route, never the raw
+      URL (the router decodes `/%61pi/`).
 - [ ] Request bodies are type-checked before use (a wrong type is a 4xx, never a 500), and nothing
       re-adds a `text/plain` or form body parser (HTML forms must not be able to post to the API).
-- [ ] Writes and WebSocket upgrades still pass the origin check; cookies stay `HttpOnly`,
-      `SameSite=Strict`, and `Secure` under TLS.
+- [ ] Writes and WebSocket upgrades still pass the origin check. The page builds every URL of
+      AgentK's own under its base (`src/web/base.ts`), and calls Meko's routes (`/api/v1/auth/*`)
+      root-absolute.
 - [ ] Nothing from a session's worktree that its repo's author controls (settings, scripts, prompts,
       agent or MCP config) runs or is used unless `repoConfigTrusted(row)` says so (`headtrust.ts`):
       on a public repo's PR head, anyone can have written it. A PR found by its branch's name must
@@ -105,10 +115,11 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       Meko URL or key change is checked against Meko before it's saved, and a typed API URL is
       checked without the key. Remote URLs lose their credentials before they go into a datapack
       description (`withoutCredentials`).
-- [ ] Login limits hold (per address or IPv6 /64, and site-wide), and nothing sent to a browser can
-      queue in memory without limit (terminal output pauses the pty; state snapshots are skipped).
-- [ ] The hook socket stays owner-only (directory 0700, socket 0600), and events are matched by
-      per-session token.
+- [ ] Nothing sent to a browser can queue in memory without limit (terminal output pauses the pty;
+      state snapshots are skipped). A socket that closes abnormally (1006: Meko refused it or closed
+      a signed-out session's) asks Meko about the sign-in alongside its retry, throttled.
+- [ ] The web socket and the hook socket stay owner-only (directory 0700, socket 0600; bound under a
+      temporary name and renamed, `listenPrivate`), and hook events are matched by per-session token.
 - [ ] Nothing internal (hostnames, mount paths, tokens) is committed; the repo will be public.
 - [ ] Pasted images (`POST /api/sessions/:id/images`) are checked by their bytes, size-capped, and
       saved owner-only under the session's `pastes/` folder with a name the server picks; the
@@ -250,7 +261,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       false: no key, and no Meko running on this computer) means no Meko calls at all; the one
       thing done then is looking for the Meko on this computer every minute (`meko token --json`
       in `Core.refreshLocalMeko`, a local command with a 5 s timeout, one at a time, never a Meko
-      call, and only while there's no Meko). Reading the local Meko again otherwise happens only on
+      call, and only while there's no Meko, or no `meko` on this computer: `lookForLocalMeko`, so
+      the install banner goes once Meko is installed). Reading the local Meko again otherwise happens only on
       events (startup, Settings open, a failed connection to it at most every 30 s), and a change
       reconnects without forgetting the account's invites (`mekoChanged` is for switching Mekos).
       The one poll is following a knowledge-base upload's
@@ -270,6 +282,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       start, closing the project). Writing it never fails the call. Claude's calls reach it only
       from the mod's `/mod/meko` end, never change what Claude gets back, and a reply read from a
       file Claude Code saved comes only from the transcript's own session's `tool-results` folder.
+      Kiro's and OpenCode's reach it only from the usage read of their own files, once per call
+      (when its `meko_calls` row is new).
 - [ ] The learn step (`learn.ts`) writes only to the session's dedicated datapack, never a shared
       one, and on the mod path never a fact that names this machine (home, AgentK's home,
       worktree, repo path, by the stored spelling and by `claudePath()`'s); the typed path relies
@@ -282,8 +296,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       per session. Its model calls' usage is
       recorded (`usage_messages`, agent `agentk:learn`), and the usage report carries counts and
       tokens only, never a fact's text.
-- [ ] What Meko doesn't know (`mekogaps.ts`) only reads what the transcript reader and recall at
-      start recorded: no Meko call lists or judges it. Teach Meko is the one write: what the user
+- [ ] What Meko doesn't know (`mekogaps.ts`) only reads what the usage readers (Claude's
+      transcript reader, Kiro's session log reader `ingestKiroMekoCalls`, OpenCode's plugin lines
+      in `ingestOpenCodeUsage`) and recall at start recorded: no Meko call lists or judges it. Teach Meko is the one write: what the user
       typed, into the project's dedicated datapack only, as AgentK in the project's conversation,
       and a question is marked taught only once Meko took it. A learn step marks only questions
       still open when it writes, offered from Claude's own searches (never one asked only by
@@ -346,4 +361,4 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] The PR title (the squash-merge commit subject) passes the repo root's `scripts/check-title.sh`, its component
       names where the change is (`agentk` for AgentK, `repo` for root-only changes), and its type
       fits the whole change: `feat`/`fix`/`perf`/`deps` ship a release, `ci`/`test`/`docs`/`nit`/
-      `chore` don't. Comment-only changes are `nit`. The `PR title` workflow checks the format, not the type or which component fits. There's no agent attribution.
+      `chore` don't. Comment-only changes are `nit`. The `PR title` workflow checks the format, not the type or which component fits.

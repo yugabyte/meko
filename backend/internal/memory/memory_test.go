@@ -162,7 +162,7 @@ func TestMemoryEngineWithAnotherModelIsRefused(t *testing.T) {
 	}
 }
 
-// The done-when check, with the real model: a paraphrased question finds its memory, with a 0-1
+// The end-to-end check, with the real model: a paraphrased question finds its memory, with a 0-1
 // score and the cosine as raw_similarity_score, and an exact identifier clears AgentK's 0.75
 // recall cut once BM25 has a datapack's worth of memories to weigh terms against.
 func TestParaphraseAndIdentifierSearch(t *testing.T) {

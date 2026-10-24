@@ -1,38 +1,40 @@
 # Meko backend: MCP and REST
 
-Status: approved; built. Milestone 3 of the backend (issue #169), on the foundation in
-[design.md](design.md) and the memory engine in [memory-engine.md](memory-engine.md). Built in
-stacked PRs; each section below names the PR that adds it, so the doc matches the code at every
-step:
+Agents (Claude Code, AgentK, and the CLI's tool commands) reach Meko over MCP at `/mcp` on the API
+listener, and the web UI ([web-ui.md](web-ui.md)) over `/api/v1` on the web listener ([web.md](web.md)), with Meko Cloud's tool names, arguments, paths and
+reply shapes, written here from scratch. Both call the service layer in `internal/memory`
+([memory-engine.md](memory-engine.md)); the knowledge-file tools and routes are designed in
+[knowledge.md](knowledge.md) and listed here beside the others.
 
-Milestone 4 (#170) added the knowledge-file tools and routes; [knowledge.md](knowledge.md) is its
-design, and this doc lists its interfaces beside the others.
+## Auth
 
-| PR | Adds |
-|---|---|
-| #197 | The rename from Meko Local to Meko (merged) |
-| #201 | The client token, the `[server] auth` setting, the call log; this doc |
-| #202 | MCP at `/mcp`, the search slots, and `meko search`, `add` and `datapacks` |
-| #203 | Learnings (keep and promote), artifacts, provenance, and the replay of AgentK's Meko calls |
-| #204 | The `/api/v1` REST subset meko_ui calls |
-
-Milestone 3 puts milestone 2's service layer (`internal/memory`) on the wire. Agents (Claude Code,
-AgentK, and the CLI's tool commands) reach Meko over MCP, and meko_ui (from
-milestone 6) over `/api/v1`, with Meko Cloud's tool names, arguments and reply shapes, written here
-from scratch.
-
-## Auth (#201)
+On the API listener (`127.0.0.1:7778`):
 
 | Route | Admin token | Client token | No credential |
 |---|---|---|---|
 | `/healthz` | yes | yes | yes |
-| `/api/v1/status`, `/api/v1/version`, `/api/v1/ui-code` | yes | 403 | 401 |
+| `/api/v1/status`, `/api/v1/version`, `/api/v1/auth/setup-link` (`meko setup_link`) | yes | 403 | 401 |
 | `/api/v1/server` (the web UI's status page: `/api/v1/status`'s reply) | yes | yes | 401, or yes with `auth = "none"` |
 | Every other route (`/mcp`, the data routes) | yes | yes | 401, or yes with `auth = "none"` |
-| The knowledge-file links, `/api/v1/knowledge-uploads/<ticket>` and `/api/v1/knowledge-downloads/<ticket>` (milestone 4) | yes | yes | yes: the ticket is the credential |
-| The web UI's files, `/` and every GET no other route takes, and `/api/v1/ui-code/redeem` (milestone 6, [web-ui.md](web-ui.md)) | yes | yes | yes: the files are static, and the one-time code is the redeem's credential |
+| The knowledge-file links, `/api/v1/knowledge-uploads/<ticket>` and `/api/v1/knowledge-downloads/<ticket>` | yes | yes | yes: the ticket is the credential |
 
-- **The admin token** is the CLI's, as in the foundation: new at each start, in `run/admin.token`.
+The web listener ([web.md](web.md)) serves the same `/mcp`, data routes, `/api/v1/server` and
+knowledge-file links to a browser with local access or the owner's session, never with a token, and
+has no admin-only routes. Its own routes:
+
+| Route | Credential | What |
+|---|---|---|
+| `GET /api/v1/auth/status` | none | `{access, local_access, signed_in, setup_required, reset, username, totp_enabled}`: `setup_required` while remote access has no login (or a setup link waits and this browser isn't signed in), `reset` when that link replaces a login |
+| `POST /api/v1/auth/setup` `{token, username, password}` | none: the setup link's token | Sets the login, signs every browser out, and signs this one in (the cookie). 400 `VALIDATION_ERROR`, 403 `FORBIDDEN` (a link that's wrong or used), 429 `RATE_LIMITED` |
+| `POST /api/v1/auth/login` `{username, password, totp?}` | none | Signs in (the cookie). 401 `BAD_LOGIN`, 401 `TOTP_REQUIRED` (no code, or a wrong one: the message says which), 429 `RATE_LIMITED` |
+| `POST /api/v1/auth/logout` | none | Ends this browser's session and the WebSockets it opened |
+| `POST /api/v1/auth/password` `{current, next}` | session or local | Signs every other browser out. 400 `VALIDATION_ERROR`, 409 `CONFLICT` (no login yet) |
+| `POST /api/v1/auth/totp/enroll`, `confirm {code}`, `disable {code}` | session or local | Enroll gives `{secret, otpauth_url}`; confirm turns two-step sign-in on with a code from it; disable turns it off with a current code |
+| `GET /api/v1/extensions` | session or local | `[{name, title, path, available}]` |
+| `/ext/<name>/*` | session or local | The extension's web UI ([web.md](web.md)); a page without a session goes to `/signin?next=` |
+| The web UI's files: `/` and every GET no other route takes | none | Static |
+
+- **The admin token** is the CLI's ([design.md](design.md#auth)): new at each start, in `run/admin.token`.
 - **The client token** is what MCP and REST clients send as `Authorization: Bearer <token>`:
   32 random bytes, hex, in `client.token` (0600) at the data folder's root. `serve` (or
   `meko token`, if it runs first) makes it once, and it's kept across restarts, because Claude
@@ -46,38 +48,40 @@ from scratch.
 - **`[server] auth = "none"`** (or `MEKO_AUTH=none`) lets `/mcp` and the data routes take requests
   with no credential; any `Authorization` header is then ignored unless it's the client or admin
   token. The default is `"token"`. An unknown value is refused at start, so a typo never turns auth
-  off. Everything else stays: status and version still need the admin token, the server still
-  listens on 127.0.0.1 only, and the Host and Origin checks still apply. Each start logs a warning,
+  off. Everything else stays: status and version still need the admin token, the API listener still
+  listens on 127.0.0.1 only, and the Host and Origin checks still apply. It doesn't touch the web
+  listener, which never takes a token. Each start logs a warning,
   and `meko status` shows `Auth: none` with what it means.
-- The credential a request got in with (`admin`, `client` or `none`) is recorded with each call,
-  never the token. Every 401 says `WWW-Authenticate: Bearer`.
-- Per-client API keys, which the PRD asks for, are #195.
-- **The knowledge-file links** (milestone 4) take no token, as S3's presigned URLs need none: a
+- The credential a request got in with (`admin`, `client` or `none`, and on the web listener
+  `session` or `local`) is recorded with each call, never the token. `knowledgebase_upload_file`,
+  which reads a path as Meko's user, takes only `admin` or `client`. Every 401 on the API listener
+  says `WWW-Authenticate: Bearer`; the web listener's don't, since it takes no Bearer token.
+- Per-client API keys aren't built yet: every client shares the client token.
+- **The knowledge-file links** take no token, as S3's presigned URLs need none: a
   browser form post, a new download tab and an agent posting to an upload link can't send one.
   Their ticket is 256 random bits, kept in memory for 5 minutes and good once; an upload's is
   bound to its datapack, key, exact size and SHA-256. The Host and Origin checks still apply. The access log
   records them like any request; the call log holds MCP calls only.
 
-## The call log (#201)
+## The call log
 
-`call_log` (`0004_call_log.sql`) gets one row per MCP tool call, which replaces Langfuse's traces
-for metrics. Each row records:
+`call_log` (`0004_call_log.sql`) gets one row per MCP tool call, which metrics, usage and the
+web UI's decision trace are computed from. Each row records:
 
 - the time, tool, datapack, agent, conversation id and credential;
 - whether it worked (with its error code) and how long it took;
 - the result counts per source (memory, knowledge base, conversation);
 - the results by match quality, as Meko Cloud bands them: 0.75 and up, 0.5 and up, below, by cosine
-  similarity (a memory's `raw_similarity_score`, else its `score`; 1 − `distance` for the others).
-  Bands are counted when the call is recorded, so calls recorded before memories were banded by
-  cosine (they were by `score`) keep their old bands until the call log's 90 days age them out;
+  similarity (a memory's `raw_similarity_score`, else its `score`; 1 − `distance` for the others),
+  counted when the call is recorded;
 - `context_search`'s token estimate (sent and saved), and what `track_token_usage` reports;
-- its steps as JSON (`[{step, ms, n}]`), enough for milestone 6's trace drawer to show timings.
+- its steps as JSON (`[{step, ms, n}]`), enough for the web UI to show timings.
 
 It never holds arguments, text or tokens. It has no foreign key to datapacks, so a deleted
 datapack's history stays until it's pruned. `serve` prunes rows older than 90 days at start and
 then daily (`memory.RunCallPruner`). The rows don't count toward the 200 MB content target.
 
-## MCP at /mcp (#202)
+## MCP at /mcp
 
 `internal/mcp` serves Meko Cloud's tools on the official `modelcontextprotocol/go-sdk` (v1.8.0),
 mounted at `/mcp` behind the server's Host, Origin and credential checks, with an 8 MB body limit.
@@ -147,7 +151,7 @@ mounted at `/mcp` behind the server's Host, Origin and credential checks, with a
 | `artifact_put` | `{artifact_id, content_hash, filename, content_type, size_bytes, stored_in: "db", created_at}` | 5 MiB at most (`artifact_too_large`); `invalid_base64`. The same bytes are kept once. |
 | `artifact_get` | The same, plus `content_base64` | Always inline, never `local_path`. `ARTIFACT_NOT_FOUND`. |
 
-The knowledge-file tools (milestone 4, [knowledge.md](knowledge.md)):
+The knowledge-file tools ([knowledge.md](knowledge.md)):
 
 | Tool | Reply | Notes |
 |---|---|---|
@@ -161,9 +165,10 @@ The knowledge-file tools (milestone 4, [knowledge.md](knowledge.md)):
 
 - Its sources run at the same time (`memory.ContextSearch`), so it takes as long as the slowest:
   memory search (the memory engine's hybrid search, Meko Cloud's 0-1 `score` and the cosine as
-  `raw_similarity_score`), knowledge-base search (milestone 4's, keeping results within cosine
-  distance 0.6, and reranked keyword or hybrid matches past it), and conversation search (milestone 2's, which leaves out the caller's own
-  conversation).
+  `raw_similarity_score`), knowledge-base search ([knowledge.md](knowledge.md#search), keeping results within
+  cosine distance 0.6, and reranked keyword or hybrid matches past it), and conversation search
+  ([memory-engine.md](memory-engine.md#conversations-internalmemory), which leaves out the caller's
+  own conversation).
 - A source is `null` when it wasn't asked for (`force_source`) or the memory engine couldn't take the
   query; empty when it found nothing. A source that fails otherwise is logged and empty, as in
   Cloud.
@@ -173,10 +178,9 @@ The knowledge-file tools (milestone 4, [knowledge.md](knowledge.md)):
   are any, else the whole knowledge base's (1000 a chunk), else 10000. Each source is there only
   when it returned something.
 
-## Responsiveness (#202)
+## Responsiveness
 
-A slow search must never make other requests wait (the PRD). The 500 ms p95 target at 200 MB is
-#192's.
+A slow search must never make other requests wait.
 
 - `context_search` runs its sources concurrently.
 - The store's read pool has 8 connections. Vector, keyword and conversation-chunk scans each take
@@ -185,7 +189,7 @@ A slow search must never make other requests wait (the PRD). The 500 ms p95 targ
 - No write transaction is open while Go waits on the memory engine: the memory engine calls back into the store
   API and needs the single writer.
 
-## CLI (#202)
+## CLI
 
 `meko search "<question>"`, `meko add_memory "<text>"`, `meko datapacks`, `meko create_datapack
 <name>` and `meko delete_datapack <name|id>` are MCP clients of the running server: they call
@@ -197,27 +201,28 @@ id derived from `meko-cli` (Cloud's tools require one). `--datapack` takes a nam
 datapack and everything in it, so it asks `Delete it? [y/N]` first (as `meko destroy` does: it
 reads stdin, end of input means no, and a no exits 1), unless `--force`. It says so when that's the default
 datapack: Meko makes the default only on first start, and once it's gone `search` and
-`add_memory` need `--datapack`, which they say instead of the tool's `datapack_id_required`. Milestone 4 adds `meko upload <file>...`, which calls `knowledgebase_upload_document`, posts each
+`add_memory` need `--datapack`, which they say instead of the tool's `datapack_id_required`. `meko upload <file>...` calls `knowledgebase_upload_document`, posts each
 file to its link and follows `knowledgebase_document_status` until it's indexed, a file already uploaded too
 (`--no-wait` returns once it's uploaded; a file that fails makes the command exit 1), and `meko upload_status
 <key>`. `meko list mcp-tools` prints each tool with its description's first sentence (`--json` adds titles),
-from the same definitions `/mcp` serves, so it needs no server. `meko ui` opens the web UI ([web-ui.md](web-ui.md)) with the client token in the link's
-fragment (a one-time code, not the token: the link passes through the browser's command line), and `--no-open`
-only prints the link. `meko token
+from the same definitions `/mcp` serves, so it needs no server. `meko ui [path]` opens the web listener's URL ([web.md](web.md)), at a path when given
+(`/ext/agentk/` for AgentK); the link carries no credential, and `--no-open` only prints it. With remote
+access and no login yet, it prints a setup link instead; `meko setup_link` prints one any time. `meko token
 --mcp` prints the `claude mcp add` command that registers Meko, named `meko`: AgentK recognizes
-Meko's tools by that name (`mcp__meko__*`), and `meko token --json` prints the MCP URL, the token
+Meko's tools by that name (`mcp__meko__*`), and `meko token --json` prints the MCP URL, the web
+listener's (`web_url`, where AgentK finds its own address), the token
 and whether a server runs, for installers (AgentK's reads it). `meko logs` and the commands that
-install and run Meko came in #171 ([install.md](install.md)).
+install and run Meko are in [install.md](install.md).
 
-## Learnings, promotion and artifacts (#203)
+## Learnings, promotion and artifacts
 
 `0005_learnings_artifacts.sql` adds them.
 
 - **Learnings**: `memories.promotion_action` is `''` for a learning (every memory starts as one,
-  as in Meko Cloud) and `keep_as_memory` once the user keeps it (`POST /keep-as-memory`, in #204).
+  as in Meko Cloud) and `keep_as_memory` once the user keeps it (`POST /keep-as-memory`).
   The memory list's `scope=learnings` is the learnings; `scope=memories` (the default) is learnings
   and kept memories.
-- **Promotion** (`memory_promote`, and `POST /promote-memories` in #204) moves learnings into the
+- **Promotion** (`memory_promote`, and `POST /promote-memories`) moves learnings into the
   datapack's collective memory, as Cloud does. Each is copied into `promoted_memories` with every
   column of its row but the lemmas (id, text, provenance, role, actor, hash, both dates), the copy
   commits, and then the memory is deleted through the memory engine (which also unlinks mem0's entities),
@@ -233,19 +238,19 @@ install and run Meko came in #171 ([install.md](install.md)).
   finished by promoting it again.
 - **Counts** (`datapack_describe`): `memory_count` is learnings and kept, `learnings_count` the
   learnings, `collective_memory_count` and `shared_knowledge_count` the promoted ones.
-- Since milestone 4, promotion also puts the memory into the knowledge base as a chunk with the
+- Promotion also puts the memory into the knowledge base as a chunk with the
   memory's own vector, so `knowledgebase_search` finds it at once and `promoted_to_kb_at` is set
   ([knowledge.md](knowledge.md)).
 - **Provenance**: `memories.connector_id` (`''` for none) beside `agent_id`, `conversation_id`
   and `source`, so every memory records where it came from from day one. Nothing sets it until
-  connectors arrive (#194), and replies don't show it yet.
+  connectors exist, and replies don't show it yet.
 - **Artifacts**: `artifacts` holds the bytes in the database, once per datapack and SHA-256, up to
   5 MiB (Cloud's limit). `artifact_get` returns them inline as `content_base64`, which AgentK reads
   as well as Cloud's `local_path`, and records when the file was last read. It's annotated
-  read-only as in Cloud: that time is bookkeeping, not a change to the artifact. The bytes move
-  with the database in milestone 7's export, and count toward the 200 MB content target.
+  read-only as in Cloud: that time is bookkeeping, not a change to the artifact. The bytes go
+  with the datapack's export, and count toward the 200 MB content target.
 
-## AgentK's calls (#203)
+## AgentK's calls
 
 `internal/mcp/agentk_contract_test.go` replays every call AgentK's Meko client makes
 (`extensions/agentk/src/server/meko.ts`), with the same tool names and arguments:
@@ -259,12 +264,13 @@ install and run Meko came in #171 ([install.md](install.md)).
 - `putArtifact`, `getArtifact`.
 
 It checks each reply has every field MekoClient reads. When a method in `meko.ts` changes a call
-or reads a new field, change its step there. #189 moves AgentK's own tests onto a real Meko and
-retires this replay.
+or reads a new field, change its step there. Once AgentK's own tests run against a real Meko,
+this replay can go.
 
-## REST at /api/v1 (#204)
+## REST at /api/v1
 
-`internal/rest` serves the routes meko_ui calls, with Meko Cloud's paths and shapes in the
+`internal/rest` serves the subset of Meko Cloud's REST routes that the web UI, AgentK and
+`meko export` use, plus a few of Meko's own (marked below), with Cloud's paths and shapes in the
 `{data, error}` envelope, mounted on the server's `/api/v1` group (1 MB body limit), behind the
 same credential check as `/mcp`. Shapes MCP shares come from `internal/wire`; REST-only ones are in
 the package. Its browser client is the web UI ([web-ui.md](web-ui.md)), the only page whose origin
@@ -280,20 +286,20 @@ the server takes. (The CLI calls `/api/v1/status`, which `internal/server` serve
 
 | Area | Routes | Notes |
 |---|---|---|
-| Local user | `GET /auth/config`, `GET /auth/me`, `PATCH /auth/me`, `PATCH /auth/me/profile`, `GET /auth/me/usage` | `{provider: "none"}`. `/auth/me` gives the install's user as `account_id`, the profile kept in `settings` (Local User until changed), `email_verified: true`, `user_type: "pro"`; onboarding starts done (meko_ui's onboarding isn't part of the local UI). Usage counts datapacks, conversations, searches, adds and tracked tokens. |
-| Datapacks | `GET`, `POST /datapacks`; `GET`, `PATCH`, `DELETE /datapacks/:id`; `GET /datapacks/:id/provision-status`, `/agents`, `/conversations/count` | The list is newest first, every row `grant: "owner"` with the local user as owner, counts left at 0 as in Cloud; describe counts. `POST` replies 201 with Cloud's blanked `mcp_server` and `db_access`. `provision-status` gives the MCP URL and the client token as `mcp_api_key`, for the Connect page, only to a request that sent a credential: with `auth = "none"`, one that sent none gets `""`, so the token keeps its meaning once auth is back on. Agents are those seen in memories, conversations and the call log. |
-| Metrics | `GET /datapacks/:id/metrics`, `GET /datapacks/:id/token-savings` | From the call log (90 days): searches (`context_search` as hybrid, `memory_search` as memory, `knowledgebase_search` as kb), tokens sent and saved, score bands, agents, last access, 30 days of activity. Sizes come from the store, knowledge files' (`kb_file_count`, `kb_chunk_count`, `kb_bytes`) too. Extraction fields are 0 until #190. `agent_count` leaves out the web UI's own agent, `meko_web_ui`: it's the user. `?days=N` (Meko's own) narrows the searches and the activity to the last N days (at most 90); without it they're Cloud's: 90 days of totals, 30 of activity. |
-| Export (Meko's own) | `GET /datapacks/:id/export` | One datapack as a zip to download (`meko-<name>-<date>.zip`), streamed. JSON Lines per kind: `memories.jsonl` (`{id, text, hash, state (learning or kept), agent_id, conversation_id, role, actor_id, attributed_to, expiration_date, metadata, created_at, updated_at, history, embedding}`), `collective_memories.jsonl` (`{..., source, connector_id, promoted_at, promoted_by, embedding}`), `conversations.jsonl` (`{id, title, agent_id, session_id, run_id, metadata, created_at, updated_at, turns: [{id, input, output, reasoning, plan, metadata, created_at, chunks: [{index, text, embedding}]}]}`), `knowledge.jsonl` (`{id, filename, type, sha256, size_bytes, status, error, uploaded_at, completed_at, path, chunks: [{index, text, metadata, embedding}]}`), `artifacts.jsonl` (`{id, filename, content_type, sha256, size_bytes, agent_id, created_at, path}`) and `call_log.jsonl` (every call with its steps). The bytes are at each `path`: `knowledge/<sha256>.<ext>` and `artifacts/<sha256>.<ext>`. Knowledge files live on disk, outside the snapshot, so one deleted while the export runs goes out with `path: ""` and no bytes. `datapack.json`, written last, is `{format: "meko-datapack-export", version: 2, exported_at, meko_version, embedding: {model, dims}, left_out, counts, datapack}`. An `embedding` is null until the sweep has embedded its text. Ids and dates are kept, and every read goes through one snapshot of the database, so writes made while it runs neither drop nor repeat a row; a memory a promotion stopped partway on is exported once, as a collective memory. Keyword indexes and entities are left out (rebuilt from the text on import). The first half of #173; nothing imports it yet. A failure before the body starts gets an error reply; one after it is logged and the connection is cut, so the download fails instead of ending cleanly. `meko export` calls it, checks the zip opens and holds `datapack.json`, and won't replace a file unless `--force`. |
+| Local user | `GET /auth/config`, `GET /auth/me`, `PATCH /auth/me`, `PATCH /auth/me/profile`, `GET /auth/me/usage` | `{provider: "none"}`. `/auth/me` gives the install's user as `account_id`, the profile kept in `settings` (Local User until changed), `email_verified: true`, `user_type: "pro"`; onboarding starts done (the web UI has no onboarding). Usage counts datapacks, conversations, searches, adds and tracked tokens. |
+| Datapacks | `GET`, `POST /datapacks`; `GET`, `PATCH`, `DELETE /datapacks/:id`; `GET /datapacks/:id/provision-status`, `/agents`, `/conversations/count` | The list is newest first, every row `grant: "owner"` with the local user as owner, counts left at 0 as in Cloud; describe counts. `POST` replies 201 with Cloud's blanked `mcp_server` and `db_access`. `provision-status` gives the MCP URL and the client token as `mcp_api_key`, for the Connect page, only to a request that sent a token or comes from the owner signed in on the web listener: with `auth = "none"`, or with the web listener's local access (which every user of the computer has), it's `""`, and the page says to run `meko token`. The token lets a caller do what those don't (`knowledgebase_upload_file` reads a path as Meko's user), and keeps its meaning once auth or access changes. Agents are those seen in memories, conversations and the call log. |
+| Metrics | `GET /datapacks/:id/metrics`, `GET /datapacks/:id/token-savings` | From the call log (90 days): searches (`context_search` as hybrid, `memory_search` as memory, `knowledgebase_search` as kb), tokens sent and saved, score bands, agents, last access, 30 days of activity. Sizes come from the store, knowledge files' (`kb_file_count`, `kb_chunk_count`, `kb_bytes`) too. Extraction fields are 0 until extraction is built. `agent_count` leaves out the web UI's own agent, `meko_web_ui`: it's the user. `?days=N` (Meko's own) narrows the searches and the activity to the last N days (at most 90); without it they're Cloud's: 90 days of totals, 30 of activity. |
+| Export (Meko's own) | `GET /datapacks/:id/export` | One datapack as a zip to download (`meko-<name>-<date>.zip`), streamed. JSON Lines per kind: `memories.jsonl` (`{id, text, hash, state (learning or kept), agent_id, conversation_id, role, actor_id, attributed_to, expiration_date, metadata, created_at, updated_at, history, embedding}`), `collective_memories.jsonl` (`{..., source, connector_id, promoted_at, promoted_by, embedding}`), `conversations.jsonl` (`{id, title, agent_id, session_id, run_id, metadata, created_at, updated_at, turns: [{id, input, output, reasoning, plan, metadata, created_at, chunks: [{index, text, embedding}]}]}`), `knowledge.jsonl` (`{id, filename, type, sha256, size_bytes, status, error, uploaded_at, completed_at, path, chunks: [{index, text, metadata, embedding}]}`), `artifacts.jsonl` (`{id, filename, content_type, sha256, size_bytes, agent_id, created_at, path}`) and `call_log.jsonl` (every call with its steps). The bytes are at each `path`: `knowledge/<sha256>.<ext>` and `artifacts/<sha256>.<ext>`. Knowledge files live on disk, outside the snapshot, so one deleted while the export runs goes out with `path: ""` and no bytes. `datapack.json`, written last, is `{format: "meko-datapack-export", version: 2, exported_at, meko_version, embedding: {model, dims}, left_out, counts, datapack}`. An `embedding` is null until the sweep has embedded its text. Ids and dates are kept, and every read goes through one snapshot of the database, so writes made while it runs neither drop nor repeat a row; a memory a promotion stopped partway on is exported once, as a collective memory. Keyword indexes and entities are left out (rebuilt from the text on import). Nothing imports it yet: it's the first half of moving a datapack to Meko Cloud. A failure before the body starts gets an error reply; one after it is logged and the connection is cut, so the download fails instead of ending cleanly. `meko export` calls it, checks the zip opens and holds `datapack.json`, and won't replace a file unless `--force`. |
 | Usage (Meko's own) | `GET /datapacks/:id/usage` | From the call log (90 days), for the web UI's Analytics tab; Cloud has no such route. `{calls, errors, tools: [{tool, calls, errors, p50_ms, p95_ms}], steps: [{step, calls, p50_ms, p95_ms}], agents: [{agent_id, calls, searches, last_at}], recent: [{id, at, tool, agent_id, ok, error_code, ms, memory_n, kb_n, conversation_n, steps: [{step, ms, n}]}] (the latest 25), input_tokens, output_tokens}`, over 90 days or `?days=N`. |
-| Artifacts | `GET /datapacks/:id/artifacts`, `POST .../artifacts/:hash/download-url`, `GET .../artifacts/:hash` | Pages from 1 (25, at most 200), newest first, `q` on the filename. `download-url` has no `url` (the bytes are in the database), so meko_ui reads them from the `GET`. A hash that isn't 64 hex: 400 `INVALID_PARAM`; missing: 404 `ARTIFACT_NOT_FOUND`. |
+| Artifacts | `GET /datapacks/:id/artifacts`, `POST .../artifacts/:hash/download-url`, `GET .../artifacts/:hash` | Pages from 1 (25, at most 200), newest first, `q` on the filename. `download-url` has no `url` (the bytes are in the database), so a client reads them from the `GET`. A hash that isn't 64 hex: 400 `INVALID_PARAM`; missing: 404 `ARTIFACT_NOT_FOUND`. |
 | Memories | `GET /memories`, `DELETE /memories/:id`, `GET /memories/:id/history` (Meko's own: `{memory_id, history: [{memory_id, action (ADD, UPDATE, DELETE), previous_value, new_value, created_at, updated_at, is_deleted}]}`, oldest first, as mem0 recorded them; only for a memory the local user can get, as `GET` on it would be: another user's, a deleted or a promoted memory is 404; the id is matched in any case), `POST /promote-memories`, `POST /keep-as-memory`, `GET /promoted-memories`, `DELETE /promoted-memories/:id` | The list takes `datapack_id`, `scope=learnings|memories`, `q` (any case) and pages of 20 (at most 100), newest first, `top_k: 0`, every row the local user's (`is_mine`). Promote and keep take `{datapack_id, memory_ids}` (UUIDs, any case). A promotion that stops partway (the memory engine went down) replies 500 `INTERNAL_ERROR` with `promoted <id>` in `details` for each one it did. |
-| Knowledge files (milestone 4) | Under `/datapacks/:id/knowledge-bases/`: `POST upload-url`, `upload-complete`, `create`, `download-url`; `GET document-status`, `status`, `documents`, `summary`, `pending-uploads`, `activity-log`; `DELETE pending-uploads?key=`, `documents/:document_id` | Cloud's shapes. `upload-url` `{filename, size, content_hash, client}` gives a link on Meko (`/api/v1/knowledge-uploads/<ticket>`) with `fields: {key}`, or `already_uploaded`; the file is registered and queued when it arrives (204), so `upload-complete` only checks the key and `create` only marks the datapack as having a knowledge base. `document-status` is `{document_key, filename, state (awaiting_upload, indexing, completed, failed), message, upload?, document?: {chunks_processed, uploaded_at, size_bytes, status}}` plus Cloud's top-level `index_name, source_uri, document_name, document_status, chunks_processed`. `documents` pages from 1 (50, at most 200) with `q`, `type_filter`, `status_filter`. `pending-uploads` is always empty (nothing is stored unregistered); its DELETE cancels a waiting link (409 `OBJECT_REFERENCED` for a stored file). `download-url` `{document_uri}` (`local://<key>`) gives a link (`/api/v1/knowledge-downloads/<ticket>`, `expires_in: 300`) that sends the file as an attachment, HTML as plain text. A key outside the datapack is 403 `FORBIDDEN`; deleting a file still indexing is 409 `DOCUMENT_PROCESSING`. |
+| Knowledge files | Under `/datapacks/:id/knowledge-bases/`: `POST upload-url`, `upload-complete`, `create`, `download-url`; `GET document-status`, `status`, `documents`, `summary`, `pending-uploads`, `activity-log`; `DELETE pending-uploads?key=`, `documents/:document_id` | Cloud's shapes. `upload-url` `{filename, size, content_hash, client}` gives a link on Meko (`/api/v1/knowledge-uploads/<ticket>`) with `fields: {key}`, or `already_uploaded`; the file is registered and queued when it arrives (204), so `upload-complete` only checks the key and `create` only marks the datapack as having a knowledge base. `document-status` is `{document_key, filename, state (awaiting_upload, indexing, completed, failed), message, upload?, document?: {chunks_processed, uploaded_at, size_bytes, status}}` plus Cloud's top-level `index_name, source_uri, document_name, document_status, chunks_processed`. `documents` pages from 1 (50, at most 200) with `q`, `type_filter`, `status_filter`. `pending-uploads` is always empty (nothing is stored unregistered); its DELETE cancels a waiting link (409 `OBJECT_REFERENCED` for a stored file). `download-url` `{document_uri}` (`local://<key>`) gives a link (`/api/v1/knowledge-downloads/<ticket>`, `expires_in: 300`) that sends the file as an attachment, HTML as plain text. A key outside the datapack is 403 `FORBIDDEN`; deleting a file still indexing is 409 `DOCUMENT_PROCESSING`. |
 | Usage stats | `GET /settings/usage-stats`, `PATCH /settings/usage-stats` | `{enabled, forced_off, by, sends, url}` ([callhome.md](callhome.md)); `url` is where they go while `sends`. `PATCH {enabled}` saves the web UI's setting (`call_home_enabled`); with usage stats forced off by `config.toml` or the environment it's saved, but they stay off. A missing `enabled` is 400 `VALIDATION_ERROR`. `/api/v1/status` (and `/api/v1/server`, which gives the same reply) carries the same state as `usage_stats`. |
 | Conversations | `GET /datapacks/:id/conversations`, `GET /datapacks/:id/conversations/:cid`, `PATCH /datapacks/:id/conversation-search-opt-out` | The list is most recently active first, 20 to a page (200 at most), with `first_message`, `messages`, `memories_added`; `q` matches the title or any turn. A conversation's thread is oldest first, 100 turns to a page (500 at most). Each turn also carries `calls` (Meko's own): its decision trace, the conversation's calls since the turn before (and since the conversation was created), shaped as `/usage`'s recent calls plus `read_only` (from the tool's definition), without `conversation_create` and `conversation_add_message`, and with the conversation's calls that failed before their datapack was known; matched by time as its memories are; with its `reasoning` and `plan`, they're what the UI's decision trace shows. Each turn carries the memories it produced, by time window (below). `llm_calls`, `latency_ms` and `total_tokens` are 0, and `can_index` false. |
 
 ### Which memories a turn produced
 
-Until extraction records which turn made which memory (#190), a turn's memories are those saved
+Until extraction records which turn made which memory, a turn's memories are those saved
 in its conversation (a memory's `conversation_id`) after the turn before it and no later than it,
 as Meko Cloud infers them. So a memory counts for a turn only when the agent records the turn
 (`conversation_add_message`) after that turn's `memory_add`s; a turn recorded before them gives
@@ -301,5 +307,6 @@ them to the next turn. Turns come from the agents' own MCP calls (AgentK's Meko 
 none), so the attribution depends on their order. Promoted ones are listed apart
 (`promoted_memory_ids`, `promoted_memory_texts`).
 
-Left for the web UI (#172): `/runtime-config.js`, the billing summary, and message traces. Meko has no sharing, so it has no sharing routes. `/me/meko-tokens`
-comes with per-client keys (#195).
+Meko has one local user and no billing or sharing: its `/auth` routes serve that user, and it serves
+no billing summary, `/runtime-config.js`, message traces or sharing routes. `/me/meko-tokens` would
+come with per-client keys.

@@ -138,6 +138,8 @@ export interface SessionRow {
    * repo's own config (headtrust.ts). 0: trusted. NULL: no PR head, or not checked yet (at every launch).
    */
   untrusted: number | null;
+  /** What it's for beyond its kind (`SessionPurpose`: 'learn'); NULL for the rest. */
+  purpose: string | null;
 }
 
 export function parseSettings(json: string): ProjectSettings {
@@ -281,6 +283,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     kind: r.kind,
     stage: r.stage,
     hasTask: !!r.initial_prompt,
+    purpose: r.purpose === 'learn' ? 'learn' : null,
     prNumber: r.pr_number,
     prUrl: r.pr_url,
     reviewState: r.review_state,

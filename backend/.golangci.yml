@@ -1,4 +1,4 @@
-# golangci-lint v2. Prod Meko's config (meko/.golangci.yml) is the starting point. Changes:
+# golangci-lint v2. Choices beyond the linters enabled below:
 # - the cgo build tags, and misspell ignores "lustre" (a filesystem name);
 # - govet's fieldalignment is off: it reorders structs for bytes, against readability;
 # - errcheck allows a deliberate `_ =` (no check-blank). Its exclusions below apply everywhere, not

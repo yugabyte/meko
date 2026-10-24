@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { Session } from '../../shared/types';
 import { api, errorMessage } from '../api';
+import { useTouch } from '../hooks/useMedia';
 import { instructionsBlocker, openPrGate } from '../util';
 import { Busy, Dialog, ErrorText, InstructionsField } from './common';
 
@@ -11,6 +12,8 @@ import { Busy, Dialog, ErrorText, InstructionsField } from './common';
  * an emptied box removes them.
  */
 export function OpenPrDialog({ session, onClose }: { session: Session; onClose: () => void }) {
+  // On touch, the keyboard comes up only when a field is tapped.
+  const touch = useTouch();
   const [instructions, setInstructions] = useState(session.queuedInstructions ?? '');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -66,7 +69,7 @@ export function OpenPrDialog({ session, onClose }: { session: Session; onClose: 
           id="pr-instructions"
           value={instructions}
           onChange={setInstructions}
-          autoFocus
+          autoFocus={!touch}
           hint={
             queued
               ? 'They go after the PR prompt when AgentK finishes its turn. Empty the box to send none.'

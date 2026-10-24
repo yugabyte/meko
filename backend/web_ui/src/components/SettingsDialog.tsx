@@ -1,9 +1,13 @@
-// Meko's settings: whether usage stats go to YugabyteDB, saved as soon as it's changed. Turned off
-// by config.toml or the environment, the checkbox is off and can't be turned on here.
+// Meko's settings: whether usage stats go to YugabyteDB, saved as soon as it's changed (turned off
+// by config.toml or the environment, the checkbox is off and can't be turned on here), and the way
+// to the account settings at /account.
 
 import { useEffect, useState } from "react";
+import { UserRound } from "lucide-react";
 import { api } from "../lib/api";
-import type { UsageStats } from "../lib/types";
+import { href, navigate } from "../lib/route";
+import type { AuthStatus, UsageStats } from "../lib/types";
+import { hasAccount, LocalAccessNote } from "../pages/AccountPage";
 import { Dialog } from "./Dialog";
 import { Button, ErrorNote, Spinner } from "./ui";
 
@@ -13,7 +17,9 @@ function note(u: UsageStats): string | null {
   return null;
 }
 
-export function SettingsDialog({ onClose }: { onClose: () => void }) {
+const ACCOUNT = { tab: "overview" as const, view: "account" as const };
+
+export function SettingsDialog({ auth, onClose }: { auth: AuthStatus; onClose: () => void }) {
   const [usage, setUsage] = useState<UsageStats>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Error>();
@@ -63,6 +69,31 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         </label>
       )}
       {error && <ErrorNote error={error} />}
+      <div className="space-y-2 border-t pt-3">
+        {hasAccount(auth) ? (
+          <>
+            <p className="text-sm font-medium">Account</p>
+            <p className="text-xs text-muted-foreground">
+              {auth.username
+                ? `${auth.signed_in ? "Signed in as" : "The login is"} ${auth.username}. Change its password, turn two-step sign-in on or off, or sign out.`
+                : "No login yet: run meko setup_link on the computer Meko runs on to create one."}
+            </p>
+            <a
+              href={href(ACCOUNT)}
+              onClick={(e) => {
+                e.preventDefault();
+                onClose();
+                navigate(ACCOUNT);
+              }}
+              className="inline-flex h-7 items-center gap-1.5 rounded-lg border bg-card px-2 text-xs font-medium hover:bg-accent"
+            >
+              <UserRound className="size-3.5" /> Account settings
+            </a>
+          </>
+        ) : (
+          <LocalAccessNote />
+        )}
+      </div>
     </Dialog>
   );
 }

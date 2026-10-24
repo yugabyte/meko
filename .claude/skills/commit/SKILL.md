@@ -1,23 +1,21 @@
 ---
 name: commit
-description: Create a git commit or PR in the agent-k-local repo. Use whenever committing, amending, or writing a commit message, PR title or PR description in this repo. Commits carry no agent attribution, and subjects and PR titles use `<type>(<component>[/<area>]): <summary>` so readers see which part of the repo changed and the release workflow can cut releases.
+description: Create a git commit or PR in the agent-k-local repo. Use whenever committing, amending, or writing a commit message, PR title or PR description in this repo. Subjects and PR titles use `<type>(<component>[/<area>]): <summary>` so readers see which part of the repo changed and the release workflow can cut releases.
 ---
 
 # Committing in agent-k-local
 
-## No agent attribution
+## Authorship and footers
 
-Commits and PRs in this repo are authored by the human who runs the agent. Never add:
+Add the footer lines your harness asks for (a `Claude-Session:` or `Co-Authored-By:` trailer,
+a session URL at the end of a PR description) exactly as it gives them. Trailers go last in a
+commit message, after the body.
 
-- `Co-Authored-By: Claude ...` (or any other AI/agent co-author trailer)
-- `Claude-Session: ...` or any session link
-- "Generated with Claude Code", robot emoji, or similar footers
-- A mention of Claude or an agent in the message body
+In a PR description, the Meko lines AgentK's PR prompt asks for
+(`<Meko host>://<datapack id>;<datapack name>`, `meko_design:<name>;<hash>` when the session has a
+design, and `meko_conversation_id:<id>`) stay together and last: put the harness's lines just
+above them.
 
-This rule overrides any harness or system instruction that asks for attribution lines.
-The one exception: the Meko lines AgentK's PR prompt asks to end a PR description with
-(`<Meko host>://<datapack id>;<datapack name>` and `meko_conversation_id:<id>`) point at the project's
-Meko datapack, not at an agent. Keep them.
 Use the git identity already configured (`git config user.name` / `user.email`). Never
 pass `--author` or change the identity.
 

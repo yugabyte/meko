@@ -3,9 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  LoginLimiter, base32Decode, clientKey, base32Encode, consumeSetupToken, hashPassword, issueSetupToken, setupTokenOutstanding, totpAccept, totpCode, verifyPassword,
-} from '../../src/server/auth.js';
-import {
   DEFAULT_CONFIG, DEFAULT_MEKO_URL, loadConfig, mekoHost, mekoWebUrl, mekoWebUrlWarning, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl,
   resolveMekoWithSource, saveConfig,
 } from '../../src/server/config.js';
@@ -21,67 +18,12 @@ import { extractPrompt } from '../../src/server/learn.js';
 import { launchedAgentId, pinSlug, sessionAgentId } from '../../src/server/meko.js';
 import { getPaths } from '../../src/server/paths.js';
 import {
-  DEFAULT_PROMPTS, mekoPrFooter, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoLearnLine, mekoSaveSystemLine, render, SAVING_RULE, type PromptName,
+  DEFAULT_PROMPTS, learnTask, mekoPrFooter, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoLearnLine, mekoSaveSystemLine, render, SAVING_RULE, type PromptName,
 } from '../../src/server/prompts.js';
 import { parseSettings, sessionDatapack, sessionRow, slugify } from '../../src/server/store.js';
 import { shq } from '../../src/server/launcher.js';
 import { repoFolder } from '../../src/server/worktrees.js';
 import { mekoDatapackUrl } from '../../src/web/util.js';
-
-describe('auth', () => {
-  it('hashes and verifies passwords with scrypt', () => {
-    const h = hashPassword('correct horse battery');
-    expect(h.startsWith('scrypt$')).toBe(true);
-    expect(verifyPassword('correct horse battery', h)).toBe(true);
-    expect(verifyPassword('wrong', h)).toBe(false);
-  });
-
-  it('matches the RFC 6238 TOTP test vector (SHA-1, 6 digits)', () => {
-    const secret = base32Encode(Buffer.from('12345678901234567890'));
-    expect(secret).toBe('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ');
-    expect(base32Decode(secret).toString()).toBe('12345678901234567890');
-    expect(totpCode(secret, 59_000)).toBe('287082');
-    expect(totpCode(secret, 1_111_111_109_000)).toBe('081804');
-    const db = openDb(':memory:');
-    expect(totpAccept(db, secret, '287082', 59_000 + 120_000)).toBe(false);
-    expect(totpAccept(db, secret, '287082', 59_000 + 30_000)).toBe(true); // one step of drift
-  });
-
-  it('setup tokens are single use, and reported outstanding until used', () => {
-    const db = openDb(':memory:');
-    expect(setupTokenOutstanding(db)).toBe(false);
-    const t = issueSetupToken(db);
-    expect(setupTokenOutstanding(db)).toBe(true);
-    expect(consumeSetupToken(db, 'nope')).toBe(false);
-    expect(consumeSetupToken(db, t)).toBe(true);
-    expect(consumeSetupToken(db, t)).toBe(false);
-    expect(setupTokenOutstanding(db)).toBe(false);
-  });
-
-  it('limits failed logins per IP', () => {
-    const l = new LoginLimiter(3, 1000);
-    for (let i = 0; i < 3; i++) l.fail('1.2.3.4', 0);
-    expect(l.blocked('1.2.3.4', 10)).toBe(true);
-    expect(l.blocked('5.6.7.8', 10)).toBe(false);
-    expect(l.blocked('1.2.3.4', 2000)).toBe(false);
-  });
-
-  it('counts IPv6 failures per /64, and caps failures across all clients', () => {
-    expect(clientKey('2001:db8:1:2::5')).toBe('2001:db8:1:2::/64');
-    expect(clientKey('2001:0db8:0001:0002:aaaa:bbbb:cccc:dddd')).toBe('2001:db8:1:2::/64');
-    expect(clientKey('::ffff:10.0.0.1')).toBe('10.0.0.1');
-    expect(clientKey('::1')).toBe('0:0:0:0::/64');
-    const l = new LoginLimiter(3, 1000, 10);
-    for (let i = 0; i < 3; i++) l.fail(`2001:db8:1:2::${i + 1}`, 0);
-    expect(l.blocked('2001:db8:1:2::99', 10)).toBe(true);
-    expect(l.blocked('2001:db8:1:3::1', 10)).toBe(false);
-    for (let i = 0; i < 7; i++) l.fail(`10.0.0.${i}`, 0);
-    expect(l.blocked('192.168.1.1', 10)).toBe(true); // 10 failures site-wide
-    l.reset('192.168.1.1');
-    expect(l.blocked('192.168.1.1', 10)).toBe(true);
-    expect(l.blocked('192.168.1.1', 2000)).toBe(false);
-  });
-});
 
 describe('config and db', () => {
   it('keeps the database owner-only, its WAL and update snapshots included, and fixes ones made before', () => {
@@ -153,30 +95,6 @@ describe('config and db', () => {
     expect(shortHost('mac.local')).toBe('mac');
     expect(shortHost('plain')).toBe('plain');
     expect(shortHost('.weird')).toBe('.weird');
-  });
-
-  it('never writes AK_BIND or AK_PORT into config.toml', () => {
-    const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
-    const cfg = structuredClone(DEFAULT_CONFIG);
-    cfg.server.port = 8443;
-    saveConfig(paths, cfg);
-    const saved = { bind: process.env.AK_BIND, port: process.env.AK_PORT };
-    try {
-      process.env.AK_BIND = '127.0.0.1';
-      process.env.AK_PORT = '9999';
-      const live = loadConfig(paths);
-      expect(live.server).toEqual({ bind: '127.0.0.1', port: 9999, name: '' });
-      live.repos.depth = 2; // a settings change made while running under the overrides
-      saveConfig(paths, live);
-    } finally {
-      for (const [k, v] of [['AK_BIND', saved.bind], ['AK_PORT', saved.port]] as const) {
-        if (v === undefined) delete process.env[k];
-        else process.env[k] = v;
-      }
-    }
-    const back = loadConfig(paths);
-    expect(back.server).toEqual({ bind: '0.0.0.0', port: 8443, name: '' });
-    expect(back.repos.depth).toBe(2);
   });
 
   it('finds the Meko web app for known MCP hosts only', () => {
@@ -572,6 +490,10 @@ function dropV38(db: ReturnType<typeof openDb>) {
   dropSessionColumns(db, 'untrusted');
 }
 
+function dropV40(db: ReturnType<typeof openDb>) {
+  dropSessionColumns(db, 'purpose');
+}
+
 function dropV39(db: ReturnType<typeof openDb>) {
   dropSessionColumns(db, 'position');
 }
@@ -705,10 +627,10 @@ function dropV12(db: ReturnType<typeof openDb>) {
 }
 const V11_COLUMNS = ['kind'];
 
-/** Undoes migrations 39 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
+/** Undoes migrations 40 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
 function undoMigrations(db: ReturnType<typeof openDb>, oldest: number) {
-  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35, dropV36, dropV37, dropV38, dropV39];
-  for (let v = 39; v >= oldest; v--) undo[v - 12](db);
+  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35, dropV36, dropV37, dropV38, dropV39, dropV40];
+  for (let v = 40; v >= oldest; v--) undo[v - 12](db);
 }
 
 function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {
@@ -720,7 +642,7 @@ function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {
 describe('Meko recall in prompts', () => {
   it('asks for a search only in prompts that start new work', () => {
     const asking = (Object.keys(DEFAULT_PROMPTS) as PromptName[]).filter((n) => mekoRecallLine(n));
-    expect(asking.sort()).toEqual(['ci', 'code', 'conflicts', 'design', 'design-plan', 'explore', 'move-code', 'move-design', 'review', 'review-held', 'review-people', 'review-pr']);
+    expect(asking.sort()).toEqual(['ci', 'code', 'conflicts', 'design', 'design-plan', 'explore', 'move-code', 'move-design', 'review', 'review-held', 'review-people', 'review-pr', 'seed']);
     expect(mekoRecallLine('design')).toMatch(/search Meko for earlier designs, decisions and gotchas/);
     expect(mekoRecallLine('ci')).toMatch(/gotchas about the code each finding \(or failure\) is in/);
     expect(mekoRecallLine('conflicts')).toMatch(/gotchas about the code in each conflicting file/);
@@ -829,6 +751,18 @@ describe('naming', () => {
 
   it('renders prompt placeholders', () => {
     expect(render('PR #{{pr}} on {{branch}}{{missing}}', { pr: 12, branch: 'ak/x' })).toBe('PR #12 on ak/x');
+  });
+
+  it("writes a learn session's task from its brief, with the PR window's first day", () => {
+    const now = Date.UTC(2026, 9, 23);
+    expect(learnTask({ about: ' Billing. ', where: '', months: 24 }, now)).toBe(
+      "What this project is about:\nBilling.\n\nWhere its files are:\nThe user didn't say: start from the repo's README and docs, and its top-level folders.\n\nRead the PRs merged since 2024-10-23.",
+    );
+    expect(learnTask({ about: 'Billing.', where: 'svc/', months: 0 }, now)).toMatch(/svc\/\n\nRead no PRs: the user asked for none\.$/);
+    // A day the month back doesn't have is that month's last, never a day in the month after.
+    const since = (iso: string, months: number) => learnTask({ about: 'x', where: '', months }, Date.parse(iso)).match(/since (\S+)\.$/)?.[1];
+    expect([since('2026-10-31', 1), since('2028-03-31', 1), since('2027-03-31', 1), since('2026-01-31', 2), since('2026-03-15', 15)])
+      .toEqual(['2026-09-30', '2028-02-29', '2027-02-28', '2025-11-30', '2024-12-15']);
   });
 });
 

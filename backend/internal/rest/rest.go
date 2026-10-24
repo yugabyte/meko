@@ -45,13 +45,35 @@ type api struct {
 	Options
 }
 
-// keyFor is the client token for a request that sent a credential, and "" for one let in by
-// auth = "none".
+// keyFor is the client token for a request that sent a credential or came from the owner signed in
+// on the web listener, and "" otherwise. Not for local access, which every user of the computer
+// has, nor auth = "none": the token lets a caller do what neither does (knowledgebase_upload_file
+// reads a path as Meko's user), and keeps working when access or auth changes. The Connect page
+// then says to run meko token.
 func (a *api) keyFor(c echo.Context) string {
-	if cred := a.Credential(c); cred == "admin" || cred == "client" {
+	switch a.Credential(c) {
+	case "admin", "client", "session":
 		return a.ClientToken
 	}
 	return ""
+}
+
+// here gives a link the service made on the API listener (http://127.0.0.1:<port>/...) to a request
+// that came in on the web listener with that listener's own origin, which its browser can reach
+// (from another computer, with remote access). Other links are given as they are.
+func (a *api) here(c echo.Context, link string) string {
+	if cred := a.Credential(c); cred != "session" && cred != "local" {
+		return link
+	}
+	base := a.Service.URL("")
+	if link == "" || !strings.HasPrefix(link, base) {
+		return link
+	}
+	scheme := "http"
+	if c.Request().TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + c.Request().Host + strings.TrimPrefix(link, base)
 }
 
 // Register adds the routes to the /api/v1 group.

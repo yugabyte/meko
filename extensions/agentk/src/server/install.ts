@@ -1,21 +1,19 @@
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmdirSync, rmSync, unlinkSync } from 'node:fs';
-import { isIP } from 'node:net';
 import { hostname, userInfo } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
-import { getOwner, issueSetupToken } from './auth.js';
 import { HARNESS_CAPS, HARNESS_IDS, type HarnessId } from '../shared/harnesses.js';
 import { claudeUserDir } from './claude.js';
 import { cliVersion, harnessCommand, versionAtLeast } from './harness/version.js';
 import {
-  DEFAULT_MEKO_URL, dbPath, isLoopback, loadConfig, readClaudeSettingsEnv, resolveMeko, resolveMekoWebUrl, resolveMekoWithSource, saveConfig, type Config,
+  DEFAULT_MEKO_URL, dbPath, loadConfig, readClaudeSettingsEnv, resolveMeko, resolveMekoWebUrl, resolveMekoWithSource, saveConfig, type Config,
 } from './config.js';
-import { openDb } from './db.js';
 import { assertFree, InstanceBusyError } from './instance.js';
 import { checkMeko, tryMekoToken } from './meko.js';
-import { findLocalMeko, isLocalMeko, type LocalMeko } from './mekolocal.js';
+import { findLocalMeko, isLocalMeko, probeLocalMeko, type LocalMeko } from './mekolocal.js';
+import { AGENTK_PATH, MEKO_INSTALL_COMMAND } from '../shared/mekourls.js';
 import { claudeConfigPath } from './trust.js';
 import {
   MekoSetupError, claudeHasMekoMcp, ensureMekoSetup, envKeyGap, latestMekoSetup, mekoClaudeGaps, mekoKeyForConfig, readClaudeMeko, runMekoSetup,
@@ -27,7 +25,6 @@ import { SessionHost } from './hostclient.js';
 import { COMMAND, commandLinks } from './cmdlink.js';
 import { style, ui } from './tty.js';
 import { waitForServer } from './health.js';
-import { loadTls } from './tls.js';
 import { removeKiroAgent } from './kiro.js';
 import { ensurePrivateDir, fsType, isNetworkFs, PrivateDirError } from './fstype.js';
 import { checkMove, makeHomeParent, mekoDirOf, tmpHomeWarning } from './movehome.js';
@@ -138,46 +135,6 @@ function installServices(paths: Paths): boolean {
   else ui.warn(boot.label, boot.detail);
   if (boot.note) ui.note(boot.note);
   return true;
-}
-
-/** True when the macOS application firewall is on (it asks before `node` may accept connections). */
-function macFirewallOn(): boolean {
-  if (process.platform !== 'darwin') return false;
-  const r = trySh('/usr/libexec/ApplicationFirewall/socketfilterfw', ['--getglobalstate']);
-  return r.ok && /enabled/i.test(r.out);
-}
-
-/**
- * True when nobody is at a desktop here: an SSH login, or Linux with no display. The browser is
- * then on another device, so the install defaults to remote access.
- */
-export function isHeadless(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): boolean {
-  if (env.SSH_CONNECTION || env.SSH_CLIENT || env.SSH_TTY) return true;
-  return platform !== 'darwin' && !env.DISPLAY && !env.WAYLAND_DISPLAY;
-}
-
-/** The answer the Access question starts with for a listen address. */
-export function accessDefault(bind: string): string {
-  if (isLoopback(bind)) return 'local';
-  return bind === '0.0.0.0' || bind === '::' ? 'remote' : bind;
-}
-
-/**
- * The listen address for an answer to the Access question: local, remote, an IP address, or the
- * address it listens on now (which may be a host name). Local and remote keep the current address
- * when it already is one (`::1`, or `::` for IPv6 as well as IPv4).
- */
-export function accessBind(answer: string, current = ''): string {
-  const a = answer.trim();
-  if (/^l(ocal)?$/i.test(a)) return isLoopback(current) ? current : '127.0.0.1';
-  if (/^r(emote)?$/i.test(a)) return current === '0.0.0.0' || current === '::' ? current : '0.0.0.0';
-  if (isIP(a) || a === 'localhost' || (a && a === current)) return a;
-  throw new InstallError(`Answer local or remote (or an address to listen on), not "${a}".`);
-}
-
-function publicHost(): string {
-  const r = trySh('hostname', ['-f']);
-  return r.ok && r.out ? r.out : hostname();
 }
 
 // ---------------------------------------------------------------------------
@@ -356,7 +313,8 @@ export function settleAgents(cfg: Config, versions: Partial<Record<HarnessId, st
   });
   if (!found.length) {
     throw new InstallError(
-      `no coding agent found. Install Claude Code (https://claude.com/claude-code), OpenCode ${HARNESS_CAPS.opencode.minVersion} or later (https://opencode.ai) `
+      `no coding agent found. Install Claude Code (https://claude.com/claude-code), OpenCode ${HARNESS_CAPS.opencode.minVersion} or later `
+        + `(https://opencode.ai; from an older one, ${HARNESS_CAPS.opencode.upgrade}) `
         + `or Kiro CLI ${HARNESS_CAPS.kiro.minVersion} or later (https://kiro.dev/cli/), sign in to it, and run the installer again.`,
     );
   }
@@ -373,8 +331,6 @@ export async function runInstall(args: string[]): Promise<void> {
       'meko-key': { type: 'string' },
       'meko-url': { type: 'string' },
       'no-meko': { type: 'boolean', default: false },
-      bind: { type: 'string' },
-      port: { type: 'string' },
       'no-service': { type: 'boolean', default: false },
       'install-deps': { type: 'boolean', default: false },
       'no-install-deps': { type: 'boolean', default: false },
@@ -412,32 +368,12 @@ export async function runInstall(args: string[]): Promise<void> {
     const reposRoot = values['repos-root'] ?? (await ask('Repos folder', cfg.repos.roots[0] ?? '~/code'));
     cfg.repos.roots = fresh ? [reposRoot] : [reposRoot, ...cfg.repos.roots.filter((r) => r !== reposRoot)];
     if (fresh) cfg.repos.cloneInto = reposRoot;
-    if (values.bind) {
-      cfg.server.bind = values.bind;
-    } else {
-      // A fresh install on a desktop is for this computer only; over SSH or with no display,
-      // the browser is somewhere else.
-      const def = fresh && !process.env.AK_BIND ? (isHeadless() ? 'remote' : 'local') : accessDefault(cfg.server.bind);
-      if (interactive && process.stdin.isTTY) {
-        ui.note('Local: only this computer, no login. Remote: other devices too (like your phone), over HTTPS with a login.');
-      }
-      for (;;) {
-        try {
-          cfg.server.bind = accessBind(await ask('Access', def), cfg.server.bind);
-          break;
-        } catch (e) {
-          if (!(e instanceof InstallError && interactive && process.stdin.isTTY)) throw e;
-          ui.warn('Access', e.message);
-        }
-      }
-    }
-    const portStr = values.port ?? (await ask('Port', String(cfg.server.port)));
-    const port = Number(portStr);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new InstallError(`invalid port: ${portStr}`);
-    cfg.server.port = port;
-    if (!(interactive && process.stdin.isTTY)) {
-      ui.row('Repos folder', reposRoot);
-      ui.row('Access', `${isLoopback(cfg.server.bind) ? 'local' : 'remote'}, on ${cfg.server.bind}:${cfg.server.port}`);
+    if (!(interactive && process.stdin.isTTY)) ui.row('Repos folder', reposRoot);
+    // Browsers reach AgentK only through the Meko on this computer, which serves it at /ext/agentk/
+    // with its own sign-in; with no Meko here, nothing could.
+    if ((await probeLocalMeko(cfg.meko.home || null)).state === 'none') {
+      throw new InstallError('AgentK runs behind the Meko on this computer, which serves it to your browser, and there is ' +
+        `no meko command here. Install Meko first (${MEKO_INSTALL_COMMAND}), then run: meko install_extension agentk`);
     }
 
     // 2. The coding agents: at least one, or nothing can run.
@@ -505,61 +441,41 @@ export async function runInstall(args: string[]): Promise<void> {
     const move = checkMove(paths, cfg);
     if (move && 'plan' in move) ui.note(`AgentK's home moves to ${tildify(move.plan.to)} once the server has started: every session ends and resumes there.`);
     else if (move) ui.warn('Home', `stays in ${tildify(paths.home)} for now: ${move.skip}`);
-    // Create the certificate now (the server reuses it), so a problem with it shows up here.
-    const tls = await loadTls(paths, cfg);
-    if (tls) ui.ok('Certificate', tls.selfSigned ? 'self-signed, created for this host' : 'from config');
 
     // 6. Services
     ui.section('Services');
-    if (!isLoopback(cfg.server.bind) && macFirewallOn()) {
-      ui.note('The macOS firewall is on. If other devices (like your phone) can\'t connect, allow incoming connections for');
-      ui.note(`${tildify(join(paths.app, 'current', 'node', 'bin', 'node'))} in System Settings > Network > Firewall > Options.`);
-    }
     let running = false;
     if (values['no-service']) {
       ui.warn('Services', 'skipped (--no-service). Start the server with: agentk serve');
     } else if (installServices(paths)) {
-      const probe = await waitForServer(cfg);
+      const probe = await waitForServer(paths);
       if (probe.ok) {
-        ui.ok('Server', `answering on port ${cfg.server.port} (version ${probe.version})`);
+        ui.ok('Server', `answering (version ${probe.version})`);
         running = true;
       } else {
         ui.warn('Server', `not answering yet (${probe.error}). See: agentk logs`);
       }
     }
 
-    // 7. Setup link and next steps
-    const handle = openDb(db);
-    try {
-      const scheme = tls ? 'https' : 'http';
-      const host = isLoopback(cfg.server.bind) ? '127.0.0.1' : publicHost();
-      const base = `${scheme}://${host}:${cfg.server.port}`;
-      const local = isLoopback(cfg.server.bind);
+    // 7. Where to open it
+    const meko = await probeLocalMeko(cfg.meko.home || null);
+    ui.blank();
+    if (meko.meko?.webUrl) {
+      ui.text(style.bold(running ? 'Done. AgentK is running:' : 'Done. AgentK will be at:'));
       ui.blank();
-      // Local access needs no login (see localAccess in auth.ts), so there's no setup link to open.
-      if (local || getOwner(handle)) {
-        ui.text(style.bold(running ? 'Done. AgentK is running:' : 'Done. AgentK will be at:'));
-        ui.blank();
-        ui.text(`    ${style.cyan(`${base}/`)}`);
-      } else {
-        ui.text(style.bold('Done. Open this link to create your login (it works once):'));
-        ui.blank();
-        ui.text(`    ${style.cyan(`${base}/setup?token=${issueSetupToken(handle)}`)}`);
-      }
+      ui.text(`    ${style.cyan(`${meko.meko.webUrl}${AGENTK_PATH}`)}`);
       ui.blank();
-      if (local) {
-        ui.row('Sign-in', getOwner(handle)
-          ? `none on this computer; the login for ${getOwner(handle)!.username} is kept for remote access`
-          : 'none: it only listens on this computer');
-      }
-      if (tls?.selfSigned) ui.row('Certificate', 'self-signed, so your browser warns once');
-      if (!local) ui.row('New link', 'agentk setup-link');
-      ui.row('Status', 'agentk status');
-      ui.row('Logs', 'agentk logs -f');
+      ui.row('Sign-in', "Meko's: meko setup_link makes (or resets) the login for remote access");
+    } else {
+      ui.text(style.bold('Done.'));
       ui.blank();
-    } finally {
-      handle.close();
+      ui.row('Browser', meko.meko
+        ? 'the Meko on this computer is too old to serve AgentK: update it with meko update'
+        : "Meko isn't running: start it with meko start, then open AgentK with agentk ui");
     }
+    ui.row('Status', 'agentk status');
+    ui.row('Logs', 'agentk logs -f');
+    ui.blank();
   } catch (e) {
     if (e instanceof InstallError || e instanceof ServiceError || e instanceof PrivateDirError) {
       process.stderr.write('\n');

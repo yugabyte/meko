@@ -1,9 +1,11 @@
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { writeScript } from './scriptfile.js';
+import { serverMekoTool } from './mekousage.js';
 import type { Paths } from './paths.js';
 
 /**
@@ -16,6 +18,19 @@ import type { Paths } from './paths.js';
 /** What OpenCode puts in its children's environment. */
 export const OPENCODE_SESSION_MARKERS = ['OPENCODE', 'OPENCODE_PID'];
 
+/**
+ * What `[opencode] disable_tracking` adds to the environment of the OpenCode AgentK runs (sessions and
+ * Ask AgentK), read from OpenCode 2.1.4's code: no OpenTelemetry export (to an OTLP endpoint the user's
+ * environment names), no update check (it sends the version to opencode.ai at every start), and none of
+ * OpenCode Zen's free models, whose providers may train on prompts. Sharing needs nothing: OpenCode 2
+ * removed it and reads neither `OPENCODE_DISABLE_SHARE` nor OpenCode 1's `experimental.openTelemetry`.
+ */
+export const OPENCODE_NO_TRACKING_ENV: Readonly<Record<string, string>> = {
+  OTEL_SDK_DISABLED: 'true',
+  OPENCODE_DISABLE_AUTOUPDATE: '1',
+  OPENCODE_DISABLE_FREE_MODELS: '1',
+};
+
 /** The agent Ask AgentK runs as, defined in the ask's own config. */
 export const OPENCODE_ASK_AGENT = 'agentk-ask';
 
@@ -24,8 +39,9 @@ export function openCodeDir(paths: Paths): string {
   return join(paths.run, 'opencode');
 }
 
+/** AgentK's plugin: a folder named by its contents (`writeOpenCodePlugin`). */
 export function openCodePluginPath(paths: Paths): string {
-  return join(openCodeDir(paths), 'agentk-plugin.js');
+  return join(openCodeDir(paths), PLUGIN_DIR);
 }
 
 /** A session's folder: `system.md` (its instructions) and `messages.jsonl` (its usage, from the plugin). */
@@ -63,112 +79,182 @@ export function openCodeCommand(command: string, home = homedir(), path = proces
 }
 
 /**
- * AgentK's plugin, loaded only into the sessions AgentK starts (`OPENCODE_CONFIG_CONTENT`). It
- * forwards OpenCode's events to the hook socket in their own shape (the adapter's
- * `normalizeOpenCode` maps them), asks the guard before a file edit and throws its reason, adds
- * AgentK's Meko recall to a new session's system prompt, and logs each finished response's tokens to
- * the session's `messages.jsonl`. It never holds OpenCode up for long, and without AgentK's session
- * variables it does nothing. A subagent's session (the task tool's) sends its events without its
- * id, so they never become the session's conversation, and not its `session.idle`, so it never ends
- * the turn; its tool calls and permission asks still count (one waiting on the user needs the user).
+ * AgentK's plugin, loaded only into the sessions AgentK starts (`OPENCODE_CONFIG_CONTENT`), as an
+ * OpenCode 2 plugin: a folder whose default export is `{ id, setup }`. It forwards OpenCode's hooks
+ * and events to the hook socket under the names `normalizeOpenCode` maps (`chat.message` for a
+ * prompt, `session.idle` for the end of a turn, which OpenCode 2 reports as `session.execution.*`),
+ * asks the guard before a file edit and throws its reason, adds AgentK's Meko recall to a new
+ * session's system prompt, and logs each finished step's tokens to the session's `messages.jsonl`.
+ * It never holds OpenCode up for long, and without AgentK's session variables it does nothing. A
+ * subagent's session sends its events without its id, so they never become the session's
+ * conversation, and not its turn's end, so it never ends the turn; its tool calls and permission
+ * asks still count (one waiting on the user needs the user).
  */
-const PLUGIN = `// Written by AgentK, which rewrites it. AgentK loads it into the OpenCode sessions it starts;
+const PLUGIN = `// Written by AgentK and never rewritten: OpenCode reloads a plugin whose files change, so a new
+// version goes in a folder of its own. AgentK loads it into the OpenCode sessions it starts;
 // without AgentK's session variables it does nothing.
 import { appendFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { join } from 'node:path';
 
-const EDIT_TOOLS = new Set(['edit', 'write', 'apply_patch', 'patch', 'multiedit']);
+const EDIT_TOOLS = new Set(['edit', 'write', 'patch']);
+// Meko's tools: its server's name ('meko', or one starting with it), '_', the tool.
+const MEKO_TOOL = /^meko[\\w-]*_/i;
+// A Meko reply longer than this isn't logged, only that it came.
+const MEKO_TEXT_MAX = 1024 * 1024;
+const TURN_ENDS = new Set(['session.execution.succeeded', 'session.execution.failed', 'session.execution.interrupted']);
 
-export const AgentK = async (input) => {
-  const sock = process.env.AK_HOOK_SOCK;
-  const token = process.env.AK_HOOK_TOKEN;
-  const dir = process.env.AK_OPENCODE_DIR;
-  if (!sock || !token) return {};
-  const cwd = (input && input.directory) || process.cwd();
-  const headers = { 'X-AK-Token': token, 'Content-Type': 'application/json' };
-  // The server's answer as text ('' when it has none or can't be reached).
-  const post = (route, body, ms) => {
-    const data = JSON.stringify({ cwd, ...body });
-    if (globalThis.Bun) {
-      return fetch('http://localhost/' + route, { unix: sock, method: 'POST', headers, body: data, signal: AbortSignal.timeout(ms) })
-        .then((r) => (r.status === 200 ? r.text() : ''), () => '');
-    }
-    return new Promise((resolve) => {
-      let req = null;
-      const timer = setTimeout(() => { if (req) req.destroy(); resolve(''); }, ms);
-      const done = (v) => { clearTimeout(timer); resolve(v); };
-      req = request({ socketPath: sock, path: '/' + route, method: 'POST', headers: { ...headers, 'Content-Length': Buffer.byteLength(data) } }, (res) => {
-        let text = '';
-        res.setEncoding('utf8');
-        res.on('data', (c) => { text += c; });
-        res.on('end', () => done(res.statusCode === 200 ? text : ''));
-        res.on('error', () => done(''));
+export default {
+  id: 'agentk',
+  setup: async (ctx) => {
+    const sock = process.env.AK_HOOK_SOCK;
+    const token = process.env.AK_HOOK_TOKEN;
+    const dir = process.env.AK_OPENCODE_DIR;
+    if (!sock || !token) return;
+    const cwd = (ctx && ctx.location && ctx.location.directory) || process.cwd();
+    const headers = { 'X-AK-Token': token, 'Content-Type': 'application/json' };
+    // The server's answer as text ('' when it has none or can't be reached).
+    const post = (route, body, ms) => {
+      const data = JSON.stringify({ cwd, ...body });
+      if (globalThis.Bun) {
+        return fetch('http://localhost/' + route, { unix: sock, method: 'POST', headers, body: data, signal: AbortSignal.timeout(ms) })
+          .then((r) => (r.status === 200 ? r.text() : ''), () => '');
+      }
+      return new Promise((resolve) => {
+        let req = null;
+        const timer = setTimeout(() => { if (req) req.destroy(); resolve(''); }, ms);
+        const done = (v) => { clearTimeout(timer); resolve(v); };
+        req = request({ socketPath: sock, path: '/' + route, method: 'POST', headers: { ...headers, 'Content-Length': Buffer.byteLength(data) } }, (res) => {
+          let text = '';
+          res.setEncoding('utf8');
+          res.on('data', (c) => { text += c; });
+          res.on('end', () => done(res.statusCode === 200 ? text : ''));
+          res.on('error', () => done(''));
+        });
+        req.on('error', () => done(''));
+        req.end(data);
       });
-      req.on('error', () => done(''));
-      req.end(data);
-    });
-  };
-  // Events go one after another, in the order OpenCode fired them.
-  let queue = Promise.resolve('');
-  const send = (body) => {
-    queue = queue.then(() => post('hook', body, 3000));
-  };
-  // The session the user last prompted (a resumed one's from the start); subagents' sessions apart.
-  let main = process.env.AK_OPENCODE_SESSION || null;
-  const children = new Set();
-  const logged = new Set();
-  const source = process.env.AK_OPENCODE_SOURCE || 'startup';
-  const recall = source === 'startup' ? post('context', { hook_event_name: 'agentk.start', source }, 5000) : Promise.resolve('');
-  send({ hook_event_name: 'agentk.start', source, ...(main ? { session_id: main } : {}) });
-  const ids = (id) => (id && id === main ? { session_id: id } : {});
-  const isMain = (id) => !!id && id === main;
+    };
+    // Events go one after another, in the order OpenCode fired them.
+    let queue = Promise.resolve('');
+    const send = (body) => {
+      queue = queue.then(() => post('hook', body, 3000));
+    };
+    // The session the user last prompted (a resumed one's from the start); subagents' sessions apart.
+    let main = process.env.AK_OPENCODE_SESSION || null;
+    const children = new Set();
+    const checked = new Set();
+    // A prompt can come before its session's session.created event: OpenCode's record says.
+    const isChild = async (id) => {
+      if (!children.has(id) && !checked.has(id)) {
+        checked.add(id);
+        try {
+          const s = await ctx.session.get({ sessionID: id });
+          if (s && s.parentID) children.add(id);
+        } catch {
+          // Not known yet: a main session.
+        }
+      }
+      return children.has(id);
+    };
+    const source = process.env.AK_OPENCODE_SOURCE || 'startup';
+    const recall = source === 'startup' ? post('context', { hook_event_name: 'agentk.start', source }, 5000) : Promise.resolve('');
+    send({ hook_event_name: 'agentk.start', source, ...(main ? { session_id: main } : {}) });
+    const ids = (id) => (id && id === main ? { session_id: id } : {});
+    const isMain = (id) => !!id && id === main;
 
-  return {
-    'chat.message': async (i) => {
-      if (!i || !i.sessionID || children.has(i.sessionID)) return;
-      main = i.sessionID;
+    await ctx.session.hook('prompt', async (e) => {
+      if (!e || !e.sessionID || (await isChild(e.sessionID))) return;
+      main = e.sessionID;
       send({ hook_event_name: 'chat.message', session_id: main });
-    },
-    'tool.execute.before': async (i, o) => {
-      if (!i || !EDIT_TOOLS.has(i.tool)) return;
-      const reason = await post('guard', { hook_event_name: 'tool.execute.before', tool: i.tool, args: (o && o.args) || {}, ...ids(i.sessionID) }, 3000);
+    });
+    // Each step's model, from its start, for the usage line at its end (and its Meko calls').
+    const models = new Map();
+    // Meko calls under way, by call id and tool (a call from code mode can share its execute call's
+    // id), each its start time; and how many of each the session made, for their ids in the log.
+    const mekoStarts = new Map();
+    const mekoCount = new Map();
+    await ctx.tool.hook('execute.before', async (e) => {
+      if (!e) return;
+      if (typeof e.tool === 'string' && MEKO_TOOL.test(e.tool)) {
+        const key = e.id + ':' + e.tool;
+        mekoStarts.set(key, [...(mekoStarts.get(key) || []), Date.now()]);
+        send({ hook_event_name: 'tool.execute.before', tool: e.tool, call_id: e.id, ...ids(e.sessionID) });
+        return;
+      }
+      if (!EDIT_TOOLS.has(e.tool)) return;
+      const args = e.input && typeof e.input === 'object' ? e.input : {};
+      const reason = await post('guard', { hook_event_name: 'tool.execute.before', tool: e.tool, args, ...ids(e.sessionID) }, 3000);
       if (reason.trim()) throw new Error(reason.trim());
-    },
-    'tool.execute.after': async (i) => {
-      if (!i) return;
-      send({ hook_event_name: 'tool.execute.after', tool: i.tool, ...ids(i.sessionID) });
-    },
-    'experimental.chat.system.transform': async (i, o) => {
-      if (!i || !isMain(i.sessionID) || !o || !Array.isArray(o.system)) return;
+    });
+    await ctx.tool.hook('execute.after', async (e) => {
+      if (!e) return;
+      send({ hook_event_name: 'tool.execute.after', tool: e.tool, call_id: e.id, ...ids(e.sessionID) });
+      if (dir && typeof e.tool === 'string' && MEKO_TOOL.test(e.tool)) logMeko(e);
+    });
+    // A Meko call with its reply, for AgentK's Meko counts, What Meko doesn't know and call log.
+    const logMeko = (e) => {
+      const key = e.id + ':' + e.tool;
+      const starts = mekoStarts.get(key) || [];
+      const start = starts.shift();
+      if (starts.length) mekoStarts.set(key, starts);
+      else mekoStarts.delete(key);
+      const n = (mekoCount.get(key) || 0) + 1;
+      mekoCount.set(key, n);
+      const content = e.result && Array.isArray(e.result.content) ? e.result.content : [];
+      const text = content.map((c) => (c && c.type === 'text' && typeof c.text === 'string' ? c.text : '')).join('');
+      const ok = e.status === 'completed';
+      const m = models.get(e.messageID) || {};
+      try {
+        appendFileSync(join(dir, 'messages.jsonl'), JSON.stringify({
+          type: 'meko', id: key + '#' + n, session: e.sessionID, tool: e.tool, model: m.id,
+          at: start || Date.now(), ms: start ? Date.now() - start : null, ok,
+          error: ok ? null : String((e.error && (e.error.message || e.error)) || e.status || 'failed').slice(0, 300),
+          input: e.input && typeof e.input === 'object' ? e.input : {},
+          ...(text.length > MEKO_TEXT_MAX ? { text: null, big: true } : { text }),
+        }) + '\\n');
+      } catch {
+        // Best effort, like the usage lines.
+      }
+    };
+    await ctx.session.hook('context', async (e) => {
+      if (!e || !isMain(e.sessionID) || !Array.isArray(e.system)) return;
       const text = (await recall).trim();
-      if (text) o.system.push(text);
-    },
-    event: async ({ event }) => {
-      const p = (event && event.properties) || {};
-      switch (event && event.type) {
+      if (text) e.system.push({ type: 'text', text });
+    });
+
+    // Events already handled, in case the stream hands one over again after it reconnects.
+    const seen = new Set();
+    const once = (ev) => !ev.id || (!seen.has(ev.id) && !!seen.add(ev.id));
+    const on = (ev) => {
+      const p = ev.data || {};
+      if (TURN_ENDS.has(ev.type)) {
+        if (isMain(p.sessionID) && once(ev)) send({ hook_event_name: 'session.idle', session_id: p.sessionID });
+        return;
+      }
+      switch (ev.type) {
         case 'session.created':
-          if (p.info && p.info.parentID) children.add(p.info.id);
-          break;
-        case 'session.idle':
-          if (isMain(p.sessionID)) send({ hook_event_name: 'session.idle', session_id: p.sessionID });
+          if (p.parentID) children.add(p.sessionID);
           break;
         case 'permission.asked':
-        case 'permission.updated':
-          send({ hook_event_name: 'permission.asked', permission: p.permission || p.type || '', ...ids(p.sessionID) });
+          if (once(ev)) send({ hook_event_name: 'permission.asked', permission: p.action || '', ...ids(p.sessionID) });
           break;
         case 'permission.replied':
-          send({ hook_event_name: 'permission.replied', ...ids(p.sessionID) });
+          if (once(ev)) send({ hook_event_name: 'permission.replied', ...ids(p.sessionID) });
           break;
-        case 'message.updated': {
-          const m = p.info;
-          if (!dir || !m || m.role !== 'assistant' || !m.time || !m.time.completed || logged.has(m.id)) break;
-          logged.add(m.id);
-          const t = m.tokens || {};
+        case 'session.step.started':
+          if (p.assistantMessageID && p.model) models.set(p.assistantMessageID, p.model);
+          break;
+        case 'session.step.ended': {
+          const id = p.assistantMessageID;
+          if (!dir || !id || !once(ev)) break;
+          const m = models.get(id) || {};
+          models.delete(id);
+          const t = p.tokens || {};
           const cache = t.cache || {};
           try {
             appendFileSync(join(dir, 'messages.jsonl'), JSON.stringify({
-              id: m.id, session: m.sessionID, model: m.modelID, provider: m.providerID, at: m.time.completed,
+              id, session: p.sessionID, model: m.id, provider: m.providerID, at: ev.created || Date.now(),
               input: t.input, output: t.output, reasoning: t.reasoning, cacheRead: cache.read, cacheWrite: cache.write,
             }) + '\\n');
           } catch {
@@ -177,20 +263,51 @@ export const AgentK = async (input) => {
           break;
         }
       }
-    },
-  };
+    };
+    let stopped = false;
+    (async () => {
+      while (!stopped) {
+        try {
+          for await (const ev of ctx.event.subscribe()) {
+            if (stopped) return;
+            if (ev && ev.type) on(ev);
+          }
+        } catch {
+          // The stream broke: subscribe again.
+        }
+        if (!stopped) await new Promise((r) => setTimeout(r, 1000));
+      }
+    })();
+    return () => {
+      stopped = true;
+    };
+  },
 };
 `;
 
-/** Writes AgentK's plugin (renamed into place: running sessions keep the copy they loaded). */
-export function writeOpenCodePlugin(paths: Paths): void {
-  mkdirSync(openCodeDir(paths), { recursive: true });
-  writeScript(openCodePluginPath(paths), PLUGIN);
-}
+/** The plugin's manifest, which OpenCode reads too. */
+const PLUGIN_MANIFEST = JSON.stringify({ name: 'agentk-opencode-plugin', private: true, type: 'module', main: 'server.js' }, null, 2) + '\n';
 
-/** The plugin's text, for tests that load it. */
-export function openCodePluginSource(): string {
-  return PLUGIN;
+/**
+ * The plugin's folder name changes with its files' text (the plugin and its manifest), so a folder
+ * once written never changes (see `writeOpenCodePlugin`).
+ */
+const PLUGIN_DIR = `agentk-plugin-${createHash('sha256').update(PLUGIN_MANIFEST).update('\0').update(PLUGIN).digest('hex').slice(0, 8)}`;
+
+/**
+ * Writes AgentK's plugin folder when it isn't there yet, and never over one: OpenCode watches a
+ * loaded plugin's files and runs its setup again when they change, even to the same text, which
+ * would restart the plugin in every running session. Older folders stay for the sessions still
+ * running on them; the plugin file of AgentK before OpenCode 2 (`agentk-plugin.js`) goes.
+ */
+export function writeOpenCodePlugin(paths: Paths): void {
+  const dir = openCodePluginPath(paths);
+  rmSync(join(openCodeDir(paths), 'agentk-plugin.js'), { force: true });
+  if (existsSync(join(dir, 'server.js'))) return;
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'package.json'), PLUGIN_MANIFEST);
+  // Renamed into place, so OpenCode never finds half of it.
+  writeScript(join(dir, 'server.js'), PLUGIN);
 }
 
 /**
@@ -213,6 +330,15 @@ export function openCodeSessionConfig(o: { plugin: string; instructions: string;
   });
 }
 
+/**
+ * The CLI (TUI) config a session starts with, as `OPENCODE_CLI_CONFIG_CONTENT`, merged by OpenCode
+ * over the user's `cli.json`: session tabs off, so the pane holds the one conversation AgentK
+ * follows (the plugin's main session is the one last prompted, and the tabs OpenCode keeps for the
+ * worktree's folder would bring back an earlier session's). `mode` from OpenCode 2.0.20, `enabled`
+ * before it; 2.0.0 to 2.0.5 don't read the variable and keep their tabs.
+ */
+export const OPENCODE_SESSION_CLI_CONFIG = JSON.stringify({ tabs: { mode: 'off', enabled: false } });
+
 /** What an Ask AgentK run keeps of the user's own OpenCode config: which model it answers on, and the providers that serve it. */
 const ASK_KEPT_KEYS = ['model', 'small_model', 'provider', 'enabled_providers', 'disabled_providers'];
 
@@ -233,17 +359,21 @@ export function openCodeAskConfig(prompt: string, own: Json = readOpenCodeConfig
  * Writes an Ask AgentK run's config into `cwd` and returns the variables the run (and deleting its
  * session) takes: OpenCode's global config read from there instead of the user's, no project config,
  * and no Claude Code files (CLAUDE.md, skills). Its sign-ins and sessions, in its data folder, stay.
+ * `noTracking`: `[opencode] disable_tracking` (`OPENCODE_NO_TRACKING_ENV`).
  */
-export function openCodeAskEnv(cwd: string, prompt: string): Record<string, string> {
-  const vars = openCodeAskVars(cwd);
+export function openCodeAskEnv(cwd: string, prompt: string, noTracking = false): Record<string, string> {
+  const vars = openCodeAskVars(cwd, noTracking);
   mkdirSync(join(vars.XDG_CONFIG_HOME, 'opencode'), { recursive: true });
   writeFileSync(join(vars.XDG_CONFIG_HOME, 'opencode', 'opencode.json'), openCodeAskConfig(prompt));
   return vars;
 }
 
 /** The variables of an Ask AgentK run in `cwd` (`openCodeAskEnv`), without writing its config. */
-export function openCodeAskVars(cwd: string): Record<string, string> & { XDG_CONFIG_HOME: string } {
-  return { XDG_CONFIG_HOME: join(cwd, 'opencode-config'), OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_CLAUDE_CODE: '1' };
+export function openCodeAskVars(cwd: string, noTracking = false): Record<string, string> & { XDG_CONFIG_HOME: string } {
+  return {
+    XDG_CONFIG_HOME: join(cwd, 'opencode-config'), OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_CLAUDE_CODE: '1',
+    ...(noTracking ? OPENCODE_NO_TRACKING_ENV : {}),
+  };
 }
 
 /** Writes a session's instructions (its system-prompt lines), read by OpenCode at the start. */
@@ -364,10 +494,54 @@ export function parseOpenCodeMessages(text: string): OpenCodeMessage[] {
     } catch {
       continue;
     }
-    if (!isObject(m) || typeof m.id !== 'string' || !ID.test(m.id) || typeof m.model !== 'string' || !m.model) continue;
+    if (!isObject(m) || m.type === 'meko' || typeof m.id !== 'string' || !ID.test(m.id) || typeof m.model !== 'string' || !m.model) continue;
     out.push({
       id: m.id, session: typeof m.session === 'string' ? m.session : '', model: m.model, at: num(m.at) || Date.now(),
       input: num(m.input), output: num(m.output) + num(m.reasoning), cacheRead: num(m.cacheRead), cacheWrite: num(m.cacheWrite),
+    });
+  }
+  return out;
+}
+
+/** A Meko call of an OpenCode session with its reply, from the plugin's `meko` lines in `messages.jsonl`. */
+export interface OpenCodeMekoCall {
+  /** The call's id, its tool and how many of those the session made (a call from code mode shares its execute call's id). */
+  id: string;
+  /** Its OpenCode session: the main one, or a subagent's. */
+  session: string;
+  /** The Meko tool, without its server's name (`context_search`). */
+  tool: string;
+  model: string | null;
+  at: number;
+  ms: number | null;
+  ok: boolean;
+  error: string | null;
+  input: Record<string, unknown>;
+  /** The reply's text; null when it was too long to log (`big`). */
+  text: string | null;
+  big: boolean;
+}
+
+/** The Meko calls in a `messages.jsonl` text; a line still being written, or one that isn't one, is skipped. */
+export function parseOpenCodeMekoCalls(text: string): OpenCodeMekoCall[] {
+  const out: OpenCodeMekoCall[] = [];
+  for (const line of text.split('\n')) {
+    if (!line.includes('"type":"meko"')) continue;
+    let m: unknown;
+    try {
+      m = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isObject(m) || m.type !== 'meko' || typeof m.id !== 'string' || !m.id || m.id.length > 300 || typeof m.tool !== 'string') continue;
+    const tool = serverMekoTool(m.tool);
+    if (!tool) continue;
+    out.push({
+      id: m.id, session: typeof m.session === 'string' ? m.session : '', tool,
+      model: typeof m.model === 'string' && m.model ? m.model : null,
+      at: num(m.at) || Date.now(), ms: typeof m.ms === 'number' && Number.isFinite(m.ms) && m.ms >= 0 ? Math.round(m.ms) : null,
+      ok: m.ok === true, error: typeof m.error === 'string' ? m.error : null,
+      input: isObject(m.input) ? m.input : {}, text: typeof m.text === 'string' ? m.text : null, big: m.big === true,
     });
   }
   return out;
@@ -389,9 +563,9 @@ export function openCodeDataDir(env: NodeJS.ProcessEnv = process.env, home = hom
 }
 
 /**
- * Whether OpenCode still has session `id`: a row in its SQLite store (`opencode.db`, or a release
- * channel's `opencode-<channel>.db`), read only. Null when no store could be read (none there, or a
- * schema this doesn't know), for the caller to decide.
+ * Whether OpenCode still has session `id`: a row in its SQLite store's `session_v2` table
+ * (`opencode.db`, or a release channel's `opencode-<channel>.db`), read only. Null when no store
+ * could be read (none there, or a schema this doesn't know), for the caller to decide.
  */
 export function openCodeStoredSession(id: string, dir = openCodeDataDir()): boolean | null {
   if (!ID.test(id)) return false;
@@ -406,7 +580,7 @@ export function openCodeStoredSession(id: string, dir = openCodeDataDir()): bool
     let db: DatabaseSync | null = null;
     try {
       db = new DatabaseSync(join(dir, f), { readOnly: true });
-      const row = db.prepare('SELECT 1 AS ok FROM session WHERE id = ?').get(id);
+      const row = db.prepare('SELECT 1 AS ok FROM session_v2 WHERE id = ?').get(id);
       read = true;
       if (row) return true;
     } catch {
@@ -419,8 +593,9 @@ export function openCodeStoredSession(id: string, dir = openCodeDataDir()): bool
 }
 
 /**
- * Whether OpenCode can resume session `id` (`--session` exits 1 on one it doesn't have): its store
- * has it, or, when the store can't be read, the session's usage log has a response of it.
+ * Whether OpenCode can resume session `id` (`--session` starts a new, empty session under an id it
+ * doesn't have): its store has it, or, when the store can't be read, the session's usage log has a
+ * response of it.
  */
 export function openCodeCanResume(log: string, id: string, dataDir = openCodeDataDir()): boolean {
   return openCodeStoredSession(id, dataDir) ?? openCodeLoggedSession(log, id);
@@ -446,8 +621,7 @@ export function readOpenCodeRun(stdout: string): { text: string; sessionId: stri
     if (!sessionId && typeof e.sessionID === 'string' && ID.test(e.sessionID)) sessionId = e.sessionID;
     if (e.type === 'text' && isObject(e.part) && typeof e.part.text === 'string') texts.push(e.part.text);
     if (e.type === 'error' && !error && isObject(e.error)) {
-      const data = isObject(e.error.data) ? e.error.data : {};
-      error = typeof data.message === 'string' ? data.message : typeof e.error.name === 'string' ? e.error.name : 'an error';
+      error = typeof e.error.message === 'string' ? e.error.message : typeof e.error.type === 'string' ? e.error.type : 'an error';
     }
   }
   return { text: texts.join('\n'), sessionId, error };
@@ -460,7 +634,7 @@ const deleting = new Set<Promise<void>>();
 export function deleteOpenCodeSession(command: string, id: string, cwd: string, env: Record<string, string> = {}): void {
   if (!ID.test(id)) return;
   const done = new Promise<void>((resolve) => {
-    execFile(command, ['session', 'delete', id], { cwd, timeout: 15_000, env: { ...process.env, ...env } }, () => resolve()).stdin?.end();
+    execFile(command, ['session', 'delete', '--standalone', id], { cwd, timeout: 15_000, env: { ...process.env, ...env } }, () => resolve()).stdin?.end();
   });
   deleting.add(done);
   void done.then(() => deleting.delete(done));

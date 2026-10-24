@@ -11,7 +11,13 @@ import { expandHome, type Paths } from './paths.js';
 export type UpdateChannel = 'stable' | 'prerelease' | 'off';
 
 export interface Config {
-  /** name: shown in the rail next to the user name; empty uses the machine's short host name. */
+  /**
+   * name: shown in the rail next to the user name; empty uses the machine's short host name.
+   * bind and port, and [tls]: where AgentK listened, and its certificate, when it served browsers
+   * itself. Meko serves it now (on AgentK's old port, at /ext/agentk/), and its handoff takes them
+   * over once (`agentk _handoff`, handoff.ts); nothing else reads them, and they're kept in
+   * config.toml only for that.
+   */
   server: { bind: string; port: number; name: string };
   tls: { cert: string; key: string };
   repos: { roots: string[]; depth: number; cloneInto: string };
@@ -50,8 +56,10 @@ export interface Config {
   /**
    * OpenCode (src/server/harness/opencode.ts). command: how it's run (the default, `opencode`, is also found in
    * `~/.opencode/bin`, where OpenCode's installer puts it). enabled: offer it for new sessions when `<command> --version` answers.
+   * disableTracking: the OpenCode AgentK runs (sessions, from their next launch or resume, and Ask AgentK) sends no telemetry, checks
+   * for no update and offers none of OpenCode Zen's free models (`OPENCODE_NO_TRACKING_ENV` in opencode.ts).
    */
-  opencode: { command: string; enabled: boolean };
+  opencode: { command: string; enabled: boolean; disableTracking: boolean };
   /**
    * idlePerRepo: worktrees each repo keeps for the next session, build outputs and all (0 to 20; 0 removes them).
    * idleDays: an idle worktree no session has used for this many days is removed (0 to 365; 0 keeps it).
@@ -95,7 +103,7 @@ export const DEFAULT_CONFIG: Config = {
   claude: { command: 'claude', enabled: true, mod: true },
   agents: { default: DEFAULT_HARNESS },
   kiro: { command: 'kiro-cli', enabled: true, trustTools: false },
-  opencode: { command: 'opencode', enabled: true },
+  opencode: { command: 'opencode', enabled: true, disableTracking: false },
   worktrees: { idlePerRepo: 3, idleDays: 14 },
   callHome: { enabled: true, url: '', diagnosticsUrl: '' },
   pr: { resolveConflicts: true },
@@ -154,11 +162,7 @@ function readConfigFile(paths: Paths, warn: (msg: string) => void): Config {
 }
 
 export function loadConfig(paths: Paths, warn: (msg: string) => void = (m) => console.warn(m)): Config {
-  const cfg = readConfigFile(paths, warn);
-  // Environment overrides (used by `npm run dev`); saveConfig keeps them out of the file.
-  if (process.env.AK_BIND) cfg.server.bind = process.env.AK_BIND;
-  if (process.env.AK_PORT) cfg.server.port = Number(process.env.AK_PORT);
-  return cfg;
+  return readConfigFile(paths, warn);
 }
 
 /** The values in `cfg` that differ from `base`, or undefined when none do. */
@@ -174,22 +178,15 @@ function changedFrom(cfg: unknown, base: unknown): unknown {
 
 /**
  * Writes the settings that differ from the defaults, so a changed default reaches existing
- * installs. A value that came from AK_BIND or AK_PORT is written as the file had it.
+ * installs. `[server] bind` and `port` and `[tls]` are written as they are, for Meko's handoff.
  */
 export function saveConfig(paths: Paths, cfg: Config): void {
   const out = structuredClone(cfg);
-  const bind = process.env.AK_BIND;
-  const port = process.env.AK_PORT;
-  if ((bind && out.server.bind === bind) || (port && out.server.port === Number(port))) {
-    const onDisk = readConfigFile(paths, () => undefined);
-    if (bind && out.server.bind === bind) out.server.bind = onDisk.server.bind;
-    if (port && out.server.port === Number(port)) out.server.port = onDisk.server.port;
-  }
   mkdirSync(dirname(paths.config), { recursive: true });
   const header =
     '# AgentK configuration. Settings changed in the web UI are written here too.\n' +
     '# Only settings that differ from the defaults are listed; add any other key to change it.\n' +
-    '# Changes to [server] or [tls] take effect after a restart.\n\n';
+    "# Meko serves AgentK to browsers: its web listener's port and access are [web] in Meko's config.toml.\n\n";
   const body = (changedFrom(mapKeys(out, snake), mapKeys(DEFAULT_CONFIG, snake)) ?? {}) as Record<string, unknown>;
   const tmp = paths.config + '.tmp';
   writeFileSync(tmp, header + stringify(body) + '\n', { mode: 0o600 });

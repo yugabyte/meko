@@ -1,9 +1,5 @@
 # Meko backend: install and release
 
-Status: built in milestone 5 (#171). The design and its decisions, as approved, are in the
-milestone's design; this file describes what was built and stays current with the code. The
-foundation is [design.md](design.md).
-
 People install Meko with one command on macOS 14+ (Apple Silicon) and Linux (x64, arm64). It runs
 as a login service, restarts on failure, updates itself and rolls back an update that keeps failing.
 `meko install_extension agentk` then installs AgentK pointed at this Meko, so a fresh machine
@@ -39,6 +35,10 @@ says so and changes nothing, unless given `--reinstall` or another version.
   `app/current/bin/meko`. A build from source is set up as it is and doesn't update itself.
 - It makes the client token (in the secret store) and sets up the login service (below), stopping
   a server started by hand on the same data folder first. `--no-service` skips the service.
+- It writes the web listener's access to `web.toml` when neither it nor `config.toml` has a `[web]`
+  table: `--access local|remote`, or by AgentK's old rule (remote over SSH or on Linux with no
+  display, else local), unless AgentK is on this computer, whose access the handoff takes over
+  instead ([web.md](web.md#settings)). It prints the web UI's URL.
 - It installs Meko alone. AgentK is `meko install_extension agentk`.
 
 `meko uninstall` removes the service, `~/.local/bin/meko` and the app folder, and keeps the data;
@@ -60,7 +60,7 @@ meko-<version>/
   bin/meko                     the CLI and server (cgo: SQLite and sqlite-vec compiled in)
   node/bin/node, node/LICENSE  Meko's own Node (22.18.0, checked against nodejs.org's SHASUMS256)
   memory_engine/package.json, dist/, node_modules/, stubs/
-  web_ui/dist/                 the built web UI, served at / (web-ui.md)
+  web_ui/dist/                 the built web UI, served at / on the web listener (web-ui.md)
   models/                      the pinned models: the embedder and the reranker
   VERSION, LICENSE
 ```
@@ -83,7 +83,7 @@ meko-<version>/
   `MEKO_MODELS_OFFLINE=1`, which sets transformers.js's `allowRemoteModels = false` in both
   workers: a release never downloads a model, and the first start works offline. A build from source still downloads into
   the data folder's `models/`.
-- Measured on linux-x64 for 0.20261022.0, before the reranker came (#170): the tarball was 118 MB;
+- Measured on linux-x64 without the reranker: the tarball was 118 MB;
   unpacked, Node 117 MB, the memory engine 194 MB (onnxruntime-node 45 MB), the embedder 24 MB and
   `meko` 24 MB. The reranker adds about 23 MB.
 - `scripts/smoke-release.sh <tarball> <version>` unpacks a tarball, checks `meko version --json`,
@@ -143,7 +143,7 @@ need an `agentk-*` tarball (`agent-k-local-*` before the rename to AgentK).
 
 With the service installed, `meko start` starts it, `meko stop` stops it (a SIGTERM alone would
 only see it started again), and `meko restart` restarts it. Without it, they start a detached
-`serve` and signal it, as before.
+`serve` and signal it.
 
 `meko logs [-f] [-n 50] [--server|--memory-engine|--service] [--json]` shows the last lines of
 `meko.log` and `memory_engine.log` merged by time, each prefixed with its source, rendering JSON lines as
@@ -160,7 +160,9 @@ its uninstall (`Catalog.UninstallArgs`; AgentK's is `uninstall --purge --delete-
 extension knows where its own folder is: `<data>/extensions/<name>` (`extensions.Dir`). AgentK's
 home is `<data>/extensions/agentk`, wherever Meko's rule puts the data folder (`MEKO_HOME`,
 `~/.meko`, or the network-home fallback; AgentK runs the same rule when Meko didn't tell it, and
-both test suites read `internal/paths/testdata/resolve-cases.json`).
+both test suites read `internal/paths/testdata/resolve-cases.json`). An AgentK whose home is in
+another data folder refuses `start`, `stop`, `status`, `uninstall` and `_handoff` run with this one's
+`MEKO_HOME`, and does nothing.
 
 - An extension's command is found on PATH, then in `~/.local/bin`, then in its release install's
   `app/current/bin`: its folder in the data folder, then its home from before it moved there
@@ -187,15 +189,18 @@ both test suites read `internal/paths/testdata/resolve-cases.json`).
   (tags `agentk-v*`, and `v*` from before) and runs it with the same two flags. An
   AgentK from before `--meko-url` is refused with a message, rather than failing on the flag: an
   installed one by its `install.js`, a release by its `install.sh`. So `install_extension` needs
-  an AgentK release from after #229, which itself is a `meko` commit and cut no AgentK release.
-  Nothing else is passed, apart from `--non-interactive` without a terminal: AgentK asks its own questions. Then it registers
+  an AgentK release that takes `--meko-url`. Nothing else is passed, apart from `--non-interactive` without a terminal: AgentK asks its own questions. Then it registers
   `agentk`.
+- An extension whose catalog entry has `WebUI` (AgentK) is served to browsers by the web listener at
+  `/ext/<name>/`, on the unix socket `<command> _handoff --json` names; at every start, that handoff
+  also brings over the web settings, certificate and login the extension had when it served
+  browsers itself ([web.md](web.md#the-handoff-from-agentk)). AgentK listens only on its socket.
 - `meko start` starts the extensions after Meko; `meko stop` stops them first (`agentk stop`
   ends AgentK's sessions too; they resume on start), unless given `--keep-extensions`. An
   extension that fails is reported, and the rest go on. `meko restart`, updates and crashes never
   touch them: AgentK has its own services and updater.
 - `meko uninstall_extension agentk` only unregisters it.
-- AgentK's key is Meko's client token until per-client keys (#195).
+- AgentK's key is Meko's client token, as every client's is ([api.md](api.md#auth)).
 
 ## Updates and rollback
 
@@ -239,8 +244,7 @@ A release install's app folder:
 
 ## Secrets
 
-`internal/secrets` keeps the client token now, and provider keys (#190, #191) and connector tokens
-(#194) later. `[secrets] store` (`MEKO_SECRETS`) picks the store:
+`internal/secrets` keeps the client token, and is where provider keys and connector tokens will go. `[secrets] store` (`MEKO_SECRETS`) picks the store:
 
 - `keychain`, the default on macOS: generic passwords in the login Keychain, service
   `com.yugabyte.meko`, account `<data folder>/<name>`, through `/usr/bin/security`. The value is
@@ -281,6 +285,6 @@ Changing the store doesn't move secrets: the client token is made again.
 - Each release build runs `scripts/smoke-release.sh` on its own platform.
 
 Not covered automatically: a real launchd or systemd service (`meko install` writes the user's own
-service), a real update from GitHub, and the Keychain under launchd. They're in the milestone's
-manual test plan: a fresh Mac and Linux machine, a reboot, an update, a forced rollback and
-`meko stop` with AgentK.
+service), a real update from GitHub, and the Keychain under launchd. Check them by hand
+on a fresh Mac and Linux machine: a reboot, an update, a forced rollback and `meko stop` with
+AgentK.

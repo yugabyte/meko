@@ -47,10 +47,12 @@ type Layout struct {
 	ModelsDir        string
 	MemoryEngineDir  string
 	MemoryEngineLog  string
-	// KnowledgeFiles holds knowledge files' bytes, beside the database (milestone 4).
+	// KnowledgeFiles holds knowledge files' bytes, beside the database.
 	KnowledgeFiles string
 	// Extensions holds each extension's own folder (extensions.Dir); it's the extensions' data, not Meko's.
 	Extensions string
+	// Certs holds the web listener's self-signed certificate (internal/tlscert).
+	Certs string
 }
 
 // New returns the layout of the data folder at root (an absolute path).
@@ -80,6 +82,7 @@ func New(root string) Layout {
 
 		KnowledgeFiles: filepath.Join(root, "knowledgebase-files"),
 		Extensions:     filepath.Join(root, "extensions"),
+		Certs:          filepath.Join(root, "certs"),
 	}
 }
 

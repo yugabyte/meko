@@ -80,18 +80,18 @@ gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-d
 #     login` for whichever isn't signed in. Sessions add ~/.local/bin to PATH after the login profile runs. --install-deps installs without asking,
 #     --no-install-deps never installs, --deps-only stops after this step
 #  2. unpacks to <home>/app/<ver>, points app/current at it, then runs `agentk install`:
-#  3. asks for your repos folder (default ~/code), access (local: 127.0.0.1, no login; remote:
-#     0.0.0.0, HTTPS and a login; remote by default over SSH or with no display) and port
+#  3. asks for your repos folder (default ~/code), and stops when there's no `meko` command: the
+#     Meko on this computer serves AgentK to browsers (at /ext/agentk/) and signs people in
 #  4. Meko: verifies the API key (reuses MEKO_API_KEY from ~/.claude/settings.json, else asks for
 #     a Meko Cloud key, and Enter uses the Meko running on this computer, which isn't stored;
 #     --meko-url and --meko-key name one; --no-meko is ignored) and offers to run Meko's setup for
 #     Claude Code if its plugin, MCP server or key is missing (declining is a warning)
 #  5. picks the database location (local disk for an older home still on NFS), writes config.toml
-#     (with the Meko data folder the home is in), sets up TLS; on an older home, says it moves into
+#     (with the Meko data folder the home is in); on an older home, says it moves into
 #     Meko's data folder once the server has started
 #  6. installs both background services: systemd user units with linger if allowed,
 #     or LaunchAgents on macOS (needs a desktop login)
-#  7. prints the one-time setup link (remote access), or the address (local access)
+#  7. prints the address Meko serves it at (meko setup_link makes the login for remote access)
 ```
 
 **Offline bundle.** People without access to the repo (it's internal) can't run the installer's
@@ -107,8 +107,9 @@ file; it installs the version it holds, so it can't be combined with `--version`
 still checks for the tools (step 1), since AgentK uses git and gh on the user's own repos. Only
 releases whose `install.sh` has `--tarball` can be bundled. Such an install still points at this
 repo for updates, so its update checks fail ("GitHub API returned 404"): set `update.channel =
-"off"` in its `config.toml`, and send a newer bundle to update it. Usage stats and Meko keep
-their defaults ([Usage stats](usage-stats.md); `--no-meko` skips Meko).
+"off"` in its `config.toml`, and send a newer bundle to update it. Usage stats keep their
+defaults ([Usage stats](usage-stats.md)). The bundle holds only AgentK: Meko, which serves AgentK to
+browsers, must be installed on that computer first.
 
 **Tags.** The repo releases two products. AgentK's releases are tagged `agentk-v<version>`
 (`v<version>` before releases were tagged by product); Meko's are `meko-v<version>`. Versions stay

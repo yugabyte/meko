@@ -220,7 +220,7 @@ export interface Asker {
   /** The command, its arguments and the variables it adds for one ask. May write what the CLI reads from `cwd` first. */
   command(cfg: Config, cwd: string): { cmd: string; args: string[]; env?: Record<string, string> };
   /** What it printed, as an answer, or the HttpError the palette shows. */
-  read(run: AskRun, cmd: string, timeoutSeconds: number, cwd: string): AskAnswer;
+  read(run: AskRun, cmd: string, timeoutSeconds: number, cwd: string, cfg: Config): AskAnswer;
 }
 
 /** Claude Code: `claude -p` with no tools, MCP servers or hooks, the answer as JSON (`askArgs`). */
@@ -250,9 +250,12 @@ export const kiroAsker: Asker = {
   },
 };
 
-/** The arguments for one ask on OpenCode: a one-shot run as the `agentk-ask` agent, its events as JSON, the message on stdin. */
+/**
+ * The arguments for one ask on OpenCode: a one-shot run on a server of its own (`--standalone`, so it
+ * reads the ask's variables) as the `agentk-ask` agent, its events as JSON, the message on stdin.
+ */
 export function openCodeAskArgs(): string[] {
-  return ['run', '--format', 'json', '--agent', OPENCODE_ASK_AGENT];
+  return ['run', '--standalone', '--format', 'json', '--agent', OPENCODE_ASK_AGENT];
 }
 
 /**
@@ -263,14 +266,14 @@ export function openCodeAskArgs(): string[] {
  */
 export const openCodeAsker: Asker = {
   command(cfg, cwd) {
-    return { cmd: openCodeCommand(cfg.opencode.command), args: openCodeAskArgs(), env: openCodeAskEnv(cwd, askPromptWithShape()) };
+    return { cmd: openCodeCommand(cfg.opencode.command), args: openCodeAskArgs(), env: openCodeAskEnv(cwd, askPromptWithShape(), cfg.opencode.disableTracking) };
   },
-  read(run, cmd, timeoutSeconds, cwd) {
+  read(run, cmd, timeoutSeconds, cwd, cfg) {
     const id = readOpenCodeRun(run.stdout).sessionId;
     try {
       return readOpenCodeAnswer(run, cmd, timeoutSeconds);
     } finally {
-      if (id) deleteOpenCodeSession(cmd, id, cwd, openCodeAskVars(cwd));
+      if (id) deleteOpenCodeSession(cmd, id, cwd, openCodeAskVars(cwd, cfg.opencode.disableTracking));
     }
   },
 };
@@ -371,7 +374,7 @@ export class AskAgentk {
       // The user closed the palette: nobody reads the answer, and it isn't counted.
       if (run.aborted) throw new HttpError(499, 'The ask was cancelled.');
       outcome = { ok: false, actions: 0 };
-      const answer = asker.read(run, cmd, timeoutSeconds, this.deps.cwd);
+      const answer = asker.read(run, cmd, timeoutSeconds, this.deps.cwd, cfg);
       // Checked against the state as it is now, not as it was when Claude started.
       const { actions, notes } = checkActions(answer.actions, this.deps.projects());
       outcome = { ok: true, actions: actions.length };

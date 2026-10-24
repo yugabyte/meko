@@ -21,6 +21,11 @@ Meko API key** while Meko is off. A shared datapack already attached can become 
 New sessions use it, each pinning it for its own agent id. Search is hidden for a project with no
 datapacks.
 
+While the dedicated datapack has no memories and no knowledge (its counts from Meko, so not while
+Meko is off or doesn't answer) and the project has never had a learn session, the box says the
+datapack is empty, with **Learn the project**, which opens the New session dialog on that choice
+(see [Learn sessions](recall-and-learn.md#learn-sessions)).
+
 The dedicated datapack's row has **Switch** (while Meko is on). It opens the same dialog, titled
 **Switch the dedicated datapack**, to make a new datapack or one of yours the dedicated one; attached
 shared datapacks are listed first, and a new one's default name gets `-2` (or the next free number)
@@ -70,9 +75,20 @@ read leaves the notice as the reply. Without a live mod (Claude Code older than 
 `[claude] mod = false`), Claude's calls aren't logged: there's no fallback to the `PostToolUse`
 hook, which misses failed calls.
 
+Kiro's and OpenCode's calls, which have no mod, come from the usage read of their own files, the
+read that records them in `meko_calls` (see [Token usage](token-usage.md#meko-calls)): Kiro's
+session log (`<conversation>.jsonl`, the call's input and reply, but not how long it took) and the
+`meko` lines AgentK's OpenCode plugin adds to the session's `messages.jsonl` (with the time it
+took). `readUsage` hands back the calls it recorded for the first time (`UsageRead.mekoCalls`), and
+`SessionManager.ingestUsage` writes them to the log with `recordAgent`, so a file read again from
+the start never logs a call twice. They're logged as `by: 'claude'`, which names the session's
+agent whichever it is: the page labels them with the session's agent (`MekoLogInfo.harness`,
+`agentName()`), and a Kiro call shows no time.
+
 Each line holds the tool (Claude's without its MCP server's prefix), who made it (`by`: `agentk`
-or `claude`; lines from before Claude's calls were logged have none and are AgentK's), its args and
-its reply (parsed, or its text), the error, how long it took, the tries (2 when it was sent again
+or `claude`, the session's agent; lines from before Claude's calls were logged have none and are
+AgentK's), its args and its reply (parsed, or its text), the error, how long it took (null for
+Kiro's calls), the tries (2 when it was sent again
 after a transport failure: a read, or a write that surely never reached Meko; always 1 for
 Claude's), the learn step that made it, and for Claude's whether a subagent made it and the notice
 Claude read. Lines are in the order the server heard of the calls ending: while one of Claude's

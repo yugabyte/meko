@@ -275,6 +275,8 @@ async function turn(text) {
     return;
   }
   if (text.includes('DESIGN_MD')) writeFileSync(process.env.AK_DESIGN_FILE, '# Design\n\nDo the thing.\n');
+  // A learn session that's done: its summary, beside the design file (learnedPath).
+  if (text.includes('LEARN_DONE')) writeFileSync(join(dirname(process.env.AK_DESIGN_FILE), 'learned.md'), 'Covered billing and 12 PRs.\nSaved 5 facts.\n');
   if (text.includes('DESIGN_QUESTIONS') || text.includes('RESOLVE_STORE')) {
     // A design with open questions, listed in the questions file beside it; RESOLVE_STORE (in the
     // user's answer) revises it, resolving the first one. WITH_DECISION adds a decision AgentK made

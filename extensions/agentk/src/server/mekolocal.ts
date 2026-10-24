@@ -3,10 +3,14 @@ import { homedir } from 'node:os';
 import type { LocalMekoState } from '../shared/types.js';
 import { withLocalBin } from './paths.js';
 
-/** A Meko running on this computer: its MCP URL and the client token its clients send. */
+/**
+ * A Meko running on this computer: its MCP URL, the client token its clients send, and its web
+ * listener's URL, where browsers find AgentK at /ext/agentk/ (null from a Meko too old to serve it).
+ */
 export interface LocalMeko {
   url: string;
   token: string;
+  webUrl?: string | null;
 }
 
 /** What `meko token --json` said: a running Meko, one that's installed but stopped, or none. */
@@ -35,14 +39,25 @@ export function probeLocalMeko(mekoHome: string | null, env: NodeJS.ProcessEnv =
     execFile('meko', ['token', '--json'], { env: run, timeout: TIMEOUT_MS, encoding: 'utf8' }, (err, stdout) => {
       if (err) return resolve((err as NodeJS.ErrnoException).code === 'ENOENT' ? none : failed);
       try {
-        const r = JSON.parse(stdout) as { url?: unknown; token?: unknown; running?: unknown };
+        const r = JSON.parse(stdout) as { url?: unknown; token?: unknown; running?: unknown; web_url?: unknown };
         if (typeof r.url !== 'string' || !/^https?:\/\//.test(r.url) || typeof r.token !== 'string' || !r.token) return resolve(failed);
-        resolve(r.running === true ? { state: 'running', meko: { url: r.url, token: r.token } } : { state: 'stopped', meko: null });
+        const webUrl = typeof r.web_url === 'string' && /^https?:\/\//.test(r.web_url) ? r.web_url : null;
+        resolve(r.running === true ? { state: 'running', meko: { url: r.url, token: r.token, webUrl } } : { state: 'stopped', meko: null });
       } catch {
         resolve(failed);
       }
     });
   });
+}
+
+/**
+ * Whether the server's every-minute look for the Meko on this computer runs: while there's no Meko
+ * at all (Meko normally starts AgentK; this covers a boot where it didn't), and, with a key, while
+ * there's no `meko` here, so the banner asking to install it goes once it's installed. Once found,
+ * a key's install isn't looked at again until the next read (a restart, Settings).
+ */
+export function lookForLocalMeko(configured: boolean, local: LocalMekoState): boolean {
+  return !configured || local === 'none';
 }
 
 /** The running Meko on this computer (`probeLocalMeko`), or null. */

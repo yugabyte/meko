@@ -46,7 +46,7 @@ Session states, shown with a dot on each session (on its tab, or in the rail) an
   Meko's m. It shows over idle, recovered and working (a learn step through the mod leaves the
   status idle; without the mod it's a working turn), never over needs you, exited or starting
   (`dotState()` in `src/web/util.ts`). The rail ranks it like working.
-- **Calling Meko:** Claude is running a Meko tool call. The working dot gets Meko's m, in white,
+- **Calling Meko:** the session's agent (Claude, Kiro or OpenCode) is running a Meko tool call. The working dot gets Meko's m, in white,
   and its halo blinks on (*Meko in the dot*, below).
 - **Queued:** a gate is queued (`Session.queued`: Merge when ready, waiting on CI or the AgentK
   review, or Open PR) while Claude is between turns. The idle ring, with its top quarter open,
@@ -61,13 +61,18 @@ rail's dot, `blinkOffsetMs()`), so different sessions blink out of step, a sessi
 palette dots blink together, and a dot shown again picks up where its signal is. With reduced
 motion the dots are still.
 
-**Meko in the dot.** While Claude runs a Meko tool call, `Session.mekoCall` is true and a working
-session's dot shows Meko's m. AgentK's mod reports each call (`/mod/meko`, a start and an end per
-`tool_use_id`), so sessions without the mod never show it. The server keeps the calls in flight in
-memory (`ModLinks.mekoCall()` in `modlink.ts`) and pushes a change only when the first starts and
-when the last ends. It forgets them at the turn's end (`Stop`, a plan approval's too, or an
-interrupted turn's `/mod/turn`) and on a reset
-(a relaunch or `SessionEnd`), in case an end never got through.
+**Meko in the dot.** While the session's agent runs a Meko tool call, `Session.mekoCall` is true
+and a working session's dot shows Meko's m. Claude's calls come from AgentK's mod (`/mod/meko`, a
+start and an end per `tool_use_id`), kept in memory by `ModLinks.mekoCall()` in `modlink.ts`, which
+pushes a change only when the first starts and when the last ends; a Claude Code session without the
+mod never shows it. Kiro's and OpenCode's come from their hooks (see
+[Harnesses](harnesses.md)): a Meko tool's `PreToolUse` opens a call and its `PostToolUse` closes it,
+matched by the key the adapter's `mekoTool()` gives, in `MekoCalls` (`mekocalls.ts`), separate from
+`ModLinks` because a mod's report marks the mod live. Kiro's calls have no id, so the key is the tool
+and a key open twice is counted. Both are forgotten at the turn's end (`Stop`, a plan approval's too,
+or an interrupted turn's `/mod/turn`) and on a reset (a relaunch or `SessionEnd`), in case an end
+never got through: Kiro runs `preToolUse` before it asks the user, so a call they refuse has no end,
+and its m stays until the turn ends.
 
 - **Where it shows:** only over working; a learn step's dot wins (`dotState()`). The rail ranks it
   above working, starting and learning, under exited and needs you, so the project's dot shows the
@@ -109,9 +114,25 @@ line counts still cover every file, and a note says how many are listed (*Showin
 changed files*).
 Big diffs aren't drawn until asked for, so a big branch can't freeze the page (`defaultOpen()` in
 `src/web/diff.ts`). Files open by default while their rows fit a 2,000-row budget, and files with
-comments always open. A diff of more than 1,000 rows (`LARGE_DIFF_ROWS`) opens to *Large diff: N
-lines* and **Show diff**, which draws 2,000 rows (`ROW_PAGE`) per click, with **Show more** under
-them; comments on rows not drawn yet are listed under that button.
+comments always open. A diff of more than 1,000 rows opens to *Large diff: N lines* and **Show
+diff**, which draws 2,000 rows per click, with **Show more** under them; comments on rows not drawn
+yet are listed under that button. A phone lays rows out several times slower, so at the phone width
+those numbers are 1,000, 500 and 500 (`DESKTOP_BUDGET`, `PHONE_BUDGET`). The panel picks them once,
+when it opens, so turning a phone sideways or resizing the window doesn't open or close diffs.
+Drawing stays cheap in two more ways. Each file is a memoized `FileSection` given only its own
+data, with handlers that never change (read through a ref). On a refetch, a file whose fields are
+all the same keeps its object (`keepUnchanged()`) and its parsed rows (`reparse()`), its comment
+threads keep their maps while they hold the same comments, and only an image gets the fetch time
+its previews reload with. So a state push, which comes as often as every 100 ms while the agent
+works, and a refetch draw again only the files that changed. Files also
+have `content-visibility: auto`, so the browser lays out and paints a file only once it comes near
+the screen, assuming the height of the rows it will draw until then. Every file stays in the DOM,
+so jumps, `[` / `]`, find in page and comment threads work as before. A JS virtual list was
+rejected for that reason. The page sets `text-size-adjust: 100%`: iOS enlarges small text in wide
+blocks such as a diff's long rows when it lays them out again, so without it the code grew each time
+a file scrolled back into view. Measured in Chromium at phone size with the CPU slowed 6×, about 1,000
+rows over several files open in about 0.7 s (2,000 rows took 2.2–2.5 s before), a push takes
+4–5 ms (60–110 ms before), and a refetch that changes nothing 18–25 ms of script (66–99 ms before).
 Untracked files over 1 MB aren't read (no diff, 0 lines), and at most 32 MB of untracked files is
 read per refresh. A changed image (PNG, JPEG, GIF, WebP, AVIF, BMP, ICO) is
 shown as *Before* and *After* side by side with its size, instead of "Binary file";
@@ -185,8 +206,8 @@ approved.
 
 Claude Code can take a while to load its plugins, MCP servers and startup hooks. While a session
 starts, the terminal shows its steps (updating the base branch and preparing the worktree, or for a
-Review a PR fetching the PR and preparing the worktree, starting Claude Code, loading, sending your
-task) with the current one animated and timed, plus the stage the session opens in. The session's
+Review a PR fetching the PR and preparing the worktree, starting the session's agent by name, Claude
+Code, OpenCode or Kiro, loading, sending your task; `startupSteps()` in `src/shared/stages.ts`) with the current one animated and timed, plus the stage the session opens in. The session's
 tab shows the current step in its tooltip. The view shows up as soon as the New session dialog
 closes, before the worktree is made; after 10 seconds on that step it says a big repo can take a
 few minutes and that you can switch to other sessions meanwhile.
@@ -333,8 +354,8 @@ An iPhone or iPad makes no offer, so there the banner says to tap Share, then Ad
 iOS shows notifications only for Home Screen web apps. Safari can't tell that AgentK is on the Home
 Screen already (it has no `appinstalled`, and the Home Screen app keeps its storage apart), so in a
 Safari tab only Not now hides these steps; the Home Screen app itself never shows them. Firefox and Safari on a Mac get no banner.
-Chrome offers nothing for a page whose certificate it doesn't trust, so with AgentK's self-signed
-certificate, trust its fingerprint (`agentk status`) first. Chrome may also wait until you've used
+Chrome offers nothing for a page whose certificate it doesn't trust, so with Meko's self-signed
+certificate (remote access), trust its fingerprint (`meko status`) first. Chrome may also wait until you've used
 the page a little before it offers, so the banner can appear a moment after the page loads.
 
 ## On a phone
@@ -351,12 +372,13 @@ move into a ⋯ sheet, leaving the screen to the terminal; a dot on ⋯ marks a 
 you, and the sheet says why a closed gate is closed. The sheet closes with the × at its top right, a
 tap outside it, or Escape. Dialogs open as bottom sheets, with tabs in a
 header (Settings) on their own row under the title and its × (focus still goes from the tabs to the
-×, as on a desktop). The app, the
-overlay behind a dialog or sheet, and the sign-in and setup screens are pinned to the visible
-viewport (its height and, where iOS pans the page for a focused field, its offset), so the on-screen
-keyboard shrinks them instead of covering the prompt or a dialog's fields. The sign-in screens
-scroll inside themselves and bring the field being typed in back into view once the keyboard is up
-(`keepFocusInView`); the page itself never scrolls, since the app puts its scroll back at the top.
+×, as on a desktop). The app and the
+overlay behind a dialog or sheet are pinned to the visible viewport (its height and, where iOS pans
+the page for a focused field, its offset), so the on-screen keyboard shrinks them instead of
+covering the prompt or a dialog's fields. On a touch screen the keyboard comes up only when you tap
+a field: opening a dialog (New project, New session, Open PR) or the Changes panel's Files, commit
+and base menus doesn't focus a text field. The page itself never scrolls, since the app puts its
+scroll back at the top. (Signing in is Meko's page.)
 While you type, the terminal stays scrolled to its newest line. On
 touch screens the terminal gets a key bar (Tab, arrows, Ctrl+C, Enter, select mode, typing mode,
 and at the far right a ▾ key that opens a second row of more keys: a sticky Ctrl, Esc, Shift+Tab,

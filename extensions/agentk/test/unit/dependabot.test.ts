@@ -128,7 +128,7 @@ describe('dependabot config', () => {
     };
     const deps = new Set([...Object.keys(pkg.dependencies), ...Object.keys(pkg.devDependencies)]);
     const families = [
-      ['fastify', '@fastify/cookie', '@fastify/static', '@fastify/websocket'],
+      ['fastify', '@fastify/static', '@fastify/websocket'],
       ['react', 'react-dom', '@types/react', '@types/react-dom'],
       ['@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-web-links', '@xterm/addon-webgl'],
       ['vite', '@vitejs/plugin-react', 'vitest'],

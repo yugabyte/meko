@@ -1,7 +1,7 @@
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { probeLocalMeko } from '../../src/server/mekolocal.js';
+import { lookForLocalMeko, probeLocalMeko } from '../../src/server/mekolocal.js';
 import { mekoDirOf } from '../../src/server/movehome.js';
 import { tempDir } from '../helpers.js';
 
@@ -21,10 +21,14 @@ describe('probeLocalMeko', () => {
   };
   const probe = (mekoHome: string | null = null) => probeLocalMeko(mekoHome, { HOME: home, PATH: '/usr/bin:/bin' });
 
-  it('reads the URL and token of a running Meko, asking the Meko whose folder it is given', async () => {
-    meko(`echo "{\\"url\\":\\"http://127.0.0.1:7778/mcp\\",\\"token\\":\\"tok-$MEKO_HOME\\",\\"running\\":true}"`);
-    expect(await probe('/data/meko')).toEqual({ state: 'running', meko: { url: 'http://127.0.0.1:7778/mcp', token: 'tok-/data/meko' } });
-    expect(await probe()).toEqual({ state: 'running', meko: { url: 'http://127.0.0.1:7778/mcp', token: 'tok-' } });
+  it('reads the URLs and token of a running Meko, asking the Meko whose folder it is given', async () => {
+    // Only the Meko in /data/meko names its web listener: the other is too old to serve AgentK.
+    meko(`w=''; [ -n "$MEKO_HOME" ] && w=',"web_url":"https://box:7777"'
+echo "{\\"url\\":\\"http://127.0.0.1:7778/mcp\\",\\"token\\":\\"tok-$MEKO_HOME\\",\\"running\\":true$w}"`);
+    expect(await probe('/data/meko')).toEqual({
+      state: 'running', meko: { url: 'http://127.0.0.1:7778/mcp', token: 'tok-/data/meko', webUrl: 'https://box:7777' },
+    });
+    expect(await probe()).toEqual({ state: 'running', meko: { url: 'http://127.0.0.1:7778/mcp', token: 'tok-', webUrl: null } });
   });
 
   it.each([
@@ -46,5 +50,13 @@ describe('mekoDirOf', () => {
     ['/data/extensions/agentk-dev', null],
   ])('%s → %s', (akHome, want) => {
     expect(mekoDirOf(akHome)).toBe(want);
+  });
+});
+
+describe('lookForLocalMeko', () => {
+  it('looks every minute while there is no Meko, and with a key only until `meko` is found', () => {
+    expect(['running', 'stopped', 'none', 'failed'].map((s) => lookForLocalMeko(false, s as 'none'))).toEqual([true, true, true, true]);
+    expect(lookForLocalMeko(true, 'none')).toBe(true);
+    expect(['running', 'stopped', 'failed'].map((s) => lookForLocalMeko(true, s as 'none'))).toEqual([false, false, false]);
   });
 });

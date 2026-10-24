@@ -75,6 +75,37 @@ plugin's hooks inject no recalled memory today, so the transcript is the rest of
 Meko gave a session. The migration that added the table cleared the read offsets again, so older
 sessions got their calls and 1-hour writes.
 
+Kiro's and OpenCode's calls go into the same table, judged by the same code (`mekoCallOf`,
+`mekoResultOf` in `mekousage.ts`, written by `recordMekoCalls` in `usage.ts`), so the counts, the
+usage report and What Meko doesn't know treat every agent's calls alike:
+
+- **Kiro** (`ingestKiroMekoCalls`, from the adapter's `readUsage`): its session log
+  (`~/.kiro/sessions/cli/<conversation>.jsonl`), read from the offset kept in `usage_files` under its
+  path. Only a `ToolResults` line names a call's MCP server (`data.results[<id>].tool.kind.Mcp`:
+  `serverName`, `toolName`, `params`), so a call is taken there, from a server named `meko` or
+  starting with it, with its reply from the line's `toolResult` content (`parseKiroMekoCalls`,
+  checked against kiro-cli 2.34.0). Kiro dates only its `Prompt` lines, so a call's `at` is its
+  turn's prompt when the read saw it, else when AgentK read the call. A Meko call's `postToolUse`
+  starts a read at once, so that's usually seconds after the call ran. If Kiro hasn't written the
+  result by then, it's the next read: a later tool call more than 10 seconds after the last read, or
+  the turn's end, which can be minutes later. `model` and `context_tokens` are NULL. The input's `__tool_use_purpose`, Kiro's
+  own, is left out. A call the user refused has Kiro's own message as its result (a `text` part,
+  status `error`) and counts as failed, as Claude's refused calls do. A Kiro session started before
+  this has its calls read from the start of its log the next time its usage is read.
+- **OpenCode** (`ingestOpenCodeUsage`): the plugin's `execute.after` adds a `type: "meko"` line to
+  the session's `messages.jsonl` for each call to a Meko server's tool (`meko…_<tool>`, the tool found
+  by `serverMekoTool`): its id (the call's id, its tool and a count, since a call from code mode
+  shares its `execute` call's id), the OpenCode session, the step's model, when it started and how
+  long it took, whether it completed, the input and the reply's text. A reply over 1 MB is left out
+  and counted as found, as one too large for Claude is. `context_tokens` is NULL. A subagent's call
+  has its session as the agent, like its responses.
+
+The savings estimate credits a search with the context it saved, which these calls don't have
+(`context_tokens` is NULL), so `mekoCalls()` gives them no `later` and `summarizeMeko` leaves them
+out of `savings` (neither searches nor unpriced searches). They still count as lookups, found or
+empty. Meko's savings come out lower than they really are for Kiro and OpenCode sessions, never
+higher. A Claude call whose response had no usage (no context either) is left out the same way.
+
 **Meko in the first turn.** The same pass keeps when each session's first turn ended:
 `sessions.first_turn_end_at`, set once from the main transcript (subagents don't count). It's the
 first of: a response with `stop_reason: "end_turn"`, an API error Claude Code wrote in the model's
@@ -178,8 +209,10 @@ own, to keep the block small. Each meter names its agent: **Claude 5-hour**, **C
 stream-json /usage` prints the account's credits this period (about 4 s; it bills nothing):
 `Estimated Usage | resets on 2026-11-01 | KIRO FREE` and `Credits (36.02 of 50 covered in plan),
 72.0%` on kiro-cli 2.32.0. `KiroPlanStore` (`src/server/kiroplan.ts`) runs it at start (once Kiro's
-version is read), hourly, and when the first Kiro session is created, so that session's plan shows
-without waiting for the hour; never after turns. It runs only while Kiro is available and some
+version is read), hourly, when the first Kiro session is created, so that session's plan shows
+without waiting for the hour, and — at most once every 10 min — when a Kiro session's turn ends, so
+an active account's reading stays fresh between the hourly reads. It runs only while Kiro is
+available and some
 session (archived ones too) has run on it, so an install that never uses Kiro in AgentK never
 runs it for this. One read at a time, in `run/kiro-usage`, 20 s at most, as `agentk-usage`, an
 inert agent written in that folder (no tools, MCP servers or hooks, like Ask AgentK's), so the
@@ -188,7 +221,8 @@ read AgentK deletes (`chat --delete-session`) the one the run named and any othe
 whose folder is `run/kiro-usage`, since a run cut off at its timeout never names its own. A server
 that is stopping waits up to 5 seconds for a read and its deletes still running. `parseKiroPlan` (`src/server/kiro.ts`)
 reads the plan name, the reset day and the credits line, and returns nothing without the credits
-line. Paid plans' bonus and overage lines haven't been seen, so they're matched loosely (a line
+line. The overage line's only seen form is `Overages: Disabled` (kiro-cli 2.34.0, Power plan); its
+credit-bearing form and the bonus line haven't been seen, so all three are matched loosely (a line
 with `bonus` and two numbers, `remaining` or `left` meaning what's left; a line with `overage`, its
 first amount that isn't money or a percentage, and `enabled`/`disabled`), and each is kept with the
 line as Kiro printed it. The reading is kept in `kv` (`kiro_plan`) and sent as `AppState.kiroPlan`;
@@ -196,7 +230,11 @@ a read that fails (signed out, say) keeps the last one and logs once. The rail s
 credits** on Kiro's row: a ring of used over covered in Kiro's violet (amber at 80%, red at 95%;
 past 100%, **Over plan**, red, or amber while overage is on, since Kiro then bills the rest and
 goes on), `36 of 50 · Free · resets Nov 1` beside it, then a line for bonus and overage when Kiro
-printed them and Kiro's own lines quoted under it (since how they're read is a guess). Its tooltip
+printed them (`kiroPlanLines` in `src/web/util.ts`). Kiro's own line is quoted under it unless the
+line above already states everything AgentK read from it: the overage quote is dropped only for the
+seen `Overages: Disabled` shape (on/off read, no credits), which `Overage off` fully states; a line
+that also carries credits keeps its quote, since the line above shows only the credits and that
+amount is still a guess, and the bonus line is always quoted (its format is unseen). Its tooltip
 says it's Kiro's estimate of all your Kiro use, with its age. The reading is dropped once its reset day has come (UTC midnight), and while
 Kiro isn't available.
 

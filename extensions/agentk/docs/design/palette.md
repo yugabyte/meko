@@ -97,7 +97,7 @@ option), no tools, no MCP servers, no hooks. The answer is the `runFinished` eve
 JSON object read even inside a code fence; Kiro keeps every run as a session, so AgentK deletes the
 ask's (`chat --delete-session`) once it has the answer, in the background (a server that is
 stopping waits up to 5 seconds for deletes still running; a run that failed is deleted too). On
-OpenCode it runs `opencode run --format json --agent agentk-ask`, the message on stdin, in the same
+OpenCode it runs `opencode run --standalone --format json --agent agentk-ask`, the message on stdin, in the same
 folder, with OpenCode's global config pointed at the ask's own (`XDG_CONFIG_HOME`), which defines
 `agentk-ask` with the system prompt and the answer's shape and `permission: "deny"` and keeps of the
 user's config only their model and providers, so the user's tools, plugins (hooks) and MCP servers

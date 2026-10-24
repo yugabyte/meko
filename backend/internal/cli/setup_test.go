@@ -117,7 +117,8 @@ func configurePort(t *testing.T, dir, port string) {
 	}
 }
 
-// noRealExtensions keeps this machine's own extensions (an installed agent-k-local) out of reach.
+// noRealExtensions keeps this machine's own extensions (an installed agentk) out of reach while the
+// test runs; t.Setenv restores PATH before setup's cleanup, which is why that one keeps the extensions.
 func noRealExtensions(t *testing.T) {
 	t.Helper()
 	t.Setenv("PATH", "/usr/bin:/bin")
@@ -158,7 +159,8 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	want(t, "restart", code, 0, out, "Meko restarted")
 	code, out, _ = run("stop", "--data-dir", dir, "--keep-extensions")
 	want(t, "stop --keep-extensions", code, 0, out, "Meko stopped\n")
-	if got := readLog(t, log); got != "stop\nstart\n" {
+	// The server asks it where it listens (_handoff) at each start; that's not starting or stopping it.
+	if got := strings.ReplaceAll(readLog(t, log), "_handoff --json\n", ""); got != "stop\nstart\n" {
 		t.Errorf("extension ran %q (restart and --keep-extensions must leave it alone)", got)
 	}
 

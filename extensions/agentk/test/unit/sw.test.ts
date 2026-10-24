@@ -13,11 +13,18 @@ interface FakeWindow {
   postMessage: (m: unknown) => void;
 }
 
-/** Loads sw.js with these open windows (most recently focused first) and clicks a notification. */
-async function click(data: Record<string, string>, open: { path: string; focused?: boolean; visible?: boolean; refuseFocus?: boolean }[]) {
+/**
+ * Loads sw.js, registered with `base` as its scope, with these open windows (most recently focused
+ * first) and clicks a notification. A window's path is below the base, unless it starts with '/'.
+ */
+async function click(
+  base: string,
+  data: Record<string, string>,
+  open: { path: string; focused?: boolean; visible?: boolean; refuseFocus?: boolean }[],
+) {
   const log: string[] = [];
   const windows: FakeWindow[] = open.map((o) => ({
-    url: ORIGIN + o.path,
+    url: ORIGIN + (o.path.startsWith('/') ? o.path : base + o.path),
     focused: !!o.focused,
     visibilityState: o.visible || o.focused ? 'visible' : 'hidden',
     focus: async () => {
@@ -28,6 +35,7 @@ async function click(data: Record<string, string>, open: { path: string; focused
   }));
   const listeners: Record<string, (ev: unknown) => void> = {};
   const self = {
+    registration: { scope: ORIGIN + base },
     addEventListener: (type: string, fn: (ev: unknown) => void) => (listeners[type] = fn),
     clients: {
       matchAll: async () => windows,
@@ -47,46 +55,54 @@ async function click(data: Record<string, string>, open: { path: string; focused
 
 const open = (projectId: string, sessionId: string) => ({ type: 'ak-open', projectId, sessionId });
 
-describe('service worker notification clicks', () => {
+describe.each(['/', '/ext/agentk/'])('service worker notification clicks, served under %s', (base) => {
   const data = { projectId: 'p1', sessionId: 's1' };
+  const at = (data: Record<string, string>, open: Parameters<typeof click>[2]) => click(base, data, open);
 
   it('switches to the tab already showing the session, not the one in use', async () => {
-    const log = await click(data, [{ path: '/p/p2/s/s9', focused: true }, { path: '/p/p1/s/s2' }, { path: '/p/p1/s/s1' }]);
-    expect(log).toEqual(['close', 'focus /p/p1/s/s1', `message /p/p1/s/s1 ${JSON.stringify(open('p1', 's1'))}`]);
+    const log = await at(data, [{ path: 'p/p2/s/s9', focused: true }, { path: 'p/p1/s/s2' }, { path: 'p/p1/s/s1' }]);
+    expect(log).toEqual(['close', 'focus p/p1/s/s1', `message p/p1/s/s1 ${JSON.stringify(open('p1', 's1'))}`]);
   });
 
   it('else switches to a tab on the session\'s project, which opens the session', async () => {
-    const log = await click(data, [{ path: '/p/p2/s/s9', focused: true }, { path: '/p/p1/home' }, { path: '/p/p1/s/s2' }]);
-    expect(log.slice(1)).toEqual(['focus /p/p1/home', `message /p/p1/home ${JSON.stringify(open('p1', 's1'))}`]);
+    const log = await at(data, [{ path: 'p/p2/s/s9', focused: true }, { path: 'p/p1/home' }, { path: 'p/p1/s/s2' }]);
+    expect(log.slice(1)).toEqual(['focus p/p1/home', `message p/p1/home ${JSON.stringify(open('p1', 's1'))}`]);
   });
 
   it('else opens it in the tab in use', async () => {
-    const log = await click(data, [{ path: '/p/p3/s/s7', visible: true }, { path: '/p/p2/s/s9', focused: true }, { path: '/usage' }]);
-    expect(log.slice(1)).toEqual(['focus /p/p2/s/s9', `message /p/p2/s/s9 ${JSON.stringify(open('p1', 's1'))}`]);
+    const log = await at(data, [{ path: 'p/p3/s/s7', visible: true }, { path: 'p/p2/s/s9', focused: true }, { path: 'usage' }]);
+    expect(log.slice(1)).toEqual(['focus p/p2/s/s9', `message p/p2/s/s9 ${JSON.stringify(open('p1', 's1'))}`]);
   });
 
   it('leaves a design doc open on its own page alone', async () => {
-    const log = await click(data, [{ path: '/p/p1/s/s1/design', focused: true }, { path: '/p/p2/s/s9' }]);
-    expect(log.slice(1)).toEqual(['focus /p/p2/s/s9', `message /p/p2/s/s9 ${JSON.stringify(open('p1', 's1'))}`]);
+    const log = await at(data, [{ path: 'p/p1/s/s1/design', focused: true }, { path: 'p/p2/s/s9' }]);
+    expect(log.slice(1)).toEqual(['focus p/p2/s/s9', `message p/p2/s/s9 ${JSON.stringify(open('p1', 's1'))}`]);
   });
 
   it('matches ids that need escaping in the URL', async () => {
-    const log = await click({ projectId: 'a b', sessionId: 's/1' }, [{ path: '/', focused: true }, { path: '/p/a%20b/s/s%2F1' }]);
-    expect(log[1]).toBe('focus /p/a%20b/s/s%2F1');
+    const log = await at({ projectId: 'a b', sessionId: 's/1' }, [{ path: '', focused: true }, { path: 'p/a%20b/s/s%2F1' }]);
+    expect(log[1]).toBe('focus p/a%20b/s/s%2F1');
   });
 
   it('opens a new window on the session when none is open', async () => {
-    expect(await click(data, [])).toEqual(['close', 'open /p/p1/s/s1']);
+    expect(await at(data, [])).toEqual(['close', `open ${base}p/p1/s/s1`]);
   });
 
   it('opens a share in the tab in use', async () => {
-    const log = await click({ datapackId: 'd1' }, [{ path: '/p/p1/s/s1' }, { path: '/p/p2/s/s2', focused: true }]);
-    expect(log.slice(1)).toEqual(['focus /p/p2/s/s2', 'message /p/p2/s/s2 {"type":"ak-invite","datapackId":"d1"}']);
-    expect(await click({ datapackId: 'd1' }, [])).toEqual(['close', 'open /']);
+    const log = await at({ datapackId: 'd1' }, [{ path: 'p/p1/s/s1' }, { path: 'p/p2/s/s2', focused: true }]);
+    expect(log.slice(1)).toEqual(['focus p/p2/s/s2', 'message p/p2/s/s2 {"type":"ak-invite","datapackId":"d1"}']);
+    expect(await at({ datapackId: 'd1' }, [])).toEqual(['close', `open ${base}`]);
   });
 
   it('still opens the session when the browser refuses focus', async () => {
-    const log = await click(data, [{ path: '/p/p1/s/s1', refuseFocus: true }]);
-    expect(log).toEqual(['close', `message /p/p1/s/s1 ${JSON.stringify(open('p1', 's1'))}`]);
+    const log = await at(data, [{ path: 'p/p1/s/s1', refuseFocus: true }]);
+    expect(log).toEqual(['close', `message p/p1/s/s1 ${JSON.stringify(open('p1', 's1'))}`]);
+  });
+});
+
+describe('service worker notification clicks behind Meko', () => {
+  it('leaves Meko’s own pages on the same origin alone', async () => {
+    const log = await click('/ext/agentk/', { projectId: 'p1', sessionId: 's1' }, [{ path: '/p/p1/s/s1', focused: true }, { path: '/account' }]);
+    expect(log).toEqual(['close', 'open /ext/agentk/p/p1/s/s1']);
   });
 });

@@ -49,7 +49,7 @@ cp "$here/../../../LICENSE" "$root/LICENSE"
 cat > "$root/install-offline.sh" <<'EOF'
 #!/bin/sh
 # Installs AgentK from the tarball in this folder for this computer, without downloading it.
-#   sh install-offline.sh [options for install.sh, e.g. --no-meko]
+#   sh install-offline.sh [options for install.sh, e.g. --repos-root ~/src]
 set -eu
 dir=$(cd "$(dirname "$0")" && pwd)
 exec sh "$dir/install.sh" --tarball "$dir" "$@"
