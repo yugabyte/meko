@@ -606,6 +606,9 @@ export class Core extends EventEmitter {
     this.callHome.stop();
     this.ybCallHome.stop();
     this.lifecycle.stop();
+    // No new plan read may start now: a turn reaching onTurnEnd during shutdown (hooks aren't
+    // awaited) must not run `/usage` after the settled() wait below has already passed.
+    this.kiroPlan.stop();
     this.hooksOn = false;
     await this.hookCheck?.catch(() => undefined);
     this.sessions.mod.closeAll();

@@ -47,6 +47,8 @@ export class KiroPlanStore {
   private run: AskRunner;
   /** When a read last actually ran (passed the available/used guard); null until the first. */
   private lastAt: number | null = null;
+  /** Set once the server is stopping, so no new read starts during shutdown. */
+  private stopping = false;
 
   constructor(private deps: KiroPlanDeps) {
     this.run = deps.run ?? runClaudeOnce;
@@ -55,6 +57,15 @@ export class KiroPlanStore {
     } catch {
       this.last = null;
     }
+  }
+
+  /**
+   * The server is stopping: refuse to start a new read, so a turn reaching `onTurnEnd` during
+   * shutdown (hook handlers aren't awaited) can't start a `/usage` run after `Core.stop` has already
+   * waited on `settled()`. A read already running is left to finish, and `settled()` still waits for it.
+   */
+  stop(): void {
+    this.stopping = true;
   }
 
   /** Some session, archived ones included, has run on Kiro. */
@@ -101,7 +112,7 @@ export class KiroPlanStore {
 
   private async read(now = Date.now()): Promise<void> {
     try {
-      if (!this.deps.available() || !this.used()) return;
+      if (this.stopping || !this.deps.available() || !this.used()) return;
       // Past the guard: a read is actually running, so the turn trigger's clock starts here.
       this.lastAt = now;
       const cmd = this.deps.command();

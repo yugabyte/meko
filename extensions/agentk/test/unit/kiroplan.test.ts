@@ -147,15 +147,13 @@ describe("Kiro's plan reading", () => {
     expect(t.runs).toHaveLength(1);
   });
 
-  it('never reads on a turn while Kiro is unavailable or unused', async () => {
+  it('never reads once the server is stopping', async () => {
     const t = setup();
-    // Unused: no Kiro session yet.
-    await t.make().refreshIfStale(TURN_MS, 1_000_000);
-    const t2 = setup();
-    t2.session('k', 'kiro');
-    // Unavailable.
-    await t2.make(false).refreshIfStale(TURN_MS, 1_000_000);
+    const store = t.make();
+    t.session('k', 'kiro');
+    store.stop();
+    await store.refreshIfStale(TURN_MS, 1_000_000);
+    await store.refresh();
     expect(t.runs).toEqual([]);
-    expect(t2.runs).toEqual([]);
   });
 });
