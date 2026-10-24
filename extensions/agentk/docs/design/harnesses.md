@@ -43,8 +43,10 @@ isn't offered, **Check again**, **Update Claude Code**, **Update OpenCode** or *
 (`POST /api/claude/update`, whose answer carries the outcome, and `POST /api/harnesses/<id>/update`,
 which runs `opencode upgrade` or `kiro-cli update`; each agent's update runs on its own, so one
 running doesn't hold up another's button), and for
-Kiro **Let Kiro run any tool without asking** while Kiro is on. Each of the tab's fields (`defaultHarness`,
-`claudeEnabled`, `opencodeEnabled`, `kiroEnabled`, `kiroTrustTools`) saves as it's changed; there's no Save.
+Kiro **Let Kiro run any tool without asking** while Kiro is on, and for OpenCode **Turn off OpenCode's tracking**
+while OpenCode is on ([Without tracking](#opencode)). Each of the tab's fields (`defaultHarness`,
+`claudeEnabled`, `opencodeEnabled`, `opencodeDisableTracking`, `kiroEnabled`, `kiroTrustTools`) saves as it's
+changed; there's no Save.
 The no-agent banner's **Settings** opens this tab. The Meko tab keeps each agent's Meko row.
 
 **No agent is required.** AgentK installs and runs with any one of them, or more; nothing assumes
@@ -270,6 +272,26 @@ profile is replaced by AgentK's while AgentK adds its Meko.
 **A public repo's PR head.** Such a session runs with `OPENCODE_DISABLE_PROJECT_CONFIG=1`, which
 leaves out the worktree's `opencode.json(c)` and `.opencode/` folders (plugins, which would run the
 PR's code, agents, commands, MCP servers); AgentK's own config still loads, from the environment.
+
+**Without tracking.** With **Turn off OpenCode's tracking** (`[opencode] disable_tracking`, off by
+default; Settings › Harness › OpenCode), every OpenCode AgentK runs (sessions, from their next launch or resume,
+and Ask AgentK's runs and their session deletes) gets `OPENCODE_NO_TRACKING_ENV` (`opencode.ts`). Only AgentK's
+runs change: OpenCode's own config isn't touched. Each variable was read from OpenCode 2.1.4's code:
+
+| What OpenCode would send | Switch | Set |
+|---|---|---|
+| OpenTelemetry logs, metrics and traces, to an `OTEL_EXPORTER_OTLP_*ENDPOINT` in the environment | `OTEL_SDK_DISABLED=true` | yes (the session's own commands inherit it, so a project's OpenTelemetry doesn't export from them either) |
+| The update check, the version and channel to `opencode.ai/update/api` at each start (and a self-update with `autoupdate` on) | `OPENCODE_DISABLE_AUTOUPDATE=1` | yes (**Update OpenCode** still works) |
+| Prompts to OpenCode Zen's free models, whose providers may train on them | `OPENCODE_DISABLE_FREE_MODELS=1` | yes; Zen's paid models stay |
+| Web search queries, to Exa, Parallel, Tavily or Firecrawl | `permission.websearch` | no: OpenCode asks which provider first |
+| The model catalog (`models.opencode.ai/api.json`, no user data) | `OPENCODE_DISABLE_MODELS_FETCH` | no: the model list stays current |
+| Session sharing | `OPENCODE_DISABLE_SHARE`, `share` | no: OpenCode 2 removed sharing and reads neither |
+| Error reports | none | already off in OpenCode 2 (`disableErrorReporting`) |
+
+OpenCode 1's `experimental.openTelemetry` is dropped by OpenCode 2, which exports only through the `OTEL_*`
+variables. Prompts and code still go to the model the user picks, so the setting's hint suggests a local model
+(Ollama, LM Studio) for code that must not leave the computer. A newer OpenCode may rename these variables:
+check them against its code when the minimum version moves.
 
 **Prompts, designs, learn** take the paths Claude Code takes without the mod, as on Kiro: prompts
 typed into the terminal as a bracketed paste, then Enter; designs as markdown with

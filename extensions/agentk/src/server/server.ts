@@ -683,6 +683,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     defaultHarness: core.config.agents.default,
     claudeEnabled: core.config.claude.enabled,
     opencodeEnabled: core.config.opencode.enabled,
+    opencodeDisableTracking: core.config.opencode.disableTracking,
     kiroEnabled: core.config.kiro.enabled,
     kiroTrustTools: core.config.kiro.trustTools,
     meko: mekoSettings(core.config),
@@ -718,7 +719,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (b.resolveConflicts !== undefined && typeof b.resolveConflicts !== 'boolean') throw new HttpError(400, 'resolveConflicts must be true or false.');
     if (b.toolsEnabled !== undefined && typeof b.toolsEnabled !== 'boolean') throw new HttpError(400, 'toolsEnabled must be true or false.');
     if (b.defaultHarness !== undefined && !isHarnessId(b.defaultHarness)) throw new HttpError(400, `The default agent must be one of ${HARNESS_IDS.join(', ')}.`);
-    for (const k of ['claudeEnabled', 'opencodeEnabled', 'kiroEnabled', 'kiroTrustTools'] as const) {
+    for (const k of ['claudeEnabled', 'opencodeEnabled', 'opencodeDisableTracking', 'kiroEnabled', 'kiroTrustTools'] as const) {
       if (b[k] !== undefined && typeof b[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false.`);
     }
     const enabledBefore = Object.fromEntries(HARNESS_IDS.map((id) => [id, core.config[id].enabled]));
@@ -740,6 +741,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.defaultHarness !== undefined) c.agents.default = b.defaultHarness;
       if (b.claudeEnabled !== undefined) c.claude.enabled = b.claudeEnabled;
       if (b.opencodeEnabled !== undefined) c.opencode.enabled = b.opencodeEnabled;
+      if (b.opencodeDisableTracking !== undefined) c.opencode.disableTracking = b.opencodeDisableTracking;
       if (b.kiroEnabled !== undefined) c.kiro.enabled = b.kiroEnabled;
       if (b.kiroTrustTools !== undefined) c.kiro.trustTools = b.kiroTrustTools;
       if (meko) applyMekoChange(c, meko.next, meko.changed);

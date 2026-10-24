@@ -644,6 +644,27 @@ export function AgentSettings({
           </span>
         )}
       </div>
+      {id === 'opencode' && enabled && (
+        <div className="field">
+          <label className="check">
+            <input
+              id="set-opencode-tracking"
+              type="checkbox"
+              checked={s.opencodeDisableTracking}
+              onChange={(e) => onChange({ opencodeDisableTracking: e.target.checked })}
+            />
+            <span>Turn off OpenCode's tracking</span>
+          </label>
+          <span className="hint">
+            {s.opencodeDisableTracking ? 'OpenCode sessions and Ask AgentK' : 'When on, OpenCode sessions and Ask AgentK'} send no telemetry, skip
+            OpenCode's update check and hide OpenCode Zen's free models, whose providers may train on your prompts. Commands the agent runs in a
+            session don't export OpenTelemetry either.{' '}
+            {s.opencodeDisableTracking &&
+              'Your prompts and code still go to the model you pick: for code that must not leave this computer, use a local model such as Ollama or LM Studio. '}
+            Takes effect when a session next starts or resumes.
+          </span>
+        </div>
+      )}
       {id === 'kiro' && enabled && (
         <div className="field">
           <label className="check">

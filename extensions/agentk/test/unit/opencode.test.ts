@@ -3,12 +3,13 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
+import { openCodeAsker } from '../../src/server/askagentk.js';
 import { DEFAULT_CONFIG } from '../../src/server/config.js';
 import { all, openDb, run } from '../../src/server/db.js';
 import { normalizeOpenCode, openCodeArgs, openCodeHarness, openCodeMekoTool } from '../../src/server/harness/opencode.js';
 import { silentLogger } from '../../src/server/log.js';
 import {
-  openCodeCanResume, openCodeCommand, openCodeHasOwnMeko, openCodePluginPath, openCodeStoredSession, readOpenCodeRun, writeOpenCodePlugin,
+  OPENCODE_NO_TRACKING_ENV, openCodeCanResume, openCodeCommand, openCodeHasOwnMeko, openCodePluginPath, openCodeStoredSession, readOpenCodeRun, writeOpenCodePlugin,
 } from '../../src/server/opencode.js';
 import { getPaths } from '../../src/server/paths.js';
 import type { SessionRow } from '../../src/server/store.js';
@@ -72,6 +73,21 @@ describe("an OpenCode session's command line", () => {
         agentk_sessions_start_sessions: 'ask', agentk_sessions_move_session: 'ask', agentk_sessions_open_pr: 'ask', agentk_sessions_open_project: 'ask',
       },
     });
+  });
+
+  it.each([false, true])("sends no telemetry, checks for no update and offers no free models, in sessions and Ask AgentK, only while [opencode] disable_tracking is %s", (off) => {
+    const paths = getPaths(tempDir('akl-oc-'));
+    const cfg = structuredClone(DEFAULT_CONFIG);
+    cfg.opencode.disableTracking = off;
+    const spec = openCodeHarness({ paths, log: silentLogger, changed: () => undefined }).launcher(paths, cfg, {
+      row: { id: 's1', worktree_path: '/w', agent_session_id: null } as SessionRow, resume: false, prompt: null, systemPrompt: '', addDirs: [],
+      modDir: null, planMode: false, env: {}, unsetEnv: [], untrusted: false, tools: false,
+    });
+    const ask = openCodeAsker.command(cfg, paths.run).env ?? {};
+    for (const env of [spec.env, ask]) {
+      if (off) expect(env).toMatchObject(OPENCODE_NO_TRACKING_ENV);
+      else for (const k of Object.keys(OPENCODE_NO_TRACKING_ENV)) expect(env).not.toHaveProperty(k);
+    }
   });
 
   it("is found in ~/.opencode/bin when the default isn't on the PATH, and a command set in config.toml is kept", () => {
