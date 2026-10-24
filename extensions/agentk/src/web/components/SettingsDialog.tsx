@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type MutableRefObject, type ReactNode } from 'react';
 import type {
   AuthStatus,
   HarnessStatus,
@@ -12,7 +12,7 @@ import type {
 } from '../../shared/types';
 import { HARNESS_CAPS, HARNESS_IDS, type HarnessId } from '../../shared/harnesses';
 import { api, errorMessage } from '../api';
-import { AUTO_SAVE_IDLE, autoSave, type AutoSaveStatus } from '../autosave';
+import { AUTO_SAVE_IDLE, autoSave, settle, type AutoSaveStatus } from '../autosave';
 import { saveRailSessions, useRailSessions } from '../rail';
 import { harnessLogosToggle } from '../toggle';
 import { claudeUpdateText, cx, defaultAgentChoice, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
@@ -52,11 +52,35 @@ export function SettingsDialog({
   onWhatsNew: (from: string, to: string) => void;
 }) {
   const [tab, setTab] = useState<Tab>(initialTab);
+  // One saver for General and Harness, so a save from a tab that has since closed still shows how it went.
+  const auto = useAutoSave();
+  // What the General tab holds typed and not saved yet, saved before Settings closes.
+  const typed = useRef<(() => void) | null>(null);
+  // A close waited for the saves out and one failed: closing again leaves it unsaved.
+  const [held, setHeld] = useState(false);
+  const closing = useRef(false);
+  useEffect(() => {
+    if (auto.status.state === 'saving') setHeld(false);
+  }, [auto.status.state]);
+  const close = () => {
+    if (held) {
+      typed.current = null;
+      return onClose();
+    }
+    if (closing.current) return;
+    closing.current = true;
+    typed.current?.();
+    void auto.flush().then((ok) => {
+      closing.current = false;
+      if (ok) onClose();
+      else setHeld(true);
+    });
+  };
   return (
     <Dialog
       title="Settings"
       wide
-      onClose={onClose}
+      onClose={close}
       aside={
         <div className="seg" role="tablist">
           {TABS.map((t) => (
@@ -70,10 +94,10 @@ export function SettingsDialog({
       {tab === 'general' && (
         <div className="stack">
           <RailSessionsSetting />
-          <GeneralTab />
+          <GeneralTab auto={auto} typed={typed} />
         </div>
       )}
-      {tab === 'harness' && <HarnessTab harnesses={harnesses} twoAgents={twoAgents} serverName={serverName} />}
+      {tab === 'harness' && <HarnessTab auto={auto} harnesses={harnesses} twoAgents={twoAgents} serverName={serverName} />}
       {tab === 'meko' && (
         <MekoTab
           status={meko}
@@ -88,6 +112,7 @@ export function SettingsDialog({
         </div>
       )}
       {tab === 'updates' && <UpdatesTab initial={update} onWhatsNew={onWhatsNew} />}
+      <SaveStatus status={auto.status} held={held} />
     </Dialog>
   );
 }
@@ -127,13 +152,10 @@ function HarnessLogosSetting() {
 /** A tab's server fields, as `PUT /api/settings` takes them. */
 type Patch = Omit<SettingsUpdate, 'meko'>;
 
-/** `from`'s values of the fields `patch` names. */
-const fieldsOf = (from: Settings, patch: Patch): Partial<Settings> =>
-  Object.fromEntries(Object.keys(patch).map((k) => [k, from[k as keyof Settings]]));
-
 /**
- * A tab's server settings, saved as they change (`src/web/autosave.ts`): `change` shows a patch at
- * once and saves it, and a patch that fails to save goes back to the server's last answer.
+ * General's and Harness's server settings, saved as they change (`src/web/autosave.ts`): `change`
+ * shows a patch at once and saves it, and a patch that fails to save goes back to the server's last
+ * answer. `load` waits for the saves still out, so a tab opened again shows them.
  */
 function useAutoSave() {
   const [s, setS] = useState<Settings | null>(null);
@@ -142,30 +164,38 @@ function useAutoSave() {
   const confirmed = useRef<Settings | null>(null);
   const [saver] = useState(() =>
     autoSave((patch: Patch) => api.saveSettings(patch), {
-      onSaved: (next, patch) => {
+      onSaved: (next, patch, queued) => {
         confirmed.current = next;
-        setS((cur) => cur && { ...cur, ...fieldsOf(next, patch) });
+        setS((cur) => cur && settle(cur, next, patch, queued));
       },
-      onFailed: (_, patch) => setS((cur) => cur && confirmed.current && { ...cur, ...fieldsOf(confirmed.current, patch) }),
+      onFailed: (_, patch, queued) => setS((cur) => cur && confirmed.current && settle(cur, confirmed.current, patch, queued)),
       onStatus: setStatus,
     }),
   );
-  const loaded = useCallback((x: Settings) => {
+  const load = useCallback(async () => {
+    setS(null);
+    await saver.flush();
+    const x = await api.settings();
     confirmed.current = x;
     setS(x);
-  }, []);
+    return x;
+  }, [saver]);
   const change = (patch: Patch) => {
     setS((cur) => cur && { ...cur, ...patch });
     void saver.save(patch);
   };
-  return { s, loaded, change, status };
+  return { s, load, change, status, flush: saver.flush };
 }
+type AutoSettings = ReturnType<typeof useAutoSave>;
 
-/** Where Save was: Saving while a change is out, then Saved, or why it didn't save. */
-function SaveStatus({ status }: { status: AutoSaveStatus }) {
+/**
+ * Where Save was: Saving while a change is out, then Saved, or why one didn't save (after a close
+ * that waited for it, with what closing again does).
+ */
+function SaveStatus({ status, held }: { status: AutoSaveStatus; held: boolean }) {
   return (
     <>
-      <ErrorText error={status.error === null ? null : errorMessage(status.error)} />
+      <ErrorText error={status.error === null ? null : `${errorMessage(status.error)}${held ? ' Close again to leave it unsaved.' : ''}`} />
       <div className="settings-actions muted small" role="status">
         {status.state === 'saving' ? <Busy label="Saving" /> : status.state === 'saved' ? 'Saved' : null}
       </div>
@@ -180,8 +210,11 @@ const clampOr = (typed: string, max: number, saved: number) => {
   return typed.trim() && Number.isFinite(n) ? Math.max(0, Math.min(max, n)) : saved;
 };
 
-function GeneralTab() {
-  const { s, loaded, change, status } = useAutoSave();
+/** The fields General saves when they lose focus. */
+type TypedField = 'reposRoots' | 'reposDepth' | 'idleWorktreesPerRepo' | 'idleWorktreeDays' | 'cloneInto' | 'serverName';
+
+function GeneralTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObject<(() => void) | null> }) {
+  const { s, load, change } = auto;
   // The typed fields as typed: each saves when it loses focus or takes Enter, never mid-typing (a
   // lower idle worktree count removes worktrees as soon as it's saved), numbers clamped first.
   const [roots, setRoots] = useState<string[]>([]);
@@ -190,13 +223,14 @@ function GeneralTab() {
   const [idleDays, setIdleDays] = useState('');
   const [cloneInto, setCloneInto] = useState('');
   const [serverName, setServerName] = useState('');
+  // The fields above hold what was loaded: until then there's nothing typed to save.
+  const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api
-      .settings()
+    load()
       .then((x) => {
-        loaded(x);
+        setReady(true);
         setRoots(x.reposRoots);
         setDepth(String(x.reposDepth));
         setIdle(String(x.idleWorktreesPerRepo));
@@ -205,12 +239,12 @@ function GeneralTab() {
         setServerName(x.serverName);
       })
       .catch((e) => setError(errorMessage(e)));
-  }, [loaded]);
+  }, [load]);
 
-  // Saves what the typed fields hold that differs from the settings (an empty repo folder list is
-  // sent, for the server to say why it can't be; a blank clone folder isn't).
-  const commit = (rootList = roots) => {
-    if (!s) return;
+  // What the typed fields hold that differs from the settings (an empty repo folder list is
+  // included, for the server to say why it can't be; a blank clone folder isn't).
+  const typedPatch = (rootList: string[]): Patch => {
+    if (!s || !ready) return {};
     const patch: Patch = {};
     const r = rootList.map((x) => x.trim()).filter(Boolean);
     if (r.join('\n') !== s.reposRoots.join('\n')) patch.reposRoots = r;
@@ -222,27 +256,42 @@ function GeneralTab() {
     if (days !== s.idleWorktreeDays) patch.idleWorktreeDays = days;
     if (cloneInto.trim() && cloneInto.trim() !== s.cloneInto) patch.cloneInto = cloneInto.trim();
     if (serverName.trim() !== s.serverName) patch.serverName = serverName.trim();
-    if (Object.keys(patch).length) change(patch);
+    return patch;
   };
-  // Switching tabs or closing Settings saves what's still typed: no blur comes when a focused field goes.
+  // Saves one field, or every field that differs, each on its own: the server refuses a whole
+  // request for one bad field, so a field it refuses doesn't take the others down with it.
+  const commit = (only?: TypedField, rootList = roots) => {
+    for (const [k, v] of Object.entries(typedPatch(rootList))) {
+      if (!only || k === only) change({ [k]: v } as Patch);
+    }
+  };
+  // Switching tabs or closing Settings saves what's still typed: no blur comes when a focused
+  // field goes. Settings' close calls it first, to wait for its answer, and takes it away when
+  // closing again leaves a refused field unsaved.
   const latest = useRef(commit);
   useEffect(() => {
     latest.current = commit;
   });
-  useEffect(() => () => latest.current(), []);
+  useEffect(() => {
+    typed.current = () => latest.current();
+    return () => {
+      typed.current?.();
+      typed.current = null;
+    };
+  }, [typed]);
 
-  if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
+  if (!s || !ready) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
 
   // A typed field's handlers: `tidy` shows the value as it's saved (clamped, or the saved one back).
-  const saveOn = (tidy?: () => void) => ({
+  const saveOn = (field: TypedField, tidy?: () => void) => ({
     onBlur: () => {
       tidy?.();
-      commit();
+      commit(field);
     },
     onKeyDown: (e: KeyboardEvent) => {
       if (e.key !== 'Enter') return;
       tidy?.();
-      commit();
+      commit(field);
     },
   });
 
@@ -258,7 +307,7 @@ function GeneralTab() {
               className="input mono"
               value={r}
               onChange={(e) => setRoots(roots.map((x, j) => (j === i ? e.target.value : x)))}
-              {...saveOn()}
+              {...saveOn('reposRoots')}
             />
             <button
               type="button"
@@ -267,7 +316,7 @@ function GeneralTab() {
               onClick={() => {
                 const next = roots.filter((_, j) => j !== i);
                 setRoots(next);
-                commit(next);
+                commit('reposRoots', next);
               }}
             >
               Remove
@@ -288,7 +337,7 @@ function GeneralTab() {
             max={4}
             value={depth}
             onChange={(e) => setDepth(e.target.value)}
-            {...saveOn(() => setDepth(String(clampDepth(depth))))}
+            {...saveOn('reposDepth', () => setDepth(String(clampDepth(depth))))}
           />
         </Field>
         <Field label="Clone into" hint="Where “Clone from URL” puts new repos.">
@@ -297,7 +346,7 @@ function GeneralTab() {
             className="input mono"
             value={cloneInto}
             onChange={(e) => setCloneInto(e.target.value)}
-            {...saveOn(() => !cloneInto.trim() && setCloneInto(s.cloneInto))}
+            {...saveOn('cloneInto', () => !cloneInto.trim() && setCloneInto(s.cloneInto))}
           />
         </Field>
       </div>
@@ -316,7 +365,7 @@ function GeneralTab() {
               max={20}
               value={idle}
               onChange={(e) => setIdle(e.target.value)}
-              {...saveOn(() => setIdle(String(clampOr(idle, 20, s.idleWorktreesPerRepo))))}
+              {...saveOn('idleWorktreesPerRepo', () => setIdle(String(clampOr(idle, 20, s.idleWorktreesPerRepo))))}
             />
           </Field>
           <Field label="Remove unused after (days)" hint="An idle worktree no session has used for this long is removed. 0 keeps it.">
@@ -328,7 +377,7 @@ function GeneralTab() {
               max={365}
               value={idleDays}
               onChange={(e) => setIdleDays(e.target.value)}
-              {...saveOn(() => setIdleDays(String(clampOr(idleDays, 365, s.idleWorktreeDays))))}
+              {...saveOn('idleWorktreeDays', () => setIdleDays(String(clampOr(idleDays, 365, s.idleWorktreeDays))))}
             />
           </Field>
         </div>
@@ -356,7 +405,7 @@ function GeneralTab() {
           placeholder={s.hostName}
           maxLength={64}
           onChange={(e) => setServerName(e.target.value)}
-          {...saveOn()}
+          {...saveOn('serverName')}
         />
       </Field>
       <div className="fields">
@@ -368,7 +417,6 @@ function GeneralTab() {
         </Field>
       </div>
       <p className="hint">Change the address and port in config.toml, then restart the server.</p>
-      <SaveStatus status={status} />
     </div>
   );
 }
@@ -392,8 +440,18 @@ const ENABLED_KEY: Record<HarnessId, 'claudeEnabled' | 'kiroEnabled'> = { claude
  * The coding agents: the default agent and the logos, then a bar that picks one agent, with that
  * agent's settings under it. Each saves as it's changed.
  */
-function HarnessTab({ harnesses, twoAgents, serverName }: { harnesses: HarnessStatus[]; twoAgents: boolean; serverName: string }) {
-  const { s, loaded, change, status } = useAutoSave();
+function HarnessTab({
+  auto,
+  harnesses,
+  twoAgents,
+  serverName,
+}: {
+  auto: AutoSettings;
+  harnesses: HarnessStatus[];
+  twoAgents: boolean;
+  serverName: string;
+}) {
+  const { s, load, change } = auto;
   // The agent the bar shows: the default agent when the tab opens, so a new default doesn't move it.
   const [shown, setShown] = useState<HarnessId>('claude');
   const [checking, setChecking] = useState(false);
@@ -408,14 +466,10 @@ function HarnessTab({ harnesses, twoAgents, serverName }: { harnesses: HarnessSt
   useEffect(() => setRechecked(null), [harnesses]);
 
   useEffect(() => {
-    api
-      .settings()
-      .then((x) => {
-        loaded(x);
-        setShown(x.defaultHarness);
-      })
+    load()
+      .then((x) => setShown(x.defaultHarness))
       .catch((e) => setError(errorMessage(e)));
-  }, [loaded]);
+  }, [load]);
 
   if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
 
@@ -487,7 +541,6 @@ function HarnessTab({ harnesses, twoAgents, serverName }: { harnesses: HarnessSt
         />
       </div>
       <ErrorText error={error} />
-      <SaveStatus status={status} />
     </div>
   );
 }
