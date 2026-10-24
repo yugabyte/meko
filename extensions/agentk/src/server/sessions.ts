@@ -482,7 +482,7 @@ export class SessionManager {
     if (learn) {
       if (kind === 'review-pr' || req.pr != null) throw new HttpError(400, "A learn session learns the project's own repo: leave out the PR.");
       if (!this.core.mekoStatus.configured) throw new HttpError(400, 'A learn session saves what it learns to Meko, and Meko is off. Turn it on in Settings → Meko first.');
-      // A dedicated datapack is always one we can write to (projects.ts refuses a viewer's).
+      // Only that there is one: whether we can still write to it is Meko's to say, at each save, as for every session's saves.
       if (!dedicatedDatapack(this.db, projectId)) {
         throw new HttpError(400, "A learn session saves what it learns to the project's dedicated datapack, and this project has none. Add one on the project's home first.");
       }

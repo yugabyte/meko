@@ -708,7 +708,7 @@ function dropV12(db: ReturnType<typeof openDb>) {
 }
 const V11_COLUMNS = ['kind'];
 
-/** Undoes migrations 39 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
+/** Undoes migrations 40 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
 function undoMigrations(db: ReturnType<typeof openDb>, oldest: number) {
   const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35, dropV36, dropV37, dropV38, dropV39, dropV40];
   for (let v = 40; v >= oldest; v--) undo[v - 12](db);
@@ -840,6 +840,10 @@ describe('naming', () => {
       "What this project is about:\nBilling.\n\nWhere its files are:\nThe user didn't say: start from the repo's README and docs, and its top-level folders.\n\nRead the PRs merged since 2024-10-23.",
     );
     expect(learnTask({ about: 'Billing.', where: 'svc/', months: 0 }, now)).toMatch(/svc\/\n\nRead no PRs: the user asked for none\.$/);
+    // A day the month back doesn't have is that month's last, never a day in the month after.
+    const since = (iso: string, months: number) => learnTask({ about: 'x', where: '', months }, Date.parse(iso)).match(/since (\S+)\.$/)?.[1];
+    expect([since('2026-10-31', 1), since('2028-03-31', 1), since('2027-03-31', 1), since('2026-01-31', 2), since('2026-03-15', 15)])
+      .toEqual(['2026-09-30', '2028-02-29', '2027-02-28', '2025-11-30', '2024-12-15']);
   });
 });
 

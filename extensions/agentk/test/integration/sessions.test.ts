@@ -676,11 +676,9 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     });
     expect(s).toMatchObject({ kind: 'plan', stage: 'explore', purpose: 'learn' });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
-    const since = new Date();
-    since.setUTCMonth(since.getUTCMonth() - 24);
     const first = argvLog(env)[0].args.at(-1);
     expect(first).toMatch(/learn session of an AgentK project[^]*Task: Learn the project\n\nWhat this project is about:\nThe billing service\.\n\nWhere its files are:\nservices\/billing\//);
-    expect(first).toContain(`Read the PRs merged since ${since.toISOString().slice(0, 10)}.`);
+    expect(first).toContain(`Read the PRs merged since ${String(new Date().getUTCFullYear() - 2)}-`);
     expect(first).toContain(join(env.core.paths.designs, s.id, 'learned.md'));
     // The seeding rule, not the usual one, which leaves out what a PR already says.
     expect(first).toContain('(PR #123)');
@@ -701,6 +699,20 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'archived', 10000, 'closed');
     expect(get(env.core.db, 'SELECT COUNT(*) AS n FROM meko_learns WHERE session_id = ?', s.id)).toEqual({ n: 0 });
     expect((await env.core.projects.home(p.id)).hasLearnSession).toBe(true);
+  });
+
+  it("holds a learn session's close for a Save learnings step still running, and closes when it ends", async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Learn', learn: { about: 'The billing service.', where: '', months: 0 } });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
+    const running = vi.spyOn(env.core.learn, 'running').mockReturnValue(true);
+    await env.core.sessions.submit(s.id, 'LEARN_DONE');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.discarding, 10000, 'held');
+    expect(env.core.sessions.get(s.id).status).not.toBe('archived');
+    expect(existsSync(join(env.core.paths.designs, s.id, 'learned.md'))).toBe(false);
+    running.mockRestore();
+    env.core.lifecycle.afterLearn(s.id);
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'archived', 10000, 'closed');
   });
 
   it.each([

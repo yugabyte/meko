@@ -1031,8 +1031,10 @@ export class Lifecycle {
    * After a learn session's turn: when Claude wrote its summary (`learnedPath`), it's done, so the
    * summary goes on the timeline and the session is discarded, with no learn step (it saved as it
    * went). Not when its worktree has changes or commits, which Discard would throw away: the timeline
-   * says so and it stays. The file is removed either way, so only a new summary closes it later.
-   * True when the session was discarded.
+   * says so and it stays. A Save learnings step still running holds the close, as it holds a
+   * Discard: the session goes when the step ends (`discarding`, afterLearn). The file is removed,
+   * and the user told, only once the session is on its way out (or kept), so a close that fails
+   * leaves the file for the next turn's end to try again. True when the session is closed or closing.
    */
   private async learnDone(row: SessionRow): Promise<boolean> {
     const file = this.sessions.learnedPath(row);
@@ -1042,22 +1044,27 @@ export class Lifecycle {
     } catch {
       return false;
     }
-    rmSync(file, { force: true });
     const text = summary.length > LEARNED_MAX ? `${summary.slice(0, LEARNED_MAX).trimEnd()}…` : summary || 'Done learning the project.';
-    this.sessions.event(row.id, 'learn-done', text);
     const check = await this.sessions.discardCheck(row.id);
     const changed = [
       check.uncommittedFiles ? `${check.uncommittedFiles} uncommitted file${check.uncommittedFiles === 1 ? '' : 's'}` : '',
       check.unpushedCommits ? `${check.unpushedCommits} commit${check.unpushedCommits === 1 ? '' : 's'} not pushed` : '',
     ].filter(Boolean).join(' and ');
+    this.sessions.event(row.id, 'learn-done', text);
     if (changed) {
+      rmSync(file, { force: true });
       const why = `Done learning, but not closed: the worktree has ${changed}, which closing would throw away. Look at them, then discard the session.`;
       this.sessions.event(row.id, 'learn-kept', why);
       this.sessions.notifyUser(row.id, 'Done learning', why);
       return false;
     }
+    if (this.core.learn.running(row.id)) {
+      this.sessions.update(row.id, { discarding: 1 });
+    } else {
+      await this.sessions.discardNow(row.id);
+    }
+    rmSync(file, { force: true });
     this.sessions.notifyUser(row.id, 'Learned the project', text.split('\n').find((l) => l.trim())?.trim() ?? text);
-    await this.sessions.discardNow(row.id);
     return true;
   }
 

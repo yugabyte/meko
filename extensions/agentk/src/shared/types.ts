@@ -2214,7 +2214,7 @@ export interface CreateSessionRequest {
   /**
    * A learn session (`Session.purpose` `learn`): a task at Explore that reads the files and PRs the
    * brief names and saves what it learns to the project's dedicated datapack, so it needs Meko and a
-   * dedicated datapack it can write to. Its task is made from the brief: `prompt`, `start` and the
+   * dedicated datapack. Its task is made from the brief: `prompt`, `start` and the
    * images are ignored. Not with `kind: 'review-pr'` or `pr`.
    */
   learn?: LearnBrief;
@@ -2464,7 +2464,7 @@ export type TermServerMessage =
 //        400 without `pr`, for a PR that isn't open, or a repoPath that isn't a clone of the PR's repo; 400 for
 //        `images` that aren't this project's staged images, or more than MAX_START_IMAGES. A learn session (`learn`): 400 without
 //        an `about`, for text over LEARN_TEXT_MAX or `months` outside 0–LEARN_MONTHS_MAX, with `kind: 'review-pr'` or `pr`, and
-//        when Meko is off or the project has no dedicated datapack it can write to). Answers once
+//        when Meko is off or the project has no dedicated datapack). Answers once
 //        the session is written, still starting: the worktree and Claude start after (Session.startup shows where it
 //        is). A worktree or PR fetch that fails then removes the session (and its images) and adds it to AppState.failedStarts.
 // POST   /api/projects/:id/images  image bytes → StagedImage   (an image added in the New session dialog: checked as

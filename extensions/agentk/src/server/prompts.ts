@@ -248,8 +248,13 @@ export function learnTask(brief: LearnBrief, now: number): string {
   let prs = "Read no PRs: the user asked for none.";
   if (brief.months > 0) {
     const d = new Date(now);
-    d.setUTCMonth(d.getUTCMonth() - brief.months);
-    prs = `Read the PRs merged since ${d.toISOString().slice(0, 10)}.`;
+    const y = d.getUTCFullYear();
+    const m = d.getUTCMonth() - brief.months;
+    // The same day in the month `months` back, or that month's last day when it has fewer days
+    // (Mar 31 one month back is Feb 28 or 29), never rolled over into the month after.
+    const last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    const since = new Date(Date.UTC(y, m, Math.min(d.getUTCDate(), last)));
+    prs = `Read the PRs merged since ${since.toISOString().slice(0, 10)}.`;
   }
   return `What this project is about:\n${brief.about.trim()}\n\nWhere its files are:\n${where}\n\n${prs}`;
 }

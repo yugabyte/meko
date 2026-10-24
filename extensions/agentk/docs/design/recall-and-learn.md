@@ -234,8 +234,12 @@ the project has never had one (`ProjectHome.hasLearnSession`).
   session is discarded with no learn step, since it saved as it went. A file rather than a marker
   in Claude's reply works the same for every harness, with no transcript to read. When the worktree
   has uncommitted files or unpushed commits, which a Discard would throw away, it isn't closed: the
-  timeline says why (`learn-kept`) for the user to look and discard it. The file is removed either
-  way, so only a new summary closes the session later. Discarding a learn session by hand starts
+  timeline says why (`learn-kept`) for the user to look and discard it. A Save learnings step still
+  running holds the close, as it holds a Discard: the session is marked `discarding` and goes when
+  the step ends (`afterLearn`). The file is removed, and the user told, only once the session is
+  closing (or kept), so a close that fails leaves it for the next turn's end to try again, and only
+  a new summary closes a kept session later. The PR window's first day is the same day `months`
+  back, or that month's last day when it has fewer (never a day in the month after). Discarding a learn session by hand starts
   with **Don't save learnings** checked, for the same reason. Its Explore gate reads **Learning the
   project** in place of **Move on…**; it can still be moved from the stage bar, and then it no
   longer closes by itself.
