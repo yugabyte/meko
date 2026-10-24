@@ -4,7 +4,6 @@ import { basename, dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
 import { buildServer } from '../../src/server/server.js';
-import { issueSetupToken } from '../../src/server/auth.js';
 import { all, get, run } from '../../src/server/db.js';
 import { repoFolder } from '../../src/server/worktrees.js';
 
@@ -245,19 +244,16 @@ describe('worktree reuse (real session host + git, fake claude)', () => {
   });
 
   it('shows and checks the settings in Settings', async () => {
-    const app = await buildServer(env.core, { tls: null, webDir: null, updater: null });
+    const app = await buildServer(env.core, { webDir: null, updater: null });
     try {
-      const token = issueSetupToken(env.core.db);
-      const res = await app.inject({ method: 'POST', url: '/api/auth/setup', payload: { token, username: 'me', password: 'correct horse battery' } });
-      const cookie = String(res.headers['set-cookie']).split(';')[0];
-      const put = (idleWorktreesPerRepo: unknown) => app.inject({ method: 'PUT', url: '/api/settings', headers: { cookie }, payload: { idleWorktreesPerRepo } });
-      expect((await app.inject({ url: '/api/settings', headers: { cookie } })).json().idleWorktreesPerRepo).toBe(3);
+      const put = (idleWorktreesPerRepo: unknown) => app.inject({ method: 'PUT', url: '/api/settings', payload: { idleWorktreesPerRepo } });
+      expect((await app.inject({ url: '/api/settings' })).json().idleWorktreesPerRepo).toBe(3);
       for (const bad of [-1, 21, 1.5, '2']) expect((await put(bad)).statusCode).toBe(400);
       expect((await put(5)).json().idleWorktreesPerRepo).toBe(5);
       expect(readFileSync(env.core.paths.config, 'utf8')).toMatch(/\[worktrees\]\s+idle_per_repo = 5/);
 
-      const days = (idleWorktreeDays: unknown) => app.inject({ method: 'PUT', url: '/api/settings', headers: { cookie }, payload: { idleWorktreeDays } });
-      expect((await app.inject({ url: '/api/settings', headers: { cookie } })).json().idleWorktreeDays).toBe(14);
+      const days = (idleWorktreeDays: unknown) => app.inject({ method: 'PUT', url: '/api/settings', payload: { idleWorktreeDays } });
+      expect((await app.inject({ url: '/api/settings' })).json().idleWorktreeDays).toBe(14);
       for (const bad of [-1, 366, 2.5, '7']) expect((await days(bad)).statusCode).toBe(400);
       expect((await days(30)).json().idleWorktreeDays).toBe(30);
       expect(readFileSync(env.core.paths.config, 'utf8')).toMatch(/idle_days = 30/);

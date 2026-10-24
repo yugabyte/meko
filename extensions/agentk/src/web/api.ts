@@ -11,7 +11,6 @@ import type {
   AskAgentkResult,
   AskAnswerRequest,
   AttachDatapackRequest,
-  AuthStatus,
   ChangeSide,
   CloseSessionRequest,
   ClaudeCodeStatus, HarnessStatus,
@@ -23,7 +22,6 @@ import type {
   DesignDoc,
   DiscardCheck,
   InviteCheck,
-  LoginRequest,
   MekoCallDetail,
   MekoCallPage,
   MekoDatapack,
@@ -66,17 +64,17 @@ import type {
   Settings,
   SettingsUpdate,
   SetDedicatedDatapackRequest,
-  SetupRequest,
   ShareContact,
   ShareDatapackRequest,
   ShareDatapackResult,
   StagedImage,
-  TotpEnrollResponse,
   UpdateProjectRequest,
   UpdateSessionRequest,
   UpdateStatus,
 } from '../shared/types';
 import type { HarnessId } from '../shared/harnesses';
+import { appUrl } from './base';
+import { checkSignIn } from './signin';
 
 export class ApiError extends Error {
   constructor(
@@ -88,19 +86,16 @@ export class ApiError extends Error {
   }
 }
 
-/** Called when any request comes back 401, so the app can drop to the login screen. */
-let onUnauthorized: (() => void) | null = null;
-export function setUnauthorizedHandler(fn: (() => void) | null) {
-  onUnauthorized = fn;
-}
-
-/** `raw` sends those bytes as the body, with their content type, instead of `body` as JSON. */
+/**
+ * `path` is the route on AgentK's server (`/api/…`), fetched under BASE. `raw` sends those bytes as
+ * the body, with their content type, instead of `body` as JSON.
+ */
 async function request<T>(
-  method: string, path: string, body?: unknown, opts: { quiet401?: boolean; raw?: { data: Blob; type: string }; signal?: AbortSignal } = {},
+  method: string, path: string, body?: unknown, opts: { raw?: { data: Blob; type: string }; signal?: AbortSignal } = {},
 ): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(path, {
+    res = await fetch(appUrl(path), {
       method,
       credentials: 'same-origin',
       headers: opts.raw ? { 'Content-Type': opts.raw.type } : body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
@@ -124,13 +119,18 @@ async function request<T>(
   }
   if (!res.ok) {
     const obj = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>;
+    // Meko, in front of AgentK, answers its own refusals in its envelope: { error: { code, message } }.
+    const meko = obj.error && typeof obj.error === 'object' ? (obj.error as { message?: unknown }).message : undefined;
     const msg =
       typeof obj.error === 'string'
         ? obj.error
-        : res.status === 429
-          ? 'Too many attempts. Wait a few minutes and try again.'
-          : `Request failed (${res.status}).`;
-    if (res.status === 401 && !opts.quiet401) onUnauthorized?.();
+        : typeof meko === 'string'
+          ? meko
+          : res.status === 429
+            ? 'Too many attempts. Wait a few minutes and try again.'
+            : `Request failed (${res.status}).`;
+    // AgentK has no login of its own: a 401 is Meko's, whose sign-in has gone.
+    if (res.status === 401) void checkSignIn();
     throw new ApiError(res.status, msg, obj);
   }
   return data as T;
@@ -141,15 +141,6 @@ const post = <T>(p: string, body?: unknown) => request<T>('POST', p, body ?? {})
 const enc = encodeURIComponent;
 
 export const api = {
-  authStatus: () => request<AuthStatus>('GET', '/api/auth/status', undefined, { quiet401: true }),
-  setup: (b: SetupRequest) => request<void>('POST', '/api/auth/setup', b, { quiet401: true }),
-  login: (b: LoginRequest) => request<void>('POST', '/api/auth/login', b, { quiet401: true }),
-  logout: () => post<void>('/api/auth/logout'),
-  changePassword: (current: string, next: string) => post<void>('/api/auth/password', { current, next }),
-  totpEnroll: () => post<TotpEnrollResponse>('/api/auth/totp/enroll'),
-  totpConfirm: (code: string) => post<void>('/api/auth/totp/confirm', { code }),
-  totpDisable: (code: string) => post<void>('/api/auth/totp/disable', { code }),
-
   state: () => get<AppState>('/api/state'),
   repos: () => get<ReposResponse>('/api/repos'),
   repoBranches: (path: string) => get<RepoBranches>(`/api/repos/branches?path=${enc(path)}`),
@@ -217,7 +208,7 @@ export const api = {
   baseBranches: (id: string) => get<string[]>(`/api/sessions/${enc(id)}/base-branches`),
   /** URL of one side of a changed image; `v` busts the cache when the diff is refetched. */
   changeImageUrl: (id: string, path: string, side: ChangeSide, v: number, commit?: string | null) =>
-    `/api/sessions/${enc(id)}/changes/image?path=${enc(path)}&side=${side}&v=${v}${commit ? `&commit=${enc(commit)}` : ''}`,
+    appUrl(`/api/sessions/${enc(id)}/changes/image?path=${enc(path)}&side=${side}&v=${v}${commit ? `&commit=${enc(commit)}` : ''}`),
   /** Saves an image pasted into the session's terminal; the server checks its type by its bytes. */
   pasteImage: (id: string, image: Blob) =>
     request<PastedImage>('POST', `/api/sessions/${enc(id)}/images`, undefined, {
@@ -258,8 +249,8 @@ export const api = {
   },
   mekoCall: (id: string, offset: number, callId: string) =>
     get<MekoCallDetail>(`/api/sessions/${enc(id)}/meko-calls/${offset}?id=${enc(callId)}`),
-  /** Where the browser downloads the session's Meko call log (a plain link: the login cookie goes with it). */
-  mekoLogUrl: (id: string) => `/api/sessions/${enc(id)}/meko-calls.jsonl`,
+  /** Where the browser downloads the session's Meko call log (a plain link: Meko's sign-in cookie goes with it). */
+  mekoLogUrl: (id: string) => appUrl(`/api/sessions/${enc(id)}/meko-calls.jsonl`),
   clearMekoLog: (id: string) => request<void>('DELETE', `/api/sessions/${enc(id)}/meko-calls`),
   mekoGaps: (projectId: string, q: { state?: MekoGapState | 'all'; after?: { lastAt: number; key: string } } = {}) => {
     const qs = new URLSearchParams();
@@ -298,25 +289,7 @@ export function errorMessage(e: unknown): string {
   return String(e);
 }
 
-/** Close code the server uses on a WebSocket whose login is missing or revoked. */
-export const WS_UNAUTHORIZED = 4401;
-
-/**
- * After a WebSocket closed with WS_UNAUTHORIZED: if the login really is gone, runs the 401
- * handler (drops to the login screen) and resolves false. Resolves true when still logged in or
- * the server can't be reached, so the caller keeps retrying.
- */
-export async function checkLogin(): Promise<boolean> {
-  try {
-    if ((await api.authStatus()).loggedIn) return true;
-  } catch {
-    return true;
-  }
-  onUnauthorized?.();
-  return false;
-}
-
 export function wsUrl(path: string): string {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${proto}//${location.host}${path}`;
+  return `${proto}//${location.host}${appUrl(path)}`;
 }

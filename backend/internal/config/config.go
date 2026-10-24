@@ -8,14 +8,20 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/yugabyte/meko/backend/internal/paths"
 )
 
-// DefaultPort is next to AgentK's 7777.
+// DefaultPort is the API listener's: next to the web listener's DefaultWebPort.
 const DefaultPort = 7778
+
+// DefaultWebPort is the web listener's, the port AgentK listened on before Meko served it.
+const DefaultWebPort = 7777
 
 // Config is every setting.
 type Config struct {
@@ -27,7 +33,35 @@ type Config struct {
 	Update             Update             `toml:"update"`
 	KnowledgeBase      KnowledgeBase      `toml:"knowledge_base"`
 	WebUI              WebUI              `toml:"web_ui"`
+	Web                Web                `toml:"web"`
+	TLS                TLS                `toml:"tls"`
 	CallHome           CallHome           `toml:"call_home"`
+}
+
+// Web is the [web] table: the web listener browsers use, for the web UI and the extensions' at
+// /ext/<name>/ (the API listener, [server], stays on 127.0.0.1 for agents and the CLI).
+type Web struct {
+	// Port is the web listener's (default 7777). Also MEKO_WEB_PORT.
+	Port int `toml:"port"`
+	// Access is "local" (the default: 127.0.0.1 over HTTP, and a request from this computer needs no
+	// login) or "remote" (every address over HTTPS, with the owner's login). Also MEKO_WEB_ACCESS.
+	Access string `toml:"access"`
+	// Name is the host name links to the web listener use; empty is this host's FQDN (remote) or
+	// 127.0.0.1 (local).
+	Name string `toml:"name"`
+}
+
+// Web access modes.
+const (
+	AccessLocal  = "local"
+	AccessRemote = "remote"
+)
+
+// TLS is the [tls] table: the web listener's certificate with remote access. Empty uses a
+// self-signed pair Meko makes in the data folder's certs/ (internal/tlscert).
+type TLS struct {
+	Cert string `toml:"cert"` // a PEM file
+	Key  string `toml:"key"`  // its PEM private key
 }
 
 // CallHome is the [call_home] table: the usage stats Meko sends to YugabyteDB's call home service
@@ -127,6 +161,7 @@ type Log struct {
 // Default is the configuration with nothing set.
 func Default() Config {
 	return Config{Server: Server{Port: DefaultPort, Auth: AuthToken}, Log: Log{Level: "info"},
+		Web:      Web{Port: DefaultWebPort, Access: AccessLocal},
 		Update:   Update{Channel: "stable", Auto: true, IntervalHours: 6, Repo: "yugabyte/agent-k-local"},
 		CallHome: CallHome{Enabled: true}}
 }
@@ -141,6 +176,21 @@ type Overrides struct {
 // and the flag overrides.
 func Load(path string, env func(string) string, o Overrides) (Config, error) {
 	c := Default()
+	// web.toml first: config.toml's own [web] and [tls] keys win over what Meko chose (AddWeb).
+	var chosen struct {
+		Web *Web `toml:"web"`
+		TLS *TLS `toml:"tls"`
+	}
+	chosenPath := WebFile(path)
+	if _, err := toml.DecodeFile(chosenPath, &chosen); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return Config{}, fmt.Errorf("%s: %w", chosenPath, err)
+	}
+	if chosen.Web != nil {
+		c.Web = mergeWeb(c.Web, *chosen.Web)
+	}
+	if chosen.TLS != nil {
+		c.TLS = *chosen.TLS
+	}
 	md, err := toml.DecodeFile(path, &c)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -161,6 +211,16 @@ func Load(path string, env func(string) string, o Overrides) (Config, error) {
 			return Config{}, fmt.Errorf("MEKO_PORT=%q isn't a port number", v)
 		}
 		c.Server.Port = p
+	}
+	if v := env("MEKO_WEB_PORT"); v != "" {
+		p, err := strconv.Atoi(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("MEKO_WEB_PORT=%q isn't a port number", v)
+		}
+		c.Web.Port = p
+	}
+	if v := env("MEKO_WEB_ACCESS"); v != "" {
+		c.Web.Access = v
 	}
 	if v := env("MEKO_AUTH"); v != "" {
 		c.Server.Auth = v
@@ -225,6 +285,19 @@ func (c Config) validate() error {
 	if c.Server.Port < 1 || c.Server.Port > 65535 {
 		return fmt.Errorf("port %d is out of range: use 1 to 65535", c.Server.Port)
 	}
+	if c.Web.Port < 1 || c.Web.Port > 65535 {
+		return fmt.Errorf("web.port %d is out of range: use 1 to 65535", c.Web.Port)
+	}
+	if c.Web.Port == c.Server.Port {
+		return fmt.Errorf("web.port and server.port are both %d: give the web listener a port of its own", c.Web.Port)
+	}
+	// An unknown access is refused, so a typo never opens the web listener to the network.
+	if c.Web.Access != AccessLocal && c.Web.Access != AccessRemote {
+		return fmt.Errorf("web.access %q isn't one of %q, %q", c.Web.Access, AccessLocal, AccessRemote)
+	}
+	if (c.TLS.Cert == "") != (c.TLS.Key == "") {
+		return errors.New("tls.cert and tls.key go together: set both, or neither for a self-signed pair")
+	}
 	// An unknown mode is refused, so a typo never turns auth off.
 	if c.Server.Auth != AuthToken && c.Server.Auth != AuthNone {
 		return fmt.Errorf("server.auth %q isn't one of %q, %q", c.Server.Auth, AuthToken, AuthNone)
@@ -278,4 +351,67 @@ func (l Log) SlogLevel() (slog.Level, error) {
 		return slog.LevelError, nil
 	}
 	return 0, fmt.Errorf("log level %q isn't one of debug, info, warn, error", l.Level)
+}
+
+// WebFile is web.toml beside config.toml at path: the [web] (and [tls]) settings Meko chose
+// itself, from meko install's access and the handoff from AgentK (AddWeb). It's a file of its own,
+// not part of config.toml, because a release from before the web listener refuses config.toml's
+// unknown keys: a rollback after an update that failed its probation, or a downgrade, would then
+// leave a Meko that can't start. Older releases don't read web.toml at all.
+func WebFile(configPath string) string {
+	return filepath.Join(filepath.Dir(configPath), "web.toml")
+}
+
+func mergeWeb(base, over Web) Web {
+	if over.Port != 0 {
+		base.Port = over.Port
+	}
+	if over.Access != "" {
+		base.Access = over.Access
+	}
+	if over.Name != "" {
+		base.Name = over.Name
+	}
+	return base
+}
+
+// AddWeb writes web.toml (WebFile) with web, and tls when it names files, unless config.toml at
+// path or web.toml already has a [web] table: config.toml's is the user's, and web.toml's an earlier
+// choice. It reports whether it wrote. Meko writes these settings only this way: meko install, with
+// the access it picked, and the handoff from AgentK, with the access and port AgentK had.
+func AddWeb(path string, web Web, tls TLS) (bool, error) {
+	webPath := WebFile(path)
+	for _, p := range []string{path, webPath} {
+		var c Config
+		md, err := toml.DecodeFile(p, &c)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return false, fmt.Errorf("%s: %w", p, err)
+		}
+		if md.IsDefined("web") {
+			return false, nil
+		}
+	}
+	var add strings.Builder
+	add.WriteString("# The web listener's settings Meko chose (meko install, or the handoff from AgentK).\n" +
+		"# A [web] or [tls] key in config.toml overrides the one here. access = \"local\" needs no login\n" +
+		"# from this computer; \"remote\" listens on every address, over HTTPS, with a login.\n[web]\n")
+	if web.Port != 0 {
+		fmt.Fprintf(&add, "port = %d\n", web.Port)
+	}
+	if web.Access != "" {
+		fmt.Fprintf(&add, "access = %q\n", web.Access)
+	}
+	if web.Name != "" {
+		fmt.Fprintf(&add, "name = %q\n", web.Name)
+	}
+	if tls.Cert != "" && tls.Key != "" {
+		fmt.Fprintf(&add, "\n[tls]\ncert = %q\nkey = %q\n", tls.Cert, tls.Key)
+	}
+	if err := paths.WriteFile(webPath, []byte(add.String())); err != nil {
+		return false, err
+	}
+	return true, nil
 }

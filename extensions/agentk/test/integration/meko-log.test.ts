@@ -3,7 +3,6 @@ import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../../src/server/server.js';
-import { issueSetupToken } from '../../src/server/auth.js';
 import type { MekoTrace } from '../../src/server/meko.js';
 import { mekoLogPath } from '../../src/server/mekolog.js';
 import type { MekoCallDetail, MekoCallPage, MekoLogInfo } from '../../src/shared/types.js';
@@ -12,14 +11,10 @@ import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
 describe('Meko call log', () => {
   let env: TestEnv;
   let app: FastifyInstance;
-  let cookie: string;
 
   beforeEach(async () => {
     env = await makeEnv();
-    app = await buildServer(env.core, { tls: null, webDir: null, updater: null });
-    const token = issueSetupToken(env.core.db);
-    const res = await app.inject({ method: 'POST', url: '/api/auth/setup', payload: { token, username: 'me', password: 'correct horse battery' } });
-    cookie = String(res.headers['set-cookie']).split(';')[0];
+    app = await buildServer(env.core, { webDir: null, updater: null });
   });
   afterEach(async () => {
     await app.close();
@@ -27,7 +22,7 @@ describe('Meko call log', () => {
   });
 
   const call = (method: 'GET' | 'PATCH' | 'DELETE', url: string, payload?: unknown) =>
-    app.inject({ method, url, headers: { cookie }, ...(payload !== undefined ? { payload: payload as object } : {}) });
+    app.inject({ method, url, ...(payload !== undefined ? { payload: payload as object } : {}) });
 
   /** A call AgentK made for the session (this start of it, unless `createdAt` says otherwise), as MekoClient reports it. */
   const traced = (sessionId: string, over: Partial<MekoTrace> = {}, createdAt = rowCreatedAt(sessionId)) => env.core.meko.onTrace!({

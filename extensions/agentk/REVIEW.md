@@ -16,9 +16,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Server restarts and updates leave running sessions untouched. The one exception is the
       one-time move of an older home into Meko's data folder (`src/server/movehome.ts`, AGENTS.md
       invariant 1), and nothing else may start it or end sessions the same way.
-- [ ] For a home already in a Meko data folder, `uninstall`, `start`, `stop` and `status` refuse a
-      `MEKO_HOME` that names another folder (`refuseOtherMeko`, checked in `main()`), so a Meko
-      for another folder can't stop or uninstall it. A home that hasn't moved there yet isn't
+- [ ] For a home already in a Meko data folder, `uninstall`, `start`, `stop`, `status` and
+      `_handoff` refuse a `MEKO_HOME` that names another folder (`refuseOtherMeko`, checked in
+      `main()`), so a Meko for another folder can't stop or uninstall it, or serve it and take its
+      old login. A home that hasn't moved there yet isn't
       covered: another Meko's commands still act on it.
 - [ ] `recover()` / `reconcile()` stay idempotent: live panes are left alone, missing panes are resumed,
       and sessions still being created or launched are skipped (so Claude never starts twice).
@@ -92,15 +93,15 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 
 ## 2. Security
 
-- [ ] New `/api/*` routes require login unless they're one of the three public auth routes, or the
-      request has local access (`localAccess()`: loopback bind, loopback peer, localhost `Host`,
-      no forwarding headers, not cross-site by `Sec-Fetch-Site` or `Origin`). Nothing widens local
-      access to a network bind, another `Host`, a forwarded address, or a request from another site. Access
-      checks key on the matched route, never the raw URL (the router decodes `/%61pi/`).
+- [ ] The server listens only on its unix socket and has no login of its own: Meko signs people in
+      and serves AgentK at `/ext/agentk/` (AGENTS.md invariant 3). Nothing adds a TCP listener, a
+      login, or trust in a forwarding header. Access checks key on the matched route, never the raw
+      URL (the router decodes `/%61pi/`).
 - [ ] Request bodies are type-checked before use (a wrong type is a 4xx, never a 500), and nothing
       re-adds a `text/plain` or form body parser (HTML forms must not be able to post to the API).
-- [ ] Writes and WebSocket upgrades still pass the origin check; cookies stay `HttpOnly`,
-      `SameSite=Strict`, and `Secure` under TLS.
+- [ ] Writes and WebSocket upgrades still pass the origin check. The page builds every URL of
+      AgentK's own under its base (`src/web/base.ts`), and calls Meko's routes (`/api/v1/auth/*`)
+      root-absolute.
 - [ ] Nothing from a session's worktree that its repo's author controls (settings, scripts, prompts,
       agent or MCP config) runs or is used unless `repoConfigTrusted(row)` says so (`headtrust.ts`):
       on a public repo's PR head, anyone can have written it. A PR found by its branch's name must
@@ -114,10 +115,11 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       Meko URL or key change is checked against Meko before it's saved, and a typed API URL is
       checked without the key. Remote URLs lose their credentials before they go into a datapack
       description (`withoutCredentials`).
-- [ ] Login limits hold (per address or IPv6 /64, and site-wide), and nothing sent to a browser can
-      queue in memory without limit (terminal output pauses the pty; state snapshots are skipped).
-- [ ] The hook socket stays owner-only (directory 0700, socket 0600), and events are matched by
-      per-session token.
+- [ ] Nothing sent to a browser can queue in memory without limit (terminal output pauses the pty;
+      state snapshots are skipped). A socket that closes abnormally (1006: Meko refused it or closed
+      a signed-out session's) asks Meko about the sign-in alongside its retry, throttled.
+- [ ] The web socket and the hook socket stay owner-only (directory 0700, socket 0600; bound under a
+      temporary name and renamed, `listenPrivate`), and hook events are matched by per-session token.
 - [ ] Nothing internal (hostnames, mount paths, tokens) is committed; the repo will be public.
 - [ ] Pasted images (`POST /api/sessions/:id/images`) are checked by their bytes, size-capped, and
       saved owner-only under the session's `pastes/` folder with a name the server picks; the

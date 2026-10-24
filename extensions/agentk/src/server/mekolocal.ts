@@ -3,10 +3,14 @@ import { homedir } from 'node:os';
 import type { LocalMekoState } from '../shared/types.js';
 import { withLocalBin } from './paths.js';
 
-/** A Meko running on this computer: its MCP URL and the client token its clients send. */
+/**
+ * A Meko running on this computer: its MCP URL, the client token its clients send, and its web
+ * listener's URL, where browsers find AgentK at /ext/agentk/ (null from a Meko too old to serve it).
+ */
 export interface LocalMeko {
   url: string;
   token: string;
+  webUrl?: string | null;
 }
 
 /** What `meko token --json` said: a running Meko, one that's installed but stopped, or none. */
@@ -35,9 +39,10 @@ export function probeLocalMeko(mekoHome: string | null, env: NodeJS.ProcessEnv =
     execFile('meko', ['token', '--json'], { env: run, timeout: TIMEOUT_MS, encoding: 'utf8' }, (err, stdout) => {
       if (err) return resolve((err as NodeJS.ErrnoException).code === 'ENOENT' ? none : failed);
       try {
-        const r = JSON.parse(stdout) as { url?: unknown; token?: unknown; running?: unknown };
+        const r = JSON.parse(stdout) as { url?: unknown; token?: unknown; running?: unknown; web_url?: unknown };
         if (typeof r.url !== 'string' || !/^https?:\/\//.test(r.url) || typeof r.token !== 'string' || !r.token) return resolve(failed);
-        resolve(r.running === true ? { state: 'running', meko: { url: r.url, token: r.token } } : { state: 'stopped', meko: null });
+        const webUrl = typeof r.web_url === 'string' && /^https?:\/\//.test(r.web_url) ? r.web_url : null;
+        resolve(r.running === true ? { state: 'running', meko: { url: r.url, token: r.token, webUrl } } : { state: 'stopped', meko: null });
       } catch {
         resolve(failed);
       }

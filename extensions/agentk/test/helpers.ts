@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -227,11 +227,11 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
   process.env.KIRO_HOME = join(home, 'kiro');
   process.env.FAKE_KIRO_DIR = join(home, 'fake-kiro');
   process.env.FAKE_OPENCODE_DIR = join(home, 'fake-opencode');
+  // Made here, since the fakes' version reads (which cleanup doesn't wait for) write nothing.
+  for (const d of [process.env.FAKE_KIRO_DIR, process.env.FAKE_OPENCODE_DIR]) mkdirSync(d, { recursive: true });
   const paths = getPaths(join(home, 'ak'));
   // The session host runs in this process, and never through this machine's background services.
   const cfg: Config = structuredClone(DEFAULT_CONFIG);
-  // A network bind, as on a remote-access install: a loopback one skips the login (localAccess).
-  cfg.server.bind = '0.0.0.0';
   cfg.repos.roots = [join(home, 'code')];
   cfg.repos.cloneInto = join(home, 'code');
   cfg.claude.command = FAKE_CLAUDE;

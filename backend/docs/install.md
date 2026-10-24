@@ -35,6 +35,10 @@ says so and changes nothing, unless given `--reinstall` or another version.
   `app/current/bin/meko`. A build from source is set up as it is and doesn't update itself.
 - It makes the client token (in the secret store) and sets up the login service (below), stopping
   a server started by hand on the same data folder first. `--no-service` skips the service.
+- It writes the web listener's access to `web.toml` when neither it nor `config.toml` has a `[web]`
+  table: `--access local|remote`, or by AgentK's old rule (remote over SSH or on Linux with no
+  display, else local), unless AgentK is on this computer, whose access the handoff takes over
+  instead ([web.md](web.md#settings)). It prints the web UI's URL.
 - It installs Meko alone. AgentK is `meko install_extension agentk`.
 
 `meko uninstall` removes the service, `~/.local/bin/meko` and the app folder, and keeps the data;
@@ -56,7 +60,7 @@ meko-<version>/
   bin/meko                     the CLI and server (cgo: SQLite and sqlite-vec compiled in)
   node/bin/node, node/LICENSE  Meko's own Node (22.18.0, checked against nodejs.org's SHASUMS256)
   memory_engine/package.json, dist/, node_modules/, stubs/
-  web_ui/dist/                 the built web UI, served at / (web-ui.md)
+  web_ui/dist/                 the built web UI, served at / on the web listener (web-ui.md)
   models/                      the pinned models: the embedder and the reranker
   VERSION, LICENSE
 ```
@@ -157,7 +161,7 @@ extension knows where its own folder is: `<data>/extensions/<name>` (`extensions
 home is `<data>/extensions/agentk`, wherever Meko's rule puts the data folder (`MEKO_HOME`,
 `~/.meko`, or the network-home fallback; AgentK runs the same rule when Meko didn't tell it, and
 both test suites read `internal/paths/testdata/resolve-cases.json`). An AgentK whose home is in
-another data folder refuses `start`, `stop`, `status` and `uninstall` run with this one's
+another data folder refuses `start`, `stop`, `status`, `uninstall` and `_handoff` run with this one's
 `MEKO_HOME`, and does nothing.
 
 - An extension's command is found on PATH, then in `~/.local/bin`, then in its release install's
@@ -187,6 +191,10 @@ another data folder refuses `start`, `stop`, `status` and `uninstall` run with t
   installed one by its `install.js`, a release by its `install.sh`. So `install_extension` needs
   an AgentK release that takes `--meko-url`. Nothing else is passed, apart from `--non-interactive` without a terminal: AgentK asks its own questions. Then it registers
   `agentk`.
+- An extension whose catalog entry has `WebUI` (AgentK) is served to browsers by the web listener at
+  `/ext/<name>/`, on the unix socket `<command> _handoff --json` names; at every start, that handoff
+  also brings over the web settings, certificate and login the extension had when it served
+  browsers itself ([web.md](web.md#the-handoff-from-agentk)). AgentK listens only on its socket.
 - `meko start` starts the extensions after Meko; `meko stop` stops them first (`agentk stop`
   ends AgentK's sessions too; they resume on start), unless given `--keep-extensions`. An
   extension that fails is reported, and the rest go on. `meko restart`, updates and crashes never

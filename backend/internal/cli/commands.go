@@ -194,7 +194,8 @@ func runStatus(l paths.Layout, stdout, stderr io.Writer) int {
 		return fail(stderr, fmt.Errorf("the server is running, but isn't answering: %w", err))
 	}
 	fmt.Fprintf(stdout, "Meko is running\n")
-	fmt.Fprintf(stdout, "  URL:           http://127.0.0.1:%d\n", st.Port)
+	fmt.Fprintf(stdout, "  URL:           http://127.0.0.1:%d (agents and the CLI)\n", st.Port)
+	printWeb(stdout, st.Web)
 	fmt.Fprintf(stdout, "  Version:       %s\n", st.Version)
 	fmt.Fprintf(stdout, "  PID:           %d\n", st.PID)
 	fmt.Fprintf(stdout, "  Uptime:        %s\n", (time.Duration(st.UptimeSeconds) * time.Second).String())
@@ -349,7 +350,18 @@ func runToken(l paths.Layout, mcp, asJSON bool, stdout, stderr io.Writer) int {
 	}
 	url := fmt.Sprintf("http://127.0.0.1:%d/mcp", port)
 	if asJSON {
-		b, _ := json.Marshal(map[string]any{"url": url, "token": tok, "running": up})
+		// web_url is where browsers find Meko's web UI and its extensions' (AgentK's at /ext/agentk/).
+		web := webURL(cfg.Web)
+		if up {
+			if c, cerr := newClient(l); cerr == nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				if st, serr := c.status(ctx); serr == nil && st.Web != nil && st.Web.URL != "" {
+					web = st.Web.URL
+				}
+				cancel()
+			}
+		}
+		b, _ := json.Marshal(map[string]any{"url": url, "token": tok, "running": up, "web_url": web})
 		fmt.Fprintln(stdout, string(b))
 		return exitOK
 	}

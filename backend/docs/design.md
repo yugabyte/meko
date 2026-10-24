@@ -10,6 +10,7 @@ an HTTP server with auth, and a supervisor for child processes. The rest builds 
 | [api.md](api.md) | MCP at `/mcp`, REST at `/api/v1`, the client token, the call log, the CLI's tool commands |
 | [knowledge.md](knowledge.md) | Knowledge files: uploads, ingestion, hybrid search with a reranker |
 | [install.md](install.md) | Release builds, releases, the installer, the login service, extensions, updates, secrets |
+| [web.md](web.md) | The web listener browsers use: local or remote access, the login, TLS, extensions at `/ext/<name>/`, the handoff from AgentK |
 | [web-ui.md](web-ui.md) | The web UI served at `/` |
 | [callhome.md](callhome.md) | Usage stats |
 
@@ -27,7 +28,8 @@ code is private: nothing here copies it or cites its paths.
 ```mermaid
 flowchart LR
   cli["meko start"] -->|"spawns detached, or starts the login service"| serve["meko serve"]
-  serve -->|"HTTP 127.0.0.1:7778"| api["/healthz, /api/v1, /mcp, / (the web UI)"]
+  serve -->|"HTTP 127.0.0.1:7778"| api["/healthz, /api/v1, /mcp"]
+  serve -->|"7777, local or remote (web.md)"| web["/ (the web UI), /api/v1, /mcp, /ext/agentk/"]
   serve -->|"owns"| db[("meko.db (SQLite)")]
   serve -->|"starts, watches, restarts"| memory_engine["Node memory engine"]
   memory_engine -->|"store API, unix socket"| serve
@@ -127,7 +129,8 @@ Config precedence: flags > `MEKO_*` env > `config.toml` > defaults. An unknown k
 
 | Key | Env | Default | What |
 |---|---|---|---|
-| `[server] port` | `MEKO_PORT`, `--port` | 7778 | The port on 127.0.0.1, next to AgentK's 7777. A taken port is an error naming the setting, with no random fallback. |
+| `[server] port` | `MEKO_PORT`, `--port` | 7778 | The API listener's port on 127.0.0.1. A taken port is an error naming the setting, with no random fallback. |
+| `[web] port`, `access`, `name`; `[tls] cert`, `key` | `MEKO_WEB_PORT`, `MEKO_WEB_ACCESS` | 7777, `"local"` | The web listener ([web.md](web.md#settings)). A taken port is retried, not an error: AgentK may still hold it. What Meko chose itself (`meko install`, the handoff from AgentK) is in `web.toml`, which these keys in `config.toml` override. |
 | `[server] auth` | `MEKO_AUTH` | `"token"` | `"none"` lifts the credential on `/mcp` and the data routes ([api.md](api.md)). |
 | `[log] level` | `MEKO_LOG_LEVEL`, `--log-level` | `"info"` | |
 | `[memory_engine] node`, `dir` | `MEKO_NODE`, `MEKO_MEMORY_ENGINE_DIR` | found | Node and the built memory engine ([memory-engine.md](memory-engine.md)). |
@@ -254,16 +257,16 @@ filter runs inside MATCH (a join with the filter outside FTS never finished at 2
 
 ## HTTP server
 
-echo v4.
+echo v4. Two listeners share the handlers: the **API listener**, below, for the CLI, MCP clients and
+AgentK, and the **web listener** for browsers ([web.md](web.md)).
 
-- Listens on `127.0.0.1` only; there's no option to bind other addresses.
+- The API listener listens on `127.0.0.1` only; there's no option to bind other addresses.
 - Envelope: Meko Cloud's wire shape, `{data, error{code, message, details}}`, with `error` omitted
   on success (`internal/envelope`). HTTP errors below 500 keep their status; anything else is logged
   and the caller gets a generic 500.
 - `GET /healthz` needs no auth (status and version only). `GET /api/v1/status` (uptime, data folder,
   the memory engine, auth mode, usage stats) and `GET /api/v1/version` take the admin token.
-  `/mcp`, the rest of `/api/v1` ([api.md](api.md)) and `/` (the web UI, [web-ui.md](web-ui.md))
-  build on it.
+  `/mcp` and the rest of `/api/v1` ([api.md](api.md)) build on it.
 - Middleware, in order: request id, recover, access log (slog), Host and Origin checks, auth, then
   a 1 MB body limit on the `/api/v1` group. It's on the group, not global, because echo's global
   `BodyLimit` would refuse bodies before a route's larger limit runs: `/mcp` takes 8 MB and the
@@ -276,13 +279,14 @@ echo v4.
   sends it as `Authorization: Bearer <token>`. It's compared in constant time and never logged.
 - **The client token**, for MCP and REST clients, kept across restarts ([api.md](api.md#auth)).
 - Every route needs one of them, or nothing with the opt-in `[server] auth = "none"`, except:
-  `/api/v1/status`, `/api/v1/version` and `/api/v1/ui-code` take only the admin token; `/healthz`,
-  the knowledge-file links (a one-time ticket instead) and the web UI's files and code redeem take
-  none ([api.md](api.md#auth)). The check runs on the matched route (`c.Path()`), never the raw URL.
+  `/api/v1/status`, `/api/v1/version` and `/api/v1/auth/setup-link` take only the admin token;
+  `/healthz` and the knowledge-file links (a one-time ticket instead) take none
+  ([api.md](api.md#auth)). The check runs on the matched route (`c.Path()`), never the raw URL. The
+  web listener has its own check: local access or the owner's session ([web.md](web.md)).
 - Host check: requests must name `127.0.0.1:<port>` or `localhost:<port>`, which stops DNS
   rebinding. A request with an `Origin` header is refused unless it's this server's own
-  (`http://127.0.0.1:<port>` or `http://localhost:<port>`), so only the web UI Meko serves can call
-  it from a browser ([web-ui.md](web-ui.md)); no CORS headers are sent.
+  (`http://127.0.0.1:<port>` or `http://localhost:<port>`), so no page can call it from a browser;
+  no CORS headers are sent.
 
 ## Supervisor
 
@@ -362,12 +366,20 @@ In `make test` on Linux and macOS:
 - **server** (in-process on port 0): `/healthz` answers without auth; `/api/v1/*` needs a token
   (401 without it or with a wrong one); a foreign Host gets 403; an `Origin` other than the server's
   own is refused; replies use the envelope with `error` omitted on success; an internal error
-  returns the generic message and logs the cause.
+  returns the generic message and logs the cause. The web listener: local access and its refusals
+  (a proxy's headers, another site, a foreign Host, a Bearer token); with remote access the setup
+  link, the cookie, sign-in for an extension's page, the proxy's headers, and a WebSocket closed at
+  sign-out; an extension that isn't answering.
+- **login**, **auth** and **tlscert**: an AgentK hash verifies; TOTP's RFC vector, its window and
+  replay; the rate limit by /64 and site-wide; sessions slide and run out; a password change keeps
+  this browser only; a self-signed pair names localhost and is renewed near its end.
 - **supervisor** (the test binary re-run as a stub child): starts and reports healthy; restarts with
   backoff after a crash; marks the child failed after 5 crashes in 10 minutes; stop sends SIGTERM,
   then SIGKILL to the whole process group, including a grandchild that outlives the child;
   `UnixHTTPCheck` passes on 2xx and fails on other answers or a missing socket.
-- **cli**: `start`, `status`, `stop` against a temp data folder; a second `serve` on the same
+- **cli**: `start`, `status`, `stop` against a temp data folder; `ui`, `setup_link` and
+  `token --json`'s `web_url`; the handoff from a fake AgentK (its port, remote access, certificate
+  and login taken over, then AgentK reached through Meko over HTTPS, and nothing added twice); a second `serve` on the same
   folder fails on the lock; a stale pid file doesn't block `start` and is replaced by the new
   server's pid; a taken port gives the clear error; `destroy`'s refusals and what it keeps; every
   printed line ends without a period (`TestOutputLinesEndWithoutPeriod`).

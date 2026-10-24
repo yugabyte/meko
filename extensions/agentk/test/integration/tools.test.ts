@@ -185,12 +185,9 @@ describe("AgentK's session tools through agentk mcp (real session host + git, fa
 
     // Do all: go actions left out, the rest checked again and run in order, one result each.
     const { buildServer } = await import('../../src/server/server.js');
-    const { issueSetupToken } = await import('../../src/server/auth.js');
-    const app = await buildServer(env.core, { tls: null, webDir: null, updater: null });
+    const app = await buildServer(env.core, { webDir: null, updater: null });
     try {
-      const setup = await app.inject({ method: 'POST', url: '/api/auth/setup', payload: { token: issueSetupToken(env.core.db), username: 'me', password: 'correct horse battery' } });
-      const cookie = String(setup.headers['set-cookie']).split(';')[0];
-      const runActions = (actions: unknown[]) => app.inject({ method: 'POST', url: '/api/actions/run', headers: { cookie }, payload: { actions } });
+      const runActions = (actions: unknown[]) => app.inject({ method: 'POST', url: '/api/actions/run', payload: { actions } });
       const r = await runActions([
         { type: 'go', view: 'usage' },
         { type: 'move', sessionId: abc, stage: 'code' },

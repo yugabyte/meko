@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../../src/server/server.js';
-import { issueSetupToken } from '../../src/server/auth.js';
 import type { MekoDatapackRow } from '../../src/server/meko.js';
 import { makeEnv, waitFor, type ApiCall, type TestEnv } from '../helpers.js';
 import { all } from '../../src/server/db.js';
@@ -12,14 +11,10 @@ import { all } from '../../src/server/db.js';
 describe('HTTP API: sharing, invites and Meko settings', () => {
   let env: TestEnv;
   let app: FastifyInstance;
-  let cookie: string;
 
   beforeEach(async () => {
     env = await makeEnv({ start: false });
-    app = await buildServer(env.core, { tls: null, webDir: null, updater: null });
-    const token = issueSetupToken(env.core.db);
-    const res = await app.inject({ method: 'POST', url: '/api/auth/setup', payload: { token, username: 'me', password: 'correct horse battery' } });
-    cookie = String(res.headers['set-cookie']).split(';')[0];
+    app = await buildServer(env.core, { webDir: null, updater: null });
   });
   afterEach(async () => {
     await app.close();
@@ -27,7 +22,7 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
   });
 
   const call = (method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, payload?: unknown) =>
-    app.inject({ method, url, headers: { cookie }, ...(payload !== undefined ? { payload: payload as object } : {}) });
+    app.inject({ method, url, ...(payload !== undefined ? { payload: payload as object } : {}) });
 
   async function project(dpId = 'dp-1') {
     return env.core.projects.create({ repoPath: env.repo, name: 'p', datapack: { mode: 'existing', id: dpId, name: 'adlc/proj/demo-repo/p' } });

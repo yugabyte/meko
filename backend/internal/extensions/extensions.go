@@ -40,6 +40,7 @@ var Known = map[string]Catalog{
 		// Its home before it moved into Meko's data folder, where an install that hasn't moved yet runs.
 		OldHomes:      []string{".agent-k-local"},
 		UninstallArgs: []string{"uninstall", "--purge", "--delete-worktrees", "--non-interactive"},
+		WebUI:         true,
 	},
 }
 
@@ -56,6 +57,9 @@ type Catalog struct {
 	// UninstallArgs uninstall it and delete all its data without asking: what meko destroy runs
 	// when it removes the extensions too.
 	UninstallArgs []string
+	// WebUI says it serves a web UI on a unix socket, which the web listener serves at
+	// /ext/<name>/ (internal/extproxy). `<command> _handoff --json` names the socket (Handoff).
+	WebUI bool
 }
 
 // Dir is the folder an extension keeps its data in, in Meko's data folder at root. AgentK's home
@@ -212,4 +216,59 @@ func FindCommand(name, home string) string {
 func executable(p string) bool {
 	fi, err := os.Stat(p)
 	return err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0
+}
+
+// Handoff is what `<command> _handoff --json` says: where an extension with a web UI listens, and
+// the settings and login it had when it served browsers itself, which Meko takes over with its port.
+type Handoff struct {
+	Socket string  `json:"socket"`
+	Legacy *Legacy `json:"legacy"`
+}
+
+// Legacy is an extension's own web settings from before Meko served it (AgentK's [server] and [tls],
+// and its login), or nil when it had none.
+type Legacy struct {
+	Bind  string       `json:"bind"`
+	Port  int          `json:"port"`
+	TLS   *LegacyTLS   `json:"tls"`
+	Owner *LegacyOwner `json:"owner"`
+}
+
+// LegacyTLS is its certificate: one it made (SelfSigned) or one its config named.
+type LegacyTLS struct {
+	Cert       string `json:"cert"`
+	Key        string `json:"key"`
+	SelfSigned bool   `json:"self_signed"`
+}
+
+// LegacyOwner is its login: a scrypt hash in Meko's own format, and its two-step secret, if on.
+type LegacyOwner struct {
+	Username   string `json:"username"`
+	PWScrypt   string `json:"pw_scrypt"`
+	TOTPSecret string `json:"totp_secret"`
+}
+
+// HandoffTimeout bounds `<command> _handoff --json`.
+var HandoffTimeout = 15 * time.Second
+
+// Handoff runs `<command> _handoff --json` for the data folder at root. An extension too old to have
+// the command fails it, and is asked again later.
+func (e Entry) Handoff(root string) (Handoff, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), HandoffTimeout)
+	defer cancel()
+	var out, errOut bytes.Buffer
+	cmd := exec.CommandContext(ctx, e.Command, "_handoff", "--json") //nolint:gosec // G204: see run
+	cmd.Stdout, cmd.Stderr, cmd.Env = &out, &errOut, Env(root)
+	if err := cmd.Run(); err != nil {
+		first, _, _ := bytes.Cut(bytes.TrimSpace(errOut.Bytes()), []byte("\n"))
+		return Handoff{}, fmt.Errorf("%s _handoff: %w (%s)", e.Command, err, first)
+	}
+	var h Handoff
+	if err := json.Unmarshal(out.Bytes(), &h); err != nil {
+		return Handoff{}, fmt.Errorf("%s _handoff: unexpected reply: %w", e.Command, err)
+	}
+	if h.Socket == "" {
+		return Handoff{}, fmt.Errorf("%s _handoff named no socket", e.Command)
+	}
+	return h, nil
 }

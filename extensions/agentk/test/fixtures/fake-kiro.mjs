@@ -14,15 +14,16 @@ import { join } from 'node:path';
 const args = process.argv.slice(2);
 const dir = process.env.FAKE_KIRO_DIR;
 const home = process.env.KIRO_HOME;
-mkdirSync(dir, { recursive: true });
 const log = (file, v) => appendFileSync(join(dir, file), JSON.stringify(v) + '\n');
 
-// The version a test put in `version` (an install or update since the last read), else 2.32.0.
+// The version a test put in `version` (an install or update since the last read), else 2.32.0. It
+// writes nothing, as fake-opencode.mjs's doesn't: a test's cleanup doesn't wait for a version read.
 if (args[0] === '--version') {
   const v = join(dir, 'version');
   process.stdout.write(existsSync(v) ? readFileSync(v, 'utf8') : 'kiro-cli 2.32.0\n');
   process.exit(0);
 }
+mkdirSync(dir, { recursive: true });
 // Like `kiro-cli agent create <name> --from kiro_default --directory <dir>`: Kiro's built-in default.
 if (args[0] === 'agent' && args[1] === 'create') {
   const out = args[args.indexOf('--directory') + 1];

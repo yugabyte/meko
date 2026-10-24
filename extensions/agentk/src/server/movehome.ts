@@ -196,12 +196,13 @@ export function checkMove(paths: Paths, cfg: Config, d: CheckDeps = {}): MoveChe
 }
 
 /**
- * The commands Meko runs for an extension that `refuseOtherMeko` checks: start, stop, status and
- * `destroy`'s uninstall. Not `install`: the installer updates the existing home in place whatever
+ * The commands Meko runs for an extension that `refuseOtherMeko` checks: start, stop, status,
+ * `destroy`'s uninstall, and `_handoff` (where the server listens and an older install's login: a
+ * Meko for another data folder mustn't serve this home or take its login). Not `install`: the installer updates the existing home in place whatever
  * MEKO_HOME says, and has switched `app/current` before it runs `agentk install`, which then keeps
  * the Meko folder the home is in over MEKO_HOME (`runInstall`).
  */
-export const MEKO_COMMANDS = ['uninstall', 'start', 'stop', 'status'];
+export const MEKO_COMMANDS = ['uninstall', 'start', 'stop', 'status', '_handoff'];
 
 /**
  * Refuses a command Meko runs for another data folder than the one this home is in. A release's
@@ -698,7 +699,7 @@ export async function runMoveJob(args: string[]): Promise<void> {
     log,
     stop: async () => void (await stopAll(paths, svc)),
     services: svc,
-    waitHealthy: async (p) => (await waitForServer(loadConfig(p, () => undefined), 60_000)).ok,
+    waitHealthy: async (p) => (await waitForServer(p, 60_000)).ok,
   }).catch((e: unknown) => {
     log.warn("moving AgentK's home failed; it's tried again", errMsg(e));
     process.exit(1);

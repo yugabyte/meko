@@ -274,3 +274,35 @@ export interface UsageStats {
   // Where they go while sends.
   url?: string;
 }
+
+// GET /auth/status, which needs no credential.
+export interface AuthStatus {
+  // How [web] access in config.toml opens the web listener: "local" (this computer, no login) or
+  // "remote" (any address, HTTPS, a password login).
+  access: "local" | "remote";
+  // This request came in as a local one, which needs no login.
+  local_access: boolean;
+  signed_in: boolean;
+  // Remote access needs a login made from a setup link (meko setup_link) first.
+  setup_required: boolean;
+  // setup_required while a login exists: the setup link replaces it.
+  reset: boolean;
+  // The login's username, or null when there's none.
+  username: string | null;
+  totp_enabled: boolean;
+}
+
+// POST /auth/totp/enroll: the authenticator's secret, as text and as the otpauth:// URL its QR
+// code holds.
+export interface TotpEnroll {
+  secret: string;
+  otpauth_url: string;
+}
+
+// GET /extensions: the extensions the web listener serves, at path.
+export interface Extension {
+  name: string;
+  title: string;
+  path: string;
+  available: boolean;
+}

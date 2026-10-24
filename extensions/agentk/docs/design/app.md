@@ -354,8 +354,8 @@ An iPhone or iPad makes no offer, so there the banner says to tap Share, then Ad
 iOS shows notifications only for Home Screen web apps. Safari can't tell that AgentK is on the Home
 Screen already (it has no `appinstalled`, and the Home Screen app keeps its storage apart), so in a
 Safari tab only Not now hides these steps; the Home Screen app itself never shows them. Firefox and Safari on a Mac get no banner.
-Chrome offers nothing for a page whose certificate it doesn't trust, so with AgentK's self-signed
-certificate, trust its fingerprint (`agentk status`) first. Chrome may also wait until you've used
+Chrome offers nothing for a page whose certificate it doesn't trust, so with Meko's self-signed
+certificate (remote access), trust its fingerprint (`meko status`) first. Chrome may also wait until you've used
 the page a little before it offers, so the banner can appear a moment after the page loads.
 
 ## On a phone
@@ -372,14 +372,13 @@ move into a ⋯ sheet, leaving the screen to the terminal; a dot on ⋯ marks a 
 you, and the sheet says why a closed gate is closed. The sheet closes with the × at its top right, a
 tap outside it, or Escape. Dialogs open as bottom sheets, with tabs in a
 header (Settings) on their own row under the title and its × (focus still goes from the tabs to the
-×, as on a desktop). The app, the
-overlay behind a dialog or sheet, and the sign-in and setup screens are pinned to the visible
-viewport (its height and, where iOS pans the page for a focused field, its offset), so the on-screen
-keyboard shrinks them instead of covering the prompt or a dialog's fields. On a touch screen the
-keyboard comes up only when you tap a field: opening a dialog (New project, New session, Open PR)
-or the Changes panel's Files, commit and base menus doesn't focus a text field. The sign-in screens
-scroll inside themselves and bring the field being typed in back into view once the keyboard is up
-(`keepFocusInView`); the page itself never scrolls, since the app puts its scroll back at the top.
+×, as on a desktop). The app and the
+overlay behind a dialog or sheet are pinned to the visible viewport (its height and, where iOS pans
+the page for a focused field, its offset), so the on-screen keyboard shrinks them instead of
+covering the prompt or a dialog's fields. On a touch screen the keyboard comes up only when you tap
+a field: opening a dialog (New project, New session, Open PR) or the Changes panel's Files, commit
+and base menus doesn't focus a text field. The page itself never scrolls, since the app puts its
+scroll back at the top. (Signing in is Meko's page.)
 While you type, the terminal stays scrolled to its newest line. On
 touch screens the terminal gets a key bar (Tab, arrows, Ctrl+C, Enter, select mode, typing mode,
 and at the far right a ▾ key that opens a second row of more keys: a sticky Ctrl, Esc, Shift+Tab,

@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../../src/server/server.js';
-import { issueSetupToken } from '../../src/server/auth.js';
 import { run } from '../../src/server/db.js';
 import { markGap } from '../../src/server/mekogaps.js';
 import type { MekoGapPage, ProjectHome } from '../../src/shared/types.js';
@@ -10,14 +9,10 @@ import { makeEnv, type TestEnv } from '../helpers.js';
 describe("What Meko doesn't know", () => {
   let env: TestEnv;
   let app: FastifyInstance;
-  let cookie: string;
 
   beforeEach(async () => {
     env = await makeEnv({ start: false });
-    app = await buildServer(env.core, { tls: null, webDir: null, updater: null });
-    const token = issueSetupToken(env.core.db);
-    const res = await app.inject({ method: 'POST', url: '/api/auth/setup', payload: { token, username: 'me', password: 'correct horse battery' } });
-    cookie = String(res.headers['set-cookie']).split(';')[0];
+    app = await buildServer(env.core, { webDir: null, updater: null });
   });
   afterEach(async () => {
     await app.close();
@@ -25,7 +20,7 @@ describe("What Meko doesn't know", () => {
   });
 
   const call = (method: 'GET' | 'POST', url: string, payload?: object) =>
-    app.inject({ method, url, headers: { cookie }, ...(payload ? { payload } : {}) });
+    app.inject({ method, url, ...(payload ? { payload } : {}) });
   const page = async (projectId: string, state = 'open') => (await call('GET', `/api/projects/${projectId}/meko-gaps?state=${state}`)).json() as MekoGapPage;
 
   const project = (name: string, datapack = true) =>

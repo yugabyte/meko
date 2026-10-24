@@ -34,12 +34,12 @@ your phone.
 You need Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon, and a coding agent:
 [Claude Code](https://claude.com/claude-code), [OpenCode](https://opencode.ai) 2.0.0 or later,
 [Kiro CLI](https://kiro.dev/cli/) 2.32 or later, or more than one.
-[Meko](https://mekodata.ai) gives projects datapacks (shared memory) and lets you share projects.
-AgentK uses a Meko Cloud API key when you give it one, and otherwise the Meko running on this
-computer: press Enter at the key prompt to use it. You can add a Cloud key later on the Meko tab in
-Settings, which links to Meko's sign-up and login pages to make one. With neither, AgentK works
-without datapacks until Meko runs here. The repo is internal for now, so the
-installer is fetched with `gh`. To run it on a Meko on this computer, install Meko (the repo's
+You also need [Meko](https://mekodata.ai) on this computer: it serves AgentK to your browser, at
+`/ext/agentk/` on its own port (7777), and signs you in. Meko also gives projects datapacks (shared
+memory) and lets you share projects. For datapacks, AgentK uses a Meko Cloud API key when you give it
+one, and otherwise the Meko on this computer: press Enter at the key prompt to use it. You can add
+a Cloud key later on the Meko tab in Settings, which links to Meko's sign-up and login pages to make
+one. The repo is internal for now, so the installer is fetched with `gh`. Install Meko (the repo's
 latest release) and then AgentK through it:
 
 ```sh
@@ -47,7 +47,7 @@ gh release download --repo yugabyte/agent-k-local --pattern install.sh --output 
 meko install_extension agentk
 ```
 
-Or AgentK alone, from its newest release:
+Or AgentK's own installer, from its newest release, once Meko is installed:
 
 ```sh
 gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-drafts \
@@ -57,21 +57,26 @@ gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-d
 ```
 
 It offers to install anything that's missing (git, gh, and Claude Code, OpenCode or Kiro CLI when
-none is there: it asks which, or pass `--agent opencode` or `--agent kiro`) and to set up Meko for each agent, asking first. It asks for **local** access (this computer only, no login) or
-**remote** access (other devices too, like your phone, over HTTPS with a login); remote is the
-default over SSH or on a machine with no display. Then it prints the address, or for remote
-access a one-time setup link that creates your login. Local access trusts everyone who can log
-in to the computer, so pick remote on a shared host.
+none is there: it asks which, or pass `--agent opencode` or `--agent kiro`) and to set up Meko for each agent, asking first. Then it prints the address to open.
+
+Who can open it is Meko's setting (`[web] access`: chosen when Meko was installed, in its
+`web.toml`, and `config.toml` can override it): **local** (this computer only, no login) or **remote** (other devices too, like your
+phone, over HTTPS with a login); remote is the default over SSH or on a machine with no display.
+For remote access, `meko setup_link` on the host prints a one-time link that creates your login.
+Local access trusts everyone who can log in to the computer, so pick remote on a shared host.
+An AgentK that served browsers itself (on port 7777, before Meko did) hands its port, access,
+certificate and login over to Meko by itself, so the same password signs in; its address moves to
+`/ext/agentk/` on the same port.
 
 Run again where AgentK is already installed with its services set up, the installer says so
 and stops without changing anything. Newer releases are offered in AgentK itself (the Update
-banner, or the button in Settings). To change its setup (repos folder, access, port, Meko) or set
-up its services again, run `agentk install`; to download and install it again, pass
-`--reinstall` (`… | sh -s -- --reinstall`). Options for `agentk install`, like `--port`,
-also make it install again, so they're never dropped.
+banner, or the button in Settings). To change its setup (repos folder, Meko) or set up its services
+again, run `agentk install`; to download and install it again, pass `--reinstall`
+(`… | sh -s -- --reinstall`). Options for `agentk install`, like `--repos-root`, also make it install
+again, so they're never dropped.
 
-Forgot your password? Run `agentk setup-link` on the host and open the link it prints to
-choose a new username and password (the sign-in screen's **Forgot password?** says the same).
+Forgot your password? Run `meko setup_link` on the host and open the link it prints to choose a
+new username and password (Meko's sign-in screen says the same).
 
 AgentK keeps its data in Meko's data folder, under `extensions/agentk`: `~/.meko/extensions/agentk`,
 or under `MEKO_HOME` when you set that for Meko. You don't pick another place. If your home directory
@@ -312,11 +317,10 @@ Design: [`docs/design.md`](docs/design.md), an index with one file per area unde
 
 | Command | What it does |
 |---|---|
-| `agentk ui` | Open the web UI in your browser (`open` on macOS, `xdg-open` on Linux); with no display to open it on, such as over SSH, it prints the URL |
-| `agentk status` | Services, URL, certificate fingerprint, sessions, and whether the server answers |
+| `agentk ui` | Open AgentK in your browser through Meko (`open` on macOS, `xdg-open` on Linux); with no display to open it on, such as over SSH, it prints the URL |
+| `agentk status` | Services, the URL Meko serves it at, sessions, and whether the server answers |
 | `agentk stop` / `start` | Stop the server and the session host, ending every session, and start them again (sessions resume). The services also start again at the next login |
 | `agentk logs -f` | Follow the server log (`logs/server.log` in AgentK's home) |
-| `agentk setup-link` | A new one-time login link; also resets a lost password |
 | `agentk uninstall [--purge [--delete-worktrees]]` | Remove the services; `--purge` also deletes AgentK's home (in Meko's data folder) except session worktrees and designs, which only `--delete-worktrees` removes (after reporting uncommitted changes). Branches are always kept. |
 | `agentk attach [session]` | Show a session's terminal in yours (`Ctrl+\` detaches; Claude keeps running); with no name, list the sessions |
 | `agentk host restart` | Restart the session host (its sessions resume); with the server stopped, `host stop` ends every session until the server starts |

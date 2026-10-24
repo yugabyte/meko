@@ -384,7 +384,8 @@ export interface CallHomeInstall {
   kiro?: string;
   /** OpenCode's version, left out when it's off or can't be read. */
   opencode?: string;
-  access: 'local' | 'remote';
+  /** 'meko': the Meko on this computer serves AgentK to browsers. Older versions sent 'local' or 'remote'. */
+  access: 'meko';
   service: 'systemd' | 'launchd' | 'none';
   /** Sharing is 'api' when AgentK shares through Meko's API, 'none' when it can't (Meko off, or no API URL). */
   meko: { enabled: boolean; keySource: MekoKeySource | 'none'; sharing: 'api' | 'none' };
@@ -1611,27 +1612,11 @@ export interface SearchResult {
   datapackId?: string;
 }
 
-export interface AuthStatus {
-  setupRequired: boolean;
-  /** The setup asked for replaces an existing login (a `setup-link` run to recover a lost password). */
-  reset: boolean;
-  loggedIn: boolean;
-  username: string | null;
-  totpEnabled: boolean;
-  /**
-   * No login needed on this connection: the server listens only on this computer (127.0.0.1 or
-   * ::1) and the request came from it, to localhost.
-   */
-  localAccess: boolean;
-}
-
 export interface Settings {
   reposRoots: string[];
   reposDepth: number;
   cloneInto: string;
   updateChannel: 'stable' | 'prerelease' | 'off';
-  bind: string;
-  port: number;
   /** `[server] name`: shown in the rail next to the user name; '' uses the machine's host name. */
   serverName: string;
   /** The machine's short host name, what an empty `serverName` shows. Read-only. */
@@ -2088,23 +2073,6 @@ export interface AskAnswerRequest {
 
 // ---- Requests ----
 
-export interface SetupRequest {
-  token: string;
-  username: string;
-  password: string;
-}
-
-export interface LoginRequest {
-  username: string;
-  password: string;
-  totp?: string;
-}
-
-export interface LoginError {
-  error: string;
-  totpRequired?: boolean;
-}
-
 export type DatapackChoice =
   /** No dedicated datapack (Meko is off, or the plan's datapack limit is reached); one can be added later. */
   | { mode: 'none' }
@@ -2301,12 +2269,6 @@ export type SessionAction =
   /** Save what the session learned to its project's dedicated datapack (the learn step); 409 while Claude is busy or one runs. */
   | 'learn';
 
-export interface TotpEnrollResponse {
-  secret: string;
-  otpauthUrl: string;
-  qrSvg: string;
-}
-
 // ---- WebSockets ----
 //
 // /ws/events: server → client JSON ServerEvent. A full `state` is sent on
@@ -2389,20 +2351,11 @@ export type TermServerMessage =
 // Request bodies must be JSON (`Content-Type: application/json`); other body types get 415.
 // Some errors add a machine-readable `code` next to `error`: DATAPACK_LIMIT (402, the Meko plan's
 // datapack limit), MEKO_OFF (409).
-// Every /api route except the three marked "no auth" answers 401 without a login cookie, and the
-// cookie is re-issued (fresh Max-Age) as its expiry slides forward. The exception is local access
-// (AuthStatus.localAccess): when the server listens only on loopback, requests from this computer
-// to localhost need no cookie.
+// The server listens only on its unix socket (`Paths.webSock`), and Meko serves it to browsers at
+// /ext/agentk/ with the prefix stripped: Meko signs people in, so every request on the socket is
+// let in. Writes and WebSocket upgrades still refuse a cross-origin `Origin`.
 //
 // GET    /healthz                              → { ok: true, version }
-// GET    /api/auth/status                      → AuthStatus            (no auth; reset: a setup link replaces the login)
-// POST   /api/auth/setup      SetupRequest     → 204 + cookie | 400 | 403 (bad link) | 429   (no auth)
-// POST   /api/auth/login      LoginRequest     → 204 + cookie | 401 LoginError | 429
-// POST   /api/auth/logout                      → 204
-// POST   /api/auth/password   { current, next }→ 204 | 400 | 409 (no login set up); signs out every other browser
-// POST   /api/auth/totp/enroll                 → TotpEnrollResponse | 409 (no login set up)
-// POST   /api/auth/totp/confirm { code }       → 204
-// POST   /api/auth/totp/disable { code }       → 204
 // GET    /api/state                            → AppState
 // GET    /api/repos                            → ReposResponse
 // GET    /api/repos/branches?path=             → RepoBranches   (400 unless the path is a scanned repo or a project's)

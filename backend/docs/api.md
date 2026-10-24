@@ -1,21 +1,38 @@
 # Meko backend: MCP and REST
 
-Agents (Claude Code, AgentK, and the CLI's tool commands) reach Meko over MCP at `/mcp`, and the web
-UI ([web-ui.md](web-ui.md)) over `/api/v1`, with Meko Cloud's tool names, arguments, paths and
+Agents (Claude Code, AgentK, and the CLI's tool commands) reach Meko over MCP at `/mcp` on the API
+listener, and the web UI ([web-ui.md](web-ui.md)) over `/api/v1` on the web listener ([web.md](web.md)), with Meko Cloud's tool names, arguments, paths and
 reply shapes, written here from scratch. Both call the service layer in `internal/memory`
 ([memory-engine.md](memory-engine.md)); the knowledge-file tools and routes are designed in
 [knowledge.md](knowledge.md) and listed here beside the others.
 
 ## Auth
 
+On the API listener (`127.0.0.1:7778`):
+
 | Route | Admin token | Client token | No credential |
 |---|---|---|---|
 | `/healthz` | yes | yes | yes |
-| `/api/v1/status`, `/api/v1/version`, `/api/v1/ui-code` | yes | 403 | 401 |
+| `/api/v1/status`, `/api/v1/version`, `/api/v1/auth/setup-link` (`meko setup_link`) | yes | 403 | 401 |
 | `/api/v1/server` (the web UI's status page: `/api/v1/status`'s reply) | yes | yes | 401, or yes with `auth = "none"` |
 | Every other route (`/mcp`, the data routes) | yes | yes | 401, or yes with `auth = "none"` |
 | The knowledge-file links, `/api/v1/knowledge-uploads/<ticket>` and `/api/v1/knowledge-downloads/<ticket>` | yes | yes | yes: the ticket is the credential |
-| The web UI's files, `/` and every GET no other route takes, and `/api/v1/ui-code/redeem` ([web-ui.md](web-ui.md)) | yes | yes | yes: the files are static, and the one-time code is the redeem's credential |
+
+The web listener ([web.md](web.md)) serves the same `/mcp`, data routes, `/api/v1/server` and
+knowledge-file links to a browser with local access or the owner's session, never with a token, and
+has no admin-only routes. Its own routes:
+
+| Route | Credential | What |
+|---|---|---|
+| `GET /api/v1/auth/status` | none | `{access, local_access, signed_in, setup_required, reset, username, totp_enabled}`: `setup_required` while remote access has no login (or a setup link waits and this browser isn't signed in), `reset` when that link replaces a login |
+| `POST /api/v1/auth/setup` `{token, username, password}` | none: the setup link's token | Sets the login, signs every browser out, and signs this one in (the cookie). 400 `VALIDATION_ERROR`, 403 `FORBIDDEN` (a link that's wrong or used), 429 `RATE_LIMITED` |
+| `POST /api/v1/auth/login` `{username, password, totp?}` | none | Signs in (the cookie). 401 `BAD_LOGIN`, 401 `TOTP_REQUIRED` (no code, or a wrong one: the message says which), 429 `RATE_LIMITED` |
+| `POST /api/v1/auth/logout` | none | Ends this browser's session and the WebSockets it opened |
+| `POST /api/v1/auth/password` `{current, next}` | session or local | Signs every other browser out. 400 `VALIDATION_ERROR`, 409 `CONFLICT` (no login yet) |
+| `POST /api/v1/auth/totp/enroll`, `confirm {code}`, `disable {code}` | session or local | Enroll gives `{secret, otpauth_url}`; confirm turns two-step sign-in on with a code from it; disable turns it off with a current code |
+| `GET /api/v1/extensions` | session or local | `[{name, title, path, available}]` |
+| `/ext/<name>/*` | session or local | The extension's web UI ([web.md](web.md)); a page without a session goes to `/signin?next=` |
+| The web UI's files: `/` and every GET no other route takes | none | Static |
 
 - **The admin token** is the CLI's ([design.md](design.md#auth)): new at each start, in `run/admin.token`.
 - **The client token** is what MCP and REST clients send as `Authorization: Bearer <token>`:
@@ -31,11 +48,14 @@ reply shapes, written here from scratch. Both call the service layer in `interna
 - **`[server] auth = "none"`** (or `MEKO_AUTH=none`) lets `/mcp` and the data routes take requests
   with no credential; any `Authorization` header is then ignored unless it's the client or admin
   token. The default is `"token"`. An unknown value is refused at start, so a typo never turns auth
-  off. Everything else stays: status and version still need the admin token, the server still
-  listens on 127.0.0.1 only, and the Host and Origin checks still apply. Each start logs a warning,
+  off. Everything else stays: status and version still need the admin token, the API listener still
+  listens on 127.0.0.1 only, and the Host and Origin checks still apply. It doesn't touch the web
+  listener, which never takes a token. Each start logs a warning,
   and `meko status` shows `Auth: none` with what it means.
-- The credential a request got in with (`admin`, `client` or `none`) is recorded with each call,
-  never the token. Every 401 says `WWW-Authenticate: Bearer`.
+- The credential a request got in with (`admin`, `client` or `none`, and on the web listener
+  `session` or `local`) is recorded with each call, never the token. `knowledgebase_upload_file`,
+  which reads a path as Meko's user, takes only `admin` or `client`. Every 401 on the API listener
+  says `WWW-Authenticate: Bearer`; the web listener's don't, since it takes no Bearer token.
 - Per-client API keys aren't built yet: every client shares the client token.
 - **The knowledge-file links** take no token, as S3's presigned URLs need none: a
   browser form post, a new download tab and an agent posting to an upload link can't send one.
@@ -185,11 +205,12 @@ datapack: Meko makes the default only on first start, and once it's gone `search
 file to its link and follows `knowledgebase_document_status` until it's indexed, a file already uploaded too
 (`--no-wait` returns once it's uploaded; a file that fails makes the command exit 1), and `meko upload_status
 <key>`. `meko list mcp-tools` prints each tool with its description's first sentence (`--json` adds titles),
-from the same definitions `/mcp` serves, so it needs no server. `meko ui` opens the web UI ([web-ui.md](web-ui.md)) with the client token in the link's
-fragment (a one-time code, not the token: the link passes through the browser's command line), and `--no-open`
-only prints the link. `meko token
+from the same definitions `/mcp` serves, so it needs no server. `meko ui [path]` opens the web listener's URL ([web.md](web.md)), at a path when given
+(`/ext/agentk/` for AgentK); the link carries no credential, and `--no-open` only prints it. With remote
+access and no login yet, it prints a setup link instead; `meko setup_link` prints one any time. `meko token
 --mcp` prints the `claude mcp add` command that registers Meko, named `meko`: AgentK recognizes
-Meko's tools by that name (`mcp__meko__*`), and `meko token --json` prints the MCP URL, the token
+Meko's tools by that name (`mcp__meko__*`), and `meko token --json` prints the MCP URL, the web
+listener's (`web_url`, where AgentK finds its own address), the token
 and whether a server runs, for installers (AgentK's reads it). `meko logs` and the commands that
 install and run Meko are in [install.md](install.md).
 
@@ -266,7 +287,7 @@ the server takes. (The CLI calls `/api/v1/status`, which `internal/server` serve
 | Area | Routes | Notes |
 |---|---|---|
 | Local user | `GET /auth/config`, `GET /auth/me`, `PATCH /auth/me`, `PATCH /auth/me/profile`, `GET /auth/me/usage` | `{provider: "none"}`. `/auth/me` gives the install's user as `account_id`, the profile kept in `settings` (Local User until changed), `email_verified: true`, `user_type: "pro"`; onboarding starts done (the web UI has no onboarding). Usage counts datapacks, conversations, searches, adds and tracked tokens. |
-| Datapacks | `GET`, `POST /datapacks`; `GET`, `PATCH`, `DELETE /datapacks/:id`; `GET /datapacks/:id/provision-status`, `/agents`, `/conversations/count` | The list is newest first, every row `grant: "owner"` with the local user as owner, counts left at 0 as in Cloud; describe counts. `POST` replies 201 with Cloud's blanked `mcp_server` and `db_access`. `provision-status` gives the MCP URL and the client token as `mcp_api_key`, for the Connect page, only to a request that sent a credential: with `auth = "none"`, one that sent none gets `""`, so the token keeps its meaning once auth is back on. Agents are those seen in memories, conversations and the call log. |
+| Datapacks | `GET`, `POST /datapacks`; `GET`, `PATCH`, `DELETE /datapacks/:id`; `GET /datapacks/:id/provision-status`, `/agents`, `/conversations/count` | The list is newest first, every row `grant: "owner"` with the local user as owner, counts left at 0 as in Cloud; describe counts. `POST` replies 201 with Cloud's blanked `mcp_server` and `db_access`. `provision-status` gives the MCP URL and the client token as `mcp_api_key`, for the Connect page, only to a request that sent a token or comes from the owner signed in on the web listener: with `auth = "none"`, or with the web listener's local access (which every user of the computer has), it's `""`, and the page says to run `meko token`. The token lets a caller do what those don't (`knowledgebase_upload_file` reads a path as Meko's user), and keeps its meaning once auth or access changes. Agents are those seen in memories, conversations and the call log. |
 | Metrics | `GET /datapacks/:id/metrics`, `GET /datapacks/:id/token-savings` | From the call log (90 days): searches (`context_search` as hybrid, `memory_search` as memory, `knowledgebase_search` as kb), tokens sent and saved, score bands, agents, last access, 30 days of activity. Sizes come from the store, knowledge files' (`kb_file_count`, `kb_chunk_count`, `kb_bytes`) too. Extraction fields are 0 until extraction is built. `agent_count` leaves out the web UI's own agent, `meko_web_ui`: it's the user. `?days=N` (Meko's own) narrows the searches and the activity to the last N days (at most 90); without it they're Cloud's: 90 days of totals, 30 of activity. |
 | Export (Meko's own) | `GET /datapacks/:id/export` | One datapack as a zip to download (`meko-<name>-<date>.zip`), streamed. JSON Lines per kind: `memories.jsonl` (`{id, text, hash, state (learning or kept), agent_id, conversation_id, role, actor_id, attributed_to, expiration_date, metadata, created_at, updated_at, history, embedding}`), `collective_memories.jsonl` (`{..., source, connector_id, promoted_at, promoted_by, embedding}`), `conversations.jsonl` (`{id, title, agent_id, session_id, run_id, metadata, created_at, updated_at, turns: [{id, input, output, reasoning, plan, metadata, created_at, chunks: [{index, text, embedding}]}]}`), `knowledge.jsonl` (`{id, filename, type, sha256, size_bytes, status, error, uploaded_at, completed_at, path, chunks: [{index, text, metadata, embedding}]}`), `artifacts.jsonl` (`{id, filename, content_type, sha256, size_bytes, agent_id, created_at, path}`) and `call_log.jsonl` (every call with its steps). The bytes are at each `path`: `knowledge/<sha256>.<ext>` and `artifacts/<sha256>.<ext>`. Knowledge files live on disk, outside the snapshot, so one deleted while the export runs goes out with `path: ""` and no bytes. `datapack.json`, written last, is `{format: "meko-datapack-export", version: 2, exported_at, meko_version, embedding: {model, dims}, left_out, counts, datapack}`. An `embedding` is null until the sweep has embedded its text. Ids and dates are kept, and every read goes through one snapshot of the database, so writes made while it runs neither drop nor repeat a row; a memory a promotion stopped partway on is exported once, as a collective memory. Keyword indexes and entities are left out (rebuilt from the text on import). Nothing imports it yet: it's the first half of moving a datapack to Meko Cloud. A failure before the body starts gets an error reply; one after it is logged and the connection is cut, so the download fails instead of ending cleanly. `meko export` calls it, checks the zip opens and holds `datapack.json`, and won't replace a file unless `--force`. |
 | Usage (Meko's own) | `GET /datapacks/:id/usage` | From the call log (90 days), for the web UI's Analytics tab; Cloud has no such route. `{calls, errors, tools: [{tool, calls, errors, p50_ms, p95_ms}], steps: [{step, calls, p50_ms, p95_ms}], agents: [{agent_id, calls, searches, last_at}], recent: [{id, at, tool, agent_id, ok, error_code, ms, memory_n, kb_n, conversation_n, steps: [{step, ms, n}]}] (the latest 25), input_tokens, output_tokens}`, over 90 days or `?days=N`. |

@@ -31,7 +31,8 @@ type Options struct {
 	Service *memory.Service
 	Version string
 	Log     *slog.Logger
-	// Credential is the credential a request got in with (admin, client or none), recorded with
+	// Credential is the credential a request got in with (admin, client, none, or the web
+	// listener's session or local), recorded with
 	// each call. The server's auth check sets it before the handler runs.
 	Credential func(*http.Request) string
 }
@@ -75,7 +76,7 @@ func NewHandler(o Options) http.Handler {
 	}
 	// One server per credential, so each call knows (and logs) what it got in with. Made up front:
 	// the SDK calls getServer from concurrent requests.
-	for _, cred := range []string{"admin", "client", "none", ""} {
+	for _, cred := range []string{"admin", "client", "none", "session", "local", ""} {
 		serverFor(cred)
 	}
 	return sdk.NewStreamableHTTPHandler(func(r *http.Request) *sdk.Server {

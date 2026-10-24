@@ -159,7 +159,8 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	want(t, "restart", code, 0, out, "Meko restarted")
 	code, out, _ = run("stop", "--data-dir", dir, "--keep-extensions")
 	want(t, "stop --keep-extensions", code, 0, out, "Meko stopped\n")
-	if got := readLog(t, log); got != "stop\nstart\n" {
+	// The server asks it where it listens (_handoff) at each start; that's not starting or stopping it.
+	if got := strings.ReplaceAll(readLog(t, log), "_handoff --json\n", ""); got != "stop\nstart\n" {
 		t.Errorf("extension ran %q (restart and --keep-extensions must leave it alone)", got)
 	}
 
