@@ -153,7 +153,8 @@ func runRestart(l paths.Layout, o startOptions, stdout, stderr io.Writer) int {
 
 // runExtensions runs `<command> <action>` for every registered extension, one after another. A
 // failure is reported and the others still run; an extension that hangs holds this up for at most
-// its timeout (extensions.StopTimeout for stop), and then Meko goes on.
+// its timeout (extensions.StopTimeout for stop), and then Meko goes on. A known extension whose
+// command is gone (its home moved, say) is looked for again, and the registry keeps what's found.
 func runExtensions(l paths.Layout, action string, stdout, stderr io.Writer) {
 	reg, err := extensions.Load(l.Root)
 	if err != nil {
@@ -163,12 +164,38 @@ func runExtensions(l paths.Layout, action string, stdout, stderr io.Writer) {
 	for _, name := range reg.Names() {
 		e := reg.Entries[name]
 		if _, err := os.Stat(e.Command); errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintf(stderr, "meko: extension %s is gone (%s); meko uninstall_extension %s forgets it\n",
-				name, e.Command, name)
-			continue
+			found := findAgain(l, reg, name)
+			if found == "" {
+				fmt.Fprintf(stderr, "meko: extension %s is gone (%s); meko uninstall_extension %s forgets it\n",
+					name, e.Command, name)
+				continue
+			}
+			e = reg.Entries[name]
 		}
-		if err := e.Run(action, stdout, stderr); err != nil {
+		if err := e.Run(l.Root, action, stdout, stderr); err != nil {
 			fmt.Fprintf(stderr, "meko: extension %s didn't %s: %v\n", name, action, err)
 		}
 	}
+}
+
+// findAgain looks for a known extension's command again, and saves it in the registry when it's
+// found. It returns the command, or "".
+func findAgain(l paths.Layout, reg *extensions.Registry, name string) string {
+	cat, ok := extensions.Known[name]
+	if !ok {
+		return ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	cmd := cat.Find(name, home, l.Root)
+	if cmd == "" {
+		return ""
+	}
+	e := reg.Entries[name]
+	e.Command = cmd
+	reg.Entries[name] = e
+	_ = reg.Save() // found again next time if this fails
+	return cmd
 }

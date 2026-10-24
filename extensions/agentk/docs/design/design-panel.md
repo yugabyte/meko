@@ -33,7 +33,7 @@ text. The Design prompt tells Claude not to write tag-like text in an Artifact's
 markdown fences are taken out as text before any HTML parsing, so they're unaffected.
 
 **Open questions and key design decisions.** Besides the design, AgentK gives you its open questions in
-`~/.agent-k-local/designs/<session>/questions.json` (`{"questions": [{"id", "kind", "question", "context",
+`<home>/designs/<session>/questions.json` (`{"questions": [{"id", "kind", "question", "context",
 "options": [{"label", "detail"}], "recommended", "status": "open" | "resolved", "decision", "decidedBy",
 "meko"}]}`): through the [mod's `design_questions` tool](mod.md) when the session's agent has it, which saves
 the file and shows them at once, or else by writing the file, read at the turn's end (Kiro, which

@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, rmdirSync, rmSync, unlinkSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmdirSync, rmSync, unlinkSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { hostname, userInfo } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { getOwner, issueSetupToken } from './auth.js';
@@ -21,18 +21,17 @@ import {
   MekoSetupError, claudeHasMekoMcp, ensureMekoSetup, envKeyGap, latestMekoSetup, mekoClaudeGaps, mekoKeyForConfig, readClaudeMeko, runMekoSetup,
 } from './mekosetup.js';
 import { claudeTokenGaps } from './mekoclaude.js';
-import { expandHome, getPaths, tildify, type Paths } from './paths.js';
-import { dropOldNames, hostServices, renderServiceFiles, ServiceError, SERVICES, type ServiceManager } from './service.js';
+import { expandHome, getPaths, oldHome, tildify, type Paths } from './paths.js';
+import { dropOldNames, hostServices, renderServiceFiles, samePath, ServiceError, SERVICES, type ServiceManager } from './service.js';
 import { SessionHost } from './hostclient.js';
 import { COMMAND, commandLinks } from './cmdlink.js';
 import { style, ui } from './tty.js';
 import { waitForServer } from './health.js';
 import { loadTls } from './tls.js';
 import { removeKiroAgent } from './kiro.js';
+import { ensurePrivateDir, fsType, isNetworkFs, PrivateDirError } from './fstype.js';
+import { checkMove, makeHomeParent, mekoDirOf, tmpHomeWarning } from './movehome.js';
 import { kiroAgentLoadsMcp, kiroMekoGaps, readKiroMeko } from './mekokiro.js';
-
-// Linux names from `stat -f -c %T`; macOS names from `mount`.
-const NETWORK_FS = new Set(['nfs', 'nfs4', 'cifs', 'smb2', 'smbfs', 'fuse.sshfs', 'afs', 'lustre', 'gpfs', 'afpfs', 'webdav', 'macfuse', 'osxfuse']);
 
 class InstallError extends Error {}
 
@@ -75,39 +74,6 @@ function makePrompter(interactive: boolean): { ask: Prompter; close: () => void 
 // ---------------------------------------------------------------------------
 // Steps
 
-/** The mount point in `df -P <dir>` output (the text after the capacity column). */
-export function parseDfMountPoint(df: string): string | null {
-  const last = df.trim().split('\n').at(-1) ?? '';
-  return /\s\d+%\s+(.+)$/.exec(last)?.[1] ?? null;
-}
-
-/** The filesystem type of `mountPoint` in macOS `mount` output ("<dev> on <dir> (<type>, …)"). */
-export function parseMountType(mount: string, mountPoint: string): string | null {
-  const marker = ` on ${mountPoint} (`;
-  for (const line of mount.split('\n')) {
-    const i = line.lastIndexOf(marker);
-    if (i >= 0) return /^[^,)]+/.exec(line.slice(i + marker.length))?.[0].trim() ?? null;
-  }
-  return null;
-}
-
-export function fsType(dir: string): string | null {
-  if (process.platform !== 'darwin') {
-    const r = trySh('stat', ['-f', '-c', '%T', dir]);
-    return r.ok ? r.out : null;
-  }
-  // BSD stat has no -c: find the mount with df, then read its type from mount.
-  const df = trySh('df', ['-P', dir]);
-  const mp = df.ok ? parseDfMountPoint(df.out) : null;
-  const mount = mp ? trySh('mount', []) : null;
-  return mp && mount?.ok ? parseMountType(mount.out, mp) : null;
-}
-
-export function isNetworkFs(dir: string): boolean {
-  const t = fsType(dir);
-  return !!t && NETWORK_FS.has(t);
-}
-
 /** Pick a local-disk location for state.db when the default is on a network filesystem. */
 function localDbLocation(): string {
   const user = userInfo().username;
@@ -120,25 +86,6 @@ function localDbLocation(): string {
   const dir = join('/var/tmp', user, 'agent-k-local');
   ensurePrivateDir(dir);
   return join(dir, 'state.db');
-}
-
-/**
- * Creates `dir` for private state in a shared place like /var/tmp, where another user could have
- * made the directories first. Refuses unless `dir` and its parent are real directories (not
- * symlinks) owned by this user and the parent isn't writable by others; then makes `dir` 0700.
- */
-export function ensurePrivateDir(dir: string, uid: number | undefined = process.getuid?.(), gid: number | undefined = process.getgid?.()): void {
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const fix = 'Remove it, or set state.db_path in config.toml to a local folder only you can write to.';
-  for (const d of [dirname(dir), dir]) {
-    const st = lstatSync(d);
-    if (st.isSymbolicLink() || !st.isDirectory()) throw new InstallError(`${d} is not a directory (it may be a symlink). ${fix}`);
-    if (uid !== undefined && st.uid !== uid) throw new InstallError(`${d} is owned by another user. ${fix}`);
-    // Group write is fine for our own primary group (a umask 002 system with a group per user).
-    const othersWrite = st.mode & 0o002 || (st.mode & 0o020 && (gid === undefined || st.gid !== gid));
-    if (d !== dir && othersWrite) throw new InstallError(`${d} can be written to by other users. ${fix}`);
-  }
-  chmodSync(dir, 0o700);
 }
 
 /** A failed service command, with what to check next and how to go without the services. */
@@ -417,6 +364,8 @@ export async function runInstall(args: string[]): Promise<void> {
   const { ask, close } = makePrompter(interactive);
 
   try {
+    // In Meko's data folder, which may not be there yet (made private as Meko does in /var/tmp).
+    makeHomeParent(paths.home);
     mkdirSync(paths.home, { recursive: true, mode: 0o700 });
     // A shared home in use on another host: installing here would pin its services to this host.
     try {
@@ -427,6 +376,12 @@ export async function runInstall(args: string[]): Promise<void> {
     }
     const fresh = !existsSync(paths.config);
     const cfg: Config = loadConfig(paths);
+    // The Meko data folder this install is in, as the installer found it (from MEKO_HOME or
+    // XDG_STATE_HOME in this shell, which the services don't have), or the one Meko's
+    // `install_extension` names: the server and a move go by it, never resolving it again.
+    const inMeko = mekoDirOf(paths.home);
+    if (inMeko) cfg.meko.home = inMeko;
+    else if (process.env.MEKO_HOME) cfg.meko.home = resolve(process.env.MEKO_HOME);
 
     // 1. Basics
     if (!process.env.AK_INSTALLER) ui.title('AgentK setup');
@@ -523,6 +478,11 @@ export async function runInstall(args: string[]): Promise<void> {
 
     saveConfig(paths, cfg);
     ui.ok('Config', tildify(paths.config));
+    const tmpWarning = tmpHomeWarning(paths.home);
+    if (tmpWarning) ui.warn('Home', tmpWarning);
+    const move = checkMove(paths, cfg);
+    if (move && 'plan' in move) ui.note(`AgentK's home moves to ${tildify(move.plan.to)} once the server has started: every session ends and resumes there.`);
+    else if (move) ui.warn('Home', `stays in ${tildify(paths.home)} for now: ${move.skip}`);
     // Create the certificate now (the server reuses it), so a problem with it shows up here.
     const tls = await loadTls(paths, cfg);
     if (tls) ui.ok('Certificate', tls.selfSigned ? 'self-signed, created for this host' : 'from config');
@@ -579,7 +539,7 @@ export async function runInstall(args: string[]): Promise<void> {
       handle.close();
     }
   } catch (e) {
-    if (e instanceof InstallError || e instanceof ServiceError) {
+    if (e instanceof InstallError || e instanceof ServiceError || e instanceof PrivateDirError) {
       process.stderr.write('\n');
       ui.fail('Install failed', e.message);
       process.exitCode = 1;
@@ -642,6 +602,15 @@ export function purgeHome(paths: Paths, all: boolean): string[] {
   });
   if (!kept.length) rmSync(paths.home, { recursive: true, force: true });
   return kept;
+}
+
+/** Removes `~/.agent-k-local` when it's the link to `home` that the move left. */
+export function removeOldHomeLink(home: string, old: string = oldHome()): void {
+  try {
+    if (lstatSync(old).isSymbolicLink() && samePath(readlinkSync(old), home)) unlinkSync(old);
+  } catch {
+    // not there
+  }
 }
 
 /**
@@ -718,6 +687,8 @@ export async function runUninstall(args: string[]): Promise<void> {
       const db = dbPath(paths, loadConfig(paths));
       const kept = purgeHome(paths, deleteWork);
       if (!db.startsWith(paths.home + '/')) removeDb(db);
+      // The link the move into Meko's data folder left at the old home goes with what it pointed at.
+      if (!kept.length) removeOldHomeLink(paths.home);
       say(kept.length ? `Removed ${tildify(paths.home)} except ${kept.map(tildify).join(' and ')}.` : `Removed ${tildify(paths.home)}.`);
       if (deleteWork) say('Run `git worktree prune` in each repo to forget the deleted worktrees.');
     } else {
