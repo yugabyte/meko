@@ -197,7 +197,8 @@ your phone can connect.
   with its hooks added, and goes through the same stages, gates, design review, PR flow, recovery
   and Resume. What only Claude Code does stays with it: designs as Artifacts, AgentK's mod
   (answering Claude's questions in AgentK, prompts sent mid-turn) and its 5-hour and weekly limits;
-  the rail shows Kiro's own plan instead (credits used of the plan, read hourly). Kiro writes its
+  the rail shows Kiro's own plan instead (credits used of the plan, read hourly and, while Kiro is in
+  use, at most every 10 min when a turn ends). Kiro writes its
   designs as markdown, AgentK types its prompts into its terminal, and since Kiro says nothing while
   it waits for a permission answer, the session shows as working until you answer in the terminal
   (or turn on **Let Kiro run any tool**). OpenCode works like Kiro there, but says when it needs

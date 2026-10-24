@@ -9,6 +9,8 @@ import { errMsg, type Logger } from './log.js';
 const KV_KEY = 'kiro_plan';
 /** How often the plan is read while Kiro is in use. */
 export const KIRO_PLAN_EVERY_MS = 60 * 60 * 1000;
+/** The most often a session's turn ending re-reads the plan, so a run of turns reads once, not per turn. */
+export const KIRO_PLAN_TURN_EVERY_MS = 10 * 60 * 1000;
 /** A `/usage` run takes about 4 s. */
 const RUN_TIMEOUT_MS = 20_000;
 
@@ -30,17 +32,23 @@ export interface KiroPlanDeps {
 
 /**
  * Kiro's plan allowance for the rail, read with its `/usage` command (`kiro-cli chat
- * --no-interactive /usage`, which bills nothing) at start, hourly, and when the first Kiro session
- * starts. Only once a session has run on Kiro in AgentK: an install that never uses Kiro never runs
- * it for this. A read that fails keeps the last one, which the rail shows with its age. Each run is
- * the inert `agentk-usage` agent's, in a folder of its own, and every session Kiro keeps of a run
- * there is deleted afterwards, whether or not the run said its id.
+ * --no-interactive /usage`, which bills nothing) at start, hourly, when the first Kiro session
+ * starts, and — at most every `KIRO_PLAN_TURN_EVERY_MS` — when a Kiro session's turn ends, so an
+ * active account's reading stays fresh between the hourly reads. Only once a session has run on Kiro
+ * in AgentK: an install that never uses Kiro never runs it for this. A read that fails keeps the last
+ * one, which the rail shows with its age. Each run is the inert `agentk-usage` agent's, in a folder
+ * of its own, and every session Kiro keeps of a run there is deleted afterwards, whether or not the
+ * run said its id.
  */
 export class KiroPlanStore {
   private last: KiroPlan | null = null;
   private reading: Promise<void> | null = null;
   private warned = false;
   private run: AskRunner;
+  /** When a read last actually ran (passed the available/used guard); null until the first. */
+  private lastAt: number | null = null;
+  /** Set once the server is stopping, so no new read starts during shutdown. */
+  private stopping = false;
 
   constructor(private deps: KiroPlanDeps) {
     this.run = deps.run ?? runClaudeOnce;
@@ -51,17 +59,37 @@ export class KiroPlanStore {
     }
   }
 
+  /**
+   * The server is stopping: refuse to start a new read, so a turn reaching `onTurnEnd` during
+   * shutdown (hook handlers aren't awaited) can't start a `/usage` run after `Core.stop` has already
+   * waited on `settled()`. A read already running is left to finish, and `settled()` still waits for it.
+   */
+  stop(): void {
+    this.stopping = true;
+  }
+
   /** Some session, archived ones included, has run on Kiro. */
   used(): boolean {
     return !!get(this.deps.db, `SELECT 1 FROM sessions WHERE harness = 'kiro' LIMIT 1`);
   }
 
   /** Reads the plan once more; a read already running is the one waited on. Never throws. */
-  refresh(): Promise<void> {
-    this.reading ??= this.read().finally(() => {
+  refresh(now = Date.now()): Promise<void> {
+    this.reading ??= this.read(now).finally(() => {
       this.reading = null;
     });
     return this.reading;
+  }
+
+  /**
+   * A Kiro session's turn ended: re-reads the plan so an active account's reading stays fresh, but
+   * only when the last read (or one running) is older than `minAgeMs`, so a run of turns reads once,
+   * not per turn. A read already running counts, and is the one waited on. Never throws.
+   */
+  refreshIfStale(minAgeMs: number, now = Date.now()): Promise<void> {
+    if (this.reading) return this.reading;
+    if (this.lastAt !== null && now - this.lastAt < minAgeMs) return Promise.resolve();
+    return this.refresh(now);
   }
 
   /** Resolves once the read running now, if any, is done (the deletes it started may still run). Never throws. */
@@ -82,9 +110,11 @@ export class KiroPlanStore {
     return this.last;
   }
 
-  private async read(): Promise<void> {
+  private async read(now = Date.now()): Promise<void> {
     try {
-      if (!this.deps.available() || !this.used()) return;
+      if (this.stopping || !this.deps.available() || !this.used()) return;
+      // Past the guard: a read is actually running, so the turn trigger's clock starts here.
+      this.lastAt = now;
       const cmd = this.deps.command();
       const cwd = this.deps.cwd;
       mkdirSync(cwd, { recursive: true });

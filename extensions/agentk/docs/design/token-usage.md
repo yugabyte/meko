@@ -204,8 +204,10 @@ own, to keep the block small. Each meter names its agent: **Claude 5-hour**, **C
 stream-json /usage` prints the account's credits this period (about 4 s; it bills nothing):
 `Estimated Usage | resets on 2026-11-01 | KIRO FREE` and `Credits (36.02 of 50 covered in plan),
 72.0%` on kiro-cli 2.32.0. `KiroPlanStore` (`src/server/kiroplan.ts`) runs it at start (once Kiro's
-version is read), hourly, and when the first Kiro session is created, so that session's plan shows
-without waiting for the hour; never after turns. It runs only while Kiro is available and some
+version is read), hourly, when the first Kiro session is created, so that session's plan shows
+without waiting for the hour, and — at most once every 10 min — when a Kiro session's turn ends, so
+an active account's reading stays fresh between the hourly reads. It runs only while Kiro is
+available and some
 session (archived ones too) has run on it, so an install that never uses Kiro in AgentK never
 runs it for this. One read at a time, in `run/kiro-usage`, 20 s at most, as `agentk-usage`, an
 inert agent written in that folder (no tools, MCP servers or hooks, like Ask AgentK's), so the
