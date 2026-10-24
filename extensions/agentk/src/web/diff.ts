@@ -88,7 +88,7 @@ export function defaultOpen(
 
 /**
  * The rows of each patch in `files`, by patch text: `prev`'s rows for a patch it already has, so a
- * file whose patch didn't change keeps the same rows across a refetch (and isn't drawn again).
+ * file whose patch didn't change keeps the same rows across a refetch.
  */
 export function reparse(prev: ReadonlyMap<string, DiffLine[]>, files: { patch: string | null }[]): Map<string, DiffLine[]> {
   const next = new Map<string, DiffLine[]>();
@@ -153,4 +153,26 @@ export function anchorComment(lines: DiffLine[], c: Anchorable): number | null {
     if (!best || (cand.full && !best.full) || (cand.full === best.full && cand.dist < best.dist)) best = cand;
   }
   return best?.i ?? null;
+}
+
+/**
+ * `next`, with each item whose fields all equal those of the previous item under its key replaced
+ * by that previous object, so a memoized view of an unchanged item isn't drawn again after a refetch.
+ */
+export function keepUnchanged<T extends object>(prev: readonly T[], next: T[], key: (t: T) => string): T[] {
+  const old = new Map(prev.map((t) => [key(t), t]));
+  return next.map((t) => {
+    const o = old.get(key(t));
+    return o && sameFields(o, t) ? o : t;
+  });
+}
+
+function sameFields(a: object, b: object): boolean {
+  const ka = Object.keys(a);
+  return ka.length === Object.keys(b).length && ka.every((k) => Object.is((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+}
+
+/** Whether two lists hold the same items in the same order, by identity. */
+export function sameItems<T>(a: readonly T[], b: readonly T[]): boolean {
+  return a.length === b.length && a.every((x, i) => x === b[i]);
 }

@@ -117,17 +117,20 @@ Big diffs aren't drawn until asked for, so a big branch can't freeze the page (`
 comments always open. A diff of more than 1,000 rows opens to *Large diff: N lines* and **Show
 diff**, which draws 2,000 rows per click, with **Show more** under them; comments on rows not drawn
 yet are listed under that button. A phone lays rows out several times slower, so at the phone width
-those numbers are 1,000, 500 and 500 (`DESKTOP_BUDGET`, `PHONE_BUDGET`).
+those numbers are 1,000, 500 and 500 (`DESKTOP_BUDGET`, `PHONE_BUDGET`). The panel picks them once,
+when it opens, so turning a phone sideways or resizing the window doesn't open or close diffs.
 Drawing stays cheap in two more ways. Each file is a memoized `FileSection` given only its own
-data, with handlers that never change (read through a ref), and a file whose patch didn't change
-keeps its parsed rows across a refetch (`reparse()`). So a state push, which comes as often as every
-100 ms while the agent works, and a refetch draw again only the files that changed. Files also
+data, with handlers that never change (read through a ref). On a refetch, a file whose fields are
+all the same keeps its object (`keepUnchanged()`) and its parsed rows (`reparse()`), its comment
+threads keep their maps while they hold the same comments, and only an image gets the fetch time
+its previews reload with. So a state push, which comes as often as every 100 ms while the agent
+works, and a refetch draw again only the files that changed. Files also
 have `content-visibility: auto`, so the browser lays out and paints a file only once it comes near
 the screen, assuming the height of the rows it will draw until then. Every file stays in the DOM,
 so jumps, `[` / `]`, find in page and comment threads work as before. A JS virtual list was
 rejected for that reason. Measured in Chromium at phone size with the CPU slowed 6×, about 1,000
-rows over several files open in about 0.7 s (2,000 rows took 2.2–2.5 s before), and a push takes
-4–5 ms (60–110 ms before).
+rows over several files open in about 0.7 s (2,000 rows took 2.2–2.5 s before), a push takes
+4–5 ms (60–110 ms before), and a refetch that changes nothing 18–25 ms of script (66–99 ms before).
 Untracked files over 1 MB aren't read (no diff, 0 lines), and at most 32 MB of untracked files is
 read per refresh. A changed image (PNG, JPEG, GIF, WebP, AVIF, BMP, ICO) is
 shown as *Before* and *After* side by side with its size, instead of "Binary file";

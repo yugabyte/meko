@@ -5,8 +5,8 @@ import {
   type SessionChanges,
 } from '../../shared/types';
 import { ApiError, api, errorMessage } from '../api';
-import { anchorComment, defaultOpen, DESKTOP_BUDGET, PHONE_BUDGET, reparse, showsLine, sideLine, type DiffLine } from '../diff';
-import { useIsMobile, useTouch } from '../hooks/useMedia';
+import { anchorComment, defaultOpen, DESKTOP_BUDGET, keepUnchanged, PHONE_BUDGET, reparse, sameItems, showsLine, sideLine, type DiffLine } from '../diff';
+import { matches, MOBILE_QUERY, useTouch } from '../hooks/useMedia';
 import { agentName, cx, relativeTime } from '../util';
 import { Busy, ConfirmButton } from './common';
 import { SidePanel } from './SidePanel';
@@ -44,7 +44,7 @@ interface Placed {
 
 /**
  * What a file's section can do. The panel makes one object that never changes, calling its latest
- * handlers through a ref, so a section is drawn again only when its own file's data changes.
+ * handlers through a ref, so a handler is never a reason to draw a section again.
  */
 interface SectionActions {
   toggle: (path: string) => void;
@@ -57,12 +57,41 @@ interface SectionActions {
   section: (path: string, el: HTMLElement | null) => void;
 }
 
+/** Whether two files' comment threads hold the same comments after the same rows. */
+function sameThreads(a: Map<number, ReviewComment[]>, b: Map<number, ReviewComment[]>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [i, cs] of b) {
+    const o = a.get(i);
+    if (!o || !sameItems(o, cs)) return false;
+  }
+  return true;
+}
+
+/**
+ * `next`, keeping `prev`'s per-file maps and lists (and its `changed` set) where they hold the same
+ * comments, so a refetch doesn't hand every file with comments new props.
+ */
+function steady(prev: Placed | null, next: Placed): Placed {
+  if (!prev) return next;
+  for (const [path, rows] of next.at) {
+    const o = prev.at.get(path);
+    if (o && sameThreads(o, rows)) next.at.set(path, o);
+  }
+  for (const [path, cs] of next.outdated) {
+    const o = prev.outdated.get(path);
+    if (o && sameItems(o, cs)) next.outdated.set(path, o);
+  }
+  const changed = prev.changed.size === next.changed.size && [...next.changed].every((id) => prev.changed.has(id)) ? prev.changed : next.changed;
+  return { ...next, changed };
+}
+
 const isTyping = (t: EventTarget) => t instanceof HTMLElement && !!t.closest('input, textarea, select, [contenteditable="true"]');
 
 export function ChangesPanel({ session, onClose }: { session: Session; onClose: () => void }) {
   const touch = useTouch();
-  // A phone lays rows out several times slower, so it draws fewer at a time.
-  const budget = useIsMobile() ? PHONE_BUDGET : DESKTOP_BUDGET;
+  // A phone lays rows out several times slower, so it draws fewer at a time. Read once per panel, so
+  // turning a phone sideways or resizing the window doesn't open or close diffs under the user.
+  const [budget] = useState(() => (matches(MOBILE_QUERY) ? PHONE_BUDGET : DESKTOP_BUDGET));
   const [data, setData] = useState<SessionChanges | null>(null);
   /** When the diff was last fetched; image previews reload with it. */
   const [fetchedAt, setFetchedAt] = useState(0);
@@ -96,7 +125,13 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
     setLoading(true);
     api
       .changes(session.id, commit)
-      .then((d) => !cancelled && (setData(d), setFetchedAt(Date.now()), setError(null)))
+      .then((d) => {
+        if (cancelled) return;
+        // Files that didn't change keep their objects, so their sections aren't drawn again.
+        setData((prev) => (prev ? { ...d, files: keepUnchanged(prev.files, d.files, (f) => f.path) } : d));
+        setFetchedAt(Date.now());
+        setError(null);
+      })
       .catch((e) => {
         if (cancelled) return;
         // The commit shown was rewritten (amended, rebased): back to All changes, with a fresh commit list.
@@ -147,6 +182,8 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
   const drafts = comments.filter((c) => c.state === 'draft').length;
   const queued = comments.filter((c) => c.state === 'queued').length;
 
+  /** The last placement, whose per-file maps and lists are kept while they still hold the same comments. */
+  const lastPlaced = useRef<Placed | null>(null);
   const placed = useMemo((): Placed => {
     const p: Placed = { at: new Map(), outdated: new Map(), changed: new Set(), gone: [] };
     const paths = new Set(files.map((f) => f.path));
@@ -166,8 +203,9 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
         p.at.set(c.path, rows);
       }
     }
-    return p;
+    return steady(lastPlaced.current, p);
   }, [files, parsed, visible]);
+  lastPlaced.current = placed;
 
   /** The row a new comment's editor sits under. */
   const editorAt = useMemo(
@@ -343,8 +381,8 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
   }, []);
   const commitSha = data?.commit?.sha;
   const imageUrl = useCallback(
-    (side: ChangeSide, path: string) => api.changeImageUrl(session.id, path, side, fetchedAt, commitSha),
-    [session.id, fetchedAt, commitSha],
+    (side: ChangeSide, path: string, v: number) => api.changeImageUrl(session.id, path, side, v, commitSha),
+    [session.id, commitSha],
   );
 
   return (
@@ -500,6 +538,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
                   editorAt={ed && !ed.id ? editorAt : null}
                   readOnly={!!data.commit}
                   imageUrl={imageUrl}
+                  imageVersion={f.binary ? fetchedAt : 0}
                   draft={draftText}
                   actions={actions}
                 />
@@ -1016,6 +1055,7 @@ const FileSection = memo(function FileSection({
   editorAt,
   readOnly,
   imageUrl,
+  imageVersion,
   draft,
   actions,
 }: {
@@ -1040,7 +1080,9 @@ const FileSection = memo(function FileSection({
   editorAt: number | null;
   /** A commit is shown: no comments. */
   readOnly: boolean;
-  imageUrl: (side: ChangeSide, path: string) => string;
+  imageUrl: (side: ChangeSide, path: string, v: number) => string;
+  /** When an image's previews were last fetched (they reload with it); 0 for text files, so a refetch leaves them alone. */
+  imageVersion: number;
   draft: RefObject<string>;
   actions: SectionActions;
 }) {
@@ -1069,7 +1111,7 @@ const FileSection = memo(function FileSection({
           )}
           <FileDiff
             file={file}
-            imageUrl={imageUrl}
+            imageUrl={(side, p) => imageUrl(side, p, imageVersion)}
             lines={lines}
             limit={limit}
             page={page}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { anchorComment, defaultOpen, DESKTOP_BUDGET, parsePatch, PHONE_BUDGET, reparse, sameLine, showsLine, type RowBudget } from '../../src/web/diff.js';
+import { anchorComment, defaultOpen, DESKTOP_BUDGET, keepUnchanged, parsePatch, PHONE_BUDGET, reparse, sameLine, showsLine, type RowBudget } from '../../src/web/diff.js';
 
 const rows = (patch: string) => parsePatch(patch).map((l) => [l.kind, l.old, l.new, l.text]);
 
@@ -102,5 +102,13 @@ describe('parsing again after a refetch', () => {
     expect(next.get(a)).toBe(first.get(a));
     expect(next.get(`${b}\n+C`)?.map((l) => l.text)).toEqual(['@@ -1 +1 @@', 'b', 'B', 'C']);
     expect(next.has(b)).toBe(false);
+  });
+
+  it('keeps the objects of files whose fields are all the same', () => {
+    const prev = [{ path: 'a', added: 1, patch: 'x' }, { path: 'b', added: 1, patch: 'y' }];
+    const next = keepUnchanged(prev, [{ path: 'a', added: 1, patch: 'x' }, { path: 'b', added: 2, patch: 'y' }, { path: 'c', added: 1, patch: 'z' }], (f) => f.path);
+    expect(next[0]).toBe(prev[0]);
+    expect(next.slice(1)).toEqual([{ path: 'b', added: 2, patch: 'y' }, { path: 'c', added: 1, patch: 'z' }]);
+    expect(next[1]).not.toBe(prev[1]);
   });
 });
