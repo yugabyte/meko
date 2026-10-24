@@ -44,4 +44,15 @@ describe('the handoff to Meko', () => {
     setup(paths);
     expect(handoff(paths, loadConfig(paths, () => undefined))).toEqual({ socket: paths.webSock, legacy: legacy(paths) });
   });
+
+  it("refuses while the home's server runs on another host, whose socket and database aren't this host's to use", () => {
+    const now = Date.now();
+    const lease = { host: 'other-host', pid: 1, version: '1', port: 0, startedAt: now, beatAt: now };
+    writeFileSync(paths.lock, JSON.stringify(lease));
+    const deps = { host: 'this-host', pid: 2, now: () => now, alive: () => true, sleep: async () => undefined };
+    expect(() => handoff(paths, loadConfig(paths, () => undefined), deps)).toThrow(/runs on other-host/);
+    // One on this host is fine: the socket is here, and a read-only reader shares its WAL index.
+    writeFileSync(paths.lock, JSON.stringify({ ...lease, host: 'this-host' }));
+    expect(handoff(paths, loadConfig(paths, () => undefined), deps).socket).toBe(paths.webSock);
+  });
 });

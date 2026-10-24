@@ -48,12 +48,16 @@ own copy.
   waits on a viewer), and it skips state snapshots until it has drained, then gets the current one.
   When Meko says a request isn't signed in (a 401, or a socket it refused), the page goes to Meko's
   sign-in with remote access, and keeps retrying with local access.
-- **The handoff.** AgentK used to listen on 7777 itself, over HTTPS with its own login. Meko took
-  that port over: at each of its starts it runs `agentk _handoff --json` (`handoff.ts`), which says
-  where the socket is and, for an install that served browsers itself, its old `[server]` bind and
-  port, its certificate (self-signed in `certs/`, or `[tls]`'s) and its login (`owner` in
-  `state.db`). Meko copies what it doesn't have yet, so the same URL, certificate fingerprint,
-  password and authenticator keep working. Nothing else in AgentK reads them any more.
+- **The handoff.** At each of its starts Meko runs `agentk _handoff --json` (`handoff.ts`), which
+  says where the socket is and, for an install that served browsers itself (on port 7777, over
+  HTTPS with its own login), its old `[server]` bind and port, its certificate (self-signed in
+  `certs/`, or `[tls]`'s) and its login (`owner` in `state.db`). Meko takes those over once, copying
+  what it doesn't have yet, so the same URL, certificate fingerprint, password and authenticator
+  keep working. Nothing else in AgentK reads them any more. `state.db` is read read-only, the one
+  read outside the server's lease, and only on the host whose server holds it: `_handoff` refuses
+  while the home's server runs on another host, whose socket this host can't reach anyway. On
+  shutdown the server removes `web.sock` only while it's still the file it bound (`socketId`), as it
+  does the hook socket: after a lost lease another server may have bound its own.
 - **Guard rails.** There is an audit log of Meko settings changes. The Meko key is
   write-only from the browser's side: no response carries it, and a saved key goes only where it
   already goes (the MCP server and API URL in use) or to Meko Cloud. A change on the Meko tab that

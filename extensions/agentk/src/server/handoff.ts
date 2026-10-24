@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { parse } from 'smol-toml';
 import { legacyOwner } from './auth.js';
 import { dbPath, type Config } from './config.js';
+import { defaultDeps, heldLease, type InstanceDeps } from './instance.js';
 import { expandHome, type Paths } from './paths.js';
 
 /**
@@ -33,7 +34,15 @@ export const SELF_SIGNED_KEY = 'self-signed.key';
  * config.toml names [server] or [tls], it made its own certificate, or it has a login. A new install
  * has none of these, so Meko keeps its own web settings rather than taking AgentK's old defaults.
  */
-export function handoff(paths: Paths, cfg: Config): Handoff {
+export function handoff(paths: Paths, cfg: Config, deps?: InstanceDeps): Handoff {
+  // The home's server runs on another host (a home shared over NFS that hasn't moved into Meko's
+  // data folder): its socket can't be reached from here, and its database is only that server's to
+  // open (a WAL reader on another host can't share its -shm index). Meko asks again later.
+  const lease = heldLease(paths.lock, deps);
+  const here = (deps ?? defaultDeps()).host;
+  if (lease && lease.host !== here) {
+    throw new Error(`AgentK's server for this home runs on ${lease.host}, not on this host (${here})`);
+  }
   const certFile = join(paths.certs, SELF_SIGNED_CERT);
   const keyFile = join(paths.certs, SELF_SIGNED_KEY);
   const configured = !!(cfg.tls.cert && cfg.tls.key);
@@ -65,7 +74,11 @@ function namesServer(paths: Paths): boolean {
   }
 }
 
-/** The old login, read without changing the database: the server may be using it. */
+/**
+ * The old login, read without changing the database. The server may have it open (on this host,
+ * as `handoff` makes sure): a read-only reader there shares its WAL index, so this is the one read
+ * outside the server's lease.
+ */
 function readOwner(file: string): ReturnType<typeof legacyOwner> {
   if (!existsSync(file)) return undefined;
   let db: DatabaseSync | null = null;

@@ -59,8 +59,8 @@ gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-d
 It offers to install anything that's missing (git, gh, and Claude Code, OpenCode or Kiro CLI when
 none is there: it asks which, or pass `--agent opencode` or `--agent kiro`) and to set up Meko for each agent, asking first. Then it prints the address to open.
 
-Who can open it is Meko's setting (`[web] access` in Meko's `config.toml`, chosen when Meko was
-installed): **local** (this computer only, no login) or **remote** (other devices too, like your
+Who can open it is Meko's setting (`[web] access`: chosen when Meko was installed, in its
+`web.toml`, and `config.toml` can override it): **local** (this computer only, no login) or **remote** (other devices too, like your
 phone, over HTTPS with a login); remote is the default over SSH or on a machine with no display.
 For remote access, `meko setup_link` on the host prints a one-time link that creates your login.
 Local access trusts everyone who can log in to the computer, so pick remote on a shared host.

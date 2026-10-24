@@ -13,7 +13,7 @@ import { kvGet, kvSet, openDb, snapshotDb } from './db.js';
 import { errMsg, fileLogger, type Logger } from './log.js';
 import { handoff } from './handoff.js';
 import { probeLocal } from './health.js';
-import { listenPrivate } from './hooks.js';
+import { listenPrivate, socketId } from './hooks.js';
 import { MekoClient } from './meko.js';
 import { getPaths, SHARED_TMP, tildify, withLocalBin, type Paths } from './paths.js';
 import { buildServer, findWebDir } from './server.js';
@@ -152,6 +152,8 @@ async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceL
   core = new Core({ paths, config: cfg, db, version: v, meko, mekoCaptureScript, log });
 
   let app: Awaited<ReturnType<typeof buildServer>> | null = null;
+  /** The web socket file this server bound (socketId), to tell it from one another server put there since. */
+  let webSockId: string | null = null;
   let shuttingDown = false;
   const shutdown = async (code: number) => {
     if (shuttingDown) return;
@@ -160,8 +162,9 @@ async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceL
     log.info('shutting down (sessions keep running in the session host)');
     try {
       await app?.close();
-      // This server holds the home's lease, so the socket is its own: Meko then says AgentK isn't running.
-      rmSync(paths.webSock, { force: true });
+      // Only while the file is still the one it bound: on a lost lease, another server on this home
+      // may have bound its own since. Gone, Meko says AgentK isn't running.
+      if (webSockId && socketId(paths.webSock) === webSockId) rmSync(paths.webSock, { force: true });
       await core?.stop();
       db.close();
     } catch (e) {
@@ -199,6 +202,7 @@ async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceL
   // Its only listener: Meko serves it to browsers at BASE_PATH, after its own sign-in.
   await app.ready();
   await listenPrivate(app.server, paths.webSock, 'the web socket');
+  webSockId = socketId(paths.webSock);
   log.info(`AgentK ${v} listening on ${paths.webSock}`);
   void probeLocalMeko(mekoDirOf(paths.home) ?? (cfg.meko.home || null)).then((p) => {
     if (p.meko?.webUrl) log.info(`browsers open it at ${p.meko.webUrl}${BASE_PATH}`);
