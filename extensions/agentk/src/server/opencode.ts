@@ -330,6 +330,15 @@ export function openCodeSessionConfig(o: { plugin: string; instructions: string;
   });
 }
 
+/**
+ * The CLI (TUI) config a session starts with, as `OPENCODE_CLI_CONFIG_CONTENT`, merged by OpenCode
+ * over the user's `cli.json`: session tabs off, so the pane holds the one conversation AgentK
+ * follows (the plugin's main session is the one last prompted, and the tabs OpenCode keeps for the
+ * worktree's folder would bring back an earlier session's). `mode` from OpenCode 2.0.20, `enabled`
+ * before it; 2.0.0 to 2.0.5 don't read the variable and keep their tabs.
+ */
+export const OPENCODE_SESSION_CLI_CONFIG = JSON.stringify({ tabs: { mode: 'off', enabled: false } });
+
 /** What an Ask AgentK run keeps of the user's own OpenCode config: which model it answers on, and the providers that serve it. */
 const ASK_KEPT_KEYS = ['model', 'small_model', 'provider', 'enabled_providers', 'disabled_providers'];
 

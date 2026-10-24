@@ -5,8 +5,8 @@ import { mekoConfigured, resolveMeko, type Config } from '../config.js';
 import type { HookPayload } from '../hooks.js';
 import { errMsg, type Logger } from '../log.js';
 import {
-  OPENCODE_NO_TRACKING_ENV, openCodeCanResume, openCodeCommand, openCodeHasOwnMeko, openCodeMessagesFile, openCodePluginPath, openCodeSessionConfig,
-  openCodeSessionDir, removeOpenCodeMeko, removeOpenCodeSession, writeOpenCodeInstructions, writeOpenCodeMeko, writeOpenCodePlugin,
+  OPENCODE_NO_TRACKING_ENV, OPENCODE_SESSION_CLI_CONFIG, openCodeCanResume, openCodeCommand, openCodeHasOwnMeko, openCodeMessagesFile,
+  openCodePluginPath, openCodeSessionConfig, openCodeSessionDir, removeOpenCodeMeko, removeOpenCodeSession, writeOpenCodeInstructions, writeOpenCodeMeko, writeOpenCodePlugin,
 } from '../opencode.js';
 import { serverMekoTool } from '../mekousage.js';
 import { claudePath, type Paths } from '../paths.js';
@@ -141,6 +141,7 @@ export function openCodeHarness(deps: { paths: Paths; log: Logger; changed: () =
             plugin: claudePath(openCodePluginPath(paths)), instructions: claudePath(instructions), dirs: l.addDirs.map((d) => claudePath(d)),
             tools: l.tools ? openCodeTools(paths) : null,
           }),
+          OPENCODE_CLI_CONFIG_CONTENT: OPENCODE_SESSION_CLI_CONFIG,
           ...(meko ? { OPENCODE_CONFIG: claudePath(meko) } : {}),
           // A PR's own opencode.json and .opencode folders (plugins: code that would run) are left out.
           ...(l.untrusted ? { OPENCODE_DISABLE_PROJECT_CONFIG: '1' } : {}),

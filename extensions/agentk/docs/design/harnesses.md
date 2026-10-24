@@ -146,7 +146,7 @@ agent choice and sign-in check:
 
 | | Claude Code | OpenCode | Kiro |
 |---|---|---|---|
-| Launch | `claude --settings … --session-id/--resume …` | `opencode --standalone [--session=<id>] [--prompt=<prompt>]` with `OPENCODE_CONFIG_CONTENT` | `kiro-cli chat --agent agentk [--trust-tools=*] [--resume-id <id>] [prompt]` |
+| Launch | `claude --settings … --session-id/--resume …` | `opencode --standalone [--session=<id>] [--prompt=<prompt>]` with `OPENCODE_CONFIG_CONTENT`, and `OPENCODE_CLI_CONFIG_CONTENT` for session tabs off | `kiro-cli chat --agent agentk [--trust-tools=*] [--resume-id <id>] [prompt]` |
 | Hooks | `run/hooks.json` via `--settings` | AgentK's plugin, `run/opencode/agentk-plugin-<hash>/` | the `agentk` agent's inline hooks |
 | System prompt | `--append-system-prompt` | an `instructions` file written at each launch | printed by the context hook at every `agentSpawn` |
 | Design guard | JSON deny | the plugin throws the reason | `kiro-guard.sh`: exit 2, the reason on stderr |
@@ -239,6 +239,18 @@ the session's conversation, and never its turn's end, so it never ends the turn;
 mark the session working, its permission asks still show **Needs you** (one waiting on the user does
 need them), and its edits still go to the guard. OpenCode fires nothing when it exits: reconcile
 finds the dead pane, as for Kiro.
+
+**No session tabs.** OpenCode 2's TUI can keep several of its sessions open as tabs (`tabs.mode` in
+its CLI config, `cli.json`: `auto`, the default, is on outside the herdr terminal). In an AgentK
+pane that's a second conversation the plugin would follow once prompted, and since OpenCode keeps
+the open tabs per folder, a reused worktree would bring back an earlier session's. So a launch also
+passes `OPENCODE_CLI_CONFIG_CONTENT` (`OPENCODE_SESSION_CLI_CONFIG`), the inline CLI config OpenCode
+merges key by key over the user's `cli.json`: `{"tabs":{"mode":"off","enabled":false}}`. `mode` is
+the key from 2.0.20 on, `enabled` the one before it (2.0.20 and later read `enabled` only when `mode`
+isn't set). OpenCode 2.0.0 to 2.0.5 don't read the variable, so their sessions keep their tabs. The
+user's other CLI settings still apply, and their own `opencode` runs and `cli.json` are left as they
+are. Turning tabs on from OpenCode's settings inside a session writes the user's `cli.json` but
+doesn't win over the variable there.
 
 **Starting and resuming.** `opencode --standalone --prompt=<first prompt>` in the worktree (the `=`
 form, so a prompt starting with `-` stays the value); resume and recovery run `--session=<id>`, never
