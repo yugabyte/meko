@@ -221,15 +221,18 @@ three tested against `backend/internal/paths/testdata/resolve-cases.json`): `MEK
 a network filesystem; else `~/.meko` on a local disk; else, for a home folder on a network
 filesystem, `$XDG_STATE_HOME/meko` when that's local, else `/var/tmp/<user>/meko` (made private as
 above). Meko sets `MEKO_HOME` on every AgentK command it runs, and AgentK keeps it as `[meko]
-home`, since its own services don't have it. A home already in a Meko data folder refuses the
-commands Meko runs (`install`, `uninstall`, `start`, `stop`, `status`) when `MEKO_HOME` names
-another folder (`refuseOtherMeko` in `src/server/movehome.ts`): a release acts on its own home
-whatever `MEKO_HOME` says, so a Meko that found this AgentK for another data folder (a second
-Meko, Meko's own tests) would otherwise stop or uninstall it, ending every session, and repoint
-its `[meko] home`. A home that hasn't moved yet still takes Meko's folder from `MEKO_HOME`. `agentk install` keeps the Meko data folder its home is
-in as `[meko] home` too, and the server takes `MEKO_HOME` and `XDG_STATE_HOME` from the login shell
-(as it does `PATH`), so the server finds the same folder the installer did. A relative
-`XDG_STATE_HOME` is ignored, as the XDG spec says.
+home`, since its own services don't have it. A home already in a Meko data folder refuses
+`uninstall`, `start`, `stop` and `status` when `MEKO_HOME` names another folder
+(`refuseOtherMeko` in `src/server/movehome.ts`): a release acts on its own home whatever
+`MEKO_HOME` says, so a Meko that found this AgentK for another data folder (a second Meko, Meko's
+own tests) would otherwise stop or uninstall it, ending every session, and repoint its `[meko]
+home`. A home that hasn't moved into a Meko data folder yet isn't protected: it takes Meko's
+folder from `MEKO_HOME`, so another Meko's commands still act on it and its `[meko] home` (where
+it moves next) follows the last one. `install` isn't refused either: the installer updates the
+existing home in place, and `agentk install` keeps the Meko data folder its home is in as `[meko]
+home`, over `MEKO_HOME`. The server takes `MEKO_HOME` and `XDG_STATE_HOME` from the login shell
+(as it does `PATH`), so it finds the same folder the installer did. A relative `XDG_STATE_HOME`
+is ignored, as the XDG spec says.
 
 - **A release's home is its own folder** (`<home>/app/<version>`, `AK_APP_DIR`), whatever
   `AK_HOME` says; the CLI run through `~/.local/bin/agentk` finds it that way, and so does the

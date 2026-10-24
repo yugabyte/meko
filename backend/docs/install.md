@@ -157,7 +157,8 @@ extension knows where its own folder is: `<data>/extensions/<name>` (`extensions
 home is `<data>/extensions/agentk`, wherever Meko's rule puts the data folder (`MEKO_HOME`,
 `~/.meko`, or the network-home fallback; AgentK runs the same rule when Meko didn't tell it, and
 both test suites read `internal/paths/testdata/resolve-cases.json`). An AgentK whose home is in
-another data folder refuses a command run with this one's `MEKO_HOME`, and does nothing.
+another data folder refuses `start`, `stop`, `status` and `uninstall` run with this one's
+`MEKO_HOME`, and does nothing.
 
 - An extension's command is found on PATH, then in `~/.local/bin`, then in its release install's
   `app/current/bin`: its folder in the data folder, then its home from before it moved there

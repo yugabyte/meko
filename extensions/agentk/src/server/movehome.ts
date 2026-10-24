@@ -195,8 +195,13 @@ export function checkMove(paths: Paths, cfg: Config, d: CheckDeps = {}): MoveChe
   return { plan: { from, to, method } };
 }
 
-/** The commands Meko runs for an extension: `install_extension`, start, stop, status and `destroy`'s uninstall. */
-export const MEKO_COMMANDS = ['install', 'uninstall', 'start', 'stop', 'status'];
+/**
+ * The commands Meko runs for an extension that `refuseOtherMeko` checks: start, stop, status and
+ * `destroy`'s uninstall. Not `install`: the installer updates the existing home in place whatever
+ * MEKO_HOME says, and has switched `app/current` before it runs `agentk install`, which then keeps
+ * the Meko folder the home is in over MEKO_HOME (`runInstall`).
+ */
+export const MEKO_COMMANDS = ['uninstall', 'start', 'stop', 'status'];
 
 /**
  * Refuses a command Meko runs for another data folder than the one this home is in. A release's
