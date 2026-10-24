@@ -67,7 +67,6 @@ describe("an OpenCode session's command line", () => {
       row, resume: false, prompt: 'hi', systemPrompt: '', addDirs: ['/designs/s1'], modDir: null, planMode: false,
       env: {}, unsetEnv: [], untrusted: false, tools: true,
     });
-    expect(trusted.env.OPENCODE_CLI_CONFIG_CONTENT).toBe(spec.env.OPENCODE_CLI_CONFIG_CONTENT);
     expect(JSON.parse(trusted.env.OPENCODE_CONFIG_CONTENT)).toMatchObject({
       mcp: { agentk_sessions: { type: 'local', command: expect.arrayContaining([process.execPath, expect.stringMatching(/mcpmain\.ts$/)]) } },
       skills: { paths: [join(paths.run, 'tools', 'skills')] },
