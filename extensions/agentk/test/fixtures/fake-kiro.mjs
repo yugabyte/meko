@@ -3,7 +3,8 @@
 // (`chat --agent <name>`, read from $KIRO_HOME/agents) and fires that agent's inline hooks the way
 // Kiro 2.x does (the event as JSON on stdin; a preToolUse hook's exit 2 denies the call, its
 // stderr the reason); it keeps a session file like Kiro's ($KIRO_HOME/sessions/cli/<id>.json) with
-// each finished turn's usage, and turns each stdin line into a turn. Everything it does is recorded
+// each finished turn's usage, and its log (<id>.jsonl) of prompts and Meko calls' results, and turns
+// each stdin line into a turn. Everything it does is recorded
 // in $FAKE_KIRO_DIR.
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -86,15 +87,22 @@ const state = existsSync(file)
   ? JSON.parse(readFileSync(file, 'utf8'))
   : { session_id: sessionId, cwd: process.cwd(), session_state: { conversation_metadata: { user_turn_metadatas: [] } } };
 const save = () => writeFileSync(file, JSON.stringify(state));
+// Like Kiro's session log: one JSON line per prompt, reply and set of tool results.
+const record = (kind, data) => appendFileSync(join(sessions, `${sessionId}.jsonl`), JSON.stringify({ version: 'v1', kind, data }) + '\n');
+const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 save();
 log('argv.jsonl', { args, cwd: process.cwd(), env: { MEKO_AGENT_ID: process.env.MEKO_AGENT_ID, AK_SESSION: process.env.AK_SESSION } });
 
-/** Runs the agent's hooks for an event (matcher '*' or the tool's name); returns their stdout, and a denial's reason. */
+/**
+ * Runs the agent's hooks for an event (matcher '*', the tool's name, or `@<server>` for an MCP
+ * server's tools, named `@<server>/<tool>`); returns their stdout, and a denial's reason.
+ */
 function hook(event, extra = {}) {
   let out = '';
   let denied = null;
   for (const h of agent.hooks?.[event] ?? []) {
-    if (h.matcher && h.matcher !== '*' && !(h.matcher === extra.tool_name || (h.matcher === 'fs_write' && extra.tool_name === 'write'))) continue;
+    const server = h.matcher?.startsWith('@') && String(extra.tool_name ?? '').startsWith(`${h.matcher}/`);
+    if (h.matcher && h.matcher !== '*' && !server && !(h.matcher === extra.tool_name || (h.matcher === 'fs_write' && extra.tool_name === 'write'))) continue;
     const input = JSON.stringify({ hook_event_name: event, cwd: process.cwd(), session_id: sessionId, ...extra });
     const r = spawnSync('sh', ['-c', h.command], { input });
     out += r.stdout?.toString() ?? '';
@@ -103,8 +111,41 @@ function hook(event, extra = {}) {
   return { out, denied };
 }
 
+/**
+ * A call to Meko's memory_search that takes `ms`: preToolUse, then its result in the session log and
+ * postToolUse. Meko finds one memory, or nothing when `empty`. When the user `refused` it, Kiro logs
+ * its own error as the result and fires no postToolUse.
+ */
+function mekoCall(query, ms, how) {
+  const input = { query, datapack_id: 'dp1' };
+  hook('preToolUse', { tool_name: '@meko/memory_search', tool_tags: ['@meko/memory_search', '@meko', '@mcp'], tool_input: { __tool_use_purpose: 'Look it up.', ...input } });
+  sleep(ms);
+  const id = `toolu_${randomUUID().replace(/-/g, '')}`;
+  if (how === 'refused') {
+    record('ToolResults', {
+      message_id: randomUUID(),
+      content: [{ kind: 'toolResult', data: { toolUseId: id, content: [{ kind: 'text', data: 'Permission request failed: denied' }], status: 'error' } }],
+      results: { [id]: { tool: { kind: { Mcp: { toolName: 'memory_search', serverName: 'meko', params: input } } } } },
+    });
+    return;
+  }
+  const text = JSON.stringify({ results: how === 'empty' ? [] : [{ id: 'mem1', memory: 'What Kiro knows.', score: 0.9, raw_similarity_score: 0.85 }] });
+  const reply = { content: [{ type: 'text', text }], isError: false };
+  record('AssistantMessage', { message_id: randomUUID(), content: [{ kind: 'toolUse', data: { toolUseId: id, name: 'memory_search', input: { __tool_use_purpose: 'Look it up.', ...input } } }] });
+  record('ToolResults', {
+    message_id: randomUUID(),
+    content: [{ kind: 'toolResult', data: { toolUseId: id, content: [{ kind: 'json', data: reply }], status: 'success' } }],
+    results: { [id]: { tool: { tool_use_purpose: 'Look it up.', kind: { Mcp: { toolName: 'memory_search', serverName: 'meko', params: { ...input, __tool_use_purpose: 'Look it up.' } } } }, result: { Success: { items: [{ Json: reply }] } } } },
+  });
+  hook('postToolUse', { tool_name: '@meko/memory_search', tool_input: { __tool_use_purpose: 'Look it up.', ...input }, tool_response: { items: [{ Json: reply }] } });
+}
+
 function turn(text) {
+  record('Prompt', { message_id: randomUUID(), content: [{ kind: 'text', data: text }], meta: { timestamp: Math.floor(Date.now() / 1000) } });
   hook('userPromptSubmit', { prompt: text });
+  // "meko <ms> [empty|refused]": a Meko search (see mekoCall).
+  const m = /\bmeko (\d+)(?: (empty|refused))?/.exec(text);
+  if (m) mekoCall(m[0], Number(m[1]), m[2]);
   // "write <file>": Kiro's write tool on that file, which the guard may deny.
   const w = /write (\S+)/.exec(text);
   if (w) {

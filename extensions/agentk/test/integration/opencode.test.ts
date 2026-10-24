@@ -96,6 +96,37 @@ describe('sessions on OpenCode (real session host + git, fake opencode running A
     expect(existsSync(openCodeSessionDir(env.core.paths, s.id))).toBe(false);
   });
 
+  it("shows Meko's m while OpenCode calls Meko, and records its calls, code mode's too, for the counts, What Meko doesn't know and the call log", async () => {
+    env.core.config.claude.mod = false;
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'create', name: 'agent-k-local/test/demo' } });
+    env.core.projects.update(p.id, { settings: { mekoLog: true } });
+    const s = await env.core.sessions.create(p.id, { name: 'OpenCode meko', prompt: 'meko 1500', start: 'code', harness: 'opencode' });
+    const get = (id: string) => env.core.sessions.get(id);
+    expect((await waitFor(() => get(s.id), (x) => x.mekoCall, 10000, 'the Meko call')).status).toBe('working');
+    await waitFor(() => get(s.id), (x) => !x.mekoCall && x.status === 'idle', 10000, 'the call and the turn to end');
+    // Two calls from code mode, inside one execute call and sharing its id: one found something, one nothing.
+    await env.core.sessions.submit(s.id, 'meko code');
+    const count = () => all<{ n: number }>(env.core.db, 'SELECT COUNT(*) AS n FROM meko_calls WHERE session_id = ?', s.id)[0].n;
+    await waitFor(count, (n) => n === 3, 10000, 'the code-mode calls');
+    await waitFor(() => get(s.id).status, (st) => st === 'idle', 10000, 'the second turn');
+
+    const calls = all(env.core.db, 'SELECT tool_use_id, tool, outcome, results, quality, query, model FROM meko_calls WHERE session_id = ? ORDER BY at, query', s.id);
+    expect(calls).toEqual([
+      { tool_use_id: expect.stringMatching(/^opencode:call_m\d+:meko_memory_search#1$/), tool: 'memory_search', outcome: 'found', results: 1, quality: null, query: 'meko 1500', model: null },
+      { tool_use_id: expect.stringMatching(/^opencode:call_x\d+:meko_memory_search#1$/), tool: 'memory_search', outcome: 'found', results: 1, quality: null, query: 'first', model: null },
+      { tool_use_id: expect.stringMatching(/^opencode:call_x\d+:meko_memory_search#2$/), tool: 'memory_search', outcome: 'empty', results: 0, quality: 'empty', query: 'second', model: null },
+    ]);
+    const usage = (await env.core.projects.home(p.id)).usage;
+    expect(usage.bySession.find((u) => u.sessionId === s.id)?.meko).toEqual({ lookups: 3, found: 2, saves: 0 });
+    expect(env.core.projects.mekoGaps(p.id, 'open', undefined, undefined).gaps.map((g) => g.query)).toContain('second');
+    // The call log has them as the session's agent's, with the time each took.
+    const page = await env.core.sessions.mekoCalls(s.id, { by: 'claude' });
+    expect(page.calls).toHaveLength(3);
+    expect(page.calls.every((c) => c.tool === 'memory_search' && c.ok && typeof c.ms === 'number')).toBe(true);
+    expect(page.calls.some((c) => (c.ms ?? 0) >= 1000)).toBe(true);
+    expect(env.core.sessions.mekoLogs(p.id)).toEqual([expect.objectContaining({ sessionId: s.id, harness: 'opencode' })]);
+  });
+
   it("leaves the user's own Meko server in OpenCode's config alone", async () => {
     const dir = join(process.env.HOME!, '.config', 'opencode');
     mkdirSync(dir, { recursive: true });

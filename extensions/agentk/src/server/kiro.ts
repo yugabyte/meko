@@ -231,6 +231,11 @@ export function kiroSessionFile(id: string, home = kiroHome()): string {
   return join(home, 'sessions', 'cli', `${id}.json`);
 }
 
+/** Its session log beside it: each prompt, reply and tool result as a line (`parseKiroMekoCalls`). */
+export function kiroSessionLog(id: string, home = kiroHome()): string {
+  return join(home, 'sessions', 'cli', `${id}.jsonl`);
+}
+
 const SESSION_ID = /^[\w-]{1,100}$/;
 
 /**
@@ -309,6 +314,82 @@ export function parseKiroTurns(text: string): KiroTurn[] {
       cacheRead: num(t.cache_read_input_token_count), cacheWrite: num(t.cache_write_input_token_count),
       credits, contextPercent: typeof pct === 'number' && Number.isFinite(pct) ? pct : null,
     });
+  }
+  return out;
+}
+
+/** A Meko call of a Kiro session with its result, from its session log (`<conversation>.jsonl`). */
+export interface KiroMekoCall {
+  /** Kiro's tool use id. */
+  id: string;
+  /** The Meko tool (`context_search`). */
+  tool: string;
+  /** When its turn started (its prompt), or when AgentK read it when the read didn't see the prompt. */
+  at: number;
+  input: Json;
+  text: string;
+  isError: boolean;
+}
+
+/** The text of an MCP reply's content items (`[{ type: 'text', text }]`). */
+function mcpText(content: unknown): string {
+  return Array.isArray(content) ? content.map((c) => (isObject(c) && c.type === 'text' && typeof c.text === 'string' ? c.text : '')).join('') : '';
+}
+
+/**
+ * The Meko calls whose results are in a Kiro session log's whole lines, checked against kiro-cli
+ * 2.34.0. Only a `ToolResults` line names a call's MCP server (`data.results[<id>].tool.kind.Mcp`),
+ * so a call is taken from there, from a server whose name starts with `meko`, with its reply from
+ * the line's `toolResult` content. Only `Prompt` lines carry a time (`data.meta.timestamp`, in
+ * seconds), so a call is dated by its turn's prompt, or `now` when the text read didn't hold it.
+ * A line it doesn't know is skipped.
+ */
+export function parseKiroMekoCalls(text: string, now: number): KiroMekoCall[] {
+  const out: KiroMekoCall[] = [];
+  let turnAt: number | null = null;
+  for (const line of text.split('\n')) {
+    const prompt = line.includes('"kind":"Prompt"');
+    if (!prompt && !(line.includes('"kind":"ToolResults"') && /"serverName":"meko/i.test(line))) continue;
+    let d: unknown;
+    try {
+      d = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isObject(d) || !isObject(d.data)) continue;
+    if (d.kind === 'Prompt') {
+      const ts = isObject(d.data.meta) ? d.data.meta.timestamp : null;
+      if (typeof ts === 'number' && Number.isFinite(ts) && ts > 0) turnAt = ts * 1000;
+      continue;
+    }
+    if (d.kind !== 'ToolResults' || !isObject(d.data.results)) continue;
+    const replies = new Map<string, { text: string; isError: boolean }>();
+    for (const c of Array.isArray(d.data.content) ? d.data.content : []) {
+      if (!isObject(c) || c.kind !== 'toolResult' || !isObject(c.data) || typeof c.data.toolUseId !== 'string') continue;
+      // An MCP reply is a `json` part; Kiro's own message (a refused call's) is a `text` part.
+      const parts = Array.isArray(c.data.content) ? c.data.content : [];
+      const json = parts.find((x): x is Json => isObject(x) && isObject(x.data));
+      const plain = parts.map((x) => (isObject(x) && x.kind === 'text' && typeof x.data === 'string' ? x.data : '')).join('');
+      replies.set(c.data.toolUseId, {
+        text: json ? mcpText((json.data as Json).content) : plain,
+        isError: c.data.status !== 'success' || (!!json && (json.data as Json).isError === true),
+      });
+    }
+    for (const [id, r] of Object.entries(d.data.results)) {
+      const mcp = isObject(r) && isObject(r.tool) && isObject(r.tool.kind) && isObject(r.tool.kind.Mcp) ? r.tool.kind.Mcp : null;
+      if (!mcp || typeof mcp.serverName !== 'string' || !/^meko/i.test(mcp.serverName) || typeof mcp.toolName !== 'string') continue;
+      if (!/^[a-z_]+$/.test(mcp.toolName) || !id || id.length > 200) continue;
+      const result = isObject(r) && isObject(r.result) ? r.result : {};
+      const success = isObject(result.Success) ? result.Success : null;
+      const items = success && Array.isArray(success.items) ? success.items : [];
+      const first = items.find((x): x is Json => isObject(x) && isObject(x.Json));
+      const reply = replies.get(id) ?? {
+        text: first ? mcpText((first.Json as Json).content) : typeof result.Error === 'string' ? result.Error : '',
+        isError: !success || (!!first && (first.Json as Json).isError === true),
+      };
+      const { __tool_use_purpose: _purpose, ...input } = isObject(mcp.params) ? mcp.params : {};
+      out.push({ id, tool: mcp.toolName, at: turnAt ?? now, input, ...reply });
+    }
   }
   return out;
 }

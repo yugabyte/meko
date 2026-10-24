@@ -8,6 +8,7 @@ import {
   OPENCODE_NO_TRACKING_ENV, openCodeCanResume, openCodeCommand, openCodeHasOwnMeko, openCodeMessagesFile, openCodePluginPath, openCodeSessionConfig,
   openCodeSessionDir, removeOpenCodeMeko, removeOpenCodeSession, writeOpenCodeInstructions, writeOpenCodeMeko, writeOpenCodePlugin,
 } from '../opencode.js';
+import { serverMekoTool } from '../mekousage.js';
 import { claudePath, type Paths } from '../paths.js';
 import { openCodeTools } from '../tools.js';
 import type { SessionRow } from '../store.js';
@@ -61,6 +62,15 @@ export function normalizeOpenCode(raw: HookPayload): HookPayload | null {
     ...(args && typeof args === 'object' ? { tool_input: args as Record<string, unknown> } : {}),
     ...(typeof id === 'string' ? { agent_session_id: id } : {}),
   };
+}
+
+/**
+ * The key of the Meko call a tool event is about: the call's id and its tool (a call from code mode
+ * can share its execute call's id), as the plugin sends them for a Meko server's tools.
+ */
+export function openCodeMekoTool(p: HookPayload): string | null {
+  const tool = p.tool_name;
+  return typeof tool === 'string' && serverMekoTool(tool) && typeof p.call_id === 'string' && p.call_id ? `${p.call_id}:${tool}` : null;
 }
 
 /** The files a patch (OpenCode's patch format) adds, changes, moves or deletes. */
@@ -145,6 +155,7 @@ export function openCodeHarness(deps: { paths: Paths; log: Logger; changed: () =
     deny: (reason) => reason,
     // Recall comes back as text for the plugin to add to the system prompt.
     context: (text) => text,
+    mekoTool: openCodeMekoTool,
     editedPaths(p) {
       const tool = p.tool_name ?? '';
       if (WRITE_TOOLS.includes(tool)) {
@@ -162,7 +173,7 @@ export function openCodeHarness(deps: { paths: Paths; log: Logger; changed: () =
     activityFiles: (row) => [openCodeMessagesFile(deps.paths, row.id)],
     forget: (row) => removeOpenCodeSession(deps.paths, row.id),
     mekoChanged: (paths) => removeOpenCodeMeko(paths),
-    readUsage: (db, row) => ({ changed: ingestOpenCodeUsage(db, row.id, openCodeMessagesFile(deps.paths, row.id), row.agent_session_id) }),
+    readUsage: (db, row) => ingestOpenCodeUsage(db, row.id, openCodeMessagesFile(deps.paths, row.id), row.agent_session_id),
     ask: openCodeAsker,
     status: cli.status,
     version: cli.version,
