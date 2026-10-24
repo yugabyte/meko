@@ -12,6 +12,7 @@ import {
 import { forgetContact, listContacts, recordShares } from '../../src/server/contacts.js';
 import { shortHost } from '../../src/server/core.js';
 import { mekoSettings } from '../../src/server/mekosettings.js';
+import { LocalMekoReader } from '../../src/server/mekolocal.js';
 import { all, kvGet, openDb, run, schemaVersion, snapshotDb } from '../../src/server/db.js';
 import { githubRepo, prettyRemote } from '../../src/server/git.js';
 import { ciState, ciSummary, isLogin, isTrustedAuthor, parseReviewDetails, reviewDetailsQuery } from '../../src/server/github.js';
@@ -945,17 +946,17 @@ describe('Meko credentials', () => {
     for (const k of ['MEKO_MCP_URL', 'MEKO_API_KEY', 'MEKO_WEB_URL'] as const) delete process.env[k];
   };
 
-  it('treats an old config.toml that saved the default URL as unset', () => {
+  it('treats an old config.toml that saved the default URL as unset, and ignores Meko turned off', () => {
     clearEnv();
     claudeSettings({ env: { MEKO_MCP_URL: 'https://mcp.example.dev/mcp', MEKO_API_KEY: 'dev-key' } });
     const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
     mkdirSync(paths.home, { recursive: true });
-    writeFileSync(paths.config, `[meko]\nurl = "${DEFAULT_MEKO_URL}"\napi_key = ""\n`);
+    writeFileSync(paths.config, `[meko]\nenabled = false\nurl = "${DEFAULT_MEKO_URL}"\napi_key = ""\n`);
     const cfg = loadConfig(paths);
     expect(cfg.meko.url).toBe('');
     expect(resolveMeko(cfg)).toEqual({ url: 'https://mcp.example.dev/mcp', apiKey: 'dev-key' });
     saveConfig(paths, cfg);
-    expect(readFileSync(paths.config, 'utf8')).not.toContain('url');
+    expect(readFileSync(paths.config, 'utf8')).not.toMatch(/url|enabled/);
   });
 
   it('takes the URL that goes with the key', () => {
@@ -980,7 +981,7 @@ describe('Meko credentials', () => {
     expect(resolveMeko(structuredClone(DEFAULT_CONFIG))).toEqual({ url: 'https://self-hosted.example/mcp', apiKey: 'env-key' });
   });
 
-  it('says where the key came from', () => {
+  it('says where the key came from, falling back to the Meko on this computer with its own URL', async () => {
     clearEnv();
     claudeSettings({ env: { MEKO_API_KEY: 'settings-key' } });
     const cfg = structuredClone(DEFAULT_CONFIG);
@@ -993,6 +994,36 @@ describe('Meko credentials', () => {
     clearEnv();
     cfg.meko.apiKey = '';
     expect(resolveMekoWithSource(cfg).keySource).toBeNull();
+    const reader = new LocalMekoReader(async () => ({ state: 'running', meko: { url: 'http://127.0.0.1:7778/mcp', token: 'local-token' } }));
+    try {
+      expect(await reader.refresh()).toBe(true);
+      expect(await reader.refresh()).toBe(false);
+      // Another source's URL never takes the local token.
+      cfg.meko.url = 'https://config.example/mcp';
+      expect(resolveMekoWithSource(cfg)).toEqual({ url: 'http://127.0.0.1:7778/mcp', apiKey: 'local-token', keySource: 'local' });
+      // Any key wins over it.
+      process.env.MEKO_API_KEY = 'env-key';
+      expect(resolveMekoWithSource(cfg)).toEqual({ url: 'https://config.example/mcp', apiKey: 'env-key', keySource: 'env' });
+      clearEnv();
+      // Except a copy of it, which Meko's setup for Claude Code writes, or an older install stored:
+      // its token on another port, or another token on its URL. The live pair is used.
+      const local = { url: 'http://127.0.0.1:7778/mcp', apiKey: 'local-token', keySource: 'local' };
+      claudeSettings({ env: { MEKO_MCP_URL: 'http://127.0.0.1:7700/mcp', MEKO_API_KEY: 'local-token' } });
+      expect(resolveMekoWithSource(cfg)).toEqual(local);
+      claudeSettings({});
+      cfg.meko.url = 'http://127.0.0.1:7778/mcp';
+      cfg.meko.apiKey = 'older-local-token';
+      expect(resolveMekoWithSource(cfg)).toEqual(local);
+      // Its token goes to no web app or API URL but its own.
+      cfg.meko.webUrl = 'https://meko.example.com';
+      cfg.meko.apiUrl = 'https://meko.example.com/api/v1';
+      expect([resolveMekoWebUrl(cfg), resolveMekoApiUrl(cfg)]).toEqual([null, null]);
+      cfg.meko.webUrl = 'http://127.0.0.1:7778';
+      cfg.meko.apiUrl = '';
+      expect([resolveMekoWebUrl(cfg), resolveMekoApiUrl(cfg)]).toEqual(['http://127.0.0.1:7778', 'http://127.0.0.1:7778/api/v1']);
+    } finally {
+      reader.clear();
+    }
   });
 
   it('tells the Meko tab what an empty MCP or web app URL falls back to', () => {
@@ -1045,7 +1076,7 @@ describe('Meko credentials', () => {
     // A Meko on this computer has no web app to set yet.
     cfg.meko.url = 'http://127.0.0.1:7778/mcp';
     expect(mekoWebUrlWarning(cfg)).toBe("datapack links and sharing are off: the Meko on this computer (127.0.0.1:7778) has no web app yet; they come with Meko's web UI");
-    cfg.meko.enabled = false;
+    cfg.meko.apiKey = '';
     expect(mekoWebUrlWarning(cfg)).toBeNull();
   });
 

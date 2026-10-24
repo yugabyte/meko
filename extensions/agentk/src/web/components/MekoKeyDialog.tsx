@@ -6,8 +6,9 @@ import { Busy, Dialog, ErrorText, Field } from './common';
 import { MekoGetKey } from './MekoGetKey';
 
 /**
- * Turns Meko on with an API key (for an install without one). The same as the Meko tab in
- * Settings, cut down to what's needed: the server checks the key with Meko before saving it.
+ * Turns Meko on with an API key (for an install with no key and no Meko running on this computer).
+ * The same as the Meko tab in Settings, cut down to what's needed: the server checks the key with
+ * Meko before saving it.
  */
 export function MekoKeyDialog({ reason, mekoWebUrl, onClose }: { reason?: string; mekoWebUrl: string | null; onClose: () => void }) {
   const [key, setKey] = useState('');
@@ -29,7 +30,7 @@ export function MekoKeyDialog({ reason, mekoWebUrl, onClose }: { reason?: string
     setBusy(true);
     setError(null);
     try {
-      await api.saveSettings({ meko: { apiKey: key.trim(), enabled: true, ...(url.trim() ? { url: url.trim() } : {}) } });
+      await api.saveSettings({ meko: { apiKey: key.trim(), ...(url.trim() ? { url: url.trim() } : {}) } });
       onClose();
     } catch (err) {
       setError(errorMessage(err));
@@ -44,6 +45,16 @@ export function MekoKeyDialog({ reason, mekoWebUrl, onClose }: { reason?: string
         <p className="muted">
           {reason ?? 'Meko gives projects a datapack: shared memory for their sessions, and what you share a project with.'}
         </p>
+        {meko && meko.local !== 'running' && (
+          <p className="muted small">
+            {meko.local === 'stopped'
+              ? 'Meko is installed on this computer but not running.'
+              : meko.local === 'failed'
+                ? 'Meko on this computer didn’t answer meko token --json.'
+                : 'No Meko was found on this computer.'}{' '}
+            AgentK uses the Meko on this computer without a key while it runs (meko start).
+          </p>
+        )}
         <MekoGetKey
           title="No account or key yet?"
           // An empty MCP URL keeps the current server; the web app URL isn't changed here.

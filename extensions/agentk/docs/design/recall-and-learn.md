@@ -37,7 +37,7 @@ while it's being created share the one `conversation_create`.
   or `late` (it found something after the hook gave up, or the hook never asked). It keeps the
   query too (NULL for a failed search), so an empty one shows on [What Meko doesn't know](#what-meko-doesnt-know).
 
-Nothing waits for the search: the session starts the same when it's slow, fails, or Meko is off
+Nothing waits for the search: the session starts the same when it's slow, fails, or there's no Meko
 (then there's no search at all).
 
 ## The learn step

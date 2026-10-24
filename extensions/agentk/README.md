@@ -33,11 +33,12 @@ your phone.
 
 You need Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon, and a coding agent:
 [Claude Code](https://claude.com/claude-code), [OpenCode](https://opencode.ai) 1.19.4 or later,
-[Kiro CLI](https://kiro.dev/cli/) 2.32 or later, or more than one. A
-[Meko](https://mekodata.ai) account and API key are optional: they give projects datapacks
-(shared memory) and let you share projects. Without one, press Enter at the key prompt (or pass
-`--no-meko`) and add a key later on the Meko tab in Settings, which links to Meko's sign-up and
-login pages to make one. The repo is internal for now, so the
+[Kiro CLI](https://kiro.dev/cli/) 2.32 or later, or more than one.
+[Meko](https://mekodata.ai) gives projects datapacks (shared memory) and lets you share projects.
+AgentK uses a Meko Cloud API key when you give it one, and otherwise the Meko running on this
+computer: press Enter at the key prompt to use it. You can add a Cloud key later on the Meko tab in
+Settings, which links to Meko's sign-up and login pages to make one. With neither, AgentK works
+without datapacks until Meko runs here. The repo is internal for now, so the
 installer is fetched with `gh`. To run it on a Meko on this computer, install Meko (the repo's
 latest release) and then AgentK through it:
 

@@ -10,6 +10,7 @@ import {
 import { claudeConfigPath } from './trust.js';
 import { claudeUserDir } from './claude.js';
 import { kiroAgentLoadsMcp, kiroMekoGaps, readKiroMeko } from './mekokiro.js';
+import { localMeko } from './mekolocal.js';
 import { HttpError } from './projects.js';
 
 /** What the Meko tab needs to talk to Meko and to set up Claude Code; tests swap them out. */
@@ -64,7 +65,6 @@ export const defaultMekoTools: MekoTools = {
 export function mekoSettings(cfg: Config): MekoSettings {
   const eff = resolveMekoWithSource(cfg);
   return {
-    enabled: cfg.meko.enabled,
     url: cfg.meko.url,
     effectiveUrl: eff.url,
     defaultUrl: DEFAULT_MEKO_URL,
@@ -74,9 +74,10 @@ export function mekoSettings(cfg: Config): MekoSettings {
     envWebUrl: envMekoWebUrl(),
     effectiveWebUrl: resolveMekoWebUrl(cfg),
     effectiveApiUrl: resolveMekoApiUrl(cfg),
-    // Never the key itself; short keys get no hint at all.
-    keyHint: eff.apiKey ? (eff.apiKey.length >= 12 ? eff.apiKey.slice(-4) : '') : null,
+    // Never the key itself; short keys and the local Meko's token get no hint at all.
+    keyHint: eff.apiKey ? (eff.apiKey.length >= 12 && eff.keySource !== 'local' ? eff.apiKey.slice(-4) : '') : null,
     keySource: eff.keySource,
+    local: localMeko().state,
   };
 }
 
@@ -106,10 +107,12 @@ function keyOrigins(cfg: Config): Set<string> {
     .map(originOf).filter((o): o is string => !!o));
 }
 
-/** The Meko settings the tab can change; all but `enabled` are strings. */
-const TEXT_KEYS = ['url', 'apiKey', 'webUrl', 'apiUrl'] as const;
-const MEKO_KEYS = ['enabled', ...TEXT_KEYS] as const;
+/** The Meko settings the tab can change. */
+const MEKO_KEYS = ['url', 'apiKey', 'webUrl', 'apiUrl'] as const;
 type MekoKey = (typeof MEKO_KEYS)[number];
+
+/** Where a key comes from that AgentK can't clear, in words. */
+const KEY_ELSEWHERE = { env: 'the MEKO_API_KEY environment variable', claude: "Claude Code's settings" } as const;
 
 /**
  * Only the fields a save changed, onto the config as it is now: the checks take a while, and
@@ -130,10 +133,11 @@ export async function nextMekoConfig(
   tools: MekoTools,
   m: MekoSettingsUpdate,
 ): Promise<{ next: Config; changed: MekoKey[]; reconnect: boolean; resync: boolean } | null> {
-  for (const k of TEXT_KEYS) {
+  for (const k of MEKO_KEYS) {
     if (m[k] !== undefined && typeof m[k] !== 'string') throw new HttpError(400, `meko.${k} must be a string.`);
   }
-  if (m.enabled !== undefined && typeof m.enabled !== 'boolean') throw new HttpError(400, 'meko.enabled must be true or false.');
+  if (m.useLocal !== undefined && typeof m.useLocal !== 'boolean') throw new HttpError(400, 'meko.useLocal must be true or false.');
+  if (m.useLocal && (m.apiKey?.trim() || m.url !== undefined)) throw new HttpError(400, 'Use the Meko on this computer, or save a URL and key: not both at once.');
   // One snapshot throughout: the checks below take a while, and another change may land meanwhile.
   const base = core.config;
   const next = structuredClone(base);
@@ -155,10 +159,19 @@ export async function nextMekoConfig(
   if (m.apiKey?.trim()) {
     if (/\s/.test(m.apiKey.trim())) throw new HttpError(400, "A Meko API key has no spaces in it. Paste it again.");
     next.meko.apiKey = m.apiKey.trim();
-    // Adding a key turns Meko on.
-    next.meko.enabled = true;
   }
-  if (m.enabled !== undefined) next.meko.enabled = m.enabled;
+  if (m.useLocal) {
+    // Without a key here, AgentK uses the Meko on this computer: unless the key comes from
+    // somewhere AgentK can't clear, or no Meko runs here (asked again now).
+    await core.refreshLocalMeko();
+    next.meko.apiKey = '';
+    next.meko.url = '';
+    const to = resolveMekoWithSource(next).keySource;
+    if (to === 'env' || to === 'claude') {
+      throw new HttpError(400, `AgentK's Meko key comes from ${KEY_ELSEWHERE[to]}, which AgentK can't change. Remove it there to use the Meko on this computer. Nothing was saved.`);
+    }
+    if (to !== 'local') throw new HttpError(400, 'No Meko is running on this computer. Start it with meko start, then try again. Nothing was saved.');
+  }
   // What this save changes, against the config as it was when it began.
   const changed = MEKO_KEYS.filter((k) => next.meko[k] !== base.meko[k]);
   if (!changed.length) return null;
@@ -166,8 +179,7 @@ export async function nextMekoConfig(
   const after = resolveMeko(next);
   // A saved key goes only where it already goes, or to Meko Cloud. Sending it to another server
   // takes it typed again: otherwise anyone with the browser's login could point AgentK at their
-  // own server and read the key off the check (or the next invite sync). Checked with Meko off
-  // too, or a URL saved while off would count as one the key goes to once Meko is back on.
+  // own server and read the key off the check (or the next invite sync).
   const key = resolveMekoWithSource(next);
   if (!m.apiKey?.trim() && key.apiKey && key.apiKey === resolveMekoWithSource(base).apiKey) {
     const known = keyOrigins(base);
@@ -175,7 +187,7 @@ export async function nextMekoConfig(
     if (to) throw new HttpError(400, `Enter the Meko API key again to use it with ${to}: AgentK sends a saved key only to a Meko server it already uses. Nothing was saved.`);
   }
   const reconnect = before.url !== after.url || before.apiKey !== after.apiKey;
-  if (reconnect && next.meko.enabled) {
+  if (reconnect) {
     if (!after.apiKey) throw new HttpError(400, 'Enter a Meko API key.');
     const r = await tools.check(after.url, after.apiKey);
     if (!r.ok) throw new HttpError(400, `Meko at ${after.url} didn't accept that key: ${r.error}. Nothing was saved.`);
@@ -191,13 +203,16 @@ export async function nextMekoConfig(
   return { next, changed, reconnect, resync };
 }
 
+/** Why a setup can't run: there's no Meko to set up with. */
+const NO_MEKO = "Meko isn't set up: start Meko on this computer (meko start), or add a Meko Cloud key.";
+
 /**
  * Runs Meko's setup for Claude Code with AgentK's Meko. After it, config.toml drops a key that
  * Claude Code's settings now hold, so the two can't drift apart (same rule as the installer).
  */
 export async function setUpClaudeMeko(core: Core, tools: MekoTools): Promise<void> {
-  const meko = resolveMeko(core.config);
-  if (!meko.apiKey) throw new HttpError(400, 'Set a Meko API key first.');
+  const meko = resolveMekoWithSource(core.config);
+  if (!meko.apiKey) throw new HttpError(400, NO_MEKO);
   const tail: string[] = [];
   try {
     await tools.setUpClaude(meko.url, meko.apiKey, (line) => {
@@ -209,6 +224,9 @@ export async function setUpClaudeMeko(core: Core, tools: MekoTools): Promise<voi
     const why = errMsg(e).replace(/([^.!?])$/, '$1.');
     throw new HttpError(502, `${why}${tail.length ? ` Last output: ${tail.join(' / ')}` : ''}`);
   }
+  core.log.info(`set up Meko for Claude Code (${meko.url})`);
+  // The local Meko's token isn't AgentK's to keep: it reads it from Meko.
+  if (meko.keySource === 'local') return;
   const env = readClaudeSettingsEnv();
   const keep = mekoKeyForConfig({
     apiKey: meko.apiKey, url: meko.url, typed: false, settingsKey: env.MEKO_API_KEY, settingsUrl: env.MEKO_MCP_URL,
@@ -220,7 +238,6 @@ export async function setUpClaudeMeko(core: Core, tools: MekoTools): Promise<voi
       c.meko.url = keep.url;
     });
   }
-  core.log.info(`set up Meko for Claude Code (${meko.url})`);
 }
 
 /**
@@ -230,7 +247,7 @@ export async function setUpClaudeMeko(core: Core, tools: MekoTools): Promise<voi
  */
 export async function setUpKiroMeko(core: Core, tools: MekoTools): Promise<void> {
   const meko = resolveMeko(core.config);
-  if (!meko.apiKey) throw new HttpError(400, 'Set a Meko API key first.');
+  if (!meko.apiKey) throw new HttpError(400, NO_MEKO);
   const tail: string[] = [];
   try {
     await tools.setUpKiro(meko.url, meko.apiKey, (line) => {

@@ -5,6 +5,7 @@ import { claudeUserDir } from './claude.js';
 import { DEFAULT_MEKO_URL, DEFAULT_MEKO_WEB_URL, mekoWebUrl } from '../shared/mekourls.js';
 import type { MekoKeySource } from '../shared/types.js';
 import { DEFAULT_HARNESS, HARNESS_IDS, isHarnessId, type HarnessId } from '../shared/harnesses.js';
+import { isLocalMeko, localMeko, originOf } from './mekolocal.js';
 import { expandHome, type Paths } from './paths.js';
 
 export type UpdateChannel = 'stable' | 'prerelease' | 'off';
@@ -19,12 +20,12 @@ export interface Config {
    * captureTranscripts: send session transcripts to Meko conversations. Off by default until Meko's capture stops
    * extracting loaded skills as user requirements (MEKO-710); off, sessions also run without the Meko plugin.
    * apiUrl: Meko's REST API base (sharing); empty means the web app URL plus /api/v1.
-   * enabled: false turns Meko off even when a key is set (here, in the environment or in Claude
-   * Code's settings); AgentK then works without datapacks.
+   * url and apiKey: a Meko Cloud (or other) key. With none here, in the environment or in Claude
+   * Code's settings, AgentK uses the Meko running on this computer (mekolocal.ts), which isn't stored here.
    * home: Meko's data folder, as Meko last told AgentK (the MEKO_HOME it sets on the commands it
    * runs); empty means Meko's default. AgentK's home is in it (paths.ts `mekoHome`).
    */
-  meko: { enabled: boolean; url: string; apiKey: string; webUrl: string; apiUrl: string; captureTranscripts: boolean; home: string };
+  meko: { url: string; apiKey: string; webUrl: string; apiUrl: string; captureTranscripts: boolean; home: string };
   /**
    * dbPath: where state.db is when the home is on a network filesystem, which only a home from before
    * the move into Meko's data folder can be (Meko keeps its folder on a local disk). `agentk install`
@@ -89,7 +90,7 @@ export const DEFAULT_CONFIG: Config = {
   tls: { cert: '', key: '' },
   repos: { roots: ['~/code'], depth: 1, cloneInto: '~/code' },
   update: { channel: 'stable', repo: 'yugabyte/agent-k-local', requireAttestation: false, intervalHours: 6 },
-  meko: { enabled: true, url: '', apiKey: '', webUrl: '', apiUrl: '', captureTranscripts: false, home: '' },
+  meko: { url: '', apiKey: '', webUrl: '', apiUrl: '', captureTranscripts: false, home: '' },
   state: { dbPath: '' },
   claude: { command: 'claude', enabled: true, mod: true },
   agents: { default: DEFAULT_HARNESS },
@@ -211,15 +212,16 @@ export function isLoopback(bind: string): boolean {
  * Meko credentials: config first, then the environment, then Claude Code's settings.json env.
  * The key comes from the first of those that has one. The URL comes from the first that has one,
  * except that a later source's URL is skipped when that source has a key of its own: it belongs
- * to that other key. With no URL, Meko Cloud.
+ * to that other key. With no URL, Meko Cloud. With no key in any of them, the Meko running on this
+ * computer, whose token goes only to its own URL; a key that's a copy of its token or for its URL
+ * (Meko's setup for Claude Code writes one) is the live local Meko too, so a copy never goes stale.
  */
 export function resolveMeko(cfg: Config): { url: string; apiKey: string } {
   const { url, apiKey } = resolveMekoWithSource(cfg);
-  // Turned off: no key, so nothing talks to Meko.
-  return { url, apiKey: cfg.meko.enabled ? apiKey : '' };
+  return { url, apiKey };
 }
 
-/** Meko is on: not turned off, and there's a key. Without it AgentK works without datapacks. */
+/** There's a Meko to use: a key, or the Meko on this computer. Without one AgentK works without datapacks. */
 export function mekoConfigured(cfg: Config): boolean {
   return !!resolveMeko(cfg).apiKey;
 }
@@ -239,14 +241,26 @@ export function resolveMekoWithSource(cfg: Config): { url: string; apiKey: strin
   });
   const keyAt = sources.findIndex((s) => s.apiKey);
   const apiKey = keyAt < 0 ? '' : sources[keyAt].apiKey;
-  const url = sources.find((s, i) => s.url && (keyAt < 0 || i <= keyAt || !s.apiKey))?.url;
+  const url = sources.find((s, i) => s.url && (keyAt < 0 || i <= keyAt || !s.apiKey))?.url || DEFAULT_MEKO_URL;
+  // The local Meko's URL and token are a pair: no other source's URL ever takes its token.
+  const local = localMeko().meko;
+  if (local && (keyAt < 0 || isLocalMeko(local, url, apiKey))) return { url: local.url, apiKey: local.token, keySource: 'local' };
   const keySource = keyAt < 0 ? null : (['config', 'env', 'claude'] as const)[keyAt];
-  return { url: url || DEFAULT_MEKO_URL, apiKey, keySource };
+  return { url, apiKey, keySource };
+}
+
+/**
+ * With the Meko on this computer, a web app or API URL from config or the environment is used only
+ * on that Meko's own origin: the local token goes to no other server.
+ */
+function forKey(override: string, eff: { url: string; keySource: MekoKeySource | null }): string {
+  return eff.keySource !== 'local' || originOf(override) === originOf(eff.url) ? override : '';
 }
 
 /** Meko web app URL: config first, then the environment, then derived from the MCP URL. */
 export function resolveMekoWebUrl(cfg: Config): string | null {
-  return mekoWebUrl(resolveMeko(cfg).url, cfg.meko.webUrl || envMekoWebUrl());
+  const eff = resolveMekoWithSource(cfg);
+  return mekoWebUrl(eff.url, forKey(cfg.meko.webUrl || envMekoWebUrl(), eff));
 }
 
 /** The web app URL MEKO_WEB_URL or Claude Code's settings give, used when config has none; '' when unset. */
@@ -275,7 +289,7 @@ export function mekoHost(cfg: Config): string {
  * plus /api/v1 (the Meko web app serves its API on the same origin). Null when neither is known.
  */
 export function resolveMekoApiUrl(cfg: Config): string | null {
-  const override = cfg.meko.apiUrl.trim() || process.env.MEKO_API_URL?.trim() || '';
+  const override = forKey(cfg.meko.apiUrl.trim() || process.env.MEKO_API_URL?.trim() || '', resolveMekoWithSource(cfg));
   if (override) return override.replace(/\/+$/, '');
   const web = resolveMekoWebUrl(cfg);
   return web ? `${web}/api/v1` : null;

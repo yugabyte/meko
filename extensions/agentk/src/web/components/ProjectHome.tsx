@@ -74,7 +74,7 @@ export function ProjectHomeView({
   /** Who can share it, when a contributor or viewer asks (null: the notice isn't shown). */
   const [sharers, setSharers] = useState<string[] | null>(null);
   const share = () => {
-    if (!mekoConfigured) setDialog({ kind: 'key', reason: 'A project is shared through its Meko datapack, so sharing needs Meko. Add your Meko API key to turn it on.' });
+    if (!mekoConfigured) setDialog({ kind: 'key', reason: 'A project is shared through its Meko datapack, so sharing needs Meko. Add a Meko Cloud key, or start Meko on this computer (meko start).' });
     else if (!dedicated) setDialog({ kind: 'datapack', reason: `A project is shared through its datapack, and ${project.name} has none yet.` });
     else if (cantShare) {
       const owner = dedicated.ownerName ?? dedicated.ownerEmail;
