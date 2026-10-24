@@ -696,7 +696,8 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
 
     rmSync(join(s.worktreePath, 'notes.txt'));
     await env.core.sessions.submit(s.id, 'LEARN_DONE');
-    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'archived', 10000, 'closed');
+    // The discard's last step: its git work (freeing the worktree, deleting the branch) is done by then.
+    await waitFor(() => events(s.id), (e) => e.some((x) => x.kind === 'discarded'), 10000, 'closed');
     expect(get(env.core.db, 'SELECT COUNT(*) AS n FROM meko_learns WHERE session_id = ?', s.id)).toEqual({ n: 0 });
     expect((await env.core.projects.home(p.id)).hasLearnSession).toBe(true);
   });
@@ -712,7 +713,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(existsSync(join(env.core.paths.designs, s.id, 'learned.md'))).toBe(false);
     running.mockRestore();
     env.core.lifecycle.afterLearn(s.id);
-    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'archived', 10000, 'closed');
+    await waitFor(() => events(s.id), (e) => e.some((x) => x.kind === 'discarded'), 10000, 'closed');
   });
 
   it.each([
