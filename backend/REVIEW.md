@@ -37,8 +37,10 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       the other browsers out and closes their WebSockets.
 - [ ] `/ext/<name>/*` passes the browser's Host and Origin to the extension's socket, drops the
       Cookie and adds no `X-Forwarded-*` (the extension trusts its socket and checks only the
-      origin). The handoff (`_handoff --json`) only fills in what Meko lacks, and its secrets never
-      reach a log.
+      origin). The handoff (`_handoff --json`) takes an extension's old settings over once and only
+      fills in what Meko lacks, writing `web.toml`, never `config.toml` (an older release refuses
+      its unknown keys after a rollback); its secrets never reach a log. The client token goes
+      only to a request with a token or a signed-in session, never to local access.
 - [ ] Files in the data folder are owner-only (folders 0700, files 0600), and tokens and memory text
       never reach logs or error replies (internal errors get the generic message), in Go or in the
       memory engine (`logs/memory_engine.log`).

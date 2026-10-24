@@ -66,12 +66,14 @@ type webListener struct {
 	sockets map[string]string          // an extension's name to the socket its handoff named
 	handed  map[string]bool            // the extensions handed over since this server started
 	asked   map[string]time.Time       // when a handoff was last tried for a socket a request needed
+	warned  map[string]string          // the last handoff failure logged for an extension, logged once
 	proxied map[string]*extproxy.Proxy // one proxy per extension, kept for its WebSockets
 }
 
 func newWebListener(l paths.Layout, st *store.Store, lg *login.Service, log *slog.Logger) *webListener {
 	return &webListener{l: l, st: st, login: lg, log: log, sockets: map[string]string{},
-		handed: map[string]bool{}, asked: map[string]time.Time{}, proxied: map[string]*extproxy.Proxy{}}
+		handed: map[string]bool{}, asked: map[string]time.Time{}, warned: map[string]string{},
+		proxied: map[string]*extproxy.Proxy{}}
 }
 
 // socket is where an extension listens. An extension registered since the server started (meko
@@ -132,7 +134,7 @@ func (w *webListener) RevokeEnded() {
 }
 
 // Run serves until ctx ends. A port that's taken is tried again every webRetry, and so is a handoff
-// that failed: once one works, its extension's settings are in config.toml, read before the port is.
+// that failed: once one works, its extension's settings are in web.toml, read before the port is.
 func (w *webListener) Run(ctx context.Context) {
 	go func() {
 		for sleep(ctx, time.Minute) {
@@ -144,7 +146,7 @@ func (w *webListener) Run(ctx context.Context) {
 		pending := w.handoff(ctx)
 		cfg, err := config.Load(w.l.Config, os.Getenv, config.Overrides{})
 		if err != nil {
-			w.fail(&logged, "can't read config.toml", err)
+			w.fail(&logged, "can't read the settings", err)
 			if !sleep(ctx, webRetry) {
 				return
 			}
@@ -310,24 +312,41 @@ func (w *webListener) handoff(ctx context.Context) (pending bool) {
 		h, err := reg.Entries[name].Handoff(w.l.Root)
 		if err != nil {
 			w.useKnownSocket(ctx, name)
-			w.log.Warn("the extension can't hand over yet; asking again in 30 s", "extension", name, "error", err)
+			w.warnOnce(name, "the extension can't hand over yet; asking again every 30 s", err)
 			pending = true
 			continue
 		}
 		if err := w.takeOver(ctx, name, h); err != nil {
-			w.log.Warn("taking over from the extension failed; asking again in 30 s", "extension", name, "error", err)
+			w.warnOnce(name, "taking over from the extension failed; asking again every 30 s", err)
 			pending = true
 			continue
 		}
 		w.mu.Lock()
 		w.sockets[name], w.handed[name] = h.Socket, true
+		delete(w.warned, name)
 		w.mu.Unlock()
 	}
 	return pending
 }
 
+// warnOnce logs a handoff failure the first time it happens, not at every retry.
+func (w *webListener) warnOnce(name, msg string, err error) {
+	w.mu.Lock()
+	seen := w.warned[name] == err.Error()
+	w.warned[name] = err.Error()
+	w.mu.Unlock()
+	if !seen {
+		w.log.Warn(msg, "extension", name, "error", err)
+	}
+}
+
 // socketKey is where the last socket an extension named is kept, for a start whose handoff fails.
 func socketKey(name string) string { return "extension_socket." + name }
+
+// tookOverKey records that an extension's old web settings and login were taken over, which
+// happens once: the extension keeps reporting them, and a [web] the owner removed later, or a
+// password changed since, must not come back from it.
+func tookOverKey(name string) string { return "extension_took_over." + name }
 
 func (w *webListener) useKnownSocket(ctx context.Context, name string) {
 	if v, ok, err := w.st.Setting(ctx, socketKey(name)); err == nil && ok {
@@ -343,7 +362,17 @@ func (w *webListener) takeOver(ctx context.Context, name string, h extensions.Ha
 	if err := w.st.SetSetting(ctx, socketKey(name), h.Socket); err != nil {
 		return err
 	}
-	lg := h.Legacy
+	if _, done, err := w.st.Setting(ctx, tookOverKey(name)); err != nil || done {
+		return err
+	}
+	if err := w.importLegacy(ctx, name, h.Legacy); err != nil {
+		return err
+	}
+	return w.st.SetSetting(ctx, tookOverKey(name), time.Now().UTC().Format(time.RFC3339))
+}
+
+// importLegacy takes over what an extension had when it served browsers itself (nil: nothing).
+func (w *webListener) importLegacy(ctx context.Context, name string, lg *extensions.Legacy) error {
 	if lg == nil {
 		return nil
 	}

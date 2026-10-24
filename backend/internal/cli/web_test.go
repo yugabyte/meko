@@ -111,12 +111,19 @@ func TestHandoff(t *testing.T) {
 		t.Fatalf("AgentK through Meko: %d %q", resp.StatusCode, b)
 	}
 
-	// Again: nothing is added twice.
+	// What Meko chose is in web.toml, so config.toml stays readable by a release from before it.
+	if raw, _ := os.ReadFile(paths.New(dir).Config); strings.Contains(string(raw), "[web]") {
+		t.Errorf("config.toml got a [web] table:\n%s", raw)
+	}
+	// The handoff happens once: AgentK keeps reporting its old settings, and a web.toml the owner
+	// removed (to go back to the defaults) doesn't come back.
+	if err = os.Remove(config.WebFile(paths.New(dir).Config)); err != nil {
+		t.Fatal(err)
+	}
 	code, out, errs = run("restart", "--data-dir", dir, "--port", port)
 	want(t, "restart", code, 0, out+errs, "is running")
-	raw, _ := os.ReadFile(paths.New(dir).Config)
-	if n := strings.Count(string(raw), "[web]"); n != 1 {
-		t.Errorf("config.toml has %d [web] tables:\n%s", n, raw)
+	if _, err = os.Stat(config.WebFile(paths.New(dir).Config)); !os.IsNotExist(err) {
+		t.Errorf("web.toml came back after the first handoff: %v", err)
 	}
 }
 

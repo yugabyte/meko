@@ -23,8 +23,10 @@ func TestPasswords(t *testing.T) {
 	if !VerifyPassword("correct horse battery", agentk) {
 		t.Fatal("an AgentK hash doesn't verify")
 	}
-	for _, bad := range []string{"", "bcrypt$x", "scrypt$abc$8$1$c2FsdA==$aGFzaA==", "scrypt$1073741824$8$1$c2FsdA==$" +
-		"aGFzaGhhc2hoYXNoaGFzaA=="} {
+	// Past twice the 32 MiB a check takes (N=2^20, r=8 would be 1 GiB), or not a power of two.
+	tooBig := "scrypt$1048576$8$1$c2FsdA==$aGFzaGhhc2hoYXNoaGFzaA=="
+	notPow2 := "scrypt$30000$8$1$c2FsdA==$aGFzaGhhc2hoYXNoaGFzaA=="
+	for _, bad := range []string{"", "bcrypt$x", "scrypt$abc$8$1$c2FsdA==$aGFzaA==", tooBig, notPow2} {
 		if VerifyPassword("x", bad) {
 			t.Errorf("%q verified", bad)
 		}

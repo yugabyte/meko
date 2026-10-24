@@ -261,8 +261,10 @@ func TestWebSettings(t *testing.T) {
 }
 
 func TestAddWeb(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(path, []byte("# mine\n[log]\nlevel = \"debug\""), 0o600); err != nil {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	mine := "# mine\n[log]\nlevel = \"debug\"\n"
+	if err := os.WriteFile(path, []byte(mine), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	wrote, err := AddWeb(path, Web{Port: 7777, Access: AccessRemote}, TLS{Cert: "/a/c.pem", Key: "/a/k.pem"})
@@ -273,23 +275,31 @@ func TestAddWeb(t *testing.T) {
 	if err != nil || c.Web.Access != AccessRemote || c.TLS.Cert != "/a/c.pem" || c.Log.Level != "debug" {
 		t.Fatalf("after the add: %+v %+v %v", c.Web, c.TLS, err)
 	}
-	b, _ := os.ReadFile(path)
-	if !strings.HasPrefix(string(b), "# mine\n") {
-		t.Errorf("the user's lines changed: %q", b)
+	// config.toml is left as it is, so a release from before the web listener, which refuses keys it
+	// doesn't know, still reads it after a rollback; web.toml is owner-only.
+	if b, _ := os.ReadFile(path); string(b) != mine {
+		t.Errorf("config.toml changed: %q", b)
 	}
-	// A [web] table that's there is the user's: nothing is added again.
+	if fi, serr := os.Stat(WebFile(path)); serr != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("web.toml: %v %v", fi, serr)
+	}
+	// Once there's a choice, nothing is added again.
 	if wrote, err = AddWeb(path, Web{Access: AccessLocal}, TLS{}); err != nil || wrote {
 		t.Fatalf("second add: %v %v", wrote, err)
 	}
-	if fi, serr := os.Stat(path); serr != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("mode: %v %v", fi.Mode(), serr)
+	// config.toml's own [web] keys win over web.toml's, and stop AddWeb.
+	if err = os.WriteFile(path, []byte(mine+"[web]\naccess = \"local\"\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	// A missing file is made.
+	if c, err = Load(path, func(string) string { return "" }, Overrides{}); err != nil || c.Web.Access != AccessLocal ||
+		c.Web.Port != 7777 {
+		t.Fatalf("config.toml over web.toml: %+v %v", c.Web, err)
+	}
 	fresh := filepath.Join(t.TempDir(), "config.toml")
-	if wrote, err = AddWeb(fresh, Web{Access: AccessLocal}, TLS{}); err != nil || !wrote {
-		t.Fatalf("fresh: %v %v", wrote, err)
+	if err = os.WriteFile(fresh, []byte("[web]\nport = 8000\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if c, err = Load(fresh, func(string) string { return "" }, Overrides{}); err != nil || c.Web.Access != AccessLocal {
-		t.Fatalf("fresh load: %+v %v", c.Web, err)
+	if wrote, err = AddWeb(fresh, Web{Access: AccessRemote}, TLS{}); err != nil || wrote {
+		t.Fatalf("add with the user's [web]: %v %v", wrote, err)
 	}
 }

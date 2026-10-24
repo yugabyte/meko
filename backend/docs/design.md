@@ -130,7 +130,7 @@ Config precedence: flags > `MEKO_*` env > `config.toml` > defaults. An unknown k
 | Key | Env | Default | What |
 |---|---|---|---|
 | `[server] port` | `MEKO_PORT`, `--port` | 7778 | The API listener's port on 127.0.0.1. A taken port is an error naming the setting, with no random fallback. |
-| `[web] port`, `access`, `name`; `[tls] cert`, `key` | `MEKO_WEB_PORT`, `MEKO_WEB_ACCESS` | 7777, `"local"` | The web listener ([web.md](web.md#settings)). A taken port is retried, not an error: AgentK may still hold it. |
+| `[web] port`, `access`, `name`; `[tls] cert`, `key` | `MEKO_WEB_PORT`, `MEKO_WEB_ACCESS` | 7777, `"local"` | The web listener ([web.md](web.md#settings)). A taken port is retried, not an error: AgentK may still hold it. What Meko chose itself (`meko install`, the handoff from AgentK) is in `web.toml`, which these keys in `config.toml` override. |
 | `[server] auth` | `MEKO_AUTH` | `"token"` | `"none"` lifts the credential on `/mcp` and the data routes ([api.md](api.md)). |
 | `[log] level` | `MEKO_LOG_LEVEL`, `--log-level` | `"info"` | |
 | `[memory_engine] node`, `dir` | `MEKO_NODE`, `MEKO_MEMORY_ENGINE_DIR` | found | Node and the built memory engine ([memory-engine.md](memory-engine.md)). |

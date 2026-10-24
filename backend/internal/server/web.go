@@ -228,7 +228,7 @@ func (s *Server) authPassword(c echo.Context) error {
 	if ck, err := c.Cookie(SessionCookie); err == nil {
 		keep = ck.Value
 	}
-	if err := s.opts.Login.ChangePassword(c.Request().Context(), b.Current, b.Next, keep); err != nil {
+	if err := s.opts.Login.ChangePassword(c.Request().Context(), b.Current, b.Next, keep, peerIP(c)); err != nil {
 		return loginError(c, err)
 	}
 	return envelope.OK(c, map[string]bool{"changed": true})

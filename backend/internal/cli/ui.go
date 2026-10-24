@@ -48,8 +48,13 @@ func runUI(l paths.Layout, path string, open bool, stdout, stderr io.Writer) int
 	if w == nil || w.URL == "" {
 		return fail(stderr, fmt.Errorf("this server has no web listener"))
 	}
-	if !w.Listening && w.Error != "" {
-		fmt.Fprintf(stderr, "meko: the web listener isn't listening yet: %s\n", w.Error)
+	if !w.Listening {
+		// Another program may hold the port (an AgentK from before Meko served it): don't open its page.
+		why := w.Error
+		if why == "" {
+			why = "it's starting"
+		}
+		return fail(stderr, fmt.Errorf("the web UI isn't listening at %s yet: %s", w.URL, why))
 	}
 	if w.Access == config.AccessRemote && !w.Login {
 		link, lerr := c.setupLink(ctx)

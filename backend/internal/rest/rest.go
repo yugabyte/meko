@@ -45,12 +45,14 @@ type api struct {
 	Options
 }
 
-// keyFor is the client token for a request that sent a credential or came from the owner's browser
-// on the web listener (signed in, or from this computer with local access), and "" for one let in
-// by auth = "none".
+// keyFor is the client token for a request that sent a credential or came from the owner signed in
+// on the web listener, and "" otherwise. Not for local access, which every user of the computer
+// has, nor auth = "none": the token lets a caller do what neither does (knowledgebase_upload_file
+// reads a path as Meko's user), and keeps working when access or auth changes. The Connect page
+// then says to run meko token.
 func (a *api) keyFor(c echo.Context) string {
 	switch a.Credential(c) {
-	case "admin", "client", "session", "local":
+	case "admin", "client", "session":
 		return a.ClientToken
 	}
 	return ""

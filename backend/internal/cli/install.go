@@ -129,7 +129,8 @@ func runInstall(l paths.Layout, noService bool, access string, stdout, stderr io
 	return nextSteps(stdout)
 }
 
-// setWebAccess adds a [web] table to config.toml when it has none: with access, or, unless an
+// setWebAccess writes the web listener's access to web.toml (config.AddWeb) when neither it nor
+// config.toml has a [web] table: with access, or, unless an
 // AgentK is on this computer (whose own access Meko takes over when it hands over its port), with
 // the default AgentK had: remote over SSH or on Linux with no display, local otherwise.
 func setWebAccess(l paths.Layout, cfg config.Config, access, home string, stdout io.Writer) error {
@@ -151,7 +152,8 @@ func setWebAccess(l paths.Layout, cfg config.Config, access, home string, stdout
 	if access == config.AccessRemote {
 		note = "every address, over HTTPS; meko setup_link makes the login"
 	}
-	fmt.Fprintf(stdout, "  Web UI:  %s access (%s), set in %s\n", access, note, l.Config)
+	fmt.Fprintf(stdout, "  Web UI:  %s access (%s), in %s; [web] in config.toml overrides it\n", access, note,
+		config.WebFile(l.Config))
 	return nil
 }
 

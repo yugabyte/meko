@@ -35,10 +35,10 @@ says so and changes nothing, unless given `--reinstall` or another version.
   `app/current/bin/meko`. A build from source is set up as it is and doesn't update itself.
 - It makes the client token (in the secret store) and sets up the login service (below), stopping
   a server started by hand on the same data folder first. `--no-service` skips the service.
-- It adds a `[web]` table to `config.toml` when there's none: `--access local|remote`, or by
-  AgentK's old rule (remote over SSH or on Linux with no display, else local), unless AgentK is on
-  this computer, whose access the handoff takes over instead ([web.md](web.md#settings)). It prints
-  the web UI's URL.
+- It writes the web listener's access to `web.toml` when neither it nor `config.toml` has a `[web]`
+  table: `--access local|remote`, or by AgentK's old rule (remote over SSH or on Linux with no
+  display, else local), unless AgentK is on this computer, whose access the handoff takes over
+  instead ([web.md](web.md#settings)). It prints the web UI's URL.
 - It installs Meko alone. AgentK is `meko install_extension agentk`.
 
 `meko uninstall` removes the service, `~/.local/bin/meko` and the app folder, and keeps the data;
@@ -161,7 +161,7 @@ extension knows where its own folder is: `<data>/extensions/<name>` (`extensions
 home is `<data>/extensions/agentk`, wherever Meko's rule puts the data folder (`MEKO_HOME`,
 `~/.meko`, or the network-home fallback; AgentK runs the same rule when Meko didn't tell it, and
 both test suites read `internal/paths/testdata/resolve-cases.json`). An AgentK whose home is in
-another data folder refuses `start`, `stop`, `status` and `uninstall` run with this one's
+another data folder refuses `start`, `stop`, `status`, `uninstall` and `_handoff` run with this one's
 `MEKO_HOME`, and does nothing.
 
 - An extension's command is found on PATH, then in `~/.local/bin`, then in its release install's

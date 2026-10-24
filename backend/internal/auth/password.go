@@ -68,9 +68,11 @@ func VerifyPassword(password, stored string) bool {
 	p, errP := strconv.Atoi(parts[3])
 	salt, errS := base64.StdEncoding.DecodeString(parts[4])
 	want, errH := base64.StdEncoding.DecodeString(parts[5])
-	// The bounds keep an imported hash from asking for more memory than a login is worth.
+	// The bounds keep an imported hash from asking for more memory or time than a login is worth:
+	// at most twice what AgentK's and Meko's own parameters take (128·N·r bytes, 32 MiB).
 	if errN != nil || errR != nil || errP != nil || errS != nil || errH != nil ||
-		n < 2 || n > 1<<20 || r < 1 || r > 32 || p < 1 || p > 16 || len(want) < 16 || len(want) > 128 {
+		n < 2 || n&(n-1) != 0 || r < 1 || p < 1 || p > 2 || n*r > 2*scryptN*scryptR ||
+		len(want) < 16 || len(want) > 128 {
 		return false
 	}
 	got, err := scrypt.Key([]byte(password), salt, n, r, p, len(want))

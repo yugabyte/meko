@@ -357,10 +357,11 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			log.Warn("can't update the pending update", "error", err)
 		}
 	}
-	drain, cancel := context.WithTimeout(context.Background(), drainTimeout)
-	defer cancel()
 	stopWeb() // Run drains the web listener (drainTimeout) before it returns
 	<-webDone
+	// The API listener's own drain, after the web listener's: agents' requests get the whole of it.
+	drain, cancel := context.WithTimeout(context.Background(), drainTimeout)
+	defer cancel()
 	if err := srv.Shutdown(drain); err != nil {
 		log.Warn("requests didn't finish in time", "error", err)
 	}

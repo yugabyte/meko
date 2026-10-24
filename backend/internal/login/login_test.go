@@ -116,10 +116,10 @@ func TestTwoStepAndPassword(t *testing.T) {
 		t.Fatalf("the next code: %v", err)
 	}
 
-	if err = s.ChangePassword(ctx, "not it", "another long one", mine); !errors.Is(err, ErrBadPassword) {
+	if err = s.ChangePassword(ctx, "not it", "another long one", mine, "10.0.0.1"); !errors.Is(err, ErrBadPassword) {
 		t.Fatalf("a wrong current password: %v", err)
 	}
-	if err = s.ChangePassword(ctx, "a long password", "another long one", mine); err != nil {
+	if err = s.ChangePassword(ctx, "a long password", "another long one", mine, "10.0.0.1"); err != nil {
 		t.Fatal(err)
 	}
 	if !s.Live(ctx, Hash(mine)) || s.Live(ctx, Hash(other)) {
@@ -186,5 +186,29 @@ func TestLoginBurst(t *testing.T) {
 	}
 	if _, err := s.Login(ctx, "ana", "a long password", "", "10.0.0.2", ""); err != nil {
 		t.Fatalf("another client: %v", err)
+	}
+}
+
+// Guessing the current password through a password change counts like a sign-in.
+func TestChangePasswordIsLimited(t *testing.T) {
+	s, _ := newService(t)
+	ctx := context.Background()
+	hash, _ := auth.HashPassword("a long password")
+	if _, err := s.ImportOwner(ctx, store.Owner{Username: "ana", PWScrypt: hash}); err != nil {
+		t.Fatal(err)
+	}
+	change := func(current string) error {
+		return s.ChangePassword(ctx, current, "another long one", "", "10.0.0.1")
+	}
+	for range 5 {
+		if err := change("a wrong guess!"); !errors.Is(err, ErrBadPassword) {
+			t.Fatalf("a wrong current password: %v", err)
+		}
+	}
+	if err := change("a long password"); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("after 5 wrong guesses: %v", err)
+	}
+	if _, err := s.Login(ctx, "ana", "a long password", "", "10.0.0.1", ""); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("a sign-in from the same client: %v", err)
 	}
 }

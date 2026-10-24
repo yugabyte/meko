@@ -8,7 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/url"
-	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -176,6 +176,21 @@ type Overrides struct {
 // and the flag overrides.
 func Load(path string, env func(string) string, o Overrides) (Config, error) {
 	c := Default()
+	// web.toml first: config.toml's own [web] and [tls] keys win over what Meko chose (AddWeb).
+	var chosen struct {
+		Web *Web `toml:"web"`
+		TLS *TLS `toml:"tls"`
+	}
+	chosenPath := WebFile(path)
+	if _, err := toml.DecodeFile(chosenPath, &chosen); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return Config{}, fmt.Errorf("%s: %w", chosenPath, err)
+	}
+	if chosen.Web != nil {
+		c.Web = mergeWeb(c.Web, *chosen.Web)
+	}
+	if chosen.TLS != nil {
+		c.TLS = *chosen.TLS
+	}
 	md, err := toml.DecodeFile(path, &c)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -338,29 +353,51 @@ func (l Log) SlogLevel() (slog.Level, error) {
 	return 0, fmt.Errorf("log level %q isn't one of debug, info, warn, error", l.Level)
 }
 
-// AddWeb adds a [web] table to config.toml at path (and a [tls] table, when tls names files and the
-// file has none), unless the file already has a [web] table, which is the user's. It reports whether
-// it wrote. Meko writes config.toml only this way: meko install, with the access it picked, and the
-// handoff from AgentK, with the access and port AgentK had. The rest of the file is kept as it is.
+// WebFile is web.toml beside config.toml at path: the [web] (and [tls]) settings Meko chose
+// itself, from meko install's access and the handoff from AgentK (AddWeb). It's a file of its own,
+// not part of config.toml, because a release from before the web listener refuses config.toml's
+// unknown keys: a rollback after an update that failed its probation, or a downgrade, would then
+// leave a Meko that can't start. Older releases don't read web.toml at all.
+func WebFile(configPath string) string {
+	return filepath.Join(filepath.Dir(configPath), "web.toml")
+}
+
+func mergeWeb(base, over Web) Web {
+	if over.Port != 0 {
+		base.Port = over.Port
+	}
+	if over.Access != "" {
+		base.Access = over.Access
+	}
+	if over.Name != "" {
+		base.Name = over.Name
+	}
+	return base
+}
+
+// AddWeb writes web.toml (WebFile) with web, and tls when it names files, unless config.toml at
+// path or web.toml already has a [web] table: config.toml's is the user's, and web.toml's an earlier
+// choice. It reports whether it wrote. Meko writes these settings only this way: meko install, with
+// the access it picked, and the handoff from AgentK, with the access and port AgentK had.
 func AddWeb(path string, web Web, tls TLS) (bool, error) {
-	var c Config
-	b, err := os.ReadFile(path)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return false, err
-	}
-	md, err := toml.Decode(string(b), &c)
-	if err != nil {
-		return false, fmt.Errorf("%s: %w", path, err)
-	}
-	if md.IsDefined("web") {
-		return false, nil
+	webPath := WebFile(path)
+	for _, p := range []string{path, webPath} {
+		var c Config
+		md, err := toml.DecodeFile(p, &c)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return false, fmt.Errorf("%s: %w", p, err)
+		}
+		if md.IsDefined("web") {
+			return false, nil
+		}
 	}
 	var add strings.Builder
-	if len(b) > 0 && !strings.HasSuffix(string(b), "\n") {
-		add.WriteString("\n")
-	}
-	add.WriteString("\n# The web listener: Meko's web UI and AgentK's (/ext/agentk/). access = \"local\" needs no\n" +
-		"# login from this computer; \"remote\" listens on every address, over HTTPS, with a login.\n[web]\n")
+	add.WriteString("# The web listener's settings Meko chose (meko install, or the handoff from AgentK).\n" +
+		"# A [web] or [tls] key in config.toml overrides the one here. access = \"local\" needs no login\n" +
+		"# from this computer; \"remote\" listens on every address, over HTTPS, with a login.\n[web]\n")
 	if web.Port != 0 {
 		fmt.Fprintf(&add, "port = %d\n", web.Port)
 	}
@@ -370,10 +407,10 @@ func AddWeb(path string, web Web, tls TLS) (bool, error) {
 	if web.Name != "" {
 		fmt.Fprintf(&add, "name = %q\n", web.Name)
 	}
-	if tls.Cert != "" && tls.Key != "" && !md.IsDefined("tls") {
+	if tls.Cert != "" && tls.Key != "" {
 		fmt.Fprintf(&add, "\n[tls]\ncert = %q\nkey = %q\n", tls.Cert, tls.Key)
 	}
-	if err := paths.WriteFile(path, append(b, add.String()...)); err != nil {
+	if err := paths.WriteFile(webPath, []byte(add.String())); err != nil {
 		return false, err
 	}
 	return true, nil

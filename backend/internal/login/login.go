@@ -118,9 +118,7 @@ func (s *Service) Login(ctx context.Context, username, password, totp, ip, userA
 	if !s.limiter.Take(ip, now) {
 		return "", ErrRateLimited
 	}
-	select {
-	case s.checking <- struct{}{}:
-	default:
+	if !s.slot() {
 		s.limiter.Refund(ip, now)
 		return "", ErrBusy
 	}
@@ -150,6 +148,17 @@ func (s *Service) Login(ctx context.Context, username, password, totp, ip, userA
 	s.limiter.Refund(ip, now)
 	s.limiter.Reset(ip)
 	return s.newSession(ctx, ip, userAgent)
+}
+
+// slot takes one of the passwordChecks slots for a scrypt run, or reports there's none free; the
+// caller gives it back with <-s.checking.
+func (s *Service) slot() bool {
+	select {
+	case s.checking <- struct{}{}:
+		return true
+	default:
+		return false
+	}
 }
 
 // checkPassword checks username and password. A password is checked either way, so the time taken
@@ -252,7 +261,11 @@ func (s *Service) Setup(ctx context.Context, token, username, password, ip, user
 		s.limiter.Fail(ip, now)
 		return "", ErrBadSetupLink
 	}
+	if !s.slot() {
+		return "", ErrBusy
+	}
 	hash, err := auth.HashPassword(password)
+	<-s.checking
 	if err != nil {
 		return "", err
 	}
@@ -272,7 +285,7 @@ type CheckError string
 func (e CheckError) Error() string { return string(e) }
 
 // ChangePassword changes the password and signs out every browser but the one with keepToken.
-func (s *Service) ChangePassword(ctx context.Context, current, next, keepToken string) error {
+func (s *Service) ChangePassword(ctx context.Context, current, next, keepToken, ip string) error {
 	o, err := s.st.Owner(ctx)
 	if err != nil {
 		return err
@@ -280,13 +293,28 @@ func (s *Service) ChangePassword(ctx context.Context, current, next, keepToken s
 	if o == nil {
 		return ErrNoOwner
 	}
-	if !auth.VerifyPassword(current, o.PWScrypt) {
-		return ErrBadPassword
-	}
 	if msg := auth.CheckPassword(next); msg != "" {
 		return CheckError(msg)
 	}
-	hash, err := auth.HashPassword(next)
+	// The current password is a guess like a sign-in's: counted, and checked in a scrypt slot.
+	now := s.now()
+	if !s.limiter.Take(ip, now) {
+		return ErrRateLimited
+	}
+	if !s.slot() {
+		s.limiter.Refund(ip, now)
+		return ErrBusy
+	}
+	ok := auth.VerifyPassword(current, o.PWScrypt)
+	var hash string
+	if ok {
+		hash, err = auth.HashPassword(next)
+	}
+	<-s.checking
+	if !ok {
+		return ErrBadPassword
+	}
+	s.limiter.Refund(ip, now)
 	if err != nil {
 		return err
 	}
