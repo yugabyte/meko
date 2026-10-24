@@ -108,9 +108,37 @@ func (w *webListener) set(f func(*server.WebStatus)) {
 	f(&w.status)
 }
 
+// forget drops where an extension listens, so the next request that needs it asks again (throttled
+// by socket): it stopped, or its home moved and its socket with it.
+func (w *webListener) forget(name string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	delete(w.sockets, name)
+	delete(w.handed, name)
+}
+
+// RevokeEnded closes the WebSockets of sessions that ended: at a sign-out, a password change or a
+// new login (login.Service.OnRevoke), and every minute for ones that ran out.
+func (w *webListener) RevokeEnded() {
+	w.mu.Lock()
+	proxies := make([]*extproxy.Proxy, 0, len(w.proxied))
+	for _, p := range w.proxied {
+		proxies = append(proxies, p)
+	}
+	w.mu.Unlock()
+	for _, p := range proxies {
+		p.Revoke(func(hash string) bool { return w.login.Live(context.Background(), hash) })
+	}
+}
+
 // Run serves until ctx ends. A port that's taken is tried again every webRetry, and so is a handoff
 // that failed: once one works, its extension's settings are in config.toml, read before the port is.
 func (w *webListener) Run(ctx context.Context) {
+	go func() {
+		for sleep(ctx, time.Minute) {
+			w.RevokeEnded()
+		}
+	}()
 	logged := ""
 	for ctx.Err() == nil {
 		pending := w.handoff(ctx)
@@ -145,15 +173,16 @@ func (w *webListener) Run(ctx context.Context) {
 		go func() { served <- srv.Serve(ln) }()
 		// An extension that couldn't hand over yet is asked again; when its settings change the
 		// listener's, the listener starts again with them.
-		restart := w.watchHandoffs(ctx, pending, cfg)
+		iter, stopWatch := context.WithCancel(ctx)
+		restart := w.watchHandoffs(iter, pending, cfg)
 		select {
 		case <-ctx.Done():
-			return // serve shuts the listener down (Shutdown)
 		case err = <-served:
 			w.log.Error("the web listener stopped", "error", err)
 		case <-restart:
 			w.log.Info("restarting the web listener with the settings an extension handed over")
 		}
+		stopWatch()
 		w.shutdownServer()
 	}
 }
@@ -229,7 +258,9 @@ func (w *webListener) Proxies() []*extproxy.Proxy {
 			continue
 		}
 		if w.proxied[name] == nil {
-			w.proxied[name] = extproxy.New(name, cat.Title, w.socket(name), w.log)
+			p := extproxy.New(name, cat.Title, w.socket(name), w.log)
+			p.OnGone = func() { w.forget(name) }
+			w.proxied[name] = p
 		}
 		out = append(out, w.proxied[name])
 	}

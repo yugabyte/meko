@@ -153,3 +153,38 @@ func TestRateLimitAndImport(t *testing.T) {
 		t.Fatalf("setup while limited: %v", err)
 	}
 }
+
+// Sign-ins that arrive together get no more guesses than ones one at a time, and only a few run
+// scrypt at once.
+func TestLoginBurst(t *testing.T) {
+	s, _ := newService(t)
+	ctx := context.Background()
+	hash, _ := auth.HashPassword("a long password")
+	if _, err := s.ImportOwner(ctx, store.Owner{Username: "ana", PWScrypt: hash}); err != nil {
+		t.Fatal(err)
+	}
+	errs := make(chan error, 20)
+	for range 20 {
+		go func() {
+			_, err := s.Login(ctx, "ana", "wrong password!", "", "10.0.0.1", "")
+			errs <- err
+		}()
+	}
+	guesses := 0
+	for range 20 {
+		err := <-errs
+		switch {
+		case errors.Is(err, ErrBadLogin):
+			guesses++
+		case errors.Is(err, ErrRateLimited), errors.Is(err, ErrBusy):
+		default:
+			t.Fatalf("unexpected: %v", err)
+		}
+	}
+	if guesses == 0 || guesses > 5 {
+		t.Fatalf("%d guesses got checked, want 1 to 5", guesses)
+	}
+	if _, err := s.Login(ctx, "ana", "a long password", "", "10.0.0.2", ""); err != nil {
+		t.Fatalf("another client: %v", err)
+	}
+}

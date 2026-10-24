@@ -110,6 +110,20 @@ func TestLoginLimiter(t *testing.T) {
 	if l.Blocked("2001:db8::ffff", now) {
 		t.Fatal("reset didn't clear the client")
 	}
+	// Take counts an attempt before it's checked, and Refund takes it back.
+	l2 := NewLoginLimiter()
+	for range 5 {
+		if !l2.Take("10.0.0.9", now) {
+			t.Fatal("Take refused before the limit")
+		}
+	}
+	if l2.Take("10.0.0.9", now) {
+		t.Fatal("a sixth Take went through")
+	}
+	l2.Refund("10.0.0.9", now)
+	if !l2.Take("10.0.0.9", now) {
+		t.Fatal("Refund didn't give the attempt back")
+	}
 	// Past the site-wide limit everyone waits.
 	for i := range 50 {
 		l.Fail("192.0.2."+string(rune('0'+i%10))+string(rune('0'+i/10)), now)

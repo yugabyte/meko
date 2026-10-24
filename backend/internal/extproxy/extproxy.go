@@ -22,6 +22,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -31,6 +32,9 @@ type Proxy struct {
 	Title  string // what people call it
 	prefix string // "/ext/<name>"
 	socket func() string
+	// OnGone, if set, hears that the socket it was given is gone or refuses connections (the
+	// extension stopped, or its home moved), so the next request asks where it listens again.
+	OnGone func()
 	log    *slog.Logger
 	rp     *httputil.ReverseProxy
 
@@ -74,7 +78,17 @@ func (p *Proxy) Available() bool {
 		return false
 	}
 	fi, err := os.Stat(path)
-	return err == nil && fi.Mode()&os.ModeSocket != 0
+	if err != nil || fi.Mode()&os.ModeSocket == 0 {
+		p.gone()
+		return false
+	}
+	return true
+}
+
+func (p *Proxy) gone() {
+	if p.OnGone != nil {
+		p.OnGone()
+	}
 }
 
 // rewrite strips the prefix and keeps the browser's Host and Origin. ReverseProxy has already
@@ -103,6 +117,9 @@ func strip(path, prefix string) string {
 // envelope for a script.
 func (p *Proxy) unavailable(w http.ResponseWriter, r *http.Request, err error) {
 	p.log.Warn("extension unavailable", "extension", p.Name, "error", err)
+	if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED) {
+		p.gone()
+	}
 	msg := fmt.Sprintf("%s isn't answering. Start it with meko start (or %s start), then reload.", p.Title, p.Name)
 	if strings.Contains(r.Header.Get("Accept"), "text/html") {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")

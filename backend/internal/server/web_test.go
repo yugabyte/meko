@@ -79,6 +79,8 @@ func startWeb(t *testing.T, access, sock string) (string, *login.Service) {
 	}
 	logins := login.New(st)
 	ext := extproxy.New("agentk", "AgentK", func() string { return sock }, slog.New(slog.DiscardHandler))
+	// As serve wires it (webListener.RevokeEnded): a session that ends closes its WebSockets.
+	logins.OnRevoke(func() { ext.Revoke(func(h string) bool { return logins.Live(context.Background(), h) }) })
 	s := New(Options{Info: Info{Version: "test"}, Port: tcpPort(t, ln), Logger: slog.New(slog.DiscardHandler),
 		Login: logins,
 		UI:    http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ui") }),

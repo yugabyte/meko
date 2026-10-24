@@ -46,6 +46,44 @@ func (l *LoginLimiter) Blocked(ip string, now time.Time) bool {
 	return len(l.recentFor(ClientKey(ip), now)) >= l.Max || len(l.all) >= l.SiteMax
 }
 
+// Take counts an attempt from ip as failed before it's checked, unless ip may not try now, in one
+// step: requests that arrive together can't all get past Blocked before any of them fails. An
+// attempt that turns out right takes its count back with Refund.
+func (l *LoginLimiter) Take(ip string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.all = recent(l.all, now, l.Window)
+	k := ClientKey(ip)
+	r := l.recentFor(k, now)
+	if len(r) >= l.Max || len(l.all) >= l.SiteMax {
+		return false
+	}
+	l.failures[k] = append(r, now)
+	l.all = append(l.all, now)
+	return true
+}
+
+// Refund takes back the count Take made at now for ip.
+func (l *LoginLimiter) Refund(ip string, now time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	k := ClientKey(ip)
+	l.failures[k] = dropOne(l.failures[k], now)
+	if len(l.failures[k]) == 0 {
+		delete(l.failures, k)
+	}
+	l.all = dropOne(l.all, now)
+}
+
+func dropOne(ts []time.Time, t time.Time) []time.Time {
+	for i := len(ts) - 1; i >= 0; i-- {
+		if ts[i].Equal(t) {
+			return append(ts[:i], ts[i+1:]...)
+		}
+	}
+	return ts
+}
+
 // Fail counts a failed attempt from ip.
 func (l *LoginLimiter) Fail(ip string, now time.Time) {
 	l.mu.Lock()

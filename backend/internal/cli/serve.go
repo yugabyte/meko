@@ -300,6 +300,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	logins := login.New(st)
 	// The web listener: the web UI and the extensions' for browsers, with local access or the login.
 	web := newWebListener(l, st, logins, log)
+	logins.OnRevoke(web.RevokeEnded)
 	web.newOpts = func(wcfg config.Config) server.Options {
 		return server.Options{Info: info, Port: wcfg.Web.Port, Auth: cfg.Server.Auth, Logger: log,
 			Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, MCP: mcpHandler,
@@ -358,10 +359,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	}
 	drain, cancel := context.WithTimeout(context.Background(), drainTimeout)
 	defer cancel()
-	stopWeb()
-	if err := web.Shutdown(drain); err != nil {
-		log.Warn("the web listener's requests didn't finish in time", "error", err)
-	}
+	stopWeb() // Run drains the web listener (drainTimeout) before it returns
 	<-webDone
 	if err := srv.Shutdown(drain); err != nil {
 		log.Warn("requests didn't finish in time", "error", err)

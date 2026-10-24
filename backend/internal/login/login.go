@@ -29,6 +29,7 @@ const (
 	keyTOTPLast    = "login_totp_last_step"
 	totpIssuer     = "Meko"
 	sessionByteLen = 32
+	passwordChecks = 2 // password checks at once; a sign-in past them is told to try again
 )
 
 // Errors a caller turns into replies.
@@ -37,6 +38,7 @@ var (
 	ErrTOTPRequired = errors.New("enter the code from your authenticator app")
 	ErrBadTOTP      = errors.New("that code is wrong or expired")
 	ErrRateLimited  = errors.New("too many failed attempts: try again in 15 minutes")
+	ErrBusy         = errors.New("too many sign-ins at once: try again in a moment")
 	ErrBadSetupLink = errors.New("this setup link is invalid or already used: " +
 		"run meko setup_link on the host for a new one")
 	ErrNoOwner     = errors.New("no login is set up: run meko setup_link on the host to make one")
@@ -50,6 +52,9 @@ type Service struct {
 	now     func() time.Time
 	// setupMu keeps a setup link's check and its use from racing, and totpMu TOTP's replay check.
 	setupMu, totpMu sync.Mutex
+	// checking holds a slot per password check under way: each takes 32 MiB of scrypt, so a burst
+	// of sign-ins mustn't run them all at once.
+	checking chan struct{}
 	// onRevoke, if set, hears that sessions ended (a sign-out, a password change, a new login), so the
 	// server can close the WebSockets they opened.
 	onRevoke func()
@@ -57,7 +62,7 @@ type Service struct {
 
 // New returns the sign-in over st.
 func New(st *store.Store) *Service {
-	return &Service{st: st, limiter: auth.NewLoginLimiter(), now: time.Now}
+	return &Service{st: st, limiter: auth.NewLoginLimiter(), now: time.Now, checking: make(chan struct{}, passwordChecks)}
 }
 
 // OnRevoke sets what's called after sessions end.
@@ -105,42 +110,60 @@ func (s *Service) Live(ctx context.Context, hash string) bool {
 	return err == nil && ok && s.now().Before(exp)
 }
 
-// Login checks a sign-in from ip and returns a new session's cookie.
+// Login checks a sign-in from ip and returns a new session's cookie. The attempt counts as failed
+// from the start (LoginLimiter.Take), and only a right one takes that back, so a burst of requests
+// gets no more guesses than one at a time; and at most passwordChecks run scrypt at once.
 func (s *Service) Login(ctx context.Context, username, password, totp, ip, userAgent string) (string, error) {
 	now := s.now()
-	if s.limiter.Blocked(ip, now) {
+	if !s.limiter.Take(ip, now) {
 		return "", ErrRateLimited
 	}
-	o, err := s.st.Owner(ctx)
+	select {
+	case s.checking <- struct{}{}:
+	default:
+		s.limiter.Refund(ip, now)
+		return "", ErrBusy
+	}
+	ok, o, err := s.checkPassword(ctx, username, password)
+	<-s.checking
 	if err != nil {
+		s.limiter.Refund(ip, now)
 		return "", err
 	}
-	userOK := o != nil && subtle.ConstantTimeCompare([]byte(o.Username), []byte(username)) == 1
-	// A password is checked either way, so the time taken doesn't say whether the username was right.
-	if !userOK {
-		auth.BurnPasswordCheck(password)
-		s.limiter.Fail(ip, now)
-		return "", ErrBadLogin
-	}
-	if !auth.VerifyPassword(password, o.PWScrypt) {
-		s.limiter.Fail(ip, now)
+	if !ok {
 		return "", ErrBadLogin
 	}
 	if o.TOTPSecret != "" {
 		if totp == "" {
+			s.limiter.Refund(ip, now) // the password was right: asking for the code isn't a failure
 			return "", ErrTOTPRequired
 		}
 		ok, err := s.acceptTOTP(ctx, o.TOTPSecret, totp)
 		if err != nil {
+			s.limiter.Refund(ip, now)
 			return "", err
 		}
 		if !ok {
-			s.limiter.Fail(ip, now)
 			return "", ErrBadTOTP
 		}
 	}
+	s.limiter.Refund(ip, now)
 	s.limiter.Reset(ip)
 	return s.newSession(ctx, ip, userAgent)
+}
+
+// checkPassword checks username and password. A password is checked either way, so the time taken
+// doesn't say whether the username was right.
+func (s *Service) checkPassword(ctx context.Context, username, password string) (bool, *store.Owner, error) {
+	o, err := s.st.Owner(ctx)
+	if err != nil {
+		return false, nil, err
+	}
+	if o == nil || subtle.ConstantTimeCompare([]byte(o.Username), []byte(username)) != 1 {
+		auth.BurnPasswordCheck(password)
+		return false, nil, nil
+	}
+	return auth.VerifyPassword(password, o.PWScrypt), o, nil
 }
 
 // Logout ends a session.

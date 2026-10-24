@@ -163,14 +163,6 @@ func New(opts Options) *Server {
 		if opts.Web.Extensions == nil {
 			opts.Web.Extensions = func() []*extproxy.Proxy { return nil }
 		}
-		if opts.Login != nil {
-			// A sign-out, a password change or a new login closes the WebSockets its sessions opened.
-			opts.Login.OnRevoke(func() {
-				for _, p := range opts.Web.Extensions() {
-					p.Revoke(func(hash string) bool { return opts.Login.Live(context.Background(), hash) })
-				}
-			})
-		}
 		s.registerWeb(v1)
 	}
 	if opts.REST != nil {

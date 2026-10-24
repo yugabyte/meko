@@ -279,6 +279,9 @@ func loginError(c echo.Context, err error) error {
 	case errors.Is(err, login.ErrBadTOTP):
 		return envelope.Fail(c, http.StatusBadRequest, "VALIDATION_ERROR",
 			"That code doesn't match. Check the time on your phone and try again.")
+	case errors.Is(err, login.ErrBusy):
+		return envelope.Fail(c, http.StatusTooManyRequests, "RATE_LIMITED",
+			"Too many sign-ins at once. Try again in a moment.")
 	case errors.Is(err, login.ErrRateLimited):
 		return envelope.Fail(c, http.StatusTooManyRequests, "RATE_LIMITED",
 			"Too many failed attempts. Try again in 15 minutes.")
