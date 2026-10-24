@@ -644,6 +644,7 @@ const KEY_SOURCE: Record<MekoKeySource, string> = {
   config: 'from config.toml',
   env: 'from the MEKO_API_KEY environment variable',
   claude: 'from Claude Code’s settings',
+  local: 'the Meko on this computer’s own token',
 };
 
 /** The Meko server and key AgentK uses, its links, and whether Claude Code's (and OpenCode's and Kiro's) sessions use the same. */
@@ -741,12 +742,12 @@ function MekoTab({ status, claude: claudeOn, kiro }: { status: MekoStatus; claud
   const claudeProblems = [...claude.gaps, ...claude.unchecked];
   const claudeTag = claude.gaps.length ? 'differs' : claude.checking ? 'checking' : claude.unchecked.length ? 'not checked' : 'matches';
 
-  /** Turns Meko off (the key is kept) or back on (checked with Meko first). */
-  const setEnabled = async (enabled: boolean) => {
+  /** Clears config.toml's key and URL, so AgentK uses the Meko on this computer (checked with it first). */
+  const switchToLocal = async () => {
     setBusy('save');
     setError(null);
     try {
-      show(await api.saveSettings({ meko: { enabled } }));
+      show(await api.saveSettings({ meko: { useLocal: true } }));
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -757,27 +758,32 @@ function MekoTab({ status, claude: claudeOn, kiro }: { status: MekoStatus; claud
   return (
     <form className="stack" onSubmit={save}>
       <div className="meko-onoff">
-        {m.enabled ? (
+        {m.keySource === 'local' ? (
+          <span>
+            <b>Using the Meko on this computer</b> <span className="muted">({httpHost(m.effectiveUrl) ?? m.effectiveUrl}). Type a Meko Cloud key below to use Meko Cloud instead.</span>
+          </span>
+        ) : m.keySource ? (
           <>
             <span className="muted">Meko gives projects datapacks: shared memory, and what a project is shared through.</span>
-            <ConfirmButton
-              className="btn small"
-              label="Turn off Meko"
-              confirmLabel="Turn off"
-              danger
-              prompt="AgentK stops using Meko: new sessions get no datapack, and designs and summaries aren't saved there. Projects keep their datapacks for when you turn it back on. Claude Code's own Meko setup isn't changed."
-              onConfirm={() => setEnabled(false)}
-            />
+            {m.keySource === 'config' && m.local === 'running' && (
+              <ConfirmButton
+                className="btn small"
+                label="Use the Meko on this computer"
+                confirmLabel="Switch"
+                danger
+                prompt={`AgentK removes the key from config.toml and uses the Meko on this computer. Existing projects’ datapacks live on ${httpHost(m.effectiveUrl) ?? 'the current Meko'}, so they won’t work after the switch.`}
+                onConfirm={() => switchToLocal()}
+              />
+            )}
           </>
         ) : (
-          <>
-            <span>
-              <b>Meko is off.</b> <span className="muted">Projects work without datapacks.</span>
+          <span>
+            <b>Meko isn’t set up.</b>{' '}
+            <span className="muted">
+              {m.local === 'stopped' ? 'Meko is installed on this computer but not running: start it with meko start, ' : 'No Meko was found on this computer: install and start Meko, '}
+              or add a Meko Cloud key below. Projects work without datapacks meanwhile.
             </span>
-            <button type="button" className="btn small primary" disabled={busy !== null || m.keyHint === null} onClick={() => void setEnabled(true)}>
-              Turn on Meko
-            </button>
-          </>
+          </span>
         )}
       </div>
       <Field label="MCP server URL" hint={`Empty means Meko Cloud (${m.defaultUrl}), unless the environment or Claude Code’s settings name one. Now using ${m.effectiveUrl}.`}>
@@ -804,7 +810,9 @@ function MekoTab({ status, claude: claudeOn, kiro }: { status: MekoStatus; claud
         hint={
           m.keyHint === null
             ? 'Paste the key you generated in Meko.'
-            : `A key is set${m.keyHint ? `, ending in ${m.keyHint}` : ''}${m.keySource ? `, ${KEY_SOURCE[m.keySource]}` : ''}. Type a new key to replace it. The key is never shown in full.`
+            : m.keySource === 'local'
+              ? 'No key is set, so AgentK uses the Meko on this computer. Paste a Meko Cloud key to use Meko Cloud instead.'
+              : `A key is set${m.keyHint ? `, ending in ${m.keyHint}` : ''}${m.keySource ? `, ${KEY_SOURCE[m.keySource]}` : ''}. Type a new key to replace it. The key is never shown in full.`
         }
       >
         <input
@@ -812,7 +820,7 @@ function MekoTab({ status, claude: claudeOn, kiro }: { status: MekoStatus; claud
           className="input mono"
           type="password"
           autoComplete="off"
-          placeholder={m.keyHint ? `••••••••${m.keyHint}` : 'mko_tkn_…'}
+          placeholder={m.keyHint && m.keySource !== 'local' ? `••••••••${m.keyHint}` : 'mko_tkn_…'}
           value={key}
           onChange={(e) => setKey(e.target.value)}
         />

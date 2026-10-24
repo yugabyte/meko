@@ -12,6 +12,7 @@ import { silentLogger } from '../src/server/log.js';
 import { mekoScope, pinSlug, sessionAgentId, type MekoClient, type TokenTry } from '../src/server/meko.js';
 import { MekoApi } from '../src/server/mekoapi.js';
 import type { MekoTools } from '../src/server/mekosettings.js';
+import type { LocalMekoProbe } from '../src/server/mekolocal.js';
 import { getPaths } from '../src/server/paths.js';
 import { startHost, type HostHandle } from '../src/server/host/host.js';
 import { SessionHost } from '../src/server/hostclient.js';
@@ -171,6 +172,8 @@ export interface TestEnv {
   meko: ReturnType<typeof stubMeko>;
   mekoApi: ReturnType<typeof fakeMekoApi>;
   mekoTools: ReturnType<typeof stubMekoTools>;
+  /** What the Meko on this computer answers when Core reads it (none at first); never the real `meko`. */
+  local: LocalMekoProbe;
   fakeDir: string;
   /** Stops the session host, ending every Claude in it, as a host crash would. The next ensureServer starts it again. */
   killHost(): Promise<void>;
@@ -242,6 +245,7 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
   const meko = stubMeko();
   const mekoApi = fakeMekoApi();
   const mekoTools = stubMekoTools();
+  const local: LocalMekoProbe = { state: 'none', meko: null };
   let hostHandle: HostHandle | null = null;
   const host = new SessionHost(paths, {
     services: () => null,
@@ -257,10 +261,11 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
   const core = new Core({
     paths, config: cfg, db, version: '0.0.0-test', meko, mekoCaptureScript: opts.capture === false ? null : FAKE_CAPTURE,
     host, services: () => null, log: silentLogger, timers: false, mekoApi: mekoApi.api, mekoTools: mekoTools.tools,
+    localMeko: async () => ({ ...local }),
   });
   if (opts.start !== false) await core.start();
   return {
-    home, repo, core, meko, mekoApi, mekoTools, fakeDir, killHost,
+    home, repo, core, meko, mekoApi, mekoTools, local, fakeDir, killHost,
     async cleanup() {
       await core.stop().catch(() => undefined);
       await killHost();

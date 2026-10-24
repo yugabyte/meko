@@ -4,7 +4,7 @@ import { installMeko, settleAgents, type InstallMekoDeps } from '../../src/serve
 import { MekoSetupError } from '../../src/server/mekosetup.js';
 
 /** The installer's Meko step with scripted answers, recording what it said. */
-function deps(o: { answers?: string[]; canAsk?: boolean; checkError?: string; setupError?: string; agents?: ('claude' | 'kiro')[]; local?: boolean } = {}) {
+function deps(o: { answers?: string[]; canAsk?: boolean; checkError?: string; failKey?: string; setupError?: string; agents?: ('claude' | 'kiro')[]; local?: boolean } = {}) {
   const agents = o.agents ?? ['claude'];
   const said: string[] = [];
   const answers = [...(o.answers ?? [])];
@@ -19,7 +19,7 @@ function deps(o: { answers?: string[]; canAsk?: boolean; checkError?: string; se
     check: async (url, key) => {
       calls.push('check');
       checked.push(`${url} ${key}`);
-      return o.checkError ? { ok: false, error: o.checkError } : { ok: true };
+      return o.checkError && (!o.failKey || key === o.failKey) ? { ok: false, error: o.checkError } : { ok: true };
     },
     ensureInClaude: !agents.includes('claude') ? undefined : async (_url, _key, keyFromEnv) => {
       calls.push(keyFromEnv ? 'claude (key from env)' : 'claude');
@@ -54,75 +54,73 @@ function deps(o: { answers?: string[]; canAsk?: boolean; checkError?: string; se
 
 const cfg = (): Config => structuredClone(DEFAULT_CONFIG);
 
-describe('installer: Meko is optional', () => {
-  it('goes on without Meko when the key prompt is skipped', async () => {
+const LOCAL = { url: 'http://127.0.0.1:7778/mcp', token: 'local-token' };
+const CLOUD_ASK = 'ask Meko Cloud API key (Enter to use the Meko on this computer, 127.0.0.1:7778)';
+
+describe('installer: a Meko Cloud key, or the Meko on this computer', () => {
+  it('goes on without Meko when there is no key and no Meko on this computer', async () => {
     const c = cfg();
     const { d, said, calls } = deps({ answers: [''] });
     expect(await installMeko(c, { noMeko: false }, d)).toBe(false);
-    expect(calls).toEqual(['local', 'ask Meko API key (Enter to skip)']);
-    expect(said.join('\n')).toMatch(/warn Meko off: no API key\. Projects work without datapacks/);
+    expect(calls).toEqual(['local', 'ask Meko Cloud API key (Enter to skip)']);
+    expect(said.join('\n')).toMatch(/warn Meko not set up: no key, and no Meko running on this computer\. AgentK uses the Meko on this computer once it runs/);
     expect(c.meko.apiKey).toBe('');
-  });
-
-  it('goes on with a warning when there is no key and no one to ask', async () => {
-    const { d, said, calls } = deps({ canAsk: false });
-    expect(await installMeko(cfg(), { noMeko: false }, d)).toBe(false);
-    expect(calls).not.toContain('check');
-    expect(said.some((s) => s.startsWith('warn Meko off'))).toBe(true);
-  });
-
-  it('turns Meko off with --no-meko, whatever key there is', async () => {
-    const c = cfg();
-    c.meko.apiKey = 'mko_tkn_x';
-    const { d, calls } = deps();
-    expect(await installMeko(c, { noMeko: true }, d)).toBe(false);
-    expect(c.meko.enabled).toBe(false);
-    expect(calls).toEqual([]);
-  });
-
-  it('keeps Meko off when it was turned off in Settings, unless a key is given now', async () => {
-    const off = cfg();
-    off.meko.enabled = false;
-    off.meko.apiKey = 'mko_tkn_kept';
-    const kept = deps({ answers: [''] });
-    expect(await installMeko(off, { noMeko: false }, kept.d)).toBe(false);
-    expect(off.meko.enabled).toBe(false);
-    expect(kept.calls).toEqual(['ask Meko is turned off. API key to turn it on (Enter to keep it off)']);
 
     const quiet = deps({ canAsk: false });
-    expect(await installMeko(off, { noMeko: false }, quiet.d)).toBe(false);
-    expect(off.meko.enabled).toBe(false);
-
-    const on = deps({ answers: ['mko_tkn_new'] });
-    expect(await installMeko(off, { noMeko: false }, on.d)).toBe(true);
-    expect(off.meko).toMatchObject({ enabled: true, apiKey: 'mko_tkn_new' });
+    expect(await installMeko(cfg(), { noMeko: false }, quiet.d)).toBe(false);
+    expect(quiet.calls).not.toContain('check');
   });
 
   it.each([
-    ['asks first, and takes it', true, ['y'], ['local', 'ask Use Meko on this computer (127.0.0.1:7778)? (Y/n)', 'check', 'claude']],
-    ['takes it with no one to ask', false, [], ['local', 'check', 'claude']],
-  ])('offers the Meko running on this computer when there is no key: %s', async (_name, canAsk, answers, want) => {
+    ['Enter at the key prompt', true, [''], ['local', CLOUD_ASK, 'check', 'claude']],
+    ['no one to ask', false, [], ['local', CLOUD_ASK, 'check', 'claude']],
+  ])('uses the Meko on this computer without storing it: %s', async (_name, canAsk, answers, want) => {
     const c = cfg();
-    const { d, calls, checked } = deps({ canAsk, answers, local: true });
+    const { d, said, calls, checked } = deps({ canAsk, answers, local: true });
     expect(await installMeko(c, { noMeko: false }, d)).toBe(true);
     expect(calls).toEqual(want);
-    expect(checked).toEqual(['http://127.0.0.1:7778/mcp local-token']);
-    expect(c.meko).toMatchObject({ enabled: true, url: 'http://127.0.0.1:7778/mcp', apiKey: 'local-token' });
+    expect(checked).toEqual([`${LOCAL.url} ${LOCAL.token}`]);
+    expect(c.meko).toMatchObject({ url: '', apiKey: '' });
+    expect(said).toContain('ok Meko on this computer (127.0.0.1:7778)');
   });
 
-  it('goes on to the Meko Cloud key when the Meko on this computer is declined', async () => {
+  it('stores a Meko Cloud key typed at the prompt, even with a Meko on this computer', async () => {
     const c = cfg();
-    const { d, calls, checked } = deps({ answers: ['n', 'mko_tkn_cloud'], local: true });
+    const { d, checked } = deps({ answers: ['mko_tkn_cloud'], local: true });
     expect(await installMeko(c, { noMeko: false }, d)).toBe(true);
-    expect(calls.slice(0, 3)).toEqual(['local', 'ask Use Meko on this computer (127.0.0.1:7778)? (Y/n)', 'ask Meko API key (Enter to skip)']);
     expect(checked).toEqual(['https://mcp.mekodata.ai/mcp mko_tkn_cloud']);
+    expect(c.meko.apiKey).toBe('mko_tkn_cloud');
   });
 
-  it('uses the URL and key it is given, and looks for no other Meko', async () => {
+  it("doesn't store the local Meko's own URL and token, given or left by an older install", async () => {
+    const given = cfg();
+    const a = deps({ canAsk: false, local: true });
+    expect(await installMeko(given, { keyArg: LOCAL.token, urlArg: LOCAL.url, noMeko: false }, a.d)).toBe(true);
+    expect(a.calls).toEqual(['local', 'check', 'claude']);
+    expect(given.meko).toMatchObject({ url: '', apiKey: '' });
+
+    const stored = cfg();
+    stored.meko.url = LOCAL.url;
+    stored.meko.apiKey = LOCAL.token;
+    const b = deps({ canAsk: false, local: true });
+    expect(await installMeko(stored, { noMeko: false }, b.d)).toBe(true);
+    expect(stored.meko).toMatchObject({ url: '', apiKey: '' });
+  });
+
+  it('ignores --no-meko, with a warning', async () => {
+    const c = cfg();
+    c.meko.apiKey = 'mko_tkn_x';
+    const { d, said, calls } = deps({ canAsk: false });
+    expect(await installMeko(c, { noMeko: true }, d)).toBe(true);
+    expect(said[0]).toMatch(/^warn --no-meko ignored/);
+    expect(calls).toContain('check');
+  });
+
+  it('uses the URL and key it is given', async () => {
     const c = cfg();
     const { d, calls, checked } = deps({ canAsk: false, local: true });
     expect(await installMeko(c, { keyArg: 'tok', urlArg: 'http://127.0.0.1:7790/mcp', noMeko: false }, d)).toBe(true);
-    expect(calls).toEqual(['check', 'claude']);
+    expect(calls).toEqual(['local', 'check', 'claude']);
     expect(checked).toEqual(['http://127.0.0.1:7790/mcp tok']);
     expect(c.meko).toMatchObject({ url: 'http://127.0.0.1:7790/mcp', apiKey: 'tok' });
   });
@@ -144,23 +142,33 @@ describe('installer: Meko is optional', () => {
     const c = cfg();
     const { d, said, calls } = deps({ canAsk: false });
     expect(await installMeko(c, { keyArg: 'mko_tkn_good', noMeko: false }, d)).toBe(true);
-    expect(calls).toEqual(['check', 'claude']);
-    expect(c.meko).toMatchObject({ enabled: true, apiKey: 'mko_tkn_good' });
+    expect(calls).toEqual(['local', 'check', 'claude']);
+    expect(c.meko).toMatchObject({ apiKey: 'mko_tkn_good' });
     expect(said.some((s) => s.startsWith('ok Meko in Claude'))).toBe(true);
   });
 
   it('stops on a key that fails with no one to ask, and offers to go on without Meko when someone is there', async () => {
-    const off = deps({ canAsk: false, checkError: 'invalid token' });
-    await expect(installMeko(cfg(), { keyArg: 'bad', noMeko: false }, off.d)).rejects.toThrow(/Meko check failed .*invalid token\. Fix the key, or pass --no-meko/);
+    const off = deps({ canAsk: false, checkError: 'invalid token', local: true });
+    await expect(installMeko(cfg(), { keyArg: 'bad', noMeko: false }, off.d)).rejects.toThrow(/Meko check failed .*invalid token\. Fix the key, or run the installer without one/);
 
     const c = cfg();
+    c.meko.apiKey = 'bad';
     const on = deps({ answers: ['y'], checkError: 'invalid token' });
-    expect(await installMeko(c, { keyArg: 'bad', noMeko: false }, on.d)).toBe(false);
-    expect(c.meko.enabled).toBe(false);
+    expect(await installMeko(c, { noMeko: false }, on.d)).toBe(false);
     expect(c.meko.apiKey).toBe('');
 
     const no = deps({ answers: ['n'], checkError: 'invalid token' });
     await expect(installMeko(cfg(), { keyArg: 'bad', noMeko: false }, no.d)).rejects.toThrow(/Run the installer again/);
+  });
+
+  it('offers the Meko on this computer when a key fails and someone is there', async () => {
+    const c = cfg();
+    c.meko.apiKey = 'bad';
+    const { d, calls, checked } = deps({ answers: ['y'], checkError: 'invalid token', failKey: 'bad', local: true });
+    expect(await installMeko(c, { noMeko: false }, d)).toBe(true);
+    expect(calls).toEqual(['local', 'check', 'ask Use the Meko on this computer (127.0.0.1:7778) instead? (Y/n)', 'check', 'claude']);
+    expect(checked).toEqual(['https://mcp.mekodata.ai/mcp bad', `${LOCAL.url} ${LOCAL.token}`]);
+    expect(c.meko).toMatchObject({ url: '', apiKey: '' });
   });
 
   it("tells Claude Code's check when the key came only from the installer's environment, and keeps it in config.toml without Claude Code", async () => {
@@ -169,7 +177,7 @@ describe('installer: Meko is optional', () => {
       const fromEnv = deps({ canAsk: false });
       const withClaude = cfg();
       expect(await installMeko(withClaude, { noMeko: false }, fromEnv.d)).toBe(true);
-      expect(fromEnv.calls).toEqual(['check', 'claude (key from env)']);
+      expect(fromEnv.calls).toEqual(['local', 'check', 'claude (key from env)']);
       expect(withClaude.meko.apiKey).toBe('');
       // Only Kiro: the service, which has no MEKO_* environment, reads it from config.toml.
       const kiroOnly = cfg();
@@ -177,15 +185,15 @@ describe('installer: Meko is optional', () => {
       expect(kiroOnly.meko.apiKey).toBe('mko_tkn_env');
       const typed = deps({ canAsk: false });
       expect(await installMeko(cfg(), { keyArg: 'mko_tkn_typed', noMeko: false }, typed.d)).toBe(true);
-      expect(typed.calls).toEqual(['check', 'claude']);
+      expect(typed.calls).toEqual(['local', 'check', 'claude']);
     } finally {
       delete process.env.MEKO_API_KEY;
     }
   });
 
   it.each([
-    ['only Claude Code', ['claude' as const], ['check', 'claude'], 'ok Meko in Claude'],
-    ['only Kiro', ['kiro' as const], ['check', 'kiro'], 'ok Meko in Kiro'],
+    ['only Claude Code', ['claude' as const], ['local', 'check', 'claude'], 'ok Meko in Claude'],
+    ['only Kiro', ['kiro' as const], ['local', 'check', 'kiro'], 'ok Meko in Kiro'],
   ])("sets Meko up in the agents that are installed: %s", async (_, agents, expected, line) => {
     const { d, said, calls } = deps({ agents });
     expect(await installMeko(cfg(), { keyArg: 'mko_tkn_good', noMeko: false }, d)).toBe(true);

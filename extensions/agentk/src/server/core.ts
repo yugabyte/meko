@@ -13,7 +13,7 @@ import { CommentService } from './comments.js';
 import { AskAgentk } from './askagentk.js';
 import { GithubLinkService } from './ghlinks.js';
 import { PrReviewService } from './prreview.js';
-import { mekoConfigured, mekoWebUrlWarning, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
+import { mekoConfigured, mekoWebUrlWarning, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, resolveMekoWithSource, saveConfig, type Config } from './config.js';
 import { all, run, type Db } from './db.js';
 import { socketId, startHookServer } from './hooks.js';
 import { claudeUserDir, writeHookFiles } from './claude.js';
@@ -30,6 +30,8 @@ import { KnowledgeService } from './knowledge.js';
 import { MekoClient } from './meko.js';
 import { MekoCallLog } from './mekolog.js';
 import { MekoClaudeWatch } from './mekoclaude.js';
+import { LocalMekoReader, isLocalMeko, localMeko, probeLocalMeko, type LocalMekoProbe } from './mekolocal.js';
+import { mekoDirOf } from './movehome.js';
 import { readClaudeMeko } from './mekosetup.js';
 import { MekoApi } from './mekoapi.js';
 import { defaultMekoTools, type MekoTools } from './mekosettings.js';
@@ -73,6 +75,8 @@ export interface CoreOptions {
   kiroVersion?: (command: string) => Promise<string | null>;
   /** Reads OpenCode's version (tests fake it); by default `<command> --version`. */
   openCodeVersion?: (command: string) => Promise<string | null>;
+  /** Asks the Meko on this computer for its URL and token (tests fake it); by default `meko token --json` on Meko's folder. */
+  localMeko?: () => Promise<LocalMekoProbe>;
 }
 
 type NotifyEvent = Extract<ServerEvent, { type: 'notify' }>;
@@ -91,6 +95,10 @@ const STAGED_SWEEP_MS = 60 * 60 * 1000;
 const KIRO_MEKO_TTL_MS = 10_000;
 /** How long a read of OpenCode's own config (for `MekoStatus.opencode`) is used. */
 const OPENCODE_MEKO_TTL_MS = 10_000;
+/** How often the Meko on this computer is looked for while there's no Meko to use. */
+const LOCAL_MEKO_EVERY_MS = 60_000;
+/** After a failed connection to the local Meko, how long until another failure reads it again. */
+const LOCAL_MEKO_RECHECK_MS = 30_000;
 
 /** How often the server checks that its hook socket file is still there. */
 const HOOK_SOCKET_CHECK_MS = 10_000;
@@ -152,6 +160,10 @@ export class Core extends EventEmitter {
   /** The last read of OpenCode's own Meko server (openCodeMeko). */
   private openCodeMekoAt: { at: number; own: boolean } | null = null;
   mekoStatus: MekoStatus;
+  /** The Meko on this computer, read when needed (mekolocal.ts); used when no key is set. */
+  private localReader: LocalMekoReader;
+  /** When a failed connection last read the local Meko again. */
+  private localRecheckAt = 0;
   updateStatus: () => UpdateStatus;
   private cfg: Config;
   private timersOn: boolean;
@@ -199,6 +211,13 @@ export class Core extends EventEmitter {
       log: this.log,
     });
     this.meko.onTrace = (t) => this.mekoLog.record(t);
+    this.localReader = new LocalMekoReader(o.localMeko ?? (() => probeLocalMeko(mekoDirOf(o.paths.home) ?? (this.cfg.meko.home || null))));
+    // Meko restarted on another port, or with a new token: read it again before the retry.
+    this.meko.onConnectFail = async () => {
+      if (resolveMekoWithSource(this.cfg).keySource !== 'local' || Date.now() - this.localRecheckAt < LOCAL_MEKO_RECHECK_MS) return;
+      this.localRecheckAt = Date.now();
+      await this.refreshLocalMeko();
+    };
     this.services = o.services ?? (() => servicesFor(o.paths.home));
     this.legacyTmuxPanes = o.legacyTmuxPanes ?? (() => legacyTmuxPanes(o.paths));
     this.host = o.host ?? new SessionHost(o.paths, { services: this.services, onHello: () => this.changed() });
@@ -384,6 +403,34 @@ export class Core extends EventEmitter {
   }
 
   /**
+   * Reads the Meko on this computer again. When that changes the Meko AgentK uses (no key is set,
+   * and it started, stopped, or has a new port or token), reconnects and shows it. A copy of its
+   * URL and token in config.toml (older installs stored one) is dropped, so the live ones are used.
+   */
+  async refreshLocalMeko(): Promise<void> {
+    const before = resolveMeko(this.cfg);
+    await this.localReader.refresh();
+    if (this.stopped) return;
+    const local = localMeko().meko;
+    if (isLocalMeko(local, this.cfg.meko.url, this.cfg.meko.apiKey)) {
+      this.updateConfig((c) => {
+        c.meko.url = '';
+        c.meko.apiKey = '';
+      });
+      this.log.info('config.toml held the Meko on this computer\'s URL and token; AgentK now reads them from Meko');
+    }
+    const after = resolveMeko(this.cfg);
+    if (before.url === after.url && before.apiKey === after.apiKey) return;
+    this.log.info(after.apiKey ? `using the Meko on this computer (${after.url})` : 'the Meko on this computer stopped; Meko is not set up');
+    // As in updateConfig: a harness may have written the old token somewhere of its own.
+    for (const h of this.harnesses.list()) h.mekoChanged?.(this.paths);
+    this.mekoStatus = this.mekoStatusFor(this.cfg);
+    this.changed();
+    void this.claudeMeko.refresh();
+    await this.mekoChanged();
+  }
+
+  /**
    * The login gh is signed in as, looked up once (from <cwd>), one lookup at a time. Null when gh
    * can't say: asked again next time, or after GH_LOGIN_RETRY_MS when it took too long, so a gh
    * that hangs (offline, GitHub slow) doesn't hold up every session start.
@@ -484,6 +531,9 @@ export class Core extends EventEmitter {
     // In the background: it may remove large build trees, and every change it makes to an idle
     // worktree is skipped once a session has claimed it.
     void this.worktrees.sweep().catch((e) => this.log.warn('checking idle worktrees failed', errMsg(e)));
+    // Before the sessions are recovered, so a relaunch gets the Meko on this computer. Bounded by
+    // `meko`'s own 5 s timeout.
+    await this.refreshLocalMeko();
     const noWebUrl = mekoWebUrlWarning(this.cfg);
     if (noWebUrl) this.log.warn(noWebUrl);
     // Before any turn can end, so the first one after a restart can tell whether its design's questions changed.
@@ -512,6 +562,8 @@ export class Core extends EventEmitter {
       this.every(INVITE_SYNC_MS, () => this.invites.sync());
       this.every(PIN_PRUNE_MS, () => this.prunePins());
       this.every(STAGED_SWEEP_MS, () => this.sweepStaged());
+      // Meko normally starts first (it starts AgentK); this covers a boot where it didn't.
+      this.every(LOCAL_MEKO_EVERY_MS, () => (mekoConfigured(this.cfg) ? undefined : this.refreshLocalMeko()));
       this.callHome.start((ms, fn) => this.every(ms, fn));
       this.ybCallHome.start((ms, fn) => this.every(ms, fn));
       // Not awaited: startup doesn't wait on Meko's API.
@@ -543,6 +595,7 @@ export class Core extends EventEmitter {
       within(openCodeDeletesSettled(), STOP_CAPTURE_MS),
     ]);
     await this.meko.close();
+    this.localReader.clear();
   }
 
   private async bindHooks(): Promise<void> {

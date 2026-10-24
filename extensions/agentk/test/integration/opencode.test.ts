@@ -87,7 +87,7 @@ describe('sessions on OpenCode (real session host + git, fake opencode running A
 
     // Turning Meko off removes the file with its key at once, not at OpenCode's next launch.
     env.core.updateConfig((c) => {
-      c.meko.enabled = false;
+      c.meko.apiKey = '';
     });
     expect(existsSync(openCodeMekoFile(env.core.paths))).toBe(false);
     // A closed project's sessions never run again: their OpenCode folders go with it.

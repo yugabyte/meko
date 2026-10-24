@@ -53,9 +53,8 @@ idle_per_repo = 3         # idle worktrees each repo keeps for its next session 
 idle_days = 14            # an idle worktree no session used for this many days is removed (0 to 365; 0 keeps it)
 
 [meko]
-# enabled = false            # turn Meko off (projects work without datapacks); on by default
 # url = "…"                  # Meko MCP server; unset uses MEKO_MCP_URL, Claude Code's settings, then Meko Cloud
-# api_key = "…"              # unset uses MEKO_API_KEY, then Claude Code's settings
+# api_key = "…"              # unset uses MEKO_API_KEY, then Claude Code's settings, then the Meko on this computer
 # web_url = "…"              # Meko web app, for links; unset uses MEKO_WEB_URL, Claude Code's settings, then Meko Cloud's for Meko Cloud
 # api_url = "…"              # Meko's REST API, for sharing; unset uses MEKO_API_URL, then web_url + /api/v1
 # home = "…"                 # Meko's data folder, which AgentK's home is in; set by the installer and from Meko's MEKO_HOME
@@ -245,7 +244,10 @@ differ from the defaults are written, so a changed default reaches existing inst
 `AK_PORT` override `[server]` for one run (`npm run dev`) and are never written to the file. The Meko
 URL and key come from `[meko]`, then `MEKO_MCP_URL`/`MEKO_API_KEY`, then the `env` block of Claude
 Code's user `settings.json` (in `CLAUDE_CONFIG_DIR` if set); a later source's URL is skipped when that
-source has a key of its own, and with no URL it's Meko Cloud.
+source has a key of its own, and with no URL it's Meko Cloud. With no key in any of them, AgentK uses
+the Meko running on this computer, with its own URL and token, read from Meko and never written here
+([datapacks.md](datapacks.md)). An `enabled` key left in `[meko]` by older versions is ignored and
+dropped at the next save: Meko can't be turned off.
 
 ## Worktree reuse
 

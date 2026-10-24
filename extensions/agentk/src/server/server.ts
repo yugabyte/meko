@@ -676,7 +676,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     meko: mekoSettings(core.config),
   });
   app.get('/api/settings', async () => {
-    // Opening Settings checks Claude Code's Meko again (in the background, reusing recent results).
+    // Opening Settings reads the Meko on this computer again (it may have started, stopped or moved)
+    // and checks Claude Code's Meko again (in the background, reusing recent results).
+    await core.refreshLocalMeko();
     void core.claudeMeko.refresh();
     return settings();
   });

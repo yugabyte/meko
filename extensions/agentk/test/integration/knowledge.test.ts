@@ -118,13 +118,13 @@ describe('adding files to a knowledge base', () => {
     const p = await project('beta');
     session(p.id, 's2');
     env.core.updateConfig((c) => {
-      c.meko.enabled = false;
+      c.meko.apiKey = '';
     });
     const off = await upload('s2', 'notes.md', Buffer.from('# Hi'));
     expect(off.statusCode).toBe(409);
-    expect(off.json().error).toMatch(/Meko is off/);
+    expect(off.json().error).toMatch(/Meko isn't set up/);
     env.core.updateConfig((c) => {
-      c.meko.enabled = true;
+      c.meko.apiKey = 'test-key';
     });
     run(env.core.db, "UPDATE sessions SET desired = 'archived' WHERE id = 's2'");
     expect((await upload('s2', 'notes.md', Buffer.from('# Hi'))).statusCode).toBe(409);
@@ -188,12 +188,12 @@ describe('adding files to a knowledge base', () => {
       statuses['dk-e'] = ['indexing'];
       await kb.upload('s3', 'd.md', Buffer.from('d'));
       env.core.updateConfig((c) => {
-        c.meko.enabled = false;
+        c.meko.apiKey = '';
       });
       kb.forget();
       await kb.upload('s3', 'e.md', Buffer.from('e')).catch(() => undefined);
       env.core.updateConfig((c) => {
-        c.meko.enabled = true;
+        c.meko.apiKey = 'test-key';
       });
       // A change of Meko's settings while an upload is on its way: its document isn't followed on the new Meko.
       statuses['dk-f'] = ['indexing'];

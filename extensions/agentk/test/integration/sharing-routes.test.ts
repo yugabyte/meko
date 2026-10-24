@@ -394,10 +394,10 @@ describe('HTTP API: sharing, invites and Meko settings', () => {
     expect(elsewhere.statusCode).toBe(400);
     expect(elsewhere.json().error).toBe('Enter the Meko API key again to use it with https://other.example.org: AgentK sends a saved key only to a Meko server it already uses. Nothing was saved.');
     expect(env.mekoTools.calls.length).toBe(sent);
-    // Nor with Meko turned off first: a URL saved while it's off would get the key once it's back on.
-    const off = await call('PUT', '/api/settings', { meko: { enabled: false, url: 'https://other.example.org/mcp' } });
-    expect(off.statusCode).toBe(400);
-    expect(env.core.config.meko).toMatchObject({ enabled: true, url: 'https://meko.example.com/mcp' });
+    // Nor alongside a switch to the Meko on this computer.
+    const local = await call('PUT', '/api/settings', { meko: { useLocal: true, url: 'https://other.example.org/mcp' } });
+    expect(local.statusCode).toBe(400);
+    expect(env.core.config.meko).toMatchObject({ url: 'https://meko.example.com/mcp' });
     expect(env.mekoTools.calls.length).toBe(sent);
 
     // Back on Meko Cloud, its web app and API URLs are worked out and trusted: the API URL isn't checked.

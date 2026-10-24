@@ -1583,13 +1583,17 @@ export interface Settings {
   meko: MekoSettings;
 }
 
-/** Where AgentK's Meko key comes from: config.toml, the environment, or Claude Code's settings.json. */
-export type MekoKeySource = 'config' | 'env' | 'claude';
+/**
+ * Where AgentK's Meko key comes from: config.toml, the environment, Claude Code's settings.json, or,
+ * with none of those, the Meko running on this computer (its client token, read from Meko).
+ */
+export type MekoKeySource = 'config' | 'env' | 'claude' | 'local';
+
+/** The Meko on this computer, as `meko token --json` last said: running, installed but stopped, or none found. */
+export type LocalMekoState = 'running' | 'stopped' | 'none';
 
 /** The Meko part of Settings. The key itself never leaves the server. */
 export interface MekoSettings {
-  /** False when Meko is turned off (`[meko] enabled = false`): AgentK then works without datapacks. */
-  enabled: boolean;
   /** The MCP server URL as set in config.toml; empty means the environment, Claude Code or Meko Cloud decides. */
   url: string;
   /** The MCP server AgentK uses now. */
@@ -1609,14 +1613,16 @@ export interface MekoSettings {
   /** The key's last four characters, or null when there's no key. */
   keyHint: string | null;
   keySource: MekoKeySource | null;
+  /** The Meko on this computer, which AgentK uses when no key is set. */
+  local: LocalMekoState;
 }
 
 /**
- * PUT /api/settings `meko`: a field left out is unchanged; `apiKey: ''` keeps the current key. A new
- * key turns Meko on; `enabled: false` turns it off (the key is kept).
+ * PUT /api/settings `meko`: a field left out is unchanged; `apiKey: ''` keeps the current key.
+ * `useLocal: true` clears config.toml's key and MCP URL, so AgentK uses the Meko on this computer.
  */
 export interface MekoSettingsUpdate {
-  enabled?: boolean;
+  useLocal?: boolean;
   url?: string;
   apiKey?: string;
   webUrl?: string;

@@ -76,7 +76,7 @@ export class InviteService {
    * finishes "AgentK can't …".
    */
   requireSharing(what: string): void {
-    if (!this.core.mekoStatus.configured) throw new HttpError(409, `Meko is off, so AgentK can't ${what}. Add a Meko API key on the Meko tab in Settings.`);
+    if (!this.core.mekoStatus.configured) throw new HttpError(409, `Meko isn't set up, so AgentK can't ${what}. Start Meko on this computer (meko start), or add a Meko Cloud key on the Meko tab in Settings.`);
     if (!resolveMekoApiUrl(this.core.config)) throw new HttpError(409, `Meko's API URL isn't known, so AgentK can't ${what}. Set the web app URL on the Meko tab in Settings.`);
   }
 
