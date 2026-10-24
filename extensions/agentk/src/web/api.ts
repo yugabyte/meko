@@ -36,6 +36,7 @@ import type {
   MekoLogInfo,
   MekoTeachRequest,
   MoveSessionRequest,
+  OpenedProject,
   OpenPrRequest,
   NewComment,
   PastedImage,
@@ -170,7 +171,7 @@ export const api = {
   declineInvite: (datapackId: string) => post<void>(`/api/invites/${enc(datapackId)}/decline`),
   laterInvite: (datapackId: string) => post<void>(`/api/invites/${enc(datapackId)}/later`),
 
-  openProject: (b: CreateProjectRequest) => post<Project>('/api/projects', b),
+  openProject: (b: CreateProjectRequest) => post<OpenedProject>('/api/projects', b),
   updateProject: (id: string, b: UpdateProjectRequest) => request<Project>('PATCH', `/api/projects/${enc(id)}`, b),
   closeProject: (id: string) => request<void>('DELETE', `/api/projects/${enc(id)}`),
   project: (id: string) => get<Project>(`/api/projects/${enc(id)}`),

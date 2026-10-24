@@ -6,7 +6,7 @@ import { makeEnv, pinFiles, pinnedDatapack, sessionPinFile, waitFor, type TestEn
 import { AGENTK_AGENT_ID, legacyAgentId, sessionAgentId } from '../../src/server/meko.js';
 import { PIN_KEEP_MS } from '../../src/server/projects.js';
 import { postHook } from '../hook-client.js';
-import { get, run } from '../../src/server/db.js';
+import { all, get, run } from '../../src/server/db.js';
 import { usageOverview } from '../../src/server/usage.js';
 import { sleep } from '../../src/server/hostclient.js';
 import { transcriptPathFor } from '../../src/server/claude.js';
@@ -50,6 +50,8 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
   afterEach(async () => {
     await env.cleanup();
   });
+
+  const events = (id: string) => all<{ kind: string; text: string | null }>(env.core.db, 'SELECT kind, text FROM session_events WHERE session_id = ? ORDER BY id', id);
 
   async function newProject() {
     return env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'create', name: 'agent-k-local/test/demo' } });
@@ -665,6 +667,56 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
 
     await env.core.sessions.action(s.id, 'archive');
     expect(env.core.sessions.get(s.id)).toMatchObject({ status: 'archived', stage: 'explore' });
+  });
+
+  it('runs a learn session: a task at Explore on the seed prompt and the brief, closed with no learn step once Claude writes its summary', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, {
+      name: 'Learn the project', learn: { about: 'The billing service.', where: 'services/billing/', months: 24 }, start: 'code', prompt: 'ignored',
+    });
+    expect(s).toMatchObject({ kind: 'plan', stage: 'explore', purpose: 'learn' });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
+    const since = new Date();
+    since.setUTCMonth(since.getUTCMonth() - 24);
+    const first = argvLog(env)[0].args.at(-1);
+    expect(first).toMatch(/learn session of an AgentK project[^]*Task: Learn the project\n\nWhat this project is about:\nThe billing service\.\n\nWhere its files are:\nservices\/billing\//);
+    expect(first).toContain(`Read the PRs merged since ${since.toISOString().slice(0, 10)}.`);
+    expect(first).toContain(join(env.core.paths.designs, s.id, 'learned.md'));
+    // The seeding rule, not the usual one, which leaves out what a PR already says.
+    expect(first).toContain('(PR #123)');
+    expect(first).not.toContain('what the diff or PR description already says');
+    // Not done yet: it stays.
+    expect(env.core.sessions.get(s.id).status).toBe('idle');
+
+    // Done, but with a change of its own in the worktree, which closing would throw away: it stays, and says why.
+    writeFileSync(join(s.worktreePath, 'notes.txt'), 'x');
+    await env.core.sessions.submit(s.id, 'LEARN_DONE');
+    await waitFor(() => events(s.id), (e) => e.some((x) => x.kind === 'learn-kept'), 10000, 'kept');
+    expect(events(s.id).find((e) => e.kind === 'learn-done')?.text).toBe('Covered billing and 12 PRs.\nSaved 5 facts.');
+    expect(existsSync(join(env.core.paths.designs, s.id, 'learned.md'))).toBe(false);
+    expect(env.core.sessions.get(s.id).status).not.toBe('archived');
+
+    rmSync(join(s.worktreePath, 'notes.txt'));
+    await env.core.sessions.submit(s.id, 'LEARN_DONE');
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'archived', 10000, 'closed');
+    expect(get(env.core.db, 'SELECT COUNT(*) AS n FROM meko_learns WHERE session_id = ?', s.id)).toEqual({ n: 0 });
+    expect((await env.core.projects.home(p.id)).hasLearnSession).toBe(true);
+  });
+
+  it.each([
+    { what: 'no about', learn: { about: ' ', where: '', months: 24 }, error: /what the project is about/ },
+    { what: 'months out of range', learn: { about: 'x', where: '', months: 121 }, error: /from 0 to 120/ },
+    { what: 'months not whole', learn: { about: 'x', where: '', months: 1.5 }, error: /whole number/ },
+    { what: 'a review', learn: { about: 'x', where: '', months: 1 }, kind: 'review-pr', error: /leave out the PR/ },
+    { what: 'no dedicated datapack', learn: { about: 'x', where: '', months: 1 }, noDatapack: true, error: /has none/ },
+    { what: 'Meko off', learn: { about: 'x', where: '', months: 1 }, mekoOff: true, error: /Meko is off/ },
+  ] as const)('refuses a learn session with $what', async (c) => {
+    const p = 'noDatapack' in c
+      ? await env.core.projects.create({ repoPath: env.repo, name: 'Bare', datapack: { mode: 'none' } })
+      : await newProject();
+    if ('mekoOff' in c) env.core.mekoStatus = { ...env.core.mekoStatus, configured: false };
+    const req = { name: 'Learn', learn: c.learn, ...('kind' in c ? { kind: c.kind, pr: { repo: 'acme/demo', number: 1 } } : {}) } as CreateSessionRequest;
+    await expect(env.core.sessions.create(p.id, req)).rejects.toMatchObject({ status: 400, message: expect.stringMatching(c.error) });
   });
 
   it('starts a task at Code, stores it as plan, keeps the old types and skipDesign working, and refuses an unknown kind or start', async () => {

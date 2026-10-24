@@ -47,6 +47,27 @@ describe("the New session dialog's Agent choice", () => {
   });
 });
 
+describe("the New session dialog's Learn the project", () => {
+  const dedicated = { ...project, datapacks: [{ id: 'dp', name: 'adlc/proj/demo/x', role: 'dedicated' }] } as unknown as Project;
+  const learnHtml = (p: Project, mekoOn: boolean, learnFirst: boolean) =>
+    renderToStaticMarkup(createElement(NewSessionDialog, {
+      project: p, ghLogin: null, harnesses: [status('claude')], mekoOn, learnFirst, onClose: () => undefined, onCreated: () => undefined,
+    }));
+  it.each([
+    ['is picked, with its fields and the empty-datapack line, for a project just opened on an empty datapack', dedicated, true, true, { pill: true, picked: true, fields: true }],
+    ['is offered but not picked otherwise', dedicated, true, false, { pill: true, picked: false, fields: false }],
+    ["isn't offered without a dedicated datapack", { ...project, datapacks: [] } as unknown as Project, true, true, { pill: false, picked: false, fields: false }],
+    ["isn't offered with Meko off", dedicated, false, true, { pill: false, picked: false, fields: false }],
+  ])('%s', (_, p, mekoOn, learnFirst, want) => {
+    const html = learnHtml(p, mekoOn, learnFirst);
+    expect({
+      pill: html.includes('id="ns-start-learn"'),
+      picked: /id="ns-start-learn"[^>]*aria-checked="true"/.test(html),
+      fields: html.includes('id="ns-learn-about"') && html.includes('id="ns-learn-offer"') && !html.includes('id="ns-prompt"'),
+    }).toEqual(want);
+  });
+});
+
 describe("Settings' Default agent", () => {
   it.each([
     ['is left out while Kiro is off', [status('claude'), status('kiro', { enabled: false, available: false })], 'claude' as const, null],

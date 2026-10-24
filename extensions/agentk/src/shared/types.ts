@@ -66,19 +66,43 @@ export type StartStage = 'explore' | 'design' | 'code';
 
 export const START_STAGES: StartStage[] = ['explore', 'design', 'code'];
 
-/** One line on what each start (and Review a PR) is for, shown under the choice in the New session dialog. */
-export const START_HINTS: Record<StartStage | 'review-pr', string> = {
+/**
+ * What a session is for, beyond its kind: `learn`, a learn session (`CreateSessionRequest.learn`),
+ * a task started at Explore that seeds the project's dedicated datapack from the repo and its PRs,
+ * and closes by itself when it's done. Null for every other session.
+ */
+export type SessionPurpose = 'learn';
+
+/** How many months back a learn session reads PRs, by default and at most (0 reads none). */
+export const LEARN_MONTHS_DEFAULT = 24;
+export const LEARN_MONTHS_MAX = 120;
+/** The most characters each of a learn session's two fields takes. */
+export const LEARN_TEXT_MAX = 4_000;
+
+/** What the user tells a learn session (`CreateSessionRequest.learn`). */
+export interface LearnBrief {
+  /** What the project is about. Required. */
+  about: string;
+  /** Where its files are: folders and files in the repo, docs, other places to look. */
+  where: string;
+  /** Read PRs merged in this many months back (0 to LEARN_MONTHS_MAX; 0 reads none). */
+  months: number;
+}
+
+/** One line on what each start (and Review a PR, and a learn session) is for, shown under the choice in the New session dialog. */
+export const START_HINTS: Record<StartStage | 'review-pr' | 'learn', string> = {
   explore: "Investigate, answer questions, build POCs and run experiments. Move on to Design, Code or a PR when you're ready.",
   design: 'AgentK writes a design for you to approve, then codes, opens a PR, handles review and merges.',
   code: 'For small tasks. AgentK codes straight away, then opens a PR, handles review and merges.',
   'review-pr': "Review someone else's PR. AgentK checks it out, sums it up for you, then helps with whatever you ask. It posts to GitHub only when you say.",
+  learn: "AgentK reads the code you point it to and the repo's past PRs, and saves what it learns to Meko for your team. It changes no files, and the session closes when it's done.",
 };
 
 /**
  * An example of the work each start (and Review a PR) suits, shown as the placeholders of the New
  * session dialog's Name and First prompt fields.
  */
-export const START_EXAMPLES: Record<StartStage | 'review-pr', { name: string; prompt: string }> = {
+export const START_EXAMPLES: Record<StartStage | 'review-pr' | 'learn', { name: string; prompt: string }> = {
   explore: {
     name: 'why is CI slow on macOS',
     prompt: 'e.g. CI takes twice as long on macOS as on Linux. Find out where the time goes and what we could cut.',
@@ -93,6 +117,10 @@ export const START_EXAMPLES: Record<StartStage | 'review-pr', { name: string; pr
     prompt: 'e.g. The install section of the README says "npm instal". Make it "npm install".',
   },
   'review-pr': { name: 'review #21', prompt: 'e.g. the migration and the polling' },
+  learn: {
+    name: 'Learn the project',
+    prompt: "e.g. The billing service: invoices, proration and the Stripe sync. We're moving it from cron jobs to a queue.",
+  },
 };
 
 /**
@@ -765,6 +793,8 @@ export interface Session {
   stage: Stage;
   /** The session has a task (its first prompt, or its name); only one started at Explore without a first prompt before the name became its task has none. */
   hasTask: boolean;
+  /** What it's for beyond its kind: `learn` for a learn session; null otherwise. */
+  purpose: SessionPurpose | null;
   prNumber: number | null;
   prUrl: string | null;
   reviewState: ReviewState;
@@ -1560,6 +1590,8 @@ export interface DatapackWithCounts extends DatapackRef {
 export interface ProjectHome {
   project: Project;
   datapacks: DatapackWithCounts[];
+  /** The project has had a learn session (archived ones count), so the home doesn't offer one for an empty datapack. */
+  hasLearnSession: boolean;
   activity: ActivityItem[];
   usage: ProjectUsage;
 }
@@ -2073,6 +2105,15 @@ export type SetDedicatedDatapackRequest = DatapackChoice & {
   detachOld?: boolean;
 };
 
+/**
+ * What opening a project answers: the project, and whether its dedicated datapack is empty (one the
+ * open made, or one Meko says has no memories and no knowledge), so the New session dialog offers a
+ * learn session first. False with no datapack, and when Meko couldn't say in time.
+ */
+export interface OpenedProject extends Project {
+  datapackEmpty: boolean;
+}
+
 export interface CreateProjectRequest {
   /** Exactly one of repoPath / cloneUrl / newRepo. */
   repoPath?: string;
@@ -2170,6 +2211,13 @@ export interface CreateSessionRequest {
    * `branch` and `baseBranch` are ignored.
    */
   pr?: { repo: string; number: number };
+  /**
+   * A learn session (`Session.purpose` `learn`): a task at Explore that reads the files and PRs the
+   * brief names and saves what it learns to the project's dedicated datapack, so it needs Meko and a
+   * dedicated datapack it can write to. Its task is made from the brief: `prompt`, `start` and the
+   * images are ignored. Not with `kind: 'review-pr'` or `pr`.
+   */
+  learn?: LearnBrief;
   /**
    * Images for the first prompt (a review's notes), by the ids `POST /api/projects/:id/images`
    * returned for this project. They're kept apart from the task, and their paths go with it (a
@@ -2362,7 +2410,7 @@ export type TermServerMessage =
 // POST   /api/invites/:datapackId/accept       → 204   (viewer invites; other invites are accepted by opening the project)
 // POST   /api/invites/:datapackId/decline      → 204
 // POST   /api/invites/:datapackId/later        → 204   (hides it here; the invite stays in Meko)
-// POST   /api/projects        CreateProjectRequest → Project   (opens a project on a repo here, a clone, or a new repo;
+// POST   /api/projects        CreateProjectRequest → OpenedProject   (opens a project on a repo here, a clone, or a new repo;
 //        409 when a new repo's folder is already taken)
 // GET    /api/projects/:id                     → Project   (404 once it's closed: the UI asks for a project it just
 //        opened when a state push comes without it)
@@ -2414,7 +2462,9 @@ export type TermServerMessage =
 //        `pr` that isn't open or whose head repo no remote of the repo is; 409 for a branch a running session uses or another checkout has, or
 //        when no coding agent is available (NO_AGENT). Review a PR:
 //        400 without `pr`, for a PR that isn't open, or a repoPath that isn't a clone of the PR's repo; 400 for
-//        `images` that aren't this project's staged images, or more than MAX_START_IMAGES). Answers once
+//        `images` that aren't this project's staged images, or more than MAX_START_IMAGES. A learn session (`learn`): 400 without
+//        an `about`, for text over LEARN_TEXT_MAX or `months` outside 0–LEARN_MONTHS_MAX, with `kind: 'review-pr'` or `pr`, and
+//        when Meko is off or the project has no dedicated datapack it can write to). Answers once
 //        the session is written, still starting: the worktree and Claude start after (Session.startup shows where it
 //        is). A worktree or PR fetch that fails then removes the session (and its images) and adds it to AppState.failedStarts.
 // POST   /api/projects/:id/images  image bytes → StagedImage   (an image added in the New session dialog: checked as

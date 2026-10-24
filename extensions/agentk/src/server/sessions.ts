@@ -2,8 +2,8 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
-import type { ChangeSide, CloseSessionRequest, DiffStat, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, MekoCallBy, MekoCallDetail, MekoCallPage, MekoLogInfo, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
-import { SESSION_NAME_MAX, START_STAGES, STAGE_LABELS } from '../shared/types.js';
+import type { ChangeSide, CloseSessionRequest, DiffStat, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, LearnBrief, MekoCallBy, MekoCallDetail, MekoCallPage, MekoLogInfo, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
+import { LEARN_MONTHS_DEFAULT, LEARN_MONTHS_MAX, LEARN_TEXT_MAX, SESSION_NAME_MAX, START_STAGES, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
 import { changedImage, changes, diffBase, diffStat, suggestBase, UnknownCommitError } from './changes.js';
@@ -23,7 +23,7 @@ import { AGENTK_AGENT_ID, launchedAgentId, sessionAgentId, withMekoScope } from 
 import { claudeReply, mekoLogPath, removeMekoLog } from './mekolog.js';
 import { mekoTool } from './mekousage.js';
 import {
-  DESIGN_UPKEEP_PROMPTS, designQaLine, designQuestionsLine, designUpkeepLine, designWhere, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine,
+  DESIGN_UPKEEP_PROMPTS, designQaLine, designQuestionsLine, designUpkeepLine, designWhere, learnTask, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine,
   mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, reviewDesignLine, taskWithName, withAttachedImages, type PromptName,
 } from './prompts.js';
 import { PR_DESIGN_TIMEOUT_MS, markPrDesignTold, prDesignFile, prDesignSource, removePrDesignFiles } from './prdesign.js';
@@ -169,6 +169,24 @@ export function startImages(row: SessionRow): string[] {
   } catch {
     return [];
   }
+}
+
+/** A learn session's brief (`CreateSessionRequest.learn`), checked: 400 for anything off. */
+function checkLearn(b: unknown): LearnBrief {
+  const o = (b !== null && typeof b === 'object' ? b : {}) as Partial<Record<keyof LearnBrief, unknown>>;
+  if (o.about != null && typeof o.about !== 'string') throw new HttpError(400, "The learn session's about must be text.");
+  if (o.where != null && typeof o.where !== 'string') throw new HttpError(400, "The learn session's where must be text.");
+  const about = (o.about ?? '').trim();
+  const where = (o.where ?? '').trim();
+  if (!about) throw new HttpError(400, 'Say what the project is about, so AgentK knows what to learn.');
+  if (about.length > LEARN_TEXT_MAX || where.length > LEARN_TEXT_MAX) {
+    throw new HttpError(400, `Keep what the project is about, and where its files are, to ${LEARN_TEXT_MAX.toLocaleString('en-US')} characters each.`);
+  }
+  const months = o.months ?? LEARN_MONTHS_DEFAULT;
+  if (typeof months !== 'number' || !Number.isInteger(months) || months < 0 || months > LEARN_MONTHS_MAX) {
+    throw new HttpError(400, `Pick how many months of PRs to read: a whole number from 0 to ${LEARN_MONTHS_MAX}.`);
+  }
+  return { about, where, months };
 }
 
 /** A review's notes line for its prompt, with the images added in the New session dialog; empty without either. */
@@ -446,8 +464,10 @@ export class SessionManager {
       if (req[k] != null && typeof req[k] !== 'string') throw new HttpError(400, `The session's ${k} must be text.`);
     }
     if (req.existingBranch != null && typeof req.existingBranch !== 'boolean') throw new HttpError(400, 'existingBranch must be true or false.');
+    // A learn session's task is its brief: it takes no images or first prompt.
+    const learn = req.learn != null ? checkLearn(req.learn) : null;
     // Before the first await, so an image swept meanwhile is left out at the move, not refused here.
-    const images = checkStaged(this.core.paths.pastes, projectId, req.images);
+    const images = learn ? [] : checkStaged(this.core.paths.pastes, projectId, req.images);
     // A harness that isn't available starts nothing.
     const harness = await this.core.harnesses.pick(this.core.config, req.harness);
     const settings = parseSettings(p.settings_json);
@@ -459,7 +479,15 @@ export class SessionManager {
     if (kind === 'task' && req.start != null && !START_STAGES.includes(req.start)) {
       throw new HttpError(400, `Pick where the session starts: ${START_STAGES.join(', ')}.`);
     }
-    const start: StartStage = req.start ?? legacy ?? (req.skipDesign ? 'code' : 'design');
+    if (learn) {
+      if (kind === 'review-pr' || req.pr != null) throw new HttpError(400, "A learn session learns the project's own repo: leave out the PR.");
+      if (!this.core.mekoStatus.configured) throw new HttpError(400, 'A learn session saves what it learns to Meko, and Meko is off. Turn it on in Settings → Meko first.');
+      // A dedicated datapack is always one we can write to (projects.ts refuses a viewer's).
+      if (!dedicatedDatapack(this.db, projectId)) {
+        throw new HttpError(400, "A learn session saves what it learns to the project's dedicated datapack, and this project has none. Add one on the project's home first.");
+      }
+    }
+    const start: StartStage = learn ? 'explore' : req.start ?? legacy ?? (req.skipDesign ? 'code' : 'design');
     const repo = this.core.projects.sessionRepo(p, req.repoPath);
     // A project's repo moved or deleted since it was opened. Checked here because the first git
     // calls below don't notice (hasCommits counts a git error as having commits), so the first to
@@ -479,7 +507,7 @@ export class SessionManager {
     // user's notes are kept apart, for its prompt).
     const task = review
       ? `Review PR #${review.info.number} of ${review.repo}: ${review.info.title}`
-      : (req.prompt ?? '').trim() || name;
+      : learn ? learnTask(learn, Date.now()) : (req.prompt ?? '').trim() || name;
     // A repo with no commits yet (one opened before AgentK gave it a first commit) gets one now.
     if (!review) {
       try {
@@ -512,7 +540,7 @@ export class SessionManager {
     }
     // What Try again fills the New session dialog with, should the start fail.
     const request: CreateSessionRequest = {
-      name, harness: harness.id, prompt: (req.prompt ?? '').trim() || undefined, kind, start: review ? undefined : start,
+      name, harness: harness.id, prompt: learn ? undefined : (req.prompt ?? '').trim() || undefined, kind, start: review || learn ? undefined : start, learn: learn ?? undefined,
       baseBranch: review || attach ? undefined : base, repoPath: req.repoPath, branch: attach ? undefined : wanted || undefined,
       existingBranch: existing || undefined,
       pr: review ? { repo: review.repo, number: review.info.number } : attach ? { repo: req.pr!.repo, number: attach.info.number } : undefined,
@@ -540,14 +568,14 @@ export class SessionManager {
       const path = claimed ?? pool.add(repo, id);
       run(this.db, `INSERT INTO sessions(id, project_id, slug, name, harness, claude_session_id, branch, base_branch, repo_path, branch_reused,
                       worktree_path, tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode, meko_agent_id,
-                      pr_number, pr_url, pr_repo, pr_title, pr_author, review_sha, pr_head_sha, pr_new_commits, pr_state, pr_remote, review_notes, push_remote, push_branch, position)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                      pr_number, pr_url, pr_repo, pr_title, pr_author, review_sha, pr_head_sha, pr_new_commits, pr_state, pr_remote, review_notes, push_remote, push_branch, purpose, position)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                       (SELECT COALESCE(MIN(position), 0) - 1 FROM sessions WHERE project_id = ?))`,
         id, projectId, slug, name, harness.id, randomUUID(), branch, base, repo, where ? 1 : 0, path, paneName(projectId, slug),
         randomBytes(24).toString('base64url'), review ? 'review-pr' : STORED_TASK_KIND, stage, task || null, now, now, sessionAgentId({ id, slug, harness: harness.id }),
         review?.info.number ?? attach?.info.number ?? null, review?.info.url ?? attach?.info.url ?? null, review?.repo ?? null, review?.info.title ?? null,
         review?.info.author ?? null, sha, sha, review ? 0 : null, review ? 'OPEN' : null, review?.remote ?? null, notes || null,
-        push?.remote ?? null, push ? push.branch : null, projectId);
+        push?.remote ?? null, push ? push.branch : null, learn ? 'learn' : null, projectId);
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
       return { worktree: path, reused: !!claimed };
     });
@@ -880,6 +908,16 @@ export class SessionManager {
     return claudePath(join(this.core.paths.designs, row.id, 'design.md'));
   }
 
+  /** Where a learn session writes its summary when it's done (outside the repo), which closes it (Lifecycle.learnDone). */
+  learnedPath(row: SessionRow): string {
+    return join(this.core.paths.designs, row.id, 'learned.md');
+  }
+
+  /** learnedPath as Claude is told it. */
+  learnedFile(row: SessionRow): string {
+    return claudePath(this.learnedPath(row));
+  }
+
   /** Where Claude lists the design's open questions, beside the markdown design. */
   questionsFile(row: SessionRow): string {
     return claudePath(join(this.core.paths.designs, row.id, 'questions.json'));
@@ -895,7 +933,7 @@ export class SessionManager {
 
   /** The prompt a session's task starts with, for the stage it's in. */
   firstPrompt(row: SessionRow): PromptName {
-    if (row.stage === 'explore') return 'explore';
+    if (row.stage === 'explore') return row.purpose === 'learn' ? 'seed' : 'explore';
     if (row.stage === 'reviewing-pr') return 'review-pr';
     if (row.stage !== 'design') return 'code';
     return row.plan_mode ? 'design-plan' : 'design';
@@ -933,6 +971,7 @@ export class SessionManager {
       repo: '{owner}/{repo}',
       designFile: this.designFile(row),
       questionsFile: this.questionsFile(row),
+      learnedFile: this.learnedFile(row),
       ...review,
       ...extra,
     });

@@ -52,9 +52,10 @@ type Modal =
   | { kind: 'new-project'; invite?: DatapackInvite }
   /**
    * `fresh`: the project was just opened, so a Review a PR is offered first when it has PRs to review.
+   * `learn`: start on Learn the project (the project was just opened on an empty datapack, or its home offered it).
    * `retry`: a failed start to try again, filling the dialog in. `initial`: a task Ask AgentK proposed, to change before it starts.
    */
-  | { kind: 'new-session'; projectId: string; fresh?: boolean; retry?: FailedStart; initial?: CreateSessionRequest }
+  | { kind: 'new-session'; projectId: string; fresh?: boolean; learn?: boolean; retry?: FailedStart; initial?: CreateSessionRequest }
   /** The project on screen lost its last open session: offer to close it. */
   | { kind: 'close-project'; projectId: string }
   | { kind: 'settings'; tab?: SettingsTab }
@@ -567,6 +568,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
             ghLogin={state.ghLogin ?? null}
             onMenu={openDrawer}
             onBack={() => goProject(currentProject)}
+            onLearn={() => setModal({ kind: 'new-session', projectId: currentProject.id, learn: true })}
             onError={showToast}
           />
         ) : currentProject ? (
@@ -612,7 +614,7 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           onCreated={(p) => {
             // Straight on to the project's first session.
             setOpened(p);
-            setModal({ kind: 'new-session', projectId: p.id, fresh: true });
+            setModal({ kind: 'new-session', projectId: p.id, fresh: true, learn: p.datapackEmpty });
             navigate({ view: 'project', projectId: p.id, sessionId: null });
           }}
         />
@@ -623,6 +625,8 @@ export function App({ auth, onLoggedOut }: { auth: AuthStatus; onLoggedOut: () =
           ghLogin={state.ghLogin ?? null}
           harnesses={state.harnesses ?? []}
           fresh={modal.kind === 'new-session' && !!modal.fresh}
+          mekoOn={state.meko.configured}
+          learnFirst={modal.kind === 'new-session' && !!modal.learn}
           initial={modal.kind === 'new-session' ? (modal.retry?.request ?? modal.initial) : undefined}
           onClose={() => setModal({ kind: 'none' })}
           onCreated={(s) => {
