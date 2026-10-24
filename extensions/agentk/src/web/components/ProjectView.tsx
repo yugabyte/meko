@@ -325,16 +325,8 @@ export function ProjectView({
           onMenu={onMenu}
           menuDot={!showTabs && sessions.some((s) => s.id !== session?.id && dotState(s) === 'needs_input')}
           sub={showTabs || !session ? undefined : project.name}
-          title={
-            showTabs ? undefined : session ? (
-              <>
-                <StatusDot status={dotState(session)} phase={session.id} />
-                {session.name}
-              </>
-            ) : (
-              project.name
-            )
-          }
+          title={showTabs ? undefined : (session?.name ?? project.name)}
+          icon={!showTabs && session ? <StatusDot status={dotState(session)} phase={session.id} /> : undefined}
         >
           {showTabs && tabs}
           {session?.status === 'exited' && (
