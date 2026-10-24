@@ -112,16 +112,23 @@ function hook(event, extra = {}) {
 }
 
 /**
- * A call to Meko's memory_search that takes `ms`: preToolUse, then (unless the user `refused` it,
- * when Kiro stops there) its result in the session log and postToolUse. Meko finds one memory, or
- * nothing when `empty`.
+ * A call to Meko's memory_search that takes `ms`: preToolUse, then its result in the session log and
+ * postToolUse. Meko finds one memory, or nothing when `empty`. When the user `refused` it, Kiro logs
+ * its own error as the result and fires no postToolUse.
  */
 function mekoCall(query, ms, how) {
   const input = { query, datapack_id: 'dp1' };
   hook('preToolUse', { tool_name: '@meko/memory_search', tool_tags: ['@meko/memory_search', '@meko', '@mcp'], tool_input: { __tool_use_purpose: 'Look it up.', ...input } });
   sleep(ms);
-  if (how === 'refused') return;
   const id = `toolu_${randomUUID().replace(/-/g, '')}`;
+  if (how === 'refused') {
+    record('ToolResults', {
+      message_id: randomUUID(),
+      content: [{ kind: 'toolResult', data: { toolUseId: id, content: [{ kind: 'text', data: 'Permission request failed: denied' }], status: 'error' } }],
+      results: { [id]: { tool: { kind: { Mcp: { toolName: 'memory_search', serverName: 'meko', params: input } } } } },
+    });
+    return;
+  }
   const text = JSON.stringify({ results: how === 'empty' ? [] : [{ id: 'mem1', memory: 'What Kiro knows.', score: 0.9, raw_similarity_score: 0.85 }] });
   const reply = { content: [{ type: 'text', text }], isError: false };
   record('AssistantMessage', { message_id: randomUUID(), content: [{ kind: 'toolUse', data: { toolUseId: id, name: 'memory_search', input: { __tool_use_purpose: 'Look it up.', ...input } } }] });

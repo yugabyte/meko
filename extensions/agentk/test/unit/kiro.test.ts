@@ -157,11 +157,18 @@ describe("a Kiro session's Meko calls", () => {
       results('t1', 'meko', 'memory_search', reply('{"results":[]}')),
       results('t2', 'github', 'search', reply('[]')),
       results('t3', 'meko-local', 'memory_add', reply('Error: down', true), 'error'),
+      // A call the user refused: Kiro's own message, as text, and an error.
+      line('ToolResults', {
+        message_id: 'm',
+        content: [{ kind: 'toolResult', data: { toolUseId: 't5', content: [{ kind: 'text', data: 'Permission request failed: denied' }], status: 'error' } }],
+        results: { t5: { tool: { kind: { Mcp: { toolName: 'context_search', serverName: 'meko', params: { query: 'q' } } } } } },
+      }),
       'not json',
     ].join('\n');
     expect(parseKiroMekoCalls(text, 42)).toEqual([
       { id: 't1', tool: 'memory_search', at: 1_700_000_000_000, input: { query: 'q' }, text: '{"results":[]}', isError: false },
       { id: 't3', tool: 'memory_add', at: 1_700_000_000_000, input: { query: 'q' }, text: 'Error: down', isError: true },
+      { id: 't5', tool: 'context_search', at: 1_700_000_000_000, input: { query: 'q' }, text: 'Permission request failed: denied', isError: true },
     ]);
     // A read that starts after the prompt dates its calls by when it ran.
     expect(parseKiroMekoCalls(results('t4', 'meko', 'context_search', reply('{}')), 42)).toEqual([

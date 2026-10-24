@@ -366,10 +366,12 @@ export function parseKiroMekoCalls(text: string, now: number): KiroMekoCall[] {
     const replies = new Map<string, { text: string; isError: boolean }>();
     for (const c of Array.isArray(d.data.content) ? d.data.content : []) {
       if (!isObject(c) || c.kind !== 'toolResult' || !isObject(c.data) || typeof c.data.toolUseId !== 'string') continue;
+      // An MCP reply is a `json` part; Kiro's own message (a refused call's) is a `text` part.
       const parts = Array.isArray(c.data.content) ? c.data.content : [];
       const json = parts.find((x): x is Json => isObject(x) && isObject(x.data));
+      const plain = parts.map((x) => (isObject(x) && x.kind === 'text' && typeof x.data === 'string' ? x.data : '')).join('');
       replies.set(c.data.toolUseId, {
-        text: json ? mcpText((json.data as Json).content) : '',
+        text: json ? mcpText((json.data as Json).content) : plain,
         isError: c.data.status !== 'success' || (!!json && (json.data as Json).isError === true),
       });
     }

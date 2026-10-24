@@ -87,8 +87,9 @@ usage report and What Meko doesn't know treat every agent's calls alike:
   checked against kiro-cli 2.34.0). Kiro dates only its `Prompt` lines, so a call's `at` is its
   turn's prompt when the read saw it, else when AgentK read the call (a live read runs within about
   10 seconds of it). `model` and `context_tokens` are NULL. The input's `__tool_use_purpose`, Kiro's
-  own, is left out. A Kiro session started before this has its calls read from the start of its log
-  the next time its usage is read.
+  own, is left out. A call the user refused has Kiro's own message as its result (a `text` part,
+  status `error`) and counts as failed, as Claude's refused calls do. A Kiro session started before
+  this has its calls read from the start of its log the next time its usage is read.
 - **OpenCode** (`ingestOpenCodeUsage`): the plugin's `execute.after` adds a `type: "meko"` line to
   the session's `messages.jsonl` for each call to a Meko server's tool (`meko…_<tool>`, the tool found
   by `serverMekoTool`): its id (the call's id, its tool and a count, since a call from code mode

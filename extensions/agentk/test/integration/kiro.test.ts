@@ -103,19 +103,24 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
     await waitFor(() => get(s.id).mekoCall, Boolean, 10000, 'the refused call');
     await waitFor(() => get(s.id), (x) => !x.mekoCall && x.status === 'idle', 10000, 'the turn to end without the call');
 
+    // The refused call is recorded as failed, as Claude's refused calls are.
+    await waitFor(() => all<{ n: number }>(env.core.db, 'SELECT COUNT(*) AS n FROM meko_calls WHERE session_id = ?', s.id)[0].n, (n) => n === 3, 10000, 'the refused call');
     const calls = all(env.core.db, 'SELECT tool, kind, agent, outcome, results, quality, query, model FROM meko_calls WHERE session_id = ? ORDER BY at, query', s.id);
     expect(calls).toEqual([
       { tool: 'memory_search', kind: 'lookup', agent: null, outcome: 'found', results: 1, quality: null, query: 'meko 1500', model: null },
       { tool: 'memory_search', kind: 'lookup', agent: null, outcome: 'empty', results: 0, quality: 'empty', query: 'meko 10 empty', model: null },
+      { tool: 'memory_search', kind: 'lookup', agent: null, outcome: 'error', results: null, quality: null, query: 'meko 1500 refused', model: null },
     ]);
     const usage = (await env.core.projects.home(p.id)).usage;
-    expect(usage.bySession.find((u) => u.sessionId === s.id)?.meko).toEqual({ lookups: 2, found: 1, saves: 0 });
-    expect(usage.meko).toMatchObject({ lookups: 2, found: 1, empty: 1 });
+    expect(usage.bySession.find((u) => u.sessionId === s.id)?.meko).toEqual({ lookups: 3, found: 1, saves: 0 });
+    expect(usage.meko).toMatchObject({ lookups: 3, found: 1, empty: 1 });
     expect(env.core.projects.mekoGaps(p.id, 'open', undefined, undefined).gaps.map((g) => g.query)).toContain('meko 10 empty');
     // The call log has them as the session's agent's, with no time taken (Kiro doesn't say).
     const page = await env.core.sessions.mekoCalls(s.id, { by: 'claude' });
-    expect(page.calls.map((c) => ({ tool: c.tool, ok: c.ok, ms: c.ms }))).toEqual([
-      { tool: 'memory_search', ok: true, ms: null }, { tool: 'memory_search', ok: true, ms: null },
+    expect(page.calls.map((c) => ({ tool: c.tool, ok: c.ok, ms: c.ms, error: c.error }))).toEqual([
+      { tool: 'memory_search', ok: false, ms: null, error: 'Permission request failed: denied' },
+      { tool: 'memory_search', ok: true, ms: null, error: null },
+      { tool: 'memory_search', ok: true, ms: null, error: null },
     ]);
     expect(env.core.sessions.mekoLogs(p.id)).toEqual([expect.objectContaining({ sessionId: s.id, harness: 'kiro' })]);
   });
