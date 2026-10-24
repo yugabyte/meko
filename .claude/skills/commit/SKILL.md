@@ -12,8 +12,9 @@ a session URL at the end of a PR description) exactly as it gives them. Trailers
 commit message, after the body.
 
 In a PR description, the Meko lines AgentK's PR prompt asks for
-(`<Meko host>://<datapack id>;<datapack name>` and `meko_conversation_id:<id>`) stay last: put
-the harness's lines just above them.
+(`<Meko host>://<datapack id>;<datapack name>`, `meko_design:<name>;<hash>` when the session has a
+design, and `meko_conversation_id:<id>`) stay together and last: put the harness's lines just
+above them.
 
 Use the git identity already configured (`git config user.name` / `user.email`). Never
 pass `--author` or change the identity.
