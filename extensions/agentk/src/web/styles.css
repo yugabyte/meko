@@ -117,6 +117,13 @@ body,
   height: 100%;
   margin: 0;
 }
+/* iOS enlarges small text in wide blocks (a diff's long rows) when it lays them out again, such as
+   a Changes file scrolled back into view (content-visibility). The layout is already phone-sized.
+   100%, not none, so Safari's own text size setting still works. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
 body {
   background: var(--bg);
   color: var(--ink);

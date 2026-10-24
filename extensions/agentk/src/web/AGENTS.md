@@ -54,7 +54,13 @@ with a finger. Before you finish a UI change:
   right-click, Shift/⌘-click, drag and drop, or keyboard shortcuts alone; give each one a tap
   equivalent. Tooltips (`title`) aren't seen on touch, so don't hide needed information in them.
 - **Text inputs are 16 px or larger on phones**, or iOS zooms in on focus. The phone section
-  already covers `.input`, `textarea` and `select`; add any new input class there.
+  already covers `.input`, `textarea` and `select`; add any new input class there. `html` sets
+  `text-size-adjust: 100%`, so iOS never enlarges small text on its own (it did to a diff's rows as
+  files scrolled back into view); text is the size the CSS gives it.
+- **The keyboard comes up only when a field is tapped.** On touch (`useTouch()`), opening a dialog,
+  menu or picker doesn't focus a text field: write `autoFocus={!touch}`, and `Dialog` focuses only
+  its `button.primary` there. The command palette and the sign-in screens, where typing is the only
+  thing to do, still focus their field.
 - **Heights follow the keyboard.** Size full-height views with `var(--app-h, 100dvh)` in the phone
   section, never a bare `100vh`, so the on-screen keyboard shrinks the view instead of covering it.
   A fixed layer over the whole screen takes `top: var(--app-top, 0px)` and `height: var(--app-h, 100dvh)`

@@ -12,7 +12,7 @@ import {
 } from '../../shared/types';
 import { LOGIN_PLACEHOLDER, expandBranchPrefix } from '../../shared/branches';
 import { api, errorMessage } from '../api';
-import { useIsMobile } from '../hooks/useMedia';
+import { useIsMobile, useTouch } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { cx, shortTime } from '../util';
 import { Busy, ConfirmButton, DatapackName, ErrorText, Field } from './common';
@@ -332,6 +332,8 @@ function AttachDatapack({
   attached: Set<string>;
   onAttach: (d: MekoDatapack) => Promise<void>;
 }) {
+  // On touch, the keyboard comes up only when a field is tapped.
+  const touch = useTouch();
   const [open, setOpen] = useState(false);
   const [all, setAll] = useState<MekoDatapack[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -366,7 +368,7 @@ function AttachDatapack({
           placeholder="Search your datapacks…"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          autoFocus
+          autoFocus={!touch}
         />
         <button className="btn ghost" onClick={() => setOpen(false)}>
           Done

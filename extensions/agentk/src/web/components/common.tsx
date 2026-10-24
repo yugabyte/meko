@@ -3,7 +3,7 @@ import { HARNESS_CAPS, harnessOf, type HarnessId } from '../../shared/harnesses'
 import { KIND_LABELS, KIND_STAGES, START_HINTS, START_STAGES, STAGE_LABELS } from '../../shared/types';
 import type { StartStage } from '../../shared/types';
 import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkKeyframes, blinkOffsetMs, totalUnits, type BlinkRun } from '../blink';
-import { useMedia } from '../hooks/useMedia';
+import { matches, TOUCH_QUERY, useMedia } from '../hooks/useMedia';
 import { TUNE, typingKeyframes, typingLoopMs } from '../typing';
 import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, cx, elapsedText, instructionsBlocker, isSubmitKey, mekoDatapackUrl } from '../util';
 
@@ -169,7 +169,8 @@ export function Dialog({
   const ref = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
-  // Focus the first control once on open; Escape closes; Tab stays inside.
+  // Focus the first control once on open; Escape closes; Tab stays inside. On touch, focusing a
+  // field would bring up the keyboard before you've tapped it, so only the main button takes focus.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -181,7 +182,7 @@ export function Dialog({
     window.addEventListener('keydown', onKey, true);
     const root = ref.current;
     if (root && !root.contains(document.activeElement)) {
-      root.querySelector<HTMLElement>('input:not([disabled]), textarea, select, button.primary')?.focus();
+      root.querySelector<HTMLElement>(matches(TOUCH_QUERY) ? 'button.primary' : 'input:not([disabled]), textarea, select, button.primary')?.focus();
     }
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
