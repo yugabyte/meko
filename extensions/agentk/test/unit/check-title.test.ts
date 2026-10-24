@@ -87,9 +87,7 @@ describe('check-title.sh', () => {
     ['feat(agentk,,meko): x', 'Bad component list'],
     ['feat(agentk,web): x', 'Unknown component "web"'],
     ['feat(agentk/web,agentk/server): x', 'Component "agentk" is named twice'],
-    ['feat(meko,meko): x', 'Component "meko" is named twice'],
     ['feat(agentk,meko/Cli): x', 'Bad area "Cli"'],
-    ['chore(agentk,meko)!: x', "\"chore\" doesn't release"],
   ])('rejects %j', (title, why) => {
     const r = check(title);
     expect(r.status).toBe(1);

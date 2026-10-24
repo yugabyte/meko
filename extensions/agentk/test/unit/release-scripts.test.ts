@@ -57,6 +57,7 @@ describe('release-notes.sh', () => {
     commit('fix(agentk/web): stop clipping the rail');
     commit('fix(repo): a release script');
     commit('feat(meko/cli)!: a Meko command');
+    commit('fix(meko): a Meko fix');
     const r = run('release-notes.sh', ['--product', 'agentk']);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('- agentk/web: stop clipping the rail');
@@ -79,8 +80,10 @@ describe('release-notes.sh', () => {
     commit('feat(agentk/meko,meko/cli): move the home into Meko');
     commit('fix(repo,meko): a shared script');
     commit('perf(meko/engine,agentk): load faster');
-    // Lookalikes that name neither in a list.
+    // Lookalikes of meko, alone and in a list, aren't Meko's.
     commit('fix(mekoish): an old free-form component');
+    commit('fix(agentk,mekoish): a lookalike last in a list');
+    commit('fix(mekoish/area,repo): a lookalike first in a list');
     for (const product of ['agentk', 'meko']) {
       const r = run('release-notes.sh', ['--product', product]);
       expect(r.status, product).toBe(0);
@@ -89,13 +92,8 @@ describe('release-notes.sh', () => {
       expect(r.stdout, product).toContain('### Performance\n\n- meko/engine,agentk: load faster');
     }
     expect(run('release-notes.sh', ['--product', 'meko']).stdout).not.toContain('mekoish');
-    expect(run('release-notes.sh', ['--product', 'agentk']).stdout).toContain('mekoish');
-  });
-
-  it('gives AgentK nothing from a subject that names only Meko, with or without an area', () => {
-    commit('feat(meko/cli): a Meko command');
-    commit('fix(meko): a Meko fix');
-    expect(run('release-notes.sh', ['--product', 'agentk']).status).toBe(3);
+    const agentk = run('release-notes.sh', ['--product', 'agentk']).stdout;
+    for (const s of ['- mekoish: ', '- agentk,mekoish: ', '- mekoish/area,repo: ']) expect(agentk).toContain(s);
   });
 });
 

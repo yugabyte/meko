@@ -74,8 +74,8 @@ The rest of the subject:
   `fix(agentk/meko,meko/cli): …`. It releases every product it names, so name a component only
   when the change alters what it ships; one that only touches another (AgentK's tests reading a
   root script) takes the one it ships in. Meko's release workflow runs only on pushes that change
-  `backend/**` or `scripts/release/**`, so a `meko` in a title whose PR changes neither waits for
-  the next push that does.
+  `backend/**`, `scripts/release/**` or `.github/workflows/meko-release.yml`, so a `meko` in a
+  title whose PR changes none of them waits for the next push that does.
 - `/<area>` is optional: one lowercase name (letters, digits, dashes) for the part of the
   component it touches, e.g. `agentk/web`, `agentk/server`, `agentk/meko` (AgentK's Meko
   integration), `agentk/update`, `meko/store`.
