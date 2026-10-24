@@ -3462,7 +3462,8 @@ div[id^='dak-mermaid-'] .label {
 .chg-file-hd {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
+  /* On the first line of a path that wraps (FilePath). */
+  align-items: baseline;
   gap: 8px;
   width: 100%;
   border: 0;
@@ -3516,6 +3517,21 @@ div[id^='dak-mermaid-'] .label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/*
+ * A file's path is never cut: it wraps after a '/' (FilePath's <wbr>). Each folder and the name is
+ * an inline-block, kept whole unless it is longer than a line, and then broken anywhere.
+ */
+.chg-file-path {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.chg-file-path .chg-seg {
+  display: inline-block;
+  max-width: 100%;
+}
+.chg-file-path .chg-dir {
+  color: var(--muted);
 }
 .chg-counts {
   display: flex;
@@ -5385,6 +5401,22 @@ div[id^='dak-mermaid-'] .label {
     right: 8px;
     width: auto;
     max-width: none;
+  }
+  /* A file's header in two rows, its position and counts under the path, so the path gets the full width. */
+  .chg-file-hd {
+    grid-template-columns: 12px auto minmax(0, 1fr) auto;
+    row-gap: 4px;
+  }
+  .chg-file-hd .chg-file-path {
+    grid-column: 3 / -1;
+  }
+  .chg-file-hd .chg-pos {
+    grid-row: 2;
+    grid-column: 3;
+  }
+  .chg-file-hd .chg-counts {
+    grid-row: 2;
+    grid-column: 4;
   }
   .design-page {
     height: var(--app-h, 100dvh);
