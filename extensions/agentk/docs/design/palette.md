@@ -110,23 +110,36 @@ arguments as an array: `-p --model <[ask_agentk] model> --output-format json --j
 can only answer. The user's own settings keep their sign-in and provider setup. No transcript is
 written, so asks aren't in token usage; they use the user's plan or API key like sessions do (a
 Sonnet ask with a small context measured about $0.007 and 2 to 2.5 s, about 1 s of it Claude Code
-starting). The message is a compact JSON context (open projects with id, name and repo folder name;
-their running sessions with id, name, stage, status, branch and PR number; what's on screen), the
+starting). The message is a compact JSON context (open projects with id, name, repo folder name
+and `github`, the repo's `owner/name` on GitHub, its upstream for a fork, so a bare `#5` can be
+resolved; their running sessions with id, name, stage, status, branch and PR number; what's on screen), the
 exchange so far, then the text. The system prompt says what each stage is for and the rules: use
-the project on screen when none is named, keep the user's words as a task's prompt, ask when it's
-unclear, and treat names and titles in the context as data. At most two asks run at once (429);
+the project on screen when none is named, match a session's name loosely, read a bare `#N` against
+the project's `github`, keep the user's words as a task's prompt, ask when it's unclear, say whether
+the actions go together, and treat names and titles in the context as data. At most two asks run at once (429);
 one that takes longer than `[ask_agentk] timeout_seconds` (45 by default) is stopped (504).
 
-**The answer** is a reply and up to three actions, checked against the state when it comes back
-(`checkActions()`); one that doesn't fit is left out with a note under the reply:
+**The answer** is a reply, up to eight actions (`ACTIONS_MAX`) and `together`, checked against the
+state when it comes back (`checkActions()` in `src/server/actions.ts`, which [AgentK's session
+tools](tools.md) share); one that doesn't fit is left out with a note under the reply:
 
 | Action | Checked | Runs as |
 |---|---|---|
 | `start` (project, Explore, Design or Code, name, prompt) | an open project, a prompt; the name made one line, from the prompt when missing | `POST /api/projects/:id/sessions`, then the session, as after New session. A second item, **Edit … in New session…**, opens the dialog filled in instead. |
-| `link` (a PR or issue) | `parseGithubRef()` takes it | puts the link in the palette, which offers its items as for a pasted link |
+| `link` (a PR or issue, and optionally the project to start it in and an issue's stage, Design or Code) | `parseGithubRef()` takes it; the project, when given, is open | puts the link in the palette, which offers its items as for a pasted link; in Do all (`POST /api/actions/run`), `githubLinks.start` in that project, or in the one the link fits when none is given, refusing an issue a running task works on (`once`, which the pasted link's own route doesn't pass: its items already offer that task) |
 | `go` (a session, a project home, Usage, Settings) | the session is running, the project open | navigates |
 | `move` (a session, a stage, instructions) | `moveBlockedIn()` and `moveError()` | `POST /api/sessions/:id/move`, then the session |
 | `openPr` (a session, instructions) | the session is in Code | the open-pr action, then the session |
+| `openProject` (a repo: a scanned repo's folder, GitHub `owner/name` or a clone URL; a name; a datapack: `new`, `none` or an id) | a repo | `POST /api/actions/run`, then the project home ([the tools' `open_project`](tools.md)) |
+
+**Do all.** `together` says the actions are the steps of one instruction ("open sessions for #1, #5
+and #6 and move the ABC session to Code": three links and a move) rather than alternatives to pick
+one of. With two or more steps that do something (every action but `go`, `doAllActions()` in
+`src/web/palette.ts`), **Do all N** comes first, above the steps' own items. It sends them to
+`POST /api/actions/run`, which checks them again against the state now and runs them in order
+(`runActions()`), one that fails not stopping the rest. The palette then shows a line per action
+(✓ or ✕ and what happened) under the reply, and in place of the actions, an item to go to each
+session or project they led to.
 
 Every action waits to be picked, a lone `go` too: a question such as "how many sessions are
 open?" often comes back with a go to a session it names, and going there at once would hide the

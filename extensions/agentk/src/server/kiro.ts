@@ -146,14 +146,23 @@ export interface KiroHook {
 /** AgentK's hooks for each Kiro event, added after the base agent's own. */
 export type KiroHooks = Partial<Record<'agentSpawn' | 'userPromptSubmit' | 'preToolUse' | 'postToolUse' | 'stop', KiroHook[]>>;
 
+/** AgentK's session tools in the `agentk` agent: their MCP server and their skill. */
+export interface KiroTools {
+  name: string;
+  server: Json;
+  skill: string;
+}
+
 /**
  * The agent Kiro sessions run as: the user's default agent (`base`, which is Meko's `meko-default`
  * when Meko's setup for Kiro ran, so its MCP server and capture hooks carry over) with AgentK's hooks
- * added to each event's list, its own kept first. Kiro's upgrade bookkeeping is left out. It grants
- * nothing the base doesn't: `[kiro] trust_tools` is a flag on AgentK's launch (kiroArgs), so a chat
- * someone starts as `agentk` outside AgentK asks as their own agent would.
+ * added to each event's list, its own kept first, and AgentK's session tools (`tools`: their MCP
+ * server, their skill as a `skill://` resource, and their read-only `list` allowed). Kiro's upgrade
+ * bookkeeping is left out. It grants nothing else the base doesn't: `[kiro] trust_tools` is a flag
+ * on AgentK's launch (kiroArgs), so a chat someone starts as `agentk` outside AgentK asks as their
+ * own agent would (and the tools there say it isn't an AgentK session).
  */
-export function agentkAgent(base: Json, hooks: KiroHooks, o: { mekoCapture?: boolean } = {}): Json {
+export function agentkAgent(base: Json, hooks: KiroHooks, o: { mekoCapture?: boolean; tools?: KiroTools | null } = {}): Json {
   const { kiroUpgrade: _upgrade, ...rest } = base;
   void _upgrade;
   const merged: Record<string, unknown[]> = {};
@@ -164,7 +173,14 @@ export function agentkAgent(base: Json, hooks: KiroHooks, o: { mekoCapture?: boo
   for (const [event, list] of Object.entries(own)) if (Array.isArray(list)) merged[event] = list.filter(keep);
   for (const [event, list] of Object.entries(hooks)) merged[event] = [...(merged[event] ?? []), ...(list ?? [])];
   const from = typeof base.name === 'string' ? ` Based on ${base.name}.` : '';
-  return { ...rest, name: AGENTK_AGENT, description: `${MARK}${from}`, hooks: merged };
+  const agent: Json = { ...rest, name: AGENTK_AGENT, description: `${MARK}${from}`, hooks: merged };
+  const t = o.tools;
+  if (t) {
+    const list = (v: unknown) => (Array.isArray(v) ? v : []);
+    agent.mcpServers = { ...(isObject(base.mcpServers) ? base.mcpServers : {}), [t.name]: t.server };
+    agent.resources = [...list(base.resources), `skill://${t.skill}`];
+  }
+  return agent;
 }
 
 /** Meko's hook handler for Kiro (its `meko-default` agent's hooks run it). */

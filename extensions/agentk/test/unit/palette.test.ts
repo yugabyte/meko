@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AskAgentkAction, JoinByLinkResult, LinkPlan, ProjectWithSessions, SessionMatch } from '../../src/shared/types.js';
-import { askEntries, filterItems, findEntries, joinEntry, joinedText, labelText, linkEntries, type LabelPart } from '../../src/web/palette.js';
+import { askEntries, doAllActions, filterItems, findEntries, joinEntry, joinedText, labelText, linkEntries, type LabelPart } from '../../src/web/palette.js';
 
 const item = (id: string, label: LabelPart[], keywords = '') => ({ id, label, keywords });
 const items = [
@@ -107,8 +107,19 @@ describe("AgentK's proposed actions", () => {
     [{ type: 'go', view: 'session', projectId: 'p1', sessionId: 's1' }, [['Go to Dark mode', 'agent-k-local · Code', false]]],
     [{ type: 'openPr', sessionId: 's1', instructions: 'x'.repeat(100) }, [['Open PR for Dark mode', `${'x'.repeat(79)}…`, false]]],
     [{ type: 'move', sessionId: 'gone', stage: 'code', instructions: '' }, [['Move a session to Code', 'Action', false]]],
+    [{ type: 'link', ref: 'acme/app#5', projectId: 'p1', start: 'design' }, [['Work on acme/app#5 in agent-k-local', 'Looks up the GitHub link', false]]],
+    [{ type: 'openProject', repo: 'acme/app', name: 'App', datapack: 'new' }, [['Open a project on acme/app named App', 'With a new datapack', false]]],
   ])('names %j', (a, want) => {
     expect(rows(a)).toEqual(want);
+  });
+
+  it('offers Do all for two or more steps of one instruction, leaving out the go actions', () => {
+    const go: AskAgentkAction = { type: 'go', view: 'usage' };
+    const move: AskAgentkAction = { type: 'move', sessionId: 's1', stage: 'code', instructions: '' };
+    const link: AskAgentkAction = { type: 'link', ref: 'acme/app#5', projectId: 'p1' };
+    expect(doAllActions([link, go, move], true)).toEqual([link, move]);
+    expect(doAllActions([link, move], false)).toEqual([]);
+    expect(doAllActions([link, go], true)).toEqual([]);
   });
 });
 

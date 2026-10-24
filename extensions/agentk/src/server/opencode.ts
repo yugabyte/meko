@@ -197,13 +197,19 @@ export function openCodePluginSource(): string {
  * The config a session starts with, as `OPENCODE_CONFIG_CONTENT`, merged by OpenCode over the user's
  * own (its `plugin` and `instructions` lists are added to theirs): AgentK's plugin, the session's
  * instructions file, and the folders outside the worktree it works in (its design folder),
- * writable without asking.
+ * writable without asking. `tools`: AgentK's session tools (`openCodeTools` in tools.ts: their MCP
+ * server, their skill's folder, and their permission rules beside the folders').
  */
-export function openCodeSessionConfig(o: { plugin: string; instructions: string; dirs: string[] }): string {
+export function openCodeSessionConfig(o: { plugin: string; instructions: string; dirs: string[]; tools?: Record<string, unknown> | null }): string {
+  const { permission: toolRules, ...tools } = o.tools ?? {};
   return JSON.stringify({
     plugin: [o.plugin],
     instructions: [o.instructions],
-    permission: { external_directory: Object.fromEntries(o.dirs.map((d) => [join(d, '*'), 'allow'])) },
+    ...tools,
+    permission: {
+      external_directory: Object.fromEntries(o.dirs.map((d) => [join(d, '*'), 'allow'])),
+      ...(toolRules && typeof toolRules === 'object' ? toolRules : {}),
+    },
   });
 }
 

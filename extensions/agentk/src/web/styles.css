@@ -2870,6 +2870,13 @@ div[id^='dak-mermaid-'] .label {
   color: var(--muted);
   font-size: 12px;
 }
+/* What Do all came to, a line per action. */
+.pal-result {
+  font-size: 13px;
+}
+.pal-result.failed {
+  color: var(--bad);
+}
 
 /* ---------- Project home ---------- */
 .home-view {
