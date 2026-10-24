@@ -99,7 +99,8 @@ of input means no; a no exits 1), or doesn't ask with `--force`.
   meko.db.bak-<version>      the copy made before a migration (below)
   client.token               the client token (api.md), unless it's in the Keychain
   run/                       pid, port, lock, admin token, unix sockets, children's pids (0600)
-  logs/                      meko.log, memory_engine.log, start.log, service.log (rotated)
+  logs/                      meko.log (rotated), memory_engine.log and service.log (appended),
+                             start.log (rewritten at each start)
   models/                    model files, when downloaded (a build from source)
   memory_engine/             mem0's own config folder
   knowledgebase-files/       knowledge files' bytes, <datapack>/<sha256> (knowledge.md)
@@ -116,7 +117,8 @@ there, and neither does `flock` across hosts. When the default folder is on a ne
 instead, as AgentK's installer does (`extensions/agentk/src/server/install.ts`):
 `$XDG_STATE_HOME/meko` if that's an absolute path on a local disk (a relative one is ignored, as the
 XDG spec says), else `/var/tmp/<user>/meko`, named by the user lookup; a failed lookup is an error.
-The `/var/tmp` parent must not be writable by others, or by a group other than the user's own. An
+`/var/tmp/<user>` must be a real folder (not a symlink) owned by the user and not writable by
+others, or by a group other than the user's own. An
 explicit `--data-dir` on a network filesystem is refused with a message saying why. Both products
 check their rule against the cases in `internal/paths/testdata/resolve-cases.json`.
 
@@ -331,8 +333,8 @@ counts and timings.
 - The `backend` CI job (in `.github/workflows/ci.yml`) runs on ubuntu-latest and macos-15 when a PR
   changes `backend/**` (`scripts/ci-scope.sh`), and on every push to `main`. A failure there fails
   the required `CI gate`. It caches Go's build cache and the models.
-- golangci-lint v2 (pinned in CI). `backend/.golangci.yml` starts from Meko Cloud's config and says
-  what it changes: the cgo build tags, govet's fieldalignment off (it reorders structs for bytes,
+- golangci-lint v2 (pinned in CI). `backend/.golangci.yml` lists its choices at its top: the cgo
+  build tags, govet's fieldalignment off (it reorders structs for bytes,
   against readability), and errcheck allowing a deliberate `_ =`. Its exclusions apply everywhere,
   not per call site: `fmt.Fprint*` (used only for CLI output here) and Close or Rollback on handles
   that only clean up (listeners, response bodies, sql rows, transactions and databases). The Close

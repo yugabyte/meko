@@ -181,7 +181,7 @@ id derived from `meko-cli` (Cloud's tools require one). `--datapack` takes a nam
 datapack and everything in it, so it asks `Delete it? [y/N]` first (as `meko destroy` does: it
 reads stdin, end of input means no, and a no exits 1), unless `--force`. It says so when that's the default
 datapack: Meko makes the default only on first start, and once it's gone `search` and
-`add_memory` need `--datapack`, which they say instead of the tool's `datapack_id_required`. `meko upload <file>...` which calls `knowledgebase_upload_document`, posts each
+`add_memory` need `--datapack`, which they say instead of the tool's `datapack_id_required`. `meko upload <file>...` calls `knowledgebase_upload_document`, posts each
 file to its link and follows `knowledgebase_document_status` until it's indexed, a file already uploaded too
 (`--no-wait` returns once it's uploaded; a file that fails makes the command exit 1), and `meko upload_status
 <key>`. `meko list mcp-tools` prints each tool with its description's first sentence (`--json` adds titles),
@@ -248,7 +248,8 @@ this replay can go.
 
 ## REST at /api/v1
 
-`internal/rest` serves the subset of Meko Cloud's REST routes the web UI needs, with Cloud's paths and shapes in the
+`internal/rest` serves the subset of Meko Cloud's REST routes that the web UI, AgentK and
+`meko export` use, plus a few of Meko's own (marked below), with Cloud's paths and shapes in the
 `{data, error}` envelope, mounted on the server's `/api/v1` group (1 MB body limit), behind the
 same credential check as `/mcp`. Shapes MCP shares come from `internal/wire`; REST-only ones are in
 the package. Its browser client is the web UI ([web-ui.md](web-ui.md)), the only page whose origin
@@ -285,5 +286,6 @@ them to the next turn. Turns come from the agents' own MCP calls (AgentK's Meko 
 none), so the attribution depends on their order. Promoted ones are listed apart
 (`promoted_memory_ids`, `promoted_memory_texts`).
 
-Meko has no login, billing or sharing, so it serves none of Cloud's routes for them. `/me/meko-tokens`
-would come with per-client keys.
+Meko has one local user and no billing or sharing: its `/auth` routes serve that user, and it serves
+no billing summary, `/runtime-config.js`, message traces or sharing routes. `/me/meko-tokens` would
+come with per-client keys.

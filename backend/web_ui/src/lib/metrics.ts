@@ -1,7 +1,7 @@
 // The Analytics tab's numbers, derived in one place from /metrics and the datapack's own counts
 // (the memory breakdown), so no two cards compute the same number differently. Formulas follow Meko
-// Cloud's Analytics tab, except token estimates, which come from bytes: Meko local's chunks are 1000
-// characters, not Cloud's 1024 tokens.
+// Cloud's Analytics tab, except token estimates, which come from bytes: Meko's chunks are 1000
+// characters.
 
 import type { Datapack, Metrics } from "./types";
 

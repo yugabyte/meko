@@ -351,7 +351,7 @@ func TestMigrationGivesEarlierPromotionsTheirChunks(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The memory engine said hello on this database from before 0006, so its model is recorded;
-	// there's no kb_chunks_vec, which 0006 added.
+	// there's no kb_chunks_vec, which the store makes for 0006's chunks.
 	for k, v := range map[string]string{keyEmbedderProvider: testModel.Provider, keyEmbedderModel: testModel.Model,
 		keyEmbeddingDims: fmt.Sprint(testModel.Dims)} {
 		if _, err := s.w.Exec("INSERT INTO settings(key, value) VALUES (?, ?)", k, v); err != nil {

@@ -84,7 +84,8 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
   milestones, PR or issue numbers, delivery plans or history of how it got here (that's the git
   log's). Work not built yet is described as such, without a tracking number. Nothing in them
   describes Meko Cloud's internals (its private code, services, hosts, data stores or tooling):
-  state only the behavior Meko matches. `docs/docs_test.go` checks the first part.
+  state only the behavior Meko matches. `docs/docs_test.go` catches the commonest slips (a
+  `Status:` line, a milestone, a `#123`), not all history.
 - Every database call goes through `internal/store`, the only package that imports the SQLite
   driver. The memory engine has no database: it stores through the store API. Migrations are append-only: never
   edit one that has shipped.
@@ -112,7 +113,7 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
   `yugabyte/go-sqlite3` fork (its `README.yugabyte.md` says how to sync sqlite-vec from
   `yugabyte/sqlite-vec` or rebase on mattn). To upgrade, cut a new `-yb.<n>` tag there (never move
   one), bump the `replace` in `go.mod`, and update the versions `TestLibVersions` expects.
-- Lint is `.golangci.yml`: Meko Cloud's config with the changes listed at its top. Fix findings
+- Lint is `.golangci.yml`, with its choices listed at its top. Fix findings
   rather than adding to its exclusions; a `nolint` names the rule and says why.
 - The lines the CLI and `scripts/install.sh` print end without a period, like Go's error strings,
   so a version, path or command at the end isn't read with one (`Installing meko 0.20261022.1`).
