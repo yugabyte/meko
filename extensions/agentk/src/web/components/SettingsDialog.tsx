@@ -644,6 +644,25 @@ export function AgentSettings({
           </span>
         )}
       </div>
+      {id === 'opencode' && enabled && (
+        <div className="field">
+          <label className="check">
+            <input
+              id="set-opencode-tracking"
+              type="checkbox"
+              checked={s.opencodeDisableTracking}
+              onChange={(e) => onChange({ opencodeDisableTracking: e.target.checked })}
+            />
+            <span>Turn off OpenCode's tracking</span>
+          </label>
+          <span className="hint">
+            {s.opencodeDisableTracking
+              ? "The OpenCode AgentK runs (sessions and Ask AgentK) doesn't send telemetry, check for updates or offer OpenCode's free models, whose providers may train on your prompts. Your prompts and code still go to the model you pick: for code that must not leave this computer, use a local model such as Ollama or LM Studio."
+              : "On, the OpenCode AgentK runs (sessions and Ask AgentK) doesn't send telemetry, check for updates or offer OpenCode's free models, whose providers may train on your prompts."}{' '}
+            Takes effect when a session next starts or resumes.
+          </span>
+        </div>
+      )}
       {id === 'kiro' && enabled && (
         <div className="field">
           <label className="check">

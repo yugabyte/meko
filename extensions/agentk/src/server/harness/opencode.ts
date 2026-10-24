@@ -5,7 +5,7 @@ import { mekoConfigured, resolveMeko, type Config } from '../config.js';
 import type { HookPayload } from '../hooks.js';
 import { errMsg, type Logger } from '../log.js';
 import {
-  openCodeCanResume, openCodeCommand, openCodeHasOwnMeko, openCodeMessagesFile, openCodePluginPath, openCodeSessionConfig,
+  OPENCODE_NO_TRACKING_ENV, openCodeCanResume, openCodeCommand, openCodeHasOwnMeko, openCodeMessagesFile, openCodePluginPath, openCodeSessionConfig,
   openCodeSessionDir, removeOpenCodeMeko, removeOpenCodeSession, writeOpenCodeInstructions, writeOpenCodeMeko, writeOpenCodePlugin,
 } from '../opencode.js';
 import { claudePath, type Paths } from '../paths.js';
@@ -134,6 +134,8 @@ export function openCodeHarness(deps: { paths: Paths; log: Logger; changed: () =
           ...(meko ? { OPENCODE_CONFIG: claudePath(meko) } : {}),
           // A PR's own opencode.json and .opencode folders (plugins: code that would run) are left out.
           ...(l.untrusted ? { OPENCODE_DISABLE_PROJECT_CONFIG: '1' } : {}),
+          // No telemetry, update check or free models ([opencode] disable_tracking).
+          ...(cfg.opencode.disableTracking ? OPENCODE_NO_TRACKING_ENV : {}),
         },
         unsetEnv: l.unsetEnv,
       };

@@ -86,7 +86,7 @@ describe('Settings › Harness', () => {
     expect(tabs).toEqual(['claude', 'opencode', 'kiro*']);
   });
 
-  const settings = { claudeEnabled: true, opencodeEnabled: true, kiroEnabled: true, kiroTrustTools: false, defaultHarness: 'claude' } as Settings;
+  const settings = { claudeEnabled: true, opencodeEnabled: true, opencodeDisableTracking: false, kiroEnabled: true, kiroTrustTools: false, defaultHarness: 'claude' } as Settings;
   /**
    * The ids of the controls (and the update outcome) an agent's panel shows, then `⚠️` when its note
    * starts with one, and the agent's upgrade command when its note names it.
@@ -104,8 +104,8 @@ describe('Settings › Harness', () => {
   it.each([
     ['Claude Code, available', 'claude' as const, {}, {}, ['set-claude', 'set-claude-check', 'set-claude-update'], null],
     ['Claude Code, after an update the banners leave out', 'claude' as const, {}, {}, ['set-claude', 'set-claude-check', 'set-claude-update', 'set-claude-outcome'], { ok: false, text: 'x' }],
-    ['OpenCode, available', 'opencode' as const, {}, {}, ['set-opencode', 'set-opencode-check', 'set-opencode-update'], null],
-    ['OpenCode, too old', 'opencode' as const, {}, { version: '1.19.4', minVersion: '2.0.0', available: false }, ['set-opencode', 'set-opencode-check', 'opencode upgrade --major'], null],
+    ['OpenCode, available', 'opencode' as const, {}, {}, ['set-opencode', 'set-opencode-check', 'set-opencode-update', 'set-opencode-tracking'], null],
+    ['OpenCode, too old', 'opencode' as const, {}, { version: '1.19.4', minVersion: '2.0.0', available: false }, ['set-opencode', 'set-opencode-check', 'set-opencode-tracking', 'opencode upgrade --major'], null],
     ['Kiro, available', 'kiro' as const, {}, {}, ['set-kiro', 'set-kiro-check', 'set-kiro-update', 'set-kiro-trust'], null],
     ['Kiro, on but not installed', 'kiro' as const, {}, { available: false, version: null }, ['set-kiro', 'set-kiro-check', 'set-kiro-trust', '⚠️'], null],
     ['Kiro, off', 'kiro' as const, { kiroEnabled: false }, { enabled: false, available: false }, ['set-kiro'], null],

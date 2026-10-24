@@ -17,6 +17,19 @@ import type { Paths } from './paths.js';
 /** What OpenCode puts in its children's environment. */
 export const OPENCODE_SESSION_MARKERS = ['OPENCODE', 'OPENCODE_PID'];
 
+/**
+ * What `[opencode] disable_tracking` adds to the environment of the OpenCode AgentK runs (sessions and
+ * Ask AgentK), read from OpenCode 2.1.4's code: no OpenTelemetry export (to an OTLP endpoint the user's
+ * environment names), no update check (it sends the version to opencode.ai at every start), and none of
+ * OpenCode Zen's free models, whose providers may train on prompts. Sharing needs nothing: OpenCode 2
+ * removed it and reads neither `OPENCODE_DISABLE_SHARE` nor OpenCode 1's `experimental.openTelemetry`.
+ */
+export const OPENCODE_NO_TRACKING_ENV: Readonly<Record<string, string>> = {
+  OTEL_SDK_DISABLED: 'true',
+  OPENCODE_DISABLE_AUTOUPDATE: '1',
+  OPENCODE_DISABLE_FREE_MODELS: '1',
+};
+
 /** The agent Ask AgentK runs as, defined in the ask's own config. */
 export const OPENCODE_ASK_AGENT = 'agentk-ask';
 
@@ -295,17 +308,21 @@ export function openCodeAskConfig(prompt: string, own: Json = readOpenCodeConfig
  * Writes an Ask AgentK run's config into `cwd` and returns the variables the run (and deleting its
  * session) takes: OpenCode's global config read from there instead of the user's, no project config,
  * and no Claude Code files (CLAUDE.md, skills). Its sign-ins and sessions, in its data folder, stay.
+ * `noTracking`: `[opencode] disable_tracking` (`OPENCODE_NO_TRACKING_ENV`).
  */
-export function openCodeAskEnv(cwd: string, prompt: string): Record<string, string> {
-  const vars = openCodeAskVars(cwd);
+export function openCodeAskEnv(cwd: string, prompt: string, noTracking = false): Record<string, string> {
+  const vars = openCodeAskVars(cwd, noTracking);
   mkdirSync(join(vars.XDG_CONFIG_HOME, 'opencode'), { recursive: true });
   writeFileSync(join(vars.XDG_CONFIG_HOME, 'opencode', 'opencode.json'), openCodeAskConfig(prompt));
   return vars;
 }
 
 /** The variables of an Ask AgentK run in `cwd` (`openCodeAskEnv`), without writing its config. */
-export function openCodeAskVars(cwd: string): Record<string, string> & { XDG_CONFIG_HOME: string } {
-  return { XDG_CONFIG_HOME: join(cwd, 'opencode-config'), OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_CLAUDE_CODE: '1' };
+export function openCodeAskVars(cwd: string, noTracking = false): Record<string, string> & { XDG_CONFIG_HOME: string } {
+  return {
+    XDG_CONFIG_HOME: join(cwd, 'opencode-config'), OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_CLAUDE_CODE: '1',
+    ...(noTracking ? OPENCODE_NO_TRACKING_ENV : {}),
+  };
 }
 
 /** Writes a session's instructions (its system-prompt lines), read by OpenCode at the start. */

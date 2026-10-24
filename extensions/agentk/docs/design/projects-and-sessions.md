@@ -72,6 +72,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 [opencode]
 # command = "opencode"       # how OpenCode is run; the default is also found in ~/.opencode/bin
 # enabled = false            # don't offer OpenCode for new sessions; on by default (offered once `opencode --version` answers 2.0.0 or later)
+# disable_tracking = true    # the OpenCode AgentK runs sends no telemetry, checks for no update and offers no free models; off by default
 
 [kiro]
 # command = "kiro-cli"       # how Kiro CLI is run

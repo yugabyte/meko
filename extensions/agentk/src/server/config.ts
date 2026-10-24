@@ -50,8 +50,10 @@ export interface Config {
   /**
    * OpenCode (src/server/harness/opencode.ts). command: how it's run (the default, `opencode`, is also found in
    * `~/.opencode/bin`, where OpenCode's installer puts it). enabled: offer it for new sessions when `<command> --version` answers.
+   * disableTracking: the OpenCode AgentK runs (sessions, from their next launch or resume, and Ask AgentK) sends no telemetry, checks
+   * for no update and offers none of OpenCode Zen's free models (`OPENCODE_NO_TRACKING_ENV` in opencode.ts).
    */
-  opencode: { command: string; enabled: boolean };
+  opencode: { command: string; enabled: boolean; disableTracking: boolean };
   /**
    * idlePerRepo: worktrees each repo keeps for the next session, build outputs and all (0 to 20; 0 removes them).
    * idleDays: an idle worktree no session has used for this many days is removed (0 to 365; 0 keeps it).
@@ -95,7 +97,7 @@ export const DEFAULT_CONFIG: Config = {
   claude: { command: 'claude', enabled: true, mod: true },
   agents: { default: DEFAULT_HARNESS },
   kiro: { command: 'kiro-cli', enabled: true, trustTools: false },
-  opencode: { command: 'opencode', enabled: true },
+  opencode: { command: 'opencode', enabled: true, disableTracking: false },
   worktrees: { idlePerRepo: 3, idleDays: 14 },
   callHome: { enabled: true, url: '', diagnosticsUrl: '' },
   pr: { resolveConflicts: true },

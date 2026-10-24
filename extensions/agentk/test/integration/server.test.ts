@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
-import type { Config } from '../../src/server/config.js';
+import { DEFAULT_CONFIG, type Config } from '../../src/server/config.js';
 import type { HarnessStatus } from '../../src/shared/types.js';
 import { buildServer, stampVersion } from '../../src/server/server.js';
 import { shortHost } from '../../src/server/core.js';
@@ -172,24 +172,27 @@ describe('HTTP API: auth, origin checks, projects', () => {
     ['resolving merge conflicts', 'resolveConflicts', (c: Config) => c.pr.resolveConflicts, '[pr]\nresolve_conflicts = false', 'resolve_conflicts'],
     // Its section also holds the fake's command, which the test sets.
     ['offering OpenCode', 'opencodeEnabled', (c: Config) => c.opencode.enabled, /\[opencode\][^[]*enabled = false/, /\[opencode\][^[]*enabled/],
-  ] as const)('turns %s off and on from Settings', async (_name, key, live, written, tomlKey) => {
+    ["OpenCode's tracking", 'opencodeDisableTracking', (c: Config) => c.opencode.disableTracking, /\[opencode\][^[]*disable_tracking = true/, 'disable_tracking'],
+  ] as const)('changes %s from Settings and back', async (_name, key, live, written, tomlKey) => {
     const cookie = await setup();
     const settings = async () => (await app.inject({ url: '/api/settings', headers: { cookie } })).json()[key];
     const put = (value: unknown) => app.inject({ method: 'PUT', url: '/api/settings', headers: { cookie }, payload: { [key]: value } });
-    expect(await settings()).toBe(true);
+    // The default, which config.toml leaves out.
+    const from = live(DEFAULT_CONFIG);
+    expect(await settings()).toBe(from);
 
-    const off = await put(false);
-    expect(off.statusCode).toBe(200);
-    expect(off.json()[key]).toBe(false);
-    expect(live(env.core.config)).toBe(false);
+    const changed = await put(!from);
+    expect(changed.statusCode).toBe(200);
+    expect(changed.json()[key]).toBe(!from);
+    expect(live(env.core.config)).toBe(!from);
     expect(readFileSync(env.core.paths.config, 'utf8')).toMatch(written);
-    expect(await settings()).toBe(false);
+    expect(await settings()).toBe(!from);
 
     const bad = await put('no');
     expect(bad.statusCode).toBe(400);
     expect(bad.json().error).toBe(`${key} must be true or false.`);
 
-    expect((await put(true)).json()[key]).toBe(true);
+    expect((await put(from)).json()[key]).toBe(from);
     expect(readFileSync(env.core.paths.config, 'utf8')).not.toMatch(tomlKey);
   });
 

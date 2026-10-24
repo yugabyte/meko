@@ -1654,6 +1654,11 @@ export interface Settings {
   claudeEnabled: boolean;
   /** `[opencode] enabled`: offer OpenCode for new sessions when its CLI answers. */
   opencodeEnabled: boolean;
+  /**
+   * `[opencode] disable_tracking`: the OpenCode AgentK runs sends no telemetry, checks for no update and offers none of
+   * OpenCode Zen's free models (whose providers may train on prompts), from a session's next launch or resume.
+   */
+  opencodeDisableTracking: boolean;
   /** `[kiro] enabled`: offer Kiro for new sessions when its CLI answers. */
   kiroEnabled: boolean;
   /** `[kiro] trust_tools`: Kiro sessions start with every tool trusted (`--trust-tools=*`), so Kiro runs any tool without asking. */
@@ -2556,7 +2561,8 @@ export type TermServerMessage =
 //                                                           resolveConflicts and toolsEnabled are booleans; defaultHarness must be a
 //                                                           known harness (while it isn't available, new sessions and
 //                                                           Ask AgentK that name none start on the first available one);
-//                                                           claudeEnabled, opencodeEnabled and kiroEnabled are booleans; the agents'
+//                                                           claudeEnabled, opencodeEnabled, opencodeDisableTracking, kiroEnabled
+//                                                           and kiroTrustTools are booleans; the agents'
 //                                                           commands are set in config.toml)
 // POST   /api/settings/meko/claude-setup       → Settings   (runs Meko's setup for Claude Code with AgentK's Meko, only when
 //                                                           the user asks; then checks Claude Code's Meko again)
