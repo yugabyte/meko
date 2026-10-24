@@ -167,8 +167,9 @@ session from its token, so `onHook` normalizes the payload with the session's ad
 `preToolUse`, `postToolUse` and `stop` become `SessionStart`, `UserPromptSubmit`, `PreToolUse`,
 `PostToolUse` and `Stop`, and Kiro's `session_id` moves to `agent_session_id` (Claude's `session_id`
 is AgentK's key for the session's Meko conversation, `claude_session_id`, which stays as it was
-for every harness). OpenCode's plugin sends OpenCode's own event names, which `normalizeOpenCode`
-maps the same way (see [OpenCode](#opencode)). The guard and context routes answer through the
+for every harness). OpenCode's plugin turns OpenCode 2's hooks and events into OpenCode 1's event
+names (`chat.message` for its `prompt` hook, `session.idle` for its `session.execution.*`, and so
+on), which `normalizeOpenCode` maps the same way (see [OpenCode](#opencode)). The guard and context routes answer through the
 adapter too (`deny()`, `context()`): JSON for Claude Code, plain text for OpenCode and Kiro
 (`GuardDecision` and `HookContext` take either).
 
@@ -187,13 +188,15 @@ server (`opencode serve --service`, started by the first CLI and kept running), 
 that first CLI's. A session's `OPENCODE_CONFIG_CONTENT`, `OPENCODE_CONFIG` and `AK_*` variables would
 never reach it, so the plugin wouldn't load and the session would run unsupervised; and if AgentK
 started the service, every later OpenCode run of the user's would get that session's variables. So
-every OpenCode command AgentK runs passes `--standalone`, a private server with the command's own
-environment: the session's TUI, Ask AgentK's `run`, `session delete`, and the installer's `auth list`
-and `auth login`.
+every OpenCode command AgentK runs that needs a server passes `--standalone`, a private server with
+the command's own environment: the session's TUI, Ask AgentK's `run`, `session delete`, and the
+installer's `auth list` and `auth login`. The two that need none don't: `opencode --version` (the
+version reads) and `opencode upgrade` (Settings' Update), one-shot commands of the server's own that
+neither start nor reach a server.
 
 **AgentK's plugin, only in AgentK's sessions.** AgentK writes its plugin to
 `run/opencode/agentk-plugin-<hash>/` (`server.js` and a `package.json`; `src/server/opencode.ts`),
-named by its text's hash and written only when that folder isn't there, never over it: OpenCode
+named by a hash of both files and written only when that folder isn't there, never over it: OpenCode
 watches a loaded plugin's files and runs its setup again when they change, even to the same text,
 which would restart the plugin in every running session. A changed plugin gets a new folder; older
 ones stay for the sessions still running on them (a few KB each), and the plugin file of AgentK

@@ -230,8 +230,14 @@ export default {
 };
 `;
 
-/** The plugin's folder name changes with its text, so a folder once written never changes (see `writeOpenCodePlugin`). */
-const PLUGIN_DIR = `agentk-plugin-${createHash('sha256').update(PLUGIN).digest('hex').slice(0, 8)}`;
+/** The plugin's manifest, which OpenCode reads too. */
+const PLUGIN_MANIFEST = JSON.stringify({ name: 'agentk-opencode-plugin', private: true, type: 'module', main: 'server.js' }, null, 2) + '\n';
+
+/**
+ * The plugin's folder name changes with its files' text (the plugin and its manifest), so a folder
+ * once written never changes (see `writeOpenCodePlugin`).
+ */
+const PLUGIN_DIR = `agentk-plugin-${createHash('sha256').update(PLUGIN_MANIFEST).update('\0').update(PLUGIN).digest('hex').slice(0, 8)}`;
 
 /**
  * Writes AgentK's plugin folder when it isn't there yet, and never over one: OpenCode watches a
@@ -244,7 +250,7 @@ export function writeOpenCodePlugin(paths: Paths): void {
   rmSync(join(openCodeDir(paths), 'agentk-plugin.js'), { force: true });
   if (existsSync(join(dir, 'server.js'))) return;
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'agentk-opencode-plugin', private: true, type: 'module', main: 'server.js' }, null, 2) + '\n');
+  writeFileSync(join(dir, 'package.json'), PLUGIN_MANIFEST);
   // Renamed into place, so OpenCode never finds half of it.
   writeScript(join(dir, 'server.js'), PLUGIN);
 }

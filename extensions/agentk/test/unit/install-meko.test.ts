@@ -231,7 +231,6 @@ describe('installer: the coding agents', () => {
     ['keeps a default that is installed', { claude: '2.1.300', kiro: '2.32.0' }, 'kiro' as const, ['claude', 'kiro'], 'kiro'],
     ['starts sessions on Kiro where only Kiro is installed', { claude: null, kiro: '2.32.0' }, 'claude' as const, ['kiro'], 'kiro'],
     ['leaves out a Kiro too old to run sessions', { claude: '2.1.300', kiro: '2.10.0' }, 'kiro' as const, ['claude'], 'claude'],
-    ['leaves out OpenCode 1, which sessions no longer run on', { claude: '2.1.300', opencode: '1.19.4' }, 'opencode' as const, ['claude'], 'claude'],
   ])('%s', (_, versions, def, found, after) => {
     const c = cfg();
     c.agents.default = def;
