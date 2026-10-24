@@ -88,7 +88,8 @@ meko-<version>/
   `meko` 24 MB. The reranker adds about 23 MB.
 - `scripts/smoke-release.sh <tarball> <version>` unpacks a tarball, checks `meko version --json`,
   starts it on a fresh data folder, waits for the memory engine, saves a memory, finds it, checks that
-  nothing was downloaded into `models/`, and stops.
+  nothing was downloaded into `models/`, checks that the web listener (on the port after the API
+  listener's, never 7777) serves the web UI at the address `meko ui --no-open` prints, and stops.
 
 Linux tarballs are built in `almalinux:8` (glibc 2.28, so they run on RHEL 8 and newer) with
 gcc-toolset-13; the Mac one on `macos-15` with `MACOSX_DEPLOYMENT_TARGET=14.0`. Nothing is signed or
