@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { AskRun, AskRunner } from '../../src/server/askagentk.js';
 import { openDb, run } from '../../src/server/db.js';
-import { KiroPlanStore } from '../../src/server/kiroplan.js';
+import { KiroPlanStore, KIRO_PLAN_TURN_EVERY_MS as TURN_MS } from '../../src/server/kiroplan.js';
 import { silentLogger } from '../../src/server/log.js';
 import { tempDir } from '../helpers.js';
 
@@ -116,5 +116,46 @@ describe("Kiro's plan reading", () => {
     t.setAnswer(reply(usage(`Estimated Usage | resets on ${resets} | KIRO FREE\nCredits (10 of 50 covered in plan)`)));
     await t.make().refresh();
     expect(t.make(available).current()).toBeNull();
+  });
+
+  it('re-reads on a turn at most once per window', async () => {
+    const t = setup();
+    const store = t.make();
+    t.session('k', 'kiro');
+    const t0 = 1_000_000;
+    // The first turn reads (nothing read yet).
+    await store.refreshIfStale(TURN_MS, t0);
+    expect(t.runs).toHaveLength(1);
+    // A turn inside the window does not read again.
+    await store.refreshIfStale(TURN_MS, t0 + TURN_MS - 1);
+    expect(t.runs).toHaveLength(1);
+    // A turn past the window reads once more.
+    await store.refreshIfStale(TURN_MS, t0 + TURN_MS);
+    expect(t.runs).toHaveLength(2);
+  });
+
+  it('collapses turns while a read is in flight into the one read', async () => {
+    const t = setup();
+    const store = t.make();
+    t.session('k', 'kiro');
+    const open = t.hold();
+    const first = store.refreshIfStale(TURN_MS, 1_000_000);
+    // A second turn while the first read is held, well past the window: still the same read.
+    const second = store.refreshIfStale(TURN_MS, 1_000_000 + 10 * TURN_MS);
+    open();
+    await Promise.all([first, second]);
+    expect(t.runs).toHaveLength(1);
+  });
+
+  it('never reads on a turn while Kiro is unavailable or unused', async () => {
+    const t = setup();
+    // Unused: no Kiro session yet.
+    await t.make().refreshIfStale(TURN_MS, 1_000_000);
+    const t2 = setup();
+    t2.session('k', 'kiro');
+    // Unavailable.
+    await t2.make(false).refreshIfStale(TURN_MS, 1_000_000);
+    expect(t.runs).toEqual([]);
+    expect(t2.runs).toEqual([]);
   });
 });
