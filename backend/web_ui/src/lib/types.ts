@@ -299,10 +299,29 @@ export interface TotpEnroll {
   otpauth_url: string;
 }
 
-// GET /extensions: the extensions the web listener serves, at path.
+// GET /extensions: every extension Meko knows, whether it's installed (registered with Meko), its
+// web UI at path ("" while it isn't served) and whether that answers (available: running), and its
+// last action from the Extensions page. An older server lists only the served ones, with no
+// installed, web_ui or description.
 export interface Extension {
   name: string;
   title: string;
+  description?: string;
+  installed?: boolean;
+  web_ui?: boolean;
   path: string;
   available: boolean;
+  job?: ExtensionJob;
+}
+
+export type ExtensionAction = "install" | "start" | "stop";
+
+// An action running, or the last one run, on an extension; output is its last 16 KB.
+export interface ExtensionJob {
+  action: ExtensionAction;
+  state: "running" | "done" | "failed";
+  started_at: string;
+  finished_at?: string;
+  error?: string;
+  output: string;
 }

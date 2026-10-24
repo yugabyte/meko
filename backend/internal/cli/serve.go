@@ -42,6 +42,8 @@ import (
 const (
 	drainTimeout     = 10 * time.Second
 	childStopTimeout = 15 * time.Second
+	// jobsWait is how long an extension's action that was stopped gets to end, alongside the rest.
+	jobsWait = 10 * time.Second
 )
 
 // testEmbedder, if set, makes the memory engine use a deterministic hashing embedder instead of
@@ -305,7 +307,8 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		return server.Options{Info: info, Port: wcfg.Web.Port, Auth: cfg.Server.Auth, Logger: log,
 			Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, MCP: mcpHandler,
 			REST: registerREST, Upload: upload, Download: download, UI: ui, Login: logins,
-			Web: &server.Web{Access: wcfg.Web.Access, Extensions: web.Proxies}}
+			Web: &server.Web{Access: wcfg.Web.Access, Extensions: web.Proxies, Installed: web.Installed,
+				Run: web.RunExtension, Jobs: web.jobs}}
 	}
 	srv := server.New(server.Options{
 		Info: info, Port: cfg.Server.Port, Token: token, ClientToken: clientToken, Auth: cfg.Server.Auth, Logger: log,
@@ -347,10 +350,22 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	case <-ctx.Done():
 		log.Info("stopping")
 	case <-restart:
+		// An install from the Extensions page runs in this process: finish it first.
+		if web.jobs.Busy() {
+			log.Info("waiting for an extension's action to finish before restarting into the update")
+			web.jobs.WaitIdle(ctx)
+		}
 		log.Info("stopping to restart into the update")
 	case serveErr = <-served:
 	}
 	stopUpdates()
+	// An action still running is stopped (an install is cut off; Install again finishes it). Its
+	// end is only logged, so this waits briefly, while the listeners drain.
+	jobsDone := make(chan struct{})
+	go func() {
+		defer close(jobsDone)
+		web.jobs.Cancel(jobsWait)
+	}()
 	if onProbation && serveErr == nil {
 		// A clean stop of a version on probation isn't a failed start.
 		if err := app.Uncount(release); err != nil {
@@ -378,6 +393,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	if err := st.Checkpoint(context.Background()); err != nil {
 		log.Warn("WAL checkpoint failed", "error", err)
 	}
+	<-jobsDone
 	log.Info("Meko stopped")
 	return serveErr
 }

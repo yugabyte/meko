@@ -163,6 +163,9 @@ func New(opts Options) *Server {
 		if opts.Web.Extensions == nil {
 			opts.Web.Extensions = func() []*extproxy.Proxy { return nil }
 		}
+		if opts.Web.Jobs == nil {
+			opts.Web.Jobs = NewExtensionJobs()
+		}
 		s.registerWeb(v1)
 	}
 	if opts.REST != nil {

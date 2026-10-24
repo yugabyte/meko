@@ -30,7 +30,9 @@ import (
 // Known are the extensions meko install_extension can install, by name.
 var Known = map[string]Catalog{
 	"agentk": {
-		Title:   "AgentK",
+		Title: "AgentK",
+		Description: "Runs Claude Code, OpenCode and Kiro sessions across your projects, from task to merged PR, " +
+			"with Meko as their shared memory.",
 		Command: "agentk",
 		// Its name before the rename to AgentK, which installs from then may still have alone.
 		OldCommands: []string{"agent-k-local"},
@@ -47,6 +49,7 @@ var Known = map[string]Catalog{
 // Catalog says how to find and install a known extension.
 type Catalog struct {
 	Title       string
+	Description string   // what it does, in a sentence, for the web UI's Extensions page
 	Command     string   // the program's name, looked for on PATH and in ~/.local/bin
 	OldCommands []string // names it had before, looked for after Command
 	TagPrefixes []string // its release tags, newest naming first
@@ -126,6 +129,15 @@ var (
 	StartTimeout     = 2 * time.Minute
 	StopTimeout      = 2 * time.Minute
 	UninstallTimeout = 5 * time.Minute
+	// InstallTimeout bounds an install the web UI started: the download and the installer.
+	InstallTimeout = 15 * time.Minute
+	// PipeWait is how long a command's output is read after it exits. Output that isn't a file (the
+	// web UI's) is a pipe, which a process the command left running (a server it started without a
+	// service) would hold open, so Wait would never return.
+	PipeWait = 5 * time.Second
+	// ListenTimeout is how long an install or start from the web UI waits for an extension with a
+	// web UI to answer on its socket.
+	ListenTimeout = 30 * time.Second
 )
 
 // Env is the environment an extension's command runs with: Meko's own, with MEKO_HOME naming
@@ -152,8 +164,8 @@ func (e Entry) run(root string, args []string, d time.Duration, stdout, stderr i
 	defer cancel()
 	// G204: the extension's own command, from the registry.
 	cmd := exec.CommandContext(ctx, e.Command, args...) //nolint:gosec
-	cmd.Stdout, cmd.Stderr, cmd.Env = stdout, stderr, Env(root)
-	if err := cmd.Run(); err != nil {
+	cmd.Stdout, cmd.Stderr, cmd.Env, cmd.WaitDelay = stdout, stderr, Env(root), PipeWait
+	if err := cmd.Run(); err != nil && !errors.Is(err, exec.ErrWaitDelay) {
 		what := e.Command + " " + strings.Join(args, " ")
 		if ctx.Err() != nil {
 			return fmt.Errorf("%s took longer than %s", what, d)
