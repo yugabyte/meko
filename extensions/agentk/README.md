@@ -32,7 +32,7 @@ your phone.
 ## Install
 
 You need Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon, and a coding agent:
-[Claude Code](https://claude.com/claude-code), [OpenCode](https://opencode.ai) 1.19.4 or later,
+[Claude Code](https://claude.com/claude-code), [OpenCode](https://opencode.ai) 2.0.0 or later,
 [Kiro CLI](https://kiro.dev/cli/) 2.32 or later, or more than one.
 [Meko](https://mekodata.ai) gives projects datapacks (shared memory) and lets you share projects.
 AgentK uses a Meko Cloud API key when you give it one, and otherwise the Meko running on this
@@ -185,7 +185,7 @@ your phone can connect.
   `agentk attach <session>` (`Ctrl+\` detaches).
 - **Claude Code, OpenCode or Kiro, per session.** New sessions start on the default agent
   (Settings → Harness), or pick **Agent** under **Advanced** in New session once more than one of
-  Claude Code, [OpenCode](https://opencode.ai) 1.19.4 or later (signed in to a model provider with
+  Claude Code, [OpenCode](https://opencode.ai) 2.0.0 or later (signed in to a model provider with
   `opencode auth login`) and [Kiro CLI](https://kiro.dev/cli/) 2.32 or later (`kiro-cli login`) is
   installed. Any one alone is enough: with only Kiro, every session runs on Kiro. Settings › Harness
   has a bar that picks an agent (Claude Code, OpenCode, Kiro) and shows its settings, and can stop

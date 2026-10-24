@@ -18,9 +18,9 @@ import { cliState } from './version.js';
 /** How long `opencode upgrade` may run before it's stopped. */
 const UPDATE_TIMEOUT_MS = 5 * 60 * 1000;
 /** OpenCode's file-writing tools, as its plugin's `tool.execute.before` names them. */
-const WRITE_TOOLS = ['edit', 'write', 'multiedit'];
-/** Its patch tools, whose files are named in the patch text. */
-const PATCH_TOOLS = ['apply_patch', 'patch'];
+const WRITE_TOOLS = ['edit', 'write'];
+/** Its patch tool, whose files are named in the patch text. */
+const PATCH_TOOLS = ['patch'];
 
 /** The plugin's events (src/server/opencode.ts) as AgentK's (Claude Code's hook names). */
 const EVENTS: Record<string, string> = {
@@ -34,12 +34,15 @@ const EVENTS: Record<string, string> = {
 };
 
 /**
- * The command line of an OpenCode session: its own session resumed by id (never `--continue`,
- * OpenCode's newest in the folder, which can be an earlier session's in a reused worktree), and the
- * prompt to submit. `--opt=value`, so a prompt that starts with "-" is never read as an option.
+ * The command line of an OpenCode session: a server of its own (`--standalone`: OpenCode 2's shared
+ * background service has the environment of whichever CLI started it, so it would never see the
+ * session's variables, and would hand them to the user's own runs if AgentK started it), its own
+ * session resumed by id (never `--continue`, OpenCode's newest in the folder, which can be an
+ * earlier session's in a reused worktree), and the prompt to submit. `--opt=value`, so a prompt that
+ * starts with "-" is never read as an option.
  */
 export function openCodeArgs(o: { conversation: string | null; prompt: string | null }): string[] {
-  const args: string[] = [];
+  const args = ['--standalone'];
   if (o.conversation) args.push(`--session=${o.conversation}`);
   if (o.prompt) args.push(`--prompt=${o.prompt}`);
   return args;
@@ -60,7 +63,7 @@ export function normalizeOpenCode(raw: HookPayload): HookPayload | null {
   };
 }
 
-/** The files a patch (OpenCode's apply_patch format) adds, changes, moves or deletes. */
+/** The files a patch (OpenCode's patch format) adds, changes, moves or deletes. */
 export function patchPaths(text: string): string[] {
   const out: string[] = [];
   for (const m of text.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$|^\*\*\* Move to: (.+)$/gm)) out.push((m[1] ?? m[2]).trim());
@@ -143,11 +146,12 @@ export function openCodeHarness(deps: { paths: Paths; log: Logger; changed: () =
     editedPaths(p) {
       const tool = p.tool_name ?? '';
       if (WRITE_TOOLS.includes(tool)) {
-        const path = p.tool_input?.filePath;
+        // Relative to the worktree, or absolute.
+        const path = p.tool_input?.path;
         return typeof path === 'string' && path ? [path] : [];
       }
       if (PATCH_TOOLS.includes(tool)) {
-        const text = p.tool_input?.patchText ?? p.tool_input?.patch;
+        const text = p.tool_input?.patchText;
         return typeof text === 'string' ? patchPaths(text) : [];
       }
       return null;

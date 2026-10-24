@@ -29,8 +29,8 @@ sequenceDiagram
   cost about 30 MB in every running session: the server measured 79 MB with the SDK and 55 MB
   without it, against Node's own 42 MB. It reads the hook socket and the session's hook token from
   `AK_HOOK_SOCK` and `AK_HOOK_TOKEN`. Claude Code, OpenCode and Kiro all pass the session's
-  environment to stdio MCP servers (checked on Claude Code 2.1.302, OpenCode 1.19.4 and kiro-cli
-  2.32.0). It loads nothing of the
+  environment to stdio MCP servers (checked on Claude Code 2.1.302, OpenCode 1.19.4 and 2.1.4 with
+  `--standalone`, and kiro-cli 2.32.0). It loads nothing of the
   server's, and it checks nothing itself. A call can run for minutes (a start that clones a repo
   first). When the hook socket closes (a stop, a restart, a rebind), `SessionTools.pause()` answers
   every call still running, saying what it started may still finish, as held mod polls are answered,
@@ -108,8 +108,11 @@ sessions start without the tools (`toolsReady`) rather than with an earlier star
 PR head that isn't untrusted. Claude Code's adapter adds `--mcp-config` and the plugin dir.
 OpenCode's adds the tools to the session's `OPENCODE_CONFIG_CONTENT` (`openCodeTools`, merged in by
 `openCodeSessionConfig`): `mcp.agentk_sessions` (a `local` server), `skills.paths`, and the `ask`
-rules beside the design folder's. OpenCode 1.19.4 lists the skill (`opencode debug skill`), shows
-the rules in its agent (`opencode debug agent build`) and connects to the server (`opencode mcp list`). Kiro's
+rules beside the design folder's. OpenCode 1.19.4 listed the skill (`opencode debug skill`), showed
+the rules in its agent (`opencode debug agent build`) and connected to the server (`opencode mcp
+list`). OpenCode 2's `debug` and `mcp list` only ask its shared service, which doesn't have the
+session's config, so on 2.1.4 the server and its `ask` rule were checked in a session itself: the
+tool is `agentk_sessions_start_sessions` there too, called directly or from code mode. Kiro's
 agent file is rewritten before each launch (`writeAgentkAgent`) with the `agentk_sessions` entry in
 `mcpServers` (a 10-minute timeout, since a start can clone a repo first), the skill in
 `resources`, and `list` in `allowedTools`, while `[tools] enabled`. A change to the setting reaches

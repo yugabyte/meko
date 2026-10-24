@@ -1,5 +1,6 @@
-import { appendFileSync, chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG } from '../../src/server/config.js';
@@ -18,8 +19,8 @@ describe("OpenCode's events as AgentK's", () => {
   it.each([
     ['the plugin loading', { hook_event_name: 'agentk.start', source: 'resume', session_id: 'ses_1' }, { hook_event_name: 'SessionStart', source: 'resume', agent_session_id: 'ses_1' }],
     ['a prompt', { hook_event_name: 'chat.message', session_id: 'ses_1' }, { hook_event_name: 'UserPromptSubmit', agent_session_id: 'ses_1' }],
-    ['an edit the guard checks', { hook_event_name: 'tool.execute.before', tool: 'write', args: { filePath: '/w/a.ts' }, session_id: 'ses_1' },
-      { hook_event_name: 'PreToolUse', tool_name: 'write', tool_input: { filePath: '/w/a.ts' }, agent_session_id: 'ses_1' }],
+    ['an edit the guard checks', { hook_event_name: 'tool.execute.before', tool: 'write', args: { path: 'a.ts' }, session_id: 'ses_1' },
+      { hook_event_name: 'PreToolUse', tool_name: 'write', tool_input: { path: 'a.ts' }, agent_session_id: 'ses_1' }],
     ["a subagent's tool, with no session id", { hook_event_name: 'tool.execute.after', tool: 'read' }, { hook_event_name: 'PostToolUse', tool_name: 'read' }],
     ['a permission ask', { hook_event_name: 'permission.asked', permission: 'bash', session_id: 'ses_1' }, { hook_event_name: 'PermissionRequest', tool_name: 'bash', agent_session_id: 'ses_1' }],
     ['its answer', { hook_event_name: 'permission.replied' }, { hook_event_name: 'PostToolUse' }],
@@ -32,9 +33,9 @@ describe("OpenCode's events as AgentK's", () => {
 
 describe("an OpenCode session's command line", () => {
   it.each([
-    ['a new session with its prompt', { conversation: null, prompt: 'hi' }, ['--prompt=hi']],
-    ['a prompt that starts with "-", which stays the value', { conversation: null, prompt: '---\nfront' }, ['--prompt=---\nfront']],
-    ['a resume by id, with no prompt', { conversation: 'ses_1', prompt: null }, ['--session=ses_1']],
+    ['a new session with its prompt', { conversation: null, prompt: 'hi' }, ['--standalone', '--prompt=hi']],
+    ['a prompt that starts with "-", which stays the value', { conversation: null, prompt: '---\nfront' }, ['--standalone', '--prompt=---\nfront']],
+    ['a resume by id, with no prompt', { conversation: 'ses_1', prompt: null }, ['--standalone', '--session=ses_1']],
   ])('%s', (_, o, expected) => {
     expect(openCodeArgs(o)).toEqual(expected);
   });
@@ -91,10 +92,10 @@ describe('the files an OpenCode edit would change', () => {
   const h = openCodeHarness({ paths: getPaths('/nonexistent/agentk'), log: silentLogger, changed: () => undefined });
   const patch = '*** Begin Patch\n*** Add File: a.ts\n+x\n*** Update File: src/b.ts\n*** Move to: src/c.ts\n@@\n-y\n+z\n*** Delete File: d.ts\n*** End Patch';
   it.each([
-    ['write', { filePath: '/w/a.ts' }, ['/w/a.ts']],
-    ['edit', { filePath: 'b.ts', oldString: 'x' }, ['b.ts']],
-    ['apply_patch', { patchText: patch }, ['a.ts', 'src/b.ts', 'src/c.ts', 'd.ts']],
-    ['read', { filePath: '/w/a.ts' }, null],
+    ['write', { path: '/w/a.ts', content: 'x' }, ['/w/a.ts']],
+    ['edit', { path: 'b.ts', oldString: 'x' }, ['b.ts']],
+    ['patch', { patchText: patch }, ['a.ts', 'src/b.ts', 'src/c.ts', 'd.ts']],
+    ['read', { path: '/w/a.ts' }, null],
   ])('%s', (tool, input, expected) => {
     expect(h.editedPaths({ tool_name: tool, tool_input: input })).toEqual(expected);
   });
@@ -143,7 +144,7 @@ describe('OpenCode outside its sessions', () => {
     expect(openCodeStoredSession('ses_gone', data)).toBeNull();
     // A release channel's store has the session; the session the user deleted is in none.
     const store = new DatabaseSync(join(data, 'opencode-beta.db'));
-    store.exec(`CREATE TABLE session (id TEXT PRIMARY KEY); INSERT INTO session(id) VALUES ('ses_here')`);
+    store.exec(`CREATE TABLE session_v2 (id TEXT PRIMARY KEY); INSERT INTO session_v2(id) VALUES ('ses_here')`);
     store.close();
     expect(openCodeStoredSession('ses_here', data)).toBe(true);
     expect(openCodeCanResume(log, 'ses_gone', data)).toBe(false);
@@ -153,15 +154,24 @@ describe('OpenCode outside its sessions', () => {
     const ev = (e: object) => JSON.stringify({ timestamp: 1, sessionID: 'ses_a', ...e });
     expect(readOpenCodeRun([ev({ type: 'step_start', part: {} }), ev({ type: 'text', part: { text: '{"reply":' } }), ev({ type: 'text', part: { text: '"ok"}' } }), 'noise'].join('\n')))
       .toEqual({ text: '{"reply":\n"ok"}', sessionId: 'ses_a', error: null });
-    expect(readOpenCodeRun(ev({ type: 'error', error: { name: 'ProviderAuthError', data: { message: 'No API key' } } })))
+    expect(readOpenCodeRun(ev({ type: 'error', error: { type: 'provider.auth', message: 'No API key', status: 401 } })))
       .toEqual({ text: '', sessionId: 'ses_a', error: 'No API key' });
   });
 
-  it("AgentK's plugin does nothing without a session's variables", async () => {
+  it("writes AgentK's plugin once, never over a copy a session loaded, and the plugin does nothing without a session's variables", async () => {
     const paths = getPaths(tempDir('akl-oc-plugin-'));
+    // The plugin file of AgentK before OpenCode 2.
+    mkdirSync(join(paths.run, 'opencode'), { recursive: true });
+    writeFileSync(join(paths.run, 'opencode', 'agentk-plugin.js'), '');
     writeOpenCodePlugin(paths);
-    const mod = (await import(openCodePluginPath(paths))) as { AgentK: (i: object) => Promise<object> };
-    expect(Object.keys(mod)).toEqual(['AgentK']);
-    expect(await mod.AgentK({ directory: '/w' })).toEqual({});
+    const file = join(openCodePluginPath(paths), 'server.js');
+    const before = statSync(file);
+    writeOpenCodePlugin(paths);
+    // OpenCode reloads a plugin whose file changes, even to the same text.
+    expect(statSync(file)).toMatchObject({ ino: before.ino, mtimeMs: before.mtimeMs });
+    expect(existsSync(join(paths.run, 'opencode', 'agentk-plugin.js'))).toBe(false);
+    const mod = (await import(pathToFileURL(file).href)) as { default: { id: string; setup: (ctx: object) => Promise<unknown> } };
+    expect(mod.default.id).toBe('agentk');
+    expect(await mod.default.setup({ location: { directory: '/w' } })).toBeUndefined();
   });
 });

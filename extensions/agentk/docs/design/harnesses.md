@@ -16,7 +16,9 @@ same on each. Codex and Cursor CLI are left for later; the interface has room fo
 one it asked for (`CreateSessionRequest.harness`). A harness is *available* when it's turned on
 (`[claude] enabled`, `[opencode] enabled`, `[kiro] enabled`: **Offer Claude Code / OpenCode / Kiro
 for new sessions** in Settings) and its `--version` answers with its minimum version or later
-(`AppState.harnesses`; Claude Code: any version, OpenCode: 1.19.4, Kiro: 2.32.0). Each one's command
+(`AppState.harnesses`; Claude Code: any version, OpenCode: 2.0.0, Kiro: 2.32.0). An agent too old says
+so in Settings with the command that updates it: OpenCode 1's `opencode upgrade` stays on 1.x, so
+for OpenCode that's `opencode upgrade --major` (`HarnessCaps.upgrade`). Each one's command
 is set only in `config.toml` (`[claude] command`, `[opencode] command`, `[kiro] command`); OpenCode's
 default, `opencode`, is also found in `~/.opencode/bin` when it isn't on the PATH (`openCodeCommand`),
 since OpenCode's installer puts it there and adds that only to a shell's rc file, which a service
@@ -67,11 +69,14 @@ The installer needs one agent: `install.sh` takes Claude Code, OpenCode (on the 
 `~/.opencode/bin`) or `kiro-cli`, and with none asks which to install (Claude Code first, OpenCode
 second, Kiro CLI third; `--agent claude|opencode|kiro` for unattended runs, and `--install-deps` takes
 Claude Code without asking unless `--agent` says otherwise), with Anthropic's installer, OpenCode's
-(`opencode.ai/install`, into `~/.opencode/bin`) or Kiro's (`cli.kiro.dev/install`, which needs
-`unzip` on Linux), and stops when that's declined or fails. It checks each agent's sign-in (`claude
-auth status`, `opencode auth list`: no credentials and no provider key in the environment, `kiro-cli
-whoami`) and offers `claude auth login`, `opencode auth login` or `kiro-cli login`. `agentk install` then reads each
-agent's version (`settleAgents`): with none it stops, saying what to install; a default that isn't
+(`opencode.ai/v2/install`, OpenCode 2's, into `~/.opencode/bin`; `opencode.ai/install` installs only
+OpenCode 1) or Kiro's (`cli.kiro.dev/install`, which needs `unzip` on Linux), and stops when that's
+declined or fails. It checks each agent's sign-in (`claude auth status`, `opencode auth list
+--standalone`: "No authenticated integrations", neither a stored credential nor a provider key in the
+environment, `kiro-cli whoami`) and offers `claude auth login`, `opencode auth login --standalone` or
+`kiro-cli login`. `agentk install` then reads each
+agent's version (`settleAgents`): with none it stops, saying what to install (and, for OpenCode,
+`opencode upgrade --major` from 1.x); a default that isn't
 installed becomes the first agent that is; and Meko's setup is offered for each agent found (Claude
 Code's plugin and MCP server, Kiro's `--client kiro`; OpenCode needs none, see
 [OpenCode](#opencode)), asking first, each a warning when declined.
@@ -137,15 +142,15 @@ agent choice and sign-in check:
 
 | | Claude Code | OpenCode | Kiro |
 |---|---|---|---|
-| Launch | `claude --settings … --session-id/--resume …` | `opencode [--session=<id>] [--prompt=<prompt>]` with `OPENCODE_CONFIG_CONTENT` | `kiro-cli chat --agent agentk [--trust-tools=*] [--resume-id <id>] [prompt]` |
-| Hooks | `run/hooks.json` via `--settings` | AgentK's plugin, `run/opencode/agentk-plugin.js` | the `agentk` agent's inline hooks |
+| Launch | `claude --settings … --session-id/--resume …` | `opencode --standalone [--session=<id>] [--prompt=<prompt>]` with `OPENCODE_CONFIG_CONTENT` | `kiro-cli chat --agent agentk [--trust-tools=*] [--resume-id <id>] [prompt]` |
+| Hooks | `run/hooks.json` via `--settings` | AgentK's plugin, `run/opencode/agentk-plugin-<hash>/` | the `agentk` agent's inline hooks |
 | System prompt | `--append-system-prompt` | an `instructions` file written at each launch | printed by the context hook at every `agentSpawn` |
 | Design guard | JSON deny | the plugin throws the reason | `kiro-guard.sh`: exit 2, the reason on stderr |
 | Conversation id | chosen (`--session-id`) | OpenCode's, from the plugin's events | Kiro's, from its hooks' `session_id`, else its session store |
 | AgentK's mod, Artifact designs | yes | no | no |
 | [Session tools](tools.md) and their skill | `--mcp-config run/tools/mcp.json`, the skill plugin `run/tools/claude` via `--plugin-dir`, `list` in `permissions.allow` | `mcp.agentk_sessions`, `skills.paths` and an `ask` rule for each write tool in `OPENCODE_CONFIG_CONTENT` | the `agentk` agent's `mcpServers.agentk_sessions`, the skill as a `skill://` resource (Kiro asks before each tool, `list` too) |
 | Plan limits in the rail | 5-hour and weekly, from the status line and the mod | none (they're the provider's) | credits this period, from `/usage` hourly |
-| Needs-you and interrupt signals | `PermissionRequest`, `Notification`, the mod's `/mod/turn` | `permission.asked` (an interrupted turn ends with its `session.idle`) | none |
+| Needs-you and interrupt signals | `PermissionRequest`, `Notification`, the mod's `/mod/turn` | `permission.asked` (an interrupted turn ends with its `session.execution.interrupted`) | none |
 | Usage | transcript tokens, priced | tokens from the plugin's log, priced | credits from Kiro's session file |
 | By-model usage rows | the model id | the agent first: **OpenCode · claude-sonnet-4-5** | the agent first: **Kiro · auto** (`labelModels`) |
 | A public repo's PR head | `--setting-sources user` | `OPENCODE_DISABLE_PROJECT_CONFIG=1` | refused while the workspace has config |
@@ -162,64 +167,89 @@ session from its token, so `onHook` normalizes the payload with the session's ad
 `preToolUse`, `postToolUse` and `stop` become `SessionStart`, `UserPromptSubmit`, `PreToolUse`,
 `PostToolUse` and `Stop`, and Kiro's `session_id` moves to `agent_session_id` (Claude's `session_id`
 is AgentK's key for the session's Meko conversation, `claude_session_id`, which stays as it was
-for every harness). OpenCode's plugin sends OpenCode's own event names, which `normalizeOpenCode`
-maps the same way (see [OpenCode](#opencode)). The guard and context routes answer through the
+for every harness). OpenCode's plugin turns OpenCode 2's hooks and events into OpenCode 1's event
+names (`chat.message` for its `prompt` hook, `session.idle` for its `session.execution.*`, and so
+on), which `normalizeOpenCode` maps the same way (see [OpenCode](#opencode)). The guard and context routes answer through the
 adapter too (`deny()`, `context()`): JSON for Claude Code, plain text for OpenCode and Kiro
 (`GuardDecision` and `HookContext` take either).
 
 ## OpenCode
 
-Checked against OpenCode 1.19.4's source (MIT, `anomalyco/opencode`). OpenCode's hooks are plugins:
-JavaScript modules that run inside it, each export a function returning its hooks (`event`,
-`chat.message`, `tool.execute.before`/`.after`, `experimental.chat.system.transform`, …); a throw in
-`tool.execute.before` denies the call, the error shown to the model. OpenCode allows every tool by
-default, asking only where the user's `permission` config says `ask`.
+OpenCode 2 (2.0.0 or later; checked live against 2.1.4, and against the 2.0.0 to 2.1.4 sources, MIT,
+`anomalyco/opencode`). OpenCode 1 isn't supported: its plugins and CLI differ, and `--standalone`
+(below) fails its strict flag parser. OpenCode's hooks are plugins: a folder whose `server` (or
+`index`) module's default export is `{ id, setup }`, `setup(ctx)` registering hooks (`ctx.session.hook`,
+`ctx.tool.hook`) and reading events (`ctx.event.subscribe()`); a throw in the tool `execute.before`
+hook fails that call, the error shown to the model. OpenCode allows every tool by default, asking
+only where the user's permission config says `ask`.
 
-**AgentK's plugin, only in AgentK's sessions.** AgentK writes `run/opencode/agentk-plugin.js`
-(`src/server/opencode.ts`, renamed into place at start and before every launch, so a running
-session keeps the copy it loaded) and nothing in OpenCode's own config. A launch passes
-`OPENCODE_CONFIG_CONTENT`, the inline config OpenCode merges last over the user's own, concatenating
-its `plugin` and `instructions` lists with theirs: AgentK's plugin, the session's `instructions` file
-(`run/opencode/sessions/<session>/system.md`, the system-prompt lines, written at every launch), and
-`permission.external_directory` allowing the session's design folder (`<dir>/*`), outside the
-worktree, so writing the design never asks. The plugin does nothing without `AK_HOOK_TOKEN`. It
-talks to the hook socket with Bun's `fetch(…, { unix })` (Node's `http` with `socketPath` where Bun
-isn't there, as in the tests), sends its events one after another in OpenCode's order, and gives up
-on each after 3 seconds:
+**A server of its own.** OpenCode 2 runs every TUI and `opencode run` against one shared background
+server (`opencode serve --service`, started by the first CLI and kept running), whose environment is
+that first CLI's. A session's `OPENCODE_CONFIG_CONTENT`, `OPENCODE_CONFIG` and `AK_*` variables would
+never reach it, so the plugin wouldn't load and the session would run unsupervised; and if AgentK
+started the service, every later OpenCode run of the user's would get that session's variables. So
+every OpenCode command AgentK runs that needs a server passes `--standalone`, a private server with
+the command's own environment: the session's TUI, Ask AgentK's `run`, `session delete`, and the
+installer's `auth list` and `auth login`. The two that need none don't: `opencode --version` (the
+version reads) and `opencode upgrade` (Settings' Update), one-shot commands of the server's own that
+neither start nor reach a server.
+
+**AgentK's plugin, only in AgentK's sessions.** AgentK writes its plugin to
+`run/opencode/agentk-plugin-<hash>/` (`server.js` and a `package.json`; `src/server/opencode.ts`),
+named by a hash of both files and written only when that folder isn't there, never over it: OpenCode
+watches a loaded plugin's files and runs its setup again when they change, even to the same text,
+which would restart the plugin in every running session. A changed plugin gets a new folder; older
+ones stay for the sessions still running on them (a few KB each), and the plugin file of AgentK
+before OpenCode 2 (`agentk-plugin.js`) is removed. Nothing goes in OpenCode's own config. A launch
+passes `OPENCODE_CONFIG_CONTENT`, the inline config OpenCode merges last over the user's own,
+concatenating its `plugin` and `instructions` lists with theirs (OpenCode 2 still reads these
+OpenCode 1 keys, `permission`, `mcp` and `skills` too): AgentK's plugin, the session's
+`instructions` file (`run/opencode/sessions/<session>/system.md`, the system-prompt lines, written at
+every launch), and `permission.external_directory` allowing the session's design folder (`<dir>/*`),
+outside the worktree, so writing the design never asks. The plugin does nothing without
+`AK_HOOK_TOKEN`. It talks to the hook socket with Bun's `fetch(…, { unix })` (Node's `http` with
+`socketPath` where Bun isn't there, as in the tests), sends its events one after another in
+OpenCode's order, and gives up on each after 3 seconds. It sends them under the names
+`normalizeOpenCode` maps, which are OpenCode 1's:
 
 | OpenCode | Sent as | AgentK's event (`normalizeOpenCode`) |
 |---|---|---|
-| the plugin loading | `agentk.start` (`source`: `startup`, or `resume` with `AK_OPENCODE_SESSION`) | `SessionStart` |
-| `chat.message` | `chat.message` | `UserPromptSubmit` |
-| `tool.execute.before` on `edit`, `write`, `multiedit`, `apply_patch`, `patch` | the guard route, with the tool's args | the reason thrown (`editedPaths`: `filePath`, or the `*** Add/Update/Delete File:` and `*** Move to:` lines of `patchText`) |
-| `tool.execute.after` | `tool.execute.after` | `PostToolUse` |
-| `permission.asked` (`permission.updated` before) | `permission.asked` with the permission's name | `PermissionRequest`: **Needs you**, "Permission needed for bash" |
-| `permission.replied` | `permission.replied` | `PostToolUse` (working again) |
-| `session.idle` | `session.idle` | `Stop` |
+| the plugin's `setup` | `agentk.start` (`source`: `startup`, or `resume` with `AK_OPENCODE_SESSION`) | `SessionStart` |
+| the session `prompt` hook | `chat.message` | `UserPromptSubmit` |
+| the tool `execute.before` hook on `edit`, `write`, `patch` | the guard route, with the tool's input | the reason thrown (`editedPaths`: `path`, relative to the worktree or absolute, or the `*** Add/Update/Delete File:` and `*** Move to:` lines of `patchText`) |
+| the tool `execute.after` hook | `tool.execute.after` | `PostToolUse` |
+| event `permission.asked` | `permission.asked` with its `action` | `PermissionRequest`: **Needs you**, "Permission needed for shell" |
+| event `permission.replied` | `permission.replied` | `PostToolUse` (working again) |
+| event `session.execution.succeeded`, `.failed` or `.interrupted` (OpenCode 2 doesn't send `session.idle`) | `session.idle` | `Stop` |
 
-OpenCode's session id moves to `agent_session_id`. The session the plugin follows is the one the
-user last prompted (`chat.message`). A subagent's (the `task` tool's, a `session.created` with a
-`parentID`) sends its events without its id, so it never becomes the session's conversation, and
-never its `session.idle`, so it never ends the turn; its tool calls still mark the session working,
-its permission asks still show **Needs you** (one waiting on the user does need them), and its edits
-still go to the guard. OpenCode fires nothing when
-it exits: reconcile finds the dead pane, as for Kiro. An interrupted turn ends with the `session.idle`
-that follows it.
+A tool called from OpenCode's code mode (its `execute` tool) goes through `execute.before` under its
+own name too, so the guard sees those edits. Events come as `{ id, type, data }`; one the stream
+hands over again after it reconnects is handled once (by its `id`). OpenCode's session id moves to
+`agent_session_id`. The session the plugin follows is the one the user last prompted. A subagent's
+(the `subagent` tool's: a session with a `parentID`, from its `session.created` event or, for a
+prompt that comes first, `ctx.session.get()`) sends its events without its id, so it never becomes
+the session's conversation, and never its turn's end, so it never ends the turn; its tool calls still
+mark the session working, its permission asks still show **Needs you** (one waiting on the user does
+need them), and its edits still go to the guard. OpenCode fires nothing when it exits: reconcile
+finds the dead pane, as for Kiro.
 
-**Starting and resuming.** `opencode --prompt=<first prompt>` in the worktree (the `=` form, so a
-prompt starting with `-` stays the value); resume and recovery run `--session=<id>`, never
+**Starting and resuming.** `opencode --standalone --prompt=<first prompt>` in the worktree (the `=`
+form, so a prompt starting with `-` stays the value); resume and recovery run `--session=<id>`, never
 `--continue` (OpenCode's newest in the folder, which can be an earlier session's in a pooled
-worktree). OpenCode exits 1 on a session id it no longer has, so a session resumes only while
-OpenCode's store still has it (`canResume`, `openCodeStoredSession`: a row in the `session` table of
-`$XDG_DATA_HOME/opencode/opencode.db`, or a release channel's `opencode-<channel>.db`, opened read
-only); one OpenCode no longer has (deleted with `opencode session delete`, or its data cleared)
-starts again with its first prompt. When no store can be read (none there, or a schema AgentK
-doesn't know), the session's usage log decides: a response of that id was logged.
+worktree). OpenCode starts a new, empty session under an id it no longer has, so a session resumes
+only while OpenCode's store still has it (`canResume`, `openCodeStoredSession`: a row in the
+`session_v2` table of `$XDG_DATA_HOME/opencode/opencode.db`, or a release channel's
+`opencode-<channel>.db`, opened read only); one OpenCode no longer has (deleted with `opencode
+session delete`, or its data cleared) starts again with its first prompt. When no store can be read
+(none there, or a schema AgentK doesn't know), the session's usage log decides: a response of that id
+was logged. A session still on OpenCode 1 after AgentK's update isn't checked for: its relaunch exits
+on `--standalone`.
 
 **Recall.** AgentK's Meko recall for a new session's first turn comes from the plugin's one
 `/context` call at its start (`AK_OPENCODE_SOURCE=startup`; waiting up to 5 seconds), added to the
-main session's system prompt through `experimental.chat.system.transform`. If a later OpenCode drops
-that hook, sessions start without recall; the workflow lines still come through `instructions`.
+main session's system prompt through the session `context` hook, which runs before every model
+request. If a later OpenCode drops that hook, sessions start without recall; the workflow lines still
+come through `instructions`.
 
 **Meko.** Meko's setup has no OpenCode client, so while Meko is on AgentK gives OpenCode sessions its
 own Meko as a remote MCP server named `meko` (AgentK's URL, `Authorization: Bearer <key>`, `oauth:
@@ -240,8 +270,9 @@ PR's code, agents, commands, MCP servers); AgentK's own config still loads, from
 typed into the terminal as a bracketed paste, then Enter; designs as markdown with
 `questions.json`; the learn step as a typed prompt.
 
-**Usage.** On every finished response (`message.updated` with `time.completed`, logged once per id),
-the main session's and its subagents', the plugin appends a line to
+**Usage.** On every finished step (`session.step.ended`, with the model from its
+`session.step.started`; logged once per step), the main session's and its subagents', the plugin
+appends a line to
 `run/opencode/sessions/<session>/messages.jsonl` (model, input, output, reasoning, cache read and
 write). `readUsage` reads it from the offset in `usage_files` into `usage_messages` (`opencode:<id>`,
 a subagent's under its own session id as the agent; reasoning counted as output; no 1-hour cache
@@ -251,7 +282,7 @@ the usage report sends an OpenCode model only when the price table knows it, els
 is read from that offset (`openSync`/`readSync`), not read again whole. That file is also the session's activity file for the hookless fallback. A session's folder is
 removed with its project; an archived session keeps it, so it can still resume.
 
-**Ask AgentK** on OpenCode is `opencode run --format json --agent agentk-ask`, the message on stdin,
+**Ask AgentK** on OpenCode is `opencode run --standalone --format json --agent agentk-ask`, the message on stdin,
 in the ask's folder, with no tools, MCP servers or hooks of the user's: `XDG_CONFIG_HOME` points
 OpenCode's global config at the ask's own (`run/ask/opencode-config/opencode/opencode.json`,
 `openCodeAskEnv`), which defines the `agentk-ask` agent with AgentK's instructions and `permission:
@@ -259,8 +290,8 @@ OpenCode's global config at the ask's own (`run/ask/opencode-config/opencode/ope
 `provider`, `enabled_providers`, `disabled_providers`), so their plugins, MCP servers and agents don't
 load; `OPENCODE_DISABLE_PROJECT_CONFIG` and `OPENCODE_DISABLE_CLAUDE_CODE` leave out project config and
 Claude Code's files. Its sign-ins and sessions are in OpenCode's data folder, which stays. The answer
-is the run's `text` events; the run's session is deleted afterwards (`opencode session delete`, with
-the same variables), whether or not the answer could be read, and stopping waits for that. Only a
+is the run's `text` events (an `error` event's `error.message` is what's wrong); the run's session is
+deleted afterwards (`opencode session delete --standalone`, with the same variables), whether or not the answer could be read, and stopping waits for that. Only a
 plugin in `~/.opencode/` itself, which OpenCode always reads, would still load.
 
 ## Kiro

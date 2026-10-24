@@ -89,7 +89,7 @@ export class Harnesses {
       ? `turn it on in Settings → Harness ([${h.id}] enabled in config.toml)`
       : s.version === null
         ? `install it, or set [${h.id}] command in config.toml`
-        : `update it to ${s.minVersion} or later (it's ${s.version})`;
+        : `update it to ${s.minVersion} or later (it's ${s.version})${h.caps.upgrade ? `: run ${h.caps.upgrade}` : ''}`;
     throw new HttpError(400, `${h.caps.label} isn't available for new sessions: ${how}.`);
   }
 

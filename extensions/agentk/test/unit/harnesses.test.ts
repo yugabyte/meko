@@ -25,8 +25,8 @@ describe('the agent new sessions and Ask AgentK start on', () => {
     ['the first available one while the default is not installed', { claude: null, kiro: '2.32.0' }, {}, 'kiro'],
     ['the first available one while the default is turned off', { claude: '2.1.300', kiro: '2.32.0' }, { off: ['claude' as const] }, 'kiro'],
     ['the first available one while the default is too old', { claude: '2.1.300', kiro: '2.10.0' }, { default: 'kiro' as const }, 'claude'],
-    ['OpenCode before Kiro, in their order, while the default is not installed', { opencode: '1.19.4', kiro: '2.32.0' }, {}, 'opencode'],
-    ['Kiro while OpenCode is too old', { opencode: '1.2.0', kiro: '2.32.0' }, {}, 'kiro'],
+    ['OpenCode before Kiro, in their order, while the default is not installed', { opencode: '2.1.4', kiro: '2.32.0' }, {}, 'opencode'],
+    ['Kiro while OpenCode is too old', { opencode: '1.19.4', kiro: '2.32.0' }, {}, 'kiro'],
     ['none when no agent is available', { claude: null, kiro: '2.32.0' }, { off: ['kiro' as const] }, null],
   ])('%s', async (_, installed, o, expected) => {
     const s = setup(installed, o);

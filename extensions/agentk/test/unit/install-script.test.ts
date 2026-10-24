@@ -325,20 +325,20 @@ describe('install.sh: installing missing tools', () => {
   it('asks which agent to install when none is there, OpenCode second, and installs OpenCode when picked', async () => {
     have('git', 'curl', 'gh');
     rmSync(join(bin, 'claude'));
-    stub(repo, 'opencode', `echo "opencode $*" >> "${log}"; [ "$1 $2" = "auth list" ] && echo "└  1 credentials"; exit 0`);
+    stub(repo, 'opencode', `echo "opencode $*" >> "${log}"; [ "$1 $2" = "auth list" ] && echo "Anthropic  Anthropic API key  stored"; exit 0`);
     // OpenCode's installer puts it in ~/.opencode/bin, which isn't on the PATH.
     writeFileSync(join(repo, 'release', 'install'), `mkdir -p "$HOME/.opencode/bin"; cp "${repo}/opencode" "$HOME/.opencode/bin/opencode"; echo "opencode installer ran" >> "${log}"\n`);
     const r = await runInTerminal('2', 'Install Claude Code (1), OpenCode (2) or Kiro CLI (3)?', [['Install them now?', 'y']]);
-    expect(r.out).toContain('curl -fsSL https://opencode.ai/install | bash');
+    expect(r.out).toContain('curl -fsSL https://opencode.ai/v2/install | bash');
     expect(r.code).toBe(0);
-    expect(r.calls).toEqual(['curl https://opencode.ai/install', 'opencode installer ran', 'opencode auth list']);
+    expect(r.calls).toEqual(['curl https://opencode.ai/v2/install', 'opencode installer ran', 'opencode auth list --standalone']);
     expect(r.out).toContain('git, curl, gh, OpenCode');
   });
 
   it.each([
     ['Claude Code', 'claude', `[ "$1 $2" = "auth status" ] && echo '{ "loggedIn": false }'`, 'claude auth login', ['claude auth login']],
     // OpenCode with no provider signed in (and none's key in the environment).
-    ['OpenCode', 'opencode', `[ "$1 $2" = "auth list" ] && printf '┌  Credentials\\n└  0 credentials\\n'`, 'opencode auth login', ['opencode auth list', 'opencode auth login']],
+    ['OpenCode', 'opencode', `[ "$1 $2" = "auth list" ] && echo 'No authenticated integrations'`, 'opencode auth login', ['opencode auth list --standalone', 'opencode auth login --standalone']],
   ])('offers to sign %s in', async (_, cmd, body, login, expected) => {
     have('git', 'curl', 'gh');
     stub(bin, cmd, `echo "${cmd} $*" >> "${log}"; ${body}; exit 0`);

@@ -66,7 +66,12 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       conversation: worktrees are pooled, and Kiro keeps earlier sessions' under the same folder.
       Nothing is written to the user's OpenCode config: AgentK's plugin and Meko server reach only
       AgentK's sessions, through their environment (`OPENCODE_CONFIG_CONTENT`, `OPENCODE_CONFIG`), and
-      a secret (Meko's key) goes in an owner-only file, never the session's environment.
+      a secret (Meko's key) goes in an owner-only file, never the session's environment. Every
+      OpenCode command AgentK runs that needs a server (the session's TUI, `run`, `session`, `auth`)
+      passes `--standalone`: OpenCode 2's shared background service has another environment, and
+      must never be started with a session's. Only `--version` and `upgrade` go without it: they're
+      one-shot commands in the server's own environment that neither start nor reach a server. A plugin folder a session
+      loaded is never written again (OpenCode reloads a plugin whose files change).
       No harness is assumed installed, Claude Code included: AgentK starts, and every feature that
       needs an agent asks the registry for an available one (`Harnesses.defaultFor`/`pick`) and
       says what to install when there's none, rather than running `claude` regardless.

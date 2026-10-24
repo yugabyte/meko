@@ -1,6 +1,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { HARNESS_CAPS } from '../../src/shared/harnesses.js';
 import type { HarnessStatus, Project, Settings } from '../../src/shared/types.js';
 import { NewSessionDialog } from '../../src/web/components/NewSessionDialog.js';
 import { AgentSettings, HarnessBar } from '../../src/web/components/SettingsDialog.js';
@@ -86,24 +87,29 @@ describe('Settings › Harness', () => {
   });
 
   const settings = { claudeEnabled: true, opencodeEnabled: true, kiroEnabled: true, kiroTrustTools: false, defaultHarness: 'claude' } as Settings;
-  /** The ids of the controls (and the update outcome) an agent's panel shows, then `⚠️` when its note starts with one. */
+  /**
+   * The ids of the controls (and the update outcome) an agent's panel shows, then `⚠️` when its note
+   * starts with one, and the agent's upgrade command when its note names it.
+   */
   const controls = (id: HarnessStatus['id'], s: Partial<Settings>, st: Partial<HarnessStatus>, outcome: { ok: boolean; text: string } | null = null) => {
     const html = renderToStaticMarkup(createElement(AgentSettings, {
       id, s: { ...settings, ...s }, status: status(id, st), checking: false, updating: false, outcome,
       onEnable: () => undefined, onChange: () => undefined, onCheck: () => undefined, onUpdate: () => undefined,
     }));
     const ids = [...html.matchAll(/<(?:input|button|span)[^>]*id="(set-[\w-]+)"/g)].map(([, x]) => x);
-    return html.includes('<span class="hint">⚠️ ') ? [...ids, '⚠️'] : ids;
+    const upgrade = HARNESS_CAPS[id].upgrade;
+    return [...ids, ...(html.includes('<span class="hint">⚠️ ') ? ['⚠️'] : []), ...(upgrade && html.includes(upgrade) ? [upgrade] : [])];
   };
 
   it.each([
     ['Claude Code, available', 'claude' as const, {}, {}, ['set-claude', 'set-claude-check', 'set-claude-update'], null],
     ['Claude Code, after an update the banners leave out', 'claude' as const, {}, {}, ['set-claude', 'set-claude-check', 'set-claude-update', 'set-claude-outcome'], { ok: false, text: 'x' }],
     ['OpenCode, available', 'opencode' as const, {}, {}, ['set-opencode', 'set-opencode-check', 'set-opencode-update'], null],
+    ['OpenCode, too old', 'opencode' as const, {}, { version: '1.19.4', minVersion: '2.0.0', available: false }, ['set-opencode', 'set-opencode-check', 'opencode upgrade --major'], null],
     ['Kiro, available', 'kiro' as const, {}, {}, ['set-kiro', 'set-kiro-check', 'set-kiro-update', 'set-kiro-trust'], null],
     ['Kiro, on but not installed', 'kiro' as const, {}, { available: false, version: null }, ['set-kiro', 'set-kiro-check', 'set-kiro-trust', '⚠️'], null],
     ['Kiro, off', 'kiro' as const, { kiroEnabled: false }, { enabled: false, available: false }, ['set-kiro'], null],
-  ])("%s: the panel shows only that agent's settings, and ⚠️ when it's missing", (_, id, s, st, shown, outcome) => {
+  ])("%s: the panel shows only that agent's settings, ⚠️ when it's missing, and how to upgrade one too old", (_, id, s, st, shown, outcome) => {
     expect(controls(id, s, st, outcome)).toEqual(shown);
   });
 });
