@@ -254,75 +254,92 @@ func runUninstall(l paths.Layout, purge bool, o destroyOptions, stdout, stderr i
 // installed is set up again with them. Nothing else is passed to its installer: it asks its own
 // questions.
 func runInstallExtension(l paths.Layout, name string, stdout, stderr io.Writer) int {
-	cat, ok := extensions.Known[name]
-	if !ok {
+	if _, ok := extensions.Known[name]; !ok {
 		return fail(stderr, fmt.Errorf("no extension called %q: meko knows agentk", name))
 	}
 	if up, _ := running(l.Lock); !up {
 		return fail(stderr, errors.New("no Meko server is running: start it with meko start first"))
 	}
+	if err := installExtension(context.Background(), l, name, interactive(), os.Stdin, stdout, stderr); err != nil {
+		return fail(stderr, err)
+	}
+	return exitOK
+}
+
+// installExtension is runInstallExtension's work, for the running server's data folder at l, and
+// for the web UI's Install too, which runs it with no terminal (interactive false, stdin nil).
+func installExtension(ctx context.Context, l paths.Layout, name string, interactive bool, stdin io.Reader,
+	stdout, stderr io.Writer) error {
+	cat, ok := extensions.Known[name]
+	if !ok {
+		return fmt.Errorf("no extension called %q: meko knows agentk", name)
+	}
 	cfg, err := config.Load(l.Config, os.Getenv, config.Overrides{})
 	if err != nil {
-		return fail(stderr, err)
+		return err
 	}
-	ct, err := clientTokens(l, cfg)
+	tok, err := readClientToken(l, cfg)
 	if err != nil {
-		return fail(stderr, err)
-	}
-	tok, err := ct.Read()
-	if err != nil {
-		return fail(stderr, err)
+		return err
 	}
 	port, err := readInt(l.Port)
 	if err != nil {
-		return fail(stderr, err)
+		return err
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return fail(stderr, err)
+		return err
 	}
 	args := []string{"--meko-url", fmt.Sprintf("http://127.0.0.1:%d/mcp", port), "--meko-key", tok}
-	if !interactive() {
+	if !interactive {
 		args = append(args, "--non-interactive")
 	}
 	if cmd := cat.Find(name, home, l.Root); cmd != "" {
 		if tooOld(cmd) {
-			return fail(stderr, fmt.Errorf("the installed %s predates --meko-url, which pointing it at this Meko "+
-				"needs: update it (the Update button in AgentK), then run this again", cat.Title))
+			return fmt.Errorf("the installed %s predates --meko-url, which pointing it at this Meko "+
+				"needs: update it (the Update button in AgentK), then run this again", cat.Title)
 		}
 		fmt.Fprintf(stdout, "%s is installed (%s): setting it up to use this Meko\n", cat.Title, cmd)
-		if err = runAttached(cmd, append([]string{"install"}, args...), extensions.Env(l.Root), stdout, stderr); err != nil {
-			return fail(stderr, fmt.Errorf("%s install failed: %w", cat.Command, err))
+		err = runAttached(ctx, cmd, append([]string{"install"}, args...), extensions.Env(l.Root), stdin, stdout, stderr)
+		if err != nil {
+			return fmt.Errorf("%s install failed: %w", cat.Command, err)
 		}
-	} else {
-		if err = runExtensionInstaller(l, cfg.Update.Repo, cat, args, stdout, stderr); err != nil {
-			return fail(stderr, err)
-		}
+	} else if err = runExtensionInstaller(ctx, l, cfg.Update.Repo, cat, args, stdin, stdout, stderr); err != nil {
+		return err
 	}
 	cmd := cat.Find(name, home, l.Root)
 	if cmd == "" {
-		return fail(stderr, fmt.Errorf("%s was installed, but %s isn't on PATH or in ~/.local/bin", cat.Title, cat.Command))
+		return fmt.Errorf("%s was installed, but %s isn't on PATH or in ~/.local/bin", cat.Title, cat.Command)
 	}
 	reg, err := extensions.Load(l.Root)
 	if err != nil {
-		return fail(stderr, err)
+		return err
 	}
 	reg.Entries[name] = extensions.Entry{Command: cmd, InstalledByMeko: true, AddedAt: time.Now().UTC()}
 	if err := reg.Save(); err != nil {
-		return fail(stderr, err)
+		return err
 	}
 	fmt.Fprintf(stdout, "%s uses this Meko, and meko start and meko stop start and stop it too\n", cat.Title)
-	return exitOK
+	return nil
+}
+
+// readClientToken is the client token the running server at l takes, which extensions are given.
+func readClientToken(l paths.Layout, cfg config.Config) (string, error) {
+	ct, err := clientTokens(l, cfg)
+	if err != nil {
+		return "", err
+	}
+	return ct.Read()
 }
 
 // runExtensionInstaller downloads the newest release's installer of an extension and runs it, with
 // MEKO_HOME naming the data folder.
-func runExtensionInstaller(l paths.Layout, repo string, cat extensions.Catalog, args []string,
-	stdout, stderr io.Writer) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+func runExtensionInstaller(ctx context.Context, l paths.Layout, repo string, cat extensions.Catalog, args []string,
+	stdin io.Reader, stdout, stderr io.Writer) error {
+	dl, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	c := newReleaseClient(repo)
-	rels, err := c.Releases(ctx)
+	rels, err := c.Releases(dl)
 	if err != nil {
 		return err
 	}
@@ -337,7 +354,7 @@ func runExtensionInstaller(l paths.Layout, repo string, cat extensions.Catalog, 
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	script := filepath.Join(dir, cat.Installer)
-	if err := c.Download(ctx, a, script); err != nil {
+	if err = c.Download(dl, a, script); err != nil {
 		return err
 	}
 	// Releases from before Meko's extensions refuse --meko-url, and their installer looks for the
@@ -348,7 +365,8 @@ func runExtensionInstaller(l paths.Layout, repo string, cat extensions.Catalog, 
 			"with the next %s release", cat.Title, rel.Tag, cat.Title)
 	}
 	fmt.Fprintf(stdout, "Installing %s %s (%s)\n", cat.Title, ver, rel.Tag)
-	if err := runAttached("sh", append([]string{script}, args...), extensions.Env(l.Root), stdout, stderr); err != nil {
+	err = runAttached(ctx, "sh", append([]string{script}, args...), extensions.Env(l.Root), stdin, stdout, stderr)
+	if err != nil {
 		return fmt.Errorf("%s's installer failed: %w", cat.Title, err)
 	}
 	return nil
@@ -370,11 +388,20 @@ func tooOld(cmd string) bool {
 	return !strings.Contains(string(b), "meko-url")
 }
 
-// runAttached runs a command with the terminal and env: an installer asks its questions there.
-func runAttached(name string, args, env []string, stdout, stderr io.Writer) error {
-	cmd := exec.Command(name, args...) //nolint:gosec // G204: an extension's own command or installer
-	cmd.Stdin, cmd.Stdout, cmd.Stderr, cmd.Env = os.Stdin, stdout, stderr, env
-	return cmd.Run()
+// runAttached runs a command with env and stdin (the terminal, where an installer asks its
+// questions, or nil for none), until it ends or ctx does.
+func runAttached(ctx context.Context, name string, args, env []string, stdin io.Reader,
+	stdout, stderr io.Writer) error {
+	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // G204: an extension's own command or installer
+	cmd.Stdin, cmd.Stdout, cmd.Stderr, cmd.Env = stdin, stdout, stderr, env
+	cmd.WaitDelay = extensions.PipeWait
+	if err := cmd.Run(); err != nil && !errors.Is(err, exec.ErrWaitDelay) {
+		if ctx.Err() != nil {
+			return fmt.Errorf("stopped: %w", ctx.Err())
+		}
+		return err
+	}
+	return nil
 }
 
 // interactive reports whether stdin is a terminal someone can answer questions on (/dev/null is a

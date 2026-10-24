@@ -13,6 +13,7 @@ import type {
   Datapack,
   DocumentList,
   Extension,
+  ExtensionAction,
   Health,
   KnowledgeActivity,
   MemoryChange,
@@ -139,6 +140,9 @@ export const api = {
   totpConfirm: (code: string) => request<unknown>("POST", "/auth/totp/confirm", { code }),
   totpDisable: (code: string) => request<unknown>("POST", "/auth/totp/disable", { code }),
   extensions: () => request<Extension[]>("GET", "/extensions"),
+  // Starts an action as the extension's job; the list shows how it goes.
+  extensionAction: (name: string, action: ExtensionAction) =>
+    request<Extension>("POST", `/extensions/${enc(name)}/${action}`),
 
   usageStats: () => request<UsageStats>("GET", "/settings/usage-stats"),
   setUsageStats: (enabled: boolean) => request<UsageStats>("PATCH", "/settings/usage-stats", { enabled }),

@@ -112,6 +112,7 @@ type Server struct {
 	e    *echo.Echo
 	opts Options
 	srv  *http.Server
+	jobs extJobs // the extensions' actions, on the web listener
 }
 
 // New builds the server and its routes.

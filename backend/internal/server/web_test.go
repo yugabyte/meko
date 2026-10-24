@@ -62,8 +62,9 @@ func shortTemp(t *testing.T) string {
 	return dir
 }
 
-// startWeb runs a web listener with access, one extension (agentk) on sock, and the sign-in.
-func startWeb(t *testing.T, access, sock string) (string, *login.Service) {
+// startWeb runs a web listener with access, one extension (agentk) on sock, and the sign-in; each
+// of with changes its Web first.
+func startWeb(t *testing.T, access, sock string, with ...func(*Web)) (string, *login.Service) {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "meko.db"))
 	if err != nil {
@@ -81,10 +82,14 @@ func startWeb(t *testing.T, access, sock string) (string, *login.Service) {
 	ext := extproxy.New("agentk", "AgentK", func() string { return sock }, slog.New(slog.DiscardHandler))
 	// As serve wires it (webListener.RevokeEnded): a session that ends closes its WebSockets.
 	logins.OnRevoke(func() { ext.Revoke(func(h string) bool { return logins.Live(context.Background(), h) }) })
+	web := &Web{Access: access, Extensions: func() []*extproxy.Proxy { return []*extproxy.Proxy{ext} }}
+	for _, f := range with {
+		f(web)
+	}
 	s := New(Options{Info: Info{Version: "test"}, Port: tcpPort(t, ln), Logger: slog.New(slog.DiscardHandler),
 		Login: logins,
 		UI:    http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ui") }),
-		Web:   &Web{Access: access, Extensions: func() []*extproxy.Proxy { return []*extproxy.Proxy{ext} }}})
+		Web:   web})
 	probe(s)
 	go func() { _ = s.Serve(ln) }()
 	t.Cleanup(func() { _ = s.Shutdown(context.Background()) })

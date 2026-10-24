@@ -305,7 +305,8 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		return server.Options{Info: info, Port: wcfg.Web.Port, Auth: cfg.Server.Auth, Logger: log,
 			Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, MCP: mcpHandler,
 			REST: registerREST, Upload: upload, Download: download, UI: ui, Login: logins,
-			Web: &server.Web{Access: wcfg.Web.Access, Extensions: web.Proxies}}
+			Web: &server.Web{Access: wcfg.Web.Access, Extensions: web.Proxies, Installed: web.Installed,
+				Run: web.RunExtension}}
 	}
 	srv := server.New(server.Options{
 		Info: info, Port: cfg.Server.Port, Token: token, ClientToken: clientToken, Auth: cfg.Server.Auth, Logger: log,

@@ -1,5 +1,6 @@
-// The UI's routes, on the History API: /datapacks/<id>/<tab>, /status and /account. meko serve answers every
-// such path with index.html. /signin and /setup are the sign-in screens', outside the app (main.tsx).
+// The UI's routes, on the History API: /datapacks/<id>/<tab>, /status, /extensions and /account.
+// meko serve answers every such path with index.html. /signin and /setup are the sign-in screens',
+// outside the app (main.tsx).
 
 import { useEffect, useState } from "react";
 
@@ -12,12 +13,12 @@ export interface Route {
   // A conversation open in the conversations tab, or the memories tab's scope.
   itemId?: string;
   // A page of the whole install rather than of a datapack.
-  view?: "status" | "account";
+  view?: "status" | "extensions" | "account";
 }
 
 function parse(path: string): Route {
   const [, root, id, tab, item] = path.split("/");
-  if (root === "status" || root === "account") return { tab: "overview", view: root };
+  if (root === "status" || root === "extensions" || root === "account") return { tab: "overview", view: root };
   if (root !== "datapacks" || !id) return { tab: "overview" };
   return {
     datapackId: id,

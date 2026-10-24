@@ -201,6 +201,8 @@ another data folder refuses `start`, `stop`, `status`, `uninstall` and `_handoff
   extension that fails is reported, and the rest go on. `meko restart`, updates and crashes never
   touch them: AgentK has its own services and updater.
 - `meko uninstall_extension agentk` only unregisters it.
+- The web UI's Extensions page runs the same install, and the extensions' `start` and `stop`, from
+  the server, without a terminal ([web.md](web.md)).
 - AgentK's key is Meko's client token, as every client's is ([api.md](api.md#auth)).
 
 ## Updates and rollback

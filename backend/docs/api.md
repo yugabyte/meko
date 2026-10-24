@@ -30,7 +30,8 @@ has no admin-only routes. Its own routes:
 | `POST /api/v1/auth/logout` | none | Ends this browser's session and the WebSockets it opened |
 | `POST /api/v1/auth/password` `{current, next}` | session or local | Signs every other browser out. 400 `VALIDATION_ERROR`, 409 `CONFLICT` (no login yet) |
 | `POST /api/v1/auth/totp/enroll`, `confirm {code}`, `disable {code}` | session or local | Enroll gives `{secret, otpauth_url}`; confirm turns two-step sign-in on with a code from it; disable turns it off with a current code |
-| `GET /api/v1/extensions` | session or local | `[{name, title, path, available}]` |
+| `GET /api/v1/extensions` | session or local | `[{name, title, description, installed, web_ui, path, available, job?}]`: every extension Meko knows, sorted by name. `installed` is registered in `extensions.json`; `path` is `/ext/<name>/` while it's served, else `""`; `available` is whether its socket answers (it's running); `job` is the last action the Extensions page ran on it since the server started, `{action, state, started_at, finished_at?, error?, output}`, `state` `running`, `done` or `failed`, `output` its last 16 KiB with the client token blanked |
+| `POST /api/v1/extensions/<name>/<action>` | session or local | `install`, `start` or `stop`, run in the background as the extension's job: 202 with its row. 404 `NOT_FOUND` (not a known extension or action), 409 `CONFLICT` (start or stop on one that isn't installed, or a job running for it) |
 | `/ext/<name>/*` | session or local | The extension's web UI ([web.md](web.md)); a page without a session goes to `/signin?next=` |
 | The web UI's files: `/` and every GET no other route takes | none | Static |
 
