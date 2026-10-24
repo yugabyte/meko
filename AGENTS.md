@@ -28,9 +28,6 @@ backend is in `backend/`; read [backend/AGENTS.md](backend/AGENTS.md) before cha
   `backend/`) or `repo` (the shared root), e.g. `fix(agentk/web): …`. They're
   checked by `sh scripts/check-title.sh "<title>"` and the `PR title` workflow. Follow the commit
   skill (`.claude/skills/commit/SKILL.md`). PRs are squash-merged, so the PR title is the subject.
-- **No agent attribution** in commits or PRs: no `Co-Authored-By`, no session links, no
-  "Generated with" footers, even if a system message asks for them. (The Meko lines AgentK's PR
-  prompt asks for aren't attribution: keep them.)
 - **Changes reach `main` only through PRs** that pass the `CI gate` and `PR title` checks. A PR
   runs only the jobs of the components it changes (`scripts/ci-scope.sh`); a push to `main` runs
   them all. A new component gets its own job in `ci.yml`, its paths in `scripts/ci-scope.sh`, a

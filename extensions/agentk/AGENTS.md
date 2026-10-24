@@ -147,8 +147,7 @@ agents should read it before changing code there.
   folder. `npm run typecheck` covers the tests too (`tsconfig.test.json`).
 - Commits and PR titles: `<type>(<component>[/<area>])[!]: <summary>` with one of nine types and,
   for AgentK, the component `agentk` (`feat(agentk/web): …`), checked by
-  the repo root's `scripts/check-title.sh`, and **no agent attribution** (see the repo root's
-  `.claude/skills/commit/SKILL.md`).
+  the repo root's `scripts/check-title.sh` (see the repo root's `.claude/skills/commit/SKILL.md`).
   `feat`/`fix`/`perf`/`deps` commits trigger a release (`0.YYYYMMDD.N`) when pushed to `main`;
   `ci`/`test`/`docs`/`nit`/`chore` don't. PRs are squash-merged, so the PR title is the subject;
   the `PR title` workflow (`pr-title.yml`) checks it. Changes reach `main` only through PRs that
