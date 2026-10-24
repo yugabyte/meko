@@ -188,7 +188,8 @@ read AgentK deletes (`chat --delete-session`) the one the run named and any othe
 whose folder is `run/kiro-usage`, since a run cut off at its timeout never names its own. A server
 that is stopping waits up to 5 seconds for a read and its deletes still running. `parseKiroPlan` (`src/server/kiro.ts`)
 reads the plan name, the reset day and the credits line, and returns nothing without the credits
-line. Paid plans' bonus and overage lines haven't been seen, so they're matched loosely (a line
+line. The overage line's only seen form is `Overages: Disabled` (kiro-cli 2.34.0, Power plan); its
+credit-bearing form and the bonus line haven't been seen, so all three are matched loosely (a line
 with `bonus` and two numbers, `remaining` or `left` meaning what's left; a line with `overage`, its
 first amount that isn't money or a percentage, and `enabled`/`disabled`), and each is kept with the
 line as Kiro printed it. The reading is kept in `kv` (`kiro_plan`) and sent as `AppState.kiroPlan`;
@@ -196,10 +197,11 @@ a read that fails (signed out, say) keeps the last one and logs once. The rail s
 credits** on Kiro's row: a ring of used over covered in Kiro's violet (amber at 80%, red at 95%;
 past 100%, **Over plan**, red, or amber while overage is on, since Kiro then bills the rest and
 goes on), `36 of 50 · Free · resets Nov 1` beside it, then a line for bonus and overage when Kiro
-printed them (`kiroPlanLines` in `src/web/util.ts`). Kiro's own line is quoted under it only where
-AgentK couldn't read it: the overage quote is dropped once AgentK read its credits or its on/off,
-since the line above already says it, and the bonus line is still quoted (its format is a guess, no
-real bonus output has been seen). Its tooltip
+printed them (`kiroPlanLines` in `src/web/util.ts`). Kiro's own line is quoted under it unless the
+line above already states everything AgentK read from it: the overage quote is dropped only for the
+seen `Overages: Disabled` shape (on/off read, no credits), which `Overage off` fully states; a line
+that also carries credits keeps its quote, since the line above shows only the credits and that
+amount is still a guess, and the bonus line is always quoted (its format is unseen). Its tooltip
 says it's Kiro's estimate of all your Kiro use, with its age. The reading is dropped once its reset day has come (UTC midnight), and while
 Kiro isn't available.
 

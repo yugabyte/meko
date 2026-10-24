@@ -75,31 +75,17 @@ describe('projects pane', () => {
 describe("Kiro's plan lines", () => {
   const plan = (over: KiroPlan['overage'], bonus: KiroPlan['bonus'] = null): Pick<KiroPlan, 'bonus' | 'overage'> => ({ bonus, overage: over });
 
-  it('states overage off without quoting Kiro, since it read the line', () => {
-    expect(kiroPlanLines(plan({ credits: null, enabled: false, line: 'Overages: Disabled' }))).toEqual({
-      extra: ['Overage off'], said: [],
-    });
-  });
-
-  it('states overage billed without quoting Kiro', () => {
-    expect(kiroPlanLines(plan({ credits: 14.2, enabled: true, line: 'Overages: 14.20 credits ($0.57), enabled' }))).toEqual({
-      extra: ['Overage 14.2 billed'], said: [],
-    });
-  });
-
-  it("quotes Kiro's overage line only when it read nothing from it", () => {
-    expect(kiroPlanLines(plan({ credits: null, enabled: null, line: 'Overage: something new' }))).toEqual({
-      extra: [], said: ['Overage: something new'],
-    });
-  });
-
-  it('keeps quoting the bonus line, whose format is still a guess', () => {
-    expect(kiroPlanLines(plan(null, { used: 380, total: 500, expires: '2026-11-30', line: 'Bonus credits: 380.00/500 (expires 2026-11-30)' }))).toEqual({
-      extra: ['Bonus 120 of 500 left'], said: ['Bonus credits: 380.00/500 (expires 2026-11-30)'],
-    });
-  });
-
-  it('has no lines without a bonus or overage', () => {
-    expect(kiroPlanLines(plan(null, null))).toEqual({ extra: [], said: [] });
+  it.each<[string, Pick<KiroPlan, 'bonus' | 'overage'>, { extra: string[]; said: string[] }]>([
+    // The one form seen (`Overages: Disabled`): on/off read, no credits, so `extra` says it all and the quote goes.
+    ['overage off: stated, not quoted', plan({ credits: null, enabled: false, line: 'Overages: Disabled' }), { extra: ['Overage off'], said: [] }],
+    // Credits read too: `extra` shows only the credits, so the on/off and the rest stay in the quote (the format is unseen).
+    ['overage with credits: stated and still quoted', plan({ credits: 14.2, enabled: true, line: 'Overages: 14.20 credits ($0.57), enabled' }), { extra: ['Overage 14.2 billed'], said: ['Overages: 14.20 credits ($0.57), enabled'] }],
+    // Nothing read: only the quote carries it.
+    ['overage unread: quoted only', plan({ credits: null, enabled: null, line: 'Overage: something new' }), { extra: [], said: ['Overage: something new'] }],
+    // Bonus format is unseen, so it's always quoted.
+    ['bonus: stated and quoted', plan(null, { used: 380, total: 500, expires: '2026-11-30', line: 'Bonus credits: 380.00/500 (expires 2026-11-30)' }), { extra: ['Bonus 120 of 500 left'], said: ['Bonus credits: 380.00/500 (expires 2026-11-30)'] }],
+    ['neither: no lines', plan(null, null), { extra: [], said: [] }],
+  ])('%s', (_, input, expected) => {
+    expect(kiroPlanLines(input)).toEqual(expected);
   });
 });

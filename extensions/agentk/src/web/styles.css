@@ -1121,7 +1121,7 @@ textarea.input {
   font-size: 10.5px;
   padding-left: 54px;
 }
-/* Kiro's own bonus and overage lines, quoted under what AgentK read from them. */
+/* Kiro's own bonus and overage lines, quoted under what AgentK read unless that already states the whole line. */
 .lim-said {
   font-family: var(--mono);
   font-size: 10.5px;
