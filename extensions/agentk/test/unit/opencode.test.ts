@@ -54,6 +54,8 @@ describe("an OpenCode session's command line", () => {
     expect(spec.env).toMatchObject({ AK_SESSION: 's1', AK_OPENCODE_SOURCE: 'startup', OPENCODE_DISABLE_PROJECT_CONFIG: '1' });
     // Meko is off here: no Meko server for it.
     expect(spec.env).not.toHaveProperty('OPENCODE_CONFIG');
+    // OpenCode's session tabs off, by its 2.0.20+ key and the legacy one before it.
+    expect(JSON.parse(spec.env.OPENCODE_CLI_CONFIG_CONTENT)).toEqual({ tabs: { mode: 'off', enabled: false } });
     const cfg = JSON.parse(spec.env.OPENCODE_CONFIG_CONTENT);
     expect(cfg).toEqual({
       plugin: [openCodePluginPath(paths)], instructions: [expect.stringMatching(/sessions\/s1\/system\.md$/)],
@@ -65,6 +67,7 @@ describe("an OpenCode session's command line", () => {
       row, resume: false, prompt: 'hi', systemPrompt: '', addDirs: ['/designs/s1'], modDir: null, planMode: false,
       env: {}, unsetEnv: [], untrusted: false, tools: true,
     });
+    expect(trusted.env.OPENCODE_CLI_CONFIG_CONTENT).toBe(spec.env.OPENCODE_CLI_CONFIG_CONTENT);
     expect(JSON.parse(trusted.env.OPENCODE_CONFIG_CONTENT)).toMatchObject({
       mcp: { agentk_sessions: { type: 'local', command: expect.arrayContaining([process.execPath, expect.stringMatching(/mcpmain\.ts$/)]) } },
       skills: { paths: [join(paths.run, 'tools', 'skills')] },
