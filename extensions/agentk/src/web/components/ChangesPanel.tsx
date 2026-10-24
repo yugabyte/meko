@@ -642,7 +642,7 @@ function BaseMenu({ session, base, onPick }: { session: Session; base: string; o
 
 /**
  * A button that opens a filterable list: type to filter, arrows and Enter to pick, Escape or a click
- * outside to close. `items` null while they load.
+ * outside to close. `items` null while they load. The filter takes focus on opening, except on touch.
  */
 function FilterMenu<T>(props: {
   label: ReactNode;
@@ -668,6 +668,8 @@ function FilterMenu<T>(props: {
   const [sel, setSel] = useState(0);
   const root = useRef<HTMLSpanElement>(null);
   const list = useRef<HTMLUListElement>(null);
+  // On touch, focusing the filter would bring up the keyboard over the list; a tap on it does that.
+  const touch = useTouch();
 
   useEffect(() => {
     if (!open) return;
@@ -727,7 +729,7 @@ function FilterMenu<T>(props: {
             className="files-filter mono"
             placeholder={props.placeholder}
             aria-label={props.placeholder}
-            autoFocus
+            autoFocus={!touch}
             value={q}
             onChange={(e) => {
               setQ(e.target.value);

@@ -5,6 +5,7 @@ import { expandBranchPrefix } from '../../shared/branches';
 import { api, errorMessage } from '../api';
 import { pastedImages } from '../clipboard';
 import { HeldImages as HeldImageList } from '../heldImages';
+import { useTouch } from '../hooks/useMedia';
 import { cx, noAgent, repoFolder, slugify } from '../util';
 import { AttachPrPicker } from './AttachPrPicker';
 import { AgentPicker, Busy, Dialog, ErrorText, Field, LEARN_LABEL, StartPicker, type StartChoice } from './common';
@@ -49,6 +50,8 @@ export function NewSessionDialog({
   onClose: () => void;
   onCreated: (s: Session) => void;
 }) {
+  // On touch, the keyboard comes up only when a field is tapped.
+  const touch = useTouch();
   const [name, setName] = useState(initial?.name ?? '');
   const [nameEdited, setNameEdited] = useState(!!initial?.name);
   const [prompt, setPrompt] = useState(initial?.prompt ?? '');
@@ -386,7 +389,7 @@ export function NewSessionDialog({
               setName(e.target.value);
               setNameEdited(true);
             }}
-            autoFocus
+            autoFocus={!touch}
           />
         </Field>
         {learn && learnFirst && (

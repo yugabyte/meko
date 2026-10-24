@@ -128,7 +128,9 @@ works, and a refetch draw again only the files that changed. Files also
 have `content-visibility: auto`, so the browser lays out and paints a file only once it comes near
 the screen, assuming the height of the rows it will draw until then. Every file stays in the DOM,
 so jumps, `[` / `]`, find in page and comment threads work as before. A JS virtual list was
-rejected for that reason. Measured in Chromium at phone size with the CPU slowed 6×, about 1,000
+rejected for that reason. The page sets `text-size-adjust: 100%`: iOS enlarges small text in wide
+blocks such as a diff's long rows when it lays them out again, so without it the code grew each time
+a file scrolled back into view. Measured in Chromium at phone size with the CPU slowed 6×, about 1,000
 rows over several files open in about 0.7 s (2,000 rows took 2.2–2.5 s before), a push takes
 4–5 ms (60–110 ms before), and a refetch that changes nothing 18–25 ms of script (66–99 ms before).
 Untracked files over 1 MB aren't read (no diff, 0 lines), and at most 32 MB of untracked files is
@@ -373,7 +375,9 @@ header (Settings) on their own row under the title and its × (focus still goes 
 ×, as on a desktop). The app and the
 overlay behind a dialog or sheet are pinned to the visible viewport (its height and, where iOS pans
 the page for a focused field, its offset), so the on-screen keyboard shrinks them instead of
-covering the prompt or a dialog's fields; the page itself never scrolls, since the app puts its
+covering the prompt or a dialog's fields. On a touch screen the keyboard comes up only when you tap
+a field: opening a dialog (New project, New session, Open PR) or the Changes panel's Files, commit
+and base menus doesn't focus a text field. The page itself never scrolls, since the app puts its
 scroll back at the top. (Signing in is Meko's page.)
 While you type, the terminal stays scrolled to its newest line. On
 touch screens the terminal gets a key bar (Tab, arrows, Ctrl+C, Enter, select mode, typing mode,
