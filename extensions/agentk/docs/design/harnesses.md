@@ -143,7 +143,7 @@ agent choice and sign-in check:
 | Design guard | JSON deny | the plugin throws the reason | `kiro-guard.sh`: exit 2, the reason on stderr |
 | Conversation id | chosen (`--session-id`) | OpenCode's, from the plugin's events | Kiro's, from its hooks' `session_id`, else its session store |
 | AgentK's mod, Artifact designs | yes | no | no |
-| [Session tools](tools.md) and their skill | `--mcp-config run/tools/mcp.json`, the skill plugin `run/tools/claude` via `--plugin-dir`, `list` in `permissions.allow` | `mcp.agentk_sessions`, `skills.paths` and an `ask` rule for each write tool in `OPENCODE_CONFIG_CONTENT` | the `agentk` agent's `mcpServers.agentk_sessions`, the skill as a `skill://` resource, `@agentk_sessions/list` in `allowedTools` |
+| [Session tools](tools.md) and their skill | `--mcp-config run/tools/mcp.json`, the skill plugin `run/tools/claude` via `--plugin-dir`, `list` in `permissions.allow` | `mcp.agentk_sessions`, `skills.paths` and an `ask` rule for each write tool in `OPENCODE_CONFIG_CONTENT` | the `agentk` agent's `mcpServers.agentk_sessions`, the skill as a `skill://` resource (Kiro asks before each tool, `list` too) |
 | Plan limits in the rail | 5-hour and weekly, from the status line and the mod | none (they're the provider's) | credits this period, from `/usage` hourly |
 | Needs-you and interrupt signals | `PermissionRequest`, `Notification`, the mod's `/mod/turn` | `permission.asked` (an interrupted turn ends with its `session.idle`) | none |
 | Usage | transcript tokens, priced | tokens from the plugin's log, priced | credits from Kiro's session file |

@@ -1,6 +1,6 @@
 ---
 name: agentk-sessions
-description: Open AgentK projects, start AgentK sessions (from a task, or from GitHub issues and PRs such as #5), move sessions between stages (Explore, Design, Code, PR & Review) and open a session's PR, with the agentk_sessions tools. Use when the user asks to start, open or create sessions or projects in AgentK, to work on issues or PRs in new sessions, or to move a session to a stage.
+description: "Open AgentK projects, start AgentK sessions (from a task, or from GitHub issues and PRs such as #5), move sessions between stages (Explore, Design, Code, PR & Review) and open a session's PR, with the agentk_sessions tools. Use when the user asks to start, open or create sessions or projects in AgentK, to work on issues or PRs in new sessions, or to move a session to a stage."
 ---
 
 # AgentK's session tools
@@ -28,8 +28,9 @@ lets you act on AgentK the way the user does in its UI. Its tools are `list`, `s
    - Every session to start goes in one `start_sessions` call (up to 8): `{ ref }` for an issue or
      a PR (a PR starts a review), or `{ name, prompt }` for a task, with the user's own words as
      the prompt. Each starts at Design unless the user names another stage.
-   - `move_session` moves one session (this one too) to `explore`, `design`, `code` or `review`
-     (PR & Review). Pass what the user asked for in that stage as `instructions`.
+   - `move_session` moves one session to `explore`, `design`, `code` or `review` (PR & Review).
+     Pass what the user asked for in that stage as `instructions`. This session's own move goes
+     once this turn ends: ask for it last, then end your turn.
    - `open_pr` opens the PR of another session in Code. It never opens this session's PR: tell
      the user to use Open PR in AgentK for that.
    - `open_project` opens a project on a repo AgentK scans, GitHub `owner/name`, or a clone URL.

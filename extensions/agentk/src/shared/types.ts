@@ -1449,8 +1449,9 @@ export interface AskAgentkTurn {
 export type AskAgentkAction =
   | { type: 'start'; projectId: string; start: StartStage; name: string; prompt: string }
   /**
-   * A PR or issue (`owner/name#N` or its link). With `projectId` it can run as it is (POST
-   * /api/github-link/start): a PR as a Review a PR session, an issue as a task at `start` (Design by default).
+   * A PR or issue (`owner/name#N` or its link). In Do all (POST /api/actions/run) it runs as
+   * `githubLinks.start` does, in `projectId` or the project the link fits: a PR as a Review a PR
+   * session, an issue as a task at `start` (Design by default), refusing an issue a running task works on.
    */
   | { type: 'link'; ref: string; projectId?: string; start?: 'design' | 'code' }
   | { type: 'go'; view: 'session'; projectId: string; sessionId: string }

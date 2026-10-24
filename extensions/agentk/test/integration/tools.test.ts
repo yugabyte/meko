@@ -84,7 +84,7 @@ describe("AgentK's session tools through agentk mcp (real session host + git, fa
     await env.cleanup();
   });
 
-  it('lists, starts sessions on issues and a task in one call, moves sessions (its own too), and never opens its own PR', async () => {
+  it('lists, starts sessions on issues and a task in one call, moves sessions (its own at its turn\'s end), and never opens its own PR', async () => {
     const t = await connect(lead);
     const { tools } = await t.client.listTools();
     expect(tools.map((x) => [x.name, x.annotations?.readOnlyHint])).toEqual([
@@ -117,7 +117,12 @@ describe("AgentK's session tools through agentk mcp (real session host + git, fa
     expect(await t.call('move_session', { sessionId: abc, stage: 'code' })).toEqual({ isError: false, text: 'Moved "ABC cleanup" to Code.' });
     expect(env.core.sessions.get(abc).stage).toBe('code');
     expect(events(abc)).toEqual(['Moved to Code by the agent in Lead']);
-    expect((await t.call('move_session', { sessionId: lead, stage: 'code' })).text).toBe('Moved "Lead" to Code.');
+    // Its own move waits for its turn to end: the agent asked mid-turn.
+    expect((await t.call('move_session', { sessionId: lead, stage: 'code' })).text).toBe('Moving "Lead" to Code once this turn ends.');
+    expect(env.core.sessions.get(lead).stage).toBe('explore');
+    await env.core.sessions.submit(lead, 'carry on');
+    await waitFor(() => events(lead), (e) => e.includes('Moved to Code by its agent, at the turn\'s end'), 10000, 'the move at the turn\'s end');
+    expect(env.core.sessions.get(lead).stage).toBe('code');
     expect(await t.call('open_pr', { sessionId: lead })).toEqual({
       isError: true, text: "Couldn't open the PR for \"Lead\": a session doesn't open its own PR: the user does, with Open PR in AgentK",
     });
@@ -128,7 +133,8 @@ describe("AgentK's session tools through agentk mcp (real session host + git, fa
       expect.stringMatching(/^Couldn't start a session on acme\/demo#1/),
       expect.stringMatching(/^Couldn't start a session on acme\/demo#404/),
       'Moved "ABC cleanup" to Code.',
-      'Moved "Lead" to Code.',
+      'Moving "Lead" to Code once this turn ends.',
+      'Moved to Code by its agent, at the turn\'s end',
       expect.stringMatching(/^Couldn't open the PR for "Lead"/),
     ]);
   });
@@ -145,10 +151,64 @@ describe("AgentK's session tools through agentk mcp (real session host + git, fa
     expect(launches().at(-1)).not.toContain(toolsPluginDir(env.core.paths));
     expect(await t.call('list')).toEqual({ isError: true, text: "AgentK's session tools are turned off (Settings → General in AgentK)." });
     env.core.config.tools.enabled = true;
-    run(env.core.db, 'UPDATE sessions SET untrusted = 1 WHERE id = ?', abc);
-    expect((await t.call('move_session', { sessionId: lead, stage: 'code' })).text).toMatch(/^This session works on a PR from a public repo/);
+    // A PR head from a public repo, and one not checked yet (a PR linked since the launch), can't use them.
+    for (const untrusted of [1, null]) {
+      run(env.core.db, "UPDATE sessions SET untrusted = ?, branch_reused = 1, pr_number = 7, pr_url = 'https://github.com/acme/demo/pull/7' WHERE id = ?", untrusted, abc);
+      expect((await t.call('move_session', { sessionId: lead, stage: 'code' })).text).toMatch(/^This session works on a PR from a public repo, or one AgentK hasn't checked yet/);
+    }
     expect(env.core.sessions.get(lead).stage).toBe('explore');
+    run(env.core.db, 'UPDATE sessions SET untrusted = NULL, branch_reused = 0, pr_number = NULL, pr_url = NULL WHERE id = ?', abc);
+    // A call still running when the hook socket closes (a stop, a restart) is answered then, so it doesn't hold the socket open.
+    issue(2, 'Slow');
+    env.core.githubLinks.start = () => new Promise(() => undefined);
+    const slow = t.call('start_sessions', { sessions: [{ ref: 'acme/demo#2' }] });
+    await new Promise((r) => setTimeout(r, 300));
+    env.core.tools.pause();
+    expect((await slow).text).toMatch(/^AgentK is restarting, so it couldn't wait for this/);
     expect((await (await connect(null)).call('list')).text).toBe("This isn't an AgentK session, so AgentK's session tools can't be used here.");
     expect((await (await connect(null, 'not-a-token')).call('list')).text).toBe('AgentK no longer runs this session, so its session tools are off.');
+  });
+
+  it('opens projects on a scanned repo or a GitHub repo, never another folder, and runs Do all through the route', async () => {
+    const t = await connect(lead);
+    const other = gitRepo(join(env.home, 'code', 'other'));
+    expect(await t.call('open_project', { repo: other, datapack: 'none' })).toEqual({ isError: false, text: `Opened other on ${other}.` });
+    // owner/name with a clone here uses the clone; a new datapack falls back to none at the plan's limit.
+    (env.meko as unknown as { createDatapack: () => Promise<never> }).createDatapack = async () => {
+      throw new Error('FREE_TIER_DATAPACK_LIMIT: Upgrade to Standard to create a new datapack');
+    };
+    const opened = await t.call('open_project', { repo: 'acme/demo', name: 'Demo 2' });
+    expect(opened).toEqual({ isError: false, text: `Opened Demo 2 on ${join(env.home, 'code', 'demo')}.` });
+    expect(env.core.projects.get(env.core.actionProjects().find((p) => p.name === 'Demo 2')!.id).datapacks).toEqual([]);
+    expect((await t.call('open_project', { repo: join(env.home, 'elsewhere') })).text)
+      .toMatch(/isn't a repo in your repos folders, a GitHub owner\/name or a clone URL$/);
+
+    // Do all: go actions left out, the rest checked again and run in order, one result each.
+    const { buildServer } = await import('../../src/server/server.js');
+    const { issueSetupToken } = await import('../../src/server/auth.js');
+    const app = await buildServer(env.core, { tls: null, webDir: null, updater: null });
+    try {
+      const setup = await app.inject({ method: 'POST', url: '/api/auth/setup', payload: { token: issueSetupToken(env.core.db), username: 'me', password: 'correct horse battery' } });
+      const cookie = String(setup.headers['set-cookie']).split(';')[0];
+      const runActions = (actions: unknown[]) => app.inject({ method: 'POST', url: '/api/actions/run', headers: { cookie }, payload: { actions } });
+      const r = await runActions([
+        { type: 'go', view: 'usage' },
+        { type: 'move', sessionId: abc, stage: 'code' },
+        { type: 'move', sessionId: 'gone', stage: 'code' },
+        { type: 'start', projectId, name: 'Docs', prompt: 'Update the docs', start: 'design' },
+      ]);
+      expect(r.statusCode).toBe(200);
+      expect(r.json()).toEqual({
+        results: [
+          { ok: true, text: 'Moved "ABC cleanup" to Code.', projectId, sessionId: abc },
+          { ok: true, text: 'Started "Docs" in Demo at Design.', projectId, sessionId: expect.any(String) },
+        ],
+        notes: ["Left out a move of a session that isn't running."],
+      });
+      expect((await runActions(Array(9).fill({ type: 'go', view: 'usage' }))).statusCode).toBe(400);
+      expect((await runActions([{ type: 'go', view: 'usage' }])).json()).toMatchObject({ error: 'There was nothing to run.' });
+    } finally {
+      await app.close();
+    }
   });
 });

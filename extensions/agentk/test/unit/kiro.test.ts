@@ -24,12 +24,13 @@ describe("Kiro's agentk agent", () => {
         preToolUse: [{ matcher: 'fs_write', command: '/run/kiro-guard.sh' }],
       },
     });
-    const tools = { name: 'agentk_sessions', server: { command: '/ak/node', args: ['/ak/mcpmain.js'] }, skill: '/ak/run/tools/skills/agentk-sessions/SKILL.md', allowed: ['@agentk_sessions/list'] };
+    const tools = { name: 'agentk_sessions', server: { command: '/ak/node', args: ['/ak/mcpmain.js'] }, skill: '/ak/run/tools/skills/agentk-sessions/SKILL.md' };
     const base = { ...meko, mcpServers: { meko: { url: 'https://meko.test/mcp' } }, resources: ['file://AGENTS.md'], allowedTools: ['read'] };
     expect(agentkAgent(base, ours, { tools })).toMatchObject({
       mcpServers: { meko: { url: 'https://meko.test/mcp' }, agentk_sessions: tools.server },
       resources: ['file://AGENTS.md', 'skill:///ak/run/tools/skills/agentk-sessions/SKILL.md'],
-      allowedTools: ['read', '@agentk_sessions/list'],
+      // Nothing more is allowed than the base allows: Kiro asks before each session tool too.
+      allowedTools: ['read'],
     });
   });
 

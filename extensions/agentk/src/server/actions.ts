@@ -9,6 +9,7 @@ import {
 import type { Core } from './core.js';
 import { repoNameFromUrl } from './git.js';
 import type { ModReply } from './hooks.js';
+import { repoConfigTrusted } from './headtrust.js';
 import { errMsg } from './log.js';
 import { repoKey } from './paths.js';
 import { HttpError } from './projects.js';
@@ -211,6 +212,12 @@ async function runOne(core: Core, a: Exclude<AskAgentkAction, { type: 'go' }>, b
       return { ok: true, text: `Started ${what} ${a.ref}, "${session.name}", in ${project.name}.`, projectId: project.id, sessionId: session.id };
     }
     case 'move': {
+      // The calling session is mid-turn (its agent is running the tool), and a move waits for a
+      // turn's end, as the move dialog does: it goes when this turn ends (Lifecycle.onTurnEnd).
+      if (by.session?.id === a.sessionId) {
+        core.tools.queueSelfMove(a.sessionId, { stage: a.stage, instructions: a.instructions });
+        return { ok: true, text: `Moving "${by.session.name}" to ${STAGE_LABELS[a.stage]} once this turn ends.`, projectId: by.session.project_id, sessionId: a.sessionId };
+      }
       const s = await core.sessions.move(a.sessionId, { stage: a.stage, instructions: a.instructions || undefined });
       return { ok: true, text: `Moved "${s.name}" to ${STAGE_LABELS[a.stage]}.`, projectId: s.projectId, sessionId: s.id };
     }
@@ -279,15 +286,77 @@ function answer(text: string, isError = false): ModReply {
   return { status: 200, body: { text, isError } };
 }
 
+/** The answer to a call still running when the hook socket closes (a stop, a restart, a rebind). */
+const CLOSING_TEXT = "AgentK is restarting, so it couldn't wait for this. What it started may still finish: call list in a minute to see what's there now.";
+
+/** A promise and what settles it. */
+function closingSignal(): { promise: Promise<void>; resolve: () => void } {
+  let resolve = () => {};
+  const promise = new Promise<void>((r) => (resolve = r));
+  return { promise, resolve };
+}
+
+/** A move a session's own agent asked for, waiting for its turn to end. */
+interface SelfMove {
+  stage: MoveTarget;
+  instructions: string;
+}
+
 export class SessionTools {
+  /** Settles when the hook socket closes (`pause`): calls still running are answered then, so none holds the socket open. */
+  private closing = closingSignal();
+  /** Moves of a session by its own agent, by session id, for its turn's end (in memory: a restart drops them). */
+  private selfMoves = new Map<string, SelfMove>();
+
   constructor(private core: Core) {}
 
-  /** A tool call from `agentk mcp` in `row`'s session: `{ v, tool, input }`. */
-  async call(row: SessionRow, body: Record<string, unknown>): Promise<ModReply> {
+  /**
+   * A tool call from `agentk mcp` in `row`'s session: `{ v, tool, input }`. Answered at once if the
+   * hook socket closes first: a call that clones a repo can take minutes, and the socket's close
+   * (a stop, a restart, a rebind) waits for every request still open.
+   */
+  call(row: SessionRow, body: Record<string, unknown>): Promise<ModReply> {
+    return Promise.race([this.callNow(row, body), this.closing.promise.then(() => answer(CLOSING_TEXT, true))]);
+  }
+
+  /** The hook socket is closing: answers every call still running. Calls after it wait on the next close. */
+  pause(): void {
+    this.closing.resolve();
+    this.closing = closingSignal();
+  }
+
+  queueSelfMove(id: string, move: SelfMove): void {
+    this.selfMoves.set(id, move);
+  }
+
+  /**
+   * The session's turn ended (Lifecycle.onTurnEnd): a move its own agent asked for goes now, with
+   * the move dialog's checks, and its outcome is written to the session's log. An interrupted turn
+   * drops it. True when one was waiting.
+   */
+  async turnEnded(id: string, interrupted: boolean): Promise<boolean> {
+    const move = this.selfMoves.get(id);
+    if (!move) return false;
+    this.selfMoves.delete(id);
+    if (interrupted) {
+      this.core.sessions.event(id, 'tools', `Didn't move to ${STAGE_LABELS[move.stage]}: the turn that asked for it was interrupted`);
+      return true;
+    }
+    try {
+      await this.core.sessions.move(id, { stage: move.stage, instructions: move.instructions || undefined });
+      this.core.sessions.event(id, 'tools', `Moved to ${STAGE_LABELS[move.stage]} by its agent, at the turn's end`);
+    } catch (e) {
+      this.core.sessions.event(id, 'tools', `Couldn't move to ${STAGE_LABELS[move.stage]}: ${errMsg(e)}`);
+    }
+    return true;
+  }
+
+  private async callNow(row: SessionRow, body: Record<string, unknown>): Promise<ModReply> {
     if (!this.core.config.tools.enabled) return answer("AgentK's session tools are turned off (Settings → General in AgentK).", true);
     // A PR head from a public repo could be steering the agent: it gets no say over other sessions.
-    if (row.untrusted === 1) {
-      return answer("This session works on a PR from a public repo, so AgentK's session tools are off in it. Ask the user to do this in AgentK.", true);
+    // Not checked yet (a PR linked since the launch) counts as untrusted, as the launch has it.
+    if (!repoConfigTrusted(row)) {
+      return answer("This session works on a PR from a public repo, or one AgentK hasn't checked yet, so AgentK's session tools are off in it. Ask the user to do this in AgentK.", true);
     }
     const tool = str(body.tool) as ToolName;
     const input = isObject(body.input) ? body.input : {};

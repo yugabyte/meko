@@ -329,12 +329,12 @@ export class Core extends EventEmitter {
     return { own: this.openCodeMekoAt.own };
   }
 
-  /** The machine's short host name: what the rail shows when `[server] name` is unset. */
   /** The open projects with their sessions, as Ask AgentK and the session tools see them (their GitHub repo not read yet). */
   actionProjects(): ActionProject[] {
     return projectRows(this.db).map((r) => ({ id: r.id, name: r.name, repoPath: r.repo_path, sessions: this.sessions.listForProject(r.id) }));
   }
 
+  /** The machine's short host name: what the rail shows when `[server] name` is unset. */
   hostName(): string {
     return shortHost(this.hostFull);
   }
@@ -582,8 +582,10 @@ export class Core extends EventEmitter {
     this.hookServer = null;
     if (!server) return;
     // Held mod polls would keep the socket open until they time out (20 s), and no hook could
-    // reach the server meanwhile: answer them now, and hold none until it's bound again.
+    // reach the server meanwhile: answer them now, and hold none until it's bound again. A session
+    // tools call can run for minutes (a clone): it's answered now too, though its work may go on.
     this.sessions.mod.pause();
+    this.tools.pause();
     await new Promise<void>((r) => server.close(() => r()));
     if (this.hookSockId && socketId(this.paths.hookSock) === this.hookSockId) rmSync(this.paths.hookSock, { force: true });
     this.hookSockId = null;

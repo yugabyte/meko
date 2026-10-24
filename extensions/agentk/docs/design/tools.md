@@ -31,7 +31,10 @@ sequenceDiagram
   `AK_HOOK_SOCK` and `AK_HOOK_TOKEN`. Claude Code, OpenCode and Kiro all pass the session's
   environment to stdio MCP servers (checked on Claude Code 2.1.302, OpenCode 1.19.4 and kiro-cli
   2.32.0). It loads nothing of the
-  server's, and it checks nothing itself. With no token (a chat started as `agentk` outside AgentK),
+  server's, and it checks nothing itself. A call can run for minutes (a start that clones a repo
+  first). When the hook socket closes (a stop, a restart, a rebind), `SessionTools.pause()` answers
+  every call still running, saying what it started may still finish, as held mod polls are answered,
+  so no call holds the socket's close, or the server's stop, open. With no token (a chat started as `agentk` outside AgentK),
   every call says it isn't an AgentK session. If the server can't be reached, the call says AgentK
   isn't running.
 - **The command.** An install starts it as `app/current/node/bin/node
@@ -50,7 +53,7 @@ sequenceDiagram
 |---|---|---|
 | `list` | `projectId?` | The open projects (id, name, repo folder, `github`: `owner/name` from its upstream, else its origin) and their running sessions (id, name, stage, status, branch, harness, PR), with the caller marked `self`. Read only. |
 | `start_sessions` | `sessions`: 1 to 8 of `{ ref }` (a GitHub issue or PR) or `{ name, prompt }`, each with `projectId?` (default: the caller's) and `stage?` | A `link` action for a ref: `githubLinks.start` with the project, so an issue becomes a task (at Design, or the stage given) and a PR becomes a Review a PR session. A `start` action for a task. An issue that a running task already works on is refused (`once`), as a PR a running review is. |
-| `move_session` | `sessionId`, `stage`, `instructions?` | The `move` action, with the move dialog's rules (`moveBlockedIn`, `moveError`). The calling session may move itself. |
+| `move_session` | `sessionId`, `stage`, `instructions?` | The `move` action, with the move dialog's rules (`moveBlockedIn`, `moveError`). The calling session may move itself: its agent asks mid-turn, and a move waits for a turn's end, so the move is held for this one (`SessionTools.queueSelfMove`) and runs from `Lifecycle.onTurnEnd` (`turnEnded`), its outcome in the session's log. An interrupted turn drops it, and so does a restart (it's kept in memory). |
 | `open_pr` | `sessionId`, `instructions?` | Open PR on a session in Code. It's refused for the calling session, because a session's own PR stays the user's gate. |
 | `open_project` | `repo`, `name?`, `datapack?` | The `openProject` action. `repo` is a scanned repo's path, GitHub `owner/name` (its clone here, else cloned), or a clone URL, and never another folder, which the Open project dialog would make a repo. `datapack` is `new` (a new dedicated datapack while Meko is on, the default), `none`, or a datapack's id. |
 
@@ -70,14 +73,16 @@ sequenceDiagram
 The tools and Ask AgentK's **Do all** (`POST /api/actions/run`, [palette](palette.md#ask-agentk))
 both run through `runActions()`, so neither can do anything the user couldn't do in the UI.
 
-**Who may.** The tools refuse every call from a session whose PR head isn't trusted
-(`sessions.untrusted = 1`, [Code from public repos](security.md#code-from-public-repos)), since text
+**Who may.** The tools refuse every call from a session whose PR head isn't known to be trusted
+(`repoConfigTrusted()`, as its launch uses: a public repo's PR head, or one not checked yet, such as a
+PR linked since the launch; [Code from public repos](security.md#code-from-public-repos)), since text
 from a public repo's PR could be steering the agent. Such a session is launched without the tools
 on Claude Code, too. Kiro's agent file is shared by every session, so a Kiro session on an untrusted
 PR head has the tools, and the route refuses them. The write tools (`start_sessions`,
 `move_session`, `open_pr`, `open_project`) go through each harness's own permission ask; only `list`
 is pre-allowed: `mcp__agentk_sessions__list` in Claude Code's `permissions.allow`
-(`writeHookFiles`), and `@agentk_sessions/list` in the Kiro agent's `allowedTools`. OpenCode allows
+(`writeHookFiles`). Kiro asks before `list` too: the `agentk` agent in the user's Kiro home grants
+nothing their own agent doesn't, and `--trust-tools=<list>` would trust only that list. OpenCode allows
 every tool unless its config says otherwise, so a session's config sets `ask` for each write tool
 (`agentk_sessions_<tool>`: OpenCode names an MCP tool `<server>_<tool>`). With
 `[kiro] trust_tools`, Kiro runs every tool without asking, these included. Every action is written
@@ -87,8 +92,8 @@ as a `tools` event on the calling session (what it came to) and on the session i
 ## Per harness
 
 The server writes the tools' files to `run/tools/` at start (`writeToolFiles`, through temp files
-renamed into place). Sessions start without the tools when the skill's source is missing from the
-install (`toolsReady`):
+renamed into place). When the skill's source is missing from the install, it removes the folder, so
+sessions start without the tools (`toolsReady`) rather than with an earlier start's command:
 
 - `mcp.json`: the MCP server, for Claude Code's `--mcp-config` (OpenCode's and Kiro's name the same
   command in their own config). It's added to the user's own

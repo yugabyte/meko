@@ -16,7 +16,7 @@ import { errMsg, type Logger } from '../log.js';
 import { claudePath, type Paths } from '../paths.js';
 import { HttpError } from '../projects.js';
 import type { SessionRow } from '../store.js';
-import { kiroAllowedTools, TOOLS_SERVER } from '../tooldefs.js';
+import { TOOLS_SERVER } from '../tooldefs.js';
 import { kiroToolsServer, skillPath, toolsReady } from '../tools.js';
 import { recordKiroTurns } from '../usage.js';
 import type { Harness } from './types.js';
@@ -58,7 +58,7 @@ export function writeAgentkAgent(paths: Paths, cfg: Config): boolean {
   const name = kiroDefaultAgentName();
   const base = (name && name !== AGENTK_AGENT ? readKiroAgent(name) : null) ?? builtinKiroAgent(paths);
   const tools = toolsReady(paths, cfg.tools.enabled)
-    ? { name: TOOLS_SERVER, server: kiroToolsServer(paths), skill: claudePath(skillPath(paths)), allowed: kiroAllowedTools() }
+    ? { name: TOOLS_SERVER, server: kiroToolsServer(paths), skill: claudePath(skillPath(paths)) }
     : null;
   return writeKiroAgent(agentkAgent(base, agentkHooks(paths), { mekoCapture: cfg.meko.captureTranscripts, tools }));
 }

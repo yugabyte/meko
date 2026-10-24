@@ -410,7 +410,8 @@ function GeneralTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObje
         <span className="hint">
           Sessions get AgentK’s session tools, so when you ask, the agent can open projects, start sessions (from GitHub
           issues and PRs too), move sessions to another stage and open another session’s PR. The agent asks before each
-          change, as for its other tools. Takes effect from each session’s next start.
+          change, as for its other tools, unless Kiro may run any tool without asking (Harness). Turning this off stops them at once;
+          turning it on reaches each session at its next start.
         </span>
       </div>
       <Field label="Server name" hint={`Shown in the rail next to your user name. Leave it empty to use this machine’s name (${s.hostName}).`}>

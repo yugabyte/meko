@@ -375,8 +375,8 @@ export class AskAgentk {
       // Checked against the state as it is now, not as it was when Claude started.
       const { actions, notes } = checkActions(answer.actions, this.deps.projects());
       outcome = { ok: true, actions: actions.length };
-      // Do all is offered for two or more steps.
-      return { reply: answer.reply, actions, together: answer.together && actions.length > 1, notes };
+      // Do all is offered for two or more steps: actions that do something, not a go, which only navigates.
+      return { reply: answer.reply, actions, together: answer.together && actions.filter((a) => a.type !== 'go').length > 1, notes };
     } finally {
       this.inFlight--;
       if (outcome) this.deps.record({ at: started, ...outcome, ms: Date.now() - started });

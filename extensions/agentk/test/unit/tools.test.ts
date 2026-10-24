@@ -20,10 +20,11 @@ describe("the session tools' files", () => {
     expect([toolsReady(paths, true), toolsReady(paths, false)]).toEqual([true, false]);
   });
 
-  it('writes nothing when the skill is missing from the install', () => {
+  it('removes what an earlier start wrote when the skill is missing from the install, so sessions start without the tools', () => {
     const paths = getPaths(join(tempDir('akl-tools-'), 'ak'));
+    writeToolFiles(paths);
     expect(writeToolFiles(paths, join(paths.home, 'nope', 'SKILL.md'))).toBe(false);
-    expect(existsSync(toolsMcpConfigPath(paths))).toBe(false);
+    expect([existsSync(toolsMcpConfigPath(paths)), existsSync(skillPath(paths)), toolsReady(paths, true)]).toEqual([false, false, false]);
   });
 
   it.each([

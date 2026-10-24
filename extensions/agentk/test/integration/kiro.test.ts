@@ -29,7 +29,8 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
       name: 'agentk', tools: ['*'], includeMcpJson: true,
       resources: ['file://AGENTS.md', `skill://${join(env.core.paths.run, 'tools', 'skills', 'agentk-sessions', 'SKILL.md')}`],
       mcpServers: { agentk_sessions: { command: process.execPath, args: expect.arrayContaining([expect.stringMatching(/mcpmain\.ts$/)]) } },
-      allowedTools: ['@agentk_sessions/list'],
+      // It grants nothing the base doesn't: Kiro asks before each session tool too.
+      allowedTools: [],
     });
     expect(agent).not.toHaveProperty('kiroUpgrade');
 

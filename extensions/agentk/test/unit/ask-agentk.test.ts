@@ -121,6 +121,11 @@ describe('asking AgentK', () => {
       reply: 'Both.', together: true, actions: [{ type: 'link', ref: 'yugabyte/agent-k-local#5', projectId: 'p1' }, { type: 'move', sessionId: 's-design', stage: 'code' }],
     } }) };
     expect((await service().ask({ text: 'start #5 and move Agentic search to Code' })).together).toBe(true);
+    // A go only navigates: one step and a go is no Do all.
+    answer = { stdout: JSON.stringify({ structured_output: {
+      reply: 'One.', together: true, actions: [{ type: 'link', ref: 'yugabyte/agent-k-local#5', projectId: 'p1' }, { type: 'go', view: 'usage' }],
+    } }) };
+    expect((await service().ask({ text: 'start #5 and show usage' })).together).toBe(false);
   });
 
   it.each([

@@ -1,7 +1,7 @@
 /**
  * AgentK's session tools as an agent sees them: the `agentk_sessions` MCP server's tools, with
  * their descriptions and input schemas. Kept on their own, with no imports, so `agentk mcp`
- * (mcp.ts) loads nothing else; the server answers them in tools.ts.
+ * (mcp.ts) loads nothing else; the server answers them in actions.ts (`SessionTools.call`).
  */
 
 /** The MCP server's name in every harness's config: Claude Code's tools are `mcp__agentk_sessions__<tool>`, Kiro's `@agentk_sessions/<tool>`. */
@@ -64,7 +64,8 @@ export const TOOL_DEFS: ToolDef[] = [
     name: 'move_session',
     description:
       "Moves an AgentK session to another stage (explore, design, code, or review for PR & Review), as the user's move dialog " +
-      'does, this session included. instructions: what the user asked for in that stage, if anything.',
+      "does. This session's own move goes once this turn ends, so ask for it last. instructions: what the user asked for in " +
+      'that stage, if anything.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -109,9 +110,4 @@ const READ_ONLY = TOOL_DEFS.filter((t) => t.readOnly).map((t) => t.name);
 /** Claude Code's names for them (`permissions.allow`). */
 export function claudeAllowedTools(): string[] {
   return READ_ONLY.map((t) => `mcp__${TOOLS_SERVER}__${t}`);
-}
-
-/** Kiro's: `@server/tool` in the agent's `allowedTools`. */
-export function kiroAllowedTools(): string[] {
-  return READ_ONLY.map((t) => `@${TOOLS_SERVER}/${t}`);
 }

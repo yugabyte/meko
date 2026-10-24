@@ -118,7 +118,7 @@ answers Claude Code's folder-trust question for worktrees):
   it on Claude Code.
 
 - [AgentK's session tools](tools.md), which start and move other sessions, refuse every call from an
-  untrusted session (`sessions.untrusted = 1`), and a Claude Code session launches without them;
+  untrusted session (`repoConfigTrusted()`: one not checked yet counts), and a Claude Code session launches without them;
   Kiro's shared agent file has them, and the route refuses them.
 
 Every session that has the tools can act on the others only through the same checks as the UI

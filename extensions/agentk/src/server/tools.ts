@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { claudePath, type Paths } from './paths.js';
@@ -106,14 +106,16 @@ function writeIfChanged(file: string, text: string): void {
 
 /**
  * Writes what sessions launch with: Claude Code's MCP config and skill plugin, and the skill's copy
- * Kiro and OpenCode read. Written at start whether or not the tools are on (the launch decides); false when the
- * skill's source is missing from this install, and then sessions start without the tools.
+ * Kiro and OpenCode read. Written at start whether or not the tools are on (the launch decides).
+ * False when the skill's source is missing from this install: the copies an earlier start wrote are
+ * removed, so sessions start without the tools (`toolsReady`) rather than with an old command.
  */
 export function writeToolFiles(paths: Paths, source = SKILL_SOURCE): boolean {
   let skill: string;
   try {
     skill = readFileSync(source, 'utf8');
   } catch {
+    rmSync(toolsDir(paths), { recursive: true, force: true });
     return false;
   }
   // Claude Code passes the session's environment to the server (AK_HOOK_SOCK, AK_HOOK_TOKEN), as Kiro does.

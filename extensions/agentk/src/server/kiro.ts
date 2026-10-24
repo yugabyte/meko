@@ -146,12 +146,11 @@ export interface KiroHook {
 /** AgentK's hooks for each Kiro event, added after the base agent's own. */
 export type KiroHooks = Partial<Record<'agentSpawn' | 'userPromptSubmit' | 'preToolUse' | 'postToolUse' | 'stop', KiroHook[]>>;
 
-/** AgentK's session tools in the `agentk` agent: their MCP server, the skill, and the tools Kiro runs without asking. */
+/** AgentK's session tools in the `agentk` agent: their MCP server and their skill. */
 export interface KiroTools {
   name: string;
   server: Json;
   skill: string;
-  allowed: string[];
 }
 
 /**
@@ -180,7 +179,6 @@ export function agentkAgent(base: Json, hooks: KiroHooks, o: { mekoCapture?: boo
     const list = (v: unknown) => (Array.isArray(v) ? v : []);
     agent.mcpServers = { ...(isObject(base.mcpServers) ? base.mcpServers : {}), [t.name]: t.server };
     agent.resources = [...list(base.resources), `skill://${t.skill}`];
-    agent.allowedTools = [...list(base.allowedTools), ...t.allowed];
   }
   return agent;
 }

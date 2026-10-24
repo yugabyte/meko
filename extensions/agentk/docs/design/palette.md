@@ -126,7 +126,7 @@ tools](tools.md) share); one that doesn't fit is left out with a note under the 
 | Action | Checked | Runs as |
 |---|---|---|
 | `start` (project, Explore, Design or Code, name, prompt) | an open project, a prompt; the name made one line, from the prompt when missing | `POST /api/projects/:id/sessions`, then the session, as after New session. A second item, **Edit … in New session…**, opens the dialog filled in instead. |
-| `link` (a PR or issue, and optionally the project to start it in and an issue's stage, Design or Code) | `parseGithubRef()` takes it; the project, when given, is open | puts the link in the palette, which offers its items as for a pasted link; in Do all, `POST /api/github-link/start` in that project (an issue that a running task works on is refused there) |
+| `link` (a PR or issue, and optionally the project to start it in and an issue's stage, Design or Code) | `parseGithubRef()` takes it; the project, when given, is open | puts the link in the palette, which offers its items as for a pasted link; in Do all (`POST /api/actions/run`), `githubLinks.start` in that project, or in the one the link fits when none is given, refusing an issue a running task works on (`once`, which the pasted link's own route doesn't pass: its items already offer that task) |
 | `go` (a session, a project home, Usage, Settings) | the session is running, the project open | navigates |
 | `move` (a session, a stage, instructions) | `moveBlockedIn()` and `moveError()` | `POST /api/sessions/:id/move`, then the session |
 | `openPr` (a session, instructions) | the session is in Code | the open-pr action, then the session |
