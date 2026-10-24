@@ -12,15 +12,8 @@ export type SessionStatus =
   | 'recovered'
   | 'archived';
 
-/** What a starting session is doing right now. */
+/** What a starting session is doing right now (the Starting view's labels: `startupSteps()` in `stages.ts`). */
 export type StartupStep = 'worktree' | 'launch' | 'loading' | 'prompt';
-
-export const STARTUP_STEPS: { step: StartupStep; label: string }[] = [
-  { step: 'worktree', label: 'Updating the base branch and preparing the worktree' },
-  { step: 'launch', label: 'Starting Claude Code' },
-  { step: 'loading', label: 'Loading plugins, MCP servers and hooks' },
-  { step: 'prompt', label: 'Sending your task' },
-];
 
 export interface StartupState {
   step: StartupStep;
