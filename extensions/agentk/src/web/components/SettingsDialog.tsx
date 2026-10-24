@@ -1,7 +1,18 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import type { AuthStatus, HarnessStatus, MekoKeySource, MekoSettingsUpdate, MekoStatus, Settings, TotpEnrollResponse, UpdateStatus } from '../../shared/types';
+import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
+import type {
+  AuthStatus,
+  HarnessStatus,
+  MekoKeySource,
+  MekoSettingsUpdate,
+  MekoStatus,
+  Settings,
+  SettingsUpdate,
+  TotpEnrollResponse,
+  UpdateStatus,
+} from '../../shared/types';
 import { HARNESS_CAPS, HARNESS_IDS, type HarnessId } from '../../shared/harnesses';
 import { api, errorMessage } from '../api';
+import { AUTO_SAVE_IDLE, autoSave, type AutoSaveStatus } from '../autosave';
 import { saveRailSessions, useRailSessions } from '../rail';
 import { harnessLogosToggle } from '../toggle';
 import { claudeUpdateText, cx, defaultAgentChoice, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
@@ -81,7 +92,7 @@ export function SettingsDialog({
   );
 }
 
-/** Saved in this browser as it's ticked, apart from the server settings below and their Save. */
+/** Saved in this browser as it's ticked, apart from the server settings below. */
 function RailSessionsSetting() {
   const on = useRailSessions();
   return (
@@ -96,7 +107,7 @@ function RailSessionsSetting() {
 }
 
 /**
- * Saved in this browser as it's ticked, apart from Settings › Harness's Save. Offered while a second agent is
+ * Saved in this browser as it's ticked, apart from Settings › Harness's server settings. Offered while a second agent is
  * turned on, or while open sessions run on two agents (the logos' own condition): turning an agent
  * off leaves its open sessions, and their logos, in place.
  */
@@ -113,72 +124,130 @@ function HarnessLogosSetting() {
   );
 }
 
-function GeneralTab() {
+/** A tab's server fields, as `PUT /api/settings` takes them. */
+type Patch = Omit<SettingsUpdate, 'meko'>;
+
+/** `from`'s values of the fields `patch` names. */
+const fieldsOf = (from: Settings, patch: Patch): Partial<Settings> =>
+  Object.fromEntries(Object.keys(patch).map((k) => [k, from[k as keyof Settings]]));
+
+/**
+ * A tab's server settings, saved as they change (`src/web/autosave.ts`): `change` shows a patch at
+ * once and saves it, and a patch that fails to save goes back to the server's last answer.
+ */
+function useAutoSave() {
   const [s, setS] = useState<Settings | null>(null);
+  const [status, setStatus] = useState<AutoSaveStatus>(AUTO_SAVE_IDLE);
+  // The server's last answer.
+  const confirmed = useRef<Settings | null>(null);
+  const [saver] = useState(() =>
+    autoSave((patch: Patch) => api.saveSettings(patch), {
+      onSaved: (next, patch) => {
+        confirmed.current = next;
+        setS((cur) => cur && { ...cur, ...fieldsOf(next, patch) });
+      },
+      onFailed: (_, patch) => setS((cur) => cur && confirmed.current && { ...cur, ...fieldsOf(confirmed.current, patch) }),
+      onStatus: setStatus,
+    }),
+  );
+  const loaded = useCallback((x: Settings) => {
+    confirmed.current = x;
+    setS(x);
+  }, []);
+  const change = (patch: Patch) => {
+    setS((cur) => cur && { ...cur, ...patch });
+    void saver.save(patch);
+  };
+  return { s, loaded, change, status };
+}
+
+/** Where Save was: Saving while a change is out, then Saved, or why it didn't save. */
+function SaveStatus({ status }: { status: AutoSaveStatus }) {
+  return (
+    <>
+      <ErrorText error={status.error === null ? null : errorMessage(status.error)} />
+      <div className="settings-actions muted small" role="status">
+        {status.state === 'saving' ? <Busy label="Saving" /> : status.state === 'saved' ? 'Saved' : null}
+      </div>
+    </>
+  );
+}
+
+const clampDepth = (typed: string) => Math.max(1, Math.min(4, Math.round(Number(typed)) || 1));
+// A blank or unreadable entry keeps the saved value: a stray 0 would remove every idle worktree.
+const clampOr = (typed: string, max: number, saved: number) => {
+  const n = Math.round(Number(typed));
+  return typed.trim() && Number.isFinite(n) ? Math.max(0, Math.min(max, n)) : saved;
+};
+
+function GeneralTab() {
+  const { s, loaded, change, status } = useAutoSave();
+  // The typed fields as typed: each saves when it loses focus or takes Enter, never mid-typing (a
+  // lower idle worktree count removes worktrees as soon as it's saved), numbers clamped first.
   const [roots, setRoots] = useState<string[]>([]);
-  // The depth as typed; clamped to 1–4 on blur and on save.
   const [depth, setDepth] = useState('');
-  // Idle worktrees per repo and days to keep them, as typed; clamped on blur and on save.
   const [idle, setIdle] = useState('');
   const [idleDays, setIdleDays] = useState('');
+  const [cloneInto, setCloneInto] = useState('');
+  const [serverName, setServerName] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
-  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     api
       .settings()
       .then((x) => {
-        setS(x);
+        loaded(x);
         setRoots(x.reposRoots);
         setDepth(String(x.reposDepth));
         setIdle(String(x.idleWorktreesPerRepo));
         setIdleDays(String(x.idleWorktreeDays));
+        setCloneInto(x.cloneInto);
+        setServerName(x.serverName);
       })
       .catch((e) => setError(errorMessage(e)));
-  }, []);
+  }, [loaded]);
+
+  // Saves what the typed fields hold that differs from the settings (an empty repo folder list is
+  // sent, for the server to say why it can't be; a blank clone folder isn't).
+  const commit = (rootList = roots) => {
+    if (!s) return;
+    const patch: Patch = {};
+    const r = rootList.map((x) => x.trim()).filter(Boolean);
+    if (r.join('\n') !== s.reposRoots.join('\n')) patch.reposRoots = r;
+    const d = clampDepth(depth);
+    if (d !== s.reposDepth) patch.reposDepth = d;
+    const cap = clampOr(idle, 20, s.idleWorktreesPerRepo);
+    if (cap !== s.idleWorktreesPerRepo) patch.idleWorktreesPerRepo = cap;
+    const days = clampOr(idleDays, 365, s.idleWorktreeDays);
+    if (days !== s.idleWorktreeDays) patch.idleWorktreeDays = days;
+    if (cloneInto.trim() && cloneInto.trim() !== s.cloneInto) patch.cloneInto = cloneInto.trim();
+    if (serverName.trim() !== s.serverName) patch.serverName = serverName.trim();
+    if (Object.keys(patch).length) change(patch);
+  };
+  // Switching tabs or closing Settings saves what's still typed: no blur comes when a focused field goes.
+  const latest = useRef(commit);
+  useEffect(() => {
+    latest.current = commit;
+  });
+  useEffect(() => () => latest.current(), []);
 
   if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
 
-  const clampDepth = () => Math.max(1, Math.min(4, Math.round(Number(depth)) || 1));
-  // A blank or unreadable entry keeps the saved value: a stray 0 would remove every idle worktree.
-  const clampOr = (typed: string, max: number, saved: number) => {
-    const n = Math.round(Number(typed));
-    return typed.trim() && Number.isFinite(n) ? Math.max(0, Math.min(max, n)) : saved;
-  };
-  const clampIdle = () => clampOr(idle, 20, s.idleWorktreesPerRepo);
-  const clampIdleDays = () => clampOr(idleDays, 365, s.idleWorktreeDays);
-
-  const save = async (e: FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      const next = await api.saveSettings({
-        reposRoots: roots.map((r) => r.trim()).filter(Boolean),
-        reposDepth: clampDepth(),
-        cloneInto: s.cloneInto.trim(),
-        serverName: s.serverName.trim(),
-        idleWorktreesPerRepo: clampIdle(),
-        idleWorktreeDays: clampIdleDays(),
-        resolveConflicts: s.resolveConflicts,
-      });
-      setS(next);
-      setRoots(next.reposRoots);
-      setDepth(String(next.reposDepth));
-      setIdle(String(next.idleWorktreesPerRepo));
-      setIdleDays(String(next.idleWorktreeDays));
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2500);
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
+  // A typed field's handlers: `tidy` shows the value as it's saved (clamped, or the saved one back).
+  const saveOn = (tidy?: () => void) => ({
+    onBlur: () => {
+      tidy?.();
+      commit();
+    },
+    onKeyDown: (e: KeyboardEvent) => {
+      if (e.key !== 'Enter') return;
+      tidy?.();
+      commit();
+    },
+  });
 
   return (
-    <form className="stack" onSubmit={save}>
+    <div className="stack">
       <div className="field">
         <span className="label">Repo folders</span>
         <span className="hint">The Open project dialog lists the git repos in these folders.</span>
@@ -189,12 +258,17 @@ function GeneralTab() {
               className="input mono"
               value={r}
               onChange={(e) => setRoots(roots.map((x, j) => (j === i ? e.target.value : x)))}
+              {...saveOn()}
             />
             <button
               type="button"
               className="btn ghost"
               disabled={roots.length <= 1}
-              onClick={() => setRoots(roots.filter((_, j) => j !== i))}
+              onClick={() => {
+                const next = roots.filter((_, j) => j !== i);
+                setRoots(next);
+                commit(next);
+              }}
             >
               Remove
             </button>
@@ -214,15 +288,16 @@ function GeneralTab() {
             max={4}
             value={depth}
             onChange={(e) => setDepth(e.target.value)}
-            onBlur={() => setDepth(String(clampDepth()))}
+            {...saveOn(() => setDepth(String(clampDepth(depth))))}
           />
         </Field>
         <Field label="Clone into" hint="Where “Clone from URL” puts new repos.">
           <input
             id="set-clone"
             className="input mono"
-            value={s.cloneInto}
-            onChange={(e) => setS({ ...s, cloneInto: e.target.value })}
+            value={cloneInto}
+            onChange={(e) => setCloneInto(e.target.value)}
+            {...saveOn(() => !cloneInto.trim() && setCloneInto(s.cloneInto))}
           />
         </Field>
       </div>
@@ -241,7 +316,7 @@ function GeneralTab() {
               max={20}
               value={idle}
               onChange={(e) => setIdle(e.target.value)}
-              onBlur={() => setIdle(String(clampIdle()))}
+              {...saveOn(() => setIdle(String(clampOr(idle, 20, s.idleWorktreesPerRepo))))}
             />
           </Field>
           <Field label="Remove unused after (days)" hint="An idle worktree no session has used for this long is removed. 0 keeps it.">
@@ -253,7 +328,7 @@ function GeneralTab() {
               max={365}
               value={idleDays}
               onChange={(e) => setIdleDays(e.target.value)}
-              onBlur={() => setIdleDays(String(clampIdleDays()))}
+              {...saveOn(() => setIdleDays(String(clampOr(idleDays, 365, s.idleWorktreeDays))))}
             />
           </Field>
         </div>
@@ -264,7 +339,7 @@ function GeneralTab() {
             id="set-resolve-conflicts"
             type="checkbox"
             checked={s.resolveConflicts}
-            onChange={(e) => setS({ ...s, resolveConflicts: e.target.checked })}
+            onChange={(e) => change({ resolveConflicts: e.target.checked })}
           />
           <span>Resolve merge conflicts on PRs</span>
         </label>
@@ -277,10 +352,11 @@ function GeneralTab() {
         <input
           id="set-server-name"
           className="input"
-          value={s.serverName}
+          value={serverName}
           placeholder={s.hostName}
           maxLength={64}
-          onChange={(e) => setS({ ...s, serverName: e.target.value })}
+          onChange={(e) => setServerName(e.target.value)}
+          {...saveOn()}
         />
       </Field>
       <div className="fields">
@@ -292,14 +368,8 @@ function GeneralTab() {
         </Field>
       </div>
       <p className="hint">Change the address and port in config.toml, then restart the server.</p>
-      <ErrorText error={error} />
-      <div className="settings-actions">
-        <button className="btn primary" disabled={busy}>
-          {busy ? <Busy label="Saving" /> : 'Save'}
-        </button>
-        {saved && <span className="muted small">Saved</span>}
-      </div>
-    </form>
+      <SaveStatus status={status} />
+    </div>
   );
 }
 
@@ -320,10 +390,10 @@ const ENABLED_KEY: Record<HarnessId, 'claudeEnabled' | 'kiroEnabled'> = { claude
 
 /**
  * The coding agents: the default agent and the logos, then a bar that picks one agent, with that
- * agent's settings under it. Edits are kept while the bar switches, and one Save sends them all.
+ * agent's settings under it. Each saves as it's changed.
  */
 function HarnessTab({ harnesses, twoAgents, serverName }: { harnesses: HarnessStatus[]; twoAgents: boolean; serverName: string }) {
-  const [s, setS] = useState<Settings | null>(null);
+  const { s, loaded, change, status } = useAutoSave();
   // The agent the bar shows: the default agent when the tab opens, so a new default doesn't move it.
   const [shown, setShown] = useState<HarnessId>('claude');
   const [checking, setChecking] = useState(false);
@@ -334,8 +404,6 @@ function HarnessTab({ harnesses, twoAgents, serverName }: { harnesses: HarnessSt
   // What Check again answered, until the next state push replaces it.
   const [rechecked, setRechecked] = useState<HarnessStatus[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
-  const [busy, setBusy] = useState(false);
 
   useEffect(() => setRechecked(null), [harnesses]);
 
@@ -343,23 +411,23 @@ function HarnessTab({ harnesses, twoAgents, serverName }: { harnesses: HarnessSt
     api
       .settings()
       .then((x) => {
-        setS(x);
+        loaded(x);
         setShown(x.defaultHarness);
       })
       .catch((e) => setError(errorMessage(e)));
-  }, []);
+  }, [loaded]);
 
   if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
 
   const agents = rechecked ?? harnesses;
   const defaultAgent = defaultAgentChoice(agents, s.defaultHarness);
   // Turning off the default agent moves the default to another available one, if there is one.
-  const enable = (id: HarnessId, on: boolean) =>
-    setS({
-      ...s,
-      [ENABLED_KEY[id]]: on,
-      defaultHarness: on || s.defaultHarness !== id ? s.defaultHarness : (agents.find((h) => h.id !== id && h.available)?.id ?? s.defaultHarness),
-    });
+  const enable = (id: HarnessId, on: boolean) => {
+    const patch: Patch = { [ENABLED_KEY[id]]: on };
+    const next = on || s.defaultHarness !== id ? s.defaultHarness : (agents.find((h) => h.id !== id && h.available)?.id ?? s.defaultHarness);
+    if (next !== s.defaultHarness) patch.defaultHarness = next;
+    change(patch);
+  };
   // Reads every agent's version again (nothing polls them).
   const checkAgain = () => {
     setChecking(true);
@@ -382,30 +450,8 @@ function HarnessTab({ harnesses, twoAgents, serverName }: { harnesses: HarnessSt
     run.catch((err) => setError(errorMessage(err))).finally(() => setUpdating(null));
   };
 
-  const save = async (e: FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      setS(
-        await api.saveSettings({
-          defaultHarness: s.defaultHarness,
-          claudeEnabled: s.claudeEnabled,
-          kiroEnabled: s.kiroEnabled,
-          kiroTrustTools: s.kiroTrustTools,
-        }),
-      );
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2500);
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
-    <form className="stack" onSubmit={save}>
+    <div className="stack">
       {defaultAgent && (
         <div className="field">
           <span className="label" id="set-agent-label">
@@ -415,7 +461,7 @@ function HarnessTab({ harnesses, twoAgents, serverName }: { harnesses: HarnessSt
             idPrefix="set-agent"
             agents={defaultAgent.agents}
             value={defaultAgent.value}
-            onChange={(id) => setS({ ...s, defaultHarness: id })}
+            onChange={(id) => change({ defaultHarness: id })}
             labelledBy="set-agent-label"
           />
           <span className="hint">
@@ -435,19 +481,14 @@ function HarnessTab({ harnesses, twoAgents, serverName }: { harnesses: HarnessSt
           updating={updating === shown}
           outcome={shown === 'claude' ? claudeOutcome : null}
           onEnable={(on) => enable(shown, on)}
-          onChange={(patch) => setS({ ...s, ...patch })}
+          onChange={change}
           onCheck={checkAgain}
           onUpdate={() => update(shown)}
         />
       </div>
       <ErrorText error={error} />
-      <div className="settings-actions">
-        <button className="btn primary" disabled={busy}>
-          {busy ? <Busy label="Saving" /> : 'Save'}
-        </button>
-        {saved && <span className="muted small">Saved</span>}
-      </div>
-    </form>
+      <SaveStatus status={status} />
+    </div>
   );
 }
 
@@ -496,7 +537,7 @@ export function AgentSettings({
   /** What this page's update of it came to, when nothing else says so (Claude Code with the mod off). */
   outcome?: { ok: boolean; text: string } | null;
   onEnable: (on: boolean) => void;
-  onChange: (patch: Partial<Settings>) => void;
+  onChange: (patch: Omit<SettingsUpdate, 'meko'>) => void;
   onCheck: () => void;
   onUpdate: () => void;
 }) {
@@ -757,7 +798,7 @@ function MekoTab({ status, claude: claudeOn, kiro }: { status: MekoStatus; claud
         <div className="meko-status-row">
           <span>Meko</span>
           {status.configured ? <span className="tag">on</span> : <span className="tag shared">off</span>}
-          {status.configured && <span className="hint">A new URL or key is checked with Meko when you save it.</span>}
+          {status.configured && <span className="hint">A new URL or key is checked with Meko before it's saved.</span>}
         </div>
         {status.configured && claudeOn && (
           <div className="meko-status-row">
@@ -800,13 +841,13 @@ function MekoTab({ status, claude: claudeOn, kiro }: { status: MekoStatus; claud
       {confirmHost && (
         <p className="confirm-warn" role="alert">
           Existing projects’ datapacks live on {httpHost(m.effectiveUrl) ?? 'the current Meko'}, not on {confirmHost}, so they
-          won’t work after the switch. Save again to switch anyway.
+          won’t work after the switch. Press Switch Meko to switch anyway.
         </p>
       )}
       <ErrorText error={error} />
       <div className="settings-actions">
         <button className="btn primary" disabled={busy !== null}>
-          {busy === 'save' ? <Busy label="Checking" /> : confirmHost ? 'Switch Meko' : 'Save'}
+          {busy === 'save' ? <Busy label="Checking" /> : confirmHost ? 'Switch Meko' : 'Check and save'}
         </button>
         {saved && <span className="muted small">Saved</span>}
       </div>

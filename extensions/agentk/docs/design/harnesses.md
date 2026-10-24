@@ -36,8 +36,8 @@ it (`AgentSettings` in `SettingsDialog.tsx`): **Offer … for new sessions** wit
 isn't offered, **Check again**, **Update Claude Code** or **Update Kiro** while it's available
 (`POST /api/claude/update`, whose answer carries the outcome, and `POST /api/harnesses/kiro/update`;
 each agent's update runs on its own, so one running doesn't hold up the other's button), and for
-Kiro **Let Kiro run any tool without asking** while Kiro is on. Edits are kept while the bar switches agents, and one
-Save sends the tab's fields (`defaultHarness`, `claudeEnabled`, `kiroEnabled`, `kiroTrustTools`).
+Kiro **Let Kiro run any tool without asking** while Kiro is on. Each of the tab's fields (`defaultHarness`,
+`claudeEnabled`, `kiroEnabled`, `kiroTrustTools`) saves as it's changed; there's no Save.
 The no-agent banner's **Settings** opens this tab. The Meko tab keeps each agent's Meko row.
 
 **No agent is required.** AgentK installs and runs with Claude Code, Kiro, or both; nothing assumes
