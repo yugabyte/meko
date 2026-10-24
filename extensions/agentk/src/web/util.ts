@@ -2,7 +2,7 @@ import { HARNESS_CAPS, harnessOf, type HarnessId } from '../shared/harnesses';
 import { DEFAULT_MEKO_URL, mekoWebUrl } from '../shared/mekourls';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, STAGE_LABELS } from '../shared/types';
-import type { ClaudeCodeStatus, HarnessStatus, LearnProgress, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoSettings, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
+import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoSettings, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /**
  * What a status dot shows: the session's status, `learning` while AgentK saves what it learned to
@@ -377,6 +377,26 @@ function roundCredits(n: number): number {
 /** A plan bar's level in the rail (Claude's windows, Kiro's credits): amber from 80%, red from 95%. */
 export function limitLevel(percent: number): 'warn' | 'bad' | null {
   return percent >= 95 ? 'bad' : percent >= 80 ? 'warn' : null;
+}
+
+/**
+ * The extra lines under Kiro's credit ring (`KiroLimit` in Rail.tsx): `extra` is AgentK's own
+ * reading of the bonus and overage lines, and `said` is Kiro's verbatim line quoted under them,
+ * kept only where AgentK couldn't read the line, so a line AgentK already states isn't shown twice.
+ * Overage's quote is dropped once AgentK read anything from it (its credits or its on/off), since
+ * the `extra` line then says it; bonus's quote stays while its format is still a guess (no real
+ * bonus output has been seen).
+ */
+export function kiroPlanLines(plan: Pick<KiroPlan, 'bonus' | 'overage'>): { extra: string[]; said: string[] } {
+  const extra = [
+    plan.bonus && `Bonus ${creditsNumber(Math.max(0, plan.bonus.total - plan.bonus.used))} of ${creditsNumber(plan.bonus.total)} left`,
+    plan.overage && (plan.overage.credits !== null ? `Overage ${creditsNumber(plan.overage.credits)} billed` : plan.overage.enabled !== null ? `Overage ${plan.overage.enabled ? 'on' : 'off'}` : null),
+  ].filter((l): l is string => !!l);
+  // Kiro's own words, shown only where AgentK couldn't read the line: the overage quote is dropped
+  // once its credits or its on/off is known, the bonus quote stays while the format is a guess.
+  const overageUnread = !!plan.overage && plan.overage.credits === null && plan.overage.enabled === null;
+  const said = [plan.bonus?.line, overageUnread ? plan.overage?.line : null].filter((l): l is string => !!l);
+  return { extra, said };
 }
 
 /** USD: "$3.06", "$241", "$1,234", "<$0.01", "−$2.75". */

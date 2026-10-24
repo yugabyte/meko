@@ -196,7 +196,10 @@ a read that fails (signed out, say) keeps the last one and logs once. The rail s
 credits** on Kiro's row: a ring of used over covered in Kiro's violet (amber at 80%, red at 95%;
 past 100%, **Over plan**, red, or amber while overage is on, since Kiro then bills the rest and
 goes on), `36 of 50 · Free · resets Nov 1` beside it, then a line for bonus and overage when Kiro
-printed them and Kiro's own lines quoted under it (since how they're read is a guess). Its tooltip
+printed them (`kiroPlanLines` in `src/web/util.ts`). Kiro's own line is quoted under it only where
+AgentK couldn't read it: the overage quote is dropped once AgentK read its credits or its on/off,
+since the line above already says it, and the bonus line is still quoted (its format is a guess, no
+real bonus output has been seen). Its tooltip
 says it's Kiro's estimate of all your Kiro use, with its age. The reading is dropped once its reset day has come (UTC midnight), and while
 Kiro isn't available.
 
