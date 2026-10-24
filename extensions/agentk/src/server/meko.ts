@@ -23,7 +23,7 @@ export interface MekoDatapackRow extends MekoDatapack {
 export const AGENTK_AGENT_ID = 'agent-k-local';
 
 /** The client part of a session's agent id, by its harness (Meko's `<client>:<project>` convention). */
-const AGENT_ID_CLIENTS: Record<HarnessId, string> = { claude: 'claude_code', kiro: 'kiro' };
+const AGENT_ID_CLIENTS: Record<HarnessId, string> = { claude: 'claude_code', opencode: 'opencode', kiro: 'kiro' };
 
 /**
  * Agent id of a session's Meko calls, capture and datapack pin: its harness's client name and its

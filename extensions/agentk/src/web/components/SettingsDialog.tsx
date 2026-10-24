@@ -426,15 +426,16 @@ function harnessNote(id: HarnessId, h: HarnessStatus | undefined): ReactNode {
   if (!h?.enabled) return 'Off.';
   if (h.version === null) {
     if (!h.checked) return <Busy label="Looking for it" />;
-    const login = id === 'kiro' ? 'kiro-cli login' : 'claude auth login';
-    return `${HARNESS_CAPS[id].label} didn't answer --version here. Install it and run ${login}, or set [${id}] command in config.toml, then check again.`;
+    return `${HARNESS_CAPS[id].label} didn't answer --version here. Install it and run ${HARNESS_CAPS[id].login}, or set [${id}] command in config.toml, then check again.`;
   }
   if (!h.available) return `Version ${h.version}; AgentK needs ${h.minVersion} or later. Update it, then check again.`;
   return `Version ${h.version}.`;
 }
 
 /** Which `Settings` field turns each agent on: its Offer … for new sessions box. */
-const ENABLED_KEY: Record<HarnessId, 'claudeEnabled' | 'kiroEnabled'> = { claude: 'claudeEnabled', kiro: 'kiroEnabled' };
+const ENABLED_KEY: Record<HarnessId, 'claudeEnabled' | 'opencodeEnabled' | 'kiroEnabled'> = {
+  claude: 'claudeEnabled', opencode: 'opencodeEnabled', kiro: 'kiroEnabled',
+};
 
 /**
  * The coding agents: the default agent and the logos, then a bar that picks one agent, with that
@@ -645,7 +646,7 @@ const KEY_SOURCE: Record<MekoKeySource, string> = {
   claude: 'from Claude Code’s settings',
 };
 
-/** The Meko server and key AgentK uses, its links, and whether Claude Code's (and Kiro's) sessions use the same. */
+/** The Meko server and key AgentK uses, its links, and whether Claude Code's (and OpenCode's and Kiro's) sessions use the same. */
 function MekoTab({ status, claude: claudeOn, kiro }: { status: MekoStatus; claude: boolean; kiro: boolean }) {
   const [s, setS] = useState<Settings | null>(null);
   const [url, setUrl] = useState('');
@@ -870,6 +871,17 @@ function MekoTab({ status, claude: claudeOn, kiro }: { status: MekoStatus; claud
               </button>
             )}
             {claudeDone && !claudeProblems.length && <span className="ok-text">Claude Code now uses this Meko.</span>}
+          </div>
+        )}
+        {status.configured && status.opencode && (
+          <div className="meko-status-row">
+            <span>OpenCode</span>
+            <span className="tag">{status.opencode.own ? 'its own' : 'matches'}</span>
+            <span className="hint">
+              {status.opencode.own
+                ? 'OpenCode sessions use the meko server in OpenCode’s own config, which AgentK leaves as it is.'
+                : `OpenCode sessions use ${m.effectiveUrl}: AgentK adds it to their config.`}
+            </span>
           </div>
         )}
         {status.configured && kiro && status.kiro && (

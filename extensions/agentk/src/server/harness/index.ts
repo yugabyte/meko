@@ -3,9 +3,11 @@ import type { HarnessStatus } from '../../shared/types.js';
 import type { ClaudeCode } from '../claudecode.js';
 import type { Config } from '../config.js';
 import type { Logger } from '../log.js';
+import type { Paths } from '../paths.js';
 import { HttpError } from '../projects.js';
 import { claudeHarness } from './claude.js';
 import { kiroHarness } from './kiro.js';
+import { openCodeHarness } from './opencode.js';
 import type { Harness } from './types.js';
 
 export type { Harness, LaunchInput } from './types.js';
@@ -14,9 +16,13 @@ export type { Harness, LaunchInput } from './types.js';
 export class Harnesses {
   private all: Record<HarnessId, Harness>;
 
-  constructor(deps: { claudeCode: ClaudeCode; log: Logger; changed: () => void; kiroVersion?: (cmd: string) => Promise<string | null> }) {
+  constructor(deps: {
+    claudeCode: ClaudeCode; paths: Paths; log: Logger; changed: () => void;
+    kiroVersion?: (cmd: string) => Promise<string | null>; openCodeVersion?: (cmd: string) => Promise<string | null>;
+  }) {
     this.all = {
       claude: claudeHarness(deps),
+      opencode: openCodeHarness({ paths: deps.paths, log: deps.log, changed: deps.changed, readVersion: deps.openCodeVersion }),
       kiro: kiroHarness({ log: deps.log, changed: deps.changed, readVersion: deps.kiroVersion }),
     };
   }
@@ -35,8 +41,8 @@ export class Harnesses {
   }
 
   /**
-   * Reads every harness's version again once the last read is stale (`force`: now), since Claude Code
-   * and Kiro update themselves. Nothing polls: this runs when a page opens, and on Check again.
+   * Reads every harness's version again once the last read is stale (`force`: now), since the CLIs
+   * update themselves. Nothing polls: this runs when a page opens, and on Check again.
    */
   async refresh(cfg: Config, force = false): Promise<HarnessStatus[]> {
     await Promise.all(this.list().map((h) => h.version(cfg, force)));
@@ -69,7 +75,7 @@ export class Harnesses {
    * do; 409 when no harness is available at all. Its version is read again first (`reread`).
    */
   async pick(cfg: Config, asked: unknown): Promise<Harness> {
-    if (asked != null && !HARNESS_IDS.includes(asked as HarnessId)) throw new HttpError(400, `Pick a harness: ${HARNESS_IDS.join(' or ')}.`);
+    if (asked != null && !HARNESS_IDS.includes(asked as HarnessId)) throw new HttpError(400, `Pick a harness: ${HARNESS_IDS.join(', ')}.`);
     if (asked == null) {
       const h = await this.ensureDefault(cfg);
       if (!h) throw new HttpError(409, NO_AGENT);

@@ -2,8 +2,8 @@
 
 # AgentK
 
-The agentic coder for ADLC. AgentK lets you manage many projects and [Claude Code](https://claude.com/claude-code) or
-[Kiro CLI](https://kiro.dev/cli/) sessions at once, with [Meko](https://mekodata.ai) as the shared context layer so designs, transcripts, and what each session learned flow into 
+The agentic coder for ADLC. AgentK lets you manage many projects and [Claude Code](https://claude.com/claude-code),
+[OpenCode](https://opencode.ai) or [Kiro CLI](https://kiro.dev/cli/) sessions at once, with [Meko](https://mekodata.ai) as the shared context layer so designs, transcripts, and what each session learned flow into 
 datapacks your whole team and their agents can build on.
 
 It's self-hosted on your devserver (headless), your Mac or a Mac mini, and you use it from a browser or
@@ -32,8 +32,8 @@ your phone.
 ## Install
 
 You need Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon, and a coding agent:
-[Claude Code](https://claude.com/claude-code), [Kiro CLI](https://kiro.dev/cli/) 2.32 or later, or
-both. A
+[Claude Code](https://claude.com/claude-code), [OpenCode](https://opencode.ai) 1.19.4 or later,
+[Kiro CLI](https://kiro.dev/cli/) 2.32 or later, or more than one. A
 [Meko](https://mekodata.ai) account and API key are optional: they give projects datapacks
 (shared memory) and let you share projects. Without one, press Enter at the key prompt (or pass
 `--no-meko`) and add a key later on the Meko tab in Settings, which links to Meko's sign-up and
@@ -55,8 +55,8 @@ gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-d
   --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
 ```
 
-It offers to install anything that's missing (git, gh, and Claude Code or Kiro CLI when neither is
-there: it asks which, or pass `--agent kiro`) and to set up Meko for each agent, asking first. It asks for **local** access (this computer only, no login) or
+It offers to install anything that's missing (git, gh, and Claude Code, OpenCode or Kiro CLI when
+none is there: it asks which, or pass `--agent opencode` or `--agent kiro`) and to set up Meko for each agent, asking first. It asks for **local** access (this computer only, no login) or
 **remote** access (other devices too, like your phone, over HTTPS with a login); remote is the
 default over SSH or on a machine with no display. Then it prints the address, or for remote
 access a one-time setup link that creates your login. Local access trusts everyone who can log
@@ -159,12 +159,16 @@ your phone can connect.
   in the browser, and sessions run in AgentK's own session host (no tmux needed), so they keep
   running when you disconnect or the server updates. You can still attach from iTerm:
   `agentk attach <session>` (`Ctrl+\` detaches).
-- **Claude Code or Kiro, per session.** New sessions start on the default agent (Settings →
-  Harness), or pick **Agent** under **Advanced** in New session once both Claude Code and
-  [Kiro CLI](https://kiro.dev/cli/) 2.32 or later are installed and signed in (`kiro-cli login`).
-  Either one alone is enough: with only Kiro, every session runs on Kiro. Settings › Harness has a
-  bar that picks an agent and shows its settings, and can stop offering an agent you have installed
-  but don't want (**Offer Claude Code / Kiro for new sessions**). A Kiro session runs as `agentk`, an
+- **Claude Code, OpenCode or Kiro, per session.** New sessions start on the default agent
+  (Settings → Harness), or pick **Agent** under **Advanced** in New session once more than one of
+  Claude Code, [OpenCode](https://opencode.ai) 1.19.4 or later (signed in to a model provider with
+  `opencode auth login`) and [Kiro CLI](https://kiro.dev/cli/) 2.32 or later (`kiro-cli login`) is
+  installed. Any one alone is enough: with only Kiro, every session runs on Kiro. Settings › Harness
+  has a bar that picks an agent (Claude Code, OpenCode, Kiro) and shows its settings, and can stop
+  offering an agent you have installed but don't want (**Offer … for new sessions**). An OpenCode
+  session loads AgentK's own OpenCode plugin (nothing is written to your OpenCode config), which
+  tells AgentK when it works, needs you for a permission, or ends a turn, and gets this Meko as its
+  `meko` MCP server unless your OpenCode config has one already. A Kiro session runs as `agentk`, an
   agent AgentK builds from your default Kiro agent (Meko's, after **Set up Kiro with this Meko**)
   with its hooks added, and goes through the same stages, gates, design review, PR flow, recovery
   and Resume. What only Claude Code does stays with it: designs as Artifacts, AgentK's mod
@@ -172,7 +176,8 @@ your phone can connect.
   the rail shows Kiro's own plan instead (credits used of the plan, read hourly). Kiro writes its
   designs as markdown, AgentK types its prompts into its terminal, and since Kiro says nothing while
   it waits for a permission answer, the session shows as working until you answer in the terminal
-  (or turn on **Let Kiro run any tool**). While your open sessions run on both, each session's tab
+  (or turn on **Let Kiro run any tool**). OpenCode works like Kiro there, but says when it needs
+  you. While your open sessions run on more than one agent, each session's tab
   and row in the rail shows its agent's logo (turn that off in Settings › Harness).
 - **One screen at a time.** A session is live in one browser tab or device at a time. Open it on
   another and that screen offers **Move to this screen**; it moves there by itself once the first
@@ -245,7 +250,8 @@ your phone can connect.
   send it to AgentK or dismiss it, and Merge & Close waits until you decide. Your own reviews
   always go to Claude.
 - **Token usage** per session and per project (by model and by day), read from Claude Code transcripts,
-  subagents included, with its cost at API list prices; Kiro sessions count the credits Kiro billed,
+  subagents included, with its cost at API list prices (OpenCode sessions' tokens too, from AgentK's
+  plugin); Kiro sessions count the credits Kiro billed,
   beside the cost and never added to it, with a Credits column by session and model and a credits
   bar beside each day's tokens. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
@@ -303,6 +309,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 [Apache-2.0](../../LICENSE)
 
-The Claude Code and Kiro logos in `src/web/public/` are their owners' marks, used to show which agent
-a session runs on. The Claude Code mascot is drawn from
-[dashboard-icons](https://github.com/homarr-labs/dashboard-icons) (Apache-2.0).
+The Claude Code, OpenCode and Kiro logos in `src/web/public/` are their owners' marks, used to show
+which agent a session runs on. The Claude Code mascot is drawn from
+[dashboard-icons](https://github.com/homarr-labs/dashboard-icons) (Apache-2.0), and OpenCode's is its
+favicon from [its repo](https://github.com/anomalyco/opencode) (MIT).

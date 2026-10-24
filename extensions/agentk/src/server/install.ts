@@ -8,7 +8,7 @@ import { parseArgs } from 'node:util';
 import { getOwner, issueSetupToken } from './auth.js';
 import { HARNESS_CAPS, HARNESS_IDS, type HarnessId } from '../shared/harnesses.js';
 import { claudeUserDir } from './claude.js';
-import { cliVersion, versionAtLeast } from './harness/version.js';
+import { cliVersion, harnessCommand, versionAtLeast } from './harness/version.js';
 import {
   DEFAULT_MEKO_URL, dbPath, isLoopback, loadConfig, readClaudeSettingsEnv, resolveMeko, resolveMekoWebUrl, resolveMekoWithSource, saveConfig, type Config,
 } from './config.js';
@@ -387,7 +387,8 @@ export function settleAgents(cfg: Config, versions: Partial<Record<HarnessId, st
   });
   if (!found.length) {
     throw new InstallError(
-      `no coding agent found. Install Claude Code (https://claude.com/claude-code) or Kiro CLI ${HARNESS_CAPS.kiro.minVersion} or later (https://kiro.dev/cli/), sign in to it, and run the installer again.`,
+      `no coding agent found. Install Claude Code (https://claude.com/claude-code), OpenCode ${HARNESS_CAPS.opencode.minVersion} or later (https://opencode.ai) `
+        + `or Kiro CLI ${HARNESS_CAPS.kiro.minVersion} or later (https://kiro.dev/cli/), sign in to it, and run the installer again.`,
     );
   }
   if (!found.includes(cfg.agents.default)) cfg.agents.default = found[0];
@@ -464,7 +465,7 @@ export async function runInstall(args: string[]): Promise<void> {
 
     // 2. The coding agents: at least one, or nothing can run.
     const versions: Partial<Record<HarnessId, string | null>> = {};
-    for (const id of HARNESS_IDS) versions[id] = await cliVersion(cfg[id].command);
+    for (const id of HARNESS_IDS) versions[id] = await cliVersion(harnessCommand(cfg, id));
     const agents = settleAgents(cfg, versions);
 
     // 3. Meko (optional) and 4. Meko in each agent

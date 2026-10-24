@@ -18,6 +18,7 @@ import { SessionHost } from '../src/server/hostclient.js';
 
 export const FAKE_CLAUDE = fileURLToPath(new URL('./fixtures/fake-claude.mjs', import.meta.url));
 export const FAKE_KIRO = fileURLToPath(new URL('./fixtures/fake-kiro.mjs', import.meta.url));
+export const FAKE_OPENCODE = fileURLToPath(new URL('./fixtures/fake-opencode.mjs', import.meta.url));
 export const FAKE_CAPTURE = fileURLToPath(new URL('./fixtures/fake-capture.mjs', import.meta.url));
 
 export function gitRepo(dir: string): string {
@@ -208,8 +209,11 @@ export function tempDir(prefix: string): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
 }
 
-/** `kiro`: offer Kiro, run by the fake (`fake-kiro.mjs`) with its home in the test's folder; off by default. */
-export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?: boolean } = {}): Promise<TestEnv> {
+/**
+ * `kiro`: offer Kiro, run by the fake (`fake-kiro.mjs`) with its home in the test's folder; `opencode`:
+ * offer OpenCode, run by `fake-opencode.mjs`. Both off by default.
+ */
+export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?: boolean; opencode?: boolean } = {}): Promise<TestEnv> {
   const home = tempDir('akl-test-');
   const repo = gitRepo(join(home, 'code', 'demo-repo'));
   const fakeDir = join(home, 'fake-claude');
@@ -219,6 +223,7 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
   process.env.CLAUDE_CONFIG_DIR = join(home, 'claude-config');
   process.env.KIRO_HOME = join(home, 'kiro');
   process.env.FAKE_KIRO_DIR = join(home, 'fake-kiro');
+  process.env.FAKE_OPENCODE_DIR = join(home, 'fake-opencode');
   const paths = getPaths(join(home, 'ak'));
   // The session host runs in this process, and never through this machine's background services.
   const cfg: Config = structuredClone(DEFAULT_CONFIG);
@@ -229,6 +234,8 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
   cfg.claude.command = FAKE_CLAUDE;
   cfg.kiro.command = FAKE_KIRO;
   cfg.kiro.enabled = !!opts.kiro;
+  cfg.opencode.command = FAKE_OPENCODE;
+  cfg.opencode.enabled = !!opts.opencode;
   cfg.meko.apiKey = 'test-key';
   cfg.meko.captureTranscripts = opts.capture !== false;
   const db = openDb(join(paths.home, 'state.db'));
@@ -259,7 +266,7 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
       await killHost();
       db.close();
       // core.stop() waited for what writes into the home after a test: the transcript captures (into
-      // fakeDir) and Kiro's one-shot runs (into FAKE_KIRO_DIR). Anything else still writing fails the
+      // fakeDir) and Kiro's and OpenCode's one-shot runs (into FAKE_KIRO_DIR, FAKE_OPENCODE_DIR). Anything else still writing fails the
       // removal with ENOTEMPTY, retries or not: they only try the folder again, and remove nothing
       // written after their first pass. Name what was left, to find the writer.
       try {
