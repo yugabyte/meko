@@ -392,9 +392,19 @@ textarea.input {
   gap: 6px;
 }
 /* Where a new session starts: pills like the stage bar's steps, joined by lines (dotted from
-   Explore), then "or" and Review a PR. One row on a desktop, one column on a phone. */
+   Explore), then "or" and Review a PR, and "or" and Learn the project when it's offered. One row on
+   a desktop, where "or Learn the project" wraps to a second row as one when the row runs out of
+   room; one column on a phone. */
 .starts {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  row-gap: 8px;
+}
+/* "or Learn the project", kept together when it wraps to the next row. */
+.start-alt {
+  flex: none;
+  display: inline-flex;
   align-items: center;
 }
 .start {
@@ -5053,6 +5063,24 @@ div[id^='dak-mermaid-'] .label {
     min-height: 36px;
   }
 }
+/* The New session dialog's offer of a learn session for a project whose datapack is empty. */
+.ns-learn-offer {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-size: 13px;
+}
+/* A learn session's months of PRs: a short number field, then its unit. */
+.ns-learn-months {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ns-learn-months .input {
+  width: 6em;
+}
 /* The New session dialog's images for the first prompt: Add image (just its icon), then the held ones. */
 .ns-images {
   display: flex;
@@ -5653,6 +5681,8 @@ div[id^='dak-mermaid-'] .label {
   .starts {
     flex-direction: column;
     align-items: flex-start;
+    /* The desktop's gap between wrapped rows would part each pill from its line here. */
+    row-gap: 0;
   }
   .start {
     min-height: 40px;
@@ -5683,6 +5713,9 @@ div[id^='dak-mermaid-'] .label {
     flex: 1;
     height: 1px;
     background: var(--rule);
+  }
+  .start-alt {
+    display: contents;
   }
 }
 /* The PR picker in the New session dialog. */

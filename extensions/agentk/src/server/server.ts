@@ -501,7 +501,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   });
 
   // ---- projects ----
-  app.post<{ Body: CreateProjectRequest }>('/api/projects', async (req) => core.projects.create(req.body));
+  app.post<{ Body: CreateProjectRequest }>('/api/projects', async (req) => core.projects.open(req.body));
   app.get<{ Params: { id: string } }>('/api/projects/:id', async (req) => core.projects.get(req.params.id));
   app.patch<{ Params: { id: string }; Body: UpdateProjectRequest }>('/api/projects/:id', async (req) => core.projects.update(req.params.id, req.body ?? {}));
   app.delete<{ Params: { id: string } }>('/api/projects/:id', async (req, reply) => {

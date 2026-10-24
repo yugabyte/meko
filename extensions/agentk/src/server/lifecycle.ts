@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { basename } from 'node:path';
 import { mekoHost } from './config.js';
 import type { Core } from './core.js';
@@ -40,6 +40,8 @@ function prRepoOf(url: string | null): string | undefined {
 }
 
 const POLL_MS = 15000;
+/** The most of a learn session's summary its timeline keeps. */
+const LEARNED_MAX = 2000;
 const REVIEW_POLL_MS = 45000;
 /** How long a requested merge may leave the PR open (a merge queue) before the session goes back to Review. */
 const MERGE_GRACE_MS = 10 * 60 * 1000;
@@ -977,6 +979,14 @@ export class Lifecycle {
     if (this.sessions.row(id).discarding) return this.afterLearn(id);
     // A move the session's own agent asked for (AgentK's session tools) goes now, and gives it its next turn.
     if (await this.core.tools.turnEnded(id, interrupted)) return;
+    // A learn session that wrote its summary is done, and closes.
+    if (row.stage === 'explore' && row.purpose === 'learn' && !interrupted) {
+      const closed = await this.learnDone(row).catch((e: unknown) => {
+        this.warn(id, 'Closing the learn session', e);
+        return false;
+      });
+      if (closed) return;
+    }
     if (row.stage === 'code') {
       await this.takeQueuedPr(id).catch((e) => this.warn(id, 'Sending the queued Open PR', e));
     } else if (row.stage === 'pr') {
@@ -1015,6 +1025,47 @@ export class Lifecycle {
     }
     // Review comments go after anything above that already gave Claude its next turn.
     await this.core.comments.deliver(id).catch((e) => this.warn(id, 'Sending review comments', e));
+  }
+
+  /**
+   * After a learn session's turn: when Claude wrote its summary (`learnedPath`), it's done, so the
+   * summary goes on the timeline and the session is discarded, with no learn step (it saved as it
+   * went). Not when its worktree has changes or commits, which Discard would throw away: the timeline
+   * says so and it stays. A Save learnings step still running holds the close, as it holds a
+   * Discard: the session goes when the step ends (`discarding`, afterLearn). The file is removed,
+   * and the user told, only once the session is on its way out (or kept), so a close that fails
+   * leaves the file for the next turn's end to try again. True when the session is closed or closing.
+   */
+  private async learnDone(row: SessionRow): Promise<boolean> {
+    const file = this.sessions.learnedPath(row);
+    let summary: string;
+    try {
+      summary = readFileSync(file, 'utf8').trim();
+    } catch {
+      return false;
+    }
+    const text = summary.length > LEARNED_MAX ? `${summary.slice(0, LEARNED_MAX).trimEnd()}…` : summary || 'Done learning the project.';
+    const check = await this.sessions.discardCheck(row.id);
+    const changed = [
+      check.uncommittedFiles ? `${check.uncommittedFiles} uncommitted file${check.uncommittedFiles === 1 ? '' : 's'}` : '',
+      check.unpushedCommits ? `${check.unpushedCommits} commit${check.unpushedCommits === 1 ? '' : 's'} not pushed` : '',
+    ].filter(Boolean).join(' and ');
+    this.sessions.event(row.id, 'learn-done', text);
+    if (changed) {
+      rmSync(file, { force: true });
+      const why = `Done learning, but not closed: the worktree has ${changed}, which closing would throw away. Look at them, then discard the session.`;
+      this.sessions.event(row.id, 'learn-kept', why);
+      this.sessions.notifyUser(row.id, 'Done learning', why);
+      return false;
+    }
+    if (this.core.learn.running(row.id)) {
+      this.sessions.update(row.id, { discarding: 1 });
+    } else {
+      await this.sessions.discardNow(row.id);
+    }
+    rmSync(file, { force: true });
+    this.sessions.notifyUser(row.id, 'Learned the project', text.split('\n').find((l) => l.trim())?.trim() ?? text);
+    return true;
   }
 
   /**

@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ClosedProject, DatapackChoice, DatapackInvite, MekoDatapack, Project, RepoInfo } from '../../shared/types';
+import type { ClosedProject, DatapackChoice, DatapackInvite, MekoDatapack, OpenedProject, Project, RepoInfo } from '../../shared/types';
 import { newRepoNameProblem } from '../../shared/types';
 import {
   canonicalRepoName, defaultProjectDatapackName, isProjectDatapack, matchRepo, parseProjectDatapack, remoteFromDescription, remoteRepoName,
@@ -65,7 +65,8 @@ export function NewProjectDialog({
   /** A share to start with chosen (Open as project on its banner). */
   initialInvite?: DatapackInvite | null;
   onClose: () => void;
-  onCreated: (p: Project) => void;
+  /** `datapackEmpty`: the project's datapack is empty, so a learn session is offered first. */
+  onCreated: (p: OpenedProject) => void;
 }) {
   const [repos, setRepos] = useState<RepoInfo[] | null>(null);
   const [roots, setRoots] = useState<string[]>([]);

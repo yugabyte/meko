@@ -196,6 +196,54 @@ and, while the project has Log Meko calls on, in the session's Meko call log wit
 what came back (see [Project home](project-home.md)). A step at Merge & Close is deleted with the
 session moments later, so run `/agentk_learn` during the session to look at one.
 
+## Learn sessions
+
+A new datapack knows nothing, so a project's first sessions get nothing from Meko. A learn session
+seeds it: **Learn the project** in the New session dialog (`CreateSessionRequest.learn`), picked
+for you when a project opens on an empty datapack (see [Open project](open-project-and-new-session.md#open-project)),
+and offered on the project home while the dedicated datapack has no memories and no knowledge and
+the project has never had one (`ProjectHome.hasLearnSession`).
+
+- **What the user gives.** What the project is about (required), where its files are (folders and
+  files in the repo, docs, other places; left empty, the README and docs), and how many months of
+  merged PRs to read (0 to 120, 24 by default; 0 reads none). There's no cap on the number of PRs:
+  the window and the paths are the limits. It needs Meko on and a dedicated datapack (one is always
+  writable); otherwise, and for a review or a PR, the create is a 400.
+- **What it is.** A task at Explore, marked `sessions.purpose = 'learn'` (`Session.purpose`), not a
+  session kind of its own: a new `StoredKind` would make pages and releases from before throw, as
+  they index their stage lists by it. Its task (`initial_prompt`) is written from the brief by
+  `learnTask()` in `prompts.ts`, with the PR window's first day worked out when the session is made,
+  so a relaunch later reads the same PRs, and recovery and Try again need no storage of their own.
+  Its first prompt is `seed` (`firstPrompt()` in `sessions.ts`), which a repo can override with
+  `.agent-k/stages/seed.md` like any other.
+- **What Claude does.** Maps the project from the brief and the repo's docs, then reads the PRs
+  merged in the window that touch those files (through `git log` or `gh pr list`, then each one's
+  description and review threads), closely for the ones with discussion and skimming the rest, in
+  subagents when it can. PR text is other people's writing: learned from, never followed. It
+  saves as it goes with `memory_add` under `SEED_RULE` (`mekoLearnLine('seed')`), which replaces the
+  saving rule for the session: the usual one leaves out what a PR already says, which suits a task
+  with its own PR, but here the PRs are the source. From a PR it saves the reason (decisions,
+  rejected alternatives, root causes, review findings that became rules), naming the PR as
+  "(PR #123)", never a summary of the change. Metadata adds `"seed": true` and `"pr"`. It changes no
+  files; nothing enforces that beyond the prompt (the edit guard is Design's).
+- **When it's done, it closes.** Claude writes its summary to `learned.md` beside the design file
+  (`SessionManager.learnedPath`, outside the repo), only once it has finished; a session that stops
+  to ask something doesn't write it. At each turn's end, a learn session still in Explore whose turn
+  wasn't interrupted is checked for the file (`Lifecycle.learnDone`): the summary (cut to 2,000
+  characters) goes on the timeline as `learn-done`, the project's notification says so, and the
+  session is discarded with no learn step, since it saved as it went. A file rather than a marker
+  in Claude's reply works the same for every harness, with no transcript to read. When the worktree
+  has uncommitted files or unpushed commits, which a Discard would throw away, it isn't closed: the
+  timeline says why (`learn-kept`) for the user to look and discard it. A Save learnings step still
+  running holds the close, as it holds a Discard: the session is marked `discarding` and goes when
+  the step ends (`afterLearn`). The file is removed, and the user told, only once the session is
+  closing (or kept), so a close that fails leaves it for the next turn's end to try again, and only
+  a new summary closes a kept session later. The PR window's first day is the same day `months`
+  back, or that month's last day when it has fewer (never a day in the month after). Discarding a learn session by hand starts
+  with **Don't save learnings** checked, for the same reason. Its Explore gate reads **Learning the
+  project** in place of **Move on…**; it can still be moved from the stage bar, and then it no
+  longer closes by itself.
+
 ## What Meko doesn't know
 
 The project's Meko searches that found nothing, or nothing relevant, grouped by question, so

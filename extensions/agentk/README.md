@@ -133,6 +133,14 @@ your phone can connect.
   the mod, AgentK asks Claude in a turn of its own and Claude saves under the same rule. **Save learnings** in the session's
   header (or the ⋯ sheet on a phone), or `/agentk_learn` in the terminal, does it any time.
   Check **Don't save learnings** beside Merge & Close or Discard to close a session without it.
+- **Learn the project to seed a new datapack.** When you open a project on a new datapack (or one
+  with nothing in it yet), the New session dialog starts on **Learn the project**: say what the
+  project is about, where its files are, and how many months of PRs to read (24 by default). The
+  session reads those files and the PRs merged in that time that touch them (descriptions and review
+  threads), and saves what a teammate would want to know before working on it: how the parts fit,
+  how it's built and tested, its traps, and from the PRs the decisions and why. It changes no files,
+  and when it's done it writes a summary to its timeline and closes by itself. While the datapack
+  is empty, the project's home offers it again.
 - **Share a project** by sharing its dedicated datapack with someone, by email or with its share
   link: turn the link on in the Share dialog with the role it gives, copy it, and post it where your
   team is. A project datapack shared with you shows a banner and a notification, and opens as a new

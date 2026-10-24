@@ -36,6 +36,7 @@ export function ProjectHomeView({
   ghLogin,
   onMenu,
   onBack,
+  onLearn,
   onError,
 }: {
   project: ProjectWithSessions;
@@ -51,6 +52,8 @@ export function ProjectHomeView({
   /** Opens the projects drawer (phone layout). */
   onMenu: () => void;
   onBack: () => void;
+  /** Opens the New session dialog on Learn the project, offered while the dedicated datapack is empty. */
+  onLearn: () => void;
   onError: (m: string) => void;
 }) {
   const mobile = useIsMobile();
@@ -193,6 +196,14 @@ export function ProjectHomeView({
                     Add a Meko API key
                   </button>
                 )}
+              </div>
+            )}
+            {mekoConfigured && dedicated && home && !home.hasLearnSession && dedicated.memoryCount === 0 && dedicated.knowledgeCount === 0 && (
+              <div className="dp-none">
+                <span className="muted">This datapack is empty.</span>
+                <button className="btn small" id="home-learn" onClick={onLearn}>
+                  Learn the project
+                </button>
               </div>
             )}
             {mekoConfigured && <AttachDatapack

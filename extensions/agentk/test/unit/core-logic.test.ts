@@ -21,7 +21,7 @@ import { extractPrompt } from '../../src/server/learn.js';
 import { launchedAgentId, pinSlug, sessionAgentId } from '../../src/server/meko.js';
 import { getPaths } from '../../src/server/paths.js';
 import {
-  DEFAULT_PROMPTS, mekoPrFooter, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoLearnLine, mekoSaveSystemLine, render, SAVING_RULE, type PromptName,
+  DEFAULT_PROMPTS, learnTask, mekoPrFooter, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoLearnLine, mekoSaveSystemLine, render, SAVING_RULE, type PromptName,
 } from '../../src/server/prompts.js';
 import { parseSettings, sessionDatapack, sessionRow, slugify } from '../../src/server/store.js';
 import { shq } from '../../src/server/launcher.js';
@@ -572,6 +572,10 @@ function dropV38(db: ReturnType<typeof openDb>) {
   dropSessionColumns(db, 'untrusted');
 }
 
+function dropV40(db: ReturnType<typeof openDb>) {
+  dropSessionColumns(db, 'purpose');
+}
+
 function dropV39(db: ReturnType<typeof openDb>) {
   dropSessionColumns(db, 'position');
 }
@@ -705,10 +709,10 @@ function dropV12(db: ReturnType<typeof openDb>) {
 }
 const V11_COLUMNS = ['kind'];
 
-/** Undoes migrations 39 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
+/** Undoes migrations 40 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
 function undoMigrations(db: ReturnType<typeof openDb>, oldest: number) {
-  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35, dropV36, dropV37, dropV38, dropV39];
-  for (let v = 39; v >= oldest; v--) undo[v - 12](db);
+  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35, dropV36, dropV37, dropV38, dropV39, dropV40];
+  for (let v = 40; v >= oldest; v--) undo[v - 12](db);
 }
 
 function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {
@@ -720,7 +724,7 @@ function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {
 describe('Meko recall in prompts', () => {
   it('asks for a search only in prompts that start new work', () => {
     const asking = (Object.keys(DEFAULT_PROMPTS) as PromptName[]).filter((n) => mekoRecallLine(n));
-    expect(asking.sort()).toEqual(['ci', 'code', 'conflicts', 'design', 'design-plan', 'explore', 'move-code', 'move-design', 'review', 'review-held', 'review-people', 'review-pr']);
+    expect(asking.sort()).toEqual(['ci', 'code', 'conflicts', 'design', 'design-plan', 'explore', 'move-code', 'move-design', 'review', 'review-held', 'review-people', 'review-pr', 'seed']);
     expect(mekoRecallLine('design')).toMatch(/search Meko for earlier designs, decisions and gotchas/);
     expect(mekoRecallLine('ci')).toMatch(/gotchas about the code each finding \(or failure\) is in/);
     expect(mekoRecallLine('conflicts')).toMatch(/gotchas about the code in each conflicting file/);
@@ -829,6 +833,18 @@ describe('naming', () => {
 
   it('renders prompt placeholders', () => {
     expect(render('PR #{{pr}} on {{branch}}{{missing}}', { pr: 12, branch: 'ak/x' })).toBe('PR #12 on ak/x');
+  });
+
+  it("writes a learn session's task from its brief, with the PR window's first day", () => {
+    const now = Date.UTC(2026, 9, 23);
+    expect(learnTask({ about: ' Billing. ', where: '', months: 24 }, now)).toBe(
+      "What this project is about:\nBilling.\n\nWhere its files are:\nThe user didn't say: start from the repo's README and docs, and its top-level folders.\n\nRead the PRs merged since 2024-10-23.",
+    );
+    expect(learnTask({ about: 'Billing.', where: 'svc/', months: 0 }, now)).toMatch(/svc\/\n\nRead no PRs: the user asked for none\.$/);
+    // A day the month back doesn't have is that month's last, never a day in the month after.
+    const since = (iso: string, months: number) => learnTask({ about: 'x', where: '', months }, Date.parse(iso)).match(/since (\S+)\.$/)?.[1];
+    expect([since('2026-10-31', 1), since('2028-03-31', 1), since('2027-03-31', 1), since('2026-01-31', 2), since('2026-03-15', 15)])
+      .toEqual(['2026-09-30', '2028-02-29', '2027-02-28', '2025-11-30', '2024-12-15']);
   });
 });
 

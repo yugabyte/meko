@@ -21,6 +21,11 @@ Meko API key** while Meko is off. A shared datapack already attached can become 
 New sessions use it, each pinning it for its own agent id. Search is hidden for a project with no
 datapacks.
 
+While the dedicated datapack has no memories and no knowledge (its counts from Meko, so not while
+Meko is off or doesn't answer) and the project has never had a learn session, the box says the
+datapack is empty, with **Learn the project**, which opens the New session dialog on that choice
+(see [Learn sessions](recall-and-learn.md#learn-sessions)).
+
 The dedicated datapack's row has **Switch** (while Meko is on). It opens the same dialog, titled
 **Switch the dedicated datapack**, to make a new datapack or one of yours the dedicated one; attached
 shared datapacks are listed first, and a new one's default name gets `-2` (or the next free number)
