@@ -2,10 +2,11 @@ name: Meko release
 
 # Meko (backend/) releases on its own train, beside AgentK's (agentk-release.yml). Versions are
 # 0.<UTC date YYYYMMDD>.<n>, tagged meko-v<version>. A push to main that changes backend/ cuts a
-# release when it contains meko feat/fix/perf/deps commits since the last Meko tag and the tests
-# pass. The release scripts are the repo root's scripts/release/*.sh --product meko. Meko's
-# releases are the repo's "latest": their install.sh is the one-line install. Run the workflow by
-# hand to force a release, or to rebuild the assets of an existing meko-v tag.
+# release when it contains meko feat/fix/perf/deps commits (naming meko, alone or in a list such as
+# agentk,meko) since the last Meko tag and the tests pass. The release scripts are the repo root's
+# scripts/release/*.sh --product meko. Meko's releases are the repo's "latest": their install.sh is
+# the one-line install. Run the workflow by hand to force a release, or to rebuild the assets of an
+# existing meko-v tag.
 
 on:
   push:

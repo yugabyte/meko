@@ -43,6 +43,10 @@ describe('check-title.sh', () => {
     'fix(agentk): handle a: colon in the summary',
     `fix(agentk/web): ${'a'.repeat(55)}`,
     `fix(agentk/web): ${'a'.repeat(55)} (#123)`,
+    // A change that ships in more than one component names each.
+    'feat(agentk,meko): move the home into Meko',
+    'feat(agentk/meko,meko/cli)!: move the home into Meko',
+    'fix(meko,repo,agentk): ship all three',
   ])('accepts %s', (title) => {
     const r = check(title);
     expect(r.stderr).toBe('');
@@ -77,6 +81,15 @@ describe('check-title.sh', () => {
     ['fix(agentk): x ', 'ends with a space'],
     ['fix(agentk): x  (#12)', 'ends with a space'],
     ['fix(agentk): x\nmore', 'one line'],
+    ['feat(agentk, meko): x', 'Bad component list "agentk, meko"'],
+    ['feat(agentk,): x', 'Bad component list "agentk,"'],
+    ['feat(,meko): x', 'Bad component list ",meko"'],
+    ['feat(agentk,,meko): x', 'Bad component list'],
+    ['feat(agentk,web): x', 'Unknown component "web"'],
+    ['feat(agentk/web,agentk/server): x', 'Component "agentk" is named twice'],
+    ['feat(meko,meko): x', 'Component "meko" is named twice'],
+    ['feat(agentk,meko/Cli): x', 'Bad area "Cli"'],
+    ['chore(agentk,meko)!: x', "\"chore\" doesn't release"],
   ])('rejects %j', (title, why) => {
     const r = check(title);
     expect(r.status).toBe(1);

@@ -48,4 +48,14 @@ describe('releaseNotes', () => {
   ])('leaves out %j', (message) => {
     expect(releaseNotes([commit(message)], 'o/r')).toEqual([]);
   });
+
+  it.each(['feat(agentk,meko): ship both (#20)', 'feat(meko/cli,agentk/web): ship both (#20)', 'feat(meko,repo): ship both (#20)'])(
+    'keeps %j: a subject that names Meko and another component releases both',
+    (message) => {
+      const component = /\(([^)]*)\)/.exec(message)![1];
+      expect(releaseNotes([commit(message, '6666666fff')], 'o/r')).toEqual([
+        { title: 'Features', items: [{ component, summary: 'ship both', pr: 20, sha: '6666666', url: 'https://github.com/o/r/pull/20' }] },
+      ]);
+    },
+  );
 });

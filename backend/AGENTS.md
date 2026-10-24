@@ -79,7 +79,8 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
 - Commits and PR titles name the `meko` component (`fix(meko/cli): ...`). Meko releases on its
   own train (`.github/workflows/meko-release.yml`, tags `meko-v<version>`): a `feat`, `fix`,
   `perf` or `deps` commit with component `meko` on `main` cuts a Meko release, and never an AgentK
-  one. Use `chore` for what doesn't change what ships ([install.md](docs/install.md)).
+  one. A change that also ships in AgentK names both (`feat(agentk,meko): ...`) and releases
+  both. Use `chore` for what doesn't change what ships ([install.md](docs/install.md)).
 - Keep the docs in `docs/` and this file current in the same commit as the code, and the repo
   root's `README.md` too when the commands, their flags or the build requirements change. Check
   the change against [REVIEW.md](REVIEW.md).

@@ -146,7 +146,8 @@ agents should read it before changing code there.
   `CLAUDE*`, `KIRO_*`, `OPENCODE*`, `GH_*`, `GIT_*` and `TMUX*` from the environment and points `HOME` at an empty
   folder. `npm run typecheck` covers the tests too (`tsconfig.test.json`).
 - Commits and PR titles: `<type>(<component>[/<area>])[!]: <summary>` with one of nine types and,
-  for AgentK, the component `agentk` (`feat(agentk/web): …`), checked by
+  for AgentK, the component `agentk` (`feat(agentk/web): …`; `feat(agentk,meko): …` for a change
+  that ships in Meko too, which releases both), checked by
   the repo root's `scripts/check-title.sh` (see the repo root's `.claude/skills/commit/SKILL.md`).
   `feat`/`fix`/`perf`/`deps` commits trigger a release (`0.YYYYMMDD.N`) when pushed to `main`;
   `ci`/`test`/`docs`/`nit`/`chore` don't. PRs are squash-merged, so the PR title is the subject;

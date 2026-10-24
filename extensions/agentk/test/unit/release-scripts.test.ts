@@ -74,6 +74,29 @@ describe('release-notes.sh', () => {
     expect(r.stdout).toContain('### Fixes\n\n- meko/engine: reload the model');
     expect(r.stdout).not.toMatch(/AgentK feature|first/);
   });
+
+  it('releases a subject that names both components on both trains', () => {
+    commit('feat(agentk/meko,meko/cli): move the home into Meko');
+    commit('fix(repo,meko): a shared script');
+    commit('perf(meko/engine,agentk): load faster');
+    // Lookalikes that name neither in a list.
+    commit('fix(mekoish): an old free-form component');
+    for (const product of ['agentk', 'meko']) {
+      const r = run('release-notes.sh', ['--product', product]);
+      expect(r.status, product).toBe(0);
+      expect(r.stdout, product).toContain('### Features\n\n- agentk/meko,meko/cli: move the home into Meko');
+      expect(r.stdout, product).toContain('- repo,meko: a shared script');
+      expect(r.stdout, product).toContain('### Performance\n\n- meko/engine,agentk: load faster');
+    }
+    expect(run('release-notes.sh', ['--product', 'meko']).stdout).not.toContain('mekoish');
+    expect(run('release-notes.sh', ['--product', 'agentk']).stdout).toContain('mekoish');
+  });
+
+  it('gives AgentK nothing from a subject that names only Meko, with or without an area', () => {
+    commit('feat(meko/cli): a Meko command');
+    commit('fix(meko): a Meko fix');
+    expect(run('release-notes.sh', ['--product', 'agentk']).status).toBe(3);
+  });
 });
 
 describe('prune-releases.sh', () => {
