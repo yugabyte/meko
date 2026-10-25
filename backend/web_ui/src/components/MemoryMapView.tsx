@@ -14,7 +14,7 @@ export const STATE_COLOR: Record<MemoryState, string> = {
 
 export const STATE_LABEL: Record<MemoryState, string> = {
   learning: "Learning",
-  kept: "Kept",
+  kept: "Reviewed",
   collective: "Collective",
 };
 

@@ -26,7 +26,7 @@ const TONE: Record<string, "success" | "primary" | "danger"> = { ADD: "success",
 
 const NOW: Record<MemoryState, string> = {
   learning: "A learning: not kept or promoted yet.",
-  kept: "Kept in this datapack's memory.",
+  kept: "Reviewed and kept as a memory in this datapack; no longer waiting on the Learnings list.",
   collective: "Promoted to the collective memory, so every agent finds it through the knowledge base.",
 };
 
