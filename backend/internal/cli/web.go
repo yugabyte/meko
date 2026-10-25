@@ -271,6 +271,16 @@ func (w *webListener) Proxies() []*extproxy.Proxy {
 	return out
 }
 
+// notify tells each running extension with a web UI that what changed (extproxy.Notify), one at a
+// time; a failure is logged, never the change itself.
+func (w *webListener) notify(ctx context.Context, what string) {
+	for _, p := range w.Proxies() {
+		if err := p.Notify(ctx, what); err != nil {
+			w.log.Warn("couldn't tell an extension of a change", "extension", p.Name, "what", what, "error", err)
+		}
+	}
+}
+
 // watchHandoffs asks the extensions that couldn't hand over yet again every webRetry, and closes the
 // returned channel when one does and its settings change the listener's.
 func (w *webListener) watchHandoffs(ctx context.Context, pending bool, cfg config.Config) <-chan struct{} {

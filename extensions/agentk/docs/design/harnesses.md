@@ -47,7 +47,7 @@ Kiro **Let Kiro run any tool without asking** while Kiro is on, and for OpenCode
 while OpenCode is on ([Without tracking](#opencode)). Each of the tab's fields (`defaultHarness`,
 `claudeEnabled`, `opencodeEnabled`, `opencodeDisableTracking`, `kiroEnabled`, `kiroTrustTools`) saves as it's
 changed; there's no Save.
-The no-agent banner's **Settings** opens this tab. The Meko tab keeps each agent's Meko row.
+Under each agent that's on, available and with a Meko to use, a **Meko** row says whether that agent's sessions reach AgentK's Meko, with **Set up Claude Code with this Meko** or **Set up Kiro with this Meko** when they don't ([Datapacks](datapacks.md)); the Claude Code Meko banner's **Details** opens the tab on Claude Code. The no-agent banner's **Settings** opens this tab.
 
 **No agent is required.** AgentK installs and runs with any one of them, or more; nothing assumes
 `claude` is there. At start the server writes AgentK's own hook files (`writeHookFiles`: the
@@ -62,7 +62,7 @@ agent that's turned on has answered and none is available, a create (and Ask Age
 says to install Claude Code, OpenCode or Kiro CLI, a banner says the same with a **Settings** button, the New
 session dialog shows it in place of starting, and the palette leaves Ask AgentK out
 (`AppState.askAgentk`). Claude Code's Meko check (`MekoClaudeWatch`) runs only while Claude Code is
-available, and the Meko tab shows Claude Code's row only then. Sessions already on an agent that's
+available, and Settings › Harness shows Claude Code's Meko row only then. Sessions already on an agent that's
 gone keep their row: a relaunch exits at once and shows as exited, like a crash. Turning an agent off
 only stops offering it for new sessions: Claude Code sessions still relaunch, resume and recover with
 AgentK's mod, whose version check (`supportsMod`) reads Claude Code's version even while it's off.
@@ -276,8 +276,8 @@ false`), in an owner-only `run/opencode/meko.json` passed with `OPENCODE_CONFIG`
 key never goes in the session's environment, where every command OpenCode runs would see it. When
 the user's own OpenCode config (`$XDG_CONFIG_HOME/opencode` or `~/.config/opencode`: `opencode.json`,
 `opencode.jsonc`, `config.json`) already has a `meko` server, AgentK leaves it alone and passes no
-file. The Meko tab's OpenCode row says which (`MekoStatus.opencode`). The file is written at each
-launch, and removed as soon as Meko's URL or key changes or Meko is turned off (`mekoChanged`), so
+file. OpenCode's Meko row in Settings › Harness says which (`MekoStatus.opencode`). The file is written at each
+launch, and removed as soon as Meko's URL or key changes (`mekoChanged`), so
 a key the user removed or rotated never stays on disk. An `OPENCODE_CONFIG` the user sets in their
 profile is replaced by AgentK's while AgentK adds its Meko.
 

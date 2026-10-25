@@ -87,10 +87,10 @@ gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-d
 #  2. unpacks to <home>/app/<ver>, points app/current at it, then runs `agentk install`:
 #  3. asks for your repos folder (default ~/code), and stops when there's no `meko` command: the
 #     Meko on this computer serves AgentK to browsers (at /ext/agentk/) and signs people in
-#  4. Meko: verifies the API key (reuses MEKO_API_KEY from ~/.claude/settings.json, else asks for
-#     a Meko Cloud key, and Enter uses the Meko running on this computer, which isn't stored;
-#     --meko-url and --meko-key name one; --no-meko is ignored) and offers to run Meko's setup for
-#     Claude Code if its plugin, MCP server or key is missing (declining is a warning)
+#  4. Meko: uses Meko's Meko Cloud link, else the Meko running on this computer, and stores neither
+#     (no key is asked for: --meko-key, with --meko-url, links one in Meko; a key AgentK kept before
+#     is handed to Meko once; --no-meko is ignored) and offers to run Meko's setup for Claude Code if
+#     its plugin, MCP server or key is missing (declining is a warning)
 #  5. picks the database location (local disk for an older home still on NFS), writes config.toml
 #     (with the Meko data folder the home is in); on an older home, says it moves into
 #     Meko's data folder once the server has started

@@ -66,15 +66,16 @@ The first start downloads the embedding model (23 MB). On RHEL 8, set
 | Command | What it does |
 |---|---|
 | `meko start` / `stop` / `restart` | Start the server (through its service once installed), and stop or restart it. `start` and `stop` also start and stop the extensions; `stop --keep-extensions` doesn't |
-| `meko status` | Whether it's running, its URL, version, data folder, memory engine and auth mode, usage stats, its service, updates and extensions |
+| `meko status` | Whether it's running, its URL, version, data folder, memory engine and auth mode, usage stats, its service, updates, the Meko Cloud link and extensions |
 | `meko logs [-f] [-n N]` | The server's and the memory engine's logs, merged by time; `-f` follows them; `--server`, `--memory-engine` or `--service` shows one, `--json` the raw lines |
 | `meko serve` | Run the server in the foreground |
 | `meko version` | Meko's version, and Go's, SQLite's and sqlite-vec's |
 | `meko ui [path] [--no-open]` | Open the web UI in the browser (`meko ui /ext/agentk/` opens AgentK's); `--no-open` only prints its link |
 | `meko setup_link` | Print a one-time link that creates the web UI's login for remote access, or resets a lost one |
+| `meko cloud_link [--url U] [--web-url W] [--api-url A] [--off]` | Link Meko Cloud (or another Meko server) for the extensions, such as AgentK: reads the API key from stdin, or asks for it on a terminal, checks it and saves it; `--off` unlinks. The web UI's Settings › Meko Cloud does the same |
 | `meko export [<name\|id>] [-o FILE] [--force]` | Write a datapack (default: the default one) to one zip: memories, collective memories, conversations, knowledge files and artifacts with their embeddings and file contents, and the call log. It won't replace a file unless `--force` |
 | `meko list mcp-tools [--json]` | The MCP tools Meko serves, each with a line on what it does; needs no running server |
-| `meko token [--mcp] [--json]` | The token MCP and REST clients send; `--mcp` prints the `claude mcp add` command for Claude Code, `--json` the MCP URL, the web UI's URL and the token |
+| `meko token [--mcp] [--json]` | The token MCP and REST clients send; `--mcp` prints the `claude mcp add` command for Claude Code, `--json` the MCP URL, the web UI's URL, the token and the Meko Cloud link |
 | `meko install [--no-service] [--access local\|remote]` | Set this meko up: the `meko` command, the login service, and how browsers reach the web UI |
 | `meko uninstall [--purge [--force] [--with-extensions]]` | Remove the service and the installed releases, keeping the data; `--purge` also destroys the data as `meko destroy` does, asking first |
 | `meko update [--check]` | Install the newest release now (under the service it updates itself); `--check` only looks |

@@ -18,6 +18,8 @@ import type {
   KnowledgeActivity,
   MemoryChange,
   MemoryPage,
+  MekoCloud,
+  MekoCloudUpdate,
   Metrics,
   PromotedMemory,
   ProvisionStatus,
@@ -146,6 +148,9 @@ export const api = {
 
   usageStats: () => request<UsageStats>("GET", "/settings/usage-stats"),
   setUsageStats: (enabled: boolean) => request<UsageStats>("PATCH", "/settings/usage-stats", { enabled }),
+  mekoCloud: () => request<MekoCloud>("GET", "/settings/meko-cloud"),
+  linkMekoCloud: (u: MekoCloudUpdate) => request<MekoCloud>("PUT", "/settings/meko-cloud", u),
+  unlinkMekoCloud: () => request<MekoCloud>("DELETE", "/settings/meko-cloud"),
 
   memories: (id: string, opts: { scope: "memories" | "learnings"; q: string; page: number }) =>
     request<MemoryPage>(

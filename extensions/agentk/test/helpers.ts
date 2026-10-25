@@ -13,6 +13,7 @@ import { mekoScope, pinSlug, sessionAgentId, type MekoClient, type TokenTry } fr
 import { MekoApi } from '../src/server/mekoapi.js';
 import type { MekoTools } from '../src/server/mekosettings.js';
 import type { LocalMekoProbe } from '../src/server/mekolocal.js';
+import type { OwnMekoLink } from '../src/server/mekohandover.js';
 import { getPaths } from '../src/server/paths.js';
 import { startHost, type HostHandle } from '../src/server/host/host.js';
 import { SessionHost } from '../src/server/hostclient.js';
@@ -124,25 +125,17 @@ export function fakeMekoApi(baseUrl = 'https://meko.test/api/v1') {
   };
 }
 
-/** The Meko tab's checks and Claude Code setup, recorded instead of run. */
+/** Meko's setup for the agents (Settings › Harness), recorded instead of run. */
 export function stubMekoTools() {
   const calls: { name: string; args: unknown[] }[] = [];
   const state: {
-    checkError: string | null; apiError: string | null; setupError: string | null;
+    setupError: string | null;
     /** What trying each of Claude Code's tokens finds; a token not listed is rejected. */
     tokens: Record<string, TokenTry>;
     /** Whether `claude mcp get meko` finds a server (null: it couldn't be asked). */
     claudeHasMcp: boolean | null;
-  } = { checkError: null, apiError: null, setupError: null, tokens: {}, claudeHasMcp: false };
+  } = { setupError: null, tokens: {}, claudeHasMcp: false };
   const tools: MekoTools = {
-    async check(url, apiKey) {
-      calls.push({ name: 'check', args: [url, apiKey] });
-      return state.checkError ? { ok: false, error: state.checkError } : { ok: true };
-    },
-    async checkApi(apiUrl) {
-      calls.push({ name: 'checkApi', args: [apiUrl] });
-      return state.apiError ? { ok: false, error: state.apiError } : { ok: true };
-    },
     async setUpClaude(url, apiKey, log) {
       calls.push({ name: 'setUpClaude', args: [url, apiKey] });
       log('setting up');
@@ -174,6 +167,14 @@ export interface TestEnv {
   mekoTools: ReturnType<typeof stubMekoTools>;
   /** What the Meko on this computer answers when Core reads it (none at first); never the real `meko`. */
   local: LocalMekoProbe;
+  /**
+   * AgentK's own key handed to Meko (`meko cloud_link`), recorded instead of run: each call's link,
+   * and what it answers (`handOverError` refuses; else Meko's link becomes it, as Meko's would).
+   */
+  handOvers: OwnMekoLink[];
+  handOverError: { value: string | null };
+  /** While set, a handover waits for it before answering (as Meko's checks take a while). */
+  handOverHold: { value: Promise<void> | null };
   fakeDir: string;
   /** Stops the session host, ending every Claude in it, as a host crash would. The next ensureServer starts it again. */
   killHost(): Promise<void>;
@@ -246,6 +247,9 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
   const mekoApi = fakeMekoApi();
   const mekoTools = stubMekoTools();
   const local: LocalMekoProbe = { state: 'none', meko: null };
+  const handOvers: OwnMekoLink[] = [];
+  const handOverError: { value: string | null } = { value: null };
+  const handOverHold: { value: Promise<void> | null } = { value: null };
   let hostHandle: HostHandle | null = null;
   const host = new SessionHost(paths, {
     services: () => null,
@@ -262,10 +266,17 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
     paths, config: cfg, db, version: '0.0.0-test', meko, mekoCaptureScript: opts.capture === false ? null : FAKE_CAPTURE,
     host, services: () => null, log: silentLogger, timers: false, mekoApi: mekoApi.api, mekoTools: mekoTools.tools,
     localMeko: async () => ({ ...local }),
+    mekoHandOver: async (_home, link) => {
+      handOvers.push(link);
+      await handOverHold.value;
+      if (handOverError.value) return { ok: false, error: handOverError.value };
+      local.cloud = { set: true, url: link.url, apiKey: link.apiKey, webUrl: link.webUrl || 'https://cloud.mekodata.ai', apiUrl: link.apiUrl || 'https://cloud.mekodata.ai/api/v1' };
+      return { ok: true };
+    },
   });
   if (opts.start !== false) await core.start();
   return {
-    home, repo, core, meko, mekoApi, mekoTools, local, fakeDir, killHost,
+    home, repo, core, meko, mekoApi, mekoTools, local, handOvers, handOverError, handOverHold, fakeDir, killHost,
     async cleanup() {
       await core.stop().catch(() => undefined);
       await killHost();

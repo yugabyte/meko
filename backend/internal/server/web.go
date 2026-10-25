@@ -84,6 +84,7 @@ func (s *Server) registerWeb(v1 *echo.Group) {
 	v1.POST("/auth/totp/disable", s.totpDisable)
 	v1.GET("/extensions", s.extensionList)
 	v1.POST("/extensions/:name/:action", s.extensionAction)
+	s.registerCloud(v1)
 	s.e.Any(extRootRoute, s.extensionRoot)
 	s.e.Any(extRoute, s.extension)
 }

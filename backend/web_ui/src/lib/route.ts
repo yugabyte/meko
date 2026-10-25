@@ -1,4 +1,5 @@
-// The UI's routes, on the History API: /datapacks/<id>/<tab>, /status, /extensions and /account.
+// The UI's routes, on the History API: /datapacks/<id>/<tab>, /status, /extensions, /account and
+// /settings/meko-cloud.
 // meko serve answers every such path with index.html. /signin and /setup are the sign-in screens',
 // outside the app (main.tsx).
 
@@ -13,12 +14,13 @@ export interface Route {
   // A conversation open in the conversations tab, or the memories tab's scope.
   itemId?: string;
   // A page of the whole install rather than of a datapack.
-  view?: "status" | "extensions" | "account";
+  view?: "status" | "extensions" | "account" | "meko-cloud";
 }
 
 function parse(path: string): Route {
   const [, root, id, tab, item] = path.split("/");
   if (root === "status" || root === "extensions" || root === "account") return { tab: "overview", view: root };
+  if (root === "settings" && id === "meko-cloud") return { tab: "overview", view: "meko-cloud" };
   if (root !== "datapacks" || !id) return { tab: "overview" };
   return {
     datapackId: id,
@@ -28,6 +30,7 @@ function parse(path: string): Route {
 }
 
 export function href(r: Route): string {
+  if (r.view === "meko-cloud") return "/settings/meko-cloud";
   if (r.view) return `/${r.view}`;
   if (!r.datapackId) return "/";
   return `/datapacks/${r.datapackId}/${r.tab}${r.itemId ? `/${r.itemId}` : ""}`;

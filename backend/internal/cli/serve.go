@@ -19,6 +19,7 @@ import (
 
 	"github.com/yugabyte/meko/backend/internal/auth"
 	"github.com/yugabyte/meko/backend/internal/callhome"
+	"github.com/yugabyte/meko/backend/internal/cloudlink"
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/logging"
@@ -200,6 +201,11 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	if err != nil {
 		return err
 	}
+	// The Meko Cloud link's, in the same secret store.
+	cloudSt, err := cloudStore(l, cfg)
+	if err != nil {
+		return err
+	}
 
 	// The store API the memory engine calls, on its unix socket with a per-start token of its own.
 	internalToken, err := auth.NewToken()
@@ -303,17 +309,20 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	// The web listener: the web UI and the extensions' for browsers, with local access or the login.
 	web := newWebListener(l, st, logins, log)
 	logins.OnRevoke(web.RevokeEnded)
+	// The Meko Cloud link: the web UI and meko cloud_link change it; the running extensions hear.
+	cloud := &cloudlink.Service{Store: cloudSt, Check: cloudlink.CheckMCP, CheckAPI: cloudlink.CheckAPI,
+		Changed: func(ctx context.Context) { web.notify(ctx, "cloud") }}
 	web.newOpts = func(wcfg config.Config) server.Options {
 		return server.Options{Info: info, Port: wcfg.Web.Port, Auth: cfg.Server.Auth, Logger: log,
 			Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, MCP: mcpHandler,
-			REST: registerREST, Upload: upload, Download: download, UI: ui, Login: logins,
+			REST: registerREST, Upload: upload, Download: download, UI: ui, Login: logins, Cloud: cloud,
 			Web: &server.Web{Access: wcfg.Web.Access, Extensions: web.Proxies, Installed: web.Installed,
 				Run: web.RunExtension, Release: web.Release, Jobs: web.jobs}}
 	}
 	srv := server.New(server.Options{
 		Info: info, Port: cfg.Server.Port, Token: token, ClientToken: clientToken, Auth: cfg.Server.Auth, Logger: log,
 		Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, MCP: mcpHandler,
-		REST: registerREST, Upload: upload, Download: download, Login: logins,
+		REST: registerREST, Upload: upload, Download: download, Login: logins, Cloud: cloud,
 		WebURL: func() string {
 			if u := web.Status(context.Background()).URL; u != "" {
 				return u

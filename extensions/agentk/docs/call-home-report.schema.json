@@ -32,7 +32,7 @@
           "required": ["enabled", "keySource", "sharing"],
           "properties": {
             "enabled": { "type": "boolean" },
-            "keySource": { "enum": ["config", "env", "claude", "local", "none"] },
+            "keySource": { "enum": ["meko", "local", "config", "env", "claude", "none"] },
             "sharing": { "enum": ["api", "none"] }
           }
         },

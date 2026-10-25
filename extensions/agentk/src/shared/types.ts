@@ -950,10 +950,14 @@ export interface ReleaseNotes {
 
 export interface MekoStatus {
   /**
-   * Meko is on (a key is set and Meko isn't turned off); when false projects work without
-   * datapacks. Meko isn't polled: an action that needs it and fails says why.
+   * There's a Meko to use (Meko's Meko Cloud link, or the Meko on this computer); when false projects
+   * work without datapacks. Meko isn't polled: an action that needs it and fails says why.
    */
   configured: boolean;
+  /** The Meko MCP server AgentK uses (and sets the agents up with); null when there's none. */
+  url: string | null;
+  /** Where its key comes from (`MekoKeySource`); null when there's none. */
+  source: MekoKeySource | null;
   /** Meko web app base URL, for links to datapacks. Null when unknown. */
   webUrl: string | null;
   /**
@@ -979,7 +983,7 @@ export interface MekoStatus {
   opencode: { own: boolean } | null;
   /**
    * The Meko on this computer, as last read. While it's `none` (no `meko` at all), a banner that
-   * can't be dismissed says to install Meko, with a Meko Cloud key too.
+   * can't be dismissed says to install Meko, with a Meko Cloud link too.
    */
   local: LocalMekoState;
 }
@@ -1625,7 +1629,7 @@ export interface Settings {
   idleWorktreesPerRepo: number;
   /** Days an idle worktree may go unused before it's removed (0 to 365; 0 keeps it until the cap trims it). */
   idleWorktreeDays: number;
-  /** `[call_home] enabled`: send anonymous usage stats (the Account tab's checkbox). */
+  /** `[call_home] enabled`: send anonymous usage stats (the checkbox on Settings › General). */
   callHomeEnabled: boolean;
   /**
    * Set while YB_DISABLE_CALLHOME in AgentK's environment turns usage stats off whatever `callHomeEnabled`
@@ -1654,14 +1658,15 @@ export interface Settings {
   kiroEnabled: boolean;
   /** `[kiro] trust_tools`: Kiro sessions start with every tool trusted (`--trust-tools=*`), so Kiro runs any tool without asking. */
   kiroTrustTools: boolean;
-  meko: MekoSettings;
 }
 
 /**
- * Where AgentK's Meko key comes from: config.toml, the environment, Claude Code's settings.json, or,
- * with none of those, the Meko running on this computer (its client token, read from Meko).
+ * Where AgentK's Meko key comes from: Meko's Meko Cloud link (`meko`), or the Meko running on this
+ * computer (`local`, its client token). Before Meko owns the link (a Meko too old to keep one, or
+ * the one-time handover still to run), AgentK's own: config.toml, the environment or Claude Code's
+ * settings.json.
  */
-export type MekoKeySource = 'config' | 'env' | 'claude' | 'local';
+export type MekoKeySource = 'meko' | 'local' | 'config' | 'env' | 'claude';
 
 /**
  * The Meko on this computer, as `meko token --json` last said: running, installed but stopped, none
@@ -1669,44 +1674,7 @@ export type MekoKeySource = 'config' | 'env' | 'claude' | 'local';
  */
 export type LocalMekoState = 'running' | 'stopped' | 'none' | 'failed';
 
-/** The Meko part of Settings. The key itself never leaves the server. */
-export interface MekoSettings {
-  /** The MCP server URL as set in config.toml; empty means the environment, Claude Code or Meko Cloud decides. */
-  url: string;
-  /** The MCP server AgentK uses now. */
-  effectiveUrl: string;
-  /** Meko Cloud's MCP server, used when nothing else names one. */
-  defaultUrl: string;
-  /** The MCP server AgentK would use with `url` empty (from the environment, Claude Code's settings or Meko Cloud). */
-  fallbackUrl: string;
-  /** Web app and API URLs as set; empty means worked out from the MCP URL. */
-  webUrl: string;
-  apiUrl: string;
-  /** The web app URL MEKO_WEB_URL or Claude Code's settings give, used when `webUrl` is empty; '' when unset. */
-  envWebUrl: string;
-  /** What they work out to now; null when they can't be (your own Meko with no URL set). */
-  effectiveWebUrl: string | null;
-  effectiveApiUrl: string | null;
-  /** The key's last four characters, or null when there's no key. */
-  keyHint: string | null;
-  keySource: MekoKeySource | null;
-  /** The Meko on this computer, which AgentK uses when no key is set. */
-  local: LocalMekoState;
-}
-
-/**
- * PUT /api/settings `meko`: a field left out is unchanged; `apiKey: ''` keeps the current key.
- * `useLocal: true` clears config.toml's key and MCP URL, so AgentK uses the Meko on this computer.
- */
-export interface MekoSettingsUpdate {
-  useLocal?: boolean;
-  url?: string;
-  apiKey?: string;
-  webUrl?: string;
-  apiUrl?: string;
-}
-
-export type SettingsUpdate = Partial<Omit<Settings, 'meko' | 'hostName'>> & { meko?: MekoSettingsUpdate };
+export type SettingsUpdate = Partial<Omit<Settings, 'hostName'>>;
 
 /** What Discard would throw away. */
 export interface DiscardCheck {
@@ -2510,9 +2478,10 @@ export type TermServerMessage =
 // POST   /api/sessions/:id/comments/send       → SendCommentsResult
 // GET    /api/sessions/:id/held-reviews        → HeldReview[]   (held for the user, oldest first)
 // POST   /api/sessions/:id/held-reviews HeldReviewsRequest → HeldReviewsResult   (send to AgentK in PR & Review, or dismiss)
-// GET    /api/settings                         → Settings
+// GET    /api/settings                         → Settings   (reads the Meko on this computer and its Meko Cloud link again first,
+//                                                           waiting 1.5 s at most. The link is Meko's: its web UI's
+//                                                           Settings › Meko Cloud, PUT /api/v1/settings/meko-cloud there)
 // PUT    /api/settings        SettingsUpdate   → Settings   (bind and port are read-only: set them in config.toml;
-//                                                           a `meko` change is checked against Meko before it's saved;
 //                                                           a lower idleWorktreesPerRepo or idleWorktreeDays removes
 //                                                           the idle worktrees now beyond it; serverName is trimmed,
 //                                                           at most 64 characters with no control characters, and
@@ -2527,6 +2496,9 @@ export type TermServerMessage =
 //                                                           the user asks; then checks Claude Code's Meko again)
 // POST   /api/settings/meko/kiro-setup         → Settings   (runs Meko's setup for Kiro (`--client kiro`) with AgentK's Meko,
 //                                                           only when the user asks; then checks Kiro's Meko again)
+// POST   /_meko/changed       { what }         → 204        (Meko, on AgentK's socket: something AgentK reads from Meko changed;
+//                                                           `cloud`, the Meko Cloud link, reads `meko token --json` again.
+//                                                           Outside /api, a write from another origin is refused)
 // POST   /api/harnesses/refresh                → HarnessStatus[]   (Check again in Settings: reads the version of every harness
 //        that's turned on again now (one that's off isn't read); a change is pushed to every page)
 // POST   /api/harnesses/:id/update             → HarnessStatus   (runs the harness's own updater (`claude update`,

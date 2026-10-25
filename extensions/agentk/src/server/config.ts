@@ -5,7 +5,7 @@ import { claudeUserDir } from './claude.js';
 import { DEFAULT_MEKO_URL, DEFAULT_MEKO_WEB_URL, mekoWebUrl } from '../shared/mekourls.js';
 import type { MekoKeySource } from '../shared/types.js';
 import { DEFAULT_HARNESS, HARNESS_IDS, isHarnessId, type HarnessId } from '../shared/harnesses.js';
-import { isLocalMeko, localMeko, originOf } from './mekolocal.js';
+import { isLocalMeko, localMeko, mekoLinkHandedOver, originOf } from './mekolocal.js';
 import { expandHome, type Paths } from './paths.js';
 
 export type UpdateChannel = 'stable' | 'prerelease' | 'off';
@@ -26,8 +26,11 @@ export interface Config {
    * captureTranscripts: send session transcripts to Meko conversations. Off by default until Meko's capture stops
    * extracting loaded skills as user requirements (MEKO-710); off, sessions also run without the Meko plugin.
    * apiUrl: Meko's REST API base (sharing); empty means the web app URL plus /api/v1.
-   * url and apiKey: a Meko Cloud (or other) key. With none here, in the environment or in Claude
-   * Code's settings, AgentK uses the Meko running on this computer (mekolocal.ts), which isn't stored here.
+   * url, apiKey, webUrl and apiUrl: a Meko Cloud (or other) key from before Meko owned the link. AgentK
+   * hands them to Meko once (mekohandover.ts) and never reads them again, but leaves them here, for a
+   * rollback to the release before; until then (or under a Meko too old to keep a link) they stand in
+   * for it. Meko's link, or else the Meko running on this computer, is
+   * read from Meko (mekolocal.ts), never stored here.
    * home: Meko's data folder, as Meko last told AgentK (the MEKO_HOME it sets on the commands it
    * runs); empty means Meko's default. AgentK's home is in it (paths.ts `mekoHome`).
    */
@@ -206,12 +209,18 @@ export function isLoopback(bind: string): boolean {
 }
 
 /**
- * Meko credentials: config first, then the environment, then Claude Code's settings.json env.
- * The key comes from the first of those that has one. The URL comes from the first that has one,
- * except that a later source's URL is skipped when that source has a key of its own: it belongs
- * to that other key. With no URL, Meko Cloud. With no key in any of them, the Meko running on this
- * computer, whose token goes only to its own URL; a key that's a copy of its token or for its URL
- * (Meko's setup for Claude Code writes one) is the live local Meko too, so a copy never goes stale.
+ * Meko credentials. Meko owns the Meko Cloud link (`cloud` in `meko token --json`): once it has had
+ * one (linked, or unlinked since), or once AgentK handed it its own key (`mekoLinkHandedOver`),
+ * AgentK uses Meko's link, else the Meko running on this computer, and nothing else.
+ *
+ * Before that (a Meko too old to keep a link, or one that was never set, with the handover still to
+ * run) AgentK's own sources stand in: config first, then the environment, then Claude Code's
+ * settings.json env. The key comes from the first of those that has one. The URL comes from the
+ * first that has one, except that a later source's URL is skipped when that source has a key of
+ * its own: it belongs to that other key. With no URL, Meko Cloud. With no key in any of them, the
+ * Meko running on this computer, whose token goes only to its own URL; a key that's a copy of its
+ * token or for its URL (Meko's setup for Claude Code writes one) is the live local Meko too, so a
+ * copy never goes stale.
  */
 export function resolveMeko(cfg: Config): { url: string; apiKey: string } {
   const { url, apiKey } = resolveMekoWithSource(cfg);
@@ -223,8 +232,8 @@ export function mekoConfigured(cfg: Config): boolean {
   return !!resolveMeko(cfg).apiKey;
 }
 
-/** resolveMeko, plus where the key came from (null when there is none). */
-export function resolveMekoWithSource(cfg: Config): { url: string; apiKey: string; keySource: MekoKeySource | null } {
+/** AgentK's own Meko key and URL (config, the environment, Claude Code's settings), before Meko owns the link. */
+export function ownMekoKey(cfg: Config): { url: string; apiKey: string; keySource: 'config' | 'env' | 'claude' | null } {
   const sources = [
     () => ({ url: cfg.meko.url, apiKey: cfg.meko.apiKey }),
     () => ({ url: process.env.MEKO_MCP_URL, apiKey: process.env.MEKO_API_KEY }),
@@ -239,24 +248,45 @@ export function resolveMekoWithSource(cfg: Config): { url: string; apiKey: strin
   const keyAt = sources.findIndex((s) => s.apiKey);
   const apiKey = keyAt < 0 ? '' : sources[keyAt].apiKey;
   const url = sources.find((s, i) => s.url && (keyAt < 0 || i <= keyAt || !s.apiKey))?.url || DEFAULT_MEKO_URL;
+  return { url, apiKey, keySource: keyAt < 0 ? null : (['config', 'env', 'claude'] as const)[keyAt] };
+}
+
+/** resolveMeko, plus where the key came from (null when there is none). */
+export function resolveMekoWithSource(cfg: Config): { url: string; apiKey: string; keySource: MekoKeySource | null } {
+  const { meko: local, cloud } = localMeko();
+  const fromLocal = local ? { url: local.url, apiKey: local.token, keySource: 'local' as const } : null;
+  if (cloud?.set || mekoLinkHandedOver()) {
+    if (cloud?.apiKey) return { url: cloud.url, apiKey: cloud.apiKey, keySource: 'meko' };
+    return fromLocal ?? { url: DEFAULT_MEKO_URL, apiKey: '', keySource: null };
+  }
+  const own = ownMekoKey(cfg);
   // The local Meko's URL and token are a pair: no other source's URL ever takes its token.
-  const local = localMeko().meko;
-  if (local && (keyAt < 0 || isLocalMeko(local, url, apiKey))) return { url: local.url, apiKey: local.token, keySource: 'local' };
-  const keySource = keyAt < 0 ? null : (['config', 'env', 'claude'] as const)[keyAt];
-  return { url, apiKey, keySource };
+  if (fromLocal && (!own.apiKey || isLocalMeko(local, own.url, own.apiKey))) return fromLocal;
+  return own;
 }
 
 /**
  * With the Meko on this computer, a web app or API URL from config or the environment is used only
- * on that Meko's own origin: the local token goes to no other server.
+ * on that Meko's own origin: the local token goes to no other server. Once Meko owns the link,
+ * AgentK's own URLs aren't used at all.
  */
 function forKey(override: string, eff: { url: string; keySource: MekoKeySource | null }): string {
+  if (mekoOwnsLink()) return '';
   return eff.keySource !== 'local' || originOf(override) === originOf(eff.url) ? override : '';
 }
 
-/** Meko web app URL: config first, then the environment, then derived from the MCP URL. */
+/** Meko owns the link: it has had one, or AgentK handed it its key. */
+function mekoOwnsLink(): boolean {
+  return !!localMeko().cloud?.set || mekoLinkHandedOver();
+}
+
+/**
+ * Meko web app URL: Meko's link's; else config first, then the environment, then derived from the
+ * MCP URL.
+ */
 export function resolveMekoWebUrl(cfg: Config): string | null {
   const eff = resolveMekoWithSource(cfg);
+  if (eff.keySource === 'meko') return localMeko().cloud?.webUrl || null;
   return mekoWebUrl(eff.url, forKey(cfg.meko.webUrl || envMekoWebUrl(), eff));
 }
 
@@ -282,10 +312,12 @@ export function mekoHost(cfg: Config): string {
 }
 
 /**
- * Meko's REST API base (used for sharing): config first, then MEKO_API_URL, then the web app URL
- * plus /api/v1 (the Meko web app serves its API on the same origin). Null when neither is known.
+ * Meko's REST API base (used for sharing): Meko's link's; else config first, then MEKO_API_URL, then
+ * the web app URL plus /api/v1 (the Meko web app serves its API on the same origin). Null when
+ * neither is known.
  */
 export function resolveMekoApiUrl(cfg: Config): string | null {
+  if (resolveMekoWithSource(cfg).keySource === 'meko') return localMeko().cloud?.apiUrl || null;
   const override = forKey(cfg.meko.apiUrl.trim() || process.env.MEKO_API_URL?.trim() || '', resolveMekoWithSource(cfg));
   if (override) return override.replace(/\/+$/, '');
   const web = resolveMekoWebUrl(cfg);
@@ -308,7 +340,7 @@ export function mekoWebUrlWarning(cfg: Config): string | null {
   }
   // A Meko on this computer serves no web app yet: nothing to set.
   if (local) return `${off} off: the Meko on this computer (${host}) has no web app yet; they come with Meko's web UI`;
-  return `the Meko web app for ${host} isn't known, so ${off} off. Set it on the Meko tab in Settings, or with [meko] web_url in config.toml or MEKO_WEB_URL`;
+  return `the Meko web app for ${host} isn't known, so ${off} off. Set it in Meko's web UI, under Settings › Meko Cloud`;
 }
 
 /** The `env` block of Claude Code's user settings.json; empty when there's none. Values may be any JSON type. */

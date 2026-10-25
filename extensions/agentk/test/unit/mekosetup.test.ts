@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { tempDir } from '../helpers.js';
 import {
-  MekoSetupError, claudeHasMekoMcpAsync, claudeMekoTokens, ensureMekoSetup, envKeyGap, latestMekoSetup, matchesIntegrity, mekoClaudeGaps, mekoKeyForConfig, readClaudeMeko, runMekoSetup,
+  MekoSetupError, claudeHasMekoMcpAsync, claudeMekoTokens, ensureMekoSetup, envKeyGap, latestMekoSetup, matchesIntegrity, mekoClaudeGaps, readClaudeMeko, runMekoSetup,
   sameMekoUrl, type MekoSetupPackage,
 } from '../../src/server/mekosetup.js';
 
@@ -233,23 +233,6 @@ describe('the install step for Meko in Claude Code', () => {
   it('fails when the setup exits non-zero or leaves something missing', async () => {
     await expect(step({ installDeps: true }, { code: 1 }).promise).rejects.toThrow(/didn't finish/);
     await expect(step({ installDeps: true }, { after: ['Claude Code has no meko MCP server.'] }).promise).rejects.toThrow(/Still: Claude Code has no meko MCP server\./);
-  });
-});
-
-describe('where the Meko key is kept', () => {
-  const base = { url: 'https://mcp.mekodata.ai/mcp', defaultUrl: 'https://mcp.mekodata.ai/mcp', envKey: undefined, settingsUrl: undefined };
-
-  it("keeps no key in config.toml once Claude Code's settings hold it, so an old one can't shadow it", () => {
-    expect(mekoKeyForConfig({ ...base, apiKey: 'NEW', typed: true, settingsKey: 'NEW' })).toEqual({ apiKey: '', url: '' });
-    // A self-hosted URL stays with it when the settings don't name one.
-    expect(mekoKeyForConfig({ ...base, url: 'https://meko.internal/mcp', apiKey: 'K', typed: false, settingsKey: 'K' })).toEqual({ apiKey: '', url: 'https://meko.internal/mcp' });
-    expect(mekoKeyForConfig({ ...base, url: 'https://meko.internal/mcp', apiKey: 'K', typed: false, settingsKey: 'K', settingsUrl: 'https://meko.internal/mcp' })).toEqual({ apiKey: '', url: '' });
-  });
-
-  it('stores a typed key the settings and environment lack, and otherwise leaves config.toml alone', () => {
-    expect(mekoKeyForConfig({ ...base, apiKey: 'K', typed: true, settingsKey: undefined })).toEqual({ apiKey: 'K', url: '' });
-    expect(mekoKeyForConfig({ ...base, apiKey: 'K', typed: true, settingsKey: undefined, envKey: 'K' })).toBe('unchanged');
-    expect(mekoKeyForConfig({ ...base, apiKey: 'K', typed: false, settingsKey: 'OTHER' })).toBe('unchanged');
   });
 });
 
