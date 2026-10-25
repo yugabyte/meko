@@ -42,7 +42,7 @@ export function MemoryMapView({
     <div className="space-y-2">
       <svg
         viewBox="-1.12 -1.12 2.24 2.24"
-        className={cx("w-full rounded-lg border bg-card", mini ? "max-h-56" : "max-h-[32rem]")}
+        className={cx("aspect-square w-full rounded-lg border bg-card", mini ? "max-w-56" : "max-w-[32rem]")}
         role="img"
         aria-label="Memory map"
       >

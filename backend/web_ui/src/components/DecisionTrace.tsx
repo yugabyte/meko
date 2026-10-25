@@ -10,7 +10,7 @@ import { CALL_RETENTION_DAYS, callResults, isRead, resultCount } from "../lib/ca
 import { duration } from "../lib/format";
 import type { MekoCall, Turn } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
-import { MemoryMapView } from "./MemoryMapView";
+import { MemoryMapView, STATE_COLOR } from "./MemoryMapView";
 import { CallTraceDialog } from "./metrics/CallTraceDialog";
 import { Badge, cx } from "./ui";
 
@@ -26,7 +26,7 @@ export function DecisionTrace({ datapackId, turn }: { datapackId: string; turn: 
   if (calls.length === 0 && !turn.reasoning && plan.length === 0 && !pruned) return null;
 
   const found = reads.reduce((n, c) => n + resultCount(c), 0);
-  const saw = new Set(
+  const saw = new Set<string>(
     reads.flatMap((c) => (c.steps ?? []).flatMap((s) => (s.step === "memory_search" ? (s.ids ?? []) : []))),
   );
   const ms = calls.reduce((n, c) => n + c.ms, 0);
@@ -118,18 +118,35 @@ function Calls({ calls, onOpen }: { calls: MekoCall[]; onOpen: (c: MekoCall) => 
   );
 }
 
-// The memories this turn's searches returned, lit on the datapack's map.
+// The memories this turn's searches returned, in the order they came: a list to read, beside a
+// small map of the datapack with them lit and every other memory faded.
 function SawMap({ datapackId, ids }: { datapackId: string; ids: Set<string> }) {
   const map = useLoad(() => api.memoryMap(datapackId), [datapackId]);
   if (!map.data) return null;
-  const gone = [...ids].filter((id) => !map.data!.points.some((p) => p.id === id)).length;
+  const byId = new Map(map.data.points.map((p) => [p.id, p]));
+  const seen = [...ids].flatMap((id) => byId.get(id) ?? []);
+  const gone = ids.size - seen.length;
   return (
-    <div className="mt-2 space-y-1">
-      <p className="text-xs text-muted-foreground">
-        What the agent saw: the {ids.size} {ids.size === 1 ? "memory" : "memories"} its searches returned, lit on this
-        datapack's memory map{gone > 0 && ` (${gone} since deleted or not embedded)`}.
+    <div className="mt-3 space-y-2">
+      <p className="text-xs font-medium text-muted-foreground">
+        What the agent saw: {ids.size} {ids.size === 1 ? "memory" : "memories"}
+        {gone > 0 && ` (${gone} since deleted)`}
       </p>
-      <MemoryMapView map={map.data} lit={ids} mini />
+      <div className="grid gap-3 sm:grid-cols-[14rem_minmax(0,1fr)]">
+        <MemoryMapView map={map.data} lit={ids} mini />
+        <ol className="space-y-1 text-sm">
+          {seen.map((p) => (
+            <li key={p.id} className="flex items-start gap-2">
+              <span className={cx("mt-1.5 size-2 shrink-0 rounded-full bg-current", STATE_COLOR[p.state])} />
+              <span className="min-w-0 break-words">{p.text}</span>
+            </li>
+          ))}
+        </ol>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        On the map, the bright dots are these; the faded ones are the datapack's other memories, which the agent
+        didn't get.
+      </p>
     </div>
   );
 }
