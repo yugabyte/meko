@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Database, Menu } from "lucide-react";
 import { api } from "./lib/api";
-import { href, navigate, useRoute } from "./lib/route";
+import { href, navigate, useNavigated, useRoute } from "./lib/route";
 import { applyTheme, initialTheme, type Theme } from "./lib/theme";
 import type { AuthStatus } from "./lib/types";
 import { useLoad } from "./lib/useLoad";
@@ -42,10 +42,9 @@ export default function App({ auth, onAuthChanged }: { auth: AuthStatus; onAuthC
 
   useShortcuts(activeId);
 
-  // The phone drawer closes whenever the page changes.
+  // The phone drawer closes on every navigation, a tap on the page already open included.
   const [menu, setMenu] = useState(false);
-  const at = href(route);
-  useEffect(() => setMenu(false), [at]);
+  useNavigated(useCallback(() => setMenu(false), []));
 
   const reloadCurrent = current.reload;
   const onChanged = useCallback(() => reloadCurrent(), [reloadCurrent]);
@@ -74,7 +73,7 @@ export default function App({ auth, onAuthChanged }: { auth: AuthStatus; onAuthC
           </Button>
           <Logo theme={theme} />
         </div>
-        <ErrorBoundary key={at}>
+        <ErrorBoundary key={href(route)}>
           {route.view === "status" ? (
             <div className={PAGE}>
               <StatusPage />
@@ -84,7 +83,7 @@ export default function App({ auth, onAuthChanged }: { auth: AuthStatus; onAuthC
               <ExtensionsPage />
             </div>
           ) : route.view === "meko-cloud" ? (
-            <div className="p-4 sm:p-8">
+            <div className={PAGE}>
               <MekoCloudPage />
             </div>
           ) : route.view === "account" ? (

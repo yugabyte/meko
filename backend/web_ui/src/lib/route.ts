@@ -3,7 +3,7 @@
 // meko serve answers every such path with index.html. /signin and /setup are the sign-in screens',
 // outside the app (main.tsx).
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export const TABS = ["overview", "analytics", "search", "memories", "knowledge", "conversations", "artifacts", "connect"] as const;
 export type Tab = (typeof TABS)[number];
@@ -43,16 +43,21 @@ export function navigate(r: Route): void {
   window.dispatchEvent(new Event(EVENT));
 }
 
-export function useRoute(): Route {
-  const [route, setRoute] = useState(() => parse(window.location.pathname));
+// Calls on after every navigation, back and forward included, even one to the page already open.
+// on must be stable (a state setter, or a useCallback).
+export function useNavigated(on: () => void): void {
   useEffect(() => {
-    const on = () => setRoute(parse(window.location.pathname));
     window.addEventListener("popstate", on);
     window.addEventListener(EVENT, on);
     return () => {
       window.removeEventListener("popstate", on);
       window.removeEventListener(EVENT, on);
     };
-  }, []);
+  }, [on]);
+}
+
+export function useRoute(): Route {
+  const [route, setRoute] = useState(() => parse(window.location.pathname));
+  useNavigated(useCallback(() => setRoute(parse(window.location.pathname)), []));
   return route;
 }

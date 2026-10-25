@@ -59,7 +59,8 @@ export function Sidebar({
       <aside
         className={cx(
           "fixed inset-y-0 left-0 z-50 flex w-64 shrink-0 flex-col border-r bg-sidebar transition-transform md:static md:w-60 md:translate-x-0",
-          open ? "translate-x-0" : "-translate-x-full",
+          // Closed, it's also invisible below md, so its links leave the tab order and the accessibility tree.
+          open ? "translate-x-0" : "invisible -translate-x-full md:visible",
         )}
       >
         <div className="flex items-center justify-between px-4 py-4">

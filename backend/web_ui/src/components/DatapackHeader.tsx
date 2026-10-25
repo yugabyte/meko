@@ -77,7 +77,7 @@ export function DatapackHeader({
         </div>
       </div>
       {inviting && <CloudBanner onClose={() => setInviting(false)} />}
-      <nav className="no-scrollbar -mx-4 mt-4 flex gap-5 overflow-x-auto px-4 text-sm sm:mx-0 sm:mt-5 sm:px-0">
+      <nav className="no-scrollbar -mx-4 mt-4 flex gap-5 overflow-x-auto px-4 pb-px text-sm sm:mx-0 sm:mt-5 sm:px-0">
         {(Object.keys(LABELS) as Tab[]).map((t) => (
           <a
             key={t}
