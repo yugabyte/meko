@@ -126,6 +126,40 @@ describe('a deck in its datapack', () => {
     expect(a).toBe(b);
   });
 
+  it.each([
+    ['the Meko that has its datapack', true, /saved in Meko Cloud \(mcp\.meko\.example\).*Link Meko to Meko Cloud \(mcp\.meko\.example\) again/],
+    ['the Meko on this computer, when the Meko it\'s opened under hasn\'t its datapack', false, null],
+  ])('gives a draft from before Presenter kept its Meko %s', async (_n, cloudHasIt, refusedLocally) => {
+    meko.where = null;
+    const decks = new DeckStore(getPaths(join(dir, 'home')), meko);
+    const d = await decks.create({ title: 'Untagged', brief: emptyBrief(), sources: { content: [], template: null, animations: [] } });
+    const kept = meko.datapacks;
+    meko.where = { kind: 'cloud', host: 'mcp.meko.example' };
+    if (!cloudHasIt) {
+      meko.datapacks = [];
+      expect((await decks.list()).find((x) => x.id === d.id)?.elsewhere).toEqual({ kind: 'local', host: '' });
+      await expect(decks.state(d.id)).rejects.toThrow(/saved in the Meko on this computer.*Unlink Meko Cloud in Meko's Settings › Meko Cloud/);
+      meko.datapacks = kept;
+    } else {
+      expect((await decks.state(d.id)).id).toBe(d.id);
+    }
+    meko.where = { kind: 'local', host: '127.0.0.1:7778' };
+    if (refusedLocally) await expect(decks.state(d.id)).rejects.toThrow(refusedLocally);
+    else expect((await decks.state(d.id)).id).toBe(d.id);
+  });
+
+  it('names a new deck the Meko it was made in, though the link changed as it was made', async () => {
+    const decks = new DeckStore(getPaths(join(dir, 'home')), meko);
+    const make = meko.createDatapack.bind(meko);
+    meko.createDatapack = async (name, description) => {
+      const row = await make(name, description);
+      meko.where = { kind: 'cloud', host: 'mcp.meko.example' };
+      return row;
+    };
+    const d = await decks.create({ title: 'Mid-switch', brief: emptyBrief(), sources: { content: [], template: null, animations: [] } });
+    await expect(decks.state(d.id)).rejects.toThrow(/saved in the Meko on this computer/);
+  });
+
   it('fetches a damaged piece again, then says so', async () => {
     const s = store();
     const saved = await s.save('dp1', sampleDeck(), new Set(), {});

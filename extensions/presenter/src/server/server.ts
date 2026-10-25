@@ -32,6 +32,8 @@ export interface Core {
   runs: Runs;
   /** Whether Claude Code is installed, for the health route. */
   claudeFound: () => boolean;
+  /** Meko says its Meko Cloud link changed: find Meko again. */
+  mekoChanged: () => void;
   /** Every open page's event socket. */
   events: Set<WebSocket>;
 }
@@ -161,7 +163,10 @@ export async function buildServer(core: Core, opts: { webDir: string | null }): 
   // Live runs follow every change to their deck, by hand, by Claude, undo or restore alike.
   core.decks.listen((s) => core.runs.deckChanged(s.id, s.deck));
 
-  app.get('/api/health', async (): Promise<Health> => ({ ok: true, version: core.version, api: API_VERSION, meko: await core.meko.status(), claude: core.claudeFound() }));
+  app.get('/api/health', async (): Promise<Health> => {
+    const meko = await core.meko.status();
+    return { ok: true, version: core.version, api: API_VERSION, meko, mekoAt: await core.meko.at(), claude: core.claudeFound() };
+  });
   app.get('/api/datapacks', async () => groupDatapacks(await core.meko.listDatapacks()));
 
   app.get('/api/decks', async () => core.decks.list());
@@ -234,6 +239,14 @@ export async function buildServer(core: Core, opts: { webDir: string | null }): 
 
   app.post<{ Params: P; Body: StartRunRequest }>('/api/decks/:id/runs', async (req) => core.runs.start(req.params.id, str(req.body?.variant, 50) || undefined));
   app.get<{ Params: P }>('/api/runs/:id', async (req) => core.runs.get(req.params.id));
+
+  // Meko, on Presenter's socket: something Presenter reads from Meko changed (`cloud`: the Meko Cloud
+  // link). Outside /api, so the same-origin rule is checked here; all it does is find Meko again.
+  app.post<{ Body: { what?: unknown } }>('/_meko/changed', async (req, reply) => {
+    if (!sameOrigin(req)) return reply.code(403).send({ error: 'Cross-origin request refused.' });
+    if (req.body?.what === 'cloud') core.mekoChanged();
+    return reply.code(204).send();
+  });
 
   app.get('/ws/events', { websocket: true }, (socket: WebSocket) => {
     core.events.add(socket);

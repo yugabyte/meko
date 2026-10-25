@@ -29,8 +29,8 @@ export interface JobsDeps {
   /** The Claude Code command, with any arguments before Presenter's (tests run a stub with node). */
   claude: string[];
   run: ClaudeRunner;
-  /** Meko's MCP URL and key for Claude's config, or null when there's no Meko. */
-  mekoCreds: () => Promise<MekoCreds | null>;
+  /** The MCP URL and key of the Meko Presenter uses, for Claude's config, or null when there's none. */
+  mekoCreds: () => Promise<Pick<MekoCreds, 'url' | 'key'> | null>;
   emit: (e: ServerEvent) => void;
 }
 
@@ -69,7 +69,8 @@ export class Jobs {
 
   /** Queues a job on the deck's session: it runs after the deck's earlier jobs. */
   async start(deckId: string, req: JobRequest): Promise<Job> {
-    const deck = await this.d.decks.deck(deckId);
+    // state(), not deck(): a deck of another Meko than the one Presenter uses now isn't Claude's to change.
+    const { deck } = await this.d.decks.state(deckId);
     if (req.kind === 'ask' && !req.instruction.trim()) throw new HttpError(400, 'Say what to change.');
     const title = req.kind === 'map' ? (req.note ? 'Redraw the story map' : 'Draft the story map')
       : req.kind === 'build' ? `Build ${req.scenes?.length === 1 ? `"${deck.scenes[req.scenes[0]!]?.title ?? req.scenes[0]}"` : 'slides'}`
@@ -181,6 +182,8 @@ export class Jobs {
    * on sessions of their own, which never replace the deck's.
    */
   private async claude(j: Running, session: SessionArgs | null, message: string, timeoutMs: number, prefix = '', deckSession = true): Promise<RunResult> {
+    // Meko's link may have changed since the job was queued: Claude works only on the deck's own Meko.
+    await this.d.decks.state(j.deckId);
     const creds = await this.d.mekoCreds();
     // The PATH the health check looks in (~/.local/bin, where Claude Code's installer puts claude).
     const env = { ...process.env, PATH: withLocalBin(process.env.PATH ?? ''), ...(creds ? { [MEKO_KEY_ENV]: creds.key } : {}) };
@@ -289,7 +292,8 @@ export class Jobs {
     j.status = 'running';
     this.changed(j);
     try {
-      const deck = await this.d.decks.deck(j.deckId);
+      // state(), not deck(): a job queued before Meko's link changed doesn't run on the other Meko.
+      const { deck } = await this.d.decks.state(j.deckId);
       const packs = await this.packs(deck);
       if (req.kind === 'build') {
         await this.build(j, deck, packs, req.scenes);

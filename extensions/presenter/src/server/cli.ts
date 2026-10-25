@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { runClaude } from './claude.js';
 import { DeckStore } from './decks.js';
 import { Jobs } from './jobs.js';
-import { findMeko, isLoopback, loadConfig, MekoClient, type PresenterConfig } from './meko.js';
+import { MekoClient } from './meko.js';
 import { getPaths, MEKO_COMMANDS, refuseOtherMeko, withLocalBin, type Paths } from './paths.js';
 import { HEALTHY_MS, markHealthy, uncountStart } from './probation.js';
 import { Runs } from './runs.js';
@@ -91,11 +91,12 @@ async function serve(paths: Paths): Promise<void> {
   const claude = process.env.PRESENTER_CLAUDE ? JSON.parse(process.env.PRESENTER_CLAUDE) as string[] : ['claude'];
   const jobs = new Jobs({
     decks, meko, claude, run: runClaude,
-    mekoCreds: async () => (await findMeko(paths)).creds,
+    // Claude works on the Meko the deck store uses; Jobs checks it's the deck's before each run.
+    mekoCreds: () => meko.current(),
     emit: (e) => broadcast({ events }, e),
   });
   const runs = new Runs(decks, join(paths.run, 'runs'));
-  const core: Core = { version: v, meko, decks, jobs, runs, events, claudeFound: () => onPath(claude[0]!) };
+  const core: Core = { version: v, meko, decks, jobs, runs, events, claudeFound: () => onPath(claude[0]!), mekoChanged: () => meko.reset() };
   const app = await buildServer(core, { webDir: findWebDir(here) });
   if (await socketAnswers(paths.webSock)) throw new Error(`Another Presenter is serving ${paths.webSock}.`);
   if (existsSync(paths.webSock)) unlinkSync(paths.webSock);
@@ -174,30 +175,35 @@ async function status(paths: Paths): Promise<void> {
 }
 
 /**
- * `install --meko-url <url> --meko-key <key> [--non-interactive]`: what `meko install_extension
- * presenter` runs. config.json keeps a Meko Cloud URL and key. The local Meko's, which `meko
- * install_extension` passes, aren't kept: Presenter asks `meko token --json` for them each time.
+ * A Meko URL and key an older Presenter kept in config.json: Meko's Meko Cloud link (or the Meko on
+ * this computer) is used instead, so a key there is removed rather than left behind.
  */
-function install(paths: Paths, args: string[]): void {
-  const at = (flag: string) => {
-    const i = args.indexOf(flag);
-    return i >= 0 ? args[i + 1] : undefined;
-  };
-  const url = at('--meko-url');
-  const key = at('--meko-key');
-  mkdirSync(paths.home, { recursive: true, mode: 0o700 });
-  const cfg: PresenterConfig = loadConfig(paths);
-  if (url && key) {
-    if (!/^https?:\/\//.test(url)) throw new Error('--meko-url must be an http or https URL');
-    if (isLoopback(url)) delete cfg.meko;
-    else cfg.meko = { url, key };
+function forgetOldKey(paths: Paths): void {
+  let cfg: Record<string, unknown>;
+  try {
+    cfg = JSON.parse(readFileSync(paths.config, 'utf8')) as Record<string, unknown>;
+  } catch {
+    return;
   }
+  if (!cfg || typeof cfg !== 'object' || !('meko' in cfg)) return;
+  delete cfg.meko;
+  if (!Object.keys(cfg).length) return rmSync(paths.config, { force: true });
   // A new 0600 file renamed over the old one: a config.json made by hand doesn't keep a looser mode.
   const tmp = `${paths.config}.tmp`;
   rmSync(tmp, { force: true });
   writeFileSync(tmp, JSON.stringify(cfg, null, 2) + '\n', { mode: 0o600 });
   renameSync(tmp, paths.config);
-  console.log(`Presenter is set up in ${paths.home}${url ? `, using the Meko at ${url}` : ''}`);
+}
+
+/**
+ * `install --meko-url <url> --meko-key <key> [--non-interactive]`: what `meko install_extension
+ * presenter` runs. Neither is kept: Presenter asks `meko token --json` which Meko to use each time
+ * (Meko's Meko Cloud link, else the Meko on this computer).
+ */
+function install(paths: Paths): void {
+  mkdirSync(paths.home, { recursive: true, mode: 0o700 });
+  forgetOldKey(paths);
+  console.log(`Presenter is set up in ${paths.home}. It saves decks where Meko says: its Meko Cloud link, else the Meko on this computer`);
   if (!onPath('claude')) console.log('Install Claude Code (claude) to build decks; playing and editing them work without it');
 }
 
@@ -231,7 +237,7 @@ export async function main(argv: string[]): Promise<void> {
     case 'start': return start(paths);
     case 'stop': return stop(paths);
     case 'status': return status(paths);
-    case 'install': return install(paths, args);
+    case 'install': return install(paths);
     case 'uninstall': return uninstall(paths, args);
     // Where the server listens, for Meko's web listener; not for people to run.
     case '_handoff':

@@ -25,9 +25,9 @@ sh scripts/package-release.sh <version> linux x64 <unpacked nodejs.org Node> out
 sh scripts/smoke-release.sh out/presenter-<version>-linux-x64.tar.gz <version>
 ```
 
-Under `npm run dev` the pages are at `http://127.0.0.1:5179/` with no `<base>`; Meko isn't
-involved, so the server needs a Meko on this computer (`meko start`) or `config.json` with a
-Meko URL and key. To try it behind Meko: `npm run build`, put `dist/server/cli.js` on PATH as
+Under `npm run dev` the pages are at `http://127.0.0.1:5179/` with no `<base>`; Meko's web
+listener isn't involved, but the server still asks `meko token --json` which Meko to use: a Meko
+on this computer (`meko start`), or the Meko Cloud link it keeps (`meko cloud_link`). To try it behind Meko: `npm run build`, put `dist/server/cli.js` on PATH as
 `meko_presenter` (`npm link`), and run `meko install_extension presenter`, then `meko ui /ext/presenter/`.
 
 ## Map
@@ -41,10 +41,10 @@ Meko URL and key. To try it behind Meko: `npm run build`, put `dist/server/cli.j
 | `src/shared/datapacks.ts` | Presenter's datapack prefixes (`presenter/template/`, `presenter/anim/`, `presenter/deck/`) and deck datapack names. |
 | `src/shared/types.ts` | The API contract: every route's request and reply and every WebSocket message. Change it first. |
 | `src/server/cli.ts` | The `meko_presenter` command (the extension is `presenter`: its folder, tags, tarballs and `/ext/presenter/`): `serve`, and what Meko runs (`start`, `stop`, `status`, `install`, `uninstall`, `_handoff`). The pid file counts only when its process is a Presenter server (`isServer`). |
-| `src/server/server.ts` | Fastify on the socket: pages (`<base href="/ext/presenter/">`, no framing), API, WebSockets, the same-origin check. |
+| `src/server/server.ts` | Fastify on the socket: pages (`<base href="/ext/presenter/">`, no framing), API, WebSockets, the same-origin check, and `POST /_meko/changed` (Meko's notice that its Meko Cloud link changed). |
 | `src/server/paths.ts` | The home by Meko's rule (`resolve-cases.json`), the socket path (under `/tmp` for a long home, not `$TMPDIR`), `refuseOtherMeko`. |
-| `src/server/meko.ts` | `MekoPort` and its MCP + REST client (`datapack_create` never sent twice, `mayRetry`); credentials from `config.json` (Meko Cloud) or `meko token --json` (the Meko on this computer, never stored: `findMeko`). |
-| `src/server/decks.ts` | Drafts, undo and redo, assets, save, load, versions, restore. |
+| `src/server/meko.ts` | `MekoPort` and its MCP + REST client (`datapack_create` never sent twice, `mayRetry`). Which Meko is Meko's to say, from `meko token --json` and never stored (`probeMeko`, `mekoFinder`): its Meko Cloud link when linked (REST on the link's own `api_url`, another host), else the Meko on this computer; a link Meko couldn't read keeps the last one, or finds no Meko before one was read. One connection at a time; `current()` (Claude's runs) reads Meko afresh. `reset()` (forgetting the link too) when Meko posts `/_meko/changed`. |
+| `src/server/decks.ts` | Drafts, undo and redo, assets, save, load, versions, restore. Each draft names the Meko its datapack is in (`mine`): one of another Meko can be played but not edited, saved or given to Claude. |
 | `src/server/pieces.ts` | Hashing, uploads (four at a time, manifest last, only what the datapack lacks), checked fetches, the cache. |
 | `src/server/claude.ts`, `jobs.ts`, `prompts.ts` | `claude -p` with the deck's session; the per-deck job queue (map, build on forks, ask); what Claude is told and must answer. |
 | `src/server/runs.ts` | Live run rooms, kept on disk so a restart resumes; they follow every change the deck store makes (`DeckStore.listen`), and a run's moves apply one at a time. |

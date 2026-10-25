@@ -1,7 +1,7 @@
 // The API contract between Presenter's server and its pages: every route's request and reply, and
 // every WebSocket message. Change it first.
 
-import type { DatapackGroups } from './datapacks.js';
+import type { DatapackGroups, MekoAt } from './datapacks.js';
 import type { Brief, Deck, DeckSources } from './deck.js';
 import type { Op } from './ops.js';
 import type { NavAction, RunState } from './run.js';
@@ -14,6 +14,8 @@ export interface Health {
   version: string;
   api: number;
   meko: 'ready' | 'none' | 'failed';
+  /** Where decks are saved: Meko's Meko Cloud link, or the Meko on this computer; null with neither. */
+  mekoAt: MekoAt | null;
   claude: boolean;
 }
 
@@ -27,6 +29,8 @@ export interface DeckSummary {
   title: string;
   savedAt: string | null;
   draft: boolean;
+  /** A draft whose datapack is in another Meko than the one Presenter uses now: it can't be opened. */
+  elsewhere?: MekoAt;
 }
 
 /** POST /api/decks */
