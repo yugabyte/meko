@@ -247,7 +247,7 @@ function FailedStartBanners({
 
 /**
  * Claude Code's sessions don't reach AgentK's Meko (another server, or a token that doesn't work
- * there). AgentK never fixes it on its own: the user sets Claude Code up from here or the Meko tab.
+ * there). AgentK never fixes it on its own: the user sets Claude Code up from here or Settings › Harness › Claude Code.
  */
 function MekoClaudeBanner({ state, onDetails, onError }: { state: AppState; onDetails: () => void; onError: (m: string) => void }) {
   const [busy, setBusy] = useState(false);
@@ -319,7 +319,7 @@ export function Banners({
   onError: (m: string) => void;
   onOpenInvite: (i: DatapackInvite) => void;
   onRetryStart: (f: FailedStart) => void;
-  /** Opens the Meko tab in Settings. */
+  /** Opens Settings › Harness on Claude Code, where its Meko row is. */
   onMekoSettings: () => void;
   /** Opens Settings (its General tab, where the agents are turned on). */
   onSettings: () => void;

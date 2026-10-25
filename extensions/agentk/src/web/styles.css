@@ -2696,61 +2696,6 @@ div[id^='dak-mermaid-'] .label {
   color: var(--bad);
 }
 
-/* Settings, Meko tab: connection, sharing and Claude Code status */
-.meko-status {
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--rule);
-  border-radius: 8px;
-}
-.meko-status-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--rule);
-}
-.meko-status-row:last-child {
-  border-bottom: 0;
-}
-.meko-status-row > span:first-child {
-  min-width: 7em;
-  font-weight: 600;
-}
-.meko-status-row .hint {
-  flex: 1 1 240px;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-/* Meko tab and key dialog: where to get an account and an API key */
-.meko-getkey {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--rule);
-  border-left: 3px solid var(--accent);
-  border-radius: 8px;
-  background: var(--sunk);
-  font-size: 13px;
-}
-.meko-getkey p {
-  margin: 0;
-}
-.meko-getkey-links,
-.meko-getkey-url {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 8px;
-}
-.meko-getkey-url code {
-  flex: 1 1 200px;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
 /* palette */
 /* At the top left with the rail's padding, so the palette opens over the rail's search bar. The
    phone section's .overlay.top comes later and puts it across the top, centred, instead. */
@@ -2933,14 +2878,6 @@ div[id^='dak-mermaid-'] .label {
 .np-limit {
   display: flex;
   justify-content: flex-end;
-}
-/* Settings, Meko tab: on or off */
-.meko-onoff {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px 12px;
 }
 .home-scroll {
   overflow-y: auto;

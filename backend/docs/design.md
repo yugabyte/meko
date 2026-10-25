@@ -97,6 +97,8 @@ of input means no; a no exits 1), or doesn't ask with `--force`.
 ```
 ~/.meko/                     0700
   config.toml                optional; Meko never writes it
+  web.toml, cloud.toml       what Meko chose itself: the web listener's settings (web.md), the
+                             Meko Cloud link's URLs (cloud.md; its key is a secret)
   meko.db, meko.db-wal       0600; the only database
   meko.db.bak-<version>      the copy made before a migration (below)
   client.token               the client token (api.md), unless it's in the Keychain

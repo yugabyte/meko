@@ -722,7 +722,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     { what: 'months not whole', learn: { about: 'x', where: '', months: 1.5 }, error: /whole number/ },
     { what: 'a review', learn: { about: 'x', where: '', months: 1 }, kind: 'review-pr', error: /leave out the PR/ },
     { what: 'no dedicated datapack', learn: { about: 'x', where: '', months: 1 }, noDatapack: true, error: /has none/ },
-    { what: 'Meko off', learn: { about: 'x', where: '', months: 1 }, mekoOff: true, error: /Meko is off/ },
+    { what: 'Meko off', learn: { about: 'x', where: '', months: 1 }, mekoOff: true, error: /there's no Meko/ },
   ] as const)('refuses a learn session with $what', async (c) => {
     const p = 'noDatapack' in c
       ? await env.core.projects.create({ repoPath: env.repo, name: 'Bare', datapack: { mode: 'none' } })

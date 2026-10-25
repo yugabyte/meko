@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { canSignOut, checkSignIn, mekoAuth, SIGN_IN_CHECK_MS } from '../../src/web/signin.js';
+import { checkSignIn, mekoAuth, SIGN_IN_CHECK_MS } from '../../src/web/signin.js';
 
 /** Each check a while after the last, so none is answered by an earlier one (checkSignIn's throttle). */
 let clock = 0;
@@ -52,12 +52,12 @@ describe('signing in through Meko', () => {
   });
 
   it.each([
-    [{ data: { access: 'remote', signed_in: true } }, true],
-    [{ data: { access: 'remote', signed_in: false } }, false],
-    [{ data: { access: 'local', signed_in: false } }, false],
-    [404, false],
-  ] as const)('offers Sign out only where Meko signed this browser in (%j)', async (reply, offered) => {
+    [{ data: { access: 'remote', signed_in: true } }, { access: 'remote', signedIn: true }],
+    [{ data: { access: 'local', signed_in: false } }, { access: 'local', signedIn: false }],
+    [{ data: { access: 'other' } }, null],
+    [404, null],
+  ] as const)('reads what Meko says about this browser (%j)', async (reply, auth) => {
     meko(reply);
-    expect(canSignOut(await mekoAuth())).toBe(offered);
+    expect(await mekoAuth()).toEqual(auth);
   });
 });

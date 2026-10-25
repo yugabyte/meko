@@ -424,7 +424,7 @@ export function NewProjectDialog({
           <p className="hint">
             {mekoConfigured
               ? 'The project starts without a datapack. You can add one later from its home.'
-              : 'Meko isn’t set up, so the project starts without a datapack. Start Meko on this computer (meko start), or add a Meko Cloud key on the Meko tab in Settings, to give projects one.'}
+              : 'Meko isn’t set up, so the project starts without a datapack. Start Meko on this computer (meko start), or link Meko Cloud in Meko’s web UI (Settings › Meko Cloud), to give projects one.'}
           </p>
         ) : dpMode === 'create' ? (
           <p className="hint">Its name is at the bottom, under the repo.</p>

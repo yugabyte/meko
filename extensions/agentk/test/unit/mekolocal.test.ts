@@ -31,6 +31,23 @@ echo "{\\"url\\":\\"http://127.0.0.1:7778/mcp\\",\\"token\\":\\"tok-$MEKO_HOME\\
     expect(await probe()).toEqual({ state: 'running', meko: { url: 'http://127.0.0.1:7778/mcp', token: 'tok-', webUrl: null } });
   });
 
+  it("reads Meko's Meko Cloud link, running or not, and none from a Meko too old to keep one", async () => {
+    const link = '"cloud":{"set":true,"url":"https://mcp.mekodata.ai/mcp","api_key":"mko_tkn_x","web_url":"https://cloud.mekodata.ai","api_url":"https://cloud.mekodata.ai/api/v1"}';
+    meko(`echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":false,${link}}'`);
+    expect(await probe()).toEqual({
+      state: 'stopped', meko: null,
+      cloud: { set: true, url: 'https://mcp.mekodata.ai/mcp', apiKey: 'mko_tkn_x', webUrl: 'https://cloud.mekodata.ai', apiUrl: 'https://cloud.mekodata.ai/api/v1' },
+    });
+    // Unlinked: no key, so no URLs either.
+    meko(`echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":true,"cloud":{"set":true,"url":"https://x/mcp","api_key":""}}'`);
+    expect((await probe()).cloud).toEqual({ set: true, url: '', apiKey: '', webUrl: '', apiUrl: '' });
+    meko(`echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":true,"cloud":"what"}'`);
+    expect(await probe()).not.toHaveProperty('cloud');
+    // One Meko couldn't read says so, for the reader to keep the link it had.
+    meko(`echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":true,"cloud":{"set":false,"url":"","api_key":"","web_url":"","api_url":"","error":"cloud.toml: bad"}}'`);
+    expect(await probe()).toEqual({ state: 'running', meko: { url: 'http://127.0.0.1:7778/mcp', token: 'abc', webUrl: null }, cloudUnreadable: true });
+  });
+
   it.each([
     ['no meko at all', null, 'none'],
     ['no server running', `echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":false}'`, 'stopped'],

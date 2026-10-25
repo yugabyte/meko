@@ -8,8 +8,7 @@ import {
 } from '../../src/server/config.js';
 import { forgetContact, listContacts, recordShares } from '../../src/server/contacts.js';
 import { shortHost } from '../../src/server/core.js';
-import { mekoSettings } from '../../src/server/mekosettings.js';
-import { LocalMekoReader } from '../../src/server/mekolocal.js';
+import { LocalMekoReader, setMekoLinkHandedOver, type LocalMekoProbe } from '../../src/server/mekolocal.js';
 import { all, kvGet, openDb, run, schemaVersion, snapshotDb } from '../../src/server/db.js';
 import { githubRepo, prettyRemote } from '../../src/server/git.js';
 import { ciState, ciSummary, isLogin, isTrustedAuthor, parseReviewDetails, reviewDetailsQuery } from '../../src/server/github.js';
@@ -960,18 +959,46 @@ describe('Meko credentials', () => {
     }
   });
 
-  it('tells the Meko tab what an empty MCP or web app URL falls back to', () => {
+  it("uses Meko's Meko Cloud link once Meko owns it, and nothing of AgentK's own after", async () => {
     clearEnv();
-    claudeSettings({ env: { MEKO_WEB_URL: 'https://settings-web.example' } });
+    claudeSettings({});
     const cfg = structuredClone(DEFAULT_CONFIG);
-    cfg.meko.url = 'https://config.example/mcp';
-    cfg.meko.webUrl = 'https://config-web.example';
-    expect(mekoSettings(cfg)).toMatchObject({ fallbackUrl: DEFAULT_MEKO_URL, envWebUrl: 'https://settings-web.example' });
-    process.env.MEKO_MCP_URL = 'https://env.example/mcp';
-    process.env.MEKO_WEB_URL = 'https://env-web.example';
-    expect(mekoSettings(cfg)).toMatchObject({ fallbackUrl: 'https://env.example/mcp', envWebUrl: 'https://env-web.example' });
-    // The config's own values are left out: they're what the tab's fields hold.
-    expect(mekoSettings(cfg)).toMatchObject({ url: 'https://config.example/mcp', webUrl: 'https://config-web.example' });
+    cfg.meko.apiKey = 'config-key';
+    process.env.MEKO_API_KEY = 'env-key';
+    const local = { url: 'http://127.0.0.1:7778/mcp', token: 'local-token' };
+    const linked = { set: true, url: 'https://meko.example.com/mcp', apiKey: 'meko-key', webUrl: 'https://meko.example.com', apiUrl: 'https://meko.example.com/api/v1' };
+    const probes: LocalMekoProbe[] = [
+      { state: 'running', meko: local, cloud: linked },
+      // `meko` failing keeps the link last read, and so does Meko failing to read it.
+      { state: 'failed', meko: null },
+      { state: 'running', meko: local, cloudUnreadable: true },
+      { state: 'running', meko: local, cloud: { set: true, url: '', apiKey: '', webUrl: '', apiUrl: '' } },
+      // Never set: AgentK's own key stands in until it's handed over.
+      { state: 'running', meko: local, cloud: { set: false, url: '', apiKey: '', webUrl: '', apiUrl: '' } },
+      { state: 'failed', meko: null },
+    ];
+    const reader = new LocalMekoReader(async () => probes.shift()!);
+    try {
+      await reader.refresh();
+      expect(resolveMekoWithSource(cfg)).toEqual({ url: 'https://meko.example.com/mcp', apiKey: 'meko-key', keySource: 'meko' });
+      expect([resolveMekoWebUrl(cfg), resolveMekoApiUrl(cfg)]).toEqual(['https://meko.example.com', 'https://meko.example.com/api/v1']);
+      await reader.refresh();
+      expect(resolveMekoWithSource(cfg).keySource).toBe('meko');
+      await reader.refresh();
+      expect(resolveMekoWithSource(cfg).keySource).toBe('meko');
+      await reader.refresh();
+      expect(resolveMekoWithSource(cfg)).toEqual({ url: local.url, apiKey: 'local-token', keySource: 'local' });
+      await reader.refresh();
+      expect(resolveMekoWithSource(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: 'config-key', keySource: 'config' });
+      // Handed over, AgentK's own sources are never read again, even while `meko` can't be asked.
+      setMekoLinkHandedOver(true);
+      await reader.refresh();
+      expect(resolveMekoWithSource(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: '', keySource: null });
+    } finally {
+      setMekoLinkHandedOver(false);
+      reader.clear();
+      clearEnv();
+    }
   });
 
   it("finds Meko's API: config, then MEKO_API_URL, then the web app plus /api/v1", () => {

@@ -324,17 +324,3 @@ export async function ensureMekoSetup(
   return 'set-up';
 }
 
-/**
- * Where the verified key is kept in config.toml. When Claude Code's settings hold it, config.toml
- * keeps none: config comes first when the server resolves the key, so an older key left there
- * would shadow the one the hooks use. Otherwise a key the user typed is stored there.
- */
-export function mekoKeyForConfig(o: {
-  apiKey: string; url: string; typed: boolean; settingsKey: unknown; settingsUrl: unknown; envKey: string | undefined; defaultUrl: string;
-}): { apiKey: string; url: string } | 'unchanged' {
-  const url = o.url === o.defaultUrl ? '' : o.url;
-  // The URL goes with the key: keep a non-default one here only when the settings don't name one.
-  if (o.settingsKey === o.apiKey) return { apiKey: '', url: o.settingsUrl ? '' : url };
-  if (o.typed && o.envKey !== o.apiKey) return { apiKey: o.apiKey, url };
-  return 'unchanged';
-}

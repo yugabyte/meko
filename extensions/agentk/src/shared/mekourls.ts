@@ -1,8 +1,7 @@
-// Meko Cloud's addresses, and the Meko web app that goes with an MCP server URL. Shared by the
-// server (which links datapacks and shares through the web app) and the web UI (the Meko tab's
-// sign-up links follow what's typed, before it's saved), so both work it out the same way.
+// Meko Cloud's addresses, the Meko web app that goes with an MCP server URL, and Meko's own pages.
+// Shared by the server (which links datapacks and shares through the web app) and the web UI.
 
-/** Meko Cloud's MCP server, used when neither config, the environment nor Claude Code's settings name one. */
+/** Meko Cloud's MCP server, used when a key from before Meko kept the link names no other. */
 export const DEFAULT_MEKO_URL = 'https://mcp.mekodata.ai/mcp';
 /** Meko Cloud's web app, which goes with DEFAULT_MEKO_URL. */
 export const DEFAULT_MEKO_WEB_URL = 'https://cloud.mekodata.ai';
@@ -12,6 +11,14 @@ export const DEFAULT_MEKO_WEB_URL = 'https://cloud.mekodata.ai';
  * with the path stripped (Meko's internal/extproxy), so AgentK's own routes stay at `/`.
  */
 export const AGENTK_PATH = '/ext/agentk/';
+
+/**
+ * Meko's own pages, on the same web listener as AgentK (absolute paths on Meko's origin): the Meko
+ * Cloud link it keeps for its extensions, and the account (password, two-step sign-in) that signs
+ * people in to both. AgentK's Settings › General links to them.
+ */
+export const MEKO_CLOUD_PATH = '/settings/meko-cloud';
+export const MEKO_ACCOUNT_PATH = '/account';
 
 /**
  * Installs Meko on this computer: the installer of the repo's latest release, which is Meko's
