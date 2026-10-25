@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -17,7 +18,7 @@ func TestCallLog(t *testing.T) {
 		{At: now.Add(-100 * 24 * time.Hour), Tool: "context_search", DatapackID: "d1", OK: true},
 		{At: now.Add(-time.Hour), Tool: "context_search", DatapackID: "d1", AgentID: "a", Credential: "client",
 			OK: true, Ms: 12, MemoryN: 3, ConversationN: 1, ScoreHigh: 2, ScoreLow: 2, TokensSent: 1600,
-			TokensSaved: 8400, Steps: []Step{{Step: "memory_search", Ms: 9, N: 3}}},
+			TokensSaved: 8400, Steps: []Step{{Step: "memory_search", Ms: 9, N: 3, IDs: []string{"m1", "m2", "m3"}}}},
 		{At: now, Tool: "memory_add", DatapackID: "d2", OK: false, ErrorCode: "memory_engine_unavailable"},
 	}
 	for _, c := range calls {
@@ -32,7 +33,8 @@ func TestCallLog(t *testing.T) {
 	c := got[0]
 	if c.Tool != "context_search" || c.AgentID != "a" || c.Credential != "client" || !c.OK || c.Ms != 12 ||
 		c.MemoryN != 3 || c.ConversationN != 1 || c.ScoreHigh != 2 || c.ScoreLow != 2 || c.TokensSaved != 8400 ||
-		len(c.Steps) != 1 || c.Steps[0] != (Step{Step: "memory_search", Ms: 9, N: 3}) ||
+		len(c.Steps) != 1 ||
+		!reflect.DeepEqual(c.Steps[0], Step{Step: "memory_search", Ms: 9, N: 3, IDs: []string{"m1", "m2", "m3"}}) ||
 		!c.At.Equal(calls[1].At.Truncate(time.Nanosecond)) {
 		t.Errorf("round trip: %+v", c)
 	}

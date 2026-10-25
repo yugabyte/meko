@@ -2,13 +2,13 @@
 // (learnings) to keep or promote into the collective memory.
 
 import { useEffect, useState, type FormEvent } from "react";
-import { Brain, Check, History, Plus, Sparkles, Trash2 } from "lucide-react";
+import { Brain, Check, GitBranch, Plus, Sparkles, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { navigate } from "../lib/route";
 import { timeAgo } from "../lib/format";
 import type { Datapack } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
-import { MemoryHistoryDialog } from "../components/MemoryHistoryDialog";
+import { MemoryLineageDialog, type LineageOf } from "../components/MemoryLineageDialog";
 import { Pager } from "../components/Pager";
 import { Segmented } from "../components/Segmented";
 import { Badge, Button, Card, Empty, ErrorNote, Input, Loading } from "../components/ui";
@@ -45,7 +45,7 @@ export function MemoriesPage({
     setPage(1);
     setSelected(new Set());
   }, [scope]);
-  const [historyOf, setHistoryOf] = useState<string>();
+  const [lineageOf, setLineageOf] = useState<LineageOf>();
 
   const list = useLoad(
     () => (scope === "promoted" ? Promise.resolve(undefined) : api.memories(id, { scope, q, page })),
@@ -105,6 +105,15 @@ export function MemoriesPage({
                   <span className="text-xs text-muted-foreground">{timeAgo(m.created_at)}</span>
                   <Button
                     size="sm"
+                    variant="ghost"
+                    title="Where this memory came from"
+                    className="opacity-60 group-hover:opacity-100"
+                    onClick={() => setLineageOf({ ...m, state: "collective" })}
+                  >
+                    <GitBranch className="size-3.5" />
+                  </Button>
+                  <Button
+                    size="sm"
                     variant="danger"
                     title="Delete from the collective memory"
                     className="opacity-60 group-hover:opacity-100"
@@ -157,11 +166,11 @@ export function MemoriesPage({
                 <Button
                   size="sm"
                   variant="ghost"
-                  title="See how this memory changed"
+                  title="Where this memory came from: its conversation, its changes"
                   className="shrink-0 opacity-60 group-hover:opacity-100"
-                  onClick={() => setHistoryOf(m.id)}
+                  onClick={(e) => (e.preventDefault(), setLineageOf({ ...m, state: scope === "learnings" ? "learning" : undefined }))}
                 >
-                  <History className="size-3.5" /> History
+                  <GitBranch className="size-3.5" /> <span className="hidden sm:inline">Origin</span>
                 </Button>
                 <Button
                   size="sm"
@@ -184,9 +193,7 @@ export function MemoriesPage({
           />
         </>
       )}
-      {historyOf && (
-        <MemoryHistoryDialog datapackId={id} memoryId={historyOf} onClose={() => setHistoryOf(undefined)} />
-      )}
+      {lineageOf && <MemoryLineageDialog datapackId={id} memory={lineageOf} onClose={() => setLineageOf(undefined)} />}
     </div>
   );
 }

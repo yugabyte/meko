@@ -106,6 +106,7 @@ func Register(g *echo.Group, o Options) {
 	g.GET("/datapacks/:id/token-savings", a.tokenSavings)
 	g.GET("/datapacks/:id/usage", a.callUsage)
 	g.GET("/datapacks/:id/export", a.exportDatapack)
+	g.GET("/datapacks/:id/memory-map", a.memoryMap)
 
 	g.GET("/datapacks/:id/artifacts", a.listArtifacts)
 	g.POST("/datapacks/:id/artifacts/:hash/download-url", a.artifactDownloadURL)

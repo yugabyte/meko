@@ -51,10 +51,10 @@ func (s *Service) ContextSearch(ctx context.Context, r ContextSearch) (ContextRe
 		mu  sync.Mutex
 		wg  sync.WaitGroup
 	)
-	step := func(name string, start time.Time, n int) {
+	step := func(name string, start time.Time, n int, ids ...string) {
 		mu.Lock()
 		defer mu.Unlock()
-		out.Steps = append(out.Steps, store.Step{Step: name, Ms: time.Since(start).Milliseconds(), N: n})
+		out.Steps = append(out.Steps, store.Step{Step: name, Ms: time.Since(start).Milliseconds(), N: n, IDs: ids})
 	}
 	if r.Memory {
 		wg.Add(1)
@@ -67,7 +67,7 @@ func (s *Service) ContextSearch(ctx context.Context, r ContextSearch) (ContextRe
 			} else if r.MinRawSimilarity > 0 {
 				res = aboveRaw(res, r.MinRawSimilarity)
 			}
-			step("memory_search", start, len(res))
+			step("memory_search", start, len(res), IDsOf(res)...)
 			mu.Lock()
 			out.Memory = res
 			mu.Unlock()
@@ -169,4 +169,13 @@ func keptKB(res []KBResult, maxDistance float64) []KBResult {
 		}
 	}
 	return kept
+}
+
+// IDsOf is the ids of memories, in order.
+func IDsOf(ms []memoryengine.Memory) []string {
+	out := make([]string, len(ms))
+	for i, m := range ms {
+		out[i] = m.ID
+	}
+	return out
 }

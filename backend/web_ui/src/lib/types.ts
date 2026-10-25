@@ -51,7 +51,8 @@ export interface Metrics {
 export interface MekoCall {
   // Absent from an older server's reply.
   id?: number;
-  steps?: { step: string; ms: number; n: number }[];
+  // ids: what a memory search returned (absent from calls recorded before it was).
+  steps?: { step: string; ms: number; n: number; ids?: string[] }[];
   at: string;
   tool: string;
   agent_id: string;
@@ -106,8 +107,31 @@ export interface PromotedMemory {
   id: string;
   data: string;
   agent_id: string;
+  conversation_id?: string;
   created_at: string;
   promoted_to_kb_at: string | null;
+}
+
+// The datapack's memories laid out by meaning (GET /datapacks/:id/memory-map): x and y in [-1, 1],
+// alike memories close together, links between near neighbors, and where ?q= lands.
+export type MemoryState = "learning" | "kept" | "collective";
+
+export interface MapPoint {
+  id: string;
+  text: string;
+  state: MemoryState;
+  agent_id: string;
+  conversation_id?: string;
+  created_at: string;
+  x: number;
+  y: number;
+  similarity?: number; // to the query, when there is one
+}
+
+export interface MemoryMap {
+  points: MapPoint[];
+  links: { a: number; b: number; similarity: number }[];
+  query?: [number, number];
 }
 
 export interface Conversation {

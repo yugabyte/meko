@@ -17,6 +17,7 @@ import { ConnectPage } from "./pages/ConnectPage";
 import { ConversationsPage } from "./pages/ConversationsPage";
 import { ExtensionsPage } from "./pages/ExtensionsPage";
 import { KnowledgePage } from "./pages/KnowledgePage";
+import { MapPage } from "./pages/MapPage";
 import { MemoriesPage } from "./pages/MemoriesPage";
 import { AccountPage } from "./pages/AccountPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
@@ -104,6 +105,7 @@ export default function App({ auth, onAuthChanged }: { auth: AuthStatus; onAuthC
                 {route.tab === "analytics" && <AnalyticsPage datapack={current.data} onChanged={onChanged} />}
                 {route.tab === "search" && <SearchPage datapack={current.data} />}
                 {route.tab === "memories" && <MemoriesPage datapack={current.data} routeScope={route.itemId} onChanged={onChanged} />}
+                {route.tab === "map" && <MapPage datapack={current.data} />}
                 {route.tab === "knowledge" && <KnowledgePage datapack={current.data} onChanged={onChanged} />}
                 {route.tab === "conversations" && (
                   <ConversationsPage datapack={current.data} conversationId={route.itemId} />
