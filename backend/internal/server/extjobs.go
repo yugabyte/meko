@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"sort"
 	"sync"
 	"time"
 )
@@ -133,6 +134,26 @@ func (x *ExtensionJobs) Busy() bool {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	return x.running > 0
+}
+
+// Running is a running job's extension and action; ok is false when none runs.
+func (x *ExtensionJobs) Running() (name, action string, ok bool) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if x.running == 0 {
+		return "", "", false
+	}
+	names := make([]string, 0, len(x.jobs))
+	for n := range x.jobs {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		if v := x.jobs[n].snapshot(); v.State == JobRunning {
+			return n, v.Action, true
+		}
+	}
+	return "", "", false
 }
 
 // WaitIdle waits until no job is running, or ctx ends.

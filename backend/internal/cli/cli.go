@@ -307,14 +307,15 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		logOut = nil
 	}
 	err = Serve(SignalContext(), ServeOptions{Layout: l, Config: cfg, Stderr: logOut})
-	var rb *rollbackError
+	var ex *execError
 	var le *lockedError
 	switch {
-	case errors.As(err, &rb):
-		// The new version failed too often: serve has put the old one back and run it in our place.
-		// G204: the previous release's own binary.
-		err = syscall.Exec(rb.exe, append([]string{rb.exe}, args...), os.Environ()) //nolint:gosec
-		return fail(stderr, fmt.Errorf("can't run the previous version %s: %w", rb.exe, err))
+	case errors.As(err, &ex):
+		// Serve has stopped for another version to run in our place: the previous one, put back after
+		// the new one failed too often, or the new one, with no service to start it.
+		// G204: a release's own binary.
+		err = syscall.Exec(ex.exe, append([]string{ex.exe}, args...), os.Environ()) //nolint:gosec
+		return fail(stderr, fmt.Errorf("can't run %s (%s): %w", ex.exe, ex.why, err))
 	case errors.As(err, &le):
 		fmt.Fprintf(stderr, "meko: %v\n", err)
 		return exitLocked

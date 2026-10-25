@@ -150,7 +150,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 				_, _ = fmt.Fprintf(f, "%s WARN %s\n", time.Now().UTC().Format(time.RFC3339), msg)
 				_ = f.Close()
 			}
-			return &rollbackError{exe: app.Exe(p.From)}
+			return &execError{exe: app.Exe(p.From), why: "rolled back"}
 		}
 		if pending, _ := app.ReadPending(); pending != nil && pending.To == release {
 			onProbation = true
@@ -309,6 +309,16 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	// The web listener: the web UI and the extensions' for browsers, with local access or the login.
 	web := newWebListener(l, st, logins, log)
 	logins.OnRevoke(web.RevokeEnded)
+	// Updates: a release install checks for them, and the Status page checks and installs them.
+	restart := make(chan struct{})
+	updCtx, stopUpdates := context.WithCancel(context.Background())
+	defer stopUpdates()
+	var updates server.Updates
+	if isRelease {
+		if u := startUpdates(updCtx, app, release, l, cfg, log, onProbation, restart); u != nil {
+			updates = u
+		}
+	}
 	// The Meko Cloud link: the web UI and meko cloud_link change it; the running extensions hear.
 	cloud := &cloudlink.Service{Store: cloudSt, Check: cloudlink.CheckMCP, CheckAPI: cloudlink.CheckAPI,
 		Changed: func(ctx context.Context) { web.notify(ctx, "cloud") }}
@@ -317,7 +327,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, MCP: mcpHandler,
 			REST: registerREST, Upload: upload, Download: download, UI: ui, Login: logins, Cloud: cloud,
 			Web: &server.Web{Access: wcfg.Web.Access, Extensions: web.Proxies, Installed: web.Installed,
-				Run: web.RunExtension, Release: web.Release, Jobs: web.jobs}}
+				Run: web.RunExtension, Release: web.Release, Jobs: web.jobs, Updates: updates}}
 	}
 	srv := server.New(server.Options{
 		Info: info, Port: cfg.Server.Port, Token: token, ClientToken: clientToken, Auth: cfg.Server.Auth, Logger: log,
@@ -347,14 +357,9 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			"write your memories through /mcp and /api/v1")
 	}
 
-	restart := make(chan struct{})
-	updCtx, stopUpdates := context.WithCancel(context.Background())
-	defer stopUpdates()
-	if isRelease {
-		startUpdates(updCtx, app, release, l, cfg, log, onProbation, restart)
-	}
-
 	var serveErr error
+	// Without a service to start the new version, serve runs it in its own place once it has stopped.
+	var execInto string
 	select {
 	case <-ctx.Done():
 		log.Info("stopping")
@@ -365,6 +370,9 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			web.jobs.WaitIdle(ctx)
 		}
 		log.Info("stopping to restart into the update")
+		if os.Getenv("MEKO_SERVICE") == "" {
+			execInto = app.CurrentExe()
+		}
 	case serveErr = <-served:
 	}
 	stopUpdates()
@@ -404,6 +412,9 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	}
 	<-jobsDone
 	log.Info("Meko stopped")
+	if serveErr == nil && execInto != "" {
+		return &execError{exe: execInto, why: "restarting into the update"}
+	}
 	return serveErr
 }
 
@@ -476,17 +487,20 @@ func waitForLock(ctx context.Context, l paths.Layout) (*os.File, error) {
 	}
 }
 
-// rollbackError is Serve's way of saying it rolled back a failing update: Run then runs exe, the
-// previous version, in its place.
-type rollbackError struct{ exe string }
+// execError is Serve's way of saying another version must run in its place: the previous one after
+// rolling back a failing update, or the new one after an update with no service to start it. Run
+// then execs exe with the same arguments.
+type execError struct{ exe, why string }
 
-func (e *rollbackError) Error() string { return "rolled back to " + e.exe }
+func (e *execError) Error() string { return e.why + ": " + e.exe }
 
 // startUpdates runs a release install's update checks, and finishes an update on probation once it
-// has run update.HealthyAfter. Updates are installed only under the service, which starts the new
-// version after serve exits; a server started by hand only reports them.
+// has run update.HealthyAfter. On their own, updates are installed only under the service, which
+// starts the new version after serve exits; a server started by hand only reports them. The
+// updater it returns is the Status page's too, even with [update] channel = "off" (which stops only
+// the scheduled checks), and nil only when the schema can't be read.
 func startUpdates(ctx context.Context, app update.App, release string, l paths.Layout, cfg config.Config,
-	log *slog.Logger, onProbation bool, restart chan struct{}) {
+	log *slog.Logger, onProbation bool, restart chan struct{}) *update.Updater {
 	if onProbation {
 		go func() {
 			select {
@@ -501,22 +515,24 @@ func startUpdates(ctx context.Context, app update.App, release string, l paths.L
 			}
 		}()
 	}
-	if cfg.Update.Channel == update.ChannelOff {
-		return
-	}
 	schema, err := store.LatestSchema()
 	if err != nil {
 		log.Warn("updates are off", "error", err)
-		return
+		return nil
 	}
 	var once sync.Once
+	service := os.Getenv("MEKO_SERVICE") != ""
 	u := &update.Updater{
 		App: app, Version: release, Client: newReleaseClient(cfg.Update.Repo), DataDir: l.Root,
 		Interval: time.Duration(cfg.Update.IntervalHours * float64(time.Hour)), FirstCheck: time.Minute,
-		Auto: cfg.Update.Auto && os.Getenv("MEKO_SERVICE") != "", Schema: schema, Log: log,
+		Auto: cfg.Update.Auto && service, Schema: schema, Log: log, Channel: cfg.Update.Channel,
+		Service: service, Context: ctx,
 		Restart: func() { once.Do(func() { close(restart) }) },
 	}
-	go u.Run(ctx)
+	if cfg.Update.Channel != update.ChannelOff {
+		go u.Run(ctx)
+	}
+	return u
 }
 
 // keychainRetry is how often serve tries the Keychain again while it refuses (locked, as when the
