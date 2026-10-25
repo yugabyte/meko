@@ -38,13 +38,13 @@ export function OverviewPage({ datapack }: { datapack: Datapack }) {
   return (
     <div className="space-y-6">
       <GetStarted datapack={datapack} metrics={m} />
-      <LearningPipeline datapack={datapack} />
+      {SHOW_COLLECTIVE && <LearningPipeline datapack={datapack} />}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
         <Stat
           icon={<Brain className="size-3.5" />}
           label="Memories"
           value={count(datapack.memory_count)}
-          hint={`${count(datapack.learnings_count)} learnings · ${bytes(m.memory_bytes)}`}
+          hint={SHOW_COLLECTIVE ? `${count(datapack.learnings_count)} learnings · ${bytes(m.memory_bytes)}` : bytes(m.memory_bytes)}
         />
         <Stat
           icon={<FileText className="size-3.5" />}

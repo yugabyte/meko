@@ -1,4 +1,4 @@
-// The frame every Analytics card uses: a title, a subtitle, and its body or an empty state.
+// The frame every Metrics card uses: a title, a subtitle, and its body or an empty state.
 
 import type { ReactNode } from "react";
 import { Card, cx } from "../ui";

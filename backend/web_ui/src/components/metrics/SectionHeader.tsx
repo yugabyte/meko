@@ -1,4 +1,4 @@
-// An Analytics section's label, a rule, and an optional refresh.
+// A Metrics section's label, a rule, and an optional refresh.
 
 import { RefreshCw } from "lucide-react";
 import { Button, cx } from "../ui";

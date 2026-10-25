@@ -19,7 +19,7 @@ import { ExtensionsPage } from "./pages/ExtensionsPage";
 import { KnowledgePage } from "./pages/KnowledgePage";
 import { MemoriesPage } from "./pages/MemoriesPage";
 import { AccountPage } from "./pages/AccountPage";
-import { AnalyticsPage } from "./pages/AnalyticsPage";
+import { MetricsPage } from "./pages/MetricsPage";
 import { ArtifactsPage } from "./pages/ArtifactsPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { SearchPage } from "./pages/SearchPage";
@@ -101,7 +101,7 @@ export default function App({ auth, onAuthChanged }: { auth: AuthStatus; onAuthC
               />
               <div className="p-8">
                 {route.tab === "overview" && <OverviewPage datapack={current.data} />}
-                {route.tab === "analytics" && <AnalyticsPage datapack={current.data} onChanged={onChanged} />}
+                {route.tab === "metrics" && <MetricsPage datapack={current.data} onChanged={onChanged} />}
                 {route.tab === "search" && <SearchPage datapack={current.data} />}
                 {route.tab === "memories" && <MemoriesPage datapack={current.data} routeScope={route.itemId} onChanged={onChanged} />}
                 {route.tab === "knowledge" && <KnowledgePage datapack={current.data} onChanged={onChanged} />}

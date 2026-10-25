@@ -8,6 +8,7 @@ import { api } from "../lib/api";
 import { dateTime } from "../lib/format";
 import { navigate } from "../lib/route";
 import type { MemoryChange, MemoryState, Turn } from "../lib/types";
+import { SHOW_COLLECTIVE } from "../lib/features";
 import { useLoad } from "../lib/useLoad";
 import { Dialog } from "./Dialog";
 import { STATE_COLOR, STATE_LABEL } from "./MemoryMapView";
@@ -100,7 +101,7 @@ export function MemoryLineageDialog({
             {h.new_value !== null && h.action !== "DELETE" && <p>{h.new_value}</p>}
           </Step>
         ))}
-        {memory.state && (
+        {SHOW_COLLECTIVE && memory.state && (
           <Step title={<span className={STATE_COLOR[memory.state]}>{STATE_LABEL[memory.state]}</span>}>
             {NOW[memory.state]}
           </Step>

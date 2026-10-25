@@ -34,6 +34,9 @@ export function only(m: MemoryMap, states: MemoryState[]): MemoryMap {
 // The states drawn: collective memories only while the UI shows them.
 export const SHOWN_STATES: MemoryState[] = SHOW_COLLECTIVE ? ["learning", "kept", "collective"] : ["learning", "kept"];
 
+// A dot's color: by its state, or one color while the UI shows memories as just memories.
+const colorOf = (s: MemoryState) => (SHOW_COLLECTIVE ? STATE_COLOR[s] : STATE_COLOR.learning);
+
 export function MemoryMapView({
   map,
   lit,
@@ -100,7 +103,7 @@ export function MemoryMapView({
             cy={p.y}
             r={on(p) && dim ? r * 1.4 : r}
             fill="currentColor"
-            className={cx(STATE_COLOR[p.state], onPick && "cursor-pointer")}
+            className={cx(colorOf(p.state), onPick && "cursor-pointer")}
             opacity={on(p) ? 1 : 0.2}
             stroke={p.id === selected ? "currentColor" : undefined}
             strokeWidth={p.id === selected ? 3 : undefined}
@@ -132,12 +135,19 @@ export function MemoryMapView({
       </svg>
       {!mini && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          {SHOWN_STATES.map((s) => (
-            <span key={s} className="flex items-center gap-1.5">
-              <span className={cx("size-2 rounded-full bg-current", STATE_COLOR[s])} />
-              {STATE_LABEL[s]}
+          {SHOW_COLLECTIVE ? (
+            SHOWN_STATES.map((s) => (
+              <span key={s} className="flex items-center gap-1.5">
+                <span className={cx("size-2 rounded-full bg-current", STATE_COLOR[s])} />
+                {STATE_LABEL[s]}
+              </span>
+            ))
+          ) : (
+            <span className="flex items-center gap-1.5">
+              <span className={cx("size-2 rounded-full bg-current", colorOf("learning"))} />
+              Memory
             </span>
-          ))}
+          )}
           {map.query && <span className="text-primary">★ your question</span>}
         </div>
       )}

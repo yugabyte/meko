@@ -13,12 +13,12 @@ import { Button, cx, ErrorNote, Input } from "./ui";
 
 const LABELS: Record<Tab, string> = {
   overview: "Overview",
-  analytics: "Analytics",
-  search: "Search",
+  metrics: "Metrics",
+  conversations: "Conversations",
   memories: "Memories",
   knowledge: "Knowledge",
-  conversations: "Conversations",
   artifacts: "Artifacts",
+  search: "Search",
   connect: "Connect",
 };
 

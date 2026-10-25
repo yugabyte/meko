@@ -19,8 +19,12 @@ type Scope = "memories" | "learnings" | "promoted";
 
 const SCOPES: readonly { id: Scope; label: string }[] = [
   { id: "memories", label: "All memories" },
-  { id: "learnings", label: "Learnings" },
-  ...(SHOW_COLLECTIVE ? [{ id: "promoted" as const, label: "Collective" }] : []),
+  ...(SHOW_COLLECTIVE
+    ? [
+        { id: "learnings" as const, label: "Learnings" },
+        { id: "promoted" as const, label: "Collective" },
+      ]
+    : []),
 ];
 
 // The memory states each scope's graph draws.
@@ -110,7 +114,7 @@ export function MemoriesPage({
       <AddMemory onAdd={(text) => act(() => api.addMemory(id, text))} />
 
       <div className="flex flex-wrap items-center gap-3">
-        <Segmented options={SCOPES} value={scope} onChange={setScope} />
+        {SCOPES.length > 1 && <Segmented options={SCOPES} value={scope} onChange={setScope} />}
         {scope !== "promoted" && view === "list" && (
           <Input
             className="max-w-xs"
@@ -264,7 +268,7 @@ function SelectionBar({
   if (count === 0) {
     return (
       <p className="text-xs text-muted-foreground">
-        Select memories to {learnings ? (SHOW_COLLECTIVE ? "keep, promote or " : "keep or ") : ""}delete them.
+        Select memories to {learnings ? "keep, promote or " : ""}delete them.
       </p>
     );
   }
@@ -273,14 +277,12 @@ function SelectionBar({
       <span className="font-medium">{count} selected</span>
       {learnings && (
         <>
-          <Button size="sm" variant="ghost" onClick={onKeep} title="Mark as reviewed and keep">
+          <Button size="sm" variant="ghost" onClick={onKeep} title="Keep as private memories">
             <Check className="size-3.5" /> Keep
           </Button>
-          {SHOW_COLLECTIVE && (
-            <Button size="sm" variant="ghost" onClick={onPromote} title="Promote to the collective memory">
-              <Sparkles className="size-3.5" /> Promote
-            </Button>
-          )}
+          <Button size="sm" variant="ghost" onClick={onPromote} title="Promote to the collective memory">
+            <Sparkles className="size-3.5" /> Promote
+          </Button>
         </>
       )}
       <Button

@@ -7,7 +7,6 @@ import type { ReactNode } from "react";
 import { count } from "../lib/format";
 import { navigate, type Tab } from "../lib/route";
 import type { Datapack } from "../lib/types";
-import { SHOW_COLLECTIVE } from "../lib/features";
 import { Card } from "./ui";
 
 export function LearningPipeline({ datapack }: { datapack: Datapack }) {
@@ -26,16 +25,14 @@ export function LearningPipeline({ datapack }: { datapack: Datapack }) {
       tab: "memories",
       itemId: "learnings",
     },
-  ];
-  if (SHOW_COLLECTIVE) {
-    stages.push({
+    {
       icon: <Users className="size-4" />,
       label: "Collective memory",
       n: datapack.collective_memory_count,
       tab: "memories",
       itemId: "promoted",
-    });
-  }
+    },
+  ];
   return (
     <Card className="flex flex-wrap items-center gap-2 p-3">
       {stages.map((s, i) => (
