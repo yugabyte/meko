@@ -23,13 +23,17 @@ export interface NoteCommit {
 
 const SUBJECT = new RegExp(`^(${RELEASE_TYPES.join('|')})(?:\\(([^)]*)\\))?(!?): (.+)$`);
 const PR = /\s*\(#(\d+)\)$/;
-/** Another product's component: its subjects release that product, not AgentK (`exclude` in scripts/release/product.sh). */
+/**
+ * Another product's component: a subject that names only it releases that product, not AgentK, and
+ * one that names it in a list with AgentK's (feat(agentk,meko): ...) releases both (`exclude` in
+ * scripts/release/product.sh).
+ */
 const OTHER_PRODUCT = /^meko(\/|$)/;
 
 /**
  * Release notes for a range of commits, newest first, by the rules of
  * scripts/release/release-notes.sh --product agentk: only feat, fix, perf and deps subjects count,
- * Meko's (component `meko`) don't, a `!` or a `BREAKING CHANGE:` footer on one of them also lists
+ * Meko's (component `meko` alone) don't, a `!` or a `BREAKING CHANGE:` footer on one of them also lists
  * it under Breaking changes, and a section with nothing in it is left out.
  * `repo` (owner/name) links a subject's "(#123)" to its PR.
  */
@@ -41,7 +45,7 @@ export function releaseNotes(commits: NoteCommit[], repo: string): ReleaseNoteSe
     const m = SUBJECT.exec(subject.trim());
     if (!m) continue;
     const [, type, component, bang, rest] = m as unknown as [string, string, string | undefined, string, string];
-    if (component && OTHER_PRODUCT.test(component)) continue;
+    if (component && component.split(',').every((c) => OTHER_PRODUCT.test(c))) continue;
     const pr = PR.exec(rest);
     const item: ReleaseNoteItem = {
       component: component || null,

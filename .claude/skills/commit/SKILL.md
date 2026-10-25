@@ -1,6 +1,6 @@
 ---
 name: commit
-description: Create a git commit or PR in the agent-k-local repo. Use whenever committing, amending, or writing a commit message, PR title or PR description in this repo. Subjects and PR titles use `<type>(<component>[/<area>]): <summary>` so readers see which part of the repo changed and the release workflow can cut releases.
+description: Create a git commit or PR in the agent-k-local repo. Use whenever committing, amending, or writing a commit message, PR title or PR description in this repo. Subjects and PR titles use `<type>(<component>[/<area>][,<component>…]): <summary>` so readers see which part of the repo changed and the release workflow can cut releases.
 ---
 
 # Committing in agent-k-local
@@ -23,14 +23,16 @@ pass `--author` or change the identity.
 
 ```
 <type>(<component>[/<area>])[!]: <summary>
+<type>(<component>[/<area>],<component>[/<area>])[!]: <summary>   # a change that ships in more than one
 ```
 
 The release workflows read commit subjects. The repo releases two products, each on its own train:
 Meko (`meko-release.yml`, tags `meko-v0.YYYYMMDD.N`) and AgentK (`agentk-release.yml`, tags
 `agentk-v0.YYYYMMDD.N`). A push to `main` with any `feat`, `fix`, `perf` or `deps` commit since a
 product's last release cuts its next version, and those subjects become its release notes (and
-AgentK's **What's new**). Subjects with component `meko` release Meko; every other component
-(`agentk`, `repo`) releases AgentK (`scripts/release/release-notes.sh --product`). Every other type
+AgentK's **What's new**). Subjects naming `meko` release Meko; subjects naming any other component
+(`agentk`, `repo`) release AgentK (`scripts/release/release-notes.sh --product`), so
+`feat(agentk,meko): …` releases both. Every other type
 lands without a release. Use exactly one of these nine types:
 
 | Type | Releases? | Use for |
@@ -64,13 +66,20 @@ The rest of the subject:
   | `meko` | Meko, `backend/` |
   | `repo` | The shared root: `.github/`, `scripts/`, root docs, `.claude/` |
 
-  A change that spans two takes the one it's mainly for. A root file that belongs to one
-  component (`agentk-release.yml` builds AgentK) takes that component, not `repo`. The list is
-  `COMPONENTS` in `scripts/check-title.sh`; a new extension adds its name there.
+  A root file that belongs to one component (`agentk-release.yml` builds AgentK) takes that
+  component, not `repo`. The list is `COMPONENTS` in `scripts/check-title.sh`; a new extension
+  adds its name there.
+- A change that ships in more than one component names each, comma-separated with no spaces,
+  each once and each with its own optional area: `feat(agentk,meko): …`,
+  `fix(agentk/meko,meko/cli): …`. It releases every product it names, so name a component only
+  when the change alters what it ships; one that only touches another (AgentK's tests reading a
+  root script) takes the one it ships in. Meko's release workflow runs only on pushes that change
+  `backend/**`, `scripts/release/**` or `.github/workflows/meko-release.yml`, so a `meko` in a
+  title whose PR changes none of them waits for the next push that does.
 - `/<area>` is optional: one lowercase name (letters, digits, dashes) for the part of the
   component it touches, e.g. `agentk/web`, `agentk/server`, `agentk/meko` (AgentK's Meko
   integration), `agentk/update`, `meko/store`.
-- `!` after the component marks a breaking change (`feat(agentk)!:`, `fix(agentk/web)!:`), or add a
+- `!` after the component (or the list) marks a breaking change (`feat(agentk)!:`, `fix(agentk/web)!:`), or add a
   `BREAKING CHANGE:` footer. Only `feat`, `fix`, `perf` and `deps` can be breaking: a breaking
   change ships, so it needs a releasing type.
 - Summary: imperative mood, lowercase except proper nouns (Homebrew, Meko), no trailing period

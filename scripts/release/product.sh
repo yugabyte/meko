@@ -13,9 +13,11 @@
 #   tag_prefixes  every prefix the product's tags have used, newest scheme first
 #   scope         an extended regex for the `(<component>[/<area>])` of the subjects that may
 #                 release the product, and
-#   exclude       one for those that don't, even though scope matches them. Meko takes only
-#                 meko subjects. AgentK takes every other one: agentk, repo, and old subjects
-#                 with no component or with the free-form one subjects had before 2026-10-20
+#   exclude       one for those that don't, even though scope matches them. Meko takes the
+#                 subjects that name meko, alone or in a list (feat(agentk,meko): ...). AgentK
+#                 takes every subject but those that name only meko: agentk, repo, lists, and old
+#                 subjects with no component or with the free-form one subjects had before
+#                 2026-10-20. So a subject naming both releases both
 #
 # and newest_tag, which prints the product's newest tag (by version, across its prefixes).
 
@@ -36,12 +38,12 @@ case $product in
     tag_prefix=agentk-v
     tag_prefixes='agentk-v v'
     scope='(\([^)]*\))?'
-    exclude='\(meko(/[^)]*)?\)'
+    exclude='\(meko(/[^,)]*)?\)'
     ;;
   meko)
     tag_prefix=meko-v
     tag_prefixes='meko-v'
-    scope='\(meko(/[^)]*)?\)'
+    scope='\(([^,)]*,)*meko(/[^,)]*)?(,[^)]*)?\)'
     exclude=''
     ;;
   *) echo "unknown product: $product (agentk or meko)" >&2; exit 2 ;;

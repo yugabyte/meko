@@ -106,7 +106,7 @@ release scripts with `--product meko`:
 |---|---|---|
 | Tag | `agentk-v0.YYYYMMDD.N` (`v0.…` before) | `meko-v0.YYYYMMDD.N` |
 | Title | its tag | its tag |
-| Releases on | feat/fix/perf/deps subjects other than `meko` | feat/fix/perf/deps subjects with component `meko` |
+| Releases on | feat/fix/perf/deps subjects other than those naming only `meko` | feat/fix/perf/deps subjects naming `meko`, alone or in a list (`feat(agentk,meko): …`) |
 | Assets | AgentK tarballs, `SHA256SUMS`, its `install.sh` | Meko tarballs, `SHA256SUMS`, Meko's `install.sh` |
 | Latest | `--latest=false` | `--latest` |
 | Pruning | newest 5 per lane of its own tags | newest 5 `meko-v` releases |

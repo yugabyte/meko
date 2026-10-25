@@ -58,7 +58,8 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 - [ ] No third-party C code is copied into `backend/`. SQLite and sqlite-vec come from the
       `replace` of `yugabyte/go-sqlite3` in `go.mod`: a bump names a new `-yb.<n>` tag and updates
       `TestLibVersions`, and the build keeps the `sqlite_fts5` and `sqlite_vec` tags.
-- [ ] Commits name the `meko` component, and a `feat`, `fix`, `perf` or `deps` subject means it
+- [ ] Commits name the `meko` component (with `agentk` too, `feat(agentk,meko): ...`, when the
+      change also ships in AgentK), and a `feat`, `fix`, `perf` or `deps` subject means it
       changes what Meko ships (it cuts a Meko release).
 - [ ] Secrets (the client token, later provider keys) live only in `internal/secrets` or the client
       token's file, and never reach a log, an error, or a command line other than an installer's
