@@ -13,10 +13,12 @@ import (
 const mapMemories = 300
 
 // mapLinks is how many of a memory's nearest others it's linked to, and mapLinkMin the least
-// similarity a link needs: a few strong links show groups, every pair is a hairball.
+// similarity a link needs: a few links each show groups, every pair is a hairball. MiniLM scores
+// short related facts 0.3 to 0.5 (a release rule and the release train, a customer and its
+// request), so 0.3 joins them and leaves unrelated ones apart.
 const (
 	mapLinks   = 3
-	mapLinkMin = 0.5
+	mapLinkMin = 0.3
 )
 
 // MapPoint is one memory on the map: x and y in [-1, 1], placed so that memories alike in meaning
