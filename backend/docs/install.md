@@ -214,7 +214,9 @@ another data folder refuses `start`, `stop`, `status`, `uninstall` and `_handoff
 - `meko uninstall_extension agentk` only unregisters it.
 - The web UI's Extensions page runs the same install, and the extensions' `start` and `stop`, from
   the server, without a terminal ([web.md](web.md)).
-- AgentK's key is Meko's client token, as every client's is ([api.md](api.md#auth)).
+- AgentK's key is Meko's client token, as every client's is ([api.md](api.md#auth)). The Meko Cloud
+  link is Meko's too: extensions read it from `meko token --json` and hear of a change on their
+  socket ([cloud.md](cloud.md)).
 
 ## Updates and rollback
 
@@ -258,7 +260,7 @@ A release install's app folder:
 
 ## Secrets
 
-`internal/secrets` keeps the client token, and is where provider keys and connector tokens will go. `[secrets] store` (`MEKO_SECRETS`) picks the store:
+`internal/secrets` keeps the client token and the Meko Cloud link's key (`meko_cloud_key`, [cloud.md](cloud.md)), and is where provider keys and connector tokens will go. `[secrets] store` (`MEKO_SECRETS`) picks the store:
 
 - `keychain`, the default on macOS: generic passwords in the login Keychain, service
   `com.yugabyte.meko`, account `<data folder>/<name>`, through `/usr/bin/security`. The value is

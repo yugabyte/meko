@@ -336,7 +336,7 @@ export class MekoClient {
     return id;
   }
 
-  /** Cheap authenticated round trip to Meko: checks a URL and key (the installer, the Meko tab). */
+  /** Cheap authenticated round trip to Meko: checks a URL and key (the installer, under a Meko too old to keep the link). */
   async check(): Promise<void> {
     await this.request(true, (c) => c.ping({ timeout: CHECK_TIMEOUT_MS }));
   }

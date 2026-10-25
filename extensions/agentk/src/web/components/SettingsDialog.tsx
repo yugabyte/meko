@@ -1,29 +1,20 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type MutableRefObject, type ReactNode } from 'react';
-import type {
-  HarnessStatus,
-  LocalMekoState,
-  MekoKeySource,
-  MekoSettingsUpdate,
-  MekoStatus,
-  Settings,
-  SettingsUpdate,
-  UpdateStatus,
-} from '../../shared/types';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type MutableRefObject, type ReactNode } from 'react';
+import type { HarnessStatus, MekoKeySource, MekoStatus, Settings, SettingsUpdate, UpdateStatus } from '../../shared/types';
 import { HARNESS_CAPS, HARNESS_IDS, type HarnessId } from '../../shared/harnesses';
+import { MEKO_ACCOUNT_PATH, MEKO_CLOUD_PATH } from '../../shared/mekourls';
 import { api, errorMessage } from '../api';
 import { AUTO_SAVE_IDLE, autoSave, settle, type AutoSaveStatus } from '../autosave';
 import { saveRailSessions, useRailSessions } from '../rail';
 import type { MekoAuth } from '../signin';
 import { harnessLogosToggle } from '../toggle';
-import { claudeUpdateText, cx, defaultAgentChoice, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
-import { AgentLabel, AgentPicker, Busy, ConfirmButton, Dialog, ErrorText, Field } from './common';
-import { MekoGetKey } from './MekoGetKey';
+import { claudeUpdateText, cx, defaultAgentChoice, httpHost, relativeTime } from '../util';
+import { AgentLabel, AgentPicker, Busy, Dialog, ErrorText, Field } from './common';
 
-export type SettingsTab = 'general' | 'harness' | 'meko' | 'account' | 'updates';
+export type SettingsTab = 'general' | 'harness' | 'updates';
 type Tab = SettingsTab;
 
-const TABS: Tab[] = ['general', 'harness', 'meko', 'account', 'updates'];
-const TAB_LABEL: Record<Tab, string> = { general: 'General', harness: 'Harness', meko: 'Meko', account: 'Account', updates: 'Updates' };
+const TABS: Tab[] = ['general', 'harness', 'updates'];
+const TAB_LABEL: Record<Tab, string> = { general: 'General', harness: 'Harness', updates: 'Updates' };
 
 export function SettingsDialog({
   mekoAuth,
@@ -33,6 +24,7 @@ export function SettingsDialog({
   twoAgents,
   serverName,
   initialTab = 'general',
+  initialAgent,
   onClose,
   onWhatsNew,
 }: {
@@ -46,8 +38,10 @@ export function SettingsDialog({
   twoAgents: boolean;
   /** `AppState.serverName`, for what to do when Claude Code's update fails. */
   serverName: string;
-  /** The tab it opens on (the Meko banner's Details opens the Meko tab). */
+  /** The tab it opens on (the Claude Code Meko banner's Details opens Harness). */
   initialTab?: SettingsTab;
+  /** The agent Harness shows first (Details: Claude Code); else the default agent. */
+  initialAgent?: HarnessId;
   onClose: () => void;
   /** Opens What's new from one version to another, in place of Settings. */
   onWhatsNew: (from: string, to: string) => void;
@@ -96,21 +90,12 @@ export function SettingsDialog({
         <div className="stack">
           <RailSessionsSetting />
           <GeneralTab auto={auto} typed={typed} />
-        </div>
-      )}
-      {tab === 'harness' && <HarnessTab auto={auto} harnesses={harnesses} twoAgents={twoAgents} serverName={serverName} />}
-      {tab === 'meko' && (
-        <MekoTab
-          status={meko}
-          claude={harnesses.find((h) => h.id === 'claude')?.available ?? false}
-          kiro={harnesses.find((h) => h.id === 'kiro')?.available ?? false}
-        />
-      )}
-      {tab === 'account' && (
-        <div className="stack">
-          <AccountTab auth={mekoAuth} />
+          <MekoLinks meko={meko} auth={mekoAuth} />
           <UsageStatsCheck />
         </div>
+      )}
+      {tab === 'harness' && (
+        <HarnessTab auto={auto} harnesses={harnesses} twoAgents={twoAgents} serverName={serverName} meko={meko} initialAgent={initialAgent} />
       )}
       {tab === 'updates' && <UpdatesTab initial={update} onWhatsNew={onWhatsNew} />}
       <SaveStatus status={auto.status} held={held} />
@@ -462,15 +447,20 @@ function HarnessTab({
   harnesses,
   twoAgents,
   serverName,
+  meko,
+  initialAgent,
 }: {
   auto: AutoSettings;
   harnesses: HarnessStatus[];
   twoAgents: boolean;
   serverName: string;
+  meko: MekoStatus;
+  initialAgent?: HarnessId;
 }) {
   const { s, load, change } = auto;
-  // The agent the bar shows: the default agent when the tab opens, so a new default doesn't move it.
-  const [shown, setShown] = useState<HarnessId>('claude');
+  // The agent the bar shows: the one asked for, else the default agent when the tab opens, so a new
+  // default doesn't move it.
+  const [shown, setShown] = useState<HarnessId>(initialAgent ?? 'claude');
   const [checking, setChecking] = useState(false);
   // The agent whose update this page started, until its request answers (each agent updates on its own).
   const [updating, setUpdating] = useState<HarnessId | null>(null);
@@ -484,9 +474,11 @@ function HarnessTab({
 
   useEffect(() => {
     load()
-      .then((x) => setShown(x.defaultHarness))
+      .then((x) => {
+        if (!initialAgent) setShown(x.defaultHarness);
+      })
       .catch((e) => setError(errorMessage(e)));
-  }, [load]);
+  }, [load, initialAgent]);
 
   if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
 
@@ -551,6 +543,7 @@ function HarnessTab({
           checking={checking}
           updating={updating === shown}
           outcome={shown === 'claude' ? claudeOutcome : null}
+          meko={meko}
           onEnable={(on) => enable(shown, on)}
           onChange={change}
           onCheck={checkAgain}
@@ -592,6 +585,7 @@ export function AgentSettings({
   checking,
   updating,
   outcome = null,
+  meko,
   onEnable,
   onChange,
   onCheck,
@@ -606,6 +600,8 @@ export function AgentSettings({
   updating: boolean;
   /** What this page's update of it came to, when nothing else says so (Claude Code with the mod off). */
   outcome?: { ok: boolean; text: string } | null;
+  /** Whether this agent's sessions reach AgentK's Meko (`AppState.meko`); left out, no Meko row. */
+  meko?: MekoStatus;
   onEnable: (on: boolean) => void;
   onChange: (patch: Omit<SettingsUpdate, 'meko'>) => void;
   onCheck: () => void;
@@ -639,6 +635,7 @@ export function AgentSettings({
           </span>
         )}
       </div>
+      {meko && enabled && status?.available && <AgentMeko id={id} meko={meko} />}
       {id === 'opencode' && enabled && (
         <div className="field">
           <label className="check">
@@ -677,303 +674,113 @@ export function AgentSettings({
   );
 }
 
-/** Why the Meko on this computer can't be used, ending where the tab's "or add a Meko Cloud key" goes on. */
-const LOCAL_STATE_TEXT: Record<LocalMekoState, string> = {
-  stopped: 'Meko is installed on this computer but not running: start it with meko start, ',
-  failed: 'Meko on this computer didn’t answer meko token --json (see what it says when you run it), ',
-  none: 'No Meko was found on this computer: install and start Meko, ',
-  running: '',
+/** Where AgentK's Meko key comes from, after "AgentK uses". */
+const SOURCE_TEXT: Record<MekoKeySource, string> = {
+  meko: 'Meko Cloud, linked in Meko',
+  local: 'the Meko on this computer',
+  config: 'its own Meko key from config.toml, until Meko keeps the link (update Meko)',
+  env: 'its own Meko key from MEKO_API_KEY, until Meko keeps the link (update Meko)',
+  claude: 'its own Meko key from Claude Code’s settings, until Meko keeps the link (update Meko)',
 };
 
-const KEY_SOURCE: Record<MekoKeySource, string> = {
-  config: 'from config.toml',
-  env: 'from the MEKO_API_KEY environment variable',
-  claude: 'from Claude Code’s settings',
-  local: 'the Meko on this computer’s own token',
-};
-
-/** The Meko server and key AgentK uses, its links, and whether Claude Code's (and OpenCode's and Kiro's) sessions use the same. */
-function MekoTab({ status, claude: claudeOn, kiro }: { status: MekoStatus; claude: boolean; kiro: boolean }) {
-  const [s, setS] = useState<Settings | null>(null);
-  const [url, setUrl] = useState('');
-  const [key, setKey] = useState('');
-  const [webUrl, setWebUrl] = useState('');
-  const [apiUrl, setApiUrl] = useState('');
-  const [confirmHost, setConfirmHost] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
-  const [busy, setBusy] = useState<'save' | 'claude' | 'kiro' | null>(null);
-  const [claudeDone, setClaudeDone] = useState(false);
-  const [kiroDone, setKiroDone] = useState(false);
-
-  const show = (x: Settings) => {
-    setS(x);
-    setUrl(x.meko.url);
-    setWebUrl(x.meko.webUrl);
-    setApiUrl(x.meko.apiUrl);
-    setKey('');
-  };
-
-  useEffect(() => {
-    api
-      .settings()
-      .then(show)
-      .catch((e) => setError(errorMessage(e)));
-  }, []);
-
-  if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
-  const m = s.meko;
-
-  const save = async (e: FormEvent) => {
-    e.preventDefault();
-    const next: MekoSettingsUpdate = {};
-    if (url.trim() !== m.url) next.url = url.trim();
-    if (key.trim()) next.apiKey = key.trim();
-    if (webUrl.trim() !== m.webUrl) next.webUrl = webUrl.trim();
-    if (apiUrl.trim() !== m.apiUrl) next.apiUrl = apiUrl.trim();
-    if (!Object.keys(next).length) return;
-    // Datapacks live on one Meko: moving to another server leaves existing projects' behind.
-    const newHost = httpHost(url.trim() || m.defaultUrl);
-    if (next.url !== undefined && newHost && newHost !== httpHost(m.effectiveUrl) && confirmHost !== newHost) {
-      setConfirmHost(newHost);
-      return;
-    }
-    setBusy('save');
-    setError(null);
-    try {
-      show(await api.saveSettings({ meko: next }));
-      setConfirmHost(null);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2500);
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const setUpClaude = async () => {
-    setBusy('claude');
-    setError(null);
-    setClaudeDone(false);
-    try {
-      show(await api.mekoClaudeSetup());
-      setClaudeDone(true);
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const setUpKiro = async () => {
-    setBusy('kiro');
-    setError(null);
-    setKiroDone(false);
-    try {
-      show(await api.mekoKiroSetup());
-      setKiroDone(true);
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(null);
-    }
-  };
-  // Worked out by the server (MekoStatus.kiro): Kiro's Meko MCP server is this one and sends a key.
-  const kiroGaps = status.kiro?.gaps ?? [];
-
-  // Worked out by the server (MekoStatus.claude): the same server in both of Claude Code's places, tokens that work there.
-  const claude = status.claude;
-  const claudeProblems = [...claude.gaps, ...claude.unchecked];
-  const claudeTag = claude.gaps.length ? 'differs' : claude.checking ? 'checking' : claude.unchecked.length ? 'not checked' : 'matches';
-
-  /** Clears config.toml's key and URL, so AgentK uses the Meko on this computer (checked with it first). */
-  const switchToLocal = async () => {
-    setBusy('save');
-    setError(null);
-    try {
-      show(await api.saveSettings({ meko: { useLocal: true } }));
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(null);
-    }
-  };
-
+/**
+ * Settings › General's ways to Meko's own pages: the Meko Cloud link (Meko keeps it for AgentK and
+ * its other extensions) and the account that signs people in to both.
+ */
+export function MekoLinks({ meko, auth }: { meko: MekoStatus; auth: MekoAuth | null }) {
+  const host = httpHost(meko.url ?? '');
   return (
-    <form className="stack" onSubmit={save}>
-      <div className="meko-onoff">
-        {m.keySource === 'local' ? (
-          <span>
-            <b>Using the Meko on this computer</b> <span className="muted">({httpHost(m.effectiveUrl) ?? m.effectiveUrl}). Type a Meko Cloud key below to use Meko Cloud instead.</span>
-          </span>
-        ) : m.keySource ? (
-          <>
-            <span className="muted">
-              Meko gives projects datapacks: shared memory, and what a project is shared through.
-              {(m.keySource === 'env' || m.keySource === 'claude') && m.local === 'running' &&
-                ` To use the Meko on this computer instead, remove the key ${KEY_SOURCE[m.keySource]}: AgentK can’t change it there.`}
-            </span>
-            {m.keySource === 'config' && m.local === 'running' && (
-              <ConfirmButton
-                className="btn small"
-                label="Use the Meko on this computer"
-                confirmLabel="Switch"
-                danger
-                prompt={`AgentK removes the key from config.toml and uses the Meko on this computer. Existing projects’ datapacks live on ${httpHost(m.effectiveUrl) ?? 'the current Meko'}, so they won’t work after the switch.`}
-                onConfirm={() => switchToLocal()}
-              />
-            )}
-          </>
-        ) : (
-          <span>
-            <b>Meko isn’t set up.</b>{' '}
-            <span className="muted">
-              {LOCAL_STATE_TEXT[m.local]}
-              or add a Meko Cloud key below. Projects work without datapacks meanwhile.
-            </span>
-          </span>
-        )}
-      </div>
-      <Field label="MCP server URL" hint={`Empty means Meko Cloud (${m.defaultUrl}), unless the environment or Claude Code’s settings name one. Now using ${m.effectiveUrl}.`}>
-        <input
-          id="set-meko-url"
-          className="input mono"
-          placeholder={m.defaultUrl}
-          value={url}
-          onChange={(e) => {
-            setUrl(e.target.value);
-            setConfirmHost(null);
-          }}
-        />
-      </Field>
-      {m.keyHint === null && (
-        <MekoGetKey
-          title="No Meko API key yet."
-          webUrl={mekoKeyLinkBase({ url, webUrl }, m)}
-          fallback={`Fill in the web app URL below to get links to sign up and make a key on ${httpHost(url.trim() || m.fallbackUrl) ?? 'this Meko'}.`}
-        />
-      )}
-      <Field
-        label="API key"
-        hint={
-          m.keyHint === null
-            ? 'Paste the key you generated in Meko.'
-            : m.keySource === 'local'
-              ? 'No key is set, so AgentK uses the Meko on this computer. Paste a Meko Cloud key to use Meko Cloud instead.'
-              : `A key is set${m.keyHint ? `, ending in ${m.keyHint}` : ''}${m.keySource ? `, ${KEY_SOURCE[m.keySource]}` : ''}. Type a new key to replace it. The key is never shown in full.`
-        }
-      >
-        <input
-          id="set-meko-key"
-          className="input mono"
-          type="password"
-          autoComplete="off"
-          placeholder={m.keyHint && m.keySource !== 'local' ? `••••••••${m.keyHint}` : 'mko_tkn_…'}
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-        />
-      </Field>
-      <div className="fields">
-        <Field label="Web app URL" hint="For links to datapacks, and sharing: the API URL defaults to it plus /api/v1.">
-          <input
-            id="set-meko-web"
-            className="input mono"
-            placeholder={m.effectiveWebUrl ?? 'https://meko.example.com'}
-            value={webUrl}
-            onChange={(e) => setWebUrl(e.target.value)}
-          />
-        </Field>
-        <Field label="API URL" hint="Meko’s REST API, for sharing.">
-          <input
-            id="set-meko-api"
-            className="input mono"
-            placeholder={m.effectiveApiUrl ?? 'https://meko.example.com/api/v1'}
-            value={apiUrl}
-            onChange={(e) => setApiUrl(e.target.value)}
-          />
-        </Field>
-      </div>
-      <p className="hint">
-        Leave the web app and API URLs empty for Meko Cloud: they’re worked out from the MCP URL. For your own Meko, fill in
-        the web app URL; the API URL defaults to it plus /api/v1.
-      </p>
-      {status.configured && !m.effectiveWebUrl && (
-        <p className="confirm-warn" role="status">
-          AgentK can’t work out the web app for {httpHost(m.effectiveUrl) ?? 'this Meko'}, so datapack links
-          {m.effectiveApiUrl ? ' are' : ' and sharing are'} off. Set the web app URL to turn them on.
-        </p>
-      )}
-
-      <div className="meko-status">
-        <div className="meko-status-row">
-          <span>Meko</span>
-          {status.configured ? <span className="tag">on</span> : <span className="tag shared">off</span>}
-          {status.configured && <span className="hint">A new URL or key is checked with Meko before it's saved.</span>}
-        </div>
-        {status.configured && claudeOn && (
-          <div className="meko-status-row">
-            <span>Claude Code</span>
-            <span className={cx('tag', claudeTag !== 'matches' && 'shared')}>{claudeTag}</span>
-            <span className="hint">
-              {claudeProblems.length
-                ? `${claudeProblems.join(' ')} New sessions pick up a fix; running ones keep what they started with.`
-                : claude.checking
-                  ? 'Checking Claude Code’s tokens on this Meko.'
-                  : `Sessions use ${m.effectiveUrl}, with tokens that work there.`}
-            </span>
-            {claudeProblems.length > 0 && (
-              <button type="button" className="btn small" disabled={busy !== null} onClick={() => void setUpClaude()}>
-                {busy === 'claude' ? <Busy label="Setting up" /> : 'Set up Claude Code with this Meko'}
-              </button>
-            )}
-            {claudeDone && !claudeProblems.length && <span className="ok-text">Claude Code now uses this Meko.</span>}
-          </div>
-        )}
-        {status.configured && status.opencode && (
-          <div className="meko-status-row">
-            <span>OpenCode</span>
-            <span className="tag">{status.opencode.own ? 'its own' : 'matches'}</span>
-            <span className="hint">
-              {status.opencode.own
-                ? 'OpenCode sessions use the meko server in OpenCode’s own config, which AgentK leaves as it is.'
-                : `OpenCode sessions use ${m.effectiveUrl}: AgentK adds it to their config.`}
-            </span>
-          </div>
-        )}
-        {status.configured && kiro && status.kiro && (
-          <div className="meko-status-row">
-            <span>Kiro</span>
-            <span className={cx('tag', kiroGaps.length > 0 && 'shared')}>{kiroGaps.length ? 'differs' : 'matches'}</span>
-            <span className="hint">
-              {kiroGaps.length
-                ? `${kiroGaps.join(' ')} Meko's setup for Kiro adds its MCP server and its agent, which Kiro sessions are built from.`
-                : `Kiro sessions use ${m.effectiveUrl}.`}
-            </span>
-            {kiroGaps.length > 0 && (
-              <button type="button" className="btn small" disabled={busy !== null} onClick={() => void setUpKiro()}>
-                {busy === 'kiro' ? <Busy label="Setting up" /> : 'Set up Kiro with this Meko'}
-              </button>
-            )}
-            {kiroDone && !kiroGaps.length && <span className="ok-text">Kiro now uses this Meko.</span>}
-          </div>
-        )}
-      </div>
-
-      {confirmHost && (
-        <p className="confirm-warn" role="alert">
-          Existing projects’ datapacks live on {httpHost(m.effectiveUrl) ?? 'the current Meko'}, not on {confirmHost}, so they
-          won’t work after the switch. Press Switch Meko to switch anyway.
-        </p>
-      )}
-      <ErrorText error={error} />
+    <div className="field" id="set-meko-links">
+      <span className="label">Meko</span>
+      <span className="hint">
+        {meko.source
+          ? `AgentK uses ${SOURCE_TEXT[meko.source]}${host && meko.source !== 'local' ? ` (${host})` : ''}.`
+          : 'Meko isn’t set up: start Meko on this computer (meko start), or link Meko Cloud.'}{' '}
+        {auth?.access === 'local' ? 'Meko opens AgentK on this computer without a sign-in.' : 'Meko signs you in to AgentK.'}
+      </span>
       <div className="settings-actions">
-        <button className="btn primary" disabled={busy !== null}>
-          {busy === 'save' ? <Busy label="Checking" /> : confirmHost ? 'Switch Meko' : 'Check and save'}
-        </button>
-        {saved && <span className="muted small">Saved</span>}
+        <a className="btn small" id="set-meko-cloud" href={MEKO_CLOUD_PATH}>
+          Meko Cloud ↗
+        </a>
+        <a className="btn small" id="set-meko-account" href={MEKO_ACCOUNT_PATH}>
+          Account ↗
+        </a>
       </div>
-    </form>
+    </div>
+  );
+}
+
+/**
+ * Settings › Harness › an agent: whether its sessions reach AgentK's Meko, worked out by the server
+ * (`MekoStatus.claude`, `.opencode`, `.kiro`), with Meko's setup for it when they don't. Nothing
+ * while there's no Meko, or nothing to say for that agent.
+ */
+function AgentMeko({ id, meko }: { id: HarnessId; meko: MekoStatus }) {
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!meko.configured) return null;
+  const url = meko.url ?? '';
+  const label = HARNESS_CAPS[id].label;
+  let tag: string;
+  let bad = false;
+  let hint: string;
+  let setUp: (() => Promise<unknown>) | null = null;
+  if (id === 'claude') {
+    const c = meko.claude;
+    const problems = [...c.gaps, ...c.unchecked];
+    bad = problems.length > 0;
+    tag = c.gaps.length ? 'differs' : c.checking ? 'checking' : c.unchecked.length ? 'not checked' : 'matches';
+    hint = problems.length
+      ? `${problems.join(' ')} New sessions pick up a fix; running ones keep what they started with.`
+      : c.checking
+        ? 'Checking Claude Code’s tokens on this Meko.'
+        : `Sessions use ${url}, with tokens that work there.`;
+    if (problems.length) setUp = api.mekoClaudeSetup;
+  } else if (id === 'opencode') {
+    if (!meko.opencode) return null;
+    tag = meko.opencode.own ? 'its own' : 'matches';
+    hint = meko.opencode.own
+      ? 'OpenCode sessions use the meko server in OpenCode’s own config, which AgentK leaves as it is.'
+      : `OpenCode sessions use ${url}: AgentK adds it to their config.`;
+  } else {
+    if (!meko.kiro) return null;
+    const gaps = meko.kiro.gaps;
+    bad = gaps.length > 0;
+    tag = bad ? 'differs' : 'matches';
+    hint = bad
+      ? `${gaps.join(' ')} Meko's setup for Kiro adds its MCP server and its agent, which Kiro sessions are built from.`
+      : `Kiro sessions use ${url}.`;
+    if (bad) setUp = api.mekoKiroSetup;
+  }
+  const run = (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(null);
+    setDone(false);
+    fn()
+      .then(() => setDone(true))
+      .catch((e) => setError(errorMessage(e)))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <div className="field">
+      <span className="label">
+        Meko{' '}
+        <span id={`set-${id}-meko`} className={cx('tag', bad && 'shared')}>
+          {tag}
+        </span>
+      </span>
+      <span className="hint">{hint}</span>
+      {setUp && (
+        <div className="settings-actions">
+          <button type="button" id={`set-${id}-meko-setup`} className="btn small" disabled={busy} onClick={() => run(setUp)}>
+            {busy ? <Busy label="Setting up" /> : `Set up ${label} with this Meko`}
+          </button>
+        </div>
+      )}
+      {done && !setUp && <span className="ok-text">{label} now uses this Meko.</span>}
+      <ErrorText error={error} />
+    </div>
   );
 }
 
@@ -1022,27 +829,6 @@ function UsageStatsCheck() {
       )}
       {offBy && <p className="muted small">Turned off by {offBy} in AgentK's environment.</p>}
       <ErrorText error={error} />
-    </div>
-  );
-}
-
-/** Signing in is Meko's: its account settings hold the password and two-step sign-in. */
-function AccountTab({ auth }: { auth: MekoAuth | null }) {
-  return (
-    <div className="stack">
-      <h3>Sign-in</h3>
-      <p className="muted">
-        {auth?.access === 'local' ? (
-          <>
-            Meko opens AgentK on this computer without a sign-in. To reach it from other devices, set{' '}
-            <code>access = "remote"</code> in the <code>[web]</code> table of Meko’s config.toml: then Meko asks for a
-            username and password.
-          </>
-        ) : (
-          'Meko signs you in to AgentK.'
-        )}{' '}
-        Set your password and two-step sign-in in <a href="/account">Meko’s account settings</a>.
-      </p>
     </div>
   );
 }

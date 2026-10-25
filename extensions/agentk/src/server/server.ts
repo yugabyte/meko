@@ -24,7 +24,7 @@ import { errMsg } from './log.js';
 import type { MekoDatapackRow } from './meko.js';
 import { MekoApiError, asGrant, routeMissing, type MekoShareLinkChange, type RedeemedShareLink, type ShareLinkRow } from './mekoapi.js';
 import { resolveMekoWebUrl } from './config.js';
-import { applyMekoChange, mekoSettings, nextMekoConfig, setUpClaudeMeko, setUpKiroMeko } from './mekosettings.js';
+import { setUpClaudeMeko, setUpKiroMeko } from './mekosettings.js';
 import { prDesignSource } from './prdesign.js';
 import { HttpError } from './projects.js';
 import { searchSessions } from './sessionsearch.js';
@@ -234,7 +234,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
 
   // ---- share links (Meko's: one per datapack; anyone signed in who opens it joins) ----
   const noWebUrl = (what: string) =>
-    new HttpError(409, `Meko's web app URL isn't known, so AgentK can't ${what}. Set it on the Meko tab in Settings.`);
+    new HttpError(409, `Meko's web app URL isn't known, so AgentK can't ${what}. Set it in Meko's web UI (Settings › Meko Cloud).`);
   /** For the browser: the link on Meko's web app while it's on. The token goes nowhere else, the log included. */
   const shareLinkOut = (l: ShareLinkRow, webUrl: string): ShareLink => ({
     active: l.active,
@@ -546,13 +546,13 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     opencodeDisableTracking: core.config.opencode.disableTracking,
     kiroEnabled: core.config.kiro.enabled,
     kiroTrustTools: core.config.kiro.trustTools,
-    meko: mekoSettings(core.config),
   });
   app.get('/api/settings', async () => {
-    // Opening Settings reads the Meko on this computer again (it may have started, stopped or moved),
-    // waiting a moment for it (a `meko` that's slow finishes in the background and pushes the
-    // change), and checks Claude Code's Meko again (in the background, reusing recent results).
-    const read = core.refreshLocalMeko().catch((e: unknown) => core.log.warn('reading the Meko on this computer failed', errMsg(e)));
+    // Opening Settings reads the Meko on this computer and its Meko Cloud link again (it may have
+    // started, stopped, moved or been linked), waiting a moment for it (a `meko` that's slow finishes
+    // in the background and pushes the change), and checks Claude Code's Meko again (in the
+    // background, reusing recent results).
+    const read = core.refreshMeko().catch((e: unknown) => core.log.warn('reading the Meko on this computer failed', errMsg(e)));
     await Promise.race([read, new Promise((r) => setTimeout(r, LOCAL_MEKO_WAIT_MS).unref())]);
     void core.claudeMeko.refresh();
     return settings();
@@ -583,9 +583,6 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b[k] !== undefined && typeof b[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false.`);
     }
     const enabledBefore = Object.fromEntries(HARNESS_IDS.map((id) => [id, core.config[id].enabled]));
-    if (b.meko !== undefined && (typeof b.meko !== 'object' || b.meko === null || Array.isArray(b.meko))) throw new HttpError(400, 'meko must be an object.');
-    // Checked against Meko before anything is saved.
-    const meko = b.meko ? await nextMekoConfig(core, core.mekoTools, b.meko) : null;
     const before = { cap: core.worktrees.cap(), days: core.worktrees.idleDays() };
     core.updateConfig((c) => {
       if (b.reposRoots) c.repos.roots = b.reposRoots.map((r) => r.trim());
@@ -604,7 +601,6 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.opencodeDisableTracking !== undefined) c.opencode.disableTracking = b.opencodeDisableTracking;
       if (b.kiroEnabled !== undefined) c.kiro.enabled = b.kiroEnabled;
       if (b.kiroTrustTools !== undefined) c.kiro.trustTools = b.kiroTrustTools;
-      if (meko) applyMekoChange(c, meko.next, meko.changed);
     });
     // An agent turned on: its version (and Kiro's agent file) follow, in the background. One turned
     // off forgets its last read, so it isn't offered on that read once it's turned on again.
@@ -619,18 +615,12 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (core.worktrees.cap() < before.cap) cleanup('trimming idle worktrees', () => core.worktrees.trimAll());
     const days = core.worktrees.idleDays();
     if (days && (!before.days || days < before.days)) cleanup('removing unused idle worktrees', () => core.worktrees.expire());
-    if (meko) {
-      audit(db, 'meko_settings_changed', { url: mekoSettings(core.config).effectiveUrl });
-      core.log.info(`Meko settings changed (${mekoSettings(core.config).effectiveUrl})`);
-      if (meko.reconnect) await core.mekoChanged();
-      else if (meko.resync) void core.syncInvites();
-    }
     return settings();
   });
   app.post('/api/settings/meko/claude-setup', async (): Promise<Settings> => {
     try {
       await setUpClaudeMeko(core, core.mekoTools);
-      audit(db, 'meko_claude_setup', { url: mekoSettings(core.config).effectiveUrl });
+      audit(db, 'meko_claude_setup', { url: core.mekoStatus.url });
     } finally {
       // Whatever the setup managed, the banner shows what's left (the saved token results are
       // stale now). In the background: the answer doesn't wait on Meko, the state stream updates.
@@ -642,7 +632,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.post('/api/settings/meko/kiro-setup', async (): Promise<Settings> => {
     try {
       await setUpKiroMeko(core, core.mekoTools);
-      audit(db, 'meko_kiro_setup', { url: mekoSettings(core.config).effectiveUrl });
+      audit(db, 'meko_kiro_setup', { url: core.mekoStatus.url });
     } finally {
       core.kiroMeko(true);
       // Meko's setup makes its agent Kiro's default: Kiro sessions' agent is built from it again.
@@ -650,6 +640,14 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       core.changed();
     }
     return settings();
+  });
+
+  // Meko, on AgentK's socket: something AgentK reads from Meko changed (`cloud`: the Meko Cloud link).
+  // Outside /api, so the same-origin rule is checked here; all it does is read Meko again.
+  app.post<{ Body: { what?: unknown } }>('/_meko/changed', async (req, reply) => {
+    if (!sameOrigin(req)) return reply.code(403).send({ error: 'Cross-origin request refused.' });
+    if (req.body?.what === 'cloud') void core.refreshMeko().catch((e: unknown) => core.log.warn('reading Meko\'s Meko Cloud link failed', errMsg(e)));
+    return reply.code(204).send();
   });
 
   // ---- updates ----

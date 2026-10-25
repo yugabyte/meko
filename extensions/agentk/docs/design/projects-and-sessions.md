@@ -54,10 +54,8 @@ idle_per_repo = 3         # idle worktrees each repo keeps for its next session 
 idle_days = 14            # an idle worktree no session used for this many days is removed (0 to 365; 0 keeps it)
 
 [meko]
-# url = "…"                  # Meko MCP server; unset uses MEKO_MCP_URL, Claude Code's settings, then Meko Cloud
-# api_key = "…"              # unset uses MEKO_API_KEY, then Claude Code's settings, then the Meko on this computer
-# web_url = "…"              # Meko web app, for links; unset uses MEKO_WEB_URL, Claude Code's settings, then Meko Cloud's for Meko Cloud
-# api_url = "…"              # Meko's REST API, for sharing; unset uses MEKO_API_URL, then web_url + /api/v1
+# The Meko Cloud link is Meko's (its web UI's Settings › Meko Cloud, or meko cloud_link). url, api_key,
+# web_url and api_url from before are handed to Meko once and cleared.
 # home = "…"                 # Meko's data folder, which AgentK's home is in; set by the installer and from Meko's MEKO_HOME
 # capture_transcripts = true   # send session transcripts to Meko conversations; off by default (MEKO-710)
 
@@ -81,7 +79,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 # trust_tools = true         # Kiro sessions start with every tool trusted (--trust-tools=*), so Kiro never asks; off by default
 
 [call_home]
-# enabled = false            # stop sending anonymous usage stats (Settings → Account); on by default
+# enabled = false            # stop sending anonymous usage stats (Settings › General); on by default
 # url = "https://…/v1/report" # where reports go (the collector's report URL); unset uses the one release builds carry
 # diagnostics_url = "http://127.0.0.1:8080/" # where the YugabyteDB copy goes; unset is https://diagnostics.yugabyte.com from release installs only
 
@@ -257,11 +255,11 @@ start, so an edit made while it runs takes effect after a restart, and a save fr
 differ from the defaults are written, so a changed default reaches existing installs; a value of the wrong type is ignored with a warning. An older
 install's `[server] bind` and `port` and `[tls]` stay in the file for Meko's handoff
 ([security.md](security.md)), and nothing else reads them. The Meko
-URL and key come from `[meko]`, then `MEKO_MCP_URL`/`MEKO_API_KEY`, then the `env` block of Claude
-Code's user `settings.json` (in `CLAUDE_CONFIG_DIR` if set); a later source's URL is skipped when that
-source has a key of its own, and with no URL it's Meko Cloud. With no key in any of them, AgentK uses
-the Meko running on this computer, with its own URL and token, read from Meko and never written here
-([datapacks.md](datapacks.md)). An `enabled` key left in `[meko]` by older versions is ignored and
+URL and key are Meko's: its Meko Cloud link, else the Meko running on this computer with its own URL
+and token, both read from Meko (`meko token --json`) and never written here. `[meko] url`, `api_key`,
+`web_url` and `api_url`, `MEKO_MCP_URL`/`MEKO_API_KEY` and the `env` block of Claude Code's user
+`settings.json` are read only to hand a key from before to Meko, once, and under a Meko too old to
+keep the link ([datapacks.md](datapacks.md)). An `enabled` key left in `[meko]` by older versions is ignored and
 dropped at the next save: Meko can't be turned off.
 
 ## Worktree reuse

@@ -1,8 +1,7 @@
 import { HARNESS_CAPS, harnessOf, type HarnessId } from '../shared/harnesses';
-import { DEFAULT_MEKO_URL, mekoWebUrl } from '../shared/mekourls';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, STAGE_LABELS } from '../shared/types';
-import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoSettings, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
+import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /**
  * What a status dot shows: the session's status, `learning` while AgentK saves what it learned to
@@ -267,29 +266,6 @@ export function httpHost(url: string): string | null {
   } catch {
     return null;
   }
-}
-
-/**
- * The Meko web app pages for getting an account and an API key (keys are under Settings →
- * Security). Signing in or up with `return_to` lands on Settings. Null when the web app is unknown.
- */
-export function mekoKeyLinks(webUrl: string | null): { signup: string; signin: string; settings: string } | null {
-  const base = webUrl?.trim().replace(/\/+$/, '') ?? '';
-  if (!httpHost(base)) return null;
-  const back = `return_to=${encodeURIComponent('/settings')}`;
-  return { signup: `${base}/signup?${back}`, signin: `${base}/signin?${back}`, settings: `${base}/settings` };
-}
-
-/**
- * Which Meko web app the sign-up links point to, from the MCP and web app URLs as typed (saved or
- * not): worked out the way the server will once they're saved (`mekoWebUrl`), with an empty field
- * falling back to what the environment or Claude Code's settings give. Null when it isn't known
- * (your own Meko with no web app URL); `mekoKeyLinks` drops anything that isn't http(s).
- */
-export function mekoKeyLinkBase(typed: { url: string; webUrl: string }, m: Pick<MekoSettings, 'fallbackUrl' | 'envWebUrl'>): string | null {
-  // The server saves Meko Cloud's URL as empty, like a cleared field.
-  const url = typed.url.trim().replace(/\/+$/, '');
-  return mekoWebUrl(url && url !== DEFAULT_MEKO_URL ? url : m.fallbackUrl, typed.webUrl.trim() || m.envWebUrl);
 }
 
 export function isMac(): boolean {

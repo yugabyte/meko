@@ -23,6 +23,7 @@ import (
 
 	"github.com/yugabyte/meko/backend/internal/auth"
 	"github.com/yugabyte/meko/backend/internal/callhome"
+	"github.com/yugabyte/meko/backend/internal/cloudlink"
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/envelope"
 	"github.com/yugabyte/meko/backend/internal/extproxy"
@@ -81,6 +82,9 @@ type Options struct {
 	WebURL func() string
 	// WebStatus, if set, is the web listener's state, for status.
 	WebStatus func() *WebStatus
+	// Cloud, if set, serves the Meko Cloud link's routes (/api/v1/settings/meko-cloud): to the web UI
+	// on the web listener, and to the CLI's admin token (meko cloud_link) on the API listener.
+	Cloud *cloudlink.Service
 }
 
 // WebStatus is what status says about the web listener.
@@ -159,6 +163,7 @@ func New(opts Options) *Server {
 		if opts.Login != nil {
 			v1.POST("/auth/setup-link", s.issueSetupLink)
 		}
+		s.registerCloud(v1)
 	} else {
 		if opts.Web.Extensions == nil {
 			opts.Web.Extensions = func() []*extproxy.Proxy { return nil }
@@ -304,8 +309,10 @@ func Credential(c echo.Context) string {
 }
 
 // adminOnly are the routes only the CLI's admin token opens, whatever the auth setting: they
-// describe the server itself, or make a setup link. Only the API listener has them.
-var adminOnly = map[string]bool{"/api/v1/status": true, "/api/v1/version": true, setupLinkRoute: true}
+// describe the server itself, make a setup link, or change the Meko Cloud link (which an agent's
+// client token mustn't redirect). On the API listener; the web listener has its own check.
+var adminOnly = map[string]bool{"/api/v1/status": true, "/api/v1/version": true, setupLinkRoute: true,
+	cloudRoute: true}
 
 // requireToken is the API listener's credential check: /healthz needs none, nor do the
 // knowledge-file links (their ticket is the credential); the admin-only routes need the admin

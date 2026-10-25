@@ -76,8 +76,8 @@ export class InviteService {
    * finishes "AgentK can't …".
    */
   requireSharing(what: string): void {
-    if (!this.core.mekoStatus.configured) throw new HttpError(409, `Meko isn't set up, so AgentK can't ${what}. Start Meko on this computer (meko start), or add a Meko Cloud key on the Meko tab in Settings.`);
-    if (!resolveMekoApiUrl(this.core.config)) throw new HttpError(409, `Meko's API URL isn't known, so AgentK can't ${what}. Set the web app URL on the Meko tab in Settings.`);
+    if (!this.core.mekoStatus.configured) throw new HttpError(409, `Meko isn't set up, so AgentK can't ${what}. Start Meko on this computer (meko start), or link Meko Cloud in Meko's web UI (Settings › Meko Cloud).`);
+    if (!resolveMekoApiUrl(this.core.config)) throw new HttpError(409, `Meko's API URL isn't known, so AgentK can't ${what}. Set the web app URL in Meko's web UI (Settings › Meko Cloud).`);
   }
 
   /**
@@ -87,7 +87,7 @@ export class InviteService {
    */
   apiFailure(e: unknown, prefix: string): Error {
     if (!(e instanceof MekoApiError)) return e instanceof Error ? e : new Error(String(e));
-    if (e.status === 401) return new HttpError(502, `${prefix}: AgentK's API key wasn't accepted (${e.message}). Check the key on the Meko tab in Settings.`);
+    if (e.status === 401) return new HttpError(502, `${prefix}: AgentK's API key wasn't accepted (${e.message}). Check the key in Meko's web UI (Settings › Meko Cloud).`);
     const status = e.status === 422 ? 400 : [400, 403, 404, 409].includes(e.status) ? e.status : 502;
     return new HttpError(status, `${prefix}: ${e.message}`);
   }

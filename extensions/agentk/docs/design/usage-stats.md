@@ -116,7 +116,7 @@ couldn't store a row, so check a change to the envelope by finding the row in Bi
 installs (with `AK_APP_DIR`) send there, unless `[call_home] diagnostics_url` names another URL.
 
 **Turning it off.** It's on by default. The **Send anonymous usage stats to YugabyteDB** checkbox
-in Settings → Account (under the password forms, or the local-access note) writes
+on Settings › General writes
 `[call_home] enabled = false`; from then on no report is built or sent to either service, without a restart.
 `YB_DISABLE_CALLHOME` set to a true word (`true`, `t`, `yes`, `y`, `1`) in the server's own environment,
 yugabyted's switch, turns off both too, and the checkbox then shows off and disabled, naming it

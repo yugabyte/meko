@@ -253,7 +253,8 @@ func usageStatsLine(u callhome.State) string {
 	return "off (turned off by " + u.By + ")"
 }
 
-// printSetup prints how Meko is installed: its service, its updates and its extensions.
+// printSetup prints how Meko is installed: its service, its updates, the Meko Cloud link and its
+// extensions.
 func printSetup(l paths.Layout, stdout io.Writer) {
 	if m := serviceOf(l); m != nil {
 		state := "stopped"
@@ -283,6 +284,7 @@ func printSetup(l paths.Layout, stdout io.Writer) {
 	} else {
 		fmt.Fprintln(stdout, "  Updates:       none (a build from source)")
 	}
+	fmt.Fprintln(stdout, "  Meko Cloud:    "+cloudStatusLine(l))
 	reg, err := extensions.Load(l.Root)
 	if err != nil {
 		fmt.Fprintf(stdout, "  Extensions:    can't read them: %v\n", err)
@@ -305,9 +307,9 @@ func printSetup(l paths.Layout, stdout io.Writer) {
 // it (the data folder, or the Keychain), so it works whether or not the server runs. While one runs
 // it only reads: the server keeps the token it loaded at start, so a token made now (after the old
 // one was deleted to replace it) would be one the server refuses. With mcp it prints the command
-// that registers Meko with Claude Code instead, and with asJSON the MCP URL, the token and whether
-// a server runs, for installers (AgentK's reads it); both on the running server's port, or the
-// configured one.
+// that registers Meko with Claude Code instead, and with asJSON the MCP URL, the token, whether a
+// server runs and the Meko Cloud link, for extensions (AgentK reads it); both on the running
+// server's port, or the configured one.
 func runToken(l paths.Layout, mcp, asJSON bool, stdout, stderr io.Writer) int {
 	if err := l.Ensure(); err != nil {
 		return fail(stderr, err)
@@ -361,7 +363,17 @@ func runToken(l paths.Layout, mcp, asJSON bool, stdout, stderr io.Writer) int {
 				cancel()
 			}
 		}
-		b, _ := json.Marshal(map[string]any{"url": url, "token": tok, "running": up, "web_url": web})
+		// cloud is the Meko Cloud link the extensions use (docs/cloud.md).
+		store, err := cloudStore(l, cfg)
+		if err != nil {
+			return fail(stderr, err)
+		}
+		cl, err := store.Load()
+		if err != nil {
+			return fail(stderr, err)
+		}
+		b, _ := json.Marshal(map[string]any{"url": url, "token": tok, "running": up, "web_url": web,
+			"cloud": cloudTokenOf(cl)})
 		fmt.Fprintln(stdout, string(b))
 		return exitOK
 	}

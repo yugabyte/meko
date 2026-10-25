@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import {
   REVIEWER_LABELS,
   type DatapackRef,
+  type LocalMekoState,
   type MekoDatapack,
   type ProjectHome,
   type ProjectSettings,
@@ -17,7 +18,7 @@ import { navigate } from '../router';
 import { cx, shortTime } from '../util';
 import { Busy, ConfirmButton, DatapackName, ErrorText, Field } from './common';
 import { AddDatapackDialog } from './AddDatapackDialog';
-import { MekoKeyDialog } from './MekoKeyDialog';
+import { MekoLinkDialog } from './MekoLinkDialog';
 import { ShareDialog } from './ShareDialog';
 import { TopBar } from './TopBar';
 
@@ -33,6 +34,7 @@ export function ProjectHomeView({
   onMove,
   mekoWebUrl,
   mekoConfigured,
+  mekoLocal,
   ghLogin,
   onMenu,
   onBack,
@@ -45,8 +47,10 @@ export function ProjectHomeView({
   /** Moves the project to this index in the list (the tap equivalent of dragging it in the rail). */
   onMove: (index: number) => void;
   mekoWebUrl: string | null;
-  /** Meko is on (a key is set). */
+  /** There's a Meko to use (Meko's Meko Cloud link, or the Meko on this computer). */
   mekoConfigured: boolean;
+  /** The Meko on this computer (`MekoStatus.local`), for what to do while there's no Meko. */
+  mekoLocal: LocalMekoState;
   /** The login gh is signed in as, for `{login}` in the branch prefix. */
   ghLogin: string | null;
   /** Opens the projects drawer (phone layout). */
@@ -60,7 +64,7 @@ export function ProjectHomeView({
   const [home, setHome] = useState<ProjectHome | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   /**
-   * The open dialog: sharing, adding a Meko key, adding a dedicated datapack (with why it's asked
+   * The open dialog: sharing, setting up Meko, adding a dedicated datapack (with why it's asked
    * for), or switching it (from the one shown when Switch was tapped, so a switch made meanwhile in
    * another tab is refused rather than undone).
    */
@@ -77,7 +81,7 @@ export function ProjectHomeView({
   /** Who can share it, when a contributor or viewer asks (null: the notice isn't shown). */
   const [sharers, setSharers] = useState<string[] | null>(null);
   const share = () => {
-    if (!mekoConfigured) setDialog({ kind: 'key', reason: 'A project is shared through its Meko datapack, so sharing needs Meko. Add a Meko Cloud key, or start Meko on this computer (meko start).' });
+    if (!mekoConfigured) setDialog({ kind: 'key', reason: 'A project is shared through its Meko datapack, so sharing needs Meko.' });
     else if (!dedicated) setDialog({ kind: 'datapack', reason: `A project is shared through its datapack, and ${project.name} has none yet.` });
     else if (cantShare) {
       const owner = dedicated.ownerName ?? dedicated.ownerEmail;
@@ -193,7 +197,7 @@ export function ProjectHomeView({
                   </button>
                 ) : (
                   <button className="btn small" onClick={() => setDialog({ kind: 'key' })}>
-                    Add a Meko API key
+                    Set up Meko
                   </button>
                 )}
               </div>
@@ -251,7 +255,7 @@ export function ProjectHomeView({
       {dialog?.kind === 'share' && dedicated && (
         <ShareDialog projectId={project.id} projectName={project.name} datapack={dedicated} onClose={() => setDialog(null)} />
       )}
-      {dialog?.kind === 'key' && <MekoKeyDialog reason={dialog.reason} mekoWebUrl={mekoWebUrl} onClose={() => setDialog(null)} />}
+      {dialog?.kind === 'key' && <MekoLinkDialog reason={dialog.reason} local={mekoLocal} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'datapack' && (
         <AddDatapackDialog project={project} reason={dialog.reason} onClose={() => setDialog(null)} onAdded={() => load()} />
       )}
