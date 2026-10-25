@@ -268,7 +268,10 @@ A release install's app folder:
   `SHA256SUMS` that isn't in `bad-versions`. What it found goes to `<data>/update.json`, which
   `meko status` shows.
 - **Applying** happens on its own only under the service (`MEKO_SERVICE`) with `[update] auto`
-  (default true); a server started by hand only reports updates, and `meko update` installs one now.
+  (default true); a server started by hand only reports updates. `meko update` installs one now, and
+  so does **Update** on the web UI's Status page, through the running server's own updater
+  ([web.md](web.md)): under the service, `serve` exits 0 as for an automatic update; started by
+  hand, it execs the new `app/current/bin/meko` in its own place once it has stopped.
   Staging downloads the tarball and `SHA256SUMS` beside the installed versions, checks the checksum,
   unpacks it (refusing entries or links outside its folder), and runs the new
   `bin/meko version --json`, which must name the version: a binary that can't run here never
@@ -285,7 +288,7 @@ A release install's app folder:
 - While an update is on probation, deleting a knowledge file leaves its bytes on disk
   (`memory.Options.KeepDeletedFiles`): a rollback restores rows from before the update, and they
   must still find their files. The sweep at a start after the update is done removes them.
-- `[update] channel = "off"` stops checks; `[update] repo` (or `MEKO_UPDATE_REPO`) points at a fork.
+- `[update] channel = "off"` stops the scheduled checks (Check now and Update on the Status page still work, as `meko update` does); `[update] repo` (or `MEKO_UPDATE_REPO`) points at a fork.
 
 ## Secrets
 
@@ -317,12 +320,15 @@ Changing the store doesn't move secrets: the client token is made again.
   Keychain file of the test's own.
 - `internal/update`: release picking, staging against a fake GitHub API, checksum and binary
   checks, unsafe tarballs, switching, three failed starts then rollback, a clean stop not counting,
-  probation and pruning.
+  probation and pruning; the web UI's install (restarting once switched, nothing newer, a failed
+  one) and its lock against the scheduled checks.
 - `internal/store`: `RestoreBackup` undoes a real upgrade.
 - `internal/cli`: `install` with a fake service manager, start, stop and restart through it,
   extensions run on start and stop but not restart or `--keep-extensions`, `uninstall` and
   `--purge`, `install_extension` with an installed `agent-k-local` (an AgentK from before the rename) and from a fake release,
-  `logs` merging and following across rotation, `token --json`, `version --json`.
+  `logs` merging and following across rotation, `token --json`, `version --json`, and an update
+  from the Status page's route ending `serve` with an exec of the new version, or under the
+  service a clean exit.
 - `scripts/install_test.go`: the installer with a fake `gh`: unpacking and running `meko install`,
   "already installed", `--reinstall`, a bad checksum, AgentK's flags refused, and Intel Macs and
   macOS 13 refused.
@@ -331,5 +337,5 @@ Changing the store doesn't move secrets: the client token is made again.
 
 Not covered automatically: a real launchd or systemd service (`meko install` writes the user's own
 service), a real update from GitHub, and the Keychain under launchd. Check them by hand
-on a fresh Mac and Linux machine: a reboot, an update, a forced rollback and `meko stop` with
-AgentK.
+on a fresh Mac and Linux machine: a reboot, an update (from `meko update` and from the Status
+page, with and without the service), a forced rollback and `meko stop` with AgentK.

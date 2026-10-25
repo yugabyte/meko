@@ -1,10 +1,12 @@
 // The left rail: the Meko mark, the Status link, the Extensions group, the datapacks, and the
-// version, settings and theme toggle.
+// version (with a chip to the Status page's Updates card when a newer release is out), settings and
+// theme toggle.
 
 import { useState } from "react";
 import { Database, Moon, Plus, Settings, Sun } from "lucide-react";
 import { href, navigate, type Route } from "../lib/route";
 import type { Theme } from "../lib/theme";
+import { useUpdateAvailable } from "../lib/update";
 import type { AuthStatus, Datapack } from "../lib/types";
 import { DatapackDialog } from "./DatapackDialog";
 import { ExtensionsLink } from "./ExtensionsLink";
@@ -33,6 +35,8 @@ export function Sidebar({
 }) {
   const [creating, setCreating] = useState(false);
   const [settings, setSettings] = useState(false);
+  const update = useUpdateAvailable();
+  const status = { tab: "overview" as const, view: "status" as const };
   return (
     <aside className="flex w-60 shrink-0 flex-col border-r bg-sidebar">
       <div className="flex items-center gap-2 px-4 py-4">
@@ -73,7 +77,19 @@ export function Sidebar({
       </nav>
 
       <div className="flex items-center justify-between border-t px-4 py-3 text-xs text-muted-foreground">
-        <span>Meko {version ?? ""}</span>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate">Meko {version ?? ""}</span>
+          {update && (
+            <a
+              href={href(status)}
+              onClick={(e) => (e.preventDefault(), navigate(status))}
+              title={`Meko ${update.latest} is available`}
+              className="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary hover:bg-primary/25"
+            >
+              Update
+            </a>
+          )}
+        </span>
         <div className="flex items-center">
           <Button size="sm" variant="ghost" onClick={() => setSettings(true)} title="Settings">
             <Settings className="size-3.5" />

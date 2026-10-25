@@ -257,6 +257,41 @@ export interface ServerStatus {
   children: { name: string; state: string; restarts: number; last_error?: string; since: string }[];
 }
 
+// GET /api/v1/update (and the replies of POST /update/check and /update/apply): Meko's own updates.
+export interface UpdateStatus {
+  running: string;
+  // A release install, which updates itself; a build from source doesn't.
+  release: boolean;
+  // Why a release install's updates can't run, when they can't.
+  off?: string;
+  // The login service runs this server, and starts a new version again if it fails.
+  service: boolean;
+  channel?: string;
+  // Installs updates on its own (under the service, with [update] auto).
+  auto: boolean;
+  checked_at?: string;
+  latest?: string;
+  latest_url?: string;
+  available: boolean;
+  // Why the last check failed.
+  error?: string;
+  // An update on probation: it's done once the new version has run 5 minutes.
+  pending?: { from: string; to: string; attempts: number };
+  rolled_back: string[];
+  job?: UpdateJob;
+}
+
+// The last install started from this page since the server started. to is "" until a release is
+// found, and stays "" when there was nothing newer.
+export interface UpdateJob {
+  state: "running" | "done" | "failed";
+  step?: "checking" | "installing" | "restarting";
+  to?: string;
+  error?: string;
+  started_at: string;
+  finished_at?: string;
+}
+
 export interface Health {
   status: string;
   version: string;

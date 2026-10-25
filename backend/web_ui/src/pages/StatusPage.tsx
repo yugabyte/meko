@@ -7,6 +7,7 @@ import { dateTime } from "../lib/format";
 import type { ServerStatus } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
 import { KeyValues } from "../components/KeyValues";
+import { UpdatesCard } from "../components/UpdatesCard";
 import { MetricCard } from "../components/metrics/MetricCard";
 import { SectionHeader } from "../components/metrics/SectionHeader";
 import { Badge, ErrorNote, Loading } from "../components/ui";
@@ -46,15 +47,21 @@ export function StatusPage() {
   if (status.error instanceof ApiError && status.error.status === 404) {
     return <ErrorNote error={new Error(OLDER_SERVER)} />;
   }
-  if (status.error) return <ErrorNote error={status.error} />;
   const s: ServerStatus | undefined = status.data;
-  if (!s) return null;
+  // Once loaded, a failed refresh (as while Meko restarts into an update) keeps the page, and the
+  // Updates card waiting for Meko, on screen.
+  if (!s) return status.error ? <ErrorNote error={status.error} /> : null;
   const e = s.memory_engine;
 
   return (
     <div className="max-w-4xl">
       <h1 className="mb-6 text-xl font-semibold">Status</h1>
       <SectionHeader label="This Meko" onRefresh={reload} refreshing={status.loading} />
+      {status.error && (
+        <div className="mb-4">
+          <ErrorNote error={new Error(`Meko isn't answering: ${status.error.message}`)} />
+        </div>
+      )}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <MetricCard title="Server">
           <KeyValues
@@ -68,6 +75,7 @@ export function StatusPage() {
             ]}
           />
         </MetricCard>
+        <UpdatesCard />
         <MetricCard title="Memory engine">
           <KeyValues
             rows={[

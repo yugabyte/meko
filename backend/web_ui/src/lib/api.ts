@@ -25,6 +25,7 @@ import type {
   ProvisionStatus,
   ServerStatus,
   TotpEnroll,
+  UpdateStatus,
   UploadOffer,
   Usage,
   UsageStats,
@@ -145,6 +146,11 @@ export const api = {
   // Starts an action as the extension's job; the list shows how it goes.
   extensionAction: (name: string, action: ExtensionAction) =>
     request<Extension>("POST", `/extensions/${enc(name)}/${action}`),
+
+  update: () => request<UpdateStatus>("GET", "/update"),
+  checkUpdate: () => request<UpdateStatus>("POST", "/update/check"),
+  // Starts installing the newest release; the status's job shows how it goes, and Meko restarts.
+  applyUpdate: () => request<UpdateStatus>("POST", "/update/apply"),
 
   usageStats: () => request<UsageStats>("GET", "/settings/usage-stats"),
   setUsageStats: (enabled: boolean) => request<UsageStats>("PATCH", "/settings/usage-stats", { enabled }),

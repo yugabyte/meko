@@ -41,6 +41,8 @@ type Web struct {
 	// Jobs are the actions Run runs, kept across the servers the listener's owner builds; nil gives
 	// this server its own.
 	Jobs *ExtensionJobs
+	// Updates are Meko's own updates, for the Status page; nil for a build from source.
+	Updates Updates
 }
 
 // The actions the Extensions page runs on an extension (POST /api/v1/extensions/:name/:action).
@@ -84,6 +86,9 @@ func (s *Server) registerWeb(v1 *echo.Group) {
 	v1.POST("/auth/totp/disable", s.totpDisable)
 	v1.GET("/extensions", s.extensionList)
 	v1.POST("/extensions/:name/:action", s.extensionAction)
+	v1.GET("/update", s.updateStatus)
+	v1.POST("/update/check", s.updateCheck)
+	v1.POST("/update/apply", s.updateApply)
 	s.registerCloud(v1)
 	s.e.Any(extRootRoute, s.extensionRoot)
 	s.e.Any(extRoute, s.extension)
