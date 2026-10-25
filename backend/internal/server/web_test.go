@@ -253,7 +253,8 @@ func TestWebExtensionDown(t *testing.T) {
 	}
 	code, env := get(t, base+"/api/v1/extensions", nil, "")
 	rows, _ := env.Data.([]any)
-	if row, _ := rowNamed(rows, "agentk"); code != 200 || row == nil || row["installed"] != true || row["available"] != false {
+	row, _ := rowNamed(rows, "agentk")
+	if code != 200 || row == nil || row["installed"] != true || row["available"] != false {
 		t.Errorf("extensions: %d %+v", code, env)
 	}
 }

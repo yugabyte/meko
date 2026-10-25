@@ -256,7 +256,8 @@ func runUninstall(l paths.Layout, purge bool, o destroyOptions, stdout, stderr i
 // questions.
 func runInstallExtension(l paths.Layout, name string, stdout, stderr io.Writer) int {
 	if _, ok := extensions.Known[name]; !ok {
-		return fail(stderr, fmt.Errorf("no extension called %q: meko knows %s", name, strings.Join(extensions.KnownNames(), ", ")))
+		return fail(stderr, fmt.Errorf("no extension called %q: meko knows %s", name,
+			strings.Join(extensions.KnownNames(), ", ")))
 	}
 	if up, _ := running(l.Lock); !up {
 		return fail(stderr, errors.New("no Meko server is running: start it with meko start first"))
@@ -301,7 +302,8 @@ func installExtension(ctx context.Context, l paths.Layout, name string, interact
 				"needs: update it (the Update button in AgentK), then run this again", cat.Title)
 		}
 		fmt.Fprintf(stdout, "%s is installed (%s): setting it up to use this Meko\n", cat.Title, cmd)
-		err = runAttached(ctx, cmd, append([]string{"install"}, args...), extensions.CommandEnv(l.Root, cmd), stdin, stdout, stderr)
+		env := extensions.CommandEnv(l.Root, cmd)
+		err = runAttached(ctx, cmd, append([]string{"install"}, args...), env, stdin, stdout, stderr)
 		if err != nil {
 			return fmt.Errorf("%s install failed: %w", cat.Command, err)
 		}

@@ -164,7 +164,8 @@ func TestPresenterBesideMeko(t *testing.T) {
 	go func() { _ = ext.Serve(ln) }()
 	t.Cleanup(func() { _ = ext.Close() })
 	cmd := filepath.Join(home, "presenter")
-	script := fmt.Sprintf("#!/bin/sh\n[ \"$1\" = _handoff ] && { printf '%%s\\n' '{\"socket\":\"%s\",\"legacy\":null}'; exit 0; }\nexit 0\n", sock)
+	reply := fmt.Sprintf(`{"socket":"%s","legacy":null}`, sock)
+	script := fmt.Sprintf("#!/bin/sh\n[ \"$1\" = _handoff ] && { printf '%%s\\n' '%s'; exit 0; }\nexit 0\n", reply)
 	if err = os.WriteFile(cmd, []byte(script), 0o700); err != nil { //nolint:gosec // G306: test script
 		t.Fatal(err)
 	}
