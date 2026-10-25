@@ -26,9 +26,19 @@ export function sameMeko(a: MekoAt, b: MekoAt): boolean {
   return a.kind === b.kind && (a.kind === 'local' || a.host === b.host);
 }
 
+/** The Meko on this computer: the only one a Presenter from before Meko's link used (its host doesn't matter). */
+export const LOCAL_MEKO: MekoAt = { kind: 'local', host: '' };
+
 /** A Meko as the pages name it: "Meko Cloud (host)", or "the Meko on this computer". */
 export function mekoLabel(at: MekoAt): string {
   return at.kind === 'cloud' ? `Meko Cloud (${at.host})` : 'the Meko on this computer';
+}
+
+/** What gets a deck saved in `at` back, while Presenter uses another Meko. */
+export function reopenHint(at: MekoAt): string {
+  return at.kind === 'cloud'
+    ? `Link Meko to ${mekoLabel(at)} again in Meko's Settings › Meko Cloud to open it.`
+    : "Unlink Meko Cloud in Meko's Settings › Meko Cloud to open it.";
 }
 
 export interface DatapackGroups {

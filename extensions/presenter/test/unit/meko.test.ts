@@ -7,7 +7,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mayRetry, MekoClient, MekoError, mekoFinder, probeMeko, type MekoProbe } from '../../src/server/meko.js';
+import { apiUrlOf, mayRetry, MekoClient, MekoError, mekoFinder, probeMeko, type MekoProbe } from '../../src/server/meko.js';
 import { getPaths } from '../../src/server/paths.js';
 import { tempDir } from '../helpers.js';
 
@@ -105,11 +105,22 @@ describe('where Meko is', () => {
     ['keeps the link when Meko couldn\'t read it', [linked, { ...local, cloudUnreadable: true }], CLOUD_CREDS],
     ['keeps the link when meko failed', [linked, { state: 'failed', local: null }], CLOUD_CREDS],
     ['finds none with no meko and no link read before', [{ state: 'none', local: null }], null],
+    ['finds none, not the Meko on this computer, when the first read couldn\'t read the link', [{ ...local, cloudUnreadable: true }], null],
+    ['finds none when a linked Meko names no REST API URL, rather than guess it from the MCP host', [{ ...local, cloud: { url: LINK.url, apiKey: 'cloud-key', apiUrl: '' } }], null],
   ])('%s', async (_n, probes, want) => {
     const find = mekoFinder(async () => probes.shift()!);
     let found;
     while (probes.length) found = await find();
     expect(found!.creds).toEqual(want);
+  });
+
+  it('forgets the link it last read when Meko says it changed', async () => {
+    const probes: MekoProbe[] = [linked, { ...local, cloudUnreadable: true }, { ...local, cloudUnreadable: true }];
+    const find = mekoFinder(async () => probes.shift()!);
+    await find();
+    expect((await find()).creds).toEqual(CLOUD_CREDS);
+    find.forget!();
+    expect(await find()).toEqual({ state: 'failed', creds: null, why: "Meko couldn't read its Meko Cloud link: check meko status." });
   });
 });
 
@@ -171,6 +182,34 @@ describe('Meko Cloud\'s REST API', () => {
       await expect(m.listArtifacts('dp1', 'deck.json')).rejects.toThrow(/Meko Cloud refused the key: link it again in Meko's Settings › Meko Cloud/);
     } finally {
       await m.close();
+    }
+  });
+
+  it('gives Claude the URL and key Meko gives now, not those of a connection still open', async () => {
+    const url = await mcp();
+    let key = 'old-token';
+    const m = new MekoClient(async () => ({ state: 'ready', creds: { url, key, apiUrl: apiUrlOf(url), kind: 'local' } }), 'test');
+    try {
+      expect((await m.current())?.key).toBe('old-token');
+      key = 'new-token';
+      expect((await m.current())?.key).toBe('new-token');
+    } finally {
+      await m.close();
+    }
+  });
+
+  it('connects once for callers that ask at once', async () => {
+    let n = 0;
+    const m = new MekoClient(async () => {
+      n++;
+      return { state: 'ready', creds: { url: 'http://127.0.0.1:1/mcp', key: 'k', apiUrl: '', kind: 'local' } };
+    }, 'test');
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } }));
+    try {
+      await Promise.all([m.at(), m.at(), m.current()]);
+      expect(n).toBe(1);
+    } finally {
+      vi.restoreAllMocks();
     }
   });
 

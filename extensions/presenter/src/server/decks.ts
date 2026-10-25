@@ -4,7 +4,7 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { DECK_PREFIX, deckDatapackName, mekoLabel, sameMeko, type DatapackRow, type MekoAt } from '../shared/datapacks.js';
+import { DECK_PREFIX, deckDatapackName, LOCAL_MEKO, mekoLabel, reopenHint, sameMeko, type DatapackRow, type MekoAt } from '../shared/datapacks.js';
 import { ASSET_NAME, assetFits, checkDeck, DeckError, newDeck, own, type Deck } from '../shared/deck.js';
 import type { Piece } from '../shared/manifest.js';
 import { applyOps, type Op } from '../shared/ops.js';
@@ -33,7 +33,10 @@ interface Stored {
   manifestHash: string | null;
   known: string[];
   assetPieces: Record<string, Piece>;
-  /** The Meko its datapack is in; a draft from before Presenter kept it takes the Meko it's next opened under. */
+  /**
+   * The Meko its datapack is in. A draft from before Presenter kept it is the current Meko's when that
+   * Meko has its datapack, else the Meko on this computer's (`untagged`).
+   */
   meko?: MekoAt;
 }
 
@@ -104,8 +107,10 @@ export class DeckStore {
       if (s) local.set(id, s);
     }
     let rows: DatapackRow[] = [];
+    let listed = false;
     try {
       rows = (await this.meko.listDatapacks()).filter((d) => d.name.startsWith(DECK_PREFIX));
+      listed = true;
     } catch {
       /* drafts alone, when Meko can't be reached */
     }
@@ -116,7 +121,9 @@ export class DeckStore {
     });
     for (const [id, s] of local) {
       if (out.some((d) => d.id === id)) continue;
-      const elsewhere = at && s.meko && !sameMeko(s.meko, at) ? { elsewhere: s.meko } : {};
+      // The current Meko didn't list it: an untagged draft is the Meko on this computer's.
+      const m = s.meko ?? (listed ? LOCAL_MEKO : undefined);
+      const elsewhere = at && m && !sameMeko(m, at) ? { elsewhere: m } : {};
       out.push({ id, name: s.name, title: s.deck.title, savedAt: s.savedAt, draft: true, ...elsewhere });
     }
     return out.sort((a, b) => a.title.localeCompare(b.title));
@@ -135,6 +142,8 @@ export class DeckStore {
   async create(req: CreateDeckRequest): Promise<DeckState> {
     const title = req.title.trim();
     if (!title) throw new HttpError(400, 'Give the deck a title.');
+    // Read before Meko is asked anything: the datapack is made in the Meko Presenter uses now.
+    const meko = (await this.meko.at()) ?? undefined;
     const deck = checkDeck(newDeck(title, req.brief, req.sources));
     const base = deckDatapackName(title);
     let row: DatapackRow | null = null;
@@ -147,7 +156,6 @@ export class DeckStore {
       }
     }
     if (!row) throw new HttpError(409, `Every name like ${base} is taken. Try another title.`);
-    const meko = (await this.meko.at()) ?? undefined;
     const e: Entry = { id: row.id, name: row.name, deck, savedJson: null, savedAt: null, manifestHash: null, known: [], assetPieces: {}, meko, undo: [], redo: [], saving: null };
     this.open.set(e.id, e);
     this.persist(e);
@@ -165,12 +173,28 @@ export class DeckStore {
     const at = await this.meko.at();
     if (!at) return e;
     if (!e.meko) {
-      e.meko = at;
+      const m = await this.untagged(e.id, at);
+      if (!m) return e;
+      e.meko = m;
       this.persist(e);
-    } else if (!sameMeko(e.meko, at)) {
-      throw new HttpError(409, `This deck is saved in ${mekoLabel(e.meko)}, and Presenter now uses ${mekoLabel(at)}. Link Meko to it again to open the deck.`);
+    }
+    if (!sameMeko(e.meko, at)) {
+      throw new HttpError(409, `This deck is saved in ${mekoLabel(e.meko)}, and Presenter now uses ${mekoLabel(at)}. ${reopenHint(e.meko)}`);
     }
     return e;
+  }
+
+  /**
+   * The Meko a draft from before Presenter kept it belongs to: the one Presenter uses now when it has
+   * the deck's datapack, else the Meko on this computer (the only one an older Presenter used, short of
+   * a hand-written config.json). Null while Meko can't be asked.
+   */
+  private async untagged(id: string, at: MekoAt): Promise<MekoAt | null> {
+    try {
+      return (await this.meko.listDatapacks()).some((d) => d.id === id) ? at : LOCAL_MEKO;
+    } catch {
+      return null;
+    }
   }
 
   /** A deck to work on: its draft here, else its newest save in Meko. */
@@ -194,12 +218,13 @@ export class DeckStore {
 
   /** A deck with no draft here, from its newest save in its datapack. */
   private async load(id: string): Promise<Entry> {
+    // Read before Meko is asked anything: the deck comes from the Meko Presenter uses now.
+    const meko = (await this.meko.at()) ?? undefined;
     const row = (await this.meko.listDatapacks()).find((d) => d.id === id);
     if (!row) throw new HttpError(404, 'There\'s no such deck.');
     const versions = await this.pieces.versions(id);
     if (!versions.length) throw new HttpError(404, `${row.name} has no saved deck yet.`);
     const loaded = await this.pieces.load(id, versions[0]!.hash);
-    const meko = (await this.meko.at()) ?? undefined;
     const e: Entry = {
       id, name: row.name, deck: loaded.deck, savedJson: JSON.stringify(loaded.deck), savedAt: loaded.savedAt,
       manifestHash: loaded.manifestHash, known: loaded.known, assetPieces: loaded.assetPieces, meko, undo: [], redo: [], saving: null,

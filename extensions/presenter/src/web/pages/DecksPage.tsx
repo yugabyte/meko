@@ -1,6 +1,6 @@
 import { Plus } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { mekoLabel } from '../../shared/datapacks.js';
+import { mekoLabel, reopenHint } from '../../shared/datapacks.js';
 import type { DeckSummary, Health } from '../../shared/types.js';
 import { api } from '../api.js';
 import { Button, ErrorLine, Pill } from '../components/ui.js';
@@ -44,7 +44,7 @@ export function DecksPage() {
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium">{d.title}</span>
                   <span className="block truncate font-mono text-xs text-muted-foreground">{d.name}</span>
-                  {d.elsewhere && <span className="block text-xs text-muted-foreground">Saved in {mekoLabel(d.elsewhere)}. Link Meko to it again to open it.</span>}
+                  {d.elsewhere && <span className="block text-xs text-muted-foreground">Saved in {mekoLabel(d.elsewhere)}. {reopenHint(d.elsewhere)}</span>}
                 </span>
                 {d.draft && <Pill tone={d.elsewhere ? 'warn' : 'info'}>{d.elsewhere ? 'another Meko' : 'draft here'}</Pill>}
                 <span className="text-xs text-muted-foreground">{d.savedAt ? new Date(d.savedAt).toLocaleDateString() : ''}</span>

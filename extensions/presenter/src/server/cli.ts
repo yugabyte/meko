@@ -91,7 +91,7 @@ async function serve(paths: Paths): Promise<void> {
   const claude = process.env.PRESENTER_CLAUDE ? JSON.parse(process.env.PRESENTER_CLAUDE) as string[] : ['claude'];
   const jobs = new Jobs({
     decks, meko, claude, run: runClaude,
-    // Claude works on the Meko the deck store uses, the one the deck was loaded from.
+    // Claude works on the Meko the deck store uses; Jobs checks it's the deck's before each run.
     mekoCreds: () => meko.current(),
     emit: (e) => broadcast({ events }, e),
   });

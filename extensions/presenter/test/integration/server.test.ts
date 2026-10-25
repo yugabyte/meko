@@ -256,7 +256,7 @@ describe('when Meko\'s Meko Cloud link changes', () => {
     meko.datapacks = [];
     expect((await api<Health>('GET', '/api/health')).body.mekoAt).toEqual({ kind: 'cloud', host: 'mcp.meko.example' });
     expect((await api<DeckSummary[]>('GET', '/api/decks')).body).toEqual([expect.objectContaining({ id: deck.id, draft: true, elsewhere: { kind: 'local', host: '127.0.0.1:7778' } })]);
-    const refused = 'This deck is saved in the Meko on this computer, and Presenter now uses Meko Cloud (mcp.meko.example). Link Meko to it again to open the deck.';
+    const refused = "This deck is saved in the Meko on this computer, and Presenter now uses Meko Cloud (mcp.meko.example). Unlink Meko Cloud in Meko's Settings › Meko Cloud to open it.";
     for (const [method, url, body] of [
       ['GET', `/api/decks/${deck.id}`],
       ['POST', `/api/decks/${deck.id}/ops`, { ops: [{ op: 'setTitle', title: 'Moved' }] }],
@@ -267,6 +267,19 @@ describe('when Meko\'s Meko Cloud link changes', () => {
       expect([url, r.status, r.body.error]).toEqual([url, 409, refused]);
     }
     expect((await api('GET', `/api/runs/${run.id}`)).status).toBe(200);
+
+    // A job queued before the link changed doesn't run Claude on the other Meko.
+    const realList = meko.listDatapacks.bind(meko);
+    meko.where = { kind: 'local', host: '127.0.0.1:7778' };
+    meko.datapacks = local;
+    meko.listDatapacks = async () => {
+      meko.where = { kind: 'cloud', host: 'mcp.meko.example' };
+      return realList();
+    };
+    const job = (await api<Job>('POST', `/api/decks/${deck.id}/jobs`, { kind: 'map' })).body;
+    const ended = await settled(deck.id, job.id);
+    expect([ended.status, ended.error]).toEqual(['failed', refused]);
+    meko.listDatapacks = realList;
 
     // Unlinked again: the deck is the store's to change once more.
     meko.where = { kind: 'local', host: '127.0.0.1:7778' };

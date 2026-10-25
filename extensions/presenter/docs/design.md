@@ -38,17 +38,24 @@ answers whether or not Meko's server runs:
 
 | Meko says | Presenter uses |
 |---|---|
-| `cloud` linked (`url`, `api_key`) | Meko Cloud: MCP at `cloud.url`, REST at `cloud.api_url` (another host than the MCP one), the link's key |
+| `cloud` linked (`url`, `api_key`) | Meko Cloud: MCP at `cloud.url`, REST at `cloud.api_url` (another host than the MCP one), the link's key. With no `api_url`, no Meko: the error says to link again |
 | `cloud` unlinked or never set, or no `cloud` (a Meko from before the link) | The Meko on this computer: its `url` and `token`, REST at the same origin's `/api/v1` |
 | `cloud.error`, or `meko` failed or is gone, after a link was read | The link last read, kept in memory only, so a slow `meko` or a locked Keychain never moves decks |
+| The same before any link was read (a start, or right after Meko's notice) | No Meko, rather than the one on this computer, for the same reason |
 
 When the link changes, Meko posts `{"what":"cloud"}` to `/_meko/changed` on Presenter's socket; the
-client drops its connection and conversation, and the next call finds Meko again. Claude's runs
-get the same Meko's URL and key (the key through `PRESENTER_MEKO_KEY`). A deck's id is its
-datapack's, which exists in one Meko only, so each draft records the Meko it belongs to (one from
-before this takes the Meko it's next opened under). The decks list shows another Meko's drafts
-greyed out. Editing, saving and Claude's jobs refuse them, while a run of one plays on, so a talk
-under way outlives a change of the link. The decks page says where decks are saved. An older
+client drops its connection, its conversation and the link it last read, and the next call finds
+Meko again. One connection is made at a time, so the client and the credentials it reports are
+always one Meko's. Each Claude run asks `meko token --json` again and reconnects when the URL or key
+changed (the local Meko on a new port, a new client token), then gets that Meko's URL and key (the
+key through `PRESENTER_MEKO_KEY`). A deck's id is its datapack's, which exists in one Meko only, so
+each draft records the Meko it belongs to, read before Meko is asked to make or load it. A draft from
+before Presenter kept it is the current Meko's when that Meko lists its datapack, else the Meko on
+this computer's. The decks list shows another Meko's drafts greyed out, with what brings them back
+(unlink Meko Cloud, or link that Meko Cloud again). Editing, saving and Claude's jobs refuse them,
+checked again as each job and each Claude run starts, so a job queued before the link changed
+doesn't run on the other Meko. A run of one plays on, so a talk under way outlives a change of the
+link. The decks page says where decks are saved. An older
 Presenter's `config.json` key is removed at install.
 
 ## The deck

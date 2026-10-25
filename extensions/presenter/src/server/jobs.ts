@@ -182,6 +182,8 @@ export class Jobs {
    * on sessions of their own, which never replace the deck's.
    */
   private async claude(j: Running, session: SessionArgs | null, message: string, timeoutMs: number, prefix = '', deckSession = true): Promise<RunResult> {
+    // Meko's link may have changed since the job was queued: Claude works only on the deck's own Meko.
+    await this.d.decks.state(j.deckId);
     const creds = await this.d.mekoCreds();
     // The PATH the health check looks in (~/.local/bin, where Claude Code's installer puts claude).
     const env = { ...process.env, PATH: withLocalBin(process.env.PATH ?? ''), ...(creds ? { [MEKO_KEY_ENV]: creds.key } : {}) };
@@ -290,7 +292,8 @@ export class Jobs {
     j.status = 'running';
     this.changed(j);
     try {
-      const deck = await this.d.decks.deck(j.deckId);
+      // state(), not deck(): a job queued before Meko's link changed doesn't run on the other Meko.
+      const { deck } = await this.d.decks.state(j.deckId);
       const packs = await this.packs(deck);
       if (req.kind === 'build') {
         await this.build(j, deck, packs, req.scenes);

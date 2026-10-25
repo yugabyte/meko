@@ -74,6 +74,14 @@ export interface MekoCreds {
 export interface Found {
   state: 'ready' | 'none' | 'failed';
   creds: MekoCreds | null;
+  /** Why there are no credentials, when it isn't the usual (no Meko, or Meko didn't answer). */
+  why?: string;
+}
+
+/** Finds Meko's URL and key; `forget()` drops what it knew of the link (Meko said it changed). */
+export interface Finder {
+  (): Promise<Found>;
+  forget?(): void;
 }
 
 /** Meko's Meko Cloud link: linked, `url` and `apiKey` are set; unlinked (or never set), they're ''. */
@@ -142,22 +150,45 @@ export function probeMeko(paths: Paths, env: NodeJS.ProcessEnv = process.env): P
   });
 }
 
+const RELINK = "link it again in Meko's Settings › Meko Cloud";
+
 /**
  * Finds Meko's URL and key each time it's called: Meko's Meko Cloud link when linked, else the Meko
  * on this computer. A read that couldn't ask `meko`, or whose link Meko couldn't read, keeps the link
  * last read (in memory only), so a slow `meko` or a locked Keychain doesn't move decks to another
- * Meko. A Meko too old to keep a link means the Meko on this computer.
+ * Meko. Before any link is read (a start, or after `forget()`), such a read finds no Meko rather than
+ * the one on this computer, for the same reason. A Meko too old to keep a link means the Meko on this
+ * computer.
  */
-export function mekoFinder(probe: () => Promise<MekoProbe>): () => Promise<Found> {
+export function mekoFinder(probe: () => Promise<MekoProbe>): Finder {
   let last: CloudLink | undefined;
-  return async () => {
+  let known = false;
+  const find = async (): Promise<Found> => {
     const p = await probe();
     const keep = !p.cloud && (p.cloudUnreadable || p.state === 'none' || p.state === 'failed');
-    last = keep ? last : p.cloud;
-    if (last?.url && last.apiKey) return { state: 'ready', creds: { url: last.url, key: last.apiKey, apiUrl: last.apiUrl || apiUrlOf(last.url), kind: 'cloud' } };
+    if (keep && !known) {
+      return p.cloudUnreadable
+        ? { state: 'failed', creds: null, why: "Meko couldn't read its Meko Cloud link: check meko status." }
+        : { state: p.state === 'failed' ? 'failed' : 'none', creds: null };
+    }
+    if (!keep) {
+      last = p.cloud;
+      known = true;
+    }
+    if (last?.url && last.apiKey) {
+      // Meko Cloud's REST API isn't on its MCP host, so there's no working it out from the MCP URL.
+      if (!last.apiUrl) return { state: 'failed', creds: null, why: `Meko's Meko Cloud link has no API URL: ${RELINK}.` };
+      return { state: 'ready', creds: { url: last.url, key: last.apiKey, apiUrl: last.apiUrl, kind: 'cloud' } };
+    }
     if (p.local) return { state: 'ready', creds: { url: p.local.url, key: p.local.token, apiUrl: apiUrlOf(p.local.url), kind: 'local' } };
     return { state: p.state === 'failed' ? 'failed' : 'none', creds: null };
   };
+  return Object.assign(find, {
+    forget: () => {
+      last = undefined;
+      known = false;
+    },
+  });
 }
 
 /** Which Meko some credentials reach, as the pages and the drafts name it. */
@@ -168,7 +199,7 @@ export function atOf(creds: MekoCreds): MekoAt {
 /** A refusal of Meko Cloud's key, which only linking again fixes. */
 function refusedKey(status: number | undefined, creds: MekoCreds): MekoError | null {
   return creds.kind === 'cloud' && (status === 401 || status === 403)
-    ? new MekoError("Meko Cloud refused the key: link it again in Meko's Settings › Meko Cloud.") : null;
+    ? new MekoError(`Meko Cloud refused the key: ${RELINK}.`) : null;
 }
 
 type Json = Record<string, unknown>;
@@ -177,13 +208,15 @@ const HASH = /^[0-9a-f]{64}$/;
 /** Meko over MCP and REST, with credentials found again when a connection fails. */
 export class MekoClient implements MekoPort {
   private client: Client | null = null;
+  /** The connection being made: one at a time, so the client and `creds` are always one Meko's. */
+  private connecting: Promise<Client> | null = null;
   /** What the last find gave, connected or not. */
   private creds: MekoCreds | null = null;
   private conversation: string | null = null;
-  /** Counts reset()s, so a connection made for the Meko before one isn't kept. */
+  /** Counts drops, so a connection made for the Meko before one isn't kept. */
   private gen = 0;
 
-  constructor(private find: () => Promise<Found>, private version: string) {}
+  constructor(private find: Finder, private version: string) {}
 
   static forPaths(paths: Paths, version: string): MekoClient {
     return new MekoClient(mekoFinder(() => probeMeko(paths)), version);
@@ -195,9 +228,19 @@ export class MekoClient implements MekoPort {
     return this.creds ? atOf(this.creds) : null;
   }
 
-  /** The credentials of the Meko Presenter uses now, for Claude's runs; null when it can't be reached. */
+  /**
+   * The credentials of the Meko Presenter uses now, for Claude's runs; null when it can't be reached.
+   * Read afresh: a connection still open can hold a URL or key Meko has since changed (a new port, a
+   * new client token), which Presenter's own calls get past by reconnecting and Claude's can't.
+   */
   async current(): Promise<MekoCreds | null> {
     try {
+      if (this.client) {
+        const now = (await this.find()).creds;
+        const was = this.creds;
+        // A read that found nothing (a slow `meko`) leaves a connection that may still work.
+        if (now && (!was || now.url !== was.url || now.key !== was.key || now.apiUrl !== was.apiUrl)) this.drop();
+      }
       await this.connect();
       return this.creds;
     } catch {
@@ -205,17 +248,23 @@ export class MekoClient implements MekoPort {
     }
   }
 
-  /**
-   * Forgets the Meko it found (Meko's link changed): the next call finds it again. The conversation
-   * id belongs to the old Meko, so it goes too.
-   */
-  reset(): void {
+  /** Drops the connection and the Meko found: the next call finds it again. */
+  private drop(): void {
     const c = this.client;
     this.client = null;
     this.creds = null;
     this.conversation = null;
     this.gen++;
     void c?.close().catch(() => undefined);
+  }
+
+  /**
+   * Forgets the Meko it found and the link it last read (Meko said its link changed): the next call
+   * finds it again. The conversation id belongs to the old Meko, so it goes too.
+   */
+  reset(): void {
+    this.find.forget?.();
+    this.drop();
   }
 
   async status(): Promise<'ready' | 'none' | 'failed'> {
@@ -227,16 +276,23 @@ export class MekoClient implements MekoPort {
     }
   }
 
-  private async connect(): Promise<Client> {
-    if (this.client) return this.client;
+  private connect(): Promise<Client> {
+    if (this.client) return Promise.resolve(this.client);
+    this.connecting ??= this.open().finally(() => {
+      this.connecting = null;
+    });
+    return this.connecting;
+  }
+
+  private async open(): Promise<Client> {
     const gen = this.gen;
     const found = await this.find();
-    if (gen !== this.gen) return this.connect();
+    if (gen !== this.gen) return this.open();
     this.creds = found.creds;
     if (!found.creds) {
-      throw new MekoError(found.state === 'none'
+      throw new MekoError(found.why ?? (found.state === 'none'
         ? "Meko isn't running here: start it with meko start (or no Meko is installed)."
-        : "Meko on this computer didn't answer: check meko status.");
+        : "Meko on this computer didn't answer: check meko status."));
     }
     const creds = found.creds;
     const transport = new StreamableHTTPClientTransport(new URL(creds.url), {
@@ -254,7 +310,7 @@ export class MekoClient implements MekoPort {
     // A reset() while it connected: this one is for the Meko before.
     if (gen !== this.gen) {
       void c.close().catch(() => undefined);
-      return this.connect();
+      return this.open();
     }
     this.client = c;
     return c;
