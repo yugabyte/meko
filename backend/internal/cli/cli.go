@@ -1,6 +1,7 @@
-// Package cli is the meko command: start, stop, restart, status, serve, version, token, ui, logs,
-// destroy, install, uninstall, install_extension, uninstall_extension, update and list, and the MCP calls
-// search, add_memory, datapacks, create_datapack, delete_datapack, upload and upload_status.
+// Package cli is the meko command: start, stop, restart, status, serve, version, token, ui,
+// setup_link, cloud_link, logs, destroy, install, uninstall, install_extension, update_extension,
+// uninstall_extension, update and list, and the MCP calls search, add_memory, datapacks,
+// create_datapack, delete_datapack, upload and upload_status.
 package cli
 
 import (
@@ -9,9 +10,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"syscall"
 
 	"github.com/yugabyte/meko/backend/internal/config"
+	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/paths"
 )
 
@@ -42,10 +45,15 @@ Usage:
   meko version   show versions; --json for installers
   meko token     print the token MCP and REST clients send (Authorization: Bearer <token>);
                  --mcp prints the claude mcp add command that registers Meko with Claude Code,
-                 --json the MCP URL, the token and whether a server runs
+                 --json the MCP URL, the token, whether a server runs and the Meko Cloud
+                 link (with its key)
   meko ui [path] open the web UI in the browser (path /ext/agentk/ opens AgentK's);
                  --no-open only prints its link. With remote access and no login yet, it
                  prints a setup link instead
+  meko cloud_link
+                 link Meko Cloud for the extensions (AgentK uses it in place of this Meko): reads
+                 the API key from stdin, or asks for it on a terminal, checks it and saves it;
+                 --url, --web-url and --api-url name another Meko server; --off unlinks
   meko setup_link
                  print a one-time link that sets up the web UI's login for remote access, or
                  replaces it (a lost password: it turns two-step sign-in off and signs every
@@ -64,9 +72,13 @@ Usage:
                  unless --force; --with-extensions removes the extensions too)
   meko update    install the newest release now (it updates itself under the service);
                  --check only looks
-  meko install_extension agentk
-                 install AgentK, pointed at this Meko, and start and stop it with Meko
-  meko uninstall_extension agentk
+  meko install_extension agentk|presenter
+                 install AgentK or Presenter, pointed at this Meko, and start and stop it with
+                 Meko (its command, agentk or meko_presenter, already on PATH is used as it is)
+  meko update_extension presenter
+                 install Presenter's newest release now and restart it (one that fails to start
+                 is rolled back); --check only looks. AgentK updates itself
+  meko uninstall_extension agentk|presenter
                  stop starting and stopping it with Meko (it stays installed)
 
   meko search "<question>"       search memories, the knowledge base and past conversations
@@ -123,6 +135,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	var detached bool
 	var t toolFlags
 	var c cmdFlags
+	var cl cloudFlags
 	switch cmd {
 	case "search", "add_memory", "datapacks", "create_datapack", "delete_datapack", "upload", "upload_status":
 		fs.BoolVar(&t.json, "json", false, "print the tool's raw reply")
@@ -130,7 +143,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&t.json, "json", false, "print raw JSON")
 	case "token":
 		fs.BoolVar(&t.mcp, "mcp", false, "print the claude mcp add command for Meko")
-		fs.BoolVar(&t.json, "json", false, "print the MCP URL, the token and whether a server runs, as JSON")
+		fs.BoolVar(&t.json, "json", false,
+			"print the MCP URL, the token, whether a server runs and the Meko Cloud link, as JSON")
 	case "stop":
 		fs.BoolVar(&c.keepExtensions, "keep-extensions", false, "leave the extensions running")
 	case "install":
@@ -144,8 +158,13 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	case "destroy":
 		fs.BoolVar(&c.force, "force", false, "destroy without asking (keeping the extensions' data)")
 		fs.BoolVar(&c.withExtensions, "with-extensions", false, "uninstall the extensions and remove their data too")
-	case "update":
+	case "update", "update_extension":
 		fs.BoolVar(&c.check, "check", false, "only look for an update")
+	case "cloud_link":
+		fs.StringVar(&cl.url, "url", "", "the MCP server's URL (default Meko Cloud's)")
+		fs.StringVar(&cl.webURL, "web-url", "", "its web app's URL (default: worked out from --url)")
+		fs.StringVar(&cl.apiURL, "api-url", "", "its REST API's URL (default: the web app's plus /api/v1)")
+		fs.BoolVar(&cl.off, "off", false, "unlink: the extensions use this Meko")
 	}
 	if cmd == "logs" {
 		fs.BoolVar(&c.follow, "f", false, "follow the logs")
@@ -185,10 +204,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&detached, "detached", false, "log only to the log file")
 	}
 	switch cmd {
-	case "start", "stop", "restart", "status", "serve", "version", "token", "ui", "setup_link", "logs", "destroy",
-		"install",
-		"uninstall", "install_extension", "uninstall_extension", "update", "search", "add_memory", "datapacks",
-		"create_datapack", "delete_datapack", "upload", "upload_status", "list", "export":
+	case "start", "stop", "restart", "status", "serve", "version", "token", "ui", "setup_link", "cloud_link", "logs",
+		"destroy", "install", "uninstall", "install_extension", "update_extension", "uninstall_extension", "update",
+		"search", "add_memory", "datapacks", "create_datapack", "delete_datapack", "upload", "upload_status", "list",
+		"export":
 	default:
 		fmt.Fprintf(stderr, "meko: unknown command %q\n\n%s", cmd, usage)
 		return exitUsage
@@ -199,7 +218,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	// These take one argument, and upload any number; their flags may follow.
 	switch cmd {
 	case "search", "add_memory", "create_datapack", "delete_datapack", "upload_status", "install_extension",
-		"uninstall_extension", "list", "export", "ui":
+		"update_extension", "uninstall_extension", "list", "export", "ui":
 		if fs.NArg() > 0 {
 			t.text = fs.Arg(0)
 			if err := fs.Parse(fs.Args()[1:]); err != nil {
@@ -218,8 +237,14 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "meko %s: unexpected argument %q\n", cmd, fs.Arg(0))
 		return exitUsage
 	}
-	if (cmd == "install_extension" || cmd == "uninstall_extension") && t.text == "" {
-		fmt.Fprintf(stderr, "meko %s: name the extension (agentk)\n", cmd)
+	cl.set = map[string]bool{}
+	fs.Visit(func(fl *flag.Flag) { cl.set[fl.Name] = true })
+	if cl.off && (cl.set["url"] || cl.set["web-url"] || cl.set["api-url"]) {
+		fmt.Fprintln(stderr, "meko cloud_link: --off takes no URLs")
+		return exitUsage
+	}
+	if (cmd == "install_extension" || cmd == "update_extension" || cmd == "uninstall_extension") && t.text == "" {
+		fmt.Fprintf(stderr, "meko %s: name the extension (%s)\n", cmd, strings.Join(extensions.KnownNames(), ", "))
 		return exitUsage
 	}
 	if cmd == "version" {
@@ -247,6 +272,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runUI(l, t.text, !c.noOpen, stdout, stderr)
 	case "setup_link":
 		return runSetupLink(l, stdout, stderr)
+	case "cloud_link":
+		return runCloudLink(l, cl, stdin, stdout, stderr)
 	case "destroy":
 		return runDestroy(l, destroyOptions{force: c.force, withExtensions: c.withExtensions}, stdin, stdout, stderr)
 	case "install":
@@ -255,6 +282,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runUninstall(l, c.purge, destroyOptions{force: c.force, withExtensions: c.withExtensions}, stdout, stderr)
 	case "install_extension":
 		return runInstallExtension(l, t.text, stdout, stderr)
+	case "update_extension":
+		return runUpdateExtension(l, t.text, c.check, stdout, stderr)
 	case "uninstall_extension":
 		return runUninstallExtension(l, t.text, stdout, stderr)
 	case "update":

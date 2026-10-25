@@ -258,13 +258,21 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Meko isn't polled. A Meko failure shows as the error of the action that needed it (or a
       logged warning for background work) and never kills a running session or blocks work that
       doesn't need Meko (a project with No datapack, sessions). No Meko (`MekoStatus.configured`
-      false: no key, and no Meko running on this computer) means no Meko calls at all; the one
+      false: no Meko Cloud link, and no Meko running on this computer) means no Meko calls at all; the one
       thing done then is looking for the Meko on this computer every minute (`meko token --json`
-      in `Core.refreshLocalMeko`, a local command with a 5 s timeout, one at a time, never a Meko
+      in `Core.refreshMeko`, a local command with a 5 s timeout, one at a time, never a Meko
       call, and only while there's no Meko, or no `meko` on this computer: `lookForLocalMeko`, so
       the install banner goes once Meko is installed). Reading the local Meko again otherwise happens only on
-      events (startup, Settings open, a failed connection to it at most every 30 s), and a change
-      reconnects without forgetting the account's invites (`mekoChanged` is for switching Mekos).
+      events (startup, Settings open, Meko's `POST /_meko/changed`, a failed connection at most
+      every 30 s), and a change on the same server reconnects without forgetting the account's
+      invites (`mekoChanged` is for switching servers).
+- [ ] Meko owns the Meko Cloud link. AgentK has no route or UI that sets or shows a Meko key, and
+      reads its own old sources (`ownMekoKey`: `[meko]` keys, `MEKO_*`, Claude Code's settings) only
+      to hand a key to Meko once (`mekohandover.ts`, the key on stdin) or under a Meko whose `meko
+      token --json` has no `cloud`. Never a copy of the local Meko's token, and never falling back to
+      the local Meko while a key of its own hasn't reached Meko. Its `[meko]` keys in
+      `config.toml` are never cleared on handover (a rollback restores only `state.db`), and the
+      handover never holds up a start.
       The one poll is following a knowledge-base upload's
       indexing (`KnowledgeService` in `knowledge.ts`): only after the file was posted to Meko's
       storage under the key `upload-url` gave (never for one Meko already had), every 5 s for a
@@ -315,7 +323,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       there's no result or no server, and there's no search with Meko off or no datapacks. What it
       gives Claude stays short (capped items and total).
 - [ ] Tests don't touch the real `~/.claude.json`, Meko, or GitHub. Meko's REST API goes through
-      `fakeMekoApi()` in `test/helpers.ts`, and the Meko tab's checks through `stubMekoTools()`.
+      `fakeMekoApi()` in `test/helpers.ts`, Meko's setup for the agents through `stubMekoTools()`, and the key handover through `makeEnv`'s `mekoHandOver` stub (`handOvers`).
 - [ ] Share invites: a project opened from an invite accepts it in Meko before writing anything
       locally, the first invite sync doesn't notify about shares that already existed, and each
       share notifies once (one joined here by its share link gets no notification or banner). While Meko's API URL isn't
@@ -359,6 +367,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       docs are a major finding. Screenshots in `docs/screenshots/` are retaken separately, not
       with every UI change, so don't flag a change for leaving them out of date.
 - [ ] The PR title (the squash-merge commit subject) passes the repo root's `scripts/check-title.sh`, its component
-      names where the change is (`agentk` for AgentK, `repo` for root-only changes), and its type
+      names where the change is (`agentk` for AgentK, `repo` for root-only changes, a list such as
+      `agentk,meko` only when the change ships in each, since it releases each), and its type
       fits the whole change: `feat`/`fix`/`perf`/`deps` ship a release, `ci`/`test`/`docs`/`nit`/
       `chore` don't. Comment-only changes are `nit`. The `PR title` workflow checks the format, not the type or which component fits.

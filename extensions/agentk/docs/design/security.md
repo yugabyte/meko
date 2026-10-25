@@ -58,13 +58,15 @@ own copy.
   while the home's server runs on another host, whose socket this host can't reach anyway. On
   shutdown the server removes `web.sock` only while it's still the file it bound (`socketId`), as it
   does the hook socket: after a lost lease another server may have bound its own.
-- **Guard rails.** There is an audit log of Meko settings changes. The Meko key is
-  write-only from the browser's side: no response carries it, and a saved key goes only where it
-  already goes (the MCP server and API URL in use) or to Meko Cloud. A change on the Meko tab that
-  would send it to another server (the MCP, web app or API URL) is refused until the key is typed
-  again, before anything is sent, so someone with a stolen login can't point AgentK at their own
-  server and read the key off it. The Meko on this computer's client token, which AgentK uses when
-  no key is set, is read from Meko (`meko token --json`), held in memory, never written to
+- **Guard rails.** AgentK has no route that sets or shows a Meko key: Meko owns the Meko Cloud
+  link, and AgentK reads it from `meko token --json`, holds it in memory and never writes it to
+  `config.toml` (a key of its own from before is handed to Meko on stdin, once, then never read
+  again, though it stays in `config.toml` for a rollback). No
+  response carries it. Meko's own page refuses to send a saved key to another server (the MCP, web
+  app or API URL) until it's typed again, so someone with a stolen login can't point it at their
+  own server and read the key off it. `POST /_meko/changed` only makes AgentK read Meko again, and
+  refuses another origin. The Meko on this computer's client token, which AgentK uses when
+  Meko has no Meko Cloud link, is read from Meko (`meko token --json`), held in memory, never written to
   `config.toml`, and sent only to that Meko: no configured MCP URL takes it, and a web app or API URL
   from config or the environment is used with it only on that Meko's own origin. Hooks use their
   own unix socket with a per-session token, never the web socket. The Design-stage edit guard asks the server over the same socket;

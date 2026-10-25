@@ -105,34 +105,6 @@ function toShareLink(r: Json | undefined): ShareLinkRow {
 }
 
 /**
- * Whether a URL answers like Meko's REST API: its share route replies with Meko's JSON envelope
- * (a 401 without a key). Asked without the key, so a mistyped host never gets it.
- */
-export async function looksLikeMekoApi(baseUrl: string, fetchImpl: Fetch = fetch): Promise<{ ok: true } | { ok: false; error: string }> {
-  let res: Response;
-  try {
-    res = await fetchImpl(`${baseUrl.replace(/\/+$/, '')}/datapacks/incoming-shares`, {
-      headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(10000),
-    });
-  } catch (e) {
-    const why = (e as Error)?.name === 'TimeoutError' ? 'it timed out' : (e as Error)?.message || String(e);
-    return { ok: false, error: `couldn't reach it (${why})` };
-  }
-  let body: unknown;
-  try {
-    body = JSON.parse(await res.text());
-  } catch {
-    body = null;
-  }
-  const env = body && typeof body === 'object' && !Array.isArray(body) ? (body as Json) : null;
-  // Meko's envelope: `{ data }`, or `{ error: { code, message } }`. A bare `{ error: "…" }` is any API.
-  const err = env?.error as Json | undefined;
-  if (env && ('data' in env || (err && typeof err === 'object' && typeof err.code === 'string'))) return { ok: true };
-  return { ok: false, error: `it answered ${res.status}, not like Meko's API` };
-}
-
-/**
  * Client for Meko's REST API (the share and invite routes, and knowledge-base uploads), with the same API key as MCP. Replies
  * come as `{ data }` or `{ error: { code, message } }`. The one call that isn't to Meko's API, posting a file to the storage
  * URL Meko gives, goes without the key.
@@ -143,7 +115,7 @@ export class MekoApi {
   /** A `body` goes as JSON. */
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const { baseUrl, apiKey } = this.creds();
-    if (!baseUrl) throw new MekoApiError(0, 'NO_API_URL', "Meko's API URL isn't known. Set it on the Meko tab in Settings.");
+    if (!baseUrl) throw new MekoApiError(0, 'NO_API_URL', "Meko's API URL isn't known. Set it in Meko's web UI (Settings › Meko Cloud).");
     if (!apiKey) throw new MekoApiError(0, 'NO_KEY', 'No Meko API key is configured.');
     let res: Response;
     try {

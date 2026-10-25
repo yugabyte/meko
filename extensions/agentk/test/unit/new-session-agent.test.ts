@@ -2,9 +2,9 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { HARNESS_CAPS } from '../../src/shared/harnesses.js';
-import type { HarnessStatus, Project, Settings } from '../../src/shared/types.js';
+import type { HarnessStatus, MekoStatus, Project, Settings } from '../../src/shared/types.js';
 import { NewSessionDialog } from '../../src/web/components/NewSessionDialog.js';
-import { AgentSettings, HarnessBar } from '../../src/web/components/SettingsDialog.js';
+import { AgentSettings, HarnessBar, MekoLinks } from '../../src/web/components/SettingsDialog.js';
 import { defaultAgentChoice } from '../../src/web/util.js';
 
 const project = { id: 'p', name: 'Demo', repoPath: '/code/demo', defaultBranch: 'main', settings: { branchPrefix: 'ak/' } } as unknown as Project;
@@ -91,9 +91,11 @@ describe('Settings › Harness', () => {
    * The ids of the controls (and the update outcome) an agent's panel shows, then `⚠️` when its note
    * starts with one, and the agent's upgrade command when its note names it.
    */
-  const controls = (id: HarnessStatus['id'], s: Partial<Settings>, st: Partial<HarnessStatus>, outcome: { ok: boolean; text: string } | null = null) => {
+  const controls = (
+    id: HarnessStatus['id'], s: Partial<Settings>, st: Partial<HarnessStatus>, outcome: { ok: boolean; text: string } | null = null, meko?: MekoStatus,
+  ) => {
     const html = renderToStaticMarkup(createElement(AgentSettings, {
-      id, s: { ...settings, ...s }, status: status(id, st), checking: false, updating: false, outcome,
+      id, s: { ...settings, ...s }, status: status(id, st), checking: false, updating: false, outcome, meko,
       onEnable: () => undefined, onChange: () => undefined, onCheck: () => undefined, onUpdate: () => undefined,
     }));
     const ids = [...html.matchAll(/<(?:input|button|span)[^>]*id="(set-[\w-]+)"/g)].map(([, x]) => x);
@@ -111,5 +113,34 @@ describe('Settings › Harness', () => {
     ['Kiro, off', 'kiro' as const, { kiroEnabled: false }, { enabled: false, available: false }, ['set-kiro'], null],
   ])("%s: the panel shows only that agent's settings, ⚠️ when it's missing, and how to upgrade one too old", (_, id, s, st, shown, outcome) => {
     expect(controls(id, s, st, outcome)).toEqual(shown);
+  });
+
+  const meko = (o: Partial<MekoStatus> = {}): MekoStatus => ({
+    configured: true, url: 'https://mcp.mekodata.ai/mcp', source: 'meko', webUrl: null, local: 'running',
+    claude: { gaps: [], unchecked: [], checking: false }, kiro: { gaps: [] }, opencode: { own: false }, ...o,
+  });
+  it.each([
+    ['Claude Code on another Meko', 'claude' as const, meko({ claude: { gaps: ['x'], unchecked: [], checking: false } }),
+      ['set-claude', 'set-claude-check', 'set-claude-update', 'set-claude-meko', 'set-claude-meko-setup']],
+    ['Claude Code on this Meko', 'claude' as const, meko(), ['set-claude', 'set-claude-check', 'set-claude-update', 'set-claude-meko']],
+    ['OpenCode with its own', 'opencode' as const, meko({ opencode: { own: true } }),
+      ['set-opencode', 'set-opencode-check', 'set-opencode-update', 'set-opencode-meko', 'set-opencode-tracking']],
+    ['Kiro on another Meko', 'kiro' as const, meko({ kiro: { gaps: ['x'] } }),
+      ['set-kiro', 'set-kiro-check', 'set-kiro-update', 'set-kiro-meko', 'set-kiro-meko-setup', 'set-kiro-trust']],
+    ['no Meko', 'claude' as const, meko({ configured: false, url: null, source: null }), ['set-claude', 'set-claude-check', 'set-claude-update']],
+  ])("%s: the agent's panel says whether its sessions reach AgentK's Meko, with Meko's setup when they don't", (_, id, m, shown) => {
+    expect(controls(id, {}, {}, null, m)).toEqual(shown);
+  });
+});
+
+describe('Settings › General', () => {
+  it("links to Meko's Meko Cloud and account pages", () => {
+    const html = renderToStaticMarkup(createElement(MekoLinks, {
+      meko: { configured: true, url: 'http://127.0.0.1:7778/mcp', source: 'local', webUrl: null, local: 'running', claude: { gaps: [], unchecked: [], checking: false }, kiro: null, opencode: null },
+      auth: { access: 'local', signedIn: true },
+    }));
+    expect([...html.matchAll(/<a[^>]*id="(set-meko-[\w-]+)"[^>]*href="([^"]+)"/g)].map(([, id, href]) => `${id} ${href}`))
+      .toEqual(['set-meko-cloud /settings/meko-cloud', 'set-meko-account /account']);
+    expect(html).toContain('AgentK uses the Meko on this computer.');
   });
 });

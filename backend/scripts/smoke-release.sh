@@ -26,8 +26,9 @@ v=$("$meko" version --json | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
 "$meko" version
 
 # A private HOME and file secrets: nothing of the runner's own is touched. No usage stats: a release
-# build would send them to YugabyteDB.
-export HOME="$tmp/home" MEKO_SECRETS=file MEKO_CALL_HOME=false
+# build would send them to YugabyteDB. The web listener gets the port after the API listener's, never
+# its default 7777, which an AgentK or a Meko on the machine may hold.
+export HOME="$tmp/home" MEKO_SECRETS=file MEKO_CALL_HOME=false MEKO_WEB_PORT=$((port + 1))
 mkdir -p "$HOME"
 "$meko" start --data-dir "$data" --port "$port"
 i=0
@@ -49,8 +50,9 @@ printf '%s\n' "$out"
 printf '%s\n' "$out" | grep -q 'blue herons' || { echo "search didn't find the memory" >&2; exit 1; }
 # The model came from the tarball: nothing was downloaded into the data folder.
 [ -z "$(ls -A "$data/models" 2>/dev/null)" ] || { echo "the memory engine downloaded a model instead of using the bundled one" >&2; exit 1; }
-# The web UI came from the tarball too.
-port=$(cat "$data/run/meko.port")
-curl -fsS "http://127.0.0.1:$port/" | grep -q 'id="root"' || { echo "the server doesn't serve the web UI" >&2; exit 1; }
+# The web UI came from the tarball too. The web listener serves it, at the address meko ui prints
+# (which waits for the listener to start); the API listener doesn't.
+url=$("$meko" ui --no-open --data-dir "$data")
+curl -fsS "$url" | grep -q 'id="root"' || { echo "the web listener at $url doesn't serve the web UI" >&2; exit 1; }
 "$meko" stop --data-dir "$data"
 echo "smoke test passed: meko $version"

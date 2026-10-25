@@ -1,10 +1,15 @@
 package server
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -12,6 +17,7 @@ import (
 
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/envelope"
+	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/extproxy"
 	"github.com/yugabyte/meko/backend/internal/login"
 )
@@ -23,7 +29,22 @@ type Web struct {
 	Access string // config.AccessLocal or config.AccessRemote
 	// Extensions are the extensions served at /ext/<name>/, read at each request.
 	Extensions func() []*extproxy.Proxy
+	// Installed names the registered extensions (extensions.json), read at each request; nil means
+	// the ones in Extensions.
+	Installed func() []string
+	// Run, if set, runs an action on a known extension for the Extensions page (install, update,
+	// start or stop), writing its output to out, and returns when it's done or ctx is (Jobs.Cancel).
+	Run func(ctx context.Context, name, action string, out io.Writer) error
+	// Release, if set, is an installed extension's release version Meko manages, and whether Meko
+	// can update it ("", false for one that updates itself or a build from source).
+	Release func(name string) (version string, updatable bool)
+	// Jobs are the actions Run runs, kept across the servers the listener's owner builds; nil gives
+	// this server its own.
+	Jobs *ExtensionJobs
 }
+
+// The actions the Extensions page runs on an extension (POST /api/v1/extensions/:name/:action).
+var extensionActions = []string{"install", "update", "start", "stop"}
 
 func (s *Server) proxy(name string) *extproxy.Proxy {
 	for _, p := range s.opts.Web.Extensions() {
@@ -62,6 +83,8 @@ func (s *Server) registerWeb(v1 *echo.Group) {
 	v1.POST("/auth/totp/confirm", s.totpConfirm)
 	v1.POST("/auth/totp/disable", s.totpDisable)
 	v1.GET("/extensions", s.extensionList)
+	v1.POST("/extensions/:name/:action", s.extensionAction)
+	s.registerCloud(v1)
 	s.e.Any(extRootRoute, s.extensionRoot)
 	s.e.Any(extRoute, s.extension)
 }
@@ -297,21 +320,92 @@ func loginError(c echo.Context, err error) error {
 	return err
 }
 
-// ExtensionInfo is a row of GET /api/v1/extensions.
+// ExtensionInfo is a row of GET /api/v1/extensions: a known extension, whether it's installed
+// (registered in extensions.json), where its web UI is and whether that answers, and its last job.
 type ExtensionInfo struct {
-	Name      string `json:"name"`
-	Title     string `json:"title"`
-	Path      string `json:"path"`
-	Available bool   `json:"available"`
+	Name        string        `json:"name"`
+	Title       string        `json:"title"`
+	Description string        `json:"description"`
+	Installed   bool          `json:"installed"`
+	WebUI       bool          `json:"web_ui"`
+	Path        string        `json:"path"`              // "" while it isn't served
+	Available   bool          `json:"available"`         // its socket is there to connect to
+	Version     string        `json:"version,omitempty"` // the release Meko installed, when it manages it
+	Updatable   bool          `json:"updatable"`         // Meko can update it (the update action)
+	Job         *ExtensionJob `json:"job,omitempty"`
+}
+
+func (s *Server) installed() map[string]bool {
+	out := map[string]bool{}
+	if s.opts.Web.Installed == nil {
+		for _, p := range s.opts.Web.Extensions() {
+			out[p.Name] = true
+		}
+		return out
+	}
+	for _, n := range s.opts.Web.Installed() {
+		out[n] = true
+	}
+	return out
+}
+
+func (s *Server) extensionInfo(name string, installed bool) ExtensionInfo {
+	cat := extensions.Known[name]
+	row := ExtensionInfo{Name: name, Title: cat.Title, Description: cat.Description, Installed: installed,
+		WebUI: cat.WebUI, Job: s.opts.Web.Jobs.get(name)}
+	if p := s.proxy(name); p != nil {
+		row.Path, row.Available = p.Path(), p.Available()
+	}
+	if installed && s.opts.Web.Release != nil {
+		row.Version, row.Updatable = s.opts.Web.Release(name)
+	}
+	return row
 }
 
 func (s *Server) extensionList(c echo.Context) error {
-	exts := s.opts.Web.Extensions()
-	out := make([]ExtensionInfo, 0, len(exts))
-	for _, p := range exts {
-		out = append(out, ExtensionInfo{Name: p.Name, Title: p.Title, Path: p.Path(), Available: p.Available()})
+	installed := s.installed()
+	names := make([]string, 0, len(extensions.Known))
+	for n := range extensions.Known {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	out := make([]ExtensionInfo, 0, len(names))
+	for _, n := range names {
+		out = append(out, s.extensionInfo(n, installed[n]))
 	}
 	return envelope.OK(c, out)
+}
+
+// extensionAction is POST /api/v1/extensions/:name/:action: it starts the action as the extension's
+// job and answers 202 with its row; the page follows the job in the list.
+func (s *Server) extensionAction(c echo.Context) error {
+	name, action := c.Param("name"), c.Param("action")
+	cat, known := extensions.Known[name]
+	if !known || s.opts.Web.Run == nil || !slices.Contains(extensionActions, action) {
+		return echo.ErrNotFound
+	}
+	installed := s.installed()[name]
+	if action != "install" && !installed {
+		return envelope.Fail(c, http.StatusConflict, "CONFLICT", cat.Title+" isn't installed.")
+	}
+	jobs := s.opts.Web.Jobs
+	j, ok := jobs.start(name, action)
+	if !ok {
+		return envelope.Fail(c, http.StatusConflict, "CONFLICT",
+			fmt.Sprintf("%s is busy: its %s hasn't finished.", cat.Title, j.snapshot().Action))
+	}
+	s.opts.Logger.Info("extension action", "extension", name, "action", action)
+	go func() {
+		// Not the request's context: the job outlives the request that started it, and this server.
+		err := s.opts.Web.Run(jobs.run(), name, action, j)
+		jobs.done(j, err)
+		if err != nil {
+			s.opts.Logger.Warn("extension action failed", "extension", name, "action", action, "error", err)
+		} else {
+			s.opts.Logger.Info("extension action done", "extension", name, "action", action)
+		}
+	}()
+	return c.JSON(http.StatusAccepted, envelope.Response{Data: s.extensionInfo(name, installed)})
 }
 
 func (s *Server) extensionRoot(c echo.Context) error {

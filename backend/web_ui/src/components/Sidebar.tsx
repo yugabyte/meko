@@ -1,14 +1,13 @@
-// The left rail: the Meko mark, the Status link, AgentK's when it's installed, the datapacks, and
-// the version, settings and theme toggle.
+// The left rail: the Meko mark, the Status link, the Extensions group, the datapacks, and the
+// version, settings and theme toggle.
 
 import { useState } from "react";
-import { Bot, Database, Moon, Plus, Settings, Sun } from "lucide-react";
-import { api } from "../lib/api";
+import { Database, Moon, Plus, Settings, Sun } from "lucide-react";
 import { href, navigate, type Route } from "../lib/route";
 import type { Theme } from "../lib/theme";
 import type { AuthStatus, Datapack } from "../lib/types";
-import { useLoad } from "../lib/useLoad";
 import { DatapackDialog } from "./DatapackDialog";
+import { ExtensionsLink } from "./ExtensionsLink";
 import { SettingsDialog } from "./SettingsDialog";
 import { StatusLink } from "./StatusLink";
 import { Button, cx } from "./ui";
@@ -34,9 +33,6 @@ export function Sidebar({
 }) {
   const [creating, setCreating] = useState(false);
   const [settings, setSettings] = useState(false);
-  // An older server has no /extensions; the link just doesn't show.
-  const extensions = useLoad(() => api.extensions(), []);
-  const agentk = extensions.data?.find((e) => e.name === "agentk" && e.available);
   return (
     <aside className="flex w-60 shrink-0 flex-col border-r bg-sidebar">
       <div className="flex items-center gap-2 px-4 py-4">
@@ -47,16 +43,7 @@ export function Sidebar({
       </div>
       <div className="px-2 pb-2">
         <StatusLink active={view === "status"} />
-        {agentk && (
-          // A plain link, opening AgentK in place of this page: AgentK refuses to be framed.
-          <a
-            href={agentk.path}
-            className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent"
-          >
-            <Bot className="size-4 shrink-0" />
-            AgentK
-          </a>
-        )}
+        <ExtensionsLink active={view === "extensions"} />
       </div>
 
       <div className="flex items-center justify-between px-4 pb-1 pt-2">

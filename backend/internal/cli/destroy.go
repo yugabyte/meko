@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/yugabyte/meko/backend/internal/cloudlink"
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/paths"
@@ -100,7 +101,8 @@ func destroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.W
 		removeExts = confirm(answers, stdout, "Also uninstall the extensions and delete their data? [y/N] ")
 	}
 	keep := len(exts) > 0 && !removeExts
-	// The client token may be outside the folder (the login Keychain): found now, deleted after.
+	// The client token and the Meko Cloud link's key may be outside the folder (the login Keychain):
+	// found now, deleted after.
 	cfg, cerr := config.Load(l.Config, os.Getenv, config.Overrides{})
 	if cerr != nil {
 		cfg = config.Default()
@@ -145,6 +147,9 @@ func destroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.W
 	if cterr == nil {
 		if err = ct.Delete(); err != nil {
 			return fail(stderr, fmt.Errorf("removed %s, but not its client token: %w", l.Root, err)), false
+		}
+		if err = ct.Store.Delete(cloudlink.SecretName); err != nil {
+			return fail(stderr, fmt.Errorf("removed %s, but not its Meko Cloud key: %w", l.Root, err)), false
 		}
 	}
 	if keep {
@@ -281,6 +286,10 @@ func uninstallExtensions(l paths.Layout, exts []extensionData, stdout, stderr io
 		fmt.Fprintf(stdout, "Uninstalling %s (%s %s)\n", cat.Title, cmd, strings.Join(cat.UninstallArgs, " "))
 		if err := (extensions.Entry{Command: cmd}).Uninstall(l.Root, cat.UninstallArgs, stdout, stderr); err != nil {
 			return fmt.Errorf("uninstalling %s failed: %w. Nothing of Meko's was removed", cat.Title, err)
+		}
+		if cat.Managed {
+			// Its uninstall removed its folder, releases and all: the link Meko made into it goes too.
+			_ = cat.App(l.Root, e.name).UnlinkCommand(home)
 		}
 	}
 	return nil

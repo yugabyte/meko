@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { AppState, CreateSessionRequest, DatapackInvite, FailedStart, Project, ProjectWithSessions, Session } from '../../shared/types';
+import type { HarnessId } from '../../shared/harnesses';
 import { api, ApiError, errorMessage } from '../api';
 import { appUrl } from '../base';
 import { approveDesign, settleApprovals } from '../design-answers';
@@ -10,7 +11,7 @@ import { installPrompting } from '../installapp';
 import { navigate, useRoute } from '../router';
 import { notifyLeader } from '../notifyLeader';
 import { railHiddenSaved, railWidthSaved, saveRailHidden, saveRailWidth, sessionTabsShown, useRailSessions } from '../rail';
-import { canSignOut, signOut, type MekoAuth } from '../signin';
+import type { MekoAuth } from '../signin';
 import { harnessLogosToggle } from '../toggle';
 import { pruneTerminals } from '../terminals';
 import { useTheme } from '../theme';
@@ -60,7 +61,7 @@ type Modal =
   | { kind: 'new-session'; projectId: string; fresh?: boolean; learn?: boolean; retry?: FailedStart; initial?: CreateSessionRequest }
   /** The project on screen lost its last open session: offer to close it. */
   | { kind: 'close-project'; projectId: string }
-  | { kind: 'settings'; tab?: SettingsTab }
+  | { kind: 'settings'; tab?: SettingsTab; agent?: HarnessId }
   | { kind: 'palette' }
   /** Move a session to another stage, starting from `preset` (a stage clicked in the stage bar). */
   | { kind: 'move'; sessionId: string; preset?: MovePreset }
@@ -520,7 +521,6 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
         onNewProject={fromDrawer(() => setModal({ kind: 'new-project' }))}
         onSettings={fromDrawer(() => setModal({ kind: 'settings' }))}
         onPalette={fromDrawer(() => setModal({ kind: 'palette' }))}
-        onLogout={canSignOut(mekoAuth) ? fromDrawer(() => void signOut()) : undefined}
         onReorder={moveProject}
         onResize={mobile ? undefined : setRailWidth}
         onHide={mobile ? undefined : () => toggleRail(true)}
@@ -535,7 +535,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
           onError={showToast}
           onOpenInvite={(invite) => setModal({ kind: 'new-project', invite })}
           onRetryStart={(retry) => setModal({ kind: 'new-session', projectId: retry.projectId, retry })}
-          onMekoSettings={() => setModal({ kind: 'settings', tab: 'meko' })}
+          onMekoSettings={() => setModal({ kind: 'settings', tab: 'harness', agent: 'claude' })}
           onSettings={() => setModal({ kind: 'settings', tab: 'harness' })}
           onWhatsNew={(from, to) => setModal({ kind: 'whats-new', from, to })}
         />
@@ -559,6 +559,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
             onMove={(index) => moveProject(currentProject.id, index)}
             mekoWebUrl={state.meko.webUrl}
             mekoConfigured={state.meko.configured}
+            mekoLocal={state.meko.local}
             ghLogin={state.ghLogin ?? null}
             onMenu={openDrawer}
             onBack={() => goProject(currentProject)}
@@ -655,7 +656,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
       {openPrSession && <OpenPrDialog key={openPrSession.id} session={openPrSession} onClose={() => setModal({ kind: 'none' })} />}
       {renameSession && <RenameSessionDialog key={renameSession.id} session={renameSession} onClose={() => setModal({ kind: 'none' })} />}
       {modal.kind === 'settings' && (
-        <SettingsDialog mekoAuth={mekoAuth} update={state.update} meko={state.meko} harnesses={state.harnesses ?? []} twoAgents={twoAgents} serverName={state.serverName} initialTab={modal.tab} onClose={() => setModal({ kind: 'none' })} onWhatsNew={(from, to) => setModal({ kind: 'whats-new', from, to })} />
+        <SettingsDialog mekoAuth={mekoAuth} update={state.update} meko={state.meko} harnesses={state.harnesses ?? []} twoAgents={twoAgents} serverName={state.serverName} initialTab={modal.tab} initialAgent={modal.agent} onClose={() => setModal({ kind: 'none' })} onWhatsNew={(from, to) => setModal({ kind: 'whats-new', from, to })} />
       )}
       {modal.kind === 'whats-new' && <WhatsNewDialog from={modal.from} to={modal.to} onClose={() => setModal({ kind: 'none' })} />}
       {modal.kind === 'palette' && (

@@ -36,10 +36,9 @@ You need Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon, and a codin
 [Kiro CLI](https://kiro.dev/cli/) 2.32 or later, or more than one.
 You also need [Meko](https://mekodata.ai) on this computer: it serves AgentK to your browser, at
 `/ext/agentk/` on its own port (7777), and signs you in. Meko also gives projects datapacks (shared
-memory) and lets you share projects. For datapacks, AgentK uses a Meko Cloud API key when you give it
-one, and otherwise the Meko on this computer: press Enter at the key prompt to use it. You can add
-a Cloud key later on the Meko tab in Settings, which links to Meko's sign-up and login pages to make
-one. The repo is internal for now, so the installer is fetched with `gh`. Install Meko (the repo's
+memory) and lets you share projects. For datapacks, AgentK uses Meko Cloud once you link it in Meko's
+web UI (Settings › Meko Cloud, which links to Meko Cloud's sign-up and login pages to make a key; or
+`meko cloud_link` on a computer without a browser), and otherwise the Meko on this computer. The repo is internal for now, so the installer is fetched with `gh`. Install Meko (the repo's
 latest release) and then AgentK through it:
 
 ```sh
@@ -164,9 +163,11 @@ your phone can connect.
   link: turn the link on in the Share dialog with the role it gives, copy it, and post it where your
   team is. A project datapack shared with you shows a banner and a notification, and opens as a new
   project with the repo and name filled in; a share link pasted into Ask AgentK joins it and opens
-  it the same way. The Meko server and key are set on the Meko tab in Settings, for your own Meko too.
+  it the same way. The Meko server and key are Meko's, linked in its web UI (Settings › Meko Cloud),
+  for your own Meko server too; AgentK's Settings › General links there, and to Meko's account page.
   When Claude Code is set up for another Meko server, or holds a token that can't see the
-  projects' datapacks there, a banner says so and offers to set Claude Code up with AgentK's Meko;
+  projects' datapacks there, a banner says so and offers to set Claude Code up with AgentK's Meko
+  (Settings › Harness shows each agent's Meko);
   AgentK never changes Claude Code's setup unless you ask.
   Once a session has a PR, **Share with reviewers** lists the reviewers of the project's open PRs
   (in every repo its sessions work in) with their emails, to share with in one click. The Share
@@ -318,7 +319,7 @@ your phone can connect.
   and when they reset, and once you've run a session on Kiro, the Kiro credits your plan has used.
 - **Usage stats:** once a day (hourly in its first day) AgentK sends anonymous counts to YugabyteDB: how many
   projects, sessions, PRs, commits and tokens (by model) it handled, and which file types changed.
-  It never sends names, paths, prompts, code, or who you are. Turn it off in Settings → Account
+  It never sends names, paths, prompts, code, or who you are. Turn it off in Settings › General
   (details in [docs/design/usage-stats.md](docs/design/usage-stats.md)).
 - **Survives restarts:** after a host reboot, every open session is brought back with
   `claude --resume`, and sessions that were mid-turn are told to continue.

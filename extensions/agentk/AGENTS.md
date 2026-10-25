@@ -68,7 +68,7 @@ agents should read it before changing code there.
 | `src/shared/branches.ts` | The branch prefix setting's `{login}` (`expandBranchPrefix`: gh's login, or left out with its joiner when gh can't say) and the default, `ak_{login}/`. Used by the server and the web UI. |
 | `src/shared/termreports.ts` | Telling a terminal's answers to a program's queries from typing (`isTerminalReport`): the browser terminal and `agentk attach` drop them, since the session host answers them. Also mouse motion with no button held and focus reports (`isPassiveReport`), which don't count as using a screen (`src/server/screens.ts`). |
 | `src/shared/emails.ts` | The email check, the parsing of a list of emails for the Share dialog (commas, semicolons, whitespace, `Name <address>`), pasting into its field and picking a suggested address (`typedEntry`, `pickEmail`, `suggestContacts`), and the most one invite can send to. Used by the server and the web UI. |
-| `src/shared/mekourls.ts` | Meko Cloud's MCP and web app URLs, the command that installs Meko on this computer (`MEKO_INSTALL_COMMAND`, for the banner shown while there's none), the web app that goes with an MCP URL (`mekoWebUrl`), and a datapack's share link on it (`shareLinkUrl`, and `shareLinkToken`, which reads a pasted one only from that web app). Used by the server and the web UI, so the Meko tab's sign-up links match what the server works out, and Ask AgentK offers to join only the links the server will. |
+| `src/shared/mekourls.ts` | Meko Cloud's MCP and web app URLs, the command that installs Meko on this computer (`MEKO_INSTALL_COMMAND`, for the banner shown while there's none), the web app that goes with an MCP URL (`mekoWebUrl`), and a datapack's share link on it (`shareLinkUrl`, and `shareLinkToken`, which reads a pasted one only from that web app), and Meko's own pages AgentK links to (`MEKO_CLOUD_PATH`, `MEKO_ACCOUNT_PATH`). Used by the server and the web UI, so Ask AgentK offers to join only the links the server will. |
 | `src/shared/pricing.ts` | Anthropic API list prices per model and the cost of a set of tokens (cache writes by duration). |
 | `src/mod/agentk/` | AgentK's mod: a Claude Code plugin of function hooks loaded into every session with `--plugin-dir`. It polls the hook socket for AgentK's prompts and submits them as the user's, reports the context fill and plan limits after each turn, forwards Claude's `AskUserQuestion` calls to AgentK while the terminal's dialog stays open (the first answer wins), reports when each of Claude's Meko tool calls starts and ends (for the session's dot, and with the call's content for the Meko call log while the project keeps one), reports a turn you interrupt (Ctrl+C, Esc: no `Stop` hook fires, `/mod/turn`), gives Claude the `design_questions` tool, runs learn steps (`$.model.fork`, then `$.model.complete` for the duplicate check), and registers `/agentk_learn`. Compiled by Claude Code against its own declarations, not by the repo's tsc; checked with `claude plugin validate` / `claude plugin test src/mod/agentk` (`test/unit/mod.test.ts`, skipped without Claude Code). |
 | `src/tools/skill/SKILL.md` | The skill for AgentK's session tools (the `agentk_sessions` MCP server, `src/server/mcp.ts`): how an agent opens projects, starts sessions (from GitHub issues and PRs too), moves them and opens another session's PR. Its one source; the server copies it for every harness (`writeToolFiles` in `src/server/tools.ts`), and the build into `dist/tools`. See [docs/design/tools.md](docs/design/tools.md). |
@@ -110,9 +110,13 @@ agents should read it before changing code there.
    data folder (invariant 1). Keep `src/server/host/` small; bump `PROTOCOL` in
    `host/protocol.ts` for a change an older peer can't read, and keep the server working with hosts back
    to `MIN_PROTOCOL`. The updater keeps the version directory the host runs from.
-7. **Meko is a key, else the Meko on this computer; a project has at most one dedicated datapack.**
-   It can't be turned off. Without a key, AgentK uses the Meko running on this computer, read from
-   Meko (`mekolocal.ts`), kept in memory and never written to `config.toml`; its token goes only to
+7. **Meko is Meko's Meko Cloud link, else the Meko on this computer; a project has at most one
+   dedicated datapack.** It can't be turned off. Meko owns the link (its web UI's Settings › Meko
+   Cloud, `meko cloud_link`); AgentK reads it, and the local Meko's URL and token, from `meko token
+   --json` (`mekolocal.ts`), keeps them in memory and never writes them to `config.toml`, and has no
+   route or UI that sets a key. A key AgentK kept itself before is handed to Meko once
+   (`mekohandover.ts`) and never read again; until then, or under a Meko too old to keep a link,
+   AgentK keeps using it rather than move to the local Meko unasked. The local token goes only to
    its own URL. With neither, AgentK doesn't talk to Meko: sessions get no datapack, pin or Meko
    lines in their prompt, and nothing is saved there. Each session gets its own
    `MEKO_AGENT_ID` (`sessionAgentId()`: `claude_code:<slug>-<hash>`, or `opencode:…` or `kiro:…` for an OpenCode or Kiro session, never the project id), with
@@ -120,7 +124,7 @@ agents should read it before changing code there.
    the id it runs with (`launchedAgentId()`). Never remove a `pin-claude_code_<project id>.json`:
    it may be the user's own pin for plain Claude Code in that repo. (Claude Code's own
    Meko setup is the user's and is changed only when they ask: the installer's question or
-   **Set up Claude Code with this Meko**.) Nothing that needs Meko may stop the install, a project or a session when there's no Meko or
+   **Set up Claude Code with this Meko** in Settings › Harness.) Nothing that needs Meko may stop the install, a project or a session when there's no Meko or
    it's down: it's skipped or offered later.
 8. **Treat the repo as public** (it's internal today). No internal hostnames, mount paths, tokens or
    keys in code, docs, tests or commit messages.
@@ -146,7 +150,8 @@ agents should read it before changing code there.
   `CLAUDE*`, `KIRO_*`, `OPENCODE*`, `GH_*`, `GIT_*` and `TMUX*` from the environment and points `HOME` at an empty
   folder. `npm run typecheck` covers the tests too (`tsconfig.test.json`).
 - Commits and PR titles: `<type>(<component>[/<area>])[!]: <summary>` with one of nine types and,
-  for AgentK, the component `agentk` (`feat(agentk/web): …`), checked by
+  for AgentK, the component `agentk` (`feat(agentk/web): …`; `feat(agentk,meko): …` for a change
+  that ships in Meko too, which releases both), checked by
   the repo root's `scripts/check-title.sh` (see the repo root's `.claude/skills/commit/SKILL.md`).
   `feat`/`fix`/`perf`/`deps` commits trigger a release (`0.YYYYMMDD.N`) when pushed to `main`;
   `ci`/`test`/`docs`/`nit`/`chore` don't. PRs are squash-merged, so the PR title is the subject;

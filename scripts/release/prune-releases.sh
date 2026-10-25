@@ -8,7 +8,7 @@
 # release under a prefix the product no longer tags with (AgentK's v…) is never deleted: AgentKs
 # installed before the switch update through it to the new tags.
 #
-#   scripts/release/prune-releases.sh [--product agentk|meko] [--dry-run]
+#   scripts/release/prune-releases.sh [--product agentk|meko|presenter] [--dry-run]
 #
 # Environment: GITHUB_REPOSITORY (owner/name), KEEP, GH_TOKEN.
 set -eu

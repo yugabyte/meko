@@ -62,8 +62,9 @@ func shortTemp(t *testing.T) string {
 	return dir
 }
 
-// startWeb runs a web listener with access, one extension (agentk) on sock, and the sign-in.
-func startWeb(t *testing.T, access, sock string) (string, *login.Service) {
+// startWeb runs a web listener with access, one extension (agentk) on sock, and the sign-in; each
+// of with changes its Web first.
+func startWeb(t *testing.T, access, sock string, with ...func(*Web)) (string, *login.Service) {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "meko.db"))
 	if err != nil {
@@ -81,10 +82,14 @@ func startWeb(t *testing.T, access, sock string) (string, *login.Service) {
 	ext := extproxy.New("agentk", "AgentK", func() string { return sock }, slog.New(slog.DiscardHandler))
 	// As serve wires it (webListener.RevokeEnded): a session that ends closes its WebSockets.
 	logins.OnRevoke(func() { ext.Revoke(func(h string) bool { return logins.Live(context.Background(), h) }) })
+	web := &Web{Access: access, Extensions: func() []*extproxy.Proxy { return []*extproxy.Proxy{ext} }}
+	for _, f := range with {
+		f(web)
+	}
 	s := New(Options{Info: Info{Version: "test"}, Port: tcpPort(t, ln), Logger: slog.New(slog.DiscardHandler),
 		Login: logins,
 		UI:    http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ui") }),
-		Web:   &Web{Access: access, Extensions: func() []*extproxy.Proxy { return []*extproxy.Proxy{ext} }}})
+		Web:   web})
 	probe(s)
 	go func() { _ = s.Serve(ln) }()
 	t.Cleanup(func() { _ = s.Shutdown(context.Background()) })
@@ -248,7 +253,8 @@ func TestWebExtensionDown(t *testing.T) {
 	}
 	code, env := get(t, base+"/api/v1/extensions", nil, "")
 	rows, _ := env.Data.([]any)
-	if row, _ := firstRow(rows); code != 200 || len(rows) != 1 || row["available"] != false {
+	row, _ := rowNamed(rows, "agentk")
+	if code != 200 || row == nil || row["installed"] != true || row["available"] != false {
 		t.Errorf("extensions: %d %+v", code, env)
 	}
 }
@@ -278,10 +284,12 @@ type bufConn struct {
 
 func (b *bufConn) Read(p []byte) (int, error) { return b.r.Read(p) }
 
-func firstRow(rows []any) (map[string]any, bool) {
-	if len(rows) == 0 {
-		return nil, false
+// rowNamed is the extension called name in a list of them, or nil.
+func rowNamed(rows []any, name string) (map[string]any, bool) {
+	for _, r := range rows {
+		if m, ok := r.(map[string]any); ok && m["name"] == name {
+			return m, true
+		}
 	}
-	m, ok := rows[0].(map[string]any)
-	return m, ok
+	return nil, false
 }

@@ -3,7 +3,7 @@
 # product's releases already tagged today (0 for the first release of the day). The tag is the
 # product's prefix plus this version (see product.sh).
 #
-#   scripts/release/next-version.sh [--product agentk|meko]        # default agentk
+#   scripts/release/next-version.sh [--product agentk|meko|presenter]   # default agentk
 #   RELEASE_DATE=20260924 scripts/release/next-version.sh --product meko
 #
 # Needs the repo's tags (fetch-depth: 0 in CI).

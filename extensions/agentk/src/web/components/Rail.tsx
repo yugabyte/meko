@@ -31,7 +31,6 @@ export function Rail({
   onSessionToTop,
   onNewProject,
   onSettings,
-  onLogout,
   onReorder,
   onPalette,
   onResize,
@@ -70,8 +69,6 @@ export function Rail({
   onSessionToTop: (sessionId: string) => void;
   onNewProject: () => void;
   onSettings: () => void;
-  /** Signs out; left out when there's no login (local access). */
-  onLogout?: () => void;
   /** Moves a project to this index in the list. Touch screens use Move up/down on the project home. */
   onReorder: (id: string, index: number) => void;
   onPalette: () => void;
@@ -103,7 +100,7 @@ export function Rail({
     listRef.current?.querySelector('.rail-sess.sel')?.scrollIntoView({ block: 'nearest' });
   }, [currentSessionId]);
   const who = [
-    onLogout ? `Signed in as ${username}` : username,
+    username,
     serverName && ` on ${serverName}`,
     serverName && serverHost && serverHost !== serverName && ` (${serverHost})`,
   ]
@@ -266,11 +263,6 @@ export function Rail({
           {onHide && (
             <button className="icon-btn rail-hide" onClick={onHide} title="Hide projects" aria-label="Hide projects" aria-expanded={true}>
               <PaneIcon />
-            </button>
-          )}
-          {onLogout && (
-            <button className="icon-btn" onClick={onLogout} title="Sign out" aria-label="Sign out">
-              <Icon d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4 M16 17l5-5-5-5 M21 12H9" />
             </button>
           )}
         </div>

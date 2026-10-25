@@ -37,6 +37,7 @@ type Proxy struct {
 	OnGone func()
 	log    *slog.Logger
 	rp     *httputil.ReverseProxy
+	tr     *http.Transport
 
 	mu    sync.Mutex
 	conns map[string]map[net.Conn]struct{} // a session's hash to its upgraded connections
@@ -46,19 +47,20 @@ type Proxy struct {
 func New(name, title string, socket func() string, log *slog.Logger) *Proxy {
 	p := &Proxy{Name: name, Title: title, prefix: "/ext/" + name, socket: socket, log: log,
 		conns: map[string]map[net.Conn]struct{}{}}
-	p.rp = &httputil.ReverseProxy{
-		Rewrite: p.rewrite,
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				path := p.socket()
-				if path == "" {
-					return nil, errNoSocket
-				}
-				var d net.Dialer
-				return d.DialContext(ctx, "unix", path)
-			},
-			MaxIdleConns: 16, IdleConnTimeout: 90 * time.Second,
+	p.tr = &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			path := p.socket()
+			if path == "" {
+				return nil, errNoSocket
+			}
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", path)
 		},
+		MaxIdleConns: 16, IdleConnTimeout: 90 * time.Second,
+	}
+	p.rp = &httputil.ReverseProxy{
+		Rewrite:   p.rewrite,
+		Transport: p.tr,
 		// Streams (a log, a long poll) reach the browser as they're written.
 		FlushInterval: -1,
 		ErrorHandler:  p.unavailable,
@@ -71,18 +73,63 @@ var errNoSocket = errors.New("the extension hasn't said where it listens")
 // Path is where browsers find it: /ext/<name>/.
 func (p *Proxy) Path() string { return p.prefix + "/" }
 
-// Available reports whether its socket is there to connect to.
+// Available reports whether the extension answers on its socket: a socket file an extension left
+// when it died refuses the connection, and is forgotten as a gone one is.
 func (p *Proxy) Available() bool {
 	path := p.socket()
 	if path == "" {
 		return false
 	}
-	fi, err := os.Stat(path)
-	if err != nil || fi.Mode()&os.ModeSocket == 0 {
+	if !Answers(path) {
 		p.gone()
 		return false
 	}
 	return true
+}
+
+// Answers reports whether something accepts connections on the unix socket at path.
+func Answers(path string) bool {
+	fi, err := os.Stat(path)
+	if err != nil || fi.Mode()&os.ModeSocket == 0 {
+		return false
+	}
+	c, err := net.DialTimeout("unix", path, time.Second)
+	if err != nil {
+		return false
+	}
+	_ = c.Close()
+	return true
+}
+
+// NotifyPath is where an extension hears that something it reads from Meko changed: Meko posts
+// {"what": "<thing>"} there on its socket (docs/web.md). An extension that doesn't know the path
+// answers 404, which is fine.
+const NotifyPath = "/_meko/changed"
+
+// NotifyTimeout bounds one notification.
+const NotifyTimeout = 5 * time.Second
+
+// Notify tells a running extension that what changed: a POST of {"what": what} to NotifyPath on its
+// socket, with no Origin (the extension trusts its socket). It does nothing while the extension
+// isn't answering, and reports only failures to reach it.
+func (p *Proxy) Notify(ctx context.Context, what string) error {
+	if !p.Available() {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, NotifyTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://localhost"+NotifyPath,
+		strings.NewReader(fmt.Sprintf(`{"what":%q}`, what)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := p.tr.RoundTrip(req)
+	if err != nil {
+		return err
+	}
+	_ = res.Body.Close()
+	return nil
 }
 
 func (p *Proxy) gone() {

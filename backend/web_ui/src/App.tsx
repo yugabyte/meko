@@ -1,5 +1,5 @@
 // The app shell, once the gate (Gate.tsx) let this browser in: loads the datapacks, and shows the
-// open datapack's tab, or the Status or Account page, beside the sidebar.
+// open datapack's tab, or the Status, Extensions, Meko Cloud or Account page, beside the sidebar.
 
 import { useCallback, useEffect, useState } from "react";
 import { Database } from "lucide-react";
@@ -15,7 +15,9 @@ import { Sidebar } from "./components/Sidebar";
 import { Empty, ErrorNote, Loading } from "./components/ui";
 import { ConnectPage } from "./pages/ConnectPage";
 import { ConversationsPage } from "./pages/ConversationsPage";
+import { ExtensionsPage } from "./pages/ExtensionsPage";
 import { KnowledgePage } from "./pages/KnowledgePage";
+import { MekoCloudPage } from "./pages/MekoCloudPage";
 import { MemoriesPage } from "./pages/MemoriesPage";
 import { AccountPage } from "./pages/AccountPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
@@ -59,6 +61,14 @@ export default function App({ auth, onAuthChanged }: { auth: AuthStatus; onAuthC
           {route.view === "status" ? (
             <div className="p-8">
               <StatusPage />
+            </div>
+          ) : route.view === "extensions" ? (
+            <div className="p-4 sm:p-8">
+              <ExtensionsPage />
+            </div>
+          ) : route.view === "meko-cloud" ? (
+            <div className="p-4 sm:p-8">
+              <MekoCloudPage />
             </div>
           ) : route.view === "account" ? (
             <div className="p-4 sm:p-8">

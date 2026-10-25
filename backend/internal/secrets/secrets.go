@@ -1,6 +1,7 @@
-// Package secrets keeps Meko's secrets: the client token now, and provider keys and connector
-// tokens later. On macOS they're in the login Keychain; elsewhere (and on a Mac set to
-// [secrets] store = "file") they're files in the data folder, readable only by their owner.
+// Package secrets keeps Meko's secrets: the client token and the Meko Cloud link's key now, and
+// provider keys and connector tokens later. On macOS they're in the login Keychain; elsewhere (and
+// on a Mac set to [secrets] store = "file") they're files in the data folder, readable only by
+// their owner.
 //
 // A secret never reaches a log or an error message, and reaches a command line only where an
 // installer takes it as a flag: meko install_extension passes the client token to AgentK's

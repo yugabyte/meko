@@ -14,15 +14,20 @@ Part of the [AgentK design](../design.md).
   every component's jobs, run or skipped) and the title check pass.
 - **Versioning (on push to main).** Versions are `0.YYYYMMDD.N`: the UTC date, and `N` counting
   from 0 for each release that day. Commit subjects are `<type>(<component>[/<area>])[!]: <summary>`
-  with one of nine types and one of the repo's components (`agentk`, `meko`, `repo`:
-  `scripts/check-title.sh`), and PRs are squash-merged with the PR title
+  with one of nine types and one of the repo's components (`agentk`, `meko`, `presenter`, `repo`:
+  `scripts/check-title.sh`), or several comma-separated for a change that ships in more than one
+  (`feat(agentk,meko): …`), and PRs are squash-merged with the PR title
   as the subject. A push with any `feat`, `fix`, `perf` or `deps` commit for AgentK since its last
   release runs the tests and cuts the next version, and those subjects become the release notes;
   `ci`, `test`, `docs`, `nit` and `chore` don't release. Releases are scoped by component: Meko
-  (`backend/`) releases on its own, from its own tags (`meko-v…`), and its `meko` subjects never
-  release AgentK. Every other subject (`agentk`, `repo`, and older ones with no component or a
-  free-form one) counts for AgentK. The repo root's `scripts/release/` holds the scripts both
-  products use, with `--product agentk|meko`: `next-version.sh`, `release-notes.sh` and
+  (`backend/`) releases on its own, from its own tags (`meko-v…`), and subjects naming only `meko`
+  never release AgentK. Presenter (`extensions/presenter`) releases on its own too
+  (`presenter-release.yml`, tags `presenter-v…`): subjects naming only `presenter` (or `meko` and
+  `presenter`) release nothing for AgentK. Every other subject
+  (`agentk`, `repo`, lists such as `agentk,meko`, and older ones with no component or a free-form
+  one) counts for AgentK, and every subject naming `meko`, alone or in a list, counts for Meko: a PR
+  titled `feat(agentk,meko): …` releases both. The repo root's `scripts/release/` holds the scripts both
+  products use, with `--product agentk|meko|presenter`: `next-version.sh`, `release-notes.sh` and
   `prune-releases.sh` (`product.sh` names each product's tags and components).
 - **Build matrix (after the tests).** Self-contained tarballs are built for `linux-x64` and
   `linux-arm64`, and on a `macos-15` runner for `darwin-arm64`. Each bundles the Node 22 runtime,
@@ -82,10 +87,10 @@ gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-d
 #  2. unpacks to <home>/app/<ver>, points app/current at it, then runs `agentk install`:
 #  3. asks for your repos folder (default ~/code), and stops when there's no `meko` command: the
 #     Meko on this computer serves AgentK to browsers (at /ext/agentk/) and signs people in
-#  4. Meko: verifies the API key (reuses MEKO_API_KEY from ~/.claude/settings.json, else asks for
-#     a Meko Cloud key, and Enter uses the Meko running on this computer, which isn't stored;
-#     --meko-url and --meko-key name one; --no-meko is ignored) and offers to run Meko's setup for
-#     Claude Code if its plugin, MCP server or key is missing (declining is a warning)
+#  4. Meko: uses Meko's Meko Cloud link, else the Meko running on this computer, and stores neither
+#     (no key is asked for: --meko-key, with --meko-url, links one in Meko; a key AgentK kept before
+#     is handed to Meko once; --no-meko is ignored) and offers to run Meko's setup for Claude Code if
+#     its plugin, MCP server or key is missing (declining is a warning)
 #  5. picks the database location (local disk for an older home still on NFS), writes config.toml
 #     (with the Meko data folder the home is in); on an older home, says it moves into
 #     Meko's data folder once the server has started
@@ -111,8 +116,9 @@ repo for updates, so its update checks fail ("GitHub API returned 404"): set `up
 defaults ([Usage stats](usage-stats.md)). The bundle holds only AgentK: Meko, which serves AgentK to
 browsers, must be installed on that computer first.
 
-**Tags.** The repo releases two products. AgentK's releases are tagged `agentk-v<version>`
-(`v<version>` before releases were tagged by product); Meko's are `meko-v<version>`. Versions stay
+**Tags.** The repo releases three products. AgentK's releases are tagged `agentk-v<version>`
+(`v<version>` before releases were tagged by product); Meko's are `meko-v<version>`, and
+Presenter's `presenter-v<version>` (`presenter-release.yml`; Meko installs and updates them). Versions stay
 bare (`0.YYYYMMDD.N`): tarball names, `app/<version>` and `bad-versions` use them, and on the day of
 the switch `next-version.sh` counted both prefixes so no version was used twice. AgentKs installed
 before the switch read only `v…` tags; the last `v…` release (the bridge) reads both, so they reach
@@ -177,7 +183,7 @@ don't say what an update brought. The **What's new** dialog (`WhatsNewDialog.tsx
 change between two versions instead: the server asks GitHub for the commits between their tags
 (`GET /api/update/notes`, `Updater.notes()`, through the same `gh` or HTTPS source as the update
 check: `repos/<repo>/compare/<from tag>...<to tag>`, each of either prefix) and lists the `feat`, `fix`, `perf` and `deps`
-subjects by type, as the repo root's `scripts/release/release-notes.sh` does (leaving out Meko's `meko` subjects) (`src/server/releasenotes.ts`), with
+subjects by type, as the repo root's `scripts/release/release-notes.sh` does (leaving out the subjects that name only `meko` or `presenter`) (`src/server/releasenotes.ts`), with
 **Breaking changes** first and each line linked to its PR. GitHub returns at most 250 commits for a
 comparison; past that the dialog says so, and **See every commit on GitHub** opens the comparison
 there. A range's notes are kept in memory once fetched; nothing is fetched until the dialog opens.

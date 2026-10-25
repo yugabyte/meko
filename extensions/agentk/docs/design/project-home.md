@@ -9,9 +9,9 @@ never pushes the rest of the page down.
 
 **Share** sits in the project's header: it shares the whole project, through its dedicated
 datapack, and opens the Share dialog. While Meko's API URL isn't known (a self-hosted Meko with
-no web app or API URL set) the dialog shows the server's 409, which says to set the web app URL on
-the Meko tab (the tab warns about it too). With Meko
-off it asks for a Meko API key first (**Add a Meko API key**), and for a project without a
+no web app or API URL set) the dialog shows the server's 409, which says to set the web app URL in
+Meko's web UI (Settings › Meko Cloud). With no Meko it says how to set one up first (**Set up Meko**,
+which links to Meko's Meko Cloud page), and for a project without a
 dedicated datapack it offers **Add a dedicated datapack**. Meko itself refuses a share from someone who isn't the owner or a
 maintainer. See [Sharing a project](sharing.md).
 

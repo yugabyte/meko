@@ -75,14 +75,17 @@ func fakeMeko(version string, fail bool) string {
 }
 
 // tarball builds meko-<version>.tar.gz holding bin/meko and an engine file.
-func tarball(t *testing.T, version string) []byte {
+func tarball(t *testing.T, version string) []byte { return tarballOf(t, "meko", "meko", version) }
+
+// tarballOf builds a release of package pkg: <pkg>-<version>/bin/<name> and an engine file.
+func tarballOf(t *testing.T, pkg, name, version string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	top := "meko-" + version + "/"
-	add := func(name, body string, mode int64) {
-		h := &tar.Header{Name: top + name, Mode: mode, Size: int64(len(body)), Typeflag: tar.TypeReg}
+	top := pkg + "-" + version + "/"
+	add := func(file, body string, mode int64) {
+		h := &tar.Header{Name: top + file, Mode: mode, Size: int64(len(body)), Typeflag: tar.TypeReg}
 		if err := tw.WriteHeader(h); err != nil {
 			t.Fatal(err)
 		}
@@ -90,7 +93,7 @@ func tarball(t *testing.T, version string) []byte {
 			t.Fatal(err)
 		}
 	}
-	add("bin/meko", fakeMeko(version, false), 0o755)
+	add("bin/"+name, fakeMeko(version, false), 0o755)
 	add("memory_engine/dist/main.js", "// memory engine\n", 0o644)
 	if err := tw.Close(); err != nil {
 		t.Fatal(err)
@@ -248,7 +251,7 @@ func TestExtractRefusesEscapes(t *testing.T) {
 		if err := os.WriteFile(f, buf.Bytes(), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := extract(f, t.TempDir()); err == nil {
+		if err := extract(f, t.TempDir(), false); err == nil {
 			t.Errorf("%s was extracted", h.Name)
 		}
 	}
@@ -337,5 +340,98 @@ func TestLinkCommand(t *testing.T) {
 	}
 	if _, err := os.Lstat(link); !os.IsNotExist(err) {
 		t.Error("link left")
+	}
+}
+
+// An extension's releases (Presenter's) go through the same App: its tarball and top folder named for
+// its package (presenter), its binary and its link in ~/.local/bin for its program (meko_presenter).
+func TestNamedAppStagesAnExtensionsRelease(t *testing.T) {
+	const next = "0.20261024.0"
+	goos, arch := Platform()
+	name := PackageTarball("presenter", next, goos, arch)
+	if want := "presenter-" + next + "-" + goos + "-" + arch + ".tar.gz"; name != want {
+		t.Fatalf("PackageTarball = %q, want %q", name, want)
+	}
+	tgz := tarballOf(t, "presenter", "meko_presenter", next)
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/o/r/releases":
+			_ = json.NewEncoder(w).Encode([]Release{
+				{Tag: TagPrefix + "0.20261030.0", Assets: []Asset{{Name: TarballName("0.20261030.0", goos, arch)}, {Name: Sums}}},
+				{Tag: "presenter-v0.20261025.0", Assets: []Asset{{Name: Sums}}}, // no tarball for this platform
+				{Tag: "presenter-v" + next, Assets: []Asset{
+					{Name: name, BrowserURL: srv.URL + "/tar"}, {Name: Sums, BrowserURL: srv.URL + "/sums"},
+				}},
+			})
+		case "/tar":
+			_, _ = w.Write(tgz)
+		case "/sums":
+			_, _ = io.WriteString(w, sum(tgz)+"  "+name+"\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := &Client{Repo: "o/r", API: srv.URL, HTTP: srv.Client()}
+	rels, err := c.Releases(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, v, ok := PickPackage(rels, []string{"presenter-v"}, "presenter", goos, arch, nil)
+	if !ok || v != next {
+		t.Fatalf("picked %q %v", v, ok)
+	}
+	if _, _, ok := PickPackage(rels, []string{"presenter-v"}, "presenter", goos, arch, map[string]bool{next: true}); ok {
+		t.Error("a bad version was picked")
+	}
+	a := App{Root: filepath.Join(t.TempDir(), "app"), Name: "meko_presenter", Package: "presenter"}
+	if err = a.Stage(context.Background(), c, r, v); err != nil {
+		t.Fatal(err)
+	}
+	if err = a.Repoint(v); err != nil {
+		t.Fatal(err)
+	}
+	if a.Exe(v) != filepath.Join(a.Root, v, "bin", "meko_presenter") {
+		t.Errorf("Exe = %s", a.Exe(v))
+	}
+	home := t.TempDir()
+	link, err := a.LinkCommand(home)
+	if err != nil || link != filepath.Join(home, ".local", "bin", "meko_presenter") {
+		t.Fatalf("link %q %v", link, err)
+	}
+	if got, ver, ok := Of(link); !ok || ver != next || got.Root != realPath(t, a.Root) {
+		t.Errorf("Of(link) = %v %q %v", got, ver, ok)
+	}
+}
+
+// A private app folder (an extension's, in Meko's data folder) gets its release owner-only:
+// folders and programs 0700, other files 0600. Meko's own keeps the tarball's modes.
+func TestPrivateAppUnpacksOwnerOnly(t *testing.T) {
+	const v = "0.20261024.0"
+	f := filepath.Join(t.TempDir(), "x.tar.gz")
+	if err := os.WriteFile(f, tarballOf(t, "presenter", "meko_presenter", v), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []bool{true, false} {
+		a := App{Root: filepath.Join(t.TempDir(), "app"), Name: "meko_presenter", Package: "presenter", Private: private}
+		if err := os.MkdirAll(a.Root, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.Unpack(f, v); err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]os.FileMode{"bin": 0o755, "bin/meko_presenter": 0o755, "VERSION": 0o644,
+			"memory_engine/dist/main.js": 0o644}
+		if private {
+			want = map[string]os.FileMode{"bin": 0o700, "bin/meko_presenter": 0o700, "VERSION": 0o600,
+				"memory_engine/dist/main.js": 0o600}
+		}
+		for p, mode := range want {
+			fi, err := os.Stat(filepath.Join(a.Dir(v), p))
+			if err != nil || fi.Mode().Perm() != mode {
+				t.Errorf("private %v: %s is %v (%v), want %v", private, p, fi.Mode().Perm(), err, mode)
+			}
+		}
 	}
 }

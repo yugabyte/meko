@@ -1,0 +1,184 @@
+package cli
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/yugabyte/meko/backend/internal/config"
+	"github.com/yugabyte/meko/backend/internal/extensions"
+	"github.com/yugabyte/meko/backend/internal/extproxy"
+)
+
+// Release is the version of an installed extension's release install that Meko manages, and whether
+// Meko can update it (meko update_extension), for the web UI's Extensions page.
+func (w *webListener) Release(name string) (string, bool) {
+	cat, ok := extensions.Known[name]
+	if !ok || !cat.Managed {
+		return "", false
+	}
+	reg, err := extensions.Load(w.l.Root)
+	if err != nil {
+		return "", false
+	}
+	e, ok := reg.Entries[name]
+	if !ok {
+		return "", false
+	}
+	v := cat.Release(w.l.Root, name, e.Command)
+	return v, v != ""
+}
+
+// Installed names the registered extensions, for the web UI's Extensions page.
+func (w *webListener) Installed() []string {
+	reg, err := extensions.Load(w.l.Root)
+	if err != nil {
+		return nil
+	}
+	return reg.Names()
+}
+
+// RunExtension runs an action of the Extensions page on a known extension (server.Web.Run): install
+// it as meko install_extension does, with no terminal, update it as meko update_extension does, or
+// run its own start or stop. The output and the error reach a browser, so the client token the
+// installer is given is blanked in both. After an install or a start of one with a web UI, or an
+// update that left it running, it waits for the extension to answer on its socket (AgentK's start
+// returns before its server listens), so the page's next look sees it running.
+func (w *webListener) RunExtension(ctx context.Context, name, action string, out io.Writer) error {
+	var tok string
+	if cfg, err := config.Load(w.l.Config, os.Getenv, config.Overrides{}); err == nil {
+		tok, _ = readClientToken(w.l, cfg)
+	}
+	r := &redactor{w: out, secret: []byte(tok)}
+	runs := true
+	var err error
+	if action == "update" {
+		upd, cancel := context.WithTimeout(ctx, extensions.InstallTimeout)
+		runs, err = updateExtension(upd, w.l, name, false, r)
+		cancel()
+		w.reconnect(name) // a restarted server's socket is asked for again
+	} else {
+		err = w.runExtension(ctx, name, action, r)
+	}
+	r.Flush()
+	if err != nil {
+		if tok != "" {
+			return errors.New(strings.ReplaceAll(err.Error(), tok, redacted))
+		}
+		return err
+	}
+	if action != "stop" && runs && extensions.Known[name].WebUI {
+		return w.awaitListening(ctx, name)
+	}
+	return nil
+}
+
+// awaitListening waits up to extensions.ListenTimeout for an extension to answer on the socket its
+// handoff names, asking again each second: a look at the list while it starts forgets a socket
+// that doesn't answer yet and holds off asking for 10 s (reconnect undoes that). Once it answers,
+// the socket is known, so the next request goes straight to it.
+func (w *webListener) awaitListening(ctx context.Context, name string) error {
+	cat := extensions.Known[name]
+	deadline := time.Now().Add(extensions.ListenTimeout)
+	for {
+		w.reconnect(name)
+		if path := w.socket(name)(); path != "" && extproxy.Answers(path) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			w.reconnect(name)
+			return fmt.Errorf("%s started, but isn't answering after %s: see %s status", cat.Title,
+				extensions.ListenTimeout, cat.Command)
+		}
+		select {
+		case <-ctx.Done():
+			w.reconnect(name)
+			return errors.New("it was stopped: Meko is stopping")
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+func (w *webListener) runExtension(ctx context.Context, name, action string, out io.Writer) error {
+	switch action {
+	case "install":
+		inst, cancel := context.WithTimeout(ctx, extensions.InstallTimeout)
+		defer cancel()
+		return installExtension(inst, w.l, name, false, nil, out, out)
+	case "start", "stop":
+		reg, err := extensions.Load(w.l.Root)
+		if err != nil {
+			return err
+		}
+		e, ok := reg.Entries[name]
+		if !ok {
+			return fmt.Errorf("%s isn't installed", name)
+		}
+		if _, err := os.Stat(e.Command); errors.Is(err, os.ErrNotExist) {
+			if findAgain(w.l, reg, name) == "" {
+				return fmt.Errorf("%s is gone (%s); meko uninstall_extension %s forgets it", name, e.Command, name)
+			}
+			e = reg.Entries[name]
+		}
+		return e.Run(w.l.Root, action, out, out)
+	}
+	return fmt.Errorf("no action %q", action)
+}
+
+// reconnect forgets where an extension listens and when it was last asked, so the next request
+// that needs it asks it again at once rather than up to 10 s later.
+func (w *webListener) reconnect(name string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	delete(w.sockets, name)
+	delete(w.handed, name)
+	delete(w.asked, name)
+}
+
+// redacted stands in for a secret in output.
+const redacted = "[hidden]"
+
+// redactor passes output on with a secret blanked, holding back only an end that could be the start
+// of the secret until more comes or Flush. exec calls Write from one goroutine at a time when
+// Stdout and Stderr are the same writer.
+type redactor struct {
+	w      io.Writer
+	secret []byte
+	buf    []byte
+}
+
+func (r *redactor) Write(p []byte) (int, error) {
+	if len(r.secret) == 0 {
+		return r.w.Write(p)
+	}
+	r.buf = bytes.ReplaceAll(append(r.buf, p...), r.secret, []byte(redacted))
+	keep := partialPrefix(r.buf, r.secret)
+	if _, err := r.w.Write(r.buf[:len(r.buf)-keep]); err != nil {
+		return 0, err
+	}
+	r.buf = append(r.buf[:0], r.buf[len(r.buf)-keep:]...)
+	return len(p), nil
+}
+
+// Flush writes what was held back: the output ended without the rest of the secret.
+func (r *redactor) Flush() {
+	if len(r.buf) > 0 {
+		_, _ = r.w.Write(r.buf)
+		r.buf = r.buf[:0]
+	}
+}
+
+// partialPrefix is the length of the longest end of b that's a start of secret (shorter than it).
+func partialPrefix(b, secret []byte) int {
+	for n := min(len(b), len(secret)-1); n > 0; n-- {
+		if bytes.HasSuffix(b, secret[:n]) {
+			return n
+		}
+	}
+	return 0
+}

@@ -1,0 +1,76 @@
+#!/bin/sh
+# Presenter's launcher, in a release as presenter-<version>/bin/meko_presenter. Meko installs releases
+# as <Meko's data folder>/extensions/presenter/app/<version>, with app/current and
+# ~/.local/bin/meko_presenter pointing at the one in use (meko install_extension, meko
+# update_extension).
+#
+# Runs the bundled Node on the bundled server, with PRESENTER_APP_DIR naming this release's folder
+# and PRESENTER_LAUNCHER this file (`meko_presenter start` runs `serve` through it). For `serve`, it also
+# rolls back an update that fails, as AgentK's launcher does: Meko writes app/update-pending.json
+# ({"from", "to", "attempts"}) as it switches app/current to a new version, and the server deletes it
+# once it has served for 5 minutes (src/server/probation.ts). Each start of the new version counts;
+# on the start after three failed ones, this switches app/current back to the old version, adds the
+# new one to app/bad-versions (Meko never offers it again) and starts the old one instead. A clean
+# stop (SIGTERM) of the new version takes its start back off the count, so only crashes count, and a
+# start of the old version (switched back by hand) drops the record. These are Meko's own rules for
+# itself (backend/internal/update/pending.go), on the same files.
+set -eu
+
+# Resolve our real location, following symlinks (~/.local/bin -> app/current -> app/<version>).
+self=$0
+while [ -h "$self" ]; do
+  dir=$(cd -P "$(dirname "$self")" && pwd)
+  link=$(readlink "$self")
+  case $link in
+    /*) self=$link ;;
+    *) self=$dir/$link ;;
+  esac
+done
+bin_dir=$(cd -P "$(dirname "$self")" && pwd)
+PRESENTER_APP_DIR=$(cd -P "$bin_dir/.." && pwd)
+PRESENTER_LAUNCHER=$bin_dir/meko_presenter
+export PRESENTER_APP_DIR PRESENTER_LAUNCHER
+
+node="$PRESENTER_APP_DIR/node/bin/node"
+cli="$PRESENTER_APP_DIR/lib/dist/server/cli.js"
+app=$(dirname "$PRESENTER_APP_DIR")
+version=$(basename "$PRESENTER_APP_DIR")
+
+if [ "${1:-}" = "serve" ] && [ -f "$app/update-pending.json" ]; then
+  # Counts this start of the version on probation, or prints the version to roll back to: the old
+  # one, once the new one has failed three times and the old one is still there.
+  # shellcheck disable=SC2016 # the single-quoted text is JavaScript, not shell
+  back=$("$node" -e '
+    const fs = require("fs");
+    const path = require("path");
+    const [f, version, app] = process.argv.slice(1);
+    let p;
+    try { p = JSON.parse(fs.readFileSync(f, "utf8")); } catch { process.exit(0); }
+    if (version !== p.to) {
+      if (version === p.from) fs.rmSync(f, { force: true });
+      process.exit(0);
+    }
+    const attempts = Number(p.attempts) || 0;
+    if (attempts >= 3 && p.from && fs.existsSync(path.join(app, p.from, "bin", "meko_presenter"))) {
+      process.stdout.write(p.from);
+      process.exit(0);
+    }
+    p.attempts = attempts + 1;
+    fs.writeFileSync(f + ".tmp", JSON.stringify(p), { mode: 0o600 });
+    fs.renameSync(f + ".tmp", f);
+  ' "$app/update-pending.json" "$version" "$app") || back=""
+
+  if [ -n "$back" ]; then
+    # On stderr, which `meko_presenter start` writes to the server's log.
+    echo "meko_presenter: version $version failed to start 3 times; rolling back to $back" >&2
+    ln -sfn "$back" "$app/current.rollback"
+    # Rename over the old link atomically. `mv -T` is GNU-only, so use the bundled Node.
+    "$node" -e 'require("fs").renameSync(process.argv[1], process.argv[2])' "$app/current.rollback" "$app/current"
+    # Owner-only, as every file in Meko's data folder (Meko's own addBadVersion makes it 0600).
+    (umask 077 && printf '%s\n' "$version" >> "$app/bad-versions")
+    rm -f "$app/update-pending.json"
+    exec "$app/$back/bin/meko_presenter" "$@"
+  fi
+fi
+
+exec "$node" --disable-warning=ExperimentalWarning "$cli" "$@"

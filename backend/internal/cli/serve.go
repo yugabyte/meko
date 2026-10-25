@@ -19,6 +19,7 @@ import (
 
 	"github.com/yugabyte/meko/backend/internal/auth"
 	"github.com/yugabyte/meko/backend/internal/callhome"
+	"github.com/yugabyte/meko/backend/internal/cloudlink"
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/logging"
@@ -42,6 +43,8 @@ import (
 const (
 	drainTimeout     = 10 * time.Second
 	childStopTimeout = 15 * time.Second
+	// jobsWait is how long an extension's action that was stopped gets to end, alongside the rest.
+	jobsWait = 10 * time.Second
 )
 
 // testEmbedder, if set, makes the memory engine use a deterministic hashing embedder instead of
@@ -198,6 +201,11 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	if err != nil {
 		return err
 	}
+	// The Meko Cloud link's, in the same secret store.
+	cloudSt, err := cloudStore(l, cfg)
+	if err != nil {
+		return err
+	}
 
 	// The store API the memory engine calls, on its unix socket with a per-start token of its own.
 	internalToken, err := auth.NewToken()
@@ -301,16 +309,20 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	// The web listener: the web UI and the extensions' for browsers, with local access or the login.
 	web := newWebListener(l, st, logins, log)
 	logins.OnRevoke(web.RevokeEnded)
+	// The Meko Cloud link: the web UI and meko cloud_link change it; the running extensions hear.
+	cloud := &cloudlink.Service{Store: cloudSt, Check: cloudlink.CheckMCP, CheckAPI: cloudlink.CheckAPI,
+		Changed: func(ctx context.Context) { web.notify(ctx, "cloud") }}
 	web.newOpts = func(wcfg config.Config) server.Options {
 		return server.Options{Info: info, Port: wcfg.Web.Port, Auth: cfg.Server.Auth, Logger: log,
 			Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, MCP: mcpHandler,
-			REST: registerREST, Upload: upload, Download: download, UI: ui, Login: logins,
-			Web: &server.Web{Access: wcfg.Web.Access, Extensions: web.Proxies}}
+			REST: registerREST, Upload: upload, Download: download, UI: ui, Login: logins, Cloud: cloud,
+			Web: &server.Web{Access: wcfg.Web.Access, Extensions: web.Proxies, Installed: web.Installed,
+				Run: web.RunExtension, Release: web.Release, Jobs: web.jobs}}
 	}
 	srv := server.New(server.Options{
 		Info: info, Port: cfg.Server.Port, Token: token, ClientToken: clientToken, Auth: cfg.Server.Auth, Logger: log,
 		Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, MCP: mcpHandler,
-		REST: registerREST, Upload: upload, Download: download, Login: logins,
+		REST: registerREST, Upload: upload, Download: download, Login: logins, Cloud: cloud,
 		WebURL: func() string {
 			if u := web.Status(context.Background()).URL; u != "" {
 				return u
@@ -347,10 +359,22 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	case <-ctx.Done():
 		log.Info("stopping")
 	case <-restart:
+		// An install from the Extensions page runs in this process: finish it first.
+		if web.jobs.Busy() {
+			log.Info("waiting for an extension's action to finish before restarting into the update")
+			web.jobs.WaitIdle(ctx)
+		}
 		log.Info("stopping to restart into the update")
 	case serveErr = <-served:
 	}
 	stopUpdates()
+	// An action still running is stopped (an install is cut off; Install again finishes it). Its
+	// end is only logged, so this waits briefly, while the listeners drain.
+	jobsDone := make(chan struct{})
+	go func() {
+		defer close(jobsDone)
+		web.jobs.Cancel(jobsWait)
+	}()
 	if onProbation && serveErr == nil {
 		// A clean stop of a version on probation isn't a failed start.
 		if err := app.Uncount(release); err != nil {
@@ -378,6 +402,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	if err := st.Checkpoint(context.Background()); err != nil {
 		log.Warn("WAL checkpoint failed", "error", err)
 	}
+	<-jobsDone
 	log.Info("Meko stopped")
 	return serveErr
 }

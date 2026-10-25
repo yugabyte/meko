@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { MekoApi, MekoApiError, looksLikeMekoApi } from '../../src/server/mekoapi.js';
+import { MekoApi, MekoApiError } from '../../src/server/mekoapi.js';
 import { fakeMekoApi } from '../helpers.js';
 
 const ok = (data: unknown) => ({ status: 200, body: { data } });
@@ -168,22 +168,5 @@ describe('MekoApi', () => {
     });
     forbid = true;
     expect((await f.api.people('d1')).invites).toEqual([]);
-  });
-
-  it("recognises Meko's API by its envelope, asking without the key", async () => {
-    const seen: { url: string; auth: unknown }[] = [];
-    const answer = (status: number, body: string) => (async (url: string | URL | Request, init?: RequestInit) => {
-      seen.push({ url: String(url), auth: (init?.headers as Record<string, string> | undefined)?.Authorization });
-      return new Response(body, { status });
-    }) as typeof fetch;
-    expect(await looksLikeMekoApi('https://meko.test/api/v1/', answer(401, JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'no token' } })))).toEqual({ ok: true });
-    expect(seen).toEqual([{ url: 'https://meko.test/api/v1/datapacks/incoming-shares', auth: undefined }]);
-    expect(await looksLikeMekoApi('https://x.test', answer(404, '<html>not found</html>'))).toEqual({ ok: false, error: "it answered 404, not like Meko's API" });
-    // Plenty of APIs answer `{ "error": "…" }`; Meko's error is an object with a code.
-    expect(await looksLikeMekoApi('https://x.test', answer(404, JSON.stringify({ error: 'Not Found' })))).toEqual({ ok: false, error: "it answered 404, not like Meko's API" });
-    const down = (async () => {
-      throw new TypeError('fetch failed');
-    }) as typeof fetch;
-    expect(await looksLikeMekoApi('https://x.test', down)).toEqual({ ok: false, error: "couldn't reach it (fetch failed)" });
   });
 });

@@ -95,7 +95,7 @@ export function ShareLink({ datapackId }: { datapackId: string }) {
         <p className="hint">
           {state.unavailable === 'permission'
             ? 'Only the datapack’s owner or a maintainer can share it by link.'
-            : 'Meko’s web app URL isn’t known, so AgentK can’t make a share link. Set it on the Meko tab in Settings.'}
+            : 'Meko’s web app URL isn’t known, so AgentK can’t make a share link. Set it in Meko’s web UI (Settings › Meko Cloud).'}
         </p>
       </div>
     );

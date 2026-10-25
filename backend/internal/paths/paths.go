@@ -2,6 +2,7 @@
 //
 //	<root>/            0700
 //	  config.toml      optional
+//	  web.toml, cloud.toml  settings Meko chose itself: the web listener's, the Meko Cloud link's URLs
 //	  meko.db          the only database (0600)
 //	  client.token     the token MCP and REST clients send, kept across restarts (0600)
 //	  run/             pid, port, lock, admin token, unix sockets

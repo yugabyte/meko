@@ -1,9 +1,9 @@
 // Meko's settings: whether usage stats go to YugabyteDB, saved as soon as it's changed (turned off
-// by config.toml or the environment, the checkbox is off and can't be turned on here), and the way
-// to the account settings at /account.
+// by config.toml or the environment, the checkbox is off and can't be turned on here), and the ways
+// to the Meko Cloud link at /settings/meko-cloud and the account settings at /account.
 
 import { useEffect, useState } from "react";
-import { UserRound } from "lucide-react";
+import { Cloud, UserRound } from "lucide-react";
 import { api } from "../lib/api";
 import { href, navigate } from "../lib/route";
 import type { AuthStatus, UsageStats } from "../lib/types";
@@ -18,6 +18,10 @@ function note(u: UsageStats): string | null {
 }
 
 const ACCOUNT = { tab: "overview" as const, view: "account" as const };
+const MEKO_CLOUD = { tab: "overview" as const, view: "meko-cloud" as const };
+
+const LINK_CLASS =
+  "inline-flex h-7 items-center gap-1.5 rounded-lg border bg-card px-2 text-xs font-medium hover:bg-accent";
 
 export function SettingsDialog({ auth, onClose }: { auth: AuthStatus; onClose: () => void }) {
   const [usage, setUsage] = useState<UsageStats>();
@@ -70,6 +74,23 @@ export function SettingsDialog({ auth, onClose }: { auth: AuthStatus; onClose: (
       )}
       {error && <ErrorNote error={error} />}
       <div className="space-y-2 border-t pt-3">
+        <p className="text-sm font-medium">Meko Cloud</p>
+        <p className="text-xs text-muted-foreground">
+          Link Meko Cloud for your extensions, such as AgentK, to keep their memory there instead of on this computer.
+        </p>
+        <a
+          href={href(MEKO_CLOUD)}
+          onClick={(e) => {
+            e.preventDefault();
+            onClose();
+            navigate(MEKO_CLOUD);
+          }}
+          className={LINK_CLASS}
+        >
+          <Cloud className="size-3.5" /> Meko Cloud
+        </a>
+      </div>
+      <div className="space-y-2 border-t pt-3">
         {hasAccount(auth) ? (
           <>
             <p className="text-sm font-medium">Account</p>
@@ -85,7 +106,7 @@ export function SettingsDialog({ auth, onClose }: { auth: AuthStatus; onClose: (
                 onClose();
                 navigate(ACCOUNT);
               }}
-              className="inline-flex h-7 items-center gap-1.5 rounded-lg border bg-card px-2 text-xs font-medium hover:bg-accent"
+              className={LINK_CLASS}
             >
               <UserRound className="size-3.5" /> Account settings
             </a>

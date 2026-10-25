@@ -439,9 +439,10 @@ Usage: agentk <command>
 
   serve         Run the server (the background service runs this for you)
   install       Configure this host, set up Meko for Claude Code if needed (asks first; --install-deps
-                to skip asking; without a Meko Cloud key, AgentK uses the Meko running on this computer;
-                --meko-url and --meko-key name one), and install the background services (systemd or
-                launchd). Browsers reach AgentK through the Meko on this computer, at /ext/agentk/
+                to skip asking; AgentK uses Meko's Meko Cloud link, else the Meko running on this
+                computer; --meko-key, with --meko-url for another server, links one in Meko), and install
+                the background services (systemd or launchd). Browsers reach AgentK through the Meko on
+                this computer, at /ext/agentk/
   uninstall     Stop and remove the background services (--purge also deletes AgentK's home, in Meko's
                 data folder, except its session worktrees and designs; add --delete-worktrees to delete
                 those too)

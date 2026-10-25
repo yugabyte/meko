@@ -299,10 +299,60 @@ export interface TotpEnroll {
   otpauth_url: string;
 }
 
-// GET /extensions: the extensions the web listener serves, at path.
+// GET /extensions: every extension Meko knows, whether it's installed (registered with Meko), its
+// web UI at path ("" while it isn't served) and whether that answers (available: running), and its
+// last action from the Extensions page. An older server lists only the served ones, with no
+// installed, web_ui or description.
 export interface Extension {
   name: string;
   title: string;
+  description?: string;
+  installed?: boolean;
+  web_ui?: boolean;
   path: string;
   available: boolean;
+  // The release Meko installed and can update (Presenter's); AgentK updates itself.
+  version?: string;
+  updatable?: boolean;
+  job?: ExtensionJob;
+}
+
+export type ExtensionAction = "install" | "update" | "start" | "stop";
+
+// An action running, or the last one run, on an extension; output is its last 16 KB.
+export interface ExtensionJob {
+  action: ExtensionAction;
+  state: "running" | "done" | "failed";
+  started_at: string;
+  finished_at?: string;
+  error?: string;
+  output: string;
+}
+
+// GET|PUT|DELETE /settings/meko-cloud: the Meko Cloud link the extensions use (never its key).
+export interface MekoCloud {
+  // Set once, linked or unlinked.
+  set: boolean;
+  // A key is saved, and the extensions use this link.
+  linked: boolean;
+  // The MCP server as set; "" is Meko Cloud's.
+  url: string;
+  web_url: string;
+  api_url: string;
+  effective_url: string;
+  // Null when it can't be worked out (another server with no web app URL set).
+  effective_web_url: string | null;
+  effective_api_url: string | null;
+  // The key's last four characters, "" for a short key, null with none.
+  key_hint: string | null;
+  default_url: string;
+  default_web_url: string;
+}
+
+// PUT /settings/meko-cloud: a field left out is unchanged; an empty api_key keeps the saved one.
+export interface MekoCloudUpdate {
+  url?: string;
+  web_url?: string;
+  api_url?: string;
+  api_key?: string;
 }

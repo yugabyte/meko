@@ -68,12 +68,14 @@ type webListener struct {
 	asked   map[string]time.Time       // when a handoff was last tried for a socket a request needed
 	warned  map[string]string          // the last handoff failure logged for an extension, logged once
 	proxied map[string]*extproxy.Proxy // one proxy per extension, kept for its WebSockets
+	// jobs are the Extensions page's actions, kept across the servers Run builds.
+	jobs *server.ExtensionJobs
 }
 
 func newWebListener(l paths.Layout, st *store.Store, lg *login.Service, log *slog.Logger) *webListener {
 	return &webListener{l: l, st: st, login: lg, log: log, sockets: map[string]string{},
 		handed: map[string]bool{}, asked: map[string]time.Time{}, warned: map[string]string{},
-		proxied: map[string]*extproxy.Proxy{}}
+		proxied: map[string]*extproxy.Proxy{}, jobs: server.NewExtensionJobs()}
 }
 
 // socket is where an extension listens. An extension registered since the server started (meko
@@ -267,6 +269,16 @@ func (w *webListener) Proxies() []*extproxy.Proxy {
 		out = append(out, w.proxied[name])
 	}
 	return out
+}
+
+// notify tells each running extension with a web UI that what changed (extproxy.Notify), one at a
+// time; a failure is logged, never the change itself.
+func (w *webListener) notify(ctx context.Context, what string) {
+	for _, p := range w.Proxies() {
+		if err := p.Notify(ctx, what); err != nil {
+			w.log.Warn("couldn't tell an extension of a change", "extension", p.Name, "what", what, "error", err)
+		}
+	}
 }
 
 // watchHandoffs asks the extensions that couldn't hand over yet again every webRetry, and closes the
