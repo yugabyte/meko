@@ -40,7 +40,7 @@ export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputEleme
   return (
     <input
       className={cx(
-        "h-9 w-full rounded-lg border bg-card px-3 text-sm outline-none placeholder:text-muted-foreground focus:border-primary",
+        "h-9 w-full rounded-lg border bg-card px-3 text-base outline-none sm:text-sm placeholder:text-muted-foreground focus:border-primary",
         className,
       )}
       {...rest}

@@ -25,7 +25,7 @@ export function Dialog({
       <div
         role="dialog"
         aria-label={title}
-        className="w-full max-w-md rounded-lg border bg-card shadow-xl"
+        className="flex max-h-[90dvh] w-full max-w-md flex-col rounded-lg border bg-card shadow-xl"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b px-4 py-3">
@@ -34,7 +34,7 @@ export function Dialog({
             <X className="size-4" />
           </Button>
         </div>
-        <div className="space-y-3 p-4">{children}</div>
+        <div className="min-h-0 space-y-3 overflow-y-auto p-4">{children}</div>
         <div className="flex justify-end gap-2 border-t px-4 py-3">{actions}</div>
       </div>
     </div>

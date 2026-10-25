@@ -79,7 +79,7 @@ export function QualityWindowCard({ d }: { d: Derived }) {
   }
   return (
     <MetricCard title={title} subtitle={subtitle}>
-      <div className="flex gap-6">
+      <div className="flex flex-wrap gap-x-6 gap-y-3">
         <BigStat value={`${Math.round(100 * d.qualityScore)}%`} label="High or mid matches" />
         <div className="w-px bg-border" />
         <BigStat value={`${(100 * d.windowUsed).toFixed(1)}%`} label={`of a ${formatTokens(CONTEXT_WINDOW)} window`} />
