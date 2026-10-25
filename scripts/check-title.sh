@@ -1,7 +1,7 @@
 #!/bin/sh
 # Checks a commit subject or PR title against the repo's title rules:
 #
-#   <type>(<component>[/<area>])[!]: <summary>
+#   <type>(<component>[/<area>][,<component>[/<area>]...])[!]: <summary>
 #
 #   scripts/check-title.sh [--no-length] "<title>"
 #
@@ -17,8 +17,11 @@ set -eu
 TYPES='feat|fix|perf|deps|ci|test|docs|nit|chore'
 RELEASE='feat|fix|perf|deps'
 # The components a title names: agentk (extensions/agentk), meko (Meko, in backend/), presenter
-# (extensions/presenter) and repo (the shared root), with an optional area after a slash. Each but repo is a component of
-# scripts/ci-scope.sh too (test/unit/check-title.test.ts checks; meko is backend there).
+# (extensions/presenter) and repo (the shared root), with an optional area after a slash. A change
+# that ships in more than one names each, comma-separated (feat(agentk,meko): ...), and releases
+# every product it names (scripts/release/product.sh; presenter has no release train yet). Each but
+# repo is a component of scripts/ci-scope.sh too (test/unit/check-title.test.ts checks; meko is
+# backend there).
 COMPONENTS='agentk|meko|presenter|repo'
 MAX=72
 
@@ -39,6 +42,7 @@ fail() {
   {
     printf 'Bad title: %s\n  %s\n\n' "$title" "$1"
     printf 'Format: <type>(<component>[/<area>])[!]: <summary>\n'
+    printf '  or, for a change in more than one: <type>(<component>[/<area>],<component>[/<area>])[!]: <summary>\n'
     printf 'Types: %s (feat, fix, perf and deps release)\n' "$(list "$TYPES")"
     printf 'Components: %s\n' "$(list "$COMPONENTS")"
     printf 'Area: optional, lowercase letters, digits and dashes, e.g. fix(agentk/web): ...\n'
@@ -68,14 +72,30 @@ printf '%s\n' "$rest" | grep -qE '^\([^()]*\)!?$' ||
   fail "Bad component \"$rest\". Put it in parentheses right after the type, then an optional !."
 scope=${rest#(}
 scope=${scope%%)*}
-component=${scope%%/*}
-printf '%s\n' "$component" | grep -qE "^($COMPONENTS)\$" ||
-  fail "Unknown component \"$component\". Use one of the list below, with an optional area after a slash."
 case $scope in
-  */*) area=${scope#*/}
-    printf '%s\n' "$area" | grep -qE '^[a-z0-9-]+$' ||
-      fail "Bad area \"$area\". Use one level of lowercase letters, digits and dashes." ;;
+  *,*) case $scope in
+      ,* | *, | *,,* | *' '*) fail "Bad component list \"$scope\". Separate the components with a comma and no spaces, e.g. feat(agentk,meko): ..." ;;
+    esac ;;
 esac
+# Each comma-separated part is <component>[/<area>], and names a component once.
+parts=$scope,
+seen=,
+while [ -n "$parts" ]; do
+  part=${parts%%,*}
+  parts=${parts#*,}
+  component=${part%%/*}
+  printf '%s\n' "$component" | grep -qE "^($COMPONENTS)\$" ||
+    fail "Unknown component \"$component\". Use one of the list below, with an optional area after a slash."
+  case $seen in
+    *",$component,"*) fail "Component \"$component\" is named twice. Name each component once, with at most one area." ;;
+  esac
+  seen=$seen$component,
+  case $part in
+    */*) area=${part#*/}
+      printf '%s\n' "$area" | grep -qE '^[a-z0-9-]+$' ||
+        fail "Bad area \"$area\". Use one level of lowercase letters, digits and dashes." ;;
+  esac
+done
 case $rest in
   *!) printf '%s\n' "$type" | grep -qE "^($RELEASE)\$" ||
     fail "\"$type\" doesn't release, so it can't be breaking (!). Breaking changes ship: use feat, fix, perf or deps." ;;

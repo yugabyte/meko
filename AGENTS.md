@@ -28,7 +28,8 @@ from the extension's folder) and which docs to keep current. Meko's own Go backe
 - **Commits and PR titles** are `<type>(<component>[/<area>])[!]: <summary>` with one of nine
   types and one of the repo's components: `agentk` (`extensions/agentk`), `meko` (Meko, in
   `backend/`), `presenter` (`extensions/presenter`) or `repo` (the shared root), e.g.
-  `fix(agentk/web): …`. They're
+  `fix(agentk/web): …`. A change that ships in more than one names each, comma-separated, and
+  releases each product it names: `feat(agentk,meko): …`. They're
   checked by `sh scripts/check-title.sh "<title>"` and the `PR title` workflow. Follow the commit
   skill (`.claude/skills/commit/SKILL.md`). PRs are squash-merged, so the PR title is the subject.
 - **Changes reach `main` only through PRs** that pass the `CI gate` and `PR title` checks. A PR

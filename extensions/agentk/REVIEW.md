@@ -359,6 +359,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       docs are a major finding. Screenshots in `docs/screenshots/` are retaken separately, not
       with every UI change, so don't flag a change for leaving them out of date.
 - [ ] The PR title (the squash-merge commit subject) passes the repo root's `scripts/check-title.sh`, its component
-      names where the change is (`agentk` for AgentK, `repo` for root-only changes), and its type
+      names where the change is (`agentk` for AgentK, `repo` for root-only changes, a list such as
+      `agentk,meko` only when the change ships in each, since it releases each), and its type
       fits the whole change: `feat`/`fix`/`perf`/`deps` ship a release, `ci`/`test`/`docs`/`nit`/
       `chore` don't. Comment-only changes are `nit`. The `PR title` workflow checks the format, not the type or which component fits.

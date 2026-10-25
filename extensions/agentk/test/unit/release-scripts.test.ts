@@ -58,6 +58,8 @@ describe('release-notes.sh', () => {
     commit('fix(repo): a release script');
     commit('feat(meko/cli)!: a Meko command');
     commit('feat(presenter/web): a Presenter page');
+    commit('fix(meko): a Meko fix');
+    commit('feat(meko,presenter): a Meko and Presenter change');
     const r = run('release-notes.sh', ['--product', 'agentk']);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('- agentk/web: stop clipping the rail');
@@ -74,6 +76,26 @@ describe('release-notes.sh', () => {
     expect(r.stdout).toContain('### Breaking changes\n\n- fix(meko/engine)!: reload the model\n');
     expect(r.stdout).toContain('### Fixes\n\n- meko/engine: reload the model');
     expect(r.stdout).not.toMatch(/AgentK feature|first/);
+  });
+
+  it('releases a subject that names both components on both trains', () => {
+    commit('feat(agentk/meko,meko/cli): move the home into Meko');
+    commit('fix(repo,meko): a shared script');
+    commit('perf(meko/engine,agentk): load faster');
+    // Lookalikes of meko, alone and in a list, aren't Meko's.
+    commit('fix(mekoish): an old free-form component');
+    commit('fix(agentk,mekoish): a lookalike last in a list');
+    commit('fix(mekoish/area,repo): a lookalike first in a list');
+    for (const product of ['agentk', 'meko']) {
+      const r = run('release-notes.sh', ['--product', product]);
+      expect(r.status, product).toBe(0);
+      expect(r.stdout, product).toContain('### Features\n\n- agentk/meko,meko/cli: move the home into Meko');
+      expect(r.stdout, product).toContain('- repo,meko: a shared script');
+      expect(r.stdout, product).toContain('### Performance\n\n- meko/engine,agentk: load faster');
+    }
+    expect(run('release-notes.sh', ['--product', 'meko']).stdout).not.toContain('mekoish');
+    const agentk = run('release-notes.sh', ['--product', 'agentk']).stdout;
+    for (const s of ['- mekoish: ', '- agentk,mekoish: ', '- mekoish/area,repo: ']) expect(agentk).toContain(s);
   });
 });
 

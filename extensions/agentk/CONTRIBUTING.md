@@ -62,7 +62,8 @@ Commit subjects and PR titles are `<type>(<component>[/<area>])[!]: <summary>`, 
 The component names the part of the repo: `agentk` for AgentK, `meko` for Meko
 (`backend/`), `presenter` for Presenter (`extensions/presenter`, whose subjects release nothing yet),
 `repo` for the shared root (CI, `scripts/`, root docs). An optional area follows a
-slash (`fix(agentk/web): …`). `!` marks a breaking change, and only on a releasing type
+slash (`fix(agentk/web): …`). A change that ships in more than one component names each,
+comma-separated (`feat(agentk,meko): …`), and releases both products. `!` marks a breaking change, and only on a releasing type
 (`feat(agentk)!: …`, `deps(agentk)!: …`). PRs are squash-merged with the
 PR title as the commit subject, so the title is what the release workflow reads: pick the type
 for the PR as a whole. Check a subject or title with `sh scripts/check-title.sh "<title>"` from the
@@ -95,8 +96,10 @@ sorts higher.
 1. Squash-merge a PR into `main`. If there are `feat`, `fix`, `perf` or `deps` commits since the last release tag, the
    AgentK release workflow (`.github/workflows/agentk-release.yml`) runs the tests, picks the next version with
    the repo root's `scripts/release/next-version.sh --product agentk`, and writes notes with
-   `scripts/release/release-notes.sh --product agentk`. Only AgentK's subjects count: Meko's
-   (`feat(meko/…)` and the like) release Meko instead, from its own workflow. Pushes with only
+   `scripts/release/release-notes.sh --product agentk`. Only AgentK's subjects count: those naming only Meko
+   (`feat(meko/…)` and the like) release Meko instead, from its own workflow, those naming only
+   Presenter (`presenter`, alone or with `meko`) release nothing here, and those naming both
+   AgentK and Meko (`feat(agentk,meko): …`) release both. Pushes with only
    `ci`/`test`/`docs`/`nit`/`chore` commits don't release. The notes list features, fixes,
    performance and dependency changes.
 2. It builds self-contained tarballs in an AlmaLinux 8 container (glibc 2.28, so they run on
