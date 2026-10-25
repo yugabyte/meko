@@ -70,3 +70,11 @@
     @apply bg-background text-foreground font-sans antialiased;
   }
 }
+
+/* A row that scrolls sideways on a phone (tabs, segmented options) without a scrollbar. */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}

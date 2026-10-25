@@ -17,7 +17,7 @@ export function StatPairCard({
 }) {
   return (
     <MetricCard title={title} subtitle={subtitle}>
-      <div className="flex gap-6">
+      <div className="flex flex-wrap gap-x-6 gap-y-3">
         {stats.map(([value, label], i) => (
           <div key={label} className="flex gap-6">
             {i > 0 && <div className="w-px bg-border" />}

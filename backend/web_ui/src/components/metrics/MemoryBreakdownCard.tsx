@@ -31,7 +31,7 @@ export function MemoryBreakdownCard({
   ];
   return (
     <MetricCard title={title} subtitle={subtitle}>
-      <div className="flex gap-6">
+      <div className="flex flex-wrap gap-x-6 gap-y-3">
         <BigStat value={count(total)} label="Total memories" />
         <div className="w-px bg-border" />
         <BigStat value={`${pct(promoted, total)}%`} label="Shared" />

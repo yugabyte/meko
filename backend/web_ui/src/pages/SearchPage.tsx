@@ -36,7 +36,7 @@ const isWeak = (m: MemoryHit) => (memorySimilarity(m) ?? 1) < WEAK_MEMORY;
 function MemoryCard({ m }: { m: MemoryHit }) {
   return (
     <Card className="flex items-start justify-between gap-4 p-3">
-      <p className="text-sm">{m.memory}</p>
+      <p className="min-w-0 break-words text-sm">{m.memory}</p>
       <div className="shrink-0 text-right text-xs text-muted-foreground">
         <Similarity value={memorySimilarity(m)} />
         <div className="mt-1">{timeAgo(m.created_at)}</div>

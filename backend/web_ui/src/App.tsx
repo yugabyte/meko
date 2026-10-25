@@ -1,8 +1,9 @@
 // The app shell, once the gate (Gate.tsx) let this browser in: loads the datapacks, and shows the
-// open datapack's tab, or the Status, Extensions, Meko Cloud or Account page, beside the sidebar.
+// open datapack's tab, or the Status, Extensions, Meko Cloud or Account page, beside the sidebar (on
+// a phone, a drawer opened from the top bar).
 
 import { useCallback, useEffect, useState } from "react";
-import { Database } from "lucide-react";
+import { Database, Menu } from "lucide-react";
 import { api } from "./lib/api";
 import { href, navigate, useRoute } from "./lib/route";
 import { applyTheme, initialTheme, type Theme } from "./lib/theme";
@@ -11,8 +12,8 @@ import { useLoad } from "./lib/useLoad";
 import { useShortcuts } from "./lib/useShortcuts";
 import { DatapackHeader } from "./components/DatapackHeader";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { Sidebar } from "./components/Sidebar";
-import { Empty, ErrorNote, Loading } from "./components/ui";
+import { Logo, Sidebar } from "./components/Sidebar";
+import { Button, Empty, ErrorNote, Loading } from "./components/ui";
 import { ConnectPage } from "./pages/ConnectPage";
 import { ConversationsPage } from "./pages/ConversationsPage";
 import { ExtensionsPage } from "./pages/ExtensionsPage";
@@ -26,6 +27,9 @@ import { OverviewPage } from "./pages/OverviewPage";
 import { SearchPage } from "./pages/SearchPage";
 import { StatusPage } from "./pages/StatusPage";
 
+// A page's padding: tighter on a phone.
+const PAGE = "p-4 sm:p-8";
+
 export default function App({ auth, onAuthChanged }: { auth: AuthStatus; onAuthChanged: () => void }) {
   const [theme, setTheme] = useState<Theme>(initialTheme);
   useEffect(() => applyTheme(theme), [theme]);
@@ -38,12 +42,19 @@ export default function App({ auth, onAuthChanged }: { auth: AuthStatus; onAuthC
 
   useShortcuts(activeId);
 
+  // The phone drawer closes whenever the page changes.
+  const [menu, setMenu] = useState(false);
+  const at = href(route);
+  useEffect(() => setMenu(false), [at]);
+
   const reloadCurrent = current.reload;
   const onChanged = useCallback(() => reloadCurrent(), [reloadCurrent]);
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex h-dvh overflow-hidden">
       <Sidebar
+        open={menu}
+        onClose={() => setMenu(false)}
         datapacks={list.data ?? []}
         activeId={route.view ? undefined : activeId}
         view={route.view}
@@ -57,13 +68,19 @@ export default function App({ auth, onAuthChanged }: { auth: AuthStatus; onAuthC
         }}
       />
       <main className="flex min-w-0 flex-1 flex-col overflow-y-auto">
-        <ErrorBoundary key={href(route)}>
+        <div className="sticky top-0 z-30 flex items-center gap-2 border-b bg-sidebar px-2 py-2 md:hidden">
+          <Button variant="ghost" onClick={() => setMenu(true)} aria-label="Open menu">
+            <Menu className="size-5" />
+          </Button>
+          <Logo theme={theme} />
+        </div>
+        <ErrorBoundary key={at}>
           {route.view === "status" ? (
-            <div className="p-8">
+            <div className={PAGE}>
               <StatusPage />
             </div>
           ) : route.view === "extensions" ? (
-            <div className="p-4 sm:p-8">
+            <div className={PAGE}>
               <ExtensionsPage />
             </div>
           ) : route.view === "meko-cloud" ? (
@@ -71,13 +88,13 @@ export default function App({ auth, onAuthChanged }: { auth: AuthStatus; onAuthC
               <MekoCloudPage />
             </div>
           ) : route.view === "account" ? (
-            <div className="p-4 sm:p-8">
+            <div className={PAGE}>
               <AccountPage auth={auth} onChanged={onAuthChanged} />
             </div>
           ) : list.loading && !list.data ? (
             <Loading />
           ) : list.error ? (
-            <div className="p-8">
+            <div className={PAGE}>
               <ErrorNote error={list.error} />
             </div>
           ) : !activeId ? (
@@ -85,7 +102,7 @@ export default function App({ auth, onAuthChanged }: { auth: AuthStatus; onAuthC
               Create one with the + beside Datapacks.
             </Empty>
           ) : current.error ? (
-            <div className="p-8">
+            <div className={PAGE}>
               <ErrorNote error={current.error} />
             </div>
           ) : !current.data ? (
@@ -104,7 +121,7 @@ export default function App({ auth, onAuthChanged }: { auth: AuthStatus; onAuthC
                   navigate({ tab: "overview" });
                 }}
               />
-              <div className="p-8">
+              <div className={PAGE}>
                 {route.tab === "overview" && <OverviewPage datapack={current.data} />}
                 {route.tab === "analytics" && <AnalyticsPage datapack={current.data} onChanged={onChanged} />}
                 {route.tab === "search" && <SearchPage datapack={current.data} />}

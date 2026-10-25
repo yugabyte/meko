@@ -100,7 +100,7 @@ export function MemoriesPage({
           <Card className="divide-y">
             {promoted.data.promoted_memories.map((m) => (
               <div key={m.id} className="group flex items-start justify-between gap-4 p-3">
-                <p className="text-sm">{m.data}</p>
+                <p className="min-w-0 break-words text-sm">{m.data}</p>
                 <div className="flex shrink-0 items-center gap-2">
                   <span className="text-xs text-muted-foreground">{timeAgo(m.created_at)}</span>
                   <Button
@@ -148,7 +148,7 @@ export function MemoriesPage({
                   onChange={() => setSelected(toggle(selected, m.id))}
                 />
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm">{m.data}</p>
+                  <p className="min-w-0 break-words text-sm">{m.data}</p>
                   <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                     <Badge>{m.agent_id}</Badge>
                     {timeAgo(m.created_at)}
