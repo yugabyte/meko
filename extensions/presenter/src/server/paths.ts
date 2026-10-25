@@ -91,7 +91,7 @@ export function presenterHome(env: NodeJS.ProcessEnv = process.env): string {
 
 export interface Paths {
   home: string;
-  /** Settings: the Meko Cloud URL and key, when there's no Meko on this computer to ask. */
+  /** Where an older Presenter kept a Meko URL and key; install removes them (Meko's link is used instead). */
   config: string;
   run: string;
   /** The server's only listener: Meko's web listener serves it to browsers at /ext/presenter/. */

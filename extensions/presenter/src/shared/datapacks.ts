@@ -13,6 +13,24 @@ export interface DatapackRow {
   description: string;
 }
 
+/**
+ * The Meko a deck's datapack is in: the one on this computer, or the one Meko links to (Meko Cloud),
+ * named by its MCP host. A deck's id is its datapack's, so it exists only there.
+ */
+export interface MekoAt {
+  kind: 'local' | 'cloud';
+  host: string;
+}
+
+export function sameMeko(a: MekoAt, b: MekoAt): boolean {
+  return a.kind === b.kind && (a.kind === 'local' || a.host === b.host);
+}
+
+/** A Meko as the pages name it: "Meko Cloud (host)", or "the Meko on this computer". */
+export function mekoLabel(at: MekoAt): string {
+  return at.kind === 'cloud' ? `Meko Cloud (${at.host})` : 'the Meko on this computer';
+}
+
 export interface DatapackGroups {
   content: DatapackRow[];
   templates: DatapackRow[];

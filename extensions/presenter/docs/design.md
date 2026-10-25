@@ -27,7 +27,29 @@ flowchart TB
   API --> D
   J --> AL
   D --> AL
+  J -.->|"when Meko links it"| MC["Meko Cloud\nMCP and REST, on two hosts"]
+  D -.-> MC
 ```
+
+## Which Meko
+
+Presenter keeps no Meko URL or key. It asks `meko token --json` (`src/server/meko.ts`), which
+answers whether or not Meko's server runs:
+
+| Meko says | Presenter uses |
+|---|---|
+| `cloud` linked (`url`, `api_key`) | Meko Cloud: MCP at `cloud.url`, REST at `cloud.api_url` (another host than the MCP one), the link's key |
+| `cloud` unlinked or never set, or no `cloud` (a Meko from before the link) | The Meko on this computer: its `url` and `token`, REST at the same origin's `/api/v1` |
+| `cloud.error`, or `meko` failed or is gone, after a link was read | The link last read, kept in memory only, so a slow `meko` or a locked Keychain never moves decks |
+
+When the link changes, Meko posts `{"what":"cloud"}` to `/_meko/changed` on Presenter's socket; the
+client drops its connection and conversation, and the next call finds Meko again. Claude's runs
+get the same Meko's URL and key (the key through `PRESENTER_MEKO_KEY`). A deck's id is its
+datapack's, which exists in one Meko only, so each draft records the Meko it belongs to (one from
+before this takes the Meko it's next opened under). The decks list shows another Meko's drafts
+greyed out. Editing, saving and Claude's jobs refuse them, while a run of one plays on, so a talk
+under way outlives a change of the link. The decks page says where decks are saved. An older
+Presenter's `config.json` key is removed at install.
 
 ## The deck
 
@@ -143,6 +165,8 @@ files. A build from source has no launcher and no record, and Meko never updates
 | Pieces under Meko's artifact limit | Decks of any size; only changes go up; never half-saved | One `deck.json`; knowledge files (indexed for search) |
 | Meko installs and updates the releases; no installer or updater of Presenter's | Meko already stages, checks, switches and rolls back its own releases (`internal/update`); one place does it | An `install.sh` per release and a `presenter update` |
 | AgentK's launcher rollback, on Meko's records | A release that can't start goes back to the one before by itself, and Meko never offers it again | No rollback; Meko watching the start itself |
+| Meko's Meko Cloud link, read from `meko token --json` and followed on Meko's notice | One place links Meko Cloud for every extension; the REST host comes from Meko, since Meko Cloud's isn't the MCP one | A key in Presenter's own `config.json`; the REST base worked out from the MCP URL |
+| Drafts name their Meko; another Meko's can be played, not edited | A deck's datapack exists in one Meko only; a talk under way outlives a change of the link | Hiding such drafts; letting their save fail with Meko's "not found" |
 | One build job packages every platform | No native modules: only the bundled Node differs | AgentK's per-platform builds (needed for node-pty) |
 
 ## Not built yet

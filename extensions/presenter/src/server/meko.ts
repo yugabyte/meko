@@ -1,15 +1,15 @@
 // Presenter's door to Meko: datapacks and artifacts, through Meko's MCP tools, and the artifact list
 // through its REST route (artifact_get only takes a hash, so finding the newest deck.json needs the
-// list). The credentials are Presenter's own config (Meko Cloud), else the Meko on this computer.
+// list). Which Meko is Meko's to say: its Meko Cloud link when linked, else the Meko on this computer,
+// both from `meko token --json` (Meko's docs/cloud.md).
 
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import type { DatapackRow } from '../shared/datapacks.js';
+import type { DatapackRow, MekoAt } from '../shared/datapacks.js';
 import { mekoDirOf, withLocalBin, type Paths } from './paths.js';
 
 export const AGENT_ID = 'presenter';
@@ -49,6 +49,8 @@ export interface ArtifactRow {
 export interface MekoPort {
   /** Whether Meko can be reached now. */
   status(): Promise<'ready' | 'none' | 'failed'>;
+  /** Which Meko Presenter uses (found even when it can't be reached), or null when there's none. */
+  at(): Promise<MekoAt | null>;
   listDatapacks(): Promise<DatapackRow[]>;
   createDatapack(name: string, description: string): Promise<DatapackRow>;
   /** Saves bytes and returns the SHA-256 Meko keeps them under. The same bytes are kept once. */
@@ -63,60 +65,110 @@ export interface MekoCreds {
   /** Meko's MCP URL: http://127.0.0.1:7778/mcp, or Meko Cloud's. */
   url: string;
   key: string;
+  /** Meko's REST API base: <origin>/api/v1 here, the link's own for Meko Cloud (another host). */
+  apiUrl: string;
+  /** The Meko on this computer, or the one Meko links to (Meko Cloud). */
+  kind: MekoAt['kind'];
 }
 
-export interface PresenterConfig {
-  meko?: { url?: string; key?: string };
+export interface Found {
+  state: 'ready' | 'none' | 'failed';
+  creds: MekoCreds | null;
 }
 
-export function loadConfig(paths: Paths): PresenterConfig {
-  if (!existsSync(paths.config)) return {};
-  try {
-    return JSON.parse(readFileSync(paths.config, 'utf8')) as PresenterConfig;
-  } catch {
-    return {};
-  }
+/** Meko's Meko Cloud link: linked, `url` and `apiKey` are set; unlinked (or never set), they're ''. */
+export interface CloudLink {
+  url: string;
+  apiKey: string;
+  apiUrl: string;
 }
 
 /**
- * The Meko on this computer, as `meko token --json` reports it (`meko` on PATH or in ~/.local/bin),
- * for the data folder this home is in. Null when there's no `meko`, it isn't running, or it failed.
+ * What `meko token --json` said. `running`/`stopped`: the Meko on this computer, with its URL and
+ * token when it runs. `none`: no `meko`. `failed`: `meko` failed, took too long, or printed something
+ * else. `cloud` is undefined from a Meko too old to keep a link, and when Meko couldn't read it
+ * (`cloudUnreadable`).
  */
-export function localMeko(paths: Paths, env: NodeJS.ProcessEnv = process.env): Promise<{ state: 'ready' | 'none' | 'failed'; creds: MekoCreds | null }> {
+export interface MekoProbe {
+  state: 'running' | 'stopped' | 'none' | 'failed';
+  local: { url: string; token: string } | null;
+  cloud?: CloudLink;
+  cloudUnreadable?: true;
+}
+
+const str = (v: unknown) => (typeof v === 'string' ? v : '');
+const HTTP = /^https?:\/\//;
+
+/** Meko's `cloud`, or undefined when it isn't one (an older Meko has none) or Meko couldn't read it. */
+export function cloudOf(v: unknown): CloudLink | undefined {
+  if (!v || typeof v !== 'object' || typeof (v as { set?: unknown }).set !== 'boolean' || (v as { error?: unknown }).error) return undefined;
+  const c = v as Record<string, unknown>;
+  const url = HTTP.test(str(c.url)) ? str(c.url) : '';
+  const apiKey = url ? str(c.api_key) : '';
+  const apiUrl = apiKey && HTTP.test(str(c.api_url)) ? str(c.api_url) : '';
+  return { url: apiKey ? url : '', apiKey, apiUrl };
+}
+
+/** Meko's REST API base on the MCP URL's own origin, as the Meko on this computer serves it. */
+export function apiUrlOf(mcpUrl: string): string {
+  return `${new URL(mcpUrl).origin}/api/v1`;
+}
+
+/**
+ * Asks `meko token --json` (`meko` on PATH or in ~/.local/bin) about the data folder this home is in.
+ * Meko answers it while its server is stopped too, and keeps its token and the link's key in the
+ * Keychain on macOS, so Presenter asks rather than read its files.
+ */
+export function probeMeko(paths: Paths, env: NodeJS.ProcessEnv = process.env): Promise<MekoProbe> {
   const mekoDir = mekoDirOf(paths.home);
   const run = { ...env, PATH: withLocalBin(env.PATH ?? '', env.HOME || homedir()), ...(mekoDir ? { MEKO_HOME: mekoDir } : {}) };
   return new Promise((resolve) => {
     execFile('meko', ['token', '--json'], { env: run, timeout: 5000, encoding: 'utf8' }, (err, stdout) => {
-      if (err) return resolve({ state: (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'none' : 'failed', creds: null });
+      if (err) return resolve({ state: (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'none' : 'failed', local: null });
       try {
-        const r = JSON.parse(stdout) as { url?: unknown; token?: unknown; running?: unknown };
-        if (typeof r.url !== 'string' || typeof r.token !== 'string' || !r.token) return resolve({ state: 'failed', creds: null });
-        resolve(r.running === true ? { state: 'ready', creds: { url: r.url, key: r.token } } : { state: 'none', creds: null });
+        const r = JSON.parse(stdout) as { url?: unknown; token?: unknown; running?: unknown; cloud?: unknown };
+        if (typeof r.url !== 'string' || !HTTP.test(r.url) || typeof r.token !== 'string' || !r.token) return resolve({ state: 'failed', local: null });
+        const cloud = cloudOf(r.cloud);
+        const unreadable = !!r.cloud && typeof r.cloud === 'object' && !!(r.cloud as { error?: unknown }).error;
+        resolve({
+          ...(r.running === true ? { state: 'running' as const, local: { url: r.url, token: r.token } } : { state: 'stopped' as const, local: null }),
+          ...(cloud ? { cloud } : {}),
+          ...(unreadable ? { cloudUnreadable: true as const } : {}),
+        });
       } catch {
-        resolve({ state: 'failed', creds: null });
+        resolve({ state: 'failed', local: null });
       }
     });
   });
 }
 
-/** Whether a Meko URL is the Meko on this computer, whose URL and key `meko token --json` gives. */
-export function isLoopback(url: string): boolean {
-  try {
-    return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(url).hostname);
-  } catch {
-    return false;
-  }
+/**
+ * Finds Meko's URL and key each time it's called: Meko's Meko Cloud link when linked, else the Meko
+ * on this computer. A read that couldn't ask `meko`, or whose link Meko couldn't read, keeps the link
+ * last read (in memory only), so a slow `meko` or a locked Keychain doesn't move decks to another
+ * Meko. A Meko too old to keep a link means the Meko on this computer.
+ */
+export function mekoFinder(probe: () => Promise<MekoProbe>): () => Promise<Found> {
+  let last: CloudLink | undefined;
+  return async () => {
+    const p = await probe();
+    const keep = !p.cloud && (p.cloudUnreadable || p.state === 'none' || p.state === 'failed');
+    last = keep ? last : p.cloud;
+    if (last?.url && last.apiKey) return { state: 'ready', creds: { url: last.url, key: last.apiKey, apiUrl: last.apiUrl || apiUrlOf(last.url), kind: 'cloud' } };
+    if (p.local) return { state: 'ready', creds: { url: p.local.url, key: p.local.token, apiUrl: apiUrlOf(p.local.url), kind: 'local' } };
+    return { state: p.state === 'failed' ? 'failed' : 'none', creds: null };
+  };
 }
 
-/**
- * Meko's URL and key: config.json's (Meko Cloud), else the Meko on this computer as `meko token
- * --json` reports it now. A copy of the local Meko's pair in config.json isn't used: it goes stale
- * when Meko moves to another port or makes a new client token.
- */
-export function findMeko(paths: Paths, env: NodeJS.ProcessEnv = process.env): Promise<{ state: 'ready' | 'none' | 'failed'; creds: MekoCreds | null }> {
-  const cfg = loadConfig(paths).meko;
-  if (cfg?.url && cfg.key && !isLoopback(cfg.url)) return Promise.resolve({ state: 'ready', creds: { url: cfg.url, key: cfg.key } });
-  return localMeko(paths, env);
+/** Which Meko some credentials reach, as the pages and the drafts name it. */
+export function atOf(creds: MekoCreds): MekoAt {
+  return { kind: creds.kind, host: new URL(creds.url).host };
+}
+
+/** A refusal of Meko Cloud's key, which only linking again fixes. */
+function refusedKey(status: number | undefined, creds: MekoCreds): MekoError | null {
+  return creds.kind === 'cloud' && (status === 401 || status === 403)
+    ? new MekoError("Meko Cloud refused the key: link it again in Meko's Settings › Meko Cloud.") : null;
 }
 
 type Json = Record<string, unknown>;
@@ -125,13 +177,45 @@ const HASH = /^[0-9a-f]{64}$/;
 /** Meko over MCP and REST, with credentials found again when a connection fails. */
 export class MekoClient implements MekoPort {
   private client: Client | null = null;
+  /** What the last find gave, connected or not. */
   private creds: MekoCreds | null = null;
   private conversation: string | null = null;
+  /** Counts reset()s, so a connection made for the Meko before one isn't kept. */
+  private gen = 0;
 
-  constructor(private find: () => Promise<{ state: 'ready' | 'none' | 'failed'; creds: MekoCreds | null }>, private version: string) {}
+  constructor(private find: () => Promise<Found>, private version: string) {}
 
   static forPaths(paths: Paths, version: string): MekoClient {
-    return new MekoClient(() => findMeko(paths), version);
+    return new MekoClient(mekoFinder(() => probeMeko(paths)), version);
+  }
+
+  /** Which Meko it found last, connected or not: a dropped connection doesn't hold up an edit to reconnect. */
+  async at(): Promise<MekoAt | null> {
+    if (!this.creds) await this.connect().catch(() => undefined);
+    return this.creds ? atOf(this.creds) : null;
+  }
+
+  /** The credentials of the Meko Presenter uses now, for Claude's runs; null when it can't be reached. */
+  async current(): Promise<MekoCreds | null> {
+    try {
+      await this.connect();
+      return this.creds;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Forgets the Meko it found (Meko's link changed): the next call finds it again. The conversation
+   * id belongs to the old Meko, so it goes too.
+   */
+  reset(): void {
+    const c = this.client;
+    this.client = null;
+    this.creds = null;
+    this.conversation = null;
+    this.gen++;
+    void c?.close().catch(() => undefined);
   }
 
   async status(): Promise<'ready' | 'none' | 'failed'> {
@@ -145,25 +229,38 @@ export class MekoClient implements MekoPort {
 
   private async connect(): Promise<Client> {
     if (this.client) return this.client;
+    const gen = this.gen;
     const found = await this.find();
+    if (gen !== this.gen) return this.connect();
+    this.creds = found.creds;
     if (!found.creds) {
       throw new MekoError(found.state === 'none'
         ? "Meko isn't running here: start it with meko start (or no Meko is installed)."
         : "Meko on this computer didn't answer: check meko status.");
     }
-    const transport = new StreamableHTTPClientTransport(new URL(found.creds.url), {
-      requestInit: { headers: { Authorization: `Bearer ${found.creds.key}` } },
+    const creds = found.creds;
+    const transport = new StreamableHTTPClientTransport(new URL(creds.url), {
+      requestInit: { headers: { Authorization: `Bearer ${creds.key}` } },
     });
     const c = new Client({ name: 'presenter', version: this.version });
-    await c.connect(transport, { timeout: 15000 });
+    try {
+      await c.connect(transport, { timeout: 15000 });
+    } catch (e) {
+      throw (e instanceof StreamableHTTPError && refusedKey(e.code, creds)) || e;
+    }
     c.onclose = () => {
       if (this.client === c) this.client = null;
     };
-    this.creds = found.creds;
+    // A reset() while it connected: this one is for the Meko before.
+    if (gen !== this.gen) {
+      void c.close().catch(() => undefined);
+      return this.connect();
+    }
     this.client = c;
     return c;
   }
 
+  /** Stops for good (the server is stopping). */
   async close(): Promise<void> {
     const c = this.client;
     this.client = null;
@@ -266,16 +363,18 @@ export class MekoClient implements MekoPort {
     return typeof r.content_base64 === 'string' ? new Uint8Array(Buffer.from(r.content_base64, 'base64')) : null;
   }
 
-  /** REST: GET /api/v1/datapacks/:id/artifacts?q=, every page, filtered to the exact filename. */
+  /**
+   * REST: GET <apiUrl>/datapacks/:id/artifacts?q=, every page, filtered to the exact filename. Meko
+   * on this computer serves Meko Cloud's routes and shapes, so only the base differs.
+   */
   async listArtifacts(datapackId: string, filename: string): Promise<ArtifactRow[]> {
     await this.connect();
     const creds = this.creds!;
-    const base = creds.url.replace(/\/mcp\/?$/, '');
     const out: ArtifactRow[] = [];
     for (let page = 1; page <= 100; page++) {
-      const url = `${base}/api/v1/datapacks/${encodeURIComponent(datapackId)}/artifacts?q=${encodeURIComponent(filename)}&page=${page}&page_size=200`;
+      const url = `${creds.apiUrl}/datapacks/${encodeURIComponent(datapackId)}/artifacts?q=${encodeURIComponent(filename)}&page=${page}&page_size=200`;
       const res = await fetch(url, { headers: { Authorization: `Bearer ${creds.key}` }, signal: AbortSignal.timeout(30000) });
-      if (!res.ok) throw new MekoError(`Meko's artifact list answered ${res.status}`);
+      if (!res.ok) throw refusedKey(res.status, creds) ?? new MekoError(`Meko's artifact list answered ${res.status}`);
       const body = (await res.json()) as { data?: { items?: Json[]; has_more?: boolean } };
       for (const a of body.data?.items ?? []) {
         if (a.filename !== filename) continue;

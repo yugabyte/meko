@@ -1,5 +1,6 @@
 import { Plus } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { mekoLabel } from '../../shared/datapacks.js';
 import type { DeckSummary, Health } from '../../shared/types.js';
 import { api } from '../api.js';
 import { Button, ErrorLine, Pill } from '../components/ui.js';
@@ -19,7 +20,10 @@ export function DecksPage() {
         <h1 className="text-2xl font-bold">Decks</h1>
         <Button variant="primary" onClick={() => navigate({ view: 'new' })}><Plus className="size-4" />New deck</Button>
       </div>
-      {health && health.meko !== 'ready' && <ErrorLine error="Presenter can't reach Meko: decks are saved in Meko datapacks, so start it with meko start." />}
+      {health && health.meko !== 'ready' && <ErrorLine error={health.mekoAt?.kind === 'cloud'
+        ? `Presenter can't reach ${mekoLabel(health.mekoAt)}, where decks are saved: check the link in Meko's Settings › Meko Cloud.`
+        : "Presenter can't reach Meko: decks are saved in Meko datapacks, so start it with meko start."} />}
+      {health?.meko === 'ready' && health.mekoAt && <p className="text-sm text-muted-foreground">Decks are saved in {mekoLabel(health.mekoAt)}.</p>}
       {health && !health.claude && <p className="rounded-md border bg-card px-3 py-2 text-sm text-muted-foreground">Claude Code isn't installed here: you can play and edit decks, and building them needs it.</p>}
       <ErrorLine error={error} />
       {!decks ? <p className="text-muted-foreground">Loading…</p> : decks.length === 0 ? (
@@ -31,12 +35,18 @@ export function DecksPage() {
         <ul className="divide-y rounded-lg border bg-card">
           {decks.map((d) => (
             <li key={d.id}>
-              <button type="button" className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-accent" onClick={() => navigate({ view: 'map', deck: d.id })}>
+              <button
+                type="button"
+                className="flex w-full items-center gap-3 px-4 py-3 text-left enabled:hover:bg-accent disabled:opacity-60"
+                disabled={!!d.elsewhere}
+                onClick={() => navigate({ view: 'map', deck: d.id })}
+              >
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium">{d.title}</span>
                   <span className="block truncate font-mono text-xs text-muted-foreground">{d.name}</span>
+                  {d.elsewhere && <span className="block text-xs text-muted-foreground">Saved in {mekoLabel(d.elsewhere)}. Link Meko to it again to open it.</span>}
                 </span>
-                {d.draft && <Pill tone="info">draft here</Pill>}
+                {d.draft && <Pill tone={d.elsewhere ? 'warn' : 'info'}>{d.elsewhere ? 'another Meko' : 'draft here'}</Pill>}
                 <span className="text-xs text-muted-foreground">{d.savedAt ? new Date(d.savedAt).toLocaleDateString() : ''}</span>
               </button>
             </li>

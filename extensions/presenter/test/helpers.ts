@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { DatapackRow } from '../src/shared/datapacks.js';
+import type { DatapackRow, MekoAt } from '../src/shared/datapacks.js';
 import { newDeck, emptyBrief, type Deck, type Scene, type Slide } from '../src/shared/deck.js';
 import { MekoError, type ArtifactRow, type MekoPort } from '../src/server/meko.js';
 
@@ -38,10 +38,16 @@ export class FakeMeko implements MekoPort {
   failAfter = Infinity;
   /** Hashes whose bytes come back wrong. */
   damaged = new Set<string>();
+  /** The Meko it stands for; set it to another to stand for Meko after its link changed. */
+  where: MekoAt | null = { kind: 'local', host: '127.0.0.1:7778' };
   private clock = Date.parse('2026-11-01T10:00:00Z');
 
   async status() {
     return 'ready' as const;
+  }
+
+  async at(): Promise<MekoAt | null> {
+    return this.where;
   }
 
   async listDatapacks(): Promise<DatapackRow[]> {

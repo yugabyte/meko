@@ -45,17 +45,19 @@ describe('the commands Meko runs', () => {
     expect(JSON.parse(r.out)).toEqual({ socket: getPaths(home).webSock, legacy: null });
   });
 
-  it('keeps a Meko Cloud URL and key, readable only by this user, and not the local Meko\'s', () => {
+  it.each([
+    ['removes a Meko URL and key an older Presenter kept, and the file with nothing else in it', { meko: { url: 'https://meko.example.com/mcp', key: 'tok' } }, null],
+    ['keeps the rest of config.json, readable only by this user', { meko: { url: 'https://meko.example.com/mcp', key: 'tok' }, other: 1 }, { other: 1 }],
+  ])('%s', (_n, before, after) => {
     mkdirSync(home, { recursive: true });
     const cfg = join(home, 'config.json');
-    writeFileSync(cfg, '{}\n');
+    writeFileSync(cfg, JSON.stringify(before));
     chmodSync(cfg, 0o644);
-    expect(presenter('install', '--meko-url', 'https://meko.example.com/mcp', '--meko-key', 'tok', '--non-interactive').code).toBe(0);
-    expect(JSON.parse(readFileSync(cfg, 'utf8'))).toEqual({ meko: { url: 'https://meko.example.com/mcp', key: 'tok' } });
-    expect(statSync(cfg).mode & 0o077).toBe(0);
-    // What `meko install_extension presenter` passes: asked of `meko token --json` each time instead.
+    // What `meko install_extension presenter` passes: neither is kept, Meko is asked each time.
     expect(presenter('install', '--meko-url', 'http://127.0.0.1:7778/mcp', '--meko-key', 'local', '--non-interactive').code).toBe(0);
-    expect(JSON.parse(readFileSync(cfg, 'utf8'))).toEqual({});
+    if (!after) return expect(existsSync(cfg)).toBe(false);
+    expect(JSON.parse(readFileSync(cfg, 'utf8'))).toEqual(after);
+    expect(statSync(cfg).mode & 0o077).toBe(0);
   });
 
   it('starts, says it runs, and stops', () => {

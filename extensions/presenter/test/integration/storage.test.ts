@@ -126,6 +126,16 @@ describe('a deck in its datapack', () => {
     expect(a).toBe(b);
   });
 
+  it('gives a draft from before Presenter kept its Meko the Meko it\'s next opened under', async () => {
+    meko.where = null;
+    const decks = new DeckStore(getPaths(join(dir, 'home')), meko);
+    const d = await decks.create({ title: 'Untagged', brief: emptyBrief(), sources: { content: [], template: null, animations: [] } });
+    meko.where = { kind: 'cloud', host: 'mcp.meko.example' };
+    expect((await decks.state(d.id)).id).toBe(d.id);
+    meko.where = { kind: 'local', host: '127.0.0.1:7778' };
+    await expect(decks.state(d.id)).rejects.toThrow(/saved in Meko Cloud \(mcp\.meko\.example\)/);
+  });
+
   it('fetches a damaged piece again, then says so', async () => {
     const s = store();
     const saved = await s.save('dp1', sampleDeck(), new Set(), {});

@@ -4,7 +4,7 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { DECK_PREFIX, deckDatapackName, type DatapackRow } from '../shared/datapacks.js';
+import { DECK_PREFIX, deckDatapackName, mekoLabel, sameMeko, type DatapackRow, type MekoAt } from '../shared/datapacks.js';
 import { ASSET_NAME, assetFits, checkDeck, DeckError, newDeck, own, type Deck } from '../shared/deck.js';
 import type { Piece } from '../shared/manifest.js';
 import { applyOps, type Op } from '../shared/ops.js';
@@ -33,6 +33,8 @@ interface Stored {
   manifestHash: string | null;
   known: string[];
   assetPieces: Record<string, Piece>;
+  /** The Meko its datapack is in; a draft from before Presenter kept it takes the Meko it's next opened under. */
+  meko?: MekoAt;
 }
 
 interface Entry extends Stored {
@@ -107,11 +109,16 @@ export class DeckStore {
     } catch {
       /* drafts alone, when Meko can't be reached */
     }
+    const at = await this.meko.at();
     const out: DeckSummary[] = rows.map((d) => {
       const s = this.open.get(d.id) ?? local.get(d.id);
       return { id: d.id, name: d.name, title: s?.deck.title ?? d.name.slice(DECK_PREFIX.length), savedAt: s?.savedAt ?? null, draft: !!s };
     });
-    for (const [id, s] of local) if (!out.some((d) => d.id === id)) out.push({ id, name: s.name, title: s.deck.title, savedAt: s.savedAt, draft: true });
+    for (const [id, s] of local) {
+      if (out.some((d) => d.id === id)) continue;
+      const elsewhere = at && s.meko && !sameMeko(s.meko, at) ? { elsewhere: s.meko } : {};
+      out.push({ id, name: s.name, title: s.deck.title, savedAt: s.savedAt, draft: true, ...elsewhere });
+    }
     return out.sort((a, b) => a.title.localeCompare(b.title));
   }
 
@@ -140,10 +147,30 @@ export class DeckStore {
       }
     }
     if (!row) throw new HttpError(409, `Every name like ${base} is taken. Try another title.`);
-    const e: Entry = { id: row.id, name: row.name, deck, savedJson: null, savedAt: null, manifestHash: null, known: [], assetPieces: {}, undo: [], redo: [], saving: null };
+    const meko = (await this.meko.at()) ?? undefined;
+    const e: Entry = { id: row.id, name: row.name, deck, savedJson: null, savedAt: null, manifestHash: null, known: [], assetPieces: {}, meko, undo: [], redo: [], saving: null };
     this.open.set(e.id, e);
     this.persist(e);
     return this.changed(e);
+  }
+
+  /**
+   * A deck to edit, save or hand to Claude: refused when its draft belongs to another Meko than the
+   * one Presenter uses now (Meko's link changed), whose datapack this Meko doesn't have. Playing it
+   * (`deck()`) still works, so a talk under way outlives a change of the link. With no Meko found,
+   * the draft can still be edited here.
+   */
+  private async mine(id: string): Promise<Entry> {
+    const e = await this.entry(id);
+    const at = await this.meko.at();
+    if (!at) return e;
+    if (!e.meko) {
+      e.meko = at;
+      this.persist(e);
+    } else if (!sameMeko(e.meko, at)) {
+      throw new HttpError(409, `This deck is saved in ${mekoLabel(e.meko)}, and Presenter now uses ${mekoLabel(at)}. Link Meko to it again to open the deck.`);
+    }
+    return e;
   }
 
   /** A deck to work on: its draft here, else its newest save in Meko. */
@@ -172,9 +199,10 @@ export class DeckStore {
     const versions = await this.pieces.versions(id);
     if (!versions.length) throw new HttpError(404, `${row.name} has no saved deck yet.`);
     const loaded = await this.pieces.load(id, versions[0]!.hash);
+    const meko = (await this.meko.at()) ?? undefined;
     const e: Entry = {
       id, name: row.name, deck: loaded.deck, savedJson: JSON.stringify(loaded.deck), savedAt: loaded.savedAt,
-      manifestHash: loaded.manifestHash, known: loaded.known, assetPieces: loaded.assetPieces, undo: [], redo: [], saving: null,
+      manifestHash: loaded.manifestHash, known: loaded.known, assetPieces: loaded.assetPieces, meko, undo: [], redo: [], saving: null,
     };
     this.open.set(id, e);
     this.persist(e);
@@ -182,16 +210,17 @@ export class DeckStore {
   }
 
   async state(id: string): Promise<DeckState> {
-    return this.stateOf(await this.entry(id));
+    return this.stateOf(await this.mine(id));
   }
 
+  /** The deck to play: drafts of another Meko too. */
   async deck(id: string): Promise<Deck> {
     return (await this.entry(id)).deck;
   }
 
   /** Applies edits, checked; the deck before them goes on the undo history. */
   async apply(id: string, ops: Op[]): Promise<DeckState> {
-    const e = await this.entry(id);
+    const e = await this.mine(id);
     // An asset whose bytes Presenter doesn't hold would make every save fail: files come in through addAsset().
     for (const o of ops) {
       if (o?.op === 'addAsset' && !(this.pieces.has(String(o.asset?.hash)) || Object.hasOwn(e.assetPieces, String(o.asset?.hash)))) {
@@ -213,7 +242,7 @@ export class DeckStore {
   }
 
   async undo(id: string): Promise<DeckState> {
-    const e = await this.entry(id);
+    const e = await this.mine(id);
     const prev = e.undo.pop();
     if (prev) {
       e.redo.push(e.deck);
@@ -224,7 +253,7 @@ export class DeckStore {
   }
 
   async redo(id: string): Promise<DeckState> {
-    const e = await this.entry(id);
+    const e = await this.mine(id);
     const next = e.redo.pop();
     if (next) {
       e.undo.push(e.deck);
@@ -236,7 +265,7 @@ export class DeckStore {
 
   /** Adds a file as an asset, refused here (not at save time) when it's over the limits. */
   async addAsset(id: string, name: string, type: string, bytes: Uint8Array): Promise<DeckState> {
-    const e = await this.entry(id);
+    const e = await this.mine(id);
     if (!ASSET_NAME.test(name)) throw new HttpError(400, 'Name the file with letters, digits, dots, dashes and underscores.');
     const why = assetFits(e.deck, bytes.length, name);
     if (why) throw new HttpError(413, why);
@@ -262,7 +291,7 @@ export class DeckStore {
 
   /** Saves the draft to the deck's datapack: only the pieces that changed, then a new deck.json. */
   async save(id: string): Promise<DeckState> {
-    const e = await this.entry(id);
+    const e = await this.mine(id);
     if (e.saving) throw new HttpError(409, 'The deck is being saved already.');
     const deck = e.deck;
     e.saving = { done: 0, total: 1 };
@@ -290,13 +319,13 @@ export class DeckStore {
   }
 
   async versions(id: string): Promise<DeckVersion[]> {
-    await this.entry(id);
+    await this.mine(id);
     return this.pieces.versions(id);
   }
 
   /** Makes a saved version the draft (Undo goes back); Save makes it the newest. */
   async restore(id: string, hash: string): Promise<DeckState> {
-    const e = await this.entry(id);
+    const e = await this.mine(id);
     if (!/^[0-9a-f]{64}$/.test(hash)) throw new HttpError(400, 'That isn\'t a version.');
     const loaded = await this.pieces.load(id, hash);
     for (const h of loaded.known) if (!e.known.includes(h)) e.known.push(h);
