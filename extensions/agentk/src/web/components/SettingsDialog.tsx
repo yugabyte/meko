@@ -678,10 +678,16 @@ export function AgentSettings({
 const SOURCE_TEXT: Record<MekoKeySource, string> = {
   meko: 'Meko Cloud, linked in Meko',
   local: 'the Meko on this computer',
-  config: 'its own Meko key from config.toml, until Meko keeps the link (update Meko)',
-  env: 'its own Meko key from MEKO_API_KEY, until Meko keeps the link (update Meko)',
-  claude: 'its own Meko key from Claude Code’s settings, until Meko keeps the link (update Meko)',
+  config: 'its own Meko key from config.toml',
+  env: 'its own Meko key from MEKO_API_KEY',
+  claude: 'its own Meko key from Claude Code’s settings',
 };
+
+/**
+ * What to do while AgentK uses a key of its own: Meko refused it, or keeps no link yet (too old, or
+ * the key is for a server on this computer).
+ */
+const OWN_KEY_FIX = 'Link Meko Cloud on Meko’s Meko Cloud page to move it there (update Meko first if it has no such page).';
 
 /**
  * Settings › General's ways to Meko's own pages: the Meko Cloud link (Meko keeps it for AgentK and
@@ -694,7 +700,9 @@ export function MekoLinks({ meko, auth }: { meko: MekoStatus; auth: MekoAuth | n
       <span className="label">Meko</span>
       <span className="hint">
         {meko.source
-          ? `AgentK uses ${SOURCE_TEXT[meko.source]}${host && meko.source !== 'local' ? ` (${host})` : ''}.`
+          ? `AgentK uses ${SOURCE_TEXT[meko.source]}${host && meko.source !== 'local' ? ` (${host})` : ''}.${
+              meko.source !== 'meko' && meko.source !== 'local' ? ` ${OWN_KEY_FIX}` : ''
+            }`
           : 'Meko isn’t set up: start Meko on this computer (meko start), or link Meko Cloud.'}{' '}
         {auth?.access === 'local' ? 'Meko opens AgentK on this computer without a sign-in.' : 'Meko signs you in to AgentK.'}
       </span>

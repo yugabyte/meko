@@ -178,6 +178,12 @@ describe('projects without a datapack, and without Meko', () => {
       const p = await env.core.projects.create({ repoPath: env.repo, name: 'Plain', datapack: { mode: 'none' } });
       const s = await env.core.sessions.create(p.id, { name: 'Work', kind: 'quick' });
       await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'the session to start');
+
+      // Started again: the same account, so neither the stop nor the start forgot its invites.
+      Object.assign(env.local, { state: 'running', meko: local });
+      await call('GET', '/api/settings');
+      expect(env.core.mekoStatus).toMatchObject({ source: 'local', url: local.url });
+      expect(forget).not.toHaveBeenCalled();
     });
   });
 });

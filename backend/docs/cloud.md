@@ -16,7 +16,7 @@ in one place, checked before it's saved, and read by every extension the same wa
 | **A change is checked before it's saved**: a new server or key with an MCP `initialize` handshake carrying the key (10 s, `CheckMCP`); a web app or API URL that was typed, when it moves the API URL, by asking its `/datapacks/incoming-shares` without the key, which must answer in Meko's `{data}` or `{error: {code}}` envelope (`CheckAPI`) | A link that doesn't work isn't saved, and a mistyped API host never gets the key. No ping follows the handshake: a stateless server on the MCP Go SDK, as Meko's own is, refuses a ping that carries no protocol version. |
 | **A saved key goes only where it already goes, or to Meko Cloud** (`Service.Link`): a change of the MCP, web app or API URL to another origin without the key typed again is refused, before anything is sent | Otherwise anyone with the browser's login could point the link at their own server and read the key off the check, or off an extension's next call. |
 | **Meko Cloud's MCP URL is saved as empty**, and its web app and API URLs are worked out (`https://cloud.mekodata.ai`, plus `/api/v1`); another server's web app must be set | The same rule AgentK's `mekoWebUrl` had. A server whose web app isn't known has no datapack links or sharing until it's set, which the page says. |
-| **Unlink keeps the URLs and removes the key** | Linking again takes only the key. Unlinked, the extensions use this Meko. |
+| **Unlink keeps the URLs and removes the key** | Linking again takes only the key. Unlinked, the extensions use this Meko. `meko destroy` removes the key from the secret store with the client token, so none is left in the Keychain. |
 | **Extensions read the link from `meko token --json`**, and are told when it changes (below) | Extensions already run it for this Meko's own MCP URL and token; one command gives them both. |
 
 ## Routes and command
@@ -49,8 +49,12 @@ in one place, checked before it's saved, and read by every extension the same wa
 - `set` false: the link was never set. An extension may hand Meko a key it kept itself, once,
   with `meko cloud_link` (AgentK does).
 - `set` true with empty URLs and key: unlinked; use this Meko.
+- `error` set (and nothing else): the link couldn't be read (a malformed `cloud.toml`, a secret
+  store that refused). The rest of the reply still answers; the extension keeps the link it last
+  read rather than treat it as unlinked.
 - No `cloud` at all: a Meko from before the link; the extension keeps doing what it did.
 
-After every change, Meko posts `{"what": "cloud"}` to `/_meko/changed` on each running
+After every change, once it's saved and the change's lock is released (so a slow extension holds
+up neither the reply nor the next change), Meko posts `{"what": "cloud"}` to `/_meko/changed` on each running
 extension's socket, with no Origin, best effort with a 5 s timeout ([web.md](web.md)); the
 extension reads `meko token --json` again. A failure to reach one is logged, never the link.

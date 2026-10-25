@@ -108,6 +108,29 @@ func TestLinkAndUnlink(t *testing.T) {
 	}
 }
 
+// The extensions are told after the change is saved and the lock is released, so a slow one holds
+// up neither the reply nor the next change.
+func TestChangedRunsUnlocked(t *testing.T) {
+	s, _ := newService(t)
+	var locked []bool
+	s.Changed = func(context.Context) {
+		free := s.mu.TryLock()
+		if free {
+			s.mu.Unlock()
+		}
+		locked = append(locked, !free)
+	}
+	if _, err := s.Link(context.Background(), Update{Key: ptr(key)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Unlink(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(locked) != 2 || locked[0] || locked[1] {
+		t.Fatalf("Changed ran with the lock held: %v", locked)
+	}
+}
+
 // A saved key goes only where it already goes, or to Meko Cloud, unless it's typed again; a typed
 // web app or API URL must answer like Meko's API; a new key or server must take the check.
 func TestLinkRules(t *testing.T) {

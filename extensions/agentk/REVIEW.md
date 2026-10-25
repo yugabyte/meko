@@ -270,7 +270,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       reads its own old sources (`ownMekoKey`: `[meko]` keys, `MEKO_*`, Claude Code's settings) only
       to hand a key to Meko once (`mekohandover.ts`, the key on stdin) or under a Meko whose `meko
       token --json` has no `cloud`. Never a copy of the local Meko's token, and never falling back to
-      the local Meko while a key of its own hasn't reached Meko.
+      the local Meko while a key of its own hasn't reached Meko. Its `[meko]` keys in
+      `config.toml` are never cleared on handover (a rollback restores only `state.db`), and the
+      handover never holds up a start.
       The one poll is following a knowledge-base upload's
       indexing (`KnowledgeService` in `knowledge.ts`): only after the file was posted to Meko's
       storage under the key `upload-url` gave (never for one Meko already had), every 5 s for a

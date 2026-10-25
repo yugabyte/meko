@@ -55,7 +55,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 
 [meko]
 # The Meko Cloud link is Meko's (its web UI's Settings › Meko Cloud, or meko cloud_link). url, api_key,
-# web_url and api_url from before are handed to Meko once and cleared.
+# web_url and api_url from before are handed to Meko once, then never read again (kept for a rollback).
 # home = "…"                 # Meko's data folder, which AgentK's home is in; set by the installer and from Meko's MEKO_HOME
 # capture_transcripts = true   # send session transcripts to Meko conversations; off by default (MEKO-710)
 

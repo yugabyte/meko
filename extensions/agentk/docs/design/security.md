@@ -60,7 +60,8 @@ own copy.
   does the hook socket: after a lost lease another server may have bound its own.
 - **Guard rails.** AgentK has no route that sets or shows a Meko key: Meko owns the Meko Cloud
   link, and AgentK reads it from `meko token --json`, holds it in memory and never writes it to
-  `config.toml` (a key of its own from before is handed to Meko on stdin, once, and cleared). No
+  `config.toml` (a key of its own from before is handed to Meko on stdin, once, then never read
+  again, though it stays in `config.toml` for a rollback). No
   response carries it. Meko's own page refuses to send a saved key to another server (the MCP, web
   app or API URL) until it's typed again, so someone with a stolen login can't point it at their
   own server and read the key off it. `POST /_meko/changed` only makes AgentK read Meko again, and

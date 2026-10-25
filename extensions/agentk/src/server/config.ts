@@ -27,8 +27,9 @@ export interface Config {
    * extracting loaded skills as user requirements (MEKO-710); off, sessions also run without the Meko plugin.
    * apiUrl: Meko's REST API base (sharing); empty means the web app URL plus /api/v1.
    * url, apiKey, webUrl and apiUrl: a Meko Cloud (or other) key from before Meko owned the link. AgentK
-   * hands them to Meko once (mekohandover.ts) and clears them; until then (or under a Meko too old to
-   * keep a link) they stand in for it. Meko's link, or else the Meko running on this computer, is
+   * hands them to Meko once (mekohandover.ts) and never reads them again, but leaves them here, for a
+   * rollback to the release before; until then (or under a Meko too old to keep a link) they stand in
+   * for it. Meko's link, or else the Meko running on this computer, is
    * read from Meko (mekolocal.ts), never stored here.
    * home: Meko's data folder, as Meko last told AgentK (the MEKO_HOME it sets on the commands it
    * runs); empty means Meko's default. AgentK's home is in it (paths.ts `mekoHome`).

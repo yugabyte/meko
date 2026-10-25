@@ -91,11 +91,18 @@ describe("installer: Meko's Meko Cloud link, or the Meko on this computer", () =
     const given = deps({ local: true, cloud: UNSET });
     expect(await installMeko(c, { keyArg: 'mko_tkn_given', urlArg: 'https://meko.example.com/mcp', noMeko: false }, given.d)).toBe(true);
     expect(given.calls).toEqual(['link https://meko.example.com/mcp mko_tkn_given', 'claude https://meko.example.com/mcp mko_tkn_given']);
-    expect(c.meko.apiKey).toBe('');
+    // The given key isn't stored, and the old one stays for a rollback.
+    expect(c.meko.apiKey).toBe('mko_tkn_old');
     // What `meko install_extension agentk` passes.
     const copy = deps({ local: true, cloud: UNSET });
     expect(await installMeko(cfg(), { keyArg: 'local-token', urlArg: LOCAL.url, noMeko: false }, copy.d)).toBe(true);
     expect(copy.calls).toEqual([`claude ${LOCAL.url} local-token`]);
+    expect(copy.said.some((l) => l.startsWith('warn --meko-key'))).toBe(false);
+    // Any other key for a server on this computer is set aside, saying so.
+    const loopback = deps({ local: true, cloud: UNSET });
+    expect(await installMeko(cfg(), { keyArg: 'mko_tkn_x', urlArg: 'http://127.0.0.1:9000/mcp', noMeko: false }, loopback.d)).toBe(true);
+    expect(loopback.calls).toEqual([`claude ${LOCAL.url} local-token`]);
+    expect(loopback.said.join('\n')).toMatch(/warn --meko-key not linked: 127\.0\.0\.1:9000 is on this computer/);
   });
 
   it("hands AgentK's own key to a Meko that never had a link, and keeps it when Meko won't take it", async () => {
@@ -105,7 +112,8 @@ describe("installer: Meko's Meko Cloud link, or the Meko on this computer", () =
     const ok = deps({ local: true, cloud: UNSET });
     expect(await installMeko(c, { noMeko: false }, ok.d)).toBe(true);
     expect(ok.calls).toEqual([`link ${DEFAULT_MEKO_URL} mko_tkn_own https://cloud.mekodata.ai`, `claude ${DEFAULT_MEKO_URL} mko_tkn_own`]);
-    expect(c.meko).toEqual(DEFAULT_CONFIG.meko);
+    // Left in config.toml, for a rollback to the release before; the server never reads it again.
+    expect(c.meko).toMatchObject({ apiKey: 'mko_tkn_own', webUrl: 'https://cloud.mekodata.ai' });
 
     const kept = cfg();
     kept.meko.apiKey = 'mko_tkn_own';
@@ -144,8 +152,19 @@ describe("installer: Meko's Meko Cloud link, or the Meko on this computer", () =
     process.env.MEKO_API_KEY = 'mko_tkn_env';
     try {
       const fromEnv = deps({ canAsk: false });
-      expect(await installMeko(cfg(), { noMeko: false }, fromEnv.d)).toBe(true);
+      const withClaude = cfg();
+      expect(await installMeko(withClaude, { noMeko: false }, fromEnv.d)).toBe(true);
       expect(fromEnv.calls).toEqual([`check ${DEFAULT_MEKO_URL} mko_tkn_env`, `claude ${DEFAULT_MEKO_URL} mko_tkn_env (key from env)`]);
+      expect(withClaude.meko.apiKey).toBe('');
+      // Only Kiro: nothing puts it in Claude Code's settings, and the service has no MEKO_*
+      // environment, so config.toml keeps it. The same when Meko refuses the handover.
+      const kiroOnly = cfg();
+      expect(await installMeko(kiroOnly, { noMeko: false }, deps({ canAsk: false, agents: ['kiro'] }).d)).toBe(true);
+      expect(kiroOnly.meko.apiKey).toBe('mko_tkn_env');
+      const refusedKiroOnly = cfg();
+      const refusedDeps = deps({ canAsk: false, agents: ['kiro'], local: true, cloud: UNSET, linkError: '401' });
+      expect(await installMeko(refusedKiroOnly, { noMeko: false }, refusedDeps.d)).toBe(true);
+      expect(refusedKiroOnly.meko.apiKey).toBe('mko_tkn_env');
     } finally {
       delete process.env.MEKO_API_KEY;
     }

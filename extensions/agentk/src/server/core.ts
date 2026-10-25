@@ -4,7 +4,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { claudeConfigPath } from './trust.js';
 import { hostname, userInfo } from 'node:os';
 import { join } from 'node:path';
-import type { AppState, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
+import type { AppState, MekoKeySource, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
 import * as github from './github.js';
 import { TranscriptCapture, mekoPluginKeys } from './capture.js';
 import { DesignQuestionStore } from './answers.js';
@@ -111,6 +111,16 @@ const LOCAL_MEKO_RECHECK_MS = 30_000;
 /** state.db's kv: AgentK handed Meko its own Meko Cloud key, so its own sources are never read again. */
 const MEKO_HANDED_OVER_KEY = 'meko-link-handed-over';
 
+/**
+ * Which Meko account a Meko is, for whether a change forgets the account's invites: the Meko on
+ * this computer is one account on any port or token; any other is its server's origin and key.
+ * Null with no Meko.
+ */
+function mekoAccountOf(m: { url: string; apiKey: string; keySource: MekoKeySource | null }): string | null {
+  if (!m.apiKey) return null;
+  return m.keySource === 'local' ? 'local' : `${originOf(m.url)} ${m.apiKey}`;
+}
+
 /** How often the server checks that its hook socket file is still there. */
 const HOOK_SOCKET_CHECK_MS = 10_000;
 /** How long stopping waits for transcript captures and Kiro's one-shot runs still running (systemd and launchd allow 15 s to stop). */
@@ -181,6 +191,8 @@ export class Core extends EventEmitter {
   private handOver: typeof handOverMekoKey;
   /** This process tried handing AgentK's own key to Meko (once: a refused key isn't sent again and again). */
   private handOverTried = false;
+  /** The Meko account AgentK last used (`mekoAccountOf`), kept through a spell with no Meko. */
+  private mekoAccount: string | null = null;
   updateStatus: () => UpdateStatus;
   private cfg: Config;
   private timersOn: boolean;
@@ -295,6 +307,7 @@ export class Core extends EventEmitter {
       log: this.log,
     });
     this.mekoStatus = this.mekoStatusFor(o.config);
+    this.mekoAccount = mekoAccountOf(resolveMekoWithSource(o.config));
     this.callHome = new CallHomeService({
       db: this.db, config: () => this.cfg, version: this.version, log: this.log, fetch: o.callHomeFetch,
     });
@@ -439,20 +452,23 @@ export class Core extends EventEmitter {
   }
 
   /**
-   * Reads the Meko on this computer and its Meko Cloud link again, handing Meko AgentK's own key
-   * first when it has none yet (`handOverMekoKey`). When that changes the Meko AgentK uses (it
-   * started, stopped, has a new port or token, or the link changed), reconnects and shows it. On
-   * the same Meko account (the local Meko's port or token) it keeps the invites and shares AgentK
-   * knows; on another server it forgets them, as `mekoChanged` does. A copy of the local Meko's URL
-   * and token in config.toml (older installs stored one, current or stale) is dropped.
+   * Reads the Meko on this computer and its Meko Cloud link again, and starts handing Meko AgentK's
+   * own key when it has none yet (`startHandOver`, in the background). When that changes what AgentK
+   * shows (the Meko, its source, its web app or API URL), shows it; when it changes the Meko AgentK
+   * uses (it started, stopped, has a new port or token, or the link changed), reconnects. On the
+   * same Meko account (the local Meko on any port or token, or the same server and key) it keeps the
+   * invites and shares AgentK knows; on another it forgets them, as `mekoChanged` does. A spell with
+   * no Meko at all (the local Meko stopped) isn't a change of account. A copy of the local Meko's
+   * URL and token in config.toml (older installs stored one, current or stale) is dropped.
    */
   async refreshMeko(): Promise<void> {
     const before = resolveMekoWithSource(this.cfg);
+    const shown = this.mekoStatus;
+    const apiBefore = resolveMekoApiUrl(this.cfg);
     const wasState = localMeko().state;
     await this.localReader.refresh();
     if (this.stopped) return;
-    await this.handOverOwnKey();
-    if (this.stopped) return;
+    this.startHandOver();
     const local = localMeko().meko;
     if (isLocalMeko(local, this.cfg.meko.url, this.cfg.meko.apiKey)) {
       this.updateConfig((c) => {
@@ -462,11 +478,26 @@ export class Core extends EventEmitter {
       this.log.info('config.toml held the Meko on this computer\'s URL and token; AgentK now reads them from Meko');
     }
     const after = resolveMekoWithSource(this.cfg);
-    if (before.url === after.url && before.apiKey === after.apiKey) {
+    const status = this.mekoStatusFor(this.cfg);
+    const apiAfter = resolveMekoApiUrl(this.cfg);
+    const reconnect = before.url !== after.url || before.apiKey !== after.apiKey;
+    // Kept on every read (a copy of the local token becoming the live local Meko changes nothing to
+    // connect to, but names the account); compared only when there's another Meko to connect to.
+    const account = mekoAccountOf(after);
+    const switched = reconnect && !!account && !!this.mekoAccount && account !== this.mekoAccount;
+    if (account) this.mekoAccount = account;
+    if (!reconnect && status.source === shown.source && status.webUrl === shown.webUrl && apiAfter === apiBefore) {
       // Installed, or gone, without changing the Meko AgentK uses: the install banner follows it.
       // With a link, `meko` removed after it was found is seen only at the next read (a restart,
       // Settings, or Meko's notice), since the minute look stops once it's found (`lookForLocalMeko`).
       if (localMeko().state !== wasState) this.changed();
+      return;
+    }
+    this.mekoStatus = status;
+    this.changed();
+    if (!reconnect) {
+      // The same Meko and key, from another source or with another web app or API URL.
+      if (apiAfter !== apiBefore) void this.syncInvites();
       return;
     }
     this.log.info(
@@ -475,24 +506,23 @@ export class Core extends EventEmitter {
     );
     // As in updateConfig: a harness may have written the old key somewhere of its own.
     for (const h of this.harnesses.list()) h.mekoChanged?.(this.paths);
-    this.mekoStatus = this.mekoStatusFor(this.cfg);
-    this.changed();
     void this.claudeMeko.refresh();
-    // The local Meko on another port or with a new token is the same account; anything else isn't.
-    const sameAccount = before.keySource === 'local' ? after.keySource === 'local' : originOf(before.url) === originOf(after.url) && after.keySource !== 'local';
-    if (!sameAccount) return this.mekoChanged();
+    if (switched) return this.mekoChanged();
     await this.meko.reset();
     void this.syncInvites();
   }
 
   /**
    * Meko owns the Meko Cloud link: while it has never had one, AgentK hands it the key it used
-   * itself (config.toml, MEKO_API_KEY, or Claude Code's settings), once, then clears config.toml's
-   * and never reads its own sources again (MEKO_HANDED_OVER_KEY). Not a copy of the local Meko's
-   * token, and not against a Meko too old to keep a link. A failure is logged and AgentK keeps its
-   * key, so nothing moves to another Meko unasked.
+   * itself (config.toml, MEKO_API_KEY, or Claude Code's settings), once per process, in the
+   * background (`meko cloud_link` checks the key with Meko Cloud, which can take tens of seconds).
+   * Not a copy of the local Meko's token, a key on this computer, or against a Meko too old to keep
+   * a link. Once Meko takes it, AgentK never reads its own sources again (MEKO_HANDED_OVER_KEY), and
+   * reads Meko again. config.toml's keys stay: a rollback to the release before, which reads only
+   * them, still finds them. A failure is logged and AgentK keeps its key, so nothing moves to
+   * another Meko unasked.
    */
-  private async handOverOwnKey(): Promise<void> {
+  private startHandOver(): void {
     const { cloud, meko: local } = localMeko();
     if (!cloud || cloud.set || mekoLinkHandedOver() || this.handOverTried) return;
     const own = ownMekoKey(this.cfg);
@@ -507,25 +537,19 @@ export class Core extends EventEmitter {
       url: own.url, apiKey: own.apiKey,
       webUrl: this.cfg.meko.webUrl || envMekoWebUrl(), apiUrl: this.cfg.meko.apiUrl || process.env.MEKO_API_URL?.trim() || '',
     };
-    const r = await this.handOver(this.mekoHome(), link);
-    if (this.stopped) return;
-    if (!r.ok) {
-      this.log.warn(`couldn't hand AgentK's Meko Cloud key (from ${own.keySource}) to Meko: ${r.error}. AgentK keeps using it until Meko Cloud is linked in Meko's web UI (Settings › Meko Cloud)`);
-      return;
-    }
-    kvSet(this.db, MEKO_HANDED_OVER_KEY, '1');
-    setMekoLinkHandedOver(true);
-    this.log.info(`handed AgentK's Meko Cloud key (from ${own.keySource}) to Meko, which keeps the link now`);
-    // Meko's link first, so clearing config.toml doesn't look like a change of Meko.
-    await this.localReader.refresh();
-    if (this.cfg.meko.url || this.cfg.meko.apiKey || this.cfg.meko.webUrl || this.cfg.meko.apiUrl) {
-      this.updateConfig((c) => {
-        c.meko.url = '';
-        c.meko.apiKey = '';
-        c.meko.webUrl = '';
-        c.meko.apiUrl = '';
-      });
-    }
+    void this.handOver(this.mekoHome(), link)
+      .then(async (r) => {
+        if (this.stopped) return;
+        if (!r.ok) {
+          this.log.warn(`couldn't hand AgentK's Meko Cloud key (from ${own.keySource}) to Meko: ${r.error}. AgentK keeps using it until Meko Cloud is linked in Meko's web UI (Settings › Meko Cloud)`);
+          return;
+        }
+        kvSet(this.db, MEKO_HANDED_OVER_KEY, '1');
+        setMekoLinkHandedOver(true);
+        this.log.info(`handed AgentK's Meko Cloud key (from ${own.keySource}) to Meko, which keeps the link now`);
+        await this.refreshMeko();
+      })
+      .catch((e: unknown) => this.log.warn('handing AgentK\'s Meko Cloud key to Meko failed', errMsg(e)));
   }
 
   /**
@@ -635,8 +659,8 @@ export class Core extends EventEmitter {
     // In the background: it may remove large build trees, and every change it makes to an idle
     // worktree is skipped once a session has claimed it.
     void this.worktrees.sweep().catch((e) => this.log.warn('checking idle worktrees failed', errMsg(e)));
-    // Before the sessions are recovered, so a relaunch gets the Meko on this computer. Bounded by
-    // `meko`'s own 5 s timeout.
+    // Before the sessions are recovered, so a relaunch gets the Meko on this computer and Meko's
+    // link. Bounded by `meko`'s own 5 s timeout: handing Meko AgentK's own key runs in the background.
     await this.refreshMeko();
     const noWebUrl = mekoWebUrlWarning(this.cfg);
     if (noWebUrl) this.log.warn(noWebUrl);

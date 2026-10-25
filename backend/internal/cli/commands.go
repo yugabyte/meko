@@ -363,17 +363,11 @@ func runToken(l paths.Layout, mcp, asJSON bool, stdout, stderr io.Writer) int {
 				cancel()
 			}
 		}
-		// cloud is the Meko Cloud link the extensions use (docs/cloud.md).
-		store, err := cloudStore(l, cfg)
-		if err != nil {
-			return fail(stderr, err)
-		}
-		cl, err := store.Load()
-		if err != nil {
-			return fail(stderr, err)
-		}
+		// cloud is the Meko Cloud link the extensions use (docs/cloud.md). One that can't be read (a
+		// bad cloud.toml, a locked Keychain) says so rather than failing the reply: this Meko's own
+		// URL and token still are, and an extension keeps the link it last read.
 		b, _ := json.Marshal(map[string]any{"url": url, "token": tok, "running": up, "web_url": web,
-			"cloud": cloudTokenOf(cl)})
+			"cloud": cloudTokenFor(l, cfg)})
 		fmt.Fprintln(stdout, string(b))
 		return exitOK
 	}

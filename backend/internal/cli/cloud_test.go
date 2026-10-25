@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -88,4 +90,12 @@ func TestCloudLink(t *testing.T) {
 
 	code, _, errs = run("cloud_link", "--data-dir", dir, "--off", "--url", "x")
 	want(t, "--off with a URL", code, exitUsage, errs, "--off takes no URLs")
+
+	// A link that can't be read says so, and the rest of token --json still answers.
+	if err := os.WriteFile(filepath.Join(dir, "cloud.toml"), []byte("linked = ["), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c := readCloudToken(t, dir); c.Error == "" || c.Set || c.APIKey != "" {
+		t.Fatalf("an unreadable link: %+v", c)
+	}
 }

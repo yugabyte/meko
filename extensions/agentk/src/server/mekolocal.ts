@@ -35,13 +35,15 @@ export interface LocalMekoProbe {
   state: LocalMekoState;
   meko: LocalMeko | null;
   cloud?: MekoCloudLink;
+  /** Meko couldn't read its link (its `cloud.error`): the link last read stands. */
+  cloudUnreadable?: true;
 }
 
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
 
-/** Meko's `cloud`, or undefined when it isn't one (an older Meko has none). */
+/** Meko's `cloud`, or undefined when it isn't one (an older Meko has none) or Meko couldn't read it. */
 function cloudOf(v: unknown): MekoCloudLink | undefined {
-  if (!v || typeof v !== 'object' || typeof (v as { set?: unknown }).set !== 'boolean') return undefined;
+  if (!v || typeof v !== 'object' || typeof (v as { set?: unknown }).set !== 'boolean' || (v as { error?: unknown }).error) return undefined;
   const c = v as Record<string, unknown>;
   const url = /^https?:\/\//.test(str(c.url)) ? str(c.url) : '';
   const apiKey = url ? str(c.api_key) : '';
@@ -72,9 +74,11 @@ export function probeLocalMeko(mekoHome: string | null, env: NodeJS.ProcessEnv =
         if (typeof r.url !== 'string' || !/^https?:\/\//.test(r.url) || typeof r.token !== 'string' || !r.token) return resolve(failed);
         const webUrl = typeof r.web_url === 'string' && /^https?:\/\//.test(r.web_url) ? r.web_url : null;
         const cloud = cloudOf(r.cloud);
+        const unreadable = !!r.cloud && typeof r.cloud === 'object' && !!(r.cloud as { error?: unknown }).error;
         resolve({
           ...(r.running === true ? { state: 'running', meko: { url: r.url, token: r.token, webUrl } } : { state: 'stopped', meko: null }),
           ...(cloud ? { cloud } : {}),
+          ...(unreadable ? { cloudUnreadable: true as const } : {}),
         });
       } catch {
         resolve(failed);
@@ -150,13 +154,15 @@ export class LocalMekoReader {
 
   /**
    * Reads it again; true when what AgentK would use changed (Meko started or stopped, a new port or
-   * token, another Meko Cloud link). A read that couldn't ask `meko` keeps the link last read, so a
-   * slow `meko` doesn't send AgentK back to a key of its own that it handed over.
+   * token, another Meko Cloud link). A read that couldn't ask `meko`, or whose link Meko couldn't
+   * read, keeps the link last read, so a slow `meko` or a locked Keychain doesn't move AgentK to
+   * another Meko.
    */
   refresh(): Promise<boolean> {
     this.reading ??= this.probe()
       .then((p) => {
-        const next = p.cloud || p.state === 'running' || p.state === 'stopped' ? p : { ...p, ...(last.cloud ? { cloud: last.cloud } : {}) };
+        const keep = !p.cloud && (p.cloudUnreadable || (p.state !== 'running' && p.state !== 'stopped'));
+        const next = keep && last.cloud ? { ...p, cloud: last.cloud } : p;
         const changed = next.meko?.url !== last.meko?.url || next.meko?.token !== last.meko?.token || JSON.stringify(next.cloud) !== JSON.stringify(last.cloud);
         last = next;
         return changed;

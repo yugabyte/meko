@@ -117,11 +117,21 @@ func originOf(u string) string {
 // must lead to an API that answers like Meko's, and a saved key goes only where it already goes or
 // to Meko Cloud. Nothing is saved when it's refused (an *Error) or a check fails.
 func (s *Service) Link(ctx context.Context, u Update) (Status, error) {
+	st, changed, err := s.link(ctx, u)
+	if changed {
+		s.changed(ctx)
+	}
+	return st, err
+}
+
+// link checks and saves a change under the lock, and reports whether it saved one; the extensions
+// are told after the lock is released, so a slow one holds up neither the reply nor the next change.
+func (s *Service) link(ctx context.Context, u Update) (Status, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur, err := s.Store.Load()
 	if err != nil {
-		return Status{}, err
+		return Status{}, false, err
 	}
 	next := cur.Link
 	if !cur.Linked {
@@ -129,7 +139,7 @@ func (s *Service) Link(ctx context.Context, u Update) (Status, error) {
 	}
 	if u.URL != nil {
 		if next.URL, err = normalURL(u.URL, "MCP server URL"); err != nil {
-			return Status{}, err
+			return Status{}, false, err
 		}
 		if next.URL == DefaultURL {
 			next.URL = ""
@@ -137,26 +147,26 @@ func (s *Service) Link(ctx context.Context, u Update) (Status, error) {
 	}
 	if u.WebURL != nil {
 		if next.WebURL, err = normalURL(u.WebURL, "web app URL"); err != nil {
-			return Status{}, err
+			return Status{}, false, err
 		}
 	}
 	if u.APIURL != nil {
 		if next.APIURL, err = normalURL(u.APIURL, "API URL"); err != nil {
-			return Status{}, err
+			return Status{}, false, err
 		}
 	}
 	typedKey := u.Key != nil && strings.TrimSpace(*u.Key) != ""
 	if typedKey {
 		next.Key = strings.TrimSpace(*u.Key)
 		if len(next.Key) > 4096 || !validKey.MatchString(next.Key) {
-			return Status{}, refuse("A Meko API key has no spaces or quotes in it. Paste it again.")
+			return Status{}, false, refuse("A Meko API key has no spaces or quotes in it. Paste it again.")
 		}
 	}
 	if next.Key == "" {
-		return Status{}, refuse("Enter a Meko Cloud API key.")
+		return Status{}, false, refuse("Enter a Meko Cloud API key.")
 	}
 	if cur.Linked && next == cur.Link {
-		return StatusOf(cur), nil
+		return StatusOf(cur), false, nil
 	}
 	// A saved key goes only where it already goes, or to Meko Cloud. Sending it elsewhere takes it
 	// typed again: otherwise anyone with the browser's login could point Meko at their own server
@@ -170,50 +180,56 @@ func (s *Service) Link(ctx context.Context, u Update) (Status, error) {
 		}
 		for _, to := range []string{originOf(next.MCPURL()), originOf(next.EffectiveAPIURL())} {
 			if to != "" && !known[to] {
-				return Status{}, refuse("Enter the Meko API key again to use it with %s: Meko sends a saved key "+
+				return Status{}, false, refuse("Enter the Meko API key again to use it with %s: Meko sends a saved key "+
 					"only to a server it already uses. Nothing was saved.", to)
 			}
 		}
 	}
 	if !cur.Linked || next.MCPURL() != cur.Link.MCPURL() || next.Key != cur.Link.Key {
 		if err := s.Check(ctx, next.MCPURL(), next.Key); err != nil {
-			return Status{}, refuse("Meko at %s didn't accept that key: %v. Nothing was saved.", next.MCPURL(), err)
+			return Status{}, false, refuse("Meko at %s didn't accept that key: %v. Nothing was saved.", next.MCPURL(), err)
 		}
 	}
 	// Worked out for Meko Cloud, the API URL is trusted; one that came from a typed URL is checked.
 	typedAPI := next.WebURL != cur.Link.WebURL || next.APIURL != cur.Link.APIURL
 	if api := next.EffectiveAPIURL(); typedAPI && api != "" && api != cur.Link.EffectiveAPIURL() {
 		if err := s.CheckAPI(ctx, api); err != nil {
-			return Status{}, refuse("%s doesn't look like Meko's API: %v. Check the API or web app URL. Nothing was saved.",
-				api, err)
+			return Status{}, false, refuse(
+				"%s doesn't look like Meko's API: %v. Check the API or web app URL. Nothing was saved.", api, err)
 		}
 	}
 	if err := s.Store.save(true, next); err != nil {
-		return Status{}, err
+		return Status{}, false, err
 	}
-	s.changed(ctx)
-	return StatusOf(State{Set: true, Linked: true, Link: next}), nil
+	return StatusOf(State{Set: true, Linked: true, Link: next}), true, nil
 }
 
 // Unlink removes the key, so extensions use the Meko on this computer. The URLs stay, for linking
 // again with only a key.
 func (s *Service) Unlink(ctx context.Context) (Status, error) {
+	st, changed, err := s.unlink()
+	if changed {
+		s.changed(ctx)
+	}
+	return st, err
+}
+
+func (s *Service) unlink() (Status, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur, err := s.Store.Load()
 	if err != nil {
-		return Status{}, err
+		return Status{}, false, err
 	}
 	if cur.Set && !cur.Linked {
-		return StatusOf(cur), nil
+		return StatusOf(cur), false, nil
 	}
 	link := cur.Link
 	link.Key = ""
 	if err := s.Store.save(false, link); err != nil {
-		return Status{}, err
+		return Status{}, false, err
 	}
-	s.changed(ctx)
-	return StatusOf(State{Set: true, Link: link}), nil
+	return StatusOf(State{Set: true, Link: link}), true, nil
 }
 
 func (s *Service) changed(ctx context.Context) {

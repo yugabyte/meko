@@ -158,13 +158,28 @@ func cloudStatusLine(l paths.Layout) string {
 
 // cloudToken is meko token --json's cloud: the link the extensions use, with its key. set says
 // whether the link was ever set: until it is, an extension may hand Meko a key of its own (AgentK
-// does, once, with meko cloud_link). Unlinked, its URLs and key are empty.
+// does, once, with meko cloud_link). Unlinked, its URLs and key are empty. With error, it couldn't
+// be read, and an extension keeps what it last read.
 type cloudToken struct {
 	Set    bool   `json:"set"`
 	URL    string `json:"url"`
 	APIKey string `json:"api_key"`
 	WebURL string `json:"web_url"`
 	APIURL string `json:"api_url"`
+	// Error, when set, is why the link couldn't be read; the rest is then empty.
+	Error string `json:"error,omitempty"`
+}
+
+// cloudTokenFor is the link for token --json; unreadable, its error says why and nothing else.
+func cloudTokenFor(l paths.Layout, cfg config.Config) cloudToken {
+	store, err := cloudStore(l, cfg)
+	if err == nil {
+		var st cloudlink.State
+		if st, err = store.Load(); err == nil {
+			return cloudTokenOf(st)
+		}
+	}
+	return cloudToken{Error: err.Error()}
 }
 
 func cloudTokenOf(st cloudlink.State) cloudToken {

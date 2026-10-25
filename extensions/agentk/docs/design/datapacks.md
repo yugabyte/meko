@@ -123,14 +123,18 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > macOS the secrets are in the Keychain, and whether Meko runs is a lock only `meko` checks. The
 > answer is kept in memory (`LocalMekoReader`) and never written to `config.toml`, so a new port,
 > token or link is picked up without a reinstall. A read that can't ask `meko` (it failed or took
-> too long) keeps the link last read. It's read at server start (before sessions are recovered),
+> too long), or whose link Meko couldn't read (`cloud.error`: a bad `cloud.toml`, a locked
+> Keychain), keeps the link last read. It's read at server start (before sessions are recovered),
 > when Settings opens (which waits up to 1.5 s for it), when Meko says the link changed (`POST
 > /_meko/changed` `{what: 'cloud'}` on AgentK's socket, which Meko sends after every change), once
 > more when connecting fails (at most every 30 s), and every minute while there's no Meko at all
-> or no `meko` on this computer (Meko normally starts AgentK, so it's up first). A change
-> reconnects (`Core.refreshMeko`): on the same server (the local Meko's new port or token) it
-> keeps the invites and shares AgentK knows, and on another one it forgets them, as a change of
-> account (`Core.mekoChanged`). The local token goes only to the local Meko, with its own URL; a
+> or no `meko` on this computer (Meko normally starts AgentK, so it's up first). A read that changes
+> what AgentK shows (the Meko, the key's source, the web app or API URL) shows it at once, and a new
+> API URL syncs invites again. One that changes the Meko it connects to reconnects
+> (`Core.refreshMeko`): on the same account (the local Meko on any port or token, or the same
+> server with the same key) it keeps the invites and shares AgentK knows, and on another it forgets
+> them (`Core.mekoChanged`). A spell with no Meko at all (the local Meko stopped) isn't a change of
+> account: AgentK compares with the last account it used (`mekoAccountOf`). The local token goes only to the local Meko, with its own URL; a
 > key that's a copy of it (its token, or any key for its URL's origin: Meko's setup for Claude
 > Code writes one into Claude Code's settings, older installs and `meko install_extension agentk`
 > stored one in `config.toml`) is the local Meko too, with the live URL and token, so a copy never
@@ -144,10 +148,13 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   `MEKO_API_URL`), else Claude Code's settings' `env` (`ownMekoKey` in `config.ts`). While Meko has
 >   never had a link (`cloud.set` false), AgentK hands that key to Meko, once, with `meko cloud_link`,
 >   the URLs as arguments and the key on stdin (`mekohandover.ts`), never a copy of the local Meko's
->   token. Meko checks it first. Once Meko takes it, AgentK clears those `config.toml` keys and
->   records the handover in `state.db`'s kv (`meko-link-handed-over`), and from then on never reads
->   any of those sources again, `MEKO_API_KEY` included, even while `meko` can't be asked. A key
->   Meko refuses is logged, kept, and not offered again until the next start. Under a Meko too old
+>   token or a key for a server on this computer. It runs in the background (`Core.startHandOver`),
+>   since Meko checks the key with Meko Cloud first, so a start isn't held up. Once Meko takes it,
+>   AgentK records the handover in `state.db`'s kv (`meko-link-handed-over`), reads Meko again, and
+>   from then on never reads any of those sources again, `MEKO_API_KEY` included, even while `meko`
+>   can't be asked. The `config.toml` keys stay where they were: a rollback to the release before
+>   (which restores only `state.db`) still finds them, rather than falling back to the local Meko. A
+>   key Meko refuses is logged, kept, and not offered again until the next start. Under a Meko too old
 >   to keep a link (`meko token --json` without `cloud`), or until the handover succeeds, AgentK
 >   keeps using its own key: a Meko Cloud user is never moved to the local Meko unasked, which would
 >   split a project's memories across two servers with different datapack ids.
@@ -157,8 +164,13 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   passes, the local Meko's URL and token, is just the local Meko. AgentK's own key from before is
 >   handed over as the server does. A given key Meko refuses stops the install with no one to ask,
 >   and asks whether to go on without it otherwise; AgentK's own key that Meko refuses is kept, with a
->   warning. Under a Meko too old to keep the link, a given key is checked and stored in
->   `config.toml` and AgentK's own key is checked, as before. With neither a link nor a Meko here, it
+>   warning. A `--meko-key` for a server on this computer isn't linked, with a warning (a copy of the
+>   local Meko's token can't be told apart while it's stopped). AgentK's own key stays in
+>   `config.toml`, for a rollback. A key from the installer's own `MEKO_API_KEY` that AgentK keeps
+>   using (Meko refused it, or is too old) is stored in `config.toml` when there's no Claude Code to
+>   hold it in its settings, since the service has no `MEKO_*` environment. Under a Meko too old to
+>   keep the link, a given key is checked and stored in `config.toml` and AgentK's own key is
+>   checked, as before. With neither a link nor a Meko here, it
 >   goes on with a warning and the server uses the local Meko once it runs. `--no-meko` no longer
 >   turns Meko off (it warns so): it only keeps a failure from stopping the install and skips Meko's
 >   setup for the agents. A local Meko serves no web app yet, so datapack links and sharing stay off

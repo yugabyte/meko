@@ -363,16 +363,37 @@ describe('HTTP API: sharing, invites and Meko', () => {
     expect(env.handOvers).toEqual([]);
     expect(env.core.mekoStatus).toMatchObject({ source: 'config', url: 'https://mcp.mekodata.ai/mcp' });
 
-    // A Meko that keeps the link and has none yet gets AgentK's key, once (opening Settings reads it).
+    // A Meko that keeps the link and has none yet gets AgentK's key, once, in the background:
+    // reading Meko doesn't wait for Meko's checks.
     env.local.state = 'running';
     env.local.meko = { url: 'http://127.0.0.1:7778/mcp', token: 'local-token' };
     env.local.cloud = { set: false, url: '', apiKey: '', webUrl: '', apiUrl: '' };
+    let release = () => undefined as void;
+    env.handOverHold.value = new Promise<void>((r) => (release = r));
+    await env.core.refreshMeko();
+    expect(env.handOvers).toEqual([{ url: 'https://mcp.mekodata.ai/mcp', apiKey: 'mko_tkn_abcdefghij1234', webUrl: 'https://cloud.mekodata.ai', apiUrl: '' }]);
+    expect(env.core.mekoStatus.source).toBe('config');
+    release();
+    await waitFor(() => env.core.mekoStatus.source, (src) => src === 'meko', 5000, 'the handover');
+    expect(env.core.mekoStatus).toMatchObject({ configured: true, url: 'https://mcp.mekodata.ai/mcp', webUrl: 'https://cloud.mekodata.ai' });
+    // config.toml keeps the key, for a rollback to the release before; this one never reads it again.
+    expect(env.core.config.meko.apiKey).toBe('mko_tkn_abcdefghij1234');
     const s = (await call('GET', '/api/settings')).json();
     expect(s).not.toHaveProperty('meko');
     expect(JSON.stringify(s)).not.toContain('abcdefghij');
-    expect(env.handOvers).toEqual([{ url: 'https://mcp.mekodata.ai/mcp', apiKey: 'mko_tkn_abcdefghij1234', webUrl: 'https://cloud.mekodata.ai', apiUrl: '' }]);
-    expect(env.core.config.meko).toMatchObject({ url: '', apiKey: '', webUrl: '', apiUrl: '' });
-    expect(env.core.mekoStatus).toMatchObject({ configured: true, source: 'meko', url: 'https://mcp.mekodata.ai/mcp', webUrl: 'https://cloud.mekodata.ai' });
+    expect(env.handOvers).toHaveLength(1);
+
+    // Only the web app changes in Meko: shown at once, without reconnecting or forgetting anything.
+    const forget = vi.spyOn(env.core.invites, 'forgetAccount');
+    const resets0 = env.meko.calls.filter((c) => c.name === 'reset').length;
+    env.local.cloud = { ...env.local.cloud!, set: true, webUrl: 'https://eu.cloud.mekodata.ai', apiUrl: 'https://eu.cloud.mekodata.ai/api/v1' };
+    expect((await call('POST', '/_meko/changed', { what: 'cloud' })).statusCode).toBe(204);
+    await waitFor(() => env.core.mekoStatus.webUrl, (w) => w === 'https://eu.cloud.mekodata.ai', 5000, 'the new web app');
+    expect(env.meko.calls.filter((c) => c.name === 'reset').length).toBe(resets0);
+    // Another account's key on the same server is another account.
+    env.local.cloud = { ...env.local.cloud!, apiKey: 'mko_tkn_otheraccount0000' };
+    await env.core.refreshMeko();
+    expect(forget).toHaveBeenCalledTimes(1);
 
     // Unlinked in Meko: Meko's notice sends AgentK to the Meko on this computer, and its own sources
     // are never read again, MEKO_API_KEY included.

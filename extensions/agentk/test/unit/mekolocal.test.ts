@@ -43,6 +43,9 @@ echo "{\\"url\\":\\"http://127.0.0.1:7778/mcp\\",\\"token\\":\\"tok-$MEKO_HOME\\
     expect((await probe()).cloud).toEqual({ set: true, url: '', apiKey: '', webUrl: '', apiUrl: '' });
     meko(`echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":true,"cloud":"what"}'`);
     expect(await probe()).not.toHaveProperty('cloud');
+    // One Meko couldn't read says so, for the reader to keep the link it had.
+    meko(`echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":true,"cloud":{"set":false,"url":"","api_key":"","web_url":"","api_url":"","error":"cloud.toml: bad"}}'`);
+    expect(await probe()).toEqual({ state: 'running', meko: { url: 'http://127.0.0.1:7778/mcp', token: 'abc', webUrl: null }, cloudUnreadable: true });
   });
 
   it.each([

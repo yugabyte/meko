@@ -173,6 +173,8 @@ export interface TestEnv {
    */
   handOvers: OwnMekoLink[];
   handOverError: { value: string | null };
+  /** While set, a handover waits for it before answering (as Meko's checks take a while). */
+  handOverHold: { value: Promise<void> | null };
   fakeDir: string;
   /** Stops the session host, ending every Claude in it, as a host crash would. The next ensureServer starts it again. */
   killHost(): Promise<void>;
@@ -247,6 +249,7 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
   const local: LocalMekoProbe = { state: 'none', meko: null };
   const handOvers: OwnMekoLink[] = [];
   const handOverError: { value: string | null } = { value: null };
+  const handOverHold: { value: Promise<void> | null } = { value: null };
   let hostHandle: HostHandle | null = null;
   const host = new SessionHost(paths, {
     services: () => null,
@@ -265,6 +268,7 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
     localMeko: async () => ({ ...local }),
     mekoHandOver: async (_home, link) => {
       handOvers.push(link);
+      await handOverHold.value;
       if (handOverError.value) return { ok: false, error: handOverError.value };
       local.cloud = { set: true, url: link.url, apiKey: link.apiKey, webUrl: link.webUrl || 'https://cloud.mekodata.ai', apiUrl: link.apiUrl || 'https://cloud.mekodata.ai/api/v1' };
       return { ok: true };
@@ -272,7 +276,7 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
   });
   if (opts.start !== false) await core.start();
   return {
-    home, repo, core, meko, mekoApi, mekoTools, local, handOvers, handOverError, fakeDir, killHost,
+    home, repo, core, meko, mekoApi, mekoTools, local, handOvers, handOverError, handOverHold, fakeDir, killHost,
     async cleanup() {
       await core.stop().catch(() => undefined);
       await killHost();

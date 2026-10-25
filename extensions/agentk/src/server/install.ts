@@ -185,8 +185,12 @@ function onLoopback(url: string): boolean {
  * doesn't ask for a key: one is linked in Meko's web UI (Settings › Meko Cloud) or with `meko
  * cloud_link`. A key given with `--meko-key` (and `--meko-url` for another server) goes to Meko, which
  * checks it and keeps it; a copy of the local Meko's token (what `meko install_extension agentk`
- * passes) is just the local Meko. AgentK's own key from before Meko kept the link (config.toml, the
- * environment, Claude Code's settings) is handed to Meko once, as the server does at start.
+ * passes) is just the local Meko; any other key for a server on this computer is set aside with a
+ * warning. AgentK's own key from before Meko kept the link (config.toml, the environment, Claude
+ * Code's settings) is handed to Meko once, as the server does at start, and left where it was, for
+ * a rollback to the release before. One from the installer's environment that AgentK keeps using
+ * (Meko refused it, or is too old to keep a link) is stored in config.toml when there's no Claude
+ * Code to hold it, since the service has no MEKO_* environment.
  *
  * Under a Meko too old to keep a link, AgentK keeps a key itself, as it did: a given key is checked
  * and stored in config.toml, and its own key is checked. A given key that fails stops the install
@@ -206,15 +210,14 @@ export async function installMeko(cfg: Config, o: { keyArg?: string; urlArg?: st
     cfg.meko.url = '';
     cfg.meko.apiKey = '';
   }
-  const clearOwn = () => {
-    cfg.meko.url = '';
-    cfg.meko.apiKey = '';
-    cfg.meko.webUrl = '';
-    cfg.meko.apiUrl = '';
-  };
   const givenUrl = o.urlArg ?? DEFAULT_MEKO_URL;
   const given = o.keyArg && !isLocalMeko(local, givenUrl, o.keyArg) && !onLoopback(givenUrl)
     ? { url: givenUrl, apiKey: o.keyArg, webUrl: '', apiUrl: '' } : null;
+  // A key for a server on this computer is never linked as Meko Cloud: when Meko isn't running, a
+  // copy of its own token (what `meko install_extension agentk` passes) can't be told apart.
+  if (o.keyArg && !given && !isLocalMeko(local, givenUrl, o.keyArg)) {
+    d.ui.warn('--meko-key', `not linked: ${hostOf(givenUrl)} is on this computer, so AgentK uses the Meko on this computer.`);
+  }
   const own = ownMekoKey(cfg);
   const ownLink = own.apiKey && !isLocalMeko(local, own.url, own.apiKey) && !onLoopback(own.url)
     ? { url: own.url, apiKey: own.apiKey, webUrl: cfg.meko.webUrl || envMekoWebUrl(), apiUrl: cfg.meko.apiUrl || process.env.MEKO_API_URL?.trim() || '' }
@@ -235,7 +238,8 @@ export async function installMeko(cfg: Config, o: { keyArg?: string; urlArg?: st
     if (hand) {
       const r = await d.link(hand);
       if (r.ok) {
-        clearOwn();
+        // AgentK's own key stays in config.toml: the server never reads it again, and a rollback to
+        // the release before, which reads only it, still finds it.
         meko = { url: hand.url, apiKey: hand.apiKey };
         label = `Meko Cloud, linked in Meko (${hostOf(hand.url)})`;
       } else if (given) {
@@ -277,6 +281,13 @@ export async function installMeko(cfg: Config, o: { keyArg?: string; urlArg?: st
   if (!meko) {
     d.ui.warn('Meko', `not set up: no Meko Cloud link, and no Meko running on this computer. AgentK uses the Meko on this computer once it runs (meko start). ${linkHint}`);
     return false;
+  }
+  // A key from the installer's own MEKO_API_KEY that AgentK keeps using: without Claude Code, nothing
+  // puts it in Claude Code's settings, and the service has no MEKO_* environment, so config.toml
+  // keeps it, as it would a typed one.
+  if (keyFromEnv && !d.ensureInClaude && meko.apiKey === process.env.MEKO_API_KEY) {
+    cfg.meko.apiKey = meko.apiKey;
+    cfg.meko.url = meko.url === DEFAULT_MEKO_URL ? '' : meko.url;
   }
   d.ui.ok('Meko', label);
   if (!cloud?.apiKey && label.startsWith('on this computer') && d.canAsk) d.ui.note(`To keep projects' memory in Meko Cloud instead: ${linkHint}`);

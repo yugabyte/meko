@@ -969,8 +969,9 @@ describe('Meko credentials', () => {
     const linked = { set: true, url: 'https://meko.example.com/mcp', apiKey: 'meko-key', webUrl: 'https://meko.example.com', apiUrl: 'https://meko.example.com/api/v1' };
     const probes: LocalMekoProbe[] = [
       { state: 'running', meko: local, cloud: linked },
-      // `meko` failing keeps the link last read.
+      // `meko` failing keeps the link last read, and so does Meko failing to read it.
       { state: 'failed', meko: null },
+      { state: 'running', meko: local, cloudUnreadable: true },
       { state: 'running', meko: local, cloud: { set: true, url: '', apiKey: '', webUrl: '', apiUrl: '' } },
       // Never set: AgentK's own key stands in until it's handed over.
       { state: 'running', meko: local, cloud: { set: false, url: '', apiKey: '', webUrl: '', apiUrl: '' } },
@@ -981,6 +982,8 @@ describe('Meko credentials', () => {
       await reader.refresh();
       expect(resolveMekoWithSource(cfg)).toEqual({ url: 'https://meko.example.com/mcp', apiKey: 'meko-key', keySource: 'meko' });
       expect([resolveMekoWebUrl(cfg), resolveMekoApiUrl(cfg)]).toEqual(['https://meko.example.com', 'https://meko.example.com/api/v1']);
+      await reader.refresh();
+      expect(resolveMekoWithSource(cfg).keySource).toBe('meko');
       await reader.refresh();
       expect(resolveMekoWithSource(cfg).keySource).toBe('meko');
       await reader.refresh();
