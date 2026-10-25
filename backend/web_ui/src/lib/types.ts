@@ -262,6 +262,8 @@ export interface UpdateStatus {
   running: string;
   // A release install, which updates itself; a build from source doesn't.
   release: boolean;
+  // Why a release install's updates can't run, when they can't.
+  off?: string;
   // The login service runs this server, and starts a new version again if it fails.
   service: boolean;
   channel?: string;

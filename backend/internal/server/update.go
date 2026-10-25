@@ -45,7 +45,7 @@ func (s *Server) updateCheck(c echo.Context) error {
 	defer cancel()
 	st, err := u.CheckNow(ctx)
 	if err != nil {
-		return updateConflict(c, err)
+		return updateConflict(c, st, err)
 	}
 	return envelope.OK(c, st)
 }
@@ -68,14 +68,16 @@ func (s *Server) updateApply(c echo.Context) error {
 	}
 	st, err := u.StartApply()
 	if err != nil {
-		return updateConflict(c, err)
+		return updateConflict(c, st, err)
 	}
 	s.opts.Logger.Info("update started from the web UI", "running", st.Running)
 	return c.JSON(http.StatusAccepted, envelope.Response{Data: st})
 }
 
-func updateConflict(c echo.Context, err error) error {
+func updateConflict(c echo.Context, st update.Status, err error) error {
 	switch {
+	case errors.Is(err, update.ErrOff):
+		return envelope.Fail(c, http.StatusConflict, "UPDATE_OFF", "Updates are off: "+st.Off+". See meko logs.")
 	case errors.Is(err, update.ErrBusy):
 		return envelope.Fail(c, http.StatusConflict, "UPDATE_BUSY", "Meko is already checking for or installing an update.")
 	case errors.Is(err, update.ErrPending):

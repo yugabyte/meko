@@ -3,7 +3,7 @@
 // Meko restarts the card waits for it to answer again and reloads the page into the new version;
 // after the reload it says how the update went.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { api, ApiError } from "../lib/api";
 import { timeAgo } from "../lib/format";
@@ -91,17 +91,26 @@ export function UpdatesCard() {
     const t = setInterval(reload, POLL_MS);
     return () => clearInterval(t);
   }, [jobRunning, restarting, reload]);
+  // The server restarts as soon as the new version is current, so a poll rarely sees the
+  // restarting step: a poll that fails while the job installs a version is the restart too.
+  const from = s?.running;
+  const step = jobRunning ? job?.step : undefined;
+  const to = job?.to;
+  const unreachable = !!status.error;
   useEffect(() => {
-    if (s && job?.state === "running" && job.step === "restarting" && job.to && !restarting) {
-      const t = { from: s.running, to: job.to };
+    if (restarting || !from || !to) return;
+    if (step === "restarting" || (step === "installing" && unreachable)) {
+      const t = { from, to };
       saveTarget(t);
       setRestarting(t);
     }
-  }, [s, job, restarting]);
-  // The sidebar's chip follows what the card shows.
+  }, [from, step, to, unreachable, restarting]);
+  // The sidebar's chip follows what the card shows, once the install ends.
+  const wasRunning = useRef(false);
   useEffect(() => {
-    if (job && !jobRunning) notifyUpdateChanged();
-  }, [job, jobRunning]);
+    if (wasRunning.current && !jobRunning) notifyUpdateChanged();
+    wasRunning.current = jobRunning;
+  }, [jobRunning]);
   const [onLost] = useState(() => () => setLost(true));
   useRestartWait(restarting, onLost);
 
@@ -136,6 +145,16 @@ export function UpdatesCard() {
       <MetricCard title="Updates">
         <p className="text-sm text-muted-foreground">
           This Meko was built from source, so it doesn't update itself: rebuild it, or install a release.
+        </p>
+      </MetricCard>
+    );
+  }
+
+  if (s.off) {
+    return (
+      <MetricCard title="Updates">
+        <p className="text-sm text-muted-foreground">
+          Meko {s.running} can't update itself: {s.off}. See meko logs.
         </p>
       </MetricCard>
     );

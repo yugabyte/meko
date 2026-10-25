@@ -91,7 +91,7 @@ func releaseInstall(t *testing.T, old, next string) update.App {
 
 // serveAndUpdate runs serve as a release install, installs next from the web listener's route and
 // returns what serve returned.
-func serveAndUpdate(t *testing.T, old, next string) (update.App, error) {
+func serveAndUpdate(t *testing.T, old, next string) (update.App, paths.Layout, error) {
 	t.Helper()
 	dir, port := setup(t)
 	app := releaseInstall(t, old, next)
@@ -145,23 +145,29 @@ func serveAndUpdate(t *testing.T, old, next string) (update.App, error) {
 	if p, _ := app.ReadPending(); p == nil || p.From != old || p.To != next {
 		t.Errorf("pending %+v", p)
 	}
-	return app, err
+	return app, l, err
 }
 
 // Started by hand, serve stops and asks Run to exec the new version in its place.
 func TestWebUpdateWithoutAServiceExecsTheNewVersion(t *testing.T) {
 	t.Setenv("MEKO_SERVICE", "")
-	app, err := serveAndUpdate(t, "0.20261021.0", "0.20261022.0")
+	app, l, err := serveAndUpdate(t, "0.20261021.0", "0.20261022.0")
 	var ex *execError
 	if !errors.As(err, &ex) || ex.exe != app.CurrentExe() {
 		t.Fatalf("serve returned %v, want an exec of %s", err, app.CurrentExe())
+	}
+	// A successful update isn't logged as a failure.
+	b, err := os.ReadFile(l.Log)
+	if err != nil || !bytes.Contains(b, []byte("restarting into the update")) ||
+		bytes.Contains(b, []byte("server stopped with an error")) {
+		t.Errorf("the log (%v):\n%s", err, b)
 	}
 }
 
 // Under the service, serve exits cleanly for the service manager to start the new version.
 func TestWebUpdateUnderTheServiceExits(t *testing.T) {
 	t.Setenv("MEKO_SERVICE", "systemd")
-	if _, err := serveAndUpdate(t, "0.20261021.0", "0.20261022.0"); err != nil {
+	if _, _, err := serveAndUpdate(t, "0.20261021.0", "0.20261022.0"); err != nil {
 		t.Fatalf("serve returned %v", err)
 	}
 }

@@ -120,7 +120,9 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	defer func() { err = errors.Join(err, logFile.Close()) }()
 	log := logging.New(logFile, o.Stderr, level)
 	defer func() {
-		if err != nil {
+		// An exec into another version isn't a failure: the rollback and the update log their own.
+		var ex *execError
+		if err != nil && !errors.As(err, &ex) {
 			log.Error("server stopped with an error", "error", err)
 		}
 	}()
@@ -315,8 +317,10 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	defer stopUpdates()
 	var updates server.Updates
 	if isRelease {
-		if u := startUpdates(updCtx, app, release, l, cfg, log, onProbation, restart); u != nil {
+		if u, off := startUpdates(updCtx, app, release, l, cfg, log, onProbation, restart); u != nil {
 			updates = u
+		} else {
+			updates = update.Off{Version: release, Reason: off}
 		}
 	}
 	// The Meko Cloud link: the web UI and meko cloud_link change it; the running extensions hear.
@@ -412,7 +416,8 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	}
 	<-jobsDone
 	log.Info("Meko stopped")
-	if serveErr == nil && execInto != "" {
+	// A stop asked for while serve was stopping (meko stop, restart or destroy) wins over the exec.
+	if serveErr == nil && execInto != "" && ctx.Err() == nil {
 		return &execError{exe: execInto, why: "restarting into the update"}
 	}
 	return serveErr
@@ -498,9 +503,9 @@ func (e *execError) Error() string { return e.why + ": " + e.exe }
 // has run update.HealthyAfter. On their own, updates are installed only under the service, which
 // starts the new version after serve exits; a server started by hand only reports them. The
 // updater it returns is the Status page's too, even with [update] channel = "off" (which stops only
-// the scheduled checks), and nil only when the schema can't be read.
+// the scheduled checks). When the schema can't be read it returns nil and why.
 func startUpdates(ctx context.Context, app update.App, release string, l paths.Layout, cfg config.Config,
-	log *slog.Logger, onProbation bool, restart chan struct{}) *update.Updater {
+	log *slog.Logger, onProbation bool, restart chan struct{}) (*update.Updater, string) {
 	if onProbation {
 		go func() {
 			select {
@@ -518,7 +523,7 @@ func startUpdates(ctx context.Context, app update.App, release string, l paths.L
 	schema, err := store.LatestSchema()
 	if err != nil {
 		log.Warn("updates are off", "error", err)
-		return nil
+		return nil, "can't read this version's database schema: " + err.Error()
 	}
 	var once sync.Once
 	service := os.Getenv("MEKO_SERVICE") != ""
@@ -532,7 +537,7 @@ func startUpdates(ctx context.Context, app update.App, release string, l paths.L
 	if cfg.Update.Channel != update.ChannelOff {
 		go u.Run(ctx)
 	}
-	return u
+	return u, ""
 }
 
 // keychainRetry is how often serve tries the Keychain again while it refuses (locked, as when the

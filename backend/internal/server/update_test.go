@@ -104,6 +104,23 @@ func TestUpdateRoutesFromSource(t *testing.T) {
 	}
 }
 
+// A release install whose updater couldn't be set up says why, and refuses checks and installs.
+func TestUpdateRoutesWhenOff(t *testing.T) {
+	off := update.Off{Version: "0.20261021.0", Reason: "no schema"}
+	base, _ := startWeb(t, config.AccessLocal, "", noProxies, func(w *Web) { w.Updates = off })
+	code, env := get(t, base+"/api/v1/update", nil, "")
+	m, _ := env.Data.(map[string]any)
+	if code != 200 || m["release"] != true || m["off"] != "no schema" {
+		t.Errorf("status: %d %+v", code, env)
+	}
+	for _, p := range []string{"/check", "/apply"} {
+		if code, env = post(t, base+"/api/v1/update"+p, nil); code != 409 || env.Error.Code != "UPDATE_OFF" ||
+			env.Error.Message != "Updates are off: no schema. See meko logs." {
+			t.Errorf("%s: %d %+v", p, code, env.Error)
+		}
+	}
+}
+
 // The routes need the owner's session without local access, and the API listener has none of them.
 func TestUpdateRoutesNeedTheOwner(t *testing.T) {
 	f := &fakeUpdates{}

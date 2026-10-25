@@ -103,13 +103,28 @@ type Job struct {
 var (
 	ErrBusy    = errors.New("an update check or install is already running")
 	ErrPending = errors.New("the last update hasn't finished: a new version counts as installed once it has run 5 minutes")
+	ErrOff     = errors.New("updates are off")
 )
+
+// Off is the web UI's view of a release install whose updater couldn't be set up: Status says why,
+// and checks and installs are refused (ErrOff).
+type Off struct{ Version, Reason string }
+
+func (o Off) Status() Status {
+	return Status{Running: o.Version, Release: true, Off: o.Reason, RolledBack: []string{}}
+}
+
+func (o Off) CheckNow(context.Context) (Status, error) { return o.Status(), ErrOff }
+
+func (o Off) StartApply() (Status, error) { return o.Status(), ErrOff }
 
 // Status is what the web UI's Status page shows about updates.
 type Status struct {
 	Running string `json:"running"`
 	// Release is whether this is a release install, which updates itself; a build from source doesn't.
-	Release bool   `json:"release"`
+	Release bool `json:"release"`
+	// Off is why a release install's updates can't run (Off); "" when they can.
+	Off     string `json:"off,omitempty"`
 	Service bool   `json:"service"`
 	Channel string `json:"channel,omitempty"`
 	// Auto is whether this server installs updates on its own: under the service, with [update] auto.
@@ -117,7 +132,7 @@ type Status struct {
 	CheckedAt *time.Time `json:"checked_at,omitempty"`
 	Latest    string     `json:"latest,omitempty"`
 	LatestURL string     `json:"latest_url,omitempty"`
-	// Available is whether Latest is newer than the running version.
+	// Available is whether Latest is newer than the running version and wasn't rolled back.
 	Available bool   `json:"available"`
 	Error     string `json:"error,omitempty"`
 	// Pending is an update on probation.
@@ -176,15 +191,17 @@ func (u *Updater) scheduled(ctx context.Context) bool {
 func (u *Updater) Status() Status {
 	s := Status{Running: u.Version, Release: true, Service: u.Service, Channel: u.Channel, Auto: u.Auto,
 		RolledBack: []string{}}
+	bad := u.App.BadVersions()
 	if st, ok := ReadState(u.DataDir); ok {
 		s.CheckedAt, s.Latest, s.LatestURL, s.Error = &st.CheckedAt, st.Latest, st.LatestURL, st.Error
 		cur, _ := ParseVersion(u.Version)
-		if v, ok := ParseVersion(st.Latest); ok {
+		// update.json can predate a rollback, and still name the version rolled back.
+		if v, ok := ParseVersion(st.Latest); ok && !bad[st.Latest] {
 			s.Available = cur.Less(v)
 		}
 	}
 	s.Pending, _ = u.App.ReadPending()
-	for v := range u.App.BadVersions() {
+	for v := range bad {
 		s.RolledBack = append(s.RolledBack, v)
 	}
 	sort.Strings(s.RolledBack)

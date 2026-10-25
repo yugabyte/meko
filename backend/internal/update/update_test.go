@@ -583,4 +583,33 @@ func TestStatus(t *testing.T) {
 	if strings.Join(st.RolledBack, ",") != "0.20261019.0,0.20261020.2" || st.Available || st.Latest != "0.20261021.0" {
 		t.Errorf("after: %+v", st)
 	}
+
+	// A check from before a rollback still names the version rolled back: it isn't offered.
+	b, _ = json.Marshal(State{CheckedAt: time.Now(), Running: webOld, Latest: "0.20261022.0"})
+	if err := os.WriteFile(StateFile(u.DataDir), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if st = u.Status(); !st.Available {
+		t.Errorf("newer: %+v", st)
+	}
+	if err := u.App.addBadVersion("0.20261022.0"); err != nil {
+		t.Fatal(err)
+	}
+	if st = u.Status(); st.Available || st.Latest != "0.20261022.0" {
+		t.Errorf("rolled back: %+v", st)
+	}
+}
+
+// Off refuses checks and installs, saying why.
+func TestOff(t *testing.T) {
+	o := Off{Version: webOld, Reason: "no schema"}
+	if st := o.Status(); !st.Release || st.Off != "no schema" || st.Running != webOld || st.RolledBack == nil {
+		t.Errorf("status %+v", st)
+	}
+	if _, err := o.CheckNow(context.Background()); err != ErrOff {
+		t.Errorf("check: %v", err)
+	}
+	if _, err := o.StartApply(); err != ErrOff {
+		t.Errorf("install: %v", err)
+	}
 }
