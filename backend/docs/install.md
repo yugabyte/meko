@@ -106,7 +106,7 @@ release scripts with `--product meko`:
 |---|---|---|
 | Tag | `agentk-v0.YYYYMMDD.N` (`v0.…` before) | `meko-v0.YYYYMMDD.N` |
 | Title | its tag | its tag |
-| Releases on | feat/fix/perf/deps subjects other than those naming only `meko` | feat/fix/perf/deps subjects naming `meko`, alone or in a list (`feat(agentk,meko): …`) |
+| Releases on | feat/fix/perf/deps subjects other than those naming only `meko` or `presenter` (Presenter has no train yet) | feat/fix/perf/deps subjects naming `meko`, alone or in a list (`feat(agentk,meko): …`) |
 | Assets | AgentK tarballs, `SHA256SUMS`, its `install.sh` | Meko tarballs, `SHA256SUMS`, Meko's `install.sh` |
 | Latest | `--latest=false` | `--latest` |
 | Pruning | newest 5 per lane of its own tags | newest 5 `meko-v` releases |
@@ -161,7 +161,7 @@ its uninstall (`Catalog.UninstallArgs`; AgentK's is `uninstall --purge --delete-
 extension knows where its own folder is: `<data>/extensions/<name>` (`extensions.Dir`). AgentK's
 home is `<data>/extensions/agentk`, wherever Meko's rule puts the data folder (`MEKO_HOME`,
 `~/.meko`, or the network-home fallback; AgentK runs the same rule when Meko didn't tell it, and
-both test suites read `internal/paths/testdata/resolve-cases.json`). An AgentK whose home is in
+AgentK's and Presenter's tests read `internal/paths/testdata/resolve-cases.json` as Meko's do). An AgentK whose home is in
 another data folder refuses `start`, `stop`, `status`, `uninstall` and `_handoff` run with this one's
 `MEKO_HOME`, and does nothing.
 
@@ -192,7 +192,18 @@ another data folder refuses `start`, `stop`, `status`, `uninstall` and `_handoff
   installed one by its `install.js`, a release by its `install.sh`. So `install_extension` needs
   an AgentK release that takes `--meko-url`. Nothing else is passed, apart from `--non-interactive` without a terminal: AgentK asks its own questions. Then it registers
   `agentk`.
-- An extension whose catalog entry has `WebUI` (AgentK) is served to browsers by the web listener at
+- The catalog (`extensions.Known`) has AgentK and Presenter. Presenter has no releases yet, so
+  `meko install_extension presenter` works only with a `presenter` command on PATH or in
+  `~/.local/bin` (a build from source), which it runs as `presenter install --meko-url … --meko-key …`;
+  without one, the release download it falls back to finds nothing. Presenter's uninstall is
+  `uninstall --purge --non-interactive`: its decks stay in their Meko datapacks.
+- A command npm installed (`npm link`, `npm install -g`: Presenter from source) is a
+  `#!/usr/bin/env node` script in the bin folder of the Node that installed it, and the login
+  service's PATH has no such Node (launchd's is `/usr/bin:/bin:/usr/sbin:/sbin`), or an older one.
+  So when an extension's command sits in a folder that holds a `node`, Meko runs it (`start`,
+  `stop`, `status`, `_handoff`, its uninstall, and its `install` from `install_extension` or the
+  Extensions page) with that folder first on PATH (`extensions.CommandEnv`).
+- An extension whose catalog entry has `WebUI` (AgentK, Presenter) is served to browsers by the web listener at
   `/ext/<name>/`, on the unix socket `<command> _handoff --json` names; at every start, that handoff
   also brings over the web settings, certificate and login the extension had when it served
   browsers itself ([web.md](web.md#the-handoff-from-agentk)). AgentK listens only on its socket.

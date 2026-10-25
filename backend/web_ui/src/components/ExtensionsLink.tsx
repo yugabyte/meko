@@ -13,6 +13,8 @@ import { cx } from "./ui";
 const page = { tab: "overview" as const, view: "extensions" as const };
 
 export function ExtensionIcon({ name, className }: { name: string; className?: string }) {
+  // Presenter's logo ships with this UI, so it shows while Presenter is stopped too.
+  if (name === "presenter") return <img src="/presenter-logo.png" alt="" className={cx("size-4 shrink-0 object-contain", className)} />;
   const Icon = name === "agentk" ? Bot : Puzzle;
   return <Icon className={cx("size-4 shrink-0", className)} />;
 }

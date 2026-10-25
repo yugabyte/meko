@@ -42,15 +42,18 @@ describe('releaseNotes', () => {
     'nit!: rename a thing\n\nBREAKING CHANGE: not from a type that releases',
     'Merge branch main',
     'feature: not a type',
-    // Meko's subjects release Meko, not AgentK.
+    // Meko's subjects release Meko, not AgentK, and Presenter's release nothing yet.
     'feat(meko/cli): add a command',
     'fix(meko)!: change the store\n\nBREAKING CHANGE: a new format',
+    'feat(presenter/web): a Presenter page',
+    'fix(presenter)!: change the deck format\n\nBREAKING CHANGE: decks move',
+    'feat(meko,presenter/web): ship Presenter and its Meko side',
   ])('leaves out %j', (message) => {
     expect(releaseNotes([commit(message)], 'o/r')).toEqual([]);
   });
 
-  it.each(['feat(agentk,meko): ship both (#20)', 'feat(meko/cli,agentk/web): ship both (#20)', 'feat(meko,repo): ship both (#20)'])(
-    'keeps %j: a subject that names Meko and another component releases both',
+  it.each(['feat(agentk,meko): ship both (#20)', 'feat(meko/cli,agentk/web): ship both (#20)', 'feat(meko,repo): ship both (#20)', 'feat(agentk,presenter): ship both (#20)'])(
+    'keeps %j: a subject that names Meko or Presenter and another component counts for AgentK',
     (message) => {
       const component = /\(([^)]*)\)/.exec(message)![1];
       expect(releaseNotes([commit(message, '6666666fff')], 'o/r')).toEqual([

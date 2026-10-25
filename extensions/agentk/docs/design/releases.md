@@ -14,16 +14,18 @@ Part of the [AgentK design](../design.md).
   every component's jobs, run or skipped) and the title check pass.
 - **Versioning (on push to main).** Versions are `0.YYYYMMDD.N`: the UTC date, and `N` counting
   from 0 for each release that day. Commit subjects are `<type>(<component>[/<area>])[!]: <summary>`
-  with one of nine types and one of the repo's components (`agentk`, `meko`, `repo`:
+  with one of nine types and one of the repo's components (`agentk`, `meko`, `presenter`, `repo`:
   `scripts/check-title.sh`), or several comma-separated for a change that ships in more than one
   (`feat(agentk,meko): …`), and PRs are squash-merged with the PR title
   as the subject. A push with any `feat`, `fix`, `perf` or `deps` commit for AgentK since its last
   release runs the tests and cuts the next version, and those subjects become the release notes;
   `ci`, `test`, `docs`, `nit` and `chore` don't release. Releases are scoped by component: Meko
   (`backend/`) releases on its own, from its own tags (`meko-v…`), and subjects naming only `meko`
-  never release AgentK. Every other subject (`agentk`, `repo`, lists such as `agentk,meko`, and
-  older ones with no component or a free-form one) counts for AgentK, and every subject naming
-  `meko`, alone or in a list, counts for Meko: a PR titled `feat(agentk,meko): …` releases both. The repo root's `scripts/release/` holds the scripts both
+  never release AgentK. Presenter (`extensions/presenter`) has no release train yet: subjects naming
+  only `presenter` (or `meko` and `presenter`) release nothing for AgentK. Every other subject
+  (`agentk`, `repo`, lists such as `agentk,meko`, and older ones with no component or a free-form
+  one) counts for AgentK, and every subject naming `meko`, alone or in a list, counts for Meko: a PR
+  titled `feat(agentk,meko): …` releases both. The repo root's `scripts/release/` holds the scripts both
   products use, with `--product agentk|meko`: `next-version.sh`, `release-notes.sh` and
   `prune-releases.sh` (`product.sh` names each product's tags and components).
 - **Build matrix (after the tests).** Self-contained tarballs are built for `linux-x64` and
@@ -162,7 +164,7 @@ don't say what an update brought. The **What's new** dialog (`WhatsNewDialog.tsx
 change between two versions instead: the server asks GitHub for the commits between their tags
 (`GET /api/update/notes`, `Updater.notes()`, through the same `gh` or HTTPS source as the update
 check: `repos/<repo>/compare/<from tag>...<to tag>`, each of either prefix) and lists the `feat`, `fix`, `perf` and `deps`
-subjects by type, as the repo root's `scripts/release/release-notes.sh` does (leaving out the subjects that name only `meko`) (`src/server/releasenotes.ts`), with
+subjects by type, as the repo root's `scripts/release/release-notes.sh` does (leaving out the subjects that name only `meko` or `presenter`) (`src/server/releasenotes.ts`), with
 **Breaking changes** first and each line linked to its PR. GitHub returns at most 250 commits for a
 comparison; past that the dialog says so, and **See every commit on GitHub** opens the comparison
 there. A range's notes are kept in memory once fetched; nothing is fetched until the dialog opens.

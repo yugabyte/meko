@@ -60,7 +60,7 @@ describe('check-title.sh', () => {
     ['Fix(agentk): x', 'Unknown type "Fix"'],
     ['Revert "feat(agentk): x"', 'Unknown type'],
     ['(agentk): x', 'Unknown type ""'],
-    ['fix: x', 'Name the component in parentheses after the type: one of agentk, meko, repo.'],
+    ['fix: x', 'Name the component in parentheses after the type: one of agentk, meko, presenter, repo.'],
     ['fix(web): x', 'Unknown component "web"'],
     ['fix(): x', 'Unknown component ""'],
     ['fix(agentk) : x', 'Bad component'],
@@ -95,7 +95,7 @@ describe('check-title.sh', () => {
     // Every rejection shows the rules.
     expect(r.stderr).toContain('Format: <type>(<component>[/<area>])[!]: <summary>');
     expect(r.stderr).toContain('Types: feat, fix, perf, deps, ci, test, docs, nit, chore');
-    expect(r.stderr).toContain('Components: agentk, meko, repo');
+    expect(r.stderr).toContain('Components: agentk, meko, presenter, repo');
   });
 
   it('skips only the length limit with --no-length', () => {

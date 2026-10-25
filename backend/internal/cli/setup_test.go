@@ -263,7 +263,7 @@ func TestInstallExtensionSetsUpAnInstalledAgentK(t *testing.T) {
 		t.Errorf("still registered: %v", reg.Entries)
 	}
 	code, _, errs = run("install_extension", "frob", "--data-dir", dir)
-	want(t, "an unknown extension", code, 1, errs, "meko knows agentk")
+	want(t, "an unknown extension", code, 1, errs, "meko knows agentk, presenter")
 }
 
 func TestInstallExtensionRunsTheNewestAgentKInstaller(t *testing.T) {

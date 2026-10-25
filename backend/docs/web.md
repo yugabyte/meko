@@ -2,7 +2,7 @@
 
 Browsers reach Meko, and its extensions, on one port: the **web listener** (`[web] port`, 7777).
 It serves the web UI ([web-ui.md](web-ui.md)) at `/`, the data routes and `/mcp` the UI calls, the
-sign-in routes, and each extension's own web UI at `/ext/<name>/`: AgentK's at `/ext/agentk/`. Agents
+sign-in routes, and each extension's own web UI at `/ext/<name>/`: AgentK's at `/ext/agentk/`, Presenter's at `/ext/presenter/`. Agents
 and the CLI keep the **API listener** (`[server] port`, `127.0.0.1:7778`) with their Bearer tokens
 ([design.md](design.md#http-server), [api.md](api.md#auth)).
 
@@ -12,6 +12,7 @@ flowchart LR
   web --> ui["/ : web UI"]
   web --> data["/api/v1, /mcp, /api/v1/auth"]
   web -->|"/ext/agentk/*, prefix stripped"| sock["AgentK's unix socket"]
+  web -->|"/ext/presenter/*, prefix stripped"| psock["Presenter's unix socket"]
   agents["MCP clients, AgentK, meko CLI"] -->|"127.0.0.1:7778, Bearer"| api["API listener"]
 ```
 

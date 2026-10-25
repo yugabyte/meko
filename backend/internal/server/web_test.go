@@ -253,7 +253,8 @@ func TestWebExtensionDown(t *testing.T) {
 	}
 	code, env := get(t, base+"/api/v1/extensions", nil, "")
 	rows, _ := env.Data.([]any)
-	if row, _ := firstRow(rows); code != 200 || len(rows) != 1 || row["available"] != false {
+	row, _ := rowNamed(rows, "agentk")
+	if code != 200 || row == nil || row["installed"] != true || row["available"] != false {
 		t.Errorf("extensions: %d %+v", code, env)
 	}
 }
@@ -283,10 +284,12 @@ type bufConn struct {
 
 func (b *bufConn) Read(p []byte) (int, error) { return b.r.Read(p) }
 
-func firstRow(rows []any) (map[string]any, bool) {
-	if len(rows) == 0 {
-		return nil, false
+// rowNamed is the extension called name in a list of them, or nil.
+func rowNamed(rows []any, name string) (map[string]any, bool) {
+	for _, r := range rows {
+		if m, ok := r.(map[string]any); ok && m["name"] == name {
+			return m, true
+		}
 	}
-	m, ok := rows[0].(map[string]any)
-	return m, ok
+	return nil, false
 }

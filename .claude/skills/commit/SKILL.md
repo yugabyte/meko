@@ -30,9 +30,9 @@ The release workflows read commit subjects. The repo releases two products, each
 Meko (`meko-release.yml`, tags `meko-v0.YYYYMMDD.N`) and AgentK (`agentk-release.yml`, tags
 `agentk-v0.YYYYMMDD.N`). A push to `main` with any `feat`, `fix`, `perf` or `deps` commit since a
 product's last release cuts its next version, and those subjects become its release notes (and
-AgentK's **What's new**). Subjects naming `meko` release Meko; subjects naming any other component
-(`agentk`, `repo`) release AgentK (`scripts/release/release-notes.sh --product`), so
-`feat(agentk,meko): …` releases both. Every other type
+AgentK's **What's new**). Subjects naming `meko` release Meko; `presenter` releases nothing yet;
+subjects naming any other component (`agentk`, `repo`) release AgentK
+(`scripts/release/release-notes.sh --product`), so `feat(agentk,meko): …` releases both. Every other type
 lands without a release. Use exactly one of these nine types:
 
 | Type | Releases? | Use for |
@@ -64,6 +64,7 @@ The rest of the subject:
   |---|---|
   | `agentk` | AgentK, `extensions/agentk` |
   | `meko` | Meko, `backend/` |
+  | `presenter` | Presenter, `extensions/presenter` (no release train yet: its subjects release nothing) |
   | `repo` | The shared root: `.github/`, `scripts/`, root docs, `.claude/` |
 
   A root file that belongs to one component (`agentk-release.yml` builds AgentK) takes that

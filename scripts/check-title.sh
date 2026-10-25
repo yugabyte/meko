@@ -16,12 +16,13 @@ set -eu
 # test/unit/check-title.test.ts). Only a releasing type can be marked breaking with `!`.
 TYPES='feat|fix|perf|deps|ci|test|docs|nit|chore'
 RELEASE='feat|fix|perf|deps'
-# The components a title names: agentk (extensions/agentk), meko (Meko, in backend/) and
-# repo (the shared root), with an optional area after a slash. A change that ships in more than one
-# names each, comma-separated (feat(agentk,meko): ...), and releases every product it names
-# (scripts/release/product.sh). Each but repo is a component of scripts/ci-scope.sh too
-# (test/unit/check-title.test.ts checks; meko is backend there).
-COMPONENTS='agentk|meko|repo'
+# The components a title names: agentk (extensions/agentk), meko (Meko, in backend/), presenter
+# (extensions/presenter) and repo (the shared root), with an optional area after a slash. A change
+# that ships in more than one names each, comma-separated (feat(agentk,meko): ...), and releases
+# every product it names (scripts/release/product.sh; presenter has no release train yet). Each but
+# repo is a component of scripts/ci-scope.sh too (test/unit/check-title.test.ts checks; meko is
+# backend there).
+COMPONENTS='agentk|meko|presenter|repo'
 MAX=72
 
 length=true

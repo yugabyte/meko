@@ -6,7 +6,7 @@
 // The contract is the extension's CLI: `<command> start`, `<command> stop` and `<command> status`,
 // and its uninstall (Catalog.UninstallArgs) for meko destroy --with-extensions. Every command Meko
 // runs of an extension gets MEKO_HOME set to Meko's data folder, so the extension knows where its
-// own folder in it is (Dir). AgentK's agentk is the first.
+// own folder in it is (Dir). AgentK's agentk is the first; Presenter's presenter the second.
 package extensions
 
 import (
@@ -44,6 +44,28 @@ var Known = map[string]Catalog{
 		UninstallArgs: []string{"uninstall", "--purge", "--delete-worktrees", "--non-interactive"},
 		WebUI:         true,
 	},
+	// Presenter (extensions/presenter): interactive, branching presentations built from datapacks.
+	// Until it has releases of its own, install_extension needs `presenter` on PATH (a build from source).
+	"presenter": {
+		Title: "Presenter",
+		Description: "Builds presentations that branch with the room from your datapacks: Claude drafts the story " +
+			"map and the slides, and you pick each path live.",
+		Command:       "presenter",
+		TagPrefixes:   []string{"presenter-v"},
+		Installer:     "install.sh",
+		UninstallArgs: []string{"uninstall", "--purge", "--non-interactive"},
+		WebUI:         true,
+	},
+}
+
+// KnownNames lists the extensions install_extension knows, in order.
+func KnownNames() []string {
+	names := make([]string, 0, len(Known))
+	for n := range Known {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // Catalog says how to find and install a known extension.
@@ -144,6 +166,23 @@ var (
 // Meko's data folder at root (the last value of a key is the one a program sees).
 func Env(root string) []string { return append(os.Environ(), paths.HomeEnv+"="+root) }
 
+// CommandEnv is Env for one extension command. A command npm installed (npm link, npm install -g)
+// is a `#!/usr/bin/env node` script in the bin folder of the Node that installed it, and Meko's
+// login service has no such Node on its PATH (launchd's is /usr/bin:/bin:/usr/sbin:/sbin), or an
+// older one: when the command's folder holds a node, that folder goes first on PATH.
+func CommandEnv(root, command string) []string {
+	env := Env(root)
+	dir := filepath.Dir(command)
+	if !executable(filepath.Join(dir, "node")) {
+		return env
+	}
+	path := dir
+	if p := os.Getenv("PATH"); p != "" {
+		path += string(os.PathListSeparator) + p
+	}
+	return append(env, "PATH="+path)
+}
+
 // Run runs `<command> <action>` for one extension, with its output passed through, for the data
 // folder at root.
 func (e Entry) Run(root, action string, stdout, stderr io.Writer) error {
@@ -164,7 +203,7 @@ func (e Entry) run(root string, args []string, d time.Duration, stdout, stderr i
 	defer cancel()
 	// G204: the extension's own command, from the registry.
 	cmd := exec.CommandContext(ctx, e.Command, args...) //nolint:gosec
-	cmd.Stdout, cmd.Stderr, cmd.Env, cmd.WaitDelay = stdout, stderr, Env(root), PipeWait
+	cmd.Stdout, cmd.Stderr, cmd.Env, cmd.WaitDelay = stdout, stderr, CommandEnv(root, e.Command), PipeWait
 	if err := cmd.Run(); err != nil && !errors.Is(err, exec.ErrWaitDelay) {
 		what := e.Command + " " + strings.Join(args, " ")
 		if ctx.Err() != nil {
@@ -181,7 +220,7 @@ func (e Entry) Status(root string) (bool, string) {
 	defer cancel()
 	var out bytes.Buffer
 	cmd := exec.CommandContext(ctx, e.Command, "status") //nolint:gosec // G204: see run
-	cmd.Stdout, cmd.Stderr, cmd.Env = &out, &out, Env(root)
+	cmd.Stdout, cmd.Stderr, cmd.Env = &out, &out, CommandEnv(root, e.Command)
 	err := cmd.Run()
 	first, _, _ := bytes.Cut(bytes.TrimSpace(out.Bytes()), []byte("\n"))
 	return err == nil, string(first)
@@ -270,7 +309,7 @@ func (e Entry) Handoff(root string) (Handoff, error) {
 	defer cancel()
 	var out, errOut bytes.Buffer
 	cmd := exec.CommandContext(ctx, e.Command, "_handoff", "--json") //nolint:gosec // G204: see run
-	cmd.Stdout, cmd.Stderr, cmd.Env = &out, &errOut, Env(root)
+	cmd.Stdout, cmd.Stderr, cmd.Env = &out, &errOut, CommandEnv(root, e.Command)
 	if err := cmd.Run(); err != nil {
 		first, _, _ := bytes.Cut(bytes.TrimSpace(errOut.Bytes()), []byte("\n"))
 		return Handoff{}, fmt.Errorf("%s _handoff: %w (%s)", e.Command, err, first)

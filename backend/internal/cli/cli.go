@@ -64,9 +64,10 @@ Usage:
                  unless --force; --with-extensions removes the extensions too)
   meko update    install the newest release now (it updates itself under the service);
                  --check only looks
-  meko install_extension agentk
-                 install AgentK, pointed at this Meko, and start and stop it with Meko
-  meko uninstall_extension agentk
+  meko install_extension agentk|presenter
+                 install AgentK or Presenter, pointed at this Meko, and start and stop it with
+                 Meko (Presenter has no releases yet: put a build of it on PATH first)
+  meko uninstall_extension agentk|presenter
                  stop starting and stopping it with Meko (it stays installed)
 
   meko search "<question>"       search memories, the knowledge base and past conversations

@@ -51,18 +51,20 @@ describe('release-notes.sh', () => {
     git('tag', 'meko-v0.20260101.0');
   });
 
-  it('gives AgentK every releasing subject but Meko’s, since AgentK’s last tag of either prefix', () => {
+  it('gives AgentK every releasing subject but Meko’s and Presenter’s, since AgentK’s last tag of either prefix', () => {
     commit('fix(agentk): before the switch');
     git('tag', 'agentk-v0.20260102.0');
     commit('fix(agentk/web): stop clipping the rail');
     commit('fix(repo): a release script');
     commit('feat(meko/cli)!: a Meko command');
+    commit('feat(presenter/web): a Presenter page');
     commit('fix(meko): a Meko fix');
+    commit('feat(meko,presenter): a Meko and Presenter change');
     const r = run('release-notes.sh', ['--product', 'agentk']);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('- agentk/web: stop clipping the rail');
     expect(r.stdout).toContain('- repo: a release script');
-    expect(r.stdout).not.toMatch(/meko|first|before the switch|Breaking/);
+    expect(r.stdout).not.toMatch(/meko|presenter|first|before the switch|Breaking/);
   });
 
   it('gives Meko only its own subjects, since Meko’s last tag, and exits 3 with none', () => {
