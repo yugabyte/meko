@@ -192,11 +192,29 @@ another data folder refuses `start`, `stop`, `status`, `uninstall` and `_handoff
   installed one by its `install.js`, a release by its `install.sh`. So `install_extension` needs
   an AgentK release that takes `--meko-url`. Nothing else is passed, apart from `--non-interactive` without a terminal: AgentK asks its own questions. Then it registers
   `agentk`.
-- The catalog (`extensions.Known`) has AgentK and Presenter. Presenter has no releases yet, so
-  `meko install_extension presenter` works only with a `presenter` command on PATH or in
-  `~/.local/bin` (a build from source), which it runs as `presenter install --meko-url … --meko-key …`;
-  without one, the release download it falls back to finds nothing. Presenter's uninstall is
-  `uninstall --purge --non-interactive`: its decks stay in their Meko datapacks.
+- The catalog (`extensions.Known`) has AgentK and Presenter. Presenter is `Managed`: Meko installs
+  and updates it from its own releases, with no installer of Presenter's. With no `presenter` on
+  PATH or in `~/.local/bin`, `meko install_extension presenter` picks the newest `presenter-v*`
+  release with this platform's `presenter-<version>-<os>-<arch>.tar.gz` and `SHA256SUMS` (skipping
+  its `bad-versions`), and installs it as Meko installs itself (`update.App`, named `presenter`):
+  checked against `SHA256SUMS`, unpacked, its `bin/presenter version --json` checked to run here,
+  into `<data>/extensions/presenter/app/<version>`, with `app/current` and
+  `~/.local/bin/presenter` pointing at it. Then, as with a `presenter` already there (a build from
+  source, used as it is and never updated), it runs `presenter install --meko-url … --meko-key …`.
+  Presenter's uninstall is `uninstall --purge --non-interactive`, which removes its folder, releases
+  and all (`meko destroy --with-extensions` then removes the `~/.local/bin/presenter` link Meko
+  made): its decks stay in their Meko datapacks.
+- `meko update_extension presenter` (and the Extensions page's **Update**) moves a release install
+  Meko made to the newest release: `--check` only looks. It deletes the versions but the current
+  one, stages the new one beside it, stops Presenter if it runs, and switches `app/current` with
+  `update-pending.json` written (`App.Switch`). A Presenter that was running is started again, up to
+  four times. Presenter's launcher (`extensions/presenter/packaging/presenter`) applies Meko's own
+  probation rules to that record: each start of the new version counts, the start after three
+  failed ones points `app/current` back at the old version, adds the new one to `bad-versions` and
+  runs the old one, and the server clears the record after 5 minutes of serving (a clean stop takes
+  its start off the count). The update then fails, saying it was rolled back. It needs no running
+  Meko. AgentK isn't `Managed`: it updates itself, and `update_extension agentk` says so. A command
+  that isn't Meko's release install (a build from source) is refused.
 - A command npm installed (`npm link`, `npm install -g`: Presenter from source) is a
   `#!/usr/bin/env node` script in the bin folder of the Node that installed it, and the login
   service's PATH has no such Node (launchd's is `/usr/bin:/bin:/usr/sbin:/sbin`), or an older one.
@@ -210,10 +228,10 @@ another data folder refuses `start`, `stop`, `status`, `uninstall` and `_handoff
 - `meko start` starts the extensions after Meko; `meko stop` stops them first (`agentk stop`
   ends AgentK's sessions too; they resume on start), unless given `--keep-extensions`. An
   extension that fails is reported, and the rest go on. `meko restart`, updates and crashes never
-  touch them: AgentK has its own services and updater.
+  touch them: AgentK has its own services and updater, and Presenter is updated only when asked.
 - `meko uninstall_extension agentk` only unregisters it.
-- The web UI's Extensions page runs the same install, and the extensions' `start` and `stop`, from
-  the server, without a terminal ([web.md](web.md)).
+- The web UI's Extensions page runs the same install and update, and the extensions' `start` and
+  `stop`, from the server, without a terminal ([web.md](web.md)).
 - AgentK's key is Meko's client token, as every client's is ([api.md](api.md#auth)).
 
 ## Updates and rollback

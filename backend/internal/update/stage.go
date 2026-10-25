@@ -18,12 +18,12 @@ import (
 	"time"
 )
 
-// Stage downloads a Meko release into the app folder: the tarball and SHA256SUMS, the checksum
-// checked, unpacked beside the installed versions and checked to run here (its meko version
-// --json must name the version), as app/<version>. Nothing in use changes.
+// Stage downloads a release of the app's program into the app folder: the tarball and SHA256SUMS,
+// the checksum checked, unpacked beside the installed versions and checked to run here (its
+// `<name> version --json` must name the version), as app/<version>. Nothing in use changes.
 func (a App) Stage(ctx context.Context, c *Client, rel Release, version string) error {
 	goos, arch := Platform()
-	name := TarballName(version, goos, arch)
+	name := PackageTarball(a.name(), version, goos, arch)
 	tarAsset, ok := rel.Asset(name)
 	sumAsset, ok2 := rel.Asset(Sums)
 	if !ok || !ok2 {
@@ -83,8 +83,8 @@ func VerifySum(file, sumsFile string) error {
 	return nil
 }
 
-// Unpack unpacks a release tarball (one folder, meko-<version>/) to app/<version>, checking that its
-// binary runs here first. An installed copy of the same version is replaced.
+// Unpack unpacks a release tarball (one folder, <name>-<version>/) to app/<version>, checking that
+// its binary runs here first. An installed copy of the same version is replaced.
 func (a App) Unpack(tarball, version string) error {
 	staging, err := os.MkdirTemp(a.Root, ".staging-")
 	if err != nil {
@@ -94,8 +94,8 @@ func (a App) Unpack(tarball, version string) error {
 	if err := extract(tarball, staging); err != nil {
 		return err
 	}
-	top := filepath.Join(staging, "meko-"+version)
-	if err := CheckBinary(filepath.Join(top, "bin", "meko"), version); err != nil {
+	top := filepath.Join(staging, a.name()+"-"+version)
+	if err := CheckBinary(filepath.Join(top, "bin", a.name()), version); err != nil {
 		return err
 	}
 	//nolint:gosec // G306: a version number isn't secret
@@ -123,23 +123,25 @@ func (a App) Unpack(tarball, version string) error {
 }
 
 // CheckBinary runs `<exe> version --json` and checks it names version: a binary that can't run on
-// this machine never becomes current.
+// this machine never becomes current. Meko's and Presenter's both answer {"version": "<version>"}.
 func CheckBinary(exe, version string) error {
+	name := filepath.Base(exe)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, exe, "version", "--json").Output() //nolint:gosec // G204: the staged meko
+	out, err := exec.CommandContext(ctx, exe, "version", "--json").Output() //nolint:gosec // G204: the staged release
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
-			return fmt.Errorf("meko %s doesn't run on this machine: %w: %s", version, err, strings.TrimSpace(string(ee.Stderr)))
+			return fmt.Errorf("%s %s doesn't run on this machine: %w: %s", name, version, err,
+				strings.TrimSpace(string(ee.Stderr)))
 		}
-		return fmt.Errorf("meko %s doesn't run on this machine: %w", version, err)
+		return fmt.Errorf("%s %s doesn't run on this machine: %w", name, version, err)
 	}
 	var v struct {
 		Version string `json:"version"`
 	}
 	if err := json.Unmarshal(out, &v); err != nil || v.Version != version {
-		return fmt.Errorf("the staged meko says it's version %q, not %s", v.Version, version)
+		return fmt.Errorf("the staged %s says it's version %q, not %s", name, v.Version, version)
 	}
 	return nil
 }

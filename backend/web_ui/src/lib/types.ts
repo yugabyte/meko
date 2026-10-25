@@ -311,10 +311,13 @@ export interface Extension {
   web_ui?: boolean;
   path: string;
   available: boolean;
+  // The release Meko installed and can update (Presenter's); AgentK updates itself.
+  version?: string;
+  updatable?: boolean;
   job?: ExtensionJob;
 }
 
-export type ExtensionAction = "install" | "start" | "stop";
+export type ExtensionAction = "install" | "update" | "start" | "stop";
 
 // An action running, or the last one run, on an extension; output is its last 16 KB.
 export interface ExtensionJob {

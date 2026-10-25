@@ -22,19 +22,28 @@ a deck.
 ## Run it
 
 Presenter needs [Meko](../../README.md) on this computer and Claude Code (`claude`, signed in) to
-build decks; playing and editing them work without Claude. It has no releases yet, so run it from
-source:
+build decks; playing and editing them work without Claude. Meko installs it, from Presenter's
+newest release (or Install on the web UI's Extensions page):
 
 ```sh
-cd extensions/presenter
-npm ci && npm run build && npm link     # puts `presenter` on PATH
-meko install_extension presenter        # registers it with this Meko (it asks Meko for its key)
+meko install_extension presenter        # installs the newest release, pointed at this Meko
 meko start                              # starts Meko and its extensions
 meko ui /ext/presenter/                 # opens Presenter
 ```
 
 Meko serves it at `/ext/presenter/` on its web listener, behind Meko's login, and its sidebar links
-to it. `presenter status` says whether it runs.
+to it. `presenter status` says whether it runs. To update it, `meko update_extension presenter`
+(or Update on the Extensions page) installs the newest release and restarts it; a release that
+fails to start three times is rolled back to the one before, and never offered again.
+
+To run a build from source instead, put it on PATH before installing it: Meko uses it as it is,
+and never updates it.
+
+```sh
+cd extensions/presenter
+npm ci && npm run build && npm link     # puts `presenter` on PATH
+meko install_extension presenter        # registers it with this Meko (it asks Meko for its key)
+```
 
 ## Datapacks
 

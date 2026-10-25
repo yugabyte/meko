@@ -1,0 +1,260 @@
+name: Presenter release
+
+# Presenter (extensions/presenter) releases on its own train, beside AgentK's and Meko's. Versions
+# are 0.<UTC date YYYYMMDD>.<n>, tagged presenter-v<version>. A push to main that changes
+# extensions/presenter cuts a release when it contains presenter feat/fix/perf/deps commits (naming
+# presenter, alone or in a list such as presenter,meko) since the last Presenter tag and the tests
+# pass. The release scripts are the repo root's scripts/release/*.sh --product presenter.
+# A release carries presenter-<version>-<os>-<arch>.tar.gz and SHA256SUMS, no installer: Meko
+# installs and updates them itself (meko install_extension presenter, meko update_extension
+# presenter). Run the workflow by hand to force a release, or to rebuild the assets of an existing
+# presenter-v tag.
+#
+# Presenter has no native modules, so one Linux job builds it once and packages every platform,
+# each with its own Node; a macOS runner smoke-tests the darwin tarball.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'extensions/presenter/**'
+      - 'scripts/release/**'
+      - '.github/workflows/presenter-release.yml'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Release even if there are no presenter feat/fix/perf/deps commits
+        type: boolean
+        default: false
+      tag:
+        description: Rebuild assets for this existing presenter-v tag instead
+        required: false
+
+# Read-only by default: only publish gets to write releases and attestations.
+permissions:
+  contents: read
+
+# One release at a time, so two pushes on the same day can't claim the same number. Its own group:
+# it never waits for AgentK's or Meko's.
+concurrency:
+  group: presenter-release
+  cancel-in-progress: false
+
+env:
+  # Bundled runtime. Bump deliberately; the SHASUMS256 check below pins the bytes.
+  NODE_VERSION: 22.18.0
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release: ${{ steps.p.outputs.release }}
+      rebuild: ${{ steps.p.outputs.rebuild }}
+      version: ${{ steps.p.outputs.version }}
+      tag: ${{ steps.p.outputs.tag }}
+      ref: ${{ steps.p.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: p
+        env:
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
+          FORCE: ${{ github.event.inputs.force }}
+        run: |
+          set -eu
+          if [ -n "${DISPATCH_TAG:-}" ]; then
+            # Only Presenter's own tags: another product's would get Presenter's tarballs and checksums.
+            case $DISPATCH_TAG in
+              presenter-v[0-9]*) ;;
+              *) echo "$DISPATCH_TAG isn't a Presenter release tag (presenter-v<version>)"; exit 1 ;;
+            esac
+            git rev-parse -q --verify "refs/tags/$DISPATCH_TAG" >/dev/null || { echo "no such tag: $DISPATCH_TAG"; exit 1; }
+            version=${DISPATCH_TAG#presenter-v}
+            { echo "release=true"; echo "rebuild=true"; echo "tag=$DISPATCH_TAG"; echo "version=$version"; echo "ref=$DISPATCH_TAG"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if sh scripts/release/release-notes.sh --product presenter > /dev/null || [ "${FORCE:-false}" = "true" ]; then
+            version=$(sh scripts/release/next-version.sh --product presenter)
+            echo "Releasing $version"
+            { echo "release=true"; echo "rebuild=false"; echo "tag=presenter-v$version"; echo "version=$version"; echo "ref=$GITHUB_SHA"; } >> "$GITHUB_OUTPUT"
+          else
+            echo "Nothing to release: no presenter feat/fix/perf/deps commits since the last release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  test:
+    needs: plan
+    if: needs.plan.outputs.release == 'true' && needs.plan.outputs.rebuild == 'false'
+    runs-on: ubuntu-latest
+    # A hung step would otherwise hold the release concurrency group for GitHub's 6h default.
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: extensions/presenter
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extensions/presenter/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+
+  build:
+    needs: [plan, test]
+    if: always() && needs.plan.outputs.release == 'true' && (needs.test.result == 'success' || needs.test.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: extensions/presenter
+    # Plan outputs reach the shell through the environment, never pasted into scripts.
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: extensions/presenter/package-lock.json
+
+      - run: npm ci
+
+      - name: Stamp version
+        run: npm pkg set version="$VERSION"
+
+      - name: Build
+        run: npm run build
+
+      - name: Prune dev dependencies
+        run: npm prune --omit=dev
+
+      - name: Download Node ${{ env.NODE_VERSION }} for each platform
+        run: |
+          set -eu
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt"
+          for dist in linux-x64 linux-arm64 darwin-arm64; do
+            f="node-v${NODE_VERSION}-${dist}.tar.gz"
+            curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/${f}"
+            grep " ${f}\$" SHASUMS256.txt | sha256sum -c -
+            tar -xzf "$f"
+          done
+
+      - name: Package
+        run: |
+          set -eu
+          for dist in linux-x64 linux-arm64 darwin-arm64; do
+            sh scripts/package-release.sh "$VERSION" "${dist%-*}" "${dist#*-}" "$RUNNER_TEMP/node-v${NODE_VERSION}-${dist}" out
+          done
+
+      - name: Smoke-test the linux-x64 tarball
+        run: sh scripts/smoke-release.sh out/presenter-"$VERSION"-linux-x64.tar.gz "$VERSION"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: presenter-tarballs
+          path: extensions/presenter/out/*.tar.gz
+          if-no-files-found: error
+
+  smoke-macos:
+    needs: [plan, build]
+    if: always() && needs.build.result == 'success'
+    runs-on: macos-15
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: extensions/presenter
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: presenter-tarballs
+          path: extensions/presenter/out
+
+      - name: Smoke-test the darwin-arm64 tarball
+        run: sh scripts/smoke-release.sh out/presenter-"$VERSION"-darwin-arm64.tar.gz "$VERSION"
+
+  publish:
+    needs: [plan, build, smoke-macos]
+    # Any failure stops the release, so SHA256SUMS never loses a tarball.
+    if: always() && needs.build.result == 'success' && needs.smoke-macos.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # create the tag and release, upload assets, prune old releases
+      id-token: write # attest build provenance
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false # gh uses GH_TOKEN; nothing here pushes with git
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: presenter-tarballs
+          path: dist-release
+
+      - name: Write SHA256SUMS
+        working-directory: dist-release
+        run: |
+          sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create the release
+        if: needs.plan.outputs.rebuild == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          SHA: ${{ needs.plan.outputs.ref }}
+        run: |
+          set -eu
+          sh scripts/release/release-notes.sh --product presenter > notes.md || echo "Maintenance release." > notes.md
+          # Not "latest": the repo's latest release is Meko's (meko-release.yml), whose installer is
+          # the one-line install. Meko finds Presenter's newest release by its tag.
+          gh release create "$TAG" --target "$SHA" --title "$TAG" --notes-file notes.md --latest=false --repo "$GITHUB_REPOSITORY" \
+            dist-release/*.tar.gz dist-release/SHA256SUMS
+
+      - name: Replace assets on an existing release
+        if: needs.plan.outputs.rebuild == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: gh release upload "$TAG" dist-release/*.tar.gz dist-release/SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
+
+      - name: Attest build provenance
+        # Artifact attestations need GitHub Enterprise Cloud for internal repos.
+        continue-on-error: true
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist-release/*.tar.gz
+
+      - name: Delete Presenter releases beyond the newest 5
+        if: needs.plan.outputs.rebuild == 'false'
+        # A failed prune never fails the release; the next one tries again.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: 5
+        run: sh scripts/release/prune-releases.sh --product presenter

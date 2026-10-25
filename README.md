@@ -79,7 +79,8 @@ The first start downloads the embedding model (23 MB). On RHEL 8, set
 | `meko uninstall [--purge [--force] [--with-extensions]]` | Remove the service and the installed releases, keeping the data; `--purge` also destroys the data as `meko destroy` does, asking first |
 | `meko update [--check]` | Install the newest release now (under the service it updates itself); `--check` only looks |
 | `meko install_extension agentk` | Install AgentK pointed at this Meko; `meko start` and `stop` then run it too, and the web UI's port serves it at `/ext/agentk/` |
-| `meko install_extension presenter` | The same for Presenter, at `/ext/presenter/`. Until it has releases, put a build of it on PATH first (its README) |
+| `meko install_extension presenter` | The same for Presenter, at `/ext/presenter/`: Meko installs its newest release itself (a build of it already on PATH is used as it is) |
+| `meko update_extension presenter [--check]` | Install Presenter's newest release now and restart it; one that fails to start is rolled back. AgentK updates itself |
 | `meko uninstall_extension agentk` | Stop starting and stopping it with Meko (it stays installed) |
 | `meko destroy [--force] [--with-extensions]` | Stop Meko and remove its data folder for good. It asks first; `--force` doesn't. The extensions' data in it (AgentK's home) stays unless you say so when asked, or pass `--with-extensions`, which uninstalls them first |
 | `meko search "<question>"` | Search memories, the knowledge base and past conversations (`context_search`) |
@@ -131,8 +132,8 @@ Its README covers installing and using it.
 that branch with the room from your datapacks. Claude drafts a story map of scenes, forks and
 detours, builds the slides, and takes changes by hand or in plain language; during the talk the
 presenter picks each fork, switches depth, or jumps to a detour, while an audience window follows.
-Decks are saved in Meko datapacks. Meko serves it at `/ext/presenter/`. It has no releases yet:
-its README says how to run it from source.
+Decks are saved in Meko datapacks. Meko serves it at `/ext/presenter/`, and installs and updates
+its releases (`meko install_extension presenter`, `meko update_extension presenter`).
 
 ## Develop
 

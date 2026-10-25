@@ -38,6 +38,12 @@ func post(t *testing.T, url string, header map[string]string) (int, envelope.Res
 // agentkRow is GET /api/v1/extensions' row for agentk.
 func agentkRow(t *testing.T, base string) ExtensionInfo {
 	t.Helper()
+	return extensionRow(t, base, "agentk")
+}
+
+// extensionRow is GET /api/v1/extensions' row for name.
+func extensionRow(t *testing.T, base, name string) ExtensionInfo {
+	t.Helper()
 	resp, err := http.Get(base + "/api/v1/extensions") //nolint:noctx // a test against a local server
 	if err != nil {
 		t.Fatal(err)
@@ -50,11 +56,11 @@ func agentkRow(t *testing.T, base string) ExtensionInfo {
 		t.Fatalf("extensions: %d %v", resp.StatusCode, err)
 	}
 	for _, r := range env.Data {
-		if r.Name == "agentk" {
+		if r.Name == name {
 			return r
 		}
 	}
-	t.Fatalf("no agentk in %+v", env.Data)
+	t.Fatalf("no %s in %+v", name, env.Data)
 	return ExtensionInfo{}
 }
 
@@ -157,6 +163,42 @@ func TestExtensionActions(t *testing.T) {
 	if len(f.calls) != 2 {
 		t.Errorf("ran %v", f.calls)
 	}
+}
+
+// An installed extension whose releases Meko manages shows its version and can be updated; one that
+// updates itself (AgentK) can't.
+func TestExtensionListShowsReleasesMekoUpdates(t *testing.T) {
+	f := &fakeRun{release: make(chan struct{})}
+	close(f.release)
+	release := func(w *Web) {
+		w.Release = func(name string) (string, bool) {
+			if name == "presenter" {
+				return "0.20261024.0", true
+			}
+			return "", false
+		}
+	}
+	base, _ := startWeb(t, config.AccessLocal, "", noProxies, installed("agentk", "presenter"), release,
+		func(w *Web) { w.Run = f.run })
+	if r := extensionRow(t, base, "presenter"); r.Version != "0.20261024.0" || !r.Updatable {
+		t.Errorf("presenter: %+v", r)
+	}
+	if r := agentkRow(t, base); r.Version != "" || r.Updatable {
+		t.Errorf("agentk: %+v", r)
+	}
+	if code, _ := post(t, base+"/api/v1/extensions/presenter/update", nil); code != http.StatusAccepted {
+		t.Fatalf("update: %d", code)
+	}
+	for range 200 {
+		if r := extensionRow(t, base, "presenter"); r.Job != nil && r.Job.State != JobRunning {
+			if r.Job.Action != "update" || r.Job.State != JobDone || r.Job.Output != "update presenter\n" {
+				t.Errorf("update: %+v", r.Job)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the update didn't finish")
 }
 
 // Only install runs on an extension that isn't installed, and a server with no runner has no actions.

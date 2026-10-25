@@ -26,11 +26,11 @@ pass `--author` or change the identity.
 <type>(<component>[/<area>],<component>[/<area>])[!]: <summary>   # a change that ships in more than one
 ```
 
-The release workflows read commit subjects. The repo releases two products, each on its own train:
-Meko (`meko-release.yml`, tags `meko-v0.YYYYMMDD.N`) and AgentK (`agentk-release.yml`, tags
-`agentk-v0.YYYYMMDD.N`). A push to `main` with any `feat`, `fix`, `perf` or `deps` commit since a
+The release workflows read commit subjects. The repo releases three products, each on its own train:
+Meko (`meko-release.yml`, tags `meko-v0.YYYYMMDD.N`), AgentK (`agentk-release.yml`, tags
+`agentk-v0.YYYYMMDD.N`) and Presenter (`presenter-release.yml`, tags `presenter-v0.YYYYMMDD.N`). A push to `main` with any `feat`, `fix`, `perf` or `deps` commit since a
 product's last release cuts its next version, and those subjects become its release notes (and
-AgentK's **What's new**). Subjects naming `meko` release Meko; `presenter` releases nothing yet;
+AgentK's **What's new**). Subjects naming `meko` release Meko; `presenter` releases Presenter;
 subjects naming any other component (`agentk`, `repo`) release AgentK
 (`scripts/release/release-notes.sh --product`), so `feat(agentk,meko): …` releases both. Every other type
 lands without a release. Use exactly one of these nine types:
@@ -64,7 +64,7 @@ The rest of the subject:
   |---|---|
   | `agentk` | AgentK, `extensions/agentk` |
   | `meko` | Meko, `backend/` |
-  | `presenter` | Presenter, `extensions/presenter` (no release train yet: its subjects release nothing) |
+  | `presenter` | Presenter, `extensions/presenter` (its own train, `presenter-release.yml`) |
   | `repo` | The shared root: `.github/`, `scripts/`, root docs, `.claude/` |
 
   A root file that belongs to one component (`agentk-release.yml` builds AgentK) takes that
@@ -75,8 +75,9 @@ The rest of the subject:
   `fix(agentk/meko,meko/cli): …`. It releases every product it names, so name a component only
   when the change alters what it ships; one that only touches another (AgentK's tests reading a
   root script) takes the one it ships in. Meko's release workflow runs only on pushes that change
-  `backend/**`, `scripts/release/**` or `.github/workflows/meko-release.yml`, so a `meko` in a
-  title whose PR changes none of them waits for the next push that does.
+  `backend/**`, `scripts/release/**` or `.github/workflows/meko-release.yml` (Presenter's:
+  `extensions/presenter/**`, `scripts/release/**` or its workflow), so a `meko` in a title whose
+  PR changes none of them waits for the next push that does.
 - `/<area>` is optional: one lowercase name (letters, digits, dashes) for the part of the
   component it touches, e.g. `agentk/web`, `agentk/server`, `agentk/meko` (AgentK's Meko
   integration), `agentk/update`, `meko/store`.

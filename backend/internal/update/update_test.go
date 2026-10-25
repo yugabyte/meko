@@ -75,12 +75,15 @@ func fakeMeko(version string, fail bool) string {
 }
 
 // tarball builds meko-<version>.tar.gz holding bin/meko and an engine file.
-func tarball(t *testing.T, version string) []byte {
+func tarball(t *testing.T, version string) []byte { return tarballOf(t, "meko", version) }
+
+// tarballOf builds a release of program name: <name>-<version>/bin/<name> and an engine file.
+func tarballOf(t *testing.T, name, version string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	top := "meko-" + version + "/"
+	top := name + "-" + version + "/"
 	add := func(name, body string, mode int64) {
 		h := &tar.Header{Name: top + name, Mode: mode, Size: int64(len(body)), Typeflag: tar.TypeReg}
 		if err := tw.WriteHeader(h); err != nil {
@@ -90,7 +93,7 @@ func tarball(t *testing.T, version string) []byte {
 			t.Fatal(err)
 		}
 	}
-	add("bin/meko", fakeMeko(version, false), 0o755)
+	add("bin/"+name, fakeMeko(version, false), 0o755)
 	add("memory_engine/dist/main.js", "// memory engine\n", 0o644)
 	if err := tw.Close(); err != nil {
 		t.Fatal(err)
@@ -337,5 +340,67 @@ func TestLinkCommand(t *testing.T) {
 	}
 	if _, err := os.Lstat(link); !os.IsNotExist(err) {
 		t.Error("link left")
+	}
+}
+
+// An extension's releases (Presenter's) go through the same App, named for its program: its tarball,
+// its top folder, its binary and its link in ~/.local/bin.
+func TestNamedAppStagesAnExtensionsRelease(t *testing.T) {
+	const next = "0.20261024.0"
+	goos, arch := Platform()
+	name := PackageTarball("presenter", next, goos, arch)
+	if want := "presenter-" + next + "-" + goos + "-" + arch + ".tar.gz"; name != want {
+		t.Fatalf("PackageTarball = %q, want %q", name, want)
+	}
+	tgz := tarballOf(t, "presenter", next)
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/o/r/releases":
+			_ = json.NewEncoder(w).Encode([]Release{
+				{Tag: TagPrefix + "0.20261030.0", Assets: []Asset{{Name: TarballName("0.20261030.0", goos, arch)}, {Name: Sums}}},
+				{Tag: "presenter-v0.20261025.0", Assets: []Asset{{Name: Sums}}}, // no tarball for this platform
+				{Tag: "presenter-v" + next, Assets: []Asset{
+					{Name: name, BrowserURL: srv.URL + "/tar"}, {Name: Sums, BrowserURL: srv.URL + "/sums"},
+				}},
+			})
+		case "/tar":
+			_, _ = w.Write(tgz)
+		case "/sums":
+			_, _ = io.WriteString(w, sum(tgz)+"  "+name+"\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := &Client{Repo: "o/r", API: srv.URL, HTTP: srv.Client()}
+	rels, err := c.Releases(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, v, ok := PickPackage(rels, []string{"presenter-v"}, "presenter", goos, arch, nil)
+	if !ok || v != next {
+		t.Fatalf("picked %q %v", v, ok)
+	}
+	if _, _, ok := PickPackage(rels, []string{"presenter-v"}, "presenter", goos, arch, map[string]bool{next: true}); ok {
+		t.Error("a bad version was picked")
+	}
+	a := App{Root: filepath.Join(t.TempDir(), "app"), Name: "presenter"}
+	if err = a.Stage(context.Background(), c, r, v); err != nil {
+		t.Fatal(err)
+	}
+	if err = a.Repoint(v); err != nil {
+		t.Fatal(err)
+	}
+	if a.Exe(v) != filepath.Join(a.Root, v, "bin", "presenter") {
+		t.Errorf("Exe = %s", a.Exe(v))
+	}
+	home := t.TempDir()
+	link, err := a.LinkCommand(home)
+	if err != nil || link != filepath.Join(home, ".local", "bin", "presenter") {
+		t.Fatalf("link %q %v", link, err)
+	}
+	if got, ver, ok := Of(link); !ok || ver != next || got.Root != realPath(t, a.Root) {
+		t.Errorf("Of(link) = %v %q %v", got, ver, ok)
 	}
 }

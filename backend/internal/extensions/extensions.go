@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/yugabyte/meko/backend/internal/paths"
+	"github.com/yugabyte/meko/backend/internal/update"
 )
 
 // Known are the extensions meko install_extension can install, by name.
@@ -45,14 +46,16 @@ var Known = map[string]Catalog{
 		WebUI:         true,
 	},
 	// Presenter (extensions/presenter): interactive, branching presentations built from datapacks.
-	// Until it has releases of its own, install_extension needs `presenter` on PATH (a build from source).
+	// Its releases (presenter-v<version>) carry presenter-<version>-<os>-<arch>.tar.gz and
+	// SHA256SUMS, which Meko installs and updates itself (Managed). A build from source on PATH is
+	// used as it is, and never updated.
 	"presenter": {
 		Title: "Presenter",
 		Description: "Builds presentations that branch with the room from your datapacks: Claude drafts the story " +
 			"map and the slides, and you pick each path live.",
 		Command:       "presenter",
 		TagPrefixes:   []string{"presenter-v"},
-		Installer:     "install.sh",
+		Managed:       true,
 		UninstallArgs: []string{"uninstall", "--purge", "--non-interactive"},
 		WebUI:         true,
 	},
@@ -75,7 +78,10 @@ type Catalog struct {
 	Command     string   // the program's name, looked for on PATH and in ~/.local/bin
 	OldCommands []string // names it had before, looked for after Command
 	TagPrefixes []string // its release tags, newest naming first
-	Installer   string   // the release asset that installs it
+	Installer   string   // the release asset that installs it, when it installs itself (not Managed)
+	// Managed says Meko installs it from its releases' tarballs into App and updates it: the
+	// <Command>-<version>-<os>-<arch>.tar.gz and SHA256SUMS of the newest release with TagPrefixes.
+	Managed bool
 	// OldHomes are folders under the home folder a release install of it lived in before its home
 	// moved into Meko's data folder (Dir); Find looks for the command in their app/current/bin.
 	OldHomes []string
@@ -90,6 +96,31 @@ type Catalog struct {
 // Dir is the folder an extension keeps its data in, in Meko's data folder at root. AgentK's home
 // is there (Meko's rule decides where root is, and AgentK follows it).
 func Dir(root, name string) string { return filepath.Join(root, "extensions", name) }
+
+// App is the app folder a Managed extension's releases are installed in: <Dir>/app, one folder per
+// version, app/current pointing at the one in use, update-pending.json and bad-versions beside
+// them, as Meko's own (internal/update).
+func (c Catalog) App(root, name string) update.App {
+	return update.App{Root: filepath.Join(Dir(root, name), "app"), Name: c.Command}
+}
+
+// Release is the version of a Managed extension's release install that command runs (through
+// ~/.local/bin and app/current), or "" for a command that isn't one (a build from source).
+func (c Catalog) Release(root, name, command string) string {
+	if !c.Managed || command == "" {
+		return ""
+	}
+	app, v, ok := update.Of(command)
+	if !ok {
+		return ""
+	}
+	// Of resolves links, so compare the real folders (macOS's /tmp is /private/tmp).
+	want, err := filepath.EvalSymlinks(c.App(root, name).Root)
+	if err != nil || app.Root != want {
+		return ""
+	}
+	return v
+}
 
 // Entry is one installed extension.
 type Entry struct {

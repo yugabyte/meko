@@ -12,6 +12,7 @@ import { DeckStore } from './decks.js';
 import { Jobs } from './jobs.js';
 import { findMeko, isLoopback, loadConfig, MekoClient, type PresenterConfig } from './meko.js';
 import { getPaths, MEKO_COMMANDS, refuseOtherMeko, withLocalBin, type Paths } from './paths.js';
+import { HEALTHY_MS, markHealthy, uncountStart } from './probation.js';
 import { Runs } from './runs.js';
 import { broadcast, buildServer, findWebDir, type Core } from './server.js';
 
@@ -112,7 +113,13 @@ async function serve(paths: Paths): Promise<void> {
     }
     process.exit(0);
   };
-  process.once('SIGTERM', () => void stop());
+  // A release on probation (an update Meko just switched to) has proved itself after HEALTHY_MS; a
+  // deliberate stop of it isn't a failed start.
+  setTimeout(() => markHealthy(), HEALTHY_MS).unref();
+  process.once('SIGTERM', () => {
+    uncountStart();
+    void stop();
+  });
   process.once('SIGINT', () => void stop());
 }
 
@@ -121,8 +128,12 @@ async function start(paths: Paths): Promise<void> {
   mkdirSync(paths.logs, { recursive: true, mode: 0o700 });
   mkdirSync(paths.run, { recursive: true, mode: 0o700 });
   const log = openSync(join(paths.logs, 'server.log'), 'a', 0o600);
-  // Node's own flags too (a loader under `tsx`), so the server runs the way this command did.
-  const child = spawn(process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), 'serve'], { detached: true, stdio: ['ignore', log, log], env: process.env });
+  // A release starts it through its launcher (packaging/presenter), which counts the starts of a
+  // version on probation and rolls back one that keeps failing. Otherwise Node's own flags too (a
+  // loader under `tsx`), so the server runs the way this command did.
+  const launcher = process.env.PRESENTER_LAUNCHER;
+  const [cmd, args] = launcher ? [launcher, ['serve']] : [process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), 'serve']];
+  const child = spawn(cmd, args, { detached: true, stdio: ['ignore', log, log], env: process.env });
   child.unref();
   closeSync(log);
   for (let i = 0; i < 100; i++) {
@@ -203,7 +214,7 @@ const HELP = `presenter: interactive, branching presentations from Meko datapack
   presenter status       whether it runs, and where
   presenter install      --meko-url <url> --meko-key <key> [--non-interactive]
   presenter uninstall    [--purge] [--non-interactive]
-  presenter version
+  presenter version      [--json]
 
 Meko serves the pages at /ext/presenter/ on its web listener.`;
 
@@ -224,7 +235,8 @@ export async function main(argv: string[]): Promise<void> {
       return;
     case 'version':
     case '--version':
-      console.log(version());
+      // --json is what Meko checks a release it unpacks with, as its own: {"version": "<version>"}.
+      console.log(args.includes('--json') ? JSON.stringify({ version: version() }) : version());
       return;
     case undefined:
     case 'help':

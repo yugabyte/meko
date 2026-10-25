@@ -14,8 +14,21 @@ import (
 	"github.com/yugabyte/meko/backend/internal/paths"
 )
 
-// App is a release install's app folder.
-type App struct{ Root string }
+// App is a release install's app folder: Meko's, or an extension's that Meko installs from its
+// releases (Presenter's, in <data folder>/extensions/presenter/app). Name is the program, which
+// names its binary (<version>/bin/<name>), its tarballs' top folder (<name>-<version>/) and its
+// link in ~/.local/bin; empty is meko.
+type App struct {
+	Root string
+	Name string
+}
+
+func (a App) name() string {
+	if a.Name == "" {
+		return "meko"
+	}
+	return a.Name
+}
 
 // DefaultRoot is where the installer puts releases: $XDG_DATA_HOME/meko/app, or
 // ~/.local/share/meko/app. It's outside the data folder, so meko destroy, which removes the data
@@ -63,10 +76,10 @@ func Of(exe string) (App, string, bool) {
 func (a App) Dir(version string) string { return filepath.Join(a.Root, version) }
 
 // Exe is a version's binary.
-func (a App) Exe(version string) string { return filepath.Join(a.Dir(version), "bin", "meko") }
+func (a App) Exe(version string) string { return filepath.Join(a.Dir(version), "bin", a.name()) }
 
 // CurrentExe is the binary app/current points at: what the service runs.
-func (a App) CurrentExe() string { return filepath.Join(a.Root, "current", "bin", "meko") }
+func (a App) CurrentExe() string { return filepath.Join(a.Root, "current", "bin", a.name()) }
 
 // Current is the version app/current points at ("" if none).
 func (a App) Current() string {
@@ -99,13 +112,13 @@ func randomSuffix() string {
 	return hex.EncodeToString(b)
 }
 
-// LinkCommand points <home>/.local/bin/meko at app/current/bin/meko, so meko is a command.
+// LinkCommand points <home>/.local/bin/<name> at app/current/bin/<name>, so it's a command.
 func (a App) LinkCommand(home string) (string, error) {
 	bin := filepath.Join(home, ".local", "bin")
 	if err := os.MkdirAll(bin, 0o755); err != nil { //nolint:gosec // G301: the user's own bin folder
 		return "", err
 	}
-	link := filepath.Join(bin, "meko")
+	link := filepath.Join(bin, a.name())
 	tmp := link + ".tmp-" + randomSuffix()
 	if err := os.Symlink(a.CurrentExe(), tmp); err != nil {
 		return "", err
@@ -117,9 +130,9 @@ func (a App) LinkCommand(home string) (string, error) {
 	return link, nil
 }
 
-// UnlinkCommand removes <home>/.local/bin/meko if it points into this app folder.
+// UnlinkCommand removes <home>/.local/bin/<name> if it points into this app folder.
 func (a App) UnlinkCommand(home string) error {
-	link := filepath.Join(home, ".local", "bin", "meko")
+	link := filepath.Join(home, ".local", "bin", a.name())
 	t, err := os.Readlink(link)
 	if err != nil || !strings.HasPrefix(t, a.Root+string(filepath.Separator)) {
 		return nil //nolint:nilerr // not ours to remove

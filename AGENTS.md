@@ -15,11 +15,11 @@ from the extension's folder) and which docs to keep current. Meko's own Go backe
 |---|---|
 | `backend/` | Meko's Go backend: the `meko` CLI and server, a Go module of its own with its `Makefile`, docs and CI job (`backend` in `.github/workflows/ci.yml`), and its Node memory engine in `backend/memory_engine`. |
 | `extensions/agentk/` | AgentK: its code, tests, scripts, packaging and docs, with its own `package.json`. |
-| `extensions/presenter/` | Presenter: interactive, branching presentations built from datapacks. Its server, its pages (served by Meko at `/ext/presenter/`), tests and docs, with its own `package.json`. No release train yet. |
+| `extensions/presenter/` | Presenter: interactive, branching presentations built from datapacks. Its server, its pages (served by Meko at `/ext/presenter/`), tests and docs, with its own `package.json`. Releases on its own train, whose tarballs Meko installs and updates. |
 | `scripts/check-title.sh` | The commit subject and PR title rules for the whole repo. |
 | `scripts/ci-scope.sh` | Which components' CI jobs a PR runs, from the paths it changes. |
-| `scripts/release/` | The release scripts both products share, with `--product agentk\|meko`: the next version, the release notes (and whether to release), and pruning old releases. |
-| `.github/` | CI (`ci.yml`: a job per component, in `extensions/agentk`, `extensions/presenter` or `backend`, run only when a PR changes it, and the `CI gate` over them), the PR title check, the two release trains (`agentk-release.yml` for AgentK, tags `agentk-v…`; `meko-release.yml` for Meko, tags `meko-v…`, the repo's latest release), and Dependabot. |
+| `scripts/release/` | The release scripts the three products share, with `--product agentk\|meko\|presenter`: the next version, the release notes (and whether to release), and pruning old releases. |
+| `.github/` | CI (`ci.yml`: a job per component, in `extensions/agentk`, `extensions/presenter` or `backend`, run only when a PR changes it, and the `CI gate` over them), the PR title check, the three release trains (`agentk-release.yml` for AgentK, tags `agentk-v…`; `meko-release.yml` for Meko, tags `meko-v…`, the repo's latest release; `presenter-release.yml` for Presenter, tags `presenter-v…`), and Dependabot. |
 | `.claude/skills/commit/` | The commit skill: how to write commits, PR titles and PR descriptions here. |
 | `README.md`, `LICENSE` | The repo's README (Meko: what it is, building it, its commands, and its extensions) and the license for everything in it. AgentK's README is `extensions/agentk/README.md`. |
 

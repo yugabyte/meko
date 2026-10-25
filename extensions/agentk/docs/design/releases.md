@@ -21,12 +21,13 @@ Part of the [AgentK design](../design.md).
   release runs the tests and cuts the next version, and those subjects become the release notes;
   `ci`, `test`, `docs`, `nit` and `chore` don't release. Releases are scoped by component: Meko
   (`backend/`) releases on its own, from its own tags (`meko-v…`), and subjects naming only `meko`
-  never release AgentK. Presenter (`extensions/presenter`) has no release train yet: subjects naming
-  only `presenter` (or `meko` and `presenter`) release nothing for AgentK. Every other subject
+  never release AgentK. Presenter (`extensions/presenter`) releases on its own too
+  (`presenter-release.yml`, tags `presenter-v…`): subjects naming only `presenter` (or `meko` and
+  `presenter`) release nothing for AgentK. Every other subject
   (`agentk`, `repo`, lists such as `agentk,meko`, and older ones with no component or a free-form
   one) counts for AgentK, and every subject naming `meko`, alone or in a list, counts for Meko: a PR
   titled `feat(agentk,meko): …` releases both. The repo root's `scripts/release/` holds the scripts both
-  products use, with `--product agentk|meko`: `next-version.sh`, `release-notes.sh` and
+  products use, with `--product agentk|meko|presenter`: `next-version.sh`, `release-notes.sh` and
   `prune-releases.sh` (`product.sh` names each product's tags and components).
 - **Build matrix (after the tests).** Self-contained tarballs are built for `linux-x64` and
   `linux-arm64`, and on a `macos-15` runner for `darwin-arm64`. Each bundles the Node 22 runtime,
