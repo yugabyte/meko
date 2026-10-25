@@ -32,16 +32,19 @@ type Web struct {
 	// Installed names the registered extensions (extensions.json), read at each request; nil means
 	// the ones in Extensions.
 	Installed func() []string
-	// Run, if set, runs an action on a known extension for the Extensions page (install, start or
-	// stop), writing its output to out, and returns when it's done or ctx is (Jobs.Cancel).
+	// Run, if set, runs an action on a known extension for the Extensions page (install, update,
+	// start or stop), writing its output to out, and returns when it's done or ctx is (Jobs.Cancel).
 	Run func(ctx context.Context, name, action string, out io.Writer) error
+	// Release, if set, is an installed extension's release version Meko manages, and whether Meko
+	// can update it ("", false for one that updates itself or a build from source).
+	Release func(name string) (version string, updatable bool)
 	// Jobs are the actions Run runs, kept across the servers the listener's owner builds; nil gives
 	// this server its own.
 	Jobs *ExtensionJobs
 }
 
 // The actions the Extensions page runs on an extension (POST /api/v1/extensions/:name/:action).
-var extensionActions = []string{"install", "start", "stop"}
+var extensionActions = []string{"install", "update", "start", "stop"}
 
 func (s *Server) proxy(name string) *extproxy.Proxy {
 	for _, p := range s.opts.Web.Extensions() {
@@ -325,8 +328,10 @@ type ExtensionInfo struct {
 	Description string        `json:"description"`
 	Installed   bool          `json:"installed"`
 	WebUI       bool          `json:"web_ui"`
-	Path        string        `json:"path"`      // "" while it isn't served
-	Available   bool          `json:"available"` // its socket is there to connect to
+	Path        string        `json:"path"`              // "" while it isn't served
+	Available   bool          `json:"available"`         // its socket is there to connect to
+	Version     string        `json:"version,omitempty"` // the release Meko installed, when it manages it
+	Updatable   bool          `json:"updatable"`         // Meko can update it (the update action)
 	Job         *ExtensionJob `json:"job,omitempty"`
 }
 
@@ -350,6 +355,9 @@ func (s *Server) extensionInfo(name string, installed bool) ExtensionInfo {
 		WebUI: cat.WebUI, Job: s.opts.Web.Jobs.get(name)}
 	if p := s.proxy(name); p != nil {
 		row.Path, row.Available = p.Path(), p.Available()
+	}
+	if installed && s.opts.Web.Release != nil {
+		row.Version, row.Updatable = s.opts.Web.Release(name)
 	}
 	return row
 }

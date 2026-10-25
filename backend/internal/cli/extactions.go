@@ -15,6 +15,25 @@ import (
 	"github.com/yugabyte/meko/backend/internal/extproxy"
 )
 
+// Release is the version of an installed extension's release install that Meko manages, and whether
+// Meko can update it (meko update_extension), for the web UI's Extensions page.
+func (w *webListener) Release(name string) (string, bool) {
+	cat, ok := extensions.Known[name]
+	if !ok || !cat.Managed {
+		return "", false
+	}
+	reg, err := extensions.Load(w.l.Root)
+	if err != nil {
+		return "", false
+	}
+	e, ok := reg.Entries[name]
+	if !ok {
+		return "", false
+	}
+	v := cat.Release(w.l.Root, name, e.Command)
+	return v, v != ""
+}
+
 // Installed names the registered extensions, for the web UI's Extensions page.
 func (w *webListener) Installed() []string {
 	reg, err := extensions.Load(w.l.Root)
@@ -25,17 +44,27 @@ func (w *webListener) Installed() []string {
 }
 
 // RunExtension runs an action of the Extensions page on a known extension (server.Web.Run): install
-// it as meko install_extension does, with no terminal, or run its own start or stop. The output and
-// the error reach a browser, so the client token the installer is given is blanked in both. After
-// an install or a start of one with a web UI, it waits for the extension to answer on its socket
-// (AgentK's start returns before its server listens), so the page's next look sees it running.
+// it as meko install_extension does, with no terminal, update it as meko update_extension does, or
+// run its own start or stop. The output and the error reach a browser, so the client token the
+// installer is given is blanked in both. After an install or a start of one with a web UI, or an
+// update that left it running, it waits for the extension to answer on its socket (AgentK's start
+// returns before its server listens), so the page's next look sees it running.
 func (w *webListener) RunExtension(ctx context.Context, name, action string, out io.Writer) error {
 	var tok string
 	if cfg, err := config.Load(w.l.Config, os.Getenv, config.Overrides{}); err == nil {
 		tok, _ = readClientToken(w.l, cfg)
 	}
 	r := &redactor{w: out, secret: []byte(tok)}
-	err := w.runExtension(ctx, name, action, r)
+	runs := true
+	var err error
+	if action == "update" {
+		upd, cancel := context.WithTimeout(ctx, extensions.InstallTimeout)
+		runs, err = updateExtension(upd, w.l, name, false, r)
+		cancel()
+		w.reconnect(name) // a restarted server's socket is asked for again
+	} else {
+		err = w.runExtension(ctx, name, action, r)
+	}
 	r.Flush()
 	if err != nil {
 		if tok != "" {
@@ -43,7 +72,7 @@ func (w *webListener) RunExtension(ctx context.Context, name, action string, out
 		}
 		return err
 	}
-	if action != "stop" && extensions.Known[name].WebUI {
+	if action != "stop" && runs && extensions.Known[name].WebUI {
 		return w.awaitListening(ctx, name)
 	}
 	return nil

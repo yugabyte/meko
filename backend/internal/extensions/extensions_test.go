@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/yugabyte/meko/backend/internal/update"
 )
 
 func TestRegistry(t *testing.T) {
@@ -128,6 +130,53 @@ func TestCatalogFindsTheCommandInItsHome(t *testing.T) {
 	put(moved)
 	if got := ak.Find("agentk", home, root); got != moved {
 		t.Fatalf("found %q, want the data folder's %q", got, moved)
+	}
+}
+
+// One ~/.local/bin/meko_presenter serves all of a user's Meko data folders, but a release belongs to
+// one: Find skips the link when it runs another data folder's release, and takes it when it runs
+// this one's (or isn't a release at all).
+func TestCatalogFindSkipsAnotherDataFoldersRelease(t *testing.T) {
+	home, a, b := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("PATH", t.TempDir())
+	pr := Known["presenter"]
+	release := func(root string) update.App {
+		app := pr.App(root, "presenter")
+		const v = "0.20261024.0"
+		if err := os.MkdirAll(filepath.Join(app.Dir(v), "bin"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(app.Exe(v), []byte("#!/bin/sh\n"), 0o700); err != nil { //nolint:gosec // G306: test
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(app.Dir(v), "VERSION"), []byte(v+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := app.Repoint(v); err != nil {
+			t.Fatal(err)
+		}
+		return app
+	}
+	appA := release(a)
+	link, err := appA.LinkCommand(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pr.Find("presenter", home, a); got != link {
+		t.Errorf("A found %q, want its link %q", got, link)
+	}
+	if got := pr.Find("presenter", home, b); got != "" {
+		t.Errorf("B found %q, A's release", got)
+	}
+	appB := release(b)
+	if got := pr.Find("presenter", home, b); got != appB.CurrentExe() {
+		t.Errorf("B found %q, want its own %q", got, appB.CurrentExe())
+	}
+	if appB.MayLink(home) || !appA.MayLink(home) {
+		t.Error("B may replace A's link, or A may not")
+	}
+	if pr.Release(b, "presenter", link) != "" || pr.Release(a, "presenter", link) != "0.20261024.0" {
+		t.Error("Release judged the link by the wrong data folder")
 	}
 }
 

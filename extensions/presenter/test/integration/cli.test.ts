@@ -20,8 +20,12 @@ afterEach(() => {
 });
 
 function presenter(...args: string[]) {
+  return presenterWith({}, ...args);
+}
+
+function presenterWith(env: Record<string, string>, ...args: string[]) {
   const r = spawnSync(process.execPath, ['--import', 'tsx', CLI, ...args], {
-    env: { ...process.env, PRESENTER_HOME: home, MEKO_HOME: join(dir, 'meko'), PATH: '/usr/bin:/bin' },
+    env: { ...process.env, PRESENTER_HOME: home, MEKO_HOME: join(dir, 'meko'), PATH: '/usr/bin:/bin', ...env },
     encoding: 'utf8',
     timeout: 30000,
   });
@@ -29,6 +33,12 @@ function presenter(...args: string[]) {
 }
 
 describe('the commands Meko runs', () => {
+  it('says its version as Meko checks a release it unpacks', () => {
+    const r = presenter('version', '--json');
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.out)).toEqual({ version: expect.any(String) });
+  });
+
   it('names the socket Meko serves at /ext/presenter/', () => {
     const r = presenter('_handoff', '--json');
     expect(r.code).toBe(0);
@@ -58,6 +68,16 @@ describe('the commands Meko runs', () => {
     expect([status.code, status.out]).toEqual([0, expect.stringMatching(/Server: running \(pid \d+\)/)]);
     expect(presenter('stop').out).toContain('Presenter stopped');
     expect(existsSync(join(home, 'run', 'server.pid'))).toBe(false);
+  });
+
+  it('starts the server through a release\'s launcher, which counts the starts of an update', () => {
+    // A stand-in for packaging/meko_presenter: notes the start, then runs the server as this test does.
+    const launcher = join(dir, 'launcher');
+    writeFileSync(launcher, `#!/bin/sh\necho "$@" >> "${join(dir, 'launched')}"\nexec "${process.execPath}" --import tsx "${CLI}" "$@"\n`);
+    chmodSync(launcher, 0o755);
+    expect(presenterWith({ PRESENTER_LAUNCHER: launcher }, 'start').out).toContain('Presenter started');
+    expect(readFileSync(join(dir, 'launched'), 'utf8')).toBe('serve\n');
+    expect(presenter('status').code).toBe(0);
   });
 
   it('leaves alone a process that has the pid a crashed server left', async () => {

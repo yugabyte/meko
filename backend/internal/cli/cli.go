@@ -1,7 +1,7 @@
 // Package cli is the meko command: start, stop, restart, status, serve, version, token, ui,
-// setup_link, cloud_link, logs,
-// destroy, install, uninstall, install_extension, uninstall_extension, update and list, and the MCP calls
-// search, add_memory, datapacks, create_datapack, delete_datapack, upload and upload_status.
+// setup_link, cloud_link, logs, destroy, install, uninstall, install_extension, update_extension,
+// uninstall_extension, update and list, and the MCP calls search, add_memory, datapacks,
+// create_datapack, delete_datapack, upload and upload_status.
 package cli
 
 import (
@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"syscall"
 
 	"github.com/yugabyte/meko/backend/internal/config"
+	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/paths"
 )
 
@@ -72,7 +74,10 @@ Usage:
                  --check only looks
   meko install_extension agentk|presenter
                  install AgentK or Presenter, pointed at this Meko, and start and stop it with
-                 Meko (Presenter has no releases yet: put a build of it on PATH first)
+                 Meko (its command, agentk or meko_presenter, already on PATH is used as it is)
+  meko update_extension presenter
+                 install Presenter's newest release now and restart it (one that fails to start
+                 is rolled back); --check only looks. AgentK updates itself
   meko uninstall_extension agentk|presenter
                  stop starting and stopping it with Meko (it stays installed)
 
@@ -153,7 +158,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	case "destroy":
 		fs.BoolVar(&c.force, "force", false, "destroy without asking (keeping the extensions' data)")
 		fs.BoolVar(&c.withExtensions, "with-extensions", false, "uninstall the extensions and remove their data too")
-	case "update":
+	case "update", "update_extension":
 		fs.BoolVar(&c.check, "check", false, "only look for an update")
 	case "cloud_link":
 		fs.StringVar(&cl.url, "url", "", "the MCP server's URL (default Meko Cloud's)")
@@ -200,9 +205,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 	switch cmd {
 	case "start", "stop", "restart", "status", "serve", "version", "token", "ui", "setup_link", "cloud_link", "logs",
-		"destroy", "install",
-		"uninstall", "install_extension", "uninstall_extension", "update", "search", "add_memory", "datapacks",
-		"create_datapack", "delete_datapack", "upload", "upload_status", "list", "export":
+		"destroy", "install", "uninstall", "install_extension", "update_extension", "uninstall_extension", "update",
+		"search", "add_memory", "datapacks", "create_datapack", "delete_datapack", "upload", "upload_status", "list",
+		"export":
 	default:
 		fmt.Fprintf(stderr, "meko: unknown command %q\n\n%s", cmd, usage)
 		return exitUsage
@@ -213,7 +218,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	// These take one argument, and upload any number; their flags may follow.
 	switch cmd {
 	case "search", "add_memory", "create_datapack", "delete_datapack", "upload_status", "install_extension",
-		"uninstall_extension", "list", "export", "ui":
+		"update_extension", "uninstall_extension", "list", "export", "ui":
 		if fs.NArg() > 0 {
 			t.text = fs.Arg(0)
 			if err := fs.Parse(fs.Args()[1:]); err != nil {
@@ -238,8 +243,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "meko cloud_link: --off takes no URLs")
 		return exitUsage
 	}
-	if (cmd == "install_extension" || cmd == "uninstall_extension") && t.text == "" {
-		fmt.Fprintf(stderr, "meko %s: name the extension (agentk)\n", cmd)
+	if (cmd == "install_extension" || cmd == "update_extension" || cmd == "uninstall_extension") && t.text == "" {
+		fmt.Fprintf(stderr, "meko %s: name the extension (%s)\n", cmd, strings.Join(extensions.KnownNames(), ", "))
 		return exitUsage
 	}
 	if cmd == "version" {
@@ -277,6 +282,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runUninstall(l, c.purge, destroyOptions{force: c.force, withExtensions: c.withExtensions}, stdout, stderr)
 	case "install_extension":
 		return runInstallExtension(l, t.text, stdout, stderr)
+	case "update_extension":
+		return runUpdateExtension(l, t.text, c.check, stdout, stderr)
 	case "uninstall_extension":
 		return runUninstallExtension(l, t.text, stdout, stderr)
 	case "update":

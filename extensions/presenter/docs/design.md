@@ -15,7 +15,7 @@ flowchart TB
     WL["web listener :7777\nlogin, proxy to the extension's socket"]
     AL["API listener 127.0.0.1:7778\nMCP and REST"]
   end
-  subgraph P["presenter serve (run/web.sock)"]
+  subgraph P["meko_presenter serve (run/web.sock)"]
     API["API and WebSockets"]
     J["jobs: claude -p on the deck's session"]
     D["decks: drafts, ops, pieces, cache"]
@@ -104,6 +104,31 @@ the run to the deck it has, so it never shows a position in a scene it doesn't h
 that throws says so instead of going blank. The audience window shows only the slide (with a fork's
 options, and a small mark on a detour); keys work in both windows.
 
+## Releases
+
+Presenter releases on its own train (`.github/workflows/presenter-release.yml`, tags
+`presenter-v<version>`, `scripts/release/*.sh --product presenter`). It has no native modules, so
+one job builds it once and packages `presenter-<version>-<os>-<arch>.tar.gz` for linux-x64,
+linux-arm64 and darwin-arm64 (`scripts/package-release.sh`), each with its own Node; a release
+carries those and `SHA256SUMS`, and no installer.
+
+Meko installs and updates them (`meko install_extension presenter`, `meko update_extension
+presenter`, the Extensions page): it unpacks a release into `<home>/app/<version>`, checks that
+`bin/meko_presenter version --json` names it, and points `app/current` and
+`~/.local/bin/meko_presenter` at it. The command is `meko_presenter`, and the extension `presenter`
+(its folder, tags, tarballs and pages). `bin/meko_presenter` is the launcher
+(`packaging/meko_presenter`): it runs the bundled Node on
+`lib/dist/server/cli.js`, with `PRESENTER_APP_DIR` naming the release's folder and
+`PRESENTER_LAUNCHER` itself, and `meko_presenter start` runs `serve` through it.
+
+An update is on probation until it has served for 5 minutes. Meko writes `app/update-pending.json`
+(`from`, `to`, `attempts`) as it switches `app/current`; the launcher counts each `serve` of the new
+version, and on the start after three failed ones points `app/current` back at the old version,
+adds the new one to `app/bad-versions` (which Meko skips) and runs the old one. The server clears
+the record once it has served for 5 minutes, and a SIGTERM takes its start off the count, so only
+crashes count (`src/server/probation.ts`). These are Meko's rules for its own releases, on the same
+files. A build from source has no launcher and no record, and Meko never updates it.
+
 ## Decisions
 
 | Decision | Why | Weighed |
@@ -116,6 +141,9 @@ options, and a small mark on a detour); keys work in both windows.
 | One persisted session per deck, driven headless | Claude keeps what it read and the editing conversation; answers stay checked JSON | A fresh `claude -p` per call; a live terminal session |
 | Typed operations for every edit, change sets for asks | One undo history, one set of rules, nothing unreviewed over hand edits | Rewriting the deck each time |
 | Pieces under Meko's artifact limit | Decks of any size; only changes go up; never half-saved | One `deck.json`; knowledge files (indexed for search) |
+| Meko installs and updates the releases; no installer or updater of Presenter's | Meko already stages, checks, switches and rolls back its own releases (`internal/update`); one place does it | An `install.sh` per release and a `presenter update` |
+| AgentK's launcher rollback, on Meko's records | A release that can't start goes back to the one before by itself, and Meko never offers it again | No rollback; Meko watching the start itself |
+| One build job packages every platform | No native modules: only the bundled Node differs | AgentK's per-platform builds (needed for node-pty) |
 
 ## Not built yet
 
@@ -124,4 +152,3 @@ options, and a small mark on a detour); keys work in both windows.
 - **Prepare** for an offline talk (fetching every piece ahead), live and prepared detours made
   during a talk, and run logs saved to the deck's datapack.
 - A phone layout for the console, audience voting, and a PDF of the path taken.
-- A release train, so `meko install_extension presenter` downloads a release.

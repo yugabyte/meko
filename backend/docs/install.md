@@ -102,14 +102,14 @@ flag, and Go signs darwin/arm64 binaries ad hoc.
 `scripts/release/**` or itself, and by hand (force, or rebuild a `meko-v` tag). It uses the repo's
 release scripts with `--product meko`:
 
-| | AgentK (`agentk-release.yml`) | Meko (`meko-release.yml`) |
-|---|---|---|
-| Tag | `agentk-v0.YYYYMMDD.N` (`v0.…` before) | `meko-v0.YYYYMMDD.N` |
-| Title | its tag | its tag |
-| Releases on | feat/fix/perf/deps subjects other than those naming only `meko` or `presenter` (Presenter has no train yet) | feat/fix/perf/deps subjects naming `meko`, alone or in a list (`feat(agentk,meko): …`) |
-| Assets | AgentK tarballs, `SHA256SUMS`, its `install.sh` | Meko tarballs, `SHA256SUMS`, Meko's `install.sh` |
-| Latest | `--latest=false` | `--latest` |
-| Pruning | newest 5 per lane of its own tags | newest 5 `meko-v` releases |
+| | AgentK (`agentk-release.yml`) | Meko (`meko-release.yml`) | Presenter (`presenter-release.yml`) |
+|---|---|---|---|
+| Tag | `agentk-v0.YYYYMMDD.N` (`v0.…` before) | `meko-v0.YYYYMMDD.N` | `presenter-v0.YYYYMMDD.N` |
+| Title | its tag | its tag | its tag |
+| Releases on | feat/fix/perf/deps subjects other than those naming only `meko` or `presenter` | feat/fix/perf/deps subjects naming `meko`, alone or in a list (`feat(agentk,meko): …`) | feat/fix/perf/deps subjects naming `presenter`, alone or in a list |
+| Assets | AgentK tarballs, `SHA256SUMS`, its `install.sh` | Meko tarballs, `SHA256SUMS`, Meko's `install.sh` | `presenter-<version>-<os>-<arch>.tar.gz` (holding `bin/meko_presenter`), `SHA256SUMS`; no installer: Meko installs them |
+| Latest | `--latest=false` | `--latest` | `--latest=false` |
+| Pruning | newest 5 per lane of its own tags | newest 5 `meko-v` releases | newest 5 `presenter-v` releases |
 
 Plan, then `make test`, then the three builds (each packaged and smoke-tested), then publish:
 `SHA256SUMS`, the release with notes from `release-notes.sh --product meko`, provenance attestation,
@@ -192,11 +192,40 @@ another data folder refuses `start`, `stop`, `status`, `uninstall` and `_handoff
   installed one by its `install.js`, a release by its `install.sh`. So `install_extension` needs
   an AgentK release that takes `--meko-url`. Nothing else is passed, apart from `--non-interactive` without a terminal: AgentK asks its own questions. Then it registers
   `agentk`.
-- The catalog (`extensions.Known`) has AgentK and Presenter. Presenter has no releases yet, so
-  `meko install_extension presenter` works only with a `presenter` command on PATH or in
-  `~/.local/bin` (a build from source), which it runs as `presenter install --meko-url … --meko-key …`;
-  without one, the release download it falls back to finds nothing. Presenter's uninstall is
-  `uninstall --purge --non-interactive`: its decks stay in their Meko datapacks.
+- The catalog (`extensions.Known`) has AgentK and Presenter. Presenter is `Managed`: Meko installs
+  and updates it from its own releases, with no installer of Presenter's. Its command is
+  `meko_presenter`; the extension, its folder, tags and tarballs are `presenter`. With no
+  `meko_presenter` on PATH or in `~/.local/bin`, `meko install_extension presenter` picks the newest `presenter-v*`
+  release with this platform's `presenter-<version>-<os>-<arch>.tar.gz` and `SHA256SUMS` (skipping
+  its `bad-versions`), and installs it as Meko installs itself (`update.App`, package `presenter`,
+  program `meko_presenter`): checked against `SHA256SUMS`, unpacked, its
+  `bin/meko_presenter version --json` checked to run here,
+  into `<data>/extensions/presenter/app/<version>` (owner-only, `App.Private`: folders and programs
+  0700, files 0600, as everything in the data folder), with `app/current` and
+  `~/.local/bin/meko_presenter` pointing at it. Then, as with a `meko_presenter` already there (a
+  build from source, used as it is and never updated), it runs
+  `meko_presenter install --meko-url … --meko-key …`. One `~/.local/bin/meko_presenter` serves all
+  of a user's data folders, but a release belongs to one: a link that runs another data folder's
+  release isn't this one's (`Catalog.Find` skips it), so Meko installs this folder's own, leaves the
+  link alone (`App.MayLink`) and registers `app/current/bin/meko_presenter`.
+  Presenter's uninstall is `uninstall --purge --non-interactive`, which removes its folder, releases
+  and all (`meko destroy --with-extensions` then removes the `~/.local/bin/meko_presenter` link Meko
+  made): its decks stay in their Meko datapacks.
+- `meko update_extension presenter` (and the Extensions page's **Update**) moves a release install
+  Meko made to the newest release: `--check` only looks, and with no release for this platform (or
+  only rolled-back ones) it says so. The version to roll back to is the current one, unless that's
+  still on probation (its own update's record names it): then it's the one that update replaced,
+  the last known to work. It deletes the other versions, stages the new one beside them, stops
+  Presenter if it runs, and switches `app/current` with `update-pending.json` written (`App.Switch`);
+  a switch that fails starts the old version again. A Presenter that was running is started again,
+  up to four times. Presenter's launcher (`extensions/presenter/packaging/meko_presenter`) applies Meko's own
+  probation rules to that record: each start of the new version counts, the start after three
+  failed ones points `app/current` back at the old version, adds the new one to `bad-versions` and
+  runs the old one, and the server clears the record after 5 minutes of serving (a clean stop takes
+  its start off the count). The update then fails, saying it was rolled back, and whether the old
+  version started (with its error when it didn't). `bad-versions` is 0600 whoever writes it. It needs no running
+  Meko. AgentK isn't `Managed`: it updates itself, and `update_extension agentk` says so. A command
+  that isn't Meko's release install (a build from source) is refused.
 - A command npm installed (`npm link`, `npm install -g`: Presenter from source) is a
   `#!/usr/bin/env node` script in the bin folder of the Node that installed it, and the login
   service's PATH has no such Node (launchd's is `/usr/bin:/bin:/usr/sbin:/sbin`), or an older one.
@@ -210,10 +239,10 @@ another data folder refuses `start`, `stop`, `status`, `uninstall` and `_handoff
 - `meko start` starts the extensions after Meko; `meko stop` stops them first (`agentk stop`
   ends AgentK's sessions too; they resume on start), unless given `--keep-extensions`. An
   extension that fails is reported, and the rest go on. `meko restart`, updates and crashes never
-  touch them: AgentK has its own services and updater.
+  touch them: AgentK has its own services and updater, and Presenter is updated only when asked.
 - `meko uninstall_extension agentk` only unregisters it.
-- The web UI's Extensions page runs the same install, and the extensions' `start` and `stop`, from
-  the server, without a terminal ([web.md](web.md)).
+- The web UI's Extensions page runs the same install and update, and the extensions' `start` and
+  `stop`, from the server, without a terminal ([web.md](web.md)).
 - AgentK's key is Meko's client token, as every client's is ([api.md](api.md#auth)). The Meko Cloud
   link is Meko's too: extensions read it from `meko token --json` and hear of a change on their
   socket ([cloud.md](cloud.md)).

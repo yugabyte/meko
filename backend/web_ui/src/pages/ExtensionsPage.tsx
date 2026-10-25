@@ -1,6 +1,7 @@
 // The Extensions page: the extensions installed (registered with Meko) and the ones available to
-// install, each with Install, Start, Stop and Open. An action runs on the server as the extension's
-// job; its card shows the output while it runs, and the error and output when it failed.
+// install, each with Install, Start, Stop and Open, and Update for one whose releases Meko installs
+// (Presenter's; AgentK updates itself). An action runs on the server as the extension's job; its
+// card shows the output while it runs, and the error and output when it failed.
 
 import { useState } from "react";
 import { ExternalLink } from "lucide-react";
@@ -12,8 +13,13 @@ import { ExtensionIcon } from "../components/ExtensionsLink";
 import { SectionHeader } from "../components/metrics/SectionHeader";
 import { Badge, Button, Card, Code, ErrorNote, Loading, Spinner } from "../components/ui";
 
-const LABEL: Record<ExtensionAction, string> = { install: "Install", start: "Start", stop: "Stop" };
-const DOING: Record<ExtensionAction, string> = { install: "Installing…", start: "Starting…", stop: "Stopping…" };
+const LABEL: Record<ExtensionAction, string> = { install: "Install", update: "Update", start: "Start", stop: "Stop" };
+const DOING: Record<ExtensionAction, string> = {
+  install: "Installing…",
+  update: "Updating…",
+  start: "Starting…",
+  stop: "Stopping…",
+};
 
 export function ExtensionsPage() {
   const list = useExtensions();
@@ -49,7 +55,8 @@ function Cards({ rows, empty }: { rows: Extension[]; empty: string }) {
 function ExtensionCard({ ext }: { ext: Extension }) {
   const [posting, setPosting] = useState<ExtensionAction>();
   const [error, setError] = useState<Error>();
-  const [confirmStop, setConfirmStop] = useState(false);
+  // Stop and Update ask first: both end what the extension is doing.
+  const [confirm, setConfirm] = useState<"stop" | "update">();
   const installed = isInstalled(ext);
   const webUI = ext.web_ui ?? true;
   const running = webUI && ext.available;
@@ -57,7 +64,7 @@ function ExtensionCard({ ext }: { ext: Extension }) {
   const doing = job?.state === "running" ? job.action : posting;
 
   const act = async (action: ExtensionAction) => {
-    setConfirmStop(false);
+    setConfirm(undefined);
     setError(undefined);
     setPosting(action);
     try {
@@ -75,7 +82,7 @@ function ExtensionCard({ ext }: { ext: Extension }) {
       key={action}
       variant={primary ? "primary" : "outline"}
       disabled={doing !== undefined}
-      onClick={() => (action === "stop" ? setConfirmStop(true) : act(action))}
+      onClick={() => (action === "stop" || action === "update" ? setConfirm(action) : act(action))}
     >
       {doing === action && <Spinner className="text-current" />}
       {doing === action ? DOING[action] : LABEL[action]}
@@ -92,6 +99,7 @@ function ExtensionCard({ ext }: { ext: Extension }) {
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-medium">{ext.title}</span>
+              {installed && ext.version && <span className="text-xs text-muted-foreground">{ext.version}</span>}
               {installed &&
                 (!webUI ? (
                   <Badge>Installed</Badge>
@@ -108,6 +116,7 @@ function ExtensionCard({ ext }: { ext: Extension }) {
           {!installed && button("install", true)}
           {installed && !running && button("start", true)}
           {installed && (running || !webUI) && button("stop", false)}
+          {installed && ext.updatable && button("update", false)}
           {running && ext.path && (
             // A plain link, opening it in place of this page: AgentK refuses to be framed.
             <a
@@ -135,19 +144,23 @@ function ExtensionCard({ ext }: { ext: Extension }) {
           <ErrorNote error={new Error(`${LABEL[job.action]} failed: ${job.error ?? "unknown error"}`)} />
         </div>
       )}
+      {job?.action === "update" && job.state === "done" && job.output && (
+        // A finished update says what it did: up to date, or installed for the next start.
+        <p className="mt-3 break-words text-sm text-muted-foreground">{lastLine(job.output)}</p>
+      )}
       {job && job.state !== "done" && job.output && (
         <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-lg border bg-muted p-3 font-mono text-xs">
           {job.output}
         </pre>
       )}
 
-      {confirmStop && (
+      {confirm === "stop" && (
         <Dialog
           title={`Stop ${ext.title}?`}
-          onClose={() => setConfirmStop(false)}
+          onClose={() => setConfirm(undefined)}
           actions={
             <>
-              <Button variant="ghost" onClick={() => setConfirmStop(false)}>
+              <Button variant="ghost" onClick={() => setConfirm(undefined)}>
                 Cancel
               </Button>
               <Button variant="primary" className="bg-destructive text-white" onClick={() => act("stop")}>
@@ -163,6 +176,33 @@ function ExtensionCard({ ext }: { ext: Extension }) {
           </p>
         </Dialog>
       )}
+      {confirm === "update" && (
+        <Dialog
+          title={`Update ${ext.title}?`}
+          onClose={() => setConfirm(undefined)}
+          actions={
+            <>
+              <Button variant="ghost" onClick={() => setConfirm(undefined)}>
+                Cancel
+              </Button>
+              <Button variant="primary" onClick={() => act("update")}>
+                Update {ext.title}
+              </Button>
+            </>
+          }
+        >
+          <p className="text-sm">
+            Meko installs {ext.title}'s newest release and, if it's running, restarts it: open pages reconnect, and
+            a live talk resumes where it was. A release that fails to start is rolled back.
+          </p>
+        </Dialog>
+      )}
     </Card>
   );
+}
+
+// The last line of a job's output.
+function lastLine(output: string): string {
+  const lines = output.trim().split("\n");
+  return lines[lines.length - 1] ?? "";
 }

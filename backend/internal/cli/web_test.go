@@ -163,7 +163,7 @@ func TestPresenterBesideMeko(t *testing.T) {
 	ext := &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(echo)}
 	go func() { _ = ext.Serve(ln) }()
 	t.Cleanup(func() { _ = ext.Close() })
-	cmd := filepath.Join(home, "presenter")
+	cmd := filepath.Join(home, "meko_presenter")
 	reply := fmt.Sprintf(`{"socket":"%s","legacy":null}`, sock)
 	script := fmt.Sprintf("#!/bin/sh\n[ \"$1\" = _handoff ] && { printf '%%s\\n' '%s'; exit 0; }\nexit 0\n", reply)
 	if err = os.WriteFile(cmd, []byte(script), 0o700); err != nil { //nolint:gosec // G306: test script

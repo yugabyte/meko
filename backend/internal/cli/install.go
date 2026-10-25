@@ -274,7 +274,7 @@ func installExtension(ctx context.Context, l paths.Layout, name string, interact
 	stdout, stderr io.Writer) error {
 	cat, ok := extensions.Known[name]
 	if !ok {
-		return fmt.Errorf("no extension called %q: meko knows agentk", name)
+		return fmt.Errorf("no extension called %q: meko knows %s", name, strings.Join(extensions.KnownNames(), ", "))
 	}
 	cfg, err := config.Load(l.Config, os.Getenv, config.Overrides{})
 	if err != nil {
@@ -296,7 +296,14 @@ func installExtension(ctx context.Context, l paths.Layout, name string, interact
 	if !interactive {
 		args = append(args, "--non-interactive")
 	}
-	if cmd := cat.Find(name, home, l.Root); cmd != "" {
+	cmd := cat.Find(name, home, l.Root)
+	if cmd == "" && cat.Managed {
+		// Meko installs it from its newest release, then sets it up below as one already there.
+		if cmd, err = installRelease(ctx, l, cfg.Update.Repo, name, home, stdout); err != nil {
+			return err
+		}
+	}
+	if cmd != "" {
 		if tooOld(cmd) {
 			return fmt.Errorf("the installed %s predates --meko-url, which pointing it at this Meko "+
 				"needs: update it (the Update button in AgentK), then run this again", cat.Title)
@@ -310,7 +317,7 @@ func installExtension(ctx context.Context, l paths.Layout, name string, interact
 	} else if err = runExtensionInstaller(ctx, l, cfg.Update.Repo, cat, args, stdin, stdout, stderr); err != nil {
 		return err
 	}
-	cmd := cat.Find(name, home, l.Root)
+	cmd = cat.Find(name, home, l.Root)
 	if cmd == "" {
 		return fmt.Errorf("%s was installed, but %s isn't on PATH or in ~/.local/bin", cat.Title, cat.Command)
 	}
@@ -333,6 +340,49 @@ func readClientToken(l paths.Layout, cfg config.Config) (string, error) {
 		return "", err
 	}
 	return ct.Read()
+}
+
+// installRelease installs a Managed extension from its newest release (its bad versions skipped)
+// into its app folder, as Meko's own installs go: the tarball for this platform checked against
+// SHA256SUMS, unpacked, its binary checked to run here, app/current pointed at it, and
+// ~/.local/bin/<command> at app/current unless that's another data folder's. It returns the link,
+// or app/current's command when there's none.
+func installRelease(ctx context.Context, l paths.Layout, repo, name, home string, stdout io.Writer) (string, error) {
+	cat := extensions.Known[name]
+	dl, cancel := context.WithTimeout(ctx, extensions.InstallTimeout)
+	defer cancel()
+	c := newReleaseClient(repo)
+	rels, err := c.Releases(dl)
+	if err != nil {
+		return "", err
+	}
+	app := cat.App(l.Root, name)
+	goos, arch := update.Platform()
+	rel, ver, ok := update.PickPackage(rels, cat.TagPrefixes, name, goos, arch, app.BadVersions())
+	if !ok {
+		return "", fmt.Errorf("no release of %s for %s-%s was found in %s", cat.Title, goos, arch, c.Repo)
+	}
+	fmt.Fprintf(stdout, "Installing %s %s (%s)\n", cat.Title, ver, rel.Tag)
+	// Owner-only, like the rest of the data folder; the extension's own folder may not be there yet.
+	if err := os.MkdirAll(filepath.Dir(app.Root), 0o700); err != nil {
+		return "", err
+	}
+	if err := app.Stage(dl, c, rel, ver); err != nil {
+		return "", err
+	}
+	if err := app.Repoint(ver); err != nil {
+		return "", err
+	}
+	// A manual install supersedes a record of an update in progress.
+	if err := app.ClearPending(); err != nil {
+		return "", err
+	}
+	if !app.MayLink(home) {
+		fmt.Fprintf(stdout, "~/.local/bin/%s runs another Meko data folder's %s, so it stays; this one is %s\n",
+			cat.Command, cat.Title, app.CurrentExe())
+		return app.CurrentExe(), nil
+	}
+	return app.LinkCommand(home)
 }
 
 // runExtensionInstaller downloads the newest release's installer of an extension and runs it, with

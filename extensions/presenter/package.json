@@ -9,7 +9,7 @@
     "node": ">=22.13"
   },
   "bin": {
-    "presenter": "dist/server/cli.js"
+    "meko_presenter": "dist/server/cli.js"
   },
   "scripts": {
     "dev": "concurrently -k -n server,web \"npm:dev:server\" \"npm:dev:web\"",
