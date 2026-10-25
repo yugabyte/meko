@@ -10,7 +10,7 @@ import { CALL_RETENTION_DAYS, callResults, isRead, resultCount } from "../lib/ca
 import { duration } from "../lib/format";
 import type { MekoCall, Turn } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
-import { MemoryMapView, STATE_COLOR } from "./MemoryMapView";
+import { MemoryMapView, only, SHOWN_STATES } from "./MemoryMapView";
 import { CallTraceDialog } from "./metrics/CallTraceDialog";
 import { Badge, cx } from "./ui";
 
@@ -121,23 +121,23 @@ function Calls({ calls, onOpen }: { calls: MekoCall[]; onOpen: (c: MekoCall) => 
 // The memories this turn's searches returned, in the order they came: a list to read, beside a
 // small map of the datapack with them lit and every other memory faded.
 function SawMap({ datapackId, ids }: { datapackId: string; ids: Set<string> }) {
-  const map = useLoad(() => api.memoryMap(datapackId), [datapackId]);
-  if (!map.data) return null;
-  const byId = new Map(map.data.points.map((p) => [p.id, p]));
+  const loaded = useLoad(() => api.memoryMap(datapackId), [datapackId]);
+  if (!loaded.data) return null;
+  const map = only(loaded.data, SHOWN_STATES);
+  const byId = new Map(map.points.map((p) => [p.id, p]));
   const seen = [...ids].flatMap((id) => byId.get(id) ?? []);
-  const gone = ids.size - seen.length;
+  if (seen.length === 0) return null;
   return (
     <div className="mt-3 space-y-2">
       <p className="text-xs font-medium text-muted-foreground">
-        What the agent saw: {ids.size} {ids.size === 1 ? "memory" : "memories"}
-        {gone > 0 && ` (${gone} since deleted)`}
+        What the agent saw: {seen.length} {seen.length === 1 ? "memory" : "memories"}
       </p>
       <div className="grid gap-3 sm:grid-cols-[14rem_minmax(0,1fr)]">
-        <MemoryMapView map={map.data} lit={ids} mini />
+        <MemoryMapView map={map} lit={ids} mini />
         <ol className="space-y-1 text-sm">
           {seen.map((p) => (
             <li key={p.id} className="flex items-start gap-2">
-              <span className={cx("mt-1.5 size-2 shrink-0 rounded-full bg-current", STATE_COLOR[p.state])} />
+              <Badge>memory</Badge>
               <span className="min-w-0 break-words">{p.text}</span>
             </li>
           ))}

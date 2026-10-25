@@ -3,6 +3,7 @@
 // waiting to be kept or promoted.
 
 import { count } from "../../lib/format";
+import { SHOW_COLLECTIVE } from "../../lib/features";
 import { pct } from "../../lib/metrics";
 import { Button } from "../ui";
 import { BigStat, MetricCard } from "./MetricCard";
@@ -18,23 +19,32 @@ export function MemoryBreakdownCard({
   pending: number;
   onReview: () => void;
 }) {
-  const total = promoted + kept + pending;
+  const total = (SHOW_COLLECTIVE ? promoted : 0) + kept + pending;
   const title = "Memory breakdown";
-  const subtitle = "Shared vs private vs pending promotion";
+  const subtitle = SHOW_COLLECTIVE ? "Shared vs private vs pending promotion" : "Reviewed vs pending review";
   if (total === 0) {
     return <MetricCard title={title} subtitle={subtitle} empty={["No memories yet", "Agents add them with memory_add."]} />;
   }
-  const parts = [
-    { label: "Promoted", n: promoted, color: "bg-info" },
-    { label: "Private", n: kept, color: "bg-info-strong" },
-    { label: "Pending", n: pending, color: "bg-muted-foreground" },
-  ];
+  const parts = SHOW_COLLECTIVE
+    ? [
+        { label: "Promoted", n: promoted, color: "bg-info" },
+        { label: "Private", n: kept, color: "bg-info-strong" },
+        { label: "Pending", n: pending, color: "bg-muted-foreground" },
+      ]
+    : [
+        { label: "Reviewed", n: kept, color: "bg-info-strong" },
+        { label: "Pending", n: pending, color: "bg-muted-foreground" },
+      ];
   return (
     <MetricCard title={title} subtitle={subtitle}>
       <div className="flex gap-6">
         <BigStat value={count(total)} label="Total memories" />
         <div className="w-px bg-border" />
-        <BigStat value={`${pct(promoted, total)}%`} label="Shared" />
+        {SHOW_COLLECTIVE ? (
+          <BigStat value={`${pct(promoted, total)}%`} label="Shared" />
+        ) : (
+          <BigStat value={`${pct(kept, total)}%`} label="Reviewed" />
+        )}
       </div>
       <div className="mt-4 flex h-2.5 overflow-hidden rounded-full bg-muted">
         {parts.map((p) => (p.n > 0 ? <div key={p.label} className={p.color} style={{ width: `${(100 * p.n) / total}%` }} /> : null))}

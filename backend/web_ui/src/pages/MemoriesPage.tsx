@@ -7,6 +7,7 @@ import { api } from "../lib/api";
 import { navigate } from "../lib/route";
 import { timeAgo } from "../lib/format";
 import type { Datapack, MemoryState } from "../lib/types";
+import { SHOW_COLLECTIVE } from "../lib/features";
 import { useLoad } from "../lib/useLoad";
 import { MemoryGraph } from "../components/MemoryGraph";
 import { MemoryLineageDialog, type LineageOf } from "../components/MemoryLineageDialog";
@@ -19,7 +20,7 @@ type Scope = "memories" | "learnings" | "promoted";
 const SCOPES: readonly { id: Scope; label: string }[] = [
   { id: "memories", label: "All memories" },
   { id: "learnings", label: "Learnings" },
-  { id: "promoted", label: "Collective" },
+  ...(SHOW_COLLECTIVE ? [{ id: "promoted" as const, label: "Collective" }] : []),
 ];
 
 // The memory states each scope's graph draws.
@@ -263,7 +264,7 @@ function SelectionBar({
   if (count === 0) {
     return (
       <p className="text-xs text-muted-foreground">
-        Select memories to {learnings ? "keep, promote or " : ""}delete them.
+        Select memories to {learnings ? (SHOW_COLLECTIVE ? "keep, promote or " : "keep or ") : ""}delete them.
       </p>
     );
   }
@@ -272,12 +273,14 @@ function SelectionBar({
       <span className="font-medium">{count} selected</span>
       {learnings && (
         <>
-          <Button size="sm" variant="ghost" onClick={onKeep} title="Keep as private memories">
+          <Button size="sm" variant="ghost" onClick={onKeep} title="Mark as reviewed and keep">
             <Check className="size-3.5" /> Keep
           </Button>
-          <Button size="sm" variant="ghost" onClick={onPromote} title="Promote to the collective memory">
-            <Sparkles className="size-3.5" /> Promote
-          </Button>
+          {SHOW_COLLECTIVE && (
+            <Button size="sm" variant="ghost" onClick={onPromote} title="Promote to the collective memory">
+              <Sparkles className="size-3.5" /> Promote
+            </Button>
+          )}
         </>
       )}
       <Button

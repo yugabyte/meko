@@ -10,6 +10,7 @@ import { useLoad } from "../lib/useLoad";
 import { GetStarted } from "../components/GetStarted";
 import { LearningPipeline } from "../components/LearningPipeline";
 import { Card, ErrorNote, Loading } from "../components/ui";
+import { SHOW_COLLECTIVE } from "../lib/features";
 
 function Stat({ icon, label, value, hint }: { icon: ReactNode; label: string; value: string; hint?: string }) {
   return (
@@ -56,12 +57,14 @@ export function OverviewPage({ datapack }: { datapack: Datapack }) {
           label="Conversations"
           value={count(m.conversation_count)}
         />
-        <Stat
-          icon={<Sparkles className="size-3.5" />}
-          label="Collective memory"
-          value={count(datapack.collective_memory_count)}
-          hint="Promoted learnings, searchable in the knowledge base"
-        />
+        {SHOW_COLLECTIVE && (
+          <Stat
+            icon={<Sparkles className="size-3.5" />}
+            label="Collective memory"
+            value={count(datapack.collective_memory_count)}
+            hint="Promoted learnings, searchable in the knowledge base"
+          />
+        )}
         <Stat
           icon={<Search className="size-3.5" />}
           label="Searches (90 days)"

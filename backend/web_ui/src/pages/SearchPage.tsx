@@ -5,6 +5,7 @@ import { useState, type FormEvent, type ReactNode } from "react";
 import { Brain, FileText, MessagesSquare, Search } from "lucide-react";
 import { api, type SearchSource } from "../lib/api";
 import { SEARCH_INPUT_ID } from "../lib/useShortcuts";
+import { SHOW_COLLECTIVE } from "../lib/features";
 import { timeAgo } from "../lib/format";
 import type { ContextSearch, Datapack, MemoryHit } from "../lib/types";
 import { ExpandableText } from "../components/ExpandableText";
@@ -153,7 +154,9 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
                 {r.knowledge_base?.map((k) => (
                   <Card key={k.id} className="p-3">
                     <div className="mb-1.5 flex gap-1.5">
-                      {k.metadata_filters?.source === "memory" && <Badge tone="success">promoted memory</Badge>}
+                      {SHOW_COLLECTIVE && k.metadata_filters?.source === "memory" && (
+                        <Badge tone="success">promoted memory</Badge>
+                      )}
                       <Badge>{k.match_type}</Badge>
                       <Similarity value={1 - k.distance} />
                       {k.rerank_score !== undefined && <Badge>rerank {k.rerank_score.toFixed(2)}</Badge>}

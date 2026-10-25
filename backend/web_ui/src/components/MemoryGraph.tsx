@@ -5,22 +5,12 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { Map as MapIcon, Sparkles } from "lucide-react";
 import { api } from "../lib/api";
-import type { MapPoint, MemoryMap, MemoryState } from "../lib/types";
+import type { MapPoint, MemoryState } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
 import { MemoryLineageDialog } from "./MemoryLineageDialog";
-import { MemoryMapView } from "./MemoryMapView";
+import { MemoryMapView, only, SHOWN_STATES } from "./MemoryMapView";
 import { round2, Similarity, WEAK_MEMORY } from "./Similarity";
 import { Button, Card, Empty, ErrorNote, Input, Loading, Spinner } from "./ui";
-
-// Only the points in states, with the links between them renumbered.
-function only(m: MemoryMap, states: MemoryState[]): MemoryMap {
-  const at = new Map<number, number>();
-  const points = m.points.filter((p, i) => states.includes(p.state) && (at.set(i, at.size), true));
-  const links = m.links.flatMap((l) =>
-    at.has(l.a) && at.has(l.b) ? [{ ...l, a: at.get(l.a)!, b: at.get(l.b)! }] : [],
-  );
-  return { ...m, points, links };
-}
 
 export function MemoryGraph({
   datapackId: id,
@@ -37,7 +27,7 @@ export function MemoryGraph({
   const [origin, setOrigin] = useState<MapPoint>();
   const loaded = useLoad(() => api.memoryMap(id, query), [id, query, refresh]);
   const key = states.join();
-  const data = useMemo(() => loaded.data && only(loaded.data, states), [loaded.data, key]);
+  const data = useMemo(() => loaded.data && only(loaded.data, states.filter((s) => SHOWN_STATES.includes(s))), [loaded.data, key]);
   const map = { ...loaded, data };
 
   const submit = (e: FormEvent) => {

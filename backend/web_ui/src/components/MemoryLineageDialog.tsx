@@ -25,7 +25,7 @@ export interface LineageOf {
 const TONE: Record<string, "success" | "primary" | "danger"> = { ADD: "success", UPDATE: "primary", DELETE: "danger" };
 
 const NOW: Record<MemoryState, string> = {
-  learning: "A learning: not kept or promoted yet.",
+  learning: "A learning: not reviewed yet.",
   kept: "Reviewed and kept as a memory in this datapack; no longer waiting on the Learnings list.",
   collective: "Promoted to the collective memory, so every agent finds it through the knowledge base.",
 };
