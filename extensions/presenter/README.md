@@ -32,16 +32,17 @@ meko ui /ext/presenter/                 # opens Presenter
 ```
 
 Meko serves it at `/ext/presenter/` on its web listener, behind Meko's login, and its sidebar links
-to it. `presenter status` says whether it runs. To update it, `meko update_extension presenter`
-(or Update on the Extensions page) installs the newest release and restarts it; a release that
-fails to start three times is rolled back to the one before, and never offered again.
+to it. Presenter's command is `meko_presenter`: `meko_presenter status` says whether it runs. To
+update it, `meko update_extension presenter` (or Update on the Extensions page) installs the
+newest release and restarts it; a release that fails to start three times is rolled back to the
+one before, and never offered again.
 
 To run a build from source instead, put it on PATH before installing it: Meko uses it as it is,
 and never updates it.
 
 ```sh
 cd extensions/presenter
-npm ci && npm run build && npm link     # puts `presenter` on PATH
+npm ci && npm run build && npm link     # puts `meko_presenter` on PATH
 meko install_extension presenter        # registers it with this Meko (it asks Meko for its key)
 ```
 

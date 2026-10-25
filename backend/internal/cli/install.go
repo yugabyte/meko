@@ -357,7 +357,7 @@ func installRelease(ctx context.Context, l paths.Layout, repo, name, home string
 	}
 	app := cat.App(l.Root, name)
 	goos, arch := update.Platform()
-	rel, ver, ok := update.PickPackage(rels, cat.TagPrefixes, cat.Command, goos, arch, app.BadVersions())
+	rel, ver, ok := update.PickPackage(rels, cat.TagPrefixes, name, goos, arch, app.BadVersions())
 	if !ok {
 		return "", fmt.Errorf("no release of %s for %s-%s was found in %s", cat.Title, goos, arch, c.Repo)
 	}

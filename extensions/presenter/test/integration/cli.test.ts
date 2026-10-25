@@ -71,7 +71,7 @@ describe('the commands Meko runs', () => {
   });
 
   it('starts the server through a release\'s launcher, which counts the starts of an update', () => {
-    // A stand-in for packaging/presenter: notes the start, then runs the server as this test does.
+    // A stand-in for packaging/meko_presenter: notes the start, then runs the server as this test does.
     const launcher = join(dir, 'launcher');
     writeFileSync(launcher, `#!/bin/sh\necho "$@" >> "${join(dir, 'launched')}"\nexec "${process.execPath}" --import tsx "${CLI}" "$@"\n`);
     chmodSync(launcher, 0o755);

@@ -10,7 +10,8 @@
 # <out-dir>/presenter-<version>-<platform>-<arch>.tar.gz containing:
 #
 #   presenter-<version>/
-#     bin/presenter            POSIX sh launcher (packaging/presenter)
+#     bin/meko_presenter       POSIX sh launcher (packaging/meko_presenter): the command, which Meko
+#                              links as ~/.local/bin/meko_presenter
 #     node/bin/node            bundled Node runtime
 #     node/LICENSE
 #     lib/package.json
@@ -53,8 +54,8 @@ trap 'rm -rf "$stage"' EXIT INT TERM
 root="$stage/$name"
 
 mkdir -p "$root/bin" "$root/node/bin" "$root/lib"
-cp "$repo/packaging/presenter" "$root/bin/presenter"
-chmod 755 "$root/bin/presenter"
+cp "$repo/packaging/meko_presenter" "$root/bin/meko_presenter"
+chmod 755 "$root/bin/meko_presenter"
 
 cp "$node_dir/bin/node" "$root/node/bin/node"
 cp "$node_dir/LICENSE" "$root/node/LICENSE"

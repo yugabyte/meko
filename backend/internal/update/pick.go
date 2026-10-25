@@ -59,7 +59,7 @@ func TarballName(version, goos, arch string) string {
 	return PackageTarball("meko", version, goos, arch)
 }
 
-// PackageTarball is a release's tarball of program name for a platform: Meko's, or an extension's
+// PackageTarball is a release's tarball of package name for a platform: Meko's, or an extension's
 // that Meko installs from its releases (presenter-<version>-<os>-<arch>.tar.gz).
 func PackageTarball(name, version, goos, arch string) string {
 	return fmt.Sprintf("%s-%s-%s-%s.tar.gz", name, version, goos, arch)
@@ -115,7 +115,7 @@ func PickMeko(releases []Release, goos, arch string, bad map[string]bool) (Relea
 	return PickPackage(releases, []string{TagPrefix}, "meko", goos, arch, bad)
 }
 
-// PickPackage is the newest release tagged with one of prefixes that has program name's tarball for
+// PickPackage is the newest release tagged with one of prefixes that has package name's tarball for
 // this platform and SHA256SUMS, skipping the versions in bad.
 func PickPackage(releases []Release, prefixes []string, name, goos, arch string,
 	bad map[string]bool) (Release, string, bool) {

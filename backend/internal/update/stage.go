@@ -23,7 +23,7 @@ import (
 // `<name> version --json` must name the version), as app/<version>. Nothing in use changes.
 func (a App) Stage(ctx context.Context, c *Client, rel Release, version string) error {
 	goos, arch := Platform()
-	name := PackageTarball(a.name(), version, goos, arch)
+	name := PackageTarball(a.pkg(), version, goos, arch)
 	tarAsset, ok := rel.Asset(name)
 	sumAsset, ok2 := rel.Asset(Sums)
 	if !ok || !ok2 {
@@ -83,8 +83,8 @@ func VerifySum(file, sumsFile string) error {
 	return nil
 }
 
-// Unpack unpacks a release tarball (one folder, <name>-<version>/) to app/<version>, checking that
-// its binary runs here first. An installed copy of the same version is replaced.
+// Unpack unpacks a release tarball (one folder, <package>-<version>/) to app/<version>, checking
+// that its binary (bin/<name>) runs here first. An installed copy of the same version is replaced.
 func (a App) Unpack(tarball, version string) error {
 	staging, err := os.MkdirTemp(a.Root, ".staging-")
 	if err != nil {
@@ -94,7 +94,7 @@ func (a App) Unpack(tarball, version string) error {
 	if err := extract(tarball, staging); err != nil {
 		return err
 	}
-	top := filepath.Join(staging, a.name()+"-"+version)
+	top := filepath.Join(staging, a.pkg()+"-"+version)
 	if err := CheckBinary(filepath.Join(top, "bin", a.name()), version); err != nil {
 		return err
 	}

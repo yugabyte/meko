@@ -71,7 +71,7 @@ func updateExtension(ctx context.Context, l paths.Layout, name string, check boo
 	}
 	app := cat.App(l.Root, name)
 	goos, arch := update.Platform()
-	rel, next, found := update.PickPackage(rels, cat.TagPrefixes, cat.Command, goos, arch, app.BadVersions())
+	rel, next, found := update.PickPackage(rels, cat.TagPrefixes, name, goos, arch, app.BadVersions())
 	cv, _ := update.ParseVersion(cur)
 	nv, _ := update.ParseVersion(next)
 	if !found || !cv.Less(nv) {

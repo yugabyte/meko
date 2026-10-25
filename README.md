@@ -79,7 +79,7 @@ The first start downloads the embedding model (23 MB). On RHEL 8, set
 | `meko uninstall [--purge [--force] [--with-extensions]]` | Remove the service and the installed releases, keeping the data; `--purge` also destroys the data as `meko destroy` does, asking first |
 | `meko update [--check]` | Install the newest release now (under the service it updates itself); `--check` only looks |
 | `meko install_extension agentk` | Install AgentK pointed at this Meko; `meko start` and `stop` then run it too, and the web UI's port serves it at `/ext/agentk/` |
-| `meko install_extension presenter` | The same for Presenter, at `/ext/presenter/`: Meko installs its newest release itself (a build of it already on PATH is used as it is) |
+| `meko install_extension presenter` | The same for Presenter, at `/ext/presenter/`: Meko installs its newest release itself, as the command `meko_presenter` (a `meko_presenter` already on PATH, a build from source, is used as it is) |
 | `meko update_extension presenter [--check]` | Install Presenter's newest release now and restart it; one that fails to start is rolled back. AgentK updates itself |
 | `meko uninstall_extension agentk` | Stop starting and stopping it with Meko (it stays installed) |
 | `meko destroy [--force] [--with-extensions]` | Stop Meko and remove its data folder for good. It asks first; `--force` doesn't. The extensions' data in it (AgentK's home) stays unless you say so when asked, or pass `--with-extensions`, which uninstalls them first |

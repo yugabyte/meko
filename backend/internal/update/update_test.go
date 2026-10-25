@@ -75,17 +75,17 @@ func fakeMeko(version string, fail bool) string {
 }
 
 // tarball builds meko-<version>.tar.gz holding bin/meko and an engine file.
-func tarball(t *testing.T, version string) []byte { return tarballOf(t, "meko", version) }
+func tarball(t *testing.T, version string) []byte { return tarballOf(t, "meko", "meko", version) }
 
-// tarballOf builds a release of program name: <name>-<version>/bin/<name> and an engine file.
-func tarballOf(t *testing.T, name, version string) []byte {
+// tarballOf builds a release of package pkg: <pkg>-<version>/bin/<name> and an engine file.
+func tarballOf(t *testing.T, pkg, name, version string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	top := name + "-" + version + "/"
-	add := func(name, body string, mode int64) {
-		h := &tar.Header{Name: top + name, Mode: mode, Size: int64(len(body)), Typeflag: tar.TypeReg}
+	top := pkg + "-" + version + "/"
+	add := func(file, body string, mode int64) {
+		h := &tar.Header{Name: top + file, Mode: mode, Size: int64(len(body)), Typeflag: tar.TypeReg}
 		if err := tw.WriteHeader(h); err != nil {
 			t.Fatal(err)
 		}
@@ -343,8 +343,8 @@ func TestLinkCommand(t *testing.T) {
 	}
 }
 
-// An extension's releases (Presenter's) go through the same App, named for its program: its tarball,
-// its top folder, its binary and its link in ~/.local/bin.
+// An extension's releases (Presenter's) go through the same App: its tarball and top folder named for
+// its package (presenter), its binary and its link in ~/.local/bin for its program (meko_presenter).
 func TestNamedAppStagesAnExtensionsRelease(t *testing.T) {
 	const next = "0.20261024.0"
 	goos, arch := Platform()
@@ -352,7 +352,7 @@ func TestNamedAppStagesAnExtensionsRelease(t *testing.T) {
 	if want := "presenter-" + next + "-" + goos + "-" + arch + ".tar.gz"; name != want {
 		t.Fatalf("PackageTarball = %q, want %q", name, want)
 	}
-	tgz := tarballOf(t, "presenter", next)
+	tgz := tarballOf(t, "presenter", "meko_presenter", next)
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -385,19 +385,19 @@ func TestNamedAppStagesAnExtensionsRelease(t *testing.T) {
 	if _, _, ok := PickPackage(rels, []string{"presenter-v"}, "presenter", goos, arch, map[string]bool{next: true}); ok {
 		t.Error("a bad version was picked")
 	}
-	a := App{Root: filepath.Join(t.TempDir(), "app"), Name: "presenter"}
+	a := App{Root: filepath.Join(t.TempDir(), "app"), Name: "meko_presenter", Package: "presenter"}
 	if err = a.Stage(context.Background(), c, r, v); err != nil {
 		t.Fatal(err)
 	}
 	if err = a.Repoint(v); err != nil {
 		t.Fatal(err)
 	}
-	if a.Exe(v) != filepath.Join(a.Root, v, "bin", "presenter") {
+	if a.Exe(v) != filepath.Join(a.Root, v, "bin", "meko_presenter") {
 		t.Errorf("Exe = %s", a.Exe(v))
 	}
 	home := t.TempDir()
 	link, err := a.LinkCommand(home)
-	if err != nil || link != filepath.Join(home, ".local", "bin", "presenter") {
+	if err != nil || link != filepath.Join(home, ".local", "bin", "meko_presenter") {
 		t.Fatalf("link %q %v", link, err)
 	}
 	if got, ver, ok := Of(link); !ok || ver != next || got.Root != realPath(t, a.Root) {

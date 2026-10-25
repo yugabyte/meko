@@ -28,7 +28,7 @@ sh scripts/smoke-release.sh out/presenter-<version>-linux-x64.tar.gz <version>
 Under `npm run dev` the pages are at `http://127.0.0.1:5179/` with no `<base>`; Meko isn't
 involved, so the server needs a Meko on this computer (`meko start`) or `config.json` with a
 Meko URL and key. To try it behind Meko: `npm run build`, put `dist/server/cli.js` on PATH as
-`presenter` (`npm link`), and run `meko install_extension presenter`, then `meko ui /ext/presenter/`.
+`meko_presenter` (`npm link`), and run `meko install_extension presenter`, then `meko ui /ext/presenter/`.
 
 ## Map
 
@@ -40,7 +40,7 @@ Meko URL and key. To try it behind Meko: `npm run build`, put `dist/server/cli.j
 | `src/shared/manifest.ts` | The stored form: the `deck.json` manifest, scene pieces, 4 MiB parts, and turning a deck into them and back. |
 | `src/shared/datapacks.ts` | Presenter's datapack prefixes (`presenter/template/`, `presenter/anim/`, `presenter/deck/`) and deck datapack names. |
 | `src/shared/types.ts` | The API contract: every route's request and reply and every WebSocket message. Change it first. |
-| `src/server/cli.ts` | The `presenter` command: `serve`, and what Meko runs (`start`, `stop`, `status`, `install`, `uninstall`, `_handoff`). The pid file counts only when its process is `presenter serve` (`isServer`). |
+| `src/server/cli.ts` | The `meko_presenter` command (the extension is `presenter`: its folder, tags, tarballs and `/ext/presenter/`): `serve`, and what Meko runs (`start`, `stop`, `status`, `install`, `uninstall`, `_handoff`). The pid file counts only when its process is a Presenter server (`isServer`). |
 | `src/server/server.ts` | Fastify on the socket: pages (`<base href="/ext/presenter/">`, no framing), API, WebSockets, the same-origin check. |
 | `src/server/paths.ts` | The home by Meko's rule (`resolve-cases.json`), the socket path (under `/tmp` for a long home, not `$TMPDIR`), `refuseOtherMeko`. |
 | `src/server/meko.ts` | `MekoPort` and its MCP + REST client (`datapack_create` never sent twice, `mayRetry`); credentials from `config.json` (Meko Cloud) or `meko token --json` (the Meko on this computer, never stored: `findMeko`). |
@@ -50,7 +50,7 @@ Meko URL and key. To try it behind Meko: `npm run build`, put `dist/server/cli.j
 | `src/server/runs.ts` | Live run rooms, kept on disk so a restart resumes; they follow every change the deck store makes (`DeckStore.listen`), and a run's moves apply one at a time. |
 | `src/web/` | The pages (React, Vite, Tailwind with Meko's tokens): decks, new deck, map (React Flow), slide editor, console, audience. |
 | `src/server/probation.ts` | A release on probation after Meko's update: clearing `app/update-pending.json` after 5 minutes of serving, and taking a clean stop off its count of starts. |
-| `packaging/presenter` | The release's launcher: runs the bundled Node, exports `PRESENTER_APP_DIR` and `PRESENTER_LAUNCHER`, and for `serve` counts a new version's starts and rolls back one that fails three times (Meko's rules, on Meko's files). |
+| `packaging/meko_presenter` | The release's launcher, `bin/meko_presenter`: runs the bundled Node, exports `PRESENTER_APP_DIR` and `PRESENTER_LAUNCHER`, and for `serve` counts a new version's starts and rolls back one that fails three times (Meko's rules, on Meko's files). |
 | `scripts/package-release.sh`, `scripts/smoke-release.sh` | The release tarball for one platform (`presenter-<v>-<os>-<arch>.tar.gz`), and its check: version, start, the page over the socket, stop. |
 | `test/` | Unit tests; integration tests with `FakeMeko` (in memory, Meko's artifact rules) and a stub `claude` (`test/fixtures/fake-claude.mjs`). |
 

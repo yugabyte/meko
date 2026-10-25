@@ -16,7 +16,7 @@ version=$2
 dir=$(mktemp -d /tmp/pres-smoke.XXXXXX)
 trap '"$bin" stop >/dev/null 2>&1 || true; rm -rf "$dir"' EXIT INT TERM
 tar -xzf "$tarball" -C "$dir"
-bin="$dir/presenter-$version/bin/presenter"
+bin="$dir/presenter-$version/bin/meko_presenter"
 MEKO_HOME="$dir/meko"
 export MEKO_HOME
 

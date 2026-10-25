@@ -68,7 +68,7 @@ Usage:
                  --check only looks
   meko install_extension agentk|presenter
                  install AgentK or Presenter, pointed at this Meko, and start and stop it with
-                 Meko (a build of it already on PATH is used as it is)
+                 Meko (its command, agentk or meko_presenter, already on PATH is used as it is)
   meko update_extension presenter
                  install Presenter's newest release now and restart it (one that fails to start
                  is rolled back); --check only looks. AgentK updates itself

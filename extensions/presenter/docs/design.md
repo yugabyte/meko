@@ -15,7 +15,7 @@ flowchart TB
     WL["web listener :7777\nlogin, proxy to the extension's socket"]
     AL["API listener 127.0.0.1:7778\nMCP and REST"]
   end
-  subgraph P["presenter serve (run/web.sock)"]
+  subgraph P["meko_presenter serve (run/web.sock)"]
     API["API and WebSockets"]
     J["jobs: claude -p on the deck's session"]
     D["decks: drafts, ops, pieces, cache"]
@@ -114,10 +114,12 @@ carries those and `SHA256SUMS`, and no installer.
 
 Meko installs and updates them (`meko install_extension presenter`, `meko update_extension
 presenter`, the Extensions page): it unpacks a release into `<home>/app/<version>`, checks that
-`bin/presenter version --json` names it, and points `app/current` and `~/.local/bin/presenter` at
-it. `bin/presenter` is the launcher (`packaging/presenter`): it runs the bundled Node on
+`bin/meko_presenter version --json` names it, and points `app/current` and
+`~/.local/bin/meko_presenter` at it. The command is `meko_presenter`, and the extension `presenter`
+(its folder, tags, tarballs and pages). `bin/meko_presenter` is the launcher
+(`packaging/meko_presenter`): it runs the bundled Node on
 `lib/dist/server/cli.js`, with `PRESENTER_APP_DIR` naming the release's folder and
-`PRESENTER_LAUNCHER` itself, and `presenter start` runs `serve` through it.
+`PRESENTER_LAUNCHER` itself, and `meko_presenter start` runs `serve` through it.
 
 An update is on probation until it has served for 5 minutes. Meko writes `app/update-pending.json`
 (`from`, `to`, `attempts`) as it switches `app/current`; the launcher counts each `serve` of the new

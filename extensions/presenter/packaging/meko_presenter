@@ -1,10 +1,11 @@
 #!/bin/sh
-# Presenter's launcher, in a release as presenter-<version>/bin/presenter. Meko installs releases as
-# <Meko's data folder>/extensions/presenter/app/<version>, with app/current and ~/.local/bin/presenter
-# pointing at the one in use (meko install_extension, meko update_extension).
+# Presenter's launcher, in a release as presenter-<version>/bin/meko_presenter. Meko installs releases
+# as <Meko's data folder>/extensions/presenter/app/<version>, with app/current and
+# ~/.local/bin/meko_presenter pointing at the one in use (meko install_extension, meko
+# update_extension).
 #
 # Runs the bundled Node on the bundled server, with PRESENTER_APP_DIR naming this release's folder
-# and PRESENTER_LAUNCHER this file (`presenter start` runs `serve` through it). For `serve`, it also
+# and PRESENTER_LAUNCHER this file (`meko_presenter start` runs `serve` through it). For `serve`, it also
 # rolls back an update that fails, as AgentK's launcher does: Meko writes app/update-pending.json
 # ({"from", "to", "attempts"}) as it switches app/current to a new version, and the server deletes it
 # once it has served for 5 minutes (src/server/probation.ts). Each start of the new version counts;
@@ -27,7 +28,7 @@ while [ -h "$self" ]; do
 done
 bin_dir=$(cd -P "$(dirname "$self")" && pwd)
 PRESENTER_APP_DIR=$(cd -P "$bin_dir/.." && pwd)
-PRESENTER_LAUNCHER=$bin_dir/presenter
+PRESENTER_LAUNCHER=$bin_dir/meko_presenter
 export PRESENTER_APP_DIR PRESENTER_LAUNCHER
 
 node="$PRESENTER_APP_DIR/node/bin/node"
@@ -50,7 +51,7 @@ if [ "${1:-}" = "serve" ] && [ -f "$app/update-pending.json" ]; then
       process.exit(0);
     }
     const attempts = Number(p.attempts) || 0;
-    if (attempts >= 3 && p.from && fs.existsSync(path.join(app, p.from, "bin", "presenter"))) {
+    if (attempts >= 3 && p.from && fs.existsSync(path.join(app, p.from, "bin", "meko_presenter"))) {
       process.stdout.write(p.from);
       process.exit(0);
     }
@@ -60,14 +61,14 @@ if [ "${1:-}" = "serve" ] && [ -f "$app/update-pending.json" ]; then
   ' "$app/update-pending.json" "$version" "$app") || back=""
 
   if [ -n "$back" ]; then
-    # On stderr, which `presenter start` writes to the server's log.
-    echo "presenter: version $version failed to start 3 times; rolling back to $back" >&2
+    # On stderr, which `meko_presenter start` writes to the server's log.
+    echo "meko_presenter: version $version failed to start 3 times; rolling back to $back" >&2
     ln -sfn "$back" "$app/current.rollback"
     # Rename over the old link atomically. `mv -T` is GNU-only, so use the bundled Node.
     "$node" -e 'require("fs").renameSync(process.argv[1], process.argv[2])' "$app/current.rollback" "$app/current"
     printf '%s\n' "$version" >> "$app/bad-versions"
     rm -f "$app/update-pending.json"
-    exec "$app/$back/bin/presenter" "$@"
+    exec "$app/$back/bin/meko_presenter" "$@"
   fi
 fi
 

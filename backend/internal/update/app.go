@@ -16,11 +16,13 @@ import (
 
 // App is a release install's app folder: Meko's, or an extension's that Meko installs from its
 // releases (Presenter's, in <data folder>/extensions/presenter/app). Name is the program, which
-// names its binary (<version>/bin/<name>), its tarballs' top folder (<name>-<version>/) and its
-// link in ~/.local/bin; empty is meko.
+// names its binary (<version>/bin/<name>) and its link in ~/.local/bin; empty is meko. Package
+// names its tarballs (<package>-<version>-<os>-<arch>.tar.gz, one folder <package>-<version>/);
+// empty is Name. Presenter's program is meko_presenter, its package presenter.
 type App struct {
-	Root string
-	Name string
+	Root    string
+	Name    string
+	Package string
 }
 
 func (a App) name() string {
@@ -28,6 +30,13 @@ func (a App) name() string {
 		return "meko"
 	}
 	return a.Name
+}
+
+func (a App) pkg() string {
+	if a.Package == "" {
+		return a.name()
+	}
+	return a.Package
 }
 
 // DefaultRoot is where the installer puts releases: $XDG_DATA_HOME/meko/app, or

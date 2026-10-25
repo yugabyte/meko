@@ -46,14 +46,14 @@ var Known = map[string]Catalog{
 		WebUI:         true,
 	},
 	// Presenter (extensions/presenter): interactive, branching presentations built from datapacks.
-	// Its releases (presenter-v<version>) carry presenter-<version>-<os>-<arch>.tar.gz and
-	// SHA256SUMS, which Meko installs and updates itself (Managed). A build from source on PATH is
-	// used as it is, and never updated.
+	// Its command is meko_presenter. Its releases (presenter-v<version>) carry
+	// presenter-<version>-<os>-<arch>.tar.gz and SHA256SUMS, which Meko installs and updates itself
+	// (Managed). A build from source on PATH is used as it is, and never updated.
 	"presenter": {
 		Title: "Presenter",
 		Description: "Builds presentations that branch with the room from your datapacks: Claude drafts the story " +
 			"map and the slides, and you pick each path live.",
-		Command:       "presenter",
+		Command:       "meko_presenter",
 		TagPrefixes:   []string{"presenter-v"},
 		Managed:       true,
 		UninstallArgs: []string{"uninstall", "--purge", "--non-interactive"},
@@ -80,7 +80,8 @@ type Catalog struct {
 	TagPrefixes []string // its release tags, newest naming first
 	Installer   string   // the release asset that installs it, when it installs itself (not Managed)
 	// Managed says Meko installs it from its releases' tarballs into App and updates it: the
-	// <Command>-<version>-<os>-<arch>.tar.gz and SHA256SUMS of the newest release with TagPrefixes.
+	// <name>-<version>-<os>-<arch>.tar.gz (named for the extension, holding bin/<Command>) and
+	// SHA256SUMS of the newest release with TagPrefixes.
 	Managed bool
 	// OldHomes are folders under the home folder a release install of it lived in before its home
 	// moved into Meko's data folder (Dir); Find looks for the command in their app/current/bin.
@@ -99,9 +100,10 @@ func Dir(root, name string) string { return filepath.Join(root, "extensions", na
 
 // App is the app folder a Managed extension's releases are installed in: <Dir>/app, one folder per
 // version, app/current pointing at the one in use, update-pending.json and bad-versions beside
-// them, as Meko's own (internal/update).
+// them, as Meko's own (internal/update). Its tarballs are named for the extension, its binary for
+// its command.
 func (c Catalog) App(root, name string) update.App {
-	return update.App{Root: filepath.Join(Dir(root, name), "app"), Name: c.Command}
+	return update.App{Root: filepath.Join(Dir(root, name), "app"), Name: c.Command, Package: name}
 }
 
 // Release is the version of a Managed extension's release install that command runs (through

@@ -1,5 +1,5 @@
-// packaging/presenter, the release's launcher, in a release install laid out as Meko lays it out:
-// app/<version>/{bin/presenter, node/bin/node, lib/dist/server/cli.js}, app/current, and the update
+// packaging/meko_presenter, the release's launcher, in a release install laid out as Meko lays it
+// out: app/<version>/{bin/meko_presenter, node/bin/node, lib/dist/server/cli.js}, app/current, and the update
 // record Meko writes as it switches versions. Each version's cli.js is a stub that says which
 // version ran, with what.
 import { spawnSync } from 'node:child_process';
@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { tempDir } from '../helpers.js';
 
-const LAUNCHER = fileURLToPath(new URL('../../packaging/presenter', import.meta.url));
+const LAUNCHER = fileURLToPath(new URL('../../packaging/meko_presenter', import.meta.url));
 const OLD = '0.20261024.0';
 const NEW = '0.20261025.0';
 let dir: string;
@@ -20,7 +20,7 @@ function release(version: string): void {
   mkdirSync(join(v, 'bin'), { recursive: true });
   mkdirSync(join(v, 'node', 'bin'), { recursive: true });
   mkdirSync(join(v, 'lib', 'dist', 'server'), { recursive: true });
-  copyFileSync(LAUNCHER, join(v, 'bin', 'presenter'));
+  copyFileSync(LAUNCHER, join(v, 'bin', 'meko_presenter'));
   symlinkSync(process.execPath, join(v, 'node', 'bin', 'node'));
   writeFileSync(join(v, 'lib', 'dist', 'server', 'cli.js'),
     `console.log(JSON.stringify({ version: ${JSON.stringify(version)}, args: process.argv.slice(2), appDir: process.env.PRESENTER_APP_DIR, launcher: process.env.PRESENTER_LAUNCHER }));\n`);
@@ -32,14 +32,14 @@ beforeEach(() => {
   release(OLD);
   release(NEW);
   symlinkSync(NEW, join(app, 'current'));
-  // ~/.local/bin/presenter, as Meko links it.
+  // ~/.local/bin/meko_presenter, as Meko links it.
   mkdirSync(join(dir, 'bin'));
-  symlinkSync(join(app, 'current', 'bin', 'presenter'), join(dir, 'bin', 'presenter'));
+  symlinkSync(join(app, 'current', 'bin', 'meko_presenter'), join(dir, 'bin', 'meko_presenter'));
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 function presenter(...args: string[]) {
-  const r = spawnSync('sh', [join(dir, 'bin', 'presenter'), ...args], { encoding: 'utf8' });
+  const r = spawnSync('sh', [join(dir, 'bin', 'meko_presenter'), ...args], { encoding: 'utf8' });
   expect(r.status, r.stderr).toBe(0);
   return { ran: JSON.parse(r.stdout) as { version: string; args: string[]; appDir: string; launcher: string }, stderr: r.stderr };
 }
@@ -52,7 +52,7 @@ const pending = () => existsSync(join(app, 'update-pending.json'))
 describe('the release launcher', () => {
   it('runs the bundled server of the release app/current names, naming its folder and itself', () => {
     const { ran } = presenter('status');
-    expect(ran).toEqual({ version: NEW, args: ['status'], appDir: join(app, NEW), launcher: join(app, NEW, 'bin', 'presenter') });
+    expect(ran).toEqual({ version: NEW, args: ['status'], appDir: join(app, NEW), launcher: join(app, NEW, 'bin', 'meko_presenter') });
   });
 
   it('counts the starts of the version on probation, and only serve\'s', () => {

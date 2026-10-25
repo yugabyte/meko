@@ -1,6 +1,6 @@
 // A release on probation. Meko installs Presenter's releases in <home>/app/<version> and updates
 // them (meko update_extension): as it switches app/current to a new version it writes
-// app/update-pending.json, {"from", "to", "attempts", ...}. The launcher (packaging/presenter)
+// app/update-pending.json, {"from", "to", "attempts", ...}. The launcher (packaging/meko_presenter)
 // counts each start of the new version and rolls back to the old one after three that failed; the
 // server clears the record once it has served for HEALTHY_MS, and a clean stop takes its start back
 // off the count, so only crashes count. These are Meko's own rules for itself (its Healthy and
