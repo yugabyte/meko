@@ -11,7 +11,7 @@
 #
 # Takes `--product agentk|meko|presenter` (default agentk) out of the script's arguments and sets:
 #
-#   product       agentk or meko
+#   product       agentk, meko or presenter
 #   tag_prefix    the prefix of the product's new tags: tag = <tag_prefix><version>
 #   tag_prefixes  every prefix the product's tags have used, newest scheme first
 #   scope         an extended regex for the `(<component>[/<area>])` of the subjects that may

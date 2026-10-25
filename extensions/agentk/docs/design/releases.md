@@ -99,8 +99,9 @@ gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-d
 #  7. prints the address Meko serves it at (meko setup_link makes the login for remote access)
 ```
 
-**Tags.** The repo releases two products. AgentK's releases are tagged `agentk-v<version>`
-(`v<version>` before releases were tagged by product); Meko's are `meko-v<version>`. Versions stay
+**Tags.** The repo releases three products. AgentK's releases are tagged `agentk-v<version>`
+(`v<version>` before releases were tagged by product); Meko's are `meko-v<version>`, and
+Presenter's `presenter-v<version>` (`presenter-release.yml`; Meko installs and updates them). Versions stay
 bare (`0.YYYYMMDD.N`): tarball names, `app/<version>` and `bad-versions` use them, and on the day of
 the switch `next-version.sh` counted both prefixes so no version was used twice. AgentKs installed
 before the switch read only `v…` tags; the last `v…` release (the bridge) reads both, so they reach

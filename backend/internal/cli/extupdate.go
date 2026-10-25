@@ -27,8 +27,9 @@ func runUpdateExtension(l paths.Layout, name string, check bool, stdout, stderr 
 
 // updateExtension updates a Managed extension's release install to its newest release (its bad
 // versions skipped), or with check only says whether there is one. It deletes the versions but the
-// current one, stages the new one beside it, stops the extension if it runs, and switches
-// app/current, recording the update (update-pending.json) for the extension's launcher. A running
+// current one and the one to roll back to, stages the new one beside them, stops the extension if
+// it runs, and switches app/current, recording the update (update-pending.json) for the extension's
+// launcher. A running
 // extension is started again, up to MaxFailedStarts+1 times: the launcher rolls back to the old
 // version at the start after MaxFailedStarts failed ones, which is an error here. It reports whether
 // the extension runs afterwards.
@@ -72,9 +73,14 @@ func updateExtension(ctx context.Context, l paths.Layout, name string, check boo
 	app := cat.App(l.Root, name)
 	goos, arch := update.Platform()
 	rel, next, found := update.PickPackage(rels, cat.TagPrefixes, name, goos, arch, app.BadVersions())
+	if !found {
+		fmt.Fprintf(out, "%s %s is installed; no release of it for %s-%s was found in %s, leaving out versions "+
+			"that were rolled back\n", cat.Title, cur, goos, arch, c.Repo)
+		return false, nil
+	}
 	cv, _ := update.ParseVersion(cur)
 	nv, _ := update.ParseVersion(next)
-	if !found || !cv.Less(nv) {
+	if !cv.Less(nv) {
 		fmt.Fprintf(out, "%s %s is the newest release\n", cat.Title, cur)
 		return false, nil
 	}
@@ -84,8 +90,21 @@ func updateExtension(ctx context.Context, l paths.Layout, name string, check boo
 		return false, nil
 	}
 	fmt.Fprintf(out, "Installing %s %s (%s)\n", cat.Title, next, rel.Tag)
-	// Only the current version is kept to roll back to; older ones and a staging left behind go.
-	app.Prune(cur)
+	// The version to roll back to is the current one, unless that's still on probation (its update
+	// hasn't served 5 minutes yet): then it's the one that update replaced, the last known to work.
+	from := cur
+	if p, _ := app.ReadPending(); p != nil && p.To == cur {
+		_, isVersion := update.ParseVersion(p.From)
+		//nolint:gosec // G703: p.From is checked to be a bare version, a folder name in the app folder
+		if _, serr := os.Stat(app.Exe(p.From)); isVersion && serr == nil {
+			from = p.From
+			fmt.Fprintf(out, "%s %s hasn't served 5 minutes yet, so %s stays the version to roll back to\n",
+				cat.Title, cur, from)
+		}
+	}
+	// The other installed versions go. Prune deletes only version folders: a .staging- or
+	// .download- folder that a killed update left behind stays.
+	app.Prune(cur, from)
 	if err = app.Stage(ctx, c, rel, next); err != nil {
 		return false, err
 	}
@@ -95,8 +114,10 @@ func updateExtension(ctx context.Context, l paths.Layout, name string, check boo
 			return false, err
 		}
 	}
-	if err = app.Switch(cur, next, 0); err != nil {
-		return false, fmt.Errorf("can't switch to %s: %w", next, err)
+	if err = app.Switch(from, next, 0); err != nil {
+		// app/current still names the old version: start it again rather than leave it stopped.
+		restarted := up && e.Run(l.Root, "start", out, out) == nil
+		return restarted, fmt.Errorf("can't switch to %s: %w", next, err)
 	}
 	if !up {
 		fmt.Fprintf(out, "Installed %s %s; it runs at its next start\n", cat.Title, next)
@@ -108,7 +129,11 @@ func updateExtension(ctx context.Context, l paths.Layout, name string, check boo
 		}
 	}
 	if now := app.Current(); now != next {
-		return err == nil, fmt.Errorf("%s %s failed to start %d times, so it was rolled back to %s and won't be "+
+		if err != nil {
+			return false, fmt.Errorf("%s %s failed to start %d times, so it was rolled back to %s, which didn't "+
+				"start either: %w. See %s status", cat.Title, next, update.MaxFailedStarts, now, err, cat.Command)
+		}
+		return true, fmt.Errorf("%s %s failed to start %d times, so it was rolled back to %s and won't be "+
 			"offered again", cat.Title, next, update.MaxFailedStarts, now)
 	}
 	if err != nil {

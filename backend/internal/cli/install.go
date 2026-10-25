@@ -345,7 +345,8 @@ func readClientToken(l paths.Layout, cfg config.Config) (string, error) {
 // installRelease installs a Managed extension from its newest release (its bad versions skipped)
 // into its app folder, as Meko's own installs go: the tarball for this platform checked against
 // SHA256SUMS, unpacked, its binary checked to run here, app/current pointed at it, and
-// ~/.local/bin/<command> at app/current. It returns that link.
+// ~/.local/bin/<command> at app/current unless that's another data folder's. It returns the link,
+// or app/current's command when there's none.
 func installRelease(ctx context.Context, l paths.Layout, repo, name, home string, stdout io.Writer) (string, error) {
 	cat := extensions.Known[name]
 	dl, cancel := context.WithTimeout(ctx, extensions.InstallTimeout)
@@ -375,6 +376,11 @@ func installRelease(ctx context.Context, l paths.Layout, repo, name, home string
 	// A manual install supersedes a record of an update in progress.
 	if err := app.ClearPending(); err != nil {
 		return "", err
+	}
+	if !app.MayLink(home) {
+		fmt.Fprintf(stdout, "~/.local/bin/%s runs another Meko data folder's %s, so it stays; this one is %s\n",
+			cat.Command, cat.Title, app.CurrentExe())
+		return app.CurrentExe(), nil
 	}
 	return app.LinkCommand(home)
 }

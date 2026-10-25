@@ -251,7 +251,7 @@ func TestExtractRefusesEscapes(t *testing.T) {
 		if err := os.WriteFile(f, buf.Bytes(), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := extract(f, t.TempDir()); err == nil {
+		if err := extract(f, t.TempDir(), false); err == nil {
 			t.Errorf("%s was extracted", h.Name)
 		}
 	}
@@ -402,5 +402,36 @@ func TestNamedAppStagesAnExtensionsRelease(t *testing.T) {
 	}
 	if got, ver, ok := Of(link); !ok || ver != next || got.Root != realPath(t, a.Root) {
 		t.Errorf("Of(link) = %v %q %v", got, ver, ok)
+	}
+}
+
+// A private app folder (an extension's, in Meko's data folder) gets its release owner-only:
+// folders and programs 0700, other files 0600. Meko's own keeps the tarball's modes.
+func TestPrivateAppUnpacksOwnerOnly(t *testing.T) {
+	const v = "0.20261024.0"
+	f := filepath.Join(t.TempDir(), "x.tar.gz")
+	if err := os.WriteFile(f, tarballOf(t, "presenter", "meko_presenter", v), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []bool{true, false} {
+		a := App{Root: filepath.Join(t.TempDir(), "app"), Name: "meko_presenter", Package: "presenter", Private: private}
+		if err := os.MkdirAll(a.Root, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.Unpack(f, v); err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]os.FileMode{"bin": 0o755, "bin/meko_presenter": 0o755, "VERSION": 0o644,
+			"memory_engine/dist/main.js": 0o644}
+		if private {
+			want = map[string]os.FileMode{"bin": 0o700, "bin/meko_presenter": 0o700, "VERSION": 0o600,
+				"memory_engine/dist/main.js": 0o600}
+		}
+		for p, mode := range want {
+			fi, err := os.Stat(filepath.Join(a.Dir(v), p))
+			if err != nil || fi.Mode().Perm() != mode {
+				t.Errorf("private %v: %s is %v (%v), want %v", private, p, fi.Mode().Perm(), err, mode)
+			}
+		}
 	}
 }

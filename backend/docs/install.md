@@ -200,22 +200,30 @@ another data folder refuses `start`, `stop`, `status`, `uninstall` and `_handoff
   its `bad-versions`), and installs it as Meko installs itself (`update.App`, package `presenter`,
   program `meko_presenter`): checked against `SHA256SUMS`, unpacked, its
   `bin/meko_presenter version --json` checked to run here,
-  into `<data>/extensions/presenter/app/<version>`, with `app/current` and
+  into `<data>/extensions/presenter/app/<version>` (owner-only, `App.Private`: folders and programs
+  0700, files 0600, as everything in the data folder), with `app/current` and
   `~/.local/bin/meko_presenter` pointing at it. Then, as with a `meko_presenter` already there (a
   build from source, used as it is and never updated), it runs
-  `meko_presenter install --meko-url … --meko-key …`.
+  `meko_presenter install --meko-url … --meko-key …`. One `~/.local/bin/meko_presenter` serves all
+  of a user's data folders, but a release belongs to one: a link that runs another data folder's
+  release isn't this one's (`Catalog.Find` skips it), so Meko installs this folder's own, leaves the
+  link alone (`App.MayLink`) and registers `app/current/bin/meko_presenter`.
   Presenter's uninstall is `uninstall --purge --non-interactive`, which removes its folder, releases
   and all (`meko destroy --with-extensions` then removes the `~/.local/bin/meko_presenter` link Meko
   made): its decks stay in their Meko datapacks.
 - `meko update_extension presenter` (and the Extensions page's **Update**) moves a release install
-  Meko made to the newest release: `--check` only looks. It deletes the versions but the current
-  one, stages the new one beside it, stops Presenter if it runs, and switches `app/current` with
-  `update-pending.json` written (`App.Switch`). A Presenter that was running is started again, up to
-  four times. Presenter's launcher (`extensions/presenter/packaging/meko_presenter`) applies Meko's own
+  Meko made to the newest release: `--check` only looks, and with no release for this platform (or
+  only rolled-back ones) it says so. The version to roll back to is the current one, unless that's
+  still on probation (its own update's record names it): then it's the one that update replaced,
+  the last known to work. It deletes the other versions, stages the new one beside them, stops
+  Presenter if it runs, and switches `app/current` with `update-pending.json` written (`App.Switch`);
+  a switch that fails starts the old version again. A Presenter that was running is started again,
+  up to four times. Presenter's launcher (`extensions/presenter/packaging/meko_presenter`) applies Meko's own
   probation rules to that record: each start of the new version counts, the start after three
   failed ones points `app/current` back at the old version, adds the new one to `bad-versions` and
   runs the old one, and the server clears the record after 5 minutes of serving (a clean stop takes
-  its start off the count). The update then fails, saying it was rolled back. It needs no running
+  its start off the count). The update then fails, saying it was rolled back, and whether the old
+  version started (with its error when it didn't). `bad-versions` is 0600 whoever writes it. It needs no running
   Meko. AgentK isn't `Managed`: it updates itself, and `update_extension agentk` says so. A command
   that isn't Meko's release install (a build from source) is refused.
 - A command npm installed (`npm link`, `npm install -g`: Presenter from source) is a

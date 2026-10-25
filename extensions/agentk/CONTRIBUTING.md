@@ -60,7 +60,7 @@ Commit subjects and PR titles are `<type>(<component>[/<area>])[!]: <summary>`, 
   with no behavior change), `chore`.
 
 The component names the part of the repo: `agentk` for AgentK, `meko` for Meko
-(`backend/`), `presenter` for Presenter (`extensions/presenter`, whose subjects release nothing yet),
+(`backend/`), `presenter` for Presenter (`extensions/presenter`, which releases on its own train),
 `repo` for the shared root (CI, `scripts/`, root docs). An optional area follows a
 slash (`fix(agentk/web): …`). A change that ships in more than one component names each,
 comma-separated (`feat(agentk,meko): …`), and releases both products. `!` marks a breaking change, and only on a releasing type
@@ -98,7 +98,8 @@ sorts higher.
    the repo root's `scripts/release/next-version.sh --product agentk`, and writes notes with
    `scripts/release/release-notes.sh --product agentk`. Only AgentK's subjects count: those naming only Meko
    (`feat(meko/…)` and the like) release Meko instead, from its own workflow, those naming only
-   Presenter (`presenter`, alone or with `meko`) release nothing here, and those naming both
+   Presenter (`presenter`, alone or with `meko`) release nothing here (they release Presenter, from
+   `presenter-release.yml`, and Meko too when they name it), and those naming both
    AgentK and Meko (`feat(agentk,meko): …`) release both. Pushes with only
    `ci`/`test`/`docs`/`nit`/`chore` commits don't release. The notes list features, fixes,
    performance and dependency changes.

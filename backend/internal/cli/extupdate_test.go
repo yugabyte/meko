@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/update"
@@ -21,14 +23,16 @@ import (
 
 // fakePresenter is a Presenter release's bin/meko_presenter, keeping its state in its folder in the data
 // folder (MEKO_HOME, which Meko sets): version --json, install and start log to its log, status
-// succeeds while it runs. With rollBackTo, start fails three times and then does what the launcher
-// does on the fourth: points app/current back at that version and starts it.
+// succeeds while it runs, and its handoff names web.sock there. With rollBackTo, start fails three
+// times and then does what the launcher does on the fourth: points app/current back at that version
+// and starts it, which fails too when old-fails is there.
 func fakePresenter(version, rollBackTo string) string {
 	start := `touch "$s/running"; echo "start ` + version + `" >> "$s/log"`
 	if rollBackTo != "" {
 		start = `n=$(( $(cat "$s/starts" 2>/dev/null || echo 0) + 1 )); echo $n > "$s/starts"
     [ $n -gt 3 ] || exit 1
-    ln -sfn ` + rollBackTo + ` "$s/app/current"; touch "$s/running"; echo "start ` + rollBackTo + `" >> "$s/log"`
+    ln -sfn ` + rollBackTo + ` "$s/app/current"; [ ! -f "$s/old-fails" ] || exit 1
+    touch "$s/running"; echo "start ` + rollBackTo + `" >> "$s/log"`
 	}
 	return `#!/bin/sh
 s="$MEKO_HOME/extensions/presenter"
@@ -38,6 +42,7 @@ case "$1" in
   status) [ -f "$s/running" ] ;;
   start) ` + start + ` ;;
   stop) rm -f "$s/running" ;;
+  _handoff) printf '{"socket": "%s"}\n' "$s/web.sock" ;;
   uninstall) rm -rf "$s" ;;
 esac
 `
@@ -274,5 +279,184 @@ func TestDestroyRemovesTheLinkToPresentersRelease(t *testing.T) {
 	want(t, "destroy", code, 0, out+errs, "Uninstalling Presenter")
 	if _, err := os.Lstat(link); !os.IsNotExist(err) {
 		t.Errorf("the link is left: %v", err)
+	}
+}
+
+// addVersion puts another release of Presenter beside the installed one, as an earlier update left it.
+func addVersion(t *testing.T, app update.App, version string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(app.Dir(version), "bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	//nolint:gosec // G306: a test's fake program
+	if err := os.WriteFile(app.Exe(version), []byte(fakePresenter(version, "")), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(app.Dir(version), "VERSION"), []byte(version+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An update of a version still on probation keeps the version before it, the last one known to
+// work, as the one to roll back to.
+func TestUpdateExtensionKeepsTheLastProvenVersion(t *testing.T) {
+	const proven, next = "0.20261023.0", "0.20261025.0"
+	t.Setenv("HOME", t.TempDir())
+	noRealExtensions(t)
+	dir := shortDir(t)
+	app := installedPresenter(t, dir)
+	addVersion(t, app, proven)
+	addVersion(t, app, "0.20261022.0") // older still: pruned
+	if err := app.Switch(proven, installedVersion, 0); err != nil {
+		t.Fatal(err)
+	}
+	presenterReleases(t, next, presenterTarball(t, next, ""))
+	if err := os.WriteFile(filepath.Join(filepath.Dir(app.Root), "running"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs := run("update_extension", "presenter", "--data-dir", dir)
+	want(t, "update_extension", code, 0, out+errs, "Presenter "+installedVersion+" hasn't served 5 minutes yet, so "+
+		proven+" stays the version to roll back to")
+	if p, _ := app.ReadPending(); p == nil || p.From != proven || p.To != next {
+		t.Errorf("pending %+v", p)
+	}
+	if got := strings.Join(app.Versions(), " "); got != proven+" "+installedVersion+" "+next {
+		t.Errorf("versions %s", got)
+	}
+}
+
+// A switch that fails leaves app/current on the old version, which is started again.
+func TestUpdateExtensionRestartsTheOldVersionWhenTheSwitchFails(t *testing.T) {
+	const next = "0.20261025.0"
+	t.Setenv("HOME", t.TempDir())
+	noRealExtensions(t)
+	dir := shortDir(t)
+	app := installedPresenter(t, dir)
+	presenterReleases(t, next, presenterTarball(t, next, ""))
+	state := filepath.Dir(app.Root)
+	if err := os.WriteFile(filepath.Join(state, "running"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A folder where the update's record goes: it can't be written.
+	if err := os.Mkdir(filepath.Join(app.Root, "update-pending.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errs := run("update_extension", "presenter", "--data-dir", dir)
+	want(t, "update_extension", code, 1, errs, "can't switch to "+next)
+	if app.Current() != installedVersion {
+		t.Errorf("app/current is %s", app.Current())
+	}
+	if got := readLog(t, filepath.Join(state, "log")); got != "start "+installedVersion+"\n" {
+		t.Errorf("log %q", got)
+	}
+}
+
+// When the version rolled back to doesn't start either, the update says so, with its error.
+func TestUpdateExtensionReportsARollBackThatDoesntStart(t *testing.T) {
+	const next = "0.20261025.0"
+	t.Setenv("HOME", t.TempDir())
+	noRealExtensions(t)
+	dir := shortDir(t)
+	app := installedPresenter(t, dir)
+	presenterReleases(t, next, presenterTarball(t, next, installedVersion))
+	state := filepath.Dir(app.Root)
+	for _, f := range []string{"running", "old-fails"} {
+		if err := os.WriteFile(filepath.Join(state, f), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	code, _, errs := run("update_extension", "presenter", "--data-dir", dir)
+	want(t, "update_extension", code, 1, errs, "so it was rolled back to "+installedVersion+", which didn't start either")
+}
+
+// With every release for this platform rolled back before, there's nothing to update to, and it says
+// so rather than calling the installed one the newest.
+func TestUpdateExtensionSaysWhenNoReleaseIsFound(t *testing.T) {
+	const next = "0.20261025.0"
+	t.Setenv("HOME", t.TempDir())
+	noRealExtensions(t)
+	dir := shortDir(t)
+	app := installedPresenter(t, dir)
+	presenterReleases(t, next, presenterTarball(t, next, ""))
+	if err := os.WriteFile(filepath.Join(app.Root, "bad-versions"), []byte(next+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs := run("update_extension", "presenter", "--data-dir", dir)
+	want(t, "update_extension", code, 0, out+errs, "no release of it for")
+	if strings.Contains(out, "newest release") {
+		t.Errorf("called the installed one the newest: %q", out)
+	}
+}
+
+// The Extensions page's Update: it waits for the socket when the update leaves Presenter running,
+// returns at once when it leaves it stopped, and the page learns the version from Release.
+func TestRunExtensionUpdates(t *testing.T) {
+	const next = "0.20261025.0"
+	t.Setenv("HOME", t.TempDir())
+	noRealExtensions(t)
+	dir := shortDir(t)
+	app := installedPresenter(t, dir)
+	presenterReleases(t, next, presenterTarball(t, next, ""))
+	w := testListener(t, dir)
+	if v, ok := w.Release("presenter"); v != installedVersion || !ok {
+		t.Errorf("Release(presenter) = %q %v", v, ok)
+	}
+	if v, ok := w.Release("agentk"); v != "" || ok {
+		t.Errorf("Release(agentk) = %q %v", v, ok)
+	}
+	old := extensions.ListenTimeout
+	extensions.ListenTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { extensions.ListenTimeout = old })
+
+	// Stopped: switched, left stopped, and no wait for a socket nothing serves.
+	var out bytes.Buffer
+	if err := w.RunExtension(context.Background(), "presenter", "update", &out); err != nil ||
+		!strings.Contains(out.String(), "it runs at its next start") {
+		t.Fatalf("stopped: %v %q", err, out.String())
+	}
+
+	// Running: started again, and it returns once the socket answers.
+	const later = "0.20261026.0"
+	presenterReleases(t, later, presenterTarball(t, later, ""))
+	state := filepath.Dir(app.Root)
+	if err := os.WriteFile(filepath.Join(state, "running"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(state, "web.sock")
+	listenAfter(t, sock, 0)
+	out.Reset()
+	if err := w.RunExtension(context.Background(), "presenter", "update", &out); err != nil ||
+		!strings.Contains(out.String(), "Presenter is running "+later) {
+		t.Fatalf("running: %v %q", err, out.String())
+	}
+	if w.sockets["presenter"] != sock {
+		t.Errorf("socket %q", w.sockets["presenter"])
+	}
+	if v, ok := w.Release("presenter"); v != later || !ok {
+		t.Errorf("Release(presenter) = %q %v", v, ok)
+	}
+}
+
+// With ~/.local/bin/meko_presenter running another data folder's release, install_extension
+// presenter installs this one's own and leaves that link alone.
+func TestInstallExtensionLeavesAnotherDataFoldersLink(t *testing.T) {
+	const version = "0.20261025.0"
+	dir, port := setup(t)
+	noRealExtensions(t)
+	other := installedPresenter(t, shortDir(t))
+	home, _ := os.UserHomeDir()
+	link := filepath.Join(home, ".local", "bin", "meko_presenter")
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "is running")
+	presenterReleases(t, version, presenterTarball(t, version, ""))
+	code, out, errs = run("install_extension", "presenter", "--data-dir", dir)
+	want(t, "install_extension", code, 0, out+errs, "runs another Meko data folder's Presenter, so it stays")
+	app := extensions.Known["presenter"].App(dir, "presenter")
+	reg, _ := extensions.Load(dir)
+	if reg.Entries["presenter"].Command != app.CurrentExe() {
+		t.Errorf("registered %q, want %q", reg.Entries["presenter"].Command, app.CurrentExe())
+	}
+	if target, _ := os.Readlink(link); target != other.CurrentExe() {
+		t.Errorf("the other data folder's link now points at %q", target)
 	}
 }

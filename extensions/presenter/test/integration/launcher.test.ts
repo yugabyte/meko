@@ -3,7 +3,7 @@
 // record Meko writes as it switches versions. Each version's cli.js is a stub that says which
 // version ran, with what.
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -72,6 +72,8 @@ describe('the release launcher', () => {
     expect(stderr).toContain(`version ${NEW} failed to start 3 times; rolling back to ${OLD}`);
     expect(readlinkSync(join(app, 'current'))).toBe(OLD);
     expect(readFileSync(join(app, 'bad-versions'), 'utf8')).toBe(`${NEW}\n`);
+    // Owner-only, as every file in Meko's data folder.
+    expect(statSync(join(app, 'bad-versions')).mode & 0o077).toBe(0);
     expect(pending()).toBeNull();
   });
 

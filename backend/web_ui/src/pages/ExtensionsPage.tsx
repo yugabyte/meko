@@ -144,6 +144,10 @@ function ExtensionCard({ ext }: { ext: Extension }) {
           <ErrorNote error={new Error(`${LABEL[job.action]} failed: ${job.error ?? "unknown error"}`)} />
         </div>
       )}
+      {job?.action === "update" && job.state === "done" && job.output && (
+        // A finished update says what it did: up to date, or installed for the next start.
+        <p className="mt-3 break-words text-sm text-muted-foreground">{lastLine(job.output)}</p>
+      )}
       {job && job.state !== "done" && job.output && (
         <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-lg border bg-muted p-3 font-mono text-xs">
           {job.output}
@@ -195,4 +199,10 @@ function ExtensionCard({ ext }: { ext: Extension }) {
       )}
     </Card>
   );
+}
+
+// The last line of a job's output.
+function lastLine(output: string): string {
+  const lines = output.trim().split("\n");
+  return lines[lines.length - 1] ?? "";
 }

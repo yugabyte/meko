@@ -103,7 +103,23 @@ func Dir(root, name string) string { return filepath.Join(root, "extensions", na
 // them, as Meko's own (internal/update). Its tarballs are named for the extension, its binary for
 // its command.
 func (c Catalog) App(root, name string) update.App {
-	return update.App{Root: filepath.Join(Dir(root, name), "app"), Name: c.Command, Package: name}
+	return update.App{Root: filepath.Join(Dir(root, name), "app"), Name: c.Command, Package: name, Private: true}
+}
+
+// releaseOf is the version of the release install command runs (through links), and whether that
+// release is in this data folder's app folder. A command that isn't a release install (a build from
+// source) has no version.
+func (c Catalog) releaseOf(root, name, command string) (string, bool) {
+	app, v, ok := update.Of(command)
+	if !ok {
+		return "", false
+	}
+	// Of resolves links, so compare the real folders (macOS's /tmp is /private/tmp).
+	want := c.App(root, name).Root
+	if real, err := filepath.EvalSymlinks(want); err == nil {
+		want = real
+	}
+	return v, app.Root == want
 }
 
 // Release is the version of a Managed extension's release install that command runs (through
@@ -112,16 +128,10 @@ func (c Catalog) Release(root, name, command string) string {
 	if !c.Managed || command == "" {
 		return ""
 	}
-	app, v, ok := update.Of(command)
-	if !ok {
-		return ""
+	if v, ours := c.releaseOf(root, name, command); ours {
+		return v
 	}
-	// Of resolves links, so compare the real folders (macOS's /tmp is /private/tmp).
-	want, err := filepath.EvalSymlinks(c.App(root, name).Root)
-	if err != nil || app.Root != want {
-		return ""
-	}
-	return v
+	return ""
 }
 
 // Entry is one installed extension.
@@ -261,11 +271,16 @@ func (e Entry) Status(root string) (bool, string) {
 
 // Find looks for the extension's program by its name, then by its old ones (FindCommand), then
 // in the app/current/bin of its release install: its folder in Meko's data folder at root (Dir),
-// then its old homes. It returns the absolute path, or "".
+// then its old homes. It returns the absolute path, or "". A Managed extension's command on PATH
+// or in ~/.local/bin that runs a release of another data folder (one link serves all of a user's
+// Meko data folders) isn't this one's.
 func (c Catalog) Find(name, home, root string) string {
 	names := append([]string{c.Command}, c.OldCommands...)
 	for _, n := range names {
 		if p := FindCommand(n, home); p != "" {
+			if v, ours := c.releaseOf(root, name, p); c.Managed && v != "" && !ours {
+				continue
+			}
 			return p
 		}
 	}

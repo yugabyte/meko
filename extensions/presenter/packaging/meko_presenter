@@ -66,7 +66,8 @@ if [ "${1:-}" = "serve" ] && [ -f "$app/update-pending.json" ]; then
     ln -sfn "$back" "$app/current.rollback"
     # Rename over the old link atomically. `mv -T` is GNU-only, so use the bundled Node.
     "$node" -e 'require("fs").renameSync(process.argv[1], process.argv[2])' "$app/current.rollback" "$app/current"
-    printf '%s\n' "$version" >> "$app/bad-versions"
+    # Owner-only, as every file in Meko's data folder (Meko's own addBadVersion makes it 0600).
+    (umask 077 && printf '%s\n' "$version" >> "$app/bad-versions")
     rm -f "$app/update-pending.json"
     exec "$app/$back/bin/meko_presenter" "$@"
   fi
