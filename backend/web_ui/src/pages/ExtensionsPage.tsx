@@ -93,8 +93,9 @@ function ExtensionCard({ ext }: { ext: Extension }) {
     <Card className="p-4">
       <div className="flex flex-wrap items-start gap-3">
         <div className="flex min-w-0 flex-1 items-start gap-3">
-          <div className="rounded-lg bg-primary/10 p-2 text-primary">
-            <ExtensionIcon name={ext.name} className="size-5" />
+          {/* shrink-0: a logo is an img, which preflight gives max-width: 100%, so a long description would squeeze it */}
+          <div className="shrink-0 rounded-lg bg-primary/10 p-2 text-primary">
+            <ExtensionIcon name={ext.name} className="size-6" />
           </div>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">

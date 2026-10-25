@@ -4,7 +4,7 @@
 // links to the Extensions page, where it can be started.
 
 import { useState } from "react";
-import { Bot, ChevronRight, Puzzle } from "lucide-react";
+import { ChevronRight, Puzzle } from "lucide-react";
 import { isInstalled, useExtensions } from "../lib/extensions";
 import { href, navigate } from "../lib/route";
 import type { Extension } from "../lib/types";
@@ -12,11 +12,14 @@ import { cx } from "./ui";
 
 const page = { tab: "overview" as const, view: "extensions" as const };
 
+// The extensions whose logo is in public/ as <name>-logo.png.
+const LOGOS = new Set(["agentk", "presenter"]);
+
 export function ExtensionIcon({ name, className }: { name: string; className?: string }) {
-  // Presenter's logo ships with this UI, so it shows while Presenter is stopped too.
-  if (name === "presenter") return <img src="/presenter-logo.png" alt="" className={cx("size-4 shrink-0 object-contain", className)} />;
-  const Icon = name === "agentk" ? Bot : Puzzle;
-  return <Icon className={cx("size-4 shrink-0", className)} />;
+  // The known extensions' logos ship with this UI, so they show while an extension is stopped or
+  // not installed too.
+  if (LOGOS.has(name)) return <img src={`/${name}-logo.png`} alt="" className={cx("size-4 shrink-0 object-contain", className)} />;
+  return <Puzzle className={cx("size-4 shrink-0", className)} />;
 }
 
 export function ExtensionsLink({ active }: { active: boolean }) {
