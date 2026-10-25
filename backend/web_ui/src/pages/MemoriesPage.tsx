@@ -1,13 +1,14 @@
 // The datapack's memories: add one, filter, page, delete one, and select several to delete, or
-// (learnings) to keep or promote into the collective memory.
+// (learnings) to keep or promote into the collective memory. Graph shows the same scope as a map.
 
 import { useEffect, useState, type FormEvent } from "react";
 import { Brain, Check, GitBranch, Plus, Sparkles, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { navigate } from "../lib/route";
 import { timeAgo } from "../lib/format";
-import type { Datapack } from "../lib/types";
+import type { Datapack, MemoryState } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
+import { MemoryGraph } from "../components/MemoryGraph";
 import { MemoryLineageDialog, type LineageOf } from "../components/MemoryLineageDialog";
 import { Pager } from "../components/Pager";
 import { Segmented } from "../components/Segmented";
@@ -20,6 +21,29 @@ const SCOPES: readonly { id: Scope; label: string }[] = [
   { id: "learnings", label: "Learnings" },
   { id: "promoted", label: "Collective" },
 ];
+
+// The memory states each scope's graph draws.
+const SCOPE_STATES: Record<Scope, MemoryState[]> = {
+  memories: ["learning", "kept"],
+  learnings: ["learning"],
+  promoted: ["collective"],
+};
+
+type View = "list" | "graph";
+const VIEWS: readonly { id: View; label: string }[] = [
+  { id: "list", label: "List" },
+  { id: "graph", label: "Graph" },
+];
+
+// The view is remembered in this browser, since a scope change reloads the page.
+const VIEW_KEY = "meko.memories.view";
+function savedView(): View {
+  try {
+    return localStorage.getItem(VIEW_KEY) === "graph" ? "graph" : "list";
+  } catch {
+    return "list";
+  }
+}
 
 // routeScope is the scope in the address (/datapacks/<id>/memories/<scope>), so a link can open
 // Learnings or Collective directly.
@@ -46,6 +70,16 @@ export function MemoriesPage({
     setSelected(new Set());
   }, [scope]);
   const [lineageOf, setLineageOf] = useState<LineageOf>();
+  const [view, setViewState] = useState<View>(savedView);
+  const [changes, setChanges] = useState(0); // redraws the graph after an add
+  const setView = (v: View) => {
+    setViewState(v);
+    try {
+      localStorage.setItem(VIEW_KEY, v);
+    } catch {
+      // Not remembered: the page still works.
+    }
+  };
 
   const list = useLoad(
     () => (scope === "promoted" ? Promise.resolve(undefined) : api.memories(id, { scope, q, page })),
@@ -61,6 +95,7 @@ export function MemoriesPage({
       setSelected(new Set());
       list.reload();
       promoted.reload();
+      setChanges((n) => n + 1);
       onChanged();
       return true;
     } catch (e) {
@@ -75,7 +110,7 @@ export function MemoriesPage({
 
       <div className="flex flex-wrap items-center gap-3">
         <Segmented options={SCOPES} value={scope} onChange={setScope} />
-        {scope !== "promoted" && (
+        {scope !== "promoted" && view === "list" && (
           <Input
             className="max-w-xs"
             placeholder="Filter by text"
@@ -83,11 +118,16 @@ export function MemoriesPage({
             onChange={(e) => (setQ(e.target.value), setPage(1), setSelected(new Set()))}
           />
         )}
+        <div className="ml-auto">
+          <Segmented options={VIEWS} value={view} onChange={setView} />
+        </div>
       </div>
 
       {actionError && <ErrorNote error={actionError} />}
 
-      {scope === "promoted" ? (
+      {view === "graph" ? (
+        <MemoryGraph datapackId={id} states={SCOPE_STATES[scope]} refresh={changes} />
+      ) : scope === "promoted" ? (
         promoted.loading && !promoted.data ? (
           <Loading />
         ) : promoted.error ? (

@@ -1,23 +1,44 @@
-// Ask the map: the datapack's memories laid out by meaning, and a question that lands among them,
-// lighting the memories that match it (0.40 or more, as Search shows) with their scores beside.
+// The Memories tab's Graph view: the datapack's memories laid out by meaning (only the states the
+// tab's scope shows), and Ask the map, a question that lands among them, lighting the memories that
+// match it (0.40 or more, as Search shows) with their scores beside.
 
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { Map as MapIcon, Sparkles } from "lucide-react";
 import { api } from "../lib/api";
-import type { Datapack, MapPoint } from "../lib/types";
+import type { MapPoint, MemoryMap, MemoryState } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
-import { MemoryLineageDialog } from "../components/MemoryLineageDialog";
-import { MemoryMapView } from "../components/MemoryMapView";
-import { round2, Similarity, WEAK_MEMORY } from "../components/Similarity";
-import { Button, Card, Empty, ErrorNote, Input, Loading, Spinner } from "../components/ui";
+import { MemoryLineageDialog } from "./MemoryLineageDialog";
+import { MemoryMapView } from "./MemoryMapView";
+import { round2, Similarity, WEAK_MEMORY } from "./Similarity";
+import { Button, Card, Empty, ErrorNote, Input, Loading, Spinner } from "./ui";
 
-export function MapPage({ datapack }: { datapack: Datapack }) {
-  const id = datapack.datapack_id;
+// Only the points in states, with the links between them renumbered.
+function only(m: MemoryMap, states: MemoryState[]): MemoryMap {
+  const at = new Map<number, number>();
+  const points = m.points.filter((p, i) => states.includes(p.state) && (at.set(i, at.size), true));
+  const links = m.links.flatMap((l) =>
+    at.has(l.a) && at.has(l.b) ? [{ ...l, a: at.get(l.a)!, b: at.get(l.b)! }] : [],
+  );
+  return { ...m, points, links };
+}
+
+export function MemoryGraph({
+  datapackId: id,
+  states,
+  refresh,
+}: {
+  datapackId: string;
+  states: MemoryState[];
+  refresh: number;
+}) {
   const [draft, setDraft] = useState("");
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<MapPoint>();
   const [origin, setOrigin] = useState<MapPoint>();
-  const map = useLoad(() => api.memoryMap(id, query), [id, query]);
+  const loaded = useLoad(() => api.memoryMap(id, query), [id, query, refresh]);
+  const key = states.join();
+  const data = useMemo(() => loaded.data && only(loaded.data, states), [loaded.data, key]);
+  const map = { ...loaded, data };
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -33,7 +54,7 @@ export function MapPage({ datapack }: { datapack: Datapack }) {
   return (
     <div className="space-y-4">
       <form onSubmit={submit} className="flex gap-2">
-        <Input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Ask the map, e.g. “how do we ship releases?”" />
+        <Input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Ask the map any question" />
         <Button variant="primary" disabled={map.loading && !!query}>
           {map.loading && query ? <Spinner className="text-primary-foreground" /> : <Sparkles className="size-4" />} Ask
         </Button>
@@ -50,8 +71,7 @@ export function MapPage({ datapack }: { datapack: Datapack }) {
         <Loading />
       ) : map.data.points.length === 0 ? (
         <Empty icon={<MapIcon className="size-8" />} title="No memories to map yet">
-          Memories appear here once they're embedded. Agents add them with <b>memory_add</b>, or add one on the
-          Memories tab.
+          Memories appear here once they're embedded. Agents add them with <b>memory_add</b>, or add one above.
         </Empty>
       ) : (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">

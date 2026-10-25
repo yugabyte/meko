@@ -16,7 +16,6 @@ const LABELS: Record<Tab, string> = {
   analytics: "Analytics",
   search: "Search",
   memories: "Memories",
-  map: "Map",
   knowledge: "Knowledge",
   conversations: "Conversations",
   artifacts: "Artifacts",
