@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../../src/server/server.js';
 import { run } from '../../src/server/db.js';
-import { markGap } from '../../src/server/mekogaps.js';
+import { learnGaps, markGap } from '../../src/server/mekogaps.js';
 import type { MekoGapPage, ProjectHome } from '../../src/shared/types.js';
 import { makeEnv, type TestEnv } from '../helpers.js';
 
@@ -50,18 +50,35 @@ describe("What Meko doesn't know", () => {
         sessionId, at, query, query.toLowerCase(), quality);
     start('s2', 1800, 'Offline mode', 'empty');
     start('s1', 1700, 'Cache hit', null);
+    // A learn session's searches while it seeds (in Explore) check before each save: not questions, though
+    // one that found something answers another session's. Moved on to Code, it's a task like any other.
+    session(p.id, 'seed', 'Learn the project');
+    run(env.core.db, "UPDATE sessions SET purpose = 'learn' WHERE id = 'seed'");
+    run(env.core.db, `INSERT INTO session_stages(session_id, stage, entered_at, left_at, moved_by)
+      VALUES ('seed', 'explore', 100, 2200, 'you'), ('seed', 'code', 2200, NULL, 'you')`);
+    start('seed', 100, 'Seed the datapack', 'empty');
+    search('seed', 't7', 'How it works: the release train', 1200, 'empty', 'empty');
+    search('seed', 't8', 'offline mode', 1300, 'empty', 'empty');
+    search('s1', 't9', 'answered by the seed', 1600, 'empty', 'empty');
+    search('seed', 't10', 'answered by the seed', 1900, 'found', null);
+    search('seed', 't11', 'Code stage question', 2300, 'empty', 'empty');
 
     const open = await page(p.id);
     expect(open.gaps.map((g) => [g.query, g.quality, g.source, g.asks, g.sessions.map((s) => s.name)])).toEqual([
+      ['Code stage question', 'empty', 'claude', 1, ['Learn the project']],
       ['release  tag retention', 'weak', 'claude', 2, ['release-cleanup', 'tags']],
       ['Offline mode', 'empty', 'start', 1, ['release-cleanup']],
     ]);
-    expect(open).toMatchObject({ counts: { open: 2, dismissed: 0, taught: 0 }, open: { empty: 1, weak: 1 }, searches: 7, since: 1000, more: false });
-    expect(((await call('GET', `/api/projects/${p.id}/home`)).json() as ProjectHome).usage.mekoGaps).toEqual({ empty: 1, weak: 1 });
+    // Every search recorded counts, the seed's too.
+    expect(open).toMatchObject({ counts: { open: 3, dismissed: 0, taught: 0 }, open: { empty: 2, weak: 1 }, searches: 13, since: 100, more: false });
+    expect(((await call('GET', `/api/projects/${p.id}/home`)).json() as ProjectHome).usage.mekoGaps).toEqual({ empty: 2, weak: 1 });
+    // A learn step isn't offered a question only the seed's search made Claude's (offline mode: else AgentK's at start).
+    expect(learnGaps(env.core.db, p.id, 's1').map((g) => [g.key, g.own])).toEqual([['release tag retention', true], ['code stage question', false]]);
+    expect(learnGaps(env.core.db, p.id, 'seed').map((g) => [g.key, g.own])).toEqual([['code stage question', true], ['release tag retention', false]]);
 
-    const key = open.gaps[0].key;
+    const key = open.gaps[1].key; // release tag retention
     expect((await call('POST', `/api/projects/${p.id}/meko-gaps/mark`, { key, state: 'dismissed' })).statusCode).toBe(204);
-    expect((await page(p.id)).gaps.map((g) => g.query)).toEqual(['Offline mode']);
+    expect((await page(p.id)).gaps.map((g) => g.query)).toEqual(['Code stage question', 'Offline mode']);
     expect((await page(p.id, 'dismissed')).gaps.map((g) => g.state)).toEqual(['dismissed']);
     // Asked again: open again.
     search('s1', 't6', 'Release tag retention', Date.now() + 1000, 'empty', 'empty');
@@ -69,29 +86,11 @@ describe("What Meko doesn't know", () => {
     // Put back after a dismissal.
     await call('POST', `/api/projects/${p.id}/meko-gaps/mark`, { key, state: 'dismissed' });
     await call('POST', `/api/projects/${p.id}/meko-gaps/mark`, { key, state: null });
-    expect((await page(p.id)).counts).toEqual({ open: 2, dismissed: 0, taught: 0 });
+    expect((await page(p.id)).counts).toEqual({ open: 3, dismissed: 0, taught: 0 });
 
     expect((await call('POST', `/api/projects/${p.id}/meko-gaps/mark`, { key: 'nothing like it', state: 'dismissed' })).statusCode).toBe(404);
     expect((await call('POST', `/api/projects/${p.id}/meko-gaps/mark`, { key, state: 'taught' })).statusCode).toBe(400);
     expect((await call('GET', `/api/projects/${p.id}/meko-gaps?state=closed`)).statusCode).toBe(400);
-  });
-
-  it("leaves a learn session's searches out: they check before saving, they aren't questions", async () => {
-    const p = await project('Alpha');
-    session(p.id, 's1', 'tags');
-    session(p.id, 'seed', 'Learn the project');
-    run(env.core.db, "UPDATE sessions SET purpose = 'learn', stage = 'explore' WHERE id = 'seed'");
-    search('s1', 't1', 'Release tag retention', 1000, 'empty', 'empty');
-    search('seed', 't2', 'How it works: the release train', 2000, 'empty', 'empty');
-    search('seed', 't3', 'release tag retention', 900, 'found', 'weak');
-    run(env.core.db, `INSERT INTO meko_preloads(session_id, at, outcome, results, chars, ms, query, query_key, quality) VALUES ('seed', 1500, 'empty', 0, 0, 900, 'Seed the datapack', 'seed the datapack', 'empty')`);
-
-    const open = await page(p.id);
-    expect(open.gaps.map((g) => [g.query, g.asks, g.sessions.map((s) => s.name)])).toEqual([['Release tag retention', 1, ['tags']]]);
-    expect(open).toMatchObject({ open: { empty: 1, weak: 0 }, searches: 1, since: 1000 });
-    // One that found something still answers another session's question.
-    search('seed', 't4', 'release tag retention', 3000, 'found', null);
-    expect((await page(p.id)).gaps).toEqual([]);
   });
 
   it("teaches Meko into the dedicated datapack as AgentK, and says why when it can't", async () => {

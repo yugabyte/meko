@@ -698,7 +698,7 @@ export interface MekoGapPage {
   counts: Record<MekoGapState, number>;
   /** The open ones by how their latest ask went. */
   open: MekoGapCounts;
-  /** Searches recorded with their query (Claude's, and AgentK's at start; a learn session's left out), and since when (null: none yet). */
+  /** Searches recorded with their query (Claude's, and AgentK's at start), and since when (null: none yet). */
   searches: number;
   since: number | null;
 }
