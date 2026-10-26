@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { parseGithubRef } from '../../shared/github-refs';
 import {
-  STAGE_LABELS, type ActionResult, type AskAgentkAction, type AskAgentkResult, type CreateSessionRequest, type DatapackInvite, type JoinByLinkResult, type LinkPlan,
+  type ActionResult, type AskAgentkAction, type AskAgentkResult, type CreateSessionRequest, type DatapackInvite, type JoinByLinkResult, type LinkPlan,
   type ProjectWithSessions, type Session, type SessionMatch, type StartFromLinkResult,
 } from '../../shared/types';
 import { moveBlockedIn } from '../../shared/stages';
@@ -12,7 +12,7 @@ import { useInstall } from '../installapp';
 import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, doAllActions, filterItems, findEntries, joinEntry, joinedText, linkEntries, type LabelPart } from '../palette';
 import { navigate } from '../router';
 import { attachFiles } from '../terminals';
-import { STATUS_TEXT, cx, dotState, isMac, liveSessions, type DotState } from '../util';
+import { STATUS_TEXT, cx, dotState, isMac, liveSessions, stageWords, type DotState } from '../util';
 import { Busy, ErrorText, StatusDot, trapTab } from './common';
 
 interface Item {
@@ -440,7 +440,7 @@ export function CommandPalette({
         out.push({
           id: `s-${s.id}`,
           label: [{ session: s.name }],
-          hint: `${p.name} · ${STAGE_LABELS[s.stage]} · ${STATUS_TEXT[dotState(s)]}`,
+          hint: `${p.name} · ${stageWords(s)} · ${STATUS_TEXT[dotState(s)]}`,
           keywords: `${p.name} ${s.name} ${s.branch}`,
           dot: dotState(s),
           phase: s.id,
