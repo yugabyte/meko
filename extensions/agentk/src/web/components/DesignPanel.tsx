@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DatapackRef, DesignDoc, Session } from '../../shared/types';
 import { api, errorMessage } from '../api';
-import { clearRevisionSent, hasDecisionChanges, useDesignDrafts, useRevisionSentAt } from '../design-answers';
+import { hasDecisionChanges, settleRevisionOf, useDesignDrafts, useRevision } from '../design-answers';
 import { designFrameDoc } from '../design-frame';
 import { useIsMobile } from '../hooks/useMedia';
 import { routePath } from '../router';
 import { useDataTheme } from '../theme';
-import { approveLabel, cx, designApprovalBlocker, designWorking, headerApproves, relativeTime, REVISION_GRACE_MS, revisionOver } from '../util';
+import { approveLabel, cx, designApprovalBlocker, designLanding, designWorking, headerApproves, type Landing, relativeTime, REVISION_GRACE_MS } from '../util';
 import { DesignQuestions } from './DesignQuestions';
 import { MarkdownView } from './MarkdownView';
 import { SidePanel } from './SidePanel';
@@ -248,50 +248,34 @@ export function DesignPanel({
   );
 }
 
-/** How long after the working line stops a newly written design still counts as the revision landing. */
-const LATE_MS = 3_000;
 /** How long the header's time stays marked as just landed (on a phone with tabs it shows only then). */
 const LANDED_MS = 3_000;
 
 /**
  * AgentK at work on the session's design, for the header's edge loader (`designWorking`), and the
- * design it last landed, while that's news: a design written while the loader showed (or just after
- * it stopped) makes the header's time flash once as it comes back.
+ * design it last landed, while that's news (`designLanding`): the header's time flashes once as it
+ * comes back.
  */
 function useDesignWorking(session: Session): { working: 'revising' | 'working' | null; landed: number | null } {
-  const sentAt = useRevisionSentAt(session.id);
-  // Draws again when the grace after Send for revision ends.
-  const [, setTick] = useState(0);
+  const rev = useRevision(session.id);
+  // Settles the revision (App does on every state push) and draws again when its grace ends.
+  const [tick, setTick] = useState(0);
   useEffect(() => {
-    if (sentAt === null) return;
-    const t = setTimeout(() => setTick((n) => n + 1), Math.max(0, sentAt + REVISION_GRACE_MS - Date.now()) + 50);
+    settleRevisionOf(session);
+    if (!rev || rev.started) return;
+    const t = setTimeout(() => setTick((n) => n + 1), Math.max(0, rev.at + REVISION_GRACE_MS - Date.now()) + 50);
     return () => clearTimeout(t);
-  }, [sentAt]);
-  const now = Date.now();
-  const working = designWorking(session, sentAt, now);
-  const over = revisionOver(session, sentAt, now);
-  useEffect(() => {
-    if (over) clearRevisionSent(session.id);
-  }, [over, session.id]);
+  }, [session, rev, tick]);
+  const working = designWorking(session, rev, Date.now());
 
-  // The design as the loader started (undefined while it isn't showing), and when it last stopped.
-  const before = useRef<number | null | undefined>(undefined);
-  const stoppedAt = useRef(0);
+  const landing = useRef<Landing>({ stoppedAt: 0 });
   const [landed, setLanded] = useState<number | null>(null);
   const at = session.designUpdatedAt;
   const on = working !== null;
   useEffect(() => {
-    if (on) {
-      if (before.current === undefined) before.current = at;
-    } else if (before.current !== undefined) {
-      const changed = before.current !== at;
-      before.current = undefined;
-      stoppedAt.current = changed ? 0 : Date.now();
-      if (changed) setLanded(at);
-    } else if (Date.now() - stoppedAt.current < LATE_MS) {
-      stoppedAt.current = 0;
-      setLanded(at);
-    }
+    const [next, justLanded] = designLanding(landing.current, on, at, Date.now());
+    landing.current = next;
+    if (justLanded) setLanded(at);
   }, [on, at]);
   useEffect(() => {
     if (landed === null) return;

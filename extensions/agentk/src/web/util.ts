@@ -699,21 +699,76 @@ export function designReviseBlocker(session: Session): string | null {
 export const REVISION_GRACE_MS = 10_000;
 
 /**
- * Whether the design panel's header shows AgentK at work on the design (its edge loader), and how
- * it's worded: 'revising' after Send for revision from this page (`sentAt`), 'working' for any other
- * turn, null when it doesn't show. It follows the session's status, so a reload or another screen
- * shows it too; `sentAt` only covers the moment between the click and Claude reporting the turn.
- * Never while Claude waits on the user, nor before there's a design (the panel has its own line then).
+ * A Send for revision from this page: when it was clicked, and whether its turn has been seen
+ * (AgentK working on it, or Claude holding the answers for the turn's end) within the grace.
  */
-export function designWorking(session: Session, sentAt: number | null, now: number): 'revising' | 'working' | null {
-  if (session.stage !== 'design' || session.desired !== 'running' || !session.hasDesign || session.approvalQueued) return null;
-  if (session.status === 'working') return sentAt !== null ? 'revising' : 'working';
-  const justSent = sentAt !== null && now - sentAt < REVISION_GRACE_MS;
-  if (justSent && session.status !== 'exited' && session.status !== 'starting' && !otherPrompt(session)) return 'revising';
-  return null;
+export interface RevisionSent {
+  at: number;
+  started: boolean;
 }
 
-/** Whether a revision sent at `sentAt` is done with: its grace is over and no turn is running. */
-export function revisionOver(session: Session, sentAt: number | null, now: number): boolean {
-  return sentAt !== null && now - sentAt >= REVISION_GRACE_MS && session.status !== 'working' && !session.midTurn;
+/** Whether a session can take or run a turn: not exited or starting, and not waiting on the user. */
+function canWork(session: Session): boolean {
+  return session.status !== 'exited' && session.status !== 'starting' && !otherPrompt(session);
+}
+
+/** AgentK is in a turn, or Claude holds answers for the next one (through the mod). */
+function busyWithTurn(session: Session): boolean {
+  return session.status === 'working' || (session.promptsHeld > 0 && canWork(session));
+}
+
+/**
+ * Whether the design panel's header shows AgentK at work on the design (its edge loader), and how
+ * it's worded: 'revising' for the turn of a Send for revision from this page (`rev`), 'working' for
+ * any other turn, null when it doesn't show. It follows the session's status, so a reload or another
+ * screen shows it too; `rev` covers the moment between the click and Claude reporting the turn, and
+ * the wording. Never while Claude waits on the user, nor before there's a design (the panel has its
+ * own line then).
+ */
+export function designWorking(session: Session, rev: RevisionSent | null, now: number): 'revising' | 'working' | null {
+  if (session.stage !== 'design' || session.desired !== 'running' || !session.hasDesign || session.approvalQueued) return null;
+  const inGrace = rev !== null && !rev.started && now - rev.at < REVISION_GRACE_MS;
+  if (busyWithTurn(session)) return rev?.started || inGrace ? 'revising' : 'working';
+  return inGrace && canWork(session) ? 'revising' : null;
+}
+
+/**
+ * A revision sent from this page, brought up to date with its session: started once its turn is
+ * seen within the grace, and null once it's done with (its turn over, or never seen within the
+ * grace, so a later turn isn't taken for it).
+ */
+export function settleRevision(session: Session, rev: RevisionSent, now: number): RevisionSent | null {
+  if (session.stage !== 'design' || session.desired !== 'running') return null;
+  const busy = busyWithTurn(session) || session.midTurn;
+  if (rev.started) return busy ? rev : null;
+  if (now - rev.at >= REVISION_GRACE_MS) return null;
+  return busy ? { ...rev, started: true } : rev;
+}
+
+/** How long after the working line stops a newly written design still counts as the revision landing. */
+export const LATE_MS = 3_000;
+
+/**
+ * Where the design panel's working line is, for its landing flash: `before` is the design's
+ * `designUpdatedAt` as the line started (undefined while it isn't showing), `stoppedAt` when it last
+ * stopped with the design unchanged (0 when that's done with).
+ */
+export interface Landing {
+  before?: number | null;
+  stoppedAt: number;
+}
+
+/**
+ * The next `Landing` as the working line turns on or off (`on`) or the design is written (`at`), and
+ * whether the revised design just landed: written while the line showed, or within `LATE_MS` after
+ * it stopped.
+ */
+export function designLanding(prev: Landing, on: boolean, at: number | null, now: number): [Landing, boolean] {
+  if (on) return [prev.before === undefined ? { before: at, stoppedAt: 0 } : prev, false];
+  if (prev.before !== undefined) {
+    const changed = prev.before !== at;
+    return [{ stoppedAt: changed ? 0 : now }, changed];
+  }
+  if (prev.stoppedAt && now - prev.stoppedAt < LATE_MS) return [{ stoppedAt: 0 }, true];
+  return [prev, false];
 }

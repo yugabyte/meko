@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { decisionNumbers } from '../shared/decisions';
 import type { DesignAnswerInput, DesignAnswersRequest, DesignQuestion, Session } from '../shared/types';
 import { api } from './api';
+import { settleRevision, type RevisionSent } from './util';
 
 /**
  * One question's answer: an option (by index, and by label so it can be found again after a
@@ -225,10 +226,10 @@ function changes(q: DesignQuestion, d: Draft): boolean {
   return d.choice !== null && (d.choice !== decidedOption(q) || !!d.text.trim());
 }
 
-// When answers last went from this page for AgentK to revise each session's design: the design
-// panel words its working line as a revision until that turn is over (`designWorking` in util.ts).
-// Kept for this page only; elsewhere the session's status alone shows AgentK at work.
-const sentAt = new Map<string, number>();
+// Each session's Send for revision from this page, while it's under way: the design panel words its
+// working line as a revision (`designWorking` in util.ts). Brought up to date on every state push
+// (`settleRevisions`), so it's done with once its turn is over even with the panel closed.
+const revisions = new Map<string, RevisionSent>();
 
 /**
  * After answers went to AgentK to revise the design: the feedback is forgotten, and the answers
@@ -237,35 +238,50 @@ const sentAt = new Map<string, number>();
  * they went (`at`) is kept for the design panel's working line.
  */
 export function revisionSent(sessionId: string, at = Date.now()): void {
-  sentAt.set(sessionId, at);
+  revisions.set(sessionId, { at, started: false });
   saveDrafts(sessionId, { answers: loadDrafts(sessionId).answers, feedback: '' });
 }
 
-/** When this page last sent a session's answers to revise its design, while that revision is under way. */
-export function revisionSentAt(sessionId: string): number | null {
-  return sentAt.get(sessionId) ?? null;
+/** A session's Send for revision from this page, while it's under way. */
+export function revisionOf(sessionId: string): RevisionSent | null {
+  return revisions.get(sessionId) ?? null;
 }
 
-/** Forgets that a revision was sent, once its turn is over. */
-export function clearRevisionSent(sessionId: string): void {
-  if (!sentAt.delete(sessionId)) return;
-  for (const fn of listeners) fn(sessionId);
+/** Brings a session's revision up to date with it (`settleRevision` in util.ts). */
+export function settleRevisionOf(s: Session, now = Date.now()): void {
+  const rev = revisions.get(s.id);
+  if (!rev) return;
+  const next = settleRevision(s, rev, now);
+  if (next === rev) return;
+  if (next) revisions.set(s.id, next);
+  else revisions.delete(s.id);
+  for (const fn of listeners) fn(s.id);
 }
 
-/** `revisionSentAt`, kept up to date. */
-export function useRevisionSentAt(sessionId: string): number | null {
-  const [at, setAt] = useState(() => revisionSentAt(sessionId));
+/** For every session on a state push: revisions under way are brought up to date, and those of sessions gone forgotten. */
+export function settleRevisions(sessions: Session[], now = Date.now()): void {
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+  for (const id of [...revisions.keys()]) {
+    const s = byId.get(id);
+    if (s) settleRevisionOf(s, now);
+    else revisions.delete(id);
+  }
+}
+
+/** `revisionOf`, kept up to date. */
+export function useRevision(sessionId: string): RevisionSent | null {
+  const [rev, setRev] = useState(() => revisionOf(sessionId));
   useEffect(() => {
-    setAt(revisionSentAt(sessionId));
+    setRev(revisionOf(sessionId));
     const onChange = (id: string) => {
-      if (id === sessionId) setAt(revisionSentAt(sessionId));
+      if (id === sessionId) setRev(revisionOf(sessionId));
     };
     listeners.add(onChange);
     return () => {
       listeners.delete(onChange);
     };
   }, [sessionId]);
-  return at;
+  return rev;
 }
 
 /**
