@@ -34,6 +34,18 @@ func TestMemoryTools(t *testing.T) {
 		obj(first["metadata"])["meko_datapack_id"] != e.DatapackID {
 		t.Errorf("search item: %v", first)
 	}
+	// The call log records the search's step with the ids it returned.
+	calls, _ := e.Store.Calls(context.Background(), e.DatapackID, time.Time{})
+	var logged bool
+	for _, c := range calls {
+		if c.Tool == "memory_search" {
+			logged = len(c.Steps) == 1 && c.Steps[0].Step == "memory_search" && len(c.Steps[0].IDs) == c.MemoryN &&
+				c.MemoryN == len(items) && c.Steps[0].IDs[0] == theirs
+		}
+	}
+	if !logged {
+		t.Errorf("memory_search's logged step: %+v", calls)
+	}
 	// run_id narrows it to one conversation.
 	r = ok(t, e, "memory_search", map[string]any{"query": "staging database orchid", "conversation_id": "c",
 		"run_id": "aaaa0000-aaaa-0000-aaaa-0000aaaa0000"})

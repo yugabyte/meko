@@ -78,7 +78,7 @@ func (s *Service) export(ctx context.Context, st *store.Store, datapack, version
 	if err != nil {
 		return err
 	}
-	learnings, err := ids(func(offset int) ([]string, error) {
+	learnings, err := idSet(func(offset int) ([]string, error) {
 		recs, _, lerr := st.ListMemoryPage(ctx, store.MemoryPage{DatapackID: datapack, UserID: s.userID,
 			Scope: store.ScopeLearnings, Limit: exportPage, Offset: offset})
 		return recordIDs(recs), lerr
@@ -88,7 +88,7 @@ func (s *Service) export(ctx context.Context, st *store.Store, datapack, version
 	}
 	// A promotion that stopped partway leaves the memory in both tables: it's exported once, as a
 	// collective memory.
-	promoted, err := ids(func(offset int) ([]string, error) {
+	promoted, err := idSet(func(offset int) ([]string, error) {
 		ps, _, perr := st.PromotedMemories(ctx, datapack, exportPage, offset)
 		out := make([]string, len(ps))
 		for i, p := range ps {
@@ -347,8 +347,8 @@ func safeExt(name string) string {
 	return "." + ext[:min(len(ext), 10)]
 }
 
-// ids collects what read returns, page by page, as a set.
-func ids(read func(offset int) ([]string, error)) (map[string]bool, error) {
+// idSet collects what read returns, page by page, as a set.
+func idSet(read func(offset int) ([]string, error)) (map[string]bool, error) {
 	out := map[string]bool{}
 	err := pages(func(offset int) (int, error) {
 		page, err := read(offset)

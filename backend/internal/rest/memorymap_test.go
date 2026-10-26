@@ -2,6 +2,7 @@ package rest_test
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 
@@ -49,6 +50,35 @@ func TestMemoryMap(t *testing.T) {
 		if a, b := int(num(obj(l)["a"])), int(num(obj(l)["b"])); a >= b || b >= len(points) {
 			t.Errorf("link %v", l)
 		}
+	}
+	// A promotion that stopped partway leaves the memory in both tables: it's drawn once, as collective.
+	half, err := e.Service.AddMemory(ctx, memory.AddMemory{DatapackID: e.DatapackID, AgentID: "claude_code:x",
+		Text: "promotion stopped partway"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Store.CopyToPromoted(ctx, e.DatapackID, e.UserID, half[0].ID, "a"); err != nil {
+		t.Fatal(err)
+	}
+	// ids are drawn even when they're older than the newest the map holds; unknown ones are skipped.
+	for i := range 300 {
+		if _, err = e.Service.AddMemory(ctx, memory.AddMemory{DatapackID: e.DatapackID, AgentID: "claude_code:x",
+			Text: fmt.Sprintf("filler memory number %d", i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldest := str(obj(arr(m["points"])[0])["id"])
+	m = obj(okData(t, e, "GET", path+"?ids="+oldest+",00000000-0000-0000-0000-000000000000", nil, 200))
+	count := map[string]int{}
+	for _, p := range arr(m["points"]) {
+		count[str(obj(p)["id"])]++
+		if obj(p)["id"] == half[0].ID && obj(p)["state"] != "collective" {
+			t.Errorf("the half-promoted memory: %v", p)
+		}
+	}
+	if count[half[0].ID] != 1 || count[oldest] != 1 {
+		t.Errorf("half-promoted %d, asked-for oldest %d of %d points", count[half[0].ID], count[oldest],
+			len(arr(m["points"])))
 	}
 	wantErr(t, e, "GET", "/datapacks/00000000-0000-0000-0000-000000000000/memory-map", nil, 404, "NOT_FOUND")
 }

@@ -121,7 +121,9 @@ function Calls({ calls, onOpen }: { calls: MekoCall[]; onOpen: (c: MekoCall) => 
 // The memories this turn's searches returned, in the order they came: a list to read, beside a
 // small map of the datapack with them lit and every other memory faded.
 function SawMap({ datapackId, ids }: { datapackId: string; ids: Set<string> }) {
-  const loaded = useLoad(() => api.memoryMap(datapackId), [datapackId]);
+  // Asked for by id: the map's newest memories may not include older ones a search returned.
+  const key = [...ids].join();
+  const loaded = useLoad(() => api.memoryMap(datapackId, "", [...ids]), [datapackId, key]);
   if (!loaded.data) return null;
   const map = only(loaded.data, SHOWN_STATES);
   const byId = new Map(map.points.map((p) => [p.id, p]));

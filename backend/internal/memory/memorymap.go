@@ -49,18 +49,23 @@ type Map struct {
 	Query  *[2]float64 `json:"query,omitempty"`
 }
 
+// mapIDs is the most memories a map can be asked to include by id.
+const mapIDs = 100
+
 // MemoryMap lays out a datapack's newest memories (learnings, kept and collective) by their
 // embeddings, projected onto their two main directions (PCA), with each linked to its nearest
 // alike. With a query, it's embedded and placed the same way, and each memory gets its similarity to
-// it. A memory the sweep hasn't embedded yet is left out.
-func (s *Service) MemoryMap(ctx context.Context, datapack, query string) (Map, error) {
+// it. ids (up to mapIDs) are included even when they're older than the newest, as a turn's trace
+// asks for what its searches returned. A memory the sweep hasn't embedded yet is left out, and so is
+// one deleted since.
+func (s *Service) MemoryMap(ctx context.Context, datapack, query string, ids []string) (Map, error) {
 	if err := s.needDatapack(ctx, datapack); err != nil {
 		return Map{}, err
 	}
 	var points []MapPoint
 	var vecs [][]float32
 	err := s.st.Snapshot(ctx, func(st *store.Store) error {
-		learnings, err := ids(func(offset int) ([]string, error) {
+		learnings, err := idSet(func(offset int) ([]string, error) {
 			recs, _, lerr := st.ListMemoryPage(ctx, store.MemoryPage{DatapackID: datapack, UserID: s.userID,
 				Scope: store.ScopeLearnings, Limit: exportPage, Offset: offset})
 			return recordIDs(recs), lerr
@@ -68,43 +73,98 @@ func (s *Service) MemoryMap(ctx context.Context, datapack, query string) (Map, e
 		if err != nil {
 			return err
 		}
+		// A promotion that stopped partway leaves the memory in both tables: it's drawn once, as a
+		// collective memory, as export does.
+		promoted, err := idSet(func(offset int) ([]string, error) {
+			ps, _, perr := st.PromotedMemories(ctx, datapack, exportPage, offset)
+			out := make([]string, len(ps))
+			for i, p := range ps {
+				out[i] = p.ID
+			}
+			return out, perr
+		})
+		if err != nil {
+			return err
+		}
+		drawn := map[string]bool{}
+		addMemory := func(r store.Record) error {
+			m := fromRecord(datapack, r)
+			if drawn[m.ID] || promoted[m.ID] || m.UserID != s.userID {
+				return nil
+			}
+			v, verr := st.MemoryEmbedding(ctx, datapack, m.ID)
+			if verr != nil || v == nil {
+				return verr
+			}
+			state := "kept"
+			if learnings[m.ID] {
+				state = "learning"
+			}
+			drawn[m.ID] = true
+			points = append(points, MapPoint{ID: m.ID, Text: m.Memory, State: state, AgentID: m.AgentID,
+				ConversationID: m.RunID, CreatedAt: m.CreatedAt})
+			vecs = append(vecs, v)
+			return nil
+		}
+		addPromoted := func(p store.Promoted) error {
+			if drawn[p.ID] {
+				return nil
+			}
+			v, verr := st.PromotedEmbedding(ctx, datapack, p.ID)
+			if verr != nil || v == nil {
+				return verr
+			}
+			drawn[p.ID] = true
+			points = append(points, MapPoint{ID: p.ID, Text: p.Text, State: "collective", AgentID: p.AgentID,
+				ConversationID: p.ConversationID, CreatedAt: p.CreatedAt.UTC().Format(time.RFC3339)})
+			vecs = append(vecs, v)
+			return nil
+		}
+
 		recs, _, err := st.ListMemoryPage(ctx, store.MemoryPage{DatapackID: datapack, UserID: s.userID,
 			Limit: mapMemories})
 		if err != nil {
 			return err
 		}
 		for _, r := range recs {
-			v, verr := st.MemoryEmbedding(ctx, datapack, r.ID)
-			if verr != nil {
-				return verr
+			if err = addMemory(r); err != nil {
+				return err
 			}
-			if v == nil {
-				continue
-			}
-			m := fromRecord(datapack, r)
-			state := "kept"
-			if learnings[m.ID] {
-				state = "learning"
-			}
-			points = append(points, MapPoint{ID: m.ID, Text: m.Memory, State: state, AgentID: m.AgentID,
-				ConversationID: m.RunID, CreatedAt: m.CreatedAt})
-			vecs = append(vecs, v)
 		}
 		ps, _, err := st.PromotedMemories(ctx, datapack, mapMemories, 0)
 		if err != nil {
 			return err
 		}
 		for _, p := range ps {
-			v, verr := st.PromotedEmbedding(ctx, datapack, p.ID)
-			if verr != nil {
-				return verr
+			if err = addPromoted(p); err != nil {
+				return err
 			}
-			if v == nil {
+		}
+		for _, id := range ids[:min(len(ids), mapIDs)] {
+			if drawn[id] {
 				continue
 			}
-			points = append(points, MapPoint{ID: p.ID, Text: p.Text, State: "collective", AgentID: p.AgentID,
-				ConversationID: p.ConversationID, CreatedAt: p.CreatedAt.UTC().Format(time.RFC3339)})
-			vecs = append(vecs, v)
+			if promoted[id] {
+				p, perr := st.GetPromoted(ctx, datapack, id)
+				if perr != nil {
+					return perr
+				}
+				if p != nil {
+					if err = addPromoted(*p); err != nil {
+						return err
+					}
+				}
+				continue
+			}
+			r, rerr := st.GetVector(ctx, store.Memories, datapack, id)
+			if rerr != nil {
+				return rerr
+			}
+			if r != nil {
+				if err = addMemory(*r); err != nil {
+					return err
+				}
+			}
 		}
 		return nil
 	})

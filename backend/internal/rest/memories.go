@@ -273,7 +273,13 @@ func (a *api) memoryMap(c echo.Context) error {
 	if !ok {
 		return err
 	}
-	m, err := a.Service.MemoryMap(ctx(c), id, strings.TrimSpace(c.QueryParam("q")))
+	var ids []string
+	for _, s := range strings.Split(c.QueryParam("ids"), ",") {
+		if s = strings.ToLower(strings.TrimSpace(s)); s != "" {
+			ids = append(ids, s)
+		}
+	}
+	m, err := a.Service.MemoryMap(ctx(c), id, strings.TrimSpace(c.QueryParam("q")), ids)
 	if err != nil {
 		return serviceError(c, err)
 	}

@@ -32,10 +32,11 @@ const NOW: Record<MemoryState, string> = {
 };
 
 // A turn is stored when the agent saves it, after its memories, so the memory's turn is the first
-// one stored at or after it.
+// one stored at or after it. None means its turn isn't stored (yet, or past the turns loaded), and
+// no turn is quoted.
 function turnOf(thread: Turn[], at: string): Turn | undefined {
   const t = new Date(at).getTime();
-  return thread.find((x) => new Date(x.started_at).getTime() >= t) ?? thread[thread.length - 1];
+  return thread.find((x) => new Date(x.started_at).getTime() >= t);
 }
 
 export function MemoryLineageDialog({
