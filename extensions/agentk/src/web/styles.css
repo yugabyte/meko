@@ -21,6 +21,8 @@
   /* Meko's mark on a design decision that rests on Meko, and its references. */
   --meko: #6b3fb8;
   --meko-soft: #efe8fa;
+  /* The black of Meko's logo (its white in dark), for the "m" in the projects pane. */
+  --meko-logo: #121017;
   --ok: #23845a;
   --warn: #b86e00;
   --warn-soft: #fff1da;
@@ -61,6 +63,7 @@
     --chart-kiro: #a77bff;
     --meko: #c3a5f5;
     --meko-soft: #2c2140;
+    --meko-logo: #fff;
     --ok: #5cc592;
     --warn: #e9a64a;
     --warn-soft: #3a2c14;
@@ -94,6 +97,7 @@
   --chart-kiro: #a77bff;
   --meko: #c3a5f5;
   --meko-soft: #2c2140;
+  --meko-logo: #fff;
   --ok: #5cc592;
   --warn: #e9a64a;
   --warn-soft: #3a2c14;
@@ -1024,6 +1028,11 @@ textarea.input {
 .rail-hide {
   order: 1;
   margin-left: auto;
+}
+/* Meko's "m", which links to Meko: the logo's own black or white, also on hover. */
+.rail-meko,
+.rail-meko:hover {
+  color: var(--meko-logo);
 }
 /* Plan usage limits, above the rail's buttons: a row per agent, its logo then a ring per limit. */
 .limits {
