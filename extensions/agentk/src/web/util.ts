@@ -610,11 +610,19 @@ export function queuedText(session: Session): string | null {
   return session.autoRun ? `✓ Run to merge: ${waits}` : `✓ Merge queued: ${waits}`;
 }
 
-/** What Run to merge does from the stage the session is in, for its checkbox's tooltip. */
+/**
+ * What Run to merge does from the stage the session is in: its checkbox's tooltip, and the line
+ * under the gate in the phone's ⋯ sheet, which has no tooltips.
+ */
 export function runToMergeTitle(session: Session): string {
-  if (session.stage === 'design') return 'Once you approve the design, AgentK opens the PR when it has made the change, then merges it once nothing blocks it';
+  if (session.stage === 'design') return 'once you approve the design, AgentK opens the PR when it has made the change, then merges it once nothing blocks it';
   if (session.stage === 'review') return 'AgentK merges the PR once nothing blocks it, and tells you when something only you can clear blocks it';
-  return 'AgentK opens the PR when its turn ends, then merges it once nothing blocks it';
+  return 'AgentK opens the PR when its turn ends (at once, between turns), then merges it once nothing blocks it';
+}
+
+/** Whether the stage bar's gate has Run to merge's box (StageBar in ProjectView.tsx). */
+export function runToMergeShown(session: Session): boolean {
+  return session.stage === 'code' || session.stage === 'review' || (session.stage === 'design' && session.hasDesign);
 }
 
 const facts = (n: number) => `${n} ${n === 1 ? 'fact' : 'facts'}`;

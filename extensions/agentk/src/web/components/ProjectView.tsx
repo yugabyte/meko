@@ -19,7 +19,7 @@ import { approveDesign, changingDecisions } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { approveLabel, closingText, cx, dotState, designApprovalBlocker, formatCredits, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, sessionTabTitle, totalTokens, updateShowing, usageTitle } from '../util';
+import { approveLabel, closingText, cx, dotState, designApprovalBlocker, formatCredits, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, runToMergeShown, runToMergeTitle, sessionTabTitle, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
 import { Busy, Check, ConfirmButton, ContextRing, DatapackName, Elapsed, HarnessLogo, NotesIcon, RunToMergeCheck, StatusDot } from './common';
@@ -572,8 +572,8 @@ function InstructionsButton({ queued, disabled, title, onClick }: { queued: bool
 }
 
 /**
- * A gate pressed early (Open PR or Merge & Close), shown as a pill with Cancel until it goes, beside
- * Run to merge's box. Run to merge's own gate has no Cancel: unchecking the box takes the gates back.
+ * A gate pressed early (Open PR or Merge & Close), or kept queued by Run to merge, shown as a pill
+ * with Cancel until it goes, beside Run to merge's box. Cancel on Run to merge's gate turns it off.
  */
 function queuedGate(
   session: Session,
@@ -597,11 +597,9 @@ function queuedGate(
       <span className="gate-pill" title={title}>
         {queuedText(session)}
       </span>
-      {!session.autoRun && (
-        <button className="btn small" disabled={blocked} onClick={() => onAct('cancel-queued')}>
-          Cancel
-        </button>
-      )}
+      <button className="btn small" disabled={blocked} onClick={() => onAct('cancel-queued')}>
+        Cancel
+      </button>
     </span>
   );
 }
@@ -886,6 +884,8 @@ function StageBar({
         </div>
       )}
       {reasons && reason && <div className="blockers">{reason}</div>}
+      {/* A phone has no tooltips: what the box beside the gate does. */}
+      {reasons && runToMergeShown(session) && <div className="blockers">Run to merge: {runToMergeTitle(session)}.</div>}
     </div>
   );
 }

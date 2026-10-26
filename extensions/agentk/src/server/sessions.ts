@@ -1615,7 +1615,8 @@ export class SessionManager {
         break;
       }
       case 'Stop':
-        await this.endTurn(row, 'stop');
+        // OpenCode's plugin marks a turn the user interrupted (Claude Code's comes from the mod, /mod/turn).
+        await this.endTurn(row, p.interrupted === true ? 'interrupted' : 'stop');
         break;
       case 'SessionEnd':
         this.ingestUsage(id);

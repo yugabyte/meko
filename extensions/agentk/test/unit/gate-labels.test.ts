@@ -56,7 +56,6 @@ describe('queuedText', () => {
 
   it.each([
     [{ queued: 'open-pr' }, '✓ Run to merge: opens the PR when this turn ends'],
-    [{ queued: 'merge', mergeQueueable: true, mergeBlockers: ['CI is still running.'] }, '✓ Run to merge: waiting on CI'],
     [{ queued: 'merge', mergeBlockers: ['CI is failing.'] }, '✓ Run to merge: waiting on a CI fix'],
     [{ queued: 'merge', mergeBlockers: ['Changes were requested.'] }, '✓ Run to merge: waiting on you'],
     [{ queued: 'merge', mergeQueueable: true, mergeBlockers: ['AgentK is still working.'] }, '✓ Run to merge: waiting on AgentK'],

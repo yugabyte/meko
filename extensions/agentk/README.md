@@ -277,8 +277,9 @@ your phone can connect.
   and AgentK's review have passed. Or check **Run to merge** (when you start a task at Code, beside
   Approve design, or beside Open PR or Merge & Close) and AgentK passes both gates by itself: it opens
   the PR when the coding turn ends and merges once nothing blocks it, telling you when something only
-  you can clear (a held review, missing approvals) holds it up. Unchecking it, interrupting AgentK or
-  moving the session gives the gates back to you. The server watches the PR and hands reviews (only AgentK's by default, or AgentK's and
+  you can clear (a held review, missing approvals) holds it up. Unchecking it, cancelling its gate,
+  interrupting AgentK (Claude Code with AgentK's mod, or OpenCode) or moving the session gives the
+  gates back to you. The server watches the PR and hands reviews (only AgentK's by default, or AgentK's and
   people's, every reviewer's, or only people's), merge conflicts with the base (unless
   you turn that off in Settings → General) and CI failures to Claude. Every other review, and
   any review from someone without a role on the repo, is held for you: you read it in AgentK and

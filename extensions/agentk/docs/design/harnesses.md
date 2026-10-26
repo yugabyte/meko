@@ -227,7 +227,7 @@ OpenCode's order, and gives up on each after 3 seconds. It sends them under the 
 | the tool `execute.after` hook | `tool.execute.after` with `call_id` | `PostToolUse` (and a Meko call closes); for a Meko tool, also a `meko` line in `messages.jsonl` with the call and its reply, see [Token usage](token-usage.md#meko-calls) |
 | event `permission.asked` | `permission.asked` with its `action` | `PermissionRequest`: **Needs you**, "Permission needed for shell" |
 | event `permission.replied` | `permission.replied` | `PostToolUse` (working again) |
-| event `session.execution.succeeded`, `.failed` or `.interrupted` (OpenCode 2 doesn't send `session.idle`) | `session.idle` | `Stop` |
+| event `session.execution.succeeded`, `.failed` or `.interrupted` (OpenCode 2 doesn't send `session.idle`) | `session.idle`, with `interrupted: true` for `.interrupted` | `Stop`; an interrupted one ends the turn as interrupted, as the mod's `/mod/turn` does for Claude Code |
 
 A tool called from OpenCode's code mode (its `execute` tool) goes through `execute.before` under its
 own name too, so the guard sees those edits. Events come as `{ id, type, data }`; one the stream

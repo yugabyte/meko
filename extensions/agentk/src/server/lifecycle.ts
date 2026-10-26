@@ -211,6 +211,11 @@ export class Lifecycle {
   private headSeen = new Map<string, { head: string; at: number }>();
   /** Per Run to merge session, the blockers waiting on the user it was last told about (so it's told once per new set). */
   private autoRunTold = new Map<string, string>();
+  /**
+   * Run to merge sessions whose queued merge waits on a blocker that doesn't clear by itself
+   * (approvals can take days): their PR is looked at every REVIEW_POLL_MS, not at every pass.
+   */
+  private autoRunBlocked = new Set<string>();
 
   constructor(private core: Core) {}
 
@@ -675,8 +680,11 @@ export class Lifecycle {
         const text = given ? 'Open PR queued with your instructions: it goes when AgentK finishes its turn' : 'Open PR queued: it goes when AgentK finishes its turn';
         this.queueGate(row.id, 'open-pr', text, given ?? '');
       } else if (given !== null && given !== (row.queued_instructions ?? '')) {
-        this.sessions.update(row.id, { queued_instructions: given || null });
+        // Pressed with instructions, Run to merge's Open PR is the user's now: stopping it keeps it.
+        this.sessions.update(row.id, { queued_instructions: given || null, queued_auto: 0 });
         this.sessions.event(row.id, 'queued', given ? 'Your instructions for the queued Open PR changed' : 'Your instructions for the queued Open PR were removed');
+      } else if (row.queued_auto) {
+        this.sessions.update(row.id, { queued_auto: 0 });
       }
       return;
     }
@@ -812,15 +820,25 @@ export class Lifecycle {
     this.checkBetweenTurns(cur);
     // A gate queued in the stage it leaves (Open PR, a merge) isn't wanted where it goes, and a move
     // takes the gates back from Run to merge.
+    const moved = `the session moved to ${STAGE_LABELS[stage]}`;
     const dropQueued = () => {
-      this.stopAutoRun(id, `the session moved to ${STAGE_LABELS[stage]}`);
-      this.dropQueued(id, `the session moved to ${STAGE_LABELS[stage]}`);
+      this.stopAutoRun(id, moved);
+      this.dropQueued(id, moved);
     };
     if (instructions) this.checkPromptable(cur);
     // A move within PR & Review was refused above (moveError).
     if (stage === 'review') {
-      dropQueued();
-      return this.moveToReview(this.sessions.row(id), instructions);
+      // Off before the PR is picked up, which would queue its merge; back on if the move is refused.
+      const wasOn = this.autoRunOff(id);
+      this.dropQueued(id, moved);
+      try {
+        await this.moveToReview(this.sessions.row(id), instructions);
+      } catch (e) {
+        if (wasOn && this.sessions.row(id).stage === cur.stage) this.sessions.update(id, { auto_run: 1 });
+        throw e;
+      }
+      if (wasOn) this.sessions.event(id, 'auto-run', `Run to merge stopped: ${moved}`);
+      return;
     }
 
     const send = offersPrompt(cur.stage, stage) && (prompt ?? promptByDefault(cur.stage, stage));
@@ -1164,7 +1182,7 @@ export class Lifecycle {
       for (const row of sessionRows(this.db)) {
         if (!projectRow(this.db, row.project_id)) continue;
         // A queued merge is checked at every pass (every POLL_MS), so it goes soon after CI does.
-        const due = row.queued_gate === 'merge' || now - (this.lastPoll.get(row.id) ?? 0) >= REVIEW_POLL_MS;
+        const due = (row.queued_gate === 'merge' && !this.autoRunBlocked.has(row.id)) || now - (this.lastPoll.get(row.id) ?? 0) >= REVIEW_POLL_MS;
         if (row.desired !== 'running') {
           // A cleanup that a restart cut short after archiving: finish it.
           if (row.stage === 'merge' && due && now - (row.archived_at ?? 0) < CLOSING_RESUME_MS) {
@@ -1430,12 +1448,15 @@ export class Lifecycle {
       this.sessions.event(id, 'queued', 'Queued merge: nothing blocks it now; merging');
       this.sessions.notifyUser(id, 'Merging', `PR #${row.pr_number} is ready: merging it now, ${row.auto_run ? 'for Run to merge' : 'as you queued'}.`);
       this.autoRunTold.delete(id);
+      this.autoRunBlocked.delete(id);
       this.merging.add(id);
       try {
         await this.doMerge(id, row.auto_run ? 'auto' : 'you');
       } catch (e) {
         this.sessions.event(id, 'queued', `Queued merge failed: ${errMsg(e)}`);
-        this.sessions.notifyUser(id, 'Merge failed', `${errMsg(e)} Press Merge & Close again once that's fixed.`);
+        // Its merge would be queued again at the next pass, and GitHub asked again: a refusal stops it.
+        if (row.auto_run) this.stopAutoRun(id, 'GitHub refused the merge');
+        this.sessions.notifyUser(id, 'Merge failed', `${errMsg(e)} ${row.auto_run ? 'Run to merge is off now: press Merge & Close' : 'Press Merge & Close again'} once that's fixed.`);
       } finally {
         this.merging.delete(id);
       }
@@ -1456,6 +1477,8 @@ export class Lifecycle {
    * rest, the user is told once per new set.
    */
   private autoRunWaits(id: string, info: MergeInfo): void {
+    if (info.hard.length) this.autoRunBlocked.add(id);
+    else this.autoRunBlocked.delete(id);
     const yours = info.hard.filter((b) => b !== CI_FAILING && !(b === CONFLICTING && this.core.config.pr.resolveConflicts));
     const key = yours.join('\n');
     if (key === (this.autoRunTold.get(id) ?? '')) return;
@@ -1935,6 +1958,9 @@ export class Lifecycle {
         this.sessions.update(row.id, skip);
         if (fresh.queued_gate !== 'merge') {
           this.queueGate(row.id, 'merge', `Merge queued: it goes once nothing blocks it (now: ${info.mergeBlockers.join(' ')})`);
+        } else if (fresh.queued_auto) {
+          // Pressed while Run to merge's merge waited: the user's now, so stopping Run to merge keeps it.
+          this.sessions.update(row.id, { queued_auto: 0 });
         }
       });
     } finally {
@@ -1998,7 +2024,7 @@ export class Lifecycle {
     this.core.changed();
     if (row.stage === 'code' && row.status !== 'exited') {
       // Mid-turn it goes when the turn ends; between turns, now (takeQueuedPr checks Claude can take it).
-      if (!row.queued_gate) this.queueGate(row.id, 'open-pr', 'Run to merge: Open PR queued');
+      if (!row.queued_gate) this.queueGate(row.id, 'open-pr', 'Run to merge: Open PR queued', '', true);
       await this.takeQueuedPr(row.id).catch((e) => this.warn(row.id, 'Sending the queued Open PR', e));
     } else if (row.stage === 'review') {
       this.armMerge(row.id);
@@ -2009,12 +2035,20 @@ export class Lifecycle {
   /** Turns Run to merge off, dropping the gate it keeps queued, and says why in the activity log. */
   private stopAutoRun(id: string, why: string): void {
     const row = sessionRow(this.db, id);
-    if (!row?.auto_run) return;
+    if (!this.autoRunOff(id)) return;
+    // Only the gate it queued: one the user pressed themselves stays, as it would have without it.
+    if (row?.queued_gate && row.queued_auto && !this.merging.has(id)) this.dropQueued(id, 'Run to merge stopped');
+    this.sessions.event(id, 'auto-run', `Run to merge stopped: ${why}`);
+  }
+
+  /** Turns Run to merge off, leaving its queued gate alone; false when it wasn't on. */
+  private autoRunOff(id: string): boolean {
+    if (!sessionRow(this.db, id)?.auto_run) return false;
     this.sessions.update(id, { auto_run: 0 });
     this.autoRunTold.delete(id);
-    if (row.queued_gate && !this.merging.has(id)) this.dropQueued(id, 'Run to merge stopped');
-    this.sessions.event(id, 'auto-run', `Run to merge stopped: ${why}`);
+    this.autoRunBlocked.delete(id);
     this.core.changed();
+    return true;
   }
 
   /**
@@ -2024,26 +2058,29 @@ export class Lifecycle {
   onTurnStart(id: string): void {
     const row = sessionRow(this.db, id);
     if (!row?.auto_run || row.stage !== 'code' || row.queued_gate || row.desired !== 'running') return;
-    this.queueGate(id, 'open-pr', 'Run to merge: the PR opens when this turn ends');
+    this.queueGate(id, 'open-pr', 'Run to merge: the PR opens when this turn ends', '', true);
   }
 
   /** In PR & Review with Run to merge on, the merge stays queued until it goes (takeQueuedMerge). */
   private armMerge(id: string): void {
     const row = sessionRow(this.db, id);
     if (!row?.auto_run || row.stage !== 'review' || row.queued_gate || this.merging.has(id) || row.desired !== 'running') return;
-    this.queueGate(id, 'merge', 'Run to merge: the PR merges once nothing blocks it');
+    this.queueGate(id, 'merge', 'Run to merge: the PR merges once nothing blocks it', '', true);
   }
 
   // ---- queued gates ----
 
-  /** Sets or clears the queued gate; its instructions (a queued Open PR's) go with it. */
-  private setQueued(id: string, gate: QueuedGate | null, instructions = ''): void {
-    this.sessions.update(id, { queued_gate: gate, queued_instructions: gate && instructions ? instructions : null });
+  /**
+   * Sets or clears the queued gate; its instructions (a queued Open PR's) go with it, and whether
+   * Run to merge queued it (`auto`) rather than the user.
+   */
+  private setQueued(id: string, gate: QueuedGate | null, instructions = '', auto = false): void {
+    this.sessions.update(id, { queued_gate: gate, queued_instructions: gate && instructions ? instructions : null, queued_auto: gate && auto ? 1 : 0 });
     this.core.changed();
   }
 
-  private queueGate(id: string, gate: QueuedGate, text: string, instructions = ''): void {
-    this.setQueued(id, gate, instructions);
+  private queueGate(id: string, gate: QueuedGate, text: string, instructions = '', auto = false): void {
+    this.setQueued(id, gate, instructions, auto);
     this.sessions.event(id, 'queued', text);
   }
 

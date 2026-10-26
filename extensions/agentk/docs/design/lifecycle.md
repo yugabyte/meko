@@ -216,15 +216,23 @@ It runs on the [queued gates](#queued-gates):
   failing CI and merge conflicts as it always does (their watchers say when they hand over), and for
   every other one (a held review, changes requested, missing approvals, a branch behind its base,
   unpushed work between turns, a Needs you) you're notified once per new set
-  (`autoRunWaits`). It merges at the first look that finds nothing blocking. After AgentK's findings
+  (`autoRunWaits`), and while such a blocker is there the PR is looked at every 45 seconds rather
+  than at every 15-second pass (approvals can take days). It merges at the first look that finds
+  nothing blocking; if GitHub refuses the merge (a ruleset, say, which the blockers don't show), Run to
+  merge stops, so the merge isn't asked for again at every pass. After AgentK's findings
   are addressed it doesn't ask for another review round, as Merge when ready doesn't. The pill reads
   *✓ Run to merge: waiting on …*. The gates it passes are logged as AgentK's (`moved_by = 'auto'`).
 
 It stops, saying why in the activity log (`stopAutoRun`), when you uncheck it (refused while the
-merge is being requested), cancel the gate it queued, interrupt a turn in Code or PR & Review (Esc:
-before it, an interrupt sent a queued Open PR at once), or move the session, by hand or by a tool.
-Claude exiting doesn't stop it: the next turn arms Open PR again. It's refused (409) in Explore,
-Merge & Close, a Review a PR and a design in plan mode.
+merge is being requested), press **Cancel** on the gate it queued, interrupt a turn in Code or PR &
+Review, or move the session, by hand or by a tool (a move to PR & Review that's refused leaves it on).
+An interrupt counts only where the harness reports one: Claude Code with AgentK's mod (`/mod/turn`)
+and OpenCode (its plugin marks `session.execution.interrupted`). Kiro, and Claude Code without the
+mod, report none, so there Esc doesn't stop it, and a queued Open PR goes when the next turn ends:
+uncheck the box instead. Stopping drops only the gate Run to merge queued (`sessions.queued_auto`):
+an Open PR or merge you pressed yourself stays queued, as it would have without it, and a press on
+the gate Run to merge queued makes it yours. Claude exiting doesn't stop it: the next turn arms
+Open PR again. It's refused (409) in Explore, Merge & Close, a Review a PR and a design in plan mode.
 
 ## The design after approval
 

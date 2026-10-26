@@ -1774,6 +1774,28 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
       expect(prPrompts(s.id)).toBe(0);
     });
 
+    it("stops when GitHub refuses its merge, rather than asking again at every pass", async () => {
+      const s = await inReview('Refused');
+      const notify = vi.spyOn(env.core.sessions, 'notifyUser');
+      gh.mergeError = new Error('Required signatures are missing.');
+      await env.core.sessions.edit(s.id, { autoRun: true });
+      await pollAll();
+      await pollAll();
+      expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'review', autoRun: false, queued: null });
+      expect(lastEvent(s.id, 'auto-run')).toBe('Run to merge stopped: GitHub refused the merge');
+      expect(notify.mock.calls.filter((c) => c[1] === 'Merge failed')).toEqual([
+        [s.id, 'Merge failed', expect.stringContaining('Run to merge is off now: press Merge & Close once') as string],
+      ]);
+    });
+
+    it("keeps an Open PR the user queued when it's turned off", async () => {
+      const s = await working('Mine');
+      await env.core.sessions.action(s.id, 'open-pr', { instructions: 'Open it as a draft.' });
+      await env.core.sessions.edit(s.id, { autoRun: true });
+      await env.core.sessions.edit(s.id, { autoRun: false });
+      expect(env.core.sessions.get(s.id)).toMatchObject({ autoRun: false, queued: 'open-pr', queuedInstructions: 'Open it as a draft.' });
+    });
+
     it('queues the merge through any blocker when turned on in Review, stops on a move, and is refused where it has no gates to pass', async () => {
       const s = await inReview('Turned on later');
       const approved = gh.status!;

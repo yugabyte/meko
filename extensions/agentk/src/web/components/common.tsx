@@ -34,7 +34,7 @@ export function RunToMergeCheck({ session, disabled = false, onChange }: { sessi
     void onChange(on).finally(() => setSaving(false));
   };
   return (
-    <label className="check gate-check" title={runToMergeTitle(session)}>
+    <label className="check gate-check" title={`Run to merge: ${runToMergeTitle(session)}`}>
       <input type="checkbox" checked={session.autoRun} disabled={disabled || saving} onChange={(e) => toggle(e.target.checked)} />
       <span>Run to merge</span>
     </label>

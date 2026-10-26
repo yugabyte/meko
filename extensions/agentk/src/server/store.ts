@@ -124,6 +124,8 @@ export interface SessionRow {
   queued_instructions: string | null;
   /** 1 while Run to merge is on (Session.autoRun). */
   auto_run: number;
+  /** 1 when Run to merge queued `queued_gate`, rather than the user's press; cleared with it. */
+  queued_auto: number;
   /** Discard was asked for and waits for the learn step (Session.discarding). */
   discarding: number;
   /** The user asked Merge & Close to skip the learn step. */

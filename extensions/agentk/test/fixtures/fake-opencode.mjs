@@ -4,7 +4,7 @@
 // and drives their hooks the way OpenCode 2.1 does: the session `prompt` hook for a prompt, tool
 // `execute.before` (whose throw denies the call) and `.after` around a tool, the session `context`
 // hook before a response, and the `session.created`, `permission.asked`/`.replied`,
-// `session.step.started`/`.ended` and `session.execution.succeeded` events, as `{ id, type, data }`.
+// `session.step.started`/`.ended` and `session.execution.succeeded` (or `.interrupted`) events, as `{ id, type, data }`.
 // Each stdin line is a prompt. Like OpenCode 2 under AgentK, every command but `--version` and
 // `upgrade` needs `--standalone`. Everything it does is recorded in $FAKE_OPENCODE_DIR.
 import { randomBytes } from 'node:crypto';
@@ -144,10 +144,10 @@ async function respond(session, model = 'claude-sonnet-4-5') {
   await sleep(10);
 }
 
-async function finish() {
+async function finish(interrupted = false) {
   await respond(sessionId);
   await sleep(100);
-  await event('session.execution.succeeded', { sessionID: sessionId });
+  await event(interrupted ? 'session.execution.interrupted' : 'session.execution.succeeded', { sessionID: sessionId });
 }
 
 /** A call to Meko's memory_search that takes `ms` (its id shared by calls from one code-mode run); Meko finds one memory, or nothing when `empty`. */
@@ -212,7 +212,8 @@ async function turn(text) {
     await event('permission.asked', { id: pending, sessionID: sessionId, action: 'bash', resources: [text.slice(4)] });
     return;
   }
-  await finish();
+  // "interrupt": the user pressed Esc, and the turn ends interrupted.
+  await finish(/\binterrupt\b/.test(text));
 }
 
 if (!resumed) await event('session.created', { sessionID: sessionId });

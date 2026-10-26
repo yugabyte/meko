@@ -28,6 +28,7 @@ describe("OpenCode's events as AgentK's", () => {
     ['a permission ask', { hook_event_name: 'permission.asked', permission: 'bash', session_id: 'ses_1' }, { hook_event_name: 'PermissionRequest', tool_name: 'bash', agent_session_id: 'ses_1' }],
     ['its answer', { hook_event_name: 'permission.replied' }, { hook_event_name: 'PostToolUse' }],
     ['the end of a turn', { hook_event_name: 'session.idle', session_id: 'ses_1' }, { hook_event_name: 'Stop', agent_session_id: 'ses_1' }],
+    ['the end of a turn the user interrupted', { hook_event_name: 'session.idle', interrupted: true, session_id: 'ses_1' }, { hook_event_name: 'Stop', interrupted: true, agent_session_id: 'ses_1' }],
     ['anything else', { hook_event_name: 'session.compacted' }, null],
   ])('%s', (_, raw, expected) => {
     expect(normalizeOpenCode(raw)).toEqual(expected);
