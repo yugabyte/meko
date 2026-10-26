@@ -5,28 +5,15 @@ import { useState, type FormEvent, type ReactNode } from "react";
 import { Brain, FileText, MessagesSquare, Search } from "lucide-react";
 import { api, type SearchSource } from "../lib/api";
 import { SEARCH_INPUT_ID } from "../lib/useShortcuts";
+import { SHOW_COLLECTIVE } from "../lib/features";
 import { timeAgo } from "../lib/format";
 import type { ContextSearch, Datapack, MemoryHit } from "../lib/types";
 import { ExpandableText } from "../components/ExpandableText";
 import { Segmented } from "../components/Segmented";
+import { round2, Similarity, WEAK_MEMORY } from "../components/Similarity";
 import { Badge, Button, Card, Empty, ErrorNote, Input, Spinner } from "../components/ui";
 
-// Memories below this cosine aren't shown. context_search returns every memory it ranks, as Cloud's
-// does, for an agent to weigh beside the other sources; a person reading the list needs only the
-// matches. Measured with Meko's embedder, right answers scored 0.40 to 0.72 and
-// unrelated memories 0.11 to 0.29.
-const WEAK_MEMORY = 0.4;
-
 // The cosine similarity every source is shown with: a memory's raw score, or 1 - distance.
-function Similarity({ value }: { value: number | undefined }) {
-  if (value === undefined) return null;
-  return (
-    <Badge tone={value >= 0.5 ? "success" : value >= WEAK_MEMORY ? "primary" : "neutral"}>{value.toFixed(2)}</Badge>
-  );
-}
-
-// Rounded to the two places the badge shows, so a memory shown as 0.40 counts as 0.40.
-const round2 = (v: number) => Math.round(v * 100) / 100;
 const memorySimilarity = (m: MemoryHit) => {
   const v = m.raw_similarity_score ?? m.score;
   return v === undefined ? undefined : round2(v);
@@ -167,7 +154,9 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
                 {r.knowledge_base?.map((k) => (
                   <Card key={k.id} className="p-3">
                     <div className="mb-1.5 flex gap-1.5">
-                      {k.metadata_filters?.source === "memory" && <Badge tone="success">promoted memory</Badge>}
+                      {SHOW_COLLECTIVE && k.metadata_filters?.source === "memory" && (
+                        <Badge tone="success">promoted memory</Badge>
+                      )}
                       <Badge>{k.match_type}</Badge>
                       <Similarity value={1 - k.distance} />
                       {k.rerank_score !== undefined && <Badge>rerank {k.rerank_score.toFixed(2)}</Badge>}

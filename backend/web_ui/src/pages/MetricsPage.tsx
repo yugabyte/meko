@@ -1,4 +1,4 @@
-// The Analytics tab: Meko Cloud's datapack dashboard (what the datapack holds, what retrieval
+// The Metrics tab: Meko Cloud's datapack dashboard (what the datapack holds, what retrieval
 // costs against it) from the same /metrics payload, then Meko local's own Usage section from the
 // call log. Searches and usage cover the range picked; what's stored is always the whole datapack.
 
@@ -9,6 +9,7 @@ import { derive, formatTokens } from "../lib/metrics";
 import { navigate } from "../lib/route";
 import type { Datapack } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
+import { SHOW_COLLECTIVE } from "../lib/features";
 import { Segmented } from "../components/Segmented";
 import { ErrorNote, Loading } from "../components/ui";
 import { ActivityCard } from "../components/metrics/ActivityCard";
@@ -26,7 +27,7 @@ const RANGES = [
 ] as const;
 
 // onChanged reloads the datapack, whose counts the memory breakdown reads.
-export function AnalyticsPage({ datapack, onChanged }: { datapack: Datapack; onChanged: () => void }) {
+export function MetricsPage({ datapack, onChanged }: { datapack: Datapack; onChanged: () => void }) {
   const id = datapack.datapack_id;
   const [range, setRange] = useState<(typeof RANGES)[number]["id"]>("30");
   const days = Number(range);
@@ -64,12 +65,14 @@ export function AnalyticsPage({ datapack, onChanged }: { datapack: Datapack; onC
           split={d.bytes}
           format={bytes}
         />
-        <MemoryBreakdownCard
-          promoted={d.promoted}
-          kept={d.kept}
-          pending={d.pending}
-          onReview={() => navigate({ datapackId: id, tab: "memories" })}
-        />
+        {SHOW_COLLECTIVE && (
+          <MemoryBreakdownCard
+            promoted={d.promoted}
+            kept={d.kept}
+            pending={d.pending}
+            onReview={() => navigate({ datapackId: id, tab: "memories" })}
+          />
+        )}
       </div>
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <StatPairCard

@@ -36,6 +36,9 @@ type Step struct {
 	Step string `json:"step"`
 	Ms   int64  `json:"ms"`
 	N    int    `json:"n"`
+	// IDs is what a memory search returned, so a turn's trace can show what the agent saw. Calls
+	// recorded before it was added have none.
+	IDs []string `json:"ids,omitempty"`
 }
 
 // AddCall records a call.

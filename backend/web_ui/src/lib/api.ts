@@ -17,6 +17,7 @@ import type {
   Health,
   KnowledgeActivity,
   MemoryChange,
+  MemoryMap,
   MemoryPage,
   MekoCloud,
   MekoCloudUpdate,
@@ -163,6 +164,8 @@ export const api = {
       "GET",
       `/memories?datapack_id=${id}&scope=${opts.scope}&q=${enc(opts.q)}&page=${opts.page}`,
     ),
+  memoryMap: (id: string, q = "", ids: string[] = []) =>
+    request<MemoryMap>("GET", `/datapacks/${id}/memory-map?q=${enc(q)}&ids=${enc(ids.join(","))}`),
   memoryHistory: (id: string, memoryId: string) =>
     request<{ history: MemoryChange[] }>("GET", `/memories/${memoryId}/history?datapack_id=${id}`),
   deleteMemory: (id: string, memoryId: string) =>

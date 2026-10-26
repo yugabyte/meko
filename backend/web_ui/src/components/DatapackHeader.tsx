@@ -13,12 +13,12 @@ import { Button, cx, ErrorNote, Input } from "./ui";
 
 const LABELS: Record<Tab, string> = {
   overview: "Overview",
-  analytics: "Analytics",
-  search: "Search",
+  metrics: "Metrics",
+  conversations: "Conversations",
   memories: "Memories",
   knowledge: "Knowledge",
-  conversations: "Conversations",
   artifacts: "Artifacts",
+  search: "Search",
   connect: "Connect",
 };
 
@@ -61,7 +61,7 @@ export function DatapackHeader({
             variant="ghost"
             disabled={exporting}
             onClick={exportIt}
-            title="Download this datapack as a zip: memories, collective memories, conversations, knowledge files and artifacts, with their embeddings and file contents, and the call log"
+            title="Download this datapack as a zip: memories, conversations, knowledge files and artifacts, with their embeddings and file contents, and the call log"
           >
             <Download className="size-3.5" /> <span className="hidden sm:inline">Export</span>
           </Button>
