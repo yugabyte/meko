@@ -218,7 +218,7 @@ export async function installMeko(cfg: Config, o: { keyArg?: string; urlArg?: st
   if (o.keyArg && !given && !isLocalMeko(local, givenUrl, o.keyArg)) {
     d.ui.warn('--meko-key', `not linked: ${hostOf(givenUrl)} is on this computer, so AgentK uses the Meko on this computer.`);
   }
-  const own = ownMekoKey(cfg);
+  const own = ownMekoKey(cfg, local);
   const ownLink = own.apiKey && !isLocalMeko(local, own.url, own.apiKey) && !onLoopback(own.url)
     ? { url: own.url, apiKey: own.apiKey, webUrl: cfg.meko.webUrl || envMekoWebUrl(), apiUrl: cfg.meko.apiUrl || process.env.MEKO_API_URL?.trim() || '' }
     : null;
@@ -412,7 +412,7 @@ export async function runInstall(args: string[]): Promise<void> {
       ensureInKiro: !agents.includes('kiro') ? undefined : async (url, apiKey) => {
         const gaps = async () => kiroMekoGaps(readKiroMeko(), url, kiroAgentLoadsMcp());
         await ensureMekoSetup(
-          { url, apiKey, client: 'kiro', ...setup },
+          { url, apiKey, client: 'kiro', mekoHome: cfg.meko.home || null, ...setup },
           { gaps, latest: () => latestMekoSetup(), run: (pkg) => runMekoSetup(pkg, { url, apiKey, client: 'kiro' }), ask, say, warn: (l, t) => ui.warn(l, t) },
         );
       },
@@ -430,7 +430,7 @@ export async function runInstall(args: string[]): Promise<void> {
           ];
         };
         await ensureMekoSetup(
-          { url, apiKey, ...setup },
+          { url, apiKey, mekoHome: cfg.meko.home || null, ...setup },
           { gaps, latest: () => latestMekoSetup(), run: (pkg) => runMekoSetup(pkg, { url, apiKey }), ask, say, warn: (l, t) => ui.warn(l, t) },
         );
       },

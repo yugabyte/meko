@@ -10,10 +10,13 @@ import { HttpError } from './projects.js';
 
 /** What Settings › Harness needs to set the agents up with AgentK's Meko; tests swap them out. */
 export interface MekoTools {
-  /** Runs Meko's setup for Claude Code against this server and key; rejects when it doesn't finish. */
-  setUpClaude: (url: string, apiKey: string, log: (line: string) => void, claudeCommand: string) => Promise<void>;
+  /**
+   * Runs Meko's setup for Claude Code against this server and key; rejects when it doesn't finish,
+   * with the command to run by hand (`mekoHome`: Meko's data folder, for its `meko token`).
+   */
+  setUpClaude: (url: string, apiKey: string, log: (line: string) => void, claudeCommand: string, mekoHome: string | null) => Promise<void>;
   /** Runs Meko's setup for Kiro (`--client kiro`) against this server and key; rejects when it doesn't finish. */
-  setUpKiro: (url: string, apiKey: string, log: (line: string) => void) => Promise<void>;
+  setUpKiro: (url: string, apiKey: string, log: (line: string) => void, mekoHome: string | null) => Promise<void>;
   /** Tries one of Claude Code's tokens on a Meko server: the datapacks it sees, or why not. */
   tryToken: (url: string, token: string) => Promise<TokenTry>;
   /**
@@ -24,8 +27,8 @@ export interface MekoTools {
 }
 
 export const defaultMekoTools: MekoTools = {
-  async setUpClaude(url, apiKey, log, claudeCommand) {
-    const manual = manualMekoSetup(url);
+  async setUpClaude(url, apiKey, log, claudeCommand, mekoHome) {
+    const manual = manualMekoSetup(url, 'claude-code', mekoHome);
     const pkg = await latestMekoSetup().catch((e: unknown) => {
       throw new Error(`Couldn't look up Meko's setup on npm (${errMsg(e)}). Run it yourself: ${manual}`);
     });
@@ -37,8 +40,8 @@ export const defaultMekoTools: MekoTools = {
       throw new Error(`Meko's setup didn't finish.${left.length ? ` Still: ${left.join(' ')}` : ''} Run it yourself: ${manual}`);
     }
   },
-  async setUpKiro(url, apiKey, log) {
-    const manual = manualMekoSetup(url, 'kiro');
+  async setUpKiro(url, apiKey, log, mekoHome) {
+    const manual = manualMekoSetup(url, 'kiro', mekoHome);
     const pkg = await latestMekoSetup().catch((e: unknown) => {
       throw new Error(`Couldn't look up Meko's setup on npm (${errMsg(e)}). Run it yourself: ${manual}`);
     });
@@ -65,7 +68,7 @@ export async function setUpClaudeMeko(core: Core, tools: MekoTools): Promise<voi
       core.log.info(`meko setup: ${line}`);
       tail.push(line);
       if (tail.length > 5) tail.shift();
-    }, core.config.claude.command);
+    }, core.config.claude.command, core.mekoHome());
   } catch (e) {
     const why = errMsg(e).replace(/([^.!?])$/, '$1.');
     throw new HttpError(502, `${why}${tail.length ? ` Last output: ${tail.join(' / ')}` : ''}`);
@@ -87,7 +90,7 @@ export async function setUpKiroMeko(core: Core, tools: MekoTools): Promise<void>
       core.log.info(`meko setup (kiro): ${line}`);
       tail.push(line);
       if (tail.length > 5) tail.shift();
-    });
+    }, core.mekoHome());
   } catch (e) {
     const why = errMsg(e).replace(/([^.!?])$/, '$1.');
     throw new HttpError(502, `${why}${tail.length ? ` Last output: ${tail.join(' / ')}` : ''}`);

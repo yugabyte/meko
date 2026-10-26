@@ -129,6 +129,18 @@ describe("installer: Meko's Meko Cloud link, or the Meko on this computer", () =
     expect(unlinked.calls).toEqual([`claude ${LOCAL.url} local-token`]);
   });
 
+  it("hands Meko a Meko Cloud key found next to the local Meko's URL, with Meko Cloud's URL", async () => {
+    // What a setup run against the local Meko without a key leaves: its URL next to the Meko Cloud key.
+    const c = cfg();
+    c.meko.url = LOCAL.url;
+    c.meko.apiKey = 'mko_tkn_own';
+    const { d, calls } = deps({ local: true, cloud: UNSET });
+    expect(await installMeko(c, { noMeko: false }, d)).toBe(true);
+    expect(calls).toEqual([`link ${DEFAULT_MEKO_URL} mko_tkn_own`, `claude ${DEFAULT_MEKO_URL} mko_tkn_own`]);
+    // Not dropped as a copy of the local Meko's token.
+    expect(c.meko).toMatchObject({ url: LOCAL.url, apiKey: 'mko_tkn_own' });
+  });
+
   it('stops on a given key Meko refuses with no one to ask, and goes on without it when someone says so', async () => {
     const opts = { keyArg: 'mko_tkn_bad', noMeko: false };
     await expect(installMeko(cfg(), opts, deps({ canAsk: false, local: true, cloud: UNSET, linkError: '401' }).d)).rejects.toThrow(/Meko didn't link .*: 401. Fix the key/);

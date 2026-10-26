@@ -5,7 +5,7 @@ import { claudeUserDir } from './claude.js';
 import { DEFAULT_MEKO_URL, DEFAULT_MEKO_WEB_URL, mekoWebUrl } from '../shared/mekourls.js';
 import type { MekoKeySource } from '../shared/types.js';
 import { DEFAULT_HARNESS, HARNESS_IDS, isHarnessId, type HarnessId } from '../shared/harnesses.js';
-import { isLocalMeko, localMeko, mekoLinkHandedOver, originOf } from './mekolocal.js';
+import { isLocalMeko, isMekoCloudKey, localMeko, mekoLinkHandedOver, originOf, type LocalMeko } from './mekolocal.js';
 import { expandHome, type Paths } from './paths.js';
 
 export type UpdateChannel = 'stable' | 'prerelease' | 'off';
@@ -217,10 +217,11 @@ export function isLoopback(bind: string): boolean {
  * run) AgentK's own sources stand in: config first, then the environment, then Claude Code's
  * settings.json env. The key comes from the first of those that has one. The URL comes from the
  * first that has one, except that a later source's URL is skipped when that source has a key of
- * its own: it belongs to that other key. With no URL, Meko Cloud. With no key in any of them, the
- * Meko running on this computer, whose token goes only to its own URL; a key that's a copy of its
- * token or for its URL (Meko's setup for Claude Code writes one) is the live local Meko too, so a
- * copy never goes stale.
+ * its own: it belongs to that other key, and so is the local Meko's URL for a Meko Cloud key. With
+ * no URL, Meko Cloud. With no key in any of them, the Meko running on this computer, whose token
+ * goes only to its own URL; a key that's a copy of its token or for its URL (Meko's setup for
+ * Claude Code writes one) is the live local Meko too, so a copy never goes stale. A Meko Cloud key
+ * is never a copy (`isLocalMeko`).
  */
 export function resolveMeko(cfg: Config): { url: string; apiKey: string } {
   const { url, apiKey } = resolveMekoWithSource(cfg);
@@ -232,8 +233,15 @@ export function mekoConfigured(cfg: Config): boolean {
   return !!resolveMeko(cfg).apiKey;
 }
 
-/** AgentK's own Meko key and URL (config, the environment, Claude Code's settings), before Meko owns the link. */
-export function ownMekoKey(cfg: Config): { url: string; apiKey: string; keySource: 'config' | 'env' | 'claude' | null } {
+/**
+ * AgentK's own Meko key and URL (config, the environment, Claude Code's settings), before Meko owns
+ * the link. A Meko Cloud key never takes the URL of the Meko on this computer (`local`): Meko's
+ * setup run against it without a key writes that URL next to the Meko Cloud key the user had.
+ */
+export function ownMekoKey(
+  cfg: Config,
+  local: LocalMeko | null = localMeko().meko,
+): { url: string; apiKey: string; keySource: 'config' | 'env' | 'claude' | null } {
   const sources = [
     () => ({ url: cfg.meko.url, apiKey: cfg.meko.apiKey }),
     () => ({ url: process.env.MEKO_MCP_URL, apiKey: process.env.MEKO_API_KEY }),
@@ -247,7 +255,8 @@ export function ownMekoKey(cfg: Config): { url: string; apiKey: string; keySourc
   });
   const keyAt = sources.findIndex((s) => s.apiKey);
   const apiKey = keyAt < 0 ? '' : sources[keyAt].apiKey;
-  const url = sources.find((s, i) => s.url && (keyAt < 0 || i <= keyAt || !s.apiKey))?.url || DEFAULT_MEKO_URL;
+  const localOrigin = local && isMekoCloudKey(apiKey) ? originOf(local.url) : null;
+  const url = sources.find((s, i) => s.url && (keyAt < 0 || i <= keyAt || !s.apiKey) && (!localOrigin || originOf(s.url) !== localOrigin))?.url || DEFAULT_MEKO_URL;
   return { url, apiKey, keySource: keyAt < 0 ? null : (['config', 'env', 'claude'] as const)[keyAt] };
 }
 

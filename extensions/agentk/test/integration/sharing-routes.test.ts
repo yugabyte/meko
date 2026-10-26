@@ -410,6 +410,30 @@ describe('HTTP API: sharing, invites and Meko', () => {
     vi.unstubAllEnvs();
   });
 
+  it("hands Meko a Meko Cloud key that a keyless setup left next to the local Meko's URL, and sets Claude Code up on Meko Cloud", async () => {
+    // Claude Code's settings after Meko's setup ran against the local Meko with no key: its URL, and
+    // the Meko Cloud key the user had.
+    const dir = process.env.CLAUDE_CONFIG_DIR!;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'settings.json'), JSON.stringify({ env: { MEKO_MCP_URL: 'http://127.0.0.1:7778/mcp', MEKO_API_KEY: 'mko_tkn_abcdefghij1234' } }));
+    env.core.updateConfig((c) => {
+      c.meko.apiKey = '';
+    });
+    env.local.state = 'running';
+    env.local.meko = { url: 'http://127.0.0.1:7778/mcp', token: 'local-token' };
+    env.local.cloud = { set: false, url: '', apiKey: '', webUrl: '', apiUrl: '' };
+    let release = () => undefined as void;
+    env.handOverHold.value = new Promise<void>((r) => (release = r));
+    await env.core.refreshMeko();
+    // Used on Meko Cloud right away, while Meko checks it.
+    expect(env.handOvers).toEqual([{ url: 'https://mcp.mekodata.ai/mcp', apiKey: 'mko_tkn_abcdefghij1234', webUrl: '', apiUrl: '' }]);
+    expect(env.core.mekoStatus).toMatchObject({ source: 'claude', url: 'https://mcp.mekodata.ai/mcp' });
+    release();
+    await waitFor(() => env.core.mekoStatus.source, (src) => src === 'meko', 5000, 'the handover');
+    expect((await call('POST', '/api/settings/meko/claude-setup')).statusCode).toBe(200);
+    expect(env.mekoTools.calls.filter((c) => c.name === 'setUpClaude')).toEqual([{ name: 'setUpClaude', args: ['https://mcp.mekodata.ai/mcp', 'mko_tkn_abcdefghij1234'] }]);
+  });
+
   it("keeps AgentK's own key when Meko won't take it, and doesn't offer it again", async () => {
     env.core.updateConfig((c) => {
       c.meko.apiKey = 'mko_tkn_abcdefghij1234';
@@ -489,8 +513,8 @@ describe('HTTP API: sharing, invites and Meko', () => {
 
     // Asked to, the setup runs once, and the check after it finds nothing left.
     const setUp = env.mekoTools.tools.setUpClaude;
-    env.mekoTools.tools.setUpClaude = async (url, apiKey, log, claude) => {
-      await setUp(url, apiKey, log, claude);
+    env.mekoTools.tools.setUpClaude = async (url, apiKey, log, claude, mekoHome) => {
+      await setUp(url, apiKey, log, claude, mekoHome);
       writeClaude(url, apiKey);
     };
     expect((await call('POST', '/api/settings/meko/claude-setup')).statusCode).toBe(200);
