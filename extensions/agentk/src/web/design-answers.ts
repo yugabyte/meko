@@ -225,13 +225,47 @@ function changes(q: DesignQuestion, d: Draft): boolean {
   return d.choice !== null && (d.choice !== decidedOption(q) || !!d.text.trim());
 }
 
+// When answers last went from this page for AgentK to revise each session's design: the design
+// panel words its working line as a revision until that turn is over (`designWorking` in util.ts).
+// Kept for this page only; elsewhere the session's status alone shows AgentK at work.
+const sentAt = new Map<string, number>();
+
 /**
  * After answers went to AgentK to revise the design: the feedback is forgotten, and the answers
  * are kept until their questions are no longer open (`pruneDrafts`), so they show until the
- * questions come back resolved, and stay for questions that aren't (a markdown design's).
+ * questions come back resolved, and stay for questions that aren't (a markdown design's). When
+ * they went (`at`) is kept for the design panel's working line.
  */
-export function revisionSent(sessionId: string): void {
+export function revisionSent(sessionId: string, at = Date.now()): void {
+  sentAt.set(sessionId, at);
   saveDrafts(sessionId, { answers: loadDrafts(sessionId).answers, feedback: '' });
+}
+
+/** When this page last sent a session's answers to revise its design, while that revision is under way. */
+export function revisionSentAt(sessionId: string): number | null {
+  return sentAt.get(sessionId) ?? null;
+}
+
+/** Forgets that a revision was sent, once its turn is over. */
+export function clearRevisionSent(sessionId: string): void {
+  if (!sentAt.delete(sessionId)) return;
+  for (const fn of listeners) fn(sessionId);
+}
+
+/** `revisionSentAt`, kept up to date. */
+export function useRevisionSentAt(sessionId: string): number | null {
+  const [at, setAt] = useState(() => revisionSentAt(sessionId));
+  useEffect(() => {
+    setAt(revisionSentAt(sessionId));
+    const onChange = (id: string) => {
+      if (id === sessionId) setAt(revisionSentAt(sessionId));
+    };
+    listeners.add(onChange);
+    return () => {
+      listeners.delete(onChange);
+    };
+  }, [sessionId]);
+  return at;
 }
 
 /**

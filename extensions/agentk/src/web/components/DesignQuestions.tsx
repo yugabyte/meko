@@ -4,6 +4,7 @@ import type { DatapackRef, DesignDoc, DesignQuestion, Session } from '../../shar
 import { api, errorMessage } from '../api';
 import {
   approvalSent, changeDraft, decidedOption, draftFor, draftsBlocker, draftsPersist, loadDrafts, pruneDrafts, revisionSent, saveDrafts, shownDraft, toRequest, useDesignDrafts,
+  useRevisionSentAt,
   type Draft,
 } from '../design-answers';
 import { cx, designApprovalBlocker, designReviseBlocker, heldForTurnEnd, isMac, isSubmitKey } from '../util';
@@ -204,6 +205,12 @@ export function DesignQuestions({
   const [note, setNote] = useState<string | null>(null);
   const [sending, setSending] = useState<'revise' | 'approve' | 'cancel' | null>(null);
   const approve = useRef<HTMLButtonElement>(null);
+  // The line saying a revision was sent goes once that revision's turn is over (the design panel's
+  // header shows AgentK at work meanwhile).
+  const sentAt = useRevisionSentAt(session.id);
+  useEffect(() => {
+    if (sentAt === null) setNote(null);
+  }, [sentAt]);
 
   const editable = session.stage === 'design' && session.desired === 'running';
   // While an approval waits for the turn's end, the answers it took stay as they were.

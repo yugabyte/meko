@@ -175,3 +175,15 @@ keeps them, in case it's dropped). After a revision it forgets the feedback and 
 until their questions are no longer open, so they still show until the questions come back
 resolved, and for a markdown design's questions until AgentK changes them. Answers reach
 Meko in the revised design and the session's conversation.
+
+While AgentK works on the design, the panel's header shows it: a bar runs along the header's
+bottom edge, and the header's "updated" time reads **Revising** (after **Send for revision** from
+this page) or **Working** (any other turn), with the keycaps. `designWorking()` in `src/web/util.ts`
+decides it from the session's status, so a reload or another screen shows it too: a session in
+Design with a design on screen and AgentK working, never while Claude waits on the user. The time
+of the click (`revisionSent()` in `src/web/design-answers.ts`, kept for this page only) covers the
+10 seconds (`REVISION_GRACE_MS`) before Claude reports the turn, and is forgotten once the turn is
+over (`revisionOver()`), along with the footer's "Sent" line. A design written while the bar
+showed, or just after it stopped, makes the "updated just now" time flash once as it comes back
+(on a phone with tabs, where the time is hidden, it shows for those few seconds). With reduced
+motion the bar stands still and nothing flashes.

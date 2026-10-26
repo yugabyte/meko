@@ -694,3 +694,26 @@ export function designReviseBlocker(session: Session): string | null {
   if (otherPrompt(session)) return 'AgentK is waiting on you in the terminal. Answer it first.';
   return null;
 }
+
+/** How long after Send for revision the design panel shows AgentK at work before Claude reports the turn. */
+export const REVISION_GRACE_MS = 10_000;
+
+/**
+ * Whether the design panel's header shows AgentK at work on the design (its edge loader), and how
+ * it's worded: 'revising' after Send for revision from this page (`sentAt`), 'working' for any other
+ * turn, null when it doesn't show. It follows the session's status, so a reload or another screen
+ * shows it too; `sentAt` only covers the moment between the click and Claude reporting the turn.
+ * Never while Claude waits on the user, nor before there's a design (the panel has its own line then).
+ */
+export function designWorking(session: Session, sentAt: number | null, now: number): 'revising' | 'working' | null {
+  if (session.stage !== 'design' || session.desired !== 'running' || !session.hasDesign || session.approvalQueued) return null;
+  if (session.status === 'working') return sentAt !== null ? 'revising' : 'working';
+  const justSent = sentAt !== null && now - sentAt < REVISION_GRACE_MS;
+  if (justSent && session.status !== 'exited' && session.status !== 'starting' && !otherPrompt(session)) return 'revising';
+  return null;
+}
+
+/** Whether a revision sent at `sentAt` is done with: its grace is over and no turn is running. */
+export function revisionOver(session: Session, sentAt: number | null, now: number): boolean {
+  return sentAt !== null && now - sentAt >= REVISION_GRACE_MS && session.status !== 'working' && !session.midTurn;
+}

@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DatapackRef, DesignDoc, Session } from '../../shared/types';
 import { api, errorMessage } from '../api';
-import { hasDecisionChanges, useDesignDrafts } from '../design-answers';
+import { clearRevisionSent, hasDecisionChanges, useDesignDrafts, useRevisionSentAt } from '../design-answers';
 import { designFrameDoc } from '../design-frame';
 import { useIsMobile } from '../hooks/useMedia';
 import { routePath } from '../router';
 import { useDataTheme } from '../theme';
-import { approveLabel, cx, designApprovalBlocker, headerApproves, relativeTime } from '../util';
+import { approveLabel, cx, designApprovalBlocker, designWorking, headerApproves, relativeTime, REVISION_GRACE_MS, revisionOver } from '../util';
 import { DesignQuestions } from './DesignQuestions';
 import { MarkdownView } from './MarkdownView';
 import { SidePanel } from './SidePanel';
@@ -51,6 +51,7 @@ export function DesignPanel({
   };
   const qcol = useRef<HTMLElement>(null);
   const mobile = useIsMobile();
+  const { working, landed } = useDesignWorking(session);
 
   const theme = useDataTheme();
 
@@ -144,11 +145,22 @@ export function DesignPanel({
     <>
       <div className={cx('design-hd', tabs && 'has-tabs')}>
         <b>{page ? `Design · ${session.name}` : 'Design'}</b>
-        {doc?.updatedAt && (
-          <span className="muted small design-updated" title={doc.fromPr ? `${doc.fromPr}, as the PR names it in Meko` : undefined}>
-            {doc.fromPr ? `from the PR · fetched ${relativeTime(doc.updatedAt)}` : `updated ${relativeTime(doc.updatedAt)}`}
+        {working ? (
+          <span className="design-working" role="status">
+            <Busy label={working === 'revising' ? 'Revising' : 'Working'} />
           </span>
+        ) : (
+          doc?.updatedAt && (
+            <span
+              key={landed ?? 'updated'}
+              className={cx('muted small design-updated', landed !== null && 'landed')}
+              title={doc.fromPr ? `${doc.fromPr}, as the PR names it in Meko` : undefined}
+            >
+              {doc.fromPr ? `from the PR · fetched ${relativeTime(doc.updatedAt)}` : `updated ${relativeTime(doc.updatedAt)}`}
+            </span>
+          )
         )}
+        {working && <span className="design-edge" aria-hidden="true" />}
         {tabs && (
           <div className="seg design-tabs" role="tablist" aria-label="Design and its questions">
             <button role="tab" aria-selected={tab === 'design'} className={cx(tab === 'design' && 'on')} onClick={() => showTab('design')}>
@@ -234,4 +246,57 @@ export function DesignPanel({
       {content}
     </SidePanel>
   );
+}
+
+/** How long after the working line stops a newly written design still counts as the revision landing. */
+const LATE_MS = 3_000;
+/** How long the header's time stays marked as just landed (on a phone with tabs it shows only then). */
+const LANDED_MS = 3_000;
+
+/**
+ * AgentK at work on the session's design, for the header's edge loader (`designWorking`), and the
+ * design it last landed, while that's news: a design written while the loader showed (or just after
+ * it stopped) makes the header's time flash once as it comes back.
+ */
+function useDesignWorking(session: Session): { working: 'revising' | 'working' | null; landed: number | null } {
+  const sentAt = useRevisionSentAt(session.id);
+  // Draws again when the grace after Send for revision ends.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (sentAt === null) return;
+    const t = setTimeout(() => setTick((n) => n + 1), Math.max(0, sentAt + REVISION_GRACE_MS - Date.now()) + 50);
+    return () => clearTimeout(t);
+  }, [sentAt]);
+  const now = Date.now();
+  const working = designWorking(session, sentAt, now);
+  const over = revisionOver(session, sentAt, now);
+  useEffect(() => {
+    if (over) clearRevisionSent(session.id);
+  }, [over, session.id]);
+
+  // The design as the loader started (undefined while it isn't showing), and when it last stopped.
+  const before = useRef<number | null | undefined>(undefined);
+  const stoppedAt = useRef(0);
+  const [landed, setLanded] = useState<number | null>(null);
+  const at = session.designUpdatedAt;
+  const on = working !== null;
+  useEffect(() => {
+    if (on) {
+      if (before.current === undefined) before.current = at;
+    } else if (before.current !== undefined) {
+      const changed = before.current !== at;
+      before.current = undefined;
+      stoppedAt.current = changed ? 0 : Date.now();
+      if (changed) setLanded(at);
+    } else if (Date.now() - stoppedAt.current < LATE_MS) {
+      stoppedAt.current = 0;
+      setLanded(at);
+    }
+  }, [on, at]);
+  useEffect(() => {
+    if (landed === null) return;
+    const t = setTimeout(() => setLanded(null), LANDED_MS);
+    return () => clearTimeout(t);
+  }, [landed]);
+  return { working, landed };
 }
