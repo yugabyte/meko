@@ -207,7 +207,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Merge is refused while `mergeBlockers` isn't empty; blockers are phrased for users. Only
       blockers that clear by themselves let it be queued (`MergeInfo.queueable`); any other one drops
       a queued merge, and the user is told (Run to merge's merge waits instead, and the user is told
-      once per new set of blockers only they can clear).
+      once per new set of blockers only they can clear). Under Run to merge, notifications are only
+      for what needs the user and for the merge; progress AgentK handles itself goes through
+      `notifyProgress`, which skips it.
 - [ ] Cleanup never force-removes a worktree with uncommitted changes, and never deletes the
       user's main checkout or repo. Trimming idle worktrees never uses `--force`.
 - [ ] The only changes made in the user's main checkout are fast-forwarding the base branch when a

@@ -321,8 +321,10 @@ activity.
 
 ## Notifications
 
-A browser notification fires when any session moves to *needs you* or finishes a turn while its
-tab is hidden. You can mute it per project. Only one open AgentK page shows them, the one used
+A browser notification fires when any session moves to *needs you*, and for the gates and the
+PR's news (a review arrived, CI failed, a merge) unless the session's tab is open in front of you.
+A session on [Run to merge](lifecycle.md#run-to-merge) notifies only when it's done or needs you. You
+can mute them per project. Only one open AgentK page shows them, the one used
 last (pages queue for a Web Lock and a page that gets focus steals it; when it closes, the next one
 takes over), so each shows once. They go through a minimal service worker (`/sw.js`), so a
 notification stays clickable after the page that showed it reloads (as open pages do after an

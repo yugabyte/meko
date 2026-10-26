@@ -96,6 +96,8 @@ export const DESIGN_READY = 'Design ready for your approval';
 /** Merge blockers AgentK works on by itself in PR & Review (the CI and merge conflict watchers). */
 const CI_FAILING = 'CI is failing.';
 const CONFLICTING = 'The branch has merge conflicts.';
+/** The merge blocker for a question in the terminal, which already notified the user as Needs you. */
+const IN_TERMINAL = 'AgentK is waiting on you in the terminal.';
 
 /** Prompts queued for Claude in the Review stage, in the order they go out. */
 const QUEUE_ORDER = ['review', 'review-people', 'review-held', 'conflicts', 'ci'] as const;
@@ -1333,10 +1335,10 @@ export class Lifecycle {
         this.sessions.event(row.id, 'review', `AgentK review: ${firstLine}`);
         if (cleanAgentkReview(latest.body)) {
           reviewState = 'approved';
-          this.sessions.notifyUser(row.id, 'AgentK review', 'No findings.');
+          this.notifyProgress(row.id, 'AgentK review', 'No findings.');
         } else {
           reviewState = 'addressing';
-          this.sessions.notifyUser(row.id, 'AgentK review arrived', firstLine);
+          this.notifyProgress(row.id, 'AgentK review arrived', firstLine);
           this.enqueue(row.id, 'review');
         }
       } else if (reviewState === 'waiting' || reviewState === 'in_review' || reviewState === 'refused') {
@@ -1405,7 +1407,7 @@ export class Lifecycle {
       if (toldOutside.length) this.sessions.event(row.id, 'review', `Review from ${loginList(toldOutside)} (not a collaborator on the repo)`);
       if (sendable.length) {
         reviewState = 'addressing';
-        this.sessions.notifyUser(row.id, 'Review arrived', `From ${loginList(sendable)}.`);
+        this.notifyProgress(row.id, 'Review arrived', `From ${loginList(sendable)}.`);
         this.enqueuePeople(row.id, sendable.map((r) => r.author!.login));
       }
       if (toHold.length) this.hold(row, toHold, details);
@@ -1446,7 +1448,7 @@ export class Lifecycle {
     if (row.queued_gate !== 'merge' || this.merging.has(id) || row.stage !== 'review' || row.desired !== 'running') return;
     if (info.canMerge) {
       this.sessions.event(id, 'queued', 'Queued merge: nothing blocks it now; merging');
-      this.sessions.notifyUser(id, 'Merging', `PR #${row.pr_number} is ready: merging it now, ${row.auto_run ? 'for Run to merge' : 'as you queued'}.`);
+      this.notifyProgress(id, 'Merging', `PR #${row.pr_number} is ready: merging it now, as you queued.`);
       this.autoRunTold.delete(id);
       this.autoRunBlocked.delete(id);
       this.merging.add(id);
@@ -1473,13 +1475,14 @@ export class Lifecycle {
 
   /**
    * Run to merge keeps its merge queued through blockers that don't clear by themselves. AgentK works
-   * on failing CI and merge conflicts (their watchers tell the user when they hand them over); for the
-   * rest, the user is told once per new set.
+   * on failing CI and merge conflicts (their watchers tell the user when they hand them over), and a
+   * question in the terminal was told as Needs you; for the rest, the user is told once per new set.
    */
   private autoRunWaits(id: string, info: MergeInfo): void {
     if (info.hard.length) this.autoRunBlocked.add(id);
     else this.autoRunBlocked.delete(id);
-    const yours = info.hard.filter((b) => b !== CI_FAILING && !(b === CONFLICTING && this.core.config.pr.resolveConflicts));
+    // A question in the terminal had a Needs you notification of its own.
+    const yours = info.hard.filter((b) => b !== CI_FAILING && b !== IN_TERMINAL && !(b === CONFLICTING && this.core.config.pr.resolveConflicts));
     const key = yours.join('\n');
     if (key === (this.autoRunTold.get(id) ?? '')) return;
     this.autoRunTold.set(id, key);
@@ -1604,7 +1607,7 @@ export class Lifecycle {
     const next = this.queue(id);
     const later = reviewQueued(next) ? 'AgentK will fix it after the review.'
       : next.conflicts ? 'AgentK will look at it after resolving the merge conflicts.' : 'AgentK is fixing it.';
-    this.sessions.notifyUser(id, 'CI failed', `${names}. ${later}`);
+    this.notifyProgress(id, 'CI failed', `${names}. ${later}`);
   }
 
   /**
@@ -1642,7 +1645,7 @@ export class Lifecycle {
     this.enqueue(id, 'conflicts', { sha: head });
     const next = this.queue(id);
     const afterReview = reviewQueued(next);
-    this.sessions.notifyUser(id, 'Merge conflicts', `PR #${st.number} conflicts with ${base}. ${afterReview ? 'AgentK will resolve them after the review.' : 'AgentK is resolving them.'}`);
+    this.notifyProgress(id, 'Merge conflicts', `PR #${st.number} conflicts with ${base}. ${afterReview ? 'AgentK will resolve them after the review.' : 'AgentK is resolving them.'}`);
   }
 
   /** A requested merge that didn't happen: the PR was closed, or is still open well after the request. */
@@ -1715,7 +1718,7 @@ export class Lifecycle {
     const turn = this.inTurn(row);
     if (st.state !== 'OPEN') block('The PR is not open.');
     if (working) block('AgentK is still working.', true);
-    else if (row.status === 'needs_input') block('AgentK is waiting on you in the terminal.', turn);
+    else if (row.status === 'needs_input') block(IN_TERMINAL, turn);
     if (unpushed) block("The branch has commits that aren't pushed to the PR.", turn || !!opts.turnAtStart);
     if (uncommitted) block(`The worktree has ${uncommitted === 1 ? '1 uncommitted file' : `${uncommitted} uncommitted files`}: commit or discard them.`, turn || !!opts.turnAtStart);
     const ci = github.ciState(st.statusCheckRollup);
@@ -2041,6 +2044,19 @@ export class Lifecycle {
     this.sessions.event(id, 'auto-run', `Run to merge stopped: ${why}`);
   }
 
+  /**
+   * A notification of progress AgentK handles by itself (a review arrived, CI failed, merging): left
+   * out while Run to merge is on, which tells the user only when it's done or needs them.
+   */
+  private notifyProgress(id: string, title: string, body: string): void {
+    if (!sessionRow(this.db, id)?.auto_run) this.sessions.notifyUser(id, title, body);
+  }
+
+  /** Run to merge's notification that it's done: its PR merged (here, or on GitHub). */
+  private autoRunDone(row: SessionRow, st: github.PrStatus): void {
+    if (row.auto_run) this.sessions.notifyUser(row.id, 'Merged', `PR #${st.number} is merged: Run to merge is done.`);
+  }
+
   /** Turns Run to merge off, leaving its queued gate alone; false when it wasn't on. */
   private autoRunOff(id: string): boolean {
     if (!sessionRow(this.db, id)?.auto_run) return false;
@@ -2142,6 +2158,7 @@ export class Lifecycle {
       if (!announced) {
         this.sessions.event(row.id, 'merged', `PR #${st.number} merged; closing when AgentK finishes`, { url: st.url });
         await this.recordPrStats(row, st);
+        this.autoRunDone(row, st);
       }
       if (row.stage !== 'merge') this.sessions.setStage(row.id, 'merge', 'auto');
       return;
@@ -2151,6 +2168,7 @@ export class Lifecycle {
       if (!announced) {
         this.sessions.event(row.id, 'merged', `PR #${st.number} merged`, { url: st.url });
         await this.recordPrStats(row, st);
+        this.autoRunDone(row, st);
       }
       if (row.stage !== 'merge') this.sessions.setStage(row.id, 'merge', 'auto');
       // What the session learned goes to Meko first, while Claude is still there; this runs again
