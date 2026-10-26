@@ -7,6 +7,7 @@ import type {
   Artifact,
   ArtifactList,
   AuthStatus,
+  CloudDatapacks,
   ContextSearch,
   ConversationDetail,
   Conversation,
@@ -158,6 +159,7 @@ export const api = {
   mekoCloud: () => request<MekoCloud>("GET", "/settings/meko-cloud"),
   linkMekoCloud: (u: MekoCloudUpdate) => request<MekoCloud>("PUT", "/settings/meko-cloud", u),
   unlinkMekoCloud: () => request<MekoCloud>("DELETE", "/settings/meko-cloud"),
+  cloudDatapacks: () => request<CloudDatapacks>("GET", "/meko-cloud/datapacks"),
 
   memories: (id: string, opts: { scope: "memories" | "learnings"; q: string; page: number }) =>
     request<MemoryPage>(

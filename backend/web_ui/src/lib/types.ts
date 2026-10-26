@@ -408,6 +408,26 @@ export interface MekoCloud {
   default_web_url: string;
 }
 
+// GET /meko-cloud/datapacks: the linked Meko Cloud's datapacks, newest first.
+export interface CloudDatapack {
+  datapack_id: string;
+  datapack_name: string;
+  description: string;
+  // owner for the account's own; any other (maintainer, contributor, viewer) was shared with it.
+  grant: string;
+  created_at: string;
+  updated_at: string;
+  // Opens it in the link's web app; null when that can't be known.
+  web_url: string | null;
+}
+
+export interface CloudDatapacks {
+  linked: boolean;
+  api_url?: string;
+  web_url?: string | null;
+  datapacks: CloudDatapack[];
+}
+
 // PUT /settings/meko-cloud: a field left out is unchanged; an empty api_key keeps the saved one.
 export interface MekoCloudUpdate {
   url?: string;

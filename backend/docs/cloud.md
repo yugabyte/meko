@@ -18,6 +18,9 @@ in one place, checked before it's saved, and read by every extension the same wa
 | **Meko Cloud's MCP URL is saved as empty**, and its web app and API URLs are worked out (`https://cloud.mekodata.ai`, plus `/api/v1`); another server's web app must be set | The same rule AgentK's `mekoWebUrl` had. A server whose web app isn't known has no datapack links or sharing until it's set, which the page says. |
 | **Unlink keeps the URLs and removes the key** | Linking again takes only the key. Unlinked, the extensions use this Meko. `meko destroy` removes the key from the secret store with the client token, so none is left in the Keychain. |
 | **Extensions read the link from `meko token --json`**, and are told when it changes (below) | Extensions already run it for this Meko's own MCP URL and token; one command gives them both. |
+| **Meko lists the linked Meko Cloud's datapacks itself** (`GET /api/v1/meko-cloud/datapacks`, `Service.Datapacks`), asking the link's REST API for `GET /datapacks` with the key | The web UI and `meko datapacks --cloud` show them beside this Meko's, and the key never leaves Meko. It's the REST API and key AgentK's knowledge uploads and Presenter's decks already use with Meko Cloud. A link to another server with no web app or API URL has no API to ask, so it says to set one. |
+| **Any client token can list them**, unlike the link's own routes | An agent or extension may want to know which datapacks the linked account has. The reply holds names, descriptions and grants, never the key, and the client token still can't read or change the link. |
+| **Only the fields Meko shows are copied** from Meko Cloud's rows | Cloud's rows also carry each datapack's database user and connection string, which no caller of a route that takes the client token should get. |
 
 ## Routes and command
 
@@ -36,6 +39,25 @@ in one place, checked before it's saved, and read by every extension the same wa
   running it goes through the API listener (admin token), so the running extensions are told;
   otherwise it saves the link itself, and they read it when they next ask. `meko status` shows
   the link (`Meko Cloud: linked to <url> (key …abcd)`, or not linked).
+
+## Listing Meko Cloud's datapacks
+
+`GET /api/v1/meko-cloud/datapacks` (`cloudlink.Service.Datapacks`, `ListDatapacks`) asks the link's
+REST API (`effective_api_url`) for `GET /datapacks` with the key as a Bearer token, within 10 s.
+It sends no query: Meko Cloud answers that with every datapack the account can see, owned and
+shared, in one list (a `limit` would switch it to pages). Each row keeps `datapack_id`,
+`datapack_name`, `description`, `grant` (`owner` for the account's own; any other, such as
+`maintainer`, `contributor` or `viewer`, means it was shared with it), `created_at` and `updated_at`,
+and gains `web_url`, the datapack in the link's web app (`<web_url>/datapacks/<id>`, null when the
+web app isn't known). The rows are newest first.
+
+- Unlinked: `{linked: false, datapacks: []}`, and Meko Cloud isn't asked.
+- A failure is a 502 with a code, never a 401 (which the web UI reads as its own sign-in lost):
+  `CLOUD_NO_API_URL` (the link has no API URL), `CLOUD_UNREACHABLE` (no answer in time),
+  `CLOUD_KEY_REFUSED` (a 401 or 403), `CLOUD_LIST_FAILED` (any other error, with Meko Cloud's
+  message). A link that can't be read is the usual 500.
+- It takes the credential every data route does: the owner on the web listener; the admin or the
+  client token on the API listener (nothing with `[server] auth = "none"`).
 
 ## What extensions see
 

@@ -5,6 +5,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { api } from "../lib/api";
+import { notifyCloudChanged } from "../lib/cloud";
 import { httpHost, mekoWebUrl } from "../lib/mekourls";
 import type { MekoCloud, MekoCloudUpdate } from "../lib/types";
 import { MekoGetKey } from "../components/MekoGetKey";
@@ -78,6 +79,7 @@ function LinkForm({ cloud, onSaved }: { cloud: MekoCloud; onSaved: (c: MekoCloud
     setSaved(null);
     try {
       show(await api.linkMekoCloud(next));
+      notifyCloudChanged();
       setConfirmHost(null);
       setSaved("Linked. The running extensions use it now.");
     } catch (err) {
@@ -93,6 +95,7 @@ function LinkForm({ cloud, onSaved }: { cloud: MekoCloud; onSaved: (c: MekoCloud
     setSaved(null);
     try {
       show(await api.unlinkMekoCloud());
+      notifyCloudChanged();
       setConfirmUnlink(false);
       setSaved("Unlinked. The extensions use this Meko now.");
     } catch (err) {

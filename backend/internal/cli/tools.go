@@ -16,6 +16,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/yugabyte/meko/backend/internal/auth"
+	"github.com/yugabyte/meko/backend/internal/cloudlink"
 	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/version"
 )
@@ -39,6 +40,7 @@ type toolFlags struct {
 	files                  []string
 	limit                  int
 	json, mcp, force       bool
+	cloud                  bool // datapacks' --cloud
 	noWait                 bool
 	out                    string // export's -o
 }
@@ -181,7 +183,7 @@ func runTool(l paths.Layout, cmd string, f toolFlags, stdin io.Reader, stdout, s
 	defer func() { _ = t.s.Close() }()
 	switch cmd {
 	case "datapacks":
-		err = toolDatapacks(ctx, t, f, stdout)
+		err = toolDatapacks(ctx, t, l, f, stdout, stderr)
 	case "add_memory":
 		err = toolAdd(ctx, t, f, stdin, stdout)
 	case "search":
@@ -211,9 +213,9 @@ func runTool(l paths.Layout, cmd string, f toolFlags, stdin io.Reader, stdout, s
 	return exitOK
 }
 
-func toolDatapacks(ctx context.Context, t *toolSession, f toolFlags, stdout io.Writer) error {
+func toolDatapacks(ctx context.Context, t *toolSession, l paths.Layout, f toolFlags, stdout, stderr io.Writer) error {
 	text, err := t.call(ctx, "datapack_list", map[string]any{})
-	if err != nil || f.json {
+	if err != nil || (f.json && !f.cloud) {
 		fmt.Fprintln(stdout, text)
 		return err
 	}
@@ -225,12 +227,60 @@ func toolDatapacks(ctx context.Context, t *toolSession, f toolFlags, stdout io.W
 	if err := json.Unmarshal([]byte(text), &rows); err != nil {
 		return err
 	}
+	var cloud cloudlink.Datapacks
+	var cloudErr error
+	if f.cloud {
+		cloudErr = cloudDatapacks(ctx, l, &cloud)
+	}
+	if f.json {
+		out := map[string]any{"local": json.RawMessage(text), "cloud": cloud}
+		if cloudErr != nil {
+			out["cloud"] = map[string]string{"error": cloudErr.Error()}
+		}
+		b, _ := json.Marshal(out)
+		fmt.Fprintln(stdout, string(b))
+		return cloudErr
+	}
 	for _, r := range rows {
 		line := r.ID + "  " + r.Name
+		if f.cloud {
+			line += "  local"
+		}
 		if r.Description != "" {
 			line += "  (" + r.Description + ")"
 		}
 		fmt.Fprintln(stdout, line)
+	}
+	if !f.cloud || cloudErr != nil {
+		return cloudErr
+	}
+	if !cloud.Linked {
+		fmt.Fprintln(stderr, "Meko Cloud isn't linked: meko cloud_link links it")
+		return nil
+	}
+	for _, d := range cloud.Datapacks {
+		line := d.DatapackID + "  " + d.DatapackName + "  cloud"
+		if d.Grant != "" && d.Grant != "owner" {
+			line += " shared"
+		}
+		if d.Description != "" {
+			line += "  (" + d.Description + ")"
+		}
+		fmt.Fprintln(stdout, line)
+	}
+	return nil
+}
+
+// cloudDatapacks reads the linked Meko Cloud's datapacks through the running server's
+// /api/v1/meko-cloud/datapacks, which waits up to 10 s on Meko Cloud.
+func cloudDatapacks(ctx context.Context, l paths.Layout, out *cloudlink.Datapacks) error {
+	c, err := newClient(l)
+	if err != nil {
+		return err
+	}
+	c.http.Timeout = cloudTimeout
+	if err := c.send(ctx, http.MethodGet, "/api/v1/meko-cloud/datapacks", nil, out); err != nil {
+		return fmt.Errorf("couldn't list Meko Cloud's datapacks: %w", err)
 	}
 	return nil
 }
