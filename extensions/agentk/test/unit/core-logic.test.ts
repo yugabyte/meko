@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   DEFAULT_CONFIG, DEFAULT_MEKO_URL, loadConfig, mekoHost, mekoWebUrl, mekoWebUrlWarning, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl,
-  resolveMekoWithSource, saveConfig,
+  ownMekoKey, resolveMekoWithSource, saveConfig,
 } from '../../src/server/config.js';
 import { forgetContact, listContacts, recordShares } from '../../src/server/contacts.js';
 import { shortHost } from '../../src/server/core.js';
@@ -951,6 +951,14 @@ describe('Meko credentials', () => {
       cfg.meko.url = 'http://127.0.0.1:7778/mcp';
       cfg.meko.apiKey = 'older-local-token';
       expect(resolveMekoWithSource(cfg)).toEqual(local);
+      // A Meko Cloud key is never a copy: a setup run against the local Meko without a key leaves its
+      // URL next to the key, which goes with Meko Cloud's URL instead, running or not.
+      cfg.meko.apiKey = 'mko_tkn_cloud';
+      expect(resolveMekoWithSource(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: 'mko_tkn_cloud', keySource: 'config' });
+      reader.clear();
+      expect(ownMekoKey(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: 'mko_tkn_cloud', keySource: 'config' });
+      await reader.refresh();
+      cfg.meko.apiKey = 'older-local-token';
       // Its token goes to no web app or API URL but its own.
       cfg.meko.webUrl = 'https://meko.example.com';
       cfg.meko.apiUrl = 'https://meko.example.com/api/v1';

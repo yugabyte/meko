@@ -138,7 +138,12 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > key that's a copy of it (its token, or any key for its URL's origin: Meko's setup for Claude
 > Code writes one into Claude Code's settings, older installs and `meko install_extension agentk`
 > stored one in `config.toml`) is the local Meko too, with the live URL and token, so a copy never
-> goes stale (`isLocalMeko`). The copy in `config.toml` is dropped at start and by the installer;
+> goes stale (`isLocalMeko`). A Meko Cloud key (`mko_tkn_…`; the local token is hex) is never a
+> copy, even next to the local Meko's URL: Meko's setup run against the local Meko without a key
+> leaves exactly that in Claude Code's settings, its URL beside the Meko Cloud key the user had. Such
+> a key never takes a URL on this computer (`ownMekoKey`), whether the local Meko runs or not: it
+> goes with the next source's URL, else Meko Cloud's, so it's used, and handed to Meko, as below,
+> rather than dropped. The copy in `config.toml` is dropped at start and by the installer;
 > the one in Claude Code's settings is left for Claude Code. Claude Code's own Meko setup, in its
 > settings, is the user's and is changed only when they ask (see *Claude Code on AgentK's Meko*
 > below).
@@ -183,7 +188,12 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   Meko's own setup (`@yugabytedb/meko-mcp --client claude-code`), fetched from npm, checked
 >   against the registry's integrity hash and run with the bundled Node, with the key passed in the
 >   environment. Declining it (or, without `--install-deps`, not being asked) is a warning with the
->   command to run yourself; Settings › Harness › Claude Code can run it later.
+>   command to run yourself; Settings › Harness › Claude Code can run it later. For the Meko on this
+>   computer (its live URL and token, not just any server on this computer, which `meko token` isn't
+>   the key for) that command reads the key in the user's shell, `--api-key "$(meko token)"` (with
+>   `MEKO_HOME=<folder>` when AgentK knows Meko's data folder), since nothing else gives the package
+>   a key there; for Meko Cloud it carries none (the package reads `MEKO_API_KEY`, or signs in
+>   through the browser) (`manualMekoSetup`).
 > - **At project creation:** the dedicated datapack is an existing one, a new one, or **No
 >   datapack** (`DatapackChoice` `{ mode: 'none' }`), the default while there's no Meko.
 >   When Meko refuses a new datapack because the plan's datapack limit is reached (HTTP 402,

@@ -452,7 +452,7 @@ export class Core extends EventEmitter {
   }
 
   /** The Meko data folder AgentK's home is in (movehome.ts), else `[meko] home`; null lets `meko` pick. */
-  private mekoHome(): string | null {
+  mekoHome(): string | null {
     return mekoDirOf(this.paths.home) ?? (this.cfg.meko.home || null);
   }
 

@@ -108,15 +108,25 @@ export function originOf(url: string): string | null {
 }
 
 /**
+ * A Meko Cloud API key (`mko_tkn_…`). The local Meko's client token is hex, so it's never one.
+ */
+export function isMekoCloudKey(key: string): boolean {
+  return key.startsWith('mko_tkn_');
+}
+
+/**
  * A key and URL are a copy of the local Meko's: its token, or a key for its URL's origin. Meko's
  * setup for Claude Code writes the token into Claude Code's settings, older installs stored it in
  * config.toml, and `meko install_extension` passes both. A copy goes stale when Meko moves to
  * another port or gets a new token, so AgentK uses the live pair instead (`resolveMekoWithSource`),
- * and never hands a copy to Meko as a Meko Cloud key.
+ * and never hands a copy to Meko as a Meko Cloud key. A Meko Cloud key is never a copy, even on the
+ * local Meko's URL: a setup run against the local Meko without a key leaves MEKO_MCP_URL there next
+ * to the Meko Cloud key the user had (`ownMekoKey` gives it Meko Cloud's URL).
  */
 export function isLocalMeko(local: LocalMeko | null, url: string, key: string): boolean {
   if (!local || !key) return false;
-  return key === local.token || (originOf(url) !== null && originOf(url) === originOf(local.url));
+  if (key === local.token) return true;
+  return !isMekoCloudKey(key) && originOf(url) !== null && originOf(url) === originOf(local.url);
 }
 
 let last: LocalMekoProbe = { state: 'none', meko: null };

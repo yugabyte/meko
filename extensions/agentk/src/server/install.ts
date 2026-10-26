@@ -7,7 +7,7 @@ import { parseArgs } from 'node:util';
 import { HARNESS_CAPS, HARNESS_IDS, type HarnessId } from '../shared/harnesses.js';
 import { claudeUserDir } from './claude.js';
 import { cliVersion, harnessCommand, versionAtLeast } from './harness/version.js';
-import { DEFAULT_MEKO_URL, dbPath, envMekoWebUrl, isLoopback, loadConfig, ownMekoKey, saveConfig, type Config } from './config.js';
+import { DEFAULT_MEKO_URL, dbPath, envMekoWebUrl, loadConfig, onLoopback, ownMekoKey, saveConfig, type Config } from './config.js';
 import { assertFree, InstanceBusyError } from './instance.js';
 import { checkMeko, tryMekoToken } from './meko.js';
 import { isLocalMeko, probeLocalMeko, type LocalMekoProbe } from './mekolocal.js';
@@ -147,12 +147,13 @@ export interface InstallMekoDeps {
   check: (url: string, apiKey: string) => Promise<{ ok: true } | { ok: false; error: string }>;
   /**
    * Sets up Meko for Claude Code; throws MekoSetupError when that's declined or doesn't finish.
-   * `keyFromEnv`: the key came from the installer's MEKO_API_KEY. Left out when Claude Code isn't
-   * installed.
+   * `keyFromEnv`: the key came from the installer's MEKO_API_KEY. `local`: the server is the Meko
+   * on this computer, with its token (for the command to run by hand). Left out when Claude Code
+   * isn't installed.
    */
-  ensureInClaude?: (url: string, apiKey: string, keyFromEnv: boolean) => Promise<void>;
+  ensureInClaude?: (url: string, apiKey: string, keyFromEnv: boolean, local: boolean) => Promise<void>;
   /** Sets up Meko for Kiro, the same way; left out when Kiro isn't installed. */
-  ensureInKiro?: (url: string, apiKey: string) => Promise<void>;
+  ensureInKiro?: (url: string, apiKey: string, local: boolean) => Promise<void>;
   /**
    * What `meko token --json` says (`probeLocalMeko`): the Meko running on this computer, and the
    * Meko Cloud link it keeps for its extensions. Neither is stored: the server reads them from Meko.
@@ -168,14 +169,6 @@ function hostOf(url: string): string {
     return new URL(url).host;
   } catch {
     return url;
-  }
-}
-
-function onLoopback(url: string): boolean {
-  try {
-    return isLoopback(new URL(url).hostname.replace(/^\[|\]$/g, ''));
-  } catch {
-    return false;
   }
 }
 
@@ -290,6 +283,8 @@ export async function installMeko(cfg: Config, o: { keyArg?: string; urlArg?: st
     cfg.meko.url = meko.url === DEFAULT_MEKO_URL ? '' : meko.url;
   }
   d.ui.ok('Meko', label);
+  // The Meko on this computer, with its own token: the only server `meko token` is the key for.
+  const onLocal = !!local && meko.url === local.url && meko.apiKey === local.token;
   if (!cloud?.apiKey && label.startsWith('on this computer') && d.canAsk) d.ui.note(`To keep projects' memory in Meko Cloud instead: ${linkHint}`);
 
   // --no-meko never set Meko up for the agents, and still doesn't.
@@ -297,7 +292,7 @@ export async function installMeko(cfg: Config, o: { keyArg?: string; urlArg?: st
   const ensureInKiro = o.noMeko ? undefined : d.ensureInKiro;
   if (ensureInClaude) {
     try {
-      await ensureInClaude(meko.url, meko.apiKey, keyFromEnv && meko.apiKey === process.env.MEKO_API_KEY);
+      await ensureInClaude(meko.url, meko.apiKey, keyFromEnv && meko.apiKey === process.env.MEKO_API_KEY, onLocal);
       d.ui.ok('Meko in Claude', 'plugin, MCP server and key in place');
     } catch (e) {
       if (!(e instanceof MekoSetupError)) throw e;
@@ -306,7 +301,7 @@ export async function installMeko(cfg: Config, o: { keyArg?: string; urlArg?: st
   }
   if (ensureInKiro) {
     try {
-      await ensureInKiro(meko.url, meko.apiKey);
+      await ensureInKiro(meko.url, meko.apiKey, onLocal);
       d.ui.ok('Meko in Kiro', 'MCP server and agent in place');
     } catch (e) {
       if (!(e instanceof MekoSetupError)) throw e;
@@ -409,14 +404,14 @@ export async function runInstall(args: string[]): Promise<void> {
       check: checkMeko,
       probe: () => probeLocalMeko(cfg.meko.home || null),
       link: (l) => handOverMekoKey(cfg.meko.home || null, l),
-      ensureInKiro: !agents.includes('kiro') ? undefined : async (url, apiKey) => {
+      ensureInKiro: !agents.includes('kiro') ? undefined : async (url, apiKey, onLocal) => {
         const gaps = async () => kiroMekoGaps(readKiroMeko(), url, kiroAgentLoadsMcp());
         await ensureMekoSetup(
-          { url, apiKey, client: 'kiro', ...setup },
+          { url, apiKey, client: 'kiro', local: onLocal ? { home: cfg.meko.home || null } : null, ...setup },
           { gaps, latest: () => latestMekoSetup(), run: (pkg) => runMekoSetup(pkg, { url, apiKey, client: 'kiro' }), ask, say, warn: (l, t) => ui.warn(l, t) },
         );
       },
-      ensureInClaude: !agents.includes('claude') ? undefined : async (url, apiKey, keyFromEnv) => {
+      ensureInClaude: !agents.includes('claude') ? undefined : async (url, apiKey, keyFromEnv, onLocal) => {
         // The plugin, its MCP server and the key where its hooks read it, all on this Meko, with
         // tokens it accepts. Anything wrong is set up by Meko's own installer, after asking. A key
         // from the environment must also end up in Claude Code's settings: the service has no
@@ -430,7 +425,7 @@ export async function runInstall(args: string[]): Promise<void> {
           ];
         };
         await ensureMekoSetup(
-          { url, apiKey, ...setup },
+          { url, apiKey, local: onLocal ? { home: cfg.meko.home || null } : null, ...setup },
           { gaps, latest: () => latestMekoSetup(), run: (pkg) => runMekoSetup(pkg, { url, apiKey }), ask, say, warn: (l, t) => ui.warn(l, t) },
         );
       },
