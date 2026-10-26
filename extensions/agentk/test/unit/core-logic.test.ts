@@ -951,6 +951,14 @@ describe('Meko credentials', () => {
       cfg.meko.url = 'http://127.0.0.1:7778/mcp';
       cfg.meko.apiKey = 'older-local-token';
       expect(resolveMekoWithSource(cfg)).toEqual(local);
+      // A Meko Cloud key is never a copy: a setup run against the local Meko without a key leaves its
+      // URL next to the key, which goes with Meko Cloud's URL instead, running or not.
+      cfg.meko.apiKey = 'mko_tkn_cloud';
+      expect(resolveMekoWithSource(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: 'mko_tkn_cloud', keySource: 'config' });
+      reader.clear();
+      expect(ownMekoKey(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: 'mko_tkn_cloud', keySource: 'config' });
+      await reader.refresh();
+      cfg.meko.apiKey = 'older-local-token';
       // Its token goes to no web app or API URL but its own.
       cfg.meko.webUrl = 'https://meko.example.com';
       cfg.meko.apiUrl = 'https://meko.example.com/api/v1';
@@ -958,32 +966,6 @@ describe('Meko credentials', () => {
       cfg.meko.webUrl = 'http://127.0.0.1:7778';
       cfg.meko.apiUrl = '';
       expect([resolveMekoWebUrl(cfg), resolveMekoApiUrl(cfg)]).toEqual(['http://127.0.0.1:7778', 'http://127.0.0.1:7778/api/v1']);
-    } finally {
-      reader.clear();
-    }
-  });
-
-  it("keeps a Meko Cloud key that a keyless setup left next to the local Meko's URL, on Meko Cloud", async () => {
-    clearEnv();
-    // What Meko's setup run against the local Meko without a key leaves in Claude Code's settings.
-    claudeSettings({ env: { MEKO_MCP_URL: 'http://127.0.0.1:7778/mcp', MEKO_API_KEY: 'mko_tkn_cloud' } });
-    const cfg = structuredClone(DEFAULT_CONFIG);
-    const local = { url: 'http://127.0.0.1:7778/mcp', token: 'local-token' };
-    expect(ownMekoKey(cfg, local)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: 'mko_tkn_cloud', keySource: 'claude' });
-    // Another source's URL that isn't the local Meko's still goes with it.
-    cfg.meko.url = 'https://meko.example.com/mcp';
-    expect(ownMekoKey(cfg, local).url).toBe('https://meko.example.com/mcp');
-    cfg.meko.url = '';
-    // With no local Meko known, nothing tells its URL apart.
-    expect(ownMekoKey(cfg, null).url).toBe('http://127.0.0.1:7778/mcp');
-    const reader = new LocalMekoReader(async () => ({ state: 'running', meko: local, cloud: { set: false, url: '', apiKey: '', webUrl: '', apiUrl: '' } }));
-    try {
-      await reader.refresh();
-      // Used right away (Meko is handed it in the background), not dropped as a copy of the local token.
-      expect(resolveMekoWithSource(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: 'mko_tkn_cloud', keySource: 'claude' });
-      // Any other key on the local Meko's URL is still a copy of its token.
-      claudeSettings({ env: { MEKO_MCP_URL: 'http://127.0.0.1:7778/mcp', MEKO_API_KEY: 'older-local-token' } });
-      expect(resolveMekoWithSource(cfg)).toEqual({ url: local.url, apiKey: 'local-token', keySource: 'local' });
     } finally {
       reader.clear();
     }

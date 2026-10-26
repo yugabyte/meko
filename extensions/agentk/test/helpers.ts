@@ -134,15 +134,19 @@ export function stubMekoTools() {
     tokens: Record<string, TokenTry>;
     /** Whether `claude mcp get meko` finds a server (null: it couldn't be asked). */
     claudeHasMcp: boolean | null;
-  } = { setupError: null, tokens: {}, claudeHasMcp: false };
+    /** The command to run by hand each setup was given, in order. */
+    manuals: string[];
+  } = { setupError: null, tokens: {}, claudeHasMcp: false, manuals: [] };
   const tools: MekoTools = {
-    async setUpClaude(url, apiKey, log) {
+    async setUpClaude(url, apiKey, log, _claude, manual) {
       calls.push({ name: 'setUpClaude', args: [url, apiKey] });
+      state.manuals.push(manual);
       log('setting up');
       if (state.setupError) throw new Error(state.setupError);
     },
-    async setUpKiro(url, apiKey, log) {
+    async setUpKiro(url, apiKey, log, manual) {
       calls.push({ name: 'setUpKiro', args: [url, apiKey] });
+      state.manuals.push(manual);
       log('setting up');
       if (state.setupError) throw new Error(state.setupError);
     },

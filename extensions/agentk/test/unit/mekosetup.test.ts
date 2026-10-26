@@ -172,17 +172,15 @@ describe('Meko in Claude Code: what is missing', () => {
 });
 
 describe('the command to set up Meko by hand', () => {
-  it("reads the local Meko's token in the user's shell, from the Meko AgentK uses", () => {
-    expect(manualMekoSetup('http://127.0.0.1:7778/mcp')).toBe('npx @yugabytedb/meko-mcp --client claude-code --url http://127.0.0.1:7778/mcp --api-key "$(meko token)"');
-    expect(manualMekoSetup('http://localhost:7778/mcp', 'kiro', '/home/u/.meko')).toBe(
-      'npx @yugabytedb/meko-mcp --client kiro --url http://localhost:7778/mcp --api-key "$(MEKO_HOME=/home/u/.meko meko token)"',
+  it("reads the local Meko's token in the user's shell, from the Meko AgentK uses, and keeps any other server's key off it", () => {
+    expect(manualMekoSetup('http://127.0.0.1:7778/mcp', 'claude-code', { home: null })).toBe(
+      'npx @yugabytedb/meko-mcp --client claude-code --url http://127.0.0.1:7778/mcp --api-key "$(meko token)"',
     );
-    expect(manualMekoSetup('http://[::1]:7778/mcp', 'claude-code', "/data/it's meko")).toMatch(/--api-key "\$\(MEKO_HOME='\/data\/it'\\''s meko' meko token\)"$/);
-  });
-
-  it('keeps the key off it for any other server', () => {
-    expect(manualMekoSetup('https://mcp.mekodata.ai/mcp', 'claude-code', '/home/u/.meko')).toBe('npx @yugabytedb/meko-mcp --client claude-code --url https://mcp.mekodata.ai/mcp');
-    expect(manualMekoSetup('not a url')).not.toContain('--api-key');
+    expect(manualMekoSetup('http://127.0.0.1:7778/mcp', 'kiro', { home: "/data/it's meko" })).toBe(
+      `npx @yugabytedb/meko-mcp --client kiro --url http://127.0.0.1:7778/mcp --api-key "$(MEKO_HOME='/data/it'\\''s meko' meko token)"`,
+    );
+    // Another server on this computer isn't the local Meko: its token goes nowhere else.
+    expect(manualMekoSetup('http://127.0.0.1:8080/mcp', 'claude-code', null)).toBe('npx @yugabytedb/meko-mcp --client claude-code --url http://127.0.0.1:8080/mcp');
   });
 });
 
@@ -248,7 +246,7 @@ describe('the install step for Meko in Claude Code', () => {
 
   it("names the local Meko's token in the command to run by hand", async () => {
     const step = ensureMekoSetup(
-      { url: 'http://127.0.0.1:7778/mcp', apiKey: 'k', canAsk: false, installDeps: false, noInstallDeps: true, mekoHome: '/home/u/.meko' },
+      { url: 'http://127.0.0.1:7778/mcp', apiKey: 'k', canAsk: false, installDeps: false, noInstallDeps: true, local: { home: '/home/u/.meko' } },
       { gaps: async () => ['x'], latest: async () => PKG, run: async () => 0, ask: async () => 'y', say: () => undefined, warn: () => undefined },
     );
     await expect(step).rejects.toThrow('--url http://127.0.0.1:7778/mcp --api-key "$(MEKO_HOME=/home/u/.meko meko token)"');
@@ -310,9 +308,8 @@ writeFileSync(d + '/.claude.json', JSON.stringify({ mcpServers: { meko: { type: 
     process.env.CLAUDE_CONFIG_DIR = claudeDir;
     vi.stubGlobal('fetch', fetchImpl);
     try {
-      const setUp = defaultMekoTools.setUpClaude('http://127.0.0.1:7778/mcp', 'local-token', () => undefined, 'claude', '/home/u/.meko');
-      await expect(setUp).rejects.toThrow(/Still: .*Claude Code's meko MCP server sends no token\./);
-      await expect(setUp).rejects.toThrow('Run it yourself: npx @yugabytedb/meko-mcp --client claude-code --url http://127.0.0.1:7778/mcp --api-key "$(MEKO_HOME=/home/u/.meko meko token)"');
+      const setUp = defaultMekoTools.setUpClaude('http://127.0.0.1:7778/mcp', 'local-token', () => undefined, 'claude', 'the command');
+      await expect(setUp).rejects.toThrow(/Still: .*Claude Code's meko MCP server sends no token\. Run it yourself: the command$/);
     } finally {
       vi.unstubAllGlobals();
       if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;

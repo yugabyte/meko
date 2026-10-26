@@ -1,7 +1,7 @@
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { isLocalMeko, isMekoCloudKey, lookForLocalMeko, probeLocalMeko } from '../../src/server/mekolocal.js';
+import { lookForLocalMeko, probeLocalMeko } from '../../src/server/mekolocal.js';
 import { mekoDirOf } from '../../src/server/movehome.js';
 import { tempDir } from '../helpers.js';
 
@@ -67,23 +67,6 @@ describe('mekoDirOf', () => {
     ['/data/extensions/agentk-dev', null],
   ])('%s → %s', (akHome, want) => {
     expect(mekoDirOf(akHome)).toBe(want);
-  });
-});
-
-describe('isLocalMeko', () => {
-  const local = { url: 'http://127.0.0.1:7778/mcp', token: 'ab'.repeat(32) };
-
-  it('takes its token anywhere, and another key on its URL, as a copy of the local Meko', () => {
-    expect(isLocalMeko(local, 'http://127.0.0.1:7700/mcp', local.token)).toBe(true);
-    expect(isLocalMeko(local, 'http://127.0.0.1:7778/mcp', 'cd'.repeat(32))).toBe(true);
-    expect(isLocalMeko(local, 'https://mcp.mekodata.ai/mcp', 'cd'.repeat(32))).toBe(false);
-    expect(isLocalMeko(null, local.url, local.token)).toBe(false);
-  });
-
-  it("never takes a Meko Cloud key for one, even on the local Meko's URL", () => {
-    expect(isMekoCloudKey('mko_tkn_abc')).toBe(true);
-    expect(isMekoCloudKey(local.token)).toBe(false);
-    expect(isLocalMeko(local, 'http://127.0.0.1:7778/mcp', 'mko_tkn_abc')).toBe(false);
   });
 });
 

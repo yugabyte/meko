@@ -4,7 +4,6 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mekoPluginInstalls } from './capture.js';
-import { isLoopback } from './config.js';
 import { DEFAULT_MEKO_URL } from '../shared/mekourls.js';
 
 /**
@@ -279,21 +278,16 @@ function shellWord(s: string): string {
 
 /**
  * The command to set up Meko for Claude Code (or `client`) by hand, against the server the key
- * belongs to. For the Meko on this computer it reads the key from `meko token` in the user's shell
- * (asking the Meko in `mekoHome` when given), since nothing else gives it to the package there. For
- * any other server the key stays off it: the package reads MEKO_API_KEY, or signs in through the
- * browser.
+ * belongs to. `local` is given when that's the Meko on this computer (its live URL and token, not
+ * just any server on this computer): the command then reads its token from `meko token` in the
+ * user's shell, asking the Meko in `local.home` when known, since nothing else gives it to the
+ * package there. For any other server the key stays off it: the package reads MEKO_API_KEY, or
+ * signs in through the browser, and the local token goes to no server but its own.
  */
-export function manualMekoSetup(url: string, client: MekoSetupClient = 'claude-code', mekoHome: string | null = null): string {
+export function manualMekoSetup(url: string, client: MekoSetupClient = 'claude-code', local: { home: string | null } | null = null): string {
   const cmd = `npx ${MEKO_SETUP_PACKAGE} --client ${client} --url ${url}`;
-  let local = false;
-  try {
-    local = isLoopback(new URL(url).hostname.replace(/^\[|\]$/g, ''));
-  } catch {
-    /* not a URL: no key */
-  }
   if (!local) return cmd;
-  return `${cmd} --api-key "$(${mekoHome ? `MEKO_HOME=${shellWord(mekoHome)} ` : ''}meko token)"`;
+  return `${cmd} --api-key "$(${local.home ? `MEKO_HOME=${shellWord(local.home)} ` : ''}meko token)"`;
 }
 
 export class MekoSetupError extends Error {}
@@ -312,8 +306,8 @@ export async function ensureMekoSetup(
     installDeps: boolean;
     noInstallDeps: boolean;
     client?: MekoSetupClient;
-    /** Meko's data folder, for the command to run by hand (`manualMekoSetup`). */
-    mekoHome?: string | null;
+    /** Set when `url` is the Meko on this computer, with its data folder: for the command to run by hand (`manualMekoSetup`). */
+    local?: { home: string | null } | null;
   },
   d: {
     /** What's wrong with Meko in the agent, one sentence each (mekoClaudeGaps plus tokens that don't work, or kiroMekoGaps). */
@@ -327,7 +321,7 @@ export async function ensureMekoSetup(
 ): Promise<'ready' | 'set-up'> {
   const gaps = await d.gaps();
   if (!gaps.length) return 'ready';
-  const manual = manualMekoSetup(o.url, o.client, o.mekoHome);
+  const manual = manualMekoSetup(o.url, o.client, o.local);
   const kiro = o.client === 'kiro';
   const agent = kiro ? 'Kiro' : 'Claude Code';
   // A short word, not the list: the install output stays tidy, and the setup fixes them all.
