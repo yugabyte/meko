@@ -40,6 +40,17 @@ const PROMPT_MAX = 8000;
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const live = (s: Session) => s.desired !== 'archived' && s.status !== 'archived';
 const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+
+/**
+ * Whether a proposed start asks for Run to merge (`autoRun: true`), which only a task starting at
+ * Code takes: asked for at any other stage, it's left out, with a note naming `what`.
+ */
+function autoRunFor(r: Record<string, unknown>, stage: string, what: string, notes: string[]): boolean {
+  if (r.autoRun !== true) return false;
+  if (stage === 'code') return true;
+  notes.push(`Left out Run to merge for ${what}: it's only for a task that starts at Code.`);
+  return false;
+}
 /** One line, no control characters (sessionName() refuses them), at most `max` characters. */
 export const oneLine = (s: string, max: number) =>
   // eslint-disable-next-line no-control-regex
@@ -75,9 +86,12 @@ export function checkActions(raw: unknown, projects: ActionProject[], max = ACTI
         const p = project(str(r.projectId));
         const prompt = cut(str(r.prompt), PROMPT_MAX);
         const start = (START_STAGES as string[]).includes(str(r.stage) || str(r.start)) ? ((str(r.stage) || str(r.start)) as StartStage) : 'design';
+        const name = oneLine(str(r.name), NAME_MAX) || oneLine(prompt, 60);
         if (!p) notes.push('Left out a task in a project that isn\'t open.');
         else if (!prompt) notes.push('Left out a task with no prompt.');
-        else actions.push({ type: 'start', projectId: p.id, start, name: oneLine(str(r.name), NAME_MAX) || oneLine(prompt, 60), prompt });
+        else {
+          actions.push({ type: 'start', projectId: p.id, start, name, prompt, ...(autoRunFor(r, start, name, notes) ? { autoRun: true } : {}) });
+        }
         break;
       }
       case 'link': {
@@ -91,6 +105,7 @@ export function checkActions(raw: unknown, projects: ActionProject[], max = ACTI
             type: 'link', ref,
             ...(projectId ? { projectId } : {}),
             ...(stage === 'design' || stage === 'code' ? { start: stage } : {}),
+            ...(autoRunFor(r, stage, ref, notes) ? { autoRun: true } : {}),
           });
         }
         break;
@@ -201,15 +216,15 @@ function describe(core: Core, a: AskAgentkAction): string {
 async function runOne(core: Core, a: Exclude<AskAgentkAction, { type: 'go' }>, by: ActionCaller): Promise<ActionResult> {
   switch (a.type) {
     case 'start': {
-      const { session, done } = await core.sessions.begin(a.projectId, { name: a.name, prompt: a.prompt, start: a.start });
+      const { session, done } = await core.sessions.begin(a.projectId, { name: a.name, prompt: a.prompt, start: a.start, autoRun: a.autoRun });
       done.catch((e: unknown) => core.log.warn(`session ${session.id} didn't start`, errMsg(e)));
       const p = core.projects.get(a.projectId);
-      return { ok: true, text: `Started "${session.name}" in ${p.name} at ${STAGE_LABELS[a.start]}.`, projectId: p.id, sessionId: session.id };
+      return { ok: true, text: `Started "${session.name}" in ${p.name} at ${STAGE_LABELS[a.start]}${a.autoRun ? ', with Run to merge' : ''}.`, projectId: p.id, sessionId: session.id };
     }
     case 'link': {
-      const { project, session } = await core.githubLinks.start({ ref: a.ref, projectId: a.projectId, start: a.start }, { once: true });
+      const { project, session } = await core.githubLinks.start({ ref: a.ref, projectId: a.projectId, start: a.start, autoRun: a.autoRun }, { once: true });
       const what = session.kind === 'review-pr' ? 'a review of' : 'a task on';
-      return { ok: true, text: `Started ${what} ${a.ref}, "${session.name}", in ${project.name}.`, projectId: project.id, sessionId: session.id };
+      return { ok: true, text: `Started ${what} ${a.ref}, "${session.name}", in ${project.name}${a.autoRun ? ', with Run to merge' : ''}.`, projectId: project.id, sessionId: session.id };
     }
     case 'move': {
       // The calling session is mid-turn (its agent is running the tool), and a move waits for a
@@ -373,8 +388,8 @@ export class SessionTools {
             const s = isObject(e) ? e : {};
             const projectId = str(s.projectId) || row.project_id;
             return str(s.ref)
-              ? { type: 'link', ref: str(s.ref), projectId, stage: str(s.stage) }
-              : { type: 'start', projectId, name: s.name, prompt: s.prompt, stage: str(s.stage) };
+              ? { type: 'link', ref: str(s.ref), projectId, stage: str(s.stage), autoRun: s.autoRun }
+              : { type: 'start', projectId, name: s.name, prompt: s.prompt, stage: str(s.stage), autoRun: s.autoRun };
           });
           return this.run(row, raw, projects);
         }

@@ -1,12 +1,12 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { HARNESS_CAPS, harnessOf, type HarnessId } from '../../shared/harnesses';
 import { KIND_LABELS, KIND_STAGES, START_HINTS, START_STAGES, STAGE_LABELS } from '../../shared/types';
-import type { StartStage } from '../../shared/types';
+import type { Session, StartStage } from '../../shared/types';
 import { appUrl } from '../base';
 import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkKeyframes, blinkOffsetMs, totalUnits, type BlinkRun } from '../blink';
 import { matches, TOUCH_QUERY, useMedia } from '../hooks/useMedia';
 import { TUNE, typingKeyframes, typingLoopMs } from '../typing';
-import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, cx, elapsedText, instructionsBlocker, isSubmitKey, mekoDatapackUrl } from '../util';
+import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, cx, elapsedText, instructionsBlocker, isSubmitKey, mekoDatapackUrl, runToMergeTitle } from '../util';
 
 const HARNESS_LOGOS: Record<HarnessId, string> = { claude: appUrl('/harness-claude.svg'), opencode: appUrl('/harness-opencode.svg'), kiro: appUrl('/harness-kiro.svg') };
 
@@ -21,6 +21,24 @@ const HARNESS_LOGOS: Record<HarnessId, string> = { claude: appUrl('/harness-clau
 export function HarnessLogo({ harness }: { harness: string }) {
   const id = harnessOf(harness);
   return <img className="harness-logo" src={HARNESS_LOGOS[id]} alt="" width={18} height={14} />;
+}
+
+/**
+ * Run to merge (`Session.autoRun`) beside a gate: Approve design, Open PR and Merge & Close. It
+ * saves as it changes (`onChange`, `PATCH /api/sessions/:id`), and is held while that's out.
+ */
+export function RunToMergeCheck({ session, disabled = false, onChange }: { session: Session; disabled?: boolean; onChange: (on: boolean) => Promise<void> }) {
+  const [saving, setSaving] = useState(false);
+  const toggle = (on: boolean) => {
+    setSaving(true);
+    void onChange(on).finally(() => setSaving(false));
+  };
+  return (
+    <label className="check gate-check" title={`Run to merge: ${runToMergeTitle(session)}`}>
+      <input type="checkbox" checked={session.autoRun} disabled={disabled || saving} onChange={(e) => toggle(e.target.checked)} />
+      <span>Run to merge</span>
+    </label>
+  );
 }
 
 /** An agent's logo, then its name: the buttons of the agent pickers and of Settings › Harness's bar. */

@@ -229,7 +229,10 @@ export default {
     const on = (ev) => {
       const p = ev.data || {};
       if (TURN_ENDS.has(ev.type)) {
-        if (isMain(p.sessionID) && once(ev)) send({ hook_event_name: 'session.idle', session_id: p.sessionID });
+        // An interrupted turn (Esc) says so: AgentK handles it as Claude Code's mod reports one.
+        if (isMain(p.sessionID) && once(ev)) {
+          send({ hook_event_name: 'session.idle', session_id: p.sessionID, ...(ev.type === 'session.execution.interrupted' ? { interrupted: true } : {}) });
+        }
         return;
       }
       switch (ev.type) {

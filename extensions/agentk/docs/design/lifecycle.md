@@ -15,7 +15,7 @@ since "Opened PR #7" says it.
 
 There are three **gates** that only you can pass: approving the design, opening the PR, and
 merging. Everything between the gates runs on its own. A task started at Code has only the last two
-gates. Explore (step 0) comes before them and is optional: Claude gets the `explore` prompt
+gates, and with [Run to merge](#run-to-merge) AgentK passes those two by itself. Explore (step 0) comes before them and is optional: Claude gets the `explore` prompt
 (investigate, build POCs, run experiments, push experimental branches if useful), edits aren't
 guarded, and review comments from the Changes panel still reach Claude. Its gate, **Move on…**,
 opens the move dialog at Design, and you can also click Code or PR & Review in the stage bar; or
@@ -189,6 +189,50 @@ sent, withdrawn or dropped.
   Merge & Close does, and you're notified; a blocker of the second kind drops it, mid-turn or not, and you're
   notified to press Merge & Close again once that's fixed. A move out of Review, archive or a merge
   on GitHub clears it too. While the merge is being requested, Cancel is refused.
+
+## Run to merge
+
+**Run to merge** (`sessions.auto_run`, `Session.autoRun`; off by default) has AgentK pass Open PR
+and Merge & Close by itself. Approving the design stays yours. It's a box beside each gate: in the
+New session dialog for a start at Code (`CreateSessionRequest.autoRun`), beside **Approve design**
+(stage bar and design panel), **Open PR** and **Merge & Close**, all saving through
+`PATCH /api/sessions/:id` (`UpdateSessionRequest.autoRun`, `Lifecycle.setAutoRun`). The session
+tools' `start_sessions` and Ask AgentK's `start` and `link` actions take it too, only for a start at
+Code ([session tools](tools.md)); no tool turns it on for a running session.
+
+It runs on the [queued gates](#queued-gates):
+
+- **Design.** On, it waits for the approval; the approval prompt then carries `autoRunLine()`.
+- **Code.** Each turn that starts in Code (`UserPromptSubmit`, `Lifecycle.onTurnStart`) queues Open
+  PR when nothing is queued, so the PR prompt goes when that turn ends (`takeQueuedPr`). A relaunch,
+  which drops a queued Open PR, is armed again by the next turn. Checked between turns, it queues
+  Open PR and sends it at once. The `code` and `approved` prompts carry `autoRunLine()` (added in
+  code, so a repo's own prompts get it too): finish the work and run the checks in this turn, and ask
+  the user with the question tool rather than ending the turn on a question, since AgentK can't tell
+  such a turn from a finished one. The pill reads *✓ Run to merge: opens the PR when this turn ends*.
+- **PR & Review.** Once the PR is adopted (`adoptPr`), or the box is checked there, the merge is
+  queued (`armMerge`; `pollAll` queues it again after a restart cut it short). Unlike Merge when
+  ready, a blocker that doesn't clear by itself doesn't drop it (`takeQueuedMerge`): AgentK works on
+  failing CI and merge conflicts as it always does (their watchers say when they hand over), and for
+  every other one (a held review, changes requested, missing approvals, a branch behind its base,
+  unpushed work between turns, a Needs you) you're notified once per new set
+  (`autoRunWaits`), and while such a blocker is there the PR is looked at every 45 seconds rather
+  than at every 15-second pass (approvals can take days). It merges at the first look that finds
+  nothing blocking; if GitHub refuses the merge (a ruleset, say, which the blockers don't show), Run to
+  merge stops, so the merge isn't asked for again at every pass. After AgentK's findings
+  are addressed it doesn't ask for another review round, as Merge when ready doesn't. The pill reads
+  *✓ Run to merge: waiting on …*. The gates it passes are logged as AgentK's (`moved_by = 'auto'`).
+
+It stops, saying why in the activity log (`stopAutoRun`), when you uncheck it (refused while the
+merge is being requested), press **Cancel** on the gate it queued, interrupt a turn in Code or PR &
+Review, or move the session, by hand or by a tool (a move to PR & Review that's refused leaves it on).
+An interrupt counts only where the harness reports one: Claude Code with AgentK's mod (`/mod/turn`)
+and OpenCode (its plugin marks `session.execution.interrupted`). Kiro, and Claude Code without the
+mod, report none, so there Esc doesn't stop it, and a queued Open PR goes when the next turn ends:
+uncheck the box instead. Stopping drops only the gate Run to merge queued (`sessions.queued_auto`):
+an Open PR or merge you pressed yourself stays queued, as it would have without it, and a press on
+the gate Run to merge queued makes it yours. Claude exiting doesn't stop it: the next turn arms
+Open PR again. It's refused (409) in Explore, Merge & Close, a Review a PR and a design in plan mode.
 
 ## The design after approval
 

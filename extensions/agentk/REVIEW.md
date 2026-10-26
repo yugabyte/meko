@@ -174,11 +174,17 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 
 ## 3. Lifecycle and GitHub
 
-- [ ] Gates (approve design, open PR, merge) are only passed by the user, never automatically. A gate
+- [ ] Gates (approve design, open PR, merge) are only passed by the user, never automatically, except
+      Open PR and merge while the user has Run to merge on (`sessions.auto_run`), which only the user (or a
+      start the user asked a session tool for, at Code) turns on, and which never approves a design. A gate
       pressed early (`sessions.queued_gate`) goes only as that press would have, shows with Cancel (honored
       until the prompt is typed or the merge requested), and is dropped (logged) when what it waited for is
       gone: a queued Open PR when Claude exits by any path (`setStatus` to exited, a relaunch), either one on
-      a move or archive, and a queued merge when a blocker appears that won't clear by itself.
+      a move or archive, and a queued merge when a blocker appears that won't clear by itself (not Run to
+      merge's, which waits and tells the user, and stops when GitHub refuses the merge). Run to merge stops
+      on an uncheck, a Cancel, a move and an interrupt where the harness reports one (Claude Code's mod,
+      OpenCode), so the user can always take the gates back, and stopping drops only the gate it queued
+      (`queued_auto`), never one the user pressed.
 - [ ] Each session kind keeps to its stages (`KIND_STAGES`): a task starts at Explore, Design or
       Code and leaves a stage only through a gate or a move by the user (`Lifecycle.move`, rules in
       `src/shared/stages.ts`), and a Review a PR stays in Reviewing PR. Code that switches on `stage`
@@ -200,7 +206,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       Prompts to one session go one at a time.
 - [ ] Merge is refused while `mergeBlockers` isn't empty; blockers are phrased for users. Only
       blockers that clear by themselves let it be queued (`MergeInfo.queueable`); any other one drops
-      a queued merge, and the user is told.
+      a queued merge, and the user is told (Run to merge's merge waits instead, and the user is told
+      once per new set of blockers only they can clear).
 - [ ] Cleanup never force-removes a worktree with uncommitted changes, and never deletes the
       user's main checkout or repo. Trimming idle worktrees never uses `--force`.
 - [ ] The only changes made in the user's main checkout are fast-forwarding the base branch when a

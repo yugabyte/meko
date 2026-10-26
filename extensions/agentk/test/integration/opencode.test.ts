@@ -71,6 +71,11 @@ describe('sessions on OpenCode (real session host + git, fake opencode running A
     expect(all<{ agent: string | null }>(env.core.db, 'SELECT agent FROM usage_messages WHERE session_id = ? ORDER BY at', s.id).map((r) => r.agent))
       .toContain(`${row.agent_session_id}_child`);
 
+    // A turn the user interrupts ends as one, as Claude Code's mod reports it.
+    await env.core.sessions.submit(s.id, 'interrupt this');
+    await waitFor(() => all<{ text: string }>(env.core.db, "SELECT text FROM session_events WHERE session_id = ? AND kind = 'turn'", s.id).map((e) => e.text),
+      (t) => t.includes('You interrupted the turn'), 10000, 'the interrupted turn');
+
     // OpenCode fires nothing when it exits: reconcile finds the dead pane.
     await env.core.sessions.submit(s.id, 'exit');
     await waitFor(async () => {

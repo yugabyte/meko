@@ -64,6 +64,8 @@ const DESIGN_LINE_RETRY_MS = 10 * 60 * 1000;
 const PR_DESIGN_RETRY_MS = 10 * 60 * 1000;
 /** The stages after a design's approval, where a change to it is saved as a new version and named in the PR. */
 const LATER_DESIGN_STAGES: readonly Stage[] = ['code', 'pr', 'review', 'merge'];
+/** Where Run to merge can be turned on or off: from Design until the merge. */
+const AUTO_RUN_STAGES: readonly Stage[] = ['design', 'code', 'pr', 'review'];
 
 /** True when a PR's design line names `ref`. */
 function sameRef(a: PrDesignRef | null, ref: PrDesignRef): boolean {
@@ -90,6 +92,10 @@ const GATE_NAMES: Record<QueuedGate, string> = { 'open-pr': 'Open PR', merge: 'm
 
 /** The status detail while a markdown or Artifact design waits for approval. */
 export const DESIGN_READY = 'Design ready for your approval';
+
+/** Merge blockers AgentK works on by itself in PR & Review (the CI and merge conflict watchers). */
+const CI_FAILING = 'CI is failing.';
+const CONFLICTING = 'The branch has merge conflicts.';
 
 /** Prompts queued for Claude in the Review stage, in the order they go out. */
 const QUEUE_ORDER = ['review', 'review-people', 'review-held', 'conflicts', 'ci'] as const;
@@ -203,6 +209,13 @@ export class Lifecycle {
   private ciFailSince = new Map<string, { head: string; at: number }>();
   /** Per session, the PR head at the last look and when it was first seen there (CI_START_MS). */
   private headSeen = new Map<string, { head: string; at: number }>();
+  /** Per Run to merge session, the blockers waiting on the user it was last told about (so it's told once per new set). */
+  private autoRunTold = new Map<string, string>();
+  /**
+   * Run to merge sessions whose queued merge waits on a blocker that doesn't clear by itself
+   * (approvals can take days): their PR is looked at every REVIEW_POLL_MS, not at every pass.
+   */
+  private autoRunBlocked = new Set<string>();
 
   constructor(private core: Core) {}
 
@@ -531,6 +544,7 @@ export class Lifecycle {
       const lead = answers && this.sessions.prompt(cur, 'approved-answers', { answers: answers.text });
       await this.sessions.submit(id, [lead, this.sessions.prompt(cur, 'approved')].filter(Boolean).join('\n\n'));
       if (answers) this.sessions.event(id, 'design', `Approved with ${answers.count}`);
+      if (cur.auto_run) this.sessions.event(id, 'auto-run', 'Approved with Run to merge: AgentK opens the PR when this turn ends, and merges it by itself');
     } catch (e) {
       if (this.sessions.row(id).stage === 'code') this.sessions.setStage(id, 'design', 'auto');
       throw new HttpError(502, `Couldn't send the approval to Claude: ${errMsg(e)}. Try again.`);
@@ -666,8 +680,11 @@ export class Lifecycle {
         const text = given ? 'Open PR queued with your instructions: it goes when AgentK finishes its turn' : 'Open PR queued: it goes when AgentK finishes its turn';
         this.queueGate(row.id, 'open-pr', text, given ?? '');
       } else if (given !== null && given !== (row.queued_instructions ?? '')) {
-        this.sessions.update(row.id, { queued_instructions: given || null });
+        // Pressed with instructions, Run to merge's Open PR is the user's now: stopping it keeps it.
+        this.sessions.update(row.id, { queued_instructions: given || null, queued_auto: 0 });
         this.sessions.event(row.id, 'queued', given ? 'Your instructions for the queued Open PR changed' : 'Your instructions for the queued Open PR were removed');
+      } else if (row.queued_auto) {
+        this.sessions.update(row.id, { queued_auto: 0 });
       }
       return;
     }
@@ -712,8 +729,8 @@ export class Lifecycle {
       // Cleared with the gate before the prompt is typed: if it can't be, the activity log keeps them.
       const instructions = row.queued_instructions;
       try {
-        await this.sendPr(row, this.prCheck(id, true));
-        this.sessions.event(id, 'queued', 'Queued Open PR sent');
+        await this.sendPr(row, this.prCheck(id, true), { by: row.auto_run ? 'auto' : 'you' });
+        this.sessions.event(id, 'queued', row.auto_run ? 'Run to merge: PR prompt sent' : 'Queued Open PR sent');
       } catch (e) {
         // Withdrawn while sendPr waited: whatever withdrew it said so in the activity log.
         if (e instanceof QueueWithdrawn) return;
@@ -734,7 +751,7 @@ export class Lifecycle {
    * user time to move on. Without `instructions` (a queued Open PR, from takeQueuedPr), those kept
    * with the queued gate go.
    */
-  private async sendPr(row: SessionRow, check: (r: SessionRow) => void, opts: { lead?: string; instructions?: string } = {}): Promise<void> {
+  private async sendPr(row: SessionRow, check: (r: SessionRow) => void, opts: { lead?: string; instructions?: string; by?: 'you' | 'auto' } = {}): Promise<void> {
     if (row.branch_reused) await this.followPrBase(row);
     // A branch whose PR head is on another remote (a fork's) is pushed there, not to origin.
     const footer = [row.push_remote ? pushLine(row) : '', await this.prFooter(row)].filter(Boolean).join('\n\n');
@@ -744,7 +761,7 @@ export class Lifecycle {
     const instructions = opts.instructions ?? (cur.queued_gate === 'open-pr' ? cur.queued_instructions ?? '' : '');
     check(cur);
     // The stage moves first: Claude's turn can end before submit returns.
-    this.sessions.setStage(row.id, 'pr', 'you');
+    this.sessions.setStage(row.id, 'pr', opts.by ?? 'you');
     this.sessions.setBusy(row.id, true);
     try {
       await this.sessions.submit(row.id, [opts.lead, this.sessions.prompt(cur, 'pr'), footer, this.instructionsPrompt(cur, instructions)].filter(Boolean).join('\n\n'));
@@ -801,13 +818,27 @@ export class Lifecycle {
       throw new HttpError(409, "This session designs in Claude's plan mode. Approve or reject the plan in the terminal first.");
     }
     this.checkBetweenTurns(cur);
-    // A gate queued in the stage it leaves (Open PR, a merge) isn't wanted where it goes.
-    const dropQueued = () => this.dropQueued(id, `the session moved to ${STAGE_LABELS[stage]}`);
+    // A gate queued in the stage it leaves (Open PR, a merge) isn't wanted where it goes, and a move
+    // takes the gates back from Run to merge.
+    const moved = `the session moved to ${STAGE_LABELS[stage]}`;
+    const dropQueued = () => {
+      this.stopAutoRun(id, moved);
+      this.dropQueued(id, moved);
+    };
     if (instructions) this.checkPromptable(cur);
     // A move within PR & Review was refused above (moveError).
     if (stage === 'review') {
-      dropQueued();
-      return this.moveToReview(this.sessions.row(id), instructions);
+      // Off before the PR is picked up, which would queue its merge; back on if the move is refused.
+      const wasOn = this.autoRunOff(id);
+      this.dropQueued(id, moved);
+      try {
+        await this.moveToReview(this.sessions.row(id), instructions);
+      } catch (e) {
+        if (wasOn && this.sessions.row(id).stage === cur.stage) this.sessions.update(id, { auto_run: 1 });
+        throw e;
+      }
+      if (wasOn) this.sessions.event(id, 'auto-run', `Run to merge stopped: ${moved}`);
+      return;
     }
 
     const send = offersPrompt(cur.stage, stage) && (prompt ?? promptByDefault(cur.stage, stage));
@@ -981,6 +1012,8 @@ export class Lifecycle {
     this.core.learn.turnEnded(id);
     // A Discard that waited for it goes now, and nothing else for the session does.
     if (this.sessions.row(id).discarding) return this.afterLearn(id);
+    // Esc on a turn is the user stepping in: Run to merge stops before a queued Open PR could go.
+    if (interrupted && (row.stage === 'code' || row.stage === 'pr' || row.stage === 'review')) this.stopAutoRun(id, 'you interrupted AgentK');
     // A move the session's own agent asked for (AgentK's session tools) goes now, and gives it its next turn.
     if (await this.core.tools.turnEnded(id, interrupted)) return;
     // A learn session that wrote its summary is done, and closes.
@@ -1149,7 +1182,7 @@ export class Lifecycle {
       for (const row of sessionRows(this.db)) {
         if (!projectRow(this.db, row.project_id)) continue;
         // A queued merge is checked at every pass (every POLL_MS), so it goes soon after CI does.
-        const due = row.queued_gate === 'merge' || now - (this.lastPoll.get(row.id) ?? 0) >= REVIEW_POLL_MS;
+        const due = (row.queued_gate === 'merge' && !this.autoRunBlocked.has(row.id)) || now - (this.lastPoll.get(row.id) ?? 0) >= REVIEW_POLL_MS;
         if (row.desired !== 'running') {
           // A cleanup that a restart cut short after archiving: finish it.
           if (row.stage === 'merge' && due && now - (row.archived_at ?? 0) < CLOSING_RESUME_MS) {
@@ -1162,7 +1195,9 @@ export class Lifecycle {
           await this.takeQueuedPr(row.id).catch((e) => this.warn(row.id, 'Sending the queued Open PR', e));
         } else if (row.stage === 'pr') {
           await this.pollPrStage(row).catch((e) => this.warn(row.id, 'PR lookup failed', e));
-        } else if ((row.stage === 'review' || row.stage === 'merge') && due) {
+        } else if ((row.stage === 'review' || row.stage === 'merge') && (due || (row.stage === 'review' && row.auto_run && !row.queued_gate))) {
+          // Run to merge's merge, after a restart that cut it short: queued again, and checked at every pass.
+          if (row.stage === 'review') this.armMerge(row.id);
           await this.pollReview(row).catch((e) => this.warn(row.id, 'PR status failed', e));
         } else if (row.stage === 'reviewing-pr' && due && !this.sessions.isCreating(row.id)) {
           // Not while its PR head is still being fetched: a push meanwhile isn't news, the fetch has it.
@@ -1229,6 +1264,7 @@ export class Lifecycle {
     }
     // Opening the PR and its review are one step in the UI: "Opened PR #7" already says the session moved on.
     this.sessions.setStage(id, 'review', by, { event: before.stage !== 'pr' });
+    this.armMerge(id);
     await this.doPollReview(id);
   }
 
@@ -1410,22 +1446,46 @@ export class Lifecycle {
     if (row.queued_gate !== 'merge' || this.merging.has(id) || row.stage !== 'review' || row.desired !== 'running') return;
     if (info.canMerge) {
       this.sessions.event(id, 'queued', 'Queued merge: nothing blocks it now; merging');
-      this.sessions.notifyUser(id, 'Merging', `PR #${row.pr_number} is ready: merging it now, as you queued.`);
+      this.sessions.notifyUser(id, 'Merging', `PR #${row.pr_number} is ready: merging it now, ${row.auto_run ? 'for Run to merge' : 'as you queued'}.`);
+      this.autoRunTold.delete(id);
+      this.autoRunBlocked.delete(id);
       this.merging.add(id);
       try {
-        await this.doMerge(id);
+        await this.doMerge(id, row.auto_run ? 'auto' : 'you');
       } catch (e) {
         this.sessions.event(id, 'queued', `Queued merge failed: ${errMsg(e)}`);
-        this.sessions.notifyUser(id, 'Merge failed', `${errMsg(e)} Press Merge & Close again once that's fixed.`);
+        // Its merge would be queued again at the next pass, and GitHub asked again: a refusal stops it.
+        if (row.auto_run) this.stopAutoRun(id, 'GitHub refused the merge');
+        this.sessions.notifyUser(id, 'Merge failed', `${errMsg(e)} ${row.auto_run ? 'Run to merge is off now: press Merge & Close' : 'Press Merge & Close again'} once that's fixed.`);
       } finally {
         this.merging.delete(id);
       }
       return;
     }
-    if (info.queueable) return;
+    if (info.queueable || row.auto_run) {
+      if (row.auto_run) this.autoRunWaits(id, info);
+      return;
+    }
     const why = info.blockers.join(' ');
     this.dropQueued(id, why);
     this.sessions.notifyUser(id, 'Queued merge dropped', `${why} Press Merge & Close again once that's fixed.`);
+  }
+
+  /**
+   * Run to merge keeps its merge queued through blockers that don't clear by themselves. AgentK works
+   * on failing CI and merge conflicts (their watchers tell the user when they hand them over); for the
+   * rest, the user is told once per new set.
+   */
+  private autoRunWaits(id: string, info: MergeInfo): void {
+    if (info.hard.length) this.autoRunBlocked.add(id);
+    else this.autoRunBlocked.delete(id);
+    const yours = info.hard.filter((b) => b !== CI_FAILING && !(b === CONFLICTING && this.core.config.pr.resolveConflicts));
+    const key = yours.join('\n');
+    if (key === (this.autoRunTold.get(id) ?? '')) return;
+    this.autoRunTold.set(id, key);
+    if (!yours.length) return;
+    this.sessions.event(id, 'auto-run', `Run to merge waits on you: ${yours.join(' ')}`);
+    this.sessions.notifyUser(id, 'Run to merge waits on you', `${yours.join(' ')} AgentK merges the PR once that's cleared.`);
   }
 
   /** Reviews' REST ids, links and inline comments, or null (retry at the next poll) when GitHub can't say. */
@@ -1646,10 +1706,10 @@ export class Lifecycle {
   mergeInfo(row: SessionRow, st: github.PrStatus, reviewer: ReviewerMode, opts: MergeChecks = {}): MergeInfo {
     const { unpushed = false, uncommitted = 0 } = opts;
     const b: string[] = [];
-    let hard = false;
+    const hard: string[] = [];
     const block = (text: string, waits = false) => {
       b.push(text);
-      if (!waits) hard = true;
+      if (!waits) hard.push(text);
     };
     const working = row.status === 'working' || this.sessions.runtime(row.id).busy;
     const turn = this.inTurn(row);
@@ -1659,7 +1719,7 @@ export class Lifecycle {
     if (unpushed) block("The branch has commits that aren't pushed to the PR.", turn || !!opts.turnAtStart);
     if (uncommitted) block(`The worktree has ${uncommitted === 1 ? '1 uncommitted file' : `${uncommitted} uncommitted files`}: commit or discard them.`, turn || !!opts.turnAtStart);
     const ci = github.ciState(st.statusCheckRollup);
-    if (ci === 'failure') block('CI is failing.');
+    if (ci === 'failure') block(CI_FAILING);
     else if (ci === 'pending') block('CI is still running.', true);
     else if (ci === 'none' && opts.newHead && row.queued_gate === 'merge') block("CI hasn't started on the latest push yet.", true);
     // AgentK gates the merge only once it's active on the PR, so repos it doesn't watch never wait for it.
@@ -1673,10 +1733,10 @@ export class Lifecycle {
     if (st.reviewDecision === 'CHANGES_REQUESTED') block('Changes were requested.');
     // Only on a repo that requires approvals: people's approvals can take days, so the merge isn't queued for them.
     if (st.reviewDecision === 'REVIEW_REQUIRED') block('Required approvals are missing.');
-    if (st.mergeable === 'CONFLICTING') block('The branch has merge conflicts.');
+    if (st.mergeable === 'CONFLICTING') block(CONFLICTING);
     if (st.mergeStateStatus === 'BEHIND') block('The branch is behind its base.');
     if (st.mergeStateStatus === 'DRAFT') block('The PR is a draft.');
-    return { canMerge: b.length === 0, blockers: b, queueable: b.length > 0 && !hard };
+    return { canMerge: b.length === 0, blockers: b, queueable: b.length > 0 && !hard.length, hard };
   }
 
   async requestReview(row: SessionRow, force: boolean): Promise<void> {
@@ -1898,6 +1958,9 @@ export class Lifecycle {
         this.sessions.update(row.id, skip);
         if (fresh.queued_gate !== 'merge') {
           this.queueGate(row.id, 'merge', `Merge queued: it goes once nothing blocks it (now: ${info.mergeBlockers.join(' ')})`);
+        } else if (fresh.queued_auto) {
+          // Pressed while Run to merge's merge waited: the user's now, so stopping Run to merge keeps it.
+          this.sessions.update(row.id, { queued_auto: 0 });
         }
       });
     } finally {
@@ -1911,7 +1974,7 @@ export class Lifecycle {
   }
 
   /** Asks GitHub to merge the PR, then looks at it again (which closes the session once it's merged). In the serial queue, under `merging`. */
-  private async doMerge(id: string): Promise<void> {
+  private async doMerge(id: string, by: 'you' | 'auto' = 'you'): Promise<void> {
     const row = this.sessions.row(id);
     const p = projectRow(this.db, row.project_id);
     if (!p || !row.pr_url) throw new HttpError(409, 'Merge is only available in the Review stage.');
@@ -1919,7 +1982,7 @@ export class Lifecycle {
     const method = await github.resolveMergeMethod(row.worktree_path, parseSettings(p.settings_json).mergeMethod);
     this.sessions.setBusy(id, true);
     try {
-      this.sessions.setStage(id, 'merge', 'you');
+      this.sessions.setStage(id, 'merge', by);
       await github.merge(row.worktree_path, row.pr_url, method);
     } catch (e) {
       if (this.sessions.row(id).stage === 'merge') this.sessions.setStage(id, 'review', 'auto');
@@ -1934,16 +1997,90 @@ export class Lifecycle {
     }
   }
 
+  // ---- Run to merge ----
+
+  /**
+   * Turns Run to merge on or off (`PATCH /api/sessions/:id`). On in Design waits for the approval;
+   * in Code it queues Open PR (sent now when Claude is at its prompt), and in PR & Review the merge.
+   * Off drops the gate it queued.
+   */
+  async setAutoRun(row: SessionRow, on: boolean): Promise<void> {
+    if (row.desired !== 'running') throw new HttpError(409, 'This session is archived.');
+    if (kindOf(row.kind) !== 'task') throw new HttpError(409, 'Run to merge is for tasks, not reviews of PRs.');
+    if (!AUTO_RUN_STAGES.includes(row.stage)) {
+      throw new HttpError(409, row.stage === 'explore' ? 'Run to merge starts at Design or later. Move the session on first.' : 'This session is already past its merge.');
+    }
+    if (row.stage === 'design' && row.plan_mode) throw new HttpError(409, "This session designs in Claude's plan mode, so Run to merge isn't available for it.");
+    if (!!row.auto_run === on) return;
+    if (!on) {
+      if (this.merging.has(row.id)) throw new HttpError(409, 'The merge is already being requested.');
+      this.stopAutoRun(row.id, 'you turned it off');
+      return;
+    }
+    this.sessions.update(row.id, { auto_run: 1 });
+    this.sessions.event(row.id, 'auto-run', row.stage === 'design'
+      ? 'Run to merge on: once you approve the design, AgentK opens the PR and merges it by itself'
+      : 'Run to merge on: AgentK opens the PR and merges it by itself');
+    this.core.changed();
+    if (row.stage === 'code' && row.status !== 'exited') {
+      // Mid-turn it goes when the turn ends; between turns, now (takeQueuedPr checks Claude can take it).
+      if (!row.queued_gate) this.queueGate(row.id, 'open-pr', 'Run to merge: Open PR queued', '', true);
+      await this.takeQueuedPr(row.id).catch((e) => this.warn(row.id, 'Sending the queued Open PR', e));
+    } else if (row.stage === 'review') {
+      this.armMerge(row.id);
+      await this.pollReview(this.sessions.row(row.id)).catch((e) => this.warn(row.id, 'PR status failed', e));
+    }
+  }
+
+  /** Turns Run to merge off, dropping the gate it keeps queued, and says why in the activity log. */
+  private stopAutoRun(id: string, why: string): void {
+    const row = sessionRow(this.db, id);
+    if (!this.autoRunOff(id)) return;
+    // Only the gate it queued: one the user pressed themselves stays, as it would have without it.
+    if (row?.queued_gate && row.queued_auto && !this.merging.has(id)) this.dropQueued(id, 'Run to merge stopped');
+    this.sessions.event(id, 'auto-run', `Run to merge stopped: ${why}`);
+  }
+
+  /** Turns Run to merge off, leaving its queued gate alone; false when it wasn't on. */
+  private autoRunOff(id: string): boolean {
+    if (!sessionRow(this.db, id)?.auto_run) return false;
+    this.sessions.update(id, { auto_run: 0 });
+    this.autoRunTold.delete(id);
+    this.autoRunBlocked.delete(id);
+    this.core.changed();
+    return true;
+  }
+
+  /**
+   * A turn started (UserPromptSubmit). In Code with Run to merge on, Open PR is queued for its end,
+   * so a relaunch (which drops a queued Open PR) is armed again by the next turn.
+   */
+  onTurnStart(id: string): void {
+    const row = sessionRow(this.db, id);
+    if (!row?.auto_run || row.stage !== 'code' || row.queued_gate || row.desired !== 'running') return;
+    this.queueGate(id, 'open-pr', 'Run to merge: the PR opens when this turn ends', '', true);
+  }
+
+  /** In PR & Review with Run to merge on, the merge stays queued until it goes (takeQueuedMerge). */
+  private armMerge(id: string): void {
+    const row = sessionRow(this.db, id);
+    if (!row?.auto_run || row.stage !== 'review' || row.queued_gate || this.merging.has(id) || row.desired !== 'running') return;
+    this.queueGate(id, 'merge', 'Run to merge: the PR merges once nothing blocks it', '', true);
+  }
+
   // ---- queued gates ----
 
-  /** Sets or clears the queued gate; its instructions (a queued Open PR's) go with it. */
-  private setQueued(id: string, gate: QueuedGate | null, instructions = ''): void {
-    this.sessions.update(id, { queued_gate: gate, queued_instructions: gate && instructions ? instructions : null });
+  /**
+   * Sets or clears the queued gate; its instructions (a queued Open PR's) go with it, and whether
+   * Run to merge queued it (`auto`) rather than the user.
+   */
+  private setQueued(id: string, gate: QueuedGate | null, instructions = '', auto = false): void {
+    this.sessions.update(id, { queued_gate: gate, queued_instructions: gate && instructions ? instructions : null, queued_auto: gate && auto ? 1 : 0 });
     this.core.changed();
   }
 
-  private queueGate(id: string, gate: QueuedGate, text: string, instructions = ''): void {
-    this.setQueued(id, gate, instructions);
+  private queueGate(id: string, gate: QueuedGate, text: string, instructions = '', auto = false): void {
+    this.setQueued(id, gate, instructions, auto);
     this.sessions.event(id, 'queued', text);
   }
 
@@ -1955,6 +2092,8 @@ export class Lifecycle {
     this.setQueued(row.id, null);
     if (gate === 'merge') this.giveUpMerge(row.id);
     this.sessions.event(row.id, 'queued', `Queued ${GATE_NAMES[gate]} withdrawn`);
+    // Or the next turn (or poll) would queue it again.
+    this.stopAutoRun(row.id, `you withdrew the queued ${GATE_NAMES[gate]}`);
   }
 
   /**

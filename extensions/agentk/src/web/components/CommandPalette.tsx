@@ -282,7 +282,7 @@ export function CommandPalette({
     return [...all, ...askEntries(last.actions, projects).map((e): Item => {
       const a = e.action;
       const item: Item = { id: e.id, label: e.label, hint: e.hint, keywords: '', busy: starting === e.id ? busyLabel[a.type] : undefined, wrap: true };
-      if (e.edit && a.type === 'start') return { ...item, run: () => onEditSession(a.projectId, { name: a.name, prompt: a.prompt, start: a.start }) };
+      if (e.edit && a.type === 'start') return { ...item, run: () => onEditSession(a.projectId, { name: a.name, prompt: a.prompt, start: a.start, autoRun: a.autoRun }) };
       switch (a.type) {
         case 'go':
           return { ...item, run: () => go(a) };
@@ -293,7 +293,7 @@ export function CommandPalette({
           return {
             ...item, keepOpen: true,
             run: () => void (!starting && run(e.id, async () => {
-              const session = await api.createSession(a.projectId, { name: a.name, prompt: a.prompt, start: a.start });
+              const session = await api.createSession(a.projectId, { name: a.name, prompt: a.prompt, start: a.start, autoRun: a.autoRun });
               const project = projects.find((p) => p.id === a.projectId);
               if (!mounted.current || !project) return;
               onClose();

@@ -618,6 +618,12 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE sessions ADD COLUMN purpose TEXT;
   `,
+  // 41: auto_run: 1 while Run to merge is on, so AgentK passes Open PR and Merge & Close by itself (lifecycle.ts);
+  // queued_auto: 1 when Run to merge queued the gate in queued_gate (not the user's press), so stopping it drops only its own.
+  `
+  ALTER TABLE sessions ADD COLUMN auto_run INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE sessions ADD COLUMN queued_auto INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 export function openDb(path: string): Db {

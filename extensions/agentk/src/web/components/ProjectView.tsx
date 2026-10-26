@@ -19,10 +19,10 @@ import { approveDesign, changingDecisions } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { approveLabel, closingText, cx, dotState, designApprovalBlocker, formatCredits, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, sessionTabTitle, totalTokens, updateShowing, usageTitle } from '../util';
+import { approveLabel, closingText, cx, dotState, designApprovalBlocker, formatCredits, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, runToMergeShown, runToMergeTitle, sessionTabTitle, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
-import { Busy, Check, ConfirmButton, ContextRing, DatapackName, Elapsed, HarnessLogo, NotesIcon, StatusDot } from './common';
+import { Busy, Check, ConfirmButton, ContextRing, DatapackName, Elapsed, HarnessLogo, NotesIcon, RunToMergeCheck, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
 import type { MovePreset } from './MoveSessionDialog';
@@ -199,6 +199,15 @@ export function ProjectView({
       setActingOn(null);
     }
   };
+  // Run to merge's checkbox beside the gates (StageBar) and the design panel's Approve.
+  const setAutoRun = async (on: boolean) => {
+    if (!session) return;
+    try {
+      await api.updateSession(session.id, { autoRun: on });
+    } catch (e) {
+      onError(errorMessage(e));
+    }
+  };
   const updating = !!session && (
     (actingOn?.id === session.id && actingOn.action === 'update-pr')
     || (updated?.id === session.id && !updateShowing(updated.pr, session.reviewingPr)));
@@ -363,6 +372,7 @@ export function ProjectView({
           session={session}
           project={project}
           onAct={act}
+          onAutoRun={setAutoRun}
           learnTo={mergeLearnTo}
           onMove={onMove}
           onOpenPr={onOpenPr}
@@ -438,6 +448,7 @@ export function ProjectView({
             showQuestions={questionsAt}
             onClose={() => setPanel(null)}
             onApprove={() => act('approve-design')}
+            onAutoRun={setAutoRun}
           />
         )}
         {session && panel === 'changes' && <ChangesPanel key={`changes-${session.id}`} session={session} onClose={() => setPanel(null)} />}
@@ -473,6 +484,7 @@ export function ProjectView({
               session={session}
               project={project}
               onAct={act}
+              onAutoRun={setAutoRun}
               learnTo={mergeLearnTo}
               onMove={(preset) => {
                 setSheet(false);
@@ -559,16 +571,21 @@ function InstructionsButton({ queued, disabled, title, onClick }: { queued: bool
   );
 }
 
-/** A gate pressed early (Open PR or Merge & Close), shown as a pill with Cancel until it goes. */
+/**
+ * A gate pressed early (Open PR or Merge & Close), or kept queued by Run to merge, shown as a pill
+ * with Cancel until it goes, beside Run to merge's box. Cancel on Run to merge's gate turns it off.
+ */
 function queuedGate(
   session: Session,
   blocked: boolean,
   onAct: (a: SessionAction, req?: CloseSessionRequest) => Promise<void>,
+  onAutoRun: (on: boolean) => Promise<void>,
   title: string,
   onInstructions?: () => void,
 ): ReactNode {
   return (
     <span className="gate-group">
+      <RunToMergeCheck session={session} disabled={blocked} onChange={onAutoRun} />
       {onInstructions && (
         <InstructionsButton
           queued
@@ -591,6 +608,7 @@ function StageBar({
   session,
   project,
   onAct,
+  onAutoRun,
   onMove,
   onOpenPr,
   onShare,
@@ -604,6 +622,8 @@ function StageBar({
   session: Session | null;
   project: ProjectWithSessions;
   onAct: (a: SessionAction, req?: CloseSessionRequest) => Promise<void>;
+  /** Turns Run to merge on or off (its checkbox beside Approve design, Open PR and Merge & Close). */
+  onAutoRun: (on: boolean) => Promise<void>;
   /** The datapack Merge & Close saves what the session learned to first; null when it has none (or Meko is off). */
   learnTo?: string | null;
   onMove: (preset?: MovePreset) => void;
@@ -667,9 +687,11 @@ function StageBar({
       );
       break;
     case 'design': {
+      const runToMerge = <RunToMergeCheck session={session} disabled={blocked} onChange={onAutoRun} />;
       if (session.approvalQueued) {
         gate = (
           <span className="gate-group">
+            {runToMerge}
             <span className="gate-pill" title="The approval goes to AgentK when its turn ends, unless the turn changes the design">
               ✓ Approved: goes when the turn ends
             </span>
@@ -684,28 +706,32 @@ function StageBar({
       reason = session.designQuestions.open ? null : designApprovalBlocker(session);
       const waits = heldForTurnEnd(session);
       gate = (
-        <button
-          className="gate"
-          disabled={blocked || !!reason}
-          title={reason ?? (session.designQuestions.open
-            ? 'Answer the open questions, then approve'
-            : waits ? 'AgentK is mid-turn: the approval goes when the turn ends, if the design stays the same' : 'Approve the design and move to Code')}
-          onClick={() => onAct('approve-design')}
-        >
-          {approveLabel(session.designQuestions.open)}
-        </button>
+        <span className="gate-group">
+          {session.hasDesign && runToMerge}
+          <button
+            className="gate"
+            disabled={blocked || !!reason}
+            title={reason ?? (session.designQuestions.open
+              ? 'Answer the open questions, then approve'
+              : waits ? 'AgentK is mid-turn: the approval goes when the turn ends, if the design stays the same' : 'Approve the design and move to Code')}
+            onClick={() => onAct('approve-design')}
+          >
+            {approveLabel(session.designQuestions.open)}
+          </button>
+        </span>
       );
       break;
     }
     case 'code': {
       if (session.queued === 'open-pr') {
-        gate = queuedGate(session, blocked, onAct, 'The PR prompt goes to AgentK when its turn ends', onOpenPr);
+        gate = queuedGate(session, blocked, onAct, onAutoRun, 'The PR prompt goes to AgentK when its turn ends', onOpenPr);
         break;
       }
       const pr = openPrGate(session);
       reason = pr.reason;
       gate = (
         <span className="gate-group">
+          <RunToMergeCheck session={session} disabled={blocked} onChange={onAutoRun} />
           <InstructionsButton queued={false} disabled={blocked || !!reason} title={reason ?? 'Open PR with instructions for AgentK'} onClick={onOpenPr} />
           <button className="gate" disabled={blocked || !!reason} title={pr.title} onClick={() => onAct('open-pr')}>
             {pr.label}
@@ -755,9 +781,10 @@ function StageBar({
             </button>
           )}
           {session.queued === 'merge' ? (
-            queuedGate(session, blocked, onAct, 'The pull request is merged once nothing blocks it')
+            queuedGate(session, blocked, onAct, onAutoRun, 'The pull request is merged once nothing blocks it')
           ) : (
             <>
+              <RunToMergeCheck session={session} disabled={blocked} onChange={onAutoRun} />
               {learnTo && (
                 <label className="check skip-learn" title={`Unchecked, AgentK saves what this session learned to ${learnTo} before closing it`}>
                   <input type="checkbox" checked={skipLearn} disabled={blocked} onChange={(e) => setSkipFor(e.target.checked ? session.id : null)} />
@@ -857,6 +884,8 @@ function StageBar({
         </div>
       )}
       {reasons && reason && <div className="blockers">{reason}</div>}
+      {/* A phone has no tooltips: what the box beside the gate does. */}
+      {reasons && runToMergeShown(session) && <div className="blockers">Run to merge: {runToMergeTitle(session)}.</div>}
     </div>
   );
 }
