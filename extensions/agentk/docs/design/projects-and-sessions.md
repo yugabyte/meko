@@ -150,6 +150,7 @@ CREATE TABLE sessions (
   queued_gate TEXT,                -- a gate pressed before it could go: 'open-pr' (at the turn's end) | 'merge' (once
                                    --   nothing blocks it); NULL: none
   queued_instructions TEXT,        -- the user's instructions for a queued Open PR (OpenPrRequest); cleared with queued_gate
+  auto_run INTEGER,                -- 1 while Run to merge is on: AgentK keeps Open PR, then the merge, queued (lifecycle.md)
   skip_learn INTEGER,              -- 1: the last Merge & Close press asked to skip the learn step (kept until the PR merges)
   discarding INTEGER,              -- 1: Discard was asked for and waits for the learn step (cleared by Archive)
   agentk_seen INTEGER,             -- 1 once AgentK commented on or reviewed the PR, or was asked to

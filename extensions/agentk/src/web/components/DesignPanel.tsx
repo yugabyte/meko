@@ -10,7 +10,7 @@ import { approveLabel, cx, designApprovalBlocker, headerApproves, relativeTime }
 import { DesignQuestions } from './DesignQuestions';
 import { MarkdownView } from './MarkdownView';
 import { SidePanel } from './SidePanel';
-import { Busy, Dots } from './common';
+import { Busy, Dots, RunToMergeCheck } from './common';
 
 /**
  * The session's design: a published Artifact in a sandboxed frame, or markdown, and its open
@@ -23,6 +23,7 @@ export function DesignPanel({
   session,
   onClose,
   onApprove,
+  onAutoRun,
   showQuestions = 0,
   page = false,
   datapacks,
@@ -32,6 +33,8 @@ export function DesignPanel({
   datapacks?: DatapackRef[];
   onClose?: () => void;
   onApprove: () => void;
+  /** Turns Run to merge on or off, from its checkbox beside Approve. */
+  onAutoRun: (on: boolean) => Promise<void>;
   /** Changes when the questions should be shown (Approve pressed elsewhere with open questions). */
   showQuestions?: number;
   page?: boolean;
@@ -158,6 +161,7 @@ export function DesignPanel({
           </div>
         )}
         <span className="sp" />
+        {headerApproves(session, questions, changing) && <RunToMergeCheck session={session} disabled={session.busy} onChange={onAutoRun} />}
         {headerApproves(session, questions, changing) && (
           <button
             className="btn small primary"

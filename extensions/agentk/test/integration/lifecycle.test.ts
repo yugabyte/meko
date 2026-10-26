@@ -1699,4 +1699,99 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await pollAll();
     expect(gh.merges).toEqual([]);
   });
+
+  describe('Run to merge', () => {
+    const movedBy = (id: string) => all<{ stage: string; moved_by: string }>(env.core.db,
+      'SELECT stage, moved_by FROM session_stages WHERE session_id = ? ORDER BY rowid', id).map((r) => `${r.stage}:${r.moved_by}`);
+    const prPrompts = (id: string) => count(transcript(id), /Open a pull request/g);
+    const clean = () => status({ reviews: [{ id: 'r1', author: { login: 'yb-agentk-dev' }, state: 'COMMENTED', body: '**0 inline comments.**', submittedAt: new Date().toISOString() }] });
+
+    it('takes a design approved with it to a merged PR, opening the PR and merging by itself', async () => {
+      const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+      const s = await env.core.sessions.create(p.id, { name: 'All the way', prompt: 'DESIGN_MD it' });
+      await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'needs_input' && x.hasDesign, 10000, 'design ready');
+      // On in Design: nothing is queued until the approval.
+      await env.core.sessions.edit(s.id, { autoRun: true });
+      expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'design', autoRun: true, queued: null });
+      const notify = vi.spyOn(env.core.sessions, 'notifyUser');
+      gh.pr = { number: 7, url: 'https://github.com/acme/demo/pull/7', state: 'OPEN' };
+      gh.status = clean();
+      await env.core.sessions.action(s.id, 'approve-design');
+      await closed(s.id);
+      expect(transcript(s.id)).toContain('Run to merge is on for this session: when this turn ends, AgentK opens the PR');
+      expect(prPrompts(s.id)).toBe(1);
+      expect(gh.merges).toEqual(['https://github.com/acme/demo/pull/7']);
+      expect(movedBy(s.id)).toEqual(['design:you', 'code:you', 'pr:auto', 'review:auto', 'merge:auto', 'done:auto']);
+      expect(notify).toHaveBeenCalledWith(s.id, 'Merging', 'PR #7 is ready: merging it now, for Run to merge.');
+    });
+
+    it('keeps the merge of a task started with it queued through failing CI, tells the user once about what only they can clear, and merges once nothing blocks it', async () => {
+      const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+      gh.pr = { number: 7, url: 'https://github.com/acme/demo/pull/7', state: 'OPEN' };
+      const green = clean();
+      gh.status = { ...green, statusCheckRollup: [failing()] };
+      const notify = vi.spyOn(env.core.sessions, 'notifyUser');
+      const s = await env.core.sessions.create(p.id, { name: 'Started with it', prompt: 'do it', start: 'code', autoRun: true });
+      await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'review' && x.queued === 'merge', 15000, 'PR opened, merge queued');
+      expect(transcript(s.id)).toContain('Run to merge is on for this session');
+      // AgentK is told to fix CI; the merge waits for it.
+      await waitFor(() => transcript(s.id), (t) => t.includes('CI failed on PR'), 10000, 'CI prompt');
+      await idle(s.id, 'CI fix turn');
+      await poll(s.id);
+      expect(queuedGate(s.id)).toBe('merge');
+      expect(gh.merges).toEqual([]);
+      expect(notify).not.toHaveBeenCalledWith(s.id, 'Run to merge waits on you', expect.anything());
+
+      gh.status = { ...green, reviewDecision: 'CHANGES_REQUESTED' };
+      await poll(s.id);
+      await poll(s.id);
+      expect(queuedGate(s.id)).toBe('merge');
+      expect(notify.mock.calls.filter((c) => c[1] === 'Run to merge waits on you')).toEqual([
+        [s.id, 'Run to merge waits on you', "Changes were requested. AgentK merges the PR once that's cleared."],
+      ]);
+
+      gh.status = green;
+      await poll(s.id);
+      expect(gh.merges).toEqual(['https://github.com/acme/demo/pull/7']);
+      await closed(s.id);
+    });
+
+    // Each takes the gates back; the turn running when it happens then ends without a PR.
+    it.each([
+      ['unchecked', (id: string) => env.core.sessions.edit(id, { autoRun: false }), 'you turned it off'],
+      ['the queued Open PR is cancelled', (id: string) => env.core.sessions.action(id, 'cancel-queued'), 'you withdrew the queued Open PR'],
+      ['the turn is interrupted', (id: string) => env.core.lifecycle.onTurnEnd(id, true), 'you interrupted AgentK'],
+    ])('stops when %s', async (_what, stop, why) => {
+      const s = await working('Stopped');
+      await env.core.sessions.edit(s.id, { autoRun: true });
+      expect(env.core.sessions.get(s.id)).toMatchObject({ autoRun: true, queued: 'open-pr' });
+      await stop(s.id);
+      expect(env.core.sessions.get(s.id)).toMatchObject({ autoRun: false, queued: null });
+      expect(lastEvent(s.id, 'auto-run')).toBe(`Run to merge stopped: ${why}`);
+      await idle(s.id, 'turn end');
+      await pollAll();
+      expect(env.core.sessions.get(s.id).stage).toBe('code');
+      expect(prPrompts(s.id)).toBe(0);
+    });
+
+    it('queues the merge through any blocker when turned on in Review, stops on a move, and is refused where it has no gates to pass', async () => {
+      const s = await inReview('Turned on later');
+      const approved = gh.status!;
+      gh.status = { ...approved, reviewDecision: 'REVIEW_REQUIRED' };
+      await env.core.sessions.edit(s.id, { autoRun: true });
+      expect(env.core.sessions.get(s.id)).toMatchObject({ autoRun: true, queued: 'merge', mergeQueueable: false });
+      await env.core.sessions.move(s.id, { stage: 'code', prompt: false });
+      expect(env.core.sessions.get(s.id)).toMatchObject({ autoRun: false, queued: null });
+      expect(lastEvent(s.id, 'auto-run')).toBe('Run to merge stopped: the session moved to Code');
+      gh.status = approved;
+      await pollAll();
+      expect(gh.merges).toEqual([]);
+
+      await expect(env.core.sessions.edit(s.id, { autoRun: 'yes' as never })).rejects.toMatchObject({ status: 400 });
+      const p = env.core.sessions.get(s.id).projectId;
+      await expect(env.core.sessions.create(p, { name: 'At Design', prompt: 'hi', autoRun: true })).rejects.toMatchObject({ status: 400 });
+      const explore = await env.core.sessions.create(p, { name: 'Looking', prompt: 'hi', start: 'explore' });
+      await expect(env.core.sessions.edit(explore.id, { autoRun: true })).rejects.toMatchObject({ status: 409 });
+    });
+  });
 });

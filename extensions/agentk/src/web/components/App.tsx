@@ -466,6 +466,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
           session={s}
           datapacks={currentProject?.datapacks}
           onApprove={() => approveDesign(s.id).catch((e) => showToast(errorMessage(e)))}
+          onAutoRun={(on) => api.updateSession(s.id, { autoRun: on }).then(() => undefined, (e: unknown) => showToast(errorMessage(e)))}
         />
         {toastBox}
       </>

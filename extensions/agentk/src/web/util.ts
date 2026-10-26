@@ -593,15 +593,28 @@ const MERGE_WAITS: [string, string][] = [
   ["CI hasn't started on the latest push yet.", 'waiting on CI'],
   ['Waiting for the AgentK review.', 'waiting on the AgentK review'],
   ['AgentK is waiting on you in the terminal.', 'waiting on you in the terminal'],
+  // Only Run to merge's merge stays queued through these, which AgentK works on.
+  ['CI is failing.', 'waiting on a CI fix'],
+  ['The branch has merge conflicts.', 'waiting on the merge conflicts'],
 ];
 
-/** The pill a queued gate shows in place of its button (`Session.queued`); null when nothing is queued. */
+/**
+ * The pill a queued gate shows in place of its button (`Session.queued`); null when nothing is
+ * queued. Run to merge's merge also waits on blockers that don't clear by themselves.
+ */
 export function queuedText(session: Session): string | null {
-  if (session.queued === 'open-pr') return '✓ Open PR queued: goes when the turn ends';
+  if (session.queued === 'open-pr') return session.autoRun ? '✓ Run to merge: opens the PR when this turn ends' : '✓ Open PR queued: goes when the turn ends';
   if (session.queued !== 'merge') return null;
   const first = session.mergeBlockers[0];
-  const waits = first ? (MERGE_WAITS.find(([text]) => text === first)?.[1] ?? 'waiting on AgentK') : 'merging soon';
-  return `✓ Merge queued: ${waits}`;
+  const waits = first ? (MERGE_WAITS.find(([text]) => text === first)?.[1] ?? (session.autoRun && !session.mergeQueueable ? 'waiting on you' : 'waiting on AgentK')) : 'merging soon';
+  return session.autoRun ? `✓ Run to merge: ${waits}` : `✓ Merge queued: ${waits}`;
+}
+
+/** What Run to merge does from the stage the session is in, for its checkbox's tooltip. */
+export function runToMergeTitle(session: Session): string {
+  if (session.stage === 'design') return 'Once you approve the design, AgentK opens the PR when it has made the change, then merges it once nothing blocks it';
+  if (session.stage === 'review') return 'AgentK merges the PR once nothing blocks it, and tells you when something only you can clear blocks it';
+  return 'AgentK opens the PR when its turn ends, then merges it once nothing blocks it';
 }
 
 const facts = (n: number) => `${n} ${n === 1 ? 'fact' : 'facts'}`;

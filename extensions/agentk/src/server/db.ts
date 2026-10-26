@@ -618,6 +618,10 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE sessions ADD COLUMN purpose TEXT;
   `,
+  // 41: auto_run: 1 while Run to merge is on, so AgentK passes Open PR and Merge & Close by itself (lifecycle.ts).
+  `
+  ALTER TABLE sessions ADD COLUMN auto_run INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 export function openDb(path: string): Db {

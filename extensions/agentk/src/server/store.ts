@@ -122,6 +122,8 @@ export interface SessionRow {
   queued_gate: QueuedGate | null;
   /** The user's instructions for a queued Open PR, sent after its prompt; cleared with queued_gate. */
   queued_instructions: string | null;
+  /** 1 while Run to merge is on (Session.autoRun). */
+  auto_run: number;
   /** Discard was asked for and waits for the learn step (Session.discarding). */
   discarding: number;
   /** The user asked Merge & Close to skip the learn step. */
@@ -230,6 +232,8 @@ export interface MergeInfo {
   canMerge: boolean;
   blockers: string[];
   queueable: boolean;
+  /** The blockers that don't clear by themselves (a part of `blockers`). */
+  hard: string[];
 }
 
 export interface SessionRuntime {
@@ -294,6 +298,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     mergeQueueable: rt.mergeQueueable,
     queued: r.queued_gate,
     queuedInstructions: r.queued_gate === 'open-pr' ? r.queued_instructions : null,
+    autoRun: !!r.auto_run,
     busy: rt.busy,
     skippedStages: skippedStages(db, r),
     hasDesign: !!design,

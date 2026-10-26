@@ -138,6 +138,11 @@ the first prompt, unless the prompt already starts with it), so the prompt needn
 | **Review a PR** (`kind: 'review-pr'`) | Reviewing someone else's PR, with AgentK assisting | `review-pr`; it stays in Reviewing PR until you **Close review** (see [Reviewing a PR](review-pr.md)) |
 | **Learn the project** (`learn`) | Seeding the project's datapack from the repo and its PRs; offered only with Meko on and a dedicated datapack | `seed`; it closes by itself when done (see [Learn sessions](recall-and-learn.md#learn-sessions)) |
 
+With Code picked, a **Run to merge** box (off by default) sits under the picker: AgentK then opens
+the PR when the coding turn ends and merges it once nothing blocks it (`CreateSessionRequest.autoRun`;
+see [Run to merge](lifecycle.md#run-to-merge)). At Design it's picked beside Approve instead, so the
+server refuses `autoRun` with any other start (400).
+
 A task can't start at PR & Review: it gets there through **Open PR** or a move. A session is a
 task or a Review a PR (`kindOf()` in `src/shared/stages.ts`). `sessions.kind` and `Session.kind`
 keep the old type names for tasks, and new tasks are stored and sent as `plan`, because an older

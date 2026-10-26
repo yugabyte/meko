@@ -555,14 +555,16 @@ textarea.input {
   font-weight: 600;
   color: var(--bad);
 }
-/* Don't save learnings, beside Discard and Merge & Close. */
-.check.skip-learn {
+/* Don't save learnings, beside Discard and Merge & Close; Run to merge, beside the gates. */
+.check.skip-learn,
+.check.gate-check {
   align-items: center;
   font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
 }
-.check.skip-learn input {
+.check.skip-learn input,
+.check.gate-check input {
   margin-top: 0;
 }
 .tag {

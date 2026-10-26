@@ -815,6 +815,11 @@ export interface Session {
   queued: QueuedGate | null;
   /** The user's instructions for a queued Open PR (OpenPrRequest); null when it has none, or none is queued. */
   queuedInstructions: string | null;
+  /**
+   * Run to merge: AgentK passes Open PR when a Code turn ends and Merge & Close once nothing blocks
+   * it, by keeping the gate queued (`queued`) in each stage. In Design it waits for the approval.
+   */
+  autoRun: boolean;
   /** True while a gate action or stage transition is in flight. */
   busy: boolean;
   /**
@@ -1424,6 +1429,8 @@ export interface StartFromLinkRequest {
   projectId?: string;
   /** An issue's task: where it starts. Defaults to `design`. */
   start?: 'design' | 'code';
+  /** An issue's task at Code: Run to merge (Session.autoRun) from the start. 400 for a PR, or a task at Design. */
+  autoRun?: boolean;
 }
 
 export interface StartFromLinkResult {
@@ -1486,13 +1493,14 @@ export interface AskAgentkTurn {
  * tools do (`src/server/actions.ts`).
  */
 export type AskAgentkAction =
-  | { type: 'start'; projectId: string; start: StartStage; name: string; prompt: string }
+  /** `autoRun`: Run to merge (Session.autoRun), only with `start` `code`. */
+  | { type: 'start'; projectId: string; start: StartStage; name: string; prompt: string; autoRun?: boolean }
   /**
    * A PR or issue (`owner/name#N` or its link). In Do all (POST /api/actions/run) it runs as
    * `githubLinks.start` does, in `projectId` or the project the link fits: a PR as a Review a PR
    * session, an issue as a task at `start` (Design by default), refusing an issue a running task works on.
    */
-  | { type: 'link'; ref: string; projectId?: string; start?: 'design' | 'code' }
+  | { type: 'link'; ref: string; projectId?: string; start?: 'design' | 'code'; autoRun?: boolean }
   | { type: 'go'; view: 'session'; projectId: string; sessionId: string }
   | { type: 'go'; view: 'home'; projectId: string }
   | { type: 'go'; view: 'usage' | 'settings' }
@@ -2114,6 +2122,11 @@ export interface UpdateSessionRequest {
   baseBranch?: string;
   /** Moves the session to the top of its project's list. */
   toTop?: boolean;
+  /**
+   * Turns Run to merge (Session.autoRun) on or off. On in Design waits for the approval; in Code it
+   * queues Open PR, and in PR & Review the merge.
+   */
+  autoRun?: boolean;
 }
 
 export interface AttachDatapackRequest {
@@ -2156,6 +2169,8 @@ export interface CreateSessionRequest {
   start?: StartStage;
   /** Deprecated: use `start: 'code'`. True starts a task at Code when neither `start` nor `kind` says otherwise. */
   skipDesign?: boolean;
+  /** Run to merge (Session.autoRun) from the start: only for a task starting at Code. */
+  autoRun?: boolean;
   /**
    * For `kind: 'review-pr'` (and required there): the PR to review. `repoPath` is then a local clone
    * of `repo`; the base and branch come from the PR, and `prompt` holds the user's notes for AgentK.
@@ -2401,7 +2416,8 @@ export type TermServerMessage =
 //        `pr` that isn't open or whose head repo no remote of the repo is; 409 for a branch a running session uses or another checkout has, or
 //        when no coding agent is available (NO_AGENT). Review a PR:
 //        400 without `pr`, for a PR that isn't open, or a repoPath that isn't a clone of the PR's repo; 400 for
-//        `images` that aren't this project's staged images, or more than MAX_START_IMAGES. A learn session (`learn`): 400 without
+//        `images` that aren't this project's staged images, or more than MAX_START_IMAGES; 400 for `autoRun` on anything but a
+//        task starting at Code. A learn session (`learn`): 400 without
 //        an `about`, for text over LEARN_TEXT_MAX or `months` outside 0–LEARN_MONTHS_MAX, with `kind: 'review-pr'` or `pr`, and
 //        when Meko is off or the project has no dedicated datapack). Answers once
 //        the session is written, still starting: the worktree and Claude start after (Session.startup shows where it
@@ -2415,7 +2431,11 @@ export type TermServerMessage =
 //        long name or one with control characters, 409 for an archived session. A new baseBranch is what the diff, the
 //        PR and the prompts use from then on: 400 for a branch that isn't here, on origin or on upstream, or that has no
 //        history in common with the session's; 409 for a review, a session with a PR, or one whose worktree is gone.
-//        toTop moves it first in its project's list; 400 when it isn't a boolean, 409 for an archived session)
+//        toTop moves it first in its project's list; 400 when it isn't a boolean, 409 for an archived session.
+//        autoRun turns Run to merge on or off: on in Design waits for the approval, in Code it queues Open PR (sent now
+//        when AgentK is at its prompt) and in PR & Review the merge, which then stays queued through any blocker; off
+//        drops the gate it queued. 400 when it isn't a boolean, 409 for an archived session, a review, Explore, Merge &
+//        Close, a design in plan mode, or while the merge is being requested)
 // GET    /api/sessions/:id/base-branches       → string[]   (the branches the session's base can be: local, origin's
 //        and upstream's, by name, newest commit first; 409 when its worktree is gone)
 // DELETE /api/failed-starts/:id                → 204   (dismisses a failed start; 204 when it's already gone)

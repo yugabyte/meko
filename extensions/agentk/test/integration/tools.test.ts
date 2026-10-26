@@ -100,15 +100,22 @@ describe("AgentK's session tools through agentk mcp (real session host + git, fa
     issue(1, 'Fix login');
     issue(5, 'Dark mode');
     const started = await t.call('start_sessions', {
-      sessions: [{ ref: 'acme/demo#1' }, { ref: 'https://github.com/acme/demo/issues/5', stage: 'code' }, { name: 'Docs', prompt: 'Update the docs' }],
+      sessions: [
+        { ref: 'acme/demo#1' },
+        { ref: 'https://github.com/acme/demo/issues/5', stage: 'code', autoRun: true },
+        // Run to merge is only for a start at Code: left out here, and said so.
+        { name: 'Docs', prompt: 'Update the docs', autoRun: true },
+      ],
     });
     expect(started).toEqual({ isError: false, text: [
+      "Left out Run to merge for Docs: it's only for a task that starts at Code.",
       'Started a task on acme/demo#1, "#1 Fix login", in Demo.',
-      'Started a task on https://github.com/acme/demo/issues/5, "#5 Dark mode", in Demo.',
+      'Started a task on https://github.com/acme/demo/issues/5, "#5 Dark mode", in Demo, with Run to merge.',
       'Started "Docs" in Demo at Design.',
     ].join('\n') });
     const byName = (name: string) => env.core.sessions.listForProject(projectId).find((s) => s.name === name)!;
-    expect(byName('#5 Dark mode').stage).toBe('code');
+    expect(byName('#5 Dark mode')).toMatchObject({ stage: 'code', autoRun: true });
+    expect(byName('Docs')).toMatchObject({ stage: 'design', autoRun: false });
     // An issue a running task already works on isn't started twice; one GitHub doesn't have fails alone.
     const again = await t.call('start_sessions', { sessions: [{ ref: 'acme/demo#1' }, { ref: 'acme/demo#404' }] });
     expect(again.isError).toBe(true);
@@ -128,7 +135,7 @@ describe("AgentK's session tools through agentk mcp (real session host + git, fa
     });
     expect(events(lead)).toEqual([
       'Started a task on acme/demo#1, "#1 Fix login", in Demo.',
-      'Started a task on https://github.com/acme/demo/issues/5, "#5 Dark mode", in Demo.',
+      'Started a task on https://github.com/acme/demo/issues/5, "#5 Dark mode", in Demo, with Run to merge.',
       'Started "Docs" in Demo at Design.',
       expect.stringMatching(/^Couldn't start a session on acme\/demo#1/),
       expect.stringMatching(/^Couldn't start a session on acme\/demo#404/),

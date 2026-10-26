@@ -439,6 +439,18 @@ function mekoMarkSentence(): string {
   return `In that section, write ${MEKO_SOURCE_MARK} after the title of each one that rests on Meko (one with "meko" items), and only those: AgentK shows it as Meko's mark.`;
 }
 
+/**
+ * Added in code to the prompts that start a task's coding (`AUTO_RUN_PROMPTS`) while Run to merge is
+ * on: AgentK opens the PR when the turn ends, so the work is finished in it, and a question for the
+ * user goes through the question tool, which keeps the turn open, rather than ending the turn.
+ */
+export function autoRunLine(): string {
+  return 'Run to merge is on for this session: when this turn ends, AgentK opens the PR, then merges it once CI passes and the reviews are addressed. So finish the work and run the checks in this turn. If you need a decision from the user, ask with your question tool rather than ending your turn with a question.';
+}
+
+/** The prompts that start a task's coding, and get autoRunLine while Run to merge is on. */
+export const AUTO_RUN_PROMPTS: readonly PromptName[] = ['code', 'approved'];
+
 /** The prompts that may change a task's code after its design was approved, and get designUpkeepLine. */
 export const DESIGN_UPKEEP_PROMPTS: readonly PromptName[] = ['approved', 'move-code', 'comments', 'review', 'review-people', 'review-held', 'ci', 'conflicts'];
 

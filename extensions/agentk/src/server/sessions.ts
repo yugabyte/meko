@@ -23,7 +23,7 @@ import { AGENTK_AGENT_ID, launchedAgentId, sessionAgentId, withMekoScope } from 
 import { claudeReply, mekoLogPath, removeMekoLog } from './mekolog.js';
 import { mekoTool } from './mekousage.js';
 import {
-  DESIGN_UPKEEP_PROMPTS, designQaLine, designQuestionsLine, designUpkeepLine, designWhere, learnTask, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine,
+  AUTO_RUN_PROMPTS, autoRunLine, DESIGN_UPKEEP_PROMPTS, designQaLine, designQuestionsLine, designUpkeepLine, designWhere, learnTask, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine,
   mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, reviewDesignLine, taskWithName, withAttachedImages, type PromptName,
 } from './prompts.js';
 import { PR_DESIGN_TIMEOUT_MS, markPrDesignTold, prDesignFile, prDesignSource, removePrDesignFiles } from './prdesign.js';
@@ -467,6 +467,7 @@ export class SessionManager {
       if (req[k] != null && typeof req[k] !== 'string') throw new HttpError(400, `The session's ${k} must be text.`);
     }
     if (req.existingBranch != null && typeof req.existingBranch !== 'boolean') throw new HttpError(400, 'existingBranch must be true or false.');
+    if (req.autoRun != null && typeof req.autoRun !== 'boolean') throw new HttpError(400, 'autoRun must be true or false.');
     // A learn session's task is its brief: it takes no images or first prompt.
     const learn = req.learn != null ? checkLearn(req.learn) : null;
     // Before the first await, so an image swept meanwhile is left out at the move, not refused here.
@@ -491,6 +492,11 @@ export class SessionManager {
       }
     }
     const start: StartStage = learn ? 'explore' : req.start ?? legacy ?? (req.skipDesign ? 'code' : 'design');
+    // Run to merge from the start is for a task at Code; at Design it's turned on beside Approve.
+    const autoRun = !!req.autoRun;
+    if (autoRun && (kind !== 'task' || learn || start !== 'code')) {
+      throw new HttpError(400, 'Run to merge can only be picked for a task that starts at Code. For one at Design, turn it on when you approve the design.');
+    }
     const repo = this.core.projects.sessionRepo(p, req.repoPath);
     // A project's repo moved or deleted since it was opened. Checked here because the first git
     // calls below don't notice (hasCommits counts a git error as having commits), so the first to
@@ -545,7 +551,7 @@ export class SessionManager {
     const request: CreateSessionRequest = {
       name, harness: harness.id, prompt: learn ? undefined : (req.prompt ?? '').trim() || undefined, kind, start: review || learn ? undefined : start, learn: learn ?? undefined,
       baseBranch: review || attach ? undefined : base, repoPath: req.repoPath, branch: attach ? undefined : wanted || undefined,
-      existingBranch: existing || undefined,
+      existingBranch: existing || undefined, autoRun: autoRun || undefined,
       pr: review ? { repo: review.repo, number: review.info.number } : attach ? { repo: req.pr!.repo, number: attach.info.number } : undefined,
       images: images.length ? images : undefined,
     };
@@ -571,14 +577,14 @@ export class SessionManager {
       const path = claimed ?? pool.add(repo, id);
       run(this.db, `INSERT INTO sessions(id, project_id, slug, name, harness, claude_session_id, branch, base_branch, repo_path, branch_reused,
                       worktree_path, tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode, meko_agent_id,
-                      pr_number, pr_url, pr_repo, pr_title, pr_author, review_sha, pr_head_sha, pr_new_commits, pr_state, pr_remote, review_notes, push_remote, push_branch, purpose, position)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                      pr_number, pr_url, pr_repo, pr_title, pr_author, review_sha, pr_head_sha, pr_new_commits, pr_state, pr_remote, review_notes, push_remote, push_branch, purpose, auto_run, position)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                       (SELECT COALESCE(MIN(position), 0) - 1 FROM sessions WHERE project_id = ?))`,
         id, projectId, slug, name, harness.id, randomUUID(), branch, base, repo, where ? 1 : 0, path, paneName(projectId, slug),
         randomBytes(24).toString('base64url'), review ? 'review-pr' : STORED_TASK_KIND, stage, task || null, now, now, sessionAgentId({ id, slug, harness: harness.id }),
         review?.info.number ?? attach?.info.number ?? null, review?.info.url ?? attach?.info.url ?? null, review?.repo ?? null, review?.info.title ?? null,
         review?.info.author ?? null, sha, sha, review ? 0 : null, review ? 'OPEN' : null, review?.remote ?? null, notes || null,
-        push?.remote ?? null, push ? push.branch : null, learn ? 'learn' : null, projectId);
+        push?.remote ?? null, push ? push.branch : null, learn ? 'learn' : null, autoRun ? 1 : 0, projectId);
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
       return { worktree: path, reused: !!claimed };
     });
@@ -978,7 +984,8 @@ export class SessionManager {
       ...review,
       ...extra,
     });
-    const lines = [...(name === 'design' || name === 'move-design' ? [designQuestionsLine(this.questionsFile(row), this.offersMod(row))] : []), ...this.designLines(row, name, extra), ...meko];
+    const lines = [...(name === 'design' || name === 'move-design' ? [designQuestionsLine(this.questionsFile(row), this.offersMod(row))] : []), ...this.designLines(row, name, extra),
+      ...(row.auto_run && AUTO_RUN_PROMPTS.includes(name) ? [autoRunLine()] : []), ...meko];
     return lines.length ? `${text.trimEnd()}\n\n${lines.join('\n\n')}` : text;
   }
 
@@ -1555,6 +1562,7 @@ export class SessionManager {
         this.planPending.delete(id);
         this.update(id, { interrupted: 0 });
         this.setStatus(id, 'working');
+        this.core.lifecycle.onTurnStart(id);
         break;
       case 'PreToolUse': {
         const meko = this.harness(row).mekoTool?.(p);
@@ -1922,12 +1930,17 @@ export class SessionManager {
     return this.get(id);
   }
 
-  /** `PATCH /api/sessions/:id`: a new base (setBase), Move to top (toTop), then a new name (rename); a bad name changes none. */
+  /**
+   * `PATCH /api/sessions/:id`: a new base (setBase), Move to top (toTop), Run to merge (autoRun), then
+   * a new name (rename); a bad name changes none.
+   */
   async edit(id: string, req: UpdateSessionRequest): Promise<Session> {
     if (req.name !== undefined) sessionName(req.name);
     if (req.toTop !== undefined && typeof req.toTop !== 'boolean') throw new HttpError(400, 'toTop must be true or false.');
+    if (req.autoRun !== undefined && typeof req.autoRun !== 'boolean') throw new HttpError(400, 'autoRun must be true or false.');
     if (req.baseBranch !== undefined) await this.setBase(id, req.baseBranch);
     if (req.toTop) this.toTop(id);
+    if (req.autoRun !== undefined) await this.core.lifecycle.setAutoRun(this.row(id), req.autoRun);
     return this.rename(id, { name: req.name });
   }
 

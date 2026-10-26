@@ -106,6 +106,7 @@ const ANSWER_SCHEMA = {
           instructions: { type: 'string' },
           repo: { type: 'string' },
           datapack: { type: 'string' },
+          autoRun: { type: 'boolean' },
         },
         required: ['type'],
       },
@@ -123,8 +124,8 @@ The user typed an instruction or a question. Answer with "reply" (one or two sho
 "together": true when the actions are the steps of what the user asked, all to be done ("start sessions for #1 and #5 and move Dark mode to Code": three actions, together); AgentK then offers to do them all at once. false when they're alternatives to pick one of, best first.
 
 Actions:
-- start: start a task session. projectId; stage: explore, design or code (design unless the user asks for another, or the request is only a question about the code (explore), or the user wants a small, clear change made straight away (code)); name: a short title, at most 60 characters; prompt: the task in the user's own words, keeping their details and adding nothing they didn't ask for.
-- link: work on a GitHub PR or issue: a PR gets a review session, an issue a task that fixes or implements it. ref: its link, or owner/name#number; for a bare #number, owner/name is the "github" of the project meant. projectId: the project to start it in (the one on screen, or the one the user names); stage: design or code, for an issue (design unless the user asks for code).
+- start: start a task session. projectId; stage: explore, design or code (design unless the user asks for another, or the request is only a question about the code (explore), or the user wants a small, clear change made straight away (code)); name: a short title, at most 60 characters; prompt: the task in the user's own words, keeping their details and adding nothing they didn't ask for; autoRun: true only when the user asks AgentK to take it all the way to a merged PR by itself, with stage code.
+- link: work on a GitHub PR or issue: a PR gets a review session, an issue a task that fixes or implements it. ref: its link, or owner/name#number; for a bare #number, owner/name is the "github" of the project meant. projectId: the project to start it in (the one on screen, or the one the user names); stage: design or code, for an issue (design unless the user asks for code); autoRun: as for start.
 - go: open something. view: session (with projectId and sessionId), home (a project's home page, with projectId), usage or settings.
 - move: move a task session to another stage. sessionId; stage: explore, design, code or review (review opens or picks up its PR); instructions: what the user asked for in that stage, if anything.
 - openPr: open a PR for a session in code. sessionId; instructions: what the user asked for the PR, if anything.

@@ -55,6 +55,8 @@ export function NewSessionDialog({
   const [name, setName] = useState(initial?.name ?? '');
   const [nameEdited, setNameEdited] = useState(!!initial?.name);
   const [prompt, setPrompt] = useState(initial?.prompt ?? '');
+  // Run to merge, offered for a start at Code (at Design it's picked beside Approve).
+  const [autoRun, setAutoRun] = useState(!!initial?.autoRun);
   // A learn session saves to the project's dedicated datapack, so it's offered only with one and Meko on.
   const learnOffered = mekoOn && project.datapacks.some((d) => d.role === 'dedicated');
   const [start, setStart] = useState<StartChoice>(
@@ -338,6 +340,7 @@ export function NewSessionDialog({
               baseBranch: workOn === 'pr' ? undefined : baseBranch,
               kind: 'task',
               start: start === 'review-pr' || start === 'learn' ? undefined : start,
+              autoRun: start === 'code' && autoRun ? true : undefined,
               repoPath: inProjectRepo ? undefined : repoPath,
               images,
               ...(workOn === 'pr' && taskPr
@@ -398,6 +401,15 @@ export function NewSessionDialog({
           </p>
         )}
         <StartPicker id="ns-start" value={learn ? 'learn' : start === 'learn' ? 'design' : start} learn={learnOffered} onChange={chooseStart} />
+        {start === 'code' && (
+          <label className="check">
+            <input id="ns-auto-run" type="checkbox" checked={autoRun} onChange={(e) => setAutoRun(e.target.checked)} />
+            <span>
+              Run to merge
+              <span className="muted small check-hint">AgentK opens the PR when it has made the change, then merges it once nothing blocks it.</span>
+            </span>
+          </label>
+        )}
         {learn && (
           <>
             <Field label="What is this project about?" hint="What it does, who it's for, and what you're working on in it.">

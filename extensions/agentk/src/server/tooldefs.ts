@@ -53,6 +53,11 @@ export const TOOL_DEFS: ToolDef[] = [
               name: { type: 'string', description: 'A task without a ref: its short title.' },
               prompt: { type: 'string', description: "A task without a ref: what to do, in the user's words." },
               stage: { type: 'string', enum: ['explore', 'design', 'code'], description: "Where a task starts (an issue's: design or code). Default design." },
+              autoRun: {
+                type: 'boolean',
+                description: 'Run to merge: AgentK opens the PR when the coding turn ends and merges it once nothing blocks it. ' +
+                  'Only when the user asks for it, and only for a task (or an issue) with stage code.',
+              },
             },
           },
         },

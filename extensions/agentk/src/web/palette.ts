@@ -158,7 +158,7 @@ export function askEntries(actions: AskAgentkAction[], projects: ProjectWithSess
         const said = preview(a.prompt, 80);
         const same = said.replace(/[.!\s]+$/, '').toLowerCase() === a.name.toLowerCase();
         return [
-          { id, label: ['Start ', { session: a.name }, ' in ', { project: projectName(a.projectId) }, ` at ${STAGE_LABELS[a.start]}`], hint: same ? 'Action' : said, action: a },
+          { id, label: ['Start ', { session: a.name }, ' in ', { project: projectName(a.projectId) }, ` at ${STAGE_LABELS[a.start]}${a.autoRun ? ', run to merge' : ''}`], hint: same ? 'Action' : said, action: a },
           { id: `${id}-edit`, label: ['Edit ', { session: a.name }, ' in New session…'], hint: 'Change it before it starts', action: a, edit: true },
         ];
       }
