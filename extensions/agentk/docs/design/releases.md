@@ -132,7 +132,10 @@ same button); a version that was rolled back is never offered again. When you cl
    (a sleeping phone or laptop) doesn't hold the restart for the 30 seconds `ws` would wait. An open
    page whose last state said an update was installing retries its events socket every second
    (for up to 2 minutes, then with the usual backoff), so it reloads into the new version as soon
-   as it's up;
+   as it's up. Just before it restarts, the server sends every open page a `restarting` event, so
+   the page shows only the update's Installing banner while it waits, and not the lost-connection
+   banner (which it shows after 2 minutes if the server isn't back; a drop before the
+   `restarting` event, while the update still downloads, is shown after the usual 2 seconds);
 6. if the new version fails to come up three times in a row (the service manager restarts it) before
    it has been healthy for 5 minutes, points back to the previous version and marks the new one as
    bad (`bad-versions`, which the updater never offers again). A deliberate stop (SIGTERM, as for a

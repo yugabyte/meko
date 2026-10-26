@@ -2284,7 +2284,9 @@ export type ServerEvent =
   /** A project datapack was shared with you: sent once per datapack. */
   | { type: 'invite'; datapackId: string; title: string; body: string }
   /** The answer to a client's `ping`. */
-  | { type: 'pong' };
+  | { type: 'pong' }
+  /** The server installed an update and is restarting into it: sent right before its sockets close. */
+  | { type: 'restarting' };
 
 export type EventsClientMessage = { type: 'ping' };
 

@@ -17,7 +17,7 @@ export const MAX_SLOW = 3;
 export const UPDATE_RETRY_MS = 1000;
 /** ...for this long, then backs off as usual (a new version that won't start takes a while to roll back). */
 export const UPDATE_RETRY_FOR_MS = 120_000;
-/** How long the connection may be down before the page says so (UPDATE_RETRY_FOR_MS while an update installs). */
+/** How long the connection may be down before the page says so (UPDATE_RETRY_FOR_MS once the server says it's restarting into an update). */
 export const LOST_GRACE_MS = 2000;
 
 /** The parts of a browser WebSocket the connection uses. */
@@ -54,9 +54,12 @@ export interface EventsHandlers {
  *
  * onConn reports what to tell the user, not each socket's ups and downs: `connecting` until the
  * first socket proves itself, `open` once a socket's state arrives, and `closed` only once the
- * connection has been down for LOST_GRACE_MS (UPDATE_RETRY_FOR_MS while an update installs, which
- * its own banner says). Retries report nothing, so the lost-connection banner shows once and stays
- * until the server is back instead of going off for every try.
+ * connection has been down for LOST_GRACE_MS. When the server said it's restarting into an update
+ * it installed (a `restarting` message, sent just before it closes the socket), the wait is
+ * UPDATE_RETRY_FOR_MS: the update's own banner says what's happening. A drop before that, while the
+ * update still downloads and checks itself, gets the usual wait. Retries report nothing, so the
+ * lost-connection banner shows once and stays until the server is back instead of going off for
+ * every try.
  */
 export class EventsConnection {
   private ws: SocketLike | null = null;
@@ -73,6 +76,8 @@ export class EventsConnection {
   private updating = false;
   /** When the socket was dropped during an update, or 0. */
   private droppedAt = 0;
+  /** The server said it's restarting into an update, since its last state. */
+  private restarting = false;
   /** Running from a drop until the page says the connection is lost. */
   private lostTimer: ReturnType<typeof setTimeout> | null = null;
   /** What onConn last reported, or null before the first. */
@@ -146,11 +151,13 @@ export class EventsConnection {
       this.attempt = 0;
       this.updating = !!msg.state.update?.applying;
       this.droppedAt = 0;
+      this.restarting = false;
       if (this.lostTimer) clearTimeout(this.lostTimer);
       this.lostTimer = null;
       this.report('open');
       this.h.onState(msg.state);
-    } else if (msg.type === 'notify' || msg.type === 'invite' || msg.type === 'knowledge') this.h.onEvent(msg);
+    } else if (msg.type === 'restarting') this.restarting = true;
+    else if (msg.type === 'notify' || msg.type === 'invite' || msg.type === 'knowledge') this.h.onEvent(msg);
   }
 
   private probe(): void {
@@ -219,7 +226,7 @@ export class EventsConnection {
       this.lostTimer = setTimeout(() => {
         this.lostTimer = null;
         this.report('closed');
-      }, this.updating ? UPDATE_RETRY_FOR_MS : LOST_GRACE_MS);
+      }, this.restarting ? UPDATE_RETRY_FOR_MS : LOST_GRACE_MS);
     }
     if (this.updating) this.droppedAt ||= Date.now();
     const delay = this.updating && Date.now() - this.droppedAt < UPDATE_RETRY_FOR_MS

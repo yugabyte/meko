@@ -129,7 +129,12 @@ describe('HTTP API: access control', () => {
       ws.send(JSON.stringify({ type: 'ping' }));
       await pong;
       expect(got).toEqual(['state', 'pong']);
-      ws.terminate();
+      // Restarting into an update: pages hear so before the close.
+      const closing = new Promise<void>((resolve) => ws.once('close', () => resolve()));
+      env.core.notifyRestarting();
+      await app.close();
+      await closing;
+      expect(got).toEqual(['state', 'pong', 'restarting']);
     });
 
     it("closes without waiting out a socket that never answers the close (ws's 30 s)", async () => {

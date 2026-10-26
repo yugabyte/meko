@@ -629,11 +629,14 @@ class SessionTerminal {
     }
   }
 
-  /** `retrying`: a backoff retry, which keeps saying the connection is lost instead of flipping to connecting each try. */
+  /**
+   * `retrying`: a backoff retry, which keeps saying what the last try did (the connection lost, or
+   * the exit or error it's retrying after) instead of flipping to connecting each try.
+   */
   private connect(retrying = false) {
     if (this.disposed) return;
     this.started = true;
-    if (!retrying || this.conn !== 'closed') this.setConn('connecting');
+    if (!retrying) this.setConn('connecting');
     // A terminal that connects is the newest viewer: the session takes its size.
     this.active = true;
     // Fit first when on screen, so the session starts at this terminal's size.

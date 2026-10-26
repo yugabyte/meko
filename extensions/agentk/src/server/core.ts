@@ -429,6 +429,11 @@ export class Core extends EventEmitter {
     this.emit('notify', { type: 'knowledge', ...n } satisfies KnowledgeEvent);
   }
 
+  /** Tells open pages the server is restarting into an update, before the restart closes their sockets. */
+  notifyRestarting(): void {
+    this.emit('notify', { type: 'restarting' } satisfies ServerEvent);
+  }
+
   /** Syncs the invites and shares waiting in Meko. Never throws. */
   async syncInvites(): Promise<void> {
     if (!this.mekoStatus.configured) return;
