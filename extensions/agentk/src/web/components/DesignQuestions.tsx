@@ -4,6 +4,7 @@ import type { DatapackRef, DesignDoc, DesignQuestion, Session } from '../../shar
 import { api, errorMessage } from '../api';
 import {
   approvalSent, changeDraft, decidedOption, draftFor, draftsBlocker, draftsPersist, loadDrafts, pruneDrafts, revisionSent, saveDrafts, shownDraft, toRequest, useDesignDrafts,
+  useRevision,
   type Draft,
 } from '../design-answers';
 import { cx, designApprovalBlocker, designReviseBlocker, heldForTurnEnd, isMac, isSubmitKey } from '../util';
@@ -204,6 +205,12 @@ export function DesignQuestions({
   const [note, setNote] = useState<string | null>(null);
   const [sending, setSending] = useState<'revise' | 'approve' | 'cancel' | null>(null);
   const approve = useRef<HTMLButtonElement>(null);
+  // The line saying a revision was sent goes once that revision's turn is over (the design panel's
+  // header shows AgentK at work meanwhile).
+  const revising = useRevision(session.id) !== null;
+  useEffect(() => {
+    if (!revising) setNote(null);
+  }, [revising]);
 
   const editable = session.stage === 'design' && session.desired === 'running';
   // While an approval waits for the turn's end, the answers it took stay as they were.
@@ -258,8 +265,9 @@ export function DesignQuestions({
       if (what === 'cancel') {
         await api.sessionAction(session.id, 'cancel-approval');
       } else if (what === 'revise') {
+        const at = Date.now();
         await api.reviseDesign(session.id, request);
-        revisionSent(session.id);
+        revisionSent(session.id, at);
         setNote(held ? 'Sent. AgentK takes them when this turn ends, then revises the design.' : 'Sent to AgentK. The design is updated when its turn ends.');
       } else {
         // An approval queued for the turn's end keeps the answers until it's sent, in case it's dropped.

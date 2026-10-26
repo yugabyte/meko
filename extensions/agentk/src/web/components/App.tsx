@@ -3,7 +3,7 @@ import type { AppState, CreateSessionRequest, DatapackInvite, FailedStart, Proje
 import type { HarnessId } from '../../shared/harnesses';
 import { api, ApiError, errorMessage } from '../api';
 import { appUrl } from '../base';
-import { approveDesign, settleApprovals } from '../design-answers';
+import { approveDesign, settleApprovals, settleRevisions } from '../design-answers';
 import { useEvents, type InviteEvent, type NotifyEvent } from '../hooks/useEvents';
 import { useIsMobile } from '../hooks/useMedia';
 import { useReload } from '../hooks/useReload';
@@ -249,7 +249,9 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
     const ids = new Set<string>();
     for (const p of state.projects) for (const s of liveSessions(p)) ids.add(s.id);
     pruneTerminals(ids);
-    settleApprovals(state.projects.flatMap((p) => p.sessions));
+    const sessions = state.projects.flatMap((p) => p.sessions);
+    settleApprovals(sessions);
+    settleRevisions(sessions);
   }, [state]);
 
   const currentProject =
@@ -462,6 +464,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
     return (
       <>
         <DesignPanel
+          key={s.id}
           page
           session={s}
           datapacks={currentProject?.datapacks}
