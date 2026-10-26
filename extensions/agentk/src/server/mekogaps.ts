@@ -6,8 +6,14 @@ import { all, run, type Db } from './db.js';
  * (`meko_calls.quality`, set by the transcript reader, and `meko_preloads.quality` for AgentK's
  * search at start), grouped by query (`query_key`), with what the user did about each
  * (`meko_gap_marks`), or a session's learn step did. A question whose latest ask found something
- * relevant is left out; one asked again after it was dismissed or taught is open again.
+ * relevant is left out; one asked again after it was dismissed or taught is open again. A learn
+ * session's searches (`sessions.purpose = 'learn'`) aren't questions: it searches before each save
+ * to skip what Meko has, into a datapack it's seeding, so finding nothing there is expected. One that
+ * found something still answers another session's question.
  */
+
+/** A session whose searches can be questions: not a learn session. */
+const ASKER = "s.purpose IS NOT 'learn'";
 
 /** Questions on one page. */
 export const GAP_PAGE = 100;
@@ -69,11 +75,11 @@ export function projectGaps(db: Db, projectId: string): MekoGap[] {
     `SELECT c.query_key AS key, c.query, c.quality, 'claude' AS source, c.tool, c.results, c.top_score, c.top_raw, c.at,
        s.id AS session_id, s.name AS session_name, s.desired
      FROM meko_calls c JOIN sessions s ON s.id = c.session_id
-     WHERE s.project_id = ? AND c.quality IS NOT NULL AND c.query_key IS NOT NULL
+     WHERE s.project_id = ? AND ${ASKER} AND c.quality IS NOT NULL AND c.query_key IS NOT NULL
      UNION ALL
      SELECT p.query_key, p.query, p.quality, 'start', 'context_search', NULL, p.top_score, NULL, p.at, s.id, s.name, s.desired
      FROM meko_preloads p JOIN sessions s ON s.id = p.session_id
-     WHERE s.project_id = ? AND p.quality IS NOT NULL AND p.query_key IS NOT NULL
+     WHERE s.project_id = ? AND ${ASKER} AND p.quality IS NOT NULL AND p.query_key IS NOT NULL
      ORDER BY at DESC`, projectId, projectId);
   if (!asks.length) return [];
   // The latest ask of each question that found something relevant: one after the poor asks answers it.
@@ -160,9 +166,9 @@ export function gapPage(db: Db, projectId: string, state: MekoGapState | 'all', 
     (!after || g.lastAt < after.lastAt || (g.lastAt === after.lastAt && g.key > after.key)));
   const recorded = all<{ n: number; since: number | null }>(db,
     `SELECT COUNT(*) AS n, MIN(at) AS since FROM (
-       SELECT c.at FROM meko_calls c JOIN sessions s ON s.id = c.session_id WHERE s.project_id = ? AND c.query_key IS NOT NULL
+       SELECT c.at FROM meko_calls c JOIN sessions s ON s.id = c.session_id WHERE s.project_id = ? AND ${ASKER} AND c.query_key IS NOT NULL
        UNION ALL
-       SELECT p.at FROM meko_preloads p JOIN sessions s ON s.id = p.session_id WHERE s.project_id = ? AND p.query_key IS NOT NULL
+       SELECT p.at FROM meko_preloads p JOIN sessions s ON s.id = p.session_id WHERE s.project_id = ? AND ${ASKER} AND p.query_key IS NOT NULL
      )`, projectId, projectId)[0];
   return {
     gaps: matching.slice(0, GAP_PAGE),

@@ -225,7 +225,8 @@ the project has never had one (`ProjectHome.hasLearnSession`).
   with its own PR, but here the PRs are the source. From a PR it saves the reason (decisions,
   rejected alternatives, root causes, review findings that became rules), naming the PR as
   "(PR #123)", never a summary of the change. Metadata adds `"seed": true` and `"pr"`. It changes no
-  files; nothing enforces that beyond the prompt (the edit guard is Design's).
+  files; nothing enforces that beyond the prompt (the edit guard is Design's). The searches it
+  makes before each save stay off [What Meko doesn't know](#what-meko-doesnt-know).
 - **When it's done, it closes.** Claude writes its summary to `learned.md` beside the design file
   (`SessionManager.learnedPath`, outside the repo), only once it has finished; a session that stops
   to ask something doesn't write it. At each turn's end, a learn session still in Explore whose turn
@@ -298,7 +299,11 @@ agent's (Claude's, Kiro's or OpenCode's) and AgentK's at start, grouped by `quer
 query as last asked, how the latest ask went and with which tool (or *AgentK's search at start*),
 how many times it was asked and by which sessions, and the latest ask's item count, best memory
 score and best raw similarity (which may be two different memories'). A question whose latest ask
-found something relevant is left out: Meko knows it now. Pages are 100 questions, and the next
+found something relevant is left out: Meko knows it now. A [learn session](#learn-sessions)'s
+searches, its own and AgentK's at start, aren't questions, and aren't in the count of searches
+recorded either: it searches before each save to skip what Meko already has, into a datapack it's
+seeding, so a search that finds nothing is what it expects, not something Meko should be taught.
+One that found something still answers another session's question. Pages are 100 questions, and the next
 starts after the last one's `lastAt` and key, since searches Claude makes in one response share a
 time.
 

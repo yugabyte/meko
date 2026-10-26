@@ -76,6 +76,24 @@ describe("What Meko doesn't know", () => {
     expect((await call('GET', `/api/projects/${p.id}/meko-gaps?state=closed`)).statusCode).toBe(400);
   });
 
+  it("leaves a learn session's searches out: they check before saving, they aren't questions", async () => {
+    const p = await project('Alpha');
+    session(p.id, 's1', 'tags');
+    session(p.id, 'seed', 'Learn the project');
+    run(env.core.db, "UPDATE sessions SET purpose = 'learn', stage = 'explore' WHERE id = 'seed'");
+    search('s1', 't1', 'Release tag retention', 1000, 'empty', 'empty');
+    search('seed', 't2', 'How it works: the release train', 2000, 'empty', 'empty');
+    search('seed', 't3', 'release tag retention', 900, 'found', 'weak');
+    run(env.core.db, `INSERT INTO meko_preloads(session_id, at, outcome, results, chars, ms, query, query_key, quality) VALUES ('seed', 1500, 'empty', 0, 0, 900, 'Seed the datapack', 'seed the datapack', 'empty')`);
+
+    const open = await page(p.id);
+    expect(open.gaps.map((g) => [g.query, g.asks, g.sessions.map((s) => s.name)])).toEqual([['Release tag retention', 1, ['tags']]]);
+    expect(open).toMatchObject({ open: { empty: 1, weak: 0 }, searches: 1, since: 1000 });
+    // One that found something still answers another session's question.
+    search('seed', 't4', 'release tag retention', 3000, 'found', null);
+    expect((await page(p.id)).gaps).toEqual([]);
+  });
+
   it("teaches Meko into the dedicated datapack as AgentK, and says why when it can't", async () => {
     const p = await project('Alpha');
     session(p.id, 's1', 'tags');
