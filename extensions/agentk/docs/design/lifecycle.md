@@ -216,8 +216,8 @@ It runs on the [queued gates](#queued-gates):
   failing CI and merge conflicts as it always does (their watchers say when they hand over), and for
   every other one (a held review, changes requested, missing approvals, a branch behind its base,
   unpushed work between turns) you're notified once per new set (`autoRunWaits`; a question in the
-  terminal had its own Needs you notification), and while such a blocker is there the PR is looked at every 45 seconds rather
-  than at every 15-second pass (approvals can take days). It merges at the first look that finds
+  terminal had its own Needs you notification), and while such a blocker is there the PR is looked
+  at every 45 seconds rather than at every 15-second pass (approvals can take days). It merges at the first look that finds
   nothing blocking; if GitHub refuses the merge (a ruleset, say, which the blockers don't show), Run to
   merge stops, so the merge isn't asked for again at every pass. After AgentK's findings
   are addressed it doesn't ask for another review round, as Merge when ready doesn't. The pill reads
@@ -226,8 +226,8 @@ It runs on the [queued gates](#queued-gates):
   GitHub: `autoRunDone`) or needs you: Needs you, a held review, *Run to merge waits on you*, the CI
   and conflict watchers handing over after three tries, a refused merge, Claude exiting. Progress
   AgentK handles itself (a review arrived and was sent to AgentK, AgentK's clean review, CI failed,
-  merge conflicts, *Merging*) goes to the activity log only (`notifyProgress`), as it does again once
-  Run to merge stops.
+  merge conflicts, *Merging*) goes to the activity log only (`notifyProgress`); once Run to merge
+  stops, it notifies again.
 
 It stops, saying why in the activity log (`stopAutoRun`), when you uncheck it (refused while the
 merge is being requested), press **Cancel** on the gate it queued, interrupt a turn in Code or PR &
