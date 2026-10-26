@@ -86,7 +86,7 @@ The first start downloads the embedding model (23 MB). On RHEL 8, set
 | `meko destroy [--force] [--with-extensions]` | Stop Meko and remove its data folder for good. It asks first; `--force` doesn't. The extensions' data in it (AgentK's home) stays unless you say so when asked, or pass `--with-extensions`, which uninstalls them first |
 | `meko search "<question>"` | Search memories, the knowledge base and past conversations (`context_search`) |
 | `meko add_memory "<text>"` | Save a memory, word for word; `-` or no text reads stdin |
-| `meko datapacks` | List the datapacks |
+| `meko datapacks [--cloud]` | List the datapacks; `--cloud` adds the linked Meko Cloud's after them, each marked local or cloud (and shared) |
 | `meko create_datapack <name>` | Create a datapack |
 | `meko delete_datapack <name\|id> [--force]` | Delete a datapack and everything in it, for good. It asks first; `--force` doesn't |
 | `meko upload <file>... [--no-wait]` | Add PDF, text, Markdown, JSON, CSV, XML or HTML files (up to 50 MiB) to the knowledge base, and wait until they're indexed |

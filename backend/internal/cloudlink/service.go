@@ -19,6 +19,8 @@ type Service struct {
 	CheckAPI func(ctx context.Context, apiURL string) error
 	// Changed, if set, hears that the link changed (it tells the running extensions).
 	Changed func(ctx context.Context)
+	// List asks a REST API URL for the key's datapacks (ListDatapacks, when nil); tests swap it out.
+	List func(ctx context.Context, apiURL, key string) ([]Datapack, error)
 
 	mu sync.Mutex
 }

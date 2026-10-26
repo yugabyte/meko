@@ -84,7 +84,8 @@ Usage:
   meko search "<question>"       search memories, the knowledge base and past conversations
                                  (context_search)
   meko add_memory "<text>"       save a memory, word for word (memory_add); - or no text reads stdin
-  meko datapacks                 list the datapacks
+  meko datapacks                 list the datapacks; --cloud adds the linked Meko Cloud's after
+                                 them, each marked local or cloud (and shared)
   meko create_datapack <name>    create a datapack (datapack_create)
   meko delete_datapack <name|id>
                                  delete a datapack and everything in it, for good (datapack_delete);
@@ -182,6 +183,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 	if cmd == "delete_datapack" {
 		fs.BoolVar(&t.force, "force", false, "delete without asking")
+	}
+	if cmd == "datapacks" {
+		fs.BoolVar(&t.cloud, "cloud", false, "also list the linked Meko Cloud's datapacks")
 	}
 	if cmd == "search" {
 		fs.StringVar(&t.source, "source", "auto", "auto, memory, knowledge_base or conversation")

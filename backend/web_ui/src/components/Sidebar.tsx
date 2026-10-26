@@ -1,13 +1,16 @@
 // The left rail: the Meko mark, the Status link, the Extensions group, the datapacks, and the
 // version (with a chip to the Status page's Updates card when a newer release is out), settings and
-// theme toggle. Below md it's a drawer over the page, opened from the top bar.
+// theme toggle. Below md it's a drawer over the page, opened from the top bar. While Meko Cloud is
+// linked, the datapacks are one list: this Meko's (a laptop) and then Meko Cloud's (a cloud).
 
 import { useState } from "react";
-import { Database, Moon, Plus, Settings, Sun, X } from "lucide-react";
+import { Database, Laptop, Moon, Plus, RefreshCw, Settings, Sun, X } from "lucide-react";
+import { isCloudFailure, useCloudDatapacks } from "../lib/cloud";
 import { href, navigate, type Route } from "../lib/route";
 import type { Theme } from "../lib/theme";
 import { useUpdateAvailable } from "../lib/update";
 import type { AuthStatus, Datapack } from "../lib/types";
+import { CloudDatapackRows } from "./CloudDatapackRows";
 import { DatapackDialog } from "./DatapackDialog";
 import { ExtensionsLink } from "./ExtensionsLink";
 import { SettingsDialog } from "./SettingsDialog";
@@ -52,6 +55,9 @@ export function Sidebar({
   const [creating, setCreating] = useState(false);
   const [settings, setSettings] = useState(false);
   const update = useUpdateAvailable();
+  const cloud = useCloudDatapacks();
+  const linked = !!cloud.data?.linked || isCloudFailure(cloud.error);
+  const LocalIcon = linked ? Laptop : Database;
   const status = { tab: "overview" as const, view: "status" as const };
   return (
     <>
@@ -76,9 +82,27 @@ export function Sidebar({
 
         <div className="flex items-center justify-between px-4 pb-1 pt-2">
           <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Datapacks</span>
-          <Button size="sm" variant="ghost" onClick={() => setCreating(true)} title="New datapack">
-            <Plus className="size-3.5" />
-          </Button>
+          <div className="flex items-center">
+            {linked && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={cloud.reload}
+                disabled={cloud.loading}
+                title="Refresh Meko Cloud's datapacks"
+              >
+                <RefreshCw className={cx("size-3.5", cloud.loading && "animate-spin")} />
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setCreating(true)}
+              title={linked ? "New datapack on this computer" : "New datapack"}
+            >
+              <Plus className="size-3.5" />
+            </Button>
+          </div>
         </div>
         <nav className="flex-1 space-y-0.5 overflow-y-auto px-2">
           {datapacks.map((d) => (
@@ -89,15 +113,27 @@ export function Sidebar({
                 e.preventDefault();
                 navigate({ datapackId: d.datapack_id, tab: "overview" });
               }}
+              title={linked ? "On this computer" : undefined}
               className={cx(
                 "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm",
                 d.datapack_id === activeId ? "bg-accent font-medium" : "text-muted-foreground hover:bg-accent",
               )}
             >
-              <Database className={cx("size-4 shrink-0", d.datapack_id === activeId && "text-primary")} />
+              <LocalIcon
+                className={cx("size-4 shrink-0", d.datapack_id === activeId && "text-primary")}
+                aria-hidden
+              />
               <span className="truncate">{d.datapack_name}</span>
+              {linked && <span className="sr-only">, on this computer</span>}
             </a>
           ))}
+          {linked && (
+            <CloudDatapackRows
+              datapacks={cloud.data?.datapacks ?? []}
+              loading={cloud.loading}
+              error={cloud.error}
+            />
+          )}
         </nav>
 
         <div className="flex items-center justify-between border-t px-4 py-3 text-xs text-muted-foreground">

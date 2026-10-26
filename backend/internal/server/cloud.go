@@ -15,6 +15,11 @@ import (
 // only the admin token (adminOnly), for meko cloud_link. Replies never carry the key.
 const cloudRoute = "/api/v1/settings/meko-cloud"
 
+// cloudDatapacksRoute lists the linked Meko Cloud's datapacks, for the web UI's sidebar and meko
+// datapacks --cloud. It takes the credential every data route does, the client token included: the
+// reply carries datapacks' names and grants, never the key.
+const cloudDatapacksRoute = "/api/v1/meko-cloud/datapacks"
+
 func (s *Server) registerCloud(v1 *echo.Group) {
 	if s.opts.Cloud == nil {
 		return
@@ -22,6 +27,7 @@ func (s *Server) registerCloud(v1 *echo.Group) {
 	v1.GET("/settings/meko-cloud", s.cloudStatus)
 	v1.PUT("/settings/meko-cloud", s.cloudLink)
 	v1.DELETE("/settings/meko-cloud", s.cloudUnlink)
+	v1.GET("/meko-cloud/datapacks", s.cloudDatapacks)
 }
 
 func (s *Server) cloudStatus(c echo.Context) error {
@@ -52,6 +58,20 @@ func (s *Server) cloudUnlink(c echo.Context) error {
 	}
 	s.opts.Logger.Info("Meko Cloud unlinked")
 	return envelope.OK(c, st)
+}
+
+// cloudDatapacks answers a listing Meko Cloud didn't make as a 502 with its code, never a 401,
+// which the web UI would read as its own sign-in lost.
+func (s *Server) cloudDatapacks(c echo.Context) error {
+	list, err := s.opts.Cloud.Datapacks(c.Request().Context())
+	var failed *cloudlink.ListError
+	if errors.As(err, &failed) {
+		return envelope.Fail(c, http.StatusBadGateway, failed.Code, failed.Error())
+	}
+	if err != nil {
+		return err
+	}
+	return envelope.OK(c, list)
 }
 
 // cloudError turns a refused change into a 400 with its reason; others are internal.

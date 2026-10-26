@@ -325,6 +325,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	}
 	// The Meko Cloud link: the web UI and meko cloud_link change it; the running extensions hear.
 	cloud := &cloudlink.Service{Store: cloudSt, Check: cloudlink.CheckMCP, CheckAPI: cloudlink.CheckAPI,
+		List:    cloudlink.ListDatapacks,
 		Changed: func(ctx context.Context) { web.notify(ctx, "cloud") }}
 	web.newOpts = func(wcfg config.Config) server.Options {
 		return server.Options{Info: info, Port: wcfg.Web.Port, Auth: cfg.Server.Auth, Logger: log,
