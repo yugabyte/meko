@@ -294,7 +294,7 @@ your phone can connect.
   filters for the tool, who made the call (AgentK or the session's agent) and failed calls.
 - **What Meko doesn't know:** the project home says how many questions Meko couldn't answer, and
   links to a list of the searches that found nothing, or only memories scoring below the bar,
-  grouped by question. **Teach Meko** saves your answer to the project's datapack; **Dismiss**
+  grouped by question (a learn session's searches while it seeds, which check before each save, aren't questions). **Teach Meko** saves your answer to the project's datapack; **Dismiss**
   hides a question until a session asks it again. When AgentK saves what a session learned through
   its mod in Claude, it also answers the open questions that session found out, its own and other
   sessions'.
