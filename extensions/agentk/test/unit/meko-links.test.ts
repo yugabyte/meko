@@ -1,5 +1,8 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { shareLinkToken, shareLinkUrl } from '../../src/shared/mekourls.js';
+import { MekoHomeLink } from '../../src/web/components/Rail.js';
 import { httpHost } from '../../src/web/util.js';
 
 describe("a URL's host", () => {
@@ -31,5 +34,14 @@ describe('Meko share links', () => {
     const url = shareLinkUrl('https://cloud.mekodata.ai/', 'a+b/c');
     expect(url).toBe('https://cloud.mekodata.ai/share/a%2Bb%2Fc');
     expect(shareLinkToken(url, web)).toBe('a+b/c');
+  });
+});
+
+describe("the projects pane's Meko link", () => {
+  it("opens Meko's main page, at the root of AgentK's origin, in this tab", () => {
+    const html = renderToStaticMarkup(createElement(MekoHomeLink));
+    expect(html).toMatch(/^<a [^>]*href="\/"/);
+    expect(html).not.toContain('target=');
+    expect(html).toContain('aria-label="Open Meko"');
   });
 });

@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from 'react';
+import { MEKO_HOME_PATH } from '../../shared/mekourls';
 import { STAGE_LABELS, type KiroPlan, type LimitWindow, type PlanLimits, type ProjectWithSessions, type Session } from '../../shared/types';
 import { appUrl } from '../base';
 import { useIsMobile, useTouch } from '../hooks/useMedia';
@@ -260,6 +261,7 @@ export function Rail({
               <Icon d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z M12 3v18" />
             )}
           </button>
+          <MekoHomeLink />
           {onHide && (
             <button className="icon-btn rail-hide" onClick={onHide} title="Hide projects" aria-label="Hide projects" aria-expanded={true}>
               <PaneIcon />
@@ -435,6 +437,27 @@ function Icon({ d }: { d: string }) {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d={d} />
+    </svg>
+  );
+}
+
+/** Opens Meko's own web UI, in this tab: its main page, on the origin AgentK is served from. */
+export function MekoHomeLink() {
+  return (
+    <a className="icon-btn rail-meko" href={MEKO_HOME_PATH} title="Open Meko" aria-label="Open Meko">
+      <MekoLogoM />
+    </a>
+  );
+}
+
+/**
+ * The "m" of Meko's logo (backend/web_ui/public/meko-logo.svg, whose "meko" is one outline): the m's
+ * run of it, closed where its right stem meets the e. Drawn in the text color.
+ */
+function MekoLogoM() {
+  return (
+    <svg width="20" height="13" viewBox="0 79.93 340.94 217.49" fill="currentColor" aria-hidden="true">
+      <path d="M340.77 171.81c-.65 -11.69 -3.02 -22.64 -7.14 -32.86c-4.89 -12.12 -11.76 -22.55 -20.65 -31.29c-8.88 -8.72 -19.39 -15.52 -31.53 -20.41c-12.14 -4.87 -25.75 -7.32 -39.96 -7.32s-27.37 2.37 -39.51 7.1c-12.14 4.75 -22.64 11.4 -31.53 19.98c-8.6 -8.58 -18.94 -15.25 -31.08 -19.98c-12.14 -4.73 -25 -7.1 -39.51 -7.1s-27.82 2.45 -39.96 7.32c-12.14 4.87 -22.64 11.69 -31.53 20.41c-8.87 8.72 -15.83 19.15 -20.86 31.29c-5.04 12.14 -7.55 25.3 -7.55 39.51v118.96h57.71v-118.53c0 -12.43 3.85 -22.41 11.55 -29.96c7.7 -7.54 17.89 -11.31 30.63 -11.31h.05c12.73 0 22.87 3.78 30.41 11.31c7.54 7.54 11.31 17.53 11.31 29.96v118.53h57.71v-118.53c0 -12.43 3.85 -22.41 11.55 -29.96c7.7 -7.54 17.89 -11.31 30.63 -11.31s22.87 3.78 30.41 11.31c7.54 7.54 11.31 17.53 11.31 29.96v118.53h57.71v-88.6Z" />
     </svg>
   );
 }
