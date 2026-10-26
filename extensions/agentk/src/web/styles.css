@@ -21,6 +21,8 @@
   /* Meko's mark on a design decision that rests on Meko, and its references. */
   --meko: #6b3fb8;
   --meko-soft: #efe8fa;
+  /* The black of Meko's logo (its white in dark), for the "m" in the projects pane. */
+  --meko-logo: #121017;
   --ok: #23845a;
   --warn: #b86e00;
   --warn-soft: #fff1da;
@@ -61,6 +63,7 @@
     --chart-kiro: #a77bff;
     --meko: #c3a5f5;
     --meko-soft: #2c2140;
+    --meko-logo: #fff;
     --ok: #5cc592;
     --warn: #e9a64a;
     --warn-soft: #3a2c14;
@@ -94,6 +97,7 @@
   --chart-kiro: #a77bff;
   --meko: #c3a5f5;
   --meko-soft: #2c2140;
+  --meko-logo: #fff;
   --ok: #5cc592;
   --warn: #e9a64a;
   --warn-soft: #3a2c14;
@@ -1024,6 +1028,11 @@ textarea.input {
 .rail-hide {
   order: 1;
   margin-left: auto;
+}
+/* Meko's "m", which links to Meko: the logo's own black or white, also on hover. */
+.rail-meko,
+.rail-meko:hover {
+  color: var(--meko-logo);
 }
 /* Plan usage limits, above the rail's buttons: a row per agent, its logo then a ring per limit. */
 .limits {
@@ -2112,11 +2121,61 @@ a.icon-btn {
   text-decoration: none;
 }
 .design-hd {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--rule);
+}
+.design-updated {
+  border-radius: 4px;
+  padding: 0 4px;
+  margin: 0 -4px;
+}
+/* AgentK at work on the design (designWorking in util.ts): its time reads Revising or Working, and
+   a bar runs along the header's bottom edge (still, at half strength, with reduced motion). When
+   the revised design lands, the time flashes once. */
+.design-working {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.design-edge {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.design-edge::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--accent);
+  opacity: 0.5;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .design-edge::before {
+    right: auto;
+    width: 34%;
+    opacity: 1;
+    border-radius: 2px;
+    animation: design-edge 1.3s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+  }
+  @keyframes design-edge {
+    from { transform: translateX(-110%); }
+    to { transform: translateX(310%); }
+  }
+  .design-updated.landed {
+    animation: design-landed 1.2s ease-out;
+  }
+  @keyframes design-landed {
+    from { background: var(--accent-soft); color: var(--accent); }
+  }
 }
 .design-body {
   overflow-y: auto;
@@ -5358,6 +5417,10 @@ div[id^='dak-mermaid-'] .label {
   /* With the tabs in the header, its time goes so the header keeps to two rows. */
   .design-hd.has-tabs .design-updated {
     display: none;
+  }
+  /* Except for a moment as a revised design lands, where the working line just was. */
+  .design-hd.has-tabs .design-updated.landed {
+    display: inline;
   }
   /* On the full-page design the questions' footer and bar sit on the screen's bottom edge. */
   .design-page .dq-foot,
