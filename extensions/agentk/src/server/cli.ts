@@ -191,7 +191,11 @@ async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceL
     snapshotDb: (dest) => snapshotDb(db, dest),
     log: (m) => log.info(m),
     onChange: () => core!.changed(),
-    requestRestart: () => void shutdown(0),
+    requestRestart: () => {
+      // Sent at once, ahead of the close the shutdown sends: pages wait for the new version quietly.
+      core!.notifyRestarting();
+      void shutdown(0);
+    },
   });
   core.updateStatus = () => updater.status();
 
