@@ -53,9 +53,10 @@ web app isn't known). The rows are newest first.
 
 - Unlinked: `{linked: false, datapacks: []}`, and Meko Cloud isn't asked.
 - A failure is a 502 with a code, never a 401 (which the web UI reads as its own sign-in lost):
-  `CLOUD_NO_API_URL` (the link has no API URL), `CLOUD_UNREACHABLE` (no answer in time),
-  `CLOUD_KEY_REFUSED` (a 401 or 403), `CLOUD_LIST_FAILED` (any other error, with Meko Cloud's
-  message). A link that can't be read is the usual 500.
+  `CLOUD_NO_API_URL` (the link has no API URL), `CLOUD_UNREACHABLE` (Meko Cloud couldn't be
+  reached, or its whole reply didn't arrive within the time limit: a refused connection, DNS, TLS,
+  a timeout, a reply cut short), `CLOUD_KEY_REFUSED` (a 401 or 403), `CLOUD_LIST_FAILED` (any
+  other error, with Meko Cloud's message). A link that can't be read is the usual 500.
 - It takes the credential every data route does: the owner on the web listener; the admin or the
   client token on the API listener (nothing with `[server] auth = "none"`).
 

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -24,6 +25,8 @@ func row(id, name, grant, created string) string {
 // ListDatapacks sends the key, asks for every row, keeps only the fields Meko shows, and turns each
 // way Meko Cloud can fail into its code, never with the key in the message.
 func TestListDatapacks(t *testing.T) {
+	// The hang and stall handlers can still be running when the next request comes in.
+	var mu sync.Mutex
 	var gotQuery, gotAuth string
 	reply := func(w http.ResponseWriter, code int, body string) {
 		w.Header().Set("Content-Type", "application/json")
@@ -31,7 +34,9 @@ func TestListDatapacks(t *testing.T) {
 		_, _ = w.Write([]byte(body))
 	}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		gotQuery, gotAuth = r.URL.RawQuery, r.Header.Get("Authorization")
+		mu.Unlock()
 		switch r.URL.Path {
 		case "/ok/datapacks":
 			reply(w, 200, `{"data":[`+row("a1", "mine", "owner", "2026-10-01T00:00:00Z")+`,`+
@@ -48,6 +53,11 @@ func TestListDatapacks(t *testing.T) {
 			reply(w, 200, `<html>`)
 		case "/hang/datapacks":
 			<-r.Context().Done()
+		case "/stall/datapacks":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[`))
+			_ = http.NewResponseController(w).Flush()
+			<-r.Context().Done()
 		default:
 			reply(w, 404, `not found`)
 		}
@@ -59,8 +69,11 @@ func TestListDatapacks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotAuth != "Bearer "+key || gotQuery != "" {
-		t.Fatalf("sent Authorization %q, query %q", gotAuth, gotQuery)
+	mu.Lock()
+	sentAuth, sentQuery := gotAuth, gotQuery
+	mu.Unlock()
+	if sentAuth != "Bearer "+key || sentQuery != "" {
+		t.Fatalf("sent Authorization %q, query %q", sentAuth, sentQuery)
 	}
 	if len(rows) != 2 || rows[0].DatapackID != "a1" || rows[1].Grant != "viewer" || rows[0].WebURL != nil {
 		t.Fatalf("rows %+v", rows)
@@ -91,6 +104,12 @@ func TestListDatapacks(t *testing.T) {
 	var le *ListError
 	if !errors.As(err, &le) || le.Code != CodeUnreachable {
 		t.Fatalf("a server that hangs: %v", err)
+	}
+	stalled, cancelStall := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancelStall()
+	_, err = ListDatapacks(stalled, ts.URL+"/stall/", key)
+	if !errors.As(err, &le) || le.Code != CodeUnreachable || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("a reply cut short by the time limit: %v", err)
 	}
 	ts.CloseClientConnections()
 	_, err = ListDatapacks(ctx, "http://127.0.0.1:1/api/v1", key)

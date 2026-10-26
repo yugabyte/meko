@@ -5,7 +5,7 @@
 
 import { useState } from "react";
 import { Database, Laptop, Moon, Plus, RefreshCw, Settings, Sun, X } from "lucide-react";
-import { useCloudDatapacks } from "../lib/cloud";
+import { isCloudFailure, useCloudDatapacks } from "../lib/cloud";
 import { href, navigate, type Route } from "../lib/route";
 import type { Theme } from "../lib/theme";
 import { useUpdateAvailable } from "../lib/update";
@@ -56,8 +56,7 @@ export function Sidebar({
   const [settings, setSettings] = useState(false);
   const update = useUpdateAvailable();
   const cloud = useCloudDatapacks();
-  // A listing that failed is still a link to show a note for.
-  const linked = !!cloud.data?.linked || !!cloud.error;
+  const linked = !!cloud.data?.linked || isCloudFailure(cloud.error);
   const LocalIcon = linked ? Laptop : Database;
   const status = { tab: "overview" as const, view: "status" as const };
   return (

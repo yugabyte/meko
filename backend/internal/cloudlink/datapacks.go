@@ -3,7 +3,6 @@ package cloudlink
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -66,13 +65,15 @@ func ListDatapacks(ctx context.Context, apiURL, key string) ([]Datapack, error) 
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+key)
+	// Any failure to reach Meko Cloud or read its whole reply (no route, refused, TLS, DNS, the time
+	// limit, a body cut short) is CodeUnreachable.
+	unreachable := func(err error) error {
+		return &ListError{Code: CodeUnreachable,
+			msg: "Couldn't reach Meko Cloud: " + strings.TrimSuffix(shortError(ctx, err).Error(), ".") + "."}
+	}
 	res, err := http.DefaultClient.Do(req) //nolint:gosec // G704: the link's API URL, checked when it was saved
 	if err != nil {
-		why := "it timed out"
-		if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			why = shortError(ctx, err).Error()
-		}
-		return nil, &ListError{Code: CodeUnreachable, msg: "Meko Cloud didn't answer: " + why + "."}
+		return nil, unreachable(err)
 	}
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
@@ -85,7 +86,10 @@ func ListDatapacks(ctx context.Context, apiURL, key string) ([]Datapack, error) 
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	body, _ := io.ReadAll(io.LimitReader(res.Body, maxListBytes))
+	body, err := io.ReadAll(io.LimitReader(res.Body, maxListBytes))
+	if err != nil {
+		return nil, unreachable(err)
+	}
 	jsonErr := json.Unmarshal(body, &env)
 	failed := func(why string) error {
 		return &ListError{Code: CodeListFailed, msg: "Meko Cloud couldn't list datapacks: " + why + "."}
