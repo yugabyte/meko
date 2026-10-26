@@ -1722,7 +1722,8 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
       expect(prPrompts(s.id)).toBe(1);
       expect(gh.merges).toEqual(['https://github.com/acme/demo/pull/7']);
       expect(movedBy(s.id)).toEqual(['design:you', 'code:you', 'pr:auto', 'review:auto', 'merge:auto', 'done:auto']);
-      expect(notify).toHaveBeenCalledWith(s.id, 'Merging', 'PR #7 is ready: merging it now, for Run to merge.');
+      // Only that it's done: AgentK's clean review and the merge itself aren't news.
+      expect(notify.mock.calls).toEqual([[s.id, 'Merged', 'PR #7 is merged: Run to merge is done.']]);
     });
 
     it('keeps the merge of a task started with it queued through failing CI, tells the user once about what only they can clear, and merges once nothing blocks it', async () => {
@@ -1746,14 +1747,20 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
       await poll(s.id);
       await poll(s.id);
       expect(queuedGate(s.id)).toBe('merge');
-      expect(notify.mock.calls.filter((c) => c[1] === 'Run to merge waits on you')).toEqual([
-        [s.id, 'Run to merge waits on you', "Changes were requested. AgentK merges the PR once that's cleared."],
-      ]);
+      // A question in the terminal between turns was its own Needs you: not a new set to tell.
+      env.core.sessions.setStatus(s.id, 'needs_input', 'Permission needed for Bash');
+      await poll(s.id);
+      env.core.sessions.setStatus(s.id, 'idle');
+      await poll(s.id);
+      expect(queuedGate(s.id)).toBe('merge');
 
       gh.status = green;
       await poll(s.id);
       expect(gh.merges).toEqual(['https://github.com/acme/demo/pull/7']);
       await closed(s.id);
+      // Not the failing CI AgentK fixed, nor the merge: only what needed the user, and that it's done.
+      expect(notify.mock.calls.map((c) => c[1])).toEqual(['Run to merge waits on you', 'Merged']);
+      expect(notify).toHaveBeenCalledWith(s.id, 'Run to merge waits on you', "Changes were requested. AgentK merges the PR once that's cleared.");
     });
 
     // Each takes the gates back; the turn running when it happens then ends without a PR.
