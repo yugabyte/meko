@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppState } from '../../src/shared/types.js';
-import { CONNECT_MS, EventsConnection, PROBE_MS, QUIET_MS, STATE_MS, UPDATE_RETRY_FOR_MS, UPDATE_RETRY_MS, type Conn, type SocketLike } from '../../src/web/events.js';
+import { CONNECT_MS, EventsConnection, LOST_GRACE_MS, PROBE_MS, QUIET_MS, STATE_MS, UPDATE_RETRY_FOR_MS, UPDATE_RETRY_MS, type Conn, type SocketLike } from '../../src/web/events.js';
 import { WS_UNAUTHORIZED } from '../../src/web/signin.js';
 
 /** A socket the test drives: what the page sent, and whether it let go of it. */
@@ -91,11 +91,12 @@ describe('the events connection', () => {
     dead.accept({ v: 1 });
     vi.advanceTimersByTime(QUIET_MS + PROBE_MS);
     expect(dead.closed).toBe(true);
-    expect(t.conns.at(-1)).toBe('closed');
     vi.advanceTimersByTime(1000);
     expect(t.sockets).toHaveLength(2);
     t.last().accept({ v: 2 });
     expect(t.states).toEqual([{ v: 1 }, { v: 2 }]);
+    // Back within the grace: the page never said it was lost.
+    expect(t.conns).toEqual(['connecting', 'open']);
     // The dead socket's late close doesn't start a third.
     dead.serverClose();
     vi.advanceTimersByTime(20_000);
@@ -163,6 +164,67 @@ describe('the events connection', () => {
     vi.advanceTimersByTime(900);
     expect(t.sockets).toHaveLength(tries + 9);
     t.conn.stop();
+  });
+
+  it('says the connection is lost once it has been down for the grace, and once only', () => {
+    const t = setup();
+    t.last().accept();
+    t.last().serverClose();
+    vi.advanceTimersByTime(LOST_GRACE_MS - 1);
+    expect(t.conns).toEqual(['connecting', 'open']);
+    vi.advanceTimersByTime(1);
+    expect(t.conns).toEqual(['connecting', 'open', 'closed']);
+    // However many retries fail meanwhile, none says connecting.
+    for (let i = 0; i < 5; i++) {
+      t.last().serverClose();
+      const n = t.sockets.length;
+      while (t.sockets.length === n) vi.advanceTimersByTime(100);
+    }
+    // A socket that opens isn't back until its state comes.
+    t.last().opened();
+    expect(t.conns.at(-1)).toBe('closed');
+    t.last().receive({ type: 'state', state: { v: 2 } });
+    expect(t.conns).toEqual(['connecting', 'open', 'closed', 'open']);
+    t.conn.stop();
+  });
+
+  it('says nothing while an update restarts the server, unless it stays down past the fast retries', () => {
+    const t = setup();
+    t.last().accept({ update: { applying: true } } as never);
+    // A server back in 5 s: the update's own banner is all the page shows.
+    for (let i = 0; i < 5; i++) {
+      t.last().serverClose();
+      vi.advanceTimersByTime(UPDATE_RETRY_MS);
+    }
+    t.last().accept({ update: { applying: false } } as never);
+    expect(t.conns).toEqual(['connecting', 'open']);
+    // One that never comes back is reported once the fast retries end.
+    t.last().accept({ update: { applying: true } } as never);
+    t.last().serverClose();
+    vi.advanceTimersByTime(UPDATE_RETRY_FOR_MS - 1);
+    expect(t.conns).toEqual(['connecting', 'open']);
+    vi.advanceTimersByTime(1);
+    expect(t.conns).toEqual(['connecting', 'open', 'closed']);
+    t.conn.stop();
+  });
+
+  it('says a first socket that fails is lost only after the grace', () => {
+    const t = setup();
+    t.last().serverClose();
+    vi.advanceTimersByTime(LOST_GRACE_MS);
+    expect(t.conns).toEqual(['connecting', 'closed']);
+    t.last().accept();
+    expect(t.conns).toEqual(['connecting', 'closed', 'open']);
+    t.conn.stop();
+  });
+
+  it('says nothing more once stopped during the grace', () => {
+    const t = setup();
+    t.last().accept();
+    t.last().serverClose();
+    t.conn.stop();
+    vi.advanceTimersByTime(LOST_GRACE_MS * 2);
+    expect(t.conns).toEqual(['connecting', 'open']);
   });
 
   it('gives up on a socket that never opens', () => {

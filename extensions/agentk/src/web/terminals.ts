@@ -629,10 +629,11 @@ class SessionTerminal {
     }
   }
 
-  private connect() {
+  /** `retrying`: a backoff retry, which keeps saying the connection is lost instead of flipping to connecting each try. */
+  private connect(retrying = false) {
     if (this.disposed) return;
     this.started = true;
-    this.setConn('connecting');
+    if (!retrying || this.conn !== 'closed') this.setConn('connecting');
     // A terminal that connects is the newest viewer: the session takes its size.
     this.active = true;
     // Fit first when on screen, so the session starts at this terminal's size.
@@ -717,7 +718,7 @@ class SessionTerminal {
     const delay = Math.min(15000, 500 * 2 ** this.attempt++) + Math.random() * 300;
     this.timer = setTimeout(() => {
       this.timer = null;
-      this.connect();
+      this.connect(true);
     }, delay);
   }
 
