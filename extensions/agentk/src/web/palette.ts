@@ -1,6 +1,7 @@
 // Command palette labels and filtering. Pure, so it's unit-tested.
 import { shareLinkToken } from '../shared/mekourls';
 import { STAGE_LABELS, type AskAgentkAction, type JoinByLinkResult, type LinkPlan, type LinkProject, type ProjectWithSessions, type SessionMatch } from '../shared/types';
+import { stageWords } from './util';
 
 /** A piece of a palette label: plain text, or a session's or project's name, drawn in its own style. */
 export type LabelPart = string | { session: string } | { project: string };
@@ -167,7 +168,7 @@ export function askEntries(actions: AskAgentkAction[], projects: ProjectWithSess
       case 'go': {
         if (a.view === 'session') {
           const s = session(a.sessionId);
-          return [{ id, label: ['Go to ', { session: sessionName(a.sessionId) }], hint: s ? `${projectName(a.projectId)} · ${STAGE_LABELS[s.stage]}` : '', action: a }];
+          return [{ id, label: ['Go to ', { session: sessionName(a.sessionId) }], hint: s ? `${projectName(a.projectId)} · ${stageWords(s)}` : '', action: a }];
         }
         if (a.view === 'home') return [{ id, label: [{ project: projectName(a.projectId) }, ': project home'], hint: 'View', action: a }];
         return [{ id, label: [a.view === 'usage' ? 'Usage' : 'Settings'], hint: 'View', action: a }];

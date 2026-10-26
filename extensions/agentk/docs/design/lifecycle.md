@@ -200,6 +200,13 @@ New session dialog for a start at Code (`CreateSessionRequest.autoRun`), beside 
 tools' `start_sessions` and Ask AgentK's `start` and `link` actions take it too, only for a start at
 Code ([session tools](tools.md)); no tool turns it on for a running session.
 
+While it's on, the session's stage carries its mark, a double chevron (`RunToMergeMark` in
+`common.tsx`), wherever the stage is shown: the chip in the rail's rows, the tabs and the Starting
+view (`StageChip`), the current stage in the stage bar (and the phone's stage name), and the footer
+and ⋯ sheet. Tooltips and the command palette's session hints say it in words (`Code · Run to
+merge`, `stageWords`). The server leaves `auto_run` set after the merge, so the web asks
+`runsToMerge()`, which leaves out a session at Done.
+
 It runs on the [queued gates](#queued-gates):
 
 - **Design.** On, it waits for the approval; the approval prompt then carries `autoRunLine()`.

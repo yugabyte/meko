@@ -620,6 +620,19 @@ export function runToMergeTitle(session: Session): string {
   return 'AgentK opens the PR when its turn ends (at once, between turns), then merges it once nothing blocks it';
 }
 
+/**
+ * Whether a session shows Run to merge's mark after its stage (`RunToMergeMark`): on, and not yet
+ * Done. The server leaves `autoRun` set after the merge, so it alone would mark finished sessions.
+ */
+export function runsToMerge(s: Session): boolean {
+  return s.autoRun && s.stage !== 'done';
+}
+
+/** A session's stage in words, for tooltips and hints that can't hold the mark: "Code · Run to merge". */
+export function stageWords(s: Session): string {
+  return runsToMerge(s) ? `${STAGE_LABELS[s.stage]} · Run to merge` : STAGE_LABELS[s.stage];
+}
+
 /** Whether the stage bar's gate has Run to merge's box (StageBar in ProjectView.tsx). */
 export function runToMergeShown(session: Session): boolean {
   return session.stage === 'code' || session.stage === 'review' || (session.stage === 'design' && session.hasDesign);
@@ -667,7 +680,7 @@ export function sessionTabTitle(s: Session): string {
     s.name,
     HARNESS_CAPS[harnessOf(s.harness)].label,
     dotTitle(s) + (s.statusDetail && s.status !== 'starting' ? `: ${s.statusDetail}` : ''),
-    STAGE_LABELS[s.stage],
+    stageWords(s),
     `${formatTokens(totalTokens(s.usage))} tokens`,
   ].join(' · ');
 }

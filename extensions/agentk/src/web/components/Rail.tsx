@@ -1,12 +1,12 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from 'react';
 import { MEKO_HOME_PATH } from '../../shared/mekourls';
-import { STAGE_LABELS, type KiroPlan, type LimitWindow, type PlanLimits, type ProjectWithSessions, type Session } from '../../shared/types';
+import type { KiroPlan, LimitWindow, PlanLimits, ProjectWithSessions, Session } from '../../shared/types';
 import { appUrl } from '../base';
 import { useIsMobile, useTouch } from '../hooks/useMedia';
 import { RAIL_DEFAULT, clampRailWidth, railCollapsedSaved, saveRailCollapsed } from '../rail';
 import type { ThemePref } from '../theme';
 import { aggregateDot, creditsNumber, cx, dotState, formatCredits, formatTokens, isMac, kiroPlanLines, limitLevel, openSessions, relativeTime, repoFolder, sessionTabTitle, totalTokens } from '../util';
-import { HarnessLogo, Ring, StatusDot } from './common';
+import { HarnessLogo, Ring, StageChip, StatusDot } from './common';
 import { HARNESS_CAPS, type HarnessId } from '../../shared/harnesses';
 
 export function Rail({
@@ -204,7 +204,7 @@ export function Rail({
                         <StatusDot status={dotState(s)} phase={s.id} />
                         {harnessLogos && <HarnessLogo harness={s.harness} />}
                         <span className="rail-sess-name">{s.name}</span>
-                        <span className="stchip">{STAGE_LABELS[s.stage]}</span>
+                        <StageChip session={s} />
                       </button>
                       {j > 0 && !touch && (
                         <button

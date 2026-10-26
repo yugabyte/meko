@@ -6,7 +6,7 @@ import { appUrl } from '../base';
 import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkKeyframes, blinkOffsetMs, totalUnits, type BlinkRun } from '../blink';
 import { matches, TOUCH_QUERY, useMedia } from '../hooks/useMedia';
 import { TUNE, typingKeyframes, typingLoopMs } from '../typing';
-import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, cx, elapsedText, instructionsBlocker, isSubmitKey, mekoDatapackUrl, runToMergeTitle } from '../util';
+import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, cx, elapsedText, instructionsBlocker, isSubmitKey, mekoDatapackUrl, runToMergeTitle, runsToMerge } from '../util';
 
 const HARNESS_LOGOS: Record<HarnessId, string> = { claude: appUrl('/harness-claude.svg'), opencode: appUrl('/harness-opencode.svg'), kiro: appUrl('/harness-kiro.svg') };
 
@@ -396,6 +396,40 @@ export function Check({ size = 10 }: { size?: number }) {
     <svg className="check" width={size} height={size} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M2.5 6.3 5 8.7l4.5-5.1" />
     </svg>
+  );
+}
+
+/** Run to merge's mark: two chevrons, fast-forward. Drawn in the text's colour, so it suits any chip or theme. */
+export function RunToMergeIcon({ size = 8 }: { size?: number }) {
+  return (
+    <svg className="rtm-icon" width={size} height={size} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2 2.5 5.5 6 2 9.5M6.5 2.5 10 6l-3.5 3.5" />
+    </svg>
+  );
+}
+
+/**
+ * After a session's stage, while Run to merge is on (`runsToMerge`): its icon, and the words for
+ * screen readers. No title: in a tab or rail row it would replace the row's own tooltip, which
+ * says "Run to merge" (`sessionTabTitle`).
+ */
+export function RunToMergeMark({ session, size }: { session: Session; size?: number }) {
+  if (!runsToMerge(session)) return null;
+  return (
+    <>
+      <RunToMergeIcon size={size} />
+      <span className="sr-only">, Run to merge</span>
+    </>
+  );
+}
+
+/** A session's stage chip, in the rail, the tabs and the Starting view, with Run to merge's mark. */
+export function StageChip({ session }: { session: Session }) {
+  return (
+    <span className="stchip">
+      {STAGE_LABELS[session.stage]}
+      <RunToMergeMark session={session} />
+    </span>
   );
 }
 

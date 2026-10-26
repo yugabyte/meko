@@ -22,7 +22,7 @@ import { disposeTerminal } from '../terminals';
 import { approveLabel, closingText, cx, dotState, designApprovalBlocker, formatCredits, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, runToMergeShown, runToMergeTitle, sessionTabTitle, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
-import { Busy, Check, ConfirmButton, ContextRing, DatapackName, Elapsed, HarnessLogo, NotesIcon, RunToMergeCheck, StatusDot } from './common';
+import { Busy, Check, ConfirmButton, ContextRing, DatapackName, Elapsed, HarnessLogo, NotesIcon, RunToMergeCheck, RunToMergeMark, StageChip, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
 import type { MovePreset } from './MoveSessionDialog';
@@ -280,6 +280,7 @@ export function ProjectView({
   const stageText = session && (
     <span>
       {session.stage === 'pr' ? 'opening PR' : STAGE_LABELS[session.stage].toLowerCase()}
+      <RunToMergeMark session={session} size={10} />
       {rv && session.stage === 'reviewing-pr' && (
         <>
           {` · at ${rv.reviewSha.slice(0, 7)}`}
@@ -318,7 +319,7 @@ export function ProjectView({
           <StatusDot status={dotState(s)} phase={s.id} />
           {harnessLogos && <HarnessLogo harness={s.harness} />}
           <span className="tab-name">{s.name}</span>
-          <span className="stchip">{STAGE_LABELS[s.stage]}</span>
+          <StageChip session={s} />
         </button>
       ))}
       <button className="tab new" onClick={onNewSession} title="New session" aria-label="New session">
@@ -839,7 +840,10 @@ function StageBar({
             const inner = (
               <>
                 <span className="n">{skipped ? '–' : i < idx ? <Check size={10} /> : i + first}</span>
-                <span className="stg-label">{STAGE_LABELS[st]}</span>
+                <span className="stg-label">
+                  {STAGE_LABELS[st]}
+                  {i === idx && <RunToMergeMark session={session} size={10} />}
+                </span>
               </>
             );
             return (
@@ -866,7 +870,10 @@ function StageBar({
           })}
           {/* The phone layout shows only the current stage's name, here. */}
           <span className="stg-now">
-            <b>{STAGE_LABELS[session.stage]}</b>
+            <b>
+              {STAGE_LABELS[session.stage]}
+              <RunToMergeMark session={session} size={10} />
+            </b>
             {session.stage !== 'done' && stages.length > 1 && idx + first > 0 && (
               <span className="muted">
                 {' '}

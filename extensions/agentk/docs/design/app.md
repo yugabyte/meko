@@ -8,7 +8,8 @@ screen, use **Move up** / **Move down** in the project home's settings. The tabs
 hold the project's sessions. With **List sessions under their project** ticked in Settings › General
 (off by default; kept in this browser, `ak-rail-sessions`), each project's open sessions are listed
 under it in the rail instead of the tabs, one row each with its status dot, its full name
-(wrapped, not cut off) and its stage, so many show at once and any can be opened with one click,
+(wrapped, not cut off) and its stage (with a » after it while [Run to merge](lifecycle.md#run-to-merge)
+is on, as on the tabs), so many show at once and any can be opened with one click,
 in any project. The tabs and the rail list a project's sessions in the same order, kept on the server
 (`sessions.position`) so every browser sees it: a new session goes first, and **Move to top** puts
 any other there, to keep the work that matters most at the top as priorities change. It's the ↑ that

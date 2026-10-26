@@ -1465,6 +1465,12 @@ textarea.input {
   border-radius: 999px;
   background: color-mix(in srgb, currentColor 14%, transparent);
 }
+/* Run to merge's mark after a stage (RunToMergeMark): in a chip, the stage bar and the footer. */
+.rtm-icon {
+  flex: none;
+  margin-left: 3px;
+  vertical-align: -0.05em;
+}
 .workarea {
   flex: 1;
   min-height: 0;

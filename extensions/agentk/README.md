@@ -280,7 +280,8 @@ your phone can connect.
   done or needs you: a question, or something only you can clear (a held review, missing approvals)
   holding it up. Unchecking it, cancelling its gate,
   interrupting AgentK (Claude Code with AgentK's mod, or OpenCode) or moving the session gives the
-  gates back to you. The server watches the PR and hands reviews (only AgentK's by default, or AgentK's and
+  gates back to you. While it's on, a » follows the session's stage in the rail, its tab, the stage
+  bar and the footer. The server watches the PR and hands reviews (only AgentK's by default, or AgentK's and
   people's, every reviewer's, or only people's), merge conflicts with the base (unless
   you turn that off in Settings → General) and CI failures to Claude. Every other review, and
   any review from someone without a role on the repo, is held for you: you read it in AgentK and
