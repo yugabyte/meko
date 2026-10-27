@@ -223,8 +223,10 @@ a network filesystem; else `~/.meko` on a local disk; else, for a home folder on
 filesystem, `$XDG_STATE_HOME/meko` when that's local, else `/var/tmp/<user>/meko` (made private as
 above). Meko sets `MEKO_HOME` on every AgentK command it runs, and AgentK keeps it as `[meko]
 home`, since its own services don't have it. A home already in a Meko data folder refuses
-`uninstall`, `start`, `stop`, `status` and `_handoff` when `MEKO_HOME` names another folder
-(`refuseOtherMeko` in `src/server/movehome.ts`): a release acts on its own home whatever
+`uninstall`, `start`, `stop`, `restart`, `status` and `_handoff` when `MEKO_HOME` names another
+folder (`refuseOtherMeko` in `src/server/movehome.ts`; `samePath` compares the folders, not their
+paths, so a second spelling of the same folder that links don't explain, such as a bind mount,
+isn't another folder): a release acts on its own home whatever
 `MEKO_HOME` says, so a Meko that found this AgentK for another data folder (a second Meko, Meko's
 own tests) would otherwise stop or uninstall it, ending every session, and repoint its `[meko]
 home`. A home that hasn't moved into a Meko data folder yet isn't protected: it takes Meko's

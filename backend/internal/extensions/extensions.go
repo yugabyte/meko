@@ -172,12 +172,9 @@ func (c Catalog) releaseOf(root, name, command string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	// Of resolves links, so compare the real folders (macOS's /tmp is /private/tmp).
-	want := c.App(root, name).Root
-	if real, err := filepath.EvalSymlinks(want); err == nil {
-		want = real
-	}
-	return v, app.Root == want
+	// Compare the folders, not their paths: Meko's --data-dir and the command's links can spell one
+	// folder two ways (a bind mount, or macOS's /tmp and /private/tmp).
+	return v, paths.SameDir(app.Root, c.App(root, name).Root)
 }
 
 // Release is the version of a Managed extension's release install that command runs (through

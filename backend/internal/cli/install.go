@@ -213,7 +213,7 @@ func runUninstall(l paths.Layout, purge bool, o destroyOptions, stdout, stderr i
 			exts = nil
 		}
 	}
-	if m, merr := newManager(); merr == nil && m.Installed() && (m.DataDir() == l.Root || m.DataDir() == "") {
+	if m, merr := newManager(); merr == nil && m.Installed() && (m.DataDir() == "" || paths.SameDir(m.DataDir(), l.Root)) {
 		if err = m.Remove(); err != nil {
 			return fail(stderr, err)
 		}

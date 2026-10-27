@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG } from '../../src/server/config.js';
@@ -6,7 +6,7 @@ import { checkMove, HomeMove, refuseOtherMeko, rememberMekoHome, type MoveCheck 
 import { loadConfig } from '../../src/server/config.js';
 import { removeOldHomeLink } from '../../src/server/install.js';
 import { akHome, getPaths, homeIn, mekoHome, MekoHomeError, oldHome } from '../../src/server/paths.js';
-import { MOVE_JOB, startMoveJob, type ServiceManager } from '../../src/server/service.js';
+import { MOVE_JOB, samePath, startMoveJob, type ServiceManager } from '../../src/server/service.js';
 import { tempDir } from '../helpers.js';
 
 /** Where Meko's data folder is: the cases Meko's own paths.Resolve is tested against too. */
@@ -238,6 +238,20 @@ describe('what Meko tells AgentK', () => {
     const run = () => refuseOtherMeko(getPaths(join(root, home)), { MEKO_HOME: mekoHome && join(root, mekoHome) });
     if (allowed) expect(run).not.toThrow();
     else expect(run).toThrow(`This AgentK belongs to the Meko in ${join(root, 'meko')}, and MEKO_HOME names ${join(root, 'other')}: nothing was done`);
+  });
+
+  // A data folder can have two spellings that links don't explain, such as a bind mount (one disk
+  // at two paths). A test can't make one, so a hard link stands in: two paths to one file.
+  it('takes two spellings of one folder for the same path, links or not', () => {
+    mkdirSync(join(root, 'a'));
+    mkdirSync(join(root, 'b'));
+    symlinkSync(join(root, 'a'), join(root, 'link'));
+    writeFileSync(join(root, 'a', 'f'), '');
+    linkSync(join(root, 'a', 'f'), join(root, 'b', 'hard'));
+    expect(samePath(join(root, 'a'), join(root, 'link'))).toBe(true);
+    expect(samePath(join(root, 'a', 'f'), join(root, 'b', 'hard'))).toBe(true);
+    expect(samePath(join(root, 'a'), join(root, 'b'))).toBe(false);
+    expect(samePath(join(root, 'a'), join(root, 'none'))).toBe(false);
   });
 });
 
