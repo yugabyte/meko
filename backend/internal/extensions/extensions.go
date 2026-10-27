@@ -172,12 +172,19 @@ func (c Catalog) releaseOf(root, name, command string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	// Of resolves links, so compare the real folders (macOS's /tmp is /private/tmp).
-	want := c.App(root, name).Root
-	if real, err := filepath.EvalSymlinks(want); err == nil {
-		want = real
+	// Compare the folders themselves, not their paths: one folder can have two spellings that links
+	// don't explain, such as a bind mount (/share and /net/<host>/share), or macOS's /tmp.
+	return v, sameDir(app.Root, c.App(root, name).Root)
+}
+
+// sameDir reports whether a and b name the same folder.
+func sameDir(a, b string) bool {
+	fa, err := os.Stat(a)
+	if err != nil {
+		return false
 	}
-	return v, app.Root == want
+	fb, err := os.Stat(b)
+	return err == nil && os.SameFile(fa, fb)
 }
 
 // Release is the version of a Managed extension's release install that command runs (through
