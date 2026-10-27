@@ -1,8 +1,8 @@
 // The Extensions page: the extensions installed (registered with Meko) and the ones available to
-// install, each with Install, Start, Stop and Open, and for a release Meko installed, Update, Check
-// now and Update automatically. An action runs on the server as the extension's job (an automatic
-// update too, marked so); its card shows the output while it runs, and the error and output when it
-// failed.
+// install, each with Install, Start, Stop and Open, and for a release Meko installed, Update (while
+// a newer release is out), Check now and Update automatically. An action runs on the server as the
+// extension's job (an automatic update too, marked so); its card shows the output while it runs, and
+// the error and output when it failed.
 
 import { useState } from "react";
 import { ExternalLink } from "lucide-react";
@@ -149,7 +149,8 @@ function ExtensionCard({ ext }: { ext: Extension }) {
           {!installed && button("install", true)}
           {installed && !running && button("start", true)}
           {installed && (running || !webUI) && button("stop", false)}
-          {installed && ext.updatable && button("update", false)}
+          {/* Update only while there's a newer release (the badge's test), or while one installs. */}
+          {installed && ext.updatable && (ext.update_available || doing === "update") && button("update", false)}
           {running && ext.path && (
             // A plain link, opening it in place of this page: AgentK refuses to be framed.
             <a
