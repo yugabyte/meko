@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -195,7 +195,8 @@ describe('the launcher', () => {
   let log: string;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'ak-launch-'));
+    // Resolved: the launcher names itself with links followed, and macOS's tmpdir is under /var, a link to /private/var.
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'ak-launch-')));
     bin = join(root, 'path');
     log = join(root, 'meko.log');
     const dir = join(root, 'home', 'app', '0.2.0');
