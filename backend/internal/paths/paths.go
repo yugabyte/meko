@@ -266,21 +266,23 @@ func LooksLikeDataDir(dir string) bool {
 	if dir == "/" {
 		return false
 	}
-	if home, err := os.UserHomeDir(); err == nil && sameDir(dir, home) {
+	if home, err := os.UserHomeDir(); err == nil && SameDir(dir, home) {
 		return false
 	}
 	fi, err := os.Lstat(New(dir).DB)
 	return err == nil && fi.Mode().IsRegular()
 }
 
-// sameDir reports whether a and b are the same folder, following symlinks.
-func sameDir(a, b string) bool {
-	ra, err := filepath.EvalSymlinks(a)
+// SameDir reports whether a and b are the same folder (or file), following links. It compares the
+// folders themselves, not their paths: one folder can have spellings links don't explain, such as
+// a bind mount, or an automount of a local disk, that puts one disk at two paths.
+func SameDir(a, b string) bool {
+	fa, err := os.Stat(a)
 	if err != nil {
 		return false
 	}
-	rb, err := filepath.EvalSymlinks(b)
-	return err == nil && ra == rb
+	fb, err := os.Stat(b)
+	return err == nil && os.SameFile(fa, fb)
 }
 
 // DirSize is the total size of the regular files under dir, leaving out the folders in skip.

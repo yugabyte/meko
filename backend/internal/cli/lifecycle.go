@@ -27,7 +27,7 @@ var newManager = func() (service.Manager, error) {
 // another data folder is left alone.
 func serviceOf(l paths.Layout) service.Manager {
 	m, err := newManager()
-	if err != nil || !m.Installed() || m.DataDir() != l.Root {
+	if err != nil || !m.Installed() || !paths.SameDir(m.DataDir(), l.Root) {
 		return nil
 	}
 	return m

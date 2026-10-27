@@ -540,8 +540,8 @@ export function samePath(a: string, b: string): boolean {
   if (a === b) return true;
   try {
     if (realpathSync(a) === realpathSync(b)) return true;
-    // One folder can have spellings links don't explain, such as a bind mount (/share and
-    // /net/<host>/share): compare the files themselves.
+    // One folder can have spellings links don't explain, such as a bind mount (one disk at two
+    // paths): compare the files themselves.
     const sa = statSync(a, { bigint: true });
     const sb = statSync(b, { bigint: true });
     return sa.dev === sb.dev && sa.ino === sb.ino;

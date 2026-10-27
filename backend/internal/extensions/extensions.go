@@ -172,19 +172,9 @@ func (c Catalog) releaseOf(root, name, command string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	// Compare the folders themselves, not their paths: one folder can have two spellings that links
-	// don't explain, such as a bind mount (/share and /net/<host>/share), or macOS's /tmp.
-	return v, sameDir(app.Root, c.App(root, name).Root)
-}
-
-// sameDir reports whether a and b name the same folder.
-func sameDir(a, b string) bool {
-	fa, err := os.Stat(a)
-	if err != nil {
-		return false
-	}
-	fb, err := os.Stat(b)
-	return err == nil && os.SameFile(fa, fb)
+	// Compare the folders, not their paths: Meko's --data-dir and the command's links can spell one
+	// folder two ways (a bind mount, or macOS's /tmp and /private/tmp).
+	return v, paths.SameDir(app.Root, c.App(root, name).Root)
 }
 
 // Release is the version of a Managed extension's release install that command runs (through

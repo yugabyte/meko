@@ -244,3 +244,32 @@ func TestLooksLikeDataDir(t *testing.T) {
 		}
 	}
 }
+
+// SameDir compares the folders themselves. A test can't make a bind mount, the case that needs it
+// (one disk at two paths), so a hard link stands in: two paths to one file that following
+// links can't make equal.
+func TestSameDir(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(a, link); err != nil {
+		t.Fatal(err)
+	}
+	file, hard := filepath.Join(a, "f"), filepath.Join(b, "hard")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(file, hard); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{a, a, true}, {a, link, true}, {a + "/.", a, true}, {file, hard, true},
+		{a, b, false}, {filepath.Join(a, "none"), filepath.Join(a, "none"), false}, {"", a, false},
+	} {
+		if got := SameDir(c.a, c.b); got != c.want {
+			t.Errorf("SameDir(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}

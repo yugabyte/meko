@@ -1,7 +1,7 @@
-import { mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { linkSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { getPaths, homeIn, mekoDirOf, mekoHome, refuseOtherMeko } from '../../src/server/paths.js';
+import { getPaths, homeIn, mekoDirOf, mekoHome, refuseOtherMeko, samePath } from '../../src/server/paths.js';
 import { tempDir } from '../helpers.js';
 
 /** Where Meko's data folder is: the cases Meko's own paths.Resolve and AgentK are tested against too. */
@@ -50,5 +50,19 @@ describe("Presenter's home", () => {
     expect(() => refuseOtherMeko(paths, { MEKO_HOME: join(root, 'other') })).toThrow(/belongs to the Meko in/);
     expect(() => refuseOtherMeko(paths, { MEKO_HOME: join(root, 'meko') })).not.toThrow();
     expect(() => refuseOtherMeko(paths, {})).not.toThrow();
+  });
+
+  // A data folder can have two spellings that links don't explain, such as a bind mount. A test
+  // can't make one, so a hard link stands in: two paths to one file.
+  it('takes two spellings of one folder for the same path, links or not', () => {
+    mkdirSync(join(root, 'a'));
+    mkdirSync(join(root, 'b'));
+    symlinkSync(join(root, 'a'), join(root, 'link'));
+    writeFileSync(join(root, 'a', 'f'), '');
+    linkSync(join(root, 'a', 'f'), join(root, 'b', 'hard'));
+    expect(samePath(join(root, 'a'), join(root, 'link'))).toBe(true);
+    expect(samePath(join(root, 'a', 'f'), join(root, 'b', 'hard'))).toBe(true);
+    expect(samePath(join(root, 'a'), join(root, 'b'))).toBe(false);
+    expect(samePath(join(root, 'a'), join(root, 'none'))).toBe(false);
   });
 });
