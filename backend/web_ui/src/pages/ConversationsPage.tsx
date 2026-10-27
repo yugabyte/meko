@@ -130,7 +130,7 @@ function Thread({ datapack, conversationId }: { datapack: Datapack; conversation
                     ))}
                   </div>
                 )}
-                <DecisionTrace turn={t} />
+                <DecisionTrace datapackId={id} turn={t} />
               </Card>
             ))}
             {c.thread_has_more && <p className="text-center text-xs text-muted-foreground">Showing the first 100 turns.</p>}

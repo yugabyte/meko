@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import type { LauncherSpec } from './launcher.js';
 import { claudePath, type Paths } from './paths.js';
 import { writeScript } from './scriptfile.js';
+import { claudeAllowedTools } from './tooldefs.js';
 
 /**
  * Markers a running Claude Code session puts in its children's environment.
@@ -198,8 +199,9 @@ export function writeHookFiles(paths: Paths, opts: { disabledPlugins?: string[] 
     // every file-editing tool, Write included; Claude Code ignores Write() rules and warns about them.
     // Images added in the New session dialog reach Claude as paths in its first prompt, for it to read.
     // Claude is given these folders' local spelling (claudePath), so the rules use it too.
+    // The session tools' read-only list needs no ask; the tools that change something do.
     permissions: {
-      allow: [`Edit(/${claudePath(paths.designs)}/**)`, 'Artifact', `Read(/${claudePath(paths.pastes)}/**)`],
+      allow: [`Edit(/${claudePath(paths.designs)}/**)`, 'Artifact', `Read(/${claudePath(paths.pastes)}/**)`, ...claudeAllowedTools()],
     },
     statusLine: {
       type: 'command',
@@ -315,8 +317,10 @@ export interface LaunchSpec {
   planMode: boolean;
   /** Extra directories Claude may work in (the session's design folder). */
   addDirs: string[];
-  /** Plugins Claude loads for the session (AgentK's mod), each a `--plugin-dir`. */
+  /** Plugins Claude loads for the session (AgentK's mod, the session tools' skill), each a `--plugin-dir`. */
   pluginDirs?: string[];
+  /** MCP config files added to the user's servers (the session tools'), each an `--mcp-config`. */
+  mcpConfigs?: string[];
   appendSystemPrompt: string;
   prompt: string | null;
   env: Record<string, string>;
@@ -346,6 +350,7 @@ export function claudeLauncher(paths: Paths, spec: LaunchSpec): LauncherSpec {
   if (spec.planMode) args.push('--permission-mode', 'plan');
   for (const d of spec.addDirs) args.push('--add-dir', claudePath(d));
   for (const d of spec.pluginDirs ?? []) args.push('--plugin-dir', claudePath(d));
+  for (const f of spec.mcpConfigs ?? []) args.push('--mcp-config', claudePath(f));
   if (spec.appendSystemPrompt) args.push('--append-system-prompt', spec.appendSystemPrompt);
   // After "--", a prompt that starts with "-" (such as "---" front matter) isn't read as an option.
   if (spec.prompt) args.push('--', spec.prompt);

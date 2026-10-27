@@ -92,8 +92,8 @@ type turn struct {
 	PromotedMemoryTexts []string `json:"promoted_memory_texts"`
 	LLMCalls            int      `json:"llm_calls"`
 	TotalTokens         int      `json:"total_tokens"`
-	// Calls is Meko's own decision trace for the turn (Cloud's comes from Langfuse): what it read
-	// and what it wrote, shaped as /usage's recent calls.
+	// Calls is Meko's own decision trace for the turn: what it read and what it wrote, shaped as
+	// /usage's recent calls.
 	Calls []map[string]any `json:"calls"`
 }
 

@@ -19,10 +19,10 @@ import { approveDesign, changingDecisions } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { approveLabel, closingText, cx, dotState, designApprovalBlocker, formatCredits, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, revisitWhen, sessionTabTitle, totalTokens, updateShowing, usageTitle } from '../util';
+import { approveLabel, closingText, cx, dotState, designApprovalBlocker, formatCredits, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, revisitWhen, runToMergeShown, runToMergeTitle, sessionTabTitle, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
-import { Busy, Check, ConfirmButton, ContextRing, DatapackName, Elapsed, HarnessLogo, NotesIcon, RevisitChip, StatusDot } from './common';
+import { Busy, Check, ConfirmButton, ContextRing, DatapackName, Elapsed, HarnessLogo, NotesIcon, RevisitChip, RunToMergeCheck, RunToMergeMark, StageChip, StatusDot } from './common';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
 import type { MovePreset } from './MoveSessionDialog';
@@ -202,6 +202,15 @@ export function ProjectView({
       setActingOn(null);
     }
   };
+  // Run to merge's checkbox beside the gates (StageBar) and the design panel's Approve.
+  const setAutoRun = async (on: boolean) => {
+    if (!session) return;
+    try {
+      await api.updateSession(session.id, { autoRun: on });
+    } catch (e) {
+      onError(errorMessage(e));
+    }
+  };
   const updating = !!session && (
     (actingOn?.id === session.id && actingOn.action === 'update-pr')
     || (updated?.id === session.id && !updateShowing(updated.pr, session.reviewingPr)));
@@ -274,6 +283,7 @@ export function ProjectView({
   const stageText = session && (
     <span>
       {session.stage === 'pr' ? 'opening PR' : STAGE_LABELS[session.stage].toLowerCase()}
+      <RunToMergeMark session={session} size={10} />
       {rv && session.stage === 'reviewing-pr' && (
         <>
           {` · at ${rv.reviewSha.slice(0, 7)}`}
@@ -313,7 +323,7 @@ export function ProjectView({
           {harnessLogos && <HarnessLogo harness={s.harness} />}
           <span className="tab-name">{s.name}</span>
           {s.revisitAt !== null && <RevisitChip until={s.revisitAt} />}
-          <span className="stchip">{STAGE_LABELS[s.stage]}</span>
+          <StageChip session={s} />
         </button>
       ))}
       <button className="tab new" onClick={onNewSession} title="New session" aria-label="New session">
@@ -329,16 +339,8 @@ export function ProjectView({
           onMenu={onMenu}
           menuDot={!showTabs && sessions.some((s) => s.id !== session?.id && dotState(s) === 'needs_input')}
           sub={showTabs || !session ? undefined : project.name}
-          title={
-            showTabs ? undefined : session ? (
-              <>
-                <StatusDot status={dotState(session)} phase={session.id} />
-                {session.name}
-              </>
-            ) : (
-              project.name
-            )
-          }
+          title={showTabs ? undefined : (session?.name ?? project.name)}
+          icon={!showTabs && session ? <StatusDot status={dotState(session)} phase={session.id} /> : undefined}
         >
           {showTabs && tabs}
           {session?.status === 'exited' && (
@@ -375,6 +377,7 @@ export function ProjectView({
           session={session}
           project={project}
           onAct={act}
+          onAutoRun={setAutoRun}
           learnTo={mergeLearnTo}
           onMove={onMove}
           onOpenPr={onOpenPr}
@@ -450,6 +453,7 @@ export function ProjectView({
             showQuestions={questionsAt}
             onClose={() => setPanel(null)}
             onApprove={() => act('approve-design')}
+            onAutoRun={setAutoRun}
           />
         )}
         {session && panel === 'changes' && <ChangesPanel key={`changes-${session.id}`} session={session} onClose={() => setPanel(null)} />}
@@ -490,6 +494,7 @@ export function ProjectView({
               session={session}
               project={project}
               onAct={act}
+              onAutoRun={setAutoRun}
               learnTo={mergeLearnTo}
               onMove={(preset) => {
                 setSheet(false);
@@ -577,16 +582,21 @@ function InstructionsButton({ queued, disabled, title, onClick }: { queued: bool
   );
 }
 
-/** A gate pressed early (Open PR or Merge & Close), shown as a pill with Cancel until it goes. */
+/**
+ * A gate pressed early (Open PR or Merge & Close), or kept queued by Run to merge, shown as a pill
+ * with Cancel until it goes, beside Run to merge's box. Cancel on Run to merge's gate turns it off.
+ */
 function queuedGate(
   session: Session,
   blocked: boolean,
   onAct: (a: SessionAction, req?: CloseSessionRequest) => Promise<void>,
+  onAutoRun: (on: boolean) => Promise<void>,
   title: string,
   onInstructions?: () => void,
 ): ReactNode {
   return (
     <span className="gate-group">
+      <RunToMergeCheck session={session} disabled={blocked} onChange={onAutoRun} />
       {onInstructions && (
         <InstructionsButton
           queued
@@ -609,6 +619,7 @@ function StageBar({
   session,
   project,
   onAct,
+  onAutoRun,
   onMove,
   onOpenPr,
   onShare,
@@ -622,6 +633,8 @@ function StageBar({
   session: Session | null;
   project: ProjectWithSessions;
   onAct: (a: SessionAction, req?: CloseSessionRequest) => Promise<void>;
+  /** Turns Run to merge on or off (its checkbox beside Approve design, Open PR and Merge & Close). */
+  onAutoRun: (on: boolean) => Promise<void>;
   /** The datapack Merge & Close saves what the session learned to first; null when it has none (or Meko is off). */
   learnTo?: string | null;
   onMove: (preset?: MovePreset) => void;
@@ -668,7 +681,12 @@ function StageBar({
   switch (session.stage) {
     case 'explore':
       reason = midTurn ? 'Wait for AgentK to finish its turn.' : null;
-      gate = (
+      // A learn session closes by itself once it's done (it can still be moved from the stage bar).
+      gate = session.purpose === 'learn' ? (
+        <span className="gate-pill" title="AgentK closes this session once it has saved what it learned">
+          Learning the project
+        </span>
+      ) : (
         <button
           className="gate"
           disabled={blocked || !!reason}
@@ -680,9 +698,11 @@ function StageBar({
       );
       break;
     case 'design': {
+      const runToMerge = <RunToMergeCheck session={session} disabled={blocked} onChange={onAutoRun} />;
       if (session.approvalQueued) {
         gate = (
           <span className="gate-group">
+            {runToMerge}
             <span className="gate-pill" title="The approval goes to AgentK when its turn ends, unless the turn changes the design">
               ✓ Approved: goes when the turn ends
             </span>
@@ -697,28 +717,32 @@ function StageBar({
       reason = session.designQuestions.open ? null : designApprovalBlocker(session);
       const waits = heldForTurnEnd(session);
       gate = (
-        <button
-          className="gate"
-          disabled={blocked || !!reason}
-          title={reason ?? (session.designQuestions.open
-            ? 'Answer the open questions, then approve'
-            : waits ? 'AgentK is mid-turn: the approval goes when the turn ends, if the design stays the same' : 'Approve the design and move to Code')}
-          onClick={() => onAct('approve-design')}
-        >
-          {approveLabel(session.designQuestions.open)}
-        </button>
+        <span className="gate-group">
+          {session.hasDesign && runToMerge}
+          <button
+            className="gate"
+            disabled={blocked || !!reason}
+            title={reason ?? (session.designQuestions.open
+              ? 'Answer the open questions, then approve'
+              : waits ? 'AgentK is mid-turn: the approval goes when the turn ends, if the design stays the same' : 'Approve the design and move to Code')}
+            onClick={() => onAct('approve-design')}
+          >
+            {approveLabel(session.designQuestions.open)}
+          </button>
+        </span>
       );
       break;
     }
     case 'code': {
       if (session.queued === 'open-pr') {
-        gate = queuedGate(session, blocked, onAct, 'The PR prompt goes to AgentK when its turn ends', onOpenPr);
+        gate = queuedGate(session, blocked, onAct, onAutoRun, 'The PR prompt goes to AgentK when its turn ends', onOpenPr);
         break;
       }
       const pr = openPrGate(session);
       reason = pr.reason;
       gate = (
         <span className="gate-group">
+          <RunToMergeCheck session={session} disabled={blocked} onChange={onAutoRun} />
           <InstructionsButton queued={false} disabled={blocked || !!reason} title={reason ?? 'Open PR with instructions for AgentK'} onClick={onOpenPr} />
           <button className="gate" disabled={blocked || !!reason} title={pr.title} onClick={() => onAct('open-pr')}>
             {pr.label}
@@ -768,9 +792,10 @@ function StageBar({
             </button>
           )}
           {session.queued === 'merge' ? (
-            queuedGate(session, blocked, onAct, 'The pull request is merged once nothing blocks it')
+            queuedGate(session, blocked, onAct, onAutoRun, 'The pull request is merged once nothing blocks it')
           ) : (
             <>
+              <RunToMergeCheck session={session} disabled={blocked} onChange={onAutoRun} />
               {learnTo && (
                 <label className="check skip-learn" title={`Unchecked, AgentK saves what this session learned to ${learnTo} before closing it`}>
                   <input type="checkbox" checked={skipLearn} disabled={blocked} onChange={(e) => setSkipFor(e.target.checked ? session.id : null)} />
@@ -825,7 +850,10 @@ function StageBar({
             const inner = (
               <>
                 <span className="n">{skipped ? '–' : i < idx ? <Check size={10} /> : i + first}</span>
-                <span className="stg-label">{STAGE_LABELS[st]}</span>
+                <span className="stg-label">
+                  {STAGE_LABELS[st]}
+                  {i === idx && <RunToMergeMark session={session} size={10} />}
+                </span>
               </>
             );
             return (
@@ -852,7 +880,10 @@ function StageBar({
           })}
           {/* The phone layout shows only the current stage's name, here. */}
           <span className="stg-now">
-            <b>{STAGE_LABELS[session.stage]}</b>
+            <b>
+              {STAGE_LABELS[session.stage]}
+              <RunToMergeMark session={session} size={10} />
+            </b>
             {session.stage !== 'done' && stages.length > 1 && idx + first > 0 && (
               <span className="muted">
                 {' '}
@@ -870,6 +901,8 @@ function StageBar({
         </div>
       )}
       {reasons && reason && <div className="blockers">{reason}</div>}
+      {/* A phone has no tooltips: what the box beside the gate does. */}
+      {reasons && runToMergeShown(session) && <div className="blockers">Run to merge: {runToMergeTitle(session)}.</div>}
     </div>
   );
 }

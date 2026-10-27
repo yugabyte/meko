@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { anchorComment, defaultOpen, parsePatch, sameLine, showsLine } from '../../src/web/diff.js';
+import { anchorComment, defaultOpen, DESKTOP_BUDGET, keepUnchanged, parsePatch, PHONE_BUDGET, reparse, sameLine, showsLine, type RowBudget } from '../../src/web/diff.js';
 
 const rows = (patch: string) => parsePatch(patch).map((l) => [l.kind, l.old, l.new, l.text]);
 
@@ -80,14 +80,35 @@ describe('telling changed lines from hidden ones', () => {
 describe('opening diffs by default', () => {
   const images = (n: number): [string, number, boolean][] => Array.from({ length: n }, (_, i) => [`${i}.png`, 0, false]);
   // Each file as [path, rows, has comments].
-  it.each<[string, [string, number, boolean][], string[]]>([
-    ['opens small files while they fit the budget', [['a', 900, false], ['b', 900, false], ['c', 300, false], ['d', 100, false]], ['a', 'b', 'd']],
-    ['never opens a large file, even first', [['big', 1001, false], ['a', 10, false]], ['a']],
-    ['opens files with comments, large ones included, and counts only small ones', [['big', 50000, true], ['a', 1000, false], ['b', 1000, true], ['c', 1, false]], ['big', 'a', 'b']],
-    ['lets files without rows take a slot, so a branch of images opens only the first ones', [['a', 1000, false], ['b', 1000, false], ['img.png', 0, false]], ['a', 'b']],
-    ['opens only as many files without rows as the budget has rows', images(2001), images(2000).map(([p]) => p)],
-  ])('%s', (_, files, open) => {
+  it.each<[string, RowBudget, [string, number, boolean][], string[]]>([
+    ['opens small files while they fit the budget', DESKTOP_BUDGET, [['a', 900, false], ['b', 900, false], ['c', 300, false], ['d', 100, false]], ['a', 'b', 'd']],
+    ['never opens a large file, even first', DESKTOP_BUDGET, [['big', 1001, false], ['a', 10, false]], ['a']],
+    ['opens files with comments, large ones included, and counts only small ones', DESKTOP_BUDGET, [['big', 50000, true], ['a', 1000, false], ['b', 1000, true], ['c', 1, false]], ['big', 'a', 'b']],
+    ['lets files without rows take a slot, so a branch of images opens only the first ones', DESKTOP_BUDGET, [['a', 1000, false], ['b', 1000, false], ['img.png', 0, false]], ['a', 'b']],
+    ['opens only as many files without rows as the budget has rows', DESKTOP_BUDGET, images(2001), images(2000).map(([p]) => p)],
+    ['opens half as many rows on a phone', PHONE_BUDGET, [['a', 450, false], ['b', 450, false], ['c', 450, false], ['d', 100, false]], ['a', 'b', 'd']],
+    ['counts a file over 500 rows as large on a phone', PHONE_BUDGET, [['a', 501, false], ['b', 500, false]], ['b']],
+  ])('%s', (_, budget, files, open) => {
     const by = new Map(files.map(([path, n, c]) => [path, { n, c }]));
-    expect([...defaultOpen(files.map(([path]) => ({ path })), (p) => by.get(p)!.n, (p) => by.get(p)!.c)]).toEqual(open);
+    expect([...defaultOpen(files.map(([path]) => ({ path })), (p) => by.get(p)!.n, (p) => by.get(p)!.c, budget)]).toEqual(open);
+  });
+});
+
+describe('parsing again after a refetch', () => {
+  it('keeps the rows of patches that did not change and parses the rest', () => {
+    const a = '@@ -1 +1 @@\n-a\n+A', b = '@@ -1 +1 @@\n-b\n+B';
+    const first = reparse(new Map(), [{ patch: a }, { patch: b }, { patch: null }]);
+    const next = reparse(first, [{ patch: a }, { patch: `${b}\n+C` }]);
+    expect(next.get(a)).toBe(first.get(a));
+    expect(next.get(`${b}\n+C`)?.map((l) => l.text)).toEqual(['@@ -1 +1 @@', 'b', 'B', 'C']);
+    expect(next.has(b)).toBe(false);
+  });
+
+  it('keeps the objects of files whose fields are all the same', () => {
+    const prev = [{ path: 'a', added: 1, patch: 'x' }, { path: 'b', added: 1, patch: 'y' }];
+    const next = keepUnchanged(prev, [{ path: 'a', added: 1, patch: 'x' }, { path: 'b', added: 2, patch: 'y' }, { path: 'c', added: 1, patch: 'z' }], (f) => f.path);
+    expect(next[0]).toBe(prev[0]);
+    expect(next.slice(1)).toEqual([{ path: 'b', added: 2, patch: 'y' }, { path: 'c', added: 1, patch: 'z' }]);
+    expect(next[1]).not.toBe(prev[1]);
   });
 });

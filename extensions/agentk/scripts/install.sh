@@ -14,23 +14,25 @@
 #   --version <X.Y.Z>   install a specific version instead of the newest
 #   --install-deps      install missing tools (git, curl, gh, a coding agent, and Meko's
 #                       setup for the agents) without asking
-#   --agent <claude|kiro>
-#                       the coding agent to install when neither Claude Code nor Kiro CLI is
-#                       there (default: ask; Claude Code with --install-deps or when there's no
-#                       one to ask)
+#   --agent <claude|opencode|kiro>
+#                       the coding agent to install when none of Claude Code, OpenCode and Kiro
+#                       CLI is there (default: ask; Claude Code with --install-deps or when
+#                       there's no one to ask)
 #   --no-install-deps   never install tools; stop and say what's missing instead
 #   --deps-only         check (and install) the tools, then stop
 #   --reinstall         download and set up again even though AgentK is already installed
+#   --print-home        print the folder AgentK is (or would be) installed in, and stop
 #   anything else       forwarded to `agentk install`
-#                       (--non-interactive, --repos-root, --meko-key, --meko-url, --no-meko, --bind,
-#                       --port, --no-service); Meko is optional: without a key the install goes on
-#                       without it, and a Meko running on this computer is offered first
+#                       (--non-interactive, --repos-root, --meko-key, --meko-url, --no-service);
+#                       Meko must be installed first: it serves AgentK to browsers. Without a Meko Cloud key, AgentK uses the Meko running on
+#                       this computer (Enter at the key prompt)
 #
 # Missing tools are installed with Homebrew on macOS and the system package manager on Linux
 # (with sudo), gh on Linux from its GitHub release (checksum-verified) into ~/.local/bin, and a
-# coding agent when neither Claude Code nor Kiro CLI is installed: Claude Code with Anthropic's
-# installer from claude.ai, or Kiro CLI with Kiro's from cli.kiro.dev, both over HTTPS (neither
-# publishes a checksum for its script), into ~/.local/bin. The installer shows the exact commands and asks first; with
+# coding agent when none of Claude Code, OpenCode and Kiro CLI is installed: Claude Code with
+# Anthropic's installer from claude.ai or Kiro CLI with Kiro's from cli.kiro.dev, into ~/.local/bin,
+# or OpenCode with its own from opencode.ai, into ~/.opencode/bin, all over HTTPS (none publishes a
+# checksum for its script). The installer shows the exact commands and asks first; with
 # --non-interactive it installs only with --install-deps. With GITHUB_TOKEN set, a missing gh
 # is only installed with --install-deps; otherwise downloads use curl and the token. Afterwards
 # it checks the tools themselves: Homebrew exiting with an error after they work is a warning.
@@ -41,17 +43,23 @@
 # before the rename to AgentK (no ~/.local/bin/agentk) is installed again, which moves it to the new
 # names.
 #
-# Environment: AK_HOME (default ~/.agent-k-local), AK_REPO (default yugabyte/agent-k-local),
-# GITHUB_TOKEN (used by the curl fallback when `gh` is unavailable).
+# AgentK's home is in Meko's data folder, <data folder>/extensions/agentk, and nothing picks
+# another: MEKO_HOME when it's set (Meko's `meko install_extension` sets it), else ~/.meko, or for a
+# home folder on a network filesystem $XDG_STATE_HOME/meko when that's local, else
+# /var/tmp/<user>/meko. An install from before the move keeps ~/.agent-k-local until its server
+# moves it (src/server/movehome.ts).
+#
+# Environment: MEKO_HOME, AK_REPO (default yugabyte/agent-k-local), GITHUB_TOKEN (used by the
+# curl fallback when `gh` is unavailable).
 set -eu
 
 repo=${AK_REPO:-yugabyte/agent-k-local}
-ak_home=${AK_HOME:-$HOME/.agent-k-local}
 version=""
 agent=""
 install_deps=ask
 deps_only=false
 reinstall=false
+print_home=false
 setup_flags=false
 interactive=true
 
@@ -76,20 +84,94 @@ while [ $# -gt 0 ]; do
   case $1 in
     --version) [ $# -ge 2 ] || die "--version needs a value"; version=$2; shift 2 ;;
     --version=*) version=${1#--version=}; shift ;;
-    --agent) [ $# -ge 2 ] || die "--agent needs a value: claude or kiro"; agent=$2; shift 2 ;;
+    --agent) [ $# -ge 2 ] || die "--agent needs a value: claude, opencode or kiro"; agent=$2; shift 2 ;;
     --agent=*) agent=${1#--agent=}; shift ;;
     --install-deps) install_deps=yes; shift ;;
     --no-install-deps) install_deps=no; shift ;;
     --deps-only) deps_only=true; shift ;;
     --reinstall) reinstall=true; shift ;;
+    --print-home) print_home=true; shift ;;
     --non-interactive) interactive=false; forward="$forward '--non-interactive'"; shift ;;
     *) setup_flags=true; forward="$forward $(printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")")"; shift ;;
   esac
 done
-case $agent in ''|claude|kiro) ;; *) die "--agent takes claude or kiro (got $agent)" ;; esac
+case $agent in ''|claude|opencode|kiro) ;; *) die "--agent takes claude, opencode or kiro (got $agent)" ;; esac
 # A version, or its tag (agentk-v<version>, or v<version> from before).
 version=${version#agentk-v}
 version=${version#v}
+
+# ---- where AgentK lives ----
+# Meko's data folder by Meko's own rule (Resolve in backend/internal/paths/paths.go, and mekoHome in
+# src/server/paths.ts; all three are tested against backend/internal/paths/testdata/resolve-cases.json).
+fs_type() {
+  if [ "$(uname -s)" = Darwin ]; then
+    # BSD stat has no -c: find the mount with df, then read its type from mount.
+    mp=$(df -P "$1" 2>/dev/null | tail -n 1 | sed -n 's/.*[0-9]%[[:space:]]*//p')
+    [ -n "$mp" ] && mount 2>/dev/null | sed -n "s|.* on $mp (\([^,)]*\).*|\1|p" | head -n 1
+  else
+    stat -f -c %T "$1" 2>/dev/null
+  fi
+}
+on_network() {
+  dir=$1
+  while [ ! -e "$dir" ] && [ "$dir" != / ]; do dir=$(dirname "$dir"); done
+  case $(fs_type "$dir" || true) in
+    nfs|nfs4|cifs|smb2|smbfs|fuse.sshfs|afs|lustre|gpfs|afpfs|webdav|macfuse|osxfuse) return 0 ;;
+  esac
+  return 1
+}
+meko_home() {
+  if [ -n "${MEKO_HOME:-}" ]; then
+    case $MEKO_HOME in /*) m=$MEKO_HOME ;; *) m=$(pwd)/$MEKO_HOME ;; esac
+    if on_network "$m"; then
+      die "Meko's data folder $m (MEKO_HOME) is on a network filesystem, which Meko refuses. Choose a folder on a local disk with MEKO_HOME."
+    fi
+    printf '%s\n' "$m"
+  elif ! on_network "$HOME/.meko"; then
+    printf '%s\n' "$HOME/.meko"
+  elif [ -n "${XDG_STATE_HOME:-}" ] && case $XDG_STATE_HOME in /*) true ;; *) false ;; esac && ! on_network "$XDG_STATE_HOME/meko"; then
+    printf '%s\n' "$XDG_STATE_HOME/meko"
+  else
+    printf '%s\n' "/var/tmp/$(id -un)/meko"
+  fi
+}
+# An install already here is found by the command link this installer made (it may be in a home
+# from before the move: ~/.agent-k-local, or one named by AK_HOME back then), so it's updated in
+# place and moves by itself; else the home in Meko's data folder, or ~/.agent-k-local when only that
+# is there.
+installed_home() {
+  for c in agentk agent-k-local; do
+    l=$(readlink "$HOME/.local/bin/$c" 2>/dev/null) || continue
+    case $l in */app/current/bin/*) h=${l%/app/current/bin/*}; [ -d "$h/app" ] && { printf '%s\n' "$h"; return 0; } ;; esac
+  done
+  return 1
+}
+meko_dir=$(meko_home) || exit 1
+if ak_home=$(installed_home); then
+  :
+elif [ -d "$meko_dir/extensions/agentk" ] || [ ! -d "$HOME/.agent-k-local" ]; then
+  ak_home=$meko_dir/extensions/agentk
+else
+  ak_home=$HOME/.agent-k-local
+fi
+if $print_home; then
+  printf '%s\n' "$ak_home"
+  exit 0
+fi
+
+# A folder of our own in a shared place like /var/tmp, where another user could have made it first:
+# refused unless it and its parent are real folders of ours and others can't write in the parent.
+private_dir() {
+  mkdir -p "$1" || die "can't create $1"
+  for dir in "$(dirname "$1")" "$1"; do
+    [ -L "$dir" ] && die "$dir is a symlink. Remove it, or set MEKO_HOME to a local folder only you can write to."
+    [ -n "$(find "$dir" -prune -user "$(id -u)")" ] || die "$dir is owned by another user. Remove it, or set MEKO_HOME to a local folder only you can write to."
+  done
+  if [ -n "$(find "$(dirname "$1")" -prune -perm -0002)" ]; then
+    die "$(dirname "$1") can be written to by other users. Remove it, or set MEKO_HOME to a local folder only you can write to."
+  fi
+  chmod 700 "$1"
+}
 
 # ---- platform ----
 case $(uname -s) in
@@ -175,7 +257,7 @@ if ! $reinstall && ! $deps_only && ! $setup_flags && [ -x "$ak_home/app/current/
     say ""
     say "  AgentK is already installed, so nothing was changed."
     row "Status" "$cmd status"
-    row "Setup" "$cmd install   (the repos folder, access, port, Meko, or the services again)"
+    row "Setup" "$cmd install   (the repos folder, Meko, or the services again)"
     row "Update" "the Update banner or button in AgentK, when there's a newer release"
     row "Reinstall" "$(alone_cmd) -s -- --reinstall"
     exit 0
@@ -203,7 +285,7 @@ say ""
 
 # What's missing, and the plan to install it: `plan` is shown to the user, `pkgs` goes to the
 # package manager, `gh_download` fetches gh from its GitHub release (Linux).
-missing="" pkgs="" plan="" gh_download=false claude_install=false kiro_install=false
+missing="" pkgs="" plan="" gh_download=false claude_install=false opencode_install=false kiro_install=false
 add_missing() { missing="${missing:+$missing, }$1"; }
 git_ok || { add_missing git; pkgs="$pkgs git"; }
 command -v curl >/dev/null 2>&1 || { add_missing curl; pkgs="$pkgs curl"; }
@@ -217,24 +299,38 @@ if ! command -v gh >/dev/null 2>&1; then
     if [ "$platform" = darwin ]; then pkgs="$pkgs gh"; else gh_download=true; fi
   fi
 fi
-# Sessions run on Claude Code or Kiro CLI: one of them is enough. With neither, one is installed:
-# the one --agent names, else the one picked here, else Claude Code. --install-deps never asks.
-if ! command -v claude >/dev/null 2>&1 && ! command -v kiro-cli >/dev/null 2>&1; then
+# OpenCode's installer puts it in ~/.opencode/bin, and adds that to a shell's rc file only.
+opencode_bin="$HOME/.opencode/bin"
+has_opencode() { command -v opencode >/dev/null 2>&1 || [ -x "$opencode_bin/opencode" ]; }
+# Sessions run on Claude Code, OpenCode or Kiro CLI: one of them is enough. With none, one is
+# installed: the one --agent names, else the one picked here, else Claude Code. --install-deps never asks.
+if ! command -v claude >/dev/null 2>&1 && ! has_opencode && ! command -v kiro-cli >/dev/null 2>&1; then
   if [ -z "$agent" ] && $interactive && [ "$install_deps" = ask ]; then
     say "${b}Coding agent${n}"
-    warn "Missing" "AgentK runs sessions on Claude Code or Kiro CLI, and neither is installed"
-    printf '    Install Claude Code (1) or Kiro CLI (2)? %s[1]%s ' "$d" "$n" >&2
+    warn "Missing" "AgentK runs sessions on Claude Code, OpenCode or Kiro CLI, and none is installed"
+    printf '    Install Claude Code (1), OpenCode (2) or Kiro CLI (3)? %s[1]%s ' "$d" "$n" >&2
     read -r answer </dev/tty || answer=""
-    case $answer in ''|1|[Cc]*) agent=claude ;; 2|[Kk]*) agent=kiro ;; *) die "pick 1 (Claude Code) or 2 (Kiro CLI), or pass --agent claude or --agent kiro." ;; esac
+    case $answer in
+      ''|1|[Cc]*) agent=claude ;;
+      2|[Oo]*) agent=opencode ;;
+      3|[Kk]*) agent=kiro ;;
+      *) die "pick 1 (Claude Code), 2 (OpenCode) or 3 (Kiro CLI), or pass --agent claude, --agent opencode or --agent kiro." ;;
+    esac
   fi
-  if [ "$agent" = kiro ]; then
+  if [ "$agent" = opencode ]; then
+    add_missing "OpenCode"; opencode_install=true
+    # OpenCode's installer unpacks a tarball on Linux and a zip on macOS.
+    if [ "$platform" = darwin ]; then command -v unzip >/dev/null 2>&1 || { add_missing unzip; pkgs="$pkgs unzip"; }
+    else command -v tar >/dev/null 2>&1 || { add_missing tar; pkgs="$pkgs tar"; }
+    fi
+  elif [ "$agent" = kiro ]; then
     add_missing "Kiro CLI"; kiro_install=true
     # Kiro's installer unpacks a zip on Linux.
     [ "$platform" = darwin ] || command -v unzip >/dev/null 2>&1 || { add_missing unzip; pkgs="$pkgs unzip"; }
   elif [ "$agent" = claude ]; then
     add_missing "Claude Code"; claude_install=true
   else
-    add_missing "Claude Code (or Kiro CLI, with --agent kiro)"; claude_install=true
+    add_missing "Claude Code (or OpenCode or Kiro CLI, with --agent opencode or --agent kiro)"; claude_install=true
   fi
 fi
 
@@ -282,6 +378,8 @@ fi
 # The agents' own installers, the same on Linux and macOS: no root.
 $claude_install && plan="$plan
       curl -fsSL https://claude.ai/install.sh | bash      (Claude Code, into ~/.local/bin)"
+$opencode_install && plan="$plan
+      curl -fsSL https://opencode.ai/v2/install | bash   (OpenCode 2, into ~/.opencode/bin)"
 $kiro_install && plan="$plan
       curl -fsSL https://cli.kiro.dev/install | bash      (Kiro CLI, into ~/.local/bin)"
 
@@ -378,6 +476,15 @@ if [ -n "$plan" ]; then
       { rm -rf "$cc_tmp"; die "Claude Code's installer failed (see the output above). Install it yourself: https://claude.com/claude-code"; }
     rm -rf "$cc_tmp"
   fi
+  if $opencode_install; then
+    command -v bash >/dev/null 2>&1 || die "OpenCode's installer needs bash, which wasn't found. Install OpenCode yourself: https://opencode.ai"
+    # Saved first rather than piped, so a failed download isn't mistaken for a finished install.
+    oc_tmp=$(mktemp -d)
+    # opencode.ai/install is OpenCode 1's, which AgentK doesn't run.
+    { curl -fsSL -o "$oc_tmp/install" https://opencode.ai/v2/install && bash "$oc_tmp/install" </dev/null; } ||
+      { rm -rf "$oc_tmp"; die "OpenCode's installer failed (see the output above). Install it yourself: https://opencode.ai"; }
+    rm -rf "$oc_tmp"
+  fi
   if $kiro_install; then
     command -v bash >/dev/null 2>&1 || die "Kiro CLI's installer needs bash, which wasn't found. Install Kiro CLI yourself: https://kiro.dev/cli/"
     # Saved first rather than piped, so a failed download isn't mistaken for a finished install.
@@ -392,6 +499,7 @@ if [ -n "$plan" ]; then
   # (Homebrew's gh was checked with the other packages.)
   ! $gh_download || command -v gh >/dev/null 2>&1 || die "gh is still not available after installing it."
   ! $claude_install || command -v claude >/dev/null 2>&1 || die "Claude Code is still not available after installing it."
+  ! $opencode_install || has_opencode || die "OpenCode is still not available after installing it."
   ! $kiro_install || command -v kiro-cli >/dev/null 2>&1 || die "Kiro CLI is still not available after installing it."
   ok "Installed" "$missing"
 fi
@@ -407,6 +515,24 @@ if command -v claude >/dev/null 2>&1; then
       warn "Claude Code" "not signed in: run 'claude auth login' before starting sessions"
     fi
   fi
+fi
+# OpenCode needs a model provider: one signed in with `opencode auth login`, or a provider's key in
+# the environment, which `opencode auth list` lists too. Both run on a server of their own
+# (--standalone): OpenCode 2's shared background service has another environment, and AgentK never
+# starts it.
+if has_opencode; then
+  agents="${agents:+$agents, }OpenCode"
+  oc=opencode; command -v opencode >/dev/null 2>&1 || oc="$opencode_bin/opencode"
+  oc_auth=$("$oc" auth list --standalone </dev/null 2>/dev/null || true)
+  case $oc_auth in
+    *"No authenticated integrations"*)
+      if $interactive && ask "  OpenCode has no model provider signed in. Sign in now (opencode auth login)?"; then
+        "$oc" auth login --standalone </dev/tty || warn "OpenCode" "sign-in didn't finish; run 'opencode auth login' later"
+      else
+        warn "OpenCode" "no model provider signed in: run 'opencode auth login' before starting sessions"
+      fi
+      ;;
+  esac
 fi
 if command -v kiro-cli >/dev/null 2>&1; then
   agents="${agents:+$agents, }Kiro"
@@ -502,7 +628,9 @@ rm -f "$tmp/.err"
 ok "Release" "$version ($platform-$arch), checksum verified"
 
 # ---- unpack into app/<version> ----
-mkdir -p "$ak_home/app"
+case $ak_home in "/var/tmp/$(id -un)/meko/"*) private_dir "/var/tmp/$(id -un)/meko" ;; esac
+# Owner-only, like Meko's own data folder (which may not be there yet).
+(umask 077 && mkdir -p "$ak_home/app")
 staging="$ak_home/app/.staging.$$"
 rm -rf "$staging"
 mkdir -p "$staging"
@@ -544,6 +672,7 @@ if grep -q 'install-deps' "$dest/lib/dist/server/install.js" 2>/dev/null; then
   esac
 fi
 
+# A release finds its home from its own folder; one from before the move into Meko's data folder needs it named.
 export AK_HOME="$ak_home"
 # Tells `agentk install` the heading is already printed.
 export AK_INSTALLER=1

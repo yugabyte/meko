@@ -1,15 +1,16 @@
-// The web UI's entry: redeems the one-time code meko ui opened the page with, then renders the app.
+// The web UI's entry: renders the sign-in gate, which shows the app once Meko lets this browser in.
 
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import App from "./App";
-import { adoptCodeFromURL } from "./lib/token";
+import { Gate } from "./Gate";
+import { initialTheme } from "./lib/theme";
 import "./index.css";
 
-void adoptCodeFromURL().then(() =>
-  createRoot(document.getElementById("root")!).render(
-    <StrictMode>
-      <App />
-    </StrictMode>,
-  ),
+// The sign-in screens come before the app, which keeps the theme from then on.
+document.documentElement.classList.toggle("dark", initialTheme() === "dark");
+
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <Gate />
+  </StrictMode>,
 );

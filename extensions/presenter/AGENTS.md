@@ -1,0 +1,84 @@
+# AGENTS.md: Presenter
+
+Guide for coding agents working on **Presenter**, the Meko extension that builds interactive,
+branching presentations from datapacks. The repo's own rules are in the root
+[AGENTS.md](../../AGENTS.md); the design as built is [docs/design.md](docs/design.md). Run the
+commands below from `extensions/presenter`.
+
+Presenter is a server on a unix socket in its home, `<Meko's data folder>/extensions/presenter`.
+Meko's web listener shows its pages at `/ext/presenter/`, behind Meko's one login, as it shows
+AgentK at `/ext/agentk/`. The server runs Claude Code headless for each deck (one persisted session
+per deck), keeps each deck's draft, saves decks to their Meko datapacks in pieces, and holds the
+rooms of live talks.
+
+## Commands
+
+```sh
+cd extensions/presenter
+nvm use 22
+npm ci
+npm run typecheck && npm run lint && npm test   # run all three before every commit
+npm run build                                   # dist/server + dist/web
+npm run dev                                     # server on .dev-home/run/web.sock, Vite on 127.0.0.1:5179
+# a release tarball, as presenter-release.yml builds one (after npm prune --omit=dev; npm ci undoes it):
+sh scripts/package-release.sh <version> linux x64 <unpacked nodejs.org Node> out
+sh scripts/smoke-release.sh out/presenter-<version>-linux-x64.tar.gz <version>
+```
+
+Under `npm run dev` the pages are at `http://127.0.0.1:5179/` with no `<base>`; Meko's web
+listener isn't involved, but the server still asks `meko token --json` which Meko to use: a Meko
+on this computer (`meko start`), or the Meko Cloud link it keeps (`meko cloud_link`). To try it behind Meko: `npm run build`, put `dist/server/cli.js` on PATH as
+`meko_presenter` (`npm link`), and run `meko install_extension presenter`, then `meko ui /ext/presenter/`.
+
+## Map
+
+| Path | What it is |
+|---|---|
+| `src/shared/deck.ts` | The deck: scenes, edges, slides, blocks, assets; `deckProblems`/`checkDeck`, the one set of rules (graph, shapes, size limits) every edit passes. |
+| `src/shared/ops.ts` | Every change to a deck as typed operations; `applyOps` (checked, never mutates its input), `describeOp` and `defaultTicks` for change sets. |
+| `src/shared/run.ts` | A live run's position and how each console action moves it (`navigate`, `fitRun`). |
+| `src/shared/manifest.ts` | The stored form: the `deck.json` manifest, scene pieces, 4 MiB parts, and turning a deck into them and back. |
+| `src/shared/datapacks.ts` | Presenter's datapack prefixes (`presenter/template/`, `presenter/anim/`, `presenter/deck/`) and deck datapack names. |
+| `src/shared/types.ts` | The API contract: every route's request and reply and every WebSocket message. Change it first. |
+| `src/server/cli.ts` | The `meko_presenter` command (the extension is `presenter`: its folder, tags, tarballs and `/ext/presenter/`): `serve`, and what Meko runs (`start`, `stop`, `status`, `install`, `uninstall`, `_handoff`). The pid file counts only when its process is a Presenter server (`isServer`). |
+| `src/server/server.ts` | Fastify on the socket: pages (`<base href="/ext/presenter/">`, no framing), API, WebSockets, the same-origin check, and `POST /_meko/changed` (Meko's notice that its Meko Cloud link changed). |
+| `src/server/paths.ts` | The home by Meko's rule (`resolve-cases.json`), the socket path (under `/tmp` for a long home, not `$TMPDIR`), `refuseOtherMeko`. |
+| `src/server/meko.ts` | `MekoPort` and its MCP + REST client (`datapack_create` never sent twice, `mayRetry`). Which Meko is Meko's to say, from `meko token --json` and never stored (`probeMeko`, `mekoFinder`): its Meko Cloud link when linked (REST on the link's own `api_url`, another host), else the Meko on this computer; a link Meko couldn't read keeps the last one, or finds no Meko before one was read. One connection at a time; `current()` (Claude's runs) reads Meko afresh. `reset()` (forgetting the link too) when Meko posts `/_meko/changed`. |
+| `src/server/decks.ts` | Drafts, undo and redo, assets, save, load, versions, restore. Each draft names the Meko its datapack is in (`mine`): one of another Meko can be played but not edited, saved or given to Claude. |
+| `src/server/pieces.ts` | Hashing, uploads (four at a time, manifest last, only what the datapack lacks), checked fetches, the cache. |
+| `src/server/claude.ts`, `jobs.ts`, `prompts.ts` | `claude -p` with the deck's session; the per-deck job queue (map, build on forks, ask); what Claude is told and must answer. |
+| `src/server/runs.ts` | Live run rooms, kept on disk so a restart resumes; they follow every change the deck store makes (`DeckStore.listen`), and a run's moves apply one at a time. |
+| `src/web/` | The pages (React, Vite, Tailwind with Meko's tokens): decks, new deck, map (React Flow), slide editor, console, audience. |
+| `src/server/probation.ts` | A release on probation after Meko's update: clearing `app/update-pending.json` after 5 minutes of serving, and taking a clean stop off its count of starts. |
+| `packaging/meko_presenter` | The release's launcher, `bin/meko_presenter`: runs the bundled Node, exports `PRESENTER_APP_DIR` and `PRESENTER_LAUNCHER`, and for `serve` counts a new version's starts and rolls back one that fails three times (Meko's rules, on Meko's files). |
+| `scripts/package-release.sh`, `scripts/smoke-release.sh` | The release tarball for one platform (`presenter-<v>-<os>-<arch>.tar.gz`), and its check: version, start, the page over the socket, stop. |
+| `test/` | Unit tests; integration tests with `FakeMeko` (in memory, Meko's artifact rules) and a stub `claude` (`test/fixtures/fake-claude.mjs`). |
+
+## Invariants
+
+1. **Only Meko reaches it.** The server listens on its unix socket alone (folder 0700). No login,
+   port or TLS of its own; writes and WebSocket upgrades refuse another site's Origin; pages refuse
+   framing. Every URL the pages build goes under the `<base href>`.
+2. **Every edit goes through `applyOps` and the deck's rules.** Hand edits and Claude's alike; a
+   change that breaks the deck is refused, not saved.
+3. **Claude never lands over hand edits unseen.** Asks always come back as change sets; a map or
+   build that would touch a hand-edited slide does too.
+4. **A save never leaves a half-saved deck.** Pieces go up first, `deck.json` last; every piece is
+   at most `PART_BYTES` (4 MiB), under Meko's 5 MiB artifact limit.
+5. **Meko's key never reaches the browser or Claude's command line.** Claude gets it through
+   `PRESENTER_MEKO_KEY`, which its MCP config names.
+6. **Limits are checked when an asset is added**: 100 MiB per asset, 1 GiB per deck. An asset's
+   bytes are on this computer or in the deck's datapack before the deck names it.
+7. **Treat the repo as public**: no internal hostnames, paths, tokens or keys.
+
+## Conventions
+
+- TypeScript strict, ES modules, Node 22, AgentK's style. `src/shared` has no Node or DOM imports.
+- User-facing text: plain, direct, active voice; errors say what went wrong and how to fix it.
+- Tests: new behavior gets one test, in an `it.each` table when it's cases of one rule. Tests never
+  touch the real Meko, Claude Code or home (`test/setup.ts`).
+- Commits and PR titles name the `presenter` component (`feat(presenter/web): …`). A `feat`, `fix`,
+  `perf` or `deps` subject naming it cuts a Presenter release (`.github/workflows/presenter-release.yml`,
+  tags `presenter-v<version>`), which Meko installs and updates.
+- Keep this file, `README.md` and `docs/design.md` current in the same commit as the code, and
+  check changes against [REVIEW.md](REVIEW.md).

@@ -13,12 +13,12 @@ import { Button, cx, ErrorNote, Input } from "./ui";
 
 const LABELS: Record<Tab, string> = {
   overview: "Overview",
-  analytics: "Analytics",
-  search: "Search",
+  metrics: "Metrics",
+  conversations: "Conversations",
   memories: "Memories",
   knowledge: "Knowledge",
-  conversations: "Conversations",
   artifacts: "Artifacts",
+  search: "Search",
   connect: "Connect",
 };
 
@@ -49,35 +49,35 @@ export function DatapackHeader({
   };
   const [inviting, setInviting] = useState(false);
   return (
-    <header className="border-b bg-card px-8 pt-6">
-      <div className="flex items-start justify-between gap-4">
+    <header className="border-b bg-card px-4 pt-4 sm:px-8 sm:pt-6">
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
         <div className="min-w-0">
           <h1 className="truncate text-xl font-semibold">{datapack.datapack_name}</h1>
           {datapack.description && <p className="mt-0.5 text-sm text-muted-foreground">{datapack.description}</p>}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 items-center gap-1 sm:gap-2">
           <Button
             size="sm"
             variant="ghost"
             disabled={exporting}
             onClick={exportIt}
-            title="Download this datapack as a zip: memories, collective memories, conversations, knowledge files and artifacts, with their embeddings and file contents, and the call log"
+            title="Download this datapack as a zip: memories, conversations, knowledge files and artifacts, with their embeddings and file contents, and the call log"
           >
-            <Download className="size-3.5" /> Export
+            <Download className="size-3.5" /> <span className="hidden sm:inline">Export</span>
           </Button>
           <Button size="sm" variant="ghost" onClick={() => setEditing(true)} title="Edit name and description">
-            <Pencil className="size-3.5" /> Edit
+            <Pencil className="size-3.5" /> <span className="hidden sm:inline">Edit</span>
           </Button>
           <Button size="sm" onClick={() => setInviting(true)} title="Invite teammates">
-            <UserPlus className="size-3.5" /> Invite
+            <UserPlus className="size-3.5" /> <span className="hidden sm:inline">Invite</span>
           </Button>
-          <Button variant="danger" size="sm" onClick={() => setDeleting(true)}>
-            <Trash2 className="size-3.5" /> Delete
+          <Button variant="danger" size="sm" onClick={() => setDeleting(true)} title="Delete datapack">
+            <Trash2 className="size-3.5" /> <span className="hidden sm:inline">Delete</span>
           </Button>
         </div>
       </div>
       {inviting && <CloudBanner onClose={() => setInviting(false)} />}
-      <nav className="mt-5 flex gap-5 text-sm">
+      <nav className="no-scrollbar -mx-4 mt-4 flex gap-5 overflow-x-auto px-4 pb-px text-sm sm:mx-0 sm:mt-5 sm:px-0">
         {(Object.keys(LABELS) as Tab[]).map((t) => (
           <a
             key={t}
@@ -87,7 +87,7 @@ export function DatapackHeader({
               navigate({ datapackId: datapack.datapack_id, tab: t });
             }}
             className={cx(
-              "-mb-px border-b-2 pb-2.5",
+              "-mb-px shrink-0 whitespace-nowrap border-b-2 pb-2.5",
               t === tab ? "border-primary font-medium" : "border-transparent text-muted-foreground hover:text-foreground",
             )}
           >

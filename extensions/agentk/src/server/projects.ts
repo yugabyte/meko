@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync, renameSync
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type {
   ActivityItem, AttachDatapackRequest, ClosedProject, CreateProjectRequest, DatapackChoice, DatapackRef, MekoGap, MekoGapMarkRequest, MekoGapPage,
-  MekoTeachRequest, Project, ProjectHome, RepoBranches, ReposResponse, SearchResult, SetDedicatedDatapackRequest, UpdateProjectRequest,
+  MekoTeachRequest, OpenedProject, Project, ProjectHome, RepoBranches, ReposResponse, SearchResult, SetDedicatedDatapackRequest, UpdateProjectRequest,
 } from '../shared/types.js';
 import { MEKO_TEACH_MAX, newRepoNameProblem, REVIEWER_LABELS } from '../shared/types.js';
 import { mekoCaptureDir } from './capture.js';
@@ -117,6 +117,24 @@ export class ProjectService {
         .map((r) => ({ ...r, projects: used.get(repoKey(r.path)) ?? [] }))
         .sort((a, b) => b.lastTouchedAt - a.lastTouchedAt),
     };
+  }
+
+  /**
+   * `POST /api/projects`: create(), and whether the project's dedicated datapack is empty, for the
+   * New session dialog to offer a learn session first: true for a datapack the open made, and for
+   * one Meko says has no memories and no knowledge. Meko failing or slow here costs only the offer.
+   */
+  async open(req: CreateProjectRequest): Promise<OpenedProject> {
+    const project = await this.create(req);
+    const dp = dedicatedDatapack(this.db, project.id);
+    let datapackEmpty = false;
+    if (dp && req.datapack.mode === 'create') {
+      datapackEmpty = true;
+    } else if (dp) {
+      const counts = await this.core.meko.describeDatapack(dp.id, DESCRIBE_TIMEOUT_MS).catch(() => null);
+      datapackEmpty = counts?.memoryCount === 0 && counts.knowledgeCount === 0;
+    }
+    return { ...project, datapackEmpty };
   }
 
   async create(req: CreateProjectRequest): Promise<Project> {
@@ -291,7 +309,7 @@ export class ProjectService {
    * shows when it's asked: its error is passed on.
    */
   private needMeko(otherwise: string): void {
-    if (!this.core.mekoStatus.configured) throw new HttpError(409, `Meko is off, so ${otherwise}. Add a Meko API key on the Meko tab in Settings.`, 'MEKO_OFF');
+    if (!this.core.mekoStatus.configured) throw new HttpError(409, `Meko isn't set up, so ${otherwise}. Start Meko on this computer (meko start), or link Meko Cloud in Meko's web UI (Settings › Meko Cloud).`, 'MEKO_OFF');
   }
 
   /**
@@ -554,7 +572,8 @@ export class ProjectService {
        WHERE e.project_id = ? AND e.text IS NOT NULL ORDER BY e.at DESC LIMIT 50`,
       id,
     ).map<ActivityItem>((r) => ({ at: r.at, sessionId: r.session_id, sessionName: r.name, kind: r.kind, text: r.text ?? '' }));
-    return { project, datapacks, activity, usage: projectUsage(this.db, id) };
+    const hasLearnSession = !!get(this.db, "SELECT 1 AS x FROM sessions WHERE project_id = ? AND purpose = 'learn' LIMIT 1", id);
+    return { project, datapacks, hasLearnSession, activity, usage: projectUsage(this.db, id) };
   }
 
   /** What Meko doesn't know: a page of the project's questions (GET /api/projects/:id/meko-gaps). */

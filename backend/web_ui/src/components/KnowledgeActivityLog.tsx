@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from "react";
 import { FileText, Sparkles } from "lucide-react";
 import { api } from "../lib/api";
+import { SHOW_COLLECTIVE } from "../lib/features";
 import { bytes, timeAgo } from "../lib/format";
 import type { KnowledgeActivity } from "../lib/types";
 import { Button, Card, ErrorNote, Spinner } from "./ui";
@@ -25,7 +26,8 @@ export function KnowledgeActivityLog({ datapackId, refresh }: { datapackId: stri
     try {
       const page = await api.activity(datapackId, from);
       if (mine !== latest.current) return;
-      setItems((prev) => (from ? [...prev, ...page.items] : page.items));
+      const shown = SHOW_COLLECTIVE ? page.items : page.items.filter((a) => a.type !== "memory_promotion");
+      setItems((prev) => (from ? [...prev, ...shown] : shown));
       setCursor(page.has_more ? page.next_cursor : "");
       setError(undefined);
     } catch (e) {
@@ -45,7 +47,7 @@ export function KnowledgeActivityLog({ datapackId, refresh }: { datapackId: stri
       <h3 className="text-sm font-medium">Activity</h3>
       {error && <ErrorNote error={error} />}
       {items.length === 0 && !busy && !error ? (
-        <p className="text-sm text-muted-foreground">Nothing yet: uploads and promoted memories show here.</p>
+        <p className="text-sm text-muted-foreground">Nothing yet: {SHOW_COLLECTIVE ? "uploads and promoted memories show here" : "uploads show here"}.</p>
       ) : (
         <Card className="divide-y text-sm">
           {items.map((a, i) => (

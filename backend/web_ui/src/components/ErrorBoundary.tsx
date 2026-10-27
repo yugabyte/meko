@@ -14,7 +14,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error?: 
   render() {
     if (!this.state.error) return this.props.children;
     return (
-      <div className="space-y-3 p-8">
+      <div className="space-y-3 p-4 sm:p-8">
         <ErrorNote error={this.state.error} />
         <p className="text-sm text-muted-foreground">
           If Meko was just updated, restart it (<code>meko restart</code>) and reload this page.

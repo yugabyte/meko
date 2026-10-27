@@ -194,7 +194,8 @@ func runStatus(l paths.Layout, stdout, stderr io.Writer) int {
 		return fail(stderr, fmt.Errorf("the server is running, but isn't answering: %w", err))
 	}
 	fmt.Fprintf(stdout, "Meko is running\n")
-	fmt.Fprintf(stdout, "  URL:           http://127.0.0.1:%d\n", st.Port)
+	fmt.Fprintf(stdout, "  URL:           http://127.0.0.1:%d (agents and the CLI)\n", st.Port)
+	printWeb(stdout, st.Web)
 	fmt.Fprintf(stdout, "  Version:       %s\n", st.Version)
 	fmt.Fprintf(stdout, "  PID:           %d\n", st.PID)
 	fmt.Fprintf(stdout, "  Uptime:        %s\n", (time.Duration(st.UptimeSeconds) * time.Second).String())
@@ -252,7 +253,8 @@ func usageStatsLine(u callhome.State) string {
 	return "off (turned off by " + u.By + ")"
 }
 
-// printSetup prints how Meko is installed: its service, its updates and its extensions.
+// printSetup prints how Meko is installed: its service, its updates, the Meko Cloud link and its
+// extensions.
 func printSetup(l paths.Layout, stdout io.Writer) {
 	if m := serviceOf(l); m != nil {
 		state := "stopped"
@@ -282,13 +284,14 @@ func printSetup(l paths.Layout, stdout io.Writer) {
 	} else {
 		fmt.Fprintln(stdout, "  Updates:       none (a build from source)")
 	}
+	fmt.Fprintln(stdout, "  Meko Cloud:    "+cloudStatusLine(l))
 	reg, err := extensions.Load(l.Root)
 	if err != nil {
 		fmt.Fprintf(stdout, "  Extensions:    can't read them: %v\n", err)
 		return
 	}
 	for _, n := range reg.Names() {
-		ok, line := reg.Entries[n].Status()
+		ok, line := reg.Entries[n].Status(l.Root)
 		state := "running"
 		if !ok {
 			state = "not running"
@@ -304,9 +307,9 @@ func printSetup(l paths.Layout, stdout io.Writer) {
 // it (the data folder, or the Keychain), so it works whether or not the server runs. While one runs
 // it only reads: the server keeps the token it loaded at start, so a token made now (after the old
 // one was deleted to replace it) would be one the server refuses. With mcp it prints the command
-// that registers Meko with Claude Code instead, and with asJSON the MCP URL, the token and whether
-// a server runs, for installers (AgentK's reads it); both on the running server's port, or the
-// configured one.
+// that registers Meko with Claude Code instead, and with asJSON the MCP URL, the token, whether a
+// server runs and the Meko Cloud link, for extensions (AgentK reads it); both on the running
+// server's port, or the configured one.
 func runToken(l paths.Layout, mcp, asJSON bool, stdout, stderr io.Writer) int {
 	if err := l.Ensure(); err != nil {
 		return fail(stderr, err)
@@ -349,7 +352,22 @@ func runToken(l paths.Layout, mcp, asJSON bool, stdout, stderr io.Writer) int {
 	}
 	url := fmt.Sprintf("http://127.0.0.1:%d/mcp", port)
 	if asJSON {
-		b, _ := json.Marshal(map[string]any{"url": url, "token": tok, "running": up})
+		// web_url is where browsers find Meko's web UI and its extensions' (AgentK's at /ext/agentk/).
+		web := webURL(cfg.Web)
+		if up {
+			if c, cerr := newClient(l); cerr == nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				if st, serr := c.status(ctx); serr == nil && st.Web != nil && st.Web.URL != "" {
+					web = st.Web.URL
+				}
+				cancel()
+			}
+		}
+		// cloud is the Meko Cloud link the extensions use (docs/cloud.md). One that can't be read (a
+		// bad cloud.toml, a locked Keychain) says so rather than failing the reply: this Meko's own
+		// URL and token still are, and an extension keeps the link it last read.
+		b, _ := json.Marshal(map[string]any{"url": url, "token": tok, "running": up, "web_url": web,
+			"cloud": cloudTokenFor(l, cfg)})
 		fmt.Fprintln(stdout, string(b))
 		return exitOK
 	}

@@ -51,7 +51,8 @@ export interface Metrics {
 export interface MekoCall {
   // Absent from an older server's reply.
   id?: number;
-  steps?: { step: string; ms: number; n: number }[];
+  // ids: what a memory search returned (absent from calls recorded before it was).
+  steps?: { step: string; ms: number; n: number; ids?: string[] }[];
   at: string;
   tool: string;
   agent_id: string;
@@ -106,8 +107,31 @@ export interface PromotedMemory {
   id: string;
   data: string;
   agent_id: string;
+  conversation_id?: string;
   created_at: string;
   promoted_to_kb_at: string | null;
+}
+
+// The datapack's memories laid out by meaning (GET /datapacks/:id/memory-map): x and y in [-1, 1],
+// alike memories close together, links between near neighbors, and where ?q= lands.
+export type MemoryState = "learning" | "kept" | "collective";
+
+export interface MapPoint {
+  id: string;
+  text: string;
+  state: MemoryState;
+  agent_id: string;
+  conversation_id?: string;
+  created_at: string;
+  x: number;
+  y: number;
+  similarity?: number; // to the query, when there is one
+}
+
+export interface MemoryMap {
+  points: MapPoint[];
+  links: { a: number; b: number; similarity: number }[];
+  query?: [number, number];
 }
 
 export interface Conversation {
@@ -257,6 +281,41 @@ export interface ServerStatus {
   children: { name: string; state: string; restarts: number; last_error?: string; since: string }[];
 }
 
+// GET /api/v1/update (and the replies of POST /update/check and /update/apply): Meko's own updates.
+export interface UpdateStatus {
+  running: string;
+  // A release install, which updates itself; a build from source doesn't.
+  release: boolean;
+  // Why a release install's updates can't run, when they can't.
+  off?: string;
+  // The login service runs this server, and starts a new version again if it fails.
+  service: boolean;
+  channel?: string;
+  // Installs updates on its own (under the service, with [update] auto).
+  auto: boolean;
+  checked_at?: string;
+  latest?: string;
+  latest_url?: string;
+  available: boolean;
+  // Why the last check failed.
+  error?: string;
+  // An update on probation: it's done once the new version has run 5 minutes.
+  pending?: { from: string; to: string; attempts: number };
+  rolled_back: string[];
+  job?: UpdateJob;
+}
+
+// The last install started from this page since the server started. to is "" until a release is
+// found, and stays "" when there was nothing newer.
+export interface UpdateJob {
+  state: "running" | "done" | "failed";
+  step?: "checking" | "installing" | "restarting";
+  to?: string;
+  error?: string;
+  started_at: string;
+  finished_at?: string;
+}
+
 export interface Health {
   status: string;
   version: string;
@@ -273,4 +332,106 @@ export interface UsageStats {
   sends: boolean;
   // Where they go while sends.
   url?: string;
+}
+
+// GET /auth/status, which needs no credential.
+export interface AuthStatus {
+  // How [web] access in config.toml opens the web listener: "local" (this computer, no login) or
+  // "remote" (any address, HTTPS, a password login).
+  access: "local" | "remote";
+  // This request came in as a local one, which needs no login.
+  local_access: boolean;
+  signed_in: boolean;
+  // Remote access needs a login made from a setup link (meko setup_link) first.
+  setup_required: boolean;
+  // setup_required while a login exists: the setup link replaces it.
+  reset: boolean;
+  // The login's username, or null when there's none.
+  username: string | null;
+  totp_enabled: boolean;
+}
+
+// POST /auth/totp/enroll: the authenticator's secret, as text and as the otpauth:// URL its QR
+// code holds.
+export interface TotpEnroll {
+  secret: string;
+  otpauth_url: string;
+}
+
+// GET /extensions: every extension Meko knows, whether it's installed (registered with Meko), its
+// web UI at path ("" while it isn't served) and whether that answers (available: running), and its
+// last action from the Extensions page. An older server lists only the served ones, with no
+// installed, web_ui or description.
+export interface Extension {
+  name: string;
+  title: string;
+  description?: string;
+  installed?: boolean;
+  web_ui?: boolean;
+  path: string;
+  available: boolean;
+  // The release Meko installed and can update (Presenter's); AgentK updates itself.
+  version?: string;
+  updatable?: boolean;
+  job?: ExtensionJob;
+}
+
+export type ExtensionAction = "install" | "update" | "start" | "stop";
+
+// An action running, or the last one run, on an extension; output is its last 16 KB.
+export interface ExtensionJob {
+  action: ExtensionAction;
+  state: "running" | "done" | "failed";
+  started_at: string;
+  finished_at?: string;
+  error?: string;
+  output: string;
+}
+
+// GET|PUT|DELETE /settings/meko-cloud: the Meko Cloud link the extensions use (never its key).
+export interface MekoCloud {
+  // Set once, linked or unlinked.
+  set: boolean;
+  // A key is saved, and the extensions use this link.
+  linked: boolean;
+  // The MCP server as set; "" is Meko Cloud's.
+  url: string;
+  web_url: string;
+  api_url: string;
+  effective_url: string;
+  // Null when it can't be worked out (another server with no web app URL set).
+  effective_web_url: string | null;
+  effective_api_url: string | null;
+  // The key's last four characters, "" for a short key, null with none.
+  key_hint: string | null;
+  default_url: string;
+  default_web_url: string;
+}
+
+// GET /meko-cloud/datapacks: the linked Meko Cloud's datapacks, newest first.
+export interface CloudDatapack {
+  datapack_id: string;
+  datapack_name: string;
+  description: string;
+  // owner for the account's own; any other (maintainer, contributor, viewer) was shared with it.
+  grant: string;
+  created_at: string;
+  updated_at: string;
+  // Opens it in the link's web app; null when that can't be known.
+  web_url: string | null;
+}
+
+export interface CloudDatapacks {
+  linked: boolean;
+  api_url?: string;
+  web_url?: string | null;
+  datapacks: CloudDatapack[];
+}
+
+// PUT /settings/meko-cloud: a field left out is unchanged; an empty api_key keeps the saved one.
+export interface MekoCloudUpdate {
+  url?: string;
+  web_url?: string;
+  api_url?: string;
+  api_key?: string;
 }

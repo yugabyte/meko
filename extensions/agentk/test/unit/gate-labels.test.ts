@@ -53,6 +53,15 @@ describe('queuedText', () => {
     expect(queuedText(session({ queued: 'merge', mergeBlockers: ['Waiting for the AgentK review.'] }))).toBe('✓ Merge queued: waiting on the AgentK review');
     expect(queuedText(session({ queued: 'merge', mergeBlockers: ['AgentK is still working.', 'CI is still running.'] }))).toBe('✓ Merge queued: waiting on AgentK');
   });
+
+  it.each([
+    [{ queued: 'open-pr' }, '✓ Run to merge: opens the PR when this turn ends'],
+    [{ queued: 'merge', mergeBlockers: ['CI is failing.'] }, '✓ Run to merge: waiting on a CI fix'],
+    [{ queued: 'merge', mergeBlockers: ['Changes were requested.'] }, '✓ Run to merge: waiting on you'],
+    [{ queued: 'merge', mergeQueueable: true, mergeBlockers: ['AgentK is still working.'] }, '✓ Run to merge: waiting on AgentK'],
+  ] as [Partial<Session>, string][])('says what Run to merge waits for: %o', (over, text) => {
+    expect(queuedText(session({ autoRun: true, ...over }))).toBe(text);
+  });
 });
 
 describe('headerApproves', () => {

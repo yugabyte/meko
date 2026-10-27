@@ -614,7 +614,17 @@ const MIGRATIONS: string[] = [
   UPDATE sessions SET position = (SELECT COUNT(*) FROM sessions o WHERE o.project_id = sessions.project_id
     AND (o.created_at < sessions.created_at OR (o.created_at = sessions.created_at AND o.id < sessions.id)));
   `,
-  // 40: revisit_at: when the user wants to revisit a session (ms), NULL when not set aside; cleared when it comes.
+  // 40: purpose: what a session is for beyond its kind ('learn': a learn session, SessionPurpose); NULL for the rest.
+  `
+  ALTER TABLE sessions ADD COLUMN purpose TEXT;
+  `,
+  // 41: auto_run: 1 while Run to merge is on, so AgentK passes Open PR and Merge & Close by itself (lifecycle.ts);
+  // queued_auto: 1 when Run to merge queued the gate in queued_gate (not the user's press), so stopping it drops only its own.
+  `
+  ALTER TABLE sessions ADD COLUMN auto_run INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE sessions ADD COLUMN queued_auto INTEGER NOT NULL DEFAULT 0;
+  `,
+  // 42: revisit_at: when the user wants to revisit a session (ms), NULL when not set aside; cleared when it comes.
   `
   ALTER TABLE sessions ADD COLUMN revisit_at INTEGER;
   `,

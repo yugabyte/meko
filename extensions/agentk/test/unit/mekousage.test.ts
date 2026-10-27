@@ -3,10 +3,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { all, get, openDb, run, schemaVersion } from '../../src/server/db.js';
-import { classifyResult, mekoCalls, mekoStarts, mekoTool, parseMekoCalls, parseMekoResults, searchQuality, toolCounts } from '../../src/server/mekousage.js';
+import { classifyResult, mekoCallOf, mekoCalls, mekoStarts, mekoTool, parseMekoCalls, parseMekoResults, searchQuality, serverMekoTool, toolCounts } from '../../src/server/mekousage.js';
 import { searchSaving } from '../../src/server/mekosavings.js';
 import { recordPreload } from '../../src/server/recall.js';
-import { ingestSessionUsage, parseTurnMark, projectUsage, usageOverview } from '../../src/server/usage.js';
+import { ingestSessionUsage, parseTurnMark, projectUsage, recordMekoCalls, usageOverview } from '../../src/server/usage.js';
 
 const usage = { input_tokens: 2, output_tokens: 100, cache_read_input_tokens: 200_000, cache_creation_input_tokens: 998 };
 
@@ -59,6 +59,16 @@ describe('Meko calls in transcripts', () => {
     expect(mekoTool('mcp__claude_ai_MekoDev__authenticate')).toBeNull();
     expect(mekoTool('mcp__phorge__phabricator_task_search')).toBeNull();
     expect(mekoTool('Read')).toBeNull();
+  });
+
+  it("recognizes a Meko tool by its server's name and the tool, as OpenCode names them", () => {
+    expect(serverMekoTool('meko_memory_search')).toBe('memory_search');
+    expect(serverMekoTool('meko-local_context_search')).toBe('context_search');
+    // A server's name may hold "_": the split that leaves a tool Meko has wins.
+    expect(serverMekoTool('meko_local_memory_add')).toBe('memory_add');
+    expect(serverMekoTool('meko_some_new_tool')).toBe('some_new_tool');
+    expect(serverMekoTool('github_search')).toBeNull();
+    expect(serverMekoTool('meko')).toBeNull();
   });
 
   it('reads calls from a model response, with its model and context', () => {
@@ -197,12 +207,12 @@ describe('Meko calls in transcripts', () => {
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
              hook_token, desired, status, stage, created_at) VALUES ('s1', 'p', 's1', 'S1', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`);
     run(db, `INSERT INTO usage_files(session_id, path, offset) VALUES ('s1', '/t.jsonl', 123)`);
-    // Back to schema 16: undo 38 (untrusted PR heads), 37 (harnesses and Kiro's credits), 36 (held reviews), 34 (What Meko doesn't know: its columns go with the tables below), 33 (share contacts), 32 (Ask AgentK's asks), 31 (designs in PRs), 30 (a queued Open PR's instructions), 29 (the branch prefix), 28 (Discard's learn step), 27 (the learn step), 26 (queued gates), 25 (start images), 24 (where a fork's PR session pushes), 23 (the merge-conflict watcher), 22 (design questions and answers), 21 (Review a PR sessions), 20
+    // Back to schema 16: undo 40 (a session's purpose), 39 (positions), 38 (untrusted PR heads), 37 (harnesses and Kiro's credits), 36 (held reviews), 34 (What Meko doesn't know: its columns go with the tables below), 33 (share contacts), 32 (Ask AgentK's asks), 31 (designs in PRs), 30 (a queued Open PR's instructions), 29 (the branch prefix), 28 (Discard's learn step), 27 (the learn step), 26 (queued gates), 25 (start images), 24 (where a fork's PR session pushes), 23 (the merge-conflict watcher), 22 (design questions and answers), 21 (Review a PR sessions), 20
     // (sessions.meko_agent_id, project_events), 19 (first-turn Meko stats), 18 (sessions.meko_datapack_*)
     // and 17 (Meko calls), then upgrade again.
     db.exec('DROP TABLE design_answers; DROP TABLE meko_learns; DROP TABLE meko_agentk_calls; DROP TABLE meko_capture_runs; DROP TABLE agentk_asks; DROP TABLE share_contacts; DROP TABLE meko_gap_marks; DROP TABLE held_reviews');
     db.exec('ALTER TABLE usage_messages DROP COLUMN credits');
-    for (const c of ['revisit_at', 'position', 'untrusted', 'harness', 'agent_session_id', 'queued_instructions', 'discarding', 'skip_learn', 'queued_gate', 'start_images', 'push_remote', 'push_branch', 'conflict_head', 'conflict_fixes']) db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);
+    for (const c of ['revisit_at', 'auto_run', 'queued_auto', 'purpose', 'position', 'untrusted', 'harness', 'agent_session_id', 'queued_instructions', 'discarding', 'skip_learn', 'queued_gate', 'start_images', 'push_remote', 'push_branch', 'conflict_head', 'conflict_fixes']) db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);
     for (const c of ['md_hash', 'html_hash', 'source', 'source_told', 'questions', 'questions_source', 'open_questions']) db.exec(`ALTER TABLE designs DROP COLUMN ${c}`);
     for (const c of ['pr_repo', 'pr_title', 'pr_author', 'review_sha', 'pr_head_sha', 'pr_new_commits', 'pr_state', 'pr_remote', 'review_notes']) {
       db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);
@@ -268,6 +278,18 @@ describe('what Meko saved', () => {
     expect(o.meko.savings).toEqual(pu.meko.savings);
     expect(o.byProject[0]).toMatchObject({ meko: pu.meko, cost: pu.cost });
     expect(o.cost).toEqual(pu.cost);
+  });
+
+  it("leaves a search with no context (Kiro's, OpenCode's) out of the savings, but counts it as found", () => {
+    const { db } = setup();
+    run(db, `INSERT INTO usage_messages(session_id, message_id, agent, model, at, input, output, cache_read, cache_write, credits)
+             VALUES ('s1', 'kiro:c:t1', NULL, 'auto', 20, 0, 0, 0, 0, 0.5)`);
+    recordMekoCalls(db, 's1', null,
+      [mekoCallOf({ toolUseId: 't1', tool: 'memory_search', at: 10, input: { query: 'q' }, model: null, contextTokens: null })],
+      [{ toolUseId: 't1', outcome: 'found', results: 1, resultChars: 400, topScore: null, topRaw: null, quality: null }]);
+    const m = projectUsage(db, 'p').meko;
+    expect(m).toMatchObject({ lookups: 1, found: 1 });
+    expect(m.savings).toEqual({ searches: 0, seeds: 0, tokens: 0, usd: 0, unpricedSearches: 0, unpricedSeeds: 0 });
   });
 
   it('keeps searches on unpriced models in the tokens, and says the dollars leave them out', () => {

@@ -69,7 +69,7 @@ export function uploadError(e: unknown, datapackName: string): HttpError {
       : `Meko's file storage refused the upload: ${e.message} Try again in a minute; if it keeps failing, add it from Meko's web app.`);
   }
   // Never a 401 to the browser: that signs it out.
-  if (e.status === 401 || /SCOPE/i.test(e.code)) return new HttpError(502, 'Meko refused AgentK\'s key. Check it on the Meko tab in Settings.');
+  if (e.status === 401 || /SCOPE/i.test(e.code)) return new HttpError(502, "Meko refused AgentK's key. Check it in Meko's web UI (Settings › Meko Cloud).");
   if (e.status === 403) {
     return new HttpError(403, `You can't add files to ${datapackName}: only its owner and maintainers can. Ask the owner for maintainer access.`);
   }
@@ -105,7 +105,7 @@ export class KnowledgeService {
   async upload(id: string, name: unknown, body: unknown): Promise<KnowledgeUpload> {
     const row = this.core.sessions.row(id);
     if (row.desired !== 'running') throw new HttpError(409, 'This session is archived.');
-    if (!this.core.mekoStatus.configured) throw new HttpError(409, 'Meko is off. Turn it on on the Meko tab in Settings to add files to a knowledge base.');
+    if (!this.core.mekoStatus.configured) throw new HttpError(409, "Meko isn't set up. Start Meko on this computer (meko start), or link Meko Cloud in Meko's web UI (Settings › Meko Cloud), to add files to a knowledge base.");
     const dp = dedicatedDatapack(this.core.db, row.project_id);
     if (!dp) throw new HttpError(409, "This session's project has no datapack. Give it one on the project's home page.");
     const filename = knowledgeName(name);

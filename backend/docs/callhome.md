@@ -1,9 +1,7 @@
 # Meko backend: usage stats
 
 Meko sends usage stats to YugabyteDB's call home service, `https://diagnostics.yugabyte.com`, the
-service yugabyted and YugabyteDB's other products report to. That service is a Flask app on Google
-App Engine (`diagnostics_v2` in yugabyte/yugabyte-growth), which writes one row per report to
-BigQuery `callhome_data`. The stats show how many installs are active, on which versions and
+service yugabyted and YugabyteDB's other products report to. The stats show how many installs are active, on which versions and
 platforms, and how much work goes through them, by client. AgentK sends its own report there too
 ([its usage stats](../../extensions/agentk/docs/design/usage-stats.md)).
 
@@ -47,8 +45,8 @@ host names, user names and tokens. The service records the address the report ca
 does for yugabyted.
 
 `timestamp` is UTC with microseconds and no zone (`callhome.Timestamp`). That's the only form the
-service parses, and it answers 200 even when it can't store a row. So check a change to the envelope
-by finding its row in BigQuery, not by the reply.
+service parses, and it answers 200 even when it can't store a report, so a 200 doesn't show that a
+change to the envelope works.
 
 ## When
 

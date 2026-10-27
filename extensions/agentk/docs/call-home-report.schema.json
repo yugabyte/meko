@@ -23,7 +23,8 @@
         "tmux": { "$ref": "#/$defs/optionalVersion", "description": "Sent only by versions before the session host (no longer by current ones); kept so their reports still validate." },
         "claudeCode": { "$ref": "#/$defs/optionalVersion" },
         "kiro": { "$ref": "#/$defs/optionalVersion", "description": "Kiro CLI's version; left out while Kiro is off or unreadable." },
-        "access": { "enum": ["local", "remote"] },
+        "opencode": { "$ref": "#/$defs/optionalVersion", "description": "OpenCode's version; left out while OpenCode is off or unreadable." },
+        "access": { "enum": ["local", "remote", "meko"], "description": "meko: the Meko on this computer serves AgentK to browsers, with its own access setting. local and remote are from versions that served browsers themselves; kept so their reports still validate." },
         "service": { "enum": ["systemd", "launchd", "none"] },
         "meko": {
           "type": "object",
@@ -31,7 +32,7 @@
           "required": ["enabled", "keySource", "sharing"],
           "properties": {
             "enabled": { "type": "boolean" },
-            "keySource": { "enum": ["config", "env", "claude", "none"] },
+            "keySource": { "enum": ["meko", "local", "config", "env", "claude", "none"] },
             "sharing": { "enum": ["api", "none"] }
           }
         },
@@ -67,6 +68,7 @@
               "additionalProperties": false,
               "properties": {
                 "claude": { "$ref": "#/$defs/count" },
+                "opencode": { "$ref": "#/$defs/count" },
                 "kiro": { "$ref": "#/$defs/count" }
               }
             },

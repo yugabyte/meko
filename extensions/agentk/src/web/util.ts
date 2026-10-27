@@ -1,8 +1,7 @@
 import { HARNESS_CAPS, harnessOf, type HarnessId } from '../shared/harnesses';
-import { DEFAULT_MEKO_URL, mekoWebUrl } from '../shared/mekourls';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, STAGE_LABELS } from '../shared/types';
-import type { ClaudeCodeStatus, HarnessStatus, LearnProgress, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoSettings, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
+import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /**
  * What a status dot shows: the session's status, `learning` while AgentK saves what it learned to
@@ -304,29 +303,6 @@ export function httpHost(url: string): string | null {
   }
 }
 
-/**
- * The Meko web app pages for getting an account and an API key (keys are under Settings →
- * Security). Signing in or up with `return_to` lands on Settings. Null when the web app is unknown.
- */
-export function mekoKeyLinks(webUrl: string | null): { signup: string; signin: string; settings: string } | null {
-  const base = webUrl?.trim().replace(/\/+$/, '') ?? '';
-  if (!httpHost(base)) return null;
-  const back = `return_to=${encodeURIComponent('/settings')}`;
-  return { signup: `${base}/signup?${back}`, signin: `${base}/signin?${back}`, settings: `${base}/settings` };
-}
-
-/**
- * Which Meko web app the sign-up links point to, from the MCP and web app URLs as typed (saved or
- * not): worked out the way the server will once they're saved (`mekoWebUrl`), with an empty field
- * falling back to what the environment or Claude Code's settings give. Null when it isn't known
- * (your own Meko with no web app URL); `mekoKeyLinks` drops anything that isn't http(s).
- */
-export function mekoKeyLinkBase(typed: { url: string; webUrl: string }, m: Pick<MekoSettings, 'fallbackUrl' | 'envWebUrl'>): string | null {
-  // The server saves Meko Cloud's URL as empty, like a cleared field.
-  const url = typed.url.trim().replace(/\/+$/, '');
-  return mekoWebUrl(url && url !== DEFAULT_MEKO_URL ? url : m.fallbackUrl, typed.webUrl.trim() || m.envWebUrl);
-}
-
 export function isMac(): boolean {
   return /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 }
@@ -412,6 +388,29 @@ function roundCredits(n: number): number {
 /** A plan bar's level in the rail (Claude's windows, Kiro's credits): amber from 80%, red from 95%. */
 export function limitLevel(percent: number): 'warn' | 'bad' | null {
   return percent >= 95 ? 'bad' : percent >= 80 ? 'warn' : null;
+}
+
+/**
+ * The extra lines under Kiro's credit ring (`KiroLimit` in Rail.tsx): `extra` is AgentK's own
+ * reading of the bonus and overage lines, and `said` is Kiro's verbatim line quoted under them,
+ * kept unless the `extra` line already states everything AgentK read from the line, so a fact
+ * isn't shown twice and nothing AgentK read but doesn't show is hidden. The overage quote is
+ * dropped only for the one form that's been seen, `Overages: Disabled` (its on/off read, no
+ * credits), which `extra` fully states as `Overage off`; a line that also carries credits keeps
+ * its quote, since `extra` shows only the credits (not the on/off) and the credits amount itself
+ * is still a guess (`firstAmount` in kiro.ts could misread a cap or a date as the amount). The
+ * bonus quote always stays while its format is unseen.
+ */
+export function kiroPlanLines(plan: Pick<KiroPlan, 'bonus' | 'overage'>): { extra: string[]; said: string[] } {
+  const extra = [
+    plan.bonus && `Bonus ${creditsNumber(Math.max(0, plan.bonus.total - plan.bonus.used))} of ${creditsNumber(plan.bonus.total)} left`,
+    plan.overage && (plan.overage.credits !== null ? `Overage ${creditsNumber(plan.overage.credits)} billed` : plan.overage.enabled !== null ? `Overage ${plan.overage.enabled ? 'on' : 'off'}` : null),
+  ].filter((l): l is string => !!l);
+  // Kiro's own words, quoted unless `extra` says everything AgentK read: dropped only for the seen
+  // `Overages: Disabled` shape (on/off, no credits), which `Overage off`/`Overage on` fully states.
+  const overageShown = !!plan.overage && plan.overage.enabled !== null && plan.overage.credits === null;
+  const said = [plan.bonus?.line, overageShown ? null : plan.overage?.line].filter((l): l is string => !!l);
+  return { extra, said };
 }
 
 /** USD: "$3.06", "$241", "$1,234", "<$0.01", "−$2.75". */
@@ -629,15 +628,49 @@ const MERGE_WAITS: [string, string][] = [
   ["CI hasn't started on the latest push yet.", 'waiting on CI'],
   ['Waiting for the AgentK review.', 'waiting on the AgentK review'],
   ['AgentK is waiting on you in the terminal.', 'waiting on you in the terminal'],
+  // Only Run to merge's merge stays queued through these, which AgentK works on.
+  ['CI is failing.', 'waiting on a CI fix'],
+  ['The branch has merge conflicts.', 'waiting on the merge conflicts'],
 ];
 
-/** The pill a queued gate shows in place of its button (`Session.queued`); null when nothing is queued. */
+/**
+ * The pill a queued gate shows in place of its button (`Session.queued`); null when nothing is
+ * queued. Run to merge's merge also waits on blockers that don't clear by themselves.
+ */
 export function queuedText(session: Session): string | null {
-  if (session.queued === 'open-pr') return '✓ Open PR queued: goes when the turn ends';
+  if (session.queued === 'open-pr') return session.autoRun ? '✓ Run to merge: opens the PR when this turn ends' : '✓ Open PR queued: goes when the turn ends';
   if (session.queued !== 'merge') return null;
   const first = session.mergeBlockers[0];
-  const waits = first ? (MERGE_WAITS.find(([text]) => text === first)?.[1] ?? 'waiting on AgentK') : 'merging soon';
-  return `✓ Merge queued: ${waits}`;
+  const waits = first ? (MERGE_WAITS.find(([text]) => text === first)?.[1] ?? (session.autoRun && !session.mergeQueueable ? 'waiting on you' : 'waiting on AgentK')) : 'merging soon';
+  return session.autoRun ? `✓ Run to merge: ${waits}` : `✓ Merge queued: ${waits}`;
+}
+
+/**
+ * What Run to merge does from the stage the session is in: its checkbox's tooltip, and the line
+ * under the gate in the phone's ⋯ sheet, which has no tooltips.
+ */
+export function runToMergeTitle(session: Session): string {
+  if (session.stage === 'design') return 'once you approve the design, AgentK opens the PR when it has made the change, then merges it once nothing blocks it';
+  if (session.stage === 'review') return 'AgentK merges the PR once nothing blocks it, and tells you when something only you can clear blocks it';
+  return 'AgentK opens the PR when its turn ends (at once, between turns), then merges it once nothing blocks it';
+}
+
+/**
+ * Whether a session shows Run to merge's mark after its stage (`RunToMergeMark`): on, and not yet
+ * Done. The server leaves `autoRun` set after the merge, so it alone would mark finished sessions.
+ */
+export function runsToMerge(s: Session): boolean {
+  return s.autoRun && s.stage !== 'done';
+}
+
+/** A session's stage in words, for tooltips and hints that can't hold the mark: "Code · Run to merge". */
+export function stageWords(s: Session): string {
+  return runsToMerge(s) ? `${STAGE_LABELS[s.stage]} · Run to merge` : STAGE_LABELS[s.stage];
+}
+
+/** Whether the stage bar's gate has Run to merge's box (StageBar in ProjectView.tsx). */
+export function runToMergeShown(session: Session): boolean {
+  return session.stage === 'code' || session.stage === 'review' || (session.stage === 'design' && session.hasDesign);
 }
 
 const facts = (n: number) => `${n} ${n === 1 ? 'fact' : 'facts'}`;
@@ -682,7 +715,7 @@ export function sessionTabTitle(s: Session): string {
     s.name,
     HARNESS_CAPS[harnessOf(s.harness)].label,
     dotTitle(s) + (s.statusDetail && s.status !== 'starting' ? `: ${s.statusDetail}` : ''),
-    STAGE_LABELS[s.stage],
+    stageWords(s),
     `${formatTokens(totalTokens(s.usage))} tokens`,
   ].join(' · ');
 }
@@ -711,4 +744,82 @@ export function designReviseBlocker(session: Session): string | null {
   if (session.status === 'working') return 'Wait for AgentK to finish its turn.';
   if (otherPrompt(session)) return 'AgentK is waiting on you in the terminal. Answer it first.';
   return null;
+}
+
+/** How long after Send for revision the design panel shows AgentK at work before Claude reports the turn. */
+export const REVISION_GRACE_MS = 10_000;
+
+/**
+ * A Send for revision from this page: when it was clicked, and whether its turn has been seen
+ * (AgentK working on it, or Claude holding the answers for the turn's end) within the grace.
+ */
+export interface RevisionSent {
+  at: number;
+  started: boolean;
+}
+
+/** Whether a session can take or run a turn: not exited or starting, and not waiting on the user. */
+function canWork(session: Session): boolean {
+  return session.status !== 'exited' && session.status !== 'starting' && !otherPrompt(session);
+}
+
+/** AgentK is in a turn, or Claude holds answers for the next one (through the mod). */
+function busyWithTurn(session: Session): boolean {
+  return session.status === 'working' || (session.promptsHeld > 0 && canWork(session));
+}
+
+/**
+ * Whether the design panel's header shows AgentK at work on the design (its edge loader), and how
+ * it's worded: 'revising' for the turn of a Send for revision from this page (`rev`), 'working' for
+ * any other turn, null when it doesn't show. It follows the session's status, so a reload or another
+ * screen shows it too; `rev` covers the moment between the click and Claude reporting the turn, and
+ * the wording. Never while Claude waits on the user, nor before there's a design (the panel has its
+ * own line then).
+ */
+export function designWorking(session: Session, rev: RevisionSent | null, now: number): 'revising' | 'working' | null {
+  if (session.stage !== 'design' || session.desired !== 'running' || !session.hasDesign || session.approvalQueued) return null;
+  const inGrace = rev !== null && !rev.started && now - rev.at < REVISION_GRACE_MS;
+  if (busyWithTurn(session)) return rev?.started || inGrace ? 'revising' : 'working';
+  return inGrace && canWork(session) ? 'revising' : null;
+}
+
+/**
+ * A revision sent from this page, brought up to date with its session: started once its turn is
+ * seen within the grace, and null once it's done with (its turn over, or never seen within the
+ * grace, so a later turn isn't taken for it).
+ */
+export function settleRevision(session: Session, rev: RevisionSent, now: number): RevisionSent | null {
+  if (session.stage !== 'design' || session.desired !== 'running') return null;
+  const busy = busyWithTurn(session) || session.midTurn;
+  if (rev.started) return busy ? rev : null;
+  if (now - rev.at >= REVISION_GRACE_MS) return null;
+  return busy ? { ...rev, started: true } : rev;
+}
+
+/** How long after the working line stops a newly written design still counts as the revision landing. */
+export const LATE_MS = 3_000;
+
+/**
+ * Where the design panel's working line is, for its landing flash: `before` is the design's
+ * `designUpdatedAt` as the line started (undefined while it isn't showing), `stoppedAt` when it last
+ * stopped with the design unchanged (0 when that's done with).
+ */
+export interface Landing {
+  before?: number | null;
+  stoppedAt: number;
+}
+
+/**
+ * The next `Landing` as the working line turns on or off (`on`) or the design is written (`at`), and
+ * whether the revised design just landed: written while the line showed, or within `LATE_MS` after
+ * it stopped.
+ */
+export function designLanding(prev: Landing, on: boolean, at: number | null, now: number): [Landing, boolean] {
+  if (on) return [prev.before === undefined ? { before: at, stoppedAt: 0 } : prev, false];
+  if (prev.before !== undefined) {
+    const changed = prev.before !== at;
+    return [{ stoppedAt: changed ? 0 : now }, changed];
+  }
+  if (prev.stoppedAt && now - prev.stoppedAt < LATE_MS) return [{ stoppedAt: 0 }, true];
+  return [prev, false];
 }

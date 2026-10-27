@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BAR_KEYS, FLING_MAX, type BarKey, MORE_KEYS, FONT_MAX, FONT_MIN, clampFont, ctrlSequence, decayVelocity, flingVelocity, insertedChar, isTerminalReport, keySequence, pastePath, pasteText, touchRow, wheelReport, wheelSteps,
+  BAR_KEYS, FLING_MAX, type BarKey, MORE_KEYS, FONT_MAX, FONT_MIN, clampFont, ctrlSequence, decayVelocity, flingVelocity, insertedChar, isTap, isTerminalReport, keySequence, pastePath, pasteText, TAP_MAX_MOVE, TAP_MAX_MS, touchCol, touchRow, wheelReport, wheelSteps,
 } from '../../src/web/keys.js';
 import { keyboardOpen } from '../../src/web/hooks/useMedia.js';
 import { isPassiveReport } from '../../src/shared/termreports.js';
@@ -22,7 +22,7 @@ describe('terminal key bar', () => {
 });
 
 describe('select mode', () => {
-  it('finds the row under a finger, kept on the screen', () => {
+  it('finds the row (or column) under a finger, kept on the screen', () => {
     // 20 rows over 400 px starting at 100: 20 px a row.
     expect(touchRow(100, 100, 400, 20)).toBe(0);
     expect(touchRow(119, 100, 400, 20)).toBe(0);
@@ -33,6 +33,19 @@ describe('select mode', () => {
     expect(touchRow(900, 100, 400, 20)).toBe(19);
     // No rows yet.
     expect(touchRow(10, 0, 400, 0)).toBe(0);
+    // Columns, for a tap on a link, the same way.
+    expect(touchCol(26, 16, 600, 60)).toBe(1);
+  });
+});
+
+describe('tapping a link', () => {
+  it('counts a short, still touch as a tap, not a swipe or a long press', () => {
+    expect(isTap(0, 80)).toBe(true);
+    expect(isTap(TAP_MAX_MOVE - 0.5, 80)).toBe(true);
+    expect(isTap(TAP_MAX_MOVE, 80)).toBe(false);
+    expect(isTap(20, 80)).toBe(false);
+    expect(isTap(0, TAP_MAX_MS)).toBe(true);
+    expect(isTap(0, TAP_MAX_MS + 1)).toBe(false);
   });
 });
 

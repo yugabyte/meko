@@ -1,9 +1,20 @@
-// The UI's routes, on the History API: /datapacks/<id>/<tab>, and /status. meko serve answers every such path
-// with index.html.
+// The UI's routes, on the History API: /datapacks/<id>/<tab>, /status, /extensions, /account and
+// /settings/meko-cloud.
+// meko serve answers every such path with index.html. /signin and /setup are the sign-in screens',
+// outside the app (main.tsx).
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-export const TABS = ["overview", "analytics", "search", "memories", "knowledge", "conversations", "artifacts", "connect"] as const;
+export const TABS = [
+  "overview",
+  "metrics",
+  "conversations",
+  "memories",
+  "knowledge",
+  "artifacts",
+  "search",
+  "connect",
+] as const;
 export type Tab = (typeof TABS)[number];
 
 export interface Route {
@@ -12,12 +23,13 @@ export interface Route {
   // A conversation open in the conversations tab, or the memories tab's scope.
   itemId?: string;
   // A page of the whole install rather than of a datapack.
-  view?: "status";
+  view?: "status" | "extensions" | "account" | "meko-cloud";
 }
 
 function parse(path: string): Route {
   const [, root, id, tab, item] = path.split("/");
-  if (root === "status") return { tab: "overview", view: "status" };
+  if (root === "status" || root === "extensions" || root === "account") return { tab: "overview", view: root };
+  if (root === "settings" && id === "meko-cloud") return { tab: "overview", view: "meko-cloud" };
   if (root !== "datapacks" || !id) return { tab: "overview" };
   return {
     datapackId: id,
@@ -27,6 +39,7 @@ function parse(path: string): Route {
 }
 
 export function href(r: Route): string {
+  if (r.view === "meko-cloud") return "/settings/meko-cloud";
   if (r.view) return `/${r.view}`;
   if (!r.datapackId) return "/";
   return `/datapacks/${r.datapackId}/${r.tab}${r.itemId ? `/${r.itemId}` : ""}`;
@@ -39,16 +52,21 @@ export function navigate(r: Route): void {
   window.dispatchEvent(new Event(EVENT));
 }
 
-export function useRoute(): Route {
-  const [route, setRoute] = useState(() => parse(window.location.pathname));
+// Calls on after every navigation, back and forward included, even one to the page already open.
+// on must be stable (a state setter, or a useCallback).
+export function useNavigated(on: () => void): void {
   useEffect(() => {
-    const on = () => setRoute(parse(window.location.pathname));
     window.addEventListener("popstate", on);
     window.addEventListener(EVENT, on);
     return () => {
       window.removeEventListener("popstate", on);
       window.removeEventListener(EVENT, on);
     };
-  }, []);
+  }, [on]);
+}
+
+export function useRoute(): Route {
+  const [route, setRoute] = useState(() => parse(window.location.pathname));
+  useNavigated(useCallback(() => setRoute(parse(window.location.pathname)), []));
   return route;
 }

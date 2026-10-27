@@ -14,8 +14,33 @@ import (
 	"github.com/yugabyte/meko/backend/internal/paths"
 )
 
-// App is a release install's app folder.
-type App struct{ Root string }
+// App is a release install's app folder: Meko's, or an extension's that Meko installs from its
+// releases (Presenter's, in <data folder>/extensions/presenter/app). Name is the program, which
+// names its binary (<version>/bin/<name>) and its link in ~/.local/bin; empty is meko. Package
+// names its tarballs (<package>-<version>-<os>-<arch>.tar.gz, one folder <package>-<version>/);
+// empty is Name. Presenter's program is meko_presenter, its package presenter. Private unpacks
+// releases owner-only (folders and programs 0700, files 0600), as files in Meko's data folder must
+// be: an extension's app folder is in it, Meko's own isn't.
+type App struct {
+	Root    string
+	Name    string
+	Package string
+	Private bool
+}
+
+func (a App) name() string {
+	if a.Name == "" {
+		return "meko"
+	}
+	return a.Name
+}
+
+func (a App) pkg() string {
+	if a.Package == "" {
+		return a.name()
+	}
+	return a.Package
+}
 
 // DefaultRoot is where the installer puts releases: $XDG_DATA_HOME/meko/app, or
 // ~/.local/share/meko/app. It's outside the data folder, so meko destroy, which removes the data
@@ -63,10 +88,10 @@ func Of(exe string) (App, string, bool) {
 func (a App) Dir(version string) string { return filepath.Join(a.Root, version) }
 
 // Exe is a version's binary.
-func (a App) Exe(version string) string { return filepath.Join(a.Dir(version), "bin", "meko") }
+func (a App) Exe(version string) string { return filepath.Join(a.Dir(version), "bin", a.name()) }
 
 // CurrentExe is the binary app/current points at: what the service runs.
-func (a App) CurrentExe() string { return filepath.Join(a.Root, "current", "bin", "meko") }
+func (a App) CurrentExe() string { return filepath.Join(a.Root, "current", "bin", a.name()) }
 
 // Current is the version app/current points at ("" if none).
 func (a App) Current() string {
@@ -99,13 +124,13 @@ func randomSuffix() string {
 	return hex.EncodeToString(b)
 }
 
-// LinkCommand points <home>/.local/bin/meko at app/current/bin/meko, so meko is a command.
+// LinkCommand points <home>/.local/bin/<name> at app/current/bin/<name>, so it's a command.
 func (a App) LinkCommand(home string) (string, error) {
 	bin := filepath.Join(home, ".local", "bin")
 	if err := os.MkdirAll(bin, 0o755); err != nil { //nolint:gosec // G301: the user's own bin folder
 		return "", err
 	}
-	link := filepath.Join(bin, "meko")
+	link := filepath.Join(bin, a.name())
 	tmp := link + ".tmp-" + randomSuffix()
 	if err := os.Symlink(a.CurrentExe(), tmp); err != nil {
 		return "", err
@@ -117,9 +142,26 @@ func (a App) LinkCommand(home string) (string, error) {
 	return link, nil
 }
 
-// UnlinkCommand removes <home>/.local/bin/meko if it points into this app folder.
+// MayLink reports whether LinkCommand may make <home>/.local/bin/<name>: there's none, or it's a
+// link into this app folder, or a dangling one. A link into another app folder is another install's
+// (an extension's release for another of this user's Meko data folders), and stays.
+func (a App) MayLink(home string) bool {
+	link := filepath.Join(home, ".local", "bin", a.name())
+	t, err := os.Readlink(link)
+	if err != nil {
+		_, lerr := os.Lstat(link)
+		return errors.Is(lerr, fs.ErrNotExist)
+	}
+	if strings.HasPrefix(t, a.Root+string(filepath.Separator)) {
+		return true
+	}
+	_, serr := os.Stat(link)
+	return serr != nil
+}
+
+// UnlinkCommand removes <home>/.local/bin/<name> if it points into this app folder.
 func (a App) UnlinkCommand(home string) error {
-	link := filepath.Join(home, ".local", "bin", "meko")
+	link := filepath.Join(home, ".local", "bin", a.name())
 	t, err := os.Readlink(link)
 	if err != nil || !strings.HasPrefix(t, a.Root+string(filepath.Separator)) {
 		return nil //nolint:nilerr // not ours to remove

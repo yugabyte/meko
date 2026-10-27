@@ -3,15 +3,25 @@
 // clickable after the page that showed them reloads (as open pages do after an update) or closes,
 // and a click can switch to whichever browser tab already shows the session.
 // It caches nothing and handles no fetches, so the app always loads from the server.
+// main.tsx registers it with AgentK's base path as its scope: `/ext/agentk/` behind Meko, whose own
+// pages share the origin, or `/` under `npm run dev`.
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
 
-/** The route parts of an AgentK page's URL: `/p/<project>[/s/<session>][/…]`. */
+/** AgentK's base path, where its pages are: the scope's, always ending in '/'. */
+const base = () => new URL(self.registration.scope).pathname;
+
+/**
+ * The route parts of an AgentK page's URL: `<base>p/<project>[/s/<session>][/…]`, `{}` for its
+ * other pages, or null for a page that isn't AgentK's (Meko's, on the same origin).
+ */
 function pageOf(url) {
   let parts;
   try {
-    parts = new URL(url).pathname.split('/').filter(Boolean).map(decodeURIComponent);
+    const path = new URL(url).pathname;
+    if (!path.startsWith(base())) return null;
+    parts = path.slice(base().length).split('/').filter(Boolean).map(decodeURIComponent);
   } catch {
     return {};
   }
@@ -26,7 +36,7 @@ function pageOf(url) {
  * project, else the one used last. `windows` is ordered most recently focused first (matchAll's order).
  */
 function pickWindow(windows, projectId, sessionId) {
-  const pages = windows.map((w) => ({ w, page: pageOf(w.url) }));
+  const pages = windows.map((w) => ({ w, page: pageOf(w.url) })).filter((x) => x.page);
   const app = pages.filter((x) => !x.page.design);
   const first = (list) => (list[0] ? list[0].w : undefined);
   if (projectId) {
@@ -35,7 +45,7 @@ function pickWindow(windows, projectId, sessionId) {
     const found = first(onSession) || first(onProject);
     if (found) return found;
   }
-  const byUse = app.length ? app.map((x) => x.w) : windows;
+  const byUse = (app.length ? app : pages).map((x) => x.w);
   return byUse.find((w) => w.focused) || byUse.find((w) => w.visibilityState === 'visible') || byUse[0];
 }
 
@@ -47,10 +57,10 @@ self.addEventListener('notificationclick', (event) => {
   let url;
   let message;
   if (projectId && sessionId) {
-    url = `/p/${encodeURIComponent(projectId)}/s/${encodeURIComponent(sessionId)}`;
+    url = `${base()}p/${encodeURIComponent(projectId)}/s/${encodeURIComponent(sessionId)}`;
     message = { type: 'ak-open', projectId, sessionId };
   } else if (datapackId) {
-    url = '/';
+    url = base();
     message = { type: 'ak-invite', datapackId };
   } else {
     return;

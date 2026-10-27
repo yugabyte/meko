@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { MAX_PASTE_BYTES, MAX_START_IMAGES, START_EXAMPLES, type CreateSessionRequest, type HarnessStatus, type Project, type RepoInfo, type ReviewablePr, type ReviewablePrs, type Session, type TaskPr } from '../../shared/types';
+import { LEARN_MONTHS_DEFAULT, LEARN_MONTHS_MAX, LEARN_TEXT_MAX, MAX_PASTE_BYTES, MAX_START_IMAGES, START_EXAMPLES, type CreateSessionRequest, type HarnessStatus, type Project, type RepoInfo, type ReviewablePr, type ReviewablePrs, type Session, type TaskPr } from '../../shared/types';
 import { HARNESS_CAPS, NO_AGENT, type HarnessId } from '../../shared/harnesses';
 import { expandBranchPrefix } from '../../shared/branches';
 import { api, errorMessage } from '../api';
 import { pastedImages } from '../clipboard';
 import { HeldImages as HeldImageList } from '../heldImages';
+import { useTouch } from '../hooks/useMedia';
 import { cx, noAgent, repoFolder, slugify } from '../util';
 import { AttachPrPicker } from './AttachPrPicker';
-import { AgentPicker, Busy, Dialog, ErrorText, Field, StartPicker, type StartChoice } from './common';
+import { AgentPicker, Busy, Dialog, ErrorText, Field, LEARN_LABEL, StartPicker, type StartChoice } from './common';
 import { HeldImages } from './HeldImages';
 import { ReviewPrPicker } from './ReviewPrPicker';
 
@@ -27,6 +28,8 @@ export function NewSessionDialog({
   ghLogin,
   harnesses,
   fresh = false,
+  mekoOn = false,
+  learnFirst = false,
   initial,
   onClose,
   onCreated,
@@ -38,18 +41,39 @@ export function NewSessionDialog({
   harnesses: HarnessStatus[];
   /** The project was just opened: when it has PRs to review (a project shared with you, say), Review a PR comes first. */
   fresh?: boolean;
+  /** Meko is on: with the project's dedicated datapack, Learn the project is offered. */
+  mekoOn?: boolean;
+  /** Start on Learn the project (offered): the project was just opened on an empty datapack, or the home's offer was taken. */
+  learnFirst?: boolean;
   /** What a failed start asked for, to try it again. */
   initial?: CreateSessionRequest;
   onClose: () => void;
   onCreated: (s: Session) => void;
 }) {
+  // On touch, the keyboard comes up only when a field is tapped.
+  const touch = useTouch();
   const [name, setName] = useState(initial?.name ?? '');
   const [nameEdited, setNameEdited] = useState(!!initial?.name);
   const [prompt, setPrompt] = useState(initial?.prompt ?? '');
-  const [start, setStart] = useState<StartChoice>(initial?.kind === 'review-pr' ? 'review-pr' : (initial?.start ?? 'design'));
+  // Run to merge, offered for a start at Code (at Design it's picked beside Approve).
+  const [autoRun, setAutoRun] = useState(!!initial?.autoRun);
+  // A learn session saves to the project's dedicated datapack, so it's offered only with one and Meko on.
+  const learnOffered = mekoOn && project.datapacks.some((d) => d.role === 'dedicated');
+  const [start, setStart] = useState<StartChoice>(
+    initial?.kind === 'review-pr' ? 'review-pr'
+      : initial?.learn || (!initial && learnFirst && learnOffered) ? 'learn'
+        : (initial?.start ?? 'design'),
+  );
   // A retry starts where the failed start asked to.
-  const startPicked = useRef(!!initial?.start);
+  const startPicked = useRef(!!initial?.start || !!initial?.learn);
   const review = start === 'review-pr';
+  const learn = start === 'learn' && learnOffered;
+  // A learn session's brief (CreateSessionRequest.learn).
+  const [about, setAbout] = useState(initial?.learn?.about ?? '');
+  const [where, setWhere] = useState(initial?.learn?.where ?? '');
+  const [months, setMonths] = useState(String(initial?.learn?.months ?? LEARN_MONTHS_DEFAULT));
+  const monthsN = /^\d+$/.test(months.trim()) ? Number(months.trim()) : NaN;
+  const monthsOk = Number.isInteger(monthsN) && monthsN >= 0 && monthsN <= LEARN_MONTHS_MAX;
   const [workOn, setWorkOn] = useState<WorkOn>(initial?.kind !== 'review-pr' && initial?.pr ? 'pr' : initial?.existingBranch ? 'branch' : 'new');
   const [existing, setExisting] = useState(initial?.existingBranch ? (initial.branch ?? '') : '');
   const [taskPr, setTaskPr] = useState<TaskPr | null>(null);
@@ -259,14 +283,22 @@ export function NewSessionDialog({
   const reviewBranch = picked ? `${prefix}review-pr-${picked.number}` : '';
   const typedExists = workOn === 'new' && !!branch.trim() && !!branches?.includes(branch.trim());
   const ready = workOn === 'branch' ? !!existing.trim() : workOn === 'pr' ? !!taskPr : true;
-  const canStart = !none && (review ? !!picked?.localRepo && !busy : !!name.trim() && !busy && !!branches && ready);
+  // A learn session left unnamed is named for what it does.
+  const sessionName = name.trim() || (learn ? LEARN_LABEL : '');
+  const canStart = !none && (review
+    ? !!picked?.localRepo && !busy
+    : learn
+      ? !!about.trim() && monthsOk && !busy && !!branches
+      : !!name.trim() && !busy && !!branches && ready);
   const chooseRepo = (path: string) => {
     setRepoPath(path);
     // Another repo has other PRs.
     setTaskPr(null);
     if (path === project.repoPath) setBaseBranch(project.defaultBranch);
   };
-  const workSummary = workOn === 'pr'
+  const workSummary = learn
+    ? `from ${baseBranch || 'its default branch'}`
+    : workOn === 'pr'
     ? (taskPr ? `PR #${taskPr.number} · ${taskPr.headRefName}` : 'a pull request')
     : workOn === 'branch'
       ? `on ${existing.trim() || 'an existing branch'}`
@@ -282,31 +314,41 @@ export function NewSessionDialog({
       const images = ready.length ? ready.flatMap((i) => (i.path ? [i.path] : [])) : undefined;
       const s = await api.createSession(
         project.id,
-        review && picked
+        learn
           ? {
-            name: name.trim(),
+            name: sessionName,
             harness: harness ?? undefined,
-            prompt: prompt.trim() || undefined,
-            kind: 'review-pr',
-            repoPath: inProjectRepo ? undefined : repoPath,
-            pr: { repo: picked.repo, number: picked.number },
-            images,
-          }
-          : {
-            name: name.trim(),
-            harness: harness ?? undefined,
-            prompt: prompt.trim() || undefined,
-            baseBranch: workOn === 'pr' ? undefined : baseBranch,
             kind: 'task',
-            start: start === 'review-pr' ? undefined : start,
+            learn: { about: about.trim(), where: where.trim(), months: monthsN },
+            baseBranch,
             repoPath: inProjectRepo ? undefined : repoPath,
-            images,
-            ...(workOn === 'pr' && taskPr
-              ? { pr: { repo: taskPr.repo, number: taskPr.number } }
-              : workOn === 'branch'
-                ? { branch: existing.trim(), existingBranch: true }
-                : { branch: branch.trim() || undefined }),
-          },
+          }
+          : review && picked
+            ? {
+              name: name.trim(),
+              harness: harness ?? undefined,
+              prompt: prompt.trim() || undefined,
+              kind: 'review-pr',
+              repoPath: inProjectRepo ? undefined : repoPath,
+              pr: { repo: picked.repo, number: picked.number },
+              images,
+            }
+            : {
+              name: name.trim(),
+              harness: harness ?? undefined,
+              prompt: prompt.trim() || undefined,
+              baseBranch: workOn === 'pr' ? undefined : baseBranch,
+              kind: 'task',
+              start: start === 'review-pr' || start === 'learn' ? undefined : start,
+              autoRun: start === 'code' && autoRun ? true : undefined,
+              repoPath: inProjectRepo ? undefined : repoPath,
+              images,
+              ...(workOn === 'pr' && taskPr
+                ? { pr: { repo: taskPr.repo, number: taskPr.number } }
+                : workOn === 'branch'
+                  ? { branch: existing.trim(), existingBranch: true }
+                  : { branch: branch.trim() || undefined }),
+            },
       );
       onCreated(s);
     } catch (e) {
@@ -323,7 +365,7 @@ export function NewSessionDialog({
       footer={
         <>
           <button className="btn primary" disabled={!canStart} onClick={create}>
-            {busy ? <Busy label={held.uploading ? 'Uploading' : 'Starting'} /> : review ? 'Start review' : 'Start session'}
+            {busy ? <Busy label={held.uploading ? 'Uploading' : 'Starting'} /> : review ? 'Start review' : learn ? 'Start learning' : 'Start session'}
           </button>
         </>
       }
@@ -350,10 +392,70 @@ export function NewSessionDialog({
               setName(e.target.value);
               setNameEdited(true);
             }}
-            autoFocus
+            autoFocus={!touch}
           />
         </Field>
-        <StartPicker id="ns-start" value={start} onChange={chooseStart} />
+        {learn && learnFirst && (
+          <p className="ns-learn-offer" id="ns-learn-offer">
+            The project's datapack is empty. Start by having AgentK learn the project, so later sessions start with what it found.
+          </p>
+        )}
+        <StartPicker id="ns-start" value={learn ? 'learn' : start === 'learn' ? 'design' : start} learn={learnOffered} onChange={chooseStart} />
+        {start === 'code' && (
+          <label className="check">
+            <input id="ns-auto-run" type="checkbox" checked={autoRun} onChange={(e) => setAutoRun(e.target.checked)} />
+            <span>
+              Run to merge
+              <span className="muted small check-hint">AgentK opens the PR when it has made the change, then merges it once nothing blocks it.</span>
+            </span>
+          </label>
+        )}
+        {learn && (
+          <>
+            <Field label="What is this project about?" hint="What it does, who it's for, and what you're working on in it.">
+              <textarea
+                id="ns-learn-about"
+                className="input"
+                rows={3}
+                maxLength={LEARN_TEXT_MAX}
+                placeholder={START_EXAMPLES.learn.prompt}
+                value={about}
+                onChange={(e) => setAbout(e.target.value)}
+              />
+            </Field>
+            <Field label="Where are its files? (optional)" hint="Folders and files in the repo, docs, and other places to look. Left empty, AgentK starts from the README and docs.">
+              <textarea
+                id="ns-learn-where"
+                className="input"
+                rows={2}
+                maxLength={LEARN_TEXT_MAX}
+                placeholder="e.g. services/billing/, libs/payments/, docs/billing/*.md"
+                value={where}
+                onChange={(e) => setWhere(e.target.value)}
+              />
+            </Field>
+            <Field
+              label="Read PRs from the last"
+              hint={
+                monthsOk
+                  ? 'Months of merged PRs that touch those files. A longer window takes longer and uses more tokens. 0 reads no PRs.'
+                  : `Give a whole number of months, from 0 to ${LEARN_MONTHS_MAX}.`
+              }
+            >
+              <div className="ns-learn-months">
+                <input
+                  id="ns-learn-months"
+                  className="input"
+                  inputMode="numeric"
+                  aria-invalid={!monthsOk}
+                  value={months}
+                  onChange={(e) => setMonths(e.target.value)}
+                />
+                <span>months</span>
+              </div>
+            </Field>
+          </>
+        )}
         {review && (
           <ReviewPrPicker
             project={project}
@@ -369,79 +471,83 @@ export function NewSessionDialog({
             lookupRepo={repoPath}
           />
         )}
-        <Field
-          label={review ? 'Notes for AgentK (optional)' : 'First prompt (optional)'}
-          hint={
-            (review
-              ? 'Anything to focus on. AgentK sums up the PR and then waits for your questions.'
-              : 'What should AgentK do? Left empty, AgentK starts on the name as the task.') + ' Images can be pasted or dropped in.'
-          }
-        >
-          <textarea
-            id="ns-prompt"
-            className="input"
-            rows={review ? 2 : 5}
-            placeholder={START_EXAMPLES[start].prompt}
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            onPaste={(e) => {
-              // A paste with images holds them; text (a spreadsheet's cells come with a picture) pastes as usual.
-              const images = pastedImages(e.clipboardData);
-              if (!images.length) return;
-              e.preventDefault();
-              hold(images);
-            }}
-            onDragOver={(e) => {
-              if (!e.dataTransfer.types.includes('Files')) return;
-              e.preventDefault();
-              e.dataTransfer.dropEffect = 'copy';
-            }}
-            onDrop={(e) => {
-              if (!e.dataTransfer.types.includes('Files')) return;
-              e.preventDefault();
-              const images = pastedImages(e.dataTransfer);
-              if (images.length) hold(images);
-              else setError('Only images can be dropped here: PNG, JPEG, GIF or WebP.');
-            }}
-          />
-          <div className="ns-images">
-            <button
-              type="button"
-              id="ns-add-image"
-              className="btn small"
-              aria-label="Add image"
-              title="Add image"
-              onClick={() => imagePicker.current?.click()}
+        {!learn && (
+          <>
+            <Field
+              label={review ? 'Notes for AgentK (optional)' : 'First prompt (optional)'}
+              hint={
+                (review
+                  ? 'Anything to focus on. AgentK sums up the PR and then waits for your questions.'
+                  : 'What should AgentK do? Left empty, AgentK starts on the name as the task.') + ' Images can be pasted or dropped in.'
+              }
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <rect x="3" y="4" width="18" height="16" rx="2" />
-                <circle cx="9" cy="10" r="1.6" />
-                <path d="M21 16l-5-5-9 9" />
-              </svg>
-            </button>
-            <HeldImages held={held} hint={review ? 'sent with your notes' : 'sent with the first prompt'} />
-            {lostImages > 0 && (
-              <span className="hint">
-                {lostImages === 1 ? "The image from the start that failed wasn't kept." : `The ${lostImages} images from the start that failed weren't kept.`} Add
-                them again.
-              </span>
-            )}
-          </div>
-        </Field>
-        {/* Outside the field's label, so a tap on the label doesn't open the picker. */}
-        <input
-          ref={imagePicker}
-          type="file"
-          accept="image/png,image/jpeg,image/gif,image/webp,image/*"
-          multiple
-          hidden
-          onChange={(e) => {
-            const files = Array.from(e.target.files ?? []);
-            // Cleared, so picking the same image again still fires a change.
-            e.target.value = '';
-            hold(files);
-          }}
-        />
+              <textarea
+                id="ns-prompt"
+                className="input"
+                rows={review ? 2 : 5}
+                placeholder={START_EXAMPLES[start].prompt}
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                onPaste={(e) => {
+                  // A paste with images holds them; text (a spreadsheet's cells come with a picture) pastes as usual.
+                  const images = pastedImages(e.clipboardData);
+                  if (!images.length) return;
+                  e.preventDefault();
+                  hold(images);
+                }}
+                onDragOver={(e) => {
+                  if (!e.dataTransfer.types.includes('Files')) return;
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'copy';
+                }}
+                onDrop={(e) => {
+                  if (!e.dataTransfer.types.includes('Files')) return;
+                  e.preventDefault();
+                  const images = pastedImages(e.dataTransfer);
+                  if (images.length) hold(images);
+                  else setError('Only images can be dropped here: PNG, JPEG, GIF or WebP.');
+                }}
+              />
+              <div className="ns-images">
+                <button
+                  type="button"
+                  id="ns-add-image"
+                  className="btn small"
+                  aria-label="Add image"
+                  title="Add image"
+                  onClick={() => imagePicker.current?.click()}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <rect x="3" y="4" width="18" height="16" rx="2" />
+                    <circle cx="9" cy="10" r="1.6" />
+                    <path d="M21 16l-5-5-9 9" />
+                  </svg>
+                </button>
+                <HeldImages held={held} hint={review ? 'sent with your notes' : 'sent with the first prompt'} />
+                {lostImages > 0 && (
+                  <span className="hint">
+                    {lostImages === 1 ? "The image from the start that failed wasn't kept." : `The ${lostImages} images from the start that failed weren't kept.`} Add
+                    them again.
+                  </span>
+                )}
+              </div>
+            </Field>
+            {/* Outside the field's label, so a tap on the label doesn't open the picker. */}
+            <input
+              ref={imagePicker}
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp,image/*"
+              multiple
+              hidden
+              onChange={(e) => {
+                const files = Array.from(e.target.files ?? []);
+                // Cleared, so picking the same image again still fires a change.
+                e.target.value = '';
+                hold(files);
+              }}
+            />
+          </>
+        )}
         <div className="advanced">
           <button
             type="button"
@@ -511,30 +617,32 @@ export function NewSessionDialog({
               )}
               {!review && (
                 <>
-                  <div className="field">
-                    <span className="label" id="ns-work-on-label">
-                      Work on
-                    </span>
-                    <div className="seg" role="radiogroup" aria-labelledby="ns-work-on-label">
-                      {WORK_ON.map((w) => (
-                        <button
-                          key={w.value}
-                          id={`ns-work-on-${w.value}`}
-                          type="button"
-                          role="radio"
-                          aria-checked={workOn === w.value}
-                          className={cx(workOn === w.value && 'on')}
-                          onClick={() => setWorkOn(w.value)}
-                        >
-                          {w.label}
-                        </button>
-                      ))}
+                  {!learn && (
+                    <div className="field">
+                      <span className="label" id="ns-work-on-label">
+                        Work on
+                      </span>
+                      <div className="seg" role="radiogroup" aria-labelledby="ns-work-on-label">
+                        {WORK_ON.map((w) => (
+                          <button
+                            key={w.value}
+                            id={`ns-work-on-${w.value}`}
+                            type="button"
+                            role="radio"
+                            aria-checked={workOn === w.value}
+                            className={cx(workOn === w.value && 'on')}
+                            onClick={() => setWorkOn(w.value)}
+                          >
+                            {w.label}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                  {workOn !== 'pr' && (
+                  )}
+                  {(learn || workOn !== 'pr') && (
                     <Field
-                      label={workOn === 'branch' ? 'Compare with' : 'Base branch'}
-                      hint={workOn === 'branch' ? "Used when the branch has no open PR. With one, the PR's base is used." : undefined}
+                      label={!learn && workOn === 'branch' ? 'Compare with' : 'Base branch'}
+                      hint={!learn && workOn === 'branch' ? "Used when the branch has no open PR. With one, the PR's base is used." : undefined}
                     >
                       <select
                         id="ns-base"
@@ -552,7 +660,7 @@ export function NewSessionDialog({
                       </select>
                     </Field>
                   )}
-                  {workOn === 'new' && (
+                  {!learn && workOn === 'new' && (
                     <Field
                       label="Branch"
                       hint={
@@ -573,7 +681,7 @@ export function NewSessionDialog({
                       />
                     </Field>
                   )}
-                  {workOn === 'branch' && (
+                  {!learn && workOn === 'branch' && (
                     <Field
                       label="Branch"
                       hint="One of your local branches, or type one that's only on origin. AgentK checks it out as it is (fast-forwarded to origin when it's behind) and picks up its open PR."
@@ -596,7 +704,7 @@ export function NewSessionDialog({
                       </datalist>
                     </Field>
                   )}
-                  {workOn === 'pr' && <AttachPrPicker project={project} repoPath={repoPath} picked={taskPr} onPick={pickTaskPr} />}
+                  {!learn && workOn === 'pr' && <AttachPrPicker project={project} repoPath={repoPath} picked={taskPr} onPick={pickTaskPr} />}
                 </>
               )}
             </div>

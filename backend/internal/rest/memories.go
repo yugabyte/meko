@@ -265,3 +265,23 @@ func (a *api) getArtifact(c echo.Context) error {
 	out.ContentBase64 = base64.StdEncoding.EncodeToString(art.Bytes)
 	return envelope.OK(c, out)
 }
+
+// memoryMap is the datapack's memories laid out by meaning, and where ?q= lands among them (Meko's
+// own; Cloud has none).
+func (a *api) memoryMap(c echo.Context) error {
+	id, ok, err := a.pathDatapack(c)
+	if !ok {
+		return err
+	}
+	var ids []string
+	for _, s := range strings.Split(c.QueryParam("ids"), ",") {
+		if s = strings.ToLower(strings.TrimSpace(s)); s != "" {
+			ids = append(ids, s)
+		}
+	}
+	m, err := a.Service.MemoryMap(ctx(c), id, strings.TrimSpace(c.QueryParam("q")), ids)
+	if err != nil {
+		return serviceError(c, err)
+	}
+	return envelope.OK(c, m)
+}

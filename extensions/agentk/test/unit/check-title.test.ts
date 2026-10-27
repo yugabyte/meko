@@ -43,6 +43,10 @@ describe('check-title.sh', () => {
     'fix(agentk): handle a: colon in the summary',
     `fix(agentk/web): ${'a'.repeat(55)}`,
     `fix(agentk/web): ${'a'.repeat(55)} (#123)`,
+    // A change that ships in more than one component names each.
+    'feat(agentk,meko): move the home into Meko',
+    'feat(agentk/meko,meko/cli)!: move the home into Meko',
+    'fix(meko,repo,agentk): ship all three',
   ])('accepts %s', (title) => {
     const r = check(title);
     expect(r.stderr).toBe('');
@@ -56,7 +60,7 @@ describe('check-title.sh', () => {
     ['Fix(agentk): x', 'Unknown type "Fix"'],
     ['Revert "feat(agentk): x"', 'Unknown type'],
     ['(agentk): x', 'Unknown type ""'],
-    ['fix: x', 'Name the component in parentheses after the type: one of agentk, meko, repo.'],
+    ['fix: x', 'Name the component in parentheses after the type: one of agentk, meko, presenter, repo.'],
     ['fix(web): x', 'Unknown component "web"'],
     ['fix(): x', 'Unknown component ""'],
     ['fix(agentk) : x', 'Bad component'],
@@ -77,6 +81,13 @@ describe('check-title.sh', () => {
     ['fix(agentk): x ', 'ends with a space'],
     ['fix(agentk): x  (#12)', 'ends with a space'],
     ['fix(agentk): x\nmore', 'one line'],
+    ['feat(agentk, meko): x', 'Bad component list "agentk, meko"'],
+    ['feat(agentk,): x', 'Bad component list "agentk,"'],
+    ['feat(,meko): x', 'Bad component list ",meko"'],
+    ['feat(agentk,,meko): x', 'Bad component list'],
+    ['feat(agentk,web): x', 'Unknown component "web"'],
+    ['feat(agentk/web,agentk/server): x', 'Component "agentk" is named twice'],
+    ['feat(agentk,meko/Cli): x', 'Bad area "Cli"'],
   ])('rejects %j', (title, why) => {
     const r = check(title);
     expect(r.status).toBe(1);
@@ -84,7 +95,7 @@ describe('check-title.sh', () => {
     // Every rejection shows the rules.
     expect(r.stderr).toContain('Format: <type>(<component>[/<area>])[!]: <summary>');
     expect(r.stderr).toContain('Types: feat, fix, perf, deps, ci, test, docs, nit, chore');
-    expect(r.stderr).toContain('Components: agentk, meko, repo');
+    expect(r.stderr).toContain('Components: agentk, meko, presenter, repo');
   });
 
   it('skips only the length limit with --no-length', () => {

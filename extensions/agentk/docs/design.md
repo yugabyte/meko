@@ -10,7 +10,7 @@ The design is split by area. Read this page first, then the part you need:
 | Part | Read it for |
 |---|---|
 | [Architecture](design/architecture.md) | The server, the session host, hooks, the state directory, and how they fit together |
-| [Agents: Claude Code and Kiro](design/harnesses.md) | The harness a session runs on: the adapter interface, how a Kiro session is launched, hooked, resumed and counted, and what stays Claude-only |
+| [Agents: Claude Code, OpenCode and Kiro](design/harnesses.md) | The harness a session runs on: the adapter interface, how an OpenCode or Kiro session is launched, hooked, resumed and counted, and what stays Claude-only |
 | [AgentK's mod in Claude](design/mod.md) | The Claude Code plugin AgentK loads into sessions: prompts, questions, Meko calls, learn steps |
 | [The app](design/app.md) | The UI: layout, Changes, review comments, side panels, Starting, keyboard, notifications, the phone layout |
 | [Open project and New session](design/open-project-and-new-session.md) | The two dialogs that start work |
@@ -19,13 +19,14 @@ The design is split by area. Read this page first, then the part you need:
 | [Projects, worktrees and sessions](design/projects-and-sessions.md) | What a project and a session are, the layout on the host, `config.toml`, the schema, worktree reuse |
 | [Task lifecycle](design/lifecycle.md) | Stages and gates, queued gates, the design after approval, moving a session, instructions with a move |
 | [Reviewing a PR](design/review-pr.md) | Review a PR sessions |
-| [GitHub links, Ask AgentK and finding a session](design/palette.md) | Starting from a pasted GitHub link, Ask AgentK and finding a session by what it's about in the command palette |
+| [GitHub links, Ask AgentK and finding a session](design/palette.md) | Starting from a pasted GitHub link, Ask AgentK (and its Do all) and finding a session by what it's about in the command palette |
+| [AgentK's session tools](design/tools.md) | The `agentk_sessions` MCP server and skill every session gets, on any harness, to open projects, start sessions and move them between stages |
 | [Datapacks](design/datapacks.md) | Meko datapacks: dedicated and shared, pins, invites, adding files to the knowledge base |
 | [Sharing a project](design/sharing.md) | Sharing a project's datapack with teammates and reviewers |
 | [Meko recall and the learn step](design/recall-and-learn.md) | What Meko gives a session at start, and what it saves at the end |
 | [Token usage](design/token-usage.md) | Reading transcripts, totals and costs, Meko's savings |
 | [Usage stats](design/usage-stats.md) | The anonymous usage report |
-| [Login and security](design/security.md) | Login, TOTP, TLS, local access, origin checks |
+| [Login and security](design/security.md) | Meko as the front door (its sign-in, local or remote access, TLS), the socket AgentK listens on, origin checks, the handoff of AgentK's old login |
 | [Surviving crashes, restarts and updates](design/recovery.md) | Recovery, auto-continue, one server per home |
 | [Releases and auto-update](design/releases.md) | Release builds, the installer, self-update and rollback |
 
@@ -37,23 +38,23 @@ Below: [Decisions so far](#decisions-so-far) · [Tech stack](#tech-stack) · [Mi
 | Topic | Decision |
 |---|---|
 | Session UI | Embed the real Claude Code TUI (xterm.js over WebSocket). Don't rebuild Claude's interface. |
-| Agents | A session runs on Claude Code or Kiro CLI, picked when it starts (default in Settings). Neither is required: AgentK installs and runs with either one, and says what to install when there's none. Everything Claude-specific sits behind one adapter per CLI; features only Claude Code has (the mod, Artifact designs, the 5-hour and weekly limits) stay with it; the rail shows Kiro's plan credits instead. Codex and Cursor CLI later. |
+| Agents | A session runs on Claude Code, OpenCode or Kiro CLI, picked when it starts (default in Settings). None is required: AgentK installs and runs with any one, and says what to install when there's none. OpenCode's hooks are AgentK's own plugin, loaded only into AgentK's sessions through OpenCode's inline config. Everything Claude-specific sits behind one adapter per CLI; features only Claude Code has (the mod, Artifact designs, the 5-hour and weekly limits) stay with it; the rail shows Kiro's plan credits instead. Codex and Cursor CLI later. |
 | Process host | AgentK's own session host (`agentk host`): one Node process that holds every Claude in a pty, in its own background service (a systemd user unit on Linux, a LaunchAgent on macOS), so the server can restart or update without touching sessions. No tmux. |
 | Open project | Pick a repo from a list of the git repos under `~/code`. The folder is configurable, and you can clone a repo into it from a URL or start a new one there. |
-| Local state | SQLite (`~/.agent-k-local/state.db`), WAL mode, schema versioned with `PRAGMA user_version`. |
+| Local state | SQLite (`state.db` in AgentK's home, `~/.meko/extensions/agentk` in Meko's data folder by default), WAL mode, schema versioned with `PRAGMA user_version`. |
 | Working copy | Each session gets its own git worktree on its own branch. When it ends, a clean worktree waits, build outputs and all, for the next session on the repo. |
 | Datapacks | Each project gets one dedicated datapack (the write target) and can attach any number of shared datapacks (read targets). |
-| Meko | Optional. With a key, projects get a dedicated datapack (or start without one, when Meko is down or the plan's datapack limit is reached, and get one later). Without a key, or turned off in Settings, AgentK works without datapacks. |
+| Meko | A Meko Cloud key when one is set, else the Meko running on this computer (read from Meko, never stored; it can't be turned off). Projects get a dedicated datapack (or start without one, when Meko is down or the plan's datapack limit is reached, and get one later). With no key and no Meko running here, AgentK works without datapacks. |
 | Meko wiring | Each session gets its own `MEKO_AGENT_ID=claude_code:<session slug>-<hash>`, and the project's datapack is pinned for that agent id when it starts. The Meko hooks already honour both, so no plugin change is needed. |
 | Datapack names | New dedicated datapacks default to `adlc/proj/<repo>/<project_name>`. Datapacks with the `adlc/proj/` prefix are *project datapacks*: offered when shared with you, and filled in automatically. |
 | Project sharing | A project is shared by sharing its dedicated datapack in Meko, from the project home or, for a PR's reviewers, from its PR & Review step. A project datapack shared with you shows a banner and a notification, and opens as a new project with its repo and name filled in. |
 | Reviewing a PR | A **Review a PR** session checks out someone else's PR, in any repo, and AgentK assists the user who reviews it: a short summary to get them oriented, then answers to what they ask, with the PR's design (named in its description, fetched from Meko) open beside it and Meko searched for the decisions behind it. It posts to GitHub only when the user says. |
 | Runtime | Node 22 (bundled in releases). State uses the built-in `node:sqlite`; node-pty is the only native module. |
-| Network | Reachable directly on the corp network over HTTPS, behind a login; or local only, listening on 127.0.0.1 with no login. |
+| Network | Served by the Meko on this computer at `/ext/agentk/` on its port: from other devices over HTTPS behind Meko's login (remote access), or from this computer only with no login (local access). AgentK itself listens only on a unix socket. |
 | Other terminal sessions | Not adopted. Only sessions created by AgentK are shown. |
 | Crash behaviour | After a host reboot, the server automatically brings back every open project and session with `claude --resume`. Sessions that were mid-turn are told to continue. |
-| Token usage | Tracked per session and per project (per model and per day too), read from Claude Code transcripts including subagents, with an estimated cost at API list prices. Meko calls are counted from the same transcripts, with an estimate of what Meko searches saved. |
-| Usage stats | Each install sends anonymous counts (projects, sessions, PRs, commits, file types, tokens by model) once a day, hourly in a new install's first day, to a collector the AgentK team runs as a separate service, and from release installs also to YugabyteDB's call home service (diagnostics.yugabyte.com, where yugabyted reports). On by default; one checkbox in Settings → Account turns off both. |
+| Token usage | Tracked per session and per project (per model and per day too), read from Claude Code transcripts including subagents, with an estimated cost at API list prices. Meko calls are counted from the same transcripts (Kiro's and OpenCode's from their own logs), with an estimate of what Meko searches saved. |
+| Usage stats | Each install sends anonymous counts (projects, sessions, PRs, commits, file types, tokens by model) once a day, hourly in a new install's first day, to a collector the AgentK team runs as a separate service, and from release installs also to YugabyteDB's call home service (diagnostics.yugabyte.com, where yugabyted reports). On by default; one checkbox in Settings › General turns off both. |
 | Task lifecycle | Explore → Design → Code → PR & Review (AgentK) → Merge & Close, with three human gates. A task starts at Explore, Design or Code, and you can move it between stages by hand; a Review a PR session has none of it. More ADLC stages plug in later. |
 | Host OS | Linux devservers, and Macs on Apple Silicon (macOS 14 or newer) while you're logged in to the desktop. Intel Macs and headless Macs aren't supported. |
 | Distribution | Public GitHub repo. GitHub Actions for CI and releases, date-based versions (`0.YYYYMMDD.N`), tarball releases, and an update check built into the server. |
@@ -103,4 +104,6 @@ iTerm (`Ctrl+\` detaches).
 2. **Automatic gates.** Should a project be allowed to make **Merge** automatic once AgentK has no
    open findings and CI is green?
 3. **Stacked PRs.** Should a session be able to produce a stack with `gh stack` instead of a single
-   PR?
+   PR? Today the sessions skill lets an agent keep a stack in one session, but AgentK tracks only
+   the PR of the session's own branch (its `prNumber`); the rest of the stack isn't followed
+   through review or merge.

@@ -9,9 +9,9 @@ never pushes the rest of the page down.
 
 **Share** sits in the project's header: it shares the whole project, through its dedicated
 datapack, and opens the Share dialog. While Meko's API URL isn't known (a self-hosted Meko with
-no web app or API URL set) the dialog shows the server's 409, which says to set the web app URL on
-the Meko tab (the tab warns about it too). With Meko
-off it asks for a Meko API key first (**Add a Meko API key**), and for a project without a
+no web app or API URL set) the dialog shows the server's 409, which says to set the web app URL in
+Meko's web UI (Settings › Meko Cloud). With no Meko it says how to set one up first (**Set up Meko**,
+which links to Meko's Meko Cloud page), and for a project without a
 dedicated datapack it offers **Add a dedicated datapack**. Meko itself refuses a share from someone who isn't the owner or a
 maintainer. See [Sharing a project](sharing.md).
 
@@ -20,6 +20,11 @@ datapack** (a new one, or one of yours; `POST /api/projects/:id/dedicated-datapa
 Meko API key** while Meko is off. A shared datapack already attached can become the dedicated one.
 New sessions use it, each pinning it for its own agent id. Search is hidden for a project with no
 datapacks.
+
+While the dedicated datapack has no memories and no knowledge (its counts from Meko, so not while
+Meko is off or doesn't answer) and the project has never had a learn session, the box says the
+datapack is empty, with **Learn the project**, which opens the New session dialog on that choice
+(see [Learn sessions](recall-and-learn.md#learn-sessions)).
 
 The dedicated datapack's row has **Switch** (while Meko is on). It opens the same dialog, titled
 **Switch the dedicated datapack**, to make a new datapack or one of yours the dedicated one; attached
@@ -43,7 +48,7 @@ session's stays on the old datapack and the next one to start pins the new one.
 **Log Meko calls** (Project settings, off by default; shown while Meko is on, or while it's on for
 the project so it can be turned off) keeps, for each of the project's sessions, every Meko call
 AgentK makes for it and every one Claude makes in it, with what was sent and what came back, in
-`~/.agent-k-local/designs/<session>/meko-calls.jsonl`. Claude in that session can read the file
+`<home>/designs/<session>/meko-calls.jsonl`. Claude in that session can read the file
 (the folder is one of its `--add-dir`s). These are the session's recall at start, its Meko
 conversation (created and renamed), design uploads, and the learn step's searches and writes:
 the call sites wrap their work in `withMekoScope(session)`, an AsyncLocalStorage that
@@ -70,9 +75,20 @@ read leaves the notice as the reply. Without a live mod (Claude Code older than 
 `[claude] mod = false`), Claude's calls aren't logged: there's no fallback to the `PostToolUse`
 hook, which misses failed calls.
 
+Kiro's and OpenCode's calls, which have no mod, come from the usage read of their own files, the
+read that records them in `meko_calls` (see [Token usage](token-usage.md#meko-calls)): Kiro's
+session log (`<conversation>.jsonl`, the call's input and reply, but not how long it took) and the
+`meko` lines AgentK's OpenCode plugin adds to the session's `messages.jsonl` (with the time it
+took). `readUsage` hands back the calls it recorded for the first time (`UsageRead.mekoCalls`), and
+`SessionManager.ingestUsage` writes them to the log with `recordAgent`, so a file read again from
+the start never logs a call twice. They're logged as `by: 'claude'`, which names the session's
+agent whichever it is: the page labels them with the session's agent (`MekoLogInfo.harness`,
+`agentName()`), and a Kiro call shows no time.
+
 Each line holds the tool (Claude's without its MCP server's prefix), who made it (`by`: `agentk`
-or `claude`; lines from before Claude's calls were logged have none and are AgentK's), its args and
-its reply (parsed, or its text), the error, how long it took, the tries (2 when it was sent again
+or `claude`, the session's agent; lines from before Claude's calls were logged have none and are
+AgentK's), its args and its reply (parsed, or its text), the error, how long it took (null for
+Kiro's calls), the tries (2 when it was sent again
 after a transport failure: a read, or a write that surely never reached Meko; always 1 for
 Claude's), the learn step that made it, and for Claude's whether a subagent made it and the notice
 Claude read. Lines are in the order the server heard of the calls ending: while one of Claude's

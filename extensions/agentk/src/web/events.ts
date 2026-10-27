@@ -1,4 +1,5 @@
 import type { AppState, EventsClientMessage, ServerEvent } from '../shared/types';
+import { WS_ABNORMAL } from './signin';
 
 export type Conn = 'connecting' | 'open' | 'closed';
 
@@ -16,6 +17,8 @@ export const MAX_SLOW = 3;
 export const UPDATE_RETRY_MS = 1000;
 /** ...for this long, then backs off as usual (a new version that won't start takes a while to roll back). */
 export const UPDATE_RETRY_FOR_MS = 120_000;
+/** How long the connection may be down before the page says so (UPDATE_RETRY_FOR_MS once the server says it's restarting into an update). */
+export const LOST_GRACE_MS = 2000;
 
 /** The parts of a browser WebSocket the connection uses. */
 export type SocketLike = Pick<WebSocket, 'readyState' | 'onopen' | 'onmessage' | 'onclose' | 'onerror' | 'send' | 'close'>;
@@ -23,12 +26,13 @@ export type SocketLike = Pick<WebSocket, 'readyState' | 'onopen' | 'onmessage' |
 export interface EventsHandlers {
   open: () => SocketLike;
   onState: (s: AppState) => void;
+  /** What to tell the user: changes only when that changes (see EventsConnection). */
   onConn: (c: Conn) => void;
   onEvent: (ev: Extract<ServerEvent, { type: 'notify' | 'invite' | 'knowledge' }>) => void;
-  /** After a 4401 close: resolves true to keep retrying, false when the login is gone. */
-  checkLogin: () => Promise<boolean>;
-  /** Close code that means the login is gone. */
-  unauthorized: number;
+  /** After an `unauthorized` close: resolves true to keep retrying, false when the sign-in is gone. */
+  checkSignIn: () => Promise<boolean>;
+  /** Close codes that mean the socket was refused for want of a sign-in. */
+  unauthorized: readonly number[];
 }
 
 /**
@@ -47,6 +51,15 @@ export interface EventsHandlers {
  *
  * A socket dropped while the last state said an update is installing retries every UPDATE_RETRY_MS
  * rather than backing off, so the page sees the new version (and reloads into it) as soon as it's up.
+ *
+ * onConn reports what to tell the user, not each socket's ups and downs: `connecting` until the
+ * first socket proves itself, `open` once a socket's state arrives, and `closed` only once the
+ * connection has been down for LOST_GRACE_MS. When the server said it's restarting into an update
+ * it installed (a `restarting` message, sent just before it closes the socket), the wait is
+ * UPDATE_RETRY_FOR_MS: the update's own banner says what's happening. A drop before that, while the
+ * update still downloads and checks itself, gets the usual wait. Retries report nothing, so the
+ * lost-connection banner shows once and stays until the server is back instead of going off for
+ * every try.
  */
 export class EventsConnection {
   private ws: SocketLike | null = null;
@@ -63,6 +76,12 @@ export class EventsConnection {
   private updating = false;
   /** When the socket was dropped during an update, or 0. */
   private droppedAt = 0;
+  /** The server said it's restarting into an update, since its last state. */
+  private restarting = false;
+  /** Running from a drop until the page says the connection is lost. */
+  private lostTimer: ReturnType<typeof setTimeout> | null = null;
+  /** What onConn last reported, or null before the first. */
+  private shown: Conn | null = null;
   private stopped = false;
 
   constructor(private readonly h: EventsHandlers) {}
@@ -75,6 +94,8 @@ export class EventsConnection {
     this.stopped = true;
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = null;
+    if (this.lostTimer) clearTimeout(this.lostTimer);
+    this.lostTimer = null;
     this.drop();
   }
 
@@ -97,14 +118,13 @@ export class EventsConnection {
   private connect(): void {
     if (this.stopped) return;
     this.retryTimer = null;
-    this.h.onConn('connecting');
+    // Only the first socket says so: a retry leaves the page saying what it did.
+    if (!this.shown) this.report('connecting');
     const ws = this.h.open();
     this.ws = ws;
     this.arm(CONNECT_MS);
-    ws.onopen = () => {
-      this.h.onConn('open');
-      this.arm(STATE_MS);
-    };
+    // Not `open` yet: the server upgrades, then may refuse.
+    ws.onopen = () => this.arm(STATE_MS);
     ws.onmessage = (ev) => this.message(ev.data);
     ws.onclose = (ev) => {
       this.drop();
@@ -131,8 +151,13 @@ export class EventsConnection {
       this.attempt = 0;
       this.updating = !!msg.state.update?.applying;
       this.droppedAt = 0;
+      this.restarting = false;
+      if (this.lostTimer) clearTimeout(this.lostTimer);
+      this.lostTimer = null;
+      this.report('open');
       this.h.onState(msg.state);
-    } else if (msg.type === 'notify' || msg.type === 'invite' || msg.type === 'knowledge') this.h.onEvent(msg);
+    } else if (msg.type === 'restarting') this.restarting = true;
+    else if (msg.type === 'notify' || msg.type === 'invite' || msg.type === 'knowledge') this.h.onEvent(msg);
   }
 
   private probe(): void {
@@ -188,9 +213,21 @@ export class EventsConnection {
     }
   }
 
+  private report(c: Conn): void {
+    if (this.shown === c) return;
+    this.shown = c;
+    this.h.onConn(c);
+  }
+
   private retry(code: number | null): void {
     if (this.stopped) return;
-    this.h.onConn('closed');
+    // The first drop of an outage starts the wait before saying so; later ones leave it running.
+    if (!this.lostTimer && this.shown !== 'closed') {
+      this.lostTimer = setTimeout(() => {
+        this.lostTimer = null;
+        this.report('closed');
+      }, this.restarting ? UPDATE_RETRY_FOR_MS : LOST_GRACE_MS);
+    }
     if (this.updating) this.droppedAt ||= Date.now();
     const delay = this.updating && Date.now() - this.droppedAt < UPDATE_RETRY_FOR_MS
       ? UPDATE_RETRY_MS
@@ -198,8 +235,11 @@ export class EventsConnection {
     const later = () => {
       if (!this.stopped && !this.ws) this.retryTimer = setTimeout(() => this.connect(), delay);
     };
-    // Logged out, password changed or login expired: the 401 handler shows the login screen.
-    if (code === this.h.unauthorized) void this.h.checkLogin().then((ok) => ok && later());
-    else later();
+    // Signed out, or the sign-in expired: checkSignIn goes to Meko's sign-in screen.
+    if (code !== null && this.h.unauthorized.includes(code)) void this.h.checkSignIn().then((ok) => ok && later());
+    else {
+      if (code === WS_ABNORMAL) void this.h.checkSignIn();
+      later();
+    }
   }
 }

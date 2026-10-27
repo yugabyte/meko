@@ -1,0 +1,449 @@
+package server
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"slices"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/labstack/echo/v4"
+
+	"github.com/yugabyte/meko/backend/internal/config"
+	"github.com/yugabyte/meko/backend/internal/envelope"
+	"github.com/yugabyte/meko/backend/internal/extensions"
+	"github.com/yugabyte/meko/backend/internal/extproxy"
+	"github.com/yugabyte/meko/backend/internal/login"
+)
+
+// Web makes a Server the web listener: the port browsers use, for Meko's web UI and its extensions'
+// at /ext/<name>/. It takes no Bearer token: with local access a request from this computer needs
+// nothing (LocalAccess), and otherwise it needs the owner's session cookie.
+type Web struct {
+	Access string // config.AccessLocal or config.AccessRemote
+	// Extensions are the extensions served at /ext/<name>/, read at each request.
+	Extensions func() []*extproxy.Proxy
+	// Installed names the registered extensions (extensions.json), read at each request; nil means
+	// the ones in Extensions.
+	Installed func() []string
+	// Run, if set, runs an action on a known extension for the Extensions page (install, update,
+	// start or stop), writing its output to out, and returns when it's done or ctx is (Jobs.Cancel).
+	Run func(ctx context.Context, name, action string, out io.Writer) error
+	// Release, if set, is an installed extension's release version Meko manages, and whether Meko
+	// can update it ("", false for one that updates itself or a build from source).
+	Release func(name string) (version string, updatable bool)
+	// Jobs are the actions Run runs, kept across the servers the listener's owner builds; nil gives
+	// this server its own.
+	Jobs *ExtensionJobs
+	// Updates are Meko's own updates, for the Status page; nil for a build from source.
+	Updates Updates
+}
+
+// The actions the Extensions page runs on an extension (POST /api/v1/extensions/:name/:action).
+var extensionActions = []string{"install", "update", "start", "stop"}
+
+func (s *Server) proxy(name string) *extproxy.Proxy {
+	for _, p := range s.opts.Web.Extensions() {
+		if p.Name == name {
+			return p
+		}
+	}
+	return nil
+}
+
+// SessionCookie is the browser's session on the web listener.
+const SessionCookie = "meko_session"
+
+// The web listener's sign-in routes. status, setup and login take no credential (logout clears
+// whatever cookie it gets); the rest need the owner signed in, or local access.
+const (
+	authStatusRoute = "/api/v1/auth/status"
+	authSetupRoute  = "/api/v1/auth/setup"
+	authLoginRoute  = "/api/v1/auth/login"
+	authLogoutRoute = "/api/v1/auth/logout"
+	// setupLinkRoute is the API listener's, for meko setup_link, with the admin token.
+	setupLinkRoute = "/api/v1/auth/setup-link"
+	extRootRoute   = "/ext/:name"
+	extRoute       = "/ext/:name/*"
+)
+
+const sessionHashKey = "meko.session" //nolint:gosec // G101: a context key, not a secret
+
+func (s *Server) registerWeb(v1 *echo.Group) {
+	v1.GET("/auth/status", s.authStatus)
+	v1.POST("/auth/setup", s.authSetup)
+	v1.POST("/auth/login", s.authLogin)
+	v1.POST("/auth/logout", s.authLogout)
+	v1.POST("/auth/password", s.authPassword)
+	v1.POST("/auth/totp/enroll", s.totpEnroll)
+	v1.POST("/auth/totp/confirm", s.totpConfirm)
+	v1.POST("/auth/totp/disable", s.totpDisable)
+	v1.GET("/extensions", s.extensionList)
+	v1.POST("/extensions/:name/:action", s.extensionAction)
+	v1.GET("/update", s.updateStatus)
+	v1.POST("/update/check", s.updateCheck)
+	v1.POST("/update/apply", s.updateApply)
+	s.registerCloud(v1)
+	s.e.Any(extRootRoute, s.extensionRoot)
+	s.e.Any(extRoute, s.extension)
+}
+
+// requireBrowser is the web listener's credential check, keyed on the matched route as
+// requireToken is: local access, else the session cookie.
+func (s *Server) requireBrowser(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		switch c.Path() {
+		case "/healthz", authStatusRoute, authSetupRoute, authLoginRoute, authLogoutRoute, uiRoute, extRootRoute:
+			return next(c)
+		case uploadRoute, downloadRoute:
+			c.Set(credentialKey, CredentialTicket)
+			return next(c)
+		}
+		if s.local(c) {
+			c.Set(credentialKey, CredentialLocal)
+			return next(c)
+		}
+		if hash, ok := s.session(c); ok {
+			c.Set(credentialKey, CredentialSession)
+			c.Set(sessionHashKey, hash)
+			return next(c)
+		}
+		r := c.Request()
+		if c.Path() == extRoute && r.Method == http.MethodGet && strings.Contains(r.Header.Get("Accept"), "text/html") {
+			return c.Redirect(http.StatusFound, "/signin?next="+url.QueryEscape(r.URL.RequestURI()))
+		}
+		return envelope.Fail(c, http.StatusUnauthorized, "UNAUTHORIZED", "Sign in first: open Meko's web UI on this port.")
+	}
+}
+
+func (s *Server) local(c echo.Context) bool {
+	return s.opts.Web.Access == config.AccessLocal && LocalAccess(c.Request())
+}
+
+// session checks the cookie, renewing it as its expiry slides forward.
+func (s *Server) session(c echo.Context) (string, bool) {
+	ck, err := c.Cookie(SessionCookie)
+	if err != nil || ck.Value == "" || s.opts.Login == nil {
+		return "", false
+	}
+	ok, renewed, err := s.opts.Login.Session(c.Request().Context(), ck.Value)
+	if err != nil || !ok {
+		return "", false
+	}
+	if renewed {
+		s.setSessionCookie(c, ck.Value)
+	}
+	return login.Hash(ck.Value), true
+}
+
+// setSessionCookie sends the session's cookie. It's Secure over HTTPS, which remote access always
+// is; local access is plain HTTP on 127.0.0.1, where some browsers (Safari) drop a Secure cookie.
+func (s *Server) setSessionCookie(c echo.Context, token string) {
+	//nolint:gosec // G124: Secure follows TLS, as above
+	c.SetCookie(&http.Cookie{Name: SessionCookie, Value: token, Path: "/", HttpOnly: true,
+		Secure: c.Request().TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: int(login.SessionTTL / time.Second)})
+}
+
+// peerIP is the connection's address, which a header can't change: failed sign-ins are counted by it.
+func peerIP(c echo.Context) string {
+	host, _, err := net.SplitHostPort(c.Request().RemoteAddr)
+	if err != nil {
+		return c.Request().RemoteAddr
+	}
+	return host
+}
+
+// AuthStatus is GET /api/v1/auth/status: how this browser stands with the web listener.
+type AuthStatus struct {
+	Access        string  `json:"access"`       // local or remote
+	LocalAccess   bool    `json:"local_access"` // this request needs no login
+	SignedIn      bool    `json:"signed_in"`
+	SetupRequired bool    `json:"setup_required"` // a login must be made (or remade) with a setup link
+	Reset         bool    `json:"reset"`          // the setup link replaces an existing login
+	Username      *string `json:"username"`
+	TOTPEnabled   bool    `json:"totp_enabled"`
+}
+
+func (s *Server) authStatus(c echo.Context) error {
+	ctx := c.Request().Context()
+	o, err := s.opts.Login.Owner(ctx)
+	if err != nil {
+		return err
+	}
+	local := s.local(c)
+	_, signed := s.session(c)
+	signedIn := local || signed
+	st := AuthStatus{Access: s.opts.Web.Access, LocalAccess: local, SignedIn: signedIn,
+		SetupRequired: !local && (o == nil || (s.opts.Login.SetupOutstanding(ctx) && !signedIn)),
+		TOTPEnabled:   o != nil && o.TOTPSecret != ""}
+	st.Reset = st.SetupRequired && o != nil
+	if o != nil && signedIn {
+		st.Username = &o.Username
+	}
+	return envelope.OK(c, st)
+}
+
+type credentials struct {
+	Token    string `json:"token"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	TOTP     string `json:"totp"`
+	Current  string `json:"current"`
+	Next     string `json:"next"`
+	Code     string `json:"code"`
+}
+
+func bindCredentials(c echo.Context) (credentials, error) {
+	var b credentials
+	if err := c.Bind(&b); err != nil {
+		return b, envelope.Fail(c, http.StatusBadRequest, "VALIDATION_ERROR", "Send a JSON body.")
+	}
+	return b, nil
+}
+
+func (s *Server) authSetup(c echo.Context) error {
+	b, err := bindCredentials(c)
+	if err != nil {
+		return err
+	}
+	token, err := s.opts.Login.Setup(c.Request().Context(), b.Token, b.Username, b.Password, peerIP(c),
+		c.Request().UserAgent())
+	if err != nil {
+		return loginError(c, err)
+	}
+	s.setSessionCookie(c, token)
+	return envelope.OK(c, map[string]bool{"signed_in": true})
+}
+
+func (s *Server) authLogin(c echo.Context) error {
+	b, err := bindCredentials(c)
+	if err != nil {
+		return err
+	}
+	token, err := s.opts.Login.Login(c.Request().Context(), b.Username, b.Password, b.TOTP, peerIP(c),
+		c.Request().UserAgent())
+	if err != nil {
+		return loginError(c, err)
+	}
+	s.setSessionCookie(c, token)
+	return envelope.OK(c, map[string]bool{"signed_in": true})
+}
+
+func (s *Server) authLogout(c echo.Context) error {
+	if ck, err := c.Cookie(SessionCookie); err == nil {
+		if err := s.opts.Login.Logout(c.Request().Context(), ck.Value); err != nil {
+			return err
+		}
+	}
+	//nolint:gosec // G124: Secure follows TLS, as in setSessionCookie
+	c.SetCookie(&http.Cookie{Name: SessionCookie, Value: "", Path: "/", HttpOnly: true,
+		Secure: c.Request().TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: -1})
+	return envelope.OK(c, map[string]bool{"signed_in": false})
+}
+
+func (s *Server) authPassword(c echo.Context) error {
+	b, err := bindCredentials(c)
+	if err != nil {
+		return err
+	}
+	keep := ""
+	if ck, err := c.Cookie(SessionCookie); err == nil {
+		keep = ck.Value
+	}
+	if err := s.opts.Login.ChangePassword(c.Request().Context(), b.Current, b.Next, keep, peerIP(c)); err != nil {
+		return loginError(c, err)
+	}
+	return envelope.OK(c, map[string]bool{"changed": true})
+}
+
+func (s *Server) totpEnroll(c echo.Context) error {
+	secret, link, err := s.opts.Login.EnrollTOTP(c.Request().Context())
+	if err != nil {
+		return loginError(c, err)
+	}
+	return envelope.OK(c, map[string]string{"secret": secret, "otpauth_url": link})
+}
+
+func (s *Server) totpConfirm(c echo.Context) error {
+	b, err := bindCredentials(c)
+	if err != nil {
+		return err
+	}
+	if err := s.opts.Login.ConfirmTOTP(c.Request().Context(), b.Code); err != nil {
+		return loginError(c, err)
+	}
+	return envelope.OK(c, map[string]bool{"totp_enabled": true})
+}
+
+func (s *Server) totpDisable(c echo.Context) error {
+	b, err := bindCredentials(c)
+	if err != nil {
+		return err
+	}
+	if err := s.opts.Login.DisableTOTP(c.Request().Context(), b.Code); err != nil {
+		return loginError(c, err)
+	}
+	return envelope.OK(c, map[string]bool{"totp_enabled": false})
+}
+
+// loginError turns the sign-in's errors into replies; others are internal.
+func loginError(c echo.Context, err error) error {
+	var check login.CheckError
+	switch {
+	case errors.As(err, &check):
+		return envelope.Fail(c, http.StatusBadRequest, "VALIDATION_ERROR", check.Error())
+	case errors.Is(err, login.ErrBadLogin):
+		return envelope.Fail(c, http.StatusUnauthorized, "BAD_LOGIN", "Wrong username or password.")
+	case errors.Is(err, login.ErrTOTPRequired):
+		return envelope.Fail(c, http.StatusUnauthorized, "TOTP_REQUIRED", "Enter the code from your authenticator app.")
+	case errors.Is(err, login.ErrBadTOTP) && c.Path() == authLoginRoute:
+		return envelope.Fail(c, http.StatusUnauthorized, "TOTP_REQUIRED", "That code is wrong or expired.")
+	case errors.Is(err, login.ErrBadTOTP):
+		return envelope.Fail(c, http.StatusBadRequest, "VALIDATION_ERROR",
+			"That code doesn't match. Check the time on your phone and try again.")
+	case errors.Is(err, login.ErrBusy):
+		return envelope.Fail(c, http.StatusTooManyRequests, "RATE_LIMITED",
+			"Too many sign-ins at once. Try again in a moment.")
+	case errors.Is(err, login.ErrRateLimited):
+		return envelope.Fail(c, http.StatusTooManyRequests, "RATE_LIMITED",
+			"Too many failed attempts. Try again in 15 minutes.")
+	case errors.Is(err, login.ErrBadSetupLink):
+		return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN",
+			"This setup link is invalid or already used. Run meko setup_link on the host for a new one.")
+	case errors.Is(err, login.ErrBadPassword):
+		return envelope.Fail(c, http.StatusBadRequest, "VALIDATION_ERROR", "The current password is wrong.")
+	case errors.Is(err, login.ErrNoOwner):
+		return envelope.Fail(c, http.StatusConflict, "CONFLICT",
+			"No login is set up. Run meko setup_link on the host to make one.")
+	}
+	return err
+}
+
+// ExtensionInfo is a row of GET /api/v1/extensions: a known extension, whether it's installed
+// (registered in extensions.json), where its web UI is and whether that answers, and its last job.
+type ExtensionInfo struct {
+	Name        string        `json:"name"`
+	Title       string        `json:"title"`
+	Description string        `json:"description"`
+	Installed   bool          `json:"installed"`
+	WebUI       bool          `json:"web_ui"`
+	Path        string        `json:"path"`              // "" while it isn't served
+	Available   bool          `json:"available"`         // its socket is there to connect to
+	Version     string        `json:"version,omitempty"` // the release Meko installed, when it manages it
+	Updatable   bool          `json:"updatable"`         // Meko can update it (the update action)
+	Job         *ExtensionJob `json:"job,omitempty"`
+}
+
+func (s *Server) installed() map[string]bool {
+	out := map[string]bool{}
+	if s.opts.Web.Installed == nil {
+		for _, p := range s.opts.Web.Extensions() {
+			out[p.Name] = true
+		}
+		return out
+	}
+	for _, n := range s.opts.Web.Installed() {
+		out[n] = true
+	}
+	return out
+}
+
+func (s *Server) extensionInfo(name string, installed bool) ExtensionInfo {
+	cat := extensions.Known[name]
+	row := ExtensionInfo{Name: name, Title: cat.Title, Description: cat.Description, Installed: installed,
+		WebUI: cat.WebUI, Job: s.opts.Web.Jobs.get(name)}
+	if p := s.proxy(name); p != nil {
+		row.Path, row.Available = p.Path(), p.Available()
+	}
+	if installed && s.opts.Web.Release != nil {
+		row.Version, row.Updatable = s.opts.Web.Release(name)
+	}
+	return row
+}
+
+func (s *Server) extensionList(c echo.Context) error {
+	installed := s.installed()
+	names := make([]string, 0, len(extensions.Known))
+	for n := range extensions.Known {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	out := make([]ExtensionInfo, 0, len(names))
+	for _, n := range names {
+		out = append(out, s.extensionInfo(n, installed[n]))
+	}
+	return envelope.OK(c, out)
+}
+
+// extensionAction is POST /api/v1/extensions/:name/:action: it starts the action as the extension's
+// job and answers 202 with its row; the page follows the job in the list.
+func (s *Server) extensionAction(c echo.Context) error {
+	name, action := c.Param("name"), c.Param("action")
+	cat, known := extensions.Known[name]
+	if !known || s.opts.Web.Run == nil || !slices.Contains(extensionActions, action) {
+		return echo.ErrNotFound
+	}
+	installed := s.installed()[name]
+	if action != "install" && !installed {
+		return envelope.Fail(c, http.StatusConflict, "CONFLICT", cat.Title+" isn't installed.")
+	}
+	jobs := s.opts.Web.Jobs
+	j, ok := jobs.start(name, action)
+	if !ok {
+		return envelope.Fail(c, http.StatusConflict, "CONFLICT",
+			fmt.Sprintf("%s is busy: its %s hasn't finished.", cat.Title, j.snapshot().Action))
+	}
+	s.opts.Logger.Info("extension action", "extension", name, "action", action)
+	go func() {
+		// Not the request's context: the job outlives the request that started it, and this server.
+		err := s.opts.Web.Run(jobs.run(), name, action, j)
+		jobs.done(j, err)
+		if err != nil {
+			s.opts.Logger.Warn("extension action failed", "extension", name, "action", action, "error", err)
+		} else {
+			s.opts.Logger.Info("extension action done", "extension", name, "action", action)
+		}
+	}()
+	return c.JSON(http.StatusAccepted, envelope.Response{Data: s.extensionInfo(name, installed)})
+}
+
+func (s *Server) extensionRoot(c echo.Context) error {
+	if s.proxy(c.Param("name")) == nil {
+		return echo.ErrNotFound
+	}
+	extproxy.RedirectToSlash(c.Response(), c.Request())
+	return nil
+}
+
+func (s *Server) extension(c echo.Context) error {
+	p := s.proxy(c.Param("name"))
+	if p == nil {
+		return echo.ErrNotFound
+	}
+	r := c.Request()
+	if hash, _ := c.Get(sessionHashKey).(string); hash != "" {
+		r = extproxy.WithSession(r, hash)
+	}
+	p.ServeHTTP(c.Response(), r)
+	return nil
+}
+
+// issueSetupLink is POST /api/v1/auth/setup-link on the API listener, for meko setup_link.
+func (s *Server) issueSetupLink(c echo.Context) error {
+	token, err := s.opts.Login.IssueSetupLink(c.Request().Context())
+	if err != nil {
+		return err
+	}
+	link := ""
+	if s.opts.WebURL != nil {
+		link = s.opts.WebURL() + "/setup?token=" + token
+	}
+	return envelope.OK(c, map[string]any{"token": token, "url": link,
+		"expires_in": int(login.SetupLinkTTL / time.Second)})
+}

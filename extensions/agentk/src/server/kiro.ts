@@ -146,14 +146,23 @@ export interface KiroHook {
 /** AgentK's hooks for each Kiro event, added after the base agent's own. */
 export type KiroHooks = Partial<Record<'agentSpawn' | 'userPromptSubmit' | 'preToolUse' | 'postToolUse' | 'stop', KiroHook[]>>;
 
+/** AgentK's session tools in the `agentk` agent: their MCP server and their skill. */
+export interface KiroTools {
+  name: string;
+  server: Json;
+  skill: string;
+}
+
 /**
  * The agent Kiro sessions run as: the user's default agent (`base`, which is Meko's `meko-default`
  * when Meko's setup for Kiro ran, so its MCP server and capture hooks carry over) with AgentK's hooks
- * added to each event's list, its own kept first. Kiro's upgrade bookkeeping is left out. It grants
- * nothing the base doesn't: `[kiro] trust_tools` is a flag on AgentK's launch (kiroArgs), so a chat
- * someone starts as `agentk` outside AgentK asks as their own agent would.
+ * added to each event's list, its own kept first, and AgentK's session tools (`tools`: their MCP
+ * server, their skill as a `skill://` resource, and their read-only `list` allowed). Kiro's upgrade
+ * bookkeeping is left out. It grants nothing else the base doesn't: `[kiro] trust_tools` is a flag
+ * on AgentK's launch (kiroArgs), so a chat someone starts as `agentk` outside AgentK asks as their
+ * own agent would (and the tools there say it isn't an AgentK session).
  */
-export function agentkAgent(base: Json, hooks: KiroHooks, o: { mekoCapture?: boolean } = {}): Json {
+export function agentkAgent(base: Json, hooks: KiroHooks, o: { mekoCapture?: boolean; tools?: KiroTools | null } = {}): Json {
   const { kiroUpgrade: _upgrade, ...rest } = base;
   void _upgrade;
   const merged: Record<string, unknown[]> = {};
@@ -164,7 +173,14 @@ export function agentkAgent(base: Json, hooks: KiroHooks, o: { mekoCapture?: boo
   for (const [event, list] of Object.entries(own)) if (Array.isArray(list)) merged[event] = list.filter(keep);
   for (const [event, list] of Object.entries(hooks)) merged[event] = [...(merged[event] ?? []), ...(list ?? [])];
   const from = typeof base.name === 'string' ? ` Based on ${base.name}.` : '';
-  return { ...rest, name: AGENTK_AGENT, description: `${MARK}${from}`, hooks: merged };
+  const agent: Json = { ...rest, name: AGENTK_AGENT, description: `${MARK}${from}`, hooks: merged };
+  const t = o.tools;
+  if (t) {
+    const list = (v: unknown) => (Array.isArray(v) ? v : []);
+    agent.mcpServers = { ...(isObject(base.mcpServers) ? base.mcpServers : {}), [t.name]: t.server };
+    agent.resources = [...list(base.resources), `skill://${t.skill}`];
+  }
+  return agent;
 }
 
 /** Meko's hook handler for Kiro (its `meko-default` agent's hooks run it). */
@@ -213,6 +229,11 @@ export function removeKiroAgent(home = kiroHome()): void {
 /** Kiro's file for one of its sessions (`<session id>.json`, beside its `.jsonl` history). */
 export function kiroSessionFile(id: string, home = kiroHome()): string {
   return join(home, 'sessions', 'cli', `${id}.json`);
+}
+
+/** Its session log beside it: each prompt, reply and tool result as a line (`parseKiroMekoCalls`). */
+export function kiroSessionLog(id: string, home = kiroHome()): string {
+  return join(home, 'sessions', 'cli', `${id}.jsonl`);
 }
 
 const SESSION_ID = /^[\w-]{1,100}$/;
@@ -297,6 +318,82 @@ export function parseKiroTurns(text: string): KiroTurn[] {
   return out;
 }
 
+/** A Meko call of a Kiro session with its result, from its session log (`<conversation>.jsonl`). */
+export interface KiroMekoCall {
+  /** Kiro's tool use id. */
+  id: string;
+  /** The Meko tool (`context_search`). */
+  tool: string;
+  /** When its turn started (its prompt), or when AgentK read it when the read didn't see the prompt. */
+  at: number;
+  input: Json;
+  text: string;
+  isError: boolean;
+}
+
+/** The text of an MCP reply's content items (`[{ type: 'text', text }]`). */
+function mcpText(content: unknown): string {
+  return Array.isArray(content) ? content.map((c) => (isObject(c) && c.type === 'text' && typeof c.text === 'string' ? c.text : '')).join('') : '';
+}
+
+/**
+ * The Meko calls whose results are in a Kiro session log's whole lines, checked against kiro-cli
+ * 2.34.0. Only a `ToolResults` line names a call's MCP server (`data.results[<id>].tool.kind.Mcp`),
+ * so a call is taken from there, from a server whose name starts with `meko`, with its reply from
+ * the line's `toolResult` content. Only `Prompt` lines carry a time (`data.meta.timestamp`, in
+ * seconds), so a call is dated by its turn's prompt, or `now` when the text read didn't hold it.
+ * A line it doesn't know is skipped.
+ */
+export function parseKiroMekoCalls(text: string, now: number): KiroMekoCall[] {
+  const out: KiroMekoCall[] = [];
+  let turnAt: number | null = null;
+  for (const line of text.split('\n')) {
+    const prompt = line.includes('"kind":"Prompt"');
+    if (!prompt && !(line.includes('"kind":"ToolResults"') && /"serverName":"meko/i.test(line))) continue;
+    let d: unknown;
+    try {
+      d = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isObject(d) || !isObject(d.data)) continue;
+    if (d.kind === 'Prompt') {
+      const ts = isObject(d.data.meta) ? d.data.meta.timestamp : null;
+      if (typeof ts === 'number' && Number.isFinite(ts) && ts > 0) turnAt = ts * 1000;
+      continue;
+    }
+    if (d.kind !== 'ToolResults' || !isObject(d.data.results)) continue;
+    const replies = new Map<string, { text: string; isError: boolean }>();
+    for (const c of Array.isArray(d.data.content) ? d.data.content : []) {
+      if (!isObject(c) || c.kind !== 'toolResult' || !isObject(c.data) || typeof c.data.toolUseId !== 'string') continue;
+      // An MCP reply is a `json` part; Kiro's own message (a refused call's) is a `text` part.
+      const parts = Array.isArray(c.data.content) ? c.data.content : [];
+      const json = parts.find((x): x is Json => isObject(x) && isObject(x.data));
+      const plain = parts.map((x) => (isObject(x) && x.kind === 'text' && typeof x.data === 'string' ? x.data : '')).join('');
+      replies.set(c.data.toolUseId, {
+        text: json ? mcpText((json.data as Json).content) : plain,
+        isError: c.data.status !== 'success' || (!!json && (json.data as Json).isError === true),
+      });
+    }
+    for (const [id, r] of Object.entries(d.data.results)) {
+      const mcp = isObject(r) && isObject(r.tool) && isObject(r.tool.kind) && isObject(r.tool.kind.Mcp) ? r.tool.kind.Mcp : null;
+      if (!mcp || typeof mcp.serverName !== 'string' || !/^meko/i.test(mcp.serverName) || typeof mcp.toolName !== 'string') continue;
+      if (!/^[a-z_]+$/.test(mcp.toolName) || !id || id.length > 200) continue;
+      const result = isObject(r) && isObject(r.result) ? r.result : {};
+      const success = isObject(result.Success) ? result.Success : null;
+      const items = success && Array.isArray(success.items) ? success.items : [];
+      const first = items.find((x): x is Json => isObject(x) && isObject(x.Json));
+      const reply = replies.get(id) ?? {
+        text: first ? mcpText((first.Json as Json).content) : typeof result.Error === 'string' ? result.Error : '',
+        isError: !success || (!!first && (first.Json as Json).isError === true),
+      };
+      const { __tool_use_purpose: _purpose, ...input } = isObject(mcp.params) ? mcp.params : {};
+      out.push({ id, tool: mcp.toolName, at: turnAt ?? now, input, ...reply });
+    }
+  }
+  return out;
+}
+
 /** The finished turns of a Kiro session, from its session file. */
 export function kiroTurns(id: string, home = kiroHome()): KiroTurn[] {
   try {
@@ -343,6 +440,29 @@ export function kiroUsageArgs(): string[] {
   return ['chat', '--no-interactive', '--output-format', 'stream-json', '--agent', USAGE_AGENT, '/usage'];
 }
 
+/**
+ * Points the sessions in Kiro's store that ran in a folder `map` moves at its new path (their
+ * `cwd`, which `findKiroSession` and `kiroSessionsIn` match on). Returns how many it changed.
+ */
+export function moveKiroSessions(map: (dir: string) => string | null, home = kiroHome()): number {
+  const dir = join(home, 'sessions', 'cli');
+  let files: string[];
+  try {
+    files = readdirSync(dir).filter((f) => f.endsWith('.json'));
+  } catch {
+    return 0;
+  }
+  let n = 0;
+  for (const f of files) {
+    const s = readJson(join(dir, f));
+    const to = s && typeof s.cwd === 'string' ? map(s.cwd) : null;
+    if (!s || !to) continue;
+    writeAtomic(join(dir, f), JSON.stringify({ ...s, cwd: to }));
+    n++;
+  }
+  return n;
+}
+
 /** The ids of the sessions in Kiro's store that ran in one of `cwds` (any of its spellings). */
 export function kiroSessionsIn(cwds: string[], home = kiroHome()): string[] {
   const dir = join(home, 'sessions', 'cli');
@@ -373,8 +493,10 @@ const DAY = /\b(\d{4}-\d{2}-\d{2})\b/;
  *     Estimated Usage | resets on 2026-11-01 | KIRO FREE
  *     Credits (36.02 of 50 covered in plan), 72.0%
  *
- * Null without the credits line. Paid plans' bonus and overage lines haven't been seen, so they're
- * matched loosely (a `bonus` line with two numbers, an `overage` line), each left null when absent.
+ * Null without the credits line. The overage line's only seen form is `Overages: Disabled`
+ * (kiro-cli 2.34.0, Power plan); its credit-bearing form and the bonus line haven't been seen, so
+ * all three are matched loosely (a `bonus` line with two numbers, an `overage` line), each left
+ * null when absent.
  */
 export function parseKiroPlan(text: string, now: number): KiroPlan | null {
   // eslint-disable-next-line no-control-regex

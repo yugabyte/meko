@@ -2,12 +2,13 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { tempDir } from '../helpers.js';
 import {
-  MekoSetupError, claudeHasMekoMcpAsync, claudeMekoTokens, ensureMekoSetup, envKeyGap, latestMekoSetup, matchesIntegrity, mekoClaudeGaps, mekoKeyForConfig, readClaudeMeko, runMekoSetup,
-  sameMekoUrl, type MekoSetupPackage,
+  MekoSetupError, claudeHasMekoMcpAsync, claudeMekoTokens, ensureMekoSetup, envKeyGap, latestMekoSetup, manualMekoSetup, matchesIntegrity, mekoClaudeGaps, readClaudeMeko,
+  runMekoSetup, sameMekoUrl, type MekoSetupPackage,
 } from '../../src/server/mekosetup.js';
+import { defaultMekoTools } from '../../src/server/mekosettings.js';
 
 let dir: string;
 beforeEach(() => {
@@ -170,6 +171,19 @@ describe('Meko in Claude Code: what is missing', () => {
   });
 });
 
+describe('the command to set up Meko by hand', () => {
+  it("reads the local Meko's token in the user's shell, from the Meko AgentK uses, and keeps any other server's key off it", () => {
+    expect(manualMekoSetup('http://127.0.0.1:7778/mcp', 'claude-code', { home: null })).toBe(
+      'npx @yugabytedb/meko-mcp --client claude-code --url http://127.0.0.1:7778/mcp --api-key "$(meko token)"',
+    );
+    expect(manualMekoSetup('http://127.0.0.1:7778/mcp', 'kiro', { home: "/data/it's meko" })).toBe(
+      `npx @yugabytedb/meko-mcp --client kiro --url http://127.0.0.1:7778/mcp --api-key "$(MEKO_HOME='/data/it'\\''s meko' meko token)"`,
+    );
+    // Another server on this computer isn't the local Meko: its token goes nowhere else.
+    expect(manualMekoSetup('http://127.0.0.1:8080/mcp', 'claude-code', null)).toBe('npx @yugabytedb/meko-mcp --client claude-code --url http://127.0.0.1:8080/mcp');
+  });
+});
+
 describe('the install step for Meko in Claude Code', () => {
   const PKG = { version: '9.9.9', tarball: 't', integrity: 'i' };
   /** Runs the step with stand-ins; `after` are the gaps once the setup has run. */
@@ -230,26 +244,17 @@ describe('the install step for Meko in Claude Code', () => {
     expect(unattended.calls).toContain("say     Running Meko's setup (@yugabytedb/meko-mcp 9.9.9 from npm)");
   });
 
+  it("names the local Meko's token in the command to run by hand", async () => {
+    const step = ensureMekoSetup(
+      { url: 'http://127.0.0.1:7778/mcp', apiKey: 'k', canAsk: false, installDeps: false, noInstallDeps: true, local: { home: '/home/u/.meko' } },
+      { gaps: async () => ['x'], latest: async () => PKG, run: async () => 0, ask: async () => 'y', say: () => undefined, warn: () => undefined },
+    );
+    await expect(step).rejects.toThrow('--url http://127.0.0.1:7778/mcp --api-key "$(MEKO_HOME=/home/u/.meko meko token)"');
+  });
+
   it('fails when the setup exits non-zero or leaves something missing', async () => {
     await expect(step({ installDeps: true }, { code: 1 }).promise).rejects.toThrow(/didn't finish/);
     await expect(step({ installDeps: true }, { after: ['Claude Code has no meko MCP server.'] }).promise).rejects.toThrow(/Still: Claude Code has no meko MCP server\./);
-  });
-});
-
-describe('where the Meko key is kept', () => {
-  const base = { url: 'https://mcp.mekodata.ai/mcp', defaultUrl: 'https://mcp.mekodata.ai/mcp', envKey: undefined, settingsUrl: undefined };
-
-  it("keeps no key in config.toml once Claude Code's settings hold it, so an old one can't shadow it", () => {
-    expect(mekoKeyForConfig({ ...base, apiKey: 'NEW', typed: true, settingsKey: 'NEW' })).toEqual({ apiKey: '', url: '' });
-    // A self-hosted URL stays with it when the settings don't name one.
-    expect(mekoKeyForConfig({ ...base, url: 'https://meko.internal/mcp', apiKey: 'K', typed: false, settingsKey: 'K' })).toEqual({ apiKey: '', url: 'https://meko.internal/mcp' });
-    expect(mekoKeyForConfig({ ...base, url: 'https://meko.internal/mcp', apiKey: 'K', typed: false, settingsKey: 'K', settingsUrl: 'https://meko.internal/mcp' })).toEqual({ apiKey: '', url: '' });
-  });
-
-  it('stores a typed key the settings and environment lack, and otherwise leaves config.toml alone', () => {
-    expect(mekoKeyForConfig({ ...base, apiKey: 'K', typed: true, settingsKey: undefined })).toEqual({ apiKey: 'K', url: '' });
-    expect(mekoKeyForConfig({ ...base, apiKey: 'K', typed: true, settingsKey: undefined, envKey: 'K' })).toBe('unchanged');
-    expect(mekoKeyForConfig({ ...base, apiKey: 'K', typed: false, settingsKey: 'OTHER' })).toBe('unchanged');
   });
 });
 
@@ -289,6 +294,27 @@ describe("Meko's setup package", () => {
     expect(ran.args).toEqual(['--client', 'claude-code', '--url', 'https://mcp.example/mcp', '--yes']);
     expect(ran.key).toBe('secret-key');
     expect(ran.args.join(' ')).not.toContain('secret-key');
+  });
+
+  it("reports a Claude Code setup that leaves the meko MCP server with no token as not finished", async () => {
+    // What the package does for the local Meko when it gets no key: the URL, and no Authorization header.
+    const { fetchImpl } = fakePackage(`const url = process.argv[process.argv.indexOf('--url') + 1];
+const d = process.env.CLAUDE_CONFIG_DIR;
+writeFileSync(d + '/settings.json', JSON.stringify({ env: { MEKO_MCP_URL: url, MEKO_API_KEY: 'mko_tkn_cloud' } }));
+writeFileSync(d + '/.claude.json', JSON.stringify({ mcpServers: { meko: { type: 'http', url } } }));`);
+    const claudeDir = join(dir, 'claude');
+    mkdirSync(claudeDir);
+    const before = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = claudeDir;
+    vi.stubGlobal('fetch', fetchImpl);
+    try {
+      const setUp = defaultMekoTools.setUpClaude('http://127.0.0.1:7778/mcp', 'local-token', () => undefined, 'claude', 'the command');
+      await expect(setUp).rejects.toThrow(/Still: .*Claude Code's meko MCP server sends no token\. Run it yourself: the command$/);
+    } finally {
+      vi.unstubAllGlobals();
+      if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = before;
+    }
   });
 
   it('refuses a download that does not match the registry integrity, and runs nothing', async () => {

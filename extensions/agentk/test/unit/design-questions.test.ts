@@ -518,8 +518,20 @@ describe('answers in the browser', () => {
       const m = await fresh();
       const a = { choice: 0, label: 'A', custom: false, text: '' };
       m.saveDrafts('s1', { answers: { pick: a }, feedback: 'Shorter.' });
-      m.revisionSent('s1');
+      m.revisionSent('s1', 1_000);
       expect(m.loadDrafts('s1')).toEqual({ answers: { pick: a }, feedback: '' });
+      // Its turn is followed on every state push, open design panel or not, and it's forgotten once over.
+      const s = (over: Partial<Session>) =>
+        ({ id: 's1', stage: 'design', desired: 'running', status: 'idle', statusDetail: null, midTurn: false, promptsHeld: 0, ...over }) as Session;
+      expect(m.revisionOf('s1')).toEqual({ at: 1_000, started: false });
+      m.settleRevisions([s({ status: 'working', midTurn: true })], 2_000);
+      expect(m.revisionOf('s1')).toEqual({ at: 1_000, started: true });
+      m.settleRevisions([s({})], 60_000);
+      expect(m.revisionOf('s1')).toBeNull();
+      // A session that's gone takes its revision with it.
+      m.revisionSent('s1', 1_000);
+      m.settleRevisions([], 2_000);
+      expect(m.revisionOf('s1')).toBeNull();
       // A change to one of AgentK's decisions holds the approvals that can't carry it.
       expect(m.changingDecisions('s1')).toBe(false);
       m.saveDrafts('s1', { answers: { pick: a, cards: { ...a, against: 'Reuse the cards' } }, feedback: '' });

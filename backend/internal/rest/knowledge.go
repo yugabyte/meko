@@ -83,6 +83,7 @@ func (a *api) uploadURL(c echo.Context) error {
 	if err != nil {
 		return knowledgeError(c, err)
 	}
+	offer.URL, offer.StatusURL = a.here(c, offer.URL), a.here(c, offer.StatusURL)
 	return envelope.OK(c, wire.UploadOfferOf(offer, false))
 }
 
@@ -313,7 +314,7 @@ func (a *api) downloadURL(c echo.Context) error {
 	if err != nil {
 		return knowledgeError(c, err)
 	}
-	return envelope.OK(c, map[string]any{"url": link, "key": key, "expires_in": 300})
+	return envelope.OK(c, map[string]any{"url": a.here(c, link), "key": key, "expires_in": 300})
 }
 
 // Tickets is the two routes the upload and download links point at, which take no token: the

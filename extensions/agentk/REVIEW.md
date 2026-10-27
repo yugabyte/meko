@@ -13,7 +13,14 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       service (systemd unit or launchd job). One-shot `claude` commands that end with their request
       (`--version`, `update`, Ask AgentK's `claude -p`) are the server's own. Code that manages the
       services goes through `src/server/service.ts`.
-- [ ] Server restarts and updates leave running sessions untouched.
+- [ ] Server restarts and updates leave running sessions untouched. The one exception is the
+      one-time move of an older home into Meko's data folder (`src/server/movehome.ts`, AGENTS.md
+      invariant 1), and nothing else may start it or end sessions the same way.
+- [ ] For a home already in a Meko data folder, `uninstall`, `start`, `stop`, `status` and
+      `_handoff` refuse a `MEKO_HOME` that names another folder (`refuseOtherMeko`, checked in
+      `main()`), so a Meko for another folder can't stop or uninstall it, or serve it and take its
+      old login. A home that hasn't moved there yet isn't
+      covered: another Meko's commands still act on it.
 - [ ] `recover()` / `reconcile()` stay idempotent: live panes are left alone, missing panes are resumed,
       and sessions still being created or launched are skipped (so Claude never starts twice).
 - [ ] Nothing respawns a live pane, and a session host error other than "no host" is never read as
@@ -52,7 +59,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] A session's agent is its harness (`Session.harness`): code that launches, reads hooks,
       answers the guard or context hooks, reads a transcript, usage or conversation id, or runs Ask
       AgentK goes through its adapter (`Harness` in `src/server/harness/types.ts`), never straight to
-      Claude Code's or Kiro's files or flags, and what only some harnesses have (the mod, Artifacts,
+      Claude Code's, OpenCode's or Kiro's files or flags, and what only some harnesses have (the mod, Artifacts,
       usage as tokens or credits, a minimum version) is read from `HARNESS_CAPS` or an optional
       adapter method, not from the harness's name (no new `harness === 'kiro'` outside the adapters;
       `docs/design/harnesses.md` lists the few that stay on purpose). Text about the process and its
@@ -62,30 +69,39 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       AgentK's variables, grants nothing the user's own agent doesn't (trust goes on AgentK's
       launch), and is removed by `uninstall`. A Kiro session reads and resumes only its own
       conversation: worktrees are pooled, and Kiro keeps earlier sessions' under the same folder.
+      Nothing is written to the user's OpenCode config: AgentK's plugin and Meko server reach only
+      AgentK's sessions, through their environment (`OPENCODE_CONFIG_CONTENT`, `OPENCODE_CONFIG`), and
+      a secret (Meko's key) goes in an owner-only file, never the session's environment. Every
+      OpenCode command AgentK runs that needs a server (the session's TUI, `run`, `session`, `auth`)
+      passes `--standalone`: OpenCode 2's shared background service has another environment, and
+      must never be started with a session's. Only `--version` and `upgrade` go without it: they're
+      one-shot commands in the server's own environment that neither start nor reach a server. A plugin folder a session
+      loaded is never written again (OpenCode reloads a plugin whose files change).
       No harness is assumed installed, Claude Code included: AgentK starts, and every feature that
       needs an agent asks the registry for an available one (`Harnesses.defaultFor`/`pick`) and
       says what to install when there's none, rather than running `claude` regardless.
 - [ ] A change to `src/server/host/` that an older host or server can't read bumps `PROTOCOL`, and the
       server still works with hosts back to `MIN_PROTOCOL` (a running host keeps its code across
-      updates). Nothing restarts the host by itself, and the program never waits on a viewer.
+      updates). Nothing restarts the host by itself (the home's one-time move aside), and the program
+      never waits on a viewer.
 - [ ] The installer never installs a tool (or runs Meko's setup) without first showing what it
       will run and asking (or `--install-deps`), verifies downloads by checksum or integrity hash
-      wherever one is published (Claude Code's installer script from claude.ai and Kiro's from
-      cli.kiro.dev publish none, so they're only fetched over HTTPS), and checks the result rather than trusting the package manager.
+      wherever one is published (Claude Code's installer script from claude.ai, OpenCode's from
+      opencode.ai and Kiro's from cli.kiro.dev publish none, so they're only fetched over HTTPS), and checks the result rather than trusting the package manager.
 - [ ] Shell commands and scripts work with macOS's BSD tools as well as GNU ones (no `mv -T`,
       `stat -c`, `sha256sum`-only, `sleep infinity`, `sed -i` without a suffix, `readlink -f`).
 
 ## 2. Security
 
-- [ ] New `/api/*` routes require login unless they're one of the three public auth routes, or the
-      request has local access (`localAccess()`: loopback bind, loopback peer, localhost `Host`,
-      no forwarding headers, not cross-site by `Sec-Fetch-Site` or `Origin`). Nothing widens local
-      access to a network bind, another `Host`, a forwarded address, or a request from another site. Access
-      checks key on the matched route, never the raw URL (the router decodes `/%61pi/`).
+- [ ] The server listens only on its unix socket and has no login of its own: Meko signs people in
+      and serves AgentK at `/ext/agentk/` (AGENTS.md invariant 3). Nothing adds a TCP listener, a
+      login, or trust in a forwarding header. Access checks key on the matched route, never the raw
+      URL (the router decodes `/%61pi/`).
 - [ ] Request bodies are type-checked before use (a wrong type is a 4xx, never a 500), and nothing
       re-adds a `text/plain` or form body parser (HTML forms must not be able to post to the API).
-- [ ] Writes and WebSocket upgrades still pass the origin check; cookies stay `HttpOnly`,
-      `SameSite=Strict`, and `Secure` under TLS.
+- [ ] Writes and WebSocket upgrades still pass the origin check. The page builds every URL of
+      AgentK's own under its base (`src/web/base.ts`), and calls Meko's routes (`/api/v1/auth/*`)
+      root-absolute.
 - [ ] Nothing from a session's worktree that its repo's author controls (settings, scripts, prompts,
       agent or MCP config) runs or is used unless `repoConfigTrusted(row)` says so (`headtrust.ts`):
       on a public repo's PR head, anyone can have written it. A PR found by its branch's name must
@@ -99,10 +115,11 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       Meko URL or key change is checked against Meko before it's saved, and a typed API URL is
       checked without the key. Remote URLs lose their credentials before they go into a datapack
       description (`withoutCredentials`).
-- [ ] Login limits hold (per address or IPv6 /64, and site-wide), and nothing sent to a browser can
-      queue in memory without limit (terminal output pauses the pty; state snapshots are skipped).
-- [ ] The hook socket stays owner-only (directory 0700, socket 0600), and events are matched by
-      per-session token.
+- [ ] Nothing sent to a browser can queue in memory without limit (terminal output pauses the pty;
+      state snapshots are skipped). A socket that closes abnormally (1006: Meko refused it or closed
+      a signed-out session's) asks Meko about the sign-in alongside its retry, throttled.
+- [ ] The web socket and the hook socket stay owner-only (directory 0700, socket 0600; bound under a
+      temporary name and renamed, `listenPrivate`), and hook events are matched by per-session token.
 - [ ] Nothing internal (hostnames, mount paths, tokens) is committed; the repo will be public.
 - [ ] Pasted images (`POST /api/sessions/:id/images`) are checked by their bytes, size-capped, and
       saved owner-only under the session's `pastes/` folder with a name the server picks; the
@@ -142,6 +159,14 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       (`checkActions()`), and the browser runs one only when the user picks it (a lone `go`
       too), through the route the UI already uses. Names, branches and PR titles in its context stay
       data in the prompt, and nothing of what's asked goes into logs or the usage report.
+- [ ] AgentK's session tools (`actions.ts`, `mcp.ts`) act only through `runActions()`, the same core
+      calls the UI's routes make, after `checkActions()`: the hook socket's `/tools` names the caller
+      by its token, refuses a PR head `repoConfigTrusted()` doesn't trust (not checked yet included)
+      and the tools turned off, never opens the caller's own PR, holds the caller's own move for its
+      turn's end, answers calls still running when the hook socket closes (`SessionTools.pause`), and
+      leaves a `tools` event on both sessions. Only read-only tools (`readOnly` in `tooldefs.ts`) are
+      pre-allowed, and never in the user's Kiro agent; `agentk mcp` checks nothing itself and loads
+      nothing of the server's.
 - [ ] Every path AgentK hands Claude (launcher arguments, `HOME`, `AK_HOOK_SOCK`, allow rules,
       file paths in prompts) goes through `claudePath()`, so a home under `/net` doesn't make
       Claude Code ask before every file or refuse the mod's socket; what AgentK stores keeps its
@@ -149,11 +174,17 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 
 ## 3. Lifecycle and GitHub
 
-- [ ] Gates (approve design, open PR, merge) are only passed by the user, never automatically. A gate
+- [ ] Gates (approve design, open PR, merge) are only passed by the user, never automatically, except
+      Open PR and merge while the user has Run to merge on (`sessions.auto_run`), which only the user (or a
+      start the user asked a session tool for, at Code) turns on, and which never approves a design. A gate
       pressed early (`sessions.queued_gate`) goes only as that press would have, shows with Cancel (honored
       until the prompt is typed or the merge requested), and is dropped (logged) when what it waited for is
       gone: a queued Open PR when Claude exits by any path (`setStatus` to exited, a relaunch), either one on
-      a move or archive, and a queued merge when a blocker appears that won't clear by itself.
+      a move or archive, and a queued merge when a blocker appears that won't clear by itself (not Run to
+      merge's, which waits and tells the user, and stops when GitHub refuses the merge). Run to merge stops
+      on an uncheck, a Cancel, a move and an interrupt where the harness reports one (Claude Code's mod,
+      OpenCode), so the user can always take the gates back, and stopping drops only the gate it queued
+      (`queued_auto`), never one the user pressed.
 - [ ] Each session kind keeps to its stages (`KIND_STAGES`): a task starts at Explore, Design or
       Code and leaves a stage only through a gate or a move by the user (`Lifecycle.move`, rules in
       `src/shared/stages.ts`), and a Review a PR stays in Reviewing PR. Code that switches on `stage`
@@ -175,7 +206,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       Prompts to one session go one at a time.
 - [ ] Merge is refused while `mergeBlockers` isn't empty; blockers are phrased for users. Only
       blockers that clear by themselves let it be queued (`MergeInfo.queueable`); any other one drops
-      a queued merge, and the user is told.
+      a queued merge, and the user is told (Run to merge's merge waits instead, and the user is told
+      once per new set of blockers only they can clear). Under Run to merge, notifications are only
+      for what needs the user and for the merge; progress AgentK handles itself goes through
+      `notifyProgress`, which skips it.
 - [ ] Cleanup never force-removes a worktree with uncommitted changes, and never deletes the
       user's main checkout or repo. Trimming idle worktrees never uses `--force`.
 - [ ] The only changes made in the user's main checkout are fast-forwarding the base branch when a
@@ -232,15 +266,30 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       idle (`session_id IS NULL`) before running git, so it can't remove one a session just claimed.
 - [ ] Meko isn't polled. A Meko failure shows as the error of the action that needed it (or a
       logged warning for background work) and never kills a running session or blocks work that
-      doesn't need Meko (a project with No datapack, sessions). Meko turned off (`MekoStatus.configured`
-      false) means no Meko calls at all. The one poll is following a knowledge-base upload's
+      doesn't need Meko (a project with No datapack, sessions). No Meko (`MekoStatus.configured`
+      false: no Meko Cloud link, and no Meko running on this computer) means no Meko calls at all; the one
+      thing done then is looking for the Meko on this computer every minute (`meko token --json`
+      in `Core.refreshMeko`, a local command with a 5 s timeout, one at a time, never a Meko
+      call, and only while there's no Meko, or no `meko` on this computer: `lookForLocalMeko`, so
+      the install banner goes once Meko is installed). Reading the local Meko again otherwise happens only on
+      events (startup, Settings open, Meko's `POST /_meko/changed`, a failed connection at most
+      every 30 s), and a change on the same server reconnects without forgetting the account's
+      invites (`mekoChanged` is for switching servers).
+- [ ] Meko owns the Meko Cloud link. AgentK has no route or UI that sets or shows a Meko key, and
+      reads its own old sources (`ownMekoKey`: `[meko]` keys, `MEKO_*`, Claude Code's settings) only
+      to hand a key to Meko once (`mekohandover.ts`, the key on stdin) or under a Meko whose `meko
+      token --json` has no `cloud`. Never a copy of the local Meko's token, and never falling back to
+      the local Meko while a key of its own hasn't reached Meko. Its `[meko]` keys in
+      `config.toml` are never cleared on handover (a rollback restores only `state.db`), and the
+      handover never holds up a start.
+      The one poll is following a knowledge-base upload's
       indexing (`KnowledgeService` in `knowledge.ts`): only after the file was posted to Meko's
       storage under the key `upload-url` gave (never for one Meko already had), every 5 s for a
       minute then every 30 s, at most 15 minutes per upload, never
-      with Meko off, stopped at an error waiting can't fix, and dropped on a Meko settings change.
+      without a Meko, stopped at an error waiting can't fix, and dropped on a Meko settings change.
       The one check that calls Meko by itself, trying Claude
-      Code's tokens (`mekoclaude.ts`), runs only on events (startup, config change, Settings open,
-      session launch, after Claude Code's setup, Claude Code becoming available or not after a
+      Code's tokens (`mekoclaude.ts`), runs only on events (startup, config change, a change of the
+      Meko on this computer, Settings open, session launch, after Claude Code's setup, Claude Code becoming available or not after a
       version read), only while Claude Code is available, in the background, only for a token that isn't
       AgentK's own, and reuses results for 10 minutes; one it couldn't check never raises the banner.
 - [ ] A new place AgentK calls Meko for a session wraps the call in `withMekoScope(session)`, so the
@@ -250,6 +299,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       start, closing the project). Writing it never fails the call. Claude's calls reach it only
       from the mod's `/mod/meko` end, never change what Claude gets back, and a reply read from a
       file Claude Code saved comes only from the transcript's own session's `tool-results` folder.
+      Kiro's and OpenCode's reach it only from the usage read of their own files, once per call
+      (when its `meko_calls` row is new).
 - [ ] The learn step (`learn.ts`) writes only to the session's dedicated datapack, never a shared
       one, and on the mod path never a fact that names this machine (home, AgentK's home,
       worktree, repo path, by the stored spelling and by `claudePath()`'s); the typed path relies
@@ -262,8 +313,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       per session. Its model calls' usage is
       recorded (`usage_messages`, agent `agentk:learn`), and the usage report carries counts and
       tokens only, never a fact's text.
-- [ ] What Meko doesn't know (`mekogaps.ts`) only reads what the transcript reader and recall at
-      start recorded: no Meko call lists or judges it. Teach Meko is the one write: what the user
+- [ ] What Meko doesn't know (`mekogaps.ts`) only reads what the usage readers (Claude's
+      transcript reader, Kiro's session log reader `ingestKiroMekoCalls`, OpenCode's plugin lines
+      in `ingestOpenCodeUsage`) and recall at start recorded: no Meko call lists or judges it. Teach Meko is the one write: what the user
       typed, into the project's dedicated datapack only, as AgentK in the project's conversation,
       and a question is marked taught only once Meko took it. A learn step marks only questions
       still open when it writes, offered from Claude's own searches (never one asked only by
@@ -280,7 +332,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       there's no result or no server, and there's no search with Meko off or no datapacks. What it
       gives Claude stays short (capped items and total).
 - [ ] Tests don't touch the real `~/.claude.json`, Meko, or GitHub. Meko's REST API goes through
-      `fakeMekoApi()` in `test/helpers.ts`, and the Meko tab's checks through `stubMekoTools()`.
+      `fakeMekoApi()` in `test/helpers.ts`, Meko's setup for the agents through `stubMekoTools()`, and the key handover through `makeEnv`'s `mekoHandOver` stub (`handOvers`).
 - [ ] Share invites: a project opened from an invite accepts it in Meko before writing anything
       locally, the first invite sync doesn't notify about shares that already existed, and each
       share notifies once (one joined here by its share link gets no notification or banner). While Meko's API URL isn't
@@ -324,6 +376,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       docs are a major finding. Screenshots in `docs/screenshots/` are retaken separately, not
       with every UI change, so don't flag a change for leaving them out of date.
 - [ ] The PR title (the squash-merge commit subject) passes the repo root's `scripts/check-title.sh`, its component
-      names where the change is (`agentk` for AgentK, `repo` for root-only changes), and its type
+      names where the change is (`agentk` for AgentK, `repo` for root-only changes, a list such as
+      `agentk,meko` only when the change ships in each, since it releases each), and its type
       fits the whole change: `feat`/`fix`/`perf`/`deps` ship a release, `ci`/`test`/`docs`/`nit`/
-      `chore` don't. Comment-only changes are `nit`. The `PR title` workflow checks the format, not the type or which component fits. There's no agent attribution.
+      `chore` don't. Comment-only changes are `nit`. The `PR title` workflow checks the format, not the type or which component fits.

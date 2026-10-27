@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,12 +12,15 @@ import { silentLogger } from '../src/server/log.js';
 import { mekoScope, pinSlug, sessionAgentId, type MekoClient, type TokenTry } from '../src/server/meko.js';
 import { MekoApi } from '../src/server/mekoapi.js';
 import type { MekoTools } from '../src/server/mekosettings.js';
+import type { LocalMekoProbe } from '../src/server/mekolocal.js';
+import type { OwnMekoLink } from '../src/server/mekohandover.js';
 import { getPaths } from '../src/server/paths.js';
 import { startHost, type HostHandle } from '../src/server/host/host.js';
 import { SessionHost } from '../src/server/hostclient.js';
 
 export const FAKE_CLAUDE = fileURLToPath(new URL('./fixtures/fake-claude.mjs', import.meta.url));
 export const FAKE_KIRO = fileURLToPath(new URL('./fixtures/fake-kiro.mjs', import.meta.url));
+export const FAKE_OPENCODE = fileURLToPath(new URL('./fixtures/fake-opencode.mjs', import.meta.url));
 export const FAKE_CAPTURE = fileURLToPath(new URL('./fixtures/fake-capture.mjs', import.meta.url));
 
 export function gitRepo(dir: string): string {
@@ -122,32 +125,28 @@ export function fakeMekoApi(baseUrl = 'https://meko.test/api/v1') {
   };
 }
 
-/** The Meko tab's checks and Claude Code setup, recorded instead of run. */
+/** Meko's setup for the agents (Settings › Harness), recorded instead of run. */
 export function stubMekoTools() {
   const calls: { name: string; args: unknown[] }[] = [];
   const state: {
-    checkError: string | null; apiError: string | null; setupError: string | null;
+    setupError: string | null;
     /** What trying each of Claude Code's tokens finds; a token not listed is rejected. */
     tokens: Record<string, TokenTry>;
     /** Whether `claude mcp get meko` finds a server (null: it couldn't be asked). */
     claudeHasMcp: boolean | null;
-  } = { checkError: null, apiError: null, setupError: null, tokens: {}, claudeHasMcp: false };
+    /** The command to run by hand each setup was given, in order. */
+    manuals: string[];
+  } = { setupError: null, tokens: {}, claudeHasMcp: false, manuals: [] };
   const tools: MekoTools = {
-    async check(url, apiKey) {
-      calls.push({ name: 'check', args: [url, apiKey] });
-      return state.checkError ? { ok: false, error: state.checkError } : { ok: true };
-    },
-    async checkApi(apiUrl) {
-      calls.push({ name: 'checkApi', args: [apiUrl] });
-      return state.apiError ? { ok: false, error: state.apiError } : { ok: true };
-    },
-    async setUpClaude(url, apiKey, log) {
+    async setUpClaude(url, apiKey, log, _claude, manual) {
       calls.push({ name: 'setUpClaude', args: [url, apiKey] });
+      state.manuals.push(manual);
       log('setting up');
       if (state.setupError) throw new Error(state.setupError);
     },
-    async setUpKiro(url, apiKey, log) {
+    async setUpKiro(url, apiKey, log, manual) {
       calls.push({ name: 'setUpKiro', args: [url, apiKey] });
+      state.manuals.push(manual);
       log('setting up');
       if (state.setupError) throw new Error(state.setupError);
     },
@@ -170,6 +169,16 @@ export interface TestEnv {
   meko: ReturnType<typeof stubMeko>;
   mekoApi: ReturnType<typeof fakeMekoApi>;
   mekoTools: ReturnType<typeof stubMekoTools>;
+  /** What the Meko on this computer answers when Core reads it (none at first); never the real `meko`. */
+  local: LocalMekoProbe;
+  /**
+   * AgentK's own key handed to Meko (`meko cloud_link`), recorded instead of run: each call's link,
+   * and what it answers (`handOverError` refuses; else Meko's link becomes it, as Meko's would).
+   */
+  handOvers: OwnMekoLink[];
+  handOverError: { value: string | null };
+  /** While set, a handover waits for it before answering (as Meko's checks take a while). */
+  handOverHold: { value: Promise<void> | null };
   fakeDir: string;
   /** Stops the session host, ending every Claude in it, as a host crash would. The next ensureServer starts it again. */
   killHost(): Promise<void>;
@@ -208,8 +217,11 @@ export function tempDir(prefix: string): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
 }
 
-/** `kiro`: offer Kiro, run by the fake (`fake-kiro.mjs`) with its home in the test's folder; off by default. */
-export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?: boolean } = {}): Promise<TestEnv> {
+/**
+ * `kiro`: offer Kiro, run by the fake (`fake-kiro.mjs`) with its home in the test's folder; `opencode`:
+ * offer OpenCode, run by `fake-opencode.mjs`. Both off by default.
+ */
+export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?: boolean; opencode?: boolean } = {}): Promise<TestEnv> {
   const home = tempDir('akl-test-');
   const repo = gitRepo(join(home, 'code', 'demo-repo'));
   const fakeDir = join(home, 'fake-claude');
@@ -219,22 +231,29 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
   process.env.CLAUDE_CONFIG_DIR = join(home, 'claude-config');
   process.env.KIRO_HOME = join(home, 'kiro');
   process.env.FAKE_KIRO_DIR = join(home, 'fake-kiro');
+  process.env.FAKE_OPENCODE_DIR = join(home, 'fake-opencode');
+  // Made here, since the fakes' version reads (which cleanup doesn't wait for) write nothing.
+  for (const d of [process.env.FAKE_KIRO_DIR, process.env.FAKE_OPENCODE_DIR]) mkdirSync(d, { recursive: true });
   const paths = getPaths(join(home, 'ak'));
   // The session host runs in this process, and never through this machine's background services.
   const cfg: Config = structuredClone(DEFAULT_CONFIG);
-  // A network bind, as on a remote-access install: a loopback one skips the login (localAccess).
-  cfg.server.bind = '0.0.0.0';
   cfg.repos.roots = [join(home, 'code')];
   cfg.repos.cloneInto = join(home, 'code');
   cfg.claude.command = FAKE_CLAUDE;
   cfg.kiro.command = FAKE_KIRO;
   cfg.kiro.enabled = !!opts.kiro;
+  cfg.opencode.command = FAKE_OPENCODE;
+  cfg.opencode.enabled = !!opts.opencode;
   cfg.meko.apiKey = 'test-key';
   cfg.meko.captureTranscripts = opts.capture !== false;
   const db = openDb(join(paths.home, 'state.db'));
   const meko = stubMeko();
   const mekoApi = fakeMekoApi();
   const mekoTools = stubMekoTools();
+  const local: LocalMekoProbe = { state: 'none', meko: null };
+  const handOvers: OwnMekoLink[] = [];
+  const handOverError: { value: string | null } = { value: null };
+  const handOverHold: { value: Promise<void> | null } = { value: null };
   let hostHandle: HostHandle | null = null;
   const host = new SessionHost(paths, {
     services: () => null,
@@ -250,16 +269,24 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
   const core = new Core({
     paths, config: cfg, db, version: '0.0.0-test', meko, mekoCaptureScript: opts.capture === false ? null : FAKE_CAPTURE,
     host, services: () => null, log: silentLogger, timers: false, mekoApi: mekoApi.api, mekoTools: mekoTools.tools,
+    localMeko: async () => ({ ...local }),
+    mekoHandOver: async (_home, link) => {
+      handOvers.push(link);
+      await handOverHold.value;
+      if (handOverError.value) return { ok: false, error: handOverError.value };
+      local.cloud = { set: true, url: link.url, apiKey: link.apiKey, webUrl: link.webUrl || 'https://cloud.mekodata.ai', apiUrl: link.apiUrl || 'https://cloud.mekodata.ai/api/v1' };
+      return { ok: true };
+    },
   });
   if (opts.start !== false) await core.start();
   return {
-    home, repo, core, meko, mekoApi, mekoTools, fakeDir, killHost,
+    home, repo, core, meko, mekoApi, mekoTools, local, handOvers, handOverError, handOverHold, fakeDir, killHost,
     async cleanup() {
       await core.stop().catch(() => undefined);
       await killHost();
       db.close();
       // core.stop() waited for what writes into the home after a test: the transcript captures (into
-      // fakeDir) and Kiro's one-shot runs (into FAKE_KIRO_DIR). Anything else still writing fails the
+      // fakeDir) and Kiro's and OpenCode's one-shot runs (into FAKE_KIRO_DIR, FAKE_OPENCODE_DIR). Anything else still writing fails the
       // removal with ENOTEMPTY, retries or not: they only try the folder again, and remove nothing
       // written after their first pass. Name what was left, to find the writer.
       try {

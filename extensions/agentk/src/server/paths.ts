@@ -1,11 +1,104 @@
 import { createHash } from 'node:crypto';
-import { realpathSync, statSync } from 'node:fs';
-import { homedir, hostname, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { existsSync, realpathSync, statSync } from 'node:fs';
+import { homedir, hostname, tmpdir, userInfo } from 'node:os';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { fsType, isNetworkFs } from './fstype.js';
 
-/** Root of all AgentK state. Override with AK_HOME (tests, dev). */
+/** The home's folder in the home directory before it moved into Meko's data folder (#236). */
+export const OLD_HOME_NAME = '.agent-k-local';
+
+/** The home of versions before the move: `~/.agent-k-local`. */
+export function oldHome(home: string = homedir()): string {
+  return join(home, OLD_HOME_NAME);
+}
+
+/** AgentK's home in Meko's data folder: `<data folder>/extensions/agentk`. */
+export function homeIn(mekoDir: string): string {
+  return join(mekoDir, 'extensions', 'agentk');
+}
+
+/** Meko's data folder can't be used: a MEKO_HOME (or `[meko] home`) on a network filesystem. */
+export class MekoHomeError extends Error {}
+
+export interface MekoHomeOptions {
+  env?: NodeJS.ProcessEnv;
+  /** The folder Meko last told AgentK (`[meko] home`), used when MEKO_HOME isn't set. */
+  configured?: string;
+  home?: string;
+  user?: string;
+  /** The shared local folder of the last fallback; tests replace it. */
+  sharedTmp?: string;
+  type?: (dir: string) => string | null;
+}
+
+/**
+ * Meko's data folder, by Meko's own rule (`Resolve` in backend/internal/paths/paths.go; both are
+ * tested against backend/internal/paths/testdata/resolve-cases.json): MEKO_HOME (or the folder
+ * Meko last told AgentK), refused on a network filesystem; else ~/.meko on a local disk; else, for
+ * a home folder on a network filesystem, $XDG_STATE_HOME/meko when that's local, else
+ * /var/tmp/<user>/meko. Makes nothing: `makeHomeParent` in movehome.ts does that.
+ */
+export function mekoHome(o: MekoHomeOptions = {}): string {
+  const env = o.env ?? process.env;
+  const type = o.type ?? fsType;
+  const network = (p: string) => isNetworkFs(existingAncestor(p), type);
+  const named = env.MEKO_HOME || o.configured;
+  if (named) {
+    const abs = resolve(named);
+    if (network(abs)) throw new MekoHomeError(`Meko's data folder ${abs} is on a network filesystem, which Meko refuses. Choose a folder on a local disk with MEKO_HOME.`);
+    return abs;
+  }
+  const home = o.home ?? homedir();
+  const def = join(home, '.meko');
+  if (!network(def)) return def;
+  const xdg = env.XDG_STATE_HOME;
+  if (xdg && isAbsolute(xdg) && !network(join(xdg, 'meko'))) return join(xdg, 'meko');
+  return join(o.sharedTmp ?? SHARED_TMP, o.user ?? userInfo().username, 'meko');
+}
+
+/** The shared local folder of Meko's last fallback (`paths.SharedTmp` in Meko). */
+export const SHARED_TMP = '/var/tmp';
+
+function existingAncestor(p: string): string {
+  for (let d = p; ; d = dirname(d)) {
+    if (existsSync(d) || dirname(d) === d) return d;
+  }
+}
+
+/**
+ * The home of a release install: the folder its running release is in (`<home>/app/<version>`,
+ * `AK_APP_DIR` as the launcher sets it), or null when this isn't one (a source checkout).
+ */
+export function releaseHome(appDir: string | undefined = process.env.AK_APP_DIR): string | null {
+  if (!appDir) return null;
+  const app = dirname(appDir);
+  return basename(app) === 'app' ? dirname(app) : null;
+}
+
+/**
+ * Where an install without a release keeps its home: `<Meko's data folder>/extensions/agentk` when
+ * it's there, else `~/.agent-k-local` when that's there (an install the move hasn't reached), else
+ * the new one. With Meko's data folder refused, the old home if there is one.
+ */
+export function defaultHome(o: MekoHomeOptions = {}): string {
+  const old = oldHome(o.home);
+  let next: string;
+  try {
+    next = homeIn(mekoHome(o));
+  } catch (e) {
+    if (existsSync(old)) return old;
+    throw e;
+  }
+  return existsSync(next) || !existsSync(old) ? next : old;
+}
+
+/**
+ * Root of all AgentK state. A release install's is the folder its release is in, whatever AK_HOME
+ * says: users don't pick where AgentK keeps its data, it's always in Meko's data folder (the move
+ * brings older homes there, movehome.ts). AK_HOME names it only without a release (tests, dev).
+ */
 export function akHome(): string {
-  return process.env.AK_HOME ?? join(homedir(), '.agent-k-local');
+  return releaseHome() ?? process.env.AK_HOME ?? defaultHome();
 }
 
 export interface Paths {
@@ -23,6 +116,11 @@ export interface Paths {
   /** Per-session launcher scripts and the Claude hooks settings file. */
   run: string;
   hookSock: string;
+  /**
+   * The server's socket, its only listener: Meko's web listener serves it to browsers at /ext/agentk/
+   * (`agentk _handoff --json` tells Meko where it is). Only this user can connect to it.
+   */
+  webSock: string;
   /** The session host's socket (host/host.ts): every Claude runs in a pty the host holds. */
   hostSock: string;
   /** What the running session host wrote about itself: pid, version, app dir, protocol. */
@@ -51,6 +149,7 @@ export function getPaths(home: string = akHome()): Paths {
     pastes: join(home, 'pastes'),
     run: join(home, 'run'),
     hookSock: sockPath(home, 'hook'),
+    webSock: sockPath(home, 'web'),
     hostSock: sockPath(home, 'host'),
     hostState: join(home, 'run', 'host.json'),
     hostLock: join(home, 'host.lock'),
@@ -67,13 +166,13 @@ export function getPaths(home: string = akHome()): Paths {
  * fits both. When the home path is too long, use a short socket in a private
  * per-user directory under the temp dir.
  */
-function sockPath(home: string, name: 'hook' | 'host'): string {
+function sockPath(home: string, name: 'hook' | 'host' | 'web'): string {
   const preferred = join(home, `${name}.sock`);
   if (Buffer.byteLength(preferred) <= 100) return preferred;
   const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
   const tag = createHash('sha256').update(home).digest('hex').slice(0, 12);
   // The hook socket kept its old name here, so a running Claude's hooks still find it.
-  return join(tmpdir(), `agent-k-local-${uid}`, name === 'hook' ? `${tag}.sock` : `${tag}-host.sock`);
+  return join(tmpdir(), `agent-k-local-${uid}`, name === 'hook' ? `${tag}.sock` : `${tag}-${name}.sock`);
 }
 
 export function expandHome(p: string): string {

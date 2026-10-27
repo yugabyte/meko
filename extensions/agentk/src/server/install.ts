@@ -1,38 +1,33 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, rmdirSync, rmSync, unlinkSync } from 'node:fs';
-import { isIP } from 'node:net';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmdirSync, rmSync, unlinkSync } from 'node:fs';
 import { hostname, userInfo } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
-import { getOwner, issueSetupToken } from './auth.js';
 import { HARNESS_CAPS, HARNESS_IDS, type HarnessId } from '../shared/harnesses.js';
 import { claudeUserDir } from './claude.js';
-import { cliVersion, versionAtLeast } from './harness/version.js';
-import {
-  DEFAULT_MEKO_URL, dbPath, isLoopback, loadConfig, readClaudeSettingsEnv, resolveMeko, resolveMekoWebUrl, resolveMekoWithSource, saveConfig, type Config,
-} from './config.js';
-import { openDb } from './db.js';
+import { cliVersion, harnessCommand, versionAtLeast } from './harness/version.js';
+import { DEFAULT_MEKO_URL, dbPath, envMekoWebUrl, loadConfig, onLoopback, ownMekoKey, saveConfig, type Config } from './config.js';
 import { assertFree, InstanceBusyError } from './instance.js';
 import { checkMeko, tryMekoToken } from './meko.js';
-import { findLocalMeko, type LocalMeko } from './mekolocal.js';
+import { isLocalMeko, probeLocalMeko, type LocalMekoProbe } from './mekolocal.js';
+import { handOverMekoKey, type OwnMekoLink } from './mekohandover.js';
+import { AGENTK_PATH, MEKO_INSTALL_COMMAND } from '../shared/mekourls.js';
 import { claudeConfigPath } from './trust.js';
 import {
-  MekoSetupError, claudeHasMekoMcp, ensureMekoSetup, envKeyGap, latestMekoSetup, mekoClaudeGaps, mekoKeyForConfig, readClaudeMeko, runMekoSetup,
+  MekoSetupError, claudeHasMekoMcp, ensureMekoSetup, envKeyGap, latestMekoSetup, mekoClaudeGaps, readClaudeMeko, runMekoSetup,
 } from './mekosetup.js';
 import { claudeTokenGaps } from './mekoclaude.js';
-import { expandHome, getPaths, tildify, type Paths } from './paths.js';
-import { dropOldNames, hostServices, renderServiceFiles, ServiceError, SERVICES, type ServiceManager } from './service.js';
+import { expandHome, getPaths, oldHome, tildify, type Paths } from './paths.js';
+import { dropOldNames, hostServices, renderServiceFiles, samePath, ServiceError, SERVICES, type ServiceManager } from './service.js';
 import { SessionHost } from './hostclient.js';
 import { COMMAND, commandLinks } from './cmdlink.js';
 import { style, ui } from './tty.js';
 import { waitForServer } from './health.js';
-import { loadTls } from './tls.js';
 import { removeKiroAgent } from './kiro.js';
+import { ensurePrivateDir, fsType, isNetworkFs, PrivateDirError } from './fstype.js';
+import { checkMove, makeHomeParent, mekoDirOf, tmpHomeWarning } from './movehome.js';
 import { kiroAgentLoadsMcp, kiroMekoGaps, readKiroMeko } from './mekokiro.js';
-
-// Linux names from `stat -f -c %T`; macOS names from `mount`.
-const NETWORK_FS = new Set(['nfs', 'nfs4', 'cifs', 'smb2', 'smbfs', 'fuse.sshfs', 'afs', 'lustre', 'gpfs', 'afpfs', 'webdav', 'macfuse', 'osxfuse']);
 
 class InstallError extends Error {}
 
@@ -75,39 +70,6 @@ function makePrompter(interactive: boolean): { ask: Prompter; close: () => void 
 // ---------------------------------------------------------------------------
 // Steps
 
-/** The mount point in `df -P <dir>` output (the text after the capacity column). */
-export function parseDfMountPoint(df: string): string | null {
-  const last = df.trim().split('\n').at(-1) ?? '';
-  return /\s\d+%\s+(.+)$/.exec(last)?.[1] ?? null;
-}
-
-/** The filesystem type of `mountPoint` in macOS `mount` output ("<dev> on <dir> (<type>, …)"). */
-export function parseMountType(mount: string, mountPoint: string): string | null {
-  const marker = ` on ${mountPoint} (`;
-  for (const line of mount.split('\n')) {
-    const i = line.lastIndexOf(marker);
-    if (i >= 0) return /^[^,)]+/.exec(line.slice(i + marker.length))?.[0].trim() ?? null;
-  }
-  return null;
-}
-
-export function fsType(dir: string): string | null {
-  if (process.platform !== 'darwin') {
-    const r = trySh('stat', ['-f', '-c', '%T', dir]);
-    return r.ok ? r.out : null;
-  }
-  // BSD stat has no -c: find the mount with df, then read its type from mount.
-  const df = trySh('df', ['-P', dir]);
-  const mp = df.ok ? parseDfMountPoint(df.out) : null;
-  const mount = mp ? trySh('mount', []) : null;
-  return mp && mount?.ok ? parseMountType(mount.out, mp) : null;
-}
-
-export function isNetworkFs(dir: string): boolean {
-  const t = fsType(dir);
-  return !!t && NETWORK_FS.has(t);
-}
-
 /** Pick a local-disk location for state.db when the default is on a network filesystem. */
 function localDbLocation(): string {
   const user = userInfo().username;
@@ -120,25 +82,6 @@ function localDbLocation(): string {
   const dir = join('/var/tmp', user, 'agent-k-local');
   ensurePrivateDir(dir);
   return join(dir, 'state.db');
-}
-
-/**
- * Creates `dir` for private state in a shared place like /var/tmp, where another user could have
- * made the directories first. Refuses unless `dir` and its parent are real directories (not
- * symlinks) owned by this user and the parent isn't writable by others; then makes `dir` 0700.
- */
-export function ensurePrivateDir(dir: string, uid: number | undefined = process.getuid?.(), gid: number | undefined = process.getgid?.()): void {
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const fix = 'Remove it, or set state.db_path in config.toml to a local folder only you can write to.';
-  for (const d of [dirname(dir), dir]) {
-    const st = lstatSync(d);
-    if (st.isSymbolicLink() || !st.isDirectory()) throw new InstallError(`${d} is not a directory (it may be a symlink). ${fix}`);
-    if (uid !== undefined && st.uid !== uid) throw new InstallError(`${d} is owned by another user. ${fix}`);
-    // Group write is fine for our own primary group (a umask 002 system with a group per user).
-    const othersWrite = st.mode & 0o002 || (st.mode & 0o020 && (gid === undefined || st.gid !== gid));
-    if (d !== dir && othersWrite) throw new InstallError(`${d} can be written to by other users. ${fix}`);
-  }
-  chmodSync(dir, 0o700);
 }
 
 /** A failed service command, with what to check next and how to go without the services. */
@@ -193,46 +136,6 @@ function installServices(paths: Paths): boolean {
   return true;
 }
 
-/** True when the macOS application firewall is on (it asks before `node` may accept connections). */
-function macFirewallOn(): boolean {
-  if (process.platform !== 'darwin') return false;
-  const r = trySh('/usr/libexec/ApplicationFirewall/socketfilterfw', ['--getglobalstate']);
-  return r.ok && /enabled/i.test(r.out);
-}
-
-/**
- * True when nobody is at a desktop here: an SSH login, or Linux with no display. The browser is
- * then on another device, so the install defaults to remote access.
- */
-export function isHeadless(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): boolean {
-  if (env.SSH_CONNECTION || env.SSH_CLIENT || env.SSH_TTY) return true;
-  return platform !== 'darwin' && !env.DISPLAY && !env.WAYLAND_DISPLAY;
-}
-
-/** The answer the Access question starts with for a listen address. */
-export function accessDefault(bind: string): string {
-  if (isLoopback(bind)) return 'local';
-  return bind === '0.0.0.0' || bind === '::' ? 'remote' : bind;
-}
-
-/**
- * The listen address for an answer to the Access question: local, remote, an IP address, or the
- * address it listens on now (which may be a host name). Local and remote keep the current address
- * when it already is one (`::1`, or `::` for IPv6 as well as IPv4).
- */
-export function accessBind(answer: string, current = ''): string {
-  const a = answer.trim();
-  if (/^l(ocal)?$/i.test(a)) return isLoopback(current) ? current : '127.0.0.1';
-  if (/^r(emote)?$/i.test(a)) return current === '0.0.0.0' || current === '::' ? current : '0.0.0.0';
-  if (isIP(a) || a === 'localhost' || (a && a === current)) return a;
-  throw new InstallError(`Answer local or remote (or an address to listen on), not "${a}".`);
-}
-
-function publicHost(): string {
-  const r = trySh('hostname', ['-f']);
-  return r.ok && r.out ? r.out : hostname();
-}
-
 // ---------------------------------------------------------------------------
 // install
 
@@ -240,134 +143,169 @@ export interface InstallMekoDeps {
   ask: Prompter;
   /** A person is there to answer. */
   canAsk: boolean;
+  /** Checks a key AgentK keeps itself, which it does only under a Meko too old to keep the link. */
   check: (url: string, apiKey: string) => Promise<{ ok: true } | { ok: false; error: string }>;
   /**
    * Sets up Meko for Claude Code; throws MekoSetupError when that's declined or doesn't finish.
-   * `keyFromEnv`: the key came from the installer's MEKO_API_KEY, so it isn't stored in config.toml.
-   * Left out when Claude Code isn't installed.
+   * `keyFromEnv`: the key came from the installer's MEKO_API_KEY. `local`: the server is the Meko
+   * on this computer, with its token (for the command to run by hand). Left out when Claude Code
+   * isn't installed.
    */
-  ensureInClaude?: (url: string, apiKey: string, keyFromEnv: boolean) => Promise<void>;
+  ensureInClaude?: (url: string, apiKey: string, keyFromEnv: boolean, local: boolean) => Promise<void>;
   /** Sets up Meko for Kiro, the same way; left out when Kiro isn't installed. */
-  ensureInKiro?: (url: string, apiKey: string) => Promise<void>;
-  /** The Meko running on this computer (`findLocalMeko`), offered when there's no key. */
-  localMeko?: () => Promise<LocalMeko | null>;
+  ensureInKiro?: (url: string, apiKey: string, local: boolean) => Promise<void>;
+  /**
+   * What `meko token --json` says (`probeLocalMeko`): the Meko running on this computer, and the
+   * Meko Cloud link it keeps for its extensions. Neither is stored: the server reads them from Meko.
+   */
+  probe?: () => Promise<LocalMekoProbe>;
+  /** Hands Meko a Meko Cloud key to keep as its link (`handOverMekoKey`: `meko cloud_link`). */
+  link: (l: OwnMekoLink) => Promise<{ ok: true } | { ok: false; error: string }>;
   ui: Pick<typeof ui, 'ok' | 'warn' | 'note' | 'section'>;
 }
 
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
 /**
- * The installer's Meko step. Meko is optional: without a key (skipped at the prompt, none given
- * non-interactively, or --no-meko) AgentK works without datapacks, and a key can be added later
- * on the Meko tab in Settings. With no key configured or given, a Meko running on this computer
- * (`meko token --json`) is offered first, and taken without asking when no one is there;
- * `--meko-url` and `--meko-key` name one (Meko's `meko install_extension agentk` passes both). A
- * key that's given must work, unless someone is there to choose to go on without Meko. Declining Meko's setup for Claude Code or Kiro (each offered only where it's
- * installed) is a warning, not a stop. Updates `cfg.meko`; returns whether Meko is on.
+ * The installer's Meko step. Meko owns the Meko Cloud link: AgentK uses it when Meko has one, and
+ * else the Meko running on this computer (`meko token --json`), and stores neither. The installer
+ * doesn't ask for a key: one is linked in Meko's web UI (Settings › Meko Cloud) or with `meko
+ * cloud_link`. A key given with `--meko-key` (and `--meko-url` for another server) goes to Meko, which
+ * checks it and keeps it; a copy of the local Meko's token (what `meko install_extension agentk`
+ * passes) is just the local Meko; any other key for a server on this computer is set aside with a
+ * warning. AgentK's own key from before Meko kept the link (config.toml, the environment, Claude
+ * Code's settings) is handed to Meko once, as the server does at start, and left where it was, for
+ * a rollback to the release before. One from the installer's environment that AgentK keeps using
+ * (Meko refused it, or is too old to keep a link) is stored in config.toml when there's no Claude
+ * Code to hold it, since the service has no MEKO_* environment.
+ *
+ * Under a Meko too old to keep a link, AgentK keeps a key itself, as it did: a given key is checked
+ * and stored in config.toml, and its own key is checked. A given key that fails stops the install
+ * unless someone there goes on without it; `--no-meko` only keeps a failure from stopping the
+ * install and skips Meko's setup for the agents. Declining Meko's setup for Claude Code or Kiro
+ * (each offered only where it's installed) is a warning, not a stop. Updates `cfg.meko`; returns
+ * whether there's a Meko to use.
  */
 export async function installMeko(cfg: Config, o: { keyArg?: string; urlArg?: string; noMeko: boolean }, d: InstallMekoDeps): Promise<boolean> {
-  const later = 'Projects work without datapacks; add a Meko key any time on the Meko tab in Settings.';
-  if (o.noMeko) {
-    cfg.meko.enabled = false;
-    d.ui.section('Checks');
-    d.ui.warn('Meko', `off (--no-meko). ${later}`);
-    return false;
+  const linkHint = "Link Meko Cloud in Meko's web UI (Settings › Meko Cloud), or with meko cloud_link.";
+  if (o.noMeko) d.ui.warn('--no-meko', "Meko can't be turned off any more: AgentK uses Meko's Meko Cloud link, else the Meko on this computer. A failed Meko check won't stop the install, and Meko isn't set up for the agents.");
+  const probe = d.probe ? await d.probe() : { state: 'none' as const, meko: null };
+  const local = probe.meko;
+  const cloud = probe.cloud;
+  // Older installs stored the local Meko's URL and token: the server reads them from Meko now.
+  if (isLocalMeko(local, cfg.meko.url, cfg.meko.apiKey)) {
+    cfg.meko.url = '';
+    cfg.meko.apiKey = '';
   }
-  let meko = resolveMeko(cfg);
-  // A key goes only where it already goes: a URL given without a key starts keyless, so the key is
-  // asked for (or given with --meko-key) rather than sent to the new host.
-  if (o.urlArg) meko = { url: o.urlArg, apiKey: '' };
-  let storeKey = false;
-  // A Meko on this computer, when there's one and it's wanted: its URL and client token.
-  const useLocalMeko = async (): Promise<boolean> => {
-    const local = d.localMeko && !o.urlArg ? await d.localMeko() : null;
-    if (!local) return false;
-    let host = local.url;
-    try {
-      host = new URL(local.url).host;
-    } catch {
-      /* shown as it is */
-    }
-    if (d.canAsk && !/^y/i.test(await d.ask(`Use Meko on this computer (${host})? (Y/n)`, 'y'))) return false;
-    meko = { url: local.url, apiKey: local.token };
-    return true;
-  };
-  if (!cfg.meko.enabled && !o.keyArg) {
-    // Turned off (on the Meko tab in Settings): it stays off unless a key is given now.
-    const k = d.canAsk ? (await d.ask('Meko is turned off. API key to turn it on (Enter to keep it off)', '')).trim() : '';
-    if (!k) {
-      d.ui.section('Checks');
-      d.ui.warn('Meko', 'off (turned off in Settings). Turn it on any time on the Meko tab.');
-      return false;
-    }
-    meko = { ...meko, apiKey: k };
-    storeKey = true;
+  const givenUrl = o.urlArg ?? DEFAULT_MEKO_URL;
+  const given = o.keyArg && !isLocalMeko(local, givenUrl, o.keyArg) && !onLoopback(givenUrl)
+    ? { url: givenUrl, apiKey: o.keyArg, webUrl: '', apiUrl: '' } : null;
+  // A key for a server on this computer is never linked as Meko Cloud: when Meko isn't running, a
+  // copy of its own token (what `meko install_extension agentk` passes) can't be told apart.
+  if (o.keyArg && !given && !isLocalMeko(local, givenUrl, o.keyArg)) {
+    d.ui.warn('--meko-key', `not linked: ${hostOf(givenUrl)} is on this computer, so AgentK uses the Meko on this computer.`);
   }
-  cfg.meko.enabled = true;
-  if (o.keyArg) {
-    meko = { ...meko, apiKey: o.keyArg };
-    storeKey = true;
-  } else if (!meko.apiKey && (await useLocalMeko())) {
-    storeKey = true;
-  } else if (!meko.apiKey) {
-    const web = resolveMekoWebUrl(cfg);
-    if (d.canAsk) d.ui.note(`Meko gives projects shared memory (optional).${web ? ` No account or key yet? Create them at ${web}.` : ''}`);
-    const k = (await d.ask('Meko API key (Enter to skip)', '')).trim();
-    if (!k) {
-      d.ui.section('Checks');
-      d.ui.warn('Meko', `off: no API key. ${later}`);
-      return false;
-    }
-    meko = { ...meko, apiKey: k };
-    storeKey = true;
-  }
+  const own = ownMekoKey(cfg);
+  const ownLink = own.apiKey && !isLocalMeko(local, own.url, own.apiKey) && !onLoopback(own.url)
+    ? { url: own.url, apiKey: own.apiKey, webUrl: cfg.meko.webUrl || envMekoWebUrl(), apiUrl: cfg.meko.apiUrl || process.env.MEKO_API_URL?.trim() || '' }
+    : null;
 
   d.ui.section('Checks');
-  const check = await d.check(meko.url, meko.apiKey);
-  if (!check.ok) {
-    const why = `Meko check failed (${meko.url}): ${check.error}`;
-    if (!d.canAsk) throw new InstallError(`${why}. Fix the key, or pass --no-meko to install without Meko.`);
+  let meko: { url: string; apiKey: string } | null = null;
+  let label = '';
+  let keyFromEnv = false;
+  const giveUp = async (why: string, fix: string): Promise<void> => {
+    if (!d.canAsk && !o.noMeko) throw new InstallError(`${why}. ${fix}`);
     d.ui.warn('Meko', why);
-    if (!/^y/i.test(await d.ask('Continue without Meko? (y/N)', 'n'))) {
-      throw new InstallError(`${why}. Run the installer again with the right key, or with --no-meko.`);
+    if (!o.noMeko && !/^y/i.test(await d.ask('Continue without it? (y/N)', 'n'))) throw new InstallError(`${why}. ${fix}`);
+  };
+  if (cloud) {
+    // Meko keeps the link: a given key, else AgentK's own from before (once), goes to Meko.
+    const hand = given ?? (cloud.set ? null : ownLink);
+    if (hand) {
+      const r = await d.link(hand);
+      if (r.ok) {
+        // AgentK's own key stays in config.toml: the server never reads it again, and a rollback to
+        // the release before, which reads only it, still finds it.
+        meko = { url: hand.url, apiKey: hand.apiKey };
+        label = `Meko Cloud, linked in Meko (${hostOf(hand.url)})`;
+      } else if (given) {
+        await giveUp(`Meko didn't link ${hand.url}: ${r.error}`, 'Fix the key, or run the installer without one to use the Meko on this computer.');
+      } else {
+        // The server tries again at start; meanwhile AgentK keeps the key it had.
+        d.ui.warn('Meko Cloud', `Meko didn't take AgentK's key (${r.error}): AgentK keeps using it until it's linked. ${linkHint}`);
+        meko = { url: hand.url, apiKey: hand.apiKey };
+        label = hostOf(hand.url);
+        keyFromEnv = own.keySource === 'env';
+      }
     }
-    // Off, so a key that doesn't work (from the environment or Claude Code's settings) isn't used.
-    cfg.meko.enabled = false;
-    d.ui.warn('Meko', `off. ${later}`);
+    if (!meko && cloud.apiKey) {
+      meko = { url: cloud.url, apiKey: cloud.apiKey };
+      label = `Meko Cloud, linked in Meko (${hostOf(cloud.url)})`;
+    }
+  } else {
+    // A Meko too old to keep the link: AgentK keeps a key itself, as before.
+    const key = given ?? ownLink;
+    if (key) {
+      const check = await d.check(key.url, key.apiKey);
+      if (check.ok) {
+        if (given) {
+          cfg.meko.url = given.url === DEFAULT_MEKO_URL ? '' : given.url;
+          cfg.meko.apiKey = given.apiKey;
+        }
+        meko = { url: key.url, apiKey: key.apiKey };
+        label = hostOf(key.url);
+        keyFromEnv = !given && own.keySource === 'env';
+      } else {
+        await giveUp(`Meko check failed (${key.url}): ${check.error}`, given ? 'Run the installer again with the right key, or without one to use the Meko on this computer.' : `Fix or remove the key (${own.keySource}).`);
+      }
+    }
+  }
+  if (!meko && local) {
+    meko = { url: local.url, apiKey: local.token };
+    label = `on this computer (${hostOf(local.url)})`;
+  }
+  if (!meko) {
+    d.ui.warn('Meko', `not set up: no Meko Cloud link, and no Meko running on this computer. AgentK uses the Meko on this computer once it runs (meko start). ${linkHint}`);
     return false;
   }
-  d.ui.ok('Meko', meko.url.replace(/^https?:\/\//, ''));
+  // A key from the installer's own MEKO_API_KEY that AgentK keeps using: without Claude Code, nothing
+  // puts it in Claude Code's settings, and the service has no MEKO_* environment, so config.toml
+  // keeps it, as it would a typed one.
+  if (keyFromEnv && !d.ensureInClaude && meko.apiKey === process.env.MEKO_API_KEY) {
+    cfg.meko.apiKey = meko.apiKey;
+    cfg.meko.url = meko.url === DEFAULT_MEKO_URL ? '' : meko.url;
+  }
+  d.ui.ok('Meko', label);
+  // The Meko on this computer, with its own token: the only server `meko token` is the key for.
+  const onLocal = !!local && meko.url === local.url && meko.apiKey === local.token;
+  if (!cloud?.apiKey && label.startsWith('on this computer') && d.canAsk) d.ui.note(`To keep projects' memory in Meko Cloud instead: ${linkHint}`);
 
-  let inClaude = !!d.ensureInClaude;
-  if (d.ensureInClaude) {
+  // --no-meko never set Meko up for the agents, and still doesn't.
+  const ensureInClaude = o.noMeko ? undefined : d.ensureInClaude;
+  const ensureInKiro = o.noMeko ? undefined : d.ensureInKiro;
+  if (ensureInClaude) {
     try {
-      // Not typed, and not from config.toml or Claude Code's settings: only this process has it.
-      const keyFromEnv = !storeKey && resolveMekoWithSource(cfg).keySource === 'env' && meko.apiKey === process.env.MEKO_API_KEY;
-      await d.ensureInClaude(meko.url, meko.apiKey, keyFromEnv);
+      await ensureInClaude(meko.url, meko.apiKey, keyFromEnv && meko.apiKey === process.env.MEKO_API_KEY, onLocal);
+      d.ui.ok('Meko in Claude', 'plugin, MCP server and key in place');
     } catch (e) {
       if (!(e instanceof MekoSetupError)) throw e;
-      inClaude = false;
-      d.ui.warn('Meko in Claude', `${e.message} AgentK uses Meko; Claude Code sessions do once it's set up (the Meko tab in Settings can do it).`);
+      d.ui.warn('Meko in Claude', `${e.message} AgentK uses Meko; Claude Code sessions do once it's set up (AgentK's Settings › Harness › Claude Code can do it).`);
     }
   }
-  const settingsEnv = readClaudeSettingsEnv();
-  // Without Claude Code, nothing puts a key from the installer's environment into its settings, and
-  // the service has no MEKO_* environment: config.toml keeps it, as it would a typed one.
-  const noClaude = !d.ensureInClaude;
-  const keep = mekoKeyForConfig({
-    apiKey: meko.apiKey, url: meko.url, typed: storeKey || noClaude, settingsKey: settingsEnv.MEKO_API_KEY, settingsUrl: settingsEnv.MEKO_MCP_URL,
-    envKey: noClaude ? undefined : process.env.MEKO_API_KEY, defaultUrl: DEFAULT_MEKO_URL,
-  });
-  if (keep !== 'unchanged') {
-    cfg.meko.apiKey = keep.apiKey;
-    cfg.meko.url = keep.url;
-  }
-  if (inClaude) d.ui.ok('Meko in Claude', 'plugin, MCP server and key in place');
-  if (d.ensureInKiro) {
+  if (ensureInKiro) {
     try {
-      await d.ensureInKiro(meko.url, meko.apiKey);
+      await ensureInKiro(meko.url, meko.apiKey, onLocal);
       d.ui.ok('Meko in Kiro', 'MCP server and agent in place');
     } catch (e) {
       if (!(e instanceof MekoSetupError)) throw e;
-      d.ui.warn('Meko in Kiro', `${e.message} AgentK uses Meko; Kiro sessions do once it's set up (the Meko tab in Settings can do it).`);
+      d.ui.warn('Meko in Kiro', `${e.message} AgentK uses Meko; Kiro sessions do once it's set up (AgentK's Settings › Harness › Kiro can do it).`);
     }
   }
   return true;
@@ -387,7 +325,9 @@ export function settleAgents(cfg: Config, versions: Partial<Record<HarnessId, st
   });
   if (!found.length) {
     throw new InstallError(
-      `no coding agent found. Install Claude Code (https://claude.com/claude-code) or Kiro CLI ${HARNESS_CAPS.kiro.minVersion} or later (https://kiro.dev/cli/), sign in to it, and run the installer again.`,
+      `no coding agent found. Install Claude Code (https://claude.com/claude-code), OpenCode ${HARNESS_CAPS.opencode.minVersion} or later `
+        + `(https://opencode.ai; from an older one, ${HARNESS_CAPS.opencode.upgrade}) `
+        + `or Kiro CLI ${HARNESS_CAPS.kiro.minVersion} or later (https://kiro.dev/cli/), sign in to it, and run the installer again.`,
     );
   }
   if (!found.includes(cfg.agents.default)) cfg.agents.default = found[0];
@@ -403,8 +343,6 @@ export async function runInstall(args: string[]): Promise<void> {
       'meko-key': { type: 'string' },
       'meko-url': { type: 'string' },
       'no-meko': { type: 'boolean', default: false },
-      bind: { type: 'string' },
-      port: { type: 'string' },
       'no-service': { type: 'boolean', default: false },
       'install-deps': { type: 'boolean', default: false },
       'no-install-deps': { type: 'boolean', default: false },
@@ -416,6 +354,8 @@ export async function runInstall(args: string[]): Promise<void> {
   const { ask, close } = makePrompter(interactive);
 
   try {
+    // In Meko's data folder, which may not be there yet (made private as Meko does in /var/tmp).
+    makeHomeParent(paths.home);
     mkdirSync(paths.home, { recursive: true, mode: 0o700 });
     // A shared home in use on another host: installing here would pin its services to this host.
     try {
@@ -426,6 +366,12 @@ export async function runInstall(args: string[]): Promise<void> {
     }
     const fresh = !existsSync(paths.config);
     const cfg: Config = loadConfig(paths);
+    // The Meko data folder this install is in, as the installer found it (from MEKO_HOME or
+    // XDG_STATE_HOME in this shell, which the services don't have), or the one Meko's
+    // `install_extension` names: the server and a move go by it, never resolving it again.
+    const inMeko = mekoDirOf(paths.home);
+    if (inMeko) cfg.meko.home = inMeko;
+    else if (process.env.MEKO_HOME) cfg.meko.home = resolve(process.env.MEKO_HOME);
 
     // 1. Basics
     if (!process.env.AK_INSTALLER) ui.title('AgentK setup');
@@ -434,40 +380,20 @@ export async function runInstall(args: string[]): Promise<void> {
     const reposRoot = values['repos-root'] ?? (await ask('Repos folder', cfg.repos.roots[0] ?? '~/code'));
     cfg.repos.roots = fresh ? [reposRoot] : [reposRoot, ...cfg.repos.roots.filter((r) => r !== reposRoot)];
     if (fresh) cfg.repos.cloneInto = reposRoot;
-    if (values.bind) {
-      cfg.server.bind = values.bind;
-    } else {
-      // A fresh install on a desktop is for this computer only; over SSH or with no display,
-      // the browser is somewhere else.
-      const def = fresh && !process.env.AK_BIND ? (isHeadless() ? 'remote' : 'local') : accessDefault(cfg.server.bind);
-      if (interactive && process.stdin.isTTY) {
-        ui.note('Local: only this computer, no login. Remote: other devices too (like your phone), over HTTPS with a login.');
-      }
-      for (;;) {
-        try {
-          cfg.server.bind = accessBind(await ask('Access', def), cfg.server.bind);
-          break;
-        } catch (e) {
-          if (!(e instanceof InstallError && interactive && process.stdin.isTTY)) throw e;
-          ui.warn('Access', e.message);
-        }
-      }
-    }
-    const portStr = values.port ?? (await ask('Port', String(cfg.server.port)));
-    const port = Number(portStr);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new InstallError(`invalid port: ${portStr}`);
-    cfg.server.port = port;
-    if (!(interactive && process.stdin.isTTY)) {
-      ui.row('Repos folder', reposRoot);
-      ui.row('Access', `${isLoopback(cfg.server.bind) ? 'local' : 'remote'}, on ${cfg.server.bind}:${cfg.server.port}`);
+    if (!(interactive && process.stdin.isTTY)) ui.row('Repos folder', reposRoot);
+    // Browsers reach AgentK only through the Meko on this computer, which serves it at /ext/agentk/
+    // with its own sign-in; with no Meko here, nothing could.
+    if ((await probeLocalMeko(cfg.meko.home || null)).state === 'none') {
+      throw new InstallError('AgentK runs behind the Meko on this computer, which serves it to your browser, and there is ' +
+        `no meko command here. Install Meko first (${MEKO_INSTALL_COMMAND}), then run: meko install_extension agentk`);
     }
 
     // 2. The coding agents: at least one, or nothing can run.
     const versions: Partial<Record<HarnessId, string | null>> = {};
-    for (const id of HARNESS_IDS) versions[id] = await cliVersion(cfg[id].command);
+    for (const id of HARNESS_IDS) versions[id] = await cliVersion(harnessCommand(cfg, id));
     const agents = settleAgents(cfg, versions);
 
-    // 3. Meko (optional) and 4. Meko in each agent
+    // 3. Meko and 4. Meko in each agent
     const canAsk = interactive && !!process.stdin.isTTY;
     const setup = { canAsk, installDeps: values['install-deps'], noInstallDeps: values['no-install-deps'] };
     const urlArg = values['meko-url'];
@@ -476,15 +402,16 @@ export async function runInstall(args: string[]): Promise<void> {
       ask,
       canAsk,
       check: checkMeko,
-      localMeko: () => findLocalMeko(),
-      ensureInKiro: !agents.includes('kiro') ? undefined : async (url, apiKey) => {
+      probe: () => probeLocalMeko(cfg.meko.home || null),
+      link: (l) => handOverMekoKey(cfg.meko.home || null, l),
+      ensureInKiro: !agents.includes('kiro') ? undefined : async (url, apiKey, onLocal) => {
         const gaps = async () => kiroMekoGaps(readKiroMeko(), url, kiroAgentLoadsMcp());
         await ensureMekoSetup(
-          { url, apiKey, client: 'kiro', ...setup },
+          { url, apiKey, client: 'kiro', local: onLocal ? { home: cfg.meko.home || null } : null, ...setup },
           { gaps, latest: () => latestMekoSetup(), run: (pkg) => runMekoSetup(pkg, { url, apiKey, client: 'kiro' }), ask, say, warn: (l, t) => ui.warn(l, t) },
         );
       },
-      ensureInClaude: !agents.includes('claude') ? undefined : async (url, apiKey, keyFromEnv) => {
+      ensureInClaude: !agents.includes('claude') ? undefined : async (url, apiKey, keyFromEnv, onLocal) => {
         // The plugin, its MCP server and the key where its hooks read it, all on this Meko, with
         // tokens it accepts. Anything wrong is set up by Meko's own installer, after asking. A key
         // from the environment must also end up in Claude Code's settings: the service has no
@@ -498,7 +425,7 @@ export async function runInstall(args: string[]): Promise<void> {
           ];
         };
         await ensureMekoSetup(
-          { url, apiKey, ...setup },
+          { url, apiKey, local: onLocal ? { home: cfg.meko.home || null } : null, ...setup },
           { gaps, latest: () => latestMekoSetup(), run: (pkg) => runMekoSetup(pkg, { url, apiKey }), ask, say, warn: (l, t) => ui.warn(l, t) },
         );
       },
@@ -522,63 +449,48 @@ export async function runInstall(args: string[]): Promise<void> {
 
     saveConfig(paths, cfg);
     ui.ok('Config', tildify(paths.config));
-    // Create the certificate now (the server reuses it), so a problem with it shows up here.
-    const tls = await loadTls(paths, cfg);
-    if (tls) ui.ok('Certificate', tls.selfSigned ? 'self-signed, created for this host' : 'from config');
+    const tmpWarning = tmpHomeWarning(paths.home);
+    if (tmpWarning) ui.warn('Home', tmpWarning);
+    const move = checkMove(paths, cfg);
+    if (move && 'plan' in move) ui.note(`AgentK's home moves to ${tildify(move.plan.to)} once the server has started: every session ends and resumes there.`);
+    else if (move) ui.warn('Home', `stays in ${tildify(paths.home)} for now: ${move.skip}`);
 
     // 6. Services
     ui.section('Services');
-    if (!isLoopback(cfg.server.bind) && macFirewallOn()) {
-      ui.note('The macOS firewall is on. If other devices (like your phone) can\'t connect, allow incoming connections for');
-      ui.note(`${tildify(join(paths.app, 'current', 'node', 'bin', 'node'))} in System Settings > Network > Firewall > Options.`);
-    }
     let running = false;
     if (values['no-service']) {
       ui.warn('Services', 'skipped (--no-service). Start the server with: agentk serve');
     } else if (installServices(paths)) {
-      const probe = await waitForServer(cfg);
+      const probe = await waitForServer(paths);
       if (probe.ok) {
-        ui.ok('Server', `answering on port ${cfg.server.port} (version ${probe.version})`);
+        ui.ok('Server', `answering (version ${probe.version})`);
         running = true;
       } else {
         ui.warn('Server', `not answering yet (${probe.error}). See: agentk logs`);
       }
     }
 
-    // 7. Setup link and next steps
-    const handle = openDb(db);
-    try {
-      const scheme = tls ? 'https' : 'http';
-      const host = isLoopback(cfg.server.bind) ? '127.0.0.1' : publicHost();
-      const base = `${scheme}://${host}:${cfg.server.port}`;
-      const local = isLoopback(cfg.server.bind);
+    // 7. Where to open it
+    const meko = await probeLocalMeko(cfg.meko.home || null);
+    ui.blank();
+    if (meko.meko?.webUrl) {
+      ui.text(style.bold(running ? 'Done. AgentK is running:' : 'Done. AgentK will be at:'));
       ui.blank();
-      // Local access needs no login (see localAccess in auth.ts), so there's no setup link to open.
-      if (local || getOwner(handle)) {
-        ui.text(style.bold(running ? 'Done. AgentK is running:' : 'Done. AgentK will be at:'));
-        ui.blank();
-        ui.text(`    ${style.cyan(`${base}/`)}`);
-      } else {
-        ui.text(style.bold('Done. Open this link to create your login (it works once):'));
-        ui.blank();
-        ui.text(`    ${style.cyan(`${base}/setup?token=${issueSetupToken(handle)}`)}`);
-      }
+      ui.text(`    ${style.cyan(`${meko.meko.webUrl}${AGENTK_PATH}`)}`);
       ui.blank();
-      if (local) {
-        ui.row('Sign-in', getOwner(handle)
-          ? `none on this computer; the login for ${getOwner(handle)!.username} is kept for remote access`
-          : 'none: it only listens on this computer');
-      }
-      if (tls?.selfSigned) ui.row('Certificate', 'self-signed, so your browser warns once');
-      if (!local) ui.row('New link', 'agentk setup-link');
-      ui.row('Status', 'agentk status');
-      ui.row('Logs', 'agentk logs -f');
+      ui.row('Sign-in', "Meko's: meko setup_link makes (or resets) the login for remote access");
+    } else {
+      ui.text(style.bold('Done.'));
       ui.blank();
-    } finally {
-      handle.close();
+      ui.row('Browser', meko.meko
+        ? 'the Meko on this computer is too old to serve AgentK: update it with meko update'
+        : "Meko isn't running: start it with meko start, then open AgentK with agentk ui");
     }
+    ui.row('Status', 'agentk status');
+    ui.row('Logs', 'agentk logs -f');
+    ui.blank();
   } catch (e) {
-    if (e instanceof InstallError || e instanceof ServiceError) {
+    if (e instanceof InstallError || e instanceof ServiceError || e instanceof PrivateDirError) {
       process.stderr.write('\n');
       ui.fail('Install failed', e.message);
       process.exitCode = 1;
@@ -641,6 +553,15 @@ export function purgeHome(paths: Paths, all: boolean): string[] {
   });
   if (!kept.length) rmSync(paths.home, { recursive: true, force: true });
   return kept;
+}
+
+/** Removes `~/.agent-k-local` when it's the link to `home` that the move left. */
+export function removeOldHomeLink(home: string, old: string = oldHome()): void {
+  try {
+    if (lstatSync(old).isSymbolicLink() && samePath(readlinkSync(old), home)) unlinkSync(old);
+  } catch {
+    // not there
+  }
 }
 
 /**
@@ -717,6 +638,8 @@ export async function runUninstall(args: string[]): Promise<void> {
       const db = dbPath(paths, loadConfig(paths));
       const kept = purgeHome(paths, deleteWork);
       if (!db.startsWith(paths.home + '/')) removeDb(db);
+      // The link the move into Meko's data folder left at the old home goes with what it pointed at.
+      if (!kept.length) removeOldHomeLink(paths.home);
       say(kept.length ? `Removed ${tildify(paths.home)} except ${kept.map(tildify).join(' and ')}.` : `Removed ${tildify(paths.home)}.`);
       if (deleteWork) say('Run `git worktree prune` in each repo to forget the deleted worktrees.');
     } else {

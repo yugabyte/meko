@@ -1,6 +1,7 @@
 // Command palette labels and filtering. Pure, so it's unit-tested.
 import { shareLinkToken } from '../shared/mekourls';
 import { STAGE_LABELS, type AskAgentkAction, type JoinByLinkResult, type LinkPlan, type LinkProject, type ProjectWithSessions, type SessionMatch } from '../shared/types';
+import { stageWords } from './util';
 
 /** A piece of a palette label: plain text, or a session's or project's name, drawn in its own style. */
 export type LabelPart = string | { session: string } | { project: string };
@@ -158,16 +159,16 @@ export function askEntries(actions: AskAgentkAction[], projects: ProjectWithSess
         const said = preview(a.prompt, 80);
         const same = said.replace(/[.!\s]+$/, '').toLowerCase() === a.name.toLowerCase();
         return [
-          { id, label: ['Start ', { session: a.name }, ' in ', { project: projectName(a.projectId) }, ` at ${STAGE_LABELS[a.start]}`], hint: same ? 'Action' : said, action: a },
+          { id, label: ['Start ', { session: a.name }, ' in ', { project: projectName(a.projectId) }, ` at ${STAGE_LABELS[a.start]}${a.autoRun ? ', run to merge' : ''}`], hint: same ? 'Action' : said, action: a },
           { id: `${id}-edit`, label: ['Edit ', { session: a.name }, ' in New session…'], hint: 'Change it before it starts', action: a, edit: true },
         ];
       }
       case 'link':
-        return [{ id, label: [`Work on ${a.ref}`], hint: 'Looks up the GitHub link', action: a }];
+        return [{ id, label: [`Work on ${a.ref}`, ...(a.projectId ? [' in ', { project: projectName(a.projectId) }] : [])], hint: 'Looks up the GitHub link', action: a }];
       case 'go': {
         if (a.view === 'session') {
           const s = session(a.sessionId);
-          return [{ id, label: ['Go to ', { session: sessionName(a.sessionId) }], hint: s ? `${projectName(a.projectId)} · ${STAGE_LABELS[s.stage]}` : '', action: a }];
+          return [{ id, label: ['Go to ', { session: sessionName(a.sessionId) }], hint: s ? `${projectName(a.projectId)} · ${stageWords(s)}` : '', action: a }];
         }
         if (a.view === 'home') return [{ id, label: [{ project: projectName(a.projectId) }, ': project home'], hint: 'View', action: a }];
         return [{ id, label: [a.view === 'usage' ? 'Usage' : 'Settings'], hint: 'View', action: a }];
@@ -176,8 +177,23 @@ export function askEntries(actions: AskAgentkAction[], projects: ProjectWithSess
         return [{ id, label: ['Move ', { session: sessionName(a.sessionId) }, ` to ${STAGE_LABELS[a.stage]}`], hint: a.instructions ? preview(a.instructions, 80) : 'Action', action: a }];
       case 'openPr':
         return [{ id, label: ['Open PR for ', { session: sessionName(a.sessionId) }], hint: a.instructions ? preview(a.instructions, 80) : 'Action', action: a }];
+      case 'openProject':
+        return [{
+          id, label: [`Open a project on ${a.repo}`, ...(a.name ? [' named ', { project: a.name }] : [])],
+          hint: a.datapack === 'none' ? 'No datapack' : a.datapack === 'new' ? 'With a new datapack' : 'With that datapack', action: a,
+        }];
     }
   });
+}
+
+/**
+ * The steps **Do all** runs (POST /api/actions/run), when AgentK's answer is the steps of one
+ * instruction (`together`) and two or more of them do something: every action but `go`, which only
+ * navigates. Empty when there's no Do all to offer.
+ */
+export function doAllActions(actions: AskAgentkAction[], together: boolean): AskAgentkAction[] {
+  const steps = actions.filter((a) => a.type !== 'go');
+  return together && steps.length > 1 ? steps : [];
 }
 
 /** What a found session's palette item does: go to it, open its PR (a closed one's), or nothing (closed, with no PR). */

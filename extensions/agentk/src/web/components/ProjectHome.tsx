@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import {
   REVIEWER_LABELS,
   type DatapackRef,
+  type LocalMekoState,
   type MekoDatapack,
   type ProjectHome,
   type ProjectSettings,
@@ -12,12 +13,12 @@ import {
 } from '../../shared/types';
 import { LOGIN_PLACEHOLDER, expandBranchPrefix } from '../../shared/branches';
 import { api, errorMessage } from '../api';
-import { useIsMobile } from '../hooks/useMedia';
+import { useIsMobile, useTouch } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { cx, shortTime } from '../util';
 import { Busy, ConfirmButton, DatapackName, ErrorText, Field } from './common';
 import { AddDatapackDialog } from './AddDatapackDialog';
-import { MekoKeyDialog } from './MekoKeyDialog';
+import { MekoLinkDialog } from './MekoLinkDialog';
 import { ShareDialog } from './ShareDialog';
 import { TopBar } from './TopBar';
 
@@ -33,9 +34,11 @@ export function ProjectHomeView({
   onMove,
   mekoWebUrl,
   mekoConfigured,
+  mekoLocal,
   ghLogin,
   onMenu,
   onBack,
+  onLearn,
   onError,
 }: {
   project: ProjectWithSessions;
@@ -44,20 +47,24 @@ export function ProjectHomeView({
   /** Moves the project to this index in the list (the tap equivalent of dragging it in the rail). */
   onMove: (index: number) => void;
   mekoWebUrl: string | null;
-  /** Meko is on (a key is set). */
+  /** There's a Meko to use (Meko's Meko Cloud link, or the Meko on this computer). */
   mekoConfigured: boolean;
+  /** The Meko on this computer (`MekoStatus.local`), for what to do while there's no Meko. */
+  mekoLocal: LocalMekoState;
   /** The login gh is signed in as, for `{login}` in the branch prefix. */
   ghLogin: string | null;
   /** Opens the projects drawer (phone layout). */
   onMenu: () => void;
   onBack: () => void;
+  /** Opens the New session dialog on Learn the project, offered while the dedicated datapack is empty. */
+  onLearn: () => void;
   onError: (m: string) => void;
 }) {
   const mobile = useIsMobile();
   const [home, setHome] = useState<ProjectHome | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   /**
-   * The open dialog: sharing, adding a Meko key, adding a dedicated datapack (with why it's asked
+   * The open dialog: sharing, setting up Meko, adding a dedicated datapack (with why it's asked
    * for), or switching it (from the one shown when Switch was tapped, so a switch made meanwhile in
    * another tab is refused rather than undone).
    */
@@ -74,7 +81,7 @@ export function ProjectHomeView({
   /** Who can share it, when a contributor or viewer asks (null: the notice isn't shown). */
   const [sharers, setSharers] = useState<string[] | null>(null);
   const share = () => {
-    if (!mekoConfigured) setDialog({ kind: 'key', reason: 'A project is shared through its Meko datapack, so sharing needs Meko. Add your Meko API key to turn it on.' });
+    if (!mekoConfigured) setDialog({ kind: 'key', reason: 'A project is shared through its Meko datapack, so sharing needs Meko.' });
     else if (!dedicated) setDialog({ kind: 'datapack', reason: `A project is shared through its datapack, and ${project.name} has none yet.` });
     else if (cantShare) {
       const owner = dedicated.ownerName ?? dedicated.ownerEmail;
@@ -190,9 +197,17 @@ export function ProjectHomeView({
                   </button>
                 ) : (
                   <button className="btn small" onClick={() => setDialog({ kind: 'key' })}>
-                    Add a Meko API key
+                    Set up Meko
                   </button>
                 )}
+              </div>
+            )}
+            {mekoConfigured && dedicated && home && !home.hasLearnSession && dedicated.memoryCount === 0 && dedicated.knowledgeCount === 0 && (
+              <div className="dp-none">
+                <span className="muted">This datapack is empty.</span>
+                <button className="btn small" id="home-learn" onClick={onLearn}>
+                  Learn the project
+                </button>
               </div>
             )}
             {mekoConfigured && <AttachDatapack
@@ -240,7 +255,7 @@ export function ProjectHomeView({
       {dialog?.kind === 'share' && dedicated && (
         <ShareDialog projectId={project.id} projectName={project.name} datapack={dedicated} onClose={() => setDialog(null)} />
       )}
-      {dialog?.kind === 'key' && <MekoKeyDialog reason={dialog.reason} mekoWebUrl={mekoWebUrl} onClose={() => setDialog(null)} />}
+      {dialog?.kind === 'key' && <MekoLinkDialog reason={dialog.reason} local={mekoLocal} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'datapack' && (
         <AddDatapackDialog project={project} reason={dialog.reason} onClose={() => setDialog(null)} onAdded={() => load()} />
       )}
@@ -321,6 +336,8 @@ function AttachDatapack({
   attached: Set<string>;
   onAttach: (d: MekoDatapack) => Promise<void>;
 }) {
+  // On touch, the keyboard comes up only when a field is tapped.
+  const touch = useTouch();
   const [open, setOpen] = useState(false);
   const [all, setAll] = useState<MekoDatapack[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -355,7 +372,7 @@ function AttachDatapack({
           placeholder="Search your datapacks…"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          autoFocus
+          autoFocus={!touch}
         />
         <button className="btn ghost" onClick={() => setOpen(false)}>
           Done

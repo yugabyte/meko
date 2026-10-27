@@ -22,14 +22,15 @@ live outside the repo so they never show up in `git status`, and outlive their s
 goes idle for the next session on the repo (see [Worktree reuse](#worktree-reuse)).
 
 ```sh
-# layout on the host
-~/.agent-k-local/
+# layout on the host: AgentK's home, in Meko's data folder (see "Where AgentK lives" below)
+~/.meko/extensions/agentk/
   config.toml              # host settings: address and port, TLS paths, repo roots, update channel, Meko
-  state.db                 # SQLite: projects, sessions, events, auth (WAL)
+  state.db                 # SQLite: projects, sessions, events (WAL); an older install's login, for Meko's handoff
   hook.sock                # Claude hooks (and AgentK's mod) → server
+  web.sock                 # the server's only listener; Meko serves it at /ext/agentk/
   run/                     # launchers, the hooks settings file and scripts, run/mod/agentk (AgentK's mod)
   server.lock              # the running server's lease on this home (one server per home)
-  certs/                   # self-signed pair, or symlinks to your own
+  certs/                   # an older install's self-signed pair, for Meko's handoff
   app/0.4.1/  app/current → 0.4.1
   worktrees/<repo>.<hash>/wt-<n>/  # git worktree, shared by the repo's projects (older ones: worktrees/<project>/<session>/)
   designs/<session>/design.md      # markdown design written during Design (Artifact designs live on claude.ai)
@@ -53,11 +54,9 @@ idle_per_repo = 3         # idle worktrees each repo keeps for its next session 
 idle_days = 14            # an idle worktree no session used for this many days is removed (0 to 365; 0 keeps it)
 
 [meko]
-# enabled = false            # turn Meko off (projects work without datapacks); on by default
-# url = "…"                  # Meko MCP server; unset uses MEKO_MCP_URL, Claude Code's settings, then Meko Cloud
-# api_key = "…"              # unset uses MEKO_API_KEY, then Claude Code's settings
-# web_url = "…"              # Meko web app, for links; unset uses MEKO_WEB_URL, Claude Code's settings, then Meko Cloud's for Meko Cloud
-# api_url = "…"              # Meko's REST API, for sharing; unset uses MEKO_API_URL, then web_url + /api/v1
+# The Meko Cloud link is Meko's (its web UI's Settings › Meko Cloud, or meko cloud_link). url, api_key,
+# web_url and api_url from before are handed to Meko once, then never read again (kept for a rollback).
+# home = "…"                 # Meko's data folder, which AgentK's home is in; set by the installer and from Meko's MEKO_HOME
 # capture_transcripts = true   # send session transcripts to Meko conversations; off by default (MEKO-710)
 
 [claude]
@@ -66,8 +65,13 @@ idle_days = 14            # an idle worktree no session used for this many days 
 # mod = false                # don't load AgentK's mod into sessions (prompts are then typed into the terminal); on by default
 
 [agents]
-# default = "kiro"           # the agent new sessions and Ask AgentK run on (claude or kiro; Settings → Harness); claude by default,
-                             # and the first available one while the one named isn't available
+# default = "kiro"           # the agent new sessions and Ask AgentK run on (claude, opencode or kiro; Settings → Harness); claude by default,
+                             # and the first available one (in that order) while the one named isn't available
+
+[opencode]
+# command = "opencode"       # how OpenCode is run; the default is also found in ~/.opencode/bin
+# enabled = false            # don't offer OpenCode for new sessions; on by default (offered once `opencode --version` answers 2.0.0 or later)
+# disable_tracking = true    # the OpenCode AgentK runs sends no telemetry, checks for no update and offers no free models; off by default
 
 [kiro]
 # command = "kiro-cli"       # how Kiro CLI is run
@@ -75,7 +79,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 # trust_tools = true         # Kiro sessions start with every tool trusted (--trust-tools=*), so Kiro never asks; off by default
 
 [call_home]
-# enabled = false            # stop sending anonymous usage stats (Settings → Account); on by default
+# enabled = false            # stop sending anonymous usage stats (Settings › General); on by default
 # url = "https://…/v1/report" # where reports go (the collector's report URL); unset uses the one release builds carry
 # diagnostics_url = "http://127.0.0.1:8080/" # where the YugabyteDB copy goes; unset is https://diagnostics.yugabyte.com from release installs only
 
@@ -86,6 +90,10 @@ idle_days = 14            # an idle worktree no session used for this many days 
 # enabled = false            # no Ask AgentK in the command palette; on by default
 # model = "sonnet"           # the model that answers asks (a Claude Code alias or a full model name; empty uses Claude Code's default)
 # timeout_seconds = 45       # an ask that takes longer is stopped (5 to 300)
+
+[tools]
+# enabled = false            # sessions get no session tools (agentk_sessions MCP server and its skill: open projects,
+#                            # start and move sessions); on by default, and also in Settings → General
 ```
 
 | Action | What the server does |
@@ -142,6 +150,8 @@ CREATE TABLE sessions (
   queued_gate TEXT,                -- a gate pressed before it could go: 'open-pr' (at the turn's end) | 'merge' (once
                                    --   nothing blocks it); NULL: none
   queued_instructions TEXT,        -- the user's instructions for a queued Open PR (OpenPrRequest); cleared with queued_gate
+  auto_run INTEGER,                -- 1 while Run to merge is on: AgentK keeps Open PR, then the merge, queued (lifecycle.md)
+  queued_auto INTEGER,             -- 1 when Run to merge queued queued_gate, not the user's press (stopping it drops only its own)
   skip_learn INTEGER,              -- 1: the last Merge & Close press asked to skip the learn step (kept until the PR merges)
   discarding INTEGER,              -- 1: Discard was asked for and waits for the learn step (cleared by Archive)
   agentk_seen INTEGER,             -- 1 once AgentK commented on or reviewed the PR, or was asked to
@@ -195,24 +205,64 @@ CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);   -- setup token, update sta
   loop. On a dev box whose disk other builds kept busy, a commit took up to 405 ms under FULL
   (0.2 ms under NORMAL), and every request waited behind it. Old `session_events` are pruned
   after 30 days, except `merged` events, which the Usage page counts.
-- **Not on NFS.** SQLite locking is unreliable on network filesystems. The installer checks the
-  filesystem type of `~/.agent-k-local`. If it's NFS, the installer puts `state.db` on local disk
-  (`$XDG_STATE_HOME`, then `/var/tmp/$USER`) and records the path in `config.toml`. The
-  `/var/tmp/$USER` folder must be a real directory owned by you that others can't write to, or the
-  installer stops rather than put the database (password hash, TOTP secret) somewhere another user
-  controls.
+- **Not on NFS.** SQLite locking is unreliable on network filesystems. A home in Meko's data
+  folder is on a local disk (below), so `state.db` is in it. Only a home from before the move can
+  be on NFS: for one, `agentk install` puts the database on local disk (`[state] db_path` in
+  `config.toml`, `$XDG_STATE_HOME/agent-k-local` or `/var/tmp/$USER/agent-k-local`), and the move
+  brings it into the new home and clears the setting. A folder in `/var/tmp` must be a real directory owned by you that others can't write
+  to, or AgentK stops rather than put its data (hook tokens, an older install's login) somewhere
+  another user controls.
 
-`config.toml` holds host settings: the listen address and port, the server's name, TLS paths, repo folders, the update
+### Where AgentK lives
+
+AgentK's home is `<Meko's data folder>/extensions/agentk`, and users don't pick another place.
+Meko's data folder is found by Meko's own rule (`Resolve` in `backend/internal/paths/paths.go`;
+`mekoHome()` in `src/server/paths.ts` repeats it, and `scripts/install.sh` repeats it in sh, all
+three tested against `backend/internal/paths/testdata/resolve-cases.json`): `MEKO_HOME`, refused on
+a network filesystem; else `~/.meko` on a local disk; else, for a home folder on a network
+filesystem, `$XDG_STATE_HOME/meko` when that's local, else `/var/tmp/<user>/meko` (made private as
+above). Meko sets `MEKO_HOME` on every AgentK command it runs, and AgentK keeps it as `[meko]
+home`, since its own services don't have it. A home already in a Meko data folder refuses
+`uninstall`, `start`, `stop`, `status` and `_handoff` when `MEKO_HOME` names another folder
+(`refuseOtherMeko` in `src/server/movehome.ts`): a release acts on its own home whatever
+`MEKO_HOME` says, so a Meko that found this AgentK for another data folder (a second Meko, Meko's
+own tests) would otherwise stop or uninstall it, ending every session, and repoint its `[meko]
+home`. A home that hasn't moved into a Meko data folder yet isn't protected: it takes Meko's
+folder from `MEKO_HOME`, so another Meko's commands still act on it and its `[meko] home` (where
+it moves next) follows the last one. `install` isn't refused either: the installer updates the
+existing home in place, and `agentk install` keeps the Meko data folder its home is in as `[meko]
+home`, over `MEKO_HOME`. The server takes `MEKO_HOME` and `XDG_STATE_HOME` from the login shell
+(as it does `PATH`), so it finds the same folder the installer did. A relative `XDG_STATE_HOME`
+is ignored, as the XDG spec says.
+
+- **A release's home is its own folder** (`<home>/app/<version>`, `AK_APP_DIR`), whatever
+  `AK_HOME` says; the CLI run through `~/.local/bin/agentk` finds it that way, and so does the
+  launcher. `AK_HOME` names a home only without a release (`npm run dev`, tests).
+- **Otherwise** (`akHome()`): `<Meko's data folder>/extensions/agentk` when it's there, else
+  `~/.agent-k-local` when that's there (an install the move hasn't reached), else the new one.
+- **In `/var/tmp`**, which many Linux systems clean by age (systemd-tmpfiles' default is 30 days on
+  Fedora and RHEL), the server holds a shared `flock` on the home while it runs, which the cleanup
+  skips on systemd versions that honor it, and the installer and the server warn and suggest a
+  local `XDG_STATE_HOME`.
+
+Homes from before this (`~/.agent-k-local`, or one an install named with `AK_HOME`) move there by
+themselves: [Moving the home into Meko's data folder](recovery.md#moving-the-home-into-mekos-data-folder).
+
+`config.toml` holds host settings: the server's name, repo folders, the update
 channel, the Meko URL and key (only when typed at install), transcript capture, the
-`claude` command, the database path, how many idle worktrees each repo keeps, and whether AgentK resolves PRs' merge conflicts. The Settings dialog
+`claude` command, Meko's data folder as Meko last named it, how many idle worktrees each repo keeps, and whether AgentK resolves PRs' merge conflicts. The Settings dialog
 writes its fields (repo folders, scan depth, clone folder, idle worktrees per repo and the days to
 keep an unused one, update channel, server name, resolving merge conflicts) there too. The server reads the file at
 start, so an edit made while it runs takes effect after a restart, and a save from Settings meanwhile writes over it. Per-project settings, sessions and everything else live in `state.db`. Only values that
-differ from the defaults are written, so a changed default reaches existing installs; a value of the wrong type is ignored with a warning. `AK_BIND` and
-`AK_PORT` override `[server]` for one run (`npm run dev`) and are never written to the file. The Meko
-URL and key come from `[meko]`, then `MEKO_MCP_URL`/`MEKO_API_KEY`, then the `env` block of Claude
-Code's user `settings.json` (in `CLAUDE_CONFIG_DIR` if set); a later source's URL is skipped when that
-source has a key of its own, and with no URL it's Meko Cloud.
+differ from the defaults are written, so a changed default reaches existing installs; a value of the wrong type is ignored with a warning. An older
+install's `[server] bind` and `port` and `[tls]` stay in the file for Meko's handoff
+([security.md](security.md)), and nothing else reads them. The Meko
+URL and key are Meko's: its Meko Cloud link, else the Meko running on this computer with its own URL
+and token, both read from Meko (`meko token --json`) and never written here. `[meko] url`, `api_key`,
+`web_url` and `api_url`, `MEKO_MCP_URL`/`MEKO_API_KEY` and the `env` block of Claude Code's user
+`settings.json` are read only to hand a key from before to Meko, once, and under a Meko too old to
+keep the link ([datapacks.md](datapacks.md)). An `enabled` key left in `[meko]` by older versions is ignored and
+dropped at the next save: Meko can't be turned off.
 
 ## Worktree reuse
 

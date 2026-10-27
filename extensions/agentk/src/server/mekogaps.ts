@@ -6,8 +6,21 @@ import { all, run, type Db } from './db.js';
  * (`meko_calls.quality`, set by the transcript reader, and `meko_preloads.quality` for AgentK's
  * search at start), grouped by query (`query_key`), with what the user did about each
  * (`meko_gap_marks`), or a session's learn step did. A question whose latest ask found something
- * relevant is left out; one asked again after it was dismissed or taught is open again.
+ * relevant is left out; one asked again after it was dismissed or taught is open again. A learn
+ * session's searches while it's in Explore (`seeding`) aren't questions: it searches before each
+ * save to skip what Meko has, into a datapack it's seeding, so finding nothing there is expected.
+ * Once moved on, it's a task like any other, and its searches count. One that found something
+ * still answers another session's question.
  */
+
+/**
+ * Whether the search `t` (`meko_calls` or `meko_preloads`, joined to its session as `s`) was made
+ * while a learn session was seeding: in Explore, where it closes itself once done (`learnDone`).
+ */
+function seeding(t: string): string {
+  return `(s.purpose = 'learn' AND EXISTS (SELECT 1 FROM session_stages st WHERE st.session_id = s.id AND st.stage = 'explore'
+    AND st.entered_at <= ${t}.at AND (st.left_at IS NULL OR st.left_at > ${t}.at)))`;
+}
 
 /** Questions on one page. */
 export const GAP_PAGE = 100;
@@ -69,11 +82,11 @@ export function projectGaps(db: Db, projectId: string): MekoGap[] {
     `SELECT c.query_key AS key, c.query, c.quality, 'claude' AS source, c.tool, c.results, c.top_score, c.top_raw, c.at,
        s.id AS session_id, s.name AS session_name, s.desired
      FROM meko_calls c JOIN sessions s ON s.id = c.session_id
-     WHERE s.project_id = ? AND c.quality IS NOT NULL AND c.query_key IS NOT NULL
+     WHERE s.project_id = ? AND NOT ${seeding('c')} AND c.quality IS NOT NULL AND c.query_key IS NOT NULL
      UNION ALL
      SELECT p.query_key, p.query, p.quality, 'start', 'context_search', NULL, p.top_score, NULL, p.at, s.id, s.name, s.desired
      FROM meko_preloads p JOIN sessions s ON s.id = p.session_id
-     WHERE s.project_id = ? AND p.quality IS NOT NULL AND p.query_key IS NOT NULL
+     WHERE s.project_id = ? AND NOT ${seeding('p')} AND p.quality IS NOT NULL AND p.query_key IS NOT NULL
      ORDER BY at DESC`, projectId, projectId);
   if (!asks.length) return [];
   // The latest ask of each question that found something relevant: one after the poor asks answers it.
@@ -187,12 +200,14 @@ export function findGap(db: Db, projectId: string, key: string): MekoGap | null 
  * each query as last asked, cut to `GAP_LEARN_CHARS`; `own` says whether the session asked it.
  */
 export function learnGaps(db: Db, projectId: string, sessionId: string): { key: string; query: string; own: boolean }[] {
+  // A learn session's searches while seeding aren't questions here either (projectGaps).
   const asked = new Map(all<{ key: string; at: number }>(db,
-    'SELECT query_key AS key, MAX(at) AS at FROM meko_calls WHERE session_id = ? AND quality IS NOT NULL AND query_key IS NOT NULL GROUP BY query_key',
+    `SELECT c.query_key AS key, MAX(c.at) AS at FROM meko_calls c JOIN sessions s ON s.id = c.session_id
+     WHERE c.session_id = ? AND NOT ${seeding('c')} AND c.quality IS NOT NULL AND c.query_key IS NOT NULL GROUP BY c.query_key`,
     sessionId).map((r) => [r.key, r.at]));
   const byClaude = new Set(all<{ key: string }>(db,
     `SELECT DISTINCT c.query_key AS key FROM meko_calls c JOIN sessions s ON s.id = c.session_id
-     WHERE s.project_id = ? AND c.quality IS NOT NULL AND c.query_key IS NOT NULL`, projectId).map((r) => r.key));
+     WHERE s.project_id = ? AND NOT ${seeding('c')} AND c.quality IS NOT NULL AND c.query_key IS NOT NULL`, projectId).map((r) => r.key));
   if (!byClaude.size) return [];
   const open = projectGaps(db, projectId).filter((g) => g.state === 'open' && byClaude.has(g.key));
   const own = open.filter((g) => asked.has(g.key))

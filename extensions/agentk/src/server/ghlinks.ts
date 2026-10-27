@@ -52,15 +52,26 @@ export class GithubLinkService {
     };
   }
 
-  /** Starts the session the plan offers, in `projectId` or in the project the link fits (opened if need be). */
-  async start(req: StartFromLinkRequest): Promise<StartFromLinkResult> {
+  /**
+   * Starts the session the plan offers, in `projectId` or in the project the link fits (opened if
+   * need be). `once`: an issue a running task already works on is refused too (409), as a PR a
+   * running review has always is; the palette offers that task instead (`LinkPlan.existing`).
+   */
+  async start(req: StartFromLinkRequest, opts: { once?: boolean } = {}): Promise<StartFromLinkResult> {
     if (req.projectId != null && typeof req.projectId !== 'string') throw new HttpError(400, 'The project must be its id.');
     if (req.start != null && req.start !== 'design' && req.start !== 'code') throw new HttpError(400, "Start an issue's session at design or code.");
+    if (req.autoRun != null && typeof req.autoRun !== 'boolean') throw new HttpError(400, 'autoRun must be true or false.');
     const { repo, item } = await this.read(req.ref);
+    if (req.autoRun && (item.kind === 'pr' || req.start !== 'code')) {
+      throw new HttpError(400, "Run to merge is only for an issue's task that starts at Code.");
+    }
     if (item.kind === 'pr') {
       if (item.state !== 'open') throw new HttpError(400, `PR #${item.number} of ${repo} is ${item.state}, so there's nothing to review.`);
       const running = this.existing(repo, item)[0];
       if (running) throw new HttpError(409, `PR #${item.number} of ${repo} is already being reviewed in "${running.name}".`);
+    } else if (opts.once) {
+      const running = this.existing(repo, item)[0];
+      if (running) throw new HttpError(409, `issue #${item.number} of ${repo} already has a session, "${running.name}".`);
     }
     let projectId: string;
     let clone: string | null;
@@ -99,7 +110,7 @@ export class GithubLinkService {
       && !['private', 'internal'].includes((await this.core.sessions.headTrust.visibility(repo)) ?? '');
     const create: CreateSessionRequest = item.kind === 'pr'
       ? { name: '', kind: 'review-pr', pr: { repo, number: item.number }, repoPath }
-      : { name: issueSessionName(item), kind: 'task', start: req.start ?? 'design', prompt: issuePrompt(repo, item, outsider), repoPath };
+      : { name: issueSessionName(item), kind: 'task', start: req.start ?? 'design', prompt: issuePrompt(repo, item, outsider), repoPath, autoRun: req.autoRun || undefined };
     const { session, done } = await this.core.sessions.begin(projectId, create);
     done.catch((e: unknown) => this.core.log.warn(`session ${session.id} didn't start`, errMsg(e)));
     return { project: this.core.projects.get(projectId), session };

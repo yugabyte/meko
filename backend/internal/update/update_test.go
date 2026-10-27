@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func rel(tag string, assets ...string) Release {
@@ -75,14 +76,17 @@ func fakeMeko(version string, fail bool) string {
 }
 
 // tarball builds meko-<version>.tar.gz holding bin/meko and an engine file.
-func tarball(t *testing.T, version string) []byte {
+func tarball(t *testing.T, version string) []byte { return tarballOf(t, "meko", "meko", version) }
+
+// tarballOf builds a release of package pkg: <pkg>-<version>/bin/<name> and an engine file.
+func tarballOf(t *testing.T, pkg, name, version string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	top := "meko-" + version + "/"
-	add := func(name, body string, mode int64) {
-		h := &tar.Header{Name: top + name, Mode: mode, Size: int64(len(body)), Typeflag: tar.TypeReg}
+	top := pkg + "-" + version + "/"
+	add := func(file, body string, mode int64) {
+		h := &tar.Header{Name: top + file, Mode: mode, Size: int64(len(body)), Typeflag: tar.TypeReg}
 		if err := tw.WriteHeader(h); err != nil {
 			t.Fatal(err)
 		}
@@ -90,7 +94,7 @@ func tarball(t *testing.T, version string) []byte {
 			t.Fatal(err)
 		}
 	}
-	add("bin/meko", fakeMeko(version, false), 0o755)
+	add("bin/"+name, fakeMeko(version, false), 0o755)
 	add("memory_engine/dist/main.js", "// memory engine\n", 0o644)
 	if err := tw.Close(); err != nil {
 		t.Fatal(err)
@@ -112,7 +116,7 @@ func releaseServer(t *testing.T, version string, tgz []byte, sums string) *Clien
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/repos/o/r/releases":
-			_ = json.NewEncoder(w).Encode([]Release{{Tag: TagPrefix + version, Assets: []Asset{
+			_ = json.NewEncoder(w).Encode([]Release{{Tag: TagPrefix + version, URL: srv.URL + "/page", Assets: []Asset{
 				{Name: name, URL: srv.URL + "/asset/tar"}, {Name: Sums, URL: srv.URL + "/asset/sums"},
 			}}})
 		case "/asset/tar":
@@ -248,7 +252,7 @@ func TestExtractRefusesEscapes(t *testing.T) {
 		if err := os.WriteFile(f, buf.Bytes(), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := extract(f, t.TempDir()); err == nil {
+		if err := extract(f, t.TempDir(), false); err == nil {
 			t.Errorf("%s was extracted", h.Name)
 		}
 	}
@@ -337,5 +341,275 @@ func TestLinkCommand(t *testing.T) {
 	}
 	if _, err := os.Lstat(link); !os.IsNotExist(err) {
 		t.Error("link left")
+	}
+}
+
+// An extension's releases (Presenter's) go through the same App: its tarball and top folder named for
+// its package (presenter), its binary and its link in ~/.local/bin for its program (meko_presenter).
+func TestNamedAppStagesAnExtensionsRelease(t *testing.T) {
+	const next = "0.20261024.0"
+	goos, arch := Platform()
+	name := PackageTarball("presenter", next, goos, arch)
+	if want := "presenter-" + next + "-" + goos + "-" + arch + ".tar.gz"; name != want {
+		t.Fatalf("PackageTarball = %q, want %q", name, want)
+	}
+	tgz := tarballOf(t, "presenter", "meko_presenter", next)
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/o/r/releases":
+			_ = json.NewEncoder(w).Encode([]Release{
+				{Tag: TagPrefix + "0.20261030.0", Assets: []Asset{{Name: TarballName("0.20261030.0", goos, arch)}, {Name: Sums}}},
+				{Tag: "presenter-v0.20261025.0", Assets: []Asset{{Name: Sums}}}, // no tarball for this platform
+				{Tag: "presenter-v" + next, Assets: []Asset{
+					{Name: name, BrowserURL: srv.URL + "/tar"}, {Name: Sums, BrowserURL: srv.URL + "/sums"},
+				}},
+			})
+		case "/tar":
+			_, _ = w.Write(tgz)
+		case "/sums":
+			_, _ = io.WriteString(w, sum(tgz)+"  "+name+"\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := &Client{Repo: "o/r", API: srv.URL, HTTP: srv.Client()}
+	rels, err := c.Releases(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, v, ok := PickPackage(rels, []string{"presenter-v"}, "presenter", goos, arch, nil)
+	if !ok || v != next {
+		t.Fatalf("picked %q %v", v, ok)
+	}
+	if _, _, ok := PickPackage(rels, []string{"presenter-v"}, "presenter", goos, arch, map[string]bool{next: true}); ok {
+		t.Error("a bad version was picked")
+	}
+	a := App{Root: filepath.Join(t.TempDir(), "app"), Name: "meko_presenter", Package: "presenter"}
+	if err = a.Stage(context.Background(), c, r, v); err != nil {
+		t.Fatal(err)
+	}
+	if err = a.Repoint(v); err != nil {
+		t.Fatal(err)
+	}
+	if a.Exe(v) != filepath.Join(a.Root, v, "bin", "meko_presenter") {
+		t.Errorf("Exe = %s", a.Exe(v))
+	}
+	home := t.TempDir()
+	link, err := a.LinkCommand(home)
+	if err != nil || link != filepath.Join(home, ".local", "bin", "meko_presenter") {
+		t.Fatalf("link %q %v", link, err)
+	}
+	if got, ver, ok := Of(link); !ok || ver != next || got.Root != realPath(t, a.Root) {
+		t.Errorf("Of(link) = %v %q %v", got, ver, ok)
+	}
+}
+
+// A private app folder (an extension's, in Meko's data folder) gets its release owner-only:
+// folders and programs 0700, other files 0600. Meko's own keeps the tarball's modes.
+func TestPrivateAppUnpacksOwnerOnly(t *testing.T) {
+	const v = "0.20261024.0"
+	f := filepath.Join(t.TempDir(), "x.tar.gz")
+	if err := os.WriteFile(f, tarballOf(t, "presenter", "meko_presenter", v), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []bool{true, false} {
+		a := App{Root: filepath.Join(t.TempDir(), "app"), Name: "meko_presenter", Package: "presenter", Private: private}
+		if err := os.MkdirAll(a.Root, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.Unpack(f, v); err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]os.FileMode{"bin": 0o755, "bin/meko_presenter": 0o755, "VERSION": 0o644,
+			"memory_engine/dist/main.js": 0o644}
+		if private {
+			want = map[string]os.FileMode{"bin": 0o700, "bin/meko_presenter": 0o700, "VERSION": 0o600,
+				"memory_engine/dist/main.js": 0o600}
+		}
+		for p, mode := range want {
+			fi, err := os.Stat(filepath.Join(a.Dir(v), p))
+			if err != nil || fi.Mode().Perm() != mode {
+				t.Errorf("private %v: %s is %v (%v), want %v", private, p, fi.Mode().Perm(), err, mode)
+			}
+		}
+	}
+}
+
+// webUpdater is an Updater as serve builds it, running webOld, against a release server offering
+// next; restarted is closed when it asks serve to restart.
+func webUpdater(t *testing.T, next, sums string) (*Updater, chan struct{}) {
+	t.Helper()
+	tgz := tarball(t, next)
+	if sums == "" {
+		goos, arch := Platform()
+		sums = sum(tgz) + "  " + TarballName(next, goos, arch) + "\n"
+	}
+	restarted := make(chan struct{})
+	u := &Updater{App: newApp(t, webOld), Version: webOld, Client: releaseServer(t, next, tgz, sums),
+		DataDir: t.TempDir(), Schema: 5, Channel: ChannelStable, Context: context.Background(),
+		Log: slog.New(slog.DiscardHandler), Restart: func() { close(restarted) }}
+	return u, restarted
+}
+
+// webOld is the version webUpdater runs.
+const webOld = "0.20261021.0"
+
+func waitJob(t *testing.T, u *Updater) Job {
+	t.Helper()
+	for range 500 {
+		if j := u.Status().Job; j != nil && j.State != JobRunning {
+			return *j
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("the job didn't end: %+v", u.Status().Job)
+	return Job{}
+}
+
+// The web UI's install checks, stages and switches, then asks for the restart, holding the lock
+// until then; a second one is refused while the new version is pending.
+func TestStartApplyInstallsAndRestarts(t *testing.T) {
+	const next = "0.20261022.0"
+	u, restarted := webUpdater(t, next, "")
+	st, err := u.StartApply()
+	if err != nil || st.Job == nil || st.Job.State != JobRunning {
+		t.Fatalf("start: %+v %v", st.Job, err)
+	}
+	select {
+	case <-restarted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no restart")
+	}
+	st = u.Status()
+	if j := st.Job; j.State != JobRunning || j.Step != StepRestarting || j.To != next {
+		t.Errorf("job %+v", j)
+	}
+	if u.App.Current() != next || st.Pending == nil || st.Pending.To != next || !st.Available ||
+		st.Latest != next || !strings.HasSuffix(st.LatestURL, "/page") {
+		t.Errorf("current %q, status %+v", u.App.Current(), st)
+	}
+	if _, err := u.StartApply(); err != ErrPending {
+		t.Errorf("a second install: %v", err)
+	}
+	if _, err := u.CheckNow(context.Background()); err != ErrBusy {
+		t.Errorf("a check before the restart: %v", err)
+	}
+}
+
+// Nothing newer ends the job done with nothing installed; a failed install ends it failed. Either
+// way the lock is free again.
+func TestStartApplyEnds(t *testing.T) {
+	const v = webOld
+	u, _ := webUpdater(t, v, "")
+	if _, err := u.StartApply(); err != nil {
+		t.Fatal(err)
+	}
+	if j := waitJob(t, u); j.State != JobDone || j.To != "" || j.Error != "" || j.FinishedAt == nil {
+		t.Errorf("nothing newer: %+v", j)
+	}
+	if _, err := u.CheckNow(context.Background()); err != nil {
+		t.Errorf("check after: %v", err)
+	}
+
+	const next = "0.20261022.0"
+	goos, arch := Platform()
+	u, restarted := webUpdater(t, next, strings.Repeat("0", 64)+"  "+TarballName(next, goos, arch)+"\n")
+	if _, err := u.StartApply(); err != nil {
+		t.Fatal(err)
+	}
+	j := waitJob(t, u)
+	if j.State != JobFailed || j.To != next || !strings.Contains(j.Error, "checksum mismatch") {
+		t.Errorf("bad checksum: %+v", j)
+	}
+	if u.App.Current() != v {
+		t.Errorf("current %q", u.App.Current())
+	}
+	select {
+	case <-restarted:
+		t.Error("restarted after a failed install")
+	default:
+	}
+	if _, err := u.StartApply(); err != nil {
+		t.Errorf("again after a failure: %v", err)
+	}
+	waitJob(t, u)
+}
+
+// While a check or an install holds the lock, the web UI's are refused and the scheduled ones skip
+// their turn.
+func TestUpdaterRefusesWhileBusy(t *testing.T) {
+	u, _ := webUpdater(t, "0.20261022.0", "")
+	u.mu.Lock()
+	if _, err := u.CheckNow(context.Background()); err != ErrBusy {
+		t.Errorf("check: %v", err)
+	}
+	if _, err := u.StartApply(); err != ErrBusy {
+		t.Errorf("install: %v", err)
+	}
+	u.FirstCheck, u.Interval = time.Millisecond, time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	u.Run(ctx)
+	if _, ok := ReadState(u.DataDir); ok {
+		t.Error("a scheduled check ran while busy")
+	}
+	u.mu.Unlock()
+	st, err := u.CheckNow(context.Background())
+	if err != nil || st.CheckedAt == nil || st.Latest != "0.20261022.0" || !st.Available {
+		t.Errorf("check: %+v %v", st, err)
+	}
+}
+
+// Status lists the rolled-back versions, sorted, and compares the latest with the running version.
+func TestStatus(t *testing.T) {
+	u, _ := webUpdater(t, "0.20261022.0", "")
+	st := u.Status()
+	if !st.Release || st.Running != "0.20261021.0" || st.Channel != ChannelStable || st.CheckedAt != nil ||
+		st.Available || len(st.RolledBack) != 0 || st.Job != nil {
+		t.Errorf("before a check: %+v", st)
+	}
+	for _, v := range []string{"0.20261020.2", "0.20261019.0"} {
+		if err := u.App.addBadVersion(v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, _ := json.Marshal(State{CheckedAt: time.Now(), Running: "0.20261020.0", Latest: "0.20261021.0"})
+	if err := os.WriteFile(StateFile(u.DataDir), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st = u.Status()
+	if strings.Join(st.RolledBack, ",") != "0.20261019.0,0.20261020.2" || st.Available || st.Latest != "0.20261021.0" {
+		t.Errorf("after: %+v", st)
+	}
+
+	// A check from before a rollback still names the version rolled back: it isn't offered.
+	b, _ = json.Marshal(State{CheckedAt: time.Now(), Running: webOld, Latest: "0.20261022.0"})
+	if err := os.WriteFile(StateFile(u.DataDir), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if st = u.Status(); !st.Available {
+		t.Errorf("newer: %+v", st)
+	}
+	if err := u.App.addBadVersion("0.20261022.0"); err != nil {
+		t.Fatal(err)
+	}
+	if st = u.Status(); st.Available || st.Latest != "0.20261022.0" {
+		t.Errorf("rolled back: %+v", st)
+	}
+}
+
+// Off refuses checks and installs, saying why.
+func TestOff(t *testing.T) {
+	o := Off{Version: webOld, Reason: "no schema"}
+	if st := o.Status(); !st.Release || st.Off != "no schema" || st.Running != webOld || st.RolledBack == nil {
+		t.Errorf("status %+v", st)
+	}
+	if _, err := o.CheckNow(context.Background()); err != ErrOff {
+		t.Errorf("check: %v", err)
+	}
+	if _, err := o.StartApply(); err != ErrOff {
+		t.Errorf("install: %v", err)
 	}
 }

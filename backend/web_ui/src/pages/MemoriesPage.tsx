@@ -1,14 +1,16 @@
 // The datapack's memories: add one, filter, page, delete one, and select several to delete, or
-// (learnings) to keep or promote into the collective memory.
+// (learnings) to keep or promote into the collective memory. Graph shows the same scope as a map.
 
 import { useEffect, useState, type FormEvent } from "react";
-import { Brain, Check, History, Plus, Sparkles, Trash2 } from "lucide-react";
+import { Brain, Check, GitBranch, Plus, Sparkles, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { navigate } from "../lib/route";
 import { timeAgo } from "../lib/format";
-import type { Datapack } from "../lib/types";
+import type { Datapack, MemoryState } from "../lib/types";
+import { SHOW_COLLECTIVE } from "../lib/features";
 import { useLoad } from "../lib/useLoad";
-import { MemoryHistoryDialog } from "../components/MemoryHistoryDialog";
+import { MemoryGraph } from "../components/MemoryGraph";
+import { MemoryLineageDialog, type LineageOf } from "../components/MemoryLineageDialog";
 import { Pager } from "../components/Pager";
 import { Segmented } from "../components/Segmented";
 import { Badge, Button, Card, Empty, ErrorNote, Input, Loading } from "../components/ui";
@@ -17,9 +19,36 @@ type Scope = "memories" | "learnings" | "promoted";
 
 const SCOPES: readonly { id: Scope; label: string }[] = [
   { id: "memories", label: "All memories" },
-  { id: "learnings", label: "Learnings" },
-  { id: "promoted", label: "Collective" },
+  ...(SHOW_COLLECTIVE
+    ? [
+        { id: "learnings" as const, label: "Learnings" },
+        { id: "promoted" as const, label: "Collective" },
+      ]
+    : []),
 ];
+
+// The memory states each scope's graph draws.
+const SCOPE_STATES: Record<Scope, MemoryState[]> = {
+  memories: ["learning", "kept"],
+  learnings: ["learning"],
+  promoted: ["collective"],
+};
+
+type View = "list" | "graph";
+const VIEWS: readonly { id: View; label: string }[] = [
+  { id: "list", label: "List" },
+  { id: "graph", label: "Graph" },
+];
+
+// The view is remembered in this browser, since a scope change reloads the page.
+const VIEW_KEY = "meko.memories.view";
+function savedView(): View {
+  try {
+    return localStorage.getItem(VIEW_KEY) === "graph" ? "graph" : "list";
+  } catch {
+    return "list";
+  }
+}
 
 // routeScope is the scope in the address (/datapacks/<id>/memories/<scope>), so a link can open
 // Learnings or Collective directly.
@@ -45,7 +74,17 @@ export function MemoriesPage({
     setPage(1);
     setSelected(new Set());
   }, [scope]);
-  const [historyOf, setHistoryOf] = useState<string>();
+  const [lineageOf, setLineageOf] = useState<LineageOf>();
+  const [view, setViewState] = useState<View>(savedView);
+  const [changes, setChanges] = useState(0); // redraws the graph after an add
+  const setView = (v: View) => {
+    setViewState(v);
+    try {
+      localStorage.setItem(VIEW_KEY, v);
+    } catch {
+      // Not remembered: the page still works.
+    }
+  };
 
   const list = useLoad(
     () => (scope === "promoted" ? Promise.resolve(undefined) : api.memories(id, { scope, q, page })),
@@ -61,6 +100,7 @@ export function MemoriesPage({
       setSelected(new Set());
       list.reload();
       promoted.reload();
+      setChanges((n) => n + 1);
       onChanged();
       return true;
     } catch (e) {
@@ -74,8 +114,8 @@ export function MemoriesPage({
       <AddMemory onAdd={(text) => act(() => api.addMemory(id, text))} />
 
       <div className="flex flex-wrap items-center gap-3">
-        <Segmented options={SCOPES} value={scope} onChange={setScope} />
-        {scope !== "promoted" && (
+        {SCOPES.length > 1 && <Segmented options={SCOPES} value={scope} onChange={setScope} />}
+        {scope !== "promoted" && view === "list" && (
           <Input
             className="max-w-xs"
             placeholder="Filter by text"
@@ -83,11 +123,16 @@ export function MemoriesPage({
             onChange={(e) => (setQ(e.target.value), setPage(1), setSelected(new Set()))}
           />
         )}
+        <div className="ml-auto">
+          <Segmented options={VIEWS} value={view} onChange={setView} />
+        </div>
       </div>
 
       {actionError && <ErrorNote error={actionError} />}
 
-      {scope === "promoted" ? (
+      {view === "graph" ? (
+        <MemoryGraph datapackId={id} states={SCOPE_STATES[scope]} refresh={changes} />
+      ) : scope === "promoted" ? (
         promoted.loading && !promoted.data ? (
           <Loading />
         ) : promoted.error ? (
@@ -100,9 +145,18 @@ export function MemoriesPage({
           <Card className="divide-y">
             {promoted.data.promoted_memories.map((m) => (
               <div key={m.id} className="group flex items-start justify-between gap-4 p-3">
-                <p className="text-sm">{m.data}</p>
+                <p className="min-w-0 break-words text-sm">{m.data}</p>
                 <div className="flex shrink-0 items-center gap-2">
                   <span className="text-xs text-muted-foreground">{timeAgo(m.created_at)}</span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    title="Where this memory came from"
+                    className="opacity-60 group-hover:opacity-100"
+                    onClick={() => setLineageOf({ ...m, state: "collective" })}
+                  >
+                    <GitBranch className="size-3.5" />
+                  </Button>
                   <Button
                     size="sm"
                     variant="danger"
@@ -148,7 +202,7 @@ export function MemoriesPage({
                   onChange={() => setSelected(toggle(selected, m.id))}
                 />
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm">{m.data}</p>
+                  <p className="min-w-0 break-words text-sm">{m.data}</p>
                   <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                     <Badge>{m.agent_id}</Badge>
                     {timeAgo(m.created_at)}
@@ -157,11 +211,11 @@ export function MemoriesPage({
                 <Button
                   size="sm"
                   variant="ghost"
-                  title="See how this memory changed"
+                  title="Where this memory came from: its conversation, its changes"
                   className="shrink-0 opacity-60 group-hover:opacity-100"
-                  onClick={() => setHistoryOf(m.id)}
+                  onClick={(e) => (e.preventDefault(), setLineageOf({ ...m, state: scope === "learnings" ? "learning" : undefined }))}
                 >
-                  <History className="size-3.5" /> History
+                  <GitBranch className="size-3.5" /> <span className="hidden sm:inline">Origin</span>
                 </Button>
                 <Button
                   size="sm"
@@ -184,9 +238,7 @@ export function MemoriesPage({
           />
         </>
       )}
-      {historyOf && (
-        <MemoryHistoryDialog datapackId={id} memoryId={historyOf} onClose={() => setHistoryOf(undefined)} />
-      )}
+      {lineageOf && <MemoryLineageDialog datapackId={id} memory={lineageOf} onClose={() => setLineageOf(undefined)} />}
     </div>
   );
 }

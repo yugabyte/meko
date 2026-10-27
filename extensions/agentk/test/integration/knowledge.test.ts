@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../../src/server/server.js';
-import { issueSetupToken } from '../../src/server/auth.js';
 import { run } from '../../src/server/db.js';
 import { KnowledgeService } from '../../src/server/knowledge.js';
 import { mekoLogPath } from '../../src/server/mekolog.js';
@@ -14,14 +13,10 @@ import { makeEnv, waitFor, type ApiCall, type TestEnv } from '../helpers.js';
 describe('adding files to a knowledge base', () => {
   let env: TestEnv;
   let app: FastifyInstance;
-  let cookie: string;
 
   beforeEach(async () => {
     env = await makeEnv({ start: false });
-    app = await buildServer(env.core, { tls: null, webDir: null, updater: null });
-    const token = issueSetupToken(env.core.db);
-    const res = await app.inject({ method: 'POST', url: '/api/auth/setup', payload: { token, username: 'me', password: 'correct horse battery' } });
-    cookie = String(res.headers['set-cookie']).split(';')[0];
+    app = await buildServer(env.core, { webDir: null, updater: null });
   });
   afterEach(async () => {
     await app.close();
@@ -36,7 +31,7 @@ describe('adding files to a knowledge base', () => {
   const upload = (id: string, name: string, payload: Buffer | string | object, headers: Record<string, string> = {}) =>
     app.inject({
       method: 'POST', url: `/api/sessions/${id}/knowledge?name=${encodeURIComponent(name)}`,
-      headers: { cookie, 'content-type': 'application/octet-stream', ...headers }, payload,
+      headers: { 'content-type': 'application/octet-stream', ...headers }, payload,
     });
   const uploads = () => env.mekoApi.calls.filter((c) => c.path.endsWith('/knowledge-bases/upload-url'));
   const STORAGE = 'https://storage.test/kb-bucket';
@@ -45,15 +40,14 @@ describe('adding files to a knowledge base', () => {
   const presigned = (key: string) =>
     ({ body: { data: { url: STORAGE, fields: { key, policy: 'cG9saWN5', 'x-amz-signature': 'secret-sig' }, key, already_uploaded: false } } });
 
-  it("sends the file to the project datapack's knowledge base, behind the login and only as raw bytes", async () => {
+  it("sends the file to the project datapack's knowledge base, same-origin only and only as raw bytes", async () => {
     const p = await project('alpha');
     session(p.id, 's1');
-    await app.inject({ method: 'PATCH', url: `/api/projects/${p.id}`, headers: { cookie }, payload: { settings: { mekoLog: true } } });
+    await app.inject({ method: 'PATCH', url: `/api/projects/${p.id}`, payload: { settings: { mekoLog: true } } });
     env.mekoApi.handle((c: ApiCall) => c.path.endsWith('/upload-url') ? presigned('dk-1')
       : c.path.startsWith(STORAGE) ? { status: 204 }
       : { status: 404, body: { error: { code: 'NOT_FOUND', message: 'not registered yet' } } });
 
-    expect((await upload('s1', 'notes.md', Buffer.from('# Hi'), { cookie: '' })).statusCode).toBe(401);
     expect((await upload('s1', 'notes.md', Buffer.from('# Hi'), { origin: 'https://evil.example' })).statusCode).toBe(403);
     // No form can reach it: a JSON or text body is refused before it's read.
     expect((await upload('s1', 'notes.md', { a: 1 }, { 'content-type': 'application/json' })).statusCode).toBe(415);
@@ -88,15 +82,14 @@ describe('adding files to a knowledge base', () => {
     expect((await upload('s1', 'notes.md', Buffer.from('# Hi'))).statusCode).toBe(502);
   });
 
-  it('saves a file of any type for Claude, behind the login, owner-only, and only as raw bytes', async () => {
+  it('saves a file of any type for Claude, same-origin only, owner-only, and only as raw bytes', async () => {
     const p = await project('files');
     session(p.id, 'sf');
     const attach = (name: string, payload: Buffer | string | object, headers: Record<string, string> = {}) =>
       app.inject({
         method: 'POST', url: `/api/sessions/sf/files?name=${encodeURIComponent(name)}`,
-        headers: { cookie, 'content-type': 'application/octet-stream', ...headers }, payload,
+        headers: { 'content-type': 'application/octet-stream', ...headers }, payload,
       });
-    expect((await attach('a.zip', Buffer.from('PK'), { cookie: '' })).statusCode).toBe(401);
     expect((await attach('a.zip', Buffer.from('PK'), { origin: 'https://evil.example' })).statusCode).toBe(403);
     expect((await attach('a.zip', { path: '/etc/passwd' }, { 'content-type': 'application/json' })).statusCode).toBe(415);
     const ok = await attach('../a b.zip', Buffer.from('PK'));
@@ -118,13 +111,13 @@ describe('adding files to a knowledge base', () => {
     const p = await project('beta');
     session(p.id, 's2');
     env.core.updateConfig((c) => {
-      c.meko.enabled = false;
+      c.meko.apiKey = '';
     });
     const off = await upload('s2', 'notes.md', Buffer.from('# Hi'));
     expect(off.statusCode).toBe(409);
-    expect(off.json().error).toMatch(/Meko is off/);
+    expect(off.json().error).toMatch(/Meko isn't set up/);
     env.core.updateConfig((c) => {
-      c.meko.enabled = true;
+      c.meko.apiKey = 'test-key';
     });
     run(env.core.db, "UPDATE sessions SET desired = 'archived' WHERE id = 's2'");
     expect((await upload('s2', 'notes.md', Buffer.from('# Hi'))).statusCode).toBe(409);
@@ -188,12 +181,12 @@ describe('adding files to a knowledge base', () => {
       statuses['dk-e'] = ['indexing'];
       await kb.upload('s3', 'd.md', Buffer.from('d'));
       env.core.updateConfig((c) => {
-        c.meko.enabled = false;
+        c.meko.apiKey = '';
       });
       kb.forget();
       await kb.upload('s3', 'e.md', Buffer.from('e')).catch(() => undefined);
       env.core.updateConfig((c) => {
-        c.meko.enabled = true;
+        c.meko.apiKey = 'test-key';
       });
       // A change of Meko's settings while an upload is on its way: its document isn't followed on the new Meko.
       statuses['dk-f'] = ['indexing'];

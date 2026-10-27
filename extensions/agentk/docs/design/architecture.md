@@ -3,7 +3,8 @@
 Part of the [AgentK design](../design.md).
 
 There are three long-lived pieces on the host: the web server, the session host that owns every
-Claude process, and the state directory at `~/.agent-k-local`. The server is stateless enough to
+Claude process, and AgentK's home, the state directory in Meko's data folder
+(`~/.meko/extensions/agentk` by default; [where it lives](projects-and-sessions.md#where-agentk-lives)). The server is stateless enough to
 be killed at any time. The session host and the on-disk state are what carry your work.
 
 ```mermaid
@@ -12,17 +13,19 @@ flowchart LR
     B["Browser or installed web app"]
   end
   subgraph Host["Devserver (headless) or your Mac"]
-    S["AgentK server<br/>HTTPS :7777"]
+    MW["Meko web listener<br/>:7777, sign-in"]
+    S["AgentK server<br/>web.sock (unix socket)"]
     H["hook.sock<br/>unix socket"]
     T["session host<br/>own service (systemd or launchd)"]
     C1["claude in worktree A"]
     C2["claude in worktree B"]
-    ST[("~/.agent-k-local<br/>state, certs, app versions")]
+    ST[("~/.meko/extensions/agentk<br/>state, app versions")]
     U["updater"]
   end
   M["Meko MCP"]
   GH["GitHub Releases"]
-  B -- "HTTPS + WebSocket, cookie auth" --> S
+  B -- "HTTP(S) + WebSocket, /ext/agentk/" --> MW
+  MW -- "prefix stripped, Host and Origin kept" --> S
   S -- "host.sock: requests, attach streams" --> T
   T -- "pty" --> C1
   T -- "pty" --> C2
@@ -123,8 +126,9 @@ in, alongside any browser (the name is the pane's, `ak-<project>--<slug>`, or ju
 name it lists them). `Ctrl+\` detaches, and Claude keeps running.
 
 **Status path.** Each session starts with `claude --settings` pointing at an agent-k hooks file
-(a Kiro session as the `agentk` agent, whose inline hooks run the same scripts; its events are
-mapped onto Claude Code's by its adapter: see [Agents](harnesses.md)).
+(a Kiro session as the `agentk` agent, whose inline hooks run the same scripts; an OpenCode session
+with AgentK's plugin, loaded through `OPENCODE_CONFIG_CONTENT`, which posts to the same socket; their
+events are mapped onto Claude Code's by their adapters: see [Agents](harnesses.md)).
 The `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`,
 `Notification`, `Stop` and `SessionEnd` hooks (and the status line relay) post to a unix socket,
 which drives the badges in the rail. Your global Claude settings stay untouched. When `/clear` (or

@@ -3,15 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  LoginLimiter, base32Decode, clientKey, base32Encode, consumeSetupToken, hashPassword, issueSetupToken, setupTokenOutstanding, totpAccept, totpCode, verifyPassword,
-} from '../../src/server/auth.js';
-import {
   DEFAULT_CONFIG, DEFAULT_MEKO_URL, loadConfig, mekoHost, mekoWebUrl, mekoWebUrlWarning, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl,
-  resolveMekoWithSource, saveConfig,
+  ownMekoKey, resolveMekoWithSource, saveConfig,
 } from '../../src/server/config.js';
 import { forgetContact, listContacts, recordShares } from '../../src/server/contacts.js';
 import { shortHost } from '../../src/server/core.js';
-import { mekoSettings } from '../../src/server/mekosettings.js';
+import { LocalMekoReader, setMekoLinkHandedOver, type LocalMekoProbe } from '../../src/server/mekolocal.js';
 import { all, kvGet, openDb, run, schemaVersion, snapshotDb } from '../../src/server/db.js';
 import { githubRepo, prettyRemote } from '../../src/server/git.js';
 import { ciState, ciSummary, isLogin, isTrustedAuthor, parseReviewDetails, reviewDetailsQuery } from '../../src/server/github.js';
@@ -20,67 +17,12 @@ import { extractPrompt } from '../../src/server/learn.js';
 import { launchedAgentId, pinSlug, sessionAgentId } from '../../src/server/meko.js';
 import { getPaths } from '../../src/server/paths.js';
 import {
-  DEFAULT_PROMPTS, mekoPrFooter, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoLearnLine, mekoSaveSystemLine, render, SAVING_RULE, type PromptName,
+  DEFAULT_PROMPTS, learnTask, mekoPrFooter, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoLearnLine, mekoSaveSystemLine, render, SAVING_RULE, type PromptName,
 } from '../../src/server/prompts.js';
 import { parseSettings, sessionDatapack, sessionRow, slugify } from '../../src/server/store.js';
 import { shq } from '../../src/server/launcher.js';
 import { repoFolder } from '../../src/server/worktrees.js';
 import { mekoDatapackUrl } from '../../src/web/util.js';
-
-describe('auth', () => {
-  it('hashes and verifies passwords with scrypt', () => {
-    const h = hashPassword('correct horse battery');
-    expect(h.startsWith('scrypt$')).toBe(true);
-    expect(verifyPassword('correct horse battery', h)).toBe(true);
-    expect(verifyPassword('wrong', h)).toBe(false);
-  });
-
-  it('matches the RFC 6238 TOTP test vector (SHA-1, 6 digits)', () => {
-    const secret = base32Encode(Buffer.from('12345678901234567890'));
-    expect(secret).toBe('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ');
-    expect(base32Decode(secret).toString()).toBe('12345678901234567890');
-    expect(totpCode(secret, 59_000)).toBe('287082');
-    expect(totpCode(secret, 1_111_111_109_000)).toBe('081804');
-    const db = openDb(':memory:');
-    expect(totpAccept(db, secret, '287082', 59_000 + 120_000)).toBe(false);
-    expect(totpAccept(db, secret, '287082', 59_000 + 30_000)).toBe(true); // one step of drift
-  });
-
-  it('setup tokens are single use, and reported outstanding until used', () => {
-    const db = openDb(':memory:');
-    expect(setupTokenOutstanding(db)).toBe(false);
-    const t = issueSetupToken(db);
-    expect(setupTokenOutstanding(db)).toBe(true);
-    expect(consumeSetupToken(db, 'nope')).toBe(false);
-    expect(consumeSetupToken(db, t)).toBe(true);
-    expect(consumeSetupToken(db, t)).toBe(false);
-    expect(setupTokenOutstanding(db)).toBe(false);
-  });
-
-  it('limits failed logins per IP', () => {
-    const l = new LoginLimiter(3, 1000);
-    for (let i = 0; i < 3; i++) l.fail('1.2.3.4', 0);
-    expect(l.blocked('1.2.3.4', 10)).toBe(true);
-    expect(l.blocked('5.6.7.8', 10)).toBe(false);
-    expect(l.blocked('1.2.3.4', 2000)).toBe(false);
-  });
-
-  it('counts IPv6 failures per /64, and caps failures across all clients', () => {
-    expect(clientKey('2001:db8:1:2::5')).toBe('2001:db8:1:2::/64');
-    expect(clientKey('2001:0db8:0001:0002:aaaa:bbbb:cccc:dddd')).toBe('2001:db8:1:2::/64');
-    expect(clientKey('::ffff:10.0.0.1')).toBe('10.0.0.1');
-    expect(clientKey('::1')).toBe('0:0:0:0::/64');
-    const l = new LoginLimiter(3, 1000, 10);
-    for (let i = 0; i < 3; i++) l.fail(`2001:db8:1:2::${i + 1}`, 0);
-    expect(l.blocked('2001:db8:1:2::99', 10)).toBe(true);
-    expect(l.blocked('2001:db8:1:3::1', 10)).toBe(false);
-    for (let i = 0; i < 7; i++) l.fail(`10.0.0.${i}`, 0);
-    expect(l.blocked('192.168.1.1', 10)).toBe(true); // 10 failures site-wide
-    l.reset('192.168.1.1');
-    expect(l.blocked('192.168.1.1', 10)).toBe(true);
-    expect(l.blocked('192.168.1.1', 2000)).toBe(false);
-  });
-});
 
 describe('config and db', () => {
   it('keeps the database owner-only, its WAL and update snapshots included, and fixes ones made before', () => {
@@ -152,30 +94,6 @@ describe('config and db', () => {
     expect(shortHost('mac.local')).toBe('mac');
     expect(shortHost('plain')).toBe('plain');
     expect(shortHost('.weird')).toBe('.weird');
-  });
-
-  it('never writes AK_BIND or AK_PORT into config.toml', () => {
-    const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
-    const cfg = structuredClone(DEFAULT_CONFIG);
-    cfg.server.port = 8443;
-    saveConfig(paths, cfg);
-    const saved = { bind: process.env.AK_BIND, port: process.env.AK_PORT };
-    try {
-      process.env.AK_BIND = '127.0.0.1';
-      process.env.AK_PORT = '9999';
-      const live = loadConfig(paths);
-      expect(live.server).toEqual({ bind: '127.0.0.1', port: 9999, name: '' });
-      live.repos.depth = 2; // a settings change made while running under the overrides
-      saveConfig(paths, live);
-    } finally {
-      for (const [k, v] of [['AK_BIND', saved.bind], ['AK_PORT', saved.port]] as const) {
-        if (v === undefined) delete process.env[k];
-        else process.env[k] = v;
-      }
-    }
-    const back = loadConfig(paths);
-    expect(back.server).toEqual({ bind: '0.0.0.0', port: 8443, name: '' });
-    expect(back.repos.depth).toBe(2);
   });
 
   it('finds the Meko web app for known MCP hosts only', () => {
@@ -571,12 +489,20 @@ function dropV38(db: ReturnType<typeof openDb>) {
   dropSessionColumns(db, 'untrusted');
 }
 
+function dropV41(db: ReturnType<typeof openDb>) {
+  dropSessionColumns(db, 'auto_run', 'queued_auto');
+}
+
+function dropV40(db: ReturnType<typeof openDb>) {
+  dropSessionColumns(db, 'purpose');
+}
+
 function dropV39(db: ReturnType<typeof openDb>) {
   dropSessionColumns(db, 'position');
 }
 
-/** Undoes migration 40 (revisit later), for tests that rewind the schema. */
-function dropV40(db: ReturnType<typeof openDb>) {
+/** Undoes migration 42 (revisit later), for tests that rewind the schema. */
+function dropV42(db: ReturnType<typeof openDb>) {
   dropSessionColumns(db, 'revisit_at');
 }
 
@@ -709,10 +635,10 @@ function dropV12(db: ReturnType<typeof openDb>) {
 }
 const V11_COLUMNS = ['kind'];
 
-/** Undoes migrations 40 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
+/** Undoes migrations 42 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
 function undoMigrations(db: ReturnType<typeof openDb>, oldest: number) {
-  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35, dropV36, dropV37, dropV38, dropV39, dropV40];
-  for (let v = 40; v >= oldest; v--) undo[v - 12](db);
+  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35, dropV36, dropV37, dropV38, dropV39, dropV40, dropV41, dropV42];
+  for (let v = 42; v >= oldest; v--) undo[v - 12](db);
 }
 
 function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {
@@ -724,7 +650,7 @@ function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {
 describe('Meko recall in prompts', () => {
   it('asks for a search only in prompts that start new work', () => {
     const asking = (Object.keys(DEFAULT_PROMPTS) as PromptName[]).filter((n) => mekoRecallLine(n));
-    expect(asking.sort()).toEqual(['ci', 'code', 'conflicts', 'design', 'design-plan', 'explore', 'move-code', 'move-design', 'review', 'review-held', 'review-people', 'review-pr']);
+    expect(asking.sort()).toEqual(['ci', 'code', 'conflicts', 'design', 'design-plan', 'explore', 'move-code', 'move-design', 'review', 'review-held', 'review-people', 'review-pr', 'seed']);
     expect(mekoRecallLine('design')).toMatch(/search Meko for earlier designs, decisions and gotchas/);
     expect(mekoRecallLine('ci')).toMatch(/gotchas about the code each finding \(or failure\) is in/);
     expect(mekoRecallLine('conflicts')).toMatch(/gotchas about the code in each conflicting file/);
@@ -833,6 +759,18 @@ describe('naming', () => {
 
   it('renders prompt placeholders', () => {
     expect(render('PR #{{pr}} on {{branch}}{{missing}}', { pr: 12, branch: 'ak/x' })).toBe('PR #12 on ak/x');
+  });
+
+  it("writes a learn session's task from its brief, with the PR window's first day", () => {
+    const now = Date.UTC(2026, 9, 23);
+    expect(learnTask({ about: ' Billing. ', where: '', months: 24 }, now)).toBe(
+      "What this project is about:\nBilling.\n\nWhere its files are:\nThe user didn't say: start from the repo's README and docs, and its top-level folders.\n\nRead the PRs merged since 2024-10-23.",
+    );
+    expect(learnTask({ about: 'Billing.', where: 'svc/', months: 0 }, now)).toMatch(/svc\/\n\nRead no PRs: the user asked for none\.$/);
+    // A day the month back doesn't have is that month's last, never a day in the month after.
+    const since = (iso: string, months: number) => learnTask({ about: 'x', where: '', months }, Date.parse(iso)).match(/since (\S+)\.$/)?.[1];
+    expect([since('2026-10-31', 1), since('2028-03-31', 1), since('2027-03-31', 1), since('2026-01-31', 2), since('2026-03-15', 15)])
+      .toEqual(['2026-09-30', '2028-02-29', '2027-02-28', '2025-11-30', '2024-12-15']);
   });
 });
 
@@ -950,17 +888,17 @@ describe('Meko credentials', () => {
     for (const k of ['MEKO_MCP_URL', 'MEKO_API_KEY', 'MEKO_WEB_URL'] as const) delete process.env[k];
   };
 
-  it('treats an old config.toml that saved the default URL as unset', () => {
+  it('treats an old config.toml that saved the default URL as unset, and ignores Meko turned off', () => {
     clearEnv();
     claudeSettings({ env: { MEKO_MCP_URL: 'https://mcp.example.dev/mcp', MEKO_API_KEY: 'dev-key' } });
     const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
     mkdirSync(paths.home, { recursive: true });
-    writeFileSync(paths.config, `[meko]\nurl = "${DEFAULT_MEKO_URL}"\napi_key = ""\n`);
+    writeFileSync(paths.config, `[meko]\nenabled = false\nurl = "${DEFAULT_MEKO_URL}"\napi_key = ""\n`);
     const cfg = loadConfig(paths);
     expect(cfg.meko.url).toBe('');
     expect(resolveMeko(cfg)).toEqual({ url: 'https://mcp.example.dev/mcp', apiKey: 'dev-key' });
     saveConfig(paths, cfg);
-    expect(readFileSync(paths.config, 'utf8')).not.toContain('url');
+    expect(readFileSync(paths.config, 'utf8')).not.toMatch(/url|enabled/);
   });
 
   it('takes the URL that goes with the key', () => {
@@ -985,7 +923,7 @@ describe('Meko credentials', () => {
     expect(resolveMeko(structuredClone(DEFAULT_CONFIG))).toEqual({ url: 'https://self-hosted.example/mcp', apiKey: 'env-key' });
   });
 
-  it('says where the key came from', () => {
+  it('says where the key came from, falling back to the Meko on this computer with its own URL', async () => {
     clearEnv();
     claudeSettings({ env: { MEKO_API_KEY: 'settings-key' } });
     const cfg = structuredClone(DEFAULT_CONFIG);
@@ -998,20 +936,86 @@ describe('Meko credentials', () => {
     clearEnv();
     cfg.meko.apiKey = '';
     expect(resolveMekoWithSource(cfg).keySource).toBeNull();
+    const reader = new LocalMekoReader(async () => ({ state: 'running', meko: { url: 'http://127.0.0.1:7778/mcp', token: 'local-token' } }));
+    try {
+      expect(await reader.refresh()).toBe(true);
+      expect(await reader.refresh()).toBe(false);
+      // Another source's URL never takes the local token.
+      cfg.meko.url = 'https://config.example/mcp';
+      expect(resolveMekoWithSource(cfg)).toEqual({ url: 'http://127.0.0.1:7778/mcp', apiKey: 'local-token', keySource: 'local' });
+      // Any key wins over it.
+      process.env.MEKO_API_KEY = 'env-key';
+      expect(resolveMekoWithSource(cfg)).toEqual({ url: 'https://config.example/mcp', apiKey: 'env-key', keySource: 'env' });
+      clearEnv();
+      // Except a copy of it, which Meko's setup for Claude Code writes, or an older install stored:
+      // its token on another port, or another token on its URL. The live pair is used.
+      const local = { url: 'http://127.0.0.1:7778/mcp', apiKey: 'local-token', keySource: 'local' };
+      claudeSettings({ env: { MEKO_MCP_URL: 'http://127.0.0.1:7700/mcp', MEKO_API_KEY: 'local-token' } });
+      expect(resolveMekoWithSource(cfg)).toEqual(local);
+      claudeSettings({});
+      cfg.meko.url = 'http://127.0.0.1:7778/mcp';
+      cfg.meko.apiKey = 'older-local-token';
+      expect(resolveMekoWithSource(cfg)).toEqual(local);
+      // A Meko Cloud key is never a copy: a setup run against the local Meko without a key leaves its
+      // URL next to the key, which goes with Meko Cloud's URL instead, running or not.
+      cfg.meko.apiKey = 'mko_tkn_cloud';
+      expect(resolveMekoWithSource(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: 'mko_tkn_cloud', keySource: 'config' });
+      reader.clear();
+      expect(ownMekoKey(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: 'mko_tkn_cloud', keySource: 'config' });
+      await reader.refresh();
+      cfg.meko.apiKey = 'older-local-token';
+      // Its token goes to no web app or API URL but its own.
+      cfg.meko.webUrl = 'https://meko.example.com';
+      cfg.meko.apiUrl = 'https://meko.example.com/api/v1';
+      expect([resolveMekoWebUrl(cfg), resolveMekoApiUrl(cfg)]).toEqual([null, null]);
+      cfg.meko.webUrl = 'http://127.0.0.1:7778';
+      cfg.meko.apiUrl = '';
+      expect([resolveMekoWebUrl(cfg), resolveMekoApiUrl(cfg)]).toEqual(['http://127.0.0.1:7778', 'http://127.0.0.1:7778/api/v1']);
+    } finally {
+      reader.clear();
+    }
   });
 
-  it('tells the Meko tab what an empty MCP or web app URL falls back to', () => {
+  it("uses Meko's Meko Cloud link once Meko owns it, and nothing of AgentK's own after", async () => {
     clearEnv();
-    claudeSettings({ env: { MEKO_WEB_URL: 'https://settings-web.example' } });
+    claudeSettings({});
     const cfg = structuredClone(DEFAULT_CONFIG);
-    cfg.meko.url = 'https://config.example/mcp';
-    cfg.meko.webUrl = 'https://config-web.example';
-    expect(mekoSettings(cfg)).toMatchObject({ fallbackUrl: DEFAULT_MEKO_URL, envWebUrl: 'https://settings-web.example' });
-    process.env.MEKO_MCP_URL = 'https://env.example/mcp';
-    process.env.MEKO_WEB_URL = 'https://env-web.example';
-    expect(mekoSettings(cfg)).toMatchObject({ fallbackUrl: 'https://env.example/mcp', envWebUrl: 'https://env-web.example' });
-    // The config's own values are left out: they're what the tab's fields hold.
-    expect(mekoSettings(cfg)).toMatchObject({ url: 'https://config.example/mcp', webUrl: 'https://config-web.example' });
+    cfg.meko.apiKey = 'config-key';
+    process.env.MEKO_API_KEY = 'env-key';
+    const local = { url: 'http://127.0.0.1:7778/mcp', token: 'local-token' };
+    const linked = { set: true, url: 'https://meko.example.com/mcp', apiKey: 'meko-key', webUrl: 'https://meko.example.com', apiUrl: 'https://meko.example.com/api/v1' };
+    const probes: LocalMekoProbe[] = [
+      { state: 'running', meko: local, cloud: linked },
+      // `meko` failing keeps the link last read, and so does Meko failing to read it.
+      { state: 'failed', meko: null },
+      { state: 'running', meko: local, cloudUnreadable: true },
+      { state: 'running', meko: local, cloud: { set: true, url: '', apiKey: '', webUrl: '', apiUrl: '' } },
+      // Never set: AgentK's own key stands in until it's handed over.
+      { state: 'running', meko: local, cloud: { set: false, url: '', apiKey: '', webUrl: '', apiUrl: '' } },
+      { state: 'failed', meko: null },
+    ];
+    const reader = new LocalMekoReader(async () => probes.shift()!);
+    try {
+      await reader.refresh();
+      expect(resolveMekoWithSource(cfg)).toEqual({ url: 'https://meko.example.com/mcp', apiKey: 'meko-key', keySource: 'meko' });
+      expect([resolveMekoWebUrl(cfg), resolveMekoApiUrl(cfg)]).toEqual(['https://meko.example.com', 'https://meko.example.com/api/v1']);
+      await reader.refresh();
+      expect(resolveMekoWithSource(cfg).keySource).toBe('meko');
+      await reader.refresh();
+      expect(resolveMekoWithSource(cfg).keySource).toBe('meko');
+      await reader.refresh();
+      expect(resolveMekoWithSource(cfg)).toEqual({ url: local.url, apiKey: 'local-token', keySource: 'local' });
+      await reader.refresh();
+      expect(resolveMekoWithSource(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: 'config-key', keySource: 'config' });
+      // Handed over, AgentK's own sources are never read again, even while `meko` can't be asked.
+      setMekoLinkHandedOver(true);
+      await reader.refresh();
+      expect(resolveMekoWithSource(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: '', keySource: null });
+    } finally {
+      setMekoLinkHandedOver(false);
+      reader.clear();
+      clearEnv();
+    }
   });
 
   it("finds Meko's API: config, then MEKO_API_URL, then the web app plus /api/v1", () => {
@@ -1050,7 +1054,7 @@ describe('Meko credentials', () => {
     // A Meko on this computer has no web app to set yet.
     cfg.meko.url = 'http://127.0.0.1:7778/mcp';
     expect(mekoWebUrlWarning(cfg)).toBe("datapack links and sharing are off: the Meko on this computer (127.0.0.1:7778) has no web app yet; they come with Meko's web UI");
-    cfg.meko.enabled = false;
+    cfg.meko.apiKey = '';
     expect(mekoWebUrlWarning(cfg)).toBeNull();
   });
 

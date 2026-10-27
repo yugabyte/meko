@@ -4,22 +4,27 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { claudeConfigPath } from './trust.js';
 import { hostname, userInfo } from 'node:os';
 import { join } from 'node:path';
-import type { AppState, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
-import { getOwner } from './auth.js';
+import type { AppState, MekoKeySource, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
 import * as github from './github.js';
 import { TranscriptCapture, mekoPluginKeys } from './capture.js';
 import { DesignQuestionStore } from './answers.js';
 import { CommentService } from './comments.js';
+import { SessionTools, type ActionProject } from './actions.js';
 import { AskAgentk } from './askagentk.js';
 import { GithubLinkService } from './ghlinks.js';
 import { PrReviewService } from './prreview.js';
-import { mekoConfigured, mekoWebUrlWarning, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, saveConfig, type Config } from './config.js';
-import { all, run, type Db } from './db.js';
+import {
+  envMekoWebUrl, isLoopback, mekoConfigured, mekoWebUrlWarning, ownMekoKey, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, resolveMekoWithSource,
+  saveConfig, type Config,
+} from './config.js';
+import { all, kvGet, kvSet, run, type Db } from './db.js';
 import { socketId, startHookServer } from './hooks.js';
 import { claudeUserDir, writeHookFiles } from './claude.js';
+import { writeToolFiles } from './tools.js';
 import { Harnesses } from './harness/index.js';
 import { kiroAgentLoadsMcp, kiroMekoGaps, readKiroMeko } from './mekokiro.js';
 import { kiroDeletesSettled } from './kiro.js';
+import { openCodeDeletesSettled, openCodeHasOwnMeko } from './opencode.js';
 import { KIRO_PLAN_EVERY_MS, KiroPlanStore } from './kiroplan.js';
 import { PlanLimitsStore } from './limits.js';
 import { sweepStaged } from './pastes.js';
@@ -29,6 +34,11 @@ import { KnowledgeService } from './knowledge.js';
 import { MekoClient } from './meko.js';
 import { MekoCallLog } from './mekolog.js';
 import { MekoClaudeWatch } from './mekoclaude.js';
+import {
+  LocalMekoReader, isLocalMeko, localMeko, lookForLocalMeko, mekoLinkHandedOver, originOf, probeLocalMeko, setMekoLinkHandedOver, type LocalMekoProbe,
+} from './mekolocal.js';
+import { handOverMekoKey } from './mekohandover.js';
+import { mekoDirOf } from './movehome.js';
 import { readClaudeMeko } from './mekosetup.js';
 import { MekoApi } from './mekoapi.js';
 import { defaultMekoTools, type MekoTools } from './mekosettings.js';
@@ -64,12 +74,18 @@ export interface CoreOptions {
   mekoCaptureScript?: string | null;
   /** Meko's REST API client (sharing, knowledge-base uploads); by default one on the configured Meko. */
   mekoApi?: MekoApi;
-  /** Checking Meko credentials and setting up Claude Code, for the Meko tab in Settings. */
+  /** Meko's setup for Claude Code and Kiro, for Settings › Harness. */
   mekoTools?: MekoTools;
   /** How usage stats are sent (tests fake it); by default the global fetch. */
   callHomeFetch?: typeof fetch;
   /** Reads Kiro CLI's version (tests fake it); by default `<command> --version`. */
   kiroVersion?: (command: string) => Promise<string | null>;
+  /** Reads OpenCode's version (tests fake it); by default `<command> --version`. */
+  openCodeVersion?: (command: string) => Promise<string | null>;
+  /** Asks the Meko on this computer for its URL and token (tests fake it); by default `meko token --json` on Meko's folder. */
+  localMeko?: () => Promise<LocalMekoProbe>;
+  /** Hands AgentK's own Meko Cloud key to Meko (mekohandover.ts); tests swap it out. */
+  mekoHandOver?: typeof handOverMekoKey;
 }
 
 type NotifyEvent = Extract<ServerEvent, { type: 'notify' }>;
@@ -88,6 +104,24 @@ const STAGED_SWEEP_MS = 60 * 60 * 1000;
 const REVISIT_SWEEP_MS = 15_000;
 /** How long a read of Kiro's Meko setup is reused (the state is pushed often). */
 const KIRO_MEKO_TTL_MS = 10_000;
+/** How long a read of OpenCode's own config (for `MekoStatus.opencode`) is used. */
+const OPENCODE_MEKO_TTL_MS = 10_000;
+/** How often the Meko on this computer is looked for while there's no Meko, or no `meko` on this computer (`lookForLocalMeko`). */
+const LOCAL_MEKO_EVERY_MS = 60_000;
+/** After a failed connection to the local Meko, how long until another failure reads it again. */
+const LOCAL_MEKO_RECHECK_MS = 30_000;
+/** state.db's kv: AgentK handed Meko its own Meko Cloud key, so its own sources are never read again. */
+const MEKO_HANDED_OVER_KEY = 'meko-link-handed-over';
+
+/**
+ * Which Meko account a Meko is, for whether a change forgets the account's invites: the Meko on
+ * this computer is one account on any port or token; any other is its server's origin and key.
+ * Null with no Meko.
+ */
+function mekoAccountOf(m: { url: string; apiKey: string; keySource: MekoKeySource | null }): string | null {
+  if (!m.apiKey) return null;
+  return m.keySource === 'local' ? 'local' : `${originOf(m.url)} ${m.apiKey}`;
+}
 
 /** How often the server checks that its hook socket file is still there. */
 const HOOK_SOCKET_CHECK_MS = 10_000;
@@ -127,6 +161,8 @@ export class Core extends EventEmitter {
   readonly prReview: PrReviewService;
   readonly githubLinks: GithubLinkService;
   readonly askAgentk: AskAgentk;
+  /** AgentK's session tools: the calls `agentk mcp` makes from sessions. */
+  readonly tools: SessionTools;
   readonly limits: PlanLimitsStore;
   /** Kiro's plan allowance for the rail. */
   readonly kiroPlan: KiroPlanStore;
@@ -146,7 +182,19 @@ export class Core extends EventEmitter {
   readonly harnesses: Harnesses;
   /** The last read of Kiro's Meko setup (kiroMeko). */
   private kiroMekoAt: { at: number; value: MekoStatus['kiro'] } | null = null;
-  mekoStatus: MekoStatus;
+  /** The last read of OpenCode's own Meko server (openCodeMeko). */
+  private openCodeMekoAt: { at: number; own: boolean } | null = null;
+  /** Meko's status as last worked out; `state()` adds the parts read live (`local`, Kiro, OpenCode). */
+  mekoStatus: Omit<MekoStatus, 'local'>;
+  /** The Meko on this computer, read when needed (mekolocal.ts); used when no key is set. */
+  private localReader: LocalMekoReader;
+  /** When a failed connection last read the local Meko again. */
+  private localRecheckAt = 0;
+  private handOver: typeof handOverMekoKey;
+  /** This process tried handing AgentK's own key to Meko (once: a refused key isn't sent again and again). */
+  private handOverTried = false;
+  /** The Meko account AgentK last used (`mekoAccountOf`), kept through a spell with no Meko. */
+  private mekoAccount: string | null = null;
   updateStatus: () => UpdateStatus;
   private cfg: Config;
   private timersOn: boolean;
@@ -194,6 +242,17 @@ export class Core extends EventEmitter {
       log: this.log,
     });
     this.meko.onTrace = (t) => this.mekoLog.record(t);
+    this.localReader = new LocalMekoReader(o.localMeko ?? (() => probeLocalMeko(this.mekoHome())));
+    this.handOver = o.mekoHandOver ?? handOverMekoKey;
+    setMekoLinkHandedOver(kvGet(this.db, MEKO_HANDED_OVER_KEY) === '1');
+    // Meko restarted on another port, or with a new token, or its Meko Cloud link changed while
+    // AgentK didn't hear: read it again before the retry.
+    this.meko.onConnectFail = async () => {
+      const source = resolveMekoWithSource(this.cfg).keySource;
+      if ((source !== 'local' && source !== 'meko') || Date.now() - this.localRecheckAt < LOCAL_MEKO_RECHECK_MS) return;
+      this.localRecheckAt = Date.now();
+      await this.refreshMeko();
+    };
     this.services = o.services ?? (() => servicesFor(o.paths.home));
     this.legacyTmuxPanes = o.legacyTmuxPanes ?? (() => legacyTmuxPanes(o.paths));
     this.host = o.host ?? new SessionHost(o.paths, { services: this.services, onHello: () => this.changed() });
@@ -205,7 +264,9 @@ export class Core extends EventEmitter {
       lastCheckedAt: null, lastError: null, justUpdatedFrom: null, lastUpdatedFrom: null, releaseUrl: null,
     });
     this.claudeCode = new ClaudeCode({ config: () => this.cfg, changed: () => this.claudeChanged() });
-    this.harnesses = new Harnesses({ claudeCode: this.claudeCode, log: this.log, changed: () => this.changed(), kiroVersion: o.kiroVersion });
+    this.harnesses = new Harnesses({
+      claudeCode: this.claudeCode, paths: this.paths, log: this.log, changed: () => this.changed(), kiroVersion: o.kiroVersion, openCodeVersion: o.openCodeVersion,
+    });
     this.projects = new ProjectService(this);
     this.worktrees = new WorktreePool(this);
     this.sessions = new SessionManager(this);
@@ -218,10 +279,11 @@ export class Core extends EventEmitter {
     this.askAgentk = new AskAgentk({
       config: () => this.cfg,
       cwd: join(this.paths.run, 'ask'),
-      projects: () => projectRows(this.db).map((r) => ({ id: r.id, name: r.name, repoPath: r.repo_path, sessions: this.sessions.listForProject(r.id) })),
+      projects: () => this.actionProjects(),
       record: (r) => this.record('INSERT INTO agentk_asks(at, ok, actions, ms) VALUES (?, ?, ?, ?)', r.at, r.ok ? 1 : 0, r.actions, r.ms),
       asker: async () => (await this.harnesses.ensureDefault(this.cfg))?.ask ?? null,
     });
+    this.tools = new SessionTools(this);
     this.limits = new PlanLimitsStore(this.db, () => this.changed());
     this.kiroPlan = new KiroPlanStore({
       db: this.db,
@@ -247,6 +309,7 @@ export class Core extends EventEmitter {
       log: this.log,
     });
     this.mekoStatus = this.mekoStatusFor(o.config);
+    this.mekoAccount = mekoAccountOf(resolveMekoWithSource(o.config));
     this.callHome = new CallHomeService({
       db: this.db, config: () => this.cfg, version: this.version, log: this.log, fetch: o.callHomeFetch,
     });
@@ -276,7 +339,11 @@ export class Core extends EventEmitter {
     const next = structuredClone(this.cfg);
     fn(next);
     saveConfig(this.paths, next);
+    const was = resolveMeko(this.cfg);
+    const now = resolveMeko(next);
     this.cfg = next;
+    // A harness may have written the old Meko key somewhere of its own (OpenCode's Meko server file).
+    if (was.url !== now.url || was.apiKey !== now.apiKey) for (const h of this.harnesses.list()) h.mekoChanged?.(this.paths);
     this.mekoStatus = this.mekoStatusFor(next);
     this.changed();
     // A Meko change can make Claude Code's Meko differ (or match again).
@@ -284,8 +351,12 @@ export class Core extends EventEmitter {
     return next;
   }
 
-  private mekoStatusFor(cfg: Config): MekoStatus {
-    return { configured: mekoConfigured(cfg), webUrl: resolveMekoWebUrl(cfg), claude: this.claudeMeko.status, kiro: null };
+  private mekoStatusFor(cfg: Config): Omit<MekoStatus, 'local'> {
+    const m = resolveMekoWithSource(cfg);
+    return {
+      configured: !!m.apiKey, url: m.apiKey ? m.url : null, source: m.keySource, webUrl: resolveMekoWebUrl(cfg),
+      claude: this.claudeMeko.status, kiro: null, opencode: null,
+    };
   }
 
   /**
@@ -299,6 +370,23 @@ export class Core extends EventEmitter {
       this.kiroMekoAt = { at: now, value: { gaps: kiroMekoGaps(readKiroMeko(), resolveMeko(this.cfg).url, kiroAgentLoadsMcp()) } };
     }
     return this.kiroMekoAt.value;
+  }
+
+  /**
+   * Which Meko OpenCode's sessions use (`MekoStatus.opencode`): AgentK's, which it adds to their
+   * config, or the `meko` server in OpenCode's own config, which AgentK leaves alone. Null while Meko
+   * is off or OpenCode isn't available. OpenCode's config is read again at most every OPENCODE_MEKO_TTL_MS.
+   */
+  openCodeMeko(): MekoStatus['opencode'] {
+    if (!mekoConfigured(this.cfg) || !this.harnesses.of('opencode').status(this.cfg).available) return null;
+    const now = Date.now();
+    if (!this.openCodeMekoAt || now - this.openCodeMekoAt.at > OPENCODE_MEKO_TTL_MS) this.openCodeMekoAt = { at: now, own: openCodeHasOwnMeko() };
+    return { own: this.openCodeMekoAt.own };
+  }
+
+  /** The open projects with their sessions, as Ask AgentK and the session tools see them (their GitHub repo not read yet). */
+  actionProjects(): ActionProject[] {
+    return projectRows(this.db).map((r) => ({ id: r.id, name: r.name, repoPath: r.repo_path, sessions: this.sessions.listForProject(r.id) }));
   }
 
   /** The machine's short host name: what the rail shows when `[server] name` is unset. */
@@ -343,6 +431,11 @@ export class Core extends EventEmitter {
     this.emit('notify', { type: 'knowledge', ...n } satisfies KnowledgeEvent);
   }
 
+  /** Tells open pages the server is restarting into an update, before the restart closes their sockets. */
+  notifyRestarting(): void {
+    this.emit('notify', { type: 'restarting' } satisfies ServerEvent);
+  }
+
   /** Syncs the invites and shares waiting in Meko. Never throws. */
   async syncInvites(): Promise<void> {
     if (!this.mekoStatus.configured) return;
@@ -358,6 +451,112 @@ export class Core extends EventEmitter {
     this.invites.forgetAccount();
     this.knowledge.forget();
     void this.syncInvites();
+  }
+
+  /** The Meko data folder AgentK's home is in (movehome.ts), else `[meko] home`; null lets `meko` pick. */
+  mekoHome(): string | null {
+    return mekoDirOf(this.paths.home) ?? (this.cfg.meko.home || null);
+  }
+
+  /**
+   * Reads the Meko on this computer and its Meko Cloud link again, and starts handing Meko AgentK's
+   * own key when it has none yet (`startHandOver`, in the background). When that changes what AgentK
+   * shows (the Meko, its source, its web app or API URL), shows it; when it changes the Meko AgentK
+   * uses (it started, stopped, has a new port or token, or the link changed), reconnects. On the
+   * same Meko account (the local Meko on any port or token, or the same server and key) it keeps the
+   * invites and shares AgentK knows; on another it forgets them, as `mekoChanged` does. A spell with
+   * no Meko at all (the local Meko stopped) isn't a change of account. A copy of the local Meko's
+   * URL and token in config.toml (older installs stored one, current or stale) is dropped.
+   */
+  async refreshMeko(): Promise<void> {
+    const before = resolveMekoWithSource(this.cfg);
+    const shown = this.mekoStatus;
+    const apiBefore = resolveMekoApiUrl(this.cfg);
+    const wasState = localMeko().state;
+    await this.localReader.refresh();
+    if (this.stopped) return;
+    this.startHandOver();
+    const local = localMeko().meko;
+    if (isLocalMeko(local, this.cfg.meko.url, this.cfg.meko.apiKey)) {
+      this.updateConfig((c) => {
+        c.meko.url = '';
+        c.meko.apiKey = '';
+      });
+      this.log.info('config.toml held the Meko on this computer\'s URL and token; AgentK now reads them from Meko');
+    }
+    const after = resolveMekoWithSource(this.cfg);
+    const status = this.mekoStatusFor(this.cfg);
+    const apiAfter = resolveMekoApiUrl(this.cfg);
+    const reconnect = before.url !== after.url || before.apiKey !== after.apiKey;
+    // Kept on every read (a copy of the local token becoming the live local Meko changes nothing to
+    // connect to, but names the account); compared only when there's another Meko to connect to.
+    const account = mekoAccountOf(after);
+    const switched = reconnect && !!account && !!this.mekoAccount && account !== this.mekoAccount;
+    if (account) this.mekoAccount = account;
+    if (!reconnect && status.source === shown.source && status.webUrl === shown.webUrl && apiAfter === apiBefore) {
+      // Installed, or gone, without changing the Meko AgentK uses: the install banner follows it.
+      // With a link, `meko` removed after it was found is seen only at the next read (a restart,
+      // Settings, or Meko's notice), since the minute look stops once it's found (`lookForLocalMeko`).
+      if (localMeko().state !== wasState) this.changed();
+      return;
+    }
+    this.mekoStatus = status;
+    this.changed();
+    if (!reconnect) {
+      // The same Meko and key, from another source or with another web app or API URL.
+      if (apiAfter !== apiBefore) void this.syncInvites();
+      return;
+    }
+    this.log.info(
+      after.keySource === 'meko' ? `using Meko's Meko Cloud link (${after.url})`
+        : after.apiKey ? `using the Meko on this computer (${after.url})` : 'the Meko on this computer stopped; Meko is not set up',
+    );
+    // As in updateConfig: a harness may have written the old key somewhere of its own.
+    for (const h of this.harnesses.list()) h.mekoChanged?.(this.paths);
+    void this.claudeMeko.refresh();
+    if (switched) return this.mekoChanged();
+    await this.meko.reset();
+    void this.syncInvites();
+  }
+
+  /**
+   * Meko owns the Meko Cloud link: while it has never had one, AgentK hands it the key it used
+   * itself (config.toml, MEKO_API_KEY, or Claude Code's settings), once per process, in the
+   * background (`meko cloud_link` checks the key with Meko Cloud, which can take tens of seconds).
+   * Not a copy of the local Meko's token, a key on this computer, or against a Meko too old to keep
+   * a link. Once Meko takes it, AgentK never reads its own sources again (MEKO_HANDED_OVER_KEY), and
+   * reads Meko again. config.toml's keys stay: a rollback to the release before, which reads only
+   * them, still finds them. A failure is logged and AgentK keeps its key, so nothing moves to
+   * another Meko unasked.
+   */
+  private startHandOver(): void {
+    const { cloud, meko: local } = localMeko();
+    if (!cloud || cloud.set || mekoLinkHandedOver() || this.handOverTried) return;
+    const own = ownMekoKey(this.cfg);
+    if (!own.apiKey || isLocalMeko(local, own.url, own.apiKey)) return;
+    try {
+      if (isLoopback(new URL(own.url).hostname.replace(/^\[|\]$/g, ''))) return;
+    } catch {
+      return;
+    }
+    this.handOverTried = true;
+    const link = {
+      url: own.url, apiKey: own.apiKey,
+      webUrl: this.cfg.meko.webUrl || envMekoWebUrl(), apiUrl: this.cfg.meko.apiUrl || process.env.MEKO_API_URL?.trim() || '',
+    };
+    void this.handOver(this.mekoHome(), link)
+      .then(async (r) => {
+        if (this.stopped) return;
+        if (!r.ok) {
+          this.log.warn(`couldn't hand AgentK's Meko Cloud key (from ${own.keySource}) to Meko: ${r.error}. AgentK keeps using it until Meko Cloud is linked in Meko's web UI (Settings › Meko Cloud)`);
+          return;
+        }
+        kvSet(this.db, MEKO_HANDED_OVER_KEY, '1');
+        setMekoLinkHandedOver(true);
+        this.log.info(`handed AgentK's Meko Cloud key (from ${own.keySource}) to Meko, which keeps the link now`);
+        await this.refreshMeko();
+      })
+      .catch((e: unknown) => this.log.warn('handing AgentK\'s Meko Cloud key to Meko failed', errMsg(e)));
   }
 
   /**
@@ -402,11 +601,11 @@ export class Core extends EventEmitter {
         }
         return projects.map((p) => ({ ...p, usage: usage.get(p.id) ?? { ...ZERO_USAGE } }));
       })(),
-      meko: { ...this.mekoStatus, kiro: this.kiroMeko() },
+      meko: { ...this.mekoStatus, kiro: this.kiroMeko(), opencode: this.openCodeMeko(), local: localMeko().state },
       update: this.updateStatus(),
       version: this.version,
-      // The login name shown in the UI; the Unix account only as a fallback.
-      username: getOwner(this.db)?.username ?? this.username,
+      // The Unix account: Meko signs people in, and its page shows the login's name.
+      username: this.username,
       ghLogin: this.ghUser,
       serverName: this.serverName(),
       serverHost: this.hostFull,
@@ -448,6 +647,12 @@ export class Core extends EventEmitter {
     // its SessionStart did. The setting, not whether the plugin's script was found: a plugin
     // installed after AgentK starts runs in sessions once capture is on.
     writeHookFiles(this.paths, { disabledPlugins: this.cfg.meko.captureTranscripts ? [] : mekoPluginKeys() });
+    // The session tools' MCP config and skill: without them sessions start without the tools.
+    try {
+      if (!writeToolFiles(this.paths)) this.log.warn("AgentK's session tools are missing from this install; sessions start without them");
+    } catch (e) {
+      this.log.warn("couldn't write AgentK's session tools; sessions start without them", errMsg(e));
+    }
     // Each harness's own files wait on its CLI (its version, Kiro's agent file), in the background:
     // no one CLI has to be installed for AgentK to start.
     for (const h of this.harnesses.list()) {
@@ -461,6 +666,9 @@ export class Core extends EventEmitter {
     // In the background: it may remove large build trees, and every change it makes to an idle
     // worktree is skipped once a session has claimed it.
     void this.worktrees.sweep().catch((e) => this.log.warn('checking idle worktrees failed', errMsg(e)));
+    // Before the sessions are recovered, so a relaunch gets the Meko on this computer and Meko's
+    // link. Bounded by `meko`'s own 5 s timeout: handing Meko AgentK's own key runs in the background.
+    await this.refreshMeko();
     const noWebUrl = mekoWebUrlWarning(this.cfg);
     if (noWebUrl) this.log.warn(noWebUrl);
     // Before any turn can end, so the first one after a restart can tell whether its design's questions changed.
@@ -490,6 +698,9 @@ export class Core extends EventEmitter {
       this.every(INVITE_SYNC_MS, () => this.invites.sync());
       this.every(PIN_PRUNE_MS, () => this.prunePins());
       this.every(STAGED_SWEEP_MS, () => this.sweepStaged());
+      // Meko normally starts first (it starts AgentK); this covers a boot where it didn't, and an
+      // install of Meko while the banner asks for one (with a Meko Cloud link too).
+      this.every(LOCAL_MEKO_EVERY_MS, () => (lookForLocalMeko(mekoConfigured(this.cfg), localMeko().state) ? this.refreshMeko() : undefined));
       this.callHome.start((ms, fn) => this.every(ms, fn));
       this.ybCallHome.start((ms, fn) => this.every(ms, fn));
       // Not awaited: startup doesn't wait on Meko's API.
@@ -505,6 +716,9 @@ export class Core extends EventEmitter {
     this.callHome.stop();
     this.ybCallHome.stop();
     this.lifecycle.stop();
+    // No new plan read may start now: a turn reaching onTurnEnd during shutdown (hooks aren't
+    // awaited) must not run `/usage` after the settled() wait below has already passed.
+    this.kiroPlan.stop();
     this.hooksOn = false;
     await this.hookCheck?.catch(() => undefined);
     this.sessions.mod.closeAll();
@@ -513,13 +727,15 @@ export class Core extends EventEmitter {
     this.knowledge.stop();
     await this.closeHooks();
     // Let the last turns reach Meko; one cut off here catches up when the server starts again. Kiro's
-    // one-shot runs already going (the plan read, deleting a run's session) get as long to end; one
-    // slower than that is left to finish on its own, as nothing kills it.
+    // and OpenCode's one-shot runs already going (the plan read, deleting a run's session) get as long
+    // to end; one slower than that is left to finish on its own, as nothing kills it.
     await Promise.all([
       this.capture.settled(STOP_CAPTURE_MS),
       within(this.kiroPlan.settled().then(kiroDeletesSettled), STOP_CAPTURE_MS),
+      within(openCodeDeletesSettled(), STOP_CAPTURE_MS),
     ]);
     await this.meko.close();
+    this.localReader.clear();
   }
 
   private async bindHooks(): Promise<void> {
@@ -543,8 +759,10 @@ export class Core extends EventEmitter {
     this.hookServer = null;
     if (!server) return;
     // Held mod polls would keep the socket open until they time out (20 s), and no hook could
-    // reach the server meanwhile: answer them now, and hold none until it's bound again.
+    // reach the server meanwhile: answer them now, and hold none until it's bound again. A session
+    // tools call can run for minutes (a clone): it's answered now too, though its work may go on.
     this.sessions.mod.pause();
+    this.tools.pause();
     await new Promise<void>((r) => server.close(() => r()));
     if (this.hookSockId && socketId(this.paths.hookSock) === this.hookSockId) rmSync(this.paths.hookSock, { force: true });
     this.hookSockId = null;

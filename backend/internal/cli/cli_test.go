@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -21,6 +23,7 @@ import (
 	"time"
 
 	"github.com/yugabyte/meko/backend/internal/config"
+	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/mcp"
 	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/supervisor"
@@ -43,8 +46,17 @@ func TestMain(m *testing.M) {
 		os.Exit(Run(os.Args[1:], os.Stdout, os.Stderr))
 	}
 	// Only in the tests' own process: a test sets them for the serve it starts.
-	for _, k := range []string{"MEKO_AUTH", "MEKO_CALL_HOME", "MEKO_CALL_HOME_URL", "YB_DISABLE_CALLHOME"} {
+	for _, k := range []string{"MEKO_AUTH", "MEKO_CALL_HOME", "MEKO_CALL_HOME_URL", "YB_DISABLE_CALLHOME",
+		"MEKO_WEB_ACCESS"} {
 		_ = os.Unsetenv(k)
+	}
+	// Never the web listener's real port (AgentK's, 7777): setup gives each test a free one, and this
+	// covers the tests that don't call it.
+	if ln, err := net.Listen("tcp", "127.0.0.1:0"); err == nil {
+		if a, ok := ln.Addr().(*net.TCPAddr); ok {
+			_ = os.Setenv("MEKO_WEB_PORT", strconv.Itoa(a.Port))
+		}
+		_ = ln.Close()
 	}
 	os.Exit(m.Run())
 }
@@ -149,13 +161,16 @@ func shortDir(t *testing.T) string {
 	return dir
 }
 
-// setup gives a test its own home and data folder, and a free port.
+// setup gives a test its own home and data folder, and a free port. Its cleanup stops only the
+// server: cleanups run last first, so by then a test's fake extension is gone and PATH is restored
+// (noRealExtensions), and stopping the extensions would find and stop this machine's real AgentK.
 func setup(t *testing.T) (dir, port string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	dir = shortDir(t)
 	port = strconv.Itoa(freePort(t))
-	t.Cleanup(func() { run("stop", "--data-dir", dir) })
+	t.Setenv("MEKO_WEB_PORT", strconv.Itoa(freePort(t)))
+	t.Cleanup(func() { run("stop", "--data-dir", dir, "--keep-extensions") })
 	return dir, port
 }
 
@@ -208,8 +223,9 @@ func TestClientTokenIsKeptAcrossRestarts(t *testing.T) {
 	code, mcpOut, _ := run("token", "--data-dir", dir, "--mcp")
 	want(t, "token --mcp with no server", code, 0, mcpOut, "http://127.0.0.1:7778/mcp")
 	code, js, _ := run("token", "--data-dir", dir, "--json")
-	want(t, "token --json with no server", code, 0, js,
-		`{"running":false,"token":"`+strings.TrimSpace(tok)+`","url":"http://127.0.0.1:7778/mcp"}`)
+	want(t, "token --json with no server", code, 0, js, `{"cloud":{"set":false,"url":"","api_key":"","web_url":"",`+
+		`"api_url":""},"running":false,"token":"`+strings.TrimSpace(tok)+
+		`","url":"http://127.0.0.1:7778/mcp","web_url":"http://127.0.0.1:`+os.Getenv("MEKO_WEB_PORT")+`"}`)
 	for i := 0; i < 2; i++ {
 		started, out, serrs := run("start", "--data-dir", dir, "--port", port)
 		want(t, "start", started, 0, out+serrs, "is running")
@@ -873,6 +889,189 @@ func TestDestroyRemovesTheLinkWhenRemovalFails(t *testing.T) {
 	}
 }
 
+// withExtensionData makes dir a stopped server's data folder holding AgentK's folder (with a file in
+// it) and AgentK registered as an extension, whose program logs its arguments and MEKO_HOME to the
+// returned log; uninstall fails when failUninstall.
+func withExtensionData(t *testing.T, dir string, failUninstall bool) (log, kept string) {
+	t.Helper()
+	noRealExtensions(t)
+	l := paths.New(dir)
+	if err := os.WriteFile(l.DB, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(l.LogDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	kept = filepath.Join(extensions.Dir(dir, "agentk"), "state.db")
+	if err := os.MkdirAll(filepath.Dir(kept), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(kept, []byte("sessions"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ext := filepath.Join(shortDir(t), "agentk")
+	log = ext + ".log"
+	fails := ""
+	if failUninstall {
+		fails = "[ \"$1\" = uninstall ] && { echo \"can't uninstall\" >&2; exit 4; }\n"
+	}
+	script := fmt.Sprintf("#!/bin/sh\necho \"$* $MEKO_HOME\" >> %q\n%sexit 0\n", log, fails)
+	if err := os.WriteFile(ext, []byte(script), 0o700); err != nil { //nolint:gosec // G306: test script
+		t.Fatal(err)
+	}
+	reg, _ := extensions.Load(dir)
+	reg.Entries["agentk"] = extensions.Entry{Command: ext, InstalledByMeko: true}
+	if err := reg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	return log, kept
+}
+
+// With extension data in the data folder, destroy asks whether to remove it too: kept, everything
+// else of Meko's goes and the extensions' folder and registry stay; removed, each extension's own
+// uninstall runs first (with MEKO_HOME) and then the whole folder goes. --force alone keeps it,
+// --with-extensions removes it without the second question.
+func TestDestroyWithExtensionData(t *testing.T) {
+	for _, c := range []struct {
+		name, answers string
+		flags         []string
+		removed       bool
+		asked         []string
+	}{
+		{"kept when asked", "y\nn\n", nil, false, []string{"Destroy it?", "Also uninstall the extensions"}},
+		{"removed when asked", "y\ny\n", nil, true, []string{"Destroy it?", "Also uninstall the extensions"}},
+		{"--force keeps it", "", []string{"--force"}, false, nil},
+		{"--with-extensions removes it", "y\n", []string{"--with-extensions"}, true, []string{"Destroy it?"}},
+		{"both ask nothing", "", []string{"--force", "--with-extensions"}, true, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir, _ := setup(t)
+			log, kept := withExtensionData(t, dir, false)
+			held, err := os.OpenFile(kept, os.O_RDWR, 0) //nolint:gosec // G304: test file
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = held.Close() }()
+			withStdin(t, c.answers)
+			code, out, errs := run(append([]string{"destroy", "--data-dir", dir}, c.flags...)...)
+			want(t, "destroy", code, 0, out+errs, "It also holds extension data:\n  AgentK in "+
+				extensions.Dir(dir, "agentk")+" (")
+			for _, q := range []string{"Destroy it?", "Also uninstall the extensions"} {
+				if asked := strings.Contains(out, q); asked != slices.Contains(c.asked, q) {
+					t.Errorf("asked %q: %v, want %v:\n%s", q, asked, !asked, out)
+				}
+			}
+			if c.removed {
+				want(t, "the extension's uninstall", 0, 0, readLog(t, log),
+					"uninstall --purge --delete-worktrees --non-interactive "+dir+"\n")
+				gone(t, dir)
+				return
+			}
+			if got := readLog(t, log); got != "" {
+				t.Errorf("the extension ran %q", got)
+			}
+			want(t, "destroy that keeps them", code, 0, out, "kept the extensions' data in it")
+			if _, serr := os.Stat(paths.New(dir).DB); !os.IsNotExist(serr) {
+				t.Errorf("meko.db is still there: %v", serr)
+			}
+			if _, err = held.WriteAt([]byte("SESSIONS"), 0); err != nil {
+				t.Fatal(err)
+			}
+			b, err := os.ReadFile(kept) //nolint:gosec // G304: test file
+			if err != nil || string(b) != "SESSIONS" {
+				t.Errorf("the extension's file: %q, %v", b, err)
+			}
+			if reg, _ := extensions.Load(dir); reg.Entries["agentk"].Command == "" {
+				t.Errorf("the registry lost agentk: %+v", reg.Entries)
+			}
+			if left, _ := filepath.Glob(dir + ".destroying-*"); len(left) > 0 {
+				t.Errorf("left behind: %v", left)
+			}
+		})
+	}
+}
+
+// A declined destroy and a failing extension uninstall remove nothing.
+func TestDestroyWithExtensionDataRemovesNothingOnNoOrFailure(t *testing.T) {
+	dir, _ := setup(t)
+	_, kept := withExtensionData(t, dir, true)
+	withStdin(t, "n\n")
+	code, _, errs := run("destroy", "--data-dir", dir)
+	want(t, "destroy declined", code, 1, errs, "Nothing was removed\n")
+	code, out, errs := run("destroy", "--data-dir", dir, "--force", "--with-extensions")
+	want(t, "destroy with a failing uninstall", code, 1, out+errs,
+		"uninstalling AgentK failed: ")
+	want(t, "destroy with a failing uninstall", code, 1, errs, "Nothing of Meko's was removed")
+	for _, p := range []string{paths.New(dir).DB, kept} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s is gone: %v", p, err)
+		}
+	}
+}
+
+// Keeping the extensions, destroy moves Meko's entries aside holding the lock throughout (run/,
+// which holds it, last), and a move that fails puts back what was moved.
+func TestDestroyKeepingExtensionsHoldsTheLockAndRollsBack(t *testing.T) {
+	dir, _ := setup(t)
+	_, kept := withExtensionData(t, dir, false)
+	l := paths.New(dir)
+	var order []string
+	old := rename
+	t.Cleanup(func() { rename = old })
+	rename = func(from, to string) error {
+		if up, _ := running(l.Lock); !up {
+			t.Errorf("moving %s with the lock free", from)
+		}
+		order = append(order, filepath.Base(from))
+		if filepath.Base(from) == "logs" && !strings.Contains(from, ".destroying-") {
+			return errors.New("injected")
+		}
+		return old(from, to)
+	}
+	code, _, errs := run("destroy", "--data-dir", dir, "--force")
+	want(t, "destroy whose move fails", code, 1, errs, "Nothing was removed")
+	for _, p := range []string{l.DB, l.LogDir, kept, extensions.File(dir)} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s isn't back: %v", p, err)
+		}
+	}
+	if left, _ := filepath.Glob(dir + ".destroying-*"); len(left) > 0 {
+		t.Errorf("left behind: %v", left)
+	}
+	order = nil
+	rename = func(from, to string) error {
+		order = append(order, filepath.Base(from))
+		return old(from, to)
+	}
+	code, out, errs := run("destroy", "--data-dir", dir, "--force")
+	want(t, "destroy", code, 0, out+errs, "kept the extensions' data in it")
+	if len(order) == 0 || order[len(order)-1] != "run" || slices.Contains(order, "extensions") {
+		t.Errorf("moved %v: run/ must go last, extensions/ never", order)
+	}
+}
+
+// A data folder with only extension data (AgentK installed without Meko) has nothing of Meko's to
+// remove, unless --with-extensions.
+func TestDestroyOnlyExtensionData(t *testing.T) {
+	dir, _ := setup(t)
+	log, kept := withExtensionData(t, dir, false)
+	if err := os.RemoveAll(paths.New(dir).DB); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs := run("destroy", "--data-dir", dir, "--force")
+	want(t, "destroy of extension data only", code, 0, out+errs, "Nothing of Meko's to remove: "+dir+
+		" holds only extension data")
+	if _, err := os.Stat(kept); err != nil {
+		t.Errorf("the extension's data is gone: %v", err)
+	}
+	code, out, errs = run("destroy", "--data-dir", dir, "--force", "--with-extensions")
+	want(t, "destroy --with-extensions of extension data only", code, 0, out+errs, "Removed")
+	want(t, "the extension's uninstall", 0, 0, readLog(t, log), "uninstall --purge")
+	if _, err := os.Stat(kept); !os.IsNotExist(err) {
+		t.Errorf("the extension's data is still there: %v", err)
+	}
+}
+
 func TestUI(t *testing.T) {
 	dir, port := setup(t)
 	code, _, errs := run("ui", "--data-dir", dir, "--no-open")
@@ -880,28 +1079,30 @@ func TestUI(t *testing.T) {
 
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
-	prefix := "http://127.0.0.1:" + port + "/#code="
+	web := "http://127.0.0.1:" + os.Getenv("MEKO_WEB_PORT")
 
 	var opened []string
 	open := openBrowser
 	openBrowser = func(u string) error { opened = append(opened, u); return nil }
 	t.Cleanup(func() { openBrowser = open })
 
-	code, out, errs = run("ui", "--data-dir", dir, "--no-open")
-	first := strings.TrimSpace(out)
-	if code != 0 || !strings.HasPrefix(first, prefix) || len(first) != len(prefix)+64 || len(opened) != 0 {
+	// With local access the link is the web listener's own address: it carries no credential.
+	code, out, _ = run("ui", "--data-dir", dir, "--no-open")
+	if code != 0 || strings.TrimSpace(out) != web+"/" || len(opened) != 0 {
 		t.Errorf("ui --no-open: %d %q, opened %v", code, out, opened)
 	}
-	want(t, "ui --no-open says the link is short-lived", code, 0, errs, "works once")
-	_, tok, _ := run("token", "--data-dir", dir)
-	if strings.Contains(out, strings.TrimSpace(tok)) {
-		t.Errorf("the link carries the client token: %q", out)
+	code, out, _ = run("ui", "/ext/agentk/", "--data-dir", dir)
+	if link := strings.TrimSpace(out); code != 0 || link != web+"/ext/agentk/" || len(opened) != 1 || opened[0] != link {
+		t.Errorf("ui /ext/agentk/: %d %q, opened %v", code, out, opened)
 	}
-	code, out, _ = run("ui", "--data-dir", dir)
-	if link := strings.TrimSpace(out); code != 0 || !strings.HasPrefix(link, prefix) || link == first ||
-		len(opened) != 1 || opened[0] != link {
-		t.Errorf("ui: %d %q, opened %v", code, out, opened)
-	}
+	code, out, _ = run("status", "--data-dir", dir)
+	want(t, "status's web line", code, 0, out, "Web:           "+web+", local (no login from this computer)")
+
+	code, out, errs = run("setup_link", "--data-dir", dir)
+	want(t, "setup_link", code, 0, out, web+"/setup?token=")
+	want(t, "setup_link says local access needs no login", code, 0, errs, "Access is local")
+	code, out, _ = run("token", "--data-dir", dir, "--json")
+	want(t, "token --json's web URL", code, 0, out, `"web_url":"`+web+`"`)
 }
 
 // list mcp-tools needs no server: it reads the tool definitions.

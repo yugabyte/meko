@@ -1,31 +1,35 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import type { AuthStatus, HarnessStatus, MekoKeySource, MekoSettingsUpdate, MekoStatus, Settings, TotpEnrollResponse, UpdateStatus } from '../../shared/types';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type MutableRefObject, type ReactNode } from 'react';
+import type { HarnessStatus, MekoKeySource, MekoStatus, Settings, SettingsUpdate, UpdateStatus } from '../../shared/types';
 import { HARNESS_CAPS, HARNESS_IDS, type HarnessId } from '../../shared/harnesses';
+import { MEKO_ACCOUNT_PATH, MEKO_CLOUD_PATH } from '../../shared/mekourls';
 import { api, errorMessage } from '../api';
+import { AUTO_SAVE_IDLE, autoSave, settle, type AutoSaveStatus } from '../autosave';
 import { saveRailSessions, useRailSessions } from '../rail';
+import type { MekoAuth } from '../signin';
 import { harnessLogosToggle } from '../toggle';
-import { claudeUpdateText, cx, defaultAgentChoice, httpHost, mekoKeyLinkBase, relativeTime } from '../util';
-import { AgentLabel, AgentPicker, Busy, ConfirmButton, Dialog, ErrorText, Field } from './common';
-import { MekoGetKey } from './MekoGetKey';
+import { claudeUpdateText, cx, defaultAgentChoice, httpHost, relativeTime } from '../util';
+import { AgentLabel, AgentPicker, Busy, Dialog, ErrorText, Field } from './common';
 
-export type SettingsTab = 'general' | 'harness' | 'meko' | 'account' | 'updates';
+export type SettingsTab = 'general' | 'harness' | 'updates';
 type Tab = SettingsTab;
 
-const TABS: Tab[] = ['general', 'harness', 'meko', 'account', 'updates'];
-const TAB_LABEL: Record<Tab, string> = { general: 'General', harness: 'Harness', meko: 'Meko', account: 'Account', updates: 'Updates' };
+const TABS: Tab[] = ['general', 'harness', 'updates'];
+const TAB_LABEL: Record<Tab, string> = { general: 'General', harness: 'Harness', updates: 'Updates' };
 
 export function SettingsDialog({
-  auth,
+  mekoAuth,
   update,
   meko,
   harnesses,
   twoAgents,
   serverName,
   initialTab = 'general',
+  initialAgent,
   onClose,
   onWhatsNew,
 }: {
-  auth: AuthStatus;
+  /** What Meko, which signs people in to AgentK, says about this browser (null without Meko). */
+  mekoAuth: MekoAuth | null;
   update: UpdateStatus;
   meko: MekoStatus;
   /** The coding agents sessions can run on (`AppState.harnesses`). */
@@ -34,18 +38,44 @@ export function SettingsDialog({
   twoAgents: boolean;
   /** `AppState.serverName`, for what to do when Claude Code's update fails. */
   serverName: string;
-  /** The tab it opens on (the Meko banner's Details opens the Meko tab). */
+  /** The tab it opens on (the Claude Code Meko banner's Details opens Harness). */
   initialTab?: SettingsTab;
+  /** The agent Harness shows first (Details: Claude Code); else the default agent. */
+  initialAgent?: HarnessId;
   onClose: () => void;
   /** Opens What's new from one version to another, in place of Settings. */
   onWhatsNew: (from: string, to: string) => void;
 }) {
   const [tab, setTab] = useState<Tab>(initialTab);
+  // One saver for General and Harness, so a save from a tab that has since closed still shows how it went.
+  const auto = useAutoSave();
+  // What the General tab holds typed and not saved yet, saved before Settings closes.
+  const typed = useRef<(() => void) | null>(null);
+  // A close waited for the saves out and one failed: closing again leaves it unsaved.
+  const [held, setHeld] = useState(false);
+  const closing = useRef(false);
+  useEffect(() => {
+    if (auto.status.state === 'saving') setHeld(false);
+  }, [auto.status.state]);
+  const close = () => {
+    if (held) {
+      typed.current = null;
+      return onClose();
+    }
+    if (closing.current) return;
+    closing.current = true;
+    typed.current?.();
+    void auto.flush().then((ok) => {
+      closing.current = false;
+      if (ok) onClose();
+      else setHeld(true);
+    });
+  };
   return (
     <Dialog
       title="Settings"
       wide
-      onClose={onClose}
+      onClose={close}
       aside={
         <div className="seg" role="tablist">
           {TABS.map((t) => (
@@ -59,29 +89,21 @@ export function SettingsDialog({
       {tab === 'general' && (
         <div className="stack">
           <RailSessionsSetting />
-          <GeneralTab />
-        </div>
-      )}
-      {tab === 'harness' && <HarnessTab harnesses={harnesses} twoAgents={twoAgents} serverName={serverName} />}
-      {tab === 'meko' && (
-        <MekoTab
-          status={meko}
-          claude={harnesses.find((h) => h.id === 'claude')?.available ?? false}
-          kiro={harnesses.find((h) => h.id === 'kiro')?.available ?? false}
-        />
-      )}
-      {tab === 'account' && (
-        <div className="stack">
-          {auth.localAccess ? <LocalAccessNote /> : <AccountTab auth={auth} />}
+          <GeneralTab auto={auto} typed={typed} />
+          <MekoLinks meko={meko} auth={mekoAuth} />
           <UsageStatsCheck />
         </div>
       )}
+      {tab === 'harness' && (
+        <HarnessTab auto={auto} harnesses={harnesses} twoAgents={twoAgents} serverName={serverName} meko={meko} initialAgent={initialAgent} />
+      )}
       {tab === 'updates' && <UpdatesTab initial={update} onWhatsNew={onWhatsNew} />}
+      <SaveStatus status={auto.status} held={held} />
     </Dialog>
   );
 }
 
-/** Saved in this browser as it's ticked, apart from the server settings below and their Save. */
+/** Saved in this browser as it's ticked, apart from the server settings below. */
 function RailSessionsSetting() {
   const on = useRailSessions();
   return (
@@ -96,7 +118,7 @@ function RailSessionsSetting() {
 }
 
 /**
- * Saved in this browser as it's ticked, apart from Settings › Harness's Save. Offered while a second agent is
+ * Saved in this browser as it's ticked, apart from Settings › Harness's server settings. Offered while a second agent is
  * turned on, or while open sessions run on two agents (the logos' own condition): turning an agent
  * off leaves its open sessions, and their logos, in place.
  */
@@ -113,72 +135,154 @@ function HarnessLogosSetting() {
   );
 }
 
-function GeneralTab() {
+/** A tab's server fields, as `PUT /api/settings` takes them. */
+type Patch = Omit<SettingsUpdate, 'meko'>;
+
+/**
+ * General's and Harness's server settings, saved as they change (`src/web/autosave.ts`): `change`
+ * shows a patch at once and saves it, and a patch that fails to save goes back to the server's last
+ * answer. `load` waits for the saves still out, so a tab opened again shows them.
+ */
+function useAutoSave() {
   const [s, setS] = useState<Settings | null>(null);
+  const [status, setStatus] = useState<AutoSaveStatus>(AUTO_SAVE_IDLE);
+  // The server's last answer.
+  const confirmed = useRef<Settings | null>(null);
+  const [saver] = useState(() =>
+    autoSave((patch: Patch) => api.saveSettings(patch), {
+      onSaved: (next, patch, queued) => {
+        confirmed.current = next;
+        setS((cur) => cur && settle(cur, next, patch, queued));
+      },
+      onFailed: (_, patch, queued) => setS((cur) => cur && confirmed.current && settle(cur, confirmed.current, patch, queued)),
+      onStatus: setStatus,
+    }),
+  );
+  const load = useCallback(async () => {
+    setS(null);
+    await saver.flush();
+    const x = await api.settings();
+    confirmed.current = x;
+    setS(x);
+    return x;
+  }, [saver]);
+  const change = (patch: Patch) => {
+    setS((cur) => cur && { ...cur, ...patch });
+    void saver.save(patch);
+  };
+  return { s, load, change, status, flush: saver.flush };
+}
+type AutoSettings = ReturnType<typeof useAutoSave>;
+
+/**
+ * Where Save was: Saving while a change is out, then Saved, or why one didn't save (after a close
+ * that waited for it, with what closing again does).
+ */
+function SaveStatus({ status, held }: { status: AutoSaveStatus; held: boolean }) {
+  return (
+    <>
+      <ErrorText error={status.error === null ? null : `${errorMessage(status.error)}${held ? ' Close again to leave it unsaved.' : ''}`} />
+      <div className="settings-actions muted small" role="status">
+        {status.state === 'saving' ? <Busy label="Saving" /> : status.state === 'saved' ? 'Saved' : null}
+      </div>
+    </>
+  );
+}
+
+const clampDepth = (typed: string) => Math.max(1, Math.min(4, Math.round(Number(typed)) || 1));
+// A blank or unreadable entry keeps the saved value: a stray 0 would remove every idle worktree.
+const clampOr = (typed: string, max: number, saved: number) => {
+  const n = Math.round(Number(typed));
+  return typed.trim() && Number.isFinite(n) ? Math.max(0, Math.min(max, n)) : saved;
+};
+
+/** The fields General saves when they lose focus. */
+type TypedField = 'reposRoots' | 'reposDepth' | 'idleWorktreesPerRepo' | 'idleWorktreeDays' | 'cloneInto' | 'serverName';
+
+function GeneralTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObject<(() => void) | null> }) {
+  const { s, load, change } = auto;
+  // The typed fields as typed: each saves when it loses focus or takes Enter, never mid-typing (a
+  // lower idle worktree count removes worktrees as soon as it's saved), numbers clamped first.
   const [roots, setRoots] = useState<string[]>([]);
-  // The depth as typed; clamped to 1–4 on blur and on save.
   const [depth, setDepth] = useState('');
-  // Idle worktrees per repo and days to keep them, as typed; clamped on blur and on save.
   const [idle, setIdle] = useState('');
   const [idleDays, setIdleDays] = useState('');
+  const [cloneInto, setCloneInto] = useState('');
+  const [serverName, setServerName] = useState('');
+  // The fields above hold what was loaded: until then there's nothing typed to save.
+  const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
-  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    api
-      .settings()
+    load()
       .then((x) => {
-        setS(x);
+        setReady(true);
         setRoots(x.reposRoots);
         setDepth(String(x.reposDepth));
         setIdle(String(x.idleWorktreesPerRepo));
         setIdleDays(String(x.idleWorktreeDays));
+        setCloneInto(x.cloneInto);
+        setServerName(x.serverName);
       })
       .catch((e) => setError(errorMessage(e)));
-  }, []);
+  }, [load]);
 
-  if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
-
-  const clampDepth = () => Math.max(1, Math.min(4, Math.round(Number(depth)) || 1));
-  // A blank or unreadable entry keeps the saved value: a stray 0 would remove every idle worktree.
-  const clampOr = (typed: string, max: number, saved: number) => {
-    const n = Math.round(Number(typed));
-    return typed.trim() && Number.isFinite(n) ? Math.max(0, Math.min(max, n)) : saved;
+  // What the typed fields hold that differs from the settings (an empty repo folder list is
+  // included, for the server to say why it can't be; a blank clone folder isn't).
+  const typedPatch = (rootList: string[]): Patch => {
+    if (!s || !ready) return {};
+    const patch: Patch = {};
+    const r = rootList.map((x) => x.trim()).filter(Boolean);
+    if (r.join('\n') !== s.reposRoots.join('\n')) patch.reposRoots = r;
+    const d = clampDepth(depth);
+    if (d !== s.reposDepth) patch.reposDepth = d;
+    const cap = clampOr(idle, 20, s.idleWorktreesPerRepo);
+    if (cap !== s.idleWorktreesPerRepo) patch.idleWorktreesPerRepo = cap;
+    const days = clampOr(idleDays, 365, s.idleWorktreeDays);
+    if (days !== s.idleWorktreeDays) patch.idleWorktreeDays = days;
+    if (cloneInto.trim() && cloneInto.trim() !== s.cloneInto) patch.cloneInto = cloneInto.trim();
+    if (serverName.trim() !== s.serverName) patch.serverName = serverName.trim();
+    return patch;
   };
-  const clampIdle = () => clampOr(idle, 20, s.idleWorktreesPerRepo);
-  const clampIdleDays = () => clampOr(idleDays, 365, s.idleWorktreeDays);
-
-  const save = async (e: FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      const next = await api.saveSettings({
-        reposRoots: roots.map((r) => r.trim()).filter(Boolean),
-        reposDepth: clampDepth(),
-        cloneInto: s.cloneInto.trim(),
-        serverName: s.serverName.trim(),
-        idleWorktreesPerRepo: clampIdle(),
-        idleWorktreeDays: clampIdleDays(),
-        resolveConflicts: s.resolveConflicts,
-      });
-      setS(next);
-      setRoots(next.reposRoots);
-      setDepth(String(next.reposDepth));
-      setIdle(String(next.idleWorktreesPerRepo));
-      setIdleDays(String(next.idleWorktreeDays));
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2500);
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(false);
+  // Saves one field, or every field that differs, each on its own: the server refuses a whole
+  // request for one bad field, so a field it refuses doesn't take the others down with it.
+  const commit = (only?: TypedField, rootList = roots) => {
+    for (const [k, v] of Object.entries(typedPatch(rootList))) {
+      if (!only || k === only) change({ [k]: v } as Patch);
     }
   };
+  // Switching tabs or closing Settings saves what's still typed: no blur comes when a focused
+  // field goes. Settings' close calls it first, to wait for its answer, and takes it away when
+  // closing again leaves a refused field unsaved.
+  const latest = useRef(commit);
+  useEffect(() => {
+    latest.current = commit;
+  });
+  useEffect(() => {
+    typed.current = () => latest.current();
+    return () => {
+      typed.current?.();
+      typed.current = null;
+    };
+  }, [typed]);
+
+  if (!s || !ready) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
+
+  // A typed field's handlers: `tidy` shows the value as it's saved (clamped, or the saved one back).
+  const saveOn = (field: TypedField, tidy?: () => void) => ({
+    onBlur: () => {
+      tidy?.();
+      commit(field);
+    },
+    onKeyDown: (e: KeyboardEvent) => {
+      if (e.key !== 'Enter') return;
+      tidy?.();
+      commit(field);
+    },
+  });
 
   return (
-    <form className="stack" onSubmit={save}>
+    <div className="stack">
       <div className="field">
         <span className="label">Repo folders</span>
         <span className="hint">The Open project dialog lists the git repos in these folders.</span>
@@ -189,12 +293,17 @@ function GeneralTab() {
               className="input mono"
               value={r}
               onChange={(e) => setRoots(roots.map((x, j) => (j === i ? e.target.value : x)))}
+              {...saveOn('reposRoots')}
             />
             <button
               type="button"
               className="btn ghost"
               disabled={roots.length <= 1}
-              onClick={() => setRoots(roots.filter((_, j) => j !== i))}
+              onClick={() => {
+                const next = roots.filter((_, j) => j !== i);
+                setRoots(next);
+                commit('reposRoots', next);
+              }}
             >
               Remove
             </button>
@@ -214,15 +323,16 @@ function GeneralTab() {
             max={4}
             value={depth}
             onChange={(e) => setDepth(e.target.value)}
-            onBlur={() => setDepth(String(clampDepth()))}
+            {...saveOn('reposDepth', () => setDepth(String(clampDepth(depth))))}
           />
         </Field>
         <Field label="Clone into" hint="Where “Clone from URL” puts new repos.">
           <input
             id="set-clone"
             className="input mono"
-            value={s.cloneInto}
-            onChange={(e) => setS({ ...s, cloneInto: e.target.value })}
+            value={cloneInto}
+            onChange={(e) => setCloneInto(e.target.value)}
+            {...saveOn('cloneInto', () => !cloneInto.trim() && setCloneInto(s.cloneInto))}
           />
         </Field>
       </div>
@@ -241,7 +351,7 @@ function GeneralTab() {
               max={20}
               value={idle}
               onChange={(e) => setIdle(e.target.value)}
-              onBlur={() => setIdle(String(clampIdle()))}
+              {...saveOn('idleWorktreesPerRepo', () => setIdle(String(clampOr(idle, 20, s.idleWorktreesPerRepo))))}
             />
           </Field>
           <Field label="Remove unused after (days)" hint="An idle worktree no session has used for this long is removed. 0 keeps it.">
@@ -253,7 +363,7 @@ function GeneralTab() {
               max={365}
               value={idleDays}
               onChange={(e) => setIdleDays(e.target.value)}
-              onBlur={() => setIdleDays(String(clampIdleDays()))}
+              {...saveOn('idleWorktreeDays', () => setIdleDays(String(clampOr(idleDays, 365, s.idleWorktreeDays))))}
             />
           </Field>
         </div>
@@ -264,7 +374,7 @@ function GeneralTab() {
             id="set-resolve-conflicts"
             type="checkbox"
             checked={s.resolveConflicts}
-            onChange={(e) => setS({ ...s, resolveConflicts: e.target.checked })}
+            onChange={(e) => change({ resolveConflicts: e.target.checked })}
           />
           <span>Resolve merge conflicts on PRs</span>
         </label>
@@ -273,33 +383,39 @@ function GeneralTab() {
           conflicts and pushes. Off leaves them to you.
         </span>
       </div>
+      <div className="field">
+        <label className="check">
+          <input
+            id="set-tools-enabled"
+            type="checkbox"
+            checked={s.toolsEnabled}
+            onChange={(e) => change({ toolsEnabled: e.target.checked })}
+          />
+          <span>Let sessions start and move sessions</span>
+        </label>
+        <span className="hint">
+          Sessions get AgentK’s session tools, so when you ask, the agent can open projects, start sessions (from GitHub
+          issues and PRs too), move sessions to another stage and open another session’s PR. The agent asks before each
+          change, as for its other tools, unless Kiro may run any tool without asking (Harness). Turning this off stops them at once;
+          turning it on reaches each session at its next start.
+        </span>
+      </div>
       <Field label="Server name" hint={`Shown in the rail next to your user name. Leave it empty to use this machine’s name (${s.hostName}).`}>
         <input
           id="set-server-name"
           className="input"
-          value={s.serverName}
+          value={serverName}
           placeholder={s.hostName}
           maxLength={64}
-          onChange={(e) => setS({ ...s, serverName: e.target.value })}
+          onChange={(e) => setServerName(e.target.value)}
+          {...saveOn('serverName')}
         />
       </Field>
-      <div className="fields">
-        <Field label="Listen address">
-          <input id="set-bind" className="input mono" value={s.bind} readOnly disabled />
-        </Field>
-        <Field label="Port">
-          <input id="set-port" className="input mono" value={s.port} readOnly disabled />
-        </Field>
-      </div>
-      <p className="hint">Change the address and port in config.toml, then restart the server.</p>
-      <ErrorText error={error} />
-      <div className="settings-actions">
-        <button className="btn primary" disabled={busy}>
-          {busy ? <Busy label="Saving" /> : 'Save'}
-        </button>
-        {saved && <span className="muted small">Saved</span>}
-      </div>
-    </form>
+      <p className="hint">
+        Meko serves AgentK. Who can reach it, and on which port, are set in Meko’s config.toml, in its{' '}
+        <code>[web]</code> table.
+      </p>
+    </div>
   );
 }
 
@@ -308,24 +424,43 @@ function harnessNote(id: HarnessId, h: HarnessStatus | undefined): ReactNode {
   if (!h?.enabled) return 'Off.';
   if (h.version === null) {
     if (!h.checked) return <Busy label="Looking for it" />;
-    const login = id === 'kiro' ? 'kiro-cli login' : 'claude auth login';
-    return `${HARNESS_CAPS[id].label} didn't answer --version here. Install it and run ${login}, or set [${id}] command in config.toml, then check again.`;
+    return `⚠️ ${HARNESS_CAPS[id].label} didn't answer --version here. Install it and run ${HARNESS_CAPS[id].login}, or set [${id}] command in config.toml, then check again.`;
   }
-  if (!h.available) return `Version ${h.version}; AgentK needs ${h.minVersion} or later. Update it, then check again.`;
+  if (!h.available) {
+    const upgrade = HARNESS_CAPS[id].upgrade;
+    return `Version ${h.version}; AgentK needs ${h.minVersion} or later. ${upgrade ? `Run ${upgrade}` : 'Update it'}, then check again.`;
+  }
   return `Version ${h.version}.`;
 }
 
 /** Which `Settings` field turns each agent on: its Offer … for new sessions box. */
-const ENABLED_KEY: Record<HarnessId, 'claudeEnabled' | 'kiroEnabled'> = { claude: 'claudeEnabled', kiro: 'kiroEnabled' };
+const ENABLED_KEY: Record<HarnessId, 'claudeEnabled' | 'opencodeEnabled' | 'kiroEnabled'> = {
+  claude: 'claudeEnabled', opencode: 'opencodeEnabled', kiro: 'kiroEnabled',
+};
 
 /**
  * The coding agents: the default agent and the logos, then a bar that picks one agent, with that
- * agent's settings under it. Edits are kept while the bar switches, and one Save sends them all.
+ * agent's settings under it. Each saves as it's changed.
  */
-function HarnessTab({ harnesses, twoAgents, serverName }: { harnesses: HarnessStatus[]; twoAgents: boolean; serverName: string }) {
-  const [s, setS] = useState<Settings | null>(null);
-  // The agent the bar shows: the default agent when the tab opens, so a new default doesn't move it.
-  const [shown, setShown] = useState<HarnessId>('claude');
+function HarnessTab({
+  auto,
+  harnesses,
+  twoAgents,
+  serverName,
+  meko,
+  initialAgent,
+}: {
+  auto: AutoSettings;
+  harnesses: HarnessStatus[];
+  twoAgents: boolean;
+  serverName: string;
+  meko: MekoStatus;
+  initialAgent?: HarnessId;
+}) {
+  const { s, load, change } = auto;
+  // The agent the bar shows: the one asked for, else the default agent when the tab opens, so a new
+  // default doesn't move it.
+  const [shown, setShown] = useState<HarnessId>(initialAgent ?? 'claude');
   const [checking, setChecking] = useState(false);
   // The agent whose update this page started, until its request answers (each agent updates on its own).
   const [updating, setUpdating] = useState<HarnessId | null>(null);
@@ -334,32 +469,28 @@ function HarnessTab({ harnesses, twoAgents, serverName }: { harnesses: HarnessSt
   // What Check again answered, until the next state push replaces it.
   const [rechecked, setRechecked] = useState<HarnessStatus[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
-  const [busy, setBusy] = useState(false);
 
   useEffect(() => setRechecked(null), [harnesses]);
 
   useEffect(() => {
-    api
-      .settings()
+    load()
       .then((x) => {
-        setS(x);
-        setShown(x.defaultHarness);
+        if (!initialAgent) setShown(x.defaultHarness);
       })
       .catch((e) => setError(errorMessage(e)));
-  }, []);
+  }, [load, initialAgent]);
 
   if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
 
   const agents = rechecked ?? harnesses;
   const defaultAgent = defaultAgentChoice(agents, s.defaultHarness);
   // Turning off the default agent moves the default to another available one, if there is one.
-  const enable = (id: HarnessId, on: boolean) =>
-    setS({
-      ...s,
-      [ENABLED_KEY[id]]: on,
-      defaultHarness: on || s.defaultHarness !== id ? s.defaultHarness : (agents.find((h) => h.id !== id && h.available)?.id ?? s.defaultHarness),
-    });
+  const enable = (id: HarnessId, on: boolean) => {
+    const patch: Patch = { [ENABLED_KEY[id]]: on };
+    const next = on || s.defaultHarness !== id ? s.defaultHarness : (agents.find((h) => h.id !== id && h.available)?.id ?? s.defaultHarness);
+    if (next !== s.defaultHarness) patch.defaultHarness = next;
+    change(patch);
+  };
   // Reads every agent's version again (nothing polls them).
   const checkAgain = () => {
     setChecking(true);
@@ -382,30 +513,8 @@ function HarnessTab({ harnesses, twoAgents, serverName }: { harnesses: HarnessSt
     run.catch((err) => setError(errorMessage(err))).finally(() => setUpdating(null));
   };
 
-  const save = async (e: FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      setS(
-        await api.saveSettings({
-          defaultHarness: s.defaultHarness,
-          claudeEnabled: s.claudeEnabled,
-          kiroEnabled: s.kiroEnabled,
-          kiroTrustTools: s.kiroTrustTools,
-        }),
-      );
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2500);
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
-    <form className="stack" onSubmit={save}>
+    <div className="stack">
       {defaultAgent && (
         <div className="field">
           <span className="label" id="set-agent-label">
@@ -415,7 +524,7 @@ function HarnessTab({ harnesses, twoAgents, serverName }: { harnesses: HarnessSt
             idPrefix="set-agent"
             agents={defaultAgent.agents}
             value={defaultAgent.value}
-            onChange={(id) => setS({ ...s, defaultHarness: id })}
+            onChange={(id) => change({ defaultHarness: id })}
             labelledBy="set-agent-label"
           />
           <span className="hint">
@@ -434,20 +543,15 @@ function HarnessTab({ harnesses, twoAgents, serverName }: { harnesses: HarnessSt
           checking={checking}
           updating={updating === shown}
           outcome={shown === 'claude' ? claudeOutcome : null}
+          meko={meko}
           onEnable={(on) => enable(shown, on)}
-          onChange={(patch) => setS({ ...s, ...patch })}
+          onChange={change}
           onCheck={checkAgain}
           onUpdate={() => update(shown)}
         />
       </div>
       <ErrorText error={error} />
-      <div className="settings-actions">
-        <button className="btn primary" disabled={busy}>
-          {busy ? <Busy label="Saving" /> : 'Save'}
-        </button>
-        {saved && <span className="muted small">Saved</span>}
-      </div>
-    </form>
+    </div>
   );
 }
 
@@ -481,6 +585,7 @@ export function AgentSettings({
   checking,
   updating,
   outcome = null,
+  meko,
   onEnable,
   onChange,
   onCheck,
@@ -495,8 +600,10 @@ export function AgentSettings({
   updating: boolean;
   /** What this page's update of it came to, when nothing else says so (Claude Code with the mod off). */
   outcome?: { ok: boolean; text: string } | null;
+  /** Whether this agent's sessions reach AgentK's Meko (`AppState.meko`); left out, no Meko row. */
+  meko?: MekoStatus;
   onEnable: (on: boolean) => void;
-  onChange: (patch: Partial<Settings>) => void;
+  onChange: (patch: Omit<SettingsUpdate, 'meko'>) => void;
   onCheck: () => void;
   onUpdate: () => void;
 }) {
@@ -528,6 +635,28 @@ export function AgentSettings({
           </span>
         )}
       </div>
+      {meko && enabled && status?.available && <AgentMeko id={id} meko={meko} />}
+      {id === 'opencode' && enabled && (
+        <div className="field">
+          <label className="check">
+            <input
+              id="set-opencode-tracking"
+              type="checkbox"
+              checked={s.opencodeDisableTracking}
+              onChange={(e) => onChange({ opencodeDisableTracking: e.target.checked })}
+            />
+            <span>Turn off OpenCode's tracking</span>
+          </label>
+          <span className="hint">
+            {s.opencodeDisableTracking ? 'OpenCode sessions and Ask AgentK' : 'When on, OpenCode sessions and Ask AgentK'} send no telemetry, skip
+            OpenCode's update check and hide OpenCode Zen's free models, whose providers may train on your prompts. Commands the agent runs in a
+            session don't export OpenTelemetry either.{' '}
+            {s.opencodeDisableTracking &&
+              'Your prompts and code still go to the model you pick: for code that must not leave this computer, use a local model such as Ollama or LM Studio. '}
+            Takes effect when a session next starts or resumes.
+          </span>
+        </div>
+      )}
       {id === 'kiro' && enabled && (
         <div className="field">
           <label className="check">
@@ -545,272 +674,121 @@ export function AgentSettings({
   );
 }
 
-const KEY_SOURCE: Record<MekoKeySource, string> = {
-  config: 'from config.toml',
-  env: 'from the MEKO_API_KEY environment variable',
-  claude: 'from Claude Code’s settings',
+/** Where AgentK's Meko key comes from, after "AgentK uses". */
+const SOURCE_TEXT: Record<MekoKeySource, string> = {
+  meko: 'Meko Cloud, linked in Meko',
+  local: 'the Meko on this computer',
+  config: 'its own Meko key from config.toml',
+  env: 'its own Meko key from MEKO_API_KEY',
+  claude: 'its own Meko key from Claude Code’s settings',
 };
 
-/** The Meko server and key AgentK uses, its links, and whether Claude Code's (and Kiro's) sessions use the same. */
-function MekoTab({ status, claude: claudeOn, kiro }: { status: MekoStatus; claude: boolean; kiro: boolean }) {
-  const [s, setS] = useState<Settings | null>(null);
-  const [url, setUrl] = useState('');
-  const [key, setKey] = useState('');
-  const [webUrl, setWebUrl] = useState('');
-  const [apiUrl, setApiUrl] = useState('');
-  const [confirmHost, setConfirmHost] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
-  const [busy, setBusy] = useState<'save' | 'claude' | 'kiro' | null>(null);
-  const [claudeDone, setClaudeDone] = useState(false);
-  const [kiroDone, setKiroDone] = useState(false);
+/**
+ * What to do while AgentK uses a key of its own: Meko refused it, or keeps no link yet (too old, or
+ * the key is for a server on this computer).
+ */
+const OWN_KEY_FIX = 'Link Meko Cloud on Meko’s Meko Cloud page to move it there (update Meko first if it has no such page).';
 
-  const show = (x: Settings) => {
-    setS(x);
-    setUrl(x.meko.url);
-    setWebUrl(x.meko.webUrl);
-    setApiUrl(x.meko.apiUrl);
-    setKey('');
-  };
-
-  useEffect(() => {
-    api
-      .settings()
-      .then(show)
-      .catch((e) => setError(errorMessage(e)));
-  }, []);
-
-  if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
-  const m = s.meko;
-
-  const save = async (e: FormEvent) => {
-    e.preventDefault();
-    const next: MekoSettingsUpdate = {};
-    if (url.trim() !== m.url) next.url = url.trim();
-    if (key.trim()) next.apiKey = key.trim();
-    if (webUrl.trim() !== m.webUrl) next.webUrl = webUrl.trim();
-    if (apiUrl.trim() !== m.apiUrl) next.apiUrl = apiUrl.trim();
-    if (!Object.keys(next).length) return;
-    // Datapacks live on one Meko: moving to another server leaves existing projects' behind.
-    const newHost = httpHost(url.trim() || m.defaultUrl);
-    if (next.url !== undefined && newHost && newHost !== httpHost(m.effectiveUrl) && confirmHost !== newHost) {
-      setConfirmHost(newHost);
-      return;
-    }
-    setBusy('save');
-    setError(null);
-    try {
-      show(await api.saveSettings({ meko: next }));
-      setConfirmHost(null);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2500);
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const setUpClaude = async () => {
-    setBusy('claude');
-    setError(null);
-    setClaudeDone(false);
-    try {
-      show(await api.mekoClaudeSetup());
-      setClaudeDone(true);
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const setUpKiro = async () => {
-    setBusy('kiro');
-    setError(null);
-    setKiroDone(false);
-    try {
-      show(await api.mekoKiroSetup());
-      setKiroDone(true);
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(null);
-    }
-  };
-  // Worked out by the server (MekoStatus.kiro): Kiro's Meko MCP server is this one and sends a key.
-  const kiroGaps = status.kiro?.gaps ?? [];
-
-  // Worked out by the server (MekoStatus.claude): the same server in both of Claude Code's places, tokens that work there.
-  const claude = status.claude;
-  const claudeProblems = [...claude.gaps, ...claude.unchecked];
-  const claudeTag = claude.gaps.length ? 'differs' : claude.checking ? 'checking' : claude.unchecked.length ? 'not checked' : 'matches';
-
-  /** Turns Meko off (the key is kept) or back on (checked with Meko first). */
-  const setEnabled = async (enabled: boolean) => {
-    setBusy('save');
-    setError(null);
-    try {
-      show(await api.saveSettings({ meko: { enabled } }));
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(null);
-    }
-  };
-
+/**
+ * Settings › General's ways to Meko's own pages: the Meko Cloud link (Meko keeps it for AgentK and
+ * its other extensions) and the account that signs people in to both.
+ */
+export function MekoLinks({ meko, auth }: { meko: MekoStatus; auth: MekoAuth | null }) {
+  const host = httpHost(meko.url ?? '');
   return (
-    <form className="stack" onSubmit={save}>
-      <div className="meko-onoff">
-        {m.enabled ? (
-          <>
-            <span className="muted">Meko gives projects datapacks: shared memory, and what a project is shared through.</span>
-            <ConfirmButton
-              className="btn small"
-              label="Turn off Meko"
-              confirmLabel="Turn off"
-              danger
-              prompt="AgentK stops using Meko: new sessions get no datapack, and designs and summaries aren't saved there. Projects keep their datapacks for when you turn it back on. Claude Code's own Meko setup isn't changed."
-              onConfirm={() => setEnabled(false)}
-            />
-          </>
-        ) : (
-          <>
-            <span>
-              <b>Meko is off.</b> <span className="muted">Projects work without datapacks.</span>
-            </span>
-            <button type="button" className="btn small primary" disabled={busy !== null || m.keyHint === null} onClick={() => void setEnabled(true)}>
-              Turn on Meko
-            </button>
-          </>
-        )}
-      </div>
-      <Field label="MCP server URL" hint={`Empty means Meko Cloud (${m.defaultUrl}), unless the environment or Claude Code’s settings name one. Now using ${m.effectiveUrl}.`}>
-        <input
-          id="set-meko-url"
-          className="input mono"
-          placeholder={m.defaultUrl}
-          value={url}
-          onChange={(e) => {
-            setUrl(e.target.value);
-            setConfirmHost(null);
-          }}
-        />
-      </Field>
-      {m.keyHint === null && (
-        <MekoGetKey
-          title="No Meko API key yet."
-          webUrl={mekoKeyLinkBase({ url, webUrl }, m)}
-          fallback={`Fill in the web app URL below to get links to sign up and make a key on ${httpHost(url.trim() || m.fallbackUrl) ?? 'this Meko'}.`}
-        />
-      )}
-      <Field
-        label="API key"
-        hint={
-          m.keyHint === null
-            ? 'Paste the key you generated in Meko.'
-            : `A key is set${m.keyHint ? `, ending in ${m.keyHint}` : ''}${m.keySource ? `, ${KEY_SOURCE[m.keySource]}` : ''}. Type a new key to replace it. The key is never shown in full.`
-        }
-      >
-        <input
-          id="set-meko-key"
-          className="input mono"
-          type="password"
-          autoComplete="off"
-          placeholder={m.keyHint ? `••••••••${m.keyHint}` : 'mko_tkn_…'}
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-        />
-      </Field>
-      <div className="fields">
-        <Field label="Web app URL" hint="For links to datapacks, and sharing: the API URL defaults to it plus /api/v1.">
-          <input
-            id="set-meko-web"
-            className="input mono"
-            placeholder={m.effectiveWebUrl ?? 'https://meko.example.com'}
-            value={webUrl}
-            onChange={(e) => setWebUrl(e.target.value)}
-          />
-        </Field>
-        <Field label="API URL" hint="Meko’s REST API, for sharing.">
-          <input
-            id="set-meko-api"
-            className="input mono"
-            placeholder={m.effectiveApiUrl ?? 'https://meko.example.com/api/v1'}
-            value={apiUrl}
-            onChange={(e) => setApiUrl(e.target.value)}
-          />
-        </Field>
-      </div>
-      <p className="hint">
-        Leave the web app and API URLs empty for Meko Cloud: they’re worked out from the MCP URL. For your own Meko, fill in
-        the web app URL; the API URL defaults to it plus /api/v1.
-      </p>
-      {status.configured && !m.effectiveWebUrl && (
-        <p className="confirm-warn" role="status">
-          AgentK can’t work out the web app for {httpHost(m.effectiveUrl) ?? 'this Meko'}, so datapack links
-          {m.effectiveApiUrl ? ' are' : ' and sharing are'} off. Set the web app URL to turn them on.
-        </p>
-      )}
-
-      <div className="meko-status">
-        <div className="meko-status-row">
-          <span>Meko</span>
-          {status.configured ? <span className="tag">on</span> : <span className="tag shared">off</span>}
-          {status.configured && <span className="hint">A new URL or key is checked with Meko when you save it.</span>}
-        </div>
-        {status.configured && claudeOn && (
-          <div className="meko-status-row">
-            <span>Claude Code</span>
-            <span className={cx('tag', claudeTag !== 'matches' && 'shared')}>{claudeTag}</span>
-            <span className="hint">
-              {claudeProblems.length
-                ? `${claudeProblems.join(' ')} New sessions pick up a fix; running ones keep what they started with.`
-                : claude.checking
-                  ? 'Checking Claude Code’s tokens on this Meko.'
-                  : `Sessions use ${m.effectiveUrl}, with tokens that work there.`}
-            </span>
-            {claudeProblems.length > 0 && (
-              <button type="button" className="btn small" disabled={busy !== null} onClick={() => void setUpClaude()}>
-                {busy === 'claude' ? <Busy label="Setting up" /> : 'Set up Claude Code with this Meko'}
-              </button>
-            )}
-            {claudeDone && !claudeProblems.length && <span className="ok-text">Claude Code now uses this Meko.</span>}
-          </div>
-        )}
-        {status.configured && kiro && status.kiro && (
-          <div className="meko-status-row">
-            <span>Kiro</span>
-            <span className={cx('tag', kiroGaps.length > 0 && 'shared')}>{kiroGaps.length ? 'differs' : 'matches'}</span>
-            <span className="hint">
-              {kiroGaps.length
-                ? `${kiroGaps.join(' ')} Meko's setup for Kiro adds its MCP server and its agent, which Kiro sessions are built from.`
-                : `Kiro sessions use ${m.effectiveUrl}.`}
-            </span>
-            {kiroGaps.length > 0 && (
-              <button type="button" className="btn small" disabled={busy !== null} onClick={() => void setUpKiro()}>
-                {busy === 'kiro' ? <Busy label="Setting up" /> : 'Set up Kiro with this Meko'}
-              </button>
-            )}
-            {kiroDone && !kiroGaps.length && <span className="ok-text">Kiro now uses this Meko.</span>}
-          </div>
-        )}
-      </div>
-
-      {confirmHost && (
-        <p className="confirm-warn" role="alert">
-          Existing projects’ datapacks live on {httpHost(m.effectiveUrl) ?? 'the current Meko'}, not on {confirmHost}, so they
-          won’t work after the switch. Save again to switch anyway.
-        </p>
-      )}
-      <ErrorText error={error} />
+    <div className="field" id="set-meko-links">
+      <span className="label">Meko</span>
+      <span className="hint">
+        {meko.source
+          ? `AgentK uses ${SOURCE_TEXT[meko.source]}${host && meko.source !== 'local' ? ` (${host})` : ''}.${
+              meko.source !== 'meko' && meko.source !== 'local' ? ` ${OWN_KEY_FIX}` : ''
+            }`
+          : 'Meko isn’t set up: start Meko on this computer (meko start), or link Meko Cloud.'}{' '}
+        {auth?.access === 'local' ? 'Meko opens AgentK on this computer without a sign-in.' : 'Meko signs you in to AgentK.'}
+      </span>
       <div className="settings-actions">
-        <button className="btn primary" disabled={busy !== null}>
-          {busy === 'save' ? <Busy label="Checking" /> : confirmHost ? 'Switch Meko' : 'Save'}
-        </button>
-        {saved && <span className="muted small">Saved</span>}
+        <a className="btn small" id="set-meko-cloud" href={MEKO_CLOUD_PATH}>
+          Meko Cloud ↗
+        </a>
+        <a className="btn small" id="set-meko-account" href={MEKO_ACCOUNT_PATH}>
+          Account ↗
+        </a>
       </div>
-    </form>
+    </div>
+  );
+}
+
+/**
+ * Settings › Harness › an agent: whether its sessions reach AgentK's Meko, worked out by the server
+ * (`MekoStatus.claude`, `.opencode`, `.kiro`), with Meko's setup for it when they don't. Nothing
+ * while there's no Meko, or nothing to say for that agent.
+ */
+function AgentMeko({ id, meko }: { id: HarnessId; meko: MekoStatus }) {
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!meko.configured) return null;
+  const url = meko.url ?? '';
+  const label = HARNESS_CAPS[id].label;
+  let tag: string;
+  let bad = false;
+  let hint: string;
+  let setUp: (() => Promise<unknown>) | null = null;
+  if (id === 'claude') {
+    const c = meko.claude;
+    const problems = [...c.gaps, ...c.unchecked];
+    bad = problems.length > 0;
+    tag = c.gaps.length ? 'differs' : c.checking ? 'checking' : c.unchecked.length ? 'not checked' : 'matches';
+    hint = problems.length
+      ? `${problems.join(' ')} New sessions pick up a fix; running ones keep what they started with.`
+      : c.checking
+        ? 'Checking Claude Code’s tokens on this Meko.'
+        : `Sessions use ${url}, with tokens that work there.`;
+    if (problems.length) setUp = api.mekoClaudeSetup;
+  } else if (id === 'opencode') {
+    if (!meko.opencode) return null;
+    tag = meko.opencode.own ? 'its own' : 'matches';
+    hint = meko.opencode.own
+      ? 'OpenCode sessions use the meko server in OpenCode’s own config, which AgentK leaves as it is.'
+      : `OpenCode sessions use ${url}: AgentK adds it to their config.`;
+  } else {
+    if (!meko.kiro) return null;
+    const gaps = meko.kiro.gaps;
+    bad = gaps.length > 0;
+    tag = bad ? 'differs' : 'matches';
+    hint = bad
+      ? `${gaps.join(' ')} Meko's setup for Kiro adds its MCP server and its agent, which Kiro sessions are built from.`
+      : `Kiro sessions use ${url}.`;
+    if (bad) setUp = api.mekoKiroSetup;
+  }
+  const run = (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(null);
+    setDone(false);
+    fn()
+      .then(() => setDone(true))
+      .catch((e) => setError(errorMessage(e)))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <div className="field">
+      <span className="label">
+        Meko{' '}
+        <span id={`set-${id}-meko`} className={cx('tag', bad && 'shared')}>
+          {tag}
+        </span>
+      </span>
+      <span className="hint">{hint}</span>
+      {setUp && (
+        <div className="settings-actions">
+          <button type="button" id={`set-${id}-meko-setup`} className="btn small" disabled={busy} onClick={() => run(setUp)}>
+            {busy ? <Busy label="Setting up" /> : `Set up ${label} with this Meko`}
+          </button>
+        </div>
+      )}
+      {done && !setUp && <span className="ok-text">{label} now uses this Meko.</span>}
+      <ErrorText error={error} />
+    </div>
   );
 }
 
@@ -859,197 +837,6 @@ function UsageStatsCheck() {
       )}
       {offBy && <p className="muted small">Turned off by {offBy} in AgentK's environment.</p>}
       <ErrorText error={error} />
-    </div>
-  );
-}
-
-function LocalAccessNote() {
-  return (
-    <div className="stack">
-      <h3>No sign-in needed</h3>
-      <p className="muted">
-        AgentK only listens on this computer, so it opens without a username and password. To reach it from other
-        devices, rerun <code>agentk install</code> and choose remote access: that turns on HTTPS and a login.
-      </p>
-    </div>
-  );
-}
-
-function AccountTab({ auth }: { auth: AuthStatus }) {
-  const [current, setCurrent] = useState('');
-  const [next, setNext] = useState('');
-  const [confirm, setConfirm] = useState('');
-  const [pwMsg, setPwMsg] = useState<string | null>(null);
-  const [pwErr, setPwErr] = useState<string | null>(null);
-  const [pwBusy, setPwBusy] = useState(false);
-
-  // The login-time auth status goes stale once two-step sign-in is turned on or off, so ask again.
-  const [totpOn, setTotpOn] = useState<boolean | null>(null);
-  const [enroll, setEnroll] = useState<TotpEnrollResponse | null>(null);
-  const [code, setCode] = useState('');
-  const [totpErr, setTotpErr] = useState<string | null>(null);
-  const [totpMsg, setTotpMsg] = useState<string | null>(null);
-  const [totpBusy, setTotpBusy] = useState(false);
-
-  useEffect(() => {
-    let live = true;
-    api
-      .authStatus()
-      .then((a) => live && setTotpOn(a.totpEnabled))
-      .catch(() => live && setTotpOn(auth.totpEnabled));
-    return () => {
-      live = false;
-    };
-  }, [auth.totpEnabled]);
-
-  const changePw = async (e: FormEvent) => {
-    e.preventDefault();
-    if (pwBusy) return;
-    setPwErr(null);
-    setPwMsg(null);
-    if (next.length < 12) return setPwErr('Use at least 12 characters.');
-    if (next !== confirm) return setPwErr('The two new passwords don’t match.');
-    setPwBusy(true);
-    try {
-      await api.changePassword(current, next);
-      setCurrent('');
-      setNext('');
-      setConfirm('');
-      setPwMsg('Password changed.');
-    } catch (err) {
-      setPwErr(errorMessage(err));
-    } finally {
-      setPwBusy(false);
-    }
-  };
-
-  const startEnroll = async () => {
-    if (totpBusy) return;
-    setTotpErr(null);
-    setTotpBusy(true);
-    try {
-      setEnroll(await api.totpEnroll());
-    } catch (err) {
-      setTotpErr(errorMessage(err));
-    } finally {
-      setTotpBusy(false);
-    }
-  };
-
-  const confirmTotp = async (e: FormEvent) => {
-    e.preventDefault();
-    if (totpBusy) return;
-    setTotpErr(null);
-    setTotpBusy(true);
-    try {
-      if (totpOn) {
-        await api.totpDisable(code);
-        setTotpOn(false);
-        setTotpMsg('Two-step sign-in is off.');
-      } else {
-        await api.totpConfirm(code);
-        setTotpOn(true);
-        setEnroll(null);
-        setTotpMsg('Two-step sign-in is on.');
-      }
-      setCode('');
-    } catch (err) {
-      setTotpErr(errorMessage(err));
-    } finally {
-      setTotpBusy(false);
-    }
-  };
-
-  return (
-    <div className="stack">
-      <form className="stack" onSubmit={changePw}>
-        <h3>Change password</h3>
-        <Field label="Current password">
-          <input
-            id="acc-current"
-            className="input"
-            type="password"
-            autoComplete="current-password"
-            value={current}
-            onChange={(e) => setCurrent(e.target.value)}
-          />
-        </Field>
-        <div className="fields">
-          <Field label="New password">
-            <input
-              id="acc-next"
-              className="input"
-              type="password"
-              autoComplete="new-password"
-              value={next}
-              onChange={(e) => setNext(e.target.value)}
-            />
-          </Field>
-          <Field label="Confirm new password">
-            <input
-              id="acc-confirm"
-              className="input"
-              type="password"
-              autoComplete="new-password"
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-            />
-          </Field>
-        </div>
-        <ErrorText error={pwErr} />
-        {pwMsg && <p className="ok-text">{pwMsg}</p>}
-        <div>
-          <button className="btn primary" disabled={!current || !next || pwBusy}>
-            {pwBusy ? <Busy label="Changing" /> : 'Change password'}
-          </button>
-        </div>
-      </form>
-
-      <div className="stack">
-        <h3>Two-step sign-in</h3>
-        <p className="muted">
-          {totpOn === null
-            ? <Busy label="Checking" />
-            : totpOn
-              ? 'On. Sign-in asks for a code from your authenticator app.'
-              : 'Off. Add a code from an authenticator app to every sign-in.'}
-        </p>
-        {totpOn === false && !enroll && (
-          <div>
-            <button className="btn" disabled={totpBusy} onClick={startEnroll}>
-              Set up authenticator
-            </button>
-          </div>
-        )}
-        {enroll && !totpOn && (
-          <div className="totp-enroll">
-            <div className="qr" dangerouslySetInnerHTML={{ __html: enroll.qrSvg }} />
-            <div className="stack">
-              <p>Scan the code with your authenticator app, or enter this key:</p>
-              <code className="secret">{enroll.secret}</code>
-            </div>
-          </div>
-        )}
-        {(enroll || totpOn) && (
-          <form className="filter-row" onSubmit={confirmTotp}>
-            <input
-              id="acc-totp"
-              className="input mono"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              placeholder="6-digit code"
-              maxLength={6}
-              value={code}
-              onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
-            />
-            <button className={cx('btn', totpOn ? 'danger' : 'primary')} disabled={code.length !== 6 || totpBusy}>
-              {totpOn ? 'Turn off' : 'Confirm'}
-            </button>
-          </form>
-        )}
-        <ErrorText error={totpErr} />
-        {totpMsg && <p className="ok-text">{totpMsg}</p>}
-      </div>
     </div>
   );
 }

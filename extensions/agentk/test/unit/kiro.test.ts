@@ -1,13 +1,14 @@
 import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { kiroArgs, normalizeKiro } from '../../src/server/harness/kiro.js';
-import { agentkAgent, findKiroSession, parseKiroPlan, parseKiroTurns, readKiroAgent, readKiroRun, writeKiroAgent } from '../../src/server/kiro.js';
-import { kiroMekoGaps } from '../../src/server/mekokiro.js';
+import { agentkHooks, kiroArgs, kiroMekoTool, normalizeKiro } from '../../src/server/harness/kiro.js';
+import { agentkAgent, findKiroSession, parseKiroMekoCalls, parseKiroPlan, parseKiroTurns, readKiroAgent, readKiroRun, writeKiroAgent } from '../../src/server/kiro.js';
+import { kiroMekoGaps, kiroMekoServerNames } from '../../src/server/mekokiro.js';
+import { getPaths } from '../../src/server/paths.js';
 import { tempDir } from '../helpers.js';
 
 describe("Kiro's agentk agent", () => {
-  it("keeps the base agent's tools, MCP servers and hooks (Meko's capture), adds AgentK's after them, and drops Kiro's upgrade bookkeeping", () => {
+  it("keeps the base agent's tools, MCP servers and hooks (Meko's capture), adds AgentK's and its session tools after them, and drops Kiro's upgrade bookkeeping", () => {
     const meko = {
       name: 'meko-default', description: 'Meko', tools: ['@meko', 'read', 'write'], includeMcpJson: true, kiroUpgrade: { revision: 2 },
       hooks: { agentSpawn: [{ command: 'node kiro-handler.js agentSpawn' }], stop: [{ command: 'node kiro-handler.js stop' }] },
@@ -23,6 +24,14 @@ describe("Kiro's agentk agent", () => {
         stop: [{ command: 'node kiro-handler.js stop' }],
         preToolUse: [{ matcher: 'fs_write', command: '/run/kiro-guard.sh' }],
       },
+    });
+    const tools = { name: 'agentk_sessions', server: { command: '/ak/node', args: ['/ak/mcpmain.js'] }, skill: '/ak/run/tools/skills/agentk-sessions/SKILL.md' };
+    const base = { ...meko, mcpServers: { meko: { url: 'https://meko.test/mcp' } }, resources: ['file://AGENTS.md'], allowedTools: ['read'] };
+    expect(agentkAgent(base, ours, { tools })).toMatchObject({
+      mcpServers: { meko: { url: 'https://meko.test/mcp' }, agentk_sessions: tools.server },
+      resources: ['file://AGENTS.md', 'skill:///ak/run/tools/skills/agentk-sessions/SKILL.md'],
+      // Nothing more is allowed than the base allows: Kiro asks before each session tool too.
+      allowedTools: ['read'],
     });
   });
 
@@ -103,6 +112,68 @@ describe("Kiro's session store", () => {
     writeFileSync(join(dir, 'earlier.json'), JSON.stringify({ session_id: 'earlier', cwd: '/w', created_at: '1970-01-01T00:16:40Z' }));
     utimesSync(join(dir, 'earlier.json'), 9000, 9000);
     expect(findKiroSession(['/w'], 1_500_000, home)).toBe('new');
+  });
+});
+
+describe("a Kiro session's Meko calls", () => {
+  it("are told by the forwarder before each call to a Meko server, one matcher per server", () => {
+    const hooks = agentkHooks(getPaths(tempDir('akl-kiro-hooks-')), ['meko', 'meko-local']);
+    expect(hooks.preToolUse).toEqual([
+      { matcher: 'fs_write', command: expect.stringMatching(/kiro-guard\.sh'$/), timeout_ms: 5000 },
+      { matcher: '@meko', command: expect.stringMatching(/hook\.sh'$/), timeout_ms: 5000 },
+      { matcher: '@meko-local', command: expect.stringMatching(/hook\.sh'$/), timeout_ms: 5000 },
+    ]);
+  });
+
+  it("finds Meko's servers in Kiro's MCP config and the agent's own, leaving out disabled ones and others; meko without any", () => {
+    const home = tempDir('akl-kiro-mcp-');
+    expect(kiroMekoServerNames(undefined, home)).toEqual(['meko']);
+    mkdirSync(join(home, 'settings'), { recursive: true });
+    writeFileSync(join(home, 'settings', 'mcp.json'), JSON.stringify({ mcpServers: { meko: { url: 'u' }, 'meko-old': { url: 'u', disabled: true }, github: {} } }));
+    expect(kiroMekoServerNames({ 'meko-local': { command: 'x' }, other: {} }, home)).toEqual(['meko', 'meko-local']);
+  });
+
+  it.each([
+    [{ tool_name: '@meko/context_search' }, '@meko/context_search'],
+    [{ tool_name: '@meko-local/memory_add' }, '@meko-local/memory_add'],
+    [{ tool_name: '@github/search' }, null],
+    [{ tool_name: 'write' }, null],
+    [{}, null],
+  ])("are keyed by their tool for the dot's m: %j", (p, key) => {
+    expect(kiroMekoTool(p)).toBe(key);
+  });
+
+  it("are read from Kiro's session log with their replies, dated by their turn's prompt", () => {
+    const line = (kind: string, data: object) => JSON.stringify({ version: 'v1', kind, data });
+    const reply = (text: string, isError = false) => ({ content: [{ type: 'text', text }], isError });
+    const results = (id: string, server: string, tool: string, r: object, status = 'success') => line('ToolResults', {
+      message_id: 'm',
+      content: [{ kind: 'toolResult', data: { toolUseId: id, content: [{ kind: 'json', data: r }], status } }],
+      results: { [id]: { tool: { kind: { Mcp: { toolName: tool, serverName: server, params: { query: 'q', __tool_use_purpose: 'why' } } } }, result: { Success: { items: [{ Json: r }] } } } },
+    });
+    const text = [
+      line('Prompt', { message_id: 'p1', content: [], meta: { timestamp: 1_700_000_000 } }),
+      line('AssistantMessage', { message_id: 'a1', content: [{ kind: 'toolUse', data: { toolUseId: 't1', name: 'memory_search', input: { query: 'q' } } }] }),
+      results('t1', 'meko', 'memory_search', reply('{"results":[]}')),
+      results('t2', 'github', 'search', reply('[]')),
+      results('t3', 'meko-local', 'memory_add', reply('Error: down', true), 'error'),
+      // A call the user refused: Kiro's own message, as text, and an error.
+      line('ToolResults', {
+        message_id: 'm',
+        content: [{ kind: 'toolResult', data: { toolUseId: 't5', content: [{ kind: 'text', data: 'Permission request failed: denied' }], status: 'error' } }],
+        results: { t5: { tool: { kind: { Mcp: { toolName: 'context_search', serverName: 'meko', params: { query: 'q' } } } } } },
+      }),
+      'not json',
+    ].join('\n');
+    expect(parseKiroMekoCalls(text, 42)).toEqual([
+      { id: 't1', tool: 'memory_search', at: 1_700_000_000_000, input: { query: 'q' }, text: '{"results":[]}', isError: false },
+      { id: 't3', tool: 'memory_add', at: 1_700_000_000_000, input: { query: 'q' }, text: 'Error: down', isError: true },
+      { id: 't5', tool: 'context_search', at: 1_700_000_000_000, input: { query: 'q' }, text: 'Permission request failed: denied', isError: true },
+    ]);
+    // A read that starts after the prompt dates its calls by when it ran.
+    expect(parseKiroMekoCalls(results('t4', 'meko', 'context_search', reply('{}')), 42)).toEqual([
+      { id: 't4', tool: 'context_search', at: 42, input: { query: 'q' }, text: '{}', isError: false },
+    ]);
   });
 });
 

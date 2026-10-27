@@ -171,7 +171,7 @@ export function localClone(clones: RepoCandidate[], repo: string): string | null
 }
 
 /** The GitHub repo a local clone works on: its upstream for a fork, else its origin. */
-async function githubRemote(path: string): Promise<string | null> {
+export async function githubRemote(path: string): Promise<string | null> {
   const { origin, upstream } = await readRemotes(path);
   return githubRepo(upstream) ?? githubRepo(origin);
 }

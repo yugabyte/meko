@@ -5,12 +5,14 @@ import { costOf, priceFor } from '../shared/pricing.js';
 import type { DailyUsage, ModelUsage, ProjectUsage, ProjectUsageSummary, SessionUsage, TokenUsage, UsageCost, UsageOverview } from '../shared/types.js';
 import { all, get, run, tx, type Db } from './db.js';
 import {
-  firstTurnMeko, learningOf, learnRuns, mekoBy, mekoCalls, parseMekoCalls, parseMekoResults, queryKey, sessionMeko, summarizeMeko,
+  firstTurnMeko, learningOf, learnRuns, mekoBy, mekoCallOf, mekoCalls, mekoResultOf, parseMekoCalls, parseMekoResults, queryKey, sessionMeko, summarizeMeko,
   type MekoCall, type MekoResult, type PendingCall,
 } from './mekousage.js';
 import { openGapCounts } from './mekogaps.js';
 import { readSavedReplySync } from './savedreply.js';
-import type { KiroTurn } from './kiro.js';
+import { parseKiroMekoCalls, type KiroTurn } from './kiro.js';
+import type { AgentMekoCall } from './mekolog.js';
+import { parseOpenCodeMekoCalls, parseOpenCodeMessages } from './opencode.js';
 import type { SessionRow } from './store.js';
 
 export const ZERO_USAGE: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, messages: 0 };
@@ -263,16 +265,7 @@ export function ingestSessionUsage(db: Db, sessionId: string, mainTranscript: st
                      cache_write_1h = MAX(cache_write_1h, excluded.cache_write_1h)`,
             sessionId, r.messageId, agent, r.model, r.at, r.input, r.output, r.cacheRead, r.cacheWrite, r.cacheWrite1h);
         }
-        for (const c of calls) {
-          run(db, `INSERT INTO meko_calls(session_id, tool_use_id, agent, tool, kind, at, input_chars, model, context_tokens, query, query_key)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
-            sessionId, c.toolUseId, agent, c.tool, c.kind, c.at, c.inputChars, c.model, c.contextTokens, c.query, c.query === null ? null : queryKey(c.query));
-        }
-        for (const r of results) {
-          run(db, `UPDATE meko_calls SET outcome = ?, results = ?, result_chars = ?, top_score = ?, top_raw = ?, quality = ?
-                   WHERE session_id = ? AND tool_use_id = ?`,
-            r.outcome, r.results, r.resultChars, r.topScore, r.topRaw, r.quality, sessionId, r.toolUseId);
-        }
+        recordMekoCalls(db, sessionId, agent, calls, results);
         // After this read's responses are in: a user mark needs a response before it.
         if (marks.length) setFirstTurnEnd(db, sessionId, marks);
         run(db, `INSERT INTO usage_files(session_id, path, offset) VALUES (?, ?, ?)
@@ -284,6 +277,27 @@ export function ingestSessionUsage(db: Db, sessionId: string, mainTranscript: st
     }
   }
   return changed;
+}
+
+/**
+ * Writes Meko calls and their results into `meko_calls` (inside the caller's transaction): a call
+ * already there is left as it is, and a result fills in its call's outcome. The same for every
+ * agent's calls, so they're counted and judged alike. Returns the ids of the calls that were new.
+ */
+export function recordMekoCalls(db: Db, sessionId: string, agent: string | null, calls: MekoCall[], results: MekoResult[]): Set<string> {
+  const added = new Set<string>();
+  for (const c of calls) {
+    const r = run(db, `INSERT INTO meko_calls(session_id, tool_use_id, agent, tool, kind, at, input_chars, model, context_tokens, query, query_key)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+      sessionId, c.toolUseId, agent, c.tool, c.kind, c.at, c.inputChars, c.model, c.contextTokens, c.query, c.query === null ? null : queryKey(c.query));
+    if (Number(r.changes)) added.add(c.toolUseId);
+  }
+  for (const r of results) {
+    run(db, `UPDATE meko_calls SET outcome = ?, results = ?, result_chars = ?, top_score = ?, top_raw = ?, quality = ?
+             WHERE session_id = ? AND tool_use_id = ?`,
+      r.outcome, r.results, r.resultChars, r.topScore, r.topRaw, r.quality, sessionId, r.toolUseId);
+  }
+  return added;
 }
 
 interface SumRow {
@@ -321,7 +335,7 @@ interface CostRow {
 const COST_SUMS = `u.model AS model, SUM(u.input) AS input, SUM(u.output) AS output, SUM(u.cache_read) AS cache_read,
   SUM(u.cache_write) AS cache_write, SUM(u.cache_write_1h) AS cache_write_1h, COUNT(*) AS messages`;
 
-/** Rows priced from their tokens: Claude Code's responses. Kiro's turns carry the credits it billed instead. */
+/** Rows priced from their tokens: Claude Code's and OpenCode's responses. Kiro's turns carry the credits it billed instead. */
 const PRICED = 'u.credits IS NULL';
 
 /** API-price cost of per-model sums. */
@@ -506,6 +520,98 @@ export function recordKiroTurns(db: Db, sessionId: string, conversation: string,
     }
   });
   return added > 0;
+}
+
+/**
+ * The whole lines a file gained since the last read (by the offset kept in `usage_files`), and the
+ * offset to keep once they're in; null when there's nothing new. A line still being written is read
+ * next time, and a file that shrank is read again from the start (rows already in are skipped by id).
+ */
+function newLines(db: Db, sessionId: string, file: string): { text: string; offset: number } | null {
+  const prev = get<{ offset: number }>(db, 'SELECT offset FROM usage_files WHERE session_id = ? AND path = ?', sessionId, file);
+  let fd: number;
+  try {
+    fd = openSync(file, 'r');
+  } catch {
+    return null;
+  }
+  try {
+    let offset = prev?.offset ?? 0;
+    const size = fstatSync(fd).size;
+    if (size < offset) offset = 0;
+    if (size === offset) return null;
+    const buf = Buffer.alloc(size - offset);
+    readSync(fd, buf, 0, buf.length, offset);
+    const end = buf.lastIndexOf(0x0a) + 1;
+    if (!end) return null;
+    return { text: buf.subarray(0, end).toString('utf8'), offset: offset + end };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function keepOffset(db: Db, sessionId: string, file: string, offset: number): void {
+  run(db, `INSERT INTO usage_files(session_id, path, offset) VALUES (?, ?, ?)
+           ON CONFLICT(session_id, path) DO UPDATE SET offset = excluded.offset`, sessionId, file, offset);
+}
+
+/** What a read of an agent's own files added: whether anything did, and the Meko calls new to `meko_calls`, for the call log. */
+export interface AgentUsageRead {
+  changed: boolean;
+  mekoCalls: AgentMekoCall[];
+}
+
+/**
+ * Reads an OpenCode session's `messages.jsonl` (each finished response's tokens, and each Meko call
+ * with its reply, written by AgentK's plugin) from where the last read stopped: responses into
+ * `usage_messages`, priced like Claude Code's, and Meko calls into `meko_calls`. Its subagents'
+ * count too, under their own OpenCode session as the agent (`main`'s have none).
+ */
+export function ingestOpenCodeUsage(db: Db, sessionId: string, file: string, main: string | null): AgentUsageRead {
+  const read = newLines(db, sessionId, file);
+  if (!read) return { changed: false, mekoCalls: [] };
+  const agentOf = (session: string) => (session && session !== main ? session : null);
+  let added = 0;
+  const logged: AgentMekoCall[] = [];
+  tx(db, () => {
+    for (const m of parseOpenCodeMessages(read.text)) {
+      const r = run(db, `INSERT INTO usage_messages(session_id, message_id, agent, model, at, input, output, cache_read, cache_write, cache_write_1h)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0) ON CONFLICT(session_id, message_id) DO NOTHING`,
+      sessionId, `opencode:${m.id}`, agentOf(m.session), m.model, m.at, m.input, m.output, m.cacheRead, m.cacheWrite);
+      added += Number(r.changes);
+    }
+    for (const c of parseOpenCodeMekoCalls(read.text)) {
+      const id = `opencode:${c.id}`;
+      const call = mekoCallOf({ toolUseId: id, tool: c.tool, at: c.at, input: c.input, model: c.model, contextTokens: null });
+      // A reply too long to log counts as found, as one too large for Claude does.
+      const res = mekoResultOf(id, call, c.big ? null : c.text ?? '', !c.ok);
+      if (!recordMekoCalls(db, sessionId, agentOf(c.session), [call], [res]).size) continue;
+      added++;
+      logged.push({ tool: c.tool, at: c.at, ms: c.ms, ok: c.ok, error: c.error, args: c.input, text: c.text, notice: null, subagent: !!agentOf(c.session) });
+    }
+    keepOffset(db, sessionId, file, read.offset);
+  });
+  return { changed: added > 0, mekoCalls: logged };
+}
+
+/**
+ * Reads a Kiro session's log (`<conversation>.jsonl`) from where the last read stopped, into
+ * `meko_calls`: the Meko calls whose results are in (`parseKiroMekoCalls`). Kiro says neither the
+ * model nor the context of a call, nor how long it took.
+ */
+export function ingestKiroMekoCalls(db: Db, sessionId: string, file: string, now = Date.now()): AgentUsageRead {
+  const read = newLines(db, sessionId, file);
+  if (!read) return { changed: false, mekoCalls: [] };
+  const logged: AgentMekoCall[] = [];
+  tx(db, () => {
+    for (const c of parseKiroMekoCalls(read.text, now)) {
+      const call = mekoCallOf({ toolUseId: c.id, tool: c.tool, at: c.at, input: c.input, model: null, contextTokens: null });
+      if (!recordMekoCalls(db, sessionId, null, [call], [mekoResultOf(c.id, call, c.text, c.isError)]).size) continue;
+      logged.push({ tool: c.tool, at: c.at, ms: null, ok: !c.isError, error: c.isError ? c.text.slice(0, 300) || 'failed' : null, args: c.input, text: c.text, notice: null, subagent: false });
+    }
+    keepOffset(db, sessionId, file, read.offset);
+  });
+  return { changed: logged.length > 0, mekoCalls: logged };
 }
 
 /** Where a session's main transcript is, preferring the path Claude reported. */

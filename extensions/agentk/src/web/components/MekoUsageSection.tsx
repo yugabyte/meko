@@ -1,4 +1,5 @@
 import type { MekoFirstTurn, MekoGapCounts, MekoLearning, MekoSavings, MekoUsage } from '../../shared/types';
+import { appUrl } from '../base';
 import { navigate, routePath } from '../router';
 import { cx, firstTurnText, formatCost, formatTokens, gapsLine, learningText, type LearningTile } from '../util';
 
@@ -29,8 +30,8 @@ export function MekoUsageSection({
     <div className="meko-usage">
       <div className="meko-usage-hd">
         {/* One logo per theme; CSS shows the one that reads on the background. */}
-        <img className="meko-logo on-light" src="/meko-black.png" alt="Meko" width={56} height={18} />
-        <img className="meko-logo on-dark" src="/meko-white.png" alt="Meko" width={56} height={18} />
+        <img className="meko-logo on-light" src={appUrl('/meko-black.png')} alt="Meko" width={56} height={18} />
+        <img className="meko-logo on-dark" src={appUrl('/meko-white.png')} alt="Meko" width={56} height={18} />
       </div>
       <div className="usage-stats">
         <div className="usage-stat" title={`${f(meko.found)} found something, ${f(meko.empty)} found nothing, ${f(meko.errors)} failed (saves included)`}>

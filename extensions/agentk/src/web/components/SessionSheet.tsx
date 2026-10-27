@@ -80,7 +80,8 @@ export function SheetItem({
 /**
  * Archive keeps the branch; Discard deletes the worktree and branch after showing what would be lost
  * (a branch the session started on that existed before it is kept). Discard saves what the session
- * learned to Meko first, unless Don't save learnings is checked (it starts unchecked).
+ * learned to Meko first, unless Don't save learnings is checked (it starts unchecked, except for a
+ * learn session, which saved what it learned as it went).
  * Archive waits for uncommitted files to be committed (the server refuses it too).
  * Shown in the session header on desktop and in the session sheet on phones.
  */
@@ -102,7 +103,7 @@ export function EndSessionButton({
   disabled?: boolean;
 }) {
   const [step, setStep] = useState<'closed' | 'choose' | 'checking' | 'discard'>('closed');
-  const [skipLearn, setSkipLearn] = useState(false);
+  const [skipLearn, setSkipLearn] = useState(session.purpose === 'learn');
   /** What ending the session would leave or lose: undefined while checking, null if the check failed. */
   const [check, setCheck] = useState<DiscardCheck | null | undefined>(undefined);
   const [busy, setBusy] = useState(false);

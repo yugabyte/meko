@@ -1,6 +1,7 @@
 package paths
 
 import (
+	"encoding/json"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -24,50 +25,92 @@ func fakeFS(t *testing.T, types map[string]string) {
 	t.Cleanup(func() { FSType = old })
 }
 
-func TestResolve(t *testing.T) {
-	home, xdg, other := t.TempDir(), t.TempDir(), t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_STATE_HOME", xdg)
-	t.Setenv(HomeEnv, "")
-
-	fakeFS(t, nil)
-	if got, err := Resolve(""); err != nil || got != filepath.Join(home, ".meko") {
-		t.Fatalf("default: got %q, %v", got, err)
+// The cases AgentK's mekoHome() runs too (testdata/resolve-cases.json), so both pick the same
+// folder. Their absolute paths are put under a temporary root, and the network folders made there,
+// because Resolve checks the filesystem of a path's nearest folder that exists.
+func TestResolveCases(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("testdata", "resolve-cases.json"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got, err := Resolve(other); err != nil || got != other {
-		t.Fatalf("explicit: got %q, %v", got, err)
+	var file struct {
+		Cases []struct {
+			Name        string            `json:"name"`
+			Env         map[string]string `json:"env"`
+			NetworkDirs []string          `json:"networkDirs"`
+			Want        string            `json:"want"`
+			Error       bool              `json:"error"`
+		} `json:"cases"`
 	}
-	t.Setenv(HomeEnv, other)
-	if got, err := Resolve(""); err != nil || got != other {
-		t.Fatalf("env: got %q, %v", got, err)
+	if err = json.Unmarshal(b, &file); err != nil {
+		t.Fatal(err)
 	}
-
-	// A home folder on NFS moves the default to $XDG_STATE_HOME on local disk.
-	t.Setenv(HomeEnv, "")
-	fakeFS(t, map[string]string{home: "nfs4"})
-	if got, err := Resolve(""); err != nil || got != filepath.Join(xdg, "meko") {
-		t.Fatalf("default on NFS: got %q, %v", got, err)
-	}
-	// With no $XDG_STATE_HOME either, it moves to /var/tmp/<user>/meko, made private.
-	t.Setenv("XDG_STATE_HOME", "")
-	oldTmp := SharedTmp
-	SharedTmp = t.TempDir()
-	t.Cleanup(func() { SharedTmp = oldTmp })
 	u, err := user.Current()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(SharedTmp, u.Username, "meko")
-	got, err := Resolve("")
-	if err != nil || got != want {
-		t.Fatalf("default on NFS without XDG: got %q, %v", got, err)
+	for _, c := range file.Cases {
+		t.Run(c.Name, func(t *testing.T) {
+			root, home, tmp := t.TempDir(), t.TempDir(), t.TempDir()
+			oldTmp := SharedTmp
+			SharedTmp = tmp
+			t.Cleanup(func() { SharedTmp = oldTmp })
+			expand := func(p string) string {
+				p = strings.NewReplacer("$HOME", home, "$SHARED_TMP", tmp, "$USER", u.Username).Replace(p)
+				if filepath.IsAbs(p) && !strings.HasPrefix(p, home) && !strings.HasPrefix(p, tmp) {
+					p = filepath.Join(root, p)
+				}
+				return p
+			}
+			t.Setenv("HOME", home)
+			for _, k := range []string{HomeEnv, "XDG_STATE_HOME"} {
+				t.Setenv(k, "")
+				if v, ok := c.Env[k]; ok {
+					t.Setenv(k, expand(v))
+				}
+			}
+			network := map[string]string{}
+			for _, d := range c.NetworkDirs {
+				if err := os.MkdirAll(expand(d), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				network[expand(d)] = "nfs4"
+			}
+			fakeFS(t, network)
+			got, err := Resolve("")
+			switch {
+			case c.Error && err == nil:
+				t.Fatalf("got %q, want an error", got)
+			case !c.Error && (err != nil || got != expand(c.Want)):
+				t.Fatalf("got %q, %v; want %q", got, err, expand(c.Want))
+			}
+		})
 	}
-	fi, err := os.Stat(want)
-	if err != nil || fi.Mode().Perm() != 0o700 {
-		t.Fatalf("fallback folder: %v, %v", fi, err)
-	}
+}
 
-	// A folder the user named on NFS is refused, with the reason.
+// A folder named with --data-dir wins, and one on NFS is refused with the reason; the
+// /var/tmp/<user>/meko fallback is made private.
+func TestResolve(t *testing.T) {
+	home, other := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_STATE_HOME", "")
+	t.Setenv(HomeEnv, "")
+	fakeFS(t, nil)
+	if got, err := Resolve(other); err != nil || got != other {
+		t.Fatalf("explicit: got %q, %v", got, err)
+	}
+	fakeFS(t, map[string]string{home: "nfs4"})
+	oldTmp := SharedTmp
+	SharedTmp = t.TempDir()
+	t.Cleanup(func() { SharedTmp = oldTmp })
+	got, err := Resolve("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(got)
+	if err != nil || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("fallback folder %s: %v, %v", got, fi, err)
+	}
 	_, err = Resolve(filepath.Join(home, "data"))
 	if err == nil || !strings.Contains(err.Error(), "network filesystem (nfs4)") {
 		t.Fatalf("explicit on NFS: got %v", err)

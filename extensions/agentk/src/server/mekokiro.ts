@@ -37,6 +37,28 @@ export function readKiroMeko(home = kiroHome()): KiroMekoServer[] {
 }
 
 /**
+ * The names of the Meko servers a Kiro session can call, for the `agentk` agent's hook matchers
+ * (`@<name>`): those named `meko`, or starting with it, in Kiro's MCP config (left out when
+ * `disabled`) and in the agent's own `mcpServers` (`agentMcp`); `meko` when there's none. Reads files only.
+ */
+export function kiroMekoServerNames(agentMcp: unknown, home = kiroHome()): string[] {
+  const names = new Set<string>();
+  const add = (servers: unknown) => {
+    if (!servers || typeof servers !== 'object') return;
+    for (const [name, v] of Object.entries(servers as Record<string, unknown>)) {
+      if (/^meko[\w-]*$/i.test(name) && !(v && typeof v === 'object' && (v as { disabled?: unknown }).disabled === true)) names.add(name);
+    }
+  };
+  try {
+    add((JSON.parse(readFileSync(join(home, 'settings', 'mcp.json'), 'utf8')) as { mcpServers?: unknown } | null)?.mcpServers);
+  } catch {
+    // No MCP config: the agent's own, if any.
+  }
+  add(agentMcp);
+  return names.size ? [...names].sort() : ['meko'];
+}
+
+/**
  * Whether the agent Kiro sessions are built from (the user's default; Kiro's built-in one loads it)
  * loads Kiro's MCP config, where Meko's setup puts its server, or names a Meko server itself.
  */

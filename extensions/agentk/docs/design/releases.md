@@ -14,15 +14,20 @@ Part of the [AgentK design](../design.md).
   every component's jobs, run or skipped) and the title check pass.
 - **Versioning (on push to main).** Versions are `0.YYYYMMDD.N`: the UTC date, and `N` counting
   from 0 for each release that day. Commit subjects are `<type>(<component>[/<area>])[!]: <summary>`
-  with one of nine types and one of the repo's components (`agentk`, `meko`, `repo`:
-  `scripts/check-title.sh`), and PRs are squash-merged with the PR title
+  with one of nine types and one of the repo's components (`agentk`, `meko`, `presenter`, `repo`:
+  `scripts/check-title.sh`), or several comma-separated for a change that ships in more than one
+  (`feat(agentk,meko): …`), and PRs are squash-merged with the PR title
   as the subject. A push with any `feat`, `fix`, `perf` or `deps` commit for AgentK since its last
   release runs the tests and cuts the next version, and those subjects become the release notes;
   `ci`, `test`, `docs`, `nit` and `chore` don't release. Releases are scoped by component: Meko
-  (`backend/`) releases on its own, from its own tags (`meko-v…`), and its `meko` subjects never
-  release AgentK. Every other subject (`agentk`, `repo`, and older ones with no component or a
-  free-form one) counts for AgentK. The repo root's `scripts/release/` holds the scripts both
-  products use, with `--product agentk|meko`: `next-version.sh`, `release-notes.sh` and
+  (`backend/`) releases on its own, from its own tags (`meko-v…`), and subjects naming only `meko`
+  never release AgentK. Presenter (`extensions/presenter`) releases on its own too
+  (`presenter-release.yml`, tags `presenter-v…`): subjects naming only `presenter` (or `meko` and
+  `presenter`) release nothing for AgentK. Every other subject
+  (`agentk`, `repo`, lists such as `agentk,meko`, and older ones with no component or a free-form
+  one) counts for AgentK, and every subject naming `meko`, alone or in a list, counts for Meko: a PR
+  titled `feat(agentk,meko): …` releases both. The repo root's `scripts/release/` holds the scripts both
+  products use, with `--product agentk|meko|presenter`: `next-version.sh`, `release-notes.sh` and
   `prune-releases.sh` (`product.sh` names each product's tags and components).
 - **Build matrix (after the tests).** Self-contained tarballs are built for `linux-x64` and
   `linux-arm64`, and on a `macos-15` runner for `darwin-arm64`. Each bundles the Node 22 runtime,
@@ -58,7 +63,12 @@ gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-d
   --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
 
 # what it does
-#  0. stops, saying so, if AgentK is already installed in AK_HOME and set up: app/current,
+#  0. finds AgentK's home: the one an install here already has (from the ~/.local/bin/agentk link
+#     it made, even in ~/.agent-k-local or a custom AK_HOME from before), else
+#     <Meko's data folder>/extensions/agentk (MEKO_HOME, else ~/.meko, or $XDG_STATE_HOME/meko or
+#     /var/tmp/<user>/meko for a home folder on NFS), or ~/.agent-k-local when only that is there
+#     (until its server moves it); --print-home prints it and stops.
+#     Stops, saying so, if AgentK is already installed there and set up: app/current,
 #     config.toml, ~/.local/bin/agentk, and both services enabled (systemd) or loaded
 #     (launchd). Updates are offered in the app, and `agentk install` redoes the setup.
 #     --reinstall, --deps-only, a --version other than the installed one, or options for
@@ -74,22 +84,24 @@ gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-d
 #     while a failed Linux package manager stops it; then offers `gh auth login` and `claude auth
 #     login` for whichever isn't signed in. Sessions add ~/.local/bin to PATH after the login profile runs. --install-deps installs without asking,
 #     --no-install-deps never installs, --deps-only stops after this step
-#  2. unpacks to ~/.agent-k-local/app/<ver>, points app/current at it, then runs `agentk install`:
-#  3. asks for your repos folder (default ~/code), access (local: 127.0.0.1, no login; remote:
-#     0.0.0.0, HTTPS and a login; remote by default over SSH or with no display) and port
-#  4. Meko (optional): verifies the API key (reuses MEKO_API_KEY from ~/.claude/settings.json,
-#     else offers a Meko running on this computer, else asks; Enter or --no-meko skips it;
-#     --meko-url and --meko-key name one) and offers to run Meko's setup for Claude Code if its
-#     plugin, MCP server or key is missing (declining is a warning)
-#  5. picks the database location (local disk if ~/.agent-k-local is on NFS), writes config.toml,
-#     sets up TLS
+#  2. unpacks to <home>/app/<ver>, points app/current at it, then runs `agentk install`:
+#  3. asks for your repos folder (default ~/code), and stops when there's no `meko` command: the
+#     Meko on this computer serves AgentK to browsers (at /ext/agentk/) and signs people in
+#  4. Meko: uses Meko's Meko Cloud link, else the Meko running on this computer, and stores neither
+#     (no key is asked for: --meko-key, with --meko-url, links one in Meko; a key AgentK kept before
+#     is handed to Meko once; --no-meko is ignored) and offers to run Meko's setup for Claude Code if
+#     its plugin, MCP server or key is missing (declining is a warning)
+#  5. picks the database location (local disk for an older home still on NFS), writes config.toml
+#     (with the Meko data folder the home is in); on an older home, says it moves into
+#     Meko's data folder once the server has started
 #  6. installs both background services: systemd user units with linger if allowed,
 #     or LaunchAgents on macOS (needs a desktop login)
-#  7. prints the one-time setup link (remote access), or the address (local access)
+#  7. prints the address Meko serves it at (meko setup_link makes the login for remote access)
 ```
 
-**Tags.** The repo releases two products. AgentK's releases are tagged `agentk-v<version>`
-(`v<version>` before releases were tagged by product); Meko's are `meko-v<version>`. Versions stay
+**Tags.** The repo releases three products. AgentK's releases are tagged `agentk-v<version>`
+(`v<version>` before releases were tagged by product); Meko's are `meko-v<version>`, and
+Presenter's `presenter-v<version>` (`presenter-release.yml`; Meko installs and updates them). Versions stay
 bare (`0.YYYYMMDD.N`): tarball names, `app/<version>` and `bad-versions` use them, and on the day of
 the switch `next-version.sh` counted both prefixes so no version was used twice. AgentKs installed
 before the switch read only `v…` tags; the last `v…` release (the bridge) reads both, so they reach
@@ -120,7 +132,10 @@ same button); a version that was rolled back is never offered again. When you cl
    (a sleeping phone or laptop) doesn't hold the restart for the 30 seconds `ws` would wait. An open
    page whose last state said an update was installing retries its events socket every second
    (for up to 2 minutes, then with the usual backoff), so it reloads into the new version as soon
-   as it's up;
+   as it's up. Just before it restarts, the server sends every open page a `restarting` event, so
+   the page shows only the update's Installing banner while it waits, and not the lost-connection
+   banner (which it shows after 2 minutes if the server isn't back; a drop before the
+   `restarting` event, while the update still downloads, is shown after the usual 2 seconds);
 6. if the new version fails to come up three times in a row (the service manager restarts it) before
    it has been healthy for 5 minutes, points back to the previous version and marks the new one as
    bad (`bad-versions`, which the updater never offers again). A deliberate stop (SIGTERM, as for a
@@ -139,6 +154,12 @@ version `app/current` points at. Each version is about 180 MB, most of it the bu
 The "Updated to" notice shows from the new version's first boot, without waiting for the healthy
 check.
 
+The first release that brings the move of AgentK's home into Meko's data folder (#236) moves an
+older home as soon as it has proved healthy, ending every session and resuming it in the new
+place: [Moving the home into Meko's data folder](recovery.md#moving-the-home-into-mekos-data-folder).
+The launcher finds the home from its own folder (`<home>/app/<version>`), so a rollback after the
+move runs the previous version from the new home.
+
 The rail shows "Updated to v0.4.1 (from v0.4.0)" with a **What's new** link. Updates never need a
 maintenance window, because they never touch the session host.
 
@@ -148,7 +169,7 @@ don't say what an update brought. The **What's new** dialog (`WhatsNewDialog.tsx
 change between two versions instead: the server asks GitHub for the commits between their tags
 (`GET /api/update/notes`, `Updater.notes()`, through the same `gh` or HTTPS source as the update
 check: `repos/<repo>/compare/<from tag>...<to tag>`, each of either prefix) and lists the `feat`, `fix`, `perf` and `deps`
-subjects by type, as the repo root's `scripts/release/release-notes.sh` does (leaving out Meko's `meko` subjects) (`src/server/releasenotes.ts`), with
+subjects by type, as the repo root's `scripts/release/release-notes.sh` does (leaving out the subjects that name only `meko` or `presenter`) (`src/server/releasenotes.ts`), with
 **Breaking changes** first and each line linked to its PR. GitHub returns at most 250 commits for a
 comparison; past that the dialog says so, and **See every commit on GitHub** opens the comparison
 there. A range's notes are kept in memory once fetched; nothing is fetched until the dialog opens.

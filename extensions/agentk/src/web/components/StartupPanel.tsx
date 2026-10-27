@@ -1,10 +1,10 @@
 import { useEffect, useReducer } from 'react';
 import type { Session, StartupStep } from '../../shared/types';
-import { STAGE_LABELS, STARTUP_STEPS } from '../../shared/types';
-import { kindOf } from '../../shared/stages';
+import { STAGE_LABELS } from '../../shared/types';
+import { startupSteps } from '../../shared/stages';
 import { HARNESS_CAPS, harnessOf } from '../../shared/harnesses';
 import { agentName, cx } from '../util';
-import { Busy, Check } from './common';
+import { Busy, Check, StageChip } from './common';
 
 const STAGE_HINT: Partial<Record<Session['stage'], string>> = {
   explore: 'AgentK investigates and experiments in this worktree. Nothing is merged; end the session when you are done.',
@@ -36,10 +36,7 @@ export function StartupPanel({ session, onShowTerminal }: { session: Session; on
   }, []);
 
   const st = session.startup;
-  const review = kindOf(session.kind) === 'review-pr';
-  const steps = STARTUP_STEPS.filter(
-    (s) => !(s.step === 'worktree' && st?.resumed) && !(s.step === 'prompt' && st && !st.hasPrompt),
-  ).map((s) => (review && s.step === 'worktree' ? { ...s, label: 'Fetching the PR and its design, and preparing the worktree' } : s));
+  const steps = startupSteps(session);
   const current: StartupStep = st?.step ?? 'loading';
   const currentIdx = steps.findIndex((s) => s.step === current);
   const now = Date.now();
@@ -93,7 +90,7 @@ export function StartupPanel({ session, onShowTerminal }: { session: Session; on
         <p className="startup-note">On a big repo this can take a few minutes. You can switch to other sessions meanwhile; this one keeps starting.</p>
       )}
       <p className="startup-stage">
-        <span className="stchip">{STAGE_LABELS[session.stage]}</span> {STAGE_HINT[session.stage] ?? `This session is in the ${STAGE_LABELS[session.stage]} stage.`}
+        <StageChip session={session} /> {STAGE_HINT[session.stage] ?? `This session is in the ${STAGE_LABELS[session.stage]} stage.`}
       </p>
       {st && <p className="startup-elapsed" aria-hidden="true">{secs(now - st.startedAt)} so far</p>}
     </div>

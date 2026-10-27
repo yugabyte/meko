@@ -19,7 +19,10 @@ agent set up for Cloud works against it. Everything lives under `~/.meko`: one S
 knowledge files' bytes beside it. Search mixes vector similarity (sqlite-vec, with an embedding
 model that runs locally) and keywords (FTS5); knowledge-base results are reranked by Cloud's
 cross-encoder, also run locally.
-The server listens only on `127.0.0.1`.
+Agents and the CLI reach it on `127.0.0.1:7778`. Browsers use its web listener on port 7777, for
+the web UI and AgentK's at `/ext/agentk/`: with local access (the default) from this computer with
+no login, with remote access from your other devices over HTTPS with a password and optional
+two-step sign-in (`[web] access` in `config.toml`).
 
 Meko is under construction. It has its storage, memory engine, conversations, knowledge files,
 MCP, REST and a web UI, and an installer that runs it as a login service and keeps it updated.
@@ -50,7 +53,7 @@ for the memory engine and the web UI.
 ```sh
 cd backend
 make build memory_engine web_ui  # bin/meko, the memory engine and the web UI
-./bin/meko start                 # runs in the background on 127.0.0.1:7778
+./bin/meko start                 # runs in the background: 127.0.0.1:7778, and the web UI on :7777
 ./bin/meko status                # wait for "Memory engine: ready"
 ./bin/meko ui                    # opens the web UI in your browser
 ```
@@ -63,23 +66,27 @@ The first start downloads the embedding model (23 MB). On RHEL 8, set
 | Command | What it does |
 |---|---|
 | `meko start` / `stop` / `restart` | Start the server (through its service once installed), and stop or restart it. `start` and `stop` also start and stop the extensions; `stop --keep-extensions` doesn't |
-| `meko status` | Whether it's running, its URL, version, data folder, memory engine and auth mode, usage stats, its service, updates and extensions |
+| `meko status` | Whether it's running, its URL, version, data folder, memory engine and auth mode, usage stats, its service, updates, the Meko Cloud link and extensions |
 | `meko logs [-f] [-n N]` | The server's and the memory engine's logs, merged by time; `-f` follows them; `--server`, `--memory-engine` or `--service` shows one, `--json` the raw lines |
 | `meko serve` | Run the server in the foreground |
 | `meko version` | Meko's version, and Go's, SQLite's and sqlite-vec's |
-| `meko ui [--no-open]` | Open the web UI in the browser, signed in with the client token; `--no-open` only prints its link |
+| `meko ui [path] [--no-open]` | Open the web UI in the browser (`meko ui /ext/agentk/` opens AgentK's); `--no-open` only prints its link |
+| `meko setup_link` | Print a one-time link that creates the web UI's login for remote access, or resets a lost one |
+| `meko cloud_link [--url U] [--web-url W] [--api-url A] [--off]` | Link Meko Cloud (or another Meko server) for the extensions, such as AgentK: reads the API key from stdin, or asks for it on a terminal, checks it and saves it; `--off` unlinks. The web UI's Settings › Meko Cloud does the same |
 | `meko export [<name\|id>] [-o FILE] [--force]` | Write a datapack (default: the default one) to one zip: memories, collective memories, conversations, knowledge files and artifacts with their embeddings and file contents, and the call log. It won't replace a file unless `--force` |
 | `meko list mcp-tools [--json]` | The MCP tools Meko serves, each with a line on what it does; needs no running server |
-| `meko token [--mcp] [--json]` | The token MCP and REST clients send; `--mcp` prints the `claude mcp add` command for Claude Code, `--json` the MCP URL and token |
-| `meko install [--no-service]` | Set this meko up: the `meko` command and the login service |
-| `meko uninstall [--purge [--force]]` | Remove the service and the installed releases, keeping the data; `--purge` also destroys the data, asking first |
+| `meko token [--mcp] [--json]` | The token MCP and REST clients send; `--mcp` prints the `claude mcp add` command for Claude Code, `--json` the MCP URL, the web UI's URL, the token and the Meko Cloud link |
+| `meko install [--no-service] [--access local\|remote]` | Set this meko up: the `meko` command, the login service, and how browsers reach the web UI |
+| `meko uninstall [--purge [--force] [--with-extensions]]` | Remove the service and the installed releases, keeping the data; `--purge` also destroys the data as `meko destroy` does, asking first |
 | `meko update [--check]` | Install the newest release now (under the service it updates itself); `--check` only looks |
-| `meko install_extension agentk` | Install AgentK pointed at this Meko; `meko start` and `stop` then run it too |
+| `meko install_extension agentk` | Install AgentK pointed at this Meko; `meko start` and `stop` then run it too, and the web UI's port serves it at `/ext/agentk/` |
+| `meko install_extension presenter` | The same for Presenter, at `/ext/presenter/`: Meko installs its newest release itself, as the command `meko_presenter` (a `meko_presenter` already on PATH, a build from source, is used as it is) |
+| `meko update_extension presenter [--check]` | Install Presenter's newest release now and restart it; one that fails to start is rolled back. AgentK updates itself |
 | `meko uninstall_extension agentk` | Stop starting and stopping it with Meko (it stays installed) |
-| `meko destroy [--force]` | Stop Meko and remove its data folder, everything in it, for good. It asks first; `--force` doesn't |
+| `meko destroy [--force] [--with-extensions]` | Stop Meko and remove its data folder for good. It asks first; `--force` doesn't. The extensions' data in it (AgentK's home) stays unless you say so when asked, or pass `--with-extensions`, which uninstalls them first |
 | `meko search "<question>"` | Search memories, the knowledge base and past conversations (`context_search`) |
 | `meko add_memory "<text>"` | Save a memory, word for word; `-` or no text reads stdin |
-| `meko datapacks` | List the datapacks |
+| `meko datapacks [--cloud]` | List the datapacks; `--cloud` adds the linked Meko Cloud's after them, each marked local or cloud (and shared) |
 | `meko create_datapack <name>` | Create a datapack |
 | `meko delete_datapack <name\|id> [--force]` | Delete a datapack and everything in it, for good. It asks first; `--force` doesn't |
 | `meko upload <file>... [--no-wait]` | Add PDF, text, Markdown, JSON, CSV, XML or HTML files (up to 50 MiB) to the knowledge base, and wait until they're indexed |
@@ -88,7 +95,8 @@ The first start downloads the embedding model (23 MB). On RHEL 8, set
 Every command takes `--data-dir`. The default is `~/.meko` (or `MEKO_HOME`), but a home folder on a
 network filesystem (NFS, say) moves it to `$XDG_STATE_HOME/meko` or `/var/tmp/<user>/meko`, since
 SQLite's locking doesn't work over the network; `meko status` prints where it is. `start`,
-`restart` and `serve` take `--port` (default 7778). `search`, `add_memory`, `upload` and
+`restart` and `serve` take `--port` (the API listener's, default 7778); the web UI's port and access are
+`[web] port` (default 7777) and `access` in `config.toml`. `search`, `add_memory`, `upload` and
 `upload_status` take `--datapack NAME|ID`, and use
 the default datapack without it. Meko makes the default datapack only on first start, so once
 it's deleted, they need `--datapack`. The data commands take `--json` for the raw reply.
@@ -117,9 +125,16 @@ shell's. [`backend/docs/callhome.md`](backend/docs/callhome.md) says what's sent
 ## Extensions
 
 **[AgentK](extensions/agentk/README.md)** (`extensions/agentk`) is the agentic coder built
-on Meko. It runs many Claude Code and Kiro CLI sessions from a browser or your phone, takes each
+on Meko. It runs many Claude Code, OpenCode and Kiro CLI sessions from a browser or your phone, takes each
 task from design to merged PR, and keeps each project's designs and learnings in a Meko datapack.
 Its README covers installing and using it.
+
+**[Presenter](extensions/presenter/README.md)** (`extensions/presenter`) builds presentations
+that branch with the room from your datapacks. Claude drafts a story map of scenes, forks and
+detours, builds the slides, and takes changes by hand or in plain language; during the talk the
+presenter picks each fork, switches depth, or jumps to a detour, while an audience window follows.
+Decks are saved in Meko datapacks. Meko serves it at `/ext/presenter/`, and installs and updates
+its releases (`meko install_extension presenter`, `meko update_extension presenter`).
 
 ## Develop
 
@@ -133,6 +148,7 @@ Its README covers installing and using it.
   extensions, updates and secrets) and [`backend/docs/callhome.md`](backend/docs/callhome.md)
   (usage stats).
 - AgentK: [`extensions/agentk/CONTRIBUTING.md`](extensions/agentk/CONTRIBUTING.md).
+- Presenter: [`extensions/presenter/AGENTS.md`](extensions/presenter/AGENTS.md).
 
 ## License
 

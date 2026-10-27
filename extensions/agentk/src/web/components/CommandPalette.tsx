@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { parseGithubRef } from '../../shared/github-refs';
 import {
-  STAGE_LABELS, type AskAgentkAction, type AskAgentkResult, type CreateSessionRequest, type DatapackInvite, type JoinByLinkResult, type LinkPlan,
+  type ActionResult, type AskAgentkAction, type AskAgentkResult, type CreateSessionRequest, type DatapackInvite, type JoinByLinkResult, type LinkPlan,
   type ProjectWithSessions, type Session, type SessionMatch, type StartFromLinkResult,
 } from '../../shared/types';
 import { moveBlockedIn } from '../../shared/stages';
 import { api, errorMessage } from '../api';
+import { appUrl } from '../base';
 import { useMedia, useTouch } from '../hooks/useMedia';
 import { useInstall } from '../installapp';
-import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, filterItems, findEntries, joinEntry, joinedText, linkEntries, type LabelPart } from '../palette';
+import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, doAllActions, filterItems, findEntries, joinEntry, joinedText, linkEntries, type LabelPart } from '../palette';
 import { navigate } from '../router';
 import { attachFiles } from '../terminals';
-import { STATUS_TEXT, cx, dotState, isMac, liveSessions, type DotState } from '../util';
+import { STATUS_TEXT, cx, dotState, isMac, liveSessions, stageWords, type DotState } from '../util';
 import { Busy, ErrorText, StatusDot, trapTab } from './common';
 
 interface Item {
@@ -43,6 +44,8 @@ const HINT_MS = 1250;
 /** One exchange with AgentK while the palette is open: what was asked, and its answer. */
 interface Exchange extends AskAgentkResult {
   text: string;
+  /** What Do all came to, once it ran: a line per action. */
+  results?: ActionResult[];
 }
 
 export function CommandPalette({
@@ -253,11 +256,39 @@ export function CommandPalette({
         if (mounted.current) setStarting(null);
       }
     };
-    const busyLabel: Record<AskAgentkAction['type'], string> = { start: 'Starting', link: '', go: '', move: 'Moving', openPr: 'Opening the PR' };
-    return askEntries(last.actions, projects).map((e): Item => {
+    // Do all has run: the sessions it started or changed, to go to.
+    if (last.results) {
+      return last.results.flatMap((r, i): Item[] => {
+        const s = r.sessionId ? projects.flatMap((p) => p.sessions).find((x) => x.id === r.sessionId) : undefined;
+        if (!r.ok || !r.projectId) return [];
+        const projectId = r.projectId;
+        const sessionId = r.sessionId;
+        const project = projects.find((p) => p.id === projectId)?.name ?? '';
+        return [sessionId
+          ? { id: `done-${i}`, label: ['Go to ', { session: s?.name ?? 'the session' }], hint: project, keywords: '', wrap: true,
+            run: () => navigate({ view: 'project', projectId, sessionId }) }
+          : { id: `done-${i}`, label: [{ project: project || 'the project' }, ': project home'], hint: 'View', keywords: '', wrap: true,
+            run: () => navigate({ view: 'home', projectId }) }];
+      });
+    }
+    const busyLabel: Record<AskAgentkAction['type'], string> = {
+      start: 'Starting', link: '', go: '', move: 'Moving', openPr: 'Opening the PR', openProject: 'Opening the project',
+    };
+    const steps = doAllActions(last.actions, last.together);
+    const all: Item[] = steps.length ? [{
+      id: 'ask-all', label: [`Do all ${steps.length}`], hint: 'In order; one that fails doesn’t stop the rest', keywords: '',
+      busy: starting === 'ask-all' ? 'Doing them' : undefined, wrap: true, keepOpen: true,
+      run: () => void (!starting && run('ask-all', async () => {
+        const r = await api.runActions({ actions: steps });
+        if (!mounted.current) return;
+        // The results take the actions' place, with items to go where they led.
+        setChat((c) => c.map((x, i) => (i === c.length - 1 ? { ...x, results: r.results, notes: [...x.notes, ...r.notes] } : x)));
+      })),
+    }] : [];
+    return [...all, ...askEntries(last.actions, projects).map((e): Item => {
       const a = e.action;
       const item: Item = { id: e.id, label: e.label, hint: e.hint, keywords: '', busy: starting === e.id ? busyLabel[a.type] : undefined, wrap: true };
-      if (e.edit && a.type === 'start') return { ...item, run: () => onEditSession(a.projectId, { name: a.name, prompt: a.prompt, start: a.start }) };
+      if (e.edit && a.type === 'start') return { ...item, run: () => onEditSession(a.projectId, { name: a.name, prompt: a.prompt, start: a.start, autoRun: a.autoRun }) };
       switch (a.type) {
         case 'go':
           return { ...item, run: () => go(a) };
@@ -268,11 +299,22 @@ export function CommandPalette({
           return {
             ...item, keepOpen: true,
             run: () => void (!starting && run(e.id, async () => {
-              const session = await api.createSession(a.projectId, { name: a.name, prompt: a.prompt, start: a.start });
+              const session = await api.createSession(a.projectId, { name: a.name, prompt: a.prompt, start: a.start, autoRun: a.autoRun });
               const project = projects.find((p) => p.id === a.projectId);
               if (!mounted.current || !project) return;
               onClose();
               onStarted({ project, session });
+            })),
+          };
+        case 'openProject':
+          return {
+            ...item, keepOpen: true,
+            run: () => void (!starting && run(e.id, async () => {
+              const [r] = (await api.runActions({ actions: [a] })).results;
+              if (!r?.ok || !r.projectId) throw new Error(r?.text ?? 'AgentK couldn’t open the project.');
+              if (!mounted.current) return;
+              onClose();
+              navigate({ view: 'home', projectId: r.projectId });
             })),
           };
         case 'move':
@@ -288,7 +330,7 @@ export function CommandPalette({
             })),
           };
       }
-    });
+    })];
     // go() only reads onSettings, which the deps have.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [last, projects, starting, onClose, onStarted, onEditSession, onSettings]);
@@ -422,7 +464,7 @@ export function CommandPalette({
         out.push({
           id: `s-${s.id}`,
           label: [{ session: s.name }],
-          hint: `${p.name} · ${STAGE_LABELS[s.stage]} · ${STATUS_TEXT[dotState(s)]}`,
+          hint: `${p.name} · ${stageWords(s)} · ${STATUS_TEXT[dotState(s)]}`,
           keywords: `${p.name} ${s.name} ${s.branch}`,
           dot: dotState(s),
           phase: s.id,
@@ -541,7 +583,7 @@ export function CommandPalette({
         onKeyDown={(e) => trapTab(e.nativeEvent, paletteRef.current)}
       >
         <div className="pal-row">
-          <img src="/logo.png" alt="" width={18} height={18} />
+          <img src={appUrl('/logo.png')} alt="" width={18} height={18} />
           <input
             id="palette-input"
             ref={inputRef}
@@ -581,6 +623,9 @@ export function CommandPalette({
                 <p className="pal-reply">{x.reply}</p>
                 {x.notes.map((n, j) => (
                   <p key={j} className="pal-note">{n}</p>
+                ))}
+                {x.results?.map((r, j) => (
+                  <p key={`r${j}`} className={cx('pal-result', !r.ok && 'failed')}>{r.ok ? '✓' : '✕'} {r.text}</p>
                 ))}
               </div>
             ))}

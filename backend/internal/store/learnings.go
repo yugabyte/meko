@@ -181,6 +181,19 @@ func (s *Store) IsPromoted(ctx context.Context, datapack, id string) (bool, erro
 	return err == nil, err
 }
 
+// GetPromoted is one promoted memory of the datapack, or nil when it has none with that id.
+func (s *Store) GetPromoted(ctx context.Context, datapack, id string) (*Promoted, error) {
+	p, err := scanPromoted(s.r.QueryRowContext(ctx, "SELECT "+promotedCols+
+		" FROM promoted_memories WHERE datapack_id = ? AND id = ?", datapack, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
 // PromotedMemories is a page of the datapack's promoted memories, most recently promoted first,
 // and how many there are in all.
 func (s *Store) PromotedMemories(ctx context.Context, datapack string, limit, offset int) ([]Promoted, int, error) {

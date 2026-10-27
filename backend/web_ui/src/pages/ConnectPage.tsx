@@ -16,10 +16,14 @@ export function ConnectPage({ datapack }: { datapack: Datapack }) {
   if (error) return <ErrorNote error={error} />;
   if (!data) return null;
 
+  // The token comes only to a signed-in owner: with local access (anyone on this computer) or auth
+  // off, this page gets none, and `meko token` on the host prints it.
   const token = data.mcp_api_key;
-  const masked = token ? `${token.slice(0, 6)}${"•".repeat(20)}` : "(none: auth is off)";
+  const masked = token ? `${token.slice(0, 6)}${"•".repeat(20)}` : "(not shown here: run meko token on this computer)";
   const header = token ? ` --header "Authorization: Bearer ${token}"` : "";
-  const claude = `claude mcp add --transport http --scope user meko ${data.mcp_server_url}${header}`;
+  const claude = token
+    ? `claude mcp add --transport http --scope user meko ${data.mcp_server_url}${header}`
+    : "meko token --mcp   # prints the claude mcp add command, with the token";
 
   return (
     <div className="max-w-3xl space-y-4">

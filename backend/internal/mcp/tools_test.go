@@ -34,6 +34,18 @@ func TestMemoryTools(t *testing.T) {
 		obj(first["metadata"])["meko_datapack_id"] != e.DatapackID {
 		t.Errorf("search item: %v", first)
 	}
+	// The call log records the search's step with the ids it returned.
+	calls, _ := e.Store.Calls(context.Background(), e.DatapackID, time.Time{})
+	var logged bool
+	for _, c := range calls {
+		if c.Tool == "memory_search" {
+			logged = len(c.Steps) == 1 && c.Steps[0].Step == "memory_search" && len(c.Steps[0].IDs) == c.MemoryN &&
+				c.MemoryN == len(items) && c.Steps[0].IDs[0] == theirs
+		}
+	}
+	if !logged {
+		t.Errorf("memory_search's logged step: %+v", calls)
+	}
 	// run_id narrows it to one conversation.
 	r = ok(t, e, "memory_search", map[string]any{"query": "staging database orchid", "conversation_id": "c",
 		"run_id": "aaaa0000-aaaa-0000-aaaa-0000aaaa0000"})
@@ -182,12 +194,17 @@ func TestContextSearch(t *testing.T) {
 	if res = obj(r.JSON["results"]); res["conversation"] != nil || res["memory"] == nil {
 		t.Errorf("force_source memory: %s", r.Text)
 	}
-	// The call log has the search's counts and steps, never its query.
+	// The call log has the search's counts and steps, and the memories it returned, never its query.
 	calls, _ := e.Store.Calls(context.Background(), e.DatapackID, time.Time{})
 	var found bool
 	for _, c := range calls {
 		if c.Tool == "context_search" && c.MemoryN > 0 && c.ConversationN > 0 && len(c.Steps) == 3 && c.TokensSent > 0 {
 			found = true
+			for _, st := range c.Steps {
+				if st.Step == "memory_search" && len(st.IDs) != c.MemoryN {
+					t.Errorf("memory_search step ids %v, want %d", st.IDs, c.MemoryN)
+				}
+			}
 		}
 		if strings.Contains(fmt.Sprintf("%+v", c), "release") {
 			t.Errorf("the call log holds text: %+v", c)

@@ -271,9 +271,23 @@ export async function runMekoSetup(
   }
 }
 
-/** The command to set up Meko for Claude Code (or `client`) by hand, against the server the key belongs to. */
-export function manualMekoSetup(url: string, client: MekoSetupClient = 'claude-code'): string {
-  return `npx ${MEKO_SETUP_PACKAGE} --client ${client} --url ${url}`;
+/** A word for sh: as it is when it's safe bare, else single-quoted. */
+function shellWord(s: string): string {
+  return /^[\w@%+=:,./~-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * The command to set up Meko for Claude Code (or `client`) by hand, against the server the key
+ * belongs to. `local` is given when that's the Meko on this computer (its live URL and token, not
+ * just any server on this computer): the command then reads its token from `meko token` in the
+ * user's shell, asking the Meko in `local.home` when known, since nothing else gives it to the
+ * package there. For any other server the key stays off it: the package reads MEKO_API_KEY, or
+ * signs in through the browser, and the local token goes to no server but its own.
+ */
+export function manualMekoSetup(url: string, client: MekoSetupClient = 'claude-code', local: { home: string | null } | null = null): string {
+  const cmd = `npx ${MEKO_SETUP_PACKAGE} --client ${client} --url ${url}`;
+  if (!local) return cmd;
+  return `${cmd} --api-key "$(${local.home ? `MEKO_HOME=${shellWord(local.home)} ` : ''}meko token)"`;
 }
 
 export class MekoSetupError extends Error {}
@@ -285,7 +299,16 @@ export class MekoSetupError extends Error {}
  * doesn't finish.
  */
 export async function ensureMekoSetup(
-  o: { url: string; apiKey: string; canAsk: boolean; installDeps: boolean; noInstallDeps: boolean; client?: MekoSetupClient },
+  o: {
+    url: string;
+    apiKey: string;
+    canAsk: boolean;
+    installDeps: boolean;
+    noInstallDeps: boolean;
+    client?: MekoSetupClient;
+    /** Set when `url` is the Meko on this computer, with its data folder: for the command to run by hand (`manualMekoSetup`). */
+    local?: { home: string | null } | null;
+  },
   d: {
     /** What's wrong with Meko in the agent, one sentence each (mekoClaudeGaps plus tokens that don't work, or kiroMekoGaps). */
     gaps: () => Promise<string[]>;
@@ -298,7 +321,7 @@ export async function ensureMekoSetup(
 ): Promise<'ready' | 'set-up'> {
   const gaps = await d.gaps();
   if (!gaps.length) return 'ready';
-  const manual = manualMekoSetup(o.url, o.client);
+  const manual = manualMekoSetup(o.url, o.client, o.local);
   const kiro = o.client === 'kiro';
   const agent = kiro ? 'Kiro' : 'Claude Code';
   // A short word, not the list: the install output stays tidy, and the setup fixes them all.
@@ -324,17 +347,3 @@ export async function ensureMekoSetup(
   return 'set-up';
 }
 
-/**
- * Where the verified key is kept in config.toml. When Claude Code's settings hold it, config.toml
- * keeps none: config comes first when the server resolves the key, so an older key left there
- * would shadow the one the hooks use. Otherwise a key the user typed is stored there.
- */
-export function mekoKeyForConfig(o: {
-  apiKey: string; url: string; typed: boolean; settingsKey: unknown; settingsUrl: unknown; envKey: string | undefined; defaultUrl: string;
-}): { apiKey: string; url: string } | 'unchanged' {
-  const url = o.url === o.defaultUrl ? '' : o.url;
-  // The URL goes with the key: keep a non-default one here only when the settings don't name one.
-  if (o.settingsKey === o.apiKey) return { apiKey: '', url: o.settingsUrl ? '' : url };
-  if (o.typed && o.envKey !== o.apiKey) return { apiKey: o.apiKey, url };
-  return 'unchanged';
-}

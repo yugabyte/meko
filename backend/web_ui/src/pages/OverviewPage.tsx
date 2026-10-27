@@ -10,6 +10,7 @@ import { useLoad } from "../lib/useLoad";
 import { GetStarted } from "../components/GetStarted";
 import { LearningPipeline } from "../components/LearningPipeline";
 import { Card, ErrorNote, Loading } from "../components/ui";
+import { SHOW_COLLECTIVE } from "../lib/features";
 
 function Stat({ icon, label, value, hint }: { icon: ReactNode; label: string; value: string; hint?: string }) {
   return (
@@ -37,13 +38,13 @@ export function OverviewPage({ datapack }: { datapack: Datapack }) {
   return (
     <div className="space-y-6">
       <GetStarted datapack={datapack} metrics={m} />
-      <LearningPipeline datapack={datapack} />
+      {SHOW_COLLECTIVE && <LearningPipeline datapack={datapack} />}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
         <Stat
           icon={<Brain className="size-3.5" />}
           label="Memories"
           value={count(datapack.memory_count)}
-          hint={`${count(datapack.learnings_count)} learnings · ${bytes(m.memory_bytes)}`}
+          hint={SHOW_COLLECTIVE ? `${count(datapack.learnings_count)} learnings · ${bytes(m.memory_bytes)}` : bytes(m.memory_bytes)}
         />
         <Stat
           icon={<FileText className="size-3.5" />}
@@ -56,12 +57,14 @@ export function OverviewPage({ datapack }: { datapack: Datapack }) {
           label="Conversations"
           value={count(m.conversation_count)}
         />
-        <Stat
-          icon={<Sparkles className="size-3.5" />}
-          label="Collective memory"
-          value={count(datapack.collective_memory_count)}
-          hint="Promoted learnings, searchable in the knowledge base"
-        />
+        {SHOW_COLLECTIVE && (
+          <Stat
+            icon={<Sparkles className="size-3.5" />}
+            label="Collective memory"
+            value={count(datapack.collective_memory_count)}
+            hint="Promoted learnings, searchable in the knowledge base"
+          />
+        )}
         <Stat
           icon={<Search className="size-3.5" />}
           label="Searches (90 days)"

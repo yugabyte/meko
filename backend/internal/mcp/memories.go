@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/yugabyte/meko/backend/internal/memory"
 	"github.com/yugabyte/meko/backend/internal/memoryengine"
+	"github.com/yugabyte/meko/backend/internal/store"
 	"github.com/yugabyte/meko/backend/internal/wire"
 )
 
@@ -172,12 +174,15 @@ func memorySearch(ctx context.Context, c *call, a args) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	start := time.Now()
 	res, err := c.svc.SearchMemories(ctx, memory.Search{DatapackID: dp, ConversationID: normalizeID(run),
 		Query: query, Limit: max(limit, 1)})
 	if err != nil {
 		return nil, err
 	}
 	res = memory.FilterRaw(res)
+	c.rec.Steps = []store.Step{{Step: "memory_search", Ms: time.Since(start).Milliseconds(), N: len(res),
+		IDs: memory.IDsOf(res)}}
 	c.rec.MemoryN = len(res)
 	c.rec.ScoreHigh, c.rec.ScoreMid, c.rec.ScoreLow = wire.Bands(memory.ContextResults{Memory: res})
 	return map[string]any{"results": res}, nil

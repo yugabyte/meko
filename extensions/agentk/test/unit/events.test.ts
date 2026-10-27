@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppState } from '../../src/shared/types.js';
-import { CONNECT_MS, EventsConnection, PROBE_MS, QUIET_MS, STATE_MS, UPDATE_RETRY_FOR_MS, UPDATE_RETRY_MS, type Conn, type SocketLike } from '../../src/web/events.js';
+import { CONNECT_MS, EventsConnection, LOST_GRACE_MS, PROBE_MS, QUIET_MS, STATE_MS, UPDATE_RETRY_FOR_MS, UPDATE_RETRY_MS, type Conn, type SocketLike } from '../../src/web/events.js';
+import { WS_UNAUTHORIZED } from '../../src/web/signin.js';
 
 /** A socket the test drives: what the page sent, and whether it let go of it. */
 class FakeSocket {
@@ -35,7 +36,7 @@ class FakeSocket {
   }
 }
 
-function setup(o: { checkLogin?: () => Promise<boolean> } = {}) {
+function setup(o: { checkSignIn?: () => Promise<boolean> } = {}) {
   const sockets: FakeSocket[] = [];
   const states: unknown[] = [];
   const conns: Conn[] = [];
@@ -49,8 +50,8 @@ function setup(o: { checkLogin?: () => Promise<boolean> } = {}) {
     onState: (s: AppState) => states.push(s),
     onConn: (c) => conns.push(c),
     onEvent: (ev) => events.push(ev),
-    checkLogin: o.checkLogin ?? (() => Promise.resolve(true)),
-    unauthorized: 4401,
+    checkSignIn: o.checkSignIn ?? (() => Promise.resolve(true)),
+    unauthorized: WS_UNAUTHORIZED,
   });
   conn.start();
   return { conn, sockets, states, conns, events, last: () => sockets[sockets.length - 1]! };
@@ -90,11 +91,12 @@ describe('the events connection', () => {
     dead.accept({ v: 1 });
     vi.advanceTimersByTime(QUIET_MS + PROBE_MS);
     expect(dead.closed).toBe(true);
-    expect(t.conns.at(-1)).toBe('closed');
     vi.advanceTimersByTime(1000);
     expect(t.sockets).toHaveLength(2);
     t.last().accept({ v: 2 });
     expect(t.states).toEqual([{ v: 1 }, { v: 2 }]);
+    // Back within the grace: the page never said it was lost.
+    expect(t.conns).toEqual(['connecting', 'open']);
     // The dead socket's late close doesn't start a third.
     dead.serverClose();
     vi.advanceTimersByTime(20_000);
@@ -136,13 +138,16 @@ describe('the events connection', () => {
   it('retries every second while an update restarts the server, then backs off as before', () => {
     const t = setup();
     t.last().accept({ update: { applying: true } } as never);
-    // The old server stops, and the new one refuses connections until it's up.
+    // The old server says it's restarting into the update, stops, and the new one refuses connections until it's up.
+    t.last().receive({ type: 'restarting' });
     const tries = (UPDATE_RETRY_FOR_MS / UPDATE_RETRY_MS) - 1;
     for (let i = 0; i < tries; i++) {
       t.last().serverClose();
       vi.advanceTimersByTime(UPDATE_RETRY_MS);
     }
     expect(t.sockets).toHaveLength(tries + 1);
+    // The update's own banner says what's happening: the page says nothing of a lost connection...
+    expect(t.conns).toEqual(['connecting', 'open']);
     // An update that never comes back up stops getting tries every second.
     for (let i = 0; i < 6; i++) {
       t.last().serverClose();
@@ -152,6 +157,8 @@ describe('the events connection', () => {
     t.last().serverClose();
     vi.advanceTimersByTime(UPDATE_RETRY_MS * 10);
     expect(t.sockets).toHaveLength(tries + 7);
+    // ...until the fast retries end without it.
+    expect(t.conns).toEqual(['connecting', 'open', 'closed']);
     // Once it's up, a later drop backs off from the start.
     vi.advanceTimersByTime(30_000);
     t.last().accept({ update: { applying: false } } as never);
@@ -161,6 +168,39 @@ describe('the events connection', () => {
     t.last().serverClose();
     vi.advanceTimersByTime(900);
     expect(t.sockets).toHaveLength(tries + 9);
+    t.conn.stop();
+  });
+
+  it('says the connection is lost once it has been down for the grace, and once only', () => {
+    const t = setup();
+    // An update still downloading: the server never said it's restarting, so this drop is an outage.
+    t.last().accept({ update: { applying: true } } as never);
+    t.last().serverClose();
+    vi.advanceTimersByTime(LOST_GRACE_MS - 1);
+    expect(t.conns).toEqual(['connecting', 'open']);
+    vi.advanceTimersByTime(1);
+    expect(t.conns).toEqual(['connecting', 'open', 'closed']);
+    // However many retries fail meanwhile, none says connecting.
+    for (let i = 0; i < 5; i++) {
+      t.last().serverClose();
+      const n = t.sockets.length;
+      while (t.sockets.length === n) vi.advanceTimersByTime(100);
+    }
+    // A socket that opens isn't back until its state comes.
+    t.last().opened();
+    expect(t.conns.at(-1)).toBe('closed');
+    t.last().receive({ type: 'state', state: { v: 2 } });
+    expect(t.conns).toEqual(['connecting', 'open', 'closed', 'open']);
+    t.conn.stop();
+  });
+
+  it('says a first socket that fails is lost only after the grace', () => {
+    const t = setup();
+    t.last().serverClose();
+    vi.advanceTimersByTime(LOST_GRACE_MS);
+    expect(t.conns).toEqual(['connecting', 'closed']);
+    t.last().accept();
+    expect(t.conns).toEqual(['connecting', 'closed', 'open']);
     t.conn.stop();
   });
 
@@ -223,16 +263,27 @@ describe('the events connection', () => {
     t.conn.stop();
   });
 
-  it('stops retrying when the login is gone', async () => {
-    const t = setup({ checkLogin: () => Promise.resolve(false) });
+  it.each(WS_UNAUTHORIZED)('stops retrying when Meko refuses it for want of a sign-in (close %i)', async (code) => {
+    const t = setup({ checkSignIn: () => Promise.resolve(false) });
     t.last().accept();
-    t.last().serverClose(4401);
+    t.last().serverClose(code);
     await vi.advanceTimersByTimeAsync(20_000);
     expect(t.sockets).toHaveLength(1);
     t.conn.stop();
   });
 
-  it('opens nothing more once stopped', () => {
+  it('checks the sign-in after an abnormal close, and still retries on time', async () => {
+    const checkSignIn = vi.fn(() => Promise.resolve(true));
+    const t = setup({ checkSignIn });
+    t.last().accept();
+    t.last().serverClose(1006);
+    expect(checkSignIn).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1000);
+    expect(t.sockets).toHaveLength(2);
+    t.conn.stop();
+  });
+
+  it('opens nothing more once stopped, and says nothing more', () => {
     const t = setup();
     t.last().accept();
     t.conn.stop();
@@ -240,5 +291,13 @@ describe('the events connection', () => {
     t.conn.resume();
     vi.advanceTimersByTime(60_000);
     expect(t.sockets).toHaveLength(1);
+    // Stopped while waiting to say a drop is lost.
+    const u = setup();
+    u.last().accept();
+    u.last().serverClose();
+    u.conn.stop();
+    vi.advanceTimersByTime(60_000);
+    expect(u.sockets).toHaveLength(1);
+    expect(u.conns).toEqual(['connecting', 'open']);
   });
 });

@@ -117,7 +117,8 @@ func configurePort(t *testing.T, dir, port string) {
 	}
 }
 
-// noRealExtensions keeps this machine's own extensions (an installed agent-k-local) out of reach.
+// noRealExtensions keeps this machine's own extensions (an installed agentk) out of reach while the
+// test runs; t.Setenv restores PATH before setup's cleanup, which is why that one keeps the extensions.
 func noRealExtensions(t *testing.T) {
 	t.Helper()
 	t.Setenv("PATH", "/usr/bin:/bin")
@@ -158,7 +159,8 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	want(t, "restart", code, 0, out, "Meko restarted")
 	code, out, _ = run("stop", "--data-dir", dir, "--keep-extensions")
 	want(t, "stop --keep-extensions", code, 0, out, "Meko stopped\n")
-	if got := readLog(t, log); got != "stop\nstart\n" {
+	// The server asks it where it listens (_handoff) at each start; that's not starting or stopping it.
+	if got := strings.ReplaceAll(readLog(t, log), "_handoff --json\n", ""); got != "stop\nstart\n" {
 		t.Errorf("extension ran %q (restart and --keep-extensions must leave it alone)", got)
 	}
 
@@ -173,10 +175,45 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	t.Cleanup(func() { stdin = os.Stdin })
 	code, _, errs = run("uninstall", "--data-dir", dir, "--purge")
 	want(t, "uninstall --purge, declined", code, 1, errs, "Nothing was removed")
+	// --force keeps the extensions' data (the registry here) and says the extension is still installed.
 	code, out, _ = run("uninstall", "--data-dir", dir, "--purge", "--force")
-	want(t, "uninstall --purge --force", code, 0, out, "Removed "+dir)
+	want(t, "uninstall --purge --force", code, 0, out, "kept the extensions' data in it")
+	want(t, "uninstall --purge --force", code, 0, out, "Extension agentk is still installed")
+	if _, err := os.Stat(paths.New(dir).DB); !os.IsNotExist(err) {
+		t.Errorf("meko.db is still there: %v", err)
+	}
+	code, out, _ = run("uninstall", "--data-dir", dir, "--purge", "--force", "--with-extensions")
+	want(t, "uninstall --purge --force --with-extensions", code, 0, out, "Removed "+dir)
+	if strings.Contains(out, "still installed") {
+		t.Errorf("uninstall said a removed extension is still installed:\n%s", out)
+	}
+	if got := readLog(t, log); !strings.HasSuffix(got, "uninstall --purge --delete-worktrees --non-interactive\n") {
+		t.Errorf("extension ran %q", got)
+	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Errorf("the data folder is still there: %v", err)
+	}
+}
+
+// A registered extension whose command is gone (AgentK's home moved into the data folder) is found
+// again in its release install there, and the registry keeps the new path.
+func TestAGoneExtensionIsFoundAgain(t *testing.T) {
+	dir, _ := setup(t)
+	noRealExtensions(t)
+	moved := filepath.Join(extensions.Dir(dir, "agentk"), "app", "current", "bin", "agentk")
+	log := fakeExtension(t, moved)
+	reg, _ := extensions.Load(dir)
+	reg.Entries["agentk"] = extensions.Entry{Command: filepath.Join(t.TempDir(), "gone", "agentk"), InstalledByMeko: true}
+	if err := reg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	_, out, errs := run("stop", "--data-dir", dir)
+	want(t, "stop", 0, 0, out+errs, "ext stop")
+	if got := readLog(t, log); got != "stop\n" {
+		t.Errorf("extension ran %q", got)
+	}
+	if reg, _ = extensions.Load(dir); reg.Entries["agentk"].Command != moved || !reg.Entries["agentk"].InstalledByMeko {
+		t.Errorf("registry %+v", reg.Entries)
 	}
 }
 
@@ -226,7 +263,7 @@ func TestInstallExtensionSetsUpAnInstalledAgentK(t *testing.T) {
 		t.Errorf("still registered: %v", reg.Entries)
 	}
 	code, _, errs = run("install_extension", "frob", "--data-dir", dir)
-	want(t, "an unknown extension", code, 1, errs, "meko knows agentk")
+	want(t, "an unknown extension", code, 1, errs, "meko knows agentk, presenter")
 }
 
 func TestInstallExtensionRunsTheNewestAgentKInstaller(t *testing.T) {
@@ -237,7 +274,8 @@ func TestInstallExtensionRunsTheNewestAgentKInstaller(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	argsFile := filepath.Join(home, "installer-args")
 	// The installer puts agentk in ~/.local/bin, and agent-k-local, its old name, as AgentK's does.
-	installer := fmt.Sprintf("#!/bin/sh\n# --meko-url\necho \"$*\" > %q\nmkdir -p \"$HOME/.local/bin\"\n"+
+	installer := fmt.Sprintf("#!/bin/sh\n# --meko-url\necho \"$* MEKO_HOME=$MEKO_HOME\" > %q\n"+
+		"mkdir -p \"$HOME/.local/bin\"\n"+
 		"printf '#!/bin/sh\\n' > \"$HOME/.local/bin/agentk\"\n"+
 		"chmod 700 \"$HOME/.local/bin/agentk\"\n"+
 		"ln -s agentk \"$HOME/.local/bin/agent-k-local\"\n", argsFile)
@@ -265,7 +303,8 @@ func TestInstallExtensionRunsTheNewestAgentKInstaller(t *testing.T) {
 	code, out, errs = run("install_extension", "agentk", "--data-dir", dir)
 	want(t, "install_extension", code, 0, out+errs,
 		"Installing AgentK 0.20261030.0 (agentk-v0.20261030.0)")
-	if got := readLog(t, argsFile); !strings.HasPrefix(got, "--meko-url http://127.0.0.1:"+port+"/mcp --meko-key ") {
+	if got := readLog(t, argsFile); !strings.HasPrefix(got, "--meko-url http://127.0.0.1:"+port+"/mcp --meko-key ") ||
+		!strings.HasSuffix(got, " MEKO_HOME="+dir+"\n") {
 		t.Errorf("installer got %q", got)
 	}
 	reg, _ := extensions.Load(dir)

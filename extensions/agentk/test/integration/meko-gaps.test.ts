@@ -1,23 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../../src/server/server.js';
-import { issueSetupToken } from '../../src/server/auth.js';
 import { run } from '../../src/server/db.js';
-import { markGap } from '../../src/server/mekogaps.js';
+import { learnGaps, markGap } from '../../src/server/mekogaps.js';
 import type { MekoGapPage, ProjectHome } from '../../src/shared/types.js';
 import { makeEnv, type TestEnv } from '../helpers.js';
 
 describe("What Meko doesn't know", () => {
   let env: TestEnv;
   let app: FastifyInstance;
-  let cookie: string;
 
   beforeEach(async () => {
     env = await makeEnv({ start: false });
-    app = await buildServer(env.core, { tls: null, webDir: null, updater: null });
-    const token = issueSetupToken(env.core.db);
-    const res = await app.inject({ method: 'POST', url: '/api/auth/setup', payload: { token, username: 'me', password: 'correct horse battery' } });
-    cookie = String(res.headers['set-cookie']).split(';')[0];
+    app = await buildServer(env.core, { webDir: null, updater: null });
   });
   afterEach(async () => {
     await app.close();
@@ -25,7 +20,7 @@ describe("What Meko doesn't know", () => {
   });
 
   const call = (method: 'GET' | 'POST', url: string, payload?: object) =>
-    app.inject({ method, url, headers: { cookie }, ...(payload ? { payload } : {}) });
+    app.inject({ method, url, ...(payload ? { payload } : {}) });
   const page = async (projectId: string, state = 'open') => (await call('GET', `/api/projects/${projectId}/meko-gaps?state=${state}`)).json() as MekoGapPage;
 
   const project = (name: string, datapack = true) =>
@@ -55,18 +50,35 @@ describe("What Meko doesn't know", () => {
         sessionId, at, query, query.toLowerCase(), quality);
     start('s2', 1800, 'Offline mode', 'empty');
     start('s1', 1700, 'Cache hit', null);
+    // A learn session's searches while it seeds (in Explore) check before each save: not questions, though
+    // one that found something answers another session's. Moved on to Code, it's a task like any other.
+    session(p.id, 'seed', 'Learn the project');
+    run(env.core.db, "UPDATE sessions SET purpose = 'learn' WHERE id = 'seed'");
+    run(env.core.db, `INSERT INTO session_stages(session_id, stage, entered_at, left_at, moved_by)
+      VALUES ('seed', 'explore', 100, 2200, 'you'), ('seed', 'code', 2200, NULL, 'you')`);
+    start('seed', 100, 'Seed the datapack', 'empty');
+    search('seed', 't7', 'How it works: the release train', 1200, 'empty', 'empty');
+    search('seed', 't8', 'offline mode', 1300, 'empty', 'empty');
+    search('s1', 't9', 'answered by the seed', 1600, 'empty', 'empty');
+    search('seed', 't10', 'answered by the seed', 1900, 'found', null);
+    search('seed', 't11', 'Code stage question', 2300, 'empty', 'empty');
 
     const open = await page(p.id);
     expect(open.gaps.map((g) => [g.query, g.quality, g.source, g.asks, g.sessions.map((s) => s.name)])).toEqual([
+      ['Code stage question', 'empty', 'claude', 1, ['Learn the project']],
       ['release  tag retention', 'weak', 'claude', 2, ['release-cleanup', 'tags']],
       ['Offline mode', 'empty', 'start', 1, ['release-cleanup']],
     ]);
-    expect(open).toMatchObject({ counts: { open: 2, dismissed: 0, taught: 0 }, open: { empty: 1, weak: 1 }, searches: 7, since: 1000, more: false });
-    expect(((await call('GET', `/api/projects/${p.id}/home`)).json() as ProjectHome).usage.mekoGaps).toEqual({ empty: 1, weak: 1 });
+    // Every search recorded counts, the seed's too.
+    expect(open).toMatchObject({ counts: { open: 3, dismissed: 0, taught: 0 }, open: { empty: 2, weak: 1 }, searches: 13, since: 100, more: false });
+    expect(((await call('GET', `/api/projects/${p.id}/home`)).json() as ProjectHome).usage.mekoGaps).toEqual({ empty: 2, weak: 1 });
+    // A learn step isn't offered a question only the seed's search made Claude's (offline mode: else AgentK's at start).
+    expect(learnGaps(env.core.db, p.id, 's1').map((g) => [g.key, g.own])).toEqual([['release tag retention', true], ['code stage question', false]]);
+    expect(learnGaps(env.core.db, p.id, 'seed').map((g) => [g.key, g.own])).toEqual([['code stage question', true], ['release tag retention', false]]);
 
-    const key = open.gaps[0].key;
+    const key = open.gaps[1].key; // release tag retention
     expect((await call('POST', `/api/projects/${p.id}/meko-gaps/mark`, { key, state: 'dismissed' })).statusCode).toBe(204);
-    expect((await page(p.id)).gaps.map((g) => g.query)).toEqual(['Offline mode']);
+    expect((await page(p.id)).gaps.map((g) => g.query)).toEqual(['Code stage question', 'Offline mode']);
     expect((await page(p.id, 'dismissed')).gaps.map((g) => g.state)).toEqual(['dismissed']);
     // Asked again: open again.
     search('s1', 't6', 'Release tag retention', Date.now() + 1000, 'empty', 'empty');
@@ -74,7 +86,7 @@ describe("What Meko doesn't know", () => {
     // Put back after a dismissal.
     await call('POST', `/api/projects/${p.id}/meko-gaps/mark`, { key, state: 'dismissed' });
     await call('POST', `/api/projects/${p.id}/meko-gaps/mark`, { key, state: null });
-    expect((await page(p.id)).counts).toEqual({ open: 2, dismissed: 0, taught: 0 });
+    expect((await page(p.id)).counts).toEqual({ open: 3, dismissed: 0, taught: 0 });
 
     expect((await call('POST', `/api/projects/${p.id}/meko-gaps/mark`, { key: 'nothing like it', state: 'dismissed' })).statusCode).toBe(404);
     expect((await call('POST', `/api/projects/${p.id}/meko-gaps/mark`, { key, state: 'taught' })).statusCode).toBe(400);
@@ -129,7 +141,7 @@ describe("What Meko doesn't know", () => {
     search('s9', 't9', 'Release tag retention', 1000, 'empty', 'empty');
     expect((await teach(plain.id, 'An answer')).json()).toMatchObject({ code: 'NO_DEDICATED_DATAPACK' });
     env.core.updateConfig((c) => {
-      c.meko.enabled = false;
+      c.meko.apiKey = '';
     });
     expect((await teach(p.id, 'An answer')).json()).toMatchObject({ code: 'MEKO_OFF' });
   });

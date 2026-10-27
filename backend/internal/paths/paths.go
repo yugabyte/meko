@@ -2,6 +2,7 @@
 //
 //	<root>/            0700
 //	  config.toml      optional
+//	  web.toml, cloud.toml  settings Meko chose itself: the web listener's, the Meko Cloud link's URLs
 //	  meko.db          the only database (0600)
 //	  client.token     the token MCP and REST clients send, kept across restarts (0600)
 //	  run/             pid, port, lock, admin token, unix sockets
@@ -9,6 +10,8 @@
 //	  logs/            meko.log, start.log, memory_engine.log, service.log (the service's stderr)
 //	  secrets/         secrets kept in files ([secrets] store = "file"); the client token stays in client.token
 //	  extensions.json  the extensions meko start and stop run
+//	  extensions/      each extension's own folder (extensions/agentk is AgentK's home); meko destroy
+//	                   keeps it unless told to remove the extensions too
 //	  update.json      what the last update check found
 //	  models/          embedding model files, downloaded on first start
 //	  memory_engine/   the memory engine's own state (mem0's config folder)
@@ -45,8 +48,12 @@ type Layout struct {
 	ModelsDir        string
 	MemoryEngineDir  string
 	MemoryEngineLog  string
-	// KnowledgeFiles holds knowledge files' bytes, beside the database (milestone 4).
+	// KnowledgeFiles holds knowledge files' bytes, beside the database.
 	KnowledgeFiles string
+	// Extensions holds each extension's own folder (extensions.Dir); it's the extensions' data, not Meko's.
+	Extensions string
+	// Certs holds the web listener's self-signed certificate (internal/tlscert).
+	Certs string
 }
 
 // New returns the layout of the data folder at root (an absolute path).
@@ -75,6 +82,8 @@ func New(root string) Layout {
 		MemoryEngineLog:  filepath.Join(logs, "memory_engine.log"),
 
 		KnowledgeFiles: filepath.Join(root, "knowledgebase-files"),
+		Extensions:     filepath.Join(root, "extensions"),
+		Certs:          filepath.Join(root, "certs"),
 	}
 }
 
@@ -105,8 +114,8 @@ func (l Layout) Ensure() error {
 const HomeEnv = "MEKO_HOME"
 
 // networkFS are filesystems SQLite's locking and flock can't be trusted on. The names are the
-// ones AgentK's installer checks (extensions/agentk/src/server/install.ts): Linux mount types and macOS
-// statfs names.
+// ones AgentK checks (extensions/agentk/src/server/fstype.ts, and its scripts/install.sh): Linux
+// mount types and macOS statfs names.
 var networkFS = map[string]bool{
 	"nfs": true, "nfs4": true, "cifs": true, "smb2": true, "smbfs": true, "fuse.sshfs": true,
 	"afs": true, "lustre": true, "gpfs": true, "afpfs": true, "webdav": true, "macfuse": true,
@@ -168,9 +177,10 @@ var SharedTmp = "/var/tmp"
 
 // localFallback is a local-disk data folder for a home folder on a network filesystem:
 // $XDG_STATE_HOME/meko if that's local, else /var/tmp/<user>/meko (as AgentK does
-// for its state.db).
+// for its state.db). A relative XDG_STATE_HOME is ignored, as the XDG spec says (and as
+// AgentK's mekoHome and install.sh do).
 func localFallback() (string, error) {
-	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
+	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" && filepath.IsAbs(xdg) {
 		dir := filepath.Join(xdg, "meko")
 		if networkType(dir) == "" {
 			return dir, nil
@@ -273,10 +283,18 @@ func sameDir(a, b string) bool {
 	return err == nil && ra == rb
 }
 
-// DirSize is the total size of the regular files under dir. Files it can't read are skipped.
-func DirSize(dir string) int64 {
+// DirSize is the total size of the regular files under dir, leaving out the folders in skip.
+// Files it can't read are skipped.
+func DirSize(dir string, skip ...string) int64 {
 	var n int64
-	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			for _, s := range skip {
+				if p == s {
+					return filepath.SkipDir
+				}
+			}
+		}
 		if err == nil && d.Type().IsRegular() {
 			if fi, ierr := d.Info(); ierr == nil {
 				n += fi.Size()

@@ -21,15 +21,16 @@ export CXX=/opt/rh/gcc-toolset-13/root/usr/bin/g++
 # On macOS, skip the exports: `xcode-select --install` and `brew install gh` are enough.
 npm ci                          # also makes node-pty's macOS spawn-helper executable (scripts/postinstall.mjs)
 
-npm run dev                     # API server on 127.0.0.1:7777 + Vite on 127.0.0.1:5173
+npm run dev                     # the server on ./.dev-home/web.sock + Vite on 127.0.0.1:5173
 ```
 
-Open http://127.0.0.1:5173. The dev server listens on loopback, so it opens without a login (local
-access, see `localAccess()` in `src/server/auth.ts`). A dev server keeps its state in `./.dev-home` (set `AK_DEV_HOME` to
-use another folder), so it never opens an installed AgentK's database, hook socket or session
+Open http://127.0.0.1:5173. The server listens only on its unix socket, as it does behind Meko,
+and Vite proxies `/api/`, `/healthz` and `/ws/` to it (`AK_DEV_SOCK` names another socket); the
+page has no `<base>` there, so it runs at `/` rather than `/ext/agentk/`, and opens without a login.
+A dev server keeps its state in `./.dev-home` (set `AK_DEV_HOME` to
+use another folder; `AK_HOME` names a home only without a release, as here and in tests), so it never opens an installed AgentK's database, hook socket or session
 host: it starts a session host of its own for that folder, which keeps running when `npm run dev`
-restarts (stop `npm run dev`, then `AK_HOME=.dev-home npx tsx src/server/cli.ts host stop` ends it). Port 7777 is taken if
-an installed server is running there.
+restarts (stop `npm run dev`, then `AK_HOME=.dev-home npx tsx src/server/cli.ts host stop` ends it).
 
 Local state uses Node's built-in `node:sqlite`, which prints an experimental warning on Node 22.
 The release wrapper runs Node with `--disable-warning=ExperimentalWarning`.
@@ -59,14 +60,15 @@ Commit subjects and PR titles are `<type>(<component>[/<area>])[!]: <summary>`, 
   with no behavior change), `chore`.
 
 The component names the part of the repo: `agentk` for AgentK, `meko` for Meko
-(`backend/`), `repo` for the shared root (CI, `scripts/`, root docs). An optional area follows a
-slash (`fix(agentk/web): …`). `!` marks a breaking change, and only on a releasing type
+(`backend/`), `presenter` for Presenter (`extensions/presenter`, which releases on its own train),
+`repo` for the shared root (CI, `scripts/`, root docs). An optional area follows a
+slash (`fix(agentk/web): …`). A change that ships in more than one component names each,
+comma-separated (`feat(agentk,meko): …`), and releases both products. `!` marks a breaking change, and only on a releasing type
 (`feat(agentk)!: …`, `deps(agentk)!: …`). PRs are squash-merged with the
 PR title as the commit subject, so the title is what the release workflow reads: pick the type
 for the PR as a whole. Check a subject or title with `sh scripts/check-title.sh "<title>"` from the
 repo root; the
-`PR title` workflow (`.github/workflows/pr-title.yml`) runs it on every PR title. See `.claude/skills/commit/SKILL.md` for the full rules, including: no
-agent attribution.
+`PR title` workflow (`.github/workflows/pr-title.yml`) runs it on every PR title. See `.claude/skills/commit/SKILL.md` for the full rules.
 
 ## Dependencies
 
@@ -94,8 +96,11 @@ sorts higher.
 1. Squash-merge a PR into `main`. If there are `feat`, `fix`, `perf` or `deps` commits since the last release tag, the
    AgentK release workflow (`.github/workflows/agentk-release.yml`) runs the tests, picks the next version with
    the repo root's `scripts/release/next-version.sh --product agentk`, and writes notes with
-   `scripts/release/release-notes.sh --product agentk`. Only AgentK's subjects count: Meko's
-   (`feat(meko/…)` and the like) release Meko instead, from its own workflow. Pushes with only
+   `scripts/release/release-notes.sh --product agentk`. Only AgentK's subjects count: those naming only Meko
+   (`feat(meko/…)` and the like) release Meko instead, from its own workflow, those naming only
+   Presenter (`presenter`, alone or with `meko`) release nothing here (they release Presenter, from
+   `presenter-release.yml`, and Meko too when they name it), and those naming both
+   AgentK and Meko (`feat(agentk,meko): …`) release both. Pushes with only
    `ci`/`test`/`docs`/`nit`/`chore` commits don't release. The notes list features, fixes,
    performance and dependency changes.
 2. It builds self-contained tarballs in an AlmaLinux 8 container (glibc 2.28, so they run on
@@ -116,7 +121,7 @@ sorts higher.
 5. Running installs see the release on their next update check (every 6 hours) and offer it in
    a "Version X is available" banner. Its **Update to the latest version** button checks again and
    installs the newest release then (which may be newer than X), without interrupting sessions. Once a version has been healthy for 5 minutes, the
-   server deletes every installed version under `~/.agent-k-local/app/` except the running one and
+   server deletes every installed version under `app/` in AgentK's home except the running one and
    one previous version (the one it updated from) to roll back to by hand.
 
 **Usage stats.** Release builds carry the collector's report URL (the full URL, ending in
@@ -166,12 +171,13 @@ gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-d
 
 Pass options through `sh -s --` (`--version 0.2.0 --non-interactive --repos-root ~/code`, …).
 
-Before anything else, the installer checks for git, curl, gh and a coding agent (Claude Code or
-Kiro CLI: either one is enough) and offers to install the missing ones, showing the commands and
-asking first. With neither agent there it asks which to install (`--agent claude|kiro` picks one
-without asking; Kiro CLI comes from its own installer at cli.kiro.dev), and it stops when no agent
-ends up installed. `agentk install` then offers Meko's own setup for each agent it finds
-(Claude Code, Kiro), asking first. `--install-deps` skips the questions (and installs Claude Code
+Before anything else, the installer checks for git, curl, gh and a coding agent (Claude Code,
+OpenCode or Kiro CLI: any one is enough) and offers to install the missing ones, showing the
+commands and asking first. With no agent there it asks which to install, OpenCode second
+(`--agent claude|opencode|kiro` picks one without asking; OpenCode 2 comes from its own installer at
+opencode.ai/v2, into `~/.opencode/bin`, and Kiro CLI from its own at cli.kiro.dev), and it stops when no
+agent ends up installed. `agentk install` then offers Meko's own setup for each agent it finds
+(Claude Code, Kiro; OpenCode sessions get AgentK's Meko from AgentK itself), asking first. `--install-deps` skips the questions (and installs Claude Code
 when no agent is there and `--agent` doesn't say), `--no-install-deps` never installs, and
 `--deps-only` stops after that step. Where AgentK
 is already installed (`app/current` and `config.toml` in its home, `~/.local/bin/agentk`,
@@ -180,11 +186,13 @@ and both services enabled or loaded), it says so and stops before any of that, u
 `agentk install` (other than `--non-interactive`). Its tests
 (`test/unit/install-script.test.ts`) run the real script against stub tools.
 
-The installer unpacks into `~/.agent-k-local/app/<version>`, points `app/current` at it, links
+The installer unpacks into `<home>/app/<version>` (AgentK's home is `extensions/agentk` in Meko's data folder, `~/.meko` by default, or `~/.agent-k-local` until an older install moves; `--print-home` prints it), points `app/current` at it, links
 `~/.local/bin/agentk` (and `~/.local/bin/agent-k-local`, the command's name before the rename,
 which older services, scripts and Meko run), and runs `agentk install`, which writes `config.toml`,
 checks Meko, installs the two background services (the `agentk` and `agentk-host`
 systemd user units on Linux; the `com.yugabyte.agentk` and `com.yugabyte.agentk.host`
-LaunchAgents on macOS), and prints the address, or for remote access the one-time setup link.
+LaunchAgents on macOS), and prints the address the Meko on this computer serves it at
+(`/ext/agentk/`). It refuses to install where there's no `meko` command: browsers reach AgentK only
+through Meko.
 Services installed before the rename keep their old names (`agent-k-local…`) until `agentk
 install` moves them; see [recovery](docs/design/recovery.md).

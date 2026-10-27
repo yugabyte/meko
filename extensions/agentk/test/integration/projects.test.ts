@@ -116,10 +116,28 @@ describe('projects', () => {
     expect(home.datapacks[0]).toMatchObject({ id: 'dp-Alpha', memoryCount: null, knowledgeCount: null, grant: null });
   });
 
+  it.each([
+    { what: 'a datapack the open made', datapack: { mode: 'create', name: 'team/new' }, describe: null, empty: true },
+    { what: 'an existing one with no memories and no knowledge', datapack: { mode: 'existing', id: 'dp-e', name: 'team/e' }, describe: { memoryCount: 0, knowledgeCount: 0 }, empty: true },
+    { what: 'an existing one with memories', datapack: { mode: 'existing', id: 'dp-e', name: 'team/e' }, describe: { memoryCount: 3, knowledgeCount: 0 }, empty: false },
+    { what: 'an existing one Meko fails to describe', datapack: { mode: 'existing', id: 'dp-e', name: 'team/e' }, describe: 'fail', empty: false },
+    { what: 'no datapack', datapack: { mode: 'none' }, describe: null, empty: false },
+  ] as const)('says whether the opened project\'s datapack is empty: $what', async ({ datapack, describe, empty }) => {
+    if (describe === 'fail') {
+      (env.meko as { describeDatapack: unknown }).describeDatapack = async () => {
+        throw new Error('Meko is down');
+      };
+    } else if (describe) {
+      (env.meko as { describeDatapack: unknown }).describeDatapack = async () => ({ ...describe, grant: 'owner', ownerName: null, ownerEmail: null });
+    }
+    const p = await env.core.projects.open({ repoPath: env.repo, name: 'Opened', datapack });
+    expect(p).toMatchObject({ name: 'Opened', datapackEmpty: empty });
+  });
+
   it("doesn't ask Meko for counts while it's off", async () => {
     const p = await create('Alpha');
     env.core.updateConfig((c) => {
-      c.meko.enabled = false;
+      c.meko.apiKey = '';
     });
     const before = env.meko.calls.length;
     expect((await env.core.projects.home(p.id)).datapacks[0]).toMatchObject({ memoryCount: null });

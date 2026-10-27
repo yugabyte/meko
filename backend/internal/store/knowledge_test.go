@@ -330,7 +330,7 @@ func TestKeywordsDropTermsInHalfTheChunks(t *testing.T) {
 	}
 }
 
-// Memories promoted before milestone 4 were text only: the migration gives each its chunk, which
+// Memories promoted before 0006_knowledge.sql were text only: the migration gives each its chunk, which
 // the embedder sweep embeds.
 func TestMigrationGivesEarlierPromotionsTheirChunks(t *testing.T) {
 	ctx := context.Background()
@@ -350,8 +350,8 @@ func TestMigrationGivesEarlierPromotionsTheirChunks(t *testing.T) {
 	if err := s.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// The memory engine said hello on this milestone-3 database, so its model is recorded; there's
-	// no kb_chunks_vec, which milestone 4 added.
+	// The memory engine said hello on this database from before 0006, so its model is recorded;
+	// there's no kb_chunks_vec, which the store makes for 0006's chunks.
 	for k, v := range map[string]string{keyEmbedderProvider: testModel.Provider, keyEmbedderModel: testModel.Model,
 		keyEmbeddingDims: fmt.Sprint(testModel.Dims)} {
 		if _, err := s.w.Exec("INSERT INTO settings(key, value) VALUES (?, ?)", k, v); err != nil {

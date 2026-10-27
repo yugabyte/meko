@@ -165,7 +165,7 @@ describe('install.sh: installing missing tools', () => {
     writeFileSync(join(repo, 'release', 'install'), `mkdir -p "$HOME/.local/bin"; cp "${repo}/kiro-cli" "$HOME/.local/bin/kiro-cli"; echo "kiro installer ran" >> "${log}"\n`);
     const plan = run(['--non-interactive']);
     expect(plan.code).toBe(1);
-    expect(plan.err).toContain('missing: Claude Code (or Kiro CLI, with --agent kiro)');
+    expect(plan.err).toContain('missing: Claude Code (or OpenCode or Kiro CLI, with --agent opencode or --agent kiro)');
     const r = run(['--non-interactive', '--install-deps', '--agent', 'kiro']);
     expect(r.code).toBe(0);
     expect(r.calls).toEqual(['curl https://cli.kiro.dev/install', 'kiro installer ran', 'kiro-cli whoami']);
@@ -322,25 +322,29 @@ describe('install.sh: installing missing tools', () => {
     expect(r.calls).toEqual(['gh auth status', 'gh auth login']);
   });
 
-  it('asks which agent to install when neither is there, and installs Kiro CLI when picked', async () => {
+  it('asks which agent to install when none is there, OpenCode second, and installs OpenCode when picked', async () => {
     have('git', 'curl', 'gh');
     rmSync(join(bin, 'claude'));
-    stub(repo, 'unzip', 'exit 0');
-    stub(repo, 'kiro-cli', `echo "kiro-cli $*" >> "${log}"; exit 0`);
-    writeFileSync(join(repo, 'release', 'install'), `mkdir -p "$HOME/.local/bin"; cp "${repo}/kiro-cli" "$HOME/.local/bin/kiro-cli"; echo "kiro installer ran" >> "${log}"\n`);
-    const r = await runInTerminal('2', 'Install Claude Code (1) or Kiro CLI (2)?', [['Install them now?', 'y']]);
-    expect(r.out).toContain('curl -fsSL https://cli.kiro.dev/install | bash');
+    stub(repo, 'opencode', `echo "opencode $*" >> "${log}"; [ "$1 $2" = "auth list" ] && echo "Anthropic  Anthropic API key  stored"; exit 0`);
+    // OpenCode's installer puts it in ~/.opencode/bin, which isn't on the PATH.
+    writeFileSync(join(repo, 'release', 'install'), `mkdir -p "$HOME/.opencode/bin"; cp "${repo}/opencode" "$HOME/.opencode/bin/opencode"; echo "opencode installer ran" >> "${log}"\n`);
+    const r = await runInTerminal('2', 'Install Claude Code (1), OpenCode (2) or Kiro CLI (3)?', [['Install them now?', 'y']]);
+    expect(r.out).toContain('curl -fsSL https://opencode.ai/v2/install | bash');
     expect(r.code).toBe(0);
-    expect(r.calls).toEqual(['sudo dnf install -y unzip', 'dnf install -y unzip', 'curl https://cli.kiro.dev/install', 'kiro installer ran', 'kiro-cli whoami']);
-    expect(r.out).toContain('git, curl, gh, Kiro');
+    expect(r.calls).toEqual(['curl https://opencode.ai/v2/install', 'opencode installer ran', 'opencode auth list --standalone']);
+    expect(r.out).toContain('git, curl, gh, OpenCode');
   });
 
-  it('offers to sign Claude Code in', async () => {
+  it.each([
+    ['Claude Code', 'claude', `[ "$1 $2" = "auth status" ] && echo '{ "loggedIn": false }'`, 'claude auth login', ['claude auth login']],
+    // OpenCode with no provider signed in (and none's key in the environment).
+    ['OpenCode', 'opencode', `[ "$1 $2" = "auth list" ] && echo 'No authenticated integrations'`, 'opencode auth login', ['opencode auth list --standalone', 'opencode auth login --standalone']],
+  ])('offers to sign %s in', async (_, cmd, body, login, expected) => {
     have('git', 'curl', 'gh');
-    stub(bin, 'claude', `echo "claude $*" >> "${log}"; [ "$1 $2" = "auth status" ] && echo '{ "loggedIn": false }'; exit 0`);
-    const r = await runInTerminal('y', 'Sign in now (claude auth login)?');
+    stub(bin, cmd, `echo "${cmd} $*" >> "${log}"; ${body}; exit 0`);
+    const r = await runInTerminal('y', `Sign in now (${login})?`);
     expect(r.code).toBe(0);
-    expect(r.calls).toEqual(['claude auth login']);
+    expect(r.calls).toEqual(expected);
   });
 });
 
@@ -546,13 +550,14 @@ exit 0`);
     expect(downloads(unset.calls).length).toBeGreaterThan(0);
   });
 
-  it('installs into another AK_HOME', () => {
-    const other = join(root, 'other-home');
-    const r = runAll(['--non-interactive'], { AK_HOME: other });
+  it("installs into Meko's data folder (MEKO_HOME), whatever AK_HOME says, once nothing is in the old home", () => {
+    rmSync(akHome(), { recursive: true });
+    const meko = join(root, 'meko');
+    const r = runAll(['--non-interactive'], { MEKO_HOME: meko, AK_HOME: join(root, 'other-home') });
     expect(r.code).toBe(0);
     expect(r.calls).toContain('agentk install --non-interactive');
-    expect(current(other)).toBe('1.2.4');
-    expect(current()).toBe('1.2.3');
+    expect(current(join(meko, 'extensions', 'agentk'))).toBe('1.2.4');
+    expect(existsSync(join(root, 'other-home'))).toBe(false);
   });
 
   it('still checks the tools with --deps-only', () => {
@@ -560,5 +565,47 @@ exit 0`);
     expect(r.code).toBe(0);
     expect(r.err).toContain('Tools');
     expect(r.err).not.toContain('already installed');
+  });
+});
+
+describe('install.sh: where AgentK lives', () => {
+  /** Where Meko's data folder is: the cases Meko's paths.Resolve and AgentK's mekoHome are tested against too. */
+  const CASES = (JSON.parse(readFileSync(join(__dirname, '../../../../backend/internal/paths/testdata/resolve-cases.json'), 'utf8')) as {
+    cases: { name: string; env: Record<string, string>; networkDirs: string[]; want?: string; error?: boolean }[];
+  }).cases;
+
+  // $SHARED_TMP is /var/tmp itself here: --print-home makes nothing. Other absolute paths go under
+  // the test's folder, the network folders made, since the check looks at the nearest folder there.
+  it.each(CASES)('$name', (c) => {
+    const fill = (p: string) => {
+      const v = p.replace('$HOME', home).replace('$SHARED_TMP', '/var/tmp').replace('$USER', 'me');
+      return v.startsWith(home) || v.startsWith('/var/tmp') || !v.startsWith('/') ? v : join(root, v);
+    };
+    const network = c.networkDirs.map(fill);
+    for (const d of network) mkdirSync(d, { recursive: true });
+    stub(bin, 'stat', `for d in ${network.map((d) => `'${d}'`).join(' ')}; do case $4 in "$d"|"$d"/*) echo nfs; exit 0 ;; esac; done; echo ext2/ext3`);
+    const env = Object.fromEntries(Object.entries(c.env).map(([k, v]) => [k, fill(v)]));
+    const r = spawnSync(join(bin, 'sh'), [SCRIPT, '--print-home'], { env: { PATH: bin, HOME: home, LANG: 'C', FAKE_UID: 'me', ...env }, encoding: 'utf8' });
+    if (c.error) {
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain('network filesystem');
+    } else {
+      expect(r.stdout.trim()).toBe(join(fill(c.want!), 'extensions', 'agentk'));
+    }
+  });
+
+  it("finds an install made with a custom AK_HOME by the command link it made, so a rerun updates it there", () => {
+    const custom = join(root, 'custom-home');
+    mkdirSync(join(custom, 'app'), { recursive: true });
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+    symlinkSync(join(custom, 'app', 'current', 'bin', 'agentk'), join(home, '.local', 'bin', 'agentk'));
+    const r = spawnSync(join(bin, 'sh'), [SCRIPT, '--print-home'], { env: { PATH: bin, HOME: home, LANG: 'C' }, encoding: 'utf8' });
+    expect(r.stdout.trim()).toBe(custom);
+  });
+
+  it("keeps an install from before the move in its old home until its server moves it", () => {
+    mkdirSync(join(home, '.agent-k-local'));
+    const r = spawnSync(join(bin, 'sh'), [SCRIPT, '--print-home'], { env: { PATH: bin, HOME: home, LANG: 'C' }, encoding: 'utf8' });
+    expect(r.stdout.trim()).toBe(join(home, '.agent-k-local'));
   });
 });

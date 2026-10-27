@@ -6,7 +6,7 @@ During Design the panel opens as soon as the design exists and again whenever it
 about 60% of the work area. An Artifact design is shown in a sandboxed frame (scripts allowed, no
 same-origin access, and a content policy that blocks network requests and limits scripts, styles
 and fonts to what Artifacts use, placed first in the frame's document so nothing of the page runs
-before it), so the page can't read the login cookie or call the API. **Open on claude.ai** links to
+before it), so the page can't read Meko's session cookie or call the API. **Open on claude.ai** links to
 the published Artifact. A markdown design is rendered as sanitized HTML with no forms or styles,
 and its links open in a new tab. Its ` ```mermaid ` blocks are drawn as diagrams (the Design prompt
 tells Claude they are): Mermaid is loaded only when a design has one and draws with SVG text in a
@@ -33,7 +33,7 @@ text. The Design prompt tells Claude not to write tag-like text in an Artifact's
 markdown fences are taken out as text before any HTML parsing, so they're unaffected.
 
 **Open questions and key design decisions.** Besides the design, AgentK gives you its open questions in
-`~/.agent-k-local/designs/<session>/questions.json` (`{"questions": [{"id", "kind", "question", "context",
+`<home>/designs/<session>/questions.json` (`{"questions": [{"id", "kind", "question", "context",
 "options": [{"label", "detail"}], "recommended", "status": "open" | "resolved", "decision", "decidedBy",
 "meko"}]}`): through the [mod's `design_questions` tool](mod.md) when the session's agent has it, which saves
 the file and shows them at once, or else by writing the file, read at the turn's end (Kiro, which
@@ -175,3 +175,19 @@ keeps them, in case it's dropped). After a revision it forgets the feedback and 
 until their questions are no longer open, so they still show until the questions come back
 resolved, and for a markdown design's questions until AgentK changes them. Answers reach
 Meko in the revised design and the session's conversation.
+
+While AgentK works on the design, the panel's header shows it: a bar runs along the header's
+bottom edge, and the header's "updated" time reads **Revising** (after **Send for revision** from
+this page) or **Working** (any other turn), with the keycaps. `designWorking()` in `src/web/util.ts`
+decides it from the session's status, so a reload or another screen shows it too: a session in
+Design with a design on screen and AgentK working (or Claude holding answers for its next turn,
+through the mod), never while Claude waits on the user. A Send for revision from this page
+(`revisionSent()` in `src/web/design-answers.ts`, kept for this page only) is timed from the click
+and covers the 10 seconds (`REVISION_GRACE_MS`) before Claude reports the turn. `settleRevision()`
+follows it on every state push (`settleRevisions()`, from `App.tsx`, so it doesn't need the panel
+open): it's marked started once its turn is seen within those 10 seconds, and forgotten once that
+turn is over and Claude holds no answers, or when its turn was never seen in time, so a later turn
+isn't taken for it. The footer's "Sent" line goes with it. A design written while the bar showed,
+or just after it stopped (`designLanding()`), makes the "updated just now" time flash once as it
+comes back (on a phone with tabs, where the time is hidden, it shows for those few seconds). With
+reduced motion the bar stands still and nothing flashes.

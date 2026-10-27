@@ -1,11 +1,32 @@
-// Meko Cloud's addresses, and the Meko web app that goes with an MCP server URL. Shared by the
-// server (which links datapacks and shares through the web app) and the web UI (the Meko tab's
-// sign-up links follow what's typed, before it's saved), so both work it out the same way.
+// Meko Cloud's addresses, the Meko web app that goes with an MCP server URL, and Meko's own pages.
+// Shared by the server (which links datapacks and shares through the web app) and the web UI.
 
-/** Meko Cloud's MCP server, used when neither config, the environment nor Claude Code's settings name one. */
+/** Meko Cloud's MCP server, used when a key from before Meko kept the link names no other. */
 export const DEFAULT_MEKO_URL = 'https://mcp.mekodata.ai/mcp';
 /** Meko Cloud's web app, which goes with DEFAULT_MEKO_URL. */
 export const DEFAULT_MEKO_WEB_URL = 'https://cloud.mekodata.ai';
+
+/**
+ * Where browsers find AgentK: the Meko on this computer serves it at this path on its web listener,
+ * with the path stripped (Meko's internal/extproxy), so AgentK's own routes stay at `/`.
+ */
+export const AGENTK_PATH = '/ext/agentk/';
+
+/**
+ * Meko's own pages, on the same web listener as AgentK (absolute paths on Meko's origin): its main
+ * page, the Meko Cloud link it keeps for its extensions, and the account (password, two-step
+ * sign-in) that signs people in to both. The projects pane's Meko "m" links to the main page, and
+ * AgentK's Settings › General to the other two.
+ */
+export const MEKO_HOME_PATH = '/';
+export const MEKO_CLOUD_PATH = '/settings/meko-cloud';
+export const MEKO_ACCOUNT_PATH = '/account';
+
+/**
+ * Installs Meko on this computer: the installer of the repo's latest release, which is Meko's
+ * (the README's install line). The banner shown while there's no Meko here gives it.
+ */
+export const MEKO_INSTALL_COMMAND = 'gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh';
 
 /**
  * The Meko web app that goes with an MCP URL: Meko Cloud's for Meko Cloud, else null (a local or

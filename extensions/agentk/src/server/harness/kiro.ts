@@ -1,7 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { HARNESS_CAPS } from '../../shared/harnesses.js';
-import type { HarnessStatus } from '../../shared/types.js';
 import { kiroAsker } from '../askagentk.js';
 import { contextScriptPath, hookScriptPath } from '../claude.js';
 import type { Config } from '../config.js';
@@ -9,22 +8,21 @@ import { run } from '../db.js';
 import type { HookPayload } from '../hooks.js';
 import {
   AGENTK_AGENT, agentkAgent, builtinKiroAgent, exportBuiltinKiroAgent, findKiroSession, kiroDefaultAgentName, kiroGuardScriptPath,
-  kiroSessionFile, kiroTurns, readKiroAgent, writeKiroAgent, writeKiroGuardScript, type KiroHooks,
+  kiroSessionFile, kiroSessionLog, kiroTurns, readKiroAgent, writeKiroAgent, writeKiroGuardScript, type KiroHooks,
 } from '../kiro.js';
+import { kiroMekoServerNames } from '../mekokiro.js';
 import { kiroWorkspaceConfig } from '../headtrust.js';
 import { shq } from '../launcher.js';
 import { errMsg, type Logger } from '../log.js';
 import { claudePath, type Paths } from '../paths.js';
 import { HttpError } from '../projects.js';
 import type { SessionRow } from '../store.js';
-import { recordKiroTurns } from '../usage.js';
-import type { Harness } from './types.js';
-import { cliVersion, versionAtLeast } from './version.js';
+import { TOOLS_SERVER } from '../tooldefs.js';
+import { kiroToolsServer, skillPath, toolsReady } from '../tools.js';
+import { ingestKiroMekoCalls, recordKiroTurns } from '../usage.js';
+import type { Harness, UsageRead } from './types.js';
+import { cliState } from './version.js';
 
-/** The oldest kiro-cli sessions start on. */
-const MIN_VERSION = HARNESS_CAPS.kiro.minVersion;
-/** How long a version read is used before it's read again (Kiro updates itself). */
-const VERSION_TTL_MS = 10 * 60 * 1000;
 /** How long `kiro-cli update` may run before it's stopped. */
 const UPDATE_TIMEOUT_MS = 5 * 60 * 1000;
 /** Kiro's file-writing tool, by the name its hook matchers take (Kiro 2.32 calls it `write` and keeps this alias). */
@@ -37,14 +35,21 @@ const EVENTS: Record<string, string> = {
   agentSpawn: 'SessionStart', userPromptSubmit: 'UserPromptSubmit', preToolUse: 'PreToolUse', postToolUse: 'PostToolUse', stop: 'Stop',
 };
 
-/** AgentK's hooks in the `agentk` agent: the forwarder on every event it follows, the context at start, the guard on writes. */
-export function agentkHooks(paths: Paths): KiroHooks {
+/**
+ * AgentK's hooks in the `agentk` agent: the forwarder on every event it follows, the context at
+ * start, the guard on writes, and the forwarder before each call to a Meko server (`mekoServers`,
+ * matched as `@<name>`, Kiro's matcher for every tool of an MCP server), for the dot's Meko m.
+ */
+export function agentkHooks(paths: Paths, mekoServers: string[] = ['meko']): KiroHooks {
   const cmd = (file: string) => shq(claudePath(file));
   const hook = { command: cmd(hookScriptPath(paths)), timeout_ms: HOOK_TIMEOUT_MS };
   return {
     agentSpawn: [hook, { command: cmd(contextScriptPath(paths)), timeout_ms: HOOK_TIMEOUT_MS }],
     userPromptSubmit: [hook],
-    preToolUse: [{ matcher: 'fs_write', command: cmd(kiroGuardScriptPath(paths)), timeout_ms: HOOK_TIMEOUT_MS }],
+    preToolUse: [
+      { matcher: 'fs_write', command: cmd(kiroGuardScriptPath(paths)), timeout_ms: HOOK_TIMEOUT_MS },
+      ...mekoServers.map((name) => ({ matcher: `@${name}`, ...hook })),
+    ],
     postToolUse: [{ matcher: '*', ...hook }],
     stop: [hook],
   };
@@ -52,13 +57,19 @@ export function agentkHooks(paths: Paths): KiroHooks {
 
 /**
  * Writes the `agentk` agent from the user's default agent (Meko's `meko-default` when Meko's setup
- * for Kiro ran, else Kiro's built-in one) with AgentK's hooks added, and Meko's capture hooks only
- * with `[meko] capture_transcripts`. True when it changed.
+ * for Kiro ran, else Kiro's built-in one) with AgentK's hooks added, Meko's capture hooks only
+ * with `[meko] capture_transcripts`, and AgentK's session tools while `[tools] enabled` (one file for
+ * every session, so a session on an untrusted PR head has them too; the tools' route refuses it).
+ * True when it changed.
  */
 export function writeAgentkAgent(paths: Paths, cfg: Config): boolean {
   const name = kiroDefaultAgentName();
   const base = (name && name !== AGENTK_AGENT ? readKiroAgent(name) : null) ?? builtinKiroAgent(paths);
-  return writeKiroAgent(agentkAgent(base, agentkHooks(paths), { mekoCapture: cfg.meko.captureTranscripts }));
+  const tools = toolsReady(paths, cfg.tools.enabled)
+    ? { name: TOOLS_SERVER, server: kiroToolsServer(paths), skill: claudePath(skillPath(paths)) }
+    : null;
+  const hooks = agentkHooks(paths, kiroMekoServerNames(base.mcpServers));
+  return writeKiroAgent(agentkAgent(base, hooks, { mekoCapture: cfg.meko.captureTranscripts, tools }));
 }
 
 /**
@@ -83,6 +94,17 @@ function kiroConversation(row: SessionRow): string | null {
   return row.agent_session_id && existsSync(kiroSessionFile(row.agent_session_id)) ? row.agent_session_id : null;
 }
 
+/** A Meko tool as Kiro names it: `@<server>/<tool>`, from a server named `meko` or starting with it. */
+const MEKO_TOOL = /^@meko[\w-]*\/[\w-]+$/i;
+
+/**
+ * The key of the Meko call a tool event is about: its tool name. Kiro gives a call no id, so two
+ * calls of one tool share it, and `MekoCalls` counts them.
+ */
+export function kiroMekoTool(p: HookPayload): string | null {
+  return typeof p.tool_name === 'string' && MEKO_TOOL.test(p.tool_name) ? p.tool_name : null;
+}
+
 /** A Kiro hook payload as AgentK's event: Kiro's id moves to `agent_session_id`, since `session_id` is Claude Code's. */
 export function normalizeKiro(raw: HookPayload): HookPayload | null {
   const ev = EVENTS[String(raw.hook_event_name ?? '')];
@@ -93,42 +115,8 @@ export function normalizeKiro(raw: HookPayload): HookPayload | null {
 
 /** Kiro CLI (`kiro-cli`). */
 export function kiroHarness(deps: { log: Logger; changed: () => void; readVersion?: (cmd: string) => Promise<string | null> }): Harness {
-  const readVersion = deps.readVersion ?? cliVersion;
-  let ver: { command: string; at: number; read: Promise<string | null> } | null = null;
-  let value: string | null = null;
-  /** The command the last finished read was for (`checked`). */
-  let readFor: string | null = null;
-  let updating = false;
-
-  const version = (cfg: Config, force = false): Promise<string | null> => {
-    const command = cfg.kiro.command;
-    if (!cfg.kiro.enabled) {
-      // Forgotten, so turning it back on reads it again before it's offered.
-      ver = null;
-      readFor = null;
-      return Promise.resolve(null);
-    }
-    const now = Date.now();
-    if (force || !ver || ver.command !== command || now - ver.at > VERSION_TTL_MS) {
-      const read = readVersion(command).then((v) => {
-        if (ver?.read === read && (v !== value || readFor !== command)) {
-          value = v;
-          readFor = command;
-          deps.changed();
-        }
-        return v;
-      });
-      ver = { command, at: now, read };
-    }
-    return ver.read;
-  };
-  const status = (cfg: Config): HarnessStatus => {
-    const v = cfg.kiro.enabled && readFor === cfg.kiro.command ? value : null;
-    return {
-      id: 'kiro', enabled: cfg.kiro.enabled, version: v, minVersion: MIN_VERSION, available: !!v && (!MIN_VERSION || versionAtLeast(v, MIN_VERSION)),
-      checked: !cfg.kiro.enabled || readFor === cfg.kiro.command, isDefault: cfg.agents.default === 'kiro', updating,
-    };
-  };
+  const cli = cliState({ id: 'kiro', changed: deps.changed, readVersion: deps.readVersion });
+  const version = cli.version;
   const refreshAgent = (paths: Paths, cfg: Config) => {
     try {
       if (writeAgentkAgent(paths, cfg)) deps.log.info(`wrote Kiro's ${AGENTK_AGENT} agent`);
@@ -171,6 +159,7 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
     deny: (reason) => reason,
     // agentSpawn's stdout goes into the model's context as it is.
     context: (text) => text,
+    mekoTool: kiroMekoTool,
     editedPaths(p) {
       if (!WRITE_TOOLS.includes(p.tool_name ?? '')) return null;
       const path = p.tool_input?.path;
@@ -182,9 +171,10 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
     canResume: (row) => !!kiroConversation(row),
     activityFiles(row) {
       const conv = kiroConversation(row);
-      return conv ? [kiroSessionFile(conv), kiroSessionFile(conv).replace(/\.json$/, '.jsonl')] : [];
+      return conv ? [kiroSessionFile(conv), kiroSessionLog(conv)] : [];
     },
-    // Its finished turns (credits, tokens) and its context fill after the last one, from its session file.
+    // Its finished turns (credits, tokens) and its context fill after the last one, from its session
+    // file, and its Meko calls with their results, from its session log.
     readUsage(db, row) {
       const conv = kiroConversation(row);
       if (!conv) return { changed: false };
@@ -199,25 +189,21 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
         // The context fill from the same read still counts.
         deps.log.warn(`reading Kiro's usage for ${row.id} failed`, errMsg(e));
       }
-      return { changed, contextPercent: turns.at(-1)?.contextPercent };
+      let mekoCalls: UsageRead['mekoCalls'] = [];
+      try {
+        const meko = ingestKiroMekoCalls(db, row.id, kiroSessionLog(conv));
+        changed ||= meko.changed;
+        mekoCalls = meko.mekoCalls;
+      } catch (e) {
+        deps.log.warn(`reading Kiro's Meko calls for ${row.id} failed`, errMsg(e));
+      }
+      return { changed, contextPercent: turns.at(-1)?.contextPercent, mekoCalls };
     },
     ask: kiroAsker,
-    status,
+    status: cli.status,
     version,
-    async update(cfg) {
-      if (updating) throw new HttpError(409, 'Kiro is already being updated.');
-      updating = true;
-      deps.changed();
-      try {
-        await new Promise<void>((done) => {
-          execFile(cfg.kiro.command, ['update', '--non-interactive'], { timeout: UPDATE_TIMEOUT_MS, env: { ...process.env, NO_COLOR: '1' } }, () => done()).stdin?.end();
-        });
-        await version(cfg, true);
-      } finally {
-        updating = false;
-        deps.changed();
-      }
-      return status(cfg);
-    },
+    update: (cfg) => cli.update(cfg, (command) => new Promise<void>((done) => {
+      execFile(command, ['update', '--non-interactive'], { timeout: UPDATE_TIMEOUT_MS, env: { ...process.env, NO_COLOR: '1' } }, () => done()).stdin?.end();
+    })),
   };
 }

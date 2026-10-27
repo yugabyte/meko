@@ -619,11 +619,12 @@ describe('bin wrapper rollback', () => {
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-  // By its old name, as services installed before the rename to AgentK start it.
+  // By its old name, as services installed before the rename to AgentK start it. The home is the
+  // release's own folder, whatever AK_HOME says.
   const runServe = () =>
     execFileSync(join(root, 'app', 'current', 'bin', 'agent-k-local'), ['serve'], {
       encoding: 'utf8',
-      env: { ...process.env, AK_HOME: root },
+      env: { ...process.env, AK_HOME: join(root, 'elsewhere') },
       stdio: ['ignore', 'pipe', 'pipe'],
     }).trim();
 

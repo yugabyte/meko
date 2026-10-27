@@ -1,6 +1,7 @@
-// Package cli is the meko command: start, stop, restart, status, serve, version, token, ui, logs,
-// destroy, install, uninstall, install_extension, uninstall_extension, update and list, and the MCP calls
-// search, add_memory, datapacks, create_datapack, delete_datapack, upload and upload_status.
+// Package cli is the meko command: start, stop, restart, status, serve, version, token, ui,
+// setup_link, cloud_link, logs, destroy, install, uninstall, install_extension, update_extension,
+// uninstall_extension, update and list, and the MCP calls search, add_memory, datapacks,
+// create_datapack, delete_datapack, upload and upload_status.
 package cli
 
 import (
@@ -9,9 +10,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"syscall"
 
 	"github.com/yugabyte/meko/backend/internal/config"
+	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/paths"
 )
 
@@ -42,28 +45,47 @@ Usage:
   meko version   show versions; --json for installers
   meko token     print the token MCP and REST clients send (Authorization: Bearer <token>);
                  --mcp prints the claude mcp add command that registers Meko with Claude Code,
-                 --json the MCP URL, the token and whether a server runs
-  meko ui        open the web UI in the browser, signed in with the client token;
-                 --no-open only prints its link
+                 --json the MCP URL, the token, whether a server runs and the Meko Cloud
+                 link (with its key)
+  meko ui [path] open the web UI in the browser (path /ext/agentk/ opens AgentK's);
+                 --no-open only prints its link. With remote access and no login yet, it
+                 prints a setup link instead
+  meko cloud_link
+                 link Meko Cloud for the extensions (AgentK uses it in place of this Meko): reads
+                 the API key from stdin, or asks for it on a terminal, checks it and saves it;
+                 --url, --web-url and --api-url name another Meko server; --off unlinks
+  meko setup_link
+                 print a one-time link that sets up the web UI's login for remote access, or
+                 replaces it (a lost password: it turns two-step sign-in off and signs every
+                 browser out)
   meko destroy   stop the server and remove the data folder, everything in it, for good;
-                 it asks first, unless --force
+                 it asks first, unless --force. The extensions' data in it (AgentK's home)
+                 goes only when you say so when asked, or with --with-extensions, which
+                 uninstalls the extensions first; --force alone keeps it
 
   meko install   set this meko up: the meko command and a login service (launchd or systemd)
                  that starts it at login and restarts it on failure; --no-service skips the
-                 service
+                 service; --access local|remote sets how browsers reach the web UI ([web]
+                 access: remote listens on every address, over HTTPS, with a login)
   meko uninstall remove the service and the installed releases, keeping your data;
-                 --purge also destroys the data and its secrets (it asks first, unless --force)
+                 --purge also destroys the data and its secrets as destroy does (it asks first,
+                 unless --force; --with-extensions removes the extensions too)
   meko update    install the newest release now (it updates itself under the service);
                  --check only looks
-  meko install_extension agentk
-                 install AgentK, pointed at this Meko, and start and stop it with Meko
-  meko uninstall_extension agentk
+  meko install_extension agentk|presenter
+                 install AgentK or Presenter, pointed at this Meko, and start and stop it with
+                 Meko (its command, agentk or meko_presenter, already on PATH is used as it is)
+  meko update_extension presenter
+                 install Presenter's newest release now and restart it (one that fails to start
+                 is rolled back); --check only looks. AgentK updates itself
+  meko uninstall_extension agentk|presenter
                  stop starting and stopping it with Meko (it stays installed)
 
   meko search "<question>"       search memories, the knowledge base and past conversations
                                  (context_search)
   meko add_memory "<text>"       save a memory, word for word (memory_add); - or no text reads stdin
-  meko datapacks                 list the datapacks
+  meko datapacks                 list the datapacks; --cloud adds the linked Meko Cloud's after
+                                 them, each marked local or cloud (and shared)
   meko create_datapack <name>    create a datapack (datapack_create)
   meko delete_datapack <name|id>
                                  delete a datapack and everything in it, for good (datapack_delete);
@@ -84,8 +106,9 @@ Usage:
                  --limit N; all seven take --json for the tools' raw replies
 
 Every command takes --data-dir (default ~/.meko, or MEKO_HOME).
-start, restart and serve also take --port (default 7778) and --log-level (debug, info, warn, error);
-under the service, set them in config.toml instead.
+start, restart and serve also take --port (the API listener's, default 7778) and --log-level (debug,
+info, warn, error); under the service, set them in config.toml instead. The web UI's port and access
+are [web] port (default 7777) and access in config.toml.
 `
 
 // stdin is what add_memory, destroy and uninstall --purge read; tests replace it.
@@ -93,9 +116,10 @@ var stdin io.Reader = os.Stdin
 
 // cmdFlags are the flags of the commands that aren't MCP calls.
 type cmdFlags struct {
-	keepExtensions, noService, purge, check, follow, force, noOpen bool
-	lines                                                          int
-	server, memoryEngine, service                                  bool
+	keepExtensions, noService, purge, check, follow, force, noOpen, withExtensions bool
+	lines                                                                          int
+	server, memoryEngine, service                                                  bool
+	access                                                                         string
 }
 
 // Run runs the command in args (without the program name) and returns the exit code.
@@ -112,6 +136,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	var detached bool
 	var t toolFlags
 	var c cmdFlags
+	var cl cloudFlags
 	switch cmd {
 	case "search", "add_memory", "datapacks", "create_datapack", "delete_datapack", "upload", "upload_status":
 		fs.BoolVar(&t.json, "json", false, "print the tool's raw reply")
@@ -119,18 +144,28 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&t.json, "json", false, "print raw JSON")
 	case "token":
 		fs.BoolVar(&t.mcp, "mcp", false, "print the claude mcp add command for Meko")
-		fs.BoolVar(&t.json, "json", false, "print the MCP URL, the token and whether a server runs, as JSON")
+		fs.BoolVar(&t.json, "json", false,
+			"print the MCP URL, the token, whether a server runs and the Meko Cloud link, as JSON")
 	case "stop":
 		fs.BoolVar(&c.keepExtensions, "keep-extensions", false, "leave the extensions running")
 	case "install":
 		fs.BoolVar(&c.noService, "no-service", false, "don't set up the login service")
+		fs.StringVar(&c.access, "access", "", "how browsers reach the web UI: local or remote")
 	case "uninstall":
 		fs.BoolVar(&c.purge, "purge", false, "also destroy the data folder and its secrets")
-		fs.BoolVar(&c.force, "force", false, "with --purge, destroy without asking")
+		fs.BoolVar(&c.force, "force", false, "with --purge, destroy without asking (keeping the extensions' data)")
+		fs.BoolVar(&c.withExtensions, "with-extensions", false,
+			"with --purge, uninstall the extensions and remove their data too")
 	case "destroy":
-		fs.BoolVar(&c.force, "force", false, "destroy without asking")
-	case "update":
+		fs.BoolVar(&c.force, "force", false, "destroy without asking (keeping the extensions' data)")
+		fs.BoolVar(&c.withExtensions, "with-extensions", false, "uninstall the extensions and remove their data too")
+	case "update", "update_extension":
 		fs.BoolVar(&c.check, "check", false, "only look for an update")
+	case "cloud_link":
+		fs.StringVar(&cl.url, "url", "", "the MCP server's URL (default Meko Cloud's)")
+		fs.StringVar(&cl.webURL, "web-url", "", "its web app's URL (default: worked out from --url)")
+		fs.StringVar(&cl.apiURL, "api-url", "", "its REST API's URL (default: the web app's plus /api/v1)")
+		fs.BoolVar(&cl.off, "off", false, "unlink: the extensions use this Meko")
 	}
 	if cmd == "logs" {
 		fs.BoolVar(&c.follow, "f", false, "follow the logs")
@@ -149,6 +184,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if cmd == "delete_datapack" {
 		fs.BoolVar(&t.force, "force", false, "delete without asking")
 	}
+	if cmd == "datapacks" {
+		fs.BoolVar(&t.cloud, "cloud", false, "also list the linked Meko Cloud's datapacks")
+	}
 	if cmd == "search" {
 		fs.StringVar(&t.source, "source", "auto", "auto, memory, knowledge_base or conversation")
 		fs.IntVar(&t.limit, "limit", 8, "the most results per source")
@@ -161,7 +199,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&c.noOpen, "no-open", false, "print the link without opening the browser")
 	}
 	if cmd == "start" || cmd == "restart" || cmd == "serve" {
-		fs.IntVar(&o.Port, "port", 0, "the port on 127.0.0.1 (default 7778)")
+		fs.IntVar(&o.Port, "port", 0, "the API listener's port on 127.0.0.1 (default 7778)")
 		fs.StringVar(&o.LogLevel, "log-level", "", "debug, info, warn or error (default info)")
 	}
 	if cmd == "serve" {
@@ -170,9 +208,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&detached, "detached", false, "log only to the log file")
 	}
 	switch cmd {
-	case "start", "stop", "restart", "status", "serve", "version", "token", "ui", "logs", "destroy", "install",
-		"uninstall", "install_extension", "uninstall_extension", "update", "search", "add_memory", "datapacks",
-		"create_datapack", "delete_datapack", "upload", "upload_status", "list", "export":
+	case "start", "stop", "restart", "status", "serve", "version", "token", "ui", "setup_link", "cloud_link", "logs",
+		"destroy", "install", "uninstall", "install_extension", "update_extension", "uninstall_extension", "update",
+		"search", "add_memory", "datapacks", "create_datapack", "delete_datapack", "upload", "upload_status", "list",
+		"export":
 	default:
 		fmt.Fprintf(stderr, "meko: unknown command %q\n\n%s", cmd, usage)
 		return exitUsage
@@ -183,7 +222,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	// These take one argument, and upload any number; their flags may follow.
 	switch cmd {
 	case "search", "add_memory", "create_datapack", "delete_datapack", "upload_status", "install_extension",
-		"uninstall_extension", "list", "export":
+		"update_extension", "uninstall_extension", "list", "export", "ui":
 		if fs.NArg() > 0 {
 			t.text = fs.Arg(0)
 			if err := fs.Parse(fs.Args()[1:]); err != nil {
@@ -202,8 +241,14 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "meko %s: unexpected argument %q\n", cmd, fs.Arg(0))
 		return exitUsage
 	}
-	if (cmd == "install_extension" || cmd == "uninstall_extension") && t.text == "" {
-		fmt.Fprintf(stderr, "meko %s: name the extension (agentk)\n", cmd)
+	cl.set = map[string]bool{}
+	fs.Visit(func(fl *flag.Flag) { cl.set[fl.Name] = true })
+	if cl.off && (cl.set["url"] || cl.set["web-url"] || cl.set["api-url"]) {
+		fmt.Fprintln(stderr, "meko cloud_link: --off takes no URLs")
+		return exitUsage
+	}
+	if (cmd == "install_extension" || cmd == "update_extension" || cmd == "uninstall_extension") && t.text == "" {
+		fmt.Fprintf(stderr, "meko %s: name the extension (%s)\n", cmd, strings.Join(extensions.KnownNames(), ", "))
 		return exitUsage
 	}
 	if cmd == "version" {
@@ -228,15 +273,21 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runLogs(l, logsOptions{follow: c.follow, lines: c.lines, server: c.server, memoryEngine: c.memoryEngine,
 			service: c.service, json: t.json}, stdout)
 	case "ui":
-		return runUI(l, !c.noOpen, stdout, stderr)
+		return runUI(l, t.text, !c.noOpen, stdout, stderr)
+	case "setup_link":
+		return runSetupLink(l, stdout, stderr)
+	case "cloud_link":
+		return runCloudLink(l, cl, stdin, stdout, stderr)
 	case "destroy":
-		return runDestroy(l, c.force, stdin, stdout, stderr)
+		return runDestroy(l, destroyOptions{force: c.force, withExtensions: c.withExtensions}, stdin, stdout, stderr)
 	case "install":
-		return runInstall(l, c.noService, stdout, stderr)
+		return runInstall(l, c.noService, c.access, stdout, stderr)
 	case "uninstall":
-		return runUninstall(l, c.purge, c.force, stdout, stderr)
+		return runUninstall(l, c.purge, destroyOptions{force: c.force, withExtensions: c.withExtensions}, stdout, stderr)
 	case "install_extension":
 		return runInstallExtension(l, t.text, stdout, stderr)
+	case "update_extension":
+		return runUpdateExtension(l, t.text, c.check, stdout, stderr)
 	case "uninstall_extension":
 		return runUninstallExtension(l, t.text, stdout, stderr)
 	case "update":
@@ -260,14 +311,15 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		logOut = nil
 	}
 	err = Serve(SignalContext(), ServeOptions{Layout: l, Config: cfg, Stderr: logOut})
-	var rb *rollbackError
+	var ex *execError
 	var le *lockedError
 	switch {
-	case errors.As(err, &rb):
-		// The new version failed too often: serve has put the old one back and run it in our place.
-		// G204: the previous release's own binary.
-		err = syscall.Exec(rb.exe, append([]string{rb.exe}, args...), os.Environ()) //nolint:gosec
-		return fail(stderr, fmt.Errorf("can't run the previous version %s: %w", rb.exe, err))
+	case errors.As(err, &ex):
+		// Serve has stopped for another version to run in our place: the previous one, put back after
+		// the new one failed too often, or the new one, with no service to start it.
+		// G204: a release's own binary.
+		err = syscall.Exec(ex.exe, append([]string{ex.exe}, args...), os.Environ()) //nolint:gosec
+		return fail(stderr, fmt.Errorf("can't run %s (%s): %w", ex.exe, ex.why, err))
 	case errors.As(err, &le):
 		fmt.Fprintf(stderr, "meko: %v\n", err)
 		return exitLocked

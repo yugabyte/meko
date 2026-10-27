@@ -1,9 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../../src/server/server.js';
-import { issueSetupToken } from '../../src/server/auth.js';
 import { MekoError } from '../../src/server/meko.js';
 import { run } from '../../src/server/db.js';
 import { gitRepo, makeEnv, pinFiles, pinnedDatapack, waitFor, type TestEnv } from '../helpers.js';
@@ -18,11 +17,24 @@ describe('projects without a datapack, and without Meko', () => {
     await env.cleanup();
   });
 
+  /** No key, and (as in every test env) no Meko running on this computer: Meko isn't set up. */
   const turnMekoOff = async () => {
     env.core.updateConfig((c) => {
-      c.meko.enabled = false;
+      c.meko.apiKey = '';
     });
   };
+
+  it('says no Meko is installed here, with a key too, and pushes the change once `meko` is found', async () => {
+    // The test env has a key, and no `meko` on this computer.
+    expect(env.core.mekoStatus.configured).toBe(true);
+    expect(env.core.state().meko.local).toBe('none');
+    const onChange = vi.fn();
+    env.core.on('change', onChange);
+    env.local.state = 'stopped';
+    await env.core.refreshMeko();
+    expect(env.core.state().meko.local).toBe('stopped');
+    expect(onChange).toHaveBeenCalled();
+  });
 
   it('creates a project with no datapack without asking Meko, and runs sessions in it', async () => {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Plain', datapack: { mode: 'none' } });
@@ -34,7 +46,7 @@ describe('projects without a datapack, and without Meko', () => {
     expect(await env.core.projects.search(p.id, 'anything')).toEqual([]);
   });
 
-  it('turns Meko off: sessions get no datapack, and datapacks are refused with a reason', async () => {
+  it('with no Meko, sessions get no datapack, and datapacks are refused with a reason', async () => {
     const withDp = await env.core.projects.create({ repoPath: env.repo, name: 'Has', datapack: { mode: 'create', name: 'adlc/proj/demo-repo/has' } });
     await turnMekoOff();
     expect(env.core.mekoStatus).toMatchObject({ configured: false });
@@ -105,20 +117,16 @@ describe('projects without a datapack, and without Meko', () => {
 
   describe('over HTTP', () => {
     let app: FastifyInstance;
-    let cookie: string;
     beforeEach(async () => {
-      app = await buildServer(env.core, { tls: null, webDir: null, updater: null });
-      const token = issueSetupToken(env.core.db);
-      const res = await app.inject({ method: 'POST', url: '/api/auth/setup', payload: { token, username: 'me', password: 'correct horse battery' } });
-      cookie = String(res.headers['set-cookie']).split(';')[0];
+      app = await buildServer(env.core, { webDir: null, updater: null });
     });
     afterEach(async () => {
       await app.close();
     });
     const call = (method: 'GET' | 'POST' | 'PUT', url: string, payload?: unknown) =>
-      app.inject({ method, url, headers: { cookie }, ...(payload !== undefined ? { payload: payload as object } : {}) });
+      app.inject({ method, url, ...(payload !== undefined ? { payload: payload as object } : {}) });
 
-    it('answers with an error code the dialog can act on, and empty lists while Meko is off', async () => {
+    it("answers with an error code the dialog can act on, and empty lists while there's no Meko", async () => {
       (env.meko as { createDatapack: unknown }).createDatapack = async () => {
         throw new MekoError('STANDARD_TIER_DATAPACK_LIMIT: Upgrade to Pro to create a new datapack.');
       };
@@ -126,27 +134,56 @@ describe('projects without a datapack, and without Meko', () => {
       expect(res.statusCode).toBe(402);
       expect(res.json()).toMatchObject({ code: 'DATAPACK_LIMIT' });
 
-      expect((await call('PUT', '/api/settings', { meko: { enabled: false } })).json().meko.enabled).toBe(false);
+      await turnMekoOff();
       const state = (await call('GET', '/api/state')).json();
       expect(state.meko).toMatchObject({ configured: false });
       expect((await call('POST', '/api/invites/check')).json()).toEqual({ datapacks: [], invites: [], closed: [] });
       expect((await call('GET', '/api/meko/datapacks')).json()).toEqual([]);
 
-      // Back on: the key is checked first.
-      env.mekoTools.state.checkError = 'invalid token';
-      expect((await call('PUT', '/api/settings', { meko: { enabled: true } })).statusCode).toBe(400);
-      expect(env.core.config.meko.enabled).toBe(false);
-      env.mekoTools.state.checkError = null;
-      expect((await call('PUT', '/api/settings', { meko: { enabled: true } })).json().meko.enabled).toBe(true);
-      expect(env.core.mekoStatus.configured).toBe(true);
+      // On again once Meko Cloud is linked in Meko: opening Settings reads it.
+      env.local.cloud = { set: true, url: 'https://mcp.mekodata.ai/mcp', apiKey: 'mko_tkn_brand_new_key', webUrl: '', apiUrl: '' };
+      await call('GET', '/api/settings');
+      expect(env.core.mekoStatus).toMatchObject({ configured: true, source: 'meko', url: 'https://mcp.mekodata.ai/mcp' });
     });
 
-    it('turns Meko on with a new key', async () => {
-      await turnMekoOff();
-      const res = await call('PUT', '/api/settings', { meko: { apiKey: 'mko_tkn_brand_new_key' } });
-      expect(res.statusCode).toBe(200);
-      expect(res.json().meko).toMatchObject({ enabled: true, keyHint: '_key' });
+    it('follows the Meko on this computer as it starts, moves and stops, and drops a stored copy of its token', async () => {
+      const local = { url: 'http://127.0.0.1:7778/mcp', token: 'local-token-1234' };
+      // An older install stored the local Meko's URL and token.
+      env.core.updateConfig((c) => {
+        c.meko.url = local.url;
+        c.meko.apiKey = local.token;
+      });
+      Object.assign(env.local, { state: 'running', meko: local });
+      const resets = () => env.meko.calls.filter((c) => c.name === 'reset').length;
+      const r0 = resets();
+      await call('GET', '/api/settings');
+      expect(env.core.mekoStatus).toMatchObject({ source: 'local', url: local.url });
+      expect(env.core.config.meko).toMatchObject({ url: '', apiKey: '' });
+      expect(resets()).toBe(r0);
       expect(env.core.mekoStatus.configured).toBe(true);
+
+      // Restarted on another port: reconnects there, keeping the invites and shares it knows (the same account).
+      const forget = vi.spyOn(env.core.invites, 'forgetAccount');
+      env.local.meko = { ...local, url: 'http://127.0.0.1:7790/mcp' };
+      await call('GET', '/api/settings');
+      expect(env.core.mekoStatus.url).toBe('http://127.0.0.1:7790/mcp');
+      expect(resets()).toBe(r0 + 1);
+      expect(forget).not.toHaveBeenCalled();
+
+      // Stopped: no Meko, and sessions still start.
+      Object.assign(env.local, { state: 'stopped', meko: null });
+      await call('GET', '/api/settings');
+      expect(env.core.state().meko).toMatchObject({ source: null, local: 'stopped' });
+      expect(env.core.mekoStatus.configured).toBe(false);
+      const p = await env.core.projects.create({ repoPath: env.repo, name: 'Plain', datapack: { mode: 'none' } });
+      const s = await env.core.sessions.create(p.id, { name: 'Work', kind: 'quick' });
+      await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'the session to start');
+
+      // Started again: the same account, so neither the stop nor the start forgot its invites.
+      Object.assign(env.local, { state: 'running', meko: local });
+      await call('GET', '/api/settings');
+      expect(env.core.mekoStatus).toMatchObject({ source: 'local', url: local.url });
+      expect(forget).not.toHaveBeenCalled();
     });
   });
 });

@@ -23,7 +23,7 @@ export interface MekoDatapackRow extends MekoDatapack {
 export const AGENTK_AGENT_ID = 'agent-k-local';
 
 /** The client part of a session's agent id, by its harness (Meko's `<client>:<project>` convention). */
-const AGENT_ID_CLIENTS: Record<HarnessId, string> = { claude: 'claude_code', kiro: 'kiro' };
+const AGENT_ID_CLIENTS: Record<HarnessId, string> = { claude: 'claude_code', opencode: 'opencode', kiro: 'kiro' };
 
 /**
  * Agent id of a session's Meko calls, capture and datapack pin: its harness's client name and its
@@ -161,6 +161,12 @@ export class MekoClient {
   /** Told of every call with what was sent and what came back (the Meko call log); never fails the call either. */
   onTrace: ((t: MekoTrace) => void) | null = null;
 
+  /**
+   * Told when connecting fails, before the retry: Core reads the Meko on this computer again then,
+   * as it may have restarted on another port or with a new token. Never fails the call.
+   */
+  onConnectFail: (() => Promise<void>) | null = null;
+
   constructor(private creds: () => MekoCreds, private version = '0.0.0') {}
 
   private async connect(): Promise<Client> {
@@ -236,6 +242,7 @@ export class MekoClient {
         if (isTimeout(e)) throw e;
         const retry = attempt === 0 && (idempotent || c === null || notDelivered(e));
         if (!retry) throw e instanceof Error ? e : new MekoError(String(e));
+        if (c === null) await this.onConnectFail?.().catch(() => undefined);
       }
     }
   }
@@ -329,7 +336,7 @@ export class MekoClient {
     return id;
   }
 
-  /** Cheap authenticated round trip to Meko: checks a URL and key (the installer, the Meko tab). */
+  /** Cheap authenticated round trip to Meko: checks a URL and key (the installer, under a Meko too old to keep the link). */
   async check(): Promise<void> {
     await this.request(true, (c) => c.ping({ timeout: CHECK_TIMEOUT_MS }));
   }

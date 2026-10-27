@@ -15,7 +15,7 @@ since "Opened PR #7" says it.
 
 There are three **gates** that only you can pass: approving the design, opening the PR, and
 merging. Everything between the gates runs on its own. A task started at Code has only the last two
-gates. Explore (step 0) comes before them and is optional: Claude gets the `explore` prompt
+gates, and with [Run to merge](#run-to-merge) AgentK passes those two by itself. Explore (step 0) comes before them and is optional: Claude gets the `explore` prompt
 (investigate, build POCs, run experiments, push experimental branches if useful), edits aren't
 guarded, and review comments from the Changes panel still reach Claude. Its gate, **Move on…**,
 opens the move dialog at Design, and you can also click Code or PR & Review in the stage bar; or
@@ -49,7 +49,7 @@ stateDiagram-v2
 | Stage | Claude | AgentK | Moves on when |
 |---|---|---|---|
 | 0 · Explore (optional) | Investigates the task: reads the code, answers questions, builds POCs and runs experiments, and may commit and push experimental branches. | Guards nothing. Review comments from the Changes panel reach Claude as in Code. | You click **Move on…** (or a stage in the stage bar) and pick Design, Code or PR & Review. |
-| 1 · Design | Starts with your task (not in plan mode), reads the code, and designs the change in one place: a complex design is published as a native Artifact with diagrams; a simple one is written as markdown to `~/.agent-k-local/designs/<session>/design.md`. It doesn't touch the repo. | Blocks file edits inside the worktree and main checkout (a `PreToolUse` guard hook). Keeps the published Artifact's page and claude.ai link (from the Artifact tool's `PostToolUse` hook), or reads the markdown file when the turn ends. Saves the design to the project's dedicated datapack as `design-<slug>.md` (or `.html` for an Artifact's page); Meko can't replace a file, so each later changed version is saved as `design-<slug>-v2.md`, `-v3`, and so on, and an unchanged one isn't sent again. A version counts only once it's sent: one that couldn't be (Meko off or failing, no datapack yet) is sent at the next save, Design turn end or approval. Reads the open questions AgentK lists beside the design (see Design panel), where you answer them, for a revision or with the approval. Marks the session *Design ready*, and opens the design panel by itself. | You click **Approve design** (**Answer & approve** with open questions, which takes you to them first), and the server sends the Code prompt ("The design is approved…"), after your answers, with two lines added in code (so a repo's own `approved.md` gets them): bring the design's *Key Design Decisions* section up to date, adding it near the top, right after the goal, if the design has none (each question and each decision AgentK made itself, who decided it, the answer, what was decided and why, and the Meko items it rests on) before writing any code, and keep the design current while working (see [The design after approval](#the-design-after-approval)). With AgentK's mod you can approve mid-turn: the approval goes when the turn ends, unless the turn changed the design. A task started at Code skips this stage. Sessions created before this change still design in plan mode and are approved through Claude's plan dialog. |
+| 1 · Design | Starts with your task (not in plan mode), reads the code, and designs the change in one place: a complex design is published as a native Artifact with diagrams; a simple one is written as markdown to `<home>/designs/<session>/design.md`. It doesn't touch the repo. | Blocks file edits inside the worktree and main checkout (a `PreToolUse` guard hook). Keeps the published Artifact's page and claude.ai link (from the Artifact tool's `PostToolUse` hook), or reads the markdown file when the turn ends. Saves the design to the project's dedicated datapack as `design-<slug>.md` (or `.html` for an Artifact's page); Meko can't replace a file, so each later changed version is saved as `design-<slug>-v2.md`, `-v3`, and so on, and an unchanged one isn't sent again. A version counts only once it's sent: one that couldn't be (Meko off or failing, no datapack yet) is sent at the next save, Design turn end or approval. Reads the open questions AgentK lists beside the design (see Design panel), where you answer them, for a revision or with the approval. Marks the session *Design ready*, and opens the design panel by itself. | You click **Approve design** (**Answer & approve** with open questions, which takes you to them first), and the server sends the Code prompt ("The design is approved…"), after your answers, with two lines added in code (so a repo's own `approved.md` gets them): bring the design's *Key Design Decisions* section up to date, adding it near the top, right after the goal, if the design has none (each question and each decision AgentK made itself, who decided it, the answer, what was decided and why, and the Meko items it rests on) before writing any code, and keep the design current while working (see [The design after approval](#the-design-after-approval)). With AgentK's mod you can approve mid-turn: the approval goes when the turn ends, unless the turn changed the design. A task started at Code skips this stage. Sessions created before this change still design in plan mode and are approved through Claude's plan dialog. |
 | 2 · Code | Implements the design and runs the repo's tests and checks, keeping the design current. | Saves each change to the design as a new version in Meko (see [The design after approval](#the-design-after-approval)). Shows the diff size against the base branch in the footer (files, and lines added and removed); clicking it opens the Changes panel with a diff per file, where you can leave review comments and send them to Claude. Its commit menu shows one of the branch's commits alone instead, without comments. | You click **Open PR**. Mid-turn it reads **Open PR after this turn**, and the PR prompt goes when the turn ends (see [Queued gates](#queued-gates)). |
 | 3 · PR & Review: opening the PR (`pr`) | Commits with the repo's own commit conventions, pushes the branch, and runs `gh pr create` with a title that follows those conventions (if the repo squash-merges, the title becomes the commit subject) and a summary taken from the design. With a dedicated datapack (and Meko on), the description ends with `<Meko host>://<datapack id>;<datapack name>`, `meko_design:<name>;<hash>` (when the task has a design in Meko) and `meko_conversation_id:<id>` lines, for the session's Meko conversation. | Records the PR number and URL and links them next to the stages. | Automatically, once the PR exists. |
 | 3 · PR & Review: review (`review`) | When a review arrives, follows the `review` prompt (AgentK: verifies each finding, fixes the valid ones, pushes, replies on every thread and reacts +1/−1) or the `review-people` prompt, or, for reviews held for you that you send, `review-held`. When the PR conflicts with its base, follows the `conflicts` prompt: merges the base into the branch (no rebase or force-push), resolves the conflicts, runs the checks and pushes, or aborts the merge and says why when a conflict needs your decision. When CI fails, follows the `ci` prompt: reads the failing jobs' logs, then fixes and pushes, or reruns the jobs once if the failure isn't caused by the change. | Looks for the PR every 15 seconds in the PR stage (only a PR opened after the session was created counts, since branch names can be reused, and only one whose head is where the branch is pushed, never a fork's branch of the same name; a session started on an existing branch also takes that branch's older open PR, and one started on a PR, or whose branch's PR was linked as it started, takes that PR by number while it's open), and checks reviews, CI checks and approvals every 45 seconds and at every turn end. This runs on the server, so waiting costs no tokens. New reviews are sent to Claude, or held for you, according to the project's reviewer mode (below). Only the newest run of each check on the head commit counts. When CI fails on the PR's head, you get a notification and Claude gets the `ci` prompt. That happens once per head commit, after every check has finished (or 10 minutes after the failure appeared), and not while the branch has unpushed commits. After three failing heads in a row, you're asked to take over, and a green run starts the count again. When GitHub reports the PR as conflicting with its base (`mergeable` CONFLICTING; UNKNOWN, while GitHub works it out, doesn't count), you get a notification and Claude gets the `conflicts` prompt, the same way: once per head commit, not while the branch has unpushed commits, and after three conflicting heads in a row it's yours; a PR that merges cleanly again starts the count again, so a later conflict on the same head (the base moved again) gets a prompt too. **Resolve merge conflicts on PRs** in Settings → General (`[pr] resolve_conflicts` in `config.toml`) turns this off, leaving conflicts as a merge blocker for you; a conflicts prompt still queued then is never sent. If Claude is mid-turn, waiting on you, or exited, prompts are queued in `state.db` (so they survive restarts) and go out one at a time when Claude is back at its prompt: reviews, then merge conflicts, then CI. A queued CI prompt is dropped if the head moves or CI stops failing, and a queued conflicts prompt if the head moves, the PR merges cleanly, or the setting is turned off. The findings count as addressed only when the turn that got the prompt ends. | You click **Merge & Close**. It is enabled once CI is green, no review findings are left unaddressed (and, once AgentK is active on the PR, its review is in), no review is held for you, the required approvals are in, every local commit is pushed to the PR, the worktree has no uncommitted or untracked files, and Claude is neither working nor waiting on you in the terminal. When the only blockers left clear by themselves (AgentK working, CI running, AgentK's review to come), it reads **Merge when ready** and queues the merge (see [Queued gates](#queued-gates)). |
@@ -118,11 +118,12 @@ stateDiagram-v2
 - **Stage prompts.** Each stage's instructions to Claude come from a template. The defaults are
   built in (`src/server/prompts.ts`), and a repo can override any of them (a stage, or `explore`, `approved`,
   `design-answers`, `approved-answers`, `review`, `review-people`, `review-held`, `conflicts`, `ci`, `continue`, `comments`, `moved`, `move-design`, `move-code`, `instructions`, `attached`,
-  `review-pr`, `review-pr-update`, `review-pr-design`, `review-pr-comments`, `learn`) with `.agent-k/stages/<name>.md`.
+  `review-pr`, `review-pr-update`, `review-pr-design`, `review-pr-comments`, `learn`, `seed`) with `.agent-k/stages/<name>.md`.
   A session on a public repo's PR head (a review, or a task on someone's PR) doesn't use them: the PR's author could have
   written them (see [Code from public repos](security.md#code-from-public-repos)).
   Lines AgentK adds in code (the Meko recall steps, the saving rule appended to `explore` and
-  `learn`, and the design's lines: see [The design after approval](#the-design-after-approval) and
+  `learn`, the seeding rule appended to `seed` (a learn session's, see
+  [Learn sessions](recall-and-learn.md#learn-sessions)), and the design's lines: see [The design after approval](#the-design-after-approval) and
   [Reviewing a PR](review-pr.md)) are added to a repo's own prompt too. This lets a team
   change how designs are written or PRs described without changing AgentK. Review comments
   from the Changes panel go out through the `comments` template (`{{count}}` and `{{comments}}`),
@@ -188,6 +189,63 @@ sent, withdrawn or dropped.
   Merge & Close does, and you're notified; a blocker of the second kind drops it, mid-turn or not, and you're
   notified to press Merge & Close again once that's fixed. A move out of Review, archive or a merge
   on GitHub clears it too. While the merge is being requested, Cancel is refused.
+
+## Run to merge
+
+**Run to merge** (`sessions.auto_run`, `Session.autoRun`; off by default) has AgentK pass Open PR
+and Merge & Close by itself. Approving the design stays yours. It's a box beside each gate: in the
+New session dialog for a start at Code (`CreateSessionRequest.autoRun`), beside **Approve design**
+(stage bar and design panel), **Open PR** and **Merge & Close**, all saving through
+`PATCH /api/sessions/:id` (`UpdateSessionRequest.autoRun`, `Lifecycle.setAutoRun`). The session
+tools' `start_sessions` and Ask AgentK's `start` and `link` actions take it too, only for a start at
+Code ([session tools](tools.md)); no tool turns it on for a running session.
+
+While it's on, the session's stage carries its mark, a double chevron (`RunToMergeMark` in
+`common.tsx`), wherever the stage is shown: the chip in the rail's rows, the tabs and the Starting
+view (`StageChip`), the current stage in the stage bar (and the phone's stage name), and the footer
+and ⋯ sheet. Tooltips and the command palette's session hints say it in words (`Code · Run to
+merge`, `stageWords`). The server leaves `auto_run` set after the merge, so the web asks
+`runsToMerge()`, which leaves out a session at Done.
+
+It runs on the [queued gates](#queued-gates):
+
+- **Design.** On, it waits for the approval; the approval prompt then carries `autoRunLine()`.
+- **Code.** Each turn that starts in Code (`UserPromptSubmit`, `Lifecycle.onTurnStart`) queues Open
+  PR when nothing is queued, so the PR prompt goes when that turn ends (`takeQueuedPr`). A relaunch,
+  which drops a queued Open PR, is armed again by the next turn. Checked between turns, it queues
+  Open PR and sends it at once. The `code` and `approved` prompts carry `autoRunLine()` (added in
+  code, so a repo's own prompts get it too): finish the work and run the checks in this turn, and ask
+  the user with the question tool rather than ending the turn on a question, since AgentK can't tell
+  such a turn from a finished one. The pill reads *✓ Run to merge: opens the PR when this turn ends*.
+- **PR & Review.** Once the PR is adopted (`adoptPr`), or the box is checked there, the merge is
+  queued (`armMerge`; `pollAll` queues it again after a restart cut it short). Unlike Merge when
+  ready, a blocker that doesn't clear by itself doesn't drop it (`takeQueuedMerge`): AgentK works on
+  failing CI and merge conflicts as it always does (their watchers say when they hand over), and for
+  every other one (a held review, changes requested, missing approvals, a branch behind its base,
+  unpushed work between turns) you're notified once per new set (`autoRunWaits`; a question in the
+  terminal had its own Needs you notification), and while such a blocker is there the PR is looked
+  at every 45 seconds rather than at every 15-second pass (approvals can take days). It merges at the first look that finds
+  nothing blocking; if GitHub refuses the merge (a ruleset, say, which the blockers don't show), Run to
+  merge stops, so the merge isn't asked for again at every pass. After AgentK's findings
+  are addressed it doesn't ask for another review round, as Merge when ready doesn't. The pill reads
+  *✓ Run to merge: waiting on …*. The gates it passes are logged as AgentK's (`moved_by = 'auto'`).
+- **Notifications.** It notifies only when it's done (*Merged*, once the PR merges, here or on
+  GitHub: `autoRunDone`) or needs you: Needs you, a held review, *Run to merge waits on you*, the CI
+  and conflict watchers handing over after three tries, a refused merge, Claude exiting. Progress
+  AgentK handles itself (a review arrived and was sent to AgentK, AgentK's clean review, CI failed,
+  merge conflicts, *Merging*) goes to the activity log only (`notifyProgress`); once Run to merge
+  stops, it notifies again.
+
+It stops, saying why in the activity log (`stopAutoRun`), when you uncheck it (refused while the
+merge is being requested), press **Cancel** on the gate it queued, interrupt a turn in Code or PR &
+Review, or move the session, by hand or by a tool (a move to PR & Review that's refused leaves it on).
+An interrupt counts only where the harness reports one: Claude Code with AgentK's mod (`/mod/turn`)
+and OpenCode (its plugin marks `session.execution.interrupted`). Kiro, and Claude Code without the
+mod, report none, so there Esc doesn't stop it, and a queued Open PR goes when the next turn ends:
+uncheck the box instead. Stopping drops only the gate Run to merge queued (`sessions.queued_auto`):
+an Open PR or merge you pressed yourself stays queued, as it would have without it, and a press on
+the gate Run to merge queued makes it yours. Claude exiting doesn't stop it: the next turn arms
+Open PR again. It's refused (409) in Explore, Merge & Close, a Review a PR and a design in plan mode.
 
 ## The design after approval
 

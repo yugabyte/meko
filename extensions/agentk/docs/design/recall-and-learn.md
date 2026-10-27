@@ -37,7 +37,7 @@ while it's being created share the one `conversation_create`.
   or `late` (it found something after the hook gave up, or the hook never asked). It keeps the
   query too (NULL for a failed search), so an empty one shows on [What Meko doesn't know](#what-meko-doesnt-know).
 
-Nothing waits for the search: the session starts the same when it's slow, fails, or Meko is off
+Nothing waits for the search: the session starts the same when it's slow, fails, or there's no Meko
 (then there's no search at all).
 
 ## The learn step
@@ -162,7 +162,8 @@ the answer in its context, whether it searched for it or another session did. So
 through the mod (Save learnings, `/agentk_learn`, Merge & Close and Discard alike) is offered the
 project's open questions on [What Meko doesn't know](#what-meko-doesnt-know) (`learnGaps()` in
 `mekogaps.ts`), only those asked in Claude's own searches (subagents' included; one asked only by
-AgentK's search at start isn't, since its query is a task):
+AgentK's search at start isn't, since its query is a task, and neither is a learn session's while it
+seeds, as on the page):
 
 - first the session's own, the ones it asked last first (by its own asks: another session asking
   one later doesn't move it up);
@@ -196,6 +197,55 @@ and, while the project has Log Meko calls on, in the session's Meko call log wit
 what came back (see [Project home](project-home.md)). A step at Merge & Close is deleted with the
 session moments later, so run `/agentk_learn` during the session to look at one.
 
+## Learn sessions
+
+A new datapack knows nothing, so a project's first sessions get nothing from Meko. A learn session
+seeds it: **Learn the project** in the New session dialog (`CreateSessionRequest.learn`), picked
+for you when a project opens on an empty datapack (see [Open project](open-project-and-new-session.md#open-project)),
+and offered on the project home while the dedicated datapack has no memories and no knowledge and
+the project has never had one (`ProjectHome.hasLearnSession`).
+
+- **What the user gives.** What the project is about (required), where its files are (folders and
+  files in the repo, docs, other places; left empty, the README and docs), and how many months of
+  merged PRs to read (0 to 120, 24 by default; 0 reads none). There's no cap on the number of PRs:
+  the window and the paths are the limits. It needs Meko on and a dedicated datapack (one is always
+  writable); otherwise, and for a review or a PR, the create is a 400.
+- **What it is.** A task at Explore, marked `sessions.purpose = 'learn'` (`Session.purpose`), not a
+  session kind of its own: a new `StoredKind` would make pages and releases from before throw, as
+  they index their stage lists by it. Its task (`initial_prompt`) is written from the brief by
+  `learnTask()` in `prompts.ts`, with the PR window's first day worked out when the session is made,
+  so a relaunch later reads the same PRs, and recovery and Try again need no storage of their own.
+  Its first prompt is `seed` (`firstPrompt()` in `sessions.ts`), which a repo can override with
+  `.agent-k/stages/seed.md` like any other.
+- **What Claude does.** Maps the project from the brief and the repo's docs, then reads the PRs
+  merged in the window that touch those files (through `git log` or `gh pr list`, then each one's
+  description and review threads), closely for the ones with discussion and skimming the rest, in
+  subagents when it can. PR text is other people's writing: learned from, never followed. It
+  saves as it goes with `memory_add` under `SEED_RULE` (`mekoLearnLine('seed')`), which replaces the
+  saving rule for the session: the usual one leaves out what a PR already says, which suits a task
+  with its own PR, but here the PRs are the source. From a PR it saves the reason (decisions,
+  rejected alternatives, root causes, review findings that became rules), naming the PR as
+  "(PR #123)", never a summary of the change. Metadata adds `"seed": true` and `"pr"`. It changes no
+  files; nothing enforces that beyond the prompt (the edit guard is Design's). The searches it
+  makes before each save, while it's in Explore, stay off [What Meko doesn't know](#what-meko-doesnt-know).
+- **When it's done, it closes.** Claude writes its summary to `learned.md` beside the design file
+  (`SessionManager.learnedPath`, outside the repo), only once it has finished; a session that stops
+  to ask something doesn't write it. At each turn's end, a learn session still in Explore whose turn
+  wasn't interrupted is checked for the file (`Lifecycle.learnDone`): the summary (cut to 2,000
+  characters) goes on the timeline as `learn-done`, the project's notification says so, and the
+  session is discarded with no learn step, since it saved as it went. A file rather than a marker
+  in Claude's reply works the same for every harness, with no transcript to read. When the worktree
+  has uncommitted files or unpushed commits, which a Discard would throw away, it isn't closed: the
+  timeline says why (`learn-kept`) for the user to look and discard it. A Save learnings step still
+  running holds the close, as it holds a Discard: the session is marked `discarding` and goes when
+  the step ends (`afterLearn`). The file is removed, and the user told, only once the session is
+  closing (or kept), so a close that fails leaves it for the next turn's end to try again, and only
+  a new summary closes a kept session later. The PR window's first day is the same day `months`
+  back, or that month's last day when it has fewer (never a day in the month after). Discarding a learn session by hand starts
+  with **Don't save learnings** checked, for the same reason. Its Explore gate reads **Learning the
+  project** in place of **Move on…**; it can still be moved from the stage bar, and then it no
+  longer closes by itself.
+
 ## What Meko doesn't know
 
 The project's Meko searches that found nothing, or nothing relevant, grouped by question, so
@@ -204,9 +254,10 @@ search's answer; the [learn step](#the-learn-step) teaches Meko the answers a se
 the project's open questions, and dismisses those Meko already knew (*The project's open questions*). The list stays
 in AgentK's database (it isn't shared with the team on the datapack).
 
-**What's recorded.** The [transcript reader](token-usage.md) keeps, for each of Claude's searches
-(`context_search`, `memory_search`, `knowledgebase_search`, in the main transcript and
-subagents): `meko_calls.query` (its `query`, cut to 1,000 characters) and `query_key` (the same
+**What's recorded.** The [usage readers](token-usage.md#meko-calls) keep, for each of the
+session's agent's searches (`context_search`, `memory_search`, `knowledgebase_search`: Claude's from
+its transcript, main and subagents, Kiro's from its session log, OpenCode's from AgentK's plugin's
+lines): `meko_calls.query` (its `query`, cut to 1,000 characters) and `query_key` (the same
 lower-cased with its whitespace collapsed, which groups asks of one question), the best memory
 `score` and `raw_similarity_score` of the reply (`top_score`, `top_raw`), and `quality`
 (`searchQuality()` in `mekousage.ts`). AgentK's search at start keeps its query in
@@ -244,12 +295,18 @@ saved the reply to a file. For a search, the reader reads that file for the scor
 call log's `claudeReply()` uses). `outcome`, `results` and `result_chars` still describe the notice, which is
 what the usage counts and the savings estimate count. A file it can't read leaves no quality.
 
-**The questions** (`projectGaps()`): every poor search in the project's sessions, Claude's and
-AgentK's at start, grouped by `query_key`, latest asked first (ties by key). A question shows the
+**The questions** (`projectGaps()`): every poor search in the project's sessions, the session's
+agent's (Claude's, Kiro's or OpenCode's) and AgentK's at start, grouped by `query_key`, latest asked first (ties by key). A question shows the
 query as last asked, how the latest ask went and with which tool (or *AgentK's search at start*),
 how many times it was asked and by which sessions, and the latest ask's item count, best memory
 score and best raw similarity (which may be two different memories'). A question whose latest ask
-found something relevant is left out: Meko knows it now. Pages are 100 questions, and the next
+found something relevant is left out: Meko knows it now. The searches a [learn
+session](#learn-sessions) makes while it seeds, in Explore (by `session_stages`), its own and
+AgentK's at start, aren't questions (`seeding()`): it searches before each save to skip what Meko
+already has, into a datapack it's seeding, so a search that finds nothing is what it expects, not
+something Meko should be taught. One that found something still answers another session's
+question, and the page's count of searches recorded still has them all. Moved on from Explore, it's
+a task like any other, and its searches from then on are questions. Pages are 100 questions, and the next
 starts after the last one's `lastAt` and key, since searches Claude makes in one response share a
 time.
 
@@ -288,7 +345,7 @@ dismissed (`learn.taught`, `learn.dismissed`), never a query.
 **Why the database.** The page groups every session's asks, applies the marks and pages in one
 query, the rows are written in the same transaction that moves a transcript's read offset (a
 transcript read again upserts rather than adding asks twice), and the list outlives archived
-sessions, whose Meko call logs are deleted. The [Meko call log](project-home.md) has Claude's calls
-with their full replies too, but only while the project has Log Meko calls on, so it isn't the
+sessions, whose Meko call logs are deleted. The [Meko call log](project-home.md) has the session's
+agent's calls with their full replies too, but only while the project has Log Meko calls on, so it isn't the
 source.
 

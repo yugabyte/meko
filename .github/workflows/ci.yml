@@ -22,6 +22,7 @@ jobs:
     outputs:
       agentk: ${{ steps.scope.outputs.agentk }}
       backend: ${{ steps.scope.outputs.backend }}
+      presenter: ${{ steps.scope.outputs.presenter }}
     steps:
       # A PR runs on GitHub's merge commit, whose first parent is the base branch: two commits
       # are enough to diff it.
@@ -149,13 +150,42 @@ jobs:
         working-directory: backend/memory_engine
       - run: make test
 
+  # Presenter (extensions/presenter).
+  presenter:
+    name: Presenter (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.presenter == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: extensions/presenter
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extensions/presenter/package-lock.json
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
   # Merging into main requires this check and `PR title` by name: renaming it means updating the
   # branch rules. It passes when every job in needs passed or was skipped, so a new component's
   # job goes into needs (extensions/agentk/test/unit/ci-scope.test.ts checks).
   gate:
     name: CI gate
     if: always()
-    needs: [changes, agentk, backend]
+    needs: [changes, agentk, backend, presenter]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

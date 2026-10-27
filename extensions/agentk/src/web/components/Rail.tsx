@@ -1,10 +1,12 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from 'react';
-import { STAGE_LABELS, type KiroPlan, type LimitWindow, type PlanLimits, type ProjectWithSessions, type Session } from '../../shared/types';
+import { MEKO_HOME_PATH } from '../../shared/mekourls';
+import type { KiroPlan, LimitWindow, PlanLimits, ProjectWithSessions, Session } from '../../shared/types';
+import { appUrl } from '../base';
 import { useIsMobile, useTouch } from '../hooks/useMedia';
 import { RAIL_DEFAULT, clampRailWidth, railCollapsedSaved, saveRailCollapsed } from '../rail';
 import type { ThemePref } from '../theme';
-import { aggregateDot, creditsNumber, cx, dotState, formatCredits, formatTokens, isMac, limitLevel, openSessions, relativeTime, repoFolder, sessionTabTitle, totalTokens } from '../util';
-import { HarnessLogo, Ring, StatusDot, RevisitChip } from './common';
+import { aggregateDot, creditsNumber, cx, dotState, formatCredits, formatTokens, isMac, kiroPlanLines, limitLevel, openSessions, relativeTime, repoFolder, sessionTabTitle, totalTokens } from '../util';
+import { HarnessLogo, Ring, RevisitChip, StageChip, StatusDot } from './common';
 import { HARNESS_CAPS, type HarnessId } from '../../shared/harnesses';
 
 export function Rail({
@@ -31,7 +33,6 @@ export function Rail({
   onSessionRevisit,
   onNewProject,
   onSettings,
-  onLogout,
   onReorder,
   onPalette,
   onResize,
@@ -72,8 +73,6 @@ export function Rail({
   onSessionRevisit: (sessionId: string) => void;
   onNewProject: () => void;
   onSettings: () => void;
-  /** Signs out; left out when there's no login (local access). */
-  onLogout?: () => void;
   /** Moves a project to this index in the list. Touch screens use Move up/down on the project home. */
   onReorder: (id: string, index: number) => void;
   onPalette: () => void;
@@ -105,7 +104,7 @@ export function Rail({
     listRef.current?.querySelector('.rail-sess.sel')?.scrollIntoView({ block: 'nearest' });
   }, [currentSessionId]);
   const who = [
-    onLogout ? `Signed in as ${username}` : username,
+    username,
     serverName && ` on ${serverName}`,
     serverName && serverHost && serverHost !== serverName && ` (${serverHost})`,
   ]
@@ -130,7 +129,7 @@ export function Rail({
       {/* Looks like a field but is a button: it opens the palette over itself, whose input takes the typing.
           It's named by its visible text, so speech input can say what it sees; the chip stays out of the name. */}
       <button className="rail-search" onClick={onPalette} aria-haspopup="dialog" aria-keyshortcuts={isMac() ? 'Meta+K' : 'Control+K'}>
-        <img src="/logo.png" alt="" width={16} height={16} />
+        <img src={appUrl('/logo.png')} alt="" width={16} height={16} />
         <span className="rail-search-text">Ask AgentK</span>
         {!touch && <kbd aria-hidden="true">{mod}K</kbd>}
       </button>
@@ -209,7 +208,7 @@ export function Rail({
                         {harnessLogos && <HarnessLogo harness={s.harness} />}
                         <span className="rail-sess-name">{s.name}</span>
                         {s.revisitAt !== null && <RevisitChip until={s.revisitAt} />}
-                        <span className="stchip">{STAGE_LABELS[s.stage]}</span>
+                        <StageChip session={s} />
                       </button>
                       {!touch && (
                         <span className="rail-sess-acts">
@@ -281,14 +280,10 @@ export function Rail({
               <Icon d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z M12 3v18" />
             )}
           </button>
+          <MekoHomeLink />
           {onHide && (
             <button className="icon-btn rail-hide" onClick={onHide} title="Hide projects" aria-label="Hide projects" aria-expanded={true}>
               <PaneIcon />
-            </button>
-          )}
-          {onLogout && (
-            <button className="icon-btn" onClick={onLogout} title="Sign out" aria-label="Sign out">
-              <Icon d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4 M16 17l5-5-5-5 M21 12H9" />
             </button>
           )}
         </div>
@@ -414,12 +409,7 @@ function KiroLimit({ plan, now }: { plan: KiroPlan; now: number }) {
   // Past the plan, Kiro stops unless overage is on; with it on, Kiro bills the rest and goes on, so amber.
   const level = over && plan.overage?.enabled ? 'warn' : limitLevel(pct);
   const resets = plan.resetsOn ? dayLabel(plan.resetsOn) : null;
-  const extra = [
-    plan.bonus && `Bonus ${creditsNumber(Math.max(0, plan.bonus.total - plan.bonus.used))} of ${creditsNumber(plan.bonus.total)} left`,
-    plan.overage && (plan.overage.credits !== null ? `Overage ${creditsNumber(plan.overage.credits)} billed` : plan.overage.enabled !== null ? `Overage ${plan.overage.enabled ? 'on' : 'off'}` : null),
-  ].filter(Boolean);
-  // Kiro's own words for the bonus and overage, shown as it printed them, since how they're read is a guess.
-  const said = [plan.bonus?.line, plan.overage?.line].filter((l): l is string => !!l);
+  const { extra, said } = kiroPlanLines(plan);
   return (
     <>
       <div className="lim-row">
@@ -466,6 +456,27 @@ function Icon({ d }: { d: string }) {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d={d} />
+    </svg>
+  );
+}
+
+/** Opens Meko's own web UI, in this tab: its main page, on the origin AgentK is served from. */
+export function MekoHomeLink() {
+  return (
+    <a className="icon-btn rail-meko" href={MEKO_HOME_PATH} title="Open Meko" aria-label="Open Meko">
+      <MekoLogoM />
+    </a>
+  );
+}
+
+/**
+ * The "m" of Meko's logo (backend/web_ui/public/meko-logo.svg, whose "meko" is one outline): the m's
+ * run of it, closed where its right stem meets the e. Drawn in the text color.
+ */
+function MekoLogoM() {
+  return (
+    <svg width="20" height="13" viewBox="0 79.93 340.94 217.49" fill="currentColor" aria-hidden="true">
+      <path d="M340.77 171.81c-.65 -11.69 -3.02 -22.64 -7.14 -32.86c-4.89 -12.12 -11.76 -22.55 -20.65 -31.29c-8.88 -8.72 -19.39 -15.52 -31.53 -20.41c-12.14 -4.87 -25.75 -7.32 -39.96 -7.32s-27.37 2.37 -39.51 7.1c-12.14 4.75 -22.64 11.4 -31.53 19.98c-8.6 -8.58 -18.94 -15.25 -31.08 -19.98c-12.14 -4.73 -25 -7.1 -39.51 -7.1s-27.82 2.45 -39.96 7.32c-12.14 4.87 -22.64 11.69 -31.53 20.41c-8.87 8.72 -15.83 19.15 -20.86 31.29c-5.04 12.14 -7.55 25.3 -7.55 39.51v118.96h57.71v-118.53c0 -12.43 3.85 -22.41 11.55 -29.96c7.7 -7.54 17.89 -11.31 30.63 -11.31h.05c12.73 0 22.87 3.78 30.41 11.31c7.54 7.54 11.31 17.53 11.31 29.96v118.53h57.71v-118.53c0 -12.43 3.85 -22.41 11.55 -29.96c7.7 -7.54 17.89 -11.31 30.63 -11.31s22.87 3.78 30.41 11.31c7.54 7.54 11.31 17.53 11.31 29.96v118.53h57.71v-88.6Z" />
     </svg>
   );
 }

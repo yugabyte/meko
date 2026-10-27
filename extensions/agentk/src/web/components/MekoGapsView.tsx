@@ -62,7 +62,7 @@ export function MekoGapsView({
   /** " by AgentK from <session>" for a mark a session's learn step made; nothing for a person's. */
   const byAgentK = (s: MekoGapSession | null) => s && <> by AgentK from {sessionName(s)}</>;
   const teachBlocker = !mekoConfigured
-    ? "Meko is off, so it can't be taught. Add a Meko API key on the Meko tab in Settings."
+    ? "Meko isn't set up, so it can't be taught. Start Meko on this computer (meko start), or link Meko Cloud in Meko's web UI (Settings › Meko Cloud)."
     : !dedicated
       ? 'This project has no dedicated datapack to save to. Add one on the project home.'
       : null;
