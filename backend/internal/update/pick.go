@@ -123,3 +123,22 @@ func PickPackage(releases []Release, prefixes []string, name, goos, arch string,
 		return []string{PackageTarball(name, v, goos, arch), Sums}
 	}, bad)
 }
+
+// PickPackageVersion is the release of package name's version, tagged with one of prefixes, that has
+// its tarball for this platform and SHA256SUMS, whether or not it was rolled back.
+func PickPackageVersion(releases []Release, prefixes []string, name, version, goos, arch string) (Release, bool) {
+	for _, r := range releases {
+		if r.Draft {
+			continue
+		}
+		if v, ok := versionOf(r.Tag, prefixes); !ok || v != version {
+			continue
+		}
+		_, tar := r.Asset(PackageTarball(name, version, goos, arch))
+		_, sums := r.Asset(Sums)
+		if tar && sums {
+			return r, true
+		}
+	}
+	return Release{}, false
+}

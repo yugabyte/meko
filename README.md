@@ -34,7 +34,7 @@ the installer is fetched with a signed-in `gh` (or `GITHUB_TOKEN`):
 
 ```sh
 gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
-meko install_extension agentk     # optional: AgentK, using this Meko
+meko install_extension agentk     # optional: AgentK, using this Meko (-- --agent kiro picks its coding agent)
 ```
 
 It downloads the newest Meko release, checks its checksum, unpacks it into `~/.local/share/meko/app`, links
@@ -78,10 +78,10 @@ The first start downloads the embedding model (23 MB). On RHEL 8, set
 | `meko token [--mcp] [--json]` | The token MCP and REST clients send; `--mcp` prints the `claude mcp add` command for Claude Code, `--json` the MCP URL, the web UI's URL, the token and the Meko Cloud link |
 | `meko install [--no-service] [--access local\|remote]` | Set this meko up: the `meko` command, the login service, and how browsers reach the web UI |
 | `meko uninstall [--purge [--force] [--with-extensions]]` | Remove the service and the installed releases, keeping the data; `--purge` also destroys the data as `meko destroy` does, asking first |
-| `meko update [--check]` | Install the newest release now (under the service it updates itself); `--check` only looks |
-| `meko install_extension agentk` | Install AgentK pointed at this Meko; `meko start` and `stop` then run it too, and the web UI's port serves it at `/ext/agentk/` |
-| `meko install_extension presenter` | The same for Presenter, at `/ext/presenter/`: Meko installs its newest release itself, as the command `meko_presenter` (a `meko_presenter` already on PATH, a build from source, is used as it is) |
-| `meko update_extension presenter [--check]` | Install Presenter's newest release now and restart it; one that fails to start is rolled back. AgentK updates itself |
+| `meko update [--check]` | Install Meko's newest release now (under the service it updates itself), then every extension's; `--check` only looks |
+| `meko install_extension agentk [--version V] [-- <options>]` | Install AgentK's newest release (or V) pointed at this Meko; `meko start` and `stop` then run it too, and the web UI's port serves it at `/ext/agentk/`. What follows `--` goes to AgentK's install: `--agent claude\|opencode\|kiro`, `--install-deps`, `--no-install-deps` |
+| `meko install_extension presenter` | The same for Presenter, at `/ext/presenter/`, as the command `meko_presenter`. An extension's command already on PATH (a build from source) is used as it is |
+| `meko update_extension <name>\|--all [--check] [--auto=on\|off]` | Install an extension's newest release now and restart it (AgentK's sessions keep running); one that fails to start is rolled back. Meko also installs updates on its own after its checks, unless `--auto=off` (or the Extensions page's Update automatically) turns that off for the extension |
 | `meko uninstall_extension agentk` | Stop starting and stopping it with Meko (it stays installed) |
 | `meko destroy [--force] [--with-extensions]` | Stop Meko and remove its data folder for good. It asks first; `--force` doesn't. The extensions' data in it (AgentK's home) stays unless you say so when asked, or pass `--with-extensions`, which uninstalls them first |
 | `meko search "<question>"` | Search memories, the knowledge base and past conversations (`context_search`) |

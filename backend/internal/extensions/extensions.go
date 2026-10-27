@@ -1,12 +1,15 @@
 // Package extensions keeps the list of extensions this Meko runs, in extensions.json in the data
-// folder, and runs their own commands to start and stop them. An extension has its own service and
-// its own updates; Meko installs it (meko install_extension), starts it with meko start and stops
-// it with meko stop, and never restarts it when Meko itself restarts or updates.
+// folder, and runs their own commands to start and stop them. An extension has its own service;
+// Meko installs it from its releases (meko install_extension), updates it (Update), runs probation
+// for a new version (meko _launch), starts it with meko start and stops it with meko stop, and never
+// restarts it when Meko itself restarts or updates.
 //
-// The contract is the extension's CLI: `<command> start`, `<command> stop` and `<command> status`,
-// and its uninstall (Catalog.UninstallArgs) for meko destroy --with-extensions. Every command Meko
-// runs of an extension gets MEKO_HOME set to Meko's data folder, so the extension knows where its
-// own folder in it is (Dir). AgentK's agentk is the first; Presenter's presenter the second.
+// The contract is the extension's CLI: `<command> start`, `<command> stop`, `<command> status`,
+// `<command> install` (pointing it at this Meko), `<command> version --json`, and the catalog's
+// RestartArgs, CheckArgs, BusyArgs and UninstallArgs; and its launcher, which hands the commands in
+// Probation to meko _launch. Every command Meko runs of an extension gets MEKO_HOME set to Meko's
+// data folder, so the extension knows where its own folder in it is (Dir). AgentK's agentk is the
+// first; Presenter's meko_presenter the second.
 package extensions
 
 import (
@@ -24,11 +27,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BurntSushi/toml"
+
 	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/update"
 )
 
-// Known are the extensions meko install_extension can install, by name.
+// Known are the extensions meko install_extension can install, by name. Both are Managed: Meko
+// installs and updates their releases. A build from source on PATH is used as it is, and never
+// updated.
 var Known = map[string]Catalog{
 	"agentk": {
 		Title: "AgentK",
@@ -39,16 +46,28 @@ var Known = map[string]Catalog{
 		OldCommands: []string{"agent-k-local"},
 		// Its releases are tagged agentk-v<version>, and v<version> before releases were tagged by product.
 		TagPrefixes: []string{"agentk-v", "v"},
-		Installer:   "install.sh",
+		Managed:     true,
 		// Its home before it moved into Meko's data folder, where an install that hasn't moved yet runs.
 		OldHomes:      []string{".agent-k-local"},
 		UninstallArgs: []string{"uninstall", "--purge", "--delete-worktrees", "--non-interactive"},
 		WebUI:         true,
+		// An update restarts only its server: its session host, and every session in it, keeps going.
+		RestartArgs: []string{"restart"},
+		CheckArgs:   [][]string{{"selftest"}},
+		Probation:   []string{"serve"},
+		// 75: another server holds its home, which restarting won't change; not a failed start.
+		CleanExits: []int{75},
+		// Its own updater kept update-pending.json and bad-versions in its home.
+		LegacyRecords: true,
+		// Its session host names the version it started from; it outlives server updates.
+		RunningRecords: []string{"run/host.json"},
+		// Its own [update] channel = "off" keeps Update automatically off until it's turned on.
+		LegacyUpdatesOff: "config.toml",
 	},
 	// Presenter (extensions/presenter): interactive, branching presentations built from datapacks.
 	// Its command is meko_presenter. Its releases (presenter-v<version>) carry
-	// presenter-<version>-<os>-<arch>.tar.gz and SHA256SUMS, which Meko installs and updates itself
-	// (Managed). A build from source on PATH is used as it is, and never updated.
+	// presenter-<version>-<os>-<arch>.tar.gz and SHA256SUMS. A build from source on PATH is used as
+	// it is, and never updated.
 	"presenter": {
 		Title: "Presenter",
 		Description: "Builds presentations that branch with the room from your datapacks: Claude drafts the story " +
@@ -58,6 +77,9 @@ var Known = map[string]Catalog{
 		Managed:       true,
 		UninstallArgs: []string{"uninstall", "--purge", "--non-interactive"},
 		WebUI:         true,
+		Probation:     []string{"serve"},
+		// A presentation is live: an automatic update waits for the next check.
+		BusyArgs: []string{"_busy"},
 	},
 }
 
@@ -78,11 +100,35 @@ type Catalog struct {
 	Command     string   // the program's name, looked for on PATH and in ~/.local/bin
 	OldCommands []string // names it had before, looked for after Command
 	TagPrefixes []string // its release tags, newest naming first
-	Installer   string   // the release asset that installs it, when it installs itself (not Managed)
 	// Managed says Meko installs it from its releases' tarballs into App and updates it: the
 	// <name>-<version>-<os>-<arch>.tar.gz (named for the extension, holding bin/<Command>) and
-	// SHA256SUMS of the newest release with TagPrefixes.
+	// SHA256SUMS of the newest release with TagPrefixes. After unpacking, Meko runs `<command>
+	// install`, which sets it up (its services, its questions).
 	Managed bool
+	// RestartArgs, when set, restart a running extension into the version app/current names, and
+	// return once it answers: an update switches while it runs, then runs them. Without them an
+	// update stops it, switches, and starts it.
+	RestartArgs []string
+	// CheckArgs are commands run on a staged release's binary before it's switched to.
+	CheckArgs [][]string
+	// Probation are the commands (their first argument) meko _launch runs as a parent: it counts a
+	// new version's starts, rolls back one that fails MaxFailedStarts times, and finishes the update
+	// once it has run update.HealthyAfter.
+	Probation []string
+	// CleanExits are exit codes that aren't failed starts, besides 0.
+	CleanExits []int
+	// BusyArgs, when set, ask whether it's in use: exit 0 means busy, and an automatic update waits
+	// for the next check. Updates someone asks for don't ask.
+	BusyArgs []string
+	// LegacyRecords says its own updater once kept update-pending.json and bad-versions in Dir,
+	// which App reads too (update.App.Legacy).
+	LegacyRecords bool
+	// RunningRecords are files in Dir where a running process names the version it runs from
+	// (update.App.Running): pruning keeps it.
+	RunningRecords []string
+	// LegacyUpdatesOff is a TOML file in Dir whose [update] channel = "off" (its own updater's
+	// switch) makes Update automatically start off, until it's set (AutoUpdate).
+	LegacyUpdatesOff string
 	// OldHomes are folders under the home folder a release install of it lived in before its home
 	// moved into Meko's data folder (Dir); Find looks for the command in their app/current/bin.
 	OldHomes []string
@@ -103,7 +149,19 @@ func Dir(root, name string) string { return filepath.Join(root, "extensions", na
 // them, as Meko's own (internal/update). Its tarballs are named for the extension, its binary for
 // its command.
 func (c Catalog) App(root, name string) update.App {
-	return update.App{Root: filepath.Join(Dir(root, name), "app"), Name: c.Command, Package: name, Private: true}
+	return c.AppIn(filepath.Join(Dir(root, name), "app"), name)
+}
+
+// AppIn is App for the app folder at appRoot, which meko _launch knows from the binary it runs.
+func (c Catalog) AppIn(appRoot, name string) update.App {
+	a := update.App{Root: appRoot, Name: c.Command, Package: name, Private: true, Checks: c.CheckArgs}
+	if c.LegacyRecords {
+		a.Legacy = filepath.Dir(appRoot)
+	}
+	for _, f := range c.RunningRecords {
+		a.Running = append(a.Running, filepath.Join(filepath.Dir(appRoot), f))
+	}
+	return a
 }
 
 // releaseOf is the version of the release install command runs (through links), and whether that
@@ -139,6 +197,30 @@ type Entry struct {
 	Command         string    `json:"command"`
 	InstalledByMeko bool      `json:"installed_by_meko"`
 	AddedAt         time.Time `json:"added_at"`
+	// AutoUpdate is the Extensions page's Update automatically; missing is on.
+	AutoUpdate *bool `json:"auto_update,omitempty"`
+}
+
+// Auto reports whether Meko installs its updates on its own, as the entry says: missing is on.
+// Catalog.AutoUpdate also reads an extension's own old switch.
+func (e Entry) Auto() bool { return e.AutoUpdate == nil || *e.AutoUpdate }
+
+// AutoUpdate reports whether Meko installs an installed extension's updates on its own: the entry's
+// switch, or while that's unset, off when the extension's own updater was turned off
+// (LegacyUpdatesOff), else on.
+func (c Catalog) AutoUpdate(root, name string, e Entry) bool {
+	if e.AutoUpdate != nil || c.LegacyUpdatesOff == "" {
+		return e.Auto()
+	}
+	var old struct {
+		Update struct {
+			Channel string `toml:"channel"`
+		} `toml:"update"`
+	}
+	if _, err := toml.DecodeFile(filepath.Join(Dir(root, name), c.LegacyUpdatesOff), &old); err != nil {
+		return true
+	}
+	return old.Update.Channel != "off"
 }
 
 // Registry is extensions.json.
@@ -176,6 +258,24 @@ func (r *Registry) Save() error {
 		return err
 	}
 	return paths.WriteFile(r.path, append(b, '\n'))
+}
+
+// FindAgain looks for a registered extension whose command is gone (Catalog.Find) and saves where
+// it found it. It returns the command, or "".
+func (r *Registry) FindAgain(name, home, root string) string {
+	cat, ok := Known[name]
+	if !ok {
+		return ""
+	}
+	cmd := cat.Find(name, home, root)
+	if cmd == "" {
+		return ""
+	}
+	e := r.Entries[name]
+	e.Command = cmd
+	r.Entries[name] = e
+	_ = r.Save() // found again next time if this fails
+	return cmd
 }
 
 // Names lists the extensions in order.
@@ -234,6 +334,27 @@ func (e Entry) Run(root, action string, stdout, stderr io.Writer) error {
 		d = StopTimeout
 	}
 	return e.run(root, []string{action}, d, stdout, stderr)
+}
+
+// RunArgs runs `<command> <args>` for one extension, bounded by d, with its output passed through.
+func (e Entry) RunArgs(root string, args []string, d time.Duration, stdout, stderr io.Writer) error {
+	return e.run(root, args, d, stdout, stderr)
+}
+
+// BusyTimeout bounds `<command> <BusyArgs>`.
+var BusyTimeout = 15 * time.Second
+
+// Busy reports whether the extension says it's in use (its catalog's BusyArgs exit 0). One without
+// BusyArgs, or that doesn't answer in time, isn't.
+func (c Catalog) Busy(root string, e Entry) bool {
+	if len(c.BusyArgs) == 0 {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), BusyTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, e.Command, c.BusyArgs...) //nolint:gosec // G204: see run
+	cmd.Env = CommandEnv(root, e.Command)
+	return cmd.Run() == nil
 }
 
 // Uninstall runs `<command> <args>` (the catalog's UninstallArgs), with its output passed through.

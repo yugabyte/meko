@@ -181,21 +181,9 @@ func runExtensions(l paths.Layout, action string, stdout, stderr io.Writer) {
 // findAgain looks for a known extension's command again, and saves it in the registry when it's
 // found. It returns the command, or "".
 func findAgain(l paths.Layout, reg *extensions.Registry, name string) string {
-	cat, ok := extensions.Known[name]
-	if !ok {
-		return ""
-	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	cmd := cat.Find(name, home, l.Root)
-	if cmd == "" {
-		return ""
-	}
-	e := reg.Entries[name]
-	e.Command = cmd
-	reg.Entries[name] = e
-	_ = reg.Save() // found again next time if this fails
-	return cmd
+	return reg.FindAgain(name, home, l.Root)
 }

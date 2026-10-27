@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,7 +18,6 @@ import (
 	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/service"
-	"github.com/yugabyte/meko/backend/internal/update"
 )
 
 // fakeService is a service manager that runs serve the way start does, as this test binary.
@@ -266,57 +263,12 @@ func TestInstallExtensionSetsUpAnInstalledAgentK(t *testing.T) {
 	want(t, "an unknown extension", code, 1, errs, "meko knows agentk, presenter")
 }
 
-func TestInstallExtensionRunsTheNewestAgentKInstaller(t *testing.T) {
-	dir, port := setup(t)
-	noRealExtensions(t)
-	code, out, errs := run("start", "--data-dir", dir, "--port", port)
-	want(t, "start", code, 0, out+errs, "is running")
-	home, _ := os.UserHomeDir()
-	argsFile := filepath.Join(home, "installer-args")
-	// The installer puts agentk in ~/.local/bin, and agent-k-local, its old name, as AgentK's does.
-	installer := fmt.Sprintf("#!/bin/sh\n# --meko-url\necho \"$* MEKO_HOME=$MEKO_HOME\" > %q\n"+
-		"mkdir -p \"$HOME/.local/bin\"\n"+
-		"printf '#!/bin/sh\\n' > \"$HOME/.local/bin/agentk\"\n"+
-		"chmod 700 \"$HOME/.local/bin/agentk\"\n"+
-		"ln -s agentk \"$HOME/.local/bin/agent-k-local\"\n", argsFile)
-	var srv *httptest.Server
-	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/repos/o/r/releases":
-			_ = json.NewEncoder(w).Encode([]update.Release{
-				{Tag: "meko-v0.20261031.0", Assets: []update.Asset{{Name: "install.sh", BrowserURL: srv.URL + "/wrong"}}},
-				{Tag: "v0.20261029.0", Assets: []update.Asset{{Name: "install.sh", BrowserURL: srv.URL + "/wrong"}}},
-				{Tag: "agentk-v0.20261030.0", Assets: []update.Asset{{Name: "install.sh", BrowserURL: srv.URL + "/install.sh"}}},
-			})
-		case "/install.sh":
-			_, _ = io.WriteString(w, installer)
-		default:
-			http.Error(w, "wrong installer", http.StatusNotFound)
-		}
-	}))
-	defer srv.Close()
-	old := newReleaseClient
-	newReleaseClient = func(string) *update.Client {
-		return &update.Client{Repo: "o/r", API: srv.URL, HTTP: srv.Client()}
-	}
-	t.Cleanup(func() { newReleaseClient = old })
-	code, out, errs = run("install_extension", "agentk", "--data-dir", dir)
-	want(t, "install_extension", code, 0, out+errs,
-		"Installing AgentK 0.20261030.0 (agentk-v0.20261030.0)")
-	if got := readLog(t, argsFile); !strings.HasPrefix(got, "--meko-url http://127.0.0.1:"+port+"/mcp --meko-key ") ||
-		!strings.HasSuffix(got, " MEKO_HOME="+dir+"\n") {
-		t.Errorf("installer got %q", got)
-	}
-	reg, _ := extensions.Load(dir)
-	if reg.Entries["agentk"].Command != filepath.Join(home, ".local", "bin", "agentk") {
-		t.Errorf("registry %+v", reg.Entries)
-	}
-}
-
-func TestUpdateNeedsAReleaseInstall(t *testing.T) {
+// meko update on a Meko built from source updates no Meko, and goes on to the extensions.
+func TestUpdateFromSourceUpdatesTheExtensions(t *testing.T) {
 	dir, _ := setup(t)
-	code, _, errs := run("update", "--data-dir", dir, "--check")
-	want(t, "update", code, 1, errs, "wasn't installed from a release")
+	code, out, errs := run("update", "--data-dir", dir, "--check")
+	want(t, "update", code, 0, out+errs, "doesn't update itself")
+	want(t, "update", code, 0, out, "No extensions are installed")
 }
 
 func TestVersionJSON(t *testing.T) {

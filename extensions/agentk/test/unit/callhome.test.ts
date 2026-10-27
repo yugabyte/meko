@@ -564,12 +564,11 @@ describe('what the report says about the install', () => {
   it("reads the agents' versions and Meko from the config, and says Meko serves AgentK", async () => {
     const cfg = structuredClone(DEFAULT_CONFIG);
     cfg.meko.apiKey = 'key';
-    cfg.update.channel = 'prerelease';
     const facts = await installFacts({
       config: cfg, version: '0.20260928.0', firstDay: '2026-09-28', probe: probe({ claude: '2.4.1 (Claude Code)\n', opencode: '1.19.4\n' }),
     });
     expect(facts).toMatchObject({
-      version: '0.20260928.0', channel: 'prerelease', platform: process.platform, arch: process.arch, node: process.versions.node,
+      version: '0.20260928.0', channel: 'stable', platform: process.platform, arch: process.arch, node: process.versions.node,
       claudeCode: '2.4.1', opencode: '1.19.4', access: 'meko', meko: { enabled: true, keySource: 'config', sharing: 'api' }, firstDay: '2026-09-28',
     });
     // A self-hosted Meko with no web app or API URL set: AgentK can't share.

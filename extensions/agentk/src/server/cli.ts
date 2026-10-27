@@ -9,10 +9,10 @@ import { findMekoCaptureScript } from './capture.js';
 import { loginShell, scrubSessionMarkers } from './launcher.js';
 import { dbPath, loadConfig, resolveMeko, type Config } from './config.js';
 import { Core } from './core.js';
-import { kvGet, kvSet, openDb, snapshotDb } from './db.js';
+import { kvGet, kvSet, openDb } from './db.js';
 import { errMsg, fileLogger, type Logger } from './log.js';
 import { handoff } from './handoff.js';
-import { probeLocal } from './health.js';
+import { probeLocal, restartServer } from './health.js';
 import { listenPrivate, socketId } from './hooks.js';
 import { MekoClient } from './meko.js';
 import { getPaths, SHARED_TMP, tildify, withLocalBin, type Paths } from './paths.js';
@@ -24,7 +24,7 @@ import { openBrowser } from './browser.js';
 import { NoHostError, SessionHost, startDetached } from './hostclient.js';
 import { HostRunningError, startHost } from './host/host.js';
 import { BEAT_MS, EXIT_BUSY, heldLease, InstanceBusyError, InstanceLock } from './instance.js';
-import { HEALTHY_MS, uncountStart, Updater } from './updater.js';
+import { HEALTHY_MS, pruneSnapshots, snapshotBeforeMigrating, switchedAway, updatedFrom, Updates } from './updates.js';
 import { probeLocalMeko } from './mekolocal.js';
 import {
   checkMove, finishMove, HomeMove, MEKO_COMMANDS, mekoDirOf, moveHome, readJournal, refuseOtherMeko, rememberMekoHome, stopAll, tmpHomeWarning,
@@ -77,7 +77,8 @@ async function moveFirst(paths: Paths): Promise<Paths> {
     console.error(`agentk: AgentK's home is moving to ${j.to}; the move starts the server again when it's done. See: ${moveJobLog(j.to)}`);
     process.exit(EXIT_BUSY);
   }
-  if (existsSync(paths.updatePending) && j?.phase !== 'moving') return paths;
+  // A version Meko just updated to moves the home only once it has proved healthy (its next start).
+  if (updatedFrom() && j?.phase !== 'moving') return paths;
   // Another server holds the home (here or on another host): this start is refused by the lease
   // below, as ever, and touches nothing first.
   if (heldLease(paths.lock)) return paths;
@@ -120,7 +121,7 @@ async function serve(): Promise<void> {
     if (!(e instanceof InstanceBusyError)) throw e;
     // Not in server.log: that belongs to the server holding the home.
     console.error(`agentk: ${e.message}`);
-    uncountStart(paths, v);
+    // Not a failed start of a version on probation: Meko's launcher counts only crashes, and this exit (75) isn't one.
     process.exit(EXIT_BUSY);
   }
   const log = fileLogger(join(paths.logs, 'server.log'));
@@ -129,21 +130,31 @@ async function serve(): Promise<void> {
   } catch (e) {
     // In server.log, not only on stderr, which may reach no one (a journal that isn't kept): a
     // start that keeps failing after an update (a migration, the guard in Core.start) is rolled
-    // back by the launcher, and this says why. The lease goes too, so the next start needn't wait.
+    // back by Meko's launcher (`meko _launch`), and this says why. The lease goes too, so the next start needn't wait.
     log.error(`AgentK ${v} couldn't start: ${errMsg(e)}`);
     lock.release();
     process.exit(1);
   }
 }
 
-/** A start once it holds the home's lease: the database, Core, the web server, and the updater. */
+/** A start once it holds the home's lease: the database, Core and the web server. */
 async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceLock, log: Logger): Promise<void> {
   try {
     if (linkCommand(paths)) log.info('added the agentk command (~/.local/bin/agentk) beside agent-k-local, its name before the rename');
   } catch (e) {
     log.warn(`couldn't add the agentk command to ~/.local/bin: ${errMsg(e)}`);
   }
-  const db = openDb(dbPath(paths, cfg));
+  // A version Meko just updated to keeps a copy of the database as the old version left it, before
+  // its migrations run: for going back by hand (Meko's rollback restores only the program).
+  const dbFile = dbPath(paths, cfg);
+  try {
+    const snap = snapshotBeforeMigrating(dbFile, updatedFrom());
+    if (snap) log.info(`kept the database from before the update in ${snap}`);
+  } catch (e) {
+    log.warn("couldn't keep a copy of the database from before the update", errMsg(e));
+  }
+  const db = openDb(dbFile);
+  for (const f of pruneSnapshots(paths, dbFile)) log.info(`removed ${f}, a database copy of a version no longer installed`);
   let core: Core | null = null;
   const meko = new MekoClient(() => resolveMeko(core?.config ?? cfg), v);
   const mekoCaptureScript = cfg.meko.captureTranscripts ? findMekoCaptureScript() : null;
@@ -182,27 +193,13 @@ async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceL
   }, BEAT_MS);
   beat.unref();
 
-  const updater = new Updater({
-    paths,
-    config: () => core!.config,
-    version: v,
-    kvGet: (k) => kvGet(db, k),
-    kvSet: (k, val) => kvSet(db, k, val),
-    snapshotDb: (dest) => snapshotDb(db, dest),
-    log: (m) => log.info(m),
-    onChange: () => core!.changed(),
-    requestRestart: () => {
-      // Sent at once, ahead of the close the shutdown sends: pages wait for the new version quietly.
-      core!.notifyRestarting();
-      void shutdown(0);
-    },
-  });
-  core.updateStatus = () => updater.status();
+  const updates = new Updates({ version: v, kvGet: (k) => kvGet(db, k), kvSet: (k, val) => kvSet(db, k, val) });
+  core.updateStatus = () => updates.status();
 
   await core.start();
   const webDir = findWebDir(here);
   if (!webDir) log.warn('web assets not found; run `npm run build:web` (or use the Vite dev server)');
-  app = await buildServer(core, { webDir, updater: updater.enabled ? updater : null });
+  app = await buildServer(core, { webDir, updates });
   // Its only listener: Meko serves it to browsers at BASE_PATH, after its own sign-in.
   await app.ready();
   await listenPrivate(app.server, paths.webSock, 'the web socket');
@@ -214,21 +211,18 @@ async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceL
     else log.warn('no Meko is running on this computer, so no browser can reach AgentK: start it with meko start');
   });
 
-  updater.start();
   // The move into Meko's data folder: now when this version isn't being tried out, else once it has
   // proved healthy. A move that finished starting the services ends here.
   finishMove(paths.home, log);
   holdTmpLock(paths.home, log);
   const homeMove = new HomeMove(paths, log);
   homeMove.check();
-  setTimeout(() => {
-    updater.markHealthy();
-    homeMove.check();
-  }, HEALTHY_MS).unref();
-  // A deliberate stop isn't a failed start of a version being tried out. Counted once: a second
-  // signal (Ctrl+C twice) or a stop during an update's restart mustn't take off another start.
+  // The move waits while this version is on probation (HomeMove.check): it's checked again once that's over.
+  setTimeout(() => homeMove.check(), HEALTHY_MS).unref();
   const stop = () => {
-    if (!shuttingDown) updater.stoppedCleanly();
+    // Meko switched app/current to an update and is restarting the server into it: pages wait for
+    // the new version quietly instead of saying the connection is lost.
+    if (!shuttingDown && switchedAway()) core!.notifyRestarting();
     void shutdown(0);
   };
   process.on('SIGTERM', stop);
@@ -421,6 +415,14 @@ async function stop(): Promise<void> {
   else console.log(`Stopped AgentK${n ? ` and the ${n} session(s) in it. They resume at: ${resume}` : ''}.`);
 }
 
+/** Restarts the server's service, not the session host's: sessions keep running. Meko runs it after an update. */
+async function restart(): Promise<void> {
+  const paths = getPaths();
+  rememberMekoHome(paths);
+  const v = await restartServer(paths, servicesFor(paths.home));
+  console.log(`AgentK ${v} is running; sessions kept running.`);
+}
+
 /** Starts the services `stop` stopped. */
 async function start(): Promise<void> {
   const paths = getPaths();
@@ -455,12 +457,14 @@ Usage: agentk <command>
   stop          Stop the server and the session host, ending every session (they resume at start, or
                 serve without services; the services also start again at the next login)
   start         Start the background services again after stop
+  restart       Restart the server, not the session host: sessions keep running (Meko runs it after an
+                update, and waits for the new version to answer)
   attach [name] Show a session's terminal here (Ctrl+\\ detaches; Claude keeps running); no name lists them
   host          Run the session host that holds every Claude (the background service runs this for you);
                 host restart ends every session and resumes them; host stop ends them (with the server stopped)
   logs [-f]     Print the server log (-f to follow, -n <lines>)
   selftest      Check that the runtime and bundled modules load
-  version       Print the version`);
+  version       Print the version (--json: {"version": "…"}, as Meko reads it)`);
 }
 
 async function main(): Promise<void> {
@@ -477,6 +481,7 @@ async function main(): Promise<void> {
     case 'ui': return ui();
     case 'stop': return stop();
     case 'start': return start();
+    case 'restart': return restart();
     case 'attach': return (await import('./attachcli.js')).runAttach(getPaths(), args);
     case 'host': return host(args);
     case 'logs': return logs(args);
@@ -489,7 +494,8 @@ async function main(): Promise<void> {
     case 'version':
     case '--version':
     case '-v':
-      console.log(version());
+      // --json is what Meko checks a release it unpacks with: {"version": "<version>"}.
+      console.log(args.includes('--json') ? JSON.stringify({ version: version() }) : version());
       return;
     case undefined:
     case 'help':

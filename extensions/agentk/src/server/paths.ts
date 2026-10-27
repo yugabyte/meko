@@ -106,7 +106,10 @@ export interface Paths {
   config: string;
   defaultDb: string;
   certs: string;
-  /** Installed app versions: app/<version>/, app/current -> <version>. */
+  /**
+   * Installed app versions: app/<version>/, app/current -> <version>. Meko installs, updates and
+   * prunes them, and keeps its update records beside them (update-pending.json, bad-versions).
+   */
   app: string;
   worktrees: string;
   /** Per-session design files written during the Design stage: designs/<session>/design.md. */
@@ -130,11 +133,6 @@ export interface Paths {
   /** The running server's lease on this home (instance.ts): one server per home, even across hosts. */
   lock: string;
   logs: string;
-  /** Written by the updater before a restart; read by the bin wrapper for rollback. */
-  updatePending: string;
-  /** One version per line that failed to boot and must not be retried. */
-  badVersions: string;
-  downloads: string;
 }
 
 export function getPaths(home: string = akHome()): Paths {
@@ -155,9 +153,6 @@ export function getPaths(home: string = akHome()): Paths {
     hostLock: join(home, 'host.lock'),
     lock: join(home, 'server.lock'),
     logs: join(home, 'logs'),
-    updatePending: join(home, 'update-pending.json'),
-    badVersions: join(home, 'bad-versions'),
-    downloads: join(home, 'downloads'),
   };
 }
 

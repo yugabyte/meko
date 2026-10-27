@@ -17,7 +17,7 @@ describe('HTTP API: origin checks, projects', () => {
   beforeEach(async () => {
     // OpenCode offered too, as on an install that has it, so Settings can turn it off.
     env = await makeEnv({ opencode: true });
-    app = await buildServer(env.core, { webDir: null, updater: null });
+    app = await buildServer(env.core, { webDir: null, updates: null });
   });
   afterEach(async () => {
     await app.close();
@@ -311,7 +311,7 @@ describe('web app: manifest and icons for the installed app', () => {
     webDir = mkdtempSync(join(tmpdir(), 'ak-web-'));
     cpSync(join(web, 'index.html'), join(webDir, 'index.html'));
     cpSync(join(web, 'public'), webDir, { recursive: true });
-    app = await buildServer(env.core, { webDir, updater: null });
+    app = await buildServer(env.core, { webDir, updates: null });
   });
   afterEach(async () => {
     await app.close();

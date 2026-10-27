@@ -3,6 +3,7 @@ package update
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -10,6 +11,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/yugabyte/meko/backend/internal/paths"
 )
@@ -20,12 +23,22 @@ import (
 // names its tarballs (<package>-<version>-<os>-<arch>.tar.gz, one folder <package>-<version>/);
 // empty is Name. Presenter's program is meko_presenter, its package presenter. Private unpacks
 // releases owner-only (folders and programs 0700, files 0600), as files in Meko's data folder must
-// be: an extension's app folder is in it, Meko's own isn't.
+// be: an extension's app folder is in it, Meko's own isn't. Legacy, when set, is a folder that
+// held update-pending.json and bad-versions before they moved into the app folder (AgentK's home):
+// a record found there is moved in, and its bad versions count too. Checks are commands run on a
+// staged version's binary, after version --json, before it's moved into place (AgentK's selftest).
 type App struct {
 	Root    string
 	Name    string
 	Package string
 	Private bool
+	Legacy  string
+	Checks  [][]string
+	// Running are files ({"pid", "appDir", "version"}) in which a running process names the version
+	// it runs from (AgentK's run/host.json): Prune keeps that version while the pid is alive, as it
+	// keeps one whose in-use lock is held. A process started before meko _launch existed, or not
+	// through it (AgentK's host started by its server without services), holds no lock.
+	Running []string
 }
 
 func (a App) name() string {
@@ -190,48 +203,125 @@ func (a App) Versions() []string {
 }
 
 // Prune deletes installed versions other than keep (the current and previous ones, and any
-// version a pending update names). It returns what it deleted.
+// version a pending update names), and other than the ones in use (InUse). It returns what it
+// deleted.
 func (a App) Prune(keep ...string) []string {
 	k := map[string]bool{}
 	for _, v := range keep {
 		k[v] = true
 	}
+	for v := range a.runningVersions() {
+		k[v] = true
+	}
 	var gone []string
 	for _, v := range a.Versions() {
-		if !k[v] && os.RemoveAll(a.Dir(v)) == nil {
+		if !k[v] && !a.InUse(v) && os.RemoveAll(a.Dir(v)) == nil {
 			gone = append(gone, v)
 		}
 	}
 	return gone
 }
 
-func (a App) badFile() string { return filepath.Join(a.Root, "bad-versions") }
+// inUseFile is the file meko _launch holds a shared flock on while a process runs from a version.
+func (a App) inUseFile(version string) string { return filepath.Join(a.Dir(version), ".in-use") }
 
-// BadVersions are versions that were rolled back; they're never offered again.
-func (a App) BadVersions() map[string]bool {
-	b, err := os.ReadFile(a.badFile())
-	out := map[string]bool{}
+// LockInUse marks a version in use for as long as the returned file stays open (in this process or,
+// passed on, a child): a shared flock on its .in-use file, which Prune doesn't delete under.
+func (a App) LockInUse(version string) (*os.File, error) {
+	//nolint:gosec // G304: the version's own folder in the app folder
+	f, err := os.OpenFile(a.inUseFile(version), os.O_RDONLY|os.O_CREATE, 0o600)
 	if err != nil {
-		return out
+		return nil, err
 	}
-	for _, l := range strings.Split(string(b), "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			out[l] = true
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_SH); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+// InUse reports whether a process holds a version's in-use lock (LockInUse): a session host that
+// outlived later updates still runs from the version it started from.
+func (a App) InUse(version string) bool {
+	f, err := os.Open(a.inUseFile(version))
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }() // closing it lets the probe's lock go
+	return errors.Is(unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB), unix.EWOULDBLOCK)
+}
+
+// runningVersions are the versions the Running files name for a live process.
+func (a App) runningVersions() map[string]bool {
+	out := map[string]bool{}
+	for _, file := range a.Running {
+		b, err := os.ReadFile(file) //nolint:gosec // G304: the extension's own record
+		if err != nil {
+			continue
+		}
+		var r struct {
+			PID     int    `json:"pid"`
+			AppDir  string `json:"appDir"`
+			Version string `json:"version"`
+		}
+		if json.Unmarshal(b, &r) != nil || r.PID <= 0 {
+			continue
+		}
+		if err := unix.Kill(r.PID, 0); err != nil && !errors.Is(err, unix.EPERM) {
+			continue
+		}
+		if r.AppDir != "" {
+			out[filepath.Base(r.AppDir)] = true
+		} else if r.Version != "" {
+			out[r.Version] = true
 		}
 	}
 	return out
 }
 
+func (a App) badFiles() []string {
+	files := []string{filepath.Join(a.Root, "bad-versions")}
+	if a.Legacy != "" {
+		files = append(files, filepath.Join(a.Legacy, "bad-versions"))
+	}
+	return files
+}
+
+// BadVersions are versions that were rolled back; they're never offered again. A legacy list's
+// entries may carry a v.
+func (a App) BadVersions() map[string]bool {
+	out := map[string]bool{}
+	for _, file := range a.badFiles() {
+		b, err := os.ReadFile(file) //nolint:gosec // G304: the app folder's own file
+		if err != nil {
+			continue
+		}
+		for _, l := range strings.Split(string(b), "\n") {
+			if l = strings.TrimPrefix(strings.TrimSpace(l), "v"); l != "" {
+				out[l] = true
+			}
+		}
+	}
+	return out
+}
+
+// addBadVersion records a rolled-back version, in the legacy list too, which a version from before
+// the records moved still reads.
 func (a App) addBadVersion(v string) error {
-	f, err := os.OpenFile(a.badFile(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
+	for _, file := range a.badFiles() {
+		f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // G304: see BadVersions
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(f, v)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			return err
+		}
 	}
-	_, err = fmt.Fprintln(f, v)
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	return err
+	return nil
 }
 
 // Remove deletes the app folder, every version in it.

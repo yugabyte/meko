@@ -83,8 +83,11 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] A change to `src/server/host/` that an older host or server can't read bumps `PROTOCOL`, and the
       server still works with hosts back to `MIN_PROTOCOL` (a running host keeps its code across
       updates). Nothing restarts the host by itself (the home's one-time move aside), and the program
-      never waits on a viewer.
-- [ ] The installer never installs a tool (or runs Meko's setup) without first showing what it
+      never waits on a viewer. `serve` and `host` keep going through Meko's launcher
+      (`packaging/agentk`: `meko _launch`), which runs an update's probation and locks the host's
+      version folder against Meko's pruning; nothing in AgentK writes Meko's update records
+      (`app/update-pending.json`, `bad-versions`).
+- [ ] The prerequisites check (`scripts/deps.sh`) never installs a tool (or runs Meko's setup) without first showing what it
       will run and asking (or `--install-deps`), verifies downloads by checksum or integrity hash
       wherever one is published (Claude Code's installer script from claude.ai, OpenCode's from
       opencode.ai and Kiro's from cli.kiro.dev publish none, so they're only fetched over HTTPS), and checks the result rather than trusting the package manager.

@@ -33,7 +33,7 @@ describe('HTTP API: access control', () => {
   let app: FastifyInstance;
   beforeEach(async () => {
     env = await makeEnv();
-    app = await buildServer(env.core, { webDir: null, updater: null });
+    app = await buildServer(env.core, { webDir: null, updates: null });
   });
   afterEach(async () => {
     await app.close();
@@ -84,10 +84,10 @@ describe('HTTP API: access control', () => {
   });
 
   it('refuses form-style bodies, so a plain HTML form can\'t post to the API', async () => {
-    const res = await app.inject({ method: 'POST', url: '/api/update/apply', headers: { 'content-type': 'text/plain' }, payload: 'x' });
+    const res = await app.inject({ method: 'POST', url: '/api/invites/check', headers: { 'content-type': 'text/plain' }, payload: 'x' });
     expect(res.statusCode).toBe(415);
     // The web client's bodiless actions send no content type and still work.
-    expect((await app.inject({ method: 'POST', url: '/api/update/check' })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'POST', url: '/api/invites/check' })).statusCode).toBe(200);
   });
 
   it('answers bodies of the wrong type with 4xx, not 500', async () => {

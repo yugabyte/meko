@@ -16,7 +16,7 @@
       "required": ["version", "channel", "platform", "arch", "node", "access", "service", "meko", "firstDay"],
       "properties": {
         "version": { "$ref": "#/$defs/version" },
-        "channel": { "enum": ["stable", "prerelease", "off"] },
+        "channel": { "enum": ["stable", "prerelease", "off"], "description": "Always stable from versions Meko updates (Meko's own channel decides); older ones sent their own [update] channel." },
         "platform": { "enum": ["aix", "android", "cygwin", "darwin", "freebsd", "haiku", "linux", "netbsd", "openbsd", "sunos", "win32"] },
         "arch": { "enum": ["arm", "arm64", "ia32", "loong64", "mips", "mipsel", "ppc", "ppc64", "riscv64", "s390", "s390x", "x64"] },
         "node": { "$ref": "#/$defs/version" },

@@ -5,6 +5,7 @@ import { MEKO_ACCOUNT_PATH, MEKO_CLOUD_PATH } from '../../shared/mekourls';
 import { api, errorMessage } from '../api';
 import { AUTO_SAVE_IDLE, autoSave, settle, type AutoSaveStatus } from '../autosave';
 import { saveRailSessions, useRailSessions } from '../rail';
+import { installing, mekoUpdates, refreshMekoUpdate, takeRow, updateFailed, useMekoUpdate } from '../mekoupdate';
 import type { MekoAuth } from '../signin';
 import { harnessLogosToggle } from '../toggle';
 import { claudeUpdateText, cx, defaultAgentChoice, httpHost, relativeTime } from '../util';
@@ -842,39 +843,29 @@ function UsageStatsCheck() {
 }
 
 function UpdatesTab({ initial, onWhatsNew }: { initial: UpdateStatus; onWhatsNew: (from: string, to: string) => void }) {
-  const [u, setU] = useState(initial);
+  // Meko checks for AgentK's updates, installs them and keeps Update automatically (mekoupdate.ts).
+  const { row, error: mekoError, loaded } = useMekoUpdate();
+  const can = !!row?.updatable;
+  const available = can && !!row.update_available && !!row.latest;
   // What the update on offer brings, else what the last update brought (none on an install never updated).
   const whatsNew =
-    u.available && u.latest
-      ? { from: u.current, to: u.latest, label: `What’s in v${u.latest}` }
-      : u.lastUpdatedFrom
-        ? { from: u.lastUpdatedFrom, to: u.current, label: `What’s new in v${u.current}` }
+    available && row.latest
+      ? { from: initial.current, to: row.latest, label: `What’s in v${row.latest}` }
+      : initial.lastUpdatedFrom
+        ? { from: initial.lastUpdatedFrom, to: initial.current, label: `What’s new in v${initial.current}` }
         : null;
-  const [busy, setBusy] = useState<'check' | 'apply' | 'channel' | null>(null);
+  const [busy, setBusy] = useState<'check' | 'apply' | 'auto' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const failed = updateFailed(row);
 
-  useEffect(() => setU(initial), [initial]);
-
-  const setChannel = async (channel: Settings['updateChannel']) => {
-    setBusy('channel');
-    setError(null);
-    try {
-      const next = await api.saveSettings({ updateChannel: channel });
-      setU((cur) => ({ ...cur, channel: next.updateChannel }));
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const run = async (kind: 'check' | 'apply') => {
+  const run = async (kind: 'check' | 'apply' | 'auto', f: () => Promise<Parameters<typeof takeRow>[0]>) => {
     setBusy(kind);
     setError(null);
     try {
-      setU(kind === 'check' ? await api.checkUpdate() : await api.applyUpdate());
+      takeRow(await f());
     } catch (e) {
       setError(errorMessage(e));
+      void refreshMekoUpdate();
     } finally {
       setBusy(null);
     }
@@ -882,39 +873,50 @@ function UpdatesTab({ initial, onWhatsNew }: { initial: UpdateStatus; onWhatsNew
 
   return (
     <div className="stack">
-      <Field label="Update channel" hint="Saved as soon as you pick one.">
-        <select
-          id="set-channel"
-          className="input"
-          value={u.channel}
-          disabled={busy === 'channel'}
-          onChange={(e) => void setChannel(e.target.value as Settings['updateChannel'])}
-        >
-          <option value="stable">Stable releases</option>
-          <option value="prerelease">Include pre-releases</option>
-          <option value="off">Off (don’t check)</option>
-        </select>
-      </Field>
       <dl className="kv">
         <dt>Installed</dt>
-        <dd className="mono">v{u.current}</dd>
+        <dd className="mono">v{initial.current}</dd>
         <dt>Latest</dt>
-        <dd className="mono">{u.latest ? `v${u.latest}` : '—'}</dd>
+        <dd className="mono">{row?.latest ? `v${row.latest}` : '—'}</dd>
         <dt>Last checked</dt>
-        <dd>{relativeTime(u.lastCheckedAt)}</dd>
+        <dd>{relativeTime(row?.checked_at ? Date.parse(row.checked_at) : null)}</dd>
       </dl>
-      {u.lastError && <p className="error-text">Last check failed: {u.lastError}</p>}
+      {!loaded ? (
+        <p className="muted">
+          <Busy label="Asking Meko" />
+        </p>
+      ) : mekoError ? (
+        <p className="muted">{mekoError}</p>
+      ) : (
+        <label className="check">
+          <input
+            id="set-auto-update"
+            type="checkbox"
+            checked={row?.auto_update ?? true}
+            disabled={!can || busy === 'auto'}
+            onChange={(e) => {
+              const on = e.target.checked;
+              void run('auto', () => mekoUpdates.setAuto(on));
+            }}
+          />
+          <span>Update automatically (Meko installs new versions when it finds them)</span>
+        </label>
+      )}
+      {row?.waiting && <p className="muted">An automatic update is waiting: {row.waiting}</p>}
+      {row?.check_error && <p className="error-text">Last check failed: {row.check_error}</p>}
+      {failed && <p className="error-text">The last update failed: {failed}</p>}
       <p className="muted">
-        Updates restart only the web server. Your Claude sessions keep running, and the page reconnects on its own.
+        Meko installs AgentK’s updates. They restart only the web server: your Claude sessions keep running, and the page reconnects on
+        its own.
       </p>
       <ErrorText error={error} />
       <div className="settings-actions">
-        <button className="btn" disabled={!!busy || u.channel === 'off'} onClick={() => run('check')}>
+        <button className="btn" disabled={!can || !!busy || installing(row)} onClick={() => void run('check', mekoUpdates.check)}>
           {busy === 'check' ? <Busy label="Checking" /> : 'Check now'}
         </button>
-        {u.available && (
-          <button className="btn primary" disabled={!!busy || u.applying} onClick={() => run('apply')}>
-            {busy === 'apply' || u.applying ? <Busy label="Updating" /> : 'Update to the latest version'}
+        {(available || installing(row)) && (
+          <button className="btn primary" disabled={!!busy || installing(row)} onClick={() => void run('apply', mekoUpdates.update)}>
+            {busy === 'apply' || installing(row) ? <Busy label="Updating" /> : 'Update to the latest version'}
           </button>
         )}
         {whatsNew && (

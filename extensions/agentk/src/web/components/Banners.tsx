@@ -5,10 +5,13 @@ import { api, errorMessage } from '../api';
 import { copyText } from '../clipboard';
 import type { Conn } from '../hooks/useEvents';
 import { useInstall } from '../installapp';
+import { installing, mekoUpdates, refreshMekoUpdate, takeRow, updateFailed, useMekoUpdate } from '../mekoupdate';
 import { claudeUpdateText, noAgent } from '../util';
 import { Busy } from './common';
 
 const DISMISS_KEY = 'ak-dismissed-updated-from';
+/** The failed update whose banner was dismissed: its job's start. */
+const FAILED_KEY = 'ak-dismissed-update-failed';
 
 function readDismissed(key = DISMISS_KEY): string | null {
   try {
@@ -329,6 +332,12 @@ export function Banners({
   const [dismissed, setDismissed] = useState<string | null>(readDismissed);
   const [applying, setApplying] = useState(false);
   const u = state.update;
+  // Meko installs AgentK's updates: what's available, and its job, are Meko's (mekoupdate.ts).
+  const meko = useMekoUpdate().row;
+  const offer = meko?.updatable && meko.update_available && meko.latest ? meko.latest : null;
+  const failed = updateFailed(meko);
+  const failedKey = failed && meko?.job ? meko.job.started_at : null;
+  const [dismissedFailure, setDismissedFailure] = useState<string | null>(() => readDismissed(FAILED_KEY));
   const updatedKey = u.justUpdatedFrom ? `${u.justUpdatedFrom}->${u.current}` : null;
 
   return (
@@ -385,18 +394,19 @@ export function Banners({
           </button>
         </div>
       )}
-      {u.available && u.latest && !u.applying && (
+      {offer && !installing(meko) && (
         <div className="banner info">
-          Version {u.latest} is available. Updating restarts the web server only; your sessions keep running.
+          Version {offer} is available. Updating restarts the web server only; your sessions keep running.
           <button
             className="btn primary small"
             disabled={applying}
             onClick={async () => {
               setApplying(true);
               try {
-                await api.applyUpdate();
+                takeRow(await mekoUpdates.update());
               } catch (e) {
                 onError(errorMessage(e));
+                void refreshMekoUpdate();
               } finally {
                 setApplying(false);
               }
@@ -404,16 +414,30 @@ export function Banners({
           >
             {applying ? <Busy label="Updating" /> : 'Update to the latest version'}
           </button>
-          <button className="btn small" onClick={() => u.latest && onWhatsNew(u.current, u.latest)}>
+          <button className="btn small" onClick={() => onWhatsNew(u.current, offer)}>
             What’s new
           </button>
         </div>
       )}
-      {u.applying && (
+      {installing(meko) && (
         <div className="banner info">
           <span>
             <Busy label="Installing the update" /> The page reloads on its own when it’s done.
           </span>
+        </div>
+      )}
+      {failed && failedKey && dismissedFailure !== failedKey && (
+        <div className="banner warn">
+          <span className="banner-text">Updating AgentK failed: {failed}</span>
+          <button
+            className="link-btn"
+            onClick={() => {
+              saveDismissed(FAILED_KEY, failedKey);
+              setDismissedFailure(failedKey);
+            }}
+          >
+            Dismiss
+          </button>
         </div>
       )}
       <MekoInstallBanner state={state} />

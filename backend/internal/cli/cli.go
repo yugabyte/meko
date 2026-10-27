@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -70,14 +71,18 @@ Usage:
   meko uninstall remove the service and the installed releases, keeping your data;
                  --purge also destroys the data and its secrets as destroy does (it asks first,
                  unless --force; --with-extensions removes the extensions too)
-  meko update    install the newest release now (it updates itself under the service);
-                 --check only looks
-  meko install_extension agentk|presenter
-                 install AgentK or Presenter, pointed at this Meko, and start and stop it with
-                 Meko (its command, agentk or meko_presenter, already on PATH is used as it is)
-  meko update_extension presenter
-                 install Presenter's newest release now and restart it (one that fails to start
-                 is rolled back); --check only looks. AgentK updates itself
+  meko update    install Meko's newest release now (it updates itself under the service), then
+                 every extension's (update_extension --all); --check only looks
+  meko install_extension agentk|presenter [--version V] [-- <its install's options>]
+                 install AgentK or Presenter from its newest release, pointed at this Meko, and
+                 start and stop it with Meko (its command, agentk or meko_presenter, already on
+                 PATH is used as it is, unless --version names a release to install over it);
+                 what follows -- goes to its own install (AgentK: --agent claude|opencode|kiro,
+                 --install-deps, --no-install-deps)
+  meko update_extension agentk|presenter|--all
+                 install an extension's newest release now and restart it (one that fails to
+                 start is rolled back); --check only looks; --auto=on|off sets whether Meko
+                 installs its updates on its own (default on), and updates nothing
   meko uninstall_extension agentk|presenter
                  stop starting and stopping it with Meko (it stays installed)
 
@@ -120,6 +125,9 @@ type cmdFlags struct {
 	lines                                                                          int
 	server, memoryEngine, service                                                  bool
 	access                                                                         string
+	all                                                                            bool
+	auto, version                                                                  string
+	extra                                                                          []string // after --
 }
 
 // Run runs the command in args (without the program name) and returns the exit code.
@@ -129,6 +137,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	}
 	cmd, rest := args[0], args[1:]
+	// What an extension's launcher runs; not in the usage, not for people.
+	if cmd == "_launch" {
+		return runLaunch(rest, stderr)
+	}
 	fs := flag.NewFlagSet("meko "+cmd, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	dataDir := fs.String("data-dir", "", "the data folder (default ~/.meko, or MEKO_HOME)")
@@ -161,6 +173,16 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&c.withExtensions, "with-extensions", false, "uninstall the extensions and remove their data too")
 	case "update", "update_extension":
 		fs.BoolVar(&c.check, "check", false, "only look for an update")
+		if cmd == "update_extension" {
+			fs.BoolVar(&c.all, "all", false, "every installed extension Meko updates")
+			fs.StringVar(&c.auto, "auto", "", "on or off: whether Meko installs its updates on its own")
+		}
+	case "install_extension":
+		fs.StringVar(&c.version, "version", "", "install this release rather than the newest")
+		// What follows -- is the extension's own install's.
+		if i := slices.Index(rest, "--"); i >= 0 {
+			rest, c.extra = rest[:i], rest[i+1:]
+		}
 	case "cloud_link":
 		fs.StringVar(&cl.url, "url", "", "the MCP server's URL (default Meko Cloud's)")
 		fs.StringVar(&cl.webURL, "web-url", "", "its web app's URL (default: worked out from --url)")
@@ -247,7 +269,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "meko cloud_link: --off takes no URLs")
 		return exitUsage
 	}
-	if (cmd == "install_extension" || cmd == "update_extension" || cmd == "uninstall_extension") && t.text == "" {
+	if cmd == "update_extension" && c.all && (t.text != "" || c.auto != "") {
+		fmt.Fprintln(stderr, "meko update_extension: --all takes no name and no --auto")
+		return exitUsage
+	}
+	if (cmd == "install_extension" || cmd == "update_extension" || cmd == "uninstall_extension") && t.text == "" &&
+		!c.all {
 		fmt.Fprintf(stderr, "meko %s: name the extension (%s)\n", cmd, strings.Join(extensions.KnownNames(), ", "))
 		return exitUsage
 	}
@@ -285,9 +312,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	case "uninstall":
 		return runUninstall(l, c.purge, destroyOptions{force: c.force, withExtensions: c.withExtensions}, stdout, stderr)
 	case "install_extension":
-		return runInstallExtension(l, t.text, stdout, stderr)
+		return runInstallExtension(l, t.text, extInstallOptions{version: c.version, extra: c.extra}, stdout, stderr)
 	case "update_extension":
-		return runUpdateExtension(l, t.text, c.check, stdout, stderr)
+		return runUpdateExtension(l, t.text, extUpdateFlags{check: c.check, all: c.all, auto: c.auto}, stdout, stderr)
 	case "uninstall_extension":
 		return runUninstallExtension(l, t.text, stdout, stderr)
 	case "update":

@@ -67,7 +67,7 @@ gone keep their row: a relaunch exits at once and shows as exited, like a crash.
 only stops offering it for new sessions: Claude Code sessions still relaunch, resume and recover with
 AgentK's mod, whose version check (`supportsMod`) reads Claude Code's version even while it's off.
 
-The installer needs one agent: `install.sh` takes Claude Code, OpenCode (on the PATH or in
+The install needs one agent: `scripts/deps.sh`, which `agentk install` runs first, takes Claude Code, OpenCode (on the PATH or in
 `~/.opencode/bin`) or `kiro-cli`, and with none asks which to install (Claude Code first, OpenCode
 second, Kiro CLI third; `--agent claude|opencode|kiro` for unattended runs, and `--install-deps` takes
 Claude Code without asking unless `--agent` says otherwise), with Anthropic's installer, OpenCode's
@@ -141,7 +141,7 @@ section and an adapter. The compiler names each `Record<HarnessId, …>` that ne
 logo, its Meko agent id prefix, the Settings dialog's switch), but not these, which also need one:
 the Settings route's `<id>Enabled` field (`Settings` in `types.ts`, checked and applied in
 `server.ts`), the installer's "no coding agent found" message
-(`settleAgents` in `install.ts`), which names each agent and where to get it, and `install.sh`'s
+(`settleAgents` in `install.ts`), which names each agent and where to get it, and `deps.sh`'s
 agent choice and sign-in check:
 
 | | Claude Code | OpenCode | Kiro |

@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // The meko_presenter command: the server, and the commands Meko runs for an extension (start, stop,
-// status, install, uninstall, and _handoff, which names the socket Meko serves at /ext/presenter/).
+// status, install, uninstall, _handoff, which names the socket Meko serves at /ext/presenter/, and
+// _busy, which says whether a talk is live).
 
 import { execFileSync, spawn } from 'node:child_process';
 import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { request } from 'node:http';
 import { createConnection } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +14,6 @@ import { DeckStore } from './decks.js';
 import { Jobs } from './jobs.js';
 import { MekoClient } from './meko.js';
 import { getPaths, MEKO_COMMANDS, refuseOtherMeko, withLocalBin, type Paths } from './paths.js';
-import { HEALTHY_MS, markHealthy, uncountStart } from './probation.js';
 import { Runs } from './runs.js';
 import { broadcast, buildServer, findWebDir, type Core } from './server.js';
 
@@ -118,13 +119,8 @@ async function serve(paths: Paths): Promise<void> {
     }
     process.exit(0);
   };
-  // A release on probation (an update Meko just switched to) has proved itself after HEALTHY_MS; a
-  // deliberate stop of it isn't a failed start.
-  setTimeout(() => markHealthy(), HEALTHY_MS).unref();
-  process.once('SIGTERM', () => {
-    uncountStart();
-    void stop();
-  });
+  // A clean stop exits 0, which Meko's launcher doesn't count as a failed start of a new version.
+  process.once('SIGTERM', () => void stop());
   process.once('SIGINT', () => void stop());
 }
 
@@ -133,9 +129,10 @@ async function start(paths: Paths): Promise<void> {
   mkdirSync(paths.logs, { recursive: true, mode: 0o700 });
   mkdirSync(paths.run, { recursive: true, mode: 0o700 });
   const log = openSync(join(paths.logs, 'server.log'), 'a', 0o600);
-  // A release starts it through its launcher (packaging/meko_presenter), which counts the starts of a
-  // version on probation and rolls back one that keeps failing. Otherwise Node's own flags too (a
-  // loader under `tsx`), so the server runs the way this command did.
+  // A release starts it through its launcher (packaging/meko_presenter), which hands it to Meko's
+  // (`meko _launch`): Meko counts the starts of a version on probation and rolls back one that keeps
+  // failing. Otherwise Node's own flags too (a loader under `tsx`), so the server runs the way this
+  // command did.
   const launcher = process.env.PRESENTER_LAUNCHER;
   const [cmd, args] = launcher ? [launcher, ['serve']] : [process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), 'serve']];
   const child = spawn(cmd, args, { detached: true, stdio: ['ignore', log, log], env: process.env });
@@ -161,6 +158,34 @@ async function stop(paths: Paths): Promise<void> {
   // Its own stop never ran, so the pid file is left for this to remove.
   rmSync(paths.pid, { force: true });
   console.log('Presenter stopped');
+}
+
+/**
+ * `_busy`, which Meko runs before it updates Presenter on its own: exit 0 while a talk is live (the
+ * server says so on its socket, `GET /_meko/busy`), so the update waits for the next check. A
+ * server that isn't running, or doesn't answer within 10 s, isn't busy.
+ */
+async function busy(paths: Paths): Promise<void> {
+  const live = await new Promise<boolean>((resolve) => {
+    if (!existsSync(paths.webSock)) return resolve(false);
+    const req = request({ socketPath: paths.webSock, path: '/_meko/busy', timeout: 10_000 }, (res) => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (c: string) => (body += c));
+      res.on('end', () => {
+        try {
+          resolve(res.statusCode === 200 && (JSON.parse(body) as { busy?: unknown }).busy === true);
+        } catch {
+          resolve(false);
+        }
+      });
+    });
+    req.on('timeout', () => req.destroy());
+    req.on('error', () => resolve(false));
+    req.end();
+  });
+  console.log(live ? 'A presentation is live' : 'No presentation is live');
+  process.exitCode = live ? 0 : 1;
 }
 
 async function status(paths: Paths): Promise<void> {
@@ -225,6 +250,7 @@ const HELP = `meko_presenter: Presenter, interactive, branching presentations fr
   meko_presenter install      --meko-url <url> --meko-key <key> [--non-interactive]
   meko_presenter uninstall    [--purge] [--non-interactive]
   meko_presenter version      [--json]
+  meko_presenter _busy        exit 0 while a talk is live (Meko's automatic updates wait for it)
 
 Meko serves the pages at /ext/presenter/ on its web listener.`;
 
@@ -239,6 +265,8 @@ export async function main(argv: string[]): Promise<void> {
     case 'status': return status(paths);
     case 'install': return install(paths);
     case 'uninstall': return uninstall(paths, args);
+    // Whether a talk is live, for Meko's automatic updates; not for people to run.
+    case '_busy': return busy(paths);
     // Where the server listens, for Meko's web listener; not for people to run.
     case '_handoff':
       console.log(JSON.stringify({ socket: paths.webSock, legacy: null }));

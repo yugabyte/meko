@@ -28,6 +28,7 @@ import { errMsg } from './log.js';
 import { claudePath, expandHome, getPaths, homeIn, MekoHomeError, mekoHome, releaseHome, SHARED_TMP, withLocalBin, type MekoHomeOptions, type Paths } from './paths.js';
 import { dropOldNames, hostServices, removeMoveJob, renderServiceFiles, samePath, servicesFor, startMoveJob, type ServiceManager } from './service.js';
 import { copyClaudeProjects } from './trust.js';
+import { onProbation } from './updates.js';
 
 /** The move's journal, in the home being moved (so it moves with it). */
 export const JOURNAL = 'move.json';
@@ -196,13 +197,13 @@ export function checkMove(paths: Paths, cfg: Config, d: CheckDeps = {}): MoveChe
 }
 
 /**
- * The commands Meko runs for an extension that `refuseOtherMeko` checks: start, stop, status,
- * `destroy`'s uninstall, and `_handoff` (where the server listens and an older install's login: a
- * Meko for another data folder mustn't serve this home or take its login). Not `install`: the installer updates the existing home in place whatever
- * MEKO_HOME says, and has switched `app/current` before it runs `agentk install`, which then keeps
- * the Meko folder the home is in over MEKO_HOME (`runInstall`).
+ * The commands Meko runs for an extension that `refuseOtherMeko` checks: start, stop, restart (after
+ * an update), status, `destroy`'s uninstall, and `_handoff` (where the server listens and an older
+ * install's login: a Meko for another data folder mustn't serve this home or take its login). Not
+ * `install`: Meko has unpacked the release and switched `app/current` before it runs `agentk
+ * install`, which then keeps the Meko folder the home is in over MEKO_HOME (`runInstall`).
  */
-export const MEKO_COMMANDS = ['uninstall', 'start', 'stop', 'status', '_handoff'];
+export const MEKO_COMMANDS = ['uninstall', 'start', 'stop', 'restart', 'status', '_handoff'];
 
 /**
  * Refuses a command Meko runs for another data folder than the one this home is in. A release's
@@ -625,9 +626,10 @@ export function finishMove(home: string, log: Log): void {
 // When it happens
 
 /**
- * Starts the move once this release has proved healthy (no update-pending.json), whatever the
- * sessions are doing: at the server's start, and again when the launcher's pending file goes. A move
- * that can't happen says why once per start, and the install keeps running where it is.
+ * Starts the move once this release has proved healthy (not on probation after Meko's update:
+ * `onProbation` in updates.ts), whatever the sessions are doing: at the server's start, and again when
+ * the probation is over. A move that can't happen says why once per start, and the install keeps
+ * running where it is.
  */
 export class HomeMove {
   private started = false;
@@ -636,11 +638,16 @@ export class HomeMove {
   constructor(
     private paths: Paths,
     private log: Log,
-    private o: { services?: () => ServiceManager | null; check?: (paths: Paths, cfg: Config) => MoveCheck; start?: typeof startMoveJob } = {},
+    private o: {
+      services?: () => ServiceManager | null;
+      check?: (paths: Paths, cfg: Config) => MoveCheck;
+      start?: typeof startMoveJob;
+      onProbation?: () => boolean;
+    } = {},
   ) {}
 
   check(): void {
-    if (this.started || existsSync(this.paths.updatePending)) return;
+    if (this.started || (this.o.onProbation ?? onProbation)()) return;
     const svc = (this.o.services ?? (() => servicesFor(this.paths.home)))();
     if (!svc?.installed('server')) return; // `serve` moves a home without services at its start
     let r: MoveCheck;

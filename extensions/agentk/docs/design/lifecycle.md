@@ -149,7 +149,7 @@ stateDiagram-v2
 ## Queued gates
 
 **Open PR** and **Merge & Close** can be pressed before they could go; the server keeps the press
-in `sessions.queued_gate` (so it survives a restart, a self-update included) and carries it out
+in `sessions.queued_gate` (so it survives a restart, an update included) and carries it out
 later. The gate then shows a pill (*✓ Open PR queued: goes when the turn ends*, *✓ Merge queued:
 waiting on CI*) with **Cancel** (`cancel-queued`), and the activity log says when it was queued,
 sent, withdrawn or dropped.

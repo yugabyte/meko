@@ -98,6 +98,11 @@ func (a App) Unpack(tarball, version string) error {
 	if err := CheckBinary(filepath.Join(top, "bin", a.name()), version); err != nil {
 		return err
 	}
+	for _, args := range a.Checks {
+		if err := runCheck(filepath.Join(top, "bin", a.name()), version, args); err != nil {
+			return err
+		}
+	}
 	mode := os.FileMode(0o644)
 	if a.Private {
 		mode = 0o600
@@ -126,7 +131,8 @@ func (a App) Unpack(tarball, version string) error {
 }
 
 // CheckBinary runs `<exe> version --json` and checks it names version: a binary that can't run on
-// this machine never becomes current. Meko's and Presenter's both answer {"version": "<version>"}.
+// this machine never becomes current. Meko's, AgentK's and Presenter's answer {"version":
+// "<version>"}; an AgentK release from before --json prints the bare version, which counts too.
 func CheckBinary(exe, version string) error {
 	name := filepath.Base(exe)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -143,7 +149,10 @@ func CheckBinary(exe, version string) error {
 	var v struct {
 		Version string `json:"version"`
 	}
-	if err := json.Unmarshal(out, &v); err != nil || v.Version != version {
+	if json.Unmarshal(out, &v) != nil && strings.TrimSpace(string(out)) == version {
+		return nil
+	}
+	if v.Version != version {
 		return fmt.Errorf("the staged %s says it's version %q, not %s", name, v.Version, version)
 	}
 	return nil
@@ -216,4 +225,19 @@ func extract(tarball, dir string, private bool) error {
 			// Nothing else belongs in a release (no devices, no hard links).
 		}
 	}
+}
+
+// CheckTimeout bounds each of an App's Checks.
+var CheckTimeout = 2 * time.Minute
+
+// runCheck runs one of an App's Checks on a staged binary.
+func runCheck(exe, version string, args []string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), CheckTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, exe, args...).CombinedOutput() //nolint:gosec // G204: the staged release
+	if err != nil {
+		return fmt.Errorf("%s %s failed on %s: %w: %s", filepath.Base(exe), strings.Join(args, " "), version, err,
+			strings.TrimSpace(string(out)))
+	}
+	return nil
 }

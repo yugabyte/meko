@@ -148,6 +148,10 @@ export const api = {
   // Starts an action as the extension's job; the list shows how it goes.
   extensionAction: (name: string, action: ExtensionAction) =>
     request<Extension>("POST", `/extensions/${enc(name)}/${action}`),
+  // Checks for releases now (Meko's and every extension's) and answers with the row.
+  extensionCheck: (name: string) => request<Extension>("POST", `/extensions/${enc(name)}/check`),
+  setExtensionAutoUpdate: (name: string, on: boolean) =>
+    request<Extension>("PATCH", `/extensions/${enc(name)}`, { auto_update: on }),
 
   update: () => request<UpdateStatus>("GET", "/update"),
   checkUpdate: () => request<UpdateStatus>("POST", "/update/check"),

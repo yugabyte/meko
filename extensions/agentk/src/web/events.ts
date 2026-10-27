@@ -49,18 +49,27 @@ export interface EventsHandlers {
  * link gets the time it needs instead of starting over forever; a ping answered within PROBE_MS
  * shows the link is quick again.
  *
- * A socket dropped while the last state said an update is installing retries every UPDATE_RETRY_MS
- * rather than backing off, so the page sees the new version (and reloads into it) as soon as it's up.
+ * A socket dropped while Meko installs an update of AgentK (`setUpdateInstalling`, from the job the
+ * page follows on Meko: `useMekoUpdate`) retries every UPDATE_RETRY_MS rather than backing off, so
+ * the page sees the new version (and reloads into it) as soon as it's up.
  *
  * onConn reports what to tell the user, not each socket's ups and downs: `connecting` until the
  * first socket proves itself, `open` once a socket's state arrives, and `closed` only once the
  * connection has been down for LOST_GRACE_MS. When the server said it's restarting into an update
- * it installed (a `restarting` message, sent just before it closes the socket), the wait is
+ * Meko installed (a `restarting` message, sent just before it closes the socket), the wait is
  * UPDATE_RETRY_FOR_MS: the update's own banner says what's happening. A drop before that, while the
  * update still downloads and checks itself, gets the usual wait. Retries report nothing, so the
  * lost-connection banner shows once and stays until the server is back instead of going off for
  * every try.
  */
+/** Meko is installing an update of AgentK: every connection retries fast while it does. */
+let installing = false;
+
+/** Says whether Meko is installing an update of AgentK (its job, which `useMekoUpdate` follows). */
+export function setUpdateInstalling(on: boolean): void {
+  installing = on;
+}
+
 export class EventsConnection {
   private ws: SocketLike | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -72,8 +81,6 @@ export class EventsConnection {
   /** How many times the deadlines have been doubled. */
   private slow = 0;
   private attempt = 0;
-  /** The last state said an update is installing. */
-  private updating = false;
   /** When the socket was dropped during an update, or 0. */
   private droppedAt = 0;
   /** The server said it's restarting into an update, since its last state. */
@@ -149,7 +156,6 @@ export class EventsConnection {
       // The server sends the state first thing, so the connection has proved itself: the
       // backoff starts over. (An open alone doesn't: the server upgrades, then may refuse.)
       this.attempt = 0;
-      this.updating = !!msg.state.update?.applying;
       this.droppedAt = 0;
       this.restarting = false;
       if (this.lostTimer) clearTimeout(this.lostTimer);
@@ -228,8 +234,8 @@ export class EventsConnection {
         this.report('closed');
       }, this.restarting ? UPDATE_RETRY_FOR_MS : LOST_GRACE_MS);
     }
-    if (this.updating) this.droppedAt ||= Date.now();
-    const delay = this.updating && Date.now() - this.droppedAt < UPDATE_RETRY_FOR_MS
+    if (installing) this.droppedAt ||= Date.now();
+    const delay = installing && Date.now() - this.droppedAt < UPDATE_RETRY_FOR_MS
       ? UPDATE_RETRY_MS
       : Math.min(15000, 500 * 2 ** this.attempt++) + Math.random() * 300;
     const later = () => {

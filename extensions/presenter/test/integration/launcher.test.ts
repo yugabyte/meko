@@ -1,94 +1,96 @@
 // packaging/meko_presenter, the release's launcher, in a release install laid out as Meko lays it
-// out: app/<version>/{bin/meko_presenter, node/bin/node, lib/dist/server/cli.js}, app/current, and the update
-// record Meko writes as it switches versions. Each version's cli.js is a stub that says which
-// version ran, with what.
+// out: app/<version>/{bin/meko_presenter, node/bin/node, lib/dist/server/cli.js} and app/current.
+// Each version's cli.js is a stub that says which version ran, with what. A fake `meko` on PATH
+// stands in for Meko's launcher, which counts the starts of an update and rolls one back.
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { tempDir } from '../helpers.js';
 
 const LAUNCHER = fileURLToPath(new URL('../../packaging/meko_presenter', import.meta.url));
-const OLD = '0.20261024.0';
 const NEW = '0.20261025.0';
 let dir: string;
 let app: string;
 
-function release(version: string): void {
-  const v = join(app, version);
+beforeEach(() => {
+  dir = tempDir('pres-launch-');
+  app = join(dir, 'app');
+  const v = join(app, NEW);
   mkdirSync(join(v, 'bin'), { recursive: true });
   mkdirSync(join(v, 'node', 'bin'), { recursive: true });
   mkdirSync(join(v, 'lib', 'dist', 'server'), { recursive: true });
   copyFileSync(LAUNCHER, join(v, 'bin', 'meko_presenter'));
   symlinkSync(process.execPath, join(v, 'node', 'bin', 'node'));
   writeFileSync(join(v, 'lib', 'dist', 'server', 'cli.js'),
-    `console.log(JSON.stringify({ version: ${JSON.stringify(version)}, args: process.argv.slice(2), appDir: process.env.PRESENTER_APP_DIR, launcher: process.env.PRESENTER_LAUNCHER }));\n`);
-}
-
-beforeEach(() => {
-  dir = tempDir('pres-launch-');
-  app = join(dir, 'app');
-  release(OLD);
-  release(NEW);
+    `console.log(JSON.stringify({ version: ${JSON.stringify(NEW)}, args: process.argv.slice(2), appDir: process.env.PRESENTER_APP_DIR, launcher: process.env.PRESENTER_LAUNCHER, launched: process.env.MEKO_LAUNCHED ?? null }));\n`);
   symlinkSync(NEW, join(app, 'current'));
   // ~/.local/bin/meko_presenter, as Meko links it.
   mkdirSync(join(dir, 'bin'));
   symlinkSync(join(app, 'current', 'bin', 'meko_presenter'), join(dir, 'bin', 'meko_presenter'));
+  mkdirSync(join(dir, 'home'));
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-function presenter(...args: string[]) {
-  const r = spawnSync('sh', [join(dir, 'bin', 'meko_presenter'), ...args], { encoding: 'utf8' });
-  expect(r.status, r.stderr).toBe(0);
-  return { ran: JSON.parse(r.stdout) as { version: string; args: string[]; appDir: string; launcher: string }, stderr: r.stderr };
+/**
+ * A fake meko in its own folder on PATH: `_launch --supported` answers as `supported` says, and
+ * `_launch` records its arguments, then runs the launcher it names again, as Meko does.
+ */
+function fakeMeko(supported: boolean): void {
+  mkdirSync(join(dir, 'meko-bin'));
+  const meko = join(dir, 'meko-bin', 'meko');
+  writeFileSync(meko, `#!/bin/sh
+[ "$1" = _launch ] || exit 2
+if [ "$2" = --supported ]; then exit ${supported ? 0 : 1}; fi
+printf '%s\\n' "$@" > "${join(dir, 'launch-args')}"
+shift 3
+MEKO_LAUNCHED=1 exec "$(sed -n 3p "${join(dir, 'launch-args')}")" "$@"
+`);
+  chmodSync(meko, 0o755);
 }
-const record = (attempts: number) =>
-  writeFileSync(join(app, 'update-pending.json'), JSON.stringify({ from: OLD, to: NEW, schema: 0, attempts }));
-const pending = () => existsSync(join(app, 'update-pending.json'))
-  ? (JSON.parse(readFileSync(join(app, 'update-pending.json'), 'utf8')) as { attempts: number })
-  : null;
+
+function presenter(env: Record<string, string>, ...args: string[]) {
+  const r = spawnSync('sh', [join(dir, 'bin', 'meko_presenter'), ...args], {
+    encoding: 'utf8',
+    // HOME and XDG_DATA_HOME in the test folder, so the machine's own meko is never found.
+    env: { ...process.env, PATH: `${join(dir, 'meko-bin')}:/usr/bin:/bin`, HOME: join(dir, 'home'), XDG_DATA_HOME: join(dir, 'home', 'share'), MEKO_LAUNCHED: '', ...env },
+  });
+  expect(r.status, r.stderr).toBe(0);
+  return { ran: JSON.parse(r.stdout) as { version: string; args: string[]; appDir: string; launcher: string; launched: string | null }, stderr: r.stderr };
+}
+const launchArgs = () => existsSync(join(dir, 'launch-args')) ? readFileSync(join(dir, 'launch-args'), 'utf8').trim().split('\n') : null;
 
 describe('the release launcher', () => {
   it('runs the bundled server of the release app/current names, naming its folder and itself', () => {
-    const { ran } = presenter('status');
-    expect(ran).toEqual({ version: NEW, args: ['status'], appDir: join(app, NEW), launcher: join(app, NEW, 'bin', 'meko_presenter') });
+    fakeMeko(true);
+    const { ran } = presenter({}, 'status');
+    expect(ran).toEqual({ version: NEW, args: ['status'], appDir: join(app, NEW), launcher: join(app, NEW, 'bin', 'meko_presenter'), launched: '' });
+    // Only serve goes through Meko.
+    expect(launchArgs()).toBeNull();
   });
 
-  it('counts the starts of the version on probation, and only serve\'s', () => {
-    record(0);
-    presenter('status');
-    expect(pending()?.attempts).toBe(0);
-    presenter('serve');
-    presenter('serve');
-    expect(pending()?.attempts).toBe(2);
+  it('hands serve to Meko\'s launcher, which runs it again', () => {
+    fakeMeko(true);
+    const { ran, stderr } = presenter({}, 'serve');
+    expect(launchArgs()).toEqual(['_launch', 'presenter', join(app, NEW, 'bin', 'meko_presenter'), 'serve']);
+    expect([ran.args, ran.launched, stderr]).toEqual([['serve'], '1', '']);
   });
 
-  it('rolls back after three failed starts: the old version is current and runs, the new one is bad', () => {
-    record(3);
-    const { ran, stderr } = presenter('serve');
-    expect(ran.version).toBe(OLD);
+  it.each([
+    ['a meko too old for _launch', true],
+    ['no meko at all', false],
+  ])('runs serve itself, saying a failed update won\'t roll back, with %s', (_n, withMeko) => {
+    if (withMeko) fakeMeko(false);
+    const { ran, stderr } = presenter({}, 'serve');
     expect(ran.args).toEqual(['serve']);
-    expect(stderr).toContain(`version ${NEW} failed to start 3 times; rolling back to ${OLD}`);
-    expect(readlinkSync(join(app, 'current'))).toBe(OLD);
-    expect(readFileSync(join(app, 'bad-versions'), 'utf8')).toBe(`${NEW}\n`);
-    // Owner-only, as every file in Meko's data folder.
-    expect(statSync(join(app, 'bad-versions')).mode & 0o077).toBe(0);
-    expect(pending()).toBeNull();
+    expect(launchArgs()).toBeNull();
+    expect(stderr).toContain('no meko with _launch was found, so a failed update won\'t roll back');
   });
 
-  it('drops the record when the old version starts (switched back by hand)', () => {
-    record(1);
-    rmSync(join(app, 'current'));
-    symlinkSync(OLD, join(app, 'current'));
-    expect(presenter('serve').ran.version).toBe(OLD);
-    expect(pending()).toBeNull();
-  });
-
-  it('keeps counting when the old version is gone: there is nothing to roll back to', () => {
-    record(3);
-    rmSync(join(app, OLD), { recursive: true });
-    expect(presenter('serve').ran.version).toBe(NEW);
-    expect(pending()?.attempts).toBe(4);
+  it('runs serve itself when Meko started it', () => {
+    fakeMeko(true);
+    const { ran, stderr } = presenter({ MEKO_LAUNCHED: '1' }, 'serve');
+    expect([ran.args, launchArgs(), stderr]).toEqual([['serve'], null, '']);
   });
 });
