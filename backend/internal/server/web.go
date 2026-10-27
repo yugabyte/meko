@@ -351,6 +351,9 @@ type ExtensionInfo struct {
 type ExtensionUpdate struct {
 	Version   string `json:"version,omitempty"` // the release Meko installed, when it manages it
 	Updatable bool   `json:"updatable"`         // Meko can update it (the update action)
+	// NotUpdatable says why an installed extension isn't updatable: a build from source, or an
+	// AgentK that hasn't moved into Meko's data folder yet. An older Meko never sends it.
+	NotUpdatable string `json:"not_updatable,omitempty"`
 	// Latest is the newest release the last check found (versions rolled back left out), and
 	// UpdateAvailable whether it's newer than Version and wasn't rolled back.
 	Latest          string     `json:"latest,omitempty"`

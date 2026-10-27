@@ -74,10 +74,11 @@ Usage:
   meko update    install Meko's newest release now (it updates itself under the service), then
                  every extension's (update_extension --all); --check only looks
   meko install_extension agentk|presenter [--version V] [-- <its install's options>]
-                 install AgentK or Presenter from its newest release (or V), pointed at this
-                 Meko, and start and stop it with Meko (its command, agentk or meko_presenter,
-                 already on PATH is used as it is); what follows -- goes to its own install
-                 (AgentK: --agent claude|opencode|kiro, --install-deps, --no-install-deps)
+                 install AgentK or Presenter from its newest release, pointed at this Meko, and
+                 start and stop it with Meko (its command, agentk or meko_presenter, already on
+                 PATH is used as it is, unless --version names a release to install over it);
+                 what follows -- goes to its own install (AgentK: --agent claude|opencode|kiro,
+                 --install-deps, --no-install-deps)
   meko update_extension agentk|presenter|--all
                  install an extension's newest release now and restart it (one that fails to
                  start is rolled back); --check only looks; --auto=on|off sets whether Meko

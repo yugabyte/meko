@@ -179,6 +179,14 @@ func TestInstallExtensionInstallsAgentKsRelease(t *testing.T) {
 	}
 	code, _, errs = run("install_extension", "agentk", "--version", "0.20261001.0", "--data-dir", dir)
 	want(t, "a version with no release", code, 1, errs, "no release 0.20261001.0 of AgentK")
+	// Going back to a version keeps Update automatically off, so the next check doesn't undo it.
+	code, out, errs = run("update_extension", "agentk", "--auto=off", "--data-dir", dir)
+	want(t, "--auto=off", code, 0, out+errs, "only reports AgentK's updates")
+	code, out, errs = run("install_extension", "agentk", "--version", newest, "--data-dir", dir)
+	want(t, "install_extension --version again", code, 0, out+errs, "Installing AgentK "+newest)
+	if reg, _ = extensions.Load(dir); reg.Entries["agentk"].Auto() {
+		t.Errorf("the switch came back on: %+v", reg.Entries["agentk"])
+	}
 }
 
 // An update of a running AgentK switches while it runs and restarts it with agentk restart, never
@@ -206,7 +214,7 @@ func TestUpdateExtensionRestartsAgentK(t *testing.T) {
 
 // When meko _launch rolls the new version back while agentk restart waits, the update says so.
 func TestUpdateExtensionReportsAgentKsRollBack(t *testing.T) {
-	const old, next = "0.20261024.0", "0.20261025.0"
+	const old, next = "0.20261023.0", "0.20261025.0"
 	t.Setenv("HOME", t.TempDir())
 	noRealExtensions(t)
 	dir := shortDir(t)
@@ -242,6 +250,33 @@ func TestUpdateExtensionWaitsForAgentKsMove(t *testing.T) {
 	}
 	code, _, errs := run("update_extension", "agentk", "--data-dir", dir)
 	want(t, "an unmoved AgentK", code, 1, errs, "once it has moved into Meko's data folder")
+	if u := testListener(t, dir).ExtensionUpdates("agentk"); u.Updatable ||
+		!strings.Contains(u.NotUpdatable, "once it has moved into Meko's data folder") {
+		t.Errorf("ExtensionUpdates = %+v", u)
+	}
+}
+
+// AgentK's own [update] channel = "off" turns Update automatically off, saved, so it stays off once
+// AgentK's config no longer says so.
+func TestAgentKsOldUpdatesOffCarriesOver(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	noRealExtensions(t)
+	dir := shortDir(t)
+	installedAgentK(t, dir, installedVersion)
+	cfg := filepath.Join(extensions.Dir(dir, "agentk"), "config.toml")
+	if err := os.WriteFile(cfg, []byte("[update]\nchannel = \"off\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w := testListener(t, dir)
+	if u := w.ExtensionUpdates("agentk"); u.AutoUpdate {
+		t.Errorf("on with AgentK's updates off: %+v", u)
+	}
+	if err := os.Remove(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if reg, _ := extensions.Load(dir); reg.Entries["agentk"].Auto() || w.ExtensionUpdates("agentk").AutoUpdate {
+		t.Errorf("came back on: %+v", reg.Entries["agentk"])
+	}
 }
 
 // update_extension --all goes through every installed extension; --auto sets Update automatically.

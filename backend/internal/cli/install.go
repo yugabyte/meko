@@ -338,7 +338,14 @@ func installExtension(ctx context.Context, l paths.Layout, name string, o extIns
 	if err != nil {
 		return err
 	}
-	reg.Entries[name] = extensions.Entry{Command: cmd, InstalledByMeko: true, AddedAt: time.Now().UTC()}
+	// Set up again (or another version installed), it keeps what it had: Update automatically
+	// above all, which someone going back to a version turned off.
+	e, ok := reg.Entries[name]
+	if !ok {
+		e.AddedAt = time.Now().UTC()
+	}
+	e.Command, e.InstalledByMeko = cmd, true
+	reg.Entries[name] = e
 	if err := reg.Save(); err != nil {
 		return err
 	}

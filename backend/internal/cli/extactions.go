@@ -35,10 +35,13 @@ func (w *webListener) ExtensionUpdates(name string) server.ExtensionUpdate {
 	if !ok {
 		return u
 	}
-	u.AutoUpdate = e.Auto()
+	u.AutoUpdate = w.autoUpdateOf(name, e)
 	u.Version = cat.Release(w.l.Root, name, e.Command)
 	u.Updatable = u.Version != ""
 	if !u.Updatable {
+		if home, err := os.UserHomeDir(); err == nil && cat.Managed {
+			u.NotUpdatable = cat.WhyNotUpdatable(w.l.Root, home, name, e.Command)
+		}
 		return u
 	}
 	app := cat.App(w.l.Root, name)
@@ -104,7 +107,7 @@ func (w *webListener) autoUpdate(ctx context.Context) {
 		e := reg.Entries[name]
 		cur := cat.Release(w.l.Root, name, e.Command)
 		latest := st.Extensions[name].Latest
-		if !known || !e.Auto() || cur == "" || !extensions.Newer(cur, latest) ||
+		if !known || !w.autoUpdateOf(name, e) || cur == "" || !extensions.Newer(cur, latest) ||
 			cat.App(w.l.Root, name).BadVersions()[latest] {
 			w.setWaiting(name, "")
 			continue
@@ -135,6 +138,19 @@ func (w *webListener) autoUpdate(ctx context.Context) {
 			return
 		}
 	}
+}
+
+// autoUpdateOf is an installed extension's Update automatically (Catalog.AutoUpdate). An unset
+// switch that its own old updater's setting turns off is saved off, so it stays off when that
+// setting goes.
+func (w *webListener) autoUpdateOf(name string, e extensions.Entry) bool {
+	on := extensions.Known[name].AutoUpdate(w.l.Root, name, e)
+	if e.AutoUpdate == nil && !on {
+		if err := setAutoUpdate(w.l, name, false); err != nil {
+			w.log.Warn("can't save an extension's Update automatically", "extension", name, "error", err)
+		}
+	}
+	return on
 }
 
 func (w *webListener) setWaiting(name, why string) {

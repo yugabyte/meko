@@ -27,6 +27,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BurntSushi/toml"
+
 	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/update"
 )
@@ -57,6 +59,10 @@ var Known = map[string]Catalog{
 		CleanExits: []int{75},
 		// Its own updater kept update-pending.json and bad-versions in its home.
 		LegacyRecords: true,
+		// Its session host names the version it started from; it outlives server updates.
+		RunningRecords: []string{"run/host.json"},
+		// Its own [update] channel = "off" keeps Update automatically off until it's turned on.
+		LegacyUpdatesOff: "config.toml",
 	},
 	// Presenter (extensions/presenter): interactive, branching presentations built from datapacks.
 	// Its command is meko_presenter. Its releases (presenter-v<version>) carry
@@ -117,6 +123,12 @@ type Catalog struct {
 	// LegacyRecords says its own updater once kept update-pending.json and bad-versions in Dir,
 	// which App reads too (update.App.Legacy).
 	LegacyRecords bool
+	// RunningRecords are files in Dir where a running process names the version it runs from
+	// (update.App.Running): pruning keeps it.
+	RunningRecords []string
+	// LegacyUpdatesOff is a TOML file in Dir whose [update] channel = "off" (its own updater's
+	// switch) makes Update automatically start off, until it's set (AutoUpdate).
+	LegacyUpdatesOff string
 	// OldHomes are folders under the home folder a release install of it lived in before its home
 	// moved into Meko's data folder (Dir); Find looks for the command in their app/current/bin.
 	OldHomes []string
@@ -145,6 +157,9 @@ func (c Catalog) AppIn(appRoot, name string) update.App {
 	a := update.App{Root: appRoot, Name: c.Command, Package: name, Private: true, Checks: c.CheckArgs}
 	if c.LegacyRecords {
 		a.Legacy = filepath.Dir(appRoot)
+	}
+	for _, f := range c.RunningRecords {
+		a.Running = append(a.Running, filepath.Join(filepath.Dir(appRoot), f))
 	}
 	return a
 }
@@ -186,8 +201,27 @@ type Entry struct {
 	AutoUpdate *bool `json:"auto_update,omitempty"`
 }
 
-// Auto reports whether Meko installs its updates on its own.
+// Auto reports whether Meko installs its updates on its own, as the entry says: missing is on.
+// Catalog.AutoUpdate also reads an extension's own old switch.
 func (e Entry) Auto() bool { return e.AutoUpdate == nil || *e.AutoUpdate }
+
+// AutoUpdate reports whether Meko installs an installed extension's updates on its own: the entry's
+// switch, or while that's unset, off when the extension's own updater was turned off
+// (LegacyUpdatesOff), else on.
+func (c Catalog) AutoUpdate(root, name string, e Entry) bool {
+	if e.AutoUpdate != nil || c.LegacyUpdatesOff == "" {
+		return e.Auto()
+	}
+	var old struct {
+		Update struct {
+			Channel string `toml:"channel"`
+		} `toml:"update"`
+	}
+	if _, err := toml.DecodeFile(filepath.Join(Dir(root, name), c.LegacyUpdatesOff), &old); err != nil {
+		return true
+	}
+	return old.Update.Channel != "off"
+}
 
 // Registry is extensions.json.
 type Registry struct {

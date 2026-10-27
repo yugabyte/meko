@@ -2,8 +2,10 @@ package update
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -150,5 +152,57 @@ func TestExtensionsOnlyUpdater(t *testing.T) {
 	st, ok := ReadState(data)
 	if !ok || st.Latest != "" || st.Extensions["presenter"].Latest != "0.20261024.0" {
 		t.Errorf("state %+v", st)
+	}
+}
+
+// A version a live process names in a Running record (AgentK's run/host.json: a session host started
+// before meko _launch, or without it) isn't pruned; one a dead process names is.
+func TestPruneKeepsAVersionARunningRecordNames(t *testing.T) {
+	a := newApp(t, "0.20261020.0", "0.20261021.0", "0.20261022.0")
+	rec := filepath.Join(t.TempDir(), "host.json")
+	a.Running = []string{rec}
+	write := func(body string) {
+		if err := os.WriteFile(rec, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(fmt.Sprintf(`{"pid":%d,"appDir":"/x/app/0.20261020.0","version":"0.20261020.0"}`, os.Getpid()))
+	if gone := a.Prune("0.20261022.0"); len(gone) != 1 || gone[0] != "0.20261021.0" {
+		t.Errorf("pruned %v with the host alive", gone)
+	}
+	dead := exec.Command("true")
+	if err := dead.Run(); err != nil {
+		t.Fatal(err)
+	}
+	write(fmt.Sprintf(`{"pid":%d,"appDir":null,"version":"0.20261020.0"}`, dead.Process.Pid))
+	if gone := a.Prune("0.20261022.0"); len(gone) != 1 || gone[0] != "0.20261020.0" {
+		t.Errorf("pruned %v with the host gone", gone)
+	}
+}
+
+// While a new Meko is on probation, a scheduled check installs nothing of Meko's, but still runs,
+// and so do the extensions' automatic updates.
+func TestProbationStillChecksForTheExtensions(t *testing.T) {
+	const cur, next = "0.20261021.0", "0.20261030.0"
+	a := newApp(t, "0.20261020.0", cur)
+	if err := a.Switch("0.20261020.0", cur, 0); err != nil {
+		t.Fatal(err)
+	}
+	data := t.TempDir()
+	ran := make(chan struct{})
+	u := &Updater{App: a, Version: cur, Client: releaseServer(t, next, tarball(t, next), ""), DataDir: data,
+		Auto: true, Log: slog.New(slog.DiscardHandler), FirstCheck: time.Millisecond, Interval: time.Hour,
+		Restart:    func() { t.Error("restarted on probation") },
+		AfterCheck: func(context.Context) { close(ran) }}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go u.Run(ctx)
+	select {
+	case <-ran:
+	case <-time.After(5 * time.Second):
+		t.Fatal("AfterCheck didn't run on probation")
+	}
+	if st, _ := ReadState(data); st.Latest != next || a.Current() != cur {
+		t.Errorf("latest %q, current %q", st.Latest, a.Current())
 	}
 }

@@ -3,6 +3,7 @@ package update
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -33,6 +34,11 @@ type App struct {
 	Private bool
 	Legacy  string
 	Checks  [][]string
+	// Running are files ({"pid", "appDir", "version"}) in which a running process names the version
+	// it runs from (AgentK's run/host.json): Prune keeps that version while the pid is alive, as it
+	// keeps one whose in-use lock is held. A process started before meko _launch existed, or not
+	// through it (AgentK's host started by its server without services), holds no lock.
+	Running []string
 }
 
 func (a App) name() string {
@@ -204,6 +210,9 @@ func (a App) Prune(keep ...string) []string {
 	for _, v := range keep {
 		k[v] = true
 	}
+	for v := range a.runningVersions() {
+		k[v] = true
+	}
 	var gone []string
 	for _, v := range a.Versions() {
 		if !k[v] && !a.InUse(v) && os.RemoveAll(a.Dir(v)) == nil {
@@ -240,6 +249,34 @@ func (a App) InUse(version string) bool {
 	}
 	defer func() { _ = f.Close() }() // closing it lets the probe's lock go
 	return errors.Is(unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB), unix.EWOULDBLOCK)
+}
+
+// runningVersions are the versions the Running files name for a live process.
+func (a App) runningVersions() map[string]bool {
+	out := map[string]bool{}
+	for _, file := range a.Running {
+		b, err := os.ReadFile(file) //nolint:gosec // G304: the extension's own record
+		if err != nil {
+			continue
+		}
+		var r struct {
+			PID     int    `json:"pid"`
+			AppDir  string `json:"appDir"`
+			Version string `json:"version"`
+		}
+		if json.Unmarshal(b, &r) != nil || r.PID <= 0 {
+			continue
+		}
+		if err := unix.Kill(r.PID, 0); err != nil && !errors.Is(err, unix.EPERM) {
+			continue
+		}
+		if r.AppDir != "" {
+			out[filepath.Base(r.AppDir)] = true
+		} else if r.Version != "" {
+			out[r.Version] = true
+		}
+	}
+	return out
 }
 
 func (a App) badFiles() []string {

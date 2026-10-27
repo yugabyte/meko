@@ -182,15 +182,19 @@ func (u *Updater) Run(ctx context.Context) {
 		case <-time.After(wait):
 		}
 		wait = u.Interval
+		// A new Meko on probation installs no further update of its own until it's done, but its
+		// check still runs, for the extensions.
+		onProbation := false
 		if !u.ExtensionsOnly {
-			if p, _ := u.App.ReadPending(); p != nil {
-				continue // a new version is on probation: no further update until it's done
-			}
+			p, _ := u.App.ReadPending()
+			onProbation = p != nil
 		}
 		if !u.lock().TryLock() {
 			continue // the web UI, or another meko, is checking or installing
 		}
-		if u.scheduled(ctx) {
+		if onProbation {
+			_, _, _, _ = u.Check(ctx)
+		} else if u.scheduled(ctx) {
 			u.Log.Info("restarting into the update")
 			u.Restart()
 			return // the lock stays held: nothing else installs before the restart

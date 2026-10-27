@@ -221,3 +221,30 @@ func TestCommandsFindTheNodeTheyWereInstalledWith(t *testing.T) {
 		t.Fatalf("handoff %+v, %v", h, err)
 	}
 }
+
+// AgentK's own [update] channel = "off" keeps Update automatically off until it's set; set, the
+// switch is what counts.
+func TestAutoUpdateReadsTheOldSwitch(t *testing.T) {
+	root := t.TempDir()
+	cat := Known["agentk"]
+	if !cat.AutoUpdate(root, "agentk", Entry{}) {
+		t.Error("off with no config")
+	}
+	if err := os.MkdirAll(Dir(root, "agentk"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(Dir(root, "agentk"), "config.toml"),
+		[]byte("[update]\nchannel = \"off\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if cat.AutoUpdate(root, "agentk", Entry{}) {
+		t.Error("on with the old switch off")
+	}
+	on := true
+	if !cat.AutoUpdate(root, "agentk", Entry{AutoUpdate: &on}) {
+		t.Error("the switch, once set, didn't count")
+	}
+	if !Known["presenter"].AutoUpdate(root, "presenter", Entry{}) {
+		t.Error("presenter off")
+	}
+}

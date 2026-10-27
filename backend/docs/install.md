@@ -190,9 +190,10 @@ another data folder refuses `start`, `stop`, `status`, `uninstall` and `_handoff
 - `meko install_extension <name>` needs a running Meko. When the extension's command is on PATH or
   in `~/.local/bin` (for AgentK also `agent-k-local`, its name before the rename, and the
   `app/current/bin` of its old home `~/.agent-k-local`: `Catalog.OldCommands`, `OldHomes`), it's used
-  as it is. Otherwise Meko picks the newest release with this platform's
-  `<name>-<version>-<os>-<arch>.tar.gz` and `SHA256SUMS` (skipping its `bad-versions`), or the one
-  `--version` names, and installs it as Meko installs itself (`update.App`): checked against
+  as it is, unless `--version` names a release, which is installed over it. Otherwise, or then,
+  Meko picks the newest release with this platform's `<name>-<version>-<os>-<arch>.tar.gz` and
+  `SHA256SUMS` (skipping its `bad-versions`), or the one `--version` names (even one rolled back),
+  and installs it as Meko installs itself (`update.App`): checked against
   `SHA256SUMS`, unpacked, `bin/<command> version --json` checked to name the version (an AgentK
   release from before `--json` prints the bare version, which counts) and the catalog's `CheckArgs`
   run (AgentK's `selftest`), into `<data>/extensions/<name>/app/<version>` (owner-only,
@@ -246,7 +247,10 @@ another data folder refuses `start`, `stop`, `status`, `uninstall` and `_handoff
   (AgentK's `host`) it execs in its own place. Either way it holds a shared `flock` on
   `<app>/<version>/.in-use` while the process runs (`App.LockInUse`), and pruning skips a version
   whose lock is held (`App.InUse`): AgentK's session host keeps running across server updates, from
-  the version it started with, and node-pty needs that folder. A launcher outside an app folder (a
+  the version it started with, and node-pty needs that folder. A host started before `_launch`
+  existed, or by AgentK's server without services (`node cli.js host`, not through the launcher),
+  holds no lock, so pruning also keeps the version a live process names in the catalog's
+  `RunningRecords` (AgentK's `run/host.json`: `pid` alive, `appDir` or `version`; `App.Running`). A launcher outside an app folder (a
   build from source) is just run. AgentK's own updater once kept `update-pending.json` and
   `bad-versions` in its home: Meko moves such a record into `app/` and counts those bad versions too
   (`App.Legacy`), and adds rolled-back versions to both lists, which a version from before still
@@ -256,12 +260,14 @@ another data folder refuses `start`, `stop`, `status`, `uninstall` and `_handoff
   record them in `update.json` under `extensions`; a Meko built from source runs checks for the
   extensions alone (`Updater.ExtensionsOnly`). After a scheduled check that doesn't restart into a new
   Meko, each extension whose **Update automatically** is on (`auto_update` in `extensions.json`;
-  missing is on) and that has a newer release is updated as its Extensions-page job, marked
+  missing is on, unless AgentK's own `config.toml` still has its old `[update] channel = "off"`,
+  which Meko then saves as off: `Catalog.LegacyUpdatesOff`) and that has a newer release is updated as its Extensions-page job, marked
   `auto`. One whose last update is still on probation waits, and so does one that says it's busy:
   the catalog's `BusyArgs` (Presenter's `meko_presenter _busy`, true while a talk is live) exit 0,
   within 15 s. It's tried again at the next check. Updates someone asks for never wait. When Meko
   installs its own update, it restarts first, and the new Meko's first check, a minute later,
-  updates the extensions: the same order as `meko update`, which updates Meko, then runs the new
+  updates the extensions (a Meko on probation still checks; it only installs no update of its
+  own until the probation ends): the same order as `meko update`, which updates Meko, then runs the new
   `meko update_extension --all`. `[update] channel = "off"` stops all of it; `[update] auto` is
   Meko's own.
 - **The update lock.** Every update, Meko's and the extensions', scheduled or asked for, holds the
@@ -323,7 +329,8 @@ A release install's app folder:
   becomes current. Then `update-pending.json` records `{from, to, schema, attempts}`, `app/current`
   is repointed atomically, and `serve` exits 0 for the service manager to start the new version.
 - **Probation**: each start of the pending version counts an attempt (a clean stop takes it back);
-  5 minutes up finishes the update and prunes versions older than the one it replaced.
+  5 minutes up finishes the update and prunes versions older than the one it replaced. Until then
+  the scheduled checks still run, and install the extensions' updates, but no update of Meko's.
 - **Rollback**: the 4th start of a version that failed 3 times puts back the previous one. If the
   new version migrated the database, `store.RestoreBackup` moves the upgraded file and its WAL aside
   to `meko.db.failed-<schema>` and copies back the `meko.db.bak-<schema>` the migration made; writes

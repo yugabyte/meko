@@ -73,6 +73,18 @@ describe('config and db', () => {
     expect(loadConfig(paths)).toEqual(DEFAULT_CONFIG);
   });
 
+  it('keeps an old [update] channel = "off", which Meko reads as Update automatically off, and drops the rest', () => {
+    const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
+    writeFileSync(paths.config, '[update]\nchannel = "off"\nrepo = "o/r"\n');
+    saveConfig(paths, loadConfig(paths, () => undefined));
+    const text = readFileSync(paths.config, 'utf8');
+    expect(text).toContain('[update]\nchannel = "off"');
+    expect(text).not.toContain('repo');
+    writeFileSync(paths.config, '[update]\nchannel = "stable"\n');
+    saveConfig(paths, loadConfig(paths, () => undefined));
+    expect(readFileSync(paths.config, 'utf8')).not.toContain('[update]');
+  });
+
   it('keeps defaults, with a warning, for values of the wrong type', () => {
     const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
     mkdirSync(paths.home, { recursive: true });

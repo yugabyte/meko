@@ -8,8 +8,10 @@
  * One store for the page (`useMekoUpdate`): AgentK's row is read when a view first needs it, every
  * IDLE_POLL_MS after, and every JOB_POLL_MS while Meko runs a job on AgentK. While that job is an
  * update, the events connection retries fast (`setUpdateInstalling`), and once the server answers as
- * the new version the page reloads into it (`reload.ts`). Without Meko (`npm run dev`), or under a
- * Meko too old to update AgentK, the row has no `updatable` and the store says so.
+ * the new version the page reloads into it (`reload.ts`). When the row isn't `updatable`, the store
+ * says why: Meko's `not_updatable` (a build from source, or an AgentK still in ~/.agent-k-local,
+ * which Meko updates once it has moved), else, from a Meko too old to say or none at all (`npm run
+ * dev`), that Meko needs updating first.
  */
 import { useSyncExternalStore } from 'react';
 import type { MekoExtension } from '../shared/types';
@@ -99,12 +101,19 @@ function schedule(): void {
   timer = setTimeout(() => void refreshMekoUpdate(), job ? JOB_POLL_MS : IDLE_POLL_MS);
 }
 
+/** Why the page can't update AgentK through this row, or null when it can. */
+function rowError(row: MekoExtension | null): string | null {
+  if (!row) return "Meko doesn't list AgentK.";
+  if (row.updatable) return null;
+  return row.not_updatable ? `Meko can't update this AgentK: ${row.not_updatable}` : UPDATE_MEKO_FIRST;
+}
+
 /** Reads AgentK's row from Meko again (one read at a time). */
 export function refreshMekoUpdate(): Promise<void> {
   reading ??= mekoUpdates
     .row()
     .then(
-      (row) => publish({ row, error: !row ? "Meko doesn't list AgentK." : row.updatable ? null : UPDATE_MEKO_FIRST, loaded: true }),
+      (row) => publish({ row, error: rowError(row), loaded: true }),
       (e: unknown) => publish({ row: state.row, error: e instanceof Error ? e.message : String(e), loaded: true }),
     )
     .finally(() => {
@@ -115,7 +124,7 @@ export function refreshMekoUpdate(): Promise<void> {
 
 /** Takes a row an action answered with, so the page shows a job from the click on. */
 export function takeRow(row: MekoExtension | null | undefined): void {
-  if (row?.name === NAME) publish({ row, error: row.updatable ? null : UPDATE_MEKO_FIRST, loaded: true });
+  if (row?.name === NAME) publish({ row, error: rowError(row), loaded: true });
 }
 
 function subscribe(f: () => void): () => void {

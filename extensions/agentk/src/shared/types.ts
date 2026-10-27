@@ -929,6 +929,8 @@ export interface MekoExtension {
   version?: string;
   /** Meko can update it. */
   updatable?: boolean;
+  /** Why Meko can't, when it's installed and not updatable (a build from source, or still in ~/.agent-k-local); an older Meko never says. */
+  not_updatable?: string;
   /** The newest release the last check found, rolled-back versions left out. */
   latest?: string;
   update_available?: boolean;

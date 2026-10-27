@@ -61,13 +61,7 @@ func Update(ctx context.Context, o UpdateOptions, name string) (bool, error) {
 	}
 	cur := cat.Release(o.Root, name, e.Command)
 	if cur == "" {
-		if h := cat.oldHomeOf(o.Home, e.Command); h != "" {
-			return false, fmt.Errorf("%w: %s still runs from %s, and Meko updates it once it has moved into Meko's "+
-				"data folder (%s), which it does by itself at its next start", ErrNotUpdatable, cat.Title, h, Dir(o.Root, name))
-		}
-		return false, fmt.Errorf("%w: %s here (%s) isn't a release Meko installed, so Meko can't update it: "+
-			"update the build yourself, or remove it from PATH and run meko install_extension %s", ErrNotUpdatable,
-			cat.Title, e.Command, name)
+		return false, fmt.Errorf("%w: %s", ErrNotUpdatable, cat.WhyNotUpdatable(o.Root, o.Home, name, e.Command))
 	}
 	rels := o.Releases
 	if rels == nil {
@@ -174,6 +168,17 @@ func started(cat Catalog, app update.App, next string, err error, out io.Writer)
 	}
 	fmt.Fprintf(out, "%s is running %s\n", cat.Title, next)
 	return true, nil
+}
+
+// WhyNotUpdatable says why Meko can't update an installed extension whose command isn't a release
+// it installed (Release is ""): one still in an old home, or a build from source.
+func (c Catalog) WhyNotUpdatable(root, home, name, command string) string {
+	if h := c.oldHomeOf(home, command); h != "" {
+		return fmt.Sprintf("%s still runs from %s, and Meko updates it once it has moved into Meko's data folder "+
+			"(%s), which it does by itself at its next start", c.Title, h, Dir(root, name))
+	}
+	return fmt.Sprintf("%s here (%s) isn't a release Meko installed, so Meko can't update it: update the build "+
+		"yourself, or remove it from PATH and run meko install_extension %s", c.Title, command, name)
 }
 
 // oldHomeOf is the old home (OldHomes, under home) command runs a release from, or "".

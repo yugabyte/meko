@@ -116,8 +116,12 @@ sees of it:
    installs an update when its check finds one). When a newer version is there, the rail shows a
    "Version X is available" banner with **Update to the latest version**; Settings › Updates has the
    same button, **Check now** (`POST /api/v1/extensions/agentk/check`) and the switch (`PATCH
-   /api/v1/extensions/agentk`). A version that was rolled back is never offered again. Under a Meko
-   too old to update AgentK (its row has no `updatable`), Settings says to update Meko first.
+   /api/v1/extensions/agentk`). A version that was rolled back is never offered again. When the row isn't `updatable`,
+   Settings says why: Meko's `not_updatable` (a build from source, or an AgentK still in
+   `~/.agent-k-local`, which Meko updates once it has moved), else, under a Meko too old to say,
+   to update Meko first. An old `[update] channel = "off"` in AgentK's `config.toml` keeps Meko's
+   **Update automatically** off for AgentK until that switch is set; AgentK keeps that one key when
+   it saves its config.
 2. **The update.** `POST /api/v1/extensions/agentk/update` starts Meko's job: it downloads the
    tarball and checks it against `SHA256SUMS`, unpacks it next to the current version, checks that
    it runs (`agentk version --json`, `agentk selftest`), writes its record
