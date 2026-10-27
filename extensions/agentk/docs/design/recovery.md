@@ -220,9 +220,11 @@ session that was mid-turn gets its continue prompt as after any host restart.
   journal is removed once the server answers on the new home (or the server removes it at its next
   start). The activity line is added once per session, and Claude Code's transcript folders are
   merged without losing a file: one the new folder has already stays in the old one.
-- **Services found by real path.** A release's home is its real path (the launcher resolves its
-  folder with `cd -P`), while a unit names the home as spelled, maybe through a symlinked `/home` or
-  the link the move leaves; `servicesFor` compares real paths, so `stop`, `start`, `status`, the
+- **Services found by folder, not spelling.** A release's home is its real path (the launcher
+  resolves its folder with `cd -P`), while a unit names the home as spelled, maybe through a
+  symlinked `/home`, the link the move leaves, or a bind mount that puts the same disk at another
+  path; `servicesFor` (`samePath`) takes the two for the same home when they're spelled alike, have
+  the same real path, or are the same folder (device and inode), so `stop`, `start`, `status`, the
   trigger and a start mid-move all find the services.
 - **Meko.** Meko finds AgentK by its command, `~/.local/bin/agentk`, which the move repoints;
   `meko destroy` leaves `extensions/` alone unless asked ([Meko's install

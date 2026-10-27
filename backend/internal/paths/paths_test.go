@@ -266,7 +266,8 @@ func TestSameDir(t *testing.T) {
 		want bool
 	}{
 		{a, a, true}, {a, link, true}, {a + "/.", a, true}, {file, hard, true},
-		{a, b, false}, {filepath.Join(a, "none"), filepath.Join(a, "none"), false}, {"", a, false},
+		{filepath.Join(a, "none"), filepath.Join(a, "none") + "/", true},
+		{a, b, false}, {filepath.Join(a, "none"), filepath.Join(b, "none"), false}, {"", a, false}, {"", "", false},
 	} {
 		if got := SameDir(c.a, c.b); got != c.want {
 			t.Errorf("SameDir(%q, %q) = %v, want %v", c.a, c.b, got, c.want)

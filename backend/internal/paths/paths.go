@@ -273,10 +273,14 @@ func LooksLikeDataDir(dir string) bool {
 	return err == nil && fi.Mode().IsRegular()
 }
 
-// SameDir reports whether a and b are the same folder (or file), following links. It compares the
-// folders themselves, not their paths: one folder can have spellings links don't explain, such as
-// a bind mount, or an automount of a local disk, that puts one disk at two paths.
+// SameDir reports whether a and b are the same folder (or file): spelled alike, which holds for one
+// that's gone too (a service naming a data folder destroy removed), or, following links, the same
+// folder itself. One folder can have spellings links don't explain, such as a bind mount, or an
+// automount of a local disk, that puts one disk at two paths.
 func SameDir(a, b string) bool {
+	if a != "" && filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
 	fa, err := os.Stat(a)
 	if err != nil {
 		return false

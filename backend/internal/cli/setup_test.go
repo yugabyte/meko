@@ -179,8 +179,13 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	if _, err := os.Stat(paths.New(dir).DB); !os.IsNotExist(err) {
 		t.Errorf("meko.db is still there: %v", err)
 	}
+	// A service for this data folder goes too, though the purge removed the folder before it's looked at.
+	if err := os.WriteFile(f.file, []byte(dir), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	code, out, _ = run("uninstall", "--data-dir", dir, "--purge", "--force", "--with-extensions")
 	want(t, "uninstall --purge --force --with-extensions", code, 0, out, "Removed "+dir)
+	want(t, "uninstall --purge --force --with-extensions", code, 0, out, "Removed the fake service")
 	if strings.Contains(out, "still installed") {
 		t.Errorf("uninstall said a removed extension is still installed:\n%s", out)
 	}
@@ -459,5 +464,21 @@ func TestServeUnderLaunchdWaitsForTheFolder(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The service for a data folder is found while the folder is gone (meko destroy leaves the service
+// to start Meko on an empty one), and not for another folder.
+func TestServiceOfAMissingDataFolder(t *testing.T) {
+	f := useFakeService(t)
+	gone := filepath.Join(t.TempDir(), "gone")
+	if err := os.WriteFile(f.file, []byte(gone), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if serviceOf(paths.New(gone)) == nil {
+		t.Error("the service for a missing data folder wasn't found")
+	}
+	if serviceOf(paths.New(t.TempDir())) != nil {
+		t.Error("the service for another data folder was found")
 	}
 }
