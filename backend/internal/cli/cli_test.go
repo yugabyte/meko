@@ -27,6 +27,7 @@ import (
 	"github.com/yugabyte/meko/backend/internal/mcp"
 	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/supervisor"
+	"github.com/yugabyte/meko/backend/internal/update"
 )
 
 // TestMain doubles as the meko binary: start re-runs os.Executable() (this test binary)
@@ -37,6 +38,13 @@ func TestMain(m *testing.M) {
 	}
 	// Never the login Keychain: the tests and the servers they start keep secrets in files.
 	_ = os.Setenv("MEKO_SECRETS", "file")
+	// meko _launch, which the launch tests run as this binary, with a short HealthyAfter.
+	if len(os.Args) > 1 && os.Args[1] == "_launch" {
+		if d, err := time.ParseDuration(os.Getenv(testHealthyAfterEnv)); err == nil {
+			update.HealthyAfter = d
+		}
+		os.Exit(Run(os.Args[1:], os.Stdout, os.Stderr))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "serve" {
 		if mode := os.Getenv("MEKO_TEST_SERVE"); mode != "" {
 			hungServe(mode)
@@ -63,6 +71,9 @@ func TestMain(m *testing.M) {
 
 // testEmbedderEnv passes testEmbedder to the serve a test starts (as this test binary).
 const testEmbedderEnv = "MEKO_TEST_EMBEDDER"
+
+// testHealthyAfterEnv is update.HealthyAfter for meko _launch run as the test binary.
+const testHealthyAfterEnv = "MEKO_TEST_HEALTHY_AFTER"
 
 // testCallHomeFirstCheckEnv passes testCallHomeFirstCheck to the serve a test starts.
 const testCallHomeFirstCheckEnv = "MEKO_TEST_CALL_HOME_FIRST_CHECK"

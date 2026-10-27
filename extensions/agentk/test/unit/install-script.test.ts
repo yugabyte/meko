@@ -1,15 +1,17 @@
 import { spawnSync, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pty from 'node-pty';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { tempDir } from '../helpers.js';
 
-// Runs the real scripts/install.sh (mostly up to --deps-only) against stand-in tools: a PATH with only
-// the basic utilities it needs, plus stubs for uname, package managers, sudo, curl, gh and friends.
-const SCRIPT = fileURLToPath(new URL('../../scripts/install.sh', import.meta.url));
+// Runs the real scripts/deps.sh (the prerequisites `agentk install` checks first) against stand-in
+// tools: a PATH with only the basic utilities it needs, plus stubs for uname, package managers, sudo,
+// curl, gh and friends.
+const SCRIPT = fileURLToPath(new URL('../../scripts/deps.sh', import.meta.url));
+const STUB = fileURLToPath(new URL('../../scripts/install.sh', import.meta.url));
 const REAL = ['sh', 'bash', 'sed', 'tr', 'mktemp', 'grep', 'tar', 'gzip', 'mkdir', 'cp', 'chmod', 'mv', 'rm', 'cat', 'env', 'head', 'dirname', 'ln', 'readlink', 'awk'];
 const GH_VERSION = '2.60.0';
 
@@ -59,14 +61,7 @@ while [ $# -gt 0 ]; do
 done
 echo "curl $url" >> "${log}"
 if $effective; then echo "https://github.com/cli/cli/releases/tag/v${GH_VERSION}"; exit 0; fi
-case $url in
-  # AgentK's releases (see release() below): the listing, and the assets of its one tag.
-  https://api.github.com/repos/*/releases?per_page=100) cat "${repo}/releases.json" ;;
-  https://github.com/yugabyte/agent-k-local/releases/download/*)
-    t=\${url%/*}; [ "\${t##*/}" = "$(cat "${repo}/release-ak.tag")" ] || exit 22
-    cp "${repo}/release-ak/\${url##*/}" "$out" ;;
-  *) cp "${repo}/release/\${url##*/}" "$out" ;;
-esac`);
+cp "${repo}/release/\${url##*/}" "$out"`);
 
   // gh's release: a tarball with bin/gh inside, and its checksums file.
   const name = `gh_${GH_VERSION}_linux_amd64`;
@@ -80,22 +75,14 @@ esac`);
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 /** What the stubs were asked to do, leaving out the sign-in checks. */
-/** jq for the gh stub's --jq, when this machine has it. */
-const JQ = spawnSync('sh', ['-c', 'command -v jq'], { encoding: 'utf8' }).stdout.trim();
-
 const calls = () =>
   (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : []).filter((c) => c && c !== 'claude auth status --json');
 
 /** Puts a repo tool on PATH as if it were already installed. */
 const have = (...tools: string[]) => tools.forEach((t) => execFileSync('cp', [join(repo, t), join(bin, t)]));
 
-function run(args: string[], env: Record<string, string> = {}) {
-  return runAll(['--deps-only', ...args], env);
-}
-
-/** Runs the whole installer, past the tools to the download and `agentk install`. */
-function runAll(args: string[], env: Record<string, string> = {}) {
-  const r = spawnSync(join(bin, 'sh'), [SCRIPT, ...args], {
+function run(args: string[], env: Record<string, string> = {}, script = SCRIPT) {
+  const r = spawnSync(join(bin, 'sh'), [script, ...args], {
     env: { PATH: bin, HOME: home, LANG: 'C', AK_BREW_DIRS: '', ...env },
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -103,14 +90,14 @@ function runAll(args: string[], env: Record<string, string> = {}) {
   return { code: r.status, err: r.stderr, calls: calls() };
 }
 
-describe('install.sh: installing missing tools', () => {
+describe('deps.sh: installing missing tools', () => {
   it('shows the plan and stops without --install-deps when there is no one to ask', () => {
     const r = run(['--non-interactive']);
     expect(r.code).toBe(1);
     expect(r.err).toContain('Missing');
     expect(r.err).toContain('sudo -n dnf install -y git curl');
     expect(r.err).toContain('download gh from github.com/cli/cli releases into ~/.local/bin');
-    expect(r.err).toMatch(/Rerun with --install-deps/);
+    expect(r.err).toContain('Run meko install_extension agentk -- --install-deps to install them');
     expect(r.calls).toEqual([]); // nothing was installed
   });
 
@@ -219,7 +206,7 @@ describe('install.sh: installing missing tools', () => {
     stub(bin, 'dnf', `echo "dnf $*" >> "${log}"; shift; ${installs(repo, bin).replace(/exit 0$/, 'exit 1')}`);
     const r = run(['--non-interactive', '--install-deps']);
     expect(r.code).toBe(1);
-    expect(r.err).toContain('installing git curl failed (see the output above). Install them yourself and run this installer again.');
+    expect(r.err).toContain('installing git curl failed (see the output above). Install them yourself and run meko install_extension agentk again.');
     expect(r.err).not.toContain('going on');
   });
 
@@ -241,7 +228,7 @@ describe('install.sh: installing missing tools', () => {
     have('git', 'curl');
     const r = run(['--non-interactive'], { GITHUB_TOKEN: 't' });
     expect(r.code).toBe(0);
-    expect(r.err).toMatch(/gh isn't installed: downloading with GITHUB_TOKEN/);
+    expect(r.err).toMatch(/gh isn't installed: install gh for PRs and reviews/);
     const installed = run(['--non-interactive', '--install-deps'], { GITHUB_TOKEN: 't' });
     expect(installed.code).toBe(0);
     expect(existsSync(join(home, '.local', 'bin', 'gh'))).toBe(true);
@@ -274,7 +261,7 @@ describe('install.sh: installing missing tools', () => {
     return new Promise((resolve) => {
       // Once the script ends, a shell keeps the terminal open until its last output is read: a pty
       // whose program has exited can lose what it wrote just before.
-      const wrap = 'sh "$0" --deps-only; s=$?; printf "\\n[exited %s]" "$s"; read -r _; exit "$s"';
+      const wrap = 'sh "$0"; s=$?; printf "\\n[exited %s]" "$s"; read -r _; exit "$s"';
       const p = pty.spawn(join(bin, 'sh'), ['-c', wrap, SCRIPT], { cols: 200, rows: 40, cwd: home, env: { PATH: bin, HOME: home, LANG: 'C', AK_BREW_DIRS: '' } });
       let out = '';
       const questions: [string, string][] = [[prompt, answer], ...more];
@@ -311,7 +298,7 @@ describe('install.sh: installing missing tools', () => {
     const r = await runInTerminal('n');
     expect(r.code).toBe(1);
     expect(r.calls).toEqual([]);
-    expect(r.out).toMatch(/Install them and run this installer again/);
+    expect(r.out).toMatch(/Install them and run meko install_extension agentk again/);
   });
 
   it('offers to sign gh in to GitHub', async () => {
@@ -348,264 +335,13 @@ describe('install.sh: installing missing tools', () => {
   });
 });
 
-describe('install.sh: when AgentK is already installed', () => {
-  const akHome = () => join(home, '.agent-k-local');
-  const current = (h = akHome()) => readlinkSync(join(h, 'app', 'current'));
-
-  /**
-   * An install of `version`: unpacked, linked as app/current and as ~/.local/bin/agentk and
-   * agent-k-local, and set up (config.toml, and both services, as long as there's no `no-services`
-   * file). `old`: one from before the rename to AgentK, with only agent-k-local; `oldServices`: its
-   * services still under their old names.
-   */
-  function installed(version: string, h = akHome(), { old = false, oldServices = old }: { old?: boolean; oldServices?: boolean } = {}) {
-    mkdirSync(join(h, 'app', version, 'bin'), { recursive: true });
-    stub(join(h, 'app', version, 'bin'), old ? 'agent-k-local' : 'agentk', 'exit 0');
-    symlinkSync(version, join(h, 'app', 'current'));
-    writeFileSync(join(h, 'config.toml'), '');
-    mkdirSync(join(home, '.local', 'bin'), { recursive: true });
-    for (const c of old ? ['agent-k-local'] : ['agentk', 'agent-k-local']) {
-      symlinkSync(join(h, 'app', 'current', 'bin', c), join(home, '.local', 'bin', c));
-    }
-    const services = `[ -f "${root}/no-services" ] && exit 1`;
-    const [unit, label] = oldServices ? ['agent-k-local', 'com.yugabyte.agent-k-local'] : ['agentk', 'com.yugabyte.agentk'];
-    stub(bin, 'systemctl', `[ "$*" = "--user is-enabled ${unit}.service" ] || [ "$*" = "--user is-enabled ${unit}-host.service" ] || exit 1; ${services}; echo enabled`);
-    stub(bin, 'launchctl', `case $2 in gui/1000/${label}|gui/1000/${label}.host) ;; *) exit 1 ;; esac; ${services}; exit 0`);
-  }
-
-  /**
-   * Release `version` of AgentK under `tag`, as `gh release download` (or curl) hands it out,
-   * listed after a newer Meko release, a prerelease and a draft (the repo's latest is Meko's).
-   * Its tarball is agentk-<version>-…, or with `old` agent-k-local-<version>-…, the only one a
-   * release from before the rename to AgentK has.
-   */
-  function release(version: string, tag = `v${version}`, { old = false } = {}) {
-    const name = old ? 'agent-k-local' : 'agentk';
-    const dir = join(repo, 'ak', `${name}-${version}`);
-    mkdirSync(join(dir, 'bin'), { recursive: true });
-    mkdirSync(join(dir, 'node', 'bin'), { recursive: true });
-    stub(join(dir, 'bin'), name, `echo "${name} $*" >> "${log}"`);
-    if (!old) symlinkSync('agentk', join(dir, 'bin', 'agent-k-local'));
-    // Stands in for the bundled Node renaming app/current.tmp over app/current.
-    stub(join(dir, 'node', 'bin'), 'node', 'ln -sfn "$(readlink "$3")" "$4" && rm "$3"');
-    const tarball = `${name}-${version}-linux-x64.tar.gz`;
-    rmSync(join(repo, 'release-ak'), { recursive: true, force: true });
-    mkdirSync(join(repo, 'release-ak'), { recursive: true });
-    execFileSync('tar', ['-czf', join(repo, 'release-ak', tarball), `${name}-${version}`], { cwd: join(repo, 'ak') });
-    const digest = createHash('sha256').update(readFileSync(join(repo, 'release-ak', tarball))).digest('hex');
-    writeFileSync(join(repo, 'release-ak', 'SHA256SUMS'), `${digest}  ${tarball}\n`);
-    writeFileSync(join(repo, 'release-ak.tag'), tag);
-    const listed = [
-      { tag_name: 'meko-v9.9.9', draft: false, prerelease: false },
-      { tag_name: 'agentk-v9.9.8', draft: true, prerelease: false },
-      { tag_name: 'agentk-v9.9.7-beta.1', draft: false, prerelease: true },
-      { tag_name: tag, draft: false, prerelease: false },
-    ];
-    // Pretty, one key per line, as GitHub's API answers curl.
-    writeFileSync(join(repo, 'releases.json'), JSON.stringify(listed, null, 2));
-    // gh's --jq is built in: here it's the real jq when there is one.
-    const api = JQ ? `while [ $# -gt 0 ]; do [ "$1" = --jq ] && q=$2; shift; done; "${JQ}" -r "$q" "${repo}/releases.json"` : `echo "${tag}"`;
-    stub(bin, 'gh', `echo "gh $*" >> "${log}"
-case "$1 $2" in
-  "api repos/yugabyte/agent-k-local/releases?per_page=100") ${api} ;;
-  "release download") [ "$3" = "${tag}" ] || { echo "release not found" >&2; exit 1; }
-    while [ $# -gt 0 ]; do [ "$1" = --dir ] && cp "${repo}/release-ak/"* "$2/"; shift; done ;;
-esac
-exit 0`);
-  }
-
-  const downloads = (calls: string[]) => calls.filter((c) => /^gh (release|api) /.test(c));
-
-  beforeEach(() => {
-    have('git', 'curl');
-    installed('1.2.3');
-    release('1.2.4');
-  });
-
-  it('says so and stops, changing nothing', () => {
-    const r = runAll([]);
-    expect(r.code).toBe(0);
-    expect(r.err).toContain('1.2.3 in ~/.agent-k-local');
-    expect(r.err).toContain('AgentK is already installed, so nothing was changed');
-    expect(r.err).toContain('Update banner or button');
-    // ~/.local/bin isn't on this PATH, so the commands are shown with it.
-    expect(r.err).toContain('~/.local/bin/agentk status');
-    expect(r.err).toContain('--output - | sh -s -- --reinstall');
+describe('install.sh', () => {
+  it("only says Meko installs AgentK now, and fails, for the Mekos and instructions that run it", () => {
+    const r = run(['--meko-url', 'http://127.0.0.1:7778/mcp', '--meko-key', 'k'], {}, STUB);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('Update Meko first (meko update), then run: meko install_extension agentk');
     expect(r.calls).toEqual([]);
-    expect(current()).toBe('1.2.3');
-
-    const onPath = runAll([], { PATH: `${bin}:${join(home, '.local', 'bin')}` });
-    expect(onPath.code).toBe(0);
-    expect(onPath.err).toMatch(/Status\S* +agentk status/);
-  });
-
-  it('counts services still under their names from before the rename to AgentK as set up', () => {
-    rmSync(join(akHome(), 'app'), { recursive: true });
-    rmSync(join(home, '.local', 'bin'), { recursive: true });
-    installed('1.2.3', akHome(), { oldServices: true });
-    const r = runAll([]);
-    expect(r.code).toBe(0);
-    expect(r.err).toContain('AgentK is already installed');
-  });
-
-  it('installs an install from before the rename to AgentK again, which adds the agentk command', () => {
-    rmSync(join(akHome(), 'app'), { recursive: true });
-    rmSync(join(home, '.local', 'bin'), { recursive: true });
-    installed('1.2.3', akHome(), { old: true });
-    const r = runAll(['--non-interactive']);
-    expect(r.err).not.toContain('already installed');
-    expect(r.code).toBe(0);
-    expect(r.calls).toContain('agentk install --non-interactive');
-    for (const c of ['agentk', 'agent-k-local']) expect(readlinkSync(join(home, '.local', 'bin', c))).toBe(join(akHome(), 'app', 'current', 'bin', c));
-  });
-
-  it("installs a release from before the rename to AgentK by its tarball's old name", () => {
-    release('1.2.0', 'v1.2.0', { old: true });
-    const r = runAll(['--version', '1.2.0', '--non-interactive']);
-    expect(r.code, r.err).toBe(0);
-    expect(current()).toBe('1.2.0');
-    expect(r.calls).toContain('agent-k-local install --non-interactive');
-  });
-
-  it('stops before the tools, even with tools missing and --install-deps', () => {
-    rmSync(join(bin, 'git'));
-    const r = runAll(['--non-interactive', '--install-deps']);
-    expect(r.code).toBe(0);
-    expect(r.err).toContain('AgentK is already installed');
-    expect(r.err).not.toContain('Missing');
-    expect(r.calls).toEqual([]);
-  });
-
-  it('installs the latest release again with --reinstall, without passing that on', () => {
-    const r = runAll(['--reinstall', '--non-interactive']);
-    expect(r.err).not.toContain('already installed');
-    expect(r.code).toBe(0);
-    expect(downloads(r.calls)).toHaveLength(2);
-    expect(r.calls).toContain('agentk install --non-interactive');
-    expect(current()).toBe('1.2.4');
-  });
-
-  it('installs another --version, and stops for the one installed', () => {
-    const same = runAll(['--version', 'v1.2.3']);
-    expect(same.code).toBe(0);
-    expect(same.err).toContain('AgentK is already installed');
-    expect(same.calls).toEqual([]);
-
-    // Either tag scheme's: agentk-v first, then v; each with the tarball's name, then its old one.
-    const other = runAll(['--version', '1.2.4']);
-    expect(other.code).toBe(0);
-    expect(downloads(other.calls)).toEqual([
-      expect.stringMatching(/^gh release download agentk-v1\.2\.4 .*--pattern agentk-1\.2\.4-/),
-      expect.stringMatching(/^gh release download agentk-v1\.2\.4 .*--pattern agent-k-local-1\.2\.4-/),
-      expect.stringMatching(/^gh release download v1\.2\.4 .*--pattern agentk-1\.2\.4-/),
-    ]);
-    expect(current()).toBe('1.2.4');
-  });
-
-  it.each([
-    ['gh', {}],
-    ['curl and GITHUB_TOKEN', { GITHUB_TOKEN: 't' }],
-  ])('installs the newest AgentK release, not the repo\'s latest (Meko\'s), with %s', (_name, env) => {
-    release('1.3.0', 'agentk-v1.3.0');
-    if ('GITHUB_TOKEN' in env) rmSync(join(bin, 'gh'));
-    const r = runAll(['--reinstall', '--non-interactive'], env);
-    expect(r.code, r.err).toBe(0);
-    expect(current()).toBe('1.3.0');
-    if (!('GITHUB_TOKEN' in env)) expect(downloads(r.calls)[1]).toMatch(/^gh release download agentk-v1\.3\.0 /);
-  });
-
-  it.each([
-    // An install that failed at its services, or was uninstalled.
-    ["the services aren't set up", () => writeFileSync(join(root, 'no-services'), '')],
-    ['~/.local/bin/agentk is gone', () => rmSync(join(home, '.local', 'bin', 'agentk'))],
-    // An install that stopped before its setup was saved.
-    ['config.toml is missing', () => rmSync(join(akHome(), 'config.toml'))],
-  ])('installs again when %s', (_, breakIt) => {
-    breakIt();
-    const r = runAll(['--non-interactive']);
-    expect(r.err).not.toContain('already installed');
-    expect(r.code).toBe(0);
-    expect(r.calls).toContain('agentk install --non-interactive');
-    expect(current()).toBe('1.2.4');
-    expect(existsSync(join(home, '.local', 'bin', 'agentk'))).toBe(true);
-  });
-
-  it('passes options for agentk install on rather than dropping them', () => {
-    const r = runAll(['--non-interactive', '--port', '8443', '--no-meko']);
-    expect(r.err).not.toContain('already installed');
-    expect(r.code).toBe(0);
-    expect(r.calls).toContain("agentk install --non-interactive --port 8443 --no-meko");
-  });
-
-  it('checks the LaunchAgents on a Mac', () => {
-    const env = { FAKE_OS: 'Darwin', FAKE_ARCH: 'arm64' };
-    const set = runAll([], env);
-    expect(set.code).toBe(0);
-    expect(set.err).toContain('AgentK is already installed');
-    expect(set.calls).toEqual([]);
-
-    writeFileSync(join(root, 'no-services'), '');
-    const unset = runAll(['--non-interactive'], env);
-    expect(unset.err).not.toContain('already installed');
-    expect(downloads(unset.calls).length).toBeGreaterThan(0);
-  });
-
-  it("installs into Meko's data folder (MEKO_HOME), whatever AK_HOME says, once nothing is in the old home", () => {
-    rmSync(akHome(), { recursive: true });
-    const meko = join(root, 'meko');
-    const r = runAll(['--non-interactive'], { MEKO_HOME: meko, AK_HOME: join(root, 'other-home') });
-    expect(r.code).toBe(0);
-    expect(r.calls).toContain('agentk install --non-interactive');
-    expect(current(join(meko, 'extensions', 'agentk'))).toBe('1.2.4');
-    expect(existsSync(join(root, 'other-home'))).toBe(false);
-  });
-
-  it('still checks the tools with --deps-only', () => {
-    const r = run(['--non-interactive']);
-    expect(r.code).toBe(0);
-    expect(r.err).toContain('Tools');
-    expect(r.err).not.toContain('already installed');
-  });
-});
-
-describe('install.sh: where AgentK lives', () => {
-  /** Where Meko's data folder is: the cases Meko's paths.Resolve and AgentK's mekoHome are tested against too. */
-  const CASES = (JSON.parse(readFileSync(join(__dirname, '../../../../backend/internal/paths/testdata/resolve-cases.json'), 'utf8')) as {
-    cases: { name: string; env: Record<string, string>; networkDirs: string[]; want?: string; error?: boolean }[];
-  }).cases;
-
-  // $SHARED_TMP is /var/tmp itself here: --print-home makes nothing. Other absolute paths go under
-  // the test's folder, the network folders made, since the check looks at the nearest folder there.
-  it.each(CASES)('$name', (c) => {
-    const fill = (p: string) => {
-      const v = p.replace('$HOME', home).replace('$SHARED_TMP', '/var/tmp').replace('$USER', 'me');
-      return v.startsWith(home) || v.startsWith('/var/tmp') || !v.startsWith('/') ? v : join(root, v);
-    };
-    const network = c.networkDirs.map(fill);
-    for (const d of network) mkdirSync(d, { recursive: true });
-    stub(bin, 'stat', `for d in ${network.map((d) => `'${d}'`).join(' ')}; do case $4 in "$d"|"$d"/*) echo nfs; exit 0 ;; esac; done; echo ext2/ext3`);
-    const env = Object.fromEntries(Object.entries(c.env).map(([k, v]) => [k, fill(v)]));
-    const r = spawnSync(join(bin, 'sh'), [SCRIPT, '--print-home'], { env: { PATH: bin, HOME: home, LANG: 'C', FAKE_UID: 'me', ...env }, encoding: 'utf8' });
-    if (c.error) {
-      expect(r.status).toBe(1);
-      expect(r.stderr).toContain('network filesystem');
-    } else {
-      expect(r.stdout.trim()).toBe(join(fill(c.want!), 'extensions', 'agentk'));
-    }
-  });
-
-  it("finds an install made with a custom AK_HOME by the command link it made, so a rerun updates it there", () => {
-    const custom = join(root, 'custom-home');
-    mkdirSync(join(custom, 'app'), { recursive: true });
-    mkdirSync(join(home, '.local', 'bin'), { recursive: true });
-    symlinkSync(join(custom, 'app', 'current', 'bin', 'agentk'), join(home, '.local', 'bin', 'agentk'));
-    const r = spawnSync(join(bin, 'sh'), [SCRIPT, '--print-home'], { env: { PATH: bin, HOME: home, LANG: 'C' }, encoding: 'utf8' });
-    expect(r.stdout.trim()).toBe(custom);
-  });
-
-  it("keeps an install from before the move in its old home until its server moves it", () => {
-    mkdirSync(join(home, '.agent-k-local'));
-    const r = spawnSync(join(bin, 'sh'), [SCRIPT, '--print-home'], { env: { PATH: bin, HOME: home, LANG: 'C' }, encoding: 'utf8' });
-    expect(r.stdout.trim()).toBe(join(home, '.agent-k-local'));
+    // An older Meko refuses an installer that doesn't mention --meko-url, with a less clear message.
+    expect(readFileSync(STUB, 'utf8')).toContain('--meko-url');
   });
 });

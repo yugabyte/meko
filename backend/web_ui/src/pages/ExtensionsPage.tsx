@@ -1,7 +1,8 @@
 // The Extensions page: the extensions installed (registered with Meko) and the ones available to
-// install, each with Install, Start, Stop and Open, and Update for one whose releases Meko installs
-// (Presenter's; AgentK updates itself). An action runs on the server as the extension's job; its
-// card shows the output while it runs, and the error and output when it failed.
+// install, each with Install, Start, Stop and Open, and for a release Meko installed, Update, Check
+// now and Update automatically. An action runs on the server as the extension's job (an automatic
+// update too, marked so); its card shows the output while it runs, and the error and output when it
+// failed.
 
 import { useState } from "react";
 import { ExternalLink } from "lucide-react";
@@ -12,6 +13,7 @@ import { Dialog } from "../components/Dialog";
 import { ExtensionIcon } from "../components/ExtensionsLink";
 import { SectionHeader } from "../components/metrics/SectionHeader";
 import { Badge, Button, Card, Code, ErrorNote, Loading, Spinner } from "../components/ui";
+import { timeAgo } from "../lib/format";
 
 const LABEL: Record<ExtensionAction, string> = { install: "Install", update: "Update", start: "Start", stop: "Stop" };
 const DOING: Record<ExtensionAction, string> = {
@@ -63,6 +65,35 @@ function ExtensionCard({ ext }: { ext: Extension }) {
   const job = ext.job;
   const doing = job?.state === "running" ? job.action : posting;
 
+  const [checking, setChecking] = useState(false);
+  const [savingAuto, setSavingAuto] = useState(false);
+
+  const check = async () => {
+    setError(undefined);
+    setChecking(true);
+    try {
+      await api.extensionCheck(ext.name);
+      notifyExtensionsChanged();
+    } catch (e) {
+      setError(e as Error);
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const setAuto = async (on: boolean) => {
+    setError(undefined);
+    setSavingAuto(true);
+    try {
+      await api.setExtensionAutoUpdate(ext.name, on);
+      notifyExtensionsChanged();
+    } catch (e) {
+      setError(e as Error);
+    } finally {
+      setSavingAuto(false);
+    }
+  };
+
   const act = async (action: ExtensionAction) => {
     setConfirm(undefined);
     setError(undefined);
@@ -101,6 +132,7 @@ function ExtensionCard({ ext }: { ext: Extension }) {
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-medium">{ext.title}</span>
               {installed && ext.version && <span className="text-xs text-muted-foreground">{ext.version}</span>}
+              {installed && ext.update_available && ext.latest && <Badge tone="primary">{ext.latest} available</Badge>}
               {installed &&
                 (!webUI ? (
                   <Badge>Installed</Badge>
@@ -130,6 +162,25 @@ function ExtensionCard({ ext }: { ext: Extension }) {
         </div>
       </div>
 
+      {installed && ext.updatable && (
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+          <label className="flex items-center gap-2">
+            <input
+              id={`auto-update-${ext.name}`}
+              type="checkbox"
+              checked={ext.auto_update ?? true}
+              disabled={savingAuto}
+              onChange={(e) => void setAuto(e.target.checked)}
+            />
+            <span>Update automatically</span>
+          </label>
+          <Button variant="ghost" disabled={checking || doing !== undefined} onClick={() => void check()}>
+            {checking && <Spinner className="text-current" />}
+            {checking ? "Checking…" : "Check now"}
+          </Button>
+          <span className="text-xs text-muted-foreground">{updateNote(ext)}</span>
+        </div>
+      )}
       {installed && (
         <p className="mt-3 break-words text-xs text-muted-foreground">
           <Code>meko uninstall_extension {ext.name}</Code> stops Meko starting and stopping it.
@@ -142,7 +193,9 @@ function ExtensionCard({ ext }: { ext: Extension }) {
       )}
       {job?.state === "failed" && (
         <div className="mt-3">
-          <ErrorNote error={new Error(`${LABEL[job.action]} failed: ${job.error ?? "unknown error"}`)} />
+          <ErrorNote
+            error={new Error(`${job.auto ? "The automatic update" : LABEL[job.action]} failed: ${job.error ?? "unknown error"}`)}
+          />
         </div>
       )}
       {job?.action === "update" && job.state === "done" && job.output && (
@@ -193,13 +246,26 @@ function ExtensionCard({ ext }: { ext: Extension }) {
           }
         >
           <p className="text-sm">
-            Meko installs {ext.title}'s newest release and, if it's running, restarts it: open pages reconnect, and
-            a live talk resumes where it was. A release that fails to start is rolled back.
+            {ext.name === "agentk"
+              ? "Meko installs AgentK's newest release and, if it's running, restarts its server: sessions keep running, and open pages reconnect."
+              : `Meko installs ${ext.title}'s newest release and, if it's running, restarts it: open pages reconnect, and a live talk resumes where it was.`}{" "}
+            A release that fails to start is rolled back.
           </p>
         </Dialog>
       )}
     </Card>
   );
+}
+
+// What the card says about updates: when the last check ran (or why it failed), an update on
+// probation, and why an automatic one waits.
+function updateNote(ext: Extension): string {
+  const parts: string[] = [];
+  if (ext.check_error) parts.push(`The last check failed: ${ext.check_error}`);
+  else if (ext.checked_at) parts.push(`Checked ${timeAgo(ext.checked_at)}`);
+  if (ext.pending) parts.push(`${ext.pending.to} is new: it counts as installed once it has run 5 minutes`);
+  if (ext.waiting) parts.push(`The automatic update waits: ${ext.waiting}`);
+  return parts.join(". ");
 }
 
 // The last line of a job's output.

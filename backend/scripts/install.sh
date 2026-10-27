@@ -35,7 +35,7 @@ say() { printf '%s\n' "$*" >&2; }
 ok() { printf '  %s✓%s %-11s %s%s%s\n' "$g" "$n" "$1" "$d" "${2:-}" "$n" >&2; }
 die() { printf '\n  %s✗%s %s\n' "$r" "$n" "$*" >&2; exit 1; }
 
-agentk_hint="To add AgentK, install Meko and then run: meko install_extension agentk. For AgentK alone, run its own installer (see its README)"
+agentk_hint="To add AgentK, install Meko and then run: meko install_extension agentk (pass its options after --, such as -- --agent kiro)"
 
 while [ $# -gt 0 ]; do
   case $1 in

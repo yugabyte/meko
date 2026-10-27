@@ -8,8 +8,6 @@ import { DEFAULT_HARNESS, HARNESS_IDS, isHarnessId, type HarnessId } from '../sh
 import { isLocalMeko, isMekoCloudKey, localMeko, mekoLinkHandedOver, originOf } from './mekolocal.js';
 import { expandHome, type Paths } from './paths.js';
 
-export type UpdateChannel = 'stable' | 'prerelease' | 'off';
-
 export interface Config {
   /**
    * name: shown in the rail next to the user name; empty uses the machine's short host name.
@@ -21,7 +19,6 @@ export interface Config {
   server: { bind: string; port: number; name: string };
   tls: { cert: string; key: string };
   repos: { roots: string[]; depth: number; cloneInto: string };
-  update: { channel: UpdateChannel; repo: string; requireAttestation: boolean; intervalHours: number };
   /**
    * captureTranscripts: send session transcripts to Meko conversations. Off by default until Meko's capture stops
    * extracting loaded skills as user requirements (MEKO-710); off, sessions also run without the Meko plugin.
@@ -100,7 +97,6 @@ export const DEFAULT_CONFIG: Config = {
   server: { bind: '0.0.0.0', port: 7777, name: '' },
   tls: { cert: '', key: '' },
   repos: { roots: ['~/code'], depth: 1, cloneInto: '~/code' },
-  update: { channel: 'stable', repo: 'yugabyte/agent-k-local', requireAttestation: false, intervalHours: 6 },
   meko: { url: '', apiKey: '', webUrl: '', apiUrl: '', captureTranscripts: false, home: '' },
   state: { dbPath: '' },
   claude: { command: 'claude', enabled: true, mod: true },
@@ -151,9 +147,13 @@ function merge<T>(base: T, over: unknown, warn: (msg: string) => void, at = ''):
 
 /** What config.toml says, over the defaults, without environment overrides. */
 function readConfigFile(paths: Paths, warn: (msg: string) => void): Config {
-  const cfg = existsSync(paths.config)
-    ? merge(structuredClone(DEFAULT_CONFIG), mapKeys(parse(readFileSync(paths.config, 'utf8')), camel), warn)
-    : structuredClone(DEFAULT_CONFIG);
+  const file = existsSync(paths.config) ? mapKeys(parse(readFileSync(paths.config, 'utf8')), camel) : null;
+  // Meko installs AgentK's updates, as the [update] in Meko's own config.toml says; an [update] here
+  // is ignored, and goes from the file at the next save.
+  if (isObject(file) && 'update' in file) {
+    warn("config.toml: [update] is ignored: Meko installs AgentK's updates, as the [update] in Meko's own config.toml says");
+  }
+  const cfg = file ? merge(structuredClone(DEFAULT_CONFIG), file, warn) : structuredClone(DEFAULT_CONFIG);
   // Older versions wrote every default, so a Meko URL equal to the default was never chosen:
   // leave it unset so MEKO_MCP_URL or Claude Code's settings can still name the server.
   if (cfg.meko.url === DEFAULT_MEKO_URL) cfg.meko.url = '';

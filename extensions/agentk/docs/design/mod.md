@@ -21,7 +21,7 @@ hooks module whatever the variable says, and AgentK types prompts as before. It 
   as the plugin's message, not the person's (before 2.1.286), or may lack what the learn step
   uses (`$.model.fork`, `$.model.complete`, `$.command.register` and `command.run`, all in 2.1.287's declarations; 2.1.286's couldn't be checked).
 
-**Claude Code's version.** AgentK installs Claude Code with Anthropic's installer (`install.sh`) and
+**Claude Code's version.** AgentK's setup installs Claude Code with Anthropic's installer (`scripts/deps.sh`) and
 never updates it; Claude Code updates itself, unless that's turned off or it hasn't run for a while.
 `ClaudeCode` (`claudecode.ts`) keeps the version read above and puts it in `AppState.claudeCode`,
 with whether it runs the mod. A running session keeps the version it started with until Claude

@@ -1,8 +1,9 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmdirSync, rmSync, unlinkSync } from 'node:fs';
 import { hostname, userInfo } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { HARNESS_CAPS, HARNESS_IDS, type HarnessId } from '../shared/harnesses.js';
 import { claudeUserDir } from './claude.js';
@@ -327,11 +328,30 @@ export function settleAgents(cfg: Config, versions: Partial<Record<HarnessId, st
     throw new InstallError(
       `no coding agent found. Install Claude Code (https://claude.com/claude-code), OpenCode ${HARNESS_CAPS.opencode.minVersion} or later `
         + `(https://opencode.ai; from an older one, ${HARNESS_CAPS.opencode.upgrade}) `
-        + `or Kiro CLI ${HARNESS_CAPS.kiro.minVersion} or later (https://kiro.dev/cli/), sign in to it, and run the installer again.`,
+        + `or Kiro CLI ${HARNESS_CAPS.kiro.minVersion} or later (https://kiro.dev/cli/), sign in to it, and run meko install_extension agentk again.`,
     );
   }
   if (!found.includes(cfg.agents.default)) cfg.agents.default = found[0];
   return found;
+}
+
+/**
+ * AgentK's prerequisites check (git, curl, gh, a coding agent and their sign-ins; it installs what's
+ * missing after asking): scripts/deps.sh, which a release has as lib/scripts/deps.sh beside lib/dist.
+ */
+export function depsScript(here = dirname(fileURLToPath(import.meta.url))): string {
+  return join(here, '..', '..', 'scripts', 'deps.sh');
+}
+
+/** Runs the prerequisites check on this terminal; a check that fails has said why. */
+function checkTools(args: string[]): void {
+  const script = depsScript();
+  if (!existsSync(script)) {
+    ui.warn('Tools', `not checked: ${script} is missing`);
+    return;
+  }
+  const r = spawnSync('sh', [script, ...args], { stdio: 'inherit' });
+  if (r.status !== 0) throw new InstallError(r.error ? `couldn't check the tools: ${r.error.message}` : 'the tools AgentK needs aren\'t all there (see above).');
 }
 
 export async function runInstall(args: string[]): Promise<void> {
@@ -346,6 +366,7 @@ export async function runInstall(args: string[]): Promise<void> {
       'no-service': { type: 'boolean', default: false },
       'install-deps': { type: 'boolean', default: false },
       'no-install-deps': { type: 'boolean', default: false },
+      agent: { type: 'string' },
     },
     strict: true,
   });
@@ -373,8 +394,16 @@ export async function runInstall(args: string[]): Promise<void> {
     if (inMeko) cfg.meko.home = inMeko;
     else if (process.env.MEKO_HOME) cfg.meko.home = resolve(process.env.MEKO_HOME);
 
-    // 1. Basics
-    if (!process.env.AK_INSTALLER) ui.title('AgentK setup');
+    // 1. The tools: git, curl, gh and a coding agent, installed after asking when missing.
+    ui.title('AgentK setup');
+    checkTools([
+      ...(interactive ? [] : ['--non-interactive']),
+      ...(values['install-deps'] ? ['--install-deps'] : []),
+      ...(values['no-install-deps'] ? ['--no-install-deps'] : []),
+      ...(values.agent ? ['--agent', values.agent] : []),
+    ]);
+
+    // 2. Basics
     ui.section('Setup');
     if (interactive && process.stdin.isTTY) ui.note('Press Enter to keep the value in brackets.');
     const reposRoot = values['repos-root'] ?? (await ask('Repos folder', cfg.repos.roots[0] ?? '~/code'));
@@ -388,12 +417,12 @@ export async function runInstall(args: string[]): Promise<void> {
         `no meko command here. Install Meko first (${MEKO_INSTALL_COMMAND}), then run: meko install_extension agentk`);
     }
 
-    // 2. The coding agents: at least one, or nothing can run.
+    // 3. The coding agents: at least one, or nothing can run.
     const versions: Partial<Record<HarnessId, string | null>> = {};
     for (const id of HARNESS_IDS) versions[id] = await cliVersion(harnessCommand(cfg, id));
     const agents = settleAgents(cfg, versions);
 
-    // 3. Meko and 4. Meko in each agent
+    // 4. Meko and 5. Meko in each agent
     const canAsk = interactive && !!process.stdin.isTTY;
     const setup = { canAsk, installDeps: values['install-deps'], noInstallDeps: values['no-install-deps'] };
     const urlArg = values['meko-url'];
@@ -435,7 +464,7 @@ export async function runInstall(args: string[]): Promise<void> {
     if (existsSync(expandHome(reposRoot))) ui.ok('Repos folder', reposRoot);
     else ui.warn('Repos folder', `${reposRoot} doesn't exist yet`);
 
-    // 5. Keep SQLite off network filesystems
+    // 6. Keep SQLite off network filesystems
     let db = dbPath(paths, cfg);
     mkdirSync(dirname(db), { recursive: true });
     if (isNetworkFs(dirname(db))) {
@@ -455,7 +484,7 @@ export async function runInstall(args: string[]): Promise<void> {
     if (move && 'plan' in move) ui.note(`AgentK's home moves to ${tildify(move.plan.to)} once the server has started: every session ends and resumes there.`);
     else if (move) ui.warn('Home', `stays in ${tildify(paths.home)} for now: ${move.skip}`);
 
-    // 6. Services
+    // 7. Services
     ui.section('Services');
     let running = false;
     if (values['no-service']) {
@@ -470,7 +499,7 @@ export async function runInstall(args: string[]): Promise<void> {
       }
     }
 
-    // 7. Where to open it
+    // 8. Where to open it
     const meko = await probeLocalMeko(cfg.meko.home || null);
     ui.blank();
     if (meko.meko?.webUrl) {

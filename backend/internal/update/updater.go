@@ -28,6 +28,15 @@ type State struct {
 	Latest    string    `json:"latest,omitempty"`
 	LatestURL string    `json:"latest_url,omitempty"` // the release's page on GitHub
 	Error     string    `json:"error,omitempty"`
+	// Extensions are what the same check found for each extension Meko updates, by name.
+	Extensions map[string]ExtensionState `json:"extensions,omitempty"`
+}
+
+// ExtensionState is the newest release of an extension the last check found (its bad versions
+// left out); "" when it found none for this platform.
+type ExtensionState struct {
+	Latest    string `json:"latest,omitempty"`
+	LatestURL string `json:"latest_url,omitempty"`
 }
 
 // StateFile is where the data folder at root keeps State.
@@ -43,7 +52,8 @@ func ReadState(root string) (State, bool) {
 	return s, true
 }
 
-// Updater checks for and applies Meko's releases from inside serve.
+// Updater checks for and applies Meko's releases from inside serve, and has the same check find the
+// extensions' (Extensions) and install the ones set to update on their own (AfterCheck).
 type Updater struct {
 	App      App
 	Version  string // the running version
@@ -66,12 +76,32 @@ type Updater struct {
 	Service bool
 	// Context is what an install the web UI started runs with: serve's, which ends as it stops.
 	Context context.Context
+	// ExtensionsOnly is an updater for a Meko built from source, which never updates itself: its
+	// checks look only for the extensions' releases.
+	ExtensionsOnly bool
+	// Extensions, if set, reads each extension's newest release from the releases a check listed;
+	// what it returns is recorded with the check (State.Extensions).
+	Extensions func(releases []Release) map[string]ExtensionState
+	// AfterCheck, if set, runs after a scheduled check that doesn't restart into a new Meko, with
+	// Lock held: it installs the extensions' updates that install on their own.
+	AfterCheck func(ctx context.Context)
+	// Lock is held by a check or an install, the scheduled ones and the web UI's, Meko's and the
+	// extensions', so two never stage at once; after a switch to a new Meko it stays held until
+	// serve restarts. Nil is a lock of its own on DataDir.
+	Lock *Lock
 
-	// mu is held by a check or an install, the scheduled ones and the web UI's, so two never stage
-	// at once; after a switch it stays held until serve restarts.
-	mu    sync.Mutex
-	jobMu sync.Mutex
-	job   *Job
+	lockOnce sync.Once
+	jobMu    sync.Mutex
+	job      *Job
+}
+
+func (u *Updater) lock() *Lock {
+	u.lockOnce.Do(func() {
+		if u.Lock == nil {
+			u.Lock = NewLock(u.DataDir)
+		}
+	})
+	return u.Lock
 }
 
 // The states of a Job.
@@ -152,23 +182,28 @@ func (u *Updater) Run(ctx context.Context) {
 		case <-time.After(wait):
 		}
 		wait = u.Interval
-		if p, _ := u.App.ReadPending(); p != nil {
-			continue // a new version is on probation: no further update until it's done
+		if !u.ExtensionsOnly {
+			if p, _ := u.App.ReadPending(); p != nil {
+				continue // a new version is on probation: no further update until it's done
+			}
 		}
-		if !u.mu.TryLock() {
-			continue // the web UI is checking or installing
+		if !u.lock().TryLock() {
+			continue // the web UI, or another meko, is checking or installing
 		}
 		if u.scheduled(ctx) {
 			u.Log.Info("restarting into the update")
 			u.Restart()
-			return // mu stays held: nothing else installs before the restart
+			return // the lock stays held: nothing else installs before the restart
 		}
-		u.mu.Unlock()
+		if u.AfterCheck != nil {
+			u.AfterCheck(ctx)
+		}
+		u.lock().Unlock()
 	}
 }
 
 // scheduled is a scheduled check, installing what it finds when Auto. It reports whether a new
-// version is now current. The caller holds mu.
+// version is now current. The caller holds the lock.
 func (u *Updater) scheduled(ctx context.Context) bool {
 	rel, ver, newer, err := u.Check(ctx)
 	if err != nil || !newer {
@@ -217,10 +252,10 @@ func (u *Updater) Status() Status {
 // CheckNow checks for a release now, for the web UI, unless a check or an install is running
 // (ErrBusy). A failed check isn't an error here: Status says why.
 func (u *Updater) CheckNow(ctx context.Context) (Status, error) {
-	if !u.mu.TryLock() {
+	if !u.lock().TryLock() {
 		return u.Status(), ErrBusy
 	}
-	defer u.mu.Unlock()
+	defer u.lock().Unlock()
 	_, _, _, _ = u.Check(ctx)
 	return u.Status(), nil
 }
@@ -232,7 +267,7 @@ func (u *Updater) StartApply() (Status, error) {
 	if p, _ := u.App.ReadPending(); p != nil {
 		return u.Status(), ErrPending
 	}
-	if !u.mu.TryLock() {
+	if !u.lock().TryLock() {
 		return u.Status(), ErrBusy
 	}
 	u.setJob(func(j *Job) { *j = Job{State: JobRunning, Step: StepChecking, StartedAt: time.Now().UTC()} })
@@ -240,7 +275,7 @@ func (u *Updater) StartApply() (Status, error) {
 	return u.Status(), nil
 }
 
-// apply is StartApply's install. It holds mu, and keeps it once a new version is current.
+// apply is StartApply's install. It holds the lock, and keeps it once a new version is current.
 func (u *Updater) apply() {
 	ctx := u.Context
 	if ctx == nil {
@@ -268,7 +303,7 @@ func (u *Updater) apply() {
 		u.Restart()
 		return
 	}
-	defer u.mu.Unlock()
+	defer u.lock().Unlock()
 	u.setJob(func(j *Job) {
 		now := time.Now().UTC()
 		j.State, j.Step, j.FinishedAt = JobDone, "", &now
@@ -309,6 +344,12 @@ func (u *Updater) Check(ctx context.Context) (Release, string, bool, error) {
 		st.Error = err.Error()
 		u.Log.Warn("can't check for updates", "error", err)
 		return Release{}, "", false, err
+	}
+	if u.Extensions != nil {
+		st.Extensions = u.Extensions(rels)
+	}
+	if u.ExtensionsOnly {
+		return Release{}, "", false, nil
 	}
 	goos, arch := Platform()
 	rel, ver, ok := PickMeko(rels, goos, arch, u.App.BadVersions())

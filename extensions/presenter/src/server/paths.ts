@@ -142,7 +142,7 @@ function samePath(a: string, b: string): boolean {
 }
 
 /** The commands Meko runs, which must be for the Meko this home is in. */
-export const MEKO_COMMANDS = ['start', 'stop', 'status', 'uninstall', '_handoff'];
+export const MEKO_COMMANDS = ['start', 'stop', 'status', 'uninstall', '_handoff', '_busy'];
 
 /**
  * Refuses a command Meko runs for another data folder than the one this home is in, so a second

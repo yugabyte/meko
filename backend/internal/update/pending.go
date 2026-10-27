@@ -30,8 +30,12 @@ type Pending struct {
 
 func (a App) pendingFile() string { return filepath.Join(a.Root, "update-pending.json") }
 
-// ReadPending returns the pending update, or nil.
+// ReadPending returns the pending update, or nil. A record in the legacy folder (one an extension's
+// own updater wrote, before Meko kept its records) is moved into the app folder first.
 func (a App) ReadPending() (*Pending, error) {
+	if err := a.importLegacyPending(); err != nil {
+		return nil, err
+	}
 	b, err := os.ReadFile(a.pendingFile())
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -44,6 +48,41 @@ func (a App) ReadPending() (*Pending, error) {
 		return nil, nil //nolint:nilerr // a damaged file is no pending update; the next one rewrites it
 	}
 	return &p, nil
+}
+
+// importLegacyPending moves a legacy update-pending.json into the app folder, unless one is there:
+// AgentK's {from, to, attempts, at} with at in milliseconds. A damaged one is dropped.
+func (a App) importLegacyPending() error {
+	if a.Legacy == "" {
+		return nil
+	}
+	old := filepath.Join(a.Legacy, "update-pending.json")
+	b, err := os.ReadFile(old) //nolint:gosec // G304: the extension's own folder
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, serr := os.Stat(a.pendingFile()); serr != nil {
+		var l struct {
+			From     string          `json:"from"`
+			To       string          `json:"to"`
+			Attempts int             `json:"attempts"`
+			At       json.RawMessage `json:"at"`
+		}
+		if json.Unmarshal(b, &l) == nil && l.To != "" {
+			p := Pending{From: l.From, To: l.To, Attempts: l.Attempts, At: time.Now().UTC()}
+			var ms int64
+			if json.Unmarshal(l.At, &ms) == nil && ms > 0 {
+				p.At = time.UnixMilli(ms).UTC()
+			}
+			if err := a.writePending(p); err != nil {
+				return err
+			}
+		}
+	}
+	return paths.RemoveIfExists(old)
 }
 
 func (a App) writePending(p Pending) error {

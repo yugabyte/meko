@@ -147,21 +147,23 @@ describe('the move trigger', () => {
     mkdirSync(paths.home, { recursive: true });
     const warnings: string[] = [];
     const starts: unknown[] = [];
+    const probation = { on: false };
     const svc = { kind: 'systemd', installed: () => services } as unknown as ServiceManager;
     const move = new HomeMove(paths, { info: () => undefined, warn: (m) => warnings.push(m) }, {
       services: () => svc,
       check: () => r,
       start: (_kind, job) => void starts.push(job),
+      onProbation: () => probation.on,
     });
-    return { paths, move, warnings, starts };
+    return { paths, move, warnings, starts, probation };
   }
 
   it('starts the move job once, and never while an update is still being tried out', () => {
     const t = trigger({ plan: { from: join(root, 'h'), to: join(root, 'new'), method: 'rename' } });
-    writeFileSync(t.paths.updatePending, '{}');
+    t.probation.on = true;
     t.move.check();
     expect(t.starts).toEqual([]);
-    rmSync(t.paths.updatePending);
+    t.probation.on = false;
     t.move.check();
     t.move.check();
     expect(t.starts).toEqual([{ bin: expect.stringMatching(/bin\/agentk$/), from: join(root, 'h'), to: join(root, 'new') }]);

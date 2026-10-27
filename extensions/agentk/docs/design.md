@@ -28,7 +28,7 @@ The design is split by area. Read this page first, then the part you need:
 | [Usage stats](design/usage-stats.md) | The anonymous usage report |
 | [Login and security](design/security.md) | Meko as the front door (its sign-in, local or remote access, TLS), the socket AgentK listens on, origin checks, the handoff of AgentK's old login |
 | [Surviving crashes, restarts and updates](design/recovery.md) | Recovery, auto-continue, one server per home |
-| [Releases and auto-update](design/releases.md) | Release builds, the installer, self-update and rollback |
+| [Releases and updates](design/releases.md) | Release builds, installing through Meko, Meko's updates and rollback |
 
 Below: [Decisions so far](#decisions-so-far) · [Tech stack](#tech-stack) · [Milestones](#milestones) ·
 [Open questions](#open-questions)
@@ -57,7 +57,7 @@ Below: [Decisions so far](#decisions-so-far) · [Tech stack](#tech-stack) · [Mi
 | Usage stats | Each install sends anonymous counts (projects, sessions, PRs, commits, file types, tokens by model) once a day, hourly in a new install's first day, to a collector the AgentK team runs as a separate service, and from release installs also to YugabyteDB's call home service (diagnostics.yugabyte.com, where yugabyted reports). On by default; one checkbox in Settings › General turns off both. |
 | Task lifecycle | Explore → Design → Code → PR & Review (AgentK) → Merge & Close, with three human gates. A task starts at Explore, Design or Code, and you can move it between stages by hand; a Review a PR session has none of it. More ADLC stages plug in later. |
 | Host OS | Linux devservers, and Macs on Apple Silicon (macOS 14 or newer) while you're logged in to the desktop. Intel Macs and headless Macs aren't supported. |
-| Distribution | Public GitHub repo. GitHub Actions for CI and releases, date-based versions (`0.YYYYMMDD.N`), tarball releases, and an update check built into the server. |
+| Distribution | Public GitHub repo. GitHub Actions for CI and releases, date-based versions (`0.YYYYMMDD.N`), tarball releases that Meko installs and updates (with its rollback). |
 | Repo & license | Internal at `github.com/yugabyte/agent-k-local` for now, to be made public later. Apache-2.0. |
 | Sharing | Everyone installs their own copy. One owner per install, with no shared instances. |
 | Client | Browser first, installable as a web app, which AgentK offers on first open (see [Installing the app](design/app.md#installing-the-app)). Installing gives it a dock icon: the web app manifest (`manifest.webmanifest`) names it "AgentK" and supplies the logo as regular and maskable icons. `/favicon.ico` and `/apple-touch-icon.png` are served at the root too, for browsers and phones that look there instead of reading the page's links; a missing file is a 404, never the app page. A native Mac wrapper is deferred. |

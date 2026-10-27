@@ -248,6 +248,9 @@ export async function buildServer(core: Core, opts: { webDir: string | null }): 
     return reply.code(204).send();
   });
 
+  // Meko, on Presenter's socket, before it updates Presenter on its own: a live talk makes it wait.
+  app.get('/_meko/busy', async () => ({ busy: core.runs.live() }));
+
   app.get('/ws/events', { websocket: true }, (socket: WebSocket) => {
     core.events.add(socket);
     socket.on('close', () => core.events.delete(socket));

@@ -14,7 +14,7 @@ describe('HTTP API: sharing, invites and Meko', () => {
 
   beforeEach(async () => {
     env = await makeEnv({ start: false });
-    app = await buildServer(env.core, { webDir: null, updater: null });
+    app = await buildServer(env.core, { webDir: null, updates: null });
   });
   afterEach(async () => {
     await app.close();

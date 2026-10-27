@@ -906,20 +906,55 @@ export interface ProjectWithSessions extends Project {
   usage: TokenUsage;
 }
 
+/**
+ * What AgentK knows about its own updates. Meko installs them and keeps what's available, the job and
+ * the switch for automatic updates (the page reads those from Meko's own routes: `MekoExtension`).
+ */
 export interface UpdateStatus {
   current: string;
-  channel: 'stable' | 'prerelease' | 'off';
-  latest: string | null;
-  available: boolean;
-  applying: boolean;
-  lastCheckedAt: number | null;
-  lastError: string | null;
-  /** Set for one boot after a successful update, for the "Updated to vX" notice. */
+  /** The version Meko updated from, while this one is on probation (its first 5 minutes): the "Updated to vX" notice. */
   justUpdatedFrom: string | null;
-  /** The version the last update came from, kept after that first boot (What's new in Settings); null before any update. */
+  /** The version the last update came from, kept after probation (What's new in Settings); null before any update. */
   lastUpdatedFrom: string | null;
-  /** The GitHub release page of `latest`. Pages before What's new linked to it; the UI no longer does. */
-  releaseUrl: string | null;
+}
+
+/**
+ * AgentK's row in Meko's extension list (`GET /api/v1/extensions` on Meko's origin, not AgentK's): the
+ * fields the Update banner and Settings › Updates read. An older Meko leaves the update fields out.
+ */
+export interface MekoExtension {
+  name: string;
+  installed?: boolean;
+  /** The release Meko installed, when it manages it. */
+  version?: string;
+  /** Meko can update it. */
+  updatable?: boolean;
+  /** The newest release the last check found, rolled-back versions left out. */
+  latest?: string;
+  update_available?: boolean;
+  /** RFC 3339. */
+  checked_at?: string;
+  check_error?: string;
+  /** An update on probation. */
+  pending?: { from: string; to: string; attempts: number; at: string };
+  rolled_back?: string[];
+  /** Update automatically (Meko's switch for this extension, on by default). */
+  auto_update?: boolean;
+  /** Why an automatic update is waiting. */
+  waiting?: string;
+  job?: MekoExtensionJob;
+}
+
+/** The last action Meko ran on an extension since it started (its install, update, start or stop). */
+export interface MekoExtensionJob {
+  action: string;
+  state: 'running' | 'done' | 'failed';
+  started_at: string;
+  finished_at?: string;
+  error?: string;
+  output: string;
+  /** Started by Meko's scheduled check (Update automatically), not by someone. */
+  auto?: boolean;
 }
 
 /** One change in What's new: a commit subject with a releasing type (see the repo root's scripts/release/release-notes.sh). */
@@ -1628,7 +1663,6 @@ export interface Settings {
   reposRoots: string[];
   reposDepth: number;
   cloneInto: string;
-  updateChannel: 'stable' | 'prerelease' | 'off';
   /** `[server] name`: shown in the rail next to the user name; '' uses the machine's host name. */
   serverName: string;
   /** The machine's short host name, what an empty `serverName` shows. Read-only. */
@@ -2285,7 +2319,7 @@ export type ServerEvent =
   | { type: 'invite'; datapackId: string; title: string; body: string }
   /** The answer to a client's `ping`. */
   | { type: 'pong' }
-  /** The server installed an update and is restarting into it: sent right before its sockets close. */
+  /** The server is stopping to restart into an update Meko installed: sent right before its sockets close. */
   | { type: 'restarting' };
 
 export type EventsClientMessage = { type: 'ping' };
@@ -2529,9 +2563,9 @@ export type TermServerMessage =
 // POST   /api/claude/update                    → ClaudeCodeStatus   (runs `claude update`, Claude Code's own updater, then
 //        reads its version again; the outcome is in `lastUpdate`, a failed update included; 409 while one runs. Called
 //        by the too-old banner's Update Claude Code and by Settings › Harness's)
-// GET    /api/update                           → UpdateStatus
-// POST   /api/update/check                     → UpdateStatus
-// POST   /api/update/apply                     → UpdateStatus
+// GET    /api/update                           → UpdateStatus   (the version, and the update it came from: Meko installs
+//        updates; the page checks, updates and sets Update automatically through Meko's own routes, on its origin:
+//        GET /api/v1/extensions, POST /api/v1/extensions/agentk/check and /update, PATCH /api/v1/extensions/agentk)
 // GET    /api/update/notes?from=&to=           → ReleaseNotes   (What's new: the feat, fix, perf and deps commits between
-//        tags v<from> and v<to>, from GitHub; 400 unless both are versions and from is older, 409 from a source checkout,
+//        the two versions' tags (agentk-v… or v…), from GitHub; 400 unless both are versions and from is older,
 //        502 when GitHub can't compare them)

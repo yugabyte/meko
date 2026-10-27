@@ -482,7 +482,8 @@ export async function installFacts(o: InstallInputs): Promise<CallHomeInstall> {
   const meko = mekoConfigured(o.config);
   return {
     version: reportVersion(o.version),
-    channel: o.config.update.channel,
+    // Meko installs AgentK's updates by its own [update] channel, which AgentK doesn't read.
+    channel: 'stable',
     platform: process.platform,
     arch: process.arch,
     node: reportVersion(process.versions.node),

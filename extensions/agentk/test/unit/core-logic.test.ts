@@ -44,7 +44,7 @@ describe('config and db', () => {
     const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
     const cfg = structuredClone(DEFAULT_CONFIG);
     cfg.repos.roots = ['~/src', '~/code'];
-    cfg.update.channel = 'prerelease';
+    cfg.worktrees.idleDays = 30;
     // Transcript capture is off unless config.toml turns it on.
     expect(cfg.meko.captureTranscripts).toBe(false);
     cfg.meko.captureTranscripts = true;
@@ -52,7 +52,7 @@ describe('config and db', () => {
     expect(readFileSync(paths.config, 'utf8')).toContain('capture_transcripts = true');
     const back = loadConfig(paths);
     expect(back.repos.roots).toEqual(['~/src', '~/code']);
-    expect(back.update.channel).toBe('prerelease');
+    expect(back.worktrees.idleDays).toBe(30);
     expect(back.meko.captureTranscripts).toBe(true);
     expect(back.server.port).toBe(7777);
   });
@@ -83,9 +83,11 @@ describe('config and db', () => {
     expect(cfg.server.port).toBe(7777);
     // Versions before the session host had [tmux]: ignored now.
     expect(cfg).not.toHaveProperty('tmux');
-    expect(cfg.update.requireAttestation).toBe(true);
-    expect(warnings).toHaveLength(3);
-    expect(warnings[0]).toContain('repos.roots should be a list of strings');
+    // [update] is Meko's now: ignored, with a warning.
+    expect(cfg).not.toHaveProperty('update');
+    expect(warnings).toHaveLength(4);
+    expect(warnings[0]).toContain('[update] is ignored');
+    expect(warnings[1]).toContain('repos.roots should be a list of strings');
     expect(warnings.join('\n')).toContain('server.port should be a number');
   });
 

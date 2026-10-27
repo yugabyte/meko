@@ -7,31 +7,166 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/extproxy"
+	"github.com/yugabyte/meko/backend/internal/server"
+	"github.com/yugabyte/meko/backend/internal/update"
 )
 
-// Release is the version of an installed extension's release install that Meko manages, and whether
-// Meko can update it (meko update_extension), for the web UI's Extensions page.
-func (w *webListener) Release(name string) (string, bool) {
+// ExtensionUpdates is what the Extensions page (and AgentK's page) shows about an installed
+// extension's updates: the release Meko installed, the newest the last check found, the update on
+// probation, the versions rolled back, Update automatically, and why an automatic update waits.
+func (w *webListener) ExtensionUpdates(name string) server.ExtensionUpdate {
+	u := server.ExtensionUpdate{RolledBack: []string{}}
 	cat, ok := extensions.Known[name]
-	if !ok || !cat.Managed {
-		return "", false
+	if !ok {
+		return u
 	}
 	reg, err := extensions.Load(w.l.Root)
 	if err != nil {
-		return "", false
+		return u
 	}
 	e, ok := reg.Entries[name]
 	if !ok {
-		return "", false
+		return u
 	}
-	v := cat.Release(w.l.Root, name, e.Command)
-	return v, v != ""
+	u.AutoUpdate = e.Auto()
+	u.Version = cat.Release(w.l.Root, name, e.Command)
+	u.Updatable = u.Version != ""
+	if !u.Updatable {
+		return u
+	}
+	app := cat.App(w.l.Root, name)
+	bad := app.BadVersions()
+	if st, ok := update.ReadState(w.l.Root); ok {
+		checked := st.CheckedAt
+		u.CheckedAt, u.CheckError = &checked, st.Error
+		es := st.Extensions[name]
+		u.Latest, u.LatestURL = es.Latest, es.LatestURL
+		// update.json can predate a rollback, and still name the version rolled back.
+		u.UpdateAvailable = !bad[es.Latest] && extensions.Newer(u.Version, es.Latest)
+	}
+	u.Pending, _ = app.ReadPending()
+	for v := range bad {
+		u.RolledBack = append(u.RolledBack, v)
+	}
+	sort.Strings(u.RolledBack)
+	w.mu.Lock()
+	u.Waiting = w.waiting[name]
+	w.mu.Unlock()
+	return u
+}
+
+// watchUpdates makes u's checks the extensions' too: they find the extensions' releases and install
+// the updates set to install on their own, and u holds the lock the Extensions page's updates take.
+func (w *webListener) watchUpdates(u *update.Updater) {
+	u.Lock = w.lock
+	u.Extensions = func(rels []update.Release) map[string]update.ExtensionState {
+		return extensions.Check(w.l.Root, rels)
+	}
+	u.AfterCheck = w.autoUpdate
+	w.updater = u
+}
+
+// CheckExtensions checks for releases now (Meko's and the extensions', one list), for the
+// Extensions page's Check now. It fails with update.ErrBusy while an update holds the lock; a check
+// that fails otherwise isn't an error here, the rows say why.
+func (w *webListener) CheckExtensions(ctx context.Context) error {
+	if w.updater == nil {
+		return errors.New("this server doesn't check for updates")
+	}
+	_, err := w.updater.CheckNow(ctx)
+	return err
+}
+
+// SetAutoUpdate is the Extensions page's Update automatically.
+func (w *webListener) SetAutoUpdate(name string, on bool) error { return setAutoUpdate(w.l, name, on) }
+
+// autoUpdate installs, after a scheduled check and with the update lock held, the updates of the
+// extensions set to Update automatically, each as its Extensions-page job (marked auto). One on
+// probation, or that says it's busy (a talk is live), waits for the next check.
+func (w *webListener) autoUpdate(ctx context.Context) {
+	st, ok := update.ReadState(w.l.Root)
+	if !ok {
+		return
+	}
+	reg, err := extensions.Load(w.l.Root)
+	if err != nil {
+		return
+	}
+	for _, name := range reg.Names() {
+		cat, known := extensions.Known[name]
+		e := reg.Entries[name]
+		cur := cat.Release(w.l.Root, name, e.Command)
+		latest := st.Extensions[name].Latest
+		if !known || !e.Auto() || cur == "" || !extensions.Newer(cur, latest) ||
+			cat.App(w.l.Root, name).BadVersions()[latest] {
+			w.setWaiting(name, "")
+			continue
+		}
+		if p, _ := cat.App(w.l.Root, name).ReadPending(); p != nil {
+			w.setWaiting(name, "its last update is still on probation")
+			continue
+		}
+		if cat.Busy(w.l.Root, e) {
+			w.setWaiting(name, "in use")
+			w.log.Info("an extension's update waits: it's in use", "extension", name, "version", latest)
+			continue
+		}
+		w.setWaiting(name, "")
+		w.log.Info("updating an extension on its own", "extension", name, "from", cur, "to", latest)
+		started, err := w.jobs.RunSync(name, "update", true, func(jctx context.Context, out io.Writer) error {
+			return w.updateExtension(jctx, name, out)
+		})
+		switch {
+		case !started:
+			w.log.Info("an extension's update waits: another of its actions is running", "extension", name)
+		case err != nil:
+			w.log.Warn("an extension's update failed", "extension", name, "error", err)
+		default:
+			w.log.Info("an extension updated on its own", "extension", name, "version", latest)
+		}
+		if ctx.Err() != nil {
+			return
+		}
+	}
+}
+
+func (w *webListener) setWaiting(name, why string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if why == "" {
+		delete(w.waiting, name)
+	} else {
+		w.waiting[name] = why
+	}
+}
+
+// updateExtension updates an extension, as meko update_extension does, for a caller that holds the
+// update lock, and waits for one with a web UI to answer when it runs afterwards.
+func (w *webListener) updateExtension(ctx context.Context, name string, out io.Writer) error {
+	cfg, err := config.Load(w.l.Config, os.Getenv, config.Overrides{})
+	if err != nil {
+		return err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	upd, cancel := context.WithTimeout(ctx, extensions.InstallTimeout)
+	runs, err := extensions.Update(upd, extensions.UpdateOptions{Root: w.l.Root, Home: home,
+		Client: newReleaseClient(cfg.Update.Repo), Out: out}, name)
+	cancel()
+	w.reconnect(name) // a restarted server's socket is asked for again
+	if err != nil || !runs || !extensions.Known[name].WebUI {
+		return err
+	}
+	return w.awaitListening(ctx, name)
 }
 
 // Installed names the registered extensions, for the web UI's Extensions page.
@@ -44,24 +179,26 @@ func (w *webListener) Installed() []string {
 }
 
 // RunExtension runs an action of the Extensions page on a known extension (server.Web.Run): install
-// it as meko install_extension does, with no terminal, update it as meko update_extension does, or
-// run its own start or stop. The output and the error reach a browser, so the client token the
-// installer is given is blanked in both. After an install or a start of one with a web UI, or an
-// update that left it running, it waits for the extension to answer on its socket (AgentK's start
-// returns before its server listens), so the page's next look sees it running.
+// it as meko install_extension does, with no terminal, update it as meko update_extension does
+// (holding the update lock), or run its own start or stop. The output and the error reach a
+// browser, so the client token the installer is given is blanked in both. After an install or a
+// start of one with a web UI, or an update that left it running, it waits for the extension to
+// answer on its socket (AgentK's start returns before its server listens), so the page's next look
+// sees it running.
 func (w *webListener) RunExtension(ctx context.Context, name, action string, out io.Writer) error {
 	var tok string
 	if cfg, err := config.Load(w.l.Config, os.Getenv, config.Overrides{}); err == nil {
 		tok, _ = readClientToken(w.l, cfg)
 	}
 	r := &redactor{w: out, secret: []byte(tok)}
-	runs := true
 	var err error
 	if action == "update" {
-		upd, cancel := context.WithTimeout(ctx, extensions.InstallTimeout)
-		runs, err = updateExtension(upd, w.l, name, false, r)
-		cancel()
-		w.reconnect(name) // a restarted server's socket is asked for again
+		if !w.lock.TryLock() {
+			err = update.ErrLocked
+		} else {
+			err = w.updateExtension(ctx, name, r)
+			w.lock.Unlock()
+		}
 	} else {
 		err = w.runExtension(ctx, name, action, r)
 	}
@@ -72,7 +209,7 @@ func (w *webListener) RunExtension(ctx context.Context, name, action string, out
 		}
 		return err
 	}
-	if action != "stop" && runs && extensions.Known[name].WebUI {
+	if (action == "install" || action == "start") && extensions.Known[name].WebUI {
 		return w.awaitListening(ctx, name)
 	}
 	return nil
@@ -109,7 +246,7 @@ func (w *webListener) runExtension(ctx context.Context, name, action string, out
 	case "install":
 		inst, cancel := context.WithTimeout(ctx, extensions.InstallTimeout)
 		defer cancel()
-		return installExtension(inst, w.l, name, false, nil, out, out)
+		return installExtension(inst, w.l, name, extInstallOptions{}, false, nil, out, out)
 	case "start", "stop":
 		reg, err := extensions.Load(w.l.Root)
 		if err != nil {

@@ -82,7 +82,7 @@ own copy.
 - **Files on disk.** `state.db` (hook tokens, and an older install's password hash and TOTP secret,
   kept for Meko's handoff) is owner-only
   (0600) whatever folder it's in, and so are its `-wal` and `-shm` files, which SQLite gives the
-  database's mode, and so are the snapshots the updater takes before an update
+  database's mode, and so are the snapshots a version takes of it before migrating it after an update
   (`state.db.bak-<version>`); ones made before this are fixed when the server opens the database.
   A folder AgentK creates for it is 0700 (so are its home, and Meko's data folder and its
   `extensions/` when AgentK makes them first); an existing one, such as AgentK's home on an older

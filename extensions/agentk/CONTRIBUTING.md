@@ -110,7 +110,8 @@ sorts higher.
    spawns a real pty).
 3. It creates the tag and GitHub release `agentk-v<version>` (`v<version>` before releases were
    tagged by product; Meko's are `meko-v<version>`) with the tarballs, `SHA256SUMS` and
-   `install.sh`, not marked "latest" (that's Meko's), and attests build provenance where the
+   `install.sh` (only a message that Meko installs AgentK now, for the Mekos and instructions that
+   still run it), not marked "latest" (that's Meko's), and attests build provenance where the
    plan allows.
 4. It deletes GitHub releases beyond the newest 5 in each lane with `scripts/release/prune-releases.sh --product agentk`, which leaves Meko's releases alone.
    A lane is the tag's prefix and the version's prerelease identifier (`-beta.2` → `beta`), or
@@ -118,11 +119,13 @@ sorts higher.
    switch to `agentk-v` tags update through it.
    Tags are kept, so release notes, version numbering and the app's **What's new** (the commits
    between two tags) are unaffected.
-5. Running installs see the release on their next update check (every 6 hours) and offer it in
-   a "Version X is available" banner. Its **Update to the latest version** button checks again and
-   installs the newest release then (which may be newer than X), without interrupting sessions. Once a version has been healthy for 5 minutes, the
-   server deletes every installed version under `app/` in AgentK's home except the running one and
-   one previous version (the one it updated from) to roll back to by hand.
+5. Meko sees the release on its next update check (every 6 hours by default) and installs it on its
+   own where AgentK's **Update automatically** is on, or offers it in AgentK's "Version X is
+   available" banner and Meko's Extensions page. An update restarts only AgentK's web server, so
+   sessions keep running, and Meko rolls back a version that fails to start. Once a version has run
+   5 minutes, Meko deletes every installed version under `app/` in AgentK's home except the running
+   one, the one it updated from, and any a running session host started from
+   ([releases](docs/design/releases.md)).
 
 **Usage stats.** Release builds carry the collector's report URL (the full URL, ending in
 `/v1/report`) from the `CALL_HOME_URL` repo variable (Settings → Secrets and variables → Actions → Variables), written into the tarball as
@@ -142,10 +145,10 @@ Release tarball layout (`agentk-<version>-<linux|darwin>-<arch>.tar.gz`):
 
 ```
 agentk-<version>/
-  bin/agentk               launcher (packaging/agentk), handles update rollback
+  bin/agentk               launcher (packaging/agentk): hands serve and host to Meko's launcher (meko _launch), which runs an update's probation and rollback
   bin/agent-k-local        a link to it, by its name before the rename to AgentK
   node/bin/node            bundled Node runtime
-  lib/                     package.json, dist/, node_modules/, packaging/{systemd,launchd}/
+  lib/                     package.json, dist/, node_modules/, packaging/{systemd,launchd}/, scripts/deps.sh
   VERSION
   CALL_HOME_URL            the usage stats collector (only when the repo variable is set)
 ```
@@ -159,37 +162,28 @@ rename look for, so those installs still update. The release workflow smoke-test
 The repo is internal for now, so downloads go through an authenticated GitHub CLI. The repo's
 latest release is Meko's: its one-line install (`gh release download --repo
 yugabyte/agent-k-local --pattern install.sh --output - | sh`) installs Meko, and then
-`meko install_extension agentk` installs AgentK pointed at that Meko. AgentK alone comes
-from its own installer in the newest AgentK release:
+`meko install_extension agentk` installs AgentK pointed at that Meko: Meko downloads the newest
+AgentK release for this platform (with gh's token, or `GITHUB_TOKEN`), checks it against
+`SHA256SUMS`, unpacks it owner-only into `<home>/app/<version>` (AgentK's home is
+`extensions/agentk` in Meko's data folder, `~/.meko` by default), checks that it runs (`agentk version
+--json`, `agentk selftest`), points `app/current` at it, links `~/.local/bin/agentk`, and runs
+`agentk install` on the terminal it was started from. `--version <v>` installs another release, and
+options after `--` go to `agentk install` (`meko install_extension agentk -- --agent kiro
+--repos-root ~/code`). An install AgentK already has (one still in `~/.agent-k-local` too) is set up
+again in place.
 
-```sh
-gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-drafts \
-  --exclude-pre-releases --limit 50 --json tagName \
-  --jq '[.[].tagName | select(test("^(agentk-v|v)[0-9]"))][0]')" \
-  --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
-```
-
-Pass options through `sh -s --` (`--version 0.2.0 --non-interactive --repos-root ~/code`, …).
-
-Before anything else, the installer checks for git, curl, gh and a coding agent (Claude Code,
-OpenCode or Kiro CLI: any one is enough) and offers to install the missing ones, showing the
-commands and asking first. With no agent there it asks which to install, OpenCode second
-(`--agent claude|opencode|kiro` picks one without asking; OpenCode 2 comes from its own installer at
-opencode.ai/v2, into `~/.opencode/bin`, and Kiro CLI from its own at cli.kiro.dev), and it stops when no
-agent ends up installed. `agentk install` then offers Meko's own setup for each agent it finds
-(Claude Code, Kiro; OpenCode sessions get AgentK's Meko from AgentK itself), asking first. `--install-deps` skips the questions (and installs Claude Code
-when no agent is there and `--agent` doesn't say), `--no-install-deps` never installs, and
-`--deps-only` stops after that step. Where AgentK
-is already installed (`app/current` and `config.toml` in its home, `~/.local/bin/agentk`,
-and both services enabled or loaded), it says so and stops before any of that, unless given
-`--reinstall`, `--deps-only`, a `--version` other than the installed one, or options for
-`agentk install` (other than `--non-interactive`). Its tests
-(`test/unit/install-script.test.ts`) run the real script against stub tools.
-
-The installer unpacks into `<home>/app/<version>` (AgentK's home is `extensions/agentk` in Meko's data folder, `~/.meko` by default, or `~/.agent-k-local` until an older install moves; `--print-home` prints it), points `app/current` at it, links
-`~/.local/bin/agentk` (and `~/.local/bin/agent-k-local`, the command's name before the rename,
-which older services, scripts and Meko run), and runs `agentk install`, which writes `config.toml`,
-checks Meko, installs the two background services (the `agentk` and `agentk-host`
+`agentk install` first runs `scripts/deps.sh` (`lib/scripts/deps.sh` in a release), which checks
+for git, curl, gh and a coding agent (Claude Code, OpenCode or Kiro CLI: any one is enough) and
+offers to install the missing ones, showing the commands and asking first. With no agent there it
+asks which to install, OpenCode second (`--agent claude|opencode|kiro` picks one without asking;
+OpenCode 2 comes from its own installer at opencode.ai/v2, into `~/.opencode/bin`, and Kiro CLI
+from its own at cli.kiro.dev), and it stops when no agent ends up installed. `--install-deps`
+skips the questions (and installs Claude Code when no agent is there and `--agent` doesn't say),
+`--no-install-deps` never installs, and from Meko's Extensions page (`--non-interactive`) nothing
+is installed without `--install-deps`. Its tests (`test/unit/install-script.test.ts`) run the real
+script against stub tools. `agentk install` then offers Meko's own setup for each agent it finds
+(Claude Code, Kiro; OpenCode sessions get AgentK's Meko from AgentK itself), asking first, writes
+`config.toml`, checks Meko, installs the two background services (the `agentk` and `agentk-host`
 systemd user units on Linux; the `com.yugabyte.agentk` and `com.yugabyte.agentk.host`
 LaunchAgents on macOS), and prints the address the Meko on this computer serves it at
 (`/ext/agentk/`). It refuses to install where there's no `meko` command: browsers reach AgentK only

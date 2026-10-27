@@ -244,7 +244,7 @@ describe('worktree reuse (real session host + git, fake claude)', () => {
   });
 
   it('shows and checks the settings in Settings', async () => {
-    const app = await buildServer(env.core, { webDir: null, updater: null });
+    const app = await buildServer(env.core, { webDir: null, updates: null });
     try {
       const put = (idleWorktreesPerRepo: unknown) => app.inject({ method: 'PUT', url: '/api/settings', payload: { idleWorktreesPerRepo } });
       expect((await app.inject({ url: '/api/settings' })).json().idleWorktreesPerRepo).toBe(3);

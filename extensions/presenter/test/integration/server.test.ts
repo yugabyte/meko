@@ -10,7 +10,7 @@ import { runClaude } from '../../src/server/claude.js';
 import { DeckStore } from '../../src/server/decks.js';
 import { Jobs } from '../../src/server/jobs.js';
 import { getPaths } from '../../src/server/paths.js';
-import { Runs } from '../../src/server/runs.js';
+import { LIVE_AFTER_MOVE_MS, Runs } from '../../src/server/runs.js';
 import { broadcast, buildServer, type Core } from '../../src/server/server.js';
 import { FAKE_CLAUDE, FakeMeko, fakeAnswers, tempDir } from '../helpers.js';
 
@@ -322,6 +322,21 @@ describe('a live run', () => {
     const restarted = new Runs(core.decks, join(getPaths(join(dir, 'home')).run, 'runs'));
     const back = await restarted.get(run.id);
     expect([back.run.pos.scene, (back.deck as Deck).title]).toEqual(['menu', 'YugabyteDB for Acme']);
+  });
+
+  it('tells Meko a talk is live while a window is open, or for a while after it last moved', async () => {
+    const busy = async () => (await api<{ busy: boolean }>('GET', '/_meko/busy')).body.busy;
+    expect(await busy()).toBe(false);
+    const deck = await createDeck();
+    const run = (await api<RunState>('POST', `/api/decks/${deck.id}/runs`, {})).body;
+    expect(await busy()).toBe(false);
+    const leave = await core.runs.join(run.id, { send: () => undefined });
+    expect(await busy()).toBe(true);
+    leave();
+    expect(await busy()).toBe(false);
+    await core.runs.nav(run.id, { action: 'next' });
+    expect(await busy()).toBe(true);
+    expect(core.runs.live(Date.now() + LIVE_AFTER_MOVE_MS)).toBe(false);
   });
 
   it('shows the windows a map Claude lands during the talk', async () => {

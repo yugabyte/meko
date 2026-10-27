@@ -120,7 +120,7 @@ describe('switching the dedicated datapack', () => {
   describe('over HTTP', () => {
     let app: FastifyInstance;
     beforeEach(async () => {
-      app = await buildServer(env.core, { webDir: null, updater: null });
+      app = await buildServer(env.core, { webDir: null, updates: null });
     });
     afterEach(async () => {
       await app.close();

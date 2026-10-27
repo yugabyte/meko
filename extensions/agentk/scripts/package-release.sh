@@ -17,6 +17,7 @@
 #     lib/node_modules/        production dependencies only
 #     lib/packaging/systemd/   service templates used by `agentk install` (Linux)
 #     lib/packaging/launchd/   service templates used by `agentk install` (macOS)
+#     lib/scripts/deps.sh      the prerequisites check `agentk install` runs first (git, curl, gh, a coding agent)
 #     VERSION
 #     CALL_HOME_URL            the usage stats collector, when AK_CALL_HOME_URL is set
 #
@@ -56,7 +57,7 @@ stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT INT TERM
 root="$stage/$name"
 
-mkdir -p "$root/bin" "$root/node/bin" "$root/lib/packaging"
+mkdir -p "$root/bin" "$root/node/bin" "$root/lib/packaging" "$root/lib/scripts"
 cp "$repo/packaging/agentk" "$root/bin/agentk"
 chmod 755 "$root/bin/agentk"
 ln -s agentk "$root/bin/agent-k-local"
@@ -69,6 +70,7 @@ cp -R "$repo/dist" "$root/lib/dist"
 cp -R "$repo/node_modules" "$root/lib/node_modules"
 cp -R "$repo/packaging/systemd" "$root/lib/packaging/systemd"
 cp -R "$repo/packaging/launchd" "$root/lib/packaging/launchd"
+cp "$repo/scripts/deps.sh" "$root/lib/scripts/deps.sh"
 # The license covers the whole repo, so it sits at the root, above extensions/agentk.
 cp "$repo/../../LICENSE" "$root/LICENSE"
 printf '%s\n' "$version" > "$root/VERSION"

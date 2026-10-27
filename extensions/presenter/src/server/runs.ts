@@ -10,6 +10,9 @@ import { fitRun, navigate, startRun, type NavAction, type RunState } from '../sh
 import type { RunServerMessage } from '../shared/types.js';
 import { HttpError, type DeckStore } from './decks.js';
 
+/** How long after its last move a run counts as live with no window open: a window reconnecting. */
+export const LIVE_AFTER_MOVE_MS = 5 * 60_000;
+
 export interface RunPeer {
   send(m: RunServerMessage): void;
 }
@@ -21,6 +24,8 @@ export class Runs {
   private navs = new Map<string, Promise<unknown>>();
   /** The deck each deck's runs last heard, so a save's progress (the same deck) isn't sent again. */
   private sent = new Map<string, Deck>();
+  /** When each run last moved. */
+  private moved = new Map<string, number>();
 
   constructor(private decks: DeckStore, private dir: string) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -77,12 +82,23 @@ export class Runs {
       const next = navigate(deck, run, a);
       this.runs.set(id, next);
       this.persist(next);
+      this.moved.set(id, Date.now());
       for (const p of this.peers.get(id) ?? []) p.send({ type: 'run', run: next });
       return next;
     };
     const done = (this.navs.get(id) ?? Promise.resolve()).then(step, step);
     this.navs.set(id, done.catch(() => undefined));
     return done;
+  }
+
+  /**
+   * Whether a talk is live, which a restart would interrupt: a run with a window open (the console
+   * or the audience's), or one that moved in the last LIVE_AFTER_MOVE_MS (its windows reconnecting).
+   */
+  live(now = Date.now()): boolean {
+    for (const set of this.peers.values()) if (set.size) return true;
+    for (const at of this.moved.values()) if (now - at < LIVE_AFTER_MOVE_MS) return true;
+    return false;
   }
 
   /** Tells a deck's open runs that it changed: the windows redraw, and a position that's gone moves. */
