@@ -96,3 +96,11 @@ test("a signed-out browser goes to sign-in, coming back to the page after", asyn
   expect(document.body.textContent).toContain("Sign in to reach your datapacks.");
   expect(window.location.pathname + window.location.search).toBe("/signin?next=%2Fdatapacks");
 });
+
+test("while a reset link waits, the login still signs in, coming back to the page after", async () => {
+  serve({ ...signedOut, setup_required: true, reset: true, username: "owner" });
+  await open("/datapacks");
+
+  expect(document.body.textContent).toContain("Sign in to reach your datapacks.");
+  expect(window.location.pathname + window.location.search).toBe("/signin?next=%2Fdatapacks");
+});

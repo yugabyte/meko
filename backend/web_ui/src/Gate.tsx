@@ -24,9 +24,14 @@ export function Gate() {
     });
   }, [auth?.access]);
 
-  // The setup screens come before sign-in: sending /setup?token=... to /signin would drop the token
-  // the setup form posts.
-  const needsSignIn = auth?.access === "remote" && !auth.signed_in && !auth.local_access && !auth.setup_required;
+  // With no login there's nothing to sign in to, and a setup link's page keeps its address: sending
+  // /setup?token=... to /signin would drop the token the setup form posts. A login that a waiting
+  // setup link would replace still signs in everywhere else until the link is used.
+  const needsSignIn =
+    auth?.access === "remote" &&
+    !auth.signed_in &&
+    !auth.local_access &&
+    !(auth.setup_required && (!auth.reset || path === SETUP_PATH));
   const inApp = auth && !refused && !auth.setup_required && !needsSignIn;
   // The sign-in screens' addresses mean nothing inside the app: go where the sign-in was headed.
   useEffect(() => {
@@ -47,8 +52,7 @@ export function Gate() {
   if (auth.setup_required) {
     const token = new URLSearchParams(window.location.search).get("token");
     if (path === SETUP_PATH && token) return <SetupPage reset={auth.reset} />;
-    // A login that a waiting setup link would replace still signs in until the link is used.
-    if (auth.reset && path === SIGNIN_PATH) return <SignInPage />;
+    if (needsSignIn) return <SignInPage />;
     return <SetupNeededPage reset={auth.reset} />;
   }
   if (needsSignIn) return <SignInPage />;
