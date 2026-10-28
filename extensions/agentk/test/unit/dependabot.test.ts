@@ -79,6 +79,7 @@ const byDirectory = (dir: string) => {
   return u;
 };
 const AGENTK = '/extensions/agentk';
+const WEB_UI = '/backend/web_ui';
 
 let root: string;
 let repo: string;
@@ -92,14 +93,14 @@ afterEach(() => rmSync(root, { recursive: true, force: true }));
 function commit(msg: string) {
   execFileSync('git', ['commit', '-q', '--allow-empty', '-m', msg], { cwd: repo });
 }
-const notes = () => spawnSync('sh', [NOTES], { cwd: repo, encoding: 'utf8' });
+const notes = (product = 'agentk') => spawnSync('sh', [NOTES, '--product', product], { cwd: repo, encoding: 'utf8' });
 // Dependabot's subjects run past the 72-character limit, so it's exempt from that one rule.
 const checkTitle = (title: string) => spawnSync('sh', [CHECK, '--no-length', title], { encoding: 'utf8' });
 
 describe('dependabot config', () => {
-  it("covers AgentK's npm, Meko's Go modules and memory engine, and GitHub Actions, assigns every PR, and sets its commit prefixes", () => {
+  it("covers AgentK's npm, Meko's Go modules, memory engine and web UI, and GitHub Actions, assigns every PR, and sets its commit prefixes", () => {
     expect(updates().map((u) => `${u.ecosystem} ${u.directory}`).sort()).toEqual(
-      ['github-actions /', 'gomod /backend', 'npm /backend/memory_engine', `npm ${AGENTK}`]);
+      ['github-actions /', 'gomod /backend', 'npm /backend/memory_engine', `npm ${WEB_UI}`, `npm ${AGENTK}`]);
     for (const u of updates()) {
       expect(u.assignees, u.directory).not.toEqual([]);
       // Without an explicit prefix Dependabot guesses one from the repo's history.
@@ -120,23 +121,33 @@ describe('dependabot config', () => {
     }
   });
 
-  it('keeps packages with peer ranges on each other in one group', () => {
-    const npm = byDirectory(AGENTK);
-    const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8')) as {
-      dependencies: Record<string, string>;
-      devDependencies: Record<string, string>;
-    };
-    const deps = new Set([...Object.keys(pkg.dependencies), ...Object.keys(pkg.devDependencies)]);
-    const families = [
+  // Only AgentK's manifest is read here: a root file these tests read runs AgentK's CI job
+  // (test/unit/ci-scope.test.ts), and the web UI's bumps shouldn't.
+  it.each([
+    [AGENTK, [
       ['fastify', '@fastify/static', '@fastify/websocket'],
       ['react', 'react-dom', '@types/react', '@types/react-dom'],
       ['@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-web-links', '@xterm/addon-webgl'],
       ['vite', '@vitejs/plugin-react', 'vitest'],
       ['typescript', 'typescript-eslint'],
       ['eslint', '@eslint/js', 'eslint-plugin-react-hooks'],
-    ];
+    ]],
+    [WEB_UI, [
+      ['react', 'react-dom', '@types/react', '@types/react-dom'],
+      ['vite', '@vitejs/plugin-react', 'vitest', '@tailwindcss/vite', 'tailwindcss'],
+    ]],
+  ])('keeps packages with peer ranges on each other in one group in %s', (dir, families) => {
+    const npm = byDirectory(dir);
+    let deps: Set<string> | undefined;
+    if (dir === AGENTK) {
+      const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8')) as {
+        dependencies: Record<string, string>;
+        devDependencies: Record<string, string>;
+      };
+      deps = new Set([...Object.keys(pkg.dependencies), ...Object.keys(pkg.devDependencies)]);
+    }
     for (const family of families) {
-      for (const p of family) expect(deps, `${p} is no longer a dependency`).toContain(p);
+      if (deps) for (const p of family) expect(deps, `${p} is no longer a dependency`).toContain(p);
       const groups = new Set(family.map((p) => groupOf(npm, p)));
       expect([...groups], family.join(', ')).toHaveLength(1);
       expect(groups.has(undefined), family.join(', ')).toBe(false);
@@ -158,14 +169,33 @@ describe('dependabot config', () => {
     expect(r.stdout).toContain('bump dompurify from 3.4.16 to 3.4.17');
   });
 
-  // Nothing in backend/ ships in AgentK's release yet, so Meko's bumps release nothing either.
+  // Nothing in backend/ ships in AgentK's release, so Meko's bumps don't release AgentK.
   it.each([
     ['/', false, 'bump actions/checkout from 4 to 5'],
     ['/backend', false, 'bump github.com/labstack/echo/v4 from 4.16.0 to 4.17.0'],
     ['/backend/memory_engine', false, 'bump mem0ai from 3.1.2 to 3.1.3'],
     ['/backend/memory_engine', true, 'bump tsx from 4.23.15 to 4.23.16'],
-  ])('does not release a bump in %s (dev %s) on its own', (dir, dev, what) => {
+    [WEB_UI, false, 'bump lucide-react from 0.545.0 to 0.546.0'],
+    [WEB_UI, true, 'bump happy-dom from 21.0.2 to 21.0.4'],
+  ])('does not release AgentK for a bump in %s (dev %s) on its own', (dir, dev, what) => {
     commit(subject(byDirectory(dir), dev, what));
     expect(notes().status).toBe(3);
+  });
+
+  // Meko bundles its Go modules, the memory engine's production packages and the web UI's
+  // dependencies (built into web_ui/dist); dev-only tools ship with its next release.
+  it.each([
+    ['/backend', false, 'bump github.com/labstack/echo/v4 from 4.16.0 to 4.17.0', true],
+    ['/backend/memory_engine', false, 'bump mem0ai from 3.1.2 to 3.1.3', true],
+    ['/backend/memory_engine', true, 'bump tsx from 4.23.15 to 4.23.16', false],
+    [WEB_UI, false, 'bump lucide-react from 0.545.0 to 0.546.0', true],
+    [WEB_UI, true, 'bump happy-dom from 21.0.2 to 21.0.4', false],
+    ['/', false, 'bump actions/checkout from 4 to 5', false],
+  ])('decides whether a bump in %s (dev %s) releases Meko', (dir, dev, what, releases) => {
+    execFileSync('git', ['tag', 'meko-v0.20260101.0'], { cwd: repo });
+    commit(subject(byDirectory(dir), dev, what));
+    const r = notes('meko');
+    expect(r.status, r.stderr).toBe(releases ? 0 : 3);
+    if (releases) expect(r.stdout).toContain(what);
   });
 });

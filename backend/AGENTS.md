@@ -98,11 +98,13 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
 - Memory engine and web UI dependencies are pinned exactly in their `package.json`; `memory_engine/.npmrc` keeps npm from
   installing mem0ai's peers. Meko Cloud's code is private: copy none of it and cite none of its
   paths (state the behavior instead).
-- Dependabot (the repo root's `.github/dependabot.yml`) bumps the Go modules (`deps(meko): ...`)
-  and the memory engine's npm packages (`deps(meko/memory-engine): ...`, or
-  `chore(meko/memory-engine): ...` for dev-only ones) every Monday, with minor and patch
-  bumps grouped and `mem0ai` in a PR of its own. `mattn/go-sqlite3` is left out: it's replaced by the
-  fork, so upgrade the fork's tag by hand.
+- Dependabot (the repo root's `.github/dependabot.yml`) bumps the Go modules (`deps(meko): ...`),
+  the memory engine's npm packages (`deps(meko/memory-engine): ...`, or
+  `chore(meko/memory-engine): ...` for dev-only ones) and the web UI's (`deps(meko/web-ui): ...`
+  for its dependencies, which ship in `web_ui/dist`, or `chore(meko/web-ui): ...` for its build
+  and test tools) every Monday, with minor and patch bumps grouped, `mem0ai` in a PR of its own,
+  and the web UI's react family and its Vite and Tailwind build each in one group. `mattn/go-sqlite3` is
+  left out: it's replaced by the fork, so upgrade the fork's tag by hand.
 - Neither log ever holds memory, turn or knowledge-file text: only ids, counts and timings. The
   memory engine never logs an error's message.
 - Knowledge files' bytes live in `knowledgebase-files/`, only through `internal/knowledge`'s
