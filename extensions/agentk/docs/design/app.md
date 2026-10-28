@@ -5,7 +5,7 @@ Part of the [AgentK design](../design.md).
 The left rail holds projects, each with its repo's folder name in small type under the project
 name and the most urgent session state shown on it. Drag a project to reorder the list; on a touch
 screen, use **Move up** / **Move down** in the project home's settings. The tabs above the terminal
-hold the project's sessions. With **List sessions under their project** ticked in Settings › General
+hold the project's sessions. With **List sessions in the projects pane** ticked in Settings › General
 (off by default; kept in this browser, `ak-rail-sessions`), each project's open sessions are listed
 under it in the rail instead of the tabs, one row each with its status dot, its full name
 (wrapped, not cut off) and its stage (with a » after it while [Run to merge](lifecycle.md#run-to-merge)

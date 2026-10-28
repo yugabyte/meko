@@ -9,7 +9,7 @@ import { installing, mekoUpdates, refreshMekoUpdate, takeRow, updateFailed, useM
 import type { MekoAuth } from '../signin';
 import { harnessLogosToggle } from '../toggle';
 import { claudeUpdateText, cx, defaultAgentChoice, httpHost, relativeTime } from '../util';
-import { AgentLabel, AgentPicker, Busy, Dialog, ErrorText, Field } from './common';
+import { AgentLabel, AgentPicker, Busy, Dialog, ErrorText, Field, InfoButton, InfoCheck, InfoPanel } from './common';
 
 export type SettingsTab = 'general' | 'harness' | 'work-queue' | 'updates';
 type Tab = SettingsTab;
@@ -111,13 +111,9 @@ export function SettingsDialog({
 function RailSessionsSetting() {
   const on = useRailSessions();
   return (
-    <div className="field">
-      <label className="check">
-        <input id="set-rail-sessions" type="checkbox" checked={on} onChange={(e) => saveRailSessions(e.target.checked)} />
-        <span>List sessions under their project in the projects pane</span>
-      </label>
-      <span className="hint">In place of the tabs above the terminal. Kept in this browser.</span>
-    </div>
+    <InfoCheck id="set-rail-sessions" label="List sessions in the projects pane" checked={on} onChange={saveRailSessions}>
+      Under each project, in place of the tabs above the terminal. Kept in this browser.
+    </InfoCheck>
   );
 }
 
@@ -129,13 +125,9 @@ function RailSessionsSetting() {
 function HarnessLogosSetting() {
   const on = harnessLogosToggle.use();
   return (
-    <div className="field">
-      <label className="check">
-        <input id="set-harness-logos" type="checkbox" checked={on} onChange={(e) => harnessLogosToggle.save(e.target.checked)} />
-        <span>Show each session's agent logo beside its name</span>
-      </label>
-      <span className="hint">While your open sessions run on more than one agent. The tooltip names the agent either way. Kept in this browser.</span>
-    </div>
+    <InfoCheck id="set-harness-logos" label="Show each session's agent logo beside its name" checked={on} onChange={harnessLogosToggle.save}>
+      When your open sessions run on more than one agent. The tooltip names the agent either way. Kept in this browser.
+    </InfoCheck>
   );
 }
 
@@ -220,24 +212,14 @@ function WorkQueueTab({ auto }: { auto: AutoSettings }) {
   };
   return (
     <div className="stack">
-      <p className="muted small">What Sync adds to the work queue. Turn both off to turn sync off.</p>
-      <div className="field">
-        <label className="check">
-          <input id="set-wq-github" type="checkbox" checked={s.workQueueGithub} onChange={(e) => change({ workQueueGithub: e.target.checked })} />
-          <span>GitHub review requests</span>
-        </label>
-        <span className="hint">Open PRs that ask for your review, through your gh login.</span>
-      </div>
-      <div className="field">
-        <label className="check">
-          <input id="set-wq-slack" type="checkbox" checked={s.workQueueSlack} onChange={(e) => change({ workQueueSlack: e.target.checked })} />
-          <span>Slack Later list</span>
-        </label>
-        <span className="hint">
-          The messages you saved for later, read by Claude Code through your Slack connector. Each read is a model call; on the
-          timer it runs only while the last read worked.
-        </span>
-      </div>
+      <p className="muted small">What Sync adds to the queue; both off turns it off.</p>
+      <InfoCheck id="set-wq-github" label="GitHub review requests" checked={s.workQueueGithub} onChange={(on) => change({ workQueueGithub: on })}>
+        Open PRs that ask for your review, through your gh login.
+      </InfoCheck>
+      <InfoCheck id="set-wq-slack" label="Slack Later list" checked={s.workQueueSlack} onChange={(on) => change({ workQueueSlack: on })}>
+        The messages you saved for later, read by Claude Code through your Slack connector. Each read is a model call; on the
+        timer it runs only while the last read worked.
+      </InfoCheck>
       <Field label="Sync every (minutes)" hint={off ? 'Sync is off.' : '0 syncs only when you press Sync.'}>
         <input
           id="set-wq-minutes"
@@ -350,7 +332,7 @@ function GeneralTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObje
     <div className="stack">
       <div className="field">
         <span className="label">Repo folders</span>
-        <span className="hint">The Open project dialog lists the git repos in these folders.</span>
+        <span className="hint">Where Open project looks for git repos.</span>
         {roots.map((r, i) => (
           <div className="filter-row" key={i}>
             <input
@@ -379,7 +361,7 @@ function GeneralTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObje
         </button>
       </div>
       <div className="fields">
-        <Field label="Scan depth" hint="1 lists only the folders directly inside each repo folder.">
+        <Field label="Scan depth" info={{ for: 'set-depth', text: 'How many folders deep to look for repos. 1 looks only directly inside each repo folder.' }}>
           <input
             id="set-depth"
             className="input"
@@ -401,71 +383,62 @@ function GeneralTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObje
           />
         </Field>
       </div>
-      <div className="field">
-        <span className="hint">
-          When a session ends, its worktree waits for the next session on the same repo, from any project, with its build
-          outputs intact. Each idle worktree keeps those outputs on disk.
-        </span>
-        <div className="fields">
-          <Field label="Idle worktrees per repo" hint="0 removes worktrees when sessions end.">
-            <input
-              id="set-idle-worktrees"
-              className="input"
-              type="number"
-              min={0}
-              max={20}
-              value={idle}
-              onChange={(e) => setIdle(e.target.value)}
-              {...saveOn('idleWorktreesPerRepo', () => setIdle(String(clampOr(idle, 20, s.idleWorktreesPerRepo))))}
-            />
-          </Field>
-          <Field label="Remove unused after (days)" hint="An idle worktree no session has used for this long is removed. 0 keeps it.">
-            <input
-              id="set-idle-worktree-days"
-              className="input"
-              type="number"
-              min={0}
-              max={365}
-              value={idleDays}
-              onChange={(e) => setIdleDays(e.target.value)}
-              {...saveOn('idleWorktreeDays', () => setIdleDays(String(clampOr(idleDays, 365, s.idleWorktreeDays))))}
-            />
-          </Field>
-        </div>
-      </div>
-      <div className="field">
-        <label className="check">
+      <div className="fields">
+        <Field
+          label="Idle worktrees per repo"
+          info={{
+            for: 'set-idle-worktrees',
+            text:
+              'When a session ends, its worktree waits, build outputs intact, for the next session on the same repo, from any project. ' +
+              'Each one keeps its outputs on disk. 0 removes worktrees when sessions end.',
+          }}
+        >
           <input
-            id="set-resolve-conflicts"
-            type="checkbox"
-            checked={s.resolveConflicts}
-            onChange={(e) => change({ resolveConflicts: e.target.checked })}
+            id="set-idle-worktrees"
+            className="input"
+            type="number"
+            min={0}
+            max={20}
+            value={idle}
+            onChange={(e) => setIdle(e.target.value)}
+            {...saveOn('idleWorktreesPerRepo', () => setIdle(String(clampOr(idle, 20, s.idleWorktreesPerRepo))))}
           />
-          <span>Resolve merge conflicts on PRs</span>
-        </label>
-        <span className="hint">
-          When a PR in PR &amp; Review conflicts with its base, AgentK merges the base into the branch, resolves the
-          conflicts and pushes. Off leaves them to you.
-        </span>
-      </div>
-      <div className="field">
-        <label className="check">
+        </Field>
+        <Field
+          label="Remove unused after (days)"
+          info={{ for: 'set-idle-worktree-days', text: 'An idle worktree no session has used for this long is removed. 0 keeps them.' }}
+        >
           <input
-            id="set-tools-enabled"
-            type="checkbox"
-            checked={s.toolsEnabled}
-            onChange={(e) => change({ toolsEnabled: e.target.checked })}
+            id="set-idle-worktree-days"
+            className="input"
+            type="number"
+            min={0}
+            max={365}
+            value={idleDays}
+            onChange={(e) => setIdleDays(e.target.value)}
+            {...saveOn('idleWorktreeDays', () => setIdleDays(String(clampOr(idleDays, 365, s.idleWorktreeDays))))}
           />
-          <span>Let sessions start and move sessions</span>
-        </label>
-        <span className="hint">
-          Sessions get AgentK’s session tools, so when you ask, the agent can open projects, start sessions (from GitHub
-          issues and PRs too), move sessions to another stage and open another session’s PR. The agent asks before each
-          change, as for its other tools, unless Kiro may run any tool without asking (Harness). Turning this off stops them at once;
-          turning it on reaches each session at its next start.
-        </span>
+        </Field>
       </div>
-      <Field label="Server name" hint={`Shown in the rail next to your user name. Leave it empty to use this machine’s name (${s.hostName}).`}>
+      <InfoCheck
+        id="set-resolve-conflicts"
+        label="Resolve merge conflicts on PRs"
+        checked={s.resolveConflicts}
+        onChange={(on) => change({ resolveConflicts: on })}
+      >
+        When a PR conflicts with its base, AgentK merges the base in, resolves the conflicts and pushes. Off leaves them to you.
+      </InfoCheck>
+      <InfoCheck
+        id="set-tools-enabled"
+        label="Let sessions start and move sessions"
+        checked={s.toolsEnabled}
+        onChange={(on) => change({ toolsEnabled: on })}
+      >
+        Gives agents AgentK’s session tools. When you ask, they can open projects, start sessions (from GitHub issues and PRs
+        too), move sessions between stages and open another session’s PR. The agent asks before each change, unless Kiro may
+        run any tool without asking (Harness). Off applies at once. On applies at each session’s next start.
+      </InfoCheck>
+      <Field label="Server name" info={{ for: 'set-server-name', text: 'Shown in the projects pane next to your user name. Empty uses this machine’s name.' }}>
         <input
           id="set-server-name"
           className="input"
@@ -476,10 +449,6 @@ function GeneralTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObje
           {...saveOn('serverName')}
         />
       </Field>
-      <p className="hint">
-        Meko serves AgentK. Who can reach it, and on which port, are set in Meko’s config.toml, in its{' '}
-        <code>[web]</code> table.
-      </p>
     </div>
   );
 }
@@ -582,9 +551,12 @@ function HarnessTab({
     <div className="stack">
       {defaultAgent && (
         <div className="field">
-          <span className="label" id="set-agent-label">
-            Default agent
-          </span>
+          <div className="info-row">
+            <span className="label" id="set-agent-label">
+              Default agent
+            </span>
+            <InfoButton id="set-agent-info" label="Default agent" />
+          </div>
           <AgentPicker
             idPrefix="set-agent"
             agents={defaultAgent.agents}
@@ -592,10 +564,10 @@ function HarnessTab({
             onChange={(id) => change({ defaultHarness: id })}
             labelledBy="set-agent-label"
           />
-          <span className="hint">
-            New sessions and Ask AgentK run on it; the New session dialog can pick another. A session keeps the agent it
+          <InfoPanel id="set-agent-info">
+            New sessions and Ask AgentK run on it. The New session dialog can pick another, and a session keeps the agent it
             started on.
-          </span>
+          </InfoPanel>
         </div>
       )}
       {(twoAgents || harnesses.some((h) => h.id !== 'claude' && h.enabled)) && <HarnessLogosSetting />}
@@ -702,38 +674,24 @@ export function AgentSettings({
       </div>
       {meko && enabled && status?.available && <AgentMeko id={id} meko={meko} />}
       {id === 'opencode' && enabled && (
-        <div className="field">
-          <label className="check">
-            <input
-              id="set-opencode-tracking"
-              type="checkbox"
-              checked={s.opencodeDisableTracking}
-              onChange={(e) => onChange({ opencodeDisableTracking: e.target.checked })}
-            />
-            <span>Turn off OpenCode's tracking</span>
-          </label>
-          <span className="hint">
-            {s.opencodeDisableTracking ? 'OpenCode sessions and Ask AgentK' : 'When on, OpenCode sessions and Ask AgentK'} send no telemetry, skip
-            OpenCode's update check and hide OpenCode Zen's free models, whose providers may train on your prompts. Commands the agent runs in a
-            session don't export OpenTelemetry either.{' '}
-            {s.opencodeDisableTracking &&
-              'Your prompts and code still go to the model you pick: for code that must not leave this computer, use a local model such as Ollama or LM Studio. '}
-            Takes effect when a session next starts or resumes.
-          </span>
-        </div>
+        <InfoCheck
+          id="set-opencode-tracking"
+          label="Turn off OpenCode's tracking"
+          checked={s.opencodeDisableTracking}
+          onChange={(on) => onChange({ opencodeDisableTracking: on })}
+        >
+          On, OpenCode sessions and Ask AgentK send no telemetry, skip OpenCode's update check and hide OpenCode Zen's free
+          models, whose providers may train on your prompts, and commands the agent runs export no OpenTelemetry. Your prompts
+          and code still go to the model you pick; for code that must stay on this computer, use a local model (Ollama, LM
+          Studio). Applies when a session next starts or resumes.
+        </InfoCheck>
       )}
       {id === 'kiro' && enabled && (
-        <div className="field">
-          <label className="check">
-            <input id="set-kiro-trust" type="checkbox" checked={s.kiroTrustTools} onChange={(e) => onChange({ kiroTrustTools: e.target.checked })} />
-            <span>Let Kiro run any tool without asking</span>
-          </label>
-          <span className="hint">
-            Kiro says nothing to AgentK while it waits for a permission answer, so the session shows as working until you answer in its terminal. On,
-            Kiro runs every tool, shell commands included, without asking, in AgentK's sessions only. Takes effect when a session next starts or
-            resumes.
-          </span>
-        </div>
+        <InfoCheck id="set-kiro-trust" label="Let Kiro run any tool without asking" checked={s.kiroTrustTools} onChange={(on) => onChange({ kiroTrustTools: on })}>
+          Kiro tells AgentK nothing while it waits for a permission answer, so the session looks busy until you answer in its
+          terminal. On, Kiro runs every tool, shell commands included, without asking, in AgentK's sessions only. Applies when a
+          session next starts or resumes.
+        </InfoCheck>
       )}
     </div>
   );
@@ -741,7 +699,7 @@ export function AgentSettings({
 
 /** Where AgentK's Meko key comes from, after "AgentK uses". */
 const SOURCE_TEXT: Record<MekoKeySource, string> = {
-  meko: 'Meko Cloud, linked in Meko',
+  meko: 'Meko Cloud',
   local: 'the Meko on this computer',
   config: 'its own Meko key from config.toml',
   env: 'its own Meko key from MEKO_API_KEY',
@@ -762,15 +720,21 @@ export function MekoLinks({ meko, auth }: { meko: MekoStatus; auth: MekoAuth | n
   const host = httpHost(meko.url ?? '');
   return (
     <div className="field" id="set-meko-links">
-      <span className="label">Meko</span>
+      <div className="info-row">
+        <span className="label">Meko</span>
+        <InfoButton id="set-meko-info" label="Meko" />
+      </div>
       <span className="hint">
         {meko.source
           ? `AgentK uses ${SOURCE_TEXT[meko.source]}${host && meko.source !== 'local' ? ` (${host})` : ''}.${
               meko.source !== 'meko' && meko.source !== 'local' ? ` ${OWN_KEY_FIX}` : ''
             }`
-          : 'Meko isn’t set up: start Meko on this computer (meko start), or link Meko Cloud.'}{' '}
-        {auth?.access === 'local' ? 'Meko opens AgentK on this computer without a sign-in.' : 'Meko signs you in to AgentK.'}
+          : 'Meko isn’t set up: start Meko on this computer (meko start), or link Meko Cloud.'}
       </span>
+      <InfoPanel id="set-meko-info">
+        {auth?.access === 'local' ? 'Meko opens AgentK on this computer without a sign-in.' : 'Meko signs you in to AgentK.'} Who can
+        reach AgentK, and on which port, are set in Meko’s config.toml, in its <code>[web]</code> table.
+      </InfoPanel>
       <div className="settings-actions">
         <a className="btn small" id="set-meko-cloud" href={MEKO_CLOUD_PATH}>
           Meko Cloud ↗
@@ -798,32 +762,29 @@ function AgentMeko({ id, meko }: { id: HarnessId; meko: MekoStatus }) {
   let tag: string;
   let bad = false;
   let hint: string;
+  // Why, or what a fix does, behind the ⓘ.
+  let info: string | null = null;
   let setUp: (() => Promise<unknown>) | null = null;
   if (id === 'claude') {
     const c = meko.claude;
     const problems = [...c.gaps, ...c.unchecked];
     bad = problems.length > 0;
     tag = c.gaps.length ? 'differs' : c.checking ? 'checking' : c.unchecked.length ? 'not checked' : 'matches';
-    hint = problems.length
-      ? `${problems.join(' ')} New sessions pick up a fix; running ones keep what they started with.`
-      : c.checking
-        ? 'Checking Claude Code’s tokens on this Meko.'
-        : `Sessions use ${url}, with tokens that work there.`;
+    hint = problems.length ? problems.join(' ') : c.checking ? 'Checking Claude Code’s tokens on this Meko.' : `Sessions use ${url}.`;
+    if (problems.length) info = 'New sessions pick up a fix; running ones keep what they started with.';
     if (problems.length) setUp = api.mekoClaudeSetup;
   } else if (id === 'opencode') {
     if (!meko.opencode) return null;
     tag = meko.opencode.own ? 'its own' : 'matches';
-    hint = meko.opencode.own
-      ? 'OpenCode sessions use the meko server in OpenCode’s own config, which AgentK leaves as it is.'
-      : `OpenCode sessions use ${url}: AgentK adds it to their config.`;
+    hint = meko.opencode.own ? 'Sessions use the meko server in OpenCode’s own config.' : `Sessions use ${url}.`;
+    info = meko.opencode.own ? 'AgentK leaves OpenCode’s config as it is.' : 'AgentK adds it to their config.';
   } else {
     if (!meko.kiro) return null;
     const gaps = meko.kiro.gaps;
     bad = gaps.length > 0;
     tag = bad ? 'differs' : 'matches';
-    hint = bad
-      ? `${gaps.join(' ')} Meko's setup for Kiro adds its MCP server and its agent, which Kiro sessions are built from.`
-      : `Kiro sessions use ${url}.`;
+    hint = bad ? gaps.join(' ') : `Sessions use ${url}.`;
+    if (bad) info = 'Meko’s setup adds Kiro’s MCP server and the agent Kiro sessions are built from.';
     if (bad) setUp = api.mekoKiroSetup;
   }
   const run = (fn: () => Promise<unknown>) => {
@@ -837,13 +798,17 @@ function AgentMeko({ id, meko }: { id: HarnessId; meko: MekoStatus }) {
   };
   return (
     <div className="field">
-      <span className="label">
-        Meko{' '}
-        <span id={`set-${id}-meko`} className={cx('tag', bad && 'shared')}>
-          {tag}
+      <div className="info-row">
+        <span className="label">
+          Meko{' '}
+          <span id={`set-${id}-meko`} className={cx('tag', bad && 'shared')}>
+            {tag}
+          </span>
         </span>
-      </span>
+        {info && <InfoButton id={`set-${id}-meko-info`} label="Meko" />}
+      </div>
       <span className="hint">{hint}</span>
+      {info && <InfoPanel id={`set-${id}-meko-info`}>{info}</InfoPanel>}
       {setUp && (
         <div className="settings-actions">
           <button type="button" id={`set-${id}-meko-setup`} className="btn small" disabled={busy} onClick={() => run(setUp)}>
@@ -906,6 +871,10 @@ function UsageStatsCheck() {
   );
 }
 
+/** Who installs AgentK's updates and what one restarts, behind Settings › Updates' ⓘ. */
+const UPDATES_INFO =
+  'Meko checks for and installs AgentK’s updates. An update restarts only the web server: sessions keep running and the page reconnects on its own.';
+
 function UpdatesTab({ initial, onWhatsNew }: { initial: UpdateStatus; onWhatsNew: (from: string, to: string) => void }) {
   // Meko checks for AgentK's updates, installs them and keeps Update automatically (mekoupdate.ts).
   const { row, error: mekoError, loaded } = useMekoUpdate();
@@ -950,29 +919,28 @@ function UpdatesTab({ initial, onWhatsNew }: { initial: UpdateStatus; onWhatsNew
           <Busy label="Asking Meko" />
         </p>
       ) : mekoError ? (
-        <p className="muted">{mekoError}</p>
+        // Why updates can't be had here, with who installs them behind the same ⓘ as Update automatically.
+        <div className="info-check">
+          <div className="info-row">
+            <p className="muted">{mekoError}</p>
+            <InfoButton id="set-auto-update-info" label="Updates" />
+          </div>
+          <InfoPanel id="set-auto-update-info">{UPDATES_INFO}</InfoPanel>
+        </div>
       ) : (
-        <label className="check">
-          <input
-            id="set-auto-update"
-            type="checkbox"
-            checked={row?.auto_update ?? true}
-            disabled={!can || busy === 'auto'}
-            onChange={(e) => {
-              const on = e.target.checked;
-              void run('auto', () => mekoUpdates.setAuto(on));
-            }}
-          />
-          <span>Update automatically (Meko installs new versions when it finds them)</span>
-        </label>
+        <InfoCheck
+          id="set-auto-update"
+          label="Update automatically"
+          checked={row?.auto_update ?? true}
+          disabled={!can || busy === 'auto'}
+          onChange={(on) => void run('auto', () => mekoUpdates.setAuto(on))}
+        >
+          {UPDATES_INFO}
+        </InfoCheck>
       )}
       {row?.waiting && <p className="muted">An automatic update is waiting: {row.waiting}</p>}
       {row?.check_error && <p className="error-text">Last check failed: {row.check_error}</p>}
       {failed && <p className="error-text">The last update failed: {failed}</p>}
-      <p className="muted">
-        Meko installs AgentK’s updates. They restart only the web server: your Claude sessions keep running, and the page reconnects on
-        its own.
-      </p>
       <ErrorText error={error} />
       <div className="settings-actions">
         <button className="btn" disabled={!can || !!busy || installing(row)} onClick={() => void run('check', mekoUpdates.check)}>

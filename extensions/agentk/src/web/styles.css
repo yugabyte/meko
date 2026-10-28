@@ -3099,12 +3099,48 @@ div[id^='dak-mermaid-'] .label {
   align-items: center;
   flex-wrap: wrap;
 }
-/* A check with a link beside it (Log Meko calls, View calls). */
-.check-row {
+/* A setting's label (or checkbox) and its ⓘ (InfoButton in common.tsx); the explanation
+   (InfoPanel) opens under the whole setting. On touch the ⓘ is a 40 px .icon-btn. */
+.info-row {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 4px 12px;
+  align-items: center;
+  gap: 0 2px;
+  min-width: 0;
+}
+.info-row > p {
+  margin: 0;
+}
+/* Log Meko calls' View calls, after the ⓘ. */
+.info-row > .view-calls {
+  margin-left: 10px;
+}
+/* Its negative margin keeps a label row as tall as a plain label's, so fields side by side line up. */
+.info-btn {
+  padding: 2px 4px;
+  margin: -6px 0;
+}
+.info-btn > span {
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font: italic 600 10px/1 Georgia, serif;
+}
+.info-btn.on {
+  color: var(--accent);
+}
+.info-panel {
+  margin: 2px 0 4px;
+  padding-left: 8px;
+  border-left: 2px solid var(--rule);
+  font-size: 12px;
+  color: var(--muted);
+}
+.info-panel[hidden] {
+  display: none;
 }
 .check-hint {
   display: block;
