@@ -22,6 +22,15 @@
 # Exits 2 on bad usage.
 set -eu
 
+# Markdown only people read: a README, CONTRIBUTING, AGENTS, CLAUDE or REVIEW file, or docs/.
+# Asked only of paths in a component, so the same names elsewhere fall to the rules for them.
+doc() {
+  case $1 in
+    */AGENTS.md | */CLAUDE.md | */CONTRIBUTING.md | */README.md | */REVIEW.md | */docs/*.md) return 0 ;;
+  esac
+  return 1
+}
+
 agentk=false
 backend=false
 presenter=false
@@ -38,15 +47,15 @@ elif [ $# -eq 0 ]; then
       .github/workflows/ci.yml | scripts/ci-scope.sh) agentk=true backend=true presenter=true ;;
       # Where Meko's data folder is: Meko's paths.Resolve, and AgentK's and Presenter's mekoHome, are tested against it.
       backend/internal/paths/testdata/resolve-cases.json) agentk=true backend=true presenter=true ;;
-      # Markdown a test reads: Meko's docs and test fixtures. These match before the docs below.
+      # Markdown a test reads: Meko's docs and test fixtures. These match before a component's docs.
       backend/docs/* | backend/*/test/* | backend/*/testdata/*) backend=true ;;
       extensions/agentk/test/*) agentk=true ;;
       extensions/presenter/test/*) presenter=true ;;
-      # Markdown only people read checks nothing; other Markdown (such as a skill a release ships) runs its component.
-      */AGENTS.md | */CLAUDE.md | */CONTRIBUTING.md | */README.md | */REVIEW.md | */docs/*.md) ;;
-      extensions/presenter/*) presenter=true ;;
-      extensions/agentk/* | scripts/* | .github/*) agentk=true ;;
-      backend/*) backend=true ;;
+      # A component's docs check nothing; its other Markdown (such as a skill a release ships) runs it.
+      extensions/presenter/*) doc "$path" || presenter=true ;;
+      extensions/agentk/*) doc "$path" || agentk=true ;;
+      scripts/* | .github/*) agentk=true ;;
+      backend/*) doc "$path" || backend=true ;;
       .claude/*) ;;
       */*) agentk=true backend=true presenter=true ;;
       *.md) ;;

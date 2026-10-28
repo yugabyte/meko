@@ -35,11 +35,12 @@ from the extension's folder) and which docs to keep current. Meko's own Go backe
   skill (`.claude/skills/commit/SKILL.md`). PRs are squash-merged, so the PR title is the subject.
 - **Changes reach `main` only through PRs** that pass the `CI gate` and `PR title` checks. A PR
   runs only the jobs of the components it changes (`scripts/ci-scope.sh`); a push to `main` runs
-  them all. Markdown only people read (READMEs, `AGENTS.md`, `REVIEW.md`, `docs/`) runs no job,
-  but Markdown a test reads (`backend/docs/`, test fixtures) or a release ships (AgentK's
-  `src/tools/skill/SKILL.md`) runs its component's, so a new test that reads Markdown, or a
-  release that packs it, gets its path in the script too. A new component gets its own job in
-  `ci.yml`, its paths in `scripts/ci-scope.sh`, a place in the gate's `needs`, and its name in `COMPONENTS` in `scripts/check-title.sh`. A new
+  them all. Root Markdown, and Markdown only people read inside a component (READMEs,
+  `AGENTS.md`, `REVIEW.md`, `docs/`), run no job, but Markdown a test reads (`backend/docs/`,
+  test fixtures) or a release ships (AgentK's `src/tools/skill/SKILL.md`) runs its component's,
+  so a new test that reads Markdown, or a release that packs it, gets its path in the script
+  too. A new component gets its own job in `ci.yml`, its paths in `scripts/ci-scope.sh`, a
+  place in the gate's `needs`, and its name in `COMPONENTS` in `scripts/check-title.sh`. A new
   product also gets a GitHub label of its own name and an entry in the issue forms' Product
   dropdown (`.github/ISSUE_TEMPLATE/`) and in the issue skill.
 - **Issues** follow the issue skill (`.claude/skills/issue/SKILL.md`): the issue forms'

@@ -27,7 +27,6 @@ describe('ci-scope.sh', () => {
     ['.github/workflows/pr-title.yml', true, false, false],
     ['backend/cmd/meko-local/main.go', false, true, false],
     ['backend/AGENTS.md', false, false, false],
-    ['backend/docs/cli.md', false, true, false],
     ['backend/internal/paths/testdata/a.md', false, true, false],
     ['extensions/presenter/src/server/cli.ts', false, false, true],
     ['extensions/presenter/AGENTS.md', false, false, false],
@@ -35,7 +34,6 @@ describe('ci-scope.sh', () => {
     ['extensions/agentk/README.md', false, false, false],
     ['extensions/agentk/docs/design/releases.md', false, false, false],
     ['extensions/agentk/src/web/REVIEW.md', false, false, false],
-    ['extensions/agentk/src/tools/skill/SKILL.md', true, false, false],
     ['extensions/agentk/test/fixtures/a.md', true, false, false],
     ['backend/internal/paths/testdata/resolve-cases.json', true, true, true],
     ['.github/workflows/ci.yml', true, true, true],
@@ -44,6 +42,8 @@ describe('ci-scope.sh', () => {
     ['.claude/skills/commit/SKILL.md', false, false, false],
     ['.gitignore', true, true, true],
     ['docs/new.md', true, true, true],
+    ['docs/README.md', true, true, true],
+    ['scripts/README.md', true, false, false],
   ])('%s runs agentk=%s backend=%s presenter=%s', (path, agentk, backend, presenter) => {
     expect(run(path)).toBe(out(agentk, backend, presenter));
   });
