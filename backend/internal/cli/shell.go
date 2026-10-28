@@ -20,10 +20,6 @@ var atPrompt bool
 // datapackCommands are mekosh's commands that take --datapack, which the prompt's use fills in.
 var datapackCommands = []string{"search", "add_memory", "upload", "upload_status"}
 
-// promptDatapack is the datapack the prompt's use picked: its id, which later lines pass (it still
-// names it after a rename), and its name, which the prompt shows. The zero value is the default.
-type promptDatapack struct{ id, name string }
-
 // RunMekosh runs mekosh: the command in args, or with none (only --data-dir) its prompt.
 func RunMekosh(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && (!strings.HasPrefix(args[0], "-") || args[0] == "-h" || args[0] == "--help") {
@@ -87,13 +83,19 @@ func runPrompt(dataDir string, in io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "Connected to Meko %s at http://127.0.0.1:%d, datapack default\n", st.Version, st.Port)
 		fmt.Fprintln(stdout, "Type help for the commands, exit to leave")
 	}
-	var datapack promptDatapack
+	// The datapack the prompt's use picked: this Meko's or the linked Meko Cloud's, by its id, which
+	// later lines pass (it still names it after a rename), and its name, which the prompt shows. The
+	// zero value is the default.
+	var datapack target
 	code := exitOK
 	for {
 		if interactive {
 			label := datapack.name
-			if label == "" {
+			switch {
+			case label == "":
 				label = "default"
+			case datapack.cloud:
+				label = cloudPrefix + label
 			}
 			fmt.Fprintf(stdout, "mekosh %s> ", label)
 		}
@@ -116,11 +118,13 @@ func runPrompt(dataDir string, in io.Reader, stdout, stderr io.Writer) int {
 		case words[0] == "use":
 			lc = promptUse(l, words[1:], &datapack, stdout, stderr)
 		default:
-			lc = runProg(progMekosh, promptArgs(words, datapack.id, dataDir), stdout, stderr)
+			lc = runProg(progMekosh, promptArgs(words, datapack.spec(), dataDir), stdout, stderr)
 			// The datapack in use is gone: later lines go to the default one again.
 			if lc == exitOK && words[0] == "delete_datapack" && datapack.id != "" {
-				if named := firstArg(words[1:]); named == datapack.id || named == datapack.name {
-					datapack = promptDatapack{}
+				side, named := splitSide(firstArg(words[1:]))
+				sameSide := side == "" || (side == "cloud") == datapack.cloud
+				if sameSide && (named == datapack.id || named == datapack.name) {
+					datapack = target{}
 					fmt.Fprintln(stdout, "Using the default datapack")
 				}
 			}
@@ -171,13 +175,13 @@ func firstArg(args []string) string {
 
 // promptUse is the prompt's use: with a name or id, find the datapack and use it from now on; alone,
 // say which one is in use.
-func promptUse(l paths.Layout, args []string, datapack *promptDatapack, stdout, stderr io.Writer) int {
+func promptUse(l paths.Layout, args []string, datapack *target, stdout, stderr io.Writer) int {
 	switch len(args) {
 	case 0:
 		if datapack.id == "" {
 			fmt.Fprintln(stdout, "Using the default datapack")
 		} else {
-			fmt.Fprintf(stdout, "Using datapack %s\n", datapack.name)
+			fmt.Fprintf(stdout, "Using %s\n", datapack.noun())
 		}
 		return exitOK
 	case 1:
@@ -187,19 +191,20 @@ func promptUse(l paths.Layout, args []string, datapack *promptDatapack, stdout, 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), toolTimeout)
 	defer cancel()
-	t, err := connectTools(ctx, l)
+	session, err := connectTools(ctx, l)
 	if err != nil {
 		fmt.Fprintf(stderr, "mekosh: the server is running, but %v\n", err)
 		return exitError
 	}
-	defer func() { _ = t.s.Close() }()
-	id, name, err := t.findDatapack(ctx, args[0])
+	t := newTools(session, l)
+	defer t.close()
+	dp, err := t.resolve(ctx, args[0])
 	if err != nil {
 		fmt.Fprintf(stderr, "mekosh: %v\n", err)
 		return exitError
 	}
-	*datapack = promptDatapack{id: id, name: name}
-	fmt.Fprintf(stdout, "Using datapack %s\n", name)
+	*datapack = dp
+	fmt.Fprintf(stdout, "Using %s\n", dp.noun())
 	return exitOK
 }
 

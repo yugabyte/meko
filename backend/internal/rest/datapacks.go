@@ -2,12 +2,14 @@ package rest
 
 import (
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/yugabyte/meko/backend/internal/cloudlink"
 	"github.com/yugabyte/meko/backend/internal/envelope"
 	"github.com/yugabyte/meko/backend/internal/memory"
 	"github.com/yugabyte/meko/backend/internal/wire"
@@ -98,7 +100,21 @@ type datapackRow struct {
 	ConversationSearchOptOut bool   `json:"conversation_search_opt_out"`
 }
 
+// listDatapacks is this Meko's datapacks and the linked Meko Cloud's (location=all, the default), or
+// with ?location=local only this Meko's, or with location=cloud only Meko Cloud's (cloud.go).
 func (a *api) listDatapacks(c echo.Context) error {
+	location := c.QueryParam("location")
+	if location == "" {
+		location = "all"
+	}
+	switch location {
+	case "local", "cloud", "all":
+	default:
+		return badRequest(c, "location must be local, cloud or all")
+	}
+	if location == "cloud" {
+		return a.listLocation(c, location, nil)
+	}
 	ds, err := a.Service.Datapacks(ctx(c))
 	if err != nil {
 		return err
@@ -113,6 +129,9 @@ func (a *api) listDatapacks(c echo.Context) error {
 		out[i] = datapackRow{Datapack: wire.DatapackRow(d, a.Service.UserID()), OwnerName: fullName(p),
 			OwnerEmail: p.Email, ConversationSearchOptOut: d.ConversationSearchOptOut}
 	}
+	if location == "all" {
+		return a.listLocation(c, location, out)
+	}
 	return envelope.OK(c, out)
 }
 
@@ -120,9 +139,37 @@ func (a *api) createDatapack(c echo.Context) error {
 	var body struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
+		// Location (Meko's own) picks where: "cloud" the linked Meko Cloud, "local" this Meko. Without
+		// it, the linked Meko Cloud while there's one, else this Meko.
+		Location string `json:"location"`
 	}
 	if ok, err := bind(c, &body); !ok {
 		return err
+	}
+	if body.Location == "" {
+		body.Location = "local"
+		if a.Cloud != nil {
+			linked, err := a.Cloud.IsLinked()
+			if err != nil {
+				return err
+			}
+			if linked {
+				body.Location = "cloud"
+			}
+		}
+	}
+	switch body.Location {
+	case "local":
+	case "cloud":
+		if a.Cloud == nil {
+			return envelope.Fail(c, http.StatusConflict, cloudlink.CodeNotLinked, "This Meko has no Meko Cloud link.")
+		}
+		if strings.TrimSpace(body.Name) == "" {
+			return badRequest(c, "name is required")
+		}
+		return a.createInCloud(c, strings.TrimSpace(body.Name), body.Description)
+	default:
+		return badRequest(c, "location must be local or cloud")
 	}
 	d, err := a.Service.CreateDatapack(ctx(c), body.Name, body.Description)
 	if err != nil {
@@ -176,6 +223,12 @@ func (a *api) updateDatapack(c echo.Context) error {
 }
 
 func (a *api) deleteDatapack(c echo.Context) error {
+	if cloud, err := a.inCloud(c); err != nil || cloud {
+		if err != nil {
+			return err
+		}
+		return a.toCloud(c, http.StatusOK, http.MethodDelete, cloudPath(c, ""), nil)
+	}
 	id, ok, err := a.pathDatapack(c)
 	if !ok {
 		return err

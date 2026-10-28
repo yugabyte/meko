@@ -93,15 +93,14 @@ agents (MCP and the REST API, on 7778), and what to run next.
 | `mekosh` | What it does |
 |---|---|
 | `mekosh` | A prompt (`mekosh default>`) that takes the commands below, one a line, plus `use <datapack>` (later `search`, `add_memory`, `upload` and `upload_status` lines use it unless they name another; a `delete_datapack` of it goes back to the default), `help` and `exit`. There's no history or line editing yet, and Ctrl-C leaves. Given a file or pipe instead of a terminal, it runs the lines as a script and exits with the first failing line's code |
-| `mekosh datapacks [--cloud]` | List the datapacks; `--cloud` adds the linked Meko Cloud's after them, each marked local or cloud (and shared) |
-| `mekosh create_datapack <name>` | Create a datapack |
+| `mekosh datapacks [--local]` | List the datapacks, then the linked Meko Cloud's, each marked local or cloud (and shared); `--local` leaves Meko Cloud out |
+| `mekosh create_datapack <name> [--cloud]` | Create a datapack, here or with `--cloud` in the linked Meko Cloud |
 | `mekosh delete_datapack <name\|id> [--force]` | Delete a datapack and everything in it, for good. It asks first; `--force` doesn't |
 | `mekosh export [<name\|id>] [-o FILE] [--force]` | Write a datapack (default: the default one) to one zip: memories, collective memories, conversations, knowledge files and artifacts with their embeddings and file contents, and the call log. It won't replace a file unless `--force` |
 | `mekosh search "<question>"` | Search memories, the knowledge base and past conversations (`context_search`) |
 | `mekosh add_memory "<text>"` | Save a memory, word for word; `-` or no text reads stdin (not at the prompt) |
 | `mekosh upload <file>... [--no-wait]` | Add PDF, text, Markdown, JSON, CSV, XML or HTML files (up to 50 MiB) to the knowledge base, and wait until they're indexed |
 | `mekosh upload_status <key>` | How an uploaded file is doing |
-| `mekosh tools [--json]` | The MCP tools Meko serves, each with a line on what it does; needs no running server |
 
 `meko` runs none of `mekosh`'s commands: given one (`meko search …`), it names the `mekosh` command to
 run instead. Every command takes `--data-dir`. The default is `~/.meko` (or `MEKO_HOME`), but a home folder on a
@@ -111,7 +110,10 @@ SQLite's locking doesn't work over the network; `meko status` prints where it is
 `[web] port` (default 7777) and `access` in `config.toml`. `search`, `add_memory`, `upload` and
 `upload_status` take `--datapack NAME|ID`, and use
 the default datapack without it. Meko makes the default datapack only on first start, so once
-it's deleted, they need `--datapack`. The data commands take `--json` for the raw reply.
+it's deleted, they need `--datapack`. While Meko Cloud is linked (`meko cloud_link`), they work on
+its datapacks too: a name or id this Meko doesn't have is looked up there, and `cloud:` or `local:`
+before it picks the side (`--datapack cloud:team-notes`; the same for `delete_datapack` and the
+prompt's `use`). `export` works only on this Meko's. The data commands take `--json` for the raw reply.
 
 ## Connect an agent
 

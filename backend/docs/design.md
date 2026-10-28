@@ -39,8 +39,9 @@ flowchart LR
 The binary is two commands, told apart by the name it's run by (`cli.Main`): `meko` runs Meko,
 and `mekosh` (`~/.local/bin/mekosh`, a link to the same binary that `meko install` makes, and a
 release's serve makes at start for an install from before it) works with what Meko keeps, through
-the running server: `datapacks`, `create_datapack`, `delete_datapack`, `export`, `search`,
-`add_memory`, `upload`, `upload_status` and `tools`. Alone, `mekosh` is a prompt (`shell.go`): it
+the running server, and with the linked Meko Cloud's datapacks ([cloud.md](cloud.md#mekosh)):
+`datapacks`, `create_datapack`, `delete_datapack`, `export`, `search`, `add_memory`, `upload` and
+`upload_status`. Alone, `mekosh` is a prompt (`shell.go`): it
 reads one command a line, split as a shell would, and runs each as `mekosh <line>`; `use <datapack>`
 fills in `--datapack` for the commands that take it, and a confirmation (`delete_datapack`'s) reads
 the next line from the same buffer. From a pipe it runs the lines as a script. Given one of

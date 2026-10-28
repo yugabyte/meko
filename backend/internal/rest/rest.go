@@ -1,6 +1,7 @@
 // Package rest is the /api/v1 subset meko_ui calls, with Meko Cloud's routes and reply shapes in
 // the {data, error} envelope: the local user, datapacks and their metrics, artifacts, memories and
 // learnings, conversations, and knowledge files. Shapes MCP shares come from internal/wire; the rest are here.
+// The linked Meko Cloud's datapacks go through the same routes (cloud.go).
 package rest
 
 import (
@@ -16,6 +17,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/yugabyte/meko/backend/internal/callhome"
+	"github.com/yugabyte/meko/backend/internal/cloudlink"
 	"github.com/yugabyte/meko/backend/internal/envelope"
 	"github.com/yugabyte/meko/backend/internal/memory"
 )
@@ -32,7 +34,13 @@ type Options struct {
 	Credential func(echo.Context) string
 	// UsageStats is the usage stats' setting the web UI shows; nil leaves its routes out.
 	UsageStats UsageStats
-	Log        *slog.Logger
+	// Tool runs one of this Meko's MCP tools in-process, as /mcp does (mcp.Call), for the routes that
+	// answer what a tool does: a datapack's search and memories.
+	Tool func(ctx context.Context, cred, name string, args map[string]any) (string, error)
+	// Cloud is the Meko Cloud link: the routes that take a datapack send one this Meko doesn't have to
+	// the linked Meko Cloud (cloud.go). Nil leaves Meko Cloud out.
+	Cloud *cloudlink.Service
+	Log   *slog.Logger
 }
 
 // UsageStats reads and sets whether usage stats are sent (internal/callhome).
@@ -107,6 +115,8 @@ func Register(g *echo.Group, o Options) {
 	g.GET("/datapacks/:id/usage", a.callUsage)
 	g.GET("/datapacks/:id/export", a.exportDatapack)
 	g.GET("/datapacks/:id/memory-map", a.memoryMap)
+	g.POST("/datapacks/:id/search", a.search)
+	g.POST("/datapacks/:id/memories", a.addMemory)
 
 	g.GET("/datapacks/:id/artifacts", a.listArtifacts)
 	g.POST("/datapacks/:id/artifacts/:hash/download-url", a.artifactDownloadURL)

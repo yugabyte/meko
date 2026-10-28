@@ -5,6 +5,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/google/uuid"
@@ -61,15 +62,25 @@ func knowledgeError(c echo.Context, err error) error {
 }
 
 func (a *api) uploadURL(c echo.Context) error {
-	dp, ok, err := a.pathDatapack(c)
-	if !ok {
-		return err
-	}
 	var body struct {
 		Filename    string `json:"filename"`
 		Size        int64  `json:"size"`
 		ContentHash string `json:"content_hash"`
 		Client      string `json:"client"`
+	}
+	cloud, err := a.inCloud(c)
+	if err != nil {
+		return err
+	}
+	if cloud {
+		if ok, berr := bind(c, &body); !ok {
+			return berr
+		}
+		return a.toCloud(c, http.StatusOK, http.MethodPost, cloudPath(c, "/knowledge-bases/upload-url"), body)
+	}
+	dp, ok, err := a.pathDatapack(c)
+	if !ok {
+		return err
 	}
 	if ok, err = bind(c, &body); !ok {
 		return err
@@ -122,11 +133,21 @@ func (a *api) createKnowledgeBase(c echo.Context) error {
 }
 
 func (a *api) documentStatus(c echo.Context) error {
+	key := c.QueryParam("document_key")
+	if cloud, err := a.inCloud(c); err != nil || cloud {
+		if err != nil {
+			return err
+		}
+		if key == "" {
+			return badRequest(c, "document_key query parameter is required")
+		}
+		return a.toCloud(c, http.StatusOK, http.MethodGet,
+			cloudPath(c, "/knowledge-bases/document-status?document_key="+url.QueryEscape(key)), nil)
+	}
 	dp, ok, err := a.pathDatapack(c)
 	if !ok {
 		return err
 	}
-	key := c.QueryParam("document_key")
 	if key == "" {
 		return badRequest(c, "document_key query parameter is required")
 	}

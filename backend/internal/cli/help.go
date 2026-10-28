@@ -130,22 +130,24 @@ var mekoCommands = []command{
 		}},
 }
 
-var mekoshGroups = []string{"Datapacks", "Memory and knowledge", "Agents", "At the prompt only"}
+var mekoshGroups = []string{"Datapacks", "Memory and knowledge", "At the prompt only"}
 
 var mekoshCommands = []command{
-	{name: "datapacks", group: "Datapacks", summary: "List the datapacks; --cloud adds the linked Meko Cloud's",
+	{name: "datapacks", group: "Datapacks", summary: "List the datapacks, and the linked Meko Cloud's",
 		usage: "mekosh datapacks [flags]", examples: []example{
-			{"mekosh datapacks", "list this Meko's datapacks"},
-			{"mekosh datapacks --cloud", "add the linked Meko Cloud's, each marked local or cloud (and shared)"},
+			{"mekosh datapacks", "this Meko's, then the linked Meko Cloud's, each marked local or cloud (and shared)"},
+			{"mekosh datapacks --local", "only this Meko's"},
 		}},
 	{name: "create_datapack", group: "Datapacks", summary: "Create a datapack",
 		usage: "mekosh create_datapack <name> [flags]", examples: []example{
 			{"mekosh create_datapack research", "create the datapack research"},
+			{"mekosh create_datapack team-notes --cloud", "create it in the linked Meko Cloud"},
 		}},
 	{name: "delete_datapack", group: "Datapacks", summary: "Delete a datapack and everything in it",
 		usage: "mekosh delete_datapack <name|id> [flags]", examples: []example{
 			{"mekosh delete_datapack research", "delete it and everything in it, for good, after asking"},
 			{"mekosh delete_datapack research --force", "don't ask"},
+			{"mekosh delete_datapack cloud:team-notes", "the linked Meko Cloud's, when this Meko has one named so too"},
 		}},
 	{name: "export", group: "Datapacks", summary: "Write a datapack to a zip",
 		usage: "mekosh export [<name|id>] [flags]", examples: []example{
@@ -157,6 +159,7 @@ var mekoshCommands = []command{
 			{`mekosh search "why is the web listener separate"`, "search the default datapack"},
 			{`mekosh search "release steps" --source knowledge_base --limit 3`, "only the knowledge base, three results"},
 			{`mekosh search "owner's login" --datapack research --json`, "another datapack, the tool's raw reply"},
+			{`mekosh search "deploy steps" --datapack cloud:team-runbooks`, "a datapack in the linked Meko Cloud"},
 		}},
 	{name: "add_memory", group: "Memory and knowledge", summary: "Save a memory, word for word",
 		usage: `mekosh add_memory "<text>" [flags]`, examples: []example{
@@ -172,14 +175,10 @@ var mekoshCommands = []command{
 		usage: "mekosh upload_status <key> [flags]", examples: []example{
 			{"mekosh upload_status <key>", "the key upload printed"},
 		}},
-	{name: "tools", group: "Agents", summary: "List the MCP tools Meko serves",
-		usage: "mekosh tools [flags]", examples: []example{
-			{"mekosh tools", "each tool with what it does (no server needed)"},
-			{"mekosh tools --json", "their names, titles and summaries"},
-		}},
 	{name: "use", group: "At the prompt only", promptOnly: true, summary: "Set the datapack later commands use",
 		usage: "use [<name|id>]", examples: []example{
 			{"use research", "search, add_memory, upload and upload_status use research unless a line names another"},
+			{"use cloud:team-notes", "a datapack in the linked Meko Cloud (cloud: only when this Meko has one named so)"},
 			{"use", "print the datapack in use"},
 		}},
 	{name: "help", group: "At the prompt only", promptOnly: true, summary: "This list, or help <command>",

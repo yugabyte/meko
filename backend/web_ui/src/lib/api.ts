@@ -7,7 +7,7 @@ import type {
   Artifact,
   ArtifactList,
   AuthStatus,
-  CloudDatapacks,
+  CloudDatapack,
   ContextSearch,
   ConversationDetail,
   Conversation,
@@ -110,10 +110,12 @@ export const api = {
     return (await res.json()).data;
   },
 
-  datapacks: () => request<Datapack[]>("GET", "/datapacks"),
+  datapacks: () => request<Datapack[]>("GET", "/datapacks?location=local"),
   datapack: (id: string) => request<Datapack>("GET", `/datapacks/${id}`),
   createDatapack: (name: string, description: string) =>
-    request<Datapack>("POST", "/datapacks", { name, description }),
+    // On this computer: the UI browses only this Meko's datapacks (the route's default is the linked
+    // Meko Cloud's).
+    request<Datapack>("POST", "/datapacks", { name, description, location: "local" }),
   updateDatapack: (id: string, fields: { name?: string; description?: string }) =>
     request<unknown>("PATCH", `/datapacks/${id}`, fields),
   deleteDatapack: (id: string) => request<unknown>("DELETE", `/datapacks/${id}`),
@@ -163,7 +165,7 @@ export const api = {
   mekoCloud: () => request<MekoCloud>("GET", "/settings/meko-cloud"),
   linkMekoCloud: (u: MekoCloudUpdate) => request<MekoCloud>("PUT", "/settings/meko-cloud", u),
   unlinkMekoCloud: () => request<MekoCloud>("DELETE", "/settings/meko-cloud"),
-  cloudDatapacks: () => request<CloudDatapacks>("GET", "/meko-cloud/datapacks"),
+  cloudDatapacks: () => request<CloudDatapack[]>("GET", "/datapacks?location=cloud"),
 
   memories: (id: string, opts: { scope: "memories" | "learnings"; q: string; page: number }) =>
     request<MemoryPage>(

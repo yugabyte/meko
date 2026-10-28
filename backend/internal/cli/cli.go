@@ -1,9 +1,9 @@
 // Package cli is the meko and mekosh commands, one binary run by either name. meko runs Meko:
 // install, start, stop, restart, status, logs, update, version, token, ui, setup_link, cloud_link,
 // destroy, uninstall, install_extension, update_extension, uninstall_extension and serve. mekosh
-// works with what it keeps, through the running server: datapacks, create_datapack,
-// delete_datapack, export, search, add_memory, upload, upload_status and tools, one at a time or at
-// its prompt (shell.go). help.go has each command's help.
+// works with what it keeps, through the running server, and with the linked Meko Cloud's datapacks
+// (cloudtools.go): datapacks, create_datapack, delete_datapack, export, search, add_memory, upload
+// and upload_status, one at a time or at its prompt (shell.go). help.go has each command's help.
 package cli
 
 import (
@@ -113,7 +113,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	switch cmd {
 	case "search", "add_memory", "datapacks", "create_datapack", "delete_datapack", "upload", "upload_status":
 		fs.BoolVar(&t.json, "json", false, "print the tool's raw reply")
-	case "version", "logs", "tools":
+	case "version", "logs":
 		fs.BoolVar(&t.json, "json", false, "print raw JSON")
 	case "status":
 		fs.BoolVar(&c.verbose, "verbose", false, "everything: the models, certificate, service, updates and links")
@@ -162,7 +162,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&c.service, "service", false, "only the service's stderr (service.log)")
 	}
 	if cmd == "search" || cmd == "add_memory" || cmd == "upload" || cmd == "upload_status" {
-		fs.StringVar(&t.datapack, "datapack", "", "the datapack, by name or id")
+		fs.StringVar(&t.datapack, "datapack", "", "the datapack, by name or id (cloud: or local: before it picks the side)")
 	}
 	if cmd == "upload" {
 		fs.BoolVar(&t.noWait, "no-wait", false, "return once the files are uploaded, before they're indexed")
@@ -170,8 +170,11 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	if cmd == "delete_datapack" {
 		fs.BoolVar(&t.force, "force", false, "delete without asking")
 	}
+	if cmd == "create_datapack" {
+		fs.BoolVar(&t.cloud, "cloud", false, "create it in the linked Meko Cloud")
+	}
 	if cmd == "datapacks" {
-		fs.BoolVar(&t.cloud, "cloud", false, "also list the linked Meko Cloud's datapacks")
+		fs.BoolVar(&t.local, "local", false, "only this Meko's datapacks, not the linked Meko Cloud's")
 	}
 	if cmd == "search" {
 		fs.StringVar(&t.source, "source", "auto", "auto, memory, knowledge_base or conversation")
@@ -249,9 +252,6 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	if cmd == "version" {
 		return runVersion(t.json, stdout, stderr)
 	}
-	if cmd == "tools" {
-		return runList(t.json, stdout, stderr)
-	}
 	root, err := paths.Resolve(*dataDir)
 	if err != nil {
 		return fail(stderr, err)
@@ -325,17 +325,11 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 }
 
 // unknownCommand says cmd isn't one of prog's: when it's the other program's, which one to run
-// instead (meko's usage commands moved to mekosh, and meko list mcp-tools is mekosh tools), else the
-// nearest of prog's names.
+// instead (meko's usage commands moved to mekosh), else the nearest of prog's names.
 func unknownCommand(prog, cmd string, rest []string, stderr io.Writer) int {
 	other := progMekosh
 	if prog == progMekosh {
 		other = progMeko
-	}
-	if prog == progMeko && cmd == "list" && len(rest) > 0 && rest[0] == "mcp-tools" {
-		fmt.Fprintf(stderr, "meko: list mcp-tools is a mekosh command now: %s\n",
-			shellQuote(append([]string{progMekosh, "tools"}, rest[1:]...)))
-		return exitUsage
 	}
 	if c, ok := lookup(other, cmd); ok && !c.hidden && !c.promptOnly {
 		what := "is a mekosh command now"

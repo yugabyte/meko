@@ -19,6 +19,7 @@ import (
 
 	"github.com/yugabyte/meko/backend/internal/auth"
 	"github.com/yugabyte/meko/backend/internal/callhome"
+	"github.com/yugabyte/meko/backend/internal/cloudlink"
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/mcp"
 	"github.com/yugabyte/meko/backend/internal/memory"
@@ -57,6 +58,8 @@ type Options struct {
 	Auth string // the [server] auth mode; "" is the default (token)
 	// CallHome is the [call_home] config; nil is the default (on, no URL).
 	CallHome *config.CallHome
+	// Cloud is the Meko Cloud link the REST routes send other datapacks to; nil leaves it out.
+	Cloud *cloudlink.Service
 }
 
 // backendDir is this module's root, found from this file.
@@ -161,15 +164,18 @@ func Start(t *testing.T, o Options) *Env {
 		callHome = *o.CallHome
 	}
 	usage := callhome.New(callhome.Options{Store: st, Config: callHome, Tools: mcp.ToolNames(), Log: log})
+	mcpOpts := mcp.Options{Service: svc, Version: "test", Log: log, Credential: server.CredentialOf}
 	restOpts := rest.Options{Service: svc, Port: port, ClientToken: ClientToken, Credential: server.Credential,
-		UsageStats: usage, Log: log}
+		UsageStats: usage, Log: log, Cloud: o.Cloud,
+		Tool: func(ctx context.Context, cred, name string, args map[string]any) (string, error) {
+			return mcp.Call(ctx, mcpOpts, cred, name, args)
+		}}
 	upload, download := rest.Tickets(restOpts)
 	srv := server.New(server.Options{
 		Info: server.Info{Version: "test", DataDir: root, PID: os.Getpid(), StartedAt: time.Now()},
 		Port: port, Token: AdminToken, ClientToken: ClientToken, Auth: o.Auth, Logger: log,
 		MemoryEngine: svc.EngineStatus, UsageStats: usage.State,
-		MCP: mcp.NewHandler(mcp.Options{Service: svc, Version: "test", Log: log,
-			Credential: server.CredentialOf}),
+		MCP:    mcp.NewHandler(mcpOpts),
 		REST:   func(g *echo.Group) { rest.Register(g, restOpts) },
 		Upload: upload, Download: download,
 	})

@@ -15,8 +15,8 @@ export function notifyCloudChanged(): void {
   window.dispatchEvent(new Event(EVENT));
 }
 
-// Whether a listing failed at Meko Cloud: only the route's 502s carry a CLOUD_ code, and they mean a
-// link exists. Any other error (a fetch that failed while Meko restarts, an unreadable link) leaves
+// Whether a listing failed at Meko Cloud: only its 502s carry a CLOUD_ code (CLOUD_NOT_LINKED is
+// read as unlinked before this is asked), and they mean a link exists. Any other error (a fetch that failed while Meko restarts, an unreadable link) leaves
 // an unlinked sidebar as it was.
 export function isCloudFailure(e: Error | undefined): boolean {
   return e instanceof ApiError && e.code.startsWith("CLOUD_");
@@ -34,13 +34,16 @@ export function isShared(grant: string): boolean {
 }
 
 export function useCloudDatapacks(): Loaded<CloudDatapacks> {
-  // A server from before the route answers 404: the sidebar stays as it was, unlinked.
+  // Unlinked, the listing is a 409 CLOUD_NOT_LINKED: no Cloud rows, and no failure to show.
   const list = useLoad(
     () =>
-      api.cloudDatapacks().catch((e: unknown) => {
-        if (e instanceof ApiError && e.status === 404) return { linked: false, datapacks: [] };
-        throw e;
-      }),
+      api.cloudDatapacks().then(
+        (datapacks): CloudDatapacks => ({ linked: true, datapacks }),
+        (e: unknown) => {
+          if (e instanceof ApiError && e.code === "CLOUD_NOT_LINKED") return { linked: false, datapacks: [] };
+          throw e;
+        },
+      ),
     [],
   );
   const { reload } = list;

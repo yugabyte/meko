@@ -309,8 +309,12 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		Version: version.Version, Commit: version.Commit, GoVersion: runtime.Version(),
 		Libs: libs, DataDir: l.Root, PID: pid, StartedAt: time.Now().UTC(),
 	}
-	mcpHandler := mcp.NewHandler(mcp.Options{Service: svc, Version: version.Version, Log: log,
-		Credential: server.CredentialOf})
+	mcpOpts := mcp.Options{Service: svc, Version: version.Version, Log: log, Credential: server.CredentialOf}
+	mcpHandler := mcp.NewHandler(mcpOpts)
+	// A datapack's search and memories routes answer what the tools do, recorded as /mcp's calls are.
+	restOpts.Tool = func(ctx context.Context, cred, name string, args map[string]any) (string, error) {
+		return mcp.Call(ctx, mcpOpts, cred, name, args)
+	}
 	registerREST := func(g *echo.Group) { rest.Register(g, restOpts) }
 	logins := login.New(st)
 	// The web listener: the web UI and the extensions' for browsers, with local access or the login.
@@ -335,6 +339,8 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	cloud := &cloudlink.Service{Store: cloudSt, Check: cloudlink.CheckMCP, CheckAPI: cloudlink.CheckAPI,
 		List:    cloudlink.ListDatapacks,
 		Changed: func(ctx context.Context) { web.notify(ctx, "cloud") }}
+	// The routes that take a datapack send one this Meko doesn't have to the linked Meko Cloud.
+	restOpts.Cloud = cloud
 	web.newOpts = func(wcfg config.Config) server.Options {
 		return server.Options{Info: info, Port: wcfg.Web.Port, Auth: cfg.Server.Auth, Logger: log,
 			Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, MCP: mcpHandler,
