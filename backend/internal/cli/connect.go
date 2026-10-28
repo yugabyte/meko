@@ -2,15 +2,20 @@ package cli
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -33,10 +38,10 @@ const mcpName = "meko"
 const agentTimeout = 60 * time.Second
 
 // connectAgent is an agent meko connect knows: its name on the command line, what people call it,
-// and how Meko adds itself to it, which returns what it did.
+// and how Meko adds itself to it, which returns what it did and anything else the user should know.
 type connectAgent struct {
 	name, title string
-	connect     func(a mcpAccess) (string, error)
+	connect     func(a mcpAccess) (did string, notes []string, err error)
 }
 
 var connectAgents = []connectAgent{
@@ -74,13 +79,16 @@ func runConnect(l paths.Layout, agent string, stdout, stderr io.Writer) int {
 		printConnectHelp(a, stdout)
 		return exitOK
 	}
-	did, err := g.connect(a)
+	did, notes, err := g.connect(a)
 	if err != nil {
 		// The token goes only where it's meant to: never in an error an agent's CLI echoed.
 		return fail(stderr, fmt.Errorf("connecting %s: %s. Run meko connect for the URL and token to add by hand",
 			g.title, strings.ReplaceAll(err.Error(), a.token, "<token>")))
 	}
 	fmt.Fprintf(stdout, "Connected %s to Meko: %s\n", g.title, did)
+	for _, n := range notes {
+		fmt.Fprintln(stdout, strings.ReplaceAll(n, a.token, "<token>"))
+	}
 	fmt.Fprintln(stdout, "Its new sessions have Meko's tools; ones already running need a restart")
 	if !a.running {
 		fmt.Fprintln(stdout, "Meko isn't running: start it with meko start")
@@ -110,13 +118,18 @@ func printConnectHelp(a mcpAccess, w io.Writer) {
 
 // runAgent runs an agent's CLI with no stdin (so one that would ask, asks no one). Its error has the
 // output's last line.
-func runAgent(name string, args ...string) error {
+func runAgent(name string, args ...string) error { return runAgentIn("", name, args...) }
+
+// runAgentIn is runAgent in the folder dir.
+func runAgentIn(dir, name string, args ...string) error {
 	if _, err := exec.LookPath(name); err != nil {
 		return fmt.Errorf("%s isn't on PATH", name)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), agentTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return nil
 	}
@@ -130,71 +143,154 @@ func runAgent(name string, args ...string) error {
 	return fmt.Errorf("%s mcp failed: %s", name, text)
 }
 
-// connectClaude adds Meko at Claude Code's user scope, in ~/.claude.json, which every project
-// reads. claude mcp add refuses a name the scope already has, so a meko server there is removed
-// first; the removal fails when there's none.
-func connectClaude(a mcpAccess) (string, error) {
+// claudeConfig is the part of Claude Code's ~/.claude.json meko connect reads: the user scope's meko
+// server, and each folder's own (local scope), kept as written.
+type claudeConfig struct {
+	MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	Projects   map[string]struct {
+		MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	} `json:"projects"`
+}
+
+// claudeConfigPath is Claude Code's ~/.claude.json, or .claude.json in CLAUDE_CONFIG_DIR.
+func claudeConfigPath() (string, error) {
+	if d := os.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
+		return filepath.Join(d, ".claude.json"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".claude.json"), nil
+}
+
+// connectClaude adds Meko at Claude Code's user scope, which every project reads, through claude mcp.
+// Meko only reads Claude's own file, which its running sessions rewrite.
+//
+// claude mcp add refuses a name the scope already has, so a meko server there is removed first, and
+// put back (claude mcp add-json) if the add then fails. Claude Code takes a folder's own server
+// (local scope) over the user scope's, so a folder's meko pointing at this computer (what the
+// claude mcp add line meko token --mcp printed made, with no --scope) is removed there too: it
+// holds the token from then, which a destroy leaves dead. A folder's meko pointing elsewhere (Meko
+// Cloud) is the user's choice and stays, with a note that Claude Code uses it there.
+func connectClaude(a mcpAccess) (string, []string, error) {
+	var cfg claudeConfig
+	if p, err := claudeConfigPath(); err == nil {
+		if b, rerr := readConfigFile(p); rerr == nil && len(b) > 0 {
+			_ = json.Unmarshal(b, &cfg) // unreadable: as if empty, and claude mcp says what's wrong
+		}
+	}
 	rmErr := runAgent("claude", "mcp", "remove", "--scope", "user", mcpName)
 	if err := runAgent("claude", "mcp", "add", "--scope", "user", "--transport", "http", mcpName, a.url,
 		"--header", "Authorization: Bearer "+a.token); err != nil {
-		return "", err
+		old, had := cfg.MCPServers[mcpName]
+		if rmErr != nil || !had {
+			return "", nil, err
+		}
+		if rerr := runAgent("claude", "mcp", "add-json", "--scope", "user", mcpName, string(old)); rerr != nil {
+			return "", nil, fmt.Errorf("%w, and the meko server it had (%s) was removed", err,
+				cmp.Or(serverURL(old), "no URL"))
+		}
+		return "", nil, fmt.Errorf("%w (the meko server it had is back)", err)
 	}
 	did := "added the MCP server meko at " + a.url + " for all your projects (user scope)"
 	if rmErr == nil {
 		did += ", replacing the one it had"
 	}
-	return did, nil
+	var notes []string
+	removed := 0
+	for _, dir := range slices.Sorted(maps.Keys(cfg.Projects)) {
+		old, ok := cfg.Projects[dir].MCPServers[mcpName]
+		if !ok {
+			continue
+		}
+		if onThisComputer(serverURL(old)) && runAgentIn(dir, "claude", "mcp", "remove", "--scope", "local", mcpName) == nil {
+			removed++
+			continue
+		}
+		notes = append(notes, fmt.Sprintf("Claude Code still uses the meko server of its own in %s (%s): "+
+			"run claude mcp remove --scope local meko there to use this one", dir, cmp.Or(serverURL(old), "no URL")))
+	}
+	if removed > 0 {
+		did += fmt.Sprintf(", and removed the meko server of its own %d folder(s) had for Meko on this computer "+
+			"(local scope), which Claude Code would use there instead", removed)
+	}
+	return did, notes, nil
+}
+
+// serverURL is an MCP server entry's url, or "" when it has none.
+func serverURL(entry json.RawMessage) string {
+	var s struct {
+		URL string `json:"url"`
+	}
+	_ = json.Unmarshal(entry, &s)
+	return s.URL
+}
+
+// onThisComputer says whether an MCP URL is on this computer's loopback, where Meko listens.
+func onThisComputer(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	h := u.Hostname()
+	return h == "localhost" || net.ParseIP(h).IsLoopback()
 }
 
 // connectOpenCode adds Meko to OpenCode's global config. opencode mcp add replaces a server of the
 // same name, and writes the config in the shape its own version reads.
-func connectOpenCode(a mcpAccess) (string, error) {
+func connectOpenCode(a mcpAccess) (string, []string, error) {
 	if err := runAgent("opencode", "mcp", "add", mcpName, "--url", a.url,
 		"--header", "Authorization=Bearer "+a.token, "--global"); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return "added the MCP server meko at " + a.url + " to its global config, for all your projects", nil
+	return "added the MCP server meko at " + a.url + " to its global config, for all your projects", nil, nil
 }
 
-// connectKiro writes Meko into Kiro CLI's global ~/.kiro/settings/mcp.json, which every agent of
-// Kiro's reads: kiro-cli mcp add takes no headers (and needs a login). The file's other servers
-// and keys stay.
-func connectKiro(a mcpAccess) (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
+// connectKiro writes Meko into Kiro CLI's global settings/mcp.json in its home (KIRO_HOME, else
+// ~/.kiro, as AgentK's kiroHome), which every agent of Kiro's reads: kiro-cli mcp add takes no
+// headers (and needs a login). The file's other servers and keys stay.
+func connectKiro(a mcpAccess) (string, []string, error) {
+	home := os.Getenv("KIRO_HOME")
+	if home == "" {
+		h, err := os.UserHomeDir()
+		if err != nil {
+			return "", nil, err
+		}
+		home = filepath.Join(h, ".kiro")
 	}
-	path := filepath.Join(home, ".kiro", "settings", "mcp.json")
-	doc := map[string]json.RawMessage{}
+	path := filepath.Join(home, "settings", "mcp.json")
+	var doc map[string]json.RawMessage
 	b, err := readConfigFile(path)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if len(bytes.TrimSpace(b)) > 0 {
 		if err := json.Unmarshal(b, &doc); err != nil {
-			return "", fmt.Errorf("can't read %s: %w", path, err)
+			return "", nil, fmt.Errorf("can't read %s: %w", path, err)
 		}
 	}
-	servers := map[string]json.RawMessage{}
-	if raw := doc["mcpServers"]; len(raw) > 0 && string(raw) != "null" {
+	if doc == nil { // no file, or a JSON null
+		doc = map[string]json.RawMessage{}
+	}
+	var servers map[string]json.RawMessage
+	if raw := doc["mcpServers"]; len(raw) > 0 {
 		if err := json.Unmarshal(raw, &servers); err != nil {
-			return "", fmt.Errorf("can't read %s's mcpServers: %w", path, err)
+			return "", nil, fmt.Errorf("can't read %s's mcpServers: %w", path, err)
 		}
 	}
-	var old struct {
-		URL string `json:"url"`
+	if servers == nil {
+		servers = map[string]json.RawMessage{}
 	}
-	if raw, ok := servers[mcpName]; ok {
-		_ = json.Unmarshal(raw, &old)
-	}
+	old := servers[mcpName]
 	servers[mcpName], _ = json.Marshal(map[string]any{"url": a.url,
 		"headers": map[string]string{"Authorization": "Bearer " + a.token}})
 	doc["mcpServers"], _ = json.Marshal(servers)
 	out, _ := json.MarshalIndent(doc, "", "  ")
 	if err := writeConfigFile(path, append(out, '\n')); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return "wrote the MCP server meko at " + a.url + " to " + path + replacing(old.URL, a.url), nil
+	return "wrote the MCP server meko at " + a.url + " to " + path + replacing(serverURL(old), a.url), nil, nil
 }
 
 // codexServers is the part of Codex's config.toml meko connect reads back.
@@ -209,35 +305,47 @@ type codexServers struct {
 // no headers, only the name of an environment variable holding a bearer token, which the user's
 // shell would then have to set. The file is edited as text so the user's comments and layout stay:
 // the [mcp_servers.meko] table (as codex mcp add writes it) and its subtables go, a new one is
-// added at the end, and the result is read back before it's written.
-func connectCodex(a mcpAccess) (string, error) {
+// added at the end, and the result is read back before it's written. The comment and blank lines
+// right before the next table's header are that table's, so they stay.
+func connectCodex(a mcpAccess) (string, []string, error) {
 	dir := os.Getenv("CODEX_HOME")
 	if dir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		dir = filepath.Join(home, ".codex")
 	}
 	path := filepath.Join(dir, "config.toml")
 	b, err := readConfigFile(path)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	var before codexServers
 	if _, derr := toml.Decode(string(b), &before); derr != nil {
-		return "", fmt.Errorf("can't read %s: %w", path, derr)
+		return "", nil, fmt.Errorf("can't read %s: %w", path, derr)
 	}
-	var kept strings.Builder
+	var kept, pending strings.Builder // pending: a dropped table's comment and blank lines, since its last key
 	in := false
 	for _, line := range strings.SplitAfter(string(b), "\n") {
 		if name, ok := tomlTable(line); ok {
+			was := in
 			in = name == "mcp_servers."+mcpName || strings.HasPrefix(name, "mcp_servers."+mcpName+".")
+			if was && !in {
+				keepComments(&kept, pending.String())
+			}
+			pending.Reset()
 		}
-		if !in {
+		switch t := strings.TrimSpace(line); {
+		case !in:
 			kept.WriteString(line)
+		case t == "" || strings.HasPrefix(t, "#"):
+			pending.WriteString(line)
+		default:
+			pending.Reset()
 		}
 	}
+	keepComments(&kept, pending.String())
 	text := strings.TrimRight(kept.String(), "\n")
 	if text != "" {
 		text += "\n\n"
@@ -248,14 +356,23 @@ func connectCodex(a mcpAccess) (string, error) {
 	_, err = toml.Decode(text, &after)
 	s := after.MCPServers[mcpName]
 	if err != nil || s.URL != a.url || s.HTTPHeaders["Authorization"] != "Bearer "+a.token {
-		return "", fmt.Errorf("%s has a meko server meko connect can't replace: remove it (codex mcp remove meko) "+
+		return "", nil, fmt.Errorf("%s has a meko server meko connect can't replace: remove it (codex mcp remove meko) "+
 			"and run meko connect codex again", path)
 	}
 	if err := writeConfigFile(path, []byte(text)); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	return "wrote the MCP server meko at " + a.url + " to " + path + replacing(before.MCPServers[mcpName].URL, a.url),
-		nil
+		nil, nil
+}
+
+// keepComments adds a dropped table's trailing comment lines to kept, without a second blank line
+// where kept already ends with one.
+func keepComments(kept *strings.Builder, lines string) {
+	if s := kept.String(); s == "" || strings.HasSuffix(s, "\n\n") {
+		lines = strings.TrimLeft(lines, " \t\n")
+	}
+	kept.WriteString(lines)
 }
 
 // tomlTable returns the name of the table a line's header opens ([a.b] or [[a.b]]), without spaces

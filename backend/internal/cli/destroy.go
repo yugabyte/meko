@@ -168,7 +168,8 @@ func destroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.W
 		fmt.Fprintf(stdout, "The meko binary is still at %s\n", exe)
 	}
 	fmt.Fprintln(stdout, "If you connected an agent to Meko, its token no longer works: after meko start, "+
-		"run meko connect <agent> again (claude, codex, kiro or opencode)")
+		"run meko connect <agent> again (claude, codex, kiro or opencode). For Claude Code that also removes "+
+		"the meko server of a folder's own (local scope) for this Meko, which Claude Code would use there instead")
 	return exitOK, keep
 }
 

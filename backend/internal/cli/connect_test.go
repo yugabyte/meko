@@ -11,8 +11,10 @@ import (
 )
 
 // fakeAgents puts fake claude and opencode commands first on PATH. Each logs its arguments, a line
-// a run, to the returned log. claude mcp remove fails until a claude mcp add has run, as the real
-// one does when the scope has no meko server; failing makes every add fail, echoing its arguments.
+// a run, to the returned log (claude's local-scope remove adds the folder it ran in). claude mcp
+// remove --scope user fails until a claude mcp add has run (or an "added" file is made beside the
+// log), as the real one does when the scope has no meko server; failing makes every add fail,
+// echoing its arguments.
 func fakeAgents(t *testing.T, failing bool) (log string) {
 	t.Helper()
 	bin := t.TempDir()
@@ -23,7 +25,9 @@ func fakeAgents(t *testing.T, failing bool) (log string) {
 		fails = "[ \"$2\" = add ] && { echo \"refused: $*\" >&2; exit 1; }\n"
 	}
 	scripts := map[string]string{
-		"claude": "[ \"$2\" = remove ] && [ ! -e " + added + " ] && { echo 'No MCP server found' >&2; exit 1; }\n" +
+		"claude": "[ \"$4\" = local ] && echo \"  in $PWD\" >> " + log + "\n" +
+			"[ \"$2\" = remove ] && [ \"$4\" = user ] && [ ! -e " + added + " ] && " +
+			"{ echo 'No MCP server found' >&2; exit 1; }\n" +
 			fails + "[ \"$2\" = add ] && touch " + added + "\n",
 		"opencode": fails,
 	}
@@ -91,6 +95,48 @@ func TestConnectClaude(t *testing.T) {
 	want(t, "connect claude without claude", code, 1, errs, "connecting Claude Code: claude isn't on PATH")
 }
 
+// Claude Code takes a folder's own meko (local scope) over the user scope's: one for this computer's
+// Meko is removed there, through claude in that folder, and one for another server stays, with a
+// note. An add that fails puts the user scope's old meko back.
+func TestConnectClaudeFolders(t *testing.T) {
+	dir, _ := setup(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	mine, cloud, bare := t.TempDir(), t.TempDir(), t.TempDir()
+	old := `{"type":"http","url":"https://meko.example.com/mcp","headers":{"Authorization":"Bearer cloud"}}`
+	cfg := `{"mcpServers": {"meko": ` + old + `}, "projects": {` +
+		`"` + mine + `": {"mcpServers": {"meko": {"type": "http", "url": "http://127.0.0.1:7778/mcp"}}}, ` +
+		`"` + cloud + `": {"mcpServers": {"meko": {"type": "http", "url": "https://meko.example.com/mcp"}}}, ` +
+		`"` + bare + `": {"mcpServers": {"git": {"command": "git-mcp"}}}}}`
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	log := fakeAgents(t, false)
+	code, out, errs := run("connect", "--data-dir", dir, "claude")
+	want(t, "connect claude", code, 0, out+errs, ", and removed the meko server of its own 1 folder(s) had for Meko "+
+		"on this computer (local scope), which Claude Code would use there instead\n")
+	want(t, "connect claude", code, 0, out, "Claude Code still uses the meko server of its own in "+cloud+
+		" (https://meko.example.com/mcp): run claude mcp remove --scope local meko there to use this one\n")
+	if got := readLog(t, log); !strings.HasSuffix(got, "claude mcp remove --scope local meko\n  in "+mine+"\n") ||
+		strings.Count(got, "--scope local") != 1 {
+		t.Errorf("claude ran:\n%s", got)
+	}
+
+	// CLAUDE_CONFIG_DIR moves the file; a failing add puts the old meko back.
+	t.Setenv("CLAUDE_CONFIG_DIR", home)
+	t.Setenv("HOME", t.TempDir())
+	log = fakeAgents(t, true)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(log), "added"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs = run("connect", "--data-dir", dir, "claude")
+	want(t, "connect claude when the add fails", code, 1, out+errs, "(the meko server it had is back)")
+	if got := readLog(t, log); !strings.Contains(got, "claude mcp add-json --scope user meko "+old+"\n") ||
+		strings.Contains(got, "--scope local") {
+		t.Errorf("claude ran:\n%s", got)
+	}
+}
+
 // OpenCode: opencode mcp add, to its global config, with the header as name=value.
 func TestConnectOpenCode(t *testing.T) {
 	dir, _ := setup(t)
@@ -113,6 +159,7 @@ func TestConnectKiro(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	path := filepath.Join(home, ".kiro", "settings", "mcp.json")
+	t.Setenv("KIRO_HOME", "")
 	type server struct {
 		URL     string            `json:"url"`
 		Command string            `json:"command"`
@@ -161,6 +208,22 @@ func TestConnectKiro(t *testing.T) {
 	}
 	code, _, errs = run("connect", "--data-dir", dir, "kiro")
 	want(t, "connect kiro with a broken file", code, 1, errs, "can't read "+path)
+
+	// A file that's JSON null is an empty one.
+	if err := os.WriteFile(path, []byte("null\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs = run("connect", "--data-dir", dir, "kiro")
+	want(t, "connect kiro over null", code, 0, out+errs, "Connected Kiro CLI to Meko")
+	if read().MCPServers["meko"].Headers["Authorization"] != "Bearer "+tok {
+		t.Errorf("meko server %+v", read())
+	}
+
+	// KIRO_HOME moves Kiro's home, as AgentK reads it.
+	kiro := t.TempDir()
+	t.Setenv("KIRO_HOME", kiro)
+	code, out, errs = run("connect", "--data-dir", dir, "kiro")
+	want(t, "connect kiro with KIRO_HOME", code, 0, out+errs, " to "+filepath.Join(kiro, "settings", "mcp.json")+"\n")
 }
 
 // Codex: config.toml in CODEX_HOME gets an [mcp_servers.meko] table with the header; the old one and
@@ -181,6 +244,7 @@ url = "https://meko.example.com/mcp"
 [mcp_servers.meko.env_http_headers]
 X-Old = "OLD"
 
+# GitHub's server
 [mcp_servers.git] # kept
 command = "git-mcp"
 `
@@ -197,6 +261,7 @@ command = "git-mcp"
 	w := `# my settings
 model = "o3"
 
+# GitHub's server
 [mcp_servers.git] # kept
 command = "git-mcp"
 
