@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -62,7 +63,9 @@ func Row(w io.Writer, k Kind, color bool, label, text string) {
 }
 
 // Step is a step that takes a while. On a terminal its row shows the dots until it ends; anywhere
-// else nothing shows until then. Only its first Done, Fail or Clear counts.
+// else (a log, or the Extensions page's job output) a step with a row says what it's doing as a plain
+// line when it starts, so a long download doesn't leave the output empty. Only its first Done, Fail
+// or Clear counts.
 type Step struct {
 	w            io.Writer
 	label, doing string
@@ -74,14 +77,17 @@ type Step struct {
 // Start begins a step whose row is label: "  ⣾ Release         installing meko 1.2.4…".
 func Start(w io.Writer, label, doing string) *Step {
 	s := &Step{w: w, label: label, doing: doing}
-	if animates(w) {
+	switch {
+	case animates(w):
 		s.run()
+	case label != "" && doing != "":
+		fmt.Fprintf(w, "%s%s\n", strings.ToUpper(doing[:1]), doing[1:])
 	}
 	return s
 }
 
 // Wait begins a step with no row of its own, "  ⣾ Looking for releases…", which Clear erases: for
-// one whose outcome the next line says.
+// one whose outcome the next line says. Off a terminal it prints nothing.
 func Wait(w io.Writer, doing string) *Step { return Start(w, "", doing) }
 
 func (s *Step) run() {

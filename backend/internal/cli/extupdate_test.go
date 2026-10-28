@@ -438,10 +438,12 @@ func TestRunExtensionUpdates(t *testing.T) {
 	extensions.ListenTimeout = 300 * time.Millisecond
 	t.Cleanup(func() { extensions.ListenTimeout = old })
 
-	// Stopped: switched, left stopped, and no wait for a socket nothing serves.
+	// Stopped: switched, left stopped, and no wait for a socket nothing serves. The job's output
+	// names the release before its download starts, so the page has a line to show meanwhile.
 	var out bytes.Buffer
 	if err := w.RunExtension(context.Background(), "presenter", "update", &out); err != nil ||
-		!strings.Contains(out.String(), "it runs at its next start") {
+		!strings.Contains(out.String(), "it runs at its next start") ||
+		!strings.HasPrefix(out.String(), "Installing Presenter "+next+" (presenter-v"+next+")\n") {
 		t.Fatalf("stopped: %v %q", err, out.String())
 	}
 

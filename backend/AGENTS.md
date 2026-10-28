@@ -42,7 +42,7 @@ the service, extensions, updates and secrets), [docs/web.md](docs/web.md) (the w
 | `internal/update/` | Release installs (`~/.local/share/meko/app/<version>`, `app/current`, outside the data folder), GitHub releases, staging and checking an update, probation and rollback (for the extensions too, through `meko _launch`), the in-use mark that keeps a running version from being pruned (`App.LockInUse`), the update lock every update holds (`Lock`), and the web UI's check and install (`Updater.Status`, `CheckNow`, `StartApply`), whose checks also find the extensions' releases (`Updater.Extensions`, `AfterCheck`). `App.Name` names the program, so a `Managed` extension's releases (in `<data>/extensions/<name>/app`) use the same code. |
 | `internal/supervisor/` | Child processes (the memory engine): process groups, health checks, backoff, stop, and the pid records (`run/children/`) that let `stop` kill a hung server's children. |
 | `internal/callhome/` | Usage stats to YugabyteDB's call home service (`diagnostics.yugabyte.com`, from release installs): the report (counts only, from `store.UsageTotals` and `CallDays`), yugabyted's envelope, the schedule, and the on/off state the web UI and `status` show. |
-| `internal/spin/` | The summary's ✓/!/✗ rows (their marks, colors and format, which `cli/report.go` uses) and a step's rotating dots on a terminal while it runs (`Start`, `Wait`): the release listing and download in `meko update`, `update_extension` and `install_extension`. Off a terminal only the finished row is printed. |
+| `internal/spin/` | The summary's ✓/!/✗ rows (their marks, colors and format, which `cli/report.go` uses) and a step's rotating dots on a terminal while it runs (`Start`, `Wait`): the release listing and download in `meko update`, `update_extension` and `install_extension`. Off a terminal a step prints what it's doing as a plain line when it starts (`Installing AgentK <version> (<tag>)`), then its finished row. |
 | `internal/logging/` | slog to a rotated JSON file and the terminal. |
 | `internal/version/` | Version and commit, set with `-ldflags`. |
 | `scripts/` | `install.sh` (Meko's installer, published with each release), `package-release.sh` and `smoke-release.sh` (the release build and its check), and their tests. |
@@ -122,6 +122,6 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
 - Lint is `.golangci.yml`, with its choices listed at its top. Fix findings
   rather than adding to its exclusions; a `nolint` names the rule and says why.
 - The lines the CLI and `scripts/install.sh` print end without a period, like Go's error strings,
-  so a version, path or command at the end isn't read with one (`Installing meko 0.20261022.1`).
+  so a version, path or command at the end isn't read with one (`Meko is running 0.20261022.1`).
   Periods between sentences stay. `TestOutputLinesEndWithoutPeriod` checks every line of the
   strings `internal/cli` prints or formats with `fmt` and of the strings its functions return.

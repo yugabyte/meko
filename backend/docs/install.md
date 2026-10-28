@@ -192,8 +192,10 @@ otherwise print nothing (`internal/spin`): `Release`, for the release they downl
 <version> installed`), and for `meko update` under the service, `Server`, for the restart. While such a
 step runs on a terminal, its row shows rotating dots (gh's spinner, which `install.sh`'s download
 shows), and so does the listing of the releases, which leaves no row. Off a terminal, as in the
-Extensions page's jobs, only the finished row is printed. On a failure the row is `✗` with what it was
-doing, and the error follows on stderr.
+Extensions page's jobs, a step prints what it's doing as a plain line when it starts (`Installing
+AgentK <version> (<tag>)`, `Restarting into meko <version>`), so the output isn't empty while it
+downloads, then its finished row. On a failure the row is `✗` with what it was doing, and the error
+follows on stderr.
 
 - An extension's command is found on PATH, then in `~/.local/bin`, then in its release install's
   `app/current/bin`: its folder in the data folder, then its home from before it moved there

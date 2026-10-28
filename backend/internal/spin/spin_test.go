@@ -9,22 +9,22 @@ import (
 	"time"
 )
 
-// Off a terminal a step draws nothing while it runs: Done and Fail print just its row, and a Wait
-// leaves nothing.
+// Off a terminal a step with a row says what it's doing as a plain line when it starts, then Done
+// and Fail print its row; a Wait leaves nothing.
 func TestStepWithoutATerminal(t *testing.T) {
 	var b bytes.Buffer
 	s := Start(&b, "Release", "installing meko 1.2.4")
-	if b.Len() != 0 {
-		t.Fatalf("drew %q while running", b.String())
+	if want := "Installing meko 1.2.4\n"; b.String() != want {
+		t.Fatalf("Start printed %q, want %q", b.String(), want)
 	}
 	s.Done("meko 1.2.4 installed")
-	if want := "  ✓ Release         meko 1.2.4 installed\n"; b.String() != want {
+	if want := "Installing meko 1.2.4\n  ✓ Release         meko 1.2.4 installed\n"; b.String() != want {
 		t.Errorf("Done printed %q, want %q", b.String(), want)
 	}
 
 	b.Reset()
 	Start(&b, "Release", "installing meko 1.2.4").Fail()
-	if want := "  ✗ Release         installing meko 1.2.4\n"; b.String() != want {
+	if want := "Installing meko 1.2.4\n  ✗ Release         installing meko 1.2.4\n"; b.String() != want {
 		t.Errorf("Fail printed %q, want %q", b.String(), want)
 	}
 
