@@ -1,12 +1,13 @@
 // The sidebar's Meko Cloud rows, after the local ones while Meko Cloud is linked: each opens in Meko
 // Cloud's web app in a new tab (never a local route, so a Cloud id never reaches one), ends with the
 // shared icon when it was shared with the account, and past CLOUD_ROWS_SHOWN the rest wait behind
-// Show all. A listing that failed is one note, linking to Settings › Meko Cloud when the fix is there.
+// Show all. While the sidebar's Find a datapack box holds a query, only matching rows show, every one
+// of them. A listing that failed is one note, linking to Settings › Meko Cloud when the fix is there.
 
 import { useState } from "react";
 import { Cloud, Users } from "lucide-react";
 import { ApiError } from "../lib/api";
-import { CLOUD_ROWS_SHOWN, isShared } from "../lib/cloud";
+import { CLOUD_ROWS_SHOWN, isShared, matchesName } from "../lib/cloud";
 import { href, navigate } from "../lib/route";
 import type { CloudDatapack } from "../lib/types";
 import { cx } from "./ui";
@@ -57,10 +58,12 @@ export function CloudDatapackRows({
   datapacks,
   loading,
   error,
+  query,
 }: {
   datapacks: CloudDatapack[];
   loading: boolean;
   error?: Error;
+  query: string;
 }) {
   const [all, setAll] = useState(false);
   if (error) {
@@ -85,6 +88,18 @@ export function CloudDatapackRows({
   }
   if (loading && datapacks.length === 0) {
     return <div className={cx(ROW, "italic")}>Loading Meko Cloud…</div>;
+  }
+  // A match is the row being looked for, so none waits behind Show all.
+  if (query.trim()) {
+    return (
+      <>
+        {datapacks
+          .filter((d) => matchesName(d.datapack_name, query))
+          .map((d) => (
+            <CloudRow key={d.datapack_id} d={d} />
+          ))}
+      </>
+    );
   }
   const shown = all ? datapacks : datapacks.slice(0, CLOUD_ROWS_SHOWN);
   return (

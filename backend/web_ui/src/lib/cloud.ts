@@ -22,6 +22,12 @@ export function isCloudFailure(e: Error | undefined): boolean {
   return e instanceof ApiError && e.code.startsWith("CLOUD_");
 }
 
+// Whether a datapack's name holds the sidebar's Find a datapack query, ignoring case; an empty
+// query holds every name.
+export function matchesName(name: string, query: string): boolean {
+  return name.toLowerCase().includes(query.trim().toLowerCase());
+}
+
 // A Meko Cloud datapack shared with the account rather than its own.
 export function isShared(grant: string): boolean {
   return grant !== "" && grant !== "owner";
