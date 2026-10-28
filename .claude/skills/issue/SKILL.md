@@ -58,7 +58,7 @@ When you know more than a reporter would, add it after the form's sections (see 
 #314):
 
 - **Why**: the cause, with code pointers: the file and the function or symbol
-  (`extensions/agentk/src/server/opencode.ts`, `normalizeOpenCode`). Line numbers go stale.
+  (`extensions/agentk/src/server/harness/opencode.ts`, `normalizeOpenCode`). Line numbers go stale.
 - **Workaround**, **Tests** (what would prove it fixed), **Out of scope**, **Open question**.
 
 Write plain, specific sentences. "Done when" items are outcomes someone can check. Logs and
