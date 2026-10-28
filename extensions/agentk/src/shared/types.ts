@@ -878,6 +878,8 @@ export interface Session {
   lastEventAt: number | null;
   /** Its place in the project's list, lowest first: a new session, or one moved to the top, goes first. */
   position: number;
+  /** The work item it's for (one session per item, `WorkItem.sessionId`); null when it's on none. */
+  workItemId: string | null;
   createdAt: number;
   archivedAt: number | null;
   recoveredAt: number | null;
@@ -1067,6 +1069,10 @@ export interface AppState {
   askAgentk: boolean;
   /** The session host that runs every Claude, as it last answered. */
   sessionHost: SessionHostStatus;
+  /** The work queue's open items, in its order (closed ones: `GET /api/work-items?status=closed`). */
+  workQueue: WorkItem[];
+  /** The work queue's last sync and whether one is running. */
+  workSync: WorkSync;
 }
 
 /** A coding agent sessions can run on (`[agents] default`, `[claude]`, `[opencode]`, `[kiro]` in config.toml). */
@@ -1497,6 +1503,102 @@ export interface SessionMatch {
   snippet: string;
 }
 
+/** What a work item's link points at: a GitHub PR or issue, a Jira issue, a Slack message, or any other page. */
+export type WorkLinkKind = 'github' | 'jira' | 'slack' | 'other';
+
+/** A link on a work item, as `parseWorkLink()` (src/shared/worklinks.ts) reads it. */
+export interface WorkLink {
+  kind: WorkLinkKind;
+  /** What it's matched by: `gh:owner/name#N`, `jira:KEY-N`, `slack:CHANNEL/pTS`, or `url:<the link>`. */
+  key: string;
+  /** The link to open; null for a bare Jira key, which names no site. */
+  url: string | null;
+  /** Its chip's text: `name#N`, `KEY-N`, `Slack`, or the site's host. */
+  label: string;
+}
+
+/** Where a work item came from: added by hand, or by a sync (a GitHub review request, a message on Slack's Later list). */
+export type WorkItemSource = 'manual' | 'github' | 'slack';
+
+/** One thing on the work queue. */
+export interface WorkItem {
+  id: string;
+  title: string;
+  notes: string;
+  links: WorkLink[];
+  status: 'open' | 'closed';
+  source: WorkItemSource;
+  /** Its session, open or closed (a closed one stays until another session is started for it); null when it has none. */
+  sessionId: string | null;
+  /** A sync added it at the bottom and nobody has moved it to its place yet (the New chip). */
+  unplaced: boolean;
+  /** A GitHub review request that the last GitHub sync didn't find any more: merged, closed, or no longer asked of you. */
+  githubDone: boolean;
+  createdAt: number;
+  closedAt: number | null;
+}
+
+/** The most characters of a work item's title, notes and each link; the most links it takes. */
+export const WORK_TITLE_MAX = 300;
+export const WORK_NOTES_MAX = 10_000;
+export const WORK_LINK_MAX = 2000;
+export const WORK_LINKS_MAX = 20;
+
+/** POST /api/work-items. A title can be left out when the first link is a GitHub PR or issue: it's read from GitHub. */
+export interface CreateWorkItemRequest {
+  title?: string;
+  notes?: string;
+  /** Links as typed, one each (anything `parseWorkLink` reads). */
+  links?: string[];
+}
+
+/** PATCH /api/work-items/:id: any of these. */
+export interface UpdateWorkItemRequest {
+  title?: string;
+  notes?: string;
+  links?: string[];
+  status?: 'open' | 'closed';
+  /** Move it one place up or down, or to the top (an open item); any move places it (`unplaced` off). */
+  move?: 'up' | 'down' | 'top';
+  /** Keep it where it is: clears `unplaced`. */
+  placed?: true;
+  /** Link this session to it (taking it from any other item, and replacing its own), or null to unlink. */
+  sessionId?: string | null;
+}
+
+/** PUT /api/work-items/order: every open item's id in the new order, and the one that was moved (it's placed). */
+export interface ReorderWorkItemsRequest {
+  ids: string[];
+  moved?: string;
+}
+
+/** How one source of a sync went: the items it added, or what went wrong. */
+export interface WorkSourceResult {
+  ok: boolean;
+  added: number;
+  error: string | null;
+}
+
+/** The work queue's sync (POST /api/work-items/sync, and every `[work_queue] sync_minutes`). */
+export interface WorkSync {
+  running: boolean;
+  /** When the last sync ended; null before the first since the server started. */
+  at: number | null;
+  github: WorkSourceResult | null;
+  /** Null when the last sync left Slack out (turned off, or a timed one while Slack isn't synced on the timer). */
+  slack: WorkSourceResult | null;
+  /** Slack is synced on the timer too: the last Slack sync worked. */
+  slackAuto: boolean;
+  /** The sources Settings › Work queue has on; with neither, there's no sync. */
+  sources: { github: boolean; slack: boolean };
+}
+
+/** GET /api/work-items/by-link: an item holding the link, with its session when it has one. */
+export interface WorkLinkMatch {
+  item: WorkItem;
+  session: { id: string; projectId: string; name: string; stage: Stage; closed: boolean; prNumber: number | null; prUrl: string | null } | null;
+}
+
 /** The most characters an instruction for Ask AgentK takes (`AskAgentkRequest.text`). */
 export const ASK_AGENTK_TEXT_MAX = 2000;
 /** The most earlier exchanges an ask carries (`AskAgentkRequest.history`); older ones are left out. */
@@ -1702,7 +1804,16 @@ export interface Settings {
   kiroEnabled: boolean;
   /** `[kiro] trust_tools`: Kiro sessions start with every tool trusted (`--trust-tools=*`), so Kiro runs any tool without asking. */
   kiroTrustTools: boolean;
+  /** `[work_queue] github`: the work queue's sync pulls in the PRs asking for your review (Settings › Work queue). */
+  workQueueGithub: boolean;
+  /** `[work_queue] slack`: the work queue's sync pulls in your Slack Later list. */
+  workQueueSlack: boolean;
+  /** `[work_queue] sync_minutes`: how often it syncs by itself (0 to WORK_SYNC_MINUTES_MAX; 0: only when you press Sync). */
+  workQueueSyncMinutes: number;
 }
+
+/** The longest the work queue's sync interval can be (`Settings.workQueueSyncMinutes`), in minutes: a day. */
+export const WORK_SYNC_MINUTES_MAX = 1440;
 
 /**
  * Where AgentK's Meko key comes from: Meko's Meko Cloud link (`meko`), or the Meko running on this
@@ -2230,6 +2341,8 @@ export interface CreateSessionRequest {
    * A failed start keeps them in its request, but the images themselves are gone by then.
    */
   images?: string[];
+  /** The open work item the session is for: it's linked to it as it's written, taking the item from any session it had. */
+  workItemId?: string;
 }
 
 /** The stages a session can be moved to by hand. `review` is the PR & Review step. */
@@ -2447,6 +2560,15 @@ export type TermServerMessage =
 // GET    /api/sessions/search?q=[&project=] → SessionMatch[]   (sessions, archived ones included, whose name, task, PR
 //        title, branch or design has the words in `q` (at least half of them), best first, at most 20; in the
 //        projects open, or only `project`; 400 for a `q` over SESSION_SEARCH_MAX characters or given twice, or two `project`s)
+// GET    /api/work-items?status=closed         → WorkItem[]   (closed items, last closed first, at most 200; open ones are AppState.workQueue)
+// POST   /api/work-items CreateWorkItemRequest → WorkItem   (400 for no title and no GitHub link to read one from, text over the
+//        WORK_*_MAX limits, more than WORK_LINKS_MAX links, or a link parseWorkLink can't read; 502 when GitHub can't give the title)
+// PATCH  /api/work-items/:id UpdateWorkItemRequest → WorkItem   (404 for an unknown item or session; 400 for bad values, or a move or
+//        session for a closed item)
+// PUT    /api/work-items/order ReorderWorkItemsRequest → 204   (409 when `ids` isn't exactly the open items)
+// POST   /api/work-items/sync                  → WorkSync   (GitHub review requests and Slack's Later list into the queue; 409 while one runs)
+// GET    /api/work-items/by-link?link=         → WorkLinkMatch[]   (open and closed items holding the link's key, open first; 400 for a
+//        link parseWorkLink can't read)
 // GET    /api/usage                            → UsageOverview
 // POST   /api/projects/:id/search { query }    → SearchResult[]
 // POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind or start, a harness that isn't available, a bad branch name, a

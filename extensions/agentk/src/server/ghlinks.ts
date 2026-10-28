@@ -111,6 +111,8 @@ export class GithubLinkService {
     const create: CreateSessionRequest = item.kind === 'pr'
       ? { name: '', kind: 'review-pr', pr: { repo, number: item.number }, repoPath }
       : { name: issueSessionName(item), kind: 'task', start: req.start ?? 'design', prompt: issuePrompt(repo, item, outsider), repoPath, autoRun: req.autoRun || undefined };
+    // The one open work item holding the link, when it has no open session, is what the session is for.
+    create.workItemId = this.core.workQueue.soleItemFor(req.ref) ?? undefined;
     const { session, done } = await this.core.sessions.begin(projectId, create);
     done.catch((e: unknown) => this.core.log.warn(`session ${session.id} didn't start`, errMsg(e)));
     return { project: this.core.projects.get(projectId), session };

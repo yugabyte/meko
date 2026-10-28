@@ -31,6 +31,7 @@ export function NewSessionDialog({
   mekoOn = false,
   learnFirst = false,
   initial,
+  projectChoice,
   onClose,
   onCreated,
 }: {
@@ -47,6 +48,11 @@ export function NewSessionDialog({
   learnFirst?: boolean;
   /** What a failed start asked for, to try it again. */
   initial?: CreateSessionRequest;
+  /**
+   * Started for a work item (the queue spans projects): a Project picker, which opens the dialog
+   * again in the project picked, with what was typed so far.
+   */
+  projectChoice?: { projects: Project[]; onPick: (projectId: string, draft: CreateSessionRequest) => void };
   onClose: () => void;
   onCreated: (s: Session) => void;
 }) {
@@ -332,6 +338,7 @@ export function NewSessionDialog({
               repoPath: inProjectRepo ? undefined : repoPath,
               pr: { repo: picked.repo, number: picked.number },
               images,
+              workItemId: initial?.workItemId,
             }
             : {
               name: name.trim(),
@@ -343,6 +350,7 @@ export function NewSessionDialog({
               autoRun: start === 'code' && autoRun ? true : undefined,
               repoPath: inProjectRepo ? undefined : repoPath,
               images,
+              workItemId: initial?.workItemId,
               ...(workOn === 'pr' && taskPr
                 ? { pr: { repo: taskPr.repo, number: taskPr.number } }
                 : workOn === 'branch'
@@ -381,6 +389,22 @@ export function NewSessionDialog({
           <p className="confirm-warn" role="alert">
             {NO_AGENT}
           </p>
+        )}
+        {projectChoice && (
+          <Field label="Project" hint="The session is for a work item, so it can start in any open project.">
+            <select
+              id="ns-project"
+              className="input"
+              value={project.id}
+              onChange={(e) => projectChoice.onPick(e.target.value, { ...initial, name, prompt })}
+            >
+              {projectChoice.projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </Field>
         )}
         <Field label="Name">
           <input

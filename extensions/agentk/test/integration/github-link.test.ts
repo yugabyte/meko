@@ -132,7 +132,10 @@ describe('starting from a GitHub link pasted into Search (real session host + gi
     // A public repo's issue from a member of its org is the task.
     gh.visibility.set('acme/demo', 'public');
     const issue = item('issue', 45, false, { title: 'Add  dark\nmode', authorAssociation: 'MEMBER' });
+    // The one work item holding the link is what the session is for.
+    const work = await env.core.workQueue.create({ title: 'Dark mode', links: ['acme/demo#45'] });
     const { project, session } = await env.core.githubLinks.start({ ref: 'https://github.com/acme/demo/issues/45', start: 'code' });
+    expect([session.workItemId, env.core.workQueue.get(work.id).sessionId]).toEqual([work.id, session.id]);
     expect(project).toMatchObject({ name: 'demo', repoPath: clone, datapacks: [{ id: 'dp-adlc-proj-demo-demo', name: 'adlc/proj/demo/demo', role: 'dedicated' }] });
     expect(session).toMatchObject({ projectId: project.id, name: '#45 Add dark mode', stage: 'code', branch: 'ak_me/45-add-dark-mode' });
     await idle(session.id);

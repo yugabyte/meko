@@ -134,7 +134,9 @@ read after Kiro's `prepare`, when a Kiro session is created, and — at most eve
 Kiro session's turn ends; its plan is Kiro-only data in
 `AppState.kiroPlan`), the usage report's per-day `kiro` counts (`callhome.ts`, a field of the
 report's schema), each agent's Meko status (`Core.kiroMeko`, `Core.openCodeMeko`: `MekoStatus.kiro`,
-`.opencode`), the usage report's agent versions (`installFacts`), and the command a harness runs as
+`.opencode`), the usage report's agent versions (`installFacts`), the work queue's Slack read (`slack.ts`, and
+`claudeAvailable` in `Core`: it reaches the user's claude.ai Slack connector, which only Claude Code
+has, so it runs Claude Code whatever the default agent), and the command a harness runs as
 (`harnessCommand` in `version.ts`, for the installer's version reads: OpenCode's default is also
 looked for in `~/.opencode/bin`). Adding a harness is an id in `HARNESS_IDS`, its caps, its `[<id>]` config
 section and an adapter. The compiler names each `Record<HarnessId, …>` that needs an entry (its

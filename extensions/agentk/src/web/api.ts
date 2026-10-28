@@ -1,5 +1,11 @@
 import type {
   AppState,
+  CreateWorkItemRequest,
+  ReorderWorkItemsRequest,
+  UpdateWorkItemRequest,
+  WorkItem,
+  WorkLinkMatch,
+  WorkSync,
   JoinByLinkRequest,
   JoinByLinkResult,
   ShareLink,
@@ -186,6 +192,14 @@ export const api = {
   askAgentk: (b: AskAgentkRequest, signal: AbortSignal) => request<AskAgentkResult>('POST', '/api/ask-agentk', b, { signal }),
   runActions: (b: RunActionsRequest) => post<RunActionsResult>('/api/actions/run', b),
   usage: () => get<UsageOverview>('/api/usage'),
+  closedWorkItems: () => get<WorkItem[]>('/api/work-items?status=closed'),
+  addWorkItem: (b: CreateWorkItemRequest) => post<WorkItem>('/api/work-items', b),
+  updateWorkItem: (id: string, b: UpdateWorkItemRequest) => request<WorkItem>('PATCH', `/api/work-items/${enc(id)}`, b),
+  reorderWorkItems: (b: ReorderWorkItemsRequest) => request<void>('PUT', '/api/work-items/order', b),
+  syncWork: () => post<WorkSync>('/api/work-items/sync'),
+  /** The work items holding a GitHub, Jira or Slack link, each with its session. */
+  workByLink: (link: string, signal?: AbortSignal) =>
+    request<WorkLinkMatch[]>('GET', `/api/work-items/by-link?link=${enc(link)}`, undefined, { signal }),
   search: (id: string, query: string) => post<SearchResult[]>(`/api/projects/${enc(id)}/search`, { query }),
   /** Sessions, closed ones too, whose name, task, PR, branch or design has the words in `q`; in `projectId`, or every project open. */
   findSessions: (q: string, projectId: string | null, signal?: AbortSignal) =>

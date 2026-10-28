@@ -171,6 +171,14 @@ your phone can connect.
   or open another session's PR. Every session gets AgentK's session tools (an MCP server) and a skill
   that says how to use them; the agent asks before each change, as for its other tools, and you can
   turn them off in Settings → General.
+- **A work queue across projects:** keep what you're working on in one ordered list (**Work queue** in
+  the rail): add items by hand with their GitHub, Jira and Slack links, drag them into order (or move
+  them from each item's menu on a phone), and close them when done. **Sync** (and every 15 minutes)
+  pulls in the PRs waiting for your review and, through your agent's Slack connector, the messages on
+  your Slack Later list, marked **New** until you give them their place; turn either source, or sync, off in
+  Settings › Work queue. Each item has one session,
+  whose status shows on it; **Start session** opens New session with the item filled in. Paste a
+  GitHub, Jira or Slack link into `⌘K` to jump to the session working on it.
 - **Find a session by what it's about:** type a few words into Ask AgentK (`⌘K`), such as "totp
   login". Besides names, it searches each session's task, PR title, branch and design, closed sessions
   included, in the project you're on (every project from elsewhere), and lists the best matches with

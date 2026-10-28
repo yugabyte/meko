@@ -896,8 +896,17 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     const again = await env.core.sessions.create(p.id, req);
     expect(again.id).toBe(session.id);
     expect(env.core.state().failedStarts.map((f) => f.name)).toEqual(['Other']);
+    // A failed start for a work item gives the item back the session it had.
+    const work = await env.core.workQueue.create({ title: 'Fix it' });
+    env.core.workQueue.update(work.id, { sessionId: again.id });
+    block('ak/retry/x');
+    await expect(env.core.sessions.create(p.id, { ...req, name: 'Retry', workItemId: work.id })).rejects.toMatchObject({ status: 400 });
+    expect(env.core.workQueue.get(work.id).sessionId).toBe(again.id);
+    env.core.sessions.dismissFailedStart('demo-repo--retry');
     env.core.sessions.dismissFailedStart('demo-repo--other');
     expect(env.core.state().failedStarts).toEqual([]);
+    // Its fake Claude writes its transcript into the test home until the turn ends: removing the home before then fails.
+    await waitFor(() => env.core.sessions.get(again.id).status, (st) => st === 'idle', 10000, 'the started session\'s first turn');
   });
 
   it("follows the transcript of a session whose hooks never arrive, and binds a removed hook socket again", async () => {

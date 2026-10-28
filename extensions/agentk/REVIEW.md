@@ -163,6 +163,12 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       (`checkActions()`), and the browser runs one only when the user picks it (a lone `go`
       too), through the route the UI already uses. Names, branches and PR titles in its context stay
       data in the prompt, and nothing of what's asked goes into logs or the usage report.
+- [ ] The work queue's Slack read (`slack.ts`) is a `claude -p` that loads the user's MCP servers
+      and connectors and reads messages other people wrote, so it keeps `--tools ""`,
+      `--permission-mode default`, `--setting-sources project` in its empty folder with only the
+      sign-in part of the user's settings (`signInSettings()`: no allow rules or default mode),
+      hooks off, only `[work_queue] slack_tools` allowed and the Slack connector's writes denied; its
+      prompt calls the messages data. What it returns only adds items to the queue.
 - [ ] AgentK's session tools (`actions.ts`, `mcp.ts`) act only through `runActions()`, the same core
       calls the UI's routes make, after `checkActions()`: the hook socket's `/tools` names the caller
       by its token, refuses a PR head `repoConfigTrusted()` doesn't trust (not checked yet included)

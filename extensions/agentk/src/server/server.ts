@@ -10,8 +10,9 @@ import type {
   HeldReview, HeldReviewsResult, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, RunActionsRequest, RunActionsResult, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
   JoinByLinkRequest, JoinByLinkResult, LinkGrant, ShareLink, ShareLinkChange, ShareLinkState,
+  CreateWorkItemRequest, ReorderWorkItemsRequest, UpdateWorkItemRequest, WorkItem, WorkLinkMatch, WorkSync,
 } from '../shared/types.js';
-import { ACTIONS_MAX, LINK_GRANTS, MAX_KB_UPLOAD_BYTES, MAX_PASTE_BYTES, MEKO_CALL_BY, SHARE_GRANTS } from '../shared/types.js';
+import { ACTIONS_MAX, LINK_GRANTS, MAX_KB_UPLOAD_BYTES, MAX_PASTE_BYTES, MEKO_CALL_BY, SHARE_GRANTS, WORK_SYNC_MINUTES_MAX } from '../shared/types.js';
 import { AGENTK_PATH, shareLinkToken, shareLinkUrl } from '../shared/mekourls.js';
 import { HARNESS_IDS, isHarnessId } from '../shared/harnesses.js';
 import { EMAIL_RE, MAX_SHARE_EMAILS } from '../shared/emails.js';
@@ -411,6 +412,19 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     return { results: await runActions(core, actions, { session: null }), notes };
   });
   app.get('/api/usage', async () => usageOverview(core.db));
+
+  // ---- work queue ----
+  app.get<{ Querystring: { status?: string } }>('/api/work-items', async (req): Promise<WorkItem[]> =>
+    req.query.status === 'closed' ? core.workQueue.closed() : core.workQueue.list());
+  app.post<{ Body: CreateWorkItemRequest }>('/api/work-items', async (req): Promise<WorkItem> => core.workQueue.create(req.body ?? {}));
+  app.patch<{ Params: { id: string }; Body: UpdateWorkItemRequest }>('/api/work-items/:id', async (req): Promise<WorkItem> =>
+    core.workQueue.update(req.params.id, req.body ?? {}));
+  app.put<{ Body: ReorderWorkItemsRequest }>('/api/work-items/order', async (req, reply) => {
+    core.workQueue.reorder(req.body ?? { ids: [] });
+    return reply.code(204).send();
+  });
+  app.post('/api/work-items/sync', async (): Promise<WorkSync> => core.workQueue.sync(true));
+  app.get<{ Querystring: { link?: string } }>('/api/work-items/by-link', async (req): Promise<WorkLinkMatch[]> => core.workQueue.byLink(req.query.link));
   app.get<{ Querystring: { q?: string; project?: string } }>('/api/sessions/search', async (req): Promise<SessionMatch[]> =>
     searchSessions(core.db, req.query.q ?? '', req.query.project || undefined));
   app.post<{ Params: { id: string }; Body: { query: string } }>('/api/projects/:id/search', async (req) => core.projects.search(req.params.id, req.body?.query ?? ''));
@@ -546,6 +560,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     opencodeDisableTracking: core.config.opencode.disableTracking,
     kiroEnabled: core.config.kiro.enabled,
     kiroTrustTools: core.config.kiro.trustTools,
+    workQueueGithub: core.config.workQueue.github,
+    workQueueSlack: core.config.workQueue.slack,
+    workQueueSyncMinutes: core.config.workQueue.syncMinutes,
   });
   app.get('/api/settings', async () => {
     // Opening Settings reads the Meko on this computer and its Meko Cloud link again (it may have
@@ -578,7 +595,10 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (b.resolveConflicts !== undefined && typeof b.resolveConflicts !== 'boolean') throw new HttpError(400, 'resolveConflicts must be true or false.');
     if (b.toolsEnabled !== undefined && typeof b.toolsEnabled !== 'boolean') throw new HttpError(400, 'toolsEnabled must be true or false.');
     if (b.defaultHarness !== undefined && !isHarnessId(b.defaultHarness)) throw new HttpError(400, `The default agent must be one of ${HARNESS_IDS.join(', ')}.`);
-    for (const k of ['claudeEnabled', 'opencodeEnabled', 'opencodeDisableTracking', 'kiroEnabled', 'kiroTrustTools'] as const) {
+    if (b.workQueueSyncMinutes !== undefined && (!Number.isInteger(b.workQueueSyncMinutes) || b.workQueueSyncMinutes < 0 || b.workQueueSyncMinutes > WORK_SYNC_MINUTES_MAX)) {
+      throw new HttpError(400, `Sync every must be a whole number of minutes from 0 to ${WORK_SYNC_MINUTES_MAX}.`);
+    }
+    for (const k of ['claudeEnabled', 'opencodeEnabled', 'opencodeDisableTracking', 'kiroEnabled', 'kiroTrustTools', 'workQueueGithub', 'workQueueSlack'] as const) {
       if (b[k] !== undefined && typeof b[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false.`);
     }
     const enabledBefore = Object.fromEntries(HARNESS_IDS.map((id) => [id, core.config[id].enabled]));
@@ -599,6 +619,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.opencodeDisableTracking !== undefined) c.opencode.disableTracking = b.opencodeDisableTracking;
       if (b.kiroEnabled !== undefined) c.kiro.enabled = b.kiroEnabled;
       if (b.kiroTrustTools !== undefined) c.kiro.trustTools = b.kiroTrustTools;
+      if (b.workQueueGithub !== undefined) c.workQueue.github = b.workQueueGithub;
+      if (b.workQueueSlack !== undefined) c.workQueue.slack = b.workQueueSlack;
+      if (b.workQueueSyncMinutes !== undefined) c.workQueue.syncMinutes = b.workQueueSyncMinutes;
     });
     // An agent turned on: its version (and Kiro's agent file) follow, in the background. One turned
     // off forgets its last read, so it isn't offered on that read once it's turned on again.

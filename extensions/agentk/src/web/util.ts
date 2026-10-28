@@ -172,14 +172,19 @@ export function dotState(s: Pick<Session, 'status' | 'learning' | 'queued' | 'me
   return s.mekoCall && s.status === 'working' ? 'meko' : s.status;
 }
 
-/** The project's dot in the rail: its most urgent session's. */
-export function aggregateDot(p: ProjectWithSessions): DotState {
+/** The most urgent dot of these sessions (idle with none). */
+export function urgentDot(sessions: Session[]): DotState {
   let best: DotState = 'idle';
-  for (const s of liveSessions(p)) {
+  for (const s of sessions) {
     const dot = dotState(s);
     if (URGENCY[dot] > URGENCY[best]) best = dot;
   }
   return best;
+}
+
+/** The project's dot in the rail: its most urgent session's. */
+export function aggregateDot(p: ProjectWithSessions): DotState {
+  return urgentDot(liveSessions(p));
 }
 
 export const STATUS_TEXT: Record<DotState, string> = {

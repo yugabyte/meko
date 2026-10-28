@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type MutableRefObject, type ReactNode } from 'react';
-import type { HarnessStatus, MekoKeySource, MekoStatus, Settings, SettingsUpdate, UpdateStatus } from '../../shared/types';
+import { WORK_SYNC_MINUTES_MAX, type HarnessStatus, type MekoKeySource, type MekoStatus, type Settings, type SettingsUpdate, type UpdateStatus } from '../../shared/types';
 import { HARNESS_CAPS, HARNESS_IDS, type HarnessId } from '../../shared/harnesses';
 import { MEKO_ACCOUNT_PATH, MEKO_CLOUD_PATH } from '../../shared/mekourls';
 import { api, errorMessage } from '../api';
@@ -11,11 +11,11 @@ import { harnessLogosToggle } from '../toggle';
 import { claudeUpdateText, cx, defaultAgentChoice, httpHost, relativeTime } from '../util';
 import { AgentLabel, AgentPicker, Busy, Dialog, ErrorText, Field } from './common';
 
-export type SettingsTab = 'general' | 'harness' | 'updates';
+export type SettingsTab = 'general' | 'harness' | 'work-queue' | 'updates';
 type Tab = SettingsTab;
 
-const TABS: Tab[] = ['general', 'harness', 'updates'];
-const TAB_LABEL: Record<Tab, string> = { general: 'General', harness: 'Harness', updates: 'Updates' };
+const TABS: Tab[] = ['general', 'harness', 'work-queue', 'updates'];
+const TAB_LABEL: Record<Tab, string> = { general: 'General', harness: 'Harness', 'work-queue': 'Work queue', updates: 'Updates' };
 
 export function SettingsDialog({
   mekoAuth,
@@ -100,6 +100,7 @@ export function SettingsDialog({
       {tab === 'harness' && (
         <HarnessTab auto={auto} harnesses={harnesses} twoAgents={twoAgents} serverName={serverName} meko={meko} initialAgent={initialAgent} />
       )}
+      {tab === 'work-queue' && <WorkQueueTab auto={auto} />}
       {tab === 'updates' && <UpdatesTab initial={update} onWhatsNew={(from, to) => leave(() => onWhatsNew(from, to))} />}
       <SaveStatus status={auto.status} held={held} />
     </Dialog>
@@ -198,6 +199,67 @@ const clampOr = (typed: string, max: number, saved: number) => {
   const n = Math.round(Number(typed));
   return typed.trim() && Number.isFinite(n) ? Math.max(0, Math.min(max, n)) : saved;
 };
+
+/**
+ * The work queue's sync: which sources it reads (both off turns sync off, the Sync button too) and how
+ * often it runs by itself. The minutes save when the field loses focus or takes Enter.
+ */
+function WorkQueueTab({ auto }: { auto: AutoSettings }) {
+  const { s, load, change } = auto;
+  const [minutes, setMinutes] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    load().then((x) => setMinutes(String(x.workQueueSyncMinutes)), (e) => setError(errorMessage(e)));
+  }, [load]);
+  if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
+  const off = !s.workQueueGithub && !s.workQueueSlack;
+  const saveMinutes = () => {
+    const m = clampOr(minutes, WORK_SYNC_MINUTES_MAX, s.workQueueSyncMinutes);
+    setMinutes(String(m));
+    if (m !== s.workQueueSyncMinutes) change({ workQueueSyncMinutes: m });
+  };
+  return (
+    <div className="stack">
+      <p className="muted small">What Sync adds to the work queue. Turn both off to turn sync off.</p>
+      <div className="field">
+        <label className="check">
+          <input id="set-wq-github" type="checkbox" checked={s.workQueueGithub} onChange={(e) => change({ workQueueGithub: e.target.checked })} />
+          <span>GitHub review requests</span>
+        </label>
+        <span className="hint">Open PRs that ask for your review, through your gh login.</span>
+      </div>
+      <div className="field">
+        <label className="check">
+          <input id="set-wq-slack" type="checkbox" checked={s.workQueueSlack} onChange={(e) => change({ workQueueSlack: e.target.checked })} />
+          <span>Slack Later list</span>
+        </label>
+        <span className="hint">
+          The messages you saved for later, read by Claude Code through your Slack connector. Each read is a model call; on the
+          timer it runs only while the last read worked.
+        </span>
+      </div>
+      <Field label="Sync every (minutes)" hint={off ? 'Sync is off.' : '0 syncs only when you press Sync.'}>
+        <input
+          id="set-wq-minutes"
+          className="input"
+          type="number"
+          min={0}
+          max={WORK_SYNC_MINUTES_MAX}
+          value={minutes}
+          disabled={off}
+          onChange={(e) => setMinutes(e.target.value)}
+          onBlur={saveMinutes}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              saveMinutes();
+            }
+          }}
+        />
+      </Field>
+    </div>
+  );
+}
 
 /** The fields General saves when they lose focus. */
 type TypedField = 'reposRoots' | 'reposDepth' | 'idleWorktreesPerRepo' | 'idleWorktreeDays' | 'cloneInto' | 'serverName';

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import type { AppState, CreateSessionRequest, DatapackInvite, FailedStart, Project, ProjectWithSessions, Session } from '../../shared/types';
+import type { AppState, CreateSessionRequest, DatapackInvite, FailedStart, Project, ProjectWithSessions, Session, WorkItem } from '../../shared/types';
 import type { HarnessId } from '../../shared/harnesses';
 import { api, ApiError, errorMessage } from '../api';
 import { appUrl } from '../base';
@@ -48,6 +48,10 @@ import { UsageView } from './UsageView';
 import { MekoCallsView } from './MekoCallsView';
 import { MekoGapsView } from './MekoGapsView';
 import { WhatsNewDialog, whatsNewBack, type WhatsNewOpener } from './WhatsNewDialog';
+import { LinkWorkItemDialog } from './LinkWorkItemDialog';
+import { WorkItemDialog } from './WorkItemDialog';
+import { WorkQueueView } from './WorkQueueView';
+import { itemProject, itemStartRequest, queueSummary } from '../workqueue';
 
 type Modal =
   | { kind: 'none' }
@@ -58,7 +62,11 @@ type Modal =
    * `learn`: start on Learn the project (the project was just opened on an empty datapack, or its home offered it).
    * `retry`: a failed start to try again, filling the dialog in. `initial`: a task Ask AgentK proposed, to change before it starts.
    */
-  | { kind: 'new-session'; projectId: string; fresh?: boolean; learn?: boolean; retry?: FailedStart; initial?: CreateSessionRequest }
+  | { kind: 'new-session'; projectId: string; fresh?: boolean; learn?: boolean; retry?: FailedStart; initial?: CreateSessionRequest; pickProject?: boolean }
+  /** Add a work item, or edit `item`. */
+  | { kind: 'work-item'; item?: WorkItem }
+  /** Link a session to the item `itemId`, or the session `sessionId` to an item. */
+  | { kind: 'link-work'; itemId?: string; sessionId?: string }
   /** The project on screen lost its last open session: offer to close it. */
   | { kind: 'close-project'; projectId: string }
   | { kind: 'settings'; tab?: SettingsTab; agent?: HarnessId }
@@ -133,6 +141,8 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
   const [theme, cycleTheme] = useTheme();
   const [modal, setModal] = useState<Modal>({ kind: 'none' });
   const [toast, setToast] = useState<string | null>(null);
+  // The work item the queue scrolls to and opens (picked in the command palette).
+  const [queueFocus, setQueueFocus] = useState<string | null>(null);
   const mobile = useIsMobile();
   const [drawer, setDrawer] = useState(false);
   const [railWidth, setRailWidth] = useState(railWidthSaved);
@@ -255,7 +265,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
   }, [state]);
 
   const currentProject =
-    route.view === 'root' || route.view === 'usage' ? null : (projects.find((p) => p.id === route.projectId) ?? null);
+    route.view === 'root' || route.view === 'usage' || route.view === 'queue' ? null : (projects.find((p) => p.id === route.projectId) ?? null);
   const live = useMemo(
     () => (currentProject ? openSessions(currentProject) : []),
     [currentProject],
@@ -297,7 +307,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
   // Normalize the route once state is known: pick a project/session when none is chosen
   // or the chosen one no longer exists.
   useEffect(() => {
-    if (!state || route.view === 'usage') return;
+    if (!state || route.view === 'usage' || route.view === 'queue') return;
     if (route.view === 'root' || !currentProject) {
       const first = projects[0];
       if (first) {
@@ -409,6 +419,19 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
   // A New session dialog whose project was closed meanwhile closes. One for a project just opened
   // has it in `projects` at once (withOpened), so it never waits on the state push.
   const newSessionProject = modal.kind === 'new-session' ? projects.find((p) => p.id === modal.projectId) : undefined;
+  const workQueue = useMemo(() => state?.workQueue ?? [], [state]);
+  const queue = useMemo(() => queueSummary(workQueue, projects), [workQueue, projects]);
+  /** Start session for a work item: New session filled in from it, in the project it fits best, which can be changed there. */
+  const startForItem = (item: WorkItem) => {
+    const projectId = itemProject(item, projects, currentProject?.id ?? null);
+    if (!projectId) {
+      showToast('Open a project first: a session for a work item starts in one.');
+      return;
+    }
+    setModal({ kind: 'new-session', projectId, initial: itemStartRequest(item), pickProject: true });
+  };
+  const linkWorkItem = modal.kind === 'link-work' && modal.itemId ? workQueue.find((i) => i.id === modal.itemId) : undefined;
+  const linkWorkSession = modal.kind === 'link-work' && modal.sessionId ? projects.flatMap((p) => p.sessions).find((s) => s.id === modal.sessionId) : undefined;
   // Gone once the session is archived (or its project deleted) under the dialog.
   const moveSession =
     modal.kind === 'move' ? projects.flatMap((p) => p.sessions).find((s) => s.id === modal.sessionId && s.desired === 'running') : undefined;
@@ -501,6 +524,13 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
           navigate({ view: 'usage' }, { replace: isDrawerEntry() });
           closeDrawer();
         }}
+        queue={queue}
+        queueOpen={route.view === 'queue'}
+        onQueue={() => {
+          setQueueFocus(null);
+          navigate({ view: 'queue' }, { replace: isDrawerEntry() });
+          closeDrawer();
+        }}
         username={state.username}
         serverName={state.serverName ?? ''}
         serverHost={state.serverHost ?? ''}
@@ -546,6 +576,20 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
         />
         {route.view === 'usage' ? (
           <UsageView onMenu={openDrawer} mekoConfigured={state.meko.configured} />
+        ) : route.view === 'queue' ? (
+          <WorkQueueView
+            items={workQueue}
+            sync={state.workSync ?? { running: false, at: null, github: null, slack: null, slackAuto: false, sources: { github: true, slack: true } }}
+            projects={projects}
+            focusId={queueFocus}
+            onMenu={openDrawer}
+            onAdd={() => setModal({ kind: 'work-item' })}
+            onEdit={(item) => setModal({ kind: 'work-item', item })}
+            onLinkSession={(item) => setModal({ kind: 'link-work', itemId: item.id })}
+            onStartSession={startForItem}
+            onError={showToast}
+            onSettings={() => setModal({ kind: 'settings', tab: 'work-queue' })}
+          />
         ) : currentProject && route.view === 'meko' ? (
           <MekoCallsView
             key={currentProject.id}
@@ -582,6 +626,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
             onMove={(preset) => currentSession && setModal({ kind: 'move', sessionId: currentSession.id, preset })}
             onOpenPr={() => currentSession && setModal({ kind: 'open-pr', sessionId: currentSession.id })}
             onRename={(sessionId) => setModal({ kind: 'rename', sessionId })}
+            onLinkWorkItem={(sessionId) => setModal({ kind: 'link-work', sessionId })}
             onToTop={(sessionId) => void sessionToTop(sessionId)}
             onMenu={openDrawer}
             showTabs={sessionTabsShown(railSessions, railHidden, mobile)}
@@ -621,7 +666,12 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
       )}
       {newSessionProject && (
         <NewSessionDialog
+          key={modal.kind === 'new-session' && modal.pickProject ? newSessionProject.id : undefined}
           project={newSessionProject}
+          projectChoice={modal.kind === 'new-session' && modal.pickProject ? {
+            projects,
+            onPick: (projectId, draft) => setModal({ kind: 'new-session', projectId, initial: draft, pickProject: true }),
+          } : undefined}
           ghLogin={state.ghLogin ?? null}
           harnesses={state.harnesses ?? []}
           fresh={modal.kind === 'new-session' && !!modal.fresh}
@@ -671,6 +721,10 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
           onBack={whatsNewTab && (() => setModal({ kind: 'settings', tab: whatsNewTab }))}
         />
       )}
+      {modal.kind === 'work-item' && <WorkItemDialog item={modal.item} onClose={() => setModal({ kind: 'none' })} />}
+      {(linkWorkItem || linkWorkSession) && (
+        <LinkWorkItemDialog item={linkWorkItem} session={linkWorkSession} items={workQueue} projects={projects} onClose={() => setModal({ kind: 'none' })} />
+      )}
       {modal.kind === 'palette' && (
         <CommandPalette
           projects={projects}
@@ -684,6 +738,15 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
           onRenameSession={() => currentSession && setModal({ kind: 'rename', sessionId: currentSession.id })}
           onSessionToTop={currentSession && live[0]?.id !== currentSession.id ? () => void sessionToTop(currentSession.id) : undefined}
           onSettings={() => setModal({ kind: 'settings' })}
+          workItems={workQueue}
+          onAddWorkItem={() => setModal({ kind: 'work-item' })}
+          onShowWorkItem={(id) => {
+            setQueueFocus(id);
+            navigate({ view: 'queue' });
+          }}
+          onStartForItem={startForItem}
+          onLinkWorkItem={() => currentSession && setModal({ kind: 'link-work', sessionId: currentSession.id })}
+          onError={showToast}
           askAgentk={!!state.askAgentk}
           onEditSession={(projectId, initial) => setModal({ kind: 'new-session', projectId, initial })}
           mekoWebUrl={state.meko.webUrl}
