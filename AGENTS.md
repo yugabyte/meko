@@ -47,15 +47,18 @@ from the extension's folder) and which docs to keep current. Meko's own Go backe
   for the backend).
 - **Treat the repo as public** (it's internal today): no internal hostnames, mount paths, tokens
   or keys in code, docs, tests or commit messages.
-- **No personal data (PII)** in anything the repo or its pages on GitHub keep: code, comments, docs,
-  tests and their fixtures, screenshots, commit messages, PR titles and descriptions, review
-  replies and issues. That's any real person's name, email address, phone number, postal address,
-  user name or handle, account or customer ID, or IP address; customer and company names; and
-  anything a user wrote or stored (prompts, transcripts, memories, datapack contents). Use made-up
-  values instead (`Alice`, `alice@example.com`, `github.com/acme/demo-repo`, `~` for a home
-  folder), and scrub logs, command output and screenshots before pasting them in. Refer to people
-  by role ("the reporter", "a reviewer"). The only personal data a change carries is its author's
-  configured git identity and the footer lines the harness asks for. If you find personal data
-  already in the repo, tell the user: it's removed in a change of its own.
+- **No secrets or personal data (PII)** in anything the repo or its pages on GitHub keep: code,
+  comments, docs, tests and their fixtures, screenshots, commit messages, PR titles and
+  descriptions, review replies and issues. Secrets are passwords, tokens, API keys, private keys
+  and certificates, session cookies, TOTP seeds, and credentials in URLs. Personal data is any
+  real person's name, email address, phone number, postal address, user name or handle, account
+  or customer ID, or IP address; customer and company names; and anything a user wrote or stored
+  (prompts, transcripts, memories, datapack contents). Use made-up values instead (`Alice`,
+  `alice@example.com`, `github.com/acme/demo-repo`, a fake token such as `test-token`, `~` for a
+  home folder), and scrub logs, command output and screenshots before pasting them in. Refer to
+  people by role ("the reporter", "a reviewer"). The only personal data a change carries is its
+  author's configured git identity and the footer lines the harness asks for. If you find a
+  secret or personal data already in the repo, tell the user: it's removed in a change of its
+  own, and a real secret is revoked too, since git history keeps it.
 - Shell commands and scripts run on Linux and macOS: stick to POSIX flags that GNU and BSD tools
   share.

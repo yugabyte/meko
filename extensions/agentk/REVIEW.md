@@ -125,9 +125,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] The web socket and the hook socket stay owner-only (directory 0700, socket 0600; bound under a
       temporary name and renamed, `listenPrivate`), and hook events are matched by per-session token.
 - [ ] Nothing internal (hostnames, mount paths, tokens) is committed; the repo will be public.
-- [ ] No personal data in the diff, the PR title or its description (the repo root's AGENTS.md):
-      no real person's name, email, handle or IP address, no customer names, nothing a user
-      wrote or stored (prompts, transcripts, memories), and no unscrubbed logs or screenshots.
+- [ ] No secrets or personal data in the diff, the PR title or its description (the repo root's
+      AGENTS.md): no passwords, tokens, keys or cookies, no real person's name, email, handle or
+      IP address, no customer names, nothing a user wrote or stored (prompts, transcripts,
+      memories), and no unscrubbed logs or screenshots.
       Tests and docs use made-up values (`alice@example.com`, `github.com/acme/demo-repo`). Any
       found is a **blocker**.
 - [ ] Pasted images (`POST /api/sessions/:id/images`) are checked by their bytes, size-capped, and
