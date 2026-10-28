@@ -1,7 +1,8 @@
 import { HARNESS_CAPS, harnessOf, type HarnessId } from '../shared/harnesses';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, STAGE_LABELS } from '../shared/types';
-import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
+import { mekoDatapackPath } from '../shared/mekourls';
+import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoStatus, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /**
  * What a status dot shows: the session's status, `learning` while AgentK saves what it learned to
@@ -268,9 +269,15 @@ export function slugify(s: string): string {
     .slice(0, 60);
 }
 
-/** A datapack's page in the Meko web app, or null when the web app's address is unknown. */
-export function mekoDatapackUrl(webUrl: string | null, datapackId: string): string | null {
-  return webUrl ? `${webUrl}/datapacks/${encodeURIComponent(datapackId)}` : null;
+/**
+ * A datapack's page in the Meko web app. While AgentK uses the Meko on this computer, that Meko's
+ * own page on this origin, root-absolute: a web URL set for it can only be on its own (loopback)
+ * origin, which a browser using remote access can't open. Else the known web app's (Meko Cloud's);
+ * null when there's none.
+ */
+export function mekoDatapackUrl(meko: Pick<MekoStatus, 'webUrl' | 'source'>, datapackId: string): string | null {
+  if (meko.source === 'local') return mekoDatapackPath(datapackId);
+  return meko.webUrl ? `${meko.webUrl}${mekoDatapackPath(datapackId)}` : null;
 }
 
 /** An http(s) URL's host, lowercased; null for anything else (never a `javascript:` link). */

@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { HARNESS_CAPS, harnessOf, type HarnessId } from '../../shared/harnesses';
 import { KIND_LABELS, KIND_STAGES, START_HINTS, START_STAGES, STAGE_LABELS } from '../../shared/types';
-import type { Session, StartStage } from '../../shared/types';
+import type { MekoStatus, Session, StartStage } from '../../shared/types';
 import { appUrl } from '../base';
 import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkKeyframes, blinkOffsetMs, totalUnits, type BlinkRun } from '../blink';
 import { matches, TOUCH_QUERY, useMedia } from '../hooks/useMedia';
@@ -302,19 +302,19 @@ export function ConfirmButton({
   );
 }
 
-/** A datapack's name, linked to its Meko page when the Meko web app's address is known. */
+/** A datapack's name, linked to its Meko page (`mekoDatapackUrl`) when there's one to link to. */
 export function DatapackName({
   id,
   name,
-  mekoWebUrl,
+  meko,
   className,
 }: {
   id: string;
   name: string;
-  mekoWebUrl: string | null;
+  meko: Pick<MekoStatus, 'webUrl' | 'source'>;
   className?: string;
 }) {
-  const href = mekoDatapackUrl(mekoWebUrl, id);
+  const href = mekoDatapackUrl(meko, id);
   if (!href) {
     return (
       <span className={className} title={id}>

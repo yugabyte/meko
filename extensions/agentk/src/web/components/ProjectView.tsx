@@ -77,7 +77,6 @@ export function ProjectView({
   project,
   sessions,
   session,
-  mekoWebUrl,
   meko,
   onNewSession,
   onMove,
@@ -93,7 +92,6 @@ export function ProjectView({
   project: ProjectWithSessions;
   sessions: Session[];
   session: Session | null;
-  mekoWebUrl: string | null;
   meko: MekoStatus;
   onNewSession: () => void;
   /** Opens the Move to another stage dialog for the session on screen. */
@@ -295,7 +293,7 @@ export function ProjectView({
     session && session.contextPercent !== null && <ContextRing percent={session.contextPercent} showPercent={showPercent} agent={agentName(session)} />;
   const mekoText = (
     <span title="The project's Meko datapack">
-      Meko:{dedicated ? <DatapackName id={dedicated.id} name={dedicated.name} mekoWebUrl={mekoWebUrl} /> : '—'}
+      Meko:{dedicated ? <DatapackName id={dedicated.id} name={dedicated.name} meko={meko} /> : '—'}
       {sharedCount > 0 ? ` · +${sharedCount} shared` : ''}
     </span>
   );
