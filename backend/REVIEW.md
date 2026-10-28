@@ -77,7 +77,8 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 - [ ] Knowledge files' bytes stay in `knowledgebase-files/` (0700 folders, 0600 files), written to a
       temporary name and renamed before their row commits, removed after it's deleted; their text
       never reaches a log or an error reply.
-- [ ] The docs in `docs/` and `AGENTS.md` here match the code, and so does the repo root's
-      `README.md` (Meko's commands, their flags and the build requirements). They describe Meko as
+- [ ] The docs in `docs/` and `AGENTS.md` here match the code (`docs/cli.md`: every command and
+      its flags), and so does the repo root's `README.md` (the commands it lists, the install and
+      the build requirements). They describe Meko as
       it is, without status lines, milestones, PR or issue numbers or history, and say nothing of
       Meko Cloud's internals beyond the behavior Meko matches.

@@ -55,7 +55,7 @@ listener, `Agents (MCP, API)` on the API listener), and the commands to run next
 print their own rows ([install.md](install.md#the-summary-rows)). `status` is that checklist;
 `status --verbose` has everything, and `status --json` the server's status reply.
 
-Every command takes `--data-dir` (default `~/.meko`, or `MEKO_HOME`). The repo's README lists them
+Every command takes `--data-dir` (default `~/.meko`, or `MEKO_HOME`). [cli.md](cli.md) lists them
 all; the ones that run the server:
 
 | Command | What it does |
