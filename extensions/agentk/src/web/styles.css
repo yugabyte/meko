@@ -2443,6 +2443,10 @@ div[id^='dak-mermaid-'] .label {
 .dialog-hd h2 {
   flex: 1;
 }
+/* A dialog's ← back (Dialog's onBack): its arrow lines up with the body's text, close to the title. */
+.dialog-hd > .icon-btn:first-child {
+  margin: 0 -6px;
+}
 .dialog-aside {
   overflow: hidden;
   text-overflow: ellipsis;

@@ -171,6 +171,7 @@ export function submitButton(root: ParentNode, focused: Element | null): HTMLBut
 export function Dialog({
   title,
   onClose,
+  onBack,
   children,
   footer,
   wide,
@@ -179,6 +180,8 @@ export function Dialog({
 }: {
   title: ReactNode;
   onClose: () => void;
+  /** Returns to the dialog this one opened in place of, from a ← before the title. */
+  onBack?: () => void;
   children: ReactNode;
   footer?: ReactNode;
   wide?: boolean;
@@ -228,6 +231,11 @@ export function Dialog({
         }}
       >
         <div className="dialog-hd">
+          {onBack && (
+            <button className="icon-btn" onClick={onBack} aria-label="Back" title="Back">
+              ←
+            </button>
+          )}
           <h2>{title}</h2>
           {aside}
           <button className="icon-btn" onClick={onClose} aria-label="Close">

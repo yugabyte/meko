@@ -68,8 +68,8 @@ type Modal =
   /** Open PR with instructions for AgentK. */
   | { kind: 'open-pr'; sessionId: string }
   | { kind: 'rename'; sessionId: string }
-  /** What's new from one version to another (the update banners, Settings). */
-  | { kind: 'whats-new'; from: string; to: string };
+  /** What's new from one version to another (the update banners, Settings: `settings` for Back to it). */
+  | { kind: 'whats-new'; from: string; to: string; settings?: boolean };
 
 const isDrawerEntry = () => !!(history.state as { akDrawer?: boolean } | null)?.akDrawer;
 
@@ -660,9 +660,16 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
       {openPrSession && <OpenPrDialog key={openPrSession.id} session={openPrSession} onClose={() => setModal({ kind: 'none' })} />}
       {renameSession && <RenameSessionDialog key={renameSession.id} session={renameSession} onClose={() => setModal({ kind: 'none' })} />}
       {modal.kind === 'settings' && (
-        <SettingsDialog mekoAuth={mekoAuth} update={state.update} meko={state.meko} harnesses={state.harnesses ?? []} twoAgents={twoAgents} serverName={state.serverName} initialTab={modal.tab} initialAgent={modal.agent} onClose={() => setModal({ kind: 'none' })} onWhatsNew={(from, to) => setModal({ kind: 'whats-new', from, to })} />
+        <SettingsDialog mekoAuth={mekoAuth} update={state.update} meko={state.meko} harnesses={state.harnesses ?? []} twoAgents={twoAgents} serverName={state.serverName} initialTab={modal.tab} initialAgent={modal.agent} onClose={() => setModal({ kind: 'none' })} onWhatsNew={(from, to) => setModal({ kind: 'whats-new', from, to, settings: true })} />
       )}
-      {modal.kind === 'whats-new' && <WhatsNewDialog from={modal.from} to={modal.to} onClose={() => setModal({ kind: 'none' })} />}
+      {modal.kind === 'whats-new' && (
+        <WhatsNewDialog
+          from={modal.from}
+          to={modal.to}
+          onClose={() => setModal({ kind: 'none' })}
+          onBack={modal.settings ? () => setModal({ kind: 'settings', tab: 'updates' }) : undefined}
+        />
+      )}
       {modal.kind === 'palette' && (
         <CommandPalette
           projects={projects}

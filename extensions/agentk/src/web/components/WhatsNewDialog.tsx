@@ -5,9 +5,10 @@ import { Busy, Dialog, ErrorText } from './common';
 
 /**
  * What's new from one version to another: every feat, fix, perf and deps change between their
- * tags, by type, across all the releases in between (GET /api/update/notes).
+ * tags, by type, across all the releases in between (GET /api/update/notes). `onBack` returns to
+ * where it opened in place of (Settings › Updates).
  */
-export function WhatsNewDialog({ from, to, onClose }: { from: string; to: string; onClose: () => void }) {
+export function WhatsNewDialog({ from, to, onClose, onBack }: { from: string; to: string; onClose: () => void; onBack?: () => void }) {
   const [notes, setNotes] = useState<ReleaseNotes | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -34,6 +35,7 @@ export function WhatsNewDialog({ from, to, onClose }: { from: string; to: string
       title={`What’s new in v${to}`}
       className="whats-new"
       onClose={onClose}
+      onBack={onBack}
       footer={
         compareUrl && (
           <a href={compareUrl} target="_blank" rel="noreferrer" className="link-btn">
