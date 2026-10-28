@@ -8,6 +8,12 @@
 # `deps(meko): ...` (Go modules) and `deps(meko/memory-engine): ...` (the memory engine's
 # production npm packages, which its tarballs bundle), so they cut a Meko release
 # (meko-release.yml); the memory engine's dev-only bumps are `chore(meko/memory-engine): ...`.
+# The web UI's (backend/web_ui) are `deps(meko/web-ui): ...` for its dependencies (react,
+# react-dom, lucide-react, qrcode), which Vite bundles into the web_ui/dist that Meko's release
+# serves, so they cut a Meko release; and `chore(meko/web-ui): ...` for its devDependencies (the
+# Vite and Tailwind build, TypeScript, types, Vitest and happy-dom), which run only at build and
+# test time and ship with the next Meko release rather than cutting one each. A grouped PR with
+# both kinds (react with @types/react) takes the `deps` prefix.
 # No `include: scope`: it would add `(deps)`, giving `deps(agentk)(deps): ...`.
 # extensions/agentk/test/unit/dependabot.test.ts checks this against both scripts.
 version: 2
@@ -96,6 +102,34 @@ updates:
       # alone: a bump that breaks that seam doesn't hold back the others.
       mem0ai:
         patterns: ["mem0ai"]
+      production:
+        dependency-type: production
+        update-types: [minor, patch]
+      development:
+        dependency-type: development
+        update-types: [minor, patch]
+
+  # Meko's web UI (React, Vite, Tailwind). Its dependencies are pinned exactly, and Dependabot keeps them so.
+  - package-ecosystem: npm
+    directory: /backend/web_ui
+    schedule:
+      interval: weekly
+      day: monday
+    assignees:
+      - hari90
+    commit-message:
+      prefix: deps(meko/web-ui)
+      prefix-development: chore(meko/web-ui)
+    # As in AgentK's entry: families with peer ranges on each other share a group for every update
+    # type, and everything else gets one PR per dependency type for minor and patch bumps.
+    groups:
+      react:
+        patterns: ["react", "react-dom", "@types/react", "@types/react-dom"]
+      vite:
+        patterns: ["vite", "@vitejs/*", "vitest"]
+      # tailwindcss and its Vite plugin are released together, at the same version.
+      tailwind:
+        patterns: ["tailwindcss", "@tailwindcss/*"]
       production:
         dependency-type: production
         update-types: [minor, patch]
