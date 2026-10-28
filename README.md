@@ -14,10 +14,10 @@
   <a href="https://mekodata.ai/discord/"><img src="https://img.shields.io/badge/Discord-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
 </p>
 
-**The Context Engine for Agentic Applications.**
+**The Context Engine for Agentic Applications**
 
 Universal, self-learning context for every agent, tool, and team: collective memory, shared
-knowledge, and decision traces in one governed datapack. This repo holds `meko`, which runs Meko on
+knowledge, and decision traces in governed datapacks. This repo holds `meko`, which runs Meko on
 your own machine: one binary with the command line, server, MCP tools and REST API.
 
 ## Start here
@@ -26,9 +26,11 @@ your own machine: one binary with the command line, server, MCP tools and REST A
 |---|---|
 | Run Meko on my machine | [Install](#install) |
 | Give agents like Claude, Codex, or any MCP client, Meko's context | [Connect an agent](#connect-an-agent) |
-| Connect with Meko Cloud | [Connect with Meko Cloud](#connect-with-meko-cloud) |
-| Run many coding sessions that share and learn from each other | [AgentK](extensions/agentk/README.md) |
+| Link to Meko Cloud | [Link to Meko Cloud](#link-to-meko-cloud) |
 | See every command | [Meko CLI](backend/docs/cli.md) |
+| See every MCP tool | [MCP tools](backend/docs/api.md#mcp-at-mcp) |
+| Call the REST API | [REST API](backend/docs/api.md#rest-at-apiv1) |
+| Run many coding sessions that share and learn from each other | [AgentK](extensions/agentk/README.md) |
 | Contribute to Meko | [Contributing](#docs-and-contributing) |
 
 ## Install
@@ -46,16 +48,15 @@ mekosh add_memory "The quick brown fox jumps over the lazy dog"
 mekosh search "What color was the fox?"
 ```
 
-Open web ui
+Open web ui:
 ```sh
 meko ui
 ```
 
 ## Connect an agent
 
-Give agents like Claude, Codex, or any MCP client, Meko's context: Meko serves MCP over Streamable
-HTTP at `http://127.0.0.1:7778/mcp`, with `Authorization: Bearer <token>` (`meko token` prints
-it). `meko connect` adds Meko to your agent, for all your projects:
+Give agents like Claude, Codex, or any MCP client, Meko's context. `meko connect` adds Meko to your
+agent, for all your projects:
 
 ```sh
 meko connect claude      # or codex, kiro, opencode
@@ -68,7 +69,7 @@ The REST API takes the same token:
 curl -s http://127.0.0.1:7778/api/v1/datapacks -H "Authorization: Bearer $(meko token)"
 ```
 
-## Connect with Meko Cloud
+## Link to Meko Cloud
 
 Link Meko to [Meko Cloud](https://cloud.mekodata.ai/) with an API key you make there:
 
@@ -76,8 +77,8 @@ Link Meko to [Meko Cloud](https://cloud.mekodata.ai/) with an API key you make t
 meko cloud_link          # asks for the key, or reads it from stdin; --off unlinks
 ```
 
-Or use the web UI's Settings › Meko Cloud
-([127.0.0.1:7777/settings/meko-cloud](http://127.0.0.1:7777/settings/meko-cloud)).
+Or use the web UI's Settings › Meko Cloud.
+[127.0.0.1:7777/settings/meko-cloud](http://127.0.0.1:7777/settings/meko-cloud)
 
 Once linked, `mekosh` works on both local and Meko Cloud datapacks.
 
@@ -104,7 +105,7 @@ Once linked, `mekosh` works on both local and Meko Cloud datapacks.
 Code, OpenCode and Kiro CLI sessions from a browser or your phone, takes each task from design to
 merged PR, and keeps each project's designs and learnings in a Meko datapack.
 
-Install it with
+Install it with:
 ```sh
 meko install_extension agentk     # -- --agent claude picks its coding agent
 agentk ui                         # opens AgentK in your browser
