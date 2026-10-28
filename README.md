@@ -39,7 +39,7 @@ On Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon:
 gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
 ```
 
-Add a memory and search, once `meko status` shows the memory engine ready:
+Add a memory and search:
 ```sh
 mekosh add_memory "Elementary, my dear Watson"
 mekosh add_memory "The quick brown fox jumps over the lazy dog"
