@@ -46,6 +46,34 @@ Part of the [AgentK design](../design.md).
   newest release's `install.sh`, and an older AgentK's own instructions still name it. Release tarballs carry the usage stats collector's URL (`CALL_HOME_URL`, from the repo variable of that name) when it's set ([Usage stats](usage-stats.md)). Afterwards, AgentK's releases beyond the newest 5 in each lane (`stable`, or the
   prerelease identifier such as `beta`, per tag prefix) are deleted, except the newest `v…` one;
   their tags stay, and Meko's are left alone.
+- **By hand.** Run the AgentK release workflow (`agentk-release.yml`) with **force** to release
+  without `feat`/`fix`/`perf`/`deps` commits, or with a **tag** (`agentk-v…` or `v…`) to rebuild the
+  assets of an existing release.
+- **Dependencies.** Dependabot (`.github/dependabot.yml`) checks AgentK's npm packages and GitHub
+  Actions every Monday (and Meko's Go modules, memory engine and web UI packages: see
+  `backend/AGENTS.md`) and assigns its PRs to the maintainer. Packages that must move together
+  (fastify, react, xterm, vite, typescript with typescript-eslint, eslint) come in one PR per
+  family, majors included. Other minor and patch bumps come grouped (runtime, dev, actions), and
+  each other major bump gets its own PR. `@types/node` stays on the Node major we ship (22).
+  `typescript` stays on 6 until typescript-eslint supports TypeScript 7
+  ([typescript-eslint#10940](https://github.com/typescript-eslint/typescript-eslint/issues/10940)),
+  so its majors don't come at all; drop that `ignore` rule once it lands. Every npm bump is
+  `deps(agentk): …` and releases once merged (the web UI's libraries are devDependencies bundled
+  into the release, so dev-tool bumps release too), while `ci(repo): …` waits for the next
+  release; `test/unit/dependabot.test.ts` checks both. Mark a breaking major with `!` when merging
+  it. Node itself (`.nvmrc`, `NODE_VERSION` in `agentk-release.yml`) is bumped by hand.
+
+The tarball (`agentk-<version>-<linux|darwin>-<arch>.tar.gz`):
+
+```
+agentk-<version>/
+  bin/agentk               launcher (packaging/agentk): hands serve and host to Meko's launcher (meko _launch), which runs an update's probation and rollback
+  bin/agent-k-local        a link to it, by its name before the rename to AgentK
+  node/bin/node            bundled Node runtime
+  lib/                     package.json, dist/, node_modules/, packaging/{systemd,launchd}/, scripts/deps.sh
+  VERSION
+  CALL_HOME_URL            the usage stats collector (only when the repo variable is set)
+```
 
 > **glibc.** RHEL 8 devservers ship glibc 2.28, and node-pty is a native module. Linux builds run
 > in an AlmaLinux 8 container rather than on `ubuntu-latest`, so the binary loads on older hosts.

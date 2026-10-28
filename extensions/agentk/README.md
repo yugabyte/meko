@@ -47,7 +47,7 @@ You also need [Meko](https://mekodata.ai) on this computer: it serves AgentK to 
 `/ext/agentk/` on its own port (7777), and signs you in. Meko also gives projects datapacks (shared
 memory) and lets you share projects. For datapacks, AgentK uses Meko Cloud once you link it in Meko's
 web UI (Settings › Meko Cloud, which links to Meko Cloud's sign-up and login pages to make a key; or
-`meko cloud_link` on a computer without a browser), and otherwise the Meko on this computer. The repo is internal for now, so Meko's installer is fetched with `gh`. Install Meko (the repo's
+`meko cloud_link` on a computer without a browser), and otherwise the Meko on this computer. Install Meko (the repo's
 latest release), and then Meko installs AgentK:
 
 ```sh
@@ -358,7 +358,8 @@ install`, which renames the server's at once and the session host's once the hos
 
 ## Develop
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+See the repo's [CONTRIBUTING.md](../../CONTRIBUTING.md), and [AGENTS.md](AGENTS.md) for AgentK's
+commands and map.
 
 ## License
 
