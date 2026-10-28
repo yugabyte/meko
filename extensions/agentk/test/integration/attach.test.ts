@@ -58,7 +58,7 @@ function tip(dir: string): string {
   }
 }
 
-const { makeEnv, gitRepo, waitFor } = await import('../helpers.js');
+const { makeEnv, gitRepo, readJsonl, waitFor } = await import('../helpers.js');
 const { get } = await import('../../src/server/db.js');
 const { taskPrs } = await import('../../src/server/taskprs.js');
 type TestEnv = Awaited<ReturnType<typeof makeEnv>>;
@@ -104,7 +104,7 @@ describe('sessions on an existing branch or an open PR (real session host + git,
   const transcript = (id: string) => readFileSync(join(env.fakeDir, `${env.core.sessions.row(id).claude_session_id}.jsonl`), 'utf8');
   const idle = (id: string) => waitFor(() => env.core.sessions.get(id), (x) => x.status === 'idle', 10000, `${id} idle`);
   const systemPrompt = () => {
-    const a = (readFileSync(join(env.fakeDir, 'argv.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { args: string[] }).at(-1)!).args;
+    const a = readJsonl<{ args: string[] }>(join(env.fakeDir, 'argv.jsonl')).at(-1)!.args;
     return a[a.indexOf('--append-system-prompt') + 1];
   };
   const sessionCount = () => get<{ n: number }>(env.core.db, 'SELECT COUNT(*) AS n FROM sessions')!.n;

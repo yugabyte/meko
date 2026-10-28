@@ -1,10 +1,10 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { TranscriptCapture, findMekoCaptureScript, mekoPluginInstalls, mekoPluginKeys } from '../../src/server/capture.js';
 import { silentLogger } from '../../src/server/log.js';
-import { FAKE_CAPTURE } from '../helpers.js';
+import { FAKE_CAPTURE, readJsonl } from '../helpers.js';
 
 function registry(claudeDir: string, plugins: Record<string, unknown>): void {
   mkdirSync(join(claudeDir, 'plugins'), { recursive: true });
@@ -60,7 +60,7 @@ describe('TranscriptCapture', () => {
     delete process.env.FAKE_CAPTURE_LOG;
     delete process.env.FAKE_CAPTURE_MS;
   });
-  const runs = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
+  const runs = () => readJsonl(log);
 
   it('runs one capture per session at a time and folds requests made during a run into one more', async () => {
     process.env.FAKE_CAPTURE_MS = '300';

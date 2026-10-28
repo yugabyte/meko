@@ -77,7 +77,7 @@ function tip(dir: string): string {
   }
 }
 
-const { makeEnv, waitFor } = await import('../helpers.js');
+const { makeEnv, readJsonl, waitFor } = await import('../helpers.js');
 const { all, get: dbGet, run } = await import('../../src/server/db.js');
 const { SKIPPED_TEXT } = await import('../../src/server/learn.js');
 const { markGap, projectGaps } = await import('../../src/server/mekogaps.js');
@@ -411,7 +411,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
   const toasts = (): string[] => jsonl('mod-toasts.jsonl');
   function jsonl<T>(file: string): T[] {
     const f = join(env.fakeDir, file);
-    return existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as T) : [];
+    return readJsonl<T>(f);
   }
 
   it('saves what the session learned through the mod before closing a merged session', async () => {

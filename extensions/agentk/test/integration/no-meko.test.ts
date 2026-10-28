@@ -1,11 +1,10 @@
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../../src/server/server.js';
 import { MekoError } from '../../src/server/meko.js';
 import { run } from '../../src/server/db.js';
-import { gitRepo, makeEnv, pinFiles, pinnedDatapack, waitFor, type TestEnv } from '../helpers.js';
+import { gitRepo, makeEnv, pinFiles, pinnedDatapack, readJsonl, waitFor, type TestEnv } from '../helpers.js';
 
 
 describe('projects without a datapack, and without Meko', () => {
@@ -53,7 +52,7 @@ describe('projects without a datapack, and without Meko', () => {
     const s = await env.core.sessions.create(withDp.id, { name: 'Work', kind: 'quick' });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'the session to start');
     const argv = join(env.fakeDir, 'argv.jsonl');
-    const launched = readFileSync(argv, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { args: string[]; env: Record<string, string> });
+    const launched = readJsonl<{ args: string[]; env: Record<string, string> }>(argv);
     expect(launched[0].env.MEKO_DATAPACK_ID).toBe('');
     expect(launched[0].args.join(' ')).not.toContain('dp-adlc-proj-demo-repo-has');
     // No search at start, and no Meko lines in the prompts.

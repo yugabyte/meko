@@ -1,14 +1,14 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
+import { makeEnv, readJsonl, waitFor, type TestEnv } from '../helpers.js';
 import { sessionAgentId } from '../../src/server/meko.js';
 import { all, get } from '../../src/server/db.js';
 import { MEKO_MIN_SHOW_MS } from '../../src/server/mekocalls.js';
 
 const lines = (env: TestEnv, file: string) => {
   const f = join(process.env.FAKE_KIRO_DIR!, file);
-  return existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
+  return readJsonl(f);
 };
 
 describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {

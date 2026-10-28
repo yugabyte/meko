@@ -1,14 +1,14 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { all } from '../../src/server/db.js';
 import { MEKO_MIN_SHOW_MS } from '../../src/server/mekocalls.js';
-import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
+import { makeEnv, readJsonl, waitFor, type TestEnv } from '../helpers.js';
 
 /** Lines of a JSONL file the fake Claude writes, or none yet. */
 function jsonl<T>(env: TestEnv, file: string): T[] {
   const f = join(env.fakeDir, file);
-  return existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as T) : [];
+  return readJsonl<T>(f);
 }
 
 describe("Claude's questions and the design through AgentK's mod (real session host + git, fake claude)", () => {

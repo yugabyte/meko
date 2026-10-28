@@ -40,7 +40,7 @@ vi.mock('../../src/server/github.js', async (orig) => {
   };
 });
 
-const { makeEnv, gitRepo, waitFor } = await import('../helpers.js');
+const { makeEnv, gitRepo, readJsonl, waitFor } = await import('../helpers.js');
 const { get, run } = await import('../../src/server/db.js');
 const { usageOverview } = await import('../../src/server/usage.js');
 type TestEnv = Awaited<ReturnType<typeof makeEnv>>;
@@ -85,7 +85,7 @@ describe('Review a PR sessions (real session host + git, fake claude, GitHub moc
     get<{ text: string }>(env.core.db, 'SELECT text FROM session_events WHERE session_id = ? AND kind = ? ORDER BY id DESC LIMIT 1', id, kind)?.text;
   const transcript = (id: string) => readFileSync(join(env.fakeDir, `${env.core.sessions.row(id).claude_session_id}.jsonl`), 'utf8');
   const idle = (id: string, what = 'idle') => waitFor(() => env.core.sessions.get(id), (x) => x.status === 'idle', 10000, what);
-  const launchArgs = () => readFileSync(join(env.fakeDir, 'argv.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { args: string[] });
+  const launchArgs = () => readJsonl<{ args: string[] }>(join(env.fakeDir, 'argv.jsonl'));
   const systemPrompt = () => {
     const a = launchArgs().at(-1)!.args;
     return a[a.indexOf('--append-system-prompt') + 1];
