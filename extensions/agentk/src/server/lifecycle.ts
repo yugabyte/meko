@@ -1487,8 +1487,9 @@ export class Lifecycle {
   private autoRunWaits(id: string, info: MergeInfo): void {
     if (info.hard.length) this.autoRunBlocked.add(id);
     else this.autoRunBlocked.delete(id);
-    // A question in the terminal had a Needs you notification of its own.
-    const yours = info.hard.filter((b) => b !== CI_FAILING && b !== IN_TERMINAL && !(b === CONFLICTING && this.core.config.pr.resolveConflicts));
+    // A question in the terminal had a Needs you notification of its own, and failing CI and conflicts
+    // AgentK handed over had their watchers'.
+    const yours = info.yours.filter((b) => b !== CI_FAILING && !(b === CONFLICTING && this.core.config.pr.resolveConflicts));
     const key = yours.join('\n');
     if (key === (this.autoRunTold.get(id) ?? '')) return;
     this.autoRunTold.set(id, key);
@@ -1713,24 +1714,34 @@ export class Lifecycle {
    * (`newHead`), even when a fast check already passed, so it never goes before CI has started on a
    * fresh push. GitHub's BLOCKED, when nothing else blocks, waits on a new head (required checks not
    * reported yet); after that it's left to GitHub, as it can't be told from a required merge queue.
+   *
+   * `yours`: the hard blockers only the user can clear, for the Needs you dot (`Session.waitsOnYou`)
+   * and Run to merge's notification. A held review always; failing CI and merge conflicts once AgentK
+   * handed them over (out of attempts, none of its prompts queued or out) or, for conflicts, doesn't
+   * resolve them; and with Run to merge every other one but a question in the terminal (already
+   * Needs you) and changes requested while AgentK addresses a review.
    */
   mergeInfo(row: SessionRow, st: github.PrStatus, reviewer: ReviewerMode, opts: MergeChecks = {}): MergeInfo {
     const { unpushed = false, uncommitted = 0 } = opts;
     const b: string[] = [];
     const hard: string[] = [];
-    const block = (text: string, waits = false) => {
+    const yours: string[] = [];
+    const q = this.queue(row.id);
+    const block = (text: string, waits = false, mine = !!row.auto_run) => {
       b.push(text);
-      if (!waits) hard.push(text);
+      if (waits) return;
+      hard.push(text);
+      if (mine) yours.push(text);
     };
     const working = row.status === 'working' || this.sessions.runtime(row.id).busy;
     const turn = this.inTurn(row);
     if (st.state !== 'OPEN') block('The PR is not open.');
     if (working) block('AgentK is still working.', true);
-    else if (row.status === 'needs_input') block(IN_TERMINAL, turn);
+    else if (row.status === 'needs_input') block(IN_TERMINAL, turn, false);
     if (unpushed) block("The branch has commits that aren't pushed to the PR.", turn || !!opts.turnAtStart);
     if (uncommitted) block(`The worktree has ${uncommitted === 1 ? '1 uncommitted file' : `${uncommitted} uncommitted files`}: commit or discard them.`, turn || !!opts.turnAtStart);
     const ci = github.ciState(st.statusCheckRollup);
-    if (ci === 'failure') block(CI_FAILING);
+    if (ci === 'failure') block(CI_FAILING, false, row.ci_fixes >= MAX_CI_FIXES && !q.ci);
     else if (ci === 'pending') block('CI is still running.', true);
     // A fast check (another workflow's) can pass before CI's own jobs show up, so passed checks hold too.
     else if ((ci === 'none' || ci === 'success') && opts.newHead && row.queued_gate === 'merge') block("CI hasn't started on the latest push yet.", true);
@@ -1741,18 +1752,20 @@ export class Lifecycle {
     // With Claude exited, the turn addressing them is gone until a Resume.
     if (row.review_state === 'addressing') block('AgentK is addressing review findings.', row.status !== 'exited');
     const held = heldSummary(this.db, row.id, row.pr_number);
-    if (held.count) block(heldBlocker(held.authors));
-    if (st.reviewDecision === 'CHANGES_REQUESTED') block('Changes were requested.');
+    if (held.count) block(heldBlocker(held.authors), false, true);
+    if (st.reviewDecision === 'CHANGES_REQUESTED') block('Changes were requested.', false, !!row.auto_run && row.review_state !== 'addressing');
     // Only on a repo that requires approvals: people's approvals can take days, so the merge isn't queued for them.
     if (st.reviewDecision === 'REVIEW_REQUIRED') block('Required approvals are missing.');
-    if (st.mergeable === 'CONFLICTING') block(CONFLICTING);
+    if (st.mergeable === 'CONFLICTING') {
+      block(CONFLICTING, false, !q.conflicts && (!this.core.config.pr.resolveConflicts || row.conflict_fixes >= MAX_CONFLICT_FIXES));
+    }
     if (st.mergeStateStatus === 'BEHIND') block('The branch is behind its base.');
     if (st.mergeStateStatus === 'DRAFT') block('The PR is a draft.');
     // GitHub's own BLOCKED, only when nothing else blocks and only on a new head. Past that it's left to
     // GitHub: a PR not yet in a required merge queue reads BLOCKED too (`gh pr merge` is what queues it),
     // and so does any PR for a moment after an edit reruns a check.
     if (st.mergeStateStatus === 'BLOCKED' && !b.length && opts.newHead) block(CHECKS_PENDING, true);
-    return { canMerge: b.length === 0, blockers: b, queueable: b.length > 0 && !hard.length, hard };
+    return { canMerge: b.length === 0, blockers: b, queueable: b.length > 0 && !hard.length, hard, yours };
   }
 
   async requestReview(row: SessionRow, force: boolean): Promise<void> {

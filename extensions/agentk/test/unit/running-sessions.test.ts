@@ -7,7 +7,7 @@ import { StatusDot } from '../../src/web/components/common.js';
 import { LEARNING_TITLE, STATUS_TEXT, aggregateDot, dotState, dotTitle, harnessLogos, offersLearn, runningSessions, type DotState } from '../../src/web/util.js';
 
 const session = (status: SessionStatus, desired: Session['desired'] = 'running', learning = false, mekoCall = false, queued: QueuedGate | null = null) =>
-  ({ id: status, status, desired, learning, mekoCall, queued, mergeBlockers: [] as string[] }) as Session;
+  ({ id: status, status, desired, learning, mekoCall, queued, stage: 'code', mergeBlockers: [] as string[], waitsOnYou: [] as string[] }) as Session;
 
 describe('runningSessions', () => {
   it('counts sessions whose Claude is up', () => {
@@ -47,7 +47,18 @@ describe('dotState', () => {
     ['exited', false, false, 'merge', 'exited'],
     ['starting', false, false, 'merge', 'starting'],
   ])('%s, learning %s, Meko call %s, queued %s → %s', (status, learning, mekoCall, queued, dot) => {
-    expect(dotState({ status, learning, mekoCall, queued })).toBe(dot);
+    expect(dotState({ status, learning, mekoCall, queued, stage: 'code', waitsOnYou: [] })).toBe(dot);
+  });
+
+  // PR & Review waiting on the user shows Needs you over Claude at its prompt or in a turn, and over
+  // every other dot there; a Claude that isn't there wins, and other stages don't show it.
+  it.each<[string, Session['stage'], SessionStatus, Partial<Session>, DotState]>([
+    ['over learning and a queued gate', 'review', 'idle', { learning: true, queued: 'merge' }, 'needs_input'],
+    ['over a turn calling Meko', 'review', 'working', { mekoCall: true }, 'needs_input'],
+    ['not over exited', 'review', 'exited', {}, 'exited'],
+    ['not outside PR & Review', 'code', 'idle', {}, 'idle'],
+  ])('a blocker only the user can clear: %s', (_, stage, status, over, dot) => {
+    expect(dotState({ ...session(status), ...over, stage, waitsOnYou: ['CI is failing.'] })).toBe(dot);
   });
 
   it('ranks learning in the rail like working (over idle, under needs you), a Meko call over both, and a queued gate over idle, under working', () => {
@@ -65,6 +76,11 @@ describe('dotState', () => {
     ['open-pr', 'Open PR queued: going now'],
   ])("titles a session's tab with what its queued %s waits on", (gate, title) => {
     expect(dotTitle({ ...session('idle', 'running', false, false, gate), mergeBlockers: ['CI is still running.'] })).toBe(title);
+  });
+
+  it("names what the user is to clear in a session's tab title", () => {
+    const s = { ...session('idle'), stage: 'review', waitsOnYou: ['CI is failing.', 'Send the held review from alice to AgentK or dismiss it.'] } as Session;
+    expect(dotTitle(s)).toBe('needs you: CI is failing. Send the held review from alice to AgentK or dismiss it.');
   });
 
   it('gives a learning dot the long tooltip and keeps its label short', () => {

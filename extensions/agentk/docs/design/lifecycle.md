@@ -96,7 +96,16 @@ stateDiagram-v2
   author, REST id and link, and grows while it waits, and **Dismiss** drops them; only PR & Review sends. A held review blocks Merge & Close
   until you decide on it, and since it doesn't clear by itself, it drops a queued merge. A new PR
   on the session drops the old PR's held reviews and a `review-held` prompt still waiting with
-  them; switching the reviewer mode releases none.
+  them; switching the reviewer mode releases none. While one waits the session shows **Needs you**
+  (see *Waiting on you*, below).
+- **Waiting on you.** In PR & Review, the session's dot shows **Needs you** (over idle, recovered and
+  working: the server's status doesn't change) while a merge blocker only you can clear stands:
+  `mergeInfo()` returns them as `yours`, and the state carries them as `Session.waitsOnYou`
+  (`dotState()` in `src/web/util.ts`; the tab's tooltip names them). They are a held review; failing
+  CI or merge conflicts once AgentK has handed them over (out of attempts, with none of its prompts
+  queued or out) or, for conflicts, while **Resolve merge conflicts on PRs** is off; and, with
+  [Run to merge](#run-to-merge) on, every blocker that doesn't clear by itself but a question in the
+  terminal (already Needs you) and changes requested while AgentK addresses a review.
 - **Whose feedback counts.** Anyone with a GitHub account can review a public repo's PR, so a review
   starts a turn by itself only when it comes from someone with a role on the repo (`authorAssociation`
   OWNER, MEMBER or COLLABORATOR), from AgentK, from a bot in *All* (an app installed on the repo),
@@ -228,8 +237,9 @@ It runs on the [queued gates](#queued-gates):
   ready, a blocker that doesn't clear by itself doesn't drop it (`takeQueuedMerge`): AgentK works on
   failing CI and merge conflicts as it always does (their watchers say when they hand over), and for
   every other one (a held review, changes requested, missing approvals, a branch behind its base,
-  unpushed work between turns) you're notified once per new set (`autoRunWaits`; a question in the
-  terminal had its own Needs you notification), and while such a blocker is there the PR is looked
+  unpushed work between turns) you're notified once per new set (`autoRunWaits`, from `mergeInfo()`'s
+  `yours`, which also makes the session show Needs you; a question in the terminal had its own Needs
+  you notification, and changes requested don't count while AgentK addresses a review), and while such a blocker is there the PR is looked
   at every 45 seconds rather than at every 15-second pass (approvals can take days). It merges at the first look that finds
   nothing blocking; if GitHub refuses the merge (a ruleset, say, which the blockers don't show), Run to
   merge stops, so the merge isn't asked for again at every pass. After AgentK's findings

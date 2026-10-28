@@ -321,6 +321,7 @@ export class SessionManager {
       canMerge: m?.canMerge ?? false,
       mergeBlockers: m?.blockers ?? [],
       mergeQueueable: m?.queueable ?? false,
+      waitsOnYou: m?.yours ?? [],
       contextPercent: this.contextFill.get(id) ?? null,
       modLive: this.modLive(id),
       midTurn: this.midTurn(id),

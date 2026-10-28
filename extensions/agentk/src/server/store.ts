@@ -236,6 +236,8 @@ export interface MergeInfo {
   queueable: boolean;
   /** The blockers that don't clear by themselves (a part of `blockers`). */
   hard: string[];
+  /** The blockers only the user can clear (a part of `hard`; Session.waitsOnYou). */
+  yours: string[];
 }
 
 export interface SessionRuntime {
@@ -246,6 +248,7 @@ export interface SessionRuntime {
   canMerge: boolean;
   mergeBlockers: string[];
   mergeQueueable: boolean;
+  waitsOnYou: string[];
   contextPercent: number | null;
   modLive: boolean;
   midTurn: boolean;
@@ -298,6 +301,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     canMerge: rt.canMerge,
     mergeBlockers: rt.mergeBlockers,
     mergeQueueable: rt.mergeQueueable,
+    waitsOnYou: rt.waitsOnYou,
     queued: r.queued_gate,
     queuedInstructions: r.queued_gate === 'open-pr' ? r.queued_instructions : null,
     autoRun: !!r.auto_run,

@@ -38,7 +38,11 @@ Session states, shown with a dot on each session (on its tab, or in the rail) an
 
 - **Working:** the dot's halo blinks
 - **Needs you:** a permission prompt or a question. The diamond knocks three times short and once
-  long, then pauses
+  long, then pauses. It also shows in PR & Review while a merge blocker only you can clear stands
+  (`Session.waitsOnYou`: a held review, CI or merge conflicts AgentK handed over, or with Run to
+  merge any blocker that doesn't clear by itself; see *Waiting on you* in
+  [the task lifecycle](lifecycle.md)), over idle, recovered and working, and over learning, queued
+  and Meko (`dotState()`); the tab's tooltip names what to clear
 - **Idle**, waiting for your next prompt
 - **Recovered** after a restart
 - **Exited**
