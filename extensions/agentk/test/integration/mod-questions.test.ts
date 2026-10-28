@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { all } from '../../src/server/db.js';
+import { MEKO_MIN_SHOW_MS } from '../../src/server/mekocalls.js';
 import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
 
 /** Lines of a JSONL file the fake Claude writes, or none yet. */
@@ -55,7 +56,7 @@ describe("Claude's questions and the design through AgentK's mod (real session h
     expect(events(id, 'ask')).toEqual(["Answered AgentK's question in the AgentK UI"]);
   });
 
-  it("shows Claude's Meko call while it runs, and forgets one whose end never came when the turn ends", async () => {
+  it("shows Claude's Meko call while it runs, forgets one whose end never came when the turn ends, and keeps a quick one's m up a while", async () => {
     const id = await start({ 'meko-ms': '1500' }, { kind: 'quick' });
     await env.core.sessions.submit(id, 'MEKO_SEARCH now');
     expect((await waitFor(() => get(id), (x) => x.mekoCall, 10000, 'the Meko call')).status).toBe('working');
@@ -65,6 +66,18 @@ describe("Claude's questions and the design through AgentK's mod (real session h
     await env.core.sessions.submit(id, 'MEKO_SEARCH again');
     await waitFor(() => get(id).mekoCall, (m) => m, 10000, 'the second Meko call');
     await waitFor(() => get(id), (x) => !x.mekoCall && x.status === 'idle', 10000, 'the turn to end');
+
+    // A call that ends at once, in a turn that goes on: the hold keeps its m, then lets it go.
+    rmSync(join(env.fakeDir, 'meko-lost'));
+    writeFileSync(join(env.fakeDir, 'meko-ms'), '0');
+    writeFileSync(join(env.fakeDir, 'meko-then-ms'), '4000');
+    await env.core.sessions.submit(id, 'MEKO_SEARCH quickly');
+    await waitFor(() => get(id).mekoCall, (m) => m, 10000, 'the quick Meko call');
+    const seen = Date.now();
+    const after = await waitFor(() => get(id), (x) => !x.mekoCall, 10000, 'the m to go');
+    expect(Date.now() - seen).toBeGreaterThanOrEqual(MEKO_MIN_SHOW_MS - 500);
+    expect(after.status).toBe('working');
+    await waitFor(() => get(id).status, (st) => st === 'idle', 10000, 'the turn to end');
   });
 
   it('drops the question once the terminal answers it first', async () => {

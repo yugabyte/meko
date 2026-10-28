@@ -356,8 +356,8 @@ async function turn(text) {
 }
 
 // Like Claude Code calling the Meko MCP server: a memory_search that finds one memory. With the mod,
-// AgentK hears when it starts and ends; a `meko-ms` file makes it take that many milliseconds, and
-// a `meko-lost` file loses its end.
+// AgentK hears when it starts and ends; a `meko-ms` file makes it take that many milliseconds, a
+// `meko-lost` file loses its end, and a `meko-then-ms` file keeps the turn going that long after it.
 async function mekoSearch() {
   const id = `msg_${sessionId.slice(0, 8)}_${process.pid}_${responses++}`;
   const toolUseId = `toolu_${id}`;
@@ -369,6 +369,11 @@ async function mekoSearch() {
       /* a quick call */
     }
     if (!existsSync(join(dir, 'meko-lost'))) await modPost('/mod/meko', { id: toolUseId, state: 'end' }).catch(() => undefined);
+    try {
+      await sleep(Number(readFileSync(join(dir, 'meko-then-ms'), 'utf8')));
+    } catch {
+      /* the turn ends at once */
+    }
   }
   const usage = { input_tokens: 3, output_tokens: 40, cache_read_input_tokens: 5000, cache_creation_input_tokens: 100 };
   const call = { type: 'tool_use', id: toolUseId, name: 'mcp__meko__memory_search', input: { query: 'how does it work' } };

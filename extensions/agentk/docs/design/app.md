@@ -79,6 +79,14 @@ or an interrupted turn's `/mod/turn`) and on a reset (a relaunch or `SessionEnd`
 never got through: Kiro runs `preToolUse` before it asks the user, so a call they refuse has no end,
 and its m stays until the turn ends.
 
+A call against a local Meko often takes less than the 100 ms the server waits before it pushes
+state, so its start and end would go out in one push and the m would never show. So each call's
+start (either source's) also starts a hold, `MekoHold` in `mekocalls.ts`: `Session.mekoCall` stays
+true for at least `MEKO_MIN_SHOW_MS` (1.5 s) from the start, and a call that runs longer shows until
+it ends, as before. A later start moves the hold's end on, so quick calls in a row read as one m;
+when it runs out, a change is pushed. It's on the server because the browser never hears of a call
+that short. The turn's end and a reset clear it with the rest.
+
 - **Where it shows:** only over working; a learn step's dot wins (`dotState()`). The rail ranks it
   above working, starting and learning, under exited and needs you, so the project's dot shows the
   m whenever one of its sessions is calling Meko.
