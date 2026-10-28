@@ -44,7 +44,7 @@ export function SettingsDialog({
   /** The agent Harness shows first (Details: Claude Code); else the default agent. */
   initialAgent?: HarnessId;
   onClose: () => void;
-  /** Opens What's new from one version to another, in place of Settings. */
+  /** Opens What's new from one version to another, in place of Settings: once Settings' saves are in, as a close. */
   onWhatsNew: (from: string, to: string) => void;
 }) {
   const [tab, setTab] = useState<Tab>(initialTab);
@@ -58,20 +58,22 @@ export function SettingsDialog({
   useEffect(() => {
     if (auto.status.state === 'saving') setHeld(false);
   }, [auto.status.state]);
-  const close = () => {
+  // Leaving Settings, closed or for What's new, waits for its saves, so none is left untracked.
+  const leave = (then: () => void) => {
     if (held) {
       typed.current = null;
-      return onClose();
+      return then();
     }
     if (closing.current) return;
     closing.current = true;
     typed.current?.();
     void auto.flush().then((ok) => {
       closing.current = false;
-      if (ok) onClose();
+      if (ok) then();
       else setHeld(true);
     });
   };
+  const close = () => leave(onClose);
   return (
     <Dialog
       title="Settings"
@@ -98,7 +100,7 @@ export function SettingsDialog({
       {tab === 'harness' && (
         <HarnessTab auto={auto} harnesses={harnesses} twoAgents={twoAgents} serverName={serverName} meko={meko} initialAgent={initialAgent} />
       )}
-      {tab === 'updates' && <UpdatesTab initial={update} onWhatsNew={onWhatsNew} />}
+      {tab === 'updates' && <UpdatesTab initial={update} onWhatsNew={(from, to) => leave(() => onWhatsNew(from, to))} />}
       <SaveStatus status={auto.status} held={held} />
     </Dialog>
   );

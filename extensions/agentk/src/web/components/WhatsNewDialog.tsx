@@ -2,11 +2,18 @@ import { useEffect, useState } from 'react';
 import type { ReleaseNotes } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { Busy, Dialog, ErrorText } from './common';
+import type { SettingsTab } from './SettingsDialog';
+
+/** What opened What's new: an update banner, or Settings › Updates, which it opens in place of. */
+export type WhatsNewOpener = 'banner' | 'settings';
+
+/** The Settings tab What's new's Back reopens: Updates when it opened in place of Settings, none from a banner. */
+export const whatsNewBack = (opener: WhatsNewOpener): SettingsTab | undefined => (opener === 'settings' ? 'updates' : undefined);
 
 /**
  * What's new from one version to another: every feat, fix, perf and deps change between their
  * tags, by type, across all the releases in between (GET /api/update/notes). `onBack` returns to
- * where it opened in place of (Settings › Updates).
+ * where it opened in place of (`whatsNewBack`).
  */
 export function WhatsNewDialog({ from, to, onClose, onBack }: { from: string; to: string; onClose: () => void; onBack?: () => void }) {
   const [notes, setNotes] = useState<ReleaseNotes | null>(null);
