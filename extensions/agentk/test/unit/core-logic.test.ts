@@ -134,10 +134,17 @@ describe('config and db', () => {
   });
 
   it('links a datapack by id', () => {
-    expect(mekoDatapackUrl('https://cloud.mekodata.ai', 'eb5ba952-643a-4610-a662-a54a39c82a90')).toBe(
-      'https://cloud.mekodata.ai/datapacks/eb5ba952-643a-4610-a662-a54a39c82a90',
-    );
-    expect(mekoDatapackUrl(null, 'eb5ba952')).toBeNull();
+    const id = 'eb5ba952-643a-4610-a662-a54a39c82a90';
+    const cloud = `https://cloud.mekodata.ai/datapacks/${id}`;
+    expect(mekoDatapackUrl({ webUrl: 'https://cloud.mekodata.ai', source: 'meko' }, id)).toBe(cloud);
+    // A known web app wins over the Meko on this computer's own page.
+    expect(mekoDatapackUrl({ webUrl: 'https://cloud.mekodata.ai', source: 'local' }, id)).toBe(cloud);
+    // The Meko on this computer: its own page, on the origin that serves AgentK.
+    expect(mekoDatapackUrl({ webUrl: null, source: 'local' }, id)).toBe(`/datapacks/${id}`);
+    expect(mekoDatapackUrl({ webUrl: null, source: 'local' }, 'a/b c')).toBe('/datapacks/a%2Fb%20c');
+    for (const source of ['meko', 'config', 'env', 'claude', null] as const) {
+      expect(mekoDatapackUrl({ webUrl: null, source }, id)).toBeNull();
+    }
   });
 
   it('moves projects on the old ak/ branch prefix to ak_{login}/, and keeps one someone set', () => {
@@ -1048,7 +1055,7 @@ describe('Meko credentials', () => {
     delete process.env.MEKO_API_URL;
   });
 
-  it('warns when Meko is on but its web app is not known', () => {
+  it('warns when Meko is on but its web app is not known', async () => {
     clearEnv();
     delete process.env.MEKO_API_URL;
     claudeSettings({});
@@ -1064,10 +1071,18 @@ describe('Meko credentials', () => {
     expect(mekoWebUrlWarning(cfg)).toBeNull();
     cfg.meko.webUrl = '';
     cfg.meko.apiUrl = '';
-    // A Meko on this computer has no web app to set yet.
-    cfg.meko.url = 'http://127.0.0.1:7778/mcp';
-    expect(mekoWebUrlWarning(cfg)).toBe("datapack links and sharing are off: the Meko on this computer (127.0.0.1:7778) has no web app yet; they come with Meko's web UI");
+    // The Meko on this computer: its datapacks link to its own web UI, but it doesn't share.
     cfg.meko.apiKey = '';
+    const reader = new LocalMekoReader(async () => ({ state: 'running', meko: { url: 'http://127.0.0.1:7778/mcp', token: 'local-token' } }));
+    try {
+      await reader.refresh();
+      expect(resolveMekoWithSource(cfg).keySource).toBe('local');
+      expect(mekoWebUrlWarning(cfg)).toBe(
+        "sharing is off: the Meko on this computer (127.0.0.1:7778) doesn't share datapacks. Link it to Meko Cloud in Meko's web UI, under Settings › Meko Cloud",
+      );
+    } finally {
+      reader.clear();
+    }
     expect(mekoWebUrlWarning(cfg)).toBeNull();
   });
 

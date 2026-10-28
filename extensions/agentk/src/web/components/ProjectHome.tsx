@@ -5,6 +5,7 @@ import {
   type DatapackRef,
   type LocalMekoState,
   type MekoDatapack,
+  type MekoStatus,
   type ProjectHome,
   type ProjectSettings,
   type ProjectWithSessions,
@@ -32,7 +33,7 @@ export function ProjectHomeView({
   project,
   order,
   onMove,
-  mekoWebUrl,
+  meko,
   mekoConfigured,
   mekoLocal,
   ghLogin,
@@ -46,7 +47,8 @@ export function ProjectHomeView({
   order: { index: number; count: number };
   /** Moves the project to this index in the list (the tap equivalent of dragging it in the rail). */
   onMove: (index: number) => void;
-  mekoWebUrl: string | null;
+  /** The Meko AgentK uses, for links to its datapacks' pages. */
+  meko: Pick<MekoStatus, 'webUrl' | 'source'>;
   /** There's a Meko to use (Meko's Meko Cloud link, or the Meko on this computer). */
   mekoConfigured: boolean;
   /** The Meko on this computer (`MekoStatus.local`), for what to do while there's no Meko. */
@@ -157,7 +159,7 @@ export function ProjectHomeView({
             {datapacks.map(
               (d) => (
                 <div className="dp" key={d.id}>
-                  <DatapackName className="mono dp-name" id={d.id} name={d.name} mekoWebUrl={mekoWebUrl} />
+                  <DatapackName className="mono dp-name" id={d.id} name={d.name} meko={meko} />
                   <span className={cx('tag', d.role === 'shared' && 'shared')}>{d.role}</span>
                   <span className="num">
                     {d.memoryCount != null ? `${fmt(d.memoryCount)} mem` : ''}

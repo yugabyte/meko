@@ -606,7 +606,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
             project={currentProject}
             order={{ index: projects.indexOf(currentProject), count: projects.length }}
             onMove={(index) => moveProject(currentProject.id, index)}
-            mekoWebUrl={state.meko.webUrl}
+            meko={state.meko}
             mekoConfigured={state.meko.configured}
             mekoLocal={state.meko.local}
             ghLogin={state.ghLogin ?? null}
@@ -620,7 +620,6 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
             project={currentProject}
             sessions={live}
             session={currentSession}
-            mekoWebUrl={state.meko.webUrl}
             meko={state.meko}
             onNewSession={() => setModal({ kind: 'new-session', projectId: currentProject.id })}
             onMove={(preset) => currentSession && setModal({ kind: 'move', sessionId: currentSession.id, preset })}

@@ -371,22 +371,23 @@ export function resolveMekoApiUrl(cfg: Config): string | null {
   return web ? `${web}/api/v1` : null;
 }
 
-/** Why datapack links (and sharing) are off, for the server log; null when the web app is known or Meko is off. */
+/**
+ * Why datapack links or sharing are off, for the server log; null when the web app is known or Meko
+ * is off. The Meko on this computer links its datapacks to its own web UI, but doesn't share them.
+ */
 export function mekoWebUrlWarning(cfg: Config): string | null {
   if (!mekoConfigured(cfg) || resolveMekoWebUrl(cfg)) return null;
-  const off = resolveMekoApiUrl(cfg) ? 'datapack links are' : 'datapack links and sharing are';
   // Only the host: a URL can carry credentials, and this goes to the log.
   let host = 'this Meko';
-  let local = false;
   try {
-    const u = new URL(resolveMeko(cfg).url);
-    host = u.host;
-    local = isLoopback(u.hostname.replace(/^\[|\]$/g, ''));
+    host = new URL(resolveMeko(cfg).url).host;
   } catch {
     /* not a URL: keep the generic name */
   }
-  // A Meko on this computer serves no web app yet: nothing to set.
-  if (local) return `${off} off: the Meko on this computer (${host}) has no web app yet; they come with Meko's web UI`;
+  if (resolveMekoWithSource(cfg).keySource === 'local') {
+    return `sharing is off: the Meko on this computer (${host}) doesn't share datapacks. Link it to Meko Cloud in Meko's web UI, under Settings › Meko Cloud`;
+  }
+  const off = resolveMekoApiUrl(cfg) ? 'datapack links are' : 'datapack links and sharing are';
   return `the Meko web app for ${host} isn't known, so ${off} off. Set it in Meko's web UI, under Settings › Meko Cloud`;
 }
 

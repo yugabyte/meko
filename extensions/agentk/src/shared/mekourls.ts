@@ -23,6 +23,14 @@ export const MEKO_CLOUD_PATH = '/settings/meko-cloud';
 export const MEKO_ACCOUNT_PATH = '/account';
 
 /**
+ * A datapack's page in the web UI of the Meko on this computer (its overview tab), on the same
+ * origin as AgentK. Datapack names link to it while AgentK uses that Meko.
+ */
+export function mekoDatapackPath(datapackId: string): string {
+  return `/datapacks/${encodeURIComponent(datapackId)}`;
+}
+
+/**
  * Installs Meko on this computer: the installer of the repo's latest release, which is Meko's
  * (the README's install line). The banner shown while there's no Meko here gives it.
  */

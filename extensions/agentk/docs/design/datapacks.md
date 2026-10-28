@@ -178,9 +178,10 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   checked, as before. With neither a link nor a Meko here, it
 >   goes on with a warning and the server uses the local Meko once it runs. `--no-meko` no longer
 >   turns Meko off (it warns so): it only keeps a failure from stopping the install and skips Meko's
->   setup for the agents. A local Meko serves no web app yet, so datapack links and sharing stay off
->   until Meko Cloud is linked, and the server log says why. With a Meko, it checks that Meko is
->   set up for Claude Code: the `meko-agent-skills` plugin installed and enabled, a `MEKO_API_KEY`
+>   setup for the agents. With only a local Meko, datapack names link to that Meko's own page for
+>   them (`/datapacks/<id>` on the origin that serves AgentK: `mekoDatapackUrl()` in
+>   `src/web/util.ts`), but sharing stays off until Meko Cloud is linked, and the server log says
+>   so. With a Meko, it checks that Meko is set up for Claude Code: the `meko-agent-skills` plugin installed and enabled, a `MEKO_API_KEY`
 >   in Claude Code's settings (sessions don't inherit the installer's environment), and the `meko`
 >   MCP server registered, both on this Meko server, with tokens it accepts (they may differ from
 >   AgentK's key; the installer deliberately stops at accepted, and the server checks datapacks once
