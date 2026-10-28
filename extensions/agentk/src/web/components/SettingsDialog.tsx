@@ -9,7 +9,7 @@ import { installing, mekoUpdates, refreshMekoUpdate, takeRow, updateFailed, useM
 import type { MekoAuth } from '../signin';
 import { harnessLogosToggle } from '../toggle';
 import { claudeUpdateText, cx, defaultAgentChoice, httpHost, relativeTime } from '../util';
-import { AgentLabel, AgentPicker, Busy, Dialog, ErrorText, Field, InfoCheck, InfoTip } from './common';
+import { AgentLabel, AgentPicker, Busy, Dialog, ErrorText, Field, InfoButton, InfoCheck, InfoPanel } from './common';
 
 export type SettingsTab = 'general' | 'harness' | 'work-queue' | 'updates';
 type Tab = SettingsTab;
@@ -555,10 +555,7 @@ function HarnessTab({
             <span className="label" id="set-agent-label">
               Default agent
             </span>
-            <InfoTip id="set-agent-info" label="Default agent">
-              New sessions and Ask AgentK run on it. The New session dialog can pick another, and a session keeps the agent it
-              started on.
-            </InfoTip>
+            <InfoButton id="set-agent-info" label="Default agent" />
           </div>
           <AgentPicker
             idPrefix="set-agent"
@@ -567,6 +564,10 @@ function HarnessTab({
             onChange={(id) => change({ defaultHarness: id })}
             labelledBy="set-agent-label"
           />
+          <InfoPanel id="set-agent-info">
+            New sessions and Ask AgentK run on it. The New session dialog can pick another, and a session keeps the agent it
+            started on.
+          </InfoPanel>
         </div>
       )}
       {(twoAgents || harnesses.some((h) => h.id !== 'claude' && h.enabled)) && <HarnessLogosSetting />}
@@ -721,10 +722,7 @@ export function MekoLinks({ meko, auth }: { meko: MekoStatus; auth: MekoAuth | n
     <div className="field" id="set-meko-links">
       <div className="info-row">
         <span className="label">Meko</span>
-        <InfoTip id="set-meko-info" label="Meko">
-          {auth?.access === 'local' ? 'Meko opens AgentK on this computer without a sign-in.' : 'Meko signs you in to AgentK.'} Who
-          can reach AgentK, and on which port, are set in Meko’s config.toml, in its <code>[web]</code> table.
-        </InfoTip>
+        <InfoButton id="set-meko-info" label="Meko" />
       </div>
       <span className="hint">
         {meko.source
@@ -733,6 +731,10 @@ export function MekoLinks({ meko, auth }: { meko: MekoStatus; auth: MekoAuth | n
             }`
           : 'Meko isn’t set up: start Meko on this computer (meko start), or link Meko Cloud.'}
       </span>
+      <InfoPanel id="set-meko-info">
+        {auth?.access === 'local' ? 'Meko opens AgentK on this computer without a sign-in.' : 'Meko signs you in to AgentK.'} Who can
+        reach AgentK, and on which port, are set in Meko’s config.toml, in its <code>[web]</code> table.
+      </InfoPanel>
       <div className="settings-actions">
         <a className="btn small" id="set-meko-cloud" href={MEKO_CLOUD_PATH}>
           Meko Cloud ↗
@@ -803,13 +805,10 @@ function AgentMeko({ id, meko }: { id: HarnessId; meko: MekoStatus }) {
             {tag}
           </span>
         </span>
-        {info && (
-          <InfoTip id={`set-${id}-meko-info`} label="Meko">
-            {info}
-          </InfoTip>
-        )}
+        {info && <InfoButton id={`set-${id}-meko-info`} label="Meko" />}
       </div>
       <span className="hint">{hint}</span>
+      {info && <InfoPanel id={`set-${id}-meko-info`}>{info}</InfoPanel>}
       {setUp && (
         <div className="settings-actions">
           <button type="button" id={`set-${id}-meko-setup`} className="btn small" disabled={busy} onClick={() => run(setUp)}>
@@ -872,6 +871,10 @@ function UsageStatsCheck() {
   );
 }
 
+/** Who installs AgentK's updates and what one restarts, behind Settings › Updates' ⓘ. */
+const UPDATES_INFO =
+  'Meko checks for and installs AgentK’s updates. An update restarts only the web server: sessions keep running and the page reconnects on its own.';
+
 function UpdatesTab({ initial, onWhatsNew }: { initial: UpdateStatus; onWhatsNew: (from: string, to: string) => void }) {
   // Meko checks for AgentK's updates, installs them and keeps Update automatically (mekoupdate.ts).
   const { row, error: mekoError, loaded } = useMekoUpdate();
@@ -916,7 +919,14 @@ function UpdatesTab({ initial, onWhatsNew }: { initial: UpdateStatus; onWhatsNew
           <Busy label="Asking Meko" />
         </p>
       ) : mekoError ? (
-        <p className="muted">{mekoError}</p>
+        // Why updates can't be had here, with who installs them behind the same ⓘ as Update automatically.
+        <div className="info-check">
+          <div className="info-row">
+            <p className="muted">{mekoError}</p>
+            <InfoButton id="set-auto-update-info" label="Updates" />
+          </div>
+          <InfoPanel id="set-auto-update-info">{UPDATES_INFO}</InfoPanel>
+        </div>
       ) : (
         <InfoCheck
           id="set-auto-update"
@@ -925,8 +935,7 @@ function UpdatesTab({ initial, onWhatsNew }: { initial: UpdateStatus; onWhatsNew
           disabled={!can || busy === 'auto'}
           onChange={(on) => void run('auto', () => mekoUpdates.setAuto(on))}
         >
-          Meko checks for and installs AgentK’s updates. An update restarts only the web server: sessions keep running and the
-          page reconnects on its own.
+          {UPDATES_INFO}
         </InfoCheck>
       )}
       {row?.waiting && <p className="muted">An automatic update is waiting: {row.waiting}</p>}

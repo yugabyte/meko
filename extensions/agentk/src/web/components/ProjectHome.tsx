@@ -521,14 +521,19 @@ function ProjectSettingsForm({
             <span>Browser notifications</span>
           </label>
           {(mekoConfigured || project.settings.mekoLog) && (
-            <div className="check-row">
-              <InfoCheck id="ps-mekolog" label="Log Meko calls" checked={s.mekoLog} onChange={(on) => set('mekoLog', on)}>
-                What AgentK and the agent send to Meko for each session, and what comes back. Deleted with the session.
-              </InfoCheck>
-              <button type="button" className="link-btn" onClick={() => navigate({ view: 'meko', projectId: project.id, sessionId: null })}>
-                View calls
-              </button>
-            </div>
+            <InfoCheck
+              id="ps-mekolog"
+              label="Log Meko calls"
+              checked={s.mekoLog}
+              onChange={(on) => set('mekoLog', on)}
+              extra={
+                <button type="button" className="link-btn view-calls" onClick={() => navigate({ view: 'meko', projectId: project.id, sessionId: null })}>
+                  View calls
+                </button>
+              }
+            >
+              What AgentK and the agent send to Meko for each session, and what comes back. Deleted with the session.
+            </InfoCheck>
           )}
         </div>
         {order.count > 1 && (

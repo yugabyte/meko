@@ -119,13 +119,13 @@ describe('Settings › Harness', () => {
     configured: true, url: 'https://mcp.mekodata.ai/mcp', source: 'meko', webUrl: null, local: 'running',
     claude: { gaps: [], unchecked: [], checking: false }, kiro: { gaps: [] }, opencode: { own: false }, ...o,
   });
-  it("keeps an agent's explanations behind a closed ⓘ, outside its checkbox's label", () => {
+  it("keeps an agent's explanations behind a closed ⓘ, outside its checkbox's label, opening under the row", () => {
     const html = renderToStaticMarkup(createElement(AgentSettings, {
       id: 'kiro', s: settings, status: status('kiro', {}), checking: false, updating: false,
       onEnable: () => undefined, onChange: () => undefined, onCheck: () => undefined, onUpdate: () => undefined,
     }));
     expect(html).toMatch(/<\/label><button type="button" class="icon-btn info-btn" aria-expanded="false" aria-controls="set-kiro-trust-info"/);
-    expect(html).toMatch(/<p id="set-kiro-trust-info" class="info-panel" hidden="">/);
+    expect(html).toMatch(/<\/button><\/div><p id="set-kiro-trust-info" class="info-panel" hidden="">/);
   });
 
   it.each([
@@ -150,7 +150,7 @@ describe('Settings › General', () => {
     }));
     expect([...html.matchAll(/<a[^>]*id="(set-meko-[\w-]+)"[^>]*href="([^"]+)"/g)].map(([, id, href]) => `${id} ${href}`))
       .toEqual(['set-meko-cloud /settings/meko-cloud', 'set-meko-account /account']);
-    expect(html).toContain('<span class="hint">AgentK uses the Meko on this computer.</span>');
-    expect(html).toMatch(/<p id="set-meko-info" class="info-panel" hidden="">Meko opens AgentK on this computer without a sign-in\./);
+    // The ⓘ's text opens under the setting, after its status line.
+    expect(html).toMatch(/<span class="hint">AgentK uses the Meko on this computer\.<\/span><p id="set-meko-info" class="info-panel" hidden="">Meko opens AgentK on this computer without a sign-in\./);
   });
 });

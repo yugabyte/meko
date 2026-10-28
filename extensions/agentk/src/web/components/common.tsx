@@ -339,9 +339,9 @@ export function ErrorText({ error }: { error: string | null }) {
 }
 
 /**
- * A labelled field, with an optional one-line hint under it. With `info`, its explanation sits
- * behind an ⓘ beside the label, and the label names the control by its id (`info.for`): a label
- * wrapping the field would name the ⓘ, its first button, instead.
+ * A labelled field, with an optional one-line hint under it. With `info`, an ⓘ sits beside the
+ * label and its explanation opens under the field, and the label names the control by its id
+ * (`info.for`): a label wrapping the field would name the ⓘ, its first button, instead.
  */
 export function Field({ label, children, hint, info }: { label: string; children: ReactNode; hint?: ReactNode; info?: { for: string; text: ReactNode } }) {
   if (!info) {
@@ -353,23 +353,23 @@ export function Field({ label, children, hint, info }: { label: string; children
       </label>
     );
   }
+  const id = `${info.for}-info`;
   return (
     <div className="field">
       <div className="info-row">
         <label className="label" htmlFor={info.for}>
           {label}
         </label>
-        <InfoTip id={`${info.for}-info`} label={label}>
-          {info.text}
-        </InfoTip>
+        <InfoButton id={id} label={label} />
       </div>
       {children}
       {hint && <span className="hint">{hint}</span>}
+      <InfoPanel id={id}>{info.text}</InfoPanel>
     </div>
   );
 }
 
-// The id of the one InfoTip open on the page, if any: opening another closes it.
+// The id of the one ⓘ open on the page, if any: opening another closes it.
 let openInfo: string | null = null;
 const infoListeners = new Set<() => void>();
 const setOpenInfo = (id: string | null) => {
@@ -380,14 +380,15 @@ const subscribeInfo = (f: () => void) => {
   infoListeners.add(f);
   return () => void infoListeners.delete(f);
 };
+const useInfoOpen = (id: string) => useSyncExternalStore(subscribeInfo, () => openInfo, () => null) === id;
 
 /**
- * A setting's explanation behind an ⓘ: a click or tap shows it under the setting's row
- * (`.info-row`), and closes any other one open; another hides it. Settings keep only a short line
- * inline, so anything longer goes here. On touch the ⓘ is a 40 px `.icon-btn`.
+ * A setting's ⓘ: a click or tap opens its `InfoPanel` (the same `id`), closing any other one open;
+ * another closes it. Settings keep only a short line inline, so anything longer goes in the panel,
+ * placed under the setting. On touch the ⓘ is a 40 px `.icon-btn`.
  */
-export function InfoTip({ id, label, children }: { id: string; label: string; children: ReactNode }) {
-  const open = useSyncExternalStore(subscribeInfo, () => openInfo, () => null) === id;
+export function InfoButton({ id, label }: { id: string; label: string }) {
+  const open = useInfoOpen(id);
   useEffect(
     () => () => {
       if (openInfo === id) setOpenInfo(null);
@@ -395,31 +396,40 @@ export function InfoTip({ id, label, children }: { id: string; label: string; ch
     [id],
   );
   return (
-    <>
-      <button
-        type="button"
-        className={cx('icon-btn', 'info-btn', open && 'on')}
-        aria-expanded={open}
-        aria-controls={id}
-        aria-label={`About ${label}`}
-        onClick={() => setOpenInfo(open ? null : id)}
-      >
-        <span aria-hidden="true">i</span>
-      </button>
-      <p id={id} className="info-panel" hidden={!open}>
-        {children}
-      </p>
-    </>
+    <button
+      type="button"
+      className={cx('icon-btn', 'info-btn', open && 'on')}
+      aria-expanded={open}
+      aria-controls={id}
+      aria-label={`About ${label}`}
+      onClick={() => setOpenInfo(open ? null : id)}
+    >
+      <span aria-hidden="true">i</span>
+    </button>
   );
 }
 
-/** A checkbox with its explanation behind an ⓘ beside it, outside its label so a tap on it doesn't tick the box. */
+/** What an `InfoButton` opens: always in the page, hidden while closed. */
+export function InfoPanel({ id, children }: { id: string; children: ReactNode }) {
+  const open = useInfoOpen(id);
+  return (
+    <p id={id} className="info-panel" hidden={!open}>
+      {children}
+    </p>
+  );
+}
+
+/**
+ * A checkbox with its ⓘ beside it, outside its label so a tap on it doesn't tick the box, and its
+ * explanation under them. `extra` sits in the row after the ⓘ (Log Meko calls' View calls).
+ */
 export function InfoCheck({
   id,
   label,
   checked,
   disabled,
   onChange,
+  extra,
   children,
 }: {
   id: string;
@@ -427,17 +437,20 @@ export function InfoCheck({
   checked: boolean;
   disabled?: boolean;
   onChange: (on: boolean) => void;
+  extra?: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <div className="info-row">
-      <label className="check">
-        <input id={id} type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
-        <span>{label}</span>
-      </label>
-      <InfoTip id={`${id}-info`} label={label}>
-        {children}
-      </InfoTip>
+    <div className="info-check">
+      <div className="info-row">
+        <label className="check">
+          <input id={id} type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
+          <span>{label}</span>
+        </label>
+        <InfoButton id={`${id}-info`} label={label} />
+        {extra}
+      </div>
+      <InfoPanel id={`${id}-info`}>{children}</InfoPanel>
     </div>
   );
 }
