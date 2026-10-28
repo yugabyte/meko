@@ -6,7 +6,7 @@ import { parseWorkLink } from '../../src/shared/worklinks.js';
 import { openDb, run } from '../../src/server/db.js';
 import type { ReviewRequest } from '../../src/server/github.js';
 import type { AskRun } from '../../src/server/askagentk.js';
-import { readSlackLater, signInSettings, slackArgs, type SlackLater } from '../../src/server/slack.js';
+import { readSlackLater, signInSettings, slackArgs, slackPrompt, type SlackLater } from '../../src/server/slack.js';
 import { checkStartItem, setItemSession, WorkQueue, type WorkQueueDeps } from '../../src/server/workqueue.js';
 
 describe('work item links', () => {
@@ -227,15 +227,17 @@ describe('syncing the work queue', () => {
 describe("reading Slack's Later list", () => {
   const ran = (out: unknown, o: Partial<AskRun> = {}): AskRun => ({ stdout: JSON.stringify(out), stderr: '', code: 0, spawnError: null, timedOut: false, aborted: false, ...o });
 
-  it('loads your connectors but none of your permissions, and no built-in tools', () => {
+  it('loads your connectors but none of your permissions, and no built-in tools but ToolSearch', () => {
     const args = slackArgs('sonnet', ['mcp__claude_ai_Slack__slack_search_public_and_private'], { env: { A: '1' } });
     const after = (flag: string) => args[args.indexOf(flag) + 1];
     expect(args).not.toContain('--strict-mcp-config');
-    expect([after('--tools'), after('--permission-mode'), after('--setting-sources')]).toEqual(['', 'default', 'project']);
+    expect([after('--tools'), after('--permission-mode'), after('--setting-sources')]).toEqual(['ToolSearch', 'default', 'project']);
+    expect(after('--system-prompt')).toContain('"select:mcp__claude_ai_Slack__slack_search_public_and_private"');
     expect(args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--disallowedTools'))).toEqual(['mcp__claude_ai_Slack__slack_search_public_and_private']);
     expect(args).toContain('mcp__claude_ai_Slack__slack_send_message');
     expect(JSON.parse(after('--settings'))).toEqual({ env: { A: '1' }, disableAllHooks: true });
     expect(slackArgs('', [])).not.toContain('--allowedTools');
+    expect(slackPrompt([])).not.toContain('ToolSearch');
   });
 
   it('takes only the sign-in part of your Claude Code settings', () => {

@@ -164,7 +164,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       too), through the route the UI already uses. Names, branches and PR titles in its context stay
       data in the prompt, and nothing of what's asked goes into logs or the usage report.
 - [ ] The work queue's Slack read (`slack.ts`) is a `claude -p` that loads the user's MCP servers
-      and connectors and reads messages other people wrote, so it keeps `--tools ""`,
+      and connectors and reads messages other people wrote, so it keeps `--tools ToolSearch`,
       `--permission-mode default`, `--setting-sources project` in its empty folder with only the
       sign-in part of the user's settings (`signInSettings()`: no allow rules or default mode),
       hooks off, only `[work_queue] slack_tools` allowed and the Slack connector's writes denied; its
