@@ -1487,8 +1487,9 @@ export class Lifecycle {
   private autoRunWaits(id: string, info: MergeInfo): void {
     if (info.hard.length) this.autoRunBlocked.add(id);
     else this.autoRunBlocked.delete(id);
-    // A question in the terminal had a Needs you notification of its own.
-    const yours = info.hard.filter((b) => b !== CI_FAILING && b !== IN_TERMINAL && !(b === CONFLICTING && this.core.config.pr.resolveConflicts));
+    // Failing CI and conflicts AgentK handed over had their watchers' notification (a question in
+    // the terminal, its own Needs you, is never in the list).
+    const yours = info.yoursWithAutoRun.filter((b) => b !== CI_FAILING && !(b === CONFLICTING && this.core.config.pr.resolveConflicts));
     const key = yours.join('\n');
     if (key === (this.autoRunTold.get(id) ?? '')) return;
     this.autoRunTold.set(id, key);
@@ -1594,14 +1595,18 @@ export class Lifecycle {
       if (row.ci_fixes) this.sessions.update(id, { ci_fixes: 0 });
       return;
     }
-    if (ci.state !== 'failure' || !head || row.ci_fix_head === head || row.stage !== 'review' || st.state !== 'OPEN') return;
+    if (ci.state !== 'failure' || !head || row.stage !== 'review' || st.state !== 'OPEN') return;
+    // AgentK's last attempt ended on this head without a fix (no push): handed over like a new head.
+    const lastTried = row.ci_fixes === MAX_CI_FIXES && !q.ci;
+    if (row.ci_fix_head === head && !lastTried) return;
     let since = this.ciFailSince.get(id);
     if (since?.head !== head) this.ciFailSince.set(id, (since = { head, at: Date.now() }));
     if ((ci.pending && Date.now() - since.at < CI_SETTLE_MS) || unpushed) return;
     this.ciFailSince.delete(id);
     const names = ci.failed.map((c) => c.name).join(', ');
     if (row.ci_fixes >= MAX_CI_FIXES) {
-      this.sessions.update(id, { ci_fix_head: head });
+      // Past MAX_CI_FIXES: handed over on ci_fix_head (mergeInfo's `yours`), and told once.
+      this.sessions.update(id, { ci_fix_head: head, ci_fixes: MAX_CI_FIXES + 1 });
       this.sessions.event(id, 'ci', `CI failed: ${names}. Still failing after ${MAX_CI_FIXES} fix attempts; over to you`, { sha: head, checks: ci.failed });
       this.sessions.notifyUser(id, 'CI still failing', `${names} failed after ${MAX_CI_FIXES} fix attempts. Take a look.`);
       return;
@@ -1638,10 +1643,13 @@ export class Lifecycle {
       if (row.conflict_fixes || row.conflict_head) this.sessions.update(id, { conflict_head: null, conflict_fixes: 0 });
       return;
     }
-    if (!on || st.mergeable !== 'CONFLICTING' || !head || row.conflict_head === head || row.stage !== 'review' || st.state !== 'OPEN' || unpushed) return;
+    if (!on || st.mergeable !== 'CONFLICTING' || !head || row.stage !== 'review' || st.state !== 'OPEN' || unpushed) return;
+    // AgentK's last attempt ended on this head and it still conflicts: handed over like a new head.
+    if (row.conflict_head === head && !(row.conflict_fixes === MAX_CONFLICT_FIXES && !q.conflicts)) return;
     const base = row.base_branch;
     if (row.conflict_fixes >= MAX_CONFLICT_FIXES) {
-      this.sessions.update(id, { conflict_head: head });
+      // Past MAX_CONFLICT_FIXES: handed over on conflict_head (mergeInfo's `yours`), and told once.
+      this.sessions.update(id, { conflict_head: head, conflict_fixes: MAX_CONFLICT_FIXES + 1 });
       this.sessions.event(id, 'conflicts', `Merge conflicts with ${base}. Still there after ${MAX_CONFLICT_FIXES} attempts; over to you`, { sha: head });
       this.sessions.notifyUser(id, 'Merge conflicts remain', `PR #${st.number} still conflicts with ${base} after ${MAX_CONFLICT_FIXES} attempts. Take a look.`);
       return;
@@ -1713,24 +1721,38 @@ export class Lifecycle {
    * (`newHead`), even when a fast check already passed, so it never goes before CI has started on a
    * fresh push. GitHub's BLOCKED, when nothing else blocks, waits on a new head (required checks not
    * reported yet); after that it's left to GitHub, as it can't be told from a required merge queue.
+   *
+   * The hard blockers only the user can clear, for the Needs you dot (`Session.waitsOnYou`) and Run
+   * to merge's notification: `yours`, a held review, and failing CI or merge conflicts AgentK handed
+   * over on this head (watchCi, watchConflicts) or, for conflicts, doesn't resolve; and
+   * `yoursWithAutoRun`, those and, while Run to merge is on, every other one but a question in the
+   * terminal (already Needs you) and changes requested while AgentK addresses a review. Both are
+   * kept so that turning Run to merge off or on shows at once, without a look at the PR.
    */
   mergeInfo(row: SessionRow, st: github.PrStatus, reviewer: ReviewerMode, opts: MergeChecks = {}): MergeInfo {
     const { unpushed = false, uncommitted = 0 } = opts;
     const b: string[] = [];
     const hard: string[] = [];
-    const block = (text: string, waits = false) => {
+    const yours: string[] = [];
+    const yoursWithAutoRun: string[] = [];
+    const block = (text: string, waits = false, mine: 'always' | 'auto-run' | 'never' = 'auto-run') => {
       b.push(text);
-      if (!waits) hard.push(text);
+      if (waits) return;
+      hard.push(text);
+      if (mine === 'always') yours.push(text);
+      if (mine !== 'never') yoursWithAutoRun.push(text);
     };
+    const handedOver = (fixes: number, max: number, at: string | null) => fixes > max && !!st.headRefOid && at === st.headRefOid;
     const working = row.status === 'working' || this.sessions.runtime(row.id).busy;
     const turn = this.inTurn(row);
     if (st.state !== 'OPEN') block('The PR is not open.');
     if (working) block('AgentK is still working.', true);
-    else if (row.status === 'needs_input') block(IN_TERMINAL, turn);
+    else if (row.status === 'needs_input') block(IN_TERMINAL, turn, 'never');
     if (unpushed) block("The branch has commits that aren't pushed to the PR.", turn || !!opts.turnAtStart);
     if (uncommitted) block(`The worktree has ${uncommitted === 1 ? '1 uncommitted file' : `${uncommitted} uncommitted files`}: commit or discard them.`, turn || !!opts.turnAtStart);
     const ci = github.ciState(st.statusCheckRollup);
-    if (ci === 'failure') block(CI_FAILING);
+    // AgentK's to fix until it hands it over.
+    if (ci === 'failure') block(CI_FAILING, false, handedOver(row.ci_fixes, MAX_CI_FIXES, row.ci_fix_head) ? 'always' : 'never');
     else if (ci === 'pending') block('CI is still running.', true);
     // A fast check (another workflow's) can pass before CI's own jobs show up, so passed checks hold too.
     else if ((ci === 'none' || ci === 'success') && opts.newHead && row.queued_gate === 'merge') block("CI hasn't started on the latest push yet.", true);
@@ -1741,18 +1763,21 @@ export class Lifecycle {
     // With Claude exited, the turn addressing them is gone until a Resume.
     if (row.review_state === 'addressing') block('AgentK is addressing review findings.', row.status !== 'exited');
     const held = heldSummary(this.db, row.id, row.pr_number);
-    if (held.count) block(heldBlocker(held.authors));
-    if (st.reviewDecision === 'CHANGES_REQUESTED') block('Changes were requested.');
+    if (held.count) block(heldBlocker(held.authors), false, 'always');
+    if (st.reviewDecision === 'CHANGES_REQUESTED') block('Changes were requested.', false, row.review_state === 'addressing' ? 'never' : 'auto-run');
     // Only on a repo that requires approvals: people's approvals can take days, so the merge isn't queued for them.
     if (st.reviewDecision === 'REVIEW_REQUIRED') block('Required approvals are missing.');
-    if (st.mergeable === 'CONFLICTING') block(CONFLICTING);
+    if (st.mergeable === 'CONFLICTING') {
+      const handed = !this.core.config.pr.resolveConflicts || handedOver(row.conflict_fixes, MAX_CONFLICT_FIXES, row.conflict_head);
+      block(CONFLICTING, false, handed ? 'always' : 'never');
+    }
     if (st.mergeStateStatus === 'BEHIND') block('The branch is behind its base.');
     if (st.mergeStateStatus === 'DRAFT') block('The PR is a draft.');
     // GitHub's own BLOCKED, only when nothing else blocks and only on a new head. Past that it's left to
     // GitHub: a PR not yet in a required merge queue reads BLOCKED too (`gh pr merge` is what queues it),
     // and so does any PR for a moment after an edit reruns a check.
     if (st.mergeStateStatus === 'BLOCKED' && !b.length && opts.newHead) block(CHECKS_PENDING, true);
-    return { canMerge: b.length === 0, blockers: b, queueable: b.length > 0 && !hard.length, hard };
+    return { canMerge: b.length === 0, blockers: b, queueable: b.length > 0 && !hard.length, hard, yours, yoursWithAutoRun };
   }
 
   async requestReview(row: SessionRow, force: boolean): Promise<void> {

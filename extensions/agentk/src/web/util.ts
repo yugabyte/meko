@@ -162,11 +162,21 @@ const LEARNING_SHOWS: ReadonlySet<SessionStatus> = new Set(['idle', 'recovered',
 /** The statuses a queued gate shows over: Claude between turns. Anything else says more. */
 const QUEUED_SHOWS: ReadonlySet<SessionStatus> = new Set(['idle', 'recovered']);
 
+/** The statuses PR & Review waiting on the user shows Needs you over: Claude there, in a turn or not. */
+const YOURS_SHOWS: ReadonlySet<SessionStatus> = new Set(['idle', 'recovered', 'working']);
+
+/** The session is in PR & Review and a merge blocker only the user can clear stands (`Session.waitsOnYou`). */
+function waitsOnYou(s: Pick<Session, 'stage' | 'waitsOnYou'>): boolean {
+  return s.stage === 'review' && s.waitsOnYou.length > 0;
+}
+
 /**
- * What a session's dot shows: `Session.learning` over idle, recovered and working, then
- * `Session.queued` over idle and recovered, then `Session.mekoCall` over working.
+ * What a session's dot shows: Needs you while PR & Review waits on the user, over idle, recovered
+ * and working; then `Session.learning` over idle, recovered and working, then `Session.queued` over
+ * idle and recovered, then `Session.mekoCall` over working.
  */
-export function dotState(s: Pick<Session, 'status' | 'learning' | 'queued' | 'mekoCall'>): DotState {
+export function dotState(s: Pick<Session, 'status' | 'learning' | 'queued' | 'mekoCall' | 'stage' | 'waitsOnYou'>): DotState {
+  if (waitsOnYou(s) && YOURS_SHOWS.has(s.status)) return 'needs_input';
   if (s.learning && LEARNING_SHOWS.has(s.status)) return 'learning';
   if (s.queued && QUEUED_SHOWS.has(s.status)) return 'queued';
   return s.mekoCall && s.status === 'working' ? 'meko' : s.status;
@@ -717,12 +727,13 @@ export function sessionTabTitle(s: Session): string {
 }
 
 /**
- * A session's dot in words, for its tab's tooltip: the long learning text, or what a queued gate
- * waits on. The queued dot shows between turns, when a queued Open PR is already going (the pill's
- * "goes when the turn ends" is for mid-turn).
+ * A session's dot in words, for its tab's tooltip: the long learning text, what the user is to
+ * clear in PR & Review, or what a queued gate waits on. The queued dot shows between turns, when a
+ * queued Open PR is already going (the pill's "goes when the turn ends" is for mid-turn).
  */
 export function dotTitle(s: Session): string {
   const dot = dotState(s);
+  if (dot === 'needs_input' && s.status !== 'needs_input') return `${STATUS_TEXT.needs_input}: ${s.waitsOnYou.join(' ')}`;
   if (dot === 'learning') return LEARNING_TITLE;
   if (dot === 'queued') return s.queued === 'open-pr' ? 'Open PR queued: going now' : (queuedText(s)?.replace(/^✓ /, '') ?? STATUS_TEXT.queued);
   return STATUS_TEXT[dot];

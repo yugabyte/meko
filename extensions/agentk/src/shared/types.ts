@@ -811,6 +811,15 @@ export interface Session {
    * addressed). The gate reads Merge when ready.
    */
   mergeQueueable: boolean;
+  /**
+   * The merge blockers only the user can clear (a part of `mergeBlockers`): a review held for them,
+   * failing CI or merge conflicts AgentK handed over after its attempts on this head, or conflicts
+   * while Resolve merge conflicts on PRs is off; and with Run to merge every other blocker that doesn't
+   * clear by itself, except a question in the terminal (the status says it), changes requested while
+   * AgentK addresses a review, and failing CI or conflicts AgentK still has attempts for. In PR &
+   * Review the session's dot shows Needs you while there's one (`dotState()`).
+   */
+  waitsOnYou: string[];
   /** A gate pressed early, waiting to go (kept in state.db across restarts); null when none. */
   queued: QueuedGate | null;
   /** The user's instructions for a queued Open PR (OpenPrRequest); null when it has none, or none is queued. */

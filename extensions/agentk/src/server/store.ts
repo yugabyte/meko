@@ -236,6 +236,10 @@ export interface MergeInfo {
   queueable: boolean;
   /** The blockers that don't clear by themselves (a part of `blockers`). */
   hard: string[];
+  /** The blockers only the user can clear (a part of `hard`; Session.waitsOnYou). */
+  yours: string[];
+  /** `yours`, and while Run to merge is on, the other hard blockers it waits on the user for (lifecycle.ts mergeInfo). */
+  yoursWithAutoRun: string[];
 }
 
 export interface SessionRuntime {
@@ -246,6 +250,9 @@ export interface SessionRuntime {
   canMerge: boolean;
   mergeBlockers: string[];
   mergeQueueable: boolean;
+  /** MergeInfo's `yours` and `yoursWithAutoRun`; `toSession` picks by `auto_run`. */
+  yours: string[];
+  yoursWithAutoRun: string[];
   contextPercent: number | null;
   modLive: boolean;
   midTurn: boolean;
@@ -298,6 +305,8 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     canMerge: rt.canMerge,
     mergeBlockers: rt.mergeBlockers,
     mergeQueueable: rt.mergeQueueable,
+    // Read from the row, so turning Run to merge off or on shows before the next look at the PR.
+    waitsOnYou: r.auto_run ? rt.yoursWithAutoRun : rt.yours,
     queued: r.queued_gate,
     queuedInstructions: r.queued_gate === 'open-pr' ? r.queued_instructions : null,
     autoRun: !!r.auto_run,
