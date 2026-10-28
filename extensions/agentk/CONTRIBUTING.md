@@ -70,6 +70,13 @@ for the PR as a whole. Check a subject or title with `sh scripts/check-title.sh 
 repo root; the
 `PR title` workflow (`.github/workflows/pr-title.yml`) runs it on every PR title. See `.claude/skills/commit/SKILL.md` for the full rules.
 
+## Issues
+
+File issues through the forms on GitHub's New issue page (`.github/ISSUE_TEMPLATE/`: bug,
+feature and task). Agents follow `.claude/skills/issue/SKILL.md`, which writes the same sections
+and sets the type, the `bug` or `enhancement` label and the product label (`agentk`, `meko`,
+`presenter`) that the forms can't.
+
 ## Dependencies
 
 Dependabot (`.github/dependabot.yml`) checks AgentK's npm packages and GitHub Actions every Monday

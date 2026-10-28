@@ -1,0 +1,64 @@
+# The issue skill (.claude/skills/issue/SKILL.md) writes agents' bug reports with these headings:
+# change both together.
+name: Bug report
+description: Something in Meko, AgentK or Presenter doesn't work as it should.
+type: Bug
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search the [existing issues](https://github.com/yugabyte/meko/issues?q=is%3Aissue) first.
+        This repo is public: leave out tokens, API keys, internal hostnames and private paths (write `~` for your home folder).
+  - type: dropdown
+    id: product
+    attributes:
+      label: Product
+      options:
+        - Meko
+        - AgentK
+        - Presenter
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "`meko status` lists Meko's version and each extension's. Paste those lines, not its links."
+      placeholder: Meko 0.20261028.1, AgentK 0.20261028.3
+    validations:
+      required: true
+  - type: textarea
+    id: what-happens
+    attributes:
+      label: What happens
+      description: What you did, what you saw, and any error message.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1.
+        2.
+        3.
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or output
+      description: "The lines around the problem, from `meko logs -n 200`, `agentk status` or the terminal. They're shown as code, so no backticks are needed."
+      render: text
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Your OS and its version. For AgentK, also the agent and its version (Claude Code, OpenCode or Kiro).
+      placeholder: macOS 15.5, Claude Code 2.1.302
