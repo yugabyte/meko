@@ -114,7 +114,7 @@ describe('opening diffs by default', () => {
   // Each file as [path, rows, has comments]; the files named gone* are deleted.
   it.each<[string, RowBudget, [string, number, boolean][], string[]]>([
     ['keeps deleted files closed, and leaves their rows to the next files', DESKTOP_BUDGET, [['gone', 1000, false], ['a', 1000, false], ['b', 1000, false]], ['a', 'b']],
-    ['opens a deleted file with comments', DESKTOP_BUDGET, [['gone', 10, true], ['a', 10, false]], ['gone', 'a']],
+    ['opens a deleted file with comments, and counts its rows like any open file', DESKTOP_BUDGET, [['gone', 1000, true], ['a', 1000, false], ['b', 1000, false]], ['gone', 'a']],
     ['opens small files while they fit the budget', DESKTOP_BUDGET, [['a', 900, false], ['b', 900, false], ['c', 300, false], ['d', 100, false]], ['a', 'b', 'd']],
     ['never opens a large file, even first', DESKTOP_BUDGET, [['big', 1001, false], ['a', 10, false]], ['a']],
     ['opens files with comments, large ones included, and counts only small ones', DESKTOP_BUDGET, [['big', 50000, true], ['a', 1000, false], ['b', 1000, true], ['c', 1, false]], ['big', 'a', 'b']],
