@@ -26,6 +26,7 @@ type Call struct {
 	ScoreLow       int
 	TokensSent     int
 	TokensSaved    int
+	TokensIfRaw    int // context_search's baseline: the whole knowledge base's tokens (0 before it was kept)
 	InputTokens    int
 	OutputTokens   int
 	Steps          []Step
@@ -53,11 +54,11 @@ func (s *Store) AddCall(ctx context.Context, c Call) error {
 	}
 	_, err = s.w.ExecContext(ctx, "INSERT INTO call_log(at, tool, datapack_id, agent_id, conversation_id, "+
 		"credential, ok, error_code, ms, memory_n, kb_n, conversation_n, score_high, score_mid, score_low, "+
-		"tokens_sent, tokens_saved, input_tokens, output_tokens, steps) "+
-		"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		"tokens_sent, tokens_saved, tokens_if_raw, input_tokens, output_tokens, steps) "+
+		"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		c.At.UTC().Format(timeLayout), c.Tool, c.DatapackID, c.AgentID, c.ConversationID, c.Credential, c.OK,
 		c.ErrorCode, c.Ms, c.MemoryN, c.KBN, c.ConversationN, c.ScoreHigh, c.ScoreMid, c.ScoreLow, c.TokensSent,
-		c.TokensSaved, c.InputTokens, c.OutputTokens, string(js))
+		c.TokensSaved, c.TokensIfRaw, c.InputTokens, c.OutputTokens, string(js))
 	return err
 }
 
@@ -76,7 +77,8 @@ func (s *Store) ConversationCalls(ctx context.Context, datapack, conversation st
 }
 
 const selectCalls = "SELECT id, at, tool, datapack_id, agent_id, conversation_id, credential, ok, error_code, ms, " +
-	"memory_n, kb_n, conversation_n, score_high, score_mid, score_low, tokens_sent, tokens_saved, input_tokens, " +
+	"memory_n, kb_n, conversation_n, score_high, score_mid, score_low, tokens_sent, tokens_saved, tokens_if_raw, " +
+	"input_tokens, " +
 	"output_tokens, steps FROM call_log "
 
 func (s *Store) calls(ctx context.Context, q string, args ...any) ([]Call, error) {
@@ -91,7 +93,7 @@ func (s *Store) calls(ctx context.Context, q string, args ...any) ([]Call, error
 		var at, steps string
 		if err = rows.Scan(&c.ID, &at, &c.Tool, &c.DatapackID, &c.AgentID, &c.ConversationID, &c.Credential, &c.OK,
 			&c.ErrorCode, &c.Ms, &c.MemoryN, &c.KBN, &c.ConversationN, &c.ScoreHigh, &c.ScoreMid, &c.ScoreLow,
-			&c.TokensSent, &c.TokensSaved, &c.InputTokens, &c.OutputTokens, &steps); err != nil {
+			&c.TokensSent, &c.TokensSaved, &c.TokensIfRaw, &c.InputTokens, &c.OutputTokens, &steps); err != nil {
 			return nil, err
 		}
 		if c.At, err = time.Parse(timeLayout, at); err != nil {
