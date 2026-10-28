@@ -190,7 +190,9 @@ available" banner and Settings while an update is on offer (this version → the
 otherwise from Settings for the last update (`update.lastUpdatedFrom` in `kv`, written from
 `MEKO_UPDATED_FROM` before the server starts, so a version that crashes while starting still
 counts, and kept after probation; no link on an install that has never updated, or after a
-rollback, when that version is no longer older than the running one). A failed comparison
+rollback, when that version is no longer older than the running one). Opened from Settings, it
+takes Settings' place once Settings' saves are in, and the ← before its title goes back to
+Settings › Updates. A failed comparison
 shows GitHub's error; it names the sign-in only for the HTTPS source with no `GITHUB_TOKEN` and a
 401, 403 or 404 (the `gh` source is used only once `gh auth status` passes). This is why release
 pruning keeps the tags.
