@@ -283,7 +283,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     // The user's only with Run to merge, and not while AgentK addresses a review.
     expect(env.core.sessions.get(s.id).waitsOnYou).toEqual([]);
     const changes = { ...approved, reviewDecision: 'CHANGES_REQUESTED' as const };
-    expect(env.core.lifecycle.mergeInfo({ ...env.core.sessions.row(s.id), auto_run: 1, review_state: 'addressing' }, changes, 'agentk-people').yours).toEqual([]);
+    expect(env.core.lifecycle.mergeInfo({ ...env.core.sessions.row(s.id), review_state: 'addressing' }, changes, 'agentk-people').yoursWithAutoRun).toEqual([]);
     // Claude also gets the prompt to resolve them.
     expect(await blockersFor({ mergeable: 'CONFLICTING' })).toEqual(['AgentK is still working.', 'The branch has merge conflicts.']);
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'conflicts prompt done');
@@ -296,7 +296,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     // (a required merge queue reads BLOCKED until `gh pr merge` queues the PR).
     const blocked = { ...approved, mergeStateStatus: 'BLOCKED' };
     expect(env.core.lifecycle.mergeInfo(env.core.sessions.row(s.id), blocked, 'agentk-people', { newHead: true })).toEqual({
-      canMerge: false, queueable: true, blockers: ["GitHub's required checks haven't reported on the latest push yet."], hard: [], yours: [],
+      canMerge: false, queueable: true, blockers: ["GitHub's required checks haven't reported on the latest push yet."], hard: [], yours: [], yoursWithAutoRun: [],
     });
     expect(await blockersFor({ mergeStateStatus: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED' })).toEqual(['Required approvals are missing.']);
     expect(await blockersFor({ mergeStateStatus: 'BLOCKED' })).toEqual([]);
@@ -1321,16 +1321,24 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
   it('hands a CI failure to the user after three heads in a row, and resets on green', async () => {
     const s = await inReview('CI keeps failing');
     const wt = env.core.sessions.row(s.id).worktree_path;
+    const told = vi.spyOn(env.core.sessions, 'notifyUser');
     gh.status = { ...gh.status!, statusCheckRollup: [failing()] };
-    for (let i = 1; i <= 4; i++) {
+    for (let i = 1; i <= 3; i++) {
       if (i > 1) commitIn(wt); // Claude pushed a fix; CI failed again on it
       await poll(s.id);
       // AgentK's to fix while it has attempts left.
       if (i === 1) expect(env.core.sessions.get(s.id).waitsOnYou).toEqual([]);
       await idle(s.id, `head ${i}`);
     }
-    expect(count(transcript(s.id), /CI failed on PR/g)).toBe(3);
+    // The third attempt ended without a fix on its head: handed over there, once.
+    await poll(s.id);
     expect(lastEvent(s.id, 'ci')).toBe('CI failed: test (macos-15). Still failing after 3 fix attempts; over to you');
+    expect(env.core.sessions.get(s.id).waitsOnYou).toEqual(['CI is failing.']);
+    // And so is every new head that fails after that, with no prompt.
+    commitIn(wt);
+    await poll(s.id);
+    expect(count(transcript(s.id), /CI failed on PR/g)).toBe(3);
+    expect(told.mock.calls.filter((c) => c[1] === 'CI still failing')).toHaveLength(2);
     expect(env.core.sessions.get(s.id).waitsOnYou).toEqual(['CI is failing.']);
     gh.status = { ...gh.status!, statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }] };
     await poll(s.id);
@@ -1407,15 +1415,21 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
   it('hands merge conflicts to the user after three heads in a row', async () => {
     const s = await inReview('Conflicts keep coming');
     const wt = env.core.sessions.row(s.id).worktree_path;
+    const told = vi.spyOn(env.core.sessions, 'notifyUser');
     gh.status = { ...gh.status!, mergeable: 'CONFLICTING' };
-    for (let i = 1; i <= 4; i++) {
+    for (let i = 1; i <= 3; i++) {
       if (i > 1) commitIn(wt); // Claude pushed a merge; it still conflicts
       await poll(s.id);
       await idle(s.id, `head ${i}`);
     }
-    expect(count(transcript(s.id), /has merge conflicts with/g)).toBe(3);
+    // The third attempt ended without pushing a merge: handed over on its head, once.
+    await poll(s.id);
     expect(lastEvent(s.id, 'conflicts')).toBe('Merge conflicts with main. Still there after 3 attempts; over to you');
     expect(env.core.sessions.get(s.id).waitsOnYou).toEqual(['The branch has merge conflicts.']);
+    commitIn(wt);
+    await poll(s.id);
+    expect(count(transcript(s.id), /has merge conflicts with/g)).toBe(3);
+    expect(told.mock.calls.filter((c) => c[1] === 'Merge conflicts remain')).toHaveLength(2);
   });
 
   it('leaves merge conflicts to the user when Settings turns it off, and drops a queued prompt', async () => {
@@ -1851,9 +1865,10 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
       const approved = gh.status!;
       gh.status = { ...approved, reviewDecision: 'REVIEW_REQUIRED' };
       await env.core.sessions.edit(s.id, { autoRun: true });
-      expect(env.core.sessions.get(s.id)).toMatchObject({ autoRun: true, queued: 'merge', mergeQueueable: false });
+      expect(env.core.sessions.get(s.id)).toMatchObject({ autoRun: true, queued: 'merge', mergeQueueable: false, waitsOnYou: ['Required approvals are missing.'] });
       await env.core.sessions.move(s.id, { stage: 'code', prompt: false });
-      expect(env.core.sessions.get(s.id)).toMatchObject({ autoRun: false, queued: null });
+      // Not the user's once Run to merge is off, before any look at the PR.
+      expect(env.core.sessions.get(s.id)).toMatchObject({ autoRun: false, queued: null, waitsOnYou: [] });
       expect(lastEvent(s.id, 'auto-run')).toBe('Run to merge stopped: the session moved to Code');
       gh.status = approved;
       await pollAll();
