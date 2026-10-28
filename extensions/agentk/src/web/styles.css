@@ -3079,6 +3079,42 @@ div[id^='dak-mermaid-'] .label {
   align-items: center;
   flex-wrap: wrap;
 }
+/* A setting and its ⓘ (InfoTip in common.tsx), whose explanation wraps onto its own line under
+   them. On touch the ⓘ is a 40 px .icon-btn. */
+.info-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 2px;
+  min-width: 0;
+}
+.info-btn {
+  padding: 2px 4px;
+  margin: -2px 0;
+}
+.info-btn > span {
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font: italic 600 10px/1 Georgia, serif;
+}
+.info-btn.on {
+  color: var(--accent);
+}
+.info-panel {
+  flex-basis: 100%;
+  margin: 2px 0 4px;
+  padding-left: 8px;
+  border-left: 2px solid var(--rule);
+  font-size: 12px;
+  color: var(--muted);
+}
+.info-panel[hidden] {
+  display: none;
+}
 /* A check with a link beside it (Log Meko calls, View calls). */
 .check-row {
   display: flex;

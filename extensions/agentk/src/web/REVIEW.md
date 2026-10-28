@@ -14,6 +14,10 @@ a **major** finding.
 - [ ] Nothing needs hover, right-click, modifier-click, drag and drop, or a keyboard shortcut
       without a tap equivalent. Needed information isn't only in a `title` tooltip.
 - [ ] Touch targets are at least 36 px tall (40 px for icon buttons) under `(pointer: coarse)`.
+- [ ] A setting (Settings, Project settings) shows at most one short line of hint, about 50
+      characters; a longer explanation goes behind an ⓘ (`InfoTip`, `InfoCheck` or `Field`'s
+      `info` in `common.tsx`). Status and what to do about it (versions, warnings, errors) stay
+      inline.
 - [ ] New text inputs are 16 px or larger in the phone section of `styles.css`.
 - [ ] Full-height views use `var(--app-h, 100dvh)` on phones, not `100vh`. Bars at the screen edges
       respect `env(safe-area-inset-*)`. Full-screen fixed layers (overlays) sit at

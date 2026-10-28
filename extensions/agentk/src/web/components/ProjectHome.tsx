@@ -16,7 +16,7 @@ import { api, errorMessage } from '../api';
 import { useIsMobile, useTouch } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { cx, shortTime } from '../util';
-import { Busy, ConfirmButton, DatapackName, ErrorText, Field } from './common';
+import { Busy, ConfirmButton, DatapackName, ErrorText, Field, InfoCheck } from './common';
 import { AddDatapackDialog } from './AddDatapackDialog';
 import { MekoLinkDialog } from './MekoLinkDialog';
 import { ShareDialog } from './ShareDialog';
@@ -395,13 +395,9 @@ function AttachDatapack({
   );
 }
 
-/** Under the branch prefix: what {login} stands for, and what the prefix comes to. */
+/** Under the branch prefix, while it holds {login}: what new branches start with. */
 function branchPrefixHint(prefix: string, login: string | null): string | null {
-  if (!prefix.includes(LOGIN_PLACEHOLDER)) return null;
-  const now = expandBranchPrefix(prefix, login);
-  return login
-    ? `${LOGIN_PLACEHOLDER} is your GitHub login: new branches start with ${now}`
-    : `${LOGIN_PLACEHOLDER} is your GitHub login, once gh is signed in. Until then, new branches start with ${now}`;
+  return prefix.includes(LOGIN_PLACEHOLDER) ? `New branches start with ${expandBranchPrefix(prefix, login)}` : null;
 }
 
 function ProjectSettingsForm({
@@ -456,7 +452,11 @@ function ProjectSettingsForm({
         <Field label="Name">
           <input id="ps-name" className="input" value={name} onChange={(e) => setName(e.target.value)} />
         </Field>
-        <Field label="Branch prefix" hint={branchPrefixHint(s.branchPrefix, ghLogin)}>
+        <Field
+          label="Branch prefix"
+          hint={branchPrefixHint(s.branchPrefix, ghLogin)}
+          info={{ for: 'ps-prefix', text: `${LOGIN_PLACEHOLDER} is your GitHub login${ghLogin ? '' : ', once gh is signed in'}.` }}
+        >
           <input
             id="ps-prefix"
             className="input mono"
@@ -464,20 +464,27 @@ function ProjectSettingsForm({
             onChange={(e) => set('branchPrefix', e.target.value)}
           />
         </Field>
-        <Field label="Reviewer">
+        <Field
+          label="Reviewer"
+          info={{
+            for: 'ps-reviewer',
+            text:
+              'Whose reviews go straight to AgentK. Other reviews wait for you to send or dismiss them; your own always go. ' +
+              'Merge waits for the AgentK reviewer once it’s active on the PR.',
+          }}
+        >
           <select
             id="ps-reviewer"
             className="input"
             value={s.reviewer}
             onChange={(e) => set('reviewer', e.target.value as ReviewerMode)}
-            title="Whose reviews go straight to AgentK. Every other review is held for you to send or dismiss, and your own always go. Merge waits for the AgentK reviewer once it's active on the PR."
           >
             {(Object.keys(REVIEWER_LABELS) as ReviewerMode[]).map((m) => (
               <option key={m} value={m}>{REVIEWER_LABELS[m]}</option>
             ))}
           </select>
         </Field>
-        <Field label="AgentK login">
+        <Field label="AgentK login" info={{ for: 'ps-login', text: 'The GitHub login whose reviews are AgentK’s.' }}>
           <input
             id="ps-login"
             className="input mono"
@@ -515,15 +522,9 @@ function ProjectSettingsForm({
           </label>
           {(mekoConfigured || project.settings.mekoLog) && (
             <div className="check-row">
-              <label className="check">
-                <input id="ps-mekolog" type="checkbox" checked={s.mekoLog} onChange={(e) => set('mekoLog', e.target.checked)} />
-                <span>
-                  Log Meko calls
-                  <span className="muted small check-hint">
-                    What AgentK and Claude send to Meko for each session, and what comes back. Deleted with the session.
-                  </span>
-                </span>
-              </label>
+              <InfoCheck id="ps-mekolog" label="Log Meko calls" checked={s.mekoLog} onChange={(on) => set('mekoLog', on)}>
+                What AgentK and the agent send to Meko for each session, and what comes back. Deleted with the session.
+              </InfoCheck>
               <button type="button" className="link-btn" onClick={() => navigate({ view: 'meko', projectId: project.id, sessionId: null })}>
                 View calls
               </button>
