@@ -102,7 +102,7 @@ merged PR, and keeps each project's designs and learnings in a Meko datapack. In
   devices over HTTPS with a password and optional two-step sign-in (`[web] access` in
   `config.toml`).
 - **Usage stats.** Meko sends counts, versions and settings (never names or contents) to
-  YugabyteDB once a day.
+  YugabyteDB once a day (every hour on an install's first day).
   Turn them off in the web UI's Settings, or with `[call_home] enabled = false` in `config.toml`
   ([what's sent](backend/docs/callhome.md)).
 
