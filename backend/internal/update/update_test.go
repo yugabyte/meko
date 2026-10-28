@@ -541,7 +541,7 @@ func TestStartApplyEnds(t *testing.T) {
 // their turn.
 func TestUpdaterRefusesWhileBusy(t *testing.T) {
 	u, _ := webUpdater(t, "0.20261022.0", "")
-	u.mu.Lock()
+	u.lock().held.Lock()
 	if _, err := u.CheckNow(context.Background()); err != ErrBusy {
 		t.Errorf("check: %v", err)
 	}
@@ -555,7 +555,7 @@ func TestUpdaterRefusesWhileBusy(t *testing.T) {
 	if _, ok := ReadState(u.DataDir); ok {
 		t.Error("a scheduled check ran while busy")
 	}
-	u.mu.Unlock()
+	u.lock().held.Unlock()
 	st, err := u.CheckNow(context.Background())
 	if err != nil || st.CheckedAt == nil || st.Latest != "0.20261022.0" || !st.Available {
 		t.Errorf("check: %+v %v", st, err)

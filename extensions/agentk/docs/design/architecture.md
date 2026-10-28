@@ -20,9 +20,9 @@ flowchart LR
     C1["claude in worktree A"]
     C2["claude in worktree B"]
     ST[("~/.meko/extensions/agentk<br/>state, app versions")]
-    U["updater"]
   end
   M["Meko MCP"]
+  MU["Meko: updates<br/>meko _launch"]
   GH["GitHub Releases"]
   B -- "HTTP(S) + WebSocket, /ext/agentk/" --> MW
   MW -- "prefix stripped, Host and Origin kept" --> S
@@ -35,7 +35,8 @@ flowchart LR
   S --- ST
   S -- "datapack list and create" --> M
   C1 -- "capture into MEKO_DATAPACK_ID" --> M
-  U -- "poll, download, verify" --> GH
+  MU -- "poll, download, verify" --> GH
+  MU -- "unpack into app/, restart the server, roll back" --> ST
 ```
 
 **Terminal path.** When you open a tab, the browser opens a WebSocket, and the server attaches

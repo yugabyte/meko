@@ -2,14 +2,12 @@
 # AgentK launcher, installed as <AK_HOME>/app/<version>/bin/agentk (and as bin/agent-k-local, its
 # name before the rename to AgentK, which services installed then still start).
 #
-# Runs the bundled Node on the bundled server. For `serve`, it also handles
-# rollback after a bad self-update: the updater writes update-pending.json
-# before restarting into a new version, and the server deletes it once it has
-# been healthy for 5 minutes. If the new version fails to come up three times in a
-# row, this wrapper (on the fourth start) switches app/current back to the previous
-# version, records the bad one, and starts the previous version instead. A clean
-# stop (SIGTERM) of the new version takes its start back off the count, so only
-# crashes count.
+# Runs the bundled Node on the bundled server. `serve` and `host` go through Meko's launcher
+# (`meko _launch`), which runs this file again with MEKO_LAUNCHED set. For `serve` Meko runs the
+# probation of a version it just updated to: it counts the version's starts, rolls back to the
+# version before after three failed ones, takes a clean stop off the count, and finishes the update
+# once the version has run 5 minutes. For both, it marks the version's folder in use while they run,
+# so Meko never deletes the folder a running session host started from.
 set -eu
 
 # Resolve our real location, following symlinks (~/.local/bin -> app/current -> app/<ver>).
@@ -29,47 +27,21 @@ export AK_APP_DIR AK_VERSION
 
 node="$AK_APP_DIR/node/bin/node"
 cli="$AK_APP_DIR/lib/dist/server/cli.js"
-# The release's own home (<home>/app/<version>), whatever AK_HOME says, as paths.ts releaseHome.
-ak_home=$(cd -P "$AK_APP_DIR/../.." && pwd)
 
-if [ "${1:-}" = "serve" ] && [ -f "$ak_home/update-pending.json" ]; then
-  # Bump the attempt counter (starts of the new version, this one included);
-  # print "<attempts> <from> <to>".
-  # shellcheck disable=SC2016 # the single-quoted text is JavaScript, not shell
-  state=$("$node" -e '
-    const fs = require("fs");
-    const f = process.argv[1];
-    let p;
-    try { p = JSON.parse(fs.readFileSync(f, "utf8")); } catch { process.exit(3); }
-    p.attempts = (Number(p.attempts) || 0) + 1;
-    fs.writeFileSync(f + ".tmp", JSON.stringify(p));
-    fs.renameSync(f + ".tmp", f);
-    process.stdout.write(`${p.attempts} ${p.from || ""} ${p.to || ""}`);
-  ' "$ak_home/update-pending.json") || state=""
-
-  if [ -n "$state" ]; then
-    attempts=${state%% *}
-    rest=${state#* }
-    from=${rest%% *}
-    to=${rest#* }
-    failed=$((attempts - 1))
-    # A version from before the rename to AgentK has only bin/agent-k-local.
-    prev=$ak_home/app/$from/bin/agentk
-    [ -x "$prev" ] || prev=$ak_home/app/$from/bin/agent-k-local
-    if [ "$failed" -ge 3 ] && [ -n "$from" ] && [ -x "$prev" ]; then
-      msg="version $to failed to start $failed times; rolling back to $from"
-      echo "agentk: $msg" >&2
-      # In server.log too, beside the failed starts' errors: stderr may reach no one.
-      { [ -d "$ak_home/logs" ] && printf '%s WARN %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$msg" >> "$ak_home/logs/server.log"; } 2>/dev/null || true
-      ln -sfn "$from" "$ak_home/app/current.rollback"
-      # Rename over the old link atomically. `mv -T` is GNU-only, so use the bundled Node.
-      "$node" -e 'require("fs").renameSync(process.argv[1], process.argv[2])' \
-        "$ak_home/app/current.rollback" "$ak_home/app/current"
-      [ -n "$to" ] && printf '%s\n' "$to" >> "$ak_home/bad-versions"
-      rm -f "$ak_home/update-pending.json"
-      exec "$prev" "$@"
-    fi
-  fi
+# Meko runs the probation of a new version (counting starts, rolling back, finishing the update);
+# without a Meko that can, the server runs anyway.
+if [ -z "${MEKO_LAUNCHED:-}" ]; then
+  case "${1:-}" in
+    serve|host)
+      meko=$(command -v meko 2>/dev/null || true)
+      [ -n "$meko" ] || meko=$HOME/.local/bin/meko
+      [ -x "$meko" ] || meko=${XDG_DATA_HOME:-$HOME/.local/share}/meko/app/current/bin/meko
+      if [ -x "$meko" ] && "$meko" _launch --supported >/dev/null 2>&1; then
+        exec "$meko" _launch agentk "$bin_dir/agentk" "$@"
+      fi
+      echo "agentk: no meko with _launch was found, so a failed update won't roll back" >&2
+      ;;
+  esac
 fi
 
 exec "$node" --disable-warning=ExperimentalWarning "$cli" "$@"

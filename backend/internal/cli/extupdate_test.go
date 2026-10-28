@@ -23,7 +23,8 @@ import (
 
 // fakePresenter is a Presenter release's bin/meko_presenter, keeping its state in its folder in the data
 // folder (MEKO_HOME, which Meko sets): version --json, install and start log to its log, status
-// succeeds while it runs, and its handoff names web.sock there. With rollBackTo, start fails three
+// succeeds while it runs, its handoff names web.sock there, and it's busy while busy is there. With
+// rollBackTo, start fails three
 // times and then does what the launcher does on the fourth: points app/current back at that version
 // and starts it, which fails too when old-fails is there.
 func fakePresenter(version, rollBackTo string) string {
@@ -43,6 +44,7 @@ case "$1" in
   start) ` + start + ` ;;
   stop) rm -f "$s/running" ;;
   _handoff) printf '{"socket": "%s"}\n' "$s/web.sock" ;;
+  _busy) [ -f "$s/busy" ] ;;
   uninstall) rm -rf "$s" ;;
 esac
 `
@@ -219,7 +221,7 @@ func TestUpdateExtensionRefuses(t *testing.T) {
 	noRealExtensions(t)
 	dir := shortDir(t)
 	code, _, errs := run("update_extension", "agentk", "--data-dir", dir)
-	want(t, "AgentK", code, 1, errs, "AgentK updates itself")
+	want(t, "AgentK", code, 1, errs, "meko install_extension agentk installs it")
 	code, _, errs = run("update_extension", "presenter", "--data-dir", dir)
 	want(t, "not installed", code, 1, errs, "meko install_extension presenter installs it")
 	// A build from source on PATH: used as it is, never updated.
@@ -236,6 +238,15 @@ func TestUpdateExtensionRefuses(t *testing.T) {
 	want(t, "a build from source", code, 1, errs, "isn't a release Meko installed")
 	code, _, errs = run("update_extension", "--data-dir", dir)
 	want(t, "no name", code, exitUsage, errs, "name the extension (agentk, presenter)")
+	code, _, errs = run("update_extension", "presenter", "--all", "--data-dir", dir)
+	want(t, "--all and a name", code, exitUsage, errs, "--all takes no name")
+	lock := update.NewLock(dir)
+	if !lock.TryLock() {
+		t.Fatal("lock")
+	}
+	code, _, errs = run("update_extension", "presenter", "--data-dir", dir)
+	lock.Unlock()
+	want(t, "another update running", code, 1, errs, "another update is running")
 }
 
 // install_extension presenter, with no presenter here, installs Presenter's newest release itself:
@@ -389,7 +400,7 @@ func TestUpdateExtensionSaysWhenNoReleaseIsFound(t *testing.T) {
 }
 
 // The Extensions page's Update: it waits for the socket when the update leaves Presenter running,
-// returns at once when it leaves it stopped, and the page learns the version from Release.
+// returns at once when it leaves it stopped, and the page learns the version from ExtensionUpdates.
 func TestRunExtensionUpdates(t *testing.T) {
 	const next = "0.20261025.0"
 	t.Setenv("HOME", t.TempDir())
@@ -398,11 +409,11 @@ func TestRunExtensionUpdates(t *testing.T) {
 	app := installedPresenter(t, dir)
 	presenterReleases(t, next, presenterTarball(t, next, ""))
 	w := testListener(t, dir)
-	if v, ok := w.Release("presenter"); v != installedVersion || !ok {
-		t.Errorf("Release(presenter) = %q %v", v, ok)
+	if u := w.ExtensionUpdates("presenter"); u.Version != installedVersion || !u.Updatable || !u.AutoUpdate {
+		t.Errorf("ExtensionUpdates(presenter) = %+v", u)
 	}
-	if v, ok := w.Release("agentk"); v != "" || ok {
-		t.Errorf("Release(agentk) = %q %v", v, ok)
+	if u := w.ExtensionUpdates("agentk"); u.Version != "" || u.Updatable {
+		t.Errorf("ExtensionUpdates(agentk) = %+v", u)
 	}
 	old := extensions.ListenTimeout
 	extensions.ListenTimeout = 300 * time.Millisecond
@@ -432,8 +443,8 @@ func TestRunExtensionUpdates(t *testing.T) {
 	if w.sockets["presenter"] != sock {
 		t.Errorf("socket %q", w.sockets["presenter"])
 	}
-	if v, ok := w.Release("presenter"); v != later || !ok {
-		t.Errorf("Release(presenter) = %q %v", v, ok)
+	if u := w.ExtensionUpdates("presenter"); u.Version != later || !u.Updatable {
+		t.Errorf("ExtensionUpdates(presenter) = %+v", u)
 	}
 }
 

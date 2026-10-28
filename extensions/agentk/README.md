@@ -38,25 +38,19 @@ You also need [Meko](https://mekodata.ai) on this computer: it serves AgentK to 
 `/ext/agentk/` on its own port (7777), and signs you in. Meko also gives projects datapacks (shared
 memory) and lets you share projects. For datapacks, AgentK uses Meko Cloud once you link it in Meko's
 web UI (Settings › Meko Cloud, which links to Meko Cloud's sign-up and login pages to make a key; or
-`meko cloud_link` on a computer without a browser), and otherwise the Meko on this computer. The repo is internal for now, so the installer is fetched with `gh`. Install Meko (the repo's
-latest release) and then AgentK through it:
+`meko cloud_link` on a computer without a browser), and otherwise the Meko on this computer. The repo is internal for now, so Meko's installer is fetched with `gh`. Install Meko (the repo's
+latest release), and then Meko installs AgentK:
 
 ```sh
 gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
 meko install_extension agentk
 ```
 
-Or AgentK's own installer, from its newest release, once Meko is installed:
-
-```sh
-gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-drafts \
-  --exclude-pre-releases --limit 50 --json tagName \
-  --jq '[.[].tagName | select(test("^(agentk-v|v)[0-9]"))][0]')" \
-  --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
-```
-
-It offers to install anything that's missing (git, gh, and Claude Code, OpenCode or Kiro CLI when
-none is there: it asks which, or pass `--agent opencode` or `--agent kiro`) and to set up Meko for each agent, asking first. Then it prints the address to open.
+(or **Install** on Meko's Extensions page). Meko downloads AgentK's newest release, checks it and
+unpacks it into its data folder, then runs AgentK's setup, which offers to install anything that's
+missing (git, gh, and Claude Code, OpenCode or Kiro CLI when none is there: it asks which, or pass
+`meko install_extension agentk -- --agent opencode` or `-- --agent kiro`) and to set up Meko for
+each agent, asking first. Then it prints the address to open.
 
 Who can open it is Meko's setting (`[web] access`: chosen when Meko was installed, in its
 `web.toml`, and `config.toml` can override it): **local** (this computer only, no login) or **remote** (other devices too, like your
@@ -67,12 +61,13 @@ An AgentK that served browsers itself (on port 7777, before Meko did) hands its 
 certificate and login over to Meko by itself, so the same password signs in; its address moves to
 `/ext/agentk/` on the same port.
 
-Run again where AgentK is already installed with its services set up, the installer says so
-and stops without changing anything. Newer releases are offered in AgentK itself (the Update
-banner, or the button in Settings). To change its setup (repos folder, Meko) or set up its services
-again, run `agentk install`; to download and install it again, pass `--reinstall`
-(`… | sh -s -- --reinstall`). Options for `agentk install`, like `--repos-root`, also make it install
-again, so they're never dropped.
+Meko installs AgentK's updates too: on its own when it finds one (each extension has an **Update
+automatically** switch on Meko's Extensions page and in AgentK's Settings › Updates, on by
+default), or when you click **Update** (the banner in AgentK, Settings › Updates, or Meko's
+Extensions page) or run `meko update` (Meko, then every extension). An update restarts only
+AgentK's web server, so sessions keep running, and Meko rolls back a version that fails to start.
+To change AgentK's setup (repos folder, Meko) or set up its services again, run `agentk install`,
+or `meko install_extension agentk` again (`--version <v>` installs another release).
 
 Forgot your password? Run `meko setup_link` on the host and open the link it prints to choose a
 new username and password (Meko's sign-in screen says the same).
@@ -85,7 +80,7 @@ clean `/var/tmp` by age, so set `XDG_STATE_HOME` to a local folder there (AgentK
 `/var/tmp`). AgentK runs only on the host you installed it on.
 
 An install from before this kept its data in `~/.agent-k-local`. It moves into Meko's data folder by
-itself right after updating to a release that brings the move: every session ends and resumes there,
+itself right after updating to a release that brings the move (and Meko updates it from then on): every session ends and resumes there,
 and `~/.agent-k-local` becomes a link to the new place. If the Meko installed here is older than
 the one whose `meko destroy` keeps AgentK's data, the move waits until you update it (`meko update`).
 
@@ -269,8 +264,8 @@ your phone can connect.
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
   markdown, with Mermaid diagrams drawn (zoom them with − and +). The design's open questions are listed beside it, each
   with AgentK's options and recommendation picked to start: pick another, or write a custom answer, then send them for
-  AgentK to revise the design, or approve with them. With open questions, **Answer & approve**
-  takes you to them first. Beside them are the design's key design decisions: the questions you answered and the decisions
+  AgentK to revise the design, or approve with them. The stage bar's **Design Review** opens the design
+  (on its questions while any are open), and you approve from the design panel. Beside them are the design's key design decisions: the questions you answered and the decisions
   AgentK made itself, each saying who decided it, with **Change this** on AgentK's; a decision that rests on something
   AgentK found in Meko carries Meko's mark, the words it relied on and the item's id.
   Once it's approved, AgentK writes the key design decisions into the design and keeps it current
@@ -320,8 +315,8 @@ your phone can connect.
   (details in [docs/design/usage-stats.md](docs/design/usage-stats.md)).
 - **Survives restarts:** after a host reboot, every open session is brought back with
   `claude --resume`, and sessions that were mid-turn are told to continue.
-- **One-click updates** from GitHub Releases, without interrupting running sessions, and rollback
-  if a new version won't start.
+- **Updates through Meko** from GitHub Releases, automatic or one click, without interrupting running
+  sessions, and rollback if a new version won't start.
 
 Design: [`docs/design.md`](docs/design.md), an index with one file per area under `docs/design/`.
 
@@ -332,6 +327,7 @@ Design: [`docs/design.md`](docs/design.md), an index with one file per area unde
 | `agentk ui` | Open AgentK in your browser through Meko (`open` on macOS, `xdg-open` on Linux); with no display to open it on, such as over SSH, it prints the URL |
 | `agentk status` | Services, the URL Meko serves it at, sessions, and whether the server answers |
 | `agentk stop` / `start` | Stop the server and the session host, ending every session, and start them again (sessions resume). The services also start again at the next login |
+| `agentk restart` | Restart the web server only (sessions keep running), and wait until it answers; Meko runs it after installing an update |
 | `agentk logs -f` | Follow the server log (`logs/server.log` in AgentK's home) |
 | `agentk uninstall [--purge [--delete-worktrees]]` | Remove the services; `--purge` also deletes AgentK's home (in Meko's data folder) except session worktrees and designs, which only `--delete-worktrees` removes (after reporting uncommitted changes). Branches are always kept. |
 | `agentk attach [session]` | Show a session's terminal in yours (`Ctrl+\` detaches; Claude keeps running); with no name, list the sessions |

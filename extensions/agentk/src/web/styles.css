@@ -2176,6 +2176,17 @@ a.icon-btn {
   padding: 8px 12px;
   border-bottom: 1px solid var(--rule);
 }
+/* Why the header's Approve design is closed (a phone has no tooltips). */
+.design-blocked {
+  margin: 0;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--rule);
+  font-size: 12px;
+  color: var(--muted);
+}
+.design-blocked:focus {
+  outline: none;
+}
 .design-updated {
   border-radius: 4px;
   padding: 0 4px;

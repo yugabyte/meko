@@ -24,14 +24,14 @@ goes idle for the next session on the repo (see [Worktree reuse](#worktree-reuse
 ```sh
 # layout on the host: AgentK's home, in Meko's data folder (see "Where AgentK lives" below)
 ~/.meko/extensions/agentk/
-  config.toml              # host settings: address and port, TLS paths, repo roots, update channel, Meko
+  config.toml              # host settings: address and port, TLS paths, repo roots, Meko
   state.db                 # SQLite: projects, sessions, events (WAL); an older install's login, for Meko's handoff
   hook.sock                # Claude hooks (and AgentK's mod) → server
   web.sock                 # the server's only listener; Meko serves it at /ext/agentk/
   run/                     # launchers, the hooks settings file and scripts, run/mod/agentk (AgentK's mod)
   server.lock              # the running server's lease on this home (one server per home)
   certs/                   # an older install's self-signed pair, for Meko's handoff
-  app/0.4.1/  app/current → 0.4.1
+  app/0.4.1/  app/current → 0.4.1   # Meko installs, updates and prunes these (update-pending.json, bad-versions beside them)
   worktrees/<repo>.<hash>/wt-<n>/  # git worktree, shared by the repo's projects (older ones: worktrees/<project>/<session>/)
   designs/<session>/design.md      # markdown design written during Design (Artifact designs live on claude.ai)
   designs/<session>/questions.json # the design's open questions for the user, written beside it
@@ -217,22 +217,27 @@ CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);   -- setup token, update sta
 
 AgentK's home is `<Meko's data folder>/extensions/agentk`, and users don't pick another place.
 Meko's data folder is found by Meko's own rule (`Resolve` in `backend/internal/paths/paths.go`;
-`mekoHome()` in `src/server/paths.ts` repeats it, and `scripts/install.sh` repeats it in sh, all
-three tested against `backend/internal/paths/testdata/resolve-cases.json`): `MEKO_HOME`, refused on
+`mekoHome()` in `src/server/paths.ts` repeats it, both tested against
+`backend/internal/paths/testdata/resolve-cases.json`): `MEKO_HOME`, refused on
 a network filesystem; else `~/.meko` on a local disk; else, for a home folder on a network
 filesystem, `$XDG_STATE_HOME/meko` when that's local, else `/var/tmp/<user>/meko` (made private as
 above). Meko sets `MEKO_HOME` on every AgentK command it runs, and AgentK keeps it as `[meko]
-home`, since its own services don't have it. A home already in a Meko data folder refuses
-`uninstall`, `start`, `stop`, `status` and `_handoff` when `MEKO_HOME` names another folder
-(`refuseOtherMeko` in `src/server/movehome.ts`): a release acts on its own home whatever
+home`, since its own services don't have it. For `meko start` and `meko stop` it also sets
+`MEKO_SUMMARY=1`, and AgentK's `start` and `stop` then print one row of Meko's summary
+(`src/server/summary.ts`, the format in Meko's `backend/docs/install.md`) in place of their usual
+line and its `agentk status` hint. A home already in a Meko data folder refuses
+`uninstall`, `start`, `stop`, `restart`, `status` and `_handoff` when `MEKO_HOME` names another
+folder (`refuseOtherMeko` in `src/server/movehome.ts`; `samePath` compares the folders, not their
+paths, so a second spelling of the same folder that links don't explain, such as a bind mount,
+isn't another folder): a release acts on its own home whatever
 `MEKO_HOME` says, so a Meko that found this AgentK for another data folder (a second Meko, Meko's
 own tests) would otherwise stop or uninstall it, ending every session, and repoint its `[meko]
 home`. A home that hasn't moved into a Meko data folder yet isn't protected: it takes Meko's
 folder from `MEKO_HOME`, so another Meko's commands still act on it and its `[meko] home` (where
-it moves next) follows the last one. `install` isn't refused either: the installer updates the
-existing home in place, and `agentk install` keeps the Meko data folder its home is in as `[meko]
+it moves next) follows the last one. `install` isn't refused either: Meko's `install_extension`
+sets the existing home up again in place, and `agentk install` keeps the Meko data folder its home is in as `[meko]
 home`, over `MEKO_HOME`. The server takes `MEKO_HOME` and `XDG_STATE_HOME` from the login shell
-(as it does `PATH`), so it finds the same folder the installer did. A relative `XDG_STATE_HOME`
+(as it does `PATH`), so it finds the same folder `agentk install` did. A relative `XDG_STATE_HOME`
 is ignored, as the XDG spec says.
 
 - **A release's home is its own folder** (`<home>/app/<version>`, `AK_APP_DIR`), whatever
@@ -248,11 +253,11 @@ is ignored, as the XDG spec says.
 Homes from before this (`~/.agent-k-local`, or one an install named with `AK_HOME`) move there by
 themselves: [Moving the home into Meko's data folder](recovery.md#moving-the-home-into-mekos-data-folder).
 
-`config.toml` holds host settings: the server's name, repo folders, the update
-channel, the Meko URL and key (only when typed at install), transcript capture, the
+`config.toml` holds host settings: the server's name, repo folders, the Meko URL and key (only when typed at install), transcript capture, the
 `claude` command, Meko's data folder as Meko last named it, how many idle worktrees each repo keeps, and whether AgentK resolves PRs' merge conflicts. The Settings dialog
 writes its fields (repo folders, scan depth, clone folder, idle worktrees per repo and the days to
-keep an unused one, update channel, server name, resolving merge conflicts) there too. The server reads the file at
+keep an unused one, server name, resolving merge conflicts) there too. An `[update]` table is
+ignored, with a warning, and goes at the next save: Meko updates AgentK, by its own `[update]`. The server reads the file at
 start, so an edit made while it runs takes effect after a restart, and a save from Settings meanwhile writes over it. Per-project settings, sessions and everything else live in `state.db`. Only values that
 differ from the defaults are written, so a changed default reaches existing installs; a value of the wrong type is ignored with a warning. An older
 install's `[server] bind` and `port` and `[tls]` stay in the file for Meko's handoff

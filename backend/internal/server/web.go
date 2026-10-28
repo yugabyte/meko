@@ -20,6 +20,7 @@ import (
 	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/extproxy"
 	"github.com/yugabyte/meko/backend/internal/login"
+	"github.com/yugabyte/meko/backend/internal/update"
 )
 
 // Web makes a Server the web listener: the port browsers use, for Meko's web UI and its extensions'
@@ -35,9 +36,14 @@ type Web struct {
 	// Run, if set, runs an action on a known extension for the Extensions page (install, update,
 	// start or stop), writing its output to out, and returns when it's done or ctx is (Jobs.Cancel).
 	Run func(ctx context.Context, name, action string, out io.Writer) error
-	// Release, if set, is an installed extension's release version Meko manages, and whether Meko
-	// can update it ("", false for one that updates itself or a build from source).
-	Release func(name string) (version string, updatable bool)
+	// ExtensionUpdates, if set, is what an installed extension's row shows about its updates.
+	ExtensionUpdates func(name string) ExtensionUpdate
+	// CheckExtensions, if set, checks for releases now (POST /api/v1/extensions/:name/check);
+	// update.ErrBusy while an update holds the lock.
+	CheckExtensions func(ctx context.Context) error
+	// SetAutoUpdate, if set, saves an extension's Update automatically (PATCH
+	// /api/v1/extensions/:name).
+	SetAutoUpdate func(name string, on bool) error
 	// Jobs are the actions Run runs, kept across the servers the listener's owner builds; nil gives
 	// this server its own.
 	Jobs *ExtensionJobs
@@ -45,7 +51,8 @@ type Web struct {
 	Updates Updates
 }
 
-// The actions the Extensions page runs on an extension (POST /api/v1/extensions/:name/:action).
+// The actions the Extensions page runs on an extension (POST /api/v1/extensions/:name/:action), as
+// jobs; check (Check now) runs in the request.
 var extensionActions = []string{"install", "update", "start", "stop"}
 
 func (s *Server) proxy(name string) *extproxy.Proxy {
@@ -86,6 +93,7 @@ func (s *Server) registerWeb(v1 *echo.Group) {
 	v1.POST("/auth/totp/disable", s.totpDisable)
 	v1.GET("/extensions", s.extensionList)
 	v1.POST("/extensions/:name/:action", s.extensionAction)
+	v1.PATCH("/extensions/:name", s.extensionPatch)
 	v1.GET("/update", s.updateStatus)
 	v1.POST("/update/check", s.updateCheck)
 	v1.POST("/update/apply", s.updateApply)
@@ -333,11 +341,31 @@ type ExtensionInfo struct {
 	Description string        `json:"description"`
 	Installed   bool          `json:"installed"`
 	WebUI       bool          `json:"web_ui"`
-	Path        string        `json:"path"`              // "" while it isn't served
-	Available   bool          `json:"available"`         // its socket is there to connect to
-	Version     string        `json:"version,omitempty"` // the release Meko installed, when it manages it
-	Updatable   bool          `json:"updatable"`         // Meko can update it (the update action)
+	Path        string        `json:"path"`      // "" while it isn't served
+	Available   bool          `json:"available"` // its socket is there to connect to
 	Job         *ExtensionJob `json:"job,omitempty"`
+	ExtensionUpdate
+}
+
+// ExtensionUpdate is what an extension's row says about its updates.
+type ExtensionUpdate struct {
+	Version   string `json:"version,omitempty"` // the release Meko installed, when it manages it
+	Updatable bool   `json:"updatable"`         // Meko can update it (the update action)
+	// NotUpdatable says why an installed extension isn't updatable: a build from source, or an
+	// AgentK that hasn't moved into Meko's data folder yet. An older Meko never sends it.
+	NotUpdatable string `json:"not_updatable,omitempty"`
+	// Latest is the newest release the last check found (versions rolled back left out), and
+	// UpdateAvailable whether it's newer than Version and wasn't rolled back.
+	Latest          string     `json:"latest,omitempty"`
+	LatestURL       string     `json:"latest_url,omitempty"`
+	UpdateAvailable bool       `json:"update_available"`
+	CheckedAt       *time.Time `json:"checked_at,omitempty"`
+	CheckError      string     `json:"check_error,omitempty"`
+	// Pending is an update on probation: meko _launch counts its starts.
+	Pending    *update.Pending `json:"pending,omitempty"`
+	RolledBack []string        `json:"rolled_back"`
+	AutoUpdate bool            `json:"auto_update"` // Update automatically
+	Waiting    string          `json:"waiting,omitempty"`
 }
 
 func (s *Server) installed() map[string]bool {
@@ -361,8 +389,9 @@ func (s *Server) extensionInfo(name string, installed bool) ExtensionInfo {
 	if p := s.proxy(name); p != nil {
 		row.Path, row.Available = p.Path(), p.Available()
 	}
-	if installed && s.opts.Web.Release != nil {
-		row.Version, row.Updatable = s.opts.Web.Release(name)
+	row.RolledBack = []string{}
+	if installed && s.opts.Web.ExtensionUpdates != nil {
+		row.ExtensionUpdate = s.opts.Web.ExtensionUpdates(name)
 	}
 	return row
 }
@@ -386,15 +415,18 @@ func (s *Server) extensionList(c echo.Context) error {
 func (s *Server) extensionAction(c echo.Context) error {
 	name, action := c.Param("name"), c.Param("action")
 	cat, known := extensions.Known[name]
-	if !known || s.opts.Web.Run == nil || !slices.Contains(extensionActions, action) {
+	if !known || s.opts.Web.Run == nil || (!slices.Contains(extensionActions, action) && action != "check") {
 		return echo.ErrNotFound
 	}
 	installed := s.installed()[name]
 	if action != "install" && !installed {
 		return envelope.Fail(c, http.StatusConflict, "CONFLICT", cat.Title+" isn't installed.")
 	}
+	if action == "check" {
+		return s.extensionCheck(c, name)
+	}
 	jobs := s.opts.Web.Jobs
-	j, ok := jobs.start(name, action)
+	j, ok := jobs.start(name, action, false)
 	if !ok {
 		return envelope.Fail(c, http.StatusConflict, "CONFLICT",
 			fmt.Sprintf("%s is busy: its %s hasn't finished.", cat.Title, j.snapshot().Action))
@@ -411,6 +443,47 @@ func (s *Server) extensionAction(c echo.Context) error {
 		}
 	}()
 	return c.JSON(http.StatusAccepted, envelope.Response{Data: s.extensionInfo(name, installed)})
+}
+
+// extensionCheck is POST /api/v1/extensions/:name/check: Check now, answered with the row once the
+// check is done (within 60 s), or 409 UPDATE_BUSY with the row while an update holds the lock.
+func (s *Server) extensionCheck(c echo.Context, name string) error {
+	if s.opts.Web.CheckExtensions == nil {
+		return envelope.Fail(c, http.StatusConflict, "CONFLICT", "This Meko doesn't check for extensions' updates.")
+	}
+	ctx, cancel := context.WithTimeout(c.Request().Context(), 60*time.Second)
+	defer cancel()
+	if err := s.opts.Web.CheckExtensions(ctx); err != nil {
+		if errors.Is(err, update.ErrBusy) {
+			return c.JSON(http.StatusConflict, envelope.Response{Data: s.extensionInfo(name, true),
+				Error: &envelope.Error{Code: "UPDATE_BUSY", Message: "An update is running: check again when it's done."}})
+		}
+		return envelope.Fail(c, http.StatusConflict, "CONFLICT", err.Error())
+	}
+	return envelope.OK(c, s.extensionInfo(name, true))
+}
+
+// extensionPatch is PATCH /api/v1/extensions/:name with {"auto_update": bool}: the Extensions
+// page's Update automatically.
+func (s *Server) extensionPatch(c echo.Context) error {
+	name := c.Param("name")
+	if _, known := extensions.Known[name]; !known || s.opts.Web.SetAutoUpdate == nil {
+		return echo.ErrNotFound
+	}
+	if !s.installed()[name] {
+		return envelope.Fail(c, http.StatusConflict, "CONFLICT", extensions.Known[name].Title+" isn't installed.")
+	}
+	var body struct {
+		AutoUpdate *bool `json:"auto_update"`
+	}
+	if err := c.Bind(&body); err != nil || body.AutoUpdate == nil {
+		return envelope.Fail(c, http.StatusBadRequest, "BAD_REQUEST", `Send {"auto_update": true|false}.`)
+	}
+	if err := s.opts.Web.SetAutoUpdate(name, *body.AutoUpdate); err != nil {
+		return err
+	}
+	s.opts.Logger.Info("extension setting", "extension", name, "auto_update", *body.AutoUpdate)
+	return envelope.OK(c, s.extensionInfo(name, true))
 }
 
 func (s *Server) extensionRoot(c echo.Context) error {

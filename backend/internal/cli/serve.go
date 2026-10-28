@@ -157,6 +157,11 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		if pending, _ := app.ReadPending(); pending != nil && pending.To == release {
 			onProbation = true
 		}
+		if home, herr := os.UserHomeDir(); herr == nil {
+			if lerr := linkMekosh(app, home); lerr != nil {
+				log.Warn("can't make the mekosh command", "error", lerr)
+			}
+		}
 	}
 
 	st, err := store.Open(l.DB)
@@ -317,11 +322,14 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	defer stopUpdates()
 	var updates server.Updates
 	if isRelease {
-		if u, off := startUpdates(updCtx, app, release, l, cfg, log, onProbation, restart); u != nil {
+		if u, off := startUpdates(updCtx, app, release, l, cfg, log, onProbation, restart, web); u != nil {
 			updates = u
 		} else {
 			updates = update.Off{Version: release, Reason: off}
+			startExtensionUpdates(updCtx, l, cfg, log, web)
 		}
+	} else {
+		startExtensionUpdates(updCtx, l, cfg, log, web)
 	}
 	// The Meko Cloud link: the web UI and meko cloud_link change it; the running extensions hear.
 	cloud := &cloudlink.Service{Store: cloudSt, Check: cloudlink.CheckMCP, CheckAPI: cloudlink.CheckAPI,
@@ -332,7 +340,8 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, MCP: mcpHandler,
 			REST: registerREST, Upload: upload, Download: download, UI: ui, Login: logins, Cloud: cloud,
 			Web: &server.Web{Access: wcfg.Web.Access, Extensions: web.Proxies, Installed: web.Installed,
-				Run: web.RunExtension, Release: web.Release, Jobs: web.jobs, Updates: updates}}
+				Run: web.RunExtension, ExtensionUpdates: web.ExtensionUpdates, CheckExtensions: web.CheckExtensions,
+				SetAutoUpdate: web.SetAutoUpdate, Jobs: web.jobs, Updates: updates}}
 	}
 	srv := server.New(server.Options{
 		Info: info, Port: cfg.Server.Port, Token: token, ClientToken: clientToken, Auth: cfg.Server.Auth, Logger: log,
@@ -502,11 +511,13 @@ func (e *execError) Error() string { return e.why + ": " + e.exe }
 
 // startUpdates runs a release install's update checks, and finishes an update on probation once it
 // has run update.HealthyAfter. On their own, updates are installed only under the service, which
-// starts the new version after serve exits; a server started by hand only reports them. The
-// updater it returns is the Status page's too, even with [update] channel = "off" (which stops only
-// the scheduled checks). When the schema can't be read it returns nil and why.
+// starts the new version after serve exits; a server started by hand only reports them. The same
+// checks find the extensions' releases, and install those set to Update automatically (web's
+// autoUpdate), under the service or not. The updater it returns is the Status page's too, even with
+// [update] channel = "off" (which stops only the scheduled checks). When the schema can't be read it
+// returns nil and why.
 func startUpdates(ctx context.Context, app update.App, release string, l paths.Layout, cfg config.Config,
-	log *slog.Logger, onProbation bool, restart chan struct{}) (*update.Updater, string) {
+	log *slog.Logger, onProbation bool, restart chan struct{}, web *webListener) (*update.Updater, string) {
 	if onProbation {
 		go func() {
 			select {
@@ -535,10 +546,24 @@ func startUpdates(ctx context.Context, app update.App, release string, l paths.L
 		Service: service, Context: ctx,
 		Restart: func() { once.Do(func() { close(restart) }) },
 	}
+	web.watchUpdates(u)
 	if cfg.Update.Channel != update.ChannelOff {
 		go u.Run(ctx)
 	}
 	return u, ""
+}
+
+// startExtensionUpdates runs the extensions' update checks for a Meko that doesn't update itself (a
+// build from source, or one whose updater couldn't be set up), as startUpdates does with Meko's.
+func startExtensionUpdates(ctx context.Context, l paths.Layout, cfg config.Config, log *slog.Logger,
+	web *webListener) {
+	u := &update.Updater{ExtensionsOnly: true, Version: version.Version, Client: newReleaseClient(cfg.Update.Repo),
+		DataDir: l.Root, Interval: time.Duration(cfg.Update.IntervalHours * float64(time.Hour)),
+		FirstCheck: time.Minute, Log: log, Channel: cfg.Update.Channel, Context: ctx}
+	web.watchUpdates(u)
+	if cfg.Update.Channel != update.ChannelOff {
+		go u.Run(ctx)
+	}
 }
 
 // keychainRetry is how often serve tries the Keychain again while it refuses (locked, as when the

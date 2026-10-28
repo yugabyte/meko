@@ -63,7 +63,7 @@ func TestHandoff(t *testing.T) {
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
 	waitFor(t, "the web listener", func() bool {
-		_, status, _ := run("status", "--data-dir", dir)
+		_, status, _ := run("status", "--data-dir", dir, "--verbose")
 		return strings.Contains(status, "Certificate:   self-signed, SHA-256 "+pair.Fingerprint)
 	})
 	c, err := config.Load(paths.New(dir).Config, func(string) string { return "" }, config.Overrides{})
@@ -121,7 +121,7 @@ func TestHandoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, out, errs = run("restart", "--data-dir", dir, "--port", port)
-	want(t, "restart", code, 0, out+errs, "is running")
+	want(t, "restart", code, 0, out+errs, "  ✓ Server          running at")
 	if _, err = os.Stat(config.WebFile(paths.New(dir).Config)); !os.IsNotExist(err) {
 		t.Errorf("web.toml came back after the first handoff: %v", err)
 	}

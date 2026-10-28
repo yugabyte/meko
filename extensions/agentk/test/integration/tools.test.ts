@@ -192,7 +192,7 @@ describe("AgentK's session tools through agentk mcp (real session host + git, fa
 
     // Do all: go actions left out, the rest checked again and run in order, one result each.
     const { buildServer } = await import('../../src/server/server.js');
-    const app = await buildServer(env.core, { webDir: null, updater: null });
+    const app = await buildServer(env.core, { webDir: null, updates: null });
     try {
       const runActions = (actions: unknown[]) => app.inject({ method: 'POST', url: '/api/actions/run', payload: { actions } });
       const r = await runActions([

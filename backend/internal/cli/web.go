@@ -23,6 +23,7 @@ import (
 	"github.com/yugabyte/meko/backend/internal/server"
 	"github.com/yugabyte/meko/backend/internal/store"
 	"github.com/yugabyte/meko/backend/internal/tlscert"
+	"github.com/yugabyte/meko/backend/internal/update"
 )
 
 // webRetry is how often serve tries again to take the web port while something else holds it (an
@@ -70,12 +71,18 @@ type webListener struct {
 	proxied map[string]*extproxy.Proxy // one proxy per extension, kept for its WebSockets
 	// jobs are the Extensions page's actions, kept across the servers Run builds.
 	jobs *server.ExtensionJobs
+	// lock is the data folder's update lock, which serve's updater holds too; updater is that
+	// updater (nil in tests), which the Extensions page's Check now runs.
+	lock    *update.Lock
+	updater *update.Updater
+	waiting map[string]string // why an extension's automatic update waits
 }
 
 func newWebListener(l paths.Layout, st *store.Store, lg *login.Service, log *slog.Logger) *webListener {
 	return &webListener{l: l, st: st, login: lg, log: log, sockets: map[string]string{},
 		handed: map[string]bool{}, asked: map[string]time.Time{}, warned: map[string]string{},
-		proxied: map[string]*extproxy.Proxy{}, jobs: server.NewExtensionJobs()}
+		proxied: map[string]*extproxy.Proxy{}, jobs: server.NewExtensionJobs(), lock: update.NewLock(l.Root),
+		waiting: map[string]string{}}
 }
 
 // socket is where an extension listens. An extension registered since the server started (meko
@@ -480,19 +487,24 @@ func sleep(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// printWeb is status's lines about the web listener.
+// webAccessNote says how browsers reach the web listener: from this computer without a login, or from
+// anywhere with the owner's.
+func webAccessNote(w *server.WebStatus) string {
+	if w.Access != config.AccessRemote {
+		return "local, no login from this computer"
+	}
+	if !w.Login {
+		return "remote; no login yet: meko setup_link makes one"
+	}
+	return "remote, sign in with the owner's login"
+}
+
+// printWeb is status --verbose's lines about the web listener.
 func printWeb(stdout io.Writer, w *server.WebStatus) {
 	if w == nil {
 		return
 	}
-	access := "local (no login from this computer)"
-	if w.Access == config.AccessRemote {
-		access = "remote (sign in with the owner's login)"
-		if !w.Login {
-			access = "remote; no login yet: meko setup_link makes one"
-		}
-	}
-	fmt.Fprintf(stdout, "  Web:           %s, %s\n", w.URL, access)
+	fmt.Fprintf(stdout, "  Humans:        %s (web UI), %s\n", w.URL, webAccessNote(w))
 	if !w.Listening && w.Error != "" {
 		fmt.Fprintf(stdout, "                 not listening: %s\n", w.Error)
 	}

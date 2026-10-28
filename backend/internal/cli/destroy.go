@@ -410,9 +410,10 @@ func confirm(in io.Reader, stdout io.Writer, question string) bool {
 	return ans == "y" || ans == "yes"
 }
 
-// isTerminal reports whether r is a terminal (a character device), which echoes what's typed.
-func isTerminal(r io.Reader) bool {
-	f, ok := r.(*os.File)
+// isTerminal reports whether v (a reader or writer) is a terminal (a character device): one that
+// echoes what's typed, or shows colors.
+func isTerminal(v any) bool {
+	f, ok := v.(*os.File)
 	if !ok {
 		return false
 	}

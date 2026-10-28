@@ -54,8 +54,8 @@ export function ConnectPage({ datapack }: { datapack: Datapack }) {
 
       <Card className="space-y-3 p-4">
         <h3 className="font-medium">From the terminal</h3>
-        <CopyBlock text={`meko search "what do I like" --datapack ${datapack.datapack_name}`} />
-        <CopyBlock text={`meko upload ~/notes.pdf --datapack ${datapack.datapack_name}`} />
+        <CopyBlock text={`mekosh search "what do I like" --datapack ${datapack.datapack_name}`} />
+        <CopyBlock text={`mekosh upload ~/notes.pdf --datapack ${datapack.datapack_name}`} />
       </Card>
     </div>
   );

@@ -16,10 +16,11 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Server restarts and updates leave running sessions untouched. The one exception is the
       one-time move of an older home into Meko's data folder (`src/server/movehome.ts`, AGENTS.md
       invariant 1), and nothing else may start it or end sessions the same way.
-- [ ] For a home already in a Meko data folder, `uninstall`, `start`, `stop`, `status` and
-      `_handoff` refuse a `MEKO_HOME` that names another folder (`refuseOtherMeko`, checked in
+- [ ] For a home already in a Meko data folder, `uninstall`, `start`, `stop`, `restart`, `status`
+      and `_handoff` refuse a `MEKO_HOME` that names another folder (`refuseOtherMeko`, checked in
       `main()`), so a Meko for another folder can't stop or uninstall it, or serve it and take its
-      old login. A home that hasn't moved there yet isn't
+      old login. `samePath` compares folders, not paths: the same folder under a spelling links
+      don't explain (a bind mount) isn't another. A home that hasn't moved there yet isn't
       covered: another Meko's commands still act on it.
 - [ ] `recover()` / `reconcile()` stay idempotent: live panes are left alone, missing panes are resumed,
       and sessions still being created or launched are skipped (so Claude never starts twice).
@@ -83,8 +84,11 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] A change to `src/server/host/` that an older host or server can't read bumps `PROTOCOL`, and the
       server still works with hosts back to `MIN_PROTOCOL` (a running host keeps its code across
       updates). Nothing restarts the host by itself (the home's one-time move aside), and the program
-      never waits on a viewer.
-- [ ] The installer never installs a tool (or runs Meko's setup) without first showing what it
+      never waits on a viewer. `serve` and `host` keep going through Meko's launcher
+      (`packaging/agentk`: `meko _launch`), which runs an update's probation and locks the host's
+      version folder against Meko's pruning; nothing in AgentK writes Meko's update records
+      (`app/update-pending.json`, `bad-versions`).
+- [ ] The prerequisites check (`scripts/deps.sh`) never installs a tool (or runs Meko's setup) without first showing what it
       will run and asking (or `--install-deps`), verifies downloads by checksum or integrity hash
       wherever one is published (Claude Code's installer script from claude.ai, OpenCode's from
       opencode.ai and Kiro's from cli.kiro.dev publish none, so they're only fetched over HTTPS), and checks the result rather than trusting the package manager.

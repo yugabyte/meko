@@ -8,8 +8,6 @@ import { DEFAULT_HARNESS, HARNESS_IDS, isHarnessId, type HarnessId } from '../sh
 import { isLocalMeko, isMekoCloudKey, localMeko, mekoLinkHandedOver, originOf } from './mekolocal.js';
 import { expandHome, type Paths } from './paths.js';
 
-export type UpdateChannel = 'stable' | 'prerelease' | 'off';
-
 export interface Config {
   /**
    * name: shown in the rail next to the user name; empty uses the machine's short host name.
@@ -21,7 +19,6 @@ export interface Config {
   server: { bind: string; port: number; name: string };
   tls: { cert: string; key: string };
   repos: { roots: string[]; depth: number; cloneInto: string };
-  update: { channel: UpdateChannel; repo: string; requireAttestation: boolean; intervalHours: number };
   /**
    * captureTranscripts: send session transcripts to Meko conversations. Off by default until Meko's capture stops
    * extracting loaded skills as user requirements (MEKO-710); off, sessions also run without the Meko plugin.
@@ -100,7 +97,6 @@ export const DEFAULT_CONFIG: Config = {
   server: { bind: '0.0.0.0', port: 7777, name: '' },
   tls: { cert: '', key: '' },
   repos: { roots: ['~/code'], depth: 1, cloneInto: '~/code' },
-  update: { channel: 'stable', repo: 'yugabyte/agent-k-local', requireAttestation: false, intervalHours: 6 },
   meko: { url: '', apiKey: '', webUrl: '', apiUrl: '', captureTranscripts: false, home: '' },
   state: { dbPath: '' },
   claude: { command: 'claude', enabled: true, mod: true },
@@ -151,9 +147,17 @@ function merge<T>(base: T, over: unknown, warn: (msg: string) => void, at = ''):
 
 /** What config.toml says, over the defaults, without environment overrides. */
 function readConfigFile(paths: Paths, warn: (msg: string) => void): Config {
-  const cfg = existsSync(paths.config)
-    ? merge(structuredClone(DEFAULT_CONFIG), mapKeys(parse(readFileSync(paths.config, 'utf8')), camel), warn)
-    : structuredClone(DEFAULT_CONFIG);
+  const file = existsSync(paths.config) ? mapKeys(parse(readFileSync(paths.config, 'utf8')), camel) : null;
+  // Meko installs AgentK's updates, as the [update] in Meko's own config.toml says. An [update] here
+  // is ignored, but for channel = "off", which Meko reads as Update automatically off for AgentK
+  // until that switch is set (saveConfig keeps it); the rest goes from the file at the next save.
+  if (isObject(file) && 'update' in file) {
+    warn(
+      "config.toml: [update] is ignored: Meko installs AgentK's updates, as the [update] in Meko's own config.toml says. " +
+        'channel = "off" here keeps Update automatically off for AgentK until it\'s turned on (Settings › Updates)',
+    );
+  }
+  const cfg = file ? merge(structuredClone(DEFAULT_CONFIG), file, warn) : structuredClone(DEFAULT_CONFIG);
   // Older versions wrote every default, so a Meko URL equal to the default was never chosen:
   // leave it unset so MEKO_MCP_URL or Claude Code's settings can still name the server.
   if (cfg.meko.url === DEFAULT_MEKO_URL) cfg.meko.url = '';
@@ -183,6 +187,16 @@ function changedFrom(cfg: unknown, base: unknown): unknown {
  * Writes the settings that differ from the defaults, so a changed default reaches existing
  * installs. `[server] bind` and `port` and `[tls]` are written as they are, for Meko's handoff.
  */
+/** Whether config.toml has AgentK's old [update] channel = "off" (its own updater's switch). */
+function updatesWereOff(paths: Paths): boolean {
+  try {
+    const t = parse(readFileSync(paths.config, 'utf8')) as { update?: { channel?: unknown } };
+    return t.update?.channel === 'off';
+  } catch {
+    return false;
+  }
+}
+
 export function saveConfig(paths: Paths, cfg: Config): void {
   const out = structuredClone(cfg);
   mkdirSync(dirname(paths.config), { recursive: true });
@@ -191,6 +205,8 @@ export function saveConfig(paths: Paths, cfg: Config): void {
     '# Only settings that differ from the defaults are listed; add any other key to change it.\n' +
     "# Meko serves AgentK to browsers: its web listener's port and access are [web] in Meko's config.toml.\n\n";
   const body = (changedFrom(mapKeys(out, snake), mapKeys(DEFAULT_CONFIG, snake)) ?? {}) as Record<string, unknown>;
+  // An old [update] channel = "off" stays: Meko reads it as Update automatically off for AgentK.
+  if (updatesWereOff(paths)) body.update = { channel: 'off' };
   const tmp = paths.config + '.tmp';
   writeFileSync(tmp, header + stringify(body) + '\n', { mode: 0o600 });
   renameSync(tmp, paths.config);

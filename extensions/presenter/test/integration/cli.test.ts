@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { createServer } from 'node:http';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getPaths } from '../../src/server/paths.js';
@@ -72,7 +73,14 @@ describe('the commands Meko runs', () => {
     expect(existsSync(join(home, 'run', 'server.pid'))).toBe(false);
   });
 
-  it('starts the server through a release\'s launcher, which counts the starts of an update', () => {
+  it("prints one row of Meko's summary when meko start and meko stop run it", () => {
+    expect(presenterWith({ MEKO_SUMMARY: '1' }, 'start').out).toBe('  ✓ Presenter       started\n');
+    expect(presenterWith({ MEKO_SUMMARY: '1' }, 'start').out).toBe('  ✓ Presenter       running\n');
+    expect(presenterWith({ MEKO_SUMMARY: '1' }, 'stop').out).toBe('  ✓ Presenter       stopped\n');
+    expect(presenterWith({ MEKO_SUMMARY: '1' }, 'stop').out).toBe("  ✓ Presenter       wasn't running\n");
+  });
+
+  it('starts the server through a release\'s launcher, which hands it to Meko\'s', () => {
     // A stand-in for packaging/meko_presenter: notes the start, then runs the server as this test does.
     const launcher = join(dir, 'launcher');
     writeFileSync(launcher, `#!/bin/sh\necho "$@" >> "${join(dir, 'launched')}"\nexec "${process.execPath}" --import tsx "${CLI}" "$@"\n`);
@@ -80,6 +88,33 @@ describe('the commands Meko runs', () => {
     expect(presenterWith({ PRESENTER_LAUNCHER: launcher }, 'start').out).toContain('Presenter started');
     expect(readFileSync(join(dir, 'launched'), 'utf8')).toBe('serve\n');
     expect(presenter('status').code).toBe(0);
+  });
+
+  it('says no talk is live when the server isn\'t running, or is but has no talk', () => {
+    expect(presenter('_busy').code).toBe(1);
+    expect(presenter('start').out).toContain('Presenter started');
+    expect(presenter('_busy')).toEqual({ code: 1, out: 'No presentation is live\n' });
+  });
+
+  it('says a talk is live when the server says so', async () => {
+    // A stand-in for the server on its socket, answering as one with a talk on.
+    const sock = getPaths(home).webSock;
+    mkdirSync(dirname(sock), { recursive: true, mode: 0o700 });
+    const server = createServer((req, res) => res.end(JSON.stringify({ busy: req.url === '/_meko/busy' })));
+    await new Promise<void>((resolve) => server.listen(sock, resolve));
+    try {
+      const r = await new Promise<{ code: number | null; out: string }>((resolve) => {
+        const child = spawn(process.execPath, ['--import', 'tsx', CLI, '_busy'], {
+          env: { ...process.env, PRESENTER_HOME: home, MEKO_HOME: join(dir, 'meko'), PATH: '/usr/bin:/bin' },
+        });
+        let out = '';
+        child.stdout.on('data', (c: Buffer) => (out += String(c)));
+        child.on('close', (code) => resolve({ code, out }));
+      });
+      expect(r).toEqual({ code: 0, out: 'A presentation is live\n' });
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 
   it('leaves alone a process that has the pid a crashed server left', async () => {

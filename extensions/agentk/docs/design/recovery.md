@@ -25,8 +25,10 @@ service itself without the host's (it says to run `agentk install`); without ser
 source checkout, `--no-service`) it starts one detached, in its own process group.
 
 **The host keeps its version.** A running host keeps the code it started with across updates:
-restarting it ends every Claude (the server's recovery resumes them). So the updater never deletes
-the version directory `run/host.json` names (node-pty runs a helper from it on macOS), and the
+restarting it ends every Claude (the server's recovery resumes them). So the version folder it
+started from is never deleted while it runs (node-pty runs a helper from it on macOS): Meko's
+launcher, which starts the host (`meko _launch`), holds a lock on that folder for as long as the
+host runs, and Meko's pruning skips a locked folder ([Releases](releases.md)). The
 server works with hosts of its own protocol back to `MIN_PROTOCOL`; an older one has to be
 restarted (`agentk host restart`), which the server's log says. `agentk host stop`
 ends every session in the host, and refuses while the server for this home runs: it would start
@@ -58,9 +60,9 @@ once, so what's left is a guard (`Core.start`): while the tmux service is instal
 (`legacyTmuxInstalled`), the server refuses to start, saying to run `agentk install`, unless
 the host service is installed too and none of this home's sessions that aren't archived is in
 tmux (`legacytmux.ts` lists the sessions on the old socket). An
-install that updated itself from a tmux version therefore fails to start and rolls back to it (the
-launcher's rollback; see [Releases](releases.md)), with its sessions still running in tmux.
-`agentk install`, which the installer runs, moves it: before it installs the services it
+install updated from a tmux version therefore fails to start and is rolled back to it (Meko's
+launcher; see [Releases](releases.md)), with its sessions still running in tmux.
+`agentk install`, which `meko install_extension agentk` runs, moves it: before it installs the services it
 removes the old ones, stopping the old server first and then the tmux service, which ends the
 Claudes in it, and the new server's recovery resumes them in the host (auto-continuing a turn that
 was cut off). `agentk uninstall` removes the tmux service too. Removing it ends the tmux
@@ -92,8 +94,8 @@ sees the same `~/.config/systemd/user`, so its systemd starts the enabled units 
 
 - **The units run only on the install host.** Both systemd units carry `ConditionHost=` with the
   host name at install time. On any other host systemd skips them: nothing starts and nothing is
-  logged. Renaming the host means running `agentk install` again, which rewrites the units
-  (the one-line installer stops early on an install it finds set up).
+  logged. Renaming the host means running `agentk install` again (or `meko install_extension
+  agentk`), which rewrites the units.
 - **A lease backs it up** (`src/server/instance.ts`). Before `serve` opens the database or binds
   anything it takes `server.lock`, which holds the host, pid, version, port and a heartbeat it
   rewrites every 10 seconds; a lease not rewritten for 45 seconds is free. A lease from another
@@ -102,8 +104,8 @@ sees the same `~/.config/systemd/user`, so its systemd starts the enabled units 
   (an update's restart), so the start waits until the lease is released, its pid exits or it
   goes stale, and is refused only if the lease beats meanwhile. A refused start says which host
   holds the home, writes nothing to the shared log, and exits with status 75. The server unit has
-  `RestartPreventExitStatus=75`, and a refused start is taken back off an update's start count, so
-  it can't cause a rollback. A server
+  `RestartPreventExitStatus=75`, and Meko's launcher doesn't count exit 75 as a failed start of an
+  update, so it can't cause a rollback. A server
   that finds another one named in the lease (it stalled for longer than 45 seconds) stops. File
   locks aren't used: they aren't reliable across NFS clients.
 - **`install` refuses** while a live server on another host holds the home, since it would pin the
@@ -112,7 +114,7 @@ sees the same `~/.config/systemd/user`, so its systemd starts the enabled units 
 | Event | What survives | What happens |
 |---|---|---|
 | A phone's page goes to the background, or its network changes | Everything | The server drops the page's sockets once they stop answering its pings. When the page is shown again, it pings its events socket and opens a new one if there's no answer, so it shows the current state instead of the one it had when it was hidden. After 30 seconds or more hidden, it also lets go of its terminals and reconnects the ones on screen, even if the phone kept its timers from running. |
-| Server crash or update | Everything | systemd (or launchd) restarts the server. It matches `state.db` against the session host's panes, and browsers reconnect automatically. An open page that finds the server on another version reloads itself (see [Releases and auto-update](releases.md)). |
+| Server crash or update | Everything | systemd (or launchd) restarts the server. It matches `state.db` against the session host's panes, and browsers reconnect automatically. An open page that finds the server on another version reloads itself (see [Releases and updates](releases.md)). |
 | A second server starts on the same home (another host that mounts it) | Everything | The units don't start on other hosts, and a server started by hand refuses while the lease is held. If the hook socket goes missing anyway, the running server binds it again within 10 seconds. |
 | Session host crash or restart | Worktrees, transcripts, state | The unit restarts the host, and the server relaunches every session with `desired: running` using `claude --resume`. |
 | Host reboot or crash | Worktrees, transcripts, state (after a crash or power cut, less the last `state.db` commits before it: `synchronous=NORMAL`, see [Projects and sessions](projects-and-sessions.md)) | Both units start at boot (on macOS, when you log in) and the same recovery runs. Sessions show as *recovered* until you interact. |
@@ -167,8 +169,10 @@ one's Claude runs in a worktree inside the home; recovery resumes them from the 
 session that was mid-turn gets its continue prompt as after any host restart.
 
 - **When.** Right after a release with the move has proved healthy, whatever the sessions are
-  doing: when the launcher's `update-pending.json` goes (`HomeMove`, run by the server at its start
-  and again once the release has been healthy for 5 minutes), so a bad release is rolled back first.
+  doing: once the release is off probation (`HomeMove`, run by the server at its start and again 5
+  minutes later; a start with `MEKO_UPDATED_FROM`, which Meko's launcher sets while an update is on
+  probation, waits those 5 minutes: `onProbation` in `updates.ts`), so a bad release is rolled back
+  first.
   Only a release install whose home isn't in a Meko data folder yet moves (a source checkout or a
   test never does, nor a home the installer already put in one). A move that can't happen is logged
   at each start, and the install keeps running where it is: a target that isn't empty, too little
@@ -216,9 +220,11 @@ session that was mid-turn gets its continue prompt as after any host restart.
   journal is removed once the server answers on the new home (or the server removes it at its next
   start). The activity line is added once per session, and Claude Code's transcript folders are
   merged without losing a file: one the new folder has already stays in the old one.
-- **Services found by real path.** A release's home is its real path (the launcher resolves its
-  folder with `cd -P`), while a unit names the home as spelled, maybe through a symlinked `/home` or
-  the link the move leaves; `servicesFor` compares real paths, so `stop`, `start`, `status`, the
+- **Services found by folder, not spelling.** A release's home is its real path (the launcher
+  resolves its folder with `cd -P`), while a unit names the home as spelled, maybe through a
+  symlinked `/home`, the link the move leaves, or a bind mount that puts the same disk at another
+  path; `servicesFor` (`samePath`) takes the two for the same home when they're spelled alike, have
+  the same real path, or are the same folder (device and inode), so `stop`, `start`, `status`, the
   trigger and a start mid-move all find the services.
 - **Meko.** Meko finds AgentK by its command, `~/.local/bin/agentk`, which the move repoints;
   `meko destroy` leaves `extensions/` alone unless asked ([Meko's install

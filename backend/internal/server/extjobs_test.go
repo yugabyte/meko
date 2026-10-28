@@ -16,6 +16,7 @@ import (
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/envelope"
 	"github.com/yugabyte/meko/backend/internal/extproxy"
+	"github.com/yugabyte/meko/backend/internal/update"
 )
 
 func post(t *testing.T, url string, header map[string]string) (int, envelope.Response) {
@@ -165,17 +166,17 @@ func TestExtensionActions(t *testing.T) {
 	}
 }
 
-// An installed extension whose releases Meko manages shows its version and can be updated; one that
-// updates itself (AgentK) can't.
+// An installed extension whose release Meko installed shows its version and can be updated; one Meko
+// didn't install (a build from source) can't.
 func TestExtensionListShowsReleasesMekoUpdates(t *testing.T) {
 	f := &fakeRun{release: make(chan struct{})}
 	close(f.release)
 	release := func(w *Web) {
-		w.Release = func(name string) (string, bool) {
+		w.ExtensionUpdates = func(name string) ExtensionUpdate {
 			if name == "presenter" {
-				return "0.20261024.0", true
+				return ExtensionUpdate{Version: "0.20261024.0", Updatable: true, RolledBack: []string{}}
 			}
-			return "", false
+			return ExtensionUpdate{RolledBack: []string{}}
 		}
 	}
 	base, _ := startWeb(t, config.AccessLocal, "", noProxies, installed("agentk", "presenter"), release,
@@ -285,11 +286,11 @@ func TestCancelStopsTheJobs(t *testing.T) {
 // A job keeps the end of its output, from a line's start, while it's written and read at once.
 func TestJobOutputKeepsTheEnd(t *testing.T) {
 	x := NewExtensionJobs()
-	j, ok := x.start("agentk", "install")
+	j, ok := x.start("agentk", "install", false)
 	if !ok {
 		t.Fatal("not started")
 	}
-	if _, again := x.start("agentk", "stop"); again {
+	if _, again := x.start("agentk", "stop", false); again {
 		t.Error("a second job started while one runs")
 	}
 	var wg sync.WaitGroup
@@ -308,7 +309,64 @@ func TestJobOutputKeepsTheEnd(t *testing.T) {
 		!strings.HasSuffix(got.Output, "line 1999 of the installer's output\n") || got.State != JobDone {
 		t.Errorf("%d bytes, state %s, starting %q", len(got.Output), got.State, got.Output[:20])
 	}
-	if _, ok = x.start("agentk", "stop"); !ok {
+	if _, ok = x.start("agentk", "stop", false); !ok {
 		t.Error("a finished job blocks the next")
+	}
+}
+
+// Check now checks in the request and answers with the row, or 409 UPDATE_BUSY while an update
+// holds the lock; PATCH saves Update automatically, and refuses a body without it.
+func TestExtensionCheckAndAutoUpdate(t *testing.T) {
+	auto := map[string]bool{"presenter": true}
+	busy := false
+	checks := 0
+	with := func(w *Web) {
+		w.Run = (&fakeRun{}).run
+		w.ExtensionUpdates = func(name string) ExtensionUpdate {
+			return ExtensionUpdate{Version: "0.20261024.0", Updatable: true, Latest: "0.20261025.0",
+				UpdateAvailable: checks > 0, AutoUpdate: auto[name], RolledBack: []string{}}
+		}
+		w.CheckExtensions = func(context.Context) error {
+			if busy {
+				return update.ErrBusy
+			}
+			checks++
+			return nil
+		}
+		w.SetAutoUpdate = func(name string, on bool) error { auto[name] = on; return nil }
+	}
+	base, _ := startWeb(t, config.AccessLocal, "", noProxies, installed("presenter"), with)
+	code, env := post(t, base+"/api/v1/extensions/presenter/check", nil)
+	if row, _ := env.Data.(map[string]any); code != http.StatusOK || row["update_available"] != true || checks != 1 {
+		t.Errorf("check: %d %+v", code, env)
+	}
+	busy = true
+	if code, env = post(t, base+"/api/v1/extensions/presenter/check", nil); code != http.StatusConflict ||
+		env.Error == nil || env.Error.Code != "UPDATE_BUSY" || env.Data == nil {
+		t.Errorf("busy check: %d %+v", code, env)
+	}
+	patch := func(name, body string) (int, envelope.Response) {
+		req, _ := http.NewRequest(http.MethodPatch, base+"/api/v1/extensions/"+name, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var reply envelope.Response
+		_ = json.NewDecoder(resp.Body).Decode(&reply)
+		return resp.StatusCode, reply
+	}
+	if code, env = patch("presenter", `{"auto_update": false}`); code != http.StatusOK || auto["presenter"] {
+		t.Errorf("patch: %d %+v", code, env)
+	}
+	if row := extensionRow(t, base, "presenter"); row.AutoUpdate {
+		t.Errorf("row after patch: %+v", row)
+	}
+	if code, _ = patch("presenter", `{}`); code != http.StatusBadRequest {
+		t.Errorf("patch without auto_update: %d", code)
+	}
+	if code, _ = patch("agentk", `{"auto_update": true}`); code != http.StatusConflict {
+		t.Errorf("patch of one not installed: %d", code)
 	}
 }

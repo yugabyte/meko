@@ -14,7 +14,7 @@ describe('Meko call log', () => {
 
   beforeEach(async () => {
     env = await makeEnv();
-    app = await buildServer(env.core, { webDir: null, updater: null });
+    app = await buildServer(env.core, { webDir: null, updates: null });
   });
   afterEach(async () => {
     await app.close();

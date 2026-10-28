@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"io"
 	"sort"
 	"sync"
 	"time"
@@ -30,6 +31,8 @@ type ExtensionJob struct {
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
 	Error      string     `json:"error,omitempty"`
 	Output     string     `json:"output"`
+	// Auto marks an update Meko started on its own (Update automatically), not someone's click.
+	Auto bool `json:"auto,omitempty"`
 }
 
 // job is a running or finished ExtensionJob; its runner writes the output while the list reads it.
@@ -93,16 +96,30 @@ func NewExtensionJobs() *ExtensionJobs {
 
 // start begins a job for name, unless one is running: then it returns that one and false. The
 // caller runs it with run's context and ends it with done.
-func (x *ExtensionJobs) start(name, action string) (*job, bool) {
+func (x *ExtensionJobs) start(name, action string, auto bool) (*job, bool) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	if j := x.jobs[name]; j != nil && j.snapshot().State == JobRunning {
 		return j, false
 	}
-	j := &job{view: ExtensionJob{Action: action, State: JobRunning, StartedAt: time.Now().UTC()}}
+	j := &job{view: ExtensionJob{Action: action, State: JobRunning, StartedAt: time.Now().UTC(), Auto: auto}}
 	x.jobs[name] = j
 	x.running++
 	return j, true
+}
+
+// RunSync runs f now, in the caller's goroutine, as name's job (auto for one Meko started on its
+// own), unless one of name's jobs is running: then it reports false. f gets the jobs' context and
+// writes the job's output.
+func (x *ExtensionJobs) RunSync(name, action string, auto bool,
+	f func(ctx context.Context, out io.Writer) error) (bool, error) {
+	j, ok := x.start(name, action, auto)
+	if !ok {
+		return false, nil
+	}
+	err := f(x.run(), j)
+	x.done(j, err)
+	return true, err
 }
 
 // run is the context a job runs with: done once Cancel is called.
@@ -128,6 +145,9 @@ func (x *ExtensionJobs) get(name string) *ExtensionJob {
 	v := j.snapshot()
 	return &v
 }
+
+// Get is name's last job, or nil.
+func (x *ExtensionJobs) Get(name string) *ExtensionJob { return x.get(name) }
 
 // Busy reports whether a job is running.
 func (x *ExtensionJobs) Busy() bool {

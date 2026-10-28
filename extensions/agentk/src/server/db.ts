@@ -734,3 +734,14 @@ export function snapshotDb(db: Db, dest: string): void {
   db.exec(`VACUUM INTO '${dest.replace(/'/g, "''")}'`);
   chmodSync(dest, 0o600);
 }
+
+/** snapshotDb for a database file nothing has open, without migrating it (updates.ts, before a new version opens it). */
+export function snapshotFile(path: string, dest: string): void {
+  const db = new DatabaseSync(path);
+  try {
+    db.exec('PRAGMA busy_timeout = 5000');
+    snapshotDb(db, dest);
+  } finally {
+    db.close();
+  }
+}

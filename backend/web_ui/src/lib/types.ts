@@ -370,15 +370,29 @@ export interface Extension {
   web_ui?: boolean;
   path: string;
   available: boolean;
-  // The release Meko installed and can update (Presenter's); AgentK updates itself.
+  // The release Meko installed and can update; none for a build from source.
   version?: string;
   updatable?: boolean;
+  // The newest release the last check found, and whether it's newer than version (and wasn't rolled back).
+  latest?: string;
+  latest_url?: string;
+  update_available?: boolean;
+  checked_at?: string;
+  check_error?: string;
+  // An update on probation: Meko counts its starts and rolls it back after three failed ones.
+  pending?: { from: string; to: string; attempts: number; at: string };
+  rolled_back?: string[];
+  // Update automatically: Meko installs the updates its checks find (on unless turned off).
+  auto_update?: boolean;
+  // Why an automatic update waits (it's in use, or its last update is still on probation).
+  waiting?: string;
   job?: ExtensionJob;
 }
 
 export type ExtensionAction = "install" | "update" | "start" | "stop";
 
-// An action running, or the last one run, on an extension; output is its last 16 KB.
+// An action running, or the last one run, on an extension; output is its last 16 KB. auto marks an
+// update Meko started on its own.
 export interface ExtensionJob {
   action: ExtensionAction;
   state: "running" | "done" | "failed";
@@ -386,6 +400,7 @@ export interface ExtensionJob {
   finished_at?: string;
   error?: string;
   output: string;
+  auto?: boolean;
 }
 
 // GET|PUT|DELETE /settings/meko-cloud: the Meko Cloud link the extensions use (never its key).

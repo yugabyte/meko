@@ -148,15 +148,29 @@ presenter`, the Extensions page): it unpacks a release into `<home>/app/<version
 (its folder, tags, tarballs and pages). `bin/meko_presenter` is the launcher
 (`packaging/meko_presenter`): it runs the bundled Node on
 `lib/dist/server/cli.js`, with `PRESENTER_APP_DIR` naming the release's folder and
-`PRESENTER_LAUNCHER` itself, and `meko_presenter start` runs `serve` through it.
+`PRESENTER_LAUNCHER` itself, and `meko_presenter start` runs `serve` through it. Run by `meko start`
+and `meko stop`, which set `MEKO_SUMMARY=1`, `start` and `stop` print one row of Meko's summary
+(`  ✓ Presenter       started`, `src/server/summary.ts`; the format is in Meko's
+`backend/docs/install.md`) instead of their usual line.
 
-An update is on probation until it has served for 5 minutes. Meko writes `app/update-pending.json`
-(`from`, `to`, `attempts`) as it switches `app/current`; the launcher counts each `serve` of the new
-version, and on the start after three failed ones points `app/current` back at the old version,
-adds the new one to `app/bad-versions` (which Meko skips) and runs the old one. The server clears
-the record once it has served for 5 minutes, and a SIGTERM takes its start off the count, so only
-crashes count (`src/server/probation.ts`). These are Meko's rules for its own releases, on the same
-files. A build from source has no launcher and no record, and Meko never updates it.
+An update is on probation until it has served for 5 minutes, and Meko runs it. The launcher hands
+`serve` to Meko's launcher (`meko _launch presenter <launcher> serve`), which runs it again with
+`MEKO_LAUNCHED` set, and then the launcher runs Node. Meko writes `app/update-pending.json` as it
+switches `app/current`, counts each start of the new version, and on the start after three failed
+ones points `app/current` back at the old version, adds the new one to `app/bad-versions` (which it
+skips from then on) and runs the old one. A clean stop (`meko_presenter stop`: the server exits 0)
+doesn't count, so only crashes do, and once the version has served 5 minutes Meko clears the
+record and prunes old versions. These are the rules Meko follows for its own releases, written
+once in Meko. With no `meko` that has `_launch` (one too old, or none on PATH, in `~/.local/bin` or
+in Meko's `app/current/bin`), the launcher runs Node itself and says a failed update won't roll
+back. A build from source has no launcher and no record, and Meko never updates it.
+
+Meko updates Presenter on its own (its **Update automatically** switch, on unless turned off),
+but not during a talk. Before an automatic update it runs `meko_presenter _busy`, which asks the
+server on its socket (`GET /_meko/busy`) and exits 0 while a talk is live: a run has a window open
+(the console or the audience's), or moved in the last 5 minutes (`Runs.live`; its windows may be
+reconnecting). Meko then tries again at its next check. A server that isn't running, or doesn't
+answer, isn't busy. An update someone asks for doesn't wait.
 
 ## Decisions
 
@@ -171,7 +185,8 @@ files. A build from source has no launcher and no record, and Meko never updates
 | Typed operations for every edit, change sets for asks | One undo history, one set of rules, nothing unreviewed over hand edits | Rewriting the deck each time |
 | Pieces under Meko's artifact limit | Decks of any size; only changes go up; never half-saved | One `deck.json`; knowledge files (indexed for search) |
 | Meko installs and updates the releases; no installer or updater of Presenter's | Meko already stages, checks, switches and rolls back its own releases (`internal/update`); one place does it | An `install.sh` per release and a `presenter update` |
-| AgentK's launcher rollback, on Meko's records | A release that can't start goes back to the one before by itself, and Meko never offers it again | No rollback; Meko watching the start itself |
+| The launcher hands `serve` to Meko's `meko _launch`, which counts starts, rolls back and finishes the update | A release that can't start goes back to the one before by itself, and the rules live in Meko once, for itself and every extension | Each extension's launcher counting and rolling back on its own; Meko watching the start from outside |
+| `_busy` makes Meko's automatic update wait during a talk | A restart would drop the console and the audience's window mid-talk | Updating whenever a check finds one; turning automatic updates off before each talk |
 | Meko's Meko Cloud link, read from `meko token --json` and followed on Meko's notice | One place links Meko Cloud for every extension; the REST host comes from Meko, since Meko Cloud's isn't the MCP one | A key in Presenter's own `config.json`; the REST base worked out from the MCP URL |
 | Drafts name their Meko; another Meko's can be played, not edited | A deck's datapack exists in one Meko only; a talk under way outlives a change of the link | Hiding such drafts; letting their save fail with Meko's "not found" |
 | One build job packages every platform | No native modules: only the bundled Node differs | AgentK's per-platform builds (needed for node-pty) |

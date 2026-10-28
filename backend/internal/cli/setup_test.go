@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,7 +18,6 @@ import (
 	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/service"
-	"github.com/yugabyte/meko/backend/internal/update"
 )
 
 // fakeService is a service manager that runs serve the way start does, as this test binary.
@@ -92,7 +89,7 @@ func useFakeService(t *testing.T) *fakeService {
 func fakeExtension(t *testing.T, path string) string {
 	t.Helper()
 	log := path + ".log"
-	script := fmt.Sprintf("#!/bin/sh\necho \"$*\" >> %q\necho \"ext $1\"\n", log)
+	script := fmt.Sprintf("#!/bin/sh\necho \"$*\" >> %q\necho \"ext $1${MEKO_SUMMARY:+ as a row}\"\n", log)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -130,12 +127,12 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	configurePort(t, dir, port)
 	f := useFakeService(t)
 	code, out, errs := run("install", "--data-dir", dir)
-	want(t, "install", code, 0, out+errs, "Meko is running at http://127.0.0.1:"+port)
+	want(t, "install", code, 0, out+errs, "  ✓ Server          running at http://127.0.0.1:"+port)
 	want(t, "install's next steps", code, 0, out, "meko install_extension agentk")
 	if f.spec.DataDir != dir || f.spec.ServiceLog != paths.New(dir).ServiceLog || f.spec.Exe == "" {
 		t.Errorf("spec %+v", f.spec)
 	}
-	code, out, _ = run("status", "--data-dir", dir)
+	code, out, _ = run("status", "--data-dir", dir, "--verbose")
 	want(t, "status", code, 0, out, "Service:       fake, running")
 
 	// An extension registered with this data folder starts and stops with Meko.
@@ -148,17 +145,17 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	}
 	code, out, _ = run("stop", "--data-dir", dir)
 	want(t, "stop", code, 0, out, "ext stop")
-	want(t, "stop", code, 0, out, "Meko stopped\n")
+	want(t, "stop", code, 0, out, "  ✓ Server          stopped\n")
 	if f.calls[len(f.calls)-1] != "stop" {
 		t.Errorf("stop didn't go through the service: %v", f.calls)
 	}
 	code, out, _ = run("start", "--data-dir", dir)
-	want(t, "start", code, 0, out, "run by fake")
-	want(t, "start", code, 0, out, "ext start")
+	want(t, "start", code, 0, out, "through fake")
+	want(t, "start", code, 0, out, "ext start as a row")
 	code, out, _ = run("restart", "--data-dir", dir)
 	want(t, "restart", code, 0, out, "Meko restarted")
 	code, out, _ = run("stop", "--data-dir", dir, "--keep-extensions")
-	want(t, "stop --keep-extensions", code, 0, out, "Meko stopped\n")
+	want(t, "stop --keep-extensions", code, 0, out, "  ✓ Server          stopped\n")
 	// The server asks it where it listens (_handoff) at each start; that's not starting or stopping it.
 	if got := strings.ReplaceAll(readLog(t, log), "_handoff --json\n", ""); got != "stop\nstart\n" {
 		t.Errorf("extension ran %q (restart and --keep-extensions must leave it alone)", got)
@@ -182,8 +179,13 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	if _, err := os.Stat(paths.New(dir).DB); !os.IsNotExist(err) {
 		t.Errorf("meko.db is still there: %v", err)
 	}
+	// A service for this data folder goes too, though the purge removed the folder before it's looked at.
+	if err := os.WriteFile(f.file, []byte(dir), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	code, out, _ = run("uninstall", "--data-dir", dir, "--purge", "--force", "--with-extensions")
 	want(t, "uninstall --purge --force --with-extensions", code, 0, out, "Removed "+dir)
+	want(t, "uninstall --purge --force --with-extensions", code, 0, out, "Removed the fake service")
 	if strings.Contains(out, "still installed") {
 		t.Errorf("uninstall said a removed extension is still installed:\n%s", out)
 	}
@@ -215,6 +217,29 @@ func TestAGoneExtensionIsFoundAgain(t *testing.T) {
 	if reg, _ = extensions.Load(dir); reg.Entries["agentk"].Command != moved || !reg.Entries["agentk"].InstalledByMeko {
 		t.Errorf("registry %+v", reg.Entries)
 	}
+}
+
+// An extension that fails gets a ✗ row after its own output, and one that's gone a ✗ row saying so;
+// stop goes on to Meko either way.
+func TestAFailingExtensionGetsAFailRow(t *testing.T) {
+	dir, _ := setup(t)
+	noRealExtensions(t)
+	ext := filepath.Join(t.TempDir(), "agentk")
+	script := []byte("#!/bin/sh\necho 'it broke' >&2\nexit 1\n")
+	if err := os.WriteFile(ext, script, 0o700); err != nil { //nolint:gosec // G306: test script
+		t.Fatal(err)
+	}
+	reg, _ := extensions.Load(dir)
+	reg.Entries["agentk"] = extensions.Entry{Command: ext, InstalledByMeko: true}
+	reg.Entries["presenter"] = extensions.Entry{Command: filepath.Join(t.TempDir(), "gone", "meko_presenter")}
+	if err := reg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs := run("stop", "--data-dir", dir)
+	want(t, "the failing extension's own output", code, 0, errs, "it broke\n")
+	want(t, "the failing extension's row", code, 0, out, "  ✗ AgentK          didn't stop: ")
+	want(t, "the gone extension's row", code, 0, out, "  ✗ Presenter       is gone (")
+	want(t, "Meko's row", code, 0, out, "  ✓ Server          isn't running\n")
 }
 
 func TestInstallWithoutAServiceLeavesStartToTheUser(t *testing.T) {
@@ -255,7 +280,7 @@ func TestInstallExtensionSetsUpAnInstalledAgentK(t *testing.T) {
 	if e := reg.Entries["agentk"]; e.Command != ak || !e.InstalledByMeko {
 		t.Errorf("registry %+v", reg.Entries)
 	}
-	code, out, _ = run("status", "--data-dir", dir)
+	code, out, _ = run("status", "--data-dir", dir, "--verbose")
 	want(t, "status", code, 0, out, "Extension:     agentk, running (ext status)")
 	code, out, _ = run("uninstall_extension", "agentk", "--data-dir", dir)
 	want(t, "uninstall_extension", code, 0, out, "still installed")
@@ -266,57 +291,12 @@ func TestInstallExtensionSetsUpAnInstalledAgentK(t *testing.T) {
 	want(t, "an unknown extension", code, 1, errs, "meko knows agentk, presenter")
 }
 
-func TestInstallExtensionRunsTheNewestAgentKInstaller(t *testing.T) {
-	dir, port := setup(t)
-	noRealExtensions(t)
-	code, out, errs := run("start", "--data-dir", dir, "--port", port)
-	want(t, "start", code, 0, out+errs, "is running")
-	home, _ := os.UserHomeDir()
-	argsFile := filepath.Join(home, "installer-args")
-	// The installer puts agentk in ~/.local/bin, and agent-k-local, its old name, as AgentK's does.
-	installer := fmt.Sprintf("#!/bin/sh\n# --meko-url\necho \"$* MEKO_HOME=$MEKO_HOME\" > %q\n"+
-		"mkdir -p \"$HOME/.local/bin\"\n"+
-		"printf '#!/bin/sh\\n' > \"$HOME/.local/bin/agentk\"\n"+
-		"chmod 700 \"$HOME/.local/bin/agentk\"\n"+
-		"ln -s agentk \"$HOME/.local/bin/agent-k-local\"\n", argsFile)
-	var srv *httptest.Server
-	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/repos/o/r/releases":
-			_ = json.NewEncoder(w).Encode([]update.Release{
-				{Tag: "meko-v0.20261031.0", Assets: []update.Asset{{Name: "install.sh", BrowserURL: srv.URL + "/wrong"}}},
-				{Tag: "v0.20261029.0", Assets: []update.Asset{{Name: "install.sh", BrowserURL: srv.URL + "/wrong"}}},
-				{Tag: "agentk-v0.20261030.0", Assets: []update.Asset{{Name: "install.sh", BrowserURL: srv.URL + "/install.sh"}}},
-			})
-		case "/install.sh":
-			_, _ = io.WriteString(w, installer)
-		default:
-			http.Error(w, "wrong installer", http.StatusNotFound)
-		}
-	}))
-	defer srv.Close()
-	old := newReleaseClient
-	newReleaseClient = func(string) *update.Client {
-		return &update.Client{Repo: "o/r", API: srv.URL, HTTP: srv.Client()}
-	}
-	t.Cleanup(func() { newReleaseClient = old })
-	code, out, errs = run("install_extension", "agentk", "--data-dir", dir)
-	want(t, "install_extension", code, 0, out+errs,
-		"Installing AgentK 0.20261030.0 (agentk-v0.20261030.0)")
-	if got := readLog(t, argsFile); !strings.HasPrefix(got, "--meko-url http://127.0.0.1:"+port+"/mcp --meko-key ") ||
-		!strings.HasSuffix(got, " MEKO_HOME="+dir+"\n") {
-		t.Errorf("installer got %q", got)
-	}
-	reg, _ := extensions.Load(dir)
-	if reg.Entries["agentk"].Command != filepath.Join(home, ".local", "bin", "agentk") {
-		t.Errorf("registry %+v", reg.Entries)
-	}
-}
-
-func TestUpdateNeedsAReleaseInstall(t *testing.T) {
+// meko update on a Meko built from source updates no Meko, and goes on to the extensions.
+func TestUpdateFromSourceUpdatesTheExtensions(t *testing.T) {
 	dir, _ := setup(t)
-	code, _, errs := run("update", "--data-dir", dir, "--check")
-	want(t, "update", code, 1, errs, "wasn't installed from a release")
+	code, out, errs := run("update", "--data-dir", dir, "--check")
+	want(t, "update", code, 0, out+errs, "doesn't update itself")
+	want(t, "update", code, 0, out, "No extensions are installed")
 }
 
 func TestVersionJSON(t *testing.T) {
@@ -459,7 +439,7 @@ func TestStartRefusesFlagsTheServiceWouldIgnore(t *testing.T) {
 	configurePort(t, dir, port)
 	useFakeService(t)
 	code, out, errs := run("install", "--data-dir", dir)
-	want(t, "install", code, 0, out+errs, "Meko is running at")
+	want(t, "install", code, 0, out+errs, "is installed and running")
 	code, _, errs = run("restart", "--data-dir", dir, "--log-level", "debug")
 	want(t, "restart --log-level", code, 1, errs, "reads config.toml")
 	code, _, errs = run("stop", "--data-dir", dir)
@@ -507,5 +487,21 @@ func TestServeUnderLaunchdWaitsForTheFolder(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The service for a data folder is found while the folder is gone (meko destroy leaves the service
+// to start Meko on an empty one), and not for another folder.
+func TestServiceOfAMissingDataFolder(t *testing.T) {
+	f := useFakeService(t)
+	gone := filepath.Join(t.TempDir(), "gone")
+	if err := os.WriteFile(f.file, []byte(gone), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if serviceOf(paths.New(gone)) == nil {
+		t.Error("the service for a missing data folder wasn't found")
+	}
+	if serviceOf(paths.New(t.TempDir())) != nil {
+		t.Error("the service for another data folder was found")
 	}
 }

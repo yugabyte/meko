@@ -29,7 +29,7 @@ import { prDesignSource } from './prdesign.js';
 import { HttpError } from './projects.js';
 import { searchSessions } from './sessionsearch.js';
 import { attachTerminal, type TermQuery } from './terminal.js';
-import { notesRange, type Updater } from './updater.js';
+import { notesRange, type Updates } from './updates.js';
 import { usageOverview } from './usage.js';
 import { taskPrs } from './taskprs.js';
 import { MAX_IDLE_DAYS, MAX_IDLE_PER_REPO } from './worktrees.js';
@@ -72,7 +72,8 @@ const BASE_PATH = AGENTK_PATH;
 
 export interface ServerOptions {
   webDir: string | null;
-  updater: Updater | null;
+  /** What AgentK knows of its updates (updates.ts); null in tests, where `core.updateStatus` stands in. */
+  updates: Updates | null;
 }
 
 export async function buildServer(core: Core, opts: ServerOptions): Promise<FastifyInstance> {
@@ -531,7 +532,6 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     reposRoots: core.config.repos.roots,
     reposDepth: core.config.repos.depth,
     cloneInto: core.config.repos.cloneInto,
-    updateChannel: core.config.update.channel,
     serverName: core.config.server.name,
     hostName: core.hostName(),
     idleWorktreesPerRepo: core.worktrees.cap(),
@@ -563,7 +563,6 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       throw new HttpError(400, 'List at least one repos folder.');
     }
     if (b.reposDepth !== undefined && (!Number.isInteger(b.reposDepth) || b.reposDepth < 1 || b.reposDepth > 4)) throw new HttpError(400, 'Scan depth must be between 1 and 4.');
-    if (b.updateChannel !== undefined && !['stable', 'prerelease', 'off'].includes(b.updateChannel)) throw new HttpError(400, 'Unknown update channel.');
     if (b.cloneInto !== undefined && typeof b.cloneInto !== 'string') throw new HttpError(400, 'The clone folder must be a path.');
     if (b.idleWorktreesPerRepo !== undefined && (!Number.isInteger(b.idleWorktreesPerRepo) || b.idleWorktreesPerRepo < 0 || b.idleWorktreesPerRepo > MAX_IDLE_PER_REPO)) {
       throw new HttpError(400, `Idle worktrees per repo must be a whole number from 0 to ${MAX_IDLE_PER_REPO}.`);
@@ -588,7 +587,6 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.reposRoots) c.repos.roots = b.reposRoots.map((r) => r.trim());
       if (b.reposDepth) c.repos.depth = b.reposDepth;
       if (b.cloneInto?.trim()) c.repos.cloneInto = b.cloneInto.trim();
-      if (b.updateChannel) c.update.channel = b.updateChannel;
       if (b.serverName !== undefined) c.server.name = b.serverName.trim();
       if (b.idleWorktreesPerRepo !== undefined) c.worktrees.idlePerRepo = b.idleWorktreesPerRepo;
       if (b.idleWorktreeDays !== undefined) c.worktrees.idleDays = b.idleWorktreeDays;
@@ -658,18 +656,15 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (!isHarnessId(req.params.id)) throw new HttpError(404, 'There is no such agent.');
     return core.harnesses.of(req.params.id).update(core.config);
   });
-  app.get('/api/update', async () => (opts.updater ? opts.updater.status() : core.updateStatus()));
-  app.post('/api/update/check', async () => (opts.updater ? opts.updater.check() : core.updateStatus()));
-  app.post('/api/update/apply', async () => {
-    if (!opts.updater) throw new HttpError(409, 'Updates are disabled when running from a source checkout.');
-    return opts.updater.apply();
-  });
+  // Meko installs updates: the page checks, updates and sets Update automatically through Meko's own
+  // routes. What AgentK keeps is which update this version came from, and What's new.
+  app.get('/api/update', async () => (opts.updates ? opts.updates.status() : core.updateStatus()));
   app.get<{ Querystring: { from?: string; to?: string } }>('/api/update/notes', async (req) => {
-    if (!opts.updater) throw new HttpError(409, 'Updates are disabled when running from a source checkout.');
     const { from, to } = req.query;
     if (typeof from !== 'string' || typeof to !== 'string' || !notesRange(from, to)) throw new HttpError(400, 'Give two versions, the older one first.');
+    if (!opts.updates) throw new HttpError(409, "What's new isn't available here.");
     try {
-      return await opts.updater.notes(from, to);
+      return await opts.updates.notes(from, to);
     } catch (e) {
       throw new HttpError(502, errMsg(e).replace(/\.?$/, '.'));
     }

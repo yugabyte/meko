@@ -43,11 +43,7 @@ func runUI(l paths.Layout, path string, open bool, stdout, stderr io.Writer) int
 	// The web listener binds just after the API listener answers (after the extensions' handoff), so
 	// right after meko start it may still be starting: wait for it, but not for one that says why it
 	// can't listen (another program on its port).
-	st, err := c.status(ctx)
-	for err == nil && st.Web != nil && !st.Web.Listening && st.Web.Error == "" && ctx.Err() == nil {
-		time.Sleep(200 * time.Millisecond)
-		st, err = c.status(ctx)
-	}
+	st, err := waitWebListening(ctx, c)
 	if err != nil {
 		return fail(stderr, err)
 	}

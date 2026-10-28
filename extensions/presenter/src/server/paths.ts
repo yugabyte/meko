@@ -4,7 +4,7 @@
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
@@ -130,7 +130,11 @@ function sockPath(home: string): string {
   return join('/tmp', `presenter-${uid}`, `${tag}-web.sock`);
 }
 
-function samePath(a: string, b: string): boolean {
+/**
+ * Whether a and b are the same folder (or file). Past links, it compares the files themselves: one
+ * folder can have spellings links don't explain, such as a bind mount.
+ */
+export function samePath(a: string, b: string): boolean {
   const real = (p: string) => {
     try {
       return realpathSync(p);
@@ -138,11 +142,18 @@ function samePath(a: string, b: string): boolean {
       return p;
     }
   };
-  return real(a) === real(b);
+  if (real(a) === real(b)) return true;
+  try {
+    const sa = statSync(a, { bigint: true });
+    const sb = statSync(b, { bigint: true });
+    return sa.dev === sb.dev && sa.ino === sb.ino;
+  } catch {
+    return false;
+  }
 }
 
 /** The commands Meko runs, which must be for the Meko this home is in. */
-export const MEKO_COMMANDS = ['start', 'stop', 'status', 'uninstall', '_handoff'];
+export const MEKO_COMMANDS = ['start', 'stop', 'status', 'uninstall', '_handoff', '_busy'];
 
 /**
  * Refuses a command Meko runs for another data folder than the one this home is in, so a second

@@ -273,8 +273,6 @@ export const api = {
   refreshHarnesses: () => post<HarnessStatus[]>('/api/harnesses/refresh'),
   updateHarness: (id: HarnessId) => post<HarnessStatus>(`/api/harnesses/${id}/update`),
   update: () => get<UpdateStatus>('/api/update'),
-  checkUpdate: () => post<UpdateStatus>('/api/update/check'),
-  applyUpdate: () => post<UpdateStatus>('/api/update/apply'),
   updateNotes: (from: string, to: string) => get<ReleaseNotes>(`/api/update/notes?${new URLSearchParams({ from, to })}`),
 };
 

@@ -32,10 +32,10 @@ export HOME="$tmp/home" MEKO_SECRETS=file MEKO_CALL_HOME=false MEKO_WEB_PORT=$((
 mkdir -p "$HOME"
 "$meko" start --data-dir "$data" --port "$port"
 i=0
-until "$meko" status --data-dir "$data" | grep -q 'Memory engine: ready'; do
+until "$meko" status --data-dir "$data" --verbose | grep -q 'Memory engine: ready'; do
   i=$((i + 1))
   if [ "$i" -ge 120 ]; then
-    "$meko" status --data-dir "$data" || true
+    "$meko" status --data-dir "$data" --verbose || true
     echo "--- memory_engine.log" >&2
     tail -n 40 "$data/logs/memory_engine.log" >&2 || true
     echo "the memory engine didn't get ready within 2 minutes" >&2
@@ -44,8 +44,11 @@ until "$meko" status --data-dir "$data" | grep -q 'Memory engine: ready'; do
   sleep 1
 done
 "$meko" status --data-dir "$data"
-"$meko" add_memory "The release smoke test saves a fact about blue herons nesting in March." --data-dir "$data"
-out=$("$meko" search "When do herons nest?" --data-dir "$data")
+# mekosh is the same binary run by that name, as meko install links it in ~/.local/bin.
+mekosh="$tmp/mekosh"
+ln -s "$meko" "$mekosh"
+"$mekosh" add_memory "The release smoke test saves a fact about blue herons nesting in March." --data-dir "$data"
+out=$("$mekosh" search "When do herons nest?" --data-dir "$data")
 printf '%s\n' "$out"
 printf '%s\n' "$out" | grep -q 'blue herons' || { echo "search didn't find the memory" >&2; exit 1; }
 # The model came from the tarball: nothing was downloaded into the data folder.

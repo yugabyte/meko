@@ -1,4 +1,4 @@
-# Releases and auto-update
+# Releases and updates
 
 Part of the [AgentK design](../design.md).
 
@@ -37,15 +37,13 @@ Part of the [AgentK design](../design.md).
   and layout that the updaters and installers from before the rename to AgentK look for. An
   updater from then skips any release without its name, so without the second copy those installs
   would never update again. Both hold `bin/agent-k-local`, a link to `bin/agentk`, which the
-  services installed then start. The updater installs only newer releases, all of which have the
-  new name, so it reads only that; the installer falls back to the old name for an older
-  `--version`. The copy goes a week after the first release that has it (#238): an install still on a release from before the rename by then needs a reinstall.
-  The installer and the updater pick the tarball for their platform. The updater skips releases
-  with no build for its platform; the installer takes the latest release (or `--version`) and stops
-  with a clear message if it has none. Releases since macOS support always include the macOS
-  build: publishing waits for it. A hand-run rebuild takes only tags from after the move to
-  `extensions/agentk`. Each release also includes `SHA256SUMS`, a build provenance attestation
-  and `install.sh`. Release tarballs carry the usage stats collector's URL (`CALL_HOME_URL`, from the repo variable of that name) when it's set ([Usage stats](usage-stats.md)). Afterwards, AgentK's releases beyond the newest 5 in each lane (`stable`, or the
+  services installed then start. Meko reads only the new name. The copy goes a week after the first release that has it (#238): an install still on a release from before the rename by then needs a reinstall.
+  Meko picks the tarball for its platform, and skips releases with no build for it. Releases
+  since macOS support always include the macOS build: publishing waits for it. A hand-run rebuild
+  takes only tags from after the move to `extensions/agentk`. Each release also includes
+  `SHA256SUMS`, a build provenance attestation and `install.sh`, which only says that Meko installs
+  AgentK (`meko install_extension agentk`): the Mekos from before Meko installed AgentK ran the
+  newest release's `install.sh`, and an older AgentK's own instructions still name it. Release tarballs carry the usage stats collector's URL (`CALL_HOME_URL`, from the repo variable of that name) when it's set ([Usage stats](usage-stats.md)). Afterwards, AgentK's releases beyond the newest 5 in each lane (`stable`, or the
   prerelease identifier such as `beta`, per tag prefix) are deleted, except the newest `v…` one;
   their tags stay, and Meko's are left alone.
 
@@ -53,112 +51,125 @@ Part of the [AgentK design](../design.md).
 > in an AlmaLinux 8 container rather than on `ubuntu-latest`, so the binary loads on older hosts.
 
 ```sh
-# The repo's one-line install (gh release download --pattern install.sh, from its latest release)
-# installs Meko, whose `meko install_extension agentk` installs AgentK pointed at it. AgentK
-# alone: its own install.sh from the newest AgentK release (no root; the repo is internal for
-# now, so this uses gh).
-gh release download "$(gh release list --repo yugabyte/agent-k-local --exclude-drafts \
-  --exclude-pre-releases --limit 50 --json tagName \
-  --jq '[.[].tagName | select(test("^(agentk-v|v)[0-9]"))][0]')" \
-  --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
+# The repo's one-line install (gh release download --pattern install.sh, from its latest release,
+# which is Meko's) installs Meko. Then:
+meko install_extension agentk                      # or Install on Meko's Extensions page
+meko install_extension agentk -- --agent kiro      # options after -- go to `agentk install`
 
-# what it does
-#  0. finds AgentK's home: the one an install here already has (from the ~/.local/bin/agentk link
-#     it made, even in ~/.agent-k-local or a custom AK_HOME from before), else
-#     <Meko's data folder>/extensions/agentk (MEKO_HOME, else ~/.meko, or $XDG_STATE_HOME/meko or
-#     /var/tmp/<user>/meko for a home folder on NFS), or ~/.agent-k-local when only that is there
-#     (until its server moves it); --print-home prints it and stops.
-#     Stops, saying so, if AgentK is already installed there and set up: app/current,
-#     config.toml, ~/.local/bin/agentk, and both services enabled (systemd) or loaded
-#     (launchd). Updates are offered in the app, and `agentk install` redoes the setup.
-#     --reinstall, --deps-only, a --version other than the installed one, or options for
-#     `agentk install` (other than --non-interactive) go on
-#  1. checks for git, curl, gh and Claude Code; offers to
-#     install whatever is missing (it shows the commands and asks first): brew on macOS, the
-#     package manager with sudo on Linux (apt-get, dnf, yum, zypper, pacman or apk), gh on Linux
-#     from its GitHub release (checksum-verified) into ~/.local/bin, and Claude Code with
-#     Anthropic's installer (claude.ai/install.sh, which publishes no checksum) into ~/.local/bin;
-#     with GITHUB_TOKEN set, a missing gh is only installed with --install-deps (downloads use
-#     curl and the token). It checks the tools themselves afterwards: Homebrew exiting with an
-#     error once they work (it builds from source on a macOS it no longer supports) is a warning,
-#     while a failed Linux package manager stops it; then offers `gh auth login` and `claude auth
-#     login` for whichever isn't signed in. Sessions add ~/.local/bin to PATH after the login profile runs. --install-deps installs without asking,
-#     --no-install-deps never installs, --deps-only stops after this step
-#  2. unpacks to <home>/app/<ver>, points app/current at it, then runs `agentk install`:
-#  3. asks for your repos folder (default ~/code), and stops when there's no `meko` command: the
+# what it does (Meko's install_extension, backend/docs/install.md)
+#  0. downloads the newest agentk-<version>-<platform>-<arch>.tar.gz and SHA256SUMS (with gh's
+#     token or GITHUB_TOKEN), checks it, unpacks it owner-only into
+#     <Meko's data folder>/extensions/agentk/app/<version>, checks that it runs (`agentk version
+#     --json`, `agentk selftest`), points app/current at it and links ~/.local/bin/agentk; an
+#     install AgentK already has (one still in ~/.agent-k-local too) is set up again in place
+# then `agentk install --meko-url … --meko-key …`, on the terminal it was started from:
+#  1. scripts/deps.sh (lib/scripts/deps.sh in a release): checks for git, curl, gh and a coding
+#     agent (Claude Code, OpenCode or Kiro CLI; one is enough); offers to install whatever is
+#     missing (it shows the commands and asks first): brew on macOS, the package manager with sudo
+#     on Linux (apt-get, dnf, yum, zypper, pacman or apk), gh on Linux from its GitHub release
+#     (checksum-verified) into ~/.local/bin, and an agent with its own installer (Claude Code's
+#     claude.ai/install.sh, which publishes no checksum, OpenCode's or Kiro's; which one: --agent,
+#     else it asks, else Claude Code); with GITHUB_TOKEN set, a missing gh is only installed with
+#     --install-deps. It checks the tools themselves afterwards: Homebrew exiting with an error
+#     once they work (it builds from source on a macOS it no longer supports) is a warning, while
+#     a failed Linux package manager stops it; then offers each agent's sign-in and `gh auth
+#     login` for whichever isn't signed in. Sessions add ~/.local/bin to PATH after the login
+#     profile runs. --install-deps installs without asking, --no-install-deps never installs,
+#     and from Meko's Extensions page (--non-interactive) nothing is installed without
+#     --install-deps
+#  2. asks for your repos folder (default ~/code), and stops when there's no `meko` command: the
 #     Meko on this computer serves AgentK to browsers (at /ext/agentk/) and signs people in
-#  4. Meko: uses Meko's Meko Cloud link, else the Meko running on this computer, and stores neither
+#  3. Meko: uses Meko's Meko Cloud link, else the Meko running on this computer, and stores neither
 #     (no key is asked for: --meko-key, with --meko-url, links one in Meko; a key AgentK kept before
 #     is handed to Meko once; --no-meko is ignored) and offers to run Meko's setup for Claude Code if
 #     its plugin, MCP server or key is missing (declining is a warning)
-#  5. picks the database location (local disk for an older home still on NFS), writes config.toml
+#  4. picks the database location (local disk for an older home still on NFS), writes config.toml
 #     (with the Meko data folder the home is in); on an older home, says it moves into
 #     Meko's data folder once the server has started
-#  6. installs both background services: systemd user units with linger if allowed,
+#  5. installs both background services: systemd user units with linger if allowed,
 #     or LaunchAgents on macOS (needs a desktop login)
-#  7. prints the address Meko serves it at (meko setup_link makes the login for remote access)
+#  6. prints the address Meko serves it at (meko setup_link makes the login for remote access)
 ```
 
 **Tags.** The repo releases three products. AgentK's releases are tagged `agentk-v<version>`
 (`v<version>` before releases were tagged by product); Meko's are `meko-v<version>`, and
 Presenter's `presenter-v<version>` (`presenter-release.yml`; Meko installs and updates them). Versions stay
-bare (`0.YYYYMMDD.N`): tarball names, `app/<version>` and `bad-versions` use them, and on the day of
+bare (`0.YYYYMMDD.N`): tarball names, `app/<version>` and Meko's `bad-versions` use them, and on the day of
 the switch `next-version.sh` counted both prefixes so no version was used twice. AgentKs installed
 before the switch read only `v…` tags; the last `v…` release (the bridge) reads both, so they reach
 the `agentk-v…` releases through it, and pruning never deletes the newest `v…` release (the old
 prefix is a lane of its own that stops growing). Meko's
 releases are the repo's "latest", since its installer is the one-line install, so AgentK's are
-published with `--latest=false`: the installer finds the newest AgentK release by its tag (the
-newest non-draft, non-prerelease `agentk-v…` or `v…`), and `--version` tries both tags. The updater
-reads both prefixes too (`TAG_PREFIXES`, `tagVersion` in `updater.ts`), skips Meko's, and downloads
-and compares (What's new) by each release's own tag. A version whose tag it hasn't listed is tried
-under each prefix, since pruning deletes releases but keeps their tags.
+published with `--latest=false`. Meko finds AgentK's releases by their tags (its catalog lists
+both prefixes), and What's new compares two versions by their tags, trying each prefix
+(`TAG_PREFIXES` in `updates.ts`), since pruning deletes releases but keeps their tags.
 
-**Update loop.** The server checks the GitHub Releases API at startup and every 6 hours
-(`update.interval_hours`). The channel can be *stable*, *prerelease* or *off*. When a newer version appears, the rail shows a
-"Version X is available" banner with an **Update to the latest version** button (Settings has the
-same button); a version that was rolled back is never offered again. When you click it, the server:
+**Updates are Meko's.** Meko checks GitHub for AgentK's releases with its own (one list for Meko
+and every extension, at its start and every `[update] interval_hours` of Meko's `config.toml`),
+installs them, and rolls back one that keeps failing; AgentK has no updater of its own and ignores
+an `[update]` table in its `config.toml`. Meko's design is in `backend/docs/install.md`. What AgentK
+sees of it:
 
-1. checks the releases again and takes the newest one, so a release cut since the last check is
-   installed now rather than offered right after the restart (if the check fails, it installs the
-   version found before). A second click while this runs gets the same update;
-2. downloads the tarball and verifies it against `SHA256SUMS`, and against its build provenance
-   attestation (with `gh`) when `[update] require_attestation = true`;
-3. unpacks it next to the current version and runs its self-test;
-4. snapshots the database with `VACUUM INTO state.db.bak-<old-ver>`, lets the new version run its
-   migrations on start, and points `app/current` at the new version;
-5. restarts only the web server unit. Sessions keep running. Closing, the server gives each
-   browser's socket 1 second to answer its close and then drops it, so a page that can't answer
-   (a sleeping phone or laptop) doesn't hold the restart for the 30 seconds `ws` would wait. An open
-   page whose last state said an update was installing retries its events socket every second
-   (for up to 2 minutes, then with the usual backoff), so it reloads into the new version as soon
-   as it's up. Just before it restarts, the server sends every open page a `restarting` event, so
-   the page shows only the update's Installing banner while it waits, and not the lost-connection
-   banner (which it shows after 2 minutes if the server isn't back; a drop before the
-   `restarting` event, while the update still downloads, is shown after the usual 2 seconds);
-6. if the new version fails to come up three times in a row (the service manager restarts it) before
-   it has been healthy for 5 minutes, points back to the previous version and marks the new one as
-   bad (`bad-versions`, which the updater never offers again). A deliberate stop (SIGTERM, as for a
-   service restart) takes its start back off the count, so restarting by hand in that window isn't
-   mistaken for a crash loop. A start that fails once it holds the home's lease (a migration,
-   Core's start, the web server) writes its error to `server.log`, and the launcher writes the
-   rollback there (once `logs/` exists), not only to stderr, which reaches no one where the service
-   manager's log isn't kept (a user journal that isn't persistent). A failure before the lease,
-   such as an unreadable `config.toml`, still goes only to stderr.
+1. **The offer.** The page reads AgentK's row from Meko's own routes, on Meko's origin
+   (`GET /api/v1/extensions`; `src/web/mekoupdate.ts`): the version installed, the newest one, the
+   last check, a job Meko runs on AgentK, and **Update automatically** (on by default; Meko then
+   installs an update when its check finds one). When a newer version is there, the rail shows a
+   "Version X is available" banner with **Update to the latest version**; Settings › Updates has the
+   same button, **Check now** (`POST /api/v1/extensions/agentk/check`) and the switch (`PATCH
+   /api/v1/extensions/agentk`). A version that was rolled back is never offered again. When the row isn't `updatable`,
+   Settings says why: Meko's `not_updatable` (a build from source, or an AgentK still in
+   `~/.agent-k-local`, which Meko updates once it has moved), else, under a Meko too old to say,
+   to update Meko first. An old `[update] channel = "off"` in AgentK's `config.toml` keeps Meko's
+   **Update automatically** off for AgentK until that switch is set; AgentK keeps that one key when
+   it saves its config.
+2. **The update.** `POST /api/v1/extensions/agentk/update` starts Meko's job: it downloads the
+   tarball and checks it against `SHA256SUMS`, unpacks it next to the current version, checks that
+   it runs (`agentk version --json`, `agentk selftest`), writes its record
+   (`app/update-pending.json`) and points `app/current` at it, then runs `agentk restart`. That
+   restarts only the server's service, and waits up to 100 s for the server to answer as the
+   version `app/current` names. Sessions keep running. The job lives in Meko, so it outlasts
+   AgentK's restart; the page follows it (every 2 s while it runs) and shows the Installing banner.
+3. **The restart.** Stopping, the server sees that `app/current` no longer names the version it
+   runs from (`switchedAway()`), and sends every open page a `restarting` event first, so the page
+   shows only the Installing banner while it waits, and not the lost-connection banner (which it
+   shows after 2 minutes if the server isn't back; any other drop is shown after the usual 2
+   seconds). While Meko's job is an update, the page's events socket retries every second (for up
+   to 2 minutes, then with the usual backoff), so it reloads into the new version as soon as it's
+   up. Closing, the server gives each browser's socket 1 second to answer its close and then
+   drops it, so a page that can't answer (a sleeping phone or laptop) doesn't hold the restart for
+   the 30 seconds `ws` would wait.
+4. **Probation.** The launcher (`packaging/agentk`) hands `serve` and `host` to Meko's launcher
+   (`meko _launch agentk <its own path> …`), which runs it again with `MEKO_LAUNCHED` set. For
+   `serve`, Meko counts each start of a version on probation, and if it fails to come up three
+   times in a row (the service manager restarts it) before it has run 5 minutes, points
+   `app/current` back to the version before, marks the new one bad (`bad-versions`) and runs the
+   old one; the job then fails, saying so. A deliberate stop (SIGTERM, as for a service restart),
+   an exit 0 or a start refused because another server holds the home (exit 75) isn't counted, so
+   restarting by hand in that window isn't mistaken for a crash loop. Without a Meko that has
+   `_launch` (an older one, or none), the launcher runs the server itself and says a failed
+   update won't roll back. A start that fails once it holds the home's lease (a migration, Core's
+   start, the web server) writes its error to `server.log`, not only to stderr, which reaches no
+   one where the service manager's log isn't kept (a user journal that isn't persistent).
+5. **The database.** While a version is on probation, Meko's launcher tells it the version it was
+   updated from (`MEKO_UPDATED_FROM`). At its first such start, before its migrations run, the
+   server copies the database as the old version left it to `state.db.bak-<old version>`
+   (`snapshotBeforeMigrating` in `updates.ts`), for going back by hand: Meko's rollback restores
+   only the program.
 
-Once a version has been healthy for 5 minutes, the server deletes every installed version under
-`app/` except the running one and one to roll back to by hand: the version it updated from, or
-(after a manual switch) the newest older one. It also deletes the database snapshots of the versions
-it removes. Nothing is removed while an update is being installed or switched to, and never the
-version `app/current` points at. Each version is about 180 MB, most of it the bundled Node runtime.
-The "Updated to" notice shows from the new version's first boot, without waiting for the healthy
-check.
+Once a version has run 5 minutes, Meko finishes the update and deletes the installed versions
+under `app/` except the running one and the one it updated from, skipping any version a running
+process started from: `meko _launch` holds a lock on its version's folder for as long as the process
+runs, so the version the session host runs from (it outlives updates) is never deleted. At each
+start the server deletes the database copies of versions no longer in `app/`. Each version is about
+180 MB, most of it the bundled Node runtime. The "Updated to" notice shows from the new version's
+first start, without waiting for the 5 minutes.
 
 The first release that brings the move of AgentK's home into Meko's data folder (#236) moves an
 older home as soon as it has proved healthy, ending every session and resuming it in the new
 place: [Moving the home into Meko's data folder](recovery.md#moving-the-home-into-mekos-data-folder).
 The launcher finds the home from its own folder (`<home>/app/<version>`), so a rollback after the
-move runs the previous version from the new home.
+move runs the previous version from the new home. An install still in an older home moves at its
+first start of a release Meko launches; Meko updates it once it's in Meko's data folder.
 
 The rail shows "Updated to v0.4.1 (from v0.4.0)" with a **What's new** link. Updates never need a
 maintenance window, because they never touch the session host.
@@ -167,18 +178,19 @@ maintenance window, because they never touch the session host.
 since the release before it, and releases beyond the newest 5 are deleted, so one release's notes
 don't say what an update brought. The **What's new** dialog (`WhatsNewDialog.tsx`) shows every
 change between two versions instead: the server asks GitHub for the commits between their tags
-(`GET /api/update/notes`, `Updater.notes()`, through the same `gh` or HTTPS source as the update
-check: `repos/<repo>/compare/<from tag>...<to tag>`, each of either prefix) and lists the `feat`, `fix`, `perf` and `deps`
+(`GET /api/update/notes`, `Updates.notes()` in `updates.ts`, through `gh` once `gh auth status`
+passes, else HTTPS: `repos/yugabyte/agent-k-local/compare/<from tag>...<to tag>`, each of either
+prefix) and lists the `feat`, `fix`, `perf` and `deps`
 subjects by type, as the repo root's `scripts/release/release-notes.sh` does (leaving out the subjects that name only `meko` or `presenter`) (`src/server/releasenotes.ts`), with
 **Breaking changes** first and each line linked to its PR. GitHub returns at most 250 commits for a
 comparison; past that the dialog says so, and **See every commit on GitHub** opens the comparison
 there. A range's notes are kept in memory once fetched; nothing is fetched until the dialog opens.
 It opens from the "Updated to" banner (the version updated from → this one), the "Version X is
 available" banner and Settings while an update is on offer (this version → the offered one), and
-otherwise from Settings for the last update (`update.lastUpdatedFrom` in `kv`, written when the
-`Updater` is made, before the server starts, so a version that crashes while starting still
-counts, and kept after the update's first boot; no link on an install that has never updated, or
-after a rollback, when that version is no longer older than the running one). A failed comparison
+otherwise from Settings for the last update (`update.lastUpdatedFrom` in `kv`, written from
+`MEKO_UPDATED_FROM` before the server starts, so a version that crashes while starting still
+counts, and kept after probation; no link on an install that has never updated, or after a
+rollback, when that version is no longer older than the running one). A failed comparison
 shows GitHub's error; it names the sign-in only for the HTTPS source with no `GITHUB_TOKEN` and a
 401, 403 or 404 (the `gh` source is used only once `gh auth status` passes). This is why release
 pruning keeps the tags.

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -539,7 +539,12 @@ export function servicesFor(home: string, svc: ServiceManager | null = hostServi
 export function samePath(a: string, b: string): boolean {
   if (a === b) return true;
   try {
-    return realpathSync(a) === realpathSync(b);
+    if (realpathSync(a) === realpathSync(b)) return true;
+    // One folder can have spellings links don't explain, such as a bind mount (one disk at two
+    // paths): compare the files themselves.
+    const sa = statSync(a, { bigint: true });
+    const sb = statSync(b, { bigint: true });
+    return sa.dev === sb.dev && sa.ino === sb.ino;
   } catch {
     return false;
   }

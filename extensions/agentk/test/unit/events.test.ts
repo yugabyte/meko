@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppState } from '../../src/shared/types.js';
-import { CONNECT_MS, EventsConnection, LOST_GRACE_MS, PROBE_MS, QUIET_MS, STATE_MS, UPDATE_RETRY_FOR_MS, UPDATE_RETRY_MS, type Conn, type SocketLike } from '../../src/web/events.js';
+import { CONNECT_MS, EventsConnection, LOST_GRACE_MS, PROBE_MS, QUIET_MS, setUpdateInstalling, STATE_MS, UPDATE_RETRY_FOR_MS, UPDATE_RETRY_MS, type Conn, type SocketLike } from '../../src/web/events.js';
 import { WS_UNAUTHORIZED } from '../../src/web/signin.js';
 
 /** A socket the test drives: what the page sent, and whether it let go of it. */
@@ -59,7 +59,10 @@ function setup(o: { checkSignIn?: () => Promise<boolean> } = {}) {
 
 describe('the events connection', () => {
   beforeEach(() => vi.useFakeTimers());
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    setUpdateInstalling(false);
+  });
 
   it('passes on state, notifications and invites, and ignores pongs', () => {
     const t = setup();
@@ -137,7 +140,8 @@ describe('the events connection', () => {
 
   it('retries every second while an update restarts the server, then backs off as before', () => {
     const t = setup();
-    t.last().accept({ update: { applying: true } } as never);
+    t.last().accept({} as never);
+    setUpdateInstalling(true);
     // The old server says it's restarting into the update, stops, and the new one refuses connections until it's up.
     t.last().receive({ type: 'restarting' });
     const tries = (UPDATE_RETRY_FOR_MS / UPDATE_RETRY_MS) - 1;
@@ -161,7 +165,8 @@ describe('the events connection', () => {
     expect(t.conns).toEqual(['connecting', 'open', 'closed']);
     // Once it's up, a later drop backs off from the start.
     vi.advanceTimersByTime(30_000);
-    t.last().accept({ update: { applying: false } } as never);
+    setUpdateInstalling(false);
+    t.last().accept({} as never);
     t.last().serverClose();
     vi.advanceTimersByTime(900);
     expect(t.sockets).toHaveLength(tries + 9);
@@ -174,7 +179,8 @@ describe('the events connection', () => {
   it('says the connection is lost once it has been down for the grace, and once only', () => {
     const t = setup();
     // An update still downloading: the server never said it's restarting, so this drop is an outage.
-    t.last().accept({ update: { applying: true } } as never);
+    t.last().accept({} as never);
+    setUpdateInstalling(true);
     t.last().serverClose();
     vi.advanceTimersByTime(LOST_GRACE_MS - 1);
     expect(t.conns).toEqual(['connecting', 'open']);

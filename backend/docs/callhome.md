@@ -82,7 +82,7 @@ release install; the variables suit a server run by hand, or CI.
 
 Config and the environment can only turn usage stats off. When they do, the web UI's checkbox is off
 and disabled, and says what turned it off (`config.toml`, `MEKO_CALL_HOME` or
-`YB_DISABLE_CALLHOME`). `meko status` says whether they're on, where they go (YugabyteDB, or
+`YB_DISABLE_CALLHOME`). `meko status --verbose` says whether they're on, where they go (YugabyteDB, or
 the URL config gives) and what turned them off. `MEKO_CALL_HOME=true` lifts `config.toml`'s
 `false`, but not `YB_DISABLE_CALLHOME`. Meko never writes `config.toml`, so the web UI's setting
 lives in the store. Meko's switches don't turn off
