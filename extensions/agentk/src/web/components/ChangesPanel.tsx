@@ -5,7 +5,7 @@ import {
   type SessionChanges,
 } from '../../shared/types';
 import { ApiError, api, errorMessage } from '../api';
-import { anchorComment, defaultOpen, DESKTOP_BUDGET, keepUnchanged, PHONE_BUDGET, pickRange, reparse, sameItems, showsLine, sideLine, type DiffLine } from '../diff';
+import { anchorComment, defaultOpen, DESKTOP_BUDGET, keepUnchanged, PHONE_BUDGET, pickComment, reparse, sameItems, showsLine, sideLine, type DiffLine } from '../diff';
 import { matches, MOBILE_QUERY, useTouch } from '../hooks/useMedia';
 import { useRangeDrag, type CommentPick } from '../hooks/useRangeDrag';
 import { agentName, cx, relativeTime } from '../util';
@@ -263,23 +263,16 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
     const l = lines?.[i];
     if (!lines || !l) return;
     const side: CommentSide = l.kind === 'del' ? 'old' : 'new';
-    const n = sideLine(l, side);
-    if (n === null) return;
     // Touch has no shift-click: tapping another line while a new comment is still empty extends it.
-    const extend = how.shift || (touch && !!editor && !editor.id && !draftText.current.trim() && pick?.line !== n);
-    // A drag covers the lines from where it started; an extended range, those from the last line picked.
-    let from = how.from ?? (extend && pick && pick.path === path && pick.side === side ? pick.line : n);
-    // It stops at the edge of the hunk it started in, rather than cover lines the diff doesn't show.
-    let r = pickRange(lines, side, from, n);
-    if (!r) {
-      from = n;
-      r = pickRange(lines, side, n, n);
-      if (!r) return;
-    }
-    setPick({ path, side, line: from });
+    const extend = how.shift || (touch && !!editor && !editor.id && !draftText.current.trim() && pick?.line !== sideLine(l, side));
+    // A drag starts its range on the line it was pressed on; a shift-click or second tap extends the
+    // range from the line it started on. It stops at the diff's next skipped lines (pickRange).
+    const c = pickComment(lines, i, how.from ?? (extend && pick && pick.path === path && pick.side === side ? pick.line : null));
+    if (!c) return;
+    setPick({ path, side, line: c.anchor });
     // Switching from editing a comment starts a fresh one; a new comment keeps what was typed.
     if (editor?.id) draftText.current = '';
-    setEditor({ id: null, path, side, line: r.from, endLine: r.to, excerpt: r.rows.map((x) => x.text).join('\n') });
+    setEditor({ id: null, path, side, line: c.line, endLine: c.endLine, excerpt: c.excerpt });
   };
 
   const closeEditor = () => {
