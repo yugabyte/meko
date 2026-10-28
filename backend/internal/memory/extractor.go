@@ -12,7 +12,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/yugabyte/meko/backend/internal/memoryengine"
 	"github.com/yugabyte/meko/backend/internal/store"
 )
 
@@ -33,6 +35,9 @@ const (
 	extractTurns           = 30   // turns of one conversation a call takes
 	extractExisting        = 20   // existing memories a call is shown
 	extractDuplicate       = 0.9  // a new fact this close to an existing memory is dropped
+	extractDuplicateOf     = 5    // the nearest memories a new fact is compared with
+	extractMaxAttempts     = 5    // a turn that failed this often leaves the queue
+	extractMaxFailures     = 3    // calls failing in a row end a run: the harness itself is likely down
 	extractQueryChars      = 2000 // of the turns' text, to find the existing memories
 )
 
@@ -49,6 +54,10 @@ const (
 
 // ErrExtractorOff is a run asked for while no harness is set up.
 var ErrExtractorOff = errors.New("the memory extractor is off: set it up with meko memory-extractor use claude")
+
+// ErrHarness is a call through the harness that failed. Its message never holds the call's text
+// (the user's turns, the memories): only the harness's own error or a fixed reason.
+var ErrHarness = errors.New("the extraction call failed")
 
 // ExtractorSettings is how the extractor runs: Harness "" is off.
 type ExtractorSettings struct {
@@ -71,9 +80,11 @@ type ExtractorStatus struct {
 
 // ExtractRun is what one run did.
 type ExtractRun struct {
-	Conversations int `json:"conversations"`
-	Turns         int `json:"turns"`
-	Memories      int `json:"memories"`
+	Conversations int    `json:"conversations"`
+	Turns         int    `json:"turns"`
+	Memories      int    `json:"memories"`
+	Failed        int    `json:"failed"` // conversations whose call failed; their turns stay queued
+	LastError     string `json:"last_error,omitempty"`
 }
 
 // ExtractedFact is one memory a harness returned, with the number of the new turn it came from.
@@ -105,7 +116,7 @@ func (h claudeHarness) Extract(ctx context.Context, system, input string) ([]Ext
 	defer func() { _ = os.RemoveAll(dir) }()
 	ctx, cancel := context.WithTimeout(ctx, extractTimeout)
 	defer cancel()
-	//nolint:gosec // G204: command is an absolute path the admin set up, checked to be the harness's program
+	//nolint:gosec // G204: command is an absolute path the admin set up, checked to be named claude and executable
 	cmd := exec.CommandContext(ctx, h.command, "-p", "--setting-sources", "local", "--tools", "",
 		"--strict-mcp-config", "--no-session-persistence", "--disable-slash-commands", "--model", h.model,
 		"--system-prompt", system, "--output-format", "json", "--json-schema", extractSchema)
@@ -121,14 +132,18 @@ func (h claudeHarness) Extract(ctx context.Context, system, input string) ([]Ext
 			Memory []ExtractedFact `json:"memory"`
 		} `json:"structured_output"`
 	}
+	// Errors say what failed, never what claude wrote: that can quote the turns.
 	if err := json.Unmarshal(out.Bytes(), &reply); err != nil {
 		if runErr != nil {
-			return nil, fmt.Errorf("claude: %v: %s", runErr, clip(errOut.String()+out.String(), 300))
+			return nil, fmt.Errorf("%w: claude exited: %v", ErrHarness, runErr)
 		}
-		return nil, fmt.Errorf("claude replied with something other than JSON: %s", clip(out.String(), 300))
+		return nil, fmt.Errorf("%w: claude's reply wasn't JSON", ErrHarness)
 	}
-	if reply.IsError || reply.Structured == nil {
-		return nil, fmt.Errorf("claude: %s", clip(reply.Result, 300))
+	switch {
+	case reply.IsError: // claude's own error, such as "Not logged in"
+		return nil, fmt.Errorf("%w: claude: %s", ErrHarness, clip(reply.Result, 200))
+	case reply.Structured == nil:
+		return nil, fmt.Errorf("%w: claude returned no structured output", ErrHarness)
 	}
 	return reply.Structured.Memory, nil
 }
@@ -269,8 +284,11 @@ func (s *Service) RunExtractor(ctx context.Context) {
 	}
 }
 
-// ExtractPending extracts every waiting turn now, a call per conversation. A failed call leaves its
-// turns queued, records why, and ends the run: the next one tries again.
+// ExtractPending extracts the waiting turns now: up to extractConversations conversations, each
+// until its queue is empty, a call per extractTurns of its turns. A failed call leaves its turns
+// queued (a turn that failed extractMaxAttempts times leaves) and the run goes on to the next
+// conversation, unless extractMaxFailures calls fail in a row. Its error is only for what stops the
+// whole run: the store, the memory engine, or the extractor being off.
 func (s *Service) ExtractPending(ctx context.Context) (ExtractRun, error) {
 	s.extractMu.Lock()
 	defer s.extractMu.Unlock()
@@ -286,22 +304,49 @@ func (s *Service) ExtractPending(ctx context.Context) (ExtractRun, error) {
 	if err != nil {
 		return run, err
 	}
+	inARow := 0
 	for _, c := range convs {
-		n, turns, err := s.extractConversation(ctx, s.harness(set), c)
-		run.Memories += n
-		if turns > 0 {
-			run.Conversations++
+		counted := false
+		for {
+			n, turns, err := s.extractConversation(ctx, s.harness(set), c)
+			run.Memories += n
+			if turns > 0 && !counted {
+				run.Conversations++
+				counted = true
+			}
 			run.Turns += turns
+			if errors.Is(err, ErrHarness) {
+				run.Failed++
+				run.LastError = err.Error()
+				inARow++
+				break
+			}
+			if err != nil {
+				s.finishRun(ctx, run, err.Error())
+				return run, err
+			}
+			inARow = 0
+			if turns < extractTurns {
+				break
+			}
 		}
-		if err != nil {
-			_ = s.st.SetSetting(ctx, keyExtractLastError, err.Error())
-			s.recordRun(ctx, run.Memories)
-			return run, err
+		if inARow >= extractMaxFailures {
+			break
 		}
 	}
-	_ = s.st.DeleteSetting(ctx, keyExtractLastError)
-	s.recordRun(ctx, run.Memories)
+	s.finishRun(ctx, run, run.LastError)
 	return run, nil
+}
+
+// finishRun records when the extractor last ran, its last error ("" clears it), and adds what it
+// saved to the total.
+func (s *Service) finishRun(ctx context.Context, run ExtractRun, lastError string) {
+	if lastError != "" {
+		_ = s.st.SetSetting(ctx, keyExtractLastError, lastError)
+	} else {
+		_ = s.st.DeleteSetting(ctx, keyExtractLastError)
+	}
+	s.recordRun(ctx, run.Memories)
 }
 
 // recordRun notes when the extractor last ran and adds what it saved to the total.
@@ -322,12 +367,22 @@ func (s *Service) extractConversation(ctx context.Context, h Harness, conv int64
 	if err != nil || len(queued) == 0 {
 		return 0, 0, err
 	}
-	all := make([]int64, len(queued))
+	var all, givenUp []int64
 	var turns []store.ExtractionTurn
-	for i, t := range queued {
-		all[i] = t.Rowid
+	for _, t := range queued {
+		if t.Attempts >= extractMaxAttempts {
+			givenUp = append(givenUp, t.Rowid)
+			continue
+		}
+		all = append(all, t.Rowid)
 		if !trivial(t.Input) {
 			turns = append(turns, t)
+		}
+	}
+	if len(givenUp) > 0 {
+		s.log.Warn("memory extraction gave up on turns that kept failing", "turns", len(givenUp))
+		if err = s.st.DoneExtracting(ctx, givenUp); err != nil {
+			return 0, 0, err
 		}
 	}
 	dp := queued[0].DatapackID
@@ -340,13 +395,13 @@ func (s *Service) extractConversation(ctx context.Context, h Harness, conv int64
 	if dp == "" || d.OptOut || len(turns) == 0 {
 		return 0, len(queued), s.st.DoneExtracting(ctx, all)
 	}
-	fail := func(err error) (int, int, error) {
+	fail := func(saved int, err error) (int, int, error) {
 		_ = s.st.FailedExtracting(ctx, all, err.Error())
-		return 0, 0, err
+		return saved, 0, err
 	}
 	earlier, err := s.st.TurnsBefore(ctx, conv, queued[0].Rowid, extractContextTurns)
 	if err != nil {
-		return fail(err)
+		return fail(0, err)
 	}
 	texts := make([]string, len(turns))
 	for i, t := range turns {
@@ -355,7 +410,7 @@ func (s *Service) extractConversation(ctx context.Context, h Harness, conv int64
 	found, err := s.SearchMemories(ctx, Search{DatapackID: dp, Query: clip(strings.Join(texts, "\n"), extractQueryChars),
 		Limit: extractExisting})
 	if err != nil {
-		return fail(err)
+		return fail(0, err)
 	}
 	existing := make([]string, len(found))
 	for i, m := range found {
@@ -363,11 +418,16 @@ func (s *Service) extractConversation(ctx context.Context, h Harness, conv int64
 	}
 	facts, err := h.Extract(ctx, extractSystem(d), extractInput(existing, earlier, turns, time.Now()))
 	if err != nil {
-		return fail(err)
+		if !errors.Is(err, ErrHarness) {
+			err = fmt.Errorf("%w: %v", ErrHarness, err)
+		}
+		return fail(0, err)
 	}
+	// A save that fails partway keeps the turns queued: the next call's facts are checked against
+	// the memories this one saved, as against any other.
 	saved, err := s.saveExtracted(ctx, dp, turns, facts)
 	if err != nil {
-		return fail(err)
+		return fail(saved, err)
 	}
 	return saved, len(queued), s.st.DoneExtracting(ctx, all)
 }
@@ -385,11 +445,13 @@ func (s *Service) saveExtracted(ctx context.Context, dp string, turns []store.Ex
 			continue
 		}
 		seen[key] = true
-		near, err := s.SearchMemories(ctx, Search{DatapackID: dp, Query: text, Limit: 1})
+		// The nearest few by the engine's fused score: a keyword or entity boost can rank a less similar
+		// memory first, so the closest by cosine is looked for among them.
+		near, err := s.SearchMemories(ctx, Search{DatapackID: dp, Query: text, Limit: extractDuplicateOf})
 		if err != nil {
 			return saved, err
 		}
-		if len(near) > 0 && near[0].RawSimilarityScore != nil && *near[0].RawSimilarityScore >= extractDuplicate {
+		if duplicate(near) {
 			continue
 		}
 		t := turns[f.Turn]
@@ -442,7 +504,7 @@ func (s *Service) SetDatapackExtraction(ctx context.Context, datapack string, c 
 		d.Profile = *c.Profile
 	}
 	if c.Instructions != nil {
-		if len(*c.Instructions) > 2000 {
+		if utf8.RuneCountInString(*c.Instructions) > 2000 {
 			return d, fmt.Errorf("%w: instructions are at most 2000 characters", ErrBadRequest)
 		}
 		d.Instructions = *c.Instructions
@@ -452,4 +514,14 @@ func (s *Service) SetDatapackExtraction(ctx context.Context, datapack string, c 
 		err = ErrNoDatapack
 	}
 	return d, err
+}
+
+// duplicate says whether any of the memories is within extractDuplicate cosine of the new fact.
+func duplicate(near []memoryengine.Memory) bool {
+	for _, m := range near {
+		if m.RawSimilarityScore != nil && *m.RawSimilarityScore >= extractDuplicate {
+			return true
+		}
+	}
+	return false
 }

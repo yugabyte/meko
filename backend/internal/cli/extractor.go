@@ -107,6 +107,9 @@ func runMemoryExtractor(args []string, stdout, stderr io.Writer) int {
 		if err = c.send(ctx, http.MethodPost, "/api/v1/settings/memory-extractor/run", nil, &run); err == nil {
 			fmt.Fprintf(stdout, "Extracted %d memories from %d turns in %d conversations\n", run.Memories, run.Turns,
 				run.Conversations)
+			if run.Failed > 0 {
+				fmt.Fprintf(stdout, "%d conversations failed and stay queued: %s\n", run.Failed, run.LastError)
+			}
 		}
 	case "datapack":
 		if *off && *on {
