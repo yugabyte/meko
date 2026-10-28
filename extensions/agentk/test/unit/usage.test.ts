@@ -75,8 +75,9 @@ describe('token usage from transcripts', () => {
     const now = new Date(2026, 8, 24, 15, 0, 0).getTime();
     const yesterday = new Date(2026, 8, 23, 10, 0, 0).toISOString();
     const u = { input_tokens: 1, output_tokens: 10, cache_read_input_tokens: 100, cache_creation_input_tokens: 0 };
-    writeFileSync(join(dir, 's1.jsonl'), line('a', u, { at: new Date(now).toISOString() }) + line('b', u, { at: yesterday, model: 'claude-sonnet-5' }));
-    writeFileSync(join(dir, 's2.jsonl'), line('c', u, { at: yesterday }));
+    // S1 is the larger, S2 the more recently used.
+    writeFileSync(join(dir, 's1.jsonl'), line('a', u, { at: yesterday }) + line('b', u, { at: yesterday, model: 'claude-sonnet-5' }));
+    writeFileSync(join(dir, 's2.jsonl'), line('c', u, { at: new Date(now).toISOString() }));
     ingestSessionUsage(db, 's1', join(dir, 's1.jsonl'));
     ingestSessionUsage(db, 's2', join(dir, 's2.jsonl'));
     // A Kiro session's turns, from before the 14 days, on Kiro's `auto` and on a model Claude Code also ran.
@@ -91,7 +92,8 @@ describe('token usage from transcripts', () => {
     expect(pu.byModel.map((m) => [m.harness, m.model])).toEqual([
       ['claude', 'claude-opus-5-5'], ['claude', 'claude-sonnet-5'], ['kiro', 'auto'], ['kiro', 'claude-sonnet-5'],
     ]);
-    expect(pu.bySession.map((s) => [s.sessionId, s.archived])).toEqual([['s1', false], ['s2', true], ['s3', false]]);
+    // The most recently used first.
+    expect(pu.bySession.map((s) => [s.sessionId, s.archived])).toEqual([['s2', true], ['s1', false], ['s3', false]]);
     expect(pu.daily).toHaveLength(14);
     expect(pu.daily.at(-1)).toEqual({ day: '2026-09-24', usage: { input: 1, output: 10, cacheRead: 100, cacheWrite: 0, messages: 1 } });
     expect(pu.daily.at(-2)!.usage.messages).toBe(2);
@@ -151,19 +153,24 @@ describe('pushes to the base branch', () => {
 });
 
 describe('usage across projects', () => {
-  it('totals tokens, merged PRs and pushed commits per project, deleted ones included', () => {
+  it('totals tokens, merged PRs and pushed commits per project, deleted ones included, the most recently used first', () => {
     const { db } = setup();
     const now = Date.now();
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at, deleted_at) VALUES ('old', 'Old', '/o', 'main', 0, ?)`, now);
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at, deleted_at) VALUES ('gone', 'Gone', '/g', 'main', 0, ?)`, now);
+    // Larger than P, but last used 20 days ago (before the daily series).
+    run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('new', 'New', '/n', 'main', 0)`);
+    run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
+             hook_token, desired, status, stage, created_at) VALUES ('s4', 'new', 's4', 'S4', 'c', 'b', 'main', '/w', 't4', 'tok-s4', 'running', 'idle', 'code', 0)`);
     // On an agent this version doesn't know (a newer install's): its rows count as Claude Code's, in one by-model row.
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
              hook_token, desired, status, stage, created_at, harness) VALUES ('s3', 'old', 's3', 'S3', 'c', 'b', 'main', '/w', 't3', 'tok-s3', 'archived', 'archived', 'done', ?, 'codex')`, now);
-    const msg = (sid: string, id: string, output: number) =>
-      run(db, `INSERT INTO usage_messages(session_id, message_id, model, at, input, output, cache_read, cache_write) VALUES (?, ?, 'm', ?, 1, ?, 0, 0)`, sid, id, now, output);
+    const msg = (sid: string, id: string, output: number, at = now) =>
+      run(db, `INSERT INTO usage_messages(session_id, message_id, model, at, input, output, cache_read, cache_write) VALUES (?, ?, 'm', ?, 1, ?, 0, 0)`, sid, id, at, output);
     msg('s1', 'a', 10);
     msg('s2', 'b', 20);
     msg('s3', 'c', 500);
+    msg('s4', 'd', 100, now - 20 * 24 * 3600 * 1000);
     const ev = (sid: string, project: string) =>
       run(db, `INSERT INTO session_events(session_id, project_id, kind, text, at) VALUES (?, ?, 'merged', 'PR merged', ?)`, sid, project, now);
     ev('s1', 'p');
@@ -172,14 +179,15 @@ describe('usage across projects', () => {
     run(db, `INSERT INTO pushes(session_id, range, ref, at, commits) VALUES ('s2', 'a..b', 'main', ?, 3), ('s2', 'b..c', 'main', ?, -1)`, now, now);
 
     const o = usageOverview(db, 14, now);
-    expect(o.byProject.map((p) => [p.name, p.repoPath, p.deleted])).toEqual([['P', '/r', false], ['Old', '/o', true]]); // 'Gone' never ran a session
+    // Current projects first, the most recently used first; 'Gone' never ran a session.
+    expect(o.byProject.map((p) => [p.name, p.repoPath, p.deleted])).toEqual([['P', '/r', false], ['New', '/n', false], ['Old', '/o', true]]);
     const p = o.byProject[0];
     expect(p).toMatchObject({ sessions: 2, mergedPrs: 1, directPushes: 2, directCommits: 3 });
     expect(p.usage.output).toBe(30);
-    expect(o.byProject[1]).toMatchObject({ sessions: 1, mergedPrs: 1, directPushes: 0, directCommits: 0 });
+    expect(o.byProject[2]).toMatchObject({ sessions: 1, mergedPrs: 1, directPushes: 0, directCommits: 0 });
     expect(o).toMatchObject({ mergedPrs: 2, directPushes: 2, directCommits: 3 });
-    expect(o.total.output).toBe(530);
-    expect(o.byModel).toEqual([{ harness: 'claude', model: 'm', usage: expect.objectContaining({ output: 530, messages: 3 }) }]);
+    expect(o.total.output).toBe(630);
+    expect(o.byModel).toEqual([{ harness: 'claude', model: 'm', usage: expect.objectContaining({ output: 630, messages: 4 }) }]);
     expect(o.daily).toHaveLength(14);
     expect(o.daily.at(-1)!.usage.output).toBe(530);
   });

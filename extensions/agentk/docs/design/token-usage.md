@@ -241,13 +241,16 @@ Kiro isn't available.
 - **Where it shows.** The session footer and tab tooltip show the session's total and output
   tokens. The rail tooltip shows the project total. The project home has a **Token usage**
   section: headline numbers with **Est. cost**, a 14-day chart with a table view, the Meko section,
-  and breakdowns by session (with a **Meko** column, found / lookups, when any session called Meko)
-  and by model. **Usage** in the rail (and the command palette) opens `/usage`: totals with Est.
+  and breakdowns by session (the most recently used first, with a **Meko** column, found / lookups,
+  when any session called Meko) and by model. **Usage** in the rail (and the command palette) opens `/usage`: totals with Est.
   cost, merged PRs and commits pushed straight to a base branch, a 14-day chart, the Meko section
   for every project, and breakdowns by project (current ones first, then deleted ones, which keep
-  their sessions and usage; each row shows its repo folder and when it was last active, and has
-  **Cost**, **Meko** and **Est. saved** columns, which a phone leaves out) and by model. Every
-  column header sorts its table; tapping it again reverses the order.
+  their sessions and usage, each group the most recently used first; each row shows its repo folder
+  and when it was last active, and has **Cost**, **Meko** and **Est. saved** columns, which a phone
+  leaves out) and by model. On both pages, every column header sorts its table; tapping it again
+  reverses the order. The tables by session and by project show about 10 rows and scroll inside
+  their box for the rest, as the project home's Recent activity does, with their header row kept
+  in view (`.rows-scroll` in `styles.css`).
 - **The Meko section** is the same on both pages (`MekoUsageSection`): the Meko logo (black in the
   light theme, white in the dark) and tiles for lookups, lookups that found something, saves,
   **1st-turn tokens** (the tokens Meko brought into first turns, `≈ 15.3k`, with the split on one

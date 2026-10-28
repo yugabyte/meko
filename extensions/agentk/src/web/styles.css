@@ -3019,7 +3019,27 @@ div[id^='dak-mermaid-'] .label {
   overscroll-behavior: contain;
   padding-right: 4px;
 }
-.act-list:focus-visible {
+/* The usage tables by session and by project scroll the same way, past about 10 rows (one-line
+   session rows; .tall for the projects' two-line rows), under a header that stays put. */
+.rows-scroll {
+  max-height: 340px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.rows-scroll.tall {
+  max-height: 520px;
+}
+/* A sticky cell's collapsed border stays behind with the rows, so the header's rule is a shadow. */
+.rows-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+  border-bottom: 0;
+  box-shadow: inset 0 -1px 0 var(--rule);
+}
+.act-list:focus-visible,
+.rows-scroll:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
