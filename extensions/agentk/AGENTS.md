@@ -1,7 +1,8 @@
 # AGENTS.md
 
 Guide for coding agents (Claude Code, Codex, Cursor, and others) working on **AgentK**. Humans
-should read [CONTRIBUTING.md](CONTRIBUTING.md) first; this file adds the map and the rules.
+should read the repo's [CONTRIBUTING.md](../../CONTRIBUTING.md) first; this file adds the map and
+the rules.
 
 AgentK lives in `extensions/agentk` of the meko repo; the repo's own
 [AGENTS.md](../../AGENTS.md) covers the rest of it. Paths here are relative to `extensions/agentk`,
@@ -50,6 +51,23 @@ npm run typecheck && npm run lint && npm test   # run all three before every com
 npm run build                                   # dist/server + dist/web
 npm run dev                                     # the server on ./.dev-home/web.sock, Vite on :5173 proxying to it; state in ./.dev-home (AK_DEV_HOME to change)
 ```
+
+Requirements: Linux or macOS, Node 22 (`.nvmrc` pins the major), git, and a coding agent. node-pty
+is a native module that needs a C++20 compiler: on RHEL 8 the system g++ (8.5) is too old, hence
+gcc-toolset-13 above; on macOS, `xcode-select --install` and `brew install gh` are enough. `npm ci`
+also makes node-pty's macOS spawn-helper executable (`scripts/postinstall.mjs`).
+
+The dev server is at http://127.0.0.1:5173. The server listens only on its unix socket, as it does
+behind Meko, and Vite proxies `/api/`, `/healthz` and `/ws/` to it (`AK_DEV_SOCK` names another
+socket); the page has no `<base>` there, so it runs at `/` rather than `/ext/agentk/`, and opens
+without a login. Its state is in `./.dev-home` (`AK_DEV_HOME` names another folder; `AK_HOME` names
+a home only without a release, as here and in tests), so it never opens an installed AgentK's
+database, hook socket or session host: it starts a session host of its own for that folder, which
+keeps running when `npm run dev` restarts (stop `npm run dev`, then
+`AK_HOME=.dev-home npx tsx src/server/cli.ts host stop` ends it). `npm test` is unit and
+integration (`npm run test:unit`, `npm run test:integration`, which needs git and uses a stub
+`claude`). `node:sqlite` prints an experimental warning on Node 22; the release wrapper runs Node
+with `--disable-warning=ExperimentalWarning`.
 
 ## Map
 
@@ -173,7 +191,8 @@ Docs are part of the change. Update them **in the same commit** as the code:
 |---|---|
 | Behavior, architecture, lifecycle, security or data model | The part of `docs/design/` that covers it (a new part gets a row in the contents table of `docs/design.md`) |
 | Features, requirements, install steps | `README.md` (the repo root's README is Meko's, and points here) |
-| Dev setup, checks, release process | `CONTRIBUTING.md` |
+| Dev setup, checks | **Commands** above |
+| Release process, Dependabot's rules | [docs/design/releases.md](docs/design/releases.md) |
 | Module layout, invariants, commands, conventions | `AGENTS.md`: this one, or `src/server/AGENTS.md` or `src/web/AGENTS.md` for a module there (the repo root's for the repo layout and repo-wide rules) |
 | What reviewers should check | `REVIEW.md` |
 | An API route or message | `src/shared/types.ts` (the route list at the bottom) |
