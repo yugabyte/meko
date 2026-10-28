@@ -13,6 +13,7 @@ import (
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/paths"
+	"github.com/yugabyte/meko/backend/internal/spin"
 	"github.com/yugabyte/meko/backend/internal/store"
 	"github.com/yugabyte/meko/backend/internal/update"
 )
@@ -73,7 +74,9 @@ func updateMeko(l paths.Layout, check bool, stdout, stderr io.Writer) (string, i
 		Extensions: func(rels []update.Release) map[string]update.ExtensionState { return extensions.Check(l.Root, rels) }}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
+	looking := spin.Wait(stdout, "Looking for a newer Meko release")
 	rel, next, newer, err := u.Check(ctx)
+	looking.Clear()
 	if err != nil {
 		return "", fail(stderr, err)
 	}
@@ -85,17 +88,25 @@ func updateMeko(l paths.Layout, check bool, stdout, stderr io.Writer) (string, i
 		fmt.Fprintf(stdout, "meko %s is available (this is %s): meko update installs it\n", next, ver)
 		return "", exitOK
 	}
-	fmt.Fprintf(stdout, "Installing meko %s\n", next)
+	installing := spin.Start(stdout, "Release", "installing meko "+next)
 	if err := u.Apply(ctx, rel, next); err != nil {
+		installing.Fail()
 		return "", fail(stderr, err)
 	}
+	installing.Done("meko " + next + " installed")
 	if up, _ := running(l.Lock); !up {
 		fmt.Fprintf(stdout, "Installed meko %s; it runs at the next meko start\n", next)
 		return app.CurrentExe(), exitOK
 	}
 	pid := currentPID(l)
-	if m := serviceOf(l); m != nil {
+	m := serviceOf(l)
+	// The service restarts Meko quietly, so its row shows the dots; by hand, stopMeko says it
+	// stopped and startDetached prints the Server row once the new Meko answers.
+	var restarting *spin.Step
+	if m != nil {
+		restarting = spin.Start(stdout, "Server", "restarting into meko "+next)
 		if err := m.Restart(); err != nil {
+			restarting.Fail()
 			return "", fail(stderr, err)
 		}
 	} else {
@@ -106,14 +117,19 @@ func updateMeko(l paths.Layout, check bool, stdout, stderr io.Writer) (string, i
 			return "", code
 		}
 	}
-	if _, ok := waitAnswering(l, serviceStartTimeout, pid); !ok {
-		if serviceOf(l) != nil {
+	st, ok := waitAnswering(l, serviceStartTimeout, pid)
+	if !ok {
+		if m != nil {
+			restarting.Fail()
 			return "", fail(stderr, fmt.Errorf("meko %s didn't answer within %s: see meko logs. The service rolls it "+
 				"back after %d failed starts", next, serviceStartTimeout, update.MaxFailedStarts))
 		}
 		return "", fail(stderr, fmt.Errorf("meko %s didn't answer within %s: see meko logs. Without the service "+
 			"nothing starts it again: run meko start, and after %d failed starts the next one rolls back to %s",
 			next, serviceStartTimeout, update.MaxFailedStarts, ver))
+	}
+	if m != nil {
+		restarting.Done(fmt.Sprintf("running at http://127.0.0.1:%d (pid %d)", st.Port, st.PID))
 	}
 	fmt.Fprintf(stdout, "Meko is running %s\n", next)
 	return app.CurrentExe(), exitOK

@@ -161,6 +161,8 @@ func TestUpdateExtensionInstallsTheNewestReleaseAndRestartsIt(t *testing.T) {
 
 	code, out, errs = run("update_extension", "presenter", "--data-dir", dir)
 	want(t, "update_extension", code, 0, out+errs, "Presenter is running "+next)
+	want(t, "update_extension", code, 0, out,
+		"  ✓ Release         Presenter "+next+" (presenter-v"+next+"), downloaded and checked\n")
 	if app.Current() != next {
 		t.Errorf("app/current is %s", app.Current())
 	}
@@ -260,7 +262,8 @@ func TestInstallExtensionInstallsPresentersRelease(t *testing.T) {
 	want(t, "start", code, 0, out+errs, "is running")
 	presenterReleases(t, version, presenterTarball(t, version, ""))
 	code, out, errs = run("install_extension", "presenter", "--data-dir", dir)
-	want(t, "install_extension", code, 0, out+errs, "Installing Presenter "+version+" (presenter-v"+version+")")
+	want(t, "install_extension", code, 0, out+errs,
+		"  ✓ Release         Presenter "+version+" (presenter-v"+version+"), downloaded and checked")
 	app := extensions.Known["presenter"].App(dir, "presenter")
 	if app.Current() != version {
 		t.Errorf("app/current is %q", app.Current())
@@ -333,6 +336,22 @@ func TestUpdateExtensionKeepsTheLastProvenVersion(t *testing.T) {
 	}
 	if got := strings.Join(app.Versions(), " "); got != proven+" "+installedVersion+" "+next {
 		t.Errorf("versions %s", got)
+	}
+}
+
+// A release that doesn't unpack fails the update with the ✗ row, and the installed version stays.
+func TestUpdateExtensionSaysWhenTheReleaseFails(t *testing.T) {
+	const next = "0.20261025.0"
+	t.Setenv("HOME", t.TempDir())
+	noRealExtensions(t)
+	dir := shortDir(t)
+	app := installedPresenter(t, dir)
+	presenterReleases(t, next, []byte("not a tarball"))
+	code, out, _ := run("update_extension", "presenter", "--data-dir", dir)
+	want(t, "update_extension", code, 1, out,
+		"  ✗ Release         installing Presenter "+next+" (presenter-v"+next+")\n")
+	if app.Current() != installedVersion {
+		t.Errorf("app/current is %s", app.Current())
 	}
 }
 

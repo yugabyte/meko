@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/yugabyte/meko/backend/internal/spin"
 	"github.com/yugabyte/meko/backend/internal/update"
 )
 
@@ -65,7 +66,10 @@ func Update(ctx context.Context, o UpdateOptions, name string) (bool, error) {
 	}
 	rels := o.Releases
 	if rels == nil {
-		if rels, err = o.Client.Releases(ctx); err != nil {
+		looking := spin.Wait(out, "Looking for "+cat.Title+"'s releases")
+		rels, err = o.Client.Releases(ctx)
+		looking.Clear()
+		if err != nil {
 			return false, err
 		}
 	}
@@ -88,7 +92,6 @@ func Update(ctx context.Context, o UpdateOptions, name string) (bool, error) {
 			cur, name)
 		return false, nil
 	}
-	fmt.Fprintf(out, "Installing %s %s (%s)\n", cat.Title, next, rel.Tag)
 	// The version to roll back to is the current one, unless that's still on probation (its update
 	// hasn't served 5 minutes yet): then it's the one that update replaced, the last known to work.
 	from := cur
@@ -104,9 +107,12 @@ func Update(ctx context.Context, o UpdateOptions, name string) (bool, error) {
 	// The other installed versions go, but for one a process still runs from. Prune deletes only
 	// version folders: a .staging- or .download- folder that a killed update left behind stays.
 	app.Prune(cur, from)
+	installing := spin.Start(out, "Release", fmt.Sprintf("installing %s %s (%s)", cat.Title, next, rel.Tag))
 	if err = app.Stage(ctx, o.Client, rel, next); err != nil {
+		installing.Fail()
 		return false, err
 	}
+	installing.Done(fmt.Sprintf("%s %s (%s), downloaded and checked", cat.Title, next, rel.Tag))
 	up, _ := e.Status(o.Root)
 	if len(cat.RestartArgs) > 0 {
 		return restartInto(o.Root, cat, e, app, from, next, up, out)

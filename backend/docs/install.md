@@ -186,6 +186,15 @@ to stderr as usual and exits non-zero, and Meko adds its own `✗` row after it.
 which keep its output for their logs) it prints what it always has. AgentK and Presenter format the
 row in `src/server/summary.ts`.
 
+`meko update`, `meko update_extension` and `meko install_extension` print the rows of the steps that
+otherwise print nothing (`internal/spin`): `Release`, for the release they download, check and unpack
+(`  ✓ Release         AgentK 0.20261030.0 (agentk-v0.20261030.0), downloaded and checked`, or `meko
+<version> installed`), and for `meko update` under the service, `Server`, for the restart. While such a
+step runs on a terminal, its row shows rotating dots (gh's spinner, which `install.sh`'s download
+shows), and so does the listing of the releases, which leaves no row. Off a terminal, as in the
+Extensions page's jobs, only the finished row is printed. On a failure the row is `✗` with what it was
+doing, and the error follows on stderr.
+
 - An extension's command is found on PATH, then in `~/.local/bin`, then in its release install's
   `app/current/bin`: its folder in the data folder, then its home from before it moved there
   (`Catalog.OldHomes`, `~/.agent-k-local`). When a registered command is gone, `meko start` and

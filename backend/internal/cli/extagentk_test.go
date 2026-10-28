@@ -154,7 +154,8 @@ func TestInstallExtensionInstallsAgentKsRelease(t *testing.T) {
 	want(t, "start", code, 0, out+errs, "is running")
 	serveReleases(t, agentkRelease(t, "agentk-v"+newest, newest), agentkRelease(t, "v"+older, older))
 	code, out, errs = run("install_extension", "agentk", "--data-dir", dir, "--", "--agent", "kiro")
-	want(t, "install_extension", code, 0, out+errs, "Installing AgentK "+newest+" (agentk-v"+newest+")")
+	want(t, "install_extension", code, 0, out+errs,
+		"  ✓ Release         AgentK "+newest+" (agentk-v"+newest+"), downloaded and checked")
 	app := extensions.Known["agentk"].App(dir, "agentk")
 	if app.Current() != newest {
 		t.Errorf("current %q", app.Current())
@@ -173,7 +174,8 @@ func TestInstallExtensionInstallsAgentKsRelease(t *testing.T) {
 		t.Errorf("agentk got %q, want %q", got, wantArgs)
 	}
 	code, out, errs = run("install_extension", "agentk", "--version", older, "--data-dir", dir)
-	want(t, "install_extension --version", code, 0, out+errs, "Installing AgentK "+older+" (v"+older+")")
+	want(t, "install_extension --version", code, 0, out+errs,
+		"  ✓ Release         AgentK "+older+" (v"+older+"), downloaded and checked")
 	if app.Current() != older {
 		t.Errorf("current %q after --version", app.Current())
 	}
@@ -183,7 +185,7 @@ func TestInstallExtensionInstallsAgentKsRelease(t *testing.T) {
 	code, out, errs = run("update_extension", "agentk", "--auto=off", "--data-dir", dir)
 	want(t, "--auto=off", code, 0, out+errs, "only reports AgentK's updates")
 	code, out, errs = run("install_extension", "agentk", "--version", newest, "--data-dir", dir)
-	want(t, "install_extension --version again", code, 0, out+errs, "Installing AgentK "+newest)
+	want(t, "install_extension --version again", code, 0, out+errs, "  ✓ Release         AgentK "+newest)
 	if reg, _ = extensions.Load(dir); reg.Entries["agentk"].Auto() {
 		t.Errorf("the switch came back on: %+v", reg.Entries["agentk"])
 	}

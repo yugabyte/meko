@@ -19,6 +19,7 @@ import (
 	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/service"
+	"github.com/yugabyte/meko/backend/internal/spin"
 	"github.com/yugabyte/meko/backend/internal/update"
 )
 
@@ -391,7 +392,9 @@ func installRelease(ctx context.Context, l paths.Layout, repo, name, version, ho
 	dl, cancel := context.WithTimeout(ctx, extensions.InstallTimeout)
 	defer cancel()
 	c := newReleaseClient(repo)
+	looking := spin.Wait(stdout, "Looking for "+cat.Title+"'s releases")
 	rels, err := c.Releases(dl)
+	looking.Clear()
 	if err != nil {
 		if c.Token == "" {
 			return "", fmt.Errorf("%w. The releases are on GitHub: sign in with gh auth login, or set GITHUB_TOKEN, "+
@@ -415,14 +418,17 @@ func installRelease(ctx context.Context, l paths.Layout, repo, name, version, ho
 		}
 		return "", fmt.Errorf("%s for %s-%s was found in %s", what, goos, arch, c.Repo)
 	}
-	fmt.Fprintf(stdout, "Installing %s %s (%s)\n", cat.Title, ver, rel.Tag)
+	installing := spin.Start(stdout, "Release", fmt.Sprintf("installing %s %s (%s)", cat.Title, ver, rel.Tag))
 	// Owner-only, like the rest of the data folder; the extension's own folder may not be there yet.
 	if err := os.MkdirAll(filepath.Dir(app.Root), 0o700); err != nil {
+		installing.Fail()
 		return "", err
 	}
 	if err := app.Stage(dl, c, rel, ver); err != nil {
+		installing.Fail()
 		return "", err
 	}
+	installing.Done(fmt.Sprintf("%s %s (%s), downloaded and checked", cat.Title, ver, rel.Tag))
 	if err := app.Repoint(ver); err != nil {
 		return "", err
 	}

@@ -3,28 +3,25 @@ package cli
 import (
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"text/tabwriter"
 	"unicode/utf8"
+
+	"github.com/yugabyte/meko/backend/internal/spin"
 )
 
 // The summary install, start, stop, restart and status print: a row per step, marked done (✓), a
 // warning (!) or failed (✗); a box of links; and the commands to run next. Extensions print their
 // start and stop rows in the same format when Meko runs them with extensions.SummaryEnv set
-// (docs/install.md, "The summary rows").
+// (docs/install.md, "The summary rows"). The marks and the row format are package spin's, whose
+// steps show the same rows with rotating dots while they run.
 
-type stepKind int
+type stepKind = spin.Kind
 
 const (
-	stepOK stepKind = iota
-	stepWarn
-	stepFail
-)
-
-var (
-	stepMarks  = [...]string{"✓", "!", "✗"}
-	stepColors = [...]string{"\033[32m", "\033[33m", "\033[31m"}
+	stepOK   = spin.OK
+	stepWarn = spin.Warn
+	stepFail = spin.Fail
 )
 
 // report writes the summary to w, in color when w is a terminal and NO_COLOR is unset.
@@ -34,20 +31,13 @@ type report struct {
 }
 
 func newReport(w io.Writer) report {
-	return report{w: w, color: isTerminal(w) && os.Getenv("NO_COLOR") == ""}
+	return report{w: w, color: spin.Color(w)}
 }
 
-func (r report) mark(k stepKind) string {
-	if !r.color {
-		return stepMarks[k]
-	}
-	return stepColors[k] + stepMarks[k] + "\033[0m"
-}
+func (r report) mark(k stepKind) string { return spin.Mark(k, r.color) }
 
 // step prints one row: "  ✓ Server          running".
-func (r report) step(k stepKind, label, text string) {
-	fmt.Fprintf(r.w, "  %s %-15s %s\n", r.mark(k), label, text)
-}
+func (r report) step(k stepKind, label, text string) { spin.Row(r.w, k, r.color, label, text) }
 
 // headline prints a line marked as a step is, unindented: status's first line.
 func (r report) headline(k stepKind, text string) {
