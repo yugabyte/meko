@@ -19,7 +19,7 @@ const version = "0.20261022.3"
 // fakeGh answers the gh calls install.sh makes from a folder of release assets.
 const fakeGh = `#!/bin/sh
 case "$1 $2" in
-  "auth status") exit 0 ;;
+  "auth status") [ -z "$FAKE_GH_SIGNED_OUT" ] ;;
   "api "*) echo "$FAKE_TAG" ;;
   "release download")
     tag=$3; shift 3
@@ -33,16 +33,33 @@ case "$1 $2" in
 esac
 `
 
+// fakeCurl answers install.sh's curl calls without gh: the latest release's redirect and the
+// asset downloads, logging each call's arguments. FAKE_CURL_404 answers 404, as GitHub does
+// for an internal repo without a token.
+const fakeCurl = `#!/bin/sh
+echo "$*" >> "$FAKE_CURL_LOG"
+[ -z "$FAKE_CURL_404" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
+out=""; write=""; url=""
+while [ $# -gt 0 ]; do
+  case $1 in -o) out=$2; shift 2 ;; -w) write=$2; shift 2 ;; -H) shift 2 ;; -*) shift ;; *) url=$1; shift ;; esac
+done
+case $url in
+  */releases/latest) [ "$write" = '%{url_effective}' ] && printf '%s' "${url%/latest}/tag/$FAKE_TAG" ;;
+  */releases/download/"$FAKE_TAG"/*) cp "$FAKE_ASSETS/${url##*/}" "$out" ;;
+  *) echo "fake curl: $url" >&2; exit 22 ;;
+esac
+`
+
 type env struct {
-	home, app, assets, args string
-	vars                    []string
+	home, app, assets, args, curlLog string
+	vars                             []string
 }
 
 func setup(t *testing.T, sums func(tarball []byte) string) env {
 	t.Helper()
 	root := t.TempDir()
 	e := env{home: filepath.Join(root, "home"), assets: filepath.Join(root, "assets"),
-		args: filepath.Join(root, "meko-args")}
+		args: filepath.Join(root, "meko-args"), curlLog: filepath.Join(root, "curl-log")}
 	e.app = filepath.Join(e.home, ".local", "share", "meko", "app")
 	bin := filepath.Join(root, "bin")
 	for _, d := range []string{e.home, e.assets, bin} {
@@ -52,6 +69,10 @@ func setup(t *testing.T, sums func(tarball []byte) string) env {
 	}
 	//nolint:gosec // G306: a test script
 	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(fakeGh), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	//nolint:gosec // G306: a test script
+	if err := os.WriteFile(filepath.Join(bin, "curl"), []byte(fakeCurl), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	// The release's meko records how it was run.
@@ -83,7 +104,7 @@ func setup(t *testing.T, sums func(tarball []byte) string) env {
 		t.Fatal(err)
 	}
 	e.vars = []string{"HOME=" + e.home, "PATH=" + bin + ":/usr/bin:/bin", "FAKE_TAG=meko-v" + version,
-		"FAKE_ASSETS=" + e.assets, "MEKO_TEST_UNAME_S=Linux", "MEKO_TEST_UNAME_M=x86_64", "NO_COLOR=1"}
+		"FAKE_ASSETS=" + e.assets, "FAKE_CURL_LOG=" + e.curlLog, "MEKO_TEST_UNAME_S=Linux", "MEKO_TEST_UNAME_M=x86_64", "NO_COLOR=1"}
 	return e
 }
 
@@ -132,6 +153,66 @@ func TestInstallUnpacksTheNewestReleaseAndRunsItsInstall(t *testing.T) {
 	code, _ = e.run(t, nil, "--reinstall")
 	if b, _ := os.ReadFile(e.args); code != 0 || string(b) != "install\n" { //nolint:gosec // G304: test file
 		t.Errorf("--reinstall: exit %d, meko ran with %q", code, b)
+	}
+}
+
+func TestInstallDownloadsAnonymouslyWithoutGhOrToken(t *testing.T) {
+	e := setup(t, goodSums)
+	code, out := e.run(t, []string{"FAKE_GH_SIGNED_OUT=1"}, "--no-service")
+	if code != 0 || !strings.Contains(out, "checksum verified") {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	if b, _ := os.ReadFile(e.args); string(b) != "install --no-service\n" { //nolint:gosec // G304: test file
+		t.Errorf("meko ran with %q", b)
+	}
+	log, _ := os.ReadFile(e.curlLog) //nolint:gosec // G304: test file
+	if strings.Contains(string(log), "api.github.com") || strings.Contains(string(log), "Authorization") {
+		t.Errorf("an anonymous install should use neither the API nor a token:\n%s", log)
+	}
+	if !strings.Contains(string(log), "https://github.com/yugabyte/meko/releases/latest") {
+		t.Errorf("the version should come from the latest release's redirect:\n%s", log)
+	}
+}
+
+func TestInstallSendsGithubTokenWhenGhIsSignedOut(t *testing.T) {
+	e := setup(t, goodSums)
+	code, out := e.run(t, []string{"FAKE_GH_SIGNED_OUT=1", "GITHUB_TOKEN=tok"}, "--version", version)
+	if code != 0 || !strings.Contains(out, "checksum verified") {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	log, _ := os.ReadFile(e.curlLog) //nolint:gosec // G304: test file
+	if n := strings.Count(string(log), "-H Authorization: Bearer tok"); n != 2 {
+		t.Errorf("both downloads should send the token, %d did:\n%s", n, log)
+	}
+}
+
+func TestInstallNamesSigningInWhenAnAnonymousDownloadFails(t *testing.T) {
+	e := setup(t, goodSums)
+	for _, args := range [][]string{nil, {"--version", version}} {
+		code, out := e.run(t, []string{"FAKE_GH_SIGNED_OUT=1", "FAKE_CURL_404=1"}, args...)
+		if code == 0 || !strings.Contains(out, "gh auth login") {
+			t.Errorf("%v: exit %d:\n%s", args, code, out)
+		}
+	}
+}
+
+func TestInstallRunsNothingWhenCutShort(t *testing.T) {
+	b, err := os.ReadFile("install.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Cut off before the last line, it only defines main.
+	cut := strings.TrimRight(string(b), "\n")
+	cut = cut[:strings.LastIndex(cut, "\n")]
+	e := setup(t, goodSums)
+	cmd := exec.Command("sh", "-s", "--", "--no-service")
+	cmd.Env = e.vars
+	cmd.Stdin = strings.NewReader(cut)
+	if out, err := cmd.CombinedOutput(); err != nil || len(out) != 0 {
+		t.Errorf("err %v, output:\n%s", err, out)
+	}
+	if _, err := os.Stat(e.app); !os.IsNotExist(err) {
+		t.Error("a cut-short script installed something")
 	}
 }
 
