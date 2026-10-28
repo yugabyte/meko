@@ -6,9 +6,11 @@ import { BASE } from './base';
 import { Root } from './components/Root';
 import { trackAppHeight } from './hooks/useMedia';
 import { watchInstall } from './installapp';
+import { watchTermTheme } from './termtheme';
 
 trackAppHeight();
 watchInstall();
+watchTermTheme();
 
 // It shows the notifications (see public/sw.js); browsers allow it on HTTPS and localhost. Its
 // scope is AgentK's pages alone: Meko's own share the origin.

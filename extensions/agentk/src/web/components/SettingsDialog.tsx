@@ -7,6 +7,7 @@ import { AUTO_SAVE_IDLE, autoSave, settle, type AutoSaveStatus } from '../autosa
 import { saveRailSessions, useRailSessions } from '../rail';
 import { installing, mekoUpdates, refreshMekoUpdate, takeRow, updateFailed, useMekoUpdate } from '../mekoupdate';
 import type { MekoAuth } from '../signin';
+import { setTermThemePref, termThemePref, TERM_THEME_LABEL, type TermThemePref } from '../termtheme';
 import { harnessLogosToggle } from '../toggle';
 import { claudeUpdateText, cx, defaultAgentChoice, httpHost, relativeTime } from '../util';
 import { AgentLabel, AgentPicker, Busy, Dialog, ErrorText, Field, InfoButton, InfoCheck, InfoPanel } from './common';
@@ -330,6 +331,7 @@ function GeneralTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObje
 
   return (
     <div className="stack">
+      <TerminalColors />
       <div className="field">
         <span className="label">Repo folders</span>
         <span className="hint">Where Open project looks for git repos.</span>
@@ -450,6 +452,38 @@ function GeneralTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObje
         />
       </Field>
     </div>
+  );
+}
+
+/** The terminals' colors: kept in this browser as soon as one is picked, not on the server. */
+function TerminalColors() {
+  const [pref, setPref] = useState(termThemePref);
+  return (
+    <Field
+      label="Terminal colors"
+      hint="Kept in this browser."
+      info={{
+        for: 'set-term-theme',
+        text: 'Applies at once to every terminal in this browser. Claude Code has its own colors too: run /theme in a session to match.',
+      }}
+    >
+      <select
+        id="set-term-theme"
+        className="input"
+        value={pref}
+        onChange={(e) => {
+          const v = e.target.value as TermThemePref;
+          setPref(v);
+          setTermThemePref(v);
+        }}
+      >
+        {(Object.keys(TERM_THEME_LABEL) as TermThemePref[]).map((k) => (
+          <option key={k} value={k}>
+            {TERM_THEME_LABEL[k]}
+          </option>
+        ))}
+      </select>
+    </Field>
   );
 }
 
