@@ -1591,31 +1591,6 @@ export interface WorkSync {
   slackAuto: boolean;
 }
 
-/** A session's last reply, from its transcript (`GET /api/sessions/:id/peek`). */
-export interface PeekReply {
-  text: string;
-  at: number | null;
-}
-
-/** The tool a session called after its last reply: what it's doing now, or did last. */
-export interface PeekTool {
-  name: string;
-  /** What the call does, from its input (a command, a file, a search), on one line. */
-  summary: string;
-  at: number | null;
-}
-
-/** GET /api/sessions/:id/peek: where a session is, for a quick look without opening it. */
-export interface SessionPeek {
-  /** The agent's transcript can be read for its replies (Claude Code); else only the status shows. */
-  readable: boolean;
-  reply: PeekReply | null;
-  tool: PeekTool | null;
-}
-
-/** The most characters a quick prompt takes (`POST /api/sessions/:id/prompt`). */
-export const QUICK_PROMPT_MAX = 10_000;
-
 /** GET /api/work-items/by-link: an item holding the link, with its session when it has one. */
 export interface WorkLinkMatch {
   item: WorkItem;
@@ -2583,9 +2558,6 @@ export type TermServerMessage =
 // POST   /api/work-items/sync                  → WorkSync   (GitHub review requests and Slack's Later list into the queue; 409 while one runs)
 // GET    /api/work-items/by-link?link=         → WorkLinkMatch[]   (open and closed items holding the link's key, open first; 400 for a
 //        link parseWorkLink can't read)
-// GET    /api/sessions/:id/peek                → SessionPeek   (its last reply and the tool it called since, from its transcript; 404 for an unknown session)
-// POST   /api/sessions/:id/prompt { text }     → 204   (types a prompt to the session's agent, as the terminal would; 400 for empty text or over
-//        QUICK_PROMPT_MAX, 409 for an archived session, one whose agent isn't running, or one still busy with another submitted prompt)
 // GET    /api/usage                            → UsageOverview
 // POST   /api/projects/:id/search { query }    → SearchResult[]
 // POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind or start, a harness that isn't available, a bad branch name, a

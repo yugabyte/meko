@@ -1,5 +1,5 @@
 import type { HarnessCaps, HarnessId } from '../../shared/harnesses.js';
-import type { HarnessStatus, PeekReply, PeekTool } from '../../shared/types.js';
+import type { HarnessStatus } from '../../shared/types.js';
 import type { Asker } from '../askagentk.js';
 import type { Config } from '../config.js';
 import type { Db } from '../db.js';
@@ -129,8 +129,6 @@ export interface Harness {
   canResume(row: SessionRow): boolean;
   /** The files the CLI writes as a session works (its transcript): their times stand in for missing hooks. */
   activityFiles(row: SessionRow): string[];
-  /** Its last reply and the tool it called since, for a quick look (`GET /api/sessions/:id/peek`); absent when its transcript can't be read for them. */
-  lastActivity?(row: SessionRow): { reply: PeekReply | null; tool: PeekTool | null };
   /** Reads the session's turns since the last read into `usage_messages`. May throw. */
   readUsage(db: Db, row: SessionRow): UsageRead;
   /**

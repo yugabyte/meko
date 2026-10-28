@@ -56,15 +56,7 @@ replaces the item's own. `Session.workItemId` is read back from it.
   again, which replaces the link.
 
 The item shows its open session's `StatusDot`, name and stage from the state the rail renders, so it
-updates live. **Latest & message** opens a quick look under it (`SessionPeek.tsx`): the session's
-status and detail, the tool it called after its last reply (Now: while it works, else Last:) and that
-reply, rendered as markdown and cut to 4,000 characters (`GET /api/sessions/:id/peek`). It's read
-again whenever the session reports an event. The reply comes from the harness's optional
-`lastActivity`, which only Claude Code's adapter has: it reads the last 512 KB of the transcript
-(`src/server/peek.ts`), leaving subagents' and meta lines out; other agents show the status only. The
-box under it sends the session a prompt (`POST /api/sessions/:id/prompt`, `SessionManager.quickPrompt`)
-the way the terminal would, through `submit()`: via the mod while it's live (held to the turn's end
-mid-turn), else typed into the TUI. It's refused while the agent is starting or has exited. The rail's Work queue entry shows its sessions' most urgent dot (`queueSummary()`) and
+updates live. The rail's Work queue entry shows its sessions' most urgent dot (`queueSummary()`) and
 how many items are open and new.
 
 ## Sync

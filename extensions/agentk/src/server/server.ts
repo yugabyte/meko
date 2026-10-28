@@ -10,7 +10,7 @@ import type {
   HeldReview, HeldReviewsResult, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, RunActionsRequest, RunActionsResult, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
   JoinByLinkRequest, JoinByLinkResult, LinkGrant, ShareLink, ShareLinkChange, ShareLinkState,
-  CreateWorkItemRequest, ReorderWorkItemsRequest, SessionPeek, UpdateWorkItemRequest, WorkItem, WorkLinkMatch, WorkSync,
+  CreateWorkItemRequest, ReorderWorkItemsRequest, UpdateWorkItemRequest, WorkItem, WorkLinkMatch, WorkSync,
 } from '../shared/types.js';
 import { ACTIONS_MAX, LINK_GRANTS, MAX_KB_UPLOAD_BYTES, MAX_PASTE_BYTES, MEKO_CALL_BY, SHARE_GRANTS } from '../shared/types.js';
 import { AGENTK_PATH, shareLinkToken, shareLinkUrl } from '../shared/mekourls.js';
@@ -449,11 +449,6 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   });
   app.patch<{ Params: { id: string }; Body: UpdateSessionRequest | null }>('/api/sessions/:id', async (req) =>
     core.sessions.edit(req.params.id, req.body && typeof req.body === 'object' ? req.body : {}));
-  app.get<{ Params: { id: string } }>('/api/sessions/:id/peek', async (req): Promise<SessionPeek> => core.sessions.peek(req.params.id));
-  app.post<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/prompt', async (req, reply) => {
-    await core.sessions.quickPrompt(req.params.id, req.body);
-    return reply.code(204).send();
-  });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/base-branches', async (req) => core.sessions.baseBranches(req.params.id));
   app.post<{ Params: { id: string }; Body: MoveSessionRequest }>('/api/sessions/:id/move', async (req) =>
     core.sessions.move(req.params.id, req.body));

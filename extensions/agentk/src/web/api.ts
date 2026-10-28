@@ -1,6 +1,5 @@
 import type {
   AppState,
-  SessionPeek,
   CreateWorkItemRequest,
   ReorderWorkItemsRequest,
   UpdateWorkItemRequest,
@@ -193,10 +192,6 @@ export const api = {
   askAgentk: (b: AskAgentkRequest, signal: AbortSignal) => request<AskAgentkResult>('POST', '/api/ask-agentk', b, { signal }),
   runActions: (b: RunActionsRequest) => post<RunActionsResult>('/api/actions/run', b),
   usage: () => get<UsageOverview>('/api/usage'),
-  /** A session's last reply and the tool it called since, for a quick look. */
-  peekSession: (id: string) => get<SessionPeek>(`/api/sessions/${enc(id)}/peek`),
-  /** Types a prompt to the session's agent, as the terminal would. */
-  promptSession: (id: string, text: string) => post<void>(`/api/sessions/${enc(id)}/prompt`, { text }),
   closedWorkItems: () => get<WorkItem[]>('/api/work-items?status=closed'),
   addWorkItem: (b: CreateWorkItemRequest) => post<WorkItem>('/api/work-items', b),
   updateWorkItem: (id: string, b: UpdateWorkItemRequest) => request<WorkItem>('PATCH', `/api/work-items/${enc(id)}`, b),

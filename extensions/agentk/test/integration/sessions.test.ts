@@ -127,12 +127,9 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     // CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: AgentK's mod is on (the fake reports a Claude Code new enough).
     expect(first.env).toEqual({ MEKO_AGENT_ID: agentId, MEKO_DATAPACK_ID: 'dp-agent-k-local-test-demo', CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1' });
 
-    // The work queue's quick look reads its last reply from the transcript.
-    expect(env.core.sessions.peek(s.id)).toMatchObject({ readable: true, reply: { text: 'Done.' } });
     // A terminal read line by line caps a line (1,024 bytes on macOS, 4,096 on Linux); Claude's TUI,
-    // like the fake, reads it raw, so a typed prompt (here the work queue's quick prompt) arrives whole however long its line is.
-    await expect(env.core.sessions.quickPrompt(s.id, { text: '  ' })).rejects.toMatchObject({ status: 400 });
-    await env.core.sessions.quickPrompt(s.id, { text: `${'x'.repeat(5000)} LONG_END` });
+    // like the fake, reads it raw, so a typed prompt arrives whole however long its line is.
+    await env.core.sessions.submit(s.id, `${'x'.repeat(5000)} LONG_END`);
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'second turn');
     expect(readFileSync(env.core.sessions.row(s.id).transcript_path!, 'utf8')).toContain(`${'x'.repeat(5000)} LONG_END`);
 
