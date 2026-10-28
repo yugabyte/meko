@@ -7,7 +7,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        This repo is public: leave out tokens, API keys, internal hostnames and private paths.
+        This repo is public: leave out tokens, API keys, internal hostnames, private paths and personal data (names, emails, user names, customer names, your prompts or memories).
   - type: dropdown
     id: product
     attributes:
