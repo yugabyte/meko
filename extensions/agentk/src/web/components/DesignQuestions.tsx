@@ -7,7 +7,7 @@ import {
   useRevision,
   type Draft,
 } from '../design-answers';
-import { cx, designApprovalBlocker, designReviseBlocker, heldForTurnEnd, isMac, isSubmitKey } from '../util';
+import { cx, designApprovalBlocker, designReviseBlocker, heldForTurnEnd, isMac, isSubmitKey, SESSION_BUSY } from '../util';
 import { AskForm } from './AskSheet';
 import { Busy } from './common';
 import { MekoBadge, MekoRefs } from './MekoRefs';
@@ -219,12 +219,12 @@ export function DesignQuestions({
   const [sending, setSending] = useState<'revise' | 'approve' | 'cancel' | null>(null);
   const approve = useRef<HTMLButtonElement>(null);
   const foot = useRef<HTMLDivElement>(null);
-  // Only a bump while the questions show: mounting with one already counted brings nothing up.
+  // Only a bump while the questions show: not one they mounted with, nor the reset to 0 after it.
   const seenApprove = useRef(approveAt);
   useEffect(() => {
-    if (approveAt === seenApprove.current) return;
+    const bumped = approveAt > seenApprove.current;
     seenApprove.current = approveAt;
-    if (!foot.current) return;
+    if (!bumped || !foot.current) return;
     const target = reviewFocus(foot.current);
     target.scrollIntoView({ block: 'nearest' });
     target.focus();
@@ -280,7 +280,7 @@ export function DesignQuestions({
     : null;
   const waiting = held && !reviseBlocker ? 'AgentK is working: your answers go now, and it takes them when this turn ends.' : null;
   // Shown in the footer too, as tooltips aren't seen on a phone.
-  const busy = session.busy ? 'AgentK is moving the session on. Wait a moment.' : null;
+  const busy = session.busy ? SESSION_BUSY : null;
 
   const go = async (what: 'revise' | 'approve' | 'cancel') => {
     setSending(what);
@@ -420,8 +420,10 @@ export function DesignQuestions({
       </div>
       {editable && (
         <div ref={foot} className="dq-foot" tabIndex={-1}>
+          {/* Why Approve is closed comes before what Send for revision needs: Design Review brings this
+              line up when Approve is disabled (reviewFocus), and a phone has no tooltips. */}
           <span className="dq-foot-note">
-            {error ? <span className="error-text">{error}</span> : (note ?? busy ?? queued ?? waiting ?? reviseBlocker ?? '')}
+            {error ? <span className="error-text">{error}</span> : (note ?? busy ?? queued ?? blocker ?? waiting ?? reviseBlocker ?? '')}
           </span>
           <button
             className="btn small"

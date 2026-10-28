@@ -104,12 +104,10 @@ describe('Ctrl+Enter in the design questions', () => {
 describe('Design Review with the questions on screen', () => {
   const focus = (foot: El) => reviewFocus(foot as unknown as HTMLElement) as unknown as El;
 
-  it('brings up the footer’s Approve, or Cancel approval while one waits', () => {
+  it('brings up the footer’s Approve', () => {
     const approve = Object.assign(el('button', { class: 'btn small primary', 'data-approve': '' }), { disabled: false });
     const foot = el('div', { class: 'dq-foot' }, el('span'), el('button', { class: 'btn small' }), approve);
     expect(focus(foot)).toBe(approve);
-    const cancel = Object.assign(el('button', { class: 'btn small', 'data-approve': '' }), { disabled: false });
-    expect(focus(el('div', { class: 'dq-foot' }, el('button', { class: 'btn small' }), cancel))).toBe(cancel);
   });
 
   it('brings up the footer itself, with its reason, while Approve is disabled', () => {

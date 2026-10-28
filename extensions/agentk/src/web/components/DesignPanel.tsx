@@ -6,7 +6,7 @@ import { designFrameDoc } from '../design-frame';
 import { useIsMobile } from '../hooks/useMedia';
 import { routePath } from '../router';
 import { useDataTheme } from '../theme';
-import { approveLabel, cx, designApprovalBlocker, designLanding, designWorking, headerApproves, type Landing, relativeTime, REVISION_GRACE_MS } from '../util';
+import { approveLabel, cx, designApprovalBlocker, designLanding, designWorking, headerApproves, type Landing, relativeTime, REVISION_GRACE_MS, SESSION_BUSY } from '../util';
 import { DesignQuestions } from './DesignQuestions';
 import { MarkdownView } from './MarkdownView';
 import { SidePanel } from './SidePanel';
@@ -57,6 +57,7 @@ export function DesignPanel({
   };
   const qcol = useRef<HTMLElement>(null);
   const headerApprove = useRef<HTMLButtonElement>(null);
+  const headerBlocked = useRef<HTMLParagraphElement>(null);
   const mobile = useIsMobile();
   const { working, landed } = useDesignWorking(session);
 
@@ -110,16 +111,25 @@ export function DesignPanel({
     setDecisionsAt((n) => (changingNow.current ? n + 1 : 0));
     qcol.current?.scrollIntoView({ block: 'nearest' });
   }, [showQuestions]);
+  // The header's Approve, and why it's closed: said under the header too, as a phone has no tooltips.
+  const headerShown = headerApproves(session, questions, changing);
+  const approveBlocker = headerShown && !toAnswer ? (session.busy ? SESSION_BUSY : designApprovalBlocker(session)) : null;
   // While the questions show, DesignQuestions takes it; with questions to answer on the Design tab,
-  // they're shown first; else the header's Approve. With the design not read, nothing to bring up.
+  // they're shown first; else the header's Approve, or why it's closed. With the design not read,
+  // nothing to bring up. Only a bump made while this panel is up: not one it mounted with (from
+  // another session's panel), nor the reset to 0 after it.
+  const seenApprove = useRef(approveAt);
   useEffect(() => {
-    if (!approveAt || questions === 'shown') return;
+    const bumped = approveAt > seenApprove.current;
+    seenApprove.current = approveAt;
+    if (!bumped || questions === 'shown') return;
     if (questions === 'hidden' && toAnswer) {
       toQuestions();
       return;
     }
-    headerApprove.current?.scrollIntoView({ block: 'nearest' });
-    headerApprove.current?.focus();
+    const target = approveBlocker ? headerBlocked.current : headerApprove.current;
+    target?.scrollIntoView({ block: 'nearest' });
+    target?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only on the bump, with the view as it is then
   }, [approveAt]);
 
@@ -192,15 +202,15 @@ export function DesignPanel({
           </div>
         )}
         <span className="sp" />
-        {headerApproves(session, questions, changing) && <RunToMergeCheck session={session} disabled={session.busy} onChange={onAutoRun} />}
-        {headerApproves(session, questions, changing) && (
+        {headerShown && <RunToMergeCheck session={session} disabled={session.busy} onChange={onAutoRun} />}
+        {headerShown && (
           <button
             ref={headerApprove}
             className="btn small primary"
             // With open questions (or a change to one of AgentK's decisions) it only shows them; the
             // approval goes from their footer, with the answers.
-            disabled={!toAnswer && (session.busy || !!designApprovalBlocker(session))}
-            title={open > 0 ? 'Answer the open questions, then approve' : changing ? 'Approve from the questions, with your change to AgentK’s decision' : (designApprovalBlocker(session) ?? undefined)}
+            disabled={!!approveBlocker}
+            title={open > 0 ? 'Answer the open questions, then approve' : changing ? 'Approve from the questions, with your change to AgentK’s decision' : (approveBlocker ?? undefined)}
             onClick={toAnswer ? toQuestions : onApprove}
           >
             {approveLabel(toAnswer ? 1 : 0)}
@@ -232,6 +242,11 @@ export function DesignPanel({
           </button>
         )}
       </div>
+      {approveBlocker && (
+        <p ref={headerBlocked} className="design-blocked" role="status" tabIndex={-1}>
+          {approveBlocker}
+        </p>
+      )}
       {split ? (
         <div className="design-split">
           <div className="design-split-doc">{docView}</div>

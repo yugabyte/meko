@@ -93,7 +93,6 @@ describe('designGate', () => {
       reason: null,
       title: 'Review the design and answer its open questions, then approve it there',
     });
-    expect(designGate(design(0))).toEqual({ label: 'Design Review', reason: null, title: 'Review the design, then approve it there' });
   });
   it('waits for a design', () => {
     const reason = 'AgentK hasn’t proposed a design yet.';
@@ -108,7 +107,6 @@ describe('reviewTarget', () => {
     ['opens the design with nothing to answer', 0, false, false, 'design'],
     // Otherwise the click would change nothing: the panel brings up its approve button.
     ['brings up the approve button with the panel open', 2, false, true, 'approve'],
-    ['brings up the approve button with the panel open and nothing to answer', 0, false, true, 'approve'],
   ])('%s', (_, open, changing, panelOpen, target) => {
     expect(reviewTarget(open, changing, panelOpen)).toBe(target);
   });

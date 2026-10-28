@@ -571,6 +571,9 @@ export function designApprovalBlocker(session: Session): string | null {
   return null;
 }
 
+/** Why the design's approve buttons wait while the server moves the session on (`Session.busy`). */
+export const SESSION_BUSY = 'AgentK is moving the session on. Wait a moment.';
+
 /** A gate button: its label, why it's disabled (null when it isn't), and its tooltip. */
 export interface GateButton {
   label: string;
