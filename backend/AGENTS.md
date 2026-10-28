@@ -103,7 +103,7 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
   `chore(meko/memory-engine): ...` for dev-only ones) and the web UI's (`deps(meko/web-ui): ...`
   for its dependencies, which ship in `web_ui/dist`, or `chore(meko/web-ui): ...` for its build
   and test tools) every Monday, with minor and patch bumps grouped, `mem0ai` in a PR of its own,
-  and the web UI's react, vite and tailwind families each in one group. `mattn/go-sqlite3` is
+  and the web UI's react family and its Vite and Tailwind build each in one group. `mattn/go-sqlite3` is
   left out: it's replaced by the fork, so upgrade the fork's tag by hand.
 - Neither log ever holds memory, turn or knowledge-file text: only ids, counts and timings. The
   memory engine never logs an error's message.

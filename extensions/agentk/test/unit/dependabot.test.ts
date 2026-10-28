@@ -134,8 +134,7 @@ describe('dependabot config', () => {
     ]],
     [WEB_UI, [
       ['react', 'react-dom', '@types/react', '@types/react-dom'],
-      ['vite', '@vitejs/plugin-react', 'vitest'],
-      ['tailwindcss', '@tailwindcss/vite'],
+      ['vite', '@vitejs/plugin-react', 'vitest', '@tailwindcss/vite', 'tailwindcss'],
     ]],
   ])('keeps packages with peer ranges on each other in one group in %s', (dir, families) => {
     const npm = byDirectory(dir);
