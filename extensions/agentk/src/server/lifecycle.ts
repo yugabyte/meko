@@ -98,6 +98,10 @@ const CI_FAILING = 'CI is failing.';
 const CONFLICTING = 'The branch has merge conflicts.';
 /** The merge blocker for a question in the terminal, which already notified the user as Needs you. */
 const IN_TERMINAL = 'AgentK is waiting on you in the terminal.';
+/** GitHub's own BLOCKED on a fresh head, which nothing else explains: required checks not reported yet. */
+const CHECKS_PENDING = "GitHub's required checks haven't reported on the latest push yet.";
+/** GitHub's own BLOCKED after that: a rule AgentK doesn't see (conversations, signatures, a check that never runs). */
+const RULES_BLOCK = "GitHub's branch rules block the merge.";
 
 /** Prompts queued for Claude in the Review stage, in the order they go out. */
 const QUEUE_ORDER = ['review', 'review-people', 'review-held', 'conflicts', 'ci'] as const;
@@ -1704,7 +1708,9 @@ export class Lifecycle {
    * mid-turn (`turnAtStart`: when they were measured, or now), where they're AgentK's work in
    * progress; a question in the terminal only during a turn; findings being addressed only while
    * Claude runs. A queued merge also waits up to CI_START_MS for CI to show up on a new head
-   * (`newHead`), so it never goes before CI has started on a fresh push.
+   * (`newHead`), even when a fast check already passed, so it never goes before CI has started on a
+   * fresh push. GitHub's BLOCKED, when no other blocker explains it, waits on a new head (required
+   * checks not reported yet) and is a hard blocker after.
    */
   mergeInfo(row: SessionRow, st: github.PrStatus, reviewer: ReviewerMode, opts: MergeChecks = {}): MergeInfo {
     const { unpushed = false, uncommitted = 0 } = opts;
@@ -1724,7 +1730,8 @@ export class Lifecycle {
     const ci = github.ciState(st.statusCheckRollup);
     if (ci === 'failure') block(CI_FAILING);
     else if (ci === 'pending') block('CI is still running.', true);
-    else if (ci === 'none' && opts.newHead && row.queued_gate === 'merge') block("CI hasn't started on the latest push yet.", true);
+    // A fast check (another workflow's) can pass before CI's own jobs show up, so passed checks hold too.
+    else if ((ci === 'none' || ci === 'success') && opts.newHead && row.queued_gate === 'merge') block("CI hasn't started on the latest push yet.", true);
     // AgentK gates the merge only once it's active on the PR, so repos it doesn't watch never wait for it.
     if (reviewer !== 'people' && row.agentk_seen && (row.review_state === 'waiting' || row.review_state === 'in_review')) {
       block('Waiting for the AgentK review.', true);
@@ -1739,6 +1746,8 @@ export class Lifecycle {
     if (st.mergeable === 'CONFLICTING') block(CONFLICTING);
     if (st.mergeStateStatus === 'BEHIND') block('The branch is behind its base.');
     if (st.mergeStateStatus === 'DRAFT') block('The PR is a draft.');
+    // GitHub's own verdict, for a required check or rule AgentK doesn't see; with another blocker it only repeats it.
+    if (st.mergeStateStatus === 'BLOCKED' && !b.length) block(opts.newHead ? CHECKS_PENDING : RULES_BLOCK, !!opts.newHead);
     return { canMerge: b.length === 0, blockers: b, queueable: b.length > 0 && !hard.length, hard };
   }
 

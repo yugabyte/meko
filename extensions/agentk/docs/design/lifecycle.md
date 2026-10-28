@@ -178,14 +178,19 @@ sent, withdrawn or dropped.
   end during the look at the PR). The others don't: CI failing, changes requested, required approvals
   missing (only on repos that require them, since people's approvals can take days), merge conflicts,
   a branch behind its base, a draft, a PR that isn't open, unpushed or uncommitted work between turns,
-  a Needs you with no turn behind it (a parked recovery), and findings left mid-address by a Claude
-  that exited. With only
+  a Needs you with no turn behind it (a parked recovery), findings left mid-address by a Claude
+  that exited, and GitHub's own `BLOCKED` (`mergeStateStatus`) when nothing else explains it: *GitHub's
+  branch rules block the merge*, a rule AgentK doesn't see (conversations to resolve, signed commits, a
+  required check that never runs). On a head AgentK first saw less than 2 minutes ago, that `BLOCKED`
+  clears by itself instead: *GitHub's required checks haven't reported on the latest push yet*. With only
   the first kind left (`Session.mergeQueueable`), the gate reads **Merge when ready** and a press
   queues the merge; the reasons line reads *Merges when these clear*. While it waits, the PR is
   checked at every 15-second pass instead of every 45 seconds. A queued merge also waits for CI to
-  show up on a new head: GitHub lists no checks on a fresh push for a moment, so *CI hasn't started on
-  the latest push yet* holds it for up to 2 minutes after the head first appeared, after which a head
-  with no checks counts as one without CI. At the first look that finds no blocker it merges, as
+  show up on a new head: GitHub lists no checks on a fresh push for a moment, and a fast check from
+  another workflow (a PR title check, say) can pass before CI's own jobs are listed, so *CI hasn't
+  started on the latest push yet* holds it for up to 2 minutes after the head first appeared while
+  its checks show none or only passed ones. After that, a head with no checks counts as one without
+  CI. Without this hold, a merge asked for in that window is refused by a repo that requires CI. At the first look that finds no blocker it merges, as
   Merge & Close does, and you're notified; a blocker of the second kind drops it, mid-turn or not, and you're
   notified to press Merge & Close again once that's fixed. A move out of Review, archive or a merge
   on GitHub clears it too. While the merge is being requested, Cancel is refused.
@@ -222,11 +227,10 @@ It runs on the [queued gates](#queued-gates):
   ready, a blocker that doesn't clear by itself doesn't drop it (`takeQueuedMerge`): AgentK works on
   failing CI and merge conflicts as it always does (their watchers say when they hand over), and for
   every other one (a held review, changes requested, missing approvals, a branch behind its base,
-  unpushed work between turns) you're notified once per new set (`autoRunWaits`; a question in the
+  GitHub's branch rules, unpushed work between turns) you're notified once per new set (`autoRunWaits`; a question in the
   terminal had its own Needs you notification), and while such a blocker is there the PR is looked
   at every 45 seconds rather than at every 15-second pass (approvals can take days). It merges at the first look that finds
-  nothing blocking; if GitHub refuses the merge (a ruleset, say, which the blockers don't show), Run to
-  merge stops, so the merge isn't asked for again at every pass. After AgentK's findings
+  nothing blocking; if GitHub still refuses the merge, Run to merge stops, so the merge isn't asked for again at every pass. After AgentK's findings
   are addressed it doesn't ask for another review round, as Merge when ready doesn't. The pill reads
   *✓ Run to merge: waiting on …*. The gates it passes are logged as AgentK's (`moved_by = 'auto'`).
 - **Notifications.** It notifies only when it's done (*Merged*, once the PR merges, here or on
