@@ -184,7 +184,7 @@ Or one that follows the reader's light or dark theme:
 </a>
 ```
 
-The links load the badges from this repo, so they show once the repo is public.
+The snippets load the badges from this repo's `main` branch on raw.githubusercontent.com.
 
 ## License
 
