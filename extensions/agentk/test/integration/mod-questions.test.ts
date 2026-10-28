@@ -78,6 +78,17 @@ describe("Claude's questions and the design through AgentK's mod (real session h
     expect(Date.now() - seen).toBeGreaterThanOrEqual(MEKO_MIN_SHOW_MS - 500);
     expect(after.status).toBe('working');
     await waitFor(() => get(id).status, (st) => st === 'idle', 10000, 'the turn to end');
+
+    // The mod turned off: this Claude keeps it until relaunched and still reports its calls, but
+    // neither the call nor its hold shows.
+    env.core.config.claude.mod = false;
+    await env.core.sessions.submit(id, 'MEKO_SEARCH unshown');
+    const shown: boolean[] = [];
+    for (let i = 0; i < 20; i++) {
+      shown.push(get(id).mekoCall);
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(shown).not.toContain(true);
   });
 
   it('drops the question once the terminal answers it first', async () => {

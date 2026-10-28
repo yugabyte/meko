@@ -1372,7 +1372,8 @@ export class SessionManager {
       case '/mod/learn':
         return this.core.learn.fromMod(row, body);
       case '/mod/meko': {
-        if (this.mod.mekoCall(row.id, body.id, body.state)) this.mekoHold.started(row.id);
+        // Held like the call it shows: only while the mod is on (a session keeps it until relaunched).
+        if (this.mod.mekoCall(row.id, body.id, body.state) && this.core.config.claude.mod) this.mekoHold.started(row.id);
         const scope = { id: row.id, createdAt: row.created_at };
         // `{ log: true }`: the project keeps a Meko call log, so the call's end carries the call.
         if (body.state === 'start') return this.core.mekoLog.wants(scope) ? { status: 200, body: { log: true } } : { status: 204 };

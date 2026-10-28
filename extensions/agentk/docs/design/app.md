@@ -85,7 +85,9 @@ start (either source's) also starts a hold, `MekoHold` in `mekocalls.ts`: `Sessi
 true for at least `MEKO_MIN_SHOW_MS` (1.5 s) from the start, and a call that runs longer shows until
 it ends, as before. A later start moves the hold's end on, so quick calls in a row read as one m;
 when it runs out, a change is pushed. It's on the server because the browser never hears of a call
-that short. The turn's end and a reset clear it with the rest.
+that short. A Claude call's hold starts only while `[claude] mod` is on, as its m shows only then: a
+session launched before the mod was turned off keeps it, and its calls, until it's relaunched. The
+turn's end and a reset clear it with the rest.
 
 - **Where it shows:** only over working; a learn step's dot wins (`dotState()`). The rail ranks it
   above working, starting and learning, under exited and needs you, so the project's dot shows the
