@@ -42,10 +42,12 @@ web_ui/dist/index.html: web_ui/node_modules/.package-lock.json $(WEB_UI_SRC)
 
 web_ui: web_ui/dist/index.html
 
-# The Go tests start the built memory engine, so it's built first.
-test: memory_engine
+# The Go tests start the built memory engine, so it's built first. The web UI's tests run its pages in
+# happy-dom against a faked API, so they need its dependencies, not a build.
+test: memory_engine web_ui/node_modules/.package-lock.json
 	go test -race -tags $(TAGS) ./...
 	cd memory_engine && npm test
+	cd web_ui && npm test
 
 # The search budget at 200 MB of content (a few minutes; not in CI).
 bench: memory_engine
