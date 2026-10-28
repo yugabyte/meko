@@ -256,7 +256,12 @@ func (c *client) send(ctx context.Context, method, path string, body, data any) 
 		return fmt.Errorf("unexpected reply from %s (%s): %w", path, resp.Status, err)
 	}
 	if env.Error != nil {
-		return errors.New(strings.TrimSuffix(env.Error.Message, "."))
+		return &apiError{code: env.Error.Code, msg: strings.TrimSuffix(env.Error.Message, ".")}
 	}
 	return nil
 }
+
+// apiError is the running server's error reply: its code, and its message for people.
+type apiError struct{ code, msg string }
+
+func (e *apiError) Error() string { return e.msg }

@@ -423,7 +423,7 @@ export interface MekoCloud {
   default_web_url: string;
 }
 
-// GET /meko-cloud/datapacks: the linked Meko Cloud's datapacks, newest first.
+// GET /datapacks?location=cloud: the linked Meko Cloud's datapacks, newest first.
 export interface CloudDatapack {
   datapack_id: string;
   datapack_name: string;
@@ -434,12 +434,12 @@ export interface CloudDatapack {
   updated_at: string;
   // Opens it in the link's web app; null when that can't be known.
   web_url: string | null;
+  location: "cloud";
 }
 
+// The sidebar's Cloud rows: none while unlinked.
 export interface CloudDatapacks {
   linked: boolean;
-  api_url?: string;
-  web_url?: string | null;
   datapacks: CloudDatapack[];
 }
 

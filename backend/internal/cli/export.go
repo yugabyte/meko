@@ -11,17 +11,20 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/yugabyte/meko/backend/internal/paths"
 )
 
 // toolExport writes a datapack's export (GET /api/v1/datapacks/:id/export) to f.out, or to the
-// file name the server suggests in the current folder. The datapack is the one named, or the default.
-func toolExport(ctx context.Context, t *toolSession, l paths.Layout, f toolFlags, stdout io.Writer) error {
-	id, err := t.datapackID(ctx, f.text)
+// file name the server suggests in the current folder. The datapack is the one named, or the default;
+// the route is Meko's own, so a Meko Cloud datapack can't be exported.
+func toolExport(ctx context.Context, t *tools, f toolFlags, stdout io.Writer) error {
+	dp, err := t.resolve(ctx, f.text)
 	if err != nil {
 		return err
 	}
+	if dp.cloud {
+		return fmt.Errorf("export works only on this Meko's datapacks, and %s is in Meko Cloud", dp.name)
+	}
+	id := dp.id
 	if id == "" {
 		if id, err = t.defaultDatapackID(ctx); err != nil {
 			return err
@@ -31,7 +34,7 @@ func toolExport(ctx context.Context, t *toolSession, l paths.Layout, f toolFlags
 				"(mekosh datapacks lists them)")
 		}
 	}
-	c, err := newClient(l)
+	c, err := newClient(t.l)
 	if err != nil {
 		return err
 	}

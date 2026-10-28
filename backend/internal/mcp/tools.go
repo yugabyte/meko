@@ -235,35 +235,12 @@ var readOnlyTools = func() map[string]bool {
 	return out
 }()
 
-// ToolInfo is a tool as `mekosh tools` shows it.
-type ToolInfo struct {
-	Name, Title, Summary string
-}
-
-// Tools lists every tool in tools/list's order, each with the first sentence of its description.
-func Tools() []ToolInfo {
-	ts := allTools()
-	out := make([]ToolInfo, len(ts))
-	for i, t := range ts {
-		out[i] = ToolInfo{Name: t.name, Title: t.title, Summary: firstSentence(t.desc)}
-	}
-	return out
-}
-
-// firstSentence is text up to its first ". " (or all of it), without the full stop.
-func firstSentence(text string) string {
-	if i := strings.Index(text, ". "); i >= 0 {
-		return text[:i]
-	}
-	return strings.TrimSuffix(text, ".")
-}
-
 // ToolNames are the names of every tool, in tools/list's order.
 func ToolNames() []string {
-	ts := Tools()
+	ts := allTools()
 	out := make([]string, len(ts))
 	for i, t := range ts {
-		out[i] = t.Name
+		out[i] = t.name
 	}
 	return out
 }

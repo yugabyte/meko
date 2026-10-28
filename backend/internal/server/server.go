@@ -83,10 +83,8 @@ type Options struct {
 	// WebStatus, if set, is the web listener's state, for status.
 	WebStatus func() *WebStatus
 	// Cloud, if set, serves the Meko Cloud link's routes (/api/v1/settings/meko-cloud): to the web UI
-	// on the web listener, and to the CLI's admin token (meko cloud_link) on the API listener. It also
-	// serves the linked Meko Cloud's datapacks (/api/v1/meko-cloud/datapacks), which takes the
-	// credential every data route does: the owner on the web listener, the admin or the client token
-	// on the API listener.
+	// on the web listener, and to the CLI's admin token (meko cloud_link) on the API listener. The
+	// linked Meko Cloud's datapacks go through the REST routes (internal/rest's cloud.go).
 	Cloud *cloudlink.Service
 }
 

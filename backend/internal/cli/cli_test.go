@@ -24,7 +24,6 @@ import (
 
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/extensions"
-	"github.com/yugabyte/meko/backend/internal/mcp"
 	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/supervisor"
 	"github.com/yugabyte/meko/backend/internal/update"
@@ -592,17 +591,42 @@ func TestServeRunsTheMemoryEngine(t *testing.T) {
 	}
 }
 
-func TestSearchAddAndDatapacks(t *testing.T) {
-	memoryEngineDir, err := filepath.Abs(filepath.Join("..", "..", "memory_engine"))
+// withMemoryEngine has the servers a test starts run the built memory engine, with the hashing
+// embedder; it skips the test when the memory engine isn't built (outside CI).
+func withMemoryEngine(t *testing.T) {
+	t.Helper()
+	dir, err := filepath.Abs(filepath.Join("..", "..", "memory_engine"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = os.Stat(filepath.Join(memoryEngineDir, "dist", "main.js")); err != nil {
+	if _, err = os.Stat(filepath.Join(dir, "dist", "main.js")); err != nil {
 		if os.Getenv("CI") != "" {
 			t.Fatal(err)
 		}
 		t.Skip("the memory engine isn't built (make test builds it)")
 	}
+	t.Setenv("MEKO_MEMORY_ENGINE_DIR", dir)
+	t.Setenv(testEmbedderEnv, "hash")
+}
+
+// startReady starts a server and waits until its memory engine is ready.
+func startReady(t *testing.T, dir, port string) {
+	t.Helper()
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "is running")
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		if _, out, _ = run("status", "--data-dir", dir, "--verbose"); strings.Contains(out, "Memory engine: ready") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the memory engine never got ready:\n%s", out)
+		}
+	}
+}
+
+func TestSearchAddAndDatapacks(t *testing.T) {
+	withMemoryEngine(t)
+	t.Setenv("MEKO_SECRETS", "file") // a name missing here reads the Meko Cloud link
 	dir, port := setup(t)
 	code, _, errs := runSh("search", "--data-dir", dir, "anything")
 	want(t, "search with no server", code, exitNotRunning, errs, "isn't running")
@@ -611,18 +635,9 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 	want(t, "the prompt with no server", code, exitNotRunning, errs,
 		"Meko isn't running (data in "+dir+"). Start it: meko start")
 
-	t.Setenv("MEKO_MEMORY_ENGINE_DIR", memoryEngineDir)
-	t.Setenv(testEmbedderEnv, "hash")
-	code, out, errs := run("start", "--data-dir", dir, "--port", port)
-	want(t, "start", code, 0, out+errs, "is running")
-	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
-		if _, out, _ = run("status", "--data-dir", dir, "--verbose"); strings.Contains(out, "Memory engine: ready") {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the memory engine never got ready:\n%s", out)
-		}
-	}
+	startReady(t, dir, port)
+	var out string
+	var err error
 
 	code, out, errs = runSh("datapacks", "--data-dir", dir)
 	want(t, "datapacks", code, 0, out+errs, "  default  (Created by Meko on first start.)")
@@ -1159,24 +1174,6 @@ func TestUI(t *testing.T) {
 	want(t, "setup_link says local access needs no login", code, 0, errs, "Access is local")
 	code, out, _ = run("token", "--data-dir", dir, "--json")
 	want(t, "token --json's web URL", code, 0, out, `"web_url":"`+web+`"`)
-}
-
-// list mcp-tools needs no server: it reads the tool definitions.
-func TestListMCPTools(t *testing.T) {
-	code, out, _ := runSh("tools")
-	want(t, "list mcp-tools", code, 0, out, "knowledgebase_upload_file")
-	if lines := strings.Count(out, "\n"); lines != len(mcp.Tools()) {
-		t.Errorf("%d lines, want one per tool (%d)", lines, len(mcp.Tools()))
-	}
-	code, out, _ = runSh("tools", "--json")
-	var tools []map[string]string
-	if err := json.Unmarshal([]byte(out), &tools); code != 0 || err != nil || len(tools) != len(mcp.Tools()) ||
-		tools[0]["name"] != "context_search" || tools[0]["summary"] == "" {
-		t.Errorf("--json: %d %v %q", code, err, out)
-	}
-	code, _, errs := run("list", "mcp-tools", "--json")
-	want(t, "meko list mcp-tools", code, exitUsage, errs,
-		"meko: list mcp-tools is a mekosh command now: mekosh tools --json\n")
 }
 
 func TestSuggestedName(t *testing.T) {

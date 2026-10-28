@@ -91,7 +91,7 @@ func TestListDatapacks(t *testing.T) {
 		{"/html/", CodeListFailed, "isn't Meko's API"},
 	} {
 		_, err = ListDatapacks(ctx, ts.URL+tc.path, key)
-		var le *ListError
+		var le *CallError
 		if !errors.As(err, &le) || le.Code != tc.code || !strings.Contains(err.Error(), tc.says) ||
 			strings.Contains(err.Error(), key) {
 			t.Errorf("%s: %v", tc.path, err)
@@ -101,7 +101,7 @@ func TestListDatapacks(t *testing.T) {
 	short, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 	defer cancel()
 	_, err = ListDatapacks(short, ts.URL+"/hang/", key)
-	var le *ListError
+	var le *CallError
 	if !errors.As(err, &le) || le.Code != CodeUnreachable {
 		t.Fatalf("a server that hangs: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestServiceDatapacks(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err = s.Datapacks(ctx)
-	if err != nil || !got.Linked || *got.APIURL != DefaultWebURL+"/api/v1" || *got.WebURL != DefaultWebURL {
+	if err != nil || !got.Linked {
 		t.Fatalf("linked: %+v, %v", got, err)
 	}
 	if asked[0] != DefaultWebURL+"/api/v1 "+key {
@@ -160,7 +160,7 @@ func TestServiceDatapacks(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = s.Datapacks(ctx)
-	var le *ListError
+	var le *CallError
 	if !errors.As(err, &le) || le.Code != CodeNoAPIURL {
 		t.Fatalf("no API URL: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestServiceDatapacks(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err = s.Datapacks(ctx)
-	if err != nil || got.WebURL != nil || got.Datapacks[0].WebURL != nil {
+	if err != nil || got.Datapacks[0].WebURL != nil {
 		t.Fatalf("no web app: %+v, %v", got, err)
 	}
 }

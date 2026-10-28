@@ -153,6 +153,7 @@ func TestPromptArgs(t *testing.T) {
 		{[]string{"search", "q", "-datapack", "other"}, "research", "", []string{"search", "q", "-datapack", "other"}},
 		{[]string{"datapacks"}, "research", "/d", []string{"datapacks", "--data-dir", "/d"}},
 		{[]string{"add_memory", "x"}, "", "", []string{"add_memory", "x"}},
+		{[]string{"upload", "a.md"}, "cloud:c0ffee00", "", []string{"upload", "a.md", "--datapack", "cloud:c0ffee00"}},
 		// A word that names a flag isn't one unless it starts with -.
 		{[]string{"search", "datapack"}, "research", "", []string{"search", "datapack", "--datapack", "research"}},
 		{[]string{"add_memory", "data-dir"}, "", "/d", []string{"add_memory", "data-dir", "--data-dir", "/d"}},

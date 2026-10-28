@@ -191,3 +191,37 @@ func withDone(te *toolError, done *partial) *toolError {
 var errArgsNotObject = errors.New("arguments must be an object")
 
 func isParseError(err error) bool { return errors.Is(err, errArgsNotObject) }
+
+// Call runs one tool in-process as /mcp does for a request that got in with cred, recording the
+// call, and returns its reply's text: an error a caller can act on ({"error", "detail"}) is a reply
+// too. It serves the REST routes that answer what a tool does (a datapack's search and memories).
+func Call(ctx context.Context, o Options, cred, name string, args map[string]any) (string, error) {
+	if o.Log == nil {
+		o.Log = slog.New(slog.DiscardHandler)
+	}
+	for _, t := range allTools() {
+		if t.name != name {
+			continue
+		}
+		raw, err := json.Marshal(args)
+		if err != nil {
+			return "", err
+		}
+		res, err := o.handler(t, cred)(ctx, &sdk.CallToolRequest{Params: &sdk.CallToolParamsRaw{Name: name,
+			Arguments: raw}})
+		if err != nil {
+			return "", err
+		}
+		text := ""
+		if len(res.Content) > 0 {
+			if tc, ok := res.Content[0].(*sdk.TextContent); ok {
+				text = tc.Text
+			}
+		}
+		if res.IsError {
+			return "", errors.New(text)
+		}
+		return text, nil
+	}
+	return "", fmt.Errorf("no tool is named %q", name)
+}

@@ -11,12 +11,15 @@ import (
 	"time"
 )
 
-// The codes a failed listing answers with (docs/cloud.md), each a 502 on the route.
+// The codes a call to Meko Cloud fails with (docs/cloud.md), each a 502 on its route but
+// CodeNotLinked, a 409.
 const (
+	CodeNotLinked   = "CLOUD_NOT_LINKED"
 	CodeNoAPIURL    = "CLOUD_NO_API_URL"
 	CodeUnreachable = "CLOUD_UNREACHABLE"
 	CodeKeyRefused  = "CLOUD_KEY_REFUSED"
 	CodeListFailed  = "CLOUD_LIST_FAILED"
+	CodeCallFailed  = "CLOUD_CALL_FAILED"
 )
 
 // maxListBytes bounds Meko Cloud's reply: a heavy account's 180 datapacks come to about 150 KB.
@@ -37,38 +40,40 @@ type Datapack struct {
 	WebURL *string `json:"web_url"`
 }
 
-// Datapacks is the route's reply: the link's Meko Cloud datapacks, newest first, or linked false.
+// Datapacks is what Service.Datapacks finds: the link's Meko Cloud datapacks, newest first, or
+// linked false. GET /datapacks lists the rows (internal/rest's cloud.go).
 type Datapacks struct {
-	Linked    bool       `json:"linked"`
-	APIURL    *string    `json:"api_url,omitempty"`
-	WebURL    *string    `json:"web_url,omitempty"`
-	Datapacks []Datapack `json:"datapacks"`
+	Linked    bool
+	Datapacks []Datapack
 }
 
-// ListError is a listing Meko Cloud didn't answer, with the code the route answers.
-type ListError struct {
-	Code string
-	msg  string
+// CallError is a call Meko Cloud didn't answer, or answered with an error, with the code the route
+// answers. Its message never carries the key.
+type CallError struct {
+	// Status is what the route answers: 0 is a 502, the default for Meko Cloud's failures.
+	Status int
+	Code   string
+	msg    string
 }
 
-func (e *ListError) Error() string { return e.msg }
+func (e *CallError) Error() string { return e.msg }
 
 // ListDatapacks asks the REST API at apiURL for the key's datapacks: GET /datapacks with no query,
 // which Meko Cloud answers with every row (a limit would switch it to cursor pages). The error is a
-// *ListError, and never carries the key.
+// *CallError, and never carries the key.
 func ListDatapacks(ctx context.Context, apiURL, key string) ([]Datapack, error) {
 	ctx, cancel := context.WithTimeout(ctx, CheckTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(apiURL, "/")+"/datapacks", nil)
 	if err != nil {
-		return nil, &ListError{Code: CodeListFailed, msg: "Meko Cloud's API URL isn't one Meko can call."}
+		return nil, &CallError{Code: CodeListFailed, msg: "Meko Cloud's API URL isn't one Meko can call."}
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+key)
 	// Any failure to reach Meko Cloud or read its whole reply (no route, refused, TLS, DNS, the time
 	// limit, a body cut short) is CodeUnreachable.
 	unreachable := func(err error) error {
-		return &ListError{Code: CodeUnreachable,
+		return &CallError{Code: CodeUnreachable,
 			msg: "Couldn't reach Meko Cloud: " + strings.TrimSuffix(shortError(ctx, err).Error(), ".") + "."}
 	}
 	res, err := http.DefaultClient.Do(req) //nolint:gosec // G704: the link's API URL, checked when it was saved
@@ -77,8 +82,7 @@ func ListDatapacks(ctx context.Context, apiURL, key string) ([]Datapack, error) 
 	}
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
-		return nil, &ListError{Code: CodeKeyRefused,
-			msg: "Meko Cloud refused the key. Link it again in Settings › Meko Cloud."}
+		return nil, keyRefused()
 	}
 	var env struct {
 		Data  json.RawMessage `json:"data"`
@@ -92,7 +96,7 @@ func ListDatapacks(ctx context.Context, apiURL, key string) ([]Datapack, error) 
 	}
 	jsonErr := json.Unmarshal(body, &env)
 	failed := func(why string) error {
-		return &ListError{Code: CodeListFailed, msg: "Meko Cloud couldn't list datapacks: " + why + "."}
+		return &CallError{Code: CodeListFailed, msg: "Meko Cloud couldn't list datapacks: " + why + "."}
 	}
 	switch {
 	case jsonErr == nil && env.Error != nil && env.Error.Message != "":
@@ -129,7 +133,7 @@ func (s *Service) Datapacks(ctx context.Context) (Datapacks, error) {
 	}
 	api := st.Link.EffectiveAPIURL()
 	if api == "" {
-		return Datapacks{}, &ListError{Code: CodeNoAPIURL, msg: "The Meko Cloud link has no API URL. " +
+		return Datapacks{}, &CallError{Code: CodeNoAPIURL, msg: "The Meko Cloud link has no API URL. " +
 			"Set the web app or API URL in Settings › Meko Cloud."}
 	}
 	list := s.List
@@ -152,7 +156,7 @@ func (s *Service) Datapacks(ctx context.Context) (Datapacks, error) {
 	if rows == nil {
 		rows = []Datapack{}
 	}
-	return Datapacks{Linked: true, APIURL: &api, WebURL: strOrNil(web), Datapacks: rows}, nil
+	return Datapacks{Linked: true, Datapacks: rows}, nil
 }
 
 // newer says whether timestamp a is after b; ones that don't parse sort last.
