@@ -33,7 +33,7 @@ the service, extensions, updates and secrets), [docs/web.md](docs/web.md) (the w
 | `internal/memory/` | The service MCP and REST call: memories (through the memory engine), learnings (keep and promote), artifacts, conversations, conversation search, knowledge files (upload and download links, the indexer, hybrid search with the reranker), the sweep that embeds turns and knowledge chunks, the call log (recording, pruning, and the stats metrics read), and the local user's profile. |
 | `assets/` | The Meko logo, dark and white, as Meko Cloud's web app has it; the repo's README shows it. |
 | `memory_engine/` | The memory engine: TypeScript on Node 22, public `mem0ai` with Meko's providers (store, history, a transformers.js embedder in a worker thread, a refusing LLM), the knowledge base's cross-encoder in a worker thread of its own, its API, its tests. |
-| `web_ui/` | The web UI: React, Vite and Tailwind, built into `web_ui/dist`, which the web listener serves at `/`. Its pages call only `/api/v1` and `/mcp`, with local access or the session cookie. |
+| `web_ui/` | The web UI: React, Vite and Tailwind, built into `web_ui/dist`, which the web listener serves at `/`. Its pages call only `/api/v1` and `/mcp`, with local access or the session cookie. Its tests (`web_ui/test`, Vitest in happy-dom) render pages against a faked `fetch`. |
 | `internal/auth/` | The admin token the CLI uses (new at each start), the client token MCP and REST clients send (`client.token`, kept across restarts), and the login's parts: scrypt hashes in AgentK's format, TOTP, the rate limiter. |
 | `internal/service/` | The login service: a launchd LaunchAgent or a systemd user unit from embedded templates, run with launchctl or systemctl. |
 | `internal/secrets/` | The secret store: the login Keychain through `/usr/bin/security` (macOS), or 0600 files in the data folder. |
@@ -58,7 +58,7 @@ export CC=/opt/rh/gcc-toolset-13/root/usr/bin/gcc   # RHEL 8 only; on macOS the 
 make build                                          # bin/meko, and bin/mekosh (a link to it)
 make memory_engine                                  # npm ci (when the lockfile changes) and build memory_engine/dist
 make web_ui                                         # the same for the web UI, into web_ui/dist
-make test                                           # builds the memory engine, then go test -race and the memory engine's tests
+make test                                           # builds the memory engine, then go test -race, the memory engine's tests and the web UI's
 make lint                                           # go vet, gofmt, golangci-lint v2 (.golangci.yml), tsc on the memory engine and the web UI
 make bench                                          # the search budget at 200 MB (minutes; not in CI)
 go test ./scripts/                                  # the installer, against a fake gh

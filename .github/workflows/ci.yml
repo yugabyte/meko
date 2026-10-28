@@ -126,7 +126,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: backend/memory_engine/package-lock.json
+          cache-dependency-path: |
+            backend/memory_engine/package-lock.json
+            backend/web_ui/package-lock.json
 
       # The Go end-to-end tests use the real embedding model (about 23 MB, from Hugging Face): keep it.
       - name: Cache the embedding model
