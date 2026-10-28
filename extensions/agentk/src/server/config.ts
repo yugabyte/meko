@@ -94,8 +94,9 @@ export interface Config {
    * off: no sync at all). syncMinutes: how often it syncs by itself (0: only Sync). slackModel: the
    * model of the `claude -p` that reads Slack's Later list through your Slack connector (slack.ts), and
    * slackTimeoutSeconds how long it may take (30 to 600). slackTools: the tools that run may call, your Slack
-   * connector's read tools (the claude.ai Slack connector's by default). It loads none of your Claude Code settings
-   * but the sign-in part, so nothing else is allowed (slack.ts).
+   * connector's read tools (the claude.ai Slack connector's by default), besides ToolSearch, which needs no
+   * permission and only loads tools. It loads none of your Claude Code settings but the sign-in part, so
+   * nothing else is allowed (slack.ts).
    */
   workQueue: { github: boolean; slack: boolean; syncMinutes: number; slackModel: string; slackTimeoutSeconds: number; slackTools: string[] };
 }

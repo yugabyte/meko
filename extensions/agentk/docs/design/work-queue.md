@@ -73,15 +73,22 @@ and the timer does nothing (`WorkSync.sources` tells the page). The timer ticks 
 - **Slack:** the messages on your Later list, read by one `claude -p` through your own Slack
   connector (`src/server/slack.ts`), titled with their first line. Unlike Ask AgentK, it loads your
   MCP servers and claude.ai connectors (no `--strict-mcp-config`). It reads messages other people
-  wrote, so it's kept to reading Slack: no built-in tools (`--tools ''`); none of your Claude Code
-  settings but `env` and `apiKeyHelper`, which signing in needs (`signInSettings()`, with
+  wrote, so it's kept to reading Slack: no built-in tools but ToolSearch (`--tools ToolSearch`);
+  none of your Claude Code settings but `env` and `apiKeyHelper`, which signing in needs (`signInSettings()`, with
   `--setting-sources project` in AgentK's empty `run/work-sync` folder), so your allow rules and
   default mode don't apply; `--permission-mode default`; and only `[work_queue] slack_tools` allowed
-  (the claude.ai Slack connector's search and read tools by default). In `-p` nothing can be asked,
-  so every other tool, another connector's included, is refused; the claude.ai connector's write
+  (the claude.ai Slack connector's search and read tools by default). ToolSearch runs too, since it
+  needs no permission, but it only loads tools' schemas. In `-p` nothing can be asked, so every other
+  tool, another connector's included, is refused; the claude.ai connector's write
   tools are also denied by name. The prompt calls the messages' text data, not instructions.
   The answer follows a JSON schema; `found: false` (no Slack tools, or no way to the list) is an
   error, not an empty list. It needs Claude Code; the model is `[work_queue] slack_model`.
+  Claude.ai connectors are still connecting when a `-p` run's first turn starts, so with no tools
+  at all the run never saw Slack and always answered `found: false`; ToolSearch waits for a
+  connecting server, so the prompt (`slackPrompt()`) has Claude load `slack_tools` with
+  `select:<slack_tools>` first. That also leaves every connector's tools deferred: setting
+  `MCP_CONNECTION_NONBLOCKING=false` instead also works, but puts all their schemas in the prompt
+  (about 100k tokens, $0.43 a read on Sonnet against $0.04–0.06).
 
 Each source succeeds or fails on its own, and `AppState.workSync` carries how each went for the line
 beside Sync. A link already on any item, open or closed, is never added again, so closing a synced
