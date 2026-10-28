@@ -217,7 +217,7 @@ func printUsage(w io.Writer, prog string) {
 		fmt.Fprint(w, "mekosh works with what Meko keeps: datapacks, memories, files and conversations\n"+
 			"Run it alone for a prompt, or give it one command\n\nUsage: mekosh [<command> [flags]]\n")
 	} else {
-		fmt.Fprint(w, "Meko runs memory and knowledge for your agents on this machine\n\nUsage: meko <command> [flags]\n")
+		fmt.Fprint(w, "The universal, self-learning context engine for agentic applications\n\nUsage: meko <command> [flags]\n")
 	}
 	for _, g := range groups {
 		fmt.Fprintf(w, "\n%s\n", g)
