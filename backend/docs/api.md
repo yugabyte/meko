@@ -238,9 +238,28 @@ a name or id this Meko doesn't have is looked up there, `cloud:` or `local:` bef
 side, `create_datapack --cloud` makes one there, and their messages say Meko Cloud. `mekosh export`
 works only on this Meko's datapacks. `meko ui [path]` opens the web listener's URL ([web.md](web.md)), at a path when given
 (`/ext/agentk/` for AgentK); the link carries no credential, and `--no-open` only prints it. With remote
-access and no login yet, it prints a setup link instead; `meko setup_link` prints one any time. `meko token
---mcp` prints the `claude mcp add` command that registers Meko, named `meko`: AgentK recognizes
-Meko's tools by that name (`mcp__meko__*`), and `meko token --json` prints the MCP URL, the web
+access and no login yet, it prints a setup link instead; `meko setup_link` prints one any time.
+`meko connect <agent>` adds Meko's MCP server to a coding agent, for all the user's projects,
+always named `meko`: AgentK recognizes Meko's tools by that name (`mcp__meko__*`). It's Streamable
+HTTP at the MCP URL (the running server's port, or the configured one) with the client token in
+`Authorization: Bearer <token>`, added each agent's own way:
+
+| Agent | How `meko connect` adds Meko | Why |
+|---|---|---|
+| `claude` (Claude Code) | `claude mcp remove --scope user meko`, then `claude mcp add --scope user --transport http meko <url> --header "Authorization: Bearer <token>"` | User scope (`~/.claude.json`) is every project's; Claude Code's default, `local`, is only the folder it runs in. `add` refuses a name the scope has, so an old `meko` goes first |
+| `opencode` (OpenCode) | `opencode mcp add meko --url <url> --header "Authorization=Bearer <token>" --global` | It replaces a server of the same name, and writes the global config in the shape its own version reads |
+| `kiro` (Kiro CLI) | Writes `mcpServers.meko` (`url`, `headers`) into `~/.kiro/settings/mcp.json`, keeping the file's other servers and keys | `kiro-cli mcp add` takes no headers, and needs a login |
+| `codex` (Codex) | Writes an `[mcp_servers.meko]` table (`url`, `http_headers`) into `config.toml` in `$CODEX_HOME` or `~/.codex`, as text: an old `[mcp_servers.meko]` table and its subtables go, the rest stays as it was, and the result is parsed before it's written | `codex mcp add` takes no headers, only the name of an environment variable holding a bearer token, which the user's shell would then have to set. A `meko` set some other way (a dotted key) isn't replaced: it says to run `codex mcp remove meko` first |
+
+Claude Code's and OpenCode's CLIs take the header only as an argument, so the token is on their
+command line while `mcp add` runs, about a second: the one exception, beside an installer's
+`--meko-key`, to the token never reaching a command line. Writing their config files instead
+would race Claude Code's running sessions, which rewrite `~/.claude.json`, and would have to
+follow OpenCode's config shape, which changes between its versions. A file Meko writes is made
+0600 (it holds the token), and an existing one is written in place, keeping its mode and a
+symlink to it. It says what it did, and the URL of a `meko` server it replaced in a file; an
+agent's CLI that fails, or isn't on PATH, fails the command, with the token never in the error. `meko connect` alone prints the URL, the header and the token for any MCP
+client, and the agents it can add itself to. `meko token --json` prints the MCP URL, the web
 listener's (`web_url`, where AgentK finds its own address), the token,
 whether a server runs and the Meko Cloud link with its key (`cloud`, [cloud.md](cloud.md)), for
 extensions (AgentK reads it). `meko cloud_link` links Meko Cloud ([cloud.md](cloud.md)). `meko logs` and the commands that

@@ -1,9 +1,10 @@
 // Package cli is the meko and mekosh commands, one binary run by either name. meko runs Meko:
-// install, start, stop, restart, status, logs, update, version, token, ui, setup_link, cloud_link,
-// destroy, uninstall, install_extension, update_extension, uninstall_extension and serve. mekosh
-// works with what it keeps, through the running server, and with the linked Meko Cloud's datapacks
-// (cloudtools.go): datapacks, create_datapack, delete_datapack, export, search, add_memory, upload
-// and upload_status, one at a time or at its prompt (shell.go). help.go has each command's help.
+// install, start, stop, restart, status, logs, update, version, connect (connect.go), token, ui,
+// setup_link, cloud_link, destroy, uninstall, install_extension, update_extension, uninstall_extension
+// and serve. mekosh works with what it keeps, through the running server, and with the linked Meko
+// Cloud's datapacks (cloudtools.go): datapacks, create_datapack, delete_datapack, export, search,
+// add_memory, upload and upload_status, one at a time or at its prompt (shell.go). help.go has each
+// command's help.
 package cli
 
 import (
@@ -122,7 +123,6 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&c.verbose, "verbose", false, "everything: the models, certificate, service, updates and links")
 		fs.BoolVar(&t.json, "json", false, "print the server's status reply")
 	case "token":
-		fs.BoolVar(&t.mcp, "mcp", false, "print the claude mcp add command for Meko")
 		fs.BoolVar(&t.json, "json", false,
 			"print the MCP URL, the token, whether a server runs and the Meko Cloud link, as JSON")
 	case "stop":
@@ -218,7 +218,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	// These take one argument, and upload any number; their flags may follow.
 	switch cmd {
 	case "search", "add_memory", "create_datapack", "delete_datapack", "upload_status", "install_extension",
-		"update_extension", "uninstall_extension", "export", "ui":
+		"update_extension", "uninstall_extension", "export", "ui", "connect":
 		if fs.NArg() > 0 {
 			t.text = fs.Arg(0)
 			if code, ok := parse(fs.Args()[1:]); !ok {
@@ -266,7 +266,9 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	case "status":
 		return runStatus(l, statusOptions{verbose: c.verbose, json: t.json}, stdout, stderr)
 	case "token":
-		return runToken(l, t.mcp, t.json, stdout, stderr)
+		return runToken(l, t.json, stdout, stderr)
+	case "connect":
+		return runConnect(l, t.text, stdout, stderr)
 	case "logs":
 		return runLogs(l, logsOptions{follow: c.follow, lines: c.lines, server: c.server, memoryEngine: c.memoryEngine,
 			service: c.service, json: t.json}, stdout)

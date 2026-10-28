@@ -293,12 +293,12 @@ func TestClientTokenIsKeptAcrossRestarts(t *testing.T) {
 	if len(strings.TrimSpace(tok)) != 64 {
 		t.Fatalf("token %q", tok)
 	}
-	// A killed server's port file is left behind; with no server, --mcp names the configured port.
+	// A killed server's port file is left behind; with no server, connect names the configured port.
 	if err := paths.WriteFile(paths.New(dir).Port, []byte("1\n")); err != nil {
 		t.Fatal(err)
 	}
-	code, mcpOut, _ := run("token", "--data-dir", dir, "--mcp")
-	want(t, "token --mcp with no server", code, 0, mcpOut, "http://127.0.0.1:7778/mcp")
+	code, mcpOut, _ := run("connect", "--data-dir", dir)
+	want(t, "connect with no server", code, 0, mcpOut, "http://127.0.0.1:7778/mcp")
 	code, js, _ := run("token", "--data-dir", dir, "--json")
 	want(t, "token --json with no server", code, 0, js, `{"cloud":{"set":false,"url":"","api_key":"","web_url":"",`+
 		`"api_url":""},"running":false,"token":"`+strings.TrimSpace(tok)+
@@ -771,9 +771,9 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 	want(t, "upload_status of an unknown key", code, 1, errs, "NOT_FOUND")
 
 	_, tok, _ := run("token", "--data-dir", dir)
-	code, out, _ = run("token", "--data-dir", dir, "--mcp")
-	want(t, "token --mcp", code, 0, out, "claude mcp add --transport http meko http://127.0.0.1:"+port+
-		"/mcp --header \"Authorization: Bearer "+strings.TrimSpace(tok)+"\"")
+	code, out, _ = run("connect", "--data-dir", dir)
+	want(t, "connect", code, 0, out, "http://127.0.0.1:"+port+"/mcp\n")
+	want(t, "connect", code, 0, out, "Authorization: Bearer "+strings.TrimSpace(tok)+"\n")
 
 	// The default datapack isn't made again, so deleting it says so, and calls that name none then
 	// ask for --datapack.
@@ -833,7 +833,7 @@ func TestDestroyAsksThenStopsAndRemoves(t *testing.T) {
 	code, out, errs = run("destroy", "--data-dir", dir)
 	// A piped answer isn't echoed, so destroy ends the prompt's line itself.
 	want(t, "destroy", code, 0, out+errs, "Destroy it? [y/N] \nMeko stopped\nRemoved "+dir+"\n")
-	want(t, "destroy's note", code, 0, out, "its token no longer works: remove it (claude mcp remove meko)")
+	want(t, "destroy's note", code, 0, out, "its token no longer works: after meko start, run meko connect <agent> again")
 	gone(t, dir)
 	code, out, _ = run("status", "--data-dir", dir)
 	want(t, "status after destroy", code, exitNotRunning, out, "isn't running")

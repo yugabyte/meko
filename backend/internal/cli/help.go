@@ -92,10 +92,15 @@ var mekoCommands = []command{
 			{"meko memory-extractor datapack personal --off", "don't extract that datapack's conversations"},
 			{"meko memory-extractor off", "turn it off"},
 		}},
-	{name: "token", group: "Connect", summary: "Print the token agents send; --mcp connects Claude Code",
+	{name: "connect", group: "Connect", summary: "Connect a coding agent to Meko (claude, codex, kiro, opencode)",
+		usage: "meko connect [claude|codex|kiro|opencode]", examples: []example{
+			{"meko connect claude", "add Meko's MCP server to Claude Code, for all your projects"},
+			{"meko connect kiro", "the same for Kiro CLI (codex and opencode too)"},
+			{"meko connect", "the MCP URL and token, to connect any MCP client"},
+		}},
+	{name: "token", group: "Connect", summary: "Print the token agents send",
 		usage: "meko token [flags]", examples: []example{
 			{"meko token", "the token MCP and REST clients send (Authorization: Bearer <token>)"},
-			{"meko token --mcp", "the claude mcp add command that connects Claude Code to Meko"},
 			{"meko token --json", "the MCP URL, the token, whether Meko runs and the Meko Cloud link"},
 		}},
 	{name: "cloud_link", group: "Connect", summary: "Link Meko Cloud, or unlink it",

@@ -51,11 +51,18 @@ release bundles its own Node and models, so the first start needs no network. It
 
 ## Connect an agent
 
-Register Meko with Claude Code by running the command `meko token --mcp` prints. As printed, it
-registers Meko only for the folder you run it in (Claude Code's default `local` scope); add
-`--scope user` to it to use Meko in every repo. Meko's tools then show up as `mcp__meko__*`. Any
-MCP client works the same way: Streamable HTTP at `http://127.0.0.1:7778/mcp`, with
-`Authorization: Bearer <token>`.
+`meko connect claude` adds Meko to Claude Code for all your projects (its `user` scope), and says
+what it did. Meko's tools then show up as `mcp__meko__*`. The same works for other agents:
+
+```sh
+meko connect claude     # Claude Code
+meko connect codex      # Codex
+meko connect kiro       # Kiro CLI
+meko connect opencode   # OpenCode
+```
+
+`meko connect` alone prints what any other MCP client needs: Streamable HTTP at
+`http://127.0.0.1:7778/mcp`, with `Authorization: Bearer <token>`.
 
 The REST API takes the same token:
 
@@ -72,7 +79,7 @@ One binary under two names, as PostgreSQL has `postgres` and `psql`: `meko` runs
 |---|---|
 | `meko start` / `stop` / `status` | Start or stop the server, or see whether it's running and its links |
 | `meko ui` | Open the web UI in your browser |
-| `meko token --mcp` | Print the `claude mcp add` command that registers Meko with Claude Code |
+| `meko connect claude` | Connect Claude Code to Meko (or `codex`, `kiro`, `opencode`; alone, the URL and token for any MCP client) |
 | `meko logs -f` | Follow the server's and the memory engine's logs |
 | `meko update` | Install Meko's newest release now, then every extension's |
 | `mekosh search "<question>"` | Search memories, the knowledge base and past conversations |

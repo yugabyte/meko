@@ -23,7 +23,7 @@ export function ConnectPage({ datapack }: { datapack: Datapack }) {
   const header = token ? ` --header "Authorization: Bearer ${token}"` : "";
   const claude = token
     ? `claude mcp add --transport http --scope user meko ${data.mcp_server_url}${header}`
-    : "meko token --mcp   # prints the claude mcp add command, with the token";
+    : "meko connect claude   # adds Meko to Claude Code, with the token (or codex, kiro, opencode)";
 
   return (
     <div className="max-w-3xl space-y-4">

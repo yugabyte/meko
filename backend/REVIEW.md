@@ -63,7 +63,9 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       changes what Meko ships (it cuts a Meko release).
 - [ ] Secrets (the client token, later provider keys) live only in `internal/secrets` or the client
       token's file, and never reach a log, an error, or a command line other than an installer's
-      own `--meko-key`. The Keychain is written through `security -i` on stdin.
+      own `--meko-key` and the agent CLIs `meko connect` runs (`claude mcp add`, `opencode mcp add`:
+      their only way to take a header, for the second they run; [docs/api.md](docs/api.md#cli)). The
+      Keychain is written through `security -i` on stdin.
 - [ ] The service files keep their stop timeout above serve's own shutdown (35 s), exit 75 stays
       "don't restart" for systemd and a launchd-run serve waits for the folder instead, and the CLI
       uses a service only for the data folder it runs. Releases stay outside the data folder.
