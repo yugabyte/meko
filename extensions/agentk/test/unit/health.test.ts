@@ -61,9 +61,13 @@ describe('health probe', () => {
     await serve();
     expect(await status()).toBe(0);
     await new Promise<void>((r) => server!.close(() => r()));
-    server = null;
-    // A server that holds the lease but didn't answer in time runs.
+    // A server that holds the lease but doesn't answer in time runs.
+    const silent = createServer(() => undefined);
+    server = silent;
+    await new Promise<void>((resolve) => silent.listen(paths.webSock, () => resolve()));
+    expect(await status()).toBe(3);
     writeFileSync(paths.lock, JSON.stringify({ host: hostname(), pid: process.pid, beatAt: Date.now() }));
     expect(await status()).toBe(0);
+    silent.closeAllConnections();
   }, 60_000);
 });

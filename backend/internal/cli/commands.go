@@ -194,7 +194,9 @@ func runStatus(l paths.Layout, o statusOptions, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, string(b))
 		case o.verbose:
 			fmt.Fprintf(stdout, "Meko isn't running (data in %s)\n", l.Root)
-			printSetup(l, extensionStatuses(l.Root), stdout)
+			exts, stop := extensionStatuses(l.Root)
+			defer stop()
+			printSetup(l, exts, stdout)
 		default:
 			newReport(stdout).headline(stepFail, fmt.Sprintf("Meko isn't running (data in %s)", l.Root))
 			fmt.Fprintln(stdout, "  Start it: meko start")
@@ -203,9 +205,12 @@ func runStatus(l paths.Layout, o statusOptions, stdout, stderr io.Writer) int {
 	}
 	// The extensions' own status commands run while the server is asked, and the rows before theirs
 	// are printed: each takes a Node start or more, and one that hangs is cut off at its own bound.
+	// Returning early (the server didn't answer) stops the ones still running rather than leave them.
 	var exts func() extensionResults
 	if !o.json {
-		exts = extensionStatuses(l.Root)
+		var stop func()
+		exts, stop = extensionStatuses(l.Root)
+		defer stop()
 	}
 	c, err := newClient(l)
 	if err != nil {
@@ -458,15 +463,21 @@ type extensionResults struct {
 }
 
 // extensionStatuses starts every registered extension's `<command> status` at once, each bounded
-// by extensions.StatusTimeout, and returns a function that waits for them.
-func extensionStatuses(root string) func() extensionResults {
+// by extensions.StatusTimeout, and returns a function that waits for them, and one that stops the
+// ones still running and waits for them to end (deferred: a no-op once they're all done).
+func extensionStatuses(root string) (wait func() extensionResults, stop func()) {
 	reg, err := extensions.Load(root)
 	if err != nil {
-		return func() extensionResults { return extensionResults{err: err} }
+		return func() extensionResults { return extensionResults{err: err} }, func() {}
 	}
-	wait := reg.Statuses(root, extensions.StatusTimeout)
-	return func() extensionResults {
-		return extensionResults{reg: reg, names: reg.Names(), status: wait()}
+	ctx, cancel := context.WithCancel(context.Background())
+	results := reg.Statuses(ctx, root, extensions.StatusTimeout)
+	wait = func() extensionResults {
+		return extensionResults{reg: reg, names: reg.Names(), status: results()}
+	}
+	return wait, func() {
+		cancel()
+		results()
 	}
 }
 

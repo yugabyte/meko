@@ -310,10 +310,16 @@ async function selftest(): Promise<void> {
   console.log(`AgentK ${version()} selftest ok`);
 }
 
+/** How long `status` waits for the server's /healthz: well inside the 3 s `meko status` gives it. */
+const STATUS_PROBE_MS = 2000;
+
 async function status(): Promise<void> {
   const paths = getPaths();
   rememberMekoHome(paths);
   const cfg = loadConfig(paths);
+  // Asked first, while the rest is read: meko status gives the whole command 3 s, and a server
+  // that's only slow to answer must still be told from a stopped one (the lease, below).
+  const probing = probeLocal(paths, STATUS_PROBE_MS);
   const web = await webUrl(paths, cfg);
   console.log(`AgentK ${version()}`);
   console.log(`home:     ${paths.home}`);
@@ -341,13 +347,14 @@ async function status(): Promise<void> {
   } else if (up === false) {
     console.log('host:     not running');
   }
-  const probe = await probeLocal(paths);
+  const probe = await probing;
   console.log(`server:   ${probe.ok ? `responding (version ${probe.version})` : `not responding (${probe.error})`}`);
   console.log(`logs:     ${join(paths.logs, 'server.log')}`);
   // Meko reads the exit code (meko status, and an update deciding whether to restart AgentK): 3 when
   // no server runs this home, as Presenter's. One holding the lease that was only slow to answer runs.
   if (!probe.ok && !heldLease(paths.lock)) process.exitCode = 3;
 }
+
 
 /** `host`, `host stop` and `host restart`. */
 async function host(args: string[]): Promise<void> {

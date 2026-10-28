@@ -398,7 +398,8 @@ var StatusTimeout = 3 * time.Second
 const statusPipeWait = time.Second
 
 // StatusResult is what `<command> status` said: whether it succeeded, its first line, and whether
-// it took longer than it was given (then Running is false and Line is whatever it printed by then).
+// it was killed for taking longer than it was given (then Running is false and Line is whatever it
+// printed by then).
 type StatusResult struct {
 	Running  bool
 	Line     string
@@ -409,38 +410,39 @@ type StatusResult struct {
 // waits up to 15 s: an update decides from it whether to stop the extension, and a slow one taken
 // for stopped would be switched while it runs.
 func (e Entry) Status(root string) (bool, string) {
-	r := e.StatusWithin(root, 15*time.Second)
+	r := e.StatusWithin(context.Background(), root, 15*time.Second)
 	return r.Running, r.Line
 }
 
-// StatusWithin runs `<command> status` quietly, bounded by d. A process it left holding its output
-// (Node under the extension's launcher, when the timeout kills only the launcher) isn't killed, and
-// isn't waited for more than statusPipeWait: a status prints a few lines, and has printed them by
-// the time it exits.
-func (e Entry) StatusWithin(root string, d time.Duration) StatusResult {
-	ctx, cancel := context.WithTimeout(context.Background(), d)
+// StatusWithin runs `<command> status` quietly, bounded by d, or until ctx is done. A process the
+// status started that still holds its output after the status exits (the launchers exec Node, so
+// it's one Node started) isn't killed, and isn't waited for more than statusPipeWait: a status
+// prints a few lines, and has printed them by the time it exits. What the exit code says stands
+// when the status exited by itself, even if waiting for its output ran past d.
+func (e Entry) StatusWithin(ctx context.Context, root string, d time.Duration) StatusResult {
+	ctx, cancel := context.WithTimeout(ctx, d)
 	defer cancel()
 	var out bytes.Buffer
 	cmd := exec.CommandContext(ctx, e.Command, "status") //nolint:gosec // G204: see run
 	cmd.Stdout, cmd.Stderr, cmd.Env = &out, &out, CommandEnv(root, e.Command)
 	cmd.WaitDelay = min(PipeWait, statusPipeWait)
-	err := cmd.Run()
+	_ = cmd.Run()
 	first, _, _ := bytes.Cut(bytes.TrimSpace(out.Bytes()), []byte("\n"))
-	if ctx.Err() != nil {
-		return StatusResult{Line: string(first), TimedOut: true}
-	}
-	return StatusResult{Running: err == nil || errors.Is(err, exec.ErrWaitDelay), Line: string(first)}
+	ps := cmd.ProcessState
+	exited := ps != nil && ps.Exited()
+	return StatusResult{Running: exited && ps.Success(), Line: string(first), TimedOut: !exited && ctx.Err() != nil}
 }
 
 // Statuses starts `<command> status` for every registered extension at once, each bounded by d, and
-// returns a function that waits for them all and gives each one's result by name.
-func (r *Registry) Statuses(root string, d time.Duration) func() map[string]StatusResult {
+// returns a function that waits for them all and gives each one's result by name. Canceling ctx
+// stops the ones still running.
+func (r *Registry) Statuses(ctx context.Context, root string, d time.Duration) func() map[string]StatusResult {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	out := make(map[string]StatusResult, len(r.Entries))
 	for name, e := range r.Entries {
 		wg.Go(func() {
-			res := e.StatusWithin(root, d)
+			res := e.StatusWithin(ctx, root, d)
 			mu.Lock()
 			out[name] = res
 			mu.Unlock()
