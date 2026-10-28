@@ -17,7 +17,7 @@ from the extension's folder) and which docs to keep current. Meko's own Go backe
 | `extensions/agentk/` | AgentK: its code, tests, scripts, packaging and docs, with its own `package.json`. |
 | `extensions/presenter/` | Presenter: interactive, branching presentations built from datapacks. Its server, its pages (served by Meko at `/ext/presenter/`), tests and docs, with its own `package.json`. Releases on its own train, whose tarballs Meko installs and updates. |
 | `scripts/check-title.sh` | The commit subject and PR title rules for the whole repo. |
-| `scripts/ci-scope.sh` | Which components' CI jobs a PR runs, from the paths it changes. |
+| `scripts/ci-scope.sh` | Which components' CI jobs a PR runs, from the paths it changes (Markdown only people read runs none). |
 | `scripts/release/` | The release scripts the three products share, with `--product agentk\|meko\|presenter`: the next version, the release notes (and whether to release), and pruning old releases; and `fetch-node.sh`, which downloads, checks and unpacks the Node a release bundles, with retries. |
 | `.github/` | CI (`ci.yml`: a job per component, in `extensions/agentk`, `extensions/presenter` or `backend`, run only when a PR changes it, and the `CI gate` over them), the PR title check, the three release trains (`agentk-release.yml` for AgentK, tags `agentk-v…`; `meko-release.yml` for Meko, tags `meko-v…`, the repo's latest release; `presenter-release.yml` for Presenter, tags `presenter-v…`), Dependabot, and the issue forms (`ISSUE_TEMPLATE/`: bug, feature and task; blank issues are off). |
 | `.claude/skills/commit/` | The commit skill: how to write commits, PR titles and PR descriptions here. |
@@ -35,8 +35,11 @@ from the extension's folder) and which docs to keep current. Meko's own Go backe
   skill (`.claude/skills/commit/SKILL.md`). PRs are squash-merged, so the PR title is the subject.
 - **Changes reach `main` only through PRs** that pass the `CI gate` and `PR title` checks. A PR
   runs only the jobs of the components it changes (`scripts/ci-scope.sh`); a push to `main` runs
-  them all. A new component gets its own job in `ci.yml`, its paths in `scripts/ci-scope.sh`, a
-  place in the gate's `needs`, and its name in `COMPONENTS` in `scripts/check-title.sh`. A new
+  them all. Markdown only people read (READMEs, `AGENTS.md`, `REVIEW.md`, `docs/`) runs no job,
+  but Markdown a test reads (`backend/docs/`, test fixtures) or a release ships (AgentK's
+  `src/tools/skill/SKILL.md`) runs its component's, so a new test that reads Markdown, or a
+  release that packs it, gets its path in the script too. A new component gets its own job in
+  `ci.yml`, its paths in `scripts/ci-scope.sh`, a place in the gate's `needs`, and its name in `COMPONENTS` in `scripts/check-title.sh`. A new
   product also gets a GitHub label of its own name and an entry in the issue forms' Product
   dropdown (`.github/ISSUE_TEMPLATE/`) and in the issue skill.
 - **Issues** follow the issue skill (`.claude/skills/issue/SKILL.md`): the issue forms'
