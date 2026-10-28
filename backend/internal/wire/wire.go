@@ -144,6 +144,9 @@ type MemoryItem struct {
 	UserEmail      string  `json:"user_email,omitempty"`
 	CreatedAt      string  `json:"created_at,omitempty"`
 	IsMine         bool    `json:"is_mine"`
+	// Meko local's own: "extract" for a memory the memory extractor saved, with the turn it came from.
+	Source    string `json:"source,omitempty"`
+	MessageID string `json:"message_id,omitempty"`
 }
 
 // MemoryList is a page of memories.
@@ -168,6 +171,7 @@ func MemoryListOf(ms []memoryengine.Memory, criteria map[string]any, total, page
 		if m.RunID != "" {
 			it.ConversationID = &m.RunID
 		}
+		it.Source, it.MessageID = Provenance(m.Metadata)
 		out.Memories[i] = it
 	}
 	return out
@@ -366,4 +370,12 @@ func ArtifactOf(a store.Artifact) Artifact {
 		out.LastAccessedAt = &t
 	}
 	return out
+}
+
+// Provenance is where a memory came from, from its metadata: "extract" and the turn's id for one the
+// memory extractor saved, empty otherwise.
+func Provenance(md map[string]any) (source, messageID string) {
+	source, _ = md[memory.MetaSource].(string)
+	messageID, _ = md[memory.MetaMessageID].(string)
+	return source, messageID
 }

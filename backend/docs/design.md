@@ -247,6 +247,7 @@ newer than the binary knows is refused with a message saying so.
 | `0004_call_log.sql` | The call log | [api.md](api.md#the-call-log) |
 | `0005_learnings_artifacts.sql` | Learnings, promoted memories, provenance, artifacts | [api.md](api.md#learnings-promotion-and-artifacts) |
 | `0006_knowledge.sql` | Knowledge files and the knowledge base's chunks | [knowledge.md](knowledge.md#storage-0006_knowledgesql) |
+| `0008_memory_extraction.sql` | The turns waiting for memory extraction, and each datapack's say in it | [memory-extraction.md](memory-extraction.md) |
 
 ### Ids
 

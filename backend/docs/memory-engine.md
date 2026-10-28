@@ -19,8 +19,6 @@ Meko Cloud, this doc states the behavior; the code is written from scratch.
 
 | What | Planned |
 |---|---|
-| LLM extraction of memories from turns, and its LLM | Runs asynchronously from a durable queue in SQLite, in a migration of its own. Only a turn's input is extracted, with earlier turns as context. The memory engine's `getLastMessages` will read Go's messages table. |
-| Links from turns to the memories they produced | A `message_memories` table written in the same transaction that marks a turn extracted. Until then a turn's memories are inferred from timestamps ([api.md](api.md#which-memories-a-turn-produced)). |
 | Re-embedding, and embedders other than the local one | Until then the model is locked at first start (below). |
 
 ## Key decisions
@@ -32,7 +30,7 @@ Meko Cloud, this doc states the behavior; the code is written from scratch.
 | **Meko Cloud's scoring, in our own code** | Upstream divides every memory by the most any memory in the results could reach; Meko divides each by what it earned, and returns the cosine as `raw_similarity_score`. The memory engine asks mem0's search for its score parts (`explain: true`) and rescores. |
 | **Keyword scores are true BM25** (FTS5's `bm25()`, negated) | The scale mem0's BM25 sigmoid was tuned for. |
 | **Embedder: `Xenova/all-MiniLM-L6-v2` (384 dims, q8, pinned to commit `751bff3` of its Hugging Face repo) on transformers.js, in a worker thread; locked at first start** | 23 MB, offline once downloaded (a release bundles it), and the runtime the knowledge base's cross-encoder runs on too ([knowledge.md](knowledge.md)). mem0-ts has no local transformers.js embedder, so the memory engine adds one. Changing the model needs re-embedding, which isn't built, so a memory engine reporting another model is refused. |
-| **No LLM:** mem0 always builds one, so the memory engine registers a `none` provider that throws; `/v1/add` takes verbatim adds only | Extraction isn't built. |
+| **No LLM:** mem0 always builds one, so the memory engine registers a `none` provider that throws; `/v1/add` takes verbatim adds only | Extraction runs in the Go server through the user's own agent CLI, which adds what it finds verbatim ([memory-extraction.md](memory-extraction.md)). |
 | **Verbatim adds link no entities** | As in Cloud and upstream mem0: entities are linked for extracted memories (and on a text update). Search still queries the entity store and scores the boost. |
 | **Conversation and message ids are Cloud's**: a 32-hex `session_id` is the id, any other is the first 32 hex of its SHA-256, none is random; a message id is the first 32 hex of the seed's SHA-256 | AgentK passes stable session ids and already derives the same fallback, and Cloud's ids keep a move to Cloud lossless. Ids are unique per datapack, and the first agent owns the conversation: another agent creating one with the same session id is refused (`ErrAgentMismatch`) rather than handed a conversation it can't add to. |
 | **Conversation search with a MiniLM cutoff**: 1024-character windows overlapping by 256, the 10 nearest outside the caller's conversation, hits within cosine distance 0.6, and a thread of the top 3 conversations' most recent searchable turns (50 in all, oldest first) | With MiniLM a paraphrase measured 0.52 from its turn and unrelated turns 0.98 and more. `[conversation_search] max_distance` changes it. Hits aren't reranked (`rerank_score` is null): the reranker serves the knowledge base only. |

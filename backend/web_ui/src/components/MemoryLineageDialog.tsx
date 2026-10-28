@@ -20,6 +20,8 @@ export interface LineageOf {
   state?: MemoryState;
   agent_id: string;
   conversation_id?: string;
+  // The turn an extracted memory came from: its exact turn, where others' is worked out by time.
+  message_id?: string;
   created_at: string;
 }
 
@@ -31,10 +33,11 @@ const NOW: Record<MemoryState, string> = {
   collective: "Promoted to the collective memory, so every agent finds it through the knowledge base.",
 };
 
-// A turn is stored when the agent saves it, after its memories, so the memory's turn is the first
-// one stored at or after it. None means its turn isn't stored (yet, or past the turns loaded), and
-// no turn is quoted.
-function turnOf(thread: Turn[], at: string): Turn | undefined {
+// An extracted memory names its turn. Another's is worked out by time: a turn is stored when the
+// agent saves it, after its memories, so it's the first one stored at or after the memory. None
+// means its turn isn't stored (yet, or past the turns loaded), and no turn is quoted.
+function turnOf(thread: Turn[], at: string, messageId?: string): Turn | undefined {
+  if (messageId) return thread.find((x) => x.message_id === messageId);
   const t = new Date(at).getTime();
   return thread.find((x) => new Date(x.started_at).getTime() >= t);
 }
@@ -58,12 +61,12 @@ export function MemoryLineageDialog({
     [datapackId, memory.conversation_id],
   );
   const c = conv.data?.conversation;
-  const turn = c && turnOf(c.thread, memory.created_at);
+  const turn = c && turnOf(c.thread, memory.created_at, memory.message_id);
 
   return (
     <Dialog title="Where this memory came from" onClose={onClose} actions={<Button onClick={onClose}>Close</Button>}>
       <ol className="space-y-4">
-        <Step title="Saved by" when={memory.created_at}>
+        <Step title={memory.message_id ? "Extracted by Meko for" : "Saved by"} when={memory.created_at}>
           <Badge>{memory.agent_id || "an agent"}</Badge>{" "}
           {!memory.conversation_id ? (
             <span className="text-muted-foreground">directly, with memory_add, outside a conversation.</span>
@@ -73,7 +76,7 @@ export function MemoryLineageDialog({
             <span className="text-muted-foreground">in a conversation that's no longer stored.</span>
           ) : (
             <>
-              <span className="text-muted-foreground">during </span>
+              <span className="text-muted-foreground">{memory.message_id ? "from a turn of " : "during "}</span>
               <button
                 type="button"
                 className="inline-flex items-center gap-0.5 font-medium text-primary hover:underline"

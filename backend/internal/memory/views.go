@@ -87,9 +87,9 @@ type Turn struct {
 var notInTrace = map[string]bool{"conversation_create": true, "conversation_add_message": true}
 
 // ConversationThread is a conversation's summary and a page of its turns, oldest first, each with
-// the memories it produced and the calls it made. Until extraction records which turn made which
-// memory (#190), a turn's memories are those saved in its conversation after the turn before it and
-// no later than it, as Meko Cloud infers them; its calls are matched the same way.
+// the memories it produced and the calls it made. An extracted memory names its turn; any other is
+// the turn's when it was saved in its conversation after the turn before it and no later than it, as
+// Meko Cloud infers them (#190). Its calls are matched by time the same way.
 func (s *Service) ConversationThread(ctx context.Context, datapack, id string, limit, offset int) (
 	store.ConversationSummary, []Turn, error) {
 	if err := s.needDatapack(ctx, datapack); err != nil {
@@ -135,7 +135,7 @@ func (s *Service) ConversationThread(ctx context.Context, datapack, id string, l
 	for i, m := range msgs {
 		turns[i] = Turn{Message: m, Memories: []store.SavedMemory{}, Calls: []store.Call{}}
 		for _, sm := range saved {
-			if sm.CreatedAt.After(after) && !sm.CreatedAt.After(m.CreatedAt) {
+			if sm.MessageID == m.ID || sm.MessageID == "" && sm.CreatedAt.After(after) && !sm.CreatedAt.After(m.CreatedAt) {
 				turns[i].Memories = append(turns[i].Memories, sm)
 			}
 		}

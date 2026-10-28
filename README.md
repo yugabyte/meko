@@ -77,6 +77,7 @@ agents (MCP and the REST API, on 7778), and what to run next.
 | `meko status [--verbose] [--json]` | Whether it's running, a row each for the memory engine, service, updates, Meko Cloud link and extensions, and the links; `--verbose` adds everything (models, certificate, auth, usage stats, children), `--json` prints the server's status reply |
 | `meko ui [path] [--no-open]` | Open the web UI in the browser (`meko ui /ext/agentk/` opens AgentK's); `--no-open` only prints its link |
 | `meko logs [-f] [-n N]` | The server's and the memory engine's logs, merged by time; `-f` follows them; `--server`, `--memory-engine` or `--service` shows one, `--json` the raw lines |
+| `meko memory-extractor use claude [--every 5m] [--model haiku]` | Extract memories from conversation turns with your own Claude Code, run headless with no tools, every 5 minutes; `off` turns it off, `status` shows how it's doing, `run` extracts now, and `datapack <name> [--profile general\|coding] [--instructions "..."] [--off\|--on]` sets a datapack's own. See [backend/docs/memory-extraction.md](backend/docs/memory-extraction.md) |
 | `meko update [--check]` | Install Meko's newest release now (under the service it updates itself), then every extension's; `--check` only looks |
 | `meko version` (or `--version`) | Meko's version, and Go's, SQLite's and sqlite-vec's |
 | `meko token [--mcp] [--json]` | The token MCP and REST clients send; `--mcp` prints the `claude mcp add` command for Claude Code, `--json` the MCP URL, the web UI's URL, the token and the Meko Cloud link |
