@@ -217,11 +217,13 @@ The usage commands are `mekosh`'s, the same binary run by that name ([design.md]
 <name>` and `mekosh delete_datapack <name|id>` are MCP clients of the running server: they call
 `context_search`, `memory_add`, `datapack_list`, `datapack_create` and `datapack_delete` on `/mcp`
 with the admin token, so each shows exactly what an agent would get. `mekosh datapacks` also
-lists the linked Meko Cloud's datapacks after this Meko's, from `GET /api/v1/datapacks?location=cloud`,
-each row marked `local` or `cloud` (and `shared`); `--json` gives `{local, cloud}`, and `--local`
-leaves Meko Cloud out (with `--json`, the tool's bare list). While unlinked the rows are unmarked and
-nothing is said of Meko Cloud; when Meko Cloud fails it still prints the local rows, then a warning,
-and exits 0. `search` and `add_memory`
+lists the linked Meko Cloud's datapacks, from `GET /api/v1/datapacks?location=cloud`, in one list
+with this Meko's, sorted by name (this Meko's first on a tie). Each row is just the name and the
+description: on a terminal the descriptions word-wrap in their column, and a name too wide for the
+name column gets a line of its own; off a terminal each datapack is one line. Ids, which side each
+datapack is on and whether it's shared are `--json`'s, which gives `{local, cloud}`; `--local` leaves
+Meko Cloud out (with `--json`, the tool's bare list). When Meko Cloud fails it still prints the local
+rows, then a warning, and exits 0. `search` and `add_memory`
 call as agent `meko_cli`; the datapack tools take no agent. Their calls carry a fixed conversation
 id derived from `meko-cli` (Cloud's tools require one). `--datapack` takes a name or an id,
 `--json` prints the raw reply, and they exit 3 when no server runs. `delete_datapack` deletes the

@@ -681,7 +681,7 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 	var err error
 
 	code, out, errs = runSh("datapacks", "--data-dir", dir)
-	want(t, "datapacks", code, 0, out+errs, "  default  (Created by Meko on first start.)")
+	want(t, "datapacks", code, 0, out+errs, "default   Created by Meko on first start.\n")
 	const note = "the build cache is in memory_engine/.models"
 	code, out, errs = runSh("add_memory", "--data-dir", dir, note, "--datapack", "default")
 	want(t, "add_memory", code, 0, out+errs, "Added memory ")

@@ -34,7 +34,7 @@ agents (MCP and the REST API, on 7778), and what to run next.
 | `mekosh` | What it does |
 |---|---|
 | `mekosh` | A prompt (`mekosh default>`) that takes the commands below, one a line, plus `use <datapack>` (later `search`, `add_memory`, `upload` and `upload_status` lines use it unless they name another; a `delete_datapack` of it goes back to the default), `help` and `exit`. There's no history or line editing yet, and Ctrl-C leaves. Given a file or pipe instead of a terminal, it runs the lines as a script and exits with the first failing line's code |
-| `mekosh datapacks [--local]` | List the datapacks, then the linked Meko Cloud's, each marked local or cloud (and shared); `--local` leaves Meko Cloud out |
+| `mekosh datapacks [--local]` | List the datapacks and the linked Meko Cloud's by name, with their descriptions; `--local` leaves Meko Cloud out, and `--json` adds each one's id and where it lives |
 | `mekosh create_datapack <name> [--cloud]` | Create a datapack, here or with `--cloud` in the linked Meko Cloud |
 | `mekosh delete_datapack <name\|id> [--force]` | Delete a datapack and everything in it, for good. It asks first; `--force` doesn't |
 | `mekosh export [<name\|id>] [-o FILE] [--force]` | Write a datapack (default: the default one) to one zip: memories, collective memories, conversations, knowledge files and artifacts with their embeddings and file contents, and the call log. It won't replace a file unless `--force` |
