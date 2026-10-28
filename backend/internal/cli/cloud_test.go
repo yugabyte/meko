@@ -17,8 +17,9 @@ import (
 
 const testCloudKey = "mko_tkn_cloud_0123456789wxyz"
 
-// fakeCloudDown makes fakeCloud's GET /api/v1/datapacks fail with a 500.
-var fakeCloudDown atomic.Bool
+// fakeCloudDown makes fakeCloud's GET /api/v1/datapacks fail with a 500, and fakeCloudEmpty makes it
+// list none.
+var fakeCloudDown, fakeCloudEmpty atomic.Bool
 
 // fakeCloud is a Meko server for the link's checks: MCP at /mcp, taking only testCloudKey, and the
 // REST API's envelope at /api/v1, where GET /datapacks gives two rows to testCloudKey.
@@ -35,6 +36,8 @@ func fakeCloud(t *testing.T) string {
 			case fakeCloudDown.Load():
 				http.Error(w, `{"data":null,"error":{"code":"INTERNAL","message":"Cloud is down."}}`,
 					http.StatusInternalServerError)
+			case fakeCloudEmpty.Load():
+				_, _ = w.Write([]byte(`{"data":[]}`))
 			default:
 				_, _ = w.Write([]byte(`{"data":[{"datapack_id":"c0ffee00-0000-4000-8000-000000000001",` +
 					`"datapack_name":"team-runbooks","grant":"viewer","created_at":"2026-10-02T00:00:00Z",` +
@@ -181,6 +184,19 @@ func TestDatapacksCloud(t *testing.T) {
 		"mekosh: couldn't list Meko Cloud's datapacks: Meko Cloud couldn't list datapacks: Cloud is down "+
 			"(mekosh datapacks --local skips Meko Cloud)")
 	want(t, "Cloud down", code, 0, out, "default   Created by Meko on first start.\n")
+	fakeCloudDown.Store(false)
+
+	// With no datapack here and none in Meko Cloud, the list says so.
+	code, out, errs = runSh("delete_datapack", "--data-dir", dir, "default", "--force")
+	want(t, "delete_datapack default --force", code, 0, out+errs, "Deleted datapack default\n")
+	fakeCloudEmpty.Store(true)
+	t.Cleanup(func() { fakeCloudEmpty.Store(false) })
+	if code, out, errs = runSh("datapacks", "--data-dir", dir); code != 0 || out != "No datapacks\n" || errs != "" {
+		t.Fatalf("no datapacks, linked: %d\n%s%s", code, out, errs)
+	}
+	if code, out, errs = runSh("datapacks", "--data-dir", dir, "--local"); code != 0 || out != "No datapacks\n" {
+		t.Fatalf("no datapacks, --local: %d\n%s%s", code, out, errs)
+	}
 }
 
 // mekosh works on the linked Meko Cloud's datapacks. The "Meko Cloud" here is a second Meko server,

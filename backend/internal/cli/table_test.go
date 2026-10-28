@@ -2,10 +2,12 @@ package cli
 
 import (
 	"bytes"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
-	"unicode/utf8"
+
+	"github.com/yugabyte/meko/backend/internal/cloudlink"
 )
 
 // The datapacks AgentK makes: long names, and descriptions that end in a repo's URL.
@@ -75,6 +77,11 @@ func TestNameDescTable(t *testing.T) {
 			"a\n  " + strings.Repeat("x", 38) + "\n"},
 		{"not a terminal: nothing wraps", cannedAgents, 0, cannedOneLine},
 		{"no rows", nil, 80, ""},
+		// 文档 takes four cells, and the emoji two: the descriptions still line up.
+		{"wide characters take two cells", []nameDesc{{"文档", "docs"}, {"notes", "📝 mine"}, {"x", "あい うえ"}}, 80,
+			"文档    docs\n" +
+				"notes   📝 mine\n" +
+				"x       あい うえ\n"},
 	}
 	for _, c := range cases {
 		got := nameDescTable(c.rows, c.width)
@@ -84,14 +91,14 @@ func TestNameDescTable(t *testing.T) {
 		widest := 0 // a word wider than the terminal runs past it
 		for _, r := range c.rows {
 			for _, w := range strings.Fields(r.description) {
-				widest = max(widest, utf8.RuneCountInString(w))
+				widest = max(widest, cells(w))
 			}
 		}
 		for _, line := range strings.Split(strings.TrimSuffix(got, "\n"), "\n") {
 			if strings.HasSuffix(line, " ") {
 				t.Errorf("%s: a line ends in a space: %q", c.name, line)
 			}
-			if n := utf8.RuneCountInString(line); c.width > 0 && n > max(c.width, widest) {
+			if n := cells(line); c.width > 0 && n > max(c.width, widest) {
 				t.Errorf("%s: a line is %d wide, past %d: %q", c.name, n, c.width, line)
 			}
 		}
@@ -116,9 +123,38 @@ func TestWrapWords(t *testing.T) {
 	}
 }
 
-// A writer that isn't a terminal, such as a pipe or the tests' buffer, gets no wrapping.
+// A writer that isn't a terminal, such as a pipe, the tests' buffer, or /dev/null (a character
+// device, but not a terminal), gets no wrapping.
 func TestTermWidthOffATerminal(t *testing.T) {
 	if w := termWidth(&bytes.Buffer{}); w != 0 {
 		t.Fatalf("termWidth of a buffer = %d", w)
+	}
+	null, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = null.Close() }()
+	if w := termWidth(null); w != 0 {
+		t.Fatalf("termWidth of %s = %d", os.DevNull, w)
+	}
+}
+
+func TestCells(t *testing.T) {
+	for s, want := range map[string]int{"abc": 3, "·": 1, "文档": 4, "📝": 2, "e\u0301": 1, "👩\u200d💻": 4} {
+		if got := cells(s); got != want {
+			t.Errorf("cells(%q) = %d, want %d", s, got, want)
+		}
+	}
+}
+
+// mekosh datapacks sorts this Meko's datapacks and Meko Cloud's together by name, ignoring case,
+// with this Meko's first on a tie, as --datapack picks it.
+func TestDatapackList(t *testing.T) {
+	local := []nameDesc{{"notes", "here"}, {"beta", ""}}
+	cloud := []cloudlink.Datapack{{DatapackName: "Zeta"}, {DatapackName: "notes", Description: "Cloud's"},
+		{DatapackName: "Alpha"}}
+	want := []nameDesc{{"Alpha", ""}, {"beta", ""}, {"notes", "here"}, {"notes", "Cloud's"}, {"Zeta", ""}}
+	if got := datapackList(local, cloud); !reflect.DeepEqual(got, want) {
+		t.Fatalf("datapackList = %q, want %q", got, want)
 	}
 }

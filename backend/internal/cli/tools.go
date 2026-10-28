@@ -235,7 +235,7 @@ func (t *tools) resolve(ctx context.Context, named string) (target, error) {
 		}
 	}
 	if side == "local" {
-		return target{}, fmt.Errorf("no datapack is named %q (mekosh datapacks lists them)", rest)
+		return target{}, fmt.Errorf("no datapack is named %q here (mekosh datapacks --local lists them)", rest)
 	}
 	c, err := t.cloudSide()
 	if err != nil {
@@ -264,7 +264,8 @@ func (t *tools) resolve(ctx context.Context, named string) (target, error) {
 		return target{}, fmt.Errorf("%d Meko Cloud datapacks are named %q: give its id (mekosh datapacks --json lists them)",
 			len(found), rest)
 	case side == "cloud":
-		return target{}, fmt.Errorf("no Meko Cloud datapack is named %q (mekosh datapacks lists them)", rest)
+		return target{}, fmt.Errorf("no Meko Cloud datapack is named %q (mekosh datapacks --json lists them "+
+			"under cloud)", rest)
 	}
 	return target{}, fmt.Errorf("no datapack is named %q here or in Meko Cloud (mekosh datapacks lists them)", rest)
 }
@@ -382,18 +383,11 @@ func toolDatapacks(ctx context.Context, t *toolSession, l paths.Layout, f toolFl
 		fmt.Fprintln(stdout, string(b))
 		return nil
 	}
-	list := make([]nameDesc, 0, len(rows)+len(cloud))
+	local := make([]nameDesc, 0, len(rows))
 	for _, r := range rows {
-		list = append(list, nameDesc{r.Name, r.Description})
+		local = append(local, nameDesc{r.Name, r.Description})
 	}
-	for _, d := range cloud {
-		list = append(list, nameDesc{d.DatapackName, d.Description})
-	}
-	// Stable, so this Meko's datapack comes first when Meko Cloud has one of the same name, as
-	// --datapack picks it.
-	slices.SortStableFunc(list, func(a, b nameDesc) int {
-		return strings.Compare(strings.ToLower(a.name), strings.ToLower(b.name))
-	})
+	list := datapackList(local, cloud)
 	if len(list) == 0 && cloudErr == nil {
 		fmt.Fprintln(stdout, "No datapacks")
 	}
@@ -402,6 +396,20 @@ func toolDatapacks(ctx context.Context, t *toolSession, l paths.Layout, f toolFl
 		fmt.Fprintf(stderr, "%s: %v (mekosh datapacks --local skips Meko Cloud)\n", progMekosh, cloudErr)
 	}
 	return nil
+}
+
+// datapackList is this Meko's datapacks and Meko Cloud's in one list, by name ignoring case. It's
+// stable, so this Meko's datapack comes first when Meko Cloud has one of the same name, as
+// --datapack picks it.
+func datapackList(local []nameDesc, cloud []cloudlink.Datapack) []nameDesc {
+	list := slices.Clone(local)
+	for _, d := range cloud {
+		list = append(list, nameDesc{d.DatapackName, d.Description})
+	}
+	slices.SortStableFunc(list, func(a, b nameDesc) int {
+		return strings.Compare(strings.ToLower(a.name), strings.ToLower(b.name))
+	})
+	return list
 }
 
 // toolCreateDatapack creates a datapack here, or with --cloud in the linked Meko Cloud, through its

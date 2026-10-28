@@ -788,6 +788,9 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 	}
 	code, _, errs = runSh("add_memory", "--data-dir", dir, "x")
 	want(t, "add_memory with no default", code, 1, errs, "there's no default datapack (it was deleted): pass --datapack")
+	if code, out, errs = runSh("datapacks", "--data-dir", dir); code != 0 || out != "No datapacks\n" {
+		t.Errorf("datapacks with none left, unlinked: %d\n%s%s", code, out, errs)
+	}
 }
 
 // withStdin makes text what the commands read as stdin, for one test.
