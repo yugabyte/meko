@@ -5823,6 +5823,10 @@ div[id^='dak-mermaid-'] .label {
   overflow-wrap: anywhere;
 }
 .wq-scroll {
+  /* The full width of the main area, not the project home's 1100 px column. */
+  max-width: none;
+  width: 100%;
+  box-sizing: border-box;
   padding: 14px 20px 40px;
   display: flex;
   flex-direction: column;
@@ -6046,4 +6050,36 @@ a.wq-chip:hover {
 }
 .wq-item.focused {
   border-color: var(--accent);
+}
+/* A work item's session at a glance (SessionPeek.tsx): its state, last reply and a message box. */
+.wq-peek {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--sunk);
+  min-width: 0;
+}
+.wq-peek-text {
+  max-height: 240px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+.wq-peek-send {
+  display: flex;
+  gap: 6px;
+  align-items: flex-end;
+}
+.wq-peek-send textarea {
+  flex: 1;
+  min-width: 0;
+  resize: vertical;
+}
+@media (max-width: 760px) {
+  .wq-peek-send {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }

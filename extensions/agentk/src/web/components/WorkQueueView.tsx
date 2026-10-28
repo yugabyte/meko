@@ -6,6 +6,7 @@ import { navigate } from '../router';
 import { cx, dotState, relativeTime, stageWords } from '../util';
 import { itemSession, movedOrder, workSyncText } from '../workqueue';
 import { Busy, StatusDot } from './common';
+import { SessionPeek } from './SessionPeek';
 import { TopBar } from './TopBar';
 
 const KIND_TEXT: Record<WorkLink['kind'], string> = { github: 'GitHub', jira: 'Jira', slack: 'Slack', other: 'Link' };
@@ -64,6 +65,8 @@ export function WorkQueueView({
   const [dragId, setDragId] = useState<string | null>(null);
   const [closed, setClosed] = useState<WorkItem[] | null>(null);
   const [showClosed, setShowClosed] = useState(false);
+  // Items whose session's latest reply and message box are showing.
+  const [peeking, setPeeking] = useState<Set<string>>(() => new Set());
   const rootRef = useRef<HTMLDivElement>(null);
 
   // A drop's order shows until the queue itself changes, not on every state push.
@@ -186,9 +189,22 @@ export function WorkQueueView({
               </div>
               <div className="wq-session">
                 {s ? (
-                  <button className="wq-go" onClick={() => navigate({ view: 'project', projectId: s.projectId, sessionId: s.id })}>
-                    {s.name} <span className="muted">· {stageWords(s)}</span>
-                  </button>
+                  <>
+                    <button className="wq-go" onClick={() => navigate({ view: 'project', projectId: s.projectId, sessionId: s.id })}>
+                      {s.name} <span className="muted">· {stageWords(s)}</span>
+                    </button>
+                    <button
+                      className="btn small wq-peek-btn"
+                      aria-expanded={peeking.has(item.id)}
+                      onClick={() => setPeeking((cur) => {
+                        const next = new Set(cur);
+                        if (!next.delete(item.id)) next.add(item.id);
+                        return next;
+                      })}
+                    >
+                      {peeking.has(item.id) ? 'Hide latest' : 'Latest & message'}
+                    </button>
+                  </>
                 ) : (
                   <>
                     {item.sessionId && <span className="muted small">Its session is closed.</span>}
@@ -198,6 +214,7 @@ export function WorkQueueView({
                   </>
                 )}
               </div>
+              {s && peeking.has(item.id) && <SessionPeek session={s} />}
               {isOpen && (
                 <div className="wq-acts">
                   <button className="btn small" onClick={() => onEdit(item)}>Edit</button>

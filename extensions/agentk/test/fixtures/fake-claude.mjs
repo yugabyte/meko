@@ -388,7 +388,7 @@ function respond() {
   const id = `msg_${sessionId.slice(0, 8)}_${process.pid}_${responses++}`;
   const usage = { input_tokens: 3, output_tokens: 50, cache_read_input_tokens: 1000, cache_creation_input_tokens: 200 };
   const entry = (stop_reason) =>
-    JSON.stringify({ type: 'assistant', timestamp: new Date().toISOString(), message: { id, model: 'claude-fake-1', stop_reason, usage } }) + '\n';
+    JSON.stringify({ type: 'assistant', timestamp: new Date().toISOString(), message: { id, model: 'claude-fake-1', stop_reason, usage, content: stop_reason ? [{ type: 'text', text: 'Done.' }] : [] } }) + '\n';
   writeFileSync(transcript, entry(null) + entry('end_turn'), { flag: 'a' });
 }
 

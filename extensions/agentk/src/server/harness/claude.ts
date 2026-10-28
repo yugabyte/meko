@@ -9,6 +9,7 @@ import type { Config } from '../config.js';
 import type { HookPayload } from '../hooks.js';
 import { errMsg, type Logger } from '../log.js';
 import { claudePath, type Paths } from '../paths.js';
+import { readLastActivity } from '../peek.js';
 import { toolsMcpConfigPath, toolsPluginDir } from '../tools.js';
 import type { SessionRow } from '../store.js';
 import { TRUST_PROMPT_RE, trustFolder } from '../trust.js';
@@ -92,6 +93,7 @@ export function claudeHarness(deps: { claudeCode: ClaudeCode; log: Logger }): Ha
     },
     canResume: (row) =>
       (!!row.transcript_path && existsSync(row.transcript_path)) || existsSync(transcriptPathFor(row.worktree_path, row.claude_session_id)),
+    lastActivity: (row) => readLastActivity(transcript(row)),
     activityFiles: (row) => [row.transcript_path, transcriptPathFor(row.worktree_path, row.claude_session_id)].filter((f): f is string => !!f),
     readUsage: (db, row) => ({ changed: ingestSessionUsage(db, row.id, transcript(row), row.base_branch) }),
     captureTranscript: transcript,

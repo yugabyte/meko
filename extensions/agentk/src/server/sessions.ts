@@ -2,8 +2,8 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
-import type { ChangeSide, CloseSessionRequest, DiffStat, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, LearnBrief, MekoCallBy, MekoCallDetail, MekoCallPage, MekoLogInfo, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
-import { LEARN_MONTHS_DEFAULT, LEARN_MONTHS_MAX, LEARN_TEXT_MAX, SESSION_NAME_MAX, START_STAGES, STAGE_LABELS } from '../shared/types.js';
+import type { ChangeSide, CloseSessionRequest, DiffStat, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, LearnBrief, MekoCallBy, MekoCallDetail, MekoCallPage, MekoLogInfo, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionPeek, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
+import { LEARN_MONTHS_DEFAULT, LEARN_MONTHS_MAX, LEARN_TEXT_MAX, QUICK_PROMPT_MAX, SESSION_NAME_MAX, START_STAGES, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
 import { changedImage, changes, diffBase, diffStat, suggestBase, UnknownCommitError } from './changes.js';
@@ -1226,6 +1226,31 @@ export class SessionManager {
       else if (row.untrusted === 1) this.event(id, 'untrusted', "The PR's repo is private or internal now: the session runs with the repo's own config again.");
     }
     return this.row(id);
+  }
+
+  /** Where a session is, for the work queue's quick look: its last reply and the tool it called since, when its agent's transcript can be read. */
+  peek(id: string): SessionPeek {
+    const row = this.row(id);
+    const read = this.harness(row).lastActivity;
+    if (!read) return { readable: false, reply: null, tool: null };
+    try {
+      return { readable: true, ...read(row) };
+    } catch (e) {
+      this.core.log.warn(`reading the latest of ${id} failed`, errMsg(e));
+      return { readable: true, reply: null, tool: null };
+    }
+  }
+
+  /** A prompt the user typed outside the terminal (the work queue's quick prompt), submitted as typing it there would be. */
+  async quickPrompt(id: string, body: unknown): Promise<void> {
+    const text = (body as { text?: unknown } | null)?.text;
+    if (typeof text !== 'string' || !text.trim()) throw new HttpError(400, 'Type a prompt to send.');
+    if (text.length > QUICK_PROMPT_MAX) throw new HttpError(400, `Keep the prompt to ${QUICK_PROMPT_MAX} characters.`);
+    const row = this.row(id);
+    if (row.desired === 'running' && (row.status === 'exited' || row.status === 'starting')) {
+      throw new HttpError(409, row.status === 'exited' ? `${agentName(row)} isn't running in this session. Resume it first.` : `${agentName(row)} is still starting. Try again in a moment.`);
+    }
+    await this.submit(id, text.trim());
   }
 
   /**
