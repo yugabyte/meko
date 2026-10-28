@@ -107,6 +107,22 @@ export function showsLine(lines: DiffLine[], side: 'old' | 'new', n: number): bo
   return lines.some((l) => sideLine(l, side) === n);
 }
 
+/**
+ * The lines a comment covers when it's picked from line `anchor` to line `n` on one side, with
+ * their rows. It stops where the side's line numbers skip (a hunk's edge), so it never covers lines
+ * the diff doesn't show. Null when the diff doesn't show `anchor` on that side.
+ */
+export function pickRange(lines: DiffLine[], side: 'old' | 'new', anchor: number, n: number): { from: number; to: number; rows: DiffLine[] } | null {
+  const rows = lines.filter((l) => sideLine(l, side) !== null);
+  const num = (k: number) => sideLine(rows[k], side) as number;
+  const at = rows.findIndex((_, k) => num(k) === anchor);
+  if (at < 0) return null;
+  let lo = at, hi = at;
+  while (hi + 1 < rows.length && num(hi + 1) === num(hi) + 1 && num(hi + 1) <= n) hi++;
+  while (lo > 0 && num(lo - 1) === num(lo) - 1 && num(lo - 1) >= n) lo--;
+  return { from: num(lo), to: num(hi), rows: rows.slice(lo, hi + 1) };
+}
+
 export interface Anchorable {
   side: 'old' | 'new';
   endLine: number;

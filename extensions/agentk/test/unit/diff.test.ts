@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { anchorComment, defaultOpen, DESKTOP_BUDGET, keepUnchanged, parsePatch, PHONE_BUDGET, reparse, sameLine, showsLine, type RowBudget } from '../../src/web/diff.js';
+import { anchorComment, defaultOpen, DESKTOP_BUDGET, keepUnchanged, parsePatch, PHONE_BUDGET, pickRange, reparse, sameLine, showsLine, type RowBudget } from '../../src/web/diff.js';
 
 const rows = (patch: string) => parsePatch(patch).map((l) => [l.kind, l.old, l.new, l.text]);
 
@@ -74,6 +74,39 @@ describe('telling changed lines from hidden ones', () => {
     expect(showsLine(lines, 'new', 5)).toBe(true);
     expect(showsLine(lines, 'old', 5)).toBe(false); // context lines are commented on the new side
     expect(showsLine(lines, 'new', 40)).toBe(false);
+  });
+});
+
+describe('picking the lines a comment covers', () => {
+  // New lines 1-5 and old 3-4 (removed) in one hunk; new 20-21 and old 21 in another.
+  const lines = parsePatch(['@@ -1,5 +1,5 @@', ' a', ' b', '-c', '-d', '+C', '+D', ' e', '@@ -20,2 +20,2 @@', ' x', '-z', '+y'].join('\n'));
+  const pick = (side: 'old' | 'new', anchor: number, n: number) => {
+    const r = pickRange(lines, side, anchor, n);
+    return r && [r.from, r.to, r.rows.map((l) => l.text).join('')];
+  };
+
+  it('covers one line, or the lines between two, whichever way it was picked', () => {
+    expect(pick('new', 2, 2)).toEqual([2, 2, 'b']);
+    expect(pick('new', 1, 4)).toEqual([1, 4, 'abCD']);
+    expect(pick('new', 4, 1)).toEqual([1, 4, 'abCD']);
+    expect(pick('old', 4, 3)).toEqual([3, 4, 'cd']);
+  });
+
+  it("passes over the other side's lines", () => {
+    expect(pick('new', 2, 3)).toEqual([2, 3, 'bC']);
+    expect(pick('old', 3, 4)).toEqual([3, 4, 'cd']);
+  });
+
+  it("stops at the edge of the anchor's hunk instead of covering lines the diff doesn't show", () => {
+    expect(pick('new', 2, 21)).toEqual([2, 5, 'bCDe']);
+    expect(pick('new', 21, 1)).toEqual([20, 21, 'xy']);
+    expect(pick('old', 3, 21)).toEqual([3, 4, 'cd']);
+    expect(pick('old', 21, 3)).toEqual([21, 21, 'z']);
+  });
+
+  it("is null when the diff doesn't show the anchor on that side", () => {
+    expect(pick('new', 10, 2)).toBeNull();
+    expect(pick('old', 1, 1)).toBeNull(); // context lines are commented on the new side
   });
 });
 

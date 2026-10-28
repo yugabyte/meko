@@ -36,6 +36,25 @@ describe('a large diff', () => {
   });
 });
 
+describe('a picked range', () => {
+  const small = { ...file, path: 'small.txt', added: 2, removed: 1 } as ChangedFile;
+  const rows = parsePatch(['@@ -1,2 +1,3 @@', ' a', '-b', '+B', '+C'].join('\n'));
+  const html = renderToStaticMarkup(createElement(FileDiff, {
+    file: small, lines: rows, limit: rows.length, page: 2000, onMore: () => {}, onComment: () => {},
+    picked: { side: 'new', line: 1, endLine: 3 }, imageUrl: () => '', renderAfter: () => null,
+  }));
+
+  it("marks the range's rows on its side only, and numbers every row for a drag to find", () => {
+    expect(html.match(/<tr [^>]*>/g)).toEqual([
+      '<tr class="dl-hunk" data-i="0">',
+      '<tr class="dl-ctx picked" data-i="1">',
+      '<tr class="dl-del" data-i="2">',
+      '<tr class="dl-add picked" data-i="3">',
+      '<tr class="dl-add picked" data-i="4">',
+    ]);
+  });
+});
+
 describe('a file path', () => {
   const path = (p: string, oldPath: string | null = null) =>
     renderToStaticMarkup(createElement(FilePath, { file: { ...file, path: p, oldPath, kind: oldPath ? 'renamed' : 'modified' } as ChangedFile }));
