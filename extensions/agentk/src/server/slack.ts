@@ -67,8 +67,8 @@ export function signInSettings(dir = claudeUserDir()): Record<string, unknown> {
  * (`--tools ToolSearch`, which only loads tools' schemas), the user's MCP servers and claude.ai
  * connectors loaded (no `--strict-mcp-config`), no settings file of theirs (`--setting-sources
  * project` finds none in that folder) but the sign-in part (`signInSettings`), the default permission
- * mode, so only `tools` run and every other tool is refused (in `-p` nothing can be asked), no hooks,
- * no transcript, and the answer in LATER_SCHEMA's shape.
+ * mode, so only `tools` and ToolSearch (which needs no permission) run and every other tool is refused
+ * (in `-p` nothing can be asked), no hooks, no transcript, and the answer in LATER_SCHEMA's shape.
  */
 export function slackArgs(model: string, tools: string[], signIn: Record<string, unknown> = {}): string[] {
   return [

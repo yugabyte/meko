@@ -77,8 +77,9 @@ and the timer does nothing (`WorkSync.sources` tells the page). The timer ticks 
   none of your Claude Code settings but `env` and `apiKeyHelper`, which signing in needs (`signInSettings()`, with
   `--setting-sources project` in AgentK's empty `run/work-sync` folder), so your allow rules and
   default mode don't apply; `--permission-mode default`; and only `[work_queue] slack_tools` allowed
-  (the claude.ai Slack connector's search and read tools by default). In `-p` nothing can be asked,
-  so every other tool, another connector's included, is refused; the claude.ai connector's write
+  (the claude.ai Slack connector's search and read tools by default). ToolSearch runs too, since it
+  needs no permission, but it only loads tools' schemas. In `-p` nothing can be asked, so every other
+  tool, another connector's included, is refused; the claude.ai connector's write
   tools are also denied by name. The prompt calls the messages' text data, not instructions.
   The answer follows a JSON schema; `found: false` (no Slack tools, or no way to the list) is an
   error, not an empty list. It needs Claude Code; the model is `[work_queue] slack_model`.
