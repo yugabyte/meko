@@ -28,6 +28,7 @@ import { DesignPanel } from './DesignPanel';
 import type { MovePreset } from './MoveSessionDialog';
 import { EndSessionButton, SessionSheet } from './SessionSheet';
 import { newCommitsText, ReviewPrGate } from './ReviewPrGate';
+import { MekoLinkDialog } from './MekoLinkDialog';
 import { ShareDialog } from './ShareDialog';
 import { TerminalPane } from './TerminalPane';
 import { TopBar } from './TopBar';
@@ -246,6 +247,7 @@ export function ProjectView({
     || (session.stage === 'review' && session.canMerge)
     || (session.stage === 'reviewing-pr' && !!rv && (rv.prState !== 'OPEN' || rv.headSha !== rv.reviewSha || rv.designUnread)))));
   // Sharing the project with a PR's reviewers is sharing its dedicated datapack (through Meko's API).
+  // While AgentK can't share (the Meko on this computer), it points to Meko Cloud instead.
   const canShare = !!dedicated && meko.configured;
   const canLearn = !!session && offersLearn(session, !!dedicated, meko.configured);
   const learnDisabled = acting || !!session?.busy || !!session?.learning;
@@ -567,7 +569,10 @@ export function ProjectView({
       )}
       {session && asking && <AskSheet session={session} onClose={() => setAsking(false)} />}
       {session && heldOpen && <HeldReviewsSheet session={session} onClose={() => setHeldOpen(false)} />}
-      {session && sharing && dedicated && (
+      {session && sharing && dedicated && !meko.sharing && (
+        <MekoLinkDialog sharing={meko.source} local={meko.local} onClose={() => setSharing(false)} />
+      )}
+      {session && sharing && dedicated && meko.sharing && (
         <ShareDialog
           projectId={project.id}
           projectName={project.name}

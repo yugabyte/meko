@@ -5,6 +5,12 @@
 export const DEFAULT_MEKO_URL = 'https://mcp.mekodata.ai/mcp';
 /** Meko Cloud's web app, which goes with DEFAULT_MEKO_URL. */
 export const DEFAULT_MEKO_WEB_URL = 'https://cloud.mekodata.ai';
+/**
+ * Signing up for Meko Cloud, then landing on its Settings, where the API key is made: the Sign up
+ * link of Meko's own Meko Cloud page (`mekoKeyLinks()` in Meko's web UI). Share offers it while
+ * AgentK uses the Meko on this computer, which doesn't share.
+ */
+export const MEKO_CLOUD_SIGNUP_URL = `${DEFAULT_MEKO_WEB_URL}/signup?return_to=${encodeURIComponent('/settings')}`;
 
 /**
  * Where browsers find AgentK: the Meko on this computer serves it at this path on its web listener,

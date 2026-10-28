@@ -185,5 +185,21 @@ describe('projects without a datapack, and without Meko', () => {
       expect(env.core.mekoStatus).toMatchObject({ source: 'local', url: local.url });
       expect(forget).not.toHaveBeenCalled();
     });
+
+    it("says AgentK can't share on the Meko on this computer, and can once Meko Cloud is linked", async () => {
+      await turnMekoOff();
+      Object.assign(env.local, { state: 'running', meko: { url: 'http://127.0.0.1:7778/mcp', token: 'local-token-1234' } });
+      await call('GET', '/api/settings');
+      expect((await call('GET', '/api/state')).json().meko).toMatchObject({ configured: true, source: 'local', sharing: false });
+
+      env.local.cloud = { set: true, url: 'https://mcp.mekodata.ai/mcp', apiKey: 'mko_tkn_brand_new_key', webUrl: 'https://cloud.mekodata.ai', apiUrl: 'https://cloud.mekodata.ai/api/v1' };
+      await call('GET', '/api/settings');
+      expect((await call('GET', '/api/state')).json().meko).toMatchObject({ source: 'meko', sharing: true });
+
+      // Unlinked again: back on the Meko on this computer, which doesn't share.
+      env.local.cloud = { set: false, url: '', apiKey: '', webUrl: '', apiUrl: '' };
+      await call('GET', '/api/settings');
+      expect(env.core.mekoStatus).toMatchObject({ source: 'local', sharing: false });
+    });
   });
 });

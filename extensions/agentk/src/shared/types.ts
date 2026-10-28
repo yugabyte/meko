@@ -1017,6 +1017,12 @@ export interface MekoStatus {
   /** Meko web app base URL, for links to datapacks. Null when unknown. */
   webUrl: string | null;
   /**
+   * AgentK can share datapacks through Meko's API: there's a Meko and its API URL is known (what
+   * `InviteService.requireSharing()` checks). False on the Meko on this computer, which doesn't
+   * share: Share then points to Meko Cloud's sign-up instead.
+   */
+  sharing: boolean;
+  /**
    * Whether Claude Code's sessions reach the Meko AgentK uses: the same server in Claude Code's
    * settings and on its `meko` MCP server, tokens there that work (accepted, and seeing AgentK's
    * project datapacks), and the plugin. Fixed only when the user asks (POST

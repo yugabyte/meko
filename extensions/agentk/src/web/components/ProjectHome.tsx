@@ -47,8 +47,8 @@ export function ProjectHomeView({
   order: { index: number; count: number };
   /** Moves the project to this index in the list (the tap equivalent of dragging it in the rail). */
   onMove: (index: number) => void;
-  /** The Meko AgentK uses, for links to its datapacks' pages. */
-  meko: Pick<MekoStatus, 'webUrl' | 'source'>;
+  /** The Meko AgentK uses, for links to its datapacks' pages and whether Share can share. */
+  meko: Pick<MekoStatus, 'webUrl' | 'source' | 'sharing'>;
   /** There's a Meko to use (Meko's Meko Cloud link, or the Meko on this computer). */
   mekoConfigured: boolean;
   /** The Meko on this computer (`MekoStatus.local`), for what to do while there's no Meko. */
@@ -66,11 +66,11 @@ export function ProjectHomeView({
   const [home, setHome] = useState<ProjectHome | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   /**
-   * The open dialog: sharing, setting up Meko, adding a dedicated datapack (with why it's asked
-   * for), or switching it (from the one shown when Switch was tapped, so a switch made meanwhile in
-   * another tab is refused rather than undone).
+   * The open dialog: sharing, setting up Meko, Meko Cloud while AgentK can't share (`cloud`), adding
+   * a dedicated datapack (with why it's asked for), or switching it (from the one shown when Switch
+   * was tapped, so a switch made meanwhile in another tab is refused rather than undone).
    */
-  const [dialog, setDialog] = useState<{ kind: 'share' | 'key' | 'datapack' | 'switch'; reason?: string; replacing?: DatapackRef } | null>(null);
+  const [dialog, setDialog] = useState<{ kind: 'share' | 'key' | 'cloud' | 'datapack' | 'switch'; reason?: string; replacing?: DatapackRef } | null>(null);
   const datapacks = home?.datapacks ?? project.datapacks.map((d) => ({ ...d, memoryCount: null, knowledgeCount: null, grant: null }));
   // Which datapack is dedicated comes from the live project (another tab may have just added one);
   // its counts, grant and owner from the home page's read.
@@ -84,6 +84,8 @@ export function ProjectHomeView({
   const [sharers, setSharers] = useState<string[] | null>(null);
   const share = () => {
     if (!mekoConfigured) setDialog({ kind: 'key', reason: 'A project is shared through its Meko datapack, so sharing needs Meko.' });
+    // Before the datapack: one added on a Meko that can't share couldn't be shared either.
+    else if (!meko.sharing) setDialog({ kind: 'cloud' });
     else if (!dedicated) setDialog({ kind: 'datapack', reason: `A project is shared through its datapack, and ${project.name} has none yet.` });
     else if (cantShare) {
       const owner = dedicated.ownerName ?? dedicated.ownerEmail;
@@ -258,6 +260,7 @@ export function ProjectHomeView({
         <ShareDialog projectId={project.id} projectName={project.name} datapack={dedicated} onClose={() => setDialog(null)} />
       )}
       {dialog?.kind === 'key' && <MekoLinkDialog reason={dialog.reason} local={mekoLocal} onClose={() => setDialog(null)} />}
+      {dialog?.kind === 'cloud' && <MekoLinkDialog sharing={meko.source} local={mekoLocal} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'datapack' && (
         <AddDatapackDialog project={project} reason={dialog.reason} onClose={() => setDialog(null)} onAdded={() => load()} />
       )}
