@@ -167,6 +167,9 @@ func TestCloudDatapacks(t *testing.T) {
 	if r := admin("POST", "/datapacks", map[string]any{"name": "x", "location": "cloud"}); r.Status != 409 {
 		t.Fatalf("create in Cloud unlinked: %+v", r)
 	}
+	// Unlinked is a 409 whatever the credential.
+	wantErr(t, e, "POST", "/datapacks", map[string]any{"name": "x", "location": "cloud"}, 409, "CLOUD_NOT_LINKED")
+	wantErr(t, e, "DELETE", "/datapacks/"+cloudDP+"?location=cloud", nil, 409, "CLOUD_NOT_LINKED")
 	made := obj(okData(t, e, "POST", "/datapacks", map[string]any{"name": "made-here"}, 201))
 	if id, _ := made["datapack_id"].(string); !dpExists(e, id) {
 		t.Fatalf("a create with no location, unlinked, is this Meko's: %v", made)
@@ -220,8 +223,14 @@ func TestCloudDatapacks(t *testing.T) {
 	if id, _ := local["datapack_id"].(string); !dpExists(e, id) {
 		t.Fatalf("location local while linked: %v", local)
 	}
-	wantErr(t, e, "DELETE", "/datapacks/"+cloudDP, nil, 403, "FORBIDDEN")
-	wantErr(t, e, "POST", "/datapacks/"+cloudDP+"/search", map[string]any{"query": "x"}, 403, "FORBIDDEN")
+	wantErr(t, e, "DELETE", "/datapacks/"+cloudDP+"?location=cloud", nil, 403, "FORBIDDEN")
+	wantErr(t, e, "POST", "/datapacks/"+cloudDP+"/search?location=cloud", map[string]any{"query": "x"}, 403,
+		"FORBIDDEN")
+	// A client token's id this Meko doesn't have is this Meko's 404, linked or not.
+	wantErr(t, e, "DELETE", "/datapacks/"+cloudDP, nil, 404, "NOT_FOUND")
+	wantErr(t, e, "POST", "/datapacks/"+missingCloud+"/memories", map[string]any{"text": "x"}, 404, "NOT_FOUND")
+	wantErr(t, e, "GET", "/datapacks/"+cloudDP+"/knowledge-bases/document-status?document_key=k1", nil, 404,
+		"NOT_FOUND")
 
 	r := admin("POST", "/datapacks", map[string]any{"name": "team-notes"})
 	if r.Status != 201 || obj(r.Data)["datapack_id"] != cloudDP || strings.Contains(toJSON(r.Data), "secret") ||
@@ -250,6 +259,20 @@ func TestCloudDatapacks(t *testing.T) {
 	r = admin("POST", "/datapacks/"+cloudDP+"/memories", map[string]any{"text": "kept in Cloud", "agent_id": "a"})
 	if r.Status != 200 || !strings.Contains(toJSON(r.Data), "m-1") || cloud.args["memory_add"]["agent_id"] != "a" {
 		t.Fatalf("memories in Cloud: %+v %v", r, cloud.args["memory_add"])
+	}
+	// location says which side, even for an id this Meko has (an export keeps ids).
+	if r = admin("DELETE", "/datapacks/"+e.DatapackID+"?location=cloud", nil); r.Status != 404 ||
+		!dpExists(e, e.DatapackID) || !strings.HasPrefix(cloud.last(), "DELETE /api/v1/datapacks/"+e.DatapackID+" ") {
+		t.Fatalf("location=cloud for an id this Meko has: %+v (Cloud got %q)", r, cloud.last())
+	}
+	if r = admin("DELETE", "/datapacks/"+cloudDP+"?location=local", nil); r.Status != 404 {
+		t.Fatalf("location=local for Cloud's id: %+v", r)
+	}
+	wantErr(t, e, "DELETE", "/datapacks/"+cloudDP+"?location=elsewhere", nil, 400, "VALIDATION_ERROR")
+	// A datapack neither side has is a 404 from search and memories too.
+	if r = admin("POST", "/datapacks/"+missingCloud+"/search", map[string]any{"query": "x"}); r.Status != 404 ||
+		r.Error.Code != "NOT_FOUND" {
+		t.Fatalf("search of a datapack Cloud hasn't: %+v", r)
 	}
 	if r = admin("DELETE", "/datapacks/"+cloudDP, nil); r.Status != 200 {
 		t.Fatalf("delete in Cloud: %+v", r)

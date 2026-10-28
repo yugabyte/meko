@@ -68,12 +68,12 @@ func (a *api) uploadURL(c echo.Context) error {
 		ContentHash string `json:"content_hash"`
 		Client      string `json:"client"`
 	}
-	cloud, err := a.inCloud(c)
-	if err != nil {
+	cloud, ok, err := a.inCloud(c)
+	if !ok {
 		return err
 	}
 	if cloud {
-		if ok, berr := bind(c, &body); !ok {
+		if bound, berr := bind(c, &body); !bound {
 			return berr
 		}
 		return a.toCloud(c, http.StatusOK, http.MethodPost, cloudPath(c, "/knowledge-bases/upload-url"), body)
@@ -134,8 +134,8 @@ func (a *api) createKnowledgeBase(c echo.Context) error {
 
 func (a *api) documentStatus(c echo.Context) error {
 	key := c.QueryParam("document_key")
-	if cloud, err := a.inCloud(c); err != nil || cloud {
-		if err != nil {
+	if cloud, ok, err := a.inCloud(c); !ok || cloud {
+		if !ok {
 			return err
 		}
 		if key == "" {

@@ -200,7 +200,7 @@ func (t *tools) tool(ctx context.Context, d target, name, path string, args map[
 	}
 	delete(args, "datapack_id")
 	args["agent_id"], args["conversation_id"] = cliAgent, cliConversation
-	return t.cloudCall(ctx, http.MethodPost, datapackPath(d.id, path), args)
+	return t.cloudCall(ctx, http.MethodPost, cloudDatapackPath(d.id, path), args)
 }
 
 // resolve finds the datapack named: "" is this Meko's default. A name or id is looked up among this
@@ -478,7 +478,7 @@ func toolDeleteDatapack(ctx context.Context, t *tools, f toolFlags, stdin io.Rea
 	}
 	var reply string
 	if dp.cloud {
-		if reply, err = t.cloudCall(ctx, http.MethodDelete, datapackPath(dp.id, ""), nil); err != nil {
+		if reply, err = t.cloudCall(ctx, http.MethodDelete, cloudDatapackPath(dp.id, ""), nil); err != nil {
 			return err
 		}
 	} else if reply, err = t.call(ctx, "datapack_delete", map[string]any{"datapack_id": dp.id}); err != nil {

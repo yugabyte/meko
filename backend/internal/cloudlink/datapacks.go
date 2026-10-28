@@ -40,12 +40,11 @@ type Datapack struct {
 	WebURL *string `json:"web_url"`
 }
 
-// Datapacks is the route's reply: the link's Meko Cloud datapacks, newest first, or linked false.
+// Datapacks is what Service.Datapacks finds: the link's Meko Cloud datapacks, newest first, or
+// linked false. GET /datapacks lists the rows (internal/rest's cloud.go).
 type Datapacks struct {
-	Linked    bool       `json:"linked"`
-	APIURL    *string    `json:"api_url,omitempty"`
-	WebURL    *string    `json:"web_url,omitempty"`
-	Datapacks []Datapack `json:"datapacks"`
+	Linked    bool
+	Datapacks []Datapack
 }
 
 // CallError is a call Meko Cloud didn't answer, or answered with an error, with the code the route
@@ -157,7 +156,7 @@ func (s *Service) Datapacks(ctx context.Context) (Datapacks, error) {
 	if rows == nil {
 		rows = []Datapack{}
 	}
-	return Datapacks{Linked: true, APIURL: &api, WebURL: strOrNil(web), Datapacks: rows}, nil
+	return Datapacks{Linked: true, Datapacks: rows}, nil
 }
 
 // newer says whether timestamp a is after b; ones that don't parse sort last.

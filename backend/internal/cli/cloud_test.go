@@ -289,6 +289,22 @@ func TestCloudDatapacks(t *testing.T) {
 		t.Fatalf("the prompt's delete_datapack left it in Cloud:\n%s", out)
 	}
 
+	// At the prompt, use cloud:<id> shows Cloud's name, and deleting this Meko's datapack of the same
+	// name leaves Cloud's in use; deleting Cloud's, named another way, goes back to the default.
+	for _, args := range [][]string{{"pair"}, {"pair", "--cloud"}} {
+		if code, out, errs = runSh(append([]string{"create_datapack", "--data-dir", dir}, args...)...); code != 0 {
+			t.Fatalf("create_datapack %v: %s%s", args, out, errs)
+		}
+	}
+	pairID := strings.TrimSuffix(out[strings.LastIndex(out, "(")+1:], ")\n")
+	withStdin(t, "use cloud:"+pairID+"\ndelete_datapack pair\ny\nuse\ndelete_datapack cloud:pair\ny\nuse\n")
+	code, out, errs = runSh("--data-dir", dir)
+	want(t, "the prompt's use cloud:<id>", code, 0, out+errs, "Using Meko Cloud datapack pair\n")
+	want(t, "the prompt keeps Cloud's after this Meko's is deleted", code, 0, out,
+		"Deleted datapack pair\nUsing Meko Cloud datapack pair\n")
+	want(t, "the prompt drops Cloud's once it's deleted", code, 0, out,
+		"Deleted Meko Cloud datapack pair\nUsing the default datapack\nUsing the default datapack\n")
+
 	withStdin(t, "y\n")
 	code, out, errs = runSh("delete_datapack", "--data-dir", dir, "cloud:notes")
 	want(t, "delete_datapack cloud:", code, 0, out+errs, "Deleted Meko Cloud datapack notes\n")

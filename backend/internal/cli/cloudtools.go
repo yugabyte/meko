@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/yugabyte/meko/backend/internal/cloudlink"
 	"github.com/yugabyte/meko/backend/internal/paths"
@@ -45,7 +46,13 @@ func (c *cloudSide) datapacks(ctx context.Context) ([]cloudlink.Datapack, error)
 
 var errNotLinked = errors.New("this Meko isn't linked to Meko Cloud: meko cloud_link links it")
 
-// datapackPath is a datapack's /api/v1 path, plus rest.
-func datapackPath(id, rest string) string {
-	return "/datapacks/" + url.PathEscape(id) + rest
+// cloudDatapackPath is a Meko Cloud datapack's /api/v1 path, plus rest (which may carry a query),
+// with location=cloud: the server then sends it to Meko Cloud even when this Meko has a datapack of
+// the same id (an export keeps ids).
+func cloudDatapackPath(id, rest string) string {
+	sep := "?"
+	if strings.Contains(rest, "?") {
+		sep = "&"
+	}
+	return "/datapacks/" + url.PathEscape(id) + rest + sep + "location=cloud"
 }

@@ -51,18 +51,34 @@ for its MCP tools, each within 30 s but the listing's 10 s):
 | Route | On the linked Meko Cloud |
 |---|---|
 | `GET /datapacks` | This Meko's rows, then its datapacks (below), each with its `location` (`location=all`, the default; only this Meko's while unlinked, and a 502 when Meko Cloud fails). `location=cloud` is only Meko Cloud's (a 409 `CLOUD_NOT_LINKED` while unlinked), and `location=local` only this Meko's, as the web UI asks. Any credential |
-| `POST /datapacks {name, description?, location?}` | `POST /datapacks` while linked, unless `location` is `"local"` (the web UI's **+** sends it); replies 201 `{datapack_id, agent_id, name, location}`, nothing else of Cloud's reply. Unlinked, or with `"local"`, it's this Meko's as before; `"cloud"` while unlinked is a 409 `CLOUD_NOT_LINKED`. While linked, a client token must send `"local"`: without it the create acts on Meko Cloud and gets 403 |
+| `POST /datapacks {name, description?, location?}` | `POST /datapacks` while linked, unless `location` is `"local"` (the web UI's **+** sends it); replies 201 `{datapack_id, agent_id, name, location}`, nothing else of Cloud's reply. Unlinked, or with `"local"`, it's made here; `"cloud"` while unlinked is a 409 `CLOUD_NOT_LINKED`, whatever the credential. While linked, a client token must send `"local"`: without it the create acts on Meko Cloud and gets 403 |
 | `DELETE /datapacks/:id` | `DELETE /datapacks/:id` (only the account's own: Cloud refuses the others) |
 | `POST /datapacks/:id/knowledge-bases/upload-url {filename, size, content_hash, client?}` | The same route. The file then goes from the caller straight to the presigned link it gives, with no key; it answers 204 |
 | `GET /datapacks/:id/knowledge-bases/document-status?document_key=` | The same route: `state` is `awaiting_upload`, `indexing`, `completed`, `failed`, `abandoned` or `oversized` |
 | `POST /datapacks/:id/search {query, limit?, force_source?, agent_id?, conversation_id?}` | MCP `context_search` (Meko's own route: Cloud's REST API has none) |
 | `POST /datapacks/:id/memories {text, agent_id?, conversation_id?}` | MCP `memory_add` (Meko's own route, likewise) |
 
-- **Which side:** a route that takes `:id` serves this Meko's datapack as it always has. A UUID this
-  Meko doesn't have goes to Meko Cloud while it's linked, and is the usual 404 otherwise.
+- **Which side:** a route that takes `:id` takes `?location=` too:
+  - `cloud` sends the request to Meko Cloud, a 409 `CLOUD_NOT_LINKED` while unlinked. It reaches
+    Cloud's datapack even when this Meko has one of the same id, since an export keeps ids.
+    `mekosh` always sends it for a Cloud datapack.
+  - `local` serves this Meko's.
+  - Without it, the route serves this Meko's datapack. A UUID this Meko doesn't have goes to Meko
+    Cloud for the owner or the admin token while it's linked. For a client token it stays this
+    Meko's 404, so linking Meko Cloud doesn't change what a missing datapack looks like to an
+    agent.
+- **A browser that names no location** (the owner's session or local access) gets this Meko's
+  datapacks from a listing or a create. The web UI always names one, so such a request is a tab still
+  running a bundle from before these routes listed and made Meko Cloud's. That bundle opens and makes
+  only this Meko's.
 - **Search and memories on this Meko's datapacks:** they run the tools in-process as `/mcp` does
-  (`mcp.Call`), recorded in the call log the same way. Their reply is the tool's. An error a caller
-  can act on (`{"error", "detail"}`) is a 400 with the tool's code.
+  (`mcp.Call`), recorded in the call log the same way. Their reply is the tool's.
+- **A tool's error reply** (`{"error", "detail"}`) maps by its code, on either side:
+  - a missing datapack (`datapack_access_denied`, `not_found`) is a 404 `NOT_FOUND`;
+  - the tool's own failure (a code ending in `_failed`) is a 500, or a 502 `CLOUD_CALL_FAILED`
+    from Meko Cloud;
+  - `memory_engine_unavailable` is a 503;
+  - the rest are 400s with the tool's code.
 - **The arguments sent to Meko Cloud's tools:** only those listed, since Meko Cloud refuses an
   argument it doesn't know. `conversation_id` defaults to a fixed id derived from `meko-rest`, since
   Cloud's tools require one.
@@ -104,13 +120,15 @@ While Meko Cloud is linked, `mekosh`'s commands work on its datapacks as on this
 key, and a local command never asks about Meko Cloud.
 
 - **Naming a datapack:**
-  - A datapack is named as before: `--datapack NAME|ID`, `delete_datapack`'s and `export`'s
-    argument, and the prompt's `use`.
+  - A datapack is named by `--datapack NAME|ID`, `delete_datapack`'s and `export`'s argument, and
+    the prompt's `use`.
   - It's looked up among this Meko's first, then among the linked Meko Cloud's
     (`?location=cloud`), so a name both have is this Meko's.
   - `cloud:` or `local:` before it looks on that side only.
-  - `cloud:<id>` is taken as it is. The prompt passes it on the lines after `use`, so they don't
-    list Meko Cloud's datapacks each time.
+  - `cloud:<id>` is taken as it is, and the routes get `location=cloud`. The prompt passes it on the
+    lines after `use`, so they don't list Meko Cloud's datapacks each time. `use` shows the name.
+  - A `delete_datapack` line at the prompt goes back to the default datapack only when the datapack it
+    deletes is the one in use, on the same side.
   - Two Cloud datapacks of one name ask for the id.
 - **The calls:** `search` and `add_memory` post to the datapack's `search` and `memories` routes.
   `create_datapack --cloud`, `delete_datapack`, `upload` (`client: "mekosh"`) and `upload_status`

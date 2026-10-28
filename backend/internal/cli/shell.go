@@ -118,15 +118,18 @@ func runPrompt(dataDir string, in io.Reader, stdout, stderr io.Writer) int {
 		case words[0] == "use":
 			lc = promptUse(l, words[1:], &datapack, stdout, stderr)
 		default:
+			// The datapack a delete_datapack line deletes, found as the command finds it, to tell
+			// whether it's the one in use.
+			var deleting target
+			var found bool
+			if words[0] == "delete_datapack" && datapack.id != "" {
+				deleting, found = promptResolve(l, firstArg(words[1:]))
+			}
 			lc = runProg(progMekosh, promptArgs(words, datapack.spec(), dataDir), stdout, stderr)
 			// The datapack in use is gone: later lines go to the default one again.
-			if lc == exitOK && words[0] == "delete_datapack" && datapack.id != "" {
-				side, named := splitSide(firstArg(words[1:]))
-				sameSide := side == "" || (side == "cloud") == datapack.cloud
-				if sameSide && (named == datapack.id || named == datapack.name) {
-					datapack = target{}
-					fmt.Fprintln(stdout, "Using the default datapack")
-				}
+			if lc == exitOK && found && deleting.cloud == datapack.cloud && strings.EqualFold(deleting.id, datapack.id) {
+				datapack = target{}
+				fmt.Fprintln(stdout, "Using the default datapack")
 			}
 		}
 		if lc != exitOK && code == exitOK && !interactive {
@@ -203,9 +206,33 @@ func promptUse(l paths.Layout, args []string, datapack *target, stdout, stderr i
 		fmt.Fprintf(stderr, "mekosh: %v\n", err)
 		return exitError
 	}
+	// cloud:<id> is taken without a lookup; the prompt shows the name, so look it up here, once.
+	if c, cerr := t.cloudSide(); dp.cloud && dp.name == dp.id && cerr == nil {
+		if rows, lerr := c.datapacks(ctx); lerr == nil {
+			for _, r := range rows {
+				if strings.EqualFold(r.DatapackID, dp.id) {
+					dp.id, dp.name = r.DatapackID, r.DatapackName
+				}
+			}
+		}
+	}
 	*datapack = dp
 	fmt.Fprintf(stdout, "Using %s\n", dp.noun())
 	return exitOK
+}
+
+// promptResolve finds the datapack a line names as its command will, and whether it was found.
+func promptResolve(l paths.Layout, named string) (target, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), toolTimeout)
+	defer cancel()
+	session, err := connectTools(ctx, l)
+	if err != nil {
+		return target{}, false
+	}
+	t := newTools(session, l)
+	defer t.close()
+	dp, err := t.resolve(ctx, named)
+	return dp, err == nil && dp.id != ""
 }
 
 // splitWords splits a prompt line into words as a shell would: blanks separate them, single quotes

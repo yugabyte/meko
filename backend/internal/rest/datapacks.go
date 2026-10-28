@@ -9,7 +9,6 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/yugabyte/meko/backend/internal/cloudlink"
 	"github.com/yugabyte/meko/backend/internal/envelope"
 	"github.com/yugabyte/meko/backend/internal/memory"
 	"github.com/yugabyte/meko/backend/internal/wire"
@@ -105,7 +104,7 @@ type datapackRow struct {
 func (a *api) listDatapacks(c echo.Context) error {
 	location := c.QueryParam("location")
 	if location == "" {
-		location = "all"
+		location = a.defaultLocation(c, "all")
 	}
 	switch location {
 	case "local", "cloud", "all":
@@ -146,23 +145,21 @@ func (a *api) createDatapack(c echo.Context) error {
 	if ok, err := bind(c, &body); !ok {
 		return err
 	}
+	linked, err := a.linked()
+	if err != nil {
+		return err
+	}
 	if body.Location == "" {
 		body.Location = "local"
-		if a.Cloud != nil {
-			linked, err := a.Cloud.IsLinked()
-			if err != nil {
-				return err
-			}
-			if linked {
-				body.Location = "cloud"
-			}
+		if linked {
+			body.Location = a.defaultLocation(c, "cloud")
 		}
 	}
 	switch body.Location {
 	case "local":
 	case "cloud":
-		if a.Cloud == nil {
-			return envelope.Fail(c, http.StatusConflict, cloudlink.CodeNotLinked, "This Meko has no Meko Cloud link.")
+		if !linked {
+			return notLinkedOr(c, nil)
 		}
 		if strings.TrimSpace(body.Name) == "" {
 			return badRequest(c, "name is required")
@@ -223,8 +220,8 @@ func (a *api) updateDatapack(c echo.Context) error {
 }
 
 func (a *api) deleteDatapack(c echo.Context) error {
-	if cloud, err := a.inCloud(c); err != nil || cloud {
-		if err != nil {
+	if cloud, ok, err := a.inCloud(c); !ok || cloud {
+		if !ok {
 			return err
 		}
 		return a.toCloud(c, http.StatusOK, http.MethodDelete, cloudPath(c, ""), nil)

@@ -80,7 +80,7 @@ type cloudKB struct {
 
 func (k cloudKB) offer(ctx context.Context, name string, data []byte) (uploadOffer, string, error) {
 	sum := sha256.Sum256(data)
-	reply, err := k.t.cloudCall(ctx, http.MethodPost, datapackPath(k.dp, "/knowledge-bases/upload-url"),
+	reply, err := k.t.cloudCall(ctx, http.MethodPost, cloudDatapackPath(k.dp, "/knowledge-bases/upload-url"),
 		map[string]any{"filename": name, "size": len(data), "content_hash": hex.EncodeToString(sum[:]),
 			"client": "mekosh"})
 	if err != nil {
@@ -92,7 +92,7 @@ func (k cloudKB) offer(ctx context.Context, name string, data []byte) (uploadOff
 
 func (k cloudKB) status(ctx context.Context, key string) (fileState, string, error) {
 	reply, err := k.t.cloudCall(ctx, http.MethodGet,
-		datapackPath(k.dp, "/knowledge-bases/document-status?document_key="+url.QueryEscape(key)), nil)
+		cloudDatapackPath(k.dp, "/knowledge-bases/document-status?document_key="+url.QueryEscape(key)), nil)
 	if err != nil {
 		return fileState{}, "", err
 	}

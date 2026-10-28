@@ -33,14 +33,20 @@ export function isShared(grant: string): boolean {
   return grant !== "" && grant !== "owner";
 }
 
+const UNLINKED: CloudDatapacks = { linked: false, datapacks: [] };
+
 export function useCloudDatapacks(): Loaded<CloudDatapacks> {
-  // Unlinked, the listing is a 409 CLOUD_NOT_LINKED: no Cloud rows, and no failure to show.
+  // Unlinked, the listing is a 409 CLOUD_NOT_LINKED: no Cloud rows, and no failure to show. A server
+  // older than this UI (between a rebuild and a restart) is unlinked too: one from before the listing
+  // took location answers it with its own datapacks, which carry no location "cloud", and one from
+  // before Meko Cloud's datapacks were listed at all with a 404.
   const list = useLoad(
     () =>
       api.cloudDatapacks().then(
-        (datapacks): CloudDatapacks => ({ linked: true, datapacks }),
+        (datapacks): CloudDatapacks =>
+          datapacks.every((d) => d.location === "cloud") ? { linked: true, datapacks } : UNLINKED,
         (e: unknown) => {
-          if (e instanceof ApiError && e.code === "CLOUD_NOT_LINKED") return { linked: false, datapacks: [] };
+          if (e instanceof ApiError && (e.code === "CLOUD_NOT_LINKED" || e.status === 404)) return UNLINKED;
           throw e;
         },
       ),

@@ -141,7 +141,7 @@ func TestServiceDatapacks(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err = s.Datapacks(ctx)
-	if err != nil || !got.Linked || *got.APIURL != DefaultWebURL+"/api/v1" || *got.WebURL != DefaultWebURL {
+	if err != nil || !got.Linked {
 		t.Fatalf("linked: %+v, %v", got, err)
 	}
 	if asked[0] != DefaultWebURL+"/api/v1 "+key {
@@ -169,7 +169,7 @@ func TestServiceDatapacks(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err = s.Datapacks(ctx)
-	if err != nil || got.WebURL != nil || got.Datapacks[0].WebURL != nil {
+	if err != nil || got.Datapacks[0].WebURL != nil {
 		t.Fatalf("no web app: %+v, %v", got, err)
 	}
 }
