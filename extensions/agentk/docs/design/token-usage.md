@@ -247,8 +247,8 @@ Kiro isn't available.
   for every project, and breakdowns by project (current ones first, then deleted ones, which keep
   their sessions and usage, each group the most recently used first; each row shows its repo folder
   and when it was last active, and has **Cost**, **Meko** and **Est. saved** columns, which a phone
-  leaves out) and by model. On both pages, every column header sorts its table; tapping it again
-  reverses the order. The tables by session and by project show about 10 rows and scroll inside
+  leaves out) and by model. Every column header of the Usage page's tables, and of the project
+  home's table by session, sorts its table; tapping it again reverses the order. The tables by session and by project show about 10 rows and scroll inside
   their box for the rest, as the project home's Recent activity does, with their header row kept
   in view (`.rows-scroll` in `styles.css`).
 - **The Meko section** is the same on both pages (`MekoUsageSection`): the Meko logo (black in the
