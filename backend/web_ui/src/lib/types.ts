@@ -37,6 +37,10 @@ export interface Metrics {
   memory_chunk_count: number;
   memory_bytes: number;
   total_requests: number;
+  // context_search calls that sent something: what context efficiency averages over (absent from an
+  // older server, which averaged over total_requests).
+  savings_requests?: number;
+  tokens_sent_total?: number; // what those searches sent (absent from an older server)
   tokens_saved_total: number;
   tokens_if_raw_total: number;
   savings_pct: number;
@@ -84,6 +88,28 @@ export interface Memory {
   agent_id: string;
   conversation_id: string;
   created_at: string;
+  // "extract" for a memory the memory extractor saved, with the turn it came from.
+  source?: string;
+  message_id?: string;
+}
+
+// The memory extractor (GET /settings/memory-extractor): whether turns are extracted, and how.
+export interface ExtractorStatus {
+  enabled: boolean;
+  harness: string;
+  model: string;
+  interval_seconds: number;
+  queued: number;
+  last_run_at?: string;
+  last_error?: string;
+  extracted: number;
+}
+
+// A datapack's say in memory extraction (GET /datapacks/:id/memory-extraction).
+export interface DatapackExtraction {
+  opt_out: boolean;
+  profile: string;
+  instructions: string;
 }
 
 // One change to a memory, as mem0 recorded it (GET /memories/:id/history).
@@ -122,6 +148,7 @@ export interface MapPoint {
   state: MemoryState;
   agent_id: string;
   conversation_id?: string;
+  message_id?: string;
   created_at: string;
   x: number;
   y: number;

@@ -87,9 +87,9 @@ type Turn struct {
 var notInTrace = map[string]bool{"conversation_create": true, "conversation_add_message": true}
 
 // ConversationThread is a conversation's summary and a page of its turns, oldest first, each with
-// the memories it produced and the calls it made. Until extraction records which turn made which
-// memory (#190), a turn's memories are those saved in its conversation after the turn before it and
-// no later than it, as Meko Cloud infers them; its calls are matched the same way.
+// the memories it produced and the calls it made. An extracted memory names its turn; any other is
+// the turn's when it was saved in its conversation after the turn before it and no later than it, as
+// Meko Cloud infers them (#190). Its calls are matched by time the same way.
 func (s *Service) ConversationThread(ctx context.Context, datapack, id string, limit, offset int) (
 	store.ConversationSummary, []Turn, error) {
 	if err := s.needDatapack(ctx, datapack); err != nil {
@@ -135,7 +135,7 @@ func (s *Service) ConversationThread(ctx context.Context, datapack, id string, l
 	for i, m := range msgs {
 		turns[i] = Turn{Message: m, Memories: []store.SavedMemory{}, Calls: []store.Call{}}
 		for _, sm := range saved {
-			if sm.CreatedAt.After(after) && !sm.CreatedAt.After(m.CreatedAt) {
+			if sm.MessageID == m.ID || sm.MessageID == "" && sm.CreatedAt.After(after) && !sm.CreatedAt.After(m.CreatedAt) {
 				turns[i].Memories = append(turns[i].Memories, sm)
 			}
 		}
@@ -188,7 +188,21 @@ type CallStats struct {
 	KBSearches          int // knowledgebase_search calls
 	InputTokens         int
 	OutputTokens        int
+	// Context efficiency and quality, as Meko Cloud counts them: only context_search calls that sent
+	// something, each saving measured against its whole knowledge base.
+	Context ContextStats
 }
+
+// ContextStats is Meko Cloud's context efficiency and quality over a datapack's context_search calls.
+type ContextStats struct {
+	Requests            int // context_search calls that sent something
+	Sent, Saved, IfRaw  int // tokens sent and saved, and the baselines the saving was measured against
+	ScoreHigh, Mid, Low int // their results by match quality
+}
+
+// defaultIfRaw is the baseline of a call recorded without one (before the call log kept it): Cloud's
+// default of 10 knowledge-base chunks.
+const defaultIfRaw = 10_000
 
 // statsDays is how many days of activity CallStats reports by default.
 const statsDays = 30
@@ -240,6 +254,21 @@ func (s *Service) CallStats(ctx context.Context, datapack string, lastDays int) 
 		out.ScoreHigh += c.ScoreHigh
 		out.Mid += c.ScoreMid
 		out.Low += c.ScoreLow
+		if kind == "hybrid" && c.TokensSent > 0 {
+			// A call recorded without a baseline measured its saving against another one; both are
+			// counted against the default instead, so saved never exceeds the baseline.
+			ifRaw, saved := c.TokensIfRaw, c.TokensSaved
+			if ifRaw == 0 {
+				ifRaw, saved = defaultIfRaw, max(0, defaultIfRaw-c.TokensSent)
+			}
+			out.Context.Requests++
+			out.Context.Sent += c.TokensSent
+			out.Context.Saved += saved
+			out.Context.IfRaw += ifRaw
+			out.Context.ScoreHigh += c.ScoreHigh
+			out.Context.Mid += c.ScoreMid
+			out.Context.Low += c.ScoreLow
+		}
 		day := c.At.UTC().Format(time.DateOnly)
 		if day < since {
 			continue

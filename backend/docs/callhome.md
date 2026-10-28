@@ -17,7 +17,7 @@ platforms, and how much work goes through them, by client. AgentK sends its own 
   "install_id": "<the install's random id>",
   "version": "0.20261101.1",
   "payload": {
-    "schema": 1,
+    "schema": 2,
     "install": {"version", "commit", "platform", "arch", "go", "service", "auth", "secrets",
                 "update": {"channel", "auto"}, "memoryEngine", "extensions": {"agentk": true}, "firstDay"},
     "totals": {"datapacks", "memories", "learnings", "promotedMemories", "artifacts", "conversations",
@@ -28,6 +28,8 @@ platforms, and how much work goes through them, by client. AgentK sends its own 
 ```
 
 - The install id is the store's `install_id` setting, made at first start.
+- Schema 2: a day's `tokensSaved` is measured against the datapack's whole knowledge base (Meko
+  Cloud's context efficiency); in schema 1 it was against the knowledge-base results a search returned.
 - `days` covers the last 7 UTC days, or 30 in an install's first report, oldest first, every day
   present. A day counts the call log's MCP calls on that day (the log keeps 90 days).
 - `byTool` names Meko's own MCP tools (`mcp.ToolNames()`) and counts anything else as `other`.

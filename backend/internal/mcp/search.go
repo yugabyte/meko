@@ -76,6 +76,7 @@ func contextSearch(ctx context.Context, c *call, a args) (any, error) {
 	}
 	c.rec.ScoreHigh, c.rec.ScoreMid, c.rec.ScoreLow = wire.Bands(res)
 	c.rec.TokensSent, c.rec.TokensSaved = reply.TokenSavings.Sent(), reply.TokenSavings.Saved()
+	c.rec.TokensIfRaw = reply.TokenSavings.Baseline
 	c.rec.Steps = res.Steps
 	return reply, nil
 }

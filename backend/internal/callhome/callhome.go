@@ -354,7 +354,7 @@ func (s *Sender) report(ctx context.Context, now time.Time, days int) (Report, e
 	if install.Extensions == nil {
 		install.Extensions = map[string]bool{}
 	}
-	return Report{Schema: 1, Install: install, Totals: Totals{Datapacks: t.Datapacks, Memories: t.Memories,
+	return Report{Schema: 2, Install: install, Totals: Totals{Datapacks: t.Datapacks, Memories: t.Memories,
 		Learnings: t.Learnings, PromotedMemories: t.PromotedMemories, Artifacts: t.Artifacts,
 		Conversations: t.Conversations, KBDocuments: t.KBDocuments, KBBytes: t.KBBytes, DBBytes: t.DBBytes},
 		Days: out}, nil

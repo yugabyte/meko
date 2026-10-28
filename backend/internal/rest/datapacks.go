@@ -327,18 +327,20 @@ func (a *api) metrics(c echo.Context) error {
 	if err != nil {
 		return serviceError(c, err)
 	}
-	ifRaw := st.TokensSent + st.TokensSaved
+	// Context efficiency and quality as Meko Cloud's datapack page shows them (ContextStats).
+	cx := st.Context
 	pct := 0.0
-	if ifRaw > 0 {
-		pct = 100 * float64(st.TokensSaved) / float64(ifRaw)
+	if cx.IfRaw > 0 {
+		pct = 100 * float64(cx.Saved) / float64(cx.IfRaw)
 	}
 	days := make([]map[string]any, len(st.Daily))
 	for i, d := range st.Daily {
 		days[i] = map[string]any{"date": d.Date, "hybrid": d.Hybrid, "kb": d.KB, "memory": d.Memory}
 	}
-	out := map[string]any{"datapack_id": id, "total_requests": st.Requests, "tokens_saved_total": st.TokensSaved,
-		"tokens_if_raw_total": ifRaw, "savings_pct": pct, "score_high_total": st.ScoreHigh, "score_mid_total": st.Mid,
-		"score_low_total": st.Low, "agent_count": st.Agents, "human_count": 1, "daily_activity": days,
+	out := map[string]any{"datapack_id": id, "total_requests": st.Requests, "savings_requests": cx.Requests,
+		"tokens_sent_total": cx.Sent, "tokens_saved_total": cx.Saved, "tokens_if_raw_total": cx.IfRaw, "savings_pct": pct,
+		"score_high_total": cx.ScoreHigh, "score_mid_total": cx.Mid, "score_low_total": cx.Low,
+		"agent_count": st.Agents, "human_count": 1, "daily_activity": days,
 		"conversation_count": z.Conversations, "memory_extraction_count": 0, "extraction_rate": 0.0,
 		"kb_chunk_count": kb.Chunks, "kb_file_count": kb.Files, "memory_chunk_count": z.Memories,
 		"conversation_chunk_count": z.ConversationChunks, "kb_bytes": kb.Bytes, "memory_bytes": z.MemoryBytes,

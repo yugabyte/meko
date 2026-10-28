@@ -1,12 +1,12 @@
-// The Metrics tab's numbers, derived in one place from /metrics and the datapack's own counts
-// (the memory breakdown), so no two cards compute the same number differently. Formulas follow Meko
-// Cloud's Analytics tab, except token estimates, which come from bytes: Meko's chunks are 1000
-// characters.
+// The Overview's and Metrics tab's numbers, derived in one place from /metrics and the datapack's
+// own counts (the memory breakdown), so no two cards compute the same number differently. Formulas
+// follow Meko Cloud's: context size counts every knowledge-base chunk, memory and conversation chunk
+// as 1024 tokens; context efficiency and quality come from the server, which counts them as Cloud does.
 
 import type { Datapack, Metrics } from "./types";
 
-// About four bytes of English text per token.
-const BYTES_PER_TOKEN = 4;
+// Tokens a chunk (a knowledge-base chunk, a memory, a conversation chunk) counts for, as Cloud counts.
+const TOKENS_PER_CHUNK = 1024;
 // The window the "window used" gauge measures against, as Cloud's does.
 export const CONTEXT_WINDOW = 128_000;
 // Score bands, as the server counts them: cosine similarity >= 0.75 high, >= 0.5 mid.
@@ -24,6 +24,7 @@ export interface Derived {
   tokens: Split;
   bytes: Split;
   savedPct: number | null;
+  searches: number; // the searches efficiency and quality cover
   avgTokensSent: number | null;
   avgTokensIfRaw: number | null;
   windowUsed: number | null;
@@ -41,11 +42,13 @@ function split(knowledge: number, memory: number, conversation: number): Split {
 
 export function derive(m: Metrics, d: Datapack): Derived {
   const bytes = split(m.kb_bytes, m.memory_bytes, m.conversation_bytes);
-  const tok = (b: number) => Math.round(b / BYTES_PER_TOKEN);
-  const hasSavings = m.total_requests > 0 && m.tokens_if_raw_total > 0;
-  const avgTokensSent = hasSavings
-    ? Math.round((m.tokens_if_raw_total - m.tokens_saved_total) / m.total_requests)
-    : null;
+  const tok = (chunks: number) => chunks * TOKENS_PER_CHUNK;
+  const requests = m.savings_requests ?? m.total_requests;
+  const hasSavings = requests > 0 && m.tokens_if_raw_total > 0;
+  // Sent comes from the server: a search's saving is clamped at 0, so baseline − saved overstates
+  // nothing but understates what was sent whenever a search sent more than its baseline.
+  const sent = m.tokens_sent_total ?? m.tokens_if_raw_total - m.tokens_saved_total;
+  const avgTokensSent = hasSavings ? Math.round(sent / requests) : null;
   const high = m.score_high_total;
   const mid = m.score_mid_total;
   const low = m.score_low_total;
@@ -53,10 +56,11 @@ export function derive(m: Metrics, d: Datapack): Derived {
   const promoted = d.collective_memory_count ?? 0;
   return {
     bytes,
-    tokens: split(tok(bytes.knowledge), tok(bytes.memory), tok(bytes.conversation)),
+    tokens: split(tok(m.kb_chunk_count), tok(m.memory_chunk_count), tok(m.conversation_chunk_count)),
     savedPct: hasSavings ? m.savings_pct : null,
     avgTokensSent,
-    avgTokensIfRaw: hasSavings ? Math.round(m.tokens_if_raw_total / m.total_requests) : null,
+    avgTokensIfRaw: hasSavings ? Math.round(m.tokens_if_raw_total / requests) : null,
+    searches: requests,
     windowUsed: avgTokensSent !== null ? avgTokensSent / CONTEXT_WINDOW : null,
     scores: { high, mid, low, total: scored },
     qualityScore: scored > 0 ? (high + mid) / scored : null,

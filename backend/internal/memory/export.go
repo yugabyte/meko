@@ -309,7 +309,8 @@ func (s *Service) export(ctx context.Context, st *store.Store, datapack, version
 				"conversation_id": c.ConversationID, "credential": c.Credential, "ok": c.OK, "error_code": c.ErrorCode,
 				"ms": c.Ms, "memory_n": c.MemoryN, "kb_n": c.KBN, "conversation_n": c.ConversationN,
 				"score_high": c.ScoreHigh, "score_mid": c.ScoreMid, "score_low": c.ScoreLow,
-				"tokens_sent": c.TokensSent, "tokens_saved": c.TokensSaved, "input_tokens": c.InputTokens,
+				"tokens_sent": c.TokensSent, "tokens_saved": c.TokensSaved, "tokens_if_raw": c.TokensIfRaw,
+				"input_tokens":  c.InputTokens,
 				"output_tokens": c.OutputTokens, "steps": c.Steps}); eerr != nil {
 				return eerr
 			}

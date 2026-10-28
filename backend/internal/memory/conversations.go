@@ -184,9 +184,13 @@ func (s *Service) AddMessage(ctx context.Context, r AddMessage) (AddedMessage, e
 			}
 		}
 	}
+	queue, err := s.queueExtraction(ctx, c.DatapackID)
+	if err != nil {
+		return AddedMessage{}, err
+	}
 	m, _, err := s.st.AddMessage(ctx, c.DatapackID, store.Message{
 		ID: messageID(r.Seed), ConversationID: c.ID, Input: r.Input, Output: r.Output, Reasoning: r.Reasoning,
-		Plan: r.Plan, Metadata: r.Metadata,
+		Plan: r.Plan, Metadata: r.Metadata, QueueExtraction: queue,
 	}, chunks)
 	if err != nil {
 		return AddedMessage{}, err
