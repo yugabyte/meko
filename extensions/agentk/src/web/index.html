@@ -29,6 +29,10 @@
             m.setAttribute('content', bar);
           });
         }
+        // And the terminals' colors (termtheme.ts keeps them up to date).
+        var tt = localStorage.getItem('ak-term-theme');
+        var dark = t === 'light' || t === 'dark' ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+        if (tt === 'light' || (tt === 'app' && !dark)) document.documentElement.setAttribute('data-term-theme', 'light');
       } catch (e) {}
     </script>
   </head>

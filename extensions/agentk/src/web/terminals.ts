@@ -18,6 +18,7 @@ import {
   type BarKey, type TouchSample,
 } from './keys';
 import { bufferRow, linkAt } from './termlinks';
+import { currentTermTheme, onTermTheme, termOptions } from './termtheme';
 
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
 
@@ -59,30 +60,6 @@ export function screenLabel(other: ScreenName | null): string {
   return other.sameBrowser ? 'another tab in this browser' : `another screen (${other.name})`;
 }
 const ELSEWHERE = 'This session is open on another screen. Use Move to this screen to type here.';
-
-const THEME = {
-  background: '#101412',
-  foreground: '#D5DDD8',
-  cursor: '#D5DDD8',
-  cursorAccent: '#101412',
-  selectionBackground: '#2E3B55',
-  black: '#1A1F1C',
-  red: '#F07366',
-  green: '#6FD19F',
-  yellow: '#F2B35B',
-  blue: '#8FB0FF',
-  magenta: '#C9A2FF',
-  cyan: '#6CCFD6',
-  white: '#D5DDD8',
-  brightBlack: '#7C8A83',
-  brightRed: '#FF8F84',
-  brightGreen: '#8BE3B5',
-  brightYellow: '#FFC97A',
-  brightBlue: '#AFC6FF',
-  brightMagenta: '#DCC0FF',
-  brightCyan: '#8FE3E8',
-  brightWhite: '#F2F5F3',
-};
 
 const FONT = '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace';
 
@@ -145,6 +122,7 @@ class SessionTerminal {
   private releaseTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
   private resizeObs: ResizeObserver | null = null;
+  private stopTheme: () => void;
   /** The size this terminal last asked for (what fits its box). */
   private lastSize = { cols: 0, rows: 0 };
   /**
@@ -234,7 +212,7 @@ class SessionTerminal {
       cursorBlink: true,
       allowProposedApi: true,
       scrollback: 10000,
-      theme: THEME,
+      ...termOptions(currentTermTheme()),
       macOptionIsMeta: true,
       // While Claude has the mouse, a plain drag goes to Claude; Shift-drag, or Option-drag on a
       // Mac, selects in the browser instead.
@@ -244,6 +222,11 @@ class SessionTerminal {
     // Mouse clicks on links; a tap on one is opened by touchEnd.
     this.term.loadAddon(new WebLinksAddon((_e, uri) => openLink(uri)));
     this.term.open(this.el);
+    this.stopTheme = onTermTheme((theme) => {
+      const o = termOptions(theme);
+      this.term.options.theme = o.theme;
+      this.term.options.minimumContrastRatio = o.minimumContrastRatio;
+    });
     this.setTyping(false);
     // Capture, so a swipe is ours before xterm sees it.
     // Not passive: in select mode a touch is prevented, so no tap reaches Claude as a mouse click.
@@ -1146,6 +1129,7 @@ class SessionTerminal {
 
   dispose() {
     this.disposed = true;
+    this.stopTheme();
     if (this.timer) clearTimeout(this.timer);
     if (this.releaseTimer) clearTimeout(this.releaseTimer);
     if (this.noticeTimer) clearTimeout(this.noticeTimer);
