@@ -11,7 +11,7 @@ import (
 )
 
 // The lines the CLI prints end without a period, as Go's error strings do: a period after a
-// version, path or command reads as part of it ("Installing meko 0.20261022.1."). This checks
+// version, path or command reads as part of it ("Meko is running 0.20261022.1."). This checks
 // the strings fmt prints or formats and the strings functions return (stopServer's messages are
 // printed by their callers): every line inside them, and the text they end with.
 func TestOutputLinesEndWithoutPeriod(t *testing.T) {
