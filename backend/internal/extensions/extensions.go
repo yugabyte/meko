@@ -326,16 +326,29 @@ func CommandEnv(root, command string) []string {
 // Run runs `<command> <action>` for one extension, with its output passed through, for the data
 // folder at root.
 func (e Entry) Run(root, action string, stdout, stderr io.Writer) error {
+	return e.runAction(root, action, nil, stdout, stderr)
+}
+
+// SummaryEnv, set to 1 for the start and stop meko start and meko stop run, asks the extension to
+// print one row in Meko's summary format instead of its usual lines (docs/design.md).
+const SummaryEnv = "MEKO_SUMMARY"
+
+// RunSummary runs `<command> <action>` as Run does, with SummaryEnv set: for meko start and stop.
+func (e Entry) RunSummary(root, action string, stdout, stderr io.Writer) error {
+	return e.runAction(root, action, []string{SummaryEnv + "=1"}, stdout, stderr)
+}
+
+func (e Entry) runAction(root, action string, env []string, stdout, stderr io.Writer) error {
 	d := StartTimeout
 	if action == "stop" {
 		d = StopTimeout
 	}
-	return e.run(root, []string{action}, d, stdout, stderr)
+	return e.run(root, []string{action}, d, env, stdout, stderr)
 }
 
 // RunArgs runs `<command> <args>` for one extension, bounded by d, with its output passed through.
 func (e Entry) RunArgs(root string, args []string, d time.Duration, stdout, stderr io.Writer) error {
-	return e.run(root, args, d, stdout, stderr)
+	return e.run(root, args, d, nil, stdout, stderr)
 }
 
 // BusyTimeout bounds `<command> <BusyArgs>`.
@@ -356,15 +369,15 @@ func (c Catalog) Busy(root string, e Entry) bool {
 
 // Uninstall runs `<command> <args>` (the catalog's UninstallArgs), with its output passed through.
 func (e Entry) Uninstall(root string, args []string, stdout, stderr io.Writer) error {
-	return e.run(root, args, UninstallTimeout, stdout, stderr)
+	return e.run(root, args, UninstallTimeout, nil, stdout, stderr)
 }
 
-func (e Entry) run(root string, args []string, d time.Duration, stdout, stderr io.Writer) error {
+func (e Entry) run(root string, args []string, d time.Duration, env []string, stdout, stderr io.Writer) error {
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
 	// G204: the extension's own command, from the registry.
 	cmd := exec.CommandContext(ctx, e.Command, args...) //nolint:gosec
-	cmd.Stdout, cmd.Stderr, cmd.Env, cmd.WaitDelay = stdout, stderr, CommandEnv(root, e.Command), PipeWait
+	cmd.Stdout, cmd.Stderr, cmd.Env, cmd.WaitDelay = stdout, stderr, append(CommandEnv(root, e.Command), env...), PipeWait
 	if err := cmd.Run(); err != nil && !errors.Is(err, exec.ErrWaitDelay) {
 		what := e.Command + " " + strings.Join(args, " ")
 		if ctx.Err() != nil {

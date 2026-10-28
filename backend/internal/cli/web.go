@@ -487,19 +487,24 @@ func sleep(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// printWeb is status's lines about the web listener.
+// webAccessNote says how browsers reach the web listener: from this computer without a login, or from
+// anywhere with the owner's.
+func webAccessNote(w *server.WebStatus) string {
+	if w.Access != config.AccessRemote {
+		return "local, no login from this computer"
+	}
+	if !w.Login {
+		return "remote; no login yet: meko setup_link makes one"
+	}
+	return "remote, sign in with the owner's login"
+}
+
+// printWeb is status --verbose's lines about the web listener.
 func printWeb(stdout io.Writer, w *server.WebStatus) {
 	if w == nil {
 		return
 	}
-	access := "local (no login from this computer)"
-	if w.Access == config.AccessRemote {
-		access = "remote (sign in with the owner's login)"
-		if !w.Login {
-			access = "remote; no login yet: meko setup_link makes one"
-		}
-	}
-	fmt.Fprintf(stdout, "  Web:           %s, %s\n", w.URL, access)
+	fmt.Fprintf(stdout, "  Humans:        %s (web UI), %s\n", w.URL, webAccessNote(w))
 	if !w.Listening && w.Error != "" {
 		fmt.Fprintf(stdout, "                 not listening: %s\n", w.Error)
 	}

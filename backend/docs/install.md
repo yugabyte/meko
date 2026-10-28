@@ -165,6 +165,20 @@ AgentK's and Presenter's tests read `internal/paths/testdata/resolve-cases.json`
 another data folder refuses `start`, `stop`, `status`, `uninstall` and `_handoff` run with this one's
 `MEKO_HOME`, and does nothing.
 
+### The summary rows
+
+`meko start` and `meko stop` run each extension's `start` and `stop` with `MEKO_SUMMARY=1` too
+(`Entry.RunSummary`), and pass its output through. With it set, the extension prints exactly one
+line, a row of Meko's summary (`internal/cli/report.go`): two spaces, a mark (`✓` done, `!` a
+warning, `✗` failed), its title padded to 15 characters, a space, then what happened, such as
+`  ✓ AgentK          started; sessions resume in a few seconds`. The mark is colored (green,
+yellow, red) only when stdout is a terminal and `NO_COLOR` is unset. It leaves out hints that name
+its own command, since Meko's summary ends with what to run next. On a failure it prints its error
+to stderr as usual and exits non-zero, and Meko adds its own `✗` row after it. Run without
+`MEKO_SUMMARY` (by hand, by an older Meko, or by `meko update_extension` and the Extensions page,
+which keep its output for their logs) it prints what it always has. AgentK and Presenter format the
+row in `src/server/summary.ts`.
+
 - An extension's command is found on PATH, then in `~/.local/bin`, then in its release install's
   `app/current/bin`: its folder in the data folder, then its home from before it moved there
   (`Catalog.OldHomes`, `~/.agent-k-local`). When a registered command is gone, `meko start` and

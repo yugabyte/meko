@@ -36,15 +36,33 @@ flowchart LR
   status["meko status / stop"] -->|"/api/v1/status, pid file"| serve
 ```
 
+The binary is two commands, told apart by the name it's run by (`cli.Main`): `meko` runs Meko,
+and `mekosh` (`~/.local/bin/mekosh`, a link to the same binary that `meko install` makes, and a
+release's serve makes at start for an install from before it) works with what Meko keeps, through
+the running server: `datapacks`, `create_datapack`, `delete_datapack`, `export`, `search`,
+`add_memory`, `upload`, `upload_status` and `tools`. Alone, `mekosh` is a prompt (`shell.go`): it
+reads one command a line, split as a shell would, and runs each as `mekosh <line>`; `use <datapack>`
+fills in `--datapack` for the commands that take it, and a confirmation (`delete_datapack`'s) reads
+the next line from the same buffer. From a pipe it runs the lines as a script. Given one of
+`mekosh`'s commands, `meko` runs nothing and names the `mekosh` command instead (exit 2).
+
+Each command's help comes from one table (`help.go`: its group, summary, usage and examples, and its
+flag set's flags), which `meko --help`, `meko help <cmd>`, `<cmd> --help` (exit 0) and the prompt's
+`help` all print. `install`, `start`, `stop`, `restart` and `status` print a summary
+(`report.go`): a row per step marked `✓`, `!` or `✗`, the links (`Humans (web UI)` on the web
+listener, `Agents (MCP, API)` on the API listener), and the commands to run next; the extensions
+print their own rows ([install.md](install.md#the-summary-rows)). `status` is that checklist;
+`status --verbose` has everything, and `status --json` the server's status reply.
+
 Every command takes `--data-dir` (default `~/.meko`, or `MEKO_HOME`). The repo's README lists them
 all; the ones that run the server:
 
 | Command | What it does |
 |---|---|
 | `serve` | Runs the server in the foreground. What `start`, launchd and systemd run. |
-| `start` | With the login service installed, starts it ([install.md](install.md)). Otherwise starts `serve` in the background in its own session (setsid), waits until `/api/v1/status` (with the admin token) reports the new server's pid, and prints the URL. If that doesn't happen within 10 s, it stops the server (SIGTERM, then SIGKILL) and prints `logs/start.log`. Already running: says so and exits 0. Then starts the extensions. |
+| `start` | With the login service installed, starts it ([install.md](install.md)). Otherwise starts `serve` in the background in its own session (setsid), waits until `/api/v1/status` (with the admin token) reports the new server's pid, and prints the URL. If that doesn't happen within 10 s, it stops the server (SIGTERM, then SIGKILL) and prints `logs/start.log`. Already running: says so and exits 0. Then starts the extensions, and waits up to 10 s for the web listener (which binds after their handoff) before it prints the links. |
 | `stop` | Stops the extensions, then the service, or sends SIGTERM to the pid in `run/meko.pid` and waits up to 30 s (longer than the server's 10 s drain plus 15 s for its children) before SIGKILL. Not running: says so and exits 0. |
-| `status` | Running or not, version, port, uptime, data folder, the auth mode, usage stats, an available update, and the memory engine's state, from `/api/v1/status`. Exits 3 when not running. |
+| `status` | Running or not, with a row each for the memory engine, the service, updates, the Meko Cloud link and the extensions, then the links, from `/api/v1/status`; `--verbose` adds the version, port, uptime, models, certificate, auth mode, usage stats and children, `--json` the reply itself. Exits 3 when not running. |
 | `version` | Version, commit, Go version, SQLite and sqlite-vec versions (`--json` for installers and updates). |
 | `destroy` | Removes the data folder for good (below). |
 

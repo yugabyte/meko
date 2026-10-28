@@ -139,11 +139,17 @@ func randomSuffix() string {
 
 // LinkCommand points <home>/.local/bin/<name> at app/current/bin/<name>, so it's a command.
 func (a App) LinkCommand(home string) (string, error) {
+	return a.LinkCommandAs(home, a.name())
+}
+
+// LinkCommandAs points <home>/.local/bin/<link> at app/current/bin/<name>: the same program under
+// another name (meko's mekosh, which it tells apart by the name it's run by).
+func (a App) LinkCommandAs(home, link string) (string, error) {
 	bin := filepath.Join(home, ".local", "bin")
 	if err := os.MkdirAll(bin, 0o755); err != nil { //nolint:gosec // G301: the user's own bin folder
 		return "", err
 	}
-	link := filepath.Join(bin, a.name())
+	link = filepath.Join(bin, link)
 	tmp := link + ".tmp-" + randomSuffix()
 	if err := os.Symlink(a.CurrentExe(), tmp); err != nil {
 		return "", err
@@ -159,7 +165,12 @@ func (a App) LinkCommand(home string) (string, error) {
 // link into this app folder, or a dangling one. A link into another app folder is another install's
 // (an extension's release for another of this user's Meko data folders), and stays.
 func (a App) MayLink(home string) bool {
-	link := filepath.Join(home, ".local", "bin", a.name())
+	return a.MayLinkAs(home, a.name())
+}
+
+// MayLinkAs is MayLink for <home>/.local/bin/<link>.
+func (a App) MayLinkAs(home, link string) bool {
+	link = filepath.Join(home, ".local", "bin", link)
 	t, err := os.Readlink(link)
 	if err != nil {
 		_, lerr := os.Lstat(link)
@@ -174,7 +185,12 @@ func (a App) MayLink(home string) bool {
 
 // UnlinkCommand removes <home>/.local/bin/<name> if it points into this app folder.
 func (a App) UnlinkCommand(home string) error {
-	link := filepath.Join(home, ".local", "bin", a.name())
+	return a.UnlinkCommandAs(home, a.name())
+}
+
+// UnlinkCommandAs removes <home>/.local/bin/<link> if it points into this app folder.
+func (a App) UnlinkCommandAs(home, link string) error {
+	link = filepath.Join(home, ".local", "bin", link)
 	t, err := os.Readlink(link)
 	if err != nil || !strings.HasPrefix(t, a.Root+string(filepath.Separator)) {
 		return nil //nolint:nilerr // not ours to remove

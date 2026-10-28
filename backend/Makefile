@@ -17,8 +17,10 @@ WEB_UI_SRC := $(shell find web_ui/src web_ui/public -type f 2>/dev/null) web_ui/
 
 .PHONY: build memory_engine web_ui test bench lint fmt clean
 
+# bin/mekosh is meko under its other name (cmd/meko picks the commands by it).
 build:
 	go build -tags $(TAGS) -ldflags "$(LDFLAGS)" -o bin/meko ./cmd/meko
+	ln -sf meko bin/mekosh
 
 # The memory engine's dependencies, installed again only when the lockfile changes. onnxruntime-node's
 # install script would download a CUDA provider on linux-x64 (and time out on CI runners); Meko runs

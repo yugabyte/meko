@@ -14,6 +14,7 @@ import { DeckStore } from './decks.js';
 import { Jobs } from './jobs.js';
 import { MekoClient } from './meko.js';
 import { getPaths, MEKO_COMMANDS, refuseOtherMeko, withLocalBin, type Paths } from './paths.js';
+import { forMekoSummary, summaryRow } from './summary.js';
 import { Runs } from './runs.js';
 import { broadcast, buildServer, findWebDir, type Core } from './server.js';
 
@@ -124,8 +125,13 @@ async function serve(paths: Paths): Promise<void> {
   process.once('SIGINT', () => void stop());
 }
 
+/** What start and stop say: one row of Meko's summary when Meko runs them for it, else a line. */
+function say(row: string, line: string): void {
+  console.log(forMekoSummary() ? summaryRow('✓', 'Presenter', row) : line);
+}
+
 async function start(paths: Paths): Promise<void> {
-  if (runningPid(paths)) return void console.log('Presenter is running');
+  if (runningPid(paths)) return say('running', 'Presenter is running');
   mkdirSync(paths.logs, { recursive: true, mode: 0o700 });
   mkdirSync(paths.run, { recursive: true, mode: 0o700 });
   const log = openSync(join(paths.logs, 'server.log'), 'a', 0o600);
@@ -139,7 +145,7 @@ async function start(paths: Paths): Promise<void> {
   child.unref();
   closeSync(log);
   for (let i = 0; i < 100; i++) {
-    if (await socketAnswers(paths.webSock)) return void console.log('Presenter started');
+    if (await socketAnswers(paths.webSock)) return say('started', 'Presenter started');
     if (child.exitCode !== null) break;
     await new Promise((r) => setTimeout(r, 100));
   }
@@ -148,16 +154,16 @@ async function start(paths: Paths): Promise<void> {
 
 async function stop(paths: Paths): Promise<void> {
   const pid = runningPid(paths);
-  if (!pid) return void console.log('Presenter isn\'t running');
+  if (!pid) return say("wasn't running", 'Presenter isn\'t running');
   process.kill(pid, 'SIGTERM');
   for (let i = 0; i < 100; i++) {
-    if (!runningPid(paths)) return void console.log('Presenter stopped');
+    if (!runningPid(paths)) return say('stopped', 'Presenter stopped');
     await new Promise((r) => setTimeout(r, 100));
   }
   process.kill(pid, 'SIGKILL');
   // Its own stop never ran, so the pid file is left for this to remove.
   rmSync(paths.pid, { force: true });
-  console.log('Presenter stopped');
+  say('stopped', 'Presenter stopped');
 }
 
 /**

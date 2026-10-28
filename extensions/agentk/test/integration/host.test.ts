@@ -363,6 +363,8 @@ describe('agentk host, attach, stop and start (the commands)', () => {
     await waitFor(() => host.serverRunning(), (up) => !up, 10000, 'host down');
     rmSync(lock);
     expect(execFileSync(tsx, [cli, 'stop'], { env, encoding: 'utf8' })).toContain('AgentK is not running.');
+    // Run by meko stop, one row of Meko's summary.
+    expect(execFileSync(tsx, [cli, 'stop'], { env: { ...env, MEKO_SUMMARY: '1' }, encoding: 'utf8' })).toBe("  ✓ AgentK          wasn't running\n");
 
     // Without services there is nothing for `start` to start.
     refused = '';

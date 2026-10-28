@@ -93,7 +93,7 @@ func TestCloudLink(t *testing.T) {
 	if c != wantCloud {
 		t.Fatalf("token --json cloud = %+v, want %+v", c, wantCloud)
 	}
-	code, out, _ = run("status", "--data-dir", dir)
+	code, out, _ = run("status", "--data-dir", dir, "--verbose")
 	want(t, "status", code, exitNotRunning, out, "Meko Cloud:    linked to "+cloud+"/mcp (key …wxyz)")
 
 	code, out, errs = run("start", "--data-dir", dir, "--port", port)
@@ -129,7 +129,7 @@ func TestDatapacksCloud(t *testing.T) {
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
 
-	code, out, errs = run("datapacks", "--data-dir", dir, "--cloud")
+	code, out, errs = runSh("datapacks", "--data-dir", dir, "--cloud")
 	want(t, "--cloud unlinked", code, 0, out, "  default  local  (Created by Meko on first start.)")
 	want(t, "--cloud unlinked", code, 0, errs, "Meko Cloud isn't linked: meko cloud_link links it")
 
@@ -137,7 +137,7 @@ func TestDatapacksCloud(t *testing.T) {
 	code, out, errs = run("cloud_link", "--data-dir", dir, "--url", cloud+"/mcp", "--web-url", cloud)
 	want(t, "cloud_link", code, 0, out+errs, "Linked to")
 
-	code, out, errs = run("datapacks", "--data-dir", dir, "--cloud")
+	code, out, errs = runSh("datapacks", "--data-dir", dir, "--cloud")
 	want(t, "--cloud linked", code, 0, out+errs,
 		"c0ffee00-0000-4000-8000-000000000001  team-runbooks  cloud shared\n"+
 			"c0ffee00-0000-4000-8000-000000000002  cloud-notes  cloud  (mine)\n")
@@ -145,12 +145,12 @@ func TestDatapacksCloud(t *testing.T) {
 		strings.Contains(out, "postgresql") {
 		t.Fatalf("local rows come first, and nothing else of Cloud's rows:\n%s", out)
 	}
-	code, out, _ = run("datapacks", "--data-dir", dir)
+	code, out, _ = runSh("datapacks", "--data-dir", dir)
 	if code != 0 || strings.Contains(out, "team-runbooks") || strings.Contains(out, "local") {
 		t.Fatalf("without --cloud it's unchanged: %d\n%s", code, out)
 	}
 
-	code, out, errs = run("datapacks", "--data-dir", dir, "--cloud", "--json")
+	code, out, errs = runSh("datapacks", "--data-dir", dir, "--cloud", "--json")
 	var j struct {
 		Local []map[string]any `json:"local"`
 		Cloud struct {
@@ -166,7 +166,7 @@ func TestDatapacksCloud(t *testing.T) {
 
 	fakeCloudDown.Store(true)
 	t.Cleanup(func() { fakeCloudDown.Store(false) })
-	code, out, errs = run("datapacks", "--data-dir", dir, "--cloud")
+	code, out, errs = runSh("datapacks", "--data-dir", dir, "--cloud")
 	want(t, "--cloud with Cloud down", code, 1, errs,
 		"couldn't list Meko Cloud's datapacks: Meko Cloud couldn't list datapacks: Cloud is down")
 	want(t, "--cloud with Cloud down", code, 1, out, "  default  local")
