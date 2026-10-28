@@ -9,7 +9,7 @@ working, its Meko features skipping or retrying.
 ## Install
 
 ```sh
-gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
+gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
 meko install_extension agentk      # then, for AgentK
 ```
 
@@ -372,7 +372,7 @@ A release install's app folder:
 - While an update is on probation, deleting a knowledge file leaves its bytes on disk
   (`memory.Options.KeepDeletedFiles`): a rollback restores rows from before the update, and they
   must still find their files. The sweep at a start after the update is done removes them.
-- `[update] channel = "off"` stops the scheduled checks (Check now and Update on the Status page still work, as `meko update` does); `[update] repo` (or `MEKO_UPDATE_REPO`) points at a fork.
+- `[update] channel = "off"` stops the scheduled checks (Check now and Update on the Status page still work, as `meko update` does); `[update] repo` (or `MEKO_UPDATE_REPO`, default `yugabyte/meko`: `update.DefaultRepo`) points at a fork.
 
 ## Secrets
 

@@ -58,7 +58,7 @@ Below: [Decisions so far](#decisions-so-far) · [Tech stack](#tech-stack) · [Mi
 | Task lifecycle | Explore → Design → Code → PR & Review (AgentK) → Merge & Close, with three human gates. A task starts at Explore, Design or Code, and you can move it between stages by hand; a Review a PR session has none of it. More ADLC stages plug in later. |
 | Host OS | Linux devservers, and Macs on Apple Silicon (macOS 14 or newer) while you're logged in to the desktop. Intel Macs and headless Macs aren't supported. |
 | Distribution | Public GitHub repo. GitHub Actions for CI and releases, date-based versions (`0.YYYYMMDD.N`), tarball releases that Meko installs and updates (with its rollback). |
-| Repo & license | Internal at `github.com/yugabyte/agent-k-local` for now, to be made public later. Apache-2.0. |
+| Repo & license | Internal at `github.com/yugabyte/meko` for now, to be made public later. Apache-2.0. |
 | Sharing | Everyone installs their own copy. One owner per install, with no shared instances. |
 | Client | Browser first, installable as a web app, which AgentK offers on first open (see [Installing the app](design/app.md#installing-the-app)). Installing gives it a dock icon: the web app manifest (`manifest.webmanifest`) names it "AgentK" and supplies the logo as regular and maskable icons. `/favicon.ico` and `/apple-touch-icon.png` are served at the root too, for browsers and phones that look there instead of reading the page's links; a missing file is a 404, never the app page. A native Mac wrapper is deferred. |
 

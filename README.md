@@ -33,7 +33,7 @@ On Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon. The repo is inter
 the installer is fetched with a signed-in `gh` (or `GITHUB_TOKEN`):
 
 ```sh
-gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
+gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
 meko install_extension agentk     # optional: AgentK, using this Meko (-- --agent kiro picks its coding agent)
 ```
 

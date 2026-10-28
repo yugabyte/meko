@@ -179,7 +179,7 @@ since the release before it, and releases beyond the newest 5 are deleted, so on
 don't say what an update brought. The **What's new** dialog (`WhatsNewDialog.tsx`) shows every
 change between two versions instead: the server asks GitHub for the commits between their tags
 (`GET /api/update/notes`, `Updates.notes()` in `updates.ts`, through `gh` once `gh auth status`
-passes, else HTTPS: `repos/yugabyte/agent-k-local/compare/<from tag>...<to tag>`, each of either
+passes, else HTTPS: `repos/yugabyte/meko/compare/<from tag>...<to tag>`, each of either
 prefix) and lists the `feat`, `fix`, `perf` and `deps`
 subjects by type, as the repo root's `scripts/release/release-notes.sh` does (leaving out the subjects that name only `meko` or `presenter`) (`src/server/releasenotes.ts`), with
 **Breaking changes** first and each line linked to its PR. GitHub returns at most 250 commits for a

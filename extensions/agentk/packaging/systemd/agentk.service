@@ -1,6 +1,6 @@
 [Unit]
 Description=AgentK web server
-Documentation=https://github.com/yugabyte/agent-k-local
+Documentation=https://github.com/yugabyte/meko
 # The home can be on a shared (NFS) file system that other hosts mount: run only on the
 # host this was installed on, or every host you log into starts its own server on it.
 ConditionHost=@HOST@

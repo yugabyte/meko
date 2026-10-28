@@ -26,7 +26,7 @@ export const MEKO_ACCOUNT_PATH = '/account';
  * Installs Meko on this computer: the installer of the repo's latest release, which is Meko's
  * (the README's install line). The banner shown while there's no Meko here gives it.
  */
-export const MEKO_INSTALL_COMMAND = 'gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh';
+export const MEKO_INSTALL_COMMAND = 'gh release download --repo yugabyte/meko --pattern install.sh --output - | sh';
 
 /**
  * The Meko web app that goes with an MCP URL: Meko Cloud's for Meko Cloud, else null (a local or

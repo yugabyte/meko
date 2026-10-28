@@ -88,7 +88,7 @@ describe('Updates', () => {
     down = false;
     const n = await u.notes('0.0.9', '0.1.0');
     expect(await u.notes('0.0.9', '0.1.0')).toBe(n);
-    expect(compare).toHaveBeenLastCalledWith('yugabyte/agent-k-local', 'v0.0.9', 'agentk-v0.1.0');
+    expect(compare).toHaveBeenLastCalledWith('yugabyte/meko', 'v0.0.9', 'agentk-v0.1.0');
     expect(n).toMatchObject({ from: '0.0.9', to: '0.1.0', commits: 3, totalCommits: 300, compareUrl: 'https://github.com/o/r/compare/v0.0.9...agentk-v0.1.0' });
     expect(n.sections).toEqual([{ title: 'Fixes', items: [expect.objectContaining({ summary: 'the newer fix' }), expect.objectContaining({ summary: 'the older fix' })] }]);
   });

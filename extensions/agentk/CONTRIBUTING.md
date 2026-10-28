@@ -6,7 +6,7 @@ Requirements: Linux or macOS, Node 22, git, and Claude
 Code. Meko (an API key plus the `meko-agent-skills` Claude Code plugin) is required to create
 projects.
 
-AgentK lives in `extensions/agentk` of the meko-local repo: run everything below from there.
+AgentK lives in `extensions/agentk` of the meko repo: run everything below from there.
 Paths are relative to it, except `.github/`, `.claude/`, `scripts/check-title.sh` and
 `scripts/ci-scope.sh`, which are at the repo root.
 
@@ -161,7 +161,7 @@ rename look for, so those installs still update. The release workflow smoke-test
 
 The repo is internal for now, so downloads go through an authenticated GitHub CLI. The repo's
 latest release is Meko's: its one-line install (`gh release download --repo
-yugabyte/agent-k-local --pattern install.sh --output - | sh`) installs Meko, and then
+yugabyte/meko --pattern install.sh --output - | sh`) installs Meko, and then
 `meko install_extension agentk` installs AgentK pointed at that Meko: Meko downloads the newest
 AgentK release for this platform (with gh's token, or `GITHUB_TOKEN`), checks it against
 `SHA256SUMS`, unpacks it owner-only into `<home>/app/<version>` (AgentK's home is

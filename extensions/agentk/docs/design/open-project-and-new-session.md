@@ -181,8 +181,8 @@ than that, and a start can't be cancelled.
 
 **Advanced**, collapsed by default under the first prompt, holds the repo and what the session works
 on: a new branch from a base, an existing branch, or an open pull request's branch. Closed, it shows
-them on one line (`agent-k-local · from main · ak/fix-retry-backoff`, `agent-k-local · on hsunder/foo`,
-or `agent-k-local · PR #123 · hsunder/foo`).
+them on one line (`meko · from main · ak/fix-retry-backoff`, `meko · on hsunder/foo`,
+or `meko · PR #123 · hsunder/foo`).
 
 - **Repo.** The project's repo, or any other repo the Open project dialog lists (the scanned repos
   only, loaded when Advanced first opens; `GET /api/repos/branches` gives a repo's branches and
