@@ -19,8 +19,9 @@ from the extension's folder) and which docs to keep current. Meko's own Go backe
 | `scripts/check-title.sh` | The commit subject and PR title rules for the whole repo. |
 | `scripts/ci-scope.sh` | Which components' CI jobs a PR runs, from the paths it changes. |
 | `scripts/release/` | The release scripts the three products share, with `--product agentk\|meko\|presenter`: the next version, the release notes (and whether to release), and pruning old releases. |
-| `.github/` | CI (`ci.yml`: a job per component, in `extensions/agentk`, `extensions/presenter` or `backend`, run only when a PR changes it, and the `CI gate` over them), the PR title check, the three release trains (`agentk-release.yml` for AgentK, tags `agentk-v…`; `meko-release.yml` for Meko, tags `meko-v…`, the repo's latest release; `presenter-release.yml` for Presenter, tags `presenter-v…`), and Dependabot. |
+| `.github/` | CI (`ci.yml`: a job per component, in `extensions/agentk`, `extensions/presenter` or `backend`, run only when a PR changes it, and the `CI gate` over them), the PR title check, the three release trains (`agentk-release.yml` for AgentK, tags `agentk-v…`; `meko-release.yml` for Meko, tags `meko-v…`, the repo's latest release; `presenter-release.yml` for Presenter, tags `presenter-v…`), Dependabot, and the issue forms (`ISSUE_TEMPLATE/`: bug, feature and task; blank issues are off). |
 | `.claude/skills/commit/` | The commit skill: how to write commits, PR titles and PR descriptions here. |
+| `.claude/skills/issue/` | The issue skill: how to write, file and edit GitHub issues here, with the forms' sections, types and labels. |
 | `README.md`, `LICENSE` | The repo's README (Meko: what it is, building it, its commands, and its extensions) and the license for everything in it. AgentK's README is `extensions/agentk/README.md`. |
 
 ## Rules for the whole repo
@@ -35,7 +36,12 @@ from the extension's folder) and which docs to keep current. Meko's own Go backe
 - **Changes reach `main` only through PRs** that pass the `CI gate` and `PR title` checks. A PR
   runs only the jobs of the components it changes (`scripts/ci-scope.sh`); a push to `main` runs
   them all. A new component gets its own job in `ci.yml`, its paths in `scripts/ci-scope.sh`, a
-  place in the gate's `needs`, and its name in `COMPONENTS` in `scripts/check-title.sh`.
+  place in the gate's `needs`, and its name in `COMPONENTS` in `scripts/check-title.sh`. A new
+  product also gets a GitHub label of its own name and an entry in the issue forms' Product
+  dropdown (`.github/ISSUE_TEMPLATE/`) and in the issue skill.
+- **Issues** follow the issue skill (`.claude/skills/issue/SKILL.md`): the issue forms'
+  sections, a type (`Bug`, `Feature` or `Task`), the `bug` or `enhancement` label, and a product
+  label (`meko`, `agentk`, `presenter`) for each product the issue is about.
 - **Keep the docs current** in the same commit as the code, and check the change against the
   REVIEW.md of the part you changed (`extensions/agentk/REVIEW.md` for AgentK, `backend/REVIEW.md`
   for the backend).

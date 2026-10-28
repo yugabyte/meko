@@ -1,0 +1,2 @@
+# Only the web UI's chooser reads this: `gh issue create` and the API still take free-form issues.
+blank_issues_enabled: false

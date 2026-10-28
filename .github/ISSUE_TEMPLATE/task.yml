@@ -1,0 +1,39 @@
+# The issue skill (.claude/skills/issue/SKILL.md) writes agents' tasks with these headings:
+# change both together.
+name: Task
+description: Planned work, a chore or a checklist, for people working on the repo.
+type: Task
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This repo is public: leave out tokens, API keys, internal hostnames and private paths.
+  - type: dropdown
+    id: product
+    attributes:
+      label: Product
+      options:
+        - Meko
+        - AgentK
+        - Presenter
+        - The repo (CI, scripts, docs)
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why this needs doing, with links to the issues, PRs and code it's about.
+    validations:
+      required: true
+  - type: textarea
+    id: plan
+    attributes:
+      label: Plan
+      description: The steps, as a checklist.
+      placeholder: |
+        - [ ]
+  - type: textarea
+    id: done-when
+    attributes:
+      label: Done when
+      placeholder: |
+        -
