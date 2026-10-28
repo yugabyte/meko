@@ -171,3 +171,47 @@ func TestCallWindow(t *testing.T) {
 		t.Errorf("90-day activity: %+v", cs.Daily)
 	}
 }
+
+// Context efficiency and quality count only context_search calls that sent something, as Meko Cloud
+// does. The docs' example: two searches against a 14,000-token baseline send 1,600 and 400 and save
+// 26,000 of 28,000 (93%). A call recorded before the baseline was kept counts Cloud's 10,000.
+func TestContextStats(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "meko.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err = st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	svc := New(st, nil, Options{})
+	now := time.Now()
+	for _, c := range []store.Call{
+		{Tool: "context_search", OK: true, TokensSent: 1600, TokensSaved: 12400, TokensIfRaw: 14000, ScoreHigh: 1,
+			ScoreMid: 1, ScoreLow: 2},
+		{Tool: "context_search", OK: true, TokensSent: 400, TokensSaved: 13600, TokensIfRaw: 14000, ScoreLow: 2},
+		{Tool: "context_search", OK: true},                                     // found nothing: not counted
+		{Tool: "memory_search", OK: true, ScoreHigh: 3},                        // not a context search
+		{Tool: "context_search", OK: false, TokensSent: 200, TokensIfRaw: 900}, // failed
+	} {
+		c.At, c.DatapackID = now, "d"
+		if err = st.AddCall(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := svc.CallStats(ctx, "d", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (ContextStats{Requests: 2, Saved: 26000, IfRaw: 28000, ScoreHigh: 1, Mid: 1, Low: 4}); got.Context != want {
+		t.Errorf("context %+v, want %+v", got.Context, want)
+	}
+	if err = st.AddCall(ctx, store.Call{At: now, DatapackID: "d", Tool: "context_search", OK: true, TokensSent: 1000,
+		TokensSaved: 9000}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = svc.CallStats(ctx, "d", 0); got.Context.IfRaw != 38000 || got.Context.Requests != 3 {
+		t.Errorf("an older call's baseline: %+v", got.Context)
+	}
+}

@@ -200,6 +200,9 @@ type TokenSavings struct {
 	Memory        *SourceSavings `json:"memory,omitempty"`
 	Conversation  *SourceSavings `json:"conversation,omitempty"`
 	TokensSaved   *int           `json:"tokens_saved,omitempty"`
+	// Baseline is what TokensSaved is measured against: the datapack's whole knowledge base (1000 a
+	// chunk), or Cloud's default of 10 chunks. The call log keeps it.
+	Baseline int `json:"-"`
 }
 
 // Sent is the tokens the results sent in all.
@@ -221,9 +224,10 @@ func (t TokenSavings) Saved() int {
 	return *t.TokensSaved
 }
 
-// Savings estimates a context_search's savings as Meko Cloud does. The baseline is the knowledge
-// results' tokens when the knowledge base returned some; else the whole knowledge base's (1000 a
-// chunk); else Cloud's default of 10 chunks.
+// Savings estimates a context_search's savings as Meko Cloud does. What it sent is 1000 tokens a
+// knowledge-base result, 200 a memory, and 1000 when past conversations matched. Its saving is
+// against the whole knowledge base (Baseline). Each source's own saving is against the knowledge
+// results' tokens when the knowledge base returned some (total_tokens), else the same baseline.
 func Savings(r memory.ContextResults) TokenSavings {
 	total := defaultBaselineTokens
 	switch {
@@ -232,7 +236,11 @@ func Savings(r memory.ContextResults) TokenSavings {
 	case r.KnowledgeChunks > 0:
 		total = r.KnowledgeChunks * kbChunkTokens
 	}
-	out := TokenSavings{TotalTokens: total}
+	baseline := defaultBaselineTokens
+	if r.KnowledgeChunks > 0 {
+		baseline = r.KnowledgeChunks * kbChunkTokens
+	}
+	out := TokenSavings{TotalTokens: total, Baseline: baseline}
 	source := func(sent int) *SourceSavings {
 		return &SourceSavings{TokensSent: sent, TokensSaved: max(0, total-sent)}
 	}
@@ -246,7 +254,7 @@ func Savings(r memory.ContextResults) TokenSavings {
 		out.Conversation = source(conversationTokens)
 	}
 	if sent := out.Sent(); sent > 0 {
-		saved := max(0, total-sent)
+		saved := max(0, baseline-sent)
 		out.TokensSaved = &saved
 	}
 	return out

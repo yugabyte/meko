@@ -188,7 +188,21 @@ type CallStats struct {
 	KBSearches          int // knowledgebase_search calls
 	InputTokens         int
 	OutputTokens        int
+	// Context efficiency and quality, as Meko Cloud counts them: only context_search calls that sent
+	// something, each saving measured against its whole knowledge base.
+	Context ContextStats
 }
+
+// ContextStats is Meko Cloud's context efficiency and quality over a datapack's context_search calls.
+type ContextStats struct {
+	Requests            int // context_search calls that sent something
+	Saved, IfRaw        int // tokens saved, and the baselines they were measured against
+	ScoreHigh, Mid, Low int // their results by match quality
+}
+
+// defaultIfRaw is the baseline of a call recorded before the call log kept it: Cloud's default of 10
+// knowledge-base chunks, as Cloud filled its own older rows.
+const defaultIfRaw = 10_000
 
 // statsDays is how many days of activity CallStats reports by default.
 const statsDays = 30
@@ -240,6 +254,18 @@ func (s *Service) CallStats(ctx context.Context, datapack string, lastDays int) 
 		out.ScoreHigh += c.ScoreHigh
 		out.Mid += c.ScoreMid
 		out.Low += c.ScoreLow
+		if kind == "hybrid" && c.TokensSent > 0 {
+			ifRaw := c.TokensIfRaw
+			if ifRaw == 0 {
+				ifRaw = defaultIfRaw
+			}
+			out.Context.Requests++
+			out.Context.Saved += c.TokensSaved
+			out.Context.IfRaw += ifRaw
+			out.Context.ScoreHigh += c.ScoreHigh
+			out.Context.Mid += c.ScoreMid
+			out.Context.Low += c.ScoreLow
+		}
 		day := c.At.UTC().Format(time.DateOnly)
 		if day < since {
 			continue

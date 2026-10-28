@@ -102,7 +102,7 @@ export function MetricsPage({ datapack, onChanged }: { datapack: Datapack; onCha
       <SectionHeader label="Retrieval & efficiency" onRefresh={refresh} refreshing={metrics.loading} />
       <ActivityCard activity={m.daily_activity} total={d.queries} n={days} />
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <EfficiencyCard d={d} requests={m.total_requests} />
+        <EfficiencyCard d={d} requests={d.searches} />
         <MatchQualityCard d={d} />
         <QualityWindowCard d={d} />
       </div>

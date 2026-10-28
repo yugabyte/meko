@@ -37,6 +37,9 @@ export interface Metrics {
   memory_chunk_count: number;
   memory_bytes: number;
   total_requests: number;
+  // context_search calls that sent something: what context efficiency averages over (absent from an
+  // older server, which averaged over total_requests).
+  savings_requests?: number;
   tokens_saved_total: number;
   tokens_if_raw_total: number;
   savings_pct: number;
