@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { AskAgentkAction, JoinByLinkResult, LinkPlan, ProjectWithSessions, SessionMatch } from '../../src/shared/types.js';
-import { askEntries, doAllActions, filterItems, findEntries, joinEntry, joinedText, labelText, linkEntries, type LabelPart } from '../../src/web/palette.js';
+import type { AskAgentkAction, JoinByLinkResult, LinkPlan, ProjectWithSessions, SessionMatch, WorkItem, WorkLinkMatch } from '../../src/shared/types.js';
+import { askEntries, doAllActions, filterItems, findEntries, joinEntry, joinedText, labelText, linkEntries, workLinkEntries, type LabelPart } from '../../src/web/palette.js';
 
 const item = (id: string, label: LabelPart[], keywords = '') => ({ id, label, keywords });
 const items = [
@@ -143,5 +143,27 @@ describe('sessions a search found', () => {
   ])('describes %j', (m, hint, action) => {
     const [e] = findEntries([match(m)], projects, 'p1');
     expect([labelText(e.label), e.hint, e.action]).toEqual(['Dark mode', hint, action]);
+  });
+});
+
+describe('work items holding a pasted link', () => {
+  const projects = [{ id: 'p1', name: 'agent-k-local' }, { id: 'p2', name: 'docs' }] as unknown as ProjectWithSessions[];
+  const item = (id: string, title: string, status: 'open' | 'closed' = 'open') => ({ id, title, status } as WorkItem);
+  const session = (s: Partial<NonNullable<WorkLinkMatch['session']>>) => ({ id: 's1', projectId: 'p1', name: 'Fix split', stage: 'code' as const, closed: false, prNumber: null, prUrl: null, ...s });
+
+  it('lists the sessions first, then each item, with Start session for one with no open session', () => {
+    const entries = workLinkEntries([
+      { item: item('a', 'Split race'), session: session({}) },
+      { item: item('b', 'Docs for split'), session: session({ id: 's2', projectId: 'p2', name: 'Old docs', closed: true, prNumber: 4, prUrl: 'https://github.com/o/d/pull/4' }) },
+      { item: item('c', 'Done', 'closed'), session: null },
+    ], projects, 'p1');
+    expect(entries.map((e) => [labelText(e.label), e.hint, e.action])).toEqual([
+      ['Fix split', 'Code · Work item: Split race', { go: { projectId: 'p1', sessionId: 's1' } }],
+      ['Old docs', 'docs · Closed · PR #4 · Work item: Docs for split', { open: 'https://github.com/o/d/pull/4' }],
+      ['Work item: Split race', 'Work queue', { queue: 'a' }],
+      ['Work item: Docs for split', 'Work queue', { queue: 'b' }],
+      ['Start a session for Docs for split…', 'Action', { start: item('b', 'Docs for split') }],
+      ['Work item: Done', 'Closed work item', { queue: 'c' }],
+    ]);
   });
 });

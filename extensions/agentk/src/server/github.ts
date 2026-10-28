@@ -468,6 +468,24 @@ export async function searchOpenPrs(cwd: string, text: string, limit = 20): Prom
     .map((r) => ({ repo: r.repository!.nameWithOwner!, number: r.number, title: r.title, author: r.author?.login ?? '', url: r.url, createdAt: r.createdAt }));
 }
 
+/** An open PR that asks for the viewer's review. */
+export interface ReviewRequest {
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+}
+
+/** The open PRs, in any repo, that ask for the viewer's review (`gh search prs --review-requested=@me`), at most `limit`. */
+export async function reviewRequests(cwd: string, limit = 100): Promise<ReviewRequest[]> {
+  const out = await ghWithin(cwd, 30_000, 'search', 'prs', '--review-requested', '@me', '--state', 'open',
+    '--json', 'repository,number,title,url', '--limit', String(limit));
+  const rows = JSON.parse(out || '[]') as { repository?: { nameWithOwner?: string }; number: number; title: string; url: string }[];
+  return rows
+    .filter((r) => isRepoName(r.repository?.nameWithOwner))
+    .map((r) => ({ repo: r.repository!.nameWithOwner!, number: r.number, title: r.title, url: r.url }));
+}
+
 /** What a Review a PR session follows on its PR. */
 export interface PrWatch {
   state: 'OPEN' | 'CLOSED' | 'MERGED';

@@ -94,6 +94,12 @@ idle_days = 14            # an idle worktree no session used for this many days 
 [tools]
 # enabled = false            # sessions get no session tools (agentk_sessions MCP server and its skill: open projects,
 #                            # start and move sessions); on by default, and also in Settings → General
+
+[work_queue]
+# sync_minutes = 15          # how often the work queue syncs by itself (0: only when you press Sync)
+# slack_model = "sonnet"     # the model of the claude -p that reads Slack's Later list through your Slack connector
+# slack_timeout_seconds = 180 # a Slack read that takes longer is stopped (30 to 600)
+# slack_tools = ["mcp__claude_ai_Slack__slack_search_public_and_private", …] # the only tools that read may call
 ```
 
 | Action | What the server does |
@@ -193,6 +199,14 @@ CREATE TABLE owner (id INTEGER PRIMARY KEY CHECK (id = 1), username TEXT, pw_scr
 CREATE TABLE auth_sessions (token_sha256 TEXT PRIMARY KEY, created_at INTEGER, expires_at INTEGER, user_agent TEXT, ip TEXT);
 CREATE TABLE audit_log (id INTEGER PRIMARY KEY, at INTEGER, action TEXT, detail_json TEXT);
 CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);   -- setup token, update state, plan limits
+CREATE TABLE work_items (      -- the work queue (workqueue.ts, docs/design/work-queue.md)
+  id TEXT PRIMARY KEY, title TEXT, notes TEXT, position INTEGER, status TEXT,  -- open | closed
+  source TEXT,                 -- manual | github | slack
+  source_key TEXT UNIQUE,      -- a synced item's link key: a sync never adds it again
+  session_id TEXT UNIQUE REFERENCES sessions(id) ON DELETE SET NULL,  -- one session per item, one item per session
+  unplaced INTEGER, github_done_at INTEGER, created_at INTEGER, closed_at INTEGER);
+CREATE TABLE work_item_links (item_id TEXT, ord INTEGER, key TEXT, kind TEXT, url TEXT, label TEXT,
+  PRIMARY KEY (item_id, key));  -- indexed on key, for the palette's lookup by link
 ```
 
 - **Why SQLite.** You get transactions across projects, sessions and datapacks, an event history

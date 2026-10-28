@@ -83,6 +83,7 @@ export function ProjectView({
   onMove,
   onOpenPr,
   onRename,
+  onLinkWorkItem,
   onToTop,
   onMenu,
   showTabs,
@@ -101,6 +102,8 @@ export function ProjectView({
   onOpenPr: () => void;
   /** Opens the Rename session dialog. */
   onRename: (sessionId: string) => void;
+  /** Opens the dialog that links a session to a work item. */
+  onLinkWorkItem: (sessionId: string) => void;
   /** Moves a session to the top of the project's list (the ⋯ sheet; the rail has its own button). */
   onToTop: (sessionId: string) => void;
   /** Opens the projects drawer (phone layout). */
@@ -534,6 +537,7 @@ export function ProjectView({
           onMekoCalls={project.settings.mekoLog ? () => navigate({ view: 'meko', projectId: project.id, sessionId: session.id }) : undefined}
           onMove={() => onMove()}
           onRename={() => onRename(session.id)}
+          onWorkItem={() => onLinkWorkItem(session.id)}
           onToTop={sessions[0]?.id !== session.id ? () => onToTop(session.id) : undefined}
           onAct={act}
           onClose={() => setSheet(false)}

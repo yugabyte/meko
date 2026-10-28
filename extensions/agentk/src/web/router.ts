@@ -7,6 +7,8 @@ export type Route =
   | { view: 'home'; projectId: string }
   /** Usage across every project. */
   | { view: 'usage' }
+  /** The work queue, across every project. */
+  | { view: 'queue' }
   /** A session's design doc on its own page (opened in a new tab). */
   | { view: 'design'; projectId: string; sessionId: string }
   /** The project's Meko call logs, on a session's (the latest logged when none is named). */
@@ -28,6 +30,7 @@ export function parseRoute(pathname: string, base = BASE): Route {
   const rest = pathname.startsWith(base) ? pathname.slice(base.length) : pathname;
   const parts = rest.split('/').filter(Boolean).map(decode);
   if (parts[0] === 'usage' && parts.length === 1) return { view: 'usage' };
+  if (parts[0] === 'queue' && parts.length === 1) return { view: 'queue' };
   if (parts[0] === 'p' && parts[1]) {
     if (parts[2] === 's' && parts[3] && parts[4] === 'design') return { view: 'design', projectId: parts[1], sessionId: parts[3] };
     if (parts[2] === 's' && parts[3]) return { view: 'project', projectId: parts[1], sessionId: parts[3] };
@@ -52,6 +55,8 @@ function routeRest(r: Route): string {
       return '';
     case 'usage':
       return 'usage';
+    case 'queue':
+      return 'queue';
     case 'home':
       return `p/${e(r.projectId)}/home`;
     case 'design':

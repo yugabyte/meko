@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import type { Server } from 'node:http';
 import { mkdirSync, rmSync } from 'node:fs';
 import { claudeConfigPath } from './trust.js';
-import { hostname, userInfo } from 'node:os';
+import { homedir, hostname, userInfo } from 'node:os';
 import { join } from 'node:path';
 import type { AppState, MekoKeySource, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
 import * as github from './github.js';
@@ -55,6 +55,8 @@ import { legacyTmuxPanes } from './legacytmux.js';
 import { servicesFor, type ServiceManager } from './service.js';
 import { ZERO_USAGE, addUsage } from './usage.js';
 import { WorktreePool } from './worktrees.js';
+import { readLaterList } from './slack.js';
+import { WorkQueue } from './workqueue.js';
 
 export interface CoreOptions {
   paths: Paths;
@@ -158,6 +160,7 @@ export class Core extends EventEmitter {
   readonly questions: DesignQuestionStore;
   readonly prReview: PrReviewService;
   readonly githubLinks: GithubLinkService;
+  readonly workQueue: WorkQueue;
   readonly askAgentk: AskAgentk;
   /** AgentK's session tools: the calls `agentk mcp` makes from sessions. */
   readonly tools: SessionTools;
@@ -271,6 +274,15 @@ export class Core extends EventEmitter {
     this.questions = new DesignQuestionStore(this);
     this.prReview = new PrReviewService(this);
     this.githubLinks = new GithubLinkService(this);
+    this.workQueue = new WorkQueue({
+      db: this.db,
+      changed: () => this.changed(),
+      warn: (m, d) => this.log.warn(m, d),
+      reviewRequests: () => github.reviewRequests(homedir()),
+      readSlack: () => readLaterList(this.cfg, join(this.paths.run, 'work-sync')),
+      claudeAvailable: () => !!this.harnesses.status(this.cfg).find((h) => h.id === 'claude')?.available,
+      githubTitle: async (repo, number) => (await github.issueOrPr(homedir(), repo, number)).title,
+    });
     this.askAgentk = new AskAgentk({
       config: () => this.cfg,
       cwd: join(this.paths.run, 'ask'),
@@ -613,6 +625,8 @@ export class Core extends EventEmitter {
       // Still offered while an agent that's turned on hasn't answered yet (just after a start).
       askAgentk: this.cfg.askAgentk.enabled && harnesses.some((h) => h.available || !h.checked),
       sessionHost: { version: this.host.hello?.version ?? null, outdated: !!this.host.hello?.outdated },
+      workQueue: this.workQueue.list(),
+      workSync: this.workQueue.syncState(),
     };
   }
 
@@ -692,6 +706,7 @@ export class Core extends EventEmitter {
       this.every(INVITE_SYNC_MS, () => this.invites.sync());
       this.every(PIN_PRUNE_MS, () => this.prunePins());
       this.every(STAGED_SWEEP_MS, () => this.sweepStaged());
+      if (this.cfg.workQueue.syncMinutes > 0) this.every(Math.max(1, this.cfg.workQueue.syncMinutes) * 60_000, () => this.workQueue.sync(false));
       // Meko normally starts first (it starts AgentK); this covers a boot where it didn't, and an
       // install of Meko while the banner asks for one (with a Meko Cloud link too).
       this.every(LOCAL_MEKO_EVERY_MS, () => (lookForLocalMeko(mekoConfigured(this.cfg), localMeko().state) ? this.refreshMeko() : undefined));

@@ -1,6 +1,6 @@
 // Command palette labels and filtering. Pure, so it's unit-tested.
 import { shareLinkToken } from '../shared/mekourls';
-import { STAGE_LABELS, type AskAgentkAction, type JoinByLinkResult, type LinkPlan, type LinkProject, type ProjectWithSessions, type SessionMatch } from '../shared/types';
+import { STAGE_LABELS, type AskAgentkAction, type JoinByLinkResult, type LinkPlan, type LinkProject, type ProjectWithSessions, type SessionMatch, type WorkItem, type WorkLinkMatch } from '../shared/types';
 import { stageWords } from './util';
 
 /** A piece of a palette label: plain text, or a session's or project's name, drawn in its own style. */
@@ -107,9 +107,9 @@ export function linkEntries(plan: LinkPlan): LinkEntry[] {
 }
 
 /** The palette input's placeholder, one at a time, so it shows everything the palette takes. */
-export const PALETTE_HINTS = ['Ask AgentK to start a task…', 'Type a command…', 'Find a session by what it’s about…', 'Paste a GitHub PR or issue link…'];
+export const PALETTE_HINTS = ['Ask AgentK to start a task…', 'Type a command…', 'Find a session by what it’s about…', 'Paste a GitHub PR or issue link…', 'Paste a Jira or Slack link to find its session…'];
 /** The placeholder with reduced motion, which doesn't rotate. */
-export const PALETTE_HINT_STILL = 'Ask AgentK, run a command, find a session by what it’s about or paste a GitHub link…';
+export const PALETTE_HINT_STILL = 'Ask AgentK, run a command, find a session by what it’s about or paste a GitHub, Jira or Slack link…';
 
 /**
  * The palette item for a Meko share link pasted on its own: only one on this Meko's web app, so a
@@ -224,4 +224,50 @@ export function findEntries(matches: SessionMatch[], projects: ProjectWithSessio
       action: !m.closed ? { go: { projectId: m.projectId, sessionId: m.sessionId } } : m.prUrl ? { open: m.prUrl } : null,
     };
   });
+}
+
+/** What a work item's palette item does: go to its session, open its closed session's PR, show it in the queue, or start a session for it. */
+export type WorkLinkAction = FindAction | { queue: string } | { start: WorkItem };
+
+export interface WorkLinkEntry {
+  id: string;
+  label: LabelPart[];
+  hint: string;
+  action: WorkLinkAction;
+  /** The session it goes to, for its dot. */
+  sessionId?: string;
+}
+
+/**
+ * The palette items for the work items holding a pasted link: their sessions first (as a found
+ * session's are worded), then each item in the queue, and Start session for one with no open session.
+ */
+export function workLinkEntries(matches: WorkLinkMatch[], projects: ProjectWithSessions[], currentProjectId: string | null): WorkLinkEntry[] {
+  const sessions = matches.flatMap((m): WorkLinkEntry[] => {
+    const s = m.session;
+    if (!s) return [];
+    const where = s.projectId !== currentProjectId ? projects.find((p) => p.id === s.projectId)?.name : undefined;
+    const state = s.closed ? (s.prNumber != null ? `Closed · PR #${s.prNumber}` : 'Closed') : STAGE_LABELS[s.stage];
+    return [{
+      id: `work-go-${s.id}`,
+      label: [{ session: s.name }],
+      hint: [where, state, `Work item: ${m.item.title}`].filter(Boolean).join(' · '),
+      action: !s.closed ? { go: { projectId: s.projectId, sessionId: s.id } } : s.prUrl ? { open: s.prUrl } : null,
+      sessionId: s.closed ? undefined : s.id,
+    }];
+  });
+  const items = matches.flatMap((m): WorkLinkEntry[] => {
+    const closedItem = m.item.status === 'closed';
+    const out: WorkLinkEntry[] = [{
+      id: `work-item-${m.item.id}`,
+      label: [`Work item: ${m.item.title}`],
+      hint: closedItem ? 'Closed work item' : 'Work queue',
+      action: { queue: m.item.id },
+    }];
+    if (!closedItem && (!m.session || m.session.closed)) {
+      out.push({ id: `work-start-${m.item.id}`, label: [`Start a session for ${m.item.title}…`], hint: 'Action', action: { start: m.item } });
+    }
+    return out;
+  });
+  return [...sessions, ...items];
 }

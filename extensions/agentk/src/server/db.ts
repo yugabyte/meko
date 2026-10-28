@@ -624,6 +624,35 @@ const MIGRATIONS: string[] = [
   ALTER TABLE sessions ADD COLUMN auto_run INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE sessions ADD COLUMN queued_auto INTEGER NOT NULL DEFAULT 0;
   `,
+  // 42: the work queue (workqueue.ts): items in the user's order (position, lowest first), each with its
+  // links (matched by their parseWorkLink key) and at most one session (session_id, unique: one item per
+  // session). source_key: a synced item's link key, so a sync never adds it again, even once closed.
+  `
+  CREATE TABLE work_items (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    position INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    source TEXT NOT NULL DEFAULT 'manual',
+    source_key TEXT UNIQUE,
+    session_id TEXT UNIQUE REFERENCES sessions(id) ON DELETE SET NULL,
+    unplaced INTEGER NOT NULL DEFAULT 0,
+    github_done_at INTEGER,
+    created_at INTEGER NOT NULL,
+    closed_at INTEGER
+  );
+  CREATE TABLE work_item_links (
+    item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+    ord INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    url TEXT,
+    label TEXT NOT NULL,
+    PRIMARY KEY (item_id, key)
+  );
+  CREATE INDEX work_item_links_key ON work_item_links(key);
+  `,
 ];
 
 export function openDb(path: string): Db {

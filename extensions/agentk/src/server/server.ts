@@ -10,6 +10,7 @@ import type {
   HeldReview, HeldReviewsResult, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, RunActionsRequest, RunActionsResult, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
   JoinByLinkRequest, JoinByLinkResult, LinkGrant, ShareLink, ShareLinkChange, ShareLinkState,
+  CreateWorkItemRequest, ReorderWorkItemsRequest, UpdateWorkItemRequest, WorkItem, WorkLinkMatch, WorkSync,
 } from '../shared/types.js';
 import { ACTIONS_MAX, LINK_GRANTS, MAX_KB_UPLOAD_BYTES, MAX_PASTE_BYTES, MEKO_CALL_BY, SHARE_GRANTS } from '../shared/types.js';
 import { AGENTK_PATH, shareLinkToken, shareLinkUrl } from '../shared/mekourls.js';
@@ -411,6 +412,19 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     return { results: await runActions(core, actions, { session: null }), notes };
   });
   app.get('/api/usage', async () => usageOverview(core.db));
+
+  // ---- work queue ----
+  app.get<{ Querystring: { status?: string } }>('/api/work-items', async (req): Promise<WorkItem[]> =>
+    req.query.status === 'closed' ? core.workQueue.closed() : core.workQueue.list());
+  app.post<{ Body: CreateWorkItemRequest }>('/api/work-items', async (req): Promise<WorkItem> => core.workQueue.create(req.body ?? {}));
+  app.patch<{ Params: { id: string }; Body: UpdateWorkItemRequest }>('/api/work-items/:id', async (req): Promise<WorkItem> =>
+    core.workQueue.update(req.params.id, req.body ?? {}));
+  app.put<{ Body: ReorderWorkItemsRequest }>('/api/work-items/order', async (req, reply) => {
+    core.workQueue.reorder(req.body ?? { ids: [] });
+    return reply.code(204).send();
+  });
+  app.post('/api/work-items/sync', async (): Promise<WorkSync> => core.workQueue.sync(true));
+  app.get<{ Querystring: { link?: string } }>('/api/work-items/by-link', async (req): Promise<WorkLinkMatch[]> => core.workQueue.byLink(req.query.link));
   app.get<{ Querystring: { q?: string; project?: string } }>('/api/sessions/search', async (req): Promise<SessionMatch[]> =>
     searchSessions(core.db, req.query.q ?? '', req.query.project || undefined));
   app.post<{ Params: { id: string }; Body: { query: string } }>('/api/projects/:id/search', async (req) => core.projects.search(req.params.id, req.body?.query ?? ''));

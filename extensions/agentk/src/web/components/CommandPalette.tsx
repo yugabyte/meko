@@ -2,14 +2,15 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { parseGithubRef } from '../../shared/github-refs';
 import {
   type ActionResult, type AskAgentkAction, type AskAgentkResult, type CreateSessionRequest, type DatapackInvite, type JoinByLinkResult, type LinkPlan,
-  type ProjectWithSessions, type Session, type SessionMatch, type StartFromLinkResult,
+  type ProjectWithSessions, type Session, type SessionMatch, type StartFromLinkResult, type WorkItem, type WorkLinkMatch,
 } from '../../shared/types';
 import { moveBlockedIn } from '../../shared/stages';
 import { api, errorMessage } from '../api';
 import { appUrl } from '../base';
 import { useMedia, useTouch } from '../hooks/useMedia';
 import { useInstall } from '../installapp';
-import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, doAllActions, filterItems, findEntries, joinEntry, joinedText, linkEntries, type LabelPart } from '../palette';
+import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, doAllActions, filterItems, findEntries, joinEntry, joinedText, linkEntries, workLinkEntries, type LabelPart } from '../palette';
+import { workLinkKey } from '../../shared/worklinks';
 import { navigate } from '../router';
 import { attachFiles } from '../terminals';
 import { STATUS_TEXT, cx, dotState, isMac, liveSessions, stageWords, type DotState } from '../util';
@@ -65,6 +66,12 @@ export function CommandPalette({
   onEditSession,
   mekoWebUrl,
   onOpenInvite,
+  workItems,
+  onAddWorkItem,
+  onShowWorkItem,
+  onStartForItem,
+  onLinkWorkItem,
+  onError,
 }: {
   projects: ProjectWithSessions[];
   currentProjectId: string | null;
@@ -92,6 +99,16 @@ export function CommandPalette({
   mekoWebUrl: string | null;
   /** Opens Open project with a share chosen (one just joined by its link). */
   onOpenInvite: (invite: DatapackInvite) => void;
+  /** The work queue's open items. */
+  workItems: WorkItem[];
+  onAddWorkItem: () => void;
+  /** Opens the work queue at an item. */
+  onShowWorkItem: (id: string) => void;
+  /** Opens New session filled in from a work item. */
+  onStartForItem: (item: WorkItem) => void;
+  /** Opens the dialog that links the session on screen to a work item. */
+  onLinkWorkItem: () => void;
+  onError: (msg: string) => void;
 }) {
   const [q, setQ] = useState('');
   const [idx, setIdx] = useState(0);
@@ -138,6 +155,23 @@ export function CommandPalette({
     };
   }, [refKey, lookupKey, currentProjectId, stale]);
   const looked = stale ? undefined : cached;
+
+  // A GitHub, Jira or Slack link pasted: the work items holding it, and their sessions, looked up once typing pauses.
+  const workKey = useMemo(() => workLinkKey(q), [q]);
+  const [work, setWork] = useState<{ key: string; matches: WorkLinkMatch[] } | null>(null);
+  useEffect(() => {
+    if (!workKey) return;
+    const ac = new AbortController();
+    const t = window.setTimeout(() => {
+      api.workByLink(q.trim(), ac.signal).then((matches) => setWork({ key: workKey, matches }), () => undefined);
+    }, LINK_LOOKUP_MS);
+    return () => {
+      window.clearTimeout(t);
+      ac.abort();
+    };
+    // q is read only for the link workKey stands for.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workKey]);
 
   // A Meko share link pasted: joined only when its item is picked.
   const join = useMemo(() => joinEntry(q, mekoWebUrl), [q, mekoWebUrl]);
@@ -418,6 +452,19 @@ export function CommandPalette({
       });
     }
     if (currentSession) {
+      const item = workItems.find((i) => i.id === currentSession.workItemId);
+      if (currentSession.workItemId) {
+        if (item) out.push({ id: 'work-show', label: ['Work item of ', { session: currentSession.name }, `: ${item.title}`], hint: 'View', keywords: 'work queue item show', run: () => onShowWorkItem(item.id) });
+        const itemId = currentSession.workItemId;
+        out.push({
+          id: 'work-unlink', label: ['Unlink ', { session: currentSession.name }, ' from its work item'], hint: 'Action', keywords: 'work queue item unlink remove',
+          run: () => void api.updateWorkItem(itemId, { sessionId: null }).catch((e: unknown) => onError(errorMessage(e))),
+        });
+      } else {
+        out.push({ id: 'work-link', label: ['Link ', { session: currentSession.name }, ' to a work item'], hint: 'Action', keywords: 'work queue item link attach', run: onLinkWorkItem });
+      }
+    }
+    if (currentSession) {
       out.push({
         id: 'attach-files',
         label: ['Attach files to ', { session: currentSession.name }],
@@ -467,12 +514,18 @@ export function CommandPalette({
       }
     }
     out.push({ id: 'new-project', label: ['Open project'], hint: 'Action', keywords: 'open new create project repo add', run: onNewProject });
+    out.push({ id: 'work-queue', label: ['Work queue'], hint: 'View', keywords: 'work queue items todo tasks priorities list', run: () => navigate({ view: 'queue' }) });
+    out.push({ id: 'work-add', label: ['Add a work item'], hint: 'Action', keywords: 'work queue item add new todo task', run: onAddWorkItem });
+    out.push({
+      id: 'work-sync', label: ['Sync the work queue'], hint: 'GitHub review requests and Slack Later', keywords: 'work queue sync github review requests slack later saved',
+      run: () => void api.syncWork().catch((e: unknown) => onError(errorMessage(e))),
+    });
     out.push({ id: 'usage', label: ['Usage'], hint: 'View', keywords: 'usage tokens prs commits pushes projects', run: () => navigate({ view: 'usage' }) });
     out.push({ id: 'settings', label: ['Settings'], hint: 'Action', keywords: 'settings password update totp', run: onSettings });
     // Still offered after the banner's Not now, while the browser can install it.
     if (canInstall) out.push({ id: 'install', label: ['Install AgentK as an app'], hint: 'Action', keywords: 'install app window dock home screen pwa', run: () => void install() });
     return out;
-  }, [projects, currentProjectId, currentSession, onNewProject, onNewSession, onMoveSession, onOpenPr, onRenameSession, onSessionToTop, onSettings, canInstall, install]);
+  }, [projects, currentProjectId, currentSession, onNewProject, onNewSession, onMoveSession, onOpenPr, onRenameSession, onSessionToTop, onSettings, canInstall, install, workItems, onAddWorkItem, onShowWorkItem, onLinkWorkItem, onError]);
 
   const findItems = useMemo<Item[]>(() => {
     if (!found || found.key !== findKey) return [];
@@ -490,6 +543,27 @@ export function CommandPalette({
       };
     });
   }, [found, findKey, projects, currentProjectId]);
+
+  const workLinkItems = useMemo<Item[]>(() => {
+    if (!work || work.key !== workKey) return [];
+    return workLinkEntries(work.matches, projects, currentProjectId).map((e): Item => {
+      const a = e.action;
+      const s = e.sessionId ? projects.flatMap((p) => p.sessions).find((x) => x.id === e.sessionId) : undefined;
+      return {
+        id: e.id, label: e.label, hint: e.hint, keywords: '', wrap: true,
+        ...(s ? { dot: dotState(s), phase: s.id } : {}),
+        ...(!a
+          ? {}
+          : 'go' in a
+            ? { run: () => navigate({ view: 'project', projectId: a.go.projectId, sessionId: a.go.sessionId }) }
+            : 'open' in a
+              ? { run: () => void window.open(a.open, '_blank', 'noopener') }
+              : 'queue' in a
+                ? { run: () => onShowWorkItem(a.queue) }
+                : { run: () => onStartForItem(a.start) }),
+      };
+    });
+  }, [work, workKey, projects, currentProjectId, onShowWorkItem, onStartForItem]);
 
   const joinItems = useMemo<Item[]>(() => {
     if (!join) return [];
@@ -532,10 +606,12 @@ export function CommandPalette({
     const matched = filterItems(items, q);
     // After Ask AgentK, so Enter still asks when a sentence matches nothing but finds sessions.
     const more = findItems.filter((f) => !matched.some((m) => m.id === `s-${f.id.slice('find-'.length)}`));
-    return [...joinItems, ...linkItems, ...matched, ...askItem, ...more];
+    // A session the work items name isn't offered again among the link's own.
+    const links = linkItems.filter((l) => !workLinkItems.some((w) => w.id === `work-go-${l.id.slice('link-go-'.length)}`));
+    return [...joinItems, ...workLinkItems, ...links, ...matched, ...askItem, ...more];
     // ask() reads the chat and screen, which change no more often than the deps here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [joinItems, linkItems, items, q, typed, refKey, join, asking, last, answerItems, askAgentk, findItems]);
+  }, [joinItems, workLinkItems, linkItems, items, q, typed, refKey, join, asking, last, answerItems, askAgentk, findItems]);
 
   useEffect(() => setIdx(0), [q, plan, last]);
   useEffect(() => {

@@ -5809,3 +5809,236 @@ div[id^='dak-mermaid-'] .label {
     padding: 0 10px 0 6px;
   }
 }
+
+/* ---------- Work queue (/queue, WorkQueueView.tsx) ---------- */
+.wq-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.wq-sync {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.wq-scroll {
+  padding: 14px 20px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.wq-empty {
+  max-width: 60ch;
+}
+.wq-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wq-item {
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.wq-item.unplaced {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--rule));
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.wq-item.dragging {
+  opacity: 0.5;
+}
+.wq-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.wq-handle {
+  cursor: grab;
+  color: var(--muted);
+  user-select: none;
+}
+.dot.none {
+  border: 1.5px dashed var(--muted);
+  box-sizing: border-box;
+}
+.wq-title {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.wq-title.closed {
+  cursor: default;
+  font-weight: 500;
+  color: var(--muted);
+}
+.wq-meta,
+.wq-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.wq-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 1px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--rule);
+  background: var(--sunk);
+  color: var(--ink);
+  text-decoration: none;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+a.wq-chip:hover {
+  border-color: var(--accent);
+}
+.wq-chip b {
+  font-weight: 600;
+  color: var(--muted);
+}
+.wq-new {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.wq-done {
+  background: var(--warn-soft);
+  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+}
+.wq-keep {
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+.wq-session {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.wq-go {
+  font: inherit;
+  color: var(--accent);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.wq-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--rule);
+}
+.wq-drop-end {
+  height: 28px;
+  border: 1px dashed var(--rule);
+  border-radius: 8px;
+}
+.wq-closed {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+.wq-closed .wq-list {
+  align-self: stretch;
+}
+.wq-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.wq-pick-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 8px;
+  align-items: center;
+  text-align: left;
+  font: inherit;
+  color: var(--ink);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.wq-pick-row .small {
+  grid-column: 2;
+}
+.wq-pick-row.sel {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.wq-pick-name {
+  overflow-wrap: anywhere;
+}
+.rail-queue-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+}
+.rail-queue-count b {
+  color: var(--accent);
+  font-weight: 600;
+}
+@media (max-width: 760px) {
+  .wq-scroll {
+    padding: 12px 12px 32px;
+  }
+  .wq-chip,
+  .wq-go,
+  .wq-keep {
+    min-height: 28px;
+  }
+  .wq-acts .btn,
+  .wq-session .btn,
+  .wq-more {
+    min-height: 36px;
+  }
+}
+/* The rail footer's work queue button, beside Settings; a dot while synced items wait for their place. */
+.rail-queue-btn {
+  position: relative;
+}
+.rail-queue-btn.sel {
+  color: var(--accent);
+}
+.rail-queue-new {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
