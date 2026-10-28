@@ -141,8 +141,8 @@ changed files*).
 Big diffs aren't drawn until asked for, so a big branch can't freeze the page (`defaultOpen()` in
 `src/web/diff.ts`). Files open by default while their rows fit a 2,000-row budget, and files with
 comments always open. A deleted file starts closed, since its diff is only removed lines, and
-leaves its rows in the budget to the files after it. A diff of more than 1,000 rows opens to *Large diff: N lines* and **Show
-diff**, which draws 2,000 rows per click, with **Show more** under them; comments on rows not drawn
+leaves its rows in the budget to the files after it. A diff of more than 1,000 rows opens to
+*Large diff: N lines* and **Show diff**, which draws 2,000 rows per click, with **Show more** under them; comments on rows not drawn
 yet are listed under that button. A phone lays rows out several times slower, so at the phone width
 those numbers are 1,000, 500 and 500 (`DESKTOP_BUDGET`, `PHONE_BUDGET`). The panel picks them once,
 when it opens, so turning a phone sideways or resizing the window doesn't open or close diffs.
