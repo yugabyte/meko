@@ -395,14 +395,19 @@ export function projectUsage(db: Db, projectId: string, days = 14, now = Date.no
   const byModel = usageByModel(db, projectId);
   const calls = mekoCalls(db, projectId);
   const bySessionMeko = mekoBy(calls, (r) => r.session_id);
-  const bySession: SessionUsage[] = all<SumRow & { id: string; name: string; stage: string; desired: string }>(db,
-    `SELECT s.id, s.name, s.stage, s.desired, ${SUMS} FROM usage_messages u JOIN sessions s ON s.id = u.session_id
+  // The most recently used first, the largest first among ties.
+  const bySession: SessionUsage[] = all<SumRow & { id: string; name: string; stage: string; desired: string; last_at: number }>(db,
+    `SELECT s.id, s.name, s.stage, s.desired, MAX(u.at) AS last_at, ${SUMS} FROM usage_messages u JOIN sessions s ON s.id = u.session_id
      WHERE s.project_id = ? GROUP BY s.id`, projectId)
     .map((r) => ({
-      sessionId: r.id, name: r.name, stage: r.stage as SessionUsage['stage'], archived: r.desired === 'archived',
-      usage: toUsage(r), meko: sessionMeko(bySessionMeko.get(r.id)),
+      lastAt: r.last_at,
+      row: {
+        sessionId: r.id, name: r.name, stage: r.stage as SessionUsage['stage'], archived: r.desired === 'archived',
+        usage: toUsage(r), meko: sessionMeko(bySessionMeko.get(r.id)),
+      },
     }))
-    .sort((a, b) => totalTokens(b.usage) - totalTokens(a.usage));
+    .sort((a, b) => b.lastAt - a.lastAt || totalTokens(b.row.usage) - totalTokens(a.row.usage))
+    .map((x) => x.row);
   const cost = toCost(all<CostRow>(db,
     `SELECT ${COST_SUMS} FROM usage_messages u JOIN sessions s ON s.id = u.session_id WHERE s.project_id = ? AND ${PRICED} GROUP BY u.model`, projectId));
 
@@ -485,7 +490,9 @@ export function usageOverview(db: Db, days = 14, now = Date.now(), calls = mekoC
     }))
     // A deleted project that never ran a session has nothing to show.
     .filter((p) => !p.deleted || p.sessions > 0)
-    .sort((a, b) => Number(a.deleted) - Number(b.deleted) || totalTokens(b.usage) - totalTokens(a.usage));
+    // Current projects first, then deleted ones; in each, the most recently used first (none yet last).
+    .sort((a, b) =>
+      Number(a.deleted) - Number(b.deleted) || (b.lastActiveAt ?? -1) - (a.lastActiveAt ?? -1) || totalTokens(b.usage) - totalTokens(a.usage));
 
   const byModel = usageByModel(db);
   const sum = (f: (p: ProjectUsageSummary) => number) => byProject.reduce((n, p) => n + f(p), 0);

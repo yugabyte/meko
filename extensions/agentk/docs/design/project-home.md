@@ -5,7 +5,8 @@ Part of the [AgentK design](../design.md).
 ![The project home page with datapacks, recent activity, token usage and settings](../screenshots/project-home.png)
 
 Recent activity shows the project's last 50 events, newest first, and scrolls inside its box so it
-never pushes the rest of the page down.
+never pushes the rest of the page down. Token usage's table by session scrolls the same way past about 10 rows,
+the most recently used first (see [Token usage](token-usage.md)).
 
 **Share** sits in the project's header: it shares the whole project, through its dedicated
 datapack, and opens the Share dialog. While Meko's API URL isn't known (a self-hosted Meko with

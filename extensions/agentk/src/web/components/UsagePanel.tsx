@@ -1,9 +1,15 @@
-import { useLayoutEffect, useRef, useState } from 'react';
-import type { DailyUsage, ProjectUsage, TokenUsage, UsageCost } from '../../shared/types';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { DailyUsage, ProjectUsage, SessionUsage, TokenUsage, UsageCost } from '../../shared/types';
 import { STAGE_LABELS } from '../../shared/types';
 import { navigate } from '../router';
+import { nextSort, sortRows, type SortState } from '../sort';
 import { creditsNumber, cx, formatCostOf, formatTokens, modelLabel, rowTokens, totalTokens, usageTitle } from '../util';
 import { MekoUsageSection } from './MekoUsageSection';
+
+type SessionKey = 'name' | 'meko' | 'output' | 'total' | 'credits';
+
+const sessionValue = (s: SessionUsage, k: SessionKey): number | string =>
+  k === 'name' ? s.name : k === 'meko' ? s.meko.found : k === 'output' ? s.usage.output : k === 'credits' ? (s.usage.credits ?? 0) : totalTokens(s.usage);
 
 /**
  * Token usage for a project: headline numbers, a 14-day chart, Meko use, and per-session and
@@ -19,6 +25,12 @@ export function UsagePanel({ projectId, usage, mekoOn }: { projectId: string; us
   // Kiro's credits get a column once any session (or model) has some.
   const sessionCredits = usage.bySession.some((s) => s.usage.credits);
   const modelCredits = usage.byModel.some((m) => m.usage.credits);
+  // Until a column is picked, sessions keep the server's order: the most recently used first.
+  const [sessionSort, setSessionSort] = useState<SortState<SessionKey>>({ key: null, dir: 'desc' });
+  const sessions = useMemo(() => sortRows(usage.bySession, sessionSort, sessionValue), [usage.bySession, sessionSort]);
+  const sessionHeader = (key: SessionKey, label: string, opts: { text?: boolean; className?: string; title?: string } = {}) => (
+    <SortHeader sort={sessionSort} col={key} text={opts.text} className={opts.className} title={opts.title} label={label} onSort={() => setSessionSort((cur) => nextSort(cur, key, !!opts.text))} />
+  );
   return (
     <section className="box usage-box">
       <div className="usage-hd">
@@ -63,43 +75,46 @@ export function UsagePanel({ projectId, usage, mekoOn }: { projectId: string; us
           )}
 
           <div className="usage-tables">
-            <table className="usage-table">
-              <thead>
-                <tr>
-                  <th>Session</th>
-                  {mekoColumn && <th className="num" title="Meko lookups that found something, of all lookups">Meko</th>}
-                  <th className="num">Output</th>
-                  <th className="num">Total</th>
-                  {sessionCredits && <CreditsHeader />}
-                </tr>
-              </thead>
-              <tbody>
-                {usage.bySession.map((s) => (
-                  <tr key={s.sessionId} title={usageTitle(s.usage)}>
-                    <td>
-                      {s.archived ? (
-                        <span>{s.name}</span>
-                      ) : (
-                        <button className="link-btn inline" onClick={() => navigate({ view: 'project', projectId, sessionId: s.sessionId })}>
-                          {s.name}
-                        </button>
-                      )}{' '}
-                      <span className="muted small">{s.archived ? 'archived' : STAGE_LABELS[s.stage].toLowerCase()}</span>
-                    </td>
-                    {mekoColumn && (
-                      <td
-                        className="num"
-                        title={`${s.meko.found} of ${s.meko.lookups} Meko lookups found something · ${s.meko.saves} ${s.meko.saves === 1 ? 'save' : 'saves'}`}
-                      >
-                        {s.meko.lookups > 0 ? `${s.meko.found}/${s.meko.lookups}` : '—'}
-                      </td>
-                    )}
-                    <TokenCells usage={s.usage} />
-                    {sessionCredits && <CreditsCell usage={s.usage} />}
+            {/* About 10 sessions show; the rest scroll here, under a header that stays put. */}
+            <div className="rows-scroll" tabIndex={0} aria-label="Usage by session">
+              <table className="usage-table">
+                <thead>
+                  <tr>
+                    {sessionHeader('name', 'Session', { text: true })}
+                    {mekoColumn && sessionHeader('meko', 'Meko', { className: 'num', title: 'Meko lookups that found something, of all lookups' })}
+                    {sessionHeader('output', 'Output', { className: 'num' })}
+                    {sessionHeader('total', 'Total', { className: 'num' })}
+                    {sessionCredits && sessionHeader('credits', 'Credits', { className: 'num', title: "What Kiro billed for its sessions' turns" })}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {sessions.map((s) => (
+                    <tr key={s.sessionId} title={usageTitle(s.usage)}>
+                      <td>
+                        {s.archived ? (
+                          <span>{s.name}</span>
+                        ) : (
+                          <button className="link-btn inline" onClick={() => navigate({ view: 'project', projectId, sessionId: s.sessionId })}>
+                            {s.name}
+                          </button>
+                        )}{' '}
+                        <span className="muted small">{s.archived ? 'archived' : STAGE_LABELS[s.stage].toLowerCase()}</span>
+                      </td>
+                      {mekoColumn && (
+                        <td
+                          className="num"
+                          title={`${s.meko.found} of ${s.meko.lookups} Meko lookups found something · ${s.meko.saves} ${s.meko.saves === 1 ? 'save' : 'saves'}`}
+                        >
+                          {s.meko.lookups > 0 ? `${s.meko.found}/${s.meko.lookups}` : '—'}
+                        </td>
+                      )}
+                      <TokenCells usage={s.usage} />
+                      {sessionCredits && <CreditsCell usage={s.usage} />}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             <table className="usage-table">
               <thead>
                 <tr>
@@ -181,6 +196,39 @@ function CreditsHeader() {
 /** The credits Kiro billed, in a table's Credits column; a dash for Claude Code's rows. */
 export function CreditsCell({ usage }: { usage: TokenUsage }) {
   return <td className="num">{usage.credits ? creditsNumber(usage.credits) : '—'}</td>;
+}
+
+/** A column header that sorts its table: tap to sort by it, tap again to reverse. */
+export function SortHeader<K extends string>({
+  sort,
+  col,
+  text,
+  className,
+  title,
+  label,
+  onSort,
+}: {
+  sort: SortState<K>;
+  col: K;
+  text?: boolean;
+  className?: string;
+  title?: string;
+  label: string;
+  onSort: () => void;
+}) {
+  const on = sort.key === col;
+  const arrow = on ? (sort.dir === 'asc' ? '▲' : '▼') : '';
+  const next = on ? (sort.dir === 'asc' ? 'descending' : 'ascending') : text ? 'A to Z' : 'largest first';
+  return (
+    <th className={className} aria-sort={on ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined} title={title}>
+      <button type="button" className={cx('th-sort', on && 'on')} onClick={onSort} aria-label={`${label}: sort ${next}`}>
+        {label}
+        <span className="th-arrow" aria-hidden="true">
+          {arrow}
+        </span>
+      </button>
+    </th>
+  );
 }
 
 /** The 14-day chart's heading: tokens, and Kiro's credits beside them once any day has some. */

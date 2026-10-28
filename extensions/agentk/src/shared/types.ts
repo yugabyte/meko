@@ -306,7 +306,7 @@ export interface ProjectUsage {
   mekoFirstTurn: MekoFirstTurn;
   mekoLearning: MekoLearning;
   byModel: ModelUsage[];
-  /** Every session with usage, archived ones included, largest first. */
+  /** Every session with usage, archived ones included, the most recently used first, the largest first among ties. */
   bySession: SessionUsage[];
   /** The last 14 days, oldest first, zero-filled. */
   daily: DailyUsage[];
@@ -341,7 +341,7 @@ export interface UsageOverview {
   mergedPrs: number;
   directPushes: number;
   directCommits: number;
-  /** Current projects first, then deleted ones; each by total tokens, largest first. */
+  /** Current projects first, then deleted ones; in each, the most recently used first, the largest first among ties. */
   byProject: ProjectUsageSummary[];
   byModel: ModelUsage[];
   /** The last 14 days, oldest first, zero-filled. */

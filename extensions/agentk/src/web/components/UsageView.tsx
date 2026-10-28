@@ -7,7 +7,7 @@ import { nextSort, sortRows, type SortState } from '../sort';
 import { creditsNumber, cx, formatCostOf, modelLabel, relativeTime, repoFolder, rowTokens, totalTokens, usageTitle } from '../util';
 import { credited, MekoUsageSection, savedClass, savedText, savedTitle } from './MekoUsageSection';
 import { TopBar } from './TopBar';
-import { chartHeading, CostStat, CreditsCell, CreditsStat, DailyChart, DailyTable, Stat, TokenCells } from './UsagePanel';
+import { chartHeading, CostStat, CreditsCell, CreditsStat, DailyChart, DailyTable, SortHeader, Stat, TokenCells } from './UsagePanel';
 import { Busy } from './common';
 
 const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
@@ -51,7 +51,7 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
   const [usage, setUsage] = useState<UsageOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showTable, setShowTable] = useState(false);
-  // Until a column is picked, projects keep the server's order: current ones first, largest first.
+  // Until a column is picked, projects keep the server's order: current ones first, the most recently used first.
   const [projectSort, setProjectSort] = useState<SortState<ProjectKey>>({ key: null, dir: 'desc' });
   const [modelSort, setModelSort] = useState<SortState<ModelKey>>({ key: null, dir: 'desc' });
   const projects = useMemo(() => sortRows(usage?.byProject ?? [], projectSort, projectValue), [usage, projectSort]);
@@ -131,7 +131,8 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
                 <p className="muted">No projects yet.</p>
               ) : (
                 <>
-                  <div className="table-scroll">
+                  {/* About 10 projects show; the rest scroll here (and sideways on a phone), under a header that stays put. */}
+                  <div className="table-scroll rows-scroll tall" tabIndex={0} aria-label="Usage by project">
                     <table className="usage-table usage-projects">
                       <thead>
                         <tr>
@@ -232,39 +233,6 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
         )}
       </div>
     </div>
-  );
-}
-
-/** A column header that sorts its table: tap to sort by it, tap again to reverse. */
-function SortHeader<K extends string>({
-  sort,
-  col,
-  text,
-  className,
-  title,
-  label,
-  onSort,
-}: {
-  sort: SortState<K>;
-  col: K;
-  text?: boolean;
-  className?: string;
-  title?: string;
-  label: string;
-  onSort: () => void;
-}) {
-  const on = sort.key === col;
-  const arrow = on ? (sort.dir === 'asc' ? '▲' : '▼') : '';
-  const next = on ? (sort.dir === 'asc' ? 'descending' : 'ascending') : text ? 'A to Z' : 'largest first';
-  return (
-    <th className={className} aria-sort={on ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined} title={title}>
-      <button type="button" className={cx('th-sort', on && 'on')} onClick={onSort} aria-label={`${label}: sort ${next}`}>
-        {label}
-        <span className="th-arrow" aria-hidden="true">
-          {arrow}
-        </span>
-      </button>
-    </th>
   );
 }
 
