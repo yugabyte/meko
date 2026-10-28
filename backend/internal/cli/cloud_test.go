@@ -17,8 +17,9 @@ import (
 
 const testCloudKey = "mko_tkn_cloud_0123456789wxyz"
 
-// fakeCloudDown makes fakeCloud's GET /api/v1/datapacks fail with a 500.
-var fakeCloudDown atomic.Bool
+// fakeCloudDown makes fakeCloud's GET /api/v1/datapacks fail with a 500, and fakeCloudEmpty makes it
+// list none.
+var fakeCloudDown, fakeCloudEmpty atomic.Bool
 
 // fakeCloud is a Meko server for the link's checks: MCP at /mcp, taking only testCloudKey, and the
 // REST API's envelope at /api/v1, where GET /datapacks gives two rows to testCloudKey.
@@ -35,6 +36,8 @@ func fakeCloud(t *testing.T) string {
 			case fakeCloudDown.Load():
 				http.Error(w, `{"data":null,"error":{"code":"INTERNAL","message":"Cloud is down."}}`,
 					http.StatusInternalServerError)
+			case fakeCloudEmpty.Load():
+				_, _ = w.Write([]byte(`{"data":[]}`))
 			default:
 				_, _ = w.Write([]byte(`{"data":[{"datapack_id":"c0ffee00-0000-4000-8000-000000000001",` +
 					`"datapack_name":"team-runbooks","grant":"viewer","created_at":"2026-10-02T00:00:00Z",` +
@@ -122,9 +125,10 @@ func TestCloudLink(t *testing.T) {
 	}
 }
 
-// mekosh datapacks lists this Meko's datapacks, then, while Meko Cloud is linked, its datapacks,
-// through the running server; --local leaves Meko Cloud out, and a Cloud that fails leaves a
-// warning after the local rows.
+// mekosh datapacks lists this Meko's datapacks and, while Meko Cloud is linked, its datapacks,
+// through the running server, as one list of names and descriptions by name (where each lives, and
+// its id, are --json's); --local leaves Meko Cloud out, and a Cloud that fails leaves a warning after
+// the local rows.
 func TestDatapacksCloud(t *testing.T) {
 	dir, port := setup(t)
 	t.Setenv("MEKO_SECRETS", "file")
@@ -133,7 +137,7 @@ func TestDatapacksCloud(t *testing.T) {
 	want(t, "start", code, 0, out+errs, "is running")
 
 	code, out, errs = runSh("datapacks", "--data-dir", dir)
-	want(t, "unlinked", code, 0, out, "  default  (Created by Meko on first start.)")
+	want(t, "unlinked", code, 0, out, "default   Created by Meko on first start.\n")
 	if errs != "" || strings.Contains(out, "local") {
 		t.Fatalf("unlinked, the list is unmarked and says nothing of Meko Cloud:\n%s%s", out, errs)
 	}
@@ -145,12 +149,10 @@ func TestDatapacksCloud(t *testing.T) {
 	want(t, "cloud_link", code, 0, out+errs, "Linked to")
 
 	code, out, errs = runSh("datapacks", "--data-dir", dir)
-	want(t, "linked", code, 0, out+errs,
-		"c0ffee00-0000-4000-8000-000000000001  team-runbooks  cloud shared\n"+
-			"c0ffee00-0000-4000-8000-000000000002  cloud-notes  cloud  (mine)\n")
-	if strings.Index(out, "  default  local") > strings.Index(out, "team-runbooks") ||
-		strings.Contains(out, "postgresql") {
-		t.Fatalf("local rows come first, and nothing else of Cloud's rows:\n%s", out)
+	if code != 0 || errs != "" || out != "cloud-notes     mine\n"+
+		"default         Created by Meko on first start.\n"+
+		"team-runbooks\n" {
+		t.Fatalf("linked, one list by name of just names and descriptions: %d\n%s%s", code, out, errs)
 	}
 	code, out, _ = runSh("datapacks", "--data-dir", dir, "--local")
 	if code != 0 || strings.Contains(out, "team-runbooks") || strings.Contains(out, "local") {
@@ -181,7 +183,20 @@ func TestDatapacksCloud(t *testing.T) {
 	want(t, "Cloud down", code, 0, errs,
 		"mekosh: couldn't list Meko Cloud's datapacks: Meko Cloud couldn't list datapacks: Cloud is down "+
 			"(mekosh datapacks --local skips Meko Cloud)")
-	want(t, "Cloud down", code, 0, out, "  default  local")
+	want(t, "Cloud down", code, 0, out, "default   Created by Meko on first start.\n")
+	fakeCloudDown.Store(false)
+
+	// With no datapack here and none in Meko Cloud, the list says so.
+	code, out, errs = runSh("delete_datapack", "--data-dir", dir, "default", "--force")
+	want(t, "delete_datapack default --force", code, 0, out+errs, "Deleted datapack default\n")
+	fakeCloudEmpty.Store(true)
+	t.Cleanup(func() { fakeCloudEmpty.Store(false) })
+	if code, out, errs = runSh("datapacks", "--data-dir", dir); code != 0 || out != "No datapacks\n" || errs != "" {
+		t.Fatalf("no datapacks, linked: %d\n%s%s", code, out, errs)
+	}
+	if code, out, errs = runSh("datapacks", "--data-dir", dir, "--local"); code != 0 || out != "No datapacks\n" {
+		t.Fatalf("no datapacks, --local: %d\n%s%s", code, out, errs)
+	}
 }
 
 // mekosh works on the linked Meko Cloud's datapacks. The "Meko Cloud" here is a second Meko server,
@@ -215,8 +230,8 @@ func TestCloudDatapacks(t *testing.T) {
 		t.Fatalf("create_datapack --cloud made it here:\n%s", out)
 	}
 	code, out, errs = runSh("datapacks", "--data-dir", dir)
-	want(t, "datapacks", code, 0, out+errs, "  team-notes  cloud\n")
-	want(t, "datapacks", code, 0, out, "  default  local  (")
+	want(t, "datapacks", code, 0, "\n"+out+errs, "\nteam-notes\n")
+	want(t, "datapacks", code, 0, "\n"+out, "\ndefault ")
 
 	const runbook = "the deploy runbook lives in the team wiki"
 	code, out, errs = runSh("add_memory", "--data-dir", dir, runbook, "--datapack", "team-notes")
@@ -308,7 +323,7 @@ func TestCloudDatapacks(t *testing.T) {
 	withStdin(t, "y\n")
 	code, out, errs = runSh("delete_datapack", "--data-dir", dir, "cloud:notes")
 	want(t, "delete_datapack cloud:", code, 0, out+errs, "Deleted Meko Cloud datapack notes\n")
-	if _, out, _ = runSh("datapacks", "--data-dir", dir, "--local"); !strings.Contains(out, "  notes") {
+	if _, out, _ = runSh("datapacks", "--data-dir", dir, "--local"); !strings.Contains("\n"+out, "\nnotes") {
 		t.Fatalf("delete_datapack cloud:notes deleted this Meko's:\n%s", out)
 	}
 	code, _, errs = runSh("search", "--data-dir", dir, "x", "--datapack", "cloud:nosuch")

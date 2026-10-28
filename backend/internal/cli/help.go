@@ -145,8 +145,9 @@ var mekoshGroups = []string{"Datapacks", "Memory and knowledge", "At the prompt 
 var mekoshCommands = []command{
 	{name: "datapacks", group: "Datapacks", summary: "List the datapacks, and the linked Meko Cloud's",
 		usage: "mekosh datapacks [flags]", examples: []example{
-			{"mekosh datapacks", "this Meko's, then the linked Meko Cloud's, each marked local or cloud (and shared)"},
+			{"mekosh datapacks", "this Meko's and the linked Meko Cloud's, by name, with their descriptions"},
 			{"mekosh datapacks --local", "only this Meko's"},
+			{"mekosh datapacks --json", "with each one's id, and whether it's this Meko's or Meko Cloud's (and shared)"},
 		}},
 	{name: "create_datapack", group: "Datapacks", summary: "Create a datapack",
 		usage: "mekosh create_datapack <name> [flags]", examples: []example{

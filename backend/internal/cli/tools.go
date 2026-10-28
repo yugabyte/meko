@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -234,7 +235,7 @@ func (t *tools) resolve(ctx context.Context, named string) (target, error) {
 		}
 	}
 	if side == "local" {
-		return target{}, fmt.Errorf("no datapack is named %q (mekosh datapacks lists them)", rest)
+		return target{}, fmt.Errorf("no datapack is named %q here (mekosh datapacks --local lists them)", rest)
 	}
 	c, err := t.cloudSide()
 	if err != nil {
@@ -260,10 +261,11 @@ func (t *tools) resolve(ctx context.Context, named string) (target, error) {
 	case len(found) == 1:
 		return found[0], nil
 	case len(found) > 1:
-		return target{}, fmt.Errorf("%d Meko Cloud datapacks are named %q: give its id (mekosh datapacks lists them)",
+		return target{}, fmt.Errorf("%d Meko Cloud datapacks are named %q: give its id (mekosh datapacks --json lists them)",
 			len(found), rest)
 	case side == "cloud":
-		return target{}, fmt.Errorf("no Meko Cloud datapack is named %q (mekosh datapacks lists them)", rest)
+		return target{}, fmt.Errorf("no Meko Cloud datapack is named %q (mekosh datapacks --json lists them "+
+			"under cloud)", rest)
 	}
 	return target{}, fmt.Errorf("no datapack is named %q here or in Meko Cloud (mekosh datapacks lists them)", rest)
 }
@@ -339,9 +341,10 @@ func runTool(l paths.Layout, prog, cmd string, f toolFlags, stdin io.Reader, std
 	return exitOK
 }
 
-// toolDatapacks lists this Meko's datapacks, then, while Meko Cloud is linked and --local isn't given,
-// the linked Meko Cloud's, each row marked local or cloud. A Meko Cloud that fails leaves a warning
-// after the local rows: they're still right.
+// toolDatapacks lists this Meko's datapacks and, while Meko Cloud is linked and --local isn't given,
+// the linked Meko Cloud's, by name: just names and descriptions, fitted to the terminal. Where each
+// lives, whether it's shared and its id are --json's. A Meko Cloud that fails leaves a warning after
+// the local rows: they're still right.
 func toolDatapacks(ctx context.Context, t *toolSession, l paths.Layout, f toolFlags, stdout, stderr io.Writer) error {
 	text, err := t.call(ctx, "datapack_list", map[string]any{})
 	if err != nil || (f.json && f.local) {
@@ -349,7 +352,6 @@ func toolDatapacks(ctx context.Context, t *toolSession, l paths.Layout, f toolFl
 		return err
 	}
 	var rows []struct {
-		ID          string `json:"datapack_id"`
 		Name        string `json:"datapack_name"`
 		Description string `json:"description"`
 	}
@@ -381,32 +383,33 @@ func toolDatapacks(ctx context.Context, t *toolSession, l paths.Layout, f toolFl
 		fmt.Fprintln(stdout, string(b))
 		return nil
 	}
-	marked := linked || cloudErr != nil
+	local := make([]nameDesc, 0, len(rows))
 	for _, r := range rows {
-		line := r.ID + "  " + r.Name
-		if marked {
-			line += "  local"
-		}
-		if r.Description != "" {
-			line += "  (" + r.Description + ")"
-		}
-		fmt.Fprintln(stdout, line)
+		local = append(local, nameDesc{r.Name, r.Description})
 	}
+	list := datapackList(local, cloud)
+	if len(list) == 0 && cloudErr == nil {
+		fmt.Fprintln(stdout, "No datapacks")
+	}
+	fmt.Fprint(stdout, nameDescTable(list, termWidth(stdout)))
 	if cloudErr != nil {
 		fmt.Fprintf(stderr, "%s: %v (mekosh datapacks --local skips Meko Cloud)\n", progMekosh, cloudErr)
-		return nil
-	}
-	for _, d := range cloud {
-		line := d.DatapackID + "  " + d.DatapackName + "  cloud"
-		if d.Grant != "" && d.Grant != "owner" {
-			line += " shared"
-		}
-		if d.Description != "" {
-			line += "  (" + d.Description + ")"
-		}
-		fmt.Fprintln(stdout, line)
 	}
 	return nil
+}
+
+// datapackList is this Meko's datapacks and Meko Cloud's in one list, by name ignoring case. It's
+// stable, so this Meko's datapack comes first when Meko Cloud has one of the same name, as
+// --datapack picks it.
+func datapackList(local []nameDesc, cloud []cloudlink.Datapack) []nameDesc {
+	list := slices.Clone(local)
+	for _, d := range cloud {
+		list = append(list, nameDesc{d.DatapackName, d.Description})
+	}
+	slices.SortStableFunc(list, func(a, b nameDesc) int {
+		return strings.Compare(strings.ToLower(a.name), strings.ToLower(b.name))
+	})
+	return list
 }
 
 // toolCreateDatapack creates a datapack here, or with --cloud in the linked Meko Cloud, through its
