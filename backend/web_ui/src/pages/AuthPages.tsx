@@ -144,7 +144,8 @@ export function SignInPage() {
 // Opened from the link meko setup_link prints (/setup?token=...): creates the login, or replaces
 // it when one exists (reset).
 export function SetupPage({ reset }: { reset: boolean }) {
-  const token = new URLSearchParams(window.location.search).get("token") ?? "";
+  // Read once: the address can change under the page (Gate's replaceState) without a remount.
+  const [token] = useState(() => new URLSearchParams(window.location.search).get("token") ?? "");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");

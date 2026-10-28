@@ -24,6 +24,9 @@ export function Gate() {
     });
   }, [auth?.access]);
 
+  const token = new URLSearchParams(window.location.search).get("token");
+  // A setup link's screen comes before sign-in, so its address (and the token in it) stays put.
+  const onSetupLink = !!auth?.setup_required && path === SETUP_PATH && !!token;
   const needsSignIn = auth?.access === "remote" && !auth.signed_in && !auth.local_access;
   const inApp = auth && !refused && !auth.setup_required && !needsSignIn;
   // The sign-in screens' addresses mean nothing inside the app: go where the sign-in was headed.
@@ -36,15 +39,14 @@ export function Gate() {
   }, [inApp, path]);
   // Any other page asks for the sign-in screen first, coming back to it after.
   useEffect(() => {
-    if (needsSignIn && path !== SIGNIN_PATH) history.replaceState(null, "", signinHref());
-  }, [needsSignIn, path]);
+    if (needsSignIn && !onSetupLink && path !== SIGNIN_PATH) history.replaceState(null, "", signinHref());
+  }, [needsSignIn, onSetupLink, path]);
 
   if (!auth) return status.error ? <UnreachablePage error={status.error} onRetry={status.reload} /> : <Loading />;
   // Shown in place, not loaded again, so a server that keeps refusing can't loop the page.
   if (refused) return auth.access === "remote" ? <SignInPage /> : <NotLocalPage />;
   if (auth.setup_required) {
-    const token = new URLSearchParams(window.location.search).get("token");
-    if (path === SETUP_PATH && token) return <SetupPage reset={auth.reset} />;
+    if (onSetupLink) return <SetupPage reset={auth.reset} />;
     // A login that a waiting setup link would replace still signs in until the link is used.
     if (auth.reset && path === SIGNIN_PATH) return <SignInPage />;
     return <SetupNeededPage reset={auth.reset} />;
