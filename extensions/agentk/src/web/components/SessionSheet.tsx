@@ -3,7 +3,7 @@ import type { CloseSessionRequest, DiscardCheck, Session, SessionAction } from '
 import { moveBlockedIn } from '../../shared/stages';
 import { api } from '../api';
 import { FONT_MAX, FONT_MIN } from '../keys';
-import { setTerminalFontSize, terminalFontSize } from '../terminals';
+import { getTerminal, setTerminalFontSize, terminalFontSize } from '../terminals';
 import { agentName, discardingText } from '../util';
 import { Busy, Elapsed, trapTab } from './common';
 
@@ -341,6 +341,7 @@ export function SessionSheet({
             Move to another stage
           </SheetItem>
         )}
+        <SheetItem onClick={then(() => getTerminal(session.id).openFind())}>Find in terminal</SheetItem>
         <SheetItem hint="›" onClick={then(onRename)}>
           Rename session
         </SheetItem>

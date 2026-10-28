@@ -1576,6 +1576,116 @@ textarea.input {
 .term-wrap.away .term-host {
   opacity: 0.4;
 }
+/* Find in the terminal (TermFind.tsx): over its top right, in the terminal theme's colors (the
+   --term-* variables follow data-term-theme, not the app's theme). */
+.term-find {
+  position: absolute;
+  top: 10px;
+  right: 18px;
+  z-index: 4;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  max-width: calc(100% - 28px);
+  padding: 5px 6px;
+  border-radius: 8px;
+  background: var(--term-key);
+  color: var(--term-ink);
+  border: 1px solid var(--term-rule);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+}
+.term-find-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.term-find-row:first-child {
+  flex: 1 1 220px;
+  gap: 8px;
+}
+.term-find-input {
+  flex: 1;
+  min-width: 0;
+  width: 180px;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--term-ink);
+  background: var(--term);
+  border: 1px solid var(--term-rule);
+  border-radius: 5px;
+  padding: 4px 7px;
+}
+.term-find-input:focus {
+  outline: none;
+  border-color: var(--term-key-on-ink);
+}
+.term-find-count {
+  min-width: 64px;
+  white-space: nowrap;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+.term-find-btn {
+  border: 0;
+  background: transparent;
+  color: var(--term-ink);
+  font-family: var(--mono);
+  font-size: 13px;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 5px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.term-find-btn:hover:not(:disabled) {
+  background: var(--term-key-down);
+}
+.term-find-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.term-find-btn[aria-pressed='true'] {
+  background: var(--term-key-on);
+  color: var(--term-key-on-ink);
+}
+.term-find-note {
+  flex-basis: 100%;
+  font-size: 11.5px;
+  opacity: 0.75;
+}
+@media (pointer: coarse) {
+  .term-find-btn {
+    min-width: 40px;
+    height: 40px;
+  }
+  .term-find-input {
+    min-height: 36px;
+  }
+  /* The toast moves to the top on touch screens (below); with the bar there, it stays at the bottom. */
+  .term-find ~ .term-toast {
+    top: auto;
+    bottom: 14px;
+  }
+}
+/* A phone: the bar spans the terminal, the field on one row and its buttons spread on the next. */
+@media (max-width: 760px) {
+  .term-find {
+    top: 6px;
+    left: 8px;
+    right: 8px;
+    max-width: none;
+  }
+  .term-find-input {
+    font-size: 16px;
+  }
+  .term-find-btns {
+    width: 100%;
+    justify-content: space-between;
+  }
+}
 /* On touch screens the toast sits at the top, clear of the overlay and the key bar. */
 @media (pointer: coarse) {
   .term-toast {

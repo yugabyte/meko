@@ -260,12 +260,32 @@ The search bar at the top of the rail (the AgentK logo, "Ask AgentK" and the sho
 opens it too; either way it opens over that bar, at the top left. In the palette, session names show
 in the accent colour and project names in bold, so they don't read as commands. On Linux and Windows
 these use Ctrl, so the terminal doesn't get Ctrl+K, Ctrl+1–9 or Ctrl+Tab; every other key passes
-through to the terminal whenever it has focus. To copy from the terminal, drag across the text and
+through to the terminal whenever it has focus, except the find shortcut below. To copy from the terminal, drag across the text and
 press `Ctrl+C` (`⌘C`), which
 copies rather than interrupting Claude while text is selected. While Claude has the mouse (it runs
 full screen), a plain drag goes to Claude; Shift-drag (Option-drag on a Mac) selects in the browser
 instead. Text a program copies itself (OSC 52) goes on the clipboard too. Clipboard access
 needs HTTPS or localhost.
+
+**Finding text in the terminal.** With the terminal focused, `⌘F` (`Ctrl+Shift+F` on Linux and
+Windows, so `Ctrl+F` still reaches the agent) opens a find bar over its top right (`TermFind.tsx`);
+anywhere else on the page the browser's own find works as usual, which can't see the terminal's
+scrollback (xterm draws only the rows on screen, and WebGL on touch screens). On a phone, **Find in
+terminal** in the ⋯ sheet opens it, as does **Find in ‹session›'s terminal** in the palette. It
+searches the screen and the 10,000 lines of scrollback with xterm's search addon, highlights every
+match and the current one in colors for the terminal's theme (`termfind.ts`), and says where you
+are ("3 of 12"; past 1,000 matches only the oldest 1,000 are highlighted and it says "More than
+1,000"). The first match is the newest; Enter (or ↑) steps to older ones and Shift+Enter (or ↓) to
+newer ones, scrolling the terminal to each. **Aa**, **ab** and **.\*** turn on match case, whole word
+and regex (a broken regex says "Invalid pattern"). Text selected on one line becomes the query.
+While the bar is open, new output is searched again once it pauses (200 ms), without moving the
+view. Esc in the field, or ×, closes it, clears the highlights and the selection (so `Ctrl+C`
+interrupts Claude again rather than copying) and focuses the terminal; Esc in the terminal still
+goes to Claude. The bar's state is the terminal's, so it survives switching sessions, and clicks on
+it never reach the terminal, so searching a session open on another screen doesn't move it here.
+While the agent runs full screen (the alternate buffer: OpenCode, Claude Code's full-screen mode)
+there's no scrollback, and the bar says it searches only the screen. A phrase across a line break
+Claude Code made itself isn't found.
 
 **The projects pane's width, and hiding it.** In the wide layout, dragging the pane's right edge
 (or the arrow keys on it) sets its width, from 180 to 480 px; a double-click on the edge goes back

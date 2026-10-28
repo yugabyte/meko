@@ -8,6 +8,7 @@ import { Busy } from './common';
 import { HeldImages } from './HeldImages';
 import { MekoUpload } from './MekoUpload';
 import { StartupPanel } from './StartupPanel';
+import { TermFind } from './TermFind';
 import { TermKeys } from './TermKeys';
 
 /**
@@ -76,6 +77,7 @@ export function TerminalPane({ session, onAsk, mekoTo }: { session: Session; onA
         }}
       >
         <div className="term-host" ref={hostRef} />
+        {term.find.open && !showStartup && <TermFind term={term} agent={agentName(session)} />}
         {showStartup && <StartupPanel session={session} onShowTerminal={() => setPeeked(startKey)} />}
         {overlay && (
           <div className="term-overlay">
