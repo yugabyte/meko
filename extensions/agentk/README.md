@@ -42,7 +42,7 @@ web UI (Settings › Meko Cloud, which links to Meko Cloud's sign-up and login p
 latest release), and then Meko installs AgentK:
 
 ```sh
-gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
+gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
 meko install_extension agentk
 ```
 
@@ -160,7 +160,7 @@ your phone can connect.
   what you ask; it posts your review on GitHub only when you say. **Update to latest** checks out
   the author's new commits and sums up what changed.
 - **Ask AgentK in plain words:** type an instruction into **Ask AgentK** (`⌘K`), such as "start a
-  design task in agent-k-local to add dark mode to the Usage page" or "which sessions need me?".
+  design task in meko to add dark mode to the Usage page" or "which sessions need me?".
   AgentK asks the default agent (one quick call with no tools) and offers what to do: start a task at
   Explore, Design or Code with a prompt, start sessions on GitHub issues or PRs (`#5` is the project's
   repo's), go to a session, move one to another stage, open its PR, or open a project. Nothing runs

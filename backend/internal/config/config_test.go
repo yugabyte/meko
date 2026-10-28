@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/yugabyte/meko/backend/internal/update"
 )
 
 func TestLoadPrecedence(t *testing.T) {
@@ -154,7 +156,7 @@ func TestUpdateAndSecretsSettings(t *testing.T) {
 	path := filepath.Join(dir, "config.toml")
 	c, err := Load(path, func(string) string { return "" }, Overrides{})
 	if err != nil || c.Update.Channel != "stable" || !c.Update.Auto || c.Update.IntervalHours != 6 ||
-		c.Update.Repo != "yugabyte/agent-k-local" || c.Secrets.Store != "" {
+		c.Update.Repo != update.DefaultRepo || c.Secrets.Store != "" {
 		t.Fatalf("defaults %+v %+v, %v", c.Update, c.Secrets, err)
 	}
 	toml := "[update]\nauto = false\ninterval_hours = 1\n[secrets]\nstore = \"file\"\n"

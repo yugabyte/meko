@@ -1,9 +1,9 @@
 ---
 name: commit
-description: Create a git commit or PR in the agent-k-local repo. Use whenever committing, amending, or writing a commit message, PR title or PR description in this repo. Subjects and PR titles use `<type>(<component>[/<area>][,<component>…]): <summary>` so readers see which part of the repo changed and the release workflow can cut releases.
+description: Create a git commit or PR in the meko repo. Use whenever committing, amending, or writing a commit message, PR title or PR description in this repo. Subjects and PR titles use `<type>(<component>[/<area>][,<component>…]): <summary>` so readers see which part of the repo changed and the release workflow can cut releases.
 ---
 
-# Committing in agent-k-local
+# Committing in meko
 
 ## Authorship and footers
 

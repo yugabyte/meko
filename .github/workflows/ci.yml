@@ -81,8 +81,8 @@ jobs:
 
       - name: Configure git for tests
         run: |
-          git config --global user.name "agent-k-local CI"
-          git config --global user.email "ci@agent-k-local.invalid"
+          git config --global user.name "meko CI"
+          git config --global user.email "ci@meko.invalid"
           git config --global init.defaultBranch main
 
       - run: npm ci
