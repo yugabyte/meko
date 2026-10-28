@@ -64,11 +64,14 @@ export function Sidebar({
   const filtering = query.trim() !== "";
   const local = datapacks.filter((d) => matchesName(d.datapack_name, query));
   const cloudRows = linked ? (cloud.data?.datapacks ?? []) : [];
-  // Nothing matched, and Meko Cloud has no listing still to come or a failure to show instead.
+  // Nothing matched, and Meko Cloud's rows aren't something else instead: its first listing, which
+  // may still bring matches (and until which `linked` can't be known), or its error note. A refresh
+  // keeps the rows it had, so the query is matched against them.
   const noMatch =
     filtering &&
     local.length === 0 &&
-    !(linked && (cloud.loading || cloud.error)) &&
+    !(cloud.loading && !cloud.data) &&
+    !(linked && cloud.error) &&
     !cloudRows.some((d) => matchesName(d.datapack_name, query));
   return (
     <>
