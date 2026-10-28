@@ -40,7 +40,7 @@ type toolFlags struct {
 	text, datapack, source string
 	files                  []string
 	limit                  int
-	json, mcp, force       bool
+	json, force            bool
 	cloud, local           bool // create_datapack's --cloud, datapacks' --local
 	noWait                 bool
 	out                    string // export's -o

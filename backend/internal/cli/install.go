@@ -137,8 +137,8 @@ func runInstall(l paths.Layout, noService bool, access string, stdout, stderr io
 	if !agentKRegistered(l) {
 		next = append(next, [2]string{"meko install_extension agentk", "add AgentK, your coding team"})
 	}
-	printRunning(l, "is installed and running", append(next, [2]string{"meko token --mcp", "connect Claude Code to Meko"}),
-		stdout)
+	next = append(next, [2]string{"meko connect claude", "connect Claude Code to Meko (or codex, kiro, opencode)"})
+	printRunning(l, "is installed and running", next, stdout)
 	return exitOK
 }
 
