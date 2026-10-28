@@ -111,8 +111,10 @@ describe('picking the lines a comment covers', () => {
 
 describe('opening diffs by default', () => {
   const images = (n: number): [string, number, boolean][] => Array.from({ length: n }, (_, i) => [`${i}.png`, 0, false]);
-  // Each file as [path, rows, has comments].
+  // Each file as [path, rows, has comments]; the files named gone* are deleted.
   it.each<[string, RowBudget, [string, number, boolean][], string[]]>([
+    ['keeps deleted files closed, and leaves their rows to the next files', DESKTOP_BUDGET, [['gone', 1000, false], ['a', 1000, false], ['b', 1000, false]], ['a', 'b']],
+    ['opens a deleted file with comments', DESKTOP_BUDGET, [['gone', 10, true], ['a', 10, false]], ['gone', 'a']],
     ['opens small files while they fit the budget', DESKTOP_BUDGET, [['a', 900, false], ['b', 900, false], ['c', 300, false], ['d', 100, false]], ['a', 'b', 'd']],
     ['never opens a large file, even first', DESKTOP_BUDGET, [['big', 1001, false], ['a', 10, false]], ['a']],
     ['opens files with comments, large ones included, and counts only small ones', DESKTOP_BUDGET, [['big', 50000, true], ['a', 1000, false], ['b', 1000, true], ['c', 1, false]], ['big', 'a', 'b']],
@@ -122,7 +124,8 @@ describe('opening diffs by default', () => {
     ['counts a file over 500 rows as large on a phone', PHONE_BUDGET, [['a', 501, false], ['b', 500, false]], ['b']],
   ])('%s', (_, budget, files, open) => {
     const by = new Map(files.map(([path, n, c]) => [path, { n, c }]));
-    expect([...defaultOpen(files.map(([path]) => ({ path })), (p) => by.get(p)!.n, (p) => by.get(p)!.c, budget)]).toEqual(open);
+    const kinds = files.map(([path]) => ({ path, kind: path.startsWith('gone') ? 'deleted' as const : 'modified' as const }));
+    expect([...defaultOpen(kinds, (p) => by.get(p)!.n, (p) => by.get(p)!.c, budget)]).toEqual(open);
   });
 });
 
