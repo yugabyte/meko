@@ -148,7 +148,10 @@ presenter`, the Extensions page): it unpacks a release into `<home>/app/<version
 (its folder, tags, tarballs and pages). `bin/meko_presenter` is the launcher
 (`packaging/meko_presenter`): it runs the bundled Node on
 `lib/dist/server/cli.js`, with `PRESENTER_APP_DIR` naming the release's folder and
-`PRESENTER_LAUNCHER` itself, and `meko_presenter start` runs `serve` through it.
+`PRESENTER_LAUNCHER` itself, and `meko_presenter start` runs `serve` through it. Run by `meko start`
+and `meko stop`, which set `MEKO_SUMMARY=1`, `start` and `stop` print one row of Meko's summary
+(`  ✓ Presenter       started`, `src/server/summary.ts`; the format is in Meko's
+`backend/docs/install.md`) instead of their usual line.
 
 An update is on probation until it has served for 5 minutes, and Meko runs it. The launcher hands
 `serve` to Meko's launcher (`meko _launch presenter <launcher> serve`), which runs it again with

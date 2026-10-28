@@ -73,6 +73,13 @@ describe('the commands Meko runs', () => {
     expect(existsSync(join(home, 'run', 'server.pid'))).toBe(false);
   });
 
+  it("prints one row of Meko's summary when meko start and meko stop run it", () => {
+    expect(presenterWith({ MEKO_SUMMARY: '1' }, 'start').out).toBe('  ✓ Presenter       started\n');
+    expect(presenterWith({ MEKO_SUMMARY: '1' }, 'start').out).toBe('  ✓ Presenter       running\n');
+    expect(presenterWith({ MEKO_SUMMARY: '1' }, 'stop').out).toBe('  ✓ Presenter       stopped\n');
+    expect(presenterWith({ MEKO_SUMMARY: '1' }, 'stop').out).toBe("  ✓ Presenter       wasn't running\n");
+  });
+
   it('starts the server through a release\'s launcher, which hands it to Meko\'s', () => {
     // A stand-in for packaging/meko_presenter: notes the start, then runs the server as this test does.
     const launcher = join(dir, 'launcher');

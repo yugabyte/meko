@@ -1,4 +1,5 @@
-// Command meko is Meko: the CLI and the server in one binary.
+// Command meko is Meko: the CLI and the server in one binary. Run as mekosh (a link to it), it is
+// the CLI that works with what Meko keeps.
 package main
 
 import (
@@ -8,5 +9,5 @@ import (
 )
 
 func main() {
-	os.Exit(cli.Run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(cli.Main(os.Args[0], os.Args[1:], os.Stdout, os.Stderr))
 }

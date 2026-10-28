@@ -157,6 +157,11 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		if pending, _ := app.ReadPending(); pending != nil && pending.To == release {
 			onProbation = true
 		}
+		if home, herr := os.UserHomeDir(); herr == nil {
+			if lerr := linkMekosh(app, home); lerr != nil {
+				log.Warn("can't make the mekosh command", "error", lerr)
+			}
+		}
 	}
 
 	st, err := store.Open(l.DB)

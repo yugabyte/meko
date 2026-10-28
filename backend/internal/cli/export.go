@@ -27,8 +27,8 @@ func toolExport(ctx context.Context, t *toolSession, l paths.Layout, f toolFlags
 			return err
 		}
 		if id == "" {
-			return errors.New("there's no default datapack (it was deleted): name one, meko export <name|id> " +
-				"(meko datapacks lists them)")
+			return errors.New("there's no default datapack (it was deleted): name one, mekosh export <name|id> " +
+				"(mekosh datapacks lists them)")
 		}
 	}
 	c, err := newClient(l)

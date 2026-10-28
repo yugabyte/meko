@@ -1,7 +1,9 @@
-// Package cli is the meko command: start, stop, restart, status, serve, version, token, ui,
-// setup_link, cloud_link, logs, destroy, install, uninstall, install_extension, update_extension,
-// uninstall_extension, update and list, and the MCP calls search, add_memory, datapacks,
-// create_datapack, delete_datapack, upload and upload_status.
+// Package cli is the meko and mekosh commands, one binary run by either name. meko runs Meko:
+// install, start, stop, restart, status, logs, update, version, token, ui, setup_link, cloud_link,
+// destroy, uninstall, install_extension, update_extension, uninstall_extension and serve. mekosh
+// works with what it keeps, through the running server: datapacks, create_datapack,
+// delete_datapack, export, search, add_memory, upload, upload_status and tools, one at a time or at
+// its prompt (shell.go). help.go has each command's help.
 package cli
 
 import (
@@ -10,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
@@ -31,97 +34,13 @@ const (
 	exitLocked = 75
 )
 
-const usage = `meko runs Meko on this machine: the server, and the commands that manage it.
-
-Usage:
-  meko start     start the server in the background (through its service once installed),
-                 then the extensions
-  meko stop      stop the extensions, then the server; --keep-extensions leaves them running
-  meko restart   restart the server alone
-  meko status    show whether it's running, its port, version, children, service, updates and
-                 extensions
-  meko logs      show the server's and the memory engine's logs; -f follows them, -n N shows N
-                 lines, --server, --memory-engine or --service shows one, --json the raw lines
-  meko serve     run the server in the foreground
-  meko version   show versions; --json for installers
-  meko token     print the token MCP and REST clients send (Authorization: Bearer <token>);
-                 --mcp prints the claude mcp add command that registers Meko with Claude Code,
-                 --json the MCP URL, the token, whether a server runs and the Meko Cloud
-                 link (with its key)
-  meko ui [path] open the web UI in the browser (path /ext/agentk/ opens AgentK's);
-                 --no-open only prints its link. With remote access and no login yet, it
-                 prints a setup link instead
-  meko cloud_link
-                 link Meko Cloud for the extensions (AgentK uses it in place of this Meko): reads
-                 the API key from stdin, or asks for it on a terminal, checks it and saves it;
-                 --url, --web-url and --api-url name another Meko server; --off unlinks
-  meko setup_link
-                 print a one-time link that sets up the web UI's login for remote access, or
-                 replaces it (a lost password: it turns two-step sign-in off and signs every
-                 browser out)
-  meko destroy   stop the server and remove the data folder, everything in it, for good;
-                 it asks first, unless --force. The extensions' data in it (AgentK's home)
-                 goes only when you say so when asked, or with --with-extensions, which
-                 uninstalls the extensions first; --force alone keeps it
-
-  meko install   set this meko up: the meko command and a login service (launchd or systemd)
-                 that starts it at login and restarts it on failure; --no-service skips the
-                 service; --access local|remote sets how browsers reach the web UI ([web]
-                 access: remote listens on every address, over HTTPS, with a login)
-  meko uninstall remove the service and the installed releases, keeping your data;
-                 --purge also destroys the data and its secrets as destroy does (it asks first,
-                 unless --force; --with-extensions removes the extensions too)
-  meko update    install Meko's newest release now (it updates itself under the service), then
-                 every extension's (update_extension --all); --check only looks
-  meko install_extension agentk|presenter [--version V] [-- <its install's options>]
-                 install AgentK or Presenter from its newest release, pointed at this Meko, and
-                 start and stop it with Meko (its command, agentk or meko_presenter, already on
-                 PATH is used as it is, unless --version names a release to install over it);
-                 what follows -- goes to its own install (AgentK: --agent claude|opencode|kiro,
-                 --install-deps, --no-install-deps)
-  meko update_extension agentk|presenter|--all
-                 install an extension's newest release now and restart it (one that fails to
-                 start is rolled back); --check only looks; --auto=on|off sets whether Meko
-                 installs its updates on its own (default on), and updates nothing
-  meko uninstall_extension agentk|presenter
-                 stop starting and stopping it with Meko (it stays installed)
-
-  meko search "<question>"       search memories, the knowledge base and past conversations
-                                 (context_search)
-  meko add_memory "<text>"       save a memory, word for word (memory_add); - or no text reads stdin
-  meko datapacks                 list the datapacks; --cloud adds the linked Meko Cloud's after
-                                 them, each marked local or cloud (and shared)
-  meko create_datapack <name>    create a datapack (datapack_create)
-  meko delete_datapack <name|id>
-                                 delete a datapack and everything in it, for good (datapack_delete);
-                                 it asks first, unless --force
-  meko upload <file>...          add files to the knowledge base (knowledgebase_upload_document) and
-                                 wait until they're indexed; --no-wait returns once they're uploaded
-  meko upload_status <key>       how an uploaded file is doing (knowledgebase_document_status)
-  meko export [<name|id>]        write a datapack (default: the default one) to a zip: its
-                                 memories, collective memories, conversations, knowledge files and
-                                 artifacts with their embeddings and file contents, and the call log;
-                                 -o FILE picks the file (default meko-<name>-<date>.zip here);
-                                 it won't replace a file unless --force
-  meko list mcp-tools            the MCP tools Meko serves, each with what it does; --json for all
-                                 their names, titles and summaries
-                 search, add_memory, upload and upload_status take --datapack NAME|ID (default: the
-                 default datapack, which Meko makes on first start and doesn't make again once
-                 deleted); search takes --source auto|memory|knowledge_base|conversation and
-                 --limit N; all seven take --json for the tools' raw replies
-
-Every command takes --data-dir (default ~/.meko, or MEKO_HOME).
-start, restart and serve also take --port (the API listener's, default 7778) and --log-level (debug,
-info, warn, error); under the service, set them in config.toml instead. The web UI's port and access
-are [web] port (default 7777) and access in config.toml.
-`
-
 // stdin is what add_memory, destroy and uninstall --purge read; tests replace it.
 var stdin io.Reader = os.Stdin
 
 // cmdFlags are the flags of the commands that aren't MCP calls.
 type cmdFlags struct {
 	keepExtensions, noService, purge, check, follow, force, noOpen, withExtensions bool
+	verbose                                                                        bool
 	lines                                                                          int
 	server, memoryEngine, service                                                  bool
 	access                                                                         string
@@ -130,19 +49,61 @@ type cmdFlags struct {
 	extra                                                                          []string // after --
 }
 
-// Run runs the command in args (without the program name) and returns the exit code.
+// Main runs the program argv0 names (mekosh, or else meko) with args and returns the exit code.
+func Main(argv0 string, args []string, stdout, stderr io.Writer) int {
+	if filepath.Base(argv0) == progMekosh {
+		return RunMekosh(args, stdout, stderr)
+	}
+	return Run(args, stdout, stderr)
+}
+
+// Run runs meko's command in args (without the program name) and returns the exit code.
 func Run(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		fmt.Fprint(stdout, usage)
+	return runProg(progMeko, args, stdout, stderr)
+}
+
+// runProg runs prog's command in args.
+func runProg(prog string, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		printUsage(stdout, prog)
 		return exitOK
 	}
 	cmd, rest := args[0], args[1:]
-	// What an extension's launcher runs; not in the usage, not for people.
-	if cmd == "_launch" {
+	switch cmd {
+	case "help", "-h", "--help":
+		if len(rest) == 0 {
+			printUsage(stdout, prog)
+			return exitOK
+		}
+		c, ok := lookup(prog, rest[0])
+		if !ok {
+			return unknownCommand(prog, rest[0], nil, stderr)
+		}
+		if c.promptOnly {
+			printCommandHelp(stdout, prog, c, nil)
+			return exitOK
+		}
+		return runProg(prog, []string{rest[0], "--help"}, stdout, stderr)
+	case "--version":
+		if prog == progMeko {
+			cmd = "version"
+		}
+	}
+	// What an extension's launcher runs; not in the help, not for people.
+	if cmd == "_launch" && prog == progMeko {
 		return runLaunch(rest, stderr)
 	}
-	fs := flag.NewFlagSet("meko "+cmd, flag.ContinueOnError)
+	info, ok := lookup(prog, cmd)
+	if !ok {
+		return unknownCommand(prog, cmd, rest, stderr)
+	}
+	if info.promptOnly {
+		fmt.Fprintf(stderr, "%s: %s works only at the prompt (run mekosh alone)\n", prog, cmd)
+		return exitUsage
+	}
+	fs := flag.NewFlagSet(prog+" "+cmd, flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	fs.Usage = func() {} // -h prints the command's help, below; a bad flag says where to find it
 	dataDir := fs.String("data-dir", "", "the data folder (default ~/.meko, or MEKO_HOME)")
 	var o config.Overrides
 	var detached bool
@@ -152,8 +113,11 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	switch cmd {
 	case "search", "add_memory", "datapacks", "create_datapack", "delete_datapack", "upload", "upload_status":
 		fs.BoolVar(&t.json, "json", false, "print the tool's raw reply")
-	case "version", "logs", "list":
+	case "version", "logs", "tools":
 		fs.BoolVar(&t.json, "json", false, "print raw JSON")
+	case "status":
+		fs.BoolVar(&c.verbose, "verbose", false, "everything: the models, certificate, service, updates and links")
+		fs.BoolVar(&t.json, "json", false, "print the server's status reply")
 	case "token":
 		fs.BoolVar(&t.mcp, "mcp", false, "print the claude mcp add command for Meko")
 		fs.BoolVar(&t.json, "json", false,
@@ -221,7 +185,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&c.noOpen, "no-open", false, "print the link without opening the browser")
 	}
 	if cmd == "start" || cmd == "restart" || cmd == "serve" {
-		fs.IntVar(&o.Port, "port", 0, "the API listener's port on 127.0.0.1 (default 7778)")
+		fs.IntVar(&o.Port, "port", 0, "the agents' listener's port (MCP and API) on 127.0.0.1 (default 7778)")
 		fs.StringVar(&o.LogLevel, "log-level", "", "debug, info, warn or error (default info)")
 	}
 	if cmd == "serve" {
@@ -229,38 +193,42 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		// log file.
 		fs.BoolVar(&detached, "detached", false, "log only to the log file")
 	}
-	switch cmd {
-	case "start", "stop", "restart", "status", "serve", "version", "token", "ui", "setup_link", "cloud_link", "logs",
-		"destroy", "install", "uninstall", "install_extension", "update_extension", "uninstall_extension", "update",
-		"search", "add_memory", "datapacks", "create_datapack", "delete_datapack", "upload", "upload_status", "list",
-		"export":
-	default:
-		fmt.Fprintf(stderr, "meko: unknown command %q\n\n%s", cmd, usage)
-		return exitUsage
+	// parse parses flags, and says how a bad one went: -h prints the command's help (exit 0).
+	parse := func(args []string) (int, bool) {
+		err := fs.Parse(args)
+		switch {
+		case errors.Is(err, flag.ErrHelp):
+			printCommandHelp(stdout, prog, info, fs)
+			return exitOK, false
+		case err != nil:
+			fmt.Fprintf(stderr, "Run %s %s --help for its flags\n", prog, cmd)
+			return exitUsage, false
+		}
+		return 0, true
 	}
-	if err := fs.Parse(rest); err != nil {
-		return exitUsage
+	if code, ok := parse(rest); !ok {
+		return code
 	}
 	// These take one argument, and upload any number; their flags may follow.
 	switch cmd {
 	case "search", "add_memory", "create_datapack", "delete_datapack", "upload_status", "install_extension",
-		"update_extension", "uninstall_extension", "list", "export", "ui":
+		"update_extension", "uninstall_extension", "export", "ui":
 		if fs.NArg() > 0 {
 			t.text = fs.Arg(0)
-			if err := fs.Parse(fs.Args()[1:]); err != nil {
-				return exitUsage
+			if code, ok := parse(fs.Args()[1:]); !ok {
+				return code
 			}
 		}
 	case "upload":
 		for fs.NArg() > 0 {
 			t.files = append(t.files, fs.Arg(0))
-			if err := fs.Parse(fs.Args()[1:]); err != nil {
-				return exitUsage
+			if code, ok := parse(fs.Args()[1:]); !ok {
+				return code
 			}
 		}
 	}
 	if fs.NArg() > 0 {
-		fmt.Fprintf(stderr, "meko %s: unexpected argument %q\n", cmd, fs.Arg(0))
+		fmt.Fprintf(stderr, "%s %s: unexpected argument %q\n", prog, cmd, fs.Arg(0))
 		return exitUsage
 	}
 	cl.set = map[string]bool{}
@@ -281,8 +249,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if cmd == "version" {
 		return runVersion(t.json, stdout, stderr)
 	}
-	if cmd == "list" {
-		return runList(t.text, t.json, stdout, stderr)
+	if cmd == "tools" {
+		return runList(t.json, stdout, stderr)
 	}
 	root, err := paths.Resolve(*dataDir)
 	if err != nil {
@@ -293,7 +261,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	case "stop":
 		return runStop(l, c.keepExtensions, stdout, stderr)
 	case "status":
-		return runStatus(l, stdout, stderr)
+		return runStatus(l, statusOptions{verbose: c.verbose, json: t.json}, stdout, stderr)
 	case "token":
 		return runToken(l, t.mcp, t.json, stdout, stderr)
 	case "logs":
@@ -320,7 +288,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	case "update":
 		return runUpdate(l, c.check, stdout, stderr)
 	case "search", "add_memory", "datapacks", "create_datapack", "delete_datapack", "upload", "upload_status", "export":
-		return runTool(l, cmd, t, stdin, stdout, stderr)
+		return runTool(l, prog, cmd, t, stdin, stdout, stderr)
 	}
 	// start loads the config too, so a bad file is reported before anything starts.
 	cfg, err := config.Load(l.Config, os.Getenv, o)
@@ -354,6 +322,41 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	return exitOK
+}
+
+// unknownCommand says cmd isn't one of prog's: when it's the other program's, which one to run
+// instead (meko's usage commands moved to mekosh, and meko list mcp-tools is mekosh tools), else the
+// nearest of prog's names.
+func unknownCommand(prog, cmd string, rest []string, stderr io.Writer) int {
+	other := progMekosh
+	if prog == progMekosh {
+		other = progMeko
+	}
+	if prog == progMeko && cmd == "list" && len(rest) > 0 && rest[0] == "mcp-tools" {
+		fmt.Fprintf(stderr, "meko: list mcp-tools is a mekosh command now: %s\n",
+			shellQuote(append([]string{progMekosh, "tools"}, rest[1:]...)))
+		return exitUsage
+	}
+	if c, ok := lookup(other, cmd); ok && !c.hidden && !c.promptOnly {
+		what := "is a mekosh command now"
+		if other == progMeko {
+			what = "is a meko command"
+		}
+		fmt.Fprintf(stderr, "%s: %s %s: %s\n", prog, cmd, what, shellQuote(append([]string{other, cmd}, rest...)))
+		return exitUsage
+	}
+	fmt.Fprintf(stderr, "%s: unknown command %q\n", prog, cmd)
+	if n := nearest(prog, cmd); n != "" {
+		fmt.Fprintf(stderr, "Did you mean %s %s?\n", prog, n)
+	}
+	fmt.Fprintf(stderr, "Run %s --help to see the commands\n", prog)
+	return exitUsage
+}
+
+// failAs is fail for prog: mekosh's errors say mekosh.
+func failAs(prog string, stderr io.Writer, err error) int {
+	fmt.Fprintf(stderr, "%s: %v\n", prog, err)
+	return exitError
 }
 
 func fail(stderr io.Writer, err error) int {

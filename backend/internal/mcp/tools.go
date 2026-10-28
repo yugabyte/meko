@@ -235,7 +235,7 @@ var readOnlyTools = func() map[string]bool {
 	return out
 }()
 
-// ToolInfo is a tool as `meko list mcp-tools` shows it.
+// ToolInfo is a tool as `mekosh tools` shows it.
 type ToolInfo struct {
 	Name, Title, Summary string
 }

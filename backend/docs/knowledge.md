@@ -5,7 +5,7 @@ and the memory engine in [memory-engine.md](memory-engine.md):
 
 - **Uploads** of PDF, TXT, Markdown, JSON, CSV, XML and HTML up to 50 MiB, through Cloud's
   presigned flow: `upload-url`, then a multipart POST of the file to the link it returns. The web UI,
-  agents (`knowledgebase_upload_document`) and `meko upload` use it. An agent on the same
+  agents (`knowledgebase_upload_document`) and `mekosh upload` use it. An agent on the same
   machine can instead pass a path to `knowledgebase_upload_file`, which Meko reads itself.
 - **Ingestion** in Go: text extraction and chunking, then embedding in the memory engine, into FTS5 and
   `vec0` indexes. It runs in the background and never holds up other requests. The same bytes
@@ -38,7 +38,7 @@ Where Meko follows Cloud, the behavior is stated here and the code is written fr
 
 ```mermaid
 flowchart LR
-  caller["the web UI, an agent, or meko upload"] -->|"upload-url"| rest["internal/rest"]
+  caller["the web UI, an agent, or mekosh upload"] -->|"upload-url"| rest["internal/rest"]
   caller -->|"POST the file to the ticket link"| sink["upload sink"]
   sink -->|"exact size and SHA-256, dedupe"| docs[("kb_documents and knowledgebase-files/")]
   idx["indexer"] -->|"claim the oldest QUEUED"| docs
@@ -56,7 +56,7 @@ which is logged). Meko never sets Cloud's `NOT_STARTED` or `RETRY`. A file stays
 the memory engine is down, since only embedding needs it. At start, `serve` puts `PROCESSING` files
 back in the queue without their chunks. A `FAILED` file asked an upload link for again is queued
 again; if its bytes are gone, the reply is a link to send them to (not `already_uploaded`), and
-they're queued once they arrive. `meko upload` waits for a file already uploaded as for a new one.
+they're queued once they arrive. `mekosh upload` waits for a file already uploaded as for a new one.
 
 ## Storage (`0006_knowledge.sql`)
 
@@ -113,7 +113,7 @@ results within cosine distance 0.6, and past it any keyword or hybrid match the 
   pinned to commit `a09144355adeed5f58c8ed011d209bf8ee5a1fec`, in a worker thread of its own
   (`rerankworker.ts`). It loads after the embedder, retrying with the same backoff, and the memory engine
   is ready without it: `/v1/rerank` answers 503 `RERANKER_NOT_READY` until it's in, and `/healthz`
-  and `meko status` say how it is. A worker that dies after loading is replaced by the next rerank
+  and `meko status --verbose` say how it is. A worker that dies after loading is replaced by the next rerank
   that finds it (`revive`, at most once every 30 s); meanwhile results are unranked, and Go logs it
   at debug level.
 - **Tests** get a word-overlap reranker with the hashing embedder.
@@ -167,7 +167,7 @@ In `make test` on Linux and macOS:
   vanished bytes, the sweep, deletes taking bytes along, fusion and trimming; with the real models,
   the end-to-end check (below).
 - **mcp**, **rest**, **server**, **cli**: every tool's and route's shapes and errors, the ticket
-  routes taking no token and a body past 1 MB, `meko upload` and `upload_status`, and AgentK's
+  routes taking no token and a body past 1 MB, `mekosh upload` and `upload_status`, and AgentK's
   upload calls replayed as it makes them (`TestAgentKUpload`).
 
 The end-to-end check, with the real models (`TestKnowledgeSearchWithTheModels`): a file uploaded through

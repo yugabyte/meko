@@ -26,6 +26,7 @@ import { HostRunningError, startHost } from './host/host.js';
 import { BEAT_MS, EXIT_BUSY, heldLease, InstanceBusyError, InstanceLock } from './instance.js';
 import { HEALTHY_MS, pruneSnapshots, snapshotBeforeMigrating, switchedAway, updatedFrom, Updates } from './updates.js';
 import { probeLocalMeko } from './mekolocal.js';
+import { forMekoSummary, stopRowText, summaryRow } from './summary.js';
 import {
   checkMove, finishMove, HomeMove, MEKO_COMMANDS, mekoDirOf, moveHome, readJournal, refuseOtherMeko, rememberMekoHome, stopAll, tmpHomeWarning,
 } from './movehome.js';
@@ -411,6 +412,7 @@ async function stop(): Promise<void> {
   const svc = servicesFor(paths.home);
   const { stopped, sessions: n } = await stopAll(paths, svc);
   const resume = svc?.installed('server') ? 'agentk start' : 'agentk serve';
+  if (forMekoSummary()) return void console.log(summaryRow('✓', 'AgentK', stopRowText(stopped, n, svc?.installed('server') === true)));
   if (!stopped) console.log('AgentK is not running.');
   else console.log(`Stopped AgentK${n ? ` and the ${n} session(s) in it. They resume at: ${resume}` : ''}.`);
 }
@@ -435,7 +437,9 @@ async function start(): Promise<void> {
     for (let i = 0; i < 50 && !svc.state(s).running; i++) await sleep(100);
     if (!svc.state(s).running) throw new Error(`${svc.id(s)} didn't start. Check: ${svc.statusHint(s)}`);
   }
-  console.log('Started AgentK; the server resumes the sessions in a few seconds. Check: agentk status');
+  console.log(forMekoSummary()
+    ? summaryRow('✓', 'AgentK', 'started; sessions resume in a few seconds')
+    : 'Started AgentK; the server resumes the sessions in a few seconds. Check: agentk status');
 }
 
 function help(): void {

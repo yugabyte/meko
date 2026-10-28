@@ -165,7 +165,7 @@ export function KnowledgePage({ datapack, onChanged }: { datapack: Datapack; onC
         <ErrorNote error={docs.error} />
       ) : !docs.data?.items.length ? (
         <Empty icon={<FileText className="size-8" />} title={q ? "No files match" : "No knowledge files yet"}>
-          Upload here, with <b>meko upload</b>, or from an agent with <b>knowledgebase_upload_file</b>.
+          Upload here, with <b>mekosh upload</b>, or from an agent with <b>knowledgebase_upload_file</b>.
         </Empty>
       ) : (
         <Card className="overflow-hidden">
