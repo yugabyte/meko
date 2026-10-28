@@ -109,13 +109,21 @@ recommendation, keeping the text. A change to one of AgentK's decisions keeps th
 begun against (`against`), and is dropped once the decision is no longer that: sent and recorded,
 or revised by AgentK.
 
-With open questions, **Approve design** reads **Answer & approve**: the gate, the panel header and
-the ⋯ sheet take you to the questions (as they do, with no open questions, while a change to one of
-AgentK's decisions waits in this browser: `changingDecisions()`, which `approveDesign()` also
-refuses, since its request can't carry it), and the approval goes from their footer, **Approve with
-answers** (the header leaves its button out while the questions are on screen, or can't be shown
-because the design couldn't be read, and does the same, reading **Answer & approve**, while a change
-to one of AgentK's decisions waits: `headerApproves(session, questions, changing)`). On a panel too
+The approval goes from the panel, never from the stage bar. The stage bar's gate (and the ⋯
+sheet's) is **Design Review** (`designGate()`, disabled only before there's a design): it opens the
+panel on the questions while any are open, or while a change to one of AgentK's decisions waits in
+this browser (`changingDecisions()`, which `approveDesign()` refuses, since its request can't carry
+it), and on the design otherwise; with the panel already open it brings the panel's approve button
+into view and focuses it (`reviewTarget()`, the panel's `approveAt`): the questions' footer
+**Approve with answers** (**Cancel approval** while one waits, or the footer itself, with its
+reason, while the button is disabled: `reviewFocus()`) while they're on screen, else the header's
+**Approve design**, or, with open questions on the Design tab, the questions. A gate that only
+showed the questions did nothing when they were already on screen, which on a phone they usually
+are. With open questions the header's **Approve design** reads **Answer & approve** and takes you to
+them, and the approval goes from their footer, **Approve with answers** (the header leaves its
+button out while the questions are on screen, or can't be shown because the design couldn't be
+read, and does the same, reading **Answer & approve**, while a change to one of AgentK's decisions
+waits: `headerApproves(session, questions, changing)`). On a panel too
 short for the questions and their footer (a phone with the keyboard up), the view scrolls, so the
 footer stays reachable. `Ctrl+Enter` (`⌘Enter`) in an answer, a note or the feedback presses
 **Approve with answers** (**Approve design** when there are no open questions), as a click would: nothing while

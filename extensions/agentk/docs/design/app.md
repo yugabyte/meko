@@ -370,7 +370,7 @@ With the setting off, the app bar holds the project's sessions as tabs, between 
 can switch sessions without opening the drawer (each tab shows its status and stage); with it on, the drawer
 lists them instead and the app bar names the session and its project, with the session's status dot, and puts
 a dot on the drawer button while another session in the project needs you. The session header,
-the stage bar with its gate button (Approve design, Open PR, Merge & Close) and the footer details
+the stage bar with its gate button (Design Review, Open PR, Merge & Close) and the footer details
 move into a ⋯ sheet, leaving the screen to the terminal; a dot on ⋯ marks a gate that is ready for
 you, and the sheet says why a closed gate is closed. The sheet closes with the × at its top right, a
 tap outside it, or Escape. Dialogs open as bottom sheets, with tabs in a

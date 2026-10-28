@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { submitButton } from '../../src/web/components/common.js';
-import { questionsSubmitButton } from '../../src/web/components/DesignQuestions.js';
+import { questionsSubmitButton, reviewFocus } from '../../src/web/components/DesignQuestions.js';
 import { isSubmitKey } from '../../src/web/util.js';
 
 /** Just enough of an element for submitButton: its selectors (tag, classes, attributes, `.a b` descendants) and classList. */
@@ -98,5 +98,23 @@ describe('Ctrl+Enter in the design questions', () => {
     el('div', { class: 'dq-scroll' }, el('div', { class: 'ask-form' }, askText, answer), el('ol', {}, note));
     expect(inQuestions(note, approve)).toBe(approve);
     expect(inQuestions(askText, approve)).toBe(answer);
+  });
+});
+
+describe('Design Review with the questions on screen', () => {
+  const focus = (foot: El) => reviewFocus(foot as unknown as HTMLElement) as unknown as El;
+
+  it('brings up the footer’s Approve, or Cancel approval while one waits', () => {
+    const approve = Object.assign(el('button', { class: 'btn small primary', 'data-approve': '' }), { disabled: false });
+    const foot = el('div', { class: 'dq-foot' }, el('span'), el('button', { class: 'btn small' }), approve);
+    expect(focus(foot)).toBe(approve);
+    const cancel = Object.assign(el('button', { class: 'btn small', 'data-approve': '' }), { disabled: false });
+    expect(focus(el('div', { class: 'dq-foot' }, el('button', { class: 'btn small' }), cancel))).toBe(cancel);
+  });
+
+  it('brings up the footer itself, with its reason, while Approve is disabled', () => {
+    const approve = Object.assign(el('button', { class: 'btn small primary', 'data-approve': '' }), { disabled: true });
+    const foot = el('div', { class: 'dq-foot' }, el('span'), approve);
+    expect(focus(foot)).toBe(foot);
   });
 });
