@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/yugabyte/meko/docs/call-home-report.schema.json",
+  "$id": "https://github.com/yugabyte/agent-k-local/docs/call-home-report.schema.json",
   "title": "AgentK CallHomeReport",
   "description": "The daily usage report an AgentK install POSTs to /v1/report. Schema 1. Only counts, enums and version strings: no names, paths or free text. The collector (yugabyte/agent-k services/ak-local-call-home) accepts reports that match this and folds anything it does not know into \"other\".",
   "type": "object",

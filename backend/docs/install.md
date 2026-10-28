@@ -361,10 +361,7 @@ A release install's app folder:
 - While an update is on probation, deleting a knowledge file leaves its bytes on disk
   (`memory.Options.KeepDeletedFiles`): a rollback restores rows from before the update, and they
   must still find their files. The sweep at a start after the update is done removes them.
-- `[update] channel = "off"` stops the scheduled checks (Check now and Update on the Status page still work, as `meko update` does); `[update] repo` (or `MEKO_UPDATE_REPO`) points at a fork. Its default is `yugabyte/meko`
-  (`update.DefaultRepo`); a Meko from before the repo's rename has `yugabyte/agent-k-local` built in
-  and keeps updating, since GitHub's API and release downloads redirect the old name. That holds
-  only while no new repo takes the old name.
+- `[update] channel = "off"` stops the scheduled checks (Check now and Update on the Status page still work, as `meko update` does); `[update] repo` (or `MEKO_UPDATE_REPO`, default `yugabyte/meko`: `update.DefaultRepo`) points at a fork.
 
 ## Secrets
 
