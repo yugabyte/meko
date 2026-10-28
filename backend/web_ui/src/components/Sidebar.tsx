@@ -1,11 +1,12 @@
 // The left rail: the Meko mark, the Status link, the Extensions group, the datapacks, and the
 // version (with a chip to the Status page's Updates card when a newer release is out), settings and
 // theme toggle. Below md it's a drawer over the page, opened from the top bar. While Meko Cloud is
-// linked, the datapacks are one list: this Meko's (a laptop) and then Meko Cloud's (a cloud).
+// linked, the datapacks are one list: this Meko's (a laptop) and then Meko Cloud's (a cloud). The
+// Find a datapack box above them narrows both to the names that hold what's typed, like Meko Cloud's.
 
 import { useState } from "react";
-import { Database, Laptop, Moon, Plus, RefreshCw, Settings, Sun, X } from "lucide-react";
-import { isCloudFailure, useCloudDatapacks } from "../lib/cloud";
+import { Database, Laptop, Moon, Plus, RefreshCw, Search, Settings, Sun, X } from "lucide-react";
+import { isCloudFailure, matchesName, useCloudDatapacks } from "../lib/cloud";
 import { href, navigate, type Route } from "../lib/route";
 import type { Theme } from "../lib/theme";
 import { useUpdateAvailable } from "../lib/update";
@@ -15,7 +16,7 @@ import { DatapackDialog } from "./DatapackDialog";
 import { ExtensionsLink } from "./ExtensionsLink";
 import { SettingsDialog } from "./SettingsDialog";
 import { StatusLink } from "./StatusLink";
-import { Button, cx } from "./ui";
+import { Button, cx, Input } from "./ui";
 
 // The Meko mark and the Local tag.
 export function Logo({ theme }: { theme: Theme }) {
@@ -54,11 +55,21 @@ export function Sidebar({
 }) {
   const [creating, setCreating] = useState(false);
   const [settings, setSettings] = useState(false);
+  const [query, setQuery] = useState("");
   const update = useUpdateAvailable();
   const cloud = useCloudDatapacks();
   const linked = !!cloud.data?.linked || isCloudFailure(cloud.error);
   const LocalIcon = linked ? Laptop : Database;
   const status = { tab: "overview" as const, view: "status" as const };
+  const filtering = query.trim() !== "";
+  const local = datapacks.filter((d) => matchesName(d.datapack_name, query));
+  const cloudRows = linked ? (cloud.data?.datapacks ?? []) : [];
+  // Nothing matched, and Meko Cloud has no listing still to come or a failure to show instead.
+  const noMatch =
+    filtering &&
+    local.length === 0 &&
+    !(linked && (cloud.loading || cloud.error)) &&
+    !cloudRows.some((d) => matchesName(d.datapack_name, query));
   return (
     <>
       {open && <div className="fixed inset-0 z-40 bg-black/50 md:hidden" onClick={onClose} />}
@@ -104,8 +115,36 @@ export function Sidebar({
             </Button>
           </div>
         </div>
+        <div className="relative px-2 pb-1">
+          <Search
+            className="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+            aria-hidden
+          />
+          <Input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setQuery("");
+            }}
+            placeholder="Find a datapack…"
+            aria-label="Find a datapack"
+            className="pl-8 pr-8 [&::-webkit-search-cancel-button]:hidden"
+          />
+          {query && (
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              aria-label="Clear the search"
+              title="Clear"
+              className="absolute right-4 top-1/2 -translate-y-1/2 rounded text-muted-foreground hover:text-foreground"
+            >
+              <X className="size-4" />
+            </button>
+          )}
+        </div>
         <nav className="flex-1 space-y-0.5 overflow-y-auto px-2">
-          {datapacks.map((d) => (
+          {local.map((d) => (
             <a
               key={d.datapack_id}
               href={href({ datapackId: d.datapack_id, tab: "overview" })}
@@ -132,7 +171,13 @@ export function Sidebar({
               datapacks={cloud.data?.datapacks ?? []}
               loading={cloud.loading}
               error={cloud.error}
+              query={query}
             />
+          )}
+          {noMatch && (
+            <div className="px-2 py-1.5 text-sm italic text-muted-foreground">
+              No datapacks match “{query.trim()}”
+            </div>
           )}
         </nav>
 
