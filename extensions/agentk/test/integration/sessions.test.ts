@@ -529,6 +529,8 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
   const designRow = (id: string) =>
     get<{ markdown: string; html: string | null; artifact_url: string | null }>(env.core.db, 'SELECT markdown, html, artifact_url FROM designs WHERE session_id = ?', id);
   const transcriptText = (claudeSessionId: string) => readFileSync(join(env.fakeDir, `${claudeSessionId}.jsonl`), 'utf8');
+  /** The prompts in the fake's transcript, oldest first. */
+  const userPrompts = (claudeSessionId: string) => readJsonl<{ type: string; text: string }>(join(env.fakeDir, `${claudeSessionId}.jsonl`)).filter((e) => e.type === 'user').map((e) => e.text);
 
   it('designs outside plan mode, guards the repo, and moves to Code when the design is approved', async () => {
     const p = await newProject();
@@ -1212,7 +1214,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(results.map((r) => r.status)).toEqual(['fulfilled', 'rejected']);
     expect(String((results[1] as PromiseRejectedResult).reason)).toMatch(/working on another prompt/);
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'turn');
-    const prompts = transcriptText(s.claudeSessionId).trim().split('\n').map((l) => JSON.parse(l)).filter((e) => e.type === 'user').map((e) => e.text);
+    const prompts = userPrompts(s.claudeSessionId);
     expect(prompts.at(-1)).toBe('first one');
   });
 
@@ -1332,7 +1334,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(state()).toEqual(['sent']);
     expect(() => env.core.comments.edit(s.id, first.id, 'changed')).toThrow(/already sent/);
     await waitFor(() => transcriptText(s.claudeSessionId), (t) => t.includes('Use one declaration.'), 10000, 'comment prompt');
-    const prompt = transcriptText(s.claudeSessionId).trim().split('\n').map((l) => JSON.parse(l)).filter((e) => e.type === 'user').at(-1).text.replace(/\s+/g, ' ');
+    const prompt = userPrompts(s.claudeSessionId).at(-1)!.replace(/\s+/g, ' ');
     expect(prompt).toMatch(/left 1 comment\. Address each one/);
     expect(prompt).toContain('## src/a.ts Lines 3–4: ``` const a = 1; const b = 2; ``` Use one declaration.');
     await waitFor(get, (x) => x.status === 'idle', 10000, 'comment turn');
