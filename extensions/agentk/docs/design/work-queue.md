@@ -73,8 +73,8 @@ and the timer does nothing (`WorkSync.sources` tells the page). The timer ticks 
 - **Slack:** the messages on your Later list, read by one `claude -p` through your own Slack
   connector (`src/server/slack.ts`), titled with their first line. Unlike Ask AgentK, it loads your
   MCP servers and claude.ai connectors (no `--strict-mcp-config`). It reads messages other people
-  wrote, so it's kept to reading Slack: no built-in tools but ToolSearch (`--tools ToolSearch`); none of your Claude Code
-  settings but `env` and `apiKeyHelper`, which signing in needs (`signInSettings()`, with
+  wrote, so it's kept to reading Slack: no built-in tools but ToolSearch (`--tools ToolSearch`);
+  none of your Claude Code settings but `env` and `apiKeyHelper`, which signing in needs (`signInSettings()`, with
   `--setting-sources project` in AgentK's empty `run/work-sync` folder), so your allow rules and
   default mode don't apply; `--permission-mode default`; and only `[work_queue] slack_tools` allowed
   (the claude.ai Slack connector's search and read tools by default). In `-p` nothing can be asked,
