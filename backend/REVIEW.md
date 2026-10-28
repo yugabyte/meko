@@ -78,7 +78,8 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       description (the repo root's AGENTS.md): no real person's name, email, handle or IP
       address, no customer names, nothing a user wrote or stored (memories, turns, knowledge
       files), and no unscrubbed logs or screenshots. Tests, `testdata/` and docs use made-up
-      values (`alice@example.com`). Any found is a **blocker**.
+      values (`alice@example.com`). Any found is a **blocker**. The description's Meko lines
+      from AgentK's PR prompt are allowed and stay as written.
 - [ ] Knowledge files' bytes stay in `knowledgebase-files/` (0700 folders, 0600 files), written to a
       temporary name and renamed before their row commits, removed after it's deleted; their text
       never reaches a log or an error reply.

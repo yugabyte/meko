@@ -23,3 +23,4 @@ What to check in a change to `extensions/presenter`, beyond the repo's rules.
 10. **Nothing personal.** Is the diff, the PR title and its description free of internal hostnames,
     paths, tokens and personal data (a real person's name, email or handle, customer names, real
     deck or datapack content, unscrubbed logs or screenshots)? Tests and docs use made-up values.
+    The description's Meko lines from AgentK's PR prompt are allowed and stay as written.

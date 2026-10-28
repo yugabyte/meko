@@ -128,9 +128,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] No secrets or personal data in the diff, the PR title or its description (the repo root's
       AGENTS.md): no passwords, tokens, keys or cookies, no real person's name, email, handle or
       IP address, no customer names, nothing a user wrote or stored (prompts, transcripts,
-      memories), and no unscrubbed logs or screenshots.
-      Tests and docs use made-up values (`alice@example.com`, `github.com/acme/demo-repo`). Any
-      found is a **blocker**.
+      memories), and no unscrubbed logs or screenshots. Tests and docs use made-up values
+      (`alice@example.com`, `github.com/acme/demo-repo`). Any found is a **blocker**. The
+      description's Meko lines from AgentK's PR prompt (`<Meko host>://<datapack id>;<name>`,
+      `meko_design:`, `meko_conversation_id:`) are allowed and stay as written.
 - [ ] Pasted images (`POST /api/sessions/:id/images`) are checked by their bytes, size-capped, and
       saved owner-only under the session's `pastes/` folder with a name the server picks; the
       browser only gets the path back. The route's `image/*` parser stays in its own scope, so no

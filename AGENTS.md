@@ -56,8 +56,10 @@ from the extension's folder) and which docs to keep current. Meko's own Go backe
   (prompts, transcripts, memories, datapack contents). Use made-up values instead (`Alice`,
   `alice@example.com`, `github.com/acme/demo-repo`, a fake token such as `test-token`, `~` for a
   home folder), and scrub logs, command output and screenshots before pasting them in. Refer to
-  people by role ("the reporter", "a reviewer"). The only personal data a change carries is its
-  author's configured git identity and the footer lines the harness asks for. If you find a
+  people by role ("the reporter", "a reviewer"). The only exceptions are a change's author's
+  configured git identity, the footer lines the harness asks for, and the Meko lines AgentK's PR
+  prompt asks for (`<Meko host>://<datapack id>;<datapack name>`, `meko_design:…` and
+  `meko_conversation_id:…`, which AgentK reads back): leave those as given. If you find a
   secret or personal data already in the repo, tell the user: it's removed in a change of its
   own, and a real secret is revoked too, since git history keeps it.
 - Shell commands and scripts run on Linux and macOS: stick to POSIX flags that GNU and BSD tools

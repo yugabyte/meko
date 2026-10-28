@@ -22,8 +22,9 @@ pass `--author` or change the identity.
 ## Nothing personal
 
 The repo is public, and commit messages and PR descriptions stay with it. Besides the author's
-identity and the harness's footer lines, they carry no secrets or personal data (the repo
-root's AGENTS.md has the rule): no passwords, tokens, keys or cookies, no one's name, email
+identity, the harness's footer lines and AgentK's Meko lines above (left exactly as given:
+AgentK reads them back), they carry no secrets or personal data (the repo root's AGENTS.md
+has the rule): no passwords, tokens, keys or cookies, no one's name, email
 address, user name or handle, no customer or company names, no internal hostnames or paths,
 and nothing a user wrote or stored (prompts, transcripts, memories, datapack contents). Say "a
 user", "the reporter" or "a reviewer", and scrub any log or output you quote. The same goes for
@@ -128,8 +129,8 @@ type is up to you, and it's what keeps a fix from missing its release.
 
 1. `git status` and `git diff --staged` (and unstaged `git diff`) to see what's changing.
 2. Stage only the files that belong to this change. Never stage secrets, `.env`, `state.db`,
-   certificates, or anything from Meko's data folder (`~/.meko`, which holds AgentK's home since
-   it moved from `~/.agent-k-local`). Check `git diff --staged` for secrets and personal data
+   certificates, or anything from Meko's data folder (`~/.meko`, or wherever `MEKO_HOME` points)
+   or AgentK's old home `~/.agent-k-local`. Check `git diff --staged` for secrets and personal data
    (see Nothing personal) and replace them with made-up values.
 3. Write the message per the rules above, with nothing personal in it, and check its subject with
    `sh scripts/check-title.sh "<subject>"`.
