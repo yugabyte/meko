@@ -17,8 +17,8 @@
 **The Context Engine for Agentic Applications**
 
 Universal, self-learning context for every agent, tool, and team: collective memory, shared
-knowledge, and decision traces in governed datapacks. This repo holds `meko`, which runs Meko on
-your own machine: one binary with the command line, server, MCP tools and REST API.
+knowledge, and decision traces in governed datapacks. Run Meko locally on your machine with `meko`,
+a single binary that has the command line, the server, the MCP tools and the REST API.
 
 ## Start here
 
@@ -39,7 +39,7 @@ On Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon:
 gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
 ```
 
-Quick start, once `meko status` shows the memory engine ready:
+Add a memory and search, once `meko status` shows the memory engine ready:
 ```sh
 mekosh add_memory "Elementary, my dear Watson"
 mekosh add_memory "The quick brown fox jumps over the lazy dog"
