@@ -85,8 +85,7 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
   both. Use `chore` for what doesn't change what ships ([install.md](docs/install.md)).
 - Keep the docs in `docs/` and this file current in the same commit as the code: `docs/cli.md`
   when a command or its flags change, and the repo root's `README.md` too when a command it lists,
-  the install or the build requirements change. Check
-  the change against [REVIEW.md](REVIEW.md).
+  the install or the build requirements change. Check the change against [REVIEW.md](REVIEW.md).
 - The docs describe Meko as it is now, with the reasons for its design: no status lines, no
   milestones, PR or issue numbers, delivery plans or history of how it got here (that's the git
   log's). Work not built yet is described as such, without a tracking number. Nothing in them
