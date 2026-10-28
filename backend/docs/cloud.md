@@ -38,7 +38,8 @@ in one place, checked before it's saved, and read by every extension the same wa
   on a terminal with echo off (Enter keeps a saved one), and links; `--off` unlinks. With a server
   running it goes through the API listener (admin token), so the running extensions are told;
   otherwise it saves the link itself, and they read it when they next ask. `meko status` shows
-  the link (`Meko Cloud: linked to <url> (key …abcd)`, or not linked).
+  the link when there is one (`✓ Meko Cloud      linked to <url> (key …abcd)`), and
+  `meko status --verbose` says so either way (`Meko Cloud:    linked to …`, or not linked).
 
 ## Listing Meko Cloud's datapacks
 

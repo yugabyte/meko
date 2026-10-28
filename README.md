@@ -92,7 +92,7 @@ agents (MCP and the REST API, on 7778), and what to run next.
 
 | `mekosh` | What it does |
 |---|---|
-| `mekosh` | A prompt (`mekosh default>`) that takes the commands below, one a line, plus `use <datapack>` (later commands use it unless a line names another), `help` and `exit`. There's no history or line editing yet, and Ctrl-C leaves. Given a file or pipe instead of a terminal, it runs the lines as a script and exits with the first failing line's code |
+| `mekosh` | A prompt (`mekosh default>`) that takes the commands below, one a line, plus `use <datapack>` (later `search`, `add_memory`, `upload` and `upload_status` lines use it unless they name another; a `delete_datapack` of it goes back to the default), `help` and `exit`. There's no history or line editing yet, and Ctrl-C leaves. Given a file or pipe instead of a terminal, it runs the lines as a script and exits with the first failing line's code |
 | `mekosh datapacks [--cloud]` | List the datapacks; `--cloud` adds the linked Meko Cloud's after them, each marked local or cloud (and shared) |
 | `mekosh create_datapack <name>` | Create a datapack |
 | `mekosh delete_datapack <name\|id> [--force]` | Delete a datapack and everything in it, for good. It asks first; `--force` doesn't |

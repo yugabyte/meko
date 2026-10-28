@@ -330,7 +330,8 @@ func (e Entry) Run(root, action string, stdout, stderr io.Writer) error {
 }
 
 // SummaryEnv, set to 1 for the start and stop meko start and meko stop run, asks the extension to
-// print one row in Meko's summary format instead of its usual lines (docs/design.md).
+// print one row in Meko's summary format instead of its usual lines (docs/install.md, "The summary
+// rows").
 const SummaryEnv = "MEKO_SUMMARY"
 
 // RunSummary runs `<command> <action>` as Run does, with SummaryEnv set: for meko start and stop.

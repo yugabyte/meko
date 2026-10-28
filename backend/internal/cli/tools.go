@@ -143,6 +143,27 @@ func (t *toolSession) datapackID(ctx context.Context, named string) (string, err
 	return "", fmt.Errorf("no datapack is named %q (mekosh datapacks lists them)", named)
 }
 
+// findDatapack finds a datapack by name or id among this Meko's, and returns both.
+func (t *toolSession) findDatapack(ctx context.Context, named string) (id, name string, err error) {
+	text, err := t.call(ctx, "datapack_list", map[string]any{})
+	if err != nil {
+		return "", "", err
+	}
+	var rows []struct {
+		ID   string `json:"datapack_id"`
+		Name string `json:"datapack_name"`
+	}
+	if err := json.Unmarshal([]byte(text), &rows); err != nil {
+		return "", "", err
+	}
+	for _, r := range rows {
+		if r.ID == named || r.Name == named {
+			return r.ID, r.Name, nil
+		}
+	}
+	return "", "", fmt.Errorf("no datapack is named %q (mekosh datapacks lists them)", named)
+}
+
 // defaultDatapackID is the default datapack's id, or "" once it has been deleted (Meko makes it
 // only on first start).
 func (t *toolSession) defaultDatapackID(ctx context.Context) (string, error) {

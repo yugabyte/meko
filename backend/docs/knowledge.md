@@ -113,7 +113,7 @@ results within cosine distance 0.6, and past it any keyword or hybrid match the 
   pinned to commit `a09144355adeed5f58c8ed011d209bf8ee5a1fec`, in a worker thread of its own
   (`rerankworker.ts`). It loads after the embedder, retrying with the same backoff, and the memory engine
   is ready without it: `/v1/rerank` answers 503 `RERANKER_NOT_READY` until it's in, and `/healthz`
-  and `meko status` say how it is. A worker that dies after loading is replaced by the next rerank
+  and `meko status --verbose` say how it is. A worker that dies after loading is replaced by the next rerank
   that finds it (`revive`, at most once every 30 s); meanwhile results are unranked, and Go logs it
   at debug level.
 - **Tests** get a word-overlap reranker with the hashing embedder.

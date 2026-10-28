@@ -52,7 +52,7 @@ has no admin-only routes. Its own routes:
   off. Everything else stays: status and version still need the admin token, the API listener still
   listens on 127.0.0.1 only, and the Host and Origin checks still apply. It doesn't touch the web
   listener, which never takes a token. Each start logs a warning,
-  and `meko status` shows `Auth: none` with what it means.
+  and `meko status` warns of it (`--verbose` shows `Auth: none` with what it means).
 - The credential a request got in with (`admin`, `client` or `none`, and on the web listener
   `session` or `local`) is recorded with each call, never the token. `knowledgebase_upload_file`,
   which reads a path as Meko's user, takes only `admin` or `client`. Every 401 on the API listener

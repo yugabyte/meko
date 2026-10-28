@@ -11,7 +11,8 @@ import (
 
 // The summary install, start, stop, restart and status print: a row per step, marked done (✓), a
 // warning (!) or failed (✗); a box of links; and the commands to run next. Extensions print their
-// start and stop rows in the same format when Meko runs them with extensions.SummaryEnv set (docs/design.md).
+// start and stop rows in the same format when Meko runs them with extensions.SummaryEnv set
+// (docs/install.md, "The summary rows").
 
 type stepKind int
 

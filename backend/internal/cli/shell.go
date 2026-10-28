@@ -20,6 +20,10 @@ var atPrompt bool
 // datapackCommands are mekosh's commands that take --datapack, which the prompt's use fills in.
 var datapackCommands = []string{"search", "add_memory", "upload", "upload_status"}
 
+// promptDatapack is the datapack the prompt's use picked: its id, which later lines pass (it still
+// names it after a rename), and its name, which the prompt shows. The zero value is the default.
+type promptDatapack struct{ id, name string }
+
 // RunMekosh runs mekosh: the command in args, or with none (only --data-dir) its prompt.
 func RunMekosh(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && (!strings.HasPrefix(args[0], "-") || args[0] == "-h" || args[0] == "--help") {
@@ -83,10 +87,11 @@ func runPrompt(dataDir string, in io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "Connected to Meko %s at http://127.0.0.1:%d, datapack default\n", st.Version, st.Port)
 		fmt.Fprintln(stdout, "Type help for the commands, exit to leave")
 	}
-	datapack, code := "", exitOK
+	var datapack promptDatapack
+	code := exitOK
 	for {
 		if interactive {
-			label := datapack
+			label := datapack.name
 			if label == "" {
 				label = "default"
 			}
@@ -111,7 +116,14 @@ func runPrompt(dataDir string, in io.Reader, stdout, stderr io.Writer) int {
 		case words[0] == "use":
 			lc = promptUse(l, words[1:], &datapack, stdout, stderr)
 		default:
-			lc = runProg(progMekosh, promptArgs(words, datapack, dataDir), stdout, stderr)
+			lc = runProg(progMekosh, promptArgs(words, datapack.id, dataDir), stdout, stderr)
+			// The datapack in use is gone: later lines go to the default one again.
+			if lc == exitOK && words[0] == "delete_datapack" && datapack.id != "" {
+				if named := firstArg(words[1:]); named == datapack.id || named == datapack.name {
+					datapack = promptDatapack{}
+					fmt.Fprintln(stdout, "Using the default datapack")
+				}
+			}
 		}
 		if lc != exitOK && code == exitOK && !interactive {
 			code = lc
@@ -120,10 +132,19 @@ func runPrompt(dataDir string, in io.Reader, stdout, stderr io.Writer) int {
 }
 
 // promptArgs adds what the prompt knows to a line's words: the datapack use set, for a command that
-// takes --datapack and names none, and the data folder mekosh was given.
+// takes --datapack and names none, and the data folder mekosh was given. help takes neither: its
+// argument is the command to explain.
 func promptArgs(words []string, datapack, dataDir string) []string {
+	if words[0] == "help" || words[0] == "-h" || words[0] == "--help" {
+		return words
+	}
+	// has reports whether the line passes the flag: only words that start with - can, so a search
+	// for "datapack" doesn't count.
 	has := func(name string) bool {
 		return slices.ContainsFunc(words[1:], func(w string) bool {
+			if !strings.HasPrefix(w, "-") {
+				return false
+			}
 			w = strings.TrimLeft(w, "-")
 			return w == name || strings.HasPrefix(w, name+"=")
 		})
@@ -138,15 +159,25 @@ func promptArgs(words []string, datapack, dataDir string) []string {
 	return out
 }
 
-// promptUse is the prompt's use: with a name or id, check the datapack exists and use it from now on;
-// alone, say which one is in use.
-func promptUse(l paths.Layout, args []string, datapack *string, stdout, stderr io.Writer) int {
+// firstArg is the first of args that isn't a flag: delete_datapack's name or id.
+func firstArg(args []string) string {
+	for _, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			return a
+		}
+	}
+	return ""
+}
+
+// promptUse is the prompt's use: with a name or id, find the datapack and use it from now on; alone,
+// say which one is in use.
+func promptUse(l paths.Layout, args []string, datapack *promptDatapack, stdout, stderr io.Writer) int {
 	switch len(args) {
 	case 0:
-		if *datapack == "" {
+		if datapack.id == "" {
 			fmt.Fprintln(stdout, "Using the default datapack")
 		} else {
-			fmt.Fprintf(stdout, "Using datapack %s\n", *datapack)
+			fmt.Fprintf(stdout, "Using datapack %s\n", datapack.name)
 		}
 		return exitOK
 	case 1:
@@ -162,12 +193,13 @@ func promptUse(l paths.Layout, args []string, datapack *string, stdout, stderr i
 		return exitError
 	}
 	defer func() { _ = t.s.Close() }()
-	if _, err := t.datapackID(ctx, args[0]); err != nil {
+	id, name, err := t.findDatapack(ctx, args[0])
+	if err != nil {
 		fmt.Fprintf(stderr, "mekosh: %v\n", err)
 		return exitError
 	}
-	*datapack = args[0]
-	fmt.Fprintf(stdout, "Using datapack %s\n", args[0])
+	*datapack = promptDatapack{id: id, name: name}
+	fmt.Fprintf(stdout, "Using datapack %s\n", name)
 	return exitOK
 }
 

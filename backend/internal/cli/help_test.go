@@ -150,6 +150,13 @@ func TestPromptArgs(t *testing.T) {
 		{[]string{"search", "q", "-datapack", "other"}, "research", "", []string{"search", "q", "-datapack", "other"}},
 		{[]string{"datapacks"}, "research", "/d", []string{"datapacks", "--data-dir", "/d"}},
 		{[]string{"add_memory", "x"}, "", "", []string{"add_memory", "x"}},
+		// A word that names a flag isn't one unless it starts with -.
+		{[]string{"search", "datapack"}, "research", "", []string{"search", "datapack", "--datapack", "research"}},
+		{[]string{"add_memory", "data-dir"}, "", "/d", []string{"add_memory", "data-dir", "--data-dir", "/d"}},
+		// help's argument is the command to explain: it takes nothing from the prompt.
+		{[]string{"help"}, "research", "/d", []string{"help"}},
+		{[]string{"help", "search"}, "research", "/d", []string{"help", "search"}},
+		{[]string{"--help"}, "", "/d", []string{"--help"}},
 	} {
 		if got := promptArgs(c.words, c.datapack, c.dataDir); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("promptArgs(%q, %q, %q) = %q, want %q", c.words, c.datapack, c.dataDir, got, c.want)

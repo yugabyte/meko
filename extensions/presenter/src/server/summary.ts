@@ -1,5 +1,5 @@
 /**
- * One row of Meko's summary, which `meko start` and `meko stop` print (backend/docs/design.md, "The
+ * One row of Meko's summary, which `meko start` and `meko stop` print (backend/docs/install.md, "The
  * summary rows"): two spaces, ✓, ! or ✗, the title padded to 15, then the text. The mark is colored on
  * a terminal unless NO_COLOR is set.
  */

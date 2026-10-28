@@ -662,15 +662,21 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 	// next line, a failing line doesn't stop it but sets the exit code, and exit ends it.
 	withStdin(t, "create_datapack prompt-notes\nuse prompt-notes\nadd_memory \"kept by the prompt\"\n"+
 		"search \"kept by the prompt\" --source memory --json\nadd_memory\nsearch \"unclosed\nuse nosuch\nuse\n"+
-		"# a comment\n\ndelete_datapack prompt-notes\ny\nexit\ncreate_datapack after-exit\n")
+		"# a comment\nhelp\n\ndelete_datapack prompt-notes\ny\nsearch \"kept by the prompt\" --source memory --json\n"+
+		"exit\ncreate_datapack after-exit\n")
 	code, out, errs = runSh("--data-dir", dir)
 	want(t, "the prompt's use", code, exitError, out, "Using datapack prompt-notes\nAdded memory ")
 	want(t, "the prompt's search in the datapack it uses", code, exitError, out, "kept by the prompt")
 	want(t, "the prompt's use, alone", code, exitError, out, "\nUsing datapack prompt-notes\n")
-	want(t, "the prompt's delete_datapack", code, exitError, out, "Delete it? [y/N] \nDeleted datapack prompt-notes\n")
+	want(t, "the prompt's help, with --data-dir", code, exitError, out, "Usage: mekosh [<command> [flags]]")
+	want(t, "the prompt's delete_datapack of the datapack in use", code, exitError, out,
+		"Delete it? [y/N] \nDeleted datapack prompt-notes\nUsing the default datapack\n")
 	want(t, "add_memory at the prompt", code, exitError, errs, "mekosh: give the memory's text: add_memory \"<text>\"\n")
 	want(t, "an unclosed quote", code, exitError, errs, "mekosh: the line has an unclosed \" quote\n")
 	want(t, "use of a missing datapack", code, exitError, errs, `mekosh: no datapack is named "nosuch"`)
+	if strings.Contains(errs, `"prompt-notes"`) || strings.Contains(errs, "unknown command") {
+		t.Errorf("a line after the datapack in use was deleted, or help, failed:\n%s", errs)
+	}
 	if _, out, _ = runSh("datapacks", "--data-dir", dir); strings.Contains(out, "prompt-notes") ||
 		strings.Contains(out, "after-exit") {
 		t.Errorf("the prompt's datapack wasn't deleted, or a line after exit ran:\n%s", out)
