@@ -338,7 +338,7 @@ func (a *api) metrics(c echo.Context) error {
 		days[i] = map[string]any{"date": d.Date, "hybrid": d.Hybrid, "kb": d.KB, "memory": d.Memory}
 	}
 	out := map[string]any{"datapack_id": id, "total_requests": st.Requests, "savings_requests": cx.Requests,
-		"tokens_saved_total": cx.Saved, "tokens_if_raw_total": cx.IfRaw, "savings_pct": pct,
+		"tokens_sent_total": cx.Sent, "tokens_saved_total": cx.Saved, "tokens_if_raw_total": cx.IfRaw, "savings_pct": pct,
 		"score_high_total": cx.ScoreHigh, "score_mid_total": cx.Mid, "score_low_total": cx.Low,
 		"agent_count": st.Agents, "human_count": 1, "daily_activity": days,
 		"conversation_count": z.Conversations, "memory_extraction_count": 0, "extraction_rate": 0.0,

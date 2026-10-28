@@ -196,12 +196,12 @@ type CallStats struct {
 // ContextStats is Meko Cloud's context efficiency and quality over a datapack's context_search calls.
 type ContextStats struct {
 	Requests            int // context_search calls that sent something
-	Saved, IfRaw        int // tokens saved, and the baselines they were measured against
+	Sent, Saved, IfRaw  int // tokens sent and saved, and the baselines the saving was measured against
 	ScoreHigh, Mid, Low int // their results by match quality
 }
 
-// defaultIfRaw is the baseline of a call recorded before the call log kept it: Cloud's default of 10
-// knowledge-base chunks, as Cloud filled its own older rows.
+// defaultIfRaw is the baseline of a call recorded without one (before the call log kept it): Cloud's
+// default of 10 knowledge-base chunks.
 const defaultIfRaw = 10_000
 
 // statsDays is how many days of activity CallStats reports by default.
@@ -255,12 +255,15 @@ func (s *Service) CallStats(ctx context.Context, datapack string, lastDays int) 
 		out.Mid += c.ScoreMid
 		out.Low += c.ScoreLow
 		if kind == "hybrid" && c.TokensSent > 0 {
-			ifRaw := c.TokensIfRaw
+			// A call recorded without a baseline measured its saving against another one; both are
+			// counted against the default instead, so saved never exceeds the baseline.
+			ifRaw, saved := c.TokensIfRaw, c.TokensSaved
 			if ifRaw == 0 {
-				ifRaw = defaultIfRaw
+				ifRaw, saved = defaultIfRaw, max(0, defaultIfRaw-c.TokensSent)
 			}
 			out.Context.Requests++
-			out.Context.Saved += c.TokensSaved
+			out.Context.Sent += c.TokensSent
+			out.Context.Saved += saved
 			out.Context.IfRaw += ifRaw
 			out.Context.ScoreHigh += c.ScoreHigh
 			out.Context.Mid += c.ScoreMid
