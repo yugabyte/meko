@@ -2629,26 +2629,60 @@ div[id^='dak-mermaid-'] .label {
   top: 0;
 }
 
-/* Open project dialog: the datapack section, the project name, then the repo section */
+/* Open project dialog: the project name with its dropdown, the datapack section, then the repo section */
 .np-section {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
-.np-dp-hd {
+.np-combo {
+  position: relative;
+}
+/* Project name's dropdown of "project · datapack", over the sections below it. */
+.np-suggest {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 5;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.np-suggest .dp-row {
+  flex-wrap: nowrap;
+}
+.np-suggest .dp-row > .mono {
+  color: var(--muted);
+}
+.np-suggest-name {
+  flex: none;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+/* Which datapack the project gets: a read-only line. */
+.np-dp-line {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-}
-.np-dp-chosen {
-  cursor: default;
-}
-.np-dp-chosen:hover {
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
   background: var(--accent-soft);
 }
-.np-dp-chosen .btn {
+.np-dp-line.off {
+  background: var(--sunk);
+}
+.np-dp-what {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.np-dp-what .tag {
+  margin-left: 8px;
+}
+.np-dp-line .icon-btn {
   flex: none;
 }
 .np-hint-ok {

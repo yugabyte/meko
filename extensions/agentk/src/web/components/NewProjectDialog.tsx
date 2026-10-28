@@ -1,10 +1,12 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ClosedProject, DatapackChoice, DatapackInvite, MekoDatapack, OpenedProject, Project, RepoInfo } from '../../shared/types';
 import { newRepoNameProblem } from '../../shared/types';
-import {
-  canonicalRepoName, defaultProjectDatapackName, isProjectDatapack, matchRepo, parseProjectDatapack, remoteFromDescription, remoteRepoName,
-} from '../../shared/datapacks';
+import { canonicalRepoName, matchRepo, parseProjectDatapack, remoteRepoName } from '../../shared/datapacks';
 import { api, errorCode, errorMessage } from '../api';
+import {
+  type DetectedDatapack, type DpOption, GROUP_LABEL, datapackOptions, detectDatapack, projectNameOf, readOnly, searchDatapacks,
+  suggestProjects, tagFor,
+} from '../datapackpick';
 import { useTouch } from '../hooks/useMedia';
 import { cx, relativeTime } from '../util';
 import { Busy, Dialog, ErrorText, Field } from './common';
@@ -25,32 +27,37 @@ function projectList(r: RepoInfo): string {
   return r.projects.map((p) => `“${p.name}”`).join(', ');
 }
 
-/** One choice in the datapack list: a datapack we can see, or an invite waiting in Meko. */
-interface DpOption {
-  id: string;
-  name: string;
-  grant: string | null;
-  owner: string | null;
-  inviteId: string | null;
-  remote: string | null;
-  /** Projects here that already use it. */
-  usedBy: string[];
-  /** The closed project it was the dedicated datapack of: picking it opens that project again. */
-  closed: ClosedProject | null;
-  group: 'invites' | 'shared' | 'yours';
-}
-
-const GROUP_LABEL: Record<DpOption['group'], string> = {
-  invites: 'Invites for you',
-  shared: 'Shared with you',
-  yours: 'Yours',
-};
-
-function tagFor(o: DpOption): string | null {
-  if (o.inviteId) return `invite${o.grant ? ` · ${o.grant}` : ''}${o.owner ? ` · ${o.owner}` : ''}`;
-  if (o.grant === 'viewer') return 'viewer · read only';
-  if (o.grant && o.grant !== 'owner') return `${o.grant}${o.owner ? ` · ${o.owner}` : ''}`;
-  return o.grant;
+/** What the Datapack section says: which datapack the project gets, or why it gets none. */
+function DatapackLine({ detected }: { detected: DetectedDatapack }) {
+  switch (detected.kind) {
+    case 'no-meko':
+      return (
+        <>
+          Meko isn’t set up, so the project opens without a datapack. Start Meko on this computer (meko start), or link Meko Cloud
+          in Meko’s web UI (Settings › Meko Cloud), to give projects one.
+        </>
+      );
+    case 'none':
+      return <><b>No datapack.</b> The project opens without one. You can add one later from its home.</>;
+    case 'loading':
+      return <Busy label="Checking Meko’s datapacks" />;
+    case 'no-name':
+      return <>Type a project name, or pick one of your projects. The datapack follows from the name and the repo.</>;
+    case 'no-repo':
+      return <><b>New datapack</b> <span className="mono">{detected.name}</span> once you pick a repo below.</>;
+    case 'new':
+      return <><b>New datapack</b> <span className="mono">{detected.name}</span></>;
+    default: {
+      const o = detected.option;
+      const tag = tagFor(o);
+      return (
+        <>
+          <b>{o.inviteId ? 'Accepts the invite to' : 'Uses'}</b> <span className="mono">{o.name}</span>
+          {tag && <span className="tag shared">{tag}</span>}
+        </>
+      );
+    }
+  }
 }
 
 export function NewProjectDialog({
@@ -92,22 +99,21 @@ export function NewProjectDialog({
   const [dpLoading, setDpLoading] = useState(false);
   // With no Meko a datapack can't be had: the project starts without one.
   const mekoUsable = mekoConfigured;
-  // A new datapack by default; opened for a share (its banner), that datapack.
-  const [dpMode, setDpMode] = useState<'create' | 'existing' | 'none'>(initialInvite ? 'existing' : mekoUsable ? 'create' : 'none');
   /** Meko refused a new datapack: the plan's datapack limit is reached. */
   const [atLimit, setAtLimit] = useState(false);
-  /** The mode was picked by hand, so it no longer follows Meko coming and going. */
-  const [dpModeTouched, setDpModeTouched] = useState(false);
   const datapacksLoaded = useRef(false);
-  const pickMode = (m: 'create' | 'existing' | 'none') => {
-    setDpModeTouched(true);
-    setDpMode(m);
-  };
-  const [dpName, setDpName] = useState('');
-  const [dpNameTouched, setDpNameTouched] = useState(false);
-  const [dpChosen, setDpChosen] = useState<DpOption | null>(null);
-  const [dpFilter, setDpFilter] = useState('');
-  const [showAll, setShowAll] = useState(false);
+  /** No datapack, ticked by hand. */
+  const [noDatapack, setNoDatapack] = useState(false);
+  /**
+   * A datapack picked from Project name's dropdown (`name`: editing the name drops it) or from
+   * Search all datapacks (`search`: it stays, and never changes the name or the repo).
+   */
+  const [picked, setPicked] = useState<{ option: DpOption; from: 'name' | 'search' } | null>(null);
+  /** Project name's dropdown is open. */
+  const [suggesting, setSuggesting] = useState(false);
+  const [highlight, setHighlight] = useState(-1);
+  /** Search all datapacks' text, or null while the search is closed. */
+  const [dpSearch, setDpSearch] = useState<string | null>(null);
   /** A datapack just chosen whose repo and name are still to be filled in (waits for the repo list). */
   const [autoFill, setAutoFill] = useState<DpOption | null>(null);
   const [autoHint, setAutoHint] = useState<{ ok: boolean; text: string } | null>(null);
@@ -150,15 +156,10 @@ export function NewProjectDialog({
     }
   }, [loadDatapacks, mekoUsable]);
 
-  // Until a mode is picked, it follows Meko: No datapack while it can't be used, else a new one.
-  useEffect(() => {
-    if (!dpModeTouched) setDpMode(initialInvite ? 'existing' : mekoUsable ? 'create' : 'none');
-  }, [mekoUsable, dpModeTouched, initialInvite]);
-
-  // The project name is typed, or filled in from a chosen project datapack. The default name for a
-  // new datapack follows the chosen repo and the name until edited: adlc/proj/<repo>/<project_name>,
-  // where <repo> is the upstream repo's name for a fork (canonicalRepoName). A typed folder that is
-  // one of the scanned repos is named the same way as picking it from the list.
+  // The project name is typed, or filled in from a project picked in its dropdown. With nothing
+  // picked, the datapack is the one named adlc/proj/<repo>/<project_name>, where <repo> is the
+  // upstream repo's name for a fork (canonicalRepoName). A typed folder that is one of the scanned
+  // repos is named the same way as picking it from the list.
   const folderRepo = source === 'folder' ? (repos?.find((r) => r.path === folder.trim().replace(/\/+$/, '')) ?? null) : null;
   const repoName =
     source === 'list'
@@ -172,55 +173,28 @@ export function NewProjectDialog({
           : folderRepo
           ? canonicalRepoName(folderRepo)
           : nameFromPath(folder);
-  const defaultDp = defaultProjectDatapackName(repoName, name);
-  useEffect(() => {
-    if (!dpNameTouched) setDpName(defaultDp);
-  }, [defaultDp, dpNameTouched]);
+  const options = useMemo(
+    () => datapackOptions(datapacks ?? [], invites, projects, closedProjects),
+    [datapacks, invites, projects, closedProjects],
+  );
+  const suggestions = useMemo(
+    () => (mekoUsable && suggesting && !noDatapack && dpSearch === null ? suggestProjects(name, options) : []),
+    [mekoUsable, suggesting, noDatapack, dpSearch, name, options],
+  );
+  const searched = useMemo(() => (dpSearch === null ? [] : searchDatapacks(dpSearch, options)), [dpSearch, options]);
 
-  const options = useMemo<DpOption[]>(() => {
-    const usedBy = new Map<string, string[]>();
-    for (const p of projects) for (const d of p.datapacks) usedBy.set(d.id, [...(usedBy.get(d.id) ?? []), p.name]);
-    const closed = new Map(closedProjects.map((c) => [c.datapackId, c]));
-    const out: DpOption[] = [];
-    const seen = new Set<string>();
-    for (const i of invites) {
-      if (!i.inviteId) continue;
-      seen.add(i.datapackId);
-      out.push({
-        id: i.datapackId, name: i.name, grant: i.grant, owner: i.ownerName ?? i.ownerEmail, inviteId: i.inviteId,
-        remote: i.repoRemote, usedBy: usedBy.get(i.datapackId) ?? [], closed: closed.get(i.datapackId) ?? null, group: 'invites',
-      });
+  /** From the dropdown: the name, the datapack and the repo. From the search: only the datapack. */
+  const choose = (o: DpOption, from: 'name' | 'search') => {
+    if (readOnly(o)) return;
+    setPicked({ option: o, from });
+    setNoDatapack(false);
+    setDpSearch(null);
+    setSuggesting(false);
+    setHighlight(-1);
+    if (from === 'name') {
+      setAutoHint(null);
+      setAutoFill(o);
     }
-    for (const d of datapacks ?? []) {
-      if (seen.has(d.id)) continue;
-      const mine = !d.grant || d.grant === 'owner';
-      out.push({
-        id: d.id, name: d.name, grant: d.grant, owner: mine ? null : (d.ownerName ?? d.ownerEmail), inviteId: null,
-        remote: remoteFromDescription(d.description), usedBy: usedBy.get(d.id) ?? [], closed: closed.get(d.id) ?? null, group: mine ? 'yours' : 'shared',
-      });
-    }
-    return out;
-  }, [datapacks, invites, projects, closedProjects]);
-
-  const dpShown = useMemo(() => {
-    const q = dpFilter.trim().toLowerCase();
-    const order: DpOption['group'][] = ['invites', 'shared', 'yours'];
-    return options
-      .filter((o) => (showAll || isProjectDatapack(o.name)) && (!q || o.name.toLowerCase().includes(q)))
-      .sort(
-        (a, b) =>
-          order.indexOf(a.group) - order.indexOf(b.group) ||
-          Number(a.usedBy.length > 0) - Number(b.usedBy.length > 0) ||
-          a.name.localeCompare(b.name),
-      )
-      .slice(0, 200);
-  }, [options, dpFilter, showAll]);
-  const hiddenCount = options.filter((o) => !isProjectDatapack(o.name)).length;
-
-  const choose = (o: DpOption) => {
-    setDpChosen(o);
-    setAutoHint(null);
-    setAutoFill(o);
   };
 
   // Open as project: choose the datapack we were opened for once the lists are in.
@@ -228,12 +202,12 @@ export function NewProjectDialog({
     if (!pendingInitial || !datapacks) return;
     const o = options.find((x) => x.id === pendingInitial);
     setPendingInitial(null);
-    if (!o || o.grant === 'viewer') return;
-    setDpChosen(o);
+    if (!o || readOnly(o)) return;
+    setPicked({ option: o, from: 'name' });
     setAutoFill(o);
   }, [pendingInitial, datapacks, options]);
 
-  // Fill in the repo and project name from the chosen datapack (once the repo list is in).
+  // Fill in the repo and project name from the project picked in the dropdown (once the repo list is in).
   useEffect(() => {
     if (!autoFill || !repos) return;
     const o = autoFill;
@@ -294,10 +268,17 @@ export function NewProjectDialog({
     return list.sort((a, b) => (sort === 'az' ? a.name.localeCompare(b.name) : b.lastTouchedAt - a.lastTouchedAt));
   }, [repos, filter, sort]);
 
+  const detected = detectDatapack({
+    mekoUsable, noDatapack, picked: picked?.option ?? null, name, repoName,
+    // A list that failed to load doesn't hold Open project up: the default name is tried, and Meko refuses a taken one.
+    options: datapacks || dpError ? options : null,
+  });
+  const dpUsed = detected.kind === 'picked' || detected.kind === 'found' ? detected.option : null;
+
   // The repo picked, when it isn't the one the closed project being opened again was on.
   const pickedRepo = source === 'list' ? (selected?.path ?? null) : source === 'folder' ? folder.trim().replace(/\/+$/, '') || null : null;
-  const movesFrom = dpMode === 'existing' && dpChosen?.closed && (source === 'clone' || source === 'new' || (pickedRepo && pickedRepo !== dpChosen.closed.repoPath))
-    ? dpChosen.closed.repoPath
+  const movesFrom = dpUsed?.closed && (source === 'clone' || source === 'new' || (pickedRepo && pickedRepo !== dpUsed.closed.repoPath))
+    ? dpUsed.closed.repoPath
     : null;
 
   // Checked as typed, as the server checks it; an empty name only keeps Open project off.
@@ -310,20 +291,14 @@ export function NewProjectDialog({
         : source === 'new'
           ? !newProblem
           : folder.trim().length > 0;
-  const dpReady = dpMode === 'none' ? true : dpMode === 'create' ? dpName.trim().length > 0 : !!dpChosen;
-  const canCreate = repoChosen && dpReady && name.trim().length > 0 && (dpMode === 'none' || mekoUsable) && !busy;
-  const accepting = dpMode === 'existing' && !!dpChosen?.inviteId;
+  const canCreate = repoChosen && !!detected.choice && name.trim().length > 0 && !busy;
+  const accepting = !!dpUsed?.inviteId;
 
-  const create = async (mode = dpMode) => {
+  const create = async (datapack: DatapackChoice | null = detected.choice) => {
+    if (!datapack) return;
     setError(null);
     setAtLimit(false);
     setBusy(true);
-    const datapack: DatapackChoice =
-      mode === 'none'
-        ? { mode: 'none' }
-        : mode === 'create'
-          ? { mode: 'create', name: dpName.trim() }
-          : { mode: 'existing', id: dpChosen!.id, name: dpChosen!.name, ...(dpChosen!.inviteId ? { inviteId: dpChosen!.inviteId } : {}) };
     try {
       const p = await api.openProject({
         repoPath: source === 'list' ? selected!.path : source === 'folder' ? folder.trim() : undefined,
@@ -341,6 +316,26 @@ export function NewProjectDialog({
     }
   };
 
+  const editName = (v: string) => {
+    setName(v);
+    setSuggesting(true);
+    setHighlight(-1);
+    // A project picked in the dropdown goes with its name; a datapack picked in the search stays.
+    if (picked?.from === 'name') {
+      setPicked(null);
+      setAutoHint(null);
+    }
+  };
+  const nameKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (!suggestions.length) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      setHighlight((h) => (e.key === 'ArrowDown' ? Math.min(suggestions.length - 1, h + 1) : Math.max(-1, h - 1)));
+    } else if (e.key === 'Enter' && highlight >= 0 && suggestions[highlight]) {
+      e.preventDefault();
+      choose(suggestions[highlight], 'name');
+    }
+  };
   let lastGroup: DpOption['group'] | null = null;
 
   return (
@@ -396,83 +391,95 @@ export function NewProjectDialog({
     >
 
       <div className="np-section">
-        <div className="np-dp-hd">
-          <span className="label">Dedicated datapack</span>
-          <div className="seg" role="group" aria-label="Dedicated datapack">
-            <button
-              className={cx(dpMode === 'create' && 'on')}
-              aria-pressed={dpMode === 'create'}
-              disabled={!mekoUsable}
-              onClick={() => pickMode('create')}
-            >
-              Create a new one
-            </button>
-            <button
-              className={cx(dpMode === 'existing' && 'on')}
-              aria-pressed={dpMode === 'existing'}
-              disabled={!mekoUsable}
-              onClick={() => pickMode('existing')}
-            >
-              Use an existing one
-            </button>
-            <button className={cx(dpMode === 'none' && 'on')} aria-pressed={dpMode === 'none'} onClick={() => pickMode('none')}>
-              No datapack
-            </button>
-          </div>
-        </div>
-        {dpMode === 'none' ? (
-          <p className="hint">
-            {mekoConfigured
-              ? 'The project starts without a datapack. You can add one later from its home.'
-              : 'Meko isn’t set up, so the project starts without a datapack. Start Meko on this computer (meko start), or link Meko Cloud in Meko’s web UI (Settings › Meko Cloud), to give projects one.'}
-          </p>
-        ) : dpMode === 'create' ? (
-          <p className="hint">Its name is at the bottom, under the repo.</p>
-        ) : dpChosen ? (
-          <>
-            <div className="dp-list">
-              <div className="dp-row sel np-dp-chosen">
-                <span className="radio" />
-                <span className="mono">{dpChosen.name}</span>
-                {tagFor(dpChosen) && <span className={cx('tag', dpChosen.group === 'yours' && 'shared')}>{tagFor(dpChosen)}</span>}
-                <button id="np-dp-change" className="btn small" onClick={() => setDpChosen(null)}>
-                  Change
+        <label className="label" htmlFor="np-name">
+          Project name
+        </label>
+        <div className="np-combo">
+          <input
+            id="np-name"
+            className="input"
+            autoComplete="off"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-controls="np-suggest"
+            aria-expanded={suggestions.length > 0}
+            aria-activedescendant={highlight >= 0 ? `np-suggest-${highlight}` : undefined}
+            value={name}
+            onChange={(e) => editName(e.target.value)}
+            onFocus={() => setSuggesting(true)}
+            onBlur={() => {
+              setSuggesting(false);
+              setHighlight(-1);
+            }}
+            onKeyDown={nameKey}
+          />
+          {suggestions.length > 0 && (
+            // Clicks here keep the name field's focus, so its blur doesn't close the dropdown before they land.
+            <div id="np-suggest" className="dp-list np-suggest" role="listbox" aria-label="Your projects" onMouseDown={(e) => e.preventDefault()}>
+              {suggestions.map((o, i) => (
+                <button
+                  key={o.id}
+                  id={`np-suggest-${i}`}
+                  role="option"
+                  tabIndex={-1}
+                  aria-selected={dpUsed?.id === o.id}
+                  className={cx('dp-row', (i === highlight || dpUsed?.id === o.id) && 'sel')}
+                  disabled={readOnly(o)}
+                  onClick={() => choose(o, 'name')}
+                >
+                  <span className="np-suggest-name">{projectNameOf(o)}</span>
+                  <span className="muted">·</span>
+                  <span className="mono">{o.name}</span>
+                  {readOnly(o) && <span className="tag shared">read only</span>}
                 </button>
-              </div>
+              ))}
             </div>
-            {autoHint && <p className={cx('hint', autoHint.ok && 'np-hint-ok')}>{autoHint.text}</p>}
-            {dpChosen.usedBy.length > 0 && (
-              <p className="hint">Already used by {dpChosen.usedBy.map((n) => `“${n}”`).join(', ')} here.</p>
-            )}
-            {dpChosen.closed && (
-              <p className="hint">
-                Opens the closed project “{dpChosen.closed.name}” again, with its sessions, settings and usage.
-                {movesFrom && ` It was on ${movesFrom}; it moves to the repo picked below, and its old sessions stay on the old one.`}
-              </p>
-            )}
-          </>
-        ) : (
+          )}
+        </div>
+        {autoHint && <p className={cx('hint', autoHint.ok && 'np-hint-ok')}>{autoHint.text}</p>}
+      </div>
+
+      <div className="np-section">
+        <span className="label">Datapack</span>
+        <div className={cx('np-dp-line', !dpUsed && detected.kind !== 'new' && 'off')} aria-live="polite">
+          <span className="np-dp-what">
+            <DatapackLine detected={detected} />
+          </span>
+          {picked && detected.kind === 'picked' && (
+            <button className="icon-btn" aria-label="Drop the picked datapack" title="Drop the picked datapack" onClick={() => setPicked(null)}>
+              ×
+            </button>
+          )}
+        </div>
+        {detected.kind === 'new' && detected.readOnly && (
+          <p className="hint">You can only read {detected.readOnly}, so the new datapack gets the next free name.</p>
+        )}
+        {dpUsed && dpUsed.usedBy.length > 0 && <p className="hint">Already used by {dpUsed.usedBy.map((n) => `“${n}”`).join(', ')} here.</p>}
+        {movesFrom && (
+          <p className="hint">“{dpUsed!.closed!.name}” was on {movesFrom}. It moves to the repo picked below, and its old sessions stay on the old one.</p>
+        )}
+        {dpError && <p className="error-text">{dpError}</p>}
+        {dpSearch !== null && (
           <div className="dp-picker">
             <input
-              id="np-dp-filter"
+              id="np-dp-search"
               className="input"
-              placeholder="Search datapacks…"
-              value={dpFilter}
-              onChange={(e) => setDpFilter(e.target.value)}
+              autoComplete="off"
+              aria-label="Search all datapacks"
+              placeholder="Search all datapacks by any part of the name"
+              value={dpSearch}
+              onChange={(e) => setDpSearch(e.target.value)}
               autoFocus={!touch}
             />
-            <div className="dp-list" role="listbox" aria-label="Datapacks">
-              {dpError && <p className="error-text pad">{dpError}</p>}
+            <div className="dp-list" role="listbox" aria-label="All datapacks">
               {!datapacks && !dpError && <p className="muted pad">
                 <Busy label="Loading datapacks" />
               </p>}
-              {datapacks && dpShown.length === 0 && (
-                <p className="muted pad">{showAll ? 'No datapacks match.' : 'No adlc/proj/ datapacks match.'}</p>
-              )}
-              {dpShown.map((o) => {
+              {datapacks && searched.length === 0 && <p className="muted pad">No datapacks match.</p>}
+              {searched.slice(0, 200).map((o) => {
                 const head = o.group !== lastGroup;
                 lastGroup = o.group;
-                const viewer = o.grant === 'viewer';
+                const viewer = readOnly(o);
                 const tag = tagFor(o);
                 return (
                   <Fragment key={o.id}>
@@ -481,17 +488,10 @@ export function NewProjectDialog({
                         {GROUP_LABEL[o.group]}
                       </div>
                     )}
-                    <button
-                      role="option"
-                      aria-selected={false}
-                      className="dp-row"
-                      disabled={viewer}
-                      onClick={() => choose(o)}
-                    >
+                    <button role="option" aria-selected={dpUsed?.id === o.id} className={cx('dp-row', dpUsed?.id === o.id && 'sel')} disabled={viewer} onClick={() => choose(o, 'search')}>
                       <span className="radio" />
                       <span className="mono">{o.name}</span>
                       {o.usedBy.length > 0 && <span className="tag shared">In “{o.usedBy[0]}”</span>}
-                      {o.closed && <span className="tag shared">Closed “{o.closed.name}”</span>}
                       {tag && <span className={cx('tag', (o.group === 'yours' || viewer) && 'shared')}>{tag}</span>}
                       {viewer && (
                         <span className="dp-row-note">
@@ -503,23 +503,44 @@ export function NewProjectDialog({
                 );
               })}
             </div>
-            <div className="np-dp-links">
-              <button className="link-btn" disabled={dpLoading} onClick={loadDatapacks}>
-                {dpLoading ? <Busy label="Refreshing" /> : 'Refresh'}
-              </button>
-              {(showAll || hiddenCount > 0) && (
-                <button className="link-btn" onClick={() => setShowAll((v) => !v)}>
-                  {showAll ? 'Only adlc/proj/ datapacks' : `Show all datapacks (${hiddenCount} more)`}
-                </button>
-              )}
-            </div>
           </div>
         )}
+        <div className="np-dp-links">
+          <label className="check">
+            <input
+              id="np-no-dp"
+              type="checkbox"
+              checked={!mekoUsable || noDatapack}
+              disabled={!mekoUsable}
+              onChange={(e) => {
+                setNoDatapack(e.target.checked);
+                if (e.target.checked) {
+                  setPicked(null);
+                  setDpSearch(null);
+                }
+              }}
+            />
+            No datapack
+          </label>
+          {mekoUsable && (dpSearch === null ? (
+            <button className="link-btn" onClick={() => {
+              setNoDatapack(false);
+              setDpSearch('');
+            }}>
+              Search all datapacks
+            </button>
+          ) : (
+            <button className="link-btn" onClick={() => setDpSearch(null)}>
+              Close the search
+            </button>
+          ))}
+          {mekoUsable && (
+            <button className="link-btn" disabled={dpLoading} onClick={loadDatapacks}>
+              {dpLoading ? <Busy label="Refreshing" /> : 'Refresh'}
+            </button>
+          )}
+        </div>
       </div>
-
-      <Field label="Project name">
-        <input id="np-name" className="input" value={name} onChange={(e) => setName(e.target.value)} />
-      </Field>
 
       <div className="np-section">
         <span className="label">Repo</span>
@@ -630,32 +651,13 @@ export function NewProjectDialog({
         )}
       </div>
 
-      {dpMode === 'create' && (
-        <Field
-          label="New datapack name"
-          hint={
-            isProjectDatapack(dpName.trim())
-              ? undefined
-              : 'Without the adlc/proj/ prefix, people you share it with aren’t offered it as a project.'
-          }
-        >
-          <input
-            id="np-dp-name"
-            className="input mono"
-            value={dpName}
-            onChange={(e) => {
-              setDpName(e.target.value);
-              setDpNameTouched(true);
-            }}
-          />
-        </Field>
-      )}
       <ErrorText error={error} />
       {atLimit && (
         <div className="np-limit">
           <button className="btn" disabled={busy} onClick={() => {
-            pickMode('none');
-            void create('none');
+            setNoDatapack(true);
+            setPicked(null);
+            void create({ mode: 'none' });
           }}>
             Open without a datapack
           </button>

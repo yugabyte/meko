@@ -4,8 +4,8 @@ Part of the [AgentK design](../design.md).
 
 ## Open project
 
-You open a project on a repo you already have, with a new datapack or one that exists (the
-datapack of a project you closed, say, which opens it again). The dialog is **Open project**, and so
+You open a project on a repo you already have, with a new datapack, one that exists (the
+datapack of a project you closed, say, which opens it again), or none. The dialog is **Open project**, and so
 are the rail's and command palette's actions. It lists every git repo directly under
 your repos folder (`~/code` by default), with the most recently touched first. A repo can back
 several projects: one that already has a project is marked with its name (*In "infra"*, or *In 2
@@ -59,17 +59,41 @@ the repo.
   project working in it). While a new repo's project is being opened its folder is held (case
   folded), so a second open of the same name meanwhile gets the 409 instead of sharing the repo. The repo has no remote: sessions work in it, but a PR needs one added first.
 
-The dialog asks for the **dedicated datapack**, then the **Project name**, then the repo. It starts with the datapack: **Create a new one** (the first option and the
-default), **Use an existing one** (the default when it's opened for a share, from its banner) or
-**No datapack** (the default while Meko is off). The existing list shows invites waiting for you first, then datapacks shared with you, then yours, each with its
-access and, for shares, its owner. It holds project datapacks (`adlc/proj/…`) unless you tap **Show
-all datapacks**. A datapack a project here already uses is tagged with that project and listed
-last. A viewer-only datapack is listed but can't be chosen, because sessions write to the dedicated
-datapack. **Refresh** lists them again and checks Meko for new shares. Choosing a datapack collapses
-the list to that one row (**Change** brings it back) and fills in the rest from its name
+The dialog has three sections, in this order: **Project name**, **Datapack**, **Repo**. There's no
+datapack box: the name finds the datapack, and the Datapack section says which one the project
+gets (`detectDatapack` in `src/web/datapackpick.ts`):
+
+- **Project name** offers your projects as you type, in a dropdown under it (also on focus, with
+  every one): one line per project datapack (`adlc/proj/<repo>/<project>`), *project · datapack*,
+  where the project is the datapack's project part, or a closed project's own name. Invites come
+  first, then datapacks shared with you, then yours, with ones a project here already uses last.
+  A viewer-only one is shown with *read only* and can't be picked, because sessions write to the
+  dedicated datapack. Clicking one (or Enter on one picked with the arrow keys) closes the dropdown
+  and fills in the project's name, its datapack and its repo (below). Leaving the field closes it too.
+  Editing the name afterwards drops that pick, and the datapack is found from the new name.
+- **With nothing picked**, the project's datapack is the one named `adlc/proj/<repo>/<project>`
+  from the repo and the name (`defaultProjectDatapackName`): that datapack when it's one you can
+  write to (invites included), else a new one by that name. A name that's a datapack you can only
+  read gives the new one the next free name (`freeDatapackName`: `…-2`). Until a repo is picked,
+  the section shows the name with `<repo>` in its place. A new datapack's name can't be typed.
+- **Search all datapacks**, a link in the Datapack section, opens a search of its own: every
+  datapack you can see, `adlc/proj/` or not, by any part of its name, grouped as above with each
+  one's access and owner. Picking one there changes only the datapack: the name and the repo stay
+  as they are, and so does the pick when the name is edited later. **×** on the Datapack line drops
+  a pick.
+- **No datapack**, a checkbox in the Datapack section, opens the project without one (it can get
+  one later from its home); picking a datapack unticks it. While Meko isn't set up it's ticked and
+  can't be changed, there's no dropdown or search, and the section says how to set Meko up.
+- The Datapack line reads **New datapack** …, **Uses** … (with its access and owner), **Accepts
+  the invite to** …, **No datapack**, or *Checking Meko's datapacks* while the list loads (Open
+  project waits for it; a list that fails to load shows its error, and the name is tried as it is).
+  **Refresh** lists the datapacks again and checks Meko for new shares.
+
+A project picked from the dropdown fills in the rest from its datapack's name
 `adlc/proj/<repo>/<project>`:
 
-- **Project name:** the `<project>` part (everything after the repo part). You can still change it.
+- **Project name:** the `<project>` part (everything after the repo part). You can still change it,
+  which drops the pick.
 - **Repo:** by the remote in the datapack's description (AgentK writes it there when it creates a
   datapack; SSH and HTTPS forms compare equal): first a fork whose `upstream` is that remote, since
   that's where you work on it, then a clone whose `origin` is the remote itself. So with
@@ -81,15 +105,13 @@ the list to that one row (**Change** brings it back) and fills in the rest from 
   hint says no repo by that name was found.
 
 The name and repo matching live in `src/shared/datapacks.ts`, so the server and the dialog use the
-same rules. **Create a new one** puts its **New datapack name** field at the bottom, under
-the repo, since it's filled in from the repo and the **Project name**: it suggests `adlc/proj/<repo>/<project>` from the
-repo and the name you type (until you edit it), where `<repo>` is the upstream repo's name for a
-fork, else the origin's, else the folder's (`hari-yugabyte-db` gives `yugabyte-db`), whether the
-repo was picked from the list or typed under Other folder; a name without the prefix gets a hint
-that people you share it with won't be offered it as a project. Choosing an invite changes the
-button to **Accept and open project**: the server accepts the invite in Meko first, and opens
-nothing if Meko refuses. The server refuses a viewer-only datapack as a project's own too (from the
-shares table's grant, else `datapack_describe`), not only the dialog.
+same rules. `<repo>` in a datapack's name is the upstream repo's name for a fork, else the origin's,
+else the folder's (`hari-yugabyte-db` gives `yugabyte-db`), whether the repo was picked from the
+list or typed under Other folder. Using an invite's datapack changes the button to **Accept and
+open project**: the server accepts the invite in Meko first, and opens nothing if Meko refuses. At
+the plan's datapack limit, the error suggests picking one of your projects or datapacks and offers
+**Open without a datapack**. The server refuses a viewer-only datapack as a project's own too (from
+the shares table's grant, else `datapack_describe`), not only the dialog.
 
 **Opening a closed project again.** When the chosen datapack was the dedicated datapack of a closed
 project (the most recently closed one, if several), that project opens again rather than a new
@@ -98,10 +120,10 @@ conversation, with the name and repo given in the dialog (the repo can be anothe
 session keeps its own `repo_path`). It's done in the same write that would add a new project, so
 two opens at once can't both take it. So a project is one thing across closes and opens, on the
 Usage page too. A new datapack, or **No datapack**, always opens a new project. The dialog knows
-the closed projects (`InviteCheck.closed`, the latest closed per datapack): their datapacks are
-tagged **Closed "*name*"**, choosing one fills in the project's name and repo (under Other folder
-when the repo isn't in the list), and a hint says the project opens again, and where it moves
-from when another repo is picked. The close dialog and **Close project** confirmation mention
+the closed projects (`InviteCheck.closed`, the latest closed per datapack): Project name's dropdown
+offers each under its own name, picking one fills in its name and repo (under Other folder when
+the repo isn't in the list), and the Datapack line reads **Uses** … as for any datapack, without
+saying the project opens again. A hint says where it moves from when another repo is picked. The close dialog and **Close project** confirmation mention
 reopening only for a project with a dedicated datapack.
 
 Once the project is open, the New session dialog opens for it, so you go straight on to its

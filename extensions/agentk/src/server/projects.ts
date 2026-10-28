@@ -326,10 +326,12 @@ export class ProjectService {
       try {
         dp = await this.core.meko.createDatapack(dpName);
       } catch (e) {
-        // At the plan's limit: Open project offers to go on without a datapack; an existing
-        // project can use one of the datapacks it already has access to.
+        // At the plan's limit: Open project offers to go on without a datapack, or to pick an
+        // existing one; an existing project can use one of the datapacks it already has access to.
         if (isDatapackLimit(e)) {
-          const fix = forExisting ? 'Pick one of your datapacks under Use an existing one' : 'Open the project without one';
+          const fix = forExisting
+            ? 'Pick one of your datapacks under Use an existing one'
+            : 'Pick one of your projects or datapacks, open the project without one';
           throw new HttpError(402, `Your Meko plan can't have more datapacks (${errMsg(e)}). ${fix}, or upgrade your plan in Meko.`, 'DATAPACK_LIMIT');
         }
         throw new HttpError(502, `Meko couldn't create the datapack "${dpName}": ${errMsg(e)}`);

@@ -66,7 +66,7 @@ describe('projects without a datapack, and without Meko', () => {
 
   it.each([
     ["says so when Meko's plan has no room for another datapack", '[FREE_TIER_DATAPACK_LIMIT] Upgrade to Standard to create a new datapack.',
-      { status: 402, code: 'DATAPACK_LIMIT', message: expect.stringMatching(/Open the project without one/) }],
+      { status: 402, code: 'DATAPACK_LIMIT', message: expect.stringMatching(/Pick one of your projects or datapacks, open the project without one, or upgrade/) }],
     ["doesn't take any refusal that mentions datapacks for the plan limit", "You don't have permission to create a new datapack in this org.", { status: 502 }],
   ])('%s', async (_, refusal, want) => {
     (env.meko as { createDatapack: unknown }).createDatapack = async () => {

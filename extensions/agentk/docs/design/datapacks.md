@@ -195,11 +195,15 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   a key there; for Meko Cloud it carries none (the package reads `MEKO_API_KEY`, or signs in
 >   through the browser) (`manualMekoSetup`).
 > - **At project creation:** the dedicated datapack is an existing one, a new one, or **No
->   datapack** (`DatapackChoice` `{ mode: 'none' }`), the default while there's no Meko.
+>   datapack** (`DatapackChoice` `{ mode: 'none' }`), the only one while there's no Meko. The
+>   Open project dialog has no datapack box: the project name finds it (`adlc/proj/<repo>/<project>`,
+>   that datapack if it exists, else a new one), Project name's dropdown offers your projects with
+>   their datapacks, **Search all datapacks** finds any other, and **No datapack** is a checkbox
+>   ([Open project](open-project-and-new-session.md#open-project)).
 >   When Meko refuses a new datapack because the plan's datapack limit is reached (HTTP 402,
 >   `FREE_TIER_DATAPACK_LIMIT` / `STANDARD_TIER_DATAPACK_LIMIT`), the server answers 402 with code
->   `DATAPACK_LIMIT` and the dialog offers **Open without a datapack**. One can be added later
->   from the project's home.
+>   `DATAPACK_LIMIT` and the dialog offers **Open without a datapack**, or picking an existing one.
+>   One can be added later from the project's home.
 > - **At session start:** every session gets `MEKO_AGENT_ID`, and `MEKO_DATAPACK_ID` when the
 >   project has a dedicated datapack. A project without one starts sessions like any other; design
 >   saves, the learn step and search skip Meko for it, and while there's no Meko, for every project.
