@@ -207,8 +207,11 @@ and a branch stacked on another uses the menu.
 
 ## Review comments
 
-Click **+** beside a line of any diff (shift-click a second line for a range) to leave a comment,
-as on a PR. Comments are drafts in `state.db` until you click **Send N comments**, which sends
+Click **+** beside a line of any diff to leave a comment, as on a PR. For a range, drag the **+** up or
+down (on a touch screen, hold it first, so a swipe that starts on one still scrolls), shift-click a
+second line, or on touch tap **+** on another line before typing. A range stays on one side (removed
+lines, or added and unchanged ones) and stops at the edge of its hunk; a range of removed lines
+leaves out the unchanged lines between them. Comments are drafts in `state.db` until you click **Send N comments**, which sends
 them to Claude as one prompt (through [AgentK's mod](mod.md), or pasted into the
 terminal), grouped by file, with the lines each one is about. If Claude is
 mid-turn or waiting on a permission prompt, they queue and go out when it's back at its prompt in

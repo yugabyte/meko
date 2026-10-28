@@ -5,8 +5,9 @@ import {
   type SessionChanges,
 } from '../../shared/types';
 import { ApiError, api, errorMessage } from '../api';
-import { anchorComment, defaultOpen, DESKTOP_BUDGET, keepUnchanged, PHONE_BUDGET, reparse, sameItems, showsLine, sideLine, type DiffLine } from '../diff';
+import { anchorComment, defaultOpen, DESKTOP_BUDGET, keepUnchanged, PHONE_BUDGET, pickComment, reparse, sameItems, showsLine, sideLine, type DiffLine } from '../diff';
 import { matches, MOBILE_QUERY, useTouch } from '../hooks/useMedia';
+import { useRangeDrag, type CommentPick } from '../hooks/useRangeDrag';
 import { agentName, cx, relativeTime } from '../util';
 import { Busy, ConfirmButton } from './common';
 import { SidePanel } from './SidePanel';
@@ -49,7 +50,7 @@ interface Placed {
 interface SectionActions {
   toggle: (path: string) => void;
   more: (path: string, rows: number) => void;
-  comment: (path: string, i: number, shift: boolean) => void;
+  comment: (path: string, i: number, pick?: CommentPick) => void;
   edit: (c: ReviewComment) => void;
   remove: (c: ReviewComment) => Promise<void>;
   save: (text: string) => Promise<void>;
@@ -114,7 +115,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
   const [editor, setEditor] = useState<Editor | null>(null);
   /** Text typed into the open editor, kept here so it survives the editor moving to another row. */
   const draftText = useRef('');
-  /** The line a shift-click extends a range from. */
+  /** The line a shift-click (or a second tap) extends a range from. */
   const [pick, setPick] = useState<{ path: string; side: CommentSide; line: number } | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -257,35 +258,21 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
     if (next >= 0 && next < files.length) jump(files[next].path);
   };
 
-  const startComment = (path: string, i: number, shift: boolean) => {
+  const startComment = (path: string, i: number, how: CommentPick = {}) => {
     const lines = parsed.get(path);
     const l = lines?.[i];
     if (!lines || !l) return;
     const side: CommentSide = l.kind === 'del' ? 'old' : 'new';
-    const n = sideLine(l, side);
-    if (n === null) return;
     // Touch has no shift-click: tapping another line while a new comment is still empty extends it.
-    const extend = shift || (touch && !!editor && !editor.id && !draftText.current.trim() && pick?.line !== n);
-    let from = n, to = n;
-    if (extend && pick && pick.path === path && pick.side === side) {
-      from = Math.min(pick.line, n);
-      to = Math.max(pick.line, n);
-    } else {
-      setPick({ path, side, line: n });
-    }
-    let rows = lines.filter((x) => {
-      const m = sideLine(x, side);
-      return m !== null && m >= from && m <= to;
-    });
-    // A range across hunks would skip the lines between them; comment on the clicked line instead.
-    if (rows.length !== to - from + 1) {
-      from = to = n;
-      rows = [l];
-      setPick({ path, side, line: n });
-    }
+    const extend = how.shift || (touch && !!editor && !editor.id && !draftText.current.trim() && pick?.line !== sideLine(l, side));
+    // A drag starts its range on the line it was pressed on; a shift-click or second tap extends the
+    // range from the line it started on. It stops at the diff's next skipped lines (pickRange).
+    const c = pickComment(lines, i, how.from ?? (extend && pick && pick.path === path && pick.side === side ? pick.line : null));
+    if (!c) return;
+    setPick({ path, side, line: c.anchor });
     // Switching from editing a comment starts a fresh one; a new comment keeps what was typed.
     if (editor?.id) draftText.current = '';
-    setEditor({ id: null, path, side, line: from, endLine: to, excerpt: rows.map((r) => r.text).join('\n') });
+    setEditor({ id: null, path, side, line: c.line, endLine: c.endLine, excerpt: c.excerpt });
   };
 
   const closeEditor = () => {
@@ -371,7 +358,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
     return {
       toggle: (path) => h().toggle(path),
       more: (path, rows) => h().more(path, rows),
-      comment: (path, i, shift) => h().comment(path, i, shift),
+      comment: (path, i, pick) => h().comment(path, i, pick),
       edit: (c) => h().edit(c),
       remove: (c) => h().remove(c),
       save: (text) => h().save(text),
@@ -506,13 +493,13 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
               </p>
             ) : touch ? (
               <p className="muted small chg-hint">
-                Use <b>Files</b> to move between files. Tap <b>+</b> beside a line to comment on it; before you type, tap <b>+</b> on
-                another line to cover a range.
+                Use <b>Files</b> to move between files. Tap <b>+</b> beside a line to comment on it; hold it and drag, or tap <b>+</b>
+                on another line before you type, to cover a range.
               </p>
             ) : (
               <p className="muted small chg-hint">
                 Use <b>Files</b> or press <kbd>[</kbd> and <kbd>]</kbd> to move between files. Click <b>+</b> beside a line to
-                comment on it; shift-click another line to cover a range.
+                comment on it; drag it, or shift-click another line, to cover a range.
               </p>
             )}
             {files.map((f, n) => {
@@ -1130,7 +1117,7 @@ const FileSection = memo(function FileSection({
               );
             }}
             picked={editor && !editor.id ? editor : null}
-            onComment={readOnly ? undefined : (i, shift) => actions.comment(path, i, shift)}
+            onComment={readOnly ? undefined : (i, pick) => actions.comment(path, i, pick)}
           />
         </>
       )}
@@ -1163,14 +1150,17 @@ export function FileDiff({
   /** The range a new comment is being written for. */
   picked: { side: CommentSide; line: number; endLine: number } | null;
   /** Undefined when the diff takes no comments. */
-  onComment?: (i: number, shift: boolean) => void;
+  onComment?: (i: number, pick: CommentPick) => void;
 }) {
+  const drag = useRangeDrag(lines, onComment);
   if (file.binary) {
     return previewImageType(file.path) ? <ImageDiff file={file} imageUrl={imageUrl} /> : <p className="chg-note">Binary file, not shown.</p>;
   }
   if (!lines) return <p className="chg-note">This diff is too large to show here.</p>;
   if (lines.length === 0) return <p className="chg-note">{file.kind === 'untracked' ? 'Empty file.' : 'No content changes.'}</p>;
   const left = lines.length - limit;
+  /** The range being dragged, else the one a new comment is being written for. */
+  const shown = drag.range ?? picked;
   /** Lines of the file among rows [from, to), for the labels: hunk headers and notes aren't lines. */
   const fileLines = (from: number, to = lines.length) => lines.slice(from, to).filter((l) => l.kind === 'add' || l.kind === 'del' || l.kind === 'ctx').length;
   // Comments on rows not rendered yet go under the button that shows them.
@@ -1182,24 +1172,28 @@ export function FileDiff({
   return (
     <div className="diff-wrap">
       {limit > 0 && (
-        <table className="diff">
+        <table className={cx('diff', drag.range && 'dragging')} ref={drag.tableRef}>
           <tbody>
             {lines.slice(0, limit).map((l, i) => {
               const side: CommentSide = l.kind === 'del' ? 'old' : 'new';
               const n = sideLine(l, side);
-              const inPick = picked !== null && n !== null && picked.side === side && n >= picked.line && n <= picked.endLine;
+              const inPick = shown !== null && n !== null && shown.side === side && n >= shown.line && n <= shown.endLine;
               const after = renderAfter(i);
               return (
                 <Fragment key={i}>
-                  <tr className={cx(`dl-${l.kind}`, inPick && 'picked')}>
+                  <tr className={cx(`dl-${l.kind}`, inPick && 'picked')} data-i={i}>
                     <td className="cg">
                       {n !== null && onComment && (
                         <button
                           className="cmt-add"
                           tabIndex={-1}
-                          title="Comment on this line (shift-click to cover a range)"
+                          title="Comment on this line (drag or shift-click to cover a range)"
                           aria-label={`Comment on ${linesLabel(side, n, n)}`}
-                          onClick={(e) => onComment(i, e.shiftKey)}
+                          onPointerDown={(e) => drag.start(e, i)}
+                          onContextMenu={drag.menu}
+                          onClick={(e) => {
+                            if (!drag.swallow()) onComment(i, { shift: e.shiftKey });
+                          }}
                         >
                           +
                         </button>

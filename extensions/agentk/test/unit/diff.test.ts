@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { anchorComment, defaultOpen, DESKTOP_BUDGET, keepUnchanged, parsePatch, PHONE_BUDGET, reparse, sameLine, showsLine, type RowBudget } from '../../src/web/diff.js';
+import { anchorComment, defaultOpen, DESKTOP_BUDGET, keepUnchanged, parsePatch, PHONE_BUDGET, pickComment, pickRange, reparse, sameLine, showsLine, type RowBudget } from '../../src/web/diff.js';
 
 const rows = (patch: string) => parsePatch(patch).map((l) => [l.kind, l.old, l.new, l.text]);
 
@@ -74,6 +74,38 @@ describe('telling changed lines from hidden ones', () => {
     expect(showsLine(lines, 'new', 5)).toBe(true);
     expect(showsLine(lines, 'old', 5)).toBe(false); // context lines are commented on the new side
     expect(showsLine(lines, 'new', 40)).toBe(false);
+  });
+});
+
+describe('picking the lines a comment covers', () => {
+  // New 1-5 and removed 3, 4 and 6 (an unchanged line 5 between them) in one hunk; new 20-21 and removed 21 in another.
+  const lines = parsePatch(['@@ -1,6 +1,5 @@', ' a', ' b', '-c', '-d', '+C', '+D', ' e', '-f', '@@ -20,2 +20,2 @@', ' x', '-z', '+y'].join('\n'));
+
+  it.each<[string, 'old' | 'new', number, number, [number, number, string] | null]>([
+    ['one line', 'new', 2, 2, [2, 2, 'b']],
+    ['the lines between two, picked downward', 'new', 1, 4, [1, 4, 'abCD']],
+    ['the lines between two, picked upward', 'new', 4, 1, [1, 4, 'abCD']],
+    ['added lines past removed ones', 'new', 2, 3, [2, 3, 'bC']],
+    ['removed lines past an unchanged one, which they leave out', 'old', 3, 6, [3, 6, 'cdf']],
+    ["new lines up to the hunk's edge", 'new', 2, 21, [2, 5, 'bCDe']],
+    ["new lines back to the hunk's edge", 'new', 21, 1, [20, 21, 'xy']],
+    ["removed lines up to the hunk's edge", 'old', 3, 21, [3, 6, 'cdf']],
+    ["removed lines back to the hunk's edge", 'old', 21, 3, [21, 21, 'z']],
+    ['nothing from a line the diff doesn\'t show', 'new', 10, 2, null],
+    ['nothing from an unchanged line on the old side', 'old', 1, 1, null],
+  ])('covers %s', (_, side, anchor, n, want) => {
+    const r = pickRange(lines, side, anchor, n);
+    expect(r && [r.from, r.to, r.rows.map((l) => l.text).join('')]).toEqual(want);
+  });
+
+  it.each<[string, number, number | null, [string, number, number, string, number] | null]>([
+    ['its own line', 3, null, ['old', 3, 3, 'c', 3]],
+    ['a range from the anchor, which a later shift-click extends from', 8, 3, ['old', 3, 6, 'c\nd\nf', 3]],
+    ['its own line when the diff no longer shows the anchor', 2, 9, ['new', 2, 2, 'b', 2]],
+    ['nothing on a hunk header', 0, null, null],
+  ])('a + picks %s', (_, i, anchor, want) => {
+    const c = pickComment(lines, i, anchor);
+    expect(c && [c.side, c.line, c.endLine, c.excerpt, c.anchor]).toEqual(want);
   });
 });
 

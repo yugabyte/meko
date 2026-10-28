@@ -4021,6 +4021,18 @@ div[id^='dak-mermaid-'] .label {
 .diff tr.picked {
   box-shadow: inset 3px 0 0 var(--accent);
 }
+/* Holding a + to drag a range (useRangeDrag) mustn't open the callout or select text on a phone. */
+.cmt-add {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.diff.dragging,
+.diff.dragging .cmt-add {
+  cursor: ns-resize;
+  -webkit-user-select: none;
+  user-select: none;
+}
 .cmt-row > td {
   padding: 6px 10px 8px;
   background: var(--bg);
