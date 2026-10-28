@@ -64,18 +64,26 @@ datapack box: the name finds the datapack, and the Datapack section says which o
 gets (`detectDatapack` in `src/web/datapackpick.ts`):
 
 - **Project name** offers your projects as you type, in a dropdown under it (also on focus, with
-  every one): one line per project datapack (`adlc/proj/<repo>/<project>`), *project · datapack*,
-  where the project is the datapack's project part, or a closed project's own name. Invites come
-  first, then datapacks shared with you, then yours, with ones a project here already uses last.
-  A viewer-only one is shown with *read only* and can't be picked, because sessions write to the
-  dedicated datapack. Clicking one (or Enter on one picked with the arrow keys) closes the dropdown
-  and fills in the project's name, its datapack and its repo (below). Leaving the field closes it too.
-  Editing the name afterwards drops that pick, and the datapack is found from the new name.
+  every one): one line per project datapack (`adlc/proj/<repo>/<project>`) and per closed project
+  whatever its datapack is called, *project · datapack*, where the project is the datapack's
+  project part, or a closed project's own name. Invites come first, then datapacks shared with
+  you, then yours, with ones a project here already uses last. A viewer-only one is shown with
+  *read only* and can't be picked (the arrow keys step over it), because sessions write to the
+  dedicated datapack. The picked project's row has a filled radio; the arrow keys' row a bar at
+  its edge. Clicking one (or Enter on the arrow keys' row) closes the dropdown and fills in the
+  project's name, its datapack and its repo (below). Leaving the field closes it too. Editing the
+  name afterwards drops that pick, and the datapack is found from the new name.
+- **Opened from a share's Open as project banner**, the dialog starts with that datapack picked:
+  it fills in the name and repo when its name is `adlc/proj/…`, and it stays picked when the name
+  is edited, as a pick from the search does.
 - **With nothing picked**, the project's datapack is the one named `adlc/proj/<repo>/<project>`
   from the repo and the name (`defaultProjectDatapackName`): that datapack when it's one you can
-  write to (invites included), else a new one by that name. A name that's a datapack you can only
-  read gives the new one the next free name (`freeDatapackName`: `…-2`). Until a repo is picked,
-  the section shows the name with `<repo>` in its place. A new datapack's name can't be typed.
+  write to (invites included) and no project here uses it, else a new one by that name. A name
+  that's a datapack you can only read, or one a project here already uses, gives the new one the
+  next free name among the datapacks you can see (`freeDatapackName`: `…-2`), and a hint says why:
+  a project shares another one's datapack only when it's picked. A name held by a datapack you
+  can't see still goes to Meko, which refuses it. Until a repo is picked, the section shows the
+  name with `<repo>` in its place. A new datapack's name can't be typed.
 - **Search all datapacks**, a link in the Datapack section, opens a search of its own: every
   datapack you can see, `adlc/proj/` or not, by any part of its name, grouped as above with each
   one's access and owner. Picking one there changes only the datapack: the name and the repo stay

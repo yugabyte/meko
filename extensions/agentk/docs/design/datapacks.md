@@ -197,8 +197,9 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > - **At project creation:** the dedicated datapack is an existing one, a new one, or **No
 >   datapack** (`DatapackChoice` `{ mode: 'none' }`), the only one while there's no Meko. The
 >   Open project dialog has no datapack box: the project name finds it (`adlc/proj/<repo>/<project>`,
->   that datapack if it exists, else a new one), Project name's dropdown offers your projects with
->   their datapacks, **Search all datapacks** finds any other, and **No datapack** is a checkbox
+>   that datapack if it exists and no project here uses it, else a new one), Project name's dropdown
+>   offers your projects with their datapacks, **Search all datapacks** finds any other, and **No
+>   datapack** is a checkbox
 >   ([Open project](open-project-and-new-session.md#open-project)).
 >   When Meko refuses a new datapack because the plan's datapack limit is reached (HTTP 402,
 >   `FREE_TIER_DATAPACK_LIMIT` / `STANDARD_TIER_DATAPACK_LIMIT`), the server answers 402 with code

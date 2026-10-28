@@ -105,10 +105,11 @@ export function NewProjectDialog({
   /** No datapack, ticked by hand. */
   const [noDatapack, setNoDatapack] = useState(false);
   /**
-   * A datapack picked from Project name's dropdown (`name`: editing the name drops it) or from
-   * Search all datapacks (`search`: it stays, and never changes the name or the repo).
+   * A datapack picked from Project name's dropdown (`name`: editing the name drops it), from
+   * Search all datapacks (`search`: it stays, and never changes the name or the repo), or the
+   * share the dialog was opened for (`banner`: it fills in the name and repo, and stays).
    */
-  const [picked, setPicked] = useState<{ option: DpOption; from: 'name' | 'search' } | null>(null);
+  const [picked, setPicked] = useState<{ option: DpOption; from: 'name' | 'search' | 'banner' } | null>(null);
   /** Project name's dropdown is open. */
   const [suggesting, setSuggesting] = useState(false);
   const [highlight, setHighlight] = useState(-1);
@@ -203,7 +204,8 @@ export function NewProjectDialog({
     const o = options.find((x) => x.id === pendingInitial);
     setPendingInitial(null);
     if (!o || readOnly(o)) return;
-    setPicked({ option: o, from: 'name' });
+    // Kept through name edits: the dialog was opened to open this share.
+    setPicked({ option: o, from: 'banner' });
     setAutoFill(o);
   }, [pendingInitial, datapacks, options]);
 
@@ -320,7 +322,7 @@ export function NewProjectDialog({
     setName(v);
     setSuggesting(true);
     setHighlight(-1);
-    // A project picked in the dropdown goes with its name; a datapack picked in the search stays.
+    // A project picked in the dropdown goes with its name; a datapack picked in the search, or the share the dialog opened for, stays.
     if (picked?.from === 'name') {
       setPicked(null);
       setAutoHint(null);
@@ -330,7 +332,12 @@ export function NewProjectDialog({
     if (!suggestions.length) return;
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
-      setHighlight((h) => (e.key === 'ArrowDown' ? Math.min(suggestions.length - 1, h + 1) : Math.max(-1, h - 1)));
+      // Read-only rows can't be picked, so the arrows step over them.
+      const step = e.key === 'ArrowDown' ? 1 : -1;
+      setHighlight((h) => {
+        for (let i = h + step; i >= 0 && i < suggestions.length; i += step) if (!readOnly(suggestions[i])) return i;
+        return step < 0 ? -1 : h;
+      });
     } else if (e.key === 'Enter' && highlight >= 0 && suggestions[highlight]) {
       e.preventDefault();
       choose(suggestions[highlight], 'name');
@@ -423,10 +430,11 @@ export function NewProjectDialog({
                   role="option"
                   tabIndex={-1}
                   aria-selected={dpUsed?.id === o.id}
-                  className={cx('dp-row', (i === highlight || dpUsed?.id === o.id) && 'sel')}
+                  className={cx('dp-row', i === highlight && 'hl', dpUsed?.id === o.id && 'sel')}
                   disabled={readOnly(o)}
                   onClick={() => choose(o, 'name')}
                 >
+                  <span className="radio" />
                   <span className="np-suggest-name">{projectNameOf(o)}</span>
                   <span className="muted">·</span>
                   <span className="mono">{o.name}</span>
@@ -451,8 +459,12 @@ export function NewProjectDialog({
             </button>
           )}
         </div>
-        {detected.kind === 'new' && detected.readOnly && (
-          <p className="hint">You can only read {detected.readOnly}, so the new datapack gets the next free name.</p>
+        {detected.kind === 'new' && detected.taken && (
+          <p className="hint">
+            {detected.taken.usedBy.length
+              ? `${detected.taken.name} is already used by ${detected.taken.usedBy.map((n) => `“${n}”`).join(', ')} here, so the new datapack gets the next free name. Pick it under Project name to share it.`
+              : `You can only read ${detected.taken.name}, so the new datapack gets the next free name.`}
+          </p>
         )}
         {dpUsed && dpUsed.usedBy.length > 0 && <p className="hint">Already used by {dpUsed.usedBy.map((n) => `“${n}”`).join(', ')} here.</p>}
         {movesFrom && (

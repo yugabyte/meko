@@ -2651,6 +2651,11 @@ div[id^='dak-mermaid-'] .label {
 .np-suggest .dp-row {
   flex-wrap: nowrap;
 }
+/* The row the arrow keys are on: a bar at its edge, apart from the picked row's filled radio. */
+.np-suggest .dp-row.hl {
+  background: var(--sunk);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
 .np-suggest .dp-row > .mono {
   color: var(--muted);
 }

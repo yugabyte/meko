@@ -75,11 +75,14 @@ export function projectNameOf(o: DpOption): string | null {
   return o.closed?.name ?? parseProjectDatapack(o.name)?.project ?? null;
 }
 
-/** Project name's dropdown: the projects our project datapacks stand for, all of them for an empty name. */
+/**
+ * Project name's dropdown: the projects our project datapacks stand for, and every closed project
+ * whatever its datapack is called; all of them for an empty name.
+ */
 export function suggestProjects(text: string, options: DpOption[]): DpOption[] {
   const q = text.trim().toLowerCase();
   return options.filter((o) => {
-    const project = parseProjectDatapack(o.name) ? projectNameOf(o) : null;
+    const project = projectNameOf(o);
     return project !== null && (!q || project.toLowerCase().includes(q));
   });
 }
@@ -99,8 +102,11 @@ export type DetectedDatapack =
   | { kind: 'no-meko' | 'none'; choice: DatapackChoice }
   /** A datapack picked from the dropdown or the search (`picked`), or the one the name and repo name (`found`). */
   | { kind: 'picked' | 'found'; option: DpOption; choice: DatapackChoice }
-  /** A new datapack; `readOnly` is the name the project would have had, taken by a datapack we can only read. */
-  | { kind: 'new'; name: string; readOnly: string | null; choice: DatapackChoice }
+  /**
+   * A new datapack. `taken` is the name the project would have had, when it's a datapack we can
+   * only read, or one that projects here already use (`usedBy`), which is only shared when picked.
+   */
+  | { kind: 'new'; name: string; taken: { name: string; usedBy: string[] } | null; choice: DatapackChoice }
   /** The datapack list is still loading. */
   | { kind: 'loading'; choice: null }
   | { kind: 'no-name'; choice: null }
@@ -109,9 +115,11 @@ export type DetectedDatapack =
 
 /**
  * A picked datapack wins; else the one named `adlc/proj/<repo>/<project>` (defaultProjectDatapackName)
- * when we can write to it, else a new one by that name (the next free name when we can only read
- * the one that has it). No Meko, or No datapack ticked, opens the project without one. `options` is
- * null while the list loads; a list that failed to load is passed as [], and Meko refuses a taken name.
+ * when we can write to it and no project here uses it, else a new one by that name (the next free
+ * name, among the datapacks we can see, when one has it). So a project shares another one's
+ * datapack only when it's picked. No Meko, or No datapack ticked, opens the project without one.
+ * `options` is null while the list loads; a list that failed to load is passed as [], and Meko
+ * refuses a taken name, as it does one held by a datapack we can't see.
  */
 export function detectDatapack(o: {
   mekoUsable: boolean;
@@ -131,9 +139,8 @@ export function detectDatapack(o: {
   }
   if (!o.options) return { kind: 'loading', choice: null };
   const want = defaultProjectDatapackName(o.repoName, o.name);
-  const named = o.options.filter((d) => d.name === want);
-  const writable = named.find((d) => !readOnly(d));
-  if (writable) return { kind: 'found', option: writable, choice: existing(writable) };
-  const name = named.length ? freeDatapackName(want, new Set(o.options.map((d) => d.name))) : want;
-  return { kind: 'new', name, readOnly: named.length ? want : null, choice: { mode: 'create', name } };
+  const named = o.options.find((d) => d.name === want);
+  if (named && !readOnly(named) && !named.usedBy.length) return { kind: 'found', option: named, choice: existing(named) };
+  const name = named ? freeDatapackName(want, new Set(o.options.map((d) => d.name))) : want;
+  return { kind: 'new', name, taken: named ? { name: want, usedBy: named.usedBy } : null, choice: { mode: 'create', name } };
 }
