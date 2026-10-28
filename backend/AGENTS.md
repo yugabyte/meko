@@ -6,7 +6,7 @@ yugabyted runs YugabyteDB, and its Node memory engine. Its design is [docs/desig
 conversations), [docs/api.md](docs/api.md) (MCP and REST), [docs/knowledge.md](docs/knowledge.md)
 (knowledge files), [docs/install.md](docs/install.md) (release builds, releases, the installer,
 the service, extensions, updates and secrets), [docs/web.md](docs/web.md) (the web listener: access, the login, TLS, extensions at `/ext/<name>/`, the handoff from AgentK), [docs/web-ui.md](docs/web-ui.md) (the web UI),
-[docs/cloud.md](docs/cloud.md) (the Meko Cloud link extensions use) and [docs/callhome.md](docs/callhome.md) (usage stats). The rules for the whole repo are in the root [AGENTS.md](../AGENTS.md).
+[docs/cloud.md](docs/cloud.md) (the Meko Cloud link extensions use), [docs/callhome.md](docs/callhome.md) (usage stats) and [docs/cli.md](docs/cli.md) (every command and its flags). The rules for the whole repo are in the root [AGENTS.md](../AGENTS.md).
 
 ## Map
 
@@ -46,7 +46,7 @@ the service, extensions, updates and secrets), [docs/web.md](docs/web.md) (the w
 | `internal/logging/` | slog to a rotated JSON file and the terminal. |
 | `internal/version/` | Version and commit, set with `-ldflags`. |
 | `scripts/` | `install.sh` (Meko's installer, published with each release), `package-release.sh` and `smoke-release.sh` (the release build and its check), and their tests. |
-| `docs/` | The design docs, and `docs_test.go`, which checks they carry no status lines, milestones or PR numbers. |
+| `docs/` | The design docs, the command reference (`cli.md`), and `docs_test.go`, which checks they carry no status lines, milestones or PR numbers. |
 | `memory_engine/scripts/fetch-model.mjs` | Downloads the pinned models (the embedder and the reranker) for a release to bundle, and checks they run offline. |
 
 ## Commands
@@ -83,9 +83,9 @@ and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
   `perf` or `deps` commit naming `meko` on `main` cuts a Meko release, and one naming only `meko`
   never cuts an AgentK one. A change that also ships in AgentK names both (`feat(agentk,meko): ...`) and releases
   both. Use `chore` for what doesn't change what ships ([install.md](docs/install.md)).
-- Keep the docs in `docs/` and this file current in the same commit as the code, and the repo
-  root's `README.md` too when the commands, their flags or the build requirements change. Check
-  the change against [REVIEW.md](REVIEW.md).
+- Keep the docs in `docs/` and this file current in the same commit as the code: `docs/cli.md`
+  when a command or its flags change, and the repo root's `README.md` too when a command it lists,
+  the install or the build requirements change. Check the change against [REVIEW.md](REVIEW.md).
 - The docs describe Meko as it is now, with the reasons for its design: no status lines, no
   milestones, PR or issue numbers, delivery plans or history of how it got here (that's the git
   log's). Work not built yet is described as such, without a tracking number. Nothing in them
