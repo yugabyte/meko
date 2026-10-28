@@ -58,6 +58,7 @@ describe('queuedText', () => {
     [{ queued: 'open-pr' }, '✓ Run to merge: opens the PR when this turn ends'],
     [{ queued: 'merge', mergeBlockers: ['CI is failing.'] }, '✓ Run to merge: waiting on a CI fix'],
     [{ queued: 'merge', mergeBlockers: ['Changes were requested.'] }, '✓ Run to merge: waiting on you'],
+    [{ queued: 'merge', mergeQueueable: true, mergeBlockers: ["GitHub's required checks haven't reported on the latest push yet."] }, '✓ Run to merge: waiting on CI'],
     [{ queued: 'merge', mergeQueueable: true, mergeBlockers: ['AgentK is still working.'] }, '✓ Run to merge: waiting on AgentK'],
   ] as [Partial<Session>, string][])('says what Run to merge waits for: %o', (over, text) => {
     expect(queuedText(session({ autoRun: true, ...over }))).toBe(text);

@@ -179,13 +179,19 @@ sent, withdrawn or dropped.
   missing (only on repos that require them, since people's approvals can take days), merge conflicts,
   a branch behind its base, a draft, a PR that isn't open, unpushed or uncommitted work between turns,
   a Needs you with no turn behind it (a parked recovery), and findings left mid-address by a Claude
-  that exited. With only
+  that exited. GitHub's own `BLOCKED` (`mergeStateStatus`) counts only when nothing else blocks and
+  only on a head AgentK first saw less than 2 minutes ago, as the first kind: *GitHub's required
+  checks haven't reported on the latest push yet*. After that it's left to GitHub, since a PR not yet
+  in a required merge queue reads `BLOCKED` too (`gh pr merge` is what queues it), and so does any PR
+  for a moment after an edit reruns a check. With only
   the first kind left (`Session.mergeQueueable`), the gate reads **Merge when ready** and a press
   queues the merge; the reasons line reads *Merges when these clear*. While it waits, the PR is
   checked at every 15-second pass instead of every 45 seconds. A queued merge also waits for CI to
-  show up on a new head: GitHub lists no checks on a fresh push for a moment, so *CI hasn't started on
-  the latest push yet* holds it for up to 2 minutes after the head first appeared, after which a head
-  with no checks counts as one without CI. At the first look that finds no blocker it merges, as
+  show up on a new head: GitHub lists no checks on a fresh push for a moment, and a fast check from
+  another workflow (a PR title check, say) can pass before CI's own jobs are listed, so *CI hasn't
+  started on the latest push yet* holds it for up to 2 minutes after the head first appeared while
+  its checks show none or only passed ones. After that, a head with no checks counts as one without
+  CI. Without this hold, a merge asked for in that window is refused by a repo that requires CI. At the first look that finds no blocker it merges, as
   Merge & Close does, and you're notified; a blocker of the second kind drops it, mid-turn or not, and you're
   notified to press Merge & Close again once that's fixed. A move out of Review, archive or a merge
   on GitHub clears it too. While the merge is being requested, Cancel is refused.

@@ -616,6 +616,7 @@ export function mergeGate(session: Session): GateButton {
 const MERGE_WAITS: [string, string][] = [
   ['CI is still running.', 'waiting on CI'],
   ["CI hasn't started on the latest push yet.", 'waiting on CI'],
+  ["GitHub's required checks haven't reported on the latest push yet.", 'waiting on CI'],
   ['Waiting for the AgentK review.', 'waiting on the AgentK review'],
   ['AgentK is waiting on you in the terminal.', 'waiting on you in the terminal'],
   // Only Run to merge's merge stays queued through these, which AgentK works on.
