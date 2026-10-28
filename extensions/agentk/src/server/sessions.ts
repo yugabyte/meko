@@ -35,7 +35,7 @@ import { expandBranchPrefix } from '../shared/branches.js';
 import { agentName, harnessOf } from '../shared/harnesses.js';
 import type { Harness } from './harness/index.js';
 import { writeLauncher } from './launcher.js';
-import { MekoCalls } from './mekocalls.js';
+import { MekoCalls, MekoHold } from './mekocalls.js';
 import { ModLinks, type DroppedPrompt } from './modlink.js';
 import { DESIGN_READY } from './lifecycle.js';
 import { askAnswers, parseAsk } from './asks.js';
@@ -276,6 +276,8 @@ export class SessionManager {
   readonly mod = new ModLinks((id, dropped) => this.promptDropped(id, dropped), Date.now, () => this.core.changed());
   /** Meko calls under way as the hooks of a CLI without the mod report them (Kiro's, OpenCode's). */
   private hookMeko = new MekoCalls();
+  /** Keeps the dot's Meko m up a little while after a quick call of either kind (mekocalls.ts). */
+  private mekoHold = new MekoHold(() => this.core.changed());
   /** How full each session's context window is (percent), from the mod's measurements (Kiro's: its session file). */
   private contextFill = new Map<string, number>();
   /** Each session's system-prompt lines at its last launch, for a harness that takes them from its context hook. */
@@ -331,7 +333,7 @@ export class SessionManager {
       midTurn: this.midTurn(id),
       promptsHeld: this.promptsHeld(id),
       asking: this.core.config.claude.mod ? this.mod.asking(id) : null,
-      mekoCall: (this.core.config.claude.mod && this.mod.callingMeko(id)) || this.hookMeko.active(id),
+      mekoCall: (this.core.config.claude.mod && this.mod.callingMeko(id)) || this.hookMeko.active(id) || this.mekoHold.active(id),
       approvalQueued: this.core.lifecycle.approvalQueued(id),
     };
   }
@@ -1370,7 +1372,8 @@ export class SessionManager {
       case '/mod/learn':
         return this.core.learn.fromMod(row, body);
       case '/mod/meko': {
-        this.mod.mekoCall(row.id, body.id, body.state);
+        // Held like the call it shows: only while the mod is on (a session keeps it until relaunched).
+        if (this.mod.mekoCall(row.id, body.id, body.state) && this.core.config.claude.mod) this.mekoHold.started(row.id);
         const scope = { id: row.id, createdAt: row.created_at };
         // `{ log: true }`: the project keeps a Meko call log, so the call's end carries the call.
         if (body.state === 'start') return this.core.mekoLog.wants(scope) ? { status: 200, body: { log: true } } : { status: 204 };
@@ -1446,6 +1449,7 @@ export class SessionManager {
   private forgetClaude(id: string, why?: string, ended = why ?? 'Claude restarted'): void {
     this.mod.reset(id, why);
     this.hookMeko.clear(id);
+    this.mekoHold.clear(id);
     this.core.learn.interrupted(id);
     this.turns.delete(id);
     this.core.lifecycle.dropApproval(id, ended);
@@ -1500,6 +1504,7 @@ export class SessionManager {
     // No Meko call outlives its turn, the plan approval's included.
     this.mod.endMeko(id);
     this.hookMeko.clear(id);
+    this.mekoHold.clear(id);
     // A plan waiting for approval keeps its turn going past its Stop; an interrupt ends it.
     if (how === 'interrupted') this.planPending.delete(id);
     if (this.planPending.has(id)) return;
@@ -1585,7 +1590,7 @@ export class SessionManager {
         break;
       case 'PreToolUse': {
         const meko = this.harness(row).mekoTool?.(p);
-        if (meko) this.hookMeko.start(id, meko);
+        if (meko && this.hookMeko.start(id, meko)) this.mekoHold.started(id);
         if (p.tool_name === 'ExitPlanMode') {
           const plan = typeof p.tool_input?.plan === 'string' ? p.tool_input.plan : '';
           if (plan) await this.core.lifecycle.saveDesign(id, { markdown: plan });

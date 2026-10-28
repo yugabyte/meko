@@ -14,12 +14,14 @@ const MAX_KEY = 200;
 export class MekoCalls {
   private open = new Map<string, Map<string, number>>();
 
-  start(session: string, key: string): void {
-    if (!key || key.length > MAX_KEY) return;
+  /** True when the call was taken (not a bad key, nor a new one past the cap). */
+  start(session: string, key: string): boolean {
+    if (!key || key.length > MAX_KEY) return false;
     let calls = this.open.get(session);
     if (!calls) this.open.set(session, (calls = new Map()));
-    if (!calls.has(key) && calls.size >= MAX_KEYS) return;
+    if (!calls.has(key) && calls.size >= MAX_KEYS) return false;
     calls.set(key, (calls.get(key) ?? 0) + 1);
+    return true;
   }
 
   /** One call of `key` ended; one that never started is ignored. */
@@ -39,5 +41,46 @@ export class MekoCalls {
 
   clear(session: string): void {
     this.open.delete(session);
+  }
+}
+
+/** The least time the dot's Meko m shows from a call's start, so a quick call is still seen. */
+export const MEKO_MIN_SHOW_MS = 1500;
+
+/**
+ * Keeps the dot's Meko m up for MEKO_MIN_SHOW_MS from each call's start (any agent's), however soon
+ * the call ends. State is pushed at most every 100 ms (server.ts), so a call that starts and ends
+ * within that would never show at all. A later start moves the end on; `onChange` is told when a
+ * hold runs out. The turn's end and a relaunch clear it.
+ */
+export class MekoHold {
+  private held = new Map<string, { until: number; timer: NodeJS.Timeout }>();
+
+  constructor(
+    private onChange: (session: string) => void,
+    private now: () => number = Date.now,
+  ) {}
+
+  started(session: string): void {
+    this.clear(session);
+    const timer = setTimeout(() => {
+      this.held.delete(session);
+      this.onChange(session);
+    }, MEKO_MIN_SHOW_MS);
+    timer.unref?.();
+    this.held.set(session, { until: this.now() + MEKO_MIN_SHOW_MS, timer });
+  }
+
+  /** True while a call that started less than MEKO_MIN_SHOW_MS ago keeps the m up. */
+  active(session: string): boolean {
+    const h = this.held.get(session);
+    return !!h && this.now() < h.until;
+  }
+
+  clear(session: string): void {
+    const h = this.held.get(session);
+    if (!h) return;
+    clearTimeout(h.timer);
+    this.held.delete(session);
   }
 }

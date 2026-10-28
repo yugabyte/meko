@@ -144,9 +144,11 @@ function mekoCall(query, ms, how) {
 function turn(text) {
   record('Prompt', { message_id: randomUUID(), content: [{ kind: 'text', data: text }], meta: { timestamp: Math.floor(Date.now() / 1000) } });
   hook('userPromptSubmit', { prompt: text });
-  // "meko <ms> [empty|refused]": a Meko search (see mekoCall).
+  // "meko <ms> [empty|refused]": a Meko search (see mekoCall); "then <ms>": the turn goes on that long after it.
   const m = /\bmeko (\d+)(?: (empty|refused))?/.exec(text);
   if (m) mekoCall(m[0], Number(m[1]), m[2]);
+  const then = /\bthen (\d+)/.exec(text);
+  if (m && then) sleep(Number(then[1]));
   // "write <file>": Kiro's write tool on that file, which the guard may deny.
   const w = /write (\S+)/.exec(text);
   if (w) {

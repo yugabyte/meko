@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
 import { sessionAgentId } from '../../src/server/meko.js';
 import { all, get } from '../../src/server/db.js';
+import { MEKO_MIN_SHOW_MS } from '../../src/server/mekocalls.js';
 
 const lines = (env: TestEnv, file: string) => {
   const f = join(process.env.FAKE_KIRO_DIR!, file);
@@ -123,6 +124,14 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
       { tool: 'memory_search', ok: true, ms: null, error: null },
     ]);
     expect(env.core.sessions.mekoLogs(p.id)).toEqual([expect.objectContaining({ sessionId: s.id, harness: 'kiro' })]);
+
+    // A call that ends at once, in a turn that goes on: the hold keeps its m, then lets it go.
+    await env.core.sessions.submit(s.id, 'meko 0 then 4000');
+    await waitFor(() => get(s.id).mekoCall, Boolean, 10000, 'the quick call');
+    const seen = Date.now();
+    const after = await waitFor(() => get(s.id), (x) => !x.mekoCall, 10000, 'the m to go');
+    expect(Date.now() - seen).toBeGreaterThanOrEqual(MEKO_MIN_SHOW_MS - 500);
+    expect(after.status).toBe('working');
   });
 
   it("refuses a new session on a harness that isn't available, reading its version again first", async () => {

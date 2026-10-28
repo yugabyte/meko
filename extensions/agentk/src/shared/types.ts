@@ -870,7 +870,10 @@ export interface Session {
   learnProgress: LearnProgress | null;
   /** Where Merge & Close is, while the session is in that stage; null in every other stage. */
   closeStep: CloseStep | null;
-  /** Claude is running a Meko tool call, as AgentK's mod reports it; false without the mod. */
+  /**
+   * The session's agent is running a Meko tool call (Claude's as AgentK's mod reports it, Kiro's and
+   * OpenCode's as their hooks do), or started one less than 1.5 s ago, so a quick call still shows.
+   */
   mekoCall: boolean;
   /** Discard was asked for: the session is discarded once its learn step ends. */
   discarding: boolean;
