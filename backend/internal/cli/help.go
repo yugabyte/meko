@@ -82,6 +82,16 @@ var mekoCommands = []command{
 			{"meko version", "Meko's version and its parts"},
 			{"meko version --json", "the same, for installers"},
 		}},
+	{name: "memory-extractor", group: "Run", summary: "Extract memories from conversations through your own Claude Code",
+		usage: "meko memory-extractor use|off|status|run|datapack [args] [flags]", examples: []example{
+			{"meko memory-extractor use claude", "turn it on: every 5 minutes, waiting turns go to claude -p (no tools)"},
+			{"meko memory-extractor use claude --every 10m --model sonnet", "run less often, with another model"},
+			{"meko memory-extractor status", "the tool, the interval, what waits, the last run and its error"},
+			{"meko memory-extractor run", "extract the waiting turns now"},
+			{"meko memory-extractor datapack work --profile coding", "rules for coding conversations in that datapack"},
+			{"meko memory-extractor datapack personal --off", "don't extract that datapack's conversations"},
+			{"meko memory-extractor off", "turn it off"},
+		}},
 	{name: "token", group: "Connect", summary: "Print the token agents send; --mcp connects Claude Code",
 		usage: "meko token [flags]", examples: []example{
 			{"meko token", "the token MCP and REST clients send (Authorization: Bearer <token>)"},

@@ -7,6 +7,7 @@ import { dateTime } from "../lib/format";
 import type { ServerStatus } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
 import { KeyValues } from "../components/KeyValues";
+import { ExtractorCard } from "../components/ExtractorCard";
 import { UpdatesCard } from "../components/UpdatesCard";
 import { MetricCard } from "../components/metrics/MetricCard";
 import { SectionHeader } from "../components/metrics/SectionHeader";
@@ -76,6 +77,7 @@ export function StatusPage() {
           />
         </MetricCard>
         <UpdatesCard />
+        <ExtractorCard />
         <MetricCard title="Memory engine">
           <KeyValues
             rows={[

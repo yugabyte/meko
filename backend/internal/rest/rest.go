@@ -95,6 +95,10 @@ func Register(g *echo.Group, o Options) {
 		g.PATCH("/settings/usage-stats", a.setUsageStats)
 	}
 
+	g.GET("/settings/memory-extractor", a.extractorStatus)
+	g.PUT("/settings/memory-extractor", a.setExtractor)
+	g.POST("/settings/memory-extractor/run", a.runExtractor)
+
 	g.GET("/datapacks", a.listDatapacks)
 	g.POST("/datapacks", a.createDatapack)
 	g.GET("/datapacks/:id", a.describeDatapack)
@@ -124,6 +128,8 @@ func Register(g *echo.Group, o Options) {
 	g.GET("/datapacks/:id/conversations/count", a.countConversations)
 	g.GET("/datapacks/:id/conversations/:conversation", a.conversation)
 	g.PATCH("/datapacks/:id/conversation-search-opt-out", a.setOptOut)
+	g.GET("/datapacks/:id/memory-extraction", a.datapackExtraction)
+	g.PATCH("/datapacks/:id/memory-extraction", a.setDatapackExtraction)
 
 	a.registerKnowledge(g)
 }

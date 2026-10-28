@@ -57,6 +57,8 @@ type Options struct {
 	Auth string // the [server] auth mode; "" is the default (token)
 	// CallHome is the [call_home] config; nil is the default (on, no URL).
 	CallHome *config.CallHome
+	// ExtractorHarness, if set, answers the memory extractor's calls instead of a real CLI.
+	ExtractorHarness memory.Harness
 }
 
 // backendDir is this module's root, found from this file.
@@ -138,7 +140,7 @@ func Start(t *testing.T, o Options) *Env {
 	port := addr.Port
 	url := fmt.Sprintf("http://127.0.0.1:%d", port)
 	svc := memory.New(st, memoryengine.NewClient(l.MemoryEngineSock, internal), memory.Options{UserID: userID, Log: log,
-		FilesDir: l.KnowledgeFiles, BaseURL: url})
+		FilesDir: l.KnowledgeFiles, BaseURL: url, ExtractorHarness: o.ExtractorHarness})
 	// The sweep that embeds turns and knowledge-base chunks, and the indexer, as serve runs them.
 	sweep, stopSweep := context.WithCancel(context.Background())
 	swept := make(chan struct{}, 2)

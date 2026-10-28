@@ -29,6 +29,7 @@ type MapPoint struct {
 	State          string   `json:"state"` // learning, kept or collective
 	AgentID        string   `json:"agent_id"`
 	ConversationID string   `json:"conversation_id,omitempty"`
+	MessageID      string   `json:"message_id,omitempty"` // the turn an extracted memory came from
 	CreatedAt      string   `json:"created_at"`
 	X              float64  `json:"x"`
 	Y              float64  `json:"y"`
@@ -102,7 +103,7 @@ func (s *Service) MemoryMap(ctx context.Context, datapack, query string, ids []s
 			}
 			drawn[m.ID] = true
 			points = append(points, MapPoint{ID: m.ID, Text: m.Memory, State: state, AgentID: m.AgentID,
-				ConversationID: m.RunID, CreatedAt: m.CreatedAt})
+				ConversationID: m.RunID, MessageID: messageIDOf(m.Metadata), CreatedAt: m.CreatedAt})
 			vecs = append(vecs, v)
 			return nil
 		}
@@ -322,4 +323,10 @@ func cosine(a, b []float32) float64 {
 		return 0
 	}
 	return ab / math.Sqrt(aa*bb)
+}
+
+// messageIDOf is the turn an extracted memory came from, or "".
+func messageIDOf(md map[string]any) string {
+	id, _ := md[MetaMessageID].(string)
+	return id
 }

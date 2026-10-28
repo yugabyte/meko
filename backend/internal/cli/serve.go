@@ -283,7 +283,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	go func() {
 		defer close(embedderDone)
 		var wg sync.WaitGroup
-		for _, run := range []func(context.Context){svc.RunCallPruner, svc.RunIndexer, usage.Run} {
+		for _, run := range []func(context.Context){svc.RunCallPruner, svc.RunIndexer, svc.RunExtractor, usage.Run} {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()

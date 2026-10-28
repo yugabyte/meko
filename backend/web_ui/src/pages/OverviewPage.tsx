@@ -7,6 +7,7 @@ import { api } from "../lib/api";
 import { bytes, count, timeAgo } from "../lib/format";
 import type { Datapack } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
+import { ExtractionBanner } from "../components/ExtractionBanner";
 import { GetStarted } from "../components/GetStarted";
 import { LearningPipeline } from "../components/LearningPipeline";
 import { Card, ErrorNote, Loading } from "../components/ui";
@@ -37,6 +38,7 @@ export function OverviewPage({ datapack }: { datapack: Datapack }) {
 
   return (
     <div className="space-y-6">
+      <ExtractionBanner datapack={datapack} />
       <GetStarted datapack={datapack} metrics={m} />
       {SHOW_COLLECTIVE && <LearningPipeline datapack={datapack} />}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">

@@ -84,6 +84,28 @@ export interface Memory {
   agent_id: string;
   conversation_id: string;
   created_at: string;
+  // "extract" for a memory the memory extractor saved, with the turn it came from.
+  source?: string;
+  message_id?: string;
+}
+
+// The memory extractor (GET /settings/memory-extractor): whether turns are extracted, and how.
+export interface ExtractorStatus {
+  enabled: boolean;
+  harness: string;
+  model: string;
+  interval_seconds: number;
+  queued: number;
+  last_run_at?: string;
+  last_error?: string;
+  extracted: number;
+}
+
+// A datapack's say in memory extraction (GET /datapacks/:id/memory-extraction).
+export interface DatapackExtraction {
+  opt_out: boolean;
+  profile: string;
+  instructions: string;
 }
 
 // One change to a memory, as mem0 recorded it (GET /memories/:id/history).
@@ -122,6 +144,7 @@ export interface MapPoint {
   state: MemoryState;
   agent_id: string;
   conversation_id?: string;
+  message_id?: string;
   created_at: string;
   x: number;
   y: number;

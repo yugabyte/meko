@@ -101,6 +101,9 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s: %s works only at the prompt (run mekosh alone)\n", prog, cmd)
 		return exitUsage
 	}
+	if cmd == "memory-extractor" {
+		return runMemoryExtractor(rest, stdout, stderr)
+	}
 	fs := flag.NewFlagSet(prog+" "+cmd, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {} // -h prints the command's help, below; a bad flag says where to find it

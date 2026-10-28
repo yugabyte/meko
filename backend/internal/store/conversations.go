@@ -32,6 +32,8 @@ type Message struct {
 	Plan           []string
 	Metadata       map[string]any
 	CreatedAt      time.Time
+	// QueueExtraction queues a new turn for memory extraction, in the same transaction that adds it.
+	QueueExtraction bool
 }
 
 // nullable is a datapack id as SQL: "" is NULL.
@@ -249,6 +251,12 @@ func (s *Store) AddMessage(ctx context.Context, datapack string, m Message, chun
 	for i, text := range chunks {
 		if _, err := tx.ExecContext(ctx, "INSERT INTO message_chunks(message_rowid, chunk_index, text) VALUES (?, ?, ?)",
 			msg, i, text); err != nil {
+			return Message{}, false, err
+		}
+	}
+	if m.QueueExtraction {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO extraction_queue(message_rowid, queued_at) VALUES (?, ?)",
+			msg, now.Format(timeLayout)); err != nil {
 			return Message{}, false, err
 		}
 	}

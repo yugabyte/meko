@@ -42,6 +42,9 @@ type Service struct {
 	tickets        *tickets
 	baseURL        string
 	keepDeleted    func() bool
+	extractKick    chan struct{}
+	extractMu      sync.Mutex // one extraction run at a time
+	testHarness    Harness
 }
 
 // Options configure a Service.
@@ -54,6 +57,8 @@ type Options struct {
 	MemoryEngineChild func() (supervisor.Status, bool)
 	// MaxDistance is conversation search's cutoff; 0 means DefaultMaxDistance.
 	MaxDistance float64
+	// ExtractorHarness, if set, runs every extraction call instead of the configured CLI (tests).
+	ExtractorHarness Harness
 	// KBMaxDistance is context_search's cutoff for knowledge-base results; 0 means
 	// DefaultKBMaxDistance.
 	KBMaxDistance float64
@@ -79,7 +84,7 @@ func New(st *store.Store, eng *memoryengine.Client, o Options) *Service {
 		child: o.MemoryEngineChild, maxDistance: o.MaxDistance, kbMaxDistance: o.KBMaxDistance,
 		kick: make(chan struct{}, 1), indexKick: make(chan struct{}, 1), files: knowledge.NewFiles(o.FilesDir),
 		tickets: &tickets{m: map[string]*ticket{}}, baseURL: strings.TrimSuffix(o.BaseURL, "/"),
-		keepDeleted: o.KeepDeletedFiles}
+		keepDeleted: o.KeepDeletedFiles, extractKick: make(chan struct{}, 1), testHarness: o.ExtractorHarness}
 }
 
 // UserID is the install's local user, the user_id on every memory.

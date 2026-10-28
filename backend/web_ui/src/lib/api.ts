@@ -12,8 +12,10 @@ import type {
   ConversationDetail,
   Conversation,
   Datapack,
+  DatapackExtraction,
   DocumentList,
   Extension,
+  ExtractorStatus,
   ExtensionAction,
   Health,
   KnowledgeActivity,
@@ -172,6 +174,8 @@ export const api = {
     ),
   memoryMap: (id: string, q = "", ids: string[] = []) =>
     request<MemoryMap>("GET", `/datapacks/${id}/memory-map?q=${enc(q)}&ids=${enc(ids.join(","))}`),
+  memoryExtractor: () => request<ExtractorStatus>("GET", "/settings/memory-extractor"),
+  datapackExtraction: (id: string) => request<DatapackExtraction>("GET", `/datapacks/${id}/memory-extraction`),
   memoryHistory: (id: string, memoryId: string) =>
     request<{ history: MemoryChange[] }>("GET", `/memories/${memoryId}/history?datapack_id=${id}`),
   deleteMemory: (id: string, memoryId: string) =>

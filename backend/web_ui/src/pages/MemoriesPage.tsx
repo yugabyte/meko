@@ -205,6 +205,7 @@ export function MemoriesPage({
                   <p className="min-w-0 break-words text-sm">{m.data}</p>
                   <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                     <Badge>{m.agent_id}</Badge>
+                    {m.source === "extract" && <Badge tone="primary">extracted</Badge>}
                     {timeAgo(m.created_at)}
                   </div>
                 </div>

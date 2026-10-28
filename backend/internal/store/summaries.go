@@ -91,13 +91,15 @@ type SavedMemory struct {
 	Text      string
 	CreatedAt time.Time
 	Promoted  bool
+	MessageID string // the turn an extracted memory came from (its meko_message_id), "" for others
 }
 
 // ConversationMemories is every memory saved in a conversation, oldest first.
 func (s *Store) ConversationMemories(ctx context.Context, datapack, conversationID string) ([]SavedMemory, error) {
-	rows, err := s.r.QueryContext(ctx, "SELECT id, text, created_at, 0 FROM memories WHERE datapack_id = ? AND "+
-		"conversation_id = ? UNION ALL SELECT id, text, created_at, 1 FROM promoted_memories WHERE datapack_id = ? AND "+
-		"conversation_id = ? ORDER BY 3, 1", datapack, conversationID, datapack, conversationID)
+	const turn = "COALESCE(json_extract(payload, '$.meko_message_id'), '')"
+	rows, err := s.r.QueryContext(ctx, "SELECT id, text, created_at, 0, "+turn+" FROM memories WHERE datapack_id = ? "+
+		"AND conversation_id = ? UNION ALL SELECT id, text, created_at, 1, "+turn+" FROM promoted_memories "+
+		"WHERE datapack_id = ? AND conversation_id = ? ORDER BY 3, 1", datapack, conversationID, datapack, conversationID)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +108,7 @@ func (s *Store) ConversationMemories(ctx context.Context, datapack, conversation
 	for rows.Next() {
 		var m SavedMemory
 		var created string
-		if err = rows.Scan(&m.ID, &m.Text, &created, &m.Promoted); err != nil {
+		if err = rows.Scan(&m.ID, &m.Text, &created, &m.Promoted, &m.MessageID); err != nil {
 			return nil, err
 		}
 		if m.CreatedAt, err = time.Parse(timeLayout, created); err != nil {
