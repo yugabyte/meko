@@ -174,7 +174,7 @@ func TestCallWindow(t *testing.T) {
 
 // Context efficiency and quality count only context_search calls that sent something, as Meko Cloud
 // does. The docs' example: two searches against a 14,000-token baseline send 1,600 and 400 and save
-// 26,000 of 28,000 (93%). A call recorded before the baseline was kept counts Cloud's 10,000.
+// 26,000 of 28,000 (93%). A call recorded without a baseline counts 10,000, its saving against it.
 func TestContextStats(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(filepath.Join(t.TempDir(), "meko.db"))
@@ -204,14 +204,18 @@ func TestContextStats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (ContextStats{Requests: 2, Saved: 26000, IfRaw: 28000, ScoreHigh: 1, Mid: 1, Low: 4}); got.Context != want {
+	want := ContextStats{Requests: 2, Sent: 2000, Saved: 26000, IfRaw: 28000, ScoreHigh: 1, Mid: 1, Low: 4}
+	if got.Context != want {
 		t.Errorf("context %+v, want %+v", got.Context, want)
 	}
-	if err = st.AddCall(ctx, store.Call{At: now, DatapackID: "d", Tool: "context_search", OK: true, TokensSent: 1000,
-		TokensSaved: 9000}); err != nil {
+	// An older call's saving was measured against another baseline (here a 50-chunk knowledge base):
+	// it's counted against the default, so saved never exceeds the baseline.
+	if err = st.AddCall(ctx, store.Call{At: now, DatapackID: "d", Tool: "context_search", OK: true, TokensSent: 400,
+		TokensSaved: 49600}); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ = svc.CallStats(ctx, "d", 0); got.Context.IfRaw != 38000 || got.Context.Requests != 3 {
-		t.Errorf("an older call's baseline: %+v", got.Context)
+	if got, _ = svc.CallStats(ctx, "d", 0); got.Context.IfRaw != 38000 || got.Context.Requests != 3 ||
+		got.Context.Saved != 26000+9600 || got.Context.Sent != 2400 {
+		t.Errorf("an older call: %+v", got.Context)
 	}
 }

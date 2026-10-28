@@ -40,6 +40,7 @@ export interface Metrics {
   // context_search calls that sent something: what context efficiency averages over (absent from an
   // older server, which averaged over total_requests).
   savings_requests?: number;
+  tokens_sent_total?: number; // what those searches sent (absent from an older server)
   tokens_saved_total: number;
   tokens_if_raw_total: number;
   savings_pct: number;

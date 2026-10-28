@@ -45,7 +45,10 @@ export function derive(m: Metrics, d: Datapack): Derived {
   const tok = (chunks: number) => chunks * TOKENS_PER_CHUNK;
   const requests = m.savings_requests ?? m.total_requests;
   const hasSavings = requests > 0 && m.tokens_if_raw_total > 0;
-  const avgTokensSent = hasSavings ? Math.round((m.tokens_if_raw_total - m.tokens_saved_total) / requests) : null;
+  // Sent comes from the server: a search's saving is clamped at 0, so baseline − saved overstates
+  // nothing but understates what was sent whenever a search sent more than its baseline.
+  const sent = m.tokens_sent_total ?? m.tokens_if_raw_total - m.tokens_saved_total;
+  const avgTokensSent = hasSavings ? Math.round(sent / requests) : null;
   const high = m.score_high_total;
   const mid = m.score_mid_total;
   const low = m.score_low_total;
