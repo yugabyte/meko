@@ -1,5 +1,7 @@
 // Unified diff parsing for the Changes panel.
 
+import type { ChangeKind } from '../shared/types';
+
 export interface DiffLine {
   kind: 'hunk' | 'add' | 'del' | 'ctx' | 'meta' | 'note';
   text: string;
@@ -63,22 +65,22 @@ export const PHONE_BUDGET: RowBudget = { open: 1000, large: 500, page: 500 };
 
 /**
  * The files whose diffs open by default: in order, each that fits what's left of the budget's
- * `open` rows (a large one never does), and every file with comments, so none are hidden (a large
- * one opens to its Show diff button).
+ * `open` rows (a large one never does, nor a deleted one, whose rows are all removed lines), and
+ * every file with comments, so none are hidden (a large one opens to its Show diff button).
  */
 export function defaultOpen(
-  files: { path: string }[],
+  files: { path: string; kind?: ChangeKind }[],
   rowsOf: (path: string) => number,
   hasComments: (path: string) => boolean,
   budget: RowBudget,
 ): Set<string> {
   const open = new Set<string>();
   let shown = 0;
-  for (const { path } of files) {
+  for (const { path, kind } of files) {
     const n = rowsOf(path);
     const large = n > budget.large;
     // A file with no rows (binary, an image) still takes a slot, so a branch of images doesn't load them all.
-    if (hasComments(path) || (!large && shown + Math.max(n, 1) <= budget.open)) {
+    if (hasComments(path) || (kind !== 'deleted' && !large && shown + Math.max(n, 1) <= budget.open)) {
       open.add(path);
       if (!large) shown += Math.max(n, 1);
     }
