@@ -121,7 +121,19 @@ jobs:
     env:
       VERSION: ${{ needs.plan.outputs.version }}
     steps:
+      # The workflow's own commit first, for scripts/release/fetch-node.sh: a tag being rebuilt can
+      # be older than the script. A rebuild then checks out its tag for the build.
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download Node ${{ env.NODE_VERSION }} for each platform
+        timeout-minutes: 15
+        run: sh ../../scripts/release/fetch-node.sh "$NODE_VERSION" "$RUNNER_TEMP" linux-x64 linux-arm64 darwin-arm64
+
+      - uses: actions/checkout@v7
+        if: needs.plan.outputs.rebuild == 'true'
         with:
           ref: ${{ needs.plan.outputs.ref }}
           persist-credentials: false
@@ -143,14 +155,6 @@ jobs:
 
       - name: Prune dev dependencies
         run: npm prune --omit=dev
-
-      - name: Download Node ${{ env.NODE_VERSION }} for each platform
-        timeout-minutes: 10
-        run: |
-          set -eu
-          for dist in linux-x64 linux-arm64 darwin-arm64; do
-            sh ../../scripts/release/fetch-node.sh "$NODE_VERSION" "$dist" "$RUNNER_TEMP"
-          done
 
       - name: Package
         run: |

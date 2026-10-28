@@ -165,18 +165,26 @@ jobs:
             gcc-toolset-13-gcc-c++ make python3.11 git tar xz findutils which
           git config --global --add safe.directory '*'
 
+      # The workflow's own commit first, for scripts/release/fetch-node.sh: a tag being rebuilt can
+      # be older than the script. A rebuild then checks out its tag for the build.
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.plan.outputs.ref }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Download Node ${{ env.NODE_VERSION }}
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: |
           set -eu
-          dir=$(sh ../../scripts/release/fetch-node.sh "$NODE_VERSION" "linux-$ARCH" "/tmp")
+          dir=$(sh ../../scripts/release/fetch-node.sh "$NODE_VERSION" "/tmp" "linux-$ARCH")
           echo "NODE_DIR=$dir" >> "$GITHUB_ENV"
           echo "$dir/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/checkout@v7
+        if: needs.plan.outputs.rebuild == 'true'
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          persist-credentials: false
 
       - name: Install dependencies (gcc-toolset-13 for node-pty)
         timeout-minutes: 10
@@ -236,18 +244,26 @@ jobs:
       VERSION: ${{ needs.plan.outputs.version }}
       AK_CALL_HOME_URL: ${{ vars.CALL_HOME_URL }}
     steps:
+      # The workflow's own commit first, for scripts/release/fetch-node.sh: a tag being rebuilt can
+      # be older than the script. A rebuild then checks out its tag for the build.
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.plan.outputs.ref }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Download Node ${{ env.NODE_VERSION }}
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: |
           set -eu
-          dir=$(sh ../../scripts/release/fetch-node.sh "$NODE_VERSION" "darwin-$ARCH" "$RUNNER_TEMP")
+          dir=$(sh ../../scripts/release/fetch-node.sh "$NODE_VERSION" "$RUNNER_TEMP" "darwin-$ARCH")
           echo "NODE_DIR=$dir" >> "$GITHUB_ENV"
           echo "$dir/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/checkout@v7
+        if: needs.plan.outputs.rebuild == 'true'
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          persist-credentials: false
 
       - name: Install dependencies (node-pty built from source)
         timeout-minutes: 10
