@@ -7,7 +7,7 @@ import {
   useRevision,
   type Draft,
 } from '../design-answers';
-import { cx, designApprovalBlocker, designReviseBlocker, heldForTurnEnd, isMac, isSubmitKey } from '../util';
+import { cx, designApprovalBlocker, designReviseBlocker, heldForTurnEnd, isMac, isSubmitKey, SESSION_BUSY } from '../util';
 import { AskForm } from './AskSheet';
 import { Busy } from './common';
 import { MekoBadge, MekoRefs } from './MekoRefs';
@@ -180,6 +180,16 @@ export function questionsSubmitButton(focused: Element, approve: HTMLButtonEleme
 }
 
 /**
+ * What the stage bar's Design Review brings up in the questions' footer: its Approve (Cancel
+ * approval while one waits for the turn's end), or, while that's disabled, the footer itself, whose
+ * line says why.
+ */
+export function reviewFocus(foot: HTMLElement): HTMLElement {
+  const button = foot.querySelector<HTMLButtonElement>('button[data-approve]');
+  return button && !button.disabled ? button : foot;
+}
+
+/**
  * The design's questions for the user: open ones to answer (an option, with an optional note, or
  * a custom answer), the key design decisions (answered questions and AgentK's own, which the user can
  * change), and other feedback. The answers stay in this browser until they go to AgentK: with the
@@ -194,17 +204,31 @@ export function DesignQuestions({
   doc,
   datapacks,
   showDecisions = 0,
+  approveAt = 0,
 }: {
   session: Session;
   doc: DesignDoc;
   datapacks?: DatapackRef[];
   showDecisions?: number;
+  /** Bumped to bring the footer's Approve into view (Design Review with the questions on screen). */
+  approveAt?: number;
 }) {
   const [drafts, update] = useDesignDrafts(session.id);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [sending, setSending] = useState<'revise' | 'approve' | 'cancel' | null>(null);
   const approve = useRef<HTMLButtonElement>(null);
+  const foot = useRef<HTMLDivElement>(null);
+  // Only a bump while the questions show: not one they mounted with, nor the reset to 0 after it.
+  const seenApprove = useRef(approveAt);
+  useEffect(() => {
+    const bumped = approveAt > seenApprove.current;
+    seenApprove.current = approveAt;
+    if (!bumped || !foot.current) return;
+    const target = reviewFocus(foot.current);
+    target.scrollIntoView({ block: 'nearest' });
+    target.focus();
+  }, [approveAt]);
   // The line saying a revision was sent goes once that revision's turn is over (the design panel's
   // header shows AgentK at work meanwhile).
   const revising = useRevision(session.id) !== null;
@@ -256,7 +280,7 @@ export function DesignQuestions({
     : null;
   const waiting = held && !reviseBlocker ? 'AgentK is working: your answers go now, and it takes them when this turn ends.' : null;
   // Shown in the footer too, as tooltips aren't seen on a phone.
-  const busy = session.busy ? 'AgentK is moving the session on. Wait a moment.' : null;
+  const busy = session.busy ? SESSION_BUSY : null;
 
   const go = async (what: 'revise' | 'approve' | 'cancel') => {
     setSending(what);
@@ -395,9 +419,11 @@ export function DesignQuestions({
         )}
       </div>
       {editable && (
-        <div className="dq-foot">
+        <div ref={foot} className="dq-foot" tabIndex={-1}>
+          {/* Why Approve is closed comes before what Send for revision needs: Design Review brings this
+              line up when Approve is disabled (reviewFocus), and a phone has no tooltips. */}
           <span className="dq-foot-note">
-            {error ? <span className="error-text">{error}</span> : (note ?? busy ?? queued ?? waiting ?? reviseBlocker ?? '')}
+            {error ? <span className="error-text">{error}</span> : (note ?? busy ?? queued ?? blocker ?? waiting ?? reviseBlocker ?? '')}
           </span>
           <button
             className="btn small"
@@ -408,12 +434,13 @@ export function DesignQuestions({
             {sending === 'revise' ? <Busy label="Sending" /> : 'Send for revision'}
           </button>
           {session.approvalQueued ? (
-            <button className="btn small" disabled={!!sending} onClick={() => void go('cancel')}>
+            <button className="btn small" data-approve="" disabled={!!sending} onClick={() => void go('cancel')}>
               {sending === 'cancel' ? <Busy label="Cancelling" /> : 'Cancel approval'}
             </button>
           ) : (
             <button
               ref={approve}
+              data-approve=""
               className="btn small primary"
               disabled={!!blocker || !!sending || !!busy}
               aria-keyshortcuts={isMac() ? 'Meta+Enter' : 'Control+Enter'}

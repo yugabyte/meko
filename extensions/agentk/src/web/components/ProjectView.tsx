@@ -19,7 +19,7 @@ import { approveDesign, changingDecisions } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { approveLabel, closingText, cx, dotState, designApprovalBlocker, formatCredits, formatTokens, heldForTurnEnd, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, runToMergeShown, runToMergeTitle, sessionTabTitle, totalTokens, updateShowing, usageTitle } from '../util';
+import { closingText, cx, dotState, designGate, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, reviewTarget, runToMergeShown, runToMergeTitle, sessionTabTitle, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
 import { Busy, Check, ConfirmButton, ContextRing, DatapackName, Elapsed, HarnessLogo, NotesIcon, RunToMergeCheck, RunToMergeMark, StageChip, StatusDot } from './common';
@@ -116,8 +116,10 @@ export function ProjectView({
   const [panel, setPanel] = useState<'design' | 'changes' | null>(null);
   const toggle = (p: 'design' | 'changes') => setPanel((o) => (o === p ? null : p));
   const [sheet, setSheet] = useState(false);
-  // Bumped to show the design's questions (Approve pressed with questions open).
+  // Bumped to show the design's questions (Design Review, or Approve pressed with questions open).
   const [questionsAt, setQuestionsAt] = useState(0);
+  // Bumped to bring the open design panel's approve button into view (Design Review).
+  const [approveAt, setApproveAt] = useState(0);
   const [sharing, setSharing] = useState(false);
   // The questions Claude is asking, opened from the bar above the terminal or the ⋯ sheet.
   const [asking, setAsking] = useState(false);
@@ -139,6 +141,7 @@ export function ProjectView({
     setAsking(false);
     setHeldOpen(false);
     setQuestionsAt(0);
+    setApproveAt(0);
   }, [session?.id]);
   // Also when the desktop tabs mount, as the rail stops listing the sessions or is hidden.
   useEffect(() => {
@@ -146,7 +149,10 @@ export function ProjectView({
   }, [session?.id, showTabs]);
   // Showing the questions is for the panel open now: one opened later starts on the design.
   useEffect(() => {
-    if (panel !== 'design') setQuestionsAt(0);
+    if (panel !== 'design') {
+      setQuestionsAt(0);
+      setApproveAt(0);
+    }
   }, [panel]);
   // During Design, show the design as soon as it's written, and again whenever it's revised.
   const designAt = session?.stage === 'design' ? session.designUpdatedAt : null;
@@ -198,6 +204,19 @@ export function ProjectView({
       actingRef.current = false;
       setActingOn(null);
     }
+  };
+  // Design Review: the design, on its questions when there are any to answer; with the panel open
+  // already, its approve button. The approval itself goes from the panel, with the answers.
+  const openReview = () => {
+    if (!session) return;
+    setSheet(false);
+    const target = reviewTarget(session.designQuestions.open, changingDecisions(session.id), panel === 'design');
+    if (target === 'approve') {
+      setApproveAt((n) => n + 1);
+      return;
+    }
+    setPanel('design');
+    if (target === 'questions') setQuestionsAt((n) => n + 1);
   };
   // Run to merge's checkbox beside the gates (StageBar) and the design panel's Approve.
   const setAutoRun = async (on: boolean) => {
@@ -373,6 +392,8 @@ export function ProjectView({
           session={session}
           project={project}
           onAct={act}
+          onReview={openReview}
+          designOpen={panel === 'design'}
           onAutoRun={setAutoRun}
           learnTo={mergeLearnTo}
           onMove={onMove}
@@ -447,6 +468,7 @@ export function ProjectView({
             session={session}
             datapacks={project.datapacks}
             showQuestions={questionsAt}
+            approveAt={approveAt}
             onClose={() => setPanel(null)}
             onApprove={() => act('approve-design')}
             onAutoRun={setAutoRun}
@@ -485,6 +507,8 @@ export function ProjectView({
               session={session}
               project={project}
               onAct={act}
+              onReview={openReview}
+              designOpen={panel === 'design'}
               onAutoRun={setAutoRun}
               learnTo={mergeLearnTo}
               onMove={(preset) => {
@@ -609,6 +633,8 @@ function StageBar({
   session,
   project,
   onAct,
+  onReview,
+  designOpen = false,
   onAutoRun,
   onMove,
   onOpenPr,
@@ -623,7 +649,11 @@ function StageBar({
   session: Session | null;
   project: ProjectWithSessions;
   onAct: (a: SessionAction, req?: CloseSessionRequest) => Promise<void>;
-  /** Turns Run to merge on or off (its checkbox beside Approve design, Open PR and Merge & Close). */
+  /** Design Review: opens the design panel, or brings its approve button into view (`reviewTarget`). */
+  onReview: () => void;
+  /** The design panel is open. */
+  designOpen?: boolean;
+  /** Turns Run to merge on or off (its checkbox beside Design Review, Open PR and Merge & Close). */
   onAutoRun: (on: boolean) => Promise<void>;
   /** The datapack Merge & Close saves what the session learned to first; null when it has none (or Meko is off). */
   learnTo?: string | null;
@@ -703,21 +733,14 @@ function StageBar({
         );
         break;
       }
-      // With open questions the gate only shows them, so it isn't held up.
-      reason = session.designQuestions.open ? null : designApprovalBlocker(session);
-      const waits = heldForTurnEnd(session);
+      // Design Review only opens the design: the approval goes from the panel, with the answers.
+      const review = designGate(session);
+      reason = review.reason;
       gate = (
         <span className="gate-group">
           {session.hasDesign && runToMerge}
-          <button
-            className="gate"
-            disabled={blocked || !!reason}
-            title={reason ?? (session.designQuestions.open
-              ? 'Answer the open questions, then approve'
-              : waits ? 'AgentK is mid-turn: the approval goes when the turn ends, if the design stays the same' : 'Approve the design and move to Code')}
-            onClick={() => onAct('approve-design')}
-          >
-            {approveLabel(session.designQuestions.open)}
+          <button className="gate" disabled={blocked || !!reason} title={review.title} aria-expanded={designOpen} onClick={onReview}>
+            {review.label}
           </button>
         </span>
       );

@@ -269,7 +269,7 @@ export function SessionSheet({
   onClose,
 }: {
   session: Session;
-  /** The stage bar with its gate (Approve design, Open PR, Merge & Close). */
+  /** The stage bar with its gate (Design Review, Open PR, Merge & Close). */
   stage: ReactNode;
   canDesign: boolean;
   /** Save learnings to Meko is offered (the project has a datapack, and Claude is there). */
