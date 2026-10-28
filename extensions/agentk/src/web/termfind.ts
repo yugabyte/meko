@@ -10,7 +10,10 @@ export const FIND_LIMIT = 1000;
 /** The bar's toggles. */
 export type FindToggles = { caseSensitive: boolean; wholeWord: boolean; regex: boolean };
 
-/** What the search addon last reported: the current match (-1: none, or past the limit) and the count. */
+/**
+ * What the search addon last reported: the current match (-1: none, or past the limit) and the count
+ * (-1: paused by a selection of the user's own, until the bar searches again).
+ */
 export type FindResult = { index: number; count: number };
 
 /**
@@ -40,6 +43,7 @@ export function findLabel(query: string, regex: boolean, r: FindResult): string 
   const p = findPattern(query, regex);
   if (p === 'empty') return '';
   if (p === 'invalid') return 'Invalid pattern';
+  if (r.count < 0) return '';
   if (r.count === 0) return 'No results';
   if (r.count >= FIND_LIMIT) return `More than ${FIND_LIMIT.toLocaleString('en-US')}`;
   return r.index < 0 ? `${r.count} found` : `${r.index + 1} of ${r.count}`;

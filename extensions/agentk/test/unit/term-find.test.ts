@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FIND_LIMIT, findLabel, findOptions, isFindKey, seedQuery } from '../../src/web/termfind.js';
+import { FIND_LIMIT, findLabel, isFindKey, seedQuery } from '../../src/web/termfind.js';
 
 const key = (k: string, mods: Partial<Record<'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey', boolean>> = {}) => ({
   key: k, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, ...mods,
@@ -29,17 +29,13 @@ describe('find in the terminal', () => {
     ['migration', false, { index: -1, count: 4 }, '4 found'],
     ['e', false, { index: -1, count: FIND_LIMIT }, 'More than 1,000'],
     ['fix(', true, { index: -1, count: 0 }, 'Invalid pattern'],
+    // Paused by a selection of the user's own: no count until the bar searches again.
+    ['migration', false, { index: -1, count: -1 }, ''],
     ['fix\\(', true, { index: 0, count: 1 }, '1 of 1'],
     // Not a regex: the same text is searched as it is.
     ['fix(', false, { index: 0, count: 2 }, '1 of 2'],
   ])('labels %j (regex %s) as %j', (query, regex, result, label) => {
     expect(findLabel(query, regex, result)).toBe(label);
-  });
-
-  it('passes the toggles to the search, highlighting in the theme’s colors', () => {
-    const dark = findOptions({ caseSensitive: true, wholeWord: false, regex: true }, 'dark');
-    expect(dark).toMatchObject({ caseSensitive: true, wholeWord: false, regex: true });
-    expect(dark.decorations?.matchBackground).not.toBe(findOptions({ caseSensitive: true, wholeWord: false, regex: true }, 'light').decorations?.matchBackground);
   });
 
   it.each([

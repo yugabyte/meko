@@ -209,6 +209,13 @@ class SessionTerminal {
   };
   /** Goes up each time find is asked for, so the bar focuses its field again (⌘F while it's open). */
   findFocus = 0;
+  /**
+   * The search addon owns the selection: it selects each match it steps to, and again as new output
+   * comes. Off while the bar is closed, or paused by a selection of the user's own (pauseFind).
+   */
+  private findLive = false;
+  /** A mouse button is down on the terminal: a selection made now is the user's. */
+  private mouseDown = false;
   /** Input typed while held images are being sent (non-null only then); it follows them. */
   private queued: string[] | null = null;
   /** While a send waits on uploads: calls it off (Esc or Ctrl+C). */
@@ -257,6 +264,11 @@ class SessionTerminal {
     this.el.addEventListener('touchmove', this.touchMove, { capture: true, passive: false });
     this.el.addEventListener('touchend', this.touchEnd, { capture: true, passive: false });
     this.el.addEventListener('touchcancel', this.touchCancel, { capture: true, passive: true });
+    // A drag or double-click selecting text while the bar is open pauses the search (pauseFind).
+    this.el.addEventListener('mousedown', this.onMouseDown, { capture: true });
+    this.term.onSelectionChange(() => {
+      if (this.findLive && (this.mouseDown || this.selecting) && this.term.hasSelection()) this.pauseFind();
+    });
     // Capture, so an image paste or drop is ours before xterm takes the paste as text.
     this.el.addEventListener('paste', this.onPaste, { capture: true });
     this.el.addEventListener('dragover', this.onDragOver);
@@ -298,7 +310,8 @@ class SessionTerminal {
       }
       const mod = IS_MAC ? e.metaKey : e.ctrlKey;
       // With text selected, ⌘C (Ctrl+C or Ctrl+Shift+C elsewhere) copies it instead of interrupting Claude.
-      if (mod && (e.key === 'c' || e.key === 'C') && this.term.hasSelection()) {
+      // Not a match the find bar selected: Ctrl+C interrupts Claude while the bar is open.
+      if (mod && (e.key === 'c' || e.key === 'C') && this.term.hasSelection() && !this.findLive) {
         e.preventDefault();
         void this.copy(this.term.getSelection());
         if (!IS_MAC) this.term.clearSelection();
@@ -354,11 +367,17 @@ class SessionTerminal {
     this.listeners.forEach((l) => l());
   }
 
-  /** Opens the find bar, or focuses it again; text selected on one line becomes the query. */
+  /**
+   * Opens the find bar, or focuses it again. Text the user selected on one line becomes the query
+   * (not a match the bar selected itself).
+   */
   openFind() {
-    const seed = this.term.hasSelection() ? seedQuery(this.term.getSelection()) : null;
+    const own = this.term.hasSelection() && !this.findLive;
+    const seed = own ? seedQuery(this.term.getSelection()) : null;
     const wasOpen = this.find.open;
     if (seed) this.find.query = seed;
+    // The search starts from the selection: with none, at the bottom.
+    else if (!wasOpen) this.term.clearSelection();
     this.find.open = true;
     this.findFocus++;
     // A fresh search starts at the bottom, so the newest match comes first; one from the selection starts there.
@@ -374,6 +393,7 @@ class SessionTerminal {
   closeFind() {
     if (!this.find.open) return;
     this.find.open = false;
+    this.findLive = false;
     this.search.clearDecorations();
     this.term.clearSelection();
     this.find.result = { index: -1, count: 0 };
@@ -408,9 +428,28 @@ class SessionTerminal {
     this.runFind('older');
   }
 
+  /**
+   * The user selected text while the bar is open: the addon's search on new output would take the
+   * selection back, so stop it (clearDecorations drops its cached term) until the bar searches
+   * again, from that selection. The bar shows no count meanwhile.
+   */
+  private pauseFind() {
+    this.findLive = false;
+    this.search.clearDecorations();
+    this.find.result = { index: -1, count: -1 };
+    this.listeners.forEach((l) => l());
+  }
+
+  private onMouseDown = () => {
+    this.mouseDown = true;
+    // A tick after the button comes up: xterm reports the finished selection on mouseup.
+    document.addEventListener('mouseup', () => setTimeout(() => (this.mouseDown = false)), { once: true });
+  };
+
   private runFind(dir: 'older' | 'newer') {
     const f = this.find;
-    if (findPattern(f.query, f.regex) !== 'ok') {
+    this.findLive = findPattern(f.query, f.regex) === 'ok';
+    if (!this.findLive) {
       // The addon finds nothing for an empty query and throws on a bad regex.
       this.search.clearDecorations();
       this.term.clearSelection();

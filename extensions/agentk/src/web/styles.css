@@ -1577,17 +1577,30 @@ textarea.input {
   opacity: 0.4;
 }
 /* Find in the terminal (TermFind.tsx): over its top right, in the terminal theme's colors (the
-   --term-* variables follow data-term-theme, not the app's theme). */
-.term-find {
+   --term-* variables follow data-term-theme, not the app's theme). A toast shown meanwhile goes
+   under the bar, in the same column (TerminalPane.tsx). */
+.term-find-stack {
   position: absolute;
   top: 10px;
   right: 18px;
   z-index: 4;
+  max-width: calc(100% - 28px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  pointer-events: none;
+}
+.term-find-stack .term-toast {
+  position: static;
+  max-width: 100%;
+}
+.term-find {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px 6px;
-  max-width: calc(100% - 28px);
+  max-width: 100%;
   padding: 5px 6px;
   border-radius: 8px;
   background: var(--term-key);
@@ -1595,6 +1608,7 @@ textarea.input {
   border: 1px solid var(--term-rule);
   box-shadow: var(--shadow);
   font-size: 12px;
+  pointer-events: auto;
 }
 .term-find-row {
   display: flex;
@@ -1647,9 +1661,12 @@ textarea.input {
   opacity: 0.4;
   cursor: default;
 }
+/* An option that's on shows by its outline and weight too, not only its color. */
 .term-find-btn[aria-pressed='true'] {
   background: var(--term-key-on);
   color: var(--term-key-on-ink);
+  box-shadow: inset 0 0 0 1px var(--term-key-on-ink);
+  font-weight: 700;
 }
 .term-find-note {
   flex-basis: 100%;
@@ -1663,27 +1680,6 @@ textarea.input {
   }
   .term-find-input {
     min-height: 36px;
-  }
-  /* The toast moves to the top on touch screens (below); with the bar there, it stays at the bottom. */
-  .term-find ~ .term-toast {
-    top: auto;
-    bottom: 14px;
-  }
-}
-/* A phone: the bar spans the terminal, the field on one row and its buttons spread on the next. */
-@media (max-width: 760px) {
-  .term-find {
-    top: 6px;
-    left: 8px;
-    right: 8px;
-    max-width: none;
-  }
-  .term-find-input {
-    font-size: 16px;
-  }
-  .term-find-btns {
-    width: 100%;
-    justify-content: space-between;
   }
 }
 /* On touch screens the toast sits at the top, clear of the overlay and the key bar. */
@@ -5788,9 +5784,22 @@ div[id^='dak-mermaid-'] .label {
   .files-filter,
   .cmt-input,
   .compose-input,
+  .term-find-input,
   select,
   textarea {
     font-size: 16px;
+  }
+  /* The find bar spans the terminal, its field on one row and its buttons spread on the next. */
+  .term-find-stack {
+    top: 6px;
+    left: 8px;
+    right: 8px;
+    max-width: none;
+    align-items: stretch;
+  }
+  .term-find-btns {
+    width: 100%;
+    justify-content: space-between;
   }
 
   /* Project home */
