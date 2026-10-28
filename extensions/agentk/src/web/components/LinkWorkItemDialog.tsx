@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ProjectWithSessions, Session, WorkItem } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { cx, dotState, liveSessions, stageWords } from '../util';
@@ -25,16 +25,23 @@ export function LinkWorkItemDialog({
   const [picked, setPicked] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // A session can be on a closed item too, which a link here would take it from.
+  const [closed, setClosed] = useState<WorkItem[]>([]);
+  useEffect(() => {
+    if (item) void api.closedWorkItems().then(setClosed, () => undefined);
+  }, [item]);
   const sessions = projects.flatMap((p) => liveSessions(p).map((s) => ({ s, project: p.name })));
-  const itemOf = (sessionId: string) => items.find((i) => i.sessionId === sessionId);
+  const itemOf = (sessionId: string) => [...items, ...closed].find((i) => i.sessionId === sessionId);
+  const current = session ? items.find((i) => i.sessionId === session.id) : undefined;
   const choices = item
     ? sessions.map(({ s, project }) => {
       const other = itemOf(s.id);
       return { id: s.id, name: s.name, hint: `${project} · ${stageWords(s)}`, dot: dotState(s), taken: other && other.id !== item.id ? `On "${other.title}"` : null };
     })
-    : items.map((i) => {
+    : items.filter((i) => i.id !== current?.id).map((i) => {
       const s = itemSession(i, projects);
-      return { id: i.id, name: i.title, hint: i.links.map((l) => l.label).join(' · '), dot: s ? dotState(s) : null, taken: s && s.id !== session?.id ? `Has "${s.name}"` : null };
+      const taken = !i.sessionId || i.sessionId === session?.id ? null : s ? `Has "${s.name}"` : 'Has a closed session';
+      return { id: i.id, name: i.title, hint: i.links.map((l) => l.label).join(' · '), dot: s ? dotState(s) : null, taken };
     });
   const choice = choices.find((c) => c.id === picked);
 
@@ -80,7 +87,7 @@ export function LinkWorkItemDialog({
             </button>
           )}
           <button className="btn primary" disabled={!picked || busy} onClick={() => void save()}>
-            {busy ? <Busy label="Linking" /> : choice?.taken ? 'Move the link here' : 'Link'}
+            {busy ? <Busy label="Linking" /> : choice?.taken || current ? 'Move the link here' : 'Link'}
           </button>
         </>
       }
@@ -103,6 +110,7 @@ export function LinkWorkItemDialog({
             </button>
           ))}
         </div>
+        {current && <p className="muted small">It's on "{current.title}" now: linking it to another item takes it off that one.</p>}
         {choice?.taken && (
           <p className="muted small">
             {item ? 'The session moves off its other work item: a session is on one item at most.' : "That item's session is unlinked: an item has one session at most."}

@@ -28,8 +28,9 @@ A new item goes to the bottom. One added with no title takes its first GitHub li
 reopening puts it at the bottom.
 
 **Order.** Dragging a row (not on touch screens) sends `PUT /api/work-items/order` with every open
-item's id in the new order and the one that moved. A list that isn't exactly the open items is a
-409, so two devices reordering at once can't scramble it. Each row's ⋯ actions also have Move to top,
+item's id in the new order and the one that moved. A list that isn't exactly the open items (one
+added, closed or reopened meanwhile) is a 409. Two devices reordering the same items: the last order
+sent wins, with no version check. Each row's ⋯ actions also have Move to top,
 Move up and Move down (`PATCH … {move}`), which is how a phone reorders.
 
 ## One session per item
@@ -67,9 +68,14 @@ how many items are open and new.
   --limit 100`, `reviewRequests()` in `github.ts`), titled `Review <owner/name>#<n>: <title>`.
 - **Slack:** the messages on your Later list, read by one `claude -p` through your own Slack
   connector (`src/server/slack.ts`), titled with their first line. Unlike Ask AgentK, it loads your
-  MCP servers and claude.ai connectors. In `-p` nothing can be asked, so only the tools in
-  `[work_queue] slack_tools` run (the claude.ai Slack connector's search and read tools by default),
-  and its write tools and the built-in tools are denied outright, whatever your own settings allow.
+  MCP servers and claude.ai connectors (no `--strict-mcp-config`). It reads messages other people
+  wrote, so it's kept to reading Slack: no built-in tools (`--tools ''`); none of your Claude Code
+  settings but `env` and `apiKeyHelper`, which signing in needs (`signInSettings()`, with
+  `--setting-sources project` in AgentK's empty `run/work-sync` folder), so your allow rules and
+  default mode don't apply; `--permission-mode default`; and only `[work_queue] slack_tools` allowed
+  (the claude.ai Slack connector's search and read tools by default). In `-p` nothing can be asked,
+  so every other tool, another connector's included, is refused; the claude.ai connector's write
+  tools are also denied by name. The prompt calls the messages' text data, not instructions.
   The answer follows a JSON schema; `found: false` (no Slack tools, or no way to the list) is an
   error, not an empty list. It needs Claude Code; the model is `[work_queue] slack_model`.
 
@@ -78,7 +84,9 @@ beside Sync. A link already on any item, open or closed, is never added again, s
 item keeps it gone. A synced item is `unplaced` (the **New** chip) until it's moved or **Keep here**
 is pressed. A GitHub item that a sync no longer finds (merged, closed, or your review no longer
 requested) gets `github_done_at` (**Done on GitHub**); it's cleared if the review is requested again.
-Nothing closes by itself.
+A read that comes back full (`REVIEW_REQUESTS_MAX`, 100) may have left some out, in no set order,
+so it marks nothing done. Nothing closes by itself. `WorkSync.slack` is null when a run left Slack
+out (a timed one while Slack isn't on the timer).
 
 Reading Slack is a model call, so the timer reads it only while the last Slack read worked: a
 Sync you press that reaches Slack turns that on (`kv` `work-slack-auto`), and any failure turns it
@@ -89,7 +97,8 @@ off until a Sync you press works again. GitHub is read on every run.
 A pasted GitHub, Jira or Slack link, `owner/name#<n>` or a bare Jira key (`workLinkKey()`) is looked
 up once typing pauses (`GET /api/work-items/by-link`, an indexed lookup in `state.db`, no tokens).
 `workLinkEntries()` in `src/web/palette.ts` lists the session of each item holding it first (Go to,
-or a closed one's PR), then each item (opening the queue at it), and Start a session for an open item
+or a closed one's PR), then each item (opening the queue at it, with the Closed section open for a
+closed one), and Start a session for an open item
 with no open session. For a GitHub link these come before the link's own items, and a session both
 name is listed once. The palette also has **Work queue**, **Add a work item**, **Sync the work
 queue**, and Link, Unlink or show the work item of the session on screen.

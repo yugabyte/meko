@@ -1,9 +1,12 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseWorkLink } from '../../src/shared/worklinks.js';
-import { get, kvGet, openDb, run } from '../../src/server/db.js';
+import { openDb, run } from '../../src/server/db.js';
 import type { ReviewRequest } from '../../src/server/github.js';
 import type { AskRun } from '../../src/server/askagentk.js';
-import { readSlackLater, slackArgs, type SlackLater } from '../../src/server/slack.js';
+import { readSlackLater, signInSettings, slackArgs, type SlackLater } from '../../src/server/slack.js';
 import { checkStartItem, setItemSession, WorkQueue, type WorkQueueDeps } from '../../src/server/workqueue.js';
 
 describe('work item links', () => {
@@ -86,7 +89,7 @@ describe('the work queue', () => {
     ['a session moves off its other item', 's1', 'B', ['B']],
     ['an item replaces its session', 's2', 'A', ['A']],
   ])('links one to one: %s', async (_what, sessionId, to, want) => {
-    const { q, db, session } = setup();
+    const { q, session } = setup();
     session('s1');
     session('s2');
     const a = await q.create({ title: 'A' });
@@ -95,7 +98,7 @@ describe('the work queue', () => {
     q.update(to === 'A' ? a.id : b.id, { sessionId });
     const holding = q.list().filter((i) => i.sessionId === sessionId).map((i) => i.title);
     expect(holding).toEqual(want);
-    expect(get<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM work_items WHERE session_id IS NOT NULL')!.n).toBe(1);
+    expect(q.list().filter((i) => i.sessionId).length).toBe(1);
   });
 
   it('finds an item and its session by any spelling of a link, closed ones last', async () => {
@@ -110,6 +113,17 @@ describe('the work queue', () => {
     expect(found[1].session).toMatchObject({ id: 's1', closed: true });
     expect(q.soleItemFor('o/r#9')).toBe(b.id);
     expect(() => q.byLink('no link here')).toThrow(/isn't a link/);
+  });
+
+  it('turns away an empty session id, and keeps a synced link\'s label when the item is edited', async () => {
+    const { q, state } = setup({ slack: [{ url: 'https://acme.slack.com/archives/C1/p1700000000000001', text: 'look', channel: 'db-dev' }] });
+    const a = await q.create({ title: 'A' });
+    expect(() => q.update(a.id, { sessionId: '' })).toThrow(/must be its id/);
+    await q.sync(true);
+    const msg = q.list()[1];
+    q.update(msg.id, { title: 'Look at it', links: [msg.links[0].url!, 'DB-1'] });
+    expect(q.get(msg.id).links.map((l) => l.label)).toEqual(['Slack #db-dev', 'DB-1']);
+    expect(state.slackReads).toBe(1);
   });
 
   it('checks the item a new session is for', async () => {
@@ -154,20 +168,27 @@ describe('syncing the work queue', () => {
     expect(q.list()[0].githubDone).toBe(false);
   });
 
+  it('marks nothing done on GitHub from a full page of review requests, which may have left some out', async () => {
+    const { q, state } = setup({ reviews: [pr(1)] });
+    await q.sync(false);
+    state.reviews = Array.from({ length: 100 }, (_, i) => pr(i + 2));
+    await q.sync(false);
+    expect(q.list().find((i) => i.title.startsWith('Review o/r#1:'))!.githubDone).toBe(false);
+  });
+
   it('reads Slack on the timer only after a Sync reached it, and stops after a failure', async () => {
-    const { q, db, state } = setup({ reviews: [pr(1)], slack: new Error('no Slack tools') });
+    const { q, state } = setup({ reviews: [pr(1)], slack: new Error('no Slack tools') });
     await q.sync(false);
     expect(state.slackReads).toBe(0);
     const r = await q.sync(true);
     expect(r).toMatchObject({ github: { ok: true }, slack: { ok: false, error: 'no Slack tools' }, slackAuto: false });
     state.slack = [];
-    await q.sync(true);
-    expect(kvGet(db, 'work-slack-auto')).toBe('1');
+    expect((await q.sync(true)).slackAuto).toBe(true);
     await q.sync(false);
     expect(state.slackReads).toBe(3);
     state.slack = new Error('timed out');
     await q.sync(false);
-    await q.sync(false);
+    expect((await q.sync(false)).slack).toBeNull();
     expect(state.slackReads).toBe(4);
   });
 
@@ -181,12 +202,22 @@ describe('syncing the work queue', () => {
 describe("reading Slack's Later list", () => {
   const ran = (out: unknown, o: Partial<AskRun> = {}): AskRun => ({ stdout: JSON.stringify(out), stderr: '', code: 0, spawnError: null, timedOut: false, aborted: false, ...o });
 
-  it('loads your connectors but lets the run only read Slack', () => {
-    const args = slackArgs('sonnet', ['mcp__claude_ai_Slack__slack_search_public_and_private']);
+  it('loads your connectors but none of your permissions, and no built-in tools', () => {
+    const args = slackArgs('sonnet', ['mcp__claude_ai_Slack__slack_search_public_and_private'], { env: { A: '1' } });
+    const after = (flag: string) => args[args.indexOf(flag) + 1];
     expect(args).not.toContain('--strict-mcp-config');
+    expect([after('--tools'), after('--permission-mode'), after('--setting-sources')]).toEqual(['', 'default', 'project']);
     expect(args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--disallowedTools'))).toEqual(['mcp__claude_ai_Slack__slack_search_public_and_private']);
-    expect(args).toEqual(expect.arrayContaining(['mcp__claude_ai_Slack__slack_send_message', 'Bash']));
+    expect(args).toContain('mcp__claude_ai_Slack__slack_send_message');
+    expect(JSON.parse(after('--settings'))).toEqual({ env: { A: '1' }, disableAllHooks: true });
     expect(slackArgs('', [])).not.toContain('--allowedTools');
+  });
+
+  it('takes only the sign-in part of your Claude Code settings', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ak-slack-'));
+    writeFileSync(join(dir, 'settings.json'), JSON.stringify({ env: { X: '1' }, apiKeyHelper: 'k', permissions: { allow: ['mcp__github'], defaultMode: 'bypassPermissions' } }));
+    expect(signInSettings(dir)).toEqual({ env: { X: '1' }, apiKeyHelper: 'k' });
+    expect(signInSettings(join(dir, 'none'))).toEqual({});
   });
 
   it.each([

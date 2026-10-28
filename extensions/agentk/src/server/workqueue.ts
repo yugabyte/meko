@@ -7,7 +7,7 @@ import {
   type WorkLink, type WorkLinkMatch, type WorkSourceResult, type WorkSync,
 } from '../shared/types.js';
 import { all, get, kvDelete, kvGet, kvSet, run, tx, type Db } from './db.js';
-import type { ReviewRequest } from './github.js';
+import { REVIEW_REQUESTS_MAX, type ReviewRequest } from './github.js';
 import { errMsg } from './log.js';
 import { HttpError } from './projects.js';
 import type { SlackLater } from './slack.js';
@@ -147,6 +147,15 @@ export class WorkQueue {
     links.forEach((l, i) => run(this.db, 'INSERT INTO work_item_links(item_id, ord, key, kind, url, label) VALUES (?, ?, ?, ?, ?, ?)', id, i, l.key, l.kind, l.url, l.label));
   }
 
+  /** The links with the label a sync gave each one already on the item (a Slack message's channel), which reading it again loses. */
+  private keepLabels(id: string, links: WorkLink[]): WorkLink[] {
+    const had = new Map(this.links(id).map((l) => [l.key, l]));
+    return links.map((l) => {
+      const old = had.get(l.key);
+      return old && old.url === l.url ? { ...l, label: old.label } : l;
+    });
+  }
+
   /** Writes a new item at the bottom of the queue. */
   private insert(o: { title: string; notes?: string; links: WorkLink[]; source: WorkItemSource; sourceKey?: string }): string {
     const id = randomUUID();
@@ -185,7 +194,7 @@ export class WorkQueue {
     if (body.status != null && body.status !== 'open' && body.status !== 'closed') throw new HttpError(400, 'A work item is open or closed.');
     if (body.move != null && !['up', 'down', 'top'].includes(body.move)) throw new HttpError(400, 'Move a work item up, down or to the top.');
     if (body.placed != null && body.placed !== true) throw new HttpError(400, 'placed must be true.');
-    if (body.sessionId !== undefined && body.sessionId !== null && typeof body.sessionId !== 'string') throw new HttpError(400, 'The session must be its id.');
+    if (body.sessionId !== undefined && body.sessionId !== null && (typeof body.sessionId !== 'string' || !body.sessionId)) throw new HttpError(400, 'The session must be its id.');
     const title = body.title == null ? null : text(body.title, 'title', WORK_TITLE_MAX);
     if (title === '') throw new HttpError(400, 'Give the work item a title.');
     const notes = body.notes == null ? null : text(body.notes, 'notes', WORK_NOTES_MAX);
@@ -196,7 +205,7 @@ export class WorkQueue {
     tx(this.db, () => {
       if (title != null) run(this.db, 'UPDATE work_items SET title = ? WHERE id = ?', title, id);
       if (notes != null) run(this.db, 'UPDATE work_items SET notes = ? WHERE id = ?', notes, id);
-      if (links) this.writeLinks(id, links);
+      if (links) this.writeLinks(id, this.keepLabels(id, links));
       if (status !== r.status) {
         if (status === 'closed') run(this.db, 'UPDATE work_items SET status = ?, closed_at = ?, unplaced = 0 WHERE id = ?', status, Date.now(), id);
         else run(this.db, `UPDATE work_items SET status = 'open', closed_at = NULL,
@@ -292,6 +301,8 @@ export class WorkQueue {
       added++;
     }
     // Done on GitHub: a review request it no longer finds (merged, closed, or not asked of you any more); back if it's asked again.
+    // A full page may have left some out, and those aren't done, so nothing is marked then.
+    if (found.length >= REVIEW_REQUESTS_MAX) return { ok: true, added, error: null };
     const now = Date.now();
     for (const r of all<{ id: string; source_key: string; github_done_at: number | null }>(this.db,
       "SELECT id, source_key, github_done_at FROM work_items WHERE source = 'github' AND status = 'open'")) {
@@ -341,7 +352,7 @@ export class WorkQueue {
       const slack = slackOn ? await attempt('Slack', () => this.syncSlack()) : null;
       if (slack?.ok && manual) kvSet(this.db, SLACK_AUTO_KEY, '1');
       if (slack && !slack.ok) kvDelete(this.db, SLACK_AUTO_KEY);
-      this.last = { at: Date.now(), github, slack: slack ?? (manual ? null : this.last.slack) };
+      this.last = { at: Date.now(), github, slack };
     } finally {
       this.syncing = false;
       this.deps.changed();

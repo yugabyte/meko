@@ -18,7 +18,8 @@ export function WorkItemDialog({ item, onClose }: { item?: WorkItem; onClose: ()
   const read = useMemo(() => typed.map((t) => ({ t, link: parseWorkLink(t) })), [typed]);
   const bad = read.find((r) => !r.link);
   const ghFirst = read[0]?.link?.kind === 'github';
-  const blocker = bad ? `"${bad.t.slice(0, 60)}" isn't a link AgentK can read.` : !title.trim() && (item || !ghFirst) ? 'Give the work item a title.' : null;
+  const needsTitle = !title.trim() && (!!item || !ghFirst);
+  const blocker = bad ? `"${bad.t.slice(0, 60)}" isn't a link AgentK can read.` : needsTitle ? 'Give the work item a title.' : null;
 
   const save = async () => {
     if (blocker || busy) return;
@@ -58,7 +59,10 @@ export function WorkItemDialog({ item, onClose }: { item?: WorkItem; onClose: ()
           void save();
         }}
       >
-        <Field label="Title" hint={item ? undefined : 'Leave it empty to use the title of the GitHub PR or issue linked first.'}>
+        <Field
+          label="Title"
+          hint={needsTitle ? (item ? 'Give the work item a title.' : 'Give it a title, or put a GitHub PR or issue link first to use its title.') : undefined}
+        >
           <input
             id="work-item-title"
             className="input"

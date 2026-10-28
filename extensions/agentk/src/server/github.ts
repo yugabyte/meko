@@ -476,8 +476,11 @@ export interface ReviewRequest {
   url: string;
 }
 
+/** The most review requests one read asks for; GitHub's search returns them in no set order. */
+export const REVIEW_REQUESTS_MAX = 100;
+
 /** The open PRs, in any repo, that ask for the viewer's review (`gh search prs --review-requested=@me`), at most `limit`. */
-export async function reviewRequests(cwd: string, limit = 100): Promise<ReviewRequest[]> {
+export async function reviewRequests(cwd: string, limit = REVIEW_REQUESTS_MAX): Promise<ReviewRequest[]> {
   const out = await ghWithin(cwd, 30_000, 'search', 'prs', '--review-requested', '@me', '--state', 'open',
     '--json', 'repository,number,title,url', '--limit', String(limit));
   const rows = JSON.parse(out || '[]') as { repository?: { nameWithOwner?: string }; number: number; title: string; url: string }[];

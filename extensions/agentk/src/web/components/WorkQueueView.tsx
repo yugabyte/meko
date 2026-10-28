@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProjectWithSessions, WorkItem, WorkLink, WorkSync } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { useIsMobile, useTouch } from '../hooks/useMedia';
@@ -64,14 +64,25 @@ export function WorkQueueView({
   const [dragId, setDragId] = useState<string | null>(null);
   const [closed, setClosed] = useState<WorkItem[] | null>(null);
   const [showClosed, setShowClosed] = useState(false);
-  const listRef = useRef<HTMLOListElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => setOrder(null), [items]);
+  // A drop's order shows until the queue itself changes, not on every state push.
+  const queueKey = items.map((i) => `${i.id}:${i.status}`).join();
+  useEffect(() => setOrder(null), [queueKey]);
+  const loadClosed = useCallback(() => void api.closedWorkItems().then(setClosed, (e: unknown) => onError(errorMessage(e))), [onError]);
+  // An item picked in the palette: opened and scrolled to, in the Closed section when it's closed.
+  const focusOpen = !!focusId && items.some((i) => i.id === focusId);
   useEffect(() => {
     if (!focusId) return;
     setOpen(focusId);
-    listRef.current?.querySelector(`[data-item="${CSS.escape(focusId)}"]`)?.scrollIntoView({ block: 'center' });
-  }, [focusId]);
+    if (!focusOpen) {
+      setShowClosed(true);
+      loadClosed();
+    }
+  }, [focusId, focusOpen, loadClosed]);
+  useEffect(() => {
+    if (focusId) rootRef.current?.querySelector(`[data-item="${CSS.escape(focusId)}"]`)?.scrollIntoView({ block: 'center' });
+  }, [focusId, closed]);
 
   const byId = new Map(items.map((i) => [i.id, i]));
   const shown = order ? order.map((id) => byId.get(id)).filter((i): i is WorkItem => !!i) : items;
@@ -83,7 +94,6 @@ export function WorkQueueView({
       onError(errorMessage(e));
     }
   };
-  const loadClosed = () => void api.closedWorkItems().then(setClosed, (e: unknown) => onError(errorMessage(e)));
   const runSync = async () => {
     setSyncing(true);
     await act(() => api.syncWork());
@@ -102,7 +112,7 @@ export function WorkQueueView({
   };
 
   return (
-    <div className="home-view wq">
+    <div className="home-view wq" ref={rootRef}>
       {mobile && <TopBar onMenu={onMenu} title="Work queue" />}
       <header className="home-hd wq-hd">
         {!mobile && <h1>Work queue</h1>}
@@ -122,7 +132,7 @@ export function WorkQueueView({
           Nothing on the queue. Add what you're working on, or press Sync to pull in the PRs waiting for your review and your Slack Later list.
         </p>
       )}
-      <ol className="wq-list" ref={listRef}>
+      <ol className="wq-list">
         {shown.map((item, i) => {
           const s = itemSession(item, projects);
           const isOpen = open === item.id;
@@ -234,7 +244,7 @@ export function WorkQueueView({
         {showClosed && closed && (
           <ul className="wq-list closed">
             {closed.map((item) => (
-              <li key={item.id} className="wq-item">
+              <li key={item.id} data-item={item.id} className={cx('wq-item', focusId === item.id && 'focused')}>
                 <div className="wq-row">
                   <span className="wq-title closed">{item.title}</span>
                   <span className="muted small">Closed {relativeTime(item.closedAt)}</span>

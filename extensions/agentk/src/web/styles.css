@@ -6011,14 +6011,16 @@ a.wq-chip:hover {
   color: var(--accent);
   font-weight: 600;
 }
+/* Keep here and the session link are tap targets that aren't .btn. */
+@media (pointer: coarse) {
+  .wq-go,
+  .wq-keep {
+    min-height: 36px;
+  }
+}
 @media (max-width: 760px) {
   .wq-scroll {
     padding: 12px 12px 32px;
-  }
-  .wq-chip,
-  .wq-go,
-  .wq-keep {
-    min-height: 28px;
   }
   .wq-acts .btn,
   .wq-session .btn,
@@ -6041,4 +6043,7 @@ a.wq-chip:hover {
   height: 7px;
   border-radius: 50%;
   background: var(--accent);
+}
+.wq-item.focused {
+  border-color: var(--accent);
 }

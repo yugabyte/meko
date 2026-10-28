@@ -92,8 +92,9 @@ export interface Config {
   /**
    * The work queue's sync (workqueue.ts). syncMinutes: how often it syncs by itself (0: only Sync). slackModel: the
    * model of the `claude -p` that reads Slack's Later list through your Slack connector (slack.ts), and
-   * slackTimeoutSeconds how long it may take (30 to 600). slackTools: the only tools that run may call, your Slack
-   * connector's read tools (the claude.ai Slack connector's by default).
+   * slackTimeoutSeconds how long it may take (30 to 600). slackTools: the tools that run may call, your Slack
+   * connector's read tools (the claude.ai Slack connector's by default). It loads none of your Claude Code settings
+   * but the sign-in part, so nothing else is allowed (slack.ts).
    */
   workQueue: { syncMinutes: number; slackModel: string; slackTimeoutSeconds: number; slackTools: string[] };
 }
