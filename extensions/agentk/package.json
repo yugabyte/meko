@@ -28,7 +28,7 @@
     "postinstall": "node scripts/postinstall.mjs"
   },
   "dependencies": {
-    "@fastify/static": "^10.1.6",
+    "@fastify/static": "^10.1.7",
     "@fastify/websocket": "^11.3.4",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@xterm/addon-serialize": "^0.14.0",
