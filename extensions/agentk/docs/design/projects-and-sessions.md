@@ -238,7 +238,10 @@ Meko's data folder is found by Meko's own rule (`Resolve` in `backend/internal/p
 a network filesystem; else `~/.meko` on a local disk; else, for a home folder on a network
 filesystem, `$XDG_STATE_HOME/meko` when that's local, else `/var/tmp/<user>/meko` (made private as
 above). Meko sets `MEKO_HOME` on every AgentK command it runs, and AgentK keeps it as `[meko]
-home`, since its own services don't have it. A home already in a Meko data folder refuses
+home`, since its own services don't have it. For `meko start` and `meko stop` it also sets
+`MEKO_SUMMARY=1`, and AgentK's `start` and `stop` then print one row of Meko's summary
+(`src/server/summary.ts`, the format in Meko's `backend/docs/install.md`) in place of their usual
+line and its `agentk status` hint. A home already in a Meko data folder refuses
 `uninstall`, `start`, `stop`, `restart`, `status` and `_handoff` when `MEKO_HOME` names another
 folder (`refuseOtherMeko` in `src/server/movehome.ts`; `samePath` compares the folders, not their
 paths, so a second spelling of the same folder that links don't explain, such as a bind mount,

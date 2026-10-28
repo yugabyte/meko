@@ -3,7 +3,7 @@
 # afterwards with `meko install_extension agentk`.
 #
 # Internal repo (needs a signed-in `gh`, or GITHUB_TOKEN):
-#   gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
+#   gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
 #
 # Options (pass through `sh -s -- ...` when piping):
 #   --version <X.Y.Z>   install that release instead of the newest
@@ -17,10 +17,10 @@
 #
 # Environment: XDG_DATA_HOME (releases go in its meko/app, default ~/.local/share/meko/app; the data
 # folder, ~/.meko or MEKO_HOME, is apart, so meko destroy never removes them), MEKO_REPO (default
-# yugabyte/agent-k-local), GITHUB_TOKEN (used when gh isn't there).
+# yugabyte/meko), GITHUB_TOKEN (used when gh isn't there).
 set -eu
 
-repo=${MEKO_REPO:-yugabyte/agent-k-local}
+repo=${MEKO_REPO:-yugabyte/meko}
 app="${XDG_DATA_HOME:-$HOME/.local/share}/meko/app"
 version=""
 reinstall=false

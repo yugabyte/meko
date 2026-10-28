@@ -74,7 +74,7 @@ that already uses the datapack, or stays open saying what to do (`joinedText()`)
 ## Ask AgentK
 
 The palette (`⌘K`, or **Ask AgentK** at the top of the rail) also takes an instruction or a question
-in plain words: "start a design task in agent-k-local to add dark mode to the Usage page", "move
+in plain words: "start a design task in meko to add dark mode to the Usage page", "move
 Dark mode to Code and add tests", "which sessions need me?". Its placeholder rotates every 1.25 s
 through what it takes (asking, commands, sessions, GitHub links), on every screen size; with
 reduced motion it doesn't rotate and names them all at once.

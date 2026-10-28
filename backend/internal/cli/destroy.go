@@ -15,6 +15,7 @@ import (
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/paths"
+	"github.com/yugabyte/meko/backend/internal/spin"
 )
 
 // destroyOptions are destroy's flags: force asks nothing, withExtensions removes the extensions'
@@ -410,15 +411,8 @@ func confirm(in io.Reader, stdout io.Writer, question string) bool {
 	return ans == "y" || ans == "yes"
 }
 
-// isTerminal reports whether r is a terminal (a character device), which echoes what's typed.
-func isTerminal(r io.Reader) bool {
-	f, ok := r.(*os.File)
-	if !ok {
-		return false
-	}
-	fi, err := f.Stat()
-	return err == nil && fi.Mode()&fs.ModeCharDevice != 0
-}
+// isTerminal reports whether v (a reader or writer) is a terminal (spin.IsTerminal).
+func isTerminal(v any) bool { return spin.IsTerminal(v) }
 
 func humanSize(n int64) string {
 	switch {

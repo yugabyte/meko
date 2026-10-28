@@ -9,7 +9,7 @@ working, its Meko features skipping or retrying.
 ## Install
 
 ```sh
-gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
+gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
 meko install_extension agentk      # then, for AgentK
 ```
 
@@ -31,8 +31,12 @@ says so and changes nothing, unless given `--reinstall` or another version.
 
 `meko install` (`internal/cli/install.go`):
 
-- In a release install it points `app/current` at its own version and links `~/.local/bin/meko` to
-  `app/current/bin/meko`. A build from source is set up as it is and doesn't update itself.
+- In a release install it points `app/current` at its own version and links `~/.local/bin/meko` and
+  `~/.local/bin/mekosh` to `app/current/bin/meko` (the binary runs `mekosh`'s commands when run by
+  that name). A build from source is set up as it is and doesn't update itself. An install from
+  before `mekosh` gets its link when the updated server starts: a release's `serve` makes it
+  (`linkMekosh`) when this install's `~/.local/bin/meko` is there and nothing is at
+  `~/.local/bin/mekosh`, since updates don't run `meko install`.
 - It makes the client token (in the secret store) and sets up the login service (below), stopping
   a server started by hand on the same data folder first. `--no-service` skips the service.
 - It writes the web listener's access to `web.toml` when neither it nor `config.toml` has a `[web]`
@@ -41,7 +45,8 @@ says so and changes nothing, unless given `--reinstall` or another version.
   instead ([web.md](web.md#settings)). It prints the web UI's URL.
 - It installs Meko alone. AgentK is `meko install_extension agentk`.
 
-`meko uninstall` removes the service, `~/.local/bin/meko` and the app folder, and keeps the data;
+`meko uninstall` removes the service, `~/.local/bin/meko`, `~/.local/bin/mekosh` and the app folder,
+and keeps the data;
 `--purge` first destroys the data folder as `meko destroy` does (it asks, unless `--force`; it
 takes `--with-extensions` too). Extensions stay installed unless that destroy removed them, and it
 names the ones that stay. `meko destroy` stops the service before the server, so its manager
@@ -164,6 +169,33 @@ home is `<data>/extensions/agentk`, wherever Meko's rule puts the data folder (`
 AgentK's and Presenter's tests read `internal/paths/testdata/resolve-cases.json` as Meko's do). An AgentK whose home is in
 another data folder refuses `start`, `stop`, `status`, `uninstall` and `_handoff` run with this one's
 `MEKO_HOME`, and does nothing.
+
+### The summary rows
+
+`meko start` and `meko stop` run each extension's `start` and `stop` with `MEKO_SUMMARY=1` too
+(`Entry.RunSummary`), and pass its output through. With it set, the extension prints exactly one
+line, a row of Meko's summary (`internal/cli/report.go`): two spaces, a mark (`✓` done, `!` a
+warning, `✗` failed), its title padded to 15 characters, a space, then what happened, such as
+`  ✓ AgentK          started; sessions resume in a few seconds`. The mark is colored (green,
+yellow, red) only when stdout is a terminal and `NO_COLOR` is unset. It leaves out hints Meko's own
+rows cover, such as `agentk status` after a start (`meko start` ends with what to run next), but
+keeps what only it knows: AgentK's stop row says where its sessions resume, `meko start`, or
+`agentk serve` when it runs without services. On a failure it prints its error
+to stderr as usual and exits non-zero, and Meko adds its own `✗` row after it. Run without
+`MEKO_SUMMARY` (by hand, by an older Meko, or by `meko update_extension` and the Extensions page,
+which keep its output for their logs) it prints what it always has. AgentK and Presenter format the
+row in `src/server/summary.ts`.
+
+`meko update`, `meko update_extension` and `meko install_extension` print the rows of the steps that
+otherwise print nothing (`internal/spin`): `Release`, for the release they download, check and unpack
+(`  ✓ Release         AgentK 0.20261030.0 (agentk-v0.20261030.0), downloaded and checked`, or `meko
+<version> installed`), and for `meko update` under the service, `Server`, for the restart. While such a
+step runs on a terminal, its row shows rotating dots (gh's spinner, which `install.sh`'s download
+shows), and so does the listing of the releases, which leaves no row. Off a terminal, as in the
+Extensions page's jobs, a step prints what it's doing as a plain line when it starts (`Installing
+AgentK <version> (<tag>)`, `Restarting into meko <version>`), so the output isn't empty while it
+downloads, then its finished row. On a failure the row is `✗` with what it was doing, and the error
+follows on stderr.
 
 - An extension's command is found on PATH, then in `~/.local/bin`, then in its release install's
   `app/current/bin`: its folder in the data folder, then its home from before it moved there
@@ -340,7 +372,7 @@ A release install's app folder:
 - While an update is on probation, deleting a knowledge file leaves its bytes on disk
   (`memory.Options.KeepDeletedFiles`): a rollback restores rows from before the update, and they
   must still find their files. The sweep at a start after the update is done removes them.
-- `[update] channel = "off"` stops the scheduled checks (Check now and Update on the Status page still work, as `meko update` does); `[update] repo` (or `MEKO_UPDATE_REPO`) points at a fork.
+- `[update] channel = "off"` stops the scheduled checks (Check now and Update on the Status page still work, as `meko update` does); `[update] repo` (or `MEKO_UPDATE_REPO`, default `yugabyte/meko`: `update.DefaultRepo`) points at a fork.
 
 ## Secrets
 

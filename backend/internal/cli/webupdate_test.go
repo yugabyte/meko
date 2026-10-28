@@ -62,7 +62,14 @@ func releaseInstall(t *testing.T, old, next string) update.App {
 	_, _ = tw.Write([]byte(body))
 	_ = tw.Close()
 	_ = gz.Close()
-	tgz := buf.Bytes()
+	serveMekoRelease(t, next, buf.Bytes())
+	return app
+}
+
+// serveMekoRelease serves a GitHub API whose one Meko release, next, has tgz as this platform's
+// tarball (with its checksum), and makes the CLI use it.
+func serveMekoRelease(t *testing.T, next string, tgz []byte) {
+	t.Helper()
 	h := sha256.Sum256(tgz)
 	goos, arch := update.Platform()
 	name := update.TarballName(next, goos, arch)
@@ -86,7 +93,6 @@ func releaseInstall(t *testing.T, old, next string) update.App {
 		return &update.Client{Repo: "o/r", API: srv.URL, HTTP: srv.Client()}
 	}
 	t.Cleanup(func() { newReleaseClient = oldClient })
-	return app
 }
 
 // serveAndUpdate runs serve as a release install, installs next from the web listener's route and

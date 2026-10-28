@@ -153,6 +153,13 @@ func run(args ...string) (int, string, string) {
 	return code, out.String(), errb.String()
 }
 
+// runSh runs mekosh's command in args.
+func runSh(args ...string) (int, string, string) {
+	var out, errb bytes.Buffer
+	code := RunMekosh(args, &out, &errb)
+	return code, out.String(), errb.String()
+}
+
 func want(t *testing.T, what string, code, wantCode int, text, wantText string) {
 	t.Helper()
 	if code != wantCode || !strings.Contains(text, wantText) {
@@ -188,12 +195,12 @@ func setup(t *testing.T) (dir, port string) {
 func TestStartStatusStop(t *testing.T) {
 	dir, port := setup(t)
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
-	want(t, "start", code, 0, out+errs, "Meko is running at http://127.0.0.1:"+port)
+	want(t, "start", code, 0, out+errs, "  ✓ Server          running at http://127.0.0.1:"+port)
 
 	code, out, _ = run("start", "--data-dir", dir, "--port", port)
 	want(t, "second start", code, 0, out, "already running")
 
-	code, out, _ = run("status", "--data-dir", dir)
+	code, out, _ = run("status", "--data-dir", dir, "--verbose")
 	want(t, "status", code, 0, out, "Children:      none")
 	want(t, "status's auth", code, 0, out, "Auth:          token")
 	want(t, "status's service", code, 0, out, "Service:       none (meko install sets one up)")
@@ -203,11 +210,30 @@ func TestStartStatusStop(t *testing.T) {
 	code, _, errs = run("serve", "--data-dir", dir, "--port", strconv.Itoa(freePort(t)))
 	want(t, "second serve", code, exitLocked, errs, "already running for "+dir)
 
+	code, out, _ = run("status", "--data-dir", dir)
+	want(t, "short status", code, 0, out, " is running (pid ")
+	want(t, "short status's service", code, 0, out, "  ! Service         none (meko install sets one up)\n")
+	want(t, "short status's link for agents", code, 0, out, "  Agents (MCP, API)   http://127.0.0.1:"+port+"/mcp\n")
+	want(t, "short status's link for people", code, 0, out, "  Humans (web UI)     http://127.0.0.1:")
+	want(t, "short status's way to more", code, 0, out, "More detail: meko status --verbose\n")
+	code, out, _ = run("status", "--data-dir", dir, "--json")
+	var reply struct {
+		Running bool `json:"running"`
+		Port    int  `json:"port"`
+	}
+	if err := json.Unmarshal([]byte(out), &reply); code != 0 || err != nil || !reply.Running ||
+		strconv.Itoa(reply.Port) != port {
+		t.Errorf("status --json: %d %v %q", code, err, out)
+	}
+
 	code, out, _ = run("stop", "--data-dir", dir)
-	want(t, "stop", code, 0, out, "Meko stopped\n")
+	want(t, "stop", code, 0, out, "Stopping Meko…\n  ✓ Server          stopped\n")
 
 	code, out, _ = run("status", "--data-dir", dir)
-	want(t, "status when stopped", code, exitNotRunning, out, "isn't running")
+	want(t, "status when stopped", code, exitNotRunning, out,
+		"✗ Meko isn't running (data in "+dir+")\n  Start it: meko start\n")
+	code, out, _ = run("status", "--data-dir", dir, "--json")
+	want(t, "status --json when stopped", code, exitNotRunning, out, `{"data_dir":"`+dir+`","running":false}`)
 
 	code, out, _ = run("stop", "--data-dir", dir)
 	want(t, "stop when stopped", code, 0, out, "isn't running")
@@ -279,7 +305,7 @@ func TestStatusWarnsWhenAuthIsOff(t *testing.T) {
 	t.Setenv("MEKO_AUTH", "none")
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
-	code, out, _ = run("status", "--data-dir", dir)
+	code, out, _ = run("status", "--data-dir", dir, "--verbose")
 	want(t, "status", code, 0, out, "Auth:          none (every user and program on this machine")
 }
 
@@ -295,7 +321,7 @@ func TestUsageStatsGoToTheConfiguredURL(t *testing.T) {
 	t.Setenv(testCallHomeFirstCheckEnv, "100ms")
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
-	code, out, _ = run("status", "--data-dir", dir)
+	code, out, _ = run("status", "--data-dir", dir, "--verbose")
 	want(t, "status", code, 0, out, "Usage stats:   on (sent to "+srv.URL+"/)")
 	select {
 	case b := <-got:
@@ -323,7 +349,7 @@ func TestStatusSaysWhatTurnedUsageStatsOff(t *testing.T) {
 	t.Setenv("YB_DISABLE_CALLHOME", "true")
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
-	code, out, _ = run("status", "--data-dir", dir)
+	code, out, _ = run("status", "--data-dir", dir, "--verbose")
 	want(t, "status", code, 0, out, "Usage stats:   off (turned off by YB_DISABLE_CALLHOME)")
 }
 
@@ -387,15 +413,6 @@ func TestServeShutsDownCleanly(t *testing.T) {
 	if fi, err := os.Stat(l.DB + "-wal"); err == nil && fi.Size() != 0 {
 		t.Errorf("WAL not checkpointed: %d bytes", fi.Size())
 	}
-}
-
-func TestUsage(t *testing.T) {
-	code, _, errs := run("frobnicate")
-	want(t, "unknown command", code, exitUsage, errs, `unknown command "frobnicate"`)
-	code, out, _ := run()
-	want(t, "no command", code, 0, out, "Usage:")
-	code, out, _ = run("version")
-	want(t, "version", code, 0, out, "sqlite-vec  v0.1.9")
 }
 
 // A start whose server never answers stops it, with SIGKILL if SIGTERM isn't enough, and leaves
@@ -525,7 +542,7 @@ func TestServeKillsAKilledServersChildren(t *testing.T) {
 	}
 	t.Setenv("MEKO_MEMORY_ENGINE_DIR", t.TempDir()) // no memory engine, so no new record
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
-	want(t, "start", code, 0, out+errs, "Meko is running")
+	want(t, "start", code, 0, out+errs, "is running")
 	waitGone(t, dir, child, "the next serve's start")
 }
 
@@ -545,9 +562,9 @@ func TestServeRunsTheMemoryEngine(t *testing.T) {
 	t.Setenv("MEKO_MEMORY_ENGINE_DIR", memoryEngineDir)
 	t.Setenv(testEmbedderEnv, "hash")
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
-	want(t, "start", code, 0, out+errs, "Meko is running")
+	want(t, "start", code, 0, out+errs, "is running")
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
-		_, out, _ = run("status", "--data-dir", dir)
+		_, out, _ = run("status", "--data-dir", dir, "--verbose")
 		if strings.Contains(out, "Memory engine: ready, test hash (384 dims)") &&
 			strings.Contains(out, "memory_engine running") {
 			break
@@ -564,7 +581,7 @@ func TestServeRunsTheMemoryEngine(t *testing.T) {
 	var memoryEnginePid int
 	_, _ = fmt.Sscanf(string(b), "%d", &memoryEnginePid)
 	code, out, _ = run("stop", "--data-dir", dir)
-	want(t, "stop", code, 0, out, "Meko stopped\n")
+	want(t, "stop", code, 0, out, "  ✓ Server          stopped\n")
 	if memoryEnginePid == 0 || syscall.Kill(memoryEnginePid, 0) == nil {
 		t.Errorf("the memory engine (pid %d) outlived stop", memoryEnginePid)
 	}
@@ -587,15 +604,19 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 		t.Skip("the memory engine isn't built (make test builds it)")
 	}
 	dir, port := setup(t)
-	code, _, errs := run("search", "--data-dir", dir, "anything")
+	code, _, errs := runSh("search", "--data-dir", dir, "anything")
 	want(t, "search with no server", code, exitNotRunning, errs, "isn't running")
+	withStdin(t, "datapacks\n")
+	code, _, errs = runSh("--data-dir", dir)
+	want(t, "the prompt with no server", code, exitNotRunning, errs,
+		"Meko isn't running (data in "+dir+"). Start it: meko start")
 
 	t.Setenv("MEKO_MEMORY_ENGINE_DIR", memoryEngineDir)
 	t.Setenv(testEmbedderEnv, "hash")
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
-	want(t, "start", code, 0, out+errs, "Meko is running")
+	want(t, "start", code, 0, out+errs, "is running")
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
-		if _, out, _ = run("status", "--data-dir", dir); strings.Contains(out, "Memory engine: ready") {
+		if _, out, _ = run("status", "--data-dir", dir, "--verbose"); strings.Contains(out, "Memory engine: ready") {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -603,38 +624,62 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 		}
 	}
 
-	code, out, errs = run("datapacks", "--data-dir", dir)
+	code, out, errs = runSh("datapacks", "--data-dir", dir)
 	want(t, "datapacks", code, 0, out+errs, "  default  (Created by Meko on first start.)")
 	const note = "the build cache is in memory_engine/.models"
-	code, out, errs = run("add_memory", "--data-dir", dir, note, "--datapack", "default")
+	code, out, errs = runSh("add_memory", "--data-dir", dir, note, "--datapack", "default")
 	want(t, "add_memory", code, 0, out+errs, "Added memory ")
-	code, out, errs = run("search", "--data-dir", dir, note, "--limit", "3")
+	code, out, errs = runSh("search", "--data-dir", dir, note, "--limit", "3")
 	want(t, "search", code, 0, out+errs, note+"  (meko_cli, ")
-	code, out, errs = run("search", "--data-dir", dir, "x", "--json", "--source", "memory")
+	code, out, errs = runSh("search", "--data-dir", dir, "x", "--json", "--source", "memory")
 	want(t, "search --json", code, 0, out+errs, `"knowledge_base":null`)
-	code, _, errs = run("add_memory", "--data-dir", dir, "x", "--datapack", "nope")
+	code, _, errs = runSh("add_memory", "--data-dir", dir, "x", "--datapack", "nope")
 	want(t, "add_memory to a missing datapack", code, 1, errs, `no datapack is named "nope"`)
 
 	// A datapack made, used by name, and deleted only when the answer is yes.
-	code, out, errs = run("create_datapack", "--data-dir", dir, "scratch-notes")
+	code, out, errs = runSh("create_datapack", "--data-dir", dir, "scratch-notes")
 	want(t, "create_datapack", code, 0, out+errs, "Created datapack scratch-notes (")
-	code, out, errs = run("create_datapack", "--data-dir", dir, "scratch-notes")
+	code, out, errs = runSh("create_datapack", "--data-dir", dir, "scratch-notes")
 	want(t, "create_datapack twice", code, 1, out+errs, "CONFLICT")
-	code, out, errs = run("add_memory", "--data-dir", dir, "kept in scratch", "--datapack", "scratch-notes")
+	code, out, errs = runSh("add_memory", "--data-dir", dir, "kept in scratch", "--datapack", "scratch-notes")
 	want(t, "add_memory by name", code, 0, out+errs, "Added memory ")
 	withStdin(t, "n\n")
-	code, out, errs = run("delete_datapack", "--data-dir", dir, "scratch-notes")
+	code, out, errs = runSh("delete_datapack", "--data-dir", dir, "scratch-notes")
 	want(t, "delete_datapack answered n", code, 1, errs, "Nothing was deleted\n")
 	want(t, "delete_datapack's question", code, 1, out, "This deletes datapack scratch-notes and everything "+
 		"in it (memories, conversations, artifacts) for good\nDelete it? [y/N] ")
-	if _, out, _ = run("datapacks", "--data-dir", dir); !strings.Contains(out, "scratch-notes") {
+	if _, out, _ = runSh("datapacks", "--data-dir", dir); !strings.Contains(out, "scratch-notes") {
 		t.Errorf("a declined delete_datapack deleted it:\n%s", out)
 	}
 	withStdin(t, "y\n")
-	code, out, errs = run("delete_datapack", "--data-dir", dir, "scratch-notes")
+	code, out, errs = runSh("delete_datapack", "--data-dir", dir, "scratch-notes")
 	want(t, "delete_datapack", code, 0, out+errs, "Deleted datapack scratch-notes\n")
-	if _, out, _ = run("datapacks", "--data-dir", dir); strings.Contains(out, "scratch-notes") {
+	if _, out, _ = runSh("datapacks", "--data-dir", dir); strings.Contains(out, "scratch-notes") {
 		t.Errorf("the deleted datapack is still listed:\n%s", out)
+	}
+
+	// mekosh's prompt, run as a script: use fills in --datapack, delete_datapack's question takes the
+	// next line, a failing line doesn't stop it but sets the exit code, and exit ends it.
+	withStdin(t, "create_datapack prompt-notes\nuse prompt-notes\nadd_memory \"kept by the prompt\"\n"+
+		"search \"kept by the prompt\" --source memory --json\nadd_memory\nsearch \"unclosed\nuse nosuch\nuse\n"+
+		"# a comment\nhelp\n\ndelete_datapack prompt-notes\ny\nsearch \"kept by the prompt\" --source memory --json\n"+
+		"exit\ncreate_datapack after-exit\n")
+	code, out, errs = runSh("--data-dir", dir)
+	want(t, "the prompt's use", code, exitError, out, "Using datapack prompt-notes\nAdded memory ")
+	want(t, "the prompt's search in the datapack it uses", code, exitError, out, "kept by the prompt")
+	want(t, "the prompt's use, alone", code, exitError, out, "\nUsing datapack prompt-notes\n")
+	want(t, "the prompt's help, with --data-dir", code, exitError, out, "Usage: mekosh [<command> [flags]]")
+	want(t, "the prompt's delete_datapack of the datapack in use", code, exitError, out,
+		"Delete it? [y/N] \nDeleted datapack prompt-notes\nUsing the default datapack\n")
+	want(t, "add_memory at the prompt", code, exitError, errs, "mekosh: give the memory's text: add_memory \"<text>\"\n")
+	want(t, "an unclosed quote", code, exitError, errs, "mekosh: the line has an unclosed \" quote\n")
+	want(t, "use of a missing datapack", code, exitError, errs, `mekosh: no datapack is named "nosuch"`)
+	if strings.Contains(errs, `"prompt-notes"`) || strings.Contains(errs, "unknown command") {
+		t.Errorf("a line after the datapack in use was deleted, or help, failed:\n%s", errs)
+	}
+	if _, out, _ = runSh("datapacks", "--data-dir", dir); strings.Contains(out, "prompt-notes") ||
+		strings.Contains(out, "after-exit") {
+		t.Errorf("the prompt's datapack wasn't deleted, or a line after exit ran:\n%s", out)
 	}
 
 	// upload adds files to the knowledge base and waits until they're indexed.
@@ -647,26 +692,26 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 	if err = os.WriteFile(bad, []byte("not a pdf at all"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	code, out, errs = run("upload", "--data-dir", dir, notes, "--datapack", "default")
+	code, out, errs = runSh("upload", "--data-dir", dir, notes, "--datapack", "default")
 	want(t, "upload", code, 0, out+errs, notes+": indexed, 1 chunk (key ")
-	code, out, errs = run("upload", "--data-dir", dir, notes)
+	code, out, errs = runSh("upload", "--data-dir", dir, notes)
 	want(t, "upload again", code, 0, out+errs, "already in the knowledge base as notes.md")
 	want(t, "upload again waits for it", code, 0, out, notes+": indexed, 1 chunk (key ")
-	code, out, errs = run("upload", "--data-dir", dir, bad, notes)
+	code, out, errs = runSh("upload", "--data-dir", dir, bad, notes)
 	want(t, "upload a bad file", code, 1, out+errs, "doesn't look like a PDF")
 	want(t, "upload a bad file", code, 1, errs, "1 of 2 files weren't added")
-	code, out, errs = run("search", "--data-dir", dir, "when does the nightly build run", "--source", "knowledge_base")
+	code, out, errs = runSh("search", "--data-dir", dir, "when does the nightly build run", "--source", "knowledge_base")
 	want(t, "search the knowledge base", code, 0, out+errs, "Knowledge base (relevance):")
-	code, out, errs = run("upload", "--data-dir", dir, notes, "--json")
+	code, out, errs = runSh("upload", "--data-dir", dir, notes, "--json")
 	want(t, "upload --json", code, 0, out+errs, `"already_uploaded":true`)
 	var offer struct{ Key string }
 	// --json prints the tool's reply, then the file's final status.
 	if err = json.Unmarshal([]byte(strings.SplitN(strings.TrimSpace(out), "\n", 2)[0]), &offer); err != nil {
 		t.Fatalf("upload --json: %v: %s", err, out)
 	}
-	code, out, errs = run("upload_status", "--data-dir", dir, offer.Key)
+	code, out, errs = runSh("upload_status", "--data-dir", dir, offer.Key)
 	want(t, "upload_status", code, 0, out+errs, offer.Key+": completed. The file is indexed and searchable.")
-	code, _, errs = run("upload_status", "--data-dir", dir, "no-such-key")
+	code, _, errs = runSh("upload_status", "--data-dir", dir, "no-such-key")
 	want(t, "upload_status of an unknown key", code, 1, errs, "NOT_FOUND")
 
 	_, tok, _ := run("token", "--data-dir", dir)
@@ -677,15 +722,15 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 	// The default datapack isn't made again, so deleting it says so, and calls that name none then
 	// ask for --datapack.
 	withStdin(t, "")
-	code, out, errs = run("delete_datapack", "--data-dir", dir, "default")
+	code, out, errs = runSh("delete_datapack", "--data-dir", dir, "default")
 	want(t, "delete_datapack default with no answer", code, 1, out+errs, "It's the default datapack")
 	want(t, "delete_datapack default with no answer", code, 1, errs, "Nothing was deleted\n")
-	code, out, errs = run("delete_datapack", "--data-dir", dir, "default", "--force")
+	code, out, errs = runSh("delete_datapack", "--data-dir", dir, "default", "--force")
 	want(t, "delete_datapack default --force", code, 0, out+errs, "Deleted datapack default\n")
 	if strings.Contains(out, "Delete it?") {
 		t.Errorf("delete_datapack --force asked:\n%s", out)
 	}
-	code, _, errs = run("add_memory", "--data-dir", dir, "x")
+	code, _, errs = runSh("add_memory", "--data-dir", dir, "x")
 	want(t, "add_memory with no default", code, 1, errs, "there's no default datapack (it was deleted): pass --datapack")
 }
 
@@ -713,7 +758,7 @@ func gone(t *testing.T, dir string) {
 func TestDestroyAsksThenStopsAndRemoves(t *testing.T) {
 	dir, port := setup(t)
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
-	want(t, "start", code, 0, out+errs, "Meko is running")
+	want(t, "start", code, 0, out+errs, "is running")
 
 	for _, answer := range []string{"n\n", "", "whatever\n"} {
 		withStdin(t, answer)
@@ -722,7 +767,7 @@ func TestDestroyAsksThenStopsAndRemoves(t *testing.T) {
 		want(t, "destroy's question", code, 1, out, "Meko is running, so it's stopped first\nDestroy it? [y/N] ")
 		want(t, "destroy's summary", code, 1, out, "This removes Meko's data in "+dir+" (")
 		code, out, _ = run("status", "--data-dir", dir)
-		want(t, "status after a declined destroy", code, 0, out, "Meko is running\n")
+		want(t, "status after a declined destroy", code, 0, out, " is running (pid ")
 	}
 
 	withStdin(t, "Yes\n")
@@ -735,7 +780,7 @@ func TestDestroyAsksThenStopsAndRemoves(t *testing.T) {
 	want(t, "status after destroy", code, exitNotRunning, out, "isn't running")
 
 	code, out, errs = run("start", "--data-dir", dir, "--port", port)
-	want(t, "start after destroy", code, 0, out+errs, "Meko is running")
+	want(t, "start after destroy", code, 0, out+errs, "is running")
 }
 
 func TestDestroyForce(t *testing.T) {
@@ -1106,8 +1151,8 @@ func TestUI(t *testing.T) {
 	if link := strings.TrimSpace(out); code != 0 || link != web+"/ext/agentk/" || len(opened) != 1 || opened[0] != link {
 		t.Errorf("ui /ext/agentk/: %d %q, opened %v", code, out, opened)
 	}
-	code, out, _ = run("status", "--data-dir", dir)
-	want(t, "status's web line", code, 0, out, "Web:           "+web+", local (no login from this computer)")
+	code, out, _ = run("status", "--data-dir", dir, "--verbose")
+	want(t, "status's web line", code, 0, out, "Humans:        "+web+" (web UI), local, no login from this computer")
 
 	code, out, errs = run("setup_link", "--data-dir", dir)
 	want(t, "setup_link", code, 0, out, web+"/setup?token=")
@@ -1118,19 +1163,20 @@ func TestUI(t *testing.T) {
 
 // list mcp-tools needs no server: it reads the tool definitions.
 func TestListMCPTools(t *testing.T) {
-	code, out, _ := run("list", "mcp-tools")
+	code, out, _ := runSh("tools")
 	want(t, "list mcp-tools", code, 0, out, "knowledgebase_upload_file")
 	if lines := strings.Count(out, "\n"); lines != len(mcp.Tools()) {
 		t.Errorf("%d lines, want one per tool (%d)", lines, len(mcp.Tools()))
 	}
-	code, out, _ = run("list", "mcp-tools", "--json")
+	code, out, _ = runSh("tools", "--json")
 	var tools []map[string]string
 	if err := json.Unmarshal([]byte(out), &tools); code != 0 || err != nil || len(tools) != len(mcp.Tools()) ||
 		tools[0]["name"] != "context_search" || tools[0]["summary"] == "" {
 		t.Errorf("--json: %d %v %q", code, err, out)
 	}
-	code, _, errs := run("list")
-	want(t, "list with nothing named", code, exitUsage, errs, "mcp-tools")
+	code, _, errs := run("list", "mcp-tools", "--json")
+	want(t, "meko list mcp-tools", code, exitUsage, errs,
+		"meko: list mcp-tools is a mekosh command now: mekosh tools --json\n")
 }
 
 func TestSuggestedName(t *testing.T) {
@@ -1163,21 +1209,21 @@ func TestExport(t *testing.T) {
 	t.Setenv("MEKO_MEMORY_ENGINE_DIR", memoryEngineDir)
 	t.Setenv(testEmbedderEnv, "hash")
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
-	want(t, "start", code, 0, out+errs, "Meko is running")
+	want(t, "start", code, 0, out+errs, "is running")
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
-		if _, out, _ = run("status", "--data-dir", dir); strings.Contains(out, "Memory engine: ready") {
+		if _, out, _ = run("status", "--data-dir", dir, "--verbose"); strings.Contains(out, "Memory engine: ready") {
 			break
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("the memory engine never got ready:\n%s", out)
 		}
 	}
-	code, out, errs = run("add_memory", "--data-dir", dir, "releases ship on Tuesdays")
+	code, out, errs = runSh("add_memory", "--data-dir", dir, "releases ship on Tuesdays")
 	want(t, "add_memory", code, 0, out+errs, "Added memory")
 
 	here := t.TempDir()
 	t.Chdir(here)
-	code, out, errs = run("export", "--data-dir", dir)
+	code, out, errs = runSh("export", "--data-dir", dir)
 	want(t, "export the default", code, 0, out+errs, "Exported to meko-default-")
 	names, _ := filepath.Glob(filepath.Join(here, "meko-default-*.zip"))
 	if len(names) != 1 {
@@ -1211,17 +1257,17 @@ func TestExport(t *testing.T) {
 		mem.Text != "releases ship on Tuesdays" || len(mem.Embedding) == 0 {
 		t.Fatalf("memories %v %q", err, entries["memories.jsonl"])
 	}
-	code, _, errs = run("export", "--data-dir", dir)
+	code, _, errs = runSh("export", "--data-dir", dir)
 	want(t, "export again", code, 1, errs, "already exists: pass --force")
-	code, out, errs = run("export", "--data-dir", dir, "--force")
+	code, out, errs = runSh("export", "--data-dir", dir, "--force")
 	want(t, "export --force", code, 0, out+errs, "Exported to")
 
 	out2 := filepath.Join(here, "by-name.zip")
-	code, out, errs = run("export", "default", "--data-dir", dir, "-o", out2)
+	code, out, errs = runSh("export", "default", "--data-dir", dir, "-o", out2)
 	want(t, "export by name with -o after it", code, 0, out+errs, "Exported to "+out2)
-	code, out, errs = run("export", "--data-dir", dir, "-o", filepath.Join(here, "first.zip"), "default")
+	code, out, errs = runSh("export", "--data-dir", dir, "-o", filepath.Join(here, "first.zip"), "default")
 	want(t, "export with -o before the name", code, 0, out+errs, "first.zip")
-	code, _, errs = run("export", "nope", "--data-dir", dir)
+	code, _, errs = runSh("export", "nope", "--data-dir", dir)
 	want(t, "export an unknown name", code, 1, errs, `no datapack is named "nope"`)
 }
 

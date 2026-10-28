@@ -23,7 +23,7 @@ import (
 )
 
 // DefaultRepo is where Meko's and AgentK's releases are published.
-const DefaultRepo = "yugabyte/agent-k-local"
+const DefaultRepo = "yugabyte/meko"
 
 // Release is one GitHub release.
 type Release struct {

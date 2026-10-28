@@ -54,7 +54,11 @@ const CI_SETTLE_MS = 10 * 60 * 1000;
 const MAX_CI_FIXES = 3;
 /** Heads in a row that get a prompt to resolve merge conflicts before the conflicts are left to the user. */
 const MAX_CONFLICT_FIXES = 3;
-/** How long a queued merge waits for CI to show up on a new head before taking a PR without checks as one without CI. */
+/**
+ * How long after a new head a queued merge waits for CI to show up while its checks show none or only
+ * passed ones, and GitHub's BLOCKED counts as required checks still to report. After it, a head
+ * without checks counts as one without CI, and BLOCKED is left to GitHub.
+ */
 const CI_START_MS = 2 * 60 * 1000;
 /** How long Open PR waits for Meko to name the session's conversation for the PR description. */
 const PR_CONVERSATION_TIMEOUT_MS = 10000;
@@ -98,6 +102,8 @@ const CI_FAILING = 'CI is failing.';
 const CONFLICTING = 'The branch has merge conflicts.';
 /** The merge blocker for a question in the terminal, which already notified the user as Needs you. */
 const IN_TERMINAL = 'AgentK is waiting on you in the terminal.';
+/** GitHub's own BLOCKED on a new head when nothing else blocks: required checks not reported yet. */
+const CHECKS_PENDING = "GitHub's required checks haven't reported on the latest push yet.";
 
 /** Prompts queued for Claude in the Review stage, in the order they go out. */
 const QUEUE_ORDER = ['review', 'review-people', 'review-held', 'conflicts', 'ci'] as const;
@@ -1704,7 +1710,9 @@ export class Lifecycle {
    * mid-turn (`turnAtStart`: when they were measured, or now), where they're AgentK's work in
    * progress; a question in the terminal only during a turn; findings being addressed only while
    * Claude runs. A queued merge also waits up to CI_START_MS for CI to show up on a new head
-   * (`newHead`), so it never goes before CI has started on a fresh push.
+   * (`newHead`), even when a fast check already passed, so it never goes before CI has started on a
+   * fresh push. GitHub's BLOCKED, when nothing else blocks, waits on a new head (required checks not
+   * reported yet); after that it's left to GitHub, as it can't be told from a required merge queue.
    */
   mergeInfo(row: SessionRow, st: github.PrStatus, reviewer: ReviewerMode, opts: MergeChecks = {}): MergeInfo {
     const { unpushed = false, uncommitted = 0 } = opts;
@@ -1724,7 +1732,8 @@ export class Lifecycle {
     const ci = github.ciState(st.statusCheckRollup);
     if (ci === 'failure') block(CI_FAILING);
     else if (ci === 'pending') block('CI is still running.', true);
-    else if (ci === 'none' && opts.newHead && row.queued_gate === 'merge') block("CI hasn't started on the latest push yet.", true);
+    // A fast check (another workflow's) can pass before CI's own jobs show up, so passed checks hold too.
+    else if ((ci === 'none' || ci === 'success') && opts.newHead && row.queued_gate === 'merge') block("CI hasn't started on the latest push yet.", true);
     // AgentK gates the merge only once it's active on the PR, so repos it doesn't watch never wait for it.
     if (reviewer !== 'people' && row.agentk_seen && (row.review_state === 'waiting' || row.review_state === 'in_review')) {
       block('Waiting for the AgentK review.', true);
@@ -1739,6 +1748,10 @@ export class Lifecycle {
     if (st.mergeable === 'CONFLICTING') block(CONFLICTING);
     if (st.mergeStateStatus === 'BEHIND') block('The branch is behind its base.');
     if (st.mergeStateStatus === 'DRAFT') block('The PR is a draft.');
+    // GitHub's own BLOCKED, only when nothing else blocks and only on a new head. Past that it's left to
+    // GitHub: a PR not yet in a required merge queue reads BLOCKED too (`gh pr merge` is what queues it),
+    // and so does any PR for a moment after an edit reruns a check.
+    if (st.mergeStateStatus === 'BLOCKED' && !b.length && opts.newHead) block(CHECKS_PENDING, true);
     return { canMerge: b.length === 0, blockers: b, queueable: b.length > 0 && !hard.length, hard };
   }
 

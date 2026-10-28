@@ -485,7 +485,29 @@ export function gapsLine(c: MekoGapCounts): { count: string; split: string } | n
 /** The status detail the server sets when a design waits for approval (`DESIGN_READY` in lifecycle.ts). */
 const DESIGN_READY = 'Design ready for your approval';
 
-/** The approve button's label: with open questions, it takes the user to answer them first. */
+/**
+ * The Design gate in the stage bar: Design Review, which opens the design (`reviewTarget`) and
+ * never approves itself, since only the panel can send the answers with the approval.
+ */
+export function designGate(session: Session): GateButton {
+  const reason = session.hasDesign ? null : 'AgentK hasn’t proposed a design yet.';
+  const title = session.designQuestions.open
+    ? 'Review the design and answer its open questions, then approve it there'
+    : 'Review the design, then approve it there';
+  return { label: 'Design Review', reason, title: reason ?? title };
+}
+
+/**
+ * What Design Review does: open the design panel on its questions (open questions, or a change to
+ * one of AgentK's decisions waiting) or on the design, or, with the panel already open, bring the
+ * panel's approve button into view (`approve`).
+ */
+export function reviewTarget(openQuestions: number, changing: boolean, panelOpen: boolean): 'questions' | 'design' | 'approve' {
+  if (panelOpen) return 'approve';
+  return openQuestions > 0 || changing ? 'questions' : 'design';
+}
+
+/** The panel header's approve button's label: with open questions, it takes the user to answer them first. */
 export function approveLabel(openQuestions: number): string {
   return openQuestions ? 'Answer & approve' : 'Approve design';
 }
@@ -554,6 +576,9 @@ export function designApprovalBlocker(session: Session): string | null {
   return null;
 }
 
+/** Why the design's approve buttons wait while the server moves the session on (`Session.busy`). */
+export const SESSION_BUSY = 'AgentK is moving the session on. Wait a moment.';
+
 /** A gate button: its label, why it's disabled (null when it isn't), and its tooltip. */
 export interface GateButton {
   label: string;
@@ -596,6 +621,7 @@ export function mergeGate(session: Session): GateButton {
 const MERGE_WAITS: [string, string][] = [
   ['CI is still running.', 'waiting on CI'],
   ["CI hasn't started on the latest push yet.", 'waiting on CI'],
+  ["GitHub's required checks haven't reported on the latest push yet.", 'waiting on CI'],
   ['Waiting for the AgentK review.', 'waiting on the AgentK review'],
   ['AgentK is waiting on you in the terminal.', 'waiting on you in the terminal'],
   // Only Run to merge's merge stays queued through these, which AgentK works on.

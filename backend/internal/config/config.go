@@ -111,7 +111,7 @@ type Update struct {
 	Auto bool `toml:"auto"`
 	// IntervalHours is how often to check (default 6).
 	IntervalHours float64 `toml:"interval_hours"`
-	// Repo is the GitHub repo releases come from (default yugabyte/agent-k-local). Also
+	// Repo is the GitHub repo releases come from (default yugabyte/meko). Also
 	// MEKO_UPDATE_REPO.
 	Repo string `toml:"repo"`
 }
@@ -162,7 +162,7 @@ type Log struct {
 func Default() Config {
 	return Config{Server: Server{Port: DefaultPort, Auth: AuthToken}, Log: Log{Level: "info"},
 		Web:      Web{Port: DefaultWebPort, Access: AccessLocal},
-		Update:   Update{Channel: "stable", Auto: true, IntervalHours: 6, Repo: "yugabyte/agent-k-local"},
+		Update:   Update{Channel: "stable", Auto: true, IntervalHours: 6, Repo: "yugabyte/meko"},
 		CallHome: CallHome{Enabled: true}}
 }
 

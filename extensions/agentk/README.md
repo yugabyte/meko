@@ -42,7 +42,7 @@ web UI (Settings › Meko Cloud, which links to Meko Cloud's sign-up and login p
 latest release), and then Meko installs AgentK:
 
 ```sh
-gh release download --repo yugabyte/agent-k-local --pattern install.sh --output - | sh
+gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
 meko install_extension agentk
 ```
 
@@ -160,7 +160,7 @@ your phone can connect.
   what you ask; it posts your review on GitHub only when you say. **Update to latest** checks out
   the author's new commits and sums up what changed.
 - **Ask AgentK in plain words:** type an instruction into **Ask AgentK** (`⌘K`), such as "start a
-  design task in agent-k-local to add dark mode to the Usage page" or "which sessions need me?".
+  design task in meko to add dark mode to the Usage page" or "which sessions need me?".
   AgentK asks the default agent (one quick call with no tools) and offers what to do: start a task at
   Explore, Design or Code with a prompt, start sessions on GitHub issues or PRs (`#5` is the project's
   repo's), go to a session, move one to another stage, open its PR, or open a project. Nothing runs
@@ -268,8 +268,8 @@ your phone can connect.
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
   markdown, with Mermaid diagrams drawn (zoom them with − and +). The design's open questions are listed beside it, each
   with AgentK's options and recommendation picked to start: pick another, or write a custom answer, then send them for
-  AgentK to revise the design, or approve with them. With open questions, **Answer & approve**
-  takes you to them first. Beside them are the design's key design decisions: the questions you answered and the decisions
+  AgentK to revise the design, or approve with them. The stage bar's **Design Review** opens the design
+  (on its questions while any are open), and you approve from the design panel. Beside them are the design's key design decisions: the questions you answered and the decisions
   AgentK made itself, each saying who decided it, with **Change this** on AgentK's; a decision that rests on something
   AgentK found in Meko carries Meko's mark, the words it relied on and the item's id.
   Once it's approved, AgentK writes the key design decisions into the design and keeps it current

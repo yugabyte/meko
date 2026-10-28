@@ -10,6 +10,7 @@ import (
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/paths"
+	"github.com/yugabyte/meko/backend/internal/spin"
 	"github.com/yugabyte/meko/backend/internal/update"
 )
 
@@ -65,7 +66,10 @@ func updateAll(ctx context.Context, l paths.Layout, o extensions.UpdateOptions, 
 		fmt.Fprintln(o.Out, "No extensions are installed")
 		return exitOK
 	}
-	if o.Releases, err = o.Client.Releases(ctx); err != nil {
+	looking := spin.Wait(o.Out, "Looking for the extensions' releases")
+	o.Releases, err = o.Client.Releases(ctx)
+	looking.Clear()
+	if err != nil {
 		return fail(stderr, err)
 	}
 	failed := 0

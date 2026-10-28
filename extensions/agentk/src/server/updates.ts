@@ -20,7 +20,7 @@ const run = promisify(execFile);
 const COMPARE_TIMEOUT_MS = 60_000;
 
 /** Where AgentK's releases are published: the commits What's new lists are compared there. */
-export const RELEASES_REPO = 'yugabyte/agent-k-local';
+export const RELEASES_REPO = 'yugabyte/meko';
 
 /**
  * How long a new version is on probation: Meko finishes the update once it has run this long. The

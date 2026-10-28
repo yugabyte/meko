@@ -14,12 +14,15 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	"github.com/yugabyte/meko/backend/internal/callhome"
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/extensions"
+	"github.com/yugabyte/meko/backend/internal/memory"
 	"github.com/yugabyte/meko/backend/internal/paths"
+	"github.com/yugabyte/meko/backend/internal/server"
 	"github.com/yugabyte/meko/backend/internal/store"
 	"github.com/yugabyte/meko/backend/internal/update"
 	"github.com/yugabyte/meko/backend/internal/version"
@@ -43,9 +46,9 @@ func startDetached(l paths.Layout, o config.Overrides, exe string, stdout, stder
 		return fail(stderr, err)
 	} else if up {
 		if port, err := readInt(l.Port); err == nil {
-			fmt.Fprintf(stdout, "Meko is already running at http://127.0.0.1:%d (data in %s)\n", port, l.Root)
+			newReport(stdout).step(stepOK, "Server", fmt.Sprintf("already running at http://127.0.0.1:%d", port))
 		} else {
-			fmt.Fprintf(stdout, "Meko is already running, and still starting (data in %s)\n", l.Root)
+			newReport(stdout).step(stepWarn, "Server", "already running, and still starting")
 		}
 		return exitOK
 	}
@@ -92,7 +95,7 @@ func startDetached(l paths.Layout, o config.Overrides, exe string, stdout, stder
 			st, err := c.status(ctx)
 			cancel()
 			if err == nil && st.PID == cmd.Process.Pid {
-				fmt.Fprintf(stdout, "Meko is running at http://127.0.0.1:%d (pid %d, data in %s)\n", st.Port, st.PID, l.Root)
+				newReport(stdout).step(stepOK, "Server", fmt.Sprintf("running at http://127.0.0.1:%d (pid %d)", st.Port, st.PID))
 				return exitOK
 			}
 		}
@@ -173,14 +176,28 @@ func waitUnlocked(lock string, d time.Duration) bool {
 	return false
 }
 
-func runStatus(l paths.Layout, stdout, stderr io.Writer) int {
+// statusOptions are status's flags: --verbose for everything, --json for the server's reply.
+type statusOptions struct{ verbose, json bool }
+
+// runStatus says whether Meko is running: by default a short checklist and its links, with verbose
+// everything (the models, certificate, service, updates and links), with json the server's reply.
+func runStatus(l paths.Layout, o statusOptions, stdout, stderr io.Writer) int {
 	up, err := running(l.Lock)
 	if err != nil {
 		return fail(stderr, err)
 	}
 	if !up {
-		fmt.Fprintf(stdout, "Meko isn't running (data in %s)\n", l.Root)
-		printSetup(l, stdout)
+		switch {
+		case o.json:
+			b, _ := json.Marshal(map[string]any{"running": false, "data_dir": l.Root})
+			fmt.Fprintln(stdout, string(b))
+		case o.verbose:
+			fmt.Fprintf(stdout, "Meko isn't running (data in %s)\n", l.Root)
+			printSetup(l, stdout)
+		default:
+			newReport(stdout).headline(stepFail, fmt.Sprintf("Meko isn't running (data in %s)", l.Root))
+			fmt.Fprintln(stdout, "  Start it: meko start")
+		}
 		return exitNotRunning
 	}
 	c, err := newClient(l)
@@ -193,8 +210,124 @@ func runStatus(l paths.Layout, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, fmt.Errorf("the server is running, but isn't answering: %w", err))
 	}
+	switch {
+	case o.json:
+		b, _ := json.Marshal(st)
+		var m map[string]any
+		_ = json.Unmarshal(b, &m)
+		m["running"] = true
+		b, _ = json.Marshal(m)
+		fmt.Fprintln(stdout, string(b))
+	case o.verbose:
+		printStatusVerbose(l, st, stdout)
+	default:
+		printStatusShort(l, st, stdout)
+	}
+	return exitOK
+}
+
+// printStatusShort is status's checklist: the memory engine, the service, updates, the Meko Cloud
+// link and the extensions, each a row, then the links.
+func printStatusShort(l paths.Layout, st server.StatusReply, stdout io.Writer) {
+	r := newReport(stdout)
+	r.headline(stepOK, fmt.Sprintf("Meko %s is running (pid %d, up %s)", st.Version, st.PID,
+		(time.Duration(st.UptimeSeconds)*time.Second).String()))
+	k, text := memoryEngineStep(st.MemoryEngine)
+	r.step(k, "Memory engine", text)
+	if st.Web != nil && !st.Web.Listening && st.Web.Error != "" {
+		r.step(stepFail, "Web UI", "not listening: "+st.Web.Error)
+	}
+	if st.Auth == config.AuthNone {
+		r.step(stepWarn, "Auth", "none: every user and program on this machine can read and write your memories")
+	}
+	if m := serviceOf(l); m == nil {
+		r.step(stepWarn, "Service", "none (meko install sets one up)")
+	} else if m.Running() {
+		r.step(stepOK, "Service", m.Kind())
+	} else {
+		r.step(stepWarn, "Service", m.Kind()+", stopped")
+	}
+	if _, ver, ok := runningRelease(); ok {
+		if us, ok := update.ReadState(l.Root); ok {
+			switch {
+			case us.Error != "":
+				r.step(stepWarn, "Updates", "the last check failed: "+us.Error)
+			case us.Latest != "" && us.Latest != ver:
+				r.step(stepWarn, "Updates", us.Latest+" is available (meko update)")
+			default:
+				r.step(stepOK, "Updates", "up to date")
+			}
+		}
+	}
+	switch cl := cloudStatusLine(l); {
+	case strings.HasPrefix(cl, "linked"):
+		r.step(stepOK, "Meko Cloud", cl)
+	case strings.HasPrefix(cl, "can't"):
+		r.step(stepWarn, "Meko Cloud", cl)
+	}
+	if reg, err := extensions.Load(l.Root); err != nil {
+		r.step(stepWarn, "Extensions", "can't read them: "+err.Error())
+	} else {
+		for _, n := range reg.Names() {
+			ok, line := reg.Entries[n].Status(l.Root)
+			k, state := stepOK, "running"
+			if !ok {
+				k, state = stepFail, "not running"
+			}
+			if line != "" {
+				state += ", " + line
+			}
+			r.step(k, extensionTitle(n), state)
+		}
+	}
+	fmt.Fprintln(stdout)
+	tw := tabwriter.NewWriter(stdout, 0, 0, 3, ' ', 0)
+	for _, row := range linkRows(st, l.Root) {
+		fmt.Fprintf(tw, "  %s\t%s\n", row[0], row[1])
+	}
+	_ = tw.Flush()
+	fmt.Fprintln(stdout, "\nMore detail: meko status --verbose")
+}
+
+// memoryEngineStep is the memory engine's row: done when ready, failed when it failed, else a warning
+// (it's starting, or restarting).
+func memoryEngineStep(e memory.EngineStatus) (stepKind, string) {
+	text := e.State
+	if e.Reason != "" {
+		text += " (" + e.Reason + ")"
+	}
+	switch e.State {
+	case "ready":
+		return stepOK, text
+	case "failed":
+		return stepFail, text
+	}
+	return stepWarn, text
+}
+
+// linkRows are where people and agents reach Meko, and its data folder.
+func linkRows(st server.StatusReply, root string) [][2]string {
+	var rows [][2]string
+	if w := st.Web; w != nil && w.URL != "" {
+		rows = append(rows, [2]string{"Humans (web UI)", w.URL + " (" + webAccessNote(w) + ")"})
+	}
+	return append(rows,
+		[2]string{"Agents (MCP, API)", fmt.Sprintf("http://127.0.0.1:%d/mcp", st.Port)},
+		[2]string{"Data", root})
+}
+
+// extensionTitle is how a known extension is named to people (AgentK), else its name.
+func extensionTitle(name string) string {
+	if c, ok := extensions.Known[name]; ok && c.Title != "" {
+		return c.Title
+	}
+	return name
+}
+
+// printStatusVerbose is status --verbose: everything the server and this install say.
+func printStatusVerbose(l paths.Layout, st server.StatusReply, stdout io.Writer) {
 	fmt.Fprintf(stdout, "Meko is running\n")
-	fmt.Fprintf(stdout, "  URL:           http://127.0.0.1:%d (agents and the CLI)\n", st.Port)
+	fmt.Fprintf(stdout, "  Agents:        http://127.0.0.1:%d/mcp (MCP and API; the CLI uses it too)\n", st.Port)
 	printWeb(stdout, st.Web)
 	fmt.Fprintf(stdout, "  Version:       %s\n", st.Version)
 	fmt.Fprintf(stdout, "  PID:           %d\n", st.PID)
@@ -235,7 +368,6 @@ func runStatus(l paths.Layout, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, line)
 	}
 	printSetup(l, stdout)
-	return exitOK
 }
 
 // usageStatsLine says whether usage stats are sent, where, and what turned them off.

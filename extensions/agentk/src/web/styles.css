@@ -2128,6 +2128,17 @@ a.icon-btn {
   padding: 8px 12px;
   border-bottom: 1px solid var(--rule);
 }
+/* Why the header's Approve design is closed (a phone has no tooltips). */
+.design-blocked {
+  margin: 0;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--rule);
+  font-size: 12px;
+  color: var(--muted);
+}
+.design-blocked:focus {
+  outline: none;
+}
 .design-updated {
   border-radius: 4px;
   padding: 0 4px;
@@ -2431,6 +2442,11 @@ div[id^='dak-mermaid-'] .label {
 }
 .dialog-hd h2 {
   flex: 1;
+}
+/* A dialog's ← back (Dialog's onBack): its arrow lines up with the body's text, close to the title.
+   On a touch screen its box is 40 px wide (the (pointer: coarse) block below). */
+.dialog-hd > .icon-btn:first-child {
+  margin: 0 -6px;
 }
 .dialog-aside {
   overflow: hidden;
@@ -5081,6 +5097,13 @@ div[id^='dak-mermaid-'] .label {
     min-height: 40px;
     display: inline-grid;
     place-items: center;
+  }
+  /* Dialog's ← back: its arrow starts its 40 px box, after the same 6 px as on a desktop, so it
+     still lines up with the body's text; the space the box leaves after it comes out of the gap
+     to the title, no further, so the title never covers the box. */
+  .dialog-hd > .icon-btn:first-child {
+    justify-items: start;
+    margin-right: -12px;
   }
   a.icon-btn {
     display: inline-grid;

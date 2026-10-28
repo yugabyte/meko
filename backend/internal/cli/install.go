@@ -19,6 +19,7 @@ import (
 	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/service"
+	"github.com/yugabyte/meko/backend/internal/spin"
 	"github.com/yugabyte/meko/backend/internal/update"
 )
 
@@ -32,6 +33,7 @@ var runningRelease = update.Running
 // it; then the client token, the web listener's access, and the login service, which it starts. It
 // installs Meko alone: extensions are meko install_extension's.
 func runInstall(l paths.Layout, noService bool, access string, stdout, stderr io.Writer) int {
+	r := newReport(stdout)
 	if access != "" && access != config.AccessLocal && access != config.AccessRemote {
 		return fail(stderr, fmt.Errorf("--access takes local or remote, not %q", access))
 	}
@@ -55,12 +57,15 @@ func runInstall(l paths.Layout, noService bool, access string, stdout, stderr io
 		if link, err = app.LinkCommand(home); err != nil {
 			return fail(stderr, err)
 		}
+		if _, err = app.LinkCommandAs(home, progMekosh); err != nil {
+			return fail(stderr, err)
+		}
 		exe = app.CurrentExe()
-		fmt.Fprintf(stdout, "Installed meko %s in %s\n", ver, app.Dir(ver))
-		if onPath(filepath.Dir(link)) {
-			fmt.Fprintf(stdout, "  Command: meko (%s)\n", link)
+		fmt.Fprintf(stdout, "Installing Meko %s in %s…\n", ver, app.Dir(ver))
+		if bin := filepath.Dir(link); onPath(bin) {
+			r.step(stepOK, "Commands", "meko and mekosh, in "+bin)
 		} else {
-			fmt.Fprintf(stdout, "  Command: %s (add %s to your PATH to run meko directly)\n", link, filepath.Dir(link))
+			r.step(stepWarn, "Commands", fmt.Sprintf("meko and mekosh, in %s (add it to your PATH to run them directly)", bin))
 		}
 	} else {
 		fmt.Fprintf(stdout, "Setting up this build of meko (%s). It isn't from a release, "+
@@ -80,14 +85,18 @@ func runInstall(l paths.Layout, noService bool, access string, stdout, stderr io
 	if _, err = ct.Ensure(); err != nil {
 		return fail(stderr, err)
 	}
-	fmt.Fprintf(stdout, "  Data:    %s\n  Secrets: %s\n", l.Root, map[string]string{
-		"keychain": "in your login Keychain", "file": "in the data folder, readable only by you"}[ct.Store.Kind()])
+	r.step(stepOK, "Data", fmt.Sprintf("%s (secrets %s)", l.Root, map[string]string{
+		"keychain": "in your login Keychain", "file": "in it, readable only by you"}[ct.Store.Kind()]))
 	if err = setWebAccess(l, cfg, access, home, stdout); err != nil {
 		return fail(stderr, err)
 	}
 	if noService {
-		fmt.Fprintln(stdout, "No service was set up (--no-service): start Meko with meko start")
-		return nextSteps(stdout)
+		r.step(stepWarn, "Service", "none (--no-service): start Meko with meko start")
+		r.next([][2]string{
+			{"meko start", "start Meko"},
+			{"meko status", "check on Meko at any time"},
+		})
+		return exitOK
 	}
 	m, err := newManager()
 	if err != nil {
@@ -110,12 +119,12 @@ func runInstall(l paths.Layout, noService bool, access string, stdout, stderr io
 	if err := m.Install(service.Spec{Exe: exe, DataDir: l.Root, ServiceLog: l.ServiceLog, Host: host}); err != nil {
 		return fail(stderr, err)
 	}
-	fmt.Fprintf(stdout, "  Service: %s (%s), starts at login and restarts on failure\n", m.Kind(), m.File())
+	r.step(stepOK, "Service", fmt.Sprintf("%s (%s), starts at login and restarts on failure", m.Kind(), m.File()))
 	if sd, ok := m.(*service.Systemd); ok {
 		if ok, detail, note := sd.Linger(); ok {
-			fmt.Fprintf(stdout, "  Boot:    %s\n", detail)
+			r.step(stepOK, "Boot", detail)
 		} else {
-			fmt.Fprintf(stdout, "  Boot:    %s. %s\n", detail, note)
+			r.step(stepWarn, "Boot", detail+". "+note)
 		}
 	}
 	st, ok := waitAnswering(l, serviceStartTimeout, pid)
@@ -123,11 +132,14 @@ func runInstall(l paths.Layout, noService bool, access string, stdout, stderr io
 		return fail(stderr, fmt.Errorf("the service didn't answer within %s. Check: %s, and meko logs",
 			serviceStartTimeout, m.StatusHint()))
 	}
-	fmt.Fprintf(stdout, "Meko is running at http://127.0.0.1:%d (pid %d)\n", st.Port, st.PID)
-	if st.Web != nil {
-		fmt.Fprintf(stdout, "  Web UI:  %s\n", st.Web.URL)
+	r.step(stepOK, "Server", fmt.Sprintf("running at http://127.0.0.1:%d (pid %d)", st.Port, st.PID))
+	next := [][2]string{{"meko ui", "open the web UI"}, {"meko status", "check on Meko at any time"}}
+	if !agentKRegistered(l) {
+		next = append(next, [2]string{"meko install_extension agentk", "add AgentK, your coding team"})
 	}
-	return nextSteps(stdout)
+	printRunning(l, "is installed and running", append(next, [2]string{"meko token --mcp", "connect Claude Code to Meko"}),
+		stdout)
+	return exitOK
 }
 
 // setWebAccess writes the web listener's access to web.toml (config.AddWeb) when neither it nor
@@ -153,8 +165,8 @@ func setWebAccess(l paths.Layout, cfg config.Config, access, home string, stdout
 	if access == config.AccessRemote {
 		note = "every address, over HTTPS; meko setup_link makes the login"
 	}
-	fmt.Fprintf(stdout, "  Web UI:  %s access (%s), in %s; [web] in config.toml overrides it\n", access, note,
-		config.WebFile(l.Config))
+	newReport(stdout).step(stepOK, "Web UI", fmt.Sprintf("%s access (%s), in %s; [web] in config.toml overrides it",
+		access, note, config.WebFile(l.Config)))
 	return nil
 }
 
@@ -167,15 +179,19 @@ func headless() bool {
 	return runtime.GOOS == "linux" && os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == ""
 }
 
-func nextSteps(stdout io.Writer) int {
-	fmt.Fprint(stdout, `
-Next:
-  meko status                      how it's doing
-  meko logs                        what it's logging
-  meko token --mcp                 the command that connects Claude Code to Meko
-  meko install_extension agentk    add AgentK, which uses this Meko
-`)
-	return exitOK
+// linkMekosh makes ~/.local/bin/mekosh for a release install whose meko command is there and whose
+// mekosh isn't: one installed before mekosh existed, which an update reaches without meko install.
+// Serve runs it at each start. Anything already at that path stays.
+func linkMekosh(app update.App, home string) error {
+	t, err := os.Readlink(filepath.Join(home, ".local", "bin", progMeko))
+	if err != nil || !strings.HasPrefix(t, app.Root+string(filepath.Separator)) {
+		return nil //nolint:nilerr // no meko command of this install's: nothing to put mekosh beside
+	}
+	if _, lerr := os.Lstat(filepath.Join(home, ".local", "bin", progMekosh)); lerr == nil {
+		return nil
+	}
+	_, err = app.LinkCommandAs(home, progMekosh)
+	return err
 }
 
 func onPath(dir string) bool {
@@ -234,11 +250,14 @@ func runUninstall(l paths.Layout, purge bool, o destroyOptions, stdout, stderr i
 		if err = app.UnlinkCommand(home); err != nil {
 			return fail(stderr, err)
 		}
+		if err = app.UnlinkCommandAs(home, progMekosh); err != nil {
+			return fail(stderr, err)
+		}
 		if _, serr := os.Stat(app.Root); serr == nil {
 			if err = app.Remove(); err != nil {
 				return fail(stderr, err)
 			}
-			fmt.Fprintf(stdout, "Removed the releases in %s and the meko command\n", app.Root)
+			fmt.Fprintf(stdout, "Removed the releases in %s and the meko and mekosh commands\n", app.Root)
 		}
 	}
 	for _, line := range exts {
@@ -373,7 +392,9 @@ func installRelease(ctx context.Context, l paths.Layout, repo, name, version, ho
 	dl, cancel := context.WithTimeout(ctx, extensions.InstallTimeout)
 	defer cancel()
 	c := newReleaseClient(repo)
+	looking := spin.Wait(stdout, "Looking for "+cat.Title+"'s releases")
 	rels, err := c.Releases(dl)
+	looking.Clear()
 	if err != nil {
 		if c.Token == "" {
 			return "", fmt.Errorf("%w. The releases are on GitHub: sign in with gh auth login, or set GITHUB_TOKEN, "+
@@ -397,14 +418,17 @@ func installRelease(ctx context.Context, l paths.Layout, repo, name, version, ho
 		}
 		return "", fmt.Errorf("%s for %s-%s was found in %s", what, goos, arch, c.Repo)
 	}
-	fmt.Fprintf(stdout, "Installing %s %s (%s)\n", cat.Title, ver, rel.Tag)
+	installing := spin.Start(stdout, "Release", fmt.Sprintf("installing %s %s (%s)", cat.Title, ver, rel.Tag))
 	// Owner-only, like the rest of the data folder; the extension's own folder may not be there yet.
 	if err := os.MkdirAll(filepath.Dir(app.Root), 0o700); err != nil {
+		installing.Fail()
 		return "", err
 	}
 	if err := app.Stage(dl, c, rel, ver); err != nil {
+		installing.Fail()
 		return "", err
 	}
+	installing.Done(fmt.Sprintf("%s %s (%s), downloaded and checked", cat.Title, ver, rel.Tag))
 	if err := app.Repoint(ver); err != nil {
 		return "", err
 	}

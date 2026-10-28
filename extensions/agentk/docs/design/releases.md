@@ -179,7 +179,7 @@ since the release before it, and releases beyond the newest 5 are deleted, so on
 don't say what an update brought. The **What's new** dialog (`WhatsNewDialog.tsx`) shows every
 change between two versions instead: the server asks GitHub for the commits between their tags
 (`GET /api/update/notes`, `Updates.notes()` in `updates.ts`, through `gh` once `gh auth status`
-passes, else HTTPS: `repos/yugabyte/agent-k-local/compare/<from tag>...<to tag>`, each of either
+passes, else HTTPS: `repos/yugabyte/meko/compare/<from tag>...<to tag>`, each of either
 prefix) and lists the `feat`, `fix`, `perf` and `deps`
 subjects by type, as the repo root's `scripts/release/release-notes.sh` does (leaving out the subjects that name only `meko` or `presenter`) (`src/server/releasenotes.ts`), with
 **Breaking changes** first and each line linked to its PR. GitHub returns at most 250 commits for a
@@ -190,7 +190,9 @@ available" banner and Settings while an update is on offer (this version → the
 otherwise from Settings for the last update (`update.lastUpdatedFrom` in `kv`, written from
 `MEKO_UPDATED_FROM` before the server starts, so a version that crashes while starting still
 counts, and kept after probation; no link on an install that has never updated, or after a
-rollback, when that version is no longer older than the running one). A failed comparison
+rollback, when that version is no longer older than the running one). Opened from Settings, it
+takes Settings' place once Settings' saves are in, and the ← before its title goes back to
+Settings › Updates. A failed comparison
 shows GitHub's error; it names the sign-in only for the HTTPS source with no `GITHUB_TOKEN` and a
 401, 403 or 404 (the `gh` source is used only once `gh auth status` passes). This is why release
 pruning keeps the tags.

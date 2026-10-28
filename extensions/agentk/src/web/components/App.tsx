@@ -47,7 +47,7 @@ import { TopBar } from './TopBar';
 import { UsageView } from './UsageView';
 import { MekoCallsView } from './MekoCallsView';
 import { MekoGapsView } from './MekoGapsView';
-import { WhatsNewDialog } from './WhatsNewDialog';
+import { WhatsNewDialog, whatsNewBack, type WhatsNewOpener } from './WhatsNewDialog';
 import { LinkWorkItemDialog } from './LinkWorkItemDialog';
 import { WorkItemDialog } from './WorkItemDialog';
 import { WorkQueueView } from './WorkQueueView';
@@ -76,8 +76,8 @@ type Modal =
   /** Open PR with instructions for AgentK. */
   | { kind: 'open-pr'; sessionId: string }
   | { kind: 'rename'; sessionId: string }
-  /** What's new from one version to another (the update banners, Settings). */
-  | { kind: 'whats-new'; from: string; to: string };
+  /** What's new from one version to another, and what opened it (for Back: `whatsNewBack`). */
+  | { kind: 'whats-new'; from: string; to: string; opener: WhatsNewOpener };
 
 const isDrawerEntry = () => !!(history.state as { akDrawer?: boolean } | null)?.akDrawer;
 
@@ -449,6 +449,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
   useEffect(() => {
     if (state && modalKind === 'rename' && !renameSession) setModal({ kind: 'none' });
   }, [state, modalKind, renameSession]);
+  const whatsNewTab = modal.kind === 'whats-new' ? whatsNewBack(modal.opener) : undefined;
   useEffect(() => {
     if (state && modalKind === 'new-session' && !newSessionProject) setModal({ kind: 'none' });
   }, [state, modalKind, newSessionProject]);
@@ -571,7 +572,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
           onRetryStart={(retry) => setModal({ kind: 'new-session', projectId: retry.projectId, retry })}
           onMekoSettings={() => setModal({ kind: 'settings', tab: 'harness', agent: 'claude' })}
           onSettings={() => setModal({ kind: 'settings', tab: 'harness' })}
-          onWhatsNew={(from, to) => setModal({ kind: 'whats-new', from, to })}
+          onWhatsNew={(from, to) => setModal({ kind: 'whats-new', from, to, opener: 'banner' })}
         />
         {route.view === 'usage' ? (
           <UsageView onMenu={openDrawer} mekoConfigured={state.meko.configured} />
@@ -710,13 +711,20 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
       {openPrSession && <OpenPrDialog key={openPrSession.id} session={openPrSession} onClose={() => setModal({ kind: 'none' })} />}
       {renameSession && <RenameSessionDialog key={renameSession.id} session={renameSession} onClose={() => setModal({ kind: 'none' })} />}
       {modal.kind === 'settings' && (
-        <SettingsDialog mekoAuth={mekoAuth} update={state.update} meko={state.meko} harnesses={state.harnesses ?? []} twoAgents={twoAgents} serverName={state.serverName} initialTab={modal.tab} initialAgent={modal.agent} onClose={() => setModal({ kind: 'none' })} onWhatsNew={(from, to) => setModal({ kind: 'whats-new', from, to })} />
+        <SettingsDialog mekoAuth={mekoAuth} update={state.update} meko={state.meko} harnesses={state.harnesses ?? []} twoAgents={twoAgents} serverName={state.serverName} initialTab={modal.tab} initialAgent={modal.agent} onClose={() => setModal({ kind: 'none' })} onWhatsNew={(from, to) => setModal({ kind: 'whats-new', from, to, opener: 'settings' })} />
+      )}
+      {modal.kind === 'whats-new' && (
+        <WhatsNewDialog
+          from={modal.from}
+          to={modal.to}
+          onClose={() => setModal({ kind: 'none' })}
+          onBack={whatsNewTab && (() => setModal({ kind: 'settings', tab: whatsNewTab }))}
+        />
       )}
       {modal.kind === 'work-item' && <WorkItemDialog item={modal.item} onClose={() => setModal({ kind: 'none' })} />}
       {(linkWorkItem || linkWorkSession) && (
         <LinkWorkItemDialog item={linkWorkItem} session={linkWorkSession} items={workQueue} projects={projects} onClose={() => setModal({ kind: 'none' })} />
       )}
-      {modal.kind === 'whats-new' && <WhatsNewDialog from={modal.from} to={modal.to} onClose={() => setModal({ kind: 'none' })} />}
       {modal.kind === 'palette' && (
         <CommandPalette
           projects={projects}

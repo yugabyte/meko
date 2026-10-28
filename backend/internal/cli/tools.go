@@ -140,7 +140,28 @@ func (t *toolSession) datapackID(ctx context.Context, named string) (string, err
 			return r.ID, nil
 		}
 	}
-	return "", fmt.Errorf("no datapack is named %q (meko datapacks lists them)", named)
+	return "", fmt.Errorf("no datapack is named %q (mekosh datapacks lists them)", named)
+}
+
+// findDatapack finds a datapack by name or id among this Meko's, and returns both.
+func (t *toolSession) findDatapack(ctx context.Context, named string) (id, name string, err error) {
+	text, err := t.call(ctx, "datapack_list", map[string]any{})
+	if err != nil {
+		return "", "", err
+	}
+	var rows []struct {
+		ID   string `json:"datapack_id"`
+		Name string `json:"datapack_name"`
+	}
+	if err := json.Unmarshal([]byte(text), &rows); err != nil {
+		return "", "", err
+	}
+	for _, r := range rows {
+		if r.ID == named || r.Name == named {
+			return r.ID, r.Name, nil
+		}
+	}
+	return "", "", fmt.Errorf("no datapack is named %q (mekosh datapacks lists them)", named)
 }
 
 // defaultDatapackID is the default datapack's id, or "" once it has been deleted (Meko makes it
@@ -159,15 +180,15 @@ func (t *toolSession) defaultDatapackID(ctx context.Context) (string, error) {
 	return d.ID, json.Unmarshal([]byte(text), &d)
 }
 
-// runTool runs a tool command (search, add_memory, datapacks, create_datapack, delete_datapack, upload,
-// upload_status) against the running server.
-func runTool(l paths.Layout, cmd string, f toolFlags, stdin io.Reader, stdout, stderr io.Writer) int {
+// runTool runs one of mekosh's tool commands (search, add_memory, datapacks, create_datapack,
+// delete_datapack, upload, upload_status, export) against the running server.
+func runTool(l paths.Layout, prog, cmd string, f toolFlags, stdin io.Reader, stdout, stderr io.Writer) int {
 	up, err := running(l.Lock)
 	if err != nil {
-		return fail(stderr, err)
+		return failAs(prog, stderr, err)
 	}
 	if !up {
-		fmt.Fprintf(stderr, "meko: Meko isn't running (data in %s). Start it with meko start\n", l.Root)
+		fmt.Fprintf(stderr, "%s: Meko isn't running (data in %s). Start it with meko start\n", prog, l.Root)
 		return exitNotRunning
 	}
 	timeout := toolTimeout
@@ -178,7 +199,7 @@ func runTool(l paths.Layout, cmd string, f toolFlags, stdin io.Reader, stdout, s
 	defer cancel()
 	t, err := connectTools(ctx, l)
 	if err != nil {
-		return fail(stderr, fmt.Errorf("the server is running, but %w", err))
+		return failAs(prog, stderr, fmt.Errorf("the server is running, but %w", err))
 	}
 	defer func() { _ = t.s.Close() }()
 	switch cmd {
@@ -205,10 +226,10 @@ func runTool(l paths.Layout, cmd string, f toolFlags, stdin io.Reader, stdout, s
 	}
 	if te := (*toolError)(nil); errors.As(err, &te) && te.code == "datapack_id_required" {
 		err = errors.New("there's no default datapack (it was deleted): pass --datapack NAME|ID " +
-			"(meko datapacks lists them)")
+			"(mekosh datapacks lists them)")
 	}
 	if err != nil {
-		return fail(stderr, err)
+		return failAs(prog, stderr, err)
 	}
 	return exitOK
 }
@@ -288,7 +309,7 @@ func cloudDatapacks(ctx context.Context, l paths.Layout, out *cloudlink.Datapack
 func toolCreateDatapack(ctx context.Context, t *toolSession, f toolFlags, stdout io.Writer) error {
 	name := strings.TrimSpace(f.text)
 	if name == "" {
-		return errors.New("give the new datapack's name: meko create_datapack <name>")
+		return errors.New("give the new datapack's name: mekosh create_datapack <name>")
 	}
 	reply, err := t.call(ctx, "datapack_create", map[string]any{"name": name})
 	if err != nil || f.json {
@@ -314,7 +335,7 @@ var errDeclined = errors.New("declined")
 func toolDeleteDatapack(ctx context.Context, t *toolSession, f toolFlags, stdin io.Reader, stdout io.Writer) error {
 	named := strings.TrimSpace(f.text)
 	if named == "" {
-		return errors.New("name the datapack to delete: meko delete_datapack <name|id>")
+		return errors.New("name the datapack to delete: mekosh delete_datapack <name|id>")
 	}
 	id, err := t.datapackID(ctx, named)
 	if err != nil {
@@ -346,6 +367,9 @@ func toolDeleteDatapack(ctx context.Context, t *toolSession, f toolFlags, stdin 
 
 func toolAdd(ctx context.Context, t *toolSession, f toolFlags, stdin io.Reader, stdout io.Writer) error {
 	text := f.text
+	if (text == "" || text == "-") && atPrompt {
+		return errors.New(`give the memory's text: add_memory "<text>"`)
+	}
 	if text == "" || text == "-" {
 		b, err := io.ReadAll(stdin)
 		if err != nil {
@@ -381,7 +405,7 @@ func toolAdd(ctx context.Context, t *toolSession, f toolFlags, stdin io.Reader, 
 
 func toolSearch(ctx context.Context, t *toolSession, f toolFlags, stdout io.Writer) error {
 	if strings.TrimSpace(f.text) == "" {
-		return errors.New("give a question to search for: meko search \"<question>\"")
+		return errors.New("give a question to search for: mekosh search \"<question>\"")
 	}
 	dp, err := t.datapackID(ctx, f.datapack)
 	if err != nil {

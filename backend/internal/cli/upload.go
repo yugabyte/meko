@@ -20,10 +20,10 @@ import (
 	"github.com/yugabyte/meko/backend/internal/knowledge"
 )
 
-// uploadTimeout bounds meko upload: a 50 MiB file takes many minutes to index.
+// uploadTimeout bounds mekosh upload: a 50 MiB file takes many minutes to index.
 const uploadTimeout = time.Hour
 
-// uploadPoll is how often meko upload asks how a file is doing.
+// uploadPoll is how often mekosh upload asks how a file is doing.
 const uploadPoll = time.Second
 
 // toolUpload uploads each file as an agent would: it asks knowledgebase_upload_document for a link,
@@ -31,7 +31,7 @@ const uploadPoll = time.Second
 // file is indexed or failed. A file that fails makes the command fail, after the others are done.
 func toolUpload(ctx context.Context, t *toolSession, f toolFlags, stdout io.Writer) error {
 	if len(f.files) == 0 {
-		return errors.New("give the files to upload: meko upload <file> [<file>...]")
+		return errors.New("give the files to upload: mekosh upload <file> [<file>...]")
 	}
 	dp, err := t.datapackID(ctx, f.datapack)
 	if err != nil {
@@ -95,7 +95,7 @@ func uploadOne(ctx context.Context, t *toolSession, dp, path string, f toolFlags
 	}
 	if f.noWait {
 		if !f.json && !offer.AlreadyUploaded {
-			fmt.Fprintf(stdout, "%s: uploaded; meko upload_status %s says when it's indexed\n", path, offer.Key)
+			fmt.Fprintf(stdout, "%s: uploaded; mekosh upload_status %s says when it's indexed\n", path, offer.Key)
 		}
 		return nil
 	}
@@ -118,7 +118,7 @@ func uploadOne(ctx context.Context, t *toolSession, dp, path string, f toolFlags
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("still %s after %s: meko upload_status %s says how it's doing", st.State,
+			return fmt.Errorf("still %s after %s: mekosh upload_status %s says how it's doing", st.State,
 				uploadTimeout, offer.Key)
 		case <-time.After(uploadPoll):
 		}
@@ -186,7 +186,7 @@ func uploadStatus(ctx context.Context, t *toolSession, dp, key string) (fileStat
 
 func toolUploadStatus(ctx context.Context, t *toolSession, f toolFlags, stdout io.Writer) error {
 	if f.text == "" {
-		return errors.New("give the file's key: meko upload_status <key>")
+		return errors.New("give the file's key: mekosh upload_status <key>")
 	}
 	dp, err := t.datapackID(ctx, f.datapack)
 	if err != nil {
