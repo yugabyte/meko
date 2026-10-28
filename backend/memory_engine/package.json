@@ -18,7 +18,7 @@
     "better-sqlite3": "file:stubs/better-sqlite3",
     "compromise": "14.19.0",
     "mem0ai": "3.3.1",
-    "natural": "8.1.1"
+    "natural": "8.1.2"
   },
   "devDependencies": {
     "@types/node": "22.20.5",
