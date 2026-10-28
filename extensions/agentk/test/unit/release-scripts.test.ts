@@ -275,7 +275,7 @@ describe('agentk-release.yml’s node-pty builds', () => {
   it('use the headers of the Node they build with, never a download', () => {
     const installs = steps('agentk-release.yml').filter((s) => /\bnpm ci\b/.test(code(s)));
     expect(installs).toHaveLength(3); // test, build (Linux) and build-macos
-    for (const s of installs) expect(code(s)).toMatch(/export npm_config_nodedir="\$/);
+    for (const s of installs) expect(code(s)).toMatch(/export npm_config_nodedir(="\$NODE_DIR"|\n)/);
   });
 });
 

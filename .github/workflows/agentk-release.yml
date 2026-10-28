@@ -119,7 +119,8 @@ jobs:
         run: |
           # node-gyp builds node-pty (no linux-x64 prebuild) against this Node's own headers instead
           # of downloading them from nodejs.org.
-          export npm_config_nodedir="$(dirname "$(dirname "$(command -v node)")")"
+          npm_config_nodedir=$(dirname "$(dirname "$(command -v node)")")
+          export npm_config_nodedir
           npm ci
       - run: npm run typecheck
       - run: npm run lint
