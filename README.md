@@ -142,8 +142,53 @@ The first start downloads the embedding model (23 MB). On RHEL 8, set
 - AgentK: [`extensions/agentk/CONTRIBUTING.md`](extensions/agentk/CONTRIBUTING.md).
 - Questions and ideas: [Meko's Discord](https://mekodata.ai/discord/).
 
+## Badges
+
+Is your context stored in Meko? Show it in your README.
+
+<a href="https://mekodata.ai"><img src="backend/assets/badges/meko-context.svg" width="112" height="30" alt="Meko context"></a>
+<a href="https://mekodata.ai"><img src="backend/assets/badges/meko-context-dark.svg" width="112" height="30" alt="Meko context"></a>
+
+The light badge:
+
+```md
+[![Meko context](https://raw.githubusercontent.com/yugabyte/meko/main/backend/assets/badges/meko-context.svg)](https://mekodata.ai)
+```
+
+```html
+<a href="https://mekodata.ai">
+  <img width="112" height="30" src="https://raw.githubusercontent.com/yugabyte/meko/main/backend/assets/badges/meko-context.svg" alt="Meko context">
+</a>
+```
+
+The dark badge:
+
+```md
+[![Meko context](https://raw.githubusercontent.com/yugabyte/meko/main/backend/assets/badges/meko-context-dark.svg)](https://mekodata.ai)
+```
+
+```html
+<a href="https://mekodata.ai">
+  <img width="112" height="30" src="https://raw.githubusercontent.com/yugabyte/meko/main/backend/assets/badges/meko-context-dark.svg" alt="Meko context">
+</a>
+```
+
+Or one that follows the reader's light or dark theme:
+
+```html
+<a href="https://mekodata.ai">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/yugabyte/meko/main/backend/assets/badges/meko-context-dark.svg">
+    <img width="112" height="30" src="https://raw.githubusercontent.com/yugabyte/meko/main/backend/assets/badges/meko-context.svg" alt="Meko context">
+  </picture>
+</a>
+```
+
+The snippets load the badges from this repo's `main` branch on raw.githubusercontent.com.
+
 ## License
 
 [Apache-2.0](LICENSE)
 
-The Meko logo in `backend/assets/` is Meko's mark, from Meko Cloud's web app.
+The Meko logo in `backend/assets/` is Meko's mark, from Meko Cloud's web app, and the badges in
+`backend/assets/badges/` are made from it.

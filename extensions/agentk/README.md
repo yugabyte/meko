@@ -1,5 +1,14 @@
 <p align="center"><img src="assets/AgentK-nobg.png" width="120" alt="AgentK logo"></p>
 
+<p align="center">
+  <a href="https://mekodata.ai">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="../../backend/assets/badges/meko-context-dark.svg">
+      <img src="../../backend/assets/badges/meko-context.svg" width="112" height="30" alt="Meko context">
+    </picture>
+  </a>
+</p>
+
 # AgentK
 
 The agentic coder for ADLC. AgentK lets you manage many projects and [Claude Code](https://claude.com/claude-code),
