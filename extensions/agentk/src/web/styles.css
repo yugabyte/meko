@@ -4015,8 +4015,14 @@ div[id^='dak-mermaid-'] .label {
 }
 .diff tr:hover .cmt-add,
 .cmt-add:focus-visible,
-.diff tr.picked .cmt-add {
+.diff tr.pick-end .cmt-add {
   opacity: 1;
+}
+/* A picked range has the bar on each of its lines and one +, on its last line (where the comment
+   goes): none on the rest of the range, and none under the pointer while dragging. */
+.diff tr.picked:not(.pick-end) .cmt-add,
+.diff.dragging tr:hover:not(.pick-end) .cmt-add {
+  opacity: 0;
 }
 .diff tr.picked {
   box-shadow: inset 3px 0 0 var(--accent);
@@ -5437,10 +5443,11 @@ div[id^='dak-mermaid-'] .label {
   .hide-touch {
     display: none;
   }
-  /* Always shown on touch, so kept small and quiet: a faint 16px + that fills in on the picked
-     lines. The button is 22px tall (the padding isn't painted), so rows keep their height for taps,
-     and 40px wide over the gutter and line numbers (its side margins give that width back), only as
-     tall as the row, so rows don't steal each other's taps. Positioned, so it's above the numbers. */
+  /* Always shown on touch, so kept small and quiet: a faint 16px + that fills in on a picked
+     range's last line (the rest of the range hides theirs). The button is 22px tall (the padding
+     isn't painted), so rows keep their height for taps, and 40px wide over the gutter and line
+     numbers (its side margins give that width back), only as tall as the row, so rows don't steal
+     each other's taps. Positioned, so it's above the numbers. */
   .chg-file {
     --chg-row: 22px;
   }
@@ -5457,7 +5464,7 @@ div[id^='dak-mermaid-'] .label {
     background-clip: content-box;
     color: var(--accent);
   }
-  .diff tr.picked .cmt-add {
+  .diff tr.pick-end .cmt-add {
     background-color: var(--accent);
     color: var(--accent-ink);
   }

@@ -1178,10 +1178,12 @@ export function FileDiff({
               const side: CommentSide = l.kind === 'del' ? 'old' : 'new';
               const n = sideLine(l, side);
               const inPick = shown !== null && n !== null && shown.side === side && n >= shown.line && n <= shown.endLine;
+              // A range shows its + only on its last line, where the comment goes.
+              const pickEnd = inPick && n === shown.endLine;
               const after = renderAfter(i);
               return (
                 <Fragment key={i}>
-                  <tr className={cx(`dl-${l.kind}`, inPick && 'picked')} data-i={i}>
+                  <tr className={cx(`dl-${l.kind}`, inPick && 'picked', pickEnd && 'pick-end')} data-i={i}>
                     <td className="cg">
                       {n !== null && onComment && (
                         <button
