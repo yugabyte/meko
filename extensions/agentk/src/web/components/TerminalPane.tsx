@@ -8,6 +8,7 @@ import { Busy } from './common';
 import { HeldImages } from './HeldImages';
 import { MekoUpload } from './MekoUpload';
 import { StartupPanel } from './StartupPanel';
+import { TermFind } from './TermFind';
 import { TermKeys } from './TermKeys';
 
 /**
@@ -51,6 +52,11 @@ export function TerminalPane({ session, onAsk, mekoTo }: { session: Session; onA
     return () => clearInterval(t);
   }, [waiting]);
 
+  const toast = term.notice && (
+    <div className="term-toast" role="status">
+      {term.noticeBusy ? <Busy label={term.notice} /> : term.notice}
+    </div>
+  );
   let overlay: ReactNode = null;
   /** The session is live on another screen: this one shows its last picture, dimmed. */
   const away = term.conn === 'open' && term.screen !== 'here' && status !== 'exited';
@@ -76,6 +82,13 @@ export function TerminalPane({ session, onAsk, mekoTo }: { session: Session; onA
         }}
       >
         <div className="term-host" ref={hostRef} />
+        {/* With the find bar open, a toast goes under it, clear of the overlay at the bottom. */}
+        {term.find.open && !showStartup && (
+          <div className="term-find-stack">
+            <TermFind term={term} agent={agentName(session)} />
+            {toast}
+          </div>
+        )}
         {showStartup && <StartupPanel session={session} onShowTerminal={() => setPeeked(startKey)} />}
         {overlay && (
           <div className="term-overlay">
@@ -98,11 +111,7 @@ export function TerminalPane({ session, onAsk, mekoTo }: { session: Session; onA
             )}
           </div>
         )}
-        {term.notice && (
-          <div className="term-toast" role="status">
-            {term.noticeBusy ? <Busy label={term.notice} /> : term.notice}
-          </div>
-        )}
+        {!(term.find.open && !showStartup) && toast}
         {status === 'exited' && (
           <div className="term-overlay">{agentName(session)} exited. Use Resume to continue this conversation in the same worktree.</div>
         )}

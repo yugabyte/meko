@@ -3,6 +3,7 @@
 
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import type { WebglAddon } from '@xterm/addon-webgl';
 import { MAX_PASTE_BYTES, SCREEN_IDLE_MS, type ScreenName, type ScreenState, type TermClientMessage, type TermServerMessage } from '../shared/types';
@@ -18,6 +19,7 @@ import {
   type BarKey, type TouchSample,
 } from './keys';
 import { bufferRow, linkAt } from './termlinks';
+import { FIND_LIMIT, findOptions, findPattern, isFindKey, seedQuery, type FindResult, type FindToggles } from './termfind';
 import { currentTermTheme, onTermTheme, termOptions } from './termtheme';
 
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
@@ -112,6 +114,7 @@ class SessionTerminal {
   readonly term: Terminal;
   readonly el: HTMLDivElement;
   private fit = new FitAddon();
+  private search = new SearchAddon({ highlightLimit: FIND_LIMIT });
   private ws: WebSocket | null = null;
   private attempt = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -197,6 +200,22 @@ class SessionTerminal {
    * being sent (they stay held, out of the next Enter's paths, until each is done).
    */
   meko: { asking: boolean; sending: ReadonlySet<number> } = { asking: false, sending: new Set() };
+  /**
+   * Find in the terminal (⌘F): whether the bar is open, its query and toggles, and what the search
+   * found. Kept here, not in the pane, so switching sessions and back keeps it.
+   */
+  find: FindToggles & { open: boolean; query: string; result: FindResult } = {
+    open: false, query: '', caseSensitive: false, wholeWord: false, regex: false, result: { index: -1, count: 0 },
+  };
+  /** Goes up each time find is asked for, so the bar focuses its field again (⌘F while it's open). */
+  findFocus = 0;
+  /**
+   * The search addon owns the selection: it selects each match it steps to, and again as new output
+   * comes. Off while the bar is closed, or paused by a selection of the user's own (pauseFind).
+   */
+  private findLive = false;
+  /** A mouse button is down on the terminal: a selection made now is the user's. */
+  private mouseDown = false;
   /** Input typed while held images are being sent (non-null only then); it follows them. */
   private queued: string[] | null = null;
   /** While a send waits on uploads: calls it off (Esc or Ctrl+C). */
@@ -221,11 +240,22 @@ class SessionTerminal {
     this.term.loadAddon(this.fit);
     // Mouse clicks on links; a tap on one is opened by touchEnd.
     this.term.loadAddon(new WebLinksAddon((_e, uri) => openLink(uri)));
+    this.term.loadAddon(this.search);
+    this.search.onDidChangeResults(({ resultIndex, resultCount }) => {
+      this.find.result = { index: resultIndex, count: resultCount };
+      this.listeners.forEach((l) => l());
+    });
+    // The bar says when only the screen is searched (a program running full screen has no scrollback).
+    this.term.buffer.onBufferChange(() => {
+      if (this.find.open) this.listeners.forEach((l) => l());
+    });
     this.term.open(this.el);
     this.stopTheme = onTermTheme((theme) => {
       const o = termOptions(theme);
       this.term.options.theme = o.theme;
       this.term.options.minimumContrastRatio = o.minimumContrastRatio;
+      // Highlight the matches again in the new theme's colors, keeping the current one.
+      if (this.find.open) this.refind();
     });
     this.setTyping(false);
     // Capture, so a swipe is ours before xterm sees it.
@@ -234,6 +264,11 @@ class SessionTerminal {
     this.el.addEventListener('touchmove', this.touchMove, { capture: true, passive: false });
     this.el.addEventListener('touchend', this.touchEnd, { capture: true, passive: false });
     this.el.addEventListener('touchcancel', this.touchCancel, { capture: true, passive: true });
+    // A drag or double-click selecting text while the bar is open pauses the search (pauseFind).
+    this.el.addEventListener('mousedown', this.onMouseDown, { capture: true });
+    this.term.onSelectionChange(() => {
+      if (this.findLive && (this.mouseDown || this.selecting) && this.term.hasSelection()) this.pauseFind();
+    });
     // Capture, so an image paste or drop is ours before xterm takes the paste as text.
     this.el.addEventListener('paste', this.onPaste, { capture: true });
     this.el.addEventListener('dragover', this.onDragOver);
@@ -268,9 +303,15 @@ class SessionTerminal {
     // Let the app's own shortcuts through; everything else goes to the terminal.
     this.term.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true;
+      if (isFindKey(e, IS_MAC)) {
+        e.preventDefault();
+        this.openFind();
+        return false;
+      }
       const mod = IS_MAC ? e.metaKey : e.ctrlKey;
       // With text selected, ⌘C (Ctrl+C or Ctrl+Shift+C elsewhere) copies it instead of interrupting Claude.
-      if (mod && (e.key === 'c' || e.key === 'C') && this.term.hasSelection()) {
+      // Not a match the find bar selected: Ctrl+C interrupts Claude while the bar is open.
+      if (mod && (e.key === 'c' || e.key === 'C') && this.term.hasSelection() && !this.findLive) {
         e.preventDefault();
         void this.copy(this.term.getSelection());
         if (!IS_MAC) this.term.clearSelection();
@@ -324,6 +365,101 @@ class SessionTerminal {
     this.notice = null;
     this.noticeBusy = false;
     this.listeners.forEach((l) => l());
+  }
+
+  /**
+   * Opens the find bar, or focuses it again. Text the user selected on one line becomes the query
+   * (not a match the bar selected itself).
+   */
+  openFind() {
+    const own = this.term.hasSelection() && !this.findLive;
+    const seed = own ? seedQuery(this.term.getSelection()) : null;
+    const wasOpen = this.find.open;
+    if (seed) this.find.query = seed;
+    // The search starts from the selection: with none, at the bottom.
+    else if (!wasOpen) this.term.clearSelection();
+    this.find.open = true;
+    this.findFocus++;
+    // A fresh search starts at the bottom, so the newest match comes first; one from the selection starts there.
+    if (!wasOpen || seed) this.refind();
+    this.listeners.forEach((l) => l());
+  }
+
+  /**
+   * Closes the find bar: no highlights, and no selection, or the next Ctrl+C would copy the match
+   * instead of interrupting Claude. Focus goes back to the terminal, unless that would take the
+   * session from another screen or open a phone's keyboard.
+   */
+  closeFind() {
+    if (!this.find.open) return;
+    this.find.open = false;
+    this.findLive = false;
+    this.search.clearDecorations();
+    this.term.clearSelection();
+    this.find.result = { index: -1, count: 0 };
+    this.listeners.forEach((l) => l());
+    if (this.screen === 'here' && (!matches(TOUCH_QUERY) || this.typing)) this.term.focus();
+  }
+
+  setFindQuery(query: string) {
+    this.find.query = query;
+    this.refind();
+  }
+
+  setFindToggle(key: keyof FindToggles, on: boolean) {
+    this.find[key] = on;
+    this.refind();
+  }
+
+  /** Steps to the next match up (older) or down (newer), scrolling to it. */
+  findStep(dir: 'older' | 'newer') {
+    this.runFind(dir);
+  }
+
+  /** Whether a program runs full screen (the alternate buffer), so find sees only the screen. */
+  get fullScreen(): boolean {
+    return this.term.buffer.active.type === 'alternate';
+  }
+
+  /** Searches again from the current match, keeping it if it still matches (the query or a toggle changed). */
+  private refind() {
+    // Without the addon's cached term, it tries the current selection first instead of stepping past it.
+    this.search.clearDecorations();
+    this.runFind('older');
+  }
+
+  /**
+   * The user selected text while the bar is open: the addon's search on new output would take the
+   * selection back, so stop it (clearDecorations drops its cached term) until the bar searches
+   * again, from that selection. The bar shows no count meanwhile.
+   */
+  private pauseFind() {
+    this.findLive = false;
+    this.search.clearDecorations();
+    this.find.result = { index: -1, count: -1 };
+    this.listeners.forEach((l) => l());
+  }
+
+  private onMouseDown = () => {
+    this.mouseDown = true;
+    // A tick after the button comes up: xterm reports the finished selection on mouseup.
+    document.addEventListener('mouseup', () => setTimeout(() => (this.mouseDown = false)), { once: true });
+  };
+
+  private runFind(dir: 'older' | 'newer') {
+    const f = this.find;
+    this.findLive = findPattern(f.query, f.regex) === 'ok';
+    if (!this.findLive) {
+      // The addon finds nothing for an empty query and throws on a bad regex.
+      this.search.clearDecorations();
+      this.term.clearSelection();
+      f.result = { index: -1, count: 0 };
+      this.listeners.forEach((l) => l());
+      return;
+    }
+    const opts = findOptions(f, currentTermTheme());
+    if (dir === 'older') this.search.findPrevious(f.query, opts);
+    else this.search.findNext(f.query, opts);
   }
 
   /** Holds images and files for Claude until the next Enter or Send; each starts uploading now. */

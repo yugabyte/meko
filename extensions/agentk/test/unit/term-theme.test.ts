@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { findOptions } from '../../src/web/termfind.js';
 import { parseTermThemePref, resolveTermTheme, termOptions, type TermTheme } from '../../src/web/termtheme.js';
 
 /** WCAG contrast ratio between two #rrggbb colors. */
@@ -40,6 +41,15 @@ describe('terminal colors', () => {
       if (mode === 'light') expect(contrast(theme.black!, theme.background!), 'light black').toBeGreaterThanOrEqual(3);
       // White on light is a gray, still visible.
       expect(contrast(theme.white!, theme.background!), `${mode} white`).toBeGreaterThanOrEqual(mode === 'light' ? 3 : 7);
+    }
+  });
+
+  it('keeps text readable on a find match, current or not', () => {
+    const toggles = { caseSensitive: false, wholeWord: false, regex: false };
+    for (const mode of ['dark', 'light'] as TermTheme[]) {
+      const fg = termOptions(mode).theme.foreground!;
+      const d = findOptions(toggles, mode).decorations!;
+      for (const bg of [d.matchBackground!, d.activeMatchBackground!]) expect(contrast(fg, bg), `${mode} ${bg}`).toBeGreaterThanOrEqual(4);
     }
   });
 

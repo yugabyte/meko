@@ -216,6 +216,9 @@ your phone can connect.
 - **One screen at a time.** A session is live in one browser tab or device at a time. Open it on
   another and that screen offers **Move to this screen**; it moves there by itself once the first
   screen has gone 10 seconds without being used, or right away if that screen isn't showing it.
+- **Find in the terminal:** `⌘F` (`Ctrl+Shift+F` on Linux and Windows) in a session's terminal
+  searches all of it, scrollback included, highlighting each match, with match case, whole word
+  and regex. On a phone, **Find in terminal** is in the ⋯ sheet and the command palette.
 - **Light or dark terminal:** the terminals are dark by default; Settings → General → Terminal
   colors makes them light or has them follow the app's theme, remembered per browser.
 - **Builds carry over between sessions.** When a session ends, its worktree waits for the next

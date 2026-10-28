@@ -12,7 +12,7 @@ import { useInstall } from '../installapp';
 import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, doAllActions, filterItems, findEntries, joinEntry, joinedText, linkEntries, workLinkEntries, type LabelPart } from '../palette';
 import { workLinkKey } from '../../shared/worklinks';
 import { navigate } from '../router';
-import { attachFiles } from '../terminals';
+import { attachFiles, getTerminal } from '../terminals';
 import { STATUS_TEXT, cx, dotState, isMac, liveSessions, stageWords, type DotState } from '../util';
 import { Busy, ErrorText, StatusDot, trapTab } from './common';
 
@@ -471,6 +471,13 @@ export function CommandPalette({
         hint: 'Action',
         keywords: 'attach file upload image pdf markdown document knowledge base kb meko',
         run: () => attachFiles(currentSession.id),
+      });
+      out.push({
+        id: 'find-terminal',
+        label: ['Find in ', { session: currentSession.name }, '’s terminal'],
+        hint: isMac() ? '⌘F' : 'Ctrl+Shift+F',
+        keywords: 'find search terminal scrollback text output',
+        run: () => getTerminal(currentSession.id).openFind(),
       });
     }
     if (currentSession && current?.settings.mekoLog) {
