@@ -136,14 +136,14 @@ describe('projects without a datapack, and without Meko', () => {
 
       await turnMekoOff();
       const state = (await call('GET', '/api/state')).json();
-      expect(state.meko).toMatchObject({ configured: false });
+      expect(state.meko).toMatchObject({ configured: false, sharing: false });
       expect((await call('POST', '/api/invites/check')).json()).toEqual({ datapacks: [], invites: [], closed: [] });
       expect((await call('GET', '/api/meko/datapacks')).json()).toEqual([]);
 
       // On again once Meko Cloud is linked in Meko: opening Settings reads it.
-      env.local.cloud = { set: true, url: 'https://mcp.mekodata.ai/mcp', apiKey: 'mko_tkn_brand_new_key', webUrl: '', apiUrl: '' };
+      env.local.cloud = { set: true, url: 'https://mcp.mekodata.ai/mcp', apiKey: 'mko_tkn_brand_new_key', webUrl: 'https://cloud.mekodata.ai', apiUrl: 'https://cloud.mekodata.ai/api/v1' };
       await call('GET', '/api/settings');
-      expect(env.core.mekoStatus).toMatchObject({ configured: true, source: 'meko', url: 'https://mcp.mekodata.ai/mcp' });
+      expect((await call('GET', '/api/state')).json().meko).toMatchObject({ configured: true, source: 'meko', url: 'https://mcp.mekodata.ai/mcp', sharing: true });
     });
 
     it('follows the Meko on this computer as it starts, moves and stops, and drops a stored copy of its token', async () => {
@@ -157,7 +157,8 @@ describe('projects without a datapack, and without Meko', () => {
       const resets = () => env.meko.calls.filter((c) => c.name === 'reset').length;
       const r0 = resets();
       await call('GET', '/api/settings');
-      expect(env.core.mekoStatus).toMatchObject({ source: 'local', url: local.url });
+      // The Meko on this computer doesn't share, and the page is told so.
+      expect((await call('GET', '/api/state')).json().meko).toMatchObject({ source: 'local', url: local.url, sharing: false });
       expect(env.core.config.meko).toMatchObject({ url: '', apiKey: '' });
       expect(resets()).toBe(r0);
       expect(env.core.mekoStatus.configured).toBe(true);
@@ -184,6 +185,12 @@ describe('projects without a datapack, and without Meko', () => {
       await call('GET', '/api/settings');
       expect(env.core.mekoStatus).toMatchObject({ source: 'local', url: local.url });
       expect(forget).not.toHaveBeenCalled();
+
+      // An API URL on its own origin, kept from before Meko owns the link, lets it share after all.
+      env.core.updateConfig((c) => {
+        c.meko.apiUrl = 'http://127.0.0.1:7778/api/v1';
+      });
+      expect((await call('GET', '/api/state')).json().meko).toMatchObject({ source: 'local', sharing: true });
     });
   });
 });

@@ -363,7 +363,7 @@ export class Core extends EventEmitter {
     const m = resolveMekoWithSource(cfg);
     return {
       configured: !!m.apiKey, url: m.apiKey ? m.url : null, source: m.keySource, webUrl: resolveMekoWebUrl(cfg),
-      claude: this.claudeMeko.status, kiro: null, opencode: null,
+      sharing: !!m.apiKey && !!resolveMekoApiUrl(cfg), claude: this.claudeMeko.status, kiro: null, opencode: null,
     };
   }
 

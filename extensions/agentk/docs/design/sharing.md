@@ -15,9 +15,16 @@ Meko's share routes (`POST /datapacks/:id/share`, `GET …/member-list`, `GET �
 `POST /share/:token/redeem`) are REST, not MCP. `src/server/mekoapi.ts` calls them with the
 same API key (a Meko personal access token), at `[meko] api_url` (by default the web app URL plus
 `/api/v1`). AgentK can share when Meko is on and that API URL is known (`resolveMekoApiUrl()`, from
-the config, not by asking Meko); the state sent to the browser doesn't carry it. Without an API URL
-the share routes answer 409, saying to set the web app URL, and the invite sync skips Meko's
-invites. Meko's own refusals of a share call (a bad email, an invite already pending,
+the config, not by asking Meko); the state sent to the browser carries it as `MekoStatus.sharing`.
+Without an API URL the share routes answer 409, saying to set the web app URL, and the invite sync
+skips Meko's invites. The Meko on this computer has no share routes and usually no API URL, so
+while AgentK uses it, Share doesn't open the Share dialog. (An API URL on its own origin, kept in
+config.toml from before Meko owned the link, is the exception: `forKey()` in `config.ts` keeps it,
+and Share then opens the Share dialog.) It opens **Share through Meko Cloud** instead
+(`MekoLinkDialog.tsx`), as Meko's own Invite points to Meko Cloud: **Sign up for Meko Cloud ↗**
+(`MEKO_CLOUD_SIGNUP_URL`, Meko Cloud's sign-up, landing on its Settings where the API key is made,
+in a new tab) and **Link Meko Cloud** (Meko's `/settings/meko-cloud`). Any other Meko without an
+API URL gets **Set Meko's web app URL**, which links to that same page of Meko's. Meko's own refusals of a share call (a bad email, an invite already pending,
 no permission) come back with their status and message; a refused key (401) is a 502 that says to
 check the key in Meko's web UI (Settings › Meko Cloud); anything else is a 502. The invite sync keeps asking every five
 minutes, but logs a failure to list the invites waiting (a refused key, say) once, until the error
@@ -57,7 +64,8 @@ can't be read, the dialog shows no suggestions.
 
 **Sharing with a PR's reviewers.** Once a session has a PR, its PR & Review step has **Share with
 reviewers** (on a phone, in the ⋯ sheet), while the project has a dedicated datapack and Meko
-is on. It opens the Share dialog with a **Reviewers on the
+is on. While AgentK can't share (`MekoStatus.sharing` false), it opens the same Meko Cloud dialog as
+the project home's Share. Otherwise it opens the Share dialog with a **Reviewers on the
 project's open PRs** section above the email form: for each open PR of the project's running sessions (in PR & Review or Merge & Close),
 each in its own session's repo, the people asked to review and the people who have reviewed,
 without bots, the PR's author or you, and the teams asked (whose members are invited by email);
