@@ -905,6 +905,8 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     env.core.sessions.dismissFailedStart('demo-repo--retry');
     env.core.sessions.dismissFailedStart('demo-repo--other');
     expect(env.core.state().failedStarts).toEqual([]);
+    // Its fake Claude writes its transcript into the test home until the turn ends: removing the home before then fails.
+    await waitFor(() => env.core.sessions.get(again.id).status, (st) => st === 'idle', 10000, 'the started session\'s first turn');
   });
 
   it("follows the transcript of a session whose hooks never arrive, and binds a removed hook socket again", async () => {
