@@ -9,13 +9,13 @@ import { startHost, type HostHandle } from '../../src/server/host/host.js';
 import { silentLogger } from '../../src/server/log.js';
 import { JOURNAL, moveHome, type MovePlan } from '../../src/server/movehome.js';
 import { getPaths, homeIn } from '../../src/server/paths.js';
-import { makeEnv, testLockDeps, waitFor, type TestEnv } from '../helpers.js';
+import { makeEnv, readJsonl, testLockDeps, waitFor, type TestEnv } from '../helpers.js';
 
 const key = (cwd: string) => cwd.replace(/[^A-Za-z0-9]/g, '-');
 
 function argvLog(env: TestEnv): { args: string[]; cwd: string }[] {
   const f = join(env.fakeDir, 'argv.jsonl');
-  return existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
+  return readJsonl(f);
 }
 
 describe("moving AgentK's home into Meko's data folder (real session host + git, fake claude)", () => {

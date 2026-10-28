@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
@@ -6,7 +5,7 @@ import type { Project } from '../../src/shared/types.js';
 import { buildServer } from '../../src/server/server.js';
 import { MekoError, sessionAgentId } from '../../src/server/meko.js';
 import { get, run } from '../../src/server/db.js';
-import { makeEnv, pinnedDatapack, waitFor, type TestEnv } from '../helpers.js';
+import { makeEnv, pinnedDatapack, readJsonl, waitFor, type TestEnv } from '../helpers.js';
 
 const OLD = { id: 'dp-adlc-proj-demo-repo-a', name: 'adlc/proj/demo-repo/a' };
 const NEW = { id: 'dp-adlc-proj-demo-repo-b', name: 'adlc/proj/demo-repo/b' };
@@ -45,8 +44,7 @@ describe('switching the dedicated datapack', () => {
 
     // The new session launches with the new datapack, and the old one to search.
     await waitFor(() => env.core.sessions.get(after.id).status, (st) => st === 'idle', 10000, 'the session to start');
-    const launched = readFileSync(join(env.fakeDir, 'argv.jsonl'), 'utf8').trim().split('\n')
-      .map((l) => JSON.parse(l) as { args: string[]; env: Record<string, string> })
+    const launched = readJsonl<{ args: string[]; env: Record<string, string> }>(join(env.fakeDir, 'argv.jsonl'))
       .find((l) => l.env.MEKO_AGENT_ID === sessionAgentId(env.core.sessions.row(after.id)))!;
     expect(launched.env.MEKO_DATAPACK_ID).toBe(NEW.id);
     const prompt = launched.args.join(' ');

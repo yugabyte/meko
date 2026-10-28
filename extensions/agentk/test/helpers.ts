@@ -299,6 +299,19 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
   };
 }
 
+/**
+ * The records of a JSONL file that another process appends to, such as a fake agent's logs, or none
+ * if it doesn't exist yet. A read can catch an append halfway on Linux (ext4 and tmpfs copy a write in
+ * page by page while reads take no lock), so a last line without its newline is a record still being
+ * written: it's left for the next read. Every record must end in a newline. Untyped like JSON.parse's
+ * result unless T says what the records are.
+ */
+export function readJsonl<T = ReturnType<typeof JSON.parse>>(file: string): T[] {
+  if (!existsSync(file)) return [];
+  const text = readFileSync(file, 'utf8');
+  return text.slice(0, text.lastIndexOf('\n') + 1).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l) as T);
+}
+
 export async function waitFor<T>(fn: () => T | Promise<T>, pred: (v: T) => boolean, ms = 10000, what = 'condition'): Promise<T> {
   const start = Date.now();
   let last: T | undefined;

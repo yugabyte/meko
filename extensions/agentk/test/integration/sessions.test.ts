@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { makeEnv, pinFiles, pinnedDatapack, sessionPinFile, waitFor, type TestEnv } from '../helpers.js';
+import { makeEnv, pinFiles, pinnedDatapack, readJsonl, sessionPinFile, waitFor, type TestEnv } from '../helpers.js';
 import { AGENTK_AGENT_ID, legacyAgentId, sessionAgentId } from '../../src/server/meko.js';
 import { PIN_KEEP_MS } from '../../src/server/projects.js';
 import { postHook } from '../hook-client.js';
@@ -18,7 +18,7 @@ import type { CreateSessionRequest } from '../../src/shared/types.js';
 
 function argvLog(env: TestEnv): { args: string[]; env: Record<string, string> }[] {
   const f = join(env.fakeDir, 'argv.jsonl');
-  return existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
+  return readJsonl(f);
 }
 
 /** HEAD isn't on a branch (an idle worktree). */
@@ -34,12 +34,12 @@ function detached(dir: string): boolean {
 /** What the fake Claude's SessionStart hooks printed, per start. */
 function sessionStarts(env: TestEnv): { sessionId: string; source: string; context: string }[] {
   const f = join(env.fakeDir, 'session-start.jsonl');
-  return existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
+  return readJsonl(f);
 }
 
 function captureLog(env: TestEnv): { args: string[]; input: { transcript_path: string }; env: Record<string, string> }[] {
   const f = join(env.fakeDir, 'capture.jsonl');
-  return existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
+  return readJsonl(f);
 }
 
 describe('projects and sessions (real session host + git, fake claude)', () => {
@@ -550,7 +550,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     // While designing, edits inside the repo are denied and edits elsewhere go ahead.
     await env.core.sessions.submit(s.id, 'EDIT_REPO');
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'guarded turn');
-    const guard = readFileSync(join(env.fakeDir, 'guard.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    const guard = readJsonl<{ file: string; out: string }>(join(env.fakeDir, 'guard.jsonl'));
     expect(JSON.parse(guard[0].out).hookSpecificOutput).toMatchObject({ permissionDecision: 'deny', permissionDecisionReason: expect.stringMatching(/Design stage/) });
     expect(guard[1].out).toBe('');
     expect(env.core.sessions.get(s.id).status).toBe('idle'); // a turn that didn't touch the design isn't "ready" again
@@ -562,8 +562,8 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
 
     // Past Design, the guard lets edits through.
     await env.core.sessions.submit(s.id, 'EDIT_REPO');
-    await waitFor(() => readFileSync(join(env.fakeDir, 'guard.jsonl'), 'utf8').trim().split('\n').length, (n) => n === 4, 10000, 'second guard check');
-    const after = readFileSync(join(env.fakeDir, 'guard.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    await waitFor(() => readJsonl(join(env.fakeDir, 'guard.jsonl')).length, (n) => n === 4, 10000, 'second guard check');
+    const after = readJsonl<{ file: string; out: string }>(join(env.fakeDir, 'guard.jsonl'));
     expect(after[2].out).toBe('');
   });
 
@@ -658,7 +658,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     // Edits in the repo go ahead (POCs), and review comments on the diff reach Claude.
     await env.core.sessions.submit(s.id, 'EDIT_REPO');
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'edit turn');
-    const guard = readFileSync(join(env.fakeDir, 'guard.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    const guard = readJsonl<{ file: string; out: string }>(join(env.fakeDir, 'guard.jsonl'));
     expect(guard.every((g) => g.out === '')).toBe(true);
     env.core.comments.add(s.id, { path: 'a.txt', side: 'new', line: 1, endLine: 1, excerpt: 'a', body: 'Try it another way.' });
     expect(await env.core.comments.send(s.id)).toEqual({ sent: 1, queued: 0 });

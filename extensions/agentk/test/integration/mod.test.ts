@@ -3,18 +3,18 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { modDirPath } from '../../src/server/claude.js';
 import { all } from '../../src/server/db.js';
-import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
+import { makeEnv, readJsonl, waitFor, type TestEnv } from '../helpers.js';
 
 /** Launches the fake Claude recorded: its arguments and the variables it was started with. */
 function launches(env: TestEnv): { args: string[]; env: Record<string, string> }[] {
   const f = join(env.fakeDir, 'argv.jsonl');
-  return existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
+  return readJsonl(f);
 }
 
 /** The prompts the fake Claude took through its mod. */
 function modPrompts(env: TestEnv): { id: string; text: string }[] {
   const f = join(env.fakeDir, 'mod-prompts.jsonl');
-  return existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
+  return readJsonl(f);
 }
 
 /** What the fake Claude read from its terminal (every chunk, while its dir has a `debug` file). */

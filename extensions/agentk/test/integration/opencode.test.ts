@@ -1,14 +1,14 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { makeEnv, waitFor, type TestEnv } from '../helpers.js';
+import { makeEnv, readJsonl, waitFor, type TestEnv } from '../helpers.js';
 import { all } from '../../src/server/db.js';
 import { sessionAgentId } from '../../src/server/meko.js';
 import { openCodeMekoFile, openCodePluginPath, openCodeSessionDir } from '../../src/server/opencode.js';
 
 const lines = (file: string) => {
   const f = join(process.env.FAKE_OPENCODE_DIR!, file);
-  return existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
+  return readJsonl(f);
 };
 
 describe('sessions on OpenCode (real session host + git, fake opencode running AgentK’s plugin)', () => {

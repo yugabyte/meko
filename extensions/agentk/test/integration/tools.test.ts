@@ -1,5 +1,4 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -25,7 +24,7 @@ vi.mock('../../src/server/github.js', async (orig) => {
   };
 });
 
-const { makeEnv, gitRepo, waitFor } = await import('../helpers.js');
+const { makeEnv, gitRepo, readJsonl, waitFor } = await import('../helpers.js');
 const { handle } = await import('../../src/server/mcp.js');
 const { all, run } = await import('../../src/server/db.js');
 const { toolsMcpConfigPath, toolsPluginDir } = await import('../../src/server/tools.js');
@@ -148,7 +147,7 @@ describe("AgentK's session tools through agentk mcp (real session host + git, fa
 
   it('refuses calls with the tools turned off, from a session on an untrusted PR head, and outside a session', async () => {
     // Claude Code sessions launch with the tools' MCP server and skill plugin while they're on, and without them once they're off.
-    const launches = () => readFileSync(join(env.fakeDir, 'argv.jsonl'), 'utf8').trim().split('\n').map((l) => (JSON.parse(l) as { args: string[] }).args);
+    const launches = () => readJsonl<{ args: string[] }>(join(env.fakeDir, 'argv.jsonl')).map((l) => l.args);
     const withTools = ['--plugin-dir', toolsPluginDir(env.core.paths), '--mcp-config', toolsMcpConfigPath(env.core.paths)];
     expect(launches()[0]).toEqual(expect.arrayContaining(withTools));
     const t = await connect(abc);
