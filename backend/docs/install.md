@@ -97,9 +97,10 @@ meko-<version>/
   listener's, never 7777) serves the web UI at the address `meko ui --no-open` prints, and stops.
 
 Linux tarballs are built in `almalinux:8` (glibc 2.28, so they run on RHEL 8 and newer) with
-gcc-toolset-13; the Mac one on `macos-15` with `MACOSX_DEPLOYMENT_TARGET=14.0`. Nothing is signed or
-notarized, as with yugabyted's macOS tarball: files that `gh` or `curl` download carry no quarantine
-flag, and Go signs darwin/arm64 binaries ad hoc.
+gcc-toolset-13; the Mac one on `macos-15` with `MACOSX_DEPLOYMENT_TARGET=14.0`. Their downloads
+retry (dnf's toolchain, and Node through the repo's `scripts/release/fetch-node.sh`), and each
+step that downloads has a timeout of its own. Nothing is signed or notarized, as with yugabyted's macOS tarball: files that `gh` or `curl`
+download carry no quarantine flag, and Go signs darwin/arm64 binaries ad hoc.
 
 ## Releases
 

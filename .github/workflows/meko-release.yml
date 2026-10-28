@@ -137,8 +137,13 @@ jobs:
       - name: Install build toolchain
         # Before checkout: backend/ doesn't exist yet.
         working-directory: .
+        # Normally under a minute; a slow mirror would otherwise hold the release group.
+        timeout-minutes: 10
         run: |
+          # dnf's default minrate (1000 B/s) let a mirror crawl through BaseOS's 100+ MB of metadata for
+          # 20 minutes: drop a mirror slower than 1 MiB/s for 30s and try the next, up to 10 of them.
           dnf install -y --setopt=install_weak_deps=False \
+            --setopt=minrate=1M --setopt=timeout=30 --setopt=retries=10 \
             gcc-toolset-13-gcc gcc-toolset-13-gcc-c++ make git tar xz gzip findutils which procps-ng
           git config --global --add safe.directory '*'
 
@@ -155,16 +160,12 @@ jobs:
             backend/go.sum
 
       - name: Download Node ${{ env.NODE_VERSION }}
+        timeout-minutes: 5
         run: |
           set -eu
-          dist="node-v${NODE_VERSION}-linux-${ARCH}"
-          cd /tmp
-          curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/${dist}.tar.xz"
-          curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt"
-          grep " ${dist}.tar.xz\$" SHASUMS256.txt | sha256sum -c -
-          tar -xJf "${dist}.tar.xz"
-          echo "NODE_DIR=/tmp/${dist}" >> "$GITHUB_ENV"
-          echo "/tmp/${dist}/bin" >> "$GITHUB_PATH"
+          dir=$(sh ../scripts/release/fetch-node.sh "$NODE_VERSION" "linux-$ARCH" "/tmp")
+          echo "NODE_DIR=$dir" >> "$GITHUB_ENV"
+          echo "$dir/bin" >> "$GITHUB_PATH"
 
       - name: Build
         run: |
@@ -214,16 +215,12 @@ jobs:
             backend/go.sum
 
       - name: Download Node ${{ env.NODE_VERSION }}
+        timeout-minutes: 5
         run: |
           set -eu
-          dist="node-v${NODE_VERSION}-darwin-${ARCH}"
-          cd "$RUNNER_TEMP"
-          curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/${dist}.tar.gz"
-          curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt"
-          grep " ${dist}.tar.gz\$" SHASUMS256.txt | shasum -a 256 -c -
-          tar -xzf "${dist}.tar.gz"
-          echo "NODE_DIR=$RUNNER_TEMP/${dist}" >> "$GITHUB_ENV"
-          echo "$RUNNER_TEMP/${dist}/bin" >> "$GITHUB_PATH"
+          dir=$(sh ../scripts/release/fetch-node.sh "$NODE_VERSION" "darwin-$ARCH" "$RUNNER_TEMP")
+          echo "NODE_DIR=$dir" >> "$GITHUB_ENV"
+          echo "$dir/bin" >> "$GITHUB_PATH"
 
       - name: Build
         run: |

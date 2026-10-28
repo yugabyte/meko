@@ -233,3 +233,123 @@ describe('presenter-release.yml’s hand-run rebuild', () => {
     expect(r.output).toBe('');
   });
 });
+
+// The release workflows' steps, each as its own lines: a step starts at `      - ` and runs to the
+// next one or the end of its job.
+function steps(name: string): string[][] {
+  const out: string[][] = [];
+  let step: string[] | undefined;
+  for (const l of readFileSync(fileURLToPath(new URL(`../../../../.github/workflows/${name}`, import.meta.url)), 'utf8').split('\n')) {
+    if (l.startsWith('      - ')) out.push((step = [l]));
+    else if (step && (!l.trim() || l.startsWith('        '))) step.push(l);
+    else step = undefined;
+  }
+  return out;
+}
+const code = (step: string[]) => step.filter((l) => !/^\s*#/.test(l)).join('\n');
+
+// On 2026-10-28 three AgentK releases broke on downloads: a dnf mirror at 110 kB/s, node-gyp
+// stuck fetching Node's headers, and a broken HTTP/2 stream from nodejs.org.
+describe.each(['agentk-release.yml', 'meko-release.yml', 'presenter-release.yml'])('%s’s downloads', (name) => {
+  const all = steps(name);
+
+  it('give every step that downloads a timeout of its own', () => {
+    const downloading = all.filter((s) => /\b(curl|fetch-node\.sh|dnf install|apt-get|npm ci)\b/.test(code(s)));
+    expect(downloading.length).toBeGreaterThan(0);
+    for (const s of downloading) expect(s.join('\n'), s[0]).toMatch(/^\s+(- )?timeout-minutes: \d+$/m);
+  });
+
+  it('get Node through fetch-node.sh, which retries', () => {
+    expect(all.some((s) => /scripts\/release\/fetch-node\.sh/.test(code(s)))).toBe(true);
+    expect(all.filter((s) => /\bcurl\b/.test(code(s)))).toEqual([]);
+  });
+
+  it('let dnf drop a slow mirror', () => {
+    for (const s of all.filter((s) => /\bdnf install\b/.test(code(s)))) {
+      expect(code(s)).toMatch(/--setopt=minrate=\S+ --setopt=timeout=\d+ --setopt=retries=\d+/);
+    }
+  });
+});
+
+describe('agentk-release.yml’s node-pty builds', () => {
+  it('use the headers of the Node they build with, never a download', () => {
+    const installs = steps('agentk-release.yml').filter((s) => /\bnpm ci\b/.test(code(s)));
+    expect(installs).toHaveLength(3); // test, build (Linux) and build-macos
+    for (const s of installs) expect(code(s)).toMatch(/export npm_config_nodedir="\$/);
+  });
+});
+
+describe('fetch-node.sh', () => {
+  // A fake nodejs.org: curl copies the file named by the URL from srv/, after failing (as a
+  // broken HTTP/2 stream does, exit 92) its first `failures` times. sleep doesn't wait.
+  const fetchNode = (platform: string, failures = 0) => {
+    const bin = join(root, 'bin');
+    const srv = join(root, 'srv');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'curl'), `#!/bin/sh
+n=$(cat "${root}/tries" 2>/dev/null || echo 0)
+echo $((n + 1)) > "${root}/tries"
+[ "$n" -ge ${failures} ] || exit 92
+for a; do url=$a; done
+echo "$*" >> "${root}/args"
+cp "${srv}/\${url##*/}" .
+`);
+    writeFileSync(join(bin, 'sleep'), '#!/bin/sh\n');
+    chmodSync(join(bin, 'curl'), 0o755);
+    chmodSync(join(bin, 'sleep'), 0o755);
+    const r = spawnSync('sh', [join(DIR, 'fetch-node.sh'), '22.18.0', platform, join(root, 'out')], {
+      cwd: root, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    });
+    return { ...r, tries: Number(readFileSync(join(root, 'tries'), 'utf8')) };
+  };
+  const serve = (file: string, flag: string, sums?: string) => {
+    const dist = file.replace(/\.tar\.[gx]z$/, '');
+    const srv = join(root, 'srv');
+    mkdirSync(join(srv, dist, 'bin'), { recursive: true });
+    writeFileSync(join(srv, dist, 'bin', 'node'), '#!/bin/sh\n');
+    execFileSync('tar', [flag, join(srv, file), '-C', srv, dist]);
+    const sum = execFileSync('sh', ['-c', `cd "${srv}" && (sha256sum "${file}" 2>/dev/null || shasum -a 256 "${file}")`], { encoding: 'utf8' });
+    writeFileSync(join(srv, 'SHASUMS256.txt'), sums ?? `0000  node-v22.18.0-other.tar.gz\n${sum}`);
+  };
+
+  it.each([
+    ['linux-x64', 'node-v22.18.0-linux-x64.tar.xz', '-cJf'],
+    ['darwin-arm64', 'node-v22.18.0-darwin-arm64.tar.gz', '-czf'],
+  ])('downloads, checks and unpacks %s, and prints its folder', (platform, file, flag) => {
+    serve(file, flag);
+    const r = fetchNode(platform);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe(`${join(root, 'out', `node-v22.18.0-${platform}`)}\n`);
+    expect(readFileSync(join(root, 'out', `node-v22.18.0-${platform}`, 'bin', 'node'), 'utf8')).toBe('#!/bin/sh\n');
+    const args = readFileSync(join(root, 'args'), 'utf8');
+    expect(args).toContain(`https://nodejs.org/dist/v22.18.0/${file}`);
+    expect(args).toContain('https://nodejs.org/dist/v22.18.0/SHASUMS256.txt');
+    expect(args).toMatch(/--retry \d+ .*--speed-limit \d+ --speed-time \d+/);
+  });
+
+  it('retries a failure curl’s own --retry leaves alone', () => {
+    serve('node-v22.18.0-linux-x64.tar.xz', '-cJf');
+    const r = fetchNode('linux-x64', 2);
+    expect(r.status).toBe(0);
+    expect(r.tries).toBe(4); // two failures, then the tarball and SHASUMS256.txt
+    expect(r.stderr).toContain('Downloading node-v22.18.0-linux-x64.tar.xz failed (try 2 of 3)');
+  });
+
+  it('gives up after three tries', () => {
+    serve('node-v22.18.0-linux-x64.tar.xz', '-cJf');
+    const r = fetchNode('linux-x64', 5);
+    expect(r.status).toBe(1);
+    expect(r.tries).toBe(3);
+    expect(r.stdout).toBe('');
+  });
+
+  it.each([
+    ['a wrong checksum', `${'0'.repeat(64)}  node-v22.18.0-linux-x64.tar.xz\n`],
+    ['no checksum', `${'0'.repeat(64)}  node-v22.18.0-linux-arm64.tar.xz\n`],
+  ])('refuses a tarball with %s', (_, sums) => {
+    serve('node-v22.18.0-linux-x64.tar.xz', '-cJf', sums);
+    const r = fetchNode('linux-x64');
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toBe('');
+  });
+});

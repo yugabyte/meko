@@ -108,11 +108,19 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: extensions/agentk/package-lock.json
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends git build-essential
+      - timeout-minutes: 5
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends git build-essential
       - run: |
           git config --global user.name "CI"
           git config --global user.email "ci@example.com"
-      - run: npm ci
+      - timeout-minutes: 10
+        run: |
+          # node-gyp builds node-pty (no linux-x64 prebuild) against this Node's own headers instead
+          # of downloading them from nodejs.org.
+          export npm_config_nodedir="$(dirname "$(dirname "$(command -v node)")")"
+          npm ci
       - run: npm run typecheck
       - run: npm run lint
       # Four files at once, as in ci.yml: by default this 2-CPU runner runs one at a time.
@@ -146,8 +154,13 @@ jobs:
       - name: Install build toolchain
         # Before checkout: extensions/agentk doesn't exist yet.
         working-directory: .
+        # Normally under a minute; a slow mirror would otherwise hold the release group.
+        timeout-minutes: 10
         run: |
+          # dnf's default minrate (1000 B/s) let a mirror crawl through BaseOS's 100+ MB of metadata for
+          # 20 minutes: drop a mirror slower than 1 MiB/s for 30s and try the next, up to 10 of them.
           dnf install -y --setopt=install_weak_deps=False \
+            --setopt=minrate=1M --setopt=timeout=30 --setopt=retries=10 \
             gcc-toolset-13-gcc-c++ make python3.11 git tar xz findutils which
           git config --global --add safe.directory '*'
 
@@ -157,23 +170,23 @@ jobs:
           persist-credentials: false
 
       - name: Download Node ${{ env.NODE_VERSION }}
+        timeout-minutes: 5
         run: |
           set -eu
-          dist="node-v${NODE_VERSION}-linux-${ARCH}"
-          cd /tmp
-          curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/${dist}.tar.xz"
-          curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt"
-          grep " ${dist}.tar.xz\$" SHASUMS256.txt | sha256sum -c -
-          tar -xJf "${dist}.tar.xz"
-          echo "NODE_DIR=/tmp/${dist}" >> "$GITHUB_ENV"
-          echo "/tmp/${dist}/bin" >> "$GITHUB_PATH"
+          dir=$(sh ../../scripts/release/fetch-node.sh "$NODE_VERSION" "linux-$ARCH" "/tmp")
+          echo "NODE_DIR=$dir" >> "$GITHUB_ENV"
+          echo "$dir/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies (gcc-toolset-13 for node-pty)
+        timeout-minutes: 10
         run: |
           set -eu
           export CC=/opt/rh/gcc-toolset-13/root/usr/bin/gcc
           export CXX=/opt/rh/gcc-toolset-13/root/usr/bin/g++
           export npm_config_python=/usr/bin/python3.11
+          # node-gyp builds node-pty against the headers in the Node tarball above, checked against
+          # SHASUMS256, instead of downloading them from nodejs.org.
+          export npm_config_nodedir="$NODE_DIR"
           node --version
           npm ci
 
@@ -228,22 +241,21 @@ jobs:
           persist-credentials: false
 
       - name: Download Node ${{ env.NODE_VERSION }}
+        timeout-minutes: 5
         run: |
           set -eu
-          dist="node-v${NODE_VERSION}-darwin-${ARCH}"
-          cd "$RUNNER_TEMP"
-          curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/${dist}.tar.gz"
-          curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt"
-          grep " ${dist}.tar.gz\$" SHASUMS256.txt | shasum -a 256 -c -
-          tar -xzf "${dist}.tar.gz"
-          echo "NODE_DIR=$RUNNER_TEMP/${dist}" >> "$GITHUB_ENV"
-          echo "$RUNNER_TEMP/${dist}/bin" >> "$GITHUB_PATH"
+          dir=$(sh ../../scripts/release/fetch-node.sh "$NODE_VERSION" "darwin-$ARCH" "$RUNNER_TEMP")
+          echo "NODE_DIR=$dir" >> "$GITHUB_ENV"
+          echo "$dir/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies (node-pty built from source)
+        timeout-minutes: 10
         env:
           # node-pty ships a prebuilt macOS binary; build our own like on Linux.
           npm_config_build_from_source: 'true'
         run: |
+          # Against the headers in the Node tarball above, not ones node-gyp would download.
+          export npm_config_nodedir="$NODE_DIR"
           node --version
           npm ci
 
