@@ -27,9 +27,7 @@ your own machine: one binary with the command line, server, MCP tools and REST A
 | Run Meko on my machine | [Install](#install) |
 | Give agents like Claude, Codex, or any MCP client, Meko's context | [Connect an agent](#connect-an-agent) |
 | Link to Meko Cloud | [Link to Meko Cloud](#link-to-meko-cloud) |
-| See every command | [Meko CLI](backend/docs/cli.md) |
-| See every MCP tool | [MCP tools](backend/docs/api.md#mcp-at-mcp) |
-| Call the REST API | [REST API](backend/docs/api.md#rest-at-apiv1) |
+| See every command | [CLI](backend/docs/cli.md) ⋅ [API](backend/docs/api.md#rest-at-apiv1) ⋅ [MCP](backend/docs/api.md#mcp-at-mcp)|
 | Run many coding sessions that share and learn from each other | [AgentK](extensions/agentk/README.md) |
 | Contribute to Meko | [Contributing](#docs-and-contributing) |
 
