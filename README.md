@@ -12,6 +12,7 @@
   <a href="https://docs.mekodata.ai/"><img src="https://img.shields.io/badge/docs-orange" alt="Docs"></a>
   <a href="https://mekodata.ai"><img src="https://img.shields.io/badge/Meko%20Cloud-purple" alt="Meko Cloud"></a>
   <a href="https://mekodata.ai/discord/"><img src="https://img.shields.io/badge/Discord-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
+</p>
 
 **The Context Engine for Agentic Applications.**
 
@@ -38,7 +39,7 @@ On Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon:
 gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
 ```
 
-Quick start
+Quick start, once `meko status` shows the memory engine ready:
 ```sh
 mekosh add_memory "Elementary, my dear Watson"
 mekosh add_memory "The quick brown fox jumps over the lazy dog"
@@ -53,7 +54,7 @@ meko ui
 ## Connect an agent
 
 Give agents like Claude, Codex, or any MCP client, Meko's context: Meko serves MCP over Streamable
-HTTP at `http://localhost:7778/mcp`, with `Authorization: Bearer <token>` (`meko token` prints
+HTTP at `http://127.0.0.1:7778/mcp`, with `Authorization: Bearer <token>` (`meko token` prints
 it). `meko connect` adds Meko to your agent, for all your projects:
 
 ```sh
@@ -64,7 +65,7 @@ meko connect             # the MCP URL and token, for any other MCP client
 The REST API takes the same token:
 
 ```sh
-curl -s http://localhost:7778/api/v1/datapacks -H "Authorization: Bearer $(meko token)"
+curl -s http://127.0.0.1:7778/api/v1/datapacks -H "Authorization: Bearer $(meko token)"
 ```
 
 ## Connect with Meko Cloud
@@ -76,7 +77,7 @@ meko cloud_link          # asks for the key, or reads it from stdin; --off unlin
 ```
 
 Or use the web UI's Settings › Meko Cloud
-([localhost:7777/settings/meko-cloud](http://localhost:7777/settings/meko-cloud)).
+([127.0.0.1:7777/settings/meko-cloud](http://127.0.0.1:7777/settings/meko-cloud)).
 
 Once linked, `mekosh` works on both local and Meko Cloud datapacks.
 
@@ -131,10 +132,11 @@ for the memory engine and the web UI.
 ```sh
 cd backend
 make build memory_engine web_ui  # bin/meko (and bin/mekosh, a link to it), the memory engine and the web UI
-./bin/meko start                 # runs in the background: localhost:7778, and the web UI on :7777
+./bin/meko start                 # runs in the background: 127.0.0.1:7778, and the web UI on :7777
 ```
 
-The first start downloads the embedding model (23 MB). On RHEL 8, set
+The first start downloads the embedding model (23 MB), and `mekosh` calls fail with
+`MEMORY_ENGINE_NOT_READY` until `meko status` shows the memory engine ready. On RHEL 8, set
 `CC=/opt/rh/gcc-toolset-13/root/usr/bin/gcc` before building.
 
 ## Docs and contributing
