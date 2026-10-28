@@ -75,6 +75,8 @@ are compiled into the binary from the `yugabyte/go-sqlite3` fork (`go.mod`'s `re
 SQLite and takes about a minute. CI runs build, lint
 and test on Linux and macOS when a PR changes `backend/` (the `backend` job in
 `.github/workflows/ci.yml`; `scripts/ci-scope.sh` decides), and the required `CI gate` fails when any of them fails.
+Markdown only people read, such as this file and `REVIEW.md`, doesn't run it; `docs/` does, since
+`docs/docs_test.go` checks it.
 
 ## Rules
 

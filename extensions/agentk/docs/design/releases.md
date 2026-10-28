@@ -7,8 +7,10 @@ Part of the [AgentK design](../design.md).
   `scripts/ci-scope.sh` and Dependabot's config are at the repo root). `scripts/ci-scope.sh` decides
   from a PR's changed paths whether AgentK's jobs run: `extensions/agentk/`, the root `scripts/` and
   `.github/` (which AgentK's tests read) and any root file outside the known components do, root
-  Markdown, `.claude/` and `backend/` don't. Integration tests run
-  against a real session host and git, with a stub `claude` binary that fakes the TUI and fires the hooks.
+  Markdown, `.claude/` and `backend/` don't. Nor does Markdown only people read: `README.md`,
+  `CONTRIBUTING.md`, the `AGENTS.md`, `CLAUDE.md` and `REVIEW.md` files and `docs/`. Markdown the
+  tests read (`test/`) or the release ships (`src/tools/skill/SKILL.md`) runs AgentK's jobs.
+  Integration tests run against a real session host and git, with a stub `claude` binary that fakes the TUI and fires the hooks.
   A separate `PR title` workflow checks the title with the repo root's `scripts/check-title.sh` and reruns when
   the PR is edited. Changes reach `main` only through PRs, squash-merged once the `CI gate` check (over
   every component's jobs, run or skipped) and the title check pass.

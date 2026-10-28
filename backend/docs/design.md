@@ -358,7 +358,8 @@ counts and timings.
   engine's tests),
   `make lint` (`go vet`, gofmt, golangci-lint, `tsc` on the memory engine and the web UI).
 - The `backend` CI job (in `.github/workflows/ci.yml`) runs on ubuntu-latest and macos-15 when a PR
-  changes `backend/**` (`scripts/ci-scope.sh`), and on every push to `main`. A failure there fails
+  changes `backend/**` other than Markdown only people read (`scripts/ci-scope.sh`; `docs/` counts,
+  since `docs/docs_test.go` checks it), and on every push to `main`. A failure there fails
   the required `CI gate`. It caches Go's build cache and the models.
 - golangci-lint v2 (pinned in CI). `backend/.golangci.yml` lists its choices at its top: the cgo
   build tags, govet's fieldalignment off (it reorders structs for bytes,
