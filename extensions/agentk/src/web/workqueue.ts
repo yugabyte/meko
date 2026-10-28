@@ -64,9 +64,10 @@ export function movedOrder(ids: string[], id: string, to: number): string[] {
 /** The line beside Sync: when it last ran, and what each source came to. */
 export function workSyncText(sync: WorkSync, now = Date.now()): string {
   const source = (name: string, r: WorkSourceResult) => (r.ok ? `${name}: ${r.added ? `${r.added} new` : 'nothing new'}` : `${name}: ${r.error ?? 'failed'}`);
+  if (!sync.sources.github && !sync.sources.slack) return 'Sync is off (Settings › Work queue)';
   return [
     sync.at ? `Synced ${relativeTime(sync.at, now)}` : 'Not synced since AgentK started',
     sync.github && source('GitHub', sync.github),
-    sync.slack ? source('Slack', sync.slack) : !sync.slackAuto && sync.at ? 'Slack: only when you press Sync' : null,
+    sync.slack ? source('Slack', sync.slack) : sync.sources.slack && !sync.slackAuto && sync.at ? 'Slack: only when you press Sync' : null,
   ].filter(Boolean).join(' · ');
 }

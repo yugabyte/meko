@@ -1585,10 +1585,12 @@ export interface WorkSync {
   /** When the last sync ended; null before the first since the server started. */
   at: number | null;
   github: WorkSourceResult | null;
-  /** Null when the last sync left Slack out (a timed one, while Slack isn't synced on the timer). */
+  /** Null when the last sync left Slack out (turned off, or a timed one while Slack isn't synced on the timer). */
   slack: WorkSourceResult | null;
   /** Slack is synced on the timer too: the last Slack sync worked. */
   slackAuto: boolean;
+  /** The sources Settings › Work queue has on; with neither, there's no sync. */
+  sources: { github: boolean; slack: boolean };
 }
 
 /** GET /api/work-items/by-link: an item holding the link, with its session when it has one. */
@@ -1802,7 +1804,16 @@ export interface Settings {
   kiroEnabled: boolean;
   /** `[kiro] trust_tools`: Kiro sessions start with every tool trusted (`--trust-tools=*`), so Kiro runs any tool without asking. */
   kiroTrustTools: boolean;
+  /** `[work_queue] github`: the work queue's sync pulls in the PRs asking for your review (Settings › Work queue). */
+  workQueueGithub: boolean;
+  /** `[work_queue] slack`: the work queue's sync pulls in your Slack Later list. */
+  workQueueSlack: boolean;
+  /** `[work_queue] sync_minutes`: how often it syncs by itself (0 to WORK_SYNC_MINUTES_MAX; 0: only when you press Sync). */
+  workQueueSyncMinutes: number;
 }
+
+/** The longest the work queue's sync interval can be (`Settings.workQueueSyncMinutes`), in minutes: a day. */
+export const WORK_SYNC_MINUTES_MAX = 1440;
 
 /**
  * Where AgentK's Meko key comes from: Meko's Meko Cloud link (`meko`), or the Meko running on this

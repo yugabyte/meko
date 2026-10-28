@@ -96,7 +96,9 @@ idle_days = 14            # an idle worktree no session used for this many days 
 #                            # start and move sessions); on by default, and also in Settings → General
 
 [work_queue]
-# sync_minutes = 15          # how often the work queue syncs by itself (0: only when you press Sync)
+# github = false             # Sync doesn't pull in GitHub review requests (Settings › Work queue); on by default
+# slack = false              # Sync doesn't read your Slack Later list; on by default (both off: no sync)
+# sync_minutes = 15          # how often the work queue syncs by itself (0: only when you press Sync, up to 1440)
 # slack_model = "sonnet"     # the model of the claude -p that reads Slack's Later list through your Slack connector
 # slack_timeout_seconds = 180 # a Slack read that takes longer is stopped (30 to 600)
 # slack_tools = ["mcp__claude_ai_Slack__slack_search_public_and_private", …] # the only tools that read may call

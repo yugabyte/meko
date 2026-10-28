@@ -46,7 +46,9 @@ describe('the work queue page', () => {
     [{}, 'Not synced since AgentK started'],
     [{ at: 0, github: { ok: true, added: 2, error: null }, slack: null }, 'Synced just now · GitHub: 2 new · Slack: only when you press Sync'],
     [{ at: 0, github: { ok: false, added: 0, error: 'gh is signed out' }, slack: { ok: true, added: 0, error: null }, slackAuto: true }, 'Synced just now · GitHub: gh is signed out · Slack: nothing new'],
+    [{ sources: { github: false, slack: false } }, 'Sync is off (Settings › Work queue)'],
   ])('says how the last sync went: %j', (s, want) => {
-    expect(workSyncText({ running: false, at: null, github: null, slack: null, slackAuto: false, ...s, ...(s.at === 0 ? { at: 1000 } : {}) }, 1000)).toBe(want);
+    const base: WorkSync = { running: false, at: null, github: null, slack: null, slackAuto: false, sources: { github: true, slack: true } };
+    expect(workSyncText({ ...base, ...s, ...(s.at === 0 ? { at: 1000 } : {}) }, 1000)).toBe(want);
   });
 });

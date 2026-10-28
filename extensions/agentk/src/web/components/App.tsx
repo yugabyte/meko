@@ -578,7 +578,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
         ) : route.view === 'queue' ? (
           <WorkQueueView
             items={workQueue}
-            sync={state.workSync ?? { running: false, at: null, github: null, slack: null, slackAuto: false }}
+            sync={state.workSync ?? { running: false, at: null, github: null, slack: null, slackAuto: false, sources: { github: true, slack: true } }}
             projects={projects}
             focusId={queueFocus}
             onMenu={openDrawer}
@@ -587,6 +587,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
             onLinkSession={(item) => setModal({ kind: 'link-work', itemId: item.id })}
             onStartSession={startForItem}
             onError={showToast}
+            onSettings={() => setModal({ kind: 'settings', tab: 'work-queue' })}
           />
         ) : currentProject && route.view === 'meko' ? (
           <MekoCallsView

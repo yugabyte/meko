@@ -62,7 +62,11 @@ how many items are open and new.
 ## Sync
 
 **Sync** (`POST /api/work-items/sync`) and a timer every `[work_queue] sync_minutes` (15 by default;
-0 turns it off) add to the bottom of the queue:
+0 turns it off) add to the bottom of the queue, from the sources `[work_queue] github` and `slack` turn
+on (both on by default). All three are in Settings › Work queue, reached from **Sync settings** on the
+queue page too. With both sources off there's no sync: the button is disabled, a pressed Sync is a 409,
+and the timer does nothing (`WorkSync.sources` tells the page). The timer ticks every minute
+(`WorkQueue.tick`) and syncs once the minutes have passed, so a change in Settings applies at once:
 
 - **GitHub:** the open PRs asking for your review (`gh search prs --review-requested=@me --state=open
   --limit 100`, `reviewRequests()` in `github.ts`), titled `Review <owner/name>#<n>: <title>`.

@@ -282,6 +282,7 @@ export class Core extends EventEmitter {
       readSlack: () => readLaterList(this.cfg, join(this.paths.run, 'work-sync')),
       claudeAvailable: () => !!this.harnesses.status(this.cfg).find((h) => h.id === 'claude')?.available,
       githubTitle: async (repo, number) => (await github.issueOrPr(homedir(), repo, number)).title,
+      settings: () => this.cfg.workQueue,
     });
     this.askAgentk = new AskAgentk({
       config: () => this.cfg,
@@ -706,7 +707,7 @@ export class Core extends EventEmitter {
       this.every(INVITE_SYNC_MS, () => this.invites.sync());
       this.every(PIN_PRUNE_MS, () => this.prunePins());
       this.every(STAGED_SWEEP_MS, () => this.sweepStaged());
-      if (this.cfg.workQueue.syncMinutes > 0) this.every(Math.max(1, this.cfg.workQueue.syncMinutes) * 60_000, () => this.workQueue.sync(false));
+      this.every(60_000, () => this.workQueue.tick());
       // Meko normally starts first (it starts AgentK); this covers a boot where it didn't, and an
       // install of Meko while the banner asks for one (with a Meko Cloud link too).
       this.every(LOCAL_MEKO_EVERY_MS, () => (lookForLocalMeko(mekoConfigured(this.cfg), localMeko().state) ? this.refreshMeko() : undefined));

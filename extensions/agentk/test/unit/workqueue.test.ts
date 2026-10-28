@@ -36,12 +36,15 @@ function setup(o: { reviews?: ReviewRequest[]; slack?: SlackLater[] | Error; cla
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token,
              desired, status, stage, created_at) VALUES (?, 'p', ?, ?, 'c', ?, 'main', '/w', 't', ?, ?, 'idle', 'code', 1)`,
       id, id, `Session ${id}`, `ak/${id}`, `tok-${id}`, desired);
-  const state = { reviews: o.reviews ?? [], slack: o.slack ?? ([] as SlackLater[] | Error), slackReads: 0, changes: 0 };
+  const state = { reviews: o.reviews ?? [], slack: o.slack ?? ([] as SlackLater[] | Error), slackReads: 0, changes: 0, reviewReads: 0, settings: { github: true, slack: true, syncMinutes: 15 } };
   const deps: WorkQueueDeps = {
     db,
     changed: () => void state.changes++,
     warn: () => undefined,
-    reviewRequests: async () => state.reviews,
+    reviewRequests: async () => {
+      state.reviewReads++;
+      return state.reviews;
+    },
     readSlack: async () => {
       state.slackReads++;
       if (state.slack instanceof Error) throw state.slack;
@@ -49,6 +52,7 @@ function setup(o: { reviews?: ReviewRequest[]; slack?: SlackLater[] | Error; cla
     },
     claudeAvailable: () => o.claude ?? true,
     githubTitle: async () => o.title ?? 'Title from GitHub',
+    settings: () => state.settings,
   };
   return { db, q: new WorkQueue(deps), session, state };
 }
@@ -190,6 +194,27 @@ describe('syncing the work queue', () => {
     await q.sync(false);
     expect((await q.sync(false)).slack).toBeNull();
     expect(state.slackReads).toBe(4);
+  });
+
+  it('reads only the sources Settings has on, and refuses Sync with none', async () => {
+    const { q, state } = setup({ reviews: [pr(1)] });
+    state.settings = { github: false, slack: true, syncMinutes: 15 };
+    expect(await q.sync(true)).toMatchObject({ github: null, slack: { ok: true }, sources: { github: false, slack: true } });
+    state.settings = { github: true, slack: false, syncMinutes: 15 };
+    expect(await q.sync(true)).toMatchObject({ github: { added: 1 }, slack: null });
+    state.settings = { github: false, slack: false, syncMinutes: 15 };
+    await expect(q.sync(true)).rejects.toThrow(/Sync is off/);
+    expect([state.reviewReads, state.slackReads]).toEqual([1, 1]);
+  });
+
+  it('syncs on the timer once the minutes Settings gives have passed, and never at 0', async () => {
+    const { q, state } = setup();
+    const now = Date.now();
+    await q.tick(now + 14 * 60_000);
+    await q.tick(now + 15 * 60_000 + 1);
+    state.settings = { ...state.settings, syncMinutes: 0 };
+    await q.tick(now + 60 * 60_000);
+    expect(state.reviewReads).toBe(1);
   });
 
   it('says Slack needs Claude Code without running it', async () => {

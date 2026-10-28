@@ -42,6 +42,7 @@ export function WorkQueueView({
   onLinkSession,
   onStartSession,
   onError,
+  onSettings,
 }: {
   items: WorkItem[];
   sync: WorkSync;
@@ -54,6 +55,8 @@ export function WorkQueueView({
   onLinkSession: (item: WorkItem) => void;
   onStartSession: (item: WorkItem) => void;
   onError: (msg: string) => void;
+  /** Opens Settings › Work queue. */
+  onSettings: () => void;
 }) {
   const mobile = useIsMobile();
   const touch = useTouch();
@@ -120,10 +123,18 @@ export function WorkQueueView({
           <button className="btn primary" onClick={onAdd}>
             + Add
           </button>
-          <button className="btn" disabled={syncing || sync.running} onClick={() => void runSync()} title="Pull in GitHub review requests and your Slack Later list">
+          <button
+            className="btn"
+            disabled={syncing || sync.running || (!sync.sources.github && !sync.sources.slack)}
+            onClick={() => void runSync()}
+            title="Pull in GitHub review requests and your Slack Later list"
+          >
             {syncing || sync.running ? <Busy label="Syncing" /> : 'Sync'}
           </button>
           <span className="muted small wq-sync">{workSyncText(sync)}</span>
+          <button className="btn small" onClick={onSettings}>
+            Sync settings
+          </button>
         </div>
       </header>
       <div className="home-scroll wq-scroll">

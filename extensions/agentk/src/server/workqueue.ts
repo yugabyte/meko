@@ -30,6 +30,8 @@ export interface WorkQueueDeps {
   claudeAvailable: () => boolean;
   /** A GitHub PR's or issue's title, for an item added with a link and no title. */
   githubTitle: (repo: string, number: number) => Promise<string>;
+  /** `[work_queue]` as it is now: the sources the sync reads and how often it runs by itself. */
+  settings: () => { github: boolean; slack: boolean; syncMinutes: number };
 }
 
 interface ItemRow {
@@ -97,6 +99,8 @@ function firstLine(s: string, fallback: string): string {
 
 export class WorkQueue {
   private syncing = false;
+  /** When the timer last synced (it starts counting at startup). */
+  private lastAuto = Date.now();
   private last: { at: number | null; github: WorkSourceResult | null; slack: WorkSourceResult | null } = { at: null, github: null, slack: null };
 
   constructor(private readonly deps: WorkQueueDeps) {}
@@ -139,7 +143,8 @@ export class WorkQueue {
   }
 
   syncState(): WorkSync {
-    return { running: this.syncing, ...this.last, slackAuto: kvGet(this.db, SLACK_AUTO_KEY) === '1' };
+    const { github, slack } = this.deps.settings();
+    return { running: this.syncing, ...this.last, slackAuto: kvGet(this.db, SLACK_AUTO_KEY) === '1', sources: { github, slack } };
   }
 
   private writeLinks(id: string, links: WorkLink[]): void {
@@ -332,6 +337,11 @@ export class WorkQueue {
    * timer while the last Slack read worked: each one is a model call. Each source fails on its own.
    */
   async sync(manual: boolean): Promise<WorkSync> {
+    const on = this.deps.settings();
+    if (!on.github && !on.slack) {
+      if (manual) throw new HttpError(409, 'Sync is off: turn on GitHub or Slack in Settings › Work queue.');
+      return this.syncState();
+    }
     if (this.syncing) {
       if (manual) throw new HttpError(409, 'The work queue is syncing already.');
       return this.syncState();
@@ -347,8 +357,8 @@ export class WorkQueue {
           return { ok: false, added: 0, error: errMsg(e) };
         }
       };
-      const github = await attempt('GitHub', () => this.syncGithub());
-      const slackOn = manual || kvGet(this.db, SLACK_AUTO_KEY) === '1';
+      const github = on.github ? await attempt('GitHub', () => this.syncGithub()) : null;
+      const slackOn = on.slack && (manual || kvGet(this.db, SLACK_AUTO_KEY) === '1');
       const slack = slackOn ? await attempt('Slack', () => this.syncSlack()) : null;
       if (slack?.ok && manual) kvSet(this.db, SLACK_AUTO_KEY, '1');
       if (slack && !slack.ok) kvDelete(this.db, SLACK_AUTO_KEY);
@@ -358,5 +368,13 @@ export class WorkQueue {
       this.deps.changed();
     }
     return this.syncState();
+  }
+
+  /** The timer's tick (every minute): a sync once `[work_queue] sync_minutes` have passed since the last, so a change in Settings applies at once. */
+  async tick(now = Date.now()): Promise<void> {
+    const minutes = this.deps.settings().syncMinutes;
+    if (minutes <= 0 || now - this.lastAuto < minutes * 60_000) return;
+    this.lastAuto = now;
+    await this.sync(false);
   }
 }
