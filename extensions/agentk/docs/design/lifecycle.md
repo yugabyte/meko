@@ -178,11 +178,12 @@ sent, withdrawn or dropped.
   end during the look at the PR). The others don't: CI failing, changes requested, required approvals
   missing (only on repos that require them, since people's approvals can take days), merge conflicts,
   a branch behind its base, a draft, a PR that isn't open, unpushed or uncommitted work between turns,
-  a Needs you with no turn behind it (a parked recovery), findings left mid-address by a Claude
-  that exited, and GitHub's own `BLOCKED` (`mergeStateStatus`) when nothing else explains it: *GitHub's
-  branch rules block the merge*, a rule AgentK doesn't see (conversations to resolve, signed commits, a
-  required check that never runs). On a head AgentK first saw less than 2 minutes ago, that `BLOCKED`
-  clears by itself instead: *GitHub's required checks haven't reported on the latest push yet*. With only
+  a Needs you with no turn behind it (a parked recovery), and findings left mid-address by a Claude
+  that exited. GitHub's own `BLOCKED` (`mergeStateStatus`) counts only when nothing else blocks and
+  only on a head AgentK first saw less than 2 minutes ago, as the first kind: *GitHub's required
+  checks haven't reported on the latest push yet*. After that it's left to GitHub, since a PR not yet
+  in a required merge queue reads `BLOCKED` too (`gh pr merge` is what queues it), and so does any PR
+  for a moment after an edit reruns a check. With only
   the first kind left (`Session.mergeQueueable`), the gate reads **Merge when ready** and a press
   queues the merge; the reasons line reads *Merges when these clear*. While it waits, the PR is
   checked at every 15-second pass instead of every 45 seconds. A queued merge also waits for CI to
@@ -227,10 +228,11 @@ It runs on the [queued gates](#queued-gates):
   ready, a blocker that doesn't clear by itself doesn't drop it (`takeQueuedMerge`): AgentK works on
   failing CI and merge conflicts as it always does (their watchers say when they hand over), and for
   every other one (a held review, changes requested, missing approvals, a branch behind its base,
-  GitHub's branch rules, unpushed work between turns) you're notified once per new set (`autoRunWaits`; a question in the
+  unpushed work between turns) you're notified once per new set (`autoRunWaits`; a question in the
   terminal had its own Needs you notification), and while such a blocker is there the PR is looked
   at every 45 seconds rather than at every 15-second pass (approvals can take days). It merges at the first look that finds
-  nothing blocking; if GitHub still refuses the merge, Run to merge stops, so the merge isn't asked for again at every pass. After AgentK's findings
+  nothing blocking; if GitHub refuses the merge (a ruleset, say, which the blockers don't show), Run to
+  merge stops, so the merge isn't asked for again at every pass. After AgentK's findings
   are addressed it doesn't ask for another review round, as Merge when ready doesn't. The pill reads
   *✓ Run to merge: waiting on …*. The gates it passes are logged as AgentK's (`moved_by = 'auto'`).
 - **Notifications.** It notifies only when it's done (*Merged*, once the PR merges, here or on

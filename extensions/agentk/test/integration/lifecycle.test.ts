@@ -286,10 +286,14 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(await blockersFor({ mergeable: 'CONFLICTING' })).toEqual(['The branch has merge conflicts.']);
     expect(await blockersFor({ mergeStateStatus: 'BEHIND' })).toEqual(['The branch is behind its base.']);
     expect(await blockersFor({ mergeStateStatus: 'DRAFT' })).toEqual(['The PR is a draft.']);
-    // GitHub's own BLOCKED counts only when nothing else explains it.
-    expect(await blockersFor({ mergeStateStatus: 'BLOCKED' })).toEqual(["GitHub's branch rules block the merge."]);
+    // GitHub's own BLOCKED waits on a new head when nothing else blocks, and is left to GitHub after
+    // (a required merge queue reads BLOCKED until `gh pr merge` queues the PR).
+    const blocked = { ...approved, mergeStateStatus: 'BLOCKED' };
+    expect(env.core.lifecycle.mergeInfo(env.core.sessions.row(s.id), blocked, 'agentk-people', { newHead: true })).toEqual({
+      canMerge: false, queueable: true, blockers: ["GitHub's required checks haven't reported on the latest push yet."], hard: [],
+    });
     expect(await blockersFor({ mergeStateStatus: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED' })).toEqual(['Required approvals are missing.']);
-    expect(await blockersFor({ mergeStateStatus: 'BLOCKED', statusCheckRollup: [{ status: 'IN_PROGRESS' }] })).toEqual(['CI is still running.']);
+    expect(await blockersFor({ mergeStateStatus: 'BLOCKED' })).toEqual([]);
 
     // A commit Claude made but didn't push.
     const pushed = tip(env.core.sessions.row(s.id).worktree_path);
@@ -1635,49 +1639,27 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(env.core.lifecycle.mergeInfo(row(), approved, 'agentk-people').queueable).toBe(false);
   });
 
-  it('holds a queued merge until CI shows up on a new head, then takes no checks as no CI', async () => {
+  // A fresh push: GitHub lists no checks on it yet, or only a fast check from another workflow that
+  // passed before CI's own jobs were listed (PRs #316 and #318, where GitHub refused the merge).
+  it.each([
+    ['no checks', []],
+    ['only a passed check', [{ status: 'COMPLETED', conclusion: 'SUCCESS' }]],
+  ] as [string, PrStatus['statusCheckRollup']][])('holds a queued merge until CI shows up on a new head with %s, then takes it as no CI', async (_what, rollup) => {
     freshHeads = true;
     const s = await inReview('No checks yet');
     const approved = gh.status!;
     gh.status = { ...approved, statusCheckRollup: [{ status: 'IN_PROGRESS' }] };
     await env.core.sessions.action(s.id, 'merge');
-    // A fresh push: GitHub lists no checks on it yet.
     commitIn(env.core.sessions.row(s.id).worktree_path);
-    gh.status = { ...approved, statusCheckRollup: [] };
+    gh.status = { ...approved, statusCheckRollup: rollup };
     await poll(s.id);
     expect(gh.merges).toEqual([]);
     expect(env.core.sessions.get(s.id)).toMatchObject({ queued: 'merge', mergeBlockers: ["CI hasn't started on the latest push yet."] });
-    // Still no checks two minutes after the head first showed up: the repo runs none on it.
+    // Two minutes after the head first showed up, still nothing running: the repo runs no more CI on it.
     const seen = headSeen(env);
     seen.set(s.id, { ...seen.get(s.id)!, at: Date.now() - 3 * 60 * 1000 });
     await poll(s.id);
     expect(gh.merges).toEqual(['https://github.com/acme/demo/pull/7']);
-  });
-
-  // PRs #316 and #318: a 6-second check from another workflow passed before CI's own jobs were listed.
-  it('holds a queued merge on a fresh push while only a fast check has passed, so Run to merge stays on', async () => {
-    freshHeads = true;
-    const s = await inReview('Fast check first');
-    const green = gh.status!;
-    commitIn(env.core.sessions.row(s.id).worktree_path);
-    gh.status = { ...green, mergeStateStatus: 'BLOCKED' };
-    await env.core.sessions.edit(s.id, { autoRun: true });
-    expect(gh.merges).toEqual([]);
-    expect(env.core.sessions.get(s.id)).toMatchObject({ autoRun: true, queued: 'merge', mergeQueueable: true, mergeBlockers: ["CI hasn't started on the latest push yet."] });
-    // Without a queued merge, GitHub's BLOCKED on the new head is what says the checks are still to come.
-    expect(env.core.lifecycle.mergeInfo({ ...env.core.sessions.row(s.id), queued_gate: null }, gh.status, 'agentk-people', { newHead: true })).toEqual({
-      canMerge: false, queueable: true, blockers: ["GitHub's required checks haven't reported on the latest push yet."], hard: [],
-    });
-    gh.status = { ...green, statusCheckRollup: [...green.statusCheckRollup!, { status: 'IN_PROGRESS' }], mergeStateStatus: 'BLOCKED' };
-    await poll(s.id);
-    expect(env.core.sessions.get(s.id)).toMatchObject({ autoRun: true, queued: 'merge', mergeBlockers: ['CI is still running.'] });
-    // CI passed: the merge goes once the head is past the hold.
-    gh.status = green;
-    const seen = headSeen(env);
-    seen.set(s.id, { ...seen.get(s.id)!, at: Date.now() - 3 * 60 * 1000 });
-    await poll(s.id);
-    expect(gh.merges).toEqual(['https://github.com/acme/demo/pull/7']);
-    expect(events(s.id, 'auto-run')).not.toContain('Run to merge stopped: GitHub refused the merge');
   });
 
   it('queues Merge & Close while CI runs, and merges once it passes', async () => {
@@ -1704,7 +1686,6 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
   it.each([
     ['CI fails', (st: PrStatus): PrStatus => ({ ...st, statusCheckRollup: [failing()] }), 'CI is failing.'],
     ['a review is held', (st: PrStatus): PrStatus => ({ ...st, reviews: [...st.reviews, review('h1', 'alice', 'Add a test.')] }), 'Send the held review from alice to AgentK or dismiss it.'],
-    ["GitHub's branch rules block it", (st: PrStatus): PrStatus => ({ ...st, mergeStateStatus: 'BLOCKED' }), "GitHub's branch rules block the merge."],
   ])('drops a queued merge when %s, and tells the user', async (_what, block, blocker) => {
     const s = await inReview('Blocked later');
     const notify = vi.spyOn(env.core.sessions, 'notifyUser');
