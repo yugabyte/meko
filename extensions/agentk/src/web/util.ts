@@ -270,12 +270,14 @@ export function slugify(s: string): string {
 }
 
 /**
- * A datapack's page in the Meko web app: Meko Cloud's (or another known web app's), else, while
- * AgentK uses the Meko on this computer, that Meko's own page on this origin. Null otherwise.
+ * A datapack's page in the Meko web app. While AgentK uses the Meko on this computer, that Meko's
+ * own page on this origin, root-absolute: a web URL set for it can only be on its own (loopback)
+ * origin, which a browser using remote access can't open. Else the known web app's (Meko Cloud's);
+ * null when there's none.
  */
 export function mekoDatapackUrl(meko: Pick<MekoStatus, 'webUrl' | 'source'>, datapackId: string): string | null {
-  if (meko.webUrl) return `${meko.webUrl}${mekoDatapackPath(datapackId)}`;
-  return meko.source === 'local' ? mekoDatapackPath(datapackId) : null;
+  if (meko.source === 'local') return mekoDatapackPath(datapackId);
+  return meko.webUrl ? `${meko.webUrl}${mekoDatapackPath(datapackId)}` : null;
 }
 
 /** An http(s) URL's host, lowercased; null for anything else (never a `javascript:` link). */

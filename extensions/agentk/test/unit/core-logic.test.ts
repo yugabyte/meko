@@ -137,10 +137,11 @@ describe('config and db', () => {
     const id = 'eb5ba952-643a-4610-a662-a54a39c82a90';
     const cloud = `https://cloud.mekodata.ai/datapacks/${id}`;
     expect(mekoDatapackUrl({ webUrl: 'https://cloud.mekodata.ai', source: 'meko' }, id)).toBe(cloud);
-    // A known web app wins over the Meko on this computer's own page.
-    expect(mekoDatapackUrl({ webUrl: 'https://cloud.mekodata.ai', source: 'local' }, id)).toBe(cloud);
-    // The Meko on this computer: its own page, on the origin that serves AgentK.
+    expect(mekoDatapackUrl({ webUrl: 'https://cloud.mekodata.ai', source: 'config' }, id)).toBe(cloud);
+    // The Meko on this computer: its own page, on the origin that serves AgentK, even with a web URL
+    // set for it (only its own loopback origin is kept, which remote access can't open).
     expect(mekoDatapackUrl({ webUrl: null, source: 'local' }, id)).toBe(`/datapacks/${id}`);
+    expect(mekoDatapackUrl({ webUrl: 'http://127.0.0.1:7778', source: 'local' }, id)).toBe(`/datapacks/${id}`);
     expect(mekoDatapackUrl({ webUrl: null, source: 'local' }, 'a/b c')).toBe('/datapacks/a%2Fb%20c');
     for (const source of ['meko', 'config', 'env', 'claude', null] as const) {
       expect(mekoDatapackUrl({ webUrl: null, source }, id)).toBeNull();
@@ -1080,6 +1081,11 @@ describe('Meko credentials', () => {
       expect(mekoWebUrlWarning(cfg)).toBe(
         "sharing is off: the Meko on this computer (127.0.0.1:7778) doesn't share datapacks. Link it to Meko Cloud in Meko's web UI, under Settings › Meko Cloud",
       );
+      // An API URL on its own origin (kept before Meko owns the link) turns sharing on: nothing to say.
+      cfg.meko.apiUrl = 'http://127.0.0.1:7778/api/v1';
+      expect(resolveMekoApiUrl(cfg)).toBe('http://127.0.0.1:7778/api/v1');
+      expect(mekoWebUrlWarning(cfg)).toBeNull();
+      cfg.meko.apiUrl = '';
     } finally {
       reader.clear();
     }
