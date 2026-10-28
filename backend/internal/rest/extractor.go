@@ -42,14 +42,15 @@ func (a *api) setExtractor(c echo.Context) error {
 	return a.extractorStatus(c)
 }
 
-// runExtractor is POST /settings/memory-extractor/run: a run now, and what it did.
+// runExtractor is POST /settings/memory-extractor/run: a run now, and what it did. Calls that failed
+// are in the reply (failed, last_error); only what stops the whole run is an error.
 func (a *api) runExtractor(c echo.Context) error {
 	run, err := a.Service.ExtractPending(ctx(c))
 	if errors.Is(err, memory.ErrExtractorOff) {
 		return envelope.Fail(c, http.StatusConflict, "EXTRACTOR_OFF", err.Error())
 	}
 	if err != nil {
-		return envelope.Fail(c, http.StatusBadGateway, "EXTRACTION_FAILED", err.Error())
+		return serviceError(c, err)
 	}
 	return envelope.OK(c, run)
 }

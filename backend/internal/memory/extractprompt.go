@@ -8,9 +8,9 @@ import (
 	"github.com/yugabyte/meko/backend/internal/store"
 )
 
-// The extraction prompt: Meko Cloud's additive extraction (meko-mem0 2.0's ADDITIVE_EXTRACTION_PROMPT),
-// cut to the rules that decide what it keeps, so each call's fixed cost stays small. As in Cloud,
-// facts come from the user's messages only; the assistant's replies are context.
+// The extraction prompt, written for Meko and kept short so each call's fixed cost stays small. It
+// matches Meko Cloud's behavior: facts come from the user's messages only (the assistant's replies
+// are context), and it only adds.
 const extractBase = `You extract long-term memories from a conversation between a user and an AI assistant.
 
 Output JSON only: {"memory": [{"text": "...", "turn": N}]}, where turn is the number of the new turn

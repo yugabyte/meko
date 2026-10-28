@@ -65,6 +65,7 @@ type column struct {
 	keys []string
 	out  string
 	kind colKind
+	def  string // an absent text column's value, when not "", and left out of the payload read back
 }
 
 // table maps one Kind to SQL. Every table also has datapack_id, payload (the rest of mem0's
@@ -116,6 +117,8 @@ var tables = map[Kind]*table{
 		{name: "text", keys: []string{"data"}, out: "data"},
 		{name: "text_lemmatized", keys: []string{"textLemmatized", "text_lemmatized"}, out: "textLemmatized"},
 		{name: "hash", keys: []string{"hash"}, out: "hash"},
+		// Provenance: "add" (memory_add, the web UI), or "extract" (the memory extractor).
+		{name: "source", keys: []string{"meko_source"}, out: "meko_source", def: "add"},
 		// A caller's metadata.created_at (a backdated memory) wins over mem0's own createdAt.
 		{name: "created_at", keys: []string{"created_at", "createdAt"}, out: "createdAt", kind: timeCol},
 		{name: "updated_at", keys: []string{"updatedAt", "updated_at"}, out: "updatedAt", kind: timeCol},
@@ -188,7 +191,7 @@ func (t *table) split(p map[string]any) (row, error) {
 		var val any
 		switch c.kind {
 		case textCol:
-			val = ""
+			val = c.def
 		case jsonCol:
 			val = "[]"
 		}
@@ -284,6 +287,7 @@ func (t *table) scan(rows *sql.Rows, extra ...any) (Record, error) {
 			if ts, err := time.Parse(timeLayout, v); err == nil {
 				p[c.out] = ts.UTC().Format(jsTime)
 			}
+		case v == c.def && c.def != "": // a default isn't added to the payload: it stays as callers wrote it
 		case v != "" || c.name == "text":
 			p[c.out] = v
 		}

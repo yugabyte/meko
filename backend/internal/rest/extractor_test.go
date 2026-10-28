@@ -89,11 +89,11 @@ func TestMemoryExtractor(t *testing.T) {
 	}
 	turn := func(seed, input string) string {
 		t.Helper()
-		m, err := e.Service.AddMessage(ctx, memory.AddMessage{ConversationID: conv.ID, AgentID: "claude_code:x",
+		m, aerr := e.Service.AddMessage(ctx, memory.AddMessage{ConversationID: conv.ID, AgentID: "claude_code:x",
 			DatapackID: e.DatapackID, Input: input, Output: "Noted, I'll keep that in mind for this project.",
 			Seed: seed})
-		if err != nil {
-			t.Fatal(err)
+		if aerr != nil {
+			t.Fatal(aerr)
 		}
 		return m.MessageID
 	}
@@ -176,13 +176,39 @@ func TestMemoryExtractor(t *testing.T) {
 		t.Errorf("a duplicate was saved: %v", run)
 	}
 
-	// A failed call keeps the turn queued and says why.
+	// A failed call keeps its turns queued and says why, and the run goes on to the next conversation.
 	turn("5", "The release train leaves every Tuesday at 10am Pacific.")
-	h.answer = func(string) ([]memory.ExtractedFact, error) { return nil, errors.New("not signed in") }
-	wantErr(t, e, "POST", settings+"/run", nil, 502, "EXTRACTION_FAILED")
+	other, err := e.Service.CreateConversation(ctx, memory.CreateConversation{AgentID: "claude_code:x",
+		DatapackID: e.DatapackID, SessionID: "s2", Title: "other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Service.AddMessage(ctx, memory.AddMessage{ConversationID: other.ID, AgentID: "claude_code:x",
+		DatapackID: e.DatapackID, Input: "Our staging database is called orchid.", Output: "Noted.",
+		Seed: "o"}); err != nil {
+		t.Fatal(err)
+	}
+	h.answer = func(input string) ([]memory.ExtractedFact, error) {
+		if strings.Contains(input, "release train") {
+			return nil, errors.New("not signed in")
+		}
+		return []memory.ExtractedFact{{Text: "The staging database is called orchid.", Turn: 0}}, nil
+	}
+	run = obj(okData(t, e, "POST", settings+"/run", nil, 200))
+	if num(run["failed"]) != 1 || num(run["memories"]) != 1 || !strings.Contains(str(run["last_error"]), "not signed in") {
+		t.Errorf("a run with one failing conversation %v", run)
+	}
 	if st := obj(okData(t, e, "GET", settings, nil, 200)); num(st["queued"]) != 1 ||
 		!strings.Contains(str(st["last_error"]), "not signed in") {
 		t.Errorf("after a failure %v", st)
+	}
+	// A turn that keeps failing leaves the queue after its fifth attempt.
+	for range 4 {
+		okData(t, e, "POST", settings+"/run", nil, 200)
+	}
+	okData(t, e, "POST", settings+"/run", nil, 200)
+	if st := obj(okData(t, e, "GET", settings, nil, 200)); num(st["queued"]) != 0 {
+		t.Errorf("a turn that kept failing is still queued: %v", st)
 	}
 
 	// A datapack's profile and instructions reach the prompt; an opted-out one queues nothing.
@@ -190,6 +216,7 @@ func TestMemoryExtractor(t *testing.T) {
 	wantErr(t, e, "PATCH", dp, map[string]any{"profile": "poetry"}, 400, "VALIDATION_ERROR")
 	okData(t, e, "PATCH", dp, map[string]any{"profile": "coding", "instructions": "Keep ticket keys."}, 200)
 	h.answer = nil
+	turn("7", "Every PR title starts with its ticket key, such as MEKO-640.")
 	okData(t, e, "POST", settings+"/run", nil, 200)
 	if system, _, _ = h.last(); !strings.Contains(system, "coding conversations") ||
 		!strings.Contains(system, "Keep ticket keys.") {
