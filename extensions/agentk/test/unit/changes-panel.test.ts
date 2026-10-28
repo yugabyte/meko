@@ -45,13 +45,13 @@ describe('a picked range', () => {
     picked: { side: 'new', line: 1, endLine: 3 }, imageUrl: () => '', renderAfter: () => null,
   }));
 
-  it("marks the range's rows on its side only, and numbers every row for a drag to find", () => {
+  it("marks the range's rows on its side only, and its last line, and numbers every row for a drag to find", () => {
     expect(html.match(/<tr [^>]*>/g)).toEqual([
       '<tr class="dl-hunk" data-i="0">',
       '<tr class="dl-ctx picked" data-i="1">',
       '<tr class="dl-del" data-i="2">',
       '<tr class="dl-add picked" data-i="3">',
-      '<tr class="dl-add picked" data-i="4">',
+      '<tr class="dl-add picked pick-end" data-i="4">',
     ]);
   });
 });
