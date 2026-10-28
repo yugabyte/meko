@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -389,16 +390,68 @@ func (e Entry) run(root string, args []string, d time.Duration, env []string, st
 	return nil
 }
 
-// Status runs `<command> status` quietly and reports whether it succeeded, with its first line.
+// StatusTimeout bounds each `<command> status` that meko status runs (Registry.Statuses): a running
+// extension answers in well under a second, and one that doesn't answer in time is shown as such.
+var StatusTimeout = 3 * time.Second
+
+// statusPipeWait is how long a status's output is read after it exits or is killed, at most.
+const statusPipeWait = time.Second
+
+// StatusResult is what `<command> status` said: whether it succeeded, its first line, and whether
+// it was killed for taking longer than it was given (then Running is false and Line is whatever it
+// printed by then).
+type StatusResult struct {
+	Running  bool
+	Line     string
+	TimedOut bool
+}
+
+// Status runs `<command> status` quietly and reports whether it succeeded, with its first line. It
+// waits up to 15 s: an update decides from it whether to stop the extension, and a slow one taken
+// for stopped would be switched while it runs.
 func (e Entry) Status(root string) (bool, string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	r := e.StatusWithin(context.Background(), root, 15*time.Second)
+	return r.Running, r.Line
+}
+
+// StatusWithin runs `<command> status` quietly, bounded by d, or until ctx is done. A process the
+// status started that still holds its output after the status exits (the launchers exec Node, so
+// it's one Node started) isn't killed, and isn't waited for more than statusPipeWait: a status
+// prints a few lines, and has printed them by the time it exits. What the exit code says stands
+// when the status exited by itself, even if waiting for its output ran past d.
+func (e Entry) StatusWithin(ctx context.Context, root string, d time.Duration) StatusResult {
+	ctx, cancel := context.WithTimeout(ctx, d)
 	defer cancel()
 	var out bytes.Buffer
 	cmd := exec.CommandContext(ctx, e.Command, "status") //nolint:gosec // G204: see run
 	cmd.Stdout, cmd.Stderr, cmd.Env = &out, &out, CommandEnv(root, e.Command)
-	err := cmd.Run()
+	cmd.WaitDelay = min(PipeWait, statusPipeWait)
+	_ = cmd.Run()
 	first, _, _ := bytes.Cut(bytes.TrimSpace(out.Bytes()), []byte("\n"))
-	return err == nil, string(first)
+	ps := cmd.ProcessState
+	exited := ps != nil && ps.Exited()
+	return StatusResult{Running: exited && ps.Success(), Line: string(first), TimedOut: !exited && ctx.Err() != nil}
+}
+
+// Statuses starts `<command> status` for every registered extension at once, each bounded by d, and
+// returns a function that waits for them all and gives each one's result by name. Canceling ctx
+// stops the ones still running.
+func (r *Registry) Statuses(ctx context.Context, root string, d time.Duration) func() map[string]StatusResult {
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	out := make(map[string]StatusResult, len(r.Entries))
+	for name, e := range r.Entries {
+		wg.Go(func() {
+			res := e.StatusWithin(ctx, root, d)
+			mu.Lock()
+			out[name] = res
+			mu.Unlock()
+		})
+	}
+	return func() map[string]StatusResult {
+		wg.Wait()
+		return out
+	}
 }
 
 // Find looks for the extension's program by its name, then by its old ones (FindCommand), then

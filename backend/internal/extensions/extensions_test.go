@@ -2,6 +2,7 @@ package extensions
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -198,6 +199,105 @@ func TestRunReturnsWhenAChildHoldsTheOutput(t *testing.T) {
 	}
 	if took := time.Since(begun); took > 3*time.Second {
 		t.Errorf("took %s: the child's pipe held it", took)
+	}
+}
+
+// writeScript writes an executable shell script named name into dir and returns its path.
+func writeScript(t *testing.T, dir, name, body string) string {
+	t.Helper()
+	p := filepath.Join(dir, name)
+	if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body), 0o700); err != nil { //nolint:gosec // G306: test script
+		t.Fatal(err)
+	}
+	return p
+}
+
+// A status's exit code says whether the extension runs; its first line comes back either way.
+func TestStatusWithinReportsRunningAndStopped(t *testing.T) {
+	dir := t.TempDir()
+	up := Entry{Command: writeScript(t, dir, "up", "echo 'Up 1.0'\necho more\n")}
+	if r := up.StatusWithin(context.Background(), dir, time.Second); !r.Running || r.TimedOut || r.Line != "Up 1.0" {
+		t.Errorf("running: %+v", r)
+	}
+	down := Entry{Command: writeScript(t, dir, "down", "echo 'Down 1.0'\nexit 3\n")}
+	if r := down.StatusWithin(context.Background(), dir, time.Second); r.Running || r.TimedOut || r.Line != "Down 1.0" {
+		t.Errorf("stopped: %+v", r)
+	}
+}
+
+// A status that doesn't answer in time is reported as such, without waiting for the process it
+// started that still holds its output (the timeout kills the status, not what it started).
+func TestStatusWithinTimesOutPastAHungChild(t *testing.T) {
+	dir := t.TempDir()
+	e := Entry{Command: writeScript(t, dir, "hung", "echo 'Hung 1.0'\nsleep 30\n")}
+	begun := time.Now()
+	r := e.StatusWithin(context.Background(), dir, 300*time.Millisecond)
+	if !r.TimedOut || r.Running || r.Line != "Hung 1.0" {
+		t.Errorf("hung: %+v", r)
+	}
+	if took := time.Since(begun); took > 300*time.Millisecond+statusPipeWait+time.Second {
+		t.Errorf("took %s", took)
+	}
+}
+
+// A status that answers and exits while a process it started still holds its output is running,
+// and comes back once statusPipeWait is up.
+func TestStatusWithinReturnsWhenAChildHoldsTheOutput(t *testing.T) {
+	dir := t.TempDir()
+	e := Entry{Command: writeScript(t, dir, "child", "echo 'Child 1.0'\nsleep 30 &\nexit 0\n")}
+	begun := time.Now()
+	if r := e.StatusWithin(context.Background(), dir, 10*time.Second); !r.Running || r.TimedOut || r.Line != "Child 1.0" {
+		t.Errorf("child: %+v", r)
+	}
+	if took := time.Since(begun); took > statusPipeWait+2*time.Second {
+		t.Errorf("took %s: the child's pipe held it", took)
+	}
+}
+
+// A status that exits by itself just before its deadline, while a process it started holds its
+// output past the deadline, is still what its exit code says: it wasn't killed.
+func TestStatusWithinTrustsAnExitNearTheDeadline(t *testing.T) {
+	dir := t.TempDir()
+	e := Entry{Command: writeScript(t, dir, "late", "echo 'Late 1.0'\nsleep 30 &\nsleep 0.3\nexit 0\n")}
+	r := e.StatusWithin(context.Background(), dir, 500*time.Millisecond)
+	if !r.Running || r.TimedOut || r.Line != "Late 1.0" {
+		t.Errorf("late: %+v", r)
+	}
+}
+
+// Canceling Statuses' context stops the checks still running.
+func TestStatusesStopWhenCancelled(t *testing.T) {
+	dir := t.TempDir()
+	r := &Registry{Entries: map[string]Entry{"hung": {Command: writeScript(t, dir, "hung", "exec sleep 30\n")}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	results := r.Statuses(ctx, dir, time.Minute)
+	begun := time.Now()
+	cancel()
+	if got := results()["hung"]; got.Running {
+		t.Errorf("hung: %+v", got)
+	}
+	if took := time.Since(begun); took > statusPipeWait+2*time.Second {
+		t.Errorf("took %s after the cancel", took)
+	}
+}
+
+// Statuses runs every extension's status at once, and gives each result under its own name.
+func TestStatusesRunAtOnce(t *testing.T) {
+	dir := t.TempDir()
+	r := &Registry{Entries: map[string]Entry{}}
+	for _, n := range []string{"a", "b", "c"} {
+		r.Entries[n] = Entry{Command: writeScript(t, dir, n, "sleep 1\necho "+n+"\n[ "+n+" = b ] && exit 3\nexit 0\n")}
+	}
+	begun := time.Now()
+	got := r.Statuses(context.Background(), dir, 5*time.Second)()
+	if took := time.Since(begun); took > 2500*time.Millisecond {
+		t.Errorf("took %s: they ran one after another", took)
+	}
+	want := map[string]StatusResult{"a": {Running: true, Line: "a"}, "b": {Line: "b"}, "c": {Running: true, Line: "c"}}
+	for n, w := range want {
+		if got[n] != w {
+			t.Errorf("%s: %+v, want %+v", n, got[n], w)
+		}
 	}
 }
 

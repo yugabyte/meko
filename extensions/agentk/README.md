@@ -329,7 +329,7 @@ Design: [`docs/design.md`](docs/design.md), an index with one file per area unde
 | Command | What it does |
 |---|---|
 | `agentk ui` | Open AgentK in your browser through Meko (`open` on macOS, `xdg-open` on Linux); with no display to open it on, such as over SSH, it prints the URL |
-| `agentk status` | Services, the URL Meko serves it at, sessions, and whether the server answers |
+| `agentk status` | Services, the URL Meko serves it at, sessions, and whether the server answers; exits 3 when no server runs this home |
 | `agentk stop` / `start` | Stop the server and the session host, ending every session, and start them again (sessions resume). The services also start again at the next login |
 | `agentk restart` | Restart the web server only (sessions keep running), and wait until it answers; Meko runs it after installing an update |
 | `agentk logs -f` | Follow the server log (`logs/server.log` in AgentK's home) |

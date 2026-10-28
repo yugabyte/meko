@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -193,12 +194,23 @@ func runStatus(l paths.Layout, o statusOptions, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, string(b))
 		case o.verbose:
 			fmt.Fprintf(stdout, "Meko isn't running (data in %s)\n", l.Root)
-			printSetup(l, stdout)
+			exts, stop := extensionStatuses(l.Root)
+			defer stop()
+			printSetup(l, exts, stdout)
 		default:
 			newReport(stdout).headline(stepFail, fmt.Sprintf("Meko isn't running (data in %s)", l.Root))
 			fmt.Fprintln(stdout, "  Start it: meko start")
 		}
 		return exitNotRunning
+	}
+	// The extensions' own status commands run while the server is asked, and the rows before theirs
+	// are printed: each takes a Node start or more, and one that hangs is cut off at its own bound.
+	// Returning early (the server didn't answer) stops the ones still running rather than leave them.
+	var exts func() extensionResults
+	if !o.json {
+		var stop func()
+		exts, stop = extensionStatuses(l.Root)
+		defer stop()
 	}
 	c, err := newClient(l)
 	if err != nil {
@@ -219,16 +231,16 @@ func runStatus(l paths.Layout, o statusOptions, stdout, stderr io.Writer) int {
 		b, _ = json.Marshal(m)
 		fmt.Fprintln(stdout, string(b))
 	case o.verbose:
-		printStatusVerbose(l, st, stdout)
+		printStatusVerbose(l, st, exts, stdout)
 	default:
-		printStatusShort(l, st, stdout)
+		printStatusShort(l, st, exts, stdout)
 	}
 	return exitOK
 }
 
 // printStatusShort is status's checklist: the memory engine, the service, updates, the Meko Cloud
 // link and the extensions, each a row, then the links.
-func printStatusShort(l paths.Layout, st server.StatusReply, stdout io.Writer) {
+func printStatusShort(l paths.Layout, st server.StatusReply, exts func() extensionResults, stdout io.Writer) {
 	r := newReport(stdout)
 	r.headline(stepOK, fmt.Sprintf("Meko %s is running (pid %d, up %s)", st.Version, st.PID,
 		(time.Duration(st.UptimeSeconds)*time.Second).String()))
@@ -265,17 +277,20 @@ func printStatusShort(l paths.Layout, st server.StatusReply, stdout io.Writer) {
 	case strings.HasPrefix(cl, "can't"):
 		r.step(stepWarn, "Meko Cloud", cl)
 	}
-	if reg, err := extensions.Load(l.Root); err != nil {
-		r.step(stepWarn, "Extensions", "can't read them: "+err.Error())
+	if res := exts(); res.err != nil {
+		r.step(stepWarn, "Extensions", "can't read them: "+res.err.Error())
 	} else {
-		for _, n := range reg.Names() {
-			ok, line := reg.Entries[n].Status(l.Root)
+		for _, n := range res.names {
+			s := res.status[n]
 			k, state := stepOK, "running"
-			if !ok {
+			switch {
+			case s.TimedOut:
+				k, state = stepWarn, res.timedOut(n)
+			case !s.Running:
 				k, state = stepFail, "not running"
 			}
-			if line != "" {
-				state += ", " + line
+			if s.Line != "" && !s.TimedOut {
+				state += ", " + s.Line
 			}
 			r.step(k, extensionTitle(n), state)
 		}
@@ -325,7 +340,7 @@ func extensionTitle(name string) string {
 }
 
 // printStatusVerbose is status --verbose: everything the server and this install say.
-func printStatusVerbose(l paths.Layout, st server.StatusReply, stdout io.Writer) {
+func printStatusVerbose(l paths.Layout, st server.StatusReply, exts func() extensionResults, stdout io.Writer) {
 	fmt.Fprintf(stdout, "Meko is running\n")
 	fmt.Fprintf(stdout, "  Agents:        http://127.0.0.1:%d/mcp (MCP and API; the CLI uses it too)\n", st.Port)
 	printWeb(stdout, st.Web)
@@ -367,7 +382,7 @@ func printStatusVerbose(l paths.Layout, st server.StatusReply, stdout io.Writer)
 		}
 		fmt.Fprintln(stdout, line)
 	}
-	printSetup(l, stdout)
+	printSetup(l, exts, stdout)
 }
 
 // usageStatsLine says whether usage stats are sent, where, and what turned them off.
@@ -386,8 +401,8 @@ func usageStatsLine(u callhome.State) string {
 }
 
 // printSetup prints how Meko is installed: its service, its updates, the Meko Cloud link and its
-// extensions.
-func printSetup(l paths.Layout, stdout io.Writer) {
+// extensions (exts, whose status commands are under way).
+func printSetup(l paths.Layout, exts func() extensionResults, stdout io.Writer) {
 	if m := serviceOf(l); m != nil {
 		state := "stopped"
 		if m.Running() {
@@ -417,22 +432,63 @@ func printSetup(l paths.Layout, stdout io.Writer) {
 		fmt.Fprintln(stdout, "  Updates:       none (a build from source)")
 	}
 	fmt.Fprintln(stdout, "  Meko Cloud:    "+cloudStatusLine(l))
-	reg, err := extensions.Load(l.Root)
-	if err != nil {
-		fmt.Fprintf(stdout, "  Extensions:    can't read them: %v\n", err)
+	res := exts()
+	if res.err != nil {
+		fmt.Fprintf(stdout, "  Extensions:    can't read them: %v\n", res.err)
 		return
 	}
-	for _, n := range reg.Names() {
-		ok, line := reg.Entries[n].Status(l.Root)
+	for _, n := range res.names {
+		s := res.status[n]
 		state := "running"
-		if !ok {
+		switch {
+		case s.TimedOut:
+			state = res.timedOut(n)
+		case !s.Running:
 			state = "not running"
 		}
-		if line != "" {
-			state += " (" + line + ")"
+		if s.Line != "" && !s.TimedOut {
+			state += " (" + s.Line + ")"
 		}
 		fmt.Fprintf(stdout, "  Extension:     %s, %s\n", n, state)
 	}
+}
+
+// extensionResults are the registered extensions' status commands' results, by name, with the
+// names in order; or why the registry couldn't be read.
+type extensionResults struct {
+	reg    *extensions.Registry
+	names  []string
+	status map[string]extensions.StatusResult
+	err    error
+}
+
+// extensionStatuses starts every registered extension's `<command> status` at once, each bounded
+// by extensions.StatusTimeout, and returns a function that waits for them, and one that stops the
+// ones still running and waits for them to end (deferred: a no-op once they're all done).
+func extensionStatuses(root string) (wait func() extensionResults, stop func()) {
+	reg, err := extensions.Load(root)
+	if err != nil {
+		return func() extensionResults { return extensionResults{err: err} }, func() {}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	results := reg.Statuses(ctx, root, extensions.StatusTimeout)
+	wait = func() extensionResults {
+		return extensionResults{reg: reg, names: reg.Names(), status: results()}
+	}
+	return wait, func() {
+		cancel()
+		results()
+	}
+}
+
+// timedOut is an extension's state when its status didn't answer in time, naming the command to
+// run by hand.
+func (r extensionResults) timedOut(name string) string {
+	cmd := extensions.Known[name].Command
+	if cmd == "" {
+		cmd = filepath.Base(r.reg.Entries[name].Command)
+	}
+	return fmt.Sprintf("didn't answer in %s (%s status)", extensions.StatusTimeout, cmd)
 }
 
 // runToken prints the client token, making it if no server has yet. It reads where the install keeps
