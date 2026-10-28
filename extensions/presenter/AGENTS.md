@@ -21,6 +21,7 @@ npm run typecheck && npm run lint && npm test   # run all three before every com
 npm run build                                   # dist/server + dist/web
 npm run dev                                     # server on .dev-home/run/web.sock, Vite on 127.0.0.1:5179
 # a release tarball, as presenter-release.yml builds one (after npm prune --omit=dev; npm ci undoes it):
+sh ../../scripts/release/fetch-node.sh 22.18.0 /tmp linux-x64   # prints the unpacked Node
 sh scripts/package-release.sh <version> linux x64 <unpacked nodejs.org Node> out
 sh scripts/smoke-release.sh out/presenter-<version>-linux-x64.tar.gz <version>
 ```

@@ -114,7 +114,13 @@ sorts higher.
    RHEL 8) for `linux-x64` and `linux-arm64`, and on a `macos-15` runner for `darwin-arm64`
    (node-pty built from source with Xcode's clang). Each bundles Node 22, the compiled server and
    web UI, and production dependencies, and is smoke-tested (`version`, and `selftest`, which
-   spawns a real pty).
+   spawns a real pty). The Node comes from nodejs.org through the repo root's
+   `scripts/release/fetch-node.sh` (Meko's and Presenter's releases use it too), which retries a
+   failed or stalled download and checks it against `SHASUMS256.txt`. node-pty builds against
+   that Node's headers (`npm_config_nodedir`), so node-gyp downloads nothing, and dnf drops a
+   mirror slower than 1 MiB/s for the next. Each step that downloads has a `timeout-minutes` of
+   its own, so a stalled one fails in minutes instead of holding the release group for the job's
+   40. `test/unit/release-scripts.test.ts` checks the script and all three release workflows.
 3. It creates the tag and GitHub release `agentk-v<version>` (`v<version>` before releases were
    tagged by product; Meko's are `meko-v<version>`) with the tarballs, `SHA256SUMS` and
    `install.sh` (only a message that Meko installs AgentK now, for the Mekos and instructions that

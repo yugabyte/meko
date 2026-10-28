@@ -104,6 +104,7 @@ jobs:
           cache: npm
           cache-dependency-path: extensions/presenter/package-lock.json
       - run: npm ci
+        timeout-minutes: 10
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
@@ -120,7 +121,19 @@ jobs:
     env:
       VERSION: ${{ needs.plan.outputs.version }}
     steps:
+      # The workflow's own commit first, for scripts/release/fetch-node.sh: a tag being rebuilt can
+      # be older than the script. A rebuild then checks out its tag for the build.
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download Node ${{ env.NODE_VERSION }} for each platform
+        timeout-minutes: 15
+        run: sh ../../scripts/release/fetch-node.sh "$NODE_VERSION" "$RUNNER_TEMP" linux-x64 linux-arm64 darwin-arm64
+
+      - uses: actions/checkout@v7
+        if: needs.plan.outputs.rebuild == 'true'
         with:
           ref: ${{ needs.plan.outputs.ref }}
           persist-credentials: false
@@ -132,6 +145,7 @@ jobs:
           cache-dependency-path: extensions/presenter/package-lock.json
 
       - run: npm ci
+        timeout-minutes: 10
 
       - name: Stamp version
         run: npm pkg set version="$VERSION"
@@ -141,18 +155,6 @@ jobs:
 
       - name: Prune dev dependencies
         run: npm prune --omit=dev
-
-      - name: Download Node ${{ env.NODE_VERSION }} for each platform
-        run: |
-          set -eu
-          cd "$RUNNER_TEMP"
-          curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt"
-          for dist in linux-x64 linux-arm64 darwin-arm64; do
-            f="node-v${NODE_VERSION}-${dist}.tar.gz"
-            curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/${f}"
-            grep " ${f}\$" SHASUMS256.txt | sha256sum -c -
-            tar -xzf "$f"
-          done
 
       - name: Package
         run: |
