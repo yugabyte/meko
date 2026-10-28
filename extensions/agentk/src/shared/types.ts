@@ -1018,8 +1018,9 @@ export interface MekoStatus {
   webUrl: string | null;
   /**
    * AgentK can share datapacks through Meko's API: there's a Meko and its API URL is known (what
-   * `InviteService.requireSharing()` checks). False on the Meko on this computer, which doesn't
-   * share: Share then points to Meko Cloud's sign-up instead.
+   * `InviteService.requireSharing()` checks). Usually false on the Meko on this computer, which has
+   * no share routes: Share then points to Meko Cloud's sign-up instead. An API URL on its own origin,
+   * kept in config.toml from before Meko owned the link (`forKey()` in config.ts), makes it true.
    */
   sharing: boolean;
   /**

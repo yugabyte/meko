@@ -15,9 +15,9 @@ const LOCAL_STATE_TEXT: Record<LocalMekoState, string> = {
  * The Meko Cloud link is Meko's, set on its own page, so this only points there.
  *
  * With `sharing` (the Meko AgentK uses, `MekoStatus.source`), Share was asked for while AgentK can't
- * share (`MekoStatus.sharing` false). The Meko on this computer doesn't share, so, as Meko's own
- * Invite does, it points to Meko Cloud: Sign up there, or link it. Any other Meko can, once Meko
- * knows its web app URL, so it points to Meko's settings to set it.
+ * share (`MekoStatus.sharing` false). On the Meko on this computer, which has no share routes, it
+ * points to Meko Cloud, as Meko's own Invite does: Sign up there, or link it. Any other Meko can
+ * share once Meko knows its web app URL, so it points to Meko's settings to set it.
  */
 export function MekoLinkDialog({
   reason,
@@ -48,8 +48,8 @@ export function MekoLinkDialog({
       >
         <div className="stack">
           <p className="muted">
-            Sharing lives in Meko Cloud. AgentK uses the Meko on this computer, which keeps this project’s datapack here, and
-            only Meko Cloud shares datapacks with your team.
+            Sharing lives in Meko Cloud. AgentK uses the Meko on this computer, which keeps datapacks here, and only Meko
+            Cloud shares them with your team.
           </p>
           <p className="muted small">
             Sign up, make an API key in Meko Cloud’s Settings, then paste it under Link Meko Cloud. AgentK then uses Meko

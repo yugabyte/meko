@@ -17,8 +17,10 @@ same API key (a Meko personal access token), at `[meko] api_url` (by default the
 `/api/v1`). AgentK can share when Meko is on and that API URL is known (`resolveMekoApiUrl()`, from
 the config, not by asking Meko); the state sent to the browser carries it as `MekoStatus.sharing`.
 Without an API URL the share routes answer 409, saying to set the web app URL, and the invite sync
-skips Meko's invites. The Meko on this computer doesn't share (it has no API URL), so while AgentK
-uses it, Share doesn't open the Share dialog. It opens **Share through Meko Cloud** instead
+skips Meko's invites. The Meko on this computer has no share routes and usually no API URL, so
+while AgentK uses it, Share doesn't open the Share dialog. (An API URL on its own origin, kept in
+config.toml from before Meko owned the link, is the exception: `forKey()` in `config.ts` keeps it,
+and Share then opens the Share dialog.) It opens **Share through Meko Cloud** instead
 (`MekoLinkDialog.tsx`), as Meko's own Invite points to Meko Cloud: **Sign up for Meko Cloud ↗**
 (`MEKO_CLOUD_SIGNUP_URL`, Meko Cloud's sign-up, landing on its Settings where the API key is made,
 in a new tab) and **Link Meko Cloud** (Meko's `/settings/meko-cloud`). Any other Meko without an
