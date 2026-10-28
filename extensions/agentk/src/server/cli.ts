@@ -344,6 +344,9 @@ async function status(): Promise<void> {
   const probe = await probeLocal(paths);
   console.log(`server:   ${probe.ok ? `responding (version ${probe.version})` : `not responding (${probe.error})`}`);
   console.log(`logs:     ${join(paths.logs, 'server.log')}`);
+  // Meko reads the exit code (meko status, and an update deciding whether to restart AgentK): 3 when
+  // no server runs this home, as Presenter's. One holding the lease that was only slow to answer runs.
+  if (!probe.ok && !heldLease(paths.lock)) process.exitCode = 3;
 }
 
 /** `host`, `host stop` and `host restart`. */

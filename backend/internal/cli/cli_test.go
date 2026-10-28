@@ -191,6 +191,47 @@ func setup(t *testing.T) (dir, port string) {
 	return dir, port
 }
 
+// status runs the extensions' status commands at once, and one that doesn't answer in time is a
+// warning that names the command, while the rest of status still prints.
+func TestStatusAsksTheExtensionsAtOnce(t *testing.T) {
+	dir, port := setup(t)
+	noRealExtensions(t)
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "  ✓ Server          running at http://127.0.0.1:"+port)
+	old := extensions.StatusTimeout
+	extensions.StatusTimeout = 2 * time.Second
+	t.Cleanup(func() { extensions.StatusTimeout = old })
+	// Registered after the start, so the server's handoff never runs them.
+	bin := t.TempDir()
+	script := func(name, body string) string {
+		p := filepath.Join(bin, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body), 0o700); err != nil { //nolint:gosec // G306: test script
+			t.Fatal(err)
+		}
+		return p
+	}
+	reg, _ := extensions.Load(dir)
+	reg.Entries["agentk"] = extensions.Entry{Command: script("agentk", "sleep 1\necho 'AgentK 1.0'\n")}
+	reg.Entries["presenter"] = extensions.Entry{Command: script("presenter", "echo 'Presenter 1.0'\nsleep 30\n")}
+	if err := reg.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	begun := time.Now()
+	code, out, _ = run("status", "--data-dir", dir)
+	// One after another, they'd take 1 s and then 2 s plus the hung one's pipe wait.
+	if took := time.Since(begun); took > 4*time.Second {
+		t.Errorf("status took %s", took)
+	}
+	want(t, "status", code, 0, out, "  ✓ AgentK          running, AgentK 1.0\n"+
+		"  ! Presenter       didn't answer in 2s (meko_presenter status)\n")
+	want(t, "status's links", code, 0, out, "  Agents (MCP, API)   http://127.0.0.1:"+port+"/mcp\n")
+
+	code, out, _ = run("status", "--data-dir", dir, "--verbose")
+	want(t, "status --verbose", code, 0, out, "  Extension:     agentk, running (AgentK 1.0)\n"+
+		"  Extension:     presenter, didn't answer in 2s (meko_presenter status)\n")
+}
+
 func TestStartStatusStop(t *testing.T) {
 	dir, port := setup(t)
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)

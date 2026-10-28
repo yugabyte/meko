@@ -161,7 +161,11 @@ only see it started again), and `meko restart` restarts it. Without it, they sta
 `<data>/extensions.json` (0600) lists the extensions this Meko runs, with the command that controls
 each one. The contract is the extension's own CLI: `<command> start`, `stop` and `status`, and
 its uninstall (`Catalog.UninstallArgs`; AgentK's is `uninstall --purge --delete-worktrees
---non-interactive`) for `meko destroy --with-extensions`. Every command Meko runs of an extension
+--non-interactive`) for `meko destroy --with-extensions`. `status` exits 0 only while the
+extension runs (AgentK and Presenter exit 3 when stopped), and its first line is shown in `meko
+status`'s row. Meko runs every extension's `status` at once and gives each 3 s
+(`extensions.StatusTimeout`); an update's check of whether the extension runs (`Entry.Status`)
+waits up to 15 s. Every command Meko runs of an extension
 (those, its installer and `agentk install`) gets `MEKO_HOME` naming Meko's data folder, so the
 extension knows where its own folder is: `<data>/extensions/<name>` (`extensions.Dir`). AgentK's
 home is `<data>/extensions/agentk`, wherever Meko's rule puts the data folder (`MEKO_HOME`,

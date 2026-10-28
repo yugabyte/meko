@@ -214,6 +214,25 @@ func TestUpdateExtensionRestartsAgentK(t *testing.T) {
 	}
 }
 
+// A stopped AgentK (its status exits non-zero) is switched to the new version and left stopped: an
+// update doesn't start it.
+func TestUpdateExtensionLeavesAStoppedAgentKStopped(t *testing.T) {
+	const old, next = "0.20261024.0", "0.20261025.0"
+	t.Setenv("HOME", t.TempDir())
+	noRealExtensions(t)
+	dir := shortDir(t)
+	app := installedAgentK(t, dir, old)
+	serveReleases(t, agentkRelease(t, "agentk-v"+next, next))
+	code, out, errs := run("update_extension", "agentk", "--data-dir", dir)
+	want(t, "update_extension", code, 0, out+errs, "Installed AgentK "+next+"; it runs at its next start")
+	if got := readLog(t, filepath.Join(extensions.Dir(dir, "agentk"), "log")); got != "" {
+		t.Errorf("log %q", got)
+	}
+	if app.Current() != next {
+		t.Errorf("current %q", app.Current())
+	}
+}
+
 // When meko _launch rolls the new version back while agentk restart waits, the update says so.
 func TestUpdateExtensionReportsAgentKsRollBack(t *testing.T) {
 	const old, next = "0.20261023.0", "0.20261025.0"
