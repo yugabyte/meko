@@ -131,7 +131,10 @@ agents should read it before changing code there.
    **Set up Claude Code with this Meko** in Settings › Harness.) Nothing that needs Meko may stop the install, a project or a session when there's no Meko or
    it's down: it's skipped or offered later.
 8. **Treat the repo as public** (it's internal today). No internal hostnames, mount paths, tokens or
-   keys in code, docs, tests or commit messages.
+   keys in code, docs, tests or commit messages, and no personal data: no real person's name,
+   email, handle or other details, and nothing a user wrote or stored. Tests and docs use made-up
+   values (`alice@example.com`, `github.com/acme/demo-repo`). The repo root's AGENTS.md has the
+   full rule.
 
 ## Conventions
 

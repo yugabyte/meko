@@ -70,7 +70,9 @@ on this computer (`meko start`), or the Meko Cloud link it keeps (`meko cloud_li
    `PRESENTER_MEKO_KEY`, which its MCP config names.
 6. **Limits are checked when an asset is added**: 100 MiB per asset, 1 GiB per deck. An asset's
    bytes are on this computer or in the deck's datapack before the deck names it.
-7. **Treat the repo as public**: no internal hostnames, paths, tokens or keys.
+7. **Treat the repo as public**: no internal hostnames, paths, tokens or keys, and no personal
+   data: no real person's name, email, handle or other details, and no real deck or datapack
+   content in tests or docs. The repo root's AGENTS.md has the full rule.
 
 ## Conventions
 

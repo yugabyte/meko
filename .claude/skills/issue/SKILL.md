@@ -67,8 +67,13 @@ command output go in fenced blocks, trimmed to the lines that matter.
 ## Never in an issue
 
 The repo is public: no internal hostnames or URLs, mount paths, tokens, API keys or session
-cookies, no customer names, and nobody's private data. Write `~` for a home folder. `meko status`
-and many logs print the web UI's hostname and the data folder's path: cut or replace them.
+cookies, and no personal data (the repo root's AGENTS.md has the rule). That means no customer
+or company names, no one's name, email address, phone number, user name or handle, account ID
+or IP address, and nothing a user wrote or stored (prompts, transcripts, memories, datapack
+contents). Say "a user" or "the reporter" instead, and use made-up values where an example
+needs one (`alice@example.com`, `github.com/acme/demo-repo`). Write `~` for a home folder.
+`meko status` and many logs print the web UI's hostname, the data folder's path, and user,
+datapack and project names: cut or replace them. Screenshots need the same care.
 
 ## Filing
 
