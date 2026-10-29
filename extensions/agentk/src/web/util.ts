@@ -2,6 +2,7 @@ import { HARNESS_CAPS, harnessOf, type HarnessId } from '../shared/harnesses';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, STAGE_LABELS } from '../shared/types';
 import { mekoDatapackPath } from '../shared/mekourls';
+import { isStrategySetting, type CodeReviewFinding, type ReviewOverrides } from '../shared/codereview';
 import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoStatus, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /**
@@ -27,8 +28,37 @@ const URGENCY: Record<DotState, number> = {
   archived: 0,
 };
 
+/**
+ * A code-review session: a task's local review (`Session.parentId`). It never shows as a tab, a
+ * rail row or a list entry of its own: it's the magnifier joined to its task's tab.
+ */
+export function isReviewChild(s: Pick<Session, 'kind'>): boolean {
+  return s.kind === 'code-review';
+}
+
+/** A project's open sessions, its tasks' code-review sessions left out (they show as part of their task). */
 export function liveSessions(p: ProjectWithSessions): Session[] {
+  return p.sessions.filter((s) => s.desired !== 'archived' && s.status !== 'archived' && !isReviewChild(s));
+}
+
+/** A project's open sessions with its tasks' code-review sessions: what a terminal or the route may show. */
+export function liveWithReviews(p: ProjectWithSessions): Session[] {
   return p.sessions.filter((s) => s.desired !== 'archived' && s.status !== 'archived');
+}
+
+/**
+ * Which part of a task's joined tab (or rail row) is on screen: the task's, its review's (the
+ * session on screen is the task's code-review session), or neither.
+ */
+export function joinedPartSelected(task: Pick<Session, 'id' | 'codeReview'>, currentId: string | null | undefined): 'task' | 'review' | null {
+  if (!currentId) return null;
+  if (task.id === currentId) return 'task';
+  return task.codeReview?.sessionId === currentId ? 'review' : null;
+}
+
+/** The task whose code-review session this is, among `sessions`; undefined for any other session. */
+export function reviewParent(sessions: Session[], s: Pick<Session, 'kind' | 'parentId'>): Session | undefined {
+  return isReviewChild(s) && s.parentId ? sessions.find((x) => x.id === s.parentId) : undefined;
 }
 
 /**
@@ -676,6 +706,19 @@ export function runsToMerge(s: Session): boolean {
   return s.autoRun && s.stage !== 'done';
 }
 
+/**
+ * The task's local review holds its Open PR: a review runs (or waits for the task's fixes between
+ * rounds) before the PR prompt goes, or failed or was cancelled and waits for Retry or Open anyway.
+ */
+export function reviewGatesPr(s: Pick<Session, 'stage' | 'codeReview'>): boolean {
+  return s.stage === 'code' && !!s.codeReview && s.codeReview.state !== 'done';
+}
+
+/** A session's stage in its chip: `Review` while its local review holds the Open PR, else the stage. */
+export function stageChipText(s: Pick<Session, 'stage' | 'codeReview'>): string {
+  return reviewGatesPr(s) ? 'Review' : STAGE_LABELS[s.stage];
+}
+
 /** A session's stage in words, for tooltips and hints that can't hold the mark: "Code · Run to merge". */
 export function stageWords(s: Session): string {
   return runsToMerge(s) ? `${STAGE_LABELS[s.stage]} · Run to merge` : STAGE_LABELS[s.stage];
@@ -833,4 +876,47 @@ export function designLanding(prev: Landing, on: boolean, at: number | null, now
   }
   if (prev.stoppedAt && now - prev.stoppedAt < LATE_MS) return [{ stoppedAt: 0 }, true];
   return [prev, false];
+}
+
+/**
+ * A review's findings grouped for its panel: by round, then by the sweep that first raised them,
+ * in that order. A round or sweep is named only when the review had more than one.
+ */
+export function findingGroups(findings: CodeReviewFinding[]): { key: string; label: string; findings: CodeReviewFinding[] }[] {
+  const rounds = new Set(findings.map((f) => f.round)).size > 1;
+  const sweeps = new Set(findings.map((f) => f.sweep)).size > 1;
+  const groups = new Map<string, { key: string; label: string; round: number; sweep: number; findings: CodeReviewFinding[] }>();
+  for (const f of findings) {
+    const key = `${f.round}:${f.sweep}`;
+    let g = groups.get(key);
+    if (!g) {
+      const label = [rounds ? `Round ${f.round}` : '', sweeps ? `sweep ${f.sweep}` : ''].filter(Boolean).join(', ');
+      g = { key, label: label ? label[0].toUpperCase() + label.slice(1) : 'Findings', round: f.round, sweep: f.sweep, findings: [] };
+      groups.set(key, g);
+    }
+    g.findings.push(f);
+  }
+  return [...groups.values()]
+    .sort((a, b) => a.round - b.round || a.sweep - b.sweep)
+    .map(({ key, label, findings: fs }) => ({ key, label, findings: fs }));
+}
+
+/**
+ * Review overrides with one setting changed from its select: '' (Default) leaves it out, so a
+ * level with nothing set is `{}`; a strategy that isn't one is left out too.
+ */
+export function withOverride(value: ReviewOverrides, key: keyof ReviewOverrides, raw: string): ReviewOverrides {
+  const next: ReviewOverrides = {};
+  if (value.strategy != null) next.strategy = value.strategy;
+  if (value.rounds != null) next.rounds = value.rounds;
+  if (value.depth != null) next.depth = value.depth;
+  delete next[key];
+  if (raw === '') return next;
+  if (key === 'strategy') {
+    if (isStrategySetting(raw)) next.strategy = raw;
+  } else {
+    const n = Number(raw);
+    if (Number.isInteger(n)) next[key] = n;
+  }
+  return next;
 }

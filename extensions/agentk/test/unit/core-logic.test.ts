@@ -103,6 +103,19 @@ describe('config and db', () => {
     expect(warnings.join('\n')).toContain('server.port should be a number');
   });
 
+  it("reads [code_review], keeping the default, with a warning, for a strategy it doesn't know or a count out of range", () => {
+    const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
+    mkdirSync(paths.home, { recursive: true });
+    writeFileSync(paths.config, '[code_review]\nstrategy = "sirius-1.0"\nrounds = 2\ndepth = 3\n[code_review.models.opencode]\nlarge = "anthropic/big"\n');
+    const cfg = loadConfig(paths, () => undefined);
+    expect(cfg.codeReview).toMatchObject({ strategy: 'sirius-1.0', rounds: 2, depth: 3 });
+    expect(cfg.codeReview.models.opencode).toEqual({ large: 'anthropic/big', mid: '', small: '' });
+    writeFileSync(paths.config, '[code_review]\nstrategy = "gollum-1.0"\nrounds = 9\ndepth = 0\n');
+    const warnings: string[] = [];
+    expect(loadConfig(paths, (m) => warnings.push(m)).codeReview).toMatchObject({ strategy: 'sagittarius-3.0', rounds: 0, depth: 1 });
+    expect(warnings).toHaveLength(3);
+  });
+
   it('shortens a host name to its first label', () => {
     expect(shortHost('dev-box.example.com')).toBe('dev-box');
     expect(shortHost('mac.local')).toBe('mac');
@@ -511,6 +524,11 @@ function dropV38(db: ReturnType<typeof openDb>) {
   dropSessionColumns(db, 'untrusted');
 }
 
+function dropV43(db: ReturnType<typeof openDb>) {
+  db.exec('DROP TABLE IF EXISTS code_review_steps; DROP TABLE IF EXISTS code_reviews');
+  dropSessionColumns(db, 'parent_id', 'review_json');
+}
+
 function dropV42(db: ReturnType<typeof openDb>) {
   db.exec('DROP TABLE IF EXISTS work_item_links; DROP TABLE IF EXISTS work_items');
 }
@@ -656,10 +674,10 @@ function dropV12(db: ReturnType<typeof openDb>) {
 }
 const V11_COLUMNS = ['kind'];
 
-/** Undoes migrations 42 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
+/** Undoes migrations 43 down to `oldest`, newest first, for tests that rewind the schema (29 changed no schema). */
 function undoMigrations(db: ReturnType<typeof openDb>, oldest: number) {
-  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35, dropV36, dropV37, dropV38, dropV39, dropV40, dropV41, dropV42];
-  for (let v = 42; v >= oldest; v--) undo[v - 12](db);
+  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35, dropV36, dropV37, dropV38, dropV39, dropV40, dropV41, dropV42, dropV43];
+  for (let v = 43; v >= oldest; v--) undo[v - 12](db);
 }
 
 function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {

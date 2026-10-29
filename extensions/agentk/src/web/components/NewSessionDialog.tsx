@@ -8,7 +8,9 @@ import { HeldImages as HeldImageList } from '../heldImages';
 import { useTouch } from '../hooks/useMedia';
 import { cx, noAgent, repoFolder, slugify } from '../util';
 import { AttachPrPicker } from './AttachPrPicker';
-import { AgentPicker, Busy, Dialog, ErrorText, Field, LEARN_LABEL, StartPicker, type StartChoice } from './common';
+import { AgentPicker, Busy, Dialog, ErrorText, Field, LEARN_LABEL, ReviewFields, StartPicker, type StartChoice } from './common';
+import { noOverrides, readOverrides, type ReviewOverrides } from '../../shared/codereview';
+import { inheritedReview, useReviewDefaults } from '../reviewdefaults';
 import { HeldImages } from './HeldImages';
 import { ReviewPrPicker } from './ReviewPrPicker';
 
@@ -66,6 +68,9 @@ export function NewSessionDialog({
   const [prompt, setPrompt] = useState(initial?.prompt ?? '');
   // Run to merge, offered for a start at Code (at Design it's picked beside Approve).
   const [autoRun, setAutoRun] = useState(!!initial?.autoRun);
+  // The task's own local review settings (CreateSessionRequest.review), over the project's.
+  const [reviewOver, setReviewOver] = useState<ReviewOverrides>(() => readOverrides(initial?.review));
+  const reviewDefaults = useReviewDefaults();
   // A learn session saves to the project's dedicated datapack, so it needs one and Meko on. It seeds a
   // new datapack, so it's offered only when the dialog opens on it (`learnFirst`) or retries one,
   // never in a plain New session on a datapack that already knows the project.
@@ -94,7 +99,7 @@ export function NewSessionDialog({
   // A retry opens Advanced when it asked for more than the defaults there.
   const [advanced, setAdvanced] = useState(
     !!initial && (!!initial.repoPath || !!initial.branch || (initial.kind !== 'review-pr' && !!initial.pr)
-      || (!!initial.baseBranch && initial.baseBranch !== project.defaultBranch)),
+      || (!!initial.baseBranch && initial.baseBranch !== project.defaultBranch) || !noOverrides(readOverrides(initial.review))),
   );
   const [repos, setRepos] = useState<RepoInfo[] | null>(null);
   const [reposError, setReposError] = useState<string | null>(null);
@@ -362,6 +367,7 @@ export function NewSessionDialog({
               kind: 'task',
               start: start === 'review-pr' || start === 'learn' ? undefined : start,
               autoRun: start === 'code' && autoRun ? true : undefined,
+              review: noOverrides(reviewOver) ? undefined : reviewOver,
               repoPath: inProjectRepo ? undefined : repoPath,
               images,
               workItemId: initial?.workItemId,
@@ -746,6 +752,18 @@ export function NewSessionDialog({
                   )}
                   {!learn && workOn === 'pr' && <AttachPrPicker project={project} repoPath={repoPath} picked={taskPr} onPick={pickTaskPr} />}
                 </>
+              )}
+              {!review && !learn && (
+                <fieldset className="ns-review">
+                  <legend className="label">Local review</legend>
+                  <ReviewFields
+                    id="ns-review"
+                    scoped
+                    inherited={inheritedReview(reviewDefaults, project.settings.codeReview ?? {})}
+                    value={reviewOver}
+                    onChange={setReviewOver}
+                  />
+                </fieldset>
               )}
             </div>
           )}

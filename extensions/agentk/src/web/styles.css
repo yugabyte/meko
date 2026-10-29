@@ -1475,6 +1475,282 @@ textarea.input {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* A task with a local review: one joined tab, the task's part then the review's (the magnifier),
+   inside one hairline border; each part is a button, and only the one on screen is selected. */
+.tab-joined {
+  display: flex;
+  flex: none;
+  align-items: stretch;
+  border-radius: 7px 7px 0 0;
+  box-shadow: inset 0 1px 0 var(--rule), inset 1px 0 0 var(--rule), inset -1px 0 0 var(--rule);
+}
+.tab-joined > .tab {
+  border-radius: 7px 0 0 0;
+}
+.tab-joined > .tab-review {
+  border-radius: 0 7px 0 0;
+}
+/* The review's part of a tab or rail row: the magnifier and its short count (ReviewSegment). */
+.review-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 6px 9px;
+  border: 0;
+  border-left: 1px solid var(--rule);
+  background: transparent;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.review-seg:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.review-seg:disabled {
+  cursor: default;
+}
+.review-seg.held {
+  color: var(--bad);
+}
+.tab-review.sel {
+  background: var(--term);
+  color: var(--term-ink);
+  border-left-color: transparent;
+}
+.tab-review.sel.held {
+  color: var(--bad);
+}
+/* The magnifier (ReviewGlass): drawn in the current color; its lens pulses while the review works,
+   and shows Meko's m in white while the review is in a Meko call. */
+.review-glass {
+  position: relative;
+  display: inline-grid;
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+.review-glass .lens {
+  fill: currentColor;
+  opacity: 0.35;
+  transform-origin: 7.5px 7.5px;
+}
+.review-glass .rim {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+}
+.review-glass .handle {
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+.review-glass.running .lens {
+  animation: lens-pulse 1.6s ease-in-out infinite;
+}
+.review-glass .glass-m {
+  display: none;
+  position: absolute;
+  left: 1px;
+  top: 1px;
+  width: 11.3px;
+  height: 11.3px;
+  background: #fff;
+  -webkit-mask: url('/meko-m.png') center / 7px 7px no-repeat;
+  mask: url('/meko-m.png') center / 7px 7px no-repeat;
+}
+.review-glass.meko .lens {
+  opacity: 1;
+  animation: none;
+}
+.review-glass.meko .glass-m {
+  display: block;
+}
+@keyframes lens-pulse {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.7);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .review-glass.running .lens {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+/* The rail's row for a task with a local review: one row, the task's part growing (its name cut
+   first) and the review's part beside it, fixed. */
+.rail-joined {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  border-radius: 6px;
+}
+.rail-joined > .rail-sess-row {
+  flex: 1;
+  min-width: 0;
+}
+.rail-joined > .rail-sess-row > .rail-sess {
+  border-radius: 6px 0 0 6px;
+}
+.rail-joined .rail-sess-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+.rail-review {
+  border-radius: 0 6px 6px 0;
+  padding: 4px 7px;
+}
+.rail-review.sel {
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.gate-pill.warn {
+  color: var(--bad);
+  border-color: color-mix(in srgb, var(--bad) 45%, var(--rule));
+  border-style: solid;
+}
+/* A local review's findings (ReviewFindings), beside its session's terminal. */
+.review-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 14px 16px;
+}
+.rv-section + .rv-section {
+  margin-top: 14px;
+}
+.rv-section h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.rv-findings,
+.rv-datapacks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rv-finding {
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  padding: 8px 10px;
+  background: var(--surface);
+}
+.rv-finding.dropped {
+  opacity: 0.65;
+}
+.rv-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.rv-where {
+  font-size: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.rv-kept {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+}
+.rv-sev {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+.rv-sev.blocker {
+  color: var(--bad);
+}
+.rv-sev.major {
+  color: var(--warn);
+}
+.rv-sev.minor {
+  color: var(--muted);
+}
+.rv-comment,
+.rv-notes {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.rv-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+.rv-reason {
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+.rv-tag {
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--meko-soft);
+  color: var(--meko);
+}
+.rv-outcome {
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+.rv-outcome.fixed {
+  color: var(--ok);
+}
+.rv-outcome.declined {
+  color: var(--warn);
+}
+/* The ⋯ sheet's local review rows and its settings; New session's Local review group. */
+.sheet-review {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent);
+}
+.sheet-review-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 16px 10px;
+}
+.ns-review {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.review-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
 /* A session's harness logo (HarnessLogo): every logo fits one 18 x 14 box, so names line up. */
 .harness-logo {
   width: 18px;
@@ -6351,4 +6627,18 @@ a.wq-chip:hover {
 }
 .wq-item.focused {
   border-color: var(--accent);
+}
+
+/* The local review's part of a tab or rail row is a finger's width on a touch screen. */
+@media (pointer: coarse) {
+  .review-seg {
+    min-width: 40px;
+    min-height: 36px;
+    justify-content: center;
+  }
+}
+@media (max-width: 760px) {
+  .topbar > .tabs .tab-joined > .tab-review {
+    padding: 10px 10px;
+  }
 }

@@ -1,6 +1,7 @@
 // API contract shared by the server (src/server) and the web UI (src/web).
 // Every REST route and WebSocket message is described here.
 
+import type { CodeReviewSummary, ReviewOverrides, ReviewStrategySetting } from './codereview.js';
 import type { HarnessId } from './harnesses.js';
 
 export type SessionStatus =
@@ -32,14 +33,18 @@ export interface StartupState {
  * `explore` is a task's optional first stage: no gates, the user moves the session on from it.
  * `reviewing-pr` is a Review a PR session's only stage: the user reviews someone else's PR, with
  * AgentK assisting, until they close the review.
+ * `reviewing-code` is a code-review session's only stage: AgentK's local review of its parent task's
+ * change before the PR opens (docs/design/code-review.md).
  */
-export type Stage = 'explore' | 'design' | 'code' | 'pr' | 'review' | 'merge' | 'done' | 'reviewing-pr';
+export type Stage = 'explore' | 'design' | 'code' | 'pr' | 'review' | 'merge' | 'done' | 'reviewing-pr' | 'reviewing-code';
 
 /**
  * What a session is: a task, which runs on Explore → Design → Code → PR & Review → Merge & Close
- * from the stage it starts at, or a Review a PR (someone else's PR), which has one stage.
+ * from the stage it starts at, a Review a PR (someone else's PR), which has one stage, or a
+ * code-review session: AgentK's local review of a task's change, a child of the task
+ * (`Session.parentId`) that AgentK starts at Open PR and shows only as part of the task's tab.
  */
-export type SessionKind = 'task' | 'review-pr';
+export type SessionKind = 'task' | 'review-pr' | 'code-review';
 
 /**
  * A session's kind as `sessions.kind` stores it and `Session.kind` sends it: `review-pr`, or a task
@@ -47,11 +52,12 @@ export type SessionKind = 'task' | 'review-pr';
  * start stages index their stage lists with it, so it never says `task`; read it with `kindOf()`
  * in `stages.ts`.
  */
-export type StoredKind = 'explore' | 'plan' | 'quick' | 'review-pr';
+export type StoredKind = 'explore' | 'plan' | 'quick' | 'review-pr' | 'code-review';
 
 export const KIND_LABELS: Record<SessionKind, string> = {
   task: 'Task',
   'review-pr': 'Review a PR',
+  'code-review': 'Local review',
 };
 
 /** Where a new task session starts. It gets to PR & Review only through Open PR or a move. */
@@ -124,6 +130,7 @@ export const START_EXAMPLES: Record<StartStage | 'review-pr' | 'learn', { name: 
 export const KIND_STAGES: Record<SessionKind, Exclude<Stage, 'done' | 'pr'>[]> = {
   task: ['explore', 'design', 'code', 'review', 'merge'],
   'review-pr': ['reviewing-pr'],
+  'code-review': ['reviewing-code'],
 };
 
 /** `pr` and `review` are one step in the UI, so they share a label. */
@@ -136,6 +143,7 @@ export const STAGE_LABELS: Record<Stage, string> = {
   merge: 'Merge & Close',
   done: 'Done',
   'reviewing-pr': 'Reviewing PR',
+  'reviewing-code': 'Local review',
 };
 
 export type ReviewState =
@@ -578,6 +586,11 @@ export interface ProjectSettings {
    * meko-calls.jsonl in the session's folder, deleted with the session. Off by default.
    */
   mekoLog: boolean;
+  /**
+   * The project's local review settings over the global ones (`[code_review]`): each one left out
+   * keeps the global value. A session's own (`Session.review`) go over these.
+   */
+  codeReview: ReviewOverrides;
 }
 
 /** The Meko tools AgentK and Claude call for a session: the Meko calls page's tool filter. */
@@ -879,6 +892,15 @@ export interface Session {
   discarding: boolean;
   /** The PR a Review a PR session reviews; null for other kinds. */
   reviewingPr: ReviewingPr | null;
+  /** A code-review session's task (its parent); null for every other session. */
+  parentId: string | null;
+  /**
+   * A task's latest local review, or a code-review session's own; null when it has none. The tab and
+   * the rail show it as the magnifier joined to the task.
+   */
+  codeReview: CodeReviewSummary | null;
+  /** The session's own local review settings, over its project's and the global ones; `{}` keeps them. */
+  review: ReviewOverrides;
   usage: TokenUsage;
   /**
    * How full Claude's context window is, in percent, as AgentK's mod last measured it (after each
@@ -1530,6 +1552,8 @@ export interface StartFromLinkRequest {
   start?: 'design' | 'code';
   /** An issue's task at Code: Run to merge (Session.autoRun) from the start. 400 for a PR, or a task at Design. */
   autoRun?: boolean;
+  /** An issue's task: its own local review settings (CreateSessionRequest.review). Ignored for a PR. */
+  review?: ReviewOverrides;
 }
 
 export interface StartFromLinkResult {
@@ -1697,13 +1721,13 @@ export interface AskAgentkTurn {
  */
 export type AskAgentkAction =
   /** `autoRun`: Run to merge (Session.autoRun), only with `start` `code`. */
-  | { type: 'start'; projectId: string; start: StartStage; name: string; prompt: string; autoRun?: boolean }
+  | { type: 'start'; projectId: string; start: StartStage; name: string; prompt: string; autoRun?: boolean; review?: ReviewOverrides }
   /**
    * A PR or issue (`owner/name#N` or its link). In Do all (POST /api/actions/run) it runs as
    * `githubLinks.start` does, in `projectId` or the project the link fits: a PR as a Review a PR
    * session, an issue as a task at `start` (Design by default), refusing an issue a running task works on.
    */
-  | { type: 'link'; ref: string; projectId?: string; start?: 'design' | 'code'; autoRun?: boolean }
+  | { type: 'link'; ref: string; projectId?: string; start?: 'design' | 'code'; autoRun?: boolean; review?: ReviewOverrides }
   | { type: 'go'; view: 'session'; projectId: string; sessionId: string }
   | { type: 'go'; view: 'home'; projectId: string }
   | { type: 'go'; view: 'usage' | 'settings' }
@@ -1877,6 +1901,12 @@ export interface Settings {
   workQueueSlack: boolean;
   /** `[work_queue] sync_minutes`: how often it syncs by itself (0 to WORK_SYNC_MINUTES_MAX; 0: only when you press Sync). */
   workQueueSyncMinutes: number;
+  /** `[code_review] strategy`: the local review before a PR opens, or `off`. */
+  codeReviewStrategy: ReviewStrategySetting;
+  /** `[code_review] rounds`: re-reviews after the first (0 to MAX_ROUNDS). */
+  codeReviewRounds: number;
+  /** `[code_review] depth`: sweeps in each review (1 to MAX_DEPTH). */
+  codeReviewDepth: number;
 }
 
 /** The longest the work queue's sync interval can be (`Settings.workQueueSyncMinutes`), in minutes: a day. */
@@ -2336,6 +2366,8 @@ export interface UpdateSessionRequest {
   baseBranch?: string;
   /** Moves the session to the top of its project's list. */
   toTop?: boolean;
+  /** The session's own local review settings (`Session.review`), replacing them; `{}` goes back to the project's. */
+  review?: ReviewOverrides;
   /**
    * Turns Run to merge (Session.autoRun) on or off. On in Design waits for the approval; in Code it
    * queues Open PR, and in PR & Review the merge.
@@ -2385,6 +2417,8 @@ export interface CreateSessionRequest {
   skipDesign?: boolean;
   /** Run to merge (Session.autoRun) from the start: only for a task starting at Code. */
   autoRun?: boolean;
+  /** The task's own local review settings (`Session.review`); left out, the project's apply. Not for a review. */
+  review?: ReviewOverrides;
   /**
    * For `kind: 'review-pr'` (and required there): the PR to review. `repoPath` is then a local clone
    * of `repo`; the base and branch come from the PR, and `prompt` holds the user's notes for AgentK.
@@ -2466,7 +2500,13 @@ export type SessionAction =
   /** Review a PR: end the review (archives the session and deletes its local review branch). */
   | 'close-review'
   /** Save what the session learned to its project's dedicated datapack (the learn step); 409 while Claude is busy or one runs. */
-  | 'learn';
+  | 'learn'
+  /** A task's local review: stop it; Open PR then waits for Retry or Open anyway. */
+  | 'review-cancel'
+  /** A task's failed or cancelled local review: review again, reusing the steps already reported. */
+  | 'review-retry'
+  /** A task's failed or cancelled local review: send the PR prompt without a `me_ak_review:` line. */
+  | 'review-open-anyway';
 
 // ---- WebSockets ----
 //
@@ -2686,7 +2726,9 @@ export type TermServerMessage =
 //        dedicated datapack or Meko, while Claude is busy, starting or exited, or while one runs. merge and discard take
 //        an optional CloseSessionRequest (400 for a skipLearn that isn't a boolean): skipLearn skips the learn step they
 //        run first. A discard that runs one answers with the session still running (Session.discarding) and discards it
-//        when the step ends; asked again with skipLearn, it discards now)
+//        when the step ends; asked again with skipLearn, it discards now). review-cancel stops a task's running local review
+//        (409 when none runs); review-retry reviews again, reusing the steps already reported, and review-open-anyway sends
+//        the PR prompt without a me_ak_review line: both 409 unless the review failed or was cancelled)
 // POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to, a
 //        missing task, or instructions that aren't text or are too long; 409 while AgentK is mid-turn, in Merge & Close,
 //        or a prompt (the stage's, or the user's instructions) is due and Claude is waiting or exited; 502 when its prompt
@@ -2699,6 +2741,8 @@ export type TermServerMessage =
 //        changed since; 400 for a bad answer or answers too long for one prompt; 502 when sending failed)
 // POST   /api/sessions/:id/ask/:askId AskAnswerRequest → 204   (answers the questions Claude is asking, Session.asking;
 //        400 for an answer that doesn't fit them, 409 once they're gone: answered in the terminal, or Claude moved on)
+// GET    /api/sessions/:id/code-review          → CodeReviewDetail   (a task's latest local review, or a code-review
+//        session's own, with every candidate, kept or dropped, and what the task did with it; 404 when it has none)
 // GET    /api/sessions/:id/discard-check       → DiscardCheck
 // GET    /api/sessions/:id/meko-calls?before=&limit=&tool=&by=agentk|claude&failed=1 → MekoCallPage   (the session's Meko
 //        call log, AgentK's calls and Claude's, newest first, read backwards from the byte offset `before`; limit 1 to 200,

@@ -5,7 +5,7 @@ import { copyText } from '../clipboard';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { agentName } from '../../shared/harnesses';
-import { cx, liveSessions } from '../util';
+import { cx, liveWithReviews } from '../util';
 import { Busy, ConfirmButton } from './common';
 import { TopBar } from './TopBar';
 
@@ -69,7 +69,8 @@ export function MekoCallsView({
   }, [project.id, reload]);
 
   // The session shown: the one asked for, else the one written to last, else the newest running one.
-  const live = liveSessions(project);
+  // A task's local review makes Meko calls of its own (the passes' gotcha searches), so it's listed too.
+  const live = liveWithReviews(project);
   const sid = sessionId ?? logs?.[0]?.sessionId ?? (logs ? (live.at(-1)?.id ?? null) : null);
   const choices: { id: string; name: string }[] = (logs ?? []).map((l) => ({ id: l.sessionId, name: l.name }));
   for (const s of live) if (!choices.some((c) => c.id === s.id)) choices.push({ id: s.id, name: s.name });

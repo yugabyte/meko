@@ -75,7 +75,7 @@ appendFileSync(join(dir, 'argv.jsonl'), JSON.stringify({ args, cwd: process.cwd(
 
 // Positional prompt: the last argument that isn't a flag value; everything after "--" is positional
 // (like Claude Code's CLI, which rejects a prompt starting with "-" before "--" as an unknown option).
-const valued = new Set(['--settings', '--session-id', '--resume', '--name', '--permission-mode', '--append-system-prompt', '--add-dir', '--plugin-dir', '--mcp-config', '--setting-sources']);
+const valued = new Set(['--settings', '--session-id', '--resume', '--name', '--permission-mode', '--append-system-prompt', '--add-dir', '--plugin-dir', '--mcp-config', '--setting-sources', '--agents', '--disallowedTools']);
 let prompt = null;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--') {
@@ -350,9 +350,37 @@ async function turn(text) {
   }
   if (text.includes('MEKO_SEARCH')) await mekoSearch();
   if (text.includes('ASK_USER') && modOn) await askUser();
+  if (text.includes('agentk-review-')) await reviewSteps(text);
   respond();
   hook('Stop', {});
   modMeasure();
+}
+
+// Like a code-review session running its steps in subagents (AgentK's local review): each step's
+// file names its report tool and step id, and the subagent reports through AgentK's tools route.
+// `review-reports.json` in the fake's dir maps a pass name to its report (default LGTM), and
+// `review-scores.json` a step id to its score (default confirmed at 90); a `review-skip` file lists
+// steps to leave unreported. Every call and its answer go to `review-calls.jsonl`.
+async function reviewSteps(text) {
+  const read = (f, d) => {
+    try {
+      return JSON.parse(readFileSync(join(dir, f), 'utf8'));
+    } catch {
+      return d;
+    }
+  };
+  const skip = read('review-skip', []);
+  for (const m of text.matchAll(/Read (\S+) and do what it says\./g)) {
+    const file = readFileSync(m[1], 'utf8');
+    const step = /"step": "([^"]+)"/.exec(file)?.[1];
+    const tool = /call `([^`]+)` once/.exec(file)?.[1]?.split('__').pop();
+    if (!step || !tool || skip.includes(step)) continue;
+    const input = tool === 'review_score'
+      ? { step, score: read('review-scores.json', {})[step] ?? { read: ['src/a.ts:1-5'], refutation: '', verdict: 'confirmed', confidence: 90, reason: 'Read it; it holds.' } }
+      : { step, report: read('review-reports.json', {})[step.split(':')[1]] ?? { summary: 'LGTM', findings: [] } };
+    const r = await modPost('/tools', { v: 1, tool, input }).catch((e) => ({ status: 0, text: String(e) }));
+    appendFileSync(join(dir, 'review-calls.jsonl'), JSON.stringify({ step, tool, status: r.status, text: r.text }) + '\n');
+  }
 }
 
 // Like Claude Code calling the Meko MCP server: a memory_search that finds one memory. With the mod,

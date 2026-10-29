@@ -297,6 +297,11 @@ your phone can connect.
   AgentK found in Meko carries Meko's mark, the words it relied on and the item's id.
   Once it's approved, AgentK writes the key design decisions into the design and keeps it current
   while it codes and addresses reviews; each version goes to Meko, and the PR names the latest one.
+  Before a PR opens, AgentK reviews the change on your computer with the cloud reviewer's algorithm
+  (Sagittarius 3.0: five specialist passes and a scorer per finding; or the quicker Sirius 1.0), in a
+  review session shown as a magnifier on the task's tab. The task fixes what it finds, and the PR
+  says how it went (`me_ak_review:2 blockers,1 major addressed`, or `me_ak_review:LGTM`). Strategy,
+  re-review rounds and depth are in Settings, the project's settings and each session's own.
   You approve the design, opening the PR, and Merge & Close, which merges the PR and
   cleans up the branches, leaving the worktree for the next session. Pressed early, they wait:
   **Open PR after this turn** goes when AgentK's turn ends, and **Merge when ready** merges once CI

@@ -88,6 +88,7 @@ describe("AgentK's session tools through agentk mcp (real session host + git, fa
     const { tools } = await t.client.listTools();
     expect(tools.map((x) => [x.name, x.annotations?.readOnlyHint])).toEqual([
       ['list', true], ['start_sessions', false], ['move_session', false], ['open_pr', false], ['open_project', false],
+      ['review_report', true], ['review_score', true], ['review_outcome', true],
     ]);
     const listed = JSON.parse((await t.call('list')).text);
     expect(listed.projects).toEqual([expect.objectContaining({

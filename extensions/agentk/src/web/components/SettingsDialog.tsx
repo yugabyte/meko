@@ -13,7 +13,8 @@ import type { MekoAuth } from '../signin';
 import { setTermThemePref, termThemePref, TERM_THEME_LABEL, type TermThemePref } from '../termtheme';
 import { harnessLogosToggle } from '../toggle';
 import { claudeUpdateText, cx, defaultAgentChoice, httpHost, relativeTime } from '../util';
-import { AgentLabel, AgentPicker, Busy, Dialog, ErrorText, Field, InfoButton, InfoCheck, InfoPanel } from './common';
+import { AgentLabel, AgentPicker, Busy, Dialog, ErrorText, Field, InfoButton, InfoCheck, InfoPanel, ReviewFields } from './common';
+import { setReviewDefaults } from '../reviewdefaults';
 
 export type SettingsTab = 'general' | 'harness' | 'work-queue' | 'updates';
 type Tab = SettingsTab;
@@ -164,6 +165,7 @@ function useAutoSave() {
     const x = await api.settings();
     confirmed.current = x;
     setS(x);
+    setReviewDefaults(x);
     return x;
   }, [saver]);
   const change = (patch: Patch) => {
@@ -443,6 +445,23 @@ function GeneralTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObje
         too), move sessions between stages and open another session’s PR. The agent asks before each change, unless Kiro may
         run any tool without asking (Harness). Off applies at once. On applies at each session’s next start.
       </InfoCheck>
+      <div className="review-settings">
+        <ReviewFields
+          id="set-review"
+          scoped={false}
+          inherited={null}
+          value={{ strategy: s.codeReviewStrategy, rounds: s.codeReviewRounds, depth: s.codeReviewDepth }}
+          onChange={(v) => {
+            const patch = {
+              codeReviewStrategy: v.strategy ?? s.codeReviewStrategy,
+              codeReviewRounds: v.rounds ?? s.codeReviewRounds,
+              codeReviewDepth: v.depth ?? s.codeReviewDepth,
+            };
+            setReviewDefaults(patch);
+            change(patch);
+          }}
+        />
+      </div>
       <Field label="Server name" info={{ for: 'set-server-name', text: 'Shown in the projects pane next to your user name. Empty uses this machine’s name.' }}>
         <input
           id="set-server-name"

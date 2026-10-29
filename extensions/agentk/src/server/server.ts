@@ -16,6 +16,7 @@ import { ACTIONS_MAX, LINK_GRANTS, MAX_KB_UPLOAD_BYTES, MAX_PASTE_BYTES, MEKO_CA
 import { AGENTK_PATH, shareLinkToken, shareLinkUrl } from '../shared/mekourls.js';
 import { HARNESS_IDS, isHarnessId } from '../shared/harnesses.js';
 import { EMAIL_RE, MAX_SHARE_EMAILS } from '../shared/emails.js';
+import { MAX_DEPTH, MAX_ROUNDS, STRATEGIES, isStrategySetting, type CodeReviewDetail } from '../shared/codereview.js';
 import { checkActions, runActions } from './actions.js';
 import { ybCallHomeDisabled } from './callhome.js';
 import { forgetContact, learnNames, listContacts, recordShares } from './contacts.js';
@@ -24,7 +25,7 @@ import { audit, get } from './db.js';
 import { errMsg } from './log.js';
 import type { MekoDatapackRow } from './meko.js';
 import { MekoApiError, asGrant, routeMissing, type MekoShareLinkChange, type RedeemedShareLink, type ShareLinkRow } from './mekoapi.js';
-import { resolveMekoWebUrl } from './config.js';
+import { globalReview, resolveMekoWebUrl } from './config.js';
 import { setUpClaudeMeko, setUpKiroMeko } from './mekosettings.js';
 import { prDesignSource } from './prdesign.js';
 import { HttpError } from './projects.js';
@@ -480,6 +481,10 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     core.sessions.clearMekoLog(req.params.id);
     return reply.code(204).send();
   });
+  app.get<{ Params: { id: string } }>('/api/sessions/:id/code-review', async (req): Promise<CodeReviewDetail> => {
+    core.sessions.row(req.params.id);
+    return core.reviews.detail(req.params.id);
+  });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/discard-check', async (req): Promise<DiscardCheck> => core.sessions.discardCheck(req.params.id));
   app.get<{ Params: { id: string }; Querystring: { commit?: string } }>('/api/sessions/:id/changes', async (req): Promise<SessionChanges> =>
     core.sessions.changes(req.params.id, req.query.commit || undefined));
@@ -564,6 +569,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     workQueueGithub: core.config.workQueue.github,
     workQueueSlack: core.config.workQueue.slack,
     workQueueSyncMinutes: core.config.workQueue.syncMinutes,
+    codeReviewStrategy: globalReview(core.config).strategy,
+    codeReviewRounds: core.config.codeReview.rounds,
+    codeReviewDepth: core.config.codeReview.depth,
   });
   app.get('/api/settings', async () => {
     // Opening Settings reads the Meko on this computer and its Meko Cloud link again (it may have
@@ -600,6 +608,15 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (b.workQueueSyncMinutes !== undefined && (!Number.isInteger(b.workQueueSyncMinutes) || b.workQueueSyncMinutes < 0 || b.workQueueSyncMinutes > WORK_SYNC_MINUTES_MAX)) {
       throw new HttpError(400, `Sync every must be a whole number of minutes from 0 to ${WORK_SYNC_MINUTES_MAX}.`);
     }
+    if (b.codeReviewStrategy !== undefined && !isStrategySetting(b.codeReviewStrategy)) {
+      throw new HttpError(400, `The review strategy must be off or one of ${STRATEGIES.map((x) => x.id).join(', ')}.`);
+    }
+    if (b.codeReviewRounds !== undefined && (!Number.isInteger(b.codeReviewRounds) || b.codeReviewRounds < 0 || b.codeReviewRounds > MAX_ROUNDS)) {
+      throw new HttpError(400, `Re-review rounds must be a whole number from 0 to ${MAX_ROUNDS}.`);
+    }
+    if (b.codeReviewDepth !== undefined && (!Number.isInteger(b.codeReviewDepth) || b.codeReviewDepth < 1 || b.codeReviewDepth > MAX_DEPTH)) {
+      throw new HttpError(400, `Review depth must be a whole number from 1 to ${MAX_DEPTH}.`);
+    }
     for (const k of ['claudeEnabled', 'opencodeEnabled', 'opencodeDisableTracking', 'kiroEnabled', 'kiroTrustTools', 'workQueueGithub', 'workQueueSlack'] as const) {
       if (b[k] !== undefined && typeof b[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false.`);
     }
@@ -624,6 +641,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.workQueueGithub !== undefined) c.workQueue.github = b.workQueueGithub;
       if (b.workQueueSlack !== undefined) c.workQueue.slack = b.workQueueSlack;
       if (b.workQueueSyncMinutes !== undefined) c.workQueue.syncMinutes = b.workQueueSyncMinutes;
+      if (b.codeReviewStrategy !== undefined) c.codeReview.strategy = b.codeReviewStrategy;
+      if (b.codeReviewRounds !== undefined) c.codeReview.rounds = b.codeReviewRounds;
+      if (b.codeReviewDepth !== undefined) c.codeReview.depth = b.codeReviewDepth;
     });
     // An agent turned on: its version (and Kiro's agent file) follow, in the background. One turned
     // off forgets its last read, so it isn't offered on that read once it's turned on again.

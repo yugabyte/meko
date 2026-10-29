@@ -331,7 +331,17 @@ export interface LaunchSpec {
    * env, status line, plugins) or its `.mcp.json` servers: for a PR head whose code isn't trusted.
    */
   userSettingsOnly?: boolean;
+  /**
+   * Subagents for the session (`--agents`), by name: a code-review session's review steps. Each runs
+   * on its model ('' the session's own).
+   */
+  agents?: { name: string; description: string; prompt: string; model: string }[];
+  /** Tools the session and its subagents may not use (`--disallowedTools`): a code-review session's writes. */
+  disallowedTools?: string[];
 }
+
+/** The tools a code-review session (and its subagents) may not use: it reads the change and changes nothing. */
+export const REVIEW_DISALLOWED_TOOLS = ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'WebFetch', 'WebSearch'];
 
 /**
  * What a Claude Code session's launcher runs: `claude` with AgentK's settings, the conversation
@@ -352,6 +362,11 @@ export function claudeLauncher(paths: Paths, spec: LaunchSpec): LauncherSpec {
   for (const d of spec.pluginDirs ?? []) args.push('--plugin-dir', claudePath(d));
   for (const f of spec.mcpConfigs ?? []) args.push('--mcp-config', claudePath(f));
   if (spec.appendSystemPrompt) args.push('--append-system-prompt', spec.appendSystemPrompt);
+  if (spec.agents?.length) {
+    const agents = Object.fromEntries(spec.agents.map((a) => [a.name, { description: a.description, prompt: a.prompt, ...(a.model ? { model: a.model } : {}) }]));
+    args.push('--agents', JSON.stringify(agents));
+  }
+  if (spec.disallowedTools?.length) args.push('--disallowedTools', spec.disallowedTools.join(' '));
   // After "--", a prompt that starts with "-" (such as "---" front matter) isn't read as an option.
   if (spec.prompt) args.push('--', spec.prompt);
   return { sessionId: spec.sessionId, worktree: spec.worktree, command: spec.claudeCommand, args, env: spec.env, unsetEnv: spec.unsetEnv };

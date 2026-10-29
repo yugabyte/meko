@@ -86,6 +86,16 @@ idle_days = 14            # an idle worktree no session used for this many days 
 [pr]
 # resolve_conflicts = false  # don't have AgentK resolve a PR's merge conflicts with its base (Settings → General); on by default
 
+[code_review]                # the local review before a PR opens (docs/design/code-review.md), also in Settings › General
+# strategy = "off"           # sagittarius-3.0 (the default), sirius-1.0, or off; a project's and a session's own go over it
+# rounds = 1                 # re-reviews after the first, each after the task fixes the findings (0 to 5; 0 by default)
+# depth = 3                  # sweeps in each review, as the cloud's deep reviews (1 to 5; 1 by default)
+
+[code_review.models.opencode] # the model each tier of review step runs on; Claude Code's are opus, sonnet and haiku,
+# large = "anthropic/…"      # OpenCode's and Kiro's empty (the session's own model)
+# mid = "anthropic/…"
+# small = "anthropic/…"
+
 [ask_agentk]
 # enabled = false            # no Ask AgentK in the command palette; on by default
 # model = "sonnet"           # the model that answers asks (a Claude Code alias or a full model name; empty uses Claude Code's default)
@@ -138,9 +148,11 @@ CREATE TABLE sessions (
   branch_reused INTEGER,          -- 1: the branch existed when the session started
   desired TEXT CHECK (desired IN ('running','archived')),   -- what recovery restores
   status TEXT,                    -- starting | working | needs_input | idle | exited | recovered | archived
-  kind TEXT,                      -- review-pr, or a task: plan for new ones, explore | plan | quick from before tasks had start
+  kind TEXT,                      -- review-pr, code-review, or a task: plan for new ones, explore | plan | quick from before tasks had start
                                   -- stages (older releases and pages index their stage lists with it); kindOf() reads all three as a task
-  stage TEXT,                     -- explore | design | code | pr | review | merge (Merge & Close) | done | reviewing-pr
+  stage TEXT,                     -- explore | design | code | pr | review | merge (Merge & Close) | done | reviewing-pr | reviewing-code
+  parent_id TEXT,                 -- a code-review session's task (code-review.md); NULL for the rest
+  review_json TEXT,               -- the session's own local review settings (ReviewOverrides); NULL: its project's
   pr_number INTEGER, pr_url TEXT, review_state TEXT, ci_state TEXT,
   pr_repo TEXT, pr_title TEXT, pr_author TEXT,  -- Review a PR only: the PR's owner/name on GitHub, title and author
   review_sha TEXT, pr_head_sha TEXT,  -- Review a PR: the commit checked out; the PR's head at the last look
@@ -209,6 +221,18 @@ CREATE TABLE work_items (      -- the work queue (workqueue.ts, docs/design/work
   unplaced INTEGER, github_done_at INTEGER, created_at INTEGER, closed_at INTEGER);
 CREATE TABLE work_item_links (item_id TEXT, ord INTEGER, key TEXT, kind TEXT, url TEXT, label TEXT,
   PRIMARY KEY (item_id, key));  -- indexed on key, for the palette's lookup by link
+CREATE TABLE code_reviews (    -- a task's local reviews (review/runner.ts, docs/design/code-review.md), one per Open PR
+  id TEXT PRIMARY KEY, task_id TEXT, session_id TEXT,  -- the task, and its code-review session
+  strategy TEXT, rounds INTEGER, depth INTEGER,        -- what it runs with, stamped when it starts
+  state TEXT,                  -- preparing | sweeping | scoring | fixing | done | failed | cancelled
+  round INTEGER, sweep INTEGER, asked INTEGER,         -- where it is; asked: steps asked for again this phase
+  candidates_json TEXT, findings_json TEXT, notes_json TEXT, datapacks_json TEXT,  -- this round's candidates, every round's
+                               --   findings (the panel), the passes' notes, the MEKO.md datapacks
+  counts_json TEXT, last_kept INTEGER,                 -- every round's kept findings by severity (the PR line)
+  instructions TEXT, by TEXT,  -- the Open PR's instructions it holds, and who pressed it (you | auto)
+  detail TEXT, created_at INTEGER, updated_at INTEGER, finished_at INTEGER);  -- finished_at: its PR prompt went
+CREATE TABLE code_review_steps (review_id TEXT, step TEXT, report_json TEXT, at INTEGER,  -- each step's report, as
+  PRIMARY KEY (review_id, step));  --   review_report or review_score took it (r1s1:guide, r1c3)
 ```
 
 - **Why SQLite.** You get transactions across projects, sessions and datapacks, an event history

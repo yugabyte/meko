@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { HARNESS_CAPS, versionAtLeast } from '../../shared/harnesses.js';
 import { claudeAsker } from '../askagentk.js';
-import { EDIT_TOOLS, claudeLauncher, modDirPath, statusLineScriptPath, transcriptPathFor, userStatusLine, writeModFiles } from '../claude.js';
+import { EDIT_TOOLS, REVIEW_DISALLOWED_TOOLS, claudeLauncher, modDirPath, statusLineScriptPath, transcriptPathFor, userStatusLine, writeModFiles } from '../claude.js';
 import type { ClaudeCode } from '../claudecode.js';
 import type { Config } from '../config.js';
 import type { HookPayload } from '../hooks.js';
@@ -69,6 +69,7 @@ export function claudeHarness(deps: { claudeCode: ClaudeCode; log: Logger }): Ha
       pluginDirs: [...(l.modDir ? [l.modDir] : []), ...(l.tools ? [toolsPluginDir(paths)] : [])],
       mcpConfigs: l.tools ? [toolsMcpConfigPath(paths)] : [],
       appendSystemPrompt: l.systemPrompt, prompt: l.prompt, unsetEnv: l.unsetEnv, userSettingsOnly: l.untrusted,
+      agents: l.review?.agents, disallowedTools: l.review ? REVIEW_DISALLOWED_TOOLS : undefined,
       env: {
         ...l.env,
         // Our status line replaces the user's; it runs theirs (resolved for this worktree) after reporting limits.
