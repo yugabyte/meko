@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { HARNESS_CAPS } from '../../src/shared/harnesses.js';
-import type { HarnessStatus, MekoStatus, Project, Settings } from '../../src/shared/types.js';
+import type { CreateSessionRequest, HarnessStatus, MekoStatus, Project, Settings } from '../../src/shared/types.js';
 import { NewSessionDialog } from '../../src/web/components/NewSessionDialog.js';
 import { AgentSettings, HarnessBar, MekoLinks } from '../../src/web/components/SettingsDialog.js';
 import { defaultAgentChoice } from '../../src/web/util.js';
@@ -50,22 +50,34 @@ describe("the New session dialog's Agent choice", () => {
 
 describe("the New session dialog's Learn the project", () => {
   const dedicated = { ...project, datapacks: [{ id: 'dp', name: 'adlc/proj/demo/x', role: 'dedicated' }] } as unknown as Project;
-  const learnHtml = (p: Project, mekoOn: boolean, learnFirst: boolean) =>
+  const learnHtml = (p: Project, mekoOn: boolean, learnFirst: boolean, initial?: CreateSessionRequest) =>
     renderToStaticMarkup(createElement(NewSessionDialog, {
-      project: p, ghLogin: null, harnesses: [status('claude')], mekoOn, learnFirst, onClose: () => undefined, onCreated: () => undefined,
+      project: p, ghLogin: null, harnesses: [status('claude')], mekoOn, learnFirst, initial, onClose: () => undefined, onCreated: () => undefined,
     }));
+  const shown = (html: string) => ({
+    pill: html.includes('id="ns-start-learn"'),
+    picked: /id="ns-start-learn"[^>]*aria-checked="true"/.test(html),
+    fields: html.includes('id="ns-learn-about"') && !html.includes('id="ns-prompt"'),
+    offer: html.includes('id="ns-learn-offer"'),
+  });
   it.each([
-    ['is picked, with its fields and the empty-datapack line, for a project just opened on an empty datapack', dedicated, true, true, { pill: true, picked: true, fields: true }],
-    ['is offered but not picked otherwise', dedicated, true, false, { pill: true, picked: false, fields: false }],
-    ["isn't offered without a dedicated datapack", { ...project, datapacks: [] } as unknown as Project, true, true, { pill: false, picked: false, fields: false }],
-    ["isn't offered with Meko off", dedicated, false, true, { pill: false, picked: false, fields: false }],
+    ['is picked, with its fields and the empty-datapack line, for a project just opened on an empty datapack', dedicated, true, true, { pill: true, picked: true, fields: true, offer: true }],
+    ["isn't offered in a plain New session, even with Meko on and a dedicated datapack", dedicated, true, false, { pill: false, picked: false, fields: false, offer: false }],
+    ["isn't offered without a dedicated datapack", { ...project, datapacks: [] } as unknown as Project, true, true, { pill: false, picked: false, fields: false, offer: false }],
+    ["isn't offered with Meko off", dedicated, false, true, { pill: false, picked: false, fields: false, offer: false }],
   ])('%s', (_, p, mekoOn, learnFirst, want) => {
-    const html = learnHtml(p, mekoOn, learnFirst);
-    expect({
-      pill: html.includes('id="ns-start-learn"'),
-      picked: /id="ns-start-learn"[^>]*aria-checked="true"/.test(html),
-      fields: html.includes('id="ns-learn-about"') && html.includes('id="ns-learn-offer"') && !html.includes('id="ns-prompt"'),
-    }).toEqual(want);
+    expect(shown(learnHtml(p, mekoOn, learnFirst))).toEqual(want);
+  });
+
+  it('is offered and picked again to retry a failed learn start, with what it asked for', () => {
+    const html = learnHtml(dedicated, true, false, { name: 'Learn the project', learn: { about: 'The billing service.', where: 'services/billing/', months: 12 } });
+    expect(shown(html)).toEqual({ pill: true, picked: true, fields: true, offer: false });
+    expect(html).toContain('The billing service.');
+    expect(html).toContain('services/billing/');
+  });
+
+  it("isn't offered to retry a failed start at Design", () => {
+    expect(shown(learnHtml(dedicated, true, false, { name: 'x', start: 'design', prompt: 'Fix it' })).pill).toBe(false);
   });
 });
 

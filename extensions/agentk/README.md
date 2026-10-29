@@ -139,7 +139,7 @@ your phone can connect.
   threads), and saves what a teammate would want to know before working on it: how the parts fit,
   how it's built and tested, its traps, and from the PRs the decisions and why. It changes no files,
   and when it's done it writes a summary to its timeline and closes by itself. While the datapack
-  is empty, the project's home offers it again.
+  is empty, the project's home offers it again; a plain New session doesn't offer it.
 - **Share a project** by sharing its dedicated datapack with someone, by email or with its share
   link: turn the link on in the Share dialog with the role it gives, copy it, and post it where your
   team is. A project datapack shared with you shows a banner and a notification, and opens as a new

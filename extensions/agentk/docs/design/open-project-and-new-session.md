@@ -136,7 +136,7 @@ the first prompt, unless the prompt already starts with it), so the prompt needn
 | **1 Design** (the default) | Normal tasks: a design for you to approve, then code, PR, review and merge | `design`; with no first prompt the name is the task |
 | **2 Code** | Small tasks: straight to code, then PR, review and merge | `code`; with no first prompt the name is the task |
 | **Review a PR** (`kind: 'review-pr'`) | Reviewing someone else's PR, with AgentK assisting | `review-pr`; it stays in Reviewing PR until you **Close review** (see [Reviewing a PR](review-pr.md)) |
-| **Learn the project** (`learn`) | Seeding the project's datapack from the repo and its PRs; offered only with Meko on and a dedicated datapack | `seed`; it closes by itself when done (see [Learn sessions](recall-and-learn.md#learn-sessions)) |
+| **Learn the project** (`learn`) | Seeding the project's datapack from the repo and its PRs; offered only with Meko on and a dedicated datapack, and only in a dialog opened on it: a project just opened on an empty datapack, the project home's offer, or Try again on a learn start | `seed`; it closes by itself when done (see [Learn sessions](recall-and-learn.md#learn-sessions)) |
 
 With Code picked, a **Run to merge** box (off by default) sits under the picker: AgentK then opens
 the PR when the coding turn ends and merges it once nothing blocks it (`CreateSessionRequest.autoRun`;
