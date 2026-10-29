@@ -109,9 +109,6 @@ meko extension install agentk     # -- --agent claude picks its coding agent
 agentk ui                         # opens AgentK in your browser
 ```
 
-`meko extension list` shows each extension, installed or not, with its state and updates.
-`meko extension update` and `meko extension delete` update and remove one.
-
 ## How it works
 
 - **One folder.** Everything lives under `~/.meko`.
