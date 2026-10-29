@@ -212,7 +212,8 @@ change between two versions instead: the server asks GitHub for the commits betw
 passes, else HTTPS: `repos/yugabyte/meko/compare/<from tag>...<to tag>`, each of either
 prefix) and lists the `feat`, `fix`, `perf` and `deps`
 subjects by type, as the repo root's `scripts/release/release-notes.sh` does (leaving out the subjects that name only `meko` or `presenter`) (`src/server/releasenotes.ts`), with
-**Breaking changes** first and each line linked to its PR. GitHub returns at most 250 commits for a
+**Breaking changes** first (a `!` subject only there, not again under its type) and each line
+linked to its PR. GitHub returns at most 250 commits for a
 comparison; past that the dialog says so, and **See every commit on GitHub** opens the comparison
 there. A range's notes are kept in memory once fetched; nothing is fetched until the dialog opens.
 It opens from the "Updated to" banner (the version updated from → this one), the "Version X is

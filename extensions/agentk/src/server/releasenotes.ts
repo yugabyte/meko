@@ -33,8 +33,9 @@ const OTHER_PRODUCT = /^(meko|presenter)(\/|$)/;
 /**
  * Release notes for a range of commits, newest first, by the rules of
  * scripts/release/release-notes.sh --product agentk: only feat, fix, perf and deps subjects count,
- * Meko's and Presenter's (subjects naming only `meko` or `presenter`) don't, a `!` or a `BREAKING CHANGE:` footer on one of them also lists
- * it under Breaking changes, and a section with nothing in it is left out.
+ * Meko's and Presenter's (subjects naming only `meko` or `presenter`) don't, a `!` subject is listed
+ * under Breaking changes instead of its type's section (so it shows once), a `BREAKING CHANGE:`
+ * footer adds its own line there, and a section with nothing in it is left out.
  * `repo` (owner/name) links a subject's "(#123)" to its PR.
  */
 export function releaseNotes(commits: NoteCommit[], repo: string): ReleaseNoteSection[] {
@@ -54,8 +55,7 @@ export function releaseNotes(commits: NoteCommit[], repo: string): ReleaseNoteSe
       sha: c.sha.slice(0, 7),
       url: pr ? `https://github.com/${repo}/pull/${pr[1]}` : c.url,
     };
-    byType.get(type)!.push(item);
-    if (bang) breaking.push(item);
+    (bang ? breaking : byType.get(type)!).push(item);
     for (const line of body) {
       if (line.startsWith('BREAKING CHANGE: ')) breaking.push({ ...item, component: null, summary: line.slice(17).trim() });
     }

@@ -10,6 +10,9 @@ export type WhatsNewOpener = 'banner' | 'settings';
 /** The Settings tab What's new's Back reopens: Updates when it opened in place of Settings, none from a banner. */
 export const whatsNewBack = (opener: WhatsNewOpener): SettingsTab | undefined => (opener === 'settings' ? 'updates' : undefined);
 
+/** The changes in `notes`: one per commit, since a BREAKING CHANGE: footer adds a line for a commit listed under its type too. */
+export const changeCount = (notes: ReleaseNotes): number => new Set(notes.sections.flatMap((s) => s.items.map((i) => i.sha))).size;
+
 /**
  * What's new from one version to another: every feat, fix, perf and deps change between their
  * tags, by type, across all the releases in between (GET /api/update/notes). `onBack` returns to
@@ -32,7 +35,7 @@ export function WhatsNewDialog({ from, to, onClose, onBack }: { from: string; to
     };
   }, [from, to]);
 
-  const changes = notes?.sections.filter((s) => s.title !== 'Breaking changes').reduce((n, s) => n + s.items.length, 0) ?? 0;
+  const changes = notes ? changeCount(notes) : 0;
   const compareUrl = notes?.compareUrl ?? null;
   // GitHub gives at most 250 commits for one comparison: the rest may hold changes.
   const cut = !!notes && notes.commits < notes.totalCommits;

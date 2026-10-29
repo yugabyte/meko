@@ -4,7 +4,7 @@ import { releaseNotes } from '../../src/server/releasenotes.js';
 const commit = (message: string, sha = 'abcdef0123') => ({ sha, message, url: `https://github.com/o/r/commit/${sha}` });
 
 describe('releaseNotes', () => {
-  it('sorts releasing subjects into sections, breaking changes first, and links PRs', () => {
+  it('sorts releasing subjects into sections, breaking changes first and only there, and links PRs', () => {
     const notes = releaseNotes(
       [
         commit('feat(web)!: drop the old layout (#12)', '1111111aaa'),
@@ -23,13 +23,8 @@ describe('releaseNotes', () => {
           { component: null, summary: 'the config moves', pr: null, sha: '2222222', url: 'https://github.com/o/r/commit/2222222bbb' },
         ],
       },
-      {
-        title: 'Features',
-        items: [
-          { component: 'web', summary: 'drop the old layout', pr: 12, sha: '1111111', url: 'https://github.com/o/r/pull/12' },
-          { component: null, summary: 'a second feature', pr: null, sha: '5555555', url: 'https://github.com/o/r/commit/5555555eee' },
-        ],
-      },
+      // A `!` subject shows only under Breaking changes, not again under Features.
+      { title: 'Features', items: [{ component: null, summary: 'a second feature', pr: null, sha: '5555555', url: 'https://github.com/o/r/commit/5555555eee' }] },
       { title: 'Fixes', items: [{ component: null, summary: 'stop a crash', pr: null, sha: '2222222', url: 'https://github.com/o/r/commit/2222222bbb' }] },
       { title: 'Performance', items: [{ component: 'server', summary: 'cache the scan', pr: null, sha: '4444444', url: 'https://github.com/o/r/commit/4444444ddd' }] },
       { title: 'Dependencies', items: [{ component: null, summary: 'bump fastify', pr: 14, sha: '3333333', url: 'https://github.com/o/r/pull/14' }] },

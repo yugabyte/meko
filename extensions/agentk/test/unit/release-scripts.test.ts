@@ -75,7 +75,7 @@ describe('release-notes.sh', () => {
     const r = run('release-notes.sh', ['--product', 'meko']);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('### Breaking changes\n\n- fix(meko/engine)!: reload the model\n');
-    expect(r.stdout).toContain('### Fixes\n\n- meko/engine: reload the model');
+    expect(r.stdout).not.toContain('### Fixes');
     expect(r.stdout).not.toMatch(/AgentK feature|first/);
   });
 
