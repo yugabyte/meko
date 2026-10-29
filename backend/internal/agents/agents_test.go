@@ -37,6 +37,17 @@ var (
 	cloud = Target{Kind: KindCloud, URL: cloudURL, Token: cloudKey}
 )
 
+// realPath is dir with its symlinks resolved, as the fake claude logs the folder it ran in (pwd -P):
+// on macOS a test's temp folder is under /var, a symlink to /private/var.
+func realPath(t *testing.T, dir string) string {
+	t.Helper()
+	p, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 // fakeAgents gives a test its own home and a PATH of fake agent commands (all four unless named),
 // first, then /usr/bin:/bin. claude and opencode log their arguments, a line a run, to the returned
 // log (claude's local-scope remove adds the folder it ran in). claude mcp remove --scope user fails
@@ -57,7 +68,7 @@ func fakeAgents(t *testing.T, failing bool, names ...string) (home, log string) 
 		fails = "[ \"$2\" = add ] && { echo \"refused: $*\" >&2; exit 1; }\n"
 	}
 	scripts := map[string]string{
-		"claude": "[ \"$4\" = local ] && echo \"  in $PWD\" >> " + log + "\n" +
+		"claude": "[ \"$4\" = local ] && echo \"  in $(pwd -P)\" >> " + log + "\n" +
 			"[ \"$2\" = remove ] && [ \"$4\" = user ] && [ ! -e " + added + " ] && " +
 			"{ echo 'No MCP server found' >&2; exit 1; }\n" +
 			fails + "[ \"$2\" = add ] && touch " + added + "\n",
@@ -303,7 +314,8 @@ func TestConnectClaudeFolders(t *testing.T) {
 	if err != nil || len(r.Notes) != 2 || r.Notes[0] != "It replaced the meko server at "+otherURL || r.Notes[1] != note {
 		t.Fatalf("connect claude: %q %v", r.Notes, err)
 	}
-	if got := readLog(t, log); !strings.HasSuffix(got, "claude mcp remove --scope local meko\n  in "+mine+"\n") ||
+	ran := "claude mcp remove --scope local meko\n  in " + realPath(t, mine) + "\n"
+	if got := readLog(t, log); !strings.HasSuffix(got, ran) ||
 		strings.Count(got, "--scope local") != 1 {
 		t.Errorf("claude ran:\n%s", got)
 	}
@@ -508,7 +520,7 @@ func TestDisconnect(t *testing.T) {
 		t.Fatalf("disconnect claude: %+v %v", r, err)
 	}
 	if got := readLog(t, log); got != "claude mcp remove --scope user meko\nclaude mcp remove --scope local meko\n  in "+
-		mine+"\n" {
+		realPath(t, mine)+"\n" {
 		t.Errorf("claude ran:\n%s", got)
 	}
 	// Unlinked, the same entry at Meko Cloud is elsewhere: it stays.
