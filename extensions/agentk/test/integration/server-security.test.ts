@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { request, type IncomingHttpHeaders } from 'node:http';
-import { connect, type Socket } from 'node:net';
+import { connect } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
@@ -137,30 +137,19 @@ describe('HTTP API: access control', () => {
       expect(got).toEqual(['state', 'pong', 'restarting']);
     });
 
-    /** A sleeping phone: its events socket opens, then nothing it receives is ever answered. */
-    async function sleepingPeer(): Promise<Socket> {
+    it("closes without waiting out a socket that never answers the close (ws's 30 s)", async () => {
       const sock = await listen();
+      // A sleeping phone: the socket opens, then nothing it receives is ever answered.
       const peer = connect(sock);
       const upgraded = new Promise<void>((resolve) => peer.once('data', () => resolve()));
       peer.write('GET /ws/events HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
         + 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n');
       await upgraded;
-      return peer;
-    }
-
-    it("closes without waiting out a socket that never answers the close (ws's 30 s)", async () => {
-      const peer = await sleepingPeer();
       const started = Date.now();
       await app.close();
       expect(Date.now() - started).toBeLessThan(SHUTDOWN_CLOSE_MS + 2000);
-      peer.destroy();
-    });
-
-    it('reads no state for a change after it closed, while a page is still closing', async () => {
-      const peer = await sleepingPeer();
-      await app.close();
-      // The dropped socket is still on its way out, and the core still changes as it stops: the
-      // database may be closed by the time a push would read the state.
+      // The dropped socket is still on its way out, and a change between the close and the core's
+      // stop must read no state: the database may be closed by the time a push would.
       const state = vi.spyOn(env.core, 'state');
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       try {

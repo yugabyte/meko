@@ -796,8 +796,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   core.on('change', pushState);
   core.on('notify', notify);
   // A push after the server closes would read state after the database may be closed. A page's
-  // socket can still be in `clients` then, closing, and the core still changes as it stops: so the
-  // server stops listening to the core here, as well as dropping the push already due.
+  // socket can still be in `clients` then, closing, and the core can still change until its stop()
+  // begins (shutdown, and a test's cleanup, close the server first): so the server stops listening
+  // to the core here, as well as dropping the push already due.
   app.addHook('onClose', async () => {
     core.off('change', pushState);
     core.off('notify', notify);
