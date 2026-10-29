@@ -1,6 +1,6 @@
 // context_search from the browser: one question over memories, the knowledge base and past
-// conversations, each source's hits in its own section. Graph shows the memories as a map instead,
-// with the question landing among them.
+// conversations, each source's hits in its own section. Graph shows the 100 things nearest the
+// question as a map instead, colored by source, with what the search returned lit.
 
 import { useState, type FormEvent, type ReactNode } from "react";
 import { Brain, FileText, MessagesSquare, Search } from "lucide-react";
@@ -8,11 +8,10 @@ import { api, type SearchSource } from "../lib/api";
 import { SEARCH_INPUT_ID } from "../lib/useShortcuts";
 import { SHOW_COLLECTIVE } from "../lib/features";
 import { timeAgo } from "../lib/format";
-import type { ContextSearch, Datapack, MemoryHit } from "../lib/types";
+import type { ContextSearch, Datapack, MapSource, MemoryHit } from "../lib/types";
 import { useSavedView, VIEWS } from "../lib/useSavedView";
 import { ExpandableText } from "../components/ExpandableText";
 import { MemoryGraph } from "../components/MemoryGraph";
-import { SHOWN_STATES } from "../components/MemoryMapView";
 import { Segmented } from "../components/Segmented";
 import { round2, Similarity, WEAK_MEMORY } from "../components/Similarity";
 import { Badge, Button, Card, Empty, ErrorNote, Input, Spinner } from "../components/ui";
@@ -83,6 +82,8 @@ function Section({
   );
 }
 
+const MAP_SOURCES: MapSource[] = ["memory", "knowledge_base", "conversation"];
+
 const SOURCES: readonly { id: SearchSource; label: string }[] = [
   { id: "auto", label: "All" },
   { id: "memory", label: "Memory" },
@@ -134,12 +135,9 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
       </form>
       <div className="flex flex-wrap items-center gap-3">
         <Segmented options={SOURCES} value={source} onChange={setSource} />
-        {/* Only memories are on the map, so a search without them has no graph. */}
-        {shows(source, "memory") && (
-          <div className="ml-auto">
-            <Segmented options={VIEWS} value={view} onChange={setView} />
-          </div>
-        )}
+        <div className="ml-auto">
+          <Segmented options={VIEWS} value={view} onChange={setView} />
+        </div>
       </div>
       {error && <ErrorNote error={error} />}
       {!r && !error && (
@@ -147,7 +145,21 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
           The same search agents run with <b>context_search</b>: memories, knowledge files and past conversations.
         </Empty>
       )}
-      {r && (
+      {r && view === "graph" && (
+        <MemoryGraph
+          datapackId={datapack.datapack_id}
+          search={{
+            query: asked,
+            sources: MAP_SOURCES.filter((s) => shows(searched, s)),
+            hits: [
+              ...(r.memory ?? []).filter((m) => !isWeak(m)).map((m) => m.id),
+              ...(r.knowledge_base ?? []).map((k) => k.id),
+              ...(r.conversation?.hits ?? []).map((h) => h.message_id),
+            ],
+          }}
+        />
+      )}
+      {r && view === "list" && (
         <div className="space-y-6">
           {shows(searched, "memory") && (
             <Section
@@ -156,16 +168,7 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
               n={r.memory?.length ?? null}
               badge={r.memory?.filter((m) => !isWeak(m)).length}
             >
-              {view === "graph" ? (
-                <MemoryGraph
-                  datapackId={datapack.datapack_id}
-                  states={SHOWN_STATES}
-                  query={asked}
-                  hits={(r.memory ?? []).filter((m) => !isWeak(m)).map((m) => m.id)}
-                />
-              ) : (
-                <Memories hits={r.memory ?? []} />
-              )}
+              <Memories hits={r.memory ?? []} />
             </Section>
           )}
           {shows(searched, "knowledge_base") && (

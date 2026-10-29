@@ -82,3 +82,19 @@ func TestMemoryMap(t *testing.T) {
 	}
 	wantErr(t, e, "GET", "/datapacks/00000000-0000-0000-0000-000000000000/memory-map", nil, 404, "NOT_FOUND")
 }
+
+// The search map needs a question and takes only context_search's sources.
+func TestSearchMapRoute(t *testing.T) {
+	e := testenv.Start(t, testenv.Options{})
+	path := "/datapacks/" + e.DatapackID + "/search-map"
+	if _, err := e.Service.AddMemory(context.Background(), memory.AddMemory{DatapackID: e.DatapackID,
+		AgentID: "claude_code:x", Text: "releases ship on Tuesdays"}); err != nil {
+		t.Fatal(err)
+	}
+	m := obj(okData(t, e, "GET", path+"?q=when+do+releases+ship&sources=memory", nil, 200))
+	if p := arr(m["points"]); len(p) != 1 || obj(p[0])["source"] != "memory" || len(arr(m["query"])) != 2 {
+		t.Errorf("map %v", m)
+	}
+	wantErr(t, e, "GET", path, nil, 400, "VALIDATION_ERROR")
+	wantErr(t, e, "GET", path+"?q=x&sources=memory,files", nil, 400, "VALIDATION_ERROR")
+}

@@ -150,14 +150,19 @@ export interface PromotedMemory {
 // alike memories close together, links between near neighbors, and where ?q= lands.
 export type MemoryState = "learning" | "kept" | "collective";
 
+// What a search map's point is: a memory, a knowledge-base chunk or a conversation turn.
+export type MapSource = "memory" | "knowledge_base" | "conversation";
+
+// A memory map's point carries its state; a search map's its source (and no agent or date).
 export interface MapPoint {
   id: string;
   text: string;
-  state: MemoryState;
-  agent_id: string;
+  state?: MemoryState;
+  source?: MapSource;
+  agent_id?: string;
   conversation_id?: string;
   message_id?: string;
-  created_at: string;
+  created_at?: string;
   x: number;
   y: number;
   similarity?: number; // to the query, when there is one

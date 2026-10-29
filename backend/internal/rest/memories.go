@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -273,15 +274,49 @@ func (a *api) memoryMap(c echo.Context) error {
 	if !ok {
 		return err
 	}
-	var ids []string
-	for _, s := range strings.Split(c.QueryParam("ids"), ",") {
-		if s = strings.ToLower(strings.TrimSpace(s)); s != "" {
-			ids = append(ids, s)
-		}
-	}
-	m, err := a.Service.MemoryMap(ctx(c), id, strings.TrimSpace(c.QueryParam("q")), ids)
+	m, err := a.Service.MemoryMap(ctx(c), id, strings.TrimSpace(c.QueryParam("q")), csv(c.QueryParam("ids")))
 	if err != nil {
 		return serviceError(c, err)
 	}
 	return envelope.OK(c, m)
+}
+
+// searchMap is the memories, knowledge-base chunks and conversation turns nearest to ?q= among
+// ?sources= (all by default), laid out by meaning, with ?hits= (what the search returned) drawn
+// too: Search's Graph view (Meko's own).
+func (a *api) searchMap(c echo.Context) error {
+	id, ok, err := a.pathDatapack(c)
+	if !ok {
+		return err
+	}
+	q := strings.TrimSpace(c.QueryParam("q"))
+	if q == "" {
+		return badRequest(c, "q is required")
+	}
+	all := []string{store.MapMemory, store.MapKnowledge, store.MapConversation}
+	sources := csv(c.QueryParam("sources"))
+	for _, s := range sources {
+		if !slices.Contains(all, s) {
+			return badRequest(c, "sources takes "+strings.Join(all, ", "))
+		}
+	}
+	if len(sources) == 0 {
+		sources = all
+	}
+	m, err := a.Service.SearchMap(ctx(c), id, q, sources, csv(c.QueryParam("hits")))
+	if err != nil {
+		return serviceError(c, err)
+	}
+	return envelope.OK(c, m)
+}
+
+// csv is a comma-separated query parameter's values, trimmed and lowercased, blanks left out.
+func csv(param string) []string {
+	var out []string
+	for _, s := range strings.Split(param, ",") {
+		if s = strings.ToLower(strings.TrimSpace(s)); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }

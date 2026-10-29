@@ -26,7 +26,8 @@ const (
 type MapPoint struct {
 	ID             string   `json:"id"`
 	Text           string   `json:"text"`
-	State          string   `json:"state"` // learning, kept or collective
+	State          string   `json:"state,omitempty"`  // a memory map's: learning, kept or collective
+	Source         string   `json:"source,omitempty"` // a search map's: memory, knowledge_base or conversation
 	AgentID        string   `json:"agent_id"`
 	ConversationID string   `json:"conversation_id,omitempty"`
 	MessageID      string   `json:"message_id,omitempty"` // the turn an extracted memory came from
@@ -195,6 +196,64 @@ func (s *Service) MemoryMap(ctx context.Context, datapack, query string, ids []s
 	if q != nil {
 		out.Query = &qxy
 	}
+	return out, nil
+}
+
+// searchMapPoints is how many things a search map draws: the nearest to the question across the
+// sources searched. Enough to show where it lands, few enough to read.
+const searchMapPoints = 100
+
+// SearchMap lays out the searchMapPoints memories, knowledge-base chunks and conversation turns
+// nearest to query among sources, by meaning, with the query placed among them and each thing's
+// similarity to it. hits (what the search returned: memory and chunk ids, turns' message ids) are
+// drawn even when they're further than the rest, as long as they're among each source's nearest
+// searchMapPoints by vector: a keyword-only match further than that isn't drawn. It draws no links,
+// which would crowd a map whose point is the question.
+func (s *Service) SearchMap(ctx context.Context, datapack, query string, sources, hits []string) (Map, error) {
+	if err := s.needDatapack(ctx, datapack); err != nil {
+		return Map{}, err
+	}
+	out := Map{Points: []MapPoint{}, Links: []MapLink{}}
+	if query == "" {
+		return out, nil
+	}
+	qs, err := s.eng.Embed(ctx, []string{query})
+	if err != nil {
+		return Map{}, err
+	}
+	q := qs[0]
+	items, err := s.st.NearestForMap(ctx, datapack, s.userID, q, searchMapPoints, sources)
+	if err != nil {
+		return Map{}, err
+	}
+	hit := map[string]bool{}
+	for _, h := range hits {
+		hit[h] = true
+	}
+	var vecs [][]float32
+	for i, it := range items {
+		if i >= searchMapPoints && !hit[it.ID] {
+			continue
+		}
+		sim := 1 - it.Distance
+		p := MapPoint{ID: it.ID, Text: it.Text, Source: it.Source, Similarity: &sim}
+		switch it.Source {
+		case store.MapConversation:
+			p.ConversationID, p.MessageID = it.ConversationID, it.ID
+		case store.MapMemory:
+			p.ConversationID = it.ConversationID
+		}
+		out.Points = append(out.Points, p)
+		vecs = append(vecs, it.Vector)
+	}
+	if len(vecs) == 0 {
+		return out, nil
+	}
+	xy, qxy := project(vecs, q)
+	for i := range out.Points {
+		out.Points[i].X, out.Points[i].Y = xy[i][0], xy[i][1]
+	}
+	out.Query = &qxy
 	return out, nil
 }
 

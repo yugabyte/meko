@@ -119,6 +119,7 @@ func Register(g *echo.Group, o Options) {
 	g.GET("/datapacks/:id/usage", a.callUsage)
 	g.GET("/datapacks/:id/export", a.exportDatapack)
 	g.GET("/datapacks/:id/memory-map", a.memoryMap)
+	g.GET("/datapacks/:id/search-map", a.searchMap)
 	g.POST("/datapacks/:id/search", a.search)
 	g.POST("/datapacks/:id/memories", a.addMemory)
 

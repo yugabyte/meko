@@ -1,11 +1,12 @@
-// A datapack's memories as a map, in plain SVG: each a dot colored by its state, alike memories
-// close together and linked, and the lit ones (a query's matches, or what a search returned) bright
-// with the rest faded. With a query, a star marks where it lands and lines run to its matches, and a
-// dot hovered or focused shows its score above it.
+// A map of things laid out by meaning, in plain SVG: a datapack's memories (each dot colored by its
+// state, alike ones linked) or a search's nearest memories, knowledge-base chunks and conversation
+// turns (colored by source, which the legend shows or hides). The lit ones (what a search returned)
+// are bright with the rest faded. With a query, a star marks where it lands and lines run to the lit
+// ones, and a dot hovered or focused shows its score above it.
 
 import { useState } from "react";
 import { SHOW_COLLECTIVE } from "../lib/features";
-import type { MapPoint, MemoryMap, MemoryState } from "../lib/types";
+import type { MapPoint, MapSource, MemoryMap, MemoryState } from "../lib/types";
 import { round2 } from "./Similarity";
 import { cx } from "./ui";
 
@@ -21,24 +22,41 @@ export const STATE_LABEL: Record<MemoryState, string> = {
   collective: "Collective",
 };
 
-// Only the points in states, with the links between them renumbered.
-export function only(m: MemoryMap, states: MemoryState[]): MemoryMap {
+export const SOURCE_COLOR: Record<MapSource, string> = {
+  memory: "text-info",
+  knowledge_base: "text-success",
+  conversation: "text-warning",
+};
+
+export const SOURCE_LABEL: Record<MapSource, string> = {
+  memory: "Memory",
+  knowledge_base: "Knowledge base",
+  conversation: "Conversation",
+};
+
+// Only the points that pass keep, with the links between them renumbered.
+function keep(m: MemoryMap, ok: (p: MapPoint) => boolean): MemoryMap {
   const at = new Map<number, number>();
-  const points = m.points.filter((p, i) => states.includes(p.state) && (at.set(i, at.size), true));
+  const points = m.points.filter((p, i) => ok(p) && (at.set(i, at.size), true));
   const links = m.links.flatMap((l) =>
     at.has(l.a) && at.has(l.b) ? [{ ...l, a: at.get(l.a)!, b: at.get(l.b)! }] : [],
   );
   return { ...m, points, links };
 }
 
+// Only the memories in states.
+export const only = (m: MemoryMap, states: MemoryState[]) => keep(m, (p) => !!p.state && states.includes(p.state));
+
 // The states drawn: collective memories only while the UI shows them.
 export const SHOWN_STATES: MemoryState[] = SHOW_COLLECTIVE ? ["learning", "kept", "collective"] : ["learning", "kept"];
 
-// A dot's color: by its state, or one color while the UI shows memories as just memories.
-const colorOf = (s: MemoryState) => (SHOW_COLLECTIVE ? STATE_COLOR[s] : STATE_COLOR.learning);
+// A dot's color: by its source on a search map; by its state on a memory map, or one color while
+// the UI shows memories as just memories.
+const colorOf = (p: MapPoint) =>
+  p.source ? SOURCE_COLOR[p.source] : SHOW_COLLECTIVE && p.state ? STATE_COLOR[p.state] : STATE_COLOR.learning;
 
 export function MemoryMapView({
-  map,
+  map: whole,
   lit,
   selected,
   onPick,
@@ -52,6 +70,16 @@ export function MemoryMapView({
   mini?: boolean;
 }) {
   const [hover, setHover] = useState<MapPoint>();
+  // A search map's sources, and the ones the legend has hidden.
+  const sources = (Object.keys(SOURCE_LABEL) as MapSource[]).filter((s) => whole.points.some((p) => p.source === s));
+  const [hidden, setHidden] = useState<Set<MapSource>>(new Set());
+  const toggle = (s: MapSource) =>
+    setHidden((h) => {
+      const next = new Set(h);
+      if (!next.delete(s)) next.add(s);
+      return next;
+    });
+  const map = hidden.size ? keep(whole, (p) => !p.source || !hidden.has(p.source)) : whole;
   const dim = lit !== undefined && lit.size > 0;
   const on = (p: MapPoint) => !dim || lit.has(p.id);
   const r = mini ? 0.04 : 0.028;
@@ -110,7 +138,7 @@ export function MemoryMapView({
             cy={p.y}
             r={on(p) && dim ? r * 1.4 : r}
             fill="currentColor"
-            className={cx(colorOf(p.state), "outline-none", onPick && "cursor-pointer")}
+            className={cx(colorOf(p), "outline-none", onPick && "cursor-pointer")}
             opacity={on(p) ? 1 : 0.2}
             tabIndex={onPick ? 0 : undefined}
             onMouseEnter={() => setHover(p)}
@@ -133,7 +161,7 @@ export function MemoryMapView({
             fill="none"
             stroke="currentColor"
             strokeWidth={r * 0.35}
-            className={colorOf(picked.state)}
+            className={colorOf(picked)}
             pointerEvents="none"
           />
         )}
@@ -153,7 +181,21 @@ export function MemoryMapView({
       </svg>
       {!mini && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          {SHOW_COLLECTIVE ? (
+          {sources.length > 0 ? (
+            sources.map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => toggle(s)}
+                aria-pressed={!hidden.has(s)}
+                className={cx("flex items-center gap-1.5 hover:text-foreground", hidden.has(s) && "opacity-40")}
+                title={hidden.has(s) ? "Show these" : "Hide these"}
+              >
+                <span className={cx("size-2 rounded-full bg-current", SOURCE_COLOR[s])} />
+                {SOURCE_LABEL[s]}
+              </button>
+            ))
+          ) : SHOW_COLLECTIVE ? (
             SHOWN_STATES.map((s) => (
               <span key={s} className="flex items-center gap-1.5">
                 <span className={cx("size-2 rounded-full bg-current", STATE_COLOR[s])} />
@@ -162,7 +204,7 @@ export function MemoryMapView({
             ))
           ) : (
             <span className="flex items-center gap-1.5">
-              <span className={cx("size-2 rounded-full bg-current", colorOf("learning"))} />
+              <span className={cx("size-2 rounded-full bg-current", STATE_COLOR.learning)} />
               Memory
             </span>
           )}
