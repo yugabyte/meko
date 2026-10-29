@@ -16,11 +16,13 @@ import { claudeUpdateText, cx, defaultAgentChoice, httpHost, relativeTime } from
 import { AgentLabel, AgentPicker, Busy, Dialog, ErrorText, Field, InfoButton, InfoCheck, InfoPanel, ReviewFields } from './common';
 import { setReviewDefaults } from '../reviewdefaults';
 
-export type SettingsTab = 'general' | 'harness' | 'work-queue' | 'updates';
+export type SettingsTab = 'general' | 'harness' | 'code-review' | 'work-queue' | 'updates';
 type Tab = SettingsTab;
 
-const TABS: Tab[] = ['general', 'harness', 'work-queue', 'updates'];
-const TAB_LABEL: Record<Tab, string> = { general: 'General', harness: 'Harness', 'work-queue': 'Work queue', updates: 'Updates' };
+const TABS: Tab[] = ['general', 'harness', 'code-review', 'work-queue', 'updates'];
+const TAB_LABEL: Record<Tab, string> = {
+  general: 'General', harness: 'Harness', 'code-review': 'Code review', 'work-queue': 'Work queue', updates: 'Updates',
+};
 
 export function SettingsDialog({
   mekoAuth,
@@ -53,7 +55,7 @@ export function SettingsDialog({
   onWhatsNew: (from: string, to: string) => void;
 }) {
   const [tab, setTab] = useState<Tab>(initialTab);
-  // One saver for General and Harness, so a save from a tab that has since closed still shows how it went.
+  // One saver for every tab's server settings, so a save from a tab that has since closed still shows how it went.
   const auto = useAutoSave();
   // What the General tab holds typed and not saved yet, saved before Settings closes.
   const typed = useRef<(() => void) | null>(null);
@@ -105,6 +107,7 @@ export function SettingsDialog({
       {tab === 'harness' && (
         <HarnessTab auto={auto} harnesses={harnesses} twoAgents={twoAgents} serverName={serverName} meko={meko} initialAgent={initialAgent} />
       )}
+      {tab === 'code-review' && <CodeReviewTab auto={auto} />}
       {tab === 'work-queue' && <WorkQueueTab auto={auto} />}
       {tab === 'updates' && <UpdatesTab initial={update} onWhatsNew={(from, to) => leave(() => onWhatsNew(from, to))} />}
       <SaveStatus status={auto.status} held={held} />
@@ -140,7 +143,7 @@ function HarnessLogosSetting() {
 type Patch = Omit<SettingsUpdate, 'meko'>;
 
 /**
- * General's and Harness's server settings, saved as they change (`src/web/autosave.ts`): `change`
+ * The tabs' server settings, saved as they change (`src/web/autosave.ts`): `change`
  * shows a patch at once and saves it, and a patch that fails to save goes back to the server's last
  * answer. `load` waits for the saves still out, so a tab opened again shows them.
  */
@@ -245,6 +248,46 @@ function WorkQueueTab({ auto }: { auto: AutoSettings }) {
           }}
         />
       </Field>
+    </div>
+  );
+}
+
+/** Code review, once its settings are loaded. */
+function CodeReviewTab({ auto }: { auto: AutoSettings }) {
+  const { s, load, change } = auto;
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    load().catch((e) => setError(errorMessage(e)));
+  }, [load]);
+  if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
+  return <CodeReviewSettings s={s} change={change} />;
+}
+
+/**
+ * The local review before a PR opens (docs/design/code-review.md): the global strategy, re-review
+ * rounds and depth, which projects and sessions can override. Each saves as it's picked.
+ */
+export function CodeReviewSettings({ s, change }: { s: Settings; change: (patch: Patch) => void }) {
+  return (
+    <div className="stack">
+      <p className="muted small">The defaults. Projects and sessions can set their own.</p>
+      <div className="review-settings">
+        <ReviewFields
+          id="set-review"
+          scoped={false}
+          inherited={null}
+          value={{ strategy: s.codeReviewStrategy, rounds: s.codeReviewRounds, depth: s.codeReviewDepth }}
+          onChange={(v) => {
+            const patch = {
+              codeReviewStrategy: v.strategy ?? s.codeReviewStrategy,
+              codeReviewRounds: v.rounds ?? s.codeReviewRounds,
+              codeReviewDepth: v.depth ?? s.codeReviewDepth,
+            };
+            setReviewDefaults(patch);
+            change(patch);
+          }}
+        />
+      </div>
     </div>
   );
 }
@@ -445,23 +488,6 @@ function GeneralTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObje
         too), move sessions between stages and open another session’s PR. The agent asks before each change, unless Kiro may
         run any tool without asking (Harness). Off applies at once. On applies at each session’s next start.
       </InfoCheck>
-      <div className="review-settings">
-        <ReviewFields
-          id="set-review"
-          scoped={false}
-          inherited={null}
-          value={{ strategy: s.codeReviewStrategy, rounds: s.codeReviewRounds, depth: s.codeReviewDepth }}
-          onChange={(v) => {
-            const patch = {
-              codeReviewStrategy: v.strategy ?? s.codeReviewStrategy,
-              codeReviewRounds: v.rounds ?? s.codeReviewRounds,
-              codeReviewDepth: v.depth ?? s.codeReviewDepth,
-            };
-            setReviewDefaults(patch);
-            change(patch);
-          }}
-        />
-      </div>
       <Field label="Server name" info={{ for: 'set-server-name', text: 'Shown in the projects pane next to your user name. Empty uses this machine’s name.' }}>
         <input
           id="set-server-name"
