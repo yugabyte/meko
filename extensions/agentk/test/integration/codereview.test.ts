@@ -67,8 +67,11 @@ describe('local code review before the PR (real session host + git, fake claude 
     // The review ran in a code-review session on the task's worktree, with read-only subagents.
     const child = env.core.sessions.row(done.codeReview!.sessionId!);
     expect(child).toMatchObject({ kind: 'code-review', parent_id: s.id, stage: 'reviewing-code', worktree_path: env.core.sessions.row(s.id).worktree_path, worktree_released: 1 });
-    const argv = readJsonl<{ args: string[] }>(join(env.fakeDir, 'argv.jsonl')).map((a) => a.args).find((a) => a.includes('--agents'))!;
+    const launch = readJsonl<{ args: string[]; env: Record<string, string | undefined> }>(join(env.fakeDir, 'argv.jsonl')).find((a) => a.args.includes('--agents'))!;
+    const argv = launch.args;
     expect(Object.keys(JSON.parse(argv[argv.indexOf('--agents') + 1]))).toEqual(['agentk-review-large', 'agentk-review-mid', 'agentk-review-small']);
+    // Subagents in the foreground: a backgrounded one ends the turn, the sweep, before it reports.
+    expect(launch.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe('1');
     expect(argv[argv.indexOf('--disallowedTools') + 1]).toContain('Edit');
     // Five passes, then a scorer for each of the three candidates.
     const calls = readJsonl<{ step: string; status: number }>(join(env.fakeDir, 'review-calls.jsonl'));
