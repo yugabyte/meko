@@ -185,8 +185,8 @@ export class CodeReviews {
       scoresDone: scoreSteps.length,
       candidates: cands.length,
       counts: json<SeverityCounts>(r.counts_json, noCounts()),
-      // Earlier rounds' findings were fixed before the next round ran; the last round's go with the PR prompt.
-      addressed: r.state === 'done' && json<CodeReviewFinding[]>(r.findings_json, []).every((f) => f.round !== r.round || !f.kept || !!f.outcome),
+      // Every round's: the next round runs at the fix turn's end whether or not the task said what it did.
+      addressed: r.state === 'done' && json<CodeReviewFinding[]>(r.findings_json, []).every((f) => !f.kept || !!f.outcome),
       mekoCall: !!r.session_id && RUNNING.includes(r.state) && this.core.sessions.mekoCalling(r.session_id),
       detail: r.detail,
     };

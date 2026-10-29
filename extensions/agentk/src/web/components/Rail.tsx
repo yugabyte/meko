@@ -32,6 +32,8 @@ export function Rail({
   harnessLogos,
   onSelectSession,
   onOpenReview,
+  findingsOpenFor,
+  onCloseFindings,
   onNewSession,
   onRenameSession,
   onSessionToTop,
@@ -74,6 +76,10 @@ export function Rail({
   onSelectSession: (s: Session) => void;
   /** A task's magnifier: the task on screen with its local review's findings open. */
   onOpenReview: (task: Session) => void;
+  /** The task whose findings are open on screen: its row selects the review's part. */
+  findingsOpenFor: string | null;
+  /** The task's part of its row while its findings are open: closes them. */
+  onCloseFindings: (task: Session) => void;
   /** New session in this project, offered at the end of each listed project's sessions. */
   onNewSession: (projectId: string) => void;
   /** Double-clicking a session renames it; the phone layout uses Rename session in the ⋯ sheet. */
@@ -205,13 +211,13 @@ export function Rail({
               {listed && !folded && (
                 <div className={cx('rail-sessions', harnessLogos && 'logos')} id={`rail-sessions-${p.id}`} role="group" aria-label={`Sessions in ${p.name}`}>
                   {sessions.map((s, j) => {
-                    const part = joinedPartSelected(s, currentSessionId);
+                    const part = joinedPartSelected(s, currentSessionId, findingsOpenFor === s.id);
                     const review = s.codeReview;
                     const row = (
                     <div key={s.id} className="rail-sess-row">
                       <button
                         className={cx('rail-sess', part === 'task' && 'sel')}
-                        onClick={() => onSelectSession(s)}
+                        onClick={() => (part === 'review' && s.id === currentSessionId ? onCloseFindings(s) : onSelectSession(s))}
                         onDoubleClick={mobile ? undefined : () => onRenameSession(s.id)}
                         aria-current={part === 'task' ? 'page' : undefined}
                         title={sessionTabTitle(s) + (mobile ? '' : '\nDouble-click to rename')}

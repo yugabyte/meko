@@ -90,7 +90,9 @@ export function ProjectView({
   onMenu,
   showTabs,
   harnessLogos,
-  findingsFor,
+  findingsRequest,
+  onFindingsTaken,
+  onFindingsShown,
   onOpenFindings,
   onError,
 }: {
@@ -115,8 +117,12 @@ export function ProjectView({
   showTabs: boolean;
   /** Show each session's harness logo in its tab: open sessions run on more than one harness and the setting is on. */
   harnessLogos: boolean;
-  /** The task whose local review's findings were last asked for (the magnifier), and when. */
-  findingsFor: { id: string; at: number } | null;
+  /** A task's findings asked open (its magnifier in the rail) or closed (the rail's task part), until taken. */
+  findingsRequest: { id: string; open: boolean } | null;
+  /** The request was acted on. */
+  onFindingsTaken: () => void;
+  /** The task whose findings are open beside its terminal, or null: for the rail's row. */
+  onFindingsShown: (taskId: string | null) => void;
   /** Shows a task's local review findings, beside its terminal: from its magnifier, the gate or the ⋯ sheet. */
   onOpenFindings: (task: Session) => void;
   onError: (msg: string) => void;
@@ -133,7 +139,6 @@ export function ProjectView({
     if (task.id === session?.id) setPanel('findings');
     else onOpenFindings(task);
   };
-  const findingsShownAt = useRef(0);
   const [sheet, setSheet] = useState(false);
   // Bumped to show the design's questions (Design Review, or Approve pressed with questions open).
   const [questionsAt, setQuestionsAt] = useState(0);
@@ -165,12 +170,19 @@ export function ProjectView({
     if (child && !mobile) setPanel('findings');
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only when another session comes on screen
   }, [session?.id]);
-  // After the reset above: a task whose magnifier was pressed comes on screen with its findings open.
+  // After the reset above: a request for this task's findings, taken once (it stays in App, which
+  // outlives this view, so a request left untaken would open them again on the way back).
   useEffect(() => {
-    if (!findingsFor || findingsFor.id !== session?.id || findingsFor.at === findingsShownAt.current) return;
-    findingsShownAt.current = findingsFor.at;
-    setPanel('findings');
-  }, [findingsFor, session?.id]);
+    if (!findingsRequest || findingsRequest.id !== session?.id) return;
+    setPanel((p) => (findingsRequest.open ? 'findings' : p === 'findings' ? null : p));
+    onFindingsTaken();
+  }, [findingsRequest, session?.id, onFindingsTaken]);
+  // Which task's findings are open, for the rail's row; none once this view goes.
+  const findingsTask = session && !child && session.codeReview && panel === 'findings' ? session.id : null;
+  useEffect(() => {
+    onFindingsShown(findingsTask);
+  }, [findingsTask, onFindingsShown]);
+  useEffect(() => () => onFindingsShown(null), [onFindingsShown]);
   // Also when the desktop tabs mount, as the rail stops listing the sessions or is hidden.
   useEffect(() => {
     tabsRef.current?.querySelector('.tab.sel, .review-seg.sel')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });

@@ -212,7 +212,7 @@ export interface CodeReviewSummary {
   candidates: number;
   /** Findings kept so far, every round's added up. */
   counts: SeverityCounts;
-  /** Done, and the task said what it did (fixed or declined) with each of the last round's kept findings. */
+  /** Done, and the task said what it did (fixed or declined, `review_outcome`) with every kept finding, every round's. */
   addressed: boolean;
   /** The review session is in a Meko tool call (the lens shows Meko's m). */
   mekoCall: boolean;
@@ -221,8 +221,10 @@ export interface CodeReviewSummary {
 }
 
 /**
- * A round's steps: each pass of a sweep, then scoring as one step when the strategy scores
- * (Sagittarius 3.0's 5 passes and its scorers are 6 steps, Sirius 1.0's one pass is 1).
+ * The steps the badge counts: each pass of a sweep, then scoring as one step when the strategy
+ * scores (Sagittarius 3.0's 5 passes and its scorers are 6 steps, Sirius 1.0's one pass is 1).
+ * With depth > 1 the passes count again for each sweep (the tooltip names the sweep); scoring
+ * follows the last.
  */
 export function reviewSteps(r: Pick<CodeReviewSummary, 'strategy' | 'passes'>): number {
   return r.passes + (strategyInfo(r.strategy)?.scored ? 1 : 0);
