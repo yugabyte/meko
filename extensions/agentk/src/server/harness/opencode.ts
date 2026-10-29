@@ -145,6 +145,7 @@ export function openCodeHarness(deps: {
           OPENCODE_CONFIG_CONTENT: openCodeSessionConfig({
             plugin: claudePath(openCodePluginPath(paths)), instructions: claudePath(instructions), dirs: l.addDirs.map((d) => claudePath(d)),
             tools: l.tools ? openCodeTools(paths) : null,
+            agents: l.review?.agents ?? null,
           }),
           OPENCODE_CLI_CONFIG_CONTENT: OPENCODE_SESSION_CLI_CONFIG,
           ...(meko ? { OPENCODE_CONFIG: claudePath(meko) } : {}),

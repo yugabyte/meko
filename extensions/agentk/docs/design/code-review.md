@@ -1,0 +1,169 @@
+# Local code review
+
+Part of the [AgentK design](../design.md).
+
+Before a task's PR opens, AgentK reviews the change on this computer with the agent-k reviewer's
+algorithm (its `pkg/agenticreview`, the cloud AgentK's Golum 1.0), so the task fixes what the review
+finds before anyone else reads the PR. The PR description then says how it went, on one line:
+
+```
+me_ak_review:4 blockers,4 major addressed
+me_ak_review:1 blocker,2 major,3 minor addressed
+me_ak_review:LGTM
+```
+
+The code is in `src/server/review/` (the algorithm, ported) and `src/shared/codereview.ts` (the
+settings, the line, the tab's label); the UI is the magnifier joined to the task's tab.
+
+## Settings
+
+Three settings, each set globally (`[code_review]` in config.toml, Settings › General), overridden
+per project (`ProjectSettings.codeReview`, the project's settings) and again per session
+(`sessions.review_json`: the New session dialog's Advanced, the session's ⋯ sheet, Open PR with
+instructions, and the `review` argument of the `start_sessions` tool, so "start a code session with
+3 deep reviews" asks for `depth: 3`). A value left out keeps the next level's (`resolveReview`).
+
+| Setting | Global default | What it does |
+|---|---|---|
+| `strategy` | `sagittarius-3.0` | Which algorithm runs: `sagittarius-3.0`, `sirius-1.0`, or `off` for no review. |
+| `rounds` | `0` | Re-reviews after the first, 0 to 5. Each runs after the task fixes the last round's findings; a clean round stops early. |
+| `depth` | `1` | Sweeps in each round, 1 to 5: the cloud's deep reviews (`/agentk review deep N`). |
+
+`[code_review.models.<harness>]` sets the model each tier of step runs on (`large`, `mid`,
+`small`): Claude Code's are `opus`, `sonnet` and `haiku`; OpenCode's and Kiro's are empty, which
+runs a step on the session's own model, since their model ids depend on the user's providers and
+plans.
+
+## Strategies
+
+A strategy is a named, versioned bundle of what a review does, stamped on each review and never
+reused (the cloud's `Strategy`); an unknown id resolves to the default.
+
+| Id | Passes | Scoring |
+|---|---|---|
+| `sagittarius-3.0` | guide (large), diff (small), dependents (large, with its state ledger), history (large), claims (large, with its claims ledger): the cloud's mandates word for word | A small-tier scorer for each candidate |
+| `sirius-1.0` | One mid-tier pass whose mandate covers all five | None: every candidate goes to Validate |
+
+The cloud AgentK isn't changed: its strategy keeps its own name, and only this registry calls the
+algorithm Sagittarius 3.0.
+
+## How a review runs
+
+```mermaid
+sequenceDiagram
+  actor U as User
+  participant T as Task session
+  participant AK as AgentK server
+  participant R as Review session (child)
+  participant S as Subagents
+  U->>AK: Open PR (or Run to merge, or the open_pr tool)
+  AK->>AK: settings: session, then project, then global
+  AK->>AK: diff, guides, MEKO.md, history, linked issues into run/reviews/{id}/r{round}
+  AK->>R: start kind=code-review, parent=T, same worktree
+  loop each round, while rounds are left and the last one found something
+    loop each sweep, up to depth
+      AK->>R: code-review-sweep: one step per pass
+      R->>S: a fresh subagent per pass, on its tier
+      S->>AK: review_report {step, report}
+    end
+    AK->>R: code-review-score: one step per candidate
+    R->>S: a fresh subagent per scorer
+    S->>AK: review_score {step, score}
+    AK->>AK: keepScored(50), Validate, counts
+    AK->>T: code-review-fix (a re-review follows)
+    T->>AK: review_outcome per finding
+  end
+  AK->>T: PR prompt, the last round's findings first, and the me_ak_review line
+  AK->>AK: once the PR is found, the line is set in its body if it's missing
+```
+
+`openPr()` (and `takeQueuedPr()`, so a queued Open PR and Run to merge go through it too) asks
+`CodeReviews.openPr()` first: while it returns true, a review holds the PR and sends the PR prompt
+itself when it's done (`Lifecycle.sendReviewedPr`).
+
+**The review session** is a session of kind `code-review` (`Session.parentId` is its task), held by
+the session host like any other, so it survives restarts and the user can open its terminal. It
+works in its task's worktree without owning it (`worktree_released`), so archiving it never frees
+the worktree or deletes the branch; archiving the task archives it. Its edit guard denies every
+edit in the repo, and on Claude Code `--disallowedTools` takes Bash and the edit and web tools away
+from it and its subagents; OpenCode's session config denies them. Its first prompt is the first
+sweep's, and AgentK sends each later step's prompt as the turn before ends.
+
+**Steps.** The main thread only starts steps. Each pass and each scorer runs with a fresh context,
+as the cloud's separate processes do (`HARNESS_CAPS.reviewSteps`):
+
+- `subagents` (Claude Code, OpenCode): the session is launched with a subagent per tier
+  (`agentk-review-large`, `-mid`, `-small`: Claude Code's `--agents`, OpenCode's `agent` config),
+  and one prompt lists the steps to run one after another, each in its subagent with the prompt
+  "Read {file} and do what it says."
+- `turns` (Kiro): each step is a prompt of its own, after `/clear` and, when the tier has a model,
+  `/model`. Kiro's sessions share one agent file, which has AgentK's MCP server only while
+  `[tools] enabled` is on, so a Kiro review needs the session tools on; without them no step can
+  report, and the review fails for Retry or Open anyway.
+
+Each step's file is the shared base prompt (the same for every pass, so a prompt cache serves it),
+the sweep context, then its mandate and how to report: AgentK's `review_report` or `review_score`
+tool (in the `agentk_sessions` MCP server, pre-allowed, answered whatever `[tools] enabled` says),
+called with the step id and a report its schema checks (`checkReport`, `checkScore`). An error names
+what to fix, and the step calls again. A required ledger is a field the model can't skip.
+
+**After a turn** of the review session (`CodeReviews.onTurnEnd`): a step that didn't report is
+asked for once more (`asked`), then the review goes on without it. A sweep merges its reports into
+the round's candidates (`mergeSweep`: on file and line, more passes on one line are
+corroboration, the worst severity and the longer comment win). Another sweep follows while the
+depth allows and, from MinSweeps (min(2, depth)) on, the last sweep added something new. Then the
+scorers, then `keepScored` (refuted only with a refutation and something read, confirmed kept,
+unverified kept at 50 or more, unscored kept) and Validate (the file must be in the change and the
+line in a hunk, at most 100). No pass reporting in the first sweep fails the review.
+
+**Rounds.** A round that keeps findings, with rounds left, sends the task `code-review-fix` (fix
+or decline each, don't commit yet), and the task reports what it did with each by its key with
+`review_outcome`. The task's next turn end starts the next round, whose passes are told the
+earlier rounds' findings and what the task did with them (prior rounds). The last round's
+findings lead the PR prompt (`code-review-findings`).
+
+**The line** (`meAkReviewLine`) adds up every round's kept findings, by severity in the order
+blocker, major, minor; `LGTM` when no round kept one. AgentK writes it into the PR's description
+after `adoptPr` when Claude left it out (`syncReviewLine`).
+
+**Stopping.** A failed review (no pass reported, or an error) or one the user cancelled holds the
+PR: Open PR answers 409, Run to merge waits, and the task offers **Retry** (the round again from
+the step it stopped at, reusing every step already reported, from `code_review_steps`) and **Open
+anyway** (the PR prompt with no line). A task that leaves Code cancels its review.
+
+**Recovery.** `code_reviews` and `code_review_steps` keep a review's state and every step's
+report. After a restart, `CodeReviews.recover()` asks an idle review session again for the steps
+still missing; a review whose session is gone fails, for Retry.
+
+## Context the passes get
+
+The base prompt follows the cloud's `BuildPrompt`, for a change rather than a PR: the branch
+against its base (origin's copy when there is one), the task's name and first prompt and where its
+design is, `git log` of its commits, the change from the merge-base to the working tree (untracked
+files included, since nothing is committed before the PR prompt), the review guides (REVIEW.md at
+the root and in each ancestor folder of a changed file), the history of the rewritten lines
+(`git blame` and recent commits, since the passes have no git), the task's linked issues (its work
+item's GitHub issues fetched into the run folder; other links by name), and earlier rounds. Secret
+files, deleted files and generated files are withheld (`withhold.go`, `generated.go`). A diff over
+256 KiB is written one patch per file instead of inline. Left out: the cloud's injection screen and
+budget caps (the change is the user's own, on their own account), and the PR description's skip
+patterns (there's no PR yet).
+
+**Meko.** In a trusted repo, AgentK reads the `MEKO.md` files that apply (the root's and each
+changed file's ancestors': a table of Datapack, ID and What's in it, `src/shared/mekomd.ts`) and
+lists their datapacks in the base prompt. The passes search the gotchas datapack (its name ends in
+`/gotchas`, as the cloud's miner names them) themselves with `knowledgebase_search` and its id, and
+may search the others with `context_search`; a finding credits a gotcha (`MG-<n>`) only with the
+sentence it instantiates, and AgentK drops a credit without one. With no `MEKO.md` the review runs
+without Meko. Retired gotchas aren't filtered: the cloud's roster of them isn't in Meko.
+
+## In the UI
+
+The review is never a tab or a rail row of its own: it's a part joined to its task's tab and rail
+row (`ReviewSegment`), a blue magnifier whose lens pulses while the review works and shows Meko's
+"m" while the review session is in a Meko call (`CodeReviewSummary.mekoCall`), then the step
+(`3/5`, the scoring's `4/9`), the result (`2·1`, blockers·majors, or `✓`) or a red `!`. Clicking it
+opens the review session: its terminal and the findings panel (`ReviewFindings`: every candidate by
+round and sweep, with its passes, verdict, confidence, kept or why dropped, credited gotchas and
+what the task did). While the review holds the PR, the task's Code gate shows it, with Cancel, or
+Retry and Open anyway.

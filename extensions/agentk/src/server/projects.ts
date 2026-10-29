@@ -1,3 +1,4 @@
+import { readOverrides } from '../shared/codereview.js';
 import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type {
@@ -458,6 +459,8 @@ export class ProjectService {
         throw new HttpError(400, 'Reviewer must be AgentK only, AgentK + People, All reviewers or People only.');
       }
       if (typeof next.mekoLog !== 'boolean') throw new HttpError(400, 'Log Meko calls must be true or false.');
+      // What isn't a valid setting goes back to the global value (readOverrides drops it).
+      if (req.settings.codeReview !== undefined) next.codeReview = readOverrides(req.settings.codeReview);
       run(this.db, 'UPDATE projects SET settings_json = ? WHERE id = ?', JSON.stringify(next), id);
     }
     if (req.position !== undefined) this.move(id, req.position);

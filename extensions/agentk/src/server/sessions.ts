@@ -32,6 +32,7 @@ import { HttpError, projectConversationKey } from './projects.js';
 import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedFile, savePastedImage, stageImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
 import { expandBranchPrefix } from '../shared/branches.js';
+import { noOverrides, readOverrides } from '../shared/codereview.js';
 import { agentName, harnessOf } from '../shared/harnesses.js';
 import type { Harness } from './harness/index.js';
 import { writeLauncher } from './launcher.js';
@@ -89,6 +90,9 @@ export function askDetail(question: string): string {
  * a task's stages, with what Explore means while it's there, or what a Review a PR is.
  */
 export function workflowLine(kind: SessionKind, stage: Stage): string {
+  if (kind === 'code-review') {
+    return "This is AgentK's local code review of a task's change, before its PR opens. You don't review the code yourself and you change no file: you run the review's steps as AgentK's prompts list them, each in a fresh subagent, and each step reports to AgentK with AgentK's tools.";
+  }
   if (kind === 'review-pr') {
     return "This is a Review a PR session: the user is reviewing someone else's pull request and you assist them. Don't review it on your own; answer what they ask. Don't push to the PR's branch or post on GitHub unless they ask. The user ends the session from the AgentK UI.";
   }
@@ -333,9 +337,15 @@ export class SessionManager {
       midTurn: this.midTurn(id),
       promptsHeld: this.promptsHeld(id),
       asking: this.core.config.claude.mod ? this.mod.asking(id) : null,
-      mekoCall: (this.core.config.claude.mod && this.mod.callingMeko(id)) || this.hookMeko.active(id) || this.mekoHold.active(id),
+      mekoCall: this.mekoCalling(id),
       approvalQueued: this.core.lifecycle.approvalQueued(id),
+      codeReview: this.core.reviews.summary(id),
     };
+  }
+
+  /** The session's agent is in a Meko tool call, or started one a moment ago (Session.mekoCall). */
+  mekoCalling(id: string): boolean {
+    return (this.core.config.claude.mod && this.mod.callingMeko(id)) || this.hookMeko.active(id) || this.mekoHold.active(id);
   }
 
   /**
@@ -505,6 +515,8 @@ export class SessionManager {
     if (autoRun && (kind !== 'task' || learn || start !== 'code')) {
       throw new HttpError(400, 'Run to merge can only be picked for a task that starts at Code. For one at Design, turn it on when you approve the design.');
     }
+    // The task's own local review settings; a review or a learn session opens no PR to review.
+    const reviewSettings = req.review != null && kind === 'task' && !learn ? readOverrides(req.review) : {};
     const repo = this.core.projects.sessionRepo(p, req.repoPath);
     // A project's repo moved or deleted since it was opened. Checked here because the first git
     // calls below don't notice (hasCommits counts a git error as having commits), so the first to
@@ -606,6 +618,7 @@ export class SessionManager {
     const missed = claimStaged(this.core.paths.pastes, projectId, images, id);
     const moved = images.filter((i) => !missed.includes(i)).map((i) => claimedPath(this.core.paths.pastes, id, i));
     if (moved.length) this.update(id, { start_images: JSON.stringify(moved) });
+    if (!noOverrides(reviewSettings)) this.update(id, { review_json: JSON.stringify(reviewSettings) });
     if (missed.length) {
       // Removed meanwhile (by the daily sweep, the project closing, or another start that took them).
       const what = missed.length === 1 ? "An image you added wasn't" : `${missed.length} of the images you added weren't`;
@@ -623,6 +636,40 @@ export class SessionManager {
         this.relinks.delete(id);
       });
     return { session: this.get(id), done };
+  }
+
+  /**
+   * Starts a task's code-review session (review/runner.ts): a child of the task (`parent_id`) on the
+   * task's harness, in the task's own worktree, which it doesn't own (`worktree_released`), so
+   * archiving it never frees the worktree or touches the branch. `prompt` is its first.
+   */
+  async startReviewSession(task: SessionRow, reviewId: string, prompt: string | null): Promise<SessionRow> {
+    const slug = `${task.slug}-review-${randomBytes(3).toString('hex')}`;
+    const id = `${task.project_id}--${slug}`;
+    const now = Date.now();
+    run(this.db, `INSERT INTO sessions(id, project_id, slug, name, harness, claude_session_id, branch, base_branch, repo_path, branch_reused,
+                    worktree_path, worktree_released, tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode,
+                    meko_agent_id, parent_id, position)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 1, ?, ?, 'running', 'starting', 'code-review', 'reviewing-code', ?, ?, ?, 0, ?, ?, ?)`,
+      id, task.project_id, slug, `Local review of ${task.name}`, task.harness, randomUUID(), task.branch, task.base_branch, task.repo_path,
+      task.worktree_path, paneName(task.project_id, slug), randomBytes(24).toString('base64url'), `Review the change on ${task.branch}`, now, now,
+      sessionAgentId({ id, slug, harness: harnessOf(task.harness) }), task.id, task.position);
+    run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, 'reviewing-code', ?, 'auto')`, id, now);
+    this.event(id, 'created', `Started for review ${reviewId} of ${task.name}`);
+    this.creating.add(id);
+    this.setStartup(id, 'launch', { resumed: false, hasPrompt: !!prompt });
+    try {
+      await this.launch(this.row(id), { resume: false, prompt });
+    } catch (e) {
+      this.startup.delete(id);
+      this.setStatus(id, 'exited', `Launch failed: ${errMsg(e)}`);
+      throw e;
+    } finally {
+      this.creating.delete(id);
+    }
+    this.setStartup(id, 'loading');
+    this.core.changed();
+    return this.row(id);
   }
 
   /**
@@ -1069,7 +1116,7 @@ export class SessionManager {
     const lines = [
       `This ${this.harness(row).caps.label} session is managed by AgentK. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. ${row.repo_path && p && row.repo_path !== p.repo_path ? `Repo: ${row.repo_path}. ` : ''}${row.kind === 'review-pr' && row.pr_repo ? `PR: ${row.pr_repo}#${row.pr_number} (${row.pr_url}). ` : ''}Branch: ${row.branch} (base ${row.base_branch}). ${workflowLine(kindOf(row.kind), row.stage)}`,
     ];
-    if (row.kind !== 'review-pr' && row.branch_reused) {
+    if (row.kind !== 'review-pr' && row.kind !== 'code-review' && row.branch_reused) {
       lines.push(`The branch existed before this session${row.pr_number ? ` and is the branch of PR #${row.pr_number} (${row.pr_url ?? ''})` : ''}: build on its commits rather than starting over.${row.push_remote ? ` ${pushLine(row)}` : ''}`);
     }
     if (dedicated) {
@@ -1183,19 +1230,23 @@ export class SessionManager {
     // A harness with no flag for it gets these lines from its context hook, at every start.
     this.systemLines.set(row.id, systemPrompt);
     const untrusted = !repoConfigTrusted(row);
+    // A code-review session reads its steps' prompts from its review's run folder, and always has
+    // AgentK's MCP server: its steps report through it, whatever `[tools] enabled` says.
+    const review = row.kind === 'code-review' ? this.core.reviews.launchForSession(row) : null;
     const script = writeLauncher(this.core.paths, h.launcher(this.core.paths, this.core.config, {
       row,
       resume: opts.resume,
       prompt: opts.prompt,
       systemPrompt,
-      addDirs: [designDir],
+      addDirs: review ? [designDir, review.runDir] : [designDir],
       modDir,
       planMode: row.stage === 'design' && !!row.plan_mode,
       env: this.env(row),
       unsetEnv: SESSION_ENV_UNSET,
       untrusted,
       // The session tools act on other sessions: not for a PR head whose code isn't trusted (the route refuses it too).
-      tools: !untrusted && toolsReady(this.core.paths, this.core.config.tools.enabled),
+      tools: review ? toolsReady(this.core.paths, true) : !untrusted && toolsReady(this.core.paths, this.core.config.tools.enabled),
+      review,
     }));
     const pane = (await this.core.host.panes()).get(row.tmux_name);
     // Archived (or its project deleted) while it was starting: Claude must not start behind its back.
@@ -1276,7 +1327,8 @@ export class SessionManager {
    */
   guard(token: string, raw: HookPayload): GuardDecision {
     const row = this.byToken(token);
-    if (!row || row.stage !== 'design' || row.plan_mode) return null;
+    const review = row?.kind === 'code-review';
+    if (!row || (!review && (row.stage !== 'design' || row.plan_mode))) return null;
     const h = this.harness(row);
     const p = h.normalize(raw);
     const paths = p && h.editedPaths(p);
@@ -1286,6 +1338,7 @@ export class SessionManager {
     const roots = [row.worktree_path, repo].filter((d): d is string => !!d).flatMap((d) => [d, realpath(d), claudePath(d)]);
     const inRepo = (file: string) => roots.some((d) => file === d || file.startsWith(d + sep));
     if (!paths.some((f) => inRepo(resolve(p.cwd || row.worktree_path, f)))) return null;
+    if (review) return h.deny("This is AgentK's local code review: it reads the change and changes no file. Report what you found with AgentK's review tools.");
     return h.deny(
       `This session is in the Design stage: AgentK blocks changes to the repo until the user approves the design. ` +
       (h.caps.artifacts ? `Publish the design as an Artifact, or write it to ${this.designFile(row)}.` : `Write the design to ${this.designFile(row)}.`),
@@ -1901,6 +1954,9 @@ export class SessionManager {
       case 'update-pr': await lc.updatePr(row); break;
       case 'close-review': await this.closeReview(row); break;
       case 'learn': await this.core.learn.start(row, 'manual'); break;
+      case 'review-cancel': await this.core.reviews.cancel(row.id); break;
+      case 'review-retry': await this.core.reviews.retry(row.id); break;
+      case 'review-open-anyway': await this.core.reviews.openAnyway(row.id); break;
       default: throw new HttpError(400, `Unknown action ${String(action)}.`);
     }
     return this.get(id);
@@ -1963,6 +2019,15 @@ export class SessionManager {
     if (req.name !== undefined) sessionName(req.name);
     if (req.toTop !== undefined && typeof req.toTop !== 'boolean') throw new HttpError(400, 'toTop must be true or false.');
     if (req.autoRun !== undefined && typeof req.autoRun !== 'boolean') throw new HttpError(400, 'autoRun must be true or false.');
+    if (req.review !== undefined) {
+      if (!req.review || typeof req.review !== 'object') throw new HttpError(400, 'review must be an object of strategy, rounds and depth.');
+      const r = this.row(id);
+      if (r.desired === 'archived') throw new HttpError(409, "This session is archived, so its review settings can't change.");
+      if (r.kind === 'review-pr' || r.kind === 'code-review') throw new HttpError(409, 'Only a task has local review settings.');
+      const o = readOverrides(req.review);
+      this.update(id, { review_json: noOverrides(o) ? null : JSON.stringify(o) });
+      this.core.changed();
+    }
     if (req.baseBranch !== undefined) await this.setBase(id, req.baseBranch);
     if (req.toTop) this.toTop(id);
     if (req.autoRun !== undefined) await this.core.lifecycle.setAutoRun(this.row(id), req.autoRun);
@@ -2203,6 +2268,8 @@ export class SessionManager {
   async archive(row: SessionRow, opts: { keepBranch: boolean; force?: boolean; stage?: Stage }): Promise<{ worktreeFreed: boolean; worktree: WorktreeFate }> {
     // A session still starting would bring its worktree back, or start Claude after the kill.
     await this.settle(row.id);
+    // A task's review stops with it, and its review session goes first.
+    if (row.kind !== 'code-review') await this.core.reviews.taskGone(row.id, 'the task was archived');
     row = this.row(row.id);
     this.recall.drop(row.id);
     // Archiving again (a cleanup finishing after the user archived by hand) keeps the first time.
@@ -2216,9 +2283,11 @@ export class SessionManager {
       await this.core.host.kill(row.tmux_name);
       const p = projectRow(this.db, row.project_id);
       const repo = p ? (sessionRepo(this.db, row) ?? p.repo_path) : null;
-      const worktree: WorktreeFate = repo ? await this.freeWorktree(row, repo, !!opts.force) : 'stuck';
+      // A code-review session reads its task's worktree and branch, which stay the task's.
+      const child = row.kind === 'code-review';
+      const worktree: WorktreeFate = child ? 'earlier' : repo ? await this.freeWorktree(row, repo, !!opts.force) : 'stuck';
       const worktreeFreed = FREED.includes(worktree);
-      if (repo && worktreeFreed && !opts.keepBranch) await tryGit(repo, 'branch', '-D', row.branch);
+      if (repo && worktreeFreed && !opts.keepBranch && !child) await tryGit(repo, 'branch', '-D', row.branch);
       // A review's copy of the PR's head (fetched again by any later review of it).
       if (repo && row.kind === 'review-pr' && row.pr_number) await tryGit(repo, 'update-ref', '-d', prRef(row.pr_number));
       rmSync(join(this.core.paths.run, `${row.id}.sh`), { force: true });

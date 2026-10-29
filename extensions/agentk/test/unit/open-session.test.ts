@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProjectWithSessions, Session } from '../../src/shared/types';
-import { lastOpenSession, openSessions, rememberOpenSession, sessionToOpen } from '../../src/web/util.js';
+import { joinedPartSelected, lastOpenSession, liveWithReviews, openSessions, rememberOpenSession, reviewParent, sessionToOpen } from '../../src/web/util.js';
 
 const session = (id: string, createdAt: number, lastEventAt?: number, position = 0) => ({ id, createdAt, lastEventAt, position }) as Session;
 
@@ -36,6 +36,31 @@ describe('openSessions', () => {
     } as ProjectWithSessions;
     expect(openSessions(p).map((s) => s.id)).toEqual(['top', 'a', 'b']);
     expect(p.sessions[0].id).toBe('b');
+  });
+
+  it("leaves out a task's code-review session, which only a terminal or the route may show", () => {
+    const p = {
+      sessions: [
+        { ...session('task', 1), desired: 'running', status: 'idle', kind: 'plan' },
+        { ...session('rv', 2, undefined, -9), desired: 'running', status: 'working', kind: 'code-review', parentId: 'task' },
+      ],
+    } as ProjectWithSessions;
+    expect(openSessions(p).map((s) => s.id)).toEqual(['task']);
+    expect(liveWithReviews(p).map((s) => s.id)).toEqual(['task', 'rv']);
+    expect(reviewParent(p.sessions, p.sessions[1])?.id).toBe('task');
+    expect(reviewParent(p.sessions, p.sessions[0])).toBeUndefined();
+  });
+});
+
+describe('joinedPartSelected', () => {
+  const task = { id: 'task', codeReview: { sessionId: 'rv' } } as Session;
+  it.each([
+    ['task', 'task'],
+    ['rv', 'review'],
+    ['other', null],
+    [null, null],
+  ] as const)('with %s on screen, selects %s', (current, part) => {
+    expect(joinedPartSelected(task, current)).toBe(part);
   });
 });
 

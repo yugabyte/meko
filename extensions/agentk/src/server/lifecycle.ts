@@ -1,3 +1,4 @@
+import { findMeAkReviewLine, withMeAkReviewLine } from '../shared/codereview.js';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { basename } from 'node:path';
 import { mekoHost } from './config.js';
@@ -20,7 +21,7 @@ import {
 import { launchedAgentId, withMekoScope } from './meko.js';
 import type { HookPayload, ModReply } from './hooks.js';
 import { fetchPrDesign, markPrDesignTold, prDesignSource, savePrDesign } from './prdesign.js';
-import { mekoDatapackLineId, mekoPrFooter, movePrompt } from './prompts.js';
+import { meAkReviewFooter, mekoDatapackLineId, mekoPrFooter, movePrompt } from './prompts.js';
 import { HttpError } from './projects.js';
 import {
   INSTRUCTIONS_MAX, KIND_LABELS, STAGE_LABELS, type CloseSessionRequest, type HeldReview, type HeldReviewAuthor, type HeldReviewsResult, type MoveSessionRequest, type QueuedGate,
@@ -701,6 +702,8 @@ export class Lifecycle {
     const instructions = given ?? (row.queued_gate === 'open-pr' ? row.queued_instructions ?? '' : '');
     const check = this.prCheck(row.id, false);
     check(row);
+    // A local review goes first (review/runner.ts): it sends the PR prompt itself when it's done.
+    if (await this.core.reviews.openPr(row, { instructions, by: 'you' })) return;
     await this.sendPr(row, check, { instructions });
   }
 
@@ -737,6 +740,11 @@ export class Lifecycle {
       // Cleared with the gate before the prompt is typed: if it can't be, the activity log keeps them.
       const instructions = row.queued_instructions;
       try {
+        // A local review takes the queued Open PR, and sends the PR prompt itself when it's done.
+        if (await this.core.reviews.openPr(row, { instructions: instructions ?? '', by: row.auto_run ? 'auto' : 'you' })) {
+          this.setQueued(id, null);
+          return;
+        }
         await this.sendPr(row, this.prCheck(id, true), { by: row.auto_run ? 'auto' : 'you' });
         this.sessions.event(id, 'queued', row.auto_run ? 'Run to merge: PR prompt sent' : 'Queued Open PR sent');
       } catch (e) {
@@ -759,10 +767,10 @@ export class Lifecycle {
    * user time to move on. Without `instructions` (a queued Open PR, from takeQueuedPr), those kept
    * with the queued gate go.
    */
-  private async sendPr(row: SessionRow, check: (r: SessionRow) => void, opts: { lead?: string; instructions?: string; by?: 'you' | 'auto' } = {}): Promise<void> {
+  private async sendPr(row: SessionRow, check: (r: SessionRow) => void, opts: { lead?: string; instructions?: string; by?: 'you' | 'auto'; reviewLine?: string | null } = {}): Promise<void> {
     if (row.branch_reused) await this.followPrBase(row);
     // A branch whose PR head is on another remote (a fork's) is pushed there, not to origin.
-    const footer = [row.push_remote ? pushLine(row) : '', await this.prFooter(row)].filter(Boolean).join('\n\n');
+    const footer = [row.push_remote ? pushLine(row) : '', opts.reviewLine ? meAkReviewFooter(opts.reviewLine) : '', await this.prFooter(row)].filter(Boolean).join('\n\n');
     const cur = this.sessions.row(row.id);
     // Read before the check, which clears a queued Open PR with its instructions; the latest, if a
     // press replaced them while this waited.
@@ -785,6 +793,63 @@ export class Lifecycle {
     this.checkBetweenTurns(row);
     if (row.status === 'needs_input' && row.status_detail !== DESIGN_READY) throw new HttpError(409, 'AgentK is waiting on you in the terminal. Answer it first.');
     if (row.status === 'exited') throw new HttpError(409, `${agentName(row)} has exited. Resume the session first.`);
+  }
+
+  /**
+   * A task's local review asks it to fix a round's findings before the next round (review/runner.ts).
+   * The task stays in Code, and its turn's end starts the next round.
+   */
+  async sendReviewFix(task: SessionRow, o: { strategy: string; round: number; findings: string; outcomeHow: string }): Promise<void> {
+    const row = this.sessions.row(task.id);
+    if (row.stage !== 'code' || row.desired !== 'running') throw new Error('the task left Code');
+    await this.sessions.submit(row.id, this.sessions.prompt(row, 'code-review-fix', { strategy: o.strategy, round: o.round, findings: o.findings, outcomeHow: o.outcomeHow }));
+  }
+
+  /**
+   * A task's local review is done (or the user opened the PR past a stopped one): the PR prompt goes,
+   * led by the last round's findings when it had some, with the `me_ak_review:` line (none past a
+   * stopped review). False when it couldn't go; the user's Open PR sends it later.
+   */
+  async sendReviewedPr(task: SessionRow, o: { line: string | null; findings: string; outcomeHow: string; strategy: string; instructions: string; by: 'you' | 'auto' }): Promise<boolean> {
+    const row = this.sessions.row(task.id);
+    if (row.stage !== 'code' || row.desired !== 'running') return false;
+    const lead = o.findings ? this.sessions.prompt(row, 'code-review-findings', { strategy: o.strategy, findings: o.findings, outcomeHow: o.outcomeHow }) : undefined;
+    try {
+      await this.serial(row.id, () => this.sendPr(row, this.prCheck(row.id, false), { lead, instructions: o.instructions, by: o.by, reviewLine: o.line }));
+      this.core.reviews.markSent(row.id);
+      return true;
+    } catch (e) {
+      this.warn(row.id, 'Sending the PR prompt after the local review', e);
+      this.sessions.event(row.id, 'review', `The PR prompt didn't go after the local review: ${errMsg(e)}. Press Open PR to send it.`);
+      this.sessions.notifyUser(row.id, 'Open PR not sent', `The local review is done, but the PR prompt couldn't be sent (${errMsg(e)}). Press Open PR to send it.`);
+      return false;
+    }
+  }
+
+  /** A task's local review failed or was cancelled: its Open PR waits for Retry or Open anyway, Run to merge's too. */
+  reviewStopped(id: string): void {
+    const row = sessionRow(this.db, id);
+    if (row?.queued_gate === 'open-pr') this.setQueued(id, null);
+  }
+
+  /**
+   * After the PR is found: a task whose local review finished has the review's `me_ak_review:` line
+   * in the description, written in by AgentK when Claude left it out. Never throws.
+   */
+  private async syncReviewLine(id: string): Promise<void> {
+    const row = sessionRow(this.db, id);
+    const line = row?.pr_number ? this.core.reviews.prLine(id) : null;
+    if (!row?.pr_number || !line) return;
+    try {
+      const repo = prRepoOf(row.pr_url);
+      const cwd = this.ghCwd(row);
+      const body = await github.prBody(cwd, row.pr_number, repo);
+      if (findMeAkReviewLine(body) === line) return;
+      await github.setPrBody(cwd, row.pr_number, withMeAkReviewLine(body, line), repo);
+      this.sessions.event(id, 'review', `Put the local review's line in PR #${row.pr_number}: ${line}`);
+    } catch (e) {
+      this.warn(id, `Putting the local review's line in PR #${row.pr_number}`, e);
+    }
   }
 
   private checkBetweenTurns(row: SessionRow): void {
@@ -1013,6 +1078,11 @@ export class Lifecycle {
     const row = sessionRow(this.db, id);
     if (!row) return;
     this.sessions.setBusy(id, false);
+    // A code-review session's turn moves its review on, and nothing else acts on it.
+    if (row.kind === 'code-review') {
+      await this.core.reviews.onTurnEnd(row, interrupted);
+      return;
+    }
     // A Kiro turn just ran: re-read the plan so the rail's credits stay fresh, at most every
     // KIRO_PLAN_TURN_EVERY_MS so a run of turns reads once. Never awaited; never blocks the turn.
     if (row.harness === 'kiro') void this.core.kiroPlan.refreshIfStale(KIRO_PLAN_TURN_EVERY_MS);
@@ -1033,6 +1103,11 @@ export class Lifecycle {
       if (closed) return;
     }
     if (row.stage === 'code') {
+      // A turn that fixed a local review's findings starts the review's next round, which opens the PR itself.
+      if (await this.core.reviews.onTurnEnd(row, interrupted)) {
+        if (this.sessions.row(id).queued_gate === 'open-pr') this.setQueued(id, null);
+        return;
+      }
       await this.takeQueuedPr(id).catch((e) => this.warn(id, 'Sending the queued Open PR', e));
     } else if (row.stage === 'pr') {
       await this.pollPrStage(row).catch((e) => this.warn(row.id, 'PR lookup failed', e));
@@ -1272,6 +1347,7 @@ export class Lifecycle {
     }
     // Opening the PR and its review are one step in the UI: "Opened PR #7" already says the session moved on.
     this.sessions.setStage(id, 'review', by, { event: before.stage !== 'pr' });
+    void this.syncReviewLine(id);
     this.armMerge(id);
     await this.doPollReview(id);
   }

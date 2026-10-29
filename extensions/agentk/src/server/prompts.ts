@@ -26,11 +26,16 @@ import type { LearnBrief, MoveTarget } from '../shared/types.js';
  * `review-pr-update` also gets {{oldSha}} and {{count}}, and `review-pr-comments` {{count}} and {{comments}}.
  * `seed` is a learn session's first prompt (Session.purpose `learn`): its {{task}} carries the user's brief
  * (learnTask), and it gets {{learnedFile}}, where Claude writes its summary when it's done (the session then closes).
+ * The local code review's prompts (review/runner.ts): `code-review-sweep` and `code-review-score` go to a code-review
+ * session and get {{steps}} (a numbered line per step: its subagent and the prompt to give it), {{what}} (which sweep, or how
+ * many findings) and {{reportTool}}; `code-review-fix` goes to the task between review rounds and `code-review-findings`
+ * before the PR prompt after the last one, both with {{strategy}}, {{round}}, {{findings}} (a line per finding, with its key)
+ * and {{outcomeHow}} (how to say what was done with each); the PR prompt then gets the `me_ak_review:` line (`meAkReviewFooter`).
  */
 export type PromptName =
   | 'explore' | 'design' | 'design-plan' | 'design-answers' | 'approved' | 'approved-answers' | 'code' | 'pr' | 'review' | 'review-people' | 'review-held' | 'conflicts' | 'ci' | 'continue' | 'continue-review' | 'comments'
   | 'moved' | 'move-design' | 'move-code' | 'instructions' | 'attached' | 'review-pr' | 'review-pr-update' | 'review-pr-design' | 'review-pr-comments' | 'learn'
-  | 'seed';
+  | 'seed' | 'code-review-sweep' | 'code-review-score' | 'code-review-fix' | 'code-review-findings';
 
 /** How to design, after the task: shared by `design` and `move-design`. */
 const DESIGN_STEPS = `Read the relevant code, then design the change: the goal, the approach, the files you expect to change, risks and open questions, and a test plan. Don't change anything in the repo yet: no file edits, commits, or commands that modify files. AgentK blocks edits in the repo until the user approves the design.
@@ -196,6 +201,30 @@ Task: {{task}}
 4. Don't change any files in the repo, commit or push.
 
 When you've finished, write a short summary to {{learnedFile}} (it's outside the repo, so writing it is allowed): what you covered (areas, and the PRs from when to when), how many facts you saved and corrected, and what you'd look at next. AgentK then closes this session. Write it only when you've finished: if you need to ask the user something first, ask without writing it.`,
+
+  'code-review-sweep': `Run the next steps of AgentK's local code review of "{{task}}" (branch {{branch}} against {{base}}): {{what}}.
+
+{{steps}}
+
+Run them one at a time, in this order: start a step only after the one before it has finished. Start each in a fresh subagent of the type named for it, and give it exactly the prompt shown, with nothing added. Each one reports to AgentK itself with {{reportTool}}; don't report for it, check what it found or retry it yourself. When every step has finished, say "Done" and stop. Change no file.`,
+
+  'code-review-score': `Run the next steps of AgentK's local code review of "{{task}}": score {{what}}, each on its own.
+
+{{steps}}
+
+Run them one at a time, in this order: start a step only after the one before it has finished. Start each in a fresh subagent of the type named for it, and give it exactly the prompt shown, with nothing added. Each one reports to AgentK itself with {{reportTool}}; don't report for it or judge the findings yourself. When every step has finished, say "Done" and stop. Change no file.`,
+
+  'code-review-fix': `AgentK reviewed this change locally ({{strategy}}, round {{round}}) before opening the PR. Address each finding below:
+
+1. Verify it against the code before changing anything. If a finding is wrong, don't change working code: say why, with evidence.
+2. Fix every valid one, and run the repo's tests and checks. Don't commit, push or open the PR yet: AgentK reviews the change again first.
+3. {{outcomeHow}}
+
+{{findings}}`,
+
+  'code-review-findings': `AgentK reviewed this change locally ({{strategy}}) before this PR. Before you open it, address each finding below: verify it against the code, fix every valid one, and for one you decline, say why in the PR description. {{outcomeHow}}
+
+{{findings}}`,
 };
 
 /**
@@ -487,4 +516,12 @@ export function render(template: string, vars: Record<string, string | number | 
     const v = vars[k];
     return v === null || v === undefined ? '' : String(v);
   });
+}
+
+/**
+ * Added to the PR prompt after a local review (review/runner.ts): the `me_ak_review:` line, in the
+ * PR description on a line of its own. AgentK writes it in itself if it's missing once the PR is found.
+ */
+export function meAkReviewFooter(line: string): string {
+  return `Put this line in the PR description, exactly as written and on a line of its own, before the lines AgentK asks to end it with:\n\n${line}`;
 }

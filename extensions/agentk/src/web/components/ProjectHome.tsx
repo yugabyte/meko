@@ -17,7 +17,8 @@ import { api, errorMessage } from '../api';
 import { useIsMobile, useTouch } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { cx, shortTime } from '../util';
-import { Busy, ConfirmButton, DatapackName, ErrorText, Field, InfoCheck } from './common';
+import { Busy, ConfirmButton, DatapackName, ErrorText, Field, InfoCheck, ReviewFields } from './common';
+import { useReviewDefaults } from '../reviewdefaults';
 import { AddDatapackDialog } from './AddDatapackDialog';
 import { MekoLinkDialog } from './MekoLinkDialog';
 import { ShareDialog } from './ShareDialog';
@@ -423,6 +424,8 @@ function ProjectSettingsForm({
 }) {
   const [name, setName] = useState(project.name);
   const [s, setS] = useState<ProjectSettings>(project.settings);
+  // What the review settings' "Default" stands for: the global ones.
+  const reviewDefaults = useReviewDefaults();
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   // Every state push brings a new settings object; reset the form only when the saved values change.
@@ -511,6 +514,13 @@ function ProjectSettingsForm({
             <option value="rebase">Rebase</option>
           </select>
         </Field>
+        <ReviewFields
+          id="ps-review"
+          scoped
+          inherited={reviewDefaults}
+          value={s.codeReview ?? {}}
+          onChange={(v) => set('codeReview', v)}
+        />
         <div className="checks">
           <label className="check">
             <input

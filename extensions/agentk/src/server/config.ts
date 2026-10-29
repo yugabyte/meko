@@ -5,6 +5,9 @@ import { claudeUserDir } from './claude.js';
 import { DEFAULT_MEKO_URL, DEFAULT_MEKO_WEB_URL, mekoWebUrl } from '../shared/mekourls.js';
 import type { MekoKeySource } from '../shared/types.js';
 import { DEFAULT_HARNESS, HARNESS_IDS, isHarnessId, type HarnessId } from '../shared/harnesses.js';
+import {
+  DEFAULT_DEPTH, DEFAULT_ROUNDS, DEFAULT_STRATEGY, MAX_DEPTH, MAX_ROUNDS, STRATEGIES, isStrategySetting, type ReviewSettings,
+} from '../shared/codereview.js';
 import { isLocalMeko, isMekoCloudKey, localMeko, mekoLinkHandedOver, originOf } from './mekolocal.js';
 import { expandHome, type Paths } from './paths.js';
 
@@ -99,6 +102,21 @@ export interface Config {
    * nothing else is allowed (slack.ts).
    */
   workQueue: { github: boolean; slack: boolean; syncMinutes: number; slackModel: string; slackTimeoutSeconds: number; slackTools: string[] };
+  /**
+   * The local code review before a PR opens (review/runner.ts, docs/design/code-review.md), also in Settings › General;
+   * a project's settings and a session's own go over these. strategy: `sagittarius-3.0`, `sirius-1.0` or `off`. rounds:
+   * re-reviews after the first (0 to MAX_ROUNDS). depth: sweeps in each review (1 to MAX_DEPTH). models: the model each
+   * tier of review step runs on, per harness (`[code_review.models.<harness>]`: large, mid, small); empty runs it on the
+   * session's own model.
+   */
+  codeReview: { strategy: string; rounds: number; depth: number; models: Record<HarnessId, ReviewModels> };
+}
+
+/** The model for each tier of a review step on one harness (`[code_review.models.<harness>]`); '' is the session's own. */
+export interface ReviewModels {
+  large: string;
+  mid: string;
+  small: string;
 }
 
 export { DEFAULT_MEKO_URL, DEFAULT_MEKO_WEB_URL, mekoWebUrl };
@@ -123,6 +141,18 @@ export const DEFAULT_CONFIG: Config = {
   askAgentk: { enabled: true, model: 'sonnet', timeoutSeconds: 45 },
   tools: { enabled: true },
   workQueue: { github: false, slack: false, syncMinutes: 15, slackModel: 'sonnet', slackTimeoutSeconds: 180, slackTools: [...SLACK_READ_TOOLS] },
+  codeReview: {
+    strategy: DEFAULT_STRATEGY,
+    rounds: DEFAULT_ROUNDS,
+    depth: DEFAULT_DEPTH,
+    // Claude Code's aliases follow its newest models. OpenCode's and Kiro's model ids depend on the
+    // providers and plans the user has, so their steps run on the session's own model unless set.
+    models: {
+      claude: { large: 'opus', mid: 'sonnet', small: 'haiku' },
+      opencode: { large: '', mid: '', small: '' },
+      kiro: { large: '', mid: '', small: '' },
+    },
+  },
 };
 
 // TOML uses snake_case keys; the in-memory config uses camelCase.
@@ -176,6 +206,20 @@ function readConfigFile(paths: Paths, warn: (msg: string) => void): Config {
   // Older versions wrote every default, so a Meko URL equal to the default was never chosen:
   // leave it unset so MEKO_MCP_URL or Claude Code's settings can still name the server.
   if (cfg.meko.url === DEFAULT_MEKO_URL) cfg.meko.url = '';
+  if (!isStrategySetting(cfg.codeReview.strategy)) {
+    warn(`config.toml: code_review.strategy should be off or one of ${STRATEGIES.map((x) => x.id).join(', ')}; using ${DEFAULT_STRATEGY}`);
+    cfg.codeReview.strategy = DEFAULT_STRATEGY;
+  }
+  const rounds = cfg.codeReview.rounds;
+  if (!Number.isInteger(rounds) || rounds < 0 || rounds > MAX_ROUNDS) {
+    warn(`config.toml: code_review.rounds should be a whole number from 0 to ${MAX_ROUNDS}; using ${DEFAULT_ROUNDS}`);
+    cfg.codeReview.rounds = DEFAULT_ROUNDS;
+  }
+  const depth = cfg.codeReview.depth;
+  if (!Number.isInteger(depth) || depth < 1 || depth > MAX_DEPTH) {
+    warn(`config.toml: code_review.depth should be a whole number from 1 to ${MAX_DEPTH}; using ${DEFAULT_DEPTH}`);
+    cfg.codeReview.depth = DEFAULT_DEPTH;
+  }
   if (!isHarnessId(cfg.agents.default)) {
     warn(`config.toml: agents.default should be one of ${HARNESS_IDS.join(', ')}; using ${DEFAULT_HARNESS}`);
     cfg.agents.default = DEFAULT_HARNESS;
@@ -401,4 +445,9 @@ export function readClaudeSettingsEnv(): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+/** The global local review settings, as `resolveReview` takes them. */
+export function globalReview(cfg: Config): ReviewSettings {
+  return { strategy: cfg.codeReview.strategy as ReviewSettings['strategy'], rounds: cfg.codeReview.rounds, depth: cfg.codeReview.depth };
 }

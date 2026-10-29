@@ -6,8 +6,8 @@ import { useIsMobile, useTouch } from '../hooks/useMedia';
 import { RAIL_DEFAULT, clampRailWidth, railCollapsedSaved, saveRailCollapsed } from '../rail';
 import type { ThemePref } from '../theme';
 import { queueBadge } from '../workqueue';
-import { aggregateDot, creditsNumber, type DotState, cx, dotState, formatCredits, formatTokens, isMac, kiroPlanLines, limitLevel, openSessions, relativeTime, repoFolder, sessionTabTitle, totalTokens } from '../util';
-import { HarnessLogo, Ring, StageChip, StatusDot } from './common';
+import { aggregateDot, creditsNumber, type DotState, cx, dotState, formatCredits, formatTokens, isMac, joinedPartSelected, kiroPlanLines, limitLevel, openSessions, relativeTime, repoFolder, sessionTabTitle, totalTokens } from '../util';
+import { HarnessLogo, ReviewSegment, Ring, StageChip, StatusDot } from './common';
 import { HARNESS_CAPS, type HarnessId } from '../../shared/harnesses';
 
 export function Rail({
@@ -201,13 +201,17 @@ export function Rail({
               </div>
               {listed && !folded && (
                 <div className={cx('rail-sessions', harnessLogos && 'logos')} id={`rail-sessions-${p.id}`} role="group" aria-label={`Sessions in ${p.name}`}>
-                  {sessions.map((s, j) => (
+                  {sessions.map((s, j) => {
+                    const part = joinedPartSelected(s, currentSessionId);
+                    const review = s.codeReview;
+                    const child = review?.sessionId ? p.sessions.find((x) => x.id === review.sessionId) : undefined;
+                    const row = (
                     <div key={s.id} className="rail-sess-row">
                       <button
-                        className={cx('rail-sess', s.id === currentSessionId && 'sel')}
+                        className={cx('rail-sess', part === 'task' && 'sel')}
                         onClick={() => onSelectSession(s)}
                         onDoubleClick={mobile ? undefined : () => onRenameSession(s.id)}
-                        aria-current={s.id === currentSessionId ? 'page' : undefined}
+                        aria-current={part === 'task' ? 'page' : undefined}
                         title={sessionTabTitle(s) + (mobile ? '' : '\nDouble-click to rename')}
                       >
                         <StatusDot status={dotState(s)} phase={s.id} />
@@ -228,7 +232,16 @@ export function Rail({
                         </button>
                       )}
                     </div>
-                  ))}
+                    );
+                    // A task with a local review keeps one row: its part, then the review's (the magnifier).
+                    if (!review) return row;
+                    return (
+                      <div key={s.id} className={cx('rail-joined', part === 'review' && 'review-sel')}>
+                        {row}
+                        <ReviewSegment review={review} selected={part === 'review'} className="rail-review" onOpen={() => child && onSelectSession(child)} />
+                      </div>
+                    );
+                  })}
                   <button className="rail-sess rail-sess-new" onClick={() => onNewSession(p.id)}>
                     + New session
                   </button>

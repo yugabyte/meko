@@ -653,6 +653,48 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX work_item_links_key ON work_item_links(key);
   `,
+  // 43: the local code review (review/runner.ts, docs/design/code-review.md). parent_id: a code-review
+  // session's task; review_json: a session's own review settings (ReviewOverrides), NULL for none.
+  // code_reviews: one row per review a task's Open PR started (its rounds, sweeps and state; the
+  // current round's candidates, every round's findings for the panel, the counts for the PR line, the
+  // Open PR instructions it holds); code_review_steps: each step's report as AgentK's tools took it,
+  // so a review resumes after a restart and a Retry reuses what was reported.
+  `
+  ALTER TABLE sessions ADD COLUMN parent_id TEXT;
+  ALTER TABLE sessions ADD COLUMN review_json TEXT;
+  CREATE TABLE code_reviews (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    session_id TEXT,
+    strategy TEXT NOT NULL,
+    rounds INTEGER NOT NULL,
+    depth INTEGER NOT NULL,
+    state TEXT NOT NULL,
+    round INTEGER NOT NULL DEFAULT 1,
+    sweep INTEGER NOT NULL DEFAULT 1,
+    asked INTEGER NOT NULL DEFAULT 0,
+    candidates_json TEXT NOT NULL DEFAULT '[]',
+    findings_json TEXT NOT NULL DEFAULT '[]',
+    notes_json TEXT NOT NULL DEFAULT '[]',
+    datapacks_json TEXT NOT NULL DEFAULT '[]',
+    counts_json TEXT NOT NULL DEFAULT '{"blocker":0,"major":0,"minor":0}',
+    last_kept INTEGER NOT NULL DEFAULT 0,
+    instructions TEXT,
+    by TEXT NOT NULL DEFAULT 'you',
+    detail TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    finished_at INTEGER
+  );
+  CREATE INDEX code_reviews_task ON code_reviews(task_id, created_at);
+  CREATE TABLE code_review_steps (
+    review_id TEXT NOT NULL REFERENCES code_reviews(id) ON DELETE CASCADE,
+    step TEXT NOT NULL,
+    report_json TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    PRIMARY KEY (review_id, step)
+  );
+  `,
 ];
 
 export function openDb(path: string): Db {

@@ -78,6 +78,25 @@ describe("an OpenCode session's command line", () => {
     });
   });
 
+  it("gives a code-review session its read-only review subagents, each on its model or the session's own, and keeps its main thread read-only", () => {
+    const paths = getPaths(tempDir('akl-oc-'));
+    const spec = openCodeHarness({ paths, log: silentLogger, changed: () => undefined }).launcher(paths, structuredClone(DEFAULT_CONFIG), {
+      row: { id: 's1', worktree_path: '/w', agent_session_id: null } as SessionRow, resume: false, prompt: null, systemPrompt: '', addDirs: [],
+      modDir: null, planMode: false, env: {}, unsetEnv: [], untrusted: false, tools: false,
+      review: { runDir: '/run/reviews/r1', agents: [
+        { name: 'agentk-review-large', tier: 'large', description: 'A step.', prompt: 'Do the step.', model: 'anthropic/big' },
+        { name: 'agentk-review-small', tier: 'small', description: 'A step.', prompt: 'Do the step.', model: '' },
+      ] },
+    });
+    const cfg = JSON.parse(spec.env.OPENCODE_CONFIG_CONTENT);
+    const readOnly = { edit: 'deny', bash: 'deny', webfetch: 'deny' };
+    expect(cfg.agent).toEqual({
+      'agentk-review-large': { description: 'A step.', mode: 'subagent', prompt: 'Do the step.', model: 'anthropic/big', permission: readOnly },
+      'agentk-review-small': { description: 'A step.', mode: 'subagent', prompt: 'Do the step.', permission: readOnly },
+    });
+    expect(cfg.permission).toMatchObject(readOnly);
+  });
+
   it.each([false, true])("sends no telemetry, checks for no update and offers no free models, in sessions and Ask AgentK, only while [opencode] disable_tracking is %s", (off) => {
     const paths = getPaths(tempDir('akl-oc-'));
     const cfg = structuredClone(DEFAULT_CONFIG);

@@ -12,6 +12,7 @@ import type { Logger } from '../log.js';
 import type { AgentMekoCall } from '../mekolog.js';
 import type { Paths } from '../paths.js';
 import type { SessionRow } from '../store.js';
+import type { ReviewLaunch } from '../review/runner.js';
 
 /** What the session manager gives a harness to launch a session with. */
 export interface LaunchInput {
@@ -39,6 +40,12 @@ export interface LaunchInput {
    * that file instead (`prepare`, `beforeLaunch`), and the tools' route refuses a session without them.
    */
   tools: boolean;
+  /**
+   * A code-review session's subagents (review/runner.ts), one per model tier: a harness whose
+   * review steps are `subagents` (`HARNESS_CAPS.reviewSteps`) defines them for the session, read-only.
+   * Null for every other session.
+   */
+  review?: ReviewLaunch | null;
 }
 
 /** What a harness gets before each launch. */

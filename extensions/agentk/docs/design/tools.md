@@ -52,9 +52,11 @@ sequenceDiagram
 | Tool | Takes | Does |
 |---|---|---|
 | `list` | `projectId?` | The open projects (id, name, repo folder, `github`: `owner/name` from its upstream, else its origin) and their running sessions (id, name, stage, status, branch, harness, PR), with the caller marked `self`. Read only. |
-| `start_sessions` | `sessions`: 1 to 8 of `{ ref }` (a GitHub issue or PR) or `{ name, prompt }`, each with `projectId?` (default: the caller's), `stage?` and `autoRun?` | A `link` action for a ref: `githubLinks.start` with the project, so an issue becomes a task (at Design, or the stage given) and a PR becomes a Review a PR session. A `start` action for a task. An issue that a running task already works on is refused (`once`), as a PR a running review is. `autoRun` is [Run to merge](lifecycle.md#run-to-merge), only for a task or an issue at Code: asked for at another stage it's left out with a note, and a PR refuses it. |
+| `start_sessions` | `sessions`: 1 to 8 of `{ ref }` (a GitHub issue or PR) or `{ name, prompt }`, each with `projectId?` (default: the caller's), `stage?`, `autoRun?` and `review?` | A `link` action for a ref: `githubLinks.start` with the project, so an issue becomes a task (at Design, or the stage given) and a PR becomes a Review a PR session. A `start` action for a task. An issue that a running task already works on is refused (`once`), as a PR a running review is. `autoRun` is [Run to merge](lifecycle.md#run-to-merge), only for a task or an issue at Code: asked for at another stage it's left out with a note, and a PR refuses it. `review` is the task's own [local review](code-review.md) settings (`strategy`, `rounds`, `depth`: "with 3 deep reviews" is `depth: 3`), each left out keeping the project's. |
 | `move_session` | `sessionId`, `stage`, `instructions?` | The `move` action, with the move dialog's rules (`moveBlockedIn`, `moveError`). The calling session may move itself: its agent asks mid-turn, and a move waits for a turn's end, so the move is held for this one (`SessionTools.queueSelfMove`) and runs from `Lifecycle.onTurnEnd` (`turnEnded`), its outcome in the session's log. An interrupted turn drops it, and so does a restart (it's kept in memory). |
 | `open_pr` | `sessionId`, `instructions?` | Open PR on a session in Code. It's refused for the calling session, because a session's own PR stays the user's gate. |
+| `review_report`, `review_score` | `step`, and `report` or `score` | A [local review](code-review.md)'s step reports its pass's findings or its verdict on one finding, checked against the step's schema (an error says what to fix). Only from a code-review session, about the step its review waits for. Pre-allowed, answered whatever `[tools] enabled` says or the session's PR head. |
+| `review_outcome` | `outcomes`: `{ key, status: fixed \| declined, note }` | A task says what it did with each of its local review's findings, by the key AgentK gave it; the next round and the findings panel show it. Pre-allowed. |
 | `open_project` | `repo`, `name?`, `datapack?` | The `openProject` action. `repo` is a scanned repo's path, GitHub `owner/name` (its clone here, else cloned), or a clone URL, and never another folder, which the Open project dialog would make a repo. `datapack` is `new` (a new dedicated datapack while Meko is on, the default), `none`, or a datapack's id. |
 
 ## One set of actions
@@ -80,7 +82,7 @@ from a public repo's PR could be steering the agent. Such a session is launched 
 on Claude Code, too. Kiro's agent file is shared by every session, so a Kiro session on an untrusted
 PR head has the tools, and the route refuses them. The write tools (`start_sessions`,
 `move_session`, `open_pr`, `open_project`) go through each harness's own permission ask; only `list`
-is pre-allowed: `mcp__agentk_sessions__list` in Claude Code's `permissions.allow`
+and the local review's reports are pre-allowed: `mcp__agentk_sessions__list` (and `review_*`) in Claude Code's `permissions.allow`
 (`writeHookFiles`). Kiro asks before `list` too: the `agentk` agent in the user's Kiro home grants
 nothing their own agent doesn't, and `--trust-tools=<list>` would trust only that list. OpenCode allows
 every tool unless its config says otherwise, so a session's config sets `ask` for each write tool

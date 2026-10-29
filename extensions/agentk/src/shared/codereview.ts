@@ -1,0 +1,319 @@
+/**
+ * AgentK's local code review (docs/design/code-review.md): the review strategies, the three
+ * settings (strategy, re-review rounds, depth) and how a session's, its project's and the global
+ * values resolve, the `me_ak_review:` line a PR description carries, and the short label the
+ * review's part of a task's tab shows. Used by the server and the web UI.
+ */
+
+/** A review strategy's id, stamped on every review and never reused (`STRATEGIES`). */
+export type ReviewStrategyId = 'sagittarius-3.0' | 'sirius-1.0';
+
+/** The strategy setting: a strategy, or no local review. */
+export type ReviewStrategySetting = ReviewStrategyId | 'off';
+
+export interface ReviewStrategyInfo {
+  id: ReviewStrategyId;
+  name: string;
+  /** One line on what it does, for the settings' ⓘ. */
+  summary: string;
+  /** Passes in one sweep. */
+  passes: number;
+  /** It runs a scorer for each candidate. */
+  scored: boolean;
+}
+
+/**
+ * The registry, oldest first. Nothing is ever removed: a review recorded under an old id has to stay
+ * readable. Sagittarius 3.0 is the agent-k reviewer's Golum 1.0 algorithm; the cloud keeps its own name.
+ */
+export const STRATEGIES: ReviewStrategyInfo[] = [
+  {
+    id: 'sagittarius-3.0',
+    name: 'Sagittarius 3.0',
+    summary: 'Five specialist passes (guide, diff, dependents, history, claims), then a scorer per finding that can only drop it by refuting it.',
+    passes: 5,
+    scored: true,
+  },
+  {
+    id: 'sirius-1.0',
+    name: 'Sirius 1.0',
+    summary: 'One Sonnet-level pass that covers all five mandates. No scorers: cheaper and faster.',
+    passes: 1,
+    scored: false,
+  },
+];
+
+export const DEFAULT_STRATEGY: ReviewStrategyId = 'sagittarius-3.0';
+/** Re-review rounds: reviews after the first, each after the task fixes the last round's findings. */
+export const DEFAULT_ROUNDS = 0;
+export const MAX_ROUNDS = 5;
+/** Review depth: sweeps in each round, as the cloud's deep reviews. */
+export const DEFAULT_DEPTH = 1;
+export const MAX_DEPTH = 5;
+/** The cloud's default MinDeepSweeps: from this sweep on, one that adds nothing new ends the round. */
+export const MIN_SWEEPS = 2;
+
+export function strategyInfo(id: string): ReviewStrategyInfo | undefined {
+  return STRATEGIES.find((s) => s.id === id);
+}
+
+/** A strategy's display name; an unknown id shows as itself, since it's a record of what ran. */
+export function strategyName(id: string): string {
+  return strategyInfo(id)?.name ?? id;
+}
+
+export function isStrategySetting(v: unknown): v is ReviewStrategySetting {
+  return v === 'off' || (typeof v === 'string' && !!strategyInfo(v));
+}
+
+/** The three settings, as resolved for one review. */
+export interface ReviewSettings {
+  strategy: ReviewStrategySetting;
+  rounds: number;
+  depth: number;
+}
+
+/** A project's or a session's overrides: a value left out (or null) keeps the next level's. */
+export interface ReviewOverrides {
+  strategy?: ReviewStrategySetting | null;
+  rounds?: number | null;
+  depth?: number | null;
+}
+
+export const DEFAULT_REVIEW: ReviewSettings = { strategy: DEFAULT_STRATEGY, rounds: DEFAULT_ROUNDS, depth: DEFAULT_DEPTH };
+
+/** Clamps a count setting into its range, or null when it isn't a whole number. */
+function count(v: unknown, min: number, max: number): number | null {
+  if (typeof v !== 'number' || !Number.isInteger(v)) return null;
+  return Math.min(max, Math.max(min, v));
+}
+
+/**
+ * Reads overrides from untrusted input (a request, a stored JSON column), dropping what isn't
+ * valid. Null (or a missing key) means "default"; numbers are clamped into range.
+ */
+export function readOverrides(v: unknown): ReviewOverrides {
+  if (!v || typeof v !== 'object') return {};
+  const o = v as Record<string, unknown>;
+  const out: ReviewOverrides = {};
+  if (isStrategySetting(o.strategy)) out.strategy = o.strategy;
+  const rounds = count(o.rounds, 0, MAX_ROUNDS);
+  if (rounds !== null) out.rounds = rounds;
+  const depth = count(o.depth, 1, MAX_DEPTH);
+  if (depth !== null) out.depth = depth;
+  return out;
+}
+
+/** True when the overrides set nothing. */
+export function noOverrides(o: ReviewOverrides): boolean {
+  return o.strategy == null && o.rounds == null && o.depth == null;
+}
+
+/** The settings a review runs with: the session's overrides, then the project's, then the global ones. */
+export function resolveReview(global: ReviewSettings, project: ReviewOverrides, session: ReviewOverrides): ReviewSettings {
+  return {
+    strategy: session.strategy ?? project.strategy ?? global.strategy,
+    rounds: session.rounds ?? project.rounds ?? global.rounds,
+    depth: session.depth ?? project.depth ?? global.depth,
+  };
+}
+
+export type Severity = 'blocker' | 'major' | 'minor';
+export const SEVERITIES: Severity[] = ['blocker', 'major', 'minor'];
+
+export type SeverityCounts = Record<Severity, number>;
+
+export function noCounts(): SeverityCounts {
+  return { blocker: 0, major: 0, minor: 0 };
+}
+
+export function addCounts(a: SeverityCounts, b: SeverityCounts): SeverityCounts {
+  return { blocker: a.blocker + b.blocker, major: a.major + b.major, minor: a.minor + b.minor };
+}
+
+export function totalCount(c: SeverityCounts): number {
+  return c.blocker + c.major + c.minor;
+}
+
+/** `N blocker` or `N blockers`; major and minor read the same for any N. */
+function severityPart(s: Severity, n: number): string {
+  return s === 'blocker' ? `${n} blocker${n === 1 ? '' : 's'}` : `${n} ${s}`;
+}
+
+/** The prefix of the PR description's line. */
+export const ME_AK_REVIEW = 'me_ak_review:';
+
+/**
+ * The PR description's line for a finished local review: every round's findings added up, each
+ * severity that has some, in the order blocker, major, minor; `LGTM` when no round found any.
+ */
+export function meAkReviewLine(counts: SeverityCounts): string {
+  const parts = SEVERITIES.filter((s) => counts[s] > 0).map((s) => severityPart(s, counts[s]));
+  return ME_AK_REVIEW + (parts.length ? `${parts.join(',')} addressed` : 'LGTM');
+}
+
+/** Reads a `me_ak_review:` line back: its counts, or null when it isn't one. */
+export function parseMeAkReviewLine(line: string): SeverityCounts | null {
+  const t = line.trim();
+  if (!t.startsWith(ME_AK_REVIEW)) return null;
+  const rest = t.slice(ME_AK_REVIEW.length).trim();
+  if (rest === 'LGTM') return noCounts();
+  const m = /^(.*)\s+addressed$/.exec(rest);
+  if (!m) return null;
+  const counts = noCounts();
+  for (const part of m[1].split(',')) {
+    const pm = /^\s*(\d+)\s+(blockers?|major|minor)\s*$/.exec(part);
+    if (!pm) return null;
+    const sev = (pm[2].startsWith('blocker') ? 'blocker' : pm[2]) as Severity;
+    counts[sev] += Number(pm[1]);
+  }
+  return totalCount(counts) ? counts : null;
+}
+
+/** The `me_ak_review:` line in a PR description, or null when it has none. */
+export function findMeAkReviewLine(body: string): string | null {
+  for (const line of body.split('\n')) if (line.trim().startsWith(ME_AK_REVIEW)) return line.trim();
+  return null;
+}
+
+/** A PR description with its `me_ak_review:` line set to `line` (replaced, or added at the end). */
+export function withMeAkReviewLine(body: string, line: string): string {
+  const lines = body.split('\n');
+  const i = lines.findIndex((l) => l.trim().startsWith(ME_AK_REVIEW));
+  if (i >= 0) {
+    lines[i] = line;
+    return lines.join('\n');
+  }
+  const trimmed = body.replace(/\s+$/, '');
+  return trimmed ? `${trimmed}\n\n${line}` : line;
+}
+
+/** Where a local review is (`CodeReviewSummary.state`). */
+export type CodeReviewState = 'preparing' | 'sweeping' | 'scoring' | 'fixing' | 'done' | 'failed' | 'cancelled';
+
+/** What a task's tab and rail row show of its local review (`Session.codeReview`). */
+export interface CodeReviewSummary {
+  /** The review's id (`code_reviews.id`). */
+  id: string;
+  /** The review session (a `code-review` session whose parent is the task); null before it's created. */
+  sessionId: string | null;
+  strategy: ReviewStrategyId;
+  state: CodeReviewState;
+  /** Round 1 is the first review; re-reviews follow. */
+  round: number;
+  rounds: number;
+  sweep: number;
+  depth: number;
+  /** In `sweeping`: passes reported in this sweep, and how many it runs. */
+  passesDone: number;
+  passes: number;
+  /** In `scoring`: candidates scored, and how many there are. */
+  scoresDone: number;
+  candidates: number;
+  /** Findings kept so far, every round's added up. */
+  counts: SeverityCounts;
+  /** The review session is in a Meko tool call (the lens shows Meko's m). */
+  mekoCall: boolean;
+  /** Why it failed or was cancelled, in plain words; null otherwise. */
+  detail: string | null;
+}
+
+/** The review's part of a task's tab: the short count after the magnifier. */
+export function reviewSegmentText(r: CodeReviewSummary): string {
+  switch (r.state) {
+    case 'failed':
+    case 'cancelled':
+      return '!';
+    case 'done':
+      return totalCount(r.counts) ? `${r.counts.blocker}·${r.counts.major}` : '✓';
+    case 'scoring':
+      return `${r.scoresDone}/${r.candidates}`;
+    case 'sweeping':
+      return `${Math.min(r.passesDone + 1, r.passes)}/${r.passes}`;
+    case 'fixing':
+      return `R${r.round}`;
+    default:
+      return '…';
+  }
+}
+
+/** The review's part of a task's tab spelled out, for its tooltip and aria-label. */
+export function reviewSegmentLabel(r: CodeReviewSummary): string {
+  const name = strategyName(r.strategy);
+  const where: string[] = [];
+  if (r.rounds > 1) where.push(`round ${r.round} of ${r.rounds}`);
+  if (r.depth > 1 && r.state === 'sweeping') where.push(`sweep ${r.sweep} of ${r.depth}`);
+  let what: string;
+  switch (r.state) {
+    case 'preparing': what = 'preparing'; break;
+    case 'sweeping': what = `pass ${Math.min(r.passesDone + 1, r.passes)} of ${r.passes}`; break;
+    case 'scoring': what = `scoring ${Math.min(r.scoresDone + 1, r.candidates)} of ${r.candidates}`; break;
+    case 'fixing': what = 'waiting for the fixes'; break;
+    case 'done': what = totalCount(r.counts) ? countsText(r.counts) : 'LGTM'; break;
+    case 'failed': what = `failed${r.detail ? `: ${r.detail}` : ''}. Retry or Open anyway`; break;
+    case 'cancelled': what = 'cancelled. Retry or Open anyway'; break;
+  }
+  const meko = r.mekoCall ? ', searching Meko' : '';
+  return `Local review: ${[name, ...where, what].join(', ')}${meko}`;
+}
+
+/** `2 blockers, 1 major` (or `no findings`), for messages. */
+export function countsText(c: SeverityCounts): string {
+  const parts = SEVERITIES.filter((s) => c[s] > 0).map((s) => severityPart(s, c[s]));
+  return parts.length ? parts.join(', ') : 'no findings';
+}
+
+/** The review holds the task's Open PR for the user to pick Retry or Open anyway. */
+export function reviewHolds(r: CodeReviewSummary | null): boolean {
+  return !!r && (r.state === 'failed' || r.state === 'cancelled');
+}
+
+/** The review is still working (its lens pulses). */
+export function reviewRunning(r: CodeReviewSummary | null): boolean {
+  return !!r && (r.state === 'preparing' || r.state === 'sweeping' || r.state === 'scoring');
+}
+
+/** A scorer's verdict on a candidate (the cloud's score schema). */
+export type ScoreVerdict = 'refuted' | 'confirmed' | 'unverified';
+
+/** What the task did with a finding (`review_outcome`), shown in the panel and sent to the next round. */
+export interface FindingOutcome {
+  status: 'fixed' | 'declined';
+  note: string;
+}
+
+/** One candidate in the review's findings panel (GET /api/sessions/:id/code-review). */
+export interface CodeReviewFinding {
+  /** Stable within the review: `<round>:<index>`. */
+  key: string;
+  round: number;
+  sweep: number;
+  file: string;
+  line: number;
+  severity: Severity;
+  comment: string;
+  /** The passes that raised it; more than one is corroboration. */
+  passes: string[];
+  /** Meko gotchas it credits (`MG-<n>`). */
+  gotchas: string[];
+  verdict: ScoreVerdict | null;
+  confidence: number | null;
+  /** The scorer's reason, or its refutation for a refuted one. */
+  reason: string | null;
+  /** Kept and sent to the task. */
+  kept: boolean;
+  /** Why it was dropped (`refuted`, `below 50`, `line is outside the diff`, …); null when kept. */
+  dropped: string | null;
+  outcome: FindingOutcome | null;
+}
+
+/** GET /api/sessions/:id/code-review: a task's (or a code-review session's) latest review in full. */
+export interface CodeReviewDetail {
+  review: CodeReviewSummary;
+  settings: ReviewSettings;
+  /** The datapacks the review's MEKO.md files listed, the gotchas one marked. */
+  datapacks: { name: string; id: string; about: string; gotchas: boolean }[];
+  /** Each round's passes' notes (their summaries when not LGTM). */
+  notes: { round: number; text: string }[];
+  findings: CodeReviewFinding[];
+}

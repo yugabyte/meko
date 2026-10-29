@@ -3,9 +3,9 @@ import {
   KIND_STAGES, STAGE_LABELS, type MoveTarget, type Session, type SessionKind, type Stage, type StartupStep, type StoredKind,
 } from './types.js';
 
-/** A session's kind as stored and sent (`Session.kind`), as the rules use it: `task` or `review-pr`. */
+/** A session's kind as stored and sent (`Session.kind`), as the rules use it: `task`, `review-pr` or `code-review`. */
 export function kindOf(kind: StoredKind | SessionKind): SessionKind {
-  return kind === 'review-pr' ? 'review-pr' : 'task';
+  return kind === 'review-pr' || kind === 'code-review' ? kind : 'task';
 }
 
 /**
