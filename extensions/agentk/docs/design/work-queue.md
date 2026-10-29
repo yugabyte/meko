@@ -24,14 +24,21 @@ reads a link and gives every spelling of the same thing one key:
 | any other http(s) link | `url:<the link>` | the host |
 
 A new item goes to the bottom. One added with no title takes its first GitHub link's title
-(`issueOrPr()`). Closing an item keeps its links and session, so the palette still finds them;
-reopening puts it at the bottom.
+(`issueOrPr()`). **Dismiss**, on every row, closes an item (`status` closed); it keeps its links and
+session, so the palette still finds them, and it's listed under **Dismissed**, where **Reopen** puts it
+at the bottom. **Dismiss all** (after an inline Are you sure) sends the ids the page showed when it started asking
+(`ConfirmButton`'s `onAsk`) to `POST /api/work-items/close` (`closeAll()`), which closes those still
+open, so an item a sync adds while it asks stays.
 
 **Order.** Dragging a row (not on touch screens) sends `PUT /api/work-items/order` with every open
 item's id in the new order and the one that moved. A list that isn't exactly the open items (one
 added, closed or reopened meanwhile) is a 409. Two devices reordering the same items: the last order
 sent wins, with no version check. Each row's ⋯ actions also have Move to top,
-Move up and Move down (`PATCH … {move}`), which is how a phone reorders.
+Move up, Move down and Move to bottom (`PATCH … {move}`), which is how a phone reorders. Where each
+puts the item is `moveItem()` in `src/shared/workorder.ts`, shared by the server and the page, which
+shows the move at once and keeps the list scrolled where it was (it saves `scrollTop` and puts it
+back as the list redraws; `.wq-scroll` has `overflow-anchor: none`, since the browser's scroll
+anchoring would follow a moved row), so the user stays at their place in the queue.
 
 ## One session per item
 
@@ -57,20 +64,24 @@ replaces the item's own. `Session.workItemId` is read back from it.
 
 The item shows its open session's `StatusDot`, name and stage from the state the rail renders, so it
 updates live. The rail's Work queue entry shows its sessions' most urgent dot (`queueSummary()`) and
-how many items are open and new.
+how many items are open and new; the list icon in its footer has the open count at its bottom right,
+up to 99 and then 99+ (`queueBadge()`).
 
 ## Sync
 
 **Sync** (`POST /api/work-items/sync`) and a timer every `[work_queue] sync_minutes` (15 by default;
 0 turns it off) add to the bottom of the queue, from the sources `[work_queue] github` and `slack` turn
-on (both on by default). All three are in Settings › Work queue, reached from **Sync settings** on the
+on (both off by default, so there's no sync until you turn one on). All three are in Settings › Work queue, reached from **Sync settings** on the
 queue page too. With both sources off there's no sync: the button is disabled, a pressed Sync is a 409,
 and the timer does nothing (`WorkSync.sources` tells the page). The timer ticks every minute
 (`WorkQueue.tick`) and syncs once the minutes have passed, so a change in Settings applies at once:
 
 - **GitHub:** the open PRs asking for your review (`gh search prs --review-requested=@me --state=open
   --limit 100`, `reviewRequests()` in `github.ts`), titled `Review <owner/name>#<n>: <title>`.
-- **Slack:** the messages on your Later list, read by one `claude -p` through your own Slack
+- **Slack:** the messages on your To-dos, the list that [replaced Later](https://slack.com/help/articles/55757634348435-Later-is-now-To-dos)
+  (Later's items without a reminder went to Saved, which the sync doesn't read). The prompt has Claude
+  search with Slack's `is:todo` modifier and leave out completed to-dos when its tools say which are.
+  They're read by one `claude -p` through your own Slack
   connector (`src/server/slack.ts`), titled with their first line. Unlike Ask AgentK, it loads your
   MCP servers and claude.ai connectors (no `--strict-mcp-config`). It reads messages other people
   wrote, so it's kept to reading Slack: no built-in tools but ToolSearch (`--tools ToolSearch`);
@@ -108,8 +119,8 @@ off until a Sync you press works again. GitHub is read on every run.
 A pasted GitHub, Jira or Slack link, `owner/name#<n>` or a bare Jira key (`workLinkKey()`) is looked
 up once typing pauses (`GET /api/work-items/by-link`, an indexed lookup in `state.db`, no tokens).
 `workLinkEntries()` in `src/web/palette.ts` lists the session of each item holding it first (Go to,
-or a closed one's PR), then each item (opening the queue at it, with the Closed section open for a
-closed one), and Start a session for an open item
+or a closed one's PR), then each item (opening the queue at it, with the Dismissed section open for a
+dismissed one), and Start a session for an open item
 with no open session. For a GitHub link these come before the link's own items, and a session both
 name is listed once. The palette also has **Work queue**, **Add a work item**, **Sync the work
 queue**, and Link, Unlink or show the work item of the session on screen.

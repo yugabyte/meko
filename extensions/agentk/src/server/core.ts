@@ -56,7 +56,7 @@ import { legacyTmuxPanes } from './legacytmux.js';
 import { servicesFor, type ServiceManager } from './service.js';
 import { ZERO_USAGE, addUsage } from './usage.js';
 import { WorktreePool } from './worktrees.js';
-import { readLaterList } from './slack.js';
+import { readTodoList } from './slack.js';
 import { WorkQueue } from './workqueue.js';
 
 export interface CoreOptions {
@@ -284,7 +284,7 @@ export class Core extends EventEmitter {
       changed: () => this.changed(),
       warn: (m, d) => this.log.warn(m, d),
       reviewRequests: () => github.reviewRequests(homedir()),
-      readSlack: () => readLaterList(this.cfg, join(this.paths.run, 'work-sync')),
+      readSlack: () => readTodoList(this.cfg, join(this.paths.run, 'work-sync')),
       claudeAvailable: () => this.harnesses.of('claude').status(this.cfg).available,
       githubTitle: async (repo, number) => (await github.issueOrPr(homedir(), repo, number)).title,
       settings: () => this.cfg.workQueue,

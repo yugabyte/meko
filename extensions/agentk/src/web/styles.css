@@ -6106,6 +6106,8 @@ div[id^='dak-mermaid-'] .label {
 }
 .wq-scroll {
   /* The full width of the main area, not the project home's 1100 px column. */
+  /* A move keeps the scroll where it was (WorkQueueView); anchoring would follow the moved row. */
+  overflow-anchor: none;
   max-width: none;
   width: 100%;
   box-sizing: border-box;
@@ -6329,6 +6331,23 @@ a.wq-chip:hover {
   height: 7px;
   border-radius: 50%;
   background: var(--accent);
+}
+.rail-queue-badge {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  background: var(--muted);
+  color: var(--bg);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  text-align: center;
+  pointer-events: none;
 }
 .wq-item.focused {
   border-color: var(--accent);

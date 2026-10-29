@@ -524,7 +524,7 @@ export function CommandPalette({
     out.push({ id: 'work-queue', label: ['Work queue'], hint: 'View', keywords: 'work queue items todo tasks priorities list', run: () => navigate({ view: 'queue' }) });
     out.push({ id: 'work-add', label: ['Add a work item'], hint: 'Action', keywords: 'work queue item add new todo task', run: onAddWorkItem });
     out.push({
-      id: 'work-sync', label: ['Sync the work queue'], hint: 'GitHub review requests and Slack Later', keywords: 'work queue sync github review requests slack later saved',
+      id: 'work-sync', label: ['Sync the work queue'], hint: 'GitHub review requests and Slack To-dos', keywords: 'work queue sync github review requests slack todos to-dos later',
       run: () => void api.syncWork().catch((e: unknown) => onError(errorMessage(e))),
     });
     out.push({ id: 'usage', label: ['Usage'], hint: 'View', keywords: 'usage tokens prs commits pushes projects', run: () => navigate({ view: 'usage' }) });

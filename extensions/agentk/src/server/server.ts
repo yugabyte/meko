@@ -10,7 +10,7 @@ import type {
   HeldReview, HeldReviewsResult, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, RunActionsRequest, RunActionsResult, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
   JoinByLinkRequest, JoinByLinkResult, LinkGrant, ShareLink, ShareLinkChange, ShareLinkState,
-  CreateWorkItemRequest, ReorderWorkItemsRequest, UpdateWorkItemRequest, WorkItem, WorkLinkMatch, WorkSync,
+  CloseWorkItemsRequest, CreateWorkItemRequest, ReorderWorkItemsRequest, UpdateWorkItemRequest, WorkItem, WorkLinkMatch, WorkSync,
 } from '../shared/types.js';
 import { ACTIONS_MAX, LINK_GRANTS, MAX_KB_UPLOAD_BYTES, MAX_PASTE_BYTES, MEKO_CALL_BY, SHARE_GRANTS, WORK_SYNC_MINUTES_MAX } from '../shared/types.js';
 import { AGENTK_PATH, shareLinkToken, shareLinkUrl } from '../shared/mekourls.js';
@@ -423,6 +423,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     core.workQueue.reorder(req.body ?? { ids: [] });
     return reply.code(204).send();
   });
+  app.post<{ Body: CloseWorkItemsRequest }>('/api/work-items/close', async (req): Promise<{ closed: number }> => ({ closed: core.workQueue.closeAll(req.body) }));
   app.post('/api/work-items/sync', async (): Promise<WorkSync> => core.workQueue.sync(true));
   app.get<{ Querystring: { link?: string } }>('/api/work-items/by-link', async (req): Promise<WorkLinkMatch[]> => core.workQueue.byLink(req.query.link));
   app.get<{ Querystring: { q?: string; project?: string } }>('/api/sessions/search', async (req): Promise<SessionMatch[]> =>

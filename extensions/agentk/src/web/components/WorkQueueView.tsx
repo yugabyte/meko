@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ProjectWithSessions, WorkItem, WorkLink, WorkSync } from '../../shared/types';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { ProjectWithSessions, WorkItem, WorkLink, WorkMove, WorkSync } from '../../shared/types';
+import { moveItem } from '../../shared/workorder';
 import { api, errorMessage } from '../api';
 import { useIsMobile, useTouch } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { cx, dotState, relativeTime, stageWords } from '../util';
 import { itemSession, movedOrder, workSyncText } from '../workqueue';
-import { Busy, StatusDot } from './common';
+import { Busy, ConfirmButton, StatusDot } from './common';
 import { TopBar } from './TopBar';
 
 const KIND_TEXT: Record<WorkLink['kind'], string> = { github: 'GitHub', jira: 'Jira', slack: 'Slack', other: 'Link' };
@@ -28,8 +29,9 @@ export function WorkLinkChip({ link }: { link: WorkLink }) {
 
 /**
  * The work queue (`/queue`): the open items in your order, each with its links and its session's
- * status (or Start session), new synced items marked until moved to their place, Sync, and the
- * closed items below. Reordered by dragging (not on touch) or from each item's ⋯ actions.
+ * status (or Start session), new synced items marked until moved to their place, Sync, Dismiss on
+ * each item and Dismiss all, and the dismissed items below. Reordered by dragging (not on touch) or
+ * from each item's ⋯ actions.
  */
 export function WorkQueueView({
   items,
@@ -62,18 +64,22 @@ export function WorkQueueView({
   const touch = useTouch();
   const [open, setOpen] = useState<string | null>(focusId);
   const [syncing, setSyncing] = useState(false);
-  // The order a drop asked for, shown until the state carries it (or the drop fails).
+  // The order a drop or a move asked for, shown until the state carries it (or the request fails).
   const [order, setOrder] = useState<string[] | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [closed, setClosed] = useState<WorkItem[] | null>(null);
   const [showClosed, setShowClosed] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Where the list was scrolled when a move was asked for, put back once it's redrawn, so the page
+  // stays where the user was instead of following the item.
+  const keepScroll = useRef<number | null>(null);
 
   // A drop's order shows until the queue itself changes, not on every state push.
   const queueKey = items.map((i) => `${i.id}:${i.status}`).join();
   useEffect(() => setOrder(null), [queueKey]);
   const loadClosed = useCallback(() => void api.closedWorkItems().then(setClosed, (e: unknown) => onError(errorMessage(e))), [onError]);
-  // An item picked in the palette: opened and scrolled to, in the Closed section when it's closed.
+  // An item picked in the palette: opened and scrolled to, in the Dismissed section when it's dismissed.
   const focusOpen = !!focusId && items.some((i) => i.id === focusId);
   useEffect(() => {
     if (!focusId) return;
@@ -87,8 +93,15 @@ export function WorkQueueView({
     if (focusId) rootRef.current?.querySelector(`[data-item="${CSS.escape(focusId)}"]`)?.scrollIntoView({ block: 'center' });
   }, [focusId, closed]);
 
+  const syncOff = !sync.sources.github && !sync.sources.slack;
   const byId = new Map(items.map((i) => [i.id, i]));
   const shown = order ? order.map((id) => byId.get(id)).filter((i): i is WorkItem => !!i) : items;
+  const shownKey = shown.map((i) => i.id).join();
+  useLayoutEffect(() => {
+    if (keepScroll.current == null || !scrollRef.current) return;
+    scrollRef.current.scrollTop = keepScroll.current;
+    keepScroll.current = null;
+  }, [shownKey]);
 
   const act = async (fn: () => Promise<unknown>) => {
     try {
@@ -102,6 +115,26 @@ export function WorkQueueView({
     await act(() => api.syncWork());
     setSyncing(false);
   };
+  const move = (item: WorkItem, to: WorkMove) => {
+    keepScroll.current = scrollRef.current?.scrollTop ?? null;
+    setOrder(moveItem(shown.map((i) => i.id), item.id, to));
+    // Its actions would go with it, out of sight.
+    if (to === 'top' || to === 'bottom') setOpen(null);
+    void api.updateWorkItem(item.id, { move: to }).catch((e: unknown) => {
+      setOrder(null);
+      onError(errorMessage(e));
+    });
+  };
+  const dismiss = (item: WorkItem) => act(async () => {
+    await api.updateWorkItem(item.id, { status: 'closed' });
+    if (showClosed) loadClosed();
+  });
+  // The items shown when Dismiss all started asking: one a sync adds while it asks isn't dismissed unseen.
+  const [dismissIds, setDismissIds] = useState<string[]>([]);
+  const dismissAll = () => act(async () => {
+    await api.closeWorkItems({ ids: dismissIds });
+    if (showClosed) loadClosed();
+  });
   const drop = (to: number) => {
     const id = dragId;
     setDragId(null);
@@ -125,9 +158,9 @@ export function WorkQueueView({
           </button>
           <button
             className="btn"
-            disabled={syncing || sync.running || (!sync.sources.github && !sync.sources.slack)}
+            disabled={syncing || sync.running || syncOff}
             onClick={() => void runSync()}
-            title="Pull in GitHub review requests and your Slack Later list"
+            title="Pull in GitHub review requests and your Slack To-dos"
           >
             {syncing || sync.running ? <Busy label="Syncing" /> : 'Sync'}
           </button>
@@ -135,12 +168,24 @@ export function WorkQueueView({
           <button className="btn small" onClick={onSettings}>
             Sync settings
           </button>
+          {shown.length > 0 && (
+            <ConfirmButton
+              className="btn small wq-dismiss-all"
+              label="Dismiss all"
+              prompt={`Dismiss all ${dismissIds.length}?`}
+              confirmLabel="Dismiss all"
+              danger
+              onAsk={() => setDismissIds(shown.map((i) => i.id))}
+              onConfirm={dismissAll}
+            />
+          )}
         </div>
       </header>
-      <div className="home-scroll wq-scroll">
+      <div className="home-scroll wq-scroll" ref={scrollRef}>
       {!shown.length && (
         <p className="muted wq-empty">
-          Nothing on the queue. Add what you're working on, or press Sync to pull in the PRs waiting for your review and your Slack Later list.
+          Nothing on the queue. Add what you're working on, or {syncOff ? 'turn on Sync in Sync settings' : 'press Sync'} to pull in the PRs waiting
+          for your review and your Slack To-dos.
         </p>
       )}
       <ol className="wq-list">
@@ -170,6 +215,9 @@ export function WorkQueueView({
                 <button className="wq-title" onClick={() => onEdit(item)} title="Edit">
                   {item.title}
                 </button>
+                <button className="btn small wq-dismiss" onClick={() => void dismiss(item)} title="Take it off the queue (it stays under Dismissed)">
+                  Dismiss
+                </button>
                 <button
                   className="icon-btn wq-more"
                   aria-label={`Actions for ${item.title}`}
@@ -189,7 +237,7 @@ export function WorkQueueView({
                   </span>
                 )}
                 {item.source === 'github' && <span className="wq-chip wq-src">Review request</span>}
-                {item.source === 'slack' && <span className="wq-chip wq-src">Slack Later</span>}
+                {item.source === 'slack' && <span className="wq-chip wq-src">Slack To-do</span>}
                 {item.githubDone && <span className="wq-chip wq-done" title="Merged, closed, or your review isn't requested any more">Done on GitHub</span>}
                 {item.links.map((l) => (
                   <WorkLinkChip key={l.key} link={l} />
@@ -216,17 +264,10 @@ export function WorkQueueView({
                   {item.sessionId && (
                     <button className="btn small" onClick={() => void act(() => api.updateWorkItem(item.id, { sessionId: null }))}>Unlink session</button>
                   )}
-                  {i > 0 && <button className="btn small" onClick={() => void act(() => api.updateWorkItem(item.id, { move: 'top' }))}>Move to top</button>}
-                  {i > 0 && <button className="btn small" onClick={() => void act(() => api.updateWorkItem(item.id, { move: 'up' }))}>Move up</button>}
-                  {i < shown.length - 1 && (
-                    <button className="btn small" onClick={() => void act(() => api.updateWorkItem(item.id, { move: 'down' }))}>Move down</button>
-                  )}
-                  <button className="btn small" onClick={() => void act(async () => {
-                    await api.updateWorkItem(item.id, { status: 'closed' });
-                    if (showClosed) loadClosed();
-                  })}>
-                    Close
-                  </button>
+                  {i > 0 && <button className="btn small" onClick={() => move(item, 'top')}>Move to top</button>}
+                  {i > 0 && <button className="btn small" onClick={() => move(item, 'up')}>Move up</button>}
+                  {i < shown.length - 1 && <button className="btn small" onClick={() => move(item, 'down')}>Move down</button>}
+                  {i < shown.length - 1 && <button className="btn small" onClick={() => move(item, 'bottom')}>Move to bottom</button>}
                 </div>
               )}
             </li>
@@ -248,17 +289,17 @@ export function WorkQueueView({
             setShowClosed(!showClosed);
           }}
         >
-          {showClosed ? '▾' : '▸'} Closed{closed ? ` (${closed.length})` : ''}
+          {showClosed ? '▾' : '▸'} Dismissed{closed ? ` (${closed.length})` : ''}
         </button>
         {showClosed && !closed && <Busy label="Loading" />}
-        {showClosed && closed && !closed.length && <p className="muted small">No closed items.</p>}
+        {showClosed && closed && !closed.length && <p className="muted small">No dismissed items.</p>}
         {showClosed && closed && (
           <ul className="wq-list closed">
             {closed.map((item) => (
               <li key={item.id} data-item={item.id} className={cx('wq-item', focusId === item.id && 'focused')}>
                 <div className="wq-row">
                   <span className="wq-title closed">{item.title}</span>
-                  <span className="muted small">Closed {relativeTime(item.closedAt)}</span>
+                  <span className="muted small">Dismissed {relativeTime(item.closedAt)}</span>
                   <button className="btn small" onClick={() => void act(async () => {
                     await api.updateWorkItem(item.id, { status: 'open' });
                     loadClosed();
