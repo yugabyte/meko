@@ -1,7 +1,11 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { railCollapsedSaved, railHiddenSaved, railSessionsSaved, railWidthSaved, saveRailSessions, sessionTabsShown } from '../../src/web/rail.js';
 import { kiroPlanLines } from '../../src/web/util.js';
 import type { KiroPlan } from '../../src/shared/types.js';
+
+const STYLES = readFileSync(join(import.meta.dirname, '../../src/web/styles.css'), 'utf8');
 
 describe('projects pane', () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -69,6 +73,16 @@ describe('projects pane', () => {
     vi.stubGlobal('window', { dispatchEvent: () => true });
     saveRailSessions(true);
     expect(railSessionsSaved()).toBe(true);
+  });
+});
+
+describe("a rail session's name", () => {
+  // A task with a local review (its row joined with the magnifier) once cut its name with an ellipsis.
+  it('wraps in every row, never cut', () => {
+    const rules = [...STYLES.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^}]*)\}/g)].filter(([, sel]) => sel!.includes('.rail-sess-name'));
+    expect(rules.map(([, sel]) => sel!.trim())).toContain('.rail-sess-name');
+    for (const [, sel, body] of rules) expect(body, sel!.trim()).not.toMatch(/nowrap|ellipsis|overflow:\s*hidden/);
+    expect(STYLES.slice(STYLES.indexOf('\n.rail-sess-name {')).split('}')[0]).toContain('overflow-wrap: anywhere;');
   });
 });
 

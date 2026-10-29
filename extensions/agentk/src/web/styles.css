@@ -1590,8 +1590,8 @@ textarea.input {
     opacity: 0.6;
   }
 }
-/* The rail's row for a task with a local review: one row, the task's part growing (its name cut
-   first) and the review's part beside it, fixed. */
+/* The rail's row for a task with a local review: one row, the task's part growing (its name
+   wrapping, as in every rail row) and the review's part beside it, fixed. */
 .rail-joined {
   display: flex;
   align-items: stretch;
@@ -1604,12 +1604,6 @@ textarea.input {
 }
 .rail-joined > .rail-sess-row > .rail-sess {
   border-radius: 6px 0 0 6px;
-}
-.rail-joined .rail-sess-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  overflow-wrap: normal;
 }
 .rail-review {
   border-radius: 0 6px 6px 0;
