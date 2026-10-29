@@ -55,7 +55,8 @@ export function MemoryMapView({
   const dim = lit !== undefined && lit.size > 0;
   const on = (p: MapPoint) => !dim || lit.has(p.id);
   const r = mini ? 0.04 : 0.028;
-  const shown = hover ?? map.points.find((p) => p.id === selected);
+  const picked = map.points.find((p) => p.id === selected);
+  const shown = hover ?? picked;
 
   return (
     <div className="space-y-2">
@@ -105,9 +106,6 @@ export function MemoryMapView({
             fill="currentColor"
             className={cx(colorOf(p.state), onPick && "cursor-pointer")}
             opacity={on(p) ? 1 : 0.2}
-            stroke={p.id === selected ? "currentColor" : undefined}
-            strokeWidth={p.id === selected ? 3 : undefined}
-            vectorEffect="non-scaling-stroke"
             tabIndex={onPick ? 0 : undefined}
             onMouseEnter={() => setHover(p)}
             onMouseLeave={() => setHover(undefined)}
@@ -119,6 +117,20 @@ export function MemoryMapView({
             <title>{p.text}</title>
           </circle>
         ))}
+        {picked && (
+          // The picked dot's ring, sized in the map's own units: a stroke width in pixels
+          // (non-scaling-stroke) isn't honored on every renderer, and 3 map units covers the whole map.
+          <circle
+            cx={picked.x}
+            cy={picked.y}
+            r={(dim && on(picked) ? r * 1.4 : r) + r * 0.6}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={r * 0.35}
+            className={colorOf(picked.state)}
+            pointerEvents="none"
+          />
+        )}
         {map.query && (
           <text
             x={map.query[0]}
