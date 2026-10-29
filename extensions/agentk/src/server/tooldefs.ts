@@ -61,10 +61,10 @@ export const TOOL_DEFS: ToolDef[] = [
               review: {
                 type: 'object',
                 description: "The task's own local review before its PR opens, only what the user asked for (the rest keeps the " +
-                  'project\'s settings): strategy (sagittarius-3.0, sirius-1.0, or off for no review), rounds (re-reviews after the ' +
+                  'project\'s settings): strategy (off for no review, sirius-1.0, or sagittarius-3.0), rounds (re-reviews after the ' +
                   'first, 0 to 5) and depth (sweeps per review, 1 to 5: "3 deep reviews" is depth 3).',
                 properties: {
-                  strategy: { type: 'string', enum: ['sagittarius-3.0', 'sirius-1.0', 'off'] },
+                  strategy: { type: 'string', enum: ['off', 'sirius-1.0', 'sagittarius-3.0'] },
                   rounds: { type: 'integer', minimum: 0, maximum: 5 },
                   depth: { type: 'integer', minimum: 1, maximum: 5 },
                 },

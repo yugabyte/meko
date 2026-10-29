@@ -25,7 +25,7 @@ instructions, and the `review` argument of the `start_sessions` tool, so "start 
 
 | Setting | Global default | What it does |
 |---|---|---|
-| `strategy` | `sagittarius-3.0` | Which algorithm runs: `sagittarius-3.0`, `sirius-1.0`, or `off` for no review. |
+| `strategy` | `sagittarius-3.0` | Which algorithm runs: `off` for no review, `sirius-1.0`, or `sagittarius-3.0`. |
 | `rounds` | `0` | Re-reviews after the first, 0 to 5. Each runs after the task fixes the last round's findings; a clean round stops early. |
 | `depth` | `1` | Sweeps in each round, 1 to 5: the cloud's deep reviews (`/agentk review deep N`). |
 
@@ -41,8 +41,8 @@ reused (the cloud's `Strategy`); an unknown id resolves to the default.
 
 | Id | Passes | Scoring |
 |---|---|---|
-| `sagittarius-3.0` | guide (large), diff (small), dependents (large, with its state ledger), history (large), claims (large, with its claims ledger): the cloud's mandates word for word | A small-tier scorer for each candidate |
 | `sirius-1.0` | One mid-tier pass whose mandate covers all five | None: every candidate goes to Validate |
+| `sagittarius-3.0` | guide (large), diff (small), dependents (large, with its state ledger), history (large), claims (large, with its claims ledger): the cloud's mandates word for word | A small-tier scorer for each candidate |
 
 The cloud AgentK isn't changed: its strategy keeps its own name, and only this registry calls the
 algorithm Sagittarius 3.0.
