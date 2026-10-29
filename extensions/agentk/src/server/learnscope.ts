@@ -2,16 +2,10 @@ import type { LearnScope } from '../shared/types.js';
 import { gitWithin, tryGit } from './git.js';
 import { learnSince } from './prompts.js';
 
-/** How long each git read for the estimate may take before it's given up. */
+/** How long the estimate's tree and log reads may take before they're given up. */
 const GIT_TIMEOUT_MS = 10_000;
 /** The most words of Where looked at as paths. */
 const MAX_WORDS = 50;
-
-/** A tracked file on the base branch: its path and size. */
-interface TreeFile {
-  path: string;
-  size: number;
-}
 
 /**
  * The words of a learn session's Where that could name paths in the repo: split on whitespace,
@@ -75,20 +69,21 @@ function named(path: string, word: string): boolean {
 }
 
 /** The words of Where that name at least one of <files>. */
-export function wherePaths(where: string, files: TreeFile[]): string[] {
-  return whereWords(where).filter((w) => files.some((f) => named(f.path, w)));
+export function wherePaths(where: string, files: string[]): string[] {
+  return whereWords(where).filter((w) => files.some((f) => named(f, w)));
 }
 
-/** The base branch's tracked files with their sizes (`ls-tree -r -l`); submodules aren't files. */
-export function parseTree(out: string): TreeFile[] {
-  const files: TreeFile[] = [];
+/**
+ * The base branch's tracked files (`ls-tree -r -z`); submodules aren't files. No `-l`: sizes would
+ * make git read every blob, and fetch each one a blobless partial clone lacks.
+ */
+export function parseTree(out: string): string[] {
+  const files: string[] = [];
   for (const entry of out.split('\0')) {
-    // <mode> SP blob SP <oid> SP+ <size> TAB <path>
+    // <mode> SP <type> SP <oid> TAB <path>
     const tab = entry.indexOf('\t');
     if (tab < 0) continue;
-    const [, type, , size] = entry.slice(0, tab).split(/ +/);
-    if (type !== 'blob') continue;
-    files.push({ path: entry.slice(tab + 1), size: Number(size) || 0 });
+    if (entry.slice(0, tab).split(' ')[1] === 'blob') files.push(entry.slice(tab + 1));
   }
   return files;
 }
@@ -96,7 +91,7 @@ export function parseTree(out: string): TreeFile[] {
 /**
  * How much a learn session's brief covers (`LearnScope`), from <repo>'s own git, with no fetch and
  * no GitHub calls: on `origin/<base>` as last fetched, else the local <base> (the worktree branches
- * from the newer of the two), the merged PRs in the window that starts `learnSince(months, now)`
+ * from `origin/<base>` whenever it exists), the merged PRs in the window that starts `learnSince(months, now)`
  * and the tracked files, both in the paths Where names, or in the whole repo when it names none.
  * The PRs are first-parent commits, one per PR for squash and merge commits (more for a repo that
  * rebases PRs in). Null when neither ref exists.
@@ -106,14 +101,14 @@ export async function learnScope(repo: string, base: string, where: string, mont
   const ref = (await tryGit(repo, 'rev-parse', '--verify', '--quiet', remote)) ? remote
     : (await tryGit(repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${base}`)) ? `refs/heads/${base}` : null;
   if (!ref) return null;
-  const all = parseTree(await gitWithin(GIT_TIMEOUT_MS, repo, 'ls-tree', '-r', '-l', '-z', ref));
+  const all = parseTree(await gitWithin(GIT_TIMEOUT_MS, repo, 'ls-tree', '-r', '-z', ref));
   const paths = wherePaths(where, all);
-  const files = paths.length ? all.filter((f) => paths.some((p) => named(f.path, p))) : all;
+  const files = paths.length ? all.filter((f) => paths.some((p) => named(f, p))) : all;
   let prs = 0;
   if (months > 0) {
     const specs = paths.map((p) => (hasGlob(p) ? `:(glob)${p}` : p));
     const out = await gitWithin(GIT_TIMEOUT_MS, repo, 'rev-list', '--count', '--first-parent', `--since=${learnSince(months, now)}`, ref, '--', ...specs);
     prs = Number(out.trim()) || 0;
   }
-  return { prs, files: files.length, bytes: files.reduce((n, f) => n + f.size, 0), paths };
+  return { prs, files: files.length, paths };
 }

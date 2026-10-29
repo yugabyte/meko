@@ -100,9 +100,8 @@ export const LEARN_WARN_FILES = 5_000;
 export interface LearnScope {
   /** First-parent commits on the base branch in the window: one per PR for squash or merge commits. */
   prs: number;
-  /** Tracked files on the base branch, and their total size in bytes. */
+  /** Tracked files on the base branch. */
   files: number;
-  bytes: number;
   /** The words of Where that name files in the repo (git pathspecs); empty for the whole repo. */
   paths: string[];
 }

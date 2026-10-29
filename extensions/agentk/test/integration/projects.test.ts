@@ -147,7 +147,7 @@ describe('projects', () => {
   it("estimates a learn session's PRs and files from the repo's git, and refuses a brief that's off", async () => {
     const p = await create('Demo');
     expect(await env.core.projects.learnScope(p.id, { months: '24', where: 'README.md' }))
-      .toEqual({ prs: 1, files: 1, bytes: 7, paths: ['README.md'] });
+      .toEqual({ prs: 1, files: 1, paths: ['README.md'] });
     expect(await env.core.projects.learnScope(p.id, { months: '0', where: '', base: 'main' })).toMatchObject({ prs: 0, files: 1, paths: [] });
     for (const [q, why] of [
       [{ months: '121' }, /whole number from 0 to 120/],

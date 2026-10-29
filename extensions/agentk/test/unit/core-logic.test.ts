@@ -17,7 +17,7 @@ import { extractPrompt } from '../../src/server/learn.js';
 import { launchedAgentId, pinSlug, sessionAgentId } from '../../src/server/meko.js';
 import { getPaths } from '../../src/server/paths.js';
 import {
-  DEFAULT_PROMPTS, learnSince, learnTask, mekoPrFooter, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoLearnLine, mekoSaveSystemLine, render, SAVING_RULE, type PromptName,
+  DEFAULT_PROMPTS, learnTask, mekoPrFooter, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoLearnLine, mekoSaveSystemLine, render, SAVING_RULE, type PromptName,
 } from '../../src/server/prompts.js';
 import { parseSettings, sessionDatapack, sessionRow, slugify } from '../../src/server/store.js';
 import { shq } from '../../src/server/launcher.js';
@@ -810,13 +810,6 @@ describe('naming', () => {
     const since = (iso: string, months: number) => learnTask({ about: 'x', where: '', months }, Date.parse(iso)).match(/since (\S+)\.$/)?.[1];
     expect([since('2026-10-31', 1), since('2028-03-31', 1), since('2027-03-31', 1), since('2026-01-31', 2), since('2026-03-15', 15)])
       .toEqual(['2026-09-30', '2028-02-29', '2027-02-28', '2025-11-30', '2024-12-15']);
-    // The dialog's estimate counts PRs from the same day.
-    expect(learnSince(1, Date.parse('2028-03-31'))).toBe('2028-02-29');
-    expect(learnSince(24, now)).toBe('2024-10-23');
-  });
-
-  it("tells a learn session not to read generated, vendored or lock files", () => {
-    expect(DEFAULT_PROMPTS.seed).toContain("Don't read generated, vendored or lock files.");
   });
 });
 

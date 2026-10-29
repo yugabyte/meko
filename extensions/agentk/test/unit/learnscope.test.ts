@@ -30,7 +30,7 @@ describe("a learn session's Where, read as paths", () => {
   });
 
   it('keeps only the words that name files the repo has', () => {
-    const files = ['README.md', 'services/billing/a.ts', 'docs/billing/x.md', 'docs/other.md'].map((path) => ({ path, size: 1 }));
+    const files = ['README.md', 'services/billing/a.ts', 'docs/billing/x.md', 'docs/other.md'];
     expect(wherePaths('services/billing/ docs/billing/*.md services/payments/ e.g. README.md', files))
       .toEqual(['services/billing/', 'docs/billing/*.md', 'README.md']);
     expect(wherePaths('the whole thing', files)).toEqual([]);
@@ -38,9 +38,9 @@ describe("a learn session's Where, read as paths", () => {
     expect(wherePaths('docs/bill', files)).toEqual([]);
   });
 
-  it('reads ls-tree -r -l -z, leaving out submodules', () => {
-    const out = '100644 blob aaaa     120\tsrc/a b.ts\x00160000 commit bbbb       -\tvendor/sub\x00100644 blob cccc 5\tREADME.md\x00';
-    expect(parseTree(out)).toEqual([{ path: 'src/a b.ts', size: 120 }, { path: 'README.md', size: 5 }]);
+  it('reads ls-tree -r -z, leaving out submodules', () => {
+    const out = '100644 blob aaaa\tsrc/a b.ts\x00160000 commit bbbb\tvendor/sub\x00100644 blob cccc\tREADME.md\x00';
+    expect(parseTree(out)).toEqual(['src/a b.ts', 'README.md']);
   });
 });
 
@@ -88,7 +88,7 @@ describe('learnScope, on a real repo', () => {
 
   it('counts only what the paths Where names cover', async () => {
     const s = await learnScope(repo, 'main', 'svc/*.ts and docs/missing/', 12, now);
-    expect(s).toEqual({ prs: 2, files: 4, bytes: 2 + 7 + 2 + 2, paths: ['svc/*.ts'] });
+    expect(s).toEqual({ prs: 2, files: 4, paths: ['svc/*.ts'] });
     expect(await learnScope(repo, 'main', 'docs/', 12, now)).toMatchObject({ prs: 1, files: 1, paths: ['docs/'] });
   });
 
@@ -103,7 +103,7 @@ describe('learnScope, on a real repo', () => {
 });
 
 describe("the New session dialog's estimate for a learn session", () => {
-  const scope = (o: Partial<LearnScope>): LearnScope => ({ prs: 12, files: 340, bytes: 1, paths: [], ...o });
+  const scope = (o: Partial<LearnScope>): LearnScope => ({ prs: 12, files: 340, paths: [], ...o });
 
   it('says how many PRs and files, and where', () => {
     expect(learnScopeHint(scope({}), 24)).toEqual({ text: 'About 12 merged PRs and 340 files in the whole repo.', warn: false });
