@@ -79,7 +79,7 @@ export const TOOL_DEFS: ToolDef[] = [
   {
     name: 'move_session',
     description:
-      "Moves an AgentK session to another stage (explore, design, code, or review for PR & Review), as the user's move dialog " +
+      "Moves an AgentK session to another stage (explore, design, code, or review for Review & PR), as the user's move dialog " +
       "does. This session's own move goes once this turn ends, so ask for it last. instructions: what the user asked for in " +
       'that stage, if anything.',
     inputSchema: {

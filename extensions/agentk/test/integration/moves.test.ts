@@ -88,7 +88,7 @@ describe('moves: moving a task session between stages', () => {
     expect(stages(s.id)).toEqual([{ stage: 'explore', moved_by: 'you' }, { stage: 'code', moved_by: 'you' }]);
     expect(events(s.id, 'kind')).toEqual([]);
     const text = sent()[0];
-    expect(text).toMatch(/^AgentK moved this session to the Code stage\. Stages: Explore → Design → Code → PR & Review → Merge & Close/);
+    expect(text).toMatch(/^AgentK moved this session to the Code stage\. Stages: Explore → Design → Code → Review & PR → Merge & Close/);
     expect(text).not.toContain("It's in Explore now");
     // Not the first prompt again: the conversation may have moved on from it.
     expect(text).toContain('Implement what this session has worked out so far');
@@ -112,13 +112,13 @@ describe('moves: moving a task session between stages', () => {
     expect(sent().at(-1)).toContain('Implement what this session has worked out so far');
   });
 
-  it('opens a PR from Explore in one move, then picks the PR up with one PR & Review line', async () => {
+  it('opens a PR from Explore in one move, then picks the PR up with one Review & PR line', async () => {
     const s = await session({ start: 'explore', prompt: 'look around' });
     const sent = typed();
     await move(s.id, { stage: 'review' });
     expect(row(s.id).kind).toBe('plan');
     expect(['pr', 'review']).toContain(row(s.id).stage);
-    expect(sent()[0]).toMatch(/^AgentK moved this session to the PR & Review stage\./);
+    expect(sent()[0]).toMatch(/^AgentK moved this session to the Review & PR stage\./);
     expect(sent()[0]).toContain('Open a pull request for this work.');
     await idle(s.id, 'PR turn');
     gh.pr = PR;
@@ -126,7 +126,7 @@ describe('moves: moving a task session between stages', () => {
     await env.core.lifecycle.pollPrStage(row(s.id));
     await waitFor(() => get(s.id), (x) => x.stage === 'review' && x.prNumber === 7, 10000, 'review stage');
     expect(events(s.id, 'pr')).toEqual(['Opened PR #7']);
-    expect(events(s.id, 'stage').filter((t) => t === 'Moved to PR & Review')).toHaveLength(1);
+    expect(events(s.id, 'stage').filter((t) => t === 'Moved to Review & PR')).toHaveLength(1);
     expect(get(s.id).skippedStages).toEqual(['design', 'code']);
   });
 
@@ -149,7 +149,7 @@ describe('moves: moving a task session between stages', () => {
     expect(events(t.id, 'pr')).toEqual(['Picked up PR #7']);
   });
 
-  it('moves back to Code from PR & Review, keeps the PR, and holds reviews until it comes back', async () => {
+  it('moves back to Code from Review & PR, keeps the PR, and holds reviews until it comes back', async () => {
     const s = await session({ start: 'code', prompt: 'do it' });
     gh.pr = PR;
     gh.status = status();
@@ -161,7 +161,7 @@ describe('moves: moving a task session between stages', () => {
     await move(s.id, { stage: 'code' });
     expect(get(s.id)).toMatchObject({ stage: 'code', prNumber: 7 });
     expect(JSON.parse(queue(s.id))).toEqual({ ci: { state: 'queued', vars: { sha: 'abc', checks: '- test' } } });
-    expect(sent()).toEqual([]); // back from PR & Review, the Code prompt is off by default
+    expect(sent()).toEqual([]); // back from Review & PR, the Code prompt is off by default
 
     // A review that arrives while in Code waits.
     gh.status = status({
@@ -171,7 +171,7 @@ describe('moves: moving a task session between stages', () => {
     expect(get(s.id).reviewState).toBe('waiting');
     expect(sent()).toEqual([]);
 
-    // Back in PR & Review: the same PR, and the review goes out once.
+    // Back in Review & PR: the same PR, and the review goes out once.
     await move(s.id, { stage: 'review' });
     expect(events(s.id, 'pr-again')).toEqual(['Back on PR #7']);
     expect(events(s.id, 'pr')).toEqual(['Picked up PR #7']);
@@ -213,7 +213,7 @@ describe('moves: moving a task session between stages', () => {
     expect(events(s.id, 'pr')).toEqual(['Picked up PR #7', 'Opened PR #8']);
   });
 
-  it('clears a design waiting for approval when it moves to PR & Review and picks up a PR', async () => {
+  it('clears a design waiting for approval when it moves to Review & PR and picks up a PR', async () => {
     const s = await session({ prompt: 'DESIGN_MD it' });
     await waitFor(() => get(s.id), (x) => x.status === 'needs_input' && x.hasDesign, 10000, 'design ready');
     gh.pr = PR;
@@ -308,7 +308,7 @@ describe('moves: moving a task session between stages', () => {
     const s = await session({ start: 'explore', prompt: 'look around' });
     const sent = typed();
     await move(s.id, { stage: 'review', instructions: 'Open it as a draft.' });
-    expect(sent()[0]).toMatch(/^AgentK moved this session to the PR & Review stage\./);
+    expect(sent()[0]).toMatch(/^AgentK moved this session to the Review & PR stage\./);
     expect(sent()[0].indexOf('Open a pull request')).toBeLessThan(sent()[0].indexOf('The user added these instructions'));
     expect(sent()[0].endsWith('\n\nOpen it as a draft.')).toBe(true);
 
@@ -321,17 +321,17 @@ describe('moves: moving a task session between stages', () => {
     expect(events(t.id, 'pr')).toEqual(['Picked up PR #7']);
     const picked = sent().slice(before);
     expect(picked).toHaveLength(1);
-    expect(picked[0]).toMatch(/^AgentK moved this session to the PR & Review stage\./);
+    expect(picked[0]).toMatch(/^AgentK moved this session to the Review & PR stage\./);
     expect(picked[0]).not.toContain('Open a pull request');
     expect(picked[0].endsWith('\n\nAddress the open threads first.')).toBe(true);
     await idle(t.id, 'instructions turn');
 
-    // The PR is picked up first: if the instructions can't be typed, the session stays in PR & Review.
+    // The PR is picked up first: if the instructions can't be typed, the session stays in Review & PR.
     await move(t.id, { stage: 'code' });
     vi.spyOn(env.core.host, 'submit').mockRejectedValueOnce(new Error('no pane'));
     await expect(move(t.id, { stage: 'review', instructions: 'Address the open threads first.' })).rejects.toMatchObject({
       status: 502,
-      message: /^Moved to PR & Review, but couldn't send your instructions to Claude: no pane\./,
+      message: /^Moved to Review & PR, but couldn't send your instructions to Claude: no pane\./,
     });
     expect(get(t.id)).toMatchObject({ stage: 'review', prNumber: 7, busy: false });
   });

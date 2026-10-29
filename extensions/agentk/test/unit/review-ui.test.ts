@@ -11,7 +11,7 @@ describe('stageChipText', () => {
     ['code', 'fixing', 'Review'],
     ['code', 'failed', 'Review'],
     ['code', 'done', 'Code'],
-    ['review', 'done', 'PR & Review'],
+    ['review', 'done', 'Review & PR'],
   ] as const)('in %s with a %s review reads %s', (stage, state, text) => {
     expect(stageChipText({ stage, codeReview: state ? review(state) : null } as Session)).toBe(text);
   });

@@ -151,7 +151,7 @@ datapack is empty, rather than on Design or Review a PR.
 ## New session
 
 You give it a name, where to start and, optionally, a first prompt. Every task runs on one
-pipeline, Explore → Design → Code → PR & Review → Merge & Close, and **Where do you want to
+pipeline, Explore → Design → Code → Review & PR → Merge & Close, and **Where do you want to
 start?** picks its first stage: the stages it can start at are pills like the stage bar's steps,
 numbered from 0 and joined by lines (dotted from Explore, which is optional), then "or" and Review
 a PR. They sit in one row on a desktop and one column on a phone, with a line under them saying what
@@ -173,7 +173,7 @@ the PR when the coding turn ends and merges it once nothing blocks it (`CreateSe
 see [Run to merge](lifecycle.md#run-to-merge)). At Design it's picked beside Approve instead, so the
 server refuses `autoRun` with any other start (400).
 
-A task can't start at PR & Review: it gets there through **Open PR** or a move. A session is a
+A task can't start at Review & PR: it gets there through **Open PR** or a move. A session is a
 task or a Review a PR (`kindOf()` in `src/shared/stages.ts`). `sessions.kind` and `Session.kind`
 keep the old type names for tasks, and new tasks are stored and sent as `plan`, because an older
 release after a rollback, and a page still running the older UI until it reloads, index their stage
@@ -262,6 +262,6 @@ build on it), and its system prompt says so for the session's life. The PR
 stage takes the linked PR while it's open, looked up by number (so a fork's PR counts), else that
 branch's open PR even when it's older than the session (never a fork's PR from a branch of the same
 name), and Open PR first moves the session's base to that PR's base; the PR prompt tells Claude to
-update an existing PR rather than open another. Moving the session to PR & Review picks the PR up
+update an existing PR rather than open another. Moving the session to Review & PR picks the PR up
 (*Back on PR #N*). Archive keeps a reused branch like any other, and so does Discard (the branch
 existed before the session); Merge & Close deletes it once the PR has merged.

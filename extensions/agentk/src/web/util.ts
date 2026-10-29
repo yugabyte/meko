@@ -193,16 +193,16 @@ const LEARNING_SHOWS: ReadonlySet<SessionStatus> = new Set(['idle', 'recovered',
 /** The statuses a queued gate shows over: Claude between turns. Anything else says more. */
 const QUEUED_SHOWS: ReadonlySet<SessionStatus> = new Set(['idle', 'recovered']);
 
-/** The statuses PR & Review waiting on the user shows Needs you over: Claude there, in a turn or not. */
+/** The statuses Review & PR waiting on the user shows Needs you over: Claude there, in a turn or not. */
 const YOURS_SHOWS: ReadonlySet<SessionStatus> = new Set(['idle', 'recovered', 'working']);
 
-/** The session is in PR & Review and a merge blocker only the user can clear stands (`Session.waitsOnYou`). */
+/** The session is in Review & PR and a merge blocker only the user can clear stands (`Session.waitsOnYou`). */
 function waitsOnYou(s: Pick<Session, 'stage' | 'waitsOnYou'>): boolean {
   return s.stage === 'review' && s.waitsOnYou.length > 0;
 }
 
 /**
- * What a session's dot shows: Needs you while PR & Review waits on the user, over idle, recovered
+ * What a session's dot shows: Needs you while Review & PR waits on the user, over idle, recovered
  * and working; then `Session.learning` over idle, recovered and working, then `Session.queued` over
  * idle and recovered, then `Session.mekoCall` over working.
  */
@@ -778,7 +778,7 @@ export function sessionTabTitle(s: Session): string {
 
 /**
  * A session's dot in words, for its tab's tooltip: the long learning text, what the user is to
- * clear in PR & Review, or what a queued gate waits on. The queued dot shows between turns, when a
+ * clear in Review & PR, or what a queued gate waits on. The queued dot shows between turns, when a
  * queued Open PR is already going (the pill's "goes when the turn ends" is for mid-turn).
  */
 export function dotTitle(s: Session): string {

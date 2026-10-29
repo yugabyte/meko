@@ -39,7 +39,7 @@ export interface StartupState {
 export type Stage = 'explore' | 'design' | 'code' | 'pr' | 'review' | 'merge' | 'done' | 'reviewing-pr' | 'reviewing-code';
 
 /**
- * What a session is: a task, which runs on Explore → Design → Code → PR & Review → Merge & Close
+ * What a session is: a task, which runs on Explore → Design → Code → Review & PR → Merge & Close
  * from the stage it starts at, a Review a PR (someone else's PR), which has one stage, or a
  * code-review session: AgentK's local review of a task's change, a child of the task
  * (`Session.parentId`) that AgentK starts at Open PR and shows only as part of the task's tab.
@@ -60,7 +60,7 @@ export const KIND_LABELS: Record<SessionKind, string> = {
   'code-review': 'Local review',
 };
 
-/** Where a new task session starts. It gets to PR & Review only through Open PR or a move. */
+/** Where a new task session starts. It gets to Review & PR only through Open PR or a move. */
 export type StartStage = 'explore' | 'design' | 'code';
 
 export const START_STAGES: StartStage[] = ['explore', 'design', 'code'];
@@ -142,7 +142,7 @@ export const START_EXAMPLES: Record<StartStage | 'review-pr' | 'learn', { name: 
 
 /**
  * The steps shown in the stage bar for each kind, in order. `pr` (opening the PR) shows as part of
- * the PR & Review step (see stepOf in `stages.ts`), and `done` is terminal and not shown. A task's
+ * the Review & PR step (see stepOf in `stages.ts`), and `done` is terminal and not shown. A task's
  * steps are numbered from 0, so Explore is 0 and Design 1.
  */
 export const KIND_STAGES: Record<SessionKind, Exclude<Stage, 'done' | 'pr'>[]> = {
@@ -151,13 +151,16 @@ export const KIND_STAGES: Record<SessionKind, Exclude<Stage, 'done' | 'pr'>[]> =
   'code-review': ['reviewing-code'],
 };
 
-/** `pr` and `review` are one step in the UI, so they share a label. */
+/**
+ * `pr` and `review` are one step in the UI, so they share a label. Its "Review" is the PR's
+ * (reviews, CI, conflicts); the local review runs in Code, before it.
+ */
 export const STAGE_LABELS: Record<Stage, string> = {
   explore: 'Explore',
   design: 'Design',
   code: 'Code',
-  pr: 'PR & Review',
-  review: 'PR & Review',
+  pr: 'Review & PR',
+  review: 'Review & PR',
   merge: 'Merge & Close',
   done: 'Done',
   'reviewing-pr': 'Reviewing PR',
@@ -847,8 +850,8 @@ export interface Session {
    * failing CI or merge conflicts AgentK handed over after its attempts on this head, or conflicts
    * while Resolve merge conflicts on PRs is off; and with Run to merge every other blocker that doesn't
    * clear by itself, except a question in the terminal (the status says it), changes requested while
-   * AgentK addresses a review, and failing CI or conflicts AgentK still has attempts for. In PR &
-   * Review the session's dot shows Needs you while there's one (`dotState()`).
+   * AgentK addresses a review, and failing CI or conflicts AgentK still has attempts for. In Review &
+   * PR the session's dot shows Needs you while there's one (`dotState()`).
    */
   waitsOnYou: string[];
   /** A gate pressed early, waiting to go (kept in state.db across restarts); null when none. */
@@ -2388,7 +2391,7 @@ export interface UpdateSessionRequest {
   review?: ReviewOverrides;
   /**
    * Turns Run to merge (Session.autoRun) on or off. On in Design waits for the approval; in Code it
-   * queues Open PR, and in PR & Review the merge.
+   * queues Open PR, and in Review & PR the merge.
    */
   autoRun?: boolean;
 }
@@ -2464,7 +2467,7 @@ export interface CreateSessionRequest {
   workItemId?: string;
 }
 
-/** The stages a session can be moved to by hand. `review` is the PR & Review step. */
+/** The stages a session can be moved to by hand. `review` is the Review & PR step. */
 export type MoveTarget = 'explore' | 'design' | 'code' | 'review';
 
 /** The most characters of instructions a move or Open PR takes (`MoveSessionRequest`, `OpenPrRequest`). */
@@ -2475,7 +2478,7 @@ export interface MoveSessionRequest {
   stage: MoveTarget;
   /**
    * Send the new stage's prompt. Left out, it follows promptByDefault, as the move dialog leaves it;
-   * kept for pages from before the dialog dropped its checkbox. Ignored for PR & Review, which
+   * kept for pages from before the dialog dropped its checkbox. Ignored for Review & PR, which
    * picks up the branch's open PR, or sends the PR prompt when there's work to push.
    */
   prompt?: boolean;
@@ -2723,7 +2726,7 @@ export type TermServerMessage =
 //        history in common with the session's; 409 for a review, a session with a PR, or one whose worktree is gone.
 //        toTop moves it first in its project's list; 400 when it isn't a boolean, 409 for an archived session.
 //        autoRun turns Run to merge on or off: on in Design waits for the approval, in Code it queues Open PR (sent now
-//        when AgentK is at its prompt) and in PR & Review the merge, which then stays queued through any blocker; off
+//        when AgentK is at its prompt) and in Review & PR the merge, which then stays queued through any blocker; off
 //        drops the gate it queued. 400 when it isn't a boolean, 409 for an archived session, a review, Explore, Merge &
 //        Close, a design in plan mode, or while the merge is being requested)
 // GET    /api/sessions/:id/base-branches       → string[]   (the branches the session's base can be: local, origin's
@@ -2791,7 +2794,7 @@ export type TermServerMessage =
 // DELETE /api/sessions/:id/comments/:cid       → 204               (drafts only)
 // POST   /api/sessions/:id/comments/send       → SendCommentsResult
 // GET    /api/sessions/:id/held-reviews        → HeldReview[]   (held for the user, oldest first)
-// POST   /api/sessions/:id/held-reviews HeldReviewsRequest → HeldReviewsResult   (send to AgentK in PR & Review, or dismiss)
+// POST   /api/sessions/:id/held-reviews HeldReviewsRequest → HeldReviewsResult   (send to AgentK in Review & PR, or dismiss)
 // GET    /api/settings                         → Settings   (reads the Meko on this computer and its Meko Cloud link again first,
 //                                                           waiting 1.5 s at most, and Meko's list of agents in the
 //                                                           background. The link is Meko's: its web UI's

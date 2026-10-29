@@ -98,7 +98,7 @@ const GATE_NAMES: Record<QueuedGate, string> = { 'open-pr': 'Open PR', merge: 'm
 /** The status detail while a markdown or Artifact design waits for approval. */
 export const DESIGN_READY = 'Design ready for your approval';
 
-/** Merge blockers AgentK works on by itself in PR & Review (the CI and merge conflict watchers). */
+/** Merge blockers AgentK works on by itself in Review & PR (the CI and merge conflict watchers). */
 const CI_FAILING = 'CI is failing.';
 const CONFLICTING = 'The branch has merge conflicts.';
 /** The merge blocker for a question in the terminal, which already notified the user as Needs you. */
@@ -185,7 +185,7 @@ async function lacksLocalCommits(repo: string, branch: string, st: github.PrStat
 }
 
 /**
- * The task lifecycle: Design → Code → PR & Review → Merge & Close (merge, then cleanup).
+ * The task lifecycle: Design → Code → Review & PR → Merge & Close (merge, then cleanup).
  * Gates (approve design, open PR, merge) come from the user; everything else
  * is driven by hook events and by polling GitHub from the server, so waiting
  * on reviews and CI costs no Claude tokens.
@@ -385,7 +385,7 @@ export class Lifecycle {
   }
 
   /**
-   * At the end of a turn after the design was approved (Code, PR & Review, Merge & Close): picks up
+   * At the end of a turn after the design was approved (Code, Review & PR, Merge & Close): picks up
    * a change to the markdown design file, which saves a new version to Meko and points the PR at
    * it. Nothing waits for the user: it's only noted in the activity log.
    */
@@ -899,7 +899,7 @@ export class Lifecycle {
       this.dropQueued(id, moved);
     };
     if (instructions) this.checkPromptable(cur);
-    // A move within PR & Review was refused above (moveError).
+    // A move within Review & PR was refused above (moveError).
     if (stage === 'review') {
       // Off before the PR is picked up, which would queue its merge; back on if the move is refused.
       const wasOn = this.autoRunOff(id);
@@ -943,7 +943,7 @@ export class Lifecycle {
   }
 
   /**
-   * A move to PR & Review: picks up the branch's open PR when there's nothing to push (the branch
+   * A move to Review & PR: picks up the branch's open PR when there's nothing to push (the branch
    * tip is in the PR and the worktree is clean), or else sends the PR prompt, as Open PR does. The
    * user's `instructions` go after the PR prompt, or with the `moved` line once a PR is picked up.
    */
@@ -988,7 +988,7 @@ export class Lifecycle {
       await this.sessions.submit(row.id, `${this.movedLine(this.sessions.row(row.id))}\n\n${this.instructionsPrompt(cur, instructions)}`);
     } catch (e) {
       this.sessions.setBusy(row.id, false);
-      throw new HttpError(502, `Moved to PR & Review, but couldn't send your instructions to Claude: ${errMsg(e)}. Ask AgentK in the terminal.`);
+      throw new HttpError(502, `Moved to Review & PR, but couldn't send your instructions to Claude: ${errMsg(e)}. Ask AgentK in the terminal.`);
     }
   }
 
@@ -1015,7 +1015,7 @@ export class Lifecycle {
   }
 
   /**
-   * Leaving PR & Review by hand, between turns: the PR stays open and queued review, conflict and CI prompts
+   * Leaving Review & PR by hand, between turns: the PR stays open and queued review, conflict and CI prompts
    * wait for the session to come back (deliverNext only sends in Review). Prompts marked sent
    * belong to a turn that's over, as onTurnEnd would have decided had the session stayed.
    */
@@ -1612,7 +1612,7 @@ export class Lifecycle {
 
   /**
    * The user's decision on held reviews: send them to Claude with the `review-held` prompt, which
-   * only PR & Review does, or dismiss them. Then a fresh look
+   * only Review & PR does, or dismiss them. Then a fresh look
    * at the PR, so the merge blocker they were goes.
    */
   async decideHeldReviews(id: string, body: unknown): Promise<HeldReviewsResult> {
@@ -1621,7 +1621,7 @@ export class Lifecycle {
       const row = this.sessions.row(id);
       if (!row.pr_number) throw new HttpError(409, 'This session has no PR, so it has no held reviews.');
       if (req.action === 'send' && (row.stage !== 'review' || row.desired !== 'running')) {
-        throw new HttpError(409, 'Held reviews go to AgentK in PR & Review. Move the session back there first, or dismiss them.');
+        throw new HttpError(409, 'Held reviews go to AgentK in Review & PR. Move the session back there first, or dismiss them.');
       }
       const done = decideHeld(this.db, id, row.pr_number, req.ids, req.action === 'send' ? 'sent' : 'dismissed');
       if (!done.length) throw new HttpError(409, 'Those reviews were already sent or dismissed.');
@@ -2118,7 +2118,7 @@ export class Lifecycle {
 
   /**
    * Turns Run to merge on or off (`PATCH /api/sessions/:id`). On in Design waits for the approval;
-   * in Code it queues Open PR (sent now when Claude is at its prompt), and in PR & Review the merge.
+   * in Code it queues Open PR (sent now when Claude is at its prompt), and in Review & PR the merge.
    * Off drops the gate it queued.
    */
   async setAutoRun(row: SessionRow, on: boolean): Promise<void> {
@@ -2191,7 +2191,7 @@ export class Lifecycle {
     this.queueGate(id, 'open-pr', 'Run to merge: the PR opens when this turn ends', '', true);
   }
 
-  /** In PR & Review with Run to merge on, the merge stays queued until it goes (takeQueuedMerge). */
+  /** In Review & PR with Run to merge on, the merge stays queued until it goes (takeQueuedMerge). */
   private armMerge(id: string): void {
     const row = sessionRow(this.db, id);
     if (!row?.auto_run || row.stage !== 'review' || row.queued_gate || this.merging.has(id) || row.desired !== 'running') return;
