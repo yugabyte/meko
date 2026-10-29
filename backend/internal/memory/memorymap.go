@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"math"
+	"slices"
 	"sort"
 	"time"
 
@@ -77,14 +78,7 @@ func (s *Service) MemoryMap(ctx context.Context, datapack, query string, ids []s
 		}
 		// A promotion that stopped partway leaves the memory in both tables: it's drawn once, as a
 		// collective memory, as export does.
-		promoted, err := idSet(func(offset int) ([]string, error) {
-			ps, _, perr := st.PromotedMemories(ctx, datapack, exportPage, offset)
-			out := make([]string, len(ps))
-			for i, p := range ps {
-				out[i] = p.ID
-			}
-			return out, perr
-		})
+		promoted, err := promotedIDs(ctx, st, datapack)
 		if err != nil {
 			return err
 		}
@@ -206,9 +200,10 @@ const searchMapPoints = 100
 // SearchMap lays out the searchMapPoints memories, knowledge-base chunks and conversation turns
 // nearest to query among sources, by meaning, with the query placed among them and each thing's
 // similarity to it. hits (what the search returned: memory and chunk ids, turns' message ids) are
-// drawn even when they're further than the rest, as long as they're among each source's nearest
-// searchMapPoints by vector: a keyword-only match further than that isn't drawn. It draws no links,
-// which would crowd a map whose point is the question.
+// drawn even when they're further than the rest, as long as NearestForMap read them (each source's
+// nearest searchMapPoints, a turn's from its nearest chunks): a keyword-only match further than that
+// isn't drawn. A memory whose promotion stopped partway is drawn once, as its knowledge-base chunk.
+// It draws no links, which would crowd a map whose point is the question.
 func (s *Service) SearchMap(ctx context.Context, datapack, query string, sources, hits []string) (Map, error) {
 	if err := s.needDatapack(ctx, datapack); err != nil {
 		return Map{}, err
@@ -226,6 +221,15 @@ func (s *Service) SearchMap(ctx context.Context, datapack, query string, sources
 	if err != nil {
 		return Map{}, err
 	}
+	promoted := map[string]bool{}
+	if slices.Contains(sources, store.MapMemory) {
+		if promoted, err = promotedIDs(ctx, s.st, datapack); err != nil {
+			return Map{}, err
+		}
+	}
+	items = slices.DeleteFunc(items, func(it store.MapItem) bool {
+		return it.Source == store.MapMemory && promoted[it.ID]
+	})
 	hit := map[string]bool{}
 	for _, h := range hits {
 		hit[h] = true
@@ -255,6 +259,18 @@ func (s *Service) SearchMap(ctx context.Context, datapack, query string, sources
 	}
 	out.Query = &qxy
 	return out, nil
+}
+
+// promotedIDs is the ids of datapack's collective memories.
+func promotedIDs(ctx context.Context, st *store.Store, datapack string) (map[string]bool, error) {
+	return idSet(func(offset int) ([]string, error) {
+		ps, _, err := st.PromotedMemories(ctx, datapack, exportPage, offset)
+		out := make([]string, len(ps))
+		for i, p := range ps {
+			out[i] = p.ID
+		}
+		return out, err
+	})
 }
 
 // links joins each vector to its mapLinks nearest others at mapLinkMin or above, each pair once.

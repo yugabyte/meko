@@ -23,25 +23,26 @@ type MapItem struct {
 	Vector         []float32
 }
 
-// mapQueries reads a source's k nearest rows to the query, with their vectors: id, text,
-// conversation id, distance and embedding. Each binds the query, k and the datapack; memories' the
+// mapQueries reads a source's k nearest rows to the query, nearest first, with their vectors: id,
+// text, conversation id, distance and embedding. Each binds the query, k and the datapack; memories' the
 // user too.
 var mapQueries = map[string]string{
 	MapMemory: "WITH knn AS (SELECT rowid, distance, embedding FROM memories_vec WHERE embedding MATCH ? " +
 		"AND k = ? AND datapack_id = ? AND user_id = ?) SELECT t.id, t.text, t.conversation_id, knn.distance, " +
-		"knn.embedding FROM knn JOIN memories t ON t.rowid = knn.rowid",
+		"knn.embedding FROM knn JOIN memories t ON t.rowid = knn.rowid ORDER BY knn.distance",
 	MapKnowledge: "WITH knn AS (SELECT rowid, distance, embedding FROM kb_chunks_vec WHERE embedding MATCH ? " +
 		"AND k = ? AND datapack_id = ?) SELECT c.id, c.text, '', knn.distance, knn.embedding FROM knn " +
-		"JOIN kb_chunks c ON c.rowid = knn.rowid",
+		"JOIN kb_chunks c ON c.rowid = knn.rowid ORDER BY knn.distance",
 	MapConversation: "WITH knn AS (SELECT rowid, distance, embedding FROM message_chunks_vec WHERE embedding " +
 		"MATCH ? AND k = ? AND datapack_id = ?) SELECT m.id, x.text, c.id, knn.distance, knn.embedding " +
 		"FROM knn JOIN message_chunks x ON x.rowid = knn.rowid JOIN messages m ON m.rowid = x.message_rowid " +
-		"JOIN conversations c ON c.rowid = m.conversation_rowid",
+		"JOIN conversations c ON c.rowid = m.conversation_rowid ORDER BY knn.distance",
 }
 
 // NearestForMap is each source's n rows nearest to query, merged nearest first. A conversation turn
-// is one item, at its nearest chunk, so a long turn isn't several dots. A source whose vectors
-// aren't there yet (no embedding model) has none.
+// is one item, at its nearest chunk, so a long turn isn't several dots; its n come from the nearest
+// n*4 chunks, so they can be fewer than n when long turns fill those. A knowledge base with no
+// chunks table yet has none.
 func (s *Store) NearestForMap(ctx context.Context, datapack, userID string, query []float32, n int,
 	sources []string) ([]MapItem, error) {
 	release, err := s.searchSlot(ctx)
@@ -65,7 +66,7 @@ func (s *Store) NearestForMap(ctx context.Context, datapack, userID string, quer
 		}
 		k := n
 		if src == MapConversation {
-			k = min(n*4, maxKNN) // turns have several chunks: enough to still find n turns
+			k = min(n*4, maxKNN) // turns have several chunks
 		}
 		args := []any{blob, k, datapack}
 		if src == MapMemory {

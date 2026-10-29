@@ -152,8 +152,7 @@ export function MemoryMapView({
           </circle>
         ))}
         {picked && (
-          // The picked dot's ring, sized in the map's own units: a stroke width in pixels
-          // (non-scaling-stroke) isn't honored on every renderer, and 3 map units covers the whole map.
+          // The picked dot's ring, a circle of its own sized in map units so it keeps to its dot.
           <circle
             cx={picked.x}
             cy={picked.y}

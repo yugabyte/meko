@@ -95,6 +95,25 @@ func TestSearchMapRoute(t *testing.T) {
 	if p := arr(m["points"]); len(p) != 1 || obj(p[0])["source"] != "memory" || len(arr(m["query"])) != 2 {
 		t.Errorf("map %v", m)
 	}
+	// A promotion that stopped partway leaves the memory in both tables: it's drawn once, as its chunk.
+	half, err := e.Service.AddMemory(context.Background(), memory.AddMemory{DatapackID: e.DatapackID,
+		AgentID: "claude_code:x", Text: "releases ship after two approvals"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Store.CopyToPromoted(context.Background(), e.DatapackID, e.UserID, half[0].ID, "a"); err != nil {
+		t.Fatal(err)
+	}
+	m = obj(okData(t, e, "GET", path+"?q=when+do+releases+ship&sources=memory,knowledge_base", nil, 200))
+	sources := map[string]int{}
+	for _, p := range arr(m["points"]) {
+		if str(obj(p)["text"]) == "releases ship after two approvals" {
+			sources[str(obj(p)["source"])]++
+		}
+	}
+	if len(sources) != 1 || sources["knowledge_base"] != 1 {
+		t.Errorf("the half-promoted memory is drawn as %v", sources)
+	}
 	wantErr(t, e, "GET", path, nil, 400, "VALIDATION_ERROR")
 	wantErr(t, e, "GET", path+"?q=x&sources=memory,files", nil, 400, "VALIDATION_ERROR")
 }

@@ -373,7 +373,7 @@ type CallUsage struct {
 	Steps        []StepUsage  // by name
 	Agents       []AgentUsage // most recently seen first
 	Recent       []store.Call // newest first
-	InputTokens  int          // what track_token_usage reported, before it was removed
+	InputTokens  int          // the call log's token counts, which no tool writes
 	OutputTokens int
 }
 

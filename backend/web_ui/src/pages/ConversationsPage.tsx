@@ -119,7 +119,7 @@ function Thread({ datapack, conversationId }: { datapack: Datapack; conversation
               >
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   {dateTime(t.started_at)}
-                  {t.message_id === focus && <Badge tone="primary">The memory you opened came from this turn</Badge>}
+                  {t.message_id === focus && <Badge tone="primary">The memory you opened was saved around this turn</Badge>}
                 </div>
                 {t.input && (
                   <div>
