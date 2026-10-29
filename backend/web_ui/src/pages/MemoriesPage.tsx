@@ -9,6 +9,7 @@ import { timeAgo } from "../lib/format";
 import type { Datapack, MemoryState } from "../lib/types";
 import { SHOW_COLLECTIVE } from "../lib/features";
 import { useLoad } from "../lib/useLoad";
+import { useSavedView, VIEWS } from "../lib/useSavedView";
 import { MemoryGraph } from "../components/MemoryGraph";
 import { MemoryLineageDialog, type LineageOf } from "../components/MemoryLineageDialog";
 import { Pager } from "../components/Pager";
@@ -33,22 +34,6 @@ const SCOPE_STATES: Record<Scope, MemoryState[]> = {
   learnings: ["learning"],
   promoted: ["collective"],
 };
-
-type View = "list" | "graph";
-const VIEWS: readonly { id: View; label: string }[] = [
-  { id: "list", label: "List" },
-  { id: "graph", label: "Graph" },
-];
-
-// The view is remembered in this browser, since a scope change reloads the page.
-const VIEW_KEY = "meko.memories.view";
-function savedView(): View {
-  try {
-    return localStorage.getItem(VIEW_KEY) === "graph" ? "graph" : "list";
-  } catch {
-    return "list";
-  }
-}
 
 // routeScope is the scope in the address (/datapacks/<id>/memories/<scope>), so a link can open
 // Learnings or Collective directly.
@@ -75,16 +60,8 @@ export function MemoriesPage({
     setSelected(new Set());
   }, [scope]);
   const [lineageOf, setLineageOf] = useState<LineageOf>();
-  const [view, setViewState] = useState<View>(savedView);
+  const [view, setView] = useSavedView("meko.memories.view");
   const [changes, setChanges] = useState(0); // redraws the graph after an add
-  const setView = (v: View) => {
-    setViewState(v);
-    try {
-      localStorage.setItem(VIEW_KEY, v);
-    } catch {
-      // Not remembered: the page still works.
-    }
-  };
 
   const list = useLoad(
     () => (scope === "promoted" ? Promise.resolve(undefined) : api.memories(id, { scope, q, page })),

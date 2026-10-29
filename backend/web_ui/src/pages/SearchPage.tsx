@@ -1,5 +1,6 @@
 // context_search from the browser: one question over memories, the knowledge base and past
-// conversations, each source's hits in its own section.
+// conversations, each source's hits in its own section. Graph shows the memories as a map instead,
+// with the question landing among them.
 
 import { useState, type FormEvent, type ReactNode } from "react";
 import { Brain, FileText, MessagesSquare, Search } from "lucide-react";
@@ -8,7 +9,10 @@ import { SEARCH_INPUT_ID } from "../lib/useShortcuts";
 import { SHOW_COLLECTIVE } from "../lib/features";
 import { timeAgo } from "../lib/format";
 import type { ContextSearch, Datapack, MemoryHit } from "../lib/types";
+import { useSavedView, VIEWS } from "../lib/useSavedView";
 import { ExpandableText } from "../components/ExpandableText";
+import { MemoryGraph } from "../components/MemoryGraph";
+import { SHOWN_STATES } from "../components/MemoryMapView";
 import { Segmented } from "../components/Segmented";
 import { round2, Similarity, WEAK_MEMORY } from "../components/Similarity";
 import { Badge, Button, Card, Empty, ErrorNote, Input, Spinner } from "../components/ui";
@@ -89,8 +93,10 @@ const SOURCES: readonly { id: SearchSource; label: string }[] = [
 export function SearchPage({ datapack }: { datapack: Datapack }) {
   const [query, setQuery] = useState("");
   const [source, setSource] = useState<SearchSource>("auto");
-  // The source the shown results were searched with.
+  // The question and source the shown results were searched with.
+  const [asked, setAsked] = useState("");
   const [searched, setSearched] = useState<SearchSource>("auto");
+  const [view, setView] = useSavedView("meko.search.view");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Error>();
   const [result, setResult] = useState<ContextSearch>();
@@ -102,6 +108,7 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
     setError(undefined);
     try {
       setResult(await api.search(datapack.datapack_id, query.trim(), source));
+      setAsked(query.trim());
       setSearched(source);
     } catch (err) {
       setError(err as Error);
@@ -125,7 +132,15 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
           {busy ? <Spinner className="text-primary-foreground" /> : <Search className="size-4" />} Search
         </Button>
       </form>
-      <Segmented options={SOURCES} value={source} onChange={setSource} />
+      <div className="flex flex-wrap items-center gap-3">
+        <Segmented options={SOURCES} value={source} onChange={setSource} />
+        {/* Only memories are on the map, so a search without them has no graph. */}
+        {shows(source, "memory") && (
+          <div className="ml-auto">
+            <Segmented options={VIEWS} value={view} onChange={setView} />
+          </div>
+        )}
+      </div>
       {error && <ErrorNote error={error} />}
       {!r && !error && (
         <Empty icon={<Search className="size-8" />} title="Search everything in this datapack">
@@ -141,7 +156,16 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
               n={r.memory?.length ?? null}
               badge={r.memory?.filter((m) => !isWeak(m)).length}
             >
-              <Memories hits={r.memory ?? []} />
+              {view === "graph" ? (
+                <MemoryGraph
+                  datapackId={datapack.datapack_id}
+                  states={SHOWN_STATES}
+                  query={asked}
+                  hits={(r.memory ?? []).filter((m) => !isWeak(m)).map((m) => m.id)}
+                />
+              ) : (
+                <Memories hits={r.memory ?? []} />
+              )}
             </Section>
           )}
           {shows(searched, "knowledge_base") && (
