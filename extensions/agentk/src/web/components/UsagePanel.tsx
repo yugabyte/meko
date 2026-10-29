@@ -4,6 +4,7 @@ import { STAGE_LABELS } from '../../shared/types';
 import { navigate } from '../router';
 import { nextSort, sortRows, type SortState } from '../sort';
 import { creditsNumber, cx, formatCostOf, formatTokens, modelLabel, rowTokens, totalTokens, usageTitle } from '../util';
+import { CodeReviewUsageSection } from './CodeReviewUsageSection';
 import { MekoUsageSection } from './MekoUsageSection';
 
 type SessionKey = 'name' | 'meko' | 'output' | 'total' | 'credits';
@@ -12,8 +13,8 @@ const sessionValue = (s: SessionUsage, k: SessionKey): number | string =>
   k === 'name' ? s.name : k === 'meko' ? s.meko.found : k === 'output' ? s.usage.output : k === 'credits' ? (s.usage.credits ?? 0) : totalTokens(s.usage);
 
 /**
- * Token usage for a project: headline numbers, a 14-day chart, Meko use, and per-session and
- * per-model tables. `mekoOn`: Meko is on and the project has a datapack, so the Meko section shows
+ * Token usage for a project: headline numbers, a 14-day chart (code reviews' tokens stacked on each
+ * day's bar), Meko use, code reviews once one has run, and per-session and per-model tables. `mekoOn`: Meko is on and the project has a datapack, so the Meko section shows
  * before any call is made.
  */
 export function UsagePanel({ projectId, usage, mekoOn }: { projectId: string; usage: ProjectUsage; mekoOn: boolean }) {
@@ -71,6 +72,12 @@ export function UsagePanel({ projectId, usage, mekoOn }: { projectId: string; us
                 learning={usage.mekoLearning}
                 gaps={{ projectId, counts: usage.mekoGaps }}
               />
+            </div>
+          )}
+
+          {usage.codeReviews.runs > 0 && (
+            <div className="usage-reviews">
+              <CodeReviewUsageSection reviews={usage.codeReviews} />
             </div>
           )}
 
@@ -150,8 +157,8 @@ export function Stat({ label, value, strong }: { label: string; value: number; s
   );
 }
 
-/** What the tokens would cost at Anthropic's API list prices; partial when some models have no price. */
-export function CostStat({ cost }: { cost: UsageCost }) {
+/** What the tokens would cost at Anthropic's API list prices; partial when some models have no price. `note`: a line under it. */
+export function CostStat({ cost, note }: { cost: UsageCost; note?: string }) {
   const partial = cost.unpricedMessages > 0;
   const left = partial
     ? ` Leaves out ${cost.unpricedMessages.toLocaleString()} ${cost.unpricedMessages === 1 ? 'response' : 'responses'} from models without a known price.`
@@ -160,6 +167,7 @@ export function CostStat({ cost }: { cost: UsageCost }) {
     <div className="usage-stat" title={`At Anthropic's API list prices.${left}`}>
       <span className="usage-num">{formatCostOf(cost)}</span>
       <span className="usage-lbl">{partial ? 'Est. cost, partial' : 'Est. cost'}</span>
+      {note && <span className="muted small">{note}</span>}
     </div>
   );
 }
@@ -261,11 +269,14 @@ export function DailyChart({ daily }: { daily: DailyUsage[] }) {
   const totals = daily.map((d) => totalTokens(d.usage));
   const credits = daily.map((d) => d.usage.credits ?? 0);
   const kiro = credits.some((c) => c > 0);
+  const reviews = daily.some((d) => d.reviewTokens > 0);
   const max = niceMax(Math.max(...totals));
   const cmax = niceMax(Math.max(...credits));
   const ticks = [max, max / 2, 0];
   const h = hover === null ? null : daily[hover];
-  const said = (i: number) => `${totals[i].toLocaleString()} tokens${credits[i] ? `, ${creditsNumber(credits[i])} Kiro credits` : ''}`;
+  const said = (i: number) =>
+    `${totals[i].toLocaleString()} tokens${daily[i].reviewTokens ? ` (${daily[i].reviewTokens.toLocaleString()} in code reviews)` : ''}` +
+    `${credits[i] ? `, ${creditsNumber(credits[i])} Kiro credits` : ''}`;
   return (
     <>
       <div
@@ -295,12 +306,15 @@ export function DailyChart({ daily }: { daily: DailyUsage[] }) {
                 tabIndex={0}
                 aria-label={`${dayLabel(d.day, 'long')}: ${said(i)}`}
               >
-                <div className="chart-bar" style={{ height: `${(totals[i] / max) * 100}%` }} />
+                <div className="chart-bar" style={{ height: `${(totals[i] / max) * 100}%` }}>
+                  {/* The day's code review tokens, stacked at the bottom of its bar. */}
+                  {d.reviewTokens > 0 && <div className="chart-bar-review" style={{ height: `${(d.reviewTokens / totals[i]) * 100}%` }} />}
+                </div>
                 {kiro && <div className="chart-bar kiro" style={{ height: `${(credits[i] / cmax) * 100}%` }} />}
               </div>
             ))}
           </div>
-          {h && hover !== null && <Tooltip day={h.day} usage={h.usage} index={hover} count={daily.length} />}
+          {h && hover !== null && <Tooltip day={h.day} usage={h.usage} reviewTokens={h.reviewTokens} index={hover} count={daily.length} />}
         </div>
         {kiro && (
           <div className="chart-y right" aria-hidden="true">
@@ -315,16 +329,26 @@ export function DailyChart({ daily }: { daily: DailyUsage[] }) {
           ))}
         </div>
       </div>
-      {kiro && (
+      {(kiro || reviews) && (
         <div className="chart-legend" aria-hidden="true">
           <span>
             <i />
-            Tokens (left axis)
+            {reviews ? 'Other work' : 'Tokens'}
+            {kiro && ' (left axis)'}
           </span>
-          <span>
-            <i className="kiro" />
-            Kiro credits (right axis)
-          </span>
+          {reviews && (
+            <span>
+              <i className="review" />
+              Code reviews
+              {kiro && ' (left axis)'}
+            </span>
+          )}
+          {kiro && (
+            <span>
+              <i className="kiro" />
+              Kiro credits (right axis)
+            </span>
+          )}
         </div>
       )}
     </>
@@ -332,7 +356,7 @@ export function DailyChart({ daily }: { daily: DailyUsage[] }) {
 }
 
 /** Beside the bar, on whichever side has room; over the bars, kept inside the plot, when neither has (phones). */
-function Tooltip({ day, usage, index, count }: { day: string; usage: TokenUsage; index: number; count: number }) {
+function Tooltip({ day, usage, reviewTokens, index, count }: { day: string; usage: TokenUsage; reviewTokens: number; index: number; count: number }) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const tip = ref.current;
@@ -344,7 +368,7 @@ function Tooltip({ day, usage, index, count }: { day: string; usage: TokenUsage;
     const gap = 12;
     const left = x + gap + w <= room ? x + gap : x - gap - w >= 0 ? x - gap - w : Math.max(0, Math.min(room - w, x - w / 2));
     tip.style.left = `${left}px`;
-  }, [index, count, day, usage]);
+  }, [index, count, day, usage, reviewTokens]);
   const f = (n: number) => n.toLocaleString();
   return (
     <div className="chart-tip" ref={ref}>
@@ -361,6 +385,12 @@ function Tooltip({ day, usage, index, count }: { day: string; usage: TokenUsage;
         <dd>{f(usage.cacheRead)}</dd>
         <dt>Responses</dt>
         <dd>{f(usage.messages)}</dd>
+        {reviewTokens > 0 && (
+          <>
+            <dt>Code reviews</dt>
+            <dd>{f(reviewTokens)}</dd>
+          </>
+        )}
         {!!usage.credits && (
           <>
             <dt>Kiro credits</dt>
@@ -374,6 +404,7 @@ function Tooltip({ day, usage, index, count }: { day: string; usage: TokenUsage;
 
 export function DailyTable({ daily }: { daily: DailyUsage[] }) {
   const kiro = daily.some((d) => d.usage.credits);
+  const reviews = daily.some((d) => d.reviewTokens > 0);
   return (
     <div className="table-scroll">
       <table className="usage-table">
@@ -385,6 +416,11 @@ export function DailyTable({ daily }: { daily: DailyUsage[] }) {
             <th className="num">Cache write</th>
             <th className="num">Cache read</th>
             <th className="num">Total</th>
+            {reviews && (
+              <th className="num" title="The part of the total local code reviews spent">
+                Code reviews
+              </th>
+            )}
             {kiro && <CreditsHeader />}
           </tr>
         </thead>
@@ -397,6 +433,7 @@ export function DailyTable({ daily }: { daily: DailyUsage[] }) {
               <td className="num">{rowTokens(d.usage, d.usage.cacheWrite)}</td>
               <td className="num">{rowTokens(d.usage, d.usage.cacheRead)}</td>
               <td className="num">{rowTokens(d.usage, totalTokens(d.usage))}</td>
+              {reviews && <td className="num">{d.reviewTokens ? d.reviewTokens.toLocaleString() : '—'}</td>}
               {kiro && <CreditsCell usage={d.usage} />}
             </tr>
           ))}

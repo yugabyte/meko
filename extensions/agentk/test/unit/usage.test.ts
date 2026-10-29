@@ -95,7 +95,7 @@ describe('token usage from transcripts', () => {
     // The most recently used first.
     expect(pu.bySession.map((s) => [s.sessionId, s.archived])).toEqual([['s2', true], ['s1', false], ['s3', false]]);
     expect(pu.daily).toHaveLength(14);
-    expect(pu.daily.at(-1)).toEqual({ day: '2026-09-24', usage: { input: 1, output: 10, cacheRead: 100, cacheWrite: 0, messages: 1 } });
+    expect(pu.daily.at(-1)).toEqual({ day: '2026-09-24', usage: { input: 1, output: 10, cacheRead: 100, cacheWrite: 0, messages: 1 }, reviewTokens: 0 });
     expect(pu.daily.at(-2)!.usage.messages).toBe(2);
     expect(pu.daily[0].usage.messages).toBe(0);
   });
@@ -190,6 +190,71 @@ describe('usage across projects', () => {
     expect(o.byModel).toEqual([{ harness: 'claude', model: 'm', usage: expect.objectContaining({ output: 630, messages: 4 }) }]);
     expect(o.daily).toHaveLength(14);
     expect(o.daily.at(-1)!.usage.output).toBe(530);
+  });
+});
+
+describe('local code reviews', () => {
+  it("counts each project's reviews, and their sessions' tokens and cost, which the daily series stacks", () => {
+    const { db } = setup();
+    const now = new Date(2026, 8, 24, 15, 0, 0).getTime();
+    run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('q', 'Q', '/q', 'main', 0)`);
+    run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
+             hook_token, desired, status, stage, kind, parent_id, created_at) VALUES ('r1', 'p', 'r1', 'Local review of S1', 'c', 'b', 'main', '/w', 't',
+             'tok-r1', 'running', 'idle', 'reviewing-code', 'code-review', 's1', ?)`, now);
+    const review = (id: string, state: string, round: number, sent: boolean, counts: string, findings: string, candidates = '[]') =>
+      run(db, `INSERT INTO code_reviews(id, task_id, session_id, strategy, rounds, depth, state, round, counts_json, findings_json, candidates_json,
+               created_at, updated_at, finished_at) VALUES (?, 's1', 'r1', 'sirius-1.0', 1, 1, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        id, state, round, counts, findings, candidates, now, now, sent ? now : null);
+    // Its finished round's candidates moved into findings_json; candidates_json still holds them, and doesn't count twice.
+    review('cr1', 'done', 1, true, '{"blocker":1,"major":0,"minor":2}',
+      JSON.stringify([{ round: 1, kept: true, outcome: { status: 'fixed' } }, { round: 1, kept: true, outcome: { status: 'declined' } }, { round: 1, kept: true }, { round: 1, kept: false }]),
+      '[{}, {}, {}, {}]');
+    // Cancelled while scoring its second round: that round's candidates are only in candidates_json.
+    review('cr2', 'cancelled', 2, false, '{"blocker":0,"major":0,"minor":0}', JSON.stringify([{ round: 1, kept: false }]), '[{}, {}]');
+    // A row that doesn't parse: it found nothing.
+    review('cr3', 'failed', 1, false, 'oops', 'oops', 'oops');
+    const msg = (sid: string, id: string, input: number, output: number) =>
+      run(db, `INSERT INTO usage_messages(session_id, message_id, model, at, input, output, cache_read, cache_write) VALUES (?, ?, 'claude-opus-5-5', ?, ?, ?, 0, 0)`,
+        sid, id, now, input, output);
+    msg('r1', 'a', 1_000_000, 0);
+    msg('s1', 'b', 1, 9);
+
+    const counts = {
+      runs: 3, byOutcome: { done: 1, failed: 1, cancelled: 1, running: 0 }, lgtm: 0, prs: 1, rounds: 4, candidates: 7,
+      findings: { blocker: 1, major: 0, minor: 2 }, fixed: 1, declined: 1,
+    };
+    const reviews = { ...counts, usage: { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0, messages: 1 }, cost: { usd: 4, unpricedMessages: 0 } };
+    const pu = projectUsage(db, 'p', 14, now);
+    expect(pu.codeReviews).toEqual(reviews);
+    expect(pu.daily.at(-1)).toMatchObject({ usage: { input: 1_000_001, output: 9 }, reviewTokens: 1_000_000 });
+    expect(usageOverview(db, 14, now).codeReviews).toEqual(reviews);
+    expect(projectUsage(db, 'q', 14, now).codeReviews).toMatchObject({ runs: 0, usage: { messages: 0 }, cost: { usd: 0 } });
+  });
+
+  it("stacks a day's review tokens at the bottom of its bar, and names the section's outcomes and issues", async () => {
+    const { createElement } = await import('react');
+    const { renderToStaticMarkup } = await import('react-dom/server');
+    const { DailyChart } = await import('../../src/web/components/UsagePanel.js');
+    const { CodeReviewUsageSection } = await import('../../src/web/components/CodeReviewUsageSection.js');
+    const usage = (n: number) => ({ input: n, output: 0, cacheRead: 0, cacheWrite: 0, messages: 1 });
+    const chart = (reviewTokens: number) =>
+      renderToStaticMarkup(createElement(DailyChart, { daily: [{ day: '2026-09-23', usage: usage(0), reviewTokens: 0 }, { day: '2026-09-24', usage: usage(400), reviewTokens }] }));
+    const stacked = chart(100);
+    expect(stacked).toContain('class="chart-bar-review" style="height:25%"');
+    expect(stacked).toContain('Code reviews');
+    // Without review tokens the chart is as it was: no review part and no legend.
+    expect(chart(0)).not.toContain('chart-bar-review');
+    expect(chart(0)).not.toContain('chart-legend');
+
+    const section = renderToStaticMarkup(createElement(CodeReviewUsageSection, {
+      reviews: {
+        runs: 4, byOutcome: { done: 2, failed: 1, cancelled: 0, running: 1 }, lgtm: 1, prs: 2, rounds: 5, candidates: 9,
+        findings: { blocker: 1, major: 0, minor: 2 }, fixed: 2, declined: 1, usage: usage(1_500_000), cost: { usd: 6, unpricedMessages: 0 },
+      },
+    })).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    for (const text of ['Code Reviews', '4 Reviews 5 rounds · 1 failed · 1 running', '3 Issues found 1 blocker, 2 minor · 9 raised', '2 Fixed 1 declined', '2 PRs opened 1 LGTM', '1.5M tokens']) {
+      expect(section).toContain(text);
+    }
   });
 });
 

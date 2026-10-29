@@ -325,7 +325,9 @@ your phone can connect.
   subagents included, with its cost at API list prices (OpenCode sessions' tokens too, from AgentK's
   plugin); Kiro sessions count the credits Kiro billed,
   beside the cost and never added to it, with a Credits column by session and model and a credits
-  bar beside each day's tokens. **Usage** in the left panel adds it up across every project, closed ones
+  bar beside each day's tokens. Each day's bar stacks the tokens local code reviews spent, and a
+  **Code Reviews** section counts the reviews, the issues they found, the ones fixed, the PRs opened
+  after them and what they cost. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
 - **Meko call log, for debugging:** turn on **Log Meko calls** in a project's settings and AgentK
   keeps every Meko call made for each session, its own (recall at start, design uploads, the learn
@@ -345,7 +347,8 @@ your phone can connect.
   and the Usage page. On Pro and Max plans, the rail also shows your Claude 5-hour and weekly usage limits
   and when they reset, and once you've run a session on Kiro, the Kiro credits your plan has used.
 - **Usage stats:** once a day (hourly in its first day) AgentK sends anonymous counts to YugabyteDB: how many
-  projects, sessions, PRs, commits and tokens (by model) it handled, and which file types changed.
+  projects, sessions, PRs, commits and tokens (by model) it handled, which file types changed, and
+  how its local code reviews went (reviews, issues found and fixed, tokens and cost).
   It never sends names, paths, prompts, code, or who you are. Turn it off in Settings › General
   (details in [docs/design/usage-stats.md](docs/design/usage-stats.md)).
 - **Survives restarts:** after a host reboot, every open session is brought back with

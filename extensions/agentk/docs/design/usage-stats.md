@@ -45,7 +45,21 @@ reports.
   and [Ask AgentK](palette.md#ask-agentk) asks (`agentk_asks`: asks, the ones that failed and the actions their
   answers proposed; left out of a day with none; a cancelled ask isn't counted), and Kiro (`kiro`:
   sessions started on it, its finished turns and the credits they billed, rounded to thousandths;
-  left out of a day with none).
+  left out of a day with none), and [local code reviews](code-review.md) (`codeReview`, below).
+  A day's tokens by model hold at most 15 entries (`MODEL_LIMIT`; the schema allows 20): every model
+  while there are no more, else the 14 most used and `other` for the rest, which leaves room for
+  `codeReview` in the 7-day report with every count at its largest.
+- *Local code reviews* (`codeReview`, optional): the `code_reviews` rows started on the day,
+  counted by their state when the report is built (`done`, `failed`, `cancelled`, or `running` for
+  one still under way, which a later report corrects, since days are sent again), with those done
+  without a kept finding (`lgtm`), those whose PR prompt went, Open anyway included (`prs`), rounds
+  run, candidates the passes raised (a round still under way, or stopped, counts the ones its sweeps
+  have raised so far), kept findings by severity, and the ones the task reported fixed
+  or declined; and the tokens the review sessions (`kind = 'code-review'`) spent on the day, with
+  their price in whole cents (`usdCents`) and Kiro's credits when there were some. Left out of a day
+  with neither. Nothing from a finding (its file, line or comment) is sent. There's no all-time
+  total: the review is newer than the first report's 30 days. AgentK's collector drops the field
+  until its own schema has it.
 - *File types* are counts per file extension: files changed, lines added and deleted, from merged
   PRs and direct pushes. When a PR is merged, one `gh pr view <url> --json
   commits,additions,deletions,files` call adds its size to the `merged` event's payload; for a

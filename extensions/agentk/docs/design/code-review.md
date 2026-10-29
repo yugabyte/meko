@@ -177,3 +177,7 @@ so its counts stay. Clicking it opens the findings panel beside the task's termi
 with its passes, verdict, confidence, kept or why dropped, credited gotchas and what the task did),
 never the review session. While the review holds the PR, the task's Code gate shows it, with Cancel, or
 Retry and Open anyway.
+
+The Usage page and the project home count reviews in their **Code Reviews** section, and stack the
+review sessions' tokens on the Token usage chart ([Token usage](token-usage.md)); the usage report
+sends the same counts each day ([Usage stats](usage-stats.md), `codeReview`).

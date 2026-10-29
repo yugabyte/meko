@@ -18,6 +18,8 @@
   --chart-bar: #2b55c0;
   /* Kiro's credits (its logo's violet), on the chart and its plan bar in the rail. */
   --chart-kiro: #7b3bf0;
+  /* Code reviews' share of a day's tokens, stacked on the chart's bar. */
+  --chart-review: #12857a;
   /* Meko's mark on a design decision that rests on Meko, and its references. */
   --meko: #6b3fb8;
   --meko-soft: #efe8fa;
@@ -68,6 +70,7 @@
     --accent-soft: #1e2a4a;
     --chart-bar: #6f8ff0;
     --chart-kiro: #a77bff;
+    --chart-review: #4fc1b3;
     --meko: #c3a5f5;
     --meko-soft: #2c2140;
     --meko-logo: #fff;
@@ -101,6 +104,7 @@
   --accent-soft: #1e2a4a;
   --chart-bar: #6f8ff0;
   --chart-kiro: #a77bff;
+  --chart-review: #4fc1b3;
   --meko: #c3a5f5;
   --meko-soft: #2c2140;
   --meko-logo: #fff;
@@ -4488,10 +4492,16 @@ div[id^='dak-mermaid-'] .label {
   color: var(--ok);
 }
 /* Meko in the project home's usage panel, below the chart. */
-.usage-meko {
+.usage-meko,
+.usage-reviews {
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px solid var(--rule);
+}
+/* The Code Reviews section's label sits over its stats, as Meko's logo does over Meko's. */
+.review-usage > .label {
+  display: block;
+  margin-bottom: 8px;
 }
 /* The questions Meko couldn't answer, under the Meko stats: one line linking to What Meko doesn't know. */
 .meko-gaps {
@@ -4637,6 +4647,15 @@ div[id^='dak-mermaid-'] .label {
   background: var(--chart-bar);
   border-radius: 4px 4px 0 0;
   transition: opacity 0.1s;
+  /* The day's code review tokens stack at the bottom of the bar. */
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow: hidden;
+}
+.chart-bar-review {
+  flex: none;
+  background: var(--chart-review);
 }
 .chart-col.hover .chart-bar {
   opacity: 0.8;
@@ -4669,6 +4688,9 @@ div[id^='dak-mermaid-'] .label {
 }
 .chart-legend i.kiro {
   background: var(--chart-kiro);
+}
+.chart-legend i.review {
+  background: var(--chart-review);
 }
 .chart-x {
   grid-column: 2;

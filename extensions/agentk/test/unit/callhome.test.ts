@@ -464,6 +464,62 @@ describe('the usage stats report', () => {
     expect(validate(r, SCHEMA)).toEqual([]);
   });
 
+  it("counts local code reviews on the day each started, and their sessions' tokens on the day they were spent", () => {
+    const db = seeded();
+    run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token,
+             desired, status, stage, kind, parent_id, created_at) VALUES ('r1', 'p1', 'r1', 'Local review of Secret task', 'c', 'ak/secret-branch', 'main',
+             '/home/alice/wt-1', 't', 'tok-r1', 'running', 'idle', 'reviewing-code', 'code-review', 's1', ?)`, at('2026-09-27T23:00:00Z'));
+    const finding = (key: string, kept: boolean, status?: 'fixed' | 'declined') =>
+      ({ key, kept, comment: 'Secret task leaks /home/alice', outcome: status ? { status, note: 'done' } : null });
+    const none = { blocker: 0, major: 0, minor: 0 };
+    const review = (id: string, state: string, round: number, sent: boolean, counts: typeof none, findings: unknown[], iso: string) =>
+      run(db, `INSERT INTO code_reviews(id, task_id, session_id, strategy, rounds, depth, state, round, counts_json, findings_json, created_at, updated_at, finished_at)
+               VALUES (?, 's1', 'r1', 'sagittarius-3.0', 1, 1, ?, ?, ?, ?, ?, ?, ?)`,
+        id, state, round, JSON.stringify(counts), JSON.stringify(findings), at(iso), at(iso), sent ? at(iso) : null);
+    // Two rounds: three kept (one fixed, one declined), one refuted; its PR went.
+    review('cr1', 'done', 2, true, { blocker: 1, major: 1, minor: 1 },
+      [finding('1:1', true, 'fixed'), finding('1:2', true, 'declined'), finding('1:3', false), finding('2:1', true)], '2026-09-27T23:00:00Z');
+    // A clean one, whose PR went; one that failed; one still sweeping.
+    review('cr2', 'done', 1, true, none, [], '2026-09-28T01:00:00Z');
+    review('cr3', 'failed', 1, false, none, [], '2026-09-28T02:00:00Z');
+    review('cr4', 'sweeping', 1, false, none, [], '2026-09-28T03:00:00Z');
+    // The first review's session, across midnight: Opus 5.5 at $4 in and $20 out per million.
+    for (const [id, iso, input, output] of [['rm1', '2026-09-27T23:30:00Z', 100_000, 100_000], ['rm2', '2026-09-28T00:30:00Z', 50_000, 0]] as const) {
+      run(db, `INSERT INTO usage_messages(session_id, message_id, agent, model, at, input, output, cache_read, cache_write)
+               VALUES ('r1', ?, NULL, 'claude-opus-5-5', ?, ?, ?, 0, 0)`, id, at(iso), input, output);
+    }
+
+    const r = report(db);
+    const day = (d: string) => r.days.find((x) => x.day === d)!;
+    expect(day('2026-09-27').codeReview).toEqual({
+      runs: 1, byOutcome: { done: 1, failed: 0, cancelled: 0, running: 0 }, lgtm: 0, prs: 1, rounds: 2, candidates: 4,
+      findings: { blocker: 1, major: 1, minor: 1 }, fixed: 1, declined: 1,
+      tokens: { input: 100_000, output: 100_000, cacheRead: 0, cacheWrite: 0, messages: 1 }, usdCents: 240,
+    });
+    expect(day('2026-09-28').codeReview).toEqual({
+      runs: 3, byOutcome: { done: 1, failed: 1, cancelled: 0, running: 1 }, lgtm: 1, prs: 1, rounds: 3, candidates: 0,
+      findings: none, fixed: 0, declined: 0, tokens: { input: 50_000, output: 0, cacheRead: 0, cacheWrite: 0, messages: 1 }, usdCents: 20,
+    });
+    expect(day('2026-09-26').codeReview).toBeUndefined();
+    // Review sessions aren't a kind of session the report counts.
+    expect(r.totals.sessions.byKind).toEqual(report(seeded()).totals.sessions.byKind);
+    expect(JSON.stringify(r)).not.toContain('alice');
+    expect(validate(r, SCHEMA)).toEqual([]);
+  });
+
+  it("keeps a day's 14 most used models and sums the rest into other", () => {
+    const db = seeded();
+    for (let i = 0; i < 18; i++) {
+      for (let m = 0; m <= i; m++) {
+        run(db, `INSERT INTO usage_messages(session_id, message_id, agent, model, at, input, output, cache_read, cache_write)
+                 VALUES ('s3', ?, NULL, ?, ?, 1, 1, 0, 0)`, `x${i}-${m}`, `claude-model-${i}`, at('2026-09-24T10:00:00Z'));
+      }
+    }
+    const models = report(db).days.find((d) => d.day === '2026-09-24')!.tokensByModel;
+    expect(models).toHaveLength(15);
+    expect(models.at(-1)).toMatchObject({ model: 'other', messages: 1 + 2 + 3 + 4 });
+  });
+
   it("names AgentK's nine most used tools, and the rest as other", () => {
     const db = openDb(':memory:');
     for (let i = 0; i < 12; i++) {
@@ -546,8 +602,14 @@ describe('the usage stats report', () => {
     r.totals.meko = meko;
     for (const d of r.days) {
       d.fileTypes = Array.from({ length: 26 }, (_, i) => ({ ext: `ext${i}`, files: big, additions: big, deletions: big }));
-      d.tokensByModel = Array.from({ length: 20 }, (_, i) => ({ model: `claude-model-${i}-5`, input: big, output: big, cacheRead: big, cacheWrite: big, messages: big }));
+      // MODEL_LIMIT: 15, so each day's codeReview fits.
+      d.tokensByModel = Array.from({ length: 15 }, (_, i) => ({ model: `claude-model-${i}-5`, input: big, output: big, cacheRead: big, cacheWrite: big, messages: big }));
       d.meko = meko;
+      d.codeReview = {
+        runs: big, byOutcome: { done: big, failed: big, cancelled: big, running: big }, lgtm: big, prs: big, rounds: big, candidates: big,
+        findings: { blocker: big, major: big, minor: big }, fixed: big, declined: big,
+        tokens: { input: big, output: big, cacheRead: big, cacheWrite: big, messages: big }, usdCents: big, credits: 123456789.123,
+      };
     }
     expect(validate(r, SCHEMA)).toEqual([]);
     expect(JSON.stringify(r).length).toBeLessThan(MAX_REPORT_BYTES);
