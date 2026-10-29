@@ -1,5 +1,5 @@
 // The command in ~/.local/bin. It was `agent-k-local` until the rename to AgentK; Meko's install
-// (`meko install_extension agentk`) links `agentk`, and AgentK's own installer linked both names
+// (`meko extension install agentk`) links `agentk`, and AgentK's own installer linked both names
 // until Meko installed it. An update doesn't relink, so an install from before the rename gets
 // `agentk` from the server when it next starts (`linkCommand`). The old name stays, for the
 // scripts, services and Meko registries that run it.

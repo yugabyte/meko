@@ -93,7 +93,7 @@ describe("installer: Meko's Meko Cloud link, or the Meko on this computer", () =
     expect(given.calls).toEqual(['link https://meko.example.com/mcp mko_tkn_given', 'claude https://meko.example.com/mcp mko_tkn_given']);
     // The given key isn't stored, and the old one stays for a rollback.
     expect(c.meko.apiKey).toBe('mko_tkn_old');
-    // What `meko install_extension agentk` passes.
+    // What `meko extension install agentk` passes.
     const copy = deps({ local: true, cloud: UNSET });
     expect(await installMeko(cfg(), { keyArg: 'local-token', urlArg: LOCAL.url, noMeko: false }, copy.d)).toBe(true);
     expect(copy.calls).toEqual([`claude ${LOCAL.url} local-token (local)`]);

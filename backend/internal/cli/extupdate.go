@@ -14,14 +14,14 @@ import (
 	"github.com/yugabyte/meko/backend/internal/update"
 )
 
-// extUpdateFlags are update_extension's: --check, --all, and --auto=on|off, which sets the
+// extUpdateFlags are extension update's: --check, --all, and --auto=on|off, which sets the
 // extension's Update automatically and updates nothing.
 type extUpdateFlags struct {
 	check, all bool
 	auto       string
 }
 
-// runUpdateExtension is meko update_extension <name>|--all [--check] [--auto=on|off]. It needs no
+// runUpdateExtension is meko extension update <name>|--all [--check] [--auto=on|off]. It needs no
 // running server: an extension starts and stops by its own commands. It holds the update lock, so it
 // waits for no other update and refuses while one runs.
 func runUpdateExtension(l paths.Layout, name string, f extUpdateFlags, stdout, stderr io.Writer) int {
@@ -109,7 +109,7 @@ func runSetAuto(l paths.Layout, name, value string, stdout, stderr io.Writer) in
 	if on {
 		fmt.Fprintf(stdout, "Meko installs %s's updates when it finds them\n", title)
 	} else {
-		fmt.Fprintf(stdout, "Meko only reports %s's updates now: meko update_extension %s installs one\n", title, name)
+		fmt.Fprintf(stdout, "Meko only reports %s's updates now: meko extension update %s installs one\n", title, name)
 	}
 	return exitOK
 }

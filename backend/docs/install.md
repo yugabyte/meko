@@ -2,7 +2,7 @@
 
 People install Meko with one command on macOS 14+ (Apple Silicon) and Linux (x64, arm64). It runs
 as a login service, restarts on failure, updates itself and rolls back an update that keeps failing.
-`meko install_extension agentk` then installs AgentK pointed at this Meko, so a fresh machine
+`meko extension install agentk` then installs AgentK pointed at this Meko, so a fresh machine
 gets a working datapack with no account. `meko stop` stops AgentK too. If Meko fails, AgentK keeps
 working, its Meko features skipping or retrying.
 
@@ -10,7 +10,7 @@ working, its Meko features skipping or retrying.
 
 ```sh
 gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
-meko install_extension agentk      # then, for AgentK
+meko extension install agentk      # then, for AgentK
 ```
 
 Meko's releases are the repo's "latest" (AgentK's are published `--latest=false`), so that is Meko's
@@ -26,7 +26,7 @@ repo is internal, and:
 4. Runs that version's `meko install`.
 
 It takes only its own flags (`--version`, `--reinstall`, `--no-service`, `--non-interactive`) and
-refuses any other, naming `meko install_extension agentk`. Run again where Meko is installed, it
+refuses any other, naming `meko extension install agentk`. Run again where Meko is installed, it
 says so and changes nothing, unless given `--reinstall` or another version.
 
 `meko install` (`internal/cli/install.go`):
@@ -46,7 +46,7 @@ says so and changes nothing, unless given `--reinstall` or another version.
   table: `--access local|remote`, or by AgentK's old rule (remote over SSH or on Linux with no
   display, else local), unless AgentK is on this computer, whose access the handoff takes over
   instead ([web.md](web.md#settings)). It prints the web UI's URL.
-- It installs Meko alone. AgentK is `meko install_extension agentk`.
+- It installs Meko alone. AgentK is `meko extension install agentk`.
 
 `meko uninstall` removes the service, `~/.local/bin/meko`, `~/.local/bin/meko-cli`,
 `~/.local/bin/mekosh` (when they're links into the app folder) and the app folder,
@@ -191,11 +191,11 @@ rows cover, such as `agentk status` after a start (`meko start` ends with what t
 keeps what only it knows: AgentK's stop row says where its sessions resume, `meko start`, or
 `agentk serve` when it runs without services. On a failure it prints its error
 to stderr as usual and exits non-zero, and Meko adds its own `✗` row after it. Run without
-`MEKO_SUMMARY` (by hand, by an older Meko, or by `meko update_extension` and the Extensions page,
+`MEKO_SUMMARY` (by hand, by an older Meko, or by `meko extension update` and the Extensions page,
 which keep its output for their logs) it prints what it always has. AgentK and Presenter format the
 row in `src/server/summary.ts`.
 
-`meko update`, `meko update_extension` and `meko install_extension` print the rows of the steps that
+`meko update`, `meko extension update` and `meko extension install` print the rows of the steps that
 otherwise print nothing (`internal/spin`): `Release`, for the release they download, check and unpack
 (`  ✓ Release         AgentK 0.20261030.0 (agentk-v0.20261030.0), downloaded and checked`, or `meko
 <version> installed`), and for `meko update` under the service, `Server`, for the restart. While such a
@@ -219,7 +219,7 @@ follows on stderr.
   nothing of Meko's is removed. Keeping stops Meko only, never the extensions, and moves
   every entry but `extensions/` and `extensions.json` aside while holding the lock (below), so
   the next `meko start` still starts them; their Meko key (the old client token) stops working, so
-  it says to run `meko install_extension agentk` after `meko start`. A data folder with extension
+  it says to run `meko extension install agentk` after `meko start`. A data folder with extension
   data and no `meko.db` (AgentK installed without Meko) has nothing of Meko's to remove; with
   `--with-extensions` the extensions are uninstalled, their data removed, and the folder too if
   that empties it.
@@ -228,7 +228,7 @@ follows on stderr.
   updates them from their own releases, and neither ships an installer. Their commands are `agentk`
   and `meko_presenter`; the extensions, their folders and tarballs are `agentk` and `presenter`
   (tags `agentk-v*`, and `v*` from before releases were tagged by product; `presenter-v*`).
-- `meko install_extension <name>` needs a running Meko. When the extension's command is on PATH or
+- `meko extension install <name>` needs a running Meko. When the extension's command is on PATH or
   in `~/.local/bin` (for AgentK also `agent-k-local`, its name before the rename, and the
   `app/current/bin` of its old home `~/.agent-k-local`: `Catalog.OldCommands`, `OldHomes`), it's used
   as it is, unless `--version` names a release, which is installed over it. Otherwise, or then,
@@ -255,7 +255,7 @@ follows on stderr.
   `meko_presenter uninstall --purge --non-interactive`, which remove the extension's folder,
   releases and all (`meko destroy --with-extensions` then removes the `~/.local/bin` link Meko made):
   Presenter's decks stay in their Meko datapacks.
-- `meko update_extension <name>` (and the Extensions page's **Update**) moves a release install Meko
+- `meko extension update <name>` (and the Extensions page's **Update**) moves a release install Meko
   made to the newest release, and `--all` does so for every installed extension, going on past one
   that fails (the exit code says whether any did). `--check` only looks, and with no release for
   this platform (or only rolled-back ones) it says so. `--auto=on|off` sets the extension's
@@ -309,18 +309,18 @@ follows on stderr.
   installs its own update, it restarts first, and the new Meko's first check, a minute later,
   updates the extensions (a Meko on probation still checks; it only installs no update of its
   own until the probation ends): the same order as `meko update`, which updates Meko, then runs the new
-  `meko update_extension --all`. `[update] channel = "off"` stops all of it; `[update] auto` is
+  `meko extension update --all`. `[update] channel = "off"` stops all of it; `[update] auto` is
   Meko's own.
 - **The update lock.** Every update, Meko's and the extensions', scheduled or asked for, holds the
   data folder's update lock (`update.Lock`): a mutex in `serve` and a `flock` on `run/update.lock`,
-  which `meko update`, `update_extension` and `install_extension` take in their own processes. A
+  which `meko update`, `extension update` and `extension install` take in their own processes. A
   second update while one runs is refused (the Status page's `UPDATE_BUSY`, "another update is
   running" on the command line), and a scheduled check skips its turn.
 - A command npm installed (`npm link`, `npm install -g`: Presenter from source) is a
   `#!/usr/bin/env node` script in the bin folder of the Node that installed it, and the login
   service's PATH has no such Node (launchd's is `/usr/bin:/bin:/usr/sbin:/sbin`), or an older one.
   So when an extension's command sits in a folder that holds a `node`, Meko runs it (`start`,
-  `stop`, `status`, `_handoff`, its uninstall, and its `install` from `install_extension` or the
+  `stop`, `status`, `_handoff`, its uninstall, and its `install` from `extension install` or the
   Extensions page) with that folder first on PATH (`extensions.CommandEnv`).
 - An extension whose catalog entry has `WebUI` (AgentK, Presenter) is served to browsers by the web listener at
   `/ext/<name>/`, on the unix socket `<command> _handoff --json` names; at every start, that handoff
@@ -331,7 +331,27 @@ follows on stderr.
   extension that fails is reported, and the rest go on. `meko restart`, Meko's updates and crashes
   never touch them: they have their own services (AgentK) or processes (Presenter), and an
   extension restarts only for its own update.
-- `meko uninstall_extension agentk` only unregisters it.
+- `meko extension delete <name>` removes an extension (`runDeleteExtension`). After asking (unless
+  `--force`), and holding the update lock (which keeps updates and release downloads out, not an
+  install's own setup), it runs the catalog's `RemoveArgs` (`uninstall --non-interactive`: the
+  extension stops and removes its services, and AgentK's sessions end), removes
+  `<data>/extensions/<name>/app` and the `~/.local/bin` link into it, and unregisters it. Its data
+  stays. With `--purge` it runs `UninstallArgs` instead and removes `<data>/extensions/<name>`, as
+  `meko destroy --with-extensions` does for every extension. If the extension's uninstall fails,
+  nothing is removed. If a version still runs after it (`App.Live`: a session host whose stop
+  failed), the releases and the registration stay, and it says what runs. Meko removes only the
+  link it made into its releases (`UnlinkCommand`), never a build from source, but the extension's
+  own uninstall may remove its links: AgentK's removes `~/.local/bin/agentk` and `agent-k-local`
+  whatever they point to, a link into another data folder's release too. A registered extension Meko
+  doesn't know is only forgotten. A damaged extension (registered, but its command is missing and
+  `Catalog.Find` doesn't find it again; `meko start`, `stop` and `update` say so, naming this
+  command) has no uninstall to run, so its services, if any, stay: a plain delete removes its
+  releases and forgets it, and `--purge` is refused, since such a service may still use its folder.
+  The same goes for a `--purge` after a plain delete, which left no command to run: installing it
+  again first lets the purge run its uninstall.
+- `meko extension list` shows every known extension and its state without a running server: it
+  runs each installed one's `status` at once (`StatusTimeout` each), reads the release installed and
+  the last check's `update.json`, and looks for a missing command again without saving what it finds.
 - The web UI's Extensions page runs the same install and update, the extensions' `start` and
   `stop`, Check now and Update automatically, from the server, without a terminal
   ([web.md](web.md)). AgentK's own page shows its update and its switch through the same routes.
@@ -419,7 +439,11 @@ Changing the store doesn't move secrets: the client token is made again.
 - `internal/store`: `RestoreBackup` undoes a real upgrade.
 - `internal/cli`: `install` with a fake service manager, start, stop and restart through it,
   extensions run on start and stop but not restart or `--keep-extensions`, `uninstall` and
-  `--purge`, `install_extension` with an installed `agent-k-local` (an AgentK from before the rename) and from a fake release,
+  `--purge`, `extension install` with an installed `agent-k-local` (an AgentK from before the rename) and from a fake release,
+  `extension list` (states, damaged, a slow status) and `extension delete` (keeping or purging the
+  data, a refused or failing one, a damaged one and its refused purge, a release still in use, an
+  unknown one), `meko update` running the new meko's
+  `extension update --all`,
   `logs` merging and following across rotation, `token --json`, `version --json`, and an update
   from the Status page's route ending `serve` with an exec of the new version, or under the
   service a clean exit.

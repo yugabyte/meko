@@ -150,7 +150,7 @@ func TestRunExtensionStartThatNeverAnswers(t *testing.T) {
 	}
 }
 
-// The page's Install sets AgentK up as meko install_extension does, never asking questions, and the
+// The page's Install sets AgentK up as meko extension install does, never asking questions, and the
 // client token it passes never reaches the output.
 func TestRunExtensionInstallsWithoutATerminal(t *testing.T) {
 	dir, port := setup(t)

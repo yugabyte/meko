@@ -1,4 +1,4 @@
-// What AgentK knows about its own updates. Meko installs them (`meko update_extension agentk`, its
+// What AgentK knows about its own updates. Meko installs them (`meko extension update agentk`, its
 // Extensions page, AgentK's Update button through Meko's routes) and runs their probation through
 // `meko _launch`: counting a new version's starts, rolling back one that keeps failing, and finishing
 // the update once it has run 5 minutes. AgentK only learns it was updated (MEKO_UPDATED_FROM, which

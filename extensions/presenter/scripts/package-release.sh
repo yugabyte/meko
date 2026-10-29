@@ -1,6 +1,6 @@
 #!/bin/sh
 # Assemble a self-contained release tarball, which Meko installs and updates (meko
-# install_extension presenter, meko update_extension presenter).
+# extension install presenter, meko extension update presenter).
 #
 #   scripts/package-release.sh <version> <linux|darwin> <x64|arm64> <node-dir> <out-dir>
 #

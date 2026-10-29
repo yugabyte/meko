@@ -108,7 +108,7 @@ func presenterReleases(t *testing.T, version string, tgz []byte) {
 // installedVersion is the Presenter release installedPresenter installs.
 const installedVersion = "0.20261024.0"
 
-// installedPresenter is a release install of Presenter's installedVersion, as install_extension
+// installedPresenter is a release install of Presenter's installedVersion, as extension install
 // leaves it: app/<version>, app/current, ~/.local/bin/meko_presenter, and the registry naming that
 // link.
 func installedPresenter(t *testing.T, dir string) update.App {
@@ -153,15 +153,15 @@ func TestUpdateExtensionInstallsTheNewestReleaseAndRestartsIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	code, out, errs := run("update_extension", "presenter", "--check", "--data-dir", dir)
+	code, out, errs := run("extension", "update", "presenter", "--check", "--data-dir", dir)
 	want(t, "--check", code, 0, out+errs, "Presenter "+next+" is available (this is "+old+")")
 	if app.Current() != old {
 		t.Fatalf("--check changed app/current to %s", app.Current())
 	}
 
-	code, out, errs = run("update_extension", "presenter", "--data-dir", dir)
-	want(t, "update_extension", code, 0, out+errs, "Presenter is running "+next)
-	want(t, "update_extension", code, 0, out,
+	code, out, errs = run("extension", "update", "presenter", "--data-dir", dir)
+	want(t, "extension update", code, 0, out+errs, "Presenter is running "+next)
+	want(t, "extension update", code, 0, out,
 		"  ✓ Release         Presenter "+next+" (presenter-v"+next+"), downloaded and checked\n")
 	if app.Current() != next {
 		t.Errorf("app/current is %s", app.Current())
@@ -178,8 +178,8 @@ func TestUpdateExtensionInstallsTheNewestReleaseAndRestartsIt(t *testing.T) {
 		t.Errorf("Release = %q", v)
 	}
 
-	code, out, errs = run("update_extension", "presenter", "--data-dir", dir)
-	want(t, "a second update_extension", code, 0, out+errs, "Presenter "+next+" is the newest release")
+	code, out, errs = run("extension", "update", "presenter", "--data-dir", dir)
+	want(t, "a second extension update", code, 0, out+errs, "Presenter "+next+" is the newest release")
 }
 
 // The launcher rolls back a version that keeps failing to start; the update says so and fails.
@@ -193,8 +193,8 @@ func TestUpdateExtensionReportsARollBack(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(filepath.Dir(app.Root), "running"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	code, _, errs := run("update_extension", "presenter", "--data-dir", dir)
-	want(t, "update_extension", code, 1, errs, "Presenter "+next+" failed to start 3 times, so it was rolled back to "+old)
+	code, _, errs := run("extension", "update", "presenter", "--data-dir", dir)
+	want(t, "extension update", code, 1, errs, "Presenter "+next+" failed to start 3 times, so it was rolled back to "+old)
 	if app.Current() != old {
 		t.Errorf("app/current is %s", app.Current())
 	}
@@ -208,8 +208,8 @@ func TestUpdateExtensionLeavesAStoppedOneStopped(t *testing.T) {
 	dir := shortDir(t)
 	app := installedPresenter(t, dir)
 	presenterReleases(t, next, presenterTarball(t, next, ""))
-	code, out, errs := run("update_extension", "presenter", "--data-dir", dir)
-	want(t, "update_extension", code, 0, out+errs, "Installed Presenter "+next+"; it runs at its next start")
+	code, out, errs := run("extension", "update", "presenter", "--data-dir", dir)
+	want(t, "extension update", code, 0, out+errs, "Installed Presenter "+next+"; it runs at its next start")
 	if app.Current() != next {
 		t.Errorf("app/current is %s", app.Current())
 	}
@@ -222,10 +222,10 @@ func TestUpdateExtensionRefuses(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	noRealExtensions(t)
 	dir := shortDir(t)
-	code, _, errs := run("update_extension", "agentk", "--data-dir", dir)
-	want(t, "AgentK", code, 1, errs, "meko install_extension agentk installs it")
-	code, _, errs = run("update_extension", "presenter", "--data-dir", dir)
-	want(t, "not installed", code, 1, errs, "meko install_extension presenter installs it")
+	code, _, errs := run("extension", "update", "agentk", "--data-dir", dir)
+	want(t, "AgentK", code, 1, errs, "meko extension install agentk installs it")
+	code, _, errs = run("extension", "update", "presenter", "--data-dir", dir)
+	want(t, "not installed", code, 1, errs, "meko extension install presenter installs it")
 	// A build from source on PATH: used as it is, never updated.
 	src := filepath.Join(t.TempDir(), "presenter")
 	if err := os.WriteFile(src, []byte(fakePresenter("0.0.0-dev", "")), 0o700); err != nil { //nolint:gosec // G306: test
@@ -236,22 +236,22 @@ func TestUpdateExtensionRefuses(t *testing.T) {
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
-	code, _, errs = run("update_extension", "presenter", "--data-dir", dir)
+	code, _, errs = run("extension", "update", "presenter", "--data-dir", dir)
 	want(t, "a build from source", code, 1, errs, "isn't a release Meko installed")
-	code, _, errs = run("update_extension", "--data-dir", dir)
+	code, _, errs = run("extension", "update", "--data-dir", dir)
 	want(t, "no name", code, exitUsage, errs, "name the extension (agentk, presenter)")
-	code, _, errs = run("update_extension", "presenter", "--all", "--data-dir", dir)
+	code, _, errs = run("extension", "update", "presenter", "--all", "--data-dir", dir)
 	want(t, "--all and a name", code, exitUsage, errs, "--all takes no name")
 	lock := update.NewLock(dir)
 	if !lock.TryLock() {
 		t.Fatal("lock")
 	}
-	code, _, errs = run("update_extension", "presenter", "--data-dir", dir)
+	code, _, errs = run("extension", "update", "presenter", "--data-dir", dir)
 	lock.Unlock()
 	want(t, "another update running", code, 1, errs, "another update is running")
 }
 
-// install_extension presenter, with no presenter here, installs Presenter's newest release itself:
+// extension install presenter, with no presenter here, installs Presenter's newest release itself:
 // no installer script, the tarball unpacked into its folder's app/, linked from ~/.local/bin, then
 // set up with meko_presenter install as one already there.
 func TestInstallExtensionInstallsPresentersRelease(t *testing.T) {
@@ -261,8 +261,8 @@ func TestInstallExtensionInstallsPresentersRelease(t *testing.T) {
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
 	presenterReleases(t, version, presenterTarball(t, version, ""))
-	code, out, errs = run("install_extension", "presenter", "--data-dir", dir)
-	want(t, "install_extension", code, 0, out+errs,
+	code, out, errs = run("extension", "install", "presenter", "--data-dir", dir)
+	want(t, "extension install", code, 0, out+errs,
 		"  ✓ Release         Presenter "+version+" (presenter-v"+version+"), downloaded and checked")
 	app := extensions.Known["presenter"].App(dir, "presenter")
 	if app.Current() != version {
@@ -328,8 +328,8 @@ func TestUpdateExtensionKeepsTheLastProvenVersion(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(filepath.Dir(app.Root), "running"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	code, out, errs := run("update_extension", "presenter", "--data-dir", dir)
-	want(t, "update_extension", code, 0, out+errs, "Presenter "+installedVersion+" hasn't served 5 minutes yet, so "+
+	code, out, errs := run("extension", "update", "presenter", "--data-dir", dir)
+	want(t, "extension update", code, 0, out+errs, "Presenter "+installedVersion+" hasn't served 5 minutes yet, so "+
 		proven+" stays the version to roll back to")
 	if p, _ := app.ReadPending(); p == nil || p.From != proven || p.To != next {
 		t.Errorf("pending %+v", p)
@@ -347,8 +347,8 @@ func TestUpdateExtensionSaysWhenTheReleaseFails(t *testing.T) {
 	dir := shortDir(t)
 	app := installedPresenter(t, dir)
 	presenterReleases(t, next, []byte("not a tarball"))
-	code, out, _ := run("update_extension", "presenter", "--data-dir", dir)
-	want(t, "update_extension", code, 1, out,
+	code, out, _ := run("extension", "update", "presenter", "--data-dir", dir)
+	want(t, "extension update", code, 1, out,
 		"  ✗ Release         installing Presenter "+next+" (presenter-v"+next+")\n")
 	if app.Current() != installedVersion {
 		t.Errorf("app/current is %s", app.Current())
@@ -371,8 +371,8 @@ func TestUpdateExtensionRestartsTheOldVersionWhenTheSwitchFails(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(app.Root, "update-pending.json"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	code, _, errs := run("update_extension", "presenter", "--data-dir", dir)
-	want(t, "update_extension", code, 1, errs, "can't switch to "+next)
+	code, _, errs := run("extension", "update", "presenter", "--data-dir", dir)
+	want(t, "extension update", code, 1, errs, "can't switch to "+next)
 	if app.Current() != installedVersion {
 		t.Errorf("app/current is %s", app.Current())
 	}
@@ -395,8 +395,8 @@ func TestUpdateExtensionReportsARollBackThatDoesntStart(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	code, _, errs := run("update_extension", "presenter", "--data-dir", dir)
-	want(t, "update_extension", code, 1, errs, "so it was rolled back to "+installedVersion+", which didn't start either")
+	code, _, errs := run("extension", "update", "presenter", "--data-dir", dir)
+	want(t, "extension update", code, 1, errs, "so it was rolled back to "+installedVersion+", which didn't start either")
 }
 
 // With every release for this platform rolled back before, there's nothing to update to, and it says
@@ -411,8 +411,8 @@ func TestUpdateExtensionSaysWhenNoReleaseIsFound(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(app.Root, "bad-versions"), []byte(next+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	code, out, errs := run("update_extension", "presenter", "--data-dir", dir)
-	want(t, "update_extension", code, 0, out+errs, "no release of it for")
+	code, out, errs := run("extension", "update", "presenter", "--data-dir", dir)
+	want(t, "extension update", code, 0, out+errs, "no release of it for")
 	if strings.Contains(out, "newest release") {
 		t.Errorf("called the installed one the newest: %q", out)
 	}
@@ -469,7 +469,7 @@ func TestRunExtensionUpdates(t *testing.T) {
 	}
 }
 
-// With ~/.local/bin/meko_presenter running another data folder's release, install_extension
+// With ~/.local/bin/meko_presenter running another data folder's release, extension install
 // presenter installs this one's own and leaves that link alone.
 func TestInstallExtensionLeavesAnotherDataFoldersLink(t *testing.T) {
 	const version = "0.20261025.0"
@@ -481,8 +481,8 @@ func TestInstallExtensionLeavesAnotherDataFoldersLink(t *testing.T) {
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
 	presenterReleases(t, version, presenterTarball(t, version, ""))
-	code, out, errs = run("install_extension", "presenter", "--data-dir", dir)
-	want(t, "install_extension", code, 0, out+errs, "runs another Meko data folder's Presenter, so it stays")
+	code, out, errs = run("extension", "install", "presenter", "--data-dir", dir)
+	want(t, "extension install", code, 0, out+errs, "runs another Meko data folder's Presenter, so it stays")
 	app := extensions.Known["presenter"].App(dir, "presenter")
 	reg, _ := extensions.Load(dir)
 	if reg.Entries["presenter"].Command != app.CurrentExe() {

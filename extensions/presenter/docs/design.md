@@ -141,7 +141,7 @@ one job builds it once and packages `presenter-<version>-<os>-<arch>.tar.gz` for
 linux-arm64 and darwin-arm64 (`scripts/package-release.sh`), each with its own Node; a release
 carries those and `SHA256SUMS`, and no installer.
 
-Meko installs and updates them (`meko install_extension presenter`, `meko update_extension
+Meko installs and updates them (`meko extension install presenter`, `meko extension update
 presenter`, the Extensions page): it unpacks a release into `<home>/app/<version>`, checks that
 `bin/meko_presenter version --json` names it, and points `app/current` and
 `~/.local/bin/meko_presenter` at it. The command is `meko_presenter`, and the extension `presenter`

@@ -7,7 +7,7 @@
 #   meko    Meko (backend/): tags meko-v<version>
 #   presenter
 #           Presenter (extensions/presenter): tags presenter-v<version>, whose tarballs Meko installs
-#           and updates (meko install_extension, meko update_extension)
+#           and updates (meko extension install, meko extension update)
 #
 # Takes `--product agentk|meko|presenter` (default agentk) out of the script's arguments and sets:
 #
