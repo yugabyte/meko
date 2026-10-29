@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -175,5 +176,72 @@ func TestWebUpdateUnderTheServiceExits(t *testing.T) {
 	t.Setenv("MEKO_SERVICE", "systemd")
 	if _, _, err := serveAndUpdate(t, "0.20261021.0", "0.20261022.0"); err != nil {
 		t.Fatalf("serve returned %v", err)
+	}
+}
+
+// serveUntilUp runs serve until its web listener answers, then stops it.
+func serveUntilUp(t *testing.T, dir, port string) {
+	t.Helper()
+	cfg := config.Default()
+	cfg.Server.Port, _ = strconv.Atoi(port)
+	cfg.Secrets.Store = "file"
+	cfg.Update.Channel = update.ChannelOff
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Serve(ctx, ServeOptions{Layout: paths.New(dir), Config: cfg}) }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("serve: %v", err)
+		}
+	}()
+	web := "http://127.0.0.1:" + os.Getenv("MEKO_WEB_PORT")
+	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		resp, err := http.Get(web + "/api/v1/update") //nolint:noctx,gosec // G704: the test's own server
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the web listener didn't answer: %v", err)
+		}
+	}
+}
+
+// A release on probation doesn't make meko-cli at its start, since one rolled back would leave
+// meko-cli pointing at an older meko that runs as meko by that name. It makes it once the update is
+// done, and a release past probation makes it at its start.
+func TestServeMakesMekoCLIPastProbation(t *testing.T) {
+	dir, port := setup(t)
+	noRealExtensions(t)
+	release := "0.20261021.0"
+	app := releaseInstall(t, release, "0.20261022.0")
+	home := os.Getenv("HOME")
+	if _, err := app.LinkCommand(home); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Switch("0.20261020.0", release, 1); err != nil {
+		t.Fatal(err)
+	}
+	mekoCLI := filepath.Join(home, ".local", "bin", "meko-cli")
+	serveUntilUp(t, dir, port)
+	if _, err := os.Lstat(mekoCLI); !os.IsNotExist(err) { //nolint:gosec // G703: the test's home
+		t.Fatalf("meko-cli on probation: %v", err)
+	}
+	finishUpdate(context.Background(), app, release, 0, slog.New(slog.DiscardHandler))
+	if p, _ := app.ReadPending(); p != nil {
+		t.Fatalf("the update isn't done: %+v", p)
+	}
+	if target, err := os.Readlink(mekoCLI); err != nil || target != app.CurrentExe() {
+		t.Fatalf("meko-cli once the update is done -> %q, %v", target, err)
+	}
+	if err := os.Remove(mekoCLI); err != nil { //nolint:gosec // G703: the test's home
+		t.Fatal(err)
+	}
+	serveUntilUp(t, dir, port)
+	if target, err := os.Readlink(mekoCLI); err != nil || target != app.CurrentExe() {
+		t.Fatalf("meko-cli past probation -> %q, %v", target, err)
 	}
 }

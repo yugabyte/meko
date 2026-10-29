@@ -202,9 +202,9 @@ func TestReport(t *testing.T) {
 	}
 }
 
-// An install from before meko-cli gets ~/.local/bin/meko-cli at serve's start, beside its meko, and
-// loses its mekosh link; one whose meko isn't there, or that has a meko-cli already, is left alone,
-// and a mekosh that isn't a link into the install stays.
+// An install from before meko-cli gets ~/.local/bin/meko-cli beside its meko, and keeps its mekosh
+// link, which names meko-cli; one whose meko isn't there, or that has a meko-cli already, is left
+// alone.
 func TestLinkMekoCLI(t *testing.T) {
 	home := t.TempDir()
 	app := update.App{Root: filepath.Join(t.TempDir(), "app")}
@@ -237,8 +237,8 @@ func TestLinkMekoCLI(t *testing.T) {
 	if target, rerr := os.Readlink(mekoCLI); rerr != nil || target != app.CurrentExe() {
 		t.Fatalf("meko-cli -> %q, %v", target, rerr)
 	}
-	if _, err = os.Lstat(mekosh); !os.IsNotExist(err) {
-		t.Fatalf("the mekosh link stayed: %v", err)
+	if target, rerr := os.Readlink(mekosh); rerr != nil || target != app.CurrentExe() {
+		t.Fatalf("mekosh -> %q, %v", target, rerr)
 	}
 	if err := app.UnlinkCommandAs(home, "meko-cli"); err != nil {
 		t.Fatal(err)
@@ -249,16 +249,10 @@ func TestLinkMekoCLI(t *testing.T) {
 	if err := linkMekoCLI(app, home); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(mekosh, []byte("mine"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	if err := linkMekoCLI(app, home); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(mekoCLI); string(b) != "mine" {
 		t.Errorf("a meko-cli that was there was replaced")
-	}
-	if b, _ := os.ReadFile(mekosh); string(b) != "mine" {
-		t.Errorf("a mekosh that isn't this install's link was removed")
 	}
 }

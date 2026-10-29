@@ -45,7 +45,7 @@ agents (MCP and the REST API, on 7778), and what to run next.
 | `meko-cli upload_status <key>` | How an uploaded file is doing |
 
 `meko` runs none of `meko-cli`'s commands: given one (`meko search …`), it names the `meko-cli` command to
-run instead. `meko-cli` was named `mekosh` before; run by that name, it does the same. Every command takes `--data-dir`. The default is `~/.meko` (or `MEKO_HOME`), but a home folder on a
+run instead. Run as `mekosh`, the binary runs nothing and names the `meko-cli` command (exit 2). Every command takes `--data-dir`. The default is `~/.meko` (or `MEKO_HOME`), but a home folder on a
 network filesystem (NFS, say) moves it to `$XDG_STATE_HOME/meko` or `/var/tmp/<user>/meko`, since
 SQLite's locking doesn't work over the network; `meko status` prints where it is. `start`,
 `restart` and `serve` take `--port` (the agents' listener's, default 7778) and `--log-level` (`debug`, `info`,

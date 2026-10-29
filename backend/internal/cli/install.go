@@ -60,9 +60,6 @@ func runInstall(l paths.Layout, noService bool, access string, stdout, stderr io
 		if _, err = app.LinkCommandAs(home, progMekoCLI); err != nil {
 			return fail(stderr, err)
 		}
-		if err = app.UnlinkCommandAs(home, progMekosh); err != nil {
-			return fail(stderr, err)
-		}
 		exe = app.CurrentExe()
 		fmt.Fprintf(stdout, "Installing Meko %s in %s…\n", ver, app.Dir(ver))
 		if bin := filepath.Dir(link); onPath(bin) {
@@ -184,15 +181,12 @@ func headless() bool {
 
 // linkMekoCLI makes ~/.local/bin/meko-cli for a release install whose meko command is there and
 // whose meko-cli isn't: one installed before meko-cli existed, which an update reaches without meko
-// install. It removes the install's ~/.local/bin/mekosh, meko-cli's old name, too. Serve runs it at
-// each start. Anything already at meko-cli, and a mekosh that isn't a link into this install, stays.
+// install. Serve runs it once its release is past probation (makeMekoCLI). Anything already at that
+// path stays.
 func linkMekoCLI(app update.App, home string) error {
 	t, err := os.Readlink(filepath.Join(home, ".local", "bin", progMeko))
 	if err != nil || !strings.HasPrefix(t, app.Root+string(filepath.Separator)) {
 		return nil //nolint:nilerr // no meko command of this install's: nothing to put meko-cli beside
-	}
-	if err = app.UnlinkCommandAs(home, progMekosh); err != nil {
-		return err
 	}
 	if _, lerr := os.Lstat(filepath.Join(home, ".local", "bin", progMekoCLI)); lerr == nil {
 		return nil

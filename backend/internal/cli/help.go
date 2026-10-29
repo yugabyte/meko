@@ -15,8 +15,8 @@ import (
 const (
 	progMeko    = "meko"
 	progMekoCLI = "meko-cli"
-	// progMekosh is meko-cli's name in the releases before it was renamed. Run by it, the binary
-	// names meko-cli instead, and serve replaces an install's ~/.local/bin/mekosh link (linkMekoCLI).
+	// progMekosh is meko-cli's old name. Run by it, the binary names meko-cli instead, which is
+	// why an install's ~/.local/bin/mekosh link stays until meko uninstall removes it.
 	progMekosh = "mekosh"
 )
 
