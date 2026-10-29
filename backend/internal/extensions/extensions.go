@@ -1,12 +1,12 @@
 // Package extensions keeps the list of extensions this Meko runs, in extensions.json in the data
 // folder, and runs their own commands to start and stop them. An extension has its own service;
-// Meko installs it from its releases (meko install_extension), updates it (Update), runs probation
+// Meko installs it from its releases (meko extension install), updates it (Update), runs probation
 // for a new version (meko _launch), starts it with meko start and stops it with meko stop, and never
 // restarts it when Meko itself restarts or updates.
 //
 // The contract is the extension's CLI: `<command> start`, `<command> stop`, `<command> status`,
 // `<command> install` (pointing it at this Meko), `<command> version --json`, and the catalog's
-// RestartArgs, CheckArgs, BusyArgs and UninstallArgs; and its launcher, which hands the commands in
+// RestartArgs, CheckArgs, BusyArgs, RemoveArgs and UninstallArgs; and its launcher, which hands the commands in
 // Probation to meko _launch. Every command Meko runs of an extension gets MEKO_HOME set to Meko's
 // data folder, so the extension knows where its own folder in it is (Dir). AgentK's agentk is the
 // first; Presenter's meko_presenter the second.
@@ -34,7 +34,7 @@ import (
 	"github.com/yugabyte/meko/backend/internal/update"
 )
 
-// Known are the extensions meko install_extension can install, by name. Both are Managed: Meko
+// Known are the extensions meko extension install can install, by name. Both are Managed: Meko
 // installs and updates their releases. A build from source on PATH is used as it is, and never
 // updated.
 var Known = map[string]Catalog{
@@ -50,6 +50,7 @@ var Known = map[string]Catalog{
 		Managed:     true,
 		// Its home before it moved into Meko's data folder, where an install that hasn't moved yet runs.
 		OldHomes:      []string{".agent-k-local"},
+		RemoveArgs:    []string{"uninstall", "--non-interactive"},
 		UninstallArgs: []string{"uninstall", "--purge", "--delete-worktrees", "--non-interactive"},
 		WebUI:         true,
 		// An update restarts only its server: its session host, and every session in it, keeps going.
@@ -76,6 +77,7 @@ var Known = map[string]Catalog{
 		Command:       "meko_presenter",
 		TagPrefixes:   []string{"presenter-v"},
 		Managed:       true,
+		RemoveArgs:    []string{"uninstall", "--non-interactive"},
 		UninstallArgs: []string{"uninstall", "--purge", "--non-interactive"},
 		WebUI:         true,
 		Probation:     []string{"serve"},
@@ -84,7 +86,7 @@ var Known = map[string]Catalog{
 	},
 }
 
-// KnownNames lists the extensions install_extension knows, in order.
+// KnownNames lists the extensions meko extension install knows, in order.
 func KnownNames() []string {
 	names := make([]string, 0, len(Known))
 	for n := range Known {
@@ -133,8 +135,11 @@ type Catalog struct {
 	// OldHomes are folders under the home folder a release install of it lived in before its home
 	// moved into Meko's data folder (Dir); Find looks for the command in their app/current/bin.
 	OldHomes []string
+	// RemoveArgs uninstall it without asking and keep its data: stop it and remove its services,
+	// what meko extension delete runs.
+	RemoveArgs []string
 	// UninstallArgs uninstall it and delete all its data without asking: what meko destroy runs
-	// when it removes the extensions too.
+	// when it removes the extensions too, and meko extension delete --purge.
 	UninstallArgs []string
 	// WebUI says it serves a web UI on a unix socket, which the web listener serves at
 	// /ext/<name>/ (internal/extproxy). `<command> _handoff --json` names the socket (Handoff).
@@ -258,8 +263,14 @@ func (r *Registry) Save() error {
 	return paths.WriteFile(r.path, append(b, '\n'))
 }
 
-// FindAgain looks for a registered extension whose command is gone (Catalog.Find) and saves where
-// it found it. It returns the command, or "".
+// Damaged says a registered extension is damaged: its command is missing, and Catalog.Find doesn't
+// find it again. It follows the extension's title in a row or an error.
+func Damaged(name, command string) string {
+	return fmt.Sprintf("is damaged (%s is missing); meko extension delete %s forgets it", command, name)
+}
+
+// FindAgain looks for a registered extension whose command is missing (Catalog.Find) and saves
+// where it found it. It returns the command, or "" when the extension is damaged.
 func (r *Registry) FindAgain(name, home, root string) string {
 	cat, ok := Known[name]
 	if !ok {
@@ -369,7 +380,8 @@ func (c Catalog) Busy(root string, e Entry) bool {
 	return cmd.Run() == nil
 }
 
-// Uninstall runs `<command> <args>` (the catalog's UninstallArgs), with its output passed through.
+// Uninstall runs `<command> <args>` (the catalog's RemoveArgs or UninstallArgs), with its output
+// passed through.
 func (e Entry) Uninstall(root string, args []string, stdout, stderr io.Writer) error {
 	return e.run(root, args, UninstallTimeout, nil, stdout, stderr)
 }

@@ -250,7 +250,7 @@ isn't another folder): a release acts on its own home whatever
 own tests) would otherwise stop or uninstall it, ending every session, and repoint its `[meko]
 home`. A home that hasn't moved into a Meko data folder yet isn't protected: it takes Meko's
 folder from `MEKO_HOME`, so another Meko's commands still act on it and its `[meko] home` (where
-it moves next) follows the last one. `install` isn't refused either: Meko's `install_extension`
+it moves next) follows the last one. `install` isn't refused either: Meko's `extension install`
 sets the existing home up again in place, and `agentk install` keeps the Meko data folder its home is in as `[meko]
 home`, over `MEKO_HOME`. The server takes `MEKO_HOME` and `XDG_STATE_HOME` from the login shell
 (as it does `PATH`), so it finds the same folder `agentk install` did. A relative `XDG_STATE_HOME`

@@ -146,8 +146,8 @@ func printRunning(l paths.Layout, title string, next [][2]string, stdout io.Writ
 	switch {
 	case agentKRegistered(l):
 		fmt.Fprintln(stdout, "\nTry AgentK, your coding team: meko ui /ext/agentk/")
-	case !slices.ContainsFunc(next, func(c [2]string) bool { return strings.HasPrefix(c[0], "meko install_extension") }):
-		fmt.Fprintln(stdout, "\nAdd AgentK, your coding team: meko install_extension agentk")
+	case !slices.ContainsFunc(next, func(c [2]string) bool { return strings.HasPrefix(c[0], "meko extension install") }):
+		fmt.Fprintln(stdout, "\nAdd AgentK, your coding team: meko extension install agentk")
 	}
 }
 
@@ -258,7 +258,8 @@ func stopStep(msg string) stepKind {
 // runExtensions runs `<command> <action>` for every registered extension, one after another. A
 // failure is reported and the others still run; an extension that hangs holds this up for at most
 // its timeout (extensions.StopTimeout for stop), and then Meko goes on. A known extension whose
-// command is gone (its home moved, say) is looked for again, and the registry keeps what's found.
+// command is missing (its home moved, say) is looked for again, and the registry keeps what's found;
+// one that isn't found is damaged (extensions.Damaged).
 //
 // Each runs with extensions.SummaryEnv set, so it prints its own row of start's or stop's summary;
 // a failed one gets a ✗ row from Meko after what it printed.
@@ -274,8 +275,7 @@ func runExtensions(l paths.Layout, action string, stdout, stderr io.Writer) {
 		if _, err := os.Stat(e.Command); errors.Is(err, os.ErrNotExist) {
 			found := findAgain(l, reg, name)
 			if found == "" {
-				r.step(stepFail, extensionTitle(name), fmt.Sprintf("is gone (%s); meko uninstall_extension %s forgets it",
-					e.Command, name))
+				r.step(stepFail, extensionTitle(name), extensions.Damaged(name, e.Command))
 				continue
 			}
 			e = reg.Entries[name]

@@ -1,10 +1,9 @@
 // Package cli is the meko and meko-cli commands, one binary run by either name. meko runs Meko:
 // install, start, stop, restart, status, logs, update, version, connect (connect.go), token, ui,
-// setup_link, cloud_link, destroy, uninstall, install_extension, update_extension, uninstall_extension
-// and serve. meko-cli works with what it keeps, through the running server, and with the linked Meko
-// Cloud's datapacks (cloudtools.go): datapacks, create_datapack, delete_datapack, export, search,
-// add_memory, upload and upload_status, one at a time or at its prompt (shell.go). help.go has each
-// command's help.
+// setup_link, cloud_link, destroy, uninstall, extension list|install|update|delete and serve. meko-cli
+// works with what it keeps, through the running server, and with the linked Meko Cloud's datapacks
+// (cloudtools.go): datapacks, create_datapack, delete_datapack, export, search, add_memory, upload
+// and upload_status, one at a time or at its prompt (shell.go). help.go has each command's help.
 package cli
 
 import (
@@ -35,7 +34,7 @@ const (
 	exitLocked = 75
 )
 
-// stdin is what add_memory, destroy and uninstall --purge read; tests replace it.
+// stdin is what add_memory, destroy, uninstall --purge and extension delete read; tests replace it.
 var stdin io.Reader = os.Stdin
 
 // cmdFlags are the flags of the commands that aren't MCP calls.
@@ -78,6 +77,16 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	cmd, rest := args[0], args[1:]
 	switch cmd {
 	case "help", "-h", "--help":
+		if prog == progMeko && rest[0] == groupExtension {
+			if len(rest) == 1 {
+				printGroupHelp(stdout, prog, groupExtension)
+				return exitOK
+			}
+			if _, ok := lookup(prog, groupExtension+" "+rest[1]); !ok {
+				return unknownSubcommand(prog, groupExtension, rest[1], stderr)
+			}
+			return runProg(prog, []string{groupExtension, rest[1], "--help"}, stdout, stderr)
+		}
 		c, ok := lookup(prog, rest[0])
 		if !ok {
 			return unknownCommand(prog, rest[0], nil, stderr)
@@ -96,8 +105,22 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	if cmd == "_launch" && prog == progMeko {
 		return runLaunch(rest, stderr)
 	}
+	// meko extension <sub> is the command "extension <sub>"; alone, it lists them.
+	if cmd == groupExtension && prog == progMeko {
+		if len(rest) == 0 || rest[0] == "-h" || rest[0] == "--help" || rest[0] == "help" {
+			printGroupHelp(stdout, prog, groupExtension)
+			if len(rest) == 0 {
+				return exitUsage
+			}
+			return exitOK
+		}
+		if _, ok := lookup(prog, groupExtension+" "+rest[0]); !ok {
+			return unknownSubcommand(prog, groupExtension, rest[0], stderr)
+		}
+		cmd, rest = groupExtension+" "+rest[0], rest[1:]
+	}
 	info, ok := lookup(prog, cmd)
-	if !ok {
+	if !ok || cmd == args[0] && strings.Contains(cmd, " ") { // a subcommand is two words
 		return unknownCommand(prog, cmd, rest, stderr)
 	}
 	if info.promptOnly {
@@ -140,13 +163,18 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	case "destroy":
 		fs.BoolVar(&c.force, "force", false, "destroy without asking (keeping the extensions' data)")
 		fs.BoolVar(&c.withExtensions, "with-extensions", false, "uninstall the extensions and remove their data too")
-	case "update", "update_extension":
+	case "update", "extension update":
 		fs.BoolVar(&c.check, "check", false, "only look for an update")
-		if cmd == "update_extension" {
+		if cmd == "extension update" {
 			fs.BoolVar(&c.all, "all", false, "every installed extension Meko updates")
 			fs.StringVar(&c.auto, "auto", "", "on or off: whether Meko installs its updates on its own")
 		}
-	case "install_extension":
+	case "extension list":
+		fs.BoolVar(&t.json, "json", false, "print the rows as JSON")
+	case "extension delete":
+		fs.BoolVar(&c.purge, "purge", false, "also delete its data: AgentK's sessions and worktrees")
+		fs.BoolVar(&c.force, "force", false, "delete without asking")
+	case "extension install":
 		fs.StringVar(&c.version, "version", "", "install this release rather than the newest")
 		// What follows -- is the extension's own install's.
 		if i := slices.Index(rest, "--"); i >= 0 {
@@ -219,8 +247,8 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	}
 	// These take one argument, and upload any number; their flags may follow.
 	switch cmd {
-	case "search", "add_memory", "create_datapack", "delete_datapack", "upload_status", "install_extension",
-		"update_extension", "uninstall_extension", "export", "ui", "connect":
+	case "search", "add_memory", "create_datapack", "delete_datapack", "upload_status", "extension install",
+		"extension update", "extension delete", "export", "ui", "connect":
 		if fs.NArg() > 0 {
 			t.text = fs.Arg(0)
 			if code, ok := parse(fs.Args()[1:]); !ok {
@@ -245,11 +273,11 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "meko cloud_link: --off takes no URLs")
 		return exitUsage
 	}
-	if cmd == "update_extension" && c.all && (t.text != "" || c.auto != "") {
-		fmt.Fprintln(stderr, "meko update_extension: --all takes no name and no --auto")
+	if cmd == "extension update" && c.all && (t.text != "" || c.auto != "") {
+		fmt.Fprintln(stderr, "meko extension update: --all takes no name and no --auto")
 		return exitUsage
 	}
-	if (cmd == "install_extension" || cmd == "update_extension" || cmd == "uninstall_extension") && t.text == "" &&
+	if (cmd == "extension install" || cmd == "extension update" || cmd == "extension delete") && t.text == "" &&
 		!c.all {
 		fmt.Fprintf(stderr, "meko %s: name the extension (%s)\n", cmd, strings.Join(extensions.KnownNames(), ", "))
 		return exitUsage
@@ -286,12 +314,14 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		return runInstall(l, c.noService, c.access, stdout, stderr)
 	case "uninstall":
 		return runUninstall(l, c.purge, destroyOptions{force: c.force, withExtensions: c.withExtensions}, stdout, stderr)
-	case "install_extension":
+	case "extension list":
+		return runListExtensions(l, t.json, stdout, stderr)
+	case "extension install":
 		return runInstallExtension(l, t.text, extInstallOptions{version: c.version, extra: c.extra}, stdout, stderr)
-	case "update_extension":
+	case "extension update":
 		return runUpdateExtension(l, t.text, extUpdateFlags{check: c.check, all: c.all, auto: c.auto}, stdout, stderr)
-	case "uninstall_extension":
-		return runUninstallExtension(l, t.text, stdout, stderr)
+	case "extension delete":
+		return runDeleteExtension(l, t.text, extDeleteOptions{purge: c.purge, force: c.force}, stdin, stdout, stderr)
 	case "update":
 		return runUpdate(l, c.check, stdout, stderr)
 	case "search", "add_memory", "datapacks", "create_datapack", "delete_datapack", "upload", "upload_status", "export":
@@ -348,6 +378,12 @@ func unknownCommand(prog, cmd string, rest []string, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stderr, "%s: unknown command %q\n", prog, cmd)
 	if n := nearest(prog, cmd); n != "" {
+		// meko extensions list is meko extension list: the subcommand is kept.
+		if n == groupExtension && len(rest) > 0 {
+			if _, ok := lookup(prog, n+" "+rest[0]); ok {
+				n += " " + rest[0]
+			}
+		}
 		fmt.Fprintf(stderr, "Did you mean %s %s?\n", prog, n)
 	}
 	fmt.Fprintf(stderr, "Run %s --help to see the commands\n", prog)

@@ -20,7 +20,7 @@ import (
 
 // runUpdate installs Meko's newest release now, then every extension's, or with check only says
 // whether there are any. A running server is restarted into the new Meko: by its service, or as
-// start would. The extensions are then updated by the new meko (update_extension --all), whatever
+// start would. The extensions are then updated by the new meko (extension update --all), whatever
 // their Update automatically says. A build from source skips Meko and updates the extensions.
 func runUpdate(l paths.Layout, check bool, stdout, stderr io.Writer) int {
 	exe, code := updateMeko(l, check, stdout, stderr)
@@ -30,7 +30,7 @@ func runUpdate(l paths.Layout, check bool, stdout, stderr io.Writer) int {
 	if exe == "" {
 		return runUpdateExtension(l, "", extUpdateFlags{all: true, check: check}, stdout, stderr)
 	}
-	args := []string{"update_extension", "--all", "--data-dir", l.Root}
+	args := []string{"extension", "update", "--all", "--data-dir", l.Root}
 	if check {
 		args = append(args, "--check")
 	}

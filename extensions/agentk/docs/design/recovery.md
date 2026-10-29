@@ -62,7 +62,7 @@ the host service is installed too and none of this home's sessions that aren't a
 tmux (`legacytmux.ts` lists the sessions on the old socket). An
 install updated from a tmux version therefore fails to start and is rolled back to it (Meko's
 launcher; see [Releases](releases.md)), with its sessions still running in tmux.
-`agentk install`, which `meko install_extension agentk` runs, moves it: before it installs the services it
+`agentk install`, which `meko extension install agentk` runs, moves it: before it installs the services it
 removes the old ones, stopping the old server first and then the tmux service, which ends the
 Claudes in it, and the new server's recovery resumes them in the host (auto-continuing a turn that
 was cut off). `agentk uninstall` removes the tmux service too. Removing it ends the tmux
@@ -94,7 +94,7 @@ sees the same `~/.config/systemd/user`, so its systemd starts the enabled units 
 
 - **The units run only on the install host.** Both systemd units carry `ConditionHost=` with the
   host name at install time. On any other host systemd skips them: nothing starts and nothing is
-  logged. Renaming the host means running `agentk install` again (or `meko install_extension
+  logged. Renaming the host means running `agentk install` again (or `meko extension install
   agentk`), which rewrites the units.
 - **A lease backs it up** (`src/server/instance.ts`). Before `serve` opens the database or binds
   anything it takes `server.lock`, which holds the host, pid, version, port and a heartbeat it

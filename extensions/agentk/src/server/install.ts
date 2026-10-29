@@ -178,7 +178,7 @@ function hostOf(url: string): string {
  * else the Meko running on this computer (`meko token --json`), and stores neither. The installer
  * doesn't ask for a key: one is linked in Meko's web UI (Settings › Meko Cloud) or with `meko
  * cloud_link`. A key given with `--meko-key` (and `--meko-url` for another server) goes to Meko, which
- * checks it and keeps it; a copy of the local Meko's token (what `meko install_extension agentk`
+ * checks it and keeps it; a copy of the local Meko's token (what `meko extension install agentk`
  * passes) is just the local Meko; any other key for a server on this computer is set aside with a
  * warning. AgentK's own key from before Meko kept the link (config.toml, the environment, Claude
  * Code's settings) is handed to Meko once, as the server does at start, and left where it was, for
@@ -208,7 +208,7 @@ export async function installMeko(cfg: Config, o: { keyArg?: string; urlArg?: st
   const given = o.keyArg && !isLocalMeko(local, givenUrl, o.keyArg) && !onLoopback(givenUrl)
     ? { url: givenUrl, apiKey: o.keyArg, webUrl: '', apiUrl: '' } : null;
   // A key for a server on this computer is never linked as Meko Cloud: when Meko isn't running, a
-  // copy of its own token (what `meko install_extension agentk` passes) can't be told apart.
+  // copy of its own token (what `meko extension install agentk` passes) can't be told apart.
   if (o.keyArg && !given && !isLocalMeko(local, givenUrl, o.keyArg)) {
     d.ui.warn('--meko-key', `not linked: ${hostOf(givenUrl)} is on this computer, so AgentK uses the Meko on this computer.`);
   }
@@ -328,7 +328,7 @@ export function settleAgents(cfg: Config, versions: Partial<Record<HarnessId, st
     throw new InstallError(
       `no coding agent found. Install Claude Code (https://claude.com/claude-code), OpenCode ${HARNESS_CAPS.opencode.minVersion} or later `
         + `(https://opencode.ai; from an older one, ${HARNESS_CAPS.opencode.upgrade}) `
-        + `or Kiro CLI ${HARNESS_CAPS.kiro.minVersion} or later (https://kiro.dev/cli/), sign in to it, and run meko install_extension agentk again.`,
+        + `or Kiro CLI ${HARNESS_CAPS.kiro.minVersion} or later (https://kiro.dev/cli/), sign in to it, and run meko extension install agentk again.`,
     );
   }
   if (!found.includes(cfg.agents.default)) cfg.agents.default = found[0];
@@ -389,7 +389,7 @@ export async function runInstall(args: string[]): Promise<void> {
     const cfg: Config = loadConfig(paths);
     // The Meko data folder this install is in, as the installer found it (from MEKO_HOME or
     // XDG_STATE_HOME in this shell, which the services don't have), or the one Meko's
-    // `install_extension` names: the server and a move go by it, never resolving it again.
+    // `extension install` names: the server and a move go by it, never resolving it again.
     const inMeko = mekoDirOf(paths.home);
     if (inMeko) cfg.meko.home = inMeko;
     else if (process.env.MEKO_HOME) cfg.meko.home = resolve(process.env.MEKO_HOME);
@@ -414,7 +414,7 @@ export async function runInstall(args: string[]): Promise<void> {
     // with its own sign-in; with no Meko here, nothing could.
     if ((await probeLocalMeko(cfg.meko.home || null)).state === 'none') {
       throw new InstallError('AgentK runs behind the Meko on this computer, which serves it to your browser, and there is ' +
-        `no meko command here. Install Meko first (${MEKO_INSTALL_COMMAND}), then run: meko install_extension agentk`);
+        `no meko command here. Install Meko first (${MEKO_INSTALL_COMMAND}), then run: meko extension install agentk`);
     }
 
     // 3. The coding agents: at least one, or nothing can run.

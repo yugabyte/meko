@@ -117,7 +117,7 @@ export function isMekoCloudKey(key: string): boolean {
 /**
  * A key and URL are a copy of the local Meko's: its token, or a key for its URL's origin. Meko's
  * setup for Claude Code writes the token into Claude Code's settings, older installs stored it in
- * config.toml, and `meko install_extension` passes both. A copy goes stale when Meko moves to
+ * config.toml, and `meko extension install` passes both. A copy goes stale when Meko moves to
  * another port or gets a new token, so AgentK uses the live pair instead (`resolveMekoWithSource`),
  * and never hands a copy to Meko as a Meko Cloud key. A Meko Cloud key is never a copy, even on the
  * local Meko's URL: a setup run against the local Meko without a key leaves MEKO_MCP_URL there next

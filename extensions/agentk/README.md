@@ -52,13 +52,13 @@ latest release), and then Meko installs AgentK:
 
 ```sh
 gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
-meko install_extension agentk
+meko extension install agentk
 ```
 
 (or **Install** on Meko's Extensions page). Meko downloads AgentK's newest release, checks it and
 unpacks it into its data folder, then runs AgentK's setup, which offers to install anything that's
 missing (git, gh, and Claude Code, OpenCode or Kiro CLI when none is there: it asks which, or pass
-`meko install_extension agentk -- --agent opencode` or `-- --agent kiro`) and to set up Meko for
+`meko extension install agentk -- --agent opencode` or `-- --agent kiro`) and to set up Meko for
 each agent, asking first. Then it prints the address to open.
 
 Who can open it is Meko's setting (`[web] access`: chosen when Meko was installed, in its
@@ -76,7 +76,9 @@ default), or when you click **Update** (the banner in AgentK, Settings › Updat
 Extensions page) or run `meko update` (Meko, then every extension). An update restarts only
 AgentK's web server, so sessions keep running, and Meko rolls back a version that fails to start.
 To change AgentK's setup (repos folder, Meko) or set up its services again, run `agentk install`,
-or `meko install_extension agentk` again (`--version <v>` installs another release).
+or `meko extension install agentk` again (`--version <v>` installs another release).
+`meko extension delete agentk` removes AgentK (it stops, ending its sessions) and keeps its home;
+`--purge` deletes that too.
 
 Forgot your password? Run `meko setup_link` on the host and open the link it prints to choose a
 new username and password (Meko's sign-in screen says the same).
@@ -148,7 +150,8 @@ your phone can connect.
   threads), and saves what a teammate would want to know before working on it: how the parts fit,
   how it's built and tested, its traps, and from the PRs the decisions and why. It changes no files,
   and when it's done it writes a summary to its timeline and closes by itself. While the datapack
-  is empty, the project's home offers it again.
+  is empty and no learn session is open on it (after a switch to a new datapack, say, or a learn
+  session that saved nothing), the project's home offers it again; a plain New session doesn't.
 - **Share a project** by sharing its dedicated datapack with someone, by email or with its share
   link: turn the link on in the Share dialog with the role it gives, copy it, and post it where your
   team is. A project datapack shared with you shows a banner and a notification, and opens as a new

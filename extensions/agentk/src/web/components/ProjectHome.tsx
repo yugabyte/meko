@@ -58,7 +58,7 @@ export function ProjectHomeView({
   /** Opens the projects drawer (phone layout). */
   onMenu: () => void;
   onBack: () => void;
-  /** Opens the New session dialog on Learn the project, offered while the dedicated datapack is empty. */
+  /** Opens the New session dialog on Learn the project, offered while the dedicated datapack is empty and no learn session is open on it. */
   onLearn: () => void;
   onError: (m: string) => void;
 }) {
@@ -206,7 +206,7 @@ export function ProjectHomeView({
                 )}
               </div>
             )}
-            {mekoConfigured && dedicated && home && !home.hasLearnSession && dedicated.memoryCount === 0 && dedicated.knowledgeCount === 0 && (
+            {mekoConfigured && dedicated && home && !home.learnSessionOpen && dedicated.memoryCount === 0 && dedicated.knowledgeCount === 0 && (
               <div className="dp-none">
                 <span className="muted">This datapack is empty.</span>
                 <button className="btn small" id="home-learn" onClick={onLearn}>

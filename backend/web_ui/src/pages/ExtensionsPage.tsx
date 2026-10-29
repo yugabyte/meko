@@ -184,7 +184,8 @@ function ExtensionCard({ ext }: { ext: Extension }) {
       )}
       {installed && (
         <p className="mt-3 break-words text-xs text-muted-foreground">
-          <Code>meko uninstall_extension {ext.name}</Code> stops Meko starting and stopping it.
+          <Code>meko extension delete {ext.name}</Code> stops and removes it; its data stays unless you add{" "}
+          <Code>--purge</Code>.
         </p>
       )}
       {error && (

@@ -54,7 +54,7 @@ describe('the commands Meko runs', () => {
     const cfg = join(home, 'config.json');
     writeFileSync(cfg, JSON.stringify(before));
     chmodSync(cfg, 0o644);
-    // What `meko install_extension presenter` passes: neither is kept, Meko is asked each time.
+    // What `meko extension install presenter` passes: neither is kept, Meko is asked each time.
     expect(presenter('install', '--meko-url', 'http://127.0.0.1:7778/mcp', '--meko-key', 'local', '--non-interactive').code).toBe(0);
     if (!after) return expect(existsSync(cfg)).toBe(false);
     expect(JSON.parse(readFileSync(cfg, 'utf8'))).toEqual(after);

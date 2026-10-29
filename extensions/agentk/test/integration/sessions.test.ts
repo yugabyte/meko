@@ -685,8 +685,12 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     // The seeding rule, not the usual one, which leaves out what a PR already says.
     expect(first).toContain('(PR #123)');
     expect(first).not.toContain('what the diff or PR description already says');
-    // Not done yet: it stays.
+    // Not done yet: it stays, and the home doesn't offer another while it's open.
     expect(env.core.sessions.get(s.id).status).toBe('idle');
+    expect((await env.core.projects.home(p.id)).learnSessionOpen).toBe(true);
+    // A new dedicated datapack is offered one of its own: this session was launched on the old one.
+    await env.core.projects.setDedicatedDatapack(p.id, { mode: 'create', name: 'team/switched', replace: p.datapacks[0].id });
+    expect((await env.core.projects.home(p.id)).learnSessionOpen).toBe(false);
 
     // Done, but with a change of its own in the worktree, which closing would throw away: it stays, and says why.
     writeFileSync(join(s.worktreePath, 'notes.txt'), 'x');
@@ -701,7 +705,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     // The discard's last step: its git work (freeing the worktree, deleting the branch) is done by then.
     await waitFor(() => events(s.id), (e) => e.some((x) => x.kind === 'discarded'), 10000, 'closed');
     expect(get(env.core.db, 'SELECT COUNT(*) AS n FROM meko_learns WHERE session_id = ?', s.id)).toEqual({ n: 0 });
-    expect((await env.core.projects.home(p.id)).hasLearnSession).toBe(true);
+    expect((await env.core.projects.home(p.id)).learnSessionOpen).toBe(false);
   });
 
   it("holds a learn session's close for a Save learnings step still running, and closes when it ends", async () => {

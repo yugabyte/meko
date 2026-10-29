@@ -42,9 +42,12 @@ export function NewSessionDialog({
   harnesses: HarnessStatus[];
   /** The project was just opened: when it has PRs to review (a project shared with you, say), Review a PR comes first. */
   fresh?: boolean;
-  /** Meko is on: with the project's dedicated datapack, Learn the project is offered. */
+  /** Meko is on: with the project's dedicated datapack, Learn the project can be offered (with `learnFirst`, or a retry of one). */
   mekoOn?: boolean;
-  /** Start on Learn the project (offered): the project was just opened on an empty datapack, or the home's offer was taken. */
+  /**
+   * Offer Learn the project and start on it: the project was just opened on an empty datapack, or the
+   * home's offer was taken. Otherwise it isn't offered, except to retry a failed learn start.
+   */
   learnFirst?: boolean;
   /** What a failed start asked for, to try it again. */
   initial?: CreateSessionRequest;
@@ -63,8 +66,10 @@ export function NewSessionDialog({
   const [prompt, setPrompt] = useState(initial?.prompt ?? '');
   // Run to merge, offered for a start at Code (at Design it's picked beside Approve).
   const [autoRun, setAutoRun] = useState(!!initial?.autoRun);
-  // A learn session saves to the project's dedicated datapack, so it's offered only with one and Meko on.
-  const learnOffered = mekoOn && project.datapacks.some((d) => d.role === 'dedicated');
+  // A learn session saves to the project's dedicated datapack, so it needs one and Meko on. It seeds a
+  // new datapack, so it's offered only when the dialog opens on it (`learnFirst`) or retries one,
+  // never in a plain New session on a datapack that already knows the project.
+  const learnOffered = mekoOn && project.datapacks.some((d) => d.role === 'dedicated') && (learnFirst || !!initial?.learn);
   const [start, setStart] = useState<StartChoice>(
     initial?.kind === 'review-pr' ? 'review-pr'
       : initial?.learn || (!initial && learnFirst && learnOffered) ? 'learn'

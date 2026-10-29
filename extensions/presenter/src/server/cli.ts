@@ -227,7 +227,7 @@ function forgetOldKey(paths: Paths): void {
 }
 
 /**
- * `install --meko-url <url> --meko-key <key> [--non-interactive]`: what `meko install_extension
+ * `install --meko-url <url> --meko-key <key> [--non-interactive]`: what `meko extension install
  * presenter` runs. Neither is kept: Presenter asks `meko token --json` which Meko to use each time
  * (Meko's Meko Cloud link, else the Meko on this computer).
  */

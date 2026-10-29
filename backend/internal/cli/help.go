@@ -29,14 +29,20 @@ const docsURL = "https://mekodata.ai/docs/cli"
 
 // command is one command's help: the group meko --help (or meko-cli --help) lists it under, a one-line
 // summary, its usage line and examples. Its flags come from its flag set. A hidden command runs but
-// isn't listed; a promptOnly one is meko-cli's, and only at its prompt.
+// isn't listed; a promptOnly one is meko-cli's, and only at its prompt. A command of two words (meko
+// extension list) is a subcommand of the first, whose own row (subcommands, with no group) isn't
+// listed: its help lists its subcommands.
 type command struct {
-	name, group, summary, usage string
-	examples                    []example
-	hidden, promptOnly          bool
+	name, group, summary, usage     string
+	examples                        []example
+	hidden, promptOnly, subcommands bool
 }
 
 type example struct{ cmd, note string }
+
+// groupExtension is the command whose subcommands work on extensions: meko extension list|install|
+// update|delete.
+const groupExtension = "extension"
 
 var mekoGroups = []string{"Get started", "Run", "Connect", "Extensions", "Remove"}
 
@@ -120,20 +126,33 @@ var mekoCommands = []command{
 		usage: "meko setup_link", examples: []example{
 			{"meko setup_link", "print a one-time link that sets up the login, or replaces a lost one"},
 		}},
-	{name: "install_extension", group: "Extensions", summary: "Add an extension (agentk, presenter)",
-		usage: "meko install_extension agentk|presenter [flags] [-- <its install's options>]", examples: []example{
-			{"meko install_extension agentk", "install AgentK from its newest release, and run it with Meko"},
-			{"meko install_extension agentk -- --agent opencode", "pass options on to AgentK's own install"},
+	{name: groupExtension, subcommands: true, summary: "List, install, update and delete Meko's extensions",
+		usage: "meko extension list|install|update|delete [<name>] [flags]", examples: []example{
+			{"meko extension list", "the extensions, installed or not: running, their version and updates"},
+			{"meko extension install agentk", "install AgentK from its newest release, and run it with Meko"},
 		}},
-	{name: "update_extension", group: "Extensions", summary: "Update an extension now, or turn its automatic updates off",
-		usage: "meko update_extension agentk|presenter|--all [flags]", examples: []example{
-			{"meko update_extension --all", "update every extension now"},
-			{"meko update_extension agentk --check", "only look"},
-			{"meko update_extension agentk --auto=off", "stop Meko installing its updates on its own"},
+	{name: "extension list", group: "Extensions",
+		summary: "Show the extensions: installed or not, running, their version and updates",
+		usage:   "meko extension list [flags]", examples: []example{
+			{"meko extension list", "a row each: its state, the release installed and its updates"},
+			{"meko extension list --json", "the same, for scripts"},
 		}},
-	{name: "uninstall_extension", group: "Extensions", summary: "Stop running an extension with Meko",
-		usage: "meko uninstall_extension agentk|presenter", examples: []example{
-			{"meko uninstall_extension presenter", "meko start and stop no longer run it (it stays installed)"},
+	{name: "extension install", group: "Extensions", summary: "Add an extension (agentk, presenter)",
+		usage: "meko extension install agentk|presenter [flags] [-- <its install's options>]", examples: []example{
+			{"meko extension install agentk", "install AgentK from its newest release, and run it with Meko"},
+			{"meko extension install agentk -- --agent opencode", "pass options on to AgentK's own install"},
+		}},
+	{name: "extension update", group: "Extensions", summary: "Update an extension now, or turn its automatic updates off",
+		usage: "meko extension update agentk|presenter|--all [flags]", examples: []example{
+			{"meko extension update --all", "update every extension now"},
+			{"meko extension update agentk --check", "only look"},
+			{"meko extension update agentk --auto=off", "stop Meko installing its updates on its own"},
+		}},
+	{name: "extension delete", group: "Extensions", summary: "Remove an extension (--purge also deletes its data)",
+		usage: "meko extension delete agentk|presenter [flags]", examples: []example{
+			{"meko extension delete presenter", "stop it and remove it, after asking; its data stays"},
+			{"meko extension delete agentk --purge", "also delete its data: AgentK's sessions and worktrees"},
+			{"meko extension delete agentk --force", "don't ask"},
 		}},
 	{name: "destroy", group: "Remove", summary: "Stop Meko and delete its data",
 		usage: "meko destroy [flags]", examples: []example{
@@ -319,11 +338,40 @@ func printCommandHelp(w io.Writer, prog string, c command, fs *flag.FlagSet) {
 	if fs != nil {
 		printFlags(w, fs)
 	}
-	anchor := c.name
+	anchor := strings.ReplaceAll(c.name, " ", "-")
 	if prog == progMekoCLI {
 		anchor = "meko-cli-" + c.name
 	}
 	fmt.Fprintf(w, "\nMore: %s#%s\n", docsURL, anchor)
+}
+
+// printGroupHelp prints a command's own help and its subcommands (meko extension's).
+func printGroupHelp(w io.Writer, prog, group string) {
+	c, _ := lookup(prog, group)
+	r, n := utf8.DecodeRuneInString(c.summary)
+	fmt.Fprintf(w, "%s %s: %c%s\n\nUsage: %s\n\nCommands:\n", prog, c.name, unicode.ToLower(r), c.summary[n:], c.usage)
+	tw := tabwriter.NewWriter(w, 0, 0, 4, ' ', 0)
+	for _, sub := range commandsOf(prog) {
+		if name, ok := strings.CutPrefix(sub.name, group+" "); ok {
+			fmt.Fprintf(tw, "  %s\t%s\n", name, sub.summary)
+		}
+	}
+	_ = tw.Flush()
+	fmt.Fprintf(w, "\nExamples:\n")
+	tw = tabwriter.NewWriter(w, 0, 0, 4, ' ', 0)
+	for _, e := range c.examples {
+		fmt.Fprintf(tw, "  %s\t%s\n", e.cmd, e.note)
+	}
+	_ = tw.Flush()
+	fmt.Fprintf(w, "\nRun %s %s <command> --help for their examples and flags\n", prog, group)
+	fmt.Fprintf(w, "More: %s#%s\n", docsURL, group)
+}
+
+// unknownSubcommand says sub isn't one of group's subcommands.
+func unknownSubcommand(prog, group, sub string, stderr io.Writer) int {
+	fmt.Fprintf(stderr, "%s %s: unknown command %q\n", prog, group, sub)
+	fmt.Fprintf(stderr, "Run %s %s --help to see its commands\n", prog, group)
+	return exitUsage
 }
 
 // flagValueNames name a flag's value in help, where the flag's type alone would say string or int.

@@ -1,8 +1,8 @@
 #!/bin/sh
 # Presenter's launcher, in a release as presenter-<version>/bin/meko_presenter. Meko installs releases
 # as <Meko's data folder>/extensions/presenter/app/<version>, with app/current and
-# ~/.local/bin/meko_presenter pointing at the one in use (meko install_extension, meko
-# update_extension).
+# ~/.local/bin/meko_presenter pointing at the one in use (meko extension install, meko
+# extension update).
 #
 # Runs the bundled Node on the bundled server, with PRESENTER_APP_DIR naming this release's folder
 # and PRESENTER_LAUNCHER this file (`meko_presenter start` runs `serve` through it). It hands `serve`

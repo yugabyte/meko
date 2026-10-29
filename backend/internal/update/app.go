@@ -238,6 +238,20 @@ func (a App) Prune(keep ...string) []string {
 	return gone
 }
 
+// Live lists the installed versions a live process still runs from, oldest first: the ones marked in
+// use (InUse) or named by a Running record. Prune keeps them; removing the whole app folder must
+// wait for them.
+func (a App) Live() []string {
+	running := a.runningVersions()
+	var out []string
+	for _, v := range a.Versions() {
+		if running[v] || a.InUse(v) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // inUseFile is the file meko _launch holds a shared flock on while a process runs from a version.
 func (a App) inUseFile(version string) string { return filepath.Join(a.Dir(version), ".in-use") }
 
