@@ -41,6 +41,7 @@ func TestMain(m *testing.M) {
 	// Never this computer's own agents: only the commands on a test's PATH and in its home, and their
 	// configs in its home.
 	agents.SystemFolders = nil
+	agents.LoginShell = ""
 	for _, k := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "KIRO_HOME", "XDG_CONFIG_HOME"} {
 		_ = os.Unsetenv(k)
 	}

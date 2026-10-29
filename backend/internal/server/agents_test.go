@@ -17,12 +17,13 @@ import (
 )
 
 // agentsHome gives a test a home of its own with Kiro CLI installed (a fake kiro-cli first on PATH)
-// and nothing else of this computer's: no other agent, no system folders, no config folders.
+// and nothing else of this computer's: no other agent, no system folders, no login shell, no config
+// folders.
 func agentsHome(t *testing.T) string {
 	t.Helper()
-	old := agents.SystemFolders
-	agents.SystemFolders = nil
-	t.Cleanup(func() { agents.SystemFolders = old })
+	old, oldShell := agents.SystemFolders, agents.LoginShell
+	agents.SystemFolders, agents.LoginShell = nil, ""
+	t.Cleanup(func() { agents.SystemFolders, agents.LoginShell = old, oldShell })
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	for _, k := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "KIRO_HOME", "XDG_CONFIG_HOME"} {

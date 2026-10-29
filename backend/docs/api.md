@@ -258,9 +258,14 @@ own config, for all the user's projects. AgentK recognizes Meko's tools by that 
 UI's Connect page and a Meko Cloud link's change. Meko keeps no record of its own: it reads each
 agent's config every time, since the user and the agent edit it too.
 
-- **Installed** means the agent's command (`claude`, `codex`, `kiro-cli`, `opencode`) is on PATH or
-  in its usual folders (`~/.local/bin`, `/usr/local/bin`, `/opt/homebrew/bin`, and `~/.claude/local`
-  for Claude Code, `~/.opencode/bin` for OpenCode). Only installed agents are listed. Meko runs the
+- **Installed** means the agent's command (`claude`, `codex`, `kiro-cli`, `opencode`) is on PATH, in
+  its usual folders (`~/.local/bin`, `/usr/local/bin`, `/opt/homebrew/bin`, and `~/.claude/local`
+  for Claude Code, `~/.opencode/bin` for OpenCode), or on the PATH of the user's login shell
+  (`$SHELL`, which systemd and launchd set for the service, else `/bin/sh`), where version managers
+  such as nvm put an npm install. bash, zsh and fish run interactive too (`-i -l -c`), since nvm sets
+  PATH up in `~/.bashrc` and `~/.zshrc`; another shell gives way to `/bin/sh -l -c`. The shell runs
+  only when an agent isn't found otherwise, in a session of its own with no terminal, for 10 s at
+  most, and its PATH is kept for 5 minutes. Only installed agents are listed. Meko runs the
   command it found by its absolute path, with its folder first on PATH (an npm install's Node is
   there), so the service's thin PATH still works. The config folders come from the environment Meko
   runs in (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `KIRO_HOME`, `XDG_CONFIG_HOME`), so a service needs them
