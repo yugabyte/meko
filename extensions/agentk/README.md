@@ -185,10 +185,10 @@ your phone can connect.
   turn them off in Settings → General.
 - **A work queue across projects:** keep what you're working on in one ordered list (**Work queue** in
   the rail): add items by hand with their GitHub, Jira and Slack links, drag them into order (or move
-  them from each item's menu on a phone), and close them when done. **Sync** (and every 15 minutes)
-  pulls in the PRs waiting for your review and, through your agent's Slack connector, the messages on
-  your Slack Later list, marked **New** until you give them their place; turn either source, or sync, off in
-  Settings › Work queue. Each item has one session,
+  them from each item's menu on a phone), and dismiss them when done (or all at once). Turn on
+  **Sync** in Settings › Work queue (it's off until you do) and it pulls in, when you press it and
+  every 15 minutes, the PRs waiting for your review and, through your agent's Slack connector, the
+  messages on your Slack To-dos, marked **New** until you give them their place. Each item has one session,
   whose status shows on it; **Start session** opens New session with the item filled in. Paste a
   GitHub, Jira or Slack link into `⌘K` to jump to the session working on it.
 - **Find a session by what it's about:** type a few words into Ask AgentK (`⌘K`), such as "totp

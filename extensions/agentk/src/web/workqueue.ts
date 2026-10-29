@@ -54,6 +54,11 @@ export function queueSummary(items: WorkItem[], projects: ProjectWithSessions[])
   return { open: items.length, unplaced: items.filter((i) => i.unplaced).length, dot: urgentDot(sessions) };
 }
 
+/** The count on the rail's work queue button: up to 99, then 99+. */
+export function queueBadge(open: number): string {
+  return open > 99 ? '99+' : String(open);
+}
+
 /** The queue's ids with `id` moved to `to` (an index in the list without it), for a drop. */
 export function movedOrder(ids: string[], id: string, to: number): string[] {
   const rest = ids.filter((x) => x !== id);

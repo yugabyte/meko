@@ -1,16 +1,17 @@
 // The work queue: the user's items across projects, their links and sessions, and the sync from GitHub and Slack.
 import { randomUUID } from 'node:crypto';
+import { moveItem } from '../shared/workorder.js';
 import { parseWorkLink, workLinkKey } from '../shared/worklinks.js';
 import {
   WORK_LINK_MAX, WORK_LINKS_MAX, WORK_NOTES_MAX, WORK_TITLE_MAX,
-  type CreateWorkItemRequest, type ReorderWorkItemsRequest, type Stage, type UpdateWorkItemRequest, type WorkItem, type WorkItemSource,
-  type WorkLink, type WorkLinkMatch, type WorkSourceResult, type WorkSync,
+  type CloseWorkItemsRequest, type CreateWorkItemRequest, type ReorderWorkItemsRequest, type Stage, type UpdateWorkItemRequest, type WorkItem, type WorkItemSource,
+  type WorkLink, type WorkLinkMatch, type WorkMove, type WorkSourceResult, type WorkSync,
 } from '../shared/types.js';
 import { all, get, kvDelete, kvGet, kvSet, run, tx, type Db } from './db.js';
 import { REVIEW_REQUESTS_MAX, type ReviewRequest } from './github.js';
 import { errMsg } from './log.js';
 import { HttpError } from './projects.js';
-import type { SlackLater } from './slack.js';
+import type { SlackTodo } from './slack.js';
 
 /** kv: '1' while Slack is synced on the timer too, which a Sync that reached Slack turns on and any failure off. */
 const SLACK_AUTO_KEY = 'work-slack-auto';
@@ -24,8 +25,8 @@ export interface WorkQueueDeps {
   warn: (msg: string, detail?: string) => void;
   /** The open PRs asking for the user's review. */
   reviewRequests: () => Promise<ReviewRequest[]>;
-  /** The messages on the user's Slack Later list; throws with what went wrong. */
-  readSlack: () => Promise<SlackLater[]>;
+  /** The messages on the user's Slack To-dos; throws with what went wrong. */
+  readSlack: () => Promise<SlackTodo[]>;
   /** Whether Claude Code can run, which the Slack read needs. */
   claudeAvailable: () => boolean;
   /** A GitHub PR's or issue's title, for an item added with a link and no title. */
@@ -197,7 +198,7 @@ export class WorkQueue {
     const body = req && typeof req === 'object' ? req : {};
     const r = this.row(id);
     if (body.status != null && body.status !== 'open' && body.status !== 'closed') throw new HttpError(400, 'A work item is open or closed.');
-    if (body.move != null && !['up', 'down', 'top'].includes(body.move)) throw new HttpError(400, 'Move a work item up, down or to the top.');
+    if (body.move != null && !['up', 'down', 'top', 'bottom'].includes(body.move)) throw new HttpError(400, 'Move a work item up, down, or to the top or bottom.');
     if (body.placed != null && body.placed !== true) throw new HttpError(400, 'placed must be true.');
     if (body.sessionId !== undefined && body.sessionId !== null && (typeof body.sessionId !== 'string' || !body.sessionId)) throw new HttpError(400, 'The session must be its id.');
     const title = body.title == null ? null : text(body.title, 'title', WORK_TITLE_MAX);
@@ -224,19 +225,28 @@ export class WorkQueue {
     return this.get(id);
   }
 
-  /** Moves an open item one place up or down, or to the top; the queue keeps its order otherwise. */
-  private move(id: string, to: 'up' | 'down' | 'top'): void {
+  /** Moves an open item one place up or down, or to the top or bottom; the queue keeps its order otherwise. */
+  private move(id: string, to: WorkMove): void {
     const ids = this.list().map((i) => i.id);
-    const at = ids.indexOf(id);
-    const dest = to === 'top' ? 0 : to === 'up' ? Math.max(0, at - 1) : Math.min(ids.length - 1, at + 1);
-    if (at < 0 || dest === at) return;
-    ids.splice(at, 1);
-    ids.splice(dest, 0, id);
-    this.writeOrder(ids);
+    if (!ids.includes(id)) return;
+    this.writeOrder(moveItem(ids, id, to));
   }
 
   private writeOrder(ids: string[]): void {
     ids.forEach((x, i) => run(this.db, 'UPDATE work_items SET position = ? WHERE id = ?', i + 1, x));
+  }
+
+  /** Closes the open items among `ids` (Dismiss all, with the items the page showed); the others stay as they are. */
+  closeAll(req: CloseWorkItemsRequest): number {
+    const ids = req?.ids;
+    if (!Array.isArray(ids) || !ids.every((x) => typeof x === 'string')) throw new HttpError(400, 'Give the items to dismiss as a list of ids.');
+    const now = Date.now();
+    let closed = 0;
+    tx(this.db, () => {
+      for (const id of new Set(ids)) closed += run(this.db, "UPDATE work_items SET status = 'closed', closed_at = ?, unplaced = 0 WHERE id = ? AND status = 'open'", now, id).changes;
+    });
+    if (closed) this.deps.changed();
+    return closed;
   }
 
   reorder(req: ReorderWorkItemsRequest): void {
@@ -332,7 +342,7 @@ export class WorkQueue {
   }
 
   /**
-   * Adds the open PRs asking for your review and the messages on Slack's Later list to the bottom of
+   * Adds the open PRs asking for your review and the messages on Slack's To-dos to the bottom of
    * the queue, marked as new, skipping any already on an item. Slack is read when `manual`, or on the
    * timer while the last Slack read worked: each one is a model call. Each source fails on its own.
    */

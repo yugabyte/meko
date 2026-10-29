@@ -5,6 +5,7 @@ import { appUrl } from '../base';
 import { useIsMobile, useTouch } from '../hooks/useMedia';
 import { RAIL_DEFAULT, clampRailWidth, railCollapsedSaved, saveRailCollapsed } from '../rail';
 import type { ThemePref } from '../theme';
+import { queueBadge } from '../workqueue';
 import { aggregateDot, creditsNumber, type DotState, cx, dotState, formatCredits, formatTokens, isMac, kiroPlanLines, limitLevel, openSessions, relativeTime, repoFolder, sessionTabTitle, totalTokens } from '../util';
 import { HarnessLogo, Ring, StageChip, StatusDot } from './common';
 import { HARNESS_CAPS, type HarnessId } from '../../shared/harnesses';
@@ -270,12 +271,13 @@ export function Rail({
           <button
             className={cx('icon-btn', 'rail-queue-btn', queueOpen && 'sel')}
             onClick={onQueue}
-            title={queue.unplaced ? `Work queue (${queue.unplaced} new)` : 'Work queue'}
-            aria-label="Work queue"
+            title={queue.unplaced ? `Work queue (${queue.open} open, ${queue.unplaced} new)` : queue.open ? `Work queue (${queue.open} open)` : 'Work queue'}
+            aria-label={queue.open ? `Work queue, ${queue.open} open` : 'Work queue'}
             aria-current={queueOpen ? 'page' : undefined}
           >
             <Icon d="M4 6h16 M4 12h16 M4 18h10" />
             {queue.unplaced > 0 && <i className="rail-queue-new" aria-hidden="true" />}
+            {queue.open > 0 && <span className="rail-queue-badge" aria-hidden="true">{queueBadge(queue.open)}</span>}
           </button>
           <button className="icon-btn" onClick={onSettings} title="Settings" aria-label="Settings">
             <Icon d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" />

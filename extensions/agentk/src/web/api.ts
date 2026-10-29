@@ -1,5 +1,6 @@
 import type {
   AppState,
+  CloseWorkItemsRequest,
   CreateWorkItemRequest,
   ReorderWorkItemsRequest,
   UpdateWorkItemRequest,
@@ -196,6 +197,7 @@ export const api = {
   addWorkItem: (b: CreateWorkItemRequest) => post<WorkItem>('/api/work-items', b),
   updateWorkItem: (id: string, b: UpdateWorkItemRequest) => request<WorkItem>('PATCH', `/api/work-items/${enc(id)}`, b),
   reorderWorkItems: (b: ReorderWorkItemsRequest) => request<void>('PUT', '/api/work-items/order', b),
+  closeWorkItems: (b: CloseWorkItemsRequest) => post<{ closed: number }>('/api/work-items/close', b),
   syncWork: () => post<WorkSync>('/api/work-items/sync'),
   /** The work items holding a GitHub, Jira or Slack link, each with its session. */
   workByLink: (link: string, signal?: AbortSignal) =>

@@ -217,8 +217,8 @@ function WorkQueueTab({ auto }: { auto: AutoSettings }) {
       <InfoCheck id="set-wq-github" label="GitHub review requests" checked={s.workQueueGithub} onChange={(on) => change({ workQueueGithub: on })}>
         Open PRs that ask for your review, through your gh login.
       </InfoCheck>
-      <InfoCheck id="set-wq-slack" label="Slack Later list" checked={s.workQueueSlack} onChange={(on) => change({ workQueueSlack: on })}>
-        The messages you saved for later, read by Claude Code through your Slack connector. Each read is a model call; on the
+      <InfoCheck id="set-wq-slack" label="Slack To-dos" checked={s.workQueueSlack} onChange={(on) => change({ workQueueSlack: on })}>
+        The messages on your To-dos, read by Claude Code through your Slack connector. Each read is a model call; on the
         timer it runs only while the last read worked.
       </InfoCheck>
       <Field label="Sync every (minutes)" hint={off ? 'Sync is off.' : '0 syncs only when you press Sync.'}>

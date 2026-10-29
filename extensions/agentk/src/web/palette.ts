@@ -261,7 +261,7 @@ export function workLinkEntries(matches: WorkLinkMatch[], projects: ProjectWithS
     const out: WorkLinkEntry[] = [{
       id: `work-item-${m.item.id}`,
       label: [`Work item: ${m.item.title}`],
-      hint: closedItem ? 'Closed work item' : 'Work queue',
+      hint: closedItem ? 'Dismissed work item' : 'Work queue',
       action: { queue: m.item.id },
     }];
     if (!closedItem && (!m.session || m.session.closed)) {

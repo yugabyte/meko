@@ -91,8 +91,8 @@ export interface Config {
   tools: { enabled: boolean };
   /**
    * The work queue's sync (workqueue.ts), also in Settings › Work queue. github and slack: which sources it reads (both
-   * off: no sync at all). syncMinutes: how often it syncs by itself (0: only Sync). slackModel: the
-   * model of the `claude -p` that reads Slack's Later list through your Slack connector (slack.ts), and
+   * off, the default: no sync at all). syncMinutes: how often it syncs by itself (0: only Sync). slackModel: the
+   * model of the `claude -p` that reads Slack's To-dos through your Slack connector (slack.ts), and
    * slackTimeoutSeconds how long it may take (30 to 600). slackTools: the tools that run may call, your Slack
    * connector's read tools (the claude.ai Slack connector's by default), besides ToolSearch, which needs no
    * permission and only loads tools. It loads none of your Claude Code settings but the sign-in part, so
@@ -122,7 +122,7 @@ export const DEFAULT_CONFIG: Config = {
   pr: { resolveConflicts: true },
   askAgentk: { enabled: true, model: 'sonnet', timeoutSeconds: 45 },
   tools: { enabled: true },
-  workQueue: { github: true, slack: true, syncMinutes: 15, slackModel: 'sonnet', slackTimeoutSeconds: 180, slackTools: [...SLACK_READ_TOOLS] },
+  workQueue: { github: false, slack: false, syncMinutes: 15, slackModel: 'sonnet', slackTimeoutSeconds: 180, slackTools: [...SLACK_READ_TOOLS] },
 };
 
 // TOML uses snake_case keys; the in-memory config uses camelCase.

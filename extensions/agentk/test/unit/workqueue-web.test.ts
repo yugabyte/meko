@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ProjectWithSessions, WorkItem, WorkSync } from '../../src/shared/types.js';
 import { parseWorkLink } from '../../src/shared/worklinks.js';
-import { itemProject, itemSession, itemStartRequest, movedOrder, queueSummary, workSyncText } from '../../src/web/workqueue.js';
+import { itemProject, itemSession, itemStartRequest, movedOrder, queueBadge, queueSummary, workSyncText } from '../../src/web/workqueue.js';
 
 const links = (...l: string[]) => l.map((x) => parseWorkLink(x)!);
 const item = (o: Partial<WorkItem>): WorkItem => ({
@@ -35,6 +35,10 @@ describe('the work queue page', () => {
     const items = [item({ sessionId: 's2' }), item({ id: 'w2', sessionId: 's1', unplaced: true }), item({ id: 'w3', sessionId: 'gone' })];
     expect(itemSession(items[2], projects)).toBeNull();
     expect(queueSummary(items, projects)).toEqual({ open: 3, unplaced: 1, dot: 'needs_input' });
+  });
+
+  it.each([[1, '1'], [99, '99'], [100, '99+'], [2500, '99+']])('counts %i open items on the rail button as %s', (n, want) => {
+    expect(queueBadge(n)).toBe(want);
   });
 
   it('moves an item to where it was dropped', () => {

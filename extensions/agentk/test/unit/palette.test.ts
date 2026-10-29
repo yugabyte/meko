@@ -163,7 +163,7 @@ describe('work items holding a pasted link', () => {
       ['Work item: Split race', 'Work queue', { queue: 'a' }],
       ['Work item: Docs for split', 'Work queue', { queue: 'b' }],
       ['Start a session for Docs for split…', 'Action', { start: item('b', 'Docs for split') }],
-      ['Work item: Done', 'Closed work item', { queue: 'c' }],
+      ['Work item: Done', 'Dismissed work item', { queue: 'c' }],
     ]);
   });
 });

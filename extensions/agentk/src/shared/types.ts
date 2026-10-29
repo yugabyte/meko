@@ -1536,7 +1536,7 @@ export interface WorkLink {
   label: string;
 }
 
-/** Where a work item came from: added by hand, or by a sync (a GitHub review request, a message on Slack's Later list). */
+/** Where a work item came from: added by hand, or by a sync (a GitHub review request, a message on Slack's To-dos). */
 export type WorkItemSource = 'manual' | 'github' | 'slack';
 
 /** One thing on the work queue. */
@@ -1577,12 +1577,20 @@ export interface UpdateWorkItemRequest {
   notes?: string;
   links?: string[];
   status?: 'open' | 'closed';
-  /** Move it one place up or down, or to the top (an open item); any move places it (`unplaced` off). */
-  move?: 'up' | 'down' | 'top';
+  /** Move it one place up or down, or to the top or bottom (an open item); any move places it (`unplaced` off). */
+  move?: WorkMove;
   /** Keep it where it is: clears `unplaced`. */
   placed?: true;
   /** Link this session to it (taking it from any other item, and replacing its own), or null to unlink. */
   sessionId?: string | null;
+}
+
+/** Where a work item's ⋯ actions move it. */
+export type WorkMove = 'up' | 'down' | 'top' | 'bottom';
+
+/** POST /api/work-items/close: Dismiss all, with the open items the page showed (any closed meanwhile are skipped). */
+export interface CloseWorkItemsRequest {
+  ids: string[];
 }
 
 /** PUT /api/work-items/order: every open item's id in the new order, and the one that was moved (it's placed). */
@@ -1828,7 +1836,7 @@ export interface Settings {
   kiroTrustTools: boolean;
   /** `[work_queue] github`: the work queue's sync pulls in the PRs asking for your review (Settings › Work queue). */
   workQueueGithub: boolean;
-  /** `[work_queue] slack`: the work queue's sync pulls in your Slack Later list. */
+  /** `[work_queue] slack`: the work queue's sync pulls in your Slack To-dos. */
   workQueueSlack: boolean;
   /** `[work_queue] sync_minutes`: how often it syncs by itself (0 to WORK_SYNC_MINUTES_MAX; 0: only when you press Sync). */
   workQueueSyncMinutes: number;
@@ -2588,7 +2596,8 @@ export type TermServerMessage =
 // PATCH  /api/work-items/:id UpdateWorkItemRequest → WorkItem   (404 for an unknown item or session; 400 for bad values, or a move or
 //        session for a closed item)
 // PUT    /api/work-items/order ReorderWorkItemsRequest → 204   (409 when `ids` isn't exactly the open items)
-// POST   /api/work-items/sync                  → WorkSync   (GitHub review requests and Slack's Later list into the queue; 409 while one runs)
+// POST   /api/work-items/close CloseWorkItemsRequest → { closed }   (Dismiss all: closes the open items among `ids`; 400 for no list of ids)
+// POST   /api/work-items/sync                  → WorkSync   (GitHub review requests and Slack's To-dos into the queue; 409 while one runs)
 // GET    /api/work-items/by-link?link=         → WorkLinkMatch[]   (open and closed items holding the link's key, open first; 400 for a
 //        link parseWorkLink can't read)
 // GET    /api/usage                            → UsageOverview
