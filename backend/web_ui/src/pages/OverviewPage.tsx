@@ -1,10 +1,11 @@
 // A datapack at a glance: what to do first in a new one, how knowledge moves through it, what it
-// holds, how it's used, and the last 30 days of searches.
+// holds (each count opening its tab), how it's used, and the last 30 days of searches.
 
 import type { ReactNode } from "react";
-import { Brain, FileText, MessagesSquare, Search, Sparkles, Users } from "lucide-react";
+import { Brain, FileText, MessagesSquare, Package, Search, Sparkles, Users } from "lucide-react";
 import { api } from "../lib/api";
 import { bytes, count, timeAgo } from "../lib/format";
+import { href, navigate, type Tab } from "../lib/route";
 import type { Datapack } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
 import { ExtractionBanner } from "../components/ExtractionBanner";
@@ -15,16 +16,40 @@ import { LearningPipeline } from "../components/LearningPipeline";
 import { Card, ErrorNote, Loading } from "../components/ui";
 import { SHOW_COLLECTIVE } from "../lib/features";
 
-function Stat({ icon, label, value, hint }: { icon: ReactNode; label: string; value: string; hint?: string }) {
+// A count, opening tab (with itemId, e.g. the memories tab's scope) when clicked: a real link, so
+// it opens in a new tab too.
+function Stat({
+  icon,
+  label,
+  value,
+  hint,
+  to,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  hint?: string;
+  to: { datapackId: string; tab: Tab; itemId?: string };
+}) {
   return (
-    <Card className="p-4">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        {icon}
-        {label}
-      </div>
-      <div className="mt-2 text-2xl font-semibold tabular-nums">{value}</div>
-      {hint && <div className="mt-0.5 text-xs text-muted-foreground">{hint}</div>}
-    </Card>
+    <a
+      href={href(to)}
+      onClick={(e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+        e.preventDefault();
+        navigate(to);
+      }}
+      className="group rounded-lg focus-visible:outline-2 focus-visible:outline-primary"
+    >
+      <Card className="h-full p-4 transition-colors group-hover:border-primary/60 group-hover:bg-accent/40">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          {icon}
+          {label}
+        </div>
+        <div className="mt-2 text-2xl font-semibold tabular-nums">{value}</div>
+        {hint && <div className="mt-0.5 text-xs text-muted-foreground">{hint}</div>}
+      </Card>
+    </a>
   );
 }
 
@@ -36,6 +61,7 @@ export function OverviewPage({ datapack }: { datapack: Datapack }) {
   if (!m) return null;
 
   const days = m.daily_activity ?? [];
+  const at = (tab: Tab, itemId?: string) => ({ datapackId: id, tab, itemId });
   const peak = Math.max(1, ...days.map((d) => d.hybrid + d.kb + d.memory));
 
   return (
@@ -49,24 +75,34 @@ export function OverviewPage({ datapack }: { datapack: Datapack }) {
           icon={<Brain className="size-3.5" />}
           label="Memories"
           value={count(datapack.memory_count)}
+          to={at("memories")}
           hint={SHOW_COLLECTIVE ? `${count(datapack.learnings_count)} learnings · ${bytes(m.memory_bytes)}` : bytes(m.memory_bytes)}
         />
         <Stat
           icon={<FileText className="size-3.5" />}
           label="Knowledge files"
           value={count(m.kb_file_count)}
+          to={at("knowledge")}
           hint={`${count(m.kb_chunk_count)} chunks · ${bytes(m.kb_bytes)}`}
         />
         <Stat
           icon={<MessagesSquare className="size-3.5" />}
           label="Conversations"
           value={count(m.conversation_count)}
+          to={at("conversations")}
+        />
+        <Stat
+          icon={<Package className="size-3.5" />}
+          label="Artifacts"
+          value={count(m.artifact_count ?? 0)}
+          to={at("artifacts")}
         />
         {SHOW_COLLECTIVE && (
           <Stat
             icon={<Sparkles className="size-3.5" />}
             label="Collective memory"
             value={count(datapack.collective_memory_count)}
+            to={at("memories", "promoted")}
             hint="Promoted learnings, searchable in the knowledge base"
           />
         )}
@@ -74,9 +110,10 @@ export function OverviewPage({ datapack }: { datapack: Datapack }) {
           icon={<Search className="size-3.5" />}
           label="Searches (90 days)"
           value={count(m.total_requests)}
+          to={at("metrics")}
           hint={`${count(m.tokens_saved_total)} tokens saved · last ${timeAgo(m.last_accessed_at)}`}
         />
-        <Stat icon={<Users className="size-3.5" />} label="Agents" value={count(m.agent_count)} />
+        <Stat icon={<Users className="size-3.5" />} label="Agents" value={count(m.agent_count)} to={at("metrics")} />
       </div>
 
       <Card className="p-4">

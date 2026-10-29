@@ -344,7 +344,7 @@ func (a *api) metrics(c echo.Context) error {
 		"conversation_count": z.Conversations, "memory_extraction_count": 0, "extraction_rate": 0.0,
 		"kb_chunk_count": kb.Chunks, "kb_file_count": kb.Files, "memory_chunk_count": z.Memories,
 		"conversation_chunk_count": z.ConversationChunks, "kb_bytes": kb.Bytes, "memory_bytes": z.MemoryBytes,
-		"conversation_bytes": z.TurnBytes, "context_size": memory.SizeOf(kb, z)}
+		"conversation_bytes": z.TurnBytes, "context_size": memory.SizeOf(kb, z), "artifact_count": z.Artifacts}
 	if st.LastAccessed != nil {
 		out["last_accessed_at"] = wire.Time(*st.LastAccessed)
 	}

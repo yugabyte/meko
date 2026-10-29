@@ -24,6 +24,9 @@ export interface Route {
   itemId?: string;
   // A page of the whole install rather than of a datapack.
   view?: "status" | "extensions" | "account" | "meko-cloud";
+  // Something on the page to scroll to and point out, as the address's #fragment: a conversation's
+  // turn, by its message id.
+  focus?: string;
 }
 
 function parse(path: string): Route {
@@ -42,7 +45,7 @@ export function href(r: Route): string {
   if (r.view === "meko-cloud") return "/settings/meko-cloud";
   if (r.view) return `/${r.view}`;
   if (!r.datapackId) return "/";
-  return `/datapacks/${r.datapackId}/${r.tab}${r.itemId ? `/${r.itemId}` : ""}`;
+  return `/datapacks/${r.datapackId}/${r.tab}${r.itemId ? `/${r.itemId}` : ""}${r.focus ? `#${r.focus}` : ""}`;
 }
 
 const EVENT = "meko:navigate";

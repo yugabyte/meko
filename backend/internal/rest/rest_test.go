@@ -296,7 +296,7 @@ func TestMetricsAndArtifacts(t *testing.T) {
 	days := arr(m["daily_activity"])
 	if num(m["total_requests"]) != 1 || num(m["agent_count"]) != 1 || m["last_accessed_at"] == nil || len(days) != 1 ||
 		num(obj(days[0])["hybrid"]) != 1 || num(m["memory_chunk_count"]) != 1 || num(m["tokens_saved_total"]) == 0 ||
-		num(obj(m["context_size"])["tokens"]) != 200 {
+		num(obj(m["context_size"])["tokens"]) != 200 || m["artifact_count"] == nil {
 		t.Errorf("metrics %v", m)
 	}
 	u := obj(okData(t, e, "GET", "/datapacks/"+e.DatapackID+"/usage", nil, 200))

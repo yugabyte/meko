@@ -42,6 +42,7 @@ export interface Metrics {
   kb_bytes: number;
   memory_chunk_count: number;
   memory_bytes: number;
+  artifact_count?: number; // absent from an older server
   // Context size in tokens, as the server counts it (memory.SizeOf).
   context_size: { tokens: number; knowledge: SizePart; memories: SizePart; conversations: SizePart };
   total_requests: number;
