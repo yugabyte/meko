@@ -57,6 +57,7 @@ import type {
   PrReviewers,
   RepoInfo,
   ReviewablePrs,
+  LearnScope,
   TaskPrs,
   LinkPlan,
   StartFromLinkRequest,
@@ -175,6 +176,11 @@ export const api = {
   closeProject: (id: string) => request<void>('DELETE', `/api/projects/${enc(id)}`),
   project: (id: string) => get<Project>(`/api/projects/${enc(id)}`),
   branches: (id: string) => get<string[]>(`/api/projects/${enc(id)}/branches`),
+  learnScope: (id: string, q: { months: number; where: string; base: string; repoPath?: string }) => {
+    const qs = new URLSearchParams({ months: String(q.months), where: q.where, base: q.base });
+    if (q.repoPath) qs.set('repoPath', q.repoPath);
+    return get<LearnScope>(`/api/projects/${enc(id)}/learn-scope?${qs}`);
+  },
   attachDatapack: (id: string, b: AttachDatapackRequest) => post<Project>(`/api/projects/${enc(id)}/datapacks`, b),
   setDedicatedDatapack: (id: string, b: SetDedicatedDatapackRequest) => post<Project>(`/api/projects/${enc(id)}/dedicated-datapack`, b),
   detachDatapack: (id: string, dpId: string) =>
