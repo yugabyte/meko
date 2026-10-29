@@ -1,13 +1,14 @@
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   claudeLauncher, hooksSettingsPath, modDirPath, writeHookFiles, writeModFiles, type LaunchSpec,
 } from '../../src/server/claude.js';
 import { versionAtLeast } from '../../src/shared/harnesses.js';
 import { cliVersion } from '../../src/server/harness/version.js';
-import { loginShellCommand, shq, writeLauncher } from '../../src/server/launcher.js';
+import { adoptLoginPath, loginShellCommand, shq, writeLauncher } from '../../src/server/launcher.js';
 import { getPaths, type Paths } from '../../src/server/paths.js';
 import { paneName } from '../../src/server/hostclient.js';
 import { tempDir } from '../helpers.js';
@@ -29,6 +30,25 @@ describe('the hooks settings file', () => {
     writeHookFiles(paths, { disabledPlugins: ['meko-agent-skills@meko-agent-skills', 'meko-agent-skills@fork'] });
     expect(JSON.parse(readFileSync(hooksSettingsPath(paths), 'utf8')).enabledPlugins)
       .toEqual({ 'meko-agent-skills@meko-agent-skills': false, 'meko-agent-skills@fork': false });
+  });
+});
+
+describe('the server taking PATH from the login shell', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  // launchd's PATH to start from; Homebrew's folders are added whatever the shell does. macOS's
+  // first run of a new script can take a few hundred ms, so only the slow shell gets a short limit.
+  it.each([
+    ['prints its PATH', "printf '/opt/x/bin\\0\\0'", 5000, null, '/opt/x/bin'],
+    ['prints no PATH', "printf '\\0\\0'", 5000, 'it printed no PATH', '/usr/bin:/bin'],
+    ['fails', 'exit 3', 5000, 'it exited with code 3', '/usr/bin:/bin'],
+    ['takes too long', 'exec sleep 5', 500, 'it took longer than 0.5 s', '/usr/bin:/bin'],
+  ])('when the shell %s', (_, body, timeoutMs, why, path) => {
+    vi.stubEnv('PATH', '/usr/bin:/bin');
+    const shell = join(tempDir('akl-shell-'), 'sh');
+    writeFileSync(shell, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    expect(adoptLoginPath(shell, timeoutMs)).toBe(why);
+    expect(process.env.PATH).toBe(`${path}:${join(homedir(), '.local', 'bin')}:/usr/local/bin:/opt/homebrew/bin`);
   });
 });
 
