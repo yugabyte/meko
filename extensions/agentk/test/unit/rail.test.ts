@@ -79,7 +79,8 @@ describe('projects pane', () => {
 describe("a rail session's name", () => {
   // A task with a local review (its row joined with the magnifier) once cut its name with an ellipsis.
   it('wraps in every row, never cut', () => {
-    const rules = [...STYLES.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^}]*)\}/g)].filter(([, sel]) => sel!.includes('.rail-sess-name'));
+    // Innermost rules only (no `{` in a body), so one nested in an @media block is checked too.
+    const rules = [...STYLES.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(([, sel]) => sel!.includes('.rail-sess-name'));
     expect(rules.map(([, sel]) => sel!.trim())).toContain('.rail-sess-name');
     for (const [, sel, body] of rules) expect(body, sel!.trim()).not.toMatch(/nowrap|ellipsis|overflow:\s*hidden/);
     expect(STYLES.slice(STYLES.indexOf('\n.rail-sess-name {')).split('}')[0]).toContain('overflow-wrap: anywhere;');
