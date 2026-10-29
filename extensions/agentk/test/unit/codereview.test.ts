@@ -1,8 +1,15 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import {
   findMeAkReviewLine, meAkReviewLine, noCounts, parseMeAkReviewLine, readOverrides, resolveReview, reviewSegmentText, withMeAkReviewLine,
-  type CodeReviewSummary, type SeverityCounts,
+  type CodeReviewState, type CodeReviewSummary, type SeverityCounts,
 } from '../../src/shared/codereview.js';
+import { ReviewSegment } from '../../src/web/components/common.js';
+
+const STYLES = readFileSync(join(import.meta.dirname, '../../src/web/styles.css'), 'utf8');
 
 const counts = (blocker: number, major: number, minor: number): SeverityCounts => ({ blocker, major, minor });
 
@@ -65,4 +72,45 @@ describe("the review's part of a task's tab", () => {
   ])('shows %j as %s', (summary, text) => {
     expect(reviewSegmentText(summary)).toBe(text);
   });
+
+  const segment = (state: CodeReviewState, className = 'tab-review', selected = false) =>
+    renderToStaticMarkup(createElement(ReviewSegment, { review: r({ state, mekoCall: state === 'sweeping' }), selected, className, onOpen: () => {} }));
+
+  it.each<[CodeReviewState, boolean]>([
+    ['failed', true],
+    ['cancelled', true],
+    ['sweeping', false],
+    ['done', false],
+  ])('marks the part and its magnifier stopped (red) when %s: %s', (state, stopped) => {
+    const html = segment(state);
+    expect(html.includes('class="review-seg tab-review stopped"')).toBe(stopped);
+    expect(html.includes('class="review-glass stopped"')).toBe(stopped);
+  });
+
+  // Each selector's last compound (what it styles) as its tag and classes, outside comments and keyframes.
+  const subjects = STYLES.replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/@keyframes[^{]*\{(?:[^{}]*\{[^}]*\})*[^}]*\}/g, '')
+    .match(/[^{};]+(?=\{)/g)!
+    .filter((sel) => !sel.trim().startsWith('@'))
+    .flatMap((sel) => sel.split(','))
+    .map((sel) => {
+      const last = sel.trim().split(/\s*[\s>+~]\s*/).pop()!.replace(/::?[\w-]+(\([^)]*\))?|\[[^\]]*\]/g, '');
+      return { selector: sel.trim(), tag: last.match(/^[a-z]\w*/)?.[0], classes: [...last.matchAll(/\.([\w-]+)/g)].map((m) => m[1]!) };
+    })
+    .filter((sub) => sub.classes.length > 0);
+  const own = ['review-seg', 'review-glass', 'review-seg-text', 'tab-review', 'rail-review', 'lens', 'rim', 'handle', 'glass-m'];
+  const states: CodeReviewState[] = ['failed', 'cancelled', 'sweeping', 'scoring', 'fixing', 'done'];
+
+  // A stopped review's `held` once matched the held-image tile's `.held` (44 px square, position:
+  // relative), which put the magnifier at the top of a tall box and pushed the `!` out of the tab.
+  it.each(states.flatMap((state) => ['tab-review', 'rail-review'].flatMap((className) => [true, false].map((selected) => [state, className, selected] as const))))(
+    'takes no rule meant for something else when %s, in a %s, selected: %s',
+    (state, className, selected) => {
+      const elements = [...segment(state, className, selected).matchAll(/<(\w+)[^>]*\sclass="([^"]*)"/g)].map(([, tag, cls]) => ({ tag, classes: new Set(cls!.split(' ')) }));
+      for (const el of elements) {
+        const foreign = subjects.filter((sub) => (!sub.tag || sub.tag === el.tag) && sub.classes.every((c) => el.classes.has(c)) && !sub.classes.some((c) => own.includes(c)));
+        expect(foreign.map((sub) => sub.selector), [...el.classes].join('.')).toEqual([]);
+      }
+    },
+  );
 });
