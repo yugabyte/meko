@@ -376,6 +376,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     return reply.code(204).send();
   });
   app.get<{ Params: { id: string } }>('/api/projects/:id/branches', async (req) => core.projects.branches(req.params.id));
+  app.get<{ Params: { id: string }; Querystring: { repoPath?: string; base?: string; where?: string; months?: string } }>(
+    '/api/projects/:id/learn-scope', async (req) => core.projects.learnScope(req.params.id, req.query));
   app.post<{ Params: { id: string }; Body: AttachDatapackRequest }>('/api/projects/:id/datapacks', async (req) => core.projects.attachDatapack(req.params.id, req.body));
   app.post<{ Params: { id: string }; Body: SetDedicatedDatapackRequest }>('/api/projects/:id/dedicated-datapack', async (req) =>
     core.projects.setDedicatedDatapack(req.params.id, req.body));

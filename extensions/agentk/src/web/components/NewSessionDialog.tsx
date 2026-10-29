@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LEARN_MONTHS_DEFAULT, LEARN_MONTHS_MAX, LEARN_TEXT_MAX, MAX_PASTE_BYTES, MAX_START_IMAGES, START_EXAMPLES, type CreateSessionRequest, type HarnessStatus, type Project, type RepoInfo, type ReviewablePr, type ReviewablePrs, type Session, type TaskPr } from '../../shared/types';
+import { LEARN_MONTHS_DEFAULT, LEARN_MONTHS_MAX, LEARN_TEXT_MAX, MAX_PASTE_BYTES, MAX_START_IMAGES, START_EXAMPLES, type CreateSessionRequest, type HarnessStatus, type LearnScope, type Project, type RepoInfo, type ReviewablePr, type ReviewablePrs, type Session, type TaskPr } from '../../shared/types';
 import { HARNESS_CAPS, noAgentText, notConnectedText, onlyMekoBlocks, type HarnessId } from '../../shared/harnesses';
 import { expandBranchPrefix } from '../../shared/branches';
 import { api, errorMessage } from '../api';
 import { pastedImages } from '../clipboard';
 import { HeldImages as HeldImageList } from '../heldImages';
 import { useTouch } from '../hooks/useMedia';
-import { cx, noAgent, repoFolder, slugify } from '../util';
+import { cx, learnScopeHint, noAgent, repoFolder, slugify } from '../util';
 import { AttachPrPicker } from './AttachPrPicker';
 import { AgentPicker, Busy, Dialog, ErrorText, Field, LEARN_LABEL, ReviewFields, StartPicker, type StartChoice } from './common';
 import { noOverrides, readOverrides, type ReviewOverrides } from '../../shared/codereview';
@@ -16,6 +16,9 @@ import { ReviewPrPicker } from './ReviewPrPicker';
 
 /** A review's default name, from its PR. */
 const reviewName = (pr: ReviewablePr) => `Review #${pr.number} ${pr.title}`.slice(0, 100).trim();
+
+/** How long the learn brief must stay unchanged before its estimate is asked for. */
+const SCOPE_WAIT_MS = 400;
 
 /** What a task works on (Advanced → Work on): a new branch from a base, an existing branch, or an open PR's branch. */
 type WorkOn = 'new' | 'branch' | 'pr';
@@ -190,6 +193,28 @@ export function NewSessionDialog({
       live = false;
     };
   }, [project.id, project.defaultBranch, repoPath, inProjectRepo]);
+
+  // A learn session's estimate, asked for once the brief stops changing for a moment. The last one
+  // stays up while the next is on its way; one that fails shows the plain hint.
+  const [scope, setScope] = useState<{ scope: LearnScope; months: number } | null>(null);
+  const whereNow = where.trim();
+  useEffect(() => {
+    if (!learn || !monthsOk || !branches) {
+      setScope(null);
+      return;
+    }
+    let live = true;
+    const t = setTimeout(() => {
+      api
+        .learnScope(project.id, { months: monthsN, where: whereNow, base: baseBranch, repoPath: inProjectRepo ? undefined : repoPath })
+        .then((r) => live && setScope({ scope: r, months: monthsN }), () => live && setScope(null));
+    }, SCOPE_WAIT_MS);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [project.id, learn, monthsOk, monthsN, whereNow, baseBranch, repoPath, inProjectRepo, branches]);
+  const scopeHint = scope && learnScopeHint(scope.scope, scope.months);
 
   // The project's PRs to review: looked for when Review a PR is picked, or right away for a project
   // just opened, where they decide where it starts.
@@ -482,9 +507,9 @@ export function NewSessionDialog({
             <Field
               label="Read PRs from the last"
               hint={
-                monthsOk
-                  ? 'Months of merged PRs that touch those files. A longer window takes longer and uses more tokens. 0 reads no PRs.'
-                  : `Give a whole number of months, from 0 to ${LEARN_MONTHS_MAX}.`
+                !monthsOk ? `Give a whole number of months, from 0 to ${LEARN_MONTHS_MAX}.`
+                  : scopeHint ? <span id="ns-learn-scope" className={cx('ns-learn-scope', scopeHint.warn && 'warn')}>{scopeHint.text}</span>
+                  : 'Months of merged PRs that touch those files. A longer window takes longer and uses more tokens. 0 reads no PRs.'
               }
             >
               <div className="ns-learn-months">

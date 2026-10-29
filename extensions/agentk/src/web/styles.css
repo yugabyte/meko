@@ -5563,6 +5563,10 @@ div[id^='dak-mermaid-'] .label {
 .ns-learn-months .input {
   width: 6em;
 }
+/* Its estimate past the limits (`learnScopeHint`): a warning, not an error. */
+.ns-learn-scope.warn {
+  color: var(--warn);
+}
 /* The New session dialog's images for the first prompt: Add image (just its icon), then the held ones. */
 .ns-images {
   display: flex;
