@@ -268,12 +268,24 @@ The search bar at the top of the rail (the AgentK logo, "Ask AgentK" and the sho
 opens it too; either way it opens over that bar, at the top left. In the palette, session names show
 in the accent colour and project names in bold, so they don't read as commands. On Linux and Windows
 these use Ctrl, so the terminal doesn't get Ctrl+K, Ctrl+1–9 or Ctrl+Tab; every other key passes
-through to the terminal whenever it has focus, except the find shortcut below. To copy from the terminal, drag across the text and
+through to the terminal whenever it has focus, except the find shortcut and the editing keys below. To copy from the terminal, drag across the text and
 press `Ctrl+C` (`⌘C`), which
 copies rather than interrupting Claude while text is selected. While Claude has the mouse (it runs
 full screen), a plain drag goes to Claude; Shift-drag (Option-drag on a Mac) selects in the browser
 instead. Text a program copies itself (OSC 52) goes on the clipboard too. Clipboard access
 needs HTTPS or localhost.
+
+**Editing keys.** Shift+Enter starts a new line in the agent's prompt, and Enter sends it. xterm.js
+sends a carriage return for both, so the terminal sends Shift+Enter as `ESC CR` itself: the bytes
+Option+Enter (Alt+Enter) already sends, and the ones Claude Code's `/terminal-setup` writes for VS
+Code. Claude Code, OpenCode and Kiro CLI all read it as a new line. It isn't Enter, so it doesn't
+send the images held for Claude; the next Enter does. On a Mac, ⌘← and ⌘→ go to the start and end
+of the line (Ctrl+A, Ctrl+E; xterm.js sends nothing for them), ⌥← and ⌥→ move by a word (`ESC b`,
+`ESC f`, as Terminal.app sends) and ⌘⌫ deletes to the start of the line (Ctrl+U), as in iTerm2's
+Natural Text Editing. On Linux and Windows, Ctrl+Backspace deletes the word before the cursor
+(`ESC DEL`, as Alt+Backspace sends). `editKeySequence()` in `keys.ts` maps the keys, and leaves a
+key that's part of an input method's composition to xterm. Every program in the terminal gets these
+bytes, not only the agent: in vim's insert mode, Shift+Enter is Esc then Enter.
 
 **Finding text in the terminal.** With the terminal focused, `⌘F` (`Ctrl+Shift+F` on Linux and
 Windows, so `Ctrl+F` still reaches the agent) opens a find bar over its top right (`TermFind.tsx`);
