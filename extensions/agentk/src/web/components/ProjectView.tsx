@@ -24,7 +24,7 @@ import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
 import { Busy, Check, ConfirmButton, ContextRing, DatapackName, Elapsed, HarnessLogo, NotesIcon, ReviewSegment, RunToMergeCheck, RunToMergeMark, StageChip, StatusDot } from './common';
 import { ReviewFindings } from './ReviewFindings';
-import { countsText, reviewHolds, reviewRunning, reviewSegmentText, type CodeReviewSummary } from '../../shared/codereview';
+import { countsText, reviewDoneText, reviewHolds, reviewRunning, reviewSegmentText, type CodeReviewSummary } from '../../shared/codereview';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
 import type { MovePreset } from './MoveSessionDialog';
@@ -90,6 +90,10 @@ export function ProjectView({
   onMenu,
   showTabs,
   harnessLogos,
+  findingsRequest,
+  onFindingsTaken,
+  onFindingsShown,
+  onOpenFindings,
   onError,
 }: {
   project: ProjectWithSessions;
@@ -113,6 +117,14 @@ export function ProjectView({
   showTabs: boolean;
   /** Show each session's harness logo in its tab: open sessions run on more than one harness and the setting is on. */
   harnessLogos: boolean;
+  /** A task's findings asked open (its magnifier in the rail) or closed (the rail's task part), until taken. */
+  findingsRequest: { id: string; open: boolean } | null;
+  /** The request was acted on. */
+  onFindingsTaken: () => void;
+  /** The task whose findings are open beside its terminal, or null: for the rail's row. */
+  onFindingsShown: (taskId: string | null) => void;
+  /** Shows a task's local review findings, beside its terminal: from its magnifier, the gate or the ⋯ sheet. */
+  onOpenFindings: (task: Session) => void;
   onError: (msg: string) => void;
 }) {
   const mobile = useIsMobile();
@@ -122,9 +134,10 @@ export function ProjectView({
   // A task's code-review session (its part of the task's tab) and the task it reviews.
   const child = session && isReviewChild(session) ? session : null;
   const parent = session ? reviewParent(project.sessions, session) : undefined;
+  // The magnifier opens its task's findings, never the review's session.
   const openReview = (task: Session) => {
-    const id = task.codeReview?.sessionId;
-    if (id) navigate({ view: 'project', projectId: project.id, sessionId: id });
+    if (task.id === session?.id) setPanel('findings');
+    else onOpenFindings(task);
   };
   const [sheet, setSheet] = useState(false);
   // Bumped to show the design's questions (Design Review, or Approve pressed with questions open).
@@ -157,6 +170,19 @@ export function ProjectView({
     if (child && !mobile) setPanel('findings');
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only when another session comes on screen
   }, [session?.id]);
+  // After the reset above: a request for this task's findings, taken once (it stays in App, which
+  // outlives this view, so a request left untaken would open them again on the way back).
+  useEffect(() => {
+    if (!findingsRequest || findingsRequest.id !== session?.id) return;
+    setPanel((p) => (findingsRequest.open ? 'findings' : p === 'findings' ? null : p));
+    onFindingsTaken();
+  }, [findingsRequest, session?.id, onFindingsTaken]);
+  // Which task's findings are open, for the rail's row; none once this view goes.
+  const findingsTask = session && !child && session.codeReview && panel === 'findings' ? session.id : null;
+  useEffect(() => {
+    onFindingsShown(findingsTask);
+  }, [findingsTask, onFindingsShown]);
+  useEffect(() => () => onFindingsShown(null), [onFindingsShown]);
   // Also when the desktop tabs mount, as the rail stops listing the sessions or is hidden.
   useEffect(() => {
     tabsRef.current?.querySelector('.tab.sel, .review-seg.sel')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -341,18 +367,22 @@ export function ProjectView({
   // and is shown; the phone's bar then names the session, with its dot, and marks the drawer button while
   // another session needs you.
   // A task with a local review is one joined tab: the task's part, then the review's (the magnifier),
-  // inside one border; each opens its own session, and only the one on screen is selected.
+  // inside one border. The task's part opens its session, the review's its findings beside it.
   const tabs = (
     <div className="tabs" role="tablist" ref={tabsRef}>
       {sessions.map((s) => {
-        const part = joinedPartSelected(s, session?.id);
+        const part = joinedPartSelected(s, session?.id, panel === 'findings');
         const tab = (
           <button
             key={s.id}
             role="tab"
             aria-selected={part === 'task'}
             className={cx('tab', part === 'task' && 'sel')}
-            onClick={() => navigate({ view: 'project', projectId: project.id, sessionId: s.id })}
+            onClick={() => {
+              // The task's part, while its findings are open, goes back to its terminal alone.
+              if (s.id !== session?.id) navigate({ view: 'project', projectId: project.id, sessionId: s.id });
+              else if (part === 'review') setPanel(null);
+            }}
             onDoubleClick={mobile ? undefined : () => onRename(s.id)}
             title={sessionTabTitle(s) + (mobile ? '' : '\nDouble-click to rename')}
           >
@@ -521,7 +551,9 @@ export function ProjectView({
           />
         )}
         {session && panel === 'changes' && <ChangesPanel key={`changes-${session.id}`} session={session} onClose={() => setPanel(null)} />}
-        {child && panel === 'findings' && <ReviewFindings key={`findings-${child.id}`} session={child} onClose={() => setPanel(null)} />}
+        {session && panel === 'findings' && (child || session.codeReview) && (
+          <ReviewFindings key={`findings-${session.id}`} session={session} onClose={() => setPanel(null)} />
+        )}
       </div>
 
       {session && (
@@ -711,8 +743,8 @@ function reviewGate(
   onOpen?: () => void,
 ): ReactNode {
   const open = onOpen && (
-    <button className="btn small" onClick={onOpen} title="Open the local review's session and findings">
-      Show review
+    <button className="btn small" onClick={onOpen} title="Show the local review's findings">
+      Show findings
     </button>
   );
   if (reviewHolds(r)) {
@@ -744,7 +776,7 @@ function reviewGate(
   if (r.state === 'done') {
     return (
       <span className="gate-group">
-        <span className="gate-pill done">{r.counts.blocker + r.counts.major + r.counts.minor ? `Reviewed: ${countsText(r.counts)}` : 'Reviewed: LGTM'}</span>
+        <span className="gate-pill done">{reviewDoneText(r)}</span>
         {open}
       </span>
     );
@@ -787,7 +819,7 @@ function StageBar({
   onAct: (a: SessionAction, req?: CloseSessionRequest) => Promise<void>;
   /** Design Review: opens the design panel, or brings its approve button into view (`reviewTarget`). */
   onReview: () => void;
-  /** Opens the task's local review session; left out on the review's own screen. */
+  /** Shows the task's local review findings; left out on the review's own screen. */
   onOpenLocalReview?: () => void;
   /** The design panel is open. */
   designOpen?: boolean;

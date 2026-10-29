@@ -12,9 +12,10 @@ under it in the rail instead of the tabs, one row each with its status dot, its 
 is on, as on the tabs), so many show at once and any can be opened with one click,
 in any project. A task's [local code review](code-review.md) is never a tab or a row of its own: it's
 a part joined to its task's tab and rail row, a blue magnifier (its lens pulses while the review
-works, and shows Meko's "m" during a Meko call) and the step it's on (`3/5`), its result (`2·1`
-blockers·majors, or `✓`) or a red `!`; clicking it opens the review session's terminal and its
-findings panel. The tabs and the rail list a project's sessions in the same order, kept on the server
+works, and shows Meko's "m" during a Meko call) and the step it's on (`3/6`: each pass, then scoring
+as one step), its result (`2·1` blockers·majors until the task has said what it did with each
+finding, then `LGTM`) or a red `!`; clicking it opens the review's findings beside the task's
+terminal (the review session stops once the review is done). The tabs and the rail list a project's sessions in the same order, kept on the server
 (`sessions.position`) so every browser sees it: a new session goes first, and **Move to top** puts
 any other there, to keep the work that matters most at the top as priorities change. It's the ↑ that
 takes a rail row's stage chip's place on hover, and is in the ⋯ sheet and the command palette (where

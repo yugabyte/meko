@@ -172,7 +172,7 @@ export class CodeReviews {
     const cands = json<Candidate[]>(r.candidates_json, []);
     return {
       id: r.id,
-      // Once the session is gone (cancelled, replaced), there's nothing to open.
+      // Once the session is gone (done, cancelled, replaced), nothing runs in it.
       sessionId: r.session_id && sessionRow(this.db, r.session_id)?.desired === 'running' ? r.session_id : null,
       strategy: strategy.id,
       state: r.state,
@@ -185,6 +185,8 @@ export class CodeReviews {
       scoresDone: scoreSteps.length,
       candidates: cands.length,
       counts: json<SeverityCounts>(r.counts_json, noCounts()),
+      // Every round's: the next round runs at the fix turn's end whether or not the task said what it did.
+      addressed: r.state === 'done' && json<CodeReviewFinding[]>(r.findings_json, []).every((f) => !f.kept || !!f.outcome),
       mekoCall: !!r.session_id && RUNNING.includes(r.state) && this.core.sessions.mekoCalling(r.session_id),
       detail: r.detail,
     };
@@ -771,8 +773,9 @@ export class CodeReviews {
     const last = json<CodeReviewFinding[]>(r.findings_json, []).filter((f) => f.round === r.round && f.kept);
     const findings = last.length ? this.findingsText(r, r.round) : '';
     this.core.sessions.event(task.id, 'review', `Local review done: ${totalCount(counts) ? countsText(counts) : 'LGTM'}`);
+    // Its session has nothing left to do: the findings are kept with the review, and the task's tab opens them.
+    if (r.session_id) void this.archiveSession(r.session_id);
     this.core.changed();
-    // The review session stays, idle, for its terminal and findings, until the task goes or another review replaces it.
     const sent = await this.core.lifecycle.sendReviewedPr(task, {
       line: meAkReviewLine(counts), findings, outcomeHow: this.outcomeHow(task), strategy: strategyName(r.strategy), instructions: r.instructions ?? '', by: r.by === 'auto' ? 'auto' : 'you',
     });

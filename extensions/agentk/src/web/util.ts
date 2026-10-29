@@ -47,12 +47,12 @@ export function liveWithReviews(p: ProjectWithSessions): Session[] {
 }
 
 /**
- * Which part of a task's joined tab (or rail row) is on screen: the task's, its review's (the
- * session on screen is the task's code-review session), or neither.
+ * Which part of a task's joined tab (or rail row) is on screen: the task's, its review's (the task
+ * with its findings open, or its code-review session opened by its URL), or neither.
  */
-export function joinedPartSelected(task: Pick<Session, 'id' | 'codeReview'>, currentId: string | null | undefined): 'task' | 'review' | null {
+export function joinedPartSelected(task: Pick<Session, 'id' | 'codeReview'>, currentId: string | null | undefined, findingsOpen = false): 'task' | 'review' | null {
   if (!currentId) return null;
-  if (task.id === currentId) return 'task';
+  if (task.id === currentId) return findingsOpen && task.codeReview ? 'review' : 'task';
   return task.codeReview?.sessionId === currentId ? 'review' : null;
 }
 

@@ -4,7 +4,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import {
-  findMeAkReviewLine, meAkReviewLine, noCounts, parseMeAkReviewLine, readOverrides, resolveReview, reviewSegmentText, withMeAkReviewLine,
+  findMeAkReviewLine, meAkReviewLine, noCounts, parseMeAkReviewLine, readOverrides, resolveReview, reviewSegmentLabel, reviewSegmentText, withMeAkReviewLine,
   type CodeReviewState, type CodeReviewSummary, type SeverityCounts,
 } from '../../src/shared/codereview.js';
 import { ReviewSegment } from '../../src/web/components/common.js';
@@ -58,19 +58,31 @@ describe('review settings', () => {
 describe("the review's part of a task's tab", () => {
   const r = (over: Partial<CodeReviewSummary>): CodeReviewSummary => ({
     id: 'r', sessionId: 's', strategy: 'sagittarius-3.0', state: 'sweeping', round: 1, rounds: 1, sweep: 1, depth: 1,
-    passesDone: 2, passes: 5, scoresDone: 3, candidates: 9, counts: noCounts(), mekoCall: false, detail: null, ...over,
+    passesDone: 2, passes: 5, scoresDone: 3, candidates: 9, counts: noCounts(), addressed: false, mekoCall: false, detail: null, ...over,
   });
 
+  // Steps: each pass, then scoring as one, so Sagittarius 3.0 has 6 and Sirius 1.0 (no scorers) 1.
   it.each([
-    [r({}), '3/5'],
-    [r({ passesDone: 5 }), '5/5'],
-    [r({ state: 'scoring' }), '3/9'],
+    [r({}), '3/6'],
+    [r({ passesDone: 5 }), '5/6'],
+    [r({ state: 'scoring' }), '6/6'],
+    [r({ strategy: 'sirius-1.0', passes: 1, passesDone: 0 }), '1/1'],
+    [r({ state: 'fixing' }), 'R1'],
     [r({ state: 'done', counts: counts(2, 1, 4) }), '2·1'],
-    [r({ state: 'done' }), '✓'],
+    [r({ state: 'done', counts: counts(2, 1, 4), addressed: true }), 'LGTM'],
+    [r({ state: 'done' }), 'LGTM'],
     [r({ state: 'failed' }), '!'],
     [r({ state: 'cancelled' }), '!'],
   ])('shows %j as %s', (summary, text) => {
     expect(reviewSegmentText(summary)).toBe(text);
+  });
+
+  it.each([
+    [r({}), 'Local review: Sagittarius 3.0, step 3 of 6, pass 3 of 5'],
+    [r({ state: 'scoring' }), 'Local review: Sagittarius 3.0, step 6 of 6, scoring 4 of 9'],
+    [r({ state: 'done', counts: counts(1, 0, 0), addressed: true }), 'Local review: Sagittarius 3.0, LGTM, 1 blocker addressed'],
+  ])('spells %j out as %s', (summary, label) => {
+    expect(reviewSegmentLabel(summary)).toBe(label);
   });
 
   const segment = (state: CodeReviewState, className = 'tab-review', selected = false) =>

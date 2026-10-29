@@ -62,6 +62,11 @@ describe('joinedPartSelected', () => {
   ] as const)('with %s on screen, selects %s', (current, part) => {
     expect(joinedPartSelected(task, current)).toBe(part);
   });
+
+  it("selects the review's part while the task on screen has its findings open", () => {
+    expect(joinedPartSelected(task, 'task', true)).toBe('review');
+    expect(joinedPartSelected({ id: 'plain', codeReview: null } as Session, 'plain', true)).toBe('task');
+  });
 });
 
 describe('rememberOpenSession', () => {

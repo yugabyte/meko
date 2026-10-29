@@ -2292,7 +2292,12 @@ export class SessionManager {
       if (repo && row.kind === 'review-pr' && row.pr_number) await tryGit(repo, 'update-ref', '-d', prRef(row.pr_number));
       rmSync(join(this.core.paths.run, `${row.id}.sh`), { force: true });
       removePastes(this.core.paths.pastes, row.id);
-      removeMekoLog(this.core.paths.designs, row.id);
+      // A review session's Meko call log (its passes' gotcha searches) stays with its task, which
+      // archives it when the review is done, so the Meko calls page keeps it until the task goes.
+      if (!child) {
+        removeMekoLog(this.core.paths.designs, row.id);
+        for (const c of all<{ id: string }>(this.db, `SELECT id FROM sessions WHERE parent_id = ? AND kind = 'code-review'`, row.id)) removeMekoLog(this.core.paths.designs, c.id);
+      }
       this.core.questions.forget(row.id);
       this.core.learn.forget(row.id);
       this.busy.delete(row.id);

@@ -7,7 +7,7 @@ import { Busy } from './common';
 import { SidePanel } from './SidePanel';
 
 /**
- * A local review's findings (GET /api/sessions/:id/code-review), beside its session's terminal:
+ * A local review's findings (GET /api/sessions/:id/code-review), beside its task's terminal:
  * every candidate by round and sweep, kept or dropped and why, the scorer's verdict, the Meko
  * gotchas it credits and what the task did with it; the passes' notes and the datapacks the
  * MEKO.md files listed. Fetched again whenever the review moves on.
@@ -18,7 +18,7 @@ export function ReviewFindings({ session, onClose }: { session: Session; onClose
   const [loading, setLoading] = useState(true);
   const r = session.codeReview;
   // Anything the summary says moving on is a reason to read the findings again.
-  const key = r ? `${r.id}:${r.state}:${r.round}:${r.sweep}:${r.passesDone}:${r.scoresDone}:${r.candidates}` : '';
+  const key = r ? `${r.id}:${r.state}:${r.round}:${r.sweep}:${r.passesDone}:${r.scoresDone}:${r.candidates}:${r.addressed}` : '';
   useEffect(() => {
     let live = true;
     setLoading(true);

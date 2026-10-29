@@ -1,5 +1,5 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // GitHub is mocked (nothing in these tests reaches a PR); git, the session host and the fake claude are real.
@@ -10,6 +10,7 @@ vi.mock('../../src/server/github.js', async (orig) => {
 
 const { makeEnv, readJsonl, waitFor } = await import('../helpers.js');
 const { all } = await import('../../src/server/db.js');
+const { mekoLogPath } = await import('../../src/server/mekolog.js');
 type TestEnv = Awaited<ReturnType<typeof makeEnv>>;
 
 /** Reports for the ledger passes that clear the change: the dependents and claims passes need their ledgers. */
@@ -65,7 +66,8 @@ describe('local code review before the PR (real session host + git, fake claude 
     expect(pr).toContain('me_ak_review:1 blocker,1 major addressed');
 
     // The review ran in a code-review session on the task's worktree, with read-only subagents.
-    const child = env.core.sessions.row(done.codeReview!.sessionId!);
+    const childId = all<{ id: string }>(env.core.db, 'SELECT id FROM sessions WHERE parent_id = ?', s.id)[0].id;
+    const child = env.core.sessions.row(childId);
     expect(child).toMatchObject({ kind: 'code-review', parent_id: s.id, stage: 'reviewing-code', worktree_path: env.core.sessions.row(s.id).worktree_path, worktree_released: 1 });
     const launch = readJsonl<{ args: string[]; env: Record<string, string | undefined> }>(join(env.fakeDir, 'argv.jsonl')).find((a) => a.args.includes('--agents'))!;
     const argv = launch.args;
@@ -82,8 +84,18 @@ describe('local code review before the PR (real session host + git, fake claude 
     expect(detail.findings.map((f) => [f.file, f.line, f.kept, f.dropped])).toEqual(
       expect.arrayContaining([['src/a.ts', 2, true, null], ['src/a.ts', 4, true, null], ['README.md', 1, false, 'file is not changed by this change']]),
     );
-    // The task's branch is untouched by the review session.
-    expect(all(env.core.db, "SELECT 1 FROM sessions WHERE parent_id = ? AND desired = 'running'", s.id)).toHaveLength(1);
+    // Once done, the review session stops (its findings stay with the review); the task's worktree stays.
+    await waitFor(() => env.core.sessions.row(childId), (x) => x.desired === 'archived', 10000, 'the review session to stop');
+    expect(env.core.sessions.get(s.id).codeReview!.sessionId).toBeNull();
+    expect(env.core.sessions.row(s.id).worktree_released).toBe(0);
+
+    // The tab shows the counts until the task says what it did with each finding, then LGTM.
+    expect(done.codeReview!.addressed).toBe(false);
+    const kept = detail.findings.filter((f) => f.kept);
+    env.core.reviews.onTool(env.core.sessions.row(s.id), 'review_outcome', { outcomes: kept.slice(1).map((f) => ({ key: f.key, status: 'fixed', note: 'Done.' })) });
+    expect(env.core.sessions.get(s.id).codeReview!.addressed).toBe(false);
+    env.core.reviews.onTool(env.core.sessions.row(s.id), 'review_outcome', { outcomes: [{ key: kept[0].key, status: 'declined', note: 'On purpose.' }] });
+    expect(env.core.sessions.get(s.id).codeReview).toMatchObject({ addressed: true, counts: { blocker: 1, major: 1, minor: 0 } });
   });
 
   it('opens the PR with me_ak_review:LGTM when Sirius 1.0 finds nothing, set for the session alone', async () => {
@@ -109,6 +121,12 @@ describe('local code review before the PR (real session host + git, fake claude 
     const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after round 2');
     expect(done.codeReview).toMatchObject({ round: 2, state: 'done', counts: { blocker: 1, major: 0, minor: 1 } });
     expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:1 blocker,1 minor addressed');
+    // Round 2 running isn't round 1's outcome: the counts stay until the task reports both rounds'.
+    const outcome = (key: string) => env.core.reviews.onTool(env.core.sessions.row(s.id), 'review_outcome', { outcomes: [{ key, status: 'fixed', note: 'Done.' }] });
+    outcome('2:1');
+    expect(env.core.sessions.get(s.id).codeReview!.addressed).toBe(false);
+    outcome('1:1');
+    expect(env.core.sessions.get(s.id).codeReview!.addressed).toBe(true);
     const round2 = readFileSync(join(env.core.paths.run, 'reviews', done.codeReview!.id, 'r2', 'base.md'), 'utf8');
     expect(round2).toContain('Off by one.');
   });
@@ -147,10 +165,16 @@ describe('local code review before the PR (real session host + git, fake claude 
     await env.core.sessions.action(s.id, 'open-pr');
     const r = await waitFor(() => env.core.sessions.get(s.id), (x) => x.codeReview?.state === 'failed', 30000, 'the review to fail');
     const childId = all<{ id: string }>(env.core.db, 'SELECT id FROM sessions WHERE parent_id = ?', s.id)[0].id;
-    // Archiving the review session alone keeps the task's worktree.
+    const log = mekoLogPath(env.core.paths.designs, childId);
+    mkdirSync(dirname(log), { recursive: true });
+    writeFileSync(log, '');
+    // Archiving the review session alone keeps the task's worktree, and its Meko call log for the task's life.
     await env.core.sessions.archive(env.core.sessions.row(childId), { keepBranch: false });
     expect(env.core.sessions.row(s.id).worktree_released).toBe(0);
     expect(r.codeReview!.sessionId).toBe(childId);
     expect(env.core.sessions.get(s.id).codeReview!.sessionId).toBeNull();
+    expect(existsSync(log)).toBe(true);
+    await env.core.sessions.archive(env.core.sessions.row(s.id), { keepBranch: true });
+    expect(existsSync(log)).toBe(false);
   });
 });

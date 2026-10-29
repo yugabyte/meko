@@ -82,9 +82,12 @@ sequenceDiagram
 itself when it's done (`Lifecycle.sendReviewedPr`).
 
 **The review session** is a session of kind `code-review` (`Session.parentId` is its task), held by
-the session host like any other, so it survives restarts and the user can open its terminal. It
-works in its task's worktree without owning it (`worktree_released`), so archiving it never frees
-the worktree or deletes the branch; archiving the task archives it. Its edit guard denies every
+the session host like any other, so it survives restarts. It works in its task's worktree without
+owning it (`worktree_released`), so archiving it never frees the worktree or deletes the branch. It
+is archived as soon as the review is done (`finish()`: the findings stay with the review), when the
+user cancels it, when another review replaces it, and with its task; a failed review keeps it for
+Retry. Its Meko call log (the passes' gotcha searches, with Log Meko calls on) stays until its task
+is archived, so a done review's calls can still be read. Its edit guard denies every
 edit in the repo, and on Claude Code `--disallowedTools` takes Bash and the edit and web tools away
 from it and its subagents; OpenCode's session config denies them. Its first prompt is the first
 sweep's, and AgentK sends each later step's prompt as the turn before ends.
@@ -163,9 +166,14 @@ without Meko. Retired gotchas aren't filtered: the cloud's roster of them isn't 
 
 The review is never a tab or a rail row of its own: it's a part joined to its task's tab and rail
 row (`ReviewSegment`), a blue magnifier whose lens pulses while the review works and shows Meko's
-"m" while the review session is in a Meko call (`CodeReviewSummary.mekoCall`), then the step
-(`3/5`, the scoring's `4/9`), the result (`2·1`, blockers·majors, or `✓`) or a red `!`. Clicking it
-opens the review session: its terminal and the findings panel (`ReviewFindings`: every candidate by
-round and sweep, with its passes, verdict, confidence, kept or why dropped, credited gotchas and
-what the task did). While the review holds the PR, the task's Code gate shows it, with Cancel, or
+"m" while the review session is in a Meko call (`CodeReviewSummary.mekoCall`), then the step it's
+on (`reviewSteps()`: each pass of a sweep, then scoring as one step, so Sagittarius 3.0 counts `1/6`
+to `6/6` and Sirius 1.0, unscored, `1/1`; with depth > 1 the passes count again for each sweep, and
+the tooltip names the sweep), `R1` while the task fixes round 1's findings, the result (`2·1`,
+blockers·majors, until the task has said what it did with every kept finding, every round's,
+through `review_outcome`: `CodeReviewSummary.addressed`; then, or with none, `LGTM`) or a red `!`.
+A task that answers in its reply instead (tools off, or an untrusted PR head) records no outcomes,
+so its counts stay. Clicking it opens the findings panel beside the task's terminal (`ReviewFindings`: every candidate by round and sweep,
+with its passes, verdict, confidence, kept or why dropped, credited gotchas and what the task did),
+never the review session. While the review holds the PR, the task's Code gate shows it, with Cancel, or
 Retry and Open anyway.
