@@ -171,6 +171,17 @@ describe('server PATH', () => {
     expect(withLocalBin('/home/me/.local/bin:/usr/bin', '/home/me')).toBe('/home/me/.local/bin:/usr/bin');
     expect(withLocalBin('', '/home/me')).toBe('/home/me/.local/bin');
   });
+
+  // launchd's PATH, when the login shell gave none: gh from Homebrew or its installer is still found.
+  it.each([
+    ['/usr/bin:/bin:/usr/sbin:/sbin', '/usr/bin:/bin:/usr/sbin:/sbin:/home/me/.local/bin:/usr/local/bin:/opt/homebrew/bin'],
+    ['/opt/homebrew/bin:/usr/bin:/usr/local/bin:/home/me/.local/bin', '/opt/homebrew/bin:/usr/bin:/usr/local/bin:/home/me/.local/bin'],
+    ['/usr/local/bin:/usr/bin', '/usr/local/bin:/usr/bin:/home/me/.local/bin:/opt/homebrew/bin'],
+    ['', '/home/me/.local/bin:/usr/local/bin:/opt/homebrew/bin'],
+  ])('adds ~/.local/bin and then Homebrew\'s folders to %j, each once', async (path, want) => {
+    const { withUsualBins } = await import('../../src/server/paths.js');
+    expect(withUsualBins(path, '/home/me')).toBe(want);
+  });
 });
 
 describe('CLI labels', () => {

@@ -52,6 +52,16 @@ one. The host runs in the foreground, as launchd wants. Both jobs set
 restart the server with `launchctl kickstart -k`, or by exiting and letting `KeepAlive` bring it
 back; reinstalling never reloads a loaded host job.
 
+**Their PATH.** systemd and launchd start both services with a thin PATH (launchd's is
+`/usr/bin:/bin:/usr/sbin:/sbin`). At its start, each one reads PATH from the user's login shell
+(`adoptLoginPath` in `cli.ts`), then adds `~/.local/bin`, `/usr/local/bin` and `/opt/homebrew/bin`
+when they're missing. The shell gets 5 s. A slow profile can take longer. So can a profile that
+reads `~/Downloads`, `~/Documents` or `~/Desktop` on macOS: macOS asks whether Meko may open the
+folder, and the shell waits for the answer. macOS asks again after each Meko update, because the
+`meko` program is a new one. When the shell gives no PATH, the service keeps the thin PATH with
+those three folders, and `server.log` (or `host.log`) says why. Sessions don't depend on this:
+their launcher runs the login shell itself.
+
 **Versions before the session host** ran every Claude in tmux, in a tmux service. The server
 moved an install off it by itself on its first start after the update (it added the host service,
 ended the sessions in tmux, and removed the tmux service once the update was final). That shipped
