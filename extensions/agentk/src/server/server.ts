@@ -40,10 +40,12 @@ import { MAX_IDLE_DAYS, MAX_IDLE_PER_REPO } from './worktrees.js';
 const MAX_BUFFERED_STATE = 4 * 1024 * 1024;
 /** How long opening Settings waits for a read of the Meko on this computer (`meko` itself may take 5 s). */
 const LOCAL_MEKO_WAIT_MS = 1500;
-const ACTIONS: SessionAction[] = [
-  'approve-design', 'cancel-approval', 'open-pr', 'merge', 'cancel-queued', 'request-review', 'force-review', 'resume', 'archive', 'discard', 'update-pr', 'close-review',
-  'learn',
-];
+/** Every SessionAction, keyed so a new one can't be left out (the route refuses what isn't here). */
+const ACTIONS: Record<SessionAction, true> = {
+  'approve-design': true, 'cancel-approval': true, 'open-pr': true, merge: true, 'cancel-queued': true, 'request-review': true, 'force-review': true,
+  resume: true, archive: true, discard: true, 'update-pr': true, 'close-review': true, learn: true,
+  'review-cancel': true, 'review-retry': true, 'review-open-anyway': true,
+};
 /**
  * The app page's Content-Security-Policy. No script-src: the design panel's Artifact frame is a
  * srcdoc iframe, which takes this policy on top of its own (design-frame.ts), and Artifacts run
@@ -446,7 +448,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   });
   app.post<{ Params: { id: string; action: string }; Body: unknown }>('/api/sessions/:id/actions/:action', async (req) => {
     const action = req.params.action as SessionAction;
-    if (!ACTIONS.includes(action)) throw new HttpError(400, `Unknown action ${action}.`);
+    if (!Object.hasOwn(ACTIONS, action)) throw new HttpError(400, `Unknown action ${action}.`);
     return core.sessions.action(req.params.id, action, req.body);
   });
   app.patch<{ Params: { id: string }; Body: UpdateSessionRequest | null }>('/api/sessions/:id', async (req) =>

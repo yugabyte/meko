@@ -71,7 +71,7 @@ let sessionId = opt('--session-id') ?? opt('--resume');
 const dir = process.env.FAKE_CLAUDE_DIR;
 mkdirSync(dir, { recursive: true });
 let transcript = join(dir, `${sessionId}.jsonl`);
-appendFileSync(join(dir, 'argv.jsonl'), JSON.stringify({ args, cwd: process.cwd(), env: { MEKO_AGENT_ID: process.env.MEKO_AGENT_ID, MEKO_DATAPACK_ID: process.env.MEKO_DATAPACK_ID, MEKO_CHECKPOINT_INTERVAL: process.env.MEKO_CHECKPOINT_INTERVAL, CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: process.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS } }) + '\n');
+appendFileSync(join(dir, 'argv.jsonl'), JSON.stringify({ args, cwd: process.cwd(), env: { MEKO_AGENT_ID: process.env.MEKO_AGENT_ID, MEKO_DATAPACK_ID: process.env.MEKO_DATAPACK_ID, MEKO_CHECKPOINT_INTERVAL: process.env.MEKO_CHECKPOINT_INTERVAL, CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: process.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS } }) + '\n');
 
 // Positional prompt: the last argument that isn't a flag value; everything after "--" is positional
 // (like Claude Code's CLI, which rejects a prompt starting with "-" before "--" as an unknown option).
