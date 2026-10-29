@@ -212,10 +212,30 @@ export interface CodeReviewSummary {
   candidates: number;
   /** Findings kept so far, every round's added up. */
   counts: SeverityCounts;
+  /** Done, and the task said what it did (fixed or declined) with each of the last round's kept findings. */
+  addressed: boolean;
   /** The review session is in a Meko tool call (the lens shows Meko's m). */
   mekoCall: boolean;
   /** Why it failed or was cancelled, in plain words; null otherwise. */
   detail: string | null;
+}
+
+/**
+ * A round's steps: each pass of a sweep, then scoring as one step when the strategy scores
+ * (Sagittarius 3.0's 5 passes and its scorers are 6 steps, Sirius 1.0's one pass is 1).
+ */
+export function reviewSteps(r: Pick<CodeReviewSummary, 'strategy' | 'passes'>): number {
+  return r.passes + (strategyInfo(r.strategy)?.scored ? 1 : 0);
+}
+
+/** The step a running review is on, from 1: the pass after the last one reported, or scoring. */
+function reviewStep(r: CodeReviewSummary): number {
+  return r.state === 'scoring' ? reviewSteps(r) : Math.min(r.passesDone + 1, r.passes);
+}
+
+/** What a done review shows: LGTM once nothing is left to address, else what it found. */
+function doneShowsCounts(r: CodeReviewSummary): boolean {
+  return totalCount(r.counts) > 0 && !r.addressed;
 }
 
 /** The review's part of a task's tab: the short count after the magnifier. */
@@ -225,11 +245,10 @@ export function reviewSegmentText(r: CodeReviewSummary): string {
     case 'cancelled':
       return '!';
     case 'done':
-      return totalCount(r.counts) ? `${r.counts.blocker}·${r.counts.major}` : '✓';
-    case 'scoring':
-      return `${r.scoresDone}/${r.candidates}`;
+      return doneShowsCounts(r) ? `${r.counts.blocker}·${r.counts.major}` : 'LGTM';
     case 'sweeping':
-      return `${Math.min(r.passesDone + 1, r.passes)}/${r.passes}`;
+    case 'scoring':
+      return `${reviewStep(r)}/${reviewSteps(r)}`;
     case 'fixing':
       return `R${r.round}`;
     default:
@@ -243,18 +262,24 @@ export function reviewSegmentLabel(r: CodeReviewSummary): string {
   const where: string[] = [];
   if (r.rounds > 1) where.push(`round ${r.round} of ${r.rounds}`);
   if (r.depth > 1 && r.state === 'sweeping') where.push(`sweep ${r.sweep} of ${r.depth}`);
+  const step = `step ${reviewStep(r)} of ${reviewSteps(r)}`;
   let what: string;
   switch (r.state) {
     case 'preparing': what = 'preparing'; break;
-    case 'sweeping': what = `pass ${Math.min(r.passesDone + 1, r.passes)} of ${r.passes}`; break;
-    case 'scoring': what = `scoring ${Math.min(r.scoresDone + 1, r.candidates)} of ${r.candidates}`; break;
+    case 'sweeping': what = `${step}, pass ${reviewStep(r)} of ${r.passes}`; break;
+    case 'scoring': what = `${step}, scoring ${Math.min(r.scoresDone + 1, r.candidates)} of ${r.candidates}`; break;
     case 'fixing': what = 'waiting for the fixes'; break;
-    case 'done': what = totalCount(r.counts) ? countsText(r.counts) : 'LGTM'; break;
+    case 'done': what = doneShowsCounts(r) ? countsText(r.counts) : totalCount(r.counts) ? `LGTM, ${countsText(r.counts)} addressed` : 'LGTM'; break;
     case 'failed': what = `failed${r.detail ? `: ${r.detail}` : ''}. Retry or Open anyway`; break;
     case 'cancelled': what = 'cancelled. Retry or Open anyway'; break;
   }
   const meko = r.mekoCall ? ', searching Meko' : '';
   return `Local review: ${[name, ...where, what].join(', ')}${meko}`;
+}
+
+/** The Code gate's line for a done review: what it found until the task addressed it, then LGTM. */
+export function reviewDoneText(r: CodeReviewSummary): string {
+  return doneShowsCounts(r) ? `Reviewed: ${countsText(r.counts)}` : 'Reviewed: LGTM';
 }
 
 /** `2 blockers, 1 major` (or `no findings`), for messages. */

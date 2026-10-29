@@ -299,7 +299,7 @@ your phone can connect.
   while it codes and addresses reviews; each version goes to Meko, and the PR names the latest one.
   Before a PR opens, AgentK reviews the change on your computer with the cloud reviewer's algorithm
   (Sagittarius 3.0: five specialist passes and a scorer per finding; or the quicker Sirius 1.0), in a
-  review session shown as a magnifier on the task's tab. The task fixes what it finds, and the PR
+  review session shown as a magnifier on the task's tab, which opens its findings. The task fixes what it finds, and the PR
   says how it went (`me_ak_review:2 blockers,1 major addressed`, or `me_ak_review:LGTM`). Strategy,
   re-review rounds and depth are in Settings, the project's settings and each session's own.
   You approve the design, opening the PR, and Merge & Close, which merges the PR and

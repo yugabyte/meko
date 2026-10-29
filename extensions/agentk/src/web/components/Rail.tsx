@@ -31,6 +31,7 @@ export function Rail({
   sessionsShown,
   harnessLogos,
   onSelectSession,
+  onOpenReview,
   onNewSession,
   onRenameSession,
   onSessionToTop,
@@ -71,6 +72,8 @@ export function Rail({
   /** Show each listed session's harness logo: open sessions run on more than one harness and the setting is on. */
   harnessLogos: boolean;
   onSelectSession: (s: Session) => void;
+  /** A task's magnifier: the task on screen with its local review's findings open. */
+  onOpenReview: (task: Session) => void;
   /** New session in this project, offered at the end of each listed project's sessions. */
   onNewSession: (projectId: string) => void;
   /** Double-clicking a session renames it; the phone layout uses Rename session in the ⋯ sheet. */
@@ -204,7 +207,6 @@ export function Rail({
                   {sessions.map((s, j) => {
                     const part = joinedPartSelected(s, currentSessionId);
                     const review = s.codeReview;
-                    const child = review?.sessionId ? p.sessions.find((x) => x.id === review.sessionId) : undefined;
                     const row = (
                     <div key={s.id} className="rail-sess-row">
                       <button
@@ -238,7 +240,7 @@ export function Rail({
                     return (
                       <div key={s.id} className={cx('rail-joined', part === 'review' && 'review-sel')}>
                         {row}
-                        <ReviewSegment review={review} selected={part === 'review'} className="rail-review" onOpen={() => child && onSelectSession(child)} />
+                        <ReviewSegment review={review} selected={part === 'review'} className="rail-review" onOpen={() => onOpenReview(s)} />
                       </div>
                     );
                   })}

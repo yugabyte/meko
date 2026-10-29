@@ -581,7 +581,7 @@ export function ReviewGlass({ review }: { review: CodeReviewSummary }) {
 /**
  * A task's local review joined to its tab or rail row: the magnifier and its short count
  * (`reviewSegmentText`), spelled out for its tooltip and screen readers (`reviewSegmentLabel`).
- * Opens the review's session.
+ * Opens the review's findings beside the task's terminal (the review's session stops once it's done).
  */
 export function ReviewSegment({ review, selected, className, tab = false, onOpen }: {
   review: CodeReviewSummary;
@@ -601,7 +601,6 @@ export function ReviewSegment({ review, selected, className, tab = false, onOpen
       title={label}
       aria-label={label}
       aria-current={!tab && selected ? 'page' : undefined}
-      disabled={!review.sessionId}
       onClick={onOpen}
     >
       <ReviewGlass review={review} />

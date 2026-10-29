@@ -333,6 +333,13 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
     navigate({ view: 'project', projectId: p.id, sessionId: s?.id ?? null }, { replace: isDrawerEntry() });
   }, []);
 
+  // A task's magnifier (its tab, its rail row): the task on screen with its local review's findings open.
+  const [findingsFor, setFindingsFor] = useState<{ id: string; at: number } | null>(null);
+  const openFindings = (s: Session) => {
+    navigate({ view: 'project', projectId: s.projectId, sessionId: s.id }, { replace: isDrawerEntry() });
+    setFindingsFor((f) => ({ id: s.id, at: (f?.at ?? 0) + 1 }));
+  };
+
   // The phone layout's projects drawer gets its own history entry, so the Back gesture closes it.
   const openDrawer = () => {
     if (!isDrawerEntry()) history.pushState({ akDrawer: true }, '', location.href);
@@ -551,6 +558,10 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
           navigate({ view: 'project', projectId: s.projectId, sessionId: s.id }, { replace: isDrawerEntry() });
           closeDrawer();
         }}
+        onOpenReview={(s) => {
+          openFindings(s);
+          closeDrawer();
+        }}
         onNewSession={(projectId) => {
           closeDrawer();
           setModal({ kind: 'new-session', projectId });
@@ -634,6 +645,8 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
             onMenu={openDrawer}
             showTabs={sessionTabsShown(railSessions, railHidden, mobile)}
             harnessLogos={logos}
+            findingsFor={findingsFor}
+            onOpenFindings={openFindings}
             onError={showToast}
           />
         ) : (
