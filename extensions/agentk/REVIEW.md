@@ -343,9 +343,19 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       only from the session's `tool-results` folder (`savedreply.ts`), and never changes what the
       usage counts (the notice is what Claude read).
 - [ ] Nothing changes Claude Code's Meko setup (its settings, `~/.claude.json`, the plugin) unless
-      the user asked: the installer's question (or `--install-deps`) or **Set up Claude Code with
-      this Meko**. A Claude Code token is only ever sent to AgentK's server, and only when Claude
-      Code is set up for that server; messages name hosts, never full URLs or tokens.
+      the user asked: the installer's question (or `--install-deps`), **Connect to Meko** or **Set
+      up Claude Code with this Meko**. A Claude Code token is only ever sent to AgentK's server, and
+      only when Claude Code's settings name that server; messages name hosts, never full URLs or tokens.
+- [ ] Meko owns the agents' connections (AGENTS.md invariant 7). AgentK's server only reads `GET
+      /api/v1/agents` with the client token (`mekoagents.ts`), on events (startup, Settings open,
+      Check again, after an agent's setup, a change of the local Meko or its link), never on a timer,
+      and never posts to Meko's agent routes; Connect is the page's own call to Meko, with the
+      owner's sign-in. No new check of an agent's `meko` MCP server in AgentK: that's Meko's list.
+      Only new sessions are gated (`Harnesses.statusOf`, through `pick` and `defaultFor`), never a
+      running or resumed one; a Meko that doesn't answer leaves the last list read in force (kept
+      in `state.db`), and with none ever read, or a 404, nothing is gated; nor is an agent Meko
+      didn't find (`missing`: Meko never sees AgentK's `[<id>] command`). Before refusing one, `pick`
+      reads Meko's list again. A refusal names the fix (`notConnectedText`).
 - [ ] The Meko search at session start (`recall.ts`) never holds up a session: `create()` doesn't
       wait for it, the SessionStart context hook answers within its limit and prints nothing when
       there's no result or no server, and there's no search with Meko off or no datapacks. What it

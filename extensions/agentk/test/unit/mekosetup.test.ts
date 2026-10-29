@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { tempDir } from '../helpers.js';
 import {
-  MekoSetupError, claudeHasMekoMcpAsync, claudeMekoTokens, ensureMekoSetup, envKeyGap, latestMekoSetup, manualMekoSetup, matchesIntegrity, mekoClaudeGaps, readClaudeMeko,
+  MekoSetupError, claudeSettingsToken, ensureMekoSetup, envKeyGap, latestMekoSetup, manualMekoSetup, matchesIntegrity, mekoClaudeGaps, readClaudeMeko,
   runMekoSetup, sameMekoUrl, type MekoSetupPackage,
 } from '../../src/server/mekosetup.js';
 import { defaultMekoTools } from '../../src/server/mekosettings.js';
@@ -31,33 +31,23 @@ describe('Meko in Claude Code: what is missing', () => {
 
   const CLOUD = 'https://mcp.mekodata.ai/mcp';
   const OWN = 'https://meko.example.com/mcp';
-  const configPath = () => join(dir, 'claude.json');
-  const register = (entry: unknown) => writeFileSync(configPath(), JSON.stringify({ mcpServers: { meko: entry } }));
-  const read = () => readClaudeMeko(claudeDir(), configPath());
+  const read = () => readClaudeMeko(claudeDir());
   const ready = (env: Record<string, string> = { MEKO_API_KEY: 'k' }) => {
     installPlugin();
     settings({ enabledPlugins: { 'meko-agent-skills@meko-agent-skills': true }, env });
   };
-  const never = () => {
-    throw new Error('asked claude mcp get although ~/.claude.json has the server');
-  };
 
-  it('lists the plugin, the key and the MCP server when none is there', () => {
-    expect(mekoClaudeGaps(read(), CLOUD, () => false)).toEqual([
+  it('lists the plugin and the key when neither is there (the MCP server is Meko\'s to report)', () => {
+    expect(mekoClaudeGaps(read(), CLOUD)).toEqual([
       "The meko-agent-skills plugin isn't installed in Claude Code.",
       "Claude Code's settings have no MEKO_API_KEY.",
-      'Claude Code has no meko MCP server.',
     ]);
   });
 
-  it('is empty when both places use this server, whatever tokens they hold', () => {
+  it('is empty when the settings use this server, whatever token they hold, which is the one tried', () => {
     ready({ MEKO_API_KEY: 'settings-token' });
-    register({ type: 'http', url: `${CLOUD}/`, headers: { Authorization: 'Bearer server-token' } });
-    expect(mekoClaudeGaps(read(), CLOUD, never)).toEqual([]);
-    expect(claudeMekoTokens(read(), 'https://MCP.MekoData.ai/mcp')).toEqual([
-      { place: 'settings', token: 'settings-token' },
-      { place: 'server', token: 'server-token' },
-    ]);
+    expect(mekoClaudeGaps(read(), CLOUD)).toEqual([]);
+    expect(claudeSettingsToken(read(), 'https://MCP.MekoData.ai/mcp')).toBe('settings-token');
   });
 
   it('counts a disabled plugin, and never a key only in the environment', () => {
@@ -65,7 +55,7 @@ describe('Meko in Claude Code: what is missing', () => {
     settings({ enabledPlugins: { 'meko-agent-skills@meko-agent-skills': false } });
     process.env.MEKO_API_KEY = 'k'; // sessions don't inherit the installer's environment
     try {
-      expect(mekoClaudeGaps(read(), CLOUD, () => true)).toEqual([
+      expect(mekoClaudeGaps(read(), CLOUD)).toEqual([
         "The meko-agent-skills plugin is installed in Claude Code but not enabled.",
         "Claude Code's settings have no MEKO_API_KEY.",
       ]);
@@ -74,76 +64,17 @@ describe('Meko in Claude Code: what is missing', () => {
     }
   });
 
-  it('names the other server when either place points elsewhere, by host only', () => {
+  it('names the other server when the settings point elsewhere, by host only, and tries no token there', () => {
     ready({ MEKO_API_KEY: 'k', MEKO_MCP_URL: 'https://user:secret@meko.example.com/mcp?x=1' });
-    register({ type: 'http', url: 'https://other.example.org/mcp', headers: { Authorization: 'Bearer k' } });
-    const gaps = mekoClaudeGaps(read(), CLOUD, never);
-    expect(gaps).toEqual([
-      "Claude Code's settings point at meko.example.com, not mcp.mekodata.ai.",
-      "Claude Code's meko MCP server points at other.example.org, not mcp.mekodata.ai.",
-    ]);
+    const gaps = mekoClaudeGaps(read(), CLOUD);
+    expect(gaps).toEqual(["Claude Code's settings point at meko.example.com, not mcp.mekodata.ai."]);
     expect(gaps.join(' ')).not.toMatch(/secret|user/);
-    // Neither token is on this server, so neither is tried.
-    expect(claudeMekoTokens(read(), CLOUD)).toEqual([]);
+    expect(claudeSettingsToken(read(), CLOUD)).toBe(null);
   });
 
   it('counts unset MEKO_MCP_URL as Meko Cloud, which the hooks then use', () => {
     ready();
-    register({ type: 'http', url: OWN, headers: { Authorization: 'Bearer k' } });
-    expect(mekoClaudeGaps(read(), OWN, never)).toEqual(["Claude Code's settings point at mcp.mekodata.ai, not meko.example.com."]);
-  });
-
-  it('reads the MCP server token from its header, expanding ${VAR}, and counts a missing one', () => {
-    ready();
-    register({ type: 'http', url: CLOUD, headers: { authorization: 'Bearer ${AKL_TEST_TOKEN}' } });
-    process.env.AKL_TEST_TOKEN = 'from-env';
-    try {
-      expect(read().server).toEqual({ url: CLOUD, token: 'from-env' });
-    } finally {
-      delete process.env.AKL_TEST_TOKEN;
-    }
-    register({ type: 'http', url: CLOUD });
-    expect(mekoClaudeGaps(read(), CLOUD, never)).toEqual(["Claude Code's meko MCP server sends no token."]);
-  });
-
-  it('expands ${VAR} with Claude Code\'s settings env over the environment, as a session sees it', () => {
-    ready({ MEKO_API_KEY: 'from-settings' });
-    register({ type: 'http', url: CLOUD, headers: { Authorization: 'Bearer ${MEKO_API_KEY}' } });
-    process.env.MEKO_API_KEY = 'the-servers-own';
-    try {
-      expect(read().server).toEqual({ url: CLOUD, token: 'from-settings' });
-    } finally {
-      delete process.env.MEKO_API_KEY;
-    }
-  });
-
-  it("doesn't call a token from a variable AgentK can't see missing, and doesn't try it", () => {
-    ready();
-    register({ type: 'http', url: CLOUD, headers: { Authorization: 'Bearer ${ONLY_IN_MY_PROFILE}' } });
-    expect(read().server).toEqual({ url: CLOUD, token: null, unresolved: 'ONLY_IN_MY_PROFILE' });
-    expect(mekoClaudeGaps(read(), CLOUD, never)).toEqual([]);
-    expect(claudeMekoTokens(read(), CLOUD)).toEqual([{ place: 'settings', token: 'k' }]);
-    // A default makes it resolved.
-    register({ type: 'http', url: CLOUD, headers: { Authorization: 'Bearer ${ONLY_IN_MY_PROFILE:-fallback}' } });
-    expect(read().server).toEqual({ url: CLOUD, token: 'fallback' });
-  });
-
-  it("doesn't count a meko MCP server Claude Code couldn't be asked about", () => {
-    ready();
-    expect(mekoClaudeGaps(read(), CLOUD, () => null)).toEqual([]);
-    expect(mekoClaudeGaps(read(), CLOUD, () => false)).toEqual(['Claude Code has no meko MCP server.']);
-  });
-
-  it("asks [claude] command, telling 'not there' (exit 1) from 'couldn't ask'", async () => {
-    const script = (name: string, body: string) => {
-      const f = join(dir, name);
-      writeFileSync(f, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
-      return f;
-    };
-    expect(await claudeHasMekoMcpAsync(script('has', '[ "$1 $2 $3" = "mcp get meko" ] && exit 0; exit 3'))).toBe(true);
-    expect(await claudeHasMekoMcpAsync(script('hasnt', 'exit 1'))).toBe(false);
-    expect(await claudeHasMekoMcpAsync(script('broken', 'exit 2'))).toBe(null);
-    expect(await claudeHasMekoMcpAsync(join(dir, 'no-such-claude'))).toBe(null);
+    expect(mekoClaudeGaps(read(), OWN)).toEqual(["Claude Code's settings point at mcp.mekodata.ai, not meko.example.com."]);
   });
 
   it("flags a different key in Claude Code's settings only when AgentK's key came from the installer's environment", () => {
@@ -153,15 +84,6 @@ describe('Meko in Claude Code: what is missing', () => {
     ]);
     expect(envKeyGap(read(), 'from-env', false)).toEqual([]);
     expect(envKeyGap(read(), 'other-account', true)).toEqual([]);
-  });
-
-  it('checks neither URL nor token of a server without a URL, and asks claude only when there is no entry', () => {
-    ready();
-    register({ type: 'stdio', command: 'meko-proxy' });
-    expect(mekoClaudeGaps(read(), CLOUD, never)).toEqual([]);
-    expect(claudeMekoTokens(read(), CLOUD)).toEqual([{ place: 'settings', token: 'k' }]);
-    rmSync(configPath());
-    expect(mekoClaudeGaps(read(), CLOUD, () => true)).toEqual([]);
   });
 
   it('compares URLs without a trailing slash and with the host in any case', () => {
@@ -296,20 +218,19 @@ describe("Meko's setup package", () => {
     expect(ran.args.join(' ')).not.toContain('secret-key');
   });
 
-  it("reports a Claude Code setup that leaves the meko MCP server with no token as not finished", async () => {
-    // What the package does for the local Meko when it gets no key: the URL, and no Authorization header.
+  it("reports a Claude Code setup that leaves what Meko's capture needs missing as not finished", async () => {
+    // A package that writes the URL but no key, and installs no plugin.
     const { fetchImpl } = fakePackage(`const url = process.argv[process.argv.indexOf('--url') + 1];
 const d = process.env.CLAUDE_CONFIG_DIR;
-writeFileSync(d + '/settings.json', JSON.stringify({ env: { MEKO_MCP_URL: url, MEKO_API_KEY: 'mko_tkn_cloud' } }));
-writeFileSync(d + '/.claude.json', JSON.stringify({ mcpServers: { meko: { type: 'http', url } } }));`);
+writeFileSync(d + '/settings.json', JSON.stringify({ env: { MEKO_MCP_URL: url } }));`);
     const claudeDir = join(dir, 'claude');
     mkdirSync(claudeDir);
     const before = process.env.CLAUDE_CONFIG_DIR;
     process.env.CLAUDE_CONFIG_DIR = claudeDir;
     vi.stubGlobal('fetch', fetchImpl);
     try {
-      const setUp = defaultMekoTools.setUpClaude('http://127.0.0.1:7778/mcp', 'local-token', () => undefined, 'claude', 'the command');
-      await expect(setUp).rejects.toThrow(/Still: .*Claude Code's meko MCP server sends no token\. Run it yourself: the command$/);
+      const setUp = defaultMekoTools.setUpClaude('http://127.0.0.1:7778/mcp', 'local-token', () => undefined, 'the command');
+      await expect(setUp).rejects.toThrow(/Still: .*Claude Code's settings have no MEKO_API_KEY\. Run it yourself: the command$/);
     } finally {
       vi.unstubAllGlobals();
       if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;

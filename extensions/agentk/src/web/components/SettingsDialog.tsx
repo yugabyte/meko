@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type MutableRefObject, type ReactNode } from 'react';
-import { WORK_SYNC_MINUTES_MAX, type HarnessStatus, type MekoKeySource, type MekoStatus, type Settings, type SettingsUpdate, type UpdateStatus } from '../../shared/types';
-import { HARNESS_CAPS, HARNESS_IDS, type HarnessId } from '../../shared/harnesses';
+import {
+  WORK_SYNC_MINUTES_MAX, type HarnessMekoState, type HarnessStatus, type MekoKeySource, type MekoStatus, type Settings, type SettingsUpdate, type UpdateStatus,
+} from '../../shared/types';
+import { HARNESS_CAPS, HARNESS_IDS, onlyMekoBlocks, type HarnessId } from '../../shared/harnesses';
 import { MEKO_ACCOUNT_PATH, MEKO_CLOUD_PATH } from '../../shared/mekourls';
 import { api, errorMessage } from '../api';
 import { AUTO_SAVE_IDLE, autoSave, settle, type AutoSaveStatus } from '../autosave';
 import { saveRailSessions, useRailSessions } from '../rail';
+import { UPDATE_MEKO_AGENTS, connectToMeko, connectable, setUpWithMeko } from '../mekoagents';
 import { installing, mekoUpdates, refreshMekoUpdate, takeRow, updateFailed, useMekoUpdate } from '../mekoupdate';
 import type { MekoAuth } from '../signin';
 import { setTermThemePref, termThemePref, TERM_THEME_LABEL, type TermThemePref } from '../termtheme';
@@ -495,6 +498,7 @@ function harnessNote(id: HarnessId, h: HarnessStatus | undefined): ReactNode {
     return `⚠️ ${HARNESS_CAPS[id].label} didn't answer --version here. Install it and run ${HARNESS_CAPS[id].login}, or set [${id}] command in config.toml, then check again.`;
   }
   if (!h.available) {
+    if (onlyMekoBlocks(h)) return `Version ${h.version}; not offered until it’s connected to Meko.`;
     const upgrade = HARNESS_CAPS[id].upgrade;
     return `Version ${h.version}; AgentK needs ${h.minVersion} or later. ${upgrade ? `Run ${upgrade}` : 'Update it'}, then check again.`;
   }
@@ -615,6 +619,7 @@ function HarnessTab({
           updating={updating === shown}
           outcome={shown === 'claude' ? claudeOutcome : null}
           meko={meko}
+          onHarnesses={setRechecked}
           onEnable={(on) => enable(shown, on)}
           onChange={change}
           onCheck={checkAgain}
@@ -657,6 +662,7 @@ export function AgentSettings({
   updating,
   outcome = null,
   meko,
+  onHarnesses = () => undefined,
   onEnable,
   onChange,
   onCheck,
@@ -673,6 +679,8 @@ export function AgentSettings({
   outcome?: { ok: boolean; text: string } | null;
   /** Whether this agent's sessions reach AgentK's Meko (`AppState.meko`); left out, no Meko row. */
   meko?: MekoStatus;
+  /** Every harness's status as Connect to Meko's refresh answered, until the next state push. */
+  onHarnesses?: (harnesses: HarnessStatus[]) => void;
   onEnable: (on: boolean) => void;
   onChange: (patch: Omit<SettingsUpdate, 'meko'>) => void;
   onCheck: () => void;
@@ -706,7 +714,9 @@ export function AgentSettings({
           </span>
         )}
       </div>
-      {meko && enabled && status?.available && <AgentMeko id={id} meko={meko} />}
+      {meko && enabled && status && (status.available || onlyMekoBlocks(status)) && (
+        <AgentMeko id={id} harness={status} meko={meko} onHarnesses={onHarnesses} />
+      )}
       {id === 'opencode' && enabled && (
         <InfoCheck
           id="set-opencode-tracking"
@@ -781,76 +791,110 @@ export function MekoLinks({ meko, auth }: { meko: MekoStatus; auth: MekoAuth | n
   );
 }
 
+/** The Meko row's tag for an agent's `meko` MCP server, as Meko reports it (`HarnessStatus.meko`). */
+const MEKO_TAG: Record<HarnessMekoState, string> = {
+  connected: 'connected',
+  stale: 'needs reconnecting',
+  elsewhere: 'connected elsewhere',
+  none: 'not connected',
+  missing: 'not found',
+};
+
 /**
- * Settings › Harness › an agent: whether its sessions reach AgentK's Meko, worked out by the server
- * (`MekoStatus.claude`, `.opencode`, `.kiro`), with Meko's setup for it when they don't. Nothing
- * while there's no Meko, or nothing to say for that agent.
+ * Settings › Harness › an agent: whether it's connected to Meko (Meko's list, `HarnessStatus.meko`),
+ * with **Connect to Meko** when it isn't, and whether its sessions reach AgentK's Meko, worked out by
+ * the server (`MekoStatus.claude`, `.opencode`, `.kiro`), with Meko's setup for what Meko's capture
+ * needs. Nothing when there's nothing to say for that agent.
  */
-function AgentMeko({ id, meko }: { id: HarnessId; meko: MekoStatus }) {
+function AgentMeko({
+  id, harness, meko, onHarnesses,
+}: { id: HarnessId; harness: HarnessStatus; meko: MekoStatus; onHarnesses: (harnesses: HarnessStatus[]) => void }) {
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  if (!meko.configured) return null;
-  const url = meko.url ?? '';
   const label = HARNESS_CAPS[id].label;
-  let tag: string;
-  let bad = false;
-  let hint: string;
+  const url = meko.url ?? '';
+  const m = harness.meko;
+  // The connection first, then what AgentK checks itself.
+  let tag: string | null = m ? MEKO_TAG[m.state] : null;
+  const lines: string[] = [];
+  if (m?.state === 'elsewhere') lines.push(`Connected elsewhere: ${m.url ?? 'another server'}.`);
+  else if (m?.state === 'missing') lines.push(`Meko didn’t find ${label} on this computer.`);
+  else if (!m && meko.agentList === 'old') lines.push(UPDATE_MEKO_AGENTS);
   // Why, or what a fix does, behind the ⓘ.
   let info: string | null = null;
-  let setUp: (() => Promise<unknown>) | null = null;
-  if (id === 'claude') {
+  let capture: string[] = [];
+  if (meko.configured && id === 'claude') {
     const c = meko.claude;
-    const problems = [...c.gaps, ...c.unchecked];
-    bad = problems.length > 0;
-    tag = c.gaps.length ? 'differs' : c.checking ? 'checking' : c.unchecked.length ? 'not checked' : 'matches';
-    hint = problems.length ? problems.join(' ') : c.checking ? 'Checking Claude Code’s tokens on this Meko.' : `Sessions use ${url}.`;
-    if (problems.length) info = 'New sessions pick up a fix; running ones keep what they started with.';
-    if (problems.length) setUp = api.mekoClaudeSetup;
-  } else if (id === 'opencode') {
-    if (!meko.opencode) return null;
-    tag = meko.opencode.own ? 'its own' : 'matches';
-    hint = meko.opencode.own ? 'Sessions use the meko server in OpenCode’s own config.' : `Sessions use ${url}.`;
+    capture = c.capture;
+    lines.push(...c.capture, ...c.unchecked);
+    tag ??= c.capture.length ? 'differs' : c.checking ? 'checking' : c.unchecked.length ? 'not checked' : 'matches';
+    if (c.checking && !lines.length) lines.push('Checking Claude Code’s token on this Meko.');
+  } else if (meko.configured && id === 'kiro' && meko.kiro) {
+    capture = meko.kiro.capture;
+    lines.push(...capture);
+    tag ??= capture.length ? 'differs' : 'matches';
+  } else if (meko.configured && id === 'opencode' && meko.opencode) {
+    tag ??= meko.opencode.own ? 'its own' : 'matches';
     info = meko.opencode.own ? 'AgentK leaves OpenCode’s config as it is.' : 'AgentK adds it to their config.';
-  } else {
-    if (!meko.kiro) return null;
-    const gaps = meko.kiro.gaps;
-    bad = gaps.length > 0;
-    tag = bad ? 'differs' : 'matches';
-    hint = bad ? gaps.join(' ') : `Sessions use ${url}.`;
-    if (bad) info = 'Meko’s setup adds Kiro’s MCP server and the agent Kiro sessions are built from.';
-    if (bad) setUp = api.mekoKiroSetup;
+    if (!lines.length) lines.push(meko.opencode.own ? 'Sessions use OpenCode’s own meko server.' : `Sessions use ${url}.`);
   }
-  const run = (fn: () => Promise<unknown>) => {
+  if (!tag && !lines.length) return null;
+  if (!lines.length && meko.configured && (!m || m.state === 'connected')) lines.push(`Sessions use ${url}.`);
+  const setUp = capture.length > 0 && (id === 'claude' || id === 'kiro');
+  const connect = !setUp && connectable(m);
+  if (setUp) info = 'Meko’s setup changes the agent’s own config. New sessions pick it up; running ones keep what they started with.';
+  else if (connect) info = 'Meko adds its meko MCP server to the agent’s own config, for all your projects. New sessions pick it up.';
+  const bad = !!tag && !['connected', 'matches', 'its own', 'checking'].includes(tag);
+  const run = (fn: () => Promise<string>) => {
     setBusy(true);
     setError(null);
-    setDone(false);
+    setDone(null);
     fn()
-      .then(() => setDone(true))
+      .then(setDone)
       .catch((e) => setError(errorMessage(e)))
       .finally(() => setBusy(false));
   };
+  const connectNow = () =>
+    run(async () => {
+      const r = await connectToMeko(id);
+      onHarnesses(r.harnesses);
+      return [`Connected ${label} to Meko.`, ...r.notes].join(' ');
+    });
+  const setUpNow = () =>
+    run(async () => {
+      await setUpWithMeko(id as 'claude' | 'kiro', m);
+      return `${label} now uses this Meko.`;
+    });
   return (
     <div className="field">
       <div className="info-row">
         <span className="label">
           Meko{' '}
-          <span id={`set-${id}-meko`} className={cx('tag', bad && 'shared')}>
-            {tag}
-          </span>
+          {tag && (
+            <span id={`set-${id}-meko`} className={cx('tag', bad && 'shared')}>
+              {tag}
+            </span>
+          )}
         </span>
         {info && <InfoButton id={`set-${id}-meko-info`} label="Meko" />}
       </div>
-      <span className="hint">{hint}</span>
+      {lines.length > 0 && <span className="hint">{lines.join(' ')}</span>}
       {info && <InfoPanel id={`set-${id}-meko-info`}>{info}</InfoPanel>}
-      {setUp && (
+      {(setUp || connect) && (
         <div className="settings-actions">
-          <button type="button" id={`set-${id}-meko-setup`} className="btn small" disabled={busy} onClick={() => run(setUp)}>
-            {busy ? <Busy label="Setting up" /> : `Set up ${label} with this Meko`}
-          </button>
+          {setUp ? (
+            <button type="button" id={`set-${id}-meko-setup`} className="btn small" disabled={busy} onClick={setUpNow}>
+              {busy ? <Busy label="Setting up" /> : `Set up ${label} with this Meko`}
+            </button>
+          ) : (
+            <button type="button" id={`set-${id}-meko-connect`} className="btn small" disabled={busy} onClick={connectNow}>
+              {busy ? <Busy label="Connecting" /> : 'Connect to Meko'}
+            </button>
+          )}
         </div>
       )}
-      {done && !setUp && <span className="ok-text">{label} now uses this Meko.</span>}
+      {done && !setUp && !connect && <span className="ok-text">{done}</span>}
       <ErrorText error={error} />
     </div>
   );

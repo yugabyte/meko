@@ -1,4 +1,5 @@
-// How to point an agent at this datapack: the MCP URL, the token, and the commands that register
+// How to point an agent at this datapack: the agents on this computer, each connected or
+// disconnected in one press (AgentsCard), the MCP URL, the token, and the commands that register
 // Meko with Claude Code or any other MCP client.
 
 import { useState } from "react";
@@ -6,6 +7,7 @@ import { Eye, EyeOff } from "lucide-react";
 import { api } from "../lib/api";
 import type { Datapack } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
+import { AgentsCard } from "../components/AgentsCard";
 import { CopyBlock } from "../components/CopyBlock";
 import { Button, Card, Code, ErrorNote, Loading } from "../components/ui";
 
@@ -23,10 +25,12 @@ export function ConnectPage({ datapack }: { datapack: Datapack }) {
   const header = token ? ` --header "Authorization: Bearer ${token}"` : "";
   const claude = token
     ? `claude mcp add --transport http --scope user meko ${data.mcp_server_url}${header}`
-    : "meko connect claude   # adds Meko to Claude Code, with the token (or codex, kiro, opencode)";
+    : "meko agent connect claude   # or codex, kiro, opencode";
 
   return (
     <div className="max-w-3xl space-y-4">
+      <AgentsCard />
+
       <Card className="space-y-3 p-4">
         <h3 className="font-medium">Claude Code</h3>
         <p className="text-sm text-muted-foreground">

@@ -17,11 +17,14 @@ import (
 
 const testCloudKey = "mko_tkn_cloud_0123456789wxyz"
 
+// testCloudKey2 is another key fakeCloud's MCP server takes, for a new key.
+const testCloudKey2 = "mko_tkn_cloud_9876543210abcd"
+
 // fakeCloudDown makes fakeCloud's GET /api/v1/datapacks fail with a 500, and fakeCloudEmpty makes it
 // list none.
 var fakeCloudDown, fakeCloudEmpty atomic.Bool
 
-// fakeCloud is a Meko server for the link's checks: MCP at /mcp, taking only testCloudKey, and the
+// fakeCloud is a Meko server for the link's checks: MCP at /mcp, taking testCloudKey (or testCloudKey2), and the
 // REST API's envelope at /api/v1, where GET /datapacks gives two rows to testCloudKey.
 func fakeCloud(t *testing.T) string {
 	t.Helper()
@@ -51,7 +54,7 @@ func fakeCloud(t *testing.T) string {
 			_, _ = w.Write([]byte(`{"data":[]}`))
 			return
 		}
-		if r.Header.Get("Authorization") != "Bearer "+testCloudKey {
+		if a := r.Header.Get("Authorization"); a != "Bearer "+testCloudKey && a != "Bearer "+testCloudKey2 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

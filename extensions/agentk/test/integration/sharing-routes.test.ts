@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
@@ -420,7 +420,9 @@ describe('HTTP API: sharing, invites and Meko', () => {
     env.local.meko = { url: 'http://127.0.0.1:7778/mcp', token: 'local-token' };
     env.local.cloud = { set: false, url: '', apiKey: '', webUrl: '', apiUrl: '' };
     // On the local Meko, the command to run by hand reads its token; on any other server it carries none.
+    // (The setup runs while what Meko's capture needs is missing, checked once Claude Code's version is in.)
     writeFileSync(join(dir, 'settings.json'), '{}');
+    await env.core.harnesses.of('claude').version(env.core.config);
     await env.core.refreshMeko();
     expect((await call('POST', '/api/settings/meko/claude-setup')).statusCode).toBe(200);
     expect(env.mekoTools.state.manuals.pop()).toMatch(/--url http:\/\/127\.0\.0\.1:7778\/mcp --api-key "\$\((MEKO_HOME=\S+ )?meko token\)"$/);
@@ -455,16 +457,21 @@ describe('HTTP API: sharing, invites and Meko', () => {
     expect(env.core.mekoStatus).toMatchObject({ source: 'config', url: 'https://mcp.mekodata.ai/mcp' });
   });
 
-  it("shows when Claude Code's Meko differs, and changes Claude Code only when asked", async () => {
+  it("shows when Claude Code's Meko differs, its MCP server from Meko and its capture from AgentK, and changes Claude Code only when asked", async () => {
     const dir = process.env.CLAUDE_CONFIG_DIR!;
-    /** Claude Code's Meko as Meko's setup writes it, on this server with this token. */
+    /** What Meko's capture reads, as Meko's setup writes it: the plugin, and this server and token in Claude Code's settings. */
     const writeClaude = (url: string, token: string) => {
       mkdirSync(join(dir, 'plugins', 'p'), { recursive: true });
       writeFileSync(join(dir, 'plugins', 'installed_plugins.json'), JSON.stringify({ plugins: { 'meko-agent-skills@m': [{ installPath: join(dir, 'plugins', 'p') }] } }));
       writeFileSync(join(dir, 'settings.json'), JSON.stringify({ enabledPlugins: { 'meko-agent-skills@m': true }, env: { MEKO_MCP_URL: url, MEKO_API_KEY: token } }));
-      const cfgFile = join(dir, '.claude.json');
-      const cfg = existsSync(cfgFile) ? JSON.parse(readFileSync(cfgFile, 'utf8')) : {};
-      writeFileSync(cfgFile, JSON.stringify({ ...cfg, mcpServers: { meko: { type: 'http', url, headers: { Authorization: `Bearer ${token}` } } } }));
+    };
+    /** Meko's list of agents, with Claude Code's meko MCP server in this state. */
+    const mekoSays = async (state: 'connected' | 'elsewhere' | 'none', url: string | null = null) => {
+      env.mekoAgents.value = {
+        kind: 'list',
+        list: { target: { kind: 'cloud', url: 'https://mcp.mekodata.ai/mcp' }, agents: [{ name: 'claude', title: 'Claude Code', state, url }] },
+      };
+      await env.core.mekoAgents.refresh();
     };
     await project();
     env.core.updateConfig((c) => {
@@ -472,55 +479,53 @@ describe('HTTP API: sharing, invites and Meko', () => {
     });
     // Claude Code is on another Meko (and installed: checked only once its version is in).
     writeClaude('https://other.example.org/mcp', 'claude-token');
+    await mekoSays('elsewhere', 'https://other.example.org/mcp');
     await env.core.harnesses.of('claude').version(env.core.config);
     await env.core.claudeMeko.refresh();
+    const settingsElsewhere = "Claude Code's settings point at other.example.org, not mcp.mekodata.ai.";
     expect(env.core.state().meko.claude).toEqual({
-      gaps: [
-        "Claude Code's settings point at other.example.org, not mcp.mekodata.ai.",
-        "Claude Code's meko MCP server points at other.example.org, not mcp.mekodata.ai.",
-      ],
+      gaps: ["Claude Code's meko MCP server points at other.example.org, not mcp.mekodata.ai.", settingsElsewhere],
+      capture: [settingsElsewhere],
       unchecked: [],
       checking: false,
     });
 
     // A token Meko turns down.
     writeClaude('https://mcp.mekodata.ai/mcp', 'claude-token');
+    await mekoSays('connected', 'https://mcp.mekodata.ai/mcp');
     await env.core.claudeMeko.refresh();
-    expect(env.core.state().meko.claude.gaps).toEqual([
-      "The token in Claude Code's settings isn't accepted by mcp.mekodata.ai.",
-      "The token on Claude Code's meko MCP server isn't accepted by mcp.mekodata.ai.",
-    ]);
+    expect(env.core.state().meko.claude.gaps).toEqual(["The token in Claude Code's settings isn't accepted by mcp.mekodata.ai."]);
 
     // On this Meko, another account's token can't see the project's datapack, which AgentK's can.
     env.meko.listDatapacks = async () => [
       { id: 'dp-1', name: 'adlc/proj/demo-repo/p', grant: 'owner', createdAt: null, ownerName: null, ownerEmail: null, description: null, ownerUserId: 'u-self' },
     ];
     env.mekoTools.state.tokens['claude-token'] = { ok: true, datapacks: ['dp-other'] };
-    writeClaude('https://mcp.mekodata.ai/mcp', 'claude-token');
     await env.core.claudeMeko.refresh(true);
-    expect(env.core.state().meko.claude.gaps).toEqual([
-      "The token in Claude Code's settings can't see the datapack adlc/proj/demo-repo/p on mcp.mekodata.ai.",
-      "The token on Claude Code's meko MCP server can't see the datapack adlc/proj/demo-repo/p on mcp.mekodata.ai.",
-    ]);
+    expect(env.core.state().meko.claude.gaps).toEqual(["The token in Claude Code's settings can't see the datapack adlc/proj/demo-repo/p on mcp.mekodata.ai."]);
     // A different token that sees it is fine.
     env.mekoTools.state.tokens['claude-token'] = { ok: true, datapacks: ['dp-1'] };
     await env.core.claudeMeko.refresh(true);
     expect(env.core.state().meko.claude.gaps).toEqual([]);
 
+    // Only its MCP server missing: the setup route leaves it to Meko's connect (the page's), and runs nothing.
+    await mekoSays('none');
+    expect(env.core.state().meko.claude).toMatchObject({ gaps: ['Claude Code has no meko MCP server.'], capture: [] });
+    expect((await call('POST', '/api/settings/meko/claude-setup')).statusCode).toBe(200);
+    expect(env.mekoTools.calls.filter((c) => c.name === 'setUpClaude')).toEqual([]);
+
     // Meko linking another server shows the difference; nothing changes Claude Code.
+    await mekoSays('connected', 'https://mcp.mekodata.ai/mcp');
     env.local.cloud = { set: true, url: 'https://meko.example.com/mcp', apiKey: 'mko_tkn_abcdefghij1234', webUrl: '', apiUrl: '' };
     await env.core.refreshMeko();
     await env.core.claudeMeko.refresh();
-    expect(env.core.state().meko.claude.gaps).toEqual([
-      "Claude Code's settings point at mcp.mekodata.ai, not meko.example.com.",
-      "Claude Code's meko MCP server points at mcp.mekodata.ai, not meko.example.com.",
-    ]);
+    expect(env.core.state().meko.claude.gaps).toEqual(["Claude Code's settings point at mcp.mekodata.ai, not meko.example.com."]);
     expect(env.mekoTools.calls.filter((c) => c.name === 'setUpClaude')).toEqual([]);
 
     // Asked to, the setup runs once, and the check after it finds nothing left.
     const setUp = env.mekoTools.tools.setUpClaude;
-    env.mekoTools.tools.setUpClaude = async (url, apiKey, log, claude, mekoHome) => {
-      await setUp(url, apiKey, log, claude, mekoHome);
+    env.mekoTools.tools.setUpClaude = async (url, apiKey, log, manual) => {
+      await setUp(url, apiKey, log, manual);
       writeClaude(url, apiKey);
     };
     expect((await call('POST', '/api/settings/meko/claude-setup')).statusCode).toBe(200);
@@ -529,6 +534,7 @@ describe('HTTP API: sharing, invites and Meko', () => {
     await waitFor(() => env.core.state().meko.claude, (c) => !c.gaps.length && !c.checking, 5000, "the check after Claude Code's setup");
 
     // A setup that doesn't finish is reported, with what it printed last.
+    writeClaude('https://other.example.org/mcp', 'claude-token');
     env.mekoTools.state.setupError = "Meko's setup didn't finish";
     const failed = await call('POST', '/api/settings/meko/claude-setup');
     expect(failed.statusCode).toBe(502);

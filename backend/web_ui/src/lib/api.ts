@@ -4,6 +4,8 @@
 // onUnauthorized.
 
 import type {
+  AgentChange,
+  Agents,
   Artifact,
   ArtifactList,
   AuthStatus,
@@ -169,6 +171,11 @@ export const api = {
   linkMekoCloud: (u: MekoCloudUpdate) => request<MekoCloud>("PUT", "/settings/meko-cloud", u),
   unlinkMekoCloud: () => request<MekoCloud>("DELETE", "/settings/meko-cloud"),
   cloudDatapacks: () => request<CloudDatapack[]>("GET", "/datapacks?location=cloud"),
+
+  // The agents installed on this computer and whether each reaches Meko (or the linked Meko Cloud).
+  agents: () => request<Agents>("GET", "/agents"),
+  connectAgent: (name: string) => request<AgentChange>("POST", `/agents/${enc(name)}/connect`),
+  disconnectAgent: (name: string) => request<AgentChange>("POST", `/agents/${enc(name)}/disconnect`),
 
   memories: (id: string, opts: { scope: "memories" | "learnings"; q: string; page: number }) =>
     request<MemoryPage>(

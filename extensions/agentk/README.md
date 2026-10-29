@@ -158,9 +158,9 @@ your phone can connect.
   project with the repo and name filled in; a share link pasted into Ask AgentK joins it and opens
   it the same way. The Meko server and key are Meko's, linked in its web UI (Settings › Meko Cloud),
   for your own Meko server too; AgentK's Settings › General links there, and to Meko's account page.
-  When Claude Code is set up for another Meko server, or holds a token that can't see the
-  projects' datapacks there, a banner says so and offers to set Claude Code up with AgentK's Meko
-  (Settings › Harness shows each agent's Meko);
+  When Claude Code isn't connected to Meko, is set up for another Meko server, or holds a token
+  that can't see the projects' datapacks there, a banner says so and offers to set Claude Code up
+  with AgentK's Meko (Settings › Harness shows each agent's Meko);
   AgentK never changes Claude Code's setup unless you ask.
   Once a session has a PR, **Share with reviewers** lists the reviewers of the project's open PRs
   (in every repo its sessions work in) with their emails, to share with in one click. The Share
@@ -208,12 +208,15 @@ your phone can connect.
   (Settings → Harness), or pick **Agent** under **Advanced** in New session once more than one of
   Claude Code, [OpenCode](https://opencode.ai) 2.0.0 or later (signed in to a model provider with
   `opencode auth login`) and [Kiro CLI](https://kiro.dev/cli/) 2.32 or later (`kiro-cli login`) is
-  installed. Any one alone is enough: with only Kiro, every session runs on Kiro. Settings › Harness
+  installed and connected to Meko (Meko owns that connection: **Connect to Meko** in Settings ›
+  Harness, or `meko agent connect <agent>`; one Meko doesn't find, or a Meko too old to list agents,
+  isn't held back). Any one
+  alone is enough: with only Kiro, every session runs on Kiro. Settings › Harness
   has a bar that picks an agent (Claude Code, OpenCode, Kiro) and shows its settings, and can stop
   offering an agent you have installed but don't want (**Offer … for new sessions**). An OpenCode
   session loads AgentK's own OpenCode plugin (nothing is written to your OpenCode config), which
   tells AgentK when it works, needs you for a permission, or ends a turn, and gets this Meko as its
-  `meko` MCP server unless your OpenCode config has one already. A Kiro session runs as `agentk`, an
+  `meko` MCP server unless OpenCode has one already. A Kiro session runs as `agentk`, an
   agent AgentK builds from your default Kiro agent (Meko's, after **Set up Kiro with this Meko**)
   with its hooks added, and goes through the same stages, gates, design review, PR flow, recovery
   and Resume. What only Claude Code does stays with it: designs as Artifacts, AgentK's mod

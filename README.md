@@ -53,12 +53,13 @@ meko ui
 
 ## Connect an agent
 
-Give agents like Claude, Codex, or any MCP client, Meko's context. `meko connect` adds Meko to your
-agent, for all your projects:
+Give agents like Claude, Codex, or any MCP client, Meko's context. `meko agent connect` adds Meko
+to your agent, for all your projects:
 
 ```sh
-meko connect claude      # or codex, kiro, opencode
-meko connect             # the MCP URL and token, for any other MCP client
+meko agent list                # the agents on this computer, and whether each reaches Meko
+meko agent connect claude      # or codex, kiro, opencode
+meko agent connect             # the MCP URL and token, for any other MCP client
 ```
 
 The REST API takes the same token:
@@ -78,7 +79,8 @@ meko cloud_link          # asks for the key, or reads it from stdin; --off unlin
 Or use the web UI's Settings › Meko Cloud.
 [127.0.0.1:7777/settings/meko-cloud](http://127.0.0.1:7777/settings/meko-cloud)
 
-Once linked, `meko-cli` works on both local and Meko Cloud datapacks.
+Once linked, `meko-cli` works on both local and Meko Cloud datapacks, and the agents connected to
+Meko connect to Meko Cloud.
 
 ## Commands
 
@@ -88,7 +90,7 @@ Once linked, `meko-cli` works on both local and Meko Cloud datapacks.
 |---|---|
 | `meko start` / `stop` / `status` | Start or stop the server, or see whether it's running and its links |
 | `meko ui` | Open the web UI in your browser |
-| `meko connect claude` | Add Meko to Claude Code (or `codex`, `kiro`, `opencode`), for all your projects |
+| `meko agent connect claude` | Add Meko to Claude Code (or `codex`, `kiro`, `opencode`), for all your projects |
 | `meko memory-extractor use claude` | Extract memories from your conversations with your own Claude Code, every 5 minutes. It's off until you run this; `status`, `run` and `off` check, run or stop it. See [memory extraction](backend/docs/memory-extraction.md) |
 | `meko update` | Install Meko's newest release now, then every extension's |
 | `meko-cli search "<question>"` | Search memories, the knowledge base and past conversations |

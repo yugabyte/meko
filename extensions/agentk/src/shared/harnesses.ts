@@ -54,6 +54,42 @@ export const HARNESS_CAPS: Record<HarnessId, HarnessCaps> = {
 export const NO_AGENT =
   'No coding agent is available: install Claude Code, OpenCode or Kiro CLI where AgentK runs, or turn one on in Settings → Harness.';
 
+/** Why an agent that's otherwise ready isn't offered: Meko doesn't report it connected (`HarnessStatus.meko`). */
+export function notConnectedText(id: HarnessId): string {
+  return `${HARNESS_CAPS[id].label} isn't connected to Meko: connect it in Settings › Harness, or run meko agent connect ${id}`;
+}
+
+/** NO_AGENT, then the fix for each agent only Meko's connection keeps off (`notConnectedText`). */
+export function noAgentText(notConnected: HarnessId[]): string {
+  return [NO_AGENT, ...notConnected.map((id) => `${notConnectedText(id)}.`)].join(' ');
+}
+
+/**
+ * Meko's report keeps an agent from new sessions: its `meko` MCP server is `none`, `stale` or
+ * `elsewhere`. Not `missing`: Meko looks for agents only on its own PATH and a few folders, never at
+ * AgentK's `[<id>] command`, so an agent AgentK runs can be missing from its list with nothing to fix.
+ */
+export function mekoGates(meko: { state: string } | null): boolean {
+  return !!meko && meko.state !== 'connected' && meko.state !== 'missing';
+}
+
+/** The agent is ready for sessions but for Meko: on, new enough, and Meko reports it isn't connected (`mekoGates`). */
+export function onlyMekoBlocks(h: { enabled: boolean; version: string | null; minVersion: string | null; meko: { state: string } | null }): boolean {
+  return h.enabled && h.version !== null && (!h.minVersion || versionAtLeast(h.version, h.minVersion)) && mekoGates(h.meko);
+}
+
+/** Whether dotted version `v` is `min` or later (numeric parts; `2.1.10` is after `2.1.9`). */
+export function versionAtLeast(v: string, min: string): boolean {
+  const a = v.split('.').map(Number);
+  const b = min.split('.').map(Number);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] || 0;
+    const y = b[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return true;
+}
+
 export function isHarnessId(v: unknown): v is HarnessId {
   return typeof v === 'string' && (HARNESS_IDS as readonly string[]).includes(v);
 }

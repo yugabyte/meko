@@ -235,14 +235,21 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   before switching hosts (existing projects' datapacks stay on the old one), and offers **Unlink**,
 >   which sends the extensions back to the local Meko. Each agent's Meko row is in Settings ›
 >   Harness, under that agent (`AgentMeko` in `SettingsDialog.tsx`), shown while the agent is on and
->   available and there's a Meko: whether Claude Code's sessions reach this Meko (the same list as
->   the banner, below), and when they don't, **Set up Claude Code with this Meko** runs Meko's setup
->   package as the installer does (without blocking the server; its output goes to the log). New
->   sessions pick that up; running ones keep what they started with. Kiro's row says whether Kiro's
->   sessions reach this Meko (`MekoStatus.kiro`, `mekokiro.ts`: a `meko…` server in
->   `~/.kiro/settings/mcp.json` at this URL, sending an `Authorization` header, that the agent Kiro
->   sessions are built from loads (`includeMcpJson`); capture hooks aren't checked), and **Set up
->   Kiro with this Meko** runs the same package with `--client kiro`. That writes Meko's MCP server,
+>   new enough. It says whether Meko has the agent connected, from Meko's list of agents
+>   (`HarnessStatus.meko`: connected, needs reconnecting, connected elsewhere with its URL, not
+>   connected, or not found; "Update Meko (meko update) to manage agent connections" from a Meko too
+>   old to list them), which new sessions are gated on ([Agents](harnesses.md#connected-to-meko)),
+>   with **Connect to Meko** when Meko can connect it. Meko owns the agents' `meko` MCP servers;
+>   AgentK checks only what Meko's capture needs. Claude Code's row lists that (the same list as the
+>   banner, below, less its MCP server), and while anything's missing **Set up Claude Code with this
+>   Meko** has Meko connect it first (the page's own call to Meko's route), then runs Meko's setup
+>   package as the installer does (`POST /api/settings/meko/claude-setup`, without blocking the
+>   server; its output goes to the log), only while the capture part is still missing. New sessions
+>   pick that up; running ones keep what they started with. Kiro's row says whether Kiro's sessions
+>   reach this Meko (`MekoStatus.kiro`: its MCP server from Meko's list, then, from `mekokiro.ts`,
+>   whether the agent Kiro sessions are built from loads Kiro's MCP config (`includeMcpJson`);
+>   capture hooks aren't checked), and **Set up Kiro with this Meko** connects it, then runs the
+>   same package with `--client kiro` while that agent doesn't load it. That writes Meko's MCP server,
 >   skill, steering and capture hooks for Kiro, and makes its `meko-default` agent Kiro's default,
 >   which AgentK's `agentk` agent is then built from, so Kiro sessions get Meko's tools and capture
 >   with the session's `MEKO_AGENT_ID` (`kiro:<slug>-<hash>`) and `MEKO_DATAPACK_ID`, as Claude's
@@ -251,30 +258,28 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   OpenCode's row says which Meko its sessions use (`MekoStatus.opencode`): Meko's setup has no
 >   OpenCode client, so AgentK adds this Meko to each OpenCode session's config as a remote `meko`
 >   MCP server, from an owner-only file (`run/opencode/meko.json`, `OPENCODE_CONFIG`; the key never
->   goes in the session's environment), unless OpenCode's own config already has a `meko` server,
->   which it then leaves alone ([Agents](harnesses.md#opencode)). The file is removed as soon as this
+>   goes in the session's environment), unless OpenCode has a `meko` server of its own (any Meko
+>   reports for it, else one in its own config), which it then leaves alone ([Agents](harnesses.md#opencode)). The file is removed as soon as this
 >   Meko's URL or key changes, and written again at the next launch. OpenCode sessions get
 >   `MEKO_AGENT_ID` `opencode:<slug>-<hash>`.
 > - **Claude Code on AgentK's Meko:** Claude Code keeps its own copy of the Meko server and token
->   in two places: its settings' `env` (`MEKO_MCP_URL`, unset meaning Meko Cloud, and
->   `MEKO_API_KEY`), which the Meko hooks read, and the user-scope `meko` MCP server in
->   `~/.claude.json` (its URL and `Authorization: Bearer` header, `${VAR}` expanded with the
->   settings' `env` over AgentK's environment, as a session sees it), which the tools call. A
->   variable set in neither (a session may get it from its login shell) leaves that token
->   unchecked, not missing. Local- and project-scope registrations aren't checked. `MekoStatus.claude`
->   (`mekoclaude.ts`) lists what keeps sessions off AgentK's Meko: the plugin, a missing key or
->   token, either place on another server (named by host only), and each token that isn't AgentK's
->   own failing on AgentK's server: turned down (HTTP 401 or 403), or unable to see a project
->   datapack that AgentK's own token sees (another account's token). Tokens are only tried on
->   AgentK's server, and only where Claude Code is set up for it. A token that couldn't be checked
->   (Meko slow or down) is listed apart and never raises the banner. The file checks are cheap;
->   token results (and AgentK's own datapack list, and `<[claude] command> mcp get meko` when
->   `~/.claude.json` has no user-scope server: exit 1 means none, and a command that couldn't be
->   asked is unchecked) are reused for 10 minutes. It's refreshed at startup, on a config
->   change, when Settings opens, at each session launch, and after Claude Code's setup (which
->   starts over). While the list isn't empty, a banner says what's wrong, with **Set up Claude Code
->   with this Meko** and **Details** (Settings › Harness › Claude Code). AgentK never fixes it on its
->   own: not at startup, and not after a change to Meko's link, which only checks again.
+>   in two places: its user-scope `meko` MCP server, which the tools call and which Meko reports and
+>   connects (`HarnessStatus.meko`), and its settings' `env` (`MEKO_MCP_URL`, unset meaning Meko
+>   Cloud, and `MEKO_API_KEY`), which the Meko hooks read. `MekoStatus.claude` lists what keeps
+>   sessions off AgentK's Meko: first its MCP server as Meko reports it (`mekoMcpGaps` in
+>   `mekoagents.ts`: none, needs reconnecting, on another server named by host, or Meko didn't find
+>   Claude Code; nothing while nothing is gated), then the capture part (`capture`, from
+>   `mekoclaude.ts`): the plugin, a missing key, the settings on another server, and their token,
+>   when it isn't AgentK's own, failing on AgentK's server: turned down (HTTP 401 or 403), or unable
+>   to see a project datapack that AgentK's own token sees (another account's token). The token is
+>   only tried on AgentK's server, and only when the settings name it. A token that couldn't be
+>   checked (Meko slow or down) is listed apart and never raises the banner. The file checks are
+>   cheap; token results (and AgentK's own datapack list) are reused for 10 minutes. It's refreshed
+>   at startup, on a config change, when Settings opens, at each session launch, and after Claude
+>   Code's setup (which starts over). While the list isn't empty, a banner says what's wrong, with
+>   **Set up Claude Code with this Meko** (Meko connects it, then the setup package runs for what's
+>   left) and **Details** (Settings › Harness › Claude Code). AgentK never fixes it on its own: not
+>   at startup, and not after a change to Meko's link, which only checks again.
 
 ## Adding files to the knowledge base
 

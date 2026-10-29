@@ -43,6 +43,12 @@ from the extension's folder) and which docs to keep current. Meko's own Go backe
   place in the gate's `needs`, and its name in `COMPONENTS` in `scripts/check-title.sh`. A new
   product also gets a GitHub label of its own name and an entry in the issue forms' Product
   dropdown (`.github/ISSUE_TEMPLATE/`) and in the issue skill.
+- **Commands and their output are concise, self-explanatory and simple.** A command does what
+  its name says, and there's one way to do a thing: no aliases or shortcuts beside it. Output
+  says the result in plain words, one line for a success ("Connected Kiro CLI to Meko"), with
+  no file names, URLs or inner workings the user doesn't need. Add a line only when the user
+  has something to know or do ("ones already running need a restart"). An error says what's
+  wrong and what to run next. Nothing should be readable two ways.
 - **Issues** follow the issue skill (`.claude/skills/issue/SKILL.md`): the issue forms'
   sections, a type (`Bug`, `Feature` or `Task`), the `bug` or `enhancement` label, and a product
   label (`meko`, `agentk`, `presenter`) for each product the issue is about.

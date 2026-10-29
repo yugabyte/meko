@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/yugabyte/meko/backend/internal/agents"
 )
 
 // Service changes the link: the web UI's Settings › Meko Cloud and meko cloud_link go through it,
@@ -19,6 +21,10 @@ type Service struct {
 	CheckAPI func(ctx context.Context, apiURL string) error
 	// Changed, if set, hears that the link changed (it tells the running extensions).
 	Changed func(ctx context.Context)
+	// Moved, if set, moves the agents connected to Meko from the link before a saved change to the
+	// link after it (internal/agents' Move); what it did goes in the reply. A failed move never
+	// undoes the change.
+	Moved func(ctx context.Context, before, after State) agents.Moves
 	// List asks a REST API URL for the key's datapacks (ListDatapacks, when nil); tests swap it out.
 	List func(ctx context.Context, apiURL, key string) ([]Datapack, error)
 
@@ -47,6 +53,8 @@ type Status struct {
 	KeyHint       *string `json:"key_hint"`
 	DefaultURL    string  `json:"default_url"`
 	DefaultWebURL string  `json:"default_web_url"`
+	// Agents is what a saved change did to the agents connected to Meko: only in a change's reply.
+	Agents *agents.Moves `json:"agents,omitempty"`
 }
 
 // Error is a change refused for a reason the person making it can act on.
@@ -203,20 +211,21 @@ func (s *Service) link(ctx context.Context, u Update) (Status, bool, error) {
 	if err := s.Store.save(true, next); err != nil {
 		return Status{}, false, err
 	}
-	return StatusOf(State{Set: true, Linked: true, Link: next}), true, nil
+	after := State{Set: true, Linked: true, Link: next}
+	return s.moved(ctx, cur, after), true, nil
 }
 
 // Unlink removes the key, so extensions use the Meko on this computer. The URLs stay, for linking
 // again with only a key.
 func (s *Service) Unlink(ctx context.Context) (Status, error) {
-	st, changed, err := s.unlink()
+	st, changed, err := s.unlink(ctx)
 	if changed {
 		s.changed(ctx)
 	}
 	return st, err
 }
 
-func (s *Service) unlink() (Status, bool, error) {
+func (s *Service) unlink(ctx context.Context) (Status, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur, err := s.Store.Load()
@@ -231,11 +240,36 @@ func (s *Service) unlink() (Status, bool, error) {
 	if err := s.Store.save(false, link); err != nil {
 		return Status{}, false, err
 	}
-	return StatusOf(State{Set: true, Link: link}), true, nil
+	return s.moved(ctx, cur, State{Set: true, Link: link}), true, nil
+}
+
+// moved moves the agents after a saved change, still under the lock so the moves happen in the
+// changes' order, and describes the link after it with what the move did.
+func (s *Service) moved(ctx context.Context, before, after State) Status {
+	st := StatusOf(after)
+	if s.Moved != nil {
+		m := s.Moved(context.WithoutCancel(ctx), before, after)
+		st.Agents = &m
+	}
+	return st
 }
 
 func (s *Service) changed(ctx context.Context) {
 	if s.Changed != nil {
 		s.Changed(context.WithoutCancel(ctx))
 	}
+}
+
+// MoveAgents moves the agents from this Meko to the link as it is now, through Moved: for a Meko
+// that was linked before its agents followed the link. It holds the changes' lock, so it never runs
+// between a change and that change's own move. While unlinked, or without Moved, it does nothing.
+func (s *Service) MoveAgents(ctx context.Context) (*agents.Moves, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur, err := s.Store.Load()
+	if err != nil || !cur.Linked || s.Moved == nil {
+		return nil, err
+	}
+	m := s.Moved(ctx, State{Set: true}, cur)
+	return &m, nil
 }

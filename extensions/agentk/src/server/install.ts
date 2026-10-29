@@ -5,18 +5,17 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { HARNESS_CAPS, HARNESS_IDS, type HarnessId } from '../shared/harnesses.js';
+import { HARNESS_CAPS, HARNESS_IDS, versionAtLeast, type HarnessId } from '../shared/harnesses.js';
 import { claudeUserDir } from './claude.js';
-import { cliVersion, harnessCommand, versionAtLeast } from './harness/version.js';
+import { cliVersion, harnessCommand } from './harness/version.js';
 import { DEFAULT_MEKO_URL, dbPath, envMekoWebUrl, loadConfig, onLoopback, ownMekoKey, saveConfig, type Config } from './config.js';
 import { assertFree, InstanceBusyError } from './instance.js';
 import { checkMeko, tryMekoToken } from './meko.js';
 import { isLocalMeko, probeLocalMeko, type LocalMekoProbe } from './mekolocal.js';
 import { handOverMekoKey, type OwnMekoLink } from './mekohandover.js';
 import { AGENTK_PATH, MEKO_INSTALL_COMMAND } from '../shared/mekourls.js';
-import { claudeConfigPath } from './trust.js';
 import {
-  MekoSetupError, claudeHasMekoMcp, ensureMekoSetup, envKeyGap, latestMekoSetup, mekoClaudeGaps, readClaudeMeko, runMekoSetup,
+  MekoSetupError, ensureMekoSetup, envKeyGap, latestMekoSetup, mekoClaudeGaps, readClaudeMeko, runMekoSetup,
 } from './mekosetup.js';
 import { claudeTokenGaps } from './mekoclaude.js';
 import { expandHome, getPaths, oldHome, tildify, type Paths } from './paths.js';
@@ -28,7 +27,7 @@ import { waitForServer } from './health.js';
 import { removeKiroAgent } from './kiro.js';
 import { ensurePrivateDir, fsType, isNetworkFs, PrivateDirError } from './fstype.js';
 import { checkMove, makeHomeParent, mekoDirOf, tmpHomeWarning } from './movehome.js';
-import { kiroAgentLoadsMcp, kiroMekoGaps, readKiroMeko } from './mekokiro.js';
+import { kiroMekoGaps } from './mekokiro.js';
 
 class InstallError extends Error {}
 
@@ -434,21 +433,21 @@ export async function runInstall(args: string[]): Promise<void> {
       probe: () => probeLocalMeko(cfg.meko.home || null),
       link: (l) => handOverMekoKey(cfg.meko.home || null, l),
       ensureInKiro: !agents.includes('kiro') ? undefined : async (url, apiKey, onLocal) => {
-        const gaps = async () => kiroMekoGaps(readKiroMeko(), url, kiroAgentLoadsMcp());
+        const gaps = async () => kiroMekoGaps();
         await ensureMekoSetup(
           { url, apiKey, client: 'kiro', local: onLocal ? { home: cfg.meko.home || null } : null, ...setup },
           { gaps, latest: () => latestMekoSetup(), run: (pkg) => runMekoSetup(pkg, { url, apiKey, client: 'kiro' }), ask, say, warn: (l, t) => ui.warn(l, t) },
         );
       },
       ensureInClaude: !agents.includes('claude') ? undefined : async (url, apiKey, keyFromEnv, onLocal) => {
-        // The plugin, its MCP server and the key where its hooks read it, all on this Meko, with
-        // tokens it accepts. Anything wrong is set up by Meko's own installer, after asking. A key
-        // from the environment must also end up in Claude Code's settings: the service has no
-        // MEKO_* environment, so it would take a different key from there.
+        // The plugin and the key where its hooks read it, on this Meko, with a token it accepts
+        // (its MCP server is Meko's: meko agent connect). Anything wrong is set up by Meko's own
+        // installer, after asking. A key from the environment must also end up in Claude Code's
+        // settings: the service has no MEKO_* environment, so it would take a different key from there.
         const gaps = async () => {
-          const c = readClaudeMeko(claudeUserDir(), claudeConfigPath());
+          const c = readClaudeMeko(claudeUserDir());
           return [
-            ...mekoClaudeGaps(c, url, () => claudeHasMekoMcp(cfg.claude.command)),
+            ...mekoClaudeGaps(c, url),
             ...envKeyGap(c, apiKey, keyFromEnv),
             ...(await claudeTokenGaps(c, url, apiKey, tryMekoToken)),
           ];

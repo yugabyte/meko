@@ -145,8 +145,14 @@ agents should read it before changing code there.
    the project's dedicated datapack pinned for it when it starts; AgentK's writes for a session use
    the id it runs with (`launchedAgentId()`). Never remove a `pin-claude_code_<project id>.json`:
    it may be the user's own pin for plain Claude Code in that repo. (Claude Code's own
-   Meko setup is the user's and is changed only when they ask: the installer's question or
-   **Set up Claude Code with this Meko** in Settings › Harness.) Nothing that needs Meko may stop the install, a project or a session when there's no Meko or
+   Meko setup is the user's and is changed only when they ask: the installer's question, or
+   **Connect to Meko** or **Set up Claude Code with this Meko** in Settings › Harness.) Meko owns
+   the agents' connections (their `meko` MCP servers): AgentK's server only reads Meko's list of
+   agents (`mekoagents.ts`) and never posts to Meko's agent routes; the page does, with the
+   owner's sign-in. New sessions don't start on agents that list says aren't connected (`none`,
+   `stale`, `elsewhere`; one it doesn't list stays available); with no list
+   ever read, or a Meko too old to give one, nothing is gated, and while Meko doesn't answer the
+   last list read stands. Nothing that needs Meko may stop the install, a project or a session when there's no Meko or
    it's down: it's skipped or offered later.
 8. **Treat the repo as public** (it's internal today). No internal hostnames, mount paths, tokens or
    keys in code, docs, tests or commit messages, and no personal data: no real person's name,

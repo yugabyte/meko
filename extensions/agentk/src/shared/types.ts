@@ -1024,26 +1024,34 @@ export interface MekoStatus {
    */
   sharing: boolean;
   /**
-   * Whether Claude Code's sessions reach the Meko AgentK uses: the same server in Claude Code's
-   * settings and on its `meko` MCP server, tokens there that work (accepted, and seeing AgentK's
-   * project datapacks), and the plugin. Fixed only when the user asks (POST
-   * /api/settings/meko/claude-setup). Empty lists while Meko is off.
+   * Whether Claude Code's sessions reach the Meko AgentK uses: its `meko` MCP server, as Meko reports
+   * it (`HarnessStatus.meko`), then what Meko's capture needs in Claude Code: the plugin, and the
+   * server and a token that works (accepted, and seeing AgentK's project datapacks) in its settings.
+   * Fixed only when the user asks (Meko's connect, then POST /api/settings/meko/claude-setup).
+   * Empty lists while Meko is off.
    */
   claude: MekoClaudeStatus;
   /**
-   * Whether Kiro's sessions reach the Meko AgentK uses, through Meko's own setup for Kiro: a Meko
-   * MCP server in `~/.kiro/settings/mcp.json` at AgentK's URL, sending a token, that the agent Kiro
-   * sessions are built from loads (its `includeMcpJson`). Meko's capture hooks aren't checked. Null
-   * when Kiro isn't available or Meko is off. Fixed only when the user asks (POST
-   * /api/settings/meko/kiro-setup).
+   * Whether Kiro's sessions reach the Meko AgentK uses: its `meko` MCP server, as Meko reports it
+   * (`HarnessStatus.meko`), and the agent Kiro sessions are built from loading it (its
+   * `includeMcpJson`). Meko's capture hooks aren't checked. Null when Kiro isn't available or Meko is
+   * off. Fixed only when the user asks (Meko's connect, then POST /api/settings/meko/kiro-setup).
    */
-  kiro: { gaps: string[] } | null;
+  kiro: MekoAgentGaps | null;
   /**
    * Which Meko OpenCode's sessions use: AgentK's (`own: false`), which AgentK adds to their config
-   * as a remote `meko` MCP server, or the `meko` server in OpenCode's own config (`own: true`), which
-   * AgentK leaves alone. Null when OpenCode isn't available or Meko is off.
+   * as a remote `meko` MCP server, or OpenCode's own `meko` server (`own: true`), which AgentK leaves
+   * alone. Own when Meko reports one (`HarnessStatus.meko`, any state but `none`), else when OpenCode's
+   * own config has one. Null when OpenCode isn't available or Meko is off.
    */
   opencode: { own: boolean } | null;
+  /**
+   * Meko's list of the agents on this computer (GET /api/v1/agents, which `HarnessStatus.meko`
+   * comes from): `read` (now, or the last list kept while Meko doesn't answer), `old` (Meko answered
+   * 404: too old to list them, so it says to update Meko), or `unread` (never read). Nothing is gated
+   * unless it's `read`.
+   */
+  agentList: 'read' | 'old' | 'unread';
   /**
    * The Meko on this computer, as last read. While it's `none` (no `meko` at all), a banner that
    * can't be dismissed says to install Meko, with a Meko Cloud link too.
@@ -1051,9 +1059,19 @@ export interface MekoStatus {
   local: LocalMekoState;
 }
 
-export interface MekoClaudeStatus {
-  /** What's wrong, one sentence each; the banner shows while this isn't empty. */
+/** What keeps an agent's sessions off AgentK's Meko, one sentence each. */
+export interface MekoAgentGaps {
+  /** Everything: its MCP server, as Meko reports it (`HarnessStatus.meko`), then `capture`. */
   gaps: string[];
+  /**
+   * The gaps Meko's setup package fixes (Claude Code's plugin and settings, Kiro's agent), which
+   * AgentK checks itself; while there are any, Settings offers Set up … with this Meko.
+   */
+  capture: string[];
+}
+
+/** Claude Code's: the banner shows while `gaps` isn't empty. */
+export interface MekoClaudeStatus extends MekoAgentGaps {
   /** Token checks that couldn't run (Meko unreachable or slow), one sentence each. Never raises the banner. */
   unchecked: string[];
   /** A token check is running. */
@@ -1103,8 +1121,19 @@ export interface HarnessStatus {
   version: string | null;
   /** The oldest version AgentK runs sessions on. */
   minVersion: string | null;
-  /** New sessions can start on it: enabled, and its version read and new enough. */
+  /**
+   * New sessions can start on it: enabled, its version read and new enough, and not kept off by
+   * Meko (`meko` isn't `none`, `stale` or `elsewhere`; `mekoGates`).
+   */
   available: boolean;
+  /**
+   * Its `meko` MCP server, as the Meko on this computer reports it (GET /api/v1/agents): `connected`
+   * (at Meko's target, with its token or key), `stale` (at one of Meko's own, but not the target),
+   * `elsewhere` (another server, at `url`), `none`, or `missing` (Meko didn't find it installed).
+   * Null when nothing is gated: no list was ever read, or Meko is too old to list agents (404).
+   * While Meko doesn't answer, the last list read stands.
+   */
+  meko: HarnessMeko | null;
   /**
    * Its version has been read (or tried) for the command it's run with since it was last turned on
    * (turning it off forgets the read), so `available: false` means it really isn't there rather than
@@ -1115,6 +1144,14 @@ export interface HarnessStatus {
   isDefault: boolean;
   /** Its update command is running (POST /api/harnesses/:id/update). */
   updating: boolean;
+}
+
+export type HarnessMekoState = 'connected' | 'stale' | 'elsewhere' | 'none' | 'missing';
+
+export interface HarnessMeko {
+  state: HarnessMekoState;
+  /** The URL of its `meko` server, or null when it has none (or Meko didn't find it). */
+  url: string | null;
 }
 
 /** The session host (`agentk host`). It keeps running across updates, so it can be older than the server. */
@@ -2605,7 +2642,8 @@ export type TermServerMessage =
 // POST   /api/projects/:id/sessions CreateSessionRequest → Session   (400 for an unknown kind or start, a harness that isn't available, a bad branch name, a
 //        base branch neither the repo nor its origin has, a repo that isn't a scanned one, an `existingBranch` that doesn't exist, or a task's
 //        `pr` that isn't open or whose head repo no remote of the repo is; 409 for a branch a running session uses or another checkout has, or
-//        when no coding agent is available (NO_AGENT). Review a PR:
+//        when no agent is available (NO_AGENT, naming any agent only Meko's connection keeps off). A harness that isn't
+//        connected to Meko (`HarnessStatus.meko`) is a 400 naming the fix: Settings › Harness, or meko agent connect <id>. Review a PR:
 //        400 without `pr`, for a PR that isn't open, or a repoPath that isn't a clone of the PR's repo; 400 for
 //        `images` that aren't this project's staged images, or more than MAX_START_IMAGES; 400 for `autoRun` on anything but a
 //        task starting at Code. A learn session (`learn`): 400 without
@@ -2690,7 +2728,8 @@ export type TermServerMessage =
 // GET    /api/sessions/:id/held-reviews        → HeldReview[]   (held for the user, oldest first)
 // POST   /api/sessions/:id/held-reviews HeldReviewsRequest → HeldReviewsResult   (send to AgentK in PR & Review, or dismiss)
 // GET    /api/settings                         → Settings   (reads the Meko on this computer and its Meko Cloud link again first,
-//                                                           waiting 1.5 s at most. The link is Meko's: its web UI's
+//                                                           waiting 1.5 s at most, and Meko's list of agents in the
+//                                                           background. The link is Meko's: its web UI's
 //                                                           Settings › Meko Cloud, PUT /api/v1/settings/meko-cloud there)
 // PUT    /api/settings        SettingsUpdate   → Settings   (bind and port are read-only: set them in config.toml;
 //                                                           a lower idleWorktreesPerRepo or idleWorktreeDays removes
@@ -2704,14 +2743,22 @@ export type TermServerMessage =
 //                                                           and kiroTrustTools are booleans; the agents'
 //                                                           commands are set in config.toml)
 // POST   /api/settings/meko/claude-setup       → Settings   (runs Meko's setup for Claude Code with AgentK's Meko, only when
-//                                                           the user asks; then checks Claude Code's Meko again)
-// POST   /api/settings/meko/kiro-setup         → Settings   (runs Meko's setup for Kiro (`--client kiro`) with AgentK's Meko,
-//                                                           only when the user asks; then checks Kiro's Meko again)
+//                                                           the user asks and only while what Meko's capture needs is
+//                                                           missing (the plugin, its settings); then checks Claude Code's
+//                                                           Meko and Meko's list of agents again. The page connects the
+//                                                           MCP server first, through Meko's own route (below))
+// POST   /api/settings/meko/kiro-setup         → Settings   (the same for Kiro (`--client kiro`): runs only while the agent
+//                                                           Kiro sessions are built from doesn't load its MCP servers)
+//        Meko's own routes, which the page calls on its origin (not under BASE) with its sign-in, in Meko's
+//        { data, error } envelope: POST /api/v1/agents/:id/connect connects an agent's `meko` MCP server (Settings ›
+//        Harness's Connect to Meko, and before either setup above), then the page calls POST /api/harnesses/refresh.
+//        AgentK's server only reads GET /api/v1/agents, on Meko's API listener with the client token: at startup,
+//        on Settings open and Check again, after either setup, and when Meko's Meko Cloud link changes.
 // POST   /_meko/changed       { what }         → 204        (Meko, on AgentK's socket: something AgentK reads from Meko changed;
 //                                                           `cloud`, the Meko Cloud link, reads `meko token --json` again.
 //                                                           Outside /api, a write from another origin is refused)
 // POST   /api/harnesses/refresh                → HarnessStatus[]   (Check again in Settings: reads the version of every harness
-//        that's turned on again now (one that's off isn't read); a change is pushed to every page)
+//        that's turned on again now (one that's off isn't read), and Meko's list of agents; a change is pushed to every page)
 // POST   /api/harnesses/:id/update             → HarnessStatus   (runs the harness's own updater (`claude update`,
 //        `opencode upgrade`, `kiro-cli update`), then reads its version again; 409 while one runs. Settings › Harness's
 //        Update OpenCode and Update Kiro call it; the UI updates Claude Code through POST /api/claude/update, whose answer carries the outcome)

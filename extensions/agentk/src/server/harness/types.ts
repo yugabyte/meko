@@ -1,5 +1,8 @@
 import type { HarnessCaps, HarnessId } from '../../shared/harnesses.js';
 import type { HarnessStatus } from '../../shared/types.js';
+
+/** A harness's status as its CLI gives it: everything but Meko's connection (`HarnessStatus.meko`). */
+export type CliStatus = Omit<HarnessStatus, 'meko'>;
 import type { Asker } from '../askagentk.js';
 import type { Config } from '../config.js';
 import type { Db } from '../db.js';
@@ -145,10 +148,10 @@ export interface Harness {
   mekoChanged?(paths: Paths): void;
   /** How it answers Ask AgentK. */
   ask: Asker;
-  /** Its version and whether sessions can start on it. */
-  status(cfg: Config): HarnessStatus;
+  /** Its version and whether sessions could start on it, Meko's connection aside (`Harnesses.statusOf` adds it). */
+  status(cfg: Config): CliStatus;
   /** Reads its version again when the last read is stale (or `force`). */
   version(cfg: Config, force?: boolean): Promise<string | null>;
   /** Runs its own updater, then reads the version again. 409 while one runs. */
-  update(cfg: Config): Promise<HarnessStatus>;
+  update(cfg: Config): Promise<CliStatus>;
 }

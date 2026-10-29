@@ -1,10 +1,10 @@
 import { EventEmitter } from 'node:events';
 import type { Server } from 'node:http';
 import { mkdirSync, rmSync } from 'node:fs';
-import { claudeConfigPath } from './trust.js';
 import { homedir, hostname, userInfo } from 'node:os';
 import { join } from 'node:path';
-import type { AppState, MekoKeySource, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
+import { HARNESS_CAPS, type HarnessId } from '../shared/harnesses.js';
+import type { AppState, HarnessStatus, MekoKeySource, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
 import * as github from './github.js';
 import { TranscriptCapture, mekoPluginKeys } from './capture.js';
 import { DesignQuestionStore } from './answers.js';
@@ -22,9 +22,9 @@ import { socketId, startHookServer } from './hooks.js';
 import { claudeUserDir, writeHookFiles } from './claude.js';
 import { writeToolFiles } from './tools.js';
 import { Harnesses } from './harness/index.js';
-import { kiroAgentLoadsMcp, kiroMekoGaps, readKiroMeko } from './mekokiro.js';
+import { kiroMekoGaps } from './mekokiro.js';
 import { kiroDeletesSettled } from './kiro.js';
-import { openCodeDeletesSettled, openCodeHasOwnMeko } from './opencode.js';
+import { openCodeDeletesSettled } from './opencode.js';
 import { KIRO_PLAN_EVERY_MS, KiroPlanStore } from './kiroplan.js';
 import { PlanLimitsStore } from './limits.js';
 import { sweepStaged } from './pastes.js';
@@ -33,6 +33,7 @@ import { InviteService } from './invites.js';
 import { KnowledgeService } from './knowledge.js';
 import { MekoClient } from './meko.js';
 import { MekoCallLog } from './mekolog.js';
+import { MekoAgents, mekoMcpGaps, readMekoAgents, type MekoAgentsRead } from './mekoagents.js';
 import { MekoClaudeWatch } from './mekoclaude.js';
 import {
   LocalMekoReader, isLocalMeko, localMeko, lookForLocalMeko, mekoLinkHandedOver, originOf, probeLocalMeko, setMekoLinkHandedOver, type LocalMekoProbe,
@@ -43,7 +44,7 @@ import { readClaudeMeko } from './mekosetup.js';
 import { MekoApi } from './mekoapi.js';
 import { defaultMekoTools, type MekoTools } from './mekosettings.js';
 import type { Paths } from './paths.js';
-import { ProjectService } from './projects.js';
+import { HttpError, ProjectService } from './projects.js';
 import { SessionManager } from './sessions.js';
 import { Learner } from './learn.js';
 import { Lifecycle } from './lifecycle.js';
@@ -88,6 +89,8 @@ export interface CoreOptions {
   localMeko?: () => Promise<LocalMekoProbe>;
   /** Hands AgentK's own Meko Cloud key to Meko (mekohandover.ts); tests swap it out. */
   mekoHandOver?: typeof handOverMekoKey;
+  /** Reads Meko's list of agents (mekoagents.ts; tests fake it); by default GET /api/v1/agents on the Meko running on this computer. */
+  mekoAgents?: () => Promise<MekoAgentsRead>;
 }
 
 type NotifyEvent = Extract<ServerEvent, { type: 'notify' }>;
@@ -102,10 +105,8 @@ const IDLE_WORKTREE_CHECK_MS = 60 * 60 * 1000;
 const PIN_PRUNE_MS = 6 * 60 * 60 * 1000;
 /** How often images staged in the New session dialog that no session started with are looked for. */
 const STAGED_SWEEP_MS = 60 * 60 * 1000;
-/** How long a read of Kiro's Meko setup is reused (the state is pushed often). */
-const KIRO_MEKO_TTL_MS = 10_000;
-/** How long a read of OpenCode's own config (for `MekoStatus.opencode`) is used. */
-const OPENCODE_MEKO_TTL_MS = 10_000;
+/** How long a read of Kiro's agent (for `MekoStatus.kiro`) and OpenCode's own config (`MekoStatus.opencode`) is reused (the state is pushed often). */
+const AGENT_MEKO_TTL_MS = 10_000;
 /** How often the Meko on this computer is looked for while there's no Meko, or no `meko` on this computer (`lookForLocalMeko`). */
 const LOCAL_MEKO_EVERY_MS = 60_000;
 /** After a failed connection to the local Meko, how long until another failure reads it again. */
@@ -170,8 +171,10 @@ export class Core extends EventEmitter {
   readonly invites: InviteService;
   readonly knowledge: KnowledgeService;
   readonly mekoTools: MekoTools;
-  /** Whether Claude Code's sessions reach AgentK's Meko (MekoStatus.claude). */
+  /** Whether Meko's capture in Claude Code's sessions reaches AgentK's Meko (MekoStatus.claude, with its MCP server from `mekoAgents`). */
   readonly claudeMeko: MekoClaudeWatch;
+  /** Meko's list of the agents on this computer, which new sessions are gated on (mekoagents.ts). */
+  readonly mekoAgents: MekoAgents;
   readonly callHome: CallHomeService;
   /** The same report to YugabyteDB's call home service, from release installs (to be the only one later). */
   readonly ybCallHome: CallHomeService;
@@ -181,12 +184,12 @@ export class Core extends EventEmitter {
   private claudeAvailable = false;
   /** Every coding agent sessions can run on (src/server/harness/). */
   readonly harnesses: Harnesses;
-  /** The last read of Kiro's Meko setup (kiroMeko). */
-  private kiroMekoAt: { at: number; value: MekoStatus['kiro'] } | null = null;
+  /** The last read of Kiro's agent (kiroMeko). */
+  private kiroMekoAt: { at: number; gaps: string[] } | null = null;
   /** The last read of OpenCode's own Meko server (openCodeMeko). */
   private openCodeMekoAt: { at: number; own: boolean } | null = null;
-  /** Meko's status as last worked out; `state()` adds the parts read live (`local`, Kiro, OpenCode). */
-  mekoStatus: Omit<MekoStatus, 'local'>;
+  /** Meko's status as last worked out; `state()` adds the parts read live (`local`, the agents'). */
+  mekoStatus: Omit<MekoStatus, 'local' | 'agentList'>;
   /** The Meko on this computer, read when needed (mekolocal.ts); used when no key is set. */
   private localReader: LocalMekoReader;
   /** When a failed connection last read the local Meko again. */
@@ -262,8 +265,10 @@ export class Core extends EventEmitter {
     this.hostFull = hostname();
     this.updateStatus = () => ({ current: this.version, justUpdatedFrom: null, lastUpdatedFrom: null });
     this.claudeCode = new ClaudeCode({ config: () => this.cfg, changed: () => this.claudeChanged() });
+    this.mekoAgents = new MekoAgents({ db: this.db, read: o.mekoAgents ?? (() => readMekoAgents(localMeko().meko)), changed: () => this.changed(), log: this.log });
     this.harnesses = new Harnesses({
       claudeCode: this.claudeCode, paths: this.paths, log: this.log, changed: () => this.changed(), kiroVersion: o.kiroVersion, openCodeVersion: o.openCodeVersion,
+      meko: () => this.mekoAgents.current(), refreshMeko: () => this.mekoAgents.refresh(),
     });
     this.projects = new ProjectService(this);
     this.worktrees = new WorktreePool(this);
@@ -280,7 +285,7 @@ export class Core extends EventEmitter {
       warn: (m, d) => this.log.warn(m, d),
       reviewRequests: () => github.reviewRequests(homedir()),
       readSlack: () => readTodoList(this.cfg, join(this.paths.run, 'work-sync')),
-      claudeAvailable: () => !!this.harnesses.status(this.cfg).find((h) => h.id === 'claude')?.available,
+      claudeAvailable: () => this.harnesses.of('claude').status(this.cfg).available,
       githubTitle: async (repo, number) => (await github.issueOrPr(homedir(), repo, number)).title,
       settings: () => this.cfg.workQueue,
     });
@@ -289,7 +294,11 @@ export class Core extends EventEmitter {
       cwd: join(this.paths.run, 'ask'),
       projects: () => this.actionProjects(),
       record: (r) => this.record('INSERT INTO agentk_asks(at, ok, actions, ms) VALUES (?, ?, ?, ?)', r.at, r.ok ? 1 : 0, r.actions, r.ms),
-      asker: async () => (await this.harnesses.ensureDefault(this.cfg))?.ask ?? null,
+      asker: async () => {
+        const h = await this.harnesses.ensureDefault(this.cfg);
+        if (!h) throw new HttpError(409, this.harnesses.noAgent(this.cfg));
+        return h.ask;
+      },
     });
     this.tools = new SessionTools(this);
     this.limits = new PlanLimitsStore(this.db, () => this.changed());
@@ -305,8 +314,7 @@ export class Core extends EventEmitter {
     this.claudeMeko = new MekoClaudeWatch({
       config: () => this.cfg,
       available: () => this.harnesses.of('claude').status(this.cfg).available,
-      read: () => readClaudeMeko(claudeUserDir(), claudeConfigPath()),
-      mcpRegistered: () => this.mekoTools.claudeHasMcp(this.cfg.claude.command),
+      read: () => readClaudeMeko(claudeUserDir()),
       projectDatapacks: () => openProjectDatapacks(this.db),
       ownDatapacks: async () => (await this.meko.listDatapacks()).map((d) => d.id),
       tryToken: (url, token) => this.mekoTools.tryToken(url, token),
@@ -359,7 +367,7 @@ export class Core extends EventEmitter {
     return next;
   }
 
-  private mekoStatusFor(cfg: Config): Omit<MekoStatus, 'local'> {
+  private mekoStatusFor(cfg: Config): Omit<MekoStatus, 'local' | 'agentList'> {
     const m = resolveMekoWithSource(cfg);
     return {
       configured: !!m.apiKey, url: m.apiKey ? m.url : null, source: m.keySource, webUrl: resolveMekoWebUrl(cfg),
@@ -368,28 +376,55 @@ export class Core extends EventEmitter {
   }
 
   /**
-   * Whether Kiro's sessions reach AgentK's Meko (`MekoStatus.kiro`): null while Meko is off or Kiro
-   * isn't available. Its files are read again at most every KIRO_MEKO_TTL_MS, or when `force`d.
+   * An agent's `meko` MCP server as a gap sentence, from Meko's list (`mekoMcpGaps`): none while
+   * nothing is gated, or it's connected.
+   */
+  private mcpGaps(id: HarnessId): string[] {
+    return mekoMcpGaps(HARNESS_CAPS[id].label, this.harnesses.mekoOf(id), this.mekoAgents.current()?.target.url ?? null);
+  }
+
+  /** `MekoStatus.claude`: its MCP server from Meko's list, then the capture part (`claudeMeko`); empty while that is. */
+  claudeMekoStatus(): MekoStatus['claude'] {
+    const c = this.claudeMeko.status;
+    if (!mekoConfigured(this.cfg) || !this.harnesses.of('claude').status(this.cfg).available) return c;
+    return { ...c, gaps: [...this.mcpGaps('claude'), ...c.gaps] };
+  }
+
+  /**
+   * Whether Kiro's sessions reach AgentK's Meko (`MekoStatus.kiro`): its MCP server from Meko's
+   * list, then whether the agent Kiro sessions are built from loads it. Null while Meko is off or
+   * Kiro isn't available. Kiro's agent is read again at most every AGENT_MEKO_TTL_MS, or when `force`d.
    */
   kiroMeko(force = false): MekoStatus['kiro'] {
     if (!mekoConfigured(this.cfg) || !this.harnesses.of('kiro').status(this.cfg).available) return null;
     const now = Date.now();
-    if (force || !this.kiroMekoAt || now - this.kiroMekoAt.at > KIRO_MEKO_TTL_MS) {
-      this.kiroMekoAt = { at: now, value: { gaps: kiroMekoGaps(readKiroMeko(), resolveMeko(this.cfg).url, kiroAgentLoadsMcp()) } };
-    }
-    return this.kiroMekoAt.value;
+    if (force || !this.kiroMekoAt || now - this.kiroMekoAt.at > AGENT_MEKO_TTL_MS) this.kiroMekoAt = { at: now, gaps: kiroMekoGaps() };
+    const capture = this.kiroMekoAt.gaps;
+    return { gaps: [...this.mcpGaps('kiro'), ...capture], capture };
   }
 
   /**
    * Which Meko OpenCode's sessions use (`MekoStatus.opencode`): AgentK's, which it adds to their
-   * config, or the `meko` server in OpenCode's own config, which AgentK leaves alone. Null while Meko
-   * is off or OpenCode isn't available. OpenCode's config is read again at most every OPENCODE_MEKO_TTL_MS.
+   * config, or a `meko` server of OpenCode's own (`Harnesses.openCodeOwnMeko`), which AgentK leaves
+   * alone. Null while Meko is off or OpenCode isn't available. Read again at most every AGENT_MEKO_TTL_MS.
    */
   openCodeMeko(): MekoStatus['opencode'] {
     if (!mekoConfigured(this.cfg) || !this.harnesses.of('opencode').status(this.cfg).available) return null;
     const now = Date.now();
-    if (!this.openCodeMekoAt || now - this.openCodeMekoAt.at > OPENCODE_MEKO_TTL_MS) this.openCodeMekoAt = { at: now, own: openCodeHasOwnMeko() };
+    if (!this.openCodeMekoAt || now - this.openCodeMekoAt.at > AGENT_MEKO_TTL_MS) this.openCodeMekoAt = { at: now, own: this.harnesses.openCodeOwnMeko() };
     return { own: this.openCodeMekoAt.own };
+  }
+
+  /**
+   * Reads every harness's version again (`force`: now) and Meko's list of agents: Check again, and
+   * Connect to Meko once the page has connected one. Answers with every harness's status.
+   */
+  async refreshHarnesses(force = false): Promise<HarnessStatus[]> {
+    await Promise.all([this.harnesses.refresh(this.cfg, force), this.mekoAgents.refresh()]);
+    // Kiro's agent may load its MCP servers now (Meko's connect, or its setup, changed it).
+    this.kiroMekoAt = null;
+    this.openCodeMekoAt = null;
+    return this.harnesses.status(this.cfg);
   }
 
   /** The open projects with their sessions, as Ask AgentK and the session tools see them (their GitHub repo not read yet). */
@@ -481,7 +516,8 @@ export class Core extends EventEmitter {
     const shown = this.mekoStatus;
     const apiBefore = resolveMekoApiUrl(this.cfg);
     const wasState = localMeko().state;
-    await this.localReader.refresh();
+    // Another Meko, or the link changed (which moves the agents): Meko's list of agents is read again too.
+    if (await this.localReader.refresh()) void this.mekoAgents.refresh();
     if (this.stopped) return;
     this.startHandOver();
     const local = localMeko().meko;
@@ -609,7 +645,10 @@ export class Core extends EventEmitter {
         }
         return projects.map((p) => ({ ...p, usage: usage.get(p.id) ?? { ...ZERO_USAGE } }));
       })(),
-      meko: { ...this.mekoStatus, kiro: this.kiroMeko(), opencode: this.openCodeMeko(), local: localMeko().state },
+      meko: {
+        ...this.mekoStatus, claude: this.claudeMekoStatus(), kiro: this.kiroMeko(), opencode: this.openCodeMeko(),
+        agentList: this.mekoAgents.known(), local: localMeko().state,
+      },
       update: this.updateStatus(),
       version: this.version,
       // The Unix account: Meko signs people in, and its page shows the login's name.
@@ -683,8 +722,9 @@ export class Core extends EventEmitter {
     if (noWebUrl) this.log.warn(noWebUrl);
     // Before any turn can end, so the first one after a restart can tell whether its design's questions changed.
     this.questions.preload();
-    // Not awaited: startup doesn't wait on Meko.
+    // Not awaited: startup doesn't wait on Meko. Meko's list of agents kept from before gates new sessions meanwhile.
     void this.claudeMeko.refresh();
+    void this.mekoAgents.refresh();
     // Not awaited: the New session dialog shows branch names with it once it's in.
     void this.ghLogin(this.paths.home);
     // A session host that is down must not keep the web server from starting: the UI stays

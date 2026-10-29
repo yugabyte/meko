@@ -209,17 +209,8 @@ describe("Kiro's plan usage (/usage)", () => {
 });
 
 describe("Kiro's Meko setup", () => {
-  const url = 'https://meko.example.com/mcp';
-  it.each([
-    [[], ['Kiro has no Meko MCP server.']],
-    [[{ name: 'meko', url: 'https://other.example.com/mcp', token: true }], ["Kiro's Meko MCP server points at other.example.com, not meko.example.com."]],
-    [[{ name: 'meko', url, token: false }], ["Kiro's Meko MCP server sends no API key."]],
-    [[{ name: 'meko', url: `${url}/`, token: true }], []],
-  ])('%j', (servers, gaps) => {
-    expect(kiroMekoGaps(servers, url)).toEqual(gaps);
-  });
-
-  it("says so when the agent Kiro sessions are built from doesn't load Kiro's MCP config", () => {
-    expect(kiroMekoGaps([{ name: 'meko', url, token: true }], url, false)).toEqual([expect.stringMatching(/^Kiro's default agent doesn't load your MCP servers/)]);
+  it("says so only when the agent Kiro sessions are built from doesn't load Kiro's MCP config (its MCP server is Meko's to report)", () => {
+    expect(kiroMekoGaps(true)).toEqual([]);
+    expect(kiroMekoGaps(false)).toEqual([expect.stringMatching(/^Kiro's default agent doesn't load your MCP servers/)]);
   });
 });

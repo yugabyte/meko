@@ -1,7 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { HARNESS_CAPS } from '../../shared/harnesses.js';
-import type { HarnessStatus } from '../../shared/types.js';
+import { HARNESS_CAPS, versionAtLeast } from '../../shared/harnesses.js';
 import { claudeAsker } from '../askagentk.js';
 import { EDIT_TOOLS, claudeLauncher, modDirPath, statusLineScriptPath, transcriptPathFor, userStatusLine, writeModFiles } from '../claude.js';
 import type { ClaudeCode } from '../claudecode.js';
@@ -13,8 +12,7 @@ import { toolsMcpConfigPath, toolsPluginDir } from '../tools.js';
 import type { SessionRow } from '../store.js';
 import { TRUST_PROMPT_RE, trustFolder } from '../trust.js';
 import { ingestSessionUsage, sessionTranscript } from '../usage.js';
-import type { Harness } from './types.js';
-import { versionAtLeast } from './version.js';
+import type { CliStatus, Harness } from './types.js';
 
 /**
  * Claude Code: AgentK's first harness, and the only one with AgentK's mod and Artifact designs. Like
@@ -22,7 +20,7 @@ import { versionAtLeast } from './version.js';
  * sessions; the mod needs MIN_MOD_CLAUDE).
  */
 export function claudeHarness(deps: { claudeCode: ClaudeCode; log: Logger }): Harness {
-  const status = (cfg: Config): HarnessStatus => {
+  const status = (cfg: Config): CliStatus => {
     const s = deps.claudeCode.status();
     const min = HARNESS_CAPS.claude.minVersion;
     return {
