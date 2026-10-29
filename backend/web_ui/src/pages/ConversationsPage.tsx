@@ -1,16 +1,17 @@
 // The agents' conversations, most recently active first, and one conversation's turns with the
-// memories each produced and its decision trace.
+// memories each produced and its decision trace. A turn the address points at (#<message id>, as a
+// memory's "where it came from" link opens it) is scrolled to, flashed and labeled.
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, Brain, MessagesSquare } from "lucide-react";
 import { api } from "../lib/api";
 import { dateTime, timeAgo } from "../lib/format";
-import { href, navigate } from "../lib/route";
+import { href, navigate, useNavigated } from "../lib/route";
 import type { Datapack } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
 import { DecisionTrace } from "../components/DecisionTrace";
 import { Pager } from "../components/Pager";
-import { Badge, Card, Empty, ErrorNote, Input, Loading } from "../components/ui";
+import { Badge, Card, cx, Empty, ErrorNote, Input, Loading } from "../components/ui";
 
 const PAGE = 20;
 
@@ -86,6 +87,11 @@ function Thread({ datapack, conversationId }: { datapack: Datapack; conversation
   const { data, error, loading } = useLoad(() => api.conversation(id, conversationId), [id, conversationId]);
   const back = { datapackId: id, tab: "conversations" as const };
   const c = data?.conversation;
+  const [focus, setFocus] = useState(() => window.location.hash.slice(1));
+  useNavigated(useCallback(() => setFocus(window.location.hash.slice(1)), []));
+  useEffect(() => {
+    if (focus && c) document.getElementById(`turn-${focus}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [focus, c]);
 
   return (
     <div className="space-y-4">
@@ -106,8 +112,15 @@ function Thread({ datapack, conversationId }: { datapack: Datapack; conversation
           </div>
           <div className="space-y-3">
             {c.thread.map((t) => (
-              <Card key={t.message_id} className="space-y-3 p-4">
-                <div className="text-xs text-muted-foreground">{dateTime(t.started_at)}</div>
+              <Card
+                key={t.message_id}
+                id={`turn-${t.message_id}`}
+                className={cx("space-y-3 p-4", t.message_id === focus && "animate-flash ring-1 ring-primary")}
+              >
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  {dateTime(t.started_at)}
+                  {t.message_id === focus && <Badge tone="primary">The memory you opened was saved around this turn</Badge>}
+                </div>
                 {t.input && (
                   <div>
                     <div className="mb-1 text-xs font-medium text-muted-foreground">User</div>

@@ -1,105 +1,108 @@
-// The Memories tab's Graph view: the datapack's memories laid out by meaning (only the states the
-// tab's scope shows), and Ask the map, a question that lands among them, lighting the memories that
-// match it (0.40 or more, as Search shows) with their scores beside.
+// A map laid out by meaning: the Memories tab's Graph view (a datapack's memories, only the given
+// states), or Search's (the 100 memories, knowledge-base chunks and conversation turns nearest the
+// question, with what the search returned lit and listed beside it).
 
-import { useMemo, useState, type FormEvent } from "react";
-import { Map as MapIcon, Sparkles } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Map as MapIcon } from "lucide-react";
 import { api } from "../lib/api";
-import type { MapPoint, MemoryState } from "../lib/types";
+import type { MapPoint, MapSource, MemoryState } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
-import { MemoryLineageDialog } from "./MemoryLineageDialog";
-import { MemoryMapView, only, SHOWN_STATES } from "./MemoryMapView";
-import { round2, Similarity, WEAK_MEMORY } from "./Similarity";
-import { Button, Card, Empty, ErrorNote, Input, Loading, Spinner } from "./ui";
+import { MemoryLineageDialog, type LineageOf } from "./MemoryLineageDialog";
+import { MemoryMapView, only, SHOWN_STATES, SOURCE_COLOR } from "./MemoryMapView";
+import { round2, Similarity } from "./Similarity";
+import { Button, Card, cx, Empty, ErrorNote, Loading } from "./ui";
+
+// A search to draw: its question, the sources it searched, and the ids of what it returned (memory
+// and chunk ids, turns' message ids).
+export interface MapSearch {
+  query: string;
+  sources: MapSource[];
+  hits: string[];
+}
 
 export function MemoryGraph({
   datapackId: id,
-  states,
-  refresh,
+  states = SHOWN_STATES,
+  refresh = 0,
+  search,
 }: {
   datapackId: string;
-  states: MemoryState[];
-  refresh: number;
+  states?: MemoryState[];
+  refresh?: number;
+  search?: MapSearch;
 }) {
-  const [draft, setDraft] = useState("");
-  const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<MapPoint>();
-  const [origin, setOrigin] = useState<MapPoint>();
-  const loaded = useLoad(() => api.memoryMap(id, query), [id, query, refresh]);
+  const [origin, setOrigin] = useState<LineageOf>();
+  const searchKey = search ? [search.query, search.sources.join(), search.hits.join()].join("|") : "";
+  const loaded = useLoad(
+    () => (search ? api.searchMap(id, search.query, search.sources, search.hits) : api.memoryMap(id)),
+    [id, searchKey, refresh],
+  );
   const key = states.join();
-  const data = useMemo(() => loaded.data && only(loaded.data, states.filter((s) => SHOWN_STATES.includes(s))), [loaded.data, key]);
-  const map = { ...loaded, data };
+  const data = useMemo(
+    () => loaded.data && (search ? loaded.data : only(loaded.data, states.filter((s) => SHOWN_STATES.includes(s)))),
+    [loaded.data, key, searchKey],
+  );
+  const lit = search && new Set(search.hits);
+  const matches = (data?.points ?? [])
+    .filter((p) => lit?.has(p.id))
+    .sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0));
 
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    setQuery(draft.trim());
-  };
-  const matches = query
-    ? (map.data?.points ?? [])
-        .filter((p) => round2(p.similarity ?? 0) >= WEAK_MEMORY)
-        .sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0))
-    : [];
-  const lit = query ? new Set(matches.map((p) => p.id)) : undefined;
-
+  if (loaded.error) return <ErrorNote error={loaded.error} />;
+  if (!data) return <Loading />;
+  if (data.points.length === 0)
+    return (
+      <Empty icon={<MapIcon className="size-8" />} title={search ? "Nothing to map" : "No memories to map yet"}>
+        {search
+          ? "Nothing searched is embedded yet."
+          : "Memories appear here once they're embedded. Agents add them with memory_add."}
+      </Empty>
+    );
   return (
-    <div className="space-y-4">
-      <form onSubmit={submit} className="flex gap-2">
-        <Input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Ask the map any question" />
-        <Button variant="primary" disabled={map.loading && !!query}>
-          {map.loading && query ? <Spinner className="text-primary-foreground" /> : <Sparkles className="size-4" />} Ask
-        </Button>
-        {query && (
-          <Button variant="ghost" type="button" onClick={() => (setDraft(""), setQuery(""))}>
-            Clear
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      <MemoryMapView map={data} lit={lit} selected={picked?.id} onPick={setPicked} />
+      <div className="space-y-2">
+        <h3 className="text-sm font-medium">
+          {search ? `${matches.length} returned, among the ${data.points.length} nearest` : "How to read it"}
+        </h3>
+        {!search ? (
+          <p className="text-sm text-muted-foreground">
+            Memories alike in meaning sit close together, and lines join each to its nearest. Search shows where a
+            question lands among them.
+          </p>
+        ) : matches.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Nothing was close enough: the star shows the nearest region.</p>
+        ) : (
+          <Card className="divide-y">
+            {matches.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => setPicked(p)}
+                className="flex w-full items-start justify-between gap-3 p-2.5 text-left text-sm hover:bg-accent"
+              >
+                <span className="flex min-w-0 items-start gap-2">
+                  {p.source && (
+                    <span className={cx("mt-1.5 size-2 shrink-0 rounded-full bg-current", SOURCE_COLOR[p.source])} />
+                  )}
+                  <span className="line-clamp-3 min-w-0 break-words">{p.text}</span>
+                </span>
+                <Similarity value={round2(p.similarity ?? 0)} />
+              </button>
+            ))}
+          </Card>
+        )}
+        {/* Only a memory map's points carry what the lineage needs. */}
+        {picked?.agent_id && picked.created_at && (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setOrigin({ ...picked, agent_id: picked.agent_id!, created_at: picked.created_at! })}
+          >
+            Where the selected memory came from
           </Button>
         )}
-      </form>
-
-      {map.error ? (
-        <ErrorNote error={map.error} />
-      ) : !map.data ? (
-        <Loading />
-      ) : map.data.points.length === 0 ? (
-        <Empty icon={<MapIcon className="size-8" />} title="No memories to map yet">
-          Memories appear here once they're embedded. Agents add them with <b>memory_add</b>, or add one above.
-        </Empty>
-      ) : (
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
-          <MemoryMapView map={map.data} lit={lit} selected={picked?.id} onPick={setPicked} />
-          <div className="space-y-2">
-            <h3 className="text-sm font-medium">
-              {query ? `${matches.length} ${matches.length === 1 ? "memory matches" : "memories match"}` : "How to read it"}
-            </h3>
-            {!query ? (
-              <p className="text-sm text-muted-foreground">
-                Memories alike in meaning sit close together, and lines join each to its nearest. Ask a question to see
-                where it lands and which memories answer it.
-              </p>
-            ) : matches.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Nothing scores 0.40 or more: the star shows the nearest region.</p>
-            ) : (
-              <Card className="divide-y">
-                {matches.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => setPicked(p)}
-                    className="flex w-full items-start justify-between gap-3 p-2.5 text-left text-sm hover:bg-accent"
-                  >
-                    <span className="min-w-0 break-words">{p.text}</span>
-                    <Similarity value={round2(p.similarity ?? 0)} />
-                  </button>
-                ))}
-              </Card>
-            )}
-            {picked && (
-              <Button size="sm" variant="ghost" onClick={() => setOrigin(picked)}>
-                Where the selected memory came from
-              </Button>
-            )}
-          </div>
-        </div>
-      )}
+      </div>
       {origin && <MemoryLineageDialog datapackId={id} memory={origin} onClose={() => setOrigin(undefined)} />}
     </div>
   );

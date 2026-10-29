@@ -1,12 +1,10 @@
 // The Overview's and Metrics tab's numbers, derived in one place from /metrics and the datapack's
-// own counts (the memory breakdown), so no two cards compute the same number differently. Formulas
-// follow Meko Cloud's: context size counts every knowledge-base chunk, memory and conversation chunk
-// as 1024 tokens; context efficiency and quality come from the server, which counts them as Cloud does.
+// own counts (the memory breakdown), so no two cards compute the same number differently. Context
+// size, efficiency and quality all come from the server: size with the weights efficiency uses (a
+// knowledge-base chunk 1000 tokens, a memory 200) and a conversation turn by its length.
 
 import type { Datapack, Metrics } from "./types";
 
-// Tokens a chunk (a knowledge-base chunk, a memory, a conversation chunk) counts for, as Cloud counts.
-const TOKENS_PER_CHUNK = 1024;
 // The window the "window used" gauge measures against, as Cloud's does.
 export const CONTEXT_WINDOW = 128_000;
 // Score bands, as the server counts them: cosine similarity >= 0.75 high, >= 0.5 mid.
@@ -42,7 +40,6 @@ function split(knowledge: number, memory: number, conversation: number): Split {
 
 export function derive(m: Metrics, d: Datapack): Derived {
   const bytes = split(m.kb_bytes, m.memory_bytes, m.conversation_bytes);
-  const tok = (chunks: number) => chunks * TOKENS_PER_CHUNK;
   const requests = m.savings_requests ?? m.total_requests;
   const hasSavings = requests > 0 && m.tokens_if_raw_total > 0;
   // Sent comes from the server: a search's saving is clamped at 0, so baseline − saved overstates
@@ -56,7 +53,11 @@ export function derive(m: Metrics, d: Datapack): Derived {
   const promoted = d.collective_memory_count ?? 0;
   return {
     bytes,
-    tokens: split(tok(m.kb_chunk_count), tok(m.memory_chunk_count), tok(m.conversation_chunk_count)),
+    tokens: split(
+      m.context_size.knowledge.tokens,
+      m.context_size.memories.tokens,
+      m.context_size.conversations.tokens,
+    ),
     savedPct: hasSavings ? m.savings_pct : null,
     avgTokensSent,
     avgTokensIfRaw: hasSavings ? Math.round(m.tokens_if_raw_total / requests) : null,

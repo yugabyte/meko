@@ -6,7 +6,10 @@ is the full list. How the CLI is built is in [design.md](design.md#process-model
 
 Meko has two commands, one binary under two names, as PostgreSQL has `postgres` and `psql`: `meko`
 runs Meko, and `meko-cli` works with what it keeps. `meko --help` and `meko-cli --help` list them, and
-`<command> --help` gives each one's examples and flags. `install`, `start`, `stop` and `status` print a
+`<command> --help` gives each one's examples and flags. `meko` alone (or `meko --help`) opens with
+what to type next, in bold on a terminal, for the state Meko is in: `meko install` on a computer
+without it, `meko start` when it's set up but stopped, `meko ui` and `meko agent connect` when it's
+running. `install`, `start`, `stop` and `status` print a
 short summary: a row per step marked ✓, ! or ✗, the links for people (the web UI, on 7777) and for
 agents (MCP and the REST API, on 7778), and what to run next.
 

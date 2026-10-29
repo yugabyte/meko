@@ -1,5 +1,6 @@
 // context_search from the browser: one question over memories, the knowledge base and past
-// conversations, each source's hits in its own section.
+// conversations, each source's hits in its own section. Graph shows the 100 things nearest the
+// question as a map instead, colored by source, with what the search returned lit.
 
 import { useState, type FormEvent, type ReactNode } from "react";
 import { Brain, FileText, MessagesSquare, Search } from "lucide-react";
@@ -7,8 +8,10 @@ import { api, type SearchSource } from "../lib/api";
 import { SEARCH_INPUT_ID } from "../lib/useShortcuts";
 import { SHOW_COLLECTIVE } from "../lib/features";
 import { timeAgo } from "../lib/format";
-import type { ContextSearch, Datapack, MemoryHit } from "../lib/types";
+import type { ContextSearch, Datapack, MapSource, MemoryHit } from "../lib/types";
+import { useSavedView, VIEWS } from "../lib/useSavedView";
 import { ExpandableText } from "../components/ExpandableText";
+import { MemoryGraph } from "../components/MemoryGraph";
 import { Segmented } from "../components/Segmented";
 import { round2, Similarity, WEAK_MEMORY } from "../components/Similarity";
 import { Badge, Button, Card, Empty, ErrorNote, Input, Spinner } from "../components/ui";
@@ -79,6 +82,8 @@ function Section({
   );
 }
 
+const MAP_SOURCES: MapSource[] = ["memory", "knowledge_base", "conversation"];
+
 const SOURCES: readonly { id: SearchSource; label: string }[] = [
   { id: "auto", label: "All" },
   { id: "memory", label: "Memory" },
@@ -89,8 +94,10 @@ const SOURCES: readonly { id: SearchSource; label: string }[] = [
 export function SearchPage({ datapack }: { datapack: Datapack }) {
   const [query, setQuery] = useState("");
   const [source, setSource] = useState<SearchSource>("auto");
-  // The source the shown results were searched with.
+  // The question and source the shown results were searched with.
+  const [asked, setAsked] = useState("");
   const [searched, setSearched] = useState<SearchSource>("auto");
+  const [view, setView] = useSavedView("meko.search.view");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Error>();
   const [result, setResult] = useState<ContextSearch>();
@@ -102,6 +109,7 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
     setError(undefined);
     try {
       setResult(await api.search(datapack.datapack_id, query.trim(), source));
+      setAsked(query.trim());
       setSearched(source);
     } catch (err) {
       setError(err as Error);
@@ -125,14 +133,33 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
           {busy ? <Spinner className="text-primary-foreground" /> : <Search className="size-4" />} Search
         </Button>
       </form>
-      <Segmented options={SOURCES} value={source} onChange={setSource} />
+      <div className="flex flex-wrap items-center gap-3">
+        <Segmented options={SOURCES} value={source} onChange={setSource} />
+        <div className="ml-auto">
+          <Segmented options={VIEWS} value={view} onChange={setView} />
+        </div>
+      </div>
       {error && <ErrorNote error={error} />}
       {!r && !error && (
         <Empty icon={<Search className="size-8" />} title="Search everything in this datapack">
           The same search agents run with <b>context_search</b>: memories, knowledge files and past conversations.
         </Empty>
       )}
-      {r && (
+      {r && view === "graph" && (
+        <MemoryGraph
+          datapackId={datapack.datapack_id}
+          search={{
+            query: asked,
+            sources: MAP_SOURCES.filter((s) => shows(searched, s)),
+            hits: [
+              ...(r.memory ?? []).filter((m) => !isWeak(m)).map((m) => m.id),
+              ...(r.knowledge_base ?? []).map((k) => k.id),
+              ...(r.conversation?.hits ?? []).map((h) => h.message_id),
+            ],
+          }}
+        />
+      )}
+      {r && view === "list" && (
         <div className="space-y-6">
           {shows(searched, "memory") && (
             <Section

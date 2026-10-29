@@ -98,7 +98,7 @@ func TestAgentCommands(t *testing.T) {
 	want(t, "agent list -h", 0, 0, help, "--json")
 	_, usage, _ := run()
 	want(t, "meko --help", 0, 0, usage, "\nConnect\n  agent list ")
-	if strings.Contains(usage, "  connect ") {
+	if strings.Contains(usage, "\n  connect ") {
 		t.Errorf("meko --help lists connect:\n%s", usage)
 	}
 	code, _, errs := run("agents", "list")

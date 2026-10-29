@@ -11,6 +11,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/update"
 )
 
@@ -23,7 +24,7 @@ func TestEveryCommandHasHelp(t *testing.T) {
 			groups = mekoCLIGroups
 		}
 		var usage bytes.Buffer
-		printUsage(&usage, prog)
+		printUsage(&usage, prog, false)
 		for _, c := range commandsOf(prog) {
 			if c.summary == "" || c.usage == "" || len(c.examples) == 0 {
 				t.Errorf("%s %s: summary %q, usage %q, %d examples", prog, c.name, c.summary, c.usage, len(c.examples))
@@ -61,6 +62,7 @@ func TestDestroyHelpNamesWithExtensions(t *testing.T) {
 }
 
 func TestUsage(t *testing.T) {
+	t.Setenv(paths.HomeEnv, t.TempDir()) // meko's usage looks at the data folder to say where to start
 	code, out, _ := run()
 	if !strings.HasPrefix(out, "The universal, self-learning context engine for agentic applications\n\n") {
 		t.Errorf("meko --help doesn't open with Meko's tagline:\n%s", out)
@@ -153,6 +155,7 @@ func TestExtensionCommands(t *testing.T) {
 }
 
 func TestMainPicksTheProgramByName(t *testing.T) {
+	t.Setenv(paths.HomeEnv, t.TempDir())
 	var out, errb bytes.Buffer
 	Main("/home/me/.local/bin/meko-cli", []string{"--help"}, &out, &errb)
 	want(t, "as meko-cli", 0, 0, out.String(), "Usage: meko-cli")
@@ -300,5 +303,29 @@ func TestLinkMekoCLI(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(mekoCLI); string(b) != "mine" {
 		t.Errorf("a meko-cli that was there was replaced")
+	}
+}
+
+// meko alone starts with what to type next: install on a computer that has no Meko, start when it's
+// set up but stopped.
+func TestMekoAloneSaysWhereToStart(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "meko")
+	t.Setenv(paths.HomeEnv, dir)
+	var out bytes.Buffer
+	if code := Run(nil, &out, &out); code != exitOK ||
+		!strings.Contains(out.String(), "\n\nNew here? Start with:\n  meko install") {
+		t.Errorf("no Meko yet: exit %d\n%s", code, out.String())
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if Run([]string{"--help"}, &out, &out); !strings.Contains(out.String(), "\n\nMeko is set up but not running") ||
+		!strings.Contains(out.String(), "  meko start") {
+		t.Errorf("set up, stopped:\n%s", out.String())
+	}
+	out.Reset()
+	if runProg(progMekoCLI, nil, &out, &out); strings.Contains(out.String(), "New here?") {
+		t.Errorf("meko-cli's help says where Meko starts:\n%s", out.String())
 	}
 }

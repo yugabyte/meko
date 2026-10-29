@@ -58,8 +58,13 @@ export function Field({ label, hint, children }: { label: string; hint?: ReactNo
   );
 }
 
-export function Card({ className, children }: { className?: string; children: ReactNode }) {
-  return <div className={cx("rounded-lg border bg-card", className)}>{children}</div>;
+// id lets a link point at a card (scrolled to by its #fragment).
+export function Card({ id, className, children }: { id?: string; className?: string; children: ReactNode }) {
+  return (
+    <div id={id} className={cx("rounded-lg border bg-card", className)}>
+      {children}
+    </div>
+  );
 }
 
 const TONES = {

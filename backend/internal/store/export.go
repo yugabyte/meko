@@ -148,11 +148,16 @@ func (s *Store) vectorOf(ctx context.Context, table string, rowid int64) ([]floa
 	case err != nil:
 		return nil, err
 	}
+	return decodeVector(blob), nil
+}
+
+// decodeVector is a vec0 embedding column's little-endian float32s.
+func decodeVector(blob []byte) []float32 {
 	v := make([]float32, len(blob)/4)
 	for i := range v {
 		v[i] = math.Float32frombits(binary.LittleEndian.Uint32(blob[4*i:]))
 	}
-	return v, nil
+	return v
 }
 
 // isNoSuchTable says whether err is SQLite's for a table that doesn't exist, as a vector table is
