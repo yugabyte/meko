@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { isRepoName, parsePrInput } from '../shared/github-refs.js';
 import type { CiState, MergeMethod } from '../shared/types.js';
@@ -10,12 +11,36 @@ async function gh(cwd: string, ...args: string[]): Promise<string> {
   return ghWithin(cwd, 0, ...args);
 }
 
+/** Whether the login shell gave the server no PATH at its start (launcher.ts adoptLoginPath, set by `serve`), for gh's error. */
+let loginPathMissing = false;
+
+export function setLoginPathMissing(missing: boolean): void {
+  loginPathMissing = missing;
+}
+
 /** `gh` with a time limit (0: none). */
 async function ghWithin(cwd: string, timeoutMs: number, ...args: string[]): Promise<string> {
-  const { stdout } = await exec('gh', args, {
-    cwd, maxBuffer: 32 * 1024 * 1024, timeout: timeoutMs, env: { ...process.env, GH_PROMPT_DISABLED: '1', NO_COLOR: '1' },
-  });
-  return stdout.trim();
+  try {
+    const { stdout } = await exec('gh', args, {
+      cwd, maxBuffer: 32 * 1024 * 1024, timeout: timeoutMs, env: { ...process.env, GH_PROMPT_DISABLED: '1', NO_COLOR: '1' },
+    });
+    return stdout.trim();
+  } catch (e) {
+    throw ghMissing(e, cwd) ?? e;
+  }
+}
+
+/**
+ * "spawn gh ENOENT" in words, or null for any other error. Node says the same for a folder to run
+ * in that's gone, so that keeps its own error.
+ */
+function ghMissing(e: unknown, cwd: string): Error | null {
+  if ((e as NodeJS.ErrnoException).code !== 'ENOENT' || !existsSync(cwd)) return null;
+  if (!loginPathMissing) return new Error("AgentK can't find gh, GitHub's command-line tool. Install gh, then run agentk restart.");
+  const allow = process.platform === 'darwin'
+    ? ' If macOS asked whether meko may open a folder, allow it (System Settings › Privacy & Security › Files and Folders), then run agentk restart.'
+    : ' Run agentk restart.';
+  return new Error(`AgentK can't find gh, because it couldn't read PATH from your login shell when it started.${allow}`);
 }
 
 export interface IssueText {

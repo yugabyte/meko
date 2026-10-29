@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-import { execFileSync, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { closeSync, existsSync, openSync, readFileSync, readSync, rmSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { findMekoCaptureScript } from './capture.js';
-import { loginShell, scrubSessionMarkers } from './launcher.js';
+import { setLoginPathMissing } from './github.js';
+import { adoptLoginPath, loginShell, scrubSessionMarkers } from './launcher.js';
 import { dbPath, loadConfig, resolveMeko, type Config } from './config.js';
 import { Core } from './core.js';
 import { kvGet, kvSet, openDb } from './db.js';
@@ -15,7 +15,7 @@ import { handoff } from './handoff.js';
 import { probeLocal, restartServer } from './health.js';
 import { listenPrivate, socketId } from './hooks.js';
 import { MekoClient } from './meko.js';
-import { getPaths, SHARED_TMP, tildify, withLocalBin, type Paths } from './paths.js';
+import { getPaths, SHARED_TMP, tildify, type Paths } from './paths.js';
 import { buildServer, findWebDir } from './server.js';
 import { AGENTK_PATH as BASE_PATH } from '../shared/mekourls.js';
 import { hostServices, moveJobLog, servicesFor, startMoveJob } from './service.js';
@@ -42,24 +42,9 @@ function version(): string {
   }
 }
 
-/**
- * Under systemd or launchd the environment is bare. Take PATH from the user's login shell
- * so git, gh and claude resolve the way they do in a terminal. ~/.local/bin is added
- * when it's missing: the installer puts `agentk` (and gh, when it installs it) there. MEKO_HOME
- * and XDG_STATE_HOME come from there too when unset, since they decide where Meko's data folder
- * is (paths.ts `mekoHome`), as they did for the installer.
- */
-function adoptLoginPath(): void {
-  try {
-    const out = execFileSync(loginShell(), ['-l', '-c', 'printf "%s\\0%s\\0%s" "$PATH" "${MEKO_HOME-}" "${XDG_STATE_HOME-}"'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
-    const [p, meko, state] = out.split('\0');
-    if (p?.trim()) process.env.PATH = p.trim();
-    if (meko && !process.env.MEKO_HOME) process.env.MEKO_HOME = meko;
-    if (state && !process.env.XDG_STATE_HOME) process.env.XDG_STATE_HOME = state;
-  } catch {
-    /* keep the inherited PATH */
-  }
-  process.env.PATH = withLocalBin(process.env.PATH ?? '', homedir());
+/** Says in the log that the login shell gave no PATH (adoptLoginPath), and the one used instead. */
+function logNoLoginPath(log: Logger, why: string | null): void {
+  if (why) log.warn(`couldn't read PATH from the login shell (${loginShell()}), so gh and the agents are looked for on ${process.env.PATH}`, why);
 }
 
 /**
@@ -109,7 +94,8 @@ function holdTmpLock(home: string, log: Logger): void {
 
 async function serve(): Promise<void> {
   scrubSessionMarkers();
-  adoptLoginPath();
+  const noLoginPath = adoptLoginPath();
+  setLoginPathMissing(noLoginPath !== null);
   const paths = await moveFirst(getPaths());
   const cfg = loadConfig(paths);
   const v = version();
@@ -126,6 +112,7 @@ async function serve(): Promise<void> {
     process.exit(EXIT_BUSY);
   }
   const log = fileLogger(join(paths.logs, 'server.log'));
+  logNoLoginPath(log, noLoginPath);
   try {
     await startServer(paths, cfg, v, lock, log);
   } catch (e) {
@@ -394,7 +381,7 @@ async function host(args: string[]): Promise<void> {
   }
   if (args.length) throw new Error(`Unknown host command: ${args[0]} (stop or restart)`);
   scrubSessionMarkers();
-  adoptLoginPath();
+  const noLoginPath = adoptLoginPath();
   const log = fileLogger(join(paths.logs, 'host.log'));
   // A terminal it was started from may close: the host keeps going.
   process.on('SIGHUP', () => undefined);
@@ -408,6 +395,8 @@ async function host(args: string[]): Promise<void> {
     console.error(`agentk: ${e.message}`);
     process.exit(EXIT_BUSY);
   }
+  // Only now: host.log belongs to the host holding the home, not to one refused above.
+  logNoLoginPath(log, noLoginPath);
   process.on('SIGTERM', exit);
   process.on('SIGINT', exit);
 }

@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { isRepoName, parsePrInput, pickPr, prFromUrl, type PrRef } from '../../src/server/github.js';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { isRepoName, issueText, parsePrInput, pickPr, prFromUrl, setLoginPathMissing, type PrRef } from '../../src/server/github.js';
 import { parseGithubRef } from '../../src/shared/github-refs.js';
+import { tempDir } from '../helpers.js';
 
 const pr = (number: number, state: PrRef['state'], createdAt: string, isCrossRepository = false): PrRef =>
   ({ number, url: `https://github.com/acme/demo/pull/${number}`, state, createdAt, isCrossRepository });
@@ -84,5 +86,24 @@ describe('a GitHub link pasted into Search', () => {
     ['../x#3', null],
   ])('%s', (input, want) => {
     expect(parseGithubRef(input)).toEqual(want);
+  });
+});
+
+describe('gh missing from PATH', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    setLoginPathMissing(false);
+  });
+
+  // Node says "spawn gh ENOENT" for a missing gh and for a missing folder to run in alike.
+  it.each([
+    ['no gh', false, true, /^AgentK can't find gh, GitHub's command-line tool\. Install gh, then run agentk restart\.$/],
+    ['no gh, and no PATH from the login shell', true, true, /^AgentK can't find gh, because it couldn't read PATH from your login shell when it started\..* agentk restart\.$/],
+    ['a folder that is gone', false, false, /^spawn gh ENOENT$/],
+  ])('%s', async (_, noLoginPath, folderThere, want) => {
+    vi.stubEnv('PATH', tempDir('ak-no-gh-'));
+    setLoginPathMissing(noLoginPath);
+    const cwd = folderThere ? tempDir('ak-cwd-') : join(tempDir('ak-cwd-'), 'gone');
+    await expect(issueText(cwd, 1)).rejects.toThrow(want);
   });
 });

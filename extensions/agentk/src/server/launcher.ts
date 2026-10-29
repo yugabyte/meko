@@ -1,10 +1,12 @@
+import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { userInfo } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { basename, join } from 'node:path';
 import { CLAUDE_SESSION_MARKERS } from './claude.js';
 import { KIRO_SESSION_MARKERS } from './kiro.js';
+import { errMsg } from './log.js';
 import { OPENCODE_SESSION_MARKERS } from './opencode.js';
-import { claudePath, type Paths } from './paths.js';
+import { claudePath, withUsualBins, type Paths } from './paths.js';
 
 /**
  * Markers a running coding agent puts in its children's environment. If AgentK itself was
@@ -97,4 +99,30 @@ export function loginShell(): string {
     /* fall through */
   }
   return process.env.SHELL && existsSync(process.env.SHELL) ? process.env.SHELL : '/bin/sh';
+}
+
+/**
+ * Under systemd or launchd the environment is bare. Take PATH from the user's login shell
+ * so git, gh and claude resolve the way they do in a terminal. ~/.local/bin is added
+ * when it's missing: the installer puts `agentk` (and gh, when it installs it) there. So are
+ * Homebrew's folders (`withUsualBins`), for when the shell gives no PATH: it can take longer than
+ * 5 s, for a slow profile or one that reads ~/Downloads while macOS asks whether Meko may. MEKO_HOME
+ * and XDG_STATE_HOME come from there too when unset, since they decide where Meko's data folder
+ * is (paths.ts `mekoHome`), as they did for the installer. Returns why the shell gave no PATH, or null.
+ */
+export function adoptLoginPath(shell = loginShell(), timeoutMs = 5000): string | null {
+  let failed: string | null = null;
+  try {
+    const out = execFileSync(shell, ['-l', '-c', 'printf "%s\\0%s\\0%s" "$PATH" "${MEKO_HOME-}" "${XDG_STATE_HOME-}"'], { encoding: 'utf8', timeout: timeoutMs, stdio: ['ignore', 'pipe', 'ignore'] });
+    const [p, meko, state] = out.split('\0');
+    if (p?.trim()) process.env.PATH = p.trim();
+    else failed = 'it printed no PATH';
+    if (meko && !process.env.MEKO_HOME) process.env.MEKO_HOME = meko;
+    if (state && !process.env.XDG_STATE_HOME) process.env.XDG_STATE_HOME = state;
+  } catch (e) {
+    const { code, status } = e as NodeJS.ErrnoException & { status?: number | null };
+    failed = code === 'ETIMEDOUT' ? `it took longer than ${timeoutMs / 1000} s` : typeof status === 'number' ? `it exited with code ${status}` : errMsg(e);
+  }
+  process.env.PATH = withUsualBins(process.env.PATH ?? '', homedir());
+  return failed;
 }

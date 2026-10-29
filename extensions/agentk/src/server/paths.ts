@@ -254,3 +254,16 @@ export function withLocalBin(path: string, home: string): string {
   const parts = path.split(':').filter(Boolean);
   return parts.includes(local) ? path : [...parts, local].join(':');
 }
+
+/**
+ * Where gh and the agents usually are when a service's PATH lacks them: Homebrew's folders (Intel
+ * and Apple silicon), where gh's macOS installer puts it too. Meko looks for agents there as well.
+ */
+const USUAL_BINS = ['/usr/local/bin', '/opt/homebrew/bin'];
+
+/** PATH with ~/.local/bin and then USUAL_BINS appended, each unless it's already there. */
+export function withUsualBins(path: string, home: string): string {
+  const withLocal = withLocalBin(path, home);
+  const parts = withLocal.split(':');
+  return [withLocal, ...USUAL_BINS.filter((d) => !parts.includes(d))].join(':');
+}
