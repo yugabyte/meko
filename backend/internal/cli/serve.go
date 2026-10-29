@@ -17,6 +17,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/yugabyte/meko/backend/internal/agents"
 	"github.com/yugabyte/meko/backend/internal/auth"
 	"github.com/yugabyte/meko/backend/internal/callhome"
 	"github.com/yugabyte/meko/backend/internal/cloudlink"
@@ -332,24 +333,37 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	} else {
 		startExtensionUpdates(updCtx, l, cfg, log, web)
 	}
-	// The Meko Cloud link: the web UI and meko cloud_link change it; the running extensions hear.
+	// The agents on this computer connect to the linked Meko Cloud, else to this Meko.
+	local := agents.Target{Kind: agents.KindLocal, URL: fmt.Sprintf("http://127.0.0.1:%d/mcp", cfg.Server.Port),
+		Token: clientToken}
+	agentsMgr := &agents.Manager{Lock: agentsLock(l), Target: func() (agents.Target, error) {
+		link, err := cloudSt.Load()
+		return agentTarget(link, local), err
+	}}
+	// The Meko Cloud link: the web UI and meko cloud_link change it; the agents connected to Meko
+	// follow it, and the running extensions hear.
 	cloud := &cloudlink.Service{Store: cloudSt, Check: cloudlink.CheckMCP, CheckAPI: cloudlink.CheckAPI,
 		List:    cloudlink.ListDatapacks,
-		Changed: func(ctx context.Context) { web.notify(ctx, "cloud") }}
+		Changed: func(ctx context.Context) { web.notify(ctx, "cloud") },
+		Moved: func(ctx context.Context, before, after cloudlink.State) agents.Moves {
+			m := agentsMgr.Move(ctx, agentTarget(before, local), agentTarget(after, local))
+			logMoves(log, m)
+			return m
+		}}
 	// The routes that take a datapack send one this Meko doesn't have to the linked Meko Cloud.
 	restOpts.Cloud = cloud
 	web.newOpts = func(wcfg config.Config) server.Options {
 		return server.Options{Info: info, Port: wcfg.Web.Port, Auth: cfg.Server.Auth, Logger: log,
 			Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, MCP: mcpHandler,
 			REST: registerREST, Upload: upload, Download: download, UI: ui, Login: logins, Cloud: cloud,
-			Web: &server.Web{Access: wcfg.Web.Access, Extensions: web.Proxies, Installed: web.Installed,
+			Agents: agentsMgr, Web: &server.Web{Access: wcfg.Web.Access, Extensions: web.Proxies, Installed: web.Installed,
 				Run: web.RunExtension, ExtensionUpdates: web.ExtensionUpdates, CheckExtensions: web.CheckExtensions,
 				SetAutoUpdate: web.SetAutoUpdate, Jobs: web.jobs, Updates: updates}}
 	}
 	srv := server.New(server.Options{
 		Info: info, Port: cfg.Server.Port, Token: token, ClientToken: clientToken, Auth: cfg.Server.Auth, Logger: log,
 		Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, MCP: mcpHandler,
-		REST: registerREST, Upload: upload, Download: download, Login: logins, Cloud: cloud,
+		REST: registerREST, Upload: upload, Download: download, Login: logins, Cloud: cloud, Agents: agentsMgr,
 		WebURL: func() string {
 			if u := web.Status(context.Background()).URL; u != "" {
 				return u
@@ -366,6 +380,13 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	go func() {
 		defer close(webDone)
 		web.Run(webCtx)
+	}()
+	// An already-linked Meko moves its agents to Meko Cloud once, at its first start that does.
+	followCtx, stopFollow := context.WithCancel(context.Background())
+	followDone := make(chan struct{})
+	go func() {
+		defer close(followDone)
+		followLinkOnce(followCtx, st, cloud, log)
 	}()
 	log.Info("Meko started", "url", fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.Port),
 		"pid", pid, "data_dir", l.Root, "version", version.Version, "auth", cfg.Server.Auth)
@@ -416,6 +437,8 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	}
 	stopEmbedder()
 	<-embedderDone
+	stopFollow()
+	<-followDone
 	stop, cancelStop := context.WithTimeout(context.Background(), childStopTimeout)
 	defer cancelStop()
 	if err := sup.Stop(stop); err != nil {
@@ -628,5 +651,41 @@ func clientTokens(l paths.Layout, cfg config.Config) (auth.ClientTokens, error) 
 func removeRunFiles(l paths.Layout) {
 	for _, p := range []string{l.Pid, l.Port, l.Token, l.StoreSock, l.MemoryEngineSock} {
 		_ = paths.RemoveIfExists(p)
+	}
+}
+
+// keyAgentsFollowedLink records that this Meko moved its agents to the Meko Cloud linked before it
+// managed their connections, so it runs once.
+const keyAgentsFollowedLink = "agents_followed_link"
+
+// followLinkOnce moves the agents connected to this Meko to the linked Meko Cloud, at the first
+// start of a Meko that moves them on a link change: one linked before then has agents connected
+// here. It runs once, whether or not Meko Cloud is linked then; a stop during it leaves it for the
+// next start.
+func followLinkOnce(ctx context.Context, st *store.Store, cloud *cloudlink.Service, log *slog.Logger) {
+	if _, done, err := st.Setting(ctx, keyAgentsFollowedLink); err != nil || done {
+		return
+	}
+	// Under the link's lock (MoveAgents), so it can't move them to a Meko Cloud just unlinked. The
+	// service's Moved logs what it did.
+	if _, err := cloud.MoveAgents(ctx); err != nil {
+		log.Warn("can't read the Meko Cloud link to move the agents to it", "error", err)
+		return
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	if err := st.SetSetting(ctx, keyAgentsFollowedLink, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		log.Warn("can't record that the agents followed the Meko Cloud link", "error", err)
+	}
+}
+
+// logMoves logs what a move did to the agents, by name: never a URL's token or a key.
+func logMoves(log *slog.Logger, m agents.Moves) {
+	for _, a := range m.Moved {
+		log.Info("agent moved to Meko's new target", "agent", a.Name)
+	}
+	for _, a := range m.Failed {
+		log.Warn("couldn't move an agent to Meko's new target", "agent", a.Name, "error", a.Error)
 	}
 }

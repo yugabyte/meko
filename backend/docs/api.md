@@ -15,6 +15,7 @@ On the API listener (`127.0.0.1:7778`):
 | `/healthz` | yes | yes | yes |
 | `/api/v1/status`, `/api/v1/version`, `/api/v1/auth/setup-link` (`meko setup_link`) | yes | 403 | 401 |
 | `/api/v1/server` (the web UI's status page: `/api/v1/status`'s reply) | yes | yes | 401, or yes with `auth = "none"` |
+| `POST /api/v1/agents/<name>/connect`, `/disconnect` ([Agents](#agents)) | yes | 403 | 401, or 403 with `auth = "none"` |
 | Every other route (`/mcp`, the data routes) | yes | yes | 401, or yes with `auth = "none"` |
 | The knowledge-file links, `/api/v1/knowledge-uploads/<ticket>` and `/api/v1/knowledge-downloads/<ticket>` | yes | yes | yes: the ticket is the credential |
 
@@ -32,6 +33,7 @@ has no admin-only routes. Its own routes:
 | `POST /api/v1/auth/totp/enroll`, `confirm {code}`, `disable {code}` | session or local | Enroll gives `{secret, otpauth_url}`; confirm turns two-step sign-in on with a code from it; disable turns it off with a current code |
 | `GET /api/v1/extensions` | session or local | `[{name, title, description, installed, web_ui, path, available, job?}]`: every extension Meko knows, sorted by name. `installed` is registered in `extensions.json`; `path` is `/ext/<name>/` while it's served, else `""`; `available` is whether it accepts a connection on its socket (it's running; a socket file left by one that died doesn't count); `job` is the last action the Extensions page ran on it since the server started, `{action, state, started_at, finished_at?, error?, output}`, `state` `running`, `done` or `failed`, `output` its last 16 KiB with the client token blanked |
 | `POST /api/v1/extensions/<name>/<action>` | session or local | `install`, `start` or `stop`, run in the background as the extension's job: 202 with its row. An install or a start of one with a web UI is done once it answers on its socket (30 s at most). 404 `NOT_FOUND` (not a known extension or action), 409 `CONFLICT` (start or stop on one that isn't installed, or a job running for it) |
+| `GET /api/v1/agents`, `POST /api/v1/agents/<name>/connect`, `/disconnect` | session or local | The agents on this computer, and connecting them to Meko ([Agents](#agents)) |
 | `/ext/<name>/*` | session or local | The extension's web UI ([web.md](web.md)); a page without a session goes to `/signin?next=` |
 | The web UI's files: `/` and every GET no other route takes | none | Static |
 
@@ -239,31 +241,81 @@ side, `create_datapack --cloud` makes one there, and their messages say Meko Clo
 works only on this Meko's datapacks. `meko ui [path]` opens the web listener's URL ([web.md](web.md)), at a path when given
 (`/ext/agentk/` for AgentK); the link carries no credential, and `--no-open` only prints it. With remote
 access and no login yet, it prints a setup link instead; `meko setup_link` prints one any time.
-`meko connect <agent>` adds Meko's MCP server to a coding agent, for all the user's projects,
-always named `meko`: AgentK recognizes Meko's tools by that name (`mcp__meko__*`). It's Streamable
-HTTP at the MCP URL (the running server's port, or the configured one) with the client token in
-`Authorization: Bearer <token>`, added each agent's own way:
-
-| Agent | How `meko connect` adds Meko | Why |
-|---|---|---|
-| `claude` (Claude Code) | `claude mcp remove --scope user meko`, then `claude mcp add --scope user --transport http meko <url> --header "Authorization: Bearer <token>"`; if the add fails, the old entry goes back (`claude mcp add-json`). Then, in each folder whose own (local scope) `meko` points at this computer, `claude mcp remove --scope local meko` | User scope (`~/.claude.json`, or `CLAUDE_CONFIG_DIR`'s) is every project's; Claude Code's default, `local`, is only the folder it runs in, and wins there over the user scope, so a folder's old `meko` for this Meko (a `claude mcp add` with no `--scope`) would keep its dead token after a destroy. `add` refuses a name the scope has, so an old `meko` goes first. Meko only reads Claude's file: its running sessions rewrite it. A folder's `meko` pointing elsewhere (Meko Cloud) stays, and it says that Claude Code uses that one there |
-| `opencode` (OpenCode) | `opencode mcp add meko --url <url> --header "Authorization=Bearer <token>" --global` | It replaces a server of the same name, and writes the global config in the shape its own version reads |
-| `kiro` (Kiro CLI) | Writes `mcpServers.meko` (`url`, `headers`) into `settings/mcp.json` in Kiro's home (`KIRO_HOME`, else `~/.kiro`, as AgentK reads it), keeping the file's other servers and keys | `kiro-cli mcp add` takes no headers, and needs a login |
-| `codex` (Codex) | Writes an `[mcp_servers.meko]` table (`url`, `http_headers`) into `config.toml` in `$CODEX_HOME` or `~/.codex`, as text: an old `[mcp_servers.meko]` table and its subtables go (but not the comment and blank lines right before the next table's header, which are that table's), the rest stays as it was, and the result is parsed before it's written | `codex mcp add` takes no headers, only the name of an environment variable holding a bearer token, which the user's shell would then have to set. A `meko` set some other way (a dotted key) isn't replaced: it says to run `codex mcp remove meko` first |
-
-Claude Code's and OpenCode's CLIs take the header only as an argument, so the token is on their
-command line while `mcp add` runs, about a second: the one exception, beside an installer's
-`--meko-key`, to the token never reaching a command line. Writing their config files instead
-would race Claude Code's running sessions, which rewrite `~/.claude.json`, and would have to
-follow OpenCode's config shape, which changes between its versions. A file Meko writes is made
-0600 (it holds the token), and an existing one is written in place, keeping its mode and a
-symlink to it. It says what it did, and the URL of a `meko` server it replaced in a file; an
-agent's CLI that fails, or isn't on PATH, fails the command, with the token never in the error. `meko connect` alone prints the URL, the header and the token for any MCP
-client, and the agents it can add itself to. `meko token --json` prints the MCP URL, the web
+`meko agent list`, `connect` and `disconnect` are in [Agents](#agents). `meko token --json` prints the MCP URL, the web
 listener's (`web_url`, where AgentK finds its own address), the token,
 whether a server runs and the Meko Cloud link with its key (`cloud`, [cloud.md](cloud.md)), for
 extensions (AgentK reads it). `meko cloud_link` links Meko Cloud ([cloud.md](cloud.md)). `meko logs` and the commands that
 install and run Meko are in [install.md](install.md).
+
+## Agents
+
+Meko knows four agents and connects them to itself: `claude` (Claude Code), `codex` (Codex), `kiro`
+(Kiro CLI) and `opencode` (OpenCode), by adding an MCP server always named `meko` to the agent's
+own config, for all the user's projects. AgentK recognizes Meko's tools by that name
+(`mcp__meko__*`). `internal/agents` does it for the CLI (`meko agent`), the routes below, the web
+UI's Connect page and a Meko Cloud link's change. Meko keeps no record of its own: it reads each
+agent's config every time, since the user and the agent edit it too.
+
+- **Installed** means the agent's command (`claude`, `codex`, `kiro-cli`, `opencode`) is on PATH or
+  in its usual folders (`~/.local/bin`, `/usr/local/bin`, `/opt/homebrew/bin`, and `~/.claude/local`
+  for Claude Code, `~/.opencode/bin` for OpenCode). Only installed agents are listed. Meko runs the
+  command it found by its absolute path, with its folder first on PATH (an npm install's Node is
+  there), so the service's thin PATH still works. The config folders come from the environment Meko
+  runs in (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `KIRO_HOME`, `XDG_CONFIG_HOME`), so a service needs them
+  set when the user's shell sets them.
+- **The target** is where agents connect: this Meko's MCP URL (`http://127.0.0.1:<port>/mcp`) with
+  the client token, or while Meko Cloud is linked its MCP URL with the link's key
+  ([cloud.md](cloud.md)).
+- **An agent's state**: `connected`, a `meko` server at the target sending its token or key;
+  `stale`, one for Meko's own (this computer's loopback, or the linked Meko Cloud's URL) that isn't
+  exactly the target (no token or an old one, after `meko destroy` or a new key, or at this Meko
+  while linked, after a move failed); `elsewhere`, one at any other URL; `none`, which a `meko`
+  server turned off is too (Kiro's `disabled: true`, Codex's `enabled = false`, OpenCode's
+  `enabled: false`): connect turns it on. Claude Code's header may name variables (`${VAR}`,
+  `${VAR:-default}`), expanded as Claude Code does, from its `settings.json` `env` over the
+  environment; one set in neither can't be checked, so a server at the target with it counts as
+  connected.
+- **URLs Meko reports** (an agent's `url`, `left`, notes) are only scheme, host and path: no
+  credentials, query or fragment, where another server's key may be.
+
+How it adds and removes the server, each agent's own way, Streamable HTTP with
+`Authorization: Bearer <token>`:
+
+| Agent | Connect | Disconnect | Why |
+|---|---|---|---|
+| `claude` (Claude Code) | `claude mcp remove --scope user meko`, then `claude mcp add --scope user --transport http meko <url> --header "Authorization: Bearer <token>"`; if the add fails, the old entry goes back (`claude mcp add-json`). Then, in each folder whose own (local scope) `meko` points at this computer, `claude mcp remove --scope local meko` | `claude mcp remove --scope user meko`, and the folders' own on this computer as connect does | User scope (`~/.claude.json`, or `CLAUDE_CONFIG_DIR`'s) is every project's; Claude Code's default, `local`, is only the folder it runs in, and wins there over the user scope, so a folder's old `meko` for this Meko would keep its dead token after a destroy. `add` refuses a name the scope has, so an old `meko` goes first. Meko only reads Claude's file: its running sessions rewrite it. A folder's `meko` pointing elsewhere stays, and the list and connect note that Claude Code uses that one there |
+| `opencode` (OpenCode) | `opencode mcp add meko --url <url> --header "Authorization=Bearer <token>" --global` | Takes `mcp.servers.meko` (OpenCode 2) and `mcp.meko` (earlier versions) out of its global config files (`opencode.json`, `opencode.jsonc`, `config.json` in `$XDG_CONFIG_HOME/opencode` or `~/.config/opencode`), as text, keeping the rest of each file, comments too | `mcp add` replaces a server of the same name and writes the config in the shape its own version reads. `opencode mcp` has no remove. The list reads the same files, JSONC included, a later file's `meko` over an earlier one's |
+| `kiro` (Kiro CLI) | Sets `mcpServers.meko` (`url`, `headers`) in `settings/mcp.json` in Kiro's home (`KIRO_HOME`, else `~/.kiro`, as AgentK reads it), as text: an old entry keeps its other fields (`autoApprove`, `timeout`) and loses `disabled`, and the file's other servers and keys stay as they were | Takes `mcpServers.meko` out of the file as text, keeping the rest as it was | `kiro-cli mcp add` takes no headers, and needs a login |
+| `codex` (Codex) | Writes an `[mcp_servers.meko]` table (`url`, `http_headers`) into `config.toml` in `$CODEX_HOME` or `~/.codex`, as text: an old `[mcp_servers.meko]` table and its subtables go (but not the comment and blank lines right before the next table's header, which are that table's), the rest stays as it was, and the result is parsed before it's written | Takes the table and its subtables out the same way | `codex mcp add` takes no headers, only the name of an environment variable holding a bearer token, which the user's shell would then have to set. A `meko` set some other way (a dotted key) isn't replaced or removed: it says to run `codex mcp remove meko` |
+
+Claude Code's and OpenCode's CLIs take the header only as an argument, so the token (or Meko
+Cloud's key) is on their command line while `mcp add` runs, about a second: the one exception,
+beside an installer's `--meko-key`, to a token never reaching a command line. Writing their config
+files instead would race Claude Code's running sessions, which rewrite `~/.claude.json`, and would
+have to follow OpenCode's config shape, which changes between its versions. A file Meko writes is
+made 0600 (it holds the token), and an existing one is written in place, keeping its mode and a
+symlink to it. Disconnect removes only a `meko` server that's Meko's own; one pointing elsewhere
+is the user's and stays. Connect, disconnect and a link change's move hold one lock across
+processes (`run/agents.lock`), so the CLI and the server never edit an agent's config at once;
+each reads the target and the agents' state under it, so a connect waiting on a link change's move
+writes the new target. No
+reply, error or log holds a token or key: an agent's CLI that echoes one has it blanked.
+
+| Route | Credential | What |
+|---|---|---|
+| `GET /api/v1/agents` | Any: the admin or client token on the API listener, session or local on the web listener | `{target: {kind, url}, agents: [{name, title, command, state, url, notes}]}`: `kind` `local` or `cloud`; the installed agents in the order above, `command` with `~` for the home folder, `url` the agent's `meko` server's (null with none), `notes` what's worth showing (a Claude Code folder whose own `meko` wins there, a config Meko can't read) |
+| `POST /api/v1/agents/<name>/connect`, `/disconnect` | The owner (session or local on the web listener) or the admin token; a client token, or none with `auth = "none"`, gets 403 `OWNER_ONLY` | `{agent, notes}`: the agent's row after it, and notes only for what the user should know (the `meko` server elsewhere connect replaced, a Claude Code folder's own). Disconnecting one whose `meko` points elsewhere changes nothing and says so in a note; one with none changes nothing. 404 `UNKNOWN_AGENT`, 409 `AGENT_NOT_INSTALLED`, 502 `AGENT_CLI_FAILED` (the agent's CLI, or its config file, failed; the message says why) |
+
+Connect takes the owner because while Meko Cloud is linked it writes Cloud's account-wide key into
+the agent's config, which an agent's client token mustn't be able to set off ([cloud.md](cloud.md)).
+
+`meko agent list` prints a row per installed agent and where agents connect; `--json` prints the
+route's `data`. `meko agent connect <agent>` prints `Connected Kiro CLI to Meko`, a note when there's
+one, and that running sessions need a restart; alone, it prints the name, URL, header and token any
+MCP client needs (while linked, Meko Cloud's URL, and that the key is in Settings › Meko Cloud,
+never the key) and `meko agent connect <agent>` for each agent installed. `meko agent disconnect
+<agent>` prints `Disconnected Claude Code from Meko`. They act in the CLI's own process, reading the
+client token and the link themselves, so they work with the server stopped.
 
 ## Learnings, promotion and artifacts
 
@@ -348,7 +400,7 @@ the server takes. (The CLI calls `/api/v1/status`, which `internal/server` serve
 | Memories | `GET /memories`, `DELETE /memories/:id`, `GET /memories/:id/history` (Meko's own: `{memory_id, history: [{memory_id, action (ADD, UPDATE, DELETE), previous_value, new_value, created_at, updated_at, is_deleted}]}`, oldest first, as mem0 recorded them; only for a memory the local user can get, as `GET` on it would be: another user's, a deleted or a promoted memory is 404; the id is matched in any case), `POST /promote-memories`, `POST /keep-as-memory`, `GET /promoted-memories`, `DELETE /promoted-memories/:id` | The list takes `datapack_id`, `scope=learnings|memories`, `q` (any case) and pages of 20 (at most 100), newest first, `top_k: 0`, every row the local user's (`is_mine`). A memory the memory extractor saved also has `source: "extract"` and `message_id`, its turn. Promote and keep take `{datapack_id, memory_ids}` (UUIDs, any case). A promotion that stops partway (the memory engine went down) replies 500 `INTERNAL_ERROR` with `promoted <id>` in `details` for each one it did. |
 | Knowledge files | Under `/datapacks/:id/knowledge-bases/`: `POST upload-url`, `upload-complete`, `create`, `download-url`; `GET document-status`, `status`, `documents`, `summary`, `pending-uploads`, `activity-log`; `DELETE pending-uploads?key=`, `documents/:document_id` | Cloud's shapes. `upload-url` `{filename, size, content_hash, client}` gives a link on Meko (`/api/v1/knowledge-uploads/<ticket>`) with `fields: {key}`, or `already_uploaded`; the file is registered and queued when it arrives (204), so `upload-complete` only checks the key and `create` only marks the datapack as having a knowledge base. `document-status` is `{document_key, filename, state (awaiting_upload, indexing, completed, failed), message, upload?, document?: {chunks_processed, uploaded_at, size_bytes, status}}` plus Cloud's top-level `index_name, source_uri, document_name, document_status, chunks_processed`. `documents` pages from 1 (50, at most 200) with `q`, `type_filter`, `status_filter`. `pending-uploads` is always empty (nothing is stored unregistered); its DELETE cancels a waiting link (409 `OBJECT_REFERENCED` for a stored file). `download-url` `{document_uri}` (`local://<key>`) gives a link (`/api/v1/knowledge-downloads/<ticket>`, `expires_in: 300`) that sends the file as an attachment, HTML as plain text. A key outside the datapack is 403 `FORBIDDEN`; deleting a file still indexing is 409 `DOCUMENT_PROCESSING`. |
 | Usage stats | `GET /settings/usage-stats`, `PATCH /settings/usage-stats` | `{enabled, forced_off, by, sends, url}` ([callhome.md](callhome.md)); `url` is where they go while `sends`. `PATCH {enabled}` saves the web UI's setting (`call_home_enabled`); with usage stats forced off by `config.toml` or the environment it's saved, but they stay off. A missing `enabled` is 400 `VALIDATION_ERROR`. `/api/v1/status` (and `/api/v1/server`, which gives the same reply) carries the same state as `usage_stats`. |
-| Meko Cloud link (Meko's own) | `GET`, `PUT`, `DELETE /settings/meko-cloud` | The link Meko keeps for its extensions ([cloud.md](cloud.md)): `{set, linked, url, web_url, api_url, effective_url, effective_web_url, effective_api_url, key_hint, default_url, default_web_url}`, never the key. `PUT {url?, web_url?, api_url?, api_key?}` checks a change before saving it; a refusal is 400 `VALIDATION_ERROR` with why. On the web listener for the owner; on the API listener for the admin token only (`meko cloud_link`), so a client token gets 403. |
+| Meko Cloud link (Meko's own) | `GET`, `PUT`, `DELETE /settings/meko-cloud` | The link Meko keeps for its extensions ([cloud.md](cloud.md)): `{set, linked, url, web_url, api_url, effective_url, effective_web_url, effective_api_url, key_hint, default_url, default_web_url}`, never the key. `PUT {url?, web_url?, api_url?, api_key?}` checks a change before saving it; a refusal is 400 `VALIDATION_ERROR` with why. A saved change's reply adds `agents: {moved: [{name, title}], left: [{name, title, url}], failed: [{name, title, error}]}`: the agents it moved to the new target ([cloud.md](cloud.md#agents-follow-the-link)). On the web listener for the owner; on the API listener for the admin token only (`meko cloud_link`), so a client token gets 403. |
 | Meko Cloud's datapacks (Meko's own) | `GET /datapacks[?location=all\|local\|cloud]`, `POST /datapacks` (Cloud by default while linked), and the `:id` routes below | The linked Meko Cloud's datapacks go through this Meko's routes ([cloud.md](cloud.md#meko-clouds-datapacks-on-this-mekos-routes)): `GET /datapacks` lists this Meko's rows, then Cloud's, each with `location` (`location=all`, the default; only this Meko's while unlinked), `location=cloud` only Cloud's (`[{datapack_id, datapack_name, description, grant, created_at, updated_at, web_url, location}]`, newest first; 409 `CLOUD_NOT_LINKED` while unlinked) and `location=local` only this Meko's; a create while linked unless it says `location: "local"`; and on `DELETE /datapacks/:id`, `upload-url`, `document-status`, `search` and `memories` a datapack sent to Meko Cloud with the link's key, which no reply holds: one `?location=cloud` names, or without it an id this Meko doesn't have, for the owner or the admin token (a client token's stays this Meko's 404). Acting on Meko Cloud takes the owner or the admin token (a client token gets 403); listing takes any credential. A browser (session or local access) that names no location gets this Meko's from a listing or a create: only a web UI tab from before these routes does that. Meko Cloud's own 4xx keeps its status and code; its other failures are 502 with a code: `CLOUD_NO_API_URL`, `CLOUD_UNREACHABLE`, `CLOUD_KEY_REFUSED`, `CLOUD_LIST_FAILED` or `CLOUD_CALL_FAILED`. |
 | Search and memories (Meko's own) | `POST /datapacks/:id/search`, `POST /datapacks/:id/memories` | What `context_search` and `memory_add` do, on the datapack in the path: `{query, limit?, force_source?, agent_id?, conversation_id?}` and `{text, agent_id?, conversation_id?}`, replying with the tool's reply. On this Meko's datapack the tool runs in-process as `/mcp` runs it, recorded in the call log the same way; on the linked Meko Cloud's, Cloud's MCP tool runs it (Cloud's REST API has no such routes). An error the tool replies with maps by its code: a missing datapack is a 404 `NOT_FOUND`, the tool's own failure (`*_failed`) a 500 (502 `CLOUD_CALL_FAILED` from Meko Cloud), `memory_engine_unavailable` a 503, and the rest a 400 with the tool's code (`invalid_force_source`). `conversation_id` defaults to a fixed id. |
 | Conversations | `GET /datapacks/:id/conversations`, `GET /datapacks/:id/conversations/:cid`, `PATCH /datapacks/:id/conversation-search-opt-out` | The list is most recently active first, 20 to a page (200 at most), with `first_message`, `messages`, `memories_added`; `q` matches the title or any turn. A conversation's thread is oldest first, 100 turns to a page (500 at most). Each turn also carries `calls` (Meko's own): its decision trace, the conversation's calls since the turn before (and since the conversation was created), shaped as `/usage`'s recent calls plus `read_only` (from the tool's definition), without `conversation_create` and `conversation_add_message`, and with the conversation's calls that failed before their datapack was known; matched by time as its memories are; with its `reasoning` and `plan`, they're what the UI's decision trace shows. Each turn carries the memories it produced, by time window (below). `llm_calls`, `latency_ms` and `total_tokens` are 0, and `can_index` false. |

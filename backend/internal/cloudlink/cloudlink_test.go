@@ -3,6 +3,7 @@ package cloudlink
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/yugabyte/meko/backend/internal/agents"
 	"github.com/yugabyte/meko/backend/internal/secrets"
 )
 
@@ -128,6 +130,62 @@ func TestChangedRunsUnlocked(t *testing.T) {
 	}
 	if len(locked) != 2 || locked[0] || locked[1] {
 		t.Fatalf("Changed ran with the lock held: %v", locked)
+	}
+}
+
+// A saved change moves the agents from the link before it to the link after it, before the
+// extensions hear of it, and the reply says what the move did; no change moves nothing.
+func TestMovedFollowsAChange(t *testing.T) {
+	s, calls := newService(t)
+	s.Moved = func(_ context.Context, before, after State) agents.Moves {
+		*calls = append(*calls, fmt.Sprintf("moved %t→%t %s", before.Linked, after.Linked, after.Link.Key))
+		return agents.Moves{Moved: []agents.Moved{{Name: "kiro", Title: "Kiro CLI"}}}
+	}
+	st, err := s.Link(context.Background(), Update{Key: ptr(key)})
+	if err != nil || st.Agents == nil || len(st.Agents.Moved) != 1 {
+		t.Fatalf("link: %+v %v", st, err)
+	}
+	if _, err = s.Link(context.Background(), Update{Key: ptr("")}); err != nil {
+		t.Fatal(err)
+	}
+	st, err = s.Unlink(context.Background())
+	if err != nil || st.Agents == nil {
+		t.Fatalf("unlink: %+v %v", st, err)
+	}
+	if got := strings.Join(*calls, ","); got != "check "+DefaultURL+",moved false→true "+key+",changed,"+
+		"moved true→false ,changed" {
+		t.Fatalf("calls %s", got)
+	}
+	if st, _ := s.Status(); st.Agents != nil {
+		t.Errorf("a status says what a move did: %+v", st.Agents)
+	}
+}
+
+// MoveAgents moves the agents from this Meko to the current link, holding the changes' lock, and does
+// nothing while unlinked.
+func TestMoveAgents(t *testing.T) {
+	s, _ := newService(t)
+	var calls []string
+	s.Moved = func(_ context.Context, before, after State) agents.Moves {
+		locked := !s.mu.TryLock()
+		if !locked {
+			s.mu.Unlock()
+		}
+		calls = append(calls, fmt.Sprintf("%t→%t %s locked=%t", before.Linked, after.Linked, after.Link.Key, locked))
+		return agents.Moves{}
+	}
+	if m, err := s.MoveAgents(context.Background()); m != nil || err != nil || len(calls) != 0 {
+		t.Fatalf("unlinked: %v %v %v", m, err, calls)
+	}
+	if _, err := s.Link(context.Background(), Update{Key: ptr(key)}); err != nil {
+		t.Fatal(err)
+	}
+	calls = nil
+	if m, err := s.MoveAgents(context.Background()); m == nil || err != nil {
+		t.Fatalf("linked: %v %v", m, err)
+	}
+	if strings.Join(calls, ",") != "false→true "+key+" locked=true" {
+		t.Fatalf("calls %v", calls)
 	}
 }
 

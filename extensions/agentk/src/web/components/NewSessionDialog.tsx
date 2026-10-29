@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { LEARN_MONTHS_DEFAULT, LEARN_MONTHS_MAX, LEARN_TEXT_MAX, MAX_PASTE_BYTES, MAX_START_IMAGES, START_EXAMPLES, type CreateSessionRequest, type HarnessStatus, type Project, type RepoInfo, type ReviewablePr, type ReviewablePrs, type Session, type TaskPr } from '../../shared/types';
-import { HARNESS_CAPS, NO_AGENT, type HarnessId } from '../../shared/harnesses';
+import { HARNESS_CAPS, noAgentText, notConnectedText, onlyMekoBlocks, type HarnessId } from '../../shared/harnesses';
 import { expandBranchPrefix } from '../../shared/branches';
 import { api, errorMessage } from '../api';
 import { pastedImages } from '../clipboard';
@@ -116,6 +116,15 @@ export function NewSessionDialog({
   const agentCaps = harness ? HARNESS_CAPS[harness] : null;
   const pickAgent = agents.length > 1;
   const none = noAgent(harnesses);
+  // Agents only Meko keeps off: not connected to it (Meko's list of agents). Said under the agent in
+  // Advanced, or at the top when it's the default agent, which the dialog would otherwise start on.
+  const notConnected = harnesses.filter(onlyMekoBlocks).map((h) => h.id);
+  const defaultOff = harnesses.some((h) => h.isDefault && onlyMekoBlocks(h));
+  const notConnectedNote = !none && notConnected.length > 0 && (
+    <p className="hint" id="ns-agent-meko">
+      {notConnected.map((id) => `${notConnectedText(id)}.`).join(' ')}
+    </p>
+  );
 
   // Images for the first prompt (a review's notes): each uploads as it's added, kept under the
   // project until the session is created with it.
@@ -392,9 +401,10 @@ export function NewSessionDialog({
       >
         {none && (
           <p className="confirm-warn" role="alert">
-            {NO_AGENT}
+            {noAgentText(notConnected)}
           </p>
         )}
+        {defaultOff && notConnectedNote}
         {projectChoice && (
           <Field label="Project" hint="The session is for a work item, so it can start in any open project.">
             <select
@@ -620,6 +630,7 @@ export function NewSessionDialog({
                   )}
                 </div>
               )}
+              {!defaultOff && notConnectedNote}
               <Field
                 label="Repo"
                 hint={

@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yugabyte/meko/backend/internal/agents"
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/paths"
@@ -37,6 +38,12 @@ func TestMain(m *testing.M) {
 	}
 	// Never the login Keychain: the tests and the servers they start keep secrets in files.
 	_ = os.Setenv("MEKO_SECRETS", "file")
+	// Never this computer's own agents: only the commands on a test's PATH and in its home, and their
+	// configs in its home.
+	agents.SystemFolders = nil
+	for _, k := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "KIRO_HOME", "XDG_CONFIG_HOME"} {
+		_ = os.Unsetenv(k)
+	}
 	// meko _launch, which the launch tests run as this binary, with a short HealthyAfter.
 	if len(os.Args) > 1 && os.Args[1] == "_launch" {
 		if d, err := time.ParseDuration(os.Getenv(testHealthyAfterEnv)); err == nil {
@@ -293,12 +300,12 @@ func TestClientTokenIsKeptAcrossRestarts(t *testing.T) {
 	if len(strings.TrimSpace(tok)) != 64 {
 		t.Fatalf("token %q", tok)
 	}
-	// A killed server's port file is left behind; with no server, connect names the configured port.
+	// A killed server's port file is left behind; with no server, agent connect names the configured port.
 	if err := paths.WriteFile(paths.New(dir).Port, []byte("1\n")); err != nil {
 		t.Fatal(err)
 	}
-	code, mcpOut, _ := run("connect", "--data-dir", dir)
-	want(t, "connect with no server", code, 0, mcpOut, "http://127.0.0.1:7778/mcp")
+	code, mcpOut, _ := run("agent", "connect", "--data-dir", dir)
+	want(t, "agent connect with no server", code, 0, mcpOut, "http://127.0.0.1:7778/mcp")
 	code, js, _ := run("token", "--data-dir", dir, "--json")
 	want(t, "token --json with no server", code, 0, js, `{"cloud":{"set":false,"url":"","api_key":"","web_url":"",`+
 		`"api_url":""},"running":false,"token":"`+strings.TrimSpace(tok)+
@@ -771,9 +778,9 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 	want(t, "upload_status of an unknown key", code, 1, errs, "NOT_FOUND")
 
 	_, tok, _ := run("token", "--data-dir", dir)
-	code, out, _ = run("connect", "--data-dir", dir)
-	want(t, "connect", code, 0, out, "http://127.0.0.1:"+port+"/mcp\n")
-	want(t, "connect", code, 0, out, "Authorization: Bearer "+strings.TrimSpace(tok)+"\n")
+	code, out, _ = run("agent", "connect", "--data-dir", dir)
+	want(t, "agent connect", code, 0, out, "http://127.0.0.1:"+port+"/mcp\n")
+	want(t, "agent connect", code, 0, out, "Authorization: Bearer "+strings.TrimSpace(tok)+"\n")
 
 	// The default datapack isn't made again, so deleting it says so, and calls that name none then
 	// ask for --datapack.
@@ -833,7 +840,8 @@ func TestDestroyAsksThenStopsAndRemoves(t *testing.T) {
 	code, out, errs = run("destroy", "--data-dir", dir)
 	// A piped answer isn't echoed, so destroy ends the prompt's line itself.
 	want(t, "destroy", code, 0, out+errs, "Destroy it? [y/N] \nMeko stopped\nRemoved "+dir+"\n")
-	want(t, "destroy's note", code, 0, out, "its token no longer works: after meko start, run meko connect <agent> again")
+	want(t, "destroy's note", code, 0, out,
+		"its token no longer works: after meko start, run meko agent connect <agent> again")
 	gone(t, dir)
 	code, out, _ = run("status", "--data-dir", dir)
 	want(t, "status after destroy", code, exitNotRunning, out, "isn't running")

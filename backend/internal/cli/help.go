@@ -40,6 +40,9 @@ type example struct{ cmd, note string }
 // update|delete.
 const groupExtension = "extension"
 
+// isGroup says whether name is a command of subcommands (meko extension, meko agent).
+func isGroup(name string) bool { return name == groupExtension || name == groupAgent }
+
 var mekoGroups = []string{"Get started", "Run", "Connect", "Extensions", "Remove"}
 
 var mekoCommands = []command{
@@ -101,11 +104,25 @@ var mekoCommands = []command{
 			{"meko memory-extractor datapack personal --off", "don't extract that datapack's conversations"},
 			{"meko memory-extractor off", "turn it off"},
 		}},
-	{name: "connect", group: "Connect", summary: "Connect a coding agent to Meko (claude, codex, kiro, opencode)",
-		usage: "meko connect [claude|codex|kiro|opencode]", examples: []example{
-			{"meko connect claude", "add Meko's MCP server to Claude Code, for all your projects"},
-			{"meko connect kiro", "the same for Kiro CLI (codex and opencode too)"},
-			{"meko connect", "the MCP URL and token, to connect any MCP client"},
+	{name: groupAgent, subcommands: true, summary: "List the agents on this computer, and connect them to Meko",
+		usage: "meko agent list|connect|disconnect [<agent>] [flags]", examples: []example{
+			{"meko agent list", "the agents on this computer, and whether each one reaches Meko"},
+			{"meko agent connect claude", "add Meko's MCP server to Claude Code, for all your projects"},
+		}},
+	{name: "agent list", group: "Connect", summary: "Show the agents on this computer and whether each reaches Meko",
+		usage: "meko agent list [flags]", examples: []example{
+			{"meko agent list", "a row for each agent installed, and where agents connect"},
+			{"meko agent list --json", "the same, for scripts and extensions"},
+		}},
+	{name: "agent connect", group: "Connect", summary: "Connect an agent to Meko (claude, codex, kiro, opencode)",
+		usage: "meko agent connect [claude|codex|kiro|opencode]", examples: []example{
+			{"meko agent connect claude", "add Meko's MCP server to Claude Code, for all your projects"},
+			{"meko agent connect kiro", "the same for Kiro CLI (codex and opencode too)"},
+			{"meko agent connect", "the MCP URL and token, to connect any MCP client"},
+		}},
+	{name: "agent disconnect", group: "Connect", summary: "Disconnect an agent from Meko",
+		usage: "meko agent disconnect claude|codex|kiro|opencode", examples: []example{
+			{"meko agent disconnect claude", "remove Meko's MCP server from Claude Code"},
 		}},
 	{name: "token", group: "Connect", summary: "Print the token agents send",
 		usage: "meko token [flags]", examples: []example{
@@ -299,7 +316,7 @@ func printCommandHelp(w io.Writer, prog string, c command, fs *flag.FlagSet) {
 	fmt.Fprintf(w, "\nMore: %s#%s\n", docsURL, anchor)
 }
 
-// printGroupHelp prints a command's own help and its subcommands (meko extension's).
+// printGroupHelp prints a command's own help and its subcommands (meko extension's, meko agent's).
 func printGroupHelp(w io.Writer, prog, group string) {
 	c, _ := lookup(prog, group)
 	r, n := utf8.DecodeRuneInString(c.summary)

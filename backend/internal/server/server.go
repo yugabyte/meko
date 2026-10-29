@@ -21,6 +21,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 
+	"github.com/yugabyte/meko/backend/internal/agents"
 	"github.com/yugabyte/meko/backend/internal/auth"
 	"github.com/yugabyte/meko/backend/internal/callhome"
 	"github.com/yugabyte/meko/backend/internal/cloudlink"
@@ -86,6 +87,8 @@ type Options struct {
 	// on the web listener, and to the CLI's admin token (meko cloud_link) on the API listener. The
 	// linked Meko Cloud's datapacks go through the REST routes (internal/rest's cloud.go).
 	Cloud *cloudlink.Service
+	// Agents, if set, serves the agents' routes (/api/v1/agents, agents.go) on either listener.
+	Agents *agents.Manager
 }
 
 // WebStatus is what status says about the web listener.
@@ -174,6 +177,7 @@ func New(opts Options) *Server {
 		}
 		s.registerWeb(v1)
 	}
+	s.registerAgents(v1)
 	if opts.REST != nil {
 		opts.REST(v1)
 	}

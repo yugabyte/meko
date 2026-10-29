@@ -15,14 +15,17 @@ same on each. Codex and Cursor CLI are left for later; the interface has room fo
 **Advanced** once more than one harness is available, and a failed start's **Try again** keeps the
 one it asked for (`CreateSessionRequest.harness`). A harness is *available* when it's turned on
 (`[claude] enabled`, `[opencode] enabled`, `[kiro] enabled`: **Offer Claude Code / OpenCode / Kiro
-for new sessions** in Settings) and its `--version` answers with its minimum version or later
-(`AppState.harnesses`; Claude Code: any version, OpenCode: 2.0.0, Kiro: 2.32.0). An agent too old says
+for new sessions** in Settings), its `--version` answers with its minimum version or later
+(`AppState.harnesses`; Claude Code: any version, OpenCode: 2.0.0, Kiro: 2.32.0), and Meko reports it
+connected ([Connected to Meko](#connected-to-meko) below). An agent too old says
 so in Settings with the command that updates it: OpenCode 1's `opencode upgrade` stays on 1.x, so
 for OpenCode that's `opencode upgrade --major` (`HarnessCaps.upgrade`). Each one's command
 is set only in `config.toml` (`[claude] command`, `[opencode] command`, `[kiro] command`); OpenCode's
 default, `opencode`, is also found in `~/.opencode/bin` when it isn't on the PATH (`openCodeCommand`),
 since OpenCode's installer puts it there and adds that only to a shell's rc file, which a service
-doesn't read. A create that names one that isn't is a 400 that says what to do; the dialog always names
+doesn't read. A create that names one that isn't is a 400 that says what to do (for one only Meko keeps
+off: "Kiro isn't connected to Meko: connect it in Settings › Harness, or run meko agent connect kiro");
+the dialog always names
 the agent it shows (none while no agent has answered yet, just after a start: the server then picks).
 A default that isn't available never decides: a request that names no harness, and Ask AgentK, start
 on the first available one in `HARNESS_IDS` order (`Harnesses.defaultFor`). Settings' **Default
@@ -47,7 +50,49 @@ Kiro **Let Kiro run any tool without asking** while Kiro is on, and for OpenCode
 while OpenCode is on ([Without tracking](#opencode)). Each of the tab's fields (`defaultHarness`,
 `claudeEnabled`, `opencodeEnabled`, `opencodeDisableTracking`, `kiroEnabled`, `kiroTrustTools`) saves as it's
 changed; there's no Save.
-Under each agent that's on, available and with a Meko to use, a **Meko** row says whether that agent's sessions reach AgentK's Meko, with **Set up Claude Code with this Meko** or **Set up Kiro with this Meko** when they don't ([Datapacks](datapacks.md)); the Claude Code Meko banner's **Details** opens the tab on Claude Code. The no-agent banner's **Settings** opens this tab.
+Under each agent that's on and new enough, a **Meko** row says whether it's connected to Meko (below)
+and whether its sessions reach AgentK's Meko, with **Connect to Meko** when it isn't connected, or
+**Set up Claude Code with this Meko** or **Set up Kiro with this Meko** when what Meko's capture
+needs is missing ([Datapacks](datapacks.md)); the Claude Code Meko banner's **Details** opens the tab
+on Claude Code. The no-agent banner's **Settings** opens this tab.
+
+### Connected to Meko
+
+Meko owns the agents' connections: it lists the agents on this computer and whether each one's `meko`
+MCP server reaches it (`GET /api/v1/agents`, `meko agent list`), and connects or disconnects them
+(`meko agent connect <id>`, its web UI's Agents card). AgentK's server reads that list
+(`MekoAgents` in `src/server/mekoagents.ts`) on Meko's API listener, the origin of the local Meko's
+MCP URL, with its client token (`localMeko()`), at startup, when Settings opens, on **Check again**,
+after an agent's Meko setup, when the local Meko or its Meko Cloud link changes, and before a new
+session (or Ask AgentK) that the list kept would refuse an agent for its connection, so `meko agent
+connect` in a terminal counts at once; nothing polls. Reads run one at a time, and one asked for
+while another runs reads again after it, so the read after a Connect never answers with the list
+from before it.
+Each harness gets `HarnessStatus.meko`: `connected` (its `meko` server is at Meko's target, the
+linked Meko Cloud or this Meko, with its key or token), `stale` (at one of Meko's own but not the
+target), `elsewhere` (another server), `none`, or `missing` (Meko didn't find it installed). A harness
+that's `none`, `stale` or `elsewhere` isn't available (`mekoGates`), so everything that picks one for a new session follows
+(`Harnesses.pick` and `defaultFor`: the New session dialog, Ask AgentK and work from the queue); a
+running or resumed session keeps the agent it started on. NO_AGENT's 409, the no-agent banner and the
+New session dialog name the fix for each agent only Meko keeps off (`notConnectedText`), the dialog
+at its top when that's the default agent, else under **Agent** in **Advanced**. One that's `missing`
+stays available: Meko looks for agents only on its own PATH and in a few folders, never at AgentK's
+`[<id>] command`, so an agent AgentK runs (npm under nvm, a command of its own) can be missing from
+Meko's list with nothing the user could fix. Its Meko row and its Meko gaps say "Meko didn't find
+<Label> on this computer.", with no Connect.
+
+The last list read is kept in `state.db`'s kv (`meko-agents`) and used while Meko doesn't answer
+(stopped, slow, or down), so a restart then still gates on it. With no list ever read, or a Meko
+too old to list agents (404), nothing is gated (`meko` null, `MekoStatus.agentList` `unread` or
+`old`): an AgentK update must not block every session on an older or stopped Meko. Settings then
+says "Update Meko (meko update) to manage agent connections" for the 404, and offers no Connect.
+
+AgentK's server never posts to Meko (its client token can't: connecting may write Meko Cloud's
+account-wide key into an agent's config, so it's the owner's). **Connect to Meko** in Settings ›
+Harness is the page's own call to Meko's web route, root-absolute on Meko's origin with its sign-in,
+as updates are (`connectAgent()` in `src/web/mekoagents.ts`: `POST /api/v1/agents/<id>/connect`, in
+Meko's `{ data, error }` envelope), followed by **Check again**'s `POST /api/harnesses/refresh`,
+which reads Meko's list again. Meko's notes (a server it replaced) show under the row.
 
 **No agent is required.** AgentK installs and runs with any one of them, or more; nothing assumes
 `claude` is there. At start the server writes AgentK's own hook files (`writeHookFiles`: the
@@ -62,7 +107,7 @@ agent that's turned on has answered and none is available, a create (and Ask Age
 says to install Claude Code, OpenCode or Kiro CLI, a banner says the same with a **Settings** button, the New
 session dialog shows it in place of starting, and the palette leaves Ask AgentK out
 (`AppState.askAgentk`). Claude Code's Meko check (`MekoClaudeWatch`) runs only while Claude Code is
-available, and Settings › Harness shows Claude Code's Meko row only then. Sessions already on an agent that's
+on and new enough, connected to Meko or not, and Settings › Harness shows an agent's Meko row only then. Sessions already on an agent that's
 gone keep their row: a relaunch exits at once and shows as exited, like a crash. Turning an agent off
 only stops offering it for new sessions: Claude Code sessions still relaunch, resume and recover with
 AgentK's mod, whose version check (`supportsMod`) reads Claude Code's version even while it's off.
@@ -79,9 +124,10 @@ environment, `kiro-cli whoami`) and offers `claude auth login`, `opencode auth l
 `kiro-cli login`. `agentk install` then reads each
 agent's version (`settleAgents`): with none it stops, saying what to install (and, for OpenCode,
 `opencode upgrade --major` from 1.x); a default that isn't
-installed becomes the first agent that is; and Meko's setup is offered for each agent found (Claude
-Code's plugin and MCP server, Kiro's `--client kiro`; OpenCode needs none, see
-[OpenCode](#opencode)), asking first, each a warning when declined.
+installed becomes the first agent that is; and Meko's setup is offered for each agent found whose
+capture isn't set up (Claude Code's plugin and its settings' URL and key, Kiro's agent loading its MCP
+servers, `--client kiro`; OpenCode needs none, see [OpenCode](#opencode)), asking first, each a
+warning when declined. The agents' `meko` MCP servers are Meko's (`meko agent connect`).
 
 ### Reading versions
 
@@ -133,8 +179,8 @@ What still names an agent outside the adapters, on purpose: Kiro's plan reader (
 read after Kiro's `prepare`, when a Kiro session is created, and — at most every 10 min — when a
 Kiro session's turn ends; its plan is Kiro-only data in
 `AppState.kiroPlan`), the usage report's per-day `kiro` counts (`callhome.ts`, a field of the
-report's schema), each agent's Meko status (`Core.kiroMeko`, `Core.openCodeMeko`: `MekoStatus.kiro`,
-`.opencode`), the usage report's agent versions (`installFacts`), the work queue's Slack read (`slack.ts`, and
+report's schema), each agent's Meko status (`Core.claudeMekoStatus`, `Core.kiroMeko`, `Core.openCodeMeko`:
+`MekoStatus.claude`, `.kiro`, `.opencode`), the usage report's agent versions (`installFacts`), the work queue's Slack read (`slack.ts`, and
 `claudeAvailable` in `Core`: it reaches the user's claude.ai Slack connector, which only Claude Code
 has, so it runs Claude Code whatever the default agent), and the command a harness runs as
 (`harnessCommand` in `version.ts`, for the installer's version reads: OpenCode's default is also
@@ -278,7 +324,9 @@ false`), in an owner-only `run/opencode/meko.json` passed with `OPENCODE_CONFIG`
 key never goes in the session's environment, where every command OpenCode runs would see it. When
 the user's own OpenCode config (`$XDG_CONFIG_HOME/opencode` or `~/.config/opencode`: `opencode.json`,
 `opencode.jsonc`, `config.json`) already has a `meko` server, AgentK leaves it alone and passes no
-file. OpenCode's Meko row in Settings › Harness says which (`MekoStatus.opencode`). The file is written at each
+file. While Meko reports OpenCode (`HarnessStatus.meko`), any `meko` server it reports counts as OpenCode's
+own (`Harnesses.openCodeOwnMeko`), so on a connected OpenCode AgentK adds none; the file check is
+for when nothing is gated or Meko didn't find it. OpenCode's Meko row in Settings › Harness says which (`MekoStatus.opencode`). The file is written at each
 launch, and removed as soon as Meko's URL or key changes (`mekoChanged`), so
 a key the user removed or rotated never stays on disk. An `OPENCODE_CONFIG` the user sets in their
 profile is replaced by AgentK's while AgentK adds its Meko.

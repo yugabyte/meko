@@ -118,6 +118,39 @@ describe('HTTP API: origin checks, projects', () => {
     expect(env.core.state().harnesses.find((h) => h.id === 'kiro')?.version).toBe('2.0.0');
   });
 
+  it("Check again reads Meko's list of agents: a harness Meko hasn't connected isn't offered, and says why", async () => {
+    env.core.updateConfig((c) => {
+      c.kiro.enabled = true;
+    });
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Gated', datapack: { mode: 'none' } });
+    const kiro = async () => ((await app.inject({ method: 'POST', url: '/api/harnesses/refresh' })).json() as HarnessStatus[]).find((h) => h.id === 'kiro');
+    const listing = (state: 'connected' | 'none') => {
+      env.mekoAgents.value = {
+        kind: 'list',
+        list: { target: { kind: 'local', url: 'http://127.0.0.1:7778/mcp' }, agents: [{ name: 'kiro', title: 'Kiro CLI', state, url: state === 'none' ? null : 'http://127.0.0.1:7778/mcp' }] },
+      };
+    };
+    // No list read yet (Meko isn't answering): nothing is gated.
+    expect(await kiro()).toMatchObject({ available: true, meko: null });
+    expect(env.core.state().meko).toMatchObject({ agentList: 'unread', kiro: { gaps: [], capture: [] } });
+
+    listing('none');
+    expect(await kiro()).toMatchObject({ available: false, meko: { state: 'none', url: null } });
+    // Its MCP server from Meko's list, in Kiro's Meko status; nothing Meko's setup for Kiro would fix.
+    expect(env.core.state().meko).toMatchObject({ agentList: 'read', kiro: { gaps: ['Kiro has no meko MCP server.'], capture: [] } });
+    const refused = await app.inject({ method: 'POST', url: `/api/projects/${p.id}/sessions`, payload: { name: 'On Kiro', harness: 'kiro' } });
+    expect(refused.statusCode).toBe(400);
+    expect(refused.json().error).toBe("Kiro isn't connected to Meko: connect it in Settings › Harness, or run meko agent connect kiro.");
+    // Meko stops answering: the last list read still stands.
+    env.mekoAgents.value = { kind: 'failed', error: 'connect ECONNREFUSED' };
+    expect(await kiro()).toMatchObject({ available: false, meko: { state: 'none' } });
+
+    // Once the page has had Meko connect it, Check again offers it.
+    listing('connected');
+    expect(await kiro()).toMatchObject({ available: true, meko: { state: 'connected' } });
+    expect(env.core.state().meko.kiro).toEqual({ gaps: [], capture: [] });
+  });
+
   it('creates a project and a session through the API', async () => {
     const repos = (await app.inject({ url: '/api/repos' })).json();
     expect(repos.repos).toHaveLength(1);

@@ -1,8 +1,10 @@
-import { HARNESS_IDS, NO_AGENT, harnessOf, type HarnessId } from '../../shared/harnesses.js';
-import type { HarnessStatus } from '../../shared/types.js';
+import { HARNESS_IDS, harnessOf, mekoGates, noAgentText, notConnectedText, onlyMekoBlocks, type HarnessId } from '../../shared/harnesses.js';
+import type { HarnessMeko, HarnessStatus } from '../../shared/types.js';
 import type { ClaudeCode } from '../claudecode.js';
 import type { Config } from '../config.js';
 import type { Logger } from '../log.js';
+import { harnessMeko, type MekoAgentList } from '../mekoagents.js';
+import { openCodeHasOwnMeko } from '../opencode.js';
 import type { Paths } from '../paths.js';
 import { HttpError } from '../projects.js';
 import { claudeHarness } from './claude.js';
@@ -12,19 +14,54 @@ import type { Harness } from './types.js';
 
 export type { Harness, LaunchInput } from './types.js';
 
-/** Every harness sessions can run on, by id (src/shared/harnesses.ts). */
+/**
+ * Every harness sessions can run on, by id (src/shared/harnesses.ts). A new session starts only on
+ * one Meko doesn't report unconnected (`HarnessStatus.meko` `none`, `stale` or `elsewhere`, from
+ * Meko's list of agents, `mekoagents.ts`; `mekoGates`), while there's a list to go by: none ever
+ * read, or a Meko too old to list agents, gates nothing, and neither does one Meko didn't find.
+ */
 export class Harnesses {
   private all: Record<HarnessId, Harness>;
+  private mekoList: () => MekoAgentList | null;
+  private rereadMeko: () => Promise<void>;
 
   constructor(deps: {
     claudeCode: ClaudeCode; paths: Paths; log: Logger; changed: () => void;
     kiroVersion?: (cmd: string) => Promise<string | null>; openCodeVersion?: (cmd: string) => Promise<string | null>;
+    /** Meko's list of agents to gate on, or null for none (`MekoAgents.current`); left out, nothing is gated. */
+    meko?: () => MekoAgentList | null;
+    /** Reads Meko's list again (`MekoAgents.refresh`), before a new session the list kept would refuse. */
+    refreshMeko?: () => Promise<void>;
   }) {
+    this.mekoList = deps.meko ?? (() => null);
+    this.rereadMeko = deps.refreshMeko ?? (async () => undefined);
     this.all = {
       claude: claudeHarness(deps),
-      opencode: openCodeHarness({ paths: deps.paths, log: deps.log, changed: deps.changed, readVersion: deps.openCodeVersion }),
+      opencode: openCodeHarness({ paths: deps.paths, log: deps.log, changed: deps.changed, readVersion: deps.openCodeVersion, ownMeko: () => this.openCodeOwnMeko() }),
       kiro: kiroHarness({ log: deps.log, changed: deps.changed, readVersion: deps.kiroVersion }),
     };
+  }
+
+  /** A harness's `meko` MCP server as Meko reports it, or null while nothing is gated. */
+  mekoOf(id: HarnessId): HarnessMeko | null {
+    const list = this.mekoList();
+    return list ? harnessMeko(list, id) : null;
+  }
+
+  /**
+   * OpenCode has a `meko` MCP server of its own, which AgentK then leaves alone (`MekoStatus.opencode`):
+   * any Meko reports, else (nothing gated, or Meko didn't find it) one in its own config.
+   */
+  openCodeOwnMeko(): boolean {
+    const m = this.mekoOf('opencode');
+    return m && m.state !== 'missing' ? m.state !== 'none' : openCodeHasOwnMeko();
+  }
+
+  /** A harness's status: its CLI's, with Meko's connection, which `available` then requires (`mekoGates`). */
+  statusOf(h: Harness, cfg: Config): HarnessStatus {
+    const s = h.status(cfg);
+    const meko = this.mekoOf(h.id);
+    return { ...s, meko, available: s.available && !mekoGates(meko) };
   }
 
   /** A session's harness (one stored by a newer version reads as Claude Code). */
@@ -37,7 +74,12 @@ export class Harnesses {
   }
 
   status(cfg: Config): HarnessStatus[] {
-    return this.list().map((h) => h.status(cfg));
+    return this.list().map((h) => this.statusOf(h, cfg));
+  }
+
+  /** NO_AGENT, naming the fix for each agent only Meko's connection keeps off. */
+  noAgent(cfg: Config): string {
+    return noAgentText(this.status(cfg).filter(onlyMekoBlocks).map((s) => s.id));
   }
 
   /**
@@ -51,11 +93,12 @@ export class Harnesses {
 
   /**
    * What runs when nobody picks: `[agents] default` while it's available, else the first available
-   * harness (HARNESS_IDS order), else null (no coding agent is installed, turned on and new enough).
+   * harness (HARNESS_IDS order), else null (no agent is installed, turned on, new enough and
+   * connected to Meko).
    */
   defaultFor(cfg: Config): Harness | null {
     const h = this.of(cfg.agents.default);
-    return h.status(cfg).available ? h : (this.list().find((x) => x.status(cfg).available) ?? null);
+    return this.statusOf(h, cfg).available ? h : (this.list().find((x) => this.statusOf(x, cfg).available) ?? null);
   }
 
   /**
@@ -65,26 +108,30 @@ export class Harnesses {
   async ensureDefault(cfg: Config): Promise<Harness | null> {
     const asked = this.of(cfg.agents.default);
     await this.reread(cfg, asked);
+    await this.rereadMekoFor(cfg, asked);
     if (!this.defaultFor(cfg)) await Promise.all(this.list().filter((h) => h !== asked).map((h) => this.reread(cfg, h)));
     return this.defaultFor(cfg);
   }
 
   /**
    * The harness a new session starts on: the one asked for, else the default (`ensureDefault`). 400
-   * when the one asked for isn't available (turned off, not installed, or too old), naming what to
-   * do; 409 when no harness is available at all. Its version is read again first (`reread`).
+   * when the one asked for isn't available (turned off, not installed, too old, or not connected to
+   * Meko), naming what to do; 409 when no harness is available at all. Its version is read again
+   * first (`reread`).
    */
   async pick(cfg: Config, asked: unknown): Promise<Harness> {
     if (asked != null && !HARNESS_IDS.includes(asked as HarnessId)) throw new HttpError(400, `Pick a harness: ${HARNESS_IDS.join(', ')}.`);
     if (asked == null) {
       const h = await this.ensureDefault(cfg);
-      if (!h) throw new HttpError(409, NO_AGENT);
+      if (!h) throw new HttpError(409, this.noAgent(cfg));
       return h;
     }
     const h = this.of(asked);
     await this.reread(cfg, h);
-    const s = h.status(cfg);
+    await this.rereadMekoFor(cfg, h);
+    const s = this.statusOf(h, cfg);
     if (s.available) return h;
+    if (onlyMekoBlocks(s)) throw new HttpError(400, `${notConnectedText(h.id)}.`);
     const how = !s.enabled
       ? `turn it on in Settings → Harness ([${h.id}] enabled in config.toml)`
       : s.version === null
@@ -100,5 +147,13 @@ export class Harnesses {
   private async reread(cfg: Config, h: Harness): Promise<void> {
     const s = h.status(cfg);
     await h.version(cfg, s.enabled && !s.available);
+  }
+
+  /**
+   * Reads Meko's list again when the one kept would refuse a harness only for its connection: it may
+   * have been connected since (`meko agent connect` in a terminal), without Settings opening.
+   */
+  private async rereadMekoFor(cfg: Config, h: Harness): Promise<void> {
+    if (onlyMekoBlocks(this.statusOf(h, cfg))) await this.rereadMeko();
   }
 }

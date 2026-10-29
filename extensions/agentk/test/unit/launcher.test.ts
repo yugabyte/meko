@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   claudeLauncher, hooksSettingsPath, modDirPath, writeHookFiles, writeModFiles, type LaunchSpec,
 } from '../../src/server/claude.js';
-import { cliVersion, versionAtLeast } from '../../src/server/harness/version.js';
+import { versionAtLeast } from '../../src/shared/harnesses.js';
+import { cliVersion } from '../../src/server/harness/version.js';
 import { loginShellCommand, shq, writeLauncher } from '../../src/server/launcher.js';
 import { getPaths, type Paths } from '../../src/server/paths.js';
 import { paneName } from '../../src/server/hostclient.js';
