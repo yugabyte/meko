@@ -260,16 +260,19 @@ agent's config every time, since the user and the agent edit it too.
 
 - **Installed** means the agent's command (`claude`, `codex`, `kiro-cli`, `opencode`) is on PATH, in
   its usual folders (`~/.local/bin`, `/usr/local/bin`, `/opt/homebrew/bin`, and `~/.claude/local`
-  for Claude Code, `~/.opencode/bin` for OpenCode), or on the PATH of the user's login shell
-  (`$SHELL`, which systemd and launchd set for the service, else `/bin/sh`), where version managers
-  such as nvm put an npm install. bash, zsh and fish run interactive too (`-i -l -c`), since nvm sets
-  PATH up in `~/.bashrc` and `~/.zshrc`; another shell gives way to `/bin/sh -l -c`. The shell runs
-  only when an agent isn't found otherwise, in a session of its own with no terminal, for 10 s at
-  most, and its PATH is kept for 5 minutes. Only installed agents are listed. Meko runs the
-  command it found by its absolute path, with its folder first on PATH (an npm install's Node is
-  there), so the service's thin PATH still works. The config folders come from the environment Meko
-  runs in (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `KIRO_HOME`, `XDG_CONFIG_HOME`), so a service needs them
-  set when the user's shell sets them.
+  for Claude Code, `~/.opencode/bin` for OpenCode), or, when Meko runs as a service, on the PATH of
+  the user's login shell (`$SHELL`, which systemd and launchd set for the service, else `/bin/sh`),
+  where version managers such as nvm put an npm install. Meko started from the user's shell has that
+  PATH already. bash, zsh and fish run interactive too (`-i -l -c`), since nvm sets PATH up in
+  `~/.zshrc` and `~/.bashrc` (which a login bash reads only when its profile sources it, as a
+  terminal's does); another shell gives way to `/bin/sh -l -c`. The shell runs only when an agent
+  isn't found otherwise, in a session of its own with no terminal, for 3 s at most (AgentK gives the
+  list 5 s). Its PATH is kept, and read again in the background once it's 5 minutes old, so only
+  the first list waits for it. Only installed agents are listed. Meko runs the command it found by
+  its absolute path, with its folder first on PATH (an npm install's Node is there), then, for one
+  found on the login shell's PATH, that PATH, so the service's thin PATH still works. The config
+  folders come from the environment Meko runs in (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `KIRO_HOME`,
+  `XDG_CONFIG_HOME`), so a service needs them set when the user's shell sets them.
 - **The target** is where agents connect: this Meko's MCP URL (`http://127.0.0.1:<port>/mcp`) with
   the client token, or while Meko Cloud is linked its MCP URL with the link's key
   ([cloud.md](cloud.md)).
