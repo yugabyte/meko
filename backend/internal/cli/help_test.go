@@ -16,10 +16,10 @@ import (
 // Every command has a group (one its program lists), a summary, a usage line and an example, and
 // each --help exits 0 with them.
 func TestEveryCommandHasHelp(t *testing.T) {
-	for _, prog := range []string{progMeko, progMekosh} {
+	for _, prog := range []string{progMeko, progMekoCLI} {
 		groups := mekoGroups
-		if prog == progMekosh {
-			groups = mekoshGroups
+		if prog == progMekoCLI {
+			groups = mekoCLIGroups
 		}
 		var usage bytes.Buffer
 		printUsage(&usage, prog)
@@ -64,9 +64,9 @@ func TestUsage(t *testing.T) {
 		t.Errorf("meko --help doesn't open with Meko's tagline:\n%s", out)
 	}
 	want(t, "no command", code, 0, out, "Usage: meko <command> [flags]")
-	want(t, "no command", code, 0, out, "run mekosh\n")
+	want(t, "no command", code, 0, out, "run meko-cli\n")
 	if strings.Contains(out, "serve") || strings.Contains(out, "search") {
-		t.Errorf("meko --help lists a hidden or mekosh command:\n%s", out)
+		t.Errorf("meko --help lists a hidden or meko-cli command:\n%s", out)
 	}
 	code, out, _ = run("version")
 	want(t, "version", code, 0, out, "sqlite-vec  v0.1.9")
@@ -85,22 +85,22 @@ func TestUsage(t *testing.T) {
 	want(t, "help for an unknown command", code, exitUsage, errs, `unknown command "frobnicate"`)
 
 	code, out, _ = runSh("--help")
-	want(t, "mekosh --help", code, 0, out, "Usage: mekosh [<command> [flags]]")
+	want(t, "meko-cli --help", code, 0, out, "Usage: meko-cli [<command> [flags]]")
 	code, out, _ = runSh("help", "use")
-	want(t, "mekosh help use", code, 0, out, "Examples, at the mekosh prompt:")
+	want(t, "meko-cli help use", code, 0, out, "Examples, at the meko-cli prompt:")
 	code, _, errs = runSh("use", "research")
 	want(t, "use outside the prompt", code, exitUsage, errs, "use works only at the prompt")
 	code, _, errs = runSh("start")
-	want(t, "mekosh start", code, exitUsage, errs, "mekosh: start is a meko command: meko start\n")
+	want(t, "meko-cli start", code, exitUsage, errs, "meko-cli: start is a meko command: meko start\n")
 }
 
-// meko's usage commands are mekosh's now: meko names the command to run instead, and runs nothing.
-func TestMekoNamesTheMekoshCommand(t *testing.T) {
+// meko's usage commands are meko-cli's now: meko names the command to run instead, and runs nothing.
+func TestMekoNamesTheMekoCLICommand(t *testing.T) {
 	for _, name := range []string{"search", "add_memory", "datapacks", "create_datapack", "delete_datapack", "upload",
 		"upload_status", "export"} {
 		code, out, errs := run(name, "--data-dir", "/nonexistent", "two words")
 		if code != exitUsage || out != "" ||
-			errs != "meko: "+name+" is a mekosh command now: mekosh "+name+" --data-dir /nonexistent 'two words'\n" {
+			errs != "meko: "+name+" is a meko-cli command now: meko-cli "+name+" --data-dir /nonexistent 'two words'\n" {
 			t.Errorf("meko %s: exit %d, output %q, errors %q", name, code, out, errs)
 		}
 	}
@@ -108,11 +108,17 @@ func TestMekoNamesTheMekoshCommand(t *testing.T) {
 
 func TestMainPicksTheProgramByName(t *testing.T) {
 	var out, errb bytes.Buffer
-	Main("/home/me/.local/bin/mekosh", []string{"--help"}, &out, &errb)
-	want(t, "as mekosh", 0, 0, out.String(), "Usage: mekosh")
+	Main("/home/me/.local/bin/meko-cli", []string{"--help"}, &out, &errb)
+	want(t, "as meko-cli", 0, 0, out.String(), "Usage: meko-cli")
 	out.Reset()
 	Main("/opt/meko/bin/meko", []string{"--help"}, &out, &errb)
 	want(t, "as meko", 0, 0, out.String(), "Usage: meko <command>")
+	out.Reset()
+	code := Main("/home/me/.local/bin/mekosh", []string{"search", "two words"}, &out, &errb)
+	want(t, "as mekosh", code, exitUsage, errb.String(), "mekosh is meko-cli now: meko-cli search 'two words'\n")
+	if out.Len() != 0 {
+		t.Errorf("as mekosh, output %q", out.String())
+	}
 }
 
 func TestSplitWords(t *testing.T) {
@@ -136,8 +142,8 @@ func TestSplitWords(t *testing.T) {
 }
 
 func TestShellQuote(t *testing.T) {
-	if got := shellQuote([]string{"mekosh", "search", "it's here", "--limit", "3", ""}); got !=
-		`mekosh search 'it'\''s here' --limit 3 ''` {
+	if got := shellQuote([]string{"meko-cli", "search", "it's here", "--limit", "3", ""}); got !=
+		`meko-cli search 'it'\''s here' --limit 3 ''` {
 		t.Errorf("shellQuote = %s", got)
 	}
 }
@@ -196,9 +202,10 @@ func TestReport(t *testing.T) {
 	}
 }
 
-// An install from before mekosh gets ~/.local/bin/mekosh at serve's start, beside its meko; one
-// whose meko isn't there, or that has a mekosh already, is left alone.
-func TestLinkMekosh(t *testing.T) {
+// An install from before meko-cli gets ~/.local/bin/meko-cli at serve's start, beside its meko, and
+// loses its mekosh link; one whose meko isn't there, or that has a meko-cli already, is left alone,
+// and a mekosh that isn't a link into the install stays.
+func TestLinkMekoCLI(t *testing.T) {
 	home := t.TempDir()
 	app := update.App{Root: filepath.Join(t.TempDir(), "app")}
 	if err := os.MkdirAll(filepath.Join(app.Root, "1.0", "bin"), 0o700); err != nil {
@@ -210,32 +217,48 @@ func TestLinkMekosh(t *testing.T) {
 	if err := app.Repoint("1.0"); err != nil {
 		t.Fatal(err)
 	}
-	mekosh := filepath.Join(home, ".local", "bin", "mekosh")
-	if err := linkMekosh(app, home); err != nil {
+	mekoCLI := filepath.Join(home, ".local", "bin", "meko-cli")
+	if err := linkMekoCLI(app, home); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Lstat(mekosh); !os.IsNotExist(err) {
-		t.Fatalf("mekosh without a meko command: %v", err)
+	if _, err := os.Lstat(mekoCLI); !os.IsNotExist(err) {
+		t.Fatalf("meko-cli without a meko command: %v", err)
 	}
 	if _, err := app.LinkCommand(home); err != nil {
 		t.Fatal(err)
 	}
-	if err := linkMekosh(app, home); err != nil {
+	mekosh, err := app.LinkCommandAs(home, "mekosh")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if target, err := os.Readlink(mekosh); err != nil || target != app.CurrentExe() {
-		t.Fatalf("mekosh -> %q, %v", target, err)
+	if err = linkMekoCLI(app, home); err != nil {
+		t.Fatal(err)
 	}
-	if err := app.UnlinkCommandAs(home, "mekosh"); err != nil {
+	if target, rerr := os.Readlink(mekoCLI); rerr != nil || target != app.CurrentExe() {
+		t.Fatalf("meko-cli -> %q, %v", target, rerr)
+	}
+	if _, err = os.Lstat(mekosh); !os.IsNotExist(err) {
+		t.Fatalf("the mekosh link stayed: %v", err)
+	}
+	if err := app.UnlinkCommandAs(home, "meko-cli"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mekoCLI, []byte("mine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := linkMekoCLI(app, home); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(mekosh, []byte("mine"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := linkMekosh(app, home); err != nil {
+	if err := linkMekoCLI(app, home); err != nil {
 		t.Fatal(err)
 	}
+	if b, _ := os.ReadFile(mekoCLI); string(b) != "mine" {
+		t.Errorf("a meko-cli that was there was replaced")
+	}
 	if b, _ := os.ReadFile(mekosh); string(b) != "mine" {
-		t.Errorf("a mekosh that was there was replaced")
+		t.Errorf("a mekosh that isn't this install's link was removed")
 	}
 }

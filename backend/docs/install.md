@@ -32,11 +32,14 @@ says so and changes nothing, unless given `--reinstall` or another version.
 `meko install` (`internal/cli/install.go`):
 
 - In a release install it points `app/current` at its own version and links `~/.local/bin/meko` and
-  `~/.local/bin/mekosh` to `app/current/bin/meko` (the binary runs `mekosh`'s commands when run by
+  `~/.local/bin/meko-cli` to `app/current/bin/meko` (the binary runs `meko-cli`'s commands when run by
   that name). A build from source is set up as it is and doesn't update itself. An install from
-  before `mekosh` gets its link when the updated server starts: a release's `serve` makes it
-  (`linkMekosh`) when this install's `~/.local/bin/meko` is there and nothing is at
-  `~/.local/bin/mekosh`, since updates don't run `meko install`.
+  before `meko-cli` gets its link when the updated server starts: a release's `serve` makes it
+  (`linkMekoCLI`) when this install's `~/.local/bin/meko` is there and nothing is at
+  `~/.local/bin/meko-cli`, since updates don't run `meko install`. `meko install` and that start
+  also remove the install's `~/.local/bin/mekosh`, `meko-cli`'s name in the releases before it was
+  renamed (a `mekosh` that isn't a link into the app folder stays). Run as `mekosh`, the binary
+  runs nothing and names the `meko-cli` command instead (exit 2).
 - It makes the client token (in the secret store) and sets up the login service (below), stopping
   a server started by hand on the same data folder first. `--no-service` skips the service.
 - It writes the web listener's access to `web.toml` when neither it nor `config.toml` has a `[web]`
@@ -45,7 +48,8 @@ says so and changes nothing, unless given `--reinstall` or another version.
   instead ([web.md](web.md#settings)). It prints the web UI's URL.
 - It installs Meko alone. AgentK is `meko install_extension agentk`.
 
-`meko uninstall` removes the service, `~/.local/bin/meko`, `~/.local/bin/mekosh` and the app folder,
+`meko uninstall` removes the service, `~/.local/bin/meko`, `~/.local/bin/meko-cli` (and an old
+`~/.local/bin/mekosh`) and the app folder,
 and keeps the data;
 `--purge` first destroys the data folder as `meko destroy` does (it asks, unless `--force`; it
 takes `--with-extensions` too). Extensions stay installed unless that destroy removed them, and it

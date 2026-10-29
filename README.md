@@ -41,9 +41,9 @@ gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
 
 Add a memory and search:
 ```sh
-mekosh add_memory "Elementary, my dear Watson"
-mekosh add_memory "The quick brown fox jumps over the lazy dog"
-mekosh search "What color was the fox?"
+meko-cli add_memory "Elementary, my dear Watson"
+meko-cli add_memory "The quick brown fox jumps over the lazy dog"
+meko-cli search "What color was the fox?"
 ```
 
 Open web ui:
@@ -78,11 +78,11 @@ meko cloud_link          # asks for the key, or reads it from stdin; --off unlin
 Or use the web UI's Settings › Meko Cloud.
 [127.0.0.1:7777/settings/meko-cloud](http://127.0.0.1:7777/settings/meko-cloud)
 
-Once linked, `mekosh` works on both local and Meko Cloud datapacks.
+Once linked, `meko-cli` works on both local and Meko Cloud datapacks.
 
 ## Commands
 
-`meko` runs Meko, and `mekosh` works with your context. The ones you'll use first:
+`meko` runs Meko, and `meko-cli` works with your context. The ones you'll use first:
 
 | Command | What it does |
 |---|---|
@@ -90,11 +90,11 @@ Once linked, `mekosh` works on both local and Meko Cloud datapacks.
 | `meko ui` | Open the web UI in your browser |
 | `meko connect claude` | Add Meko to Claude Code (or `codex`, `kiro`, `opencode`), for all your projects |
 | `meko update` | Install Meko's newest release now, then every extension's |
-| `mekosh search "<question>"` | Search memories, the knowledge base and past conversations |
-| `mekosh add_memory "<text>"` | Save a memory, word for word |
-| `mekosh upload <file>...` | Add files to the knowledge base |
+| `meko-cli search "<question>"` | Search memories, the knowledge base and past conversations |
+| `meko-cli add_memory "<text>"` | Save a memory, word for word |
+| `meko-cli upload <file>...` | Add files to the knowledge base |
 
-`meko --help`, `mekosh --help` and `<command> --help` give the rest. Every command and flag is in
+`meko --help`, `meko-cli --help` and `<command> --help` give the rest. Every command and flag is in
 [`backend/docs/cli.md`](backend/docs/cli.md).
 
 ## Extensions
@@ -130,11 +130,11 @@ for the memory engine and the web UI.
 
 ```sh
 cd backend
-make build memory_engine web_ui  # bin/meko (and bin/mekosh, a link to it), the memory engine and the web UI
+make build memory_engine web_ui  # bin/meko (and bin/meko-cli, a link to it), the memory engine and the web UI
 ./bin/meko start                 # runs in the background: 127.0.0.1:7778, and the web UI on :7777
 ```
 
-The first start downloads the embedding model (23 MB), and `mekosh` calls fail with
+The first start downloads the embedding model (23 MB), and `meko-cli` calls fail with
 `MEMORY_ENGINE_NOT_READY` until `meko status` shows the memory engine ready. On RHEL 8, set
 `CC=/opt/rh/gcc-toolset-13/root/usr/bin/gcc` before building.
 

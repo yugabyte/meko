@@ -79,7 +79,7 @@ func runStart(l paths.Layout, o startOptions, stdout, stderr io.Writer) int {
 		printRunning(l, "is running", [][2]string{
 			{"meko ui", "open the web UI"},
 			{"meko status", "check on Meko at any time"},
-			{"mekosh", "search and add to what Meko keeps"},
+			{"meko-cli", "search and add to what Meko keeps"},
 			{"meko connect claude", "connect Claude Code to Meko (or codex, kiro, opencode)"},
 		}, stdout)
 	}

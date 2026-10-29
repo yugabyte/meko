@@ -147,7 +147,7 @@ func TestCells(t *testing.T) {
 	}
 }
 
-// mekosh datapacks sorts this Meko's datapacks and Meko Cloud's together by name, ignoring case,
+// meko-cli datapacks sorts this Meko's datapacks and Meko Cloud's together by name, ignoring case,
 // with this Meko's first on a tie, as --datapack picks it.
 func TestDatapackList(t *testing.T) {
 	local := []nameDesc{{"notes", "here"}, {"beta", ""}}

@@ -12,9 +12,9 @@ import (
 	"github.com/yugabyte/meko/backend/internal/paths"
 )
 
-// cloudSide is mekosh's way to the linked Meko Cloud's datapacks: the running server's own /api/v1
+// cloudSide is meko-cli's way to the linked Meko Cloud's datapacks: the running server's own /api/v1
 // routes, which send a datapack this Meko doesn't have to Meko Cloud with the link's key, which
-// mekosh never reads (docs/cloud.md).
+// meko-cli never reads (docs/cloud.md).
 type cloudSide struct{ c *client }
 
 func openCloud(l paths.Layout) (*cloudSide, error) {

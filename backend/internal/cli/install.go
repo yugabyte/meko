@@ -57,15 +57,18 @@ func runInstall(l paths.Layout, noService bool, access string, stdout, stderr io
 		if link, err = app.LinkCommand(home); err != nil {
 			return fail(stderr, err)
 		}
-		if _, err = app.LinkCommandAs(home, progMekosh); err != nil {
+		if _, err = app.LinkCommandAs(home, progMekoCLI); err != nil {
+			return fail(stderr, err)
+		}
+		if err = app.UnlinkCommandAs(home, progMekosh); err != nil {
 			return fail(stderr, err)
 		}
 		exe = app.CurrentExe()
 		fmt.Fprintf(stdout, "Installing Meko %s in %s…\n", ver, app.Dir(ver))
 		if bin := filepath.Dir(link); onPath(bin) {
-			r.step(stepOK, "Commands", "meko and mekosh, in "+bin)
+			r.step(stepOK, "Commands", "meko and meko-cli, in "+bin)
 		} else {
-			r.step(stepWarn, "Commands", fmt.Sprintf("meko and mekosh, in %s (add it to your PATH to run them directly)", bin))
+			r.step(stepWarn, "Commands", fmt.Sprintf("meko and meko-cli, in %s (add it to your PATH to run them directly)", bin))
 		}
 	} else {
 		fmt.Fprintf(stdout, "Setting up this build of meko (%s). It isn't from a release, "+
@@ -179,18 +182,22 @@ func headless() bool {
 	return runtime.GOOS == "linux" && os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == ""
 }
 
-// linkMekosh makes ~/.local/bin/mekosh for a release install whose meko command is there and whose
-// mekosh isn't: one installed before mekosh existed, which an update reaches without meko install.
-// Serve runs it at each start. Anything already at that path stays.
-func linkMekosh(app update.App, home string) error {
+// linkMekoCLI makes ~/.local/bin/meko-cli for a release install whose meko command is there and
+// whose meko-cli isn't: one installed before meko-cli existed, which an update reaches without meko
+// install. It removes the install's ~/.local/bin/mekosh, meko-cli's old name, too. Serve runs it at
+// each start. Anything already at meko-cli, and a mekosh that isn't a link into this install, stays.
+func linkMekoCLI(app update.App, home string) error {
 	t, err := os.Readlink(filepath.Join(home, ".local", "bin", progMeko))
 	if err != nil || !strings.HasPrefix(t, app.Root+string(filepath.Separator)) {
-		return nil //nolint:nilerr // no meko command of this install's: nothing to put mekosh beside
+		return nil //nolint:nilerr // no meko command of this install's: nothing to put meko-cli beside
 	}
-	if _, lerr := os.Lstat(filepath.Join(home, ".local", "bin", progMekosh)); lerr == nil {
+	if err = app.UnlinkCommandAs(home, progMekosh); err != nil {
+		return err
+	}
+	if _, lerr := os.Lstat(filepath.Join(home, ".local", "bin", progMekoCLI)); lerr == nil {
 		return nil
 	}
-	_, err = app.LinkCommandAs(home, progMekosh)
+	_, err = app.LinkCommandAs(home, progMekoCLI)
 	return err
 }
 
@@ -250,14 +257,16 @@ func runUninstall(l paths.Layout, purge bool, o destroyOptions, stdout, stderr i
 		if err = app.UnlinkCommand(home); err != nil {
 			return fail(stderr, err)
 		}
-		if err = app.UnlinkCommandAs(home, progMekosh); err != nil {
-			return fail(stderr, err)
+		for _, link := range []string{progMekoCLI, progMekosh} {
+			if err = app.UnlinkCommandAs(home, link); err != nil {
+				return fail(stderr, err)
+			}
 		}
 		if _, serr := os.Stat(app.Root); serr == nil {
 			if err = app.Remove(); err != nil {
 				return fail(stderr, err)
 			}
-			fmt.Fprintf(stdout, "Removed the releases in %s and the meko and mekosh commands\n", app.Root)
+			fmt.Fprintf(stdout, "Removed the releases in %s and the meko and meko-cli commands\n", app.Root)
 		}
 	}
 	for _, line := range exts {

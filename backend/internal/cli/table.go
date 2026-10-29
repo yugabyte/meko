@@ -13,7 +13,7 @@ import (
 	"github.com/yugabyte/meko/backend/internal/spin"
 )
 
-// nameDesc is one row of a name and description list, such as mekosh datapacks'.
+// nameDesc is one row of a name and description list, such as meko-cli datapacks'.
 type nameDesc struct{ name, description string }
 
 // The gap between the name and description columns, and the least room a description gets beside

@@ -18,10 +18,10 @@ in one place, checked before it's saved, and read by every extension the same wa
 | **Meko Cloud's MCP URL is saved as empty**, and its web app and API URLs are worked out (`https://cloud.mekodata.ai`, plus `/api/v1`); another server's web app must be set | The same rule AgentK's `mekoWebUrl` had. A server whose web app isn't known has no datapack links or sharing until it's set, which the page says. |
 | **Unlink keeps the URLs and removes the key** | Linking again takes only the key. Unlinked, the extensions use this Meko. `meko destroy` removes the key from the secret store with the client token, so none is left in the Keychain. |
 | **Extensions read the link from `meko token --json`**, and are told when it changes (below) | Extensions already run it for this Meko's own MCP URL and token; one command gives them both. |
-| **Meko lists the linked Meko Cloud's datapacks itself** (`GET /api/v1/datapacks`, after this Meko's, or `?location=cloud`; `Service.Datapacks`), asking the link's REST API for `GET /datapacks` with the key | The web UI and `mekosh datapacks` show them beside this Meko's, and the key never leaves Meko. It's the REST API and key AgentK's knowledge uploads and Presenter's decks already use with Meko Cloud. A link to another server with no web app or API URL has no API to ask, so it says to set one. |
+| **Meko lists the linked Meko Cloud's datapacks itself** (`GET /api/v1/datapacks`, after this Meko's, or `?location=cloud`; `Service.Datapacks`), asking the link's REST API for `GET /datapacks` with the key | The web UI and `meko-cli datapacks` show them beside this Meko's, and the key never leaves Meko. It's the REST API and key AgentK's knowledge uploads and Presenter's decks already use with Meko Cloud. A link to another server with no web app or API URL has no API to ask, so it says to set one. |
 | **Any client token can list them**, unlike the link's own routes | An agent or extension may want to know which datapacks the linked account has. The reply holds names, descriptions and grants, never the key, and the client token still can't read or change the link. |
 | **Only the fields Meko shows are copied** from Meko Cloud's rows | Cloud's rows also carry each datapack's database user and connection string, which no caller of a route that takes the client token should get. |
-| **This Meko's own `/api/v1` routes act on the linked Meko Cloud's datapacks** ([below](#meko-clouds-datapacks-on-this-mekos-routes)): a datapack id this Meko doesn't have goes to Meko Cloud, and where there's no id `location` picks the side: a listing names both by default, and a create goes to Meko Cloud while it's linked. The server makes the call with the link's key | One API for the web UI and `mekosh`, with Meko Cloud's paths and shapes, and the key never leaves the server. The id is enough to tell the sides apart: both are UUIDs. Meko Cloud's REST API serves what it has a route for; it has none that searches a datapack or adds a memory with an API key, so those two use its MCP tools. A saved key goes only where the link sends it: the routes take no URL, and another Meko Cloud is set with `meko cloud_link --url --api-url`. |
+| **This Meko's own `/api/v1` routes act on the linked Meko Cloud's datapacks** ([below](#meko-clouds-datapacks-on-this-mekos-routes)): a datapack id this Meko doesn't have goes to Meko Cloud, and where there's no id `location` picks the side: a listing names both by default, and a create goes to Meko Cloud while it's linked. The server makes the call with the link's key | One API for the web UI and `meko-cli`, with Meko Cloud's paths and shapes, and the key never leaves the server. The id is enough to tell the sides apart: both are UUIDs. Meko Cloud's REST API serves what it has a route for; it has none that searches a datapack or adds a memory with an API key, so those two use its MCP tools. A saved key goes only where the link sends it: the routes take no URL, and another Meko Cloud is set with `meko cloud_link --url --api-url`. |
 | **Acting on Meko Cloud takes the owner or the admin token**, not an agent's client token; listing takes any | The key acts on the whole Meko Cloud account and can delete its datapacks. An agent that should use Meko Cloud is given Cloud's own key. |
 
 ## Routes and command
@@ -61,7 +61,7 @@ for its MCP tools, each within 30 s but the listing's 10 s):
 - **Which side:** a route that takes `:id` takes `?location=` too:
   - `cloud` sends the request to Meko Cloud, a 409 `CLOUD_NOT_LINKED` while unlinked. It reaches
     Cloud's datapack even when this Meko has one of the same id, since an export keeps ids.
-    `mekosh` always sends it for a Cloud datapack.
+    `meko-cli` always sends it for a Cloud datapack.
   - `local` serves this Meko's.
   - Without it, the route serves this Meko's datapack. A UUID this Meko doesn't have goes to Meko
     Cloud for the owner or the admin token while it's linked. For a client token it stays this
@@ -83,7 +83,7 @@ for its MCP tools, each within 30 s but the listing's 10 s):
   argument it doesn't know. `conversation_id` defaults to a fixed id derived from `meko-rest`, since
   Cloud's tools require one.
 - **Credential:**
-  - Acting on Meko Cloud takes the admin token (`mekosh`) or the owner on the web listener; an
+  - Acting on Meko Cloud takes the admin token (`meko-cli`) or the owner on the web listener; an
     agent's client token gets 403.
   - The listing takes the credential every data route does: the client token too, or nothing with
     `[server] auth = "none"`.
@@ -113,10 +113,10 @@ Each row keeps:
 It gains `web_url`, the datapack in the link's web app (`<web_url>/datapacks/<id>`, null when the
 web app isn't known). The rows are newest first.
 
-### mekosh
+### meko-cli
 
-While Meko Cloud is linked, `mekosh`'s commands work on its datapacks as on this Meko's
-([api.md](api.md#cli)), through the routes above, with its admin token. `mekosh` never reads the
+While Meko Cloud is linked, `meko-cli`'s commands work on its datapacks as on this Meko's
+([api.md](api.md#cli)), through the routes above, with its admin token. `meko-cli` never reads the
 key, and a local command never asks about Meko Cloud.
 
 - **Naming a datapack:**
@@ -131,7 +131,7 @@ key, and a local command never asks about Meko Cloud.
     deletes is the one in use, on the same side.
   - Two Cloud datapacks of one name ask for the id.
 - **The calls:** `search` and `add_memory` post to the datapack's `search` and `memories` routes.
-  `create_datapack --cloud`, `delete_datapack`, `upload` (`client: "mekosh"`) and `upload_status`
+  `create_datapack --cloud`, `delete_datapack`, `upload` (`client: "meko-cli"`) and `upload_status`
   use the routes above. `upload` waits for `completed`, and fails on `failed`, `abandoned` or
   `oversized`.
 - **Messages:** those about a Cloud datapack say so (`Using Meko Cloud datapack team-notes`,

@@ -214,7 +214,7 @@ func (t *tools) resolve(ctx context.Context, named string) (target, error) {
 	}
 	side, rest := splitSide(named)
 	if rest == "" {
-		return target{}, fmt.Errorf("name the datapack after %s: (mekosh datapacks lists them)", side)
+		return target{}, fmt.Errorf("name the datapack after %s: (meko-cli datapacks lists them)", side)
 	}
 	if side != "cloud" {
 		text, err := t.call(ctx, "datapack_list", map[string]any{})
@@ -235,7 +235,7 @@ func (t *tools) resolve(ctx context.Context, named string) (target, error) {
 		}
 	}
 	if side == "local" {
-		return target{}, fmt.Errorf("no datapack is named %q here (mekosh datapacks --local lists them)", rest)
+		return target{}, fmt.Errorf("no datapack is named %q here (meko-cli datapacks --local lists them)", rest)
 	}
 	c, err := t.cloudSide()
 	if err != nil {
@@ -246,7 +246,7 @@ func (t *tools) resolve(ctx context.Context, named string) (target, error) {
 	}
 	rows, err := c.datapacks(ctx)
 	if side == "" && errors.Is(err, errNotLinked) {
-		return target{}, fmt.Errorf("no datapack is named %q (mekosh datapacks lists them)", rest)
+		return target{}, fmt.Errorf("no datapack is named %q (meko-cli datapacks lists them)", rest)
 	}
 	if err != nil {
 		return target{}, err
@@ -261,13 +261,13 @@ func (t *tools) resolve(ctx context.Context, named string) (target, error) {
 	case len(found) == 1:
 		return found[0], nil
 	case len(found) > 1:
-		return target{}, fmt.Errorf("%d Meko Cloud datapacks are named %q: give its id (mekosh datapacks --json lists them)",
-			len(found), rest)
+		return target{}, fmt.Errorf(
+			"%d Meko Cloud datapacks are named %q: give its id (meko-cli datapacks --json lists them)", len(found), rest)
 	case side == "cloud":
-		return target{}, fmt.Errorf("no Meko Cloud datapack is named %q (mekosh datapacks --json lists them "+
+		return target{}, fmt.Errorf("no Meko Cloud datapack is named %q (meko-cli datapacks --json lists them "+
 			"under cloud)", rest)
 	}
-	return target{}, fmt.Errorf("no datapack is named %q here or in Meko Cloud (mekosh datapacks lists them)", rest)
+	return target{}, fmt.Errorf("no datapack is named %q here or in Meko Cloud (meko-cli datapacks lists them)", rest)
 }
 
 // defaultDatapackID is the default datapack's id, or "" once it has been deleted (Meko makes it
@@ -286,7 +286,7 @@ func (t *toolSession) defaultDatapackID(ctx context.Context) (string, error) {
 	return d.ID, json.Unmarshal([]byte(text), &d)
 }
 
-// runTool runs one of mekosh's tool commands (search, add_memory, datapacks, create_datapack,
+// runTool runs one of meko-cli's tool commands (search, add_memory, datapacks, create_datapack,
 // delete_datapack, upload, upload_status, export) against the running server.
 func runTool(l paths.Layout, prog, cmd string, f toolFlags, stdin io.Reader, stdout, stderr io.Writer) int {
 	up, err := running(l.Lock)
@@ -333,7 +333,7 @@ func runTool(l paths.Layout, prog, cmd string, f toolFlags, stdin io.Reader, std
 	}
 	if te := (*toolError)(nil); errors.As(err, &te) && te.code == "datapack_id_required" {
 		err = errors.New("there's no default datapack (it was deleted): pass --datapack NAME|ID " +
-			"(mekosh datapacks lists them)")
+			"(meko-cli datapacks lists them)")
 	}
 	if err != nil {
 		return failAs(prog, stderr, err)
@@ -393,7 +393,7 @@ func toolDatapacks(ctx context.Context, t *toolSession, l paths.Layout, f toolFl
 	}
 	fmt.Fprint(stdout, nameDescTable(list, termWidth(stdout)))
 	if cloudErr != nil {
-		fmt.Fprintf(stderr, "%s: %v (mekosh datapacks --local skips Meko Cloud)\n", progMekosh, cloudErr)
+		fmt.Fprintf(stderr, "%s: %v (meko-cli datapacks --local skips Meko Cloud)\n", progMekoCLI, cloudErr)
 	}
 	return nil
 }
@@ -417,7 +417,7 @@ func datapackList(local []nameDesc, cloud []cloudlink.Datapack) []nameDesc {
 func toolCreateDatapack(ctx context.Context, t *tools, f toolFlags, stdout io.Writer) error {
 	name := strings.TrimSpace(f.text)
 	if name == "" {
-		return errors.New("give the new datapack's name: mekosh create_datapack <name>")
+		return errors.New("give the new datapack's name: meko-cli create_datapack <name>")
 	}
 	var reply string
 	where := "datapack"
@@ -458,7 +458,7 @@ var errDeclined = errors.New("declined")
 func toolDeleteDatapack(ctx context.Context, t *tools, f toolFlags, stdin io.Reader, stdout io.Writer) error {
 	named := strings.TrimSpace(f.text)
 	if named == "" {
-		return errors.New("name the datapack to delete: mekosh delete_datapack <name|id>")
+		return errors.New("name the datapack to delete: meko-cli delete_datapack <name|id>")
 	}
 	dp, err := t.resolve(ctx, named)
 	if err != nil {
@@ -541,7 +541,7 @@ func toolAdd(ctx context.Context, t *tools, f toolFlags, stdin io.Reader, stdout
 
 func toolSearch(ctx context.Context, t *tools, f toolFlags, stdout io.Writer) error {
 	if strings.TrimSpace(f.text) == "" {
-		return errors.New("give a question to search for: mekosh search \"<question>\"")
+		return errors.New("give a question to search for: meko-cli search \"<question>\"")
 	}
 	dp, err := t.resolve(ctx, f.datapack)
 	if err != nil {

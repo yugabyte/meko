@@ -158,8 +158,8 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			onProbation = true
 		}
 		if home, herr := os.UserHomeDir(); herr == nil {
-			if lerr := linkMekosh(app, home); lerr != nil {
-				log.Warn("can't make the mekosh command", "error", lerr)
+			if lerr := linkMekoCLI(app, home); lerr != nil {
+				log.Warn("can't make the meko-cli command", "error", lerr)
 			}
 		}
 	}

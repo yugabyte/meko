@@ -21,10 +21,10 @@ import (
 	"github.com/yugabyte/meko/backend/internal/knowledge"
 )
 
-// uploadTimeout bounds mekosh upload: a 50 MiB file takes many minutes to index.
+// uploadTimeout bounds meko-cli upload: a 50 MiB file takes many minutes to index.
 const uploadTimeout = time.Hour
 
-// uploadPoll is how often mekosh upload asks how a file is doing.
+// uploadPoll is how often meko-cli upload asks how a file is doing.
 const uploadPoll = time.Second
 
 // uploadOffer is where to upload a file to, or that the datapack already has its bytes.
@@ -36,7 +36,7 @@ type uploadOffer struct {
 	ExistingFilename string            `json:"existing_filename"`
 }
 
-// knowledgeBase is a datapack's knowledge base as mekosh upload sees it: this Meko's, through its
+// knowledgeBase is a datapack's knowledge base as meko-cli upload sees it: this Meko's, through its
 // tools, or the linked Meko Cloud's, through its REST API. Each call returns the reply's raw JSON
 // too, for --json.
 type knowledgeBase interface {
@@ -82,7 +82,7 @@ func (k cloudKB) offer(ctx context.Context, name string, data []byte) (uploadOff
 	sum := sha256.Sum256(data)
 	reply, err := k.t.cloudCall(ctx, http.MethodPost, cloudDatapackPath(k.dp, "/knowledge-bases/upload-url"),
 		map[string]any{"filename": name, "size": len(data), "content_hash": hex.EncodeToString(sum[:]),
-			"client": "mekosh"})
+			"client": "meko-cli"})
 	if err != nil {
 		return uploadOffer{}, "", err
 	}
@@ -112,9 +112,9 @@ func (t *tools) knowledgeBase(ctx context.Context, named string) (knowledgeBase,
 // statusHint is the upload_status line that asks how a file is doing.
 func statusHint(dp target, key string) string {
 	if dp.id == "" {
-		return "mekosh upload_status " + key
+		return "meko-cli upload_status " + key
 	}
-	return "mekosh upload_status " + key + " --datapack " + dp.spec()
+	return "meko-cli upload_status " + key + " --datapack " + dp.spec()
 }
 
 // toolUpload uploads each file as an agent would: it asks the knowledge base for a link, posts the
@@ -122,7 +122,7 @@ func statusHint(dp target, key string) string {
 // that fails makes the command fail, after the others are done.
 func toolUpload(ctx context.Context, t *tools, f toolFlags, stdout io.Writer) error {
 	if len(f.files) == 0 {
-		return errors.New("give the files to upload: mekosh upload <file> [<file>...]")
+		return errors.New("give the files to upload: meko-cli upload <file> [<file>...]")
 	}
 	kb, dp, err := t.knowledgeBase(ctx, f.datapack)
 	if err != nil {
@@ -262,7 +262,7 @@ type fileState struct {
 
 func toolUploadStatus(ctx context.Context, t *tools, f toolFlags, stdout io.Writer) error {
 	if f.text == "" {
-		return errors.New("give the file's key: mekosh upload_status <key>")
+		return errors.New("give the file's key: meko-cli upload_status <key>")
 	}
 	kb, _, err := t.knowledgeBase(ctx, f.datapack)
 	if err != nil {

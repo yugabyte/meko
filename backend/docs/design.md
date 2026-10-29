@@ -37,15 +37,16 @@ flowchart LR
 ```
 
 The binary is two commands, told apart by the name it's run by (`cli.Main`): `meko` runs Meko,
-and `mekosh` (`~/.local/bin/mekosh`, a link to the same binary that `meko install` makes, and a
+and `meko-cli` (`~/.local/bin/meko-cli`, a link to the same binary that `meko install` makes, and a
 release's serve makes at start for an install from before it) works with what Meko keeps, through
-the running server, and with the linked Meko Cloud's datapacks ([cloud.md](cloud.md#mekosh)):
+the running server, and with the linked Meko Cloud's datapacks ([cloud.md](cloud.md#meko-cli)):
 `datapacks`, `create_datapack`, `delete_datapack`, `export`, `search`, `add_memory`, `upload` and
-`upload_status`. Alone, `mekosh` is a prompt (`shell.go`): it
-reads one command a line, split as a shell would, and runs each as `mekosh <line>`; `use <datapack>`
+`upload_status`. Alone, `meko-cli` is a prompt (`shell.go`): it
+reads one command a line, split as a shell would, and runs each as `meko-cli <line>`; `use <datapack>`
 fills in `--datapack` for the commands that take it, and a confirmation (`delete_datapack`'s) reads
 the next line from the same buffer. From a pipe it runs the lines as a script. Given one of
-`mekosh`'s commands, `meko` runs nothing and names the `mekosh` command instead (exit 2).
+`meko-cli`'s commands, `meko` runs nothing and names the `meko-cli` command instead (exit 2). Run as
+`mekosh`, `meko-cli`'s old name, it does the same ([install.md](install.md)).
 
 Each command's help comes from one table (`help.go`: its group, summary, usage and examples, and its
 flag set's flags), which `meko --help`, `meko help <cmd>`, `<cmd> --help` (exit 0) and the prompt's

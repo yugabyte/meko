@@ -238,9 +238,9 @@ func TestCloudDatapacks(t *testing.T) {
 		t.Fatalf("create in Cloud: %+v (Cloud got %q)", r, cloud.last())
 	}
 	r = admin("POST", "/datapacks/"+cloudDP+"/knowledge-bases/upload-url",
-		map[string]any{"filename": "a.md", "size": 4, "content_hash": strings.Repeat("a", 64), "client": "mekosh"})
+		map[string]any{"filename": "a.md", "size": 4, "content_hash": strings.Repeat("a", 64), "client": "meko-cli"})
 	if r.Status != 200 || obj(r.Data)["url"] != "https://s3.example.com/up" ||
-		!strings.Contains(cloud.last(), `"client":"mekosh"`) {
+		!strings.Contains(cloud.last(), `"client":"meko-cli"`) {
 		t.Fatalf("upload-url in Cloud: %+v (Cloud got %q)", r, cloud.last())
 	}
 	r = admin("GET", "/datapacks/"+cloudDP+"/knowledge-bases/document-status?document_key=k%201", nil)

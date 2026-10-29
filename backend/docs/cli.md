@@ -1,18 +1,18 @@
 # Meko backend: the commands
 
-Every `meko` and `mekosh` command, with its flags. The README lists the few most people need; this
+Every `meko` and `meko-cli` command, with its flags. The README lists the few most people need; this
 is the full list. How the CLI is built is in [design.md](design.md#process-model-and-cli) and
 [api.md](api.md#cli), and installing and running Meko in [install.md](install.md).
 
 Meko has two commands, one binary under two names, as PostgreSQL has `postgres` and `psql`: `meko`
-runs Meko, and `mekosh` works with what it keeps. `meko --help` and `mekosh --help` list them, and
+runs Meko, and `meko-cli` works with what it keeps. `meko --help` and `meko-cli --help` list them, and
 `<command> --help` gives each one's examples and flags. `install`, `start`, `stop` and `status` print a
 short summary: a row per step marked ✓, ! or ✗, the links for people (the web UI, on 7777) and for
 agents (MCP and the REST API, on 7778), and what to run next.
 
 | `meko` | What it does |
 |---|---|
-| `meko install [--no-service] [--access local\|remote]` | Set this meko up: the `meko` and `mekosh` commands, the login service, and how browsers reach the web UI |
+| `meko install [--no-service] [--access local\|remote]` | Set this meko up: the `meko` and `meko-cli` commands, the login service, and how browsers reach the web UI |
 | `meko start` / `stop` / `restart` | Start the server (through its service once installed), and stop or restart it. `start` and `stop` also start and stop the extensions, each printing its own row; `stop --keep-extensions` doesn't |
 | `meko status [--verbose] [--json]` | Whether it's running, a row each for the memory engine, service, updates, Meko Cloud link and extensions, and the links; `--verbose` adds everything (models, certificate, auth, usage stats, children), `--json` prints the server's status reply |
 | `meko ui [path] [--no-open]` | Open the web UI in the browser (`meko ui /ext/agentk/` opens AgentK's); `--no-open` only prints its link |
@@ -32,20 +32,20 @@ agents (MCP and the REST API, on 7778), and what to run next.
 | `meko uninstall [--purge [--force] [--with-extensions]]` | Remove the service, the installed releases and the commands, keeping the data; `--purge` also destroys the data as `meko destroy` does, asking first |
 | `meko serve` | Run the server in the foreground (what the service runs; not listed in `--help`) |
 
-| `mekosh` | What it does |
+| `meko-cli` | What it does |
 |---|---|
-| `mekosh` | A prompt (`mekosh default>`) that takes the commands below, one a line, plus `use <datapack>` (later `search`, `add_memory`, `upload` and `upload_status` lines use it unless they name another; a `delete_datapack` of it goes back to the default), `help` and `exit`. There's no history or line editing yet, and Ctrl-C leaves. Given a file or pipe instead of a terminal, it runs the lines as a script and exits with the first failing line's code |
-| `mekosh datapacks [--local]` | List the datapacks and the linked Meko Cloud's by name, with their descriptions; `--local` leaves Meko Cloud out, and `--json` adds each one's id and where it lives |
-| `mekosh create_datapack <name> [--cloud]` | Create a datapack, here or with `--cloud` in the linked Meko Cloud |
-| `mekosh delete_datapack <name\|id> [--force]` | Delete a datapack and everything in it, for good. It asks first; `--force` doesn't |
-| `mekosh export [<name\|id>] [-o FILE] [--force]` | Write a datapack (default: the default one) to one zip: memories, collective memories, conversations, knowledge files and artifacts with their embeddings and file contents, and the call log. It won't replace a file unless `--force` |
-| `mekosh search "<question>" [--source S] [--limit N]` | Search memories, the knowledge base and past conversations (`context_search`); `--source memory`, `knowledge_base` or `conversation` searches one (default `auto`, all three), and `--limit` caps the results per source (default 8) |
-| `mekosh add_memory "<text>"` | Save a memory, word for word; `-` or no text reads stdin (not at the prompt) |
-| `mekosh upload <file>... [--no-wait]` | Add PDF, text, Markdown, JSON, CSV, XML or HTML files (up to 50 MiB) to the knowledge base, and wait until they're indexed |
-| `mekosh upload_status <key>` | How an uploaded file is doing |
+| `meko-cli` | A prompt (`meko-cli default>`) that takes the commands below, one a line, plus `use <datapack>` (later `search`, `add_memory`, `upload` and `upload_status` lines use it unless they name another; a `delete_datapack` of it goes back to the default), `help` and `exit`. There's no history or line editing yet, and Ctrl-C leaves. Given a file or pipe instead of a terminal, it runs the lines as a script and exits with the first failing line's code |
+| `meko-cli datapacks [--local]` | List the datapacks and the linked Meko Cloud's by name, with their descriptions; `--local` leaves Meko Cloud out, and `--json` adds each one's id and where it lives |
+| `meko-cli create_datapack <name> [--cloud]` | Create a datapack, here or with `--cloud` in the linked Meko Cloud |
+| `meko-cli delete_datapack <name\|id> [--force]` | Delete a datapack and everything in it, for good. It asks first; `--force` doesn't |
+| `meko-cli export [<name\|id>] [-o FILE] [--force]` | Write a datapack (default: the default one) to one zip: memories, collective memories, conversations, knowledge files and artifacts with their embeddings and file contents, and the call log. It won't replace a file unless `--force` |
+| `meko-cli search "<question>" [--source S] [--limit N]` | Search memories, the knowledge base and past conversations (`context_search`); `--source memory`, `knowledge_base` or `conversation` searches one (default `auto`, all three), and `--limit` caps the results per source (default 8) |
+| `meko-cli add_memory "<text>"` | Save a memory, word for word; `-` or no text reads stdin (not at the prompt) |
+| `meko-cli upload <file>... [--no-wait]` | Add PDF, text, Markdown, JSON, CSV, XML or HTML files (up to 50 MiB) to the knowledge base, and wait until they're indexed |
+| `meko-cli upload_status <key>` | How an uploaded file is doing |
 
-`meko` runs none of `mekosh`'s commands: given one (`meko search …`), it names the `mekosh` command to
-run instead. Every command takes `--data-dir`. The default is `~/.meko` (or `MEKO_HOME`), but a home folder on a
+`meko` runs none of `meko-cli`'s commands: given one (`meko search …`), it names the `meko-cli` command to
+run instead. `meko-cli` was named `mekosh` before; run by that name, it does the same. Every command takes `--data-dir`. The default is `~/.meko` (or `MEKO_HOME`), but a home folder on a
 network filesystem (NFS, say) moves it to `$XDG_STATE_HOME/meko` or `/var/tmp/<user>/meko`, since
 SQLite's locking doesn't work over the network; `meko status` prints where it is. `start`,
 `restart` and `serve` take `--port` (the agents' listener's, default 7778) and `--log-level` (`debug`, `info`,
@@ -56,5 +56,5 @@ the default datapack without it. Meko makes the default datapack only on first s
 it's deleted, they need `--datapack`. While Meko Cloud is linked (`meko cloud_link`), they work on
 its datapacks too: a name or id this Meko doesn't have is looked up there, and `cloud:` or `local:`
 before it picks the side (`--datapack cloud:team-notes`; the same for `delete_datapack` and the
-prompt's `use`). `export` works only on this Meko's. `--json` prints the raw reply: `mekosh`'s commands other than
+prompt's `use`). `export` works only on this Meko's. `--json` prints the raw reply: `meko-cli`'s commands other than
 `export`, and `meko status`, `token`, `logs`, `version` and `memory-extractor`.

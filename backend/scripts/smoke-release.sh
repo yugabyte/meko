@@ -44,11 +44,11 @@ until "$meko" status --data-dir "$data" --verbose | grep -q 'Memory engine: read
   sleep 1
 done
 "$meko" status --data-dir "$data"
-# mekosh is the same binary run by that name, as meko install links it in ~/.local/bin.
-mekosh="$tmp/mekosh"
-ln -s "$meko" "$mekosh"
-"$mekosh" add_memory "The release smoke test saves a fact about blue herons nesting in March." --data-dir "$data"
-out=$("$mekosh" search "When do herons nest?" --data-dir "$data")
+# meko-cli is the same binary run by that name, as meko install links it in ~/.local/bin.
+meko_cli="$tmp/meko-cli"
+ln -s "$meko" "$meko_cli"
+"$meko_cli" add_memory "The release smoke test saves a fact about blue herons nesting in March." --data-dir "$data"
+out=$("$meko_cli" search "When do herons nest?" --data-dir "$data")
 printf '%s\n' "$out"
 printf '%s\n' "$out" | grep -q 'blue herons' || { echo "search didn't find the memory" >&2; exit 1; }
 # The model came from the tarball: nothing was downloaded into the data folder.

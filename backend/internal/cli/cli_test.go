@@ -152,10 +152,10 @@ func run(args ...string) (int, string, string) {
 	return code, out.String(), errb.String()
 }
 
-// runSh runs mekosh's command in args.
+// runSh runs meko-cli's command in args.
 func runSh(args ...string) (int, string, string) {
 	var out, errb bytes.Buffer
-	code := RunMekosh(args, &out, &errb)
+	code := RunMekoCLI(args, &out, &errb)
 	return code, out.String(), errb.String()
 }
 
@@ -714,7 +714,7 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 		t.Errorf("the deleted datapack is still listed:\n%s", out)
 	}
 
-	// mekosh's prompt, run as a script: use fills in --datapack, delete_datapack's question takes the
+	// meko-cli's prompt, run as a script: use fills in --datapack, delete_datapack's question takes the
 	// next line, a failing line doesn't stop it but sets the exit code, and exit ends it.
 	withStdin(t, "create_datapack prompt-notes\nuse prompt-notes\nadd_memory \"kept by the prompt\"\n"+
 		"search \"kept by the prompt\" --source memory --json\nadd_memory\nsearch \"unclosed\nuse nosuch\nuse\n"+
@@ -724,12 +724,12 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 	want(t, "the prompt's use", code, exitError, out, "Using datapack prompt-notes\nAdded memory ")
 	want(t, "the prompt's search in the datapack it uses", code, exitError, out, "kept by the prompt")
 	want(t, "the prompt's use, alone", code, exitError, out, "\nUsing datapack prompt-notes\n")
-	want(t, "the prompt's help, with --data-dir", code, exitError, out, "Usage: mekosh [<command> [flags]]")
+	want(t, "the prompt's help, with --data-dir", code, exitError, out, "Usage: meko-cli [<command> [flags]]")
 	want(t, "the prompt's delete_datapack of the datapack in use", code, exitError, out,
 		"Delete it? [y/N] \nDeleted datapack prompt-notes\nUsing the default datapack\n")
-	want(t, "add_memory at the prompt", code, exitError, errs, "mekosh: give the memory's text: add_memory \"<text>\"\n")
-	want(t, "an unclosed quote", code, exitError, errs, "mekosh: the line has an unclosed \" quote\n")
-	want(t, "use of a missing datapack", code, exitError, errs, `mekosh: no datapack is named "nosuch"`)
+	want(t, "add_memory at the prompt", code, exitError, errs, "meko-cli: give the memory's text: add_memory \"<text>\"\n")
+	want(t, "an unclosed quote", code, exitError, errs, "meko-cli: the line has an unclosed \" quote\n")
+	want(t, "use of a missing datapack", code, exitError, errs, `meko-cli: no datapack is named "nosuch"`)
 	if strings.Contains(errs, `"prompt-notes"`) || strings.Contains(errs, "unknown command") {
 		t.Errorf("a line after the datapack in use was deleted, or help, failed:\n%s", errs)
 	}

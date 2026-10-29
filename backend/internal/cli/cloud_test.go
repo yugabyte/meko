@@ -125,7 +125,7 @@ func TestCloudLink(t *testing.T) {
 	}
 }
 
-// mekosh datapacks lists this Meko's datapacks and, while Meko Cloud is linked, its datapacks,
+// meko-cli datapacks lists this Meko's datapacks and, while Meko Cloud is linked, its datapacks,
 // through the running server, as one list of names and descriptions by name (where each lives, and
 // its id, are --json's); --local leaves Meko Cloud out, and a Cloud that fails leaves a warning after
 // the local rows.
@@ -181,8 +181,8 @@ func TestDatapacksCloud(t *testing.T) {
 	t.Cleanup(func() { fakeCloudDown.Store(false) })
 	code, out, errs = runSh("datapacks", "--data-dir", dir)
 	want(t, "Cloud down", code, 0, errs,
-		"mekosh: couldn't list Meko Cloud's datapacks: Meko Cloud couldn't list datapacks: Cloud is down "+
-			"(mekosh datapacks --local skips Meko Cloud)")
+		"meko-cli: couldn't list Meko Cloud's datapacks: Meko Cloud couldn't list datapacks: Cloud is down "+
+			"(meko-cli datapacks --local skips Meko Cloud)")
 	want(t, "Cloud down", code, 0, out, "default   Created by Meko on first start.\n")
 	fakeCloudDown.Store(false)
 
@@ -199,8 +199,8 @@ func TestDatapacksCloud(t *testing.T) {
 	}
 }
 
-// mekosh works on the linked Meko Cloud's datapacks. The "Meko Cloud" here is a second Meko server,
-// which serves the REST routes and MCP tools mekosh calls with Cloud's shapes: a name only it has
+// meko-cli works on the linked Meko Cloud's datapacks. The "Meko Cloud" here is a second Meko server,
+// which serves the REST routes and MCP tools meko-cli calls with Cloud's shapes: a name only it has
 // goes there, cloud: picks it when both have one, and every message about its datapacks says so.
 func TestCloudDatapacks(t *testing.T) {
 	withMemoryEngine(t)
@@ -214,9 +214,9 @@ func TestCloudDatapacks(t *testing.T) {
 
 	// Unlinked: cloud: says so, and a missing name is only missing here.
 	code, _, errs := runSh("add_memory", "--data-dir", dir, "x", "--datapack", "cloud:team-notes")
-	want(t, "cloud: unlinked", code, 1, errs, "mekosh: this Meko isn't linked to Meko Cloud: meko cloud_link links it\n")
+	want(t, "cloud: unlinked", code, 1, errs, "meko-cli: this Meko isn't linked to Meko Cloud: meko cloud_link links it\n")
 	code, _, errs = runSh("search", "--data-dir", dir, "x", "--datapack", "nope")
-	want(t, "a missing name unlinked", code, 1, errs, `no datapack is named "nope" (mekosh datapacks lists them)`)
+	want(t, "a missing name unlinked", code, 1, errs, `no datapack is named "nope" (meko-cli datapacks lists them)`)
 
 	_, key, _ := run("token", "--data-dir", cloudDir)
 	withStdin(t, key)
@@ -330,7 +330,7 @@ func TestCloudDatapacks(t *testing.T) {
 	want(t, "a missing Cloud name", code, 1, errs, `no Meko Cloud datapack is named "nosuch"`)
 	code, _, errs = runSh("search", "--data-dir", dir, "x", "--datapack", "nosuch")
 	want(t, "a name missing on both sides", code, 1, errs,
-		`no datapack is named "nosuch" here or in Meko Cloud (mekosh datapacks lists them)`)
+		`no datapack is named "nosuch" here or in Meko Cloud (meko-cli datapacks lists them)`)
 }
 
 // A key Meko Cloud refuses says so, without the key.
@@ -351,7 +351,7 @@ func TestCloudDatapacksKeyRefused(t *testing.T) {
 		{"create_datapack", "x", "--cloud"}} {
 		code, out, errs = runSh(append(args, "--data-dir", dir)...)
 		want(t, args[0]+" with a refused key", code, 1, errs,
-			"mekosh: Meko Cloud refused the key. Link it again in Settings › Meko Cloud, or with meko cloud_link\n")
+			"meko-cli: Meko Cloud refused the key. Link it again in Settings › Meko Cloud, or with meko cloud_link\n")
 		if strings.Contains(out+errs, stale) {
 			t.Fatalf("the key is in the output:\n%s%s", out, errs)
 		}
@@ -374,10 +374,10 @@ func TestSplitSide(t *testing.T) {
 	if d.spec() != "cloud:"+d.id || d.noun() != "Meko Cloud datapack team-notes" {
 		t.Errorf("a Cloud target: %q, %q", d.spec(), d.noun())
 	}
-	if got := statusHint(d, "k"); got != "mekosh upload_status k --datapack cloud:"+d.id {
+	if got := statusHint(d, "k"); got != "meko-cli upload_status k --datapack cloud:"+d.id {
 		t.Errorf("statusHint = %q", got)
 	}
-	if got := statusHint(target{}, "k"); got != "mekosh upload_status k" {
+	if got := statusHint(target{}, "k"); got != "meko-cli upload_status k" {
 		t.Errorf("statusHint of the default = %q", got)
 	}
 }
