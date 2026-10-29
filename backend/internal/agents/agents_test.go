@@ -6,18 +6,21 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/BurntSushi/toml"
 )
 
-// The tests never read or change this computer's own agents: no system folders, and every config
-// folder an environment variable could point at is the test's.
+// The tests never read or change this computer's own agents: no system folders, no login shell, and
+// every config folder an environment variable could point at is the test's.
 func TestMain(m *testing.M) {
 	SystemFolders = nil
+	LoginShell = ""
 	for _, k := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "KIRO_HOME", "XDG_CONFIG_HOME"} {
 		_ = os.Unsetenv(k)
 	}
@@ -233,6 +236,151 @@ func TestListStates(t *testing.T) {
 	t.Setenv("PATH", "/usr/bin:/bin")
 	if l, _ := manager(local).List(); len(l.Agents) != 0 || l.Agents == nil {
 		t.Errorf("none installed: %+v", l)
+	}
+}
+
+// loginShell makes the test's login shell a fake called name, which counts its runs in the returned
+// file and runs its -c script (the last argument) with PATH set to path, after a profile's chatter.
+func loginShell(t *testing.T, name, path string) (runs string) {
+	t.Helper()
+	dir := t.TempDir()
+	runs = filepath.Join(dir, "runs")
+	write(t, filepath.Join(dir, name), "#!/bin/sh\necho run >> "+runs+"\necho 'Welcome back'\n"+
+		"for a; do script=$a; done\nPATH="+path+"; export PATH\neval \"$script\"\necho bye\n")
+	//nolint:gosec // G302: a test script
+	if err := os.Chmod(filepath.Join(dir, name), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old, oldTTL := LoginShell, LoginPathTTL
+	LoginShell = filepath.Join(dir, name)
+	t.Cleanup(func() { LoginShell, LoginPathTTL = old, oldTTL })
+	return runs
+}
+
+// refreshed waits for the login shell's PATH being read in the background.
+func refreshed(t *testing.T) {
+	t.Helper()
+	for end := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		loginPathCache.Lock()
+		busy := loginPathCache.refreshing
+		loginPathCache.Unlock()
+		if !busy {
+			return
+		}
+		if time.Now().After(end) {
+			t.Fatal("the login shell's PATH is still being read")
+		}
+	}
+}
+
+// An agent the server's PATH and the usual folders lack, such as Claude Code installed with npm under
+// nvm, is found on the user's login shell's PATH, and its CLI runs with that PATH: its node is in
+// another of its folders. The shell runs only when an agent isn't found otherwise, and once a
+// LoginPathTTL, in the background, the list going on with the PATH it had.
+func TestFindOnTheLoginShellsPath(t *testing.T) {
+	_, log := fakeAgents(t, false, "codex")
+	nvm := filepath.Join(t.TempDir(), "nvm", "versions", "node", "v22", "bin")
+	tools := filepath.Join(t.TempDir(), "homebrew", "bin")
+	write(t, filepath.Join(nvm, "claude"), "#!/bin/sh\ncommand -v node >/dev/null || "+
+		"{ echo 'env: node: No such file or directory' >&2; exit 127; }\necho \"claude $*\" >> "+log+"\n")
+	write(t, filepath.Join(tools, "node"), "#!/bin/sh\n")
+	for _, p := range []string{filepath.Join(nvm, "claude"), filepath.Join(tools, "node")} {
+		//nolint:gosec // G302: a test script
+		if err := os.Chmod(p, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runs := loginShell(t, "zsh", "relative/bin:"+nvm+":"+tools+":/usr/bin:/bin")
+	LoginPathTTL = time.Hour
+	l, _ := manager(local).List()
+	if len(l.Agents) != 2 || l.Agents[0].Name != "claude" || l.Agents[0].Command != filepath.Join(nvm, "claude") ||
+		l.Agents[1].Name != "codex" {
+		t.Fatalf("installed: %+v", l.Agents)
+	}
+	if _, err := manager(local).Connect(context.Background(), "claude"); err != nil ||
+		!strings.Contains(readLog(t, log), "claude mcp add") {
+		t.Errorf("connect claude: %v", err)
+	}
+	if n := strings.Count(readLog(t, runs), "run"); n != 1 {
+		t.Errorf("the login shell ran %d times, want once", n)
+	}
+	LoginPathTTL = 0
+	if p, ok := Catalog[0].Find(); !ok || p != filepath.Join(nvm, "claude") {
+		t.Errorf("after the TTL: %q, %v", p, ok)
+	}
+	refreshed(t)
+	if n := strings.Count(readLog(t, runs), "run"); n != 1 {
+		t.Errorf("after the TTL, the login shell ran %d times, want once", n)
+	}
+
+	// An agent on PATH never runs the shell, nor gets its PATH.
+	LoginPathTTL = time.Hour
+	if _, ok := Catalog[1].Find(); !ok || readLog(t, runs) != "" {
+		t.Errorf("codex on PATH ran the login shell")
+	}
+	if p := loginPathOf(filepath.Join(filepath.Dir(log), "codex")); p != nil {
+		t.Errorf("codex's PATH: %v", p)
+	}
+
+	// Other shells give way to sh's login profile.
+	_ = loginShell(t, "tcsh", "/nowhere")
+	h, _ := os.UserHomeDir()
+	write(t, filepath.Join(h, ".profile"), "PATH="+nvm+":$PATH\n")
+	if p, ok := Catalog[0].Find(); !ok || p != filepath.Join(nvm, "claude") {
+		t.Errorf("through sh's profile: %q, %v", p, ok)
+	}
+}
+
+// Only a service looks on the login shell's PATH: Meko started from the user's shell has it already.
+func TestLoginShellOnlyForAService(t *testing.T) {
+	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("MEKO_SERVICE", "")
+	if s := defaultShell(); s != "" {
+		t.Errorf("outside a service: %q", s)
+	}
+	t.Setenv("MEKO_SERVICE", "launchd")
+	if s := defaultShell(); s != "/bin/zsh" {
+		t.Errorf("under launchd: %q", s)
+	}
+	t.Setenv("SHELL", "")
+	if s := defaultShell(); s != "/bin/sh" {
+		t.Errorf("with no SHELL: %q", s)
+	}
+}
+
+// A login shell that fails, prints no PATH or hangs finds nothing, and one that hangs is killed, its
+// children too, at LoginPathTimeout.
+func TestLoginShellThatFails(t *testing.T) {
+	_, _ = fakeAgents(t, false, "codex")
+	old := LoginPathTimeout
+	LoginPathTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { LoginPathTimeout = old })
+	pids := filepath.Join(t.TempDir(), "pids")
+	for _, script := range []string{"exit 1", "echo /usr/bin", "sleep 30 & echo $! > " + pids + "; exec sleep 30"} {
+		dir := t.TempDir()
+		write(t, filepath.Join(dir, "bash"), "#!/bin/sh\n"+script+"\n")
+		//nolint:gosec // G302: a test script
+		if err := os.Chmod(filepath.Join(dir, "bash"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		oldShell := LoginShell
+		LoginShell = filepath.Join(dir, "bash")
+		start := time.Now()
+		p, ok := Catalog[0].Find()
+		LoginShell = oldShell
+		if ok || time.Since(start) > 5*time.Second {
+			t.Errorf("%q: found %q in %s", script, p, time.Since(start))
+		}
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(read(t, pids)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for end := time.Now().Add(5 * time.Second); syscall.Kill(pid, 0) == nil; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(end) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			t.Fatal("the hanging shell's child is still running")
+		}
 	}
 }
 

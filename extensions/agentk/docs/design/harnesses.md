@@ -76,10 +76,10 @@ that's `none`, `stale` or `elsewhere` isn't available (`mekoGates`), so everythi
 running or resumed session keeps the agent it started on. NO_AGENT's 409, the no-agent banner and the
 New session dialog name the fix for each agent only Meko keeps off (`notConnectedText`), the dialog
 at its top when that's the default agent, else under **Agent** in **Advanced**. One that's `missing`
-stays available: Meko looks for agents only on its own PATH and in a few folders, never at AgentK's
-`[<id>] command`, so an agent AgentK runs (npm under nvm, a command of its own) can be missing from
-Meko's list with nothing the user could fix. Its Meko row and its Meko gaps say "Meko didn't find
-<Label> on this computer.", with no Connect.
+stays available: Meko looks for agents only on its own PATH, in a few folders and on the user's login
+shell's PATH, never at AgentK's `[<id>] command`, so an agent AgentK runs (a command of its own) can
+be missing from Meko's list with nothing the user could fix. Its Meko row and its Meko gaps say
+"Meko didn't find <Label> on this computer.", with no Connect.
 
 The last list read is kept in `state.db`'s kv (`meko-agents`) and used while Meko doesn't answer
 (stopped, slow, or down), so a restart then still gates on it. With no list ever read, or a Meko

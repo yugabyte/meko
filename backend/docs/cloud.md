@@ -74,8 +74,8 @@ cloud_link` waits out, with the checks and a minute to spare.
   Meko's own: that's what following the link means. Running sessions keep the old server until
   they restart.
 - **`serve` may not see what the user's shell sees** (a service's thin PATH, or no
-  `CLAUDE_CONFIG_DIR`): Meko also looks in each agent's usual folders, and a move it can't make is
-  reported, never a reason to refuse the link.
+  `CLAUDE_CONFIG_DIR`): Meko also looks in each agent's usual folders and on the user's login
+  shell's PATH, and a move it can't make is reported, never a reason to refuse the link.
 
 ## Meko Cloud's datapacks on this Meko's routes
 

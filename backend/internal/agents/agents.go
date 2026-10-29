@@ -1,9 +1,9 @@
 // Package agents connects the agents on this computer (Claude Code, Codex, Kiro CLI and OpenCode) to
-// Meko. It finds each one (its command on PATH or in its usual folders), reads from the agent's own
-// config whether its meko MCP server reaches Meko's target, and adds or removes that server each
-// agent's own way. Meko keeps no record of its own: the configs are read every time, since the user
-// and the agents edit them too. The CLI (meko agent), the server's /api/v1/agents routes and the
-// Meko Cloud link's changes (Move) share it (docs/api.md#agents).
+// Meko. It finds each one (its command on PATH, in its usual folders or on the user's login shell's
+// PATH), reads from the agent's own config whether its meko MCP server reaches Meko's target, and
+// adds or removes that server each agent's own way. Meko keeps no record of its own: the configs are
+// read every time, since the user and the agents edit them too. The CLI (meko agent), the server's
+// /api/v1/agents routes and the Meko Cloud link's changes (Move) share it (docs/api.md#agents).
 package agents
 
 import (
@@ -168,7 +168,8 @@ func Lookup(name string) (Agent, bool) {
 // folder's ~/.local/bin: a service runs with a thin PATH. Tests empty it.
 var SystemFolders = []string{"/usr/local/bin", "/opt/homebrew/bin"}
 
-// Find is the agent's command: on PATH, else in its usual folders, as an absolute path.
+// Find is the agent's command: on PATH, else in its usual folders, else on the user's login shell's
+// PATH (LoginShell), as an absolute path.
 func (a Agent) Find() (string, bool) {
 	if p, err := lookPath(a.Command); err == nil {
 		return p, true
@@ -180,8 +181,16 @@ func (a Agent) Find() (string, bool) {
 			dirs = append(dirs, filepath.Join(home, f))
 		}
 	}
-	for _, d := range append(dirs, SystemFolders...) {
-		p := filepath.Join(d, a.Command)
+	if p, ok := findIn(append(dirs, SystemFolders...), a.Command); ok {
+		return p, true
+	}
+	return findIn(loginPath(), a.Command)
+}
+
+// findIn is the first executable file called name in the folders.
+func findIn(dirs []string, name string) (string, bool) {
+	for _, d := range dirs {
+		p := filepath.Join(d, name)
 		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0 {
 			return p, true
 		}
