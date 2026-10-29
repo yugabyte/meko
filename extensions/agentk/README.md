@@ -47,13 +47,15 @@ You also need [Meko](https://mekodata.ai) on this computer: it serves AgentK to 
 `/ext/agentk/` on its own port (7777), and signs you in. Meko also gives projects datapacks (shared
 memory) and lets you share projects. For datapacks, AgentK uses Meko Cloud once you link it in Meko's
 web UI (Settings › Meko Cloud, which links to Meko Cloud's sign-up and login pages to make a key; or
-`meko cloud_link` on a computer without a browser), and otherwise the Meko on this computer. Install Meko (the repo's
-latest release), and then Meko installs AgentK:
+`meko cloud_link` on a computer without a browser), and otherwise the Meko on this computer. Install Meko, and then Meko installs AgentK:
 
 ```sh
-gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
+curl -fsSL https://mekodata.ai/install.sh | sh
 meko extension install agentk
 ```
+
+While the repo is internal, fetch Meko's installer with a signed-in `gh` instead:
+`gh release download --repo yugabyte/meko --pattern install.sh --output - | sh`.
 
 (or **Install** on Meko's Extensions page). Meko downloads AgentK's newest release, checks it and
 unpacks it into its data folder, then runs AgentK's setup, which offers to install anything that's

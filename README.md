@@ -36,8 +36,12 @@ a single binary that has the command line, the server, the MCP tools and the RES
 On Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon:
 
 ```sh
-gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
+curl -fsSL https://mekodata.ai/install.sh | sh
 ```
+
+While the repo is internal, that link answers 404 to anyone not signed in to GitHub: fetch the
+installer with a signed-in `gh` instead,
+`gh release download --repo yugabyte/meko --pattern install.sh --output - | sh`.
 
 Add a memory and search:
 ```sh
