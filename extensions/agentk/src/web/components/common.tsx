@@ -567,7 +567,7 @@ export function ReviewGlass({ review }: { review: CodeReviewSummary }) {
   const running = reviewRunning(review);
   const held = reviewHolds(review);
   return (
-    <span className={cx('review-glass', running && 'running', held && 'held', running && review.mekoCall && 'meko')} aria-hidden="true">
+    <span className={cx('review-glass', running && 'running', held && 'stopped', running && review.mekoCall && 'meko')} aria-hidden="true">
       <svg width="16" height="16" viewBox="0 0 18 18">
         <circle className="lens" cx="7.5" cy="7.5" r="4.2" />
         <circle className="rim" cx="7.5" cy="7.5" r="5.5" />
@@ -597,7 +597,7 @@ export function ReviewSegment({ review, selected, className, tab = false, onOpen
       type="button"
       role={tab ? 'tab' : undefined}
       aria-selected={tab ? selected : undefined}
-      className={cx('review-seg', className, selected && 'sel', reviewHolds(review) && 'held')}
+      className={cx('review-seg', className, selected && 'sel', reviewHolds(review) && 'stopped')}
       title={label}
       aria-label={label}
       aria-current={!tab && selected ? 'page' : undefined}
