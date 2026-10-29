@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,19 @@ func TestUpdateInstallsMekoForTheNextStart(t *testing.T) {
 			"Installed meko "+updateNext+"; it runs at the next meko start\n")
 	if exe != app.CurrentExe() || app.Current() != updateNext {
 		t.Errorf("exe %q, current %q", exe, app.Current())
+	}
+}
+
+// meko update then has the meko it installed update the extensions, as meko extension update --all.
+func TestUpdateHasTheNewMekoUpdateTheExtensions(t *testing.T) {
+	dir, _ := setup(t)
+	releaseInstall(t, updateOld, updateNext)
+	log := filepath.Join(t.TempDir(), "args")
+	t.Setenv("FAKE_MEKO_ARGS", log)
+	_, out, errs := run("update", "--data-dir", dir)
+	want(t, "update", 0, 0, out+errs, "Installed meko "+updateNext)
+	if got := readLog(t, log); !strings.HasSuffix(got, "\nextension update --all --data-dir "+dir+"\n") {
+		t.Errorf("the new meko ran %q", got)
 	}
 }
 

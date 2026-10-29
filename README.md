@@ -105,9 +105,12 @@ merged PR, and keeps each project's designs and learnings in a Meko datapack.
 
 Install it with:
 ```sh
-meko install_extension agentk     # -- --agent claude picks its coding agent
+meko extension install agentk     # -- --agent claude picks its coding agent
 agentk ui                         # opens AgentK in your browser
 ```
+
+`meko extension list` shows each extension, installed or not, with its state and updates.
+`meko extension update` and `meko extension delete` update and remove one.
 
 ## How it works
 

@@ -31,7 +31,7 @@ var runningRelease = update.Running
 
 // runInstall sets this meko up: as a release install, app/current and the meko command point at
 // it; then the client token, the web listener's access, and the login service, which it starts. It
-// installs Meko alone: extensions are meko install_extension's.
+// installs Meko alone: extensions are meko extension install's.
 func runInstall(l paths.Layout, noService bool, access string, stdout, stderr io.Writer) int {
 	r := newReport(stdout)
 	if access != "" && access != config.AccessLocal && access != config.AccessRemote {
@@ -135,7 +135,7 @@ func runInstall(l paths.Layout, noService bool, access string, stdout, stderr io
 	r.step(stepOK, "Server", fmt.Sprintf("running at http://127.0.0.1:%d (pid %d)", st.Port, st.PID))
 	next := [][2]string{{"meko ui", "open the web UI"}, {"meko status", "check on Meko at any time"}}
 	if !agentKRegistered(l) {
-		next = append(next, [2]string{"meko install_extension agentk", "add AgentK, your coding team"})
+		next = append(next, [2]string{"meko extension install agentk", "add AgentK, your coding team"})
 	}
 	next = append(next, [2]string{"meko connect claude", "connect Claude Code to Meko (or codex, kiro, opencode)"})
 	printRunning(l, "is installed and running", next, stdout)
@@ -290,7 +290,7 @@ func runInstallExtension(l paths.Layout, name string, o extInstallOptions, stdou
 	return exitOK
 }
 
-// extInstallOptions are install_extension's: --version, a release to install (again) rather than
+// extInstallOptions are extension install's: --version, a release to install (again) rather than
 // the newest, and the arguments after --, for the extension's own install.
 type extInstallOptions struct {
 	version string
@@ -492,24 +492,4 @@ func runAttached(ctx context.Context, name string, args, env []string, stdin io.
 func interactive() bool {
 	_, err := unix.IoctlGetTermios(int(os.Stdin.Fd()), ioctlGetTermios)
 	return err == nil
-}
-
-// runUninstallExtension stops starting and stopping an extension with Meko. It stays installed.
-func runUninstallExtension(l paths.Layout, name string, stdout, stderr io.Writer) int {
-	reg, err := extensions.Load(l.Root)
-	if err != nil {
-		return fail(stderr, err)
-	}
-	e, ok := reg.Entries[name]
-	if !ok {
-		return fail(stderr, fmt.Errorf("extension %q isn't registered (registered: %s)", name,
-			strings.Join(append(reg.Names(), "none")[:max(len(reg.Names()), 1)], ", ")))
-	}
-	delete(reg.Entries, name)
-	if err := reg.Save(); err != nil {
-		return fail(stderr, err)
-	}
-	fmt.Fprintf(stdout, "meko start and stop no longer run %s. It's still installed: %s uninstall removes it\n",
-		name, e.Command)
-	return exitOK
 }

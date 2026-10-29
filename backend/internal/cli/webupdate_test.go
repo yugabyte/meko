@@ -25,9 +25,11 @@ import (
 	"github.com/yugabyte/meko/backend/internal/update"
 )
 
-// fakeReleaseBinary is a release's bin/meko that only answers version --json.
+// fakeReleaseBinary is a release's bin/meko that only answers version --json, and logs its arguments
+// to $FAKE_MEKO_ARGS when that's set.
 func fakeReleaseBinary(version string) string {
-	return fmt.Sprintf("#!/bin/sh\n[ \"$1 $2\" = 'version --json' ] && echo '{\"version\":\"%s\"}'\n", version)
+	return fmt.Sprintf("#!/bin/sh\n[ -z \"$FAKE_MEKO_ARGS\" ] || echo \"$*\" >> \"$FAKE_MEKO_ARGS\"\n"+
+		"[ \"$1 $2\" = 'version --json' ] && echo '{\"version\":\"%s\"}'\n", version)
 }
 
 // releaseInstall makes an app folder with old installed and current, has serve take it for its own,

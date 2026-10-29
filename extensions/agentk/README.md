@@ -52,13 +52,13 @@ latest release), and then Meko installs AgentK:
 
 ```sh
 gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
-meko install_extension agentk
+meko extension install agentk
 ```
 
 (or **Install** on Meko's Extensions page). Meko downloads AgentK's newest release, checks it and
 unpacks it into its data folder, then runs AgentK's setup, which offers to install anything that's
 missing (git, gh, and Claude Code, OpenCode or Kiro CLI when none is there: it asks which, or pass
-`meko install_extension agentk -- --agent opencode` or `-- --agent kiro`) and to set up Meko for
+`meko extension install agentk -- --agent opencode` or `-- --agent kiro`) and to set up Meko for
 each agent, asking first. Then it prints the address to open.
 
 Who can open it is Meko's setting (`[web] access`: chosen when Meko was installed, in its
@@ -76,7 +76,9 @@ default), or when you click **Update** (the banner in AgentK, Settings › Updat
 Extensions page) or run `meko update` (Meko, then every extension). An update restarts only
 AgentK's web server, so sessions keep running, and Meko rolls back a version that fails to start.
 To change AgentK's setup (repos folder, Meko) or set up its services again, run `agentk install`,
-or `meko install_extension agentk` again (`--version <v>` installs another release).
+or `meko extension install agentk` again (`--version <v>` installs another release).
+`meko extension delete agentk` removes AgentK (it stops, ending its sessions) and keeps its home;
+`--purge` deletes that too.
 
 Forgot your password? Run `meko setup_link` on the host and open the link it prints to choose a
 new username and password (Meko's sign-in screen says the same).

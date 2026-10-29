@@ -8,7 +8,7 @@ easiest way to change it is with one.
 The best way to contribute is with [AgentK](extensions/agentk/README.md), the agentic coder in this
 repo:
 
-1. [Install Meko](README.md#install), then AgentK: `meko install_extension agentk`.
+1. [Install Meko](README.md#install), then AgentK: `meko extension install agentk`.
 2. In AgentK, open a project on your clone of this repo.
 3. Start a session with what you want changed. AgentK takes it from design to a reviewed, merged
    PR, following the repo's [AGENTS.md](AGENTS.md), and keeps what each session learns in the

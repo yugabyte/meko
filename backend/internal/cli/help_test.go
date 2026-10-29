@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,7 +15,7 @@ import (
 )
 
 // Every command has a group (one its program lists), a summary, a usage line and an example, and
-// each --help exits 0 with them.
+// each --help exits 0 with them. A two-word command (extension list) runs as its two words.
 func TestEveryCommandHasHelp(t *testing.T) {
 	for _, prog := range []string{progMeko, progMekoCLI} {
 		groups := mekoGroups
@@ -27,18 +28,19 @@ func TestEveryCommandHasHelp(t *testing.T) {
 			if c.summary == "" || c.usage == "" || len(c.examples) == 0 {
 				t.Errorf("%s %s: summary %q, usage %q, %d examples", prog, c.name, c.summary, c.usage, len(c.examples))
 			}
-			if !c.hidden && !slices.Contains(groups, c.group) {
+			if !c.hidden && !c.subcommands && !slices.Contains(groups, c.group) {
 				t.Errorf("%s %s: group %q isn't one %s --help lists", prog, c.name, c.group, prog)
 			}
-			listed := strings.Contains(usage.String(), "\n  "+c.name+" ")
-			if listed == c.hidden {
+			// A command with subcommands is listed by them.
+			listed := strings.Contains(usage.String(), "\n  "+fmt.Sprintf("%-22s", c.name))
+			if listed == (c.hidden || c.subcommands) {
 				t.Errorf("%s %s: listed in --help %v, hidden %v", prog, c.name, listed, c.hidden)
 			}
 			if c.promptOnly {
 				continue
 			}
 			var out, errb bytes.Buffer
-			code := runProg(prog, []string{c.name, "--help"}, &out, &errb)
+			code := runProg(prog, append(strings.Fields(c.name), "--help"), &out, &errb)
 			if code != exitOK || !strings.Contains(out.String(), "Usage: "+c.usage) ||
 				!strings.Contains(out.String(), c.examples[0].cmd) || errb.Len() != 0 {
 				t.Errorf("%s %s --help: exit %d, output %q, errors %q", prog, c.name, code, out.String(), errb.String())
@@ -104,6 +106,50 @@ func TestMekoNamesTheMekoCLICommand(t *testing.T) {
 			t.Errorf("meko %s: exit %d, output %q, errors %q", name, code, out, errs)
 		}
 	}
+}
+
+// meko extension groups the extension commands: alone it lists them (exit 2), help names each, and
+// the snake_case commands it replaced are gone, with no pointer to it. The plural is a typo of it.
+func TestExtensionCommands(t *testing.T) {
+	code, out, _ := run("extension")
+	want(t, "extension alone", code, exitUsage, out, "Usage: meko extension list|install|update|delete")
+	for _, sub := range []string{"list", "install", "update", "delete"} {
+		want(t, "extension alone", code, exitUsage, out, "\n  "+sub+" ")
+	}
+	code, help, _ := run("help", "extension")
+	if code != exitOK || help != out {
+		t.Errorf("meko help extension: exit %d, %q", code, help)
+	}
+	code, out, _ = run("extension", "delete", "-h")
+	want(t, "extension delete -h", code, 0, out, "Usage: meko extension delete agentk|presenter [flags]")
+	want(t, "extension delete -h", code, 0, out, "--purge")
+	want(t, "extension delete -h", code, 0, out, "More: "+docsURL+"#extension-delete")
+	_, help, _ = run("help", "extension", "delete")
+	if help != out {
+		t.Errorf("meko help extension delete %q != meko extension delete -h %q", help, out)
+	}
+	_, usage, _ := run()
+	want(t, "meko --help", 0, 0, usage, "\nExtensions\n  extension list ")
+	for _, old := range []string{"install_extension", "update_extension", "uninstall_extension"} {
+		if strings.Contains(usage, old) {
+			t.Errorf("meko --help lists %s", old)
+		}
+		oldCode, _, oldErrs := run(old, "agentk")
+		want(t, old, oldCode, exitUsage, oldErrs, `meko: unknown command "`+old+`"`)
+		if strings.Contains(oldErrs, "Did you mean") {
+			t.Errorf("%s points somewhere: %q", old, oldErrs)
+		}
+	}
+	code, _, errs := run("extensions", "list")
+	want(t, "extensions list", code, exitUsage, errs, "Did you mean meko extension list?")
+	code, _, errs = run("extension", "frob")
+	want(t, "extension frob", code, exitUsage, errs, `meko extension: unknown command "frob"`)
+	code, _, errs = run("extension list")
+	want(t, "one word with a space", code, exitUsage, errs, `unknown command "extension list"`)
+	code, _, errs = run("extension", "delete", "--data-dir", t.TempDir())
+	want(t, "extension delete with no name", code, exitUsage, errs, "name the extension (agentk, presenter)")
+	code, _, errs = run("extension", "delete", "frob", "--data-dir", t.TempDir())
+	want(t, "extension delete frob", code, exitUsage, errs, `no extension called "frob"`)
 }
 
 func TestMainPicksTheProgramByName(t *testing.T) {

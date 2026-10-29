@@ -52,11 +52,11 @@ func Update(ctx context.Context, o UpdateOptions, name string) (bool, error) {
 	}
 	e, ok := reg.Entries[name]
 	if !ok {
-		return false, fmt.Errorf("%s isn't installed: meko install_extension %s installs it", cat.Title, name)
+		return false, fmt.Errorf("%s isn't installed: meko extension install %s installs it", cat.Title, name)
 	}
 	if _, serr := os.Stat(e.Command); errors.Is(serr, os.ErrNotExist) {
 		if reg.FindAgain(name, o.Home, o.Root) == "" {
-			return false, fmt.Errorf("%s is gone (%s); meko uninstall_extension %s forgets it", name, e.Command, name)
+			return false, fmt.Errorf("%s %s", cat.Title, Damaged(name, e.Command))
 		}
 		e = reg.Entries[name]
 	}
@@ -88,7 +88,7 @@ func Update(ctx context.Context, o UpdateOptions, name string) (bool, error) {
 		return false, nil
 	}
 	if o.Check {
-		fmt.Fprintf(out, "%s %s is available (this is %s): meko update_extension %s installs it\n", cat.Title, next,
+		fmt.Fprintf(out, "%s %s is available (this is %s): meko extension update %s installs it\n", cat.Title, next,
 			cur, name)
 		return false, nil
 	}
@@ -184,7 +184,7 @@ func (c Catalog) WhyNotUpdatable(root, home, name, command string) string {
 			"(%s), which it does by itself at its next start", c.Title, h, Dir(root, name))
 	}
 	return fmt.Sprintf("%s here (%s) isn't a release Meko installed, so Meko can't update it: update the build "+
-		"yourself, or remove it from PATH and run meko install_extension %s", c.Title, command, name)
+		"yourself, or remove it from PATH and run meko extension install %s", c.Title, command, name)
 }
 
 // oldHomeOf is the old home (OldHomes, under home) command runs a release from, or "".

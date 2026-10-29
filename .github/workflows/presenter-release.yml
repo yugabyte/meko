@@ -6,7 +6,7 @@ name: Presenter release
 # presenter, alone or in a list such as presenter,meko) since the last Presenter tag and the tests
 # pass. The release scripts are the repo root's scripts/release/*.sh --product presenter.
 # A release carries presenter-<version>-<os>-<arch>.tar.gz and SHA256SUMS, no installer: Meko
-# installs and updates them itself (meko install_extension presenter, meko update_extension
+# installs and updates them itself (meko extension install presenter, meko extension update
 # presenter). Run the workflow by hand to force a release, or to rebuild the assets of an existing
 # presenter-v tag.
 #

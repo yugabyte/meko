@@ -11,7 +11,7 @@ import (
 
 // Lock serializes the updates of one data folder, Meko's own and its extensions': an in-process
 // mutex for serve's scheduled checks and the web UI's installs, and a flock on run/update.lock that
-// meko update and meko update_extension, in processes of their own, take too. A check or an install
+// meko update and meko extension update, in processes of their own, take too. A check or an install
 // holds it from the release list to the switch, and a switch to a new Meko keeps it until serve
 // restarts.
 type Lock struct {
@@ -69,4 +69,4 @@ func (l *Lock) lockFile() error {
 
 // ErrLocked is what an update refuses with while another holds the lock.
 var ErrLocked = errors.New("another update is running (the server's own, or another meko update or " +
-	"update_extension): try again when it's done")
+	"meko extension update): try again when it's done")

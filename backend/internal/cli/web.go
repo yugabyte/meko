@@ -86,7 +86,7 @@ func newWebListener(l paths.Layout, st *store.Store, lg *login.Service, log *slo
 }
 
 // socket is where an extension listens. An extension registered since the server started (meko
-// install_extension) is asked on the first request that needs it, and again at most every 10 s.
+// extension install) is asked on the first request that needs it, and again at most every 10 s.
 func (w *webListener) socket(name string) func() string {
 	return func() string {
 		w.mu.Lock()

@@ -44,7 +44,7 @@ Part of the [AgentK design](../design.md).
   since macOS support always include the macOS build: publishing waits for it. A hand-run rebuild
   takes only tags from after the move to `extensions/agentk`. Each release also includes
   `SHA256SUMS`, a build provenance attestation and `install.sh`, which only says that Meko installs
-  AgentK (`meko install_extension agentk`): the Mekos from before Meko installed AgentK ran the
+  AgentK (`meko extension install agentk`): the Mekos from before Meko installed AgentK ran the
   newest release's `install.sh`, and an older AgentK's own instructions still name it. Release tarballs carry the usage stats collector's URL (`CALL_HOME_URL`, from the repo variable of that name) when it's set ([Usage stats](usage-stats.md)). Afterwards, AgentK's releases beyond the newest 5 in each lane (`stable`, or the
   prerelease identifier such as `beta`, per tag prefix) are deleted, except the newest `v…` one;
   their tags stay, and Meko's are left alone.
@@ -83,10 +83,10 @@ agentk-<version>/
 ```sh
 # The repo's one-line install (gh release download --pattern install.sh, from its latest release,
 # which is Meko's) installs Meko. Then:
-meko install_extension agentk                      # or Install on Meko's Extensions page
-meko install_extension agentk -- --agent kiro      # options after -- go to `agentk install`
+meko extension install agentk                      # or Install on Meko's Extensions page
+meko extension install agentk -- --agent kiro      # options after -- go to `agentk install`
 
-# what it does (Meko's install_extension, backend/docs/install.md)
+# what it does (Meko's extension install, backend/docs/install.md)
 #  0. downloads the newest agentk-<version>-<platform>-<arch>.tar.gz and SHA256SUMS (with gh's
 #     token or GITHUB_TOKEN), checks it, unpacks it owner-only into
 #     <Meko's data folder>/extensions/agentk/app/<version>, checks that it runs (`agentk version

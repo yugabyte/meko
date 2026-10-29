@@ -35,7 +35,7 @@ build decks; playing and editing them work without Claude. Meko installs it, fro
 newest release (or Install on the web UI's Extensions page):
 
 ```sh
-meko install_extension presenter        # installs the newest release, pointed at this Meko
+meko extension install presenter        # installs the newest release, pointed at this Meko
 meko start                              # starts Meko and its extensions
 meko ui /ext/presenter/                 # opens Presenter
 ```
@@ -45,7 +45,7 @@ to it. Decks are saved where Meko says: in Meko Cloud when Meko links it (Settin
 `meko cloud_link`), else in the Meko on this computer. Presenter follows a change of the link at
 once; a draft made under the other Meko stays listed, and opens again once Meko links it again. Presenter's command is `meko_presenter`: `meko_presenter status` says whether it runs. Meko
 updates it on its own when a new release comes out (unless its **Update automatically** switch on
-the Extensions page is off), waiting while a talk is live; `meko update_extension presenter` (or
+the Extensions page is off), waiting while a talk is live; `meko extension update presenter` (or
 Update on the Extensions page) updates it now. A release that fails to start three times is rolled
 back to the one before, and never offered again.
 
@@ -55,7 +55,7 @@ and never updates it.
 ```sh
 cd extensions/presenter
 npm ci && npm run build && npm link     # puts `meko_presenter` on PATH
-meko install_extension presenter        # registers it with this Meko (it asks Meko for its key)
+meko extension install presenter        # registers it with this Meko (it asks Meko for its key)
 ```
 
 ## Datapacks

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Install or update Meko for the current user; no root needed. It installs Meko alone: add AgentK
-# afterwards with `meko install_extension agentk`.
+# afterwards with `meko extension install agentk`.
 #
 # Internal repo (needs a signed-in `gh`, or GITHUB_TOKEN):
 #   gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
@@ -35,7 +35,7 @@ say() { printf '%s\n' "$*" >&2; }
 ok() { printf '  %s✓%s %-11s %s%s%s\n' "$g" "$n" "$1" "$d" "${2:-}" "$n" >&2; }
 die() { printf '\n  %s✗%s %s\n' "$r" "$n" "$*" >&2; exit 1; }
 
-agentk_hint="To add AgentK, install Meko and then run: meko install_extension agentk (pass its options after --, such as -- --agent kiro)"
+agentk_hint="To add AgentK, install Meko and then run: meko extension install agentk (pass its options after --, such as -- --agent kiro)"
 
 while [ $# -gt 0 ]; do
   case $1 in

@@ -19,12 +19,10 @@ import (
 )
 
 // ExtensionUpdates is what the Extensions page (and AgentK's page) shows about an installed
-// extension's updates: the release Meko installed, the newest the last check found, the update on
-// probation, the versions rolled back, Update automatically, and why an automatic update waits.
+// extension's updates (extensionUpdates), with why an automatic update waits.
 func (w *webListener) ExtensionUpdates(name string) server.ExtensionUpdate {
 	u := server.ExtensionUpdate{RolledBack: []string{}}
-	cat, ok := extensions.Known[name]
-	if !ok {
+	if _, ok := extensions.Known[name]; !ok {
 		return u
 	}
 	reg, err := extensions.Load(w.l.Root)
@@ -35,18 +33,30 @@ func (w *webListener) ExtensionUpdates(name string) server.ExtensionUpdate {
 	if !ok {
 		return u
 	}
-	u.AutoUpdate = w.autoUpdateOf(name, e)
-	u.Version = cat.Release(w.l.Root, name, e.Command)
+	u = extensionUpdates(w.l.Root, name, e, w.autoUpdateOf(name, e))
+	w.mu.Lock()
+	u.Waiting = w.waiting[name]
+	w.mu.Unlock()
+	return u
+}
+
+// extensionUpdates is what the Extensions page and meko extension list say about an installed known
+// extension's updates (e, its registry entry): the release Meko installed, the newest the last check
+// found, the update on probation, the versions rolled back, and Update automatically (auto).
+func extensionUpdates(root, name string, e extensions.Entry, auto bool) server.ExtensionUpdate {
+	u := server.ExtensionUpdate{RolledBack: []string{}, AutoUpdate: auto}
+	cat := extensions.Known[name]
+	u.Version = cat.Release(root, name, e.Command)
 	u.Updatable = u.Version != ""
 	if !u.Updatable {
 		if home, err := os.UserHomeDir(); err == nil && cat.Managed {
-			u.NotUpdatable = cat.WhyNotUpdatable(w.l.Root, home, name, e.Command)
+			u.NotUpdatable = cat.WhyNotUpdatable(root, home, name, e.Command)
 		}
 		return u
 	}
-	app := cat.App(w.l.Root, name)
+	app := cat.App(root, name)
 	bad := app.BadVersions()
-	if st, ok := update.ReadState(w.l.Root); ok {
+	if st, ok := update.ReadState(root); ok {
 		checked := st.CheckedAt
 		u.CheckedAt, u.CheckError = &checked, st.Error
 		es := st.Extensions[name]
@@ -59,9 +69,6 @@ func (w *webListener) ExtensionUpdates(name string) server.ExtensionUpdate {
 		u.RolledBack = append(u.RolledBack, v)
 	}
 	sort.Strings(u.RolledBack)
-	w.mu.Lock()
-	u.Waiting = w.waiting[name]
-	w.mu.Unlock()
 	return u
 }
 
@@ -163,7 +170,7 @@ func (w *webListener) setWaiting(name, why string) {
 	}
 }
 
-// updateExtension updates an extension, as meko update_extension does, for a caller that holds the
+// updateExtension updates an extension, as meko extension update does, for a caller that holds the
 // update lock, and waits for one with a web UI to answer when it runs afterwards.
 func (w *webListener) updateExtension(ctx context.Context, name string, out io.Writer) error {
 	cfg, err := config.Load(w.l.Config, os.Getenv, config.Overrides{})
@@ -195,7 +202,7 @@ func (w *webListener) Installed() []string {
 }
 
 // RunExtension runs an action of the Extensions page on a known extension (server.Web.Run): install
-// it as meko install_extension does, with no terminal, update it as meko update_extension does
+// it as meko extension install does, with no terminal, update it as meko extension update does
 // (holding the update lock), or run its own start or stop. The output and the error reach a
 // browser, so the client token the installer is given is blanked in both. After an install or a
 // start of one with a web UI, or an update that left it running, it waits for the extension to
@@ -274,7 +281,7 @@ func (w *webListener) runExtension(ctx context.Context, name, action string, out
 		}
 		if _, err := os.Stat(e.Command); errors.Is(err, os.ErrNotExist) {
 			if findAgain(w.l, reg, name) == "" {
-				return fmt.Errorf("%s is gone (%s); meko uninstall_extension %s forgets it", name, e.Command, name)
+				return fmt.Errorf("%s %s", extensionTitle(name), extensions.Damaged(name, e.Command))
 			}
 			e = reg.Entries[name]
 		}

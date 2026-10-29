@@ -112,7 +112,7 @@ func destroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.W
 
 	nothing := "Nothing was removed"
 	if removeExts {
-		if err = uninstallExtensions(l, exts, stdout, stderr); err != nil {
+		if err = uninstallExtensions(l, exts, true, stdout, stderr); err != nil {
 			return fail(stderr, err), false
 		}
 		nothing = "The extensions were uninstalled and their data deleted already, but nothing of Meko's was removed"
@@ -156,7 +156,7 @@ func destroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.W
 	if keep {
 		fmt.Fprintf(stdout, "Removed Meko's data in %s, and kept the extensions' data in it\n", l.Root)
 		fmt.Fprintln(stdout, "The extensions' Meko key no longer works: after meko start, run meko "+
-			"install_extension agentk to point AgentK at the new Meko")
+			"extension install agentk to point AgentK at the new Meko")
 	} else {
 		fmt.Fprintf(stdout, "Removed %s\n", l.Root)
 	}
@@ -189,7 +189,7 @@ func destroyOnlyExtensions(l paths.Layout, exts []extensionData, o destroyOption
 		fmt.Fprintln(stderr, "Nothing was removed")
 		return exitError
 	}
-	if err := uninstallExtensions(l, exts, stdout, stderr); err != nil {
+	if err := uninstallExtensions(l, exts, true, stdout, stderr); err != nil {
 		return fail(stderr, err)
 	}
 	for _, p := range []string{l.Extensions, extensions.File(l.Root)} {
@@ -263,17 +263,22 @@ func listExtensionData(exts []extensionData, o destroyOptions, stdout io.Writer)
 	}
 }
 
-// uninstallExtensions runs each extension's own uninstall (extensions.Catalog.UninstallArgs), with
-// its output shown. The first failure stops it, before anything of Meko's is touched.
-func uninstallExtensions(l paths.Layout, exts []extensionData, stdout, stderr io.Writer) error {
+// uninstallExtensions runs each extension's own uninstall, with its output shown: with purge,
+// extensions.Catalog.UninstallArgs, which also deletes its data, else RemoveArgs, which keeps it. The
+// first failure stops it, before anything of Meko's is touched.
+func uninstallExtensions(l paths.Layout, exts []extensionData, purge bool, stdout, stderr io.Writer) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}
 	for _, e := range exts {
 		cat, ok := extensions.Known[e.name]
-		if !ok || len(cat.UninstallArgs) == 0 {
-			fmt.Fprintf(stderr, "meko: Meko doesn't know how to uninstall extension %s; only its data goes\n", e.name)
+		args := cat.RemoveArgs
+		if purge {
+			args = cat.UninstallArgs
+		}
+		if !ok || len(args) == 0 {
+			fmt.Fprintf(stderr, "meko: Meko doesn't know how to uninstall extension %s\n", e.name)
 			continue
 		}
 		cmd := e.command
@@ -281,12 +286,12 @@ func uninstallExtensions(l paths.Layout, exts []extensionData, stdout, stderr io
 			cmd = cat.Find(e.name, home, l.Root)
 		}
 		if cmd == "" {
-			fmt.Fprintf(stderr, "meko: %s's command isn't on PATH, in ~/.local/bin or in its folder, so only "+
-				"its data goes; any service it installed stays\n", cat.Title)
+			fmt.Fprintf(stderr, "meko: %s's command isn't on PATH, in ~/.local/bin or in its folder, so its own "+
+				"uninstall can't run; any service it installed stays\n", cat.Title)
 			continue
 		}
-		fmt.Fprintf(stdout, "Uninstalling %s (%s %s)\n", cat.Title, cmd, strings.Join(cat.UninstallArgs, " "))
-		if err := (extensions.Entry{Command: cmd}).Uninstall(l.Root, cat.UninstallArgs, stdout, stderr); err != nil {
+		fmt.Fprintf(stdout, "Uninstalling %s (%s %s)\n", cat.Title, cmd, strings.Join(args, " "))
+		if err := (extensions.Entry{Command: cmd}).Uninstall(l.Root, args, stdout, stderr); err != nil {
 			return fmt.Errorf("uninstalling %s failed: %w. Nothing of Meko's was removed", cat.Title, err)
 		}
 		if cat.Managed {

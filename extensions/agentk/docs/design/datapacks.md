@@ -136,7 +136,7 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > them (`Core.mekoChanged`). A spell with no Meko at all (the local Meko stopped) isn't a change of
 > account: AgentK compares with the last account it used (`mekoAccountOf`). The local token goes only to the local Meko, with its own URL; a
 > key that's a copy of it (its token, or any key for its URL's origin: Meko's setup for Claude
-> Code writes one into Claude Code's settings, older installs and `meko install_extension agentk`
+> Code writes one into Claude Code's settings, older installs and `meko extension install agentk`
 > stored one in `config.toml`) is the local Meko too, with the live URL and token, so a copy never
 > goes stale (`isLocalMeko`). A Meko Cloud key (`mko_tkn_…`; the local token is hex) is never a
 > copy, even next to the local Meko's URL: Meko's setup run against the local Meko without a key
@@ -165,7 +165,7 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   split a project's memories across two servers with different datapack ids.
 > - **At install:** the installer asks for no key. It uses Meko's link when there is one, else the
 >   Meko on this computer, and stores neither. `--meko-key` (with `--meko-url` for a server other
->   than Meko Cloud) hands a key to Meko with `meko cloud_link`; what `meko install_extension agentk`
+>   than Meko Cloud) hands a key to Meko with `meko cloud_link`; what `meko extension install agentk`
 >   passes, the local Meko's URL and token, is just the local Meko. AgentK's own key from before is
 >   handed over as the server does. A given key Meko refuses stops the install with no one to ask,
 >   and asks whether to go on without it otherwise; AgentK's own key that Meko refuses is kept, with a
