@@ -2,13 +2,55 @@
 // state, alike ones linked) or a search's nearest memories, knowledge-base chunks and conversation
 // turns (colored by source, which the legend shows or hides). The lit ones (what a search returned)
 // are bright with the rest faded. With a query, a star marks where it lands and lines run to the lit
-// ones, and a dot hovered or focused shows its score above it.
+// ones, and a dot hovered or focused shows its score above it. 3D adds the third main direction as
+// depth: drag to turn it, and it turns slowly on its own until touched.
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { SHOW_COLLECTIVE } from "../lib/features";
 import type { MapPoint, MapSource, MemoryMap, MemoryState } from "../lib/types";
+import { useSaved } from "../lib/useSavedView";
+import { Segmented } from "./Segmented";
 import { round2 } from "./Similarity";
 import { cx } from "./ui";
+
+type Depth = "2d" | "3d";
+const DEPTHS: readonly { id: Depth; label: string }[] = [
+  { id: "2d", label: "2D" },
+  { id: "3d", label: "3D" },
+];
+
+// Where a point is drawn: its place on screen, and in 3D how near it is (s, 1 at the center's depth).
+interface Spot {
+  x: number;
+  y: number;
+  s: number;
+}
+
+const FLAT = (x: number, y: number): Spot => ({ x, y, s: 1 });
+
+// turn places points seen from yaw and pitch, with perspective. Depth is stretched to the map's own
+// spread, since the third direction varies less than the first two and would draw nearly flat, then
+// the whole is shrunk so the nearest dots stay inside the map.
+function turn(m: MemoryMap, yaw: number, pitch: number): { at: Spot[]; query?: Spot } {
+  const zs = [...m.points.map((p) => p.z ?? 0), m.query_z ?? 0];
+  const zMax = Math.max(...zs.map(Math.abs)) || 1;
+  const k = 0.6;
+  const eye = 4;
+  const [cy, sy, cp, sp] = [Math.cos(yaw), Math.sin(yaw), Math.cos(pitch), Math.sin(pitch)];
+  const at = (x: number, y: number, z: number): Spot => {
+    [x, y, z] = [x * k, y * k, (z / zMax) * k];
+    const x1 = x * cy + z * sy;
+    const z1 = -x * sy + z * cy;
+    const y2 = y * cp - z1 * sp;
+    const z2 = y * sp + z1 * cp;
+    const s = eye / (eye - z2);
+    return { x: x1 * s, y: y2 * s, s };
+  };
+  return {
+    at: m.points.map((p) => at(p.x, p.y, p.z ?? 0)),
+    query: m.query && at(m.query[0], m.query[1], m.query_z ?? 0),
+  };
+}
 
 export const STATE_COLOR: Record<MemoryState, string> = {
   learning: "text-info",
@@ -70,6 +112,20 @@ export function MemoryMapView({
   mini?: boolean;
 }) {
   const [hover, setHover] = useState<MapPoint>();
+  const [depth, setDepth] = useSaved<Depth>("meko.map.depth", ["2d", "3d"], "2d");
+  const three = depth === "3d" && !mini; // a mini map has no switch, so stays flat
+  const [angle, setAngle] = useState({ yaw: 0.5, pitch: -0.3 });
+  // It turns on its own until the map is touched, unless the reader asked for less motion.
+  const [spinning, setSpinning] = useState(() => !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+  const drag = useRef<{ x: number; y: number; moved: boolean } | undefined>(undefined);
+  useEffect(() => {
+    if (!three || !spinning) return;
+    let frame = requestAnimationFrame(function step() {
+      setAngle((a) => ({ ...a, yaw: a.yaw + 0.004 }));
+      frame = requestAnimationFrame(step);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [three, spinning]);
   // A search map's sources, and the ones the legend has hidden.
   const sources = (Object.keys(SOURCE_LABEL) as MapSource[]).filter((s) => whole.points.some((p) => p.source === s));
   const [hidden, setHidden] = useState<Set<MapSource>>(new Set());
@@ -83,8 +139,25 @@ export function MemoryMapView({
   const dim = lit !== undefined && lit.size > 0;
   const on = (p: MapPoint) => !dim || lit.has(p.id);
   const r = mini ? 0.04 : 0.028;
-  const picked = map.points.find((p) => p.id === selected);
+  const view = useMemo(
+    () =>
+      three
+        ? turn(map, angle.yaw, angle.pitch)
+        : { at: map.points.map((p) => FLAT(p.x, p.y)), query: map.query && FLAT(map.query[0], map.query[1]) },
+    [map, three, angle],
+  );
+  // Far dots first, so near ones cover them.
+  const order = map.points.map((_, i) => i);
+  if (three) order.sort((a, b) => view.at[a].s - view.at[b].s);
+  const spot = (p: MapPoint) => view.at[map.points.indexOf(p)];
+  // Nearer dots are bolder; the farthest fade to about half.
+  const fade = (i: number) => (three ? Math.min(1, Math.max(0.35, 0.5 + (view.at[i].s - 1) * 2.5)) : 1);
+  const pickedIndex = map.points.findIndex((p) => p.id === selected);
+  const picked = pickedIndex >= 0 ? map.points[pickedIndex] : undefined;
   const shown = hover ?? picked;
+  const pick = (p: MapPoint) => {
+    if (!drag.current?.moved) onPick?.(p);
+  };
 
   return (
     <div className="space-y-2">
@@ -97,19 +170,38 @@ export function MemoryMapView({
           mini ? "max-w-56" : "max-w-[32rem]",
         )}
         onMouseDown={(e) => e.preventDefault()}
+        onPointerDown={(e) => {
+          if (!three) return;
+          setSpinning(false);
+          drag.current = { x: e.clientX, y: e.clientY, moved: false };
+        }}
+        onPointerMove={(e) => {
+          const d = drag.current;
+          if (!three || !d || e.buttons === 0) return;
+          const [dx, dy] = [e.clientX - d.x, e.clientY - d.y];
+          if (Math.abs(dx) + Math.abs(dy) > 3) d.moved = true;
+          d.x = e.clientX;
+          d.y = e.clientY;
+          setAngle((a) => ({
+            yaw: a.yaw + dx * 0.01,
+            pitch: Math.min(1.4, Math.max(-1.4, a.pitch - dy * 0.01)),
+          }));
+        }}
+        onPointerUp={() => setTimeout(() => (drag.current = undefined))}
         role="img"
         aria-label="Memory map"
       >
         {map.links.map((l, i) => {
           const a = map.points[l.a];
           const b = map.points[l.b];
+          const [sa, sb] = [view.at[l.a], view.at[l.b]];
           return (
             <line
               key={i}
-              x1={a.x}
-              y1={a.y}
-              x2={b.x}
-              y2={b.y}
+              x1={sa.x}
+              y1={sa.y}
+              x2={sb.x}
+              y2={sb.y}
               className="stroke-border"
               strokeWidth={1}
               vectorEffect="non-scaling-stroke"
@@ -117,57 +209,61 @@ export function MemoryMapView({
             />
           );
         })}
-        {map.query &&
+        {view.query &&
           map.points.filter((p) => dim && lit.has(p.id)).map((p) => (
             <line
               key={`q-${p.id}`}
-              x1={map.query![0]}
-              y1={map.query![1]}
-              x2={p.x}
-              y2={p.y}
+              x1={view.query!.x}
+              y1={view.query!.y}
+              x2={spot(p).x}
+              y2={spot(p).y}
               className="stroke-primary"
               strokeWidth={1 + 4 * Math.max(0, (p.similarity ?? 0) - 0.3)}
               vectorEffect="non-scaling-stroke"
               opacity={0.6}
             />
           ))}
-        {map.points.map((p) => (
-          <circle
-            key={p.id}
-            cx={p.x}
-            cy={p.y}
-            r={on(p) && dim ? r * 1.4 : r}
-            fill="currentColor"
-            className={cx(colorOf(p), "outline-none", onPick && "cursor-pointer")}
-            opacity={on(p) ? 1 : 0.2}
-            tabIndex={onPick ? 0 : undefined}
-            onMouseEnter={() => setHover(p)}
-            onMouseLeave={() => setHover(undefined)}
-            onFocus={() => setHover(p)}
-            onBlur={() => setHover(undefined)}
-            onClick={() => onPick?.(p)}
-            onKeyDown={(e) => e.key === "Enter" && onPick?.(p)}
-          >
-            <title>{p.text}</title>
-          </circle>
-        ))}
+        {order.map((i) => {
+          const p = map.points[i];
+          const at = view.at[i];
+          return (
+            <circle
+              key={p.id}
+              cx={at.x}
+              cy={at.y}
+              r={(on(p) && dim ? r * 1.4 : r) * at.s}
+              fill="currentColor"
+              className={cx(colorOf(p), "outline-none", onPick && "cursor-pointer")}
+              opacity={(on(p) ? 1 : 0.2) * fade(i)}
+              tabIndex={onPick ? 0 : undefined}
+              onMouseEnter={() => setHover(p)}
+              onMouseLeave={() => setHover(undefined)}
+              onFocus={() => setHover(p)}
+              onBlur={() => setHover(undefined)}
+              onClick={() => pick(p)}
+              onKeyDown={(e) => e.key === "Enter" && onPick?.(p)}
+            >
+              <title>{p.text}</title>
+            </circle>
+          );
+        })}
         {picked && (
           // The picked dot's ring, a circle of its own sized in map units so it keeps to its dot.
           <circle
-            cx={picked.x}
-            cy={picked.y}
-            r={(dim && on(picked) ? r * 1.4 : r) + r * 0.6}
+            cx={view.at[pickedIndex].x}
+            cy={view.at[pickedIndex].y}
+            r={((dim && on(picked) ? r * 1.4 : r) + r * 0.6) * view.at[pickedIndex].s}
             fill="none"
             stroke="currentColor"
-            strokeWidth={r * 0.35}
+            strokeWidth={r * 0.35 * view.at[pickedIndex].s}
             className={colorOf(picked)}
             pointerEvents="none"
           />
         )}
-        {map.query && (
+        {view.query && (
           <text
-            x={map.query[0]}
-            y={map.query[1]}
+            x={view.query.x}
+            y={view.query.y}
             textAnchor="middle"
             dominantBaseline="central"
             fontSize={mini ? 0.16 : 0.12}
@@ -176,7 +272,9 @@ export function MemoryMapView({
             ★
           </text>
         )}
-        {hover?.similarity !== undefined && <Score p={hover} r={r} />}
+        {hover?.similarity !== undefined && spot(hover) && (
+          <Score similarity={hover.similarity} at={spot(hover)} r={r} />
+        )}
       </svg>
       {!mini && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
@@ -208,6 +306,10 @@ export function MemoryMapView({
             </span>
           )}
           {map.query && <span className="text-primary">★ your question</span>}
+          <div className="ml-auto flex items-center gap-2">
+            {three && <span>Drag to turn</span>}
+            <Segmented size="sm" options={DEPTHS} value={depth} onChange={setDepth} />
+          </div>
         </div>
       )}
       {!mini && (
@@ -221,12 +323,13 @@ export function MemoryMapView({
 
 // A dot's score to the question, in a small label above it (below it at the top edge), kept inside
 // the map.
-function Score({ p, r }: { p: MapPoint; r: number }) {
+function Score({ similarity, at, r }: { similarity: number; at: Spot; r: number }) {
   const w = 0.26;
   const h = 0.11;
-  const x = Math.min(Math.max(p.x, -1.1 + w / 2), 1.1 - w / 2);
-  const above = p.y - r - 0.04 - h > -1.1;
-  const y = above ? p.y - r - 0.04 - h : p.y + r + 0.04;
+  r *= at.s;
+  const x = Math.min(Math.max(at.x, -1.1 + w / 2), 1.1 - w / 2);
+  const above = at.y - r - 0.04 - h > -1.1;
+  const y = above ? at.y - r - 0.04 - h : at.y + r + 0.04;
   return (
     <g pointerEvents="none">
       <rect x={x - w / 2} y={y} width={w} height={h} rx={0.025} className="fill-foreground" />
@@ -238,7 +341,7 @@ function Score({ p, r }: { p: MapPoint; r: number }) {
         fontSize={0.07}
         className="fill-background font-semibold"
       >
-        {round2(p.similarity!).toFixed(2)}
+        {round2(similarity).toFixed(2)}
       </text>
     </g>
   );
