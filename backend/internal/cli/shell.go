@@ -31,7 +31,7 @@ func RunMekoCLI(args []string, stdout, stderr io.Writer) int {
 	dataDir := fs.String("data-dir", "", "the data folder (default ~/.meko, or MEKO_HOME)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			printUsage(stdout, progMekoCLI)
+			printUsage(stdout, progMekoCLI, false)
 			return exitOK
 		}
 		fmt.Fprintln(stderr, "Run meko-cli --help to see the commands")

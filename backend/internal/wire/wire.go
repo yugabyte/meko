@@ -177,11 +177,11 @@ func MemoryListOf(ms []memoryengine.Memory, criteria map[string]any, total, page
 	return out
 }
 
-// Token estimates, as Meko Cloud makes them.
+// Token estimates, as Meko Cloud makes them: the weights context size counts with too.
 const (
-	kbChunkTokens          = 1000
-	memoryTokens           = 200
-	conversationTokens     = 1000
+	kbChunkTokens          = memory.TokensPerKBChunk
+	memoryTokens           = memory.TokensPerMemory
+	conversationTokens     = memory.TokensPerConversation
 	defaultBaselineTokens  = 10 * kbChunkTokens
 	scoreHigh, scoreMedium = 0.75, 0.5
 )

@@ -4,10 +4,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"text/tabwriter"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/yugabyte/meko/backend/internal/paths"
+	"github.com/yugabyte/meko/backend/internal/spin"
 )
 
 // The two programs this binary is: meko runs Meko, meko-cli works with what it keeps. cmd/meko picks
@@ -246,16 +250,58 @@ func lookup(prog, name string) (command, bool) {
 	return command{}, false
 }
 
-// printUsage prints prog's commands, by group.
-func printUsage(w io.Writer, prog string) {
+// startHere prints what to type next for the state Meko is in on this computer, ahead of meko's
+// command list, so someone running meko for the first time isn't left to pick from all of it. The
+// commands are bold on a terminal.
+func startHere(w io.Writer) {
+	root, err := paths.Resolve("")
+	if err != nil {
+		return
+	}
+	l := paths.New(root)
+	var title string
+	var cmds [][2]string
+	if up, _ := running(l.Lock); up {
+		title = "Meko is running. Next:"
+		cmds = [][2]string{{"meko ui", "open the web UI"},
+			{"meko connect claude", "connect Claude Code to it (or codex, kiro, opencode)"}}
+	} else if _, err = os.Stat(l.Root); err == nil {
+		title = "Meko is set up but not running. Start it with:"
+		cmds = [][2]string{{"meko start", "start Meko, then meko ui opens the web UI"}}
+	} else {
+		title = "New here? Start with:"
+		cmds = [][2]string{{"meko install", "set Meko up and start it, now and at every login"},
+			{"meko ui", "then open the web UI"}}
+	}
+	bold := func(s string) string { return s }
+	if spin.Color(w) {
+		bold = func(s string) string { return "\033[1m" + s + "\033[0m" }
+	}
+	fmt.Fprintf(w, "%s\n", title)
+	width := 0
+	for _, c := range cmds {
+		width = max(width, len(c[0]))
+	}
+	for _, c := range cmds {
+		fmt.Fprintf(w, "  %s%s    %s\n", bold(c[0]), strings.Repeat(" ", width-len(c[0])), c[1])
+	}
+	fmt.Fprintln(w)
+}
+
+// printUsage prints prog's commands, by group; with start, meko's opens with what to type next
+// (startHere).
+func printUsage(w io.Writer, prog string, start bool) {
 	groups := mekoGroups
 	if prog == progMekoCLI {
 		groups = mekoCLIGroups
 		fmt.Fprint(w, "meko-cli works with what Meko keeps: datapacks, memories, files and conversations\n"+
 			"Run it alone for a prompt, or give it one command\n\nUsage: meko-cli [<command> [flags]]\n")
 	} else {
-		fmt.Fprint(w, "The universal, self-learning context engine for agentic applications\n\n"+
-			"Usage: meko <command> [flags]\n")
+		fmt.Fprint(w, "The universal, self-learning context engine for agentic applications\n\n")
+		if start {
+			startHere(w)
+		}
+		fmt.Fprint(w, "Usage: meko <command> [flags]\n")
 	}
 	for _, g := range groups {
 		fmt.Fprintf(w, "\n%s\n", g)

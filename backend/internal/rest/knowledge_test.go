@@ -194,7 +194,8 @@ func TestKnowledgeRoutes(t *testing.T) {
 	// Metrics count the knowledge base.
 	mt := obj(okData(t, e, "GET", "/datapacks/"+e.DatapackID+"/metrics", nil, 200))
 	if num(mt["kb_file_count"]) != 2 || num(mt["kb_chunk_count"]) < 2 ||
-		num(mt["kb_bytes"]) != float64(len(page)+len(big)) {
+		num(mt["kb_bytes"]) != float64(len(page)+len(big)) ||
+		num(obj(obj(mt["context_size"])["knowledge"])["tokens"]) != 1000*num(mt["kb_chunk_count"]) {
 		t.Errorf("metrics %v", mt)
 	}
 

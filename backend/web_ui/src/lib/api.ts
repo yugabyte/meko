@@ -19,6 +19,7 @@ import type {
   ExtensionAction,
   Health,
   KnowledgeActivity,
+  MapSource,
   MemoryChange,
   MemoryMap,
   MemoryPage,
@@ -176,6 +177,12 @@ export const api = {
     ),
   memoryMap: (id: string, q = "", ids: string[] = []) =>
     request<MemoryMap>("GET", `/datapacks/${id}/memory-map?q=${enc(q)}&ids=${enc(ids.join(","))}`),
+  // The 100 things nearest a question among sources, and hits (what the search returned) besides.
+  searchMap: (id: string, q: string, sources: MapSource[], hits: string[]) =>
+    request<MemoryMap>(
+      "GET",
+      `/datapacks/${id}/search-map?q=${enc(q)}&sources=${sources.join(",")}&hits=${enc(hits.join(","))}`,
+    ),
   memoryExtractor: () => request<ExtractorStatus>("GET", "/settings/memory-extractor"),
   datapackExtraction: (id: string) => request<DatapackExtraction>("GET", `/datapacks/${id}/memory-extraction`),
   memoryHistory: (id: string, memoryId: string) =>

@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"errors"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -64,6 +65,20 @@ func datapackTools() []*tool {
 				{name: "include_status", typ: "boolean", def: false, desc: "Also report its status."},
 				pTrace},
 			run: datapackDescribe,
+		},
+		{
+			name: "datapack_metrics", title: "Datapack Metrics", kind: readOnly, failCode: "metrics_failed",
+			desc: "A datapack's context metrics, as the web UI's Overview shows them: context size (the tokens " +
+				"its knowledge base, memories and conversations hold), context efficiency (the tokens " +
+				"context_search sent, against sending the whole knowledge base) and context relevance (the " +
+				"share of search results scoring 0.5 or more). Without datapack_id it measures the default " +
+				"datapack: ask the user which datapack they mean (datapack_list shows them) and tell them " +
+				"when you use the default.",
+			params: []param{pDatapack,
+				{name: "days", typ: "integer", def: 0,
+					desc: "Measure the searches of the last this many days; 0 for all the call log keeps (90)."},
+				pTrace},
+			run: datapackMetrics,
 		},
 		{
 			name: "datapack_update", title: "Update Datapack", kind: write, failCode: "update_failed",
@@ -257,6 +272,67 @@ func datapackDescribe(ctx context.Context, c *call, a args) (any, error) {
 		wire.DatapackDescription
 		Status map[string]any `json:"status"`
 	}{desc, map[string]any{"agent_count": 0, "knowledge_base_count": desc.KnowledgeBaseFileCount, "status": "ready"}}, nil
+}
+
+// datapackMetrics is the Overview's three context tiles, from the same numbers /metrics gives the web
+// UI. A percentage is null until there's something to measure.
+func datapackMetrics(ctx context.Context, c *call, a args) (any, error) {
+	if _, err := c.conversationID(a); err != nil {
+		return nil, err
+	}
+	days, err := a.integer("days", 0)
+	if err != nil {
+		return nil, err
+	}
+	if days < 0 {
+		return nil, fail("invalid_days", "days is 0 (all the call log keeps) or more.")
+	}
+	named, err := a.str("datapack_id")
+	if err != nil {
+		return nil, err
+	}
+	dp, err := c.datapack(ctx, a)
+	if err != nil {
+		return nil, err
+	}
+	st, err := c.svc.CallStats(ctx, dp, days)
+	if err != nil {
+		return nil, err
+	}
+	z, err := c.svc.SizeDatapack(ctx, dp)
+	if err != nil {
+		return nil, err
+	}
+	kb, err := c.svc.KnowledgeStats(ctx, dp)
+	if err != nil {
+		return nil, err
+	}
+	kept := int(memory.CallRetention.Hours() / 24)
+	if days == 0 || days > kept {
+		days = kept
+	}
+	cx := st.Context
+	percent := func(part, whole int) *int {
+		if whole == 0 {
+			return nil
+		}
+		p := int(math.Round(100 * float64(part) / float64(whole)))
+		return &p
+	}
+	d, err := c.svc.Datapack(ctx, dp)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"datapack_id": dp, "datapack_name": d.Name,
+		"used_default": strings.TrimSpace(named) == "", "days": days,
+		"searches":     cx.Requests,
+		"context_size": memory.SizeOf(kb, z),
+		"context_efficiency": map[string]any{"tokens_sent": cx.Sent, "tokens_saved": cx.Saved,
+			"saved_pct": percent(cx.Saved, cx.IfRaw)},
+		"context_relevance": map[string]any{"relevant_pct": percent(cx.ScoreHigh+cx.Mid, cx.ScoreHigh+cx.Mid+cx.Low),
+			"high": cx.ScoreHigh, "mid": cx.Mid, "low": cx.Low},
+	}, nil
 }
 
 func datapackUpdate(ctx context.Context, c *call, a args) (any, error) {

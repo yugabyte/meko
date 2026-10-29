@@ -165,6 +165,44 @@ func (s *Service) SizeDatapack(ctx context.Context, datapack string) (store.Data
 	return s.st.SizeDatapack(ctx, datapack)
 }
 
+// Token weights, as Meko Cloud's estimate of what a context_search sent counts them: a knowledge-base
+// chunk 1000, a memory 200, and past conversations 1000. Context size counts what a datapack holds
+// with the same weights, so it reads against efficiency, but a conversation turn by its length, about
+// 4 bytes a token: turns run from "yes" to a pasted log, so no one weight fits them.
+const (
+	TokensPerKBChunk      = 1000
+	TokensPerMemory       = 200
+	TokensPerConversation = 1000
+	bytesPerToken         = 4
+)
+
+// SizePart is one source's share of a datapack's context size: Count is its knowledge-base chunks,
+// memories or conversation turns.
+type SizePart struct {
+	Count  int `json:"count"`
+	Tokens int `json:"tokens"`
+}
+
+// ContextSize is how much a datapack holds, in tokens: its knowledge base (promoted memories' chunks
+// included), its memories and its conversation turns.
+type ContextSize struct {
+	Tokens        int      `json:"tokens"`
+	Knowledge     SizePart `json:"knowledge"`
+	Memories      SizePart `json:"memories"`
+	Conversations SizePart `json:"conversations"`
+}
+
+// SizeOf is a datapack's context size from its knowledge base's stats and its sizes.
+func SizeOf(kb store.KBStats, z store.DatapackSizes) ContextSize {
+	out := ContextSize{
+		Knowledge:     SizePart{Count: kb.Chunks, Tokens: kb.Chunks * TokensPerKBChunk},
+		Memories:      SizePart{Count: z.Memories, Tokens: z.Memories * TokensPerMemory},
+		Conversations: SizePart{Count: z.Turns, Tokens: z.TurnBytes / bytesPerToken},
+	}
+	out.Tokens = out.Knowledge.Tokens + out.Memories.Tokens + out.Conversations.Tokens
+	return out
+}
+
 // Search tools, whose calls are a datapack's requests in its metrics.
 var searchTools = map[string]string{"context_search": "hybrid", "memory_search": "memory", "knowledgebase_search": "kb"}
 
@@ -335,7 +373,7 @@ type CallUsage struct {
 	Steps        []StepUsage  // by name
 	Agents       []AgentUsage // most recently seen first
 	Recent       []store.Call // newest first
-	InputTokens  int          // what track_token_usage reported
+	InputTokens  int          // the call log's token counts, which no tool writes
 	OutputTokens int
 }
 

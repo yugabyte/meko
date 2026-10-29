@@ -80,7 +80,7 @@ export function MemoryLineageDialog({
               <button
                 type="button"
                 className="inline-flex items-center gap-0.5 font-medium text-primary hover:underline"
-                onClick={() => navigate({ datapackId, tab: "conversations", itemId: c.id })}
+                onClick={() => navigate({ datapackId, tab: "conversations", itemId: c.id, focus: turn?.message_id })}
               >
                 {c.title || "a conversation"} <ArrowUpRight className="size-3" />
               </button>

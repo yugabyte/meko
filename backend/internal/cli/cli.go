@@ -70,17 +70,13 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 // runProg runs prog's command in args.
 func runProg(prog string, args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 {
-		printUsage(stdout, prog)
+	if len(args) == 0 || (len(args) == 1 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help")) {
+		printUsage(stdout, prog, true)
 		return exitOK
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
 	case "help", "-h", "--help":
-		if len(rest) == 0 {
-			printUsage(stdout, prog)
-			return exitOK
-		}
 		if prog == progMeko && rest[0] == groupExtension {
 			if len(rest) == 1 {
 				printGroupHelp(stdout, prog, groupExtension)
