@@ -282,8 +282,10 @@ func TestInstallExtensionSetsUpAnInstalledAgentK(t *testing.T) {
 	}
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
 	want(t, "status", code, 0, out, "Extension:     agentk, running (ext status)")
-	// It isn't Meko's release, so delete runs its uninstall and forgets it, but leaves the command.
+	// It isn't Meko's release, so delete runs its uninstall and forgets it, and Meko leaves the
+	// command (the fake's uninstall leaves it too; AgentK's own removes its ~/.local/bin links).
 	code, out, _ = run("extension", "delete", "agentk", "--force", "--data-dir", dir)
+	want(t, "extension delete", code, 0, out, "Its command ("+ak+") isn't a release Meko installed, so Meko leaves it")
 	want(t, "extension delete", code, 0, out, "Deleted AgentK")
 	if got := readLog(t, log); !strings.HasSuffix(got, "uninstall --non-interactive\n") {
 		t.Errorf("agent-k-local got %q", got)

@@ -332,15 +332,23 @@ follows on stderr.
   never touch them: they have their own services (AgentK) or processes (Presenter), and an
   extension restarts only for its own update.
 - `meko extension delete <name>` removes an extension (`runDeleteExtension`). After asking (unless
-  `--force`), and holding the update lock, it runs the catalog's `RemoveArgs` (`uninstall
-  --non-interactive`: the extension stops and removes its services, and AgentK's sessions end),
-  removes `<data>/extensions/<name>/app` and the `~/.local/bin` link into it, and unregisters it.
-  Its data stays. With `--purge` it runs `UninstallArgs` instead and removes
-  `<data>/extensions/<name>`, as `meko destroy --with-extensions` does for every extension. If the
-  extension's uninstall fails, nothing is removed. A command that isn't Meko's release (a build
-  from source) is never removed. A damaged extension (registered, but its command is missing and
+  `--force`), and holding the update lock (which keeps updates and release downloads out, not an
+  install's own setup), it runs the catalog's `RemoveArgs` (`uninstall --non-interactive`: the
+  extension stops and removes its services, and AgentK's sessions end), removes
+  `<data>/extensions/<name>/app` and the `~/.local/bin` link into it, and unregisters it. Its data
+  stays. With `--purge` it runs `UninstallArgs` instead and removes `<data>/extensions/<name>`, as
+  `meko destroy --with-extensions` does for every extension. If the extension's uninstall fails,
+  nothing is removed. If a version still runs after it (`App.Live`: a session host whose stop
+  failed), the releases and the registration stay, and it says what runs. Meko removes only the
+  link it made into its releases (`UnlinkCommand`), never a build from source, but the extension's
+  own uninstall may remove its links: AgentK's removes `~/.local/bin/agentk` and `agent-k-local`
+  whatever they point to, a link into another data folder's release too. A registered extension Meko
+  doesn't know is only forgotten. A damaged extension (registered, but its command is missing and
   `Catalog.Find` doesn't find it again; `meko start`, `stop` and `update` say so, naming this
-  command) has no uninstall to run, so its services, if any, stay.
+  command) has no uninstall to run, so its services, if any, stay: a plain delete removes its
+  releases and forgets it, and `--purge` is refused, since such a service may still use its folder.
+  The same goes for a `--purge` after a plain delete, which left no command to run: installing it
+  again first lets the purge run its uninstall.
 - `meko extension list` shows every known extension and its state without a running server: it
   runs each installed one's `status` at once (`StatusTimeout` each), reads the release installed and
   the last check's `update.json`, and looks for a missing command again without saving what it finds.
@@ -433,7 +441,8 @@ Changing the store doesn't move secrets: the client token is made again.
   extensions run on start and stop but not restart or `--keep-extensions`, `uninstall` and
   `--purge`, `extension install` with an installed `agent-k-local` (an AgentK from before the rename) and from a fake release,
   `extension list` (states, damaged, a slow status) and `extension delete` (keeping or purging the
-  data, a refused or failing one, a damaged one), `meko update` running the new meko's
+  data, a refused or failing one, a damaged one and its refused purge, a release still in use, an
+  unknown one), `meko update` running the new meko's
   `extension update --all`,
   `logs` merging and following across rotation, `token --json`, `version --json`, and an update
   from the Status page's route ending `serve` with an exec of the new version, or under the

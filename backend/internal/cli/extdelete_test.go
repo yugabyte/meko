@@ -90,11 +90,11 @@ func TestExtensionDeletePurge(t *testing.T) {
 }
 
 // An uninstall that fails leaves everything; one that's running holds off; a damaged one has no
-// uninstall to run, and is removed and forgotten.
+// uninstall to run, so a purge of it is refused, and a plain delete removes and forgets it.
 func TestExtensionDeleteFailsSafely(t *testing.T) {
 	dir, _ := setup(t)
 	noRealExtensions(t)
-	app, _ := withAgentKData(t, dir)
+	app, data := withAgentKData(t, dir)
 	stdin = strings.NewReader("")
 	t.Cleanup(func() { stdin = os.Stdin })
 
@@ -130,6 +130,12 @@ func TestExtensionDeleteFailsSafely(t *testing.T) {
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}
+	code, _, errs = run("extension", "delete", "agentk", "--purge", "--force", "--data-dir", dir)
+	want(t, "damaged, --purge", code, 1, errs, "so its own uninstall can't run, and a service it installed may "+
+		"still use "+extensions.Dir(dir, "agentk")+". Nothing was removed")
+	if _, err := os.Stat(data); err != nil {
+		t.Errorf("a refused purge deleted the data: %v", err)
+	}
 	code, out, errs := run("extension", "delete", "agentk", "--force", "--data-dir", dir)
 	want(t, "damaged", code, 0, out, "AgentK is damaged ("+missing+" is missing), so its own uninstall can't run")
 	want(t, "damaged", code, 0, errs, "so its own uninstall can't run; any service it installed stays")
@@ -140,5 +146,50 @@ func TestExtensionDeleteFailsSafely(t *testing.T) {
 	code, out, _ = run("stop", "--data-dir", dir, "--keep-extensions")
 	if strings.Contains(out, "damaged") {
 		t.Errorf("stop still runs it: exit %d\n%s", code, out)
+	}
+}
+
+// A release a live process still runs from (AgentK's session host, when its stop failed) is kept,
+// with the registration, and delete says what still runs.
+func TestExtensionDeleteKeepsAReleaseInUse(t *testing.T) {
+	dir, _ := setup(t)
+	noRealExtensions(t)
+	app, _ := withAgentKData(t, dir)
+	f, err := app.LockInUse(app.Current())
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, _, errs := run("extension", "delete", "agentk", "--force", "--data-dir", dir)
+	want(t, "in use", code, 1, errs, "AgentK's uninstall ran, but something still runs from AgentK "+app.Current())
+	if _, serr := os.Stat(app.Root); serr != nil {
+		t.Errorf("the releases went: %v", serr)
+	}
+	if reg, _ := extensions.Load(dir); len(reg.Entries) != 1 {
+		t.Errorf("unregistered: %v", reg.Entries)
+	}
+	_ = f.Close()
+	code, out, errs := run("extension", "delete", "agentk", "--force", "--data-dir", dir)
+	want(t, "once it stopped", code, 0, out+errs, "Deleted AgentK")
+}
+
+// A registered extension Meko doesn't know is only forgotten: nothing is run or removed.
+func TestExtensionDeleteForgetsAnUnknownOne(t *testing.T) {
+	dir, _ := setup(t)
+	noRealExtensions(t)
+	cmd := filepath.Join(t.TempDir(), "frob")
+	log := fakeExtension(t, cmd)
+	reg, _ := extensions.Load(dir)
+	reg.Entries["frob"] = extensions.Entry{Command: cmd}
+	if err := reg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs := run("extension", "delete", "frob", "--force", "--data-dir", dir)
+	want(t, "unknown", code, 0, out+errs, "Meko doesn't know how to uninstall frob, so it stays as it is")
+	want(t, "unknown", code, 0, out, "Deleted frob\n")
+	if readLog(t, log) != "" {
+		t.Errorf("it ran %q", readLog(t, log))
+	}
+	if reg, _ = extensions.Load(dir); len(reg.Entries) != 0 {
+		t.Errorf("still registered: %v", reg.Entries)
 	}
 }

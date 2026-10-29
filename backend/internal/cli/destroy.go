@@ -295,7 +295,8 @@ func uninstallExtensions(l paths.Layout, exts []extensionData, purge bool, stdou
 			return fmt.Errorf("uninstalling %s failed: %w. Nothing of Meko's was removed", cat.Title, err)
 		}
 		if cat.Managed {
-			// Its uninstall removed its folder, releases and all: the link Meko made into it goes too.
+			// The link Meko made into its releases goes too: they're gone with a purge, and extension
+			// delete removes them next.
 			_ = cat.App(l.Root, e.name).UnlinkCommand(home)
 		}
 	}

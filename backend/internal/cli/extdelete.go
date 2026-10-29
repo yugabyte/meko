@@ -17,11 +17,13 @@ type extDeleteOptions struct{ purge, force bool }
 
 // runDeleteExtension is meko extension delete <name> [--purge] [--force]. It runs the extension's
 // own uninstall (Catalog.RemoveArgs: it stops and removes its services, so AgentK's sessions end),
-// removes the release Meko installed and the command Meko linked to it, and unregisters it. Its data
-// in its folder stays; with purge, its uninstall is UninstallArgs, which deletes its data, and the
-// folder goes too. It asks first unless force. A damaged extension (its command is missing) has no
-// uninstall to run, and is only removed and unregistered. It needs no running server, and holds the
-// update lock, so no install or update runs meanwhile.
+// removes the releases Meko installed and the command Meko linked to them, and unregisters it. Its
+// data in its folder stays; with purge, its uninstall is UninstallArgs, which deletes its data, and
+// the folder goes too. It asks first unless force. A damaged extension (its command is missing) has
+// no uninstall to run: it's only removed and unregistered, and a purge of it is refused, since a
+// service it installed may still use its folder. Releases a live process still runs from (a session
+// host whose stop failed) are kept, and so is its registration, with an error. It needs no running
+// server. It holds the update lock, so no update or release download runs meanwhile.
 func runDeleteExtension(l paths.Layout, name string, o extDeleteOptions, in io.Reader, stdout, stderr io.Writer) int {
 	cat, known := extensions.Known[name]
 	exts, err := findExtensionData(l)
@@ -49,19 +51,33 @@ func runDeleteExtension(l paths.Layout, name string, o extDeleteOptions, in io.R
 	// Not registered and no release of Meko's left: there's nothing to remove but its data.
 	if !ext.registered && !hasApp && (!o.purge || ext.dir == "") {
 		if ext.dir != "" {
-			return fail(stderr, fmt.Errorf("%s isn't installed; its data stays in %s (meko extension delete %s "+
-				"--purge deletes it)", title, ext.dir, name))
+			return fail(stderr, fmt.Errorf("%s isn't installed; its data stays in %s (to delete it too, install it "+
+				"again with meko extension install %s, then run meko extension delete %s --purge)", title, ext.dir,
+				name, name))
 		}
 		return fail(stderr, fmt.Errorf("%s isn't installed", title))
 	}
-	if damaged(l, name, ext) {
+	cmd := deleteCommand(l, name, ext)
+	if o.purge && known && cmd == "" && ext.dir != "" {
+		return fail(stderr, fmt.Errorf("%s's command isn't on PATH, in ~/.local/bin or in its folder, so its own "+
+			"uninstall can't run, and a service it installed may still use %s. Nothing was removed: install it again "+
+			"(meko extension install %s) and run this again, or run it without --purge", title, ext.dir, name))
+	}
+	switch {
+	case !known:
+		fmt.Fprintf(stdout, "Meko doesn't know how to uninstall %s, so it stays as it is: deleting it only forgets "+
+			"it\n", title)
+	case cmd == "":
 		fmt.Fprintf(stdout, "%s is damaged (%s is missing), so its own uninstall can't run and any service it "+
 			"installed stays: deleting it removes the releases Meko installed and forgets it\n", title, ext.command)
-	} else {
+	case cat.Release(l.Root, name, cmd) == "":
+		fmt.Fprintf(stdout, "Deleting %s stops it%s and removes its services. Its command (%s) isn't a release "+
+			"Meko installed, so Meko leaves it\n", title, sessionsEnd(name), cmd)
+	default:
 		fmt.Fprintf(stdout, "Deleting %s stops it%s and removes its services, the releases Meko installed and its "+
 			"command\n", title, sessionsEnd(name))
 	}
-	if ext.dir != "" {
+	if ext.dir != "" && known {
 		size := humanSize(paths.DirSize(ext.dir))
 		if o.purge {
 			fmt.Fprintf(stdout, "--purge also deletes its data in %s (%s)%s\n", ext.dir, size, purgedWork(name))
@@ -80,6 +96,12 @@ func runDeleteExtension(l paths.Layout, name string, o extDeleteOptions, in io.R
 	defer lock.Unlock()
 	if err := uninstallExtensions(l, []extensionData{ext}, o.purge, stdout, stderr); err != nil {
 		return fail(stderr, err)
+	}
+	// A version a live process still runs from (AgentK's session host, when its stop failed) keeps
+	// its release, which removing the app folder would pull out from under it.
+	if live := app.Live(); cat.Managed && len(live) > 0 {
+		return fail(stderr, fmt.Errorf("%s's uninstall ran, but something still runs from %s %s, so its releases "+
+			"and registration were kept: stop it, then run this again", title, title, strings.Join(live, ", ")))
 	}
 	if cat.Managed {
 		// A damaged extension's uninstall didn't run, so the link Meko made is removed here.
@@ -111,27 +133,26 @@ func runDeleteExtension(l paths.Layout, name string, o extDeleteOptions, in io.R
 			return fail(stderr, err)
 		}
 	}
-	switch {
-	case o.purge || ext.dir == "":
+	if o.purge || ext.dir == "" || !known {
 		fmt.Fprintf(stdout, "Deleted %s\n", title)
-	default:
-		fmt.Fprintf(stdout, "Deleted %s. Its data stays in %s: meko extension delete %s --purge deletes it\n",
-			title, ext.dir, name)
+	} else {
+		fmt.Fprintf(stdout, "Deleted %s. Its data stays in %s\n", title, ext.dir)
 	}
 	return exitOK
 }
 
-// damaged says a registered extension's command is missing and isn't found again.
-func damaged(l paths.Layout, name string, ext extensionData) bool {
-	if !ext.registered {
-		return false
-	}
-	if _, err := os.Stat(ext.command); err == nil {
-		return false
+// deleteCommand is the command extension delete runs the uninstall of, as uninstallExtensions finds
+// it: the registered one, else Catalog.Find's. "" means its uninstall can't run.
+func deleteCommand(l paths.Layout, name string, ext extensionData) string {
+	if _, err := os.Stat(ext.command); ext.command != "" && err == nil {
+		return ext.command
 	}
 	cat, ok := extensions.Known[name]
 	home, err := os.UserHomeDir()
-	return !ok || err != nil || cat.Find(name, home, l.Root) == ""
+	if !ok || err != nil {
+		return ""
+	}
+	return cat.Find(name, home, l.Root)
 }
 
 // sessionsEnd is what else stops with an extension: AgentK's sessions.
