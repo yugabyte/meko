@@ -234,6 +234,9 @@ your phone can connect.
 - **Find in the terminal:** `⌘F` (`Ctrl+Shift+F` on Linux and Windows) in a session's terminal
   searches all of it, scrollback included, highlighting each match, with match case, whole word
   and regex. On a phone, **Find in terminal** is in the ⋯ sheet and the command palette.
+- **Multi-line prompts:** Shift+Enter starts a new line in a session's terminal, and Enter sends
+  the prompt. On a Mac, ⌘← and ⌘→ go to the start and end of the line, ⌥← and ⌥→ move by a word,
+  and ⌘⌫ deletes to the start of the line. On Linux and Windows, Ctrl+Backspace deletes a word.
 - **Light or dark terminal:** the terminals are dark by default; Settings → General → Terminal
   colors makes them light or has them follow the app's theme, remembered per browser.
 - **Builds carry over between sessions.** When a session ends, its worktree waits for the next
