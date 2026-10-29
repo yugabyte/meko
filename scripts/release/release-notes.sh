@@ -8,6 +8,9 @@
 #   scripts/release/release-notes.sh [--product agentk|meko|presenter] [<from-ref>]
 #                                    # default product agentk, from its latest tag
 #
+# A `!` subject is listed under Breaking changes only, not again under its type; a BREAKING CHANGE:
+# footer adds its own line there.
+#
 # Also used to decide whether a push is worth releasing: exits 3 when there
 # are no feat/fix/perf/deps commits for the product in the range. The other types don't
 # release, not even with a breaking-change marker.
@@ -26,11 +29,11 @@ own() {
 }
 
 section() {
-  # $1 = heading, $2 = type regex
-  lines=$(git log --no-merges --format='%s (%h)' "$range" | own "$2")
+  # $1 = heading, $2 = type regex; `!` subjects are under Breaking changes instead
+  lines=$(git log --no-merges --format='%s (%h)' "$range" | own "$2" | grep -vE "^($2)(\([^)]*\))?!: " || true)
   [ -n "$lines" ] || return 0
   printf '### %s\n\n' "$1"
-  printf '%s\n' "$lines" | sed -E "s/^($2)(\(([^)]*)\))?!?: /- \3: /; s/^- : /- /"
+  printf '%s\n' "$lines" | sed -E "s/^($2)(\(([^)]*)\))?: /- \3: /; s/^- : /- /"
   printf '\n'
 }
 

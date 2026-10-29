@@ -188,6 +188,8 @@ describe('release types', () => {
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('### Breaking changes\n\n- BREAKING CHANGE: [web] is now [ui]\n- feat(agentk/server)!: drop the v1 API\n\n');
     expect(r.stdout).not.toContain('not this one');
+    // A BREAKING CHANGE: footer's commit stays under its type too.
+    expect(r.stdout).toMatch(/### Fixes\n\n- agentk: rename the config key \([0-9a-f]+\)\n/);
   });
 
   it('releases deps commits under Dependencies', () => {
