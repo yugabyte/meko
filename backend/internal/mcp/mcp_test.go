@@ -141,7 +141,7 @@ func TestClaudeCodesHandshake(t *testing.T) {
 		"memory_get_by_id", "memory_update", "memory_delete_by_id", "memory_delete_all", "conversation_create",
 		"conversation_add_message", "conversation_get", "conversation_list", "conversation_update",
 		"conversation_delete", "datapack_list", "datapack_search", "datapack_create", "datapack_describe",
-		"datapack_update", "datapack_delete", "track_token_usage", "memory_promote", "artifact_put", "artifact_get",
+		"datapack_update", "datapack_delete", "datapack_metrics", "memory_promote", "artifact_put", "artifact_get",
 		"knowledgebase_search", "knowledgebase_upload_document", "knowledgebase_upload_file",
 		"knowledgebase_document_status", "knowledgebase_delete_document"} {
 		if names[want] == nil {

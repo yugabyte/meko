@@ -160,7 +160,7 @@ func (s *Store) DatapackAgents(ctx context.Context, datapack string) ([]AgentSee
 type DatapackSizes struct {
 	Memories, MemoryBytes           int
 	ConversationChunks, TurnBytes   int
-	Conversations, Artifacts        int
+	Turns, Conversations, Artifacts int
 	ArtifactBytes, PromotedMemories int
 }
 
@@ -175,12 +175,15 @@ func (s *Store) SizeDatapack(ctx context.Context, datapack string) (DatapackSize
 		"JOIN conversations c ON c.rowid = m.conversation_rowid WHERE c.datapack_id = ?), "+
 		"(SELECT sum(length(CAST(m.input AS BLOB)) + length(CAST(m.output AS BLOB))) FROM messages m "+
 		"JOIN conversations c ON c.rowid = m.conversation_rowid WHERE c.datapack_id = ?), "+
+		"(SELECT count(*) FROM messages m JOIN conversations c ON c.rowid = m.conversation_rowid "+
+		"WHERE c.datapack_id = ?), "+
 		"(SELECT count(*) FROM conversations WHERE datapack_id = ?), "+
 		"(SELECT count(*) FROM artifacts WHERE datapack_id = ?), "+
 		"(SELECT sum(size_bytes) FROM artifacts WHERE datapack_id = ?), "+
 		"(SELECT count(*) FROM promoted_memories WHERE datapack_id = ?)",
-		datapack, datapack, datapack, datapack, datapack, datapack, datapack, datapack).Scan(&z.Memories, &memBytes,
-		&z.ConversationChunks, &turnBytes, &z.Conversations, &z.Artifacts, &artBytes, &z.PromotedMemories)
+		datapack, datapack, datapack, datapack, datapack, datapack, datapack, datapack, datapack).Scan(&z.Memories,
+		&memBytes, &z.ConversationChunks, &turnBytes, &z.Turns, &z.Conversations, &z.Artifacts, &artBytes,
+		&z.PromotedMemories)
 	z.MemoryBytes, z.TurnBytes, z.ArtifactBytes = int(memBytes.Int64), int(turnBytes.Int64), int(artBytes.Int64)
 	return z, err
 }

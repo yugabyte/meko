@@ -23,6 +23,12 @@ export interface DayActivity {
   memory: number;
 }
 
+// One source's share of context size: count is knowledge-base chunks, memories or conversation turns.
+export interface SizePart {
+  count: number;
+  tokens: number;
+}
+
 // GET /datapacks/:id/metrics, the same payload Meko Cloud's Analytics tab reads.
 export interface Metrics {
   agent_count: number;
@@ -36,6 +42,8 @@ export interface Metrics {
   kb_bytes: number;
   memory_chunk_count: number;
   memory_bytes: number;
+  // Context size in tokens, as the server counts it (memory.SizeOf).
+  context_size: { tokens: number; knowledge: SizePart; memories: SizePart; conversations: SizePart };
   total_requests: number;
   // context_search calls that sent something: what context efficiency averages over (absent from an
   // older server, which averaged over total_requests).

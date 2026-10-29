@@ -49,8 +49,13 @@ with memory_add. Store a chat with conversation_create, then conversation_add_me
 turn. Pass the same conversation_id to every call of a session.
 
 agent_id says who is calling: <client>:<project> for a coding agent (claude_code:myrepo), a
-client name otherwise. Blank means meko_agent. datapack_id picks the datapack; blank uses the
-default one. datapack_list shows them all.`
+client name otherwise. Blank means meko_agent.
+
+datapack_id picks the datapack: Meko's separate spaces, each with its own memories, conversations
+and files. Blank uses the default one. When the user hasn't said which to use, ask them (datapack_list
+shows them all) before your first call, and tell them you'll use the default datapack if they don't
+pick one. datapack_metrics shows how a datapack's context is doing: its size, how much context_search
+saves sending, and how relevant its results are.`
 
 // NewHandler is the /mcp handler.
 func NewHandler(o Options) http.Handler {
@@ -154,13 +159,9 @@ func (o Options) result(t *tool, c *call, reply any, err error) *sdk.CallToolRes
 		c.rec.ErrorCode = t.failCode
 		reply = withDone(fail(t.failCode, genericDetail), done)
 	}
-	switch r := reply.(type) {
-	case plainText:
+	if r, isText := reply.(plainText); isText {
 		return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: string(r)}},
 			StructuredContent: map[string]any{"result": string(r)}}
-	case structured:
-		b, _ := json.Marshal(r.v) //nolint:errchkjson // replies are plain data
-		return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: string(b)}}, StructuredContent: r.v}
 	}
 	b, merr := json.Marshal(reply)
 	if merr != nil {

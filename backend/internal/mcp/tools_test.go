@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yugabyte/meko/backend/internal/store"
 	"github.com/yugabyte/meko/backend/internal/testenv"
 )
 
@@ -282,36 +283,51 @@ func TestDatapackTools(t *testing.T) {
 	wantError(t, e, "memory_add", map[string]any{"text": "x", "conversation_id": "c"}, "datapack_id_required")
 }
 
-func TestTrackTokenUsage(t *testing.T) {
+// datapack_metrics: an empty datapack measures nothing yet; then its size counts a knowledge-base chunk
+// 1000 tokens, a memory 200 and a turn by its length, and its searches give efficiency and relevance.
+func TestDatapackMetrics(t *testing.T) {
 	e := testenv.Start(t, testenv.Options{})
-	r := call(t, e, "track_token_usage", map[string]any{"conversation_id": "c", "name": "LLM Response",
-		"input_tokens": 120, "output_tokens": 30})
-	if r.IsError || r.JSON["recorded"] != true || obj(r.Raw["structuredContent"])["recorded"] != true {
-		t.Fatalf("track: %s %v", r.Text, r.Raw)
+	r := ok(t, e, "datapack_metrics", map[string]any{"conversation_id": "c"})
+	eff, rel := obj(r.JSON["context_efficiency"]), obj(r.JSON["context_relevance"])
+	if r.JSON["datapack_id"] != e.DatapackID || r.JSON["used_default"] != true || r.JSON["datapack_name"] == "" ||
+		num(r.JSON["days"]) != 90 || num(r.JSON["searches"]) != 0 ||
+		num(obj(r.JSON["context_size"])["tokens"]) != 0 || eff["saved_pct"] != nil || rel["relevant_pct"] != nil {
+		t.Fatalf("empty: %s", r.Text)
 	}
-	if r = call(t, e, "track_token_usage", map[string]any{"name": "x"}); r.JSON["recorded"] != false ||
-		r.JSON["error"] != "conversation_id_required" {
-		t.Errorf("no conversation: %s", r.Text)
-	}
-	r = call(t, e, "track_token_usage", map[string]any{"conversation_id": "c", "name": "x", "input_tokens": -1})
-	if r.JSON["recorded"] != false {
-		t.Errorf("negative: %s", r.Text)
-	}
-	r = call(t, e, "track_token_usage", map[string]any{"conversation_id": "c", "name": "x",
-		"datapack_id": "00000000-0000-0000-0000-000000000000"})
-	if r.JSON["recorded"] != false || r.JSON["error"] != "datapack_access_denied" {
-		t.Errorf("missing datapack: %s", r.Text)
-	}
-	all, _ := e.Store.Calls(context.Background(), "", time.Time{})
-	for _, c := range all {
-		if c.ErrorCode != "" && c.OK {
-			t.Errorf("a call that recorded nothing is logged as ok: %+v", c)
+	ok(t, e, "memory_add", map[string]any{"text": "The release train leaves every Tuesday.", "agent_id": "a",
+		"conversation_id": "c"})
+	conv := str(ok(t, e, "conversation_create", map[string]any{"agent_id": "a", "title": "t"}).JSON["id"])
+	ok(t, e, "conversation_add_message", map[string]any{"conversation_id": conv, "agent_id": "a",
+		"input": strings.Repeat("a", 395), "output": "noted"})
+	for _, c := range []store.Call{
+		{Tool: "context_search", OK: true, TokensSent: 1600, TokensSaved: 12400, TokensIfRaw: 14000, ScoreHigh: 1,
+			ScoreMid: 1, ScoreLow: 2},
+		{Tool: "context_search", OK: true, TokensSent: 400, TokensSaved: 13600, TokensIfRaw: 14000, ScoreLow: 2},
+	} {
+		c.At, c.DatapackID = time.Now(), e.DatapackID
+		if err := e.Store.AddCall(context.Background(), c); err != nil {
+			t.Fatal(err)
 		}
 	}
-	calls, _ := e.Store.Calls(context.Background(), e.DatapackID, time.Time{})
-	if len(calls) == 0 || calls[0].InputTokens != 120 || calls[0].OutputTokens != 30 {
-		t.Errorf("recorded tokens: %+v", calls)
+	r = ok(t, e, "datapack_metrics", map[string]any{"conversation_id": "c", "days": 7, "datapack_id": e.DatapackID})
+	if r.JSON["used_default"] != false {
+		t.Errorf("a named datapack reads as the default: %s", r.Text)
 	}
+	size := obj(r.JSON["context_size"])
+	if mem, turns := obj(size["memories"]), obj(size["conversations"]); num(mem["count"]) != 1 ||
+		num(mem["tokens"]) != 200 || num(turns["count"]) != 1 || num(turns["tokens"]) != 100 ||
+		num(size["tokens"]) != 300 {
+		t.Errorf("size: %v", size)
+	}
+	eff, rel = obj(r.JSON["context_efficiency"]), obj(r.JSON["context_relevance"])
+	if num(r.JSON["days"]) != 7 || num(r.JSON["searches"]) != 2 || num(eff["tokens_sent"]) != 2000 ||
+		num(eff["tokens_saved"]) != 26000 || num(eff["saved_pct"]) != 93 || num(rel["relevant_pct"]) != 33 ||
+		num(rel["high"]) != 1 || num(rel["mid"]) != 1 || num(rel["low"]) != 4 {
+		t.Errorf("searches: %s", r.Text)
+	}
+	wantError(t, e, "datapack_metrics", map[string]any{"conversation_id": "c", "days": -1}, "invalid_days")
+	wantError(t, e, "datapack_metrics", map[string]any{"conversation_id": "c",
+		"datapack_id": "00000000-0000-0000-0000-000000000000"}, "datapack_access_denied")
 }
 
 func TestPromoteAndArtifacts(t *testing.T) {

@@ -85,10 +85,6 @@ func (p *partial) Unwrap() error { return p.err }
 // plainText is a reply Cloud sends as plain text rather than JSON, kept for its few legacy paths.
 type plainText string
 
-// structured is a reply whose structuredContent is the object itself (track_token_usage's),
-// rather than its JSON text.
-type structured struct{ v any }
-
 // normalizeID is a conversation id as callers may write it: hyphens dropped, trimmed, lowercase.
 func normalizeID(id string) string {
 	return strings.ToLower(strings.TrimSpace(strings.ReplaceAll(id, "-", "")))
@@ -254,6 +250,5 @@ func allTools() []*tool {
 	out = append(out, conversationTools()...)
 	out = append(out, datapackTools()...)
 	out = append(out, artifactTools()...)
-	out = append(out, usageTools()...)
 	return out
 }
