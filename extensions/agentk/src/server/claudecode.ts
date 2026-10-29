@@ -1,6 +1,7 @@
 import type { ClaudeCodeStatus } from '../shared/types.js';
 import { MIN_MOD_CLAUDE, runClaudeUpdate } from './claude.js';
-import { cliVersion, versionAtLeast } from './harness/version.js';
+import { versionAtLeast } from '../shared/harnesses.js';
+import { cliVersion } from './harness/version.js';
 import type { Config } from './config.js';
 import { HttpError } from './projects.js';
 

@@ -1,9 +1,9 @@
 import { execFile } from 'node:child_process';
-import { HARNESS_CAPS, type HarnessId } from '../../shared/harnesses.js';
-import type { HarnessStatus } from '../../shared/types.js';
+import { HARNESS_CAPS, versionAtLeast, type HarnessId } from '../../shared/harnesses.js';
 import type { Config } from '../config.js';
 import { openCodeCommand } from '../opencode.js';
 import { HttpError } from '../projects.js';
+import type { CliStatus } from './types.js';
 
 /** The version `<command> --version` prints (`2.1.287 (Claude Code)` → `2.1.287`), or null. */
 export function cliVersion(command: string): Promise<string | null> {
@@ -12,18 +12,6 @@ export function cliVersion(command: string): Promise<string | null> {
       resolve(err ? null : (/(\d+\.\d+\.\d+)/.exec(String(stdout))?.[1] ?? null));
     });
   });
-}
-
-/** Whether dotted version `v` is `min` or later (numeric parts; `2.1.10` is after `2.1.9`). */
-export function versionAtLeast(v: string, min: string): boolean {
-  const a = v.split('.').map(Number);
-  const b = min.split('.').map(Number);
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    const x = a[i] || 0;
-    const y = b[i] || 0;
-    if (x !== y) return x > y;
-  }
-  return true;
 }
 
 /** The command a harness runs as: `[<id>] command`, and for OpenCode's default also `~/.opencode/bin/opencode`. */
@@ -38,9 +26,9 @@ const VERSION_TTL_MS = 10 * 60 * 1000;
 export interface CliState {
   /** Reads the version again when the last read is stale, is for another command, or `force`; null while it's turned off. */
   version(cfg: Config, force?: boolean): Promise<string | null>;
-  status(cfg: Config): HarnessStatus;
+  status(cfg: Config): CliStatus;
   /** Runs its updater (`run`), one at a time (409 while one runs), then reads the version again. */
-  update(cfg: Config, run: (command: string) => Promise<void>): Promise<HarnessStatus>;
+  update(cfg: Config, run: (command: string) => Promise<void>): Promise<CliStatus>;
 }
 
 /**
@@ -85,7 +73,7 @@ export function cliState(o: {
     }
     return ver.read;
   };
-  const status = (cfg: Config): HarnessStatus => {
+  const status = (cfg: Config): CliStatus => {
     const { enabled } = cfg[o.id];
     const read = readFor === command(cfg);
     const v = enabled && read ? value : null;

@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/yugabyte/meko/backend/internal/agents"
 	"github.com/yugabyte/meko/backend/internal/cloudlink"
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/envelope"
@@ -28,8 +29,10 @@ type cloudFlags struct {
 	set                 map[string]bool // the flags given, so --url "" (Meko Cloud's) differs from no --url
 }
 
-// cloudTimeout bounds a link through the server: its checks take up to 10 s each.
-const cloudTimeout = 30 * time.Second
+// cloudTimeout bounds a link through the server: its two checks (cloudlink.CheckTimeout each) and
+// moving the agents (agents.MoveTimeout), with a minute to spare, so it never gives up on a change
+// the server goes on to finish.
+var cloudTimeout = 2*cloudlink.CheckTimeout + agents.MoveTimeout + time.Minute
 
 func cloudStore(l paths.Layout, cfg config.Config) (cloudlink.Store, error) {
 	s, err := secrets.Open(cfg.Secrets.Store, l.Root)
@@ -86,11 +89,14 @@ func runCloudLink(l paths.Layout, f cloudFlags, in io.Reader, stdout, stderr io.
 	if err != nil {
 		return fail(stderr, err)
 	}
-	if !st.Linked {
+	if st.Linked {
+		fmt.Fprintln(stdout, "Linked to "+cloudLine(st))
+	} else {
 		fmt.Fprintln(stdout, "Meko Cloud is unlinked: extensions use this Meko")
-		return exitOK
 	}
-	fmt.Fprintln(stdout, "Linked to "+cloudLine(st))
+	for _, line := range moveLines(st.Agents, st.Linked) {
+		fmt.Fprintln(stdout, line)
+	}
 	return exitOK
 }
 
@@ -115,7 +121,12 @@ func applyCloud(ctx context.Context, l paths.Layout, store cloudlink.Store, off 
 		}
 		return st, err
 	}
-	svc := &cloudlink.Service{Store: store, Check: cloudlink.CheckMCP, CheckAPI: cloudlink.CheckAPI}
+	_, a, err := readMCPAccess(l)
+	if err != nil {
+		return cloudlink.Status{}, err
+	}
+	svc := &cloudlink.Service{Store: store, Check: cloudlink.CheckMCP, CheckAPI: cloudlink.CheckAPI,
+		Moved: cloudMover(l, localTarget(a))}
 	if off {
 		return svc.Unlink(ctx)
 	}

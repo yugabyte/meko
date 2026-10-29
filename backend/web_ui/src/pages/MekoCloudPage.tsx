@@ -1,13 +1,13 @@
 // Settings › Meko Cloud at /settings/meko-cloud: the Meko Cloud (or another Meko server) this Meko's
 // extensions use, and its API key. Meko checks a new server or key before saving it, and tells the
-// running extensions; Unlink sends them back to this Meko. AgentK sets each coding agent up with the
-// link in its own Settings › Harness.
+// running extensions; Unlink sends them back to this Meko. Either moves the agents connected to the
+// old one to the new one, and the page says which moved (or couldn't).
 
 import { useEffect, useState, type FormEvent } from "react";
 import { api } from "../lib/api";
 import { notifyCloudChanged } from "../lib/cloud";
 import { httpHost, mekoWebUrl } from "../lib/mekourls";
-import type { MekoCloud, MekoCloudUpdate } from "../lib/types";
+import type { AgentMoves, MekoCloud, MekoCloudUpdate } from "../lib/types";
 import { MekoGetKey } from "../components/MekoGetKey";
 import { Badge, Button, Card, Code, ErrorNote, Field, Input, Loading, Spinner } from "../components/ui";
 
@@ -28,8 +28,8 @@ export function MekoCloudPage() {
       </div>
       {cloud ? <LinkForm cloud={cloud} onSaved={setCloud} /> : loadError ? <ErrorNote error={loadError} /> : <Loading />}
       <p className="text-xs text-muted-foreground">
-        On a computer without a browser, <Code>meko cloud_link</Code> does the same. Each coding agent's own Meko setup is
-        in AgentK's Settings › Harness.
+        On a computer without a browser, <Code>meko cloud_link</Code> does the same. A datapack's Connect page connects
+        agents.
       </p>
     </div>
   );
@@ -47,6 +47,8 @@ function LinkForm({ cloud, onSaved }: { cloud: MekoCloud; onSaved: (c: MekoCloud
   const [busy, setBusy] = useState<"save" | "unlink" | null>(null);
   const [error, setError] = useState<Error>();
   const [saved, setSaved] = useState<string | null>(null);
+  // What the last link change did to the agents, when it moved one or failed to.
+  const [moves, setMoves] = useState<{ text: string; failed: boolean } | null>(null);
 
   const show = (c: MekoCloud) => {
     onSaved(c);
@@ -77,8 +79,11 @@ function LinkForm({ cloud, onSaved }: { cloud: MekoCloud; onSaved: (c: MekoCloud
     setBusy("save");
     setError(undefined);
     setSaved(null);
+    setMoves(null);
     try {
-      show(await api.linkMekoCloud(next));
+      const c = await api.linkMekoCloud(next);
+      show(c);
+      setMoves(movesLine(c.agents, "to Meko Cloud"));
       notifyCloudChanged();
       setConfirmHost(null);
       setSaved("Linked. The running extensions use it now.");
@@ -93,8 +98,11 @@ function LinkForm({ cloud, onSaved }: { cloud: MekoCloud; onSaved: (c: MekoCloud
     setBusy("unlink");
     setError(undefined);
     setSaved(null);
+    setMoves(null);
     try {
-      show(await api.unlinkMekoCloud());
+      const c = await api.unlinkMekoCloud();
+      show(c);
+      setMoves(movesLine(c.agents, "back to this Meko"));
       notifyCloudChanged();
       setConfirmUnlink(false);
       setSaved("Unlinked. The extensions use this Meko now.");
@@ -227,6 +235,18 @@ function LinkForm({ cloud, onSaved }: { cloud: MekoCloud; onSaved: (c: MekoCloud
             ))}
           {saved && <span className="text-sm text-muted-foreground">{saved}</span>}
         </div>
+        {moves && (
+          <p
+            className={
+              moves.failed
+                ? "rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm"
+                : "text-sm text-muted-foreground"
+            }
+            role="status"
+          >
+            {moves.text}
+          </p>
+        )}
         {confirmUnlink && (
           <p className="text-sm text-muted-foreground" role="alert">
             The extensions switch to this Meko. Projects whose datapacks live on {currentHost ?? "Meko Cloud"} won't find
@@ -236,4 +256,18 @@ function LinkForm({ cloud, onSaved }: { cloud: MekoCloud; onSaved: (c: MekoCloud
       </form>
     </Card>
   );
+}
+
+// One line for what a link change did to the agents: the ones it moved (where says where to), then
+// the ones it couldn't move and why; null when it changed none (or the server is older).
+function movesLine(agents: AgentMoves | undefined, where: string): { text: string; failed: boolean } | null {
+  const parts: string[] = [];
+  if (agents?.moved?.length) parts.push(`Moved ${names(agents.moved.map((a) => a.title))} ${where}`);
+  for (const f of agents?.failed ?? []) parts.push(`Couldn't move ${f.title}: ${f.error}`);
+  return parts.length ? { text: parts.join(". "), failed: Boolean(agents?.failed?.length) } : null;
+}
+
+// "A", "A and B", "A, B and C".
+function names(titles: string[]): string {
+  return titles.length < 2 ? titles.join("") : `${titles.slice(0, -1).join(", ")} and ${titles[titles.length - 1]}`;
 }

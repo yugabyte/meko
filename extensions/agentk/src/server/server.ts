@@ -567,10 +567,11 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.get('/api/settings', async () => {
     // Opening Settings reads the Meko on this computer and its Meko Cloud link again (it may have
     // started, stopped, moved or been linked), waiting a moment for it (a `meko` that's slow finishes
-    // in the background and pushes the change), and checks Claude Code's Meko again (in the
-    // background, reusing recent results).
+    // in the background and pushes the change), then Meko's list of agents, and checks Claude Code's
+    // Meko again (both in the background; the check reuses recent results).
     const read = core.refreshMeko().catch((e: unknown) => core.log.warn('reading the Meko on this computer failed', errMsg(e)));
     await Promise.race([read, new Promise((r) => setTimeout(r, LOCAL_MEKO_WAIT_MS).unref())]);
+    void read.then(() => core.mekoAgents.refresh());
     void core.claudeMeko.refresh();
     return settings();
   });
@@ -638,23 +639,26 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (days && (!before.days || days < before.days)) cleanup('removing unused idle worktrees', () => core.worktrees.expire());
     return settings();
   });
+  // The page connects the agent's `meko` MCP server through Meko's own route first; these run Meko's
+  // setup package only for what Meko's capture needs (nothing when that's all there).
   app.post('/api/settings/meko/claude-setup', async (): Promise<Settings> => {
     try {
-      await setUpClaudeMeko(core, core.mekoTools);
-      audit(db, 'meko_claude_setup', { url: core.mekoStatus.url });
+      if (await setUpClaudeMeko(core, core.mekoTools)) audit(db, 'meko_claude_setup', { url: core.mekoStatus.url });
     } finally {
       // Whatever the setup managed, the banner shows what's left (the saved token results are
-      // stale now). In the background: the answer doesn't wait on Meko, the state stream updates.
+      // stale now; the setup writes the MCP server too). In the background: the answer doesn't wait
+      // on Meko, the state stream updates.
       void core.claudeMeko.refresh(true);
+      void core.mekoAgents.refresh();
     }
     return settings();
   });
 
   app.post('/api/settings/meko/kiro-setup', async (): Promise<Settings> => {
     try {
-      await setUpKiroMeko(core, core.mekoTools);
-      audit(db, 'meko_kiro_setup', { url: core.mekoStatus.url });
+      if (await setUpKiroMeko(core, core.mekoTools)) audit(db, 'meko_kiro_setup', { url: core.mekoStatus.url });
     } finally {
+      void core.mekoAgents.refresh();
       core.kiroMeko(true);
       // Meko's setup makes its agent Kiro's default: Kiro sessions' agent is built from it again.
       await core.harnesses.of('kiro').prepare(core.paths, core.config).catch((e) => core.log.warn('preparing Kiro failed', errMsg(e)));
@@ -673,11 +677,14 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
 
   // ---- updates ----
   app.post('/api/claude/update', async () => core.claudeCode.update());
-  // Check again (Settings → Harness): a version that changed reaches every page through `changed()`.
-  app.post('/api/harnesses/refresh', async (): Promise<HarnessStatus[]> => core.harnesses.refresh(core.config, true));
-  app.post<{ Params: { id: string } }>('/api/harnesses/:id/update', async (req) => {
+  // Check again (Settings → Harness), and Connect to Meko after the page connected an agent through
+  // Meko's own route: a version or Meko list that changed reaches every page through `changed()`.
+  app.post('/api/harnesses/refresh', async (): Promise<HarnessStatus[]> => core.refreshHarnesses(true));
+  app.post<{ Params: { id: string } }>('/api/harnesses/:id/update', async (req): Promise<HarnessStatus> => {
     if (!isHarnessId(req.params.id)) throw new HttpError(404, 'There is no such agent.');
-    return core.harnesses.of(req.params.id).update(core.config);
+    const h = core.harnesses.of(req.params.id);
+    await h.update(core.config);
+    return core.harnesses.statusOf(h, core.config);
   });
   // Meko installs updates: the page checks, updates and sets Update automatically through Meko's own
   // routes. What AgentK keeps is which update this version came from, and What's new.

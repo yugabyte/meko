@@ -87,7 +87,12 @@ function conversation(paths: Paths, row: SessionRow): string | null {
 }
 
 /** OpenCode (`opencode`), its hooks from AgentK's plugin. */
-export function openCodeHarness(deps: { paths: Paths; log: Logger; changed: () => void; readVersion?: (cmd: string) => Promise<string | null> }): Harness {
+export function openCodeHarness(deps: {
+  paths: Paths; log: Logger; changed: () => void; readVersion?: (cmd: string) => Promise<string | null>;
+  /** OpenCode has a `meko` MCP server of its own (`Harnesses.openCodeOwnMeko`); by default, one in its own config. */
+  ownMeko?: () => boolean;
+}): Harness {
+  const ownMeko = deps.ownMeko ?? (() => openCodeHasOwnMeko());
   const command = (cfg: Config) => openCodeCommand(cfg.opencode.command);
   const cli = cliState({ id: 'opencode', changed: deps.changed, readVersion: deps.readVersion, command });
   const writePlugin = (paths: Paths) => {
@@ -98,12 +103,12 @@ export function openCodeHarness(deps: { paths: Paths; log: Logger; changed: () =
     }
   };
   /**
-   * AgentK's Meko for a launch: the config file with its MCP server, while Meko is on and the user's
-   * own OpenCode config has no `meko` server; else null (and the file removed).
+   * AgentK's Meko for a launch: the config file with its MCP server, while Meko is on and OpenCode
+   * has no `meko` server of its own (`ownMeko`); else null (and the file removed).
    */
   const mekoConfig = (paths: Paths, cfg: Config): string | null => {
     try {
-      if (mekoConfigured(cfg) && !openCodeHasOwnMeko()) {
+      if (mekoConfigured(cfg) && !ownMeko()) {
         const { url, apiKey } = resolveMeko(cfg);
         return writeOpenCodeMeko(paths, url, apiKey);
       }

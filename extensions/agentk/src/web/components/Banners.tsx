@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import type { AppState, DatapackInvite, FailedStart } from '../../shared/types';
+import { notConnectedText, onlyMekoBlocks } from '../../shared/harnesses';
 import { MEKO_INSTALL_COMMAND } from '../../shared/mekourls';
 import { api, errorMessage } from '../api';
 import { copyText } from '../clipboard';
 import type { Conn } from '../hooks/useEvents';
 import { useInstall } from '../installapp';
+import { setUpWithMeko } from '../mekoagents';
 import { installing, mekoUpdates, refreshMekoUpdate, takeRow, updateFailed, useMekoUpdate } from '../mekoupdate';
 import { claudeUpdateText, noAgent } from '../util';
 import { Busy } from './common';
@@ -249,8 +251,10 @@ function FailedStartBanners({
 }
 
 /**
- * Claude Code's sessions don't reach AgentK's Meko (another server, or a token that doesn't work
- * there). AgentK never fixes it on its own: the user sets Claude Code up from here or Settings › Harness › Claude Code.
+ * Claude Code's sessions don't reach AgentK's Meko (its meko MCP server isn't connected, as Meko
+ * reports it, or its settings name another server or a token that doesn't work there). AgentK never
+ * fixes it on its own: the user sets Claude Code up from here or Settings › Harness › Claude Code,
+ * which has Meko connect it first (`setUpWithMeko`).
  */
 function MekoClaudeBanner({ state, onDetails, onError }: { state: AppState; onDetails: () => void; onError: (m: string) => void }) {
   const [busy, setBusy] = useState(false);
@@ -259,7 +263,7 @@ function MekoClaudeBanner({ state, onDetails, onError }: { state: AppState; onDe
   const setUp = async () => {
     setBusy(true);
     try {
-      await api.mekoClaudeSetup();
+      await setUpWithMeko('claude', state.harnesses.find((h) => h.id === 'claude')?.meko);
     } catch (e) {
       onError(errorMessage(e));
     } finally {
@@ -355,6 +359,7 @@ export function Banners({
           <span className="banner-text">
             No coding agent is available on {state.serverName}, so no session can start. Install Claude Code or Kiro CLI there, or turn
             one on in Settings.
+            {(state.harnesses ?? []).filter(onlyMekoBlocks).map((h) => ` ${notConnectedText(h.id)}.`)}
           </span>
           <button className="btn primary small" onClick={onSettings}>
             Settings

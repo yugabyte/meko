@@ -22,7 +22,8 @@ in one place, checked before it's saved, and read by every extension the same wa
 | **Any client token can list them**, unlike the link's own routes | An agent or extension may want to know which datapacks the linked account has. The reply holds names, descriptions and grants, never the key, and the client token still can't read or change the link. |
 | **Only the fields Meko shows are copied** from Meko Cloud's rows | Cloud's rows also carry each datapack's database user and connection string, which no caller of a route that takes the client token should get. |
 | **This Meko's own `/api/v1` routes act on the linked Meko Cloud's datapacks** ([below](#meko-clouds-datapacks-on-this-mekos-routes)): a datapack id this Meko doesn't have goes to Meko Cloud, and where there's no id `location` picks the side: a listing names both by default, and a create goes to Meko Cloud while it's linked. The server makes the call with the link's key | One API for the web UI and `meko-cli`, with Meko Cloud's paths and shapes, and the key never leaves the server. The id is enough to tell the sides apart: both are UUIDs. Meko Cloud's REST API serves what it has a route for; it has none that searches a datapack or adds a memory with an API key, so those two use its MCP tools. A saved key goes only where the link sends it: the routes take no URL, and another Meko Cloud is set with `meko cloud_link --url --api-url`. |
-| **Acting on Meko Cloud takes the owner or the admin token**, not an agent's client token; listing takes any | The key acts on the whole Meko Cloud account and can delete its datapacks. An agent that should use Meko Cloud is given Cloud's own key. |
+| **Acting on Meko Cloud takes the owner or the admin token**, not an agent's client token; listing takes any | The key acts on the whole Meko Cloud account and can delete its datapacks. An agent that should use Meko Cloud gets the key in its own config, and only through the owner's connect (`meko agent connect`, the web UI, or the admin token) or a link change ([below](#agents-follow-the-link)): an agent's client token can't set either off. |
+| **The agents connected to Meko follow the link** ([below](#agents-follow-the-link)): while Meko Cloud is linked they connect to it directly, with its key, and a link change moves the ones at the old target to the new one | Every agent, AgentK and its capture then use the same Meko. Unlinking moves them back, which takes the key out of their configs. |
 
 ## Routes and command
 
@@ -42,6 +43,39 @@ in one place, checked before it's saved, and read by every extension the same wa
   otherwise it saves the link itself, and they read it when they next ask. `meko status` shows
   the link when there is one (`✓ Meko Cloud      linked to <url> (key …abcd)`), and
   `meko status --verbose` says so either way (`Meko Cloud:    linked to …`, or not linked).
+- A saved change (`PUT` or `DELETE`) moves the agents ([below](#agents-follow-the-link)), and its
+  reply adds `agents: {moved: [{name, title}], left: [{name, title, url}], failed: [{name, title,
+  error}]}`. `meko cloud_link` prints a line when it moved any (`Moved Claude Code and Kiro CLI to
+  Meko Cloud; their sessions already running need a restart`) and one for each it couldn't
+  (`Couldn't move Kiro CLI: <why>; run meko agent connect kiro`).
+
+## Agents follow the link
+
+The agents on this computer connect to Meko's target ([api.md](api.md#agents)): the linked Meko
+Cloud, with its MCP URL and key, else this Meko. After a change is saved (a link, a new key or URL,
+an unlink), `Service.Link` and `Unlink` call their `Moved` hook, still under the change's lock so
+moves happen in the changes' order and before the extensions are told. It moves every installed
+agent whose `meko` server is one of Meko's own (this computer's, the old link's or the new one's)
+and isn't already connected to the new target, the way `meko agent connect` would. One pointing
+anywhere else is left, and reported. The server's routes do it in `serve`; `meko cloud_link` with
+the server stopped does it itself. Both hold the agents' lock (`run/agents.lock`), and a move has
+`agents.MoveTimeout` (the lock's wait, then up to three runs of each agent's CLI), which `meko
+cloud_link` waits out, with the checks and a minute to spare.
+
+- **A failed move never undoes the link.** The agent is reported as failed, with why (its CLI's
+  error, the key blanked), and shows as stale until it's connected again.
+- **Unlinking moves them back** to this Meko with the client token, so no agent's config keeps
+  Meko Cloud's key.
+- **A Meko linked before agents followed the link** moves its agents to Meko Cloud once, at its
+  first start that does (`agents_followed_link` in Meko's settings records it, linked or not), in
+  the background, under the changes' lock (`Service.MoveAgents`), so it never moves them to a Meko
+  Cloud being unlinked; a stop during it leaves it for the next start.
+- **It edits the user's agent configs without asking**, only their `meko` server and only for
+  Meko's own: that's what following the link means. Running sessions keep the old server until
+  they restart.
+- **`serve` may not see what the user's shell sees** (a service's thin PATH, or no
+  `CLAUDE_CONFIG_DIR`): Meko also looks in each agent's usual folders, and a move it can't make is
+  reported, never a reason to refuse the link.
 
 ## Meko Cloud's datapacks on this Meko's routes
 

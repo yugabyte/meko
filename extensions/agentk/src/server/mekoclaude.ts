@@ -3,25 +3,23 @@ import type { MekoClaudeStatus } from '../shared/types.js';
 import { resolveMeko, type Config } from './config.js';
 import { errMsg, type Logger } from './log.js';
 import type { TokenTry } from './meko.js';
-import { claudeMekoTokens, mekoClaudeGaps, mekoUrlHost, type ClaudeMeko, type ClaudeTokenPlace } from './mekosetup.js';
+import { claudeSettingsToken, mekoClaudeGaps, mekoUrlHost, type ClaudeMeko } from './mekosetup.js';
 
 /**
- * Whether Claude Code's sessions reach the Meko AgentK uses (MekoStatus.claude). Claude Code keeps
- * its own copy of the server and token in two places, its settings (the Meko hooks) and its `meko`
- * MCP server (the tools), and either can drift from AgentK's. Its tokens may differ from AgentK's;
- * each must work on AgentK's server: accepted, and seeing the project datapacks AgentK's own token
- * sees. Nothing here changes Claude Code's setup: that's only done when the user asks.
+ * Whether Meko's capture in Claude Code's sessions reaches the Meko AgentK uses (the capture part of
+ * MekoStatus.claude; its `meko` MCP server is Meko's to report, `mekoagents.ts`). Claude Code keeps
+ * its own copy of the server and token in its settings, where the Meko hooks read them, and it can
+ * drift from AgentK's. Its token may differ from AgentK's; it must work on AgentK's server: accepted,
+ * and seeing the project datapacks AgentK's own token sees. Nothing here changes Claude Code's setup:
+ * that's only done when the user asks.
  */
 
-/** How long a token's result, AgentK's own datapack list and the `claude mcp get` answer are reused. */
+/** How long a token's result and AgentK's own datapack list are reused. */
 export const CLAUDE_MEKO_TTL_MS = 10 * 60 * 1000;
 
-const PLACE: Record<ClaudeTokenPlace, string> = {
-  settings: "the token in Claude Code's settings",
-  server: "the token on Claude Code's meko MCP server",
-};
+const PLACE = "the token in Claude Code's settings";
 
-const EMPTY: MekoClaudeStatus = { gaps: [], unchecked: [], checking: false };
+const EMPTY: MekoClaudeStatus = { gaps: [], capture: [], unchecked: [], checking: false };
 
 export type TokenOutcome =
   | { kind: 'works' }
@@ -42,40 +40,35 @@ function upper(s: string): string {
 }
 
 /** The sentence for a token that doesn't work or couldn't be checked; null when it works. */
-export function tokenOutcomeText(place: ClaudeTokenPlace, o: TokenOutcome, url: string): string | null {
+export function tokenOutcomeText(o: TokenOutcome, url: string): string | null {
   const host = mekoUrlHost(url);
   switch (o.kind) {
     case 'works':
       return null;
     case 'rejected':
-      return `${upper(PLACE[place])} isn't accepted by ${host}.`;
+      return `${upper(PLACE)} isn't accepted by ${host}.`;
     case 'missing': {
       const what = o.names.length === 1
         ? `the datapack ${o.names[0]}`
         : `${o.names.length} of AgentK's project datapacks (${o.names.slice(0, 2).join(', ')}${o.names.length > 2 ? ', …' : ''})`;
-      return `${upper(PLACE[place])} can't see ${what} on ${host}.`;
+      return `${upper(PLACE)} can't see ${what} on ${host}.`;
     }
     case 'unchecked':
-      return `Couldn't check ${PLACE[place]} on ${host}: ${o.error.replace(/[.\s]+$/, '')}.`;
+      return `Couldn't check ${PLACE} on ${host}: ${o.error.replace(/[.\s]+$/, '')}.`;
   }
 }
 
 /**
- * The installer's token check: each of Claude Code's tokens that isn't AgentK's must be accepted by
+ * The installer's token check: Claude Code's token, unless it's AgentK's, must be accepted by
  * AgentK's server. It deliberately stops there, even on a reinstall whose projects already have
- * datapacks: whether a token sees them is the server's check (MekoClaudeWatch), which runs once it
+ * datapacks: whether it sees them is the server's check (MekoClaudeWatch), which runs once it
  * starts. One that couldn't be checked isn't a gap: the install goes on.
  */
 export async function claudeTokenGaps(c: ClaudeMeko, url: string, apiKey: string, tryToken: (url: string, token: string) => Promise<TokenTry>): Promise<string[]> {
-  const gaps: string[] = [];
-  const tried = new Map<string, TokenOutcome>();
-  for (const t of claudeMekoTokens(c, url)) {
-    if (t.token === apiKey) continue;
-    if (!tried.has(t.token)) tried.set(t.token, tokenOutcome(await tryToken(url, t.token), []));
-    const o = tried.get(t.token)!;
-    if (o.kind === 'rejected') gaps.push(tokenOutcomeText(t.place, o, url)!);
-  }
-  return gaps;
+  const token = claudeSettingsToken(c, url);
+  if (!token || token === apiKey) return [];
+  const o = tokenOutcome(await tryToken(url, token), []);
+  return o.kind === 'rejected' ? [tokenOutcomeText(o, url)!] : [];
 }
 
 function hash(s: string): string {
@@ -86,13 +79,8 @@ export interface MekoClaudeWatchDeps {
   config: () => Config;
   /** Claude Code is available for sessions (turned on and installed): nothing to check without it. */
   available: () => boolean;
-  /** Claude Code's Meko as its files say now. */
+  /** What Meko's capture needs in Claude Code, as its files say now. */
   read: () => ClaudeMeko;
-  /**
-   * Claude Code has a `meko` MCP server some other way; asked only when ~/.claude.json has no
-   * user-scope one. Null when Claude Code couldn't be asked: that's unchecked, never a gap.
-   */
-  mcpRegistered: () => Promise<boolean | null>;
   /** Every open project's datapacks. */
   projectDatapacks: () => { id: string; name: string }[];
   /** The datapacks AgentK's own token sees. */
@@ -105,8 +93,8 @@ export interface MekoClaudeWatchDeps {
 }
 
 /**
- * Keeps MekoStatus.claude current. A refresh reads Claude Code's files (cheap) and tries each of
- * its tokens that isn't AgentK's own on AgentK's server, reusing a token's result for
+ * Keeps the capture part of MekoStatus.claude current. A refresh reads Claude Code's settings (cheap)
+ * and tries its token, unless it's AgentK's own, on AgentK's server, reusing a token's result for
  * CLAUDE_MEKO_TTL_MS. Refreshes run one at a time; one asked for while another runs follows it.
  * Empty while Meko is off or Claude Code isn't available (Core refreshes it when that changes).
  */
@@ -114,7 +102,6 @@ export class MekoClaudeWatch {
   status: MekoClaudeStatus = EMPTY;
   private results = new Map<string, { at: number; outcome: TokenOutcome }>();
   private own: { key: string; at: number; ids: Set<string> } | null = null;
-  private registered: { at: number; value: boolean } | null = null;
   private chain: Promise<void> = Promise.resolve();
   private next: Promise<void> | null = null;
   private forceNext = false;
@@ -157,47 +144,21 @@ export class MekoClaudeWatch {
       return;
     }
     const c = this.o.read();
-    const fileUnchecked: string[] = [];
-    let registered: boolean | null = true;
-    if (!c.server) {
-      if (force || !this.registered || now - this.registered.at >= CLAUDE_MEKO_TTL_MS) {
-        const value = await this.o.mcpRegistered();
-        // An answer is kept; not being able to ask is tried again next time.
-        this.registered = value === null ? null : { at: now, value };
-        registered = value;
-      } else {
-        registered = this.registered.value;
-      }
-      if (registered === null) fileUnchecked.push("Couldn't ask Claude Code whether it has a meko MCP server (`claude mcp get meko` didn't answer).");
-    }
-    if (c.server?.unresolved) {
-      fileUnchecked.push(`Couldn't check ${PLACE.server}: it comes from \${${c.server.unresolved}}, which AgentK can't see (it isn't in Claude Code's settings env).`);
-    }
-    const gaps = mekoClaudeGaps(c, url, () => registered);
-    const tokens = claudeMekoTokens(c, url).filter((t) => t.token !== apiKey);
+    const gaps = mekoClaudeGaps(c, url);
+    const settingsToken = claudeSettingsToken(c, url);
+    const token = settingsToken && settingsToken !== apiKey ? settingsToken : null;
     const required = this.o.projectDatapacks();
-    const keyOf = (token: string) => [url, hash(apiKey), hash(token), required.map((d) => d.id).join(',')].join('\n');
-    const saved = (token: string) => (force ? undefined : this.results.get(keyOf(token))?.outcome);
-    if (tokens.some((t) => !saved(t.token))) this.set({ ...this.status, checking: true });
-
-    const outcomes = new Map<string, TokenOutcome>();
-    for (const t of tokens) {
-      if (outcomes.has(t.token)) continue;
-      let outcome = saved(t.token);
-      if (!outcome) {
-        outcome = await this.check(url, apiKey, t.token, required, now, force);
-        if (outcome.kind !== 'unchecked') this.results.set(keyOf(t.token), { at: now, outcome });
-      }
-      outcomes.set(t.token, outcome);
+    const key = token ? [url, hash(apiKey), hash(token), required.map((d) => d.id).join(',')].join('\n') : '';
+    let outcome = token && !force ? this.results.get(key)?.outcome : undefined;
+    if (token && !outcome) {
+      this.set({ ...this.status, checking: true });
+      outcome = await this.check(url, apiKey, token, required, now, force);
+      if (outcome.kind !== 'unchecked') this.results.set(key, { at: now, outcome });
     }
-    const tokenGaps: string[] = [];
-    const unchecked: string[] = [...fileUnchecked];
-    for (const t of tokens) {
-      const outcome = outcomes.get(t.token)!;
-      const text = tokenOutcomeText(t.place, outcome, url);
-      if (text) (outcome.kind === 'unchecked' ? unchecked : tokenGaps).push(text);
-    }
-    this.set({ gaps: [...gaps, ...tokenGaps], unchecked, checking: false });
+    const text = outcome ? tokenOutcomeText(outcome, url) : null;
+    const unchecked = text && outcome?.kind === 'unchecked' ? [text] : [];
+    if (text && outcome?.kind !== 'unchecked') gaps.push(text);
+    this.set({ gaps, capture: gaps, unchecked, checking: false });
   }
 
   /** One token on AgentK's server, held to the project datapacks AgentK's own token sees. */

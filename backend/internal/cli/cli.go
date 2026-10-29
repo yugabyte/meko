@@ -1,6 +1,7 @@
 // Package cli is the meko and meko-cli commands, one binary run by either name. meko runs Meko:
-// install, start, stop, restart, status, logs, update, version, connect (connect.go), token, ui,
-// setup_link, cloud_link, destroy, uninstall, extension list|install|update|delete and serve. meko-cli
+// install, start, stop, restart, status, logs, update, version, token, ui, setup_link, cloud_link,
+// destroy, uninstall, extension list|install|update|delete, agent list|connect|disconnect (agent.go)
+// and serve. meko-cli
 // works with what it keeps, through the running server, and with the linked Meko Cloud's datapacks
 // (cloudtools.go): datapacks, create_datapack, delete_datapack, export, search, add_memory, upload
 // and upload_status, one at a time or at its prompt (shell.go). help.go has each command's help.
@@ -77,15 +78,15 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	cmd, rest := args[0], args[1:]
 	switch cmd {
 	case "help", "-h", "--help":
-		if prog == progMeko && rest[0] == groupExtension {
+		if g := rest[0]; prog == progMeko && isGroup(g) {
 			if len(rest) == 1 {
-				printGroupHelp(stdout, prog, groupExtension)
+				printGroupHelp(stdout, prog, g)
 				return exitOK
 			}
-			if _, ok := lookup(prog, groupExtension+" "+rest[1]); !ok {
-				return unknownSubcommand(prog, groupExtension, rest[1], stderr)
+			if _, ok := lookup(prog, g+" "+rest[1]); !ok {
+				return unknownSubcommand(prog, g, rest[1], stderr)
 			}
-			return runProg(prog, []string{groupExtension, rest[1], "--help"}, stdout, stderr)
+			return runProg(prog, []string{g, rest[1], "--help"}, stdout, stderr)
 		}
 		c, ok := lookup(prog, rest[0])
 		if !ok {
@@ -105,19 +106,20 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	if cmd == "_launch" && prog == progMeko {
 		return runLaunch(rest, stderr)
 	}
-	// meko extension <sub> is the command "extension <sub>"; alone, it lists them.
-	if cmd == groupExtension && prog == progMeko {
+	// meko extension <sub> is the command "extension <sub>", and meko agent <sub> "agent <sub>";
+	// alone, each lists its subcommands.
+	if isGroup(cmd) && prog == progMeko {
 		if len(rest) == 0 || rest[0] == "-h" || rest[0] == "--help" || rest[0] == "help" {
-			printGroupHelp(stdout, prog, groupExtension)
+			printGroupHelp(stdout, prog, cmd)
 			if len(rest) == 0 {
 				return exitUsage
 			}
 			return exitOK
 		}
-		if _, ok := lookup(prog, groupExtension+" "+rest[0]); !ok {
-			return unknownSubcommand(prog, groupExtension, rest[0], stderr)
+		if _, ok := lookup(prog, cmd+" "+rest[0]); !ok {
+			return unknownSubcommand(prog, cmd, rest[0], stderr)
 		}
-		cmd, rest = groupExtension+" "+rest[0], rest[1:]
+		cmd, rest = cmd+" "+rest[0], rest[1:]
 	}
 	info, ok := lookup(prog, cmd)
 	if !ok || cmd == args[0] && strings.Contains(cmd, " ") { // a subcommand is two words
@@ -171,6 +173,8 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		}
 	case "extension list":
 		fs.BoolVar(&t.json, "json", false, "print the rows as JSON")
+	case "agent list":
+		fs.BoolVar(&t.json, "json", false, "print the list as JSON, as GET /api/v1/agents gives it")
 	case "extension delete":
 		fs.BoolVar(&c.purge, "purge", false, "also delete its data: AgentK's sessions and worktrees")
 		fs.BoolVar(&c.force, "force", false, "delete without asking")
@@ -248,7 +252,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	// These take one argument, and upload any number; their flags may follow.
 	switch cmd {
 	case "search", "add_memory", "create_datapack", "delete_datapack", "upload_status", "extension install",
-		"extension update", "extension delete", "export", "ui", "connect":
+		"extension update", "extension delete", "export", "ui", "agent connect", "agent disconnect":
 		if fs.NArg() > 0 {
 			t.text = fs.Arg(0)
 			if code, ok := parse(fs.Args()[1:]); !ok {
@@ -297,8 +301,12 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		return runStatus(l, statusOptions{verbose: c.verbose, json: t.json}, stdout, stderr)
 	case "token":
 		return runToken(l, t.json, stdout, stderr)
-	case "connect":
-		return runConnect(l, t.text, stdout, stderr)
+	case "agent list":
+		return runAgentList(l, t.json, stdout, stderr)
+	case "agent connect":
+		return runAgentConnect(l, t.text, stdout, stderr)
+	case "agent disconnect":
+		return runAgentDisconnect(l, t.text, stdout, stderr)
 	case "logs":
 		return runLogs(l, logsOptions{follow: c.follow, lines: c.lines, server: c.server, memoryEngine: c.memoryEngine,
 			service: c.service, json: t.json}, stdout)
@@ -379,7 +387,7 @@ func unknownCommand(prog, cmd string, rest []string, stderr io.Writer) int {
 	fmt.Fprintf(stderr, "%s: unknown command %q\n", prog, cmd)
 	if n := nearest(prog, cmd); n != "" {
 		// meko extensions list is meko extension list: the subcommand is kept.
-		if n == groupExtension && len(rest) > 0 {
+		if isGroup(n) && len(rest) > 0 {
 			if _, ok := lookup(prog, n+" "+rest[0]); ok {
 				n += " " + rest[0]
 			}

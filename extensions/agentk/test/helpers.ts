@@ -11,6 +11,7 @@ import { defaultDeps, type InstanceDeps } from '../src/server/instance.js';
 import { silentLogger } from '../src/server/log.js';
 import { mekoScope, pinSlug, sessionAgentId, type MekoClient, type TokenTry } from '../src/server/meko.js';
 import { MekoApi } from '../src/server/mekoapi.js';
+import type { MekoAgentsRead } from '../src/server/mekoagents.js';
 import type { MekoTools } from '../src/server/mekosettings.js';
 import type { LocalMekoProbe } from '../src/server/mekolocal.js';
 import type { OwnMekoLink } from '../src/server/mekohandover.js';
@@ -130,15 +131,13 @@ export function stubMekoTools() {
   const calls: { name: string; args: unknown[] }[] = [];
   const state: {
     setupError: string | null;
-    /** What trying each of Claude Code's tokens finds; a token not listed is rejected. */
+    /** What trying Claude Code's token finds; a token not listed is rejected. */
     tokens: Record<string, TokenTry>;
-    /** Whether `claude mcp get meko` finds a server (null: it couldn't be asked). */
-    claudeHasMcp: boolean | null;
     /** The command to run by hand each setup was given, in order. */
     manuals: string[];
-  } = { setupError: null, tokens: {}, claudeHasMcp: false, manuals: [] };
+  } = { setupError: null, tokens: {}, manuals: [] };
   const tools: MekoTools = {
-    async setUpClaude(url, apiKey, log, _claude, manual) {
+    async setUpClaude(url, apiKey, log, manual) {
       calls.push({ name: 'setUpClaude', args: [url, apiKey] });
       state.manuals.push(manual);
       log('setting up');
@@ -153,10 +152,6 @@ export function stubMekoTools() {
     async tryToken(url, token) {
       calls.push({ name: 'tryToken', args: [url, token] });
       return state.tokens[token] ?? { ok: false, rejected: true, error: 'invalid_token' };
-    },
-    async claudeHasMcp(command) {
-      calls.push({ name: 'claudeHasMcp', args: [command] });
-      return state.claudeHasMcp;
     },
   };
   return { tools, calls, state };
@@ -179,6 +174,8 @@ export interface TestEnv {
   handOverError: { value: string | null };
   /** While set, a handover waits for it before answering (as Meko's checks take a while). */
   handOverHold: { value: Promise<void> | null };
+  /** What Meko's list of agents (GET /api/v1/agents) answers when Core reads it: no answer at first, so nothing is gated. */
+  mekoAgents: { value: MekoAgentsRead };
   fakeDir: string;
   /** Stops the session host, ending every Claude in it, as a host crash would. The next ensureServer starts it again. */
   killHost(): Promise<void>;
@@ -254,6 +251,7 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
   const handOvers: OwnMekoLink[] = [];
   const handOverError: { value: string | null } = { value: null };
   const handOverHold: { value: Promise<void> | null } = { value: null };
+  const mekoAgents: { value: MekoAgentsRead } = { value: { kind: 'failed', error: "Meko isn't running on this computer" } };
   let hostHandle: HostHandle | null = null;
   const host = new SessionHost(paths, {
     services: () => null,
@@ -270,6 +268,7 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
     paths, config: cfg, db, version: '0.0.0-test', meko, mekoCaptureScript: opts.capture === false ? null : FAKE_CAPTURE,
     host, services: () => null, log: silentLogger, timers: false, mekoApi: mekoApi.api, mekoTools: mekoTools.tools,
     localMeko: async () => ({ ...local }),
+    mekoAgents: async () => mekoAgents.value,
     mekoHandOver: async (_home, link) => {
       handOvers.push(link);
       await handOverHold.value;
@@ -280,7 +279,7 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
   });
   if (opts.start !== false) await core.start();
   return {
-    home, repo, core, meko, mekoApi, mekoTools, local, handOvers, handOverError, handOverHold, fakeDir, killHost,
+    home, repo, core, meko, mekoApi, mekoTools, local, handOvers, handOverError, handOverHold, mekoAgents, fakeDir, killHost,
     async cleanup() {
       await core.stop().catch(() => undefined);
       await killHost();

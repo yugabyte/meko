@@ -462,6 +462,42 @@ export interface MekoCloud {
   key_hint: string | null;
   default_url: string;
   default_web_url: string;
+  // PUT and DELETE only: the agents a link change moved to the new target, left where they point,
+  // or failed to move. Absent from an older server.
+  agents?: AgentMoves;
+}
+
+export interface AgentMoves {
+  moved: { name: string; title: string }[];
+  left: { name: string; title: string; url: string }[];
+  failed: { name: string; title: string; error: string }[];
+}
+
+// An installed agent and whether its meko MCP server reaches the target: connected; stale (one of
+// Meko's own, but not exactly the target: a token or a move that's missing); elsewhere (another
+// server); none.
+export type AgentState = "connected" | "stale" | "elsewhere" | "none";
+
+export interface Agent {
+  name: string;
+  title: string;
+  command: string;
+  state: AgentState;
+  // Its meko server's URL, null with none.
+  url: string | null;
+  notes: string[];
+}
+
+// GET /agents: where agents connect (this Meko, or the linked Meko Cloud) and the installed agents.
+export interface Agents {
+  target: { kind: "local" | "cloud"; url: string };
+  agents: Agent[];
+}
+
+// POST /agents/:name/connect|disconnect: the agent's row after, and what the user should know.
+export interface AgentChange {
+  agent: Agent;
+  notes: string[];
 }
 
 // GET /datapacks?location=cloud: the linked Meko Cloud's datapacks, newest first.
