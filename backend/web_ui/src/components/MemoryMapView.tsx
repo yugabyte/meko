@@ -62,7 +62,13 @@ export function MemoryMapView({
     <div className="space-y-2">
       <svg
         viewBox="-1.12 -1.12 2.24 2.24"
-        className={cx("aspect-square w-full rounded-lg border bg-card", mini ? "max-w-56" : "max-w-[32rem]")}
+        // A click paints nothing over the map: it doesn't select the drawing (which the browser fills
+        // with its selection color), take focus or flash a tap highlight. Tab still focuses a dot.
+        className={cx(
+          "aspect-square w-full select-none rounded-lg border bg-card outline-none [-webkit-tap-highlight-color:transparent]",
+          mini ? "max-w-56" : "max-w-[32rem]",
+        )}
+        onMouseDown={(e) => e.preventDefault()}
         role="img"
         aria-label="Memory map"
       >
@@ -104,7 +110,7 @@ export function MemoryMapView({
             cy={p.y}
             r={on(p) && dim ? r * 1.4 : r}
             fill="currentColor"
-            className={cx(colorOf(p.state), onPick && "cursor-pointer")}
+            className={cx(colorOf(p.state), "outline-none", onPick && "cursor-pointer")}
             opacity={on(p) ? 1 : 0.2}
             tabIndex={onPick ? 0 : undefined}
             onMouseEnter={() => setHover(p)}
