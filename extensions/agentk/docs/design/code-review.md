@@ -17,7 +17,7 @@ settings, the line, the tab's label); the UI is the magnifier joined to the task
 
 ## Settings
 
-Three settings, each set globally (`[code_review]` in config.toml, Settings › General), overridden
+Three settings, each set globally (`[code_review]` in config.toml, Settings › Code review), overridden
 per project (`ProjectSettings.codeReview`, the project's settings) and again per session
 (`sessions.review_json`: the New session dialog's Advanced, the session's ⋯ sheet, Open PR with
 instructions, and the `review` argument of the `start_sessions` tool, so "start a code session with

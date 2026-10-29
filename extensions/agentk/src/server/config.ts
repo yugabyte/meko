@@ -103,7 +103,7 @@ export interface Config {
    */
   workQueue: { github: boolean; slack: boolean; syncMinutes: number; slackModel: string; slackTimeoutSeconds: number; slackTools: string[] };
   /**
-   * The local code review before a PR opens (review/runner.ts, docs/design/code-review.md), also in Settings › General;
+   * The local code review before a PR opens (review/runner.ts, docs/design/code-review.md), also in Settings › Code review;
    * a project's settings and a session's own go over these. strategy: `sagittarius-3.0`, `sirius-1.0` or `off`. rounds:
    * re-reviews after the first (0 to MAX_ROUNDS). depth: sweeps in each review (1 to MAX_DEPTH). models: the model each
    * tier of review step runs on, per harness (`[code_review.models.<harness>]`: large, mid, small); empty runs it on the

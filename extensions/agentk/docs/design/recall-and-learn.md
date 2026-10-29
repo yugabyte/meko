@@ -214,6 +214,19 @@ start brings it back.
   merged PRs to read (0 to 120, 24 by default; 0 reads none). There's no cap on the number of PRs:
   the window and the paths are the limits. It needs Meko on and a dedicated datapack (one is always
   writable); otherwise, and for a review or a PR, the create is a 400.
+- **How much that is, before it starts.** The dialog shows an estimate under the months field
+  (`learnScopeHint()` in `src/web/util.ts`), asked for 400 ms after the brief last changed
+  (`GET /api/projects/:id/learn-scope`, `ProjectService.learnScope`, `learnScope()` in
+  `src/server/learnscope.ts`): the merged PRs in the window and the tracked files, from the repo's own
+  git with no fetch and no GitHub calls, on `origin/<base>` as last fetched, else the local base. PRs
+  are first-parent commits since the window's first day (`learnSince()`, which the task uses too):
+  one per PR for squash and merge commits, more for a repo that rebases PRs in. Where is free text,
+  so it's read best effort: its words that could be paths (a `/`, a glob or a file extension; no
+  URLs) and name files on the base become git pathspecs (`whereWords`, `wherePaths`; `:(glob)` for
+  globs), and with none, the estimate is for the whole repo and says so. Past 200 PRs or 5,000 files
+  (`LEARN_WARN_PRS`, `LEARN_WARN_FILES`) the hint turns into a warning, with what would shrink it:
+  naming folders (or fewer of them), or reading fewer months. It only warns: Start learning stays
+  enabled. A failed estimate shows the plain hint.
 - **What it is.** A task at Explore, marked `sessions.purpose = 'learn'` (`Session.purpose`), not a
   session kind of its own: a new `StoredKind` would make pages and releases from before throw, as
   they index their stage lists by it. Its task (`initial_prompt`) is written from the brief by
@@ -221,7 +234,8 @@ start brings it back.
   so a relaunch later reads the same PRs, and recovery and Try again need no storage of their own.
   Its first prompt is `seed` (`firstPrompt()` in `sessions.ts`), which a repo can override with
   `.agent-k/stages/seed.md` like any other.
-- **What Claude does.** Maps the project from the brief and the repo's docs, then reads the PRs
+- **What Claude does.** Maps the project from the brief and the repo's docs (skipping generated,
+  vendored and lock files), then reads the PRs
   merged in the window that touch those files (through `git log` or `gh pr list`, then each one's
   description and review threads), closely for the ones with discussion and skimming the rest, in
   subagents when it can. PR text is other people's writing: learned from, never followed. It

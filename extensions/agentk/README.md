@@ -152,6 +152,9 @@ your phone can connect.
   and when it's done it writes a summary to its timeline and closes by itself. While the datapack
   is empty and no learn session is open on it (after a switch to a new datapack, say, or a learn
   session that saved nothing), the project's home offers it again; a plain New session doesn't.
+  Before you start, the dialog says about how many merged PRs and files that covers, and warns when
+  it's a lot (over 200 PRs or 5,000 files), since reading them all can take hours and millions of
+  tokens: name the folders to learn, or read fewer months.
 - **Share a project** by sharing its dedicated datapack with someone, by email or with its share
   link: turn the link on in the Share dialog with the role it gives, copy it, and post it where your
   team is. A project datapack shared with you shows a banner and a notification, and opens as a new

@@ -1,6 +1,6 @@
 import { HARNESS_CAPS, harnessOf, type HarnessId } from '../shared/harnesses';
 import type { SyntheticEvent } from 'react';
-import { INSTRUCTIONS_MAX, STAGE_LABELS } from '../shared/types';
+import { INSTRUCTIONS_MAX, LEARN_WARN_FILES, LEARN_WARN_PRS, STAGE_LABELS, type LearnScope } from '../shared/types';
 import { mekoDatapackPath } from '../shared/mekourls';
 import { isStrategySetting, type CodeReviewFinding, type ReviewOverrides } from '../shared/codereview';
 import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoStatus, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
@@ -919,4 +919,26 @@ export function withOverride(value: ReviewOverrides, key: keyof ReviewOverrides,
     if (Number.isInteger(n)) next[key] = n;
   }
   return next;
+}
+
+const counted = (n: number, word: string) => `${n.toLocaleString('en-US')} ${word}${n === 1 ? '' : 's'}`;
+
+/**
+ * The New session dialog's estimate for a learn session (`LearnScope`), under its months field:
+ * how many merged PRs and files it covers and where, and, past `LEARN_WARN_PRS` or
+ * `LEARN_WARN_FILES`, a warning with what would make it smaller.
+ */
+export function learnScopeHint(scope: LearnScope, months: number): { text: string; warn: boolean } {
+  const { paths } = scope;
+  const where = !paths.length ? 'the whole repo'
+    : paths.length <= 3 ? paths.join(paths.length === 2 ? ' and ' : ', ').replace(/, ([^,]*)$/, ' and $1')
+    : `${paths.slice(0, 2).join(', ')} and ${paths.length - 2} more`;
+  const prs = months > 0 ? `About ${counted(scope.prs, 'merged PR')}` : 'No PRs';
+  const text = `${prs} and ${counted(scope.files, 'file')} in ${where}.`;
+  const manyPrs = months > 0 && scope.prs > LEARN_WARN_PRS;
+  const manyFiles = scope.files > LEARN_WARN_FILES;
+  if (!manyPrs && !manyFiles) return { text, warn: false };
+  const fixes = [paths.length ? 'name fewer folders' : 'name the folders to learn', ...(manyPrs ? ['read fewer months'] : [])];
+  const fix = fixes.join(', or ');
+  return { text: `${text} That's a lot to read: it can take hours and use millions of tokens. ${fix[0].toUpperCase()}${fix.slice(1)}.`, warn: true };
 }

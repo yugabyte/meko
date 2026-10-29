@@ -88,6 +88,24 @@ export interface LearnBrief {
   months: number;
 }
 
+/** Past either, the New session dialog warns that a learn session will read a lot (`LearnScope`). */
+export const LEARN_WARN_PRS = 200;
+export const LEARN_WARN_FILES = 5_000;
+
+/**
+ * How much a learn session's brief covers, estimated from local git before it starts
+ * (`GET /api/projects/:id/learn-scope`): the merged PRs in its window and the files, in the paths
+ * its Where names, or in the whole repo when it names none the repo has.
+ */
+export interface LearnScope {
+  /** First-parent commits on the base branch in the window: one per PR for squash or merge commits. */
+  prs: number;
+  /** Tracked files on the base branch. */
+  files: number;
+  /** The words of Where that name files in the repo (git pathspecs); empty for the whole repo. */
+  paths: string[];
+}
+
 /** One line on what each start (and Review a PR, and a learn session) is for, shown under the choice in the New session dialog. */
 export const START_HINTS: Record<StartStage | 'review-pr' | 'learn', string> = {
   explore: "Investigate, answer questions, build POCs and run experiments. Move on to Design, Code or a PR when you're ready.",
@@ -2629,6 +2647,9 @@ export type TermServerMessage =
 // PATCH  /api/projects/:id    UpdateProjectRequest → Project
 // DELETE /api/projects/:id                     → 204   (closes it: the repo, branches and datapacks stay)
 // GET    /api/projects/:id/branches            → string[]
+// GET    /api/projects/:id/learn-scope?months=&where=&base=&repoPath= → LearnScope   (a learn session's estimate from
+//        local git, for the New session dialog; 400 for months outside 0–LEARN_MONTHS_MAX, where over LEARN_TEXT_MAX,
+//        a repo that isn't the project's or a scanned one, or a base in neither the repo nor its origin)
 // POST   /api/projects/:id/datapacks AttachDatapackRequest → Project
 // POST   /api/projects/:id/dedicated-datapack SetDedicatedDatapackRequest → Project   (a project without one gets its
 //        dedicated datapack; 409 if it has one or Meko is off, 402 with code DATAPACK_LIMIT at the plan's limit.
