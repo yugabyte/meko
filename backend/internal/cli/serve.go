@@ -156,11 +156,8 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		}
 		if pending, _ := app.ReadPending(); pending != nil && pending.To == release {
 			onProbation = true
-		}
-		if home, herr := os.UserHomeDir(); herr == nil {
-			if lerr := linkMekosh(app, home); lerr != nil {
-				log.Warn("can't make the mekosh command", "error", lerr)
-			}
+		} else {
+			makeMekoCLI(app, log)
 		}
 	}
 
@@ -515,28 +512,46 @@ type execError struct{ exe, why string }
 
 func (e *execError) Error() string { return e.why + ": " + e.exe }
 
+// makeMekoCLI makes this install's meko-cli command (linkMekoCLI), logging why it can't. Serve runs
+// it only once its release is past probation: a release rolled back after making the link would
+// leave meko-cli pointing at an older meko, which doesn't know that name and runs as meko.
+func makeMekoCLI(app update.App, log *slog.Logger) {
+	home, err := os.UserHomeDir()
+	if err == nil {
+		err = linkMekoCLI(app, home)
+	}
+	if err != nil {
+		log.Warn("can't make the meko-cli command", "error", err)
+	}
+}
+
+// finishUpdate finishes the update to release once it has run for after (update.HealthyAfter),
+// unless ctx ends first, and then makes the meko-cli command.
+func finishUpdate(ctx context.Context, app update.App, release string, after time.Duration, log *slog.Logger) {
+	select {
+	case <-ctx.Done():
+	case <-time.After(after):
+		pruned, err := app.Healthy(release)
+		if err != nil {
+			log.Warn("can't finish the update", "error", err)
+			return
+		}
+		log.Info("the update is done", "version", release, "pruned", pruned)
+		makeMekoCLI(app, log)
+	}
+}
+
 // startUpdates runs a release install's update checks, and finishes an update on probation once it
-// has run update.HealthyAfter. On their own, updates are installed only under the service, which
-// starts the new version after serve exits; a server started by hand only reports them. The same
-// checks find the extensions' releases, and install those set to Update automatically (web's
-// autoUpdate), under the service or not. The updater it returns is the Status page's too, even with
-// [update] channel = "off" (which stops only the scheduled checks). When the schema can't be read it
-// returns nil and why.
+// has run update.HealthyAfter (finishUpdate). On their own, updates are installed only under the
+// service, which starts the new version after serve exits; a server started by hand only reports
+// them. The same checks find the extensions' releases, and install those set to Update
+// automatically (web's autoUpdate), under the service or not. The updater it returns is the Status
+// page's too, even with [update] channel = "off" (which stops only the scheduled checks). When the
+// schema can't be read it returns nil and why.
 func startUpdates(ctx context.Context, app update.App, release string, l paths.Layout, cfg config.Config,
 	log *slog.Logger, onProbation bool, restart chan struct{}, web *webListener) (*update.Updater, string) {
 	if onProbation {
-		go func() {
-			select {
-			case <-ctx.Done():
-			case <-time.After(update.HealthyAfter):
-				pruned, err := app.Healthy(release)
-				if err != nil {
-					log.Warn("can't finish the update", "error", err)
-					return
-				}
-				log.Info("the update is done", "version", release, "pruned", pruned)
-			}
-		}()
+		go finishUpdate(ctx, app, release, update.HealthyAfter, log)
 	}
 	schema, err := store.LatestSchema()
 	if err != nil {

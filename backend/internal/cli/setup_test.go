@@ -505,3 +505,37 @@ func TestServiceOfAMissingDataFolder(t *testing.T) {
 		t.Error("the service for another data folder was found")
 	}
 }
+
+// meko uninstall removes a release install's commands, with mekosh (meko-cli's old name), and leaves
+// a mekosh that isn't a link into the app folder.
+func TestUninstallRemovesTheCommands(t *testing.T) {
+	dir, _ := setup(t)
+	noRealExtensions(t)
+	useFakeService(t)
+	app := releaseInstall(t, "0.20261021.0", "0.20261022.0")
+	home := os.Getenv("HOME")
+	bin := filepath.Join(home, ".local", "bin")
+	for _, link := range []string{progMeko, progMekoCLI, progMekosh} {
+		if _, err := app.LinkCommandAs(home, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	code, out, errs := run("uninstall", "--data-dir", dir)
+	want(t, "uninstall", code, 0, out+errs, "and the meko and meko-cli commands")
+	for _, link := range []string{progMeko, progMekoCLI, progMekosh} {
+		if _, err := os.Lstat(filepath.Join(bin, link)); !os.IsNotExist(err) { //nolint:gosec // G703: the test's home
+			t.Errorf("uninstall left %s: %v", link, err)
+		}
+	}
+	mekosh := filepath.Join(bin, progMekosh)
+	if err := os.WriteFile(mekosh, []byte("mine"), 0o600); err != nil { //nolint:gosec // G703: the test's home
+		t.Fatal(err)
+	}
+	code, out, errs = run("uninstall", "--data-dir", dir)
+	if code != 0 {
+		t.Fatalf("uninstall again: exit %d\n%s%s", code, out, errs)
+	}
+	if b, _ := os.ReadFile(mekosh); string(b) != "mine" { //nolint:gosec // G304: test file
+		t.Errorf("uninstall removed a mekosh that isn't a link into the app folder")
+	}
+}

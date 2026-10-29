@@ -1,7 +1,7 @@
-// Package cli is the meko and mekosh commands, one binary run by either name. meko runs Meko:
+// Package cli is the meko and meko-cli commands, one binary run by either name. meko runs Meko:
 // install, start, stop, restart, status, logs, update, version, connect (connect.go), token, ui,
 // setup_link, cloud_link, destroy, uninstall, install_extension, update_extension, uninstall_extension
-// and serve. mekosh works with what it keeps, through the running server, and with the linked Meko
+// and serve. meko-cli works with what it keeps, through the running server, and with the linked Meko
 // Cloud's datapacks (cloudtools.go): datapacks, create_datapack, delete_datapack, export, search,
 // add_memory, upload and upload_status, one at a time or at its prompt (shell.go). help.go has each
 // command's help.
@@ -50,10 +50,16 @@ type cmdFlags struct {
 	extra                                                                          []string // after --
 }
 
-// Main runs the program argv0 names (mekosh, or else meko) with args and returns the exit code.
+// Main runs the program argv0 names (meko-cli, or else meko) with args and returns the exit code.
+// Run by meko-cli's old name, it runs nothing and names the meko-cli command instead.
 func Main(argv0 string, args []string, stdout, stderr io.Writer) int {
-	if filepath.Base(argv0) == progMekosh {
-		return RunMekosh(args, stdout, stderr)
+	switch filepath.Base(argv0) {
+	case progMekoCLI:
+		return RunMekoCLI(args, stdout, stderr)
+	case progMekosh:
+		fmt.Fprintf(stderr, "%s is %s now: %s\n", progMekosh, progMekoCLI,
+			shellQuote(append([]string{progMekoCLI}, args...)))
+		return exitUsage
 	}
 	return Run(args, stdout, stderr)
 }
@@ -99,7 +105,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		return unknownCommand(prog, cmd, rest, stderr)
 	}
 	if info.promptOnly {
-		fmt.Fprintf(stderr, "%s: %s works only at the prompt (run mekosh alone)\n", prog, cmd)
+		fmt.Fprintf(stderr, "%s: %s works only at the prompt (run meko-cli alone)\n", prog, cmd)
 		return exitUsage
 	}
 	if cmd == "memory-extractor" {
@@ -330,14 +336,14 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 }
 
 // unknownCommand says cmd isn't one of prog's: when it's the other program's, which one to run
-// instead (meko's usage commands moved to mekosh), else the nearest of prog's names.
+// instead (meko's usage commands moved to meko-cli), else the nearest of prog's names.
 func unknownCommand(prog, cmd string, rest []string, stderr io.Writer) int {
-	other := progMekosh
-	if prog == progMekosh {
+	other := progMekoCLI
+	if prog == progMekoCLI {
 		other = progMeko
 	}
 	if c, ok := lookup(other, cmd); ok && !c.hidden && !c.promptOnly {
-		what := "is a mekosh command now"
+		what := "is a meko-cli command now"
 		if other == progMeko {
 			what = "is a meko command"
 		}
@@ -352,7 +358,7 @@ func unknownCommand(prog, cmd string, rest []string, stderr io.Writer) int {
 	return exitUsage
 }
 
-// failAs is fail for prog: mekosh's errors say mekosh.
+// failAs is fail for prog: meko-cli's errors say meko-cli.
 func failAs(prog string, stderr io.Writer, err error) int {
 	fmt.Fprintf(stderr, "%s: %v\n", prog, err)
 	return exitError

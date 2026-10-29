@@ -143,7 +143,7 @@ func (a App) LinkCommand(home string) (string, error) {
 }
 
 // LinkCommandAs points <home>/.local/bin/<link> at app/current/bin/<name>: the same program under
-// another name (meko's mekosh, which it tells apart by the name it's run by).
+// another name (meko's meko-cli, which it tells apart by the name it's run by).
 func (a App) LinkCommandAs(home, link string) (string, error) {
 	bin := filepath.Join(home, ".local", "bin")
 	if err := os.MkdirAll(bin, 0o755); err != nil { //nolint:gosec // G301: the user's own bin folder

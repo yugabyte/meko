@@ -13,28 +13,28 @@ import (
 	"github.com/yugabyte/meko/backend/internal/paths"
 )
 
-// atPrompt is set while mekosh's prompt runs: add_memory then needs its text on the line, since
+// atPrompt is set while meko-cli's prompt runs: add_memory then needs its text on the line, since
 // stdin is where the next commands come from.
 var atPrompt bool
 
-// datapackCommands are mekosh's commands that take --datapack, which the prompt's use fills in.
+// datapackCommands are meko-cli's commands that take --datapack, which the prompt's use fills in.
 var datapackCommands = []string{"search", "add_memory", "upload", "upload_status"}
 
-// RunMekosh runs mekosh: the command in args, or with none (only --data-dir) its prompt.
-func RunMekosh(args []string, stdout, stderr io.Writer) int {
+// RunMekoCLI runs meko-cli: the command in args, or with none (only --data-dir) its prompt.
+func RunMekoCLI(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && (!strings.HasPrefix(args[0], "-") || args[0] == "-h" || args[0] == "--help") {
-		return runProg(progMekosh, args, stdout, stderr)
+		return runProg(progMekoCLI, args, stdout, stderr)
 	}
-	fs := flag.NewFlagSet(progMekosh, flag.ContinueOnError)
+	fs := flag.NewFlagSet(progMekoCLI, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {}
 	dataDir := fs.String("data-dir", "", "the data folder (default ~/.meko, or MEKO_HOME)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			printUsage(stdout, progMekosh)
+			printUsage(stdout, progMekoCLI)
 			return exitOK
 		}
-		fmt.Fprintln(stderr, "Run mekosh --help to see the commands")
+		fmt.Fprintln(stderr, "Run meko-cli --help to see the commands")
 		return exitUsage
 	}
 	if fs.NArg() > 0 {
@@ -42,12 +42,12 @@ func RunMekosh(args []string, stdout, stderr io.Writer) int {
 		if *dataDir != "" {
 			rest = append(rest, "--data-dir", *dataDir)
 		}
-		return runProg(progMekosh, rest, stdout, stderr)
+		return runProg(progMekoCLI, rest, stdout, stderr)
 	}
 	return runPrompt(*dataDir, stdin, stdout, stderr)
 }
 
-// runPrompt reads mekosh's commands from in, one a line, and runs each as mekosh <line> would, until
+// runPrompt reads meko-cli's commands from in, one a line, and runs each as meko-cli <line> would, until
 // exit, quit or the end of input. On a terminal it prints a banner and a prompt, and a failed line
 // doesn't change the exit code; from a pipe or file it's a script, and exits with the first failing
 // line's code.
@@ -97,7 +97,7 @@ func runPrompt(dataDir string, in io.Reader, stdout, stderr io.Writer) int {
 			case datapack.cloud:
 				label = cloudPrefix + label
 			}
-			fmt.Fprintf(stdout, "mekosh %s> ", label)
+			fmt.Fprintf(stdout, "meko-cli %s> ", label)
 		}
 		line, err := a.ReadString('\n')
 		if line == "" && err != nil {
@@ -110,7 +110,7 @@ func runPrompt(dataDir string, in io.Reader, stdout, stderr io.Writer) int {
 		lc := exitOK
 		switch {
 		case werr != nil:
-			fmt.Fprintf(stderr, "mekosh: %v\n", werr)
+			fmt.Fprintf(stderr, "meko-cli: %v\n", werr)
 			lc = exitUsage
 		case len(words) == 0:
 		case words[0] == "exit" || words[0] == "quit":
@@ -125,7 +125,7 @@ func runPrompt(dataDir string, in io.Reader, stdout, stderr io.Writer) int {
 			if words[0] == "delete_datapack" && datapack.id != "" {
 				deleting, found = promptResolve(l, firstArg(words[1:]))
 			}
-			lc = runProg(progMekosh, promptArgs(words, datapack.spec(), dataDir), stdout, stderr)
+			lc = runProg(progMekoCLI, promptArgs(words, datapack.spec(), dataDir), stdout, stderr)
 			// The datapack in use is gone: later lines go to the default one again.
 			if lc == exitOK && found && deleting.cloud == datapack.cloud && strings.EqualFold(deleting.id, datapack.id) {
 				datapack = target{}
@@ -139,7 +139,7 @@ func runPrompt(dataDir string, in io.Reader, stdout, stderr io.Writer) int {
 }
 
 // promptArgs adds what the prompt knows to a line's words: the datapack use set, for a command that
-// takes --datapack and names none, and the data folder mekosh was given. help takes neither: its
+// takes --datapack and names none, and the data folder meko-cli was given. help takes neither: its
 // argument is the command to explain.
 func promptArgs(words []string, datapack, dataDir string) []string {
 	if words[0] == "help" || words[0] == "-h" || words[0] == "--help" {
@@ -189,21 +189,21 @@ func promptUse(l paths.Layout, args []string, datapack *target, stdout, stderr i
 		return exitOK
 	case 1:
 	default:
-		fmt.Fprintln(stderr, "mekosh: use takes one datapack, by name or id")
+		fmt.Fprintln(stderr, "meko-cli: use takes one datapack, by name or id")
 		return exitUsage
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), toolTimeout)
 	defer cancel()
 	session, err := connectTools(ctx, l)
 	if err != nil {
-		fmt.Fprintf(stderr, "mekosh: the server is running, but %v\n", err)
+		fmt.Fprintf(stderr, "meko-cli: the server is running, but %v\n", err)
 		return exitError
 	}
 	t := newTools(session, l)
 	defer t.close()
 	dp, err := t.resolve(ctx, args[0])
 	if err != nil {
-		fmt.Fprintf(stderr, "mekosh: %v\n", err)
+		fmt.Fprintf(stderr, "meko-cli: %v\n", err)
 		return exitError
 	}
 	// cloud:<id> is taken without a lookup; the prompt shows the name, so look it up here, once.

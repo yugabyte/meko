@@ -32,11 +32,14 @@ says so and changes nothing, unless given `--reinstall` or another version.
 `meko install` (`internal/cli/install.go`):
 
 - In a release install it points `app/current` at its own version and links `~/.local/bin/meko` and
-  `~/.local/bin/mekosh` to `app/current/bin/meko` (the binary runs `mekosh`'s commands when run by
-  that name). A build from source is set up as it is and doesn't update itself. An install from
-  before `mekosh` gets its link when the updated server starts: a release's `serve` makes it
-  (`linkMekosh`) when this install's `~/.local/bin/meko` is there and nothing is at
-  `~/.local/bin/mekosh`, since updates don't run `meko install`.
+  `~/.local/bin/meko-cli` to `app/current/bin/meko` (the binary runs `meko-cli`'s commands when run by
+  that name). A build from source is set up as it is and doesn't update itself. Since updates
+  don't run `meko install`, a release's `serve` also makes `~/.local/bin/meko-cli` (`linkMekoCLI`)
+  when this install's `~/.local/bin/meko` is there and nothing is at `~/.local/bin/meko-cli`, but
+  only once the release is past probation: at a start with no update pending, or when the update
+  is done ([below](#updates-and-rollback)). A release rolled back after making it would leave
+  `meko-cli` pointing at an older `meko` that doesn't know the name. Run as `mekosh`, the binary runs nothing
+  and names the `meko-cli` command instead (exit 2), so a `~/.local/bin/mekosh` link stays.
 - It makes the client token (in the secret store) and sets up the login service (below), stopping
   a server started by hand on the same data folder first. `--no-service` skips the service.
 - It writes the web listener's access to `web.toml` when neither it nor `config.toml` has a `[web]`
@@ -45,7 +48,8 @@ says so and changes nothing, unless given `--reinstall` or another version.
   instead ([web.md](web.md#settings)). It prints the web UI's URL.
 - It installs Meko alone. AgentK is `meko install_extension agentk`.
 
-`meko uninstall` removes the service, `~/.local/bin/meko`, `~/.local/bin/mekosh` and the app folder,
+`meko uninstall` removes the service, `~/.local/bin/meko`, `~/.local/bin/meko-cli`,
+`~/.local/bin/mekosh` (when they're links into the app folder) and the app folder,
 and keeps the data;
 `--purge` first destroys the data folder as `meko destroy` does (it asks, unless `--force`; it
 takes `--with-extensions` too). Extensions stay installed unless that destroy removed them, and it
@@ -366,7 +370,8 @@ A release install's app folder:
   becomes current. Then `update-pending.json` records `{from, to, schema, attempts}`, `app/current`
   is repointed atomically, and `serve` exits 0 for the service manager to start the new version.
 - **Probation**: each start of the pending version counts an attempt (a clean stop takes it back);
-  5 minutes up finishes the update and prunes versions older than the one it replaced. Until then
+  5 minutes up finishes the update, prunes versions older than the one it replaced, and makes
+  `~/.local/bin/meko-cli` if it isn't there ([above](#install)). Until then
   the scheduled checks still run, and install the extensions' updates, but no update of Meko's.
 - **Rollback**: the 4th start of a version that failed 3 times puts back the previous one. If the
   new version migrated the database, `store.RestoreBackup` moves the upgraded file and its WAL aside

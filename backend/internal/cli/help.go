@@ -10,19 +10,22 @@ import (
 	"unicode/utf8"
 )
 
-// The two programs this binary is: meko runs Meko, mekosh works with what it keeps. cmd/meko picks
+// The two programs this binary is: meko runs Meko, meko-cli works with what it keeps. cmd/meko picks
 // one from the name it was run by.
 const (
-	progMeko   = "meko"
+	progMeko    = "meko"
+	progMekoCLI = "meko-cli"
+	// progMekosh is meko-cli's old name. Run by it, the binary names meko-cli instead, which is
+	// why an install's ~/.local/bin/mekosh link stays until meko uninstall removes it.
 	progMekosh = "mekosh"
 )
 
 // docsURL is where the CLI's docs live; each command's help links to its anchor there.
 const docsURL = "https://mekodata.ai/docs/cli"
 
-// command is one command's help: the group meko --help (or mekosh --help) lists it under, a one-line
+// command is one command's help: the group meko --help (or meko-cli --help) lists it under, a one-line
 // summary, its usage line and examples. Its flags come from its flag set. A hidden command runs but
-// isn't listed; a promptOnly one is mekosh's, and only at its prompt.
+// isn't listed; a promptOnly one is meko-cli's, and only at its prompt.
 type command struct {
 	name, group, summary, usage string
 	examples                    []example
@@ -145,51 +148,51 @@ var mekoCommands = []command{
 		}},
 }
 
-var mekoshGroups = []string{"Datapacks", "Memory and knowledge", "At the prompt only"}
+var mekoCLIGroups = []string{"Datapacks", "Memory and knowledge", "At the prompt only"}
 
-var mekoshCommands = []command{
+var mekoCLICommands = []command{
 	{name: "datapacks", group: "Datapacks", summary: "List the datapacks, and the linked Meko Cloud's",
-		usage: "mekosh datapacks [flags]", examples: []example{
-			{"mekosh datapacks", "this Meko's and the linked Meko Cloud's, by name, with their descriptions"},
-			{"mekosh datapacks --local", "only this Meko's"},
-			{"mekosh datapacks --json", "with each one's id, and whether it's this Meko's or Meko Cloud's (and shared)"},
+		usage: "meko-cli datapacks [flags]", examples: []example{
+			{"meko-cli datapacks", "this Meko's and the linked Meko Cloud's, by name, with their descriptions"},
+			{"meko-cli datapacks --local", "only this Meko's"},
+			{"meko-cli datapacks --json", "with each one's id, and whether it's this Meko's or Meko Cloud's (and shared)"},
 		}},
 	{name: "create_datapack", group: "Datapacks", summary: "Create a datapack",
-		usage: "mekosh create_datapack <name> [flags]", examples: []example{
-			{"mekosh create_datapack research", "create the datapack research"},
-			{"mekosh create_datapack team-notes --cloud", "create it in the linked Meko Cloud"},
+		usage: "meko-cli create_datapack <name> [flags]", examples: []example{
+			{"meko-cli create_datapack research", "create the datapack research"},
+			{"meko-cli create_datapack team-notes --cloud", "create it in the linked Meko Cloud"},
 		}},
 	{name: "delete_datapack", group: "Datapacks", summary: "Delete a datapack and everything in it",
-		usage: "mekosh delete_datapack <name|id> [flags]", examples: []example{
-			{"mekosh delete_datapack research", "delete it and everything in it, for good, after asking"},
-			{"mekosh delete_datapack research --force", "don't ask"},
-			{"mekosh delete_datapack cloud:team-notes", "the linked Meko Cloud's, when this Meko has one named so too"},
+		usage: "meko-cli delete_datapack <name|id> [flags]", examples: []example{
+			{"meko-cli delete_datapack research", "delete it and everything in it, for good, after asking"},
+			{"meko-cli delete_datapack research --force", "don't ask"},
+			{"meko-cli delete_datapack cloud:team-notes", "the linked Meko Cloud's, when this Meko has one named so too"},
 		}},
 	{name: "export", group: "Datapacks", summary: "Write a datapack to a zip",
-		usage: "mekosh export [<name|id>] [flags]", examples: []example{
-			{"mekosh export", "write the default datapack to meko-<name>-<date>.zip here"},
-			{"mekosh export research -o research.zip", "write another datapack to a file you name"},
+		usage: "meko-cli export [<name|id>] [flags]", examples: []example{
+			{"meko-cli export", "write the default datapack to meko-<name>-<date>.zip here"},
+			{"meko-cli export research -o research.zip", "write another datapack to a file you name"},
 		}},
 	{name: "search", group: "Memory and knowledge", summary: "Search memories, files and past conversations",
-		usage: `mekosh search "<question>" [flags]`, examples: []example{
-			{`mekosh search "why is the web listener separate"`, "search the default datapack"},
-			{`mekosh search "release steps" --source knowledge_base --limit 3`, "only the knowledge base, three results"},
-			{`mekosh search "owner's login" --datapack research --json`, "another datapack, the tool's raw reply"},
-			{`mekosh search "deploy steps" --datapack cloud:team-runbooks`, "a datapack in the linked Meko Cloud"},
+		usage: `meko-cli search "<question>" [flags]`, examples: []example{
+			{`meko-cli search "why is the web listener separate"`, "search the default datapack"},
+			{`meko-cli search "release steps" --source knowledge_base --limit 3`, "only the knowledge base, three results"},
+			{`meko-cli search "owner's login" --datapack research --json`, "another datapack, the tool's raw reply"},
+			{`meko-cli search "deploy steps" --datapack cloud:team-runbooks`, "a datapack in the linked Meko Cloud"},
 		}},
 	{name: "add_memory", group: "Memory and knowledge", summary: "Save a memory, word for word",
-		usage: `mekosh add_memory "<text>" [flags]`, examples: []example{
-			{`mekosh add_memory "CI runs on Linux and macOS"`, "save it to the default datapack"},
-			{"git log -1 --format=%B | mekosh add_memory", "read the text from stdin (not at the prompt)"},
+		usage: `meko-cli add_memory "<text>" [flags]`, examples: []example{
+			{`meko-cli add_memory "CI runs on Linux and macOS"`, "save it to the default datapack"},
+			{"git log -1 --format=%B | meko-cli add_memory", "read the text from stdin (not at the prompt)"},
 		}},
 	{name: "upload", group: "Memory and knowledge", summary: "Add files to the knowledge base",
-		usage: "mekosh upload <file>... [flags]", examples: []example{
-			{"mekosh upload notes.md spec.pdf", "add the files and wait until they're indexed"},
-			{"mekosh upload big.pdf --no-wait", "return once it's uploaded"},
+		usage: "meko-cli upload <file>... [flags]", examples: []example{
+			{"meko-cli upload notes.md spec.pdf", "add the files and wait until they're indexed"},
+			{"meko-cli upload big.pdf --no-wait", "return once it's uploaded"},
 		}},
 	{name: "upload_status", group: "Memory and knowledge", summary: "Show how an uploaded file is doing",
-		usage: "mekosh upload_status <key> [flags]", examples: []example{
-			{"mekosh upload_status <key>", "the key upload printed"},
+		usage: "meko-cli upload_status <key> [flags]", examples: []example{
+			{"meko-cli upload_status <key>", "the key upload printed"},
 		}},
 	{name: "use", group: "At the prompt only", promptOnly: true, summary: "Set the datapack later commands use",
 		usage: "use [<name|id>]", examples: []example{
@@ -205,15 +208,15 @@ var mekoshCommands = []command{
 
 // commandsOf are prog's commands.
 func commandsOf(prog string) []command {
-	if prog == progMekosh {
-		return mekoshCommands
+	if prog == progMekoCLI {
+		return mekoCLICommands
 	}
 	return mekoCommands
 }
 
 // lookup finds prog's command called name.
 func lookup(prog, name string) (command, bool) {
-	if prog == progMekosh && name == "quit" {
+	if prog == progMekoCLI && name == "quit" {
 		name = "exit"
 	}
 	for _, c := range commandsOf(prog) {
@@ -227,10 +230,10 @@ func lookup(prog, name string) (command, bool) {
 // printUsage prints prog's commands, by group.
 func printUsage(w io.Writer, prog string) {
 	groups := mekoGroups
-	if prog == progMekosh {
-		groups = mekoshGroups
-		fmt.Fprint(w, "mekosh works with what Meko keeps: datapacks, memories, files and conversations\n"+
-			"Run it alone for a prompt, or give it one command\n\nUsage: mekosh [<command> [flags]]\n")
+	if prog == progMekoCLI {
+		groups = mekoCLIGroups
+		fmt.Fprint(w, "meko-cli works with what Meko keeps: datapacks, memories, files and conversations\n"+
+			"Run it alone for a prompt, or give it one command\n\nUsage: meko-cli [<command> [flags]]\n")
 	} else {
 		fmt.Fprint(w, "The universal, self-learning context engine for agentic applications\n\n"+
 			"Usage: meko <command> [flags]\n")
@@ -243,13 +246,13 @@ func printUsage(w io.Writer, prog string) {
 			}
 		}
 	}
-	if prog == progMekosh {
+	if prog == progMekoCLI {
 		fmt.Fprint(w, "\nCommands take --datapack NAME|ID where it applies, and --json for the raw reply\n"+
-			"Run mekosh <command> --help for examples. Meko itself: meko --help\n")
-		fmt.Fprintf(w, "Docs: %s#mekosh\n", docsURL)
+			"Run meko-cli <command> --help for examples. Meko itself: meko --help\n")
+		fmt.Fprintf(w, "Docs: %s#meko-cli\n", docsURL)
 		return
 	}
-	fmt.Fprint(w, "\nTo work with datapacks, memories and files, run mekosh\n")
+	fmt.Fprint(w, "\nTo work with datapacks, memories and files, run meko-cli\n")
 	fmt.Fprintf(w, "Run meko <command> --help for examples and flags. Docs: %s\n", docsURL)
 }
 
@@ -257,8 +260,8 @@ func printUsage(w io.Writer, prog string) {
 func printCommandHelp(w io.Writer, prog string, c command, fs *flag.FlagSet) {
 	r, n := utf8.DecodeRuneInString(c.summary)
 	fmt.Fprintf(w, "%s %s: %c%s\n\nUsage: %s\n", prog, c.name, unicode.ToLower(r), c.summary[n:], c.usage)
-	if prog == progMekosh && c.promptOnly {
-		fmt.Fprintf(w, "\nExamples, at the mekosh prompt:\n")
+	if prog == progMekoCLI && c.promptOnly {
+		fmt.Fprintf(w, "\nExamples, at the meko-cli prompt:\n")
 	} else {
 		fmt.Fprintf(w, "\nExamples:\n")
 	}
@@ -271,8 +274,8 @@ func printCommandHelp(w io.Writer, prog string, c command, fs *flag.FlagSet) {
 		printFlags(w, fs)
 	}
 	anchor := c.name
-	if prog == progMekosh {
-		anchor = "mekosh-" + c.name
+	if prog == progMekoCLI {
+		anchor = "meko-cli-" + c.name
 	}
 	fmt.Fprintf(w, "\nMore: %s#%s\n", docsURL, anchor)
 }

@@ -1,4 +1,4 @@
-// Command meko is Meko: the CLI and the server in one binary. Run as mekosh (a link to it), it is
+// Command meko is Meko: the CLI and the server in one binary. Run as meko-cli (a link to it), it is
 // the CLI that works with what Meko keeps.
 package main
 

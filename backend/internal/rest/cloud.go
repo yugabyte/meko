@@ -23,7 +23,7 @@ import (
 // (delete, upload-url, document-status, search, memories) send a datapack this Meko doesn't have to
 // it. The server calls Meko Cloud with the link's key, which never leaves it.
 
-// owner says whether a request may act on the linked Meko Cloud: the admin token (mekosh) or the
+// owner says whether a request may act on the linked Meko Cloud: the admin token (meko-cli) or the
 // owner on the web listener. An agent's client token mayn't: the key acts on the whole Meko Cloud
 // account. Listing its datapacks takes any credential.
 func (a *api) owner(c echo.Context) bool {
@@ -98,7 +98,7 @@ func (a *api) toCloud(c echo.Context, status int, method, path string, body any)
 
 func forbiddenCloud(c echo.Context) error {
 	return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN",
-		"Meko Cloud's datapacks take the owner or the admin token (mekosh), not a client token. "+
+		"Meko Cloud's datapacks take the owner or the admin token (meko-cli), not a client token. "+
 			"To make a datapack on this Meko, send location \"local\".")
 }
 
