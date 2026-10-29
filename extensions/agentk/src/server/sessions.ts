@@ -96,7 +96,7 @@ export function workflowLine(kind: SessionKind, stage: Stage): string {
   if (kind === 'review-pr') {
     return "This is a Review a PR session: the user is reviewing someone else's pull request and you assist them. Don't review it on your own; answer what they ask. Don't push to the PR's branch or post on GitHub unless they ask. The user ends the session from the AgentK UI.";
   }
-  const stages = 'Stages: Explore → Design → Code → PR & Review → Merge & Close; the user moves the session between stages, and approves the design, opening the PR, and merging, from the AgentK UI.';
+  const stages = 'Stages: Explore → Design → Code → Review & PR → Merge & Close; the user moves the session between stages, and approves the design, opening the PR, and merging, from the AgentK UI.';
   if (stage !== 'explore') return stages;
   return `${stages} It's in Explore now: investigate, answer questions, build POCs and run experiments in this worktree, and push experimental branches when useful. AgentK runs no design approval, PR, review or merge until the user moves it on.`;
 }

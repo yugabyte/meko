@@ -91,7 +91,7 @@ user asks; then Claude posts one review with their comments inline
 the Changes panel go out through the `review-pr-comments` template: they're the user's review
 comments, to answer or draft as review comments, never changes to make or comments of Claude's own.
 
-**Keeping up with the PR.** The session is polled like a PR & Review one (every 45 seconds and at
+**Keeping up with the PR.** The session is polled like a Review & PR one (every 45 seconds and at
 each turn end, `prWatch`), and nothing is sent to Claude by itself, so waiting costs no tokens.
 New commits on the PR show in the footer and the stage bar (*3 new commits*, or *PR force-pushed*
 when the commit reviewed is no longer in it), with one notification per new head. **Update to

@@ -10,7 +10,7 @@ const KINDS: Record<HeldReview['kind'], string> = { agentk: 'AgentK', person: ''
 
 /**
  * The reviews on the session's PR held for the user (`Session.heldReviews`): each one's text and
- * inline comments, checked to start, and **Send to AgentK** (PR & Review only) or **Dismiss** for
+ * inline comments, checked to start, and **Send to AgentK** (Review & PR only) or **Dismiss** for
  * the checked ones. Refetched whenever the count changes.
  */
 export function HeldReviewsSheet({ session, onClose }: { session: Session; onClose: () => void }) {
@@ -70,7 +70,7 @@ export function HeldReviewsSheet({ session, onClose }: { session: Session; onClo
           <button
             className="btn primary"
             disabled={!n || !!busy || !canSend}
-            title={canSend ? 'AgentK addresses the checked reviews' : 'Held reviews go to AgentK in PR & Review'}
+            title={canSend ? 'AgentK addresses the checked reviews' : 'Held reviews go to AgentK in Review & PR'}
             onClick={() => void act('send')}
           >
             {busy === 'send' ? <Busy label="Sending" /> : n ? `Send ${n} to AgentK` : 'Send to AgentK'}
@@ -78,7 +78,7 @@ export function HeldReviewsSheet({ session, onClose }: { session: Session; onClo
         </>
       }
     >
-      {!canSend && <p className="hint">Held reviews go to AgentK in PR &amp; Review. Move the session back there to send them, or dismiss them.</p>}
+      {!canSend && <p className="hint">Held reviews go to AgentK in Review &amp; PR. Move the session back there to send them, or dismiss them.</p>}
       {!reviews && !error && <Busy label="Reading the held reviews" />}
       {reviews && !reviews.length && <p className="muted">No reviews are held now.</p>}
       {reviews && reviews.length > 0 && (

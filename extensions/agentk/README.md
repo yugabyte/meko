@@ -122,7 +122,7 @@ your phone can connect.
   **Advanced** a session can work in another of your repos, on a new branch you name, or pick up
   existing work: an **existing branch** (its open PR is linked), or one of your open **pull
   requests**, a fork's included when the fork is one of the repo's remotes. AgentK then builds on
-  what's there instead of branching from it, and picks the PR up at PR & Review.
+  what's there instead of branching from it, and picks the PR up at Review & PR.
   The foot of the rail shows who you are and which server you're on (`you@dev-box`), so windows
   on different machines are easy to tell apart; give the server your own name in Settings.
 - **Meko, the shared context layer:** every project has a dedicated datapack plus any number of
@@ -281,7 +281,7 @@ your phone can connect.
   ([details](docs/design/mod.md)). Claude Code's mods are early
   access, and its own rollout decides whether they load; when they don't, AgentK types its prompts.
   When the host's Claude Code is too old for the mod, a banner says so and can update it.
-- **Start where you want:** every task runs on one pipeline, Explore → Design → Code → PR & Review →
+- **Start where you want:** every task runs on one pipeline, Explore → Design → Code → Review & PR →
   Merge & Close, and a new session asks where to start: *Explore* for investigating, POCs and
   experiments, *Design* (the default) for the full lifecycle below, or *Code* for small tasks that
   go straight to code. Or pick *Review a PR* (above). A task moves between stages, forward or back,
@@ -290,7 +290,7 @@ your phone can connect.
   session has discussed or done, not its first prompt. A move, and **Open PR** (its **+** notes
   button), takes optional instructions for AgentK, sent after the stage's prompt. Rename a session any time
   (double-click its tab, or its row in the rail): its branch and worktree keep their names.
-- **Task lifecycle:** (Explore →) Design → Code → PR & Review (AgentK) → Merge & Close. Complex designs are
+- **Task lifecycle:** (Explore →) Design → Code → Review & PR (AgentK) → Merge & Close. Complex designs are
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
   markdown, with Mermaid diagrams drawn (zoom them with − and +). The design's open questions are listed beside it, each
   with AgentK's options and recommendation picked to start: pick another, or write a custom answer, then send them for

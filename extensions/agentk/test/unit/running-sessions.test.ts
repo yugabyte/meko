@@ -50,13 +50,13 @@ describe('dotState', () => {
     expect(dotState({ status, learning, mekoCall, queued, stage: 'code', waitsOnYou: [] })).toBe(dot);
   });
 
-  // PR & Review waiting on the user shows Needs you over Claude at its prompt or in a turn, and over
+  // Review & PR waiting on the user shows Needs you over Claude at its prompt or in a turn, and over
   // every other dot there; a Claude that isn't there wins, and other stages don't show it.
   it.each<[string, Session['stage'], SessionStatus, Partial<Session>, DotState]>([
     ['over learning and a queued gate', 'review', 'idle', { learning: true, queued: 'merge' }, 'needs_input'],
     ['over a turn calling Meko', 'review', 'working', { mekoCall: true }, 'needs_input'],
     ['not over exited', 'review', 'exited', {}, 'exited'],
-    ['not outside PR & Review', 'code', 'idle', {}, 'idle'],
+    ['not outside Review & PR', 'code', 'idle', {}, 'idle'],
   ])('a blocker only the user can clear: %s', (_, stage, status, over, dot) => {
     expect(dotState({ ...session(status), ...over, stage, waitsOnYou: ['CI is failing.'] })).toBe(dot);
   });
