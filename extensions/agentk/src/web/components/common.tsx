@@ -667,9 +667,9 @@ export const LEARN_LABEL = 'Learn the project';
 
 /**
  * Where a new session starts: the stages a task can start at as pills joined like the stage bar
- * (dotted from Explore, which is optional), then "or" and Review a PR, and with `learn` (Meko on and
- * a dedicated datapack) "or" and Learn the project. A radio group (arrow keys move the choice); `id`
- * prefixes the element ids.
+ * (dotted from Explore, which is optional), then "or" and Review a PR, and with `learn` (the New
+ * session dialog opened as the learn offer, or to retry a learn start) "or" and Learn the project.
+ * A radio group (arrow keys move the choice); `id` prefixes the element ids.
  */
 export function StartPicker({ id, value, learn = false, onChange }: { id: string; value: StartChoice; learn?: boolean; onChange: (c: StartChoice) => void }) {
   const refs = useRef<Partial<Record<StartChoice, HTMLButtonElement | null>>>({});

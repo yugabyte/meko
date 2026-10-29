@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { HARNESS_CAPS } from '../../src/shared/harnesses.js';
-import type { HarnessStatus, MekoStatus, Project, Settings } from '../../src/shared/types.js';
+import type { CreateSessionRequest, HarnessStatus, MekoStatus, Project, Settings } from '../../src/shared/types.js';
 import { NewSessionDialog } from '../../src/web/components/NewSessionDialog.js';
 import { AgentSettings, HarnessBar, MekoLinks } from '../../src/web/components/SettingsDialog.js';
 import { defaultAgentChoice } from '../../src/web/util.js';
@@ -50,22 +50,30 @@ describe("the New session dialog's Agent choice", () => {
 
 describe("the New session dialog's Learn the project", () => {
   const dedicated = { ...project, datapacks: [{ id: 'dp', name: 'adlc/proj/demo/x', role: 'dedicated' }] } as unknown as Project;
-  const learnHtml = (p: Project, mekoOn: boolean, learnFirst: boolean) =>
+  const learnHtml = (p: Project, mekoOn: boolean, learnFirst: boolean, initial?: CreateSessionRequest) =>
     renderToStaticMarkup(createElement(NewSessionDialog, {
-      project: p, ghLogin: null, harnesses: [status('claude')], mekoOn, learnFirst, onClose: () => undefined, onCreated: () => undefined,
+      project: p, ghLogin: null, harnesses: [status('claude')], mekoOn, learnFirst, initial, onClose: () => undefined, onCreated: () => undefined,
     }));
+  const shown = (html: string) => ({
+    pill: html.includes('id="ns-start-learn"'),
+    picked: /id="ns-start-learn"[^>]*aria-checked="true"/.test(html),
+    fields: html.includes('id="ns-learn-about"') && !html.includes('id="ns-prompt"'),
+    offer: html.includes('id="ns-learn-offer"'),
+  });
+  const retryLearn: CreateSessionRequest = { name: 'Learn the project', learn: { about: 'The billing service.', where: 'services/billing/', months: 12 } };
+  const retryDesign: CreateSessionRequest = { name: 'x', start: 'design', prompt: 'Fix it' };
   it.each([
-    ['is picked, with its fields and the empty-datapack line, for a project just opened on an empty datapack', dedicated, true, true, { pill: true, picked: true, fields: true }],
-    ['is offered but not picked otherwise', dedicated, true, false, { pill: true, picked: false, fields: false }],
-    ["isn't offered without a dedicated datapack", { ...project, datapacks: [] } as unknown as Project, true, true, { pill: false, picked: false, fields: false }],
-    ["isn't offered with Meko off", dedicated, false, true, { pill: false, picked: false, fields: false }],
-  ])('%s', (_, p, mekoOn, learnFirst, want) => {
-    const html = learnHtml(p, mekoOn, learnFirst);
-    expect({
-      pill: html.includes('id="ns-start-learn"'),
-      picked: /id="ns-start-learn"[^>]*aria-checked="true"/.test(html),
-      fields: html.includes('id="ns-learn-about"') && html.includes('id="ns-learn-offer"') && !html.includes('id="ns-prompt"'),
-    }).toEqual(want);
+    ['is picked, with its fields and the empty-datapack line, for a project just opened on an empty datapack', dedicated, true, true, undefined, { pill: true, picked: true, fields: true, offer: true }],
+    ["isn't offered in a plain New session, even with Meko on and a dedicated datapack", dedicated, true, false, undefined, { pill: false, picked: false, fields: false, offer: false }],
+    ['is offered and picked again to retry a failed learn start', dedicated, true, false, retryLearn, { pill: true, picked: true, fields: true, offer: false }],
+    ["isn't offered to retry a failed start at Design", dedicated, true, false, retryDesign, { pill: false, picked: false, fields: false, offer: false }],
+    ["isn't offered without a dedicated datapack", { ...project, datapacks: [] } as unknown as Project, true, true, undefined, { pill: false, picked: false, fields: false, offer: false }],
+    ["isn't offered with Meko off", dedicated, false, true, undefined, { pill: false, picked: false, fields: false, offer: false }],
+  ])('%s', (_, p, mekoOn, learnFirst, initial, want) => {
+    const html = learnHtml(p, mekoOn, learnFirst, initial);
+    expect(shown(html)).toEqual(want);
+    // A retry keeps what it asked for.
+    if (initial?.learn) expect([html.includes('The billing service.'), html.includes('services/billing/')]).toEqual([true, true]);
   });
 });
 

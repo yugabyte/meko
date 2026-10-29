@@ -1765,8 +1765,11 @@ export interface DatapackWithCounts extends DatapackRef {
 export interface ProjectHome {
   project: Project;
   datapacks: DatapackWithCounts[];
-  /** The project has had a learn session (archived ones count), so the home doesn't offer one for an empty datapack. */
-  hasLearnSession: boolean;
+  /**
+   * A learn session is open on the dedicated datapack (one launched on a datapack since switched
+   * away from doesn't count), so the home doesn't offer another for it while it's empty.
+   */
+  learnSessionOpen: boolean;
   activity: ActivityItem[];
   usage: ProjectUsage;
 }
