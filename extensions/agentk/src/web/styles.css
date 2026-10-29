@@ -1513,7 +1513,8 @@ textarea.input {
 .review-seg:disabled {
   cursor: default;
 }
-.review-seg.held {
+/* A failed or cancelled review is `stopped`, not `held`: `.held` is a held image's 44 px tile. */
+.review-seg.stopped {
   color: var(--bad);
 }
 .tab-review.sel {
@@ -1521,7 +1522,7 @@ textarea.input {
   color: var(--term-ink);
   border-left-color: transparent;
 }
-.tab-review.sel.held {
+.tab-review.sel.stopped {
   color: var(--bad);
 }
 /* The magnifier (ReviewGlass): drawn in the current color; its lens pulses while the review works,
@@ -1547,6 +1548,9 @@ textarea.input {
   stroke: currentColor;
   stroke-width: 2.4;
   stroke-linecap: round;
+}
+.review-glass.stopped {
+  color: var(--bad);
 }
 .review-glass.running .lens {
   animation: lens-pulse 1.6s ease-in-out infinite;
