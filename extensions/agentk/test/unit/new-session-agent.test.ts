@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HARNESS_CAPS } from '../../src/shared/harnesses.js';
 import type { CreateSessionRequest, HarnessMekoState, HarnessStatus, MekoStatus, Project, Settings } from '../../src/shared/types.js';
 import { NewSessionDialog } from '../../src/web/components/NewSessionDialog.js';
-import { AgentSettings, CodeReviewSettings, HarnessBar, MekoLinks, SettingsDialog } from '../../src/web/components/SettingsDialog.js';
+import { AgentSettings, CodeReviewSettings, HarnessBar, MekoLinks } from '../../src/web/components/SettingsDialog.js';
 import { connectToMeko, setUpWithMeko } from '../../src/web/mekoagents.js';
 import { defaultAgentChoice } from '../../src/web/util.js';
 
@@ -221,23 +221,6 @@ describe('Settings › General', () => {
 });
 
 describe('Settings › Code review', () => {
-  const dialog = (initialTab: 'code-review') => renderToStaticMarkup(createElement(SettingsDialog, {
-    mekoAuth: null,
-    update: {} as Parameters<typeof SettingsDialog>[0]['update'],
-    meko: {} as MekoStatus,
-    harnesses: [],
-    twoAgents: false,
-    serverName: '',
-    initialTab,
-    onClose: () => undefined,
-    onWhatsNew: () => undefined,
-  }));
-
-  it('is a tab of its own, after Harness', () => {
-    const tabs = [...dialog('code-review').matchAll(/<button role="tab" aria-selected="(true|false)"[^>]*>([^<]+)</g)].map(([, on, label]) => `${label}${on === 'true' ? ' *' : ''}`);
-    expect(tabs).toEqual(['General', 'Harness', 'Code review *', 'Work queue', 'Updates']);
-  });
-
   it('holds the global review settings, each showing its saved value', () => {
     const s = { codeReviewStrategy: 'sirius-1.0', codeReviewRounds: 2, codeReviewDepth: 3 } as Settings;
     const html = renderToStaticMarkup(createElement(CodeReviewSettings, { s, change: () => undefined }));

@@ -55,7 +55,8 @@ export function SettingsDialog({
   onWhatsNew: (from: string, to: string) => void;
 }) {
   const [tab, setTab] = useState<Tab>(initialTab);
-  // One saver for every tab's server settings, so a save from a tab that has since closed still shows how it went.
+  // One saver for General, Harness, Code review and Work queue, so a save from a tab that has since closed
+  // still shows how it went. General's usage-stats box saves on its own.
   const auto = useAutoSave();
   // What the General tab holds typed and not saved yet, saved before Settings closes.
   const typed = useRef<(() => void) | null>(null);
@@ -143,9 +144,9 @@ function HarnessLogosSetting() {
 type Patch = Omit<SettingsUpdate, 'meko'>;
 
 /**
- * The tabs' server settings, saved as they change (`src/web/autosave.ts`): `change`
- * shows a patch at once and saves it, and a patch that fails to save goes back to the server's last
- * answer. `load` waits for the saves still out, so a tab opened again shows them.
+ * General's, Harness's, Code review's and Work queue's server settings, saved as they change
+ * (`src/web/autosave.ts`): `change` shows a patch at once and saves it, and a patch that fails to
+ * save goes back to the server's last answer. `load` waits for the saves still out, so a tab opened again shows them.
  */
 function useAutoSave() {
   const [s, setS] = useState<Settings | null>(null);
