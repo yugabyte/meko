@@ -6033,8 +6033,13 @@ div[id^='dak-mermaid-'] .label {
     order: 1;
     flex: 1 0 100%;
   }
+  /* Five tabs share a phone's width: less side padding, and a label that still doesn't fit wraps
+     onto a second line (min-width: 0) rather than pushing the bar past the edge. */
   .dialog-hd > .seg button {
     flex: 1;
+    min-width: 0;
+    padding-left: 4px;
+    padding-right: 4px;
   }
   .dialog-ft {
     flex-wrap: wrap;

@@ -1,4 +1,4 @@
-// Settings that save as they're changed (Settings › General and Harness): one request at a time,
+// Settings that save as they're changed (Settings › General, Harness, Code review and Work queue): one request at a time,
 // each with only the fields of one change, in the order the changes were made.
 
 export interface AutoSaveStatus {
