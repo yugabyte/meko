@@ -88,8 +88,8 @@ idle_days = 14            # an idle worktree no session used for this many days 
 
 [code_review]                # the local review before a PR opens (docs/design/code-review.md), also in Settings › Code review
 # strategy = "off"           # sagittarius-3.0 (the default), sirius-1.0, or off; a project's and a session's own go over it
-# rounds = 1                 # re-reviews after the first, each after the task fixes the findings (0 to 5; 0 by default)
-# depth = 3                  # sweeps in each review, as the cloud's deep reviews (1 to 5; 1 by default)
+# depth = 3                  # times a review runs before findings are sent to the coding agent (1 to 5; 1 by default); more than one is a deep review: each sweep looks past what the earlier ones found, up to this count, and from the second on, one that finds nothing new ends it; costs more tokens
+# rounds = 1                 # times the code review runs again after the coding agent fixes the last review's findings (0 to 5; 0 by default); a review that finds nothing ends it early
 
 [code_review.models.opencode] # the model each tier of review step runs on; Claude Code's are opus, sonnet and haiku,
 # large = "anthropic/…"      # OpenCode's and Kiro's empty (the session's own model)

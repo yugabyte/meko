@@ -800,7 +800,7 @@ const ROUND_CHOICES = Array.from({ length: MAX_ROUNDS + 1 }, (_, i) => i);
 const DEPTH_CHOICES = Array.from({ length: MAX_DEPTH }, (_, i) => i + 1);
 
 /**
- * The local review's three settings (strategy, re-review rounds, depth) as selects, each with its
+ * The local review's three settings (strategy, depth, re-review rounds) as selects, each with its
  * ⓘ. The global ones always have a value; a project's or a session's (`scoped`) start with
  * "Default (…)", the value they'd inherit, which leaves the setting out (null). `onChange` gets
  * the whole set after one change.
@@ -845,15 +845,15 @@ export function ReviewFields({ id, value, scoped, inherited, disabled, onChange 
         </select>
       </Field>
       <Field
-        label="Re-review rounds"
+        label="Review depth"
         info={{
-          for: `${id}-rounds`,
-          text: 'Reviews after the first. With 1, AgentK sends the findings to the task to fix first, then reviews again before the PR opens. A round with no findings ends it early.',
+          for: `${id}-depth`,
+          text: "The number of times a review runs before findings are sent to the coding agent. More than one sweep makes it a deep review: each sweep after the first is told what the earlier ones found and looks elsewhere, and the sweeps run up to this count, but from the second sweep on, one that finds nothing new ends it. Costs more tokens.",
         }}
       >
-        <select id={`${id}-rounds`} className="input" disabled={disabled} value={value.rounds ?? ''} onChange={(e) => set('rounds', e.target.value)}>
-          {def(inherited ? String(inherited.rounds) : undefined)}
-          {ROUND_CHOICES.map((n) => (
+        <select id={`${id}-depth`} className="input" disabled={disabled} value={value.depth ?? ''} onChange={(e) => set('depth', e.target.value)}>
+          {def(inherited ? String(inherited.depth) : undefined)}
+          {DEPTH_CHOICES.map((n) => (
             <option key={n} value={n}>
               {n}
             </option>
@@ -861,15 +861,15 @@ export function ReviewFields({ id, value, scoped, inherited, disabled, onChange 
         </select>
       </Field>
       <Field
-        label="Review depth"
+        label="Re-review rounds"
         info={{
-          for: `${id}-depth`,
-          text: "Sweeps per review, as the cloud's deep reviews: each sweep after the first is told what the earlier ones found and looks elsewhere. From the second on, a sweep that finds nothing new ends it.",
+          for: `${id}-rounds`,
+          text: "The number of times the code review runs again after the coding agent fixes the last review's findings, before the PR opens. A review that finds nothing ends it early.",
         }}
       >
-        <select id={`${id}-depth`} className="input" disabled={disabled} value={value.depth ?? ''} onChange={(e) => set('depth', e.target.value)}>
-          {def(inherited ? String(inherited.depth) : undefined)}
-          {DEPTH_CHOICES.map((n) => (
+        <select id={`${id}-rounds`} className="input" disabled={disabled} value={value.rounds ?? ''} onChange={(e) => set('rounds', e.target.value)}>
+          {def(inherited ? String(inherited.rounds) : undefined)}
+          {ROUND_CHOICES.map((n) => (
             <option key={n} value={n}>
               {n}
             </option>

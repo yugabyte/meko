@@ -47,10 +47,10 @@ export const DEFAULT_STRATEGY: ReviewStrategyId = 'sagittarius-3.0';
 /** Re-review rounds: reviews after the first, each after the task fixes the last round's findings. */
 export const DEFAULT_ROUNDS = 0;
 export const MAX_ROUNDS = 5;
-/** Review depth: sweeps in each round, as the cloud's deep reviews. */
+/** Review depth: sweeps in each round. A sweep runs each of the strategy's passes once; each after the first is shown what the earlier ones found. */
 export const DEFAULT_DEPTH = 1;
 export const MAX_DEPTH = 5;
-/** The cloud's default MinDeepSweeps: from this sweep on, one that adds nothing new ends the round. */
+/** The sweep from which one that adds nothing new ends the review's sweeps; the ones before it always run. */
 export const MIN_SWEEPS = 2;
 
 export function strategyInfo(id: string): ReviewStrategyInfo | undefined {

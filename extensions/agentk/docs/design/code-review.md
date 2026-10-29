@@ -26,8 +26,8 @@ instructions, and the `review` argument of the `start_sessions` tool, so "start 
 | Setting | Global default | What it does |
 |---|---|---|
 | `strategy` | `sagittarius-3.0` | Which algorithm runs: `sagittarius-3.0`, `sirius-1.0`, or `off` for no review. |
-| `rounds` | `0` | Re-reviews after the first, 0 to 5. Each runs after the task fixes the last round's findings; a clean round stops early. |
-| `depth` | `1` | Sweeps in each round, 1 to 5: the cloud's deep reviews (`/agentk review deep N`). |
+| `depth` | `1` | Sweeps in each round, 1 to 5: the number of times a review runs before findings are sent to the coding agent. More than one sweep makes it a deep review: each sweep after the first is told what the earlier ones found and looks elsewhere, and the sweeps run up to this count, but from the second sweep on, one that finds nothing new ends it ([how a review runs](#how-a-review-runs)). Costs more tokens. |
+| `rounds` | `0` | Re-review rounds, 0 to 5: the number of times the code review runs again after the coding agent fixes the last review's findings, before the PR opens. A review that finds nothing ends it early. |
 
 `[code_review.models.<harness>]` sets the model each tier of step runs on (`large`, `mid`,
 `small`): Claude Code's are `opus`, `sonnet` and `haiku`; OpenCode's and Kiro's are empty, which
