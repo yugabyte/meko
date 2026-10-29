@@ -255,6 +255,7 @@ export function ConfirmButton({
   confirmLabel,
   prompt,
   onConfirm,
+  onAsk,
   className,
   disabled,
   danger,
@@ -263,6 +264,8 @@ export function ConfirmButton({
   confirmLabel: string;
   prompt?: string;
   onConfirm: () => void | Promise<void>;
+  /** When it starts asking: for what Confirm should act on as it was then, not as it is at the click. */
+  onAsk?: () => void;
   className?: string;
   disabled?: boolean;
   danger?: boolean;
@@ -271,7 +274,10 @@ export function ConfirmButton({
   const [busy, setBusy] = useState(false);
   if (!asking) {
     return (
-      <button type="button" className={className ?? 'btn'} disabled={disabled} onClick={() => setAsking(true)}>
+      <button type="button" className={className ?? 'btn'} disabled={disabled} onClick={() => {
+        onAsk?.();
+        setAsking(true);
+      }}>
         {label}
       </button>
     );

@@ -26,9 +26,9 @@ reads a link and gives every spelling of the same thing one key:
 A new item goes to the bottom. One added with no title takes its first GitHub link's title
 (`issueOrPr()`). **Dismiss**, on every row, closes an item (`status` closed); it keeps its links and
 session, so the palette still finds them, and it's listed under **Dismissed**, where **Reopen** puts it
-at the bottom. **Dismiss all** (after an inline Are you sure) sends the ids the page shows to
-`POST /api/work-items/close` (`closeAll()`), which closes those still open, so an item a sync added
-meanwhile stays.
+at the bottom. **Dismiss all** (after an inline Are you sure) sends the ids the page showed when it started asking
+(`ConfirmButton`'s `onAsk`) to `POST /api/work-items/close` (`closeAll()`), which closes those still
+open, so an item a sync adds while it asks stays.
 
 **Order.** Dragging a row (not on touch screens) sends `PUT /api/work-items/order` with every open
 item's id in the new order and the one that moved. A list that isn't exactly the open items (one
@@ -119,8 +119,8 @@ off until a Sync you press works again. GitHub is read on every run.
 A pasted GitHub, Jira or Slack link, `owner/name#<n>` or a bare Jira key (`workLinkKey()`) is looked
 up once typing pauses (`GET /api/work-items/by-link`, an indexed lookup in `state.db`, no tokens).
 `workLinkEntries()` in `src/web/palette.ts` lists the session of each item holding it first (Go to,
-or a closed one's PR), then each item (opening the queue at it, with the Closed section open for a
-closed one), and Start a session for an open item
+or a closed one's PR), then each item (opening the queue at it, with the Dismissed section open for a
+dismissed one), and Start a session for an open item
 with no open session. For a GitHub link these come before the link's own items, and a session both
 name is listed once. The palette also has **Work queue**, **Add a work item**, **Sync the work
 queue**, and Link, Unlink or show the work item of the session on screen.

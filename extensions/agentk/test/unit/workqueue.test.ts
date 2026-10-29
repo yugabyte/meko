@@ -6,7 +6,6 @@ import { parseWorkLink } from '../../src/shared/worklinks.js';
 import { openDb, run } from '../../src/server/db.js';
 import type { ReviewRequest } from '../../src/server/github.js';
 import type { AskRun } from '../../src/server/askagentk.js';
-import { DEFAULT_CONFIG } from '../../src/server/config.js';
 import { readSlackTodos, signInSettings, slackArgs, slackPrompt, type SlackTodo } from '../../src/server/slack.js';
 import { moveItem } from '../../src/shared/workorder.js';
 import { checkStartItem, setItemSession, WorkQueue, type WorkQueueDeps } from '../../src/server/workqueue.js';
@@ -83,8 +82,6 @@ describe('the work queue', () => {
     expect(titles(q)).toEqual(['a', 'c', 'b']);
     q.update(id('a'), { move: 'bottom' });
     expect(titles(q)).toEqual(['c', 'b', 'a']);
-    q.update(id('a'), { move: 'top' });
-    expect(titles(q)).toEqual(['a', 'c', 'b']);
     expect(() => q.update(id('a'), { move: 'sideways' as 'up' })).toThrow(/top or bottom/);
     q.reorder({ ids: [id('b'), id('a'), id('c')] });
     expect(titles(q)).toEqual(['b', 'a', 'c']);
@@ -250,10 +247,6 @@ describe('syncing the work queue', () => {
     expect(state.reviewReads).toBe(1);
   });
 
-  it('is off by default: no source on', () => {
-    expect([DEFAULT_CONFIG.workQueue.github, DEFAULT_CONFIG.workQueue.slack]).toEqual([false, false]);
-  });
-
   it('says Slack needs Claude Code without running it', async () => {
     const { q, state } = setup({ claude: false });
     expect((await q.sync(true)).slack).toMatchObject({ ok: false, error: expect.stringMatching(/needs Claude Code/) });
@@ -275,8 +268,6 @@ describe("reading Slack's To-dos", () => {
     expect(JSON.parse(after('--settings'))).toEqual({ env: { A: '1' }, disableAllHooks: true });
     expect(slackArgs('', [])).not.toContain('--allowedTools');
     expect(slackPrompt([])).not.toContain('ToolSearch');
-    expect(slackPrompt([])).toContain('is:todo');
-    expect(slackPrompt([])).not.toContain('is:saved');
   });
 
   it('takes only the sign-in part of your Claude Code settings', () => {

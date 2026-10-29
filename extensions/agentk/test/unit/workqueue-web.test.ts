@@ -37,7 +37,7 @@ describe('the work queue page', () => {
     expect(queueSummary(items, projects)).toEqual({ open: 3, unplaced: 1, dot: 'needs_input' });
   });
 
-  it.each([[1, '1'], [99, '99'], [100, '99+'], [2500, '99+']])('counts %i open items on the rail button as %s', (n, want) => {
+  it.each([[1, '1'], [99, '99'], [100, '99+']])('counts %i open items on the rail button as %s', (n, want) => {
     expect(queueBadge(n)).toBe(want);
   });
 

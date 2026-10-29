@@ -129,8 +129,10 @@ export function WorkQueueView({
     await api.updateWorkItem(item.id, { status: 'closed' });
     if (showClosed) loadClosed();
   });
+  // The items shown when Dismiss all started asking: one a sync adds while it asks isn't dismissed unseen.
+  const [dismissIds, setDismissIds] = useState<string[]>([]);
   const dismissAll = () => act(async () => {
-    await api.closeWorkItems({ ids: shown.map((i) => i.id) });
+    await api.closeWorkItems({ ids: dismissIds });
     if (showClosed) loadClosed();
   });
   const drop = (to: number) => {
@@ -170,9 +172,10 @@ export function WorkQueueView({
             <ConfirmButton
               className="btn small wq-dismiss-all"
               label="Dismiss all"
-              prompt={`Dismiss all ${shown.length}?`}
+              prompt={`Dismiss all ${dismissIds.length}?`}
               confirmLabel="Dismiss all"
               danger
+              onAsk={() => setDismissIds(shown.map((i) => i.id))}
               onConfirm={dismissAll}
             />
           )}
