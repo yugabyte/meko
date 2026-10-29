@@ -786,18 +786,25 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     }, 250);
     check.unref();
   };
-  core.on('change', () => {
+  const pushState = () => {
     pending ??= setTimeout(() => {
       pending = null;
       if (clients.size) broadcast({ type: 'state', state: core.state() });
     }, 100);
-  });
-  // A push still due when the server closes would read state after the database may be closed.
+  };
+  const notify = (ev: ServerEvent) => broadcast(ev);
+  core.on('change', pushState);
+  core.on('notify', notify);
+  // A push after the server closes would read state after the database may be closed. A page's
+  // socket can still be in `clients` then, closing, and the core can still change until its stop()
+  // begins (shutdown, and a test's cleanup, close the server first): so the server stops listening
+  // to the core here, as well as dropping the push already due.
   app.addHook('onClose', async () => {
+    core.off('change', pushState);
+    core.off('notify', notify);
     if (pending) clearTimeout(pending);
     pending = null;
   });
-  core.on('notify', (ev: ServerEvent) => broadcast(ev));
 
   const wsGuard = (socket: WebSocket, req: FastifyRequest): boolean => {
     if (!sameOrigin(req)) {
