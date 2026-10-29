@@ -203,9 +203,11 @@ A new datapack knows nothing, so a project's first sessions get nothing from Mek
 seeds it: **Learn the project** in the New session dialog (`CreateSessionRequest.learn`), picked
 for you when a project opens on an empty datapack (see [Open project](open-project-and-new-session.md#open-project)),
 and offered on the project home while the dedicated datapack has no memories and no knowledge and
-the project has never had one (`ProjectHome.hasLearnSession`). It isn't offered anywhere else: a plain
-New session, on a datapack that already knows the project, has no Learn the project, and only **Try
-again** on a failed learn start brings it back.
+no learn session is open on it (`ProjectHome.learnSessionOpen`: one launched on a datapack since
+switched away from doesn't count, and one that closed with the datapack still empty, having saved
+nothing, gives the offer back). It isn't offered anywhere else: a plain New session, on a datapack
+that already knows the project, has no Learn the project, and only **Try again** on a failed learn
+start brings it back.
 
 - **What the user gives.** What the project is about (required), where its files are (folders and
   files in the repo, docs, other places; left empty, the README and docs), and how many months of

@@ -23,7 +23,8 @@ New sessions use it, each pinning it for its own agent id. Search is hidden for 
 datapacks.
 
 While the dedicated datapack has no memories and no knowledge (its counts from Meko, so not while
-Meko is off or doesn't answer) and the project has never had a learn session, the box says the
+Meko is off or doesn't answer) and no learn session is open on it (one launched on a datapack since
+switched away from doesn't count), the box says the
 datapack is empty, with **Learn the project**, which opens the New session dialog on that choice
 (see [Learn sessions](recall-and-learn.md#learn-sessions)).
 

@@ -572,8 +572,13 @@ export class ProjectService {
        WHERE e.project_id = ? AND e.text IS NOT NULL ORDER BY e.at DESC LIMIT 50`,
       id,
     ).map<ActivityItem>((r) => ({ at: r.at, sessionId: r.session_id, sessionName: r.name, kind: r.kind, text: r.text ?? '' }));
-    const hasLearnSession = !!get(this.db, "SELECT 1 AS x FROM sessions WHERE project_id = ? AND purpose = 'learn' LIMIT 1", id);
-    return { project, datapacks, hasLearnSession, activity, usage: projectUsage(this.db, id) };
+    // A learn session still open on the dedicated datapack: one launched on another (before a switch)
+    // doesn't count, and once it's closed, a datapack it left empty is offered one again.
+    const dedicated = dedicatedDatapack(this.db, id);
+    const learnSessionOpen = !!dedicated && !!get(this.db,
+      `SELECT 1 AS x FROM sessions WHERE project_id = ? AND purpose = 'learn' AND status != 'archived'
+         AND (meko_datapack_id IS NULL OR meko_datapack_id = ?) LIMIT 1`, id, dedicated.id);
+    return { project, datapacks, learnSessionOpen, activity, usage: projectUsage(this.db, id) };
   }
 
   /** What Meko doesn't know: a page of the project's questions (GET /api/projects/:id/meko-gaps). */

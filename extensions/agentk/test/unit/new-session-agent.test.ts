@@ -60,24 +60,20 @@ describe("the New session dialog's Learn the project", () => {
     fields: html.includes('id="ns-learn-about"') && !html.includes('id="ns-prompt"'),
     offer: html.includes('id="ns-learn-offer"'),
   });
+  const retryLearn: CreateSessionRequest = { name: 'Learn the project', learn: { about: 'The billing service.', where: 'services/billing/', months: 12 } };
+  const retryDesign: CreateSessionRequest = { name: 'x', start: 'design', prompt: 'Fix it' };
   it.each([
-    ['is picked, with its fields and the empty-datapack line, for a project just opened on an empty datapack', dedicated, true, true, { pill: true, picked: true, fields: true, offer: true }],
-    ["isn't offered in a plain New session, even with Meko on and a dedicated datapack", dedicated, true, false, { pill: false, picked: false, fields: false, offer: false }],
-    ["isn't offered without a dedicated datapack", { ...project, datapacks: [] } as unknown as Project, true, true, { pill: false, picked: false, fields: false, offer: false }],
-    ["isn't offered with Meko off", dedicated, false, true, { pill: false, picked: false, fields: false, offer: false }],
-  ])('%s', (_, p, mekoOn, learnFirst, want) => {
-    expect(shown(learnHtml(p, mekoOn, learnFirst))).toEqual(want);
-  });
-
-  it('is offered and picked again to retry a failed learn start, with what it asked for', () => {
-    const html = learnHtml(dedicated, true, false, { name: 'Learn the project', learn: { about: 'The billing service.', where: 'services/billing/', months: 12 } });
-    expect(shown(html)).toEqual({ pill: true, picked: true, fields: true, offer: false });
-    expect(html).toContain('The billing service.');
-    expect(html).toContain('services/billing/');
-  });
-
-  it("isn't offered to retry a failed start at Design", () => {
-    expect(shown(learnHtml(dedicated, true, false, { name: 'x', start: 'design', prompt: 'Fix it' })).pill).toBe(false);
+    ['is picked, with its fields and the empty-datapack line, for a project just opened on an empty datapack', dedicated, true, true, undefined, { pill: true, picked: true, fields: true, offer: true }],
+    ["isn't offered in a plain New session, even with Meko on and a dedicated datapack", dedicated, true, false, undefined, { pill: false, picked: false, fields: false, offer: false }],
+    ['is offered and picked again to retry a failed learn start', dedicated, true, false, retryLearn, { pill: true, picked: true, fields: true, offer: false }],
+    ["isn't offered to retry a failed start at Design", dedicated, true, false, retryDesign, { pill: false, picked: false, fields: false, offer: false }],
+    ["isn't offered without a dedicated datapack", { ...project, datapacks: [] } as unknown as Project, true, true, undefined, { pill: false, picked: false, fields: false, offer: false }],
+    ["isn't offered with Meko off", dedicated, false, true, undefined, { pill: false, picked: false, fields: false, offer: false }],
+  ])('%s', (_, p, mekoOn, learnFirst, initial, want) => {
+    const html = learnHtml(p, mekoOn, learnFirst, initial);
+    expect(shown(html)).toEqual(want);
+    // A retry keeps what it asked for.
+    if (initial?.learn) expect([html.includes('The billing service.'), html.includes('services/billing/')]).toEqual([true, true]);
   });
 });
 
