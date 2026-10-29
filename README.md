@@ -89,6 +89,7 @@ Once linked, `meko-cli` works on both local and Meko Cloud datapacks.
 | `meko start` / `stop` / `status` | Start or stop the server, or see whether it's running and its links |
 | `meko ui` | Open the web UI in your browser |
 | `meko connect claude` | Add Meko to Claude Code (or `codex`, `kiro`, `opencode`), for all your projects |
+| `meko memory-extractor use claude` | Extract memories from your conversations with your own Claude Code, every 5 minutes. It's off until you run this; `status`, `run` and `off` check, run or stop it. See [memory extraction](backend/docs/memory-extraction.md) |
 | `meko update` | Install Meko's newest release now, then every extension's |
 | `meko-cli search "<question>"` | Search memories, the knowledge base and past conversations |
 | `meko-cli add_memory "<text>"` | Save a memory, word for word |
