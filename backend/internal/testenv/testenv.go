@@ -64,6 +64,9 @@ type Options struct {
 	ExtractorHarness memory.Harness
 	// Answerer, if set, writes search answers instead of a real CLI.
 	Answerer memory.Answerer
+	// Credential, if set, is the REST routes' credential check instead of the server's, for a
+	// request with credentials the API listener doesn't give (a session, local access).
+	Credential func(echo.Context) string
 }
 
 // backendDir is this module's root, found from this file.
@@ -170,7 +173,11 @@ func Start(t *testing.T, o Options) *Env {
 	}
 	usage := callhome.New(callhome.Options{Store: st, Config: callHome, Tools: mcp.ToolNames(), Log: log})
 	mcpOpts := mcp.Options{Service: svc, Version: "test", Log: log, Credential: server.CredentialOf}
-	restOpts := rest.Options{Service: svc, Port: port, ClientToken: ClientToken, Credential: server.Credential,
+	credential := server.Credential
+	if o.Credential != nil {
+		credential = o.Credential
+	}
+	restOpts := rest.Options{Service: svc, Port: port, ClientToken: ClientToken, Credential: credential,
 		UsageStats: usage, Log: log, Cloud: o.Cloud,
 		Tool: func(ctx context.Context, cred, name string, args map[string]any) (string, error) {
 			return mcp.Call(ctx, mcpOpts, cred, name, args)

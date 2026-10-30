@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/yugabyte/meko/backend/internal/agents"
 	"github.com/yugabyte/meko/backend/internal/memoryengine"
 	"github.com/yugabyte/meko/backend/internal/store"
 )
@@ -131,11 +132,14 @@ func runClaude(ctx context.Context, command, model, system, input, schema string
 	defer func() { _ = os.RemoveAll(dir) }()
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	//nolint:gosec // G204: command is an absolute path the admin set up, checked to be named claude and executable
+	// command is an absolute path the CLI's admin token named or agents.Find found, checked to be named
+	// claude and executable.
+	//nolint:gosec // G204: see above
 	cmd := exec.CommandContext(ctx, command, "-p", "--setting-sources", "local", "--tools", "",
 		"--strict-mcp-config", "--no-session-persistence", "--disable-slash-commands", "--model", model,
 		"--system-prompt", system, "--output-format", "json", "--json-schema", schema)
 	cmd.Dir = dir
+	cmd.Env = agents.CommandEnv(command)
 	cmd.Stdin = strings.NewReader(input)
 	var stdout, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &errOut
@@ -225,10 +229,8 @@ func (s *Service) SetExtractor(ctx context.Context, set ExtractorSettings) error
 	if _, ok := harnessPrograms[set.Harness]; !ok {
 		return fmt.Errorf("%w: harness must be claude (codex and cursor come later)", ErrBadRequest)
 	}
-	if s.testHarness == nil {
-		if err := checkHarnessCommand(set.Harness, set.Command); err != nil {
-			return err
-		}
+	if err := checkHarnessCommand(set.Harness, set.Command); err != nil {
+		return err
 	}
 	if set.Model == "" {
 		set.Model = defaultClaudeModel

@@ -7,10 +7,13 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/yugabyte/meko/backend/internal/agents"
 	"github.com/yugabyte/meko/backend/internal/memory"
 	"github.com/yugabyte/meko/backend/internal/testenv"
 )
@@ -49,6 +52,25 @@ func (h *fakeHarness) last() (string, string, int) {
 	return h.systems[len(h.systems)-1], h.inputs[len(h.inputs)-1], len(h.inputs)
 }
 
+// fakeClaude puts a claude first on PATH and hides this computer's agents (no home,
+// system folders or login shell), so the server finds that claude and only it. It returns
+// its path.
+func fakeClaude(t *testing.T) string {
+	t.Helper()
+	folders, shell := agents.SystemFolders, agents.LoginShell
+	agents.SystemFolders, agents.LoginShell = nil, ""
+	t.Cleanup(func() { agents.SystemFolders, agents.LoginShell = folders, shell })
+	t.Setenv("HOME", t.TempDir())
+	bin := t.TempDir()
+	claude := filepath.Join(bin, "claude")
+	//nolint:gosec // G306: a test script
+	if err := os.WriteFile(claude, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH")) // the memory engine's Node too
+	return claude
+}
+
 // asAdmin sends a PUT with the CLI's admin token.
 func asAdmin(t *testing.T, e *testenv.Env, path string, body any) reply {
 	t.Helper()
@@ -76,6 +98,7 @@ func asAdmin(t *testing.T, e *testenv.Env, path string, body any) reply {
 // turns queued; an opted-out datapack queues nothing.
 func TestMemoryExtractor(t *testing.T) {
 	h := &fakeHarness{}
+	claude := fakeClaude(t)
 	e := testenv.Start(t, testenv.Options{ExtractorHarness: h})
 	ctx := context.Background()
 	const settings = "/settings/memory-extractor"
@@ -107,8 +130,8 @@ func TestMemoryExtractor(t *testing.T) {
 		t.Errorf("an unknown harness: %+v", r)
 	}
 	r := asAdmin(t, e, settings, map[string]any{"harness": "claude", "interval_seconds": 120})
-	if r.Status != 200 ||
-		obj(r.Data)["enabled"] != true || obj(r.Data)["model"] != "haiku" || num(obj(r.Data)["interval_seconds"]) != 120 {
+	if r.Status != 200 || obj(r.Data)["enabled"] != true || obj(r.Data)["command"] != claude ||
+		obj(r.Data)["model"] != "haiku" || num(obj(r.Data)["interval_seconds"]) != 120 {
 		t.Fatalf("set up: %+v", r)
 	}
 	if _, _, n := h.last(); n != 1 {
