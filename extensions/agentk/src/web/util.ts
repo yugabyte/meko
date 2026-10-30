@@ -2,7 +2,7 @@ import { HARNESS_CAPS, harnessOf, type HarnessId } from '../shared/harnesses';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, LEARN_WARN_FILES, LEARN_WARN_PRS, STAGE_LABELS, type LearnScope } from '../shared/types';
 import { mekoDatapackPath } from '../shared/mekourls';
-import { isStrategySetting, type CodeReviewFinding, type ReviewOverrides } from '../shared/codereview';
+import { isStrategySetting, reviewHolds, type CodeReviewFinding, type ReviewOverrides } from '../shared/codereview';
 import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoStatus, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /**
@@ -59,6 +59,16 @@ export function joinedPartSelected(task: Pick<Session, 'id' | 'codeReview'>, cur
 /** The task whose code-review session this is, among `sessions`; undefined for any other session. */
 export function reviewParent(sessions: Session[], s: Pick<Session, 'kind' | 'parentId'>): Session | undefined {
   return isReviewChild(s) && s.parentId ? sessions.find((x) => x.id === s.parentId) : undefined;
+}
+
+/**
+ * How far, in pixels, a wheel turn over the session tabs scrolls them sideways: the strip has no
+ * scrollbar, and a mouse wheel only turns up and down. 0 for a sideways turn (a trackpad's swipe,
+ * Shift with the wheel), which the browser already scrolls by. `deltaMode` 1 is lines, 2 pages.
+ */
+export function sidewaysWheel(e: { deltaX: number; deltaY: number; deltaMode: number }, pageWidth: number): number {
+  if (Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return 0;
+  return e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? pageWidth : 1);
 }
 
 /**
@@ -708,10 +718,12 @@ export function runsToMerge(s: Session): boolean {
 
 /**
  * The task's local review holds its Open PR: a review runs (or waits for the task's fixes between
- * rounds) before the PR prompt goes, or failed or was cancelled and waits for Retry or Open anyway.
+ * rounds) before the PR prompt goes, or failed or was cancelled and waits for Retry or Open anyway
+ * (not one cancelled because the task left Code: the next Open PR starts a new review).
  */
 export function reviewGatesPr(s: Pick<Session, 'stage' | 'codeReview'>): boolean {
-  return s.stage === 'code' && !!s.codeReview && s.codeReview.state !== 'done';
+  const r = s.codeReview;
+  return s.stage === 'code' && !!r && r.state !== 'done' && (r.state !== 'cancelled' || reviewHolds(r));
 }
 
 /** A session's stage in its chip: `Review` while its local review holds the Open PR, else the stage. */

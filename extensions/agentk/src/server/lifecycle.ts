@@ -889,23 +889,27 @@ export class Lifecycle {
 
   /**
    * A task's local review asks it to fix a round's findings before the next round (review/runner.ts).
-   * The task stays in Code, and its turn's end starts the next round.
+   * The task stays in Code, and its turn's end starts the next round. `moved`: the `moved` line of a
+   * move to Review & PR that started the review from Explore or Design (reviewBeforePr), first.
    */
-  async sendReviewFix(task: SessionRow, o: { strategy: string; round: number; findings: string; outcomeHow: string }): Promise<void> {
+  async sendReviewFix(task: SessionRow, o: { strategy: string; round: number; findings: string; outcomeHow: string; moved?: string | null }): Promise<void> {
     const row = this.sessions.row(task.id);
     if (row.stage !== 'code' || row.desired !== 'running') throw new Error('the task left Code');
-    await this.sessions.submit(row.id, this.sessions.prompt(row, 'code-review-fix', { strategy: o.strategy, round: o.round, findings: o.findings, outcomeHow: o.outcomeHow }));
+    const fix = this.sessions.prompt(row, 'code-review-fix', { strategy: o.strategy, round: o.round, findings: o.findings, outcomeHow: o.outcomeHow });
+    await this.sessions.submit(row.id, [o.moved, fix].filter(Boolean).join('\n\n'));
   }
 
   /**
    * A task's local review is done (or the user opened the PR past a stopped one): the PR prompt goes,
    * led by the last round's findings when it had some, with the `me_ak_review:` line (none past a
-   * stopped review). False when it couldn't go; the user's Open PR sends it later.
+   * stopped review), after the `moved` line of a move that started the review, when that line hasn't gone
+   * with the review's fixes. False when it couldn't go; the user's Open PR sends it later.
    */
-  async sendReviewedPr(task: SessionRow, o: { line: string | null; findings: string; outcomeHow: string; strategy: string; instructions: string; by: 'you' | 'auto' }): Promise<boolean> {
+  async sendReviewedPr(task: SessionRow, o: { line: string | null; findings: string; outcomeHow: string; strategy: string; instructions: string; by: 'you' | 'auto'; moved?: string | null }): Promise<boolean> {
     const row = this.sessions.row(task.id);
     if (row.stage !== 'code' || row.desired !== 'running') return false;
-    const lead = o.findings ? this.sessions.prompt(row, 'code-review-findings', { strategy: o.strategy, findings: o.findings, outcomeHow: o.outcomeHow }) : undefined;
+    const findings = o.findings ? this.sessions.prompt(row, 'code-review-findings', { strategy: o.strategy, findings: o.findings, outcomeHow: o.outcomeHow }) : '';
+    const lead = [o.moved, findings].filter(Boolean).join('\n\n') || undefined;
     try {
       await this.serial(row.id, () => this.sendPr(row, this.prCheck(row.id, false), { lead, instructions: o.instructions, by: o.by, reviewLine: o.line }));
       this.core.reviews.markSent(row.id);
@@ -1002,7 +1006,8 @@ export class Lifecycle {
         if (wasOn && this.sessions.row(id).stage === cur.stage) this.sessions.update(id, { auto_run: 1 });
         throw e;
       }
-      if (wasOn) this.sessions.event(id, 'auto-run', `Run to merge stopped: ${moved}`);
+      // A move a local review took over leaves the session in Code until the review sends the PR prompt.
+      if (wasOn) this.sessions.event(id, 'auto-run', `Run to merge stopped: ${this.sessions.row(id).stage === 'code' ? 'the session moved to Code for its local review' : moved}`);
       return;
     }
 
@@ -1016,6 +1021,7 @@ export class Lifecycle {
     if (movesStep(cur.stage, stage)) {
       dropQueued();
       if (cur.stage === 'pr' || cur.stage === 'review') this.leaveReview(id);
+      if (cur.stage === 'code') this.core.reviews.leftCode(id);
       if (cur.stage === 'design') this.leaveDesign(id, stage === 'code');
       this.sessions.setStage(id, stage, 'you');
       // Back in Design, what an approval left to AgentK is open again.
@@ -1036,8 +1042,9 @@ export class Lifecycle {
 
   /**
    * A move to Review & PR: picks up the branch's open PR when there's nothing to push (the branch
-   * tip is in the PR and the worktree is clean), or else sends the PR prompt, as Open PR does. The
-   * user's `instructions` go after the PR prompt, or with the `moved` line once a PR is picked up.
+   * tip is in the PR and the worktree is clean), or else does what Open PR does: the local review
+   * first, when it runs (reviewBeforePr), else the PR prompt. The user's `instructions` go after the
+   * PR prompt, or with the `moved` line once a PR is picked up.
    */
   private async moveToReview(row: SessionRow, instructions: string): Promise<void> {
     const cwd = this.ghCwd(row);
@@ -1057,6 +1064,17 @@ export class Lifecycle {
     };
     check(cur);
     this.checkBetweenTurns(cur);
+    if (!adopt || !pr) {
+      // As for Open PR: the user's prompts go first, and a stopped local review holds the PR. Outside
+      // Code an earlier review holds nothing (its Retry and Open anyway are Code's).
+      if (cur.stage !== 'code') this.core.reviews.leftCode(cur.id);
+      if (this.sessions.promptsHeld(cur.id) > 0) throw new HttpError(409, 'AgentK has prompts from you to take first. Move the session once it has.');
+      this.core.reviews.checkNotHeld(cur.id);
+    }
+    if ((!adopt || !pr) && this.core.reviews.applies(cur)) {
+      await this.reviewBeforePr(cur, instructions);
+      return;
+    }
     if (!adopt || !pr) {
       await this.sendPr(cur, (r) => {
         check(r);
@@ -1087,6 +1105,25 @@ export class Lifecycle {
   /** The `instructions` prompt with the user's text, or '' when they gave none. */
   private instructionsPrompt(row: SessionRow, instructions: string): string {
     return instructions ? this.sessions.prompt(row, 'instructions', { instructions }) : '';
+  }
+
+  /**
+   * A move to Review & PR with work to push, on a task whose local review runs: as with Open PR, the
+   * review goes first, in Code (from Explore or Design too, past the design approval), and sends the
+   * PR prompt when it's done. moveToReview has checked what Open PR checks.
+   */
+  private async reviewBeforePr(row: SessionRow, instructions: string): Promise<void> {
+    this.checkPromptable(row);
+    // Claude's system prompt still says where it was (Explore: no PR): the `moved` line goes before the
+    // review's first prompt to the task, its fixes or the PR prompt.
+    let lead: string | undefined;
+    if (row.stage !== 'code') {
+      if (row.stage === 'design') this.leaveDesign(row.id, true);
+      this.sessions.setStage(row.id, 'code', 'you', { event: false });
+      this.sessions.event(row.id, 'stage', 'Moved to Code: AgentK reviews the change locally before it opens the PR');
+      lead = this.movedLine(this.sessions.row(row.id));
+    }
+    await this.core.reviews.openPr(this.sessions.row(row.id), { instructions, by: 'you', lead });
   }
 
   /** The `moved` line: where the session is now, since Claude's system prompt still says where it was. */

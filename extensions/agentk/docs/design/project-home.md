@@ -6,7 +6,9 @@ Part of the [AgentK design](../design.md).
 
 Recent activity shows the project's last 50 events, newest first, and scrolls inside its box so it
 never pushes the rest of the page down. Token usage's table by session scrolls the same way past about 10 rows,
-the most recently used first (see [Token usage](token-usage.md)).
+the most recently used first (see [Token usage](token-usage.md)). Its chart stacks each day's local
+code review tokens on the bar, and once a review has run, a **Code Reviews** section follows the Meko
+stats.
 
 **Share** sits in the project's header: it shares the whole project, through its dedicated
 datapack, and opens the Share dialog. While AgentK can't share (`MekoStatus.sharing` false) it

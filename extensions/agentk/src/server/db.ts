@@ -695,6 +695,10 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (review_id, step)
   );
   `,
+  // 44: code_reviews.lead: the `moved` line for a review a move to Review & PR started from Explore or
+  // Design (Lifecycle.reviewBeforePr), sent before the review's first prompt to the task (its fixes, or
+  // the PR prompt) and cleared once that has gone; NULL for none.
+  `ALTER TABLE code_reviews ADD COLUMN lead TEXT;`,
 ];
 
 export function openDb(path: string): Db {

@@ -26,8 +26,8 @@ instructions, and the `review` argument of the `start_sessions` tool, so "start 
 | Setting | Global default | What it does |
 |---|---|---|
 | `strategy` | `sagittarius-3.0` | Which algorithm runs: `sagittarius-3.0`, `sirius-1.0`, or `off` for no review. |
-| `rounds` | `0` | Re-reviews after the first, 0 to 5. Each runs after the task fixes the last round's findings; a clean round stops early. |
-| `depth` | `1` | Sweeps in each round, 1 to 5: the cloud's deep reviews (`/agentk review deep N`). |
+| `depth` | `1` | Sweeps in each round, 1 to 5: the number of times a review runs before AgentK gets the findings to fix. More than one sweep makes it a deep review: each sweep after the first is told what the earlier ones found and looks elsewhere, and the sweeps run up to this count, but from the second sweep on, one that finds nothing new ends it ([how a review runs](#how-a-review-runs)). Costs more tokens. |
+| `rounds` | `0` | Re-review rounds, 0 to 5: the number of times the code review runs again after AgentK fixes the last review's findings, before the PR opens. A review that finds nothing ends it early. |
 
 `[code_review.models.<harness>]` sets the model each tier of step runs on (`large`, `mid`,
 `small`): Claude Code's are `opus`, `sonnet` and `haiku`; OpenCode's and Kiro's are empty, which
@@ -56,7 +56,7 @@ sequenceDiagram
   participant AK as AgentK server
   participant R as Review session (child)
   participant S as Subagents
-  U->>AK: Open PR (or Run to merge, or the open_pr tool)
+  U->>AK: Open PR (or Run to merge, the open_pr tool, or a move to Review & PR)
   AK->>AK: settings: session, then project, then global
   AK->>AK: diff, guides, MEKO.md, history, linked issues into run/reviews/{id}/r{round}
   AK->>R: start kind=code-review, parent=T, same worktree
@@ -79,7 +79,14 @@ sequenceDiagram
 
 `openPr()` (and `takeQueuedPr()`, so a queued Open PR and Run to merge go through it too) asks
 `CodeReviews.openPr()` first: while it returns true, a review holds the PR and sends the PR prompt
-itself when it's done (`Lifecycle.sendReviewedPr`).
+itself when it's done (`Lifecycle.sendReviewedPr`). A move to Review & PR by hand with work to push
+(`moveToReview`, from Explore, Design or Code) does the same when a review applies
+(`CodeReviews.applies`): the session goes to Code (`reviewBeforePr`), since the review's checks, its
+gate and its cancelling are all Code's, and the review sends the PR prompt as for Open PR. From
+Explore or Design, the `moved` line (Claude's system prompt still names the old stage, and
+Explore's says no PR) waits on the review (`code_reviews.lead`) and goes before its first prompt to
+the task, its fixes or the PR prompt. A move that only picks up the branch's open PR runs no review. The PR prompt itself doesn't ask the task
+to review its diff: the review session has.
 
 **The review session** is a session of kind `code-review` (`Session.parentId` is its task), held by
 the session host like any other, so it survives restarts. It works in its task's worktree without
@@ -134,13 +141,20 @@ after `adoptPr` when Claude left it out (`syncReviewLine`).
 **Stopping.** A failed review (no pass reported, or an error) or one the user cancelled holds the
 PR: Open PR answers 409, Run to merge waits, and the task offers **Retry** (the round again from
 the step it stopped at, reusing every step already reported, from `code_review_steps`) and **Open
-anyway** (the PR prompt with no line). A task that leaves Code cancels its review.
+anyway** (the PR prompt with no line). A move out of Code (or a move to Review & PR that finds
+the task outside Code) cancels its review, running or stopped, with the detail `the task left Code`
+(`REVIEW_LEFT_CODE`, `CodeReviews.leftCode`; `taskMovedOn` catches one the review session's turn
+end finds there): that one doesn't hold the PR (`reviewHolds`), since Retry and Open anyway are
+Code's, so the next Open PR, or a move to Review & PR, starts a new review on the change as it is.
+A move to Review & PR checks what Open PR does, whether the review is on or off: the user's
+prompts go first, and a stopped review in Code answers 409. Open PR, or a move, while a review
+waits for fixes whose turn was interrupted moves it on to the next round.
 
-**The PR prompt.** A done review's `finished_at` says its PR prompt went. Open PR on a done review
-without it sends the PR prompt with the findings and the line, and starts no new review. It's
-set when the prompt is sent, and cleared again (`markUnsent`) when Claude exits before taking
-it: the task goes back to Code, and the prompt goes again once Claude is back
-([AgentK's mod](mod.md)).
+**The PR prompt.** A done review's `finished_at` says its PR prompt went. Open PR (or a move to
+Review & PR) on a done review without it sends the PR prompt with the findings and the line, and
+starts no new review. It's set when the prompt is sent, and cleared again (`markUnsent`) when
+Claude exits before taking it: the task goes back to Code, and the prompt goes again once Claude
+is back ([AgentK's mod](mod.md)).
 
 **Recovery.** `code_reviews` and `code_review_steps` keep a review's state and every step's
 report. After a restart, `CodeReviews.recover()` asks an idle review session again for the steps
@@ -183,3 +197,7 @@ so its counts stay. Clicking it opens the findings panel beside the task's termi
 with its passes, verdict, confidence, kept or why dropped, credited gotchas and what the task did),
 never the review session. While the review holds the PR, the task's Code gate shows it, with Cancel, or
 Retry and Open anyway.
+
+The Usage page and the project home count reviews in their **Code Reviews** section, and stack the
+review sessions' tokens on the Token usage chart ([Token usage](token-usage.md)); the usage report
+sends the same counts each day ([Usage stats](usage-stats.md), `codeReview`).

@@ -35,6 +35,7 @@ type MapPoint struct {
 	CreatedAt      string   `json:"created_at"`
 	X              float64  `json:"x"`
 	Y              float64  `json:"y"`
+	Z              float64  `json:"z"` // the third main direction, for the 3D view; on the 2D map's scale
 	Similarity     *float64 `json:"similarity,omitempty"`
 }
 
@@ -50,6 +51,7 @@ type Map struct {
 	Points []MapPoint  `json:"points"`
 	Links  []MapLink   `json:"links"`
 	Query  *[2]float64 `json:"query,omitempty"`
+	QueryZ *float64    `json:"query_z,omitempty"`
 }
 
 // mapIDs is the most memories a map can be asked to include by id.
@@ -183,13 +185,7 @@ func (s *Service) MemoryMap(ctx context.Context, datapack, query string, ids []s
 			out.Points[i].Similarity = &sim
 		}
 	}
-	xy, qxy := project(vecs, q)
-	for i := range out.Points {
-		out.Points[i].X, out.Points[i].Y = xy[i][0], xy[i][1]
-	}
-	if q != nil {
-		out.Query = &qxy
-	}
+	out.place(vecs, q)
 	return out, nil
 }
 
@@ -253,11 +249,7 @@ func (s *Service) SearchMap(ctx context.Context, datapack, query string, sources
 	if len(vecs) == 0 {
 		return out, nil
 	}
-	xy, qxy := project(vecs, q)
-	for i := range out.Points {
-		out.Points[i].X, out.Points[i].Y = xy[i][0], xy[i][1]
-	}
-	out.Query = &qxy
+	out.place(vecs, q)
 	return out, nil
 }
 
@@ -298,12 +290,24 @@ func links(vecs [][]float32) []MapLink {
 	return out
 }
 
-// project places vectors (and q, when given) on the plane of their two main directions, found by
-// power iteration on the centered vectors, scaled so the farthest point sits at 1.
-func project(vecs [][]float32, q []float32) ([][2]float64, [2]float64) {
-	out := make([][2]float64, len(vecs))
+// place sets each point's place from its vector (in Points' order), and the query's when q is given.
+func (m *Map) place(vecs [][]float32, q []float32) {
+	at, qat := project(vecs, q)
+	for i := range m.Points {
+		m.Points[i].X, m.Points[i].Y, m.Points[i].Z = at[i][0], at[i][1], at[i][2]
+	}
+	if q != nil {
+		m.Query, m.QueryZ = &[2]float64{qat[0], qat[1]}, &qat[2]
+	}
+}
+
+// project places vectors (and q, when given) along their three main directions, found by power
+// iteration on the centered vectors, scaled so the farthest point on the first two sits at 1: the 2D
+// map is the first two, and the third, which varies less, is the 3D view's depth.
+func project(vecs [][]float32, q []float32) ([][3]float64, [3]float64) {
+	out := make([][3]float64, len(vecs))
 	if len(vecs) == 0 {
-		return out, [2]float64{}
+		return out, [3]float64{}
 	}
 	dims := len(vecs[0])
 	mean := make([]float64, dims)
@@ -323,31 +327,38 @@ func project(vecs [][]float32, q []float32) ([][2]float64, [2]float64) {
 	for i, v := range vecs {
 		rows[i] = centered(v)
 	}
-	first := direction(rows, nil)
+	first := direction(rows)
 	second := direction(rows, first)
-	at := func(c []float64) [2]float64 { return [2]float64{dot(c, first), dot(c, second)} }
+	third := direction(rows, first, second)
+	at := func(c []float64) [3]float64 { return [3]float64{dot(c, first), dot(c, second), dot(c, third)} }
 	scale := 0.0
 	for i, r := range rows {
 		out[i] = at(r)
 		scale = math.Max(scale, math.Hypot(out[i][0], out[i][1]))
 	}
-	var qxy [2]float64
+	var qat [3]float64
 	if q != nil {
-		qxy = at(centered(q))
-		scale = math.Max(scale, math.Hypot(qxy[0], qxy[1]))
+		qat = at(centered(q))
+		scale = math.Max(scale, math.Hypot(qat[0], qat[1]))
 	}
 	if scale == 0 {
-		return out, qxy
+		return out, qat
 	}
 	for i := range out {
-		out[i][0], out[i][1] = out[i][0]/scale, out[i][1]/scale
+		for d := range out[i] {
+			out[i][d] /= scale
+		}
 	}
-	return out, [2]float64{qxy[0] / scale, qxy[1] / scale}
+	for d := range qat {
+		qat[d] /= scale
+	}
+	return out, qat
 }
 
-// direction is the rows' main direction by power iteration, kept at right angles to not, when
-// given. Its starting vector is fixed, so the same memories draw the same map.
-func direction(rows [][]float64, not []float64) []float64 {
+// direction is the rows' main direction by power iteration, kept at right angles to each of not
+// (directions already found, each of length 1). Its starting vector is fixed, so the same memories
+// draw the same map.
+func direction(rows [][]float64, not ...[]float64) []float64 {
 	dims := len(rows[0])
 	v := make([]float64, dims)
 	for d := range v {
@@ -361,10 +372,10 @@ func direction(rows [][]float64, not []float64) []float64 {
 				next[d] += k * r[d]
 			}
 		}
-		if not != nil {
-			k := dot(next, not)
+		for _, o := range not {
+			k := dot(next, o)
 			for d := range next {
-				next[d] -= k * not[d]
+				next[d] -= k * o[d]
 			}
 		}
 		n := math.Sqrt(dot(next, next))

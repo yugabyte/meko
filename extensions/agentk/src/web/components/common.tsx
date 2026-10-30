@@ -4,7 +4,7 @@ import { KIND_LABELS, KIND_STAGES, START_HINTS, START_STAGES, STAGE_LABELS } fro
 import type { MekoStatus, Session, StartStage } from '../../shared/types';
 import { appUrl } from '../base';
 import {
-  MAX_DEPTH, MAX_ROUNDS, STRATEGIES, reviewHolds, reviewRunning, reviewSegmentLabel, reviewSegmentText, strategyName,
+  MAX_DEPTH, MAX_ROUNDS, STRATEGIES, reviewRunning, reviewSegmentLabel, reviewSegmentText, reviewStopped, strategyName,
   type CodeReviewSummary, type ReviewOverrides, type ReviewSettings, type ReviewStrategySetting,
 } from '../../shared/codereview';
 import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkKeyframes, blinkOffsetMs, totalUnits, type BlinkRun } from '../blink';
@@ -565,9 +565,9 @@ export function StageChip({ session }: { session: Session }) {
  */
 export function ReviewGlass({ review }: { review: CodeReviewSummary }) {
   const running = reviewRunning(review);
-  const held = reviewHolds(review);
+  const stopped = reviewStopped(review);
   return (
-    <span className={cx('review-glass', running && 'running', held && 'stopped', running && review.mekoCall && 'meko')} aria-hidden="true">
+    <span className={cx('review-glass', running && 'running', stopped && 'stopped', running && review.mekoCall && 'meko')} aria-hidden="true">
       <svg width="16" height="16" viewBox="0 0 18 18">
         <circle className="lens" cx="7.5" cy="7.5" r="4.2" />
         <circle className="rim" cx="7.5" cy="7.5" r="5.5" />
@@ -597,7 +597,7 @@ export function ReviewSegment({ review, selected, className, tab = false, onOpen
       type="button"
       role={tab ? 'tab' : undefined}
       aria-selected={tab ? selected : undefined}
-      className={cx('review-seg', className, selected && 'sel', reviewHolds(review) && 'stopped')}
+      className={cx('review-seg', className, selected && 'sel', reviewStopped(review) && 'stopped')}
       title={label}
       aria-label={label}
       aria-current={!tab && selected ? 'page' : undefined}
@@ -800,7 +800,7 @@ const ROUND_CHOICES = Array.from({ length: MAX_ROUNDS + 1 }, (_, i) => i);
 const DEPTH_CHOICES = Array.from({ length: MAX_DEPTH }, (_, i) => i + 1);
 
 /**
- * The local review's three settings (strategy, re-review rounds, depth) as selects, each with its
+ * The local review's three settings (strategy, depth, re-review rounds) as selects, each with its
  * ⓘ. The global ones always have a value; a project's or a session's (`scoped`) start with
  * "Default (…)", the value they'd inherit, which leaves the setting out (null). `onChange` gets
  * the whole set after one change.
@@ -845,15 +845,15 @@ export function ReviewFields({ id, value, scoped, inherited, disabled, onChange 
         </select>
       </Field>
       <Field
-        label="Re-review rounds"
+        label="Review depth"
         info={{
-          for: `${id}-rounds`,
-          text: 'Reviews after the first. With 1, AgentK sends the findings to the task to fix first, then reviews again before the PR opens. A round with no findings ends it early.',
+          for: `${id}-depth`,
+          text: "The number of times a review runs before AgentK gets the findings to fix. More than one sweep makes it a deep review: each sweep after the first is told what the earlier ones found and looks elsewhere, and the sweeps run up to this count, but from the second sweep on, one that finds nothing new ends it. Costs more tokens.",
         }}
       >
-        <select id={`${id}-rounds`} className="input" disabled={disabled} value={value.rounds ?? ''} onChange={(e) => set('rounds', e.target.value)}>
-          {def(inherited ? String(inherited.rounds) : undefined)}
-          {ROUND_CHOICES.map((n) => (
+        <select id={`${id}-depth`} className="input" disabled={disabled} value={value.depth ?? ''} onChange={(e) => set('depth', e.target.value)}>
+          {def(inherited ? String(inherited.depth) : undefined)}
+          {DEPTH_CHOICES.map((n) => (
             <option key={n} value={n}>
               {n}
             </option>
@@ -861,15 +861,15 @@ export function ReviewFields({ id, value, scoped, inherited, disabled, onChange 
         </select>
       </Field>
       <Field
-        label="Review depth"
+        label="Re-review rounds"
         info={{
-          for: `${id}-depth`,
-          text: "Sweeps per review, as the cloud's deep reviews: each sweep after the first is told what the earlier ones found and looks elsewhere. From the second on, a sweep that finds nothing new ends it.",
+          for: `${id}-rounds`,
+          text: "The number of times the code review runs again after AgentK fixes the last review's findings, before the PR opens. A review that finds nothing ends it early.",
         }}
       >
-        <select id={`${id}-depth`} className="input" disabled={disabled} value={value.depth ?? ''} onChange={(e) => set('depth', e.target.value)}>
-          {def(inherited ? String(inherited.depth) : undefined)}
-          {DEPTH_CHOICES.map((n) => (
+        <select id={`${id}-rounds`} className="input" disabled={disabled} value={value.rounds ?? ''} onChange={(e) => set('rounds', e.target.value)}>
+          {def(inherited ? String(inherited.rounds) : undefined)}
+          {ROUND_CHOICES.map((n) => (
             <option key={n} value={n}>
               {n}
             </option>

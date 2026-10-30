@@ -19,7 +19,7 @@ import { approveDesign, changingDecisions } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { closingText, cx, dotState, designGate, isReviewChild, joinedPartSelected, reviewGatesPr, reviewParent, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, reviewTarget, runToMergeShown, runToMergeTitle, sessionTabTitle, totalTokens, updateShowing, usageTitle } from '../util';
+import { closingText, cx, dotState, designGate, isReviewChild, joinedPartSelected, reviewGatesPr, reviewParent, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, reviewTarget, runToMergeShown, runToMergeTitle, sessionTabTitle, sidewaysWheel, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
 import { Busy, Check, ConfirmButton, ContextRing, DatapackName, Elapsed, HarnessLogo, NotesIcon, ReviewSegment, RunToMergeCheck, RunToMergeMark, StageChip, StatusDot } from './common';
@@ -369,7 +369,14 @@ export function ProjectView({
   // A task with a local review is one joined tab: the task's part, then the review's (the magnifier),
   // inside one border. The task's part opens its session, the review's its findings beside it.
   const tabs = (
-    <div className="tabs" role="tablist" ref={tabsRef}>
+    <div
+      className="tabs"
+      role="tablist"
+      ref={tabsRef}
+      onWheel={(e) => {
+        e.currentTarget.scrollLeft += sidewaysWheel(e, e.currentTarget.clientWidth);
+      }}
+    >
       {sessions.map((s) => {
         const part = joinedPartSelected(s, session?.id, panel === 'findings');
         const tab = (
@@ -734,7 +741,8 @@ function queuedGate(
 /**
  * A task's local review in its stage bar's gate (in Code, while it holds Open PR) or in the review
  * session's own: where it is with Cancel while it runs, the task fixing a round's findings, or why
- * it stopped with Retry and Open anyway. The actions are the task's (`act` sends them there).
+ * it stopped with Retry and Open anyway (or only that it stopped, for one cancelled because the task
+ * left Code, which holds nothing). The actions are the task's (`act` sends them there).
  */
 function reviewGate(
   r: CodeReviewSummary,
@@ -760,6 +768,16 @@ function reviewGate(
         <button className="gate" disabled={blocked} onClick={() => onAct('review-retry')} title="Review again, reusing the steps already reported">
           Retry
         </button>
+      </span>
+    );
+  }
+  if (r.state === 'cancelled') {
+    return (
+      <span className="gate-group">
+        <span className="gate-pill warn" title={r.detail ?? undefined}>
+          Local review cancelled
+        </span>
+        {open}
       </span>
     );
   }

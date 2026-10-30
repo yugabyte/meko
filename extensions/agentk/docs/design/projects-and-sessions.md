@@ -88,8 +88,8 @@ idle_days = 14            # an idle worktree no session used for this many days 
 
 [code_review]                # the local review before a PR opens (docs/design/code-review.md), also in Settings › Code review
 # strategy = "off"           # sagittarius-3.0 (the default), sirius-1.0, or off; a project's and a session's own go over it
-# rounds = 1                 # re-reviews after the first, each after the task fixes the findings (0 to 5; 0 by default)
-# depth = 3                  # sweeps in each review, as the cloud's deep reviews (1 to 5; 1 by default)
+# depth = 3                  # times a review runs before AgentK gets the findings to fix (1 to 5; 1 by default); more than one is a deep review: each sweep looks past what the earlier ones found, up to this count, and from the second on, one that finds nothing new ends it; costs more tokens
+# rounds = 1                 # times the code review runs again after AgentK fixes the last review's findings (0 to 5; 0 by default); a review that finds nothing ends it early
 
 [code_review.models.opencode] # the model each tier of review step runs on; Claude Code's are opus, sonnet and haiku,
 # large = "anthropic/…"      # OpenCode's and Kiro's empty (the session's own model)
@@ -221,7 +221,7 @@ CREATE TABLE work_items (      -- the work queue (workqueue.ts, docs/design/work
   unplaced INTEGER, github_done_at INTEGER, created_at INTEGER, closed_at INTEGER);
 CREATE TABLE work_item_links (item_id TEXT, ord INTEGER, key TEXT, kind TEXT, url TEXT, label TEXT,
   PRIMARY KEY (item_id, key));  -- indexed on key, for the palette's lookup by link
-CREATE TABLE code_reviews (    -- a task's local reviews (review/runner.ts, docs/design/code-review.md), one per Open PR
+CREATE TABLE code_reviews (    -- a task's local reviews (review/runner.ts, docs/design/code-review.md), one per Open PR or move to Review & PR
   id TEXT PRIMARY KEY, task_id TEXT, session_id TEXT,  -- the task, and its code-review session
   strategy TEXT, rounds INTEGER, depth INTEGER,        -- what it runs with, stamped when it starts
   state TEXT,                  -- preparing | sweeping | scoring | fixing | done | failed | cancelled
@@ -230,6 +230,8 @@ CREATE TABLE code_reviews (    -- a task's local reviews (review/runner.ts, docs
                                --   findings (the panel), the passes' notes, the MEKO.md datapacks
   counts_json TEXT, last_kept INTEGER,                 -- every round's kept findings by severity (the PR line)
   instructions TEXT, by TEXT,  -- the Open PR's instructions it holds, and who pressed it (you | auto)
+  lead TEXT,                   -- the `moved` line of a move to Review & PR from Explore or Design, sent before the
+                               --   review's first prompt to the task (its fixes or the PR prompt), cleared once that goes
   detail TEXT, created_at INTEGER, updated_at INTEGER, finished_at INTEGER);  -- finished_at: its PR prompt went
 CREATE TABLE code_review_steps (review_id TEXT, step TEXT, report_json TEXT, at INTEGER,  -- each step's report, as
   PRIMARY KEY (review_id, step));  --   review_report or review_score took it (r1s1:guide, r1c3)

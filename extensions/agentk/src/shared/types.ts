@@ -1,7 +1,7 @@
 // API contract shared by the server (src/server) and the web UI (src/web).
 // Every REST route and WebSocket message is described here.
 
-import type { CodeReviewSummary, ReviewOverrides, ReviewStrategySetting } from './codereview.js';
+import type { CodeReviewSummary, ReviewOverrides, ReviewStrategySetting, SeverityCounts } from './codereview.js';
 import type { HarnessId } from './harnesses.js';
 
 export type SessionStatus =
@@ -324,6 +324,45 @@ export interface DailyUsage {
   /** YYYY-MM-DD in the server's time zone. */
   day: string;
   usage: TokenUsage;
+  /** The part of the day's tokens local code reviews' sessions spent (in `usage` too), for the chart's stacked bar. */
+  reviewTokens: number;
+}
+
+/**
+ * Local code reviews (docs/design/code-review.md) counted from `code_reviews`:
+ * each review by its current state, and what its rounds found and the task did with it.
+ */
+export interface CodeReviewCounts {
+  /** Reviews started; a Retry goes on in its review, so it isn't another. */
+  runs: number;
+  /** By the review's state now: preparing, sweeping, scoring and fixing are `running`. */
+  byOutcome: { done: number; failed: number; cancelled: number; running: number };
+  /** Done reviews that kept no finding. */
+  lgtm: number;
+  /** Reviews whose PR prompt went, Open anyway included. */
+  prs: number;
+  /**
+   * Rounds run, the first and every re-review: each that reached its passes. One that stopped, or
+   * found nothing changed, while it prepared doesn't count.
+   */
+  rounds: number;
+  /**
+   * Every candidate the passes raised, before scoring and Validate, each once: each finished
+   * round's, and the ones a round that ran and hasn't finished (still under way, or stopped) has
+   * raised so far.
+   */
+  candidates: number;
+  /** Kept findings, every round's: what the `me_ak_review:` line says. */
+  findings: SeverityCounts;
+  /** What the task said it did with kept findings (`review_outcome`). */
+  fixed: number;
+  declined: number;
+}
+
+/** Local code reviews for the Code Reviews section: their counts, and their sessions' tokens and cost. */
+export interface CodeReviewUsage extends CodeReviewCounts {
+  usage: TokenUsage;
+  cost: UsageCost;
 }
 
 export interface ProjectUsage {
@@ -334,6 +373,7 @@ export interface ProjectUsage {
   mekoGaps: MekoGapCounts;
   mekoFirstTurn: MekoFirstTurn;
   mekoLearning: MekoLearning;
+  codeReviews: CodeReviewUsage;
   byModel: ModelUsage[];
   /** Every session with usage, archived ones included, the most recently used first, the largest first among ties. */
   bySession: SessionUsage[];
@@ -367,6 +407,7 @@ export interface UsageOverview {
   meko: MekoUsage;
   mekoFirstTurn: MekoFirstTurn;
   mekoLearning: MekoLearning;
+  codeReviews: CodeReviewUsage;
   mergedPrs: number;
   directPushes: number;
   directCommits: number;
@@ -505,6 +546,17 @@ export interface CallHomeAgentkMeko {
 }
 
 /**
+ * Local code reviews on a day: the reviews started then (counted by their state now, so a later
+ * report corrects one that ended after), and the tokens their sessions spent then with their price in
+ * whole cents and, from Kiro, the credits billed (left out when none).
+ */
+export interface CallHomeCodeReview extends CodeReviewCounts {
+  tokens: CallHomeTokens;
+  usdCents: number;
+  credits?: number;
+}
+
+/**
  * Sessions as the report counts them, by where they started: `explore`, `plan` (Design) and `quick`
  * (Code) are the starts under the names the session types had, and `review-pr` a Review a PR.
  */
@@ -564,6 +616,8 @@ export interface CallHomeDay {
   kiro?: { sessionsCreated: number; turns: number; credits: number };
   /** Ask AgentK on the day: asks, the ones that failed, and the actions the answers proposed. Left out of a day with none. */
   askAgentk?: { asks: number; failed: number; actions: number };
+  /** Local code reviews on the day: started then, or whose sessions spent tokens then. Left out of a day with neither. */
+  codeReview?: CallHomeCodeReview;
 }
 
 export interface CallHomeReport {
@@ -2479,7 +2533,9 @@ export interface MoveSessionRequest {
   /**
    * Send the new stage's prompt. Left out, it follows promptByDefault, as the move dialog leaves it;
    * kept for pages from before the dialog dropped its checkbox. Ignored for Review & PR, which
-   * picks up the branch's open PR, or sends the PR prompt when there's work to push.
+   * picks up the branch's open PR, or, when there's work to push, does what Open PR does: with the
+   * local review on, the session goes to Code and the review sends the PR prompt when it's done;
+   * else the PR prompt goes now.
    */
   prompt?: boolean;
   /**
@@ -2755,8 +2811,11 @@ export type TermServerMessage =
 //        the PR prompt without a me_ak_review line: both 409 unless the review failed or was cancelled)
 // POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to, a
 //        missing task, or instructions that aren't text or are too long; 409 while AgentK is mid-turn, in Merge & Close,
-//        or a prompt (the stage's, or the user's instructions) is due and Claude is waiting or exited; 502 when its prompt
-//        couldn't be sent: the move stays made, except a PR prompt's, which goes back to where it was)
+//        or a prompt (the stage's, or the user's instructions) is due and Claude is waiting or exited, and for a move to
+//        Review & PR with work to push, while prompts from the user wait or a stopped local review holds the PR in Code
+//        (Retry it, or Open anyway), whether the review is on or off now, as for Open PR; 502 when its prompt couldn't be sent: the move stays made, except a PR prompt's, which
+//        goes back to where it was. A move to Review & PR that the local review takes over answers with the session
+//        in Code, the review running)
 // GET    /api/sessions/:id/design              → DesignDoc
 // POST   /api/sessions/:id/design/answers DesignAnswersRequest → 204   (sends them for AgentK to revise the design,
 //        and resolves the questions answered with their answers in questions.json, unless the questions come from a

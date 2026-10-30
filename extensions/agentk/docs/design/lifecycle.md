@@ -360,8 +360,12 @@ from before start stages is ignored. The rules are in `src/shared/stages.ts`, sh
 - **Review & PR** picks up the branch's open PR (any open PR from this repo) when there's nothing to
   push: the branch tip is in the PR and the worktree is clean. The session goes straight to Review,
   logged as "Picked up PR #7", or "Back on PR #7" for the PR it had before (not counted as another
-  PR, and its review state, an AgentK approval say, carries on). Otherwise it goes to the PR stage with the PR prompt, as **Open PR** does, and goes back to
-  where it was if the prompt can't be typed. The PR stage never takes the PR the
+  PR, and its review state, an AgentK approval say, carries on). Otherwise it does what **Open PR**
+  does. With the [local review](code-review.md) on, the session goes to Code (from Explore or Design
+  too, logged as "Moved to Code: AgentK reviews the change locally before it opens the PR"), the
+  review runs, and it sends the PR prompt when it's done; the `moved` line goes before the review's
+  first prompt to the task (its fixes, or the PR prompt). With the review off, the session goes to
+  the PR stage with the PR prompt, and goes back to where it was if the prompt can't be typed. The PR stage never takes the PR the
   session had before if it's been merged or closed since: it waits for the new one. Moving back to
   Code also gets a session out of a PR stage whose turn ended without a PR.
 

@@ -92,6 +92,7 @@ Meko connect to Meko Cloud.
 | `meko ui` | Open the web UI in your browser |
 | `meko agent connect claude` | Add Meko to Claude Code (or `codex`, `kiro`, `opencode`), for all your projects |
 | `meko memory-extractor use claude` | Extract memories from your conversations with your own Claude Code, every 5 minutes. It's off until you run this; `status`, `run` and `off` check, run or stop it. See [memory extraction](backend/docs/memory-extraction.md) |
+| `meko answers use claude` | Have your own Claude Code write an answer from each search's results in the web UI, citing them. Off until you run this; `status` and `off` check or stop it |
 | `meko update` | Install Meko's newest release now, then every extension's |
 | `meko-cli search "<question>"` | Search memories, the knowledge base and past conversations |
 | `meko-cli add_memory "<text>"` | Save a memory, word for word |

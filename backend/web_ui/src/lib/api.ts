@@ -6,6 +6,7 @@
 import type {
   AgentChange,
   Agents,
+  AnswerStatus,
   Artifact,
   ArtifactList,
   AuthStatus,
@@ -28,8 +29,10 @@ import type {
   MekoCloud,
   MekoCloudUpdate,
   Metrics,
+  Passage,
   PromotedMemory,
   ProvisionStatus,
+  SearchAnswer,
   ServerStatus,
   TotpEnroll,
   UpdateStatus,
@@ -191,6 +194,10 @@ export const api = {
       `/datapacks/${id}/search-map?q=${enc(q)}&sources=${sources.join(",")}&hits=${enc(hits.join(","))}`,
     ),
   memoryExtractor: () => request<ExtractorStatus>("GET", "/settings/memory-extractor"),
+  answers: () => request<AnswerStatus>("GET", "/settings/answers"),
+  // An answer to query written from a search's passages, through the user's own Claude Code.
+  answer: (id: string, query: string, passages: Passage[]) =>
+    request<SearchAnswer>("POST", `/datapacks/${id}/answer`, { query, passages }),
   datapackExtraction: (id: string) => request<DatapackExtraction>("GET", `/datapacks/${id}/memory-extraction`),
   memoryHistory: (id: string, memoryId: string) =>
     request<{ history: MemoryChange[] }>("GET", `/memories/${memoryId}/history?datapack_id=${id}`),
