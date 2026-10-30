@@ -109,7 +109,7 @@ func runAgentList(l paths.Layout, asJSON bool, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
-// catalogTitles names every agent Meko knows: "Claude Code, Codex, Kiro CLI and OpenCode".
+// catalogTitles names every agent Meko knows: "Claude Code, Codex, Kiro CLI, OpenCode and Cursor".
 func catalogTitles() string {
 	t := make([]string, 0, len(agents.Catalog))
 	for _, a := range agents.Catalog {

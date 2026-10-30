@@ -22,6 +22,7 @@ import (
 // every config folder an environment variable could point at is the test's.
 func TestMain(m *testing.M) {
 	SystemFolders = nil
+	Applications = ""
 	LoginShell = ""
 	for _, k := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "KIRO_HOME", "XDG_CONFIG_HOME"} {
 		_ = os.Unsetenv(k)
@@ -232,7 +233,7 @@ func TestListStates(t *testing.T) {
 		err.Error() != "Kiro CLI isn't installed" {
 		t.Errorf("connect kiro, not installed: %v", err)
 	}
-	if _, err := manager(local).Disconnect(context.Background(), "cursor"); !isCode(err, CodeUnknown) {
+	if _, err := manager(local).Disconnect(context.Background(), "windsurf"); !isCode(err, CodeUnknown) {
 		t.Errorf("an unknown agent: %v", err)
 	}
 	t.Setenv("PATH", "/usr/bin:/bin")
@@ -689,6 +690,50 @@ func TestKiro(t *testing.T) {
 	r, err = m.Disconnect(context.Background(), "kiro")
 	if err != nil || r.Changed || len(r.Notes) != 0 {
 		t.Errorf("disconnect with none: %+v %v", r, err)
+	}
+}
+
+// Cursor: found as the editor's command inside the macOS app (not on PATH) or as cursor-agent, and
+// connected in ~/.cursor/mcp.json, which the editor and the CLI share, keeping its other servers.
+func TestCursor(t *testing.T) {
+	home, _ := fakeAgents(t, false, "codex")
+	m := manager(local)
+	if _, ok := rows(t, m)["cursor"]; ok {
+		t.Fatal("found without the app or cursor-agent")
+	}
+	apps := t.TempDir()
+	Applications = apps
+	t.Cleanup(func() { Applications = "" })
+	write(t, filepath.Join(apps, cursorApp, "cursor"), "#!/bin/sh\n")
+	if err := os.Chmod(filepath.Join(apps, cursorApp, "cursor"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if r, ok := rows(t, m)["cursor"]; !ok || r.State != StateNone || r.Title != "Cursor" {
+		t.Fatalf("the app's command: %+v", r)
+	}
+	path := filepath.Join(home, ".cursor", "mcp.json")
+	write(t, path, `{"mcpServers": {"git": {"command": "git-mcp"}}}`)
+	r, err := m.Connect(context.Background(), "cursor")
+	if err != nil || r.Agent.State != StateConnected {
+		t.Fatalf("connect cursor: %+v %v", r, err)
+	}
+	if doc := readKiroDoc(t, path); doc.MCPServers["git"].Command != "git-mcp" ||
+		doc.MCPServers["meko"].URL != localURL || doc.MCPServers["meko"].Headers["Authorization"] != "Bearer "+token {
+		t.Errorf("mcp.json %+v", doc)
+	}
+	if r, err = m.Disconnect(context.Background(), "cursor"); err != nil || !r.Changed || r.Agent.State != StateNone {
+		t.Errorf("disconnect cursor: %+v %v", r, err)
+	}
+
+	Applications = ""
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "cursor-agent"), "#!/bin/sh\n")
+	if err = os.Chmod(filepath.Join(bin, "cursor-agent"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":/usr/bin:/bin")
+	if r, ok := rows(t, m)["cursor"]; !ok || !strings.HasSuffix(r.Command, "/cursor-agent") {
+		t.Errorf("the CLI alone: %+v", r)
 	}
 }
 

@@ -251,16 +251,17 @@ install and run Meko are in [install.md](install.md).
 
 ## Agents
 
-Meko knows four agents and connects them to itself: `claude` (Claude Code), `codex` (Codex), `kiro`
-(Kiro CLI) and `opencode` (OpenCode), by adding an MCP server always named `meko` to the agent's
+Meko knows five agents and connects them to itself: `claude` (Claude Code), `codex` (Codex), `kiro`
+(Kiro CLI), `opencode` (OpenCode) and `cursor` (Cursor), by adding an MCP server always named `meko` to the agent's
 own config, for all the user's projects. AgentK recognizes Meko's tools by that name
 (`mcp__meko__*`). `internal/agents` does it for the CLI (`meko agent`), the routes below, the web
 UI's Connect page and a Meko Cloud link's change. Meko keeps no record of its own: it reads each
 agent's config every time, since the user and the agent edit it too.
 
-- **Installed** means the agent's command (`claude`, `codex`, `kiro-cli`, `opencode`) is on PATH, in
-  its usual folders (`~/.local/bin`, `/usr/local/bin`, `/opt/homebrew/bin`, and `~/.claude/local`
-  for Claude Code, `~/.opencode/bin` for OpenCode), or, when Meko runs as a service, on the PATH of
+- **Installed** means the agent's command (`claude`, `codex`, `kiro-cli`, `opencode`, and `cursor` or
+  `cursor-agent`) is on PATH, in its usual folders (`~/.local/bin`, `/usr/local/bin`,
+  `/opt/homebrew/bin`, and `~/.claude/local` for Claude Code, `~/.opencode/bin` for OpenCode, the
+  macOS app's `/Applications/Cursor.app/Contents/Resources/app/bin` for Cursor's editor), or, when Meko runs as a service, on the PATH of
   the user's login shell (`$SHELL`, which systemd and launchd set for the service, else `/bin/sh`),
   where version managers such as nvm put an npm install. Meko started from the user's shell has that
   PATH already. bash, zsh and fish run interactive too (`-i -l -c`), since nvm sets PATH up in
@@ -301,6 +302,7 @@ How it adds and removes the server, each agent's own way, Streamable HTTP with
 | `opencode` (OpenCode) | `opencode mcp add meko --url <url> --header "Authorization=Bearer <token>" --global` | Takes `mcp.servers.meko` (OpenCode 2) and `mcp.meko` (earlier versions) out of its global config files (`opencode.json`, `opencode.jsonc`, `config.json` in `$XDG_CONFIG_HOME/opencode` or `~/.config/opencode`), as text, keeping the rest of each file, comments too | `mcp add` replaces a server of the same name and writes the config in the shape its own version reads. `opencode mcp` has no remove. The list reads the same files, JSONC included, a later file's `meko` over an earlier one's |
 | `kiro` (Kiro CLI) | Sets `mcpServers.meko` (`url`, `headers`) in `settings/mcp.json` in Kiro's home (`KIRO_HOME`, else `~/.kiro`, as AgentK reads it), as text: an old entry keeps its other fields (`autoApprove`, `timeout`) and loses `disabled`, and the file's other servers and keys stay as they were | Takes `mcpServers.meko` out of the file as text, keeping the rest as it was | `kiro-cli mcp add` takes no headers, and needs a login |
 | `codex` (Codex) | Writes an `[mcp_servers.meko]` table (`url`, `http_headers`) into `config.toml` in `$CODEX_HOME` or `~/.codex`, as text: an old `[mcp_servers.meko]` table and its subtables go (but not the comment and blank lines right before the next table's header, which are that table's), the rest stays as it was, and the result is parsed before it's written | Takes the table and its subtables out the same way | `codex mcp add` takes no headers, only the name of an environment variable holding a bearer token, which the user's shell would then have to set. A `meko` set some other way (a dotted key) isn't replaced or removed: it says to run `codex mcp remove meko` |
+| `cursor` (Cursor) | As Kiro's, in `~/.cursor/mcp.json` | As Kiro's | The editor and its CLI (`cursor-agent`) share that global file; neither has an `mcp add` that takes headers |
 
 Claude Code's and OpenCode's CLIs take the header only as an argument, so the token (or Meko
 Cloud's key) is on their command line while `mcp add` runs, about a second: the one exception,

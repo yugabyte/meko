@@ -62,7 +62,7 @@ to your agent, for all your projects:
 
 ```sh
 meko agent list                # the agents on this computer, and whether each reaches Meko
-meko agent connect claude      # or codex, kiro, opencode
+meko agent connect claude      # or codex, kiro, opencode, cursor
 meko agent connect             # the MCP URL and token, for any other MCP client
 ```
 

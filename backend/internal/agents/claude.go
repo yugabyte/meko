@@ -41,7 +41,7 @@ func readClaudeConfig() (claudeConfig, error) {
 	return cfg, nil
 }
 
-// mcpEntry is an MCP server entry as Claude Code, Kiro CLI and OpenCode write one: its URL, headers,
+// mcpEntry is an MCP server entry as Claude Code, Kiro CLI, OpenCode and Cursor write one: its URL, headers,
 // and whether it's turned off (Kiro's disabled, OpenCode's enabled).
 type mcpEntry struct {
 	URL      string            `json:"url"`

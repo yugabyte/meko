@@ -112,12 +112,12 @@ func TestAgentCommands(t *testing.T) {
 			t.Errorf("meko %s: exit %d, %q %q", strings.Join(args, " "), code, out, errs)
 		}
 	}
-	code, _, errs = run("agent", "connect", "cursor", "--data-dir", t.TempDir())
-	want(t, "agent connect cursor", code, exitUsage, errs,
-		`meko agent connect: unknown agent "cursor" (claude, codex, kiro, opencode)`)
+	code, _, errs = run("agent", "connect", "windsurf", "--data-dir", t.TempDir())
+	want(t, "agent connect windsurf", code, exitUsage, errs,
+		`meko agent connect: unknown agent "windsurf" (claude, codex, kiro, opencode, cursor)`)
 	code, _, errs = run("agent", "disconnect", "--data-dir", t.TempDir())
 	want(t, "agent disconnect alone", code, exitUsage, errs,
-		"meko agent disconnect: name the agent (claude, codex, kiro, opencode)")
+		"meko agent disconnect: name the agent (claude, codex, kiro, opencode, cursor)")
 }
 
 // meko agent list shows the agents installed and whether each reaches Meko, and where they connect;
@@ -126,8 +126,8 @@ func TestAgentList(t *testing.T) {
 	dir, port := setup(t)
 	t.Setenv("PATH", "/usr/bin:/bin")
 	code, out, errs := run("agent", "list", "--data-dir", dir)
-	if code != 0 || errs != "" || out != "No agents found on this computer: Meko works with Claude Code, Codex, Kiro CLI "+
-		"and OpenCode\n" {
+	if code != 0 || errs != "" || out != "No agents found on this computer: Meko works with Claude Code, Codex, "+
+		"Kiro CLI, OpenCode and Cursor\n" {
 		t.Fatalf("none installed: %d %q %q", code, out, errs)
 	}
 	fakeAgents(t, false)

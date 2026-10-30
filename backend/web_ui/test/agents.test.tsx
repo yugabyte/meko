@@ -130,7 +130,7 @@ test("with no agent installed, the card names the ones Meko works with", async (
   serve({ "GET /api/v1/agents": () => ({ data: { target: { kind: "local", url: LOCAL }, agents: [] } }) });
   await render(<AgentsCard />);
   expect(text()).toContain(
-    "No agents found on this computer: Meko works with Claude Code, Codex, Kiro CLI and OpenCode",
+    "No agents found on this computer: Meko works with Claude Code, Codex, Kiro CLI, OpenCode and Cursor",
   );
 });
 

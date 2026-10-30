@@ -1,6 +1,6 @@
-// Package agents connects the agents on this computer (Claude Code, Codex, Kiro CLI and OpenCode) to
-// Meko. It finds each one (its command on PATH, in its usual folders or on the user's login shell's
-// PATH), reads from the agent's own config whether its meko MCP server reaches Meko's target, and
+// Package agents connects the agents on this computer (Claude Code, Codex, Kiro CLI, OpenCode and
+// Cursor) to Meko. It finds each one (its command on PATH, in its usual folders or on the user's login
+// shell's PATH), reads from the agent's own config whether its meko MCP server reaches Meko's target, and
 // adds or removes that server each agent's own way. Meko keeps no record of its own: the configs are
 // read every time, since the user and the agents edit them too. The CLI (meko agent), the server's
 // /api/v1/agents routes and the Meko Cloud link's changes (Move) share it (docs/api.md#agents).
@@ -121,8 +121,11 @@ func shownURL(raw string) string {
 // how Meko reads, adds and removes its meko server.
 type Agent struct {
 	Name, Title, Command string
-	// folders are its own install folders, under the home folder, beside the usual ones.
-	folders []string
+	// also are other commands that mean it's installed (Cursor's CLI beside its editor).
+	also []string
+	// folders are its own install folders, under the home folder, beside the usual ones; apps are
+	// under Applications (inside a macOS app).
+	folders, apps []string
 	// read returns the user-level meko server (nil with none) and notes on others that win over it
 	// (Claude Code's folders).
 	read func(t Target) (*server, []string, error)
@@ -139,10 +142,12 @@ var Catalog = []Agent{
 		read: readClaude, connect: connectClaude, disconnect: disconnectClaude},
 	{Name: "codex", Title: "Codex", Command: "codex", read: readCodex, connect: connectCodex,
 		disconnect: disconnectCodex},
-	{Name: "kiro", Title: "Kiro CLI", Command: "kiro-cli", read: readKiro, connect: connectKiro,
-		disconnect: disconnectKiro},
+	{Name: "kiro", Title: "Kiro CLI", Command: "kiro-cli", read: kiro.read, connect: kiro.connect,
+		disconnect: kiro.disconnect},
 	{Name: "opencode", Title: "OpenCode", Command: "opencode", folders: []string{".opencode/bin"},
 		read: readOpenCode, connect: connectOpenCode, disconnect: disconnectOpenCode},
+	{Name: "cursor", Title: "Cursor", Command: "cursor", also: []string{"cursor-agent"}, apps: []string{cursorApp},
+		read: cursor.read, connect: cursor.connect, disconnect: cursor.disconnect},
 }
 
 // Names are the catalog's names.
@@ -168,10 +173,29 @@ func Lookup(name string) (Agent, bool) {
 // folder's ~/.local/bin: a service runs with a thin PATH. Tests empty it.
 var SystemFolders = []string{"/usr/local/bin", "/opt/homebrew/bin"}
 
-// Find is the agent's command: on PATH, else in its usual folders, else on the user's login shell's
-// PATH (LoginShell), as an absolute path.
+// Applications is where macOS apps are installed, for an agent's apps folders. Tests empty it.
+var Applications = "/Applications"
+
+// Find is the agent's command, or else one of also: on PATH, else in its usual folders, else on the
+// user's login shell's PATH (LoginShell), as an absolute path. The shell runs only when no command
+// is found otherwise.
 func (a Agent) Find() (string, bool) {
-	if p, err := lookPath(a.Command); err == nil {
+	commands := append([]string{a.Command}, a.also...)
+	for _, c := range commands {
+		if p, ok := a.find(c); ok {
+			return p, true
+		}
+	}
+	for _, c := range commands {
+		if p, ok := findIn(loginPath(), c); ok {
+			return p, true
+		}
+	}
+	return "", false
+}
+
+func (a Agent) find(command string) (string, bool) {
+	if p, err := lookPath(command); err == nil {
 		return p, true
 	}
 	var dirs []string
@@ -181,10 +205,12 @@ func (a Agent) Find() (string, bool) {
 			dirs = append(dirs, filepath.Join(home, f))
 		}
 	}
-	if p, ok := findIn(append(dirs, SystemFolders...), a.Command); ok {
-		return p, true
+	if Applications != "" {
+		for _, f := range a.apps {
+			dirs = append(dirs, filepath.Join(Applications, f))
+		}
 	}
-	return findIn(loginPath(), a.Command)
+	return findIn(append(dirs, SystemFolders...), command)
 }
 
 // findIn is the first executable file called name in the folders.
