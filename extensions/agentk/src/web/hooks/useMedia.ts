@@ -129,3 +129,20 @@ export function markOverlayScrollbars(): () => void {
     root.classList.remove('overlay-scrollbars');
   };
 }
+
+let sideways: ResizeObserver | null = null;
+
+/**
+ * A ref for a box that scrolls sideways (a diff): marks it `data-sideways` while its content is wider
+ * than it, so the room left for an overlay scrollbar goes only under a box that has one. One observer
+ * watches every box; showing more rows or resizing the panel changes the box's size, and it looks again.
+ */
+export function watchSideways(box: HTMLElement | null): (() => void) | undefined {
+  if (!box || typeof ResizeObserver === 'undefined') return;
+  sideways ??= new ResizeObserver((entries) => {
+    for (const { target } of entries) target.toggleAttribute('data-sideways', target.scrollWidth > target.clientWidth);
+  });
+  const watcher = sideways;
+  watcher.observe(box);
+  return () => watcher.unobserve(box);
+}

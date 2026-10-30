@@ -4071,8 +4071,9 @@ div[id^='dak-mermaid-'] .label {
   container-type: inline-size;
 }
 /* An overlay scrollbar (macOS, phones; markOverlayScrollbars in useMedia.ts) is drawn over the box's
-   bottom edge: room for it under the last row, which it covered. */
-.overlay-scrollbars .diff-wrap {
+   bottom edge: room for it under the last row, which it covered, only on a diff wider than its box
+   (data-sideways, watchSideways in useMedia.ts), the one that has a scrollbar. */
+.overlay-scrollbars .diff-wrap[data-sideways] {
   padding-bottom: 14px;
 }
 .diff {

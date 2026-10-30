@@ -140,7 +140,8 @@ is closer to the branch (a fork's own `<base>` can lag the upstream one the bran
 `origin` wins a tie, and the local `<base>` is used only when neither remote has one.
 Each file has a kind (A, M, D, R, U), its line counts, an *uncommitted* tag when it has uncommitted
 edits, and a collapsible diff, which scrolls sideways in its own box (where scrollbars are drawn over
-content, macOS's and phones', it leaves room under its last row: `markOverlayScrollbars()`). Single-file diffs are cut at 256 KB and the whole panel at 4 MB;
+content, macOS's and phones', a diff wider than the panel leaves room under its last row for it:
+`markOverlayScrollbars()`, `watchSideways()`). Single-file diffs are cut at 256 KB and the whole panel at 4 MB;
 past that only line counts are shown.
 The panel lists at most 1,000 files (`MAX_FILES`, `capFiles()` in `changes.ts`): the files with
 review comments, so no comment loses its file, then the first by path. The header's file count and

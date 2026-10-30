@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChangedFile } from '../../src/shared/types.js';
 import { FileDiff, FilePath } from '../../src/web/components/ChangesPanel.js';
 import { parsePatch } from '../../src/web/diff.js';
+import { watchSideways } from '../../src/web/hooks/useMedia.js';
 import { LONG_PRESS_MS, RangeDrag, type CommentPick, type Drag } from '../../src/web/hooks/useRangeDrag.js';
 
 const file = { path: 'gen.txt', oldPath: null, kind: 'added', added: 5000, removed: 0, binary: false, uncommitted: false, truncated: false } as ChangedFile;
@@ -143,6 +144,28 @@ describe('dragging a range', () => {
     expect(picks).toEqual([]);
     expect(shown.at(-1)).toBeNull();
     expect(drag.swallow()).toBe(true);
+  });
+});
+
+describe("a diff's sideways scroll", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('is marked only while the diff is wider than its box, until the box goes', () => {
+    let report: (entries: { target: Element }[]) => void = () => {};
+    const unobserve = vi.fn();
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(cb: typeof report) { report = cb; }
+      observe() {}
+      unobserve = unobserve;
+    });
+    const box = { scrollWidth: 900, clientWidth: 600, toggleAttribute: vi.fn() };
+    const stop = watchSideways(box as unknown as HTMLElement);
+    report([{ target: box as unknown as Element }]);
+    box.scrollWidth = 600;
+    report([{ target: box as unknown as Element }]);
+    expect(box.toggleAttribute.mock.calls).toEqual([['data-sideways', true], ['data-sideways', false]]);
+    stop?.();
+    expect(unobserve).toHaveBeenCalledWith(box);
   });
 });
 
