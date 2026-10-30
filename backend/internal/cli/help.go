@@ -108,6 +108,13 @@ var mekoCommands = []command{
 			{"meko memory-extractor datapack personal --off", "don't extract that datapack's conversations"},
 			{"meko memory-extractor off", "turn it off"},
 		}},
+	{name: "answers", group: "Run", summary: "Answer from Search's results in the web UI, through your own Claude Code",
+		usage: "meko answers use|off|status [args] [flags]", examples: []example{
+			{"meko answers use claude", "turn them on: Search sends its results to claude -p (no tools) for an answer"},
+			{"meko answers use claude --model sonnet", "with another model"},
+			{"meko answers status", "whether they're on, and through what"},
+			{"meko answers off", "turn them off"},
+		}},
 	{name: groupAgent, subcommands: true, summary: "List the agents on this computer, and connect them to Meko",
 		usage: "meko agent list|connect|disconnect [<agent>] [flags]", examples: []example{
 			{"meko agent list", "the agents on this computer, and whether each one reaches Meko"},

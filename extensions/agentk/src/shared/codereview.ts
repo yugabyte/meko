@@ -216,6 +216,8 @@ export interface CodeReviewSummary {
   addressed: boolean;
   /** The review session is in a Meko tool call (the lens shows Meko's m). */
   mekoCall: boolean;
+  /** The review session waits on the user in its terminal (a permission prompt or a question): the glass knocks. */
+  waiting: boolean;
   /** Why it failed or was cancelled, in plain words; null otherwise. */
   detail: string | null;
 }
@@ -274,10 +276,11 @@ export function reviewSegmentLabel(r: CodeReviewSummary): string {
     case 'fixing': what = 'waiting for the fixes'; break;
     case 'done': what = doneShowsCounts(r) ? countsText(r.counts) : totalCount(r.counts) ? `LGTM, ${countsText(r.counts)} addressed` : 'LGTM'; break;
     case 'failed': what = `failed${r.detail ? `: ${r.detail}` : ''}. Retry or Open anyway`; break;
-    case 'cancelled': what = 'cancelled. Retry or Open anyway'; break;
+    case 'cancelled': what = reviewHolds(r) ? 'cancelled. Retry or Open anyway' : `cancelled: ${r.detail}`; break;
   }
   const meko = r.mekoCall ? ', searching Meko' : '';
-  return `Local review: ${[name, ...where, what].join(', ')}${meko}`;
+  const waiting = r.waiting ? ', waiting on you in its terminal' : '';
+  return `Local review: ${[name, ...where, what].join(', ')}${meko}${waiting}`;
 }
 
 /** The Code gate's line for a done review: what it found until the task addressed it, then LGTM. */
@@ -291,13 +294,21 @@ export function countsText(c: SeverityCounts): string {
   return parts.length ? parts.join(', ') : 'no findings';
 }
 
-/** The review holds the task's Open PR for the user to pick Retry or Open anyway. */
-export function reviewHolds(r: CodeReviewSummary | null): boolean {
+/** Why a review stopped when its task left Code: it doesn't hold the next Open PR, which starts a new review. */
+export const REVIEW_LEFT_CODE = 'the task left Code';
+
+/** The review failed or was cancelled: its magnifier shows it stopped, whether or not it holds the PR. */
+export function reviewStopped(r: Pick<CodeReviewSummary, 'state'> | null | undefined): boolean {
   return !!r && (r.state === 'failed' || r.state === 'cancelled');
 }
 
-/** The review is still working (its lens pulses). */
-export function reviewRunning(r: CodeReviewSummary | null): boolean {
+/** The review holds the task's Open PR for the user to pick Retry or Open anyway. */
+export function reviewHolds(r: Pick<CodeReviewSummary, 'state' | 'detail'> | null | undefined): boolean {
+  return !!r && (r.state === 'failed' || (r.state === 'cancelled' && r.detail !== REVIEW_LEFT_CODE));
+}
+
+/** The review is still working (its lens pulses): its steps run, not the task's fixes. */
+export function reviewRunning(r: Pick<CodeReviewSummary, 'state'> | null): boolean {
   return !!r && (r.state === 'preparing' || r.state === 'sweeping' || r.state === 'scoring');
 }
 

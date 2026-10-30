@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { HARNESS_CAPS, versionAtLeast } from '../../shared/harnesses.js';
 import { claudeAsker } from '../askagentk.js';
-import { EDIT_TOOLS, REVIEW_DISALLOWED_TOOLS, claudeLauncher, modDirPath, statusLineScriptPath, transcriptPathFor, userStatusLine, writeModFiles } from '../claude.js';
+import { EDIT_TOOLS, REVIEW_DISALLOWED_TOOLS, claudeLauncher, modDirPath, promptInTranscript, statusLineScriptPath, transcriptMarkOf, transcriptPathFor, userStatusLine, writeModFiles } from '../claude.js';
 import type { ClaudeCode } from '../claudecode.js';
 import type { Config } from '../config.js';
 import type { HookPayload } from '../hooks.js';
@@ -81,6 +81,9 @@ export function claudeHarness(deps: { claudeCode: ClaudeCode; log: Logger }): Ha
         // A review's steps run in subagents (a sweep's passes all at once), and its turn's end is the sweep's end. Claude Code
         // runs subagents in the background by default, ending the turn before they report; this keeps them in it.
         ...(l.review ? { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' } : {}),
+        // Claude Code hands a conversation whose TUI exits with background tasks running to its own
+        // background sessions, where AgentK can't reach it (no hooks, no mod, a new conversation id).
+        CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF: '1',
       },
     }),
     // Claude Code's hook shape is AgentK's event shape.
@@ -95,6 +98,8 @@ export function claudeHarness(deps: { claudeCode: ClaudeCode; log: Logger }): Ha
     canResume: (row) =>
       (!!row.transcript_path && existsSync(row.transcript_path)) || existsSync(transcriptPathFor(row.worktree_path, row.claude_session_id)),
     activityFiles: (row) => [row.transcript_path, transcriptPathFor(row.worktree_path, row.claude_session_id)].filter((f): f is string => !!f),
+    transcriptMark: (row) => transcriptMarkOf(transcript(row)),
+    promptStarted: (_row, mark, text) => promptInTranscript(mark, text),
     readUsage: (db, row) => ({ changed: ingestSessionUsage(db, row.id, transcript(row), row.base_branch) }),
     captureTranscript: transcript,
     ask: claudeAsker,

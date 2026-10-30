@@ -109,43 +109,73 @@ const extractSchema = `{"type":"object","properties":{"memory":{"type":"array","
 type claudeHarness struct{ command, model string }
 
 func (h claudeHarness) Extract(ctx context.Context, system, input string) ([]ExtractedFact, error) {
-	dir, err := os.MkdirTemp("", "meko-extract-")
-	if err != nil {
+	var reply struct {
+		Memory []ExtractedFact `json:"memory"`
+	}
+	if err := runClaude(ctx, h.command, h.model, system, input, extractSchema, extractTimeout, ErrHarness,
+		&reply); err != nil {
 		return nil, err
 	}
+	return reply.Memory, nil
+}
+
+// runClaude runs Claude Code headless as claudeHarness says, sending input on stdin, and decodes its
+// output, held to schema, into out. Errors wrap fail and say what failed, never what claude wrote:
+// that can quote the input.
+func runClaude(ctx context.Context, command, model, system, input, schema string, timeout time.Duration,
+	fail error, out any) error {
+	dir, err := os.MkdirTemp("", "meko-claude-")
+	if err != nil {
+		return err
+	}
 	defer func() { _ = os.RemoveAll(dir) }()
-	ctx, cancel := context.WithTimeout(ctx, extractTimeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	//nolint:gosec // G204: command is an absolute path the admin set up, checked to be named claude and executable
-	cmd := exec.CommandContext(ctx, h.command, "-p", "--setting-sources", "local", "--tools", "",
-		"--strict-mcp-config", "--no-session-persistence", "--disable-slash-commands", "--model", h.model,
-		"--system-prompt", system, "--output-format", "json", "--json-schema", extractSchema)
+	cmd := exec.CommandContext(ctx, command, "-p", "--setting-sources", "local", "--tools", "",
+		"--strict-mcp-config", "--no-session-persistence", "--disable-slash-commands", "--model", model,
+		"--system-prompt", system, "--output-format", "json", "--json-schema", schema)
 	cmd.Dir = dir
 	cmd.Stdin = strings.NewReader(input)
-	var out, errOut bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errOut
+	var stdout, errOut bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &errOut
 	runErr := cmd.Run()
 	var reply struct {
-		IsError    bool   `json:"is_error"`
-		Result     string `json:"result"`
-		Structured *struct {
-			Memory []ExtractedFact `json:"memory"`
-		} `json:"structured_output"`
+		IsError    bool            `json:"is_error"`
+		Result     string          `json:"result"`
+		Structured json.RawMessage `json:"structured_output"`
 	}
-	// Errors say what failed, never what claude wrote: that can quote the turns.
-	if err := json.Unmarshal(out.Bytes(), &reply); err != nil {
+	if err := json.Unmarshal(stdout.Bytes(), &reply); err != nil {
 		if runErr != nil {
-			return nil, fmt.Errorf("%w: claude exited: %v", ErrHarness, runErr)
+			return fmt.Errorf("%w: claude exited: %v", fail, runErr)
 		}
-		return nil, fmt.Errorf("%w: claude's reply wasn't JSON", ErrHarness)
+		return fmt.Errorf("%w: claude's reply wasn't JSON", fail)
 	}
 	switch {
 	case reply.IsError: // claude's own error, such as "Not logged in"
-		return nil, fmt.Errorf("%w: claude: %s", ErrHarness, clip(reply.Result, 200))
-	case reply.Structured == nil:
-		return nil, fmt.Errorf("%w: claude returned no structured output", ErrHarness)
+		return fmt.Errorf("%w: claude: %s", fail, clip(reply.Result, 200))
+	case len(reply.Structured) == 0 || string(reply.Structured) == "null":
+		return fmt.Errorf("%w: claude returned no structured output", fail)
 	}
-	return reply.Structured.Memory, nil
+	if err := json.Unmarshal(reply.Structured, out); err != nil {
+		return fmt.Errorf("%w: claude's structured output didn't match its schema", fail)
+	}
+	return nil
+}
+
+// checkHarnessCommand checks that command is an absolute path to harness's program, which can run.
+func checkHarnessCommand(harness, command string) error {
+	program, ok := harnessPrograms[harness]
+	if !ok {
+		return fmt.Errorf("%w: harness must be claude (codex and cursor come later)", ErrBadRequest)
+	}
+	if !filepath.IsAbs(command) || filepath.Base(command) != program {
+		return fmt.Errorf("%w: command must be the absolute path of %s", ErrBadRequest, program)
+	}
+	if fi, err := os.Stat(command); err != nil || fi.IsDir() || fi.Mode()&0o111 == 0 {
+		return fmt.Errorf("%w: %s isn't a program that can run", ErrBadRequest, command)
+	}
+	return nil
 }
 
 // harness is the harness for settings: a test's, or the named one.
@@ -188,16 +218,12 @@ func (s *Service) SetExtractor(ctx context.Context, set ExtractorSettings) error
 		s.kickExtractor()
 		return nil
 	}
-	program, ok := harnessPrograms[set.Harness]
-	if !ok {
+	if _, ok := harnessPrograms[set.Harness]; !ok {
 		return fmt.Errorf("%w: harness must be claude (codex and cursor come later)", ErrBadRequest)
 	}
 	if s.testHarness == nil {
-		if !filepath.IsAbs(set.Command) || filepath.Base(set.Command) != program {
-			return fmt.Errorf("%w: command must be the absolute path of %s", ErrBadRequest, program)
-		}
-		if fi, err := os.Stat(set.Command); err != nil || fi.IsDir() || fi.Mode()&0o111 == 0 {
-			return fmt.Errorf("%w: %s isn't a program that can run", ErrBadRequest, set.Command)
+		if err := checkHarnessCommand(set.Harness, set.Command); err != nil {
+			return err
 		}
 	}
 	if set.Model == "" {

@@ -95,3 +95,54 @@ export function trackAppHeight(): () => void {
     root.classList.remove('kb-open');
   };
 }
+
+/**
+ * Marks the root element `overlay-scrollbars` while scrollbars are drawn over a box's content and take
+ * no room (macOS's default, phones), so a box that scrolls sideways can leave room under its last row.
+ * macOS switches between overlay and classic scrollbars as a mouse comes and goes (Show scroll bars:
+ * Automatically) and tells the page nothing, so it probes again whenever the window takes focus, is
+ * shown again or resizes: a page stays open for days.
+ */
+export function markOverlayScrollbars(): () => void {
+  const root = document.documentElement;
+  let frame = 0;
+  const probe = () => {
+    frame = 0;
+    const box = document.createElement('div');
+    box.style.cssText = 'position: absolute; top: -100px; width: 50px; height: 50px; overflow: scroll';
+    document.body.append(box);
+    root.classList.toggle('overlay-scrollbars', box.offsetHeight === box.clientHeight);
+    box.remove();
+  };
+  const schedule = () => {
+    if (!frame && document.visibilityState === 'visible') frame = requestAnimationFrame(probe);
+  };
+  probe();
+  window.addEventListener('focus', schedule);
+  window.addEventListener('resize', schedule);
+  document.addEventListener('visibilitychange', schedule);
+  return () => {
+    if (frame) cancelAnimationFrame(frame);
+    window.removeEventListener('focus', schedule);
+    window.removeEventListener('resize', schedule);
+    document.removeEventListener('visibilitychange', schedule);
+    root.classList.remove('overlay-scrollbars');
+  };
+}
+
+let sideways: ResizeObserver | null = null;
+
+/**
+ * A ref for a box that scrolls sideways (a diff): marks it `data-sideways` while its content is wider
+ * than it, so the room left for an overlay scrollbar goes only under a box that has one. One observer
+ * watches every box; showing more rows or resizing the panel changes the box's size, and it looks again.
+ */
+export function watchSideways(box: HTMLElement | null): (() => void) | undefined {
+  if (!box || typeof ResizeObserver === 'undefined') return;
+  sideways ??= new ResizeObserver((entries) => {
+    for (const { target } of entries) target.toggleAttribute('data-sideways', target.scrollWidth > target.clientWidth);
+  });
+  const watcher = sideways;
+  watcher.observe(box);
+  return () => watcher.unobserve(box);
+}

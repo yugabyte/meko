@@ -91,7 +91,7 @@ Implement this on the current branch ({{branch}}). ${CODE_STEPS}`,
 
   pr: `Open a pull request for this work.
 
-1. Review the full diff against {{base}}. Make sure the repo's tests and checks pass.
+1. Make sure the repo's tests and checks pass.
 2. Commit using this repo's commit conventions (see AGENTS.md and any commit skill) on branch {{branch}}.
 3. Push the branch to origin. If the branch has no open PR yet, run \`gh pr create --base {{base}}\` with a title that follows the repo's commit conventions (if the repo squash-merges, the title becomes the commit subject) and a description that summarizes the design and the change; if it already has one (\`gh pr view\`), update that PR's title and description instead of opening another.
 

@@ -125,7 +125,10 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     const agentId = sessionAgentId(env.core.sessions.row(s.id));
     expect(agentId).toMatch(/^claude_code:fix-the-thing-[0-9a-f]{8}$/);
     // CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: AgentK's mod is on (the fake reports a Claude Code new enough).
-    expect(first.env).toEqual({ MEKO_AGENT_ID: agentId, MEKO_DATAPACK_ID: 'dp-agent-k-local-test-demo', CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1' });
+    // CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF: Claude Code keeps the conversation when it exits, not its background sessions.
+    expect(first.env).toEqual({
+      MEKO_AGENT_ID: agentId, MEKO_DATAPACK_ID: 'dp-agent-k-local-test-demo', CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1', CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF: '1',
+    });
 
     // A terminal read line by line caps a line (1,024 bytes on macOS, 4,096 on Linux); Claude's TUI,
     // like the fake, reads it raw, so a typed prompt arrives whole however long its line is.

@@ -9,8 +9,9 @@ vi.mock('../../src/server/github.js', async (orig) => {
 });
 
 const { makeEnv, readJsonl, waitFor } = await import('../helpers.js');
-const { all } = await import('../../src/server/db.js');
+const { all, run } = await import('../../src/server/db.js');
 const { mekoLogPath } = await import('../../src/server/mekolog.js');
+const { REVIEW_LEFT_CODE } = await import('../../src/shared/codereview.js');
 type TestEnv = Awaited<ReturnType<typeof makeEnv>>;
 
 /** Reports for the ledger passes that clear the change: the dependents and claims passes need their ledgers. */
@@ -33,7 +34,7 @@ describe('local code review before the PR (real session host + git, fake claude 
   /** The task's PR prompt, once it has reached Claude (the stage moves to PR just before it's typed). */
   const prPrompt = (id: string) => waitFor(() => prompts(id).at(-1) ?? '', (p) => p.includes('Open a pull request'), 10000, 'the PR prompt');
 
-  /** A task at Code whose worktree has a new file with six lines, ready for Open PR. */
+  /** A task at Code (or where `req.start` says) whose worktree has a new file with six lines, ready for Open PR. */
   async function task(req: Record<string, unknown> = {}) {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'none' } });
     const s = await env.core.sessions.create(p.id, { name: 'Fix the thing', prompt: 'do it', start: 'code', ...req });
@@ -139,6 +140,12 @@ describe('local code review before the PR (real session host + git, fake claude 
     expect(failed.stage).toBe('code');
     expect(failed.codeReview!.detail).toBe('no review pass reported');
     await expect(env.core.sessions.action(s.id, 'open-pr')).rejects.toThrow(/Retry it, or open the PR anyway/);
+    // A move to Review & PR is refused alike: it would open the PR past the stopped review. So it is
+    // with the review turned off since, as Open PR is.
+    await expect(env.core.sessions.move(s.id, { stage: 'review' })).rejects.toThrow(/Retry it, or open the PR anyway/);
+    env.core.projects.update(s.projectId, { settings: { codeReview: { strategy: 'off' } } });
+    await expect(env.core.sessions.move(s.id, { stage: 'review' })).rejects.toThrow(/Retry it, or open the PR anyway/);
+    expect(env.core.sessions.get(s.id).stage).toBe('code');
     await env.core.sessions.action(s.id, 'review-open-anyway');
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 10000, 'the PR prompt');
     expect(await prPrompt(s.claudeSessionId)).not.toContain('me_ak_review');
@@ -152,11 +159,139 @@ describe('local code review before the PR (real session host + git, fake claude 
     expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM');
   });
 
+  it.each([['through the mod', true], ['typed', false]])('sends the PR prompt again once Claude is back, when Claude exits before taking it (%s)', async (_how, mod) => {
+    if (mod) {
+      mkdirSync(env.fakeDir, { recursive: true });
+      writeFileSync(join(env.fakeDir, 'mod'), '');
+    }
+    const s = await task({ review: { strategy: 'sirius-1.0' } });
+    // Like Claude Code moving the conversation to its background sessions as the PR prompt comes.
+    writeFileSync(join(env.fakeDir, 'exit-unrun'), 'Open a pull request');
+    // Typed: Claude's SessionEnd lands before the session host answers the paste.
+    let answered: Promise<void> = Promise.resolve();
+    if (!mod) {
+      const submit = env.core.host.submit.bind(env.core.host);
+      vi.spyOn(env.core.host, 'submit').mockImplementation(async (name, text) => {
+        if (!text.includes('Open a pull request')) return submit(name, text);
+        vi.mocked(env.core.host.submit).mockRestore();
+        answered = (async () => {
+          await submit(name, text);
+          await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'exited', 10000, 'SessionEnd');
+        })();
+        return answered;
+      });
+    }
+    await env.core.sessions.action(s.id, 'open-pr');
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'exited', 30000, 'Claude to exit with the PR prompt');
+    // Typed, the send finishes after the exit: it mustn't count the prompt as sent, or the session as working.
+    await answered;
+    // Past the send's end too (sendReviewedPr runs in the session's serial queue).
+    await (env.core.lifecycle as unknown as { serial(id: string, f: () => Promise<void>): Promise<void> }).serial(s.id, async () => undefined);
+    await new Promise((r) => setImmediate(r));
+    const lost = env.core.sessions.get(s.id);
+    if (mod) expect(readJsonl<{ text: string }>(join(env.fakeDir, 'mod-prompts.jsonl')).some((p) => p.text.includes('Open a pull request'))).toBe(true);
+    // Back where it was, not busy, and no turn was cut short: the review's PR counts as not sent.
+    expect(lost).toMatchObject({ status: 'exited', stage: 'code', busy: false, codeReview: { state: 'done' } });
+    expect(env.core.sessions.row(s.id).interrupted).toBe(0);
+    const finished = () => all<{ finished_at: number | null }>(env.core.db, 'SELECT finished_at FROM code_reviews WHERE task_id = ?', s.id)[0].finished_at;
+    expect(finished()).toBeNull();
+    expect(all<{ text: string }>(env.core.db, "SELECT text FROM session_events WHERE session_id = ? AND kind = 'pr'", s.id).map((e) => e.text))
+      .toEqual(['Claude exited before taking the PR prompt; it goes again once Claude is back']);
+    await env.core.sessions.action(s.id, 'resume');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 10000, 'the PR prompt again');
+    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM');
+    expect(prompts(s.claudeSessionId).filter((p) => p.includes('Open a pull request'))).toHaveLength(1);
+    expect(finished()).not.toBeNull();
+  });
+
+  it('reviews the change in Code when the session is moved to Review & PR by hand, then sends the PR prompt with the move\'s instructions', async () => {
+    const s = await task({ start: 'explore', review: { strategy: 'sirius-1.0' } });
+    await env.core.sessions.move(s.id, { stage: 'review', instructions: 'Mention the demo.' });
+    // The review holds the PR, in Code, as for Open PR.
+    expect(env.core.sessions.get(s.id).stage).toBe('code');
+    const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the review');
+    expect(done.codeReview).toMatchObject({ strategy: 'sirius-1.0', state: 'done' });
+    const pr = await prPrompt(s.claudeSessionId);
+    // Claude's system prompt still says Explore (no PR): the moved line leads the review's first prompt to it.
+    expect(pr.startsWith('AgentK moved this session to the Code stage.')).toBe(true);
+    expect(pr).toContain('me_ak_review:LGTM');
+    expect(pr).toContain('Mention the demo.');
+    expect(all<{ stage: string }>(env.core.db, 'SELECT stage FROM session_stages WHERE session_id = ? ORDER BY rowid', s.id).map((r) => r.stage)).toEqual(['explore', 'code', 'pr']);
+  });
+
+  it('starts a new review on a move to Review & PR from outside Code, past one that failed in Code', async () => {
+    const s = await task({ review: { strategy: 'sirius-1.0' } });
+    fake('review-skip', ['r1s1:all']);
+    await env.core.sessions.action(s.id, 'open-pr');
+    const failed = await waitFor(() => env.core.sessions.get(s.id), (x) => x.codeReview?.state === 'failed', 30000, 'the review to fail');
+    // Its Retry and Open anyway are Code's: leaving Code lets it go.
+    await env.core.sessions.move(s.id, { stage: 'explore', prompt: false });
+    expect(env.core.sessions.get(s.id).codeReview).toMatchObject({ state: 'cancelled', detail: REVIEW_LEFT_CODE });
+    fake('review-skip', []);
+    await env.core.sessions.move(s.id, { stage: 'review' });
+    const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the new review');
+    expect(done.codeReview).toMatchObject({ state: 'done' });
+    expect(done.codeReview!.id).not.toBe(failed.codeReview!.id);
+    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM');
+  });
+
+  describe('a fix turn the user interrupted', () => {
+    /** Round 1 finds a blocker whose fix turn is interrupted (the fake interrupts a prompt saying INTERRUPT): the review waits for fixes. */
+    async function interruptedFix() {
+      // Through the mod, which reports an interrupted turn (no Stop hook fires for one).
+      mkdirSync(env.fakeDir, { recursive: true });
+      writeFileSync(join(env.fakeDir, 'mod'), '');
+      const s = await task({ review: { rounds: 1 } });
+      await waitFor(() => env.core.sessions.mod.live(s.id), (l) => l, 10000, 'the mod to poll');
+      fake('review-reports.json', { ...LEDGERS, diff: { summary: 'LGTM', findings: [{ file: 'src/a.ts', line: 2, severity: 'blocker', comment: 'Off by one. INTERRUPT', gotchas: [] }] } });
+      await env.core.sessions.action(s.id, 'open-pr');
+      const interrupted = () => all<{ text: string }>(env.core.db, "SELECT text FROM session_events WHERE session_id = ? AND kind = 'turn'", s.id).some((e) => e.text === 'You interrupted the turn');
+      await waitFor(() => interrupted() && env.core.sessions.get(s.id).status === 'idle', (x) => x, 30000, 'the interrupted fix turn');
+      expect(env.core.sessions.get(s.id).codeReview!.state).toBe('fixing');
+      fake('review-reports.json', LEDGERS);
+      return s;
+    }
+
+    it('goes on with the next round at Open PR', async () => {
+      const s = await interruptedFix();
+      await env.core.sessions.action(s.id, 'open-pr');
+      const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after round 2');
+      expect(done.codeReview).toMatchObject({ round: 2, state: 'done' });
+    });
+
+    it('is cancelled by a move out of Code, and a move back to Review & PR starts a new review', async () => {
+      const s = await interruptedFix();
+      const first = env.core.sessions.get(s.id).codeReview!.id;
+      await env.core.sessions.move(s.id, { stage: 'explore', prompt: false });
+      expect(env.core.sessions.get(s.id).codeReview).toMatchObject({ state: 'cancelled', detail: REVIEW_LEFT_CODE });
+      await env.core.sessions.move(s.id, { stage: 'review' });
+      const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the new review');
+      expect(done.codeReview).toMatchObject({ round: 1, state: 'done' });
+      expect(done.codeReview!.id).not.toBe(first);
+    });
+  });
+
   it('skips the review when the project turns it off', async () => {
     const s = await task();
     env.core.projects.update(s.projectId, { settings: { codeReview: { strategy: 'off' } } });
     await env.core.sessions.action(s.id, 'open-pr');
     expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'pr', codeReview: null });
+  });
+
+  it('says the review waits on you while its session asks in its terminal, and only while its steps run', async () => {
+    const s = await task({ review: { strategy: 'sirius-1.0' } });
+    fake('review-skip', ['r1s1:all']);
+    await env.core.sessions.action(s.id, 'open-pr');
+    const r = await waitFor(() => env.core.sessions.get(s.id), (x) => x.codeReview?.state === 'failed', 30000, 'the review to fail');
+    const childId = r.codeReview!.sessionId!;
+    run(env.core.db, `UPDATE sessions SET status = 'needs_input' WHERE id = ?`, childId);
+    expect(env.core.sessions.get(s.id).codeReview!.waiting).toBe(false);
+    run(env.core.db, `UPDATE code_reviews SET state = 'fixing' WHERE id = ?`, r.codeReview!.id);
+    expect(env.core.sessions.get(s.id).codeReview!.waiting).toBe(false);
+    run(env.core.db, `UPDATE code_reviews SET state = 'sweeping' WHERE id = ?`, r.codeReview!.id);
+    expect(env.core.sessions.get(s.id).codeReview!.waiting).toBe(true);
+    run(env.core.db, `UPDATE sessions SET status = 'working' WHERE id = ?`, childId);
+    expect(env.core.sessions.get(s.id).codeReview!.waiting).toBe(false);
   });
 
   it('archives the review session with its task, and leaves the task\'s worktree and branch alone', async () => {

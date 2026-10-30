@@ -49,11 +49,11 @@ func (h *fakeHarness) last() (string, string, int) {
 	return h.systems[len(h.systems)-1], h.inputs[len(h.inputs)-1], len(h.inputs)
 }
 
-// asAdmin sends a request with the CLI's admin token.
-func asAdmin(t *testing.T, e *testenv.Env, method, path string, body any) reply {
+// asAdmin sends a PUT with the CLI's admin token.
+func asAdmin(t *testing.T, e *testenv.Env, path string, body any) reply {
 	t.Helper()
 	b, _ := json.Marshal(body)
-	req, _ := http.NewRequest(method, e.URL+"/api/v1"+path, bytes.NewReader(b))
+	req, _ := http.NewRequest(http.MethodPut, e.URL+"/api/v1"+path, bytes.NewReader(b))
 	req.Header.Set("Authorization", "Bearer "+testenv.AdminToken)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
@@ -103,10 +103,10 @@ func TestMemoryExtractor(t *testing.T) {
 	}
 
 	wantErr(t, e, "PUT", settings, map[string]any{"harness": "claude"}, 403, "FORBIDDEN")
-	if r := asAdmin(t, e, "PUT", settings, map[string]any{"harness": "codex"}); r.Status != 400 {
+	if r := asAdmin(t, e, settings, map[string]any{"harness": "codex"}); r.Status != 400 {
 		t.Errorf("an unknown harness: %+v", r)
 	}
-	r := asAdmin(t, e, "PUT", settings, map[string]any{"harness": "claude", "interval_seconds": 120})
+	r := asAdmin(t, e, settings, map[string]any{"harness": "claude", "interval_seconds": 120})
 	if r.Status != 200 ||
 		obj(r.Data)["enabled"] != true || obj(r.Data)["model"] != "haiku" || num(obj(r.Data)["interval_seconds"]) != 120 {
 		t.Fatalf("set up: %+v", r)
@@ -232,7 +232,7 @@ func TestMemoryExtractor(t *testing.T) {
 	}
 
 	// Off: a run is refused.
-	if r = asAdmin(t, e, "PUT", settings, map[string]any{"harness": ""}); r.Status != 200 ||
+	if r = asAdmin(t, e, settings, map[string]any{"harness": ""}); r.Status != 200 ||
 		obj(r.Data)["enabled"] != false {
 		t.Errorf("off: %+v", r)
 	}

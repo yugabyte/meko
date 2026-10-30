@@ -194,6 +194,14 @@ export async function runActions(core: Core, actions: AskAgentkAction[], by: Act
   return results;
 }
 
+/**
+ * Where a move left a session, in words: a move to Review & PR that a local review took over leaves it
+ * in Code until the review sends the PR prompt (Lifecycle.reviewBeforePr).
+ */
+function movedTo(asked: MoveTarget, s: Pick<Session, 'stage'>): string {
+  return asked === 'review' && s.stage === 'code' ? 'Code, for its local review before the PR opens' : STAGE_LABELS[asked];
+}
+
 /** What an action does, for an event on the session it changed. */
 function verb(a: AskAgentkAction): string {
   switch (a.type) {
@@ -243,7 +251,7 @@ async function runOne(core: Core, a: Exclude<AskAgentkAction, { type: 'go' }>, b
         return { ok: true, text: `Moving "${by.session.name}" to ${STAGE_LABELS[a.stage]} once this turn ends.`, projectId: by.session.project_id, sessionId: a.sessionId };
       }
       const s = await core.sessions.move(a.sessionId, { stage: a.stage, instructions: a.instructions || undefined });
-      return { ok: true, text: `Moved "${s.name}" to ${STAGE_LABELS[a.stage]}.`, projectId: s.projectId, sessionId: s.id };
+      return { ok: true, text: `Moved "${s.name}" to ${movedTo(a.stage, s)}.`, projectId: s.projectId, sessionId: s.id };
     }
     case 'openPr': {
       // A session's own PR stays the user's gate.
@@ -367,8 +375,8 @@ export class SessionTools {
       return true;
     }
     try {
-      await this.core.sessions.move(id, { stage: move.stage, instructions: move.instructions || undefined });
-      this.core.sessions.event(id, 'tools', `Moved to ${STAGE_LABELS[move.stage]} by its agent, at the turn's end`);
+      const s = await this.core.sessions.move(id, { stage: move.stage, instructions: move.instructions || undefined });
+      this.core.sessions.event(id, 'tools', `Moved to ${movedTo(move.stage, s)} by its agent, at the turn's end`);
     } catch (e) {
       this.core.sessions.event(id, 'tools', `Couldn't move to ${STAGE_LABELS[move.stage]}: ${errMsg(e)}`);
     }
