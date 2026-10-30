@@ -255,8 +255,10 @@ follows on stderr.
   release from before `--json` prints the bare version, which counts) and the catalog's `CheckArgs`
   run (AgentK's `selftest`), into `<data>/extensions/<name>/app/<version>` (owner-only,
   `App.Private`: folders and programs 0700, files 0600, as everything in the data folder), with
-  `app/current` and `~/.local/bin/<command>` pointing at it. While the repo is internal, listing its
-  releases fails without `GITHUB_TOKEN` or a signed-in `gh`, and it says to sign in. Then it runs
+  `app/current` and `~/.local/bin/<command>` pointing at it. Without `GITHUB_TOKEN` or a signed-in
+  `gh`, a refusal from GitHub says why: GitHub's 60 API calls an hour for a caller with no token are
+  spent (it names when they come back), or, for a 401, 403 or 404, the repo may still be internal;
+  either way it offers signing in (`update.tokenlessHint`). Then it runs
   `<command> install --meko-url <url> --meko-key <client token>` on the terminal, with
   `--non-interactive` without one, and whatever followed `--` on the command line (AgentK's
   `--agent claude|opencode|kiro`, `--install-deps`, `--no-install-deps`). AgentK's install checks
@@ -391,7 +393,8 @@ A release install's app folder:
 
 - **Checks** run inside `serve` a minute after start, then every `[update] interval_hours` (6). The
   client lists the repo's newest 100 releases through GitHub's API with `GITHUB_TOKEN` or `gh auth
-  token`, or with no token on a public repo (looked for in Homebrew's folders and `~/.local/bin` too, since a service starts with a
+  token`, or with no token on a public repo, within GitHub's 60 API calls an hour for a caller
+  with none (looked for in Homebrew's folders and `~/.local/bin` too, since a service starts with a
   short PATH), and picks the newest stable `meko-v*` release with this platform's tarball and
   `SHA256SUMS` that isn't in `bad-versions`. What it found goes to `<data>/update.json`, which
   `meko status` shows.

@@ -399,11 +399,7 @@ func installRelease(ctx context.Context, l paths.Layout, repo, name, version, ho
 	rels, err := c.Releases(dl)
 	looking.Clear()
 	if err != nil {
-		if c.Token == "" {
-			return "", fmt.Errorf("%w. The releases are on GitHub: sign in with gh auth login, or set GITHUB_TOKEN, "+
-				"then run this again", err)
-		}
-		return "", err
+		return "", err // with no token, GitHub's refusal says why: its rate limit, or an internal repo
 	}
 	app := cat.App(l.Root, name)
 	goos, arch := update.Platform()

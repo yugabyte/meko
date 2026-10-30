@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -60,7 +61,7 @@ type Client struct {
 }
 
 // NewClient is a client for repo, signed in with GITHUB_TOKEN or else gh's token, if either is
-// there (the repo is internal for now).
+// there. Without one it works only on a public repo, within GitHub's limit of 60 API calls an hour.
 func NewClient(repo string) *Client {
 	if repo == "" {
 		repo = DefaultRepo
@@ -114,12 +115,31 @@ func (c *Client) get(ctx context.Context, url, accept string) (*http.Response, e
 	if resp.StatusCode != http.StatusOK {
 		_ = resp.Body.Close()
 		hint := ""
-		if c.Token == "" && (resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 404) {
-			hint = ". The repo is internal: sign in with gh auth login, or set GITHUB_TOKEN"
+		if c.Token == "" {
+			hint = tokenlessHint(resp)
 		}
 		return nil, fmt.Errorf("GitHub returned %s for %s%s", resp.Status, url, hint)
 	}
 	return resp, nil
+}
+
+// tokenlessHint says what GitHub refusing a call with no token means: its limit of 60 API calls an
+// hour is spent (a 403 or 429 with X-RateLimit-Remaining 0), or the repo is internal, which GitHub
+// hides behind a 401, 403 or 404 from anyone not signed in.
+func tokenlessHint(resp *http.Response) string {
+	signIn := "sign in with gh auth login, or set GITHUB_TOKEN"
+	if resp.Header.Get("X-RateLimit-Remaining") == "0" || resp.StatusCode == http.StatusTooManyRequests {
+		when := "within the hour"
+		if reset, err := strconv.ParseInt(resp.Header.Get("X-RateLimit-Reset"), 10, 64); err == nil {
+			when = "after " + time.Unix(reset, 0).Local().Format("15:04")
+		}
+		return ". GitHub allows 60 calls an hour without a token and they're spent: try again " + when + ", or " + signIn
+	}
+	switch resp.StatusCode {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+		return ". If the repo is still internal, " + signIn
+	}
+	return ""
 }
 
 // Releases lists the repo's newest 100 releases.

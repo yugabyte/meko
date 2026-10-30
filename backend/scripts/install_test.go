@@ -104,7 +104,8 @@ func setup(t *testing.T, sums func(tarball []byte) string) env {
 		t.Fatal(err)
 	}
 	e.vars = []string{"HOME=" + e.home, "PATH=" + bin + ":/usr/bin:/bin", "FAKE_TAG=meko-v" + version,
-		"FAKE_ASSETS=" + e.assets, "FAKE_CURL_LOG=" + e.curlLog, "MEKO_TEST_UNAME_S=Linux", "MEKO_TEST_UNAME_M=x86_64", "NO_COLOR=1"}
+		"FAKE_ASSETS=" + e.assets, "FAKE_CURL_LOG=" + e.curlLog,
+		"MEKO_TEST_UNAME_S=Linux", "MEKO_TEST_UNAME_M=x86_64", "NO_COLOR=1"}
 	return e
 }
 

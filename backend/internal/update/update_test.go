@@ -613,3 +613,48 @@ func TestOff(t *testing.T) {
 		t.Errorf("install: %v", err)
 	}
 }
+
+func TestTokenlessRefusalsSayWhy(t *testing.T) {
+	cases := []struct {
+		name    string
+		status  int
+		headers map[string]string
+		token   string
+		want    string
+	}{
+		{"rate limit", 403, map[string]string{"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1793300000"}, "",
+			"60 calls an hour without a token and they're spent: try again after "},
+		{"too many requests", 429, nil, "", "try again within the hour, or sign in with gh auth login"},
+		{"internal repo", 404, nil, "", "If the repo is still internal, sign in with gh auth login"},
+		{"forbidden", 403, map[string]string{"X-RateLimit-Remaining": "59"}, "", "If the repo is still internal"},
+		{"with a token", 404, nil, "tok", ""},
+		{"server error", 502, nil, "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				for k, v := range tc.headers {
+					w.Header().Set(k, v)
+				}
+				w.WriteHeader(tc.status)
+			}))
+			defer srv.Close()
+			c := &Client{Repo: "o/r", Token: tc.token, API: srv.URL, HTTP: srv.Client()}
+			_, err := c.Releases(context.Background())
+			if err == nil {
+				t.Fatal("no error")
+			}
+			msg := err.Error()
+			if tc.want == "" {
+				if strings.Contains(msg, "sign in") || strings.Contains(msg, "internal") {
+					t.Errorf("no hint wanted: %s", msg)
+				}
+			} else if !strings.Contains(msg, tc.want) {
+				t.Errorf("want %q in: %s", tc.want, msg)
+			}
+			if strings.HasSuffix(msg, ".") {
+				t.Errorf("ends with a period: %s", msg)
+			}
+		})
+	}
+}
