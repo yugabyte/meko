@@ -848,7 +848,7 @@ export function ReviewFields({ id, value, scoped, inherited, disabled, onChange 
         label="Review depth"
         info={{
           for: `${id}-depth`,
-          text: "The number of times a review runs before findings are sent to the coding agent. More than one sweep makes it a deep review: each sweep after the first is told what the earlier ones found and looks elsewhere, and the sweeps run up to this count, but from the second sweep on, one that finds nothing new ends it. Costs more tokens.",
+          text: "The number of times a review runs before AgentK gets the findings to fix. More than one sweep makes it a deep review: each sweep after the first is told what the earlier ones found and looks elsewhere, and the sweeps run up to this count, but from the second sweep on, one that finds nothing new ends it. Costs more tokens.",
         }}
       >
         <select id={`${id}-depth`} className="input" disabled={disabled} value={value.depth ?? ''} onChange={(e) => set('depth', e.target.value)}>
@@ -864,7 +864,7 @@ export function ReviewFields({ id, value, scoped, inherited, disabled, onChange 
         label="Re-review rounds"
         info={{
           for: `${id}-rounds`,
-          text: "The number of times the code review runs again after the coding agent fixes the last review's findings, before the PR opens. A review that finds nothing ends it early.",
+          text: "The number of times the code review runs again after AgentK fixes the last review's findings, before the PR opens. A review that finds nothing ends it early.",
         }}
       >
         <select id={`${id}-rounds`} className="input" disabled={disabled} value={value.rounds ?? ''} onChange={(e) => set('rounds', e.target.value)}>
