@@ -164,11 +164,11 @@ export interface ReviewContext {
   headSha: string;
   /** The working tree has changes not committed yet (the review reads them too). */
   dirty: boolean;
-  /** The PR's title the task wrote before the review (its PR description file's first line), else the task's name. */
+  /** The task's name. */
   title: string;
   /**
-   * The PR's description the task wrote before the review, Meko lines included; null when it wrote
-   * none. Absent in a context saved before the task was asked for one.
+   * The PR title (its first line) and description the task wrote before the review, Meko lines
+   * included; null when it wrote none. Absent in a context saved before the task was asked for one.
    */
   prDescription?: string | null;
   /** The task's first prompt. */

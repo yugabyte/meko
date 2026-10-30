@@ -222,7 +222,7 @@ export interface CodeReviewSummary {
   mekoCall: boolean;
   /** The review session waits on the user in its terminal (a permission prompt or a question): the glass knocks. */
   waiting: boolean;
-  /** Why it failed or was cancelled, in plain words; null otherwise. */
+  /** Why it failed or was cancelled, or why a `describing` review waits on you, in plain words; null otherwise. */
   detail: string | null;
 }
 
@@ -298,6 +298,14 @@ export function countsText(c: SeverityCounts): string {
   const parts = SEVERITIES.filter((s) => c[s] > 0).map((s) => severityPart(s, c[s]));
   return parts.length ? parts.join(', ') : 'no findings';
 }
+
+/**
+ * Why a `describing` review waits on the user (its `detail`): the task's PR description turn was
+ * interrupted, or its agent exited before taking the ask. Open PR (the gate's Review now) then
+ * starts the review, or asks again for a lost ask; a restart leaves either waiting.
+ */
+export const DESCRIBE_INTERRUPTED = 'you interrupted the PR description turn';
+export const DESCRIBE_LOST = "the task's agent exited before taking the ask for the PR description";
 
 /** Why a review stopped when its task left Code: it doesn't hold the next Open PR, which starts a new review. */
 export const REVIEW_LEFT_CODE = 'the task left Code';

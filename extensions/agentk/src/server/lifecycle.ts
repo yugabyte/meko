@@ -928,15 +928,19 @@ export class Lifecycle {
    * (review/runner.ts). The task stays in Code, and its turn's end starts the review's first round.
    * The task is busy from now until that turn ends, as for the PR prompt: an Open PR or a move while
    * the Meko lines are looked up is refused, not taken for a press past an interrupted turn.
-   * `moved`: the `moved` line of a move that started the review (reviewBeforePr), first.
+   * `moved`: the `moved` line of a move that started the review (reviewBeforePr), first. `lost`: the
+   * agent exited before taking the ask (sessions.submit's), after the task stops being busy.
    */
-  async sendPrDescription(task: SessionRow, o: { moved?: string | null }): Promise<void> {
+  async sendPrDescription(task: SessionRow, o: { moved?: string | null; lost: () => void }): Promise<void> {
     const row = this.sessions.row(task.id);
     if (row.stage !== 'code' || row.desired !== 'running') throw new Error('the task left Code');
     this.sessions.setBusy(row.id, true);
     try {
       const ask = this.sessions.prompt(row, 'pr-description', { prDescriptionFile: this.sessions.prDescriptionFile(row) });
-      await this.sessions.submit(row.id, [o.moved, ask, await this.prFooter(row)].filter(Boolean).join('\n\n'));
+      await this.sessions.submit(row.id, [o.moved, ask, await this.prFooter(row)].filter(Boolean).join('\n\n'), () => {
+        this.sessions.setBusy(row.id, false);
+        o.lost();
+      });
     } catch (e) {
       this.sessions.setBusy(row.id, false);
       throw e;
@@ -1165,7 +1169,7 @@ export class Lifecycle {
   private async reviewBeforePr(row: SessionRow, instructions: string): Promise<void> {
     this.checkPromptable(row);
     // Claude's system prompt still says where it was (Explore: no PR): the `moved` line goes before the
-    // review's first prompt to the task, its fixes or the PR prompt.
+    // review's first prompt to the task, the ask for the PR description.
     let lead: string | undefined;
     if (row.stage !== 'code') {
       if (row.stage === 'design') this.leaveDesign(row.id, true);

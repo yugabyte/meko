@@ -87,7 +87,7 @@ itself when it's done (`Lifecycle.sendReviewedPr`). A move to Review & PR by han
 gate and its cancelling are all Code's, and the review sends the PR prompt as for Open PR. From
 Explore or Design, the `moved` line (Claude's system prompt still names the old stage, and
 Explore's says no PR) waits on the review (`code_reviews.lead`) and goes before its first prompt to
-the task, its fixes or the PR prompt. A move that only picks up the branch's open PR runs no review. The PR prompt itself doesn't ask the task
+the task, the ask for the PR description. A move that only picks up the branch's open PR runs no review. The PR prompt itself doesn't ask the task
 to review its diff: the review session has.
 
 **The PR description.** Before the first round the review is `describing`: AgentK asks the task
@@ -96,14 +96,18 @@ description to `pr-description.md` beside its design (`designs/<task>/`, outside
 every session may write), ending with the Meko lines the PR prompt asks for (`prFooter`: the
 datapack, the design and the conversation), so the passes check the change against the author's
 account of it, as the cloud's check a PR's, and see where its Meko context is. An earlier review's
-file is removed first, so a turn that writes none leaves the passes the task alone. The task's turn
-end starts round 1 (`CodeReviews.onTurnEnd`); an interrupted one waits, as a fix turn does, for the
-next turn's end or Open PR (the gate's **Review now**), and after a restart `recover()` starts round 1
-unless that turn still runs. The task is busy from the ask until its turn ends, so an Open PR or a
-move while AgentK looks up the Meko lines is refused rather than taken for a press past an
-interrupted turn. The passes get the description quoted, as data to check the change against and
-never instructions (an open PR's body it starts from may be anyone's), clipped before its Meko
-lines, which are kept whole (`clipDescription`). Each later round reads the file again: the fix prompt asks the task to
+file is removed first, so a turn that writes none leaves the passes the task alone. The ask calls an
+open PR's existing text untrusted. The task's turn end starts round 1 (`CodeReviews.onTurnEnd`). An
+interrupted one waits, as a fix turn does, for the next turn's end or Open PR (the gate's **Review
+now**); so does an ask the agent exited before taking (sessions.submit's `lost`), and there Open PR
+asks again. The review keeps why it waits in its `detail` (`DESCRIBE_INTERRUPTED`, `DESCRIBE_LOST`),
+so a restart leaves it waiting; otherwise `recover()` starts round 1 once the task is idle (not while
+its turn runs or asks something). A Retry before round 1 had a description asks again. The task is
+busy from the ask until its turn ends, so an Open PR or a move while AgentK looks up the Meko lines
+is refused rather than taken for a press past an interrupted turn. The passes get the file, title
+and all, quoted, as data to check the change against and never instructions (an open PR's text it
+starts from may be anyone's), clipped before its trailing Meko lines, which are kept (at most six,
+each clipped: `clipDescription`). Each later round reads the file again: the fix prompt asks the task to
 keep it true (`prDescriptionFixLine`), and the PR prompt to open the PR with it, brought up to date
 (`prDescriptionUseLine`).
 
@@ -190,8 +194,8 @@ the root and in each ancestor folder of a changed file), the history of the rewr
 (`git blame` and recent commits, since the passes have no git), the task's linked issues (its work
 item's GitHub issues fetched into the run folder; other links by name), and earlier rounds. Secret
 files, deleted files and generated files are withheld (`withhold.go`, `generated.go`). A diff over
-256 KiB is written one patch per file instead of inline. The description is the PR description the
-task wrote (its title is the change's), followed by the task it was written for; with none, the
+256 KiB is written one patch per file instead of inline. The description is the PR title and
+description the task wrote, quoted, followed by the task it was written for; with none, the
 task alone. Left out: the cloud's injection screen and budget caps (the change is the user's own, on
 their own account), and the PR description's skip patterns.
 
@@ -238,8 +242,11 @@ credited gotchas and what the task did), whose **Terminal** button goes to the r
 it has one. While the review holds the PR, the stage bar and the task's chip show the task in Review & PR
 (`shownStep()` in `src/web/util.ts`), though it stays in Code, and its gate shows the review, with Cancel, or Retry and
 Open anyway, and **Local review waits on you** with **Open terminal** while it waits. While the task
-writes the PR description the gate says so; past a description turn the user interrupted it offers
-**Review now** (Open PR, which starts round 1 with the description as it is) and Cancel.
+writes the PR description the gate says so, with Cancel and **Review now** (Open PR: past an
+interrupted turn it starts round 1 with the description as it is, past a lost ask it asks again);
+while the task fixes a round's findings it offers **Review now** too, which starts the next round
+past an interrupted fix turn. Both are off while the task's turn runs. The step the stage bar shows
+isn't a move target then, and neither is Code, the session's own stage.
 
 The Usage page and the project home count reviews in their **Code Reviews** section, and stack the
 review sessions' tokens on the Token usage chart ([Token usage](token-usage.md)); the usage report
