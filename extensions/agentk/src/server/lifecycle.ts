@@ -21,7 +21,7 @@ import {
 import { launchedAgentId, withMekoScope } from './meko.js';
 import type { HookPayload, ModReply } from './hooks.js';
 import { fetchPrDesign, markPrDesignTold, prDesignSource, savePrDesign } from './prdesign.js';
-import { meAkReviewFooter, mekoDatapackLineId, mekoPrFooter, movePrompt } from './prompts.js';
+import { meAkReviewFooter, mekoDatapackLineId, mekoPrFooter, movePrompt, prDescriptionFixLine, prDescriptionUseLine } from './prompts.js';
 import { HttpError } from './projects.js';
 import {
   INSTRUCTIONS_MAX, KIND_LABELS, STAGE_LABELS, type CloseSessionRequest, type HeldReview, type HeldReviewAuthor, type HeldReviewsResult, type MoveSessionRequest, type QueuedGate,
@@ -91,6 +91,8 @@ interface PrSend {
   instructions?: string;
   by?: 'you' | 'auto';
   reviewLine?: string | null;
+  /** The PR description file the task wrote before its local review, as Claude is told it. */
+  description?: string | null;
 }
 
 /** A queued Open PR was withdrawn before its prompt went. */
@@ -797,7 +799,8 @@ export class Lifecycle {
     this.lostPrs.delete(row.id);
     const sent = { ...opts, instructions, back: cur.stage };
     try {
-      await this.sessions.submit(row.id, [opts.lead, this.sessions.prompt(cur, 'pr'), footer, this.instructionsPrompt(cur, instructions)].filter(Boolean).join('\n\n'), () => this.prLost(row.id, sent));
+      const description = opts.description ? prDescriptionUseLine(opts.description) : '';
+      await this.sessions.submit(row.id, [opts.lead, this.sessions.prompt(cur, 'pr'), description, footer, this.instructionsPrompt(cur, instructions)].filter(Boolean).join('\n\n'), () => this.prLost(row.id, sent));
     } catch (e) {
       this.sessions.setBusy(row.id, false);
       if (this.sessions.row(row.id).stage === 'pr') this.sessions.setStage(row.id, cur.stage, 'auto');
@@ -909,29 +912,51 @@ export class Lifecycle {
 
   /**
    * A task's local review asks it to fix a round's findings before the next round (review/runner.ts).
-   * The task stays in Code, and its turn's end starts the next round. `moved`: the `moved` line of a
-   * move to Review & PR that started the review from Explore or Design (reviewBeforePr), first.
+   * The task stays in Code, and its turn's end starts the next round. `moved`: a move's `moved` line
+   * still waiting on the review (`code_reviews.lead`: the ask for the PR description normally took it), first.
    */
-  async sendReviewFix(task: SessionRow, o: { strategy: string; round: number; findings: string; outcomeHow: string; moved?: string | null }): Promise<void> {
+  async sendReviewFix(task: SessionRow, o: { strategy: string; round: number; findings: string; outcomeHow: string; moved?: string | null; description?: string | null }): Promise<void> {
     const row = this.sessions.row(task.id);
     if (row.stage !== 'code' || row.desired !== 'running') throw new Error('the task left Code');
     const fix = this.sessions.prompt(row, 'code-review-fix', { strategy: o.strategy, round: o.round, findings: o.findings, outcomeHow: o.outcomeHow });
-    await this.sessions.submit(row.id, [o.moved, fix].filter(Boolean).join('\n\n'));
+    await this.sessions.submit(row.id, [o.moved, fix, o.description ? prDescriptionFixLine(o.description) : ''].filter(Boolean).join('\n\n'));
+  }
+
+  /**
+   * A task's local review asks it first for the PR's title and description, written to its PR
+   * description file with the PR's Meko lines, for the passes to check the change against
+   * (review/runner.ts). The task stays in Code, and its turn's end starts the review's first round.
+   * The task is busy from now until that turn ends, as for the PR prompt: an Open PR or a move while
+   * the Meko lines are looked up is refused, not taken for a press past an interrupted turn.
+   * `moved`: the `moved` line of a move that started the review (reviewBeforePr), first.
+   */
+  async sendPrDescription(task: SessionRow, o: { moved?: string | null }): Promise<void> {
+    const row = this.sessions.row(task.id);
+    if (row.stage !== 'code' || row.desired !== 'running') throw new Error('the task left Code');
+    this.sessions.setBusy(row.id, true);
+    try {
+      const ask = this.sessions.prompt(row, 'pr-description', { prDescriptionFile: this.sessions.prDescriptionFile(row) });
+      await this.sessions.submit(row.id, [o.moved, ask, await this.prFooter(row)].filter(Boolean).join('\n\n'));
+    } catch (e) {
+      this.sessions.setBusy(row.id, false);
+      throw e;
+    }
   }
 
   /**
    * A task's local review is done (or the user opened the PR past a stopped one): the PR prompt goes,
    * led by the last round's findings when it had some, with the `me_ak_review:` line (none past a
-   * stopped review), after the `moved` line of a move that started the review, when that line hasn't gone
-   * with the review's fixes. False when it couldn't go; the user's Open PR sends it later.
+   * stopped review), after a move's `moved` line still waiting on the review (the ask for the PR description
+   * normally took it), and pointing at the PR description file the task wrote (`description`).
+   * False when it couldn't go; the user's Open PR sends it later.
    */
-  async sendReviewedPr(task: SessionRow, o: { line: string | null; findings: string; outcomeHow: string; strategy: string; instructions: string; by: 'you' | 'auto'; moved?: string | null }): Promise<boolean> {
+  async sendReviewedPr(task: SessionRow, o: { line: string | null; findings: string; outcomeHow: string; strategy: string; instructions: string; by: 'you' | 'auto'; moved?: string | null; description?: string | null }): Promise<boolean> {
     const row = this.sessions.row(task.id);
     if (row.stage !== 'code' || row.desired !== 'running') return false;
     const findings = o.findings ? this.sessions.prompt(row, 'code-review-findings', { strategy: o.strategy, findings: o.findings, outcomeHow: o.outcomeHow }) : '';
     const lead = [o.moved, findings].filter(Boolean).join('\n\n') || undefined;
     try {
-      await this.serial(row.id, () => this.sendPr(row, this.prCheck(row.id, false), { lead, instructions: o.instructions, by: o.by, reviewLine: o.line }));
+      await this.serial(row.id, () => this.sendPr(row, this.prCheck(row.id, false), { lead, instructions: o.instructions, by: o.by, reviewLine: o.line, description: o.description }));
       // Claude exited while it was being typed (prLost): it didn't go, and goes again once Claude is back.
       if (this.lostPrs.has(row.id)) return false;
       this.core.reviews.markSent(row.id);

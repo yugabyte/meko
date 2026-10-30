@@ -287,6 +287,10 @@ async function turn(text) {
     return;
   }
   if (text.includes('DESIGN_MD')) writeFileSync(process.env.AK_DESIGN_FILE, '# Design\n\nDo the thing.\n');
+  // Asked for the PR description before a local review: `pr-description.md` in the fake's dir, when there, beside the design file.
+  if (text.includes('pr-description.md') && text.includes("write the PR's title and description") && existsSync(join(dir, 'pr-description.md'))) {
+    writeFileSync(join(dirname(process.env.AK_DESIGN_FILE), 'pr-description.md'), readFileSync(join(dir, 'pr-description.md')));
+  }
   // A learn session that's done: its summary, beside the design file (learnedPath).
   if (text.includes('LEARN_DONE')) writeFileSync(join(dirname(process.env.AK_DESIGN_FILE), 'learned.md'), 'Covered billing and 12 PRs.\nSaved 5 facts.\n');
   if (text.includes('DESIGN_QUESTIONS') || text.includes('RESOLVE_STORE')) {

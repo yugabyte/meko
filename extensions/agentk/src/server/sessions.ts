@@ -1013,6 +1013,16 @@ export class SessionManager {
     return claudePath(this.learnedPath(row));
   }
 
+  /** Where Claude writes the PR's title and description before a local review (outside the repo), beside the design. */
+  prDescriptionPath(row: SessionRow): string {
+    return join(this.core.paths.designs, row.id, 'pr-description.md');
+  }
+
+  /** prDescriptionPath as Claude is told it. */
+  prDescriptionFile(row: SessionRow): string {
+    return claudePath(this.prDescriptionPath(row));
+  }
+
   /** Where Claude lists the design's open questions, beside the markdown design. */
   questionsFile(row: SessionRow): string {
     return claudePath(join(this.core.paths.designs, row.id, 'questions.json'));

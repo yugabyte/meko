@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -35,8 +35,8 @@ describe('local code review before the PR (real session host + git, fake claude 
   const prPrompt = (id: string) => waitFor(() => prompts(id).at(-1) ?? '', (p) => p.includes('Open a pull request'), 10000, 'the PR prompt');
 
   /** A task at Code (or where `req.start` says) whose worktree has a new file with six lines, ready for Open PR. */
-  async function task(req: Record<string, unknown> = {}) {
-    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'none' } });
+  async function task(req: Record<string, unknown> = {}, datapack: Parameters<TestEnv['core']['projects']['create']>[0]['datapack'] = { mode: 'none' }) {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack });
     const s = await env.core.sessions.create(p.id, { name: 'Fix the thing', prompt: 'do it', start: 'code', ...req });
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'first turn');
     const wt = env.core.sessions.row(s.id).worktree_path;
@@ -97,6 +97,40 @@ describe('local code review before the PR (real session host + git, fake claude 
     expect(env.core.sessions.get(s.id).codeReview!.addressed).toBe(false);
     env.core.reviews.onTool(env.core.sessions.row(s.id), 'review_outcome', { outcomes: [{ key: kept[0].key, status: 'declined', note: 'On purpose.' }] });
     expect(env.core.sessions.get(s.id).codeReview).toMatchObject({ addressed: true, counts: { blocker: 1, major: 1, minor: 0 } });
+  });
+
+  it('asks the task for the PR description with its Meko lines first, reviews the change against it, then opens the PR with it', async () => {
+    const s = await task({ review: { strategy: 'sirius-1.0' } }, { mode: 'existing', id: 'dp-1', name: 'team/demo' });
+    mkdirSync(env.fakeDir, { recursive: true });
+    writeFileSync(join(env.fakeDir, 'pr-description.md'), 'feat(demo): add f\n\nAdds f and calls it twice.\n\ncloud.mekodata.ai://dp-1;team/demo\nmeko_conversation_id:conv-1\n');
+    await env.core.sessions.action(s.id, 'open-pr');
+    const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the review');
+    const file = env.core.sessions.prDescriptionFile(env.core.sessions.row(s.id));
+    const asked = prompts(s.claudeSessionId).find((p) => p.includes(`write the PR's title and description to ${file}`))!;
+    expect(asked).toMatch(/End the PR description with these lines.*cloud\.mekodata\.ai:\/\/dp-1;team\/demo\s+meko_conversation_id:conv-1$/s);
+    // The passes read it as the PR's title and description, the task it was written for after it.
+    const base = readFileSync(join(env.core.paths.run, 'reviews', done.codeReview!.id, 'r1', 'base.md'), 'utf8');
+    expect(base).toContain('# The change: feat(demo): add f');
+    expect(base).toContain('> Adds f and calls it twice.\n>\n> cloud.mekodata.ai://dp-1;team/demo\n> meko_conversation_id:conv-1\n\nThe task it was written for:');
+    expect(await prPrompt(s.claudeSessionId)).toContain(`Use the title and description you wrote to ${file} for the PR`);
+  });
+
+  it.each([['Open PR', false], ['a restart', true]])('waits on a PR description turn the user interrupted, and goes on with the review at %s', async (_how, restart) => {
+    // Through the mod, which reports an interrupted turn (no Stop hook fires for one).
+    mkdirSync(env.fakeDir, { recursive: true });
+    writeFileSync(join(env.fakeDir, 'mod'), '');
+    const s = await task({ review: { strategy: 'sirius-1.0' } });
+    await waitFor(() => env.core.sessions.mod.live(s.id), (l) => l, 10000, 'the mod to poll');
+    writeFileSync(join(env.fakeDir, 'interrupt'), '');
+    await env.core.sessions.action(s.id, 'open-pr');
+    const interrupted = () => all<{ text: string }>(env.core.db, "SELECT text FROM session_events WHERE session_id = ? AND kind = 'turn'", s.id).some((e) => e.text === 'You interrupted the turn');
+    await waitFor(() => interrupted() && env.core.sessions.get(s.id).status === 'idle', (x) => x, 30000, 'the interrupted description turn');
+    expect(env.core.sessions.get(s.id).codeReview!.state).toBe('describing');
+    rmSync(join(env.fakeDir, 'interrupt'));
+    if (restart) await env.core.reviews.recover();
+    else await env.core.sessions.action(s.id, 'open-pr');
+    const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the review');
+    expect(done.codeReview).toMatchObject({ round: 1, state: 'done' });
   });
 
   it('opens the PR with me_ak_review:LGTM when Sirius 1.0 finds nothing, set for the session alone', async () => {
@@ -212,8 +246,10 @@ describe('local code review before the PR (real session host + git, fake claude 
     const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the review');
     expect(done.codeReview).toMatchObject({ strategy: 'sirius-1.0', state: 'done' });
     const pr = await prPrompt(s.claudeSessionId);
-    // Claude's system prompt still says Explore (no PR): the moved line leads the review's first prompt to it.
-    expect(pr.startsWith('AgentK moved this session to the Code stage.')).toBe(true);
+    // Claude's system prompt still says Explore (no PR): the moved line leads the review's first prompt to it, the ask for the PR description.
+    const asked = prompts(s.claudeSessionId).find((p) => p.includes("write the PR's title and description"))!;
+    expect(asked.startsWith('AgentK moved this session to the Code stage.')).toBe(true);
+    expect(pr.startsWith('AgentK moved this session')).toBe(false);
     expect(pr).toContain('me_ak_review:LGTM');
     expect(pr).toContain('Mention the demo.');
     expect(all<{ stage: string }>(env.core.db, 'SELECT stage FROM session_stages WHERE session_id = ? ORDER BY rowid', s.id).map((r) => r.stage)).toEqual(['explore', 'code', 'pr']);

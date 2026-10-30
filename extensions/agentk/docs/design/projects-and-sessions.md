@@ -224,7 +224,7 @@ CREATE TABLE work_item_links (item_id TEXT, ord INTEGER, key TEXT, kind TEXT, ur
 CREATE TABLE code_reviews (    -- a task's local reviews (review/runner.ts, docs/design/code-review.md), one per Open PR or move to Review & PR
   id TEXT PRIMARY KEY, task_id TEXT, session_id TEXT,  -- the task, and its code-review session
   strategy TEXT, rounds INTEGER, depth INTEGER,        -- what it runs with, stamped when it starts
-  state TEXT,                  -- preparing | sweeping | scoring | fixing | done | failed | cancelled
+  state TEXT,                  -- describing | preparing | sweeping | scoring | fixing | done | failed | cancelled
   round INTEGER, sweep INTEGER, asked INTEGER,         -- where it is; asked: steps asked for again this phase
   candidates_json TEXT, findings_json TEXT, notes_json TEXT, datapacks_json TEXT,  -- this round's candidates, every round's
                                --   findings (the panel), the passes' notes, the MEKO.md datapacks

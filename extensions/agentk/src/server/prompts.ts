@@ -26,7 +26,9 @@ import type { LearnBrief, MoveTarget } from '../shared/types.js';
  * `review-pr-update` also gets {{oldSha}} and {{count}}, and `review-pr-comments` {{count}} and {{comments}}.
  * `seed` is a learn session's first prompt (Session.purpose `learn`): its {{task}} carries the user's brief
  * (learnTask), and it gets {{learnedFile}}, where Claude writes its summary when it's done (the session then closes).
- * The local code review's prompts (review/runner.ts): `code-review-sweep` and `code-review-score` go to a code-review
+ * The local code review's prompts (review/runner.ts): `pr-description` goes to the task first and gets {{prDescriptionFile}},
+ * where the task writes the PR's title and description (the PR prompt's Meko lines follow it, and the PR prompt then
+ * points at the file: `prDescriptionUseLine`); `code-review-sweep` and `code-review-score` go to a code-review
  * session and get {{steps}} (a numbered line per step: its subagent and the prompt to give it), {{what}} (which sweep, or how
  * many findings) and {{reportTool}}; `code-review-fix` goes to the task between review rounds and `code-review-findings`
  * before the PR prompt after the last one, both with {{strategy}}, {{round}}, {{findings}} (a line per finding, with its key)
@@ -35,7 +37,7 @@ import type { LearnBrief, MoveTarget } from '../shared/types.js';
 export type PromptName =
   | 'explore' | 'design' | 'design-plan' | 'design-answers' | 'approved' | 'approved-answers' | 'code' | 'pr' | 'review' | 'review-people' | 'review-held' | 'conflicts' | 'ci' | 'continue' | 'continue-review' | 'comments'
   | 'moved' | 'move-design' | 'move-code' | 'instructions' | 'attached' | 'review-pr' | 'review-pr-update' | 'review-pr-design' | 'review-pr-comments' | 'learn'
-  | 'seed' | 'code-review-sweep' | 'code-review-score' | 'code-review-fix' | 'code-review-findings';
+  | 'seed' | 'pr-description' | 'code-review-sweep' | 'code-review-score' | 'code-review-fix' | 'code-review-findings';
 
 /** How to design, after the task: shared by `design` and `move-design`. */
 const DESIGN_STEPS = `Read the relevant code, then design the change: the goal, the approach, the files you expect to change, risks and open questions, and a test plan. Don't change anything in the repo yet: no file edits, commits, or commands that modify files. AgentK blocks edits in the repo until the user approves the design.
@@ -201,6 +203,8 @@ Task: {{task}}
 4. Don't change any files in the repo, commit or push.
 
 When you've finished, write a short summary to {{learnedFile}} (it's outside the repo, so writing it is allowed): what you covered (areas, and the PRs from when to when), how many facts you saved and corrected, and what you'd look at next. AgentK then closes this session. Write it only when you've finished: if you need to ask the user something first, ask without writing it.`,
+
+  'pr-description': `Before AgentK reviews this change locally and opens its PR, write the PR's title and description to {{prDescriptionFile}} (it's outside the repo, so writing it is allowed). Put the title on the first line, following the repo's commit conventions (see AGENTS.md and any commit skill; if the repo squash-merges, the title becomes the commit subject), then a blank line, then the description: what the change does and why, summarizing the design and the change, as the repo's conventions for PR descriptions ask. If the branch already has an open PR (\`gh pr view\`), start from its title and description and bring them up to date. The review's passes read it as your account of the change and check it against the code. Write only that file: don't change the code, commit, push or open the PR yet.`,
 
   'code-review-sweep': `Run the next steps of AgentK's local code review of "{{task}}" (branch {{branch}} against {{base}}): {{what}}.
 
@@ -519,6 +523,19 @@ export function render(template: string, vars: Record<string, string | number | 
     const v = vars[k];
     return v === null || v === undefined ? '' : String(v);
   });
+}
+
+/**
+ * Added to the PR prompt after a local review whose task wrote its PR description first (the
+ * `pr-description` prompt): the PR goes out with that title and description.
+ */
+export function prDescriptionUseLine(file: string): string {
+  return `Use the title and description you wrote to ${file} for the PR (its first line is the title, the rest is the description), brought up to date with anything that changed since you wrote it, such as fixes for the review's findings.`;
+}
+
+/** Added to a local review's fix prompt when the task wrote its PR description first: fixes keep it true. */
+export function prDescriptionFixLine(file: string): string {
+  return `If your fixes change what the PR description in ${file} says, update it there too.`;
 }
 
 /**

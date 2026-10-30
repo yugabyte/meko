@@ -696,8 +696,9 @@ const MIGRATIONS: string[] = [
   );
   `,
   // 44: code_reviews.lead: the `moved` line for a review a move to Review & PR started from Explore or
-  // Design (Lifecycle.reviewBeforePr), sent before the review's first prompt to the task (its fixes, or
-  // the PR prompt) and cleared once that has gone; NULL for none.
+  // Design (Lifecycle.reviewBeforePr), sent before the review's first prompt to the task (the ask for
+  // the PR description, since that was added; its fixes or the PR prompt before) and cleared once that
+  // has gone; NULL for none.
   `ALTER TABLE code_reviews ADD COLUMN lead TEXT;`,
 ];
 

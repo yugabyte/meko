@@ -19,7 +19,7 @@ import { approveDesign, changingDecisions } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { closingText, cx, dotState, designGate, isReviewChild, joinedPartSelected, reviewGatesPr, reviewOpens, reviewParent, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, reviewTarget, runToMergeShown, runToMergeTitle, sessionTabTitle, sidewaysWheel, totalTokens, updateShowing, usageTitle } from '../util';
+import { closingText, cx, dotState, designGate, isReviewChild, joinedPartSelected, reviewGatesPr, reviewOpens, reviewParent, shownStep, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, reviewTarget, runToMergeShown, runToMergeTitle, sessionTabTitle, sidewaysWheel, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
 import { Busy, Check, ConfirmButton, ContextRing, DatapackName, Elapsed, HarnessLogo, NotesIcon, ReviewSegment, RunToMergeCheck, RunToMergeMark, StageChip, StatusDot } from './common';
@@ -798,6 +798,22 @@ function reviewGate(
       </span>
     );
   }
+  if (r.state === 'describing') {
+    return (
+      <span className="gate-group">
+        {/* Past a description turn you interrupted (the task isn't busy), the review waits for Review now. */}
+        <span className="gate-pill" title="AgentK writes the PR's title and description first, for the local review to check the change against">
+          {blocked ? <Busy label="Writing the PR description" /> : 'Local review waits to start'}
+        </span>
+        <button className="btn small" disabled={blocked} onClick={() => onAct('review-cancel')} title="Stop the review; then Retry or Open anyway">
+          Cancel
+        </button>
+        <button className="gate" disabled={blocked} onClick={() => onAct('open-pr')} title="Start the review with the PR description as it is now">
+          Review now
+        </button>
+      </span>
+    );
+  }
   if (r.state === 'fixing') {
     return (
       <span className="gate-group">
@@ -913,11 +929,13 @@ function StageBar({
   }
   const kind = kindOf(session.kind);
   const stages: Stage[] = KIND_STAGES[kind];
-  const idx = session.stage === 'done' ? stages.length : stages.indexOf(stepOf(session.stage));
+  // A task whose local review holds its Open PR shows in Review & PR, while it stays in Code.
+  const step = shownStep(session);
+  const idx = session.stage === 'done' ? stages.length : stages.indexOf(step);
   // A task's steps are numbered from 0 (Explore), so Design is 1 and Merge & Close 4.
   const first = kind === 'task' ? 0 : 1;
   // Other stages the session can be moved to open the move dialog.
-  const targets: Stage[] = moveBlockedIn(session.stage) ? [] : moveTargets(kind);
+  const targets: Stage[] = moveBlockedIn(session.stage) ? [] : moveTargets(kind).filter((t) => t !== stepOf(session.stage));
   const midTurn = session.status === 'working' || session.status === 'starting';
   const blocked = session.busy || acting;
   // Why the Design or Code gate is closed, if it is.
@@ -1129,7 +1147,7 @@ function StageBar({
           {/* The phone layout shows only the current stage's name, here. */}
           <span className="stg-now">
             <b>
-              {STAGE_LABELS[session.stage]}
+              {STAGE_LABELS[step]}
               <RunToMergeMark session={session} size={10} />
             </b>
             {session.stage !== 'done' && stages.length > 1 && idx + first > 0 && (

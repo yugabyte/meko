@@ -189,8 +189,11 @@ export function withMeAkReviewLine(body: string, line: string): string {
   return trimmed ? `${trimmed}\n\n${line}` : line;
 }
 
-/** Where a local review is (`CodeReviewSummary.state`). */
-export type CodeReviewState = 'preparing' | 'sweeping' | 'scoring' | 'fixing' | 'done' | 'failed' | 'cancelled';
+/**
+ * Where a local review is (`CodeReviewSummary.state`): `describing` while the task writes the PR's
+ * title and description for the passes to read, before the first round.
+ */
+export type CodeReviewState = 'describing' | 'preparing' | 'sweeping' | 'scoring' | 'fixing' | 'done' | 'failed' | 'cancelled';
 
 /** What a task's tab and rail row show of its local review (`Session.codeReview`). */
 export interface CodeReviewSummary {
@@ -273,6 +276,7 @@ export function reviewSegmentLabel(r: CodeReviewSummary): string {
     case 'preparing': what = 'preparing'; break;
     case 'sweeping': what = `${step}, pass ${reviewStep(r)} of ${r.passes}`; break;
     case 'scoring': what = `${step}, scoring ${Math.min(r.scoresDone + 1, r.candidates)} of ${r.candidates}`; break;
+    case 'describing': what = 'waiting for the PR description'; break;
     case 'fixing': what = 'waiting for the fixes'; break;
     case 'done': what = doneShowsCounts(r) ? countsText(r.counts) : totalCount(r.counts) ? `LGTM, ${countsText(r.counts)} addressed` : 'LGTM'; break;
     case 'failed': what = `failed${r.detail ? `: ${r.detail}` : ''}. Retry or Open anyway`; break;
