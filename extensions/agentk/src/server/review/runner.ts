@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import {
-  MIN_SWEEPS, REVIEW_LEFT_CODE, addCounts, countsText, meAkReviewLine, noCounts, resolveReview, reviewHolds, reviewRunning, strategyName, totalCount,
+  DESCRIBE_INTERRUPTED, DESCRIBE_LOST, MIN_SWEEPS, REVIEW_LEFT_CODE, addCounts, countsText, meAkReviewLine, noCounts, resolveReview, reviewHolds, reviewRunning, strategyName, totalCount,
   type CodeReviewDetail, type CodeReviewFinding, type CodeReviewState, type CodeReviewSummary, type FindingOutcome,
   type ReviewSettings, type ReviewStrategyId, type SeverityCounts,
 } from '../../shared/codereview.js';
@@ -78,7 +78,8 @@ interface ReviewRow {
 }
 
 /** The running states: a review in one of them holds the task's Open PR. */
-const RUNNING: CodeReviewState[] = ['preparing', 'sweeping', 'scoring', 'fixing'];
+const RUNNING: CodeReviewState[] = ['describing', 'preparing', 'sweeping', 'scoring', 'fixing'];
+
 
 /** What the subagent definitions say, for each harness that has them (`ReviewLaunch`). */
 export interface ReviewAgent {
@@ -252,8 +253,11 @@ export class CodeReviews {
       // Pressed again while it runs: the instructions given now go with the PR, and a move's line before the next prompt.
       if (opts.instructions) this.set(last.id, { instructions: opts.instructions });
       if (opts.lead) this.set(last.id, { lead: opts.lead });
-      // Open PR (or a move) is only taken between turns: a review still waiting for fixes then had its
-      // fix turn interrupted, and the press says to go on with the next round.
+      // The user's press after Run to merge's: the PR goes as theirs (Run to merge stopped at the interrupt).
+      if (opts.by === 'you' && last.by !== 'you') this.set(last.id, { by: 'you' });
+      // Open PR (or a move) is only taken between turns: a review still waiting for the task's PR
+      // description or fixes then had that turn interrupted (or its ask lost), and the press says to go on.
+      if (last.state === 'describing') this.kick(last.id, () => (last.detail === DESCRIBE_LOST ? this.describe(last.id) : this.beginRound(last.id)));
       if (last.state === 'fixing') this.kick(last.id, () => this.nextRound(last.id));
       return true;
     }
@@ -291,11 +295,49 @@ export class CodeReviews {
     // An earlier review's session goes: the task's tab shows only the latest.
     const prev = this.latest(task.id);
     run(this.db, `INSERT INTO code_reviews(id, task_id, strategy, rounds, depth, state, instructions, by, lead, created_at, updated_at)
-                  VALUES (?, ?, ?, ?, ?, 'preparing', ?, ?, ?, ?, ?)`, id, task.id, settings.strategy, settings.rounds, settings.depth, opts.instructions || null, opts.by, opts.lead || null, now, now);
+                  VALUES (?, ?, ?, ?, ?, 'describing', ?, ?, ?, ?, ?)`, id, task.id, settings.strategy, settings.rounds, settings.depth, opts.instructions || null, opts.by, opts.lead || null, now, now);
     this.core.sessions.event(task.id, 'review', `Local review started (${strategyName(settings.strategy)}${settings.depth > 1 ? `, depth ${settings.depth}` : ''}${settings.rounds ? `, up to ${settings.rounds} re-review${settings.rounds === 1 ? '' : 's'}` : ''})`);
     this.core.changed();
     if (prev?.session_id) void this.archiveSession(prev.session_id);
-    this.kick(id, () => this.beginRound(id));
+    this.kick(id, () => this.describe(id));
+  }
+
+  /**
+   * Before the first round, the task writes the PR's title and description, Meko lines included, to
+   * its PR description file: the passes check the change against it, as the cloud's do a PR's, and
+   * the PR prompt opens the PR with it. The task's turn's end starts the first round (onTurnEnd).
+   */
+  private async describe(id: string): Promise<void> {
+    const r = this.mustReview(id);
+    const task = this.core.sessions.row(r.task_id);
+    if (r.state !== 'describing' || r.detail) this.set(id, { state: 'describing', detail: null });
+    // An earlier review's description would pass for this one's if the task didn't write it.
+    rmSync(this.core.sessions.prDescriptionPath(task), { force: true });
+    await this.core.lifecycle.sendPrDescription(task, { moved: r.lead, lost: () => this.describeLost(id) });
+    if (r.lead) this.set(id, { lead: null });
+  }
+
+  /** The task's agent exited before taking the ask for the PR description: the review waits, and Open PR asks again. */
+  private describeLost(id: string): void {
+    const r = this.review(id);
+    if (r?.state !== 'describing') return;
+    this.set(id, { detail: DESCRIBE_LOST });
+    this.core.sessions.event(r.task_id, 'review', `Local review waits: ${DESCRIBE_LOST}. Review now asks again.`);
+    this.core.sessions.notifyUser(r.task_id, 'Local review waits', `${DESCRIBE_LOST[0].toUpperCase()}${DESCRIBE_LOST.slice(1)}. Once it's back, press Review now to ask again.`);
+  }
+
+  /** The task's PR description file, as Claude is told it, once the task has written it; null before. */
+  private descriptionFile(task: SessionRow): string | null {
+    return existsSync(this.core.sessions.prDescriptionPath(task)) ? this.core.sessions.prDescriptionFile(task) : null;
+  }
+
+  /** The PR title (its first line) and description the task wrote, or null without one. basePrompt clips and quotes it. */
+  private readDescription(task: SessionRow): string | null {
+    try {
+      return readFileSync(this.core.sessions.prDescriptionPath(task), 'utf8').trim() || null;
+    } catch {
+      return null;
+    }
   }
 
   /** Runs `fn` for a review once nothing else is moving it on; failures fail the review. */
@@ -328,7 +370,14 @@ export class CodeReviews {
 
   /** A round starts: the change is read again (the task may have fixed things), and its first sweep goes out. */
   private async beginRound(id: string): Promise<void> {
-    const r = this.mustReview(id);
+    let r = this.mustReview(id);
+    // Asked for twice (the description turn's end and an Open PR right after it): the first one started it.
+    if (r.state !== 'describing' && r.state !== 'preparing') return;
+    if (this.taskMovedOn(r)) return;
+    if (r.state === 'describing') {
+      this.set(id, { state: 'preparing', detail: null });
+      r = this.mustReview(id);
+    }
     const task = this.core.sessions.row(r.task_id);
     const dir = this.runDir(r);
     rmSync(dir, { recursive: true, force: true });
@@ -363,6 +412,7 @@ export class CodeReviews {
     const trusted = repoConfigTrusted(task);
     const datapacks = trusted && this.core.mekoStatus.configured ? this.datapacks(wt, paths) : [];
     const repo = sessionRepo(this.db, task);
+    const prDescription = this.readDescription(task);
     return {
       diff,
       ctx: {
@@ -373,6 +423,7 @@ export class CodeReviews {
         headSha: head,
         dirty,
         title: task.name,
+        prDescription,
         description: task.initial_prompt ?? '',
         design: this.design(task),
         commits: await readCommits(wt, mergeBase),
@@ -655,9 +706,14 @@ export class CodeReviews {
       return true;
     }
     const r = this.latest(row.id);
-    if (r?.state !== 'fixing') return false;
-    // An interrupted fix turn is the user stepping in: the review waits for the next turn to end.
-    if (!interrupted) this.kick(r.id, () => this.nextRound(r.id));
+    if (r?.state !== 'describing' && r?.state !== 'fixing') return false;
+    // An interrupted turn is the user stepping in: the review waits for the next turn to end, or Open
+    // PR. A describing review keeps why, so a restart leaves it waiting too.
+    if (interrupted) {
+      if (r.state === 'describing') this.set(r.id, { detail: DESCRIBE_INTERRUPTED });
+      return true;
+    }
+    this.kick(r.id, () => (r.state === 'describing' ? this.beginRound(r.id) : this.nextRound(r.id)));
     return true;
   }
 
@@ -776,7 +832,10 @@ export class CodeReviews {
     this.core.sessions.event(task.id, 'review', `Local review, round ${r.round}: ${totalCount(roundCounts) ? countsText(roundCounts) : 'LGTM'}`);
     if (post.length && r.round <= r.rounds) {
       this.set(id, { state: 'fixing' });
-      await this.core.lifecycle.sendReviewFix(task, { strategy: strategyName(r.strategy), round: r.round, findings: this.findingsText(this.mustReview(id), r.round), outcomeHow: this.outcomeHow(task), moved: r.lead });
+      await this.core.lifecycle.sendReviewFix(task, {
+        strategy: strategyName(r.strategy), round: r.round, findings: this.findingsText(this.mustReview(id), r.round), outcomeHow: this.outcomeHow(task), moved: r.lead,
+        description: this.descriptionFile(task),
+      });
       if (r.lead) this.set(id, { lead: null });
       return;
     }
@@ -807,7 +866,7 @@ export class CodeReviews {
     this.core.changed();
     const sent = await this.core.lifecycle.sendReviewedPr(task, {
       line: meAkReviewLine(counts), findings, outcomeHow: this.outcomeHow(task), strategy: strategyName(r.strategy), instructions: r.instructions ?? '', by: r.by === 'auto' ? 'auto' : 'you',
-      moved: r.lead,
+      moved: r.lead, description: this.descriptionFile(task),
     });
     if (sent) this.set(id, { finished_at: Date.now(), lead: null });
   }
@@ -893,11 +952,15 @@ export class CodeReviews {
     if (!r || (r.state !== 'failed' && r.state !== 'cancelled')) throw new HttpError(409, 'There is no stopped local review to retry.');
     const dir = this.runDir(r);
     const resumable = existsSync(join(dir, 'base.md')) && existsSync(join(dir, 'context.json'));
-    this.set(r.id, { state: resumable ? (json<Candidate[]>(r.candidates_json, []).length && this.steps(r.id, `r${r.round}c`).length ? 'scoring' : 'sweeping') : 'preparing', detail: null, asked: 0 });
+    // Stopped before round 1 had the task's PR description: the task is asked for it again first.
+    const describe = !resumable && r.round === 1 && !existsSync(this.core.sessions.prDescriptionPath(this.core.sessions.row(taskId)));
+    const state = resumable ? (json<Candidate[]>(r.candidates_json, []).length && this.steps(r.id, `r${r.round}c`).length ? 'scoring' : 'sweeping') : describe ? 'describing' : 'preparing';
+    this.set(r.id, { state, detail: null, asked: 0 });
     this.core.sessions.event(taskId, 'review', 'Local review retried');
     this.core.changed();
     this.kick(r.id, async () => {
       const cur = this.mustReview(r.id);
+      if (cur.state === 'describing') return this.describe(r.id);
       if (cur.state === 'preparing') return this.beginRound(r.id);
       if (cur.state === 'scoring') {
         const done = new Set(this.steps(r.id, `r${cur.round}c`).map((s) => Number(s.step.slice(`r${cur.round}c`.length))));
@@ -915,7 +978,9 @@ export class CodeReviews {
     const r = this.latest(taskId);
     if (!r || (r.state !== 'failed' && r.state !== 'cancelled')) throw new HttpError(409, 'There is no stopped local review to open the PR past.');
     const task = this.core.sessions.row(taskId);
-    const sent = await this.core.lifecycle.sendReviewedPr(task, { line: null, findings: '', outcomeHow: '', strategy: strategyName(r.strategy), instructions: r.instructions ?? '', by: 'you', moved: r.lead });
+    const sent = await this.core.lifecycle.sendReviewedPr(task, {
+      line: null, findings: '', outcomeHow: '', strategy: strategyName(r.strategy), instructions: r.instructions ?? '', by: 'you', moved: r.lead, description: this.descriptionFile(task),
+    });
     if (sent) this.set(r.id, { finished_at: Date.now(), lead: null, detail: `${r.detail ?? 'stopped'}; the PR opened anyway` });
   }
 
@@ -935,11 +1000,21 @@ export class CodeReviews {
 
   /**
    * After a restart: a review whose session is idle with steps still to report gets them asked for
-   * again (its prompts may have gone with the old server), and a review with no session left fails.
+   * again (its prompts may have gone with the old server), a review with no session left fails, and
+   * one waiting on its task's PR description starts its first round once the task is idle, unless it
+   * waits on the user (an interrupted turn, a lost ask: its `detail`).
    */
   async recover(): Promise<void> {
-    const rows = all<ReviewRow>(this.db, `SELECT * FROM code_reviews WHERE state IN ('preparing', 'sweeping', 'scoring')`);
+    const rows = all<ReviewRow>(this.db, `SELECT * FROM code_reviews WHERE state IN ('describing', 'preparing', 'sweeping', 'scoring')`);
     for (const r of rows) {
+      if (r.state === 'describing') {
+        // The task's PR description turn may have ended while AgentK was down: the first round goes on
+        // with what the task wrote. Not while that turn runs or asks something (needs_input), and not
+        // past an interrupt or a lost ask, which wait for the user's Open PR.
+        const task = sessionRow(this.db, r.task_id);
+        if (!r.detail && (task?.status === 'idle' || task?.status === 'recovered')) this.kick(r.id, () => this.beginRound(r.id));
+        continue;
+      }
       const session = r.session_id ? sessionRow(this.db, r.session_id) : undefined;
       if (r.state === 'preparing' || !session || session.desired !== 'running') {
         this.kick(r.id, async () => {

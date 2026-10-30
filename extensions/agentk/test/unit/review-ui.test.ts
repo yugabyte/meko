@@ -7,10 +7,11 @@ describe('stageChipText', () => {
   const review = (state: CodeReviewSummary['state'], detail: string | null) => ({ state, detail }) as CodeReviewSummary;
   it.each([
     ['code', null, null, 'Code'],
-    ['code', 'sweeping', null, 'Review'],
-    ['code', 'fixing', null, 'Review'],
-    ['code', 'failed', 'no review pass reported', 'Review'],
-    ['code', 'cancelled', 'you cancelled it', 'Review'],
+    ['code', 'describing', null, 'Review & PR'],
+    ['code', 'sweeping', null, 'Review & PR'],
+    ['code', 'fixing', null, 'Review & PR'],
+    ['code', 'failed', 'no review pass reported', 'Review & PR'],
+    ['code', 'cancelled', 'you cancelled it', 'Review & PR'],
     // Cancelled by leaving Code: it doesn't hold the next Open PR, which starts a new review.
     ['code', 'cancelled', REVIEW_LEFT_CODE, 'Code'],
     ['code', 'done', null, 'Code'],

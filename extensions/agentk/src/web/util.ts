@@ -3,7 +3,8 @@ import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, LEARN_WARN_FILES, LEARN_WARN_PRS, STAGE_LABELS, type LearnScope } from '../shared/types';
 import { mekoDatapackPath } from '../shared/mekourls';
 import { isStrategySetting, reviewHolds, type CodeReviewFinding, type ReviewOverrides } from '../shared/codereview';
-import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoStatus, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
+import { stepOf } from '../shared/stages';
+import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoStatus, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, Stage, TokenUsage } from '../shared/types';
 
 /**
  * What a status dot shows: the session's status, `learning` while AgentK saves what it learned to
@@ -743,9 +744,18 @@ export function reviewGatesPr(s: Pick<Session, 'stage' | 'codeReview'>): boolean
   return s.stage === 'code' && !!r && r.state !== 'done' && (r.state !== 'cancelled' || reviewHolds(r));
 }
 
-/** A session's stage in its chip: `Review` while its local review holds the Open PR, else the stage. */
+/**
+ * The step a session shows in the stage bar and its chip: Review & PR while its local review holds
+ * the Open PR (the session stays in Code, where the review runs: docs/design/code-review.md), else
+ * its stage's step.
+ */
+export function shownStep(s: Pick<Session, 'stage' | 'codeReview'>): Stage {
+  return reviewGatesPr(s) ? 'review' : stepOf(s.stage);
+}
+
+/** A session's stage in its chip: the step it shows (shownStep). */
 export function stageChipText(s: Pick<Session, 'stage' | 'codeReview'>): string {
-  return reviewGatesPr(s) ? 'Review' : STAGE_LABELS[s.stage];
+  return STAGE_LABELS[shownStep(s)];
 }
 
 /** A session's stage in words, for tooltips and hints that can't hold the mark: "Code · Run to merge". */

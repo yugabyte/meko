@@ -335,7 +335,7 @@ export interface DailyUsage {
 export interface CodeReviewCounts {
   /** Reviews started; a Retry goes on in its review, so it isn't another. */
   runs: number;
-  /** By the review's state now: preparing, sweeping, scoring and fixing are `running`. */
+  /** By the review's state now: describing, preparing, sweeping, scoring and fixing are `running`. */
   byOutcome: { done: number; failed: number; cancelled: number; running: number };
   /** Done reviews that kept no finding. */
   lgtm: number;

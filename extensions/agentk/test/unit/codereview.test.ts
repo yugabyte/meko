@@ -74,6 +74,7 @@ describe("the review's part of a task's tab", () => {
     [r({ state: 'scoring' }), '6/6'],
     [r({ strategy: 'sirius-1.0', passes: 1, passesDone: 0 }), '1/1'],
     [r({ state: 'fixing' }), 'R1'],
+    [r({ state: 'describing' }), '…'],
     [r({ state: 'done', counts: counts(2, 1, 4) }), '2·1'],
     [r({ state: 'done', counts: counts(2, 1, 4), addressed: true }), 'LGTM'],
     [r({ state: 'done' }), 'LGTM'],
@@ -86,6 +87,7 @@ describe("the review's part of a task's tab", () => {
   it.each([
     [r({}), 'Local review: Sagittarius 3.0, 2 of 5 passes reported'],
     [r({ state: 'scoring' }), 'Local review: Sagittarius 3.0, step 6 of 6, scoring 4 of 9'],
+    [r({ state: 'describing' }), 'Local review: Sagittarius 3.0, waiting for the PR description'],
     [r({ state: 'done', counts: counts(1, 0, 0), addressed: true }), 'Local review: Sagittarius 3.0, LGTM, 1 blocker addressed'],
     [r({ waiting: true }), 'Local review: Sagittarius 3.0, 2 of 5 passes reported, waiting on you in its terminal'],
   ])('spells %j out as %s', (summary, label) => {

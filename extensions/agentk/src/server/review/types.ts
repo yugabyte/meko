@@ -166,6 +166,11 @@ export interface ReviewContext {
   dirty: boolean;
   /** The task's name. */
   title: string;
+  /**
+   * The PR title (its first line) and description the task wrote before the review, Meko lines
+   * included; null when it wrote none. Absent in a context saved before the task was asked for one.
+   */
+  prDescription?: string | null;
   /** The task's first prompt. */
   description: string;
   /**

@@ -58,7 +58,9 @@ sequenceDiagram
   participant S as Subagents
   U->>AK: Open PR (or Run to merge, the open_pr tool, or a move to Review & PR)
   AK->>AK: settings: session, then project, then global
-  AK->>AK: diff, guides, MEKO.md, history, linked issues into run/reviews/{id}/r{round}
+  AK->>T: pr-description: the PR's title and description, with its Meko lines
+  T->>AK: turn ends, pr-description.md written
+  AK->>AK: diff, guides, MEKO.md, history, linked issues, the PR description into run/reviews/{id}/r{round}
   AK->>R: start kind=code-review, parent=T, same worktree
   loop each round, while rounds are left and the last one found something
     loop each sweep, up to depth
@@ -73,7 +75,7 @@ sequenceDiagram
     AK->>T: code-review-fix (a re-review follows)
     T->>AK: review_outcome per finding
   end
-  AK->>T: PR prompt, the last round's findings first, and the me_ak_review line
+  AK->>T: PR prompt, the last round's findings first, pr-description.md, and the me_ak_review line
   AK->>AK: once the PR is found, the line is set in its body if it's missing
 ```
 
@@ -85,8 +87,29 @@ itself when it's done (`Lifecycle.sendReviewedPr`). A move to Review & PR by han
 gate and its cancelling are all Code's, and the review sends the PR prompt as for Open PR. From
 Explore or Design, the `moved` line (Claude's system prompt still names the old stage, and
 Explore's says no PR) waits on the review (`code_reviews.lead`) and goes before its first prompt to
-the task, its fixes or the PR prompt. A move that only picks up the branch's open PR runs no review. The PR prompt itself doesn't ask the task
+the task, the ask for the PR description. A move that only picks up the branch's open PR runs no review. The PR prompt itself doesn't ask the task
 to review its diff: the review session has.
+
+**The PR description.** Before the first round the review is `describing`: AgentK asks the task
+(`pr-description`, `Lifecycle.sendPrDescription`) to write the PR's title (the first line) and
+description to `pr-description.md` beside its design (`designs/<task>/`, outside the repo, which
+every session may write), ending with the Meko lines the PR prompt asks for (`prFooter`: the
+datapack, the design and the conversation), so the passes check the change against the author's
+account of it, as the cloud's check a PR's, and see where its Meko context is. An earlier review's
+file is removed first, so a turn that writes none leaves the passes the task alone. The ask calls an
+open PR's existing text untrusted. The task's turn end starts round 1 (`CodeReviews.onTurnEnd`). An
+interrupted one waits, as a fix turn does, for the next turn's end or Open PR (the gate's **Review
+now**); so does an ask the agent exited before taking (sessions.submit's `lost`), and there Open PR
+asks again. The review keeps why it waits in its `detail` (`DESCRIBE_INTERRUPTED`, `DESCRIBE_LOST`),
+so a restart leaves it waiting; otherwise `recover()` starts round 1 once the task is idle (not while
+its turn runs or asks something). A Retry before round 1 had a description asks again. The task is
+busy from the ask until its turn ends, so an Open PR or a move while AgentK looks up the Meko lines
+is refused rather than taken for a press past an interrupted turn. The passes get the file, title
+and all, quoted, as data to check the change against and never instructions (an open PR's text it
+starts from may be anyone's), clipped before its trailing Meko lines, which are kept (at most six,
+each clipped: `clipDescription`). Each later round reads the file again: the fix prompt asks the task to
+keep it true (`prDescriptionFixLine`), and the PR prompt to open the PR with it, brought up to date
+(`prDescriptionUseLine`).
 
 **The review session** is a session of kind `code-review` (`Session.parentId` is its task), held by
 the session host like any other, so it survives restarts. It works in its task's worktree without
@@ -164,16 +187,17 @@ still missing; a review whose session is gone fails, for Retry.
 ## Context the passes get
 
 The base prompt follows the cloud's `BuildPrompt`, for a change rather than a PR: the branch
-against its base (origin's copy when there is one), the task's name and first prompt and where its
-design is, `git log` of its commits, the change from the merge-base to the working tree (untracked
+against its base (origin's copy when there is one), the PR title and description the task wrote,
+its first prompt and where its design is, `git log` of its commits, the change from the merge-base to the working tree (untracked
 files included, since nothing is committed before the PR prompt), the review guides (REVIEW.md at
 the root and in each ancestor folder of a changed file), the history of the rewritten lines
 (`git blame` and recent commits, since the passes have no git), the task's linked issues (its work
 item's GitHub issues fetched into the run folder; other links by name), and earlier rounds. Secret
 files, deleted files and generated files are withheld (`withhold.go`, `generated.go`). A diff over
-256 KiB is written one patch per file instead of inline. Left out: the cloud's injection screen and
-budget caps (the change is the user's own, on their own account), and the PR description's skip
-patterns (there's no PR yet).
+256 KiB is written one patch per file instead of inline. The description is the PR title and
+description the task wrote, quoted, followed by the task it was written for; with none, the
+task alone. Left out: the cloud's injection screen and budget caps (the change is the user's own, on
+their own account), and the PR description's skip patterns.
 
 Every absolute path the prompts give (the working directory, the run folder, the per-file patches,
 the linked issues, the design and each step's prompt file) is in the spelling the review session
@@ -196,7 +220,8 @@ without Meko. Retired gotchas aren't filtered: the cloud's roster of them isn't 
 
 The review is never a tab or a rail row of its own: it's a part joined to its task's tab and rail
 row (`ReviewSegment`), a blue magnifier whose lens pulses while the review works and shows Meko's
-"m" while the review session is in a Meko call (`CodeReviewSummary.mekoCall`), then how far it
+"m" while the review session is in a Meko call (`CodeReviewSummary.mekoCall`), then `…` while the
+task writes the PR description (describing) or the review prepares, then how far it
 has got (`reviewSteps()`: each pass of a sweep, then scoring as one step, so Sagittarius 3.0 counts
 `1/6` to `6/6` and Sirius 1.0, unscored, `1/1`, moving on as each pass reports, whether the passes
 run at once, on Claude Code and OpenCode, or one after another, on Kiro; with depth > 1 the passes
@@ -211,11 +236,17 @@ knocks, since that session has no tab to show it. Clicking it (in the tab, the r
 follows `reviewOpens()` in `src/web/util.ts`: while the review has a running session and isn't
 waiting for the task's fixes (preparing, sweeping, scoring, or failed, which keeps its session for
 Retry), it opens the review's own screen, its terminal with the findings beside it on a desktop;
-otherwise (fixing, done, cancelled) the findings panel beside the task's terminal (`ReviewFindings`:
+otherwise (describing, which has no review session yet, fixing, done, cancelled) the findings panel beside the task's terminal (`ReviewFindings`:
 the MEKO.md files' datapacks, each by name with the gotchas one tagged; every candidate by round and sweep, with its passes, verdict, confidence, kept or why dropped,
 credited gotchas and what the task did), whose **Terminal** button goes to the review's screen while
-it has one. While the review holds the PR, the task's Code gate shows it, with Cancel, or Retry and
-Open anyway, and **Local review waits on you** with **Open terminal** while it waits.
+it has one. While the review holds the PR, the stage bar and the task's chip show the task in Review & PR
+(`shownStep()` in `src/web/util.ts`), though it stays in Code, and its gate shows the review, with Cancel, or Retry and
+Open anyway, and **Local review waits on you** with **Open terminal** while it waits. While the task
+writes the PR description the gate says so, with Cancel and **Review now** (Open PR: past an
+interrupted turn it starts round 1 with the description as it is, past a lost ask it asks again);
+while the task fixes a round's findings it offers **Review now** too, which starts the next round
+past an interrupted fix turn. Both are off while the task's turn runs. The step the stage bar shows
+isn't a move target then, and neither is Code, the session's own stage.
 
 The Usage page and the project home count reviews in their **Code Reviews** section, and stack the
 review sessions' tokens on the Token usage chart ([Token usage](token-usage.md)); the usage report

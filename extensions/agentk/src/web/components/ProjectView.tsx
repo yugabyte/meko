@@ -19,12 +19,12 @@ import { approveDesign, changingDecisions } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { closingText, cx, dotState, designGate, isReviewChild, joinedPartSelected, reviewGatesPr, reviewOpens, reviewParent, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, reviewTarget, runToMergeShown, runToMergeTitle, sessionTabTitle, sidewaysWheel, totalTokens, updateShowing, usageTitle } from '../util';
+import { closingText, cx, dotState, designGate, isReviewChild, joinedPartSelected, reviewGatesPr, reviewOpens, reviewParent, shownStep, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, reviewTarget, runToMergeShown, runToMergeTitle, sessionTabTitle, sidewaysWheel, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
 import { Busy, Check, ConfirmButton, ContextRing, DatapackName, Elapsed, HarnessLogo, NotesIcon, ReviewSegment, RunToMergeCheck, RunToMergeMark, StageChip, StatusDot } from './common';
 import { ReviewFindings } from './ReviewFindings';
-import { countsText, reviewDoneText, reviewHolds, reviewRunning, reviewSegmentText, type CodeReviewSummary } from '../../shared/codereview';
+import { DESCRIBE_LOST, countsText, reviewDoneText, reviewHolds, reviewRunning, reviewSegmentText, type CodeReviewSummary } from '../../shared/codereview';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
 import type { MovePreset } from './MoveSessionDialog';
@@ -766,7 +766,14 @@ function reviewGate(
   onAct: (a: SessionAction) => Promise<void>,
   onOpen?: () => void,
   onTerminal?: () => void,
+  midTurn = false,
 ): ReactNode {
+  // Past an interrupted turn of the task's (its PR description, or a round's fixes), Open PR goes on.
+  const reviewNow = (title: string) => (
+    <button className="gate" disabled={blocked || midTurn} onClick={() => onAct('open-pr')} title={title}>
+      Review now
+    </button>
+  );
   const open = onOpen && (
     <button className="btn small" onClick={onOpen} title="Show the local review's findings">
       Show findings
@@ -798,6 +805,20 @@ function reviewGate(
       </span>
     );
   }
+  if (r.state === 'describing') {
+    return (
+      <span className="gate-group">
+        {/* Past an interrupted description turn or a lost ask (`detail`), the review waits for Review now. */}
+        <span className="gate-pill" title={r.detail ?? "AgentK writes the PR's title and description first, for the local review to check the change against"}>
+          {r.detail ? 'Local review waits to start' : <Busy label="Writing the PR description" />}
+        </span>
+        <button className="btn small" disabled={blocked} onClick={() => onAct('review-cancel')} title="Stop the review; then Retry or Open anyway">
+          Cancel
+        </button>
+        {reviewNow(r.detail === DESCRIBE_LOST ? 'Ask for the PR description again' : 'Start the review with the PR description as it is now')}
+      </span>
+    );
+  }
   if (r.state === 'fixing') {
     return (
       <span className="gate-group">
@@ -805,6 +826,7 @@ function reviewGate(
           <Busy label={`Fixing round ${r.round}'s findings`} />
         </span>
         {open}
+        {reviewNow(`Start round ${r.round + 1} with the fixes as they are now`)}
       </span>
     );
   }
@@ -913,11 +935,14 @@ function StageBar({
   }
   const kind = kindOf(session.kind);
   const stages: Stage[] = KIND_STAGES[kind];
-  const idx = session.stage === 'done' ? stages.length : stages.indexOf(stepOf(session.stage));
+  // A task whose local review holds its Open PR shows in Review & PR, while it stays in Code.
+  const step = shownStep(session);
+  const idx = session.stage === 'done' ? stages.length : stages.indexOf(step);
   // A task's steps are numbered from 0 (Explore), so Design is 1 and Merge & Close 4.
   const first = kind === 'task' ? 0 : 1;
-  // Other stages the session can be moved to open the move dialog.
-  const targets: Stage[] = moveBlockedIn(session.stage) ? [] : moveTargets(kind);
+  // Other stages the session can be moved to open the move dialog: not its own stage (a move there
+  // changes nothing), which differs from the step it shows while a local review holds its Open PR.
+  const targets: Stage[] = moveBlockedIn(session.stage) ? [] : moveTargets(kind).filter((t) => t !== stepOf(session.stage));
   const midTurn = session.status === 'working' || session.status === 'starting';
   const blocked = session.busy || acting;
   // Why the Design or Code gate is closed, if it is.
@@ -974,7 +999,7 @@ function StageBar({
     }
     case 'code': {
       if (reviewGatesPr(session) && session.codeReview) {
-        gate = reviewGate(session.codeReview, blocked, onAct, onOpenLocalReview, onOpenReviewTerminal);
+        gate = reviewGate(session.codeReview, blocked, onAct, onOpenLocalReview, onOpenReviewTerminal, midTurn);
         reason = reviewHolds(session.codeReview) ? session.codeReview.detail : null;
         break;
       }
@@ -1129,7 +1154,7 @@ function StageBar({
           {/* The phone layout shows only the current stage's name, here. */}
           <span className="stg-now">
             <b>
-              {STAGE_LABELS[session.stage]}
+              {STAGE_LABELS[step]}
               <RunToMergeMark session={session} size={10} />
             </b>
             {session.stage !== 'done' && stages.length > 1 && idx + first > 0 && (
