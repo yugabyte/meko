@@ -33,8 +33,8 @@ var (
 	LoginPathTTL     = 5 * time.Minute
 )
 
-// Log, when set, hears of a login shell that gave no PATH, which would otherwise leave an agent
-// missing from the list with no word why.
+// Log, when set, hears of a login shell that gave no PATH: Find keeps the one it gave last, and with
+// none the agents only on it are missing from the list, which would otherwise say nothing of why.
 var Log *slog.Logger
 
 func defaultShell() string {
@@ -49,14 +49,15 @@ func defaultShell() string {
 
 // loginPathCache is the login shell's PATH last read: Find runs from the server's routes at once.
 // dirs is the last read that gave a PATH, which a failed read keeps. at is when the last read ended,
-// either way. reading is closed when the read under way ends, nil with none. waitUntil is when the
-// first read stops being waited for.
+// either way. reading is closed when the read under way ends, nil with none, and stop kills its
+// shell. waitUntil is when the first read stops being waited for.
 var loginPathCache struct {
 	sync.Mutex
 	shell     string
 	dirs      []string
 	at        time.Time
 	reading   chan struct{}
+	stop      context.CancelFunc
 	waitUntil time.Time
 }
 
@@ -73,15 +74,17 @@ func loginPath() []string {
 		return nil
 	}
 	if c.shell != shell {
-		c.shell, c.dirs, c.at, c.reading = shell, nil, time.Time{}, nil
+		c.shell, c.dirs, c.at, c.reading, c.stop = shell, nil, time.Time{}, nil, nil
 	}
 	first := c.at.IsZero()
 	if c.reading == nil && (first || time.Since(c.at) >= LoginPathTTL) {
+		var ctx context.Context
+		ctx, c.stop = context.WithCancel(context.Background())
 		c.reading = make(chan struct{})
 		if first {
 			c.waitUntil = time.Now().Add(LoginPathWait)
 		}
-		go readInBackground(shell, LoginPathTimeout, Log, c.reading)
+		go readInBackground(ctx, c.stop, shell, LoginPathTimeout, Log, c.reading)
 	}
 	reading, wait := c.reading, time.Until(c.waitUntil)
 	c.Unlock()
@@ -100,16 +103,19 @@ func loginPath() []string {
 
 // readInBackground reads the login shell's PATH into loginPathCache, keeping the one it has when the
 // shell gives none, and closes done.
-func readInBackground(shell string, timeout time.Duration, log *slog.Logger, done chan struct{}) {
+func readInBackground(ctx context.Context, stop context.CancelFunc, shell string, timeout time.Duration,
+	log *slog.Logger, done chan struct{}) {
 	defer close(done)
-	dirs, err := readLoginPath(shell, timeout)
+	defer stop()
+	dirs, err := readLoginPath(ctx, shell, timeout)
+	stopped := errors.Is(err, context.Canceled)
 	c := &loginPathCache
 	c.Lock()
 	if c.reading == done {
-		c.reading = nil
+		c.reading, c.stop = nil, nil
 	}
 	kept := false
-	if c.shell == shell {
+	if c.shell == shell && !stopped {
 		c.at = time.Now()
 		if err == nil {
 			c.dirs = dirs
@@ -118,12 +124,27 @@ func readInBackground(shell string, timeout time.Duration, log *slog.Logger, don
 	}
 	c.Unlock()
 	switch {
-	case err == nil || log == nil:
+	case err == nil || stopped || log == nil:
 	case kept:
 		log.Warn("the login shell gave no PATH: keeping the one it gave last", "shell", shell, "error", err.Error())
 	default:
 		log.Warn("the login shell gave no PATH: agents only on it aren't found", "shell", shell, "error", err.Error())
 	}
+}
+
+// StopLoginShell kills the login shell a read has running, its children too, and waits for the read
+// to end, for serve's stop: the shell runs in a session of its own, which a service manager that
+// kills only the job's process group (launchd) leaves running, and a hanging profile never ends.
+func StopLoginShell() {
+	c := &loginPathCache
+	c.Lock()
+	reading, stop := c.reading, c.stop
+	c.Unlock()
+	if reading == nil {
+		return
+	}
+	stop()
+	<-reading
 }
 
 // loginPathOf is the login shell's PATH as last read when cmd is in one of its folders, else nil:
@@ -151,9 +172,10 @@ const pathMark = "__meko_path__"
 // readLoginPath runs the shell to print its PATH between two pathMarks, which it may print and
 // then fail, or hang after (a profile's command): only a missing or unclosed pair gives none, and
 // the error says why. It runs in a session of its own, away from any terminal, so an interactive
-// shell can't take it over, and its whole group is killed at the timeout.
-func readLoginPath(shell string, timeout time.Duration) ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+// shell can't take it over, and its whole group is killed at the timeout, or when ctx ends.
+func readLoginPath(ctx context.Context, shell string, timeout time.Duration) ([]string, error) {
+	parent := ctx
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	name, args := shellArgs(shell, "printf '"+pathMark+"%s"+pathMark+"' \"$PATH\"")
 	c := exec.CommandContext(ctx, name, args...) //nolint:gosec // G204: the user's own shell
@@ -165,6 +187,8 @@ func readLoginPath(shell string, timeout time.Duration) ([]string, error) {
 	p, _, closed := strings.Cut(rest, pathMark)
 	switch {
 	case ok && closed:
+	case parent.Err() != nil:
+		return nil, parent.Err()
 	case ctx.Err() != nil:
 		return nil, fmt.Errorf("it took more than %s", timeout)
 	case err != nil:

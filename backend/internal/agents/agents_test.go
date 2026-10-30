@@ -454,6 +454,53 @@ func TestSlowAndFailingLoginShell(t *testing.T) {
 	}
 }
 
+// StopLoginShell, at serve's stop, kills a login shell still running, its children too, though
+// LoginPathTimeout is far off, and logs nothing of it.
+func TestStopLoginShell(t *testing.T) {
+	_, _ = fakeAgents(t, false, "codex")
+	StopLoginShell() // none running
+	dir := t.TempDir()
+	pids := filepath.Join(dir, "pids")
+	write(t, filepath.Join(dir, "bash"), "#!/bin/sh\nsleep 30 & echo $! > "+pids+"\nexec sleep 30\n")
+	//nolint:gosec // G302: a test script
+	if err := os.Chmod(filepath.Join(dir, "bash"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var logged bytes.Buffer
+	oldShell, oldWait, oldTimeout, oldLog := LoginShell, LoginPathWait, LoginPathTimeout, Log
+	t.Cleanup(func() { LoginShell, LoginPathWait, LoginPathTimeout, Log = oldShell, oldWait, oldTimeout, oldLog })
+	LoginShell, LoginPathWait, LoginPathTimeout = filepath.Join(dir, "bash"), 100*time.Millisecond, time.Minute
+	Log = slog.New(slog.NewTextHandler(&logged, nil))
+	if p, ok := Catalog[0].Find(); ok {
+		t.Fatalf("found %q", p)
+	}
+	var pid int
+	for end := time.Now().Add(5 * time.Second); pid == 0; time.Sleep(10 * time.Millisecond) {
+		b, _ := os.ReadFile(pids) //nolint:gosec // G304: the test's own file
+		pid, _ = strconv.Atoi(strings.TrimSpace(string(b)))
+		if pid == 0 && time.Now().After(end) {
+			t.Fatal("the shell didn't start")
+		}
+	}
+	start := time.Now()
+	StopLoginShell()
+	if time.Since(start) > 3*time.Second {
+		t.Errorf("stopping took %s", time.Since(start))
+	}
+	for end := time.Now().Add(5 * time.Second); syscall.Kill(pid, 0) == nil; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(end) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			t.Fatal("the shell's child is still running")
+		}
+	}
+	loginPathCache.Lock()
+	reading := loginPathCache.reading
+	loginPathCache.Unlock()
+	if reading != nil || logged.Len() != 0 {
+		t.Errorf("after the stop: a read under way %v, the log %q", reading != nil, logged.String())
+	}
+}
+
 func isCode(err error, code string) bool {
 	var e *Error
 	return errors.As(err, &e) && e.Code == code
