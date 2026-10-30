@@ -96,19 +96,36 @@ export function trackAppHeight(): () => void {
   };
 }
 
-/** Whether a box's scrollbars take no room (its offset and client heights match with `overflow: scroll`). */
-export function overlayScrollbars(probe: { offsetHeight: number; clientHeight: number }): boolean {
-  return probe.offsetHeight === probe.clientHeight;
-}
-
 /**
- * Marks the root element `overlay-scrollbars` when scrollbars are drawn over a box's content and take
+ * Marks the root element `overlay-scrollbars` while scrollbars are drawn over a box's content and take
  * no room (macOS's default, phones), so a box that scrolls sideways can leave room under its last row.
+ * macOS switches between overlay and classic scrollbars as a mouse comes and goes (Show scroll bars:
+ * Automatically) and tells the page nothing, so it probes again whenever the window takes focus, is
+ * shown again or resizes: a page stays open for days.
  */
-export function markOverlayScrollbars() {
-  const probe = document.createElement('div');
-  probe.style.cssText = 'position: absolute; top: -100px; width: 50px; height: 50px; overflow: scroll';
-  document.body.append(probe);
-  document.documentElement.classList.toggle('overlay-scrollbars', overlayScrollbars(probe));
-  probe.remove();
+export function markOverlayScrollbars(): () => void {
+  const root = document.documentElement;
+  let frame = 0;
+  const probe = () => {
+    frame = 0;
+    const box = document.createElement('div');
+    box.style.cssText = 'position: absolute; top: -100px; width: 50px; height: 50px; overflow: scroll';
+    document.body.append(box);
+    root.classList.toggle('overlay-scrollbars', box.offsetHeight === box.clientHeight);
+    box.remove();
+  };
+  const schedule = () => {
+    if (!frame && document.visibilityState === 'visible') frame = requestAnimationFrame(probe);
+  };
+  probe();
+  window.addEventListener('focus', schedule);
+  window.addEventListener('resize', schedule);
+  document.addEventListener('visibilitychange', schedule);
+  return () => {
+    if (frame) cancelAnimationFrame(frame);
+    window.removeEventListener('focus', schedule);
+    window.removeEventListener('resize', schedule);
+    document.removeEventListener('visibilitychange', schedule);
+    root.classList.remove('overlay-scrollbars');
+  };
 }

@@ -5,7 +5,9 @@ Part of the [AgentK design](../design.md).
 The left rail holds projects, each with its repo's folder name in small type under the project
 name and the most urgent session state shown on it. Drag a project to reorder the list; on a touch
 screen, use **Move up** / **Move down** in the project home's settings. The tabs above the terminal
-hold the project's sessions. With **List sessions in the projects pane** ticked in Settings › General
+hold the project's sessions; when there are more than fit, they scroll sideways with no scrollbar
+(one drawn over the tabs, as macOS and phones do, hid their names): swipe, Shift with the wheel, or the
+plain mouse wheel (`sidewaysWheel()`), and the selected tab is always scrolled into view. With **List sessions in the projects pane** ticked in Settings › General
 (off by default; kept in this browser, `ak-rail-sessions`), each project's open sessions are listed
 under it in the rail instead of the tabs, one row each with its status dot, its full name
 (wrapped, not cut off) and its stage (with a » after it while [Run to merge](lifecycle.md#run-to-merge)
@@ -137,7 +139,8 @@ The base is the branch's merge base with `origin/<base>` or, in a fork, `upstrea
 is closer to the branch (a fork's own `<base>` can lag the upstream one the branch was rebased onto);
 `origin` wins a tie, and the local `<base>` is used only when neither remote has one.
 Each file has a kind (A, M, D, R, U), its line counts, an *uncommitted* tag when it has uncommitted
-edits, and a collapsible diff. Single-file diffs are cut at 256 KB and the whole panel at 4 MB;
+edits, and a collapsible diff, which scrolls sideways in its own box (where scrollbars are drawn over
+content, macOS's and phones', it leaves room under its last row: `markOverlayScrollbars()`). Single-file diffs are cut at 256 KB and the whole panel at 4 MB;
 past that only line counts are shown.
 The panel lists at most 1,000 files (`MAX_FILES`, `capFiles()` in `changes.ts`): the files with
 review comments, so no comment loses its file, then the first by path. The header's file count and
@@ -445,7 +448,7 @@ At 760 px wide or less the app switches to a phone layout. The rail becomes a dr
 app bar (the Back gesture closes it, and its search bar at the top opens the palette, across the
 top of the screen, in place of `⌘K`), and, with the setting on, lists the sessions under their projects as on a desktop.
 With the setting off, the app bar holds the project's sessions as tabs, between the drawer button and ⋯, so a phone
-can switch sessions without opening the drawer (each tab shows its status and stage); with it on, the drawer
+can switch sessions without opening the drawer (each tab shows its status and stage; a swipe scrolls them, with no scrollbar); with it on, the drawer
 lists them instead and the app bar names the session and its project, with the session's status dot, and puts
 a dot on the drawer button while another session in the project needs you. The session header,
 the stage bar with its gate button (Design Review, Open PR, Merge & Close) and the footer details

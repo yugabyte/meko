@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProjectWithSessions, Session } from '../../src/shared/types';
-import { joinedPartSelected, lastOpenSession, liveWithReviews, openSessions, rememberOpenSession, reviewParent, sessionToOpen } from '../../src/web/util.js';
+import { joinedPartSelected, lastOpenSession, liveWithReviews, openSessions, rememberOpenSession, reviewParent, sessionToOpen, sidewaysWheel } from '../../src/web/util.js';
 
 const session = (id: string, createdAt: number, lastEventAt?: number, position = 0) => ({ id, createdAt, lastEventAt, position }) as Session;
 
@@ -66,6 +66,17 @@ describe('joinedPartSelected', () => {
   it("selects the review's part while the task on screen has its findings open", () => {
     expect(joinedPartSelected(task, 'task', true)).toBe('review');
     expect(joinedPartSelected({ id: 'plain', codeReview: null } as Session, 'plain', true)).toBe('task');
+  });
+});
+
+describe('sidewaysWheel', () => {
+  it.each([
+    [{ deltaX: 0, deltaY: 100, deltaMode: 0 }, 100],
+    [{ deltaX: 0, deltaY: 3, deltaMode: 1 }, 120],
+    [{ deltaX: 0, deltaY: -1, deltaMode: 2 }, -600],
+    [{ deltaX: 50, deltaY: 10, deltaMode: 0 }, 0],
+  ])('scrolls the tabs sideways by a wheel turn %o: %d px', (e, px) => {
+    expect(sidewaysWheel(e, 600)).toBe(px);
   });
 });
 
