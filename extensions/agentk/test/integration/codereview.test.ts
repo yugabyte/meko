@@ -85,6 +85,9 @@ describe('local code review before the PR (real session host + git, fake claude 
     expect(detail.findings.map((f) => [f.file, f.line, f.kept, f.dropped])).toEqual(
       expect.arrayContaining([['src/a.ts', 2, true, null], ['src/a.ts', 4, true, null], ['README.md', 1, false, 'file is not changed by this change']]),
     );
+    // Its datapacks are names, the gotchas one marked: what each holds is for the prompt only.
+    run(env.core.db, 'UPDATE code_reviews SET datapacks_json = ? WHERE task_id = ?', JSON.stringify([{ name: 'adlc/repo/demo-repo/gotchas', id: 'g-id', about: 'Gotchas.', gotchas: true }]), s.id);
+    expect(env.core.reviews.detail(s.id).datapacks).toEqual([{ name: 'adlc/repo/demo-repo/gotchas', id: 'g-id', gotchas: true }]);
     // Once done, the review session stops (its findings stay with the review); the task's worktree stays.
     await waitFor(() => env.core.sessions.row(childId), (x) => x.desired === 'archived', 10000, 'the review session to stop');
     expect(env.core.sessions.get(s.id).codeReview!.sessionId).toBeNull();

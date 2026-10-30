@@ -207,7 +207,7 @@ export class CodeReviews {
     return {
       review: this.summarize(r),
       settings: { strategy: r.strategy as ReviewStrategyId, rounds: r.rounds, depth: r.depth },
-      datapacks: json<ReviewDatapack[]>(r.datapacks_json, []).map((d) => ({ name: d.name, id: d.id, about: d.about, gotchas: d.gotchas })),
+      datapacks: json<ReviewDatapack[]>(r.datapacks_json, []).map((d) => ({ name: d.name, id: d.id, gotchas: d.gotchas })),
       notes: json<{ round: number; text: string }[]>(r.notes_json, []),
       findings,
     };
