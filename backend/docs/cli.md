@@ -20,6 +20,7 @@ agents (MCP and the REST API, on 7778), and what to run next.
 | `meko status [--verbose] [--json]` | Whether it's running, a row each for the memory engine, service, updates, Meko Cloud link and extensions, and the links; `--verbose` adds everything (models, certificate, auth, usage stats, children), `--json` prints the server's status reply |
 | `meko ui [path] [--no-open]` | Open the web UI in the browser (`meko ui /ext/agentk/` opens AgentK's); `--no-open` only prints its link |
 | `meko logs [-f] [-n N]` | The server's and the memory engine's logs, merged by time; `-f` follows them; `--server`, `--memory-engine` or `--service` shows one, `--json` the raw lines |
+| `meko answers use claude [--model haiku]` | Have your own Claude Code, run headless with no tools, write an answer from each of the web UI's Search results; `off` turns it off, `status` shows it (`--json` for raw JSON). It makes one test call first. See [memory-extraction.md](memory-extraction.md#search-answers) |
 | `meko memory-extractor use claude [--every 5m] [--model haiku]` | Extract memories from conversation turns with your own Claude Code, run headless with no tools, every 5 minutes; `off` turns it off, `status` shows how it's doing, `run` extracts now, and `datapack <name> [--profile general\|coding] [--instructions "..."] [--off\|--on]` sets a datapack's own; `--json` prints raw JSON. See [memory-extraction.md](memory-extraction.md) |
 | `meko update [--check]` | Install Meko's newest release now (under the service it updates itself), then every extension's; `--check` only looks |
 | `meko version` (or `--version`) | Meko's version, and Go's, SQLite's and sqlite-vec's |
@@ -65,4 +66,4 @@ it's deleted, they need `--datapack`. While Meko Cloud is linked (`meko cloud_li
 its datapacks too: a name or id this Meko doesn't have is looked up there, and `cloud:` or `local:`
 before it picks the side (`--datapack cloud:team-notes`; the same for `delete_datapack` and the
 prompt's `use`). `export` works only on this Meko's. `--json` prints the raw reply: `meko-cli`'s commands other than
-`export`, and `meko status`, `token`, `logs`, `version` and `memory-extractor`.
+`export`, and `meko status`, `token`, `logs`, `version`, `memory-extractor` and `answers`.

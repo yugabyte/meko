@@ -1,5 +1,5 @@
-// A page's List or Graph view, remembered in this browser per page, so a reload or a scope change
-// keeps the one last picked.
+// A choice remembered in this browser, such as a page's List or Graph view, so a reload or a scope
+// change keeps the one last picked.
 
 import { useState } from "react";
 
@@ -10,21 +10,25 @@ export const VIEWS: readonly { id: View; label: string }[] = [
   { id: "graph", label: "Graph" },
 ];
 
-export function useSavedView(key: string): [View, (v: View) => void] {
-  const [view, setView] = useState<View>(() => {
+// One of ids, remembered in this browser under key; fallback until one is picked.
+export function useSaved<T extends string>(key: string, ids: readonly T[], fallback: T): [T, (v: T) => void] {
+  const [value, setValue] = useState<T>(() => {
     try {
-      return localStorage.getItem(key) === "graph" ? "graph" : "list";
+      const v = localStorage.getItem(key) as T | null;
+      return v !== null && ids.includes(v) ? v : fallback;
     } catch {
-      return "list";
+      return fallback;
     }
   });
-  const save = (v: View) => {
-    setView(v);
+  const save = (v: T) => {
+    setValue(v);
     try {
       localStorage.setItem(key, v);
     } catch {
       // Not remembered: the page still works.
     }
   };
-  return [view, save];
+  return [value, save];
 }
+
+export const useSavedView = (key: string) => useSaved<View>(key, ["list", "graph"], "list");

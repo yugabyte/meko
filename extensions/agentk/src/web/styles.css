@@ -18,6 +18,8 @@
   --chart-bar: #2b55c0;
   /* Kiro's credits (its logo's violet), on the chart and its plan bar in the rail. */
   --chart-kiro: #7b3bf0;
+  /* Code reviews' share of a day's tokens, stacked on the chart's bar. */
+  --chart-review: #12857a;
   /* Meko's mark on a design decision that rests on Meko, and its references. */
   --meko: #6b3fb8;
   --meko-soft: #efe8fa;
@@ -68,6 +70,7 @@
     --accent-soft: #1e2a4a;
     --chart-bar: #6f8ff0;
     --chart-kiro: #a77bff;
+    --chart-review: #4fc1b3;
     --meko: #c3a5f5;
     --meko-soft: #2c2140;
     --meko-logo: #fff;
@@ -101,6 +104,7 @@
   --accent-soft: #1e2a4a;
   --chart-bar: #6f8ff0;
   --chart-kiro: #a77bff;
+  --chart-review: #4fc1b3;
   --meko: #c3a5f5;
   --meko-soft: #2c2140;
   --meko-logo: #fff;
@@ -1435,6 +1439,9 @@ textarea.input {
   font-size: 12px;
   color: var(--muted);
 }
+/* The session tabs scroll sideways with no scrollbar: an overlay one (macOS, phones) is drawn over the
+   tabs' names. A mouse wheel scrolls them too (sidewaysWheel in util.ts), and the selected tab is
+   scrolled into view. */
 .tabs {
   display: flex;
   gap: 2px;
@@ -1442,7 +1449,11 @@ textarea.input {
   border-bottom: 1px solid var(--rule);
   background: var(--sunk);
   overflow-x: auto;
+  scrollbar-width: none;
   flex: none;
+}
+.tabs::-webkit-scrollbar {
+  display: none;
 }
 .tab {
   display: flex;
@@ -1573,6 +1584,34 @@ textarea.input {
 .review-glass.meko .glass-m {
   display: block;
 }
+/* The review session waits on you in its terminal: the needs-you color, its lens knocking. */
+.review-glass.waiting {
+  color: var(--warn);
+}
+.review-glass.waiting .lens {
+  opacity: 1;
+  animation: lens-knock 3.2s steps(1, end) infinite;
+}
+/* A selected tab is the terminal's color: the waiting glass follows the terminal, not the app. */
+:root:not([data-term-theme='light']) .tab-review.sel .review-glass.waiting {
+  color: #e9a64a;
+}
+:root[data-term-theme='light'] .tab-review.sel .review-glass.waiting {
+  color: #b86e00;
+}
+@keyframes lens-knock {
+  0%,
+  10%,
+  20% {
+    opacity: 1;
+  }
+  5%,
+  15%,
+  25%,
+  100% {
+    opacity: 0.25;
+  }
+}
 @keyframes lens-pulse {
   0%,
   100% {
@@ -1588,6 +1627,10 @@ textarea.input {
   .review-glass.running .lens {
     animation: none;
     opacity: 0.6;
+  }
+  /* Still, a waiting lens stays filled, so it differs from a working one by more than its color. */
+  .review-glass.running.waiting .lens {
+    opacity: 1;
   }
 }
 /* The rail's row for a task with a local review: one row, the task's part growing (its name
@@ -4059,6 +4102,12 @@ div[id^='dak-mermaid-'] .label {
   /* Comment cards size against the visible width, not the (often wider) table. */
   container-type: inline-size;
 }
+/* An overlay scrollbar (macOS, phones; markOverlayScrollbars in useMedia.ts) is drawn over the box's
+   bottom edge: room for it under the last row, which it covered, only on a diff wider than its box
+   (data-sideways, watchSideways in useMedia.ts), the one that has a scrollbar. */
+.overlay-scrollbars .diff-wrap[data-sideways] {
+  padding-bottom: 14px;
+}
 .diff {
   border-collapse: collapse;
   width: 100%;
@@ -4488,10 +4537,16 @@ div[id^='dak-mermaid-'] .label {
   color: var(--ok);
 }
 /* Meko in the project home's usage panel, below the chart. */
-.usage-meko {
+.usage-meko,
+.usage-reviews {
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px solid var(--rule);
+}
+/* The Code Reviews section's label sits over its stats, as Meko's logo does over Meko's. */
+.review-usage > .label {
+  display: block;
+  margin-bottom: 8px;
 }
 /* The questions Meko couldn't answer, under the Meko stats: one line linking to What Meko doesn't know. */
 .meko-gaps {
@@ -4637,6 +4692,15 @@ div[id^='dak-mermaid-'] .label {
   background: var(--chart-bar);
   border-radius: 4px 4px 0 0;
   transition: opacity 0.1s;
+  /* The day's code review tokens stack at the bottom of the bar. */
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow: hidden;
+}
+.chart-bar-review {
+  flex: none;
+  background: var(--chart-review);
 }
 .chart-col.hover .chart-bar {
   opacity: 0.8;
@@ -4669,6 +4733,9 @@ div[id^='dak-mermaid-'] .label {
 }
 .chart-legend i.kiro {
   background: var(--chart-kiro);
+}
+.chart-legend i.review {
+  background: var(--chart-review);
 }
 .chart-x {
   grid-column: 2;

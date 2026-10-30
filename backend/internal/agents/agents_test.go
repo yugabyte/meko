@@ -1,9 +1,11 @@
 package agents
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -260,16 +262,16 @@ func loginShell(t *testing.T, name, path string) (runs string) {
 // refreshed waits for the login shell's PATH being read in the background.
 func refreshed(t *testing.T) {
 	t.Helper()
-	for end := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		loginPathCache.Lock()
-		busy := loginPathCache.refreshing
-		loginPathCache.Unlock()
-		if !busy {
-			return
-		}
-		if time.Now().After(end) {
-			t.Fatal("the login shell's PATH is still being read")
-		}
+	loginPathCache.Lock()
+	reading := loginPathCache.reading
+	loginPathCache.Unlock()
+	if reading == nil {
+		return
+	}
+	select {
+	case <-reading:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the login shell's PATH is still being read")
 	}
 }
 
@@ -352,9 +354,10 @@ func TestLoginShellOnlyForAService(t *testing.T) {
 // children too, at LoginPathTimeout.
 func TestLoginShellThatFails(t *testing.T) {
 	_, _ = fakeAgents(t, false, "codex")
-	old := LoginPathTimeout
-	LoginPathTimeout = 300 * time.Millisecond
-	t.Cleanup(func() { LoginPathTimeout = old })
+	old, oldLog := LoginPathTimeout, Log
+	var logged bytes.Buffer
+	LoginPathTimeout, Log = 300*time.Millisecond, slog.New(slog.NewTextHandler(&logged, nil))
+	t.Cleanup(func() { LoginPathTimeout, Log = old, oldLog })
 	pids := filepath.Join(t.TempDir(), "pids")
 	for _, script := range []string{"exit 1", "echo /usr/bin", "sleep 30 & echo $! > " + pids + "; exec sleep 30"} {
 		dir := t.TempDir()
@@ -372,6 +375,10 @@ func TestLoginShellThatFails(t *testing.T) {
 			t.Errorf("%q: found %q in %s", script, p, time.Since(start))
 		}
 	}
+	if l := logged.String(); strings.Count(l, "the login shell gave no PATH: agents only on it aren't found") != 3 ||
+		!strings.Contains(l, "it took more than 300ms") || !strings.Contains(l, "it printed none") {
+		t.Errorf("the log: %s", l)
+	}
 	pid, err := strconv.Atoi(strings.TrimSpace(read(t, pids)))
 	if err != nil {
 		t.Fatal(err)
@@ -381,6 +388,116 @@ func TestLoginShellThatFails(t *testing.T) {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 			t.Fatal("the hanging shell's child is still running")
 		}
+	}
+}
+
+// A login shell slower than LoginPathWait leaves the first list without the agents only on its PATH,
+// that list waiting LoginPathWait in all, however many agents it looks for there, and a list while
+// the shell still runs not waiting at all. The shell goes on in the background, and the list after
+// it ends has them. A read that fails later, by LoginPathTimeout or the shell's own error, keeps the
+// PATH the last one gave, and says so in Log.
+func TestSlowAndFailingLoginShell(t *testing.T) {
+	_, _ = fakeAgents(t, false, "codex")
+	nvm := filepath.Join(t.TempDir(), "nvm", "bin")
+	claude := filepath.Join(nvm, "claude")
+	write(t, claude, "#!/bin/sh\n")
+	dir := t.TempDir()
+	shell, slow, fail := filepath.Join(dir, "bash"), filepath.Join(dir, "slow"), filepath.Join(dir, "fail")
+	write(t, shell, "#!/bin/sh\n[ -e "+fail+" ] && exit 1\n[ -e "+slow+" ] && sleep 2\n"+
+		"printf '"+pathMark+"%s"+pathMark+"' "+nvm+"\n")
+	for _, p := range []string{claude, shell} {
+		//nolint:gosec // G302: a test script
+		if err := os.Chmod(p, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(t, slow, "")
+	var logged bytes.Buffer
+	oldShell, oldWait, oldTimeout, oldTTL, oldLog := LoginShell, LoginPathWait, LoginPathTimeout, LoginPathTTL, Log
+	t.Cleanup(func() {
+		refreshed(t)
+		LoginShell, LoginPathWait, LoginPathTimeout, LoginPathTTL, Log = oldShell, oldWait, oldTimeout, oldTTL, oldLog
+	})
+	LoginShell, LoginPathWait, LoginPathTimeout, LoginPathTTL = shell, 300*time.Millisecond, 10*time.Second, time.Hour
+	Log = slog.New(slog.NewTextHandler(&logged, nil))
+
+	// claude, kiro-cli and opencode are each looked for on the login shell's PATH.
+	for _, limit := range []time.Duration{600 * time.Millisecond, 150 * time.Millisecond} {
+		start := time.Now()
+		l, _ := manager(local).List()
+		if len(l.Agents) != 1 || l.Agents[0].Name != "codex" || time.Since(start) > limit {
+			t.Errorf("while the shell runs: %+v in %s, want codex in %s at most", l.Agents, time.Since(start), limit)
+		}
+	}
+	refreshed(t)
+	if l, _ := manager(local).List(); len(l.Agents) != 2 || l.Agents[0].Command != claude {
+		t.Errorf("once it's done: %+v", l.Agents)
+	}
+
+	LoginPathTimeout, LoginPathTTL = 200*time.Millisecond, 0
+	steps := []struct{ name, want string }{{"timed out", "it took more than 200ms"}, {"failed", "exit status 1"}}
+	for _, step := range steps {
+		if step.name == "failed" {
+			write(t, fail, "")
+		}
+		_, _ = Catalog[0].Find()
+		refreshed(t)
+		if p, ok := Catalog[0].Find(); !ok || p != claude {
+			t.Errorf("after a read that %s: %q, %v", step.name, p, ok)
+		}
+		refreshed(t)
+		if l := logged.String(); !strings.Contains(l, "the login shell gave no PATH: keeping the one it gave last") ||
+			!strings.Contains(l, step.want) {
+			t.Errorf("after a read that %s, the log: %s", step.name, l)
+		}
+		logged.Reset()
+	}
+}
+
+// StopLoginShell, at serve's stop, kills a login shell still running, its children too, though
+// LoginPathTimeout is far off, and logs nothing of it.
+func TestStopLoginShell(t *testing.T) {
+	_, _ = fakeAgents(t, false, "codex")
+	StopLoginShell() // none running
+	dir := t.TempDir()
+	pids := filepath.Join(dir, "pids")
+	write(t, filepath.Join(dir, "bash"), "#!/bin/sh\nsleep 30 & echo $! > "+pids+"\nexec sleep 30\n")
+	//nolint:gosec // G302: a test script
+	if err := os.Chmod(filepath.Join(dir, "bash"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var logged bytes.Buffer
+	oldShell, oldWait, oldTimeout, oldLog := LoginShell, LoginPathWait, LoginPathTimeout, Log
+	t.Cleanup(func() { LoginShell, LoginPathWait, LoginPathTimeout, Log = oldShell, oldWait, oldTimeout, oldLog })
+	LoginShell, LoginPathWait, LoginPathTimeout = filepath.Join(dir, "bash"), 100*time.Millisecond, time.Minute
+	Log = slog.New(slog.NewTextHandler(&logged, nil))
+	if p, ok := Catalog[0].Find(); ok {
+		t.Fatalf("found %q", p)
+	}
+	var pid int
+	for end := time.Now().Add(5 * time.Second); pid == 0; time.Sleep(10 * time.Millisecond) {
+		b, _ := os.ReadFile(pids) //nolint:gosec // G304: the test's own file
+		pid, _ = strconv.Atoi(strings.TrimSpace(string(b)))
+		if pid == 0 && time.Now().After(end) {
+			t.Fatal("the shell didn't start")
+		}
+	}
+	start := time.Now()
+	StopLoginShell()
+	if time.Since(start) > 3*time.Second {
+		t.Errorf("stopping took %s", time.Since(start))
+	}
+	for end := time.Now().Add(5 * time.Second); syscall.Kill(pid, 0) == nil; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(end) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			t.Fatal("the shell's child is still running")
+		}
+	}
+	loginPathCache.Lock()
+	reading := loginPathCache.reading
+	loginPathCache.Unlock()
+	if reading != nil || logged.Len() != 0 {
+		t.Errorf("after the stop: a read under way %v, the log %q", reading != nil, logged.String())
 	}
 }
 

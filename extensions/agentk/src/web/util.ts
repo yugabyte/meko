@@ -2,7 +2,7 @@ import { HARNESS_CAPS, harnessOf, type HarnessId } from '../shared/harnesses';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, LEARN_WARN_FILES, LEARN_WARN_PRS, STAGE_LABELS, type LearnScope } from '../shared/types';
 import { mekoDatapackPath } from '../shared/mekourls';
-import { isStrategySetting, type CodeReviewFinding, type ReviewOverrides } from '../shared/codereview';
+import { isStrategySetting, reviewHolds, type CodeReviewFinding, type ReviewOverrides } from '../shared/codereview';
 import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoStatus, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
 
 /**
@@ -30,7 +30,8 @@ const URGENCY: Record<DotState, number> = {
 
 /**
  * A code-review session: a task's local review (`Session.parentId`). It never shows as a tab, a
- * rail row or a list entry of its own: it's the magnifier joined to its task's tab.
+ * rail row or a list entry of its own: it's the magnifier joined to its task's tab, which opens its
+ * screen while it runs (`reviewOpens`).
  */
 export function isReviewChild(s: Pick<Session, 'kind'>): boolean {
   return s.kind === 'code-review';
@@ -48,7 +49,7 @@ export function liveWithReviews(p: ProjectWithSessions): Session[] {
 
 /**
  * Which part of a task's joined tab (or rail row) is on screen: the task's, its review's (the task
- * with its findings open, or its code-review session opened by its URL), or neither.
+ * with its findings open, or its code-review session on screen), or neither.
  */
 export function joinedPartSelected(task: Pick<Session, 'id' | 'codeReview'>, currentId: string | null | undefined, findingsOpen = false): 'task' | 'review' | null {
   if (!currentId) return null;
@@ -56,9 +57,30 @@ export function joinedPartSelected(task: Pick<Session, 'id' | 'codeReview'>, cur
   return task.codeReview?.sessionId === currentId ? 'review' : null;
 }
 
+/**
+ * What opening a task's review shows (its magnifier in the tab or the rail, its row in the ⋯ sheet):
+ * the review's own screen, its terminal with its findings beside it, while its session runs and
+ * isn't idle waiting for the task's fixes; else its findings beside the task's terminal (a done
+ * review's session is gone).
+ */
+export function reviewOpens(task: Pick<Session, 'codeReview'>): 'session' | 'findings' {
+  const r = task.codeReview;
+  return r?.sessionId && r.state !== 'fixing' ? 'session' : 'findings';
+}
+
 /** The task whose code-review session this is, among `sessions`; undefined for any other session. */
 export function reviewParent(sessions: Session[], s: Pick<Session, 'kind' | 'parentId'>): Session | undefined {
   return isReviewChild(s) && s.parentId ? sessions.find((x) => x.id === s.parentId) : undefined;
+}
+
+/**
+ * How far, in pixels, a wheel turn over the session tabs scrolls them sideways: the strip has no
+ * scrollbar, and a mouse wheel only turns up and down. 0 for a sideways turn (a trackpad's swipe,
+ * Shift with the wheel), which the browser already scrolls by. `deltaMode` 1 is lines, 2 pages.
+ */
+export function sidewaysWheel(e: { deltaX: number; deltaY: number; deltaMode: number }, pageWidth: number): number {
+  if (Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return 0;
+  return e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? pageWidth : 1);
 }
 
 /**
@@ -161,8 +183,13 @@ export function lastOpenSession(projectId: string): string | undefined {
   return readLastOpen()[projectId];
 }
 
-/** Remembers the session open in a project, so switching back to the project reopens it. */
-export function rememberOpenSession(projectId: string, sessionId: string) {
+/**
+ * Remembers the session open in a project, so switching back to the project reopens it. A task's
+ * review session is remembered as its task: it has no tab to come back to, and it goes once the
+ * review is done.
+ */
+export function rememberOpenSession(projectId: string, session: Pick<Session, 'id' | 'kind' | 'parentId'>) {
+  const sessionId = isReviewChild(session) && session.parentId ? session.parentId : session.id;
   const all = readLastOpen();
   if (all[projectId] === sessionId) return;
   all[projectId] = sessionId;
@@ -708,10 +735,12 @@ export function runsToMerge(s: Session): boolean {
 
 /**
  * The task's local review holds its Open PR: a review runs (or waits for the task's fixes between
- * rounds) before the PR prompt goes, or failed or was cancelled and waits for Retry or Open anyway.
+ * rounds) before the PR prompt goes, or failed or was cancelled and waits for Retry or Open anyway
+ * (not one cancelled because the task left Code: the next Open PR starts a new review).
  */
 export function reviewGatesPr(s: Pick<Session, 'stage' | 'codeReview'>): boolean {
-  return s.stage === 'code' && !!s.codeReview && s.codeReview.state !== 'done';
+  const r = s.codeReview;
+  return s.stage === 'code' && !!r && r.state !== 'done' && (r.state !== 'cancelled' || reviewHolds(r));
 }
 
 /** A session's stage in its chip: `Review` while its local review holds the Open PR, else the stage. */

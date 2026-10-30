@@ -64,7 +64,7 @@ describe('review settings', () => {
 describe("the review's part of a task's tab", () => {
   const r = (over: Partial<CodeReviewSummary>): CodeReviewSummary => ({
     id: 'r', sessionId: 's', strategy: 'sagittarius-3.0', state: 'sweeping', round: 1, rounds: 1, sweep: 1, depth: 1,
-    passesDone: 2, passes: 5, scoresDone: 3, candidates: 9, counts: noCounts(), addressed: false, mekoCall: false, detail: null, ...over,
+    passesDone: 2, passes: 5, scoresDone: 3, candidates: 9, counts: noCounts(), addressed: false, mekoCall: false, waiting: false, detail: null, ...over,
   });
 
   // Steps: each pass, then scoring as one, so Sagittarius 3.0 has 6 and Sirius 1.0 (no scorers) 1.
@@ -87,12 +87,23 @@ describe("the review's part of a task's tab", () => {
     [r({}), 'Local review: Sagittarius 3.0, step 3 of 6, pass 3 of 5'],
     [r({ state: 'scoring' }), 'Local review: Sagittarius 3.0, step 6 of 6, scoring 4 of 9'],
     [r({ state: 'done', counts: counts(1, 0, 0), addressed: true }), 'Local review: Sagittarius 3.0, LGTM, 1 blocker addressed'],
+    [r({ waiting: true }), 'Local review: Sagittarius 3.0, step 3 of 6, pass 3 of 5, waiting on you in its terminal'],
   ])('spells %j out as %s', (summary, label) => {
     expect(reviewSegmentLabel(summary)).toBe(label);
   });
 
   const segment = (state: CodeReviewState, className = 'tab-review', selected = false) =>
-    renderToStaticMarkup(createElement(ReviewSegment, { review: r({ state, mekoCall: state === 'sweeping' }), selected, className, onOpen: () => {} }));
+    renderToStaticMarkup(createElement(ReviewSegment, { review: r({ state, mekoCall: state === 'sweeping', waiting: state === 'scoring' }), selected, className, onOpen: () => {} }));
+
+  it.each<[Partial<CodeReviewSummary>, string]>([
+    [{ waiting: true }, 'review-glass running waiting'],
+    [{ waiting: true, mekoCall: true }, 'review-glass running waiting'],
+    [{ mekoCall: true }, 'review-glass running meko'],
+    [{ state: 'failed', waiting: true }, 'review-glass stopped'],
+  ])('draws the magnifier of %j as %s', (over, cls) => {
+    const html = renderToStaticMarkup(createElement(ReviewSegment, { review: r(over), selected: false, onOpen: () => {} }));
+    expect(html).toContain(`class="${cls}"`);
+  });
 
   it.each<[CodeReviewState, boolean]>([
     ['failed', true],

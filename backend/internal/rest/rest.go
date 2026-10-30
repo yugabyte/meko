@@ -106,6 +106,8 @@ func Register(g *echo.Group, o Options) {
 	g.GET("/settings/memory-extractor", a.extractorStatus)
 	g.PUT("/settings/memory-extractor", a.setExtractor)
 	g.POST("/settings/memory-extractor/run", a.runExtractor)
+	g.GET("/settings/answers", a.answersStatus)
+	g.PUT("/settings/answers", a.setAnswers)
 
 	g.GET("/datapacks", a.listDatapacks)
 	g.POST("/datapacks", a.createDatapack)
@@ -121,6 +123,7 @@ func Register(g *echo.Group, o Options) {
 	g.GET("/datapacks/:id/memory-map", a.memoryMap)
 	g.GET("/datapacks/:id/search-map", a.searchMap)
 	g.POST("/datapacks/:id/search", a.search)
+	g.POST("/datapacks/:id/answer", a.answer)
 	g.POST("/datapacks/:id/memories", a.addMemory)
 
 	g.GET("/datapacks/:id/artifacts", a.listArtifacts)

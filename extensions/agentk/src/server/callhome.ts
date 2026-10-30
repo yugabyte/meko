@@ -17,7 +17,7 @@ import {
   type AgentkCall, type CaptureRun, type LearnRun, type MekoStart,
 } from './mekousage.js';
 import { gapMarks, type GapMark } from './mekogaps.js';
-import { usageOverview } from './usage.js';
+import { countReviews, reviewRuns, reviewSpendByDay, usageOverview, type ReviewRun } from './usage.js';
 import { HARNESS_CAPS, HARNESS_IDS, harnessOf, type HarnessId } from '../shared/harnesses.js';
 import { priceFor } from '../shared/pricing.js';
 
@@ -56,8 +56,12 @@ export const NEW_INSTALL_FIRST_CHECK_MS: [number, number] = [60 * 1000, 5 * 60 *
 export const MAX_REPORT_BYTES = 64 * 1024;
 const SEND_TIMEOUT_MS = 15_000;
 const PROBE_TIMEOUT_MS = 10_000;
-/** tokensByModel keeps this many models; the rest are summed into `other`. */
-const MODEL_LIMIT = 20;
+/**
+ * tokensByModel holds at most this many entries: every model while that's all of them, else the
+ * MODEL_LIMIT - 1 most used and `other` for the rest. 15, not the schema's 20, so the worst-case
+ * 7-day report keeps room for each day's codeReview under MAX_REPORT_BYTES.
+ */
+const MODEL_LIMIT = 15;
 
 const KV_INSTALL_ID = 'call_home_install_id';
 const KV_FIRST_DAY = 'call_home_first_day';
@@ -149,7 +153,7 @@ function payload(json: string | null): Record<string, unknown> {
   }
 }
 
-/** Model ids that aren't plain ids become `other`; after that, the MODEL_LIMIT largest by messages are kept. */
+/** Model ids that aren't plain ids become `other`; past MODEL_LIMIT, the MODEL_LIMIT - 1 largest by messages are kept and the rest are `other`. */
 function capModels(rows: (CallHomeTokens & { model: string })[]): (CallHomeTokens & { model: string })[] {
   const by = new Map<string, CallHomeTokens & { model: string }>();
   for (const r of rows) {
@@ -407,6 +411,27 @@ export function buildReport(db: Db, o: ReportOptions): CallHomeReport {
     t.asks++;
     if (!a.ok) t.failed++;
     t.actions += n(a.actions);
+  }
+
+  // Local code reviews: each on the day it started, its sessions' tokens on the day they were spent.
+  // A day with neither leaves `codeReview` out.
+  const reviewDays = new Map<string, ReviewRun[]>();
+  for (const r of reviewRuns(db)) {
+    const d = dayOf(r.at);
+    if (d) reviewDays.set(d.day, [...(reviewDays.get(d.day) ?? []), r]);
+  }
+  const reviewSpend = reviewSpendByDay(db, start);
+  for (const d of days.values()) {
+    const runs = reviewDays.get(d.day);
+    const spend = reviewSpend.get(d.day);
+    if (!runs && !spend) continue;
+    const u = spend?.usage;
+    d.codeReview = {
+      ...countReviews(runs ?? []),
+      tokens: { input: n(u?.input), output: n(u?.output), cacheRead: n(u?.cacheRead), cacheWrite: n(u?.cacheWrite), messages: n(u?.messages) },
+      usdCents: Math.round(n(spend?.cost.usd) * 100),
+      ...(u?.credits ? { credits: Math.round(u.credits * 1000) / 1000 } : {}),
+    };
   }
 
   const overview = usageOverview(db, 1, now, calls);

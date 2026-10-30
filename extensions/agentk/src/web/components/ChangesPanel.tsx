@@ -6,7 +6,7 @@ import {
 } from '../../shared/types';
 import { ApiError, api, errorMessage } from '../api';
 import { anchorComment, defaultOpen, DESKTOP_BUDGET, keepUnchanged, PHONE_BUDGET, pickComment, reparse, sameItems, showsLine, sideLine, type DiffLine } from '../diff';
-import { matches, MOBILE_QUERY, useTouch } from '../hooks/useMedia';
+import { matches, MOBILE_QUERY, useTouch, watchSideways } from '../hooks/useMedia';
 import { useRangeDrag, type CommentPick } from '../hooks/useRangeDrag';
 import { agentName, cx, relativeTime } from '../util';
 import { Busy, ConfirmButton } from './common';
@@ -1170,7 +1170,7 @@ export function FileDiff({
     if (after) later.push(<Fragment key={i}>{after}</Fragment>);
   }
   return (
-    <div className="diff-wrap">
+    <div className="diff-wrap" ref={watchSideways}>
       {limit > 0 && (
         <table className={cx('diff', drag.range && 'dragging')} ref={drag.tableRef}>
           <tbody>

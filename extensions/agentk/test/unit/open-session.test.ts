@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProjectWithSessions, Session } from '../../src/shared/types';
-import { joinedPartSelected, lastOpenSession, liveWithReviews, openSessions, rememberOpenSession, reviewParent, sessionToOpen } from '../../src/web/util.js';
+import { joinedPartSelected, lastOpenSession, liveWithReviews, openSessions, rememberOpenSession, reviewOpens, reviewParent, sessionToOpen, sidewaysWheel } from '../../src/web/util.js';
 
 const session = (id: string, createdAt: number, lastEventAt?: number, position = 0) => ({ id, createdAt, lastEventAt, position }) as Session;
 
@@ -69,7 +69,41 @@ describe('joinedPartSelected', () => {
   });
 });
 
+describe('reviewOpens', () => {
+  const task = (state: string, sessionId: string | null = 'rv') => ({ codeReview: { state, sessionId } }) as Session;
+  // The review's terminal while it runs (a failed one keeps its session for Retry); its findings once
+  // its session is gone, or while it sits idle waiting for the task's fixes.
+  it.each([
+    ['preparing', 'rv', 'session'],
+    ['sweeping', 'rv', 'session'],
+    ['scoring', 'rv', 'session'],
+    ['failed', 'rv', 'session'],
+    ['fixing', 'rv', 'findings'],
+    ['done', null, 'findings'],
+    ['cancelled', null, 'findings'],
+    ['sweeping', null, 'findings'],
+  ] as const)('opens a review %s with session %s on its %s', (state, sessionId, opens) => {
+    expect(reviewOpens(task(state, sessionId))).toBe(opens);
+  });
+
+  it('opens the findings of a task without a review', () => {
+    expect(reviewOpens({ codeReview: null } as Session)).toBe('findings');
+  });
+});
+
+describe('sidewaysWheel', () => {
+  it.each([
+    [{ deltaX: 0, deltaY: 100, deltaMode: 0 }, 100],
+    [{ deltaX: 0, deltaY: 3, deltaMode: 1 }, 120],
+    [{ deltaX: 0, deltaY: -1, deltaMode: 2 }, -600],
+    [{ deltaX: 50, deltaY: 10, deltaMode: 0 }, 0],
+  ])('scrolls the tabs sideways by a wheel turn %o: %d px', (e, px) => {
+    expect(sidewaysWheel(e, 600)).toBe(px);
+  });
+});
+
 describe('rememberOpenSession', () => {
+  const open = (id: string) => ({ id, parentId: null }) as Session;
   beforeEach(() => {
     const items = new Map<string, string>();
     vi.stubGlobal('localStorage', {
@@ -82,17 +116,23 @@ describe('rememberOpenSession', () => {
 
   it('keeps the open session per project', () => {
     expect(lastOpenSession('a')).toBeUndefined();
-    rememberOpenSession('a', 's1');
-    rememberOpenSession('b', 's2');
-    rememberOpenSession('a', 's3');
+    rememberOpenSession('a', open('s1'));
+    rememberOpenSession('b', open('s2'));
+    rememberOpenSession('a', open('s3'));
     expect(lastOpenSession('a')).toBe('s3');
     expect(lastOpenSession('b')).toBe('s2');
+  });
+
+  // A review's session has no tab, and it's archived once the review is done: coming back lands on its task.
+  it("keeps a task's review session as its task", () => {
+    rememberOpenSession('a', { id: 'task--review-1', kind: 'code-review', parentId: 'task' } as Session);
+    expect(lastOpenSession('a')).toBe('task');
   });
 
   it('ignores bad stored values', () => {
     localStorage.setItem('ak-last-session', 'not json');
     expect(lastOpenSession('a')).toBeUndefined();
-    rememberOpenSession('a', 's1');
+    rememberOpenSession('a', open('s1'));
     expect(lastOpenSession('a')).toBe('s1');
   });
 
@@ -105,7 +145,7 @@ describe('rememberOpenSession', () => {
         throw new Error('blocked');
       },
     });
-    expect(() => rememberOpenSession('a', 's1')).not.toThrow();
+    expect(() => rememberOpenSession('a', open('s1'))).not.toThrow();
     expect(lastOpenSession('a')).toBeUndefined();
   });
 });
