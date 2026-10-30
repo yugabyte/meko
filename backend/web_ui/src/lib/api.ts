@@ -195,6 +195,11 @@ export const api = {
     ),
   memoryExtractor: () => request<ExtractorStatus>("GET", "/settings/memory-extractor"),
   answers: () => request<AnswerStatus>("GET", "/settings/answers"),
+  // Turn memory extraction or Search's answers on through harness (the server finds its command), or
+  // off with "". The owner only; turning one on makes one test call first.
+  setMemoryExtractor: (harness: string) =>
+    request<ExtractorStatus>("PUT", "/settings/memory-extractor", { harness }),
+  setAnswers: (harness: string) => request<AnswerStatus>("PUT", "/settings/answers", { harness }),
   // An answer to query written from a search's passages, through the user's own Claude Code.
   answer: (id: string, query: string, passages: Passage[]) =>
     request<SearchAnswer>("POST", `/datapacks/${id}/answer`, { query, passages }),

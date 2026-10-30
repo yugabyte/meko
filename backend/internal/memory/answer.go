@@ -131,10 +131,8 @@ func (s *Service) SetAnswers(ctx context.Context, set AnswerSettings) error {
 	if _, ok := harnessPrograms[set.Harness]; !ok {
 		return fmt.Errorf("%w: harness must be claude (codex and cursor come later)", ErrBadRequest)
 	}
-	if s.testAnswerer == nil {
-		if err := checkHarnessCommand(set.Harness, set.Command); err != nil {
-			return err
-		}
+	if err := checkHarnessCommand(set.Harness, set.Command); err != nil {
+		return err
 	}
 	if set.Model == "" {
 		set.Model = defaultClaudeModel
