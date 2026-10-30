@@ -41,6 +41,16 @@ says what failed and never what the harness wrote, which can quote the turns: th
 | **Setting it up is the CLI's (admin token)** | It points the server at a program to run: `PUT /settings/memory-extractor` takes the absolute path `meko memory-extractor use` finds on the user's PATH (the login service's own may not have it), checked to be the harness's program, and refuses the client token and the browser. |
 | **An extracted memory names its turn in its metadata** | The conversation's thread and Origin place it on that turn; other memories are still placed by time ([api.md](api.md#which-memories-a-turn-produced)). |
 
+## Search answers
+
+The web UI's Search can write an answer from its results through the same CLI, set up on its own:
+`meko answers use claude [--model haiku]`, `off` and `status`. Search sends the question and up to 10
+of its results, taken in turn from each source, to `POST /datapacks/:id/answer`; Claude Code runs as
+extraction runs it (no tools, MCP servers or saved session, in an empty folder) with a prompt to
+answer from the numbered passages only, cite them as [n], and say so when they don't answer. Its
+reply is held to `{"answer", "cited"}` by a JSON schema, and citations of passages it wasn't given
+are dropped. Each search costs one call of the user's quota, which is why it's off until set up.
+
 ## Not built yet
 
 Codex (`codex exec`) and Cursor (`cursor-agent -p`) adapters; extracting turns stored before the

@@ -62,6 +62,8 @@ type Options struct {
 	Cloud *cloudlink.Service
 	// ExtractorHarness, if set, answers the memory extractor's calls instead of a real CLI.
 	ExtractorHarness memory.Harness
+	// Answerer, if set, writes search answers instead of a real CLI.
+	Answerer memory.Answerer
 }
 
 // backendDir is this module's root, found from this file.
@@ -143,7 +145,8 @@ func Start(t *testing.T, o Options) *Env {
 	port := addr.Port
 	url := fmt.Sprintf("http://127.0.0.1:%d", port)
 	svc := memory.New(st, memoryengine.NewClient(l.MemoryEngineSock, internal), memory.Options{UserID: userID, Log: log,
-		FilesDir: l.KnowledgeFiles, BaseURL: url, ExtractorHarness: o.ExtractorHarness})
+		FilesDir: l.KnowledgeFiles, BaseURL: url, ExtractorHarness: o.ExtractorHarness,
+		Answerer: o.Answerer})
 	// The sweep that embeds turns and knowledge-base chunks, and the indexer, as serve runs them.
 	sweep, stopSweep := context.WithCancel(context.Background())
 	swept := make(chan struct{}, 2)
