@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { REVIEW_LEFT_CODE, type CodeReviewFinding, type CodeReviewSummary } from '../../src/shared/codereview';
+import { REVIEW_LEFT_CODE, type CodeReviewDetail, type CodeReviewFinding, type CodeReviewSummary } from '../../src/shared/codereview';
 import type { Session } from '../../src/shared/types';
-import { findingGroups, stageChipText, withOverride } from '../../src/web/util.js';
+import { findingGroups, findingsCountsText, findingsReviewing, stageChipText, withOverride } from '../../src/web/util.js';
 
 describe('stageChipText', () => {
   const review = (state: CodeReviewSummary['state'], detail: string | null) => ({ state, detail }) as CodeReviewSummary;
@@ -35,6 +35,41 @@ describe('findingGroups', () => {
       ['Round 1, sweep 2', ['a']],
       ['Round 2, sweep 1', ['c']],
     ]);
+  });
+});
+
+describe('findings panel while the review runs', () => {
+  const review = (state: CodeReviewSummary['state']) => ({ state }) as CodeReviewSummary;
+  const detail = (major: number) => ({ review: { counts: { blocker: 0, major, minor: 0 } } }) as CodeReviewDetail;
+
+  it.each([
+    ['preparing', true],
+    ['sweeping', true],
+    ['scoring', true],
+    // Waiting on the task's PR description, before round 1.
+    ['describing', true],
+    // The round's findings are final while the task fixes them.
+    ['fixing', false],
+    ['done', false],
+    ['failed', false],
+    ['cancelled', false],
+  ] as const)('reads Reviewing in %s: %s', (state, reviewing) => {
+    expect(findingsReviewing(review(state))).toBe(reviewing);
+  });
+
+  it('reads nothing without a review', () => {
+    expect(findingsReviewing(null)).toBe(false);
+    expect(findingsCountsText(null, null)).toBeNull();
+  });
+
+  it('leaves the counts out of the header while it reads Reviewing', () => {
+    expect(findingsCountsText(review('sweeping'), detail(0))).toBeNull();
+    expect(findingsCountsText(review('describing'), detail(2))).toBeNull();
+  });
+
+  it('shows the counts once the review stops running, no findings included', () => {
+    expect(findingsCountsText(review('done'), detail(0))).toBe('no findings');
+    expect(findingsCountsText(review('fixing'), detail(2))).toBe('2 major');
   });
 });
 

@@ -2,7 +2,7 @@ import { HARNESS_CAPS, harnessOf, type HarnessId } from '../shared/harnesses';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, LEARN_WARN_FILES, LEARN_WARN_PRS, STAGE_LABELS, type LearnScope } from '../shared/types';
 import { mekoDatapackPath } from '../shared/mekourls';
-import { isStrategySetting, reviewHolds, type CodeReviewFinding, type ReviewOverrides } from '../shared/codereview';
+import { countsText, isStrategySetting, reviewHolds, reviewRunning, type CodeReviewDetail, type CodeReviewFinding, type CodeReviewSummary, type ReviewOverrides } from '../shared/codereview';
 import { stepOf } from '../shared/stages';
 import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoStatus, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, Stage, TokenUsage } from '../shared/types';
 
@@ -938,6 +938,19 @@ export function findingGroups(findings: CodeReviewFinding[]): { key: string; lab
   return [...groups.values()]
     .sort((a, b) => a.round - b.round || a.sweep - b.sweep)
     .map(({ key, label, findings: fs }) => ({ key, label, findings: fs }));
+}
+
+/**
+ * The findings panel reads Reviewing: the review runs, or waits on the task's PR description to
+ * start. Not in fixing, where the round's findings are final.
+ */
+export function findingsReviewing(r: Pick<CodeReviewSummary, 'state'> | null): boolean {
+  return reviewRunning(r) || r?.state === 'describing';
+}
+
+/** The findings panel header's counts, or null while it reads Reviewing (partial counts read as final). */
+export function findingsCountsText(r: Pick<CodeReviewSummary, 'state'> | null, detail: CodeReviewDetail | null): string | null {
+  return detail && !findingsReviewing(r) ? countsText(detail.review.counts) : null;
 }
 
 /**

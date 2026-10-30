@@ -238,8 +238,9 @@ waiting for the task's fixes (preparing, sweeping, scoring, or failed, which kee
 Retry), it opens the review's own screen, its terminal with the findings beside it on a desktop;
 otherwise (describing, which has no review session yet, fixing, done, cancelled) the findings panel beside the task's terminal (`ReviewFindings`:
 the MEKO.md files' datapacks, each by name with the gotchas one tagged; every candidate by round and sweep, with its passes, verdict, confidence, kept or why dropped,
-credited gotchas and what the task did), whose **Terminal** button goes to the review's screen while
-it has one. While the review holds the PR, the stage bar and the task's chip show the task in Review & PR
+credited gotchas and what the task did; while the review runs or waits on the PR description,
+`findingsReviewing()`, it reads **Reviewing** under the findings so far, with a bar along its header
+and no counts), whose **Terminal** button goes to the review's screen while it has one. While the review holds the PR, the stage bar and the task's chip show the task in Review & PR
 (`shownStep()` in `src/web/util.ts`), though it stays in Code, and its gate shows the review, with Cancel, or Retry and
 Open anyway, and **Local review waits on you** with **Open terminal** while it waits. While the task
 writes the PR description the gate says so, with Cancel and **Review now** (Open PR: past an
