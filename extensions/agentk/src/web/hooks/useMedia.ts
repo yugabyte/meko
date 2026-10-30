@@ -95,3 +95,20 @@ export function trackAppHeight(): () => void {
     root.classList.remove('kb-open');
   };
 }
+
+/** Whether a box's scrollbars take no room (its offset and client heights match with `overflow: scroll`). */
+export function overlayScrollbars(probe: { offsetHeight: number; clientHeight: number }): boolean {
+  return probe.offsetHeight === probe.clientHeight;
+}
+
+/**
+ * Marks the root element `overlay-scrollbars` when scrollbars are drawn over a box's content and take
+ * no room (macOS's default, phones), so a box that scrolls sideways can leave room under its last row.
+ */
+export function markOverlayScrollbars() {
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position: absolute; top: -100px; width: 50px; height: 50px; overflow: scroll';
+  document.body.append(probe);
+  document.documentElement.classList.toggle('overlay-scrollbars', overlayScrollbars(probe));
+  probe.remove();
+}

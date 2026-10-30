@@ -62,6 +62,16 @@ export function reviewParent(sessions: Session[], s: Pick<Session, 'kind' | 'par
 }
 
 /**
+ * How far, in pixels, a wheel turn over the session tabs scrolls them sideways: the strip has no
+ * scrollbar, and a mouse wheel only turns up and down. 0 for a sideways turn (a trackpad's swipe,
+ * Shift with the wheel), which the browser already scrolls by. `deltaMode` 1 is lines, 2 pages.
+ */
+export function sidewaysWheel(e: { deltaX: number; deltaY: number; deltaMode: number }, pageWidth: number): number {
+  if (Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return 0;
+  return e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? pageWidth : 1);
+}
+
+/**
  * Whether the open sessions across all projects run on more than one harness: the session tabs and
  * the rail then show each session's logo (`HarnessLogo`), and none while they all run on one.
  */
