@@ -62,7 +62,7 @@ make web_ui                                         # the same for the web UI, i
 make test                                           # builds the memory engine, then go test -race, the memory engine's tests and the web UI's
 make lint                                           # go vet, gofmt, golangci-lint v2 (.golangci.yml), tsc on the memory engine and the web UI
 make bench                                          # the search budget at 200 MB (minutes; not in CI)
-go test ./scripts/                                  # the installer, against a fake gh
+go test ./scripts/                                  # the installer, against a fake gh and a fake curl
 ```
 
 It needs Go 1.26 (an older `go` downloads it on first use; `go.mod`'s `go` line is a hard minimum,
