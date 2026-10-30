@@ -14,6 +14,12 @@ import type { Paths } from '../paths.js';
 import type { SessionRow } from '../store.js';
 import type { ReviewLaunch } from '../review/runner.js';
 
+/** A place in a session's transcript: its file and how long it was then. */
+export interface TranscriptMark {
+  file: string;
+  offset: number;
+}
+
 /** What the session manager gives a harness to launch a session with. */
 export interface LaunchInput {
   row: SessionRow;
@@ -139,6 +145,13 @@ export interface Harness {
   canResume(row: SessionRow): boolean;
   /** The files the CLI writes as a session works (its transcript): their times stand in for missing hooks. */
   activityFiles(row: SessionRow): string[];
+  /**
+   * Where the session's transcript ends now, taken as a prompt goes between turns, for
+   * `promptStarted`. Absent (or null) when the CLI's record can't tell whether a prompt ran.
+   */
+  transcriptMark?(row: SessionRow): TranscriptMark | null;
+  /** Whether a prompt sent at `mark` started its turn: its text is in a user message written since. */
+  promptStarted?(row: SessionRow, mark: TranscriptMark, text: string): boolean;
   /** Reads the session's turns since the last read into `usage_messages`. May throw. */
   readUsage(db: Db, row: SessionRow): UsageRead;
   /**

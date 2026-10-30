@@ -150,6 +150,12 @@ A move to Review & PR checks what Open PR does, whether the review is on or off:
 prompts go first, and a stopped review in Code answers 409. Open PR, or a move, while a review
 waits for fixes whose turn was interrupted moves it on to the next round.
 
+**The PR prompt.** A done review's `finished_at` says its PR prompt went. Open PR (or a move to
+Review & PR) on a done review without it sends the PR prompt with the findings and the line, and
+starts no new review. It's set when the prompt is sent, and cleared again (`markUnsent`) when
+Claude exits before taking it: the task goes back to Code, and the prompt goes again once Claude
+is back ([AgentK's mod](mod.md)).
+
 **Recovery.** `code_reviews` and `code_review_steps` keep a review's state and every step's
 report. After a restart, `CodeReviews.recover()` asks an idle review session again for the steps
 still missing; a review whose session is gone fails, for Retry.

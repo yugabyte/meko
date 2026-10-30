@@ -159,6 +159,51 @@ describe('local code review before the PR (real session host + git, fake claude 
     expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM');
   });
 
+  it.each([['through the mod', true], ['typed', false]])('sends the PR prompt again once Claude is back, when Claude exits before taking it (%s)', async (_how, mod) => {
+    if (mod) {
+      mkdirSync(env.fakeDir, { recursive: true });
+      writeFileSync(join(env.fakeDir, 'mod'), '');
+    }
+    const s = await task({ review: { strategy: 'sirius-1.0' } });
+    // Like Claude Code moving the conversation to its background sessions as the PR prompt comes.
+    writeFileSync(join(env.fakeDir, 'exit-unrun'), 'Open a pull request');
+    // Typed: Claude's SessionEnd lands before the session host answers the paste.
+    let answered: Promise<void> = Promise.resolve();
+    if (!mod) {
+      const submit = env.core.host.submit.bind(env.core.host);
+      vi.spyOn(env.core.host, 'submit').mockImplementation(async (name, text) => {
+        if (!text.includes('Open a pull request')) return submit(name, text);
+        vi.mocked(env.core.host.submit).mockRestore();
+        answered = (async () => {
+          await submit(name, text);
+          await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'exited', 10000, 'SessionEnd');
+        })();
+        return answered;
+      });
+    }
+    await env.core.sessions.action(s.id, 'open-pr');
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'exited', 30000, 'Claude to exit with the PR prompt');
+    // Typed, the send finishes after the exit: it mustn't count the prompt as sent, or the session as working.
+    await answered;
+    // Past the send's end too (sendReviewedPr runs in the session's serial queue).
+    await (env.core.lifecycle as unknown as { serial(id: string, f: () => Promise<void>): Promise<void> }).serial(s.id, async () => undefined);
+    await new Promise((r) => setImmediate(r));
+    const lost = env.core.sessions.get(s.id);
+    if (mod) expect(readJsonl<{ text: string }>(join(env.fakeDir, 'mod-prompts.jsonl')).some((p) => p.text.includes('Open a pull request'))).toBe(true);
+    // Back where it was, not busy, and no turn was cut short: the review's PR counts as not sent.
+    expect(lost).toMatchObject({ status: 'exited', stage: 'code', busy: false, codeReview: { state: 'done' } });
+    expect(env.core.sessions.row(s.id).interrupted).toBe(0);
+    const finished = () => all<{ finished_at: number | null }>(env.core.db, 'SELECT finished_at FROM code_reviews WHERE task_id = ?', s.id)[0].finished_at;
+    expect(finished()).toBeNull();
+    expect(all<{ text: string }>(env.core.db, "SELECT text FROM session_events WHERE session_id = ? AND kind = 'pr'", s.id).map((e) => e.text))
+      .toEqual(['Claude exited before taking the PR prompt; it goes again once Claude is back']);
+    await env.core.sessions.action(s.id, 'resume');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 10000, 'the PR prompt again');
+    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM');
+    expect(prompts(s.claudeSessionId).filter((p) => p.includes('Open a pull request'))).toHaveLength(1);
+    expect(finished()).not.toBeNull();
+  });
+
   it('reviews the change in Code when the session is moved to Review & PR by hand, then sends the PR prompt with the move\'s instructions', async () => {
     const s = await task({ start: 'explore', review: { strategy: 'sirius-1.0' } });
     await env.core.sessions.move(s.id, { stage: 'review', instructions: 'Mention the demo.' });

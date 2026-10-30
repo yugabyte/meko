@@ -201,7 +201,11 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       merge's, which waits and tells the user, and stops when GitHub refuses the merge). Run to merge stops
       on an uncheck, a Cancel, a move and an interrupt where the harness reports one (Claude Code's mod,
       OpenCode), so the user can always take the gates back, and stopping drops only the gate it queued
-      (`queued_auto`), never one the user pressed.
+      (`queued_auto`), never one the user pressed. The one exception to "dropped when Claude exits": a
+      PR prompt Claude took but exited before running (`lostPrs`) is that press carried over. It goes
+      only when Claude is back with no prompt of its own (`claudeBack`), and is dropped (logged) on
+      anything first: another prompt's turn, a move, archive, Run to merge stopping (its own), or a
+      newer Open PR press. Nothing resends it at a later turn's end.
 - [ ] Each session kind keeps to its stages (`KIND_STAGES`): a task starts at Explore, Design or
       Code and leaves a stage only through a gate or a move by the user (`Lifecycle.move`, rules in
       `src/shared/stages.ts`), and a Review a PR stays in Reviewing PR. Code that switches on `stage`

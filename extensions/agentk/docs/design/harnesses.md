@@ -164,7 +164,9 @@ runs on. The adapter says how to prepare its files and settle what a launch need
 and what its trust dialog looks like (`trustFolder`, `trustPrompt`, Claude Code only), its command line
 (`launcher`, which also takes `LaunchInput.tools`: launch with [AgentK's session tools](tools.md), and `LaunchInput.review`: a [local review](code-review.md)'s read-only subagents, one per model tier, as Claude Code's `--agents` and OpenCode's `agent` config; Kiro, whose `HARNESS_CAPS.reviewSteps` is `turns`, runs each step as a prompt of its own after `/clear`), its hooks (`normalize`, `deny`, `context`, `editedPaths`, and `mekoTool` for a CLI without the mod: which events open and close a Meko call for the dot's m), its conversation on disk
 (`canResume`, and `findConversation` for a CLI that picks its own id), the files a session's
-progress shows in (`activityFiles`, for the hookless fallback), its usage (`readUsage`, with the
+progress shows in (`activityFiles`, for the hookless fallback), whether a prompt sent between turns
+started its turn when its hook never came (`transcriptMark`, `promptStarted`, Claude Code only: see
+[AgentK's mod](mod.md)), its usage (`readUsage`, with the
 agent's Meko calls it found for the first time, `UsageRead.mekoCalls`, for the Meko call log), the
 transcript AgentK sends to Meko (`captureTranscript`, Claude Code only), AgentK's mod (`modDir`,
 `offersMod`, Claude Code only), what it keeps for a session that can't run again (`forget`, called
