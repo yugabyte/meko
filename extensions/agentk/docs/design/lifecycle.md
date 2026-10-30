@@ -185,6 +185,12 @@ sent, withdrawn or dropped.
   blank ones included; one without, like the plain gate's, keeps them). An Open PR pressed after the
   turn ended but before the queued one went goes at once, with them unless it gives its own. If the
   queued PR prompt can't be typed, the activity log keeps them, so they can be given again.
+- **A PR prompt Claude exited before taking.** The PR prompt that went but whose turn never started
+  (see [AgentK's mod](mod.md)) isn't a queued gate: it shows no pill. The session goes back to
+  where it came from, and the prompt goes again once Claude is back between turns: after a Resume
+  or a recovery that sent no prompt, or at the end of its next turn (not an interrupted one). An
+  Open PR you press meanwhile goes instead, with its own instructions. Run to merge's goes only while
+  Run to merge is on: stopping it drops it.
 - **Merge when ready.** In Review, the merge blockers are of two kinds. Some clear by themselves:
   AgentK working or waiting on you mid-turn, CI running, AgentK's review still to come, its findings
   being addressed (while Claude runs), and, mid-turn only, unpushed commits and uncommitted files
@@ -260,6 +266,8 @@ It runs on the [queued gates](#queued-gates):
 It stops, saying why in the activity log (`stopAutoRun`), when you uncheck it (refused while the
 merge is being requested), press **Cancel** on the gate it queued, interrupt a turn in Code or Review &
 PR, or move the session, by hand or by a tool (a move to Review & PR that's refused leaves it on).
+Stopping drops its PR prompt that Claude exited before taking (`autoRunOff`), so it isn't sent
+again later.
 An interrupt counts only where the harness reports one: Claude Code with AgentK's mod (`/mod/turn`)
 and OpenCode (its plugin marks `session.execution.interrupted`). Kiro, and Claude Code without the
 mod, report none, so there Esc doesn't stop it, and a queued Open PR goes when the next turn ends:

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -29,7 +29,7 @@ describe('a session whose home Claude reaches by its local spelling (real sessio
 
   beforeEach(async () => {
     links = tempDir('akl-local-');
-    env = await makeEnv({ start: false });
+    env = await makeEnv({ start: false, review: true });
     for (const [from, name] of [[env.home, 'ak-home'], [homedir(), 'user-home']] as const) {
       symlinkSync(from, join(links, name));
       views.push({ from, to: join(links, name) });
@@ -74,5 +74,22 @@ describe('a session whose home Claude reaches by its local spelling (real sessio
     expect(edit('README.md')).toMatchObject(denied);
     expect(edit(join(row.worktree_path, 'README.md'))).toMatchObject(denied);
     expect(edit(env.core.sessions.designFile(row))).toBeNull();
+  });
+
+  it("names the worktree and the review's folder to a local review's steps by that spelling", async () => {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'none' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Fix it', prompt: 'hi', start: 'code', review: { strategy: 'sirius-1.0' } });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'the session to start');
+    const row = env.core.sessions.row(s.id);
+    writeFileSync(join(row.worktree_path, 'a.txt'), 'changed\n');
+    await env.core.sessions.action(s.id, 'open-pr');
+    const review = await waitFor(() => env.core.sessions.get(s.id).codeReview, (r) => !!r, 10000, 'the review to start');
+    const base = join(env.core.paths.run, 'reviews', review!.id, 'r1', 'base.md');
+    await waitFor(() => existsSync(base), (x) => x, 10000, "the review's base prompt");
+    // Claude Code asks before reading through /net, which would stop the review at a permission prompt.
+    const text = readFileSync(base, 'utf8');
+    expect(text).toContain(`The working directory is ${local(row.worktree_path)}.`);
+    expect(text).toContain(local(join(env.core.paths.run, 'reviews', review!.id, 'r1')));
+    expect(text).not.toContain(row.worktree_path);
   });
 });

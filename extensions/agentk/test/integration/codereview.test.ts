@@ -152,6 +152,31 @@ describe('local code review before the PR (real session host + git, fake claude 
     expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM');
   });
 
+  it.each([['through the mod', true], ['typed', false]])('sends the PR prompt again once Claude is back, when Claude exits before taking it (%s)', async (_how, mod) => {
+    if (mod) {
+      mkdirSync(env.fakeDir, { recursive: true });
+      writeFileSync(join(env.fakeDir, 'mod'), '');
+    }
+    const s = await task({ review: { strategy: 'sirius-1.0' } });
+    // Like Claude Code moving the conversation to its background sessions as the PR prompt comes.
+    writeFileSync(join(env.fakeDir, 'exit-unrun'), 'Open a pull request');
+    await env.core.sessions.action(s.id, 'open-pr');
+    const lost = await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'exited', 30000, 'Claude to exit with the PR prompt');
+    if (mod) expect(readJsonl<{ text: string }>(join(env.fakeDir, 'mod-prompts.jsonl')).some((p) => p.text.includes('Open a pull request'))).toBe(true);
+    // Back where it was, not busy, and no turn was cut short: the review's PR counts as not sent.
+    expect(lost).toMatchObject({ stage: 'code', busy: false, codeReview: { state: 'done' } });
+    expect(env.core.sessions.row(s.id).interrupted).toBe(0);
+    const finished = () => all<{ finished_at: number | null }>(env.core.db, 'SELECT finished_at FROM code_reviews WHERE task_id = ?', s.id)[0].finished_at;
+    expect(finished()).toBeNull();
+    expect(all<{ text: string }>(env.core.db, "SELECT text FROM session_events WHERE session_id = ? AND kind = 'pr'", s.id).map((e) => e.text))
+      .toEqual(['Claude exited before taking the PR prompt; it goes again once Claude is back']);
+    await env.core.sessions.action(s.id, 'resume');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 10000, 'the PR prompt again');
+    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM');
+    expect(prompts(s.claudeSessionId).filter((p) => p.includes('Open a pull request'))).toHaveLength(1);
+    expect(finished()).not.toBeNull();
+  });
+
   it('skips the review when the project turns it off', async () => {
     const s = await task();
     env.core.projects.update(s.projectId, { settings: { codeReview: { strategy: 'off' } } });

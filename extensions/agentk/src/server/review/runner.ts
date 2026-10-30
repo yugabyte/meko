@@ -354,8 +354,9 @@ export class CodeReviews {
         issues: await this.issues(task, dir),
         datapacks,
         prior: this.prior(r),
-        worktree: wt,
-        runDir: dir,
+        // As Claude is told every path: Claude Code asks before reading through /net.
+        worktree: claudePath(wt),
+        runDir: claudePath(dir),
       },
     };
   }
@@ -786,6 +787,12 @@ export class CodeReviews {
   markSent(taskId: string): void {
     const r = this.latest(taskId);
     if (r?.state === 'done' && !r.finished_at) this.set(r.id, { finished_at: Date.now() });
+  }
+
+  /** Claude exited before taking a finished review's PR prompt: Open PR sends it again, with the findings. */
+  markUnsent(taskId: string): void {
+    const r = this.latest(taskId);
+    if (r?.state === 'done' && r.finished_at) this.set(r.id, { finished_at: null });
   }
 
   /** A round's kept findings, numbered by their keys, for the task's prompt. */

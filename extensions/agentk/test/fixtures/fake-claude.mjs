@@ -4,7 +4,7 @@
 // with --settings), records its argv, and turns each stdin line into a turn.
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { dirname, join } from 'node:path';
 
@@ -71,7 +71,7 @@ let sessionId = opt('--session-id') ?? opt('--resume');
 const dir = process.env.FAKE_CLAUDE_DIR;
 mkdirSync(dir, { recursive: true });
 let transcript = join(dir, `${sessionId}.jsonl`);
-appendFileSync(join(dir, 'argv.jsonl'), JSON.stringify({ args, cwd: process.cwd(), env: { MEKO_AGENT_ID: process.env.MEKO_AGENT_ID, MEKO_DATAPACK_ID: process.env.MEKO_DATAPACK_ID, MEKO_CHECKPOINT_INTERVAL: process.env.MEKO_CHECKPOINT_INTERVAL, CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: process.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS } }) + '\n');
+appendFileSync(join(dir, 'argv.jsonl'), JSON.stringify({ args, cwd: process.cwd(), env: { MEKO_AGENT_ID: process.env.MEKO_AGENT_ID, MEKO_DATAPACK_ID: process.env.MEKO_DATAPACK_ID, MEKO_CHECKPOINT_INTERVAL: process.env.MEKO_CHECKPOINT_INTERVAL, CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: process.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF: process.env.CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF } }) + '\n');
 
 // Positional prompt: the last argument that isn't a flag value; everything after "--" is positional
 // (like Claude Code's CLI, which rejects a prompt starting with "-" before "--" as an unknown option).
@@ -146,6 +146,17 @@ let modTurns = Promise.resolve();
 const held = new Set();
 const reportHeld = () => modPost('/mod/held', { held: [...held] }).catch(() => undefined);
 
+// Like Claude Code moving its conversation to its background sessions just after taking a prompt:
+// with an `exit-unrun` file, a prompt (through the mod, or typed) that contains its text ends Claude
+// before its turn starts (SessionEnd, then exit 0), once: the file goes with it.
+function exitUnrun(text) {
+  const f = join(dir, 'exit-unrun');
+  if (!existsSync(f) || !text.includes(readFileSync(f, 'utf8'))) return;
+  rmSync(f);
+  hook('SessionEnd', { reason: 'other' });
+  process.exit(0);
+}
+
 const LEARN_USAGE = { input_tokens: 10, output_tokens: 200, cache_read_input_tokens: 5000, cache_creation_input_tokens: 0 };
 
 /** Like the mod's learn step: the fork's reply to an `extract` part, the duplicate check's to a `check`. */
@@ -176,6 +187,7 @@ async function modLoop() {
           const ack = await modPost('/mod/ack', { id: p.id, state: 'accepted' });
           appendFileSync(join(dir, 'mod-acks.jsonl'), JSON.stringify({ id: p.id, status: ack.status }) + '\n');
           if (ack.status !== 204) continue;
+          exitUnrun(p.text);
           held.add(p.id);
           if (existsSync(join(dir, 'mod-drop'))) {
             await modPost('/mod/ack', { id: p.id, state: 'dropped', reason: 'held by another plugin', filled: true });
@@ -484,6 +496,7 @@ process.stdin.on('data', async (chunk) => {
     }
     // Like Claude crashing: gone without a SessionEnd hook.
     if (line === 'crash') process.exit(1);
+    exitUnrun(line);
     if (line === '/clear') {
       // Like Claude Code: /clear starts a new conversation with a new session id and transcript.
       hook('SessionEnd', { reason: 'clear' });

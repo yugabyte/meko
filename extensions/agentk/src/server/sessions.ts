@@ -35,6 +35,7 @@ import { expandBranchPrefix } from '../shared/branches.js';
 import { noOverrides, readOverrides } from '../shared/codereview.js';
 import { agentName, harnessOf } from '../shared/harnesses.js';
 import type { Harness } from './harness/index.js';
+import type { TranscriptMark } from './harness/types.js';
 import { writeLauncher } from './launcher.js';
 import { MekoCalls, MekoHold } from './mekocalls.js';
 import { ModLinks, type DroppedPrompt } from './modlink.js';
@@ -103,6 +104,13 @@ export function workflowLine(kind: SessionKind, stage: Stage): string {
 
 /** The old session types a create request may still name, and where each starts. */
 const LEGACY_STARTS: Partial<Record<string, StartStage>> = { explore: 'explore', plan: 'design', quick: 'code' };
+
+/** A prompt sent between turns that hasn't started its turn: its text, what its sender does if it's lost, where the transcript stood. */
+interface Unstarted {
+  text: string;
+  lost: () => void;
+  mark: TranscriptMark | null;
+}
 
 /** The PR a new Review a PR session checks out: its repo on GitHub, what GitHub says about it, and the clone's remote it's fetched from. */
 interface ReviewTarget {
@@ -257,6 +265,14 @@ export class SessionManager {
   private awaitingStart = new Set<string>();
   /** The tail of each session's prompt submissions, so two prompts are never pasted at once. */
   private submitting = new Map<string, Promise<void>>();
+  /**
+   * A prompt submitted between turns whose turn hasn't started yet (no UserPromptSubmit), with what
+   * its sender does if Claude goes first: an acked or typed prompt counts as sent, but a Claude that
+   * exits before running it (Claude Code moving the conversation to its background sessions, say)
+   * loses it. Its text and where the transcript stood tell a lost hook from a prompt that never ran
+   * (`notStarted`).
+   */
+  private unstarted = new Map<string, Unstarted>();
   /** After a failed recovery, when to try again (Infinity: not until the user resumes it). */
   private recoverRetryAt = new Map<string, number>();
   /** Token totals per session, refreshed after each transcript read. */
@@ -1286,14 +1302,17 @@ export class SessionManager {
   /**
    * Submits a prompt to the session's Claude: through AgentK's mod while it's live and `[claude] mod`
    * is on (Claude takes it when it's next idle), else typed into the TUI. Submissions to one session go one at a time; one
-   * that had to wait is refused if the one before it started a turn.
+   * that had to wait is refused if the one before it started a turn. `lost` runs if Claude goes
+   * (exits, or is relaunched) after a prompt sent between turns counted as sent but before its turn started.
    */
-  submit(id: string, text: string): Promise<void> {
+  submit(id: string, text: string, lost?: () => void): Promise<void> {
     const prev = this.submitting.get(id);
     const next = (prev ?? Promise.resolve()).then(async () => {
       const r = this.row(id);
       if (r.desired !== 'running') throw new HttpError(409, 'This session is archived.');
       if (prev && r.status === 'working') throw new HttpError(409, 'AgentK is working on another prompt. Try again when the turn ends.');
+      // Where the transcript ends before the prompt can reach it.
+      const unstarted: Unstarted = { text, lost: lost ?? (() => undefined), mark: this.harness(r).transcriptMark?.(r) ?? null };
       if (this.modLive(id)) {
         // Mid-turn (answers to a design sent while AgentK works), Claude holds the prompt until the
         // turn ends, and its UserPromptSubmit says when it starts: the status stays as it is, so a
@@ -1305,8 +1324,17 @@ export class SessionManager {
           this.core.changed();
           return;
         }
+        // Before the mod hears the ack's answer, so before the turn's UserPromptSubmit can come.
+        this.unstarted.set(id, unstarted);
       } else {
-        await this.core.host.submit(r.tmux_name, text);
+        // Before the paste: its UserPromptSubmit may come before the session host answers.
+        this.unstarted.set(id, unstarted);
+        try {
+          await this.core.host.submit(r.tmux_name, text);
+        } catch (e) {
+          this.unstarted.delete(id);
+          throw e;
+        }
       }
       this.setStatus(id, 'working');
     });
@@ -1508,6 +1536,24 @@ export class SessionManager {
     this.core.lifecycle.dropApproval(id, ended);
     // The turn a queued Open PR waited for is gone with it.
     this.core.lifecycle.dropQueued(id, ended, 'open-pr');
+    // A prompt it took but never started is lost with it: its sender sends it again later.
+    const lost = this.notStarted(id);
+    this.unstarted.delete(id);
+    lost?.lost();
+  }
+
+  /**
+   * The prompt sent between turns that never started its turn, if any: no UserPromptSubmit or Stop
+   * came for it, and the transcript, read again, has no message for it either (a hook can be lost:
+   * hooks fail open). Null when the harness can't tell from its transcript: the prompt may have run,
+   * and a prompt runs once at most.
+   */
+  private notStarted(id: string): Unstarted | null {
+    const u = this.unstarted.get(id);
+    const row = sessionRow(this.db, id);
+    if (!u?.mark || !row) return null;
+    const started = this.harness(row).promptStarted;
+    return started && !started(row, u.mark, u.text) ? u : null;
   }
 
   /** A measurement from the mod: the context window's fill, and the account's plan limits. */
@@ -1563,6 +1609,8 @@ export class SessionManager {
     if (this.planPending.has(id)) return;
     this.update(id, { interrupted: 0 });
     this.turns.delete(id);
+    // A turn ran, whether or not its UserPromptSubmit reached the server.
+    this.unstarted.delete(id);
     if (how === 'interrupted') this.event(id, 'turn', 'You interrupted the turn');
     // A tool call doesn't outlive its turn.
     this.mod.endAsk(id);
@@ -1628,11 +1676,17 @@ export class SessionManager {
         } else if (row.status === 'starting' || row.status === 'exited' || trustPrompt) {
           this.clearStartup(id);
           this.setStatus(id, 'idle');
+          // Back with no prompt to take (a resume): what the last Claude lost can go now.
+          void this.core.lifecycle.claudeBack(id);
+        } else if (row.status === 'recovered') {
+          // A recovery that sent no prompt, whose status was set before Claude got here.
+          void this.core.lifecycle.claudeBack(id);
         }
         break;
       }
       case 'UserPromptSubmit':
         this.turns.add(id);
+        this.unstarted.delete(id);
         // A mod too old to report what it holds (until it reloads): this may be a held prompt starting.
         this.mod.started(id);
         this.clearStartup(id);
@@ -1695,16 +1749,21 @@ export class SessionManager {
         // OpenCode's plugin marks a turn the user interrupted (Claude Code's comes from the mod, /mod/turn).
         await this.endTurn(row, p.interrupted === true ? 'interrupted' : 'stop');
         break;
-      case 'SessionEnd':
+      case 'SessionEnd': {
         this.ingestUsage(id);
         // /clear ends one conversation and starts the next (SessionStart follows); Claude keeps running.
         if (p.reason === 'clear') break;
+        // Working only on a prompt that never started: no turn was cut short.
+        const cut = row.status === 'working' && !this.notStarted(id);
         this.forgetClaude(id, 'Claude exited before taking the prompt', 'Claude exited');
         this.clearStartup(id);
+        // A prompt's sender keeps the session busy until its turn ends, which won't come now.
+        this.busy.delete(id);
         if (this.stopping.has(id)) break;
-        if (row.status === 'working') this.update(id, { interrupted: 1 });
+        if (cut) this.update(id, { interrupted: 1 });
         this.setStatus(id, 'exited', p.reason ? `Claude exited (${String(p.reason)})` : 'Claude exited');
         break;
+      }
     }
     this.core.changed();
   }
@@ -1809,7 +1868,7 @@ export class SessionManager {
         this.startup.delete(row.id);
         this.hookless.delete(row.id);
         this.awaitingStart.delete(row.id);
-        if (row.status === 'working') this.update(row.id, { interrupted: 1 });
+        if (row.status === 'working' && !this.notStarted(row.id)) this.update(row.id, { interrupted: 1 });
         this.planPending.delete(row.id);
         this.busy.delete(row.id);
         // No SessionEnd came (Claude crashed, or its pane was killed; Kiro has no such hook at all).
@@ -1924,6 +1983,9 @@ export class SessionManager {
     });
     this.event(row.id, 'recovered', detail);
     if (parked) this.notifyUser(row.id, 'Needs you', detail);
+    // Back with no prompt, and Claude already up (its SessionStart came before the status above): what
+    // the last Claude lost goes now. Otherwise that SessionStart sends it, or the continue turn's end does.
+    if (!prompt && !this.awaitingStart.has(row.id)) void this.core.lifecycle.claudeBack(row.id);
     this.core.log.info(`recovered ${row.id}: ${detail}`);
   }
 
@@ -2140,6 +2202,8 @@ export class SessionManager {
     row = await this.checkHead(row.id);
     const firstPrompt = resume ? null : this.hasFirstPrompt(row) ? this.prompt(row, this.firstPrompt(row)) : null;
     this.setStatus(row.id, 'starting', 'Resuming');
+    // As at a recovery: the turn a prompt's sender waited for is gone with the last Claude.
+    this.busy.delete(row.id);
     this.startup.delete(row.id);
     this.setStartup(row.id, 'launch', { resumed: resume, hasPrompt: !!firstPrompt });
     await this.launch(row, { resume, prompt: firstPrompt });

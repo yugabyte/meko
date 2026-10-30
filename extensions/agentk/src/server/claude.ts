@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { TranscriptMark } from './harness/types.js';
 import type { LauncherSpec } from './launcher.js';
 import { claudePath, type Paths } from './paths.js';
 import { writeScript } from './scriptfile.js';
@@ -370,6 +371,47 @@ export function claudeLauncher(paths: Paths, spec: LaunchSpec): LauncherSpec {
   // After "--", a prompt that starts with "-" (such as "---" front matter) isn't read as an option.
   if (spec.prompt) args.push('--', spec.prompt);
   return { sessionId: spec.sessionId, worktree: spec.worktree, command: spec.claudeCommand, args, env: spec.env, unsetEnv: spec.unsetEnv };
+}
+
+/** The most of a transcript read past a mark: a prompt's own user message comes first in its turn. */
+const MARK_READ_MAX = 4 * 1024 * 1024;
+
+/** Where a transcript ends now (0 before it's written). */
+export function transcriptMarkOf(file: string): TranscriptMark {
+  try {
+    return { file, offset: statSync(file).size };
+  } catch {
+    return { file, offset: 0 };
+  }
+}
+
+/**
+ * True when a user message written to the transcript since `mark` holds the start of `text`: Claude
+ * Code writes a prompt's message when its turn starts. When it can't tell (the file was replaced,
+ * or can't be read), true, so a prompt is never taken as lost when it may have run.
+ */
+export function promptInTranscript(mark: TranscriptMark, text: string): boolean {
+  const first = text.split('\n').map((l) => l.trim()).find(Boolean)?.slice(0, 80);
+  if (!first) return true;
+  // As the transcript's JSON writes it.
+  const needle = JSON.stringify(first).slice(1, -1);
+  let fd: number;
+  try {
+    fd = openSync(mark.file, 'r');
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
+  try {
+    const size = fstatSync(fd).size;
+    if (size < mark.offset) return true;
+    const buf = Buffer.alloc(Math.min(size - mark.offset, MARK_READ_MAX));
+    readSync(fd, buf, 0, buf.length, mark.offset);
+    return buf.toString('utf8').split('\n').some((l) => l.includes('"type":"user"') && l.includes(needle));
+  } catch {
+    return true;
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /**
