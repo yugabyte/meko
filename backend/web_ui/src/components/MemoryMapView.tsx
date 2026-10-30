@@ -28,22 +28,29 @@ interface Spot {
 
 const FLAT = (x: number, y: number): Spot => ({ x, y, s: 1 });
 
+const MIN_DEPTH = 0.05;
+// The scale the turned map is drawn at, and the eye's distance: with them, a dot's s runs from about
+// NEAREST_S (front) to FARTHEST_S (back), and the nearest stays inside the map.
+const K = 0.6;
+const EYE = 4;
+const NEAREST_S = EYE / (EYE - K * Math.SQRT2);
+const FARTHEST_S = EYE / (EYE + K * Math.SQRT2);
+
 // turn places points seen from yaw and pitch, with perspective. Depth is stretched to the map's own
-// spread, since the third direction varies less than the first two and would draw nearly flat, then
-// the whole is shrunk so the nearest dots stay inside the map.
+// spread, since the third direction varies less than the first two and would draw nearly flat, but
+// never from under MIN_DEPTH: with three points or fewer there's no third direction, and its z is
+// rounding noise. Then the whole is shrunk so the nearest dots stay inside the map.
 function turn(m: MemoryMap, yaw: number, pitch: number): { at: Spot[]; query?: Spot } {
   const zs = [...m.points.map((p) => p.z ?? 0), m.query_z ?? 0];
-  const zMax = Math.max(...zs.map(Math.abs)) || 1;
-  const k = 0.6;
-  const eye = 4;
+  const zMax = Math.max(MIN_DEPTH, ...zs.map(Math.abs));
   const [cy, sy, cp, sp] = [Math.cos(yaw), Math.sin(yaw), Math.cos(pitch), Math.sin(pitch)];
   const at = (x: number, y: number, z: number): Spot => {
-    [x, y, z] = [x * k, y * k, (z / zMax) * k];
+    [x, y, z] = [x * K, y * K, (z / zMax) * K];
     const x1 = x * cy + z * sy;
     const z1 = -x * sy + z * cy;
     const y2 = y * cp - z1 * sp;
     const z2 = y * sp + z1 * cp;
-    const s = eye / (eye - z2);
+    const s = EYE / (EYE - z2);
     return { x: x1 * s, y: y2 * s, s };
   };
   return {
@@ -150,8 +157,9 @@ export function MemoryMapView({
   const order = map.points.map((_, i) => i);
   if (three) order.sort((a, b) => view.at[a].s - view.at[b].s);
   const spot = (p: MapPoint) => view.at[map.points.indexOf(p)];
-  // Nearer dots are bolder; the farthest fade to about half.
-  const fade = (i: number) => (three ? Math.min(1, Math.max(0.35, 0.5 + (view.at[i].s - 1) * 2.5)) : 1);
+  // Nearer dots are bolder: full at the front, two thirds at the center's depth, under half at the back.
+  const fade = (i: number) =>
+    three ? 0.4 + (0.6 * (view.at[i].s - FARTHEST_S)) / (NEAREST_S - FARTHEST_S) : 1;
   const pickedIndex = map.points.findIndex((p) => p.id === selected);
   const picked = pickedIndex >= 0 ? map.points[pickedIndex] : undefined;
   const shown = hover ?? picked;

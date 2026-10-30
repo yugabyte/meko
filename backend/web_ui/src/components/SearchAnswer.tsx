@@ -45,7 +45,9 @@ export function SearchAnswer({
       </p>
     );
   if (passages.length === 0) return null;
-  return <Answer datapackId={datapackId} query={query} passages={passages} model={status.data.model} />;
+  // Keyed by the search, so a new one starts from loading rather than the last answer's citations.
+  const key = query + "|" + passages.map((p) => p.id).join();
+  return <Answer key={key} datapackId={datapackId} query={query} passages={passages} model={status.data.model} />;
 }
 
 function Answer({
@@ -59,8 +61,7 @@ function Answer({
   passages: Passage[];
   model: string;
 }) {
-  const key = query + "|" + passages.map((p) => p.id).join();
-  const answer = useLoad(() => api.answer(datapackId, query, passages), [datapackId, key]);
+  const answer = useLoad(() => api.answer(datapackId, query, passages), [datapackId]);
   return (
     <Card className="space-y-3 p-4">
       <h3 className="flex items-center gap-2 text-sm font-medium">
@@ -83,6 +84,7 @@ function Answer({
               <ol className="space-y-1 text-xs text-muted-foreground">
                 {answer.data.cited.map((n) => {
                   const p = passages[n - 1];
+                  if (!p) return null;
                   return (
                     <li key={n} className="flex items-start gap-2">
                       <span className="font-medium text-foreground">[{n}]</span>

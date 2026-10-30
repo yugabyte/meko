@@ -55,7 +55,7 @@ func TestSearchAnswers(t *testing.T) {
 		many = append(many, map[string]string{"source": "knowledge_base", "id": fmt.Sprint(i),
 			"text": fmt.Sprintf("passage %d", i)})
 	}
-	a.reply = memory.SearchAnswer{Answer: "On Tuesdays [1].", Cited: []int{1, 1, 11, 0}}
+	a.reply = memory.SearchAnswer{Answer: "On Tuesdays [1][11].", Cited: []int{1, 1, 11, 0}}
 	got := obj(okData(t, e, "POST", path, map[string]any{"query": "when?", "passages": many}, 200))
 	if got["answer"] != "On Tuesdays [1]." || fmt.Sprint(got["cited"]) != "[1]" || got["model"] != "haiku" {
 		t.Errorf("answer %v", got)

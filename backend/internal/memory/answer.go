@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -65,6 +67,9 @@ type SearchAnswer struct {
 type Answerer interface {
 	Answer(ctx context.Context, system, input string) (SearchAnswer, error)
 }
+
+// citation is a [n] in an answer's text.
+var citation = regexp.MustCompile(`\[\d+\]`)
 
 const answerSchema = `{"type":"object","properties":{"answer":{"type":"string"},"cited":{"type":"array",` +
 	`"items":{"type":"integer"}}},"required":["answer","cited"]}`
@@ -148,7 +153,8 @@ func (s *Service) SetAnswers(ctx context.Context, set AnswerSettings) error {
 }
 
 // Answer writes an answer to query from passages, the first answerPassages of them, each cut to
-// answerPassageChars. Citations of a passage it wasn't given are dropped.
+// answerPassageChars. Citations of a passage it wasn't given are dropped, from cited and from the
+// answer's text.
 func (s *Service) Answer(ctx context.Context, datapack, query string, passages []Passage) (SearchAnswer, error) {
 	if err := s.needDatapack(ctx, datapack); err != nil {
 		return SearchAnswer{}, err
@@ -183,6 +189,12 @@ func (s *Service) Answer(ctx context.Context, datapack, query string, passages [
 			cited = append(cited, n)
 		}
 	}
+	out.Answer = citation.ReplaceAllStringFunc(out.Answer, func(m string) string {
+		if n, _ := strconv.Atoi(m[1 : len(m)-1]); n >= 1 && n <= len(passages) {
+			return m
+		}
+		return ""
+	})
 	out.Cited, out.Model = cited, set.Model
 	return out, nil
 }
