@@ -251,7 +251,7 @@ your phone can connect.
   worktrees when sessions end).
 - **Changes panel:** click the `N files · +N −N` diff size in a session's footer to see every changed file
   (committed, uncommitted and untracked) with a diff per file. Jump between files with the
-  **Files** menu or `[` / `]`, and leave review comments on lines (drag the **+** to cover a range) that go to Claude as one prompt. The
+  **Files** menu (its filter takes a regex too) or `[` / `]`, and leave review comments on lines (drag the **+** to cover a range) that go to Claude as one prompt. The
   **All changes ▾** menu shows one of the branch's commits alone instead (read-only).
   Compare with another branch (a release branch for a backport, say) from the base in its header;
   when the branch has clearly moved onto another branch, the panel offers to switch.

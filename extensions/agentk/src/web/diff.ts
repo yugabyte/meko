@@ -216,3 +216,20 @@ function sameFields(a: object, b: object): boolean {
 export function sameItems<T>(a: readonly T[], b: readonly T[]): boolean {
   return a.length === b.length && a.every((x, i) => x === b[i]);
 }
+
+/**
+ * The Files menu's filter: `q` as a case-insensitive regular expression tested against a file's path
+ * and its old path, or as plain text (a case-insensitive substring) when it isn't a valid one, so
+ * `c++` or an unclosed `(` while typing still filters.
+ */
+export function pathFilter(q: string): (file: { path: string; oldPath?: string | null }) => boolean {
+  let test: (s: string) => boolean;
+  try {
+    const re = new RegExp(q, 'i');
+    test = (s) => re.test(s);
+  } catch {
+    const needle = q.toLowerCase();
+    test = (s) => s.toLowerCase().includes(needle);
+  }
+  return (f) => test(f.path) || (!!f.oldPath && test(f.oldPath));
+}

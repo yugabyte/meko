@@ -183,7 +183,10 @@ disk (in a commit's view, its parent's and its own, from git), only for those ty
 a sandboxing content policy so the bytes can never run as a page. The footer counts use the same
 comparison, so they always match. The file list is the header's **Files** menu, with a filter, so
 you can jump to any file from anywhere in a long diff; each file's header shows its position
-(*4 / 12*), and `[` / `]` step to the previous or next file.
+(*4 / 12*), and `[` / `]` step to the previous or next file. The filter is a case-insensitive
+regular expression tested against each file's path and its old path (`pathFilter()` in
+`src/web/diff.ts`), so `\.tsx?$` or `^src/web/` work; text that isn't a valid one, such as `c++`
+or a half-typed `(`, matches as plain text instead. The commit and base menus match plain text.
 
 The header's commit menu (**All changes ▾**) shows either that whole comparison or one of the
 branch's commits alone: the commits since the merge base, newest first (at most 200,
