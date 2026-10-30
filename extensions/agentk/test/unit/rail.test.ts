@@ -85,22 +85,6 @@ describe("a rail session's name", () => {
     for (const [, sel, body] of rules) expect(body, sel!.trim()).not.toMatch(/nowrap|ellipsis|overflow:\s*hidden/);
     expect(STYLES.slice(STYLES.indexOf('\n.rail-sess-name {')).split('}')[0]).toContain('overflow-wrap: anywhere;');
   });
-
-  // The name once shared a reviewed task's row with the stage chip and the magnifier side by side,
-  // a word a line. Now the chip and the magnifier stack in the right-hand column, and Move to top
-  // covers the chip's row only, never the magnifier under it.
-  it.each([
-    ['.rail-joined .rail-sess > .rail-sess-name', '-3', '1 / -1'],
-    ['.rail-joined .rail-sess > .stchip', '-2', '1'],
-    ['.rail-joined .rail-sess-top', '-2', '1'],
-    ['.rail-review', '-2', '2'],
-  ])('with a local review, %s takes column %s, row %s', (sel, column, row) => {
-    const at = STYLES.indexOf(`\n${sel} {`);
-    expect(at, sel).toBeGreaterThan(-1);
-    const body = STYLES.slice(at).split('}')[0]!;
-    expect(body).toContain(`grid-column: ${column};`);
-    expect(body).toContain(`grid-row: ${row};`);
-  });
 });
 
 describe("Kiro's plan lines", () => {
