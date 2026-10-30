@@ -465,15 +465,13 @@ export function countReviews(runs: ReviewRun[]): CodeReviewCounts {
   return c;
 }
 
-/** Local reviews' counts, and their sessions' tokens and cost, for every project or one. */
+/** Local reviews' counts, and their sessions' tokens, for every project or one. */
 export function reviewUsage(db: Db, projectId?: string): CodeReviewUsage {
   const where = `s.kind = 'code-review'${projectId ? ' AND s.project_id = ?' : ''}`;
   const args = projectId ? [projectId] : [];
   return {
     ...countReviews(reviewRuns(db, projectId)),
     usage: toUsage(get<SumRow>(db, `SELECT ${SUMS} FROM usage_messages u JOIN sessions s ON s.id = u.session_id WHERE ${where}`, ...args)),
-    cost: toCost(all<CostRow>(db,
-      `SELECT ${COST_SUMS} FROM usage_messages u JOIN sessions s ON s.id = u.session_id WHERE ${where} AND ${PRICED} GROUP BY u.model`, ...args)),
   };
 }
 

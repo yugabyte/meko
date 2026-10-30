@@ -216,4 +216,5 @@ Open anyway, and **Local review waits on you** with **Open terminal** while it w
 
 The Usage page and the project home count reviews in their **Code Reviews** section, and stack the
 review sessions' tokens on the Token usage chart ([Token usage](token-usage.md)); the usage report
-sends the same counts each day ([Usage stats](usage-stats.md), `codeReview`).
+sends the same counts each day, with the candidates the passes raised and the review sessions' cost
+([Usage stats](usage-stats.md), `codeReview`).

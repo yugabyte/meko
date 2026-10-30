@@ -326,8 +326,8 @@ your phone can connect.
   plugin); Kiro sessions count the credits Kiro billed,
   beside the cost and never added to it, with a Credits column by session and model and a credits
   bar beside each day's tokens. Each day's bar stacks the tokens local code reviews spent, and a
-  **Code Reviews** section counts the reviews, the issues they found, the ones fixed, the PRs opened
-  after them and what they cost. **Usage** in the left panel adds it up across every project, closed ones
+  **Code Reviews** section counts the reviews, the issues they found, the ones fixed and the PRs opened
+  after them. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
 - **Meko call log, for debugging:** turn on **Log Meko calls** in a project's settings and AgentK
   keeps every Meko call made for each session, its own (recall at start, design uploads, the learn
