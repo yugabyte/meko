@@ -266,9 +266,11 @@ agent's config every time, since the user and the agent edit it too.
   PATH already. bash, zsh and fish run interactive too (`-i -l -c`), since nvm sets PATH up in
   `~/.zshrc` and `~/.bashrc` (which a login bash reads only when its profile sources it, as a
   terminal's does); another shell gives way to `/bin/sh -l -c`. The shell runs only when an agent
-  isn't found otherwise, in a session of its own with no terminal, for 3 s at most (AgentK gives the
-  list 5 s). Its PATH is kept, and read again in the background once it's 5 minutes old, so only
-  the first list waits for it. Only installed agents are listed. Meko runs the command it found by
+  isn't found otherwise, in a session of its own with no terminal. The first list waits 3 s at most
+  for it (AgentK gives the list 5 s), and the shell goes on in the background for up to 20 s, since
+  a heavy profile can take seconds under a service: the next list gets its PATH. Its PATH is kept,
+  and read again in the background once it's 5 minutes old, so only the first list waits for it. A
+  read that fails or runs out of time keeps the PATH the last one gave, and is logged. Only installed agents are listed. Meko runs the command it found by
   its absolute path, with its folder first on PATH (an npm install's Node is there), then, for one
   found on the login shell's PATH, that PATH, so the service's thin PATH still works. The config
   folders come from the environment Meko runs in (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `KIRO_HOME`,

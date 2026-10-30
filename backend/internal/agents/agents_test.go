@@ -1,9 +1,11 @@
 package agents
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -260,16 +262,16 @@ func loginShell(t *testing.T, name, path string) (runs string) {
 // refreshed waits for the login shell's PATH being read in the background.
 func refreshed(t *testing.T) {
 	t.Helper()
-	for end := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		loginPathCache.Lock()
-		busy := loginPathCache.refreshing
-		loginPathCache.Unlock()
-		if !busy {
-			return
-		}
-		if time.Now().After(end) {
-			t.Fatal("the login shell's PATH is still being read")
-		}
+	loginPathCache.Lock()
+	reading := loginPathCache.reading
+	loginPathCache.Unlock()
+	if reading == nil {
+		return
+	}
+	select {
+	case <-reading:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the login shell's PATH is still being read")
 	}
 }
 
@@ -381,6 +383,62 @@ func TestLoginShellThatFails(t *testing.T) {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 			t.Fatal("the hanging shell's child is still running")
 		}
+	}
+}
+
+// A login shell slower than LoginPathWait leaves the first list without the agents only on its PATH,
+// but goes on in the background, and the next list has them. A read that fails later, by
+// LoginPathTimeout or the shell's own error, keeps the PATH the last one gave, and says why in Log.
+func TestSlowAndFailingLoginShell(t *testing.T) {
+	_, _ = fakeAgents(t, false, "codex")
+	nvm := filepath.Join(t.TempDir(), "nvm", "bin")
+	claude := filepath.Join(nvm, "claude")
+	write(t, claude, "#!/bin/sh\n")
+	dir := t.TempDir()
+	shell, slow, fail := filepath.Join(dir, "bash"), filepath.Join(dir, "slow"), filepath.Join(dir, "fail")
+	write(t, shell, "#!/bin/sh\n[ -e "+fail+" ] && exit 1\n[ -e "+slow+" ] && sleep 1\n"+
+		"printf '"+pathMark+"%s"+pathMark+"' "+nvm+"\n")
+	for _, p := range []string{claude, shell} {
+		//nolint:gosec // G302: a test script
+		if err := os.Chmod(p, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(t, slow, "")
+	var logged bytes.Buffer
+	oldShell, oldWait, oldTimeout, oldTTL, oldLog := LoginShell, LoginPathWait, LoginPathTimeout, LoginPathTTL, Log
+	t.Cleanup(func() {
+		refreshed(t)
+		LoginShell, LoginPathWait, LoginPathTimeout, LoginPathTTL, Log = oldShell, oldWait, oldTimeout, oldTTL, oldLog
+	})
+	LoginShell, LoginPathWait, LoginPathTimeout, LoginPathTTL = shell, 100*time.Millisecond, 10*time.Second, time.Hour
+	Log = slog.New(slog.NewTextHandler(&logged, nil))
+
+	start := time.Now()
+	if p, ok := Catalog[0].Find(); ok || time.Since(start) > 900*time.Millisecond {
+		t.Errorf("while the shell runs: found %q in %s", p, time.Since(start))
+	}
+	refreshed(t)
+	if p, ok := Catalog[0].Find(); !ok || p != claude {
+		t.Errorf("once it's done: %q, %v", p, ok)
+	}
+
+	LoginPathTimeout, LoginPathTTL = 200*time.Millisecond, 0
+	steps := []struct{ name, want string }{{"timed out", "it took more than 200ms"}, {"failed", "exit status 1"}}
+	for _, step := range steps {
+		if step.name == "failed" {
+			write(t, fail, "")
+		}
+		_, _ = Catalog[0].Find()
+		refreshed(t)
+		if p, ok := Catalog[0].Find(); !ok || p != claude {
+			t.Errorf("after a read that %s: %q, %v", step.name, p, ok)
+		}
+		refreshed(t)
+		if l := logged.String(); !strings.Contains(l, "the login shell gave no PATH") || !strings.Contains(l, step.want) {
+			t.Errorf("after a read that %s, the log: %s", step.name, l)
+		}
+		logged.Reset()
 	}
 }
 
