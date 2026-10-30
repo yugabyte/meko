@@ -104,8 +104,9 @@ as the cloud's separate processes do (`HARNESS_CAPS.reviewSteps`):
 
 - `subagents` (Claude Code, OpenCode): the session is launched with a subagent per tier
   (`agentk-review-large`, `-mid`, `-small`: Claude Code's `--agents`, OpenCode's `agent` config),
-  and one prompt lists the steps to run one after another, each in its subagent with the prompt
-  "Read {file} and do what it says." The turn's end is the sweep's end, so the subagents must run
+  and one prompt lists the steps, each in its subagent with the prompt "Read {file} and do what it
+  says." A sweep's passes start all at once, in one message, as the cloud runs them; the scorers
+  run one after another. The turn's end is the sweep's end, so the subagents must run
   inside it: Claude Code backgrounds a subagent by default, which ends the turn before any step
   reports, so a Claude Code review session launches with `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`.
 - `turns` (Kiro): each step is a prompt of its own, after `/clear` and, when the tier has a model,
@@ -195,10 +196,12 @@ without Meko. Retired gotchas aren't filtered: the cloud's roster of them isn't 
 
 The review is never a tab or a rail row of its own: it's a part joined to its task's tab and rail
 row (`ReviewSegment`), a blue magnifier whose lens pulses while the review works and shows Meko's
-"m" while the review session is in a Meko call (`CodeReviewSummary.mekoCall`), then the step it's
-on (`reviewSteps()`: each pass of a sweep, then scoring as one step, so Sagittarius 3.0 counts `1/6`
-to `6/6` and Sirius 1.0, unscored, `1/1`; with depth > 1 the passes count again for each sweep, and
-the tooltip names the sweep), `R1` while the task fixes round 1's findings, the result (`2·1`,
+"m" while the review session is in a Meko call (`CodeReviewSummary.mekoCall`), then how far it
+has got (`reviewSteps()`: each pass of a sweep, then scoring as one step, so Sagittarius 3.0 counts
+`1/6` to `6/6` and Sirius 1.0, unscored, `1/1`, moving on as each pass reports, whether the passes
+run at once, on Claude Code and OpenCode, or one after another, on Kiro; with depth > 1 the passes
+count again for each sweep; the tooltip says how many passes have reported, and names the sweep),
+`R1` while the task fixes round 1's findings, the result (`2·1`,
 blockers·majors, until the task has said what it did with every kept finding, every round's,
 through `review_outcome`: `CodeReviewSummary.addressed`; then, or with none, `LGTM`) or a red `!`.
 A task that answers in its reply instead (tools off, or an untrusted PR head) records no outcomes,

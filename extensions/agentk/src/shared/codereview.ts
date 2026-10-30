@@ -226,14 +226,15 @@ export interface CodeReviewSummary {
 /**
  * The steps the badge counts: each pass of a sweep, then scoring as one step when the strategy
  * scores (Sagittarius 3.0's 5 passes and its scorers are 6 steps, Sirius 1.0's one pass is 1).
- * With depth > 1 the passes count again for each sweep (the tooltip names the sweep); scoring
- * follows the last.
+ * The count moves on as each pass reports, whether a sweep's passes run at once (Claude Code,
+ * OpenCode) or one after another (Kiro). With depth > 1 the passes count again for each sweep (the
+ * tooltip names the sweep); scoring follows the last.
  */
 export function reviewSteps(r: Pick<CodeReviewSummary, 'strategy' | 'passes'>): number {
   return r.passes + (strategyInfo(r.strategy)?.scored ? 1 : 0);
 }
 
-/** The step a running review is on, from 1: the pass after the last one reported, or scoring. */
+/** The step the badge shows a running review at, from 1: one past the passes reported (at most the last pass), or scoring. */
 function reviewStep(r: CodeReviewSummary): number {
   return r.state === 'scoring' ? reviewSteps(r) : Math.min(r.passesDone + 1, r.passes);
 }
@@ -267,12 +268,12 @@ export function reviewSegmentLabel(r: CodeReviewSummary): string {
   const where: string[] = [];
   if (r.rounds > 1) where.push(`round ${r.round} of ${r.rounds}`);
   if (r.depth > 1 && r.state === 'sweeping') where.push(`sweep ${r.sweep} of ${r.depth}`);
-  const step = `step ${reviewStep(r)} of ${reviewSteps(r)}`;
   let what: string;
   switch (r.state) {
     case 'preparing': what = 'preparing'; break;
-    case 'sweeping': what = `${step}, pass ${reviewStep(r)} of ${r.passes}`; break;
-    case 'scoring': what = `${step}, scoring ${Math.min(r.scoresDone + 1, r.candidates)} of ${r.candidates}`; break;
+    // The passes may all be running, so no "step n" here: only how many have reported.
+    case 'sweeping': what = `${r.passesDone} of ${r.passes} passes reported`; break;
+    case 'scoring': what = `step ${reviewSteps(r)} of ${reviewSteps(r)}, scoring ${Math.min(r.scoresDone + 1, r.candidates)} of ${r.candidates}`; break;
     case 'fixing': what = 'waiting for the fixes'; break;
     case 'done': what = doneShowsCounts(r) ? countsText(r.counts) : totalCount(r.counts) ? `LGTM, ${countsText(r.counts)} addressed` : 'LGTM'; break;
     case 'failed': what = `failed${r.detail ? `: ${r.detail}` : ''}. Retry or Open anyway`; break;
