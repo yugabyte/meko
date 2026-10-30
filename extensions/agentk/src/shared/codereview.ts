@@ -24,7 +24,8 @@ export interface ReviewStrategyInfo {
 
 /**
  * The registry, in the order the settings list them after Off: the lightest review first. Nothing is
- * ever removed: a review recorded under an old id has to stay readable. Sagittarius 3.0 is the agent-k reviewer's Golum 1.0 algorithm; the cloud keeps its own name.
+ * ever removed: a review recorded under an old id has to stay readable. Sagittarius 3.0 is the agent-k
+ * reviewer's Golum 1.0 algorithm; the cloud keeps its own name.
  */
 export const STRATEGIES: ReviewStrategyInfo[] = [
   {
