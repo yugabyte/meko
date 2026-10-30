@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import {
-  MIN_SWEEPS, REVIEW_LEFT_CODE, addCounts, countsText, meAkReviewLine, noCounts, resolveReview, reviewHolds, strategyName, totalCount,
+  MIN_SWEEPS, REVIEW_LEFT_CODE, addCounts, countsText, meAkReviewLine, noCounts, resolveReview, reviewHolds, reviewRunning, strategyName, totalCount,
   type CodeReviewDetail, type CodeReviewFinding, type CodeReviewState, type CodeReviewSummary, type FindingOutcome,
   type ReviewSettings, type ReviewStrategyId, type SeverityCounts,
 } from '../../shared/codereview.js';
@@ -190,6 +190,9 @@ export class CodeReviews {
       // Every round's: the next round runs at the fix turn's end whether or not the task said what it did.
       addressed: r.state === 'done' && json<CodeReviewFinding[]>(r.findings_json, []).every((f) => !f.kept || !!f.outcome),
       mekoCall: !!r.session_id && RUNNING.includes(r.state) && this.core.sessions.mekoCalling(r.session_id),
+      // A permission prompt or a question in the review's terminal, which has no tab to show it. Only
+      // while its steps run: in fixing the UI opens the findings and has no terminal button.
+      waiting: !!r.session_id && reviewRunning(r) && sessionRow(this.db, r.session_id)?.status === 'needs_input',
       detail: r.detail,
     };
   }
@@ -368,7 +371,8 @@ export class CodeReviews {
         headSha: head,
         dirty,
         title: task.name,
-        description: this.description(task),
+        description: task.initial_prompt ?? '',
+        design: this.design(task),
         commits: await readCommits(wt, mergeBase),
         guides: findGuides(wt, paths),
         history: await readHistory(wt, mergeBase, diff),
@@ -415,12 +419,10 @@ export class CodeReviews {
     return [...seen.values()];
   }
 
-  /** The task's own account of the change: its first prompt, and where its design is. */
-  private description(task: SessionRow): string {
-    const parts = [task.initial_prompt ?? ''];
+  /** Where the task's design is: its Artifact's link, else its file; null without one. */
+  private design(task: SessionRow): string | null {
     const design = get<{ artifact_url: string | null }>(this.db, 'SELECT artifact_url FROM designs WHERE session_id = ?', task.id);
-    if (design) parts.push(`The task's design: ${design.artifact_url ?? this.core.sessions.designFile(task)}`);
-    return parts.filter(Boolean).join('\n\n');
+    return design ? (design.artifact_url ?? this.core.sessions.designFile(task)) : null;
   }
 
   /**
@@ -441,7 +443,7 @@ export class CodeReviews {
           const path = join(dir, 'issues', `${ref.repo.replace('/', '-')}-${ref.number}.md`);
           mkdirSync(join(dir, 'issues'), { recursive: true });
           writeFileSync(path, text.slice(0, ISSUE_MAX_BYTES));
-          out.push({ title: l.label, path: claudePath(path), url: l.url });
+          out.push({ title: l.label, path, url: l.url });
           continue;
         } catch (e) {
           this.core.log.warn(`reading ${l.url} for ${task.id}'s review failed`, errMsg(e));

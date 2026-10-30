@@ -1584,6 +1584,34 @@ textarea.input {
 .review-glass.meko .glass-m {
   display: block;
 }
+/* The review session waits on you in its terminal: the needs-you color, its lens knocking. */
+.review-glass.waiting {
+  color: var(--warn);
+}
+.review-glass.waiting .lens {
+  opacity: 1;
+  animation: lens-knock 3.2s steps(1, end) infinite;
+}
+/* A selected tab is the terminal's color: the waiting glass follows the terminal, not the app. */
+:root:not([data-term-theme='light']) .tab-review.sel .review-glass.waiting {
+  color: #e9a64a;
+}
+:root[data-term-theme='light'] .tab-review.sel .review-glass.waiting {
+  color: #b86e00;
+}
+@keyframes lens-knock {
+  0%,
+  10%,
+  20% {
+    opacity: 1;
+  }
+  5%,
+  15%,
+  25%,
+  100% {
+    opacity: 0.25;
+  }
+}
 @keyframes lens-pulse {
   0%,
   100% {
@@ -1599,6 +1627,10 @@ textarea.input {
   .review-glass.running .lens {
     animation: none;
     opacity: 0.6;
+  }
+  /* Still, a waiting lens stays filled, so it differs from a working one by more than its color. */
+  .review-glass.running.waiting .lens {
+    opacity: 1;
   }
 }
 /* The rail's row for a task with a local review: one row, the task's part growing (its name

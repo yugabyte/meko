@@ -9,6 +9,7 @@
  * the candidate last.
  */
 import { strategyName } from '../../shared/codereview.js';
+import { claudePath } from '../paths.js';
 import { PASS_FOOTER } from './strategies.js';
 import type { Candidate, Diff, Pass, PriorRound, ReviewContext } from './types.js';
 
@@ -57,11 +58,15 @@ proposed.${uncommitted} The diff is computed from where the branch left \`${ctx.
 (${short(ctx.baseSha)}), and its line numbers are the ones a finding has to cite.`;
 }
 
-/** Where the passes may read beyond the worktree: the review's own folder (patches, issues). */
+/**
+ * Where the passes may read beyond the worktree: the review's own folder (patches, issues). Every
+ * path is in the spelling the review's Claude runs in (`claudePath`): Claude Code asks before any
+ * read under /net, and a pass waiting on that prompt stops the review.
+ */
 function environment(ctx: ReviewContext): string {
   return `## Your environment
 
-The working directory is ${ctx.worktree}. ${treeDescription(ctx)}
+The working directory is ${claudePath(ctx.worktree)}. ${treeDescription(ctx)}
 
 Every path you are handed is already in the form Read wants. Pass each one
 through exactly as written, and never build a path yourself:
@@ -71,7 +76,7 @@ through exactly as written, and never build a path yourself:
     directory, so that string is the whole argument. Do not prepend the directory
     named above, and do not prepend anything else.
   - A linked issue or a per-file patch — already absolute and complete. Copy it
-    as it stands. They are in the review's own folder, ${ctx.runDir}.
+    as it stands. They are in the review's own folder, ${claudePath(ctx.runDir)}.
 
 Stay inside the working directory and that folder: everything this change is
 about is there. If a question can only be settled by code you cannot reach, say
@@ -163,7 +168,7 @@ export function changedFiles(diff: Diff): string {
       secret++;
     }
     lines.push(`${`+${f.additions}/-${f.deletions}`.padEnd(6)} ${f.path}${mark}`);
-    if (f.patchPath) lines.push(`       patch: ${f.patchPath}`);
+    if (f.patchPath) lines.push(`       patch: ${claudePath(f.patchPath)}`);
   }
   lines.push('```');
   let out = lines.join('\n');
@@ -272,7 +277,7 @@ only the code can settle whether a problem is still there.`];
 /** The linked issues (`issues.go`): written ones to Read, links only by their titles. */
 function linkedIssues(ctx: ReviewContext): string {
   if (!ctx.issues.length) return '';
-  const written = ctx.issues.filter((i) => i.path);
+  const written = ctx.issues.flatMap((i) => (i.path ? [{ ...i, path: claudePath(i.path) }] : []));
   const named = ctx.issues.filter((i) => !i.path);
   const parts = ['## Linked issues'];
   if (written.length) {
@@ -372,7 +377,10 @@ them.`;
 export function basePrompt(ctx: ReviewContext, diff: Diff): string {
   const guideRef = ctx.guides.length === 0 ? 'any review guide this repository provides' : ctx.guides.join(', then ');
   const fallback = ctx.guides.length === 0 ? NO_GUIDE_FALLBACK : '';
-  const description = ctx.description.trim() ? clip(ctx.description.trim(), MAX_DESCRIPTION) : '(none provided)';
+  const told = ctx.description.trim() ? clip(ctx.description.trim(), MAX_DESCRIPTION) : '';
+  // A link is left as it is: claudePath changes only a /net path.
+  const design = ctx.design ? `The task's design: ${claudePath(ctx.design)}` : '';
+  const description = [told, design].filter(Boolean).join('\n\n') || '(none provided)';
   const parts = [
     `You are reviewing a change in ${ctx.repo}: the work on branch \`${ctx.branch}\` against
 \`${ctx.baseRef}\`, before its pull request is opened. What follows calls it "this PR".
@@ -555,7 +563,7 @@ You are not reviewing the PR and you must not report problems of your own.
 
 ## Your environment
 
-The working directory is ${ctx.worktree}. ${treeDescription(ctx)}
+The working directory is ${claudePath(ctx.worktree)}. ${treeDescription(ctx)}
 
 Every path you are handed is already in the form Read wants. Pass each one
 through exactly as written, and never build a path yourself:

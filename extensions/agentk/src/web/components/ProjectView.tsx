@@ -19,7 +19,7 @@ import { approveDesign, changingDecisions } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { closingText, cx, dotState, designGate, isReviewChild, joinedPartSelected, reviewGatesPr, reviewParent, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, reviewTarget, runToMergeShown, runToMergeTitle, sessionTabTitle, sidewaysWheel, totalTokens, updateShowing, usageTitle } from '../util';
+import { closingText, cx, dotState, designGate, isReviewChild, joinedPartSelected, reviewGatesPr, reviewOpens, reviewParent, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, reviewTarget, runToMergeShown, runToMergeTitle, sessionTabTitle, sidewaysWheel, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
 import { Busy, Check, ConfirmButton, ContextRing, DatapackName, Elapsed, HarnessLogo, NotesIcon, ReviewSegment, RunToMergeCheck, RunToMergeMark, StageChip, StatusDot } from './common';
@@ -134,11 +134,16 @@ export function ProjectView({
   // A task's code-review session (its part of the task's tab) and the task it reviews.
   const child = session && isReviewChild(session) ? session : null;
   const parent = session ? reviewParent(project.sessions, session) : undefined;
-  // The magnifier opens its task's findings, never the review's session.
-  const openReview = (task: Session) => {
+  // The review's screen (its terminal, its findings beside it) while its steps run (or it failed); its
+  // findings beside the task's terminal while the task fixes a round's findings and once it's done.
+  const openReviewTerminal = (task: Session) => {
+    if (task.codeReview?.sessionId) navigate({ view: 'project', projectId: project.id, sessionId: task.codeReview.sessionId });
+  };
+  const openFindings = (task: Session) => {
     if (task.id === session?.id) setPanel('findings');
     else onOpenFindings(task);
   };
+  const openReview = (task: Session) => (reviewOpens(task) === 'session' ? openReviewTerminal(task) : openFindings(task));
   const [sheet, setSheet] = useState(false);
   // Bumped to show the design's questions (Design Review, or Approve pressed with questions open).
   const [questionsAt, setQuestionsAt] = useState(0);
@@ -459,7 +464,8 @@ export function ProjectView({
           project={project}
           onAct={act}
           onReview={openDesignReview}
-          onOpenLocalReview={session && !child ? () => openReview(session) : undefined}
+          onOpenLocalReview={session && !child ? () => openFindings(session) : undefined}
+          onOpenReviewTerminal={session && !child ? () => openReviewTerminal(session) : undefined}
           designOpen={panel === 'design'}
           onAutoRun={setAutoRun}
           learnTo={mergeLearnTo}
@@ -559,7 +565,12 @@ export function ProjectView({
         )}
         {session && panel === 'changes' && <ChangesPanel key={`changes-${session.id}`} session={session} onClose={() => setPanel(null)} />}
         {session && panel === 'findings' && (child || session.codeReview) && (
-          <ReviewFindings key={`findings-${session.id}`} session={session} onClose={() => setPanel(null)} />
+          <ReviewFindings
+            key={`findings-${session.id}`}
+            session={session}
+            onClose={() => setPanel(null)}
+            onTerminal={!child && session.codeReview?.sessionId ? () => openReviewTerminal(session) : undefined}
+          />
         )}
       </div>
 
@@ -596,7 +607,11 @@ export function ProjectView({
               onReview={openDesignReview}
               onOpenLocalReview={!child ? () => {
                 setSheet(false);
-                openReview(session);
+                openFindings(session);
+              } : undefined}
+              onOpenReviewTerminal={!child ? () => {
+                setSheet(false);
+                openReviewTerminal(session);
               } : undefined}
               designOpen={panel === 'design'}
               onAutoRun={setAutoRun}
@@ -742,13 +757,15 @@ function queuedGate(
  * A task's local review in its stage bar's gate (in Code, while it holds Open PR) or in the review
  * session's own: where it is with Cancel while it runs, the task fixing a round's findings, or why
  * it stopped with Retry and Open anyway (or only that it stopped, for one cancelled because the task
- * left Code, which holds nothing). The actions are the task's (`act` sends them there).
+ * left Code, which holds nothing). While the review waits on you in its terminal, Open terminal goes
+ * there. The actions are the task's (`act` sends them there).
  */
 function reviewGate(
   r: CodeReviewSummary,
   blocked: boolean,
   onAct: (a: SessionAction) => Promise<void>,
   onOpen?: () => void,
+  onTerminal?: () => void,
 ): ReactNode {
   const open = onOpen && (
     <button className="btn small" onClick={onOpen} title="Show the local review's findings">
@@ -799,6 +816,24 @@ function reviewGate(
       </span>
     );
   }
+  if (r.waiting) {
+    return (
+      <span className="gate-group">
+        <span className="gate-pill warn" title="A permission prompt or a question in the review's terminal">
+          Local review waits on you
+        </span>
+        {onTerminal && (
+          <button className="gate" onClick={onTerminal} title="Show the review's terminal">
+            Open terminal
+          </button>
+        )}
+        {open}
+        <button className="btn small" disabled={blocked} onClick={() => onAct('review-cancel')} title="Stop the review; then Retry or Open anyway">
+          Cancel
+        </button>
+      </span>
+    );
+  }
   return (
     <span className="gate-group">
       <span className="gate-pill" title="The PR prompt goes once the local review is done">
@@ -820,6 +855,7 @@ function StageBar({
   onAct,
   onReview,
   onOpenLocalReview,
+  onOpenReviewTerminal,
   designOpen = false,
   onAutoRun,
   onMove,
@@ -839,6 +875,8 @@ function StageBar({
   onReview: () => void;
   /** Shows the task's local review findings; left out on the review's own screen. */
   onOpenLocalReview?: () => void;
+  /** Shows the task's review session's terminal, while it waits on you; left out on the review's own screen. */
+  onOpenReviewTerminal?: () => void;
   /** The design panel is open. */
   designOpen?: boolean;
   /** Turns Run to merge on or off (its checkbox beside Design Review, Open PR and Merge & Close). */
@@ -936,7 +974,7 @@ function StageBar({
     }
     case 'code': {
       if (reviewGatesPr(session) && session.codeReview) {
-        gate = reviewGate(session.codeReview, blocked, onAct, onOpenLocalReview);
+        gate = reviewGate(session.codeReview, blocked, onAct, onOpenLocalReview, onOpenReviewTerminal);
         reason = reviewHolds(session.codeReview) ? session.codeReview.detail : null;
         break;
       }

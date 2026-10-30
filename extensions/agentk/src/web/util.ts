@@ -30,7 +30,8 @@ const URGENCY: Record<DotState, number> = {
 
 /**
  * A code-review session: a task's local review (`Session.parentId`). It never shows as a tab, a
- * rail row or a list entry of its own: it's the magnifier joined to its task's tab.
+ * rail row or a list entry of its own: it's the magnifier joined to its task's tab, which opens its
+ * screen while it runs (`reviewOpens`).
  */
 export function isReviewChild(s: Pick<Session, 'kind'>): boolean {
   return s.kind === 'code-review';
@@ -48,12 +49,23 @@ export function liveWithReviews(p: ProjectWithSessions): Session[] {
 
 /**
  * Which part of a task's joined tab (or rail row) is on screen: the task's, its review's (the task
- * with its findings open, or its code-review session opened by its URL), or neither.
+ * with its findings open, or its code-review session on screen), or neither.
  */
 export function joinedPartSelected(task: Pick<Session, 'id' | 'codeReview'>, currentId: string | null | undefined, findingsOpen = false): 'task' | 'review' | null {
   if (!currentId) return null;
   if (task.id === currentId) return findingsOpen && task.codeReview ? 'review' : 'task';
   return task.codeReview?.sessionId === currentId ? 'review' : null;
+}
+
+/**
+ * What opening a task's review shows (its magnifier in the tab or the rail, its row in the ⋯ sheet):
+ * the review's own screen, its terminal with its findings beside it, while its session runs and
+ * isn't idle waiting for the task's fixes; else its findings beside the task's terminal (a done
+ * review's session is gone).
+ */
+export function reviewOpens(task: Pick<Session, 'codeReview'>): 'session' | 'findings' {
+  const r = task.codeReview;
+  return r?.sessionId && r.state !== 'fixing' ? 'session' : 'findings';
 }
 
 /** The task whose code-review session this is, among `sessions`; undefined for any other session. */
@@ -171,8 +183,13 @@ export function lastOpenSession(projectId: string): string | undefined {
   return readLastOpen()[projectId];
 }
 
-/** Remembers the session open in a project, so switching back to the project reopens it. */
-export function rememberOpenSession(projectId: string, sessionId: string) {
+/**
+ * Remembers the session open in a project, so switching back to the project reopens it. A task's
+ * review session is remembered as its task: it has no tab to come back to, and it goes once the
+ * review is done.
+ */
+export function rememberOpenSession(projectId: string, session: Pick<Session, 'id' | 'kind' | 'parentId'>) {
+  const sessionId = isReviewChild(session) && session.parentId ? session.parentId : session.id;
   const all = readLastOpen();
   if (all[projectId] === sessionId) return;
   all[projectId] = sessionId;

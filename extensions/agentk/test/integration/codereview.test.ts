@@ -9,7 +9,7 @@ vi.mock('../../src/server/github.js', async (orig) => {
 });
 
 const { makeEnv, readJsonl, waitFor } = await import('../helpers.js');
-const { all } = await import('../../src/server/db.js');
+const { all, run } = await import('../../src/server/db.js');
 const { mekoLogPath } = await import('../../src/server/mekolog.js');
 const { REVIEW_LEFT_CODE } = await import('../../src/shared/codereview.js');
 type TestEnv = Awaited<ReturnType<typeof makeEnv>>;
@@ -231,6 +231,22 @@ describe('local code review before the PR (real session host + git, fake claude 
     env.core.projects.update(s.projectId, { settings: { codeReview: { strategy: 'off' } } });
     await env.core.sessions.action(s.id, 'open-pr');
     expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'pr', codeReview: null });
+  });
+
+  it('says the review waits on you while its session asks in its terminal, and only while its steps run', async () => {
+    const s = await task({ review: { strategy: 'sirius-1.0' } });
+    fake('review-skip', ['r1s1:all']);
+    await env.core.sessions.action(s.id, 'open-pr');
+    const r = await waitFor(() => env.core.sessions.get(s.id), (x) => x.codeReview?.state === 'failed', 30000, 'the review to fail');
+    const childId = r.codeReview!.sessionId!;
+    run(env.core.db, `UPDATE sessions SET status = 'needs_input' WHERE id = ?`, childId);
+    expect(env.core.sessions.get(s.id).codeReview!.waiting).toBe(false);
+    run(env.core.db, `UPDATE code_reviews SET state = 'fixing' WHERE id = ?`, r.codeReview!.id);
+    expect(env.core.sessions.get(s.id).codeReview!.waiting).toBe(false);
+    run(env.core.db, `UPDATE code_reviews SET state = 'sweeping' WHERE id = ?`, r.codeReview!.id);
+    expect(env.core.sessions.get(s.id).codeReview!.waiting).toBe(true);
+    run(env.core.db, `UPDATE sessions SET status = 'working' WHERE id = ?`, childId);
+    expect(env.core.sessions.get(s.id).codeReview!.waiting).toBe(false);
   });
 
   it('archives the review session with its task, and leaves the task\'s worktree and branch alone', async () => {

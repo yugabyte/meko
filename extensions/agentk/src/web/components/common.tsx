@@ -560,14 +560,15 @@ export function StageChip({ session }: { session: Session }) {
 
 /**
  * The local review's magnifier: blue, its lens pulsing while the review works (still with reduced
- * motion), Meko's m in the lens while the review is in a Meko tool call, and red with a still lens
- * when it failed or was cancelled. Decorative: the button around it names the review.
+ * motion), Meko's m in the lens while the review is in a Meko tool call, the needs-you color with
+ * its lens knocking while the review waits on you in its terminal (over the m), and red with a
+ * still lens when it failed or was cancelled. Decorative: the button around it names the review.
  */
 export function ReviewGlass({ review }: { review: CodeReviewSummary }) {
   const running = reviewRunning(review);
   const stopped = reviewStopped(review);
   return (
-    <span className={cx('review-glass', running && 'running', stopped && 'stopped', running && review.mekoCall && 'meko')} aria-hidden="true">
+    <span className={cx('review-glass', running && 'running', stopped && 'stopped', running && review.mekoCall && !review.waiting && 'meko', running && review.waiting && 'waiting')} aria-hidden="true">
       <svg width="16" height="16" viewBox="0 0 18 18">
         <circle className="lens" cx="7.5" cy="7.5" r="4.2" />
         <circle className="rim" cx="7.5" cy="7.5" r="5.5" />
@@ -581,7 +582,8 @@ export function ReviewGlass({ review }: { review: CodeReviewSummary }) {
 /**
  * A task's local review joined to its tab or rail row: the magnifier and its short count
  * (`reviewSegmentText`), spelled out for its tooltip and screen readers (`reviewSegmentLabel`).
- * Opens the review's findings beside the task's terminal (the review's session stops once it's done).
+ * Opens the review's screen while it runs, else its findings beside the task's terminal
+ * (`reviewOpens`; the review's session stops once it's done).
  */
 export function ReviewSegment({ review, selected, className, tab = false, onOpen }: {
   review: CodeReviewSummary;
