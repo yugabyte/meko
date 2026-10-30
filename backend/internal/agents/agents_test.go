@@ -354,9 +354,10 @@ func TestLoginShellOnlyForAService(t *testing.T) {
 // children too, at LoginPathTimeout.
 func TestLoginShellThatFails(t *testing.T) {
 	_, _ = fakeAgents(t, false, "codex")
-	old := LoginPathTimeout
-	LoginPathTimeout = 300 * time.Millisecond
-	t.Cleanup(func() { LoginPathTimeout = old })
+	old, oldLog := LoginPathTimeout, Log
+	var logged bytes.Buffer
+	LoginPathTimeout, Log = 300*time.Millisecond, slog.New(slog.NewTextHandler(&logged, nil))
+	t.Cleanup(func() { LoginPathTimeout, Log = old, oldLog })
 	pids := filepath.Join(t.TempDir(), "pids")
 	for _, script := range []string{"exit 1", "echo /usr/bin", "sleep 30 & echo $! > " + pids + "; exec sleep 30"} {
 		dir := t.TempDir()
@@ -374,6 +375,10 @@ func TestLoginShellThatFails(t *testing.T) {
 			t.Errorf("%q: found %q in %s", script, p, time.Since(start))
 		}
 	}
+	if l := logged.String(); strings.Count(l, "the login shell gave no PATH: agents only on it aren't found") != 3 ||
+		!strings.Contains(l, "it took more than 300ms") || !strings.Contains(l, "it printed none") {
+		t.Errorf("the log: %s", l)
+	}
 	pid, err := strconv.Atoi(strings.TrimSpace(read(t, pids)))
 	if err != nil {
 		t.Fatal(err)
@@ -387,8 +392,10 @@ func TestLoginShellThatFails(t *testing.T) {
 }
 
 // A login shell slower than LoginPathWait leaves the first list without the agents only on its PATH,
-// but goes on in the background, and the next list has them. A read that fails later, by
-// LoginPathTimeout or the shell's own error, keeps the PATH the last one gave, and says why in Log.
+// that list waiting LoginPathWait in all, however many agents it looks for there, and a list while
+// the shell still runs not waiting at all. The shell goes on in the background, and the list after
+// it ends has them. A read that fails later, by LoginPathTimeout or the shell's own error, keeps the
+// PATH the last one gave, and says so in Log.
 func TestSlowAndFailingLoginShell(t *testing.T) {
 	_, _ = fakeAgents(t, false, "codex")
 	nvm := filepath.Join(t.TempDir(), "nvm", "bin")
@@ -396,7 +403,7 @@ func TestSlowAndFailingLoginShell(t *testing.T) {
 	write(t, claude, "#!/bin/sh\n")
 	dir := t.TempDir()
 	shell, slow, fail := filepath.Join(dir, "bash"), filepath.Join(dir, "slow"), filepath.Join(dir, "fail")
-	write(t, shell, "#!/bin/sh\n[ -e "+fail+" ] && exit 1\n[ -e "+slow+" ] && sleep 1\n"+
+	write(t, shell, "#!/bin/sh\n[ -e "+fail+" ] && exit 1\n[ -e "+slow+" ] && sleep 2\n"+
 		"printf '"+pathMark+"%s"+pathMark+"' "+nvm+"\n")
 	for _, p := range []string{claude, shell} {
 		//nolint:gosec // G302: a test script
@@ -411,16 +418,20 @@ func TestSlowAndFailingLoginShell(t *testing.T) {
 		refreshed(t)
 		LoginShell, LoginPathWait, LoginPathTimeout, LoginPathTTL, Log = oldShell, oldWait, oldTimeout, oldTTL, oldLog
 	})
-	LoginShell, LoginPathWait, LoginPathTimeout, LoginPathTTL = shell, 100*time.Millisecond, 10*time.Second, time.Hour
+	LoginShell, LoginPathWait, LoginPathTimeout, LoginPathTTL = shell, 300*time.Millisecond, 10*time.Second, time.Hour
 	Log = slog.New(slog.NewTextHandler(&logged, nil))
 
-	start := time.Now()
-	if p, ok := Catalog[0].Find(); ok || time.Since(start) > 900*time.Millisecond {
-		t.Errorf("while the shell runs: found %q in %s", p, time.Since(start))
+	// claude, kiro-cli and opencode are each looked for on the login shell's PATH.
+	for _, limit := range []time.Duration{600 * time.Millisecond, 150 * time.Millisecond} {
+		start := time.Now()
+		l, _ := manager(local).List()
+		if len(l.Agents) != 1 || l.Agents[0].Name != "codex" || time.Since(start) > limit {
+			t.Errorf("while the shell runs: %+v in %s, want codex in %s at most", l.Agents, time.Since(start), limit)
+		}
 	}
 	refreshed(t)
-	if p, ok := Catalog[0].Find(); !ok || p != claude {
-		t.Errorf("once it's done: %q, %v", p, ok)
+	if l, _ := manager(local).List(); len(l.Agents) != 2 || l.Agents[0].Command != claude {
+		t.Errorf("once it's done: %+v", l.Agents)
 	}
 
 	LoginPathTimeout, LoginPathTTL = 200*time.Millisecond, 0
@@ -435,7 +446,8 @@ func TestSlowAndFailingLoginShell(t *testing.T) {
 			t.Errorf("after a read that %s: %q, %v", step.name, p, ok)
 		}
 		refreshed(t)
-		if l := logged.String(); !strings.Contains(l, "the login shell gave no PATH") || !strings.Contains(l, step.want) {
+		if l := logged.String(); !strings.Contains(l, "the login shell gave no PATH: keeping the one it gave last") ||
+			!strings.Contains(l, step.want) {
 			t.Errorf("after a read that %s, the log: %s", step.name, l)
 		}
 		logged.Reset()

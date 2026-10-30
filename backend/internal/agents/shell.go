@@ -21,12 +21,12 @@ import (
 // PATH already, so it's "": none, as tests have it.
 var LoginShell = defaultShell()
 
-// LoginPathWait is how long a list waits for the login shell's PATH the first time, within the 5 s
-// AgentK gives the agents' list. LoginPathTimeout bounds the shell's run, which goes on in the
-// background past the wait: a heavy profile can take seconds under a service, and the next list
-// gets its PATH. LoginPathTTL is how long Find keeps its PATH before it reads it again in the
-// background, so a list never waits for the shell but the first, and an agent installed since is
-// still found.
+// LoginPathWait is how long after the first read of the login shell's PATH starts the lists wait
+// for it, all of them together, within the 5 s AgentK gives the agents' list. LoginPathTimeout
+// bounds the shell's run, which goes on in the background past the wait: a heavy profile can take
+// seconds under a service, and the lists after it ends get its PATH. LoginPathTTL is how long Find
+// keeps its PATH before it reads it again in the background, so no list waits for the shell after
+// the first read, and an agent installed since is still found.
 var (
 	LoginPathWait    = 3 * time.Second
 	LoginPathTimeout = 20 * time.Second
@@ -49,18 +49,21 @@ func defaultShell() string {
 
 // loginPathCache is the login shell's PATH last read: Find runs from the server's routes at once.
 // dirs is the last read that gave a PATH, which a failed read keeps. at is when the last read ended,
-// either way. reading is closed when the read under way ends, nil with none.
+// either way. reading is closed when the read under way ends, nil with none. waitUntil is when the
+// first read stops being waited for.
 var loginPathCache struct {
 	sync.Mutex
-	shell   string
-	dirs    []string
-	at      time.Time
-	reading chan struct{}
+	shell     string
+	dirs      []string
+	at        time.Time
+	reading   chan struct{}
+	waitUntil time.Time
 }
 
-// loginPath is the folders on the login shell's PATH. The first call starts reading them and waits
-// up to LoginPathWait, and calls at the same time wait with it; once they're older than
-// LoginPathTTL, a call gets them as they are and starts reading them again in the background.
+// loginPath is the folders on the login shell's PATH. The first call starts reading them, and it and
+// every call until the read ends wait for it until LoginPathWait after it started, no longer, so one
+// list's Finds wait LoginPathWait in all; once they're older than LoginPathTTL, a call gets them as
+// they are and starts reading them again in the background.
 func loginPath() []string {
 	c := &loginPathCache
 	c.Lock()
@@ -75,14 +78,19 @@ func loginPath() []string {
 	first := c.at.IsZero()
 	if c.reading == nil && (first || time.Since(c.at) >= LoginPathTTL) {
 		c.reading = make(chan struct{})
+		if first {
+			c.waitUntil = time.Now().Add(LoginPathWait)
+		}
 		go readInBackground(shell, LoginPathTimeout, Log, c.reading)
 	}
-	reading, wait := c.reading, LoginPathWait
+	reading, wait := c.reading, time.Until(c.waitUntil)
 	c.Unlock()
-	if first {
+	if first && wait > 0 {
+		t := time.NewTimer(wait)
+		defer t.Stop()
 		select {
 		case <-reading:
-		case <-time.After(wait):
+		case <-t.C:
 		}
 	}
 	c.Lock()
@@ -100,14 +108,20 @@ func readInBackground(shell string, timeout time.Duration, log *slog.Logger, don
 	if c.reading == done {
 		c.reading = nil
 	}
+	kept := false
 	if c.shell == shell {
 		c.at = time.Now()
 		if err == nil {
 			c.dirs = dirs
 		}
+		kept = c.dirs != nil
 	}
 	c.Unlock()
-	if err != nil && log != nil {
+	switch {
+	case err == nil || log == nil:
+	case kept:
+		log.Warn("the login shell gave no PATH: keeping the one it gave last", "shell", shell, "error", err.Error())
+	default:
 		log.Warn("the login shell gave no PATH: agents only on it aren't found", "shell", shell, "error", err.Error())
 	}
 }
@@ -136,9 +150,8 @@ const pathMark = "__meko_path__"
 
 // readLoginPath runs the shell to print its PATH between two pathMarks, which it may print and
 // then fail, or hang after (a profile's command): only a missing or unclosed pair gives none, and
-// the error says why. It
-// runs in a session of its own, away from any terminal, so an interactive shell can't take it over,
-// and its whole group is killed at the timeout.
+// the error says why. It runs in a session of its own, away from any terminal, so an interactive
+// shell can't take it over, and its whole group is killed at the timeout.
 func readLoginPath(shell string, timeout time.Duration) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

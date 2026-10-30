@@ -333,8 +333,9 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	} else {
 		startExtensionUpdates(updCtx, l, cfg, log, web)
 	}
-	// The agents on this computer connect to the linked Meko Cloud, else to this Meko.
+	// A login shell that gives no PATH, which leaves agents found only on it missing, is logged.
 	agents.Log = log
+	// The agents on this computer connect to the linked Meko Cloud, else to this Meko.
 	local := agents.Target{Kind: agents.KindLocal, URL: fmt.Sprintf("http://127.0.0.1:%d/mcp", cfg.Server.Port),
 		Token: clientToken}
 	agentsMgr := &agents.Manager{Lock: agentsLock(l), Target: func() (agents.Target, error) {
