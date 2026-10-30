@@ -110,7 +110,10 @@ export interface FileChange {
   deleted: boolean;
   /** Function names its hunk headers name. */
   symbols: string[];
-  /** Where its patch was written for the passes to read, when the diff isn't inline; null otherwise. */
+  /**
+   * Where its patch was written for the passes to read, when the diff isn't inline; null otherwise.
+   * AgentK's spelling: the prompts give it through `claudePath`.
+   */
   patchPath: string | null;
 }
 
@@ -171,8 +174,8 @@ export interface ReviewContext {
   issues: ReviewIssue[];
   datapacks: ReviewDatapack[];
   prior: PriorRound[];
-  /** The worktree the passes read (absolute). */
+  /** The worktree the passes read (absolute), in AgentK's spelling: the prompts give it through `claudePath`. */
   worktree: string;
-  /** The review's run folder (absolute): prompts, patches, issues. */
+  /** The review's run folder (absolute): prompts, patches, issues. AgentK's spelling, as `worktree`. */
   runDir: string;
 }

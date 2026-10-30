@@ -1,4 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// This machine's home under /net/box is /home locally: the spelling the review's Claude runs in.
+vi.mock('../../src/server/paths.js', async (orig) => ({
+  ...(await orig<typeof import('../../src/server/paths.js')>()),
+  claudePath: (p: string) => p.replace(/^\/net\/box(?=\/)/, ''),
+}));
+
 import { basePrompt, passPrompt, priorRounds, scoreBase, scorePrompt, sweepContext, trimPriorRounds } from '../../src/server/review/prompt.js';
 import { PASS_FOOTER, strategyFor } from '../../src/server/review/strategies.js';
 import type { Candidate, Diff, PriorRound, ReviewContext } from '../../src/server/review/types.js';
@@ -138,5 +145,24 @@ describe('the scorer', () => {
     expect(p).toContain('`src/app.ts:3` (major)\nRaised by: diff, claims');
     expect(p).toContain('"step": "r1-score-1"');
     expect(base).toContain('You are not reviewing the PR and you must not report problems of your own.');
+  });
+});
+
+describe('paths in the prompts', () => {
+  // Claude Code asks before any read under /net, and a pass waiting on that prompt stops the review.
+  it("names the worktree, the run folder and the patches in the spelling the review's Claude runs in", () => {
+    const net = ctx({ worktree: '/net/box/home/alice/wt-1', runDir: '/net/box/home/alice/run/reviews/r/r1' });
+    const big: Diff = { ...diff, inline: false, files: [{ ...diff.files[0]!, patchPath: '/net/box/home/alice/run/reviews/r/r1/patches/src__app.ts.patch' }] };
+    const base = basePrompt(net, big);
+    const score = scoreBase(net, big, 'sagittarius-3.0');
+    expect(base).toContain('The working directory is /home/alice/wt-1.');
+    expect(base).toContain("in the review's own folder, /home/alice/run/reviews/r/r1.");
+    expect(base).toContain('patch: /home/alice/run/reviews/r/r1/patches/src__app.ts.patch');
+    expect(score).toContain('The working directory is /home/alice/wt-1.');
+    expect(score).toContain('patch: /home/alice/run/reviews/r/r1/patches/src__app.ts.patch');
+    expect(base).not.toContain('/net/');
+    expect(score).not.toContain('/net/');
+    // A local path is left as it is.
+    expect(basePrompt(ctx(), diff)).toContain("The working directory is /w. It is the task's worktree");
   });
 });

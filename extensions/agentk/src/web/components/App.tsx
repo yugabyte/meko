@@ -27,6 +27,7 @@ import {
   withCreated,
   withOpened,
   rememberOpenSession,
+  reviewOpens,
   sessionToOpen,
   type LiveCount,
 } from '../util';
@@ -333,8 +334,8 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
     navigate({ view: 'project', projectId: p.id, sessionId: s?.id ?? null }, { replace: isDrawerEntry() });
   }, []);
 
-  // A task's magnifier (its tab, its rail row) asks for the task on screen with its local review's
-  // findings open, and the rail's task part, while they're open, for them closed: a request
+  // A task's magnifier (its tab, its rail row), once its review's session is done (`reviewOpens`),
+  // asks for the task on screen with its local review's findings open, and the rail's task part, while they're open, for them closed: a request
   // ProjectView takes once. `findingsOpenFor` is the task whose findings ProjectView shows.
   const [findingsRequest, setFindingsRequest] = useState<{ id: string; open: boolean } | null>(null);
   const [findingsOpenFor, setFindingsOpenFor] = useState<string | null>(null);
@@ -563,7 +564,10 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
           closeDrawer();
         }}
         onOpenReview={(s) => {
-          openFindings(s);
+          // While the review runs, its own screen (`reviewOpens`); else its findings beside the task.
+          if (reviewOpens(s) === 'session' && s.codeReview?.sessionId) {
+            navigate({ view: 'project', projectId: s.projectId, sessionId: s.codeReview.sessionId }, { replace: isDrawerEntry() });
+          } else openFindings(s);
           closeDrawer();
         }}
         findingsOpenFor={findingsOpenFor}

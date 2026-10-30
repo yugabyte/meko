@@ -168,6 +168,14 @@ files, deleted files and generated files are withheld (`withhold.go`, `generated
 budget caps (the change is the user's own, on their own account), and the PR description's skip
 patterns (there's no PR yet).
 
+Every absolute path the prompts give (the working directory, the run folder, the per-file patches,
+the linked issues, the design and each step's prompt file) is in the spelling the review session
+runs in, `claudePath()`, as its cwd and `--add-dir`s are; `ReviewContext` and `context.json` keep
+AgentK's own. For a home under `/net/<this host>`, Claude Code asks before every read under `/net`,
+and a pass that builds a path from a `/net` working directory would wait on a prompt nobody sees.
+The pass prompts' base is written once per round (`base.md`), so a round started before a change
+here keeps its old text through Retry; the scorers' base is rendered again at each send.
+
 **Meko.** In a trusted repo, AgentK reads the `MEKO.md` files that apply (the root's and each
 changed file's ancestors': a table of Datapack, ID and What's in it, `src/shared/mekomd.ts`) and
 lists their datapacks in the base prompt. The passes search the gotchas datapack (its name ends in
@@ -187,10 +195,17 @@ the tooltip names the sweep), `R1` while the task fixes round 1's findings, the 
 blockers·majors, until the task has said what it did with every kept finding, every round's,
 through `review_outcome`: `CodeReviewSummary.addressed`; then, or with none, `LGTM`) or a red `!`.
 A task that answers in its reply instead (tools off, or an untrusted PR head) records no outcomes,
-so its counts stay. Clicking it opens the findings panel beside the task's terminal (`ReviewFindings`: every candidate by round and sweep,
-with its passes, verdict, confidence, kept or why dropped, credited gotchas and what the task did),
-never the review session. While the review holds the PR, the task's Code gate shows it, with Cancel, or
-Retry and Open anyway.
+so its counts stay. While the review session waits on the user in its terminal (a permission prompt
+or a question: `CodeReviewSummary.waiting`), the magnifier takes the needs-you color and its lens
+knocks, since that session has no tab to show it. Clicking it (in the tab, the rail or the ⋯ sheet)
+follows `reviewOpens()` in `src/web/util.ts`: while the review has a running session and isn't
+waiting for the task's fixes (preparing, sweeping, scoring, or failed, which keeps its session for
+Retry), it opens the review's own screen, its terminal with the findings beside it on a desktop;
+otherwise (fixing, done, cancelled) the findings panel beside the task's terminal (`ReviewFindings`:
+every candidate by round and sweep, with its passes, verdict, confidence, kept or why dropped,
+credited gotchas and what the task did), whose **Terminal** button goes to the review's screen while
+it has one. While the review holds the PR, the task's Code gate shows it, with Cancel, or Retry and
+Open anyway, and **Local review waits on you** with **Open terminal** while it waits.
 
 The Usage page and the project home count reviews in their **Code Reviews** section, and stack the
 review sessions' tokens on the Token usage chart ([Token usage](token-usage.md)); the usage report

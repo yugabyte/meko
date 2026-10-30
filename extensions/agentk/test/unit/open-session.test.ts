@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProjectWithSessions, Session } from '../../src/shared/types';
-import { joinedPartSelected, lastOpenSession, liveWithReviews, openSessions, rememberOpenSession, reviewParent, sessionToOpen, sidewaysWheel } from '../../src/web/util.js';
+import { joinedPartSelected, lastOpenSession, liveWithReviews, openSessions, rememberOpenSession, reviewOpens, reviewParent, sessionToOpen, sidewaysWheel } from '../../src/web/util.js';
 
 const session = (id: string, createdAt: number, lastEventAt?: number, position = 0) => ({ id, createdAt, lastEventAt, position }) as Session;
 
@@ -66,6 +66,28 @@ describe('joinedPartSelected', () => {
   it("selects the review's part while the task on screen has its findings open", () => {
     expect(joinedPartSelected(task, 'task', true)).toBe('review');
     expect(joinedPartSelected({ id: 'plain', codeReview: null } as Session, 'plain', true)).toBe('task');
+  });
+});
+
+describe('reviewOpens', () => {
+  const task = (state: string, sessionId: string | null = 'rv') => ({ codeReview: { state, sessionId } }) as Session;
+  // The review's terminal while it runs (a failed one keeps its session for Retry); its findings once
+  // its session is gone, or while it sits idle waiting for the task's fixes.
+  it.each([
+    ['preparing', 'rv', 'session'],
+    ['sweeping', 'rv', 'session'],
+    ['scoring', 'rv', 'session'],
+    ['failed', 'rv', 'session'],
+    ['fixing', 'rv', 'findings'],
+    ['done', null, 'findings'],
+    ['cancelled', null, 'findings'],
+    ['sweeping', null, 'findings'],
+  ] as const)('opens a review %s with session %s on its %s', (state, sessionId, opens) => {
+    expect(reviewOpens(task(state, sessionId))).toBe(opens);
+  });
+
+  it('opens the findings of a task without a review', () => {
+    expect(reviewOpens({ codeReview: null } as Session)).toBe('findings');
   });
 });
 

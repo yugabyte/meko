@@ -12,7 +12,12 @@ import { SidePanel } from './SidePanel';
  * gotchas it credits and what the task did with it; the passes' notes and the datapacks the
  * MEKO.md files listed. Fetched again whenever the review moves on.
  */
-export function ReviewFindings({ session, onClose }: { session: Session; onClose: () => void }) {
+export function ReviewFindings({ session, onClose, onTerminal }: {
+  session: Session;
+  onClose: () => void;
+  /** Shows the review session's terminal: beside the task, while the review has one. */
+  onTerminal?: () => void;
+}) {
   const [detail, setDetail] = useState<CodeReviewDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -50,6 +55,11 @@ export function ReviewFindings({ session, onClose }: { session: Session; onClose
         )}
         <span className="sp" />
         {loading && <Busy label="Loading" />}
+        {onTerminal && (
+          <button className="btn small" onClick={onTerminal} title="Show the review's terminal">
+            Terminal
+          </button>
+        )}
         <button className="icon-btn panel-close" onClick={onClose} aria-label="Close findings">
           <span className="desktop-only">×</span>
           <span className="mobile-only">← Back</span>

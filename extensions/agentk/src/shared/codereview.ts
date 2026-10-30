@@ -216,6 +216,8 @@ export interface CodeReviewSummary {
   addressed: boolean;
   /** The review session is in a Meko tool call (the lens shows Meko's m). */
   mekoCall: boolean;
+  /** The review session waits on the user in its terminal (a permission prompt or a question): the glass knocks. */
+  waiting: boolean;
   /** Why it failed or was cancelled, in plain words; null otherwise. */
   detail: string | null;
 }
@@ -276,7 +278,8 @@ export function reviewSegmentLabel(r: CodeReviewSummary): string {
     case 'cancelled': what = reviewHolds(r) ? 'cancelled. Retry or Open anyway' : `cancelled: ${r.detail}`; break;
   }
   const meko = r.mekoCall ? ', searching Meko' : '';
-  return `Local review: ${[name, ...where, what].join(', ')}${meko}`;
+  const waiting = r.waiting ? ', waiting on you in its terminal' : '';
+  return `Local review: ${[name, ...where, what].join(', ')}${meko}${waiting}`;
 }
 
 /** The Code gate's line for a done review: what it found until the task addressed it, then LGTM. */

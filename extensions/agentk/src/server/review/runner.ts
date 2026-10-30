@@ -190,6 +190,8 @@ export class CodeReviews {
       // Every round's: the next round runs at the fix turn's end whether or not the task said what it did.
       addressed: r.state === 'done' && json<CodeReviewFinding[]>(r.findings_json, []).every((f) => !f.kept || !!f.outcome),
       mekoCall: !!r.session_id && RUNNING.includes(r.state) && this.core.sessions.mekoCalling(r.session_id),
+      // A permission prompt or a question in the review's terminal, which has no tab to show it.
+      waiting: !!r.session_id && RUNNING.includes(r.state) && sessionRow(this.db, r.session_id)?.status === 'needs_input',
       detail: r.detail,
     };
   }
@@ -419,7 +421,7 @@ export class CodeReviews {
   private description(task: SessionRow): string {
     const parts = [task.initial_prompt ?? ''];
     const design = get<{ artifact_url: string | null }>(this.db, 'SELECT artifact_url FROM designs WHERE session_id = ?', task.id);
-    if (design) parts.push(`The task's design: ${design.artifact_url ?? this.core.sessions.designFile(task)}`);
+    if (design) parts.push(`The task's design: ${design.artifact_url ?? claudePath(this.core.sessions.designFile(task))}`);
     return parts.filter(Boolean).join('\n\n');
   }
 
