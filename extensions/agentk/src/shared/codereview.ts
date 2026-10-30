@@ -352,7 +352,7 @@ export interface CodeReviewDetail {
   review: CodeReviewSummary;
   settings: ReviewSettings;
   /** The datapacks the review's MEKO.md files listed, the gotchas one marked. */
-  datapacks: { name: string; id: string; about: string; gotchas: boolean }[];
+  datapacks: { name: string; id: string; gotchas: boolean }[];
   /** Each round's passes' notes (their summaries when not LGTM). */
   notes: { round: number; text: string }[];
   findings: CodeReviewFinding[];
