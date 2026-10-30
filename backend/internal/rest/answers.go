@@ -6,6 +6,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/yugabyte/meko/backend/internal/agents"
 	"github.com/yugabyte/meko/backend/internal/envelope"
 	"github.com/yugabyte/meko/backend/internal/memory"
 )
@@ -19,20 +20,38 @@ func (a *api) answersStatus(c echo.Context) error {
 	return envelope.OK(c, st)
 }
 
-// setAnswers is PUT /settings/answers {harness, command, model}, for the CLI's admin token only: it
-// points the server at a program to run. harness "" turns answers off.
+// setAnswers is PUT /settings/answers {harness, command, model}, for the owner only (the CLI's admin
+// token, or the web UI's Settings): it makes the server run a program. harness "" turns answers off;
+// with no command, the server finds the harness's itself.
 func (a *api) setAnswers(c echo.Context) error {
-	if a.Credential(c) != "admin" {
-		return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN", "Set up search answers with meko answers use claude.")
+	if !a.owner(c) {
+		return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN",
+			"Only Meko's owner can set up search answers: meko answers use claude, or Settings.")
 	}
 	var body memory.AnswerSettings
 	if ok, berr := bind(c, &body); !ok {
 		return berr
 	}
+	body.Command = harnessCommand(body.Harness, body.Command)
 	if err := a.Service.SetAnswers(ctx(c), body); err != nil {
 		return serviceError(c, err)
 	}
 	return a.answersStatus(c)
+}
+
+// harnessCommand is the program to run for a harness: command when given (the CLI finds it on the
+// user's PATH), else the one Meko finds as it finds the agent it connects, which may be "" (not
+// installed), for the service to refuse.
+func harnessCommand(harness, command string) string {
+	if harness == "" || command != "" {
+		return command
+	}
+	if ag, ok := agents.Lookup(harness); ok {
+		if p, found := ag.Find(); found {
+			return p
+		}
+	}
+	return ""
 }
 
 // answer is POST /datapacks/:id/answer {query, passages: [{source, id, text}]}: an answer to query

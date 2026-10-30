@@ -1,5 +1,5 @@
 // Overview's warning while the memory extractor is off: Meko isn't pulling memories out of this
-// datapack's conversations, and the command that points it at the user's own AI tool. Closing it
+// datapack's conversations, and where to turn it on: Settings, or the command. Closing it
 // lasts until the datapack has more conversations; it's hidden for a datapack that opted out.
 
 import { useState } from "react";
@@ -8,6 +8,7 @@ import { api } from "../lib/api";
 import type { Datapack } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
 import { Banner } from "./Banner";
+import { SettingsHere } from "./SettingsHere";
 
 export const EXTRACTOR_COMMAND = "meko memory-extractor use claude";
 
@@ -39,8 +40,8 @@ export function ExtractionBanner({ datapack }: { datapack: Datapack }) {
   return (
     <Banner tone="warning" icon={<BrainCircuit />} command={EXTRACTOR_COMMAND} onClose={close}>
       <b>Meko isn't extracting memories from your conversations.</b> Point it at the AI tool you already use, and it
-      pulls memories out of them in the background, from your own messages. Run this in a terminal (Claude Code
-      today; Codex and Cursor are coming):
+      pulls memories out of them in the background, from your own messages. Turn it on in <SettingsHere />, or run
+      this in a terminal (Claude Code today; Codex and Cursor are coming):
     </Banner>
   );
 }

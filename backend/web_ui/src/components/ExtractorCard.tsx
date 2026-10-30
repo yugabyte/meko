@@ -1,4 +1,4 @@
-// The Status page's memory extractor: off (with the command that turns it on), or the AI tool it
+// The Status page's memory extractor: off (with where to turn it on), or the AI tool it
 // runs, how often, what waits, and how its last run went.
 
 import { api } from "../lib/api";
@@ -7,6 +7,7 @@ import { useLoad } from "../lib/useLoad";
 import { CopyBlock } from "./CopyBlock";
 import { EXTRACTOR_COMMAND } from "./ExtractionBanner";
 import { KeyValues } from "./KeyValues";
+import { SettingsHere } from "./SettingsHere";
 import { MetricCard } from "./metrics/MetricCard";
 import { Badge } from "./ui";
 
@@ -18,7 +19,8 @@ export function ExtractorCard() {
       {!x.enabled ? (
         <div className="space-y-2 text-sm">
           <p>
-            <Badge tone="warning">off</Badge> Memories aren't extracted from conversations. Turn it on with:
+            <Badge tone="warning">off</Badge> Memories aren't extracted from conversations. Turn it on in{" "}
+            <SettingsHere />, or with:
           </p>
           <CopyBlock text={EXTRACTOR_COMMAND} />
         </div>

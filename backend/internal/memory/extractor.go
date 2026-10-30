@@ -169,6 +169,10 @@ func checkHarnessCommand(harness, command string) error {
 	if !ok {
 		return fmt.Errorf("%w: harness must be claude (codex and cursor come later)", ErrBadRequest)
 	}
+	if command == "" {
+		return fmt.Errorf("%w: Meko can't find %s on this computer: install it and sign in, or run the "+
+			"setup from a terminal where %s works", ErrBadRequest, program, program)
+	}
 	if !filepath.IsAbs(command) || filepath.Base(command) != program {
 		return fmt.Errorf("%w: command must be the absolute path of %s", ErrBadRequest, program)
 	}
