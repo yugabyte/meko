@@ -19,7 +19,7 @@ import { approveDesign, changingDecisions } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { closingText, cx, dotState, designGate, isReviewChild, joinedPartSelected, reviewGatesPr, reviewParent, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, reviewTarget, runToMergeShown, runToMergeTitle, sessionTabTitle, totalTokens, updateShowing, usageTitle } from '../util';
+import { closingText, cx, dotState, designGate, isReviewChild, joinedPartSelected, reviewGatesPr, reviewParent, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, reviewTarget, runToMergeShown, runToMergeTitle, sessionTabTitle, sidewaysWheel, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
 import { Busy, Check, ConfirmButton, ContextRing, DatapackName, Elapsed, HarnessLogo, NotesIcon, ReviewSegment, RunToMergeCheck, RunToMergeMark, StageChip, StatusDot } from './common';
@@ -369,7 +369,14 @@ export function ProjectView({
   // A task with a local review is one joined tab: the task's part, then the review's (the magnifier),
   // inside one border. The task's part opens its session, the review's its findings beside it.
   const tabs = (
-    <div className="tabs" role="tablist" ref={tabsRef}>
+    <div
+      className="tabs"
+      role="tablist"
+      ref={tabsRef}
+      onWheel={(e) => {
+        e.currentTarget.scrollLeft += sidewaysWheel(e, e.currentTarget.clientWidth);
+      }}
+    >
       {sessions.map((s) => {
         const part = joinedPartSelected(s, session?.id, panel === 'findings');
         const tab = (

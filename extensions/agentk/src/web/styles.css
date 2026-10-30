@@ -1439,6 +1439,9 @@ textarea.input {
   font-size: 12px;
   color: var(--muted);
 }
+/* The session tabs scroll sideways with no scrollbar: an overlay one (macOS, phones) is drawn over the
+   tabs' names. A mouse wheel scrolls them too (sidewaysWheel in util.ts), and the selected tab is
+   scrolled into view. */
 .tabs {
   display: flex;
   gap: 2px;
@@ -1446,7 +1449,11 @@ textarea.input {
   border-bottom: 1px solid var(--rule);
   background: var(--sunk);
   overflow-x: auto;
+  scrollbar-width: none;
   flex: none;
+}
+.tabs::-webkit-scrollbar {
+  display: none;
 }
 .tab {
   display: flex;
@@ -4062,6 +4069,12 @@ div[id^='dak-mermaid-'] .label {
   overflow-x: auto;
   /* Comment cards size against the visible width, not the (often wider) table. */
   container-type: inline-size;
+}
+/* An overlay scrollbar (macOS, phones; markOverlayScrollbars in useMedia.ts) is drawn over the box's
+   bottom edge: room for it under the last row, which it covered, only on a diff wider than its box
+   (data-sideways, watchSideways in useMedia.ts), the one that has a scrollbar. */
+.overlay-scrollbars .diff-wrap[data-sideways] {
+  padding-bottom: 14px;
 }
 .diff {
   border-collapse: collapse;
