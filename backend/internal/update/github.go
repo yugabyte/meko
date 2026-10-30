@@ -124,11 +124,13 @@ func (c *Client) get(ctx context.Context, url, accept string) (*http.Response, e
 }
 
 // tokenlessHint says what GitHub refusing a call with no token means: its limit of 60 API calls an
-// hour is spent (a 403 or 429 with X-RateLimit-Remaining 0), or the repo is internal, which GitHub
-// hides behind a 401, 403 or 404 from anyone not signed in.
+// hour is spent (a 429, or a 403 with X-RateLimit-Remaining 0), or the repo is internal, which GitHub
+// hides behind a 401, 403 or 404 from anyone not signed in. The header alone isn't enough: GitHub
+// sends it as 0 on the call that spends the last one too, which gets its usual answer.
 func tokenlessHint(resp *http.Response) string {
 	signIn := "sign in with gh auth login, or set GITHUB_TOKEN"
-	if resp.Header.Get("X-RateLimit-Remaining") == "0" || resp.StatusCode == http.StatusTooManyRequests {
+	spent := resp.Header.Get("X-RateLimit-Remaining") == "0"
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden && spent {
 		when := "within the hour"
 		if reset, err := strconv.ParseInt(resp.Header.Get("X-RateLimit-Reset"), 10, 64); err == nil {
 			when = "after " + time.Unix(reset, 0).Local().Format("15:04")

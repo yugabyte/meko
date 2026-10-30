@@ -217,6 +217,28 @@ func TestInstallRunsNothingWhenCutShort(t *testing.T) {
 	}
 }
 
+func TestInstallHelpPrintsTheHeaderOnly(t *testing.T) {
+	e := setup(t, goodSums)
+	for _, flag := range []string{"--help", "-h"} {
+		code, out := e.run(t, nil, flag)
+		if code != 0 {
+			t.Fatalf("%s: exit %d:\n%s", flag, code, out)
+		}
+		for _, want := range []string{"curl -fsSL https://mekodata.ai/install.sh | sh", "--version <X.Y.Z>",
+			"--reinstall", "--no-service", "--non-interactive", "GITHUB_TOKEN"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("%s: no %q in:\n%s", flag, want, out)
+			}
+		}
+		if strings.Contains(out, "#") || strings.Contains(out, "set -eu") {
+			t.Errorf("%s: printed past the header or kept its #:\n%s", flag, out)
+		}
+		if _, err := os.Stat(e.app); !os.IsNotExist(err) {
+			t.Errorf("%s: installed something", flag)
+		}
+	}
+}
+
 func TestInstallRefusesABadChecksum(t *testing.T) {
 	e := setup(t, func([]byte) string { return strings.Repeat("0", 64) })
 	code, out := e.run(t, nil)

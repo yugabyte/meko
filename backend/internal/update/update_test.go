@@ -627,6 +627,9 @@ func TestTokenlessRefusalsSayWhy(t *testing.T) {
 		{"too many requests", 429, nil, "", "try again within the hour, or sign in with gh auth login"},
 		{"internal repo", 404, nil, "", "If the repo is still internal, sign in with gh auth login"},
 		{"forbidden", 403, map[string]string{"X-RateLimit-Remaining": "59"}, "", "If the repo is still internal"},
+		// The call that spends the last of the 60 gets its usual answer, with the header at 0.
+		{"internal repo on the last call", 404, map[string]string{"X-RateLimit-Remaining": "0"}, "",
+			"If the repo is still internal, sign in with gh auth login"},
 		{"with a token", 404, nil, "tok", ""},
 		{"server error", 502, nil, "", ""},
 	}
