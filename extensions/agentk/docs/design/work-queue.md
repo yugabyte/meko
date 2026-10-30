@@ -71,7 +71,7 @@ up to 99 and then 99+ (`queueBadge()`).
 
 **Sync** (`POST /api/work-items/sync`) and a timer every `[work_queue] sync_minutes` (15 by default;
 0 turns it off) add to the bottom of the queue, from the sources `[work_queue] github` and `slack` turn
-on (both off by default, so there's no sync until you turn one on). All three are in Settings › Work queue, reached from **Sync settings** on the
+on (both off by default, so there's no sync until you turn one on). All four, with `slack_list` (the Slack list's link), are in Settings › Work queue, reached from **Sync settings** on the
 queue page too. With both sources off there's no sync: the button is disabled, a pressed Sync is a 409,
 and the timer does nothing (`WorkSync.sources` tells the page). The timer ticks every minute
 (`WorkQueue.tick`) and syncs once the minutes have passed, so a change in Settings applies at once:
@@ -89,13 +89,15 @@ and the timer does nothing (`WorkSync.sources` tells the page). The timer ticks 
   column marks done. A list is private until it's shared, but sharing one of its items gives the
   people it goes to edit access to the whole list, so its rows are still data written by people.
   The rows are read by one `claude -p` through your own Slack
-  connector (`src/server/slack.ts`), titled with their name, or the message's first line. Unlike Ask AgentK, it loads your
+  connector (`src/server/slack.ts`), titled with their name or title column, else their first column of text (a row with neither gets "Slack message"). Unlike Ask AgentK, it loads your
   MCP servers and claude.ai connectors (no `--strict-mcp-config`). It reads messages other people
   wrote, so it's kept to reading Slack: no built-in tools but ToolSearch (`--tools ToolSearch`);
   none of your Claude Code settings but `env` and `apiKeyHelper`, which signing in needs (`signInSettings()`, with
   `--setting-sources project` in AgentK's empty `run/work-sync` folder), so your allow rules and
   default mode don't apply; `--permission-mode default`; and only `[work_queue] slack_tools` allowed
-  (the claude.ai Slack connector's `slack_read_file` and its other read tools by default). ToolSearch runs too, since it
+  (only the claude.ai Slack connector's `slack_read_file` by default, so the run can't search Slack or
+  read a channel or thread, even when a row's text asks it to; a `slack_tools` set in config.toml
+  before this keeps its old list and needs `mcp__claude_ai_Slack__slack_read_file` added). ToolSearch runs too, since it
   needs no permission, but it only loads tools' schemas. In `-p` nothing can be asked, so every other
   tool, another connector's included, is refused; the claude.ai connector's write
   tools are also denied by name. The prompt calls the rows' text data, not instructions.

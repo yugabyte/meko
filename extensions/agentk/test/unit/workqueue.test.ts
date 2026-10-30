@@ -270,6 +270,7 @@ describe("reading the user's Slack list", () => {
     expect(after('--system-prompt')).toContain('the file F0LIST');
     expect(slackArgs('', [], 'F0LIST')).not.toContain('--allowedTools');
     expect(slackPrompt([], 'F0LIST')).not.toContain('ToolSearch');
+    expect(DEFAULT_CONFIG.workQueue.slackTools).toEqual(['mcp__claude_ai_Slack__slack_read_file']);
   });
 
   it('takes only the sign-in part of your Claude Code settings', () => {
@@ -281,7 +282,7 @@ describe("reading the user's Slack list", () => {
 
   it.each([
     ['the messages it found', ran({ structured_output: { found: true, items: [{ url: 'u', text: ' hi ', channel: 'c' }, { text: 'no url' }] } }), [{ url: 'u', text: 'hi', channel: 'c' }]],
-    ['that it could not reach the list', ran({ structured_output: { found: false, items: [] } }), /couldn't read your Slack list/],
+    ['that it could not reach the list', ran({ structured_output: { found: false, items: [] } }), /couldn't read your Slack list.*slack_read_file/],
     ['a sign-in it needs', ran({ is_error: true, result: 'Not logged in · Please run /login' }, { code: 1 }), /isn't signed in/],
     ['a timeout', ran({}, { timedOut: true, code: null }), /over 180 seconds/],
   ])('reads %s', (_what, r, want) => {
