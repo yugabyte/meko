@@ -2479,7 +2479,9 @@ export interface MoveSessionRequest {
   /**
    * Send the new stage's prompt. Left out, it follows promptByDefault, as the move dialog leaves it;
    * kept for pages from before the dialog dropped its checkbox. Ignored for Review & PR, which
-   * picks up the branch's open PR, or sends the PR prompt when there's work to push.
+   * picks up the branch's open PR, or, when there's work to push, does what Open PR does: with the
+   * local review on, the session goes to Code and the review sends the PR prompt when it's done;
+   * else the PR prompt goes now.
    */
   prompt?: boolean;
   /**
@@ -2755,8 +2757,11 @@ export type TermServerMessage =
 //        the PR prompt without a me_ak_review line: both 409 unless the review failed or was cancelled)
 // POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to, a
 //        missing task, or instructions that aren't text or are too long; 409 while AgentK is mid-turn, in Merge & Close,
-//        or a prompt (the stage's, or the user's instructions) is due and Claude is waiting or exited; 502 when its prompt
-//        couldn't be sent: the move stays made, except a PR prompt's, which goes back to where it was)
+//        or a prompt (the stage's, or the user's instructions) is due and Claude is waiting or exited, and for a move to
+//        Review & PR with work to push, while prompts from the user wait or a stopped local review holds the PR (Retry
+//        it, or Open anyway); 502 when its prompt couldn't be sent: the move stays made, except a PR prompt's, which
+//        goes back to where it was. A move to Review & PR that the local review takes over answers with the session
+//        in Code, the review running)
 // GET    /api/sessions/:id/design              → DesignDoc
 // POST   /api/sessions/:id/design/answers DesignAnswersRequest → 204   (sends them for AgentK to revise the design,
 //        and resolves the questions answered with their answers in questions.json, unless the questions come from a

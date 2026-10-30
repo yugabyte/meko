@@ -4,7 +4,7 @@ import { KIND_LABELS, KIND_STAGES, START_HINTS, START_STAGES, STAGE_LABELS } fro
 import type { MekoStatus, Session, StartStage } from '../../shared/types';
 import { appUrl } from '../base';
 import {
-  MAX_DEPTH, MAX_ROUNDS, STRATEGIES, reviewHolds, reviewRunning, reviewSegmentLabel, reviewSegmentText, strategyName,
+  MAX_DEPTH, MAX_ROUNDS, STRATEGIES, reviewRunning, reviewSegmentLabel, reviewSegmentText, reviewStopped, strategyName,
   type CodeReviewSummary, type ReviewOverrides, type ReviewSettings, type ReviewStrategySetting,
 } from '../../shared/codereview';
 import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkKeyframes, blinkOffsetMs, totalUnits, type BlinkRun } from '../blink';
@@ -565,9 +565,9 @@ export function StageChip({ session }: { session: Session }) {
  */
 export function ReviewGlass({ review }: { review: CodeReviewSummary }) {
   const running = reviewRunning(review);
-  const held = reviewHolds(review);
+  const stopped = reviewStopped(review);
   return (
-    <span className={cx('review-glass', running && 'running', held && 'stopped', running && review.mekoCall && 'meko')} aria-hidden="true">
+    <span className={cx('review-glass', running && 'running', stopped && 'stopped', running && review.mekoCall && 'meko')} aria-hidden="true">
       <svg width="16" height="16" viewBox="0 0 18 18">
         <circle className="lens" cx="7.5" cy="7.5" r="4.2" />
         <circle className="rim" cx="7.5" cy="7.5" r="5.5" />
@@ -597,7 +597,7 @@ export function ReviewSegment({ review, selected, className, tab = false, onOpen
       type="button"
       role={tab ? 'tab' : undefined}
       aria-selected={tab ? selected : undefined}
-      className={cx('review-seg', className, selected && 'sel', reviewHolds(review) && 'stopped')}
+      className={cx('review-seg', className, selected && 'sel', reviewStopped(review) && 'stopped')}
       title={label}
       aria-label={label}
       aria-current={!tab && selected ? 'page' : undefined}

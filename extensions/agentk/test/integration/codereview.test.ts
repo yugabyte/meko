@@ -11,6 +11,7 @@ vi.mock('../../src/server/github.js', async (orig) => {
 const { makeEnv, readJsonl, waitFor } = await import('../helpers.js');
 const { all } = await import('../../src/server/db.js');
 const { mekoLogPath } = await import('../../src/server/mekolog.js');
+const { REVIEW_LEFT_CODE } = await import('../../src/shared/codereview.js');
 type TestEnv = Awaited<ReturnType<typeof makeEnv>>;
 
 /** Reports for the ledger passes that clear the change: the dependents and claims passes need their ledgers. */
@@ -33,7 +34,7 @@ describe('local code review before the PR (real session host + git, fake claude 
   /** The task's PR prompt, once it has reached Claude (the stage moves to PR just before it's typed). */
   const prPrompt = (id: string) => waitFor(() => prompts(id).at(-1) ?? '', (p) => p.includes('Open a pull request'), 10000, 'the PR prompt');
 
-  /** A task at Code whose worktree has a new file with six lines, ready for Open PR. */
+  /** A task at Code (or where `req.start` says) whose worktree has a new file with six lines, ready for Open PR. */
   async function task(req: Record<string, unknown> = {}) {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'none' } });
     const s = await env.core.sessions.create(p.id, { name: 'Fix the thing', prompt: 'do it', start: 'code', ...req });
@@ -139,6 +140,9 @@ describe('local code review before the PR (real session host + git, fake claude 
     expect(failed.stage).toBe('code');
     expect(failed.codeReview!.detail).toBe('no review pass reported');
     await expect(env.core.sessions.action(s.id, 'open-pr')).rejects.toThrow(/Retry it, or open the PR anyway/);
+    // A move to Review & PR is refused alike: it would open the PR past the stopped review.
+    await expect(env.core.sessions.move(s.id, { stage: 'review' })).rejects.toThrow(/Retry it, or open the PR anyway/);
+    expect(env.core.sessions.get(s.id).stage).toBe('code');
     await env.core.sessions.action(s.id, 'review-open-anyway');
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 10000, 'the PR prompt');
     expect(await prPrompt(s.claudeSessionId)).not.toContain('me_ak_review');
@@ -149,6 +153,34 @@ describe('local code review before the PR (real session host + git, fake claude 
     const s = await env.core.sessions.create(p.id, { name: 'Fix the thing', prompt: 'do it', start: 'code', autoRun: true, review: { strategy: 'sirius-1.0' } });
     const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the review');
     expect(done.codeReview).toMatchObject({ strategy: 'sirius-1.0', state: 'done' });
+    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM');
+  });
+
+  it('reviews the change in Code when the session is moved to Review & PR by hand, then sends the PR prompt with the move\'s instructions', async () => {
+    const s = await task({ start: 'explore', review: { strategy: 'sirius-1.0' } });
+    await env.core.sessions.move(s.id, { stage: 'review', instructions: 'Mention the demo.' });
+    // The review holds the PR, in Code, as for Open PR.
+    expect(env.core.sessions.get(s.id).stage).toBe('code');
+    const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the review');
+    expect(done.codeReview).toMatchObject({ strategy: 'sirius-1.0', state: 'done' });
+    const pr = await prPrompt(s.claudeSessionId);
+    // Claude's system prompt still says Explore (no PR): the moved line leads the review's first prompt to it.
+    expect(pr.startsWith('AgentK moved this session to the Code stage.')).toBe(true);
+    expect(pr).toContain('me_ak_review:LGTM');
+    expect(pr).toContain('Mention the demo.');
+    expect(all<{ stage: string }>(env.core.db, 'SELECT stage FROM session_stages WHERE session_id = ? ORDER BY rowid', s.id).map((r) => r.stage)).toEqual(['explore', 'code', 'pr']);
+  });
+
+  it('starts a new review on a move to Review & PR after the last one stopped because the task left Code', async () => {
+    const s = await task({ review: { strategy: 'sirius-1.0' } });
+    await env.core.sessions.action(s.id, 'open-pr');
+    await env.core.sessions.move(s.id, { stage: 'explore', prompt: false });
+    const left = await waitFor(() => env.core.sessions.get(s.id), (x) => x.codeReview?.state === 'cancelled', 30000, 'the review to stop');
+    expect(left.codeReview!.detail).toBe(REVIEW_LEFT_CODE);
+    await env.core.sessions.move(s.id, { stage: 'review' });
+    const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the new review');
+    expect(done.codeReview).toMatchObject({ state: 'done' });
+    expect(done.codeReview!.id).not.toBe(left.codeReview!.id);
     expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM');
   });
 
