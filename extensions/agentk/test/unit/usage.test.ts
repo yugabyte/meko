@@ -201,18 +201,24 @@ describe('local code reviews', () => {
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
              hook_token, desired, status, stage, kind, parent_id, created_at) VALUES ('r1', 'p', 'r1', 'Local review of S1', 'c', 'b', 'main', '/w', 't',
              'tok-r1', 'running', 'idle', 'reviewing-code', 'code-review', 's1', ?)`, now);
-    const review = (id: string, state: string, round: number, sent: boolean, counts: string, findings: string, candidates = '[]') =>
+    const review = (id: string, state: string, round: number, sent: boolean, counts: string, findings: string, candidates = '[]', reported = round) => {
       run(db, `INSERT INTO code_reviews(id, task_id, session_id, strategy, rounds, depth, state, round, counts_json, findings_json, candidates_json,
                created_at, updated_at, finished_at) VALUES (?, 's1', 'r1', 'sirius-1.0', 1, 1, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id, state, round, counts, findings, candidates, now, now, sent ? now : null);
+      // The rounds whose passes reported.
+      for (let n = 1; n <= reported; n++) run(db, `INSERT INTO code_review_steps(review_id, step, report_json, at) VALUES (?, ?, '{}', ?)`, id, `r${n}s1:all`, now);
+    };
     // Its finished round's candidates moved into findings_json; candidates_json still holds them, and doesn't count twice.
     review('cr1', 'done', 1, true, '{"blocker":1,"major":0,"minor":2}',
       JSON.stringify([{ round: 1, kept: true, outcome: { status: 'fixed' } }, { round: 1, kept: true, outcome: { status: 'declined' } }, { round: 1, kept: true }, { round: 1, kept: false }]),
       '[{}, {}, {}, {}]');
     // Cancelled while scoring its second round: that round's candidates are only in candidates_json.
     review('cr2', 'cancelled', 2, false, '{"blocker":0,"major":0,"minor":0}', JSON.stringify([{ round: 1, kept: false }]), '[{}, {}]');
-    // A row that doesn't parse: it found nothing.
-    review('cr3', 'failed', 1, false, 'oops', 'oops', 'oops');
+    // A row that doesn't parse: it found nothing, and no pass reported.
+    review('cr3', 'failed', 1, false, 'oops', 'oops', 'oops', 0);
+    // Failed preparing its second round: nextRound left round 1's candidates in candidates_json,
+    // already in findings_json. They count once, and round 2 never ran.
+    review('cr4', 'failed', 2, false, '{"blocker":0,"major":0,"minor":0}', JSON.stringify([{ round: 1, kept: false }, { round: 1, kept: false }]), '[{}, {}]', 1);
     const msg = (sid: string, id: string, input: number, output: number) =>
       run(db, `INSERT INTO usage_messages(session_id, message_id, model, at, input, output, cache_read, cache_write) VALUES (?, ?, 'claude-opus-5-5', ?, ?, ?, 0, 0)`,
         sid, id, now, input, output);
@@ -220,7 +226,7 @@ describe('local code reviews', () => {
     msg('s1', 'b', 1, 9);
 
     const counts = {
-      runs: 3, byOutcome: { done: 1, failed: 1, cancelled: 1, running: 0 }, lgtm: 0, prs: 1, rounds: 4, candidates: 7,
+      runs: 4, byOutcome: { done: 1, failed: 2, cancelled: 1, running: 0 }, lgtm: 0, prs: 1, rounds: 4, candidates: 9,
       findings: { blocker: 1, major: 0, minor: 2 }, fixed: 1, declined: 1,
     };
     const reviews = { ...counts, usage: { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0, messages: 1 }, cost: { usd: 4, unpricedMessages: 0 } };

@@ -472,10 +472,13 @@ describe('the usage stats report', () => {
     const finding = (key: string, kept: boolean, status?: 'fixed' | 'declined') =>
       ({ key, kept, comment: 'Secret task leaks /home/alice', outcome: status ? { status, note: 'done' } : null });
     const none = { blocker: 0, major: 0, minor: 0 };
-    const review = (id: string, state: string, round: number, sent: boolean, counts: typeof none, findings: unknown[], iso: string) =>
+    const review = (id: string, state: string, round: number, sent: boolean, counts: typeof none, findings: unknown[], iso: string) => {
       run(db, `INSERT INTO code_reviews(id, task_id, session_id, strategy, rounds, depth, state, round, counts_json, findings_json, created_at, updated_at, finished_at)
                VALUES (?, 's1', 'r1', 'sagittarius-3.0', 1, 1, ?, ?, ?, ?, ?, ?, ?)`,
         id, state, round, JSON.stringify(counts), JSON.stringify(findings), at(iso), at(iso), sent ? at(iso) : null);
+      // Every round reached its passes.
+      for (let n = 1; n <= round; n++) run(db, `INSERT INTO code_review_steps(review_id, step, report_json, at) VALUES (?, ?, '{}', ?)`, id, `r${n}s1:diff`, at(iso));
+    };
     // Two rounds: three kept (one fixed, one declined), one refuted; its PR went.
     review('cr1', 'done', 2, true, { blocker: 1, major: 1, minor: 1 },
       [finding('1:1', true, 'fixed'), finding('1:2', true, 'declined'), finding('1:3', false), finding('2:1', true)], '2026-09-27T23:00:00Z');

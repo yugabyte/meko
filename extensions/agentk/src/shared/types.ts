@@ -341,11 +341,15 @@ export interface CodeReviewCounts {
   lgtm: number;
   /** Reviews whose PR prompt went, Open anyway included. */
   prs: number;
-  /** Rounds run: the first and every re-review. */
+  /**
+   * Rounds run, the first and every re-review: each that reached its passes. One that stopped, or
+   * found nothing changed, while it prepared doesn't count.
+   */
   rounds: number;
   /**
-   * Every candidate the passes raised, before scoring and Validate: each finished round's, and the
-   * ones a round still under way (or stopped) has raised so far.
+   * Every candidate the passes raised, before scoring and Validate, each once: each finished
+   * round's, and the ones a round that ran and hasn't finished (still under way, or stopped) has
+   * raised so far.
    */
   candidates: number;
   /** Kept findings, every round's: what the `me_ak_review:` line says. */

@@ -53,8 +53,9 @@ reports.
   counted by their state when the report is built (`done`, `failed`, `cancelled`, or `running` for
   one still under way, which a later report corrects, since days are sent again), with those done
   without a kept finding (`lgtm`), those whose PR prompt went, Open anyway included (`prs`), rounds
-  run, candidates the passes raised (a round still under way, or stopped, counts the ones its sweeps
-  have raised so far), kept findings by severity, and the ones the task reported fixed
+  run (each that reached its passes: one stopped while it prepared doesn't count), candidates the
+  passes raised (a round that ran and is still under way, or stopped, counts the ones its sweeps
+  have raised so far; each candidate once), kept findings by severity, and the ones the task reported fixed
   or declined; and the tokens the review sessions (`kind = 'code-review'`) spent on the day, with
   their price in whole cents (`usdCents`) and Kiro's credits when there were some. Left out of a day
   with neither. Nothing from a finding (its file, line or comment) is sent. There's no all-time

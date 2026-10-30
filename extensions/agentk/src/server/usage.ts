@@ -396,6 +396,7 @@ export interface ReviewRun {
   /** When it started. */
   at: number;
   state: string;
+  /** Rounds that reached their passes. */
   round: number;
   /** Its PR prompt went. */
   sent: boolean;
@@ -415,18 +416,28 @@ const parsed = <T>(s: string | null, fallback: T): T => {
 
 /** Every local review, or one project's (its task's project), oldest first. A row that doesn't parse counts as finding nothing. */
 export function reviewRuns(db: Db, projectId?: string): ReviewRun[] {
-  return all<{ created_at: number; state: string; round: number; finished_at: number | null; counts_json: string; findings_json: string; candidates_json: string }>(db,
-    `SELECT r.created_at, r.state, r.round, r.finished_at, r.counts_json, r.findings_json, r.candidates_json FROM code_reviews r
-     ${projectId ? 'JOIN sessions t ON t.id = r.task_id WHERE t.project_id = ?' : ''} ORDER BY r.created_at`, ...(projectId ? [projectId] : []))
+  // `reported`: a step of the review's current round (r<round>s…, r<round>c…) has reported.
+  return all<{
+    created_at: number; state: string; round: number; finished_at: number | null; counts_json: string; findings_json: string; candidates_json: string; reported: number;
+  }>(db,
+    `SELECT r.created_at, r.state, r.round, r.finished_at, r.counts_json, r.findings_json, r.candidates_json,
+            EXISTS (SELECT 1 FROM code_review_steps s WHERE s.review_id = r.id
+                    AND (s.step LIKE 'r' || r.round || 's%' OR s.step LIKE 'r' || r.round || 'c%')) AS reported
+     FROM code_reviews r ${projectId ? 'JOIN sessions t ON t.id = r.task_id WHERE t.project_id = ?' : ''} ORDER BY r.created_at`, ...(projectId ? [projectId] : []))
     .map((r) => {
       const findings = parsed<{ round?: unknown; kept?: unknown; outcome?: { status?: unknown } | null }[]>(r.findings_json, []);
       const list = Array.isArray(findings) ? findings : [];
       const kept = list.filter((f) => f?.kept === true);
+      // The current round reached its passes: it's sweeping, scoring or fixing, or a step of it
+      // reported. One that stopped (or found nothing changed) while preparing never ran. nextRound
+      // bumps `round` and leaves the last round's candidates_json until beginRound resets it, so
+      // its candidates_json is the earlier round's, already in findings_json.
+      const ran = !!r.reported || r.state === 'sweeping' || r.state === 'scoring' || r.state === 'fixing';
       // A round's candidates move into findings_json only when it finishes; until then (or for good,
       // once it failed or was cancelled) they're in candidates_json.
-      const open = list.some((f) => f?.round === r.round) ? [] : parsed<unknown[]>(r.candidates_json, []);
+      const open = ran && !list.some((f) => f?.round === r.round) ? parsed<unknown[]>(r.candidates_json, []) : [];
       return {
-        at: r.created_at, state: r.state, round: r.round, sent: r.finished_at != null,
+        at: r.created_at, state: r.state, round: Math.max(0, r.round - (ran ? 0 : 1)), sent: r.finished_at != null,
         counts: { ...noCounts(), ...parsed<Partial<SeverityCounts>>(r.counts_json, {}) },
         candidates: list.length + (Array.isArray(open) ? open.length : 0),
         fixed: kept.filter((f) => f.outcome?.status === 'fixed').length,
