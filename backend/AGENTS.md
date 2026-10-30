@@ -118,7 +118,7 @@ Markdown only people read, such as this file and `REVIEW.md`, doesn't run it; `d
   ports, never `~/.meko`, port 7778 or 7777 (the CLI's tests set `MEKO_WEB_PORT` to a free port). They never touch the user's own service, Keychain or
   extensions: the CLI's tests set `HOME`, `MEKO_SECRETS=file`, a fake service manager and a PATH
   without the machine's `agentk` (or `agent-k-local`, its old name), and never read or change the
-  machine's agents: `agents.SystemFolders` is empty, `agents.LoginShell` is `""` (or the user's
+  machine's agents: `agents.SystemFolders` and `agents.Applications` are empty, `agents.LoginShell` is `""` (or the user's
   interactive login shell runs and finds their agents), `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `KIRO_HOME`
   and `XDG_CONFIG_HOME` are unset, and the agent commands are fakes on the test's PATH. Tests that need no model start the memory engine with the
   hashing embedder (`memoryengine.Options.TestEmbedder`; the CLI's tests set it through their own

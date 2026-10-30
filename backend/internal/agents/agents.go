@@ -177,10 +177,17 @@ var SystemFolders = []string{"/usr/local/bin", "/opt/homebrew/bin"}
 var Applications = "/Applications"
 
 // Find is the agent's command, or else one of also: on PATH, else in its usual folders, else on the
-// user's login shell's PATH (LoginShell), as an absolute path.
+// user's login shell's PATH (LoginShell), as an absolute path. The shell runs only when no command
+// is found otherwise.
 func (a Agent) Find() (string, bool) {
-	for _, c := range append([]string{a.Command}, a.also...) {
+	commands := append([]string{a.Command}, a.also...)
+	for _, c := range commands {
 		if p, ok := a.find(c); ok {
+			return p, true
+		}
+	}
+	for _, c := range commands {
+		if p, ok := findIn(loginPath(), c); ok {
 			return p, true
 		}
 	}
@@ -203,10 +210,7 @@ func (a Agent) find(command string) (string, bool) {
 			dirs = append(dirs, filepath.Join(Applications, f))
 		}
 	}
-	if p, ok := findIn(append(dirs, SystemFolders...), command); ok {
-		return p, true
-	}
-	return findIn(loginPath(), command)
+	return findIn(append(dirs, SystemFolders...), command)
 }
 
 // findIn is the first executable file called name in the folders.

@@ -121,7 +121,7 @@ var mekoCommands = []command{
 	{name: "agent connect", group: "Connect", summary: "Connect an agent to Meko (claude, codex, kiro, opencode, cursor)",
 		usage: "meko agent connect [claude|codex|kiro|opencode|cursor]", examples: []example{
 			{"meko agent connect claude", "add Meko's MCP server to Claude Code, for all your projects"},
-			{"meko agent connect kiro", "the same for Kiro CLI (codex and opencode too)"},
+			{"meko agent connect kiro", "the same for Kiro CLI (codex, opencode and cursor too)"},
 			{"meko agent connect", "the MCP URL and token, to connect any MCP client"},
 		}},
 	{name: "agent disconnect", group: "Connect", summary: "Disconnect an agent from Meko",
