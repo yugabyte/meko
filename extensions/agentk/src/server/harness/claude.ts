@@ -78,7 +78,7 @@ export function claudeHarness(deps: { claudeCode: ClaudeCode; log: Logger }): Ha
         AK_USER_STATUSLINE: userStatusLine(l.untrusted ? null : l.row.worktree_path, statusLineScriptPath(paths))?.command ?? '',
         // Plugins' hooks modules are early access in Claude Code, off unless this says otherwise.
         ...(l.modDir ? { CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1' } : {}),
-        // A review's steps run one at a time in subagents, and its turn's end is the sweep's end. Claude Code
+        // A review's steps run in subagents (a sweep's passes all at once), and its turn's end is the sweep's end. Claude Code
         // runs subagents in the background by default, ending the turn before they report; this keeps them in it.
         ...(l.review ? { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' } : {}),
       },

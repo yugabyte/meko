@@ -206,7 +206,7 @@ When you've finished, write a short summary to {{learnedFile}} (it's outside the
 
 {{steps}}
 
-Run them one at a time, in this order: start a step only after the one before it has finished. Start each in a fresh subagent of the type named for it, and give it exactly the prompt shown, with nothing added. Each one reports to AgentK itself with {{reportTool}}; don't report for it, check what it found or retry it yourself. When every step has finished, say "Done" and stop. Change no file.`,
+Run them all at once: start every step in the same message, each in a fresh subagent of the type named for it, and give each exactly the prompt shown, with nothing added. Then wait for all of them to finish. Each one reports to AgentK itself with {{reportTool}}; don't report for it, check what it found or retry it yourself. When every step has finished, say "Done" and stop. Change no file.`,
 
   'code-review-score': `Run the next steps of AgentK's local code review of "{{task}}": score {{what}}, each on its own.
 
