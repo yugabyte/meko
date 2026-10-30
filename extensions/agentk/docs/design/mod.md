@@ -91,10 +91,12 @@ paste, then Enter). A prompt is never sent both ways:
   lost, and `submit()`'s `lost` callback tells its sender; a harness that can't tell counts it as
   started, so a prompt runs once at most. Only the PR prompt acts on it (`prLost` in
   `lifecycle.ts`): the session goes back to where it was, a local review's own PR prompt counts as
-  not sent, and the prompt goes again once Claude is back (see [Queued gates](lifecycle.md#queued-gates)):
-  after a Resume (`claudeBack`, from the `SessionStart` that makes it idle) or a recovery that
-  sent no prompt, or at its next turn's end. The resend is kept in memory; after a server restart,
-  Open PR sends the prompt. The case seen was Claude Code moving the conversation into its
+  not sent, and the prompt goes again once Claude is back with no prompt of its own (`claudeBack`:
+  a Resume or a recovery whose launch had none), or is dropped (logged) when anything comes first
+  (see [Queued gates](lifecycle.md#queued-gates)). A send whose prompt is reported lost while it's
+  still being typed neither marks the session working nor counts a review's PR as sent. The resend
+  is kept in memory; after a server restart, Open PR (or a move to Review & PR) sends the prompt.
+  The case seen was Claude Code moving the conversation into its
   background sessions (a TUI that exits with background tasks running: a `continued-in` line in
   the transcript) just as the PR prompt arrived. Sessions launch with
   `CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF=1` against that;

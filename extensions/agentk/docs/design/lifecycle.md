@@ -186,11 +186,18 @@ sent, withdrawn or dropped.
   turn ended but before the queued one went goes at once, with them unless it gives its own. If the
   queued PR prompt can't be typed, the activity log keeps them, so they can be given again.
 - **A PR prompt Claude exited before taking.** The PR prompt that went but whose turn never started
-  (see [AgentK's mod](mod.md)) isn't a queued gate: it shows no pill. The session goes back to
-  where it came from, and the prompt goes again once Claude is back between turns: after a Resume
-  or a recovery that sent no prompt, or at the end of its next turn (not an interrupted one). An
-  Open PR you press meanwhile goes instead, with its own instructions. Run to merge's goes only while
-  Run to merge is on: stopping it drops it.
+  (see [AgentK's mod](mod.md)) isn't a queued gate: it shows no pill and waits for nothing. It's the
+  press that sent it (yours, or Run to merge's) carried over to Claude's return. The session goes
+  back to where it came from, and the prompt goes only when Claude is back with no prompt of its
+  own: after a Resume, or a recovery that sent none. It's dropped, and the activity log says why,
+  when anything comes first:
+  - another prompt's turn starts (one you typed, or a recovery's first or continue prompt);
+  - a move, or archive;
+  - Run to merge stops, for its own prompt;
+  - an Open PR you press meanwhile, which goes instead with its own instructions;
+  - Claude can't take it when it's back.
+
+  Open PR (or a move to Review & PR) sends it then.
 - **Merge when ready.** In Review, the merge blockers are of two kinds. Some clear by themselves:
   AgentK working or waiting on you mid-turn, CI running, AgentK's review still to come, its findings
   being addressed (while Claude runs), and, mid-turn only, unpushed commits and uncommitted files
@@ -267,7 +274,7 @@ It stops, saying why in the activity log (`stopAutoRun`), when you uncheck it (r
 merge is being requested), press **Cancel** on the gate it queued, interrupt a turn in Code or Review &
 PR, or move the session, by hand or by a tool (a move to Review & PR that's refused leaves it on).
 Stopping drops its PR prompt that Claude exited before taking (`autoRunOff`), so it isn't sent
-again later.
+again later. A Run to merge PR prompt found with Run to merge already off is dropped (logged) too.
 An interrupt counts only where the harness reports one: Claude Code with AgentK's mod (`/mod/turn`)
 and OpenCode (its plugin marks `session.execution.interrupted`). Kiro, and Claude Code without the
 mod, report none, so there Esc doesn't stop it, and a queued Open PR goes when the next turn ends:

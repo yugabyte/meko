@@ -82,6 +82,8 @@ describe('a session whose home Claude reaches by its local spelling (real sessio
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'the session to start');
     const row = env.core.sessions.row(s.id);
     writeFileSync(join(row.worktree_path, 'a.txt'), 'changed\n');
+    // Past what goes in the prompt whole: each file's patch is a file the passes read by its path.
+    writeFileSync(join(row.worktree_path, 'big.txt'), 'line\n'.repeat(60_000));
     await env.core.sessions.action(s.id, 'open-pr');
     const review = await waitFor(() => env.core.sessions.get(s.id).codeReview, (r) => !!r, 10000, 'the review to start');
     const base = join(env.core.paths.run, 'reviews', review!.id, 'r1', 'base.md');
@@ -90,6 +92,7 @@ describe('a session whose home Claude reaches by its local spelling (real sessio
     const text = readFileSync(base, 'utf8');
     expect(text).toContain(`The working directory is ${local(row.worktree_path)}.`);
     expect(text).toContain(local(join(env.core.paths.run, 'reviews', review!.id, 'r1')));
+    expect(text).toMatch(new RegExp(`patch: ${local(join(env.core.paths.run, 'reviews', review!.id, 'r1', 'patches'))}/`));
     expect(text).not.toContain(row.worktree_path);
   });
 });

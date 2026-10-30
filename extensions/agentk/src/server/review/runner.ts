@@ -351,6 +351,8 @@ export class CodeReviews {
     const wt = task.worktree_path;
     const base = await this.baseRef(task);
     const diff = await readDiff(wt, base, dir);
+    // The passes read each patch too large to inline by its path: as Claude is told every path.
+    for (const f of diff.files) if (f.patchPath) f.patchPath = claudePath(f.patchPath);
     const mergeBase = (await git(wt, 'merge-base', base, 'HEAD')).trim();
     const head = (await git(wt, 'rev-parse', 'HEAD')).trim();
     const dirty = !!(await git(wt, 'status', '--porcelain')).trim();

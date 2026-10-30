@@ -273,6 +273,8 @@ export class SessionManager {
    * (`notStarted`).
    */
   private unstarted = new Map<string, Unstarted>();
+  /** Sessions whose Claude was launched with a prompt it hasn't started yet (its first, or a continue): it isn't back between turns. */
+  private launchPrompt = new Set<string>();
   /** After a failed recovery, when to try again (Infinity: not until the user resumes it). */
   private recoverRetryAt = new Map<string, number>();
   /** Token totals per session, refreshed after each transcript read. */
@@ -1273,6 +1275,8 @@ export class SessionManager {
     // A new Claude process: the last one's mod and measurements are gone with it.
     this.forgetClaude(row.id);
     this.contextFill.delete(row.id);
+    if (opts.prompt) this.launchPrompt.add(row.id);
+    else this.launchPrompt.delete(row.id);
     try {
       await this.core.host.spawn(row.tmux_name, claudePath(row.worktree_path), ['/bin/sh', script]);
     } catch (e) {
@@ -1336,7 +1340,9 @@ export class SessionManager {
           throw e;
         }
       }
-      this.setStatus(id, 'working');
+      // Unless its turn started meanwhile (its hooks set the status), or Claude went first and the
+      // prompt was reported lost (the session is exited, not working).
+      if (this.unstarted.get(id) === unstarted) this.setStatus(id, 'working');
     });
     const tail = next.catch(() => undefined);
     this.submitting.set(id, tail);
@@ -1556,6 +1562,14 @@ export class SessionManager {
     return started && !started(row, u.mark, u.text) ? u : null;
   }
 
+  /**
+   * Claude is up after a launch: unless the launch gave it a prompt to take (its first, a recovery's
+   * continue), it's back between turns, and a PR prompt the last Claude lost goes now (claudeBack).
+   */
+  private back(id: string): void {
+    if (!this.launchPrompt.has(id)) void this.core.lifecycle.claudeBack(id);
+  }
+
   /** A measurement from the mod: the context window's fill, and the account's plan limits. */
   private measured(id: string, m: Record<string, unknown>): void {
     this.core.limits.reportMeasured(id, m.rateLimits);
@@ -1676,17 +1690,17 @@ export class SessionManager {
         } else if (row.status === 'starting' || row.status === 'exited' || trustPrompt) {
           this.clearStartup(id);
           this.setStatus(id, 'idle');
-          // Back with no prompt to take (a resume): what the last Claude lost can go now.
-          void this.core.lifecycle.claudeBack(id);
+          this.back(id);
         } else if (row.status === 'recovered') {
-          // A recovery that sent no prompt, whose status was set before Claude got here.
-          void this.core.lifecycle.claudeBack(id);
+          // A recovery, whose status was set before Claude got here.
+          this.back(id);
         }
         break;
       }
       case 'UserPromptSubmit':
         this.turns.add(id);
         this.unstarted.delete(id);
+        this.launchPrompt.delete(id);
         // A mod too old to report what it holds (until it reloads): this may be a held prompt starting.
         this.mod.started(id);
         this.clearStartup(id);
@@ -1983,9 +1997,9 @@ export class SessionManager {
     });
     this.event(row.id, 'recovered', detail);
     if (parked) this.notifyUser(row.id, 'Needs you', detail);
-    // Back with no prompt, and Claude already up (its SessionStart came before the status above): what
-    // the last Claude lost goes now. Otherwise that SessionStart sends it, or the continue turn's end does.
-    if (!prompt && !this.awaitingStart.has(row.id)) void this.core.lifecycle.claudeBack(row.id);
+    // Claude already up (its SessionStart came before the status above): what the last Claude lost
+    // goes now. Otherwise that SessionStart sends it.
+    if (!this.awaitingStart.has(row.id)) this.back(row.id);
     this.core.log.info(`recovered ${row.id}: ${detail}`);
   }
 
@@ -2372,6 +2386,8 @@ export class SessionManager {
       this.diffs.delete(row.id);
       this.forgetClaude(row.id, 'The session was archived');
       this.core.lifecycle.dropQueued(row.id, 'The session was archived');
+      this.core.lifecycle.dropLostPr(row.id, null);
+      this.launchPrompt.delete(row.id);
       this.contextFill.delete(row.id);
       // A kept branch is one that existed before the session (see Discard in action()).
       const kept = `branch ${row.branch} kept (it existed before the session)`;

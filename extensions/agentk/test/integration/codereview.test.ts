@@ -167,11 +167,31 @@ describe('local code review before the PR (real session host + git, fake claude 
     const s = await task({ review: { strategy: 'sirius-1.0' } });
     // Like Claude Code moving the conversation to its background sessions as the PR prompt comes.
     writeFileSync(join(env.fakeDir, 'exit-unrun'), 'Open a pull request');
+    // Typed: Claude's SessionEnd lands before the session host answers the paste.
+    let answered: Promise<void> = Promise.resolve();
+    if (!mod) {
+      const submit = env.core.host.submit.bind(env.core.host);
+      vi.spyOn(env.core.host, 'submit').mockImplementation(async (name, text) => {
+        if (!text.includes('Open a pull request')) return submit(name, text);
+        vi.mocked(env.core.host.submit).mockRestore();
+        answered = (async () => {
+          await submit(name, text);
+          await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'exited', 10000, 'SessionEnd');
+        })();
+        return answered;
+      });
+    }
     await env.core.sessions.action(s.id, 'open-pr');
-    const lost = await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'exited', 30000, 'Claude to exit with the PR prompt');
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'exited', 30000, 'Claude to exit with the PR prompt');
+    // Typed, the send finishes after the exit: it mustn't count the prompt as sent, or the session as working.
+    await answered;
+    // Past the send's end too (sendReviewedPr runs in the session's serial queue).
+    await (env.core.lifecycle as unknown as { serial(id: string, f: () => Promise<void>): Promise<void> }).serial(s.id, async () => undefined);
+    await new Promise((r) => setImmediate(r));
+    const lost = env.core.sessions.get(s.id);
     if (mod) expect(readJsonl<{ text: string }>(join(env.fakeDir, 'mod-prompts.jsonl')).some((p) => p.text.includes('Open a pull request'))).toBe(true);
     // Back where it was, not busy, and no turn was cut short: the review's PR counts as not sent.
-    expect(lost).toMatchObject({ stage: 'code', busy: false, codeReview: { state: 'done' } });
+    expect(lost).toMatchObject({ status: 'exited', stage: 'code', busy: false, codeReview: { state: 'done' } });
     expect(env.core.sessions.row(s.id).interrupted).toBe(0);
     const finished = () => all<{ finished_at: number | null }>(env.core.db, 'SELECT finished_at FROM code_reviews WHERE task_id = ?', s.id)[0].finished_at;
     expect(finished()).toBeNull();

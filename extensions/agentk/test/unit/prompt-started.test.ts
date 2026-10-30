@@ -25,13 +25,15 @@ describe('whether a prompt started its turn, from the Claude Code transcript wri
     expect(promptInTranscript(mark, PROMPT)).toBe(started);
   });
 
-  it('counts a transcript not written yet as not started, and one replaced since as unknown, so started', () => {
+  it('counts a transcript not written yet as not started, and one replaced or removed since as unknown, so started', () => {
     dir = tempDir('akl-mark-');
     const file = join(dir, 't.jsonl');
     expect(promptInTranscript(transcriptMarkOf(file), PROMPT)).toBe(false);
     writeFileSync(file, user('a long earlier turn'));
     const mark = transcriptMarkOf(file);
     writeFileSync(file, '');
+    expect(promptInTranscript(mark, PROMPT)).toBe(true);
+    rmSync(file);
     expect(promptInTranscript(mark, PROMPT)).toBe(true);
   });
 });

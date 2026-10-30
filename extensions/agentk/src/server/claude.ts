@@ -399,7 +399,8 @@ export function promptInTranscript(mark: TranscriptMark, text: string): boolean 
   try {
     fd = openSync(mark.file, 'r');
   } catch (e) {
-    return (e as NodeJS.ErrnoException).code !== 'ENOENT';
+    // Never written: no turn. Gone since it was written: replaced, so it can't tell.
+    return (e as NodeJS.ErrnoException).code !== 'ENOENT' || mark.offset > 0;
   }
   try {
     const size = fstatSync(fd).size;

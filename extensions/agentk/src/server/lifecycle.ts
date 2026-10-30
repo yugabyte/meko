@@ -211,8 +211,9 @@ export class Lifecycle {
    */
   private queuedApprovals = new Map<string, CheckedAnswers | null>();
   /**
-   * PR prompts Claude took but exited before running (prLost), to send again once Claude is back:
-   * the stage it went back to and what went with it. In memory only: after a restart, Open PR sends it.
+   * PR prompts Claude took but exited before running (prLost), to send again once Claude is back
+   * with no prompt of its own (claudeBack): the stage it went back to and what went with it. In
+   * memory only: after a restart, Open PR (or a move to Review & PR) sends it.
    */
   private lostPrs = new Map<string, PrSend & { back: Stage }>();
   /** Sessions whose cleanup is running, so an overlapping poll doesn't start a second one. */
@@ -824,39 +825,41 @@ export class Lifecycle {
     this.sessions.notifyUser(id, 'PR prompt not taken', `${name} exited before taking the PR prompt. It goes again once ${name} is back (Resume the session if it shows as exited), or ${press} sends it.`);
   }
 
-  /** Claude is back between turns after a launch with no prompt (a resume): a PR prompt the last one lost goes now. */
+  /** Claude is back between turns after a launch with no prompt (a Resume, a recovery): a PR prompt the last one lost goes now, or not at all. */
   async claudeBack(id: string): Promise<void> {
     await this.resendLostPr(id);
   }
 
   /**
-   * Sends again a PR prompt the last Claude lost, once Claude can take it in the stage the session
-   * went back to; dropped when the session moved on meanwhile. True when it went.
+   * Sends again a PR prompt the last Claude lost, now that Claude is back between turns, in the
+   * stage the session went back to. Anything else drops it, saying why: it's the press (the user's,
+   * or Run to merge's) carried over to Claude's return, not a gate that waits. True when it went.
    */
   private async resendLostPr(id: string): Promise<boolean> {
     const sent = this.lostPrs.get(id);
     const row = sent && sessionRow(this.db, id);
     if (!sent || !row) return false;
     if (row.desired !== 'running' || row.stage !== sent.back) {
-      this.lostPrs.delete(id);
+      this.dropLostPr(id, `the session moved to ${STAGE_LABELS[row.stage]}`);
       return false;
     }
     // An Open PR the user pressed since (with their latest instructions) goes instead: takeQueuedPr sends it.
     if (row.queued_gate === 'open-pr' && !row.queued_auto) {
-      this.lostPrs.delete(id);
+      this.dropLostPr(id, 'you pressed Open PR since');
       return false;
     }
     // Run to merge's PR prompt goes only while Run to merge is on (stopping it drops it too: autoRunOff).
     if (sent.by === 'auto' && !row.auto_run) {
-      this.lostPrs.delete(id);
+      this.dropLostPr(id, 'Run to merge is off');
       return false;
     }
     try {
       this.checkPromptable(row);
+      if (this.sessions.promptsHeld(id) > 0) throw new HttpError(409, 'prompts to take first');
     } catch {
-      return false; // not yet: the next turn's end tries again
+      this.dropLostPr(id, `${agentName(row)} couldn't take it when it was back`);
+      return false;
     }
-    if (this.sessions.promptsHeld(id) > 0) return false;
     this.lostPrs.delete(id);
     try {
       await this.serial(id, () => this.sendPr(row, (r) => {
@@ -866,6 +869,8 @@ export class Lifecycle {
         // Run to merge's Open PR, queued at a turn's start meanwhile, is this one.
         if (r.queued_gate === 'open-pr') this.setQueued(id, null);
       }, sent));
+      // Lost again while it was being typed: it goes once Claude is back again.
+      if (this.lostPrs.has(id)) return false;
       if (sent.reviewLine !== undefined) this.core.reviews.markSent(id);
       this.sessions.event(id, 'pr', 'PR prompt sent again');
       return true;
@@ -878,6 +883,21 @@ export class Lifecycle {
       this.sessions.notifyUser(id, 'Open PR not sent', `The PR prompt couldn't be sent again (${errMsg(e)}). ${how}`);
       return false;
     }
+  }
+
+  /**
+   * Drops a PR prompt the last Claude didn't take, saying why in the activity log: another prompt's
+   * turn started first, a move, Run to merge stopping (its own), or it couldn't go when Claude came
+   * back. Open PR (or a move to Review & PR) sends it then. A null `why` drops it unsaid (archive).
+   */
+  dropLostPr(id: string, why: string | null): void {
+    const sent = this.lostPrs.get(id);
+    const row = sessionRow(this.db, id);
+    if (!sent || !row) return;
+    this.lostPrs.delete(id);
+    if (why === null) return;
+    const how = sent.back === 'code' ? 'Press Open PR to send it' : 'Move the session to Review & PR to send it';
+    this.sessions.event(id, 'pr', `The PR prompt ${agentName(row)} didn't take won't go again: ${why}. ${how}.`);
   }
 
   /** Refuses while Claude can't take a prompt: mid-turn, waiting on the user (a ready design aside), or exited. */
@@ -912,6 +932,8 @@ export class Lifecycle {
     const lead = [o.moved, findings].filter(Boolean).join('\n\n') || undefined;
     try {
       await this.serial(row.id, () => this.sendPr(row, this.prCheck(row.id, false), { lead, instructions: o.instructions, by: o.by, reviewLine: o.line }));
+      // Claude exited while it was being typed (prLost): it didn't go, and goes again once Claude is back.
+      if (this.lostPrs.has(row.id)) return false;
       this.core.reviews.markSent(row.id);
       return true;
     } catch (e) {
@@ -993,6 +1015,7 @@ export class Lifecycle {
     const dropQueued = () => {
       this.stopAutoRun(id, moved);
       this.dropQueued(id, moved);
+      this.dropLostPr(id, moved);
     };
     if (instructions) this.checkPromptable(cur);
     // A move within Review & PR was refused above (moveError).
@@ -1006,6 +1029,8 @@ export class Lifecycle {
         if (wasOn && this.sessions.row(id).stage === cur.stage) this.sessions.update(id, { auto_run: 1 });
         throw e;
       }
+      // A PR prompt the last Claude didn't take: the move's own replaced it (sendPr), or the branch's PR was picked up.
+      this.dropLostPr(id, moved);
       // A move a local review took over leaves the session in Code until the review sends the PR prompt.
       if (wasOn) this.sessions.event(id, 'auto-run', `Run to merge stopped: ${this.sessions.row(id).stage === 'code' ? 'the session moved to Code for its local review' : moved}`);
       return;
@@ -1223,8 +1248,6 @@ export class Lifecycle {
     if (interrupted && (row.stage === 'code' || row.stage === 'pr' || row.stage === 'review')) this.stopAutoRun(id, 'you interrupted AgentK');
     // A move the session's own agent asked for (AgentK's session tools) goes now, and gives it its next turn.
     if (await this.core.tools.turnEnded(id, interrupted)) return;
-    // A PR prompt the last Claude lost goes now (a recovery's continue turn came first), unless the user stepped in.
-    if (!interrupted && (await this.resendLostPr(id))) return;
     // A learn session that wrote its summary is done, and closes.
     if (row.stage === 'explore' && row.purpose === 'learn' && !interrupted) {
       const closed = await this.learnDone(row).catch((e: unknown) => {
@@ -2307,10 +2330,7 @@ export class Lifecycle {
     if (!sessionRow(this.db, id)?.auto_run) return false;
     this.sessions.update(id, { auto_run: 0 });
     // The PR prompt it sent that Claude never took goes with it: the user takes the gates back.
-    if (this.lostPrs.get(id)?.by === 'auto') {
-      this.lostPrs.delete(id);
-      this.sessions.event(id, 'pr', `The PR prompt ${agentName(this.sessions.row(id))} didn't take won't go again: Run to merge stopped`);
-    }
+    if (this.lostPrs.get(id)?.by === 'auto') this.dropLostPr(id, 'Run to merge stopped');
     this.autoRunTold.delete(id);
     this.autoRunBlocked.delete(id);
     this.core.changed();
@@ -2323,6 +2343,8 @@ export class Lifecycle {
    */
   onTurnStart(id: string): void {
     const row = sessionRow(this.db, id);
+    // Claude took another prompt first (yours, or a recovery's continue): the work moved on from it.
+    if (row && this.lostPrs.has(id)) this.dropLostPr(id, `${agentName(row)} took another prompt first`);
     if (!row?.auto_run || row.stage !== 'code' || row.queued_gate || row.desired !== 'running') return;
     this.queueGate(id, 'open-pr', 'Run to merge: the PR opens when this turn ends', '', true);
   }
