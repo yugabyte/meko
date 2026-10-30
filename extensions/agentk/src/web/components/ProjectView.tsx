@@ -741,7 +741,8 @@ function queuedGate(
 /**
  * A task's local review in its stage bar's gate (in Code, while it holds Open PR) or in the review
  * session's own: where it is with Cancel while it runs, the task fixing a round's findings, or why
- * it stopped with Retry and Open anyway. The actions are the task's (`act` sends them there).
+ * it stopped with Retry and Open anyway (or only that it stopped, for one cancelled because the task
+ * left Code, which holds nothing). The actions are the task's (`act` sends them there).
  */
 function reviewGate(
   r: CodeReviewSummary,
@@ -767,6 +768,16 @@ function reviewGate(
         <button className="gate" disabled={blocked} onClick={() => onAct('review-retry')} title="Review again, reusing the steps already reported">
           Retry
         </button>
+      </span>
+    );
+  }
+  if (r.state === 'cancelled') {
+    return (
+      <span className="gate-group">
+        <span className="gate-pill warn" title={r.detail ?? undefined}>
+          Local review cancelled
+        </span>
+        {open}
       </span>
     );
   }

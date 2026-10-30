@@ -56,7 +56,7 @@ sequenceDiagram
   participant AK as AgentK server
   participant R as Review session (child)
   participant S as Subagents
-  U->>AK: Open PR (or Run to merge, or the open_pr tool)
+  U->>AK: Open PR (or Run to merge, the open_pr tool, or a move to Review & PR)
   AK->>AK: settings: session, then project, then global
   AK->>AK: diff, guides, MEKO.md, history, linked issues into run/reviews/{id}/r{round}
   AK->>R: start kind=code-review, parent=T, same worktree
@@ -79,7 +79,14 @@ sequenceDiagram
 
 `openPr()` (and `takeQueuedPr()`, so a queued Open PR and Run to merge go through it too) asks
 `CodeReviews.openPr()` first: while it returns true, a review holds the PR and sends the PR prompt
-itself when it's done (`Lifecycle.sendReviewedPr`).
+itself when it's done (`Lifecycle.sendReviewedPr`). A move to Review & PR by hand with work to push
+(`moveToReview`, from Explore, Design or Code) does the same when a review applies
+(`CodeReviews.applies`): the session goes to Code (`reviewBeforePr`), since the review's checks, its
+gate and its cancelling are all Code's, and the review sends the PR prompt as for Open PR. From
+Explore or Design, the `moved` line (Claude's system prompt still names the old stage, and
+Explore's says no PR) waits on the review (`code_reviews.lead`) and goes before its first prompt to
+the task, its fixes or the PR prompt. A move that only picks up the branch's open PR runs no review. The PR prompt itself doesn't ask the task
+to review its diff: the review session has.
 
 **The review session** is a session of kind `code-review` (`Session.parentId` is its task), held by
 the session host like any other, so it survives restarts. It works in its task's worktree without
@@ -134,7 +141,14 @@ after `adoptPr` when Claude left it out (`syncReviewLine`).
 **Stopping.** A failed review (no pass reported, or an error) or one the user cancelled holds the
 PR: Open PR answers 409, Run to merge waits, and the task offers **Retry** (the round again from
 the step it stopped at, reusing every step already reported, from `code_review_steps`) and **Open
-anyway** (the PR prompt with no line). A task that leaves Code cancels its review.
+anyway** (the PR prompt with no line). A move out of Code (or a move to Review & PR that finds
+the task outside Code) cancels its review, running or stopped, with the detail `the task left Code`
+(`REVIEW_LEFT_CODE`, `CodeReviews.leftCode`; `taskMovedOn` catches one the review session's turn
+end finds there): that one doesn't hold the PR (`reviewHolds`), since Retry and Open anyway are
+Code's, so the next Open PR, or a move to Review & PR, starts a new review on the change as it is.
+A move to Review & PR checks what Open PR does, whether the review is on or off: the user's
+prompts go first, and a stopped review in Code answers 409. Open PR, or a move, while a review
+waits for fixes whose turn was interrupted moves it on to the next round.
 
 **Recovery.** `code_reviews` and `code_review_steps` keep a review's state and every step's
 report. After a restart, `CodeReviews.recover()` asks an idle review session again for the steps

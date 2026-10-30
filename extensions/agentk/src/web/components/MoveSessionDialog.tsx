@@ -7,7 +7,7 @@ import { Busy, Dialog, ErrorText, Field, InstructionsField } from './common';
 
 /** What the instructions box says it does, by whether the move sends the new stage's prompt. */
 function instructionsHint(stage: MoveTarget, sendsPrompt: boolean): string {
-  if (stage === 'review') return 'Sent after the PR prompt, or on their own if AgentK picks up the branch’s open PR.';
+  if (stage === 'review') return 'Sent after the PR prompt (which waits for the local review, when it’s on), or on their own if AgentK picks up the branch’s open PR.';
   if (sendsPrompt) return `AgentK gets the ${STAGE_LABELS[stage]} instructions; anything you write here goes after them.`;
   return 'Tell AgentK what to do now. Left empty, AgentK isn’t sent anything.';
 }

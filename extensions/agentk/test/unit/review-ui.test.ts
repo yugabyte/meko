@@ -1,19 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import type { CodeReviewFinding, CodeReviewSummary } from '../../src/shared/codereview';
+import { REVIEW_LEFT_CODE, type CodeReviewFinding, type CodeReviewSummary } from '../../src/shared/codereview';
 import type { Session } from '../../src/shared/types';
 import { findingGroups, stageChipText, withOverride } from '../../src/web/util.js';
 
 describe('stageChipText', () => {
-  const review = (state: CodeReviewSummary['state']) => ({ state }) as CodeReviewSummary;
+  const review = (state: CodeReviewSummary['state'], detail: string | null) => ({ state, detail }) as CodeReviewSummary;
   it.each([
-    ['code', null, 'Code'],
-    ['code', 'sweeping', 'Review'],
-    ['code', 'fixing', 'Review'],
-    ['code', 'failed', 'Review'],
-    ['code', 'done', 'Code'],
-    ['review', 'done', 'Review & PR'],
-  ] as const)('in %s with a %s review reads %s', (stage, state, text) => {
-    expect(stageChipText({ stage, codeReview: state ? review(state) : null } as Session)).toBe(text);
+    ['code', null, null, 'Code'],
+    ['code', 'sweeping', null, 'Review'],
+    ['code', 'fixing', null, 'Review'],
+    ['code', 'failed', 'no review pass reported', 'Review'],
+    ['code', 'cancelled', 'you cancelled it', 'Review'],
+    // Cancelled by leaving Code: it doesn't hold the next Open PR, which starts a new review.
+    ['code', 'cancelled', REVIEW_LEFT_CODE, 'Code'],
+    ['code', 'done', null, 'Code'],
+    ['review', 'done', null, 'Review & PR'],
+  ] as const)('in %s with a %s review (%s) reads %s', (stage, state, detail, text) => {
+    expect(stageChipText({ stage, codeReview: state ? review(state, detail) : null } as Session)).toBe(text);
   });
 });
 
