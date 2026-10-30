@@ -859,7 +859,7 @@ function reviewGate(
   return (
     <span className="gate-group">
       <span className="gate-pill" title="The PR prompt goes once the local review is done">
-        <Busy label="Reviewing locally" /> <span className="mono">{reviewSegmentText(r)}</span>
+        <Busy label="Reviewing" /> <span className="mono">{reviewSegmentText(r)}</span>
       </span>
       {open}
       {reviewRunning(r) && (
