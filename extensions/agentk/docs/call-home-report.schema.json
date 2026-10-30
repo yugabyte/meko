@@ -162,7 +162,8 @@
               "failed": { "$ref": "#/$defs/count" },
               "actions": { "$ref": "#/$defs/count" }
             }
-          }
+          },
+          "codeReview": { "$ref": "#/$defs/codeReview" }
         }
       }
     }
@@ -304,6 +305,45 @@
         "cacheRead": { "$ref": "#/$defs/count" },
         "cacheWrite": { "$ref": "#/$defs/count" },
         "messages": { "$ref": "#/$defs/count" }
+      }
+    },
+    "codeReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Local code reviews on a day: those started then, by their state now, and the tokens their sessions spent then; left out of a day with neither.",
+      "required": ["runs", "byOutcome", "lgtm", "prs", "rounds", "candidates", "findings", "fixed", "declined", "tokens", "usdCents"],
+      "properties": {
+        "runs": { "$ref": "#/$defs/count" },
+        "byOutcome": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["done", "failed", "cancelled", "running"],
+          "properties": {
+            "done": { "$ref": "#/$defs/count" },
+            "failed": { "$ref": "#/$defs/count" },
+            "cancelled": { "$ref": "#/$defs/count" },
+            "running": { "$ref": "#/$defs/count" }
+          }
+        },
+        "lgtm": { "$ref": "#/$defs/count" },
+        "prs": { "$ref": "#/$defs/count" },
+        "rounds": { "$ref": "#/$defs/count" },
+        "candidates": { "$ref": "#/$defs/count" },
+        "findings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["blocker", "major", "minor"],
+          "properties": {
+            "blocker": { "$ref": "#/$defs/count" },
+            "major": { "$ref": "#/$defs/count" },
+            "minor": { "$ref": "#/$defs/count" }
+          }
+        },
+        "fixed": { "$ref": "#/$defs/count" },
+        "declined": { "$ref": "#/$defs/count" },
+        "tokens": { "$ref": "#/$defs/tokens" },
+        "usdCents": { "$ref": "#/$defs/count" },
+        "credits": { "type": "number", "minimum": 0, "maximum": 1000000000 }
       }
     },
     "learn": {

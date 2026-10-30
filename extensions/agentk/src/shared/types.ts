@@ -1,7 +1,7 @@
 // API contract shared by the server (src/server) and the web UI (src/web).
 // Every REST route and WebSocket message is described here.
 
-import type { CodeReviewSummary, ReviewOverrides, ReviewStrategySetting } from './codereview.js';
+import type { CodeReviewSummary, ReviewOverrides, ReviewStrategySetting, SeverityCounts } from './codereview.js';
 import type { HarnessId } from './harnesses.js';
 
 export type SessionStatus =
@@ -324,6 +324,45 @@ export interface DailyUsage {
   /** YYYY-MM-DD in the server's time zone. */
   day: string;
   usage: TokenUsage;
+  /** The part of the day's tokens local code reviews' sessions spent (in `usage` too), for the chart's stacked bar. */
+  reviewTokens: number;
+}
+
+/**
+ * Local code reviews (docs/design/code-review.md) counted from `code_reviews`:
+ * each review by its current state, and what its rounds found and the task did with it.
+ */
+export interface CodeReviewCounts {
+  /** Reviews started; a Retry goes on in its review, so it isn't another. */
+  runs: number;
+  /** By the review's state now: preparing, sweeping, scoring and fixing are `running`. */
+  byOutcome: { done: number; failed: number; cancelled: number; running: number };
+  /** Done reviews that kept no finding. */
+  lgtm: number;
+  /** Reviews whose PR prompt went, Open anyway included. */
+  prs: number;
+  /**
+   * Rounds run, the first and every re-review: each that reached its passes. One that stopped, or
+   * found nothing changed, while it prepared doesn't count.
+   */
+  rounds: number;
+  /**
+   * Every candidate the passes raised, before scoring and Validate, each once: each finished
+   * round's, and the ones a round that ran and hasn't finished (still under way, or stopped) has
+   * raised so far.
+   */
+  candidates: number;
+  /** Kept findings, every round's: what the `me_ak_review:` line says. */
+  findings: SeverityCounts;
+  /** What the task said it did with kept findings (`review_outcome`). */
+  fixed: number;
+  declined: number;
+}
+
+/** Local code reviews for the Code Reviews section: their counts, and their sessions' tokens and cost. */
+export interface CodeReviewUsage extends CodeReviewCounts {
+  usage: TokenUsage;
+  cost: UsageCost;
 }
 
 export interface ProjectUsage {
@@ -334,6 +373,7 @@ export interface ProjectUsage {
   mekoGaps: MekoGapCounts;
   mekoFirstTurn: MekoFirstTurn;
   mekoLearning: MekoLearning;
+  codeReviews: CodeReviewUsage;
   byModel: ModelUsage[];
   /** Every session with usage, archived ones included, the most recently used first, the largest first among ties. */
   bySession: SessionUsage[];
@@ -367,6 +407,7 @@ export interface UsageOverview {
   meko: MekoUsage;
   mekoFirstTurn: MekoFirstTurn;
   mekoLearning: MekoLearning;
+  codeReviews: CodeReviewUsage;
   mergedPrs: number;
   directPushes: number;
   directCommits: number;
@@ -505,6 +546,17 @@ export interface CallHomeAgentkMeko {
 }
 
 /**
+ * Local code reviews on a day: the reviews started then (counted by their state now, so a later
+ * report corrects one that ended after), and the tokens their sessions spent then with their price in
+ * whole cents and, from Kiro, the credits billed (left out when none).
+ */
+export interface CallHomeCodeReview extends CodeReviewCounts {
+  tokens: CallHomeTokens;
+  usdCents: number;
+  credits?: number;
+}
+
+/**
  * Sessions as the report counts them, by where they started: `explore`, `plan` (Design) and `quick`
  * (Code) are the starts under the names the session types had, and `review-pr` a Review a PR.
  */
@@ -564,6 +616,8 @@ export interface CallHomeDay {
   kiro?: { sessionsCreated: number; turns: number; credits: number };
   /** Ask AgentK on the day: asks, the ones that failed, and the actions the answers proposed. Left out of a day with none. */
   askAgentk?: { asks: number; failed: number; actions: number };
+  /** Local code reviews on the day: started then, or whose sessions spent tokens then. Left out of a day with neither. */
+  codeReview?: CallHomeCodeReview;
 }
 
 export interface CallHomeReport {
