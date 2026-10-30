@@ -111,7 +111,7 @@ so it marks nothing done. Nothing closes by itself, unless `[work_queue] close_c
 (**Close review requests whose PR closed** in Settings › Work queue, off by default): then each item
 the sync no longer finds has its PR read (`gh pr view --json state`), and one merged or closed is
 closed as if you closed it, so it stays gone; one still open (your review no longer requested) stays,
-marked done, and is read again at each sync. A read that fails leaves the item as it was. An item
+marked done, and is read again at each sync. A read that fails, or takes over 20 s, leaves the item as it was. An item
 you reopen by hand stays open (`github_kept`) until the sync finds its review request again. `WorkSync.slack` is null when a run left Slack
 out (a timed one while Slack isn't on the timer).
 

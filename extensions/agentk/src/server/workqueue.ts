@@ -344,7 +344,7 @@ export class WorkQueue {
       return;
     }
     if (state === 'OPEN') return;
-    run(this.db, "UPDATE work_items SET status = 'closed', closed_at = ?, unplaced = 0 WHERE id = ? AND status = 'open'", Date.now(), id);
+    run(this.db, "UPDATE work_items SET status = 'closed', closed_at = ?, unplaced = 0 WHERE id = ? AND status = 'open' AND github_kept = 0", Date.now(), id);
   }
 
   private async syncSlack(): Promise<WorkSourceResult> {

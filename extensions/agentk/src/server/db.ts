@@ -700,8 +700,9 @@ const MIGRATIONS: string[] = [
   // the PR description, since that was added; its fixes or the PR prompt before) and cleared once that
   // has gone; NULL for none.
   `ALTER TABLE code_reviews ADD COLUMN lead TEXT;`,
-  // 45: work_items.github_kept: a GitHub item reopened by hand, which `[work_queue] close_closed_prs` then
-  // leaves open though its PR is closed; cleared when the sync finds its review request again.
+  // 45: work_items.github_kept: set on any item reopened by hand; only GitHub items read it:
+  // `[work_queue] close_closed_prs` leaves them open though their PR is closed. The sync clears it
+  // when it finds the item's review request again.
   `ALTER TABLE work_items ADD COLUMN github_kept INTEGER NOT NULL DEFAULT 0;`,
 ];
 

@@ -37,7 +37,7 @@ function setup(o: { reviews?: ReviewRequest[]; slack?: SlackTodo[] | Error; clau
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token,
              desired, status, stage, created_at) VALUES (?, 'p', ?, ?, 'c', ?, 'main', '/w', 't', ?, ?, 'idle', 'code', 1)`,
       id, id, `Session ${id}`, `ak/${id}`, `tok-${id}`, desired);
-  const state = { reviews: o.reviews ?? [], slack: o.slack ?? ([] as SlackTodo[] | Error), slackReads: 0, changes: 0, reviewReads: 0, settings: { github: true, slack: true, syncMinutes: 15, closeClosedPrs: false }, prStates: new Map<string, 'OPEN' | 'CLOSED' | 'MERGED' | Error>() };
+  const state = { reviews: o.reviews ?? [], slack: o.slack ?? ([] as SlackTodo[] | Error), slackReads: 0, changes: 0, reviewReads: 0, settings: { github: true, slack: true, syncMinutes: 15, closeClosedPrs: false }, prStates: new Map<string, 'OPEN' | 'CLOSED' | 'MERGED' | Error>(), onPrRead: () => undefined as void };
   const deps: WorkQueueDeps = {
     db,
     changed: () => void state.changes++,
@@ -54,6 +54,7 @@ function setup(o: { reviews?: ReviewRequest[]; slack?: SlackTodo[] | Error; clau
     claudeAvailable: () => o.claude ?? true,
     githubTitle: async () => o.title ?? 'Title from GitHub',
     prState: async (repo, number) => {
+      state.onPrRead();
       const s = state.prStates.get(`${repo}#${number}`) ?? 'OPEN';
       if (s instanceof Error) throw s;
       return s;
@@ -220,9 +221,6 @@ describe('syncing the work queue', () => {
     await q.sync(false);
     expect(titles(q)).toEqual(['Review o/r#3: PR 3', 'Review o/r#4: PR 4']);
     expect(q.closed().map((i) => i.title).sort()).toEqual(['Review o/r#1: PR 1', 'Review o/r#2: PR 2']);
-    state.reviews = [pr(1)];
-    await q.sync(false);
-    expect(titles(q)).toHaveLength(2);
   });
 
   it('leaves open a GitHub item reopened by hand until its review is asked again', async () => {
@@ -240,6 +238,21 @@ describe('syncing the work queue', () => {
     state.reviews = [];
     await q.sync(false);
     expect(titles(q)).toEqual([]);
+  });
+
+  it('leaves open a GitHub item reopened by hand while the sync reads its PR', async () => {
+    const { q, state } = setup({ reviews: [pr(1)] });
+    state.settings = { ...state.settings, closeClosedPrs: true };
+    await q.sync(false);
+    const id = q.list()[0].id;
+    state.reviews = [];
+    state.prStates.set('o/r#1', 'MERGED');
+    state.onPrRead = () => {
+      q.update(id, { status: 'closed' });
+      q.update(id, { status: 'open' });
+    };
+    await q.sync(false);
+    expect(titles(q)).toEqual(['Review o/r#1: PR 1']);
   });
 
   it('marks nothing done on GitHub from a full page of review requests, which may have left some out', async () => {

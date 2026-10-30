@@ -514,6 +514,12 @@ export async function reviewRequests(cwd: string, limit = REVIEW_REQUESTS_MAX): 
     .map((r) => ({ repo: r.repository!.nameWithOwner!, number: r.number, title: r.title, url: r.url }));
 }
 
+/** A PR's state, within 20 s so a hung read can't hold up the work queue's sync. */
+export async function prState(cwd: string, repo: string, number: number): Promise<PrRef['state']> {
+  const r = JSON.parse(await ghWithin(cwd, 20_000, 'pr', 'view', String(number), '--repo', repo, '--json', 'state')) as { state: PrRef['state'] };
+  return r.state;
+}
+
 /** What a Review a PR session follows on its PR. */
 export interface PrWatch {
   state: 'OPEN' | 'CLOSED' | 'MERGED';
