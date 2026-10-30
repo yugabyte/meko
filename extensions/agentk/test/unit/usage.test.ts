@@ -194,7 +194,7 @@ describe('usage across projects', () => {
 });
 
 describe('local code reviews', () => {
-  it("counts each project's reviews, and their sessions' tokens and cost, which the daily series stacks", () => {
+  it("counts each project's reviews, and their sessions' tokens, which the daily series stacks", () => {
     const { db } = setup();
     const now = new Date(2026, 8, 24, 15, 0, 0).getTime();
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('q', 'Q', '/q', 'main', 0)`);
@@ -229,12 +229,12 @@ describe('local code reviews', () => {
       runs: 4, byOutcome: { done: 1, failed: 2, cancelled: 1, running: 0 }, lgtm: 0, prs: 1, rounds: 4, candidates: 9,
       findings: { blocker: 1, major: 0, minor: 2 }, fixed: 1, declined: 1,
     };
-    const reviews = { ...counts, usage: { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0, messages: 1 }, cost: { usd: 4, unpricedMessages: 0 } };
+    const reviews = { ...counts, usage: { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0, messages: 1 } };
     const pu = projectUsage(db, 'p', 14, now);
     expect(pu.codeReviews).toEqual(reviews);
     expect(pu.daily.at(-1)).toMatchObject({ usage: { input: 1_000_001, output: 9 }, reviewTokens: 1_000_000 });
     expect(usageOverview(db, 14, now).codeReviews).toEqual(reviews);
-    expect(projectUsage(db, 'q', 14, now).codeReviews).toMatchObject({ runs: 0, usage: { messages: 0 }, cost: { usd: 0 } });
+    expect(projectUsage(db, 'q', 14, now).codeReviews).toMatchObject({ runs: 0, usage: { messages: 0 } });
   });
 
   it("stacks a day's review tokens at the bottom of its bar, and names the section's outcomes and issues", async () => {
@@ -255,12 +255,14 @@ describe('local code reviews', () => {
     const section = renderToStaticMarkup(createElement(CodeReviewUsageSection, {
       reviews: {
         runs: 4, byOutcome: { done: 2, failed: 1, cancelled: 0, running: 1 }, lgtm: 1, prs: 2, rounds: 5, candidates: 9,
-        findings: { blocker: 1, major: 0, minor: 2 }, fixed: 2, declined: 1, usage: usage(1_500_000), cost: { usd: 6, unpricedMessages: 0 },
+        findings: { blocker: 1, major: 0, minor: 2 }, fixed: 2, declined: 1, usage: usage(1_500_000),
       },
     })).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-    for (const text of ['Code Reviews', '4 Reviews 5 rounds · 1 failed · 1 running', '3 Issues found 1 blocker, 2 minor · 9 raised', '2 Fixed 1 declined', '2 PRs opened 1 LGTM', '1.5M tokens']) {
+    for (const text of ['Code Reviews', '4 Reviews 5 rounds · 1 failed · 1 running', '3 Issues found 1 blocker, 2 minor', '2 Fixed 1 declined', '2 PRs opened 1 LGTM']) {
       expect(section).toContain(text);
     }
+    // Neither the candidates the passes raised nor the review sessions' cost is shown.
+    for (const text of ['raised', 'Est. cost', 'tokens']) expect(section).not.toContain(text);
   });
 });
 
