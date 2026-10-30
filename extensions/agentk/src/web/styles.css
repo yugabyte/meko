@@ -922,9 +922,16 @@ textarea.input {
 .rail-sess-name {
   overflow-wrap: anywhere;
 }
-/* Centred on the name's first line (13 px at line-height 1.3). */
+/* Centred on the name's first line (13 px at line-height 1.3). The learning and Meko dots are
+   drawn bigger than their 10 px box with negative margins, so they start that much higher. */
 .rail-sess > .dot {
   margin-top: 3.5px;
+}
+.rail-sess > .dot.learning {
+  margin-top: 1.5px;
+}
+.rail-sess > .dot.meko {
+  margin-top: 2.5px;
 }
 .rail-sess > .harness-logo {
   margin-top: 1.5px;
@@ -1682,6 +1689,17 @@ textarea.input {
 .rail-joined .rail-sess > .stchip {
   grid-column: -2;
   grid-row: 1;
+}
+/* Move to top takes the chip's grid cell, so it stops where the magnifier starts. In the flow:
+   Chromium doesn't place an absolutely positioned child of a subgrid by its grid area. */
+.rail-joined .rail-sess-top {
+  position: relative;
+  grid-column: -2;
+  grid-row: 1;
+  justify-self: end;
+  top: auto;
+  right: auto;
+  height: auto;
 }
 .rail-review {
   position: relative;
