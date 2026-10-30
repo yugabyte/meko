@@ -9,13 +9,29 @@ working, its Meko features skipping or retrying.
 ## Install
 
 ```sh
-gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
+curl -fsSL https://mekodata.ai/install.sh | sh
 meko extension install agentk      # then, for AgentK
 ```
 
-Meko's releases are the repo's "latest" (AgentK's are published `--latest=false`), so that is Meko's
-`install.sh` (`backend/scripts/install.sh`). It needs a signed-in `gh` or `GITHUB_TOKEN` while the
-repo is internal, and:
+`mekodata.ai/install.sh` is a 302 redirect, set on the website, to
+`https://github.com/yugabyte/meko/releases/latest/download/install.sh`. Meko's releases are the
+repo's "latest" (AgentK's and Presenter's are published `--latest=false`), so that is the newest
+Meko release's `install.sh` (`backend/scripts/install.sh`), and a release needs no change on the
+website. It's a 302, not a 301, so no cache keeps it for good. The link is `mekodata.ai`:
+`www.mekodata.ai` redirects elsewhere. While the repo is internal, GitHub answers 404 to anyone not
+signed in (`curl -f` then fails and `sh` runs nothing), so the installer is fetched with a
+signed-in `gh` instead:
+
+```sh
+gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
+```
+
+It downloads with a signed-in `gh`, else with curl and `GITHUB_TOKEN`, else with curl and no
+token, which needs a public repo. With no token it reads the newest version from where
+`github.com/yugabyte/meko/releases/latest` redirects rather than from GitHub's API, which allows 60
+calls an hour per address without one. Everything runs from a `main` function called on the
+script's last line, so a download cut short runs nothing and `meko install` doesn't read the rest
+of the script as its input. It:
 
 1. Checks the platform: Linux x64 or arm64, or an Apple Silicon Mac on macOS 14 or newer.
 2. Finds the newest `meko-v*` release (or `--version`), downloads
@@ -240,7 +256,9 @@ follows on stderr.
   run (AgentK's `selftest`), into `<data>/extensions/<name>/app/<version>` (owner-only,
   `App.Private`: folders and programs 0700, files 0600, as everything in the data folder), with
   `app/current` and `~/.local/bin/<command>` pointing at it. Without `GITHUB_TOKEN` or a signed-in
-  `gh`, listing the releases of the internal repo fails, and it says to sign in. Then it runs
+  `gh`, a refusal from GitHub says why: GitHub's 60 API calls an hour for a caller with no token are
+  spent (it names when they come back), or, for a 401, 403 or 404, the repo may still be internal;
+  either way it offers signing in (`update.tokenlessHint`). Then it runs
   `<command> install --meko-url <url> --meko-key <client token>` on the terminal, with
   `--non-interactive` without one, and whatever followed `--` on the command line (AgentK's
   `--agent claude|opencode|kiro`, `--install-deps`, `--no-install-deps`). AgentK's install checks
@@ -375,7 +393,8 @@ A release install's app folder:
 
 - **Checks** run inside `serve` a minute after start, then every `[update] interval_hours` (6). The
   client lists the repo's newest 100 releases through GitHub's API with `GITHUB_TOKEN` or `gh auth
-  token` (looked for in Homebrew's folders and `~/.local/bin` too, since a service starts with a
+  token`, or with no token on a public repo, within GitHub's 60 API calls an hour for a caller
+  with none (looked for in Homebrew's folders and `~/.local/bin` too, since a service starts with a
   short PATH), and picks the newest stable `meko-v*` release with this platform's tarball and
   `SHA256SUMS` that isn't in `bad-versions`. What it found goes to `<data>/update.json`, which
   `meko status` shows.

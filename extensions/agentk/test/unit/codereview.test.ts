@@ -85,11 +85,11 @@ describe("the review's part of a task's tab", () => {
   });
 
   it.each([
-    [r({}), 'Local review: Sagittarius 3.0, step 3 of 6, pass 3 of 5'],
+    [r({}), 'Local review: Sagittarius 3.0, 2 of 5 passes reported'],
     [r({ state: 'scoring' }), 'Local review: Sagittarius 3.0, step 6 of 6, scoring 4 of 9'],
     [r({ state: 'describing' }), 'Local review: Sagittarius 3.0, waiting for the PR description'],
     [r({ state: 'done', counts: counts(1, 0, 0), addressed: true }), 'Local review: Sagittarius 3.0, LGTM, 1 blocker addressed'],
-    [r({ waiting: true }), 'Local review: Sagittarius 3.0, step 3 of 6, pass 3 of 5, waiting on you in its terminal'],
+    [r({ waiting: true }), 'Local review: Sagittarius 3.0, 2 of 5 passes reported, waiting on you in its terminal'],
   ])('spells %j out as %s', (summary, label) => {
     expect(reviewSegmentLabel(summary)).toBe(label);
   });

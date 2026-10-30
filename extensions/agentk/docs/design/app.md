@@ -14,8 +14,8 @@ under it in the rail instead of the tabs, one row each with its status dot, its 
 is on, as on the tabs), so many show at once and any can be opened with one click,
 in any project. A task's [local code review](code-review.md) is never a tab or a row of its own: it's
 a part joined to its task's tab and rail row, a blue magnifier (its lens pulses while the review
-works, and shows Meko's "m" during a Meko call) and the step it's on (`3/6`: each pass, then scoring
-as one step), its result (`2·1` blockers·majors until the task has said what it did with each
+works, and shows Meko's "m" during a Meko call) and how far it has got (`3/6`: each pass, then
+scoring as one step, moving on as each pass reports), its result (`2·1` blockers·majors until the task has said what it did with each
 finding, then `LGTM`) or a red `!`. While the review works and its session waits on you in its
 terminal, the magnifier takes the needs-you color and its lens knocks. Clicking it opens the
 review's own screen (its terminal, its findings beside it) while its passes run (or it failed),

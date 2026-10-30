@@ -47,13 +47,15 @@ You also need [Meko](https://mekodata.ai) on this computer: it serves AgentK to 
 `/ext/agentk/` on its own port (7777), and signs you in. Meko also gives projects datapacks (shared
 memory) and lets you share projects. For datapacks, AgentK uses Meko Cloud once you link it in Meko's
 web UI (Settings › Meko Cloud, which links to Meko Cloud's sign-up and login pages to make a key; or
-`meko cloud_link` on a computer without a browser), and otherwise the Meko on this computer. Install Meko (the repo's
-latest release), and then Meko installs AgentK:
+`meko cloud_link` on a computer without a browser), and otherwise the Meko on this computer. Install Meko, and then Meko installs AgentK:
 
 ```sh
-gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
+curl -fsSL https://mekodata.ai/install.sh | sh
 meko extension install agentk
 ```
+
+While the repo is internal, fetch Meko's installer with a signed-in `gh` instead:
+`gh release download --repo yugabyte/meko --pattern install.sh --output - | sh`.
 
 (or **Install** on Meko's Extensions page). Meko downloads AgentK's newest release, checks it and
 unpacks it into its data folder, then runs AgentK's setup, which offers to install anything that's
@@ -328,8 +330,8 @@ your phone can connect.
   plugin); Kiro sessions count the credits Kiro billed,
   beside the cost and never added to it, with a Credits column by session and model and a credits
   bar beside each day's tokens. Each day's bar stacks the tokens local code reviews spent, and a
-  **Code Reviews** section counts the reviews, the issues they found, the ones fixed, the PRs opened
-  after them and what they cost. **Usage** in the left panel adds it up across every project, closed ones
+  **Code Reviews** section counts the reviews, the issues they found, the ones fixed and the PRs opened
+  after them. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
 - **Meko call log, for debugging:** turn on **Log Meko calls** in a project's settings and AgentK
   keeps every Meko call made for each session, its own (recall at start, design uploads, the learn

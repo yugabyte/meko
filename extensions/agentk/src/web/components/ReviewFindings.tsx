@@ -10,7 +10,8 @@ import { SidePanel } from './SidePanel';
  * A local review's findings (GET /api/sessions/:id/code-review), beside its task's terminal:
  * every candidate by round and sweep, kept or dropped and why, the scorer's verdict, the Meko
  * gotchas it credits and what the task did with it; the passes' notes and the datapacks the
- * MEKO.md files listed. Fetched again whenever the review moves on.
+ * MEKO.md files listed, by name with the gotchas one tagged (what each holds is for the review's
+ * prompt, not the panel). Fetched again whenever the review moves on.
  */
 export function ReviewFindings({ session, onClose, onTerminal }: {
   session: Session;
@@ -78,7 +79,6 @@ export function ReviewFindings({ session, onClose, onTerminal }: {
                     <li key={d.id}>
                       <span className="mono">{d.name}</span>
                       {d.gotchas && <span className="rv-tag">gotchas</span>}
-                      {d.about && <span className="muted"> · {d.about}</span>}
                     </li>
                   ))}
                 </ul>

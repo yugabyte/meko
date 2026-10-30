@@ -278,11 +278,11 @@ Kiro isn't available.
   section, the **Code Reviews** section (`CodeReviewUsageSection`, from `codeReviews` on
   `ProjectUsage` and `UsageOverview`, built by `reviewUsage()` in `src/server/usage.ts`) has tiles
   for **Reviews** (`code_reviews` rows, with the rounds they ran and the failed, cancelled and
-  running ones under it), **Issues found** (kept findings, every round's, by severity, with how many
-  candidates the passes raised under it), **Fixed** (and declined, as the
-  task reported them), **PRs opened** (reviews whose PR prompt went, Open anyway included; the
-  LGTM ones under it) and **Est. cost** of the review sessions, priced as above, with their tokens
-  under it, plus **Kiro credits** when they billed some. The task's own turns fixing the findings
+  running ones under it), **Issues found** (kept findings, every round's, by severity), **Fixed**
+  (and declined, as the task reported them) and **PRs opened** (reviews whose PR prompt went, Open
+  anyway included; the LGTM ones under it), plus **Kiro credits** when the review sessions billed
+  some. It shows neither the candidates the passes raised nor the review sessions' cost; the usage
+  report still sends both ([Usage stats](usage-stats.md), `codeReview`). The task's own turns fixing the findings
   run in the task's session, so they count as the task's, not the review's.
 - **What's counted.** Four numbers, kept separate: uncached input, cache writes, cache reads and
   output. Cache reads dominate long sessions, so the headline total is shown next to output. The

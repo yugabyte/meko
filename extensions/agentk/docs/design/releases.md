@@ -81,14 +81,14 @@ agentk-<version>/
 > in an AlmaLinux 8 container rather than on `ubuntu-latest`, so the binary loads on older hosts.
 
 ```sh
-# The repo's one-line install (gh release download --pattern install.sh, from its latest release,
-# which is Meko's) installs Meko. Then:
+# The repo's one-line install (curl -fsSL https://mekodata.ai/install.sh | sh, which redirects to
+# its latest release's install.sh, Meko's) installs Meko. Then:
 meko extension install agentk                      # or Install on Meko's Extensions page
 meko extension install agentk -- --agent kiro      # options after -- go to `agentk install`
 
 # what it does (Meko's extension install, backend/docs/install.md)
-#  0. downloads the newest agentk-<version>-<platform>-<arch>.tar.gz and SHA256SUMS (with gh's
-#     token or GITHUB_TOKEN), checks it, unpacks it owner-only into
+#  0. downloads the newest agentk-<version>-<platform>-<arch>.tar.gz and SHA256SUMS (with
+#     GITHUB_TOKEN or gh's token while the repo is internal), checks it, unpacks it owner-only into
 #     <Meko's data folder>/extensions/agentk/app/<version>, checks that it runs (`agentk version
 #     --json`, `agentk selftest`), points app/current at it and links ~/.local/bin/agentk; an
 #     install AgentK already has (one still in ~/.agent-k-local too) is set up again in place

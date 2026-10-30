@@ -359,10 +359,9 @@ export interface CodeReviewCounts {
   declined: number;
 }
 
-/** Local code reviews for the Code Reviews section: their counts, and their sessions' tokens and cost. */
+/** Local code reviews for the Code Reviews section: their counts, and their sessions' tokens. */
 export interface CodeReviewUsage extends CodeReviewCounts {
   usage: TokenUsage;
-  cost: UsageCost;
 }
 
 export interface ProjectUsage {
