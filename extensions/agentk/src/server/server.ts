@@ -573,6 +573,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     workQueueGithub: core.config.workQueue.github,
     workQueueSlack: core.config.workQueue.slack,
     workQueueSyncMinutes: core.config.workQueue.syncMinutes,
+    workQueueCloseClosedPrs: core.config.workQueue.closeClosedPrs,
     codeReviewStrategy: globalReview(core.config).strategy,
     codeReviewRounds: core.config.codeReview.rounds,
     codeReviewDepth: core.config.codeReview.depth,
@@ -621,7 +622,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (b.codeReviewDepth !== undefined && (!Number.isInteger(b.codeReviewDepth) || b.codeReviewDepth < 1 || b.codeReviewDepth > MAX_DEPTH)) {
       throw new HttpError(400, `Review depth must be a whole number from 1 to ${MAX_DEPTH}.`);
     }
-    for (const k of ['claudeEnabled', 'opencodeEnabled', 'opencodeDisableTracking', 'kiroEnabled', 'kiroTrustTools', 'workQueueGithub', 'workQueueSlack'] as const) {
+    for (const k of ['claudeEnabled', 'opencodeEnabled', 'opencodeDisableTracking', 'kiroEnabled', 'kiroTrustTools', 'workQueueGithub', 'workQueueSlack', 'workQueueCloseClosedPrs'] as const) {
       if (b[k] !== undefined && typeof b[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false.`);
     }
     const enabledBefore = Object.fromEntries(HARNESS_IDS.map((id) => [id, core.config[id].enabled]));
@@ -645,6 +646,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.workQueueGithub !== undefined) c.workQueue.github = b.workQueueGithub;
       if (b.workQueueSlack !== undefined) c.workQueue.slack = b.workQueueSlack;
       if (b.workQueueSyncMinutes !== undefined) c.workQueue.syncMinutes = b.workQueueSyncMinutes;
+      if (b.workQueueCloseClosedPrs !== undefined) c.workQueue.closeClosedPrs = b.workQueueCloseClosedPrs;
       if (b.codeReviewStrategy !== undefined) c.codeReview.strategy = b.codeReviewStrategy;
       if (b.codeReviewRounds !== undefined) c.codeReview.rounds = b.codeReviewRounds;
       if (b.codeReviewDepth !== undefined) c.codeReview.depth = b.codeReviewDepth;

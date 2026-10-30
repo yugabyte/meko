@@ -108,6 +108,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 [work_queue]
 # github = true              # Sync pulls in GitHub review requests (Settings › Work queue); off by default
 # slack = true               # Sync reads your Slack To-dos; off by default (both off, the default: no sync)
+# close_closed_prs = true    # the GitHub sync closes the review requests whose PR was merged or closed; off by default
 # sync_minutes = 15          # how often the work queue syncs by itself (0: only when you press Sync, up to 1440)
 # slack_model = "sonnet"     # the model of the claude -p that reads Slack's To-dos through your Slack connector
 # slack_timeout_seconds = 180 # a Slack read that takes longer is stopped (30 to 600)

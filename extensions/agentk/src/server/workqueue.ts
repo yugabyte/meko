@@ -31,8 +31,10 @@ export interface WorkQueueDeps {
   claudeAvailable: () => boolean;
   /** A GitHub PR's or issue's title, for an item added with a link and no title. */
   githubTitle: (repo: string, number: number) => Promise<string>;
-  /** `[work_queue]` as it is now: the sources the sync reads and how often it runs by itself. */
-  settings: () => { github: boolean; slack: boolean; syncMinutes: number };
+  /** A GitHub PR's state, for closing an item whose PR closed. */
+  prState: (repo: string, number: number) => Promise<'OPEN' | 'CLOSED' | 'MERGED'>;
+  /** `[work_queue]` as it is now: the sources the sync reads, how often it runs by itself, and whether it closes items whose PR closed. */
+  settings: () => { github: boolean; slack: boolean; syncMinutes: number; closeClosedPrs: boolean };
 }
 
 interface ItemRow {
@@ -46,6 +48,7 @@ interface ItemRow {
   session_id: string | null;
   unplaced: number;
   github_done_at: number | null;
+  github_kept: number;
   created_at: number;
   closed_at: number | null;
 }
@@ -214,7 +217,7 @@ export class WorkQueue {
       if (links) this.writeLinks(id, this.keepLabels(id, links));
       if (status !== r.status) {
         if (status === 'closed') run(this.db, 'UPDATE work_items SET status = ?, closed_at = ?, unplaced = 0 WHERE id = ?', status, Date.now(), id);
-        else run(this.db, `UPDATE work_items SET status = 'open', closed_at = NULL,
+        else run(this.db, `UPDATE work_items SET status = 'open', closed_at = NULL, github_kept = 1,
                            position = (SELECT COALESCE(MAX(position), 0) + 1 FROM work_items WHERE status = 'open') WHERE id = ?`, id);
       }
       if (body.move) this.move(id, body.move);
@@ -319,12 +322,29 @@ export class WorkQueue {
     // A full page may have left some out, and those aren't done, so nothing is marked then.
     if (found.length >= REVIEW_REQUESTS_MAX) return { ok: true, added, error: null };
     const now = Date.now();
-    for (const r of all<{ id: string; source_key: string; github_done_at: number | null }>(this.db,
-      "SELECT id, source_key, github_done_at FROM work_items WHERE source = 'github' AND status = 'open'")) {
+    for (const r of all<{ id: string; source_key: string; github_done_at: number | null; github_kept: number }>(this.db,
+      "SELECT id, source_key, github_done_at, github_kept FROM work_items WHERE source = 'github' AND status = 'open'")) {
       const done = !keys.has(r.source_key);
       if (done !== (r.github_done_at != null)) run(this.db, 'UPDATE work_items SET github_done_at = ? WHERE id = ?', done ? now : null, r.id);
+      if (!done && r.github_kept) run(this.db, 'UPDATE work_items SET github_kept = 0 WHERE id = ?', r.id);
+      if (done && !r.github_kept && this.deps.settings().closeClosedPrs) await this.closeIfPrClosed(r.id, r.source_key);
     }
     return { ok: true, added, error: null };
+  }
+
+  /** Closes a GitHub item whose PR was merged or closed; one whose review is just no longer asked of you stays. */
+  private async closeIfPrClosed(id: string, key: string): Promise<void> {
+    const m = /^gh:([^#]+)#(\d+)$/.exec(key);
+    if (!m) return;
+    let state: 'OPEN' | 'CLOSED' | 'MERGED';
+    try {
+      state = await this.deps.prState(m[1], Number(m[2]));
+    } catch (e) {
+      this.deps.warn(`work queue: reading ${m[1]}#${m[2]} failed`, errMsg(e));
+      return;
+    }
+    if (state === 'OPEN') return;
+    run(this.db, "UPDATE work_items SET status = 'closed', closed_at = ?, unplaced = 0 WHERE id = ? AND status = 'open'", Date.now(), id);
   }
 
   private async syncSlack(): Promise<WorkSourceResult> {

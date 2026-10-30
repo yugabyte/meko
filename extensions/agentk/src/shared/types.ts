@@ -1973,6 +1973,8 @@ export interface Settings {
   workQueueGithub: boolean;
   /** `[work_queue] slack`: the work queue's sync pulls in your Slack To-dos. */
   workQueueSlack: boolean;
+  /** `[work_queue] close_closed_prs`: the GitHub sync closes the review requests whose PR was merged or closed. */
+  workQueueCloseClosedPrs: boolean;
   /** `[work_queue] sync_minutes`: how often it syncs by itself (0 to WORK_SYNC_MINUTES_MAX; 0: only when you press Sync). */
   workQueueSyncMinutes: number;
   /** `[code_review] strategy`: the local review before a PR opens, or `off`. */
