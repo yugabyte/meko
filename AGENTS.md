@@ -23,6 +23,7 @@ from the extension's folder) and which docs to keep current. Meko's own Go backe
 | `.claude/skills/commit/` | The commit skill: how to write commits, PR titles and PR descriptions here. |
 | `.claude/skills/issue/` | The issue skill: how to write, file and edit GitHub issues here, with the forms' sections, types and labels. |
 | `README.md`, `CONTRIBUTING.md`, `LICENSE` | The repo's README (Meko: what it is, installing and building it, its main commands, and AgentK), how to contribute (with AgentK, or any coding agent starting from this file, and the rules), and the license for everything in it. Every command is in `backend/docs/cli.md`. AgentK's README is `extensions/agentk/README.md`. |
+| `MEKO.md` | The Meko datapacks that hold context for this repo, with each one's ID and what it covers. How to use them is under [Meko datapacks](#meko-datapacks-mekomd). |
 
 ## Rules for the whole repo
 
@@ -74,3 +75,25 @@ from the extension's folder) and which docs to keep current. Meko's own Go backe
   own, and a real secret is revoked too, since git history keeps it.
 - Shell commands and scripts run on Linux and macOS: stick to POSIX flags that GNU and BSD tools
   share.
+
+## Meko datapacks (`MEKO.md`)
+
+A `MEKO.md` lists the Meko datapacks that hold context for the folder it sits in, with each one's
+ID and what it covers; the root's [MEKO.md](MEKO.md) covers the whole repo. Like `REVIEW.md`, it
+belongs to its subtree: use the one nearest the files you're working on, and the root's. Search
+its datapacks before any work here, even before reading the code. Datapacks are shared per person:
+ask a datapack's owner for access.
+
+Save new facts to the datapack that owns the topic in the nearest `MEKO.md`, or, when none does,
+to your project's datapack (AgentK makes one for each project). A datapack that starts holding
+context for part of the repo gets a row in that part's `MEKO.md`.
+
+What to save in Meko, and what not to:
+
+- **Don't save** secrets (passwords, tokens, keys, connection strings with credentials), what's in
+  flight this session (that's for plans and tasks), anything the code or `git log` already says,
+  or the story of a fixed bug: its cause, fix and check live in the commit and the issue. Keep
+  only a trap the fix doesn't prevent, in one sentence.
+- **Do save** facts the code doesn't hold, such as why a design is the way it is and the
+  alternatives it rejected, and the sharp edges a future session would otherwise rediscover the
+  hard way.
