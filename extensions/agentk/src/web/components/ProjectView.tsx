@@ -134,7 +134,8 @@ export function ProjectView({
   // A task's code-review session (its part of the task's tab) and the task it reviews.
   const child = session && isReviewChild(session) ? session : null;
   const parent = session ? reviewParent(project.sessions, session) : undefined;
-  // The review's screen (its terminal, its findings beside it) while it runs; its findings beside the task's terminal after.
+  // The review's screen (its terminal, its findings beside it) while its steps run (or it failed); its
+  // findings beside the task's terminal while the task fixes a round's findings and once it's done.
   const openReviewTerminal = (task: Session) => {
     if (task.codeReview?.sessionId) navigate({ view: 'project', projectId: project.id, sessionId: task.codeReview.sessionId });
   };

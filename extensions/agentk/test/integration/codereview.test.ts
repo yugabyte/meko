@@ -233,13 +233,15 @@ describe('local code review before the PR (real session host + git, fake claude 
     expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'pr', codeReview: null });
   });
 
-  it('says the review waits on you while its session asks in its terminal, and only while it runs', async () => {
+  it('says the review waits on you while its session asks in its terminal, and only while its steps run', async () => {
     const s = await task({ review: { strategy: 'sirius-1.0' } });
     fake('review-skip', ['r1s1:all']);
     await env.core.sessions.action(s.id, 'open-pr');
     const r = await waitFor(() => env.core.sessions.get(s.id), (x) => x.codeReview?.state === 'failed', 30000, 'the review to fail');
     const childId = r.codeReview!.sessionId!;
     run(env.core.db, `UPDATE sessions SET status = 'needs_input' WHERE id = ?`, childId);
+    expect(env.core.sessions.get(s.id).codeReview!.waiting).toBe(false);
+    run(env.core.db, `UPDATE code_reviews SET state = 'fixing' WHERE id = ?`, r.codeReview!.id);
     expect(env.core.sessions.get(s.id).codeReview!.waiting).toBe(false);
     run(env.core.db, `UPDATE code_reviews SET state = 'sweeping' WHERE id = ?`, r.codeReview!.id);
     expect(env.core.sessions.get(s.id).codeReview!.waiting).toBe(true);

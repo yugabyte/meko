@@ -150,19 +150,25 @@ describe('the scorer', () => {
 
 describe('paths in the prompts', () => {
   // Claude Code asks before any read under /net, and a pass waiting on that prompt stops the review.
-  it("names the worktree, the run folder and the patches in the spelling the review's Claude runs in", () => {
-    const net = ctx({ worktree: '/net/box/home/alice/wt-1', runDir: '/net/box/home/alice/run/reviews/r/r1' });
+  it("names the worktree, the run folder, the patches, the issues and the design in the spelling the review's Claude runs in", () => {
+    const net = ctx({
+      worktree: '/net/box/home/alice/wt-1', runDir: '/net/box/home/alice/run/reviews/r/r1', design: '/net/box/home/alice/designs/t/design.md',
+      issues: [{ title: '#7: serve twice', path: '/net/box/home/alice/run/reviews/r/r1/issues/issue-7.md', url: 'https://github.com/acme/demo-repo/issues/7' }],
+    });
     const big: Diff = { ...diff, inline: false, files: [{ ...diff.files[0]!, patchPath: '/net/box/home/alice/run/reviews/r/r1/patches/src__app.ts.patch' }] };
     const base = basePrompt(net, big);
     const score = scoreBase(net, big, 'sagittarius-3.0');
     expect(base).toContain('The working directory is /home/alice/wt-1.');
     expect(base).toContain("in the review's own folder, /home/alice/run/reviews/r/r1.");
     expect(base).toContain('patch: /home/alice/run/reviews/r/r1/patches/src__app.ts.patch');
+    expect(base).toContain('`/home/alice/run/reviews/r/r1/issues/issue-7.md` — #7: serve twice');
+    expect(base).toContain("Serve twice.\n\nThe task's design: /home/alice/designs/t/design.md");
     expect(score).toContain('The working directory is /home/alice/wt-1.');
     expect(score).toContain('patch: /home/alice/run/reviews/r/r1/patches/src__app.ts.patch');
     expect(base).not.toContain('/net/');
     expect(score).not.toContain('/net/');
-    // A local path is left as it is.
+    // A local path, and a design's link, are left as they are.
     expect(basePrompt(ctx(), diff)).toContain("The working directory is /w. It is the task's worktree");
+    expect(basePrompt(ctx({ design: 'https://claude.ai/artifact/abc' }), diff)).toContain("The task's design: https://claude.ai/artifact/abc");
   });
 });

@@ -277,7 +277,7 @@ only the code can settle whether a problem is still there.`];
 /** The linked issues (`issues.go`): written ones to Read, links only by their titles. */
 function linkedIssues(ctx: ReviewContext): string {
   if (!ctx.issues.length) return '';
-  const written = ctx.issues.filter((i) => i.path);
+  const written = ctx.issues.flatMap((i) => (i.path ? [{ ...i, path: claudePath(i.path) }] : []));
   const named = ctx.issues.filter((i) => !i.path);
   const parts = ['## Linked issues'];
   if (written.length) {
@@ -377,7 +377,10 @@ them.`;
 export function basePrompt(ctx: ReviewContext, diff: Diff): string {
   const guideRef = ctx.guides.length === 0 ? 'any review guide this repository provides' : ctx.guides.join(', then ');
   const fallback = ctx.guides.length === 0 ? NO_GUIDE_FALLBACK : '';
-  const description = ctx.description.trim() ? clip(ctx.description.trim(), MAX_DESCRIPTION) : '(none provided)';
+  const told = ctx.description.trim() ? clip(ctx.description.trim(), MAX_DESCRIPTION) : '';
+  // A link is left as it is: claudePath changes only a /net path.
+  const design = ctx.design ? `The task's design: ${claudePath(ctx.design)}` : '';
+  const description = [told, design].filter(Boolean).join('\n\n') || '(none provided)';
   const parts = [
     `You are reviewing a change in ${ctx.repo}: the work on branch \`${ctx.branch}\` against
 \`${ctx.baseRef}\`, before its pull request is opened. What follows calls it "this PR".

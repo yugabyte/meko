@@ -140,7 +140,10 @@ export interface ReviewDatapack {
 /** A linked issue the passes are shown: a GitHub issue fetched into the run folder, or a link by its title. */
 export interface ReviewIssue {
   title: string;
-  /** Where its text was written (absolute), or null for a link the passes only see named. */
+  /**
+   * Where its text was written (absolute, AgentK's spelling: the prompts give it through
+   * `claudePath`), or null for a link the passes only see named.
+   */
   path: string | null;
   url: string;
 }
@@ -163,8 +166,14 @@ export interface ReviewContext {
   dirty: boolean;
   /** The task's name. */
   title: string;
-  /** The task's first prompt and its design's path, when it has one. */
+  /** The task's first prompt. */
   description: string;
+  /**
+   * Where the task's design is, when it has one: its Artifact's link, or its file in AgentK's
+   * spelling (the prompts give it through `claudePath`). Absent in a context saved before it was kept
+   * apart from the description, which named it.
+   */
+  design?: string | null;
   /** `git log base..HEAD` subjects and bodies, newest first. */
   commits: string[];
   /** Review guides (REVIEW.md) that apply, repo-relative, root first. */

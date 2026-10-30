@@ -306,8 +306,8 @@ export function reviewHolds(r: Pick<CodeReviewSummary, 'state' | 'detail'> | nul
   return !!r && (r.state === 'failed' || (r.state === 'cancelled' && r.detail !== REVIEW_LEFT_CODE));
 }
 
-/** The review is still working (its lens pulses). */
-export function reviewRunning(r: CodeReviewSummary | null): boolean {
+/** The review is still working (its lens pulses): its steps run, not the task's fixes. */
+export function reviewRunning(r: Pick<CodeReviewSummary, 'state'> | null): boolean {
   return !!r && (r.state === 'preparing' || r.state === 'sweeping' || r.state === 'scoring');
 }
 

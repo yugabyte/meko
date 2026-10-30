@@ -103,6 +103,7 @@ describe('sidewaysWheel', () => {
 });
 
 describe('rememberOpenSession', () => {
+  const open = (id: string) => ({ id, parentId: null }) as Session;
   beforeEach(() => {
     const items = new Map<string, string>();
     vi.stubGlobal('localStorage', {
@@ -115,17 +116,23 @@ describe('rememberOpenSession', () => {
 
   it('keeps the open session per project', () => {
     expect(lastOpenSession('a')).toBeUndefined();
-    rememberOpenSession('a', 's1');
-    rememberOpenSession('b', 's2');
-    rememberOpenSession('a', 's3');
+    rememberOpenSession('a', open('s1'));
+    rememberOpenSession('b', open('s2'));
+    rememberOpenSession('a', open('s3'));
     expect(lastOpenSession('a')).toBe('s3');
     expect(lastOpenSession('b')).toBe('s2');
+  });
+
+  // A review's session has no tab, and it's archived once the review is done: coming back lands on its task.
+  it("keeps a task's review session as its task", () => {
+    rememberOpenSession('a', { id: 'task--review-1', kind: 'code-review', parentId: 'task' } as Session);
+    expect(lastOpenSession('a')).toBe('task');
   });
 
   it('ignores bad stored values', () => {
     localStorage.setItem('ak-last-session', 'not json');
     expect(lastOpenSession('a')).toBeUndefined();
-    rememberOpenSession('a', 's1');
+    rememberOpenSession('a', open('s1'));
     expect(lastOpenSession('a')).toBe('s1');
   });
 
@@ -138,7 +145,7 @@ describe('rememberOpenSession', () => {
         throw new Error('blocked');
       },
     });
-    expect(() => rememberOpenSession('a', 's1')).not.toThrow();
+    expect(() => rememberOpenSession('a', open('s1'))).not.toThrow();
     expect(lastOpenSession('a')).toBeUndefined();
   });
 });

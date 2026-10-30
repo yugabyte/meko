@@ -170,8 +170,9 @@ patterns (there's no PR yet).
 
 Every absolute path the prompts give (the working directory, the run folder, the per-file patches,
 the linked issues, the design and each step's prompt file) is in the spelling the review session
-runs in, `claudePath()`, as its cwd and `--add-dir`s are; `ReviewContext` and `context.json` keep
-AgentK's own. For a home under `/net/<this host>`, Claude Code asks before every read under `/net`,
+runs in, `claudePath()`, as its cwd and `--add-dir`s are. Each is converted as the prompt is
+rendered: `ReviewContext` and `context.json` keep AgentK's own (the design as its own field,
+`ReviewContext.design`, beside the task's first prompt). For a home under `/net/<this host>`, Claude Code asks before every read under `/net`,
 and a pass that builds a path from a `/net` working directory would wait on a prompt nobody sees.
 The pass prompts' base is written once per round (`base.md`), so a round started before a change
 here keeps its old text through Retry; the scorers' base is rendered again at each send.
@@ -196,7 +197,7 @@ blockers·majors, until the task has said what it did with every kept finding, e
 through `review_outcome`: `CodeReviewSummary.addressed`; then, or with none, `LGTM`) or a red `!`.
 A task that answers in its reply instead (tools off, or an untrusted PR head) records no outcomes,
 so its counts stay. While the review session waits on the user in its terminal (a permission prompt
-or a question: `CodeReviewSummary.waiting`), the magnifier takes the needs-you color and its lens
+or a question, while its steps run: `CodeReviewSummary.waiting`), the magnifier takes the needs-you color and its lens
 knocks, since that session has no tab to show it. Clicking it (in the tab, the rail or the ⋯ sheet)
 follows `reviewOpens()` in `src/web/util.ts`: while the review has a running session and isn't
 waiting for the task's fixes (preparing, sweeping, scoring, or failed, which keeps its session for

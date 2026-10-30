@@ -281,7 +281,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
   focusRef.current = { projectId: currentProject?.id ?? null, sessionId: currentSession?.id ?? null };
 
   useEffect(() => {
-    if (currentProject && currentSession) rememberOpenSession(currentProject.id, currentSession.id);
+    if (currentProject && currentSession) rememberOpenSession(currentProject.id, currentSession);
   }, [currentProject, currentSession]);
 
   // When the project on screen loses its last open session, offer to close it. Only on the
@@ -334,8 +334,8 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
     navigate({ view: 'project', projectId: p.id, sessionId: s?.id ?? null }, { replace: isDrawerEntry() });
   }, []);
 
-  // A task's magnifier (its tab, its rail row), once its review's session is done (`reviewOpens`),
-  // asks for the task on screen with its local review's findings open, and the rail's task part, while they're open, for them closed: a request
+  // A task's magnifier (its tab, its rail row), while the task fixes a round's findings or once the
+  // review is done (`reviewOpens`), asks for the task on screen with its local review's findings open, and the rail's task part, while they're open, for them closed: a request
   // ProjectView takes once. `findingsOpenFor` is the task whose findings ProjectView shows.
   const [findingsRequest, setFindingsRequest] = useState<{ id: string; open: boolean } | null>(null);
   const [findingsOpenFor, setFindingsOpenFor] = useState<string | null>(null);

@@ -183,8 +183,13 @@ export function lastOpenSession(projectId: string): string | undefined {
   return readLastOpen()[projectId];
 }
 
-/** Remembers the session open in a project, so switching back to the project reopens it. */
-export function rememberOpenSession(projectId: string, sessionId: string) {
+/**
+ * Remembers the session open in a project, so switching back to the project reopens it. A task's
+ * review session is remembered as its task: it has no tab to come back to, and it goes once the
+ * review is done.
+ */
+export function rememberOpenSession(projectId: string, session: Pick<Session, 'id' | 'kind' | 'parentId'>) {
+  const sessionId = isReviewChild(session) && session.parentId ? session.parentId : session.id;
   const all = readLastOpen();
   if (all[projectId] === sessionId) return;
   all[projectId] = sessionId;
