@@ -87,6 +87,33 @@ describe("a rail session's name", () => {
   });
 });
 
+describe('a rail row with a local review', () => {
+  // The body of the top-level rule with exactly this selector list.
+  const rule = (sel: string) => {
+    const at = STYLES.indexOf(`\n${sel} {`);
+    expect(at, sel).toBeGreaterThan(-1);
+    return STYLES.slice(at).split('}')[0]!;
+  };
+
+  // The name once had a column of its own between the stage chip and the magnifier, a word a line.
+  it('stacks the stage chip over the magnifier, both the task row\'s columns', () => {
+    expect(rule('.rail-joined')).toContain('display: grid;');
+    expect(rule('.rail-joined > .rail-sess-row,\n.rail-joined > .rail-sess-row > .rail-sess')).toMatch(/grid-template-columns: subgrid;[\s\S]*grid-template-rows: subgrid;/);
+    expect(rule('.rail-joined .rail-sess > .stchip')).toMatch(/grid-column: -2;\s*grid-row: 1;/);
+    expect(rule('.rail-review')).toMatch(/grid-column: -2;\s*grid-row: 2;/);
+  });
+
+  it('has no divider before the magnifier', () => {
+    expect(rule('.rail-review')).toContain('border-left: 0;');
+  });
+
+  it('keeps the dot, the logo and the chip on the first line, and Move to top over it alone', () => {
+    expect(rule('.rail-sess')).toContain('align-items: start;');
+    expect(rule('.rail-sess-top')).not.toMatch(/bottom:/);
+    expect(rule('.rail-sess-top')).toMatch(/height: \d+px;/);
+  });
+});
+
 describe("Kiro's plan lines", () => {
   const plan = (over: KiroPlan['overage'], bonus: KiroPlan['bonus'] = null): Pick<KiroPlan, 'bonus' | 'overage'> => ({ bonus, overage: over });
 
