@@ -25,7 +25,7 @@ instructions, and the `review` argument of the `start_sessions` tool, so "start 
 
 | Setting | Global default | What it does |
 |---|---|---|
-| `strategy` | `sagittarius-3.0` | Which algorithm runs: `sagittarius-3.0`, `sirius-1.0`, or `off` for no review. |
+| `strategy` | `sagittarius-3.0` | Which algorithm runs: `off` for no review, `sirius-1.0`, or `sagittarius-3.0`. |
 | `depth` | `1` | Sweeps in each round, 1 to 5: the number of times a review runs before AgentK gets the findings to fix. More than one sweep makes it a deep review: each sweep after the first is told what the earlier ones found and looks elsewhere, and the sweeps run up to this count, but from the second sweep on, one that finds nothing new ends it ([how a review runs](#how-a-review-runs)). Costs more tokens. |
 | `rounds` | `0` | Re-review rounds, 0 to 5: the number of times the code review runs again after AgentK fixes the last review's findings, before the PR opens. A review that finds nothing ends it early. |
 
@@ -41,8 +41,8 @@ reused (the cloud's `Strategy`); an unknown id resolves to the default.
 
 | Id | Passes | Scoring |
 |---|---|---|
-| `sagittarius-3.0` | guide (large), diff (small), dependents (large, with its state ledger), history (large), claims (large, with its claims ledger): the cloud's mandates word for word | A small-tier scorer for each candidate |
 | `sirius-1.0` | One mid-tier pass whose mandate covers all five | None: every candidate goes to Validate |
+| `sagittarius-3.0` | guide (large), diff (small), dependents (large, with its state ledger), history (large), claims (large, with its claims ledger): the cloud's mandates word for word | A small-tier scorer for each candidate |
 
 The cloud AgentK isn't changed: its strategy keeps its own name, and only this registry calls the
 algorithm Sagittarius 3.0.

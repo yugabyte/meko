@@ -7,7 +7,7 @@ import {
   findMeAkReviewLine, meAkReviewLine, noCounts, parseMeAkReviewLine, readOverrides, resolveReview, reviewSegmentLabel, reviewSegmentText, withMeAkReviewLine,
   type CodeReviewState, type CodeReviewSummary, type SeverityCounts,
 } from '../../src/shared/codereview.js';
-import { ReviewSegment } from '../../src/web/components/common.js';
+import { ReviewFields, ReviewSegment } from '../../src/web/components/common.js';
 
 const STYLES = readFileSync(join(import.meta.dirname, '../../src/web/styles.css'), 'utf8');
 
@@ -52,6 +52,12 @@ describe('review settings', () => {
     [null, {}],
   ])('reads %j from untrusted input as %j', (input, want) => {
     expect(readOverrides(input)).toEqual(want);
+  });
+
+  it('lists the strategies from the lightest review to the most thorough', () => {
+    const html = renderToStaticMarkup(createElement(ReviewFields, { id: 'r', value: {}, scoped: true, inherited: global, onChange: () => {} }));
+    const strategy = html.slice(html.indexOf('id="r-strategy"'), html.indexOf('</select>'));
+    expect([...strategy.matchAll(/<option value="([^"]*)"/g)].map((m) => m[1])).toEqual(['', 'off', 'sirius-1.0', 'sagittarius-3.0']);
   });
 });
 
