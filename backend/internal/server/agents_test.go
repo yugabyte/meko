@@ -21,9 +21,9 @@ import (
 // folders.
 func agentsHome(t *testing.T) string {
 	t.Helper()
-	old, oldShell := agents.SystemFolders, agents.LoginShell
-	agents.SystemFolders, agents.LoginShell = nil, ""
-	t.Cleanup(func() { agents.SystemFolders, agents.LoginShell = old, oldShell })
+	old, oldApps, oldShell := agents.SystemFolders, agents.Applications, agents.LoginShell
+	agents.SystemFolders, agents.Applications, agents.LoginShell = nil, "", ""
+	t.Cleanup(func() { agents.SystemFolders, agents.Applications, agents.LoginShell = old, oldApps, oldShell })
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	for _, k := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "KIRO_HOME", "XDG_CONFIG_HOME"} {
@@ -98,7 +98,7 @@ func TestAgentsOnTheAPIListener(t *testing.T) {
 		path, code string
 		status     int
 	}{
-		{"/api/v1/agents/cursor/connect", "UNKNOWN_AGENT", 404},
+		{"/api/v1/agents/windsurf/connect", "UNKNOWN_AGENT", 404},
 		{"/api/v1/agents/codex/connect", "AGENT_NOT_INSTALLED", 409},
 		{"/api/v1/agents/opencode/disconnect", "AGENT_NOT_INSTALLED", 409},
 	} {
