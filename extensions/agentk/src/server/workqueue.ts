@@ -11,7 +11,7 @@ import { all, get, kvDelete, kvGet, kvSet, run, tx, type Db } from './db.js';
 import { REVIEW_REQUESTS_MAX, type ReviewRequest } from './github.js';
 import { errMsg } from './log.js';
 import { HttpError } from './projects.js';
-import type { SlackTodo } from './slack.js';
+import type { SlackListItem } from './slack.js';
 
 /** kv: '1' while Slack is synced on the timer too, which a Sync that reached Slack turns on and any failure off. */
 const SLACK_AUTO_KEY = 'work-slack-auto';
@@ -25,8 +25,8 @@ export interface WorkQueueDeps {
   warn: (msg: string, detail?: string) => void;
   /** The open PRs asking for the user's review. */
   reviewRequests: () => Promise<ReviewRequest[]>;
-  /** The messages on the user's Slack To-dos; throws with what went wrong. */
-  readSlack: () => Promise<SlackTodo[]>;
+  /** The messages on the user's Slack list; throws with what went wrong. */
+  readSlack: () => Promise<SlackListItem[]>;
   /** Whether Claude Code can run, which the Slack read needs. */
   claudeAvailable: () => boolean;
   /** A GitHub PR's or issue's title, for an item added with a link and no title. */
@@ -342,7 +342,7 @@ export class WorkQueue {
   }
 
   /**
-   * Adds the open PRs asking for your review and the messages on Slack's To-dos to the bottom of
+   * Adds the open PRs asking for your review and the messages on the user's Slack list to the bottom of
    * the queue, marked as new, skipping any already on an item. Slack is read when `manual`, or on the
    * timer while the last Slack read worked: each one is a model call. Each source fails on its own.
    */

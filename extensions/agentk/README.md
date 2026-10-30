@@ -188,7 +188,7 @@ your phone can connect.
   them from each item's menu on a phone), and dismiss them when done (or all at once). Turn on
   **Sync** in Settings › Work queue (it's off until you do) and it pulls in, when you press it and
   every 15 minutes, the PRs waiting for your review and, through your agent's Slack connector, the
-  messages on your Slack To-dos, marked **New** until you give them their place. Each item has one session,
+  messages on a Slack list of yours, marked **New** until you give them their place. Each item has one session,
   whose status shows on it; **Start session** opens New session with the item filled in. Paste a
   GitHub, Jira or Slack link into `⌘K` to jump to the session working on it.
 - **Find a session by what it's about:** type a few words into Ask AgentK (`⌘K`), such as "totp

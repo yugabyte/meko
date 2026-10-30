@@ -91,20 +91,21 @@ export interface Config {
   tools: { enabled: boolean };
   /**
    * The work queue's sync (workqueue.ts), also in Settings › Work queue. github and slack: which sources it reads (both
-   * off, the default: no sync at all). syncMinutes: how often it syncs by itself (0: only Sync). slackModel: the
-   * model of the `claude -p` that reads Slack's To-dos through your Slack connector (slack.ts), and
+   * off, the default: no sync at all). syncMinutes: how often it syncs by itself (0: only Sync). slackList: the link
+   * to the Slack list that Slack sync reads. slackModel: the model of the `claude -p` that reads it through your
+   * Slack connector (slack.ts), and
    * slackTimeoutSeconds how long it may take (30 to 600). slackTools: the tools that run may call, your Slack
    * connector's read tools (the claude.ai Slack connector's by default), besides ToolSearch, which needs no
    * permission and only loads tools. It loads none of your Claude Code settings but the sign-in part, so
    * nothing else is allowed (slack.ts).
    */
-  workQueue: { github: boolean; slack: boolean; syncMinutes: number; slackModel: string; slackTimeoutSeconds: number; slackTools: string[] };
+  workQueue: { github: boolean; slack: boolean; syncMinutes: number; slackList: string; slackModel: string; slackTimeoutSeconds: number; slackTools: string[] };
 }
 
 export { DEFAULT_MEKO_URL, DEFAULT_MEKO_WEB_URL, mekoWebUrl };
 
 /** The claude.ai Slack connector's read tools: the Slack sync may call these and nothing else. */
-const SLACK_READ_TOOLS = ['search_public_and_private', 'search_public', 'read_channel', 'read_thread', 'search_channels', 'read_user_profile']
+const SLACK_READ_TOOLS = ['read_file', 'search_public_and_private', 'search_public', 'read_channel', 'read_thread', 'search_channels', 'read_user_profile']
   .map((t) => `mcp__claude_ai_Slack__slack_${t}`);
 
 export const DEFAULT_CONFIG: Config = {
@@ -122,7 +123,7 @@ export const DEFAULT_CONFIG: Config = {
   pr: { resolveConflicts: true },
   askAgentk: { enabled: true, model: 'sonnet', timeoutSeconds: 45 },
   tools: { enabled: true },
-  workQueue: { github: false, slack: false, syncMinutes: 15, slackModel: 'sonnet', slackTimeoutSeconds: 180, slackTools: [...SLACK_READ_TOOLS] },
+  workQueue: { github: false, slack: false, syncMinutes: 15, slackList: '', slackModel: 'sonnet', slackTimeoutSeconds: 180, slackTools: [...SLACK_READ_TOOLS] },
 };
 
 // TOML uses snake_case keys; the in-memory config uses camelCase.

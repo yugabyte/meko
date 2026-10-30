@@ -78,22 +78,29 @@ and the timer does nothing (`WorkSync.sources` tells the page). The timer ticks 
 
 - **GitHub:** the open PRs asking for your review (`gh search prs --review-requested=@me --state=open
   --limit 100`, `reviewRequests()` in `github.ts`), titled `Review <owner/name>#<n>: <title>`.
-- **Slack:** the messages on your To-dos, the list that [replaced Later](https://slack.com/help/articles/55757634348435-Later-is-now-To-dos)
-  (Later's items without a reminder went to Saved, which the sync doesn't read). The prompt has Claude
-  search with Slack's `is:todo` modifier and leave out completed to-dos when its tools say which are.
-  They're read by one `claude -p` through your own Slack
-  connector (`src/server/slack.ts`), titled with their first line. Unlike Ask AgentK, it loads your
+- **Slack:** the messages on a [Slack list](https://slack.com/help/articles/27452748828179-Use-lists-in-Slack)
+  of yours, whose link is `[work_queue] slack_list` (Settings › Work queue; `slackListId()` reads the
+  list's file ID from it, and with none there the read fails without running anything). Not Slack's
+  To-dos: the claude.ai Slack connector's search ignores modifiers it doesn't know, `is:todo` among
+  them (it returns the newest messages anywhere), its results don't say what's a to-do or done, and
+  no tool of its lists To-dos or Saved. Its `slack_read_file` returns a list as CSV with the list's
+  own columns, so the prompt has Claude read that one file, without searching Slack or reading the
+  messages, and give each row with a Slack message link, leaving out rows a checkbox or status
+  column marks done. A list is private until it's shared, but sharing one of its items gives the
+  people it goes to edit access to the whole list, so its rows are still data written by people.
+  The rows are read by one `claude -p` through your own Slack
+  connector (`src/server/slack.ts`), titled with their name, or the message's first line. Unlike Ask AgentK, it loads your
   MCP servers and claude.ai connectors (no `--strict-mcp-config`). It reads messages other people
   wrote, so it's kept to reading Slack: no built-in tools but ToolSearch (`--tools ToolSearch`);
   none of your Claude Code settings but `env` and `apiKeyHelper`, which signing in needs (`signInSettings()`, with
   `--setting-sources project` in AgentK's empty `run/work-sync` folder), so your allow rules and
   default mode don't apply; `--permission-mode default`; and only `[work_queue] slack_tools` allowed
-  (the claude.ai Slack connector's search and read tools by default). ToolSearch runs too, since it
+  (the claude.ai Slack connector's `slack_read_file` and its other read tools by default). ToolSearch runs too, since it
   needs no permission, but it only loads tools' schemas. In `-p` nothing can be asked, so every other
   tool, another connector's included, is refused; the claude.ai connector's write
-  tools are also denied by name. The prompt calls the messages' text data, not instructions.
+  tools are also denied by name. The prompt calls the rows' text data, not instructions.
   The answer follows a JSON schema; `found: false` (no Slack tools, or no way to the list) is an
-  error, not an empty list. It needs Claude Code; the model is `[work_queue] slack_model`.
+  error, not an empty list (a list with no rows left is `found: true`). It needs Claude Code; the model is `[work_queue] slack_model`.
   Claude.ai connectors are still connecting when a `-p` run's first turn starts, so with no tools
   at all the run never saw Slack and always answered `found: false`; ToolSearch waits for a
   connecting server, so the prompt (`slackPrompt()`) has Claude load `slack_tools` with

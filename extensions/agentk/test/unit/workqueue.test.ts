@@ -6,7 +6,8 @@ import { parseWorkLink } from '../../src/shared/worklinks.js';
 import { openDb, run } from '../../src/server/db.js';
 import type { ReviewRequest } from '../../src/server/github.js';
 import type { AskRun } from '../../src/server/askagentk.js';
-import { readSlackTodos, signInSettings, slackArgs, slackPrompt, type SlackTodo } from '../../src/server/slack.js';
+import { DEFAULT_CONFIG } from '../../src/server/config.js';
+import { readList, readSlackList, signInSettings, slackArgs, slackListId, slackPrompt, type SlackListItem } from '../../src/server/slack.js';
 import { moveItem } from '../../src/shared/workorder.js';
 import { checkStartItem, setItemSession, WorkQueue, type WorkQueueDeps } from '../../src/server/workqueue.js';
 
@@ -30,14 +31,14 @@ describe('work item links', () => {
   });
 });
 
-function setup(o: { reviews?: ReviewRequest[]; slack?: SlackTodo[] | Error; claude?: boolean; title?: string } = {}) {
+function setup(o: { reviews?: ReviewRequest[]; slack?: SlackListItem[] | Error; claude?: boolean; title?: string } = {}) {
   const db = openDb(':memory:');
   run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('p', 'P', '/r', 'main', 1)`);
   const session = (id: string, desired = 'running') =>
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token,
              desired, status, stage, created_at) VALUES (?, 'p', ?, ?, 'c', ?, 'main', '/w', 't', ?, ?, 'idle', 'code', 1)`,
       id, id, `Session ${id}`, `ak/${id}`, `tok-${id}`, desired);
-  const state = { reviews: o.reviews ?? [], slack: o.slack ?? ([] as SlackTodo[] | Error), slackReads: 0, changes: 0, reviewReads: 0, settings: { github: true, slack: true, syncMinutes: 15 } };
+  const state = { reviews: o.reviews ?? [], slack: o.slack ?? ([] as SlackListItem[] | Error), slackReads: 0, changes: 0, reviewReads: 0, settings: { github: true, slack: true, syncMinutes: 15 } };
   const deps: WorkQueueDeps = {
     db,
     changed: () => void state.changes++,
@@ -173,9 +174,9 @@ describe('the work queue', () => {
 
 describe('syncing the work queue', () => {
   const pr = (n: number): ReviewRequest => ({ repo: 'o/r', number: n, title: `PR ${n}`, url: `https://github.com/o/r/pull/${n}` });
-  const msg = (ts: string, text: string): SlackTodo => ({ url: `https://acme.slack.com/archives/C1/p${ts}`, text, channel: 'db-dev' });
+  const msg = (ts: string, text: string): SlackListItem => ({ url: `https://acme.slack.com/archives/C1/p${ts}`, text, channel: 'db-dev' });
 
-  it('adds review requests and To-dos at the bottom, new, and never again once closed', async () => {
+  it('adds review requests and Slack list messages at the bottom, new, and never again once closed', async () => {
     const { q, state } = setup({ reviews: [pr(1), pr(2)], slack: [msg('1700000000000001', 'can you look at\nthe flaky test')] });
     await q.create({ title: 'Mine', links: ['o/r#2'] });
     const r = await q.sync(true);
@@ -254,11 +255,11 @@ describe('syncing the work queue', () => {
   });
 });
 
-describe("reading Slack's To-dos", () => {
+describe("reading the user's Slack list", () => {
   const ran = (out: unknown, o: Partial<AskRun> = {}): AskRun => ({ stdout: JSON.stringify(out), stderr: '', code: 0, spawnError: null, timedOut: false, aborted: false, ...o });
 
   it('loads your connectors but none of your permissions, and no built-in tools but ToolSearch', () => {
-    const args = slackArgs('sonnet', ['mcp__claude_ai_Slack__slack_search_public_and_private'], { env: { A: '1' } });
+    const args = slackArgs('sonnet', ['mcp__claude_ai_Slack__slack_search_public_and_private'], 'F0LIST', { env: { A: '1' } });
     const after = (flag: string) => args[args.indexOf(flag) + 1];
     expect(args).not.toContain('--strict-mcp-config');
     expect([after('--tools'), after('--permission-mode'), after('--setting-sources')]).toEqual(['ToolSearch', 'default', 'project']);
@@ -266,8 +267,9 @@ describe("reading Slack's To-dos", () => {
     expect(args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--disallowedTools'))).toEqual(['mcp__claude_ai_Slack__slack_search_public_and_private']);
     expect(args).toContain('mcp__claude_ai_Slack__slack_send_message');
     expect(JSON.parse(after('--settings'))).toEqual({ env: { A: '1' }, disableAllHooks: true });
-    expect(slackArgs('', [])).not.toContain('--allowedTools');
-    expect(slackPrompt([])).not.toContain('ToolSearch');
+    expect(after('--system-prompt')).toContain('the file F0LIST');
+    expect(slackArgs('', [], 'F0LIST')).not.toContain('--allowedTools');
+    expect(slackPrompt([], 'F0LIST')).not.toContain('ToolSearch');
   });
 
   it('takes only the sign-in part of your Claude Code settings', () => {
@@ -279,11 +281,31 @@ describe("reading Slack's To-dos", () => {
 
   it.each([
     ['the messages it found', ran({ structured_output: { found: true, items: [{ url: 'u', text: ' hi ', channel: 'c' }, { text: 'no url' }] } }), [{ url: 'u', text: 'hi', channel: 'c' }]],
-    ['that it could not reach the list', ran({ structured_output: { found: false, items: [] } }), /couldn't reach your To-dos/],
+    ['that it could not reach the list', ran({ structured_output: { found: false, items: [] } }), /couldn't read your Slack list/],
     ['a sign-in it needs', ran({ is_error: true, result: 'Not logged in · Please run /login' }, { code: 1 }), /isn't signed in/],
     ['a timeout', ran({}, { timedOut: true, code: null }), /over 180 seconds/],
   ])('reads %s', (_what, r, want) => {
-    if (want instanceof RegExp) expect(() => readSlackTodos(r, 'claude', 180)).toThrow(want);
-    else expect(readSlackTodos(r, 'claude', 180)).toEqual(want);
+    if (want instanceof RegExp) expect(() => readSlackList(r, 'claude', 180)).toThrow(want);
+    else expect(readSlackList(r, 'claude', 180)).toEqual(want);
+  });
+
+  it.each([
+    ['https://acme.slack.com/lists/T0ACME/F0CDR40FFS5', 'F0CDR40FFS5'],
+    [' https://acme.enterprise.slack.com/lists/T0ACME/F0CDR40FFS5/?view=all ', 'F0CDR40FFS5'],
+    ['https://acme.slack.com/archives/C024BE91L/p1700000000123456', null],
+    ['http://acme.slack.com/lists/T0ACME/F0CDR40FFS5', null],
+    ['https://slack.com.example.com/lists/T0ACME/F0CDR40FFS5', null],
+    ['F0CDR40FFS5', null],
+  ])('reads the list in %s as %s', (link, id) => {
+    expect(slackListId(link)).toBe(id);
+  });
+
+  it('says to set the list without running Claude Code when there is no link to one', async () => {
+    let runs = 0;
+    const cfg = structuredClone(DEFAULT_CONFIG);
+    cfg.workQueue.slackList = 'https://acme.slack.com/archives/C1/p1700000000000001';
+    const dir = mkdtempSync(join(tmpdir(), 'ak-slack-'));
+    await expect(readList(cfg, dir, async () => (runs++, ran({})))).rejects.toThrow(/Set the link to your Slack list/);
+    expect(runs).toBe(0);
   });
 });

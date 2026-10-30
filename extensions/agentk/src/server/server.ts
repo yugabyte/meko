@@ -29,6 +29,7 @@ import { setUpClaudeMeko, setUpKiroMeko } from './mekosettings.js';
 import { prDesignSource } from './prdesign.js';
 import { HttpError } from './projects.js';
 import { searchSessions } from './sessionsearch.js';
+import { slackListId } from './slack.js';
 import { attachTerminal, type TermQuery } from './terminal.js';
 import { notesRange, type Updates } from './updates.js';
 import { usageOverview } from './usage.js';
@@ -563,6 +564,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     kiroTrustTools: core.config.kiro.trustTools,
     workQueueGithub: core.config.workQueue.github,
     workQueueSlack: core.config.workQueue.slack,
+    workQueueSlackList: core.config.workQueue.slackList,
     workQueueSyncMinutes: core.config.workQueue.syncMinutes,
   });
   app.get('/api/settings', async () => {
@@ -600,6 +602,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (b.workQueueSyncMinutes !== undefined && (!Number.isInteger(b.workQueueSyncMinutes) || b.workQueueSyncMinutes < 0 || b.workQueueSyncMinutes > WORK_SYNC_MINUTES_MAX)) {
       throw new HttpError(400, `Sync every must be a whole number of minutes from 0 to ${WORK_SYNC_MINUTES_MAX}.`);
     }
+    if (b.workQueueSlackList !== undefined && (typeof b.workQueueSlackList !== 'string' || (b.workQueueSlackList.trim() && !slackListId(b.workQueueSlackList)))) {
+      throw new HttpError(400, "That isn't a link to a Slack list: in the list, use ⋯ › Copy link.");
+    }
     for (const k of ['claudeEnabled', 'opencodeEnabled', 'opencodeDisableTracking', 'kiroEnabled', 'kiroTrustTools', 'workQueueGithub', 'workQueueSlack'] as const) {
       if (b[k] !== undefined && typeof b[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false.`);
     }
@@ -623,6 +628,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.kiroTrustTools !== undefined) c.kiro.trustTools = b.kiroTrustTools;
       if (b.workQueueGithub !== undefined) c.workQueue.github = b.workQueueGithub;
       if (b.workQueueSlack !== undefined) c.workQueue.slack = b.workQueueSlack;
+      if (b.workQueueSlackList !== undefined) c.workQueue.slackList = b.workQueueSlackList.trim();
       if (b.workQueueSyncMinutes !== undefined) c.workQueue.syncMinutes = b.workQueueSyncMinutes;
     });
     // An agent turned on: its version (and Kiro's agent file) follow, in the background. One turned

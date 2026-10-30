@@ -203,9 +203,13 @@ const clampOr = (typed: string, max: number, saved: number) => {
 function WorkQueueTab({ auto }: { auto: AutoSettings }) {
   const { s, load, change } = auto;
   const [minutes, setMinutes] = useState('');
+  const [list, setList] = useState('');
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    load().then((x) => setMinutes(String(x.workQueueSyncMinutes)), (e) => setError(errorMessage(e)));
+    load().then((x) => {
+      setMinutes(String(x.workQueueSyncMinutes));
+      setList(x.workQueueSlackList);
+    }, (e) => setError(errorMessage(e)));
   }, [load]);
   if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
   const off = !s.workQueueGithub && !s.workQueueSlack;
@@ -214,16 +218,44 @@ function WorkQueueTab({ auto }: { auto: AutoSettings }) {
     setMinutes(String(m));
     if (m !== s.workQueueSyncMinutes) change({ workQueueSyncMinutes: m });
   };
+  const saveList = () => {
+    if (list.trim() !== s.workQueueSlackList) change({ workQueueSlackList: list.trim() });
+  };
   return (
     <div className="stack">
       <p className="muted small">What Sync adds to the queue; both off turns it off.</p>
       <InfoCheck id="set-wq-github" label="GitHub review requests" checked={s.workQueueGithub} onChange={(on) => change({ workQueueGithub: on })}>
         Open PRs that ask for your review, through your gh login.
       </InfoCheck>
-      <InfoCheck id="set-wq-slack" label="Slack To-dos" checked={s.workQueueSlack} onChange={(on) => change({ workQueueSlack: on })}>
-        The messages on your To-dos, read by Claude Code through your Slack connector. Each read is a model call; on the
-        timer it runs only while the last read worked.
+      <InfoCheck id="set-wq-slack" label="Slack list" checked={s.workQueueSlack} onChange={(on) => change({ workQueueSlack: on })}>
+        The messages on a Slack list of yours, read by Claude Code through your Slack connector. Each read is a model
+        call; on the timer it runs only while the last read worked.
       </InfoCheck>
+      <Field
+        label="Slack list link"
+        hint={s.workQueueSlack && !s.workQueueSlackList ? 'Paste the link to your list.' : undefined}
+        info={{
+          for: 'set-wq-slack-list',
+          text: "Slack's To-dos can't be read by its connector, so keep a list of your own (for example Meko work queue), add the messages you want worked on, and paste its link from the list's ⋯ › Copy link. A list is private until you share it; sharing one of its items gives the people you share it with edit access to the whole list. Rows ticked done in a checkbox or status column are left out.",
+        }}
+      >
+        <input
+          id="set-wq-slack-list"
+          className="input"
+          type="url"
+          placeholder="https://<workspace>.slack.com/lists/…"
+          value={list}
+          disabled={!s.workQueueSlack}
+          onChange={(e) => setList(e.target.value)}
+          onBlur={saveList}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              saveList();
+            }
+          }}
+        />
+      </Field>
       <Field label="Sync every (minutes)" hint={off ? 'Sync is off.' : '0 syncs only when you press Sync.'}>
         <input
           id="set-wq-minutes"

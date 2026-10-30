@@ -97,11 +97,12 @@ idle_days = 14            # an idle worktree no session used for this many days 
 
 [work_queue]
 # github = true              # Sync pulls in GitHub review requests (Settings › Work queue); off by default
-# slack = true               # Sync reads your Slack To-dos; off by default (both off, the default: no sync)
+# slack = true               # Sync reads the messages on your Slack list; off by default (both off, the default: no sync)
+# slack_list = "https://<workspace>.slack.com/lists/<team>/<F…>" # that list's link (its ⋯ › Copy link)
 # sync_minutes = 15          # how often the work queue syncs by itself (0: only when you press Sync, up to 1440)
-# slack_model = "sonnet"     # the model of the claude -p that reads Slack's To-dos through your Slack connector
+# slack_model = "sonnet"     # the model of the claude -p that reads that list through your Slack connector
 # slack_timeout_seconds = 180 # a Slack read that takes longer is stopped (30 to 600)
-# slack_tools = ["mcp__claude_ai_Slack__slack_search_public_and_private", …] # the only tools that read may call, besides ToolSearch
+# slack_tools = ["mcp__claude_ai_Slack__slack_read_file", …] # the only tools that read may call, besides ToolSearch
 ```
 
 | Action | What the server does |
