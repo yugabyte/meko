@@ -11,8 +11,8 @@ plain mouse wheel (`sidewaysWheel()`), and the selected tab is always scrolled i
 (off by default; kept in this browser, `ak-rail-sessions`), each project's open sessions are listed
 under it in the rail instead of the tabs, one row each with its status dot, its full name
 (wrapped, not cut off) and its stage (with a » after it while [Run to merge](lifecycle.md#run-to-merge)
-is on, as on the tabs), so many show at once and any can be opened with one click,
-in any project. A task's [local code review](code-review.md) is never a tab or a row of its own: it's
+is on, as on the tabs) at the right of the name's first line, so many show at once and any can be
+opened with one click, in any project. A task's [local code review](code-review.md) is never a tab or a row of its own: it's
 a part joined to its task's tab and rail row, a blue magnifier (its lens pulses while the review
 works, and shows Meko's "m" during a Meko call) and how far it has got (`3/6`: each pass, then
 scoring as one step, moving on as each pass reports), its result (`2·1` blockers·majors until the task has said what it did with each
@@ -20,10 +20,11 @@ finding, then `LGTM`) or a red `!`. While the review works and its session waits
 terminal, the magnifier takes the needs-you color and its lens knocks. Clicking it opens the
 review's own screen (its terminal, its findings beside it) while its passes run (or it failed),
 and its findings beside the task's terminal while the task fixes them and once the review is done
-(the review session stops then). The tabs and the rail list a project's sessions in the same order, kept on the server
+(the review session stops then). In the rail, the magnifier sits under the stage, with no divider,
+so the name keeps one column. The tabs and the rail list a project's sessions in the same order, kept on the server
 (`sessions.position`) so every browser sees it: a new session goes first, and **Move to top** puts
 any other there, to keep the work that matters most at the top as priorities change. It's the ↑ that
-takes a rail row's stage chip's place on hover, and is in the ⋯ sheet and the command palette (where
+takes a rail row's stage chip's place on hover (the first line only), and is in the ⋯ sheet and the command palette (where
 touch screens find it). Each takes one below the project's lowest position, so no other row is
 renumbered. The session on screen is highlighted (its project's name turns bold instead), and
 **+ New session** follows each project's list (the project on screen shows it even with no

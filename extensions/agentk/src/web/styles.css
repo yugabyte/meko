@@ -892,10 +892,13 @@ textarea.input {
   gap: 1px;
   margin: 0 0 4px 16px;
 }
+/* A wrapping name keeps the dot, the logo and the stage chip on its first line; a row taller than
+   its lines (a phone's 36 px) centres them. */
 .rail-sess {
   display: grid;
   grid-template-columns: 14px minmax(0, 1fr) auto;
-  align-items: center;
+  align-items: start;
+  align-content: center;
   gap: 7px;
   padding: 5px 8px 5px 6px;
   border: 0;
@@ -919,7 +922,26 @@ textarea.input {
 .rail-sess-name {
   overflow-wrap: anywhere;
 }
-/* Move to top sits over the stage chip, shown in its place while the row is hovered or focused. */
+/* Centred on the name's first line (13 px at line-height 1.3). The learning and Meko dots are
+   drawn bigger than their 10 px box with negative margins, so they start that much higher. */
+.rail-sess > .dot {
+  margin-top: 3.5px;
+}
+.rail-sess > .dot.learning {
+  margin-top: 1.5px;
+}
+.rail-sess > .dot.meko {
+  margin-top: 2.5px;
+}
+.rail-sess > .harness-logo {
+  margin-top: 1.5px;
+}
+.rail-sess > .stchip {
+  margin-top: 2px;
+  justify-self: end;
+}
+/* Move to top sits over the stage chip, shown in its place while the row is hovered or focused:
+   the first line only, so it never covers the name or the magnifier under the chip. */
 .rail-sess-row {
   position: relative;
   display: grid;
@@ -928,7 +950,7 @@ textarea.input {
   position: absolute;
   top: 0;
   right: 0;
-  bottom: 0;
+  height: 27px;
   width: 28px;
   display: grid;
   place-items: center;
@@ -1633,24 +1655,61 @@ textarea.input {
     opacity: 1;
   }
 }
-/* The rail's row for a task with a local review: one row, the task's part growing (its name
-   wrapping, as in every rail row) and the review's part beside it, fixed. */
+/* The rail's row for a task with a local review: one grid, which the task's button covers whole
+   and passes its columns to (subgrid). The name takes the middle column on every line; the right
+   column holds the stage chip on the first line and the review's part (the magnifier) under it,
+   drawn over the task's button, so the chip stays the task's and the column is as wide as the
+   wider of the two. No divider: the magnifier has its own hover and selected box. The first
+   column takes the button's 6 px left padding too (a subgrid's padding doesn't widen a fixed
+   track), so names line up with the other rows'. */
 .rail-joined {
-  display: flex;
-  align-items: stretch;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  grid-template-rows: auto auto 1fr;
+  column-gap: 7px;
   min-width: 0;
   border-radius: 6px;
 }
-.rail-joined > .rail-sess-row {
-  flex: 1;
-  min-width: 0;
+.rail-sessions.logos .rail-joined {
+  grid-template-columns: 20px 18px minmax(0, 1fr) auto;
 }
+.rail-joined > .rail-sess-row,
 .rail-joined > .rail-sess-row > .rail-sess {
-  border-radius: 6px 0 0 6px;
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  grid-template-columns: subgrid;
+  grid-template-rows: subgrid;
+  row-gap: 0;
+}
+/* Placed by column too: an item placed by row alone goes before the dot, into the first column. */
+.rail-joined .rail-sess > .rail-sess-name {
+  grid-column: -3;
+  grid-row: 1 / -1;
+}
+.rail-joined .rail-sess > .stchip {
+  grid-column: -2;
+  grid-row: 1;
+}
+/* Move to top takes the chip's grid cell, so it stops where the magnifier starts. In the flow:
+   Chromium doesn't place an absolutely positioned child of a subgrid by its grid area. */
+.rail-joined .rail-sess-top {
+  position: relative;
+  grid-column: -2;
+  grid-row: 1;
+  justify-self: end;
+  top: auto;
+  right: auto;
+  height: auto;
 }
 .rail-review {
-  border-radius: 0 6px 6px 0;
-  padding: 4px 7px;
+  position: relative;
+  grid-column: -2;
+  grid-row: 2;
+  align-self: start;
+  justify-self: end;
+  border-left: 0;
+  border-radius: 6px;
+  padding: 2px 8px 4px;
 }
 .rail-review.sel {
   background: var(--accent-soft);
