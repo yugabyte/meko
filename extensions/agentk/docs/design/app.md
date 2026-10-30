@@ -5,15 +5,26 @@ Part of the [AgentK design](../design.md).
 The left rail holds projects, each with its repo's folder name in small type under the project
 name and the most urgent session state shown on it. Drag a project to reorder the list; on a touch
 screen, use **Move up** / **Move down** in the project home's settings. The tabs above the terminal
-hold the project's sessions. With **List sessions in the projects pane** ticked in Settings › General
+hold the project's sessions; when there are more than fit, they scroll sideways with no scrollbar
+(one drawn over the tabs, as macOS and phones do, hid their names): swipe, Shift with the wheel, or the
+plain mouse wheel (`sidewaysWheel()`), and the selected tab is always scrolled into view. With **List sessions in the projects pane** ticked in Settings › General
 (off by default; kept in this browser, `ak-rail-sessions`), each project's open sessions are listed
 under it in the rail instead of the tabs, one row each with its status dot, its full name
 (wrapped, not cut off) and its stage (with a » after it while [Run to merge](lifecycle.md#run-to-merge)
-is on, as on the tabs), so many show at once and any can be opened with one click,
-in any project. The tabs and the rail list a project's sessions in the same order, kept on the server
+is on, as on the tabs) at the right of the name's first line, so many show at once and any can be
+opened with one click, in any project. A task's [local code review](code-review.md) is never a tab or a row of its own: it's
+a part joined to its task's tab and rail row, a blue magnifier (its lens pulses while the review
+works, and shows Meko's "m" during a Meko call) and how far it has got (`3/6`: each pass, then
+scoring as one step, moving on as each pass reports), its result (`2·1` blockers·majors until the task has said what it did with each
+finding, then `LGTM`) or a red `!`. While the review works and its session waits on you in its
+terminal, the magnifier takes the needs-you color and its lens knocks. Clicking it opens the
+review's own screen (its terminal, its findings beside it) while its passes run (or it failed),
+and its findings beside the task's terminal while the task fixes them and once the review is done
+(the review session stops then). In the rail, the magnifier sits under the stage, with no divider,
+so the name keeps one column. The tabs and the rail list a project's sessions in the same order, kept on the server
 (`sessions.position`) so every browser sees it: a new session goes first, and **Move to top** puts
 any other there, to keep the work that matters most at the top as priorities change. It's the ↑ that
-takes a rail row's stage chip's place on hover, and is in the ⋯ sheet and the command palette (where
+takes a rail row's stage chip's place on hover (the first line only), and is in the ⋯ sheet and the command palette (where
 touch screens find it). Each takes one below the project's lowest position, so no other row is
 renumbered. The session on screen is highlighted (its project's name turns bold instead), and
 **+ New session** follows each project's list (the project on screen shows it even with no
@@ -49,7 +60,7 @@ Session states, shown with a dot on each session (on its tab, or in the rail) an
 
 - **Working:** the dot's halo blinks
 - **Needs you:** a permission prompt or a question. The diamond knocks three times short and once
-  long, then pauses. It also shows in PR & Review while a merge blocker only you can clear stands
+  long, then pauses. It also shows in Review & PR while a merge blocker only you can clear stands
   (`Session.waitsOnYou`: a held review, CI or merge conflicts AgentK handed over, or with Run to
   merge any blocker that doesn't clear by itself; see *Waiting on you* in
   [the task lifecycle](lifecycle.md)), over idle, recovered and working, and over learning, queued
@@ -132,7 +143,9 @@ The base is the branch's merge base with `origin/<base>` or, in a fork, `upstrea
 is closer to the branch (a fork's own `<base>` can lag the upstream one the branch was rebased onto);
 `origin` wins a tie, and the local `<base>` is used only when neither remote has one.
 Each file has a kind (A, M, D, R, U), its line counts, an *uncommitted* tag when it has uncommitted
-edits, and a collapsible diff. Single-file diffs are cut at 256 KB and the whole panel at 4 MB;
+edits, and a collapsible diff, which scrolls sideways in its own box (where scrollbars are drawn over
+content, macOS's and phones', a diff wider than the panel leaves room under its last row for it:
+`markOverlayScrollbars()`, `watchSideways()`). Single-file diffs are cut at 256 KB and the whole panel at 4 MB;
 past that only line counts are shown.
 The panel lists at most 1,000 files (`MAX_FILES`, `capFiles()` in `changes.ts`): the files with
 review comments, so no comment loses its file, then the first by path. The header's file count and
@@ -268,12 +281,24 @@ The search bar at the top of the rail (the AgentK logo, "Ask AgentK" and the sho
 opens it too; either way it opens over that bar, at the top left. In the palette, session names show
 in the accent colour and project names in bold, so they don't read as commands. On Linux and Windows
 these use Ctrl, so the terminal doesn't get Ctrl+K, Ctrl+1–9 or Ctrl+Tab; every other key passes
-through to the terminal whenever it has focus, except the find shortcut below. To copy from the terminal, drag across the text and
+through to the terminal whenever it has focus, except the find shortcut and the editing keys below. To copy from the terminal, drag across the text and
 press `Ctrl+C` (`⌘C`), which
 copies rather than interrupting Claude while text is selected. While Claude has the mouse (it runs
 full screen), a plain drag goes to Claude; Shift-drag (Option-drag on a Mac) selects in the browser
 instead. Text a program copies itself (OSC 52) goes on the clipboard too. Clipboard access
 needs HTTPS or localhost.
+
+**Editing keys.** Shift+Enter starts a new line in the agent's prompt, and Enter sends it. xterm.js
+sends a carriage return for both, so the terminal sends Shift+Enter as `ESC CR` itself: the bytes
+Option+Enter (Alt+Enter) already sends, and the ones Claude Code's `/terminal-setup` writes for VS
+Code. Claude Code, OpenCode and Kiro CLI all read it as a new line. It isn't Enter, so it doesn't
+send the images held for Claude; the next Enter does. On a Mac, ⌘← and ⌘→ go to the start and end
+of the line (Ctrl+A, Ctrl+E; xterm.js sends nothing for them), ⌥← and ⌥→ move by a word (`ESC b`,
+`ESC f`, as Terminal.app sends) and ⌘⌫ deletes to the start of the line (Ctrl+U), as in iTerm2's
+Natural Text Editing. On Linux and Windows, Ctrl+Backspace deletes the word before the cursor
+(`ESC DEL`, as Alt+Backspace sends). `editKeySequence()` in `keys.ts` maps the keys, and leaves a
+key that's part of an input method's composition to xterm. Every program in the terminal gets these
+bytes, not only the agent: in vim's insert mode, Shift+Enter is Esc then Enter.
 
 **Finding text in the terminal.** With the terminal focused, `⌘F` (`Ctrl+Shift+F` on Linux and
 Windows, so `Ctrl+F` still reaches the agent) opens a find bar over its top right (`TermFind.tsx`);
@@ -428,7 +453,7 @@ At 760 px wide or less the app switches to a phone layout. The rail becomes a dr
 app bar (the Back gesture closes it, and its search bar at the top opens the palette, across the
 top of the screen, in place of `⌘K`), and, with the setting on, lists the sessions under their projects as on a desktop.
 With the setting off, the app bar holds the project's sessions as tabs, between the drawer button and ⋯, so a phone
-can switch sessions without opening the drawer (each tab shows its status and stage); with it on, the drawer
+can switch sessions without opening the drawer (each tab shows its status and stage; a swipe scrolls them, with no scrollbar); with it on, the drawer
 lists them instead and the app bar names the session and its project, with the session's status dot, and puts
 a dot on the drawer button while another session in the project needs you. The session header,
 the stage bar with its gate button (Design Review, Open PR, Merge & Close) and the footer details

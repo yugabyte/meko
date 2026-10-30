@@ -14,7 +14,7 @@ import { HeldImages, type HeldImage } from './heldImages';
 import { isPastableImage, mekoPlan, mekoSummary, pickFiles, type MekoResult } from './knowledge';
 import { MOBILE_QUERY, TOUCH_QUERY, matches } from './hooks/useMedia';
 import {
-  clampFont, ctrlSequence, decayVelocity, flingVelocity, isTap, isTerminalReport, keySequence, pastePath, pasteText, touchCol, touchRow, wheelReport, wheelSteps,
+  clampFont, ctrlSequence, decayVelocity, editKeySequence, flingVelocity, isTap, isTerminalReport, keySequence, pastePath, pasteText, touchCol, touchRow, wheelReport, wheelSteps,
   FLING_WINDOW_MS,
   type BarKey, type TouchSample,
 } from './keys';
@@ -326,6 +326,14 @@ class SessionTerminal {
         // On a Mac ⌘V pastes and Ctrl+V doesn't, so read the clipboard for an image.
         e.preventDefault();
         void this.ctrlV();
+        return false;
+      }
+      // Shift+Enter starts a new line, and the usual text-editing keys work (editKeySequence). Typed
+      // through xterm, so they scroll to the bottom and go through onData as other keys do.
+      const seq = editKeySequence(e, IS_MAC);
+      if (seq) {
+        e.preventDefault();
+        this.term.input(seq);
         return false;
       }
       if (mod && (e.key === 'k' || e.key === 'K')) return false;

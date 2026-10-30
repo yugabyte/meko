@@ -320,15 +320,30 @@ export function writeOpenCodePlugin(paths: Paths): void {
  * writable without asking. `tools`: AgentK's session tools (`openCodeTools` in tools.ts: their MCP
  * server, their skill's folder, and their permission rules beside the folders').
  */
-export function openCodeSessionConfig(o: { plugin: string; instructions: string; dirs: string[]; tools?: Record<string, unknown> | null }): string {
+export function openCodeSessionConfig(o: {
+  plugin: string; instructions: string; dirs: string[]; tools?: Record<string, unknown> | null;
+  /** A code-review session's subagents, read-only, each on its model ('' the session's own). */
+  agents?: { name: string; description: string; prompt: string; model: string }[] | null;
+}): string {
   const { permission: toolRules, ...tools } = o.tools ?? {};
+  const agents = o.agents?.length
+    ? {
+      agent: Object.fromEntries(o.agents.map((a) => [a.name, {
+        description: a.description, mode: 'subagent', prompt: a.prompt, ...(a.model ? { model: a.model } : {}),
+        permission: { edit: 'deny', bash: 'deny', webfetch: 'deny' },
+      }])),
+    }
+    : {};
   return JSON.stringify({
     plugin: [o.plugin],
     instructions: [o.instructions],
     ...tools,
+    ...agents,
     permission: {
       external_directory: Object.fromEntries(o.dirs.map((d) => [join(d, '*'), 'allow'])),
       ...(toolRules && typeof toolRules === 'object' ? toolRules : {}),
+      // A code-review session reads the change and changes nothing, its main thread included.
+      ...(o.agents?.length ? { edit: 'deny', bash: 'deny', webfetch: 'deny' } : {}),
     },
   });
 }

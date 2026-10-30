@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { request, type IncomingHttpHeaders } from 'node:http';
 import { connect } from 'node:net';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 import { makeEnv, type TestEnv } from '../helpers.js';
@@ -148,6 +148,17 @@ describe('HTTP API: access control', () => {
       const started = Date.now();
       await app.close();
       expect(Date.now() - started).toBeLessThan(SHUTDOWN_CLOSE_MS + 2000);
+      // The dropped socket is still on its way out, and a change between the close and the core's
+      // stop must read no state: the database may be closed by the time a push would.
+      const state = vi.spyOn(env.core, 'state');
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        env.core.changed();
+        vi.advanceTimersByTime(1000);
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(state).not.toHaveBeenCalled();
       peer.destroy();
     });
   });

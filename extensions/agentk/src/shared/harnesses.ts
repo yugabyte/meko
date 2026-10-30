@@ -39,15 +39,21 @@ export interface HarnessCaps {
   upgrade?: string;
   /** What it loads before it takes a session's first prompt, for the Starting view: "Kiro loads <this> first". */
   loads: string;
+  /**
+   * How a local code review runs its steps (docs/design/code-review.md): `subagents`, each pass and
+   * scorer as a subagent defined for the review session, on its tier's model; `turns`, each as a
+   * prompt of its own after clearing the conversation, for a CLI with no subagents AgentK can define.
+   */
+  reviewSteps: 'subagents' | 'turns';
 }
 
 export const HARNESS_CAPS: Record<HarnessId, HarnessCaps> = {
   claude: { label: 'Claude Code', short: 'Claude', login: 'claude auth login', mod: true, artifacts: true, usage: 'tokens', labelModels: false,
-    userModels: false, minVersion: null, loads: 'its plugins, MCP servers and startup hooks' },
+    userModels: false, minVersion: null, loads: 'its plugins, MCP servers and startup hooks', reviewSteps: 'subagents' },
   opencode: { label: 'OpenCode', short: 'OpenCode', login: 'opencode auth login', mod: false, artifacts: false, usage: 'tokens', labelModels: true,
-    userModels: true, minVersion: '2.0.0', upgrade: 'opencode upgrade --major', loads: 'its plugins and MCP servers' },
+    userModels: true, minVersion: '2.0.0', upgrade: 'opencode upgrade --major', loads: 'its plugins and MCP servers', reviewSteps: 'subagents' },
   kiro: { label: 'Kiro', short: 'Kiro', login: 'kiro-cli login', mod: false, artifacts: false, usage: 'credits', labelModels: true,
-    userModels: false, minVersion: '2.32.0', loads: 'its agent and MCP servers' },
+    userModels: false, minVersion: '2.32.0', loads: 'its agent and MCP servers', reviewSteps: 'turns' },
 };
 
 /** Why nothing can start when no harness is available: a new session, Ask AgentK, the banner. */

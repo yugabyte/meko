@@ -1,8 +1,10 @@
 import { HARNESS_CAPS, harnessOf, type HarnessId } from '../shared/harnesses';
 import type { SyntheticEvent } from 'react';
-import { INSTRUCTIONS_MAX, STAGE_LABELS } from '../shared/types';
+import { INSTRUCTIONS_MAX, LEARN_WARN_FILES, LEARN_WARN_PRS, STAGE_LABELS, type LearnScope } from '../shared/types';
 import { mekoDatapackPath } from '../shared/mekourls';
-import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoStatus, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, TokenUsage } from '../shared/types';
+import { isStrategySetting, reviewHolds, type CodeReviewFinding, type ReviewOverrides } from '../shared/codereview';
+import { stepOf } from '../shared/stages';
+import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoStatus, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, Stage, TokenUsage } from '../shared/types';
 
 /**
  * What a status dot shows: the session's status, `learning` while AgentK saves what it learned to
@@ -27,8 +29,59 @@ const URGENCY: Record<DotState, number> = {
   archived: 0,
 };
 
+/**
+ * A code-review session: a task's local review (`Session.parentId`). It never shows as a tab, a
+ * rail row or a list entry of its own: it's the magnifier joined to its task's tab, which opens its
+ * screen while it runs (`reviewOpens`).
+ */
+export function isReviewChild(s: Pick<Session, 'kind'>): boolean {
+  return s.kind === 'code-review';
+}
+
+/** A project's open sessions, its tasks' code-review sessions left out (they show as part of their task). */
 export function liveSessions(p: ProjectWithSessions): Session[] {
+  return p.sessions.filter((s) => s.desired !== 'archived' && s.status !== 'archived' && !isReviewChild(s));
+}
+
+/** A project's open sessions with its tasks' code-review sessions: what a terminal or the route may show. */
+export function liveWithReviews(p: ProjectWithSessions): Session[] {
   return p.sessions.filter((s) => s.desired !== 'archived' && s.status !== 'archived');
+}
+
+/**
+ * Which part of a task's joined tab (or rail row) is on screen: the task's, its review's (the task
+ * with its findings open, or its code-review session on screen), or neither.
+ */
+export function joinedPartSelected(task: Pick<Session, 'id' | 'codeReview'>, currentId: string | null | undefined, findingsOpen = false): 'task' | 'review' | null {
+  if (!currentId) return null;
+  if (task.id === currentId) return findingsOpen && task.codeReview ? 'review' : 'task';
+  return task.codeReview?.sessionId === currentId ? 'review' : null;
+}
+
+/**
+ * What opening a task's review shows (its magnifier in the tab or the rail, its row in the ⋯ sheet):
+ * the review's own screen, its terminal with its findings beside it, while its session runs and
+ * isn't idle waiting for the task's fixes; else its findings beside the task's terminal (a done
+ * review's session is gone).
+ */
+export function reviewOpens(task: Pick<Session, 'codeReview'>): 'session' | 'findings' {
+  const r = task.codeReview;
+  return r?.sessionId && r.state !== 'fixing' ? 'session' : 'findings';
+}
+
+/** The task whose code-review session this is, among `sessions`; undefined for any other session. */
+export function reviewParent(sessions: Session[], s: Pick<Session, 'kind' | 'parentId'>): Session | undefined {
+  return isReviewChild(s) && s.parentId ? sessions.find((x) => x.id === s.parentId) : undefined;
+}
+
+/**
+ * How far, in pixels, a wheel turn over the session tabs scrolls them sideways: the strip has no
+ * scrollbar, and a mouse wheel only turns up and down. 0 for a sideways turn (a trackpad's swipe,
+ * Shift with the wheel), which the browser already scrolls by. `deltaMode` 1 is lines, 2 pages.
+ */
+export function sidewaysWheel(e: { deltaX: number; deltaY: number; deltaMode: number }, pageWidth: number): number {
+  if (Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return 0;
+  return e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? pageWidth : 1);
 }
 
 /**
@@ -131,8 +184,13 @@ export function lastOpenSession(projectId: string): string | undefined {
   return readLastOpen()[projectId];
 }
 
-/** Remembers the session open in a project, so switching back to the project reopens it. */
-export function rememberOpenSession(projectId: string, sessionId: string) {
+/**
+ * Remembers the session open in a project, so switching back to the project reopens it. A task's
+ * review session is remembered as its task: it has no tab to come back to, and it goes once the
+ * review is done.
+ */
+export function rememberOpenSession(projectId: string, session: Pick<Session, 'id' | 'kind' | 'parentId'>) {
+  const sessionId = isReviewChild(session) && session.parentId ? session.parentId : session.id;
   const all = readLastOpen();
   if (all[projectId] === sessionId) return;
   all[projectId] = sessionId;
@@ -163,16 +221,16 @@ const LEARNING_SHOWS: ReadonlySet<SessionStatus> = new Set(['idle', 'recovered',
 /** The statuses a queued gate shows over: Claude between turns. Anything else says more. */
 const QUEUED_SHOWS: ReadonlySet<SessionStatus> = new Set(['idle', 'recovered']);
 
-/** The statuses PR & Review waiting on the user shows Needs you over: Claude there, in a turn or not. */
+/** The statuses Review & PR waiting on the user shows Needs you over: Claude there, in a turn or not. */
 const YOURS_SHOWS: ReadonlySet<SessionStatus> = new Set(['idle', 'recovered', 'working']);
 
-/** The session is in PR & Review and a merge blocker only the user can clear stands (`Session.waitsOnYou`). */
+/** The session is in Review & PR and a merge blocker only the user can clear stands (`Session.waitsOnYou`). */
 function waitsOnYou(s: Pick<Session, 'stage' | 'waitsOnYou'>): boolean {
   return s.stage === 'review' && s.waitsOnYou.length > 0;
 }
 
 /**
- * What a session's dot shows: Needs you while PR & Review waits on the user, over idle, recovered
+ * What a session's dot shows: Needs you while Review & PR waits on the user, over idle, recovered
  * and working; then `Session.learning` over idle, recovered and working, then `Session.queued` over
  * idle and recovered, then `Session.mekoCall` over working.
  */
@@ -676,6 +734,30 @@ export function runsToMerge(s: Session): boolean {
   return s.autoRun && s.stage !== 'done';
 }
 
+/**
+ * The task's local review holds its Open PR: a review runs (or waits for the task's fixes between
+ * rounds) before the PR prompt goes, or failed or was cancelled and waits for Retry or Open anyway
+ * (not one cancelled because the task left Code: the next Open PR starts a new review).
+ */
+export function reviewGatesPr(s: Pick<Session, 'stage' | 'codeReview'>): boolean {
+  const r = s.codeReview;
+  return s.stage === 'code' && !!r && r.state !== 'done' && (r.state !== 'cancelled' || reviewHolds(r));
+}
+
+/**
+ * The step a session shows in the stage bar and its chip: Review & PR while its local review holds
+ * the Open PR (the session stays in Code, where the review runs: docs/design/code-review.md), else
+ * its stage's step.
+ */
+export function shownStep(s: Pick<Session, 'stage' | 'codeReview'>): Stage {
+  return reviewGatesPr(s) ? 'review' : stepOf(s.stage);
+}
+
+/** A session's stage in its chip: the step it shows (shownStep). */
+export function stageChipText(s: Pick<Session, 'stage' | 'codeReview'>): string {
+  return STAGE_LABELS[shownStep(s)];
+}
+
 /** A session's stage in words, for tooltips and hints that can't hold the mark: "Code · Run to merge". */
 export function stageWords(s: Session): string {
   return runsToMerge(s) ? `${STAGE_LABELS[s.stage]} · Run to merge` : STAGE_LABELS[s.stage];
@@ -735,7 +817,7 @@ export function sessionTabTitle(s: Session): string {
 
 /**
  * A session's dot in words, for its tab's tooltip: the long learning text, what the user is to
- * clear in PR & Review, or what a queued gate waits on. The queued dot shows between turns, when a
+ * clear in Review & PR, or what a queued gate waits on. The queued dot shows between turns, when a
  * queued Open PR is already going (the pill's "goes when the turn ends" is for mid-turn).
  */
 export function dotTitle(s: Session): string {
@@ -833,4 +915,69 @@ export function designLanding(prev: Landing, on: boolean, at: number | null, now
   }
   if (prev.stoppedAt && now - prev.stoppedAt < LATE_MS) return [{ stoppedAt: 0 }, true];
   return [prev, false];
+}
+
+/**
+ * A review's findings grouped for its panel: by round, then by the sweep that first raised them,
+ * in that order. A round or sweep is named only when the review had more than one.
+ */
+export function findingGroups(findings: CodeReviewFinding[]): { key: string; label: string; findings: CodeReviewFinding[] }[] {
+  const rounds = new Set(findings.map((f) => f.round)).size > 1;
+  const sweeps = new Set(findings.map((f) => f.sweep)).size > 1;
+  const groups = new Map<string, { key: string; label: string; round: number; sweep: number; findings: CodeReviewFinding[] }>();
+  for (const f of findings) {
+    const key = `${f.round}:${f.sweep}`;
+    let g = groups.get(key);
+    if (!g) {
+      const label = [rounds ? `Round ${f.round}` : '', sweeps ? `sweep ${f.sweep}` : ''].filter(Boolean).join(', ');
+      g = { key, label: label ? label[0].toUpperCase() + label.slice(1) : 'Findings', round: f.round, sweep: f.sweep, findings: [] };
+      groups.set(key, g);
+    }
+    g.findings.push(f);
+  }
+  return [...groups.values()]
+    .sort((a, b) => a.round - b.round || a.sweep - b.sweep)
+    .map(({ key, label, findings: fs }) => ({ key, label, findings: fs }));
+}
+
+/**
+ * Review overrides with one setting changed from its select: '' (Default) leaves it out, so a
+ * level with nothing set is `{}`; a strategy that isn't one is left out too.
+ */
+export function withOverride(value: ReviewOverrides, key: keyof ReviewOverrides, raw: string): ReviewOverrides {
+  const next: ReviewOverrides = {};
+  if (value.strategy != null) next.strategy = value.strategy;
+  if (value.rounds != null) next.rounds = value.rounds;
+  if (value.depth != null) next.depth = value.depth;
+  delete next[key];
+  if (raw === '') return next;
+  if (key === 'strategy') {
+    if (isStrategySetting(raw)) next.strategy = raw;
+  } else {
+    const n = Number(raw);
+    if (Number.isInteger(n)) next[key] = n;
+  }
+  return next;
+}
+
+const counted = (n: number, word: string) => `${n.toLocaleString('en-US')} ${word}${n === 1 ? '' : 's'}`;
+
+/**
+ * The New session dialog's estimate for a learn session (`LearnScope`), under its months field:
+ * how many merged PRs and files it covers and where, and, past `LEARN_WARN_PRS` or
+ * `LEARN_WARN_FILES`, a warning with what would make it smaller.
+ */
+export function learnScopeHint(scope: LearnScope, months: number): { text: string; warn: boolean } {
+  const { paths } = scope;
+  const where = !paths.length ? 'the whole repo'
+    : paths.length <= 3 ? paths.join(paths.length === 2 ? ' and ' : ', ').replace(/, ([^,]*)$/, ' and $1')
+    : `${paths.slice(0, 2).join(', ')} and ${paths.length - 2} more`;
+  const prs = months > 0 ? `About ${counted(scope.prs, 'merged PR')}` : 'No PRs';
+  const text = `${prs} and ${counted(scope.files, 'file')} in ${where}.`;
+  const manyPrs = months > 0 && scope.prs > LEARN_WARN_PRS;
+  const manyFiles = scope.files > LEARN_WARN_FILES;
+  if (!manyPrs && !manyFiles) return { text, warn: false };
+  const fixes = [paths.length ? 'name fewer folders' : 'name the folders to learn', ...(manyPrs ? ['read fewer months'] : [])];
+  const fix = fixes.join(', or ');
+  return { text: `${text} That's a lot to read: it can take hours and use millions of tokens. ${fix[0].toUpperCase()}${fix.slice(1)}.`, warn: true };
 }

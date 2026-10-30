@@ -1,3 +1,5 @@
+import { noOverrides, readOverrides, type ReviewOverrides } from '../shared/codereview.js';
+import { REVIEW_TOOLS } from './review/runner.js';
 import { basename } from 'node:path';
 import { defaultProjectDatapackName, freeDatapackName } from '../shared/datapacks.js';
 import { parseGithubRef } from '../shared/github-refs.js';
@@ -51,6 +53,12 @@ function autoRunFor(r: Record<string, unknown>, stage: string, what: string, not
   notes.push(`Left out Run to merge for ${what}: it's only for a task that starts at Code.`);
   return false;
 }
+/** The review settings a proposed start asks for, when it asks for any (`review`, the task's own). */
+function reviewFor(r: Record<string, unknown>): { review?: ReviewOverrides } {
+  const o = readOverrides(r.review);
+  return noOverrides(o) ? {} : { review: o };
+}
+
 /** One line, no control characters (sessionName() refuses them), at most `max` characters. */
 export const oneLine = (s: string, max: number) =>
   // eslint-disable-next-line no-control-regex
@@ -90,7 +98,7 @@ export function checkActions(raw: unknown, projects: ActionProject[], max = ACTI
         if (!p) notes.push('Left out a task in a project that isn\'t open.');
         else if (!prompt) notes.push('Left out a task with no prompt.');
         else {
-          actions.push({ type: 'start', projectId: p.id, start, name, prompt, ...(autoRunFor(r, start, name, notes) ? { autoRun: true } : {}) });
+          actions.push({ type: 'start', projectId: p.id, start, name, prompt, ...(autoRunFor(r, start, name, notes) ? { autoRun: true } : {}), ...reviewFor(r) });
         }
         break;
       }
@@ -106,6 +114,7 @@ export function checkActions(raw: unknown, projects: ActionProject[], max = ACTI
             ...(projectId ? { projectId } : {}),
             ...(stage === 'design' || stage === 'code' ? { start: stage } : {}),
             ...(autoRunFor(r, stage, ref, notes) ? { autoRun: true } : {}),
+            ...reviewFor(r),
           });
         }
         break;
@@ -185,6 +194,14 @@ export async function runActions(core: Core, actions: AskAgentkAction[], by: Act
   return results;
 }
 
+/**
+ * Where a move left a session, in words: a move to Review & PR that a local review took over leaves it
+ * in Code until the review sends the PR prompt (Lifecycle.reviewBeforePr).
+ */
+function movedTo(asked: MoveTarget, s: Pick<Session, 'stage'>): string {
+  return asked === 'review' && s.stage === 'code' ? 'Code, for its local review before the PR opens' : STAGE_LABELS[asked];
+}
+
 /** What an action does, for an event on the session it changed. */
 function verb(a: AskAgentkAction): string {
   switch (a.type) {
@@ -216,13 +233,13 @@ function describe(core: Core, a: AskAgentkAction): string {
 async function runOne(core: Core, a: Exclude<AskAgentkAction, { type: 'go' }>, by: ActionCaller): Promise<ActionResult> {
   switch (a.type) {
     case 'start': {
-      const { session, done } = await core.sessions.begin(a.projectId, { name: a.name, prompt: a.prompt, start: a.start, autoRun: a.autoRun });
+      const { session, done } = await core.sessions.begin(a.projectId, { name: a.name, prompt: a.prompt, start: a.start, autoRun: a.autoRun, review: a.review });
       done.catch((e: unknown) => core.log.warn(`session ${session.id} didn't start`, errMsg(e)));
       const p = core.projects.get(a.projectId);
       return { ok: true, text: `Started "${session.name}" in ${p.name} at ${STAGE_LABELS[a.start]}${a.autoRun ? ', with Run to merge' : ''}.`, projectId: p.id, sessionId: session.id };
     }
     case 'link': {
-      const { project, session } = await core.githubLinks.start({ ref: a.ref, projectId: a.projectId, start: a.start, autoRun: a.autoRun }, { once: true });
+      const { project, session } = await core.githubLinks.start({ ref: a.ref, projectId: a.projectId, start: a.start, autoRun: a.autoRun, review: a.review }, { once: true });
       const what = session.kind === 'review-pr' ? 'a review of' : 'a task on';
       return { ok: true, text: `Started ${what} ${a.ref}, "${session.name}", in ${project.name}${a.autoRun ? ', with Run to merge' : ''}.`, projectId: project.id, sessionId: session.id };
     }
@@ -234,7 +251,7 @@ async function runOne(core: Core, a: Exclude<AskAgentkAction, { type: 'go' }>, b
         return { ok: true, text: `Moving "${by.session.name}" to ${STAGE_LABELS[a.stage]} once this turn ends.`, projectId: by.session.project_id, sessionId: a.sessionId };
       }
       const s = await core.sessions.move(a.sessionId, { stage: a.stage, instructions: a.instructions || undefined });
-      return { ok: true, text: `Moved "${s.name}" to ${STAGE_LABELS[a.stage]}.`, projectId: s.projectId, sessionId: s.id };
+      return { ok: true, text: `Moved "${s.name}" to ${movedTo(a.stage, s)}.`, projectId: s.projectId, sessionId: s.id };
     }
     case 'openPr': {
       // A session's own PR stays the user's gate.
@@ -358,8 +375,8 @@ export class SessionTools {
       return true;
     }
     try {
-      await this.core.sessions.move(id, { stage: move.stage, instructions: move.instructions || undefined });
-      this.core.sessions.event(id, 'tools', `Moved to ${STAGE_LABELS[move.stage]} by its agent, at the turn's end`);
+      const s = await this.core.sessions.move(id, { stage: move.stage, instructions: move.instructions || undefined });
+      this.core.sessions.event(id, 'tools', `Moved to ${movedTo(move.stage, s)} by its agent, at the turn's end`);
     } catch (e) {
       this.core.sessions.event(id, 'tools', `Couldn't move to ${STAGE_LABELS[move.stage]}: ${errMsg(e)}`);
     }
@@ -367,6 +384,13 @@ export class SessionTools {
   }
 
   private async callNow(row: SessionRow, body: Record<string, unknown>): Promise<ModReply> {
+    // A local review's reports: from its steps and its task, whatever `[tools] enabled` says. They
+    // only report on the session's own review, so they're answered for an untrusted head too.
+    const reviewTool = REVIEW_TOOLS.find((t) => t === body.tool);
+    if (reviewTool) {
+      const r = this.core.reviews.onTool(row, reviewTool, isObject(body.input) ? body.input : {});
+      return answer(r.text, r.error);
+    }
     if (!this.core.config.tools.enabled) return answer("AgentK's session tools are turned off (Settings → General in AgentK).", true);
     // A PR head from a public repo could be steering the agent: it gets no say over other sessions.
     // Not checked yet (a PR linked since the launch) counts as untrusted, as the launch has it.
@@ -388,8 +412,8 @@ export class SessionTools {
             const s = isObject(e) ? e : {};
             const projectId = str(s.projectId) || row.project_id;
             return str(s.ref)
-              ? { type: 'link', ref: str(s.ref), projectId, stage: str(s.stage), autoRun: s.autoRun }
-              : { type: 'start', projectId, name: s.name, prompt: s.prompt, stage: str(s.stage), autoRun: s.autoRun };
+              ? { type: 'link', ref: str(s.ref), projectId, stage: str(s.stage), autoRun: s.autoRun, review: s.review }
+              : { type: 'start', projectId, name: s.name, prompt: s.prompt, stage: str(s.stage), autoRun: s.autoRun, review: s.review };
           });
           return this.run(row, raw, projects);
         }

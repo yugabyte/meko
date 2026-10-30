@@ -209,6 +209,9 @@ describe('HTTP API: origin checks, projects', () => {
     expect(home.activity.length).toBeGreaterThan(0);
     const unknown = await app.inject({ method: 'POST', url: `/api/sessions/${s.json().id}/actions/explode` });
     expect(unknown.statusCode).toBe(400);
+    // Every SessionAction reaches the session, the local review's too.
+    const retry = await app.inject({ method: 'POST', url: `/api/sessions/${s.json().id}/actions/review-retry` });
+    expect(retry.json()).toMatchObject({ error: 'There is no stopped local review to retry.' });
     const changes = await app.inject({ url: `/api/sessions/${s.json().id}/changes` });
     expect(changes.statusCode).toBe(200);
     expect(changes.json()).toMatchObject({ base: 'main', files: [], added: 0, removed: 0, ahead: 0, suggestedBase: null });

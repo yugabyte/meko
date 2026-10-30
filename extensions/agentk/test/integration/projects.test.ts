@@ -143,4 +143,22 @@ describe('projects', () => {
     expect((await env.core.projects.home(p.id)).datapacks[0]).toMatchObject({ memoryCount: null });
     expect(env.meko.calls.slice(before).some((c) => c.name === 'describeDatapack')).toBe(false);
   });
+
+  it("estimates a learn session's PRs and files from the repo's git, and refuses a brief that's off", async () => {
+    const p = await create('Demo');
+    expect(await env.core.projects.learnScope(p.id, { months: '24', where: 'README.md' }))
+      .toEqual({ prs: 1, files: 1, paths: ['README.md'] });
+    expect(await env.core.projects.learnScope(p.id, { months: '0', where: '', base: 'main' })).toMatchObject({ prs: 0, files: 1, paths: [] });
+    for (const [q, why] of [
+      [{ months: '121' }, /whole number from 0 to 120/],
+      [{ months: '-1' }, /whole number from 0 to 120/],
+      [{}, /whole number from 0 to 120/],
+      [{ months: '1', where: 'x'.repeat(4_001) }, /4,000 characters/],
+      [{ months: '1', base: 'nope' }, /Branch nope isn't in demo-repo or on its origin/],
+      [{ months: '1', base: '-x' }, /isn't a valid branch name/],
+      [{ months: '1', repoPath: env.home }, /./],
+    ] as const) {
+      await expect(env.core.projects.learnScope(p.id, q)).rejects.toMatchObject({ status: 400, message: expect.stringMatching(why) });
+    }
+  });
 });

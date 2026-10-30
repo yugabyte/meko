@@ -3,10 +3,14 @@ import { HARNESS_CAPS, harnessOf, type HarnessId } from '../../shared/harnesses'
 import { KIND_LABELS, KIND_STAGES, START_HINTS, START_STAGES, STAGE_LABELS } from '../../shared/types';
 import type { MekoStatus, Session, StartStage } from '../../shared/types';
 import { appUrl } from '../base';
+import {
+  MAX_DEPTH, MAX_ROUNDS, STRATEGIES, reviewRunning, reviewSegmentLabel, reviewSegmentText, reviewStopped, strategyName,
+  type CodeReviewSummary, type ReviewOverrides, type ReviewSettings, type ReviewStrategySetting,
+} from '../../shared/codereview';
 import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkKeyframes, blinkOffsetMs, totalUnits, type BlinkRun } from '../blink';
 import { matches, TOUCH_QUERY, useMedia } from '../hooks/useMedia';
 import { TUNE, typingKeyframes, typingLoopMs } from '../typing';
-import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, cx, elapsedText, instructionsBlocker, isSubmitKey, mekoDatapackUrl, runToMergeTitle, runsToMerge } from '../util';
+import { LEARNING_TITLE, STATUS_TEXT, type DotState, contextArc, contextLevel, cx, elapsedText, instructionsBlocker, isSubmitKey, mekoDatapackUrl, runToMergeTitle, runsToMerge, stageChipText, withOverride } from '../util';
 
 const HARNESS_LOGOS: Record<HarnessId, string> = { claude: appUrl('/harness-claude.svg'), opencode: appUrl('/harness-opencode.svg'), kiro: appUrl('/harness-kiro.svg') };
 
@@ -548,9 +552,62 @@ export function RunToMergeMark({ session, size }: { session: Session; size?: num
 export function StageChip({ session }: { session: Session }) {
   return (
     <span className="stchip">
-      {STAGE_LABELS[session.stage]}
+      {stageChipText(session)}
       <RunToMergeMark session={session} />
     </span>
+  );
+}
+
+/**
+ * The local review's magnifier: blue, its lens pulsing while the review works (still with reduced
+ * motion), Meko's m in the lens while the review is in a Meko tool call, the needs-you color with
+ * its lens knocking while the review waits on you in its terminal (over the m), and red with a
+ * still lens when it failed or was cancelled. Decorative: the button around it names the review.
+ */
+export function ReviewGlass({ review }: { review: CodeReviewSummary }) {
+  const running = reviewRunning(review);
+  const stopped = reviewStopped(review);
+  return (
+    <span className={cx('review-glass', running && 'running', stopped && 'stopped', running && review.mekoCall && !review.waiting && 'meko', running && review.waiting && 'waiting')} aria-hidden="true">
+      <svg width="16" height="16" viewBox="0 0 18 18">
+        <circle className="lens" cx="7.5" cy="7.5" r="4.2" />
+        <circle className="rim" cx="7.5" cy="7.5" r="5.5" />
+        <line className="handle" x1="11.6" y1="11.6" x2="16" y2="16" />
+      </svg>
+      <i className="glass-m" />
+    </span>
+  );
+}
+
+/**
+ * A task's local review joined to its tab or rail row: the magnifier and its short count
+ * (`reviewSegmentText`), spelled out for its tooltip and screen readers (`reviewSegmentLabel`).
+ * Opens the review's screen while it runs, else its findings beside the task's terminal
+ * (`reviewOpens`; the review's session stops once it's done).
+ */
+export function ReviewSegment({ review, selected, className, tab = false, onOpen }: {
+  review: CodeReviewSummary;
+  selected: boolean;
+  className?: string;
+  /** In the tab strip: a tab of its own for screen readers. */
+  tab?: boolean;
+  onOpen: () => void;
+}) {
+  const label = reviewSegmentLabel(review);
+  return (
+    <button
+      type="button"
+      role={tab ? 'tab' : undefined}
+      aria-selected={tab ? selected : undefined}
+      className={cx('review-seg', className, selected && 'sel', reviewStopped(review) && 'stopped')}
+      title={label}
+      aria-label={label}
+      aria-current={!tab && selected ? 'page' : undefined}
+      onClick={onOpen}
+    >
+      <ReviewGlass review={review} />
+      <span className="review-seg-text">{reviewSegmentText(review)}</span>
+    </button>
   );
 }
 
@@ -738,5 +795,89 @@ export function StartPicker({ id, value, learn = false, onChange }: { id: string
         {START_HINTS[value]}
       </span>
     </div>
+  );
+}
+
+const ROUND_CHOICES = Array.from({ length: MAX_ROUNDS + 1 }, (_, i) => i);
+const DEPTH_CHOICES = Array.from({ length: MAX_DEPTH }, (_, i) => i + 1);
+
+/**
+ * The local review's three settings (strategy, depth, re-review rounds) as selects, each with its
+ * ⓘ. The global ones always have a value; a project's or a session's (`scoped`) start with
+ * "Default (…)", the value they'd inherit, which leaves the setting out (null). `onChange` gets
+ * the whole set after one change.
+ */
+export function ReviewFields({ id, value, scoped, inherited, disabled, onChange }: {
+  id: string;
+  value: ReviewOverrides;
+  /** A project's or a session's: each setting starts with "Default (…)". False for the global ones. */
+  scoped: boolean;
+  /** What "Default" stands for, when known. */
+  inherited: ReviewSettings | null;
+  disabled?: boolean;
+  onChange: (v: ReviewOverrides) => void;
+}) {
+  const def = (text: string | undefined) => (scoped ? <option value="">{text === undefined ? 'Default' : `Default (${text})`}</option> : null);
+  // "Default" leaves the setting out, so a level with nothing set is `{}`.
+  const set = (k: keyof ReviewOverrides, raw: string) => onChange(withOverride(value, k, raw));
+  const strategyText = (v: ReviewStrategySetting) => (v === 'off' ? 'Off' : strategyName(v));
+  return (
+    <>
+      <Field
+        label="Review before opening a PR"
+        info={{
+          for: `${id}-strategy`,
+          text: (
+            <>
+              AgentK reviews the change on this computer before it opens the PR, the task fixes or answers what the
+              review found, and the PR says so in a <span className="mono">me_ak_review:</span> line.{' '}
+              {STRATEGIES.map((s) => `${s.name}: ${s.summary}`).join(' ')}
+            </>
+          ),
+        }}
+      >
+        <select id={`${id}-strategy`} className="input" disabled={disabled} value={value.strategy ?? ''} onChange={(e) => set('strategy', e.target.value)}>
+          {def(inherited ? strategyText(inherited.strategy) : undefined)}
+          <option value="off">Off</option>
+          {STRATEGIES.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Field
+        label="Review depth"
+        info={{
+          for: `${id}-depth`,
+          text: "The number of times a review runs before AgentK gets the findings to fix. More than one sweep makes it a deep review: each sweep after the first is told what the earlier ones found and looks elsewhere, and the sweeps run up to this count, but from the second sweep on, one that finds nothing new ends it. Costs more tokens.",
+        }}
+      >
+        <select id={`${id}-depth`} className="input" disabled={disabled} value={value.depth ?? ''} onChange={(e) => set('depth', e.target.value)}>
+          {def(inherited ? String(inherited.depth) : undefined)}
+          {DEPTH_CHOICES.map((n) => (
+            <option key={n} value={n}>
+              {n}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Field
+        label="Re-review rounds"
+        info={{
+          for: `${id}-rounds`,
+          text: "The number of times the code review runs again after AgentK fixes the last review's findings, before the PR opens. A review that finds nothing ends it early.",
+        }}
+      >
+        <select id={`${id}-rounds`} className="input" disabled={disabled} value={value.rounds ?? ''} onChange={(e) => set('rounds', e.target.value)}>
+          {def(inherited ? String(inherited.rounds) : undefined)}
+          {ROUND_CHOICES.map((n) => (
+            <option key={n} value={n}>
+              {n}
+            </option>
+          ))}
+        </select>
+      </Field>
+    </>
   );
 }

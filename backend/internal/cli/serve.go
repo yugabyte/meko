@@ -333,6 +333,13 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	} else {
 		startExtensionUpdates(updCtx, l, cfg, log, web)
 	}
+	// A login shell that gives no PATH is logged. One still running when serve stops is killed, since
+	// it's out of serve's process group, before the log it would write to closes.
+	agents.Log = log
+	defer func() {
+		agents.StopLoginShell()
+		agents.Log = nil
+	}()
 	// The agents on this computer connect to the linked Meko Cloud, else to this Meko.
 	local := agents.Target{Kind: agents.KindLocal, URL: fmt.Sprintf("http://127.0.0.1:%d/mcp", cfg.Server.Port),
 		Token: clientToken}

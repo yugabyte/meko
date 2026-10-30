@@ -1,4 +1,5 @@
-// What the terminal key bar and compose box send, as terminal input. Pure, so it's unit-tested.
+// What the terminal key bar, the compose box and the keys the terminal maps itself send, as terminal
+// input. Pure, so it's unit-tested.
 
 export type BarKey =
   | 'tab' | 'up' | 'down' | 'left' | 'right' | 'ctrl-c' | 'enter'
@@ -46,6 +47,38 @@ export function keySequence(key: BarKey, applicationCursor = false): string {
   const arrow = ARROWS[key];
   if (arrow) return `${applicationCursor ? '\x1bO' : '\x1b['}${arrow}`;
   return FIXED[key] ?? '';
+}
+
+// Keys the terminal sends itself instead of xterm.js's bytes, by their modifiers and key.
+const EDIT_KEYS: Record<string, string> = {
+  // A new line, as Option+Enter (Alt+Enter) sends; xterm sends Enter's own CR, which submits.
+  'shift+Enter': '\x1b\r',
+};
+// On a Mac, as iTerm2's Natural Text Editing sends them; xterm sends nothing for ⌘← and ⌘→.
+const MAC_EDIT_KEYS: Record<string, string> = {
+  'meta+ArrowLeft': '\x01', // start of the line (Ctrl+A)
+  'meta+ArrowRight': '\x05', // end of the line (Ctrl+E)
+  'alt+ArrowLeft': '\x1bb', // back a word (Meta+B)
+  'alt+ArrowRight': '\x1bf', // forward a word (Meta+F)
+  'meta+Backspace': '\x15', // delete to the start of the line (Ctrl+U)
+};
+const OTHER_EDIT_KEYS: Record<string, string> = {
+  'ctrl+Backspace': '\x1b\x7f', // delete the word before the cursor, as Alt+Backspace sends
+};
+
+/**
+ * What a key the terminal maps itself sends, or null to leave the key to xterm.js: Shift+Enter starts
+ * a new line, and the text-editing keys people expect from a Mac's terminals, or Ctrl+Backspace
+ * elsewhere, work. Never a key that's part of an input method's composition.
+ */
+export function editKeySequence(
+  e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey' | 'isComposing'>,
+  mac: boolean,
+): string | null {
+  if (e.isComposing) return null;
+  const mods = [e.ctrlKey && 'ctrl', e.altKey && 'alt', e.shiftKey && 'shift', e.metaKey && 'meta'].filter(Boolean);
+  const id = [...mods, e.key].join('+');
+  return EDIT_KEYS[id] ?? (mac ? MAC_EDIT_KEYS : OTHER_EDIT_KEYS)[id] ?? null;
 }
 
 // Ctrl with a punctuation key, as a terminal sends it.

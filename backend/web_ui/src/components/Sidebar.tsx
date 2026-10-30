@@ -1,20 +1,20 @@
-// The left rail: the Meko mark, the Status link, the Extensions group, the datapacks, and the
-// version (with a chip to the Status page's Updates card when a newer release is out), settings and
-// theme toggle. Below md it's a drawer over the page, opened from the top bar. While Meko Cloud is
+// The left rail: the Meko mark, the Status link, the Extensions group, the Settings link, the
+// datapacks, and the version (with a chip to the Status page's Updates card when a newer release is
+// out) and theme toggle. Below md it's a drawer over the page, opened from the top bar. While Meko Cloud is
 // linked, the datapacks are one list: this Meko's (a laptop) and then Meko Cloud's (a cloud). The
 // Find a datapack box above them narrows both to the names that hold what's typed, like Meko Cloud's.
 
 import { useState } from "react";
-import { Database, Laptop, Moon, Plus, RefreshCw, Search, Settings, Sun, X } from "lucide-react";
+import { Database, Laptop, Moon, Plus, RefreshCw, Search, Sun, X } from "lucide-react";
 import { isCloudFailure, matchesName, useCloudDatapacks } from "../lib/cloud";
 import { href, navigate, type Route } from "../lib/route";
 import type { Theme } from "../lib/theme";
 import { useUpdateAvailable } from "../lib/update";
-import type { AuthStatus, Datapack } from "../lib/types";
+import type { Datapack } from "../lib/types";
 import { CloudDatapackRows } from "./CloudDatapackRows";
 import { DatapackDialog } from "./DatapackDialog";
 import { ExtensionsLink } from "./ExtensionsLink";
-import { SettingsDialog } from "./SettingsDialog";
+import { SettingsLink } from "./SettingsLink";
 import { StatusLink } from "./StatusLink";
 import { Button, cx, Input } from "./ui";
 
@@ -36,7 +36,6 @@ export function Sidebar({
   datapacks,
   activeId,
   view,
-  auth,
   version,
   theme,
   onToggleTheme,
@@ -47,14 +46,12 @@ export function Sidebar({
   datapacks: Datapack[];
   activeId?: string;
   view: Route["view"];
-  auth: AuthStatus;
   version?: string;
   theme: Theme;
   onToggleTheme: () => void;
   onCreated: (id: string) => void;
 }) {
   const [creating, setCreating] = useState(false);
-  const [settings, setSettings] = useState(false);
   const [query, setQuery] = useState("");
   const update = useUpdateAvailable();
   const cloud = useCloudDatapacks();
@@ -92,6 +89,7 @@ export function Sidebar({
         <div className="px-2 pb-2">
           <StatusLink active={view === "status"} />
           <ExtensionsLink active={view === "extensions"} />
+          <SettingsLink active={view === "settings"} />
         </div>
 
         <div className="flex items-center justify-between px-4 pb-1 pt-2">
@@ -199,16 +197,12 @@ export function Sidebar({
             )}
           </span>
           <div className="flex items-center">
-            <Button size="sm" variant="ghost" onClick={() => setSettings(true)} title="Settings">
-              <Settings className="size-3.5" />
-            </Button>
             <Button size="sm" variant="ghost" onClick={onToggleTheme} title="Toggle theme">
               {theme === "dark" ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
             </Button>
           </div>
         </div>
       </aside>
-      {settings && <SettingsDialog auth={auth} onClose={() => setSettings(false)} />}
 
       {creating && (
         <DatapackDialog

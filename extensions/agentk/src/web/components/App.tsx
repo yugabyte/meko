@@ -21,11 +21,13 @@ import {
   lastOpenSession,
   lastSessionClosed,
   liveSessions,
+  liveWithReviews,
   openSessions,
   modKey,
   withCreated,
   withOpened,
   rememberOpenSession,
+  reviewOpens,
   sessionToOpen,
   type LiveCount,
 } from '../util';
@@ -257,7 +259,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
   useEffect(() => {
     if (!state) return;
     const ids = new Set<string>();
-    for (const p of state.projects) for (const s of liveSessions(p)) ids.add(s.id);
+    for (const p of state.projects) for (const s of liveWithReviews(p)) ids.add(s.id);
     pruneTerminals(ids);
     const sessions = state.projects.flatMap((p) => p.sessions);
     settleApprovals(sessions);
@@ -270,15 +272,16 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
     () => (currentProject ? openSessions(currentProject) : []),
     [currentProject],
   );
+  // A task's code-review session has no tab of its own, but opens like any other (its part of the task's tab).
   const currentSession =
     route.view === 'project' && currentProject
-      ? (live.find((s) => s.id === route.sessionId) ?? null)
+      ? (liveWithReviews(currentProject).find((s) => s.id === route.sessionId) ?? null)
       : null;
 
   focusRef.current = { projectId: currentProject?.id ?? null, sessionId: currentSession?.id ?? null };
 
   useEffect(() => {
-    if (currentProject && currentSession) rememberOpenSession(currentProject.id, currentSession.id);
+    if (currentProject && currentSession) rememberOpenSession(currentProject.id, currentSession);
   }, [currentProject, currentSession]);
 
   // When the project on screen loses its last open session, offer to close it. Only on the
@@ -331,6 +334,17 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
     navigate({ view: 'project', projectId: p.id, sessionId: s?.id ?? null }, { replace: isDrawerEntry() });
   }, []);
 
+  // A task's magnifier (its tab, its rail row), while the task fixes a round's findings or once the
+  // review is done (`reviewOpens`), asks for the task on screen with its local review's findings open, and the rail's task part, while they're open, for them closed: a request
+  // ProjectView takes once. `findingsOpenFor` is the task whose findings ProjectView shows.
+  const [findingsRequest, setFindingsRequest] = useState<{ id: string; open: boolean } | null>(null);
+  const [findingsOpenFor, setFindingsOpenFor] = useState<string | null>(null);
+  const openFindings = (s: Session) => {
+    navigate({ view: 'project', projectId: s.projectId, sessionId: s.id }, { replace: isDrawerEntry() });
+    setFindingsRequest({ id: s.id, open: true });
+  };
+  const findingsTaken = useCallback(() => setFindingsRequest(null), []);
+
   // The phone layout's projects drawer gets its own history entry, so the Back gesture closes it.
   const openDrawer = () => {
     if (!isDrawerEntry()) history.pushState({ akDrawer: true }, '', location.href);
@@ -379,7 +393,9 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
       }
       if (e.ctrlKey && e.key === 'Tab' && currentProject && live.length > 0) {
         e.preventDefault();
-        const idx = Math.max(0, live.findIndex((s) => s.id === currentSession?.id));
+        // From a task's code-review session, its task's place.
+        const onScreen = currentSession?.parentId ?? currentSession?.id;
+        const idx = Math.max(0, live.findIndex((s) => s.id === onScreen));
         const next = live[(idx + (e.shiftKey ? -1 : 1) + live.length) % live.length];
         navigate({ view: 'project', projectId: currentProject.id, sessionId: next.id });
       }
@@ -547,6 +563,18 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
           navigate({ view: 'project', projectId: s.projectId, sessionId: s.id }, { replace: isDrawerEntry() });
           closeDrawer();
         }}
+        onOpenReview={(s) => {
+          // While the review runs, its own screen (`reviewOpens`); else its findings beside the task.
+          if (reviewOpens(s) === 'session' && s.codeReview?.sessionId) {
+            navigate({ view: 'project', projectId: s.projectId, sessionId: s.codeReview.sessionId }, { replace: isDrawerEntry() });
+          } else openFindings(s);
+          closeDrawer();
+        }}
+        findingsOpenFor={findingsOpenFor}
+        onCloseFindings={(s) => {
+          setFindingsRequest({ id: s.id, open: false });
+          closeDrawer();
+        }}
         onNewSession={(projectId) => {
           closeDrawer();
           setModal({ kind: 'new-session', projectId });
@@ -630,6 +658,10 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
             onMenu={openDrawer}
             showTabs={sessionTabsShown(railSessions, railHidden, mobile)}
             harnessLogos={logos}
+            findingsRequest={findingsRequest}
+            onFindingsTaken={findingsTaken}
+            onFindingsShown={setFindingsOpenFor}
+            onOpenFindings={openFindings}
             onError={showToast}
           />
         ) : (
@@ -707,7 +739,14 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
           onClose={() => setModal({ kind: 'none' })}
         />
       )}
-      {openPrSession && <OpenPrDialog key={openPrSession.id} session={openPrSession} onClose={() => setModal({ kind: 'none' })} />}
+      {openPrSession && (
+        <OpenPrDialog
+          key={openPrSession.id}
+          session={openPrSession}
+          projectReview={projects.find((p) => p.id === openPrSession.projectId)?.settings.codeReview ?? {}}
+          onClose={() => setModal({ kind: 'none' })}
+        />
+      )}
       {renameSession && <RenameSessionDialog key={renameSession.id} session={renameSession} onClose={() => setModal({ kind: 'none' })} />}
       {modal.kind === 'settings' && (
         <SettingsDialog mekoAuth={mekoAuth} update={state.update} meko={state.meko} harnesses={state.harnesses ?? []} twoAgents={twoAgents} serverName={state.serverName} initialTab={modal.tab} initialAgent={modal.agent} onClose={() => setModal({ kind: 'none' })} onWhatsNew={(from, to) => setModal({ kind: 'whats-new', from, to, opener: 'settings' })} />

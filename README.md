@@ -36,8 +36,12 @@ a single binary that has the command line, the server, the MCP tools and the RES
 On Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon:
 
 ```sh
-gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
+curl -fsSL https://mekodata.ai/install.sh | sh
 ```
+
+While the repo is internal, that link answers 404 to anyone not signed in to GitHub: fetch the
+installer with a signed-in `gh` instead,
+`gh release download --repo yugabyte/meko --pattern install.sh --output - | sh`.
 
 Add a memory and search:
 ```sh
@@ -58,7 +62,7 @@ to your agent, for all your projects:
 
 ```sh
 meko agent list                # the agents on this computer, and whether each reaches Meko
-meko agent connect claude      # or codex, kiro, opencode
+meko agent connect claude      # or codex, kiro, opencode, cursor
 meko agent connect             # the MCP URL and token, for any other MCP client
 ```
 
@@ -91,7 +95,8 @@ Meko connect to Meko Cloud.
 | `meko start` / `stop` / `status` | Start or stop the server, or see whether it's running and its links |
 | `meko ui` | Open the web UI in your browser |
 | `meko agent connect claude` | Add Meko to Claude Code (or `codex`, `kiro`, `opencode`), for all your projects |
-| `meko memory-extractor use claude` | Extract memories from your conversations with your own Claude Code, every 5 minutes. It's off until you run this; `status`, `run` and `off` check, run or stop it. See [memory extraction](backend/docs/memory-extraction.md) |
+| `meko memory-extractor use claude` | Extract memories from your conversations with your own Claude Code, every 5 minutes. It's off until you run this or turn it on in the web UI's Settings; `status`, `run` and `off` check, run or stop it. See [memory extraction](backend/docs/memory-extraction.md) |
+| `meko answers use claude` | Have your own Claude Code write an answer from each search's results in the web UI, citing them. Off until you run this or turn it on in Settings; `status` and `off` check or stop it |
 | `meko update` | Install Meko's newest release now, then every extension's |
 | `meko-cli search "<question>"` | Search memories, the knowledge base and past conversations |
 | `meko-cli add_memory "<text>"` | Save a memory, word for word |

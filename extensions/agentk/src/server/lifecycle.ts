@@ -1,3 +1,4 @@
+import { findMeAkReviewLine, withMeAkReviewLine } from '../shared/codereview.js';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { basename } from 'node:path';
 import { mekoHost } from './config.js';
@@ -20,7 +21,7 @@ import {
 import { launchedAgentId, withMekoScope } from './meko.js';
 import type { HookPayload, ModReply } from './hooks.js';
 import { fetchPrDesign, markPrDesignTold, prDesignSource, savePrDesign } from './prdesign.js';
-import { mekoDatapackLineId, mekoPrFooter, movePrompt } from './prompts.js';
+import { meAkReviewFooter, mekoDatapackLineId, mekoPrFooter, movePrompt, prDescriptionFixLine, prDescriptionUseLine } from './prompts.js';
 import { HttpError } from './projects.js';
 import {
   INSTRUCTIONS_MAX, KIND_LABELS, STAGE_LABELS, type CloseSessionRequest, type HeldReview, type HeldReviewAuthor, type HeldReviewsResult, type MoveSessionRequest, type QueuedGate,
@@ -84,6 +85,16 @@ interface MergeChecks {
   newHead?: boolean;
 }
 
+/** What goes with a PR prompt (sendPr): a lead before it, the user's instructions after it, who sent it, the review's line. */
+interface PrSend {
+  lead?: string;
+  instructions?: string;
+  by?: 'you' | 'auto';
+  reviewLine?: string | null;
+  /** The PR description file the task wrote before its local review, as Claude is told it. */
+  description?: string | null;
+}
+
 /** A queued Open PR was withdrawn before its prompt went. */
 class QueueWithdrawn extends Error {
   constructor() {
@@ -97,7 +108,7 @@ const GATE_NAMES: Record<QueuedGate, string> = { 'open-pr': 'Open PR', merge: 'm
 /** The status detail while a markdown or Artifact design waits for approval. */
 export const DESIGN_READY = 'Design ready for your approval';
 
-/** Merge blockers AgentK works on by itself in PR & Review (the CI and merge conflict watchers). */
+/** Merge blockers AgentK works on by itself in Review & PR (the CI and merge conflict watchers). */
 const CI_FAILING = 'CI is failing.';
 const CONFLICTING = 'The branch has merge conflicts.';
 /** The merge blocker for a question in the terminal, which already notified the user as Needs you. */
@@ -184,7 +195,7 @@ async function lacksLocalCommits(repo: string, branch: string, st: github.PrStat
 }
 
 /**
- * The task lifecycle: Design → Code → PR & Review → Merge & Close (merge, then cleanup).
+ * The task lifecycle: Design → Code → Review & PR → Merge & Close (merge, then cleanup).
  * Gates (approve design, open PR, merge) come from the user; everything else
  * is driven by hook events and by polling GitHub from the server, so waiting
  * on reviews and CI costs no Claude tokens.
@@ -201,6 +212,12 @@ export class Lifecycle {
    * user's answers to the design's questions, or null. In memory only, like the answers.
    */
   private queuedApprovals = new Map<string, CheckedAnswers | null>();
+  /**
+   * PR prompts Claude took but exited before running (prLost), to send again once Claude is back
+   * with no prompt of its own (claudeBack): the stage it went back to and what went with it. In
+   * memory only: after a restart, Open PR (or a move to Review & PR) sends it.
+   */
+  private lostPrs = new Map<string, PrSend & { back: Stage }>();
   /** Sessions whose cleanup is running, so an overlapping poll doesn't start a second one. */
   private closing = new Set<string>();
   /** Sessions with a Merge request in flight. */
@@ -384,7 +401,7 @@ export class Lifecycle {
   }
 
   /**
-   * At the end of a turn after the design was approved (Code, PR & Review, Merge & Close): picks up
+   * At the end of a turn after the design was approved (Code, Review & PR, Merge & Close): picks up
    * a change to the markdown design file, which saves a new version to Meko and points the PR at
    * it. Nothing waits for the user: it's only noted in the activity log.
    */
@@ -701,6 +718,8 @@ export class Lifecycle {
     const instructions = given ?? (row.queued_gate === 'open-pr' ? row.queued_instructions ?? '' : '');
     const check = this.prCheck(row.id, false);
     check(row);
+    // A local review goes first (review/runner.ts): it sends the PR prompt itself when it's done.
+    if (await this.core.reviews.openPr(row, { instructions, by: 'you' })) return;
     await this.sendPr(row, check, { instructions });
   }
 
@@ -737,6 +756,11 @@ export class Lifecycle {
       // Cleared with the gate before the prompt is typed: if it can't be, the activity log keeps them.
       const instructions = row.queued_instructions;
       try {
+        // A local review takes the queued Open PR, and sends the PR prompt itself when it's done.
+        if (await this.core.reviews.openPr(row, { instructions: instructions ?? '', by: row.auto_run ? 'auto' : 'you' })) {
+          this.setQueued(id, null);
+          return;
+        }
         await this.sendPr(row, this.prCheck(id, true), { by: row.auto_run ? 'auto' : 'you' });
         this.sessions.event(id, 'queued', row.auto_run ? 'Run to merge: PR prompt sent' : 'Queued Open PR sent');
       } catch (e) {
@@ -759,10 +783,10 @@ export class Lifecycle {
    * user time to move on. Without `instructions` (a queued Open PR, from takeQueuedPr), those kept
    * with the queued gate go.
    */
-  private async sendPr(row: SessionRow, check: (r: SessionRow) => void, opts: { lead?: string; instructions?: string; by?: 'you' | 'auto' } = {}): Promise<void> {
+  private async sendPr(row: SessionRow, check: (r: SessionRow) => void, opts: PrSend = {}): Promise<void> {
     if (row.branch_reused) await this.followPrBase(row);
     // A branch whose PR head is on another remote (a fork's) is pushed there, not to origin.
-    const footer = [row.push_remote ? pushLine(row) : '', await this.prFooter(row)].filter(Boolean).join('\n\n');
+    const footer = [row.push_remote ? pushLine(row) : '', opts.reviewLine ? meAkReviewFooter(opts.reviewLine) : '', await this.prFooter(row)].filter(Boolean).join('\n\n');
     const cur = this.sessions.row(row.id);
     // Read before the check, which clears a queued Open PR with its instructions; the latest, if a
     // press replaced them while this waited.
@@ -771,8 +795,12 @@ export class Lifecycle {
     // The stage moves first: Claude's turn can end before submit returns.
     this.sessions.setStage(row.id, 'pr', opts.by ?? 'you');
     this.sessions.setBusy(row.id, true);
+    // This one replaces a PR prompt the last Claude lost.
+    this.lostPrs.delete(row.id);
+    const sent = { ...opts, instructions, back: cur.stage };
     try {
-      await this.sessions.submit(row.id, [opts.lead, this.sessions.prompt(cur, 'pr'), footer, this.instructionsPrompt(cur, instructions)].filter(Boolean).join('\n\n'));
+      const description = opts.description ? prDescriptionUseLine(opts.description) : '';
+      await this.sessions.submit(row.id, [opts.lead, this.sessions.prompt(cur, 'pr'), description, footer, this.instructionsPrompt(cur, instructions)].filter(Boolean).join('\n\n'), () => this.prLost(row.id, sent));
     } catch (e) {
       this.sessions.setBusy(row.id, false);
       if (this.sessions.row(row.id).stage === 'pr') this.sessions.setStage(row.id, cur.stage, 'auto');
@@ -780,11 +808,195 @@ export class Lifecycle {
     }
   }
 
+  /**
+   * Claude went after taking the PR prompt but before running it (sessions.submit's `lost`): the
+   * session goes back to where it was, as when the prompt can't be typed, a local review's PR
+   * counts as not sent (so Open PR sends it with the findings), and the prompt goes again once
+   * Claude is back (claudeBack, or the end of its next turn).
+   */
+  private prLost(id: string, sent: PrSend & { back: Stage }): void {
+    const row = sessionRow(this.db, id);
+    if (!row || row.desired !== 'running' || row.stage !== 'pr') return;
+    this.sessions.setBusy(id, false);
+    this.sessions.setStage(id, sent.back, 'auto');
+    // Only a review's own PR prompt (sendReviewedPr): another one's loss mustn't bring back an older review's findings.
+    if (sent.reviewLine !== undefined) this.core.reviews.markUnsent(id);
+    this.lostPrs.set(id, sent);
+    const name = agentName(row);
+    const press = sent.back === 'code' ? 'Open PR' : 'a move to Review & PR';
+    this.sessions.event(id, 'pr', `${name} exited before taking the PR prompt; it goes again once ${name} is back`);
+    this.sessions.notifyUser(id, 'PR prompt not taken', `${name} exited before taking the PR prompt. It goes again once ${name} is back (Resume the session if it shows as exited), or ${press} sends it.`);
+  }
+
+  /** Claude is back between turns after a launch with no prompt (a Resume, a recovery): a PR prompt the last one lost goes now, or not at all. */
+  async claudeBack(id: string): Promise<void> {
+    await this.resendLostPr(id);
+  }
+
+  /**
+   * Sends again a PR prompt the last Claude lost, now that Claude is back between turns, in the
+   * stage the session went back to. Anything else drops it, saying why: it's the press (the user's,
+   * or Run to merge's) carried over to Claude's return, not a gate that waits. True when it went.
+   */
+  private async resendLostPr(id: string): Promise<boolean> {
+    const sent = this.lostPrs.get(id);
+    const row = sent && sessionRow(this.db, id);
+    if (!sent || !row) return false;
+    if (row.desired !== 'running' || row.stage !== sent.back) {
+      this.dropLostPr(id, `the session moved to ${STAGE_LABELS[row.stage]}`);
+      return false;
+    }
+    // An Open PR the user pressed since (with their latest instructions) goes instead: takeQueuedPr sends it.
+    if (row.queued_gate === 'open-pr' && !row.queued_auto) {
+      this.dropLostPr(id, 'you pressed Open PR since');
+      return false;
+    }
+    // Run to merge's PR prompt goes only while Run to merge is on (stopping it drops it too: autoRunOff).
+    if (sent.by === 'auto' && !row.auto_run) {
+      this.dropLostPr(id, 'Run to merge is off');
+      return false;
+    }
+    try {
+      this.checkPromptable(row);
+      if (this.sessions.promptsHeld(id) > 0) throw new HttpError(409, 'prompts to take first');
+    } catch {
+      this.dropLostPr(id, `${agentName(row)} couldn't take it when it was back`);
+      return false;
+    }
+    this.lostPrs.delete(id);
+    try {
+      await this.serial(id, () => this.sendPr(row, (r) => {
+        if (r.stage !== sent.back) throw new HttpError(409, `The session moved to ${STAGE_LABELS[r.stage]} meanwhile.`);
+        this.checkPromptable(r);
+        if (r.queued_gate === 'open-pr' && !r.queued_auto) throw new QueueWithdrawn();
+        // Run to merge's Open PR, queued at a turn's start meanwhile, is this one.
+        if (r.queued_gate === 'open-pr') this.setQueued(id, null);
+      }, sent));
+      // Lost again while it was being typed: it goes once Claude is back again.
+      if (this.lostPrs.has(id)) return false;
+      if (sent.reviewLine !== undefined) this.core.reviews.markSent(id);
+      this.sessions.event(id, 'pr', 'PR prompt sent again');
+      return true;
+    } catch (e) {
+      // The user pressed Open PR while this waited on GitHub and Meko: theirs goes, with its instructions.
+      if (e instanceof QueueWithdrawn) return false;
+      const how = sent.back === 'code' ? 'Press Open PR to send it.' : 'Move the session to Review & PR to send it.';
+      this.warn(id, 'Sending the PR prompt again', e);
+      this.sessions.event(id, 'pr', `The PR prompt didn't go again: ${errMsg(e)}. ${how}`);
+      this.sessions.notifyUser(id, 'Open PR not sent', `The PR prompt couldn't be sent again (${errMsg(e)}). ${how}`);
+      return false;
+    }
+  }
+
+  /**
+   * Drops a PR prompt the last Claude didn't take, saying why in the activity log: another prompt's
+   * turn started first, a move, Run to merge stopping (its own), or it couldn't go when Claude came
+   * back. Open PR (or a move to Review & PR) sends it then. A null `why` drops it unsaid (archive).
+   */
+  dropLostPr(id: string, why: string | null): void {
+    const sent = this.lostPrs.get(id);
+    const row = sessionRow(this.db, id);
+    if (!sent || !row) return;
+    this.lostPrs.delete(id);
+    if (why === null) return;
+    const how = sent.back === 'code' ? 'Press Open PR to send it' : 'Move the session to Review & PR to send it';
+    this.sessions.event(id, 'pr', `The PR prompt ${agentName(row)} didn't take won't go again: ${why}. ${how}.`);
+  }
+
   /** Refuses while Claude can't take a prompt: mid-turn, waiting on the user (a ready design aside), or exited. */
   private checkPromptable(row: SessionRow): void {
     this.checkBetweenTurns(row);
     if (row.status === 'needs_input' && row.status_detail !== DESIGN_READY) throw new HttpError(409, 'AgentK is waiting on you in the terminal. Answer it first.');
     if (row.status === 'exited') throw new HttpError(409, `${agentName(row)} has exited. Resume the session first.`);
+  }
+
+  /**
+   * A task's local review asks it to fix a round's findings before the next round (review/runner.ts).
+   * The task stays in Code, and its turn's end starts the next round. `moved`: a move's `moved` line
+   * still waiting on the review (`code_reviews.lead`: the ask for the PR description normally took it), first.
+   */
+  async sendReviewFix(task: SessionRow, o: { strategy: string; round: number; findings: string; outcomeHow: string; moved?: string | null; description?: string | null }): Promise<void> {
+    const row = this.sessions.row(task.id);
+    if (row.stage !== 'code' || row.desired !== 'running') throw new Error('the task left Code');
+    const fix = this.sessions.prompt(row, 'code-review-fix', { strategy: o.strategy, round: o.round, findings: o.findings, outcomeHow: o.outcomeHow });
+    await this.sessions.submit(row.id, [o.moved, fix, o.description ? prDescriptionFixLine(o.description) : ''].filter(Boolean).join('\n\n'));
+  }
+
+  /**
+   * A task's local review asks it first for the PR's title and description, written to its PR
+   * description file with the PR's Meko lines, for the passes to check the change against
+   * (review/runner.ts). The task stays in Code, and its turn's end starts the review's first round.
+   * The task is busy from now until that turn ends, as for the PR prompt: an Open PR or a move while
+   * the Meko lines are looked up is refused, not taken for a press past an interrupted turn.
+   * `moved`: the `moved` line of a move that started the review (reviewBeforePr), first. `lost`: the
+   * agent exited before taking the ask (sessions.submit's), after the task stops being busy.
+   */
+  async sendPrDescription(task: SessionRow, o: { moved?: string | null; lost: () => void }): Promise<void> {
+    const row = this.sessions.row(task.id);
+    if (row.stage !== 'code' || row.desired !== 'running') throw new Error('the task left Code');
+    this.sessions.setBusy(row.id, true);
+    try {
+      const ask = this.sessions.prompt(row, 'pr-description', { prDescriptionFile: this.sessions.prDescriptionFile(row) });
+      await this.sessions.submit(row.id, [o.moved, ask, await this.prFooter(row)].filter(Boolean).join('\n\n'), () => {
+        this.sessions.setBusy(row.id, false);
+        o.lost();
+      });
+    } catch (e) {
+      this.sessions.setBusy(row.id, false);
+      throw e;
+    }
+  }
+
+  /**
+   * A task's local review is done (or the user opened the PR past a stopped one): the PR prompt goes,
+   * led by the last round's findings when it had some, with the `me_ak_review:` line (none past a
+   * stopped review), after a move's `moved` line still waiting on the review (the ask for the PR description
+   * normally took it), and pointing at the PR description file the task wrote (`description`).
+   * False when it couldn't go; the user's Open PR sends it later.
+   */
+  async sendReviewedPr(task: SessionRow, o: { line: string | null; findings: string; outcomeHow: string; strategy: string; instructions: string; by: 'you' | 'auto'; moved?: string | null; description?: string | null }): Promise<boolean> {
+    const row = this.sessions.row(task.id);
+    if (row.stage !== 'code' || row.desired !== 'running') return false;
+    const findings = o.findings ? this.sessions.prompt(row, 'code-review-findings', { strategy: o.strategy, findings: o.findings, outcomeHow: o.outcomeHow }) : '';
+    const lead = [o.moved, findings].filter(Boolean).join('\n\n') || undefined;
+    try {
+      await this.serial(row.id, () => this.sendPr(row, this.prCheck(row.id, false), { lead, instructions: o.instructions, by: o.by, reviewLine: o.line, description: o.description }));
+      // Claude exited while it was being typed (prLost): it didn't go, and goes again once Claude is back.
+      if (this.lostPrs.has(row.id)) return false;
+      this.core.reviews.markSent(row.id);
+      return true;
+    } catch (e) {
+      this.warn(row.id, 'Sending the PR prompt after the local review', e);
+      this.sessions.event(row.id, 'review', `The PR prompt didn't go after the local review: ${errMsg(e)}. Press Open PR to send it.`);
+      this.sessions.notifyUser(row.id, 'Open PR not sent', `The local review is done, but the PR prompt couldn't be sent (${errMsg(e)}). Press Open PR to send it.`);
+      return false;
+    }
+  }
+
+  /** A task's local review failed or was cancelled: its Open PR waits for Retry or Open anyway, Run to merge's too. */
+  reviewStopped(id: string): void {
+    const row = sessionRow(this.db, id);
+    if (row?.queued_gate === 'open-pr') this.setQueued(id, null);
+  }
+
+  /**
+   * After the PR is found: a task whose local review finished has the review's `me_ak_review:` line
+   * in the description, written in by AgentK when Claude left it out. Never throws.
+   */
+  private async syncReviewLine(id: string): Promise<void> {
+    const row = sessionRow(this.db, id);
+    const line = row?.pr_number ? this.core.reviews.prLine(id) : null;
+    if (!row?.pr_number || !line) return;
+    try {
+      const repo = prRepoOf(row.pr_url);
+      const cwd = this.ghCwd(row);
+      const body = await github.prBody(cwd, row.pr_number, repo);
+      if (findMeAkReviewLine(body) === line) return;
+      await github.setPrBody(cwd, row.pr_number, withMeAkReviewLine(body, line), repo);
+      this.sessions.event(id, 'review', `Put the local review's line in PR #${row.pr_number}: ${line}`);
+    } catch (e) {
+      this.warn(id, `Putting the local review's line in PR #${row.pr_number}`, e);
+    }
   }
 
   private checkBetweenTurns(row: SessionRow): void {
@@ -832,9 +1044,10 @@ export class Lifecycle {
     const dropQueued = () => {
       this.stopAutoRun(id, moved);
       this.dropQueued(id, moved);
+      this.dropLostPr(id, moved);
     };
     if (instructions) this.checkPromptable(cur);
-    // A move within PR & Review was refused above (moveError).
+    // A move within Review & PR was refused above (moveError).
     if (stage === 'review') {
       // Off before the PR is picked up, which would queue its merge; back on if the move is refused.
       const wasOn = this.autoRunOff(id);
@@ -845,7 +1058,10 @@ export class Lifecycle {
         if (wasOn && this.sessions.row(id).stage === cur.stage) this.sessions.update(id, { auto_run: 1 });
         throw e;
       }
-      if (wasOn) this.sessions.event(id, 'auto-run', `Run to merge stopped: ${moved}`);
+      // A PR prompt the last Claude didn't take: the move's own replaced it (sendPr), or the branch's PR was picked up.
+      this.dropLostPr(id, moved);
+      // A move a local review took over leaves the session in Code until the review sends the PR prompt.
+      if (wasOn) this.sessions.event(id, 'auto-run', `Run to merge stopped: ${this.sessions.row(id).stage === 'code' ? 'the session moved to Code for its local review' : moved}`);
       return;
     }
 
@@ -859,6 +1075,7 @@ export class Lifecycle {
     if (movesStep(cur.stage, stage)) {
       dropQueued();
       if (cur.stage === 'pr' || cur.stage === 'review') this.leaveReview(id);
+      if (cur.stage === 'code') this.core.reviews.leftCode(id);
       if (cur.stage === 'design') this.leaveDesign(id, stage === 'code');
       this.sessions.setStage(id, stage, 'you');
       // Back in Design, what an approval left to AgentK is open again.
@@ -878,9 +1095,10 @@ export class Lifecycle {
   }
 
   /**
-   * A move to PR & Review: picks up the branch's open PR when there's nothing to push (the branch
-   * tip is in the PR and the worktree is clean), or else sends the PR prompt, as Open PR does. The
-   * user's `instructions` go after the PR prompt, or with the `moved` line once a PR is picked up.
+   * A move to Review & PR: picks up the branch's open PR when there's nothing to push (the branch
+   * tip is in the PR and the worktree is clean), or else does what Open PR does: the local review
+   * first, when it runs (reviewBeforePr), else the PR prompt. The user's `instructions` go after the
+   * PR prompt, or with the `moved` line once a PR is picked up.
    */
   private async moveToReview(row: SessionRow, instructions: string): Promise<void> {
     const cwd = this.ghCwd(row);
@@ -900,6 +1118,17 @@ export class Lifecycle {
     };
     check(cur);
     this.checkBetweenTurns(cur);
+    if (!adopt || !pr) {
+      // As for Open PR: the user's prompts go first, and a stopped local review holds the PR. Outside
+      // Code an earlier review holds nothing (its Retry and Open anyway are Code's).
+      if (cur.stage !== 'code') this.core.reviews.leftCode(cur.id);
+      if (this.sessions.promptsHeld(cur.id) > 0) throw new HttpError(409, 'AgentK has prompts from you to take first. Move the session once it has.');
+      this.core.reviews.checkNotHeld(cur.id);
+    }
+    if ((!adopt || !pr) && this.core.reviews.applies(cur)) {
+      await this.reviewBeforePr(cur, instructions);
+      return;
+    }
     if (!adopt || !pr) {
       await this.sendPr(cur, (r) => {
         check(r);
@@ -923,13 +1152,32 @@ export class Lifecycle {
       await this.sessions.submit(row.id, `${this.movedLine(this.sessions.row(row.id))}\n\n${this.instructionsPrompt(cur, instructions)}`);
     } catch (e) {
       this.sessions.setBusy(row.id, false);
-      throw new HttpError(502, `Moved to PR & Review, but couldn't send your instructions to Claude: ${errMsg(e)}. Ask AgentK in the terminal.`);
+      throw new HttpError(502, `Moved to Review & PR, but couldn't send your instructions to Claude: ${errMsg(e)}. Ask AgentK in the terminal.`);
     }
   }
 
   /** The `instructions` prompt with the user's text, or '' when they gave none. */
   private instructionsPrompt(row: SessionRow, instructions: string): string {
     return instructions ? this.sessions.prompt(row, 'instructions', { instructions }) : '';
+  }
+
+  /**
+   * A move to Review & PR with work to push, on a task whose local review runs: as with Open PR, the
+   * review goes first, in Code (from Explore or Design too, past the design approval), and sends the
+   * PR prompt when it's done. moveToReview has checked what Open PR checks.
+   */
+  private async reviewBeforePr(row: SessionRow, instructions: string): Promise<void> {
+    this.checkPromptable(row);
+    // Claude's system prompt still says where it was (Explore: no PR): the `moved` line goes before the
+    // review's first prompt to the task, the ask for the PR description.
+    let lead: string | undefined;
+    if (row.stage !== 'code') {
+      if (row.stage === 'design') this.leaveDesign(row.id, true);
+      this.sessions.setStage(row.id, 'code', 'you', { event: false });
+      this.sessions.event(row.id, 'stage', 'Moved to Code: AgentK reviews the change locally before it opens the PR');
+      lead = this.movedLine(this.sessions.row(row.id));
+    }
+    await this.core.reviews.openPr(this.sessions.row(row.id), { instructions, by: 'you', lead });
   }
 
   /** The `moved` line: where the session is now, since Claude's system prompt still says where it was. */
@@ -950,7 +1198,7 @@ export class Lifecycle {
   }
 
   /**
-   * Leaving PR & Review by hand, between turns: the PR stays open and queued review, conflict and CI prompts
+   * Leaving Review & PR by hand, between turns: the PR stays open and queued review, conflict and CI prompts
    * wait for the session to come back (deliverNext only sends in Review). Prompts marked sent
    * belong to a turn that's over, as onTurnEnd would have decided had the session stayed.
    */
@@ -1013,6 +1261,11 @@ export class Lifecycle {
     const row = sessionRow(this.db, id);
     if (!row) return;
     this.sessions.setBusy(id, false);
+    // A code-review session's turn moves its review on, and nothing else acts on it.
+    if (row.kind === 'code-review') {
+      await this.core.reviews.onTurnEnd(row, interrupted);
+      return;
+    }
     // A Kiro turn just ran: re-read the plan so the rail's credits stay fresh, at most every
     // KIRO_PLAN_TURN_EVERY_MS so a run of turns reads once. Never awaited; never blocks the turn.
     if (row.harness === 'kiro') void this.core.kiroPlan.refreshIfStale(KIRO_PLAN_TURN_EVERY_MS);
@@ -1033,6 +1286,11 @@ export class Lifecycle {
       if (closed) return;
     }
     if (row.stage === 'code') {
+      // A turn that fixed a local review's findings starts the review's next round, which opens the PR itself.
+      if (await this.core.reviews.onTurnEnd(row, interrupted)) {
+        if (this.sessions.row(id).queued_gate === 'open-pr') this.setQueued(id, null);
+        return;
+      }
       await this.takeQueuedPr(id).catch((e) => this.warn(id, 'Sending the queued Open PR', e));
     } else if (row.stage === 'pr') {
       await this.pollPrStage(row).catch((e) => this.warn(row.id, 'PR lookup failed', e));
@@ -1272,6 +1530,7 @@ export class Lifecycle {
     }
     // Opening the PR and its review are one step in the UI: "Opened PR #7" already says the session moved on.
     this.sessions.setStage(id, 'review', by, { event: before.stage !== 'pr' });
+    void this.syncReviewLine(id);
     this.armMerge(id);
     await this.doPollReview(id);
   }
@@ -1536,7 +1795,7 @@ export class Lifecycle {
 
   /**
    * The user's decision on held reviews: send them to Claude with the `review-held` prompt, which
-   * only PR & Review does, or dismiss them. Then a fresh look
+   * only Review & PR does, or dismiss them. Then a fresh look
    * at the PR, so the merge blocker they were goes.
    */
   async decideHeldReviews(id: string, body: unknown): Promise<HeldReviewsResult> {
@@ -1545,7 +1804,7 @@ export class Lifecycle {
       const row = this.sessions.row(id);
       if (!row.pr_number) throw new HttpError(409, 'This session has no PR, so it has no held reviews.');
       if (req.action === 'send' && (row.stage !== 'review' || row.desired !== 'running')) {
-        throw new HttpError(409, 'Held reviews go to AgentK in PR & Review. Move the session back there first, or dismiss them.');
+        throw new HttpError(409, 'Held reviews go to AgentK in Review & PR. Move the session back there first, or dismiss them.');
       }
       const done = decideHeld(this.db, id, row.pr_number, req.ids, req.action === 'send' ? 'sent' : 'dismissed');
       if (!done.length) throw new HttpError(409, 'Those reviews were already sent or dismissed.');
@@ -2042,7 +2301,7 @@ export class Lifecycle {
 
   /**
    * Turns Run to merge on or off (`PATCH /api/sessions/:id`). On in Design waits for the approval;
-   * in Code it queues Open PR (sent now when Claude is at its prompt), and in PR & Review the merge.
+   * in Code it queues Open PR (sent now when Claude is at its prompt), and in Review & PR the merge.
    * Off drops the gate it queued.
    */
   async setAutoRun(row: SessionRow, on: boolean): Promise<void> {
@@ -2099,6 +2358,8 @@ export class Lifecycle {
   private autoRunOff(id: string): boolean {
     if (!sessionRow(this.db, id)?.auto_run) return false;
     this.sessions.update(id, { auto_run: 0 });
+    // The PR prompt it sent that Claude never took goes with it: the user takes the gates back.
+    if (this.lostPrs.get(id)?.by === 'auto') this.dropLostPr(id, 'Run to merge stopped');
     this.autoRunTold.delete(id);
     this.autoRunBlocked.delete(id);
     this.core.changed();
@@ -2111,11 +2372,13 @@ export class Lifecycle {
    */
   onTurnStart(id: string): void {
     const row = sessionRow(this.db, id);
+    // Claude took another prompt first (yours, or a recovery's continue): the work moved on from it.
+    if (row && this.lostPrs.has(id)) this.dropLostPr(id, `${agentName(row)} took another prompt first`);
     if (!row?.auto_run || row.stage !== 'code' || row.queued_gate || row.desired !== 'running') return;
     this.queueGate(id, 'open-pr', 'Run to merge: the PR opens when this turn ends', '', true);
   }
 
-  /** In PR & Review with Run to merge on, the merge stays queued until it goes (takeQueuedMerge). */
+  /** In Review & PR with Run to merge on, the merge stays queued until it goes (takeQueuedMerge). */
   private armMerge(id: string): void {
     const row = sessionRow(this.db, id);
     if (!row?.auto_run || row.stage !== 'review' || row.queued_gate || this.merging.has(id) || row.desired !== 'running') return;

@@ -23,6 +23,12 @@ export async function gitRaw(cwd: string, ...args: string[]): Promise<string> {
   return stdout;
 }
 
+/** Like gitRaw(), but git is stopped after <ms> (a read a page waits on). */
+export async function gitWithin(ms: number, cwd: string, ...args: string[]): Promise<string> {
+  const { stdout } = await exec('git', args, { cwd, timeout: ms, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, ...GIT_ENV } });
+  return stdout;
+}
+
 /** Like gitRaw(), but stdout is returned as bytes (for binary blobs). */
 export async function gitBuffer(cwd: string, ...args: string[]): Promise<Buffer> {
   const { stdout } = await exec('git', args, {

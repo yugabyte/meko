@@ -2,7 +2,10 @@
 # Install or update Meko for the current user; no root needed. It installs Meko alone: add AgentK
 # afterwards with `meko extension install agentk`.
 #
-# Internal repo (needs a signed-in `gh`, or GITHUB_TOKEN):
+#   curl -fsSL https://mekodata.ai/install.sh | sh
+#
+# mekodata.ai/install.sh redirects to the latest release's install.sh, which is Meko's. While the repo
+# is internal that needs a signed-in `gh` (or GITHUB_TOKEN):
 #   gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
 #
 # Options (pass through `sh -s -- ...` when piping):
@@ -17,8 +20,13 @@
 #
 # Environment: XDG_DATA_HOME (releases go in its meko/app, default ~/.local/share/meko/app; the data
 # folder, ~/.meko or MEKO_HOME, is apart, so meko destroy never removes them), MEKO_REPO (default
-# yugabyte/meko), GITHUB_TOKEN (used when gh isn't there).
+# yugabyte/meko), GITHUB_TOKEN (used when gh isn't signed in; with neither it downloads anonymously,
+# which needs a public repo).
 set -eu
+
+# Everything runs from main, called on the last line, so a download cut short runs nothing, and
+# meko install's stdin isn't the rest of this script when it's piped to sh.
+main() {
 
 repo=${MEKO_REPO:-yugabyte/meko}
 app="${XDG_DATA_HOME:-$HOME/.local/share}/meko/app"
@@ -44,7 +52,7 @@ while [ $# -gt 0 ]; do
     --reinstall) reinstall=true; shift ;;
     --no-service) no_service=true; shift ;;
     --non-interactive) shift ;;
-    -h|--help) sed -n '2,21p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' >&2 || true; exit 0 ;;
+    -h|--help) awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$0" >&2 2>/dev/null || true; exit 0 ;;
     *) die "unknown option $1. Meko's installer takes --version, --reinstall, --no-service and --non-interactive. $agentk_hint" ;;
   esac
 done
@@ -84,14 +92,16 @@ else
   die "sha256sum (coreutils) or shasum is required but neither was found on PATH"
 fi
 
+# A signed-in gh, else curl with GITHUB_TOKEN, else curl with no token (a public repo).
 have_gh=false
+auth=""
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   have_gh=true
-elif [ -z "${GITHUB_TOKEN:-}" ]; then
-  die "the repo is internal: install the GitHub CLI and sign in (gh auth login), or set GITHUB_TOKEN, then run this again"
 else
   command -v curl >/dev/null 2>&1 || die "curl is required (or a signed-in gh)"
+  [ -n "${GITHUB_TOKEN:-}" ] && auth="Authorization: Bearer $GITHUB_TOKEN"
 fi
+internal_hint="If $repo is still internal, sign in with gh auth login (or set GITHUB_TOKEN) and run this again"
 
 # ---- already installed ----
 installed=$(readlink "$app/current" 2>/dev/null) || installed=""
@@ -110,11 +120,20 @@ if [ -z "$version" ]; then
   if $have_gh; then
     tag=$(gh api "repos/$repo/releases?per_page=100" \
       --jq '[.[] | select((.draft or .prerelease) | not) | .tag_name | select(test("^meko-v[0-9]+\\.[0-9]+\\.[0-9]+$"))] | first // empty' 2>/dev/null) || tag=""
-  else
-    tag=$(curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" "https://api.github.com/repos/$repo/releases?per_page=100" 2>/dev/null |
+  elif [ -n "$auth" ]; then
+    tag=$(curl -fsSL -H "$auth" "https://api.github.com/repos/$repo/releases?per_page=100" 2>/dev/null |
       sed -n 's/^ *"tag_name": *"\(meko-v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' | head -n 1) || tag=""
+  else
+    # Meko's releases are the repo's latest, and github.com/<repo>/releases/latest redirects to its
+    # tag. That spends none of the API's 60 calls an hour a machine gets without a token.
+    tag=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$repo/releases/latest" 2>/dev/null) || tag=""
+    tag=${tag##*/}
+    case $tag in meko-v[0-9]*.[0-9]*.[0-9]*) ;; *) tag="" ;; esac
   fi
-  [ -n "$tag" ] || die "could not find a Meko release in $repo"
+  if [ -z "$tag" ]; then
+    $have_gh || [ -n "$auth" ] || die "could not find a Meko release in $repo. $internal_hint"
+    die "could not find a Meko release in $repo"
+  fi
   version=${tag#meko-v}
 fi
 tag="meko-v$version"
@@ -129,7 +148,10 @@ if $have_gh; then
 else
   base="https://github.com/$repo/releases/download/$tag"
   for f in "$tarball" SHA256SUMS; do
-    curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" -o "$tmp/$f" "$base/$f" || die "download of $f failed"
+    if ! curl -fsSL ${auth:+-H "$auth"} -o "$tmp/$f" "$base/$f"; then
+      [ -n "$auth" ] || die "download of $f failed. $internal_hint"
+      die "download of $f failed"
+    fi
   done
 fi
 (cd "$tmp" && grep " $tarball\$" SHA256SUMS | sha256_check >/dev/null) || die "checksum verification failed for $tarball"
@@ -155,3 +177,6 @@ ok "Unpacked" "$dest"
 set -- install
 $no_service && set -- "$@" --no-service
 exec "$dest/bin/meko" "$@"
+}
+
+main "$@"

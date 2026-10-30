@@ -201,17 +201,21 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       merge's, which waits and tells the user, and stops when GitHub refuses the merge). Run to merge stops
       on an uncheck, a Cancel, a move and an interrupt where the harness reports one (Claude Code's mod,
       OpenCode), so the user can always take the gates back, and stopping drops only the gate it queued
-      (`queued_auto`), never one the user pressed.
+      (`queued_auto`), never one the user pressed. The one exception to "dropped when Claude exits": a
+      PR prompt Claude took but exited before running (`lostPrs`) is that press carried over. It goes
+      only when Claude is back with no prompt of its own (`claudeBack`), and is dropped (logged) on
+      anything first: another prompt's turn, a move, archive, Run to merge stopping (its own), or a
+      newer Open PR press. Nothing resends it at a later turn's end.
 - [ ] Each session kind keeps to its stages (`KIND_STAGES`): a task starts at Explore, Design or
       Code and leaves a stage only through a gate or a move by the user (`Lifecycle.move`, rules in
       `src/shared/stages.ts`), and a Review a PR stays in Reviewing PR. Code that switches on `stage`
-      handles `explore`, and the stage bar maps `pr` to the PR & Review step with `stepOf`.
+      handles `explore`, and the stage bar maps `pr` to the Review & PR step with `stepOf`.
 - [ ] `sessions.kind` and `Session.kind` keep the old type names for tasks, so a rolled-back release
       and a page still on the older UI can index their stage lists with every value: new tasks are
       stored and sent as `plan` (`STORED_TASK_KIND`), never `task`, and code that needs a session's
       kind reads it through `kindOf()` (comparing with `review-pr` directly is fine).
 - [ ] A move by hand leaves the session consistent: the Review
-      queue dropped when leaving PR & Review, the edit guard on when entering Design, and no move
+      queue dropped when leaving Review & PR, the edit guard on when entering Design, and no move
       out of Merge & Close or while AgentK is mid-turn. A move's prompt carries on from the conversation
       (`move-design`, `move-code`): it doesn't restate the session's first prompt, which the work may have moved on from. The
       exceptions name a task on purpose: a move that gives a session without one its task sends the stage's start prompt, and
@@ -227,8 +231,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       once per new set of blockers only they can clear). Under Run to merge, notifications are only
       for what needs the user and for the merge; progress AgentK handles itself goes through
       `notifyProgress`, which skips it. What only the user can clear is decided once, in
-      `mergeInfo()` (`MergeInfo.yours`), which both that notification and the Needs you dot in PR &
-      Review (`Session.waitsOnYou`) read; a blocker AgentK still works on is never in it.
+      `mergeInfo()` (`MergeInfo.yours`), which both that notification and the Needs you dot in Review &
+      PR (`Session.waitsOnYou`) read; a blocker AgentK still works on is never in it.
 - [ ] Cleanup never force-removes a worktree with uncommitted changes, and never deletes the
       user's main checkout or repo. Trimming idle worktrees never uses `--force`.
 - [ ] The only changes made in the user's main checkout are fast-forwarding the base branch when a

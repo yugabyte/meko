@@ -5,6 +5,7 @@ import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { nextSort, sortRows, type SortState } from '../sort';
 import { creditsNumber, cx, formatCostOf, modelLabel, relativeTime, repoFolder, rowTokens, totalTokens, usageTitle } from '../util';
+import { CodeReviewUsageSection } from './CodeReviewUsageSection';
 import { credited, MekoUsageSection, savedClass, savedText, savedTitle } from './MekoUsageSection';
 import { TopBar } from './TopBar';
 import { chartHeading, CostStat, CreditsCell, CreditsStat, DailyChart, DailyTable, SortHeader, Stat, TokenCells } from './UsagePanel';
@@ -122,6 +123,12 @@ export function UsageView({ onMenu, mekoConfigured }: { onMenu: () => void; meko
             {showMeko && (
               <section className="box">
                 <MekoUsageSection meko={usage.meko} firstTurn={usage.mekoFirstTurn} learning={usage.mekoLearning} />
+              </section>
+            )}
+
+            {usage.codeReviews.runs > 0 && (
+              <section className="box">
+                <CodeReviewUsageSection reviews={usage.codeReviews} />
               </section>
             )}
 

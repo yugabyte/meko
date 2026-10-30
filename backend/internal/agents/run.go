@@ -24,17 +24,23 @@ func lookPath(name string) (string, error) {
 	return filepath.Abs(p)
 }
 
+// CommandEnv is Meko's environment for running cmd, an absolute path Find gave. cmd's folder goes
+// first on PATH: an npm install's command finds its Node there, which a service's thin PATH lacks.
+// One in a folder of the login shell's PATH gets that PATH next, before Meko's own.
+func CommandEnv(cmd string) []string {
+	path := append(append([]string{filepath.Dir(cmd)}, loginPathOf(cmd)...), os.Getenv("PATH"))
+	return append(os.Environ(), "PATH="+strings.Join(path, string(os.PathListSeparator)))
+}
+
 // runCLI runs an agent's CLI (cmd, the absolute path Find gave) in the folder dir ("" for this
-// one), with no stdin, so one that would ask asks no one. Its folder goes first on PATH: an npm
-// install's command finds its Node there, which a service's thin PATH lacks. One in a folder of the
-// login shell's PATH gets that PATH next, before Meko's own. Its error has the output's last line.
+// one), in CommandEnv, with no stdin, so one that would ask asks no one. Its error has the output's
+// last line.
 func runCLI(ctx context.Context, dir, cmd string, args ...string) error {
 	ctx, cancel := context.WithTimeout(ctx, CLITimeout)
 	defer cancel()
 	c := exec.CommandContext(ctx, cmd, args...) //nolint:gosec // G204: the agent's own CLI, found by Find
 	c.Dir = dir
-	path := append(append([]string{filepath.Dir(cmd)}, loginPathOf(cmd)...), os.Getenv("PATH"))
-	c.Env = append(os.Environ(), "PATH="+strings.Join(path, string(os.PathListSeparator)))
+	c.Env = CommandEnv(cmd)
 	out, err := c.CombinedOutput()
 	if err == nil {
 		return nil

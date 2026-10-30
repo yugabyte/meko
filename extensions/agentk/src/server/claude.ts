@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { TranscriptMark } from './harness/types.js';
 import type { LauncherSpec } from './launcher.js';
 import { claudePath, type Paths } from './paths.js';
 import { writeScript } from './scriptfile.js';
@@ -331,7 +332,17 @@ export interface LaunchSpec {
    * env, status line, plugins) or its `.mcp.json` servers: for a PR head whose code isn't trusted.
    */
   userSettingsOnly?: boolean;
+  /**
+   * Subagents for the session (`--agents`), by name: a code-review session's review steps. Each runs
+   * on its model ('' the session's own).
+   */
+  agents?: { name: string; description: string; prompt: string; model: string }[];
+  /** Tools the session and its subagents may not use (`--disallowedTools`): a code-review session's writes. */
+  disallowedTools?: string[];
 }
+
+/** The tools a code-review session (and its subagents) may not use: it reads the change and changes nothing. */
+export const REVIEW_DISALLOWED_TOOLS = ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'WebFetch', 'WebSearch'];
 
 /**
  * What a Claude Code session's launcher runs: `claude` with AgentK's settings, the conversation
@@ -352,9 +363,56 @@ export function claudeLauncher(paths: Paths, spec: LaunchSpec): LauncherSpec {
   for (const d of spec.pluginDirs ?? []) args.push('--plugin-dir', claudePath(d));
   for (const f of spec.mcpConfigs ?? []) args.push('--mcp-config', claudePath(f));
   if (spec.appendSystemPrompt) args.push('--append-system-prompt', spec.appendSystemPrompt);
+  if (spec.agents?.length) {
+    const agents = Object.fromEntries(spec.agents.map((a) => [a.name, { description: a.description, prompt: a.prompt, ...(a.model ? { model: a.model } : {}) }]));
+    args.push('--agents', JSON.stringify(agents));
+  }
+  if (spec.disallowedTools?.length) args.push('--disallowedTools', spec.disallowedTools.join(' '));
   // After "--", a prompt that starts with "-" (such as "---" front matter) isn't read as an option.
   if (spec.prompt) args.push('--', spec.prompt);
   return { sessionId: spec.sessionId, worktree: spec.worktree, command: spec.claudeCommand, args, env: spec.env, unsetEnv: spec.unsetEnv };
+}
+
+/** The most of a transcript read past a mark: a prompt's own user message comes first in its turn. */
+const MARK_READ_MAX = 4 * 1024 * 1024;
+
+/** Where a transcript ends now (0 before it's written). */
+export function transcriptMarkOf(file: string): TranscriptMark {
+  try {
+    return { file, offset: statSync(file).size };
+  } catch {
+    return { file, offset: 0 };
+  }
+}
+
+/**
+ * True when a user message written to the transcript since `mark` holds the start of `text`: Claude
+ * Code writes a prompt's message when its turn starts. When it can't tell (the file was replaced,
+ * or can't be read), true, so a prompt is never taken as lost when it may have run.
+ */
+export function promptInTranscript(mark: TranscriptMark, text: string): boolean {
+  const first = text.split('\n').map((l) => l.trim()).find(Boolean)?.slice(0, 80);
+  if (!first) return true;
+  // As the transcript's JSON writes it.
+  const needle = JSON.stringify(first).slice(1, -1);
+  let fd: number;
+  try {
+    fd = openSync(mark.file, 'r');
+  } catch (e) {
+    // Never written: no turn. Gone since it was written: replaced, so it can't tell.
+    return (e as NodeJS.ErrnoException).code !== 'ENOENT' || mark.offset > 0;
+  }
+  try {
+    const size = fstatSync(fd).size;
+    if (size < mark.offset) return true;
+    const buf = Buffer.alloc(Math.min(size - mark.offset, MARK_READ_MAX));
+    readSync(fd, buf, 0, buf.length, mark.offset);
+    return buf.toString('utf8').split('\n').some((l) => l.includes('"type":"user"') && l.includes(needle));
+  } catch {
+    return true;
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /**

@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { CloseSessionRequest, DiscardCheck, Session, SessionAction } from '../../shared/types';
 import { moveBlockedIn } from '../../shared/stages';
-import { api } from '../api';
+import { api, errorMessage } from '../api';
+import { reviewHolds, reviewRunning, reviewSegmentLabel, type ReviewOverrides } from '../../shared/codereview';
+import { inheritedReview, useReviewDefaults } from '../reviewdefaults';
 import { FONT_MAX, FONT_MIN } from '../keys';
 import { getTerminal, setTerminalFontSize, terminalFontSize } from '../terminals';
-import { agentName, discardingText } from '../util';
-import { Busy, Elapsed, trapTab } from './common';
+import { agentName, discardingText, isReviewChild } from '../util';
+import { Busy, Elapsed, ReviewFields, ReviewGlass, trapTab } from './common';
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
@@ -268,8 +270,14 @@ export function SessionSheet({
   onWorkItem,
   onAct,
   onClose,
+  child = false,
+  reviewRows,
 }: {
   session: Session;
+  /** A task's code-review session: only its own rows (`reviewRows`), Find and Project home. */
+  child?: boolean;
+  /** The local review's rows: open it or its findings, back to its task, its settings and actions. */
+  reviewRows?: ReactNode;
   /** The stage bar with its gate (Design Review, Open PR, Merge & Close). */
   stage: ReactNode;
   canDesign: boolean;
@@ -320,7 +328,8 @@ export function SessionSheet({
             Resume {agentName(session)}
           </SheetItem>
         )}
-        {canDesign && (
+        {reviewRows}
+        {canDesign && !child && (
           <SheetItem hint="›" onClick={then(onDesign)}>
             Design doc
             {openQuestions > 0 && <span className="count-badge">{openQuestions === 1 ? '1 open question' : `${openQuestions} open questions`}</span>}
@@ -331,24 +340,28 @@ export function SessionSheet({
             PR #{session.prNumber} on GitHub
           </SheetItem>
         )}
-        {canLearn && (
+        {canLearn && !child && (
           <SheetItem disabled={learnDisabled} onClick={then(() => void onAct('learn'))}>
             {session.learning ? <Busy label="Saving learnings to Meko" /> : 'Save learnings to Meko'}
           </SheetItem>
         )}
-        {!moveBlockedIn(session.stage) && (
+        {!child && !moveBlockedIn(session.stage) && (
           <SheetItem hint="›" onClick={then(onMove)}>
             Move to another stage
           </SheetItem>
         )}
         <SheetItem onClick={then(() => getTerminal(session.id).openFind())}>Find in terminal</SheetItem>
-        <SheetItem hint="›" onClick={then(onRename)}>
-          Rename session
-        </SheetItem>
-        {onToTop && <SheetItem onClick={then(onToTop)}>Move to top</SheetItem>}
-        <SheetItem hint="›" onClick={then(onWorkItem)}>
-          {session.workItemId ? 'Change its work item' : 'Link to a work item'}
-        </SheetItem>
+        {!child && (
+          <>
+            <SheetItem hint="›" onClick={then(onRename)}>
+              Rename session
+            </SheetItem>
+            {onToTop && <SheetItem onClick={then(onToTop)}>Move to top</SheetItem>}
+            <SheetItem hint="›" onClick={then(onWorkItem)}>
+              {session.workItemId ? 'Change its work item' : 'Link to a work item'}
+            </SheetItem>
+          </>
+        )}
         {onMekoCalls && (
           <SheetItem hint="›" onClick={then(onMekoCalls)}>
             Meko calls
@@ -359,17 +372,130 @@ export function SessionSheet({
         </SheetItem>
       </div>
       <FontSize />
-      <div className="sheet-end">
-        <EndSessionButton
-          session={session}
-          onAct={onAct}
-          learnTo={learnTo}
-          disabled={acting}
-          label="Archive or discard…"
-          className="btn block danger-outline"
-        />
-      </div>
+      {!child && (
+        <div className="sheet-end">
+          <EndSessionButton
+            session={session}
+            onAct={onAct}
+            learnTo={learnTo}
+            disabled={acting}
+            label="Archive or discard…"
+            className="btn block danger-outline"
+          />
+        </div>
+      )}
       <div className="sheet-info">{info}</div>
     </Sheet>
+  );
+}
+
+/**
+ * The ⋯ sheet's local review rows. On a task's code-review session: its findings and back to its
+ * task. On a task: its review (open it, Cancel while it runs, Retry or Open anyway once it stopped)
+ * and the task's own review settings, over its project's (`Session.review`, saved at once).
+ */
+export function LocalReviewRows({ session, parent, projectReview, acting, onOpen, onFindings, onBack, onAct, onClose, onError }: {
+  session: Session;
+  /** The task, on its code-review session's sheet. */
+  parent?: Session;
+  /** The project's review settings, what this task's "Default" stands for over the global ones. */
+  projectReview: ReviewOverrides;
+  acting: boolean;
+  onOpen: () => void;
+  onFindings: () => void;
+  onBack: () => void;
+  onAct: (a: SessionAction) => Promise<void>;
+  onClose: () => void;
+  onError: (msg: string) => void;
+}) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const global = useReviewDefaults();
+  const then = (f: () => void) => () => {
+    onClose();
+    f();
+  };
+  const r = session.codeReview;
+  if (isReviewChild(session)) {
+    return (
+      <>
+        <SheetItem hint="›" onClick={then(onFindings)}>
+          Findings
+        </SheetItem>
+        {parent && (
+          <SheetItem hint="›" onClick={then(onBack)}>
+            Back to {parent.name}
+          </SheetItem>
+        )}
+        {r && reviewRunning(r) && (
+          <SheetItem disabled={acting} onClick={then(() => void onAct('review-cancel'))}>
+            Cancel the local review
+          </SheetItem>
+        )}
+        {r && reviewHolds(r) && (
+          <>
+            <SheetItem className="primary" disabled={acting} onClick={then(() => void onAct('review-retry'))}>
+              Retry the local review
+            </SheetItem>
+            <SheetItem disabled={acting} onClick={then(() => void onAct('review-open-anyway'))}>
+              Open the PR without it
+            </SheetItem>
+          </>
+        )}
+      </>
+    );
+  }
+  if (session.kind === 'review-pr') return null;
+  const save = async (review: ReviewOverrides) => {
+    setSaving(true);
+    try {
+      await api.updateSession(session.id, { review });
+    } catch (e) {
+      onError(errorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <>
+      {r && (
+        <SheetItem hint="›" onClick={then(onOpen)}>
+          <span className="sheet-review">
+            <ReviewGlass review={r} />
+            {reviewSegmentLabel(r)}
+          </span>
+        </SheetItem>
+      )}
+      {r && reviewRunning(r) && (
+        <SheetItem disabled={acting} onClick={then(() => void onAct('review-cancel'))}>
+          Cancel the local review
+        </SheetItem>
+      )}
+      {r && reviewHolds(r) && (
+        <>
+          <SheetItem className="primary" disabled={acting} onClick={then(() => void onAct('review-retry'))}>
+            Retry the local review
+          </SheetItem>
+          <SheetItem disabled={acting} onClick={then(() => void onAct('review-open-anyway'))}>
+            Open the PR without it
+          </SheetItem>
+        </>
+      )}
+      <SheetItem hint={settingsOpen ? '⌄' : '›'} onClick={() => setSettingsOpen((o) => !o)}>
+        Local review settings
+      </SheetItem>
+      {settingsOpen && (
+        <div className="sheet-review-settings">
+          <ReviewFields
+            id={`sheet-review-${session.id}`}
+            value={session.review ?? {}}
+            scoped
+            inherited={inheritedReview(global, projectReview)}
+            disabled={saving}
+            onChange={(v) => void save(v)}
+          />
+        </div>
+      )}
+    </>
   );
 }

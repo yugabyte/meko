@@ -1,8 +1,8 @@
 # Meko backend: memory extraction
 
 Meko pulls memories out of conversation turns through the user's own AI tool's CLI, run headless:
-Claude Code today (`claude -p`), Codex and Cursor later. It's off until `meko memory-extractor use
-claude` turns it on.
+Claude Code today (`claude -p`), Codex and Cursor later. It's off until Settings or `meko
+memory-extractor use claude` turns it on.
 
 ## How it works
 
@@ -38,8 +38,18 @@ says what failed and never what the harness wrote, which can quote the turns: th
 | **A short prompt, with profiles and the datapack's own instructions** (`extractprompt.go`, written for Meko) | Every call pays for the prompt, so it holds only the rules that decide what's kept. A datapack picks `general` or `coding` (rules and examples for coding conversations: keep conventions, stack, decisions, recurring fixes; skip transient code, pasted files and logs) and may add instructions (`meko memory-extractor datapack <name> --profile coding --instructions "..."`). |
 | **A fixed interval, one call per conversation** | Predictable, and a call covers up to 30 of a conversation's waiting turns, so its fixed cost is shared. |
 | **Claude Code runs with no tools, MCP servers, slash commands or saved session, and only the local settings of an empty folder** | Turns are untrusted text. The empty folder's settings keep the user's hooks (Meko's own capture among them) from running inside the call; `--bare` would too, but skips the saved login. `--system-prompt` replaces Claude Code's own (about 4k tokens). |
-| **Setting it up is the CLI's (admin token)** | It points the server at a program to run: `PUT /settings/memory-extractor` takes the absolute path `meko memory-extractor use` finds on the user's PATH (the login service's own may not have it), checked to be the harness's program, and refuses the client token and the browser. |
+| **Setting it up is the owner's: the CLI, or the web UI's Settings** | It makes the server run a program, so `PUT /settings/memory-extractor` refuses the client token (agents) and takes only the owner: the admin token, a signed-in session or local access. The CLI sends the absolute path `meko memory-extractor use` finds on the user's PATH (the login service's own may not have it); the web UI sends no path, and the server finds the harness as it finds the agents it connects (`internal/agents`) and runs it with the same PATH; anyone but the admin token who names a path gets 403, since local access is every user of the computer's. Either way it's checked to be the harness's program. |
 | **An extracted memory names its turn in its metadata** | The conversation's thread and Origin place it on that turn; other memories are still placed by time ([api.md](api.md#which-memories-a-turn-produced)). |
+
+## Search answers
+
+The web UI's Search can write an answer from its results through the same CLI, set up on its own:
+the Settings page's switch, or `meko answers use claude [--model haiku]`, `off` and `status`. Search sends the question and up to 10
+of its results, taken in turn from each source, to `POST /datapacks/:id/answer`; Claude Code runs as
+extraction runs it (no tools, MCP servers or saved session, in an empty folder) with a prompt to
+answer from the numbered passages only, cite them as [n], and say so when they don't answer. Its
+reply is held to `{"answer", "cited"}` by a JSON schema, and citations of passages it wasn't given
+are dropped. Each search costs one call of the user's quota, which is why it's off until set up.
 
 ## Not built yet
 

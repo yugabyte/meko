@@ -1,12 +1,12 @@
 ---
 name: agentk-sessions
-description: "Open AgentK (AK) projects, start AgentK sessions (from a task, or from GitHub issues and PRs such as #5), move sessions between stages (Explore, Design, Code, PR & Review) and open a session's PR, with the agentk_sessions tools. Use when the user asks to start, open or create sessions or projects in AgentK or AK (such as a new ak session), to work on issues or PRs in new sessions, or to move a session to a stage, and when part of your work needs a PR of its own, apart from this session's."
+description: "Open AgentK (AK) projects, start AgentK sessions (from a task, or from GitHub issues and PRs such as #5), move sessions between stages (Explore, Design, Code, Review & PR) and open a session's PR, with the agentk_sessions tools. Use when the user asks to start, open or create sessions or projects in AgentK or AK (such as a new ak session), to work on issues or PRs in new sessions, or to move a session to a stage, and when part of your work needs a PR of its own, apart from this session's."
 ---
 
 # AgentK's session tools
 
 This session runs in AgentK, which runs many sessions, each on its own branch and worktree, through
-the stages Explore → Design → Code → PR & Review → Merge & Close. Users often call it AK: "ak" or
+the stages Explore → Design → Code → Review & PR → Merge & Close. Users often call it AK: "ak" or
 "AK" in a request means AgentK, so "start a new ak session" asks for an AgentK session. The
 `agentk_sessions` MCP server lets you act on AgentK the way the user does in its UI. Its tools are
 `list`, `start_sessions`, `move_session`, `open_pr` and `open_project`. In Claude Code they're named
@@ -33,7 +33,14 @@ the stages Explore → Design → Code → PR & Review → Merge & Close. Users 
      to a merged PR by itself ("run it to merge", "open the PR and merge it when it's done"). It
      needs `"stage": "code"`, and for a ref only an issue takes it. AgentK then opens the PR when
      the coding turn ends and merges once nothing blocks it.
-   - `move_session` moves one session to `explore`, `design`, `code` or `review` (PR & Review).
+   - Add `"review"` only with what the user asked for of the task's local code review before its
+     PR opens, leaving the rest to the project's settings: `"depth": 3` for "3 deep reviews",
+     `"rounds": 1` for "review again after the fixes", `"strategy": "sirius-1.0"` for the quick one,
+     `"strategy": "off"` for no review. "Start a code session with 3 deep reviews and run it to
+     merge" is `{ name, prompt, "stage": "code", "autoRun": true, "review": { "depth": 3 } }`.
+   - `review_report`, `review_score` and `review_outcome` belong to AgentK's local code review: use
+     them only when an AgentK prompt or a review step's file tells you to.
+   - `move_session` moves one session to `explore`, `design`, `code` or `review` (Review & PR).
      Pass what the user asked for in that stage as `instructions`. This session's own move goes
      once this turn ends: ask for it last, then end your turn.
    - `open_pr` opens the PR of another session in Code. It never opens this session's PR: tell
@@ -43,7 +50,7 @@ the stages Explore → Design → Code → PR & Review → Merge & Close. Users 
 
 ## One PR per session
 
-A session has one branch, one worktree and one PR, which AgentK tracks through PR & Review and
+A session has one branch, one worktree and one PR, which AgentK tracks through Review & PR and
 Merge & Close. So:
 
 - Keep this session's work to what goes in its PR.

@@ -1,6 +1,6 @@
 // context_search from the browser: one question over memories, the knowledge base and past
-// conversations, each source's hits in its own section. Graph shows the 100 things nearest the
-// question as a map instead, colored by source, with what the search returned lit.
+// conversations, each source's hits in its own section, under an answer written from them when
+// answers are on. Graph shows the 100 things nearest the question as a map instead, colored by source.
 
 import { useState, type FormEvent, type ReactNode } from "react";
 import { Brain, FileText, MessagesSquare, Search } from "lucide-react";
@@ -12,6 +12,7 @@ import type { ContextSearch, Datapack, MapSource, MemoryHit } from "../lib/types
 import { useSavedView, VIEWS } from "../lib/useSavedView";
 import { ExpandableText } from "../components/ExpandableText";
 import { MemoryGraph } from "../components/MemoryGraph";
+import { passagesOf, SearchAnswer } from "../components/SearchAnswer";
 import { Segmented } from "../components/Segmented";
 import { round2, Similarity, WEAK_MEMORY } from "../components/Similarity";
 import { Badge, Button, Card, Empty, ErrorNote, Input, Spinner } from "../components/ui";
@@ -144,6 +145,13 @@ export function SearchPage({ datapack }: { datapack: Datapack }) {
         <Empty icon={<Search className="size-8" />} title="Search everything in this datapack">
           The same search agents run with <b>context_search</b>: memories, knowledge files and past conversations.
         </Empty>
+      )}
+      {r && (
+        <SearchAnswer
+          datapackId={datapack.datapack_id}
+          query={asked}
+          passages={passagesOf(r, (id) => !!r.memory?.some((m) => m.id === id && !isWeak(m)))}
+        />
       )}
       {r && view === "graph" && (
         <MemoryGraph

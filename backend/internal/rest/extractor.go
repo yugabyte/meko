@@ -22,20 +22,26 @@ func (a *api) extractorStatus(c echo.Context) error {
 }
 
 // setExtractor is PUT /settings/memory-extractor {harness, command, model, interval_seconds}, for the
-// CLI's admin token only: it points the server at a program to run. harness "" turns it off.
+// owner only (the CLI's admin token, or the web UI's Settings): it makes the server run a program.
+// harness "" turns it off; with no command, the server finds the harness's itself, and only the
+// admin token may name one.
 func (a *api) setExtractor(c echo.Context) error {
-	if a.Credential(c) != "admin" {
+	if !a.owner(c) {
 		return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN",
-			"Set up the memory extractor with meko memory-extractor use claude.")
+			"Only Meko's owner can set up the memory extractor: meko memory-extractor use claude, or Settings.")
 	}
 	var body struct {
 		memory.ExtractorSettings
 		IntervalSeconds int `json:"interval_seconds"`
 	}
-	if ok, berr := bind(c, &body); !ok {
+	ok, berr := bind(c, &body)
+	if !ok {
 		return berr
 	}
 	body.Interval = time.Duration(body.IntervalSeconds) * time.Second
+	if body.Command, ok = a.harnessCommand(c, body.Harness, body.Command); !ok {
+		return namedCommand(c)
+	}
 	if err := a.Service.SetExtractor(ctx(c), body.ExtractorSettings); err != nil {
 		return serviceError(c, err)
 	}

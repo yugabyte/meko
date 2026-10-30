@@ -28,12 +28,12 @@ describe('stage moves', () => {
       }
     }
     expect(moveError({ kind: 'task', stage: 'design' }, 'design')).toBe('Nothing to change: this session is already in Design.');
-    // The PR stage is already PR & Review.
-    expect(moveError({ kind: 'task', stage: 'pr' }, 'review')).toBe('Nothing to change: this session is already in PR & Review.');
+    // The PR stage is already Review & PR.
+    expect(moveError({ kind: 'task', stage: 'pr' }, 'review')).toBe('Nothing to change: this session is already in Review & PR.');
     expect(moveError({ kind: 'task', stage: 'pr' }, 'code')).toBeNull();
   });
 
-  it('opens the move dialog on the next step, or back on Code from PR & Review', () => {
+  it('opens the move dialog on the next step, or back on Code from Review & PR', () => {
     expect(defaultTarget('explore')).toBe('design');
     expect(defaultTarget('design')).toBe('code');
     expect(defaultTarget('code')).toBe('review');
@@ -63,7 +63,7 @@ describe('stage moves', () => {
     expect(moveEffect({ stage: 'explore', prNumber: null }, 'code')).toBe('AgentK implements what this session has worked out so far.');
     expect(moveEffect({ stage: 'explore', prNumber: null }, 'code', true)).toBe('AgentK implements the task you typed.');
     expect(moveEffect({ stage: 'review', prNumber: 12 }, 'code')).toBe(
-      'The session keeps its worktree, branch and conversation. PR #12 stays open. AgentK stops handling its reviews and CI until you come back to PR & Review.');
+      'The session keeps its worktree, branch and conversation. PR #12 stays open. AgentK stops handling its reviews and CI until you come back to Review & PR.');
     expect(moveEffect({ stage: 'code', prNumber: null }, 'explore')).toBe('AgentK runs no design, PR or merge while the session is in Explore.');
     expect(moveEffect({ stage: 'explore', prNumber: null }, 'review')).toMatch(/^AgentK picks up the branch's open PR/);
   });

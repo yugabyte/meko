@@ -10,8 +10,8 @@ import (
 	"github.com/yugabyte/meko/backend/internal/testenv"
 )
 
-// The memory map lays a datapack's memories out by meaning, inside [-1, 1], links near neighbors,
-// and with ?q= places the query and gives each memory its similarity to it.
+// The memory map lays a datapack's memories out by meaning, inside [-1, 1] with a depth for the 3D
+// view, links near neighbors, and with ?q= places the query and gives each memory its similarity to it.
 func TestMemoryMap(t *testing.T) {
 	e := testenv.Start(t, testenv.Options{})
 	ctx := context.Background()
@@ -45,6 +45,14 @@ func TestMemoryMap(t *testing.T) {
 	}
 	if len(points) != 4 || states["learning"] != 3 || states["collective"] != 1 || len(arr(m["query"])) != 2 {
 		t.Errorf("map %v", m)
+	}
+	// The 3D view's depth: every point has one, and the query too.
+	depth := 0.0
+	for _, p := range points {
+		depth += math.Abs(num(obj(p)["z"]))
+	}
+	if _, ok := m["query_z"].(float64); !ok || depth == 0 {
+		t.Errorf("no depth: query_z %v, total %v", m["query_z"], depth)
 	}
 	for _, l := range arr(m["links"]) {
 		if a, b := int(num(obj(l)["a"])), int(num(obj(l)["b"])); a >= b || b >= len(points) {

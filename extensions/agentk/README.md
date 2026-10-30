@@ -47,13 +47,15 @@ You also need [Meko](https://mekodata.ai) on this computer: it serves AgentK to 
 `/ext/agentk/` on its own port (7777), and signs you in. Meko also gives projects datapacks (shared
 memory) and lets you share projects. For datapacks, AgentK uses Meko Cloud once you link it in Meko's
 web UI (Settings › Meko Cloud, which links to Meko Cloud's sign-up and login pages to make a key; or
-`meko cloud_link` on a computer without a browser), and otherwise the Meko on this computer. Install Meko (the repo's
-latest release), and then Meko installs AgentK:
+`meko cloud_link` on a computer without a browser), and otherwise the Meko on this computer. Install Meko, and then Meko installs AgentK:
 
 ```sh
-gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
+curl -fsSL https://mekodata.ai/install.sh | sh
 meko extension install agentk
 ```
+
+While the repo is internal, fetch Meko's installer with a signed-in `gh` instead:
+`gh release download --repo yugabyte/meko --pattern install.sh --output - | sh`.
 
 (or **Install** on Meko's Extensions page). Meko downloads AgentK's newest release, checks it and
 unpacks it into its data folder, then runs AgentK's setup, which offers to install anything that's
@@ -122,7 +124,7 @@ your phone can connect.
   **Advanced** a session can work in another of your repos, on a new branch you name, or pick up
   existing work: an **existing branch** (its open PR is linked), or one of your open **pull
   requests**, a fork's included when the fork is one of the repo's remotes. AgentK then builds on
-  what's there instead of branching from it, and picks the PR up at PR & Review.
+  what's there instead of branching from it, and picks the PR up at Review & PR.
   The foot of the rail shows who you are and which server you're on (`you@dev-box`), so windows
   on different machines are easy to tell apart; give the server your own name in Settings.
 - **Meko, the shared context layer:** every project has a dedicated datapack plus any number of
@@ -152,6 +154,9 @@ your phone can connect.
   and when it's done it writes a summary to its timeline and closes by itself. While the datapack
   is empty and no learn session is open on it (after a switch to a new datapack, say, or a learn
   session that saved nothing), the project's home offers it again; a plain New session doesn't.
+  Before you start, the dialog says about how many merged PRs and files that covers, and warns when
+  it's a lot (over 200 PRs or 5,000 files), since reading them all can take hours and millions of
+  tokens: name the folders to learn, or read fewer months.
 - **Share a project** by sharing its dedicated datapack with someone, by email or with its share
   link: turn the link on in the Share dialog with the role it gives, copy it, and post it where your
   team is. A project datapack shared with you shows a banner and a notification, and opens as a new
@@ -234,6 +239,9 @@ your phone can connect.
 - **Find in the terminal:** `⌘F` (`Ctrl+Shift+F` on Linux and Windows) in a session's terminal
   searches all of it, scrollback included, highlighting each match, with match case, whole word
   and regex. On a phone, **Find in terminal** is in the ⋯ sheet and the command palette.
+- **Multi-line prompts:** Shift+Enter starts a new line in a session's terminal, and Enter sends
+  the prompt. On a Mac, ⌘← and ⌘→ go to the start and end of the line, ⌥← and ⌥→ move by a word,
+  and ⌘⌫ deletes to the start of the line. On Linux and Windows, Ctrl+Backspace deletes a word.
 - **Light or dark terminal:** the terminals are dark by default; Settings → General → Terminal
   colors makes them light or has them follow the app's theme, remembered per browser.
 - **Builds carry over between sessions.** When a session ends, its worktree waits for the next
@@ -275,7 +283,7 @@ your phone can connect.
   ([details](docs/design/mod.md)). Claude Code's mods are early
   access, and its own rollout decides whether they load; when they don't, AgentK types its prompts.
   When the host's Claude Code is too old for the mod, a banner says so and can update it.
-- **Start where you want:** every task runs on one pipeline, Explore → Design → Code → PR & Review →
+- **Start where you want:** every task runs on one pipeline, Explore → Design → Code → Review & PR →
   Merge & Close, and a new session asks where to start: *Explore* for investigating, POCs and
   experiments, *Design* (the default) for the full lifecycle below, or *Code* for small tasks that
   go straight to code. Or pick *Review a PR* (above). A task moves between stages, forward or back,
@@ -284,7 +292,7 @@ your phone can connect.
   session has discussed or done, not its first prompt. A move, and **Open PR** (its **+** notes
   button), takes optional instructions for AgentK, sent after the stage's prompt. Rename a session any time
   (double-click its tab, or its row in the rail): its branch and worktree keep their names.
-- **Task lifecycle:** (Explore →) Design → Code → PR & Review (AgentK) → Merge & Close. Complex designs are
+- **Task lifecycle:** (Explore →) Design → Code → Review & PR (AgentK) → Merge & Close. Complex designs are
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
   markdown, with Mermaid diagrams drawn (zoom them with − and +). The design's open questions are listed beside it, each
   with AgentK's options and recommendation picked to start: pick another, or write a custom answer, then send them for
@@ -294,6 +302,13 @@ your phone can connect.
   AgentK found in Meko carries Meko's mark, the words it relied on and the item's id.
   Once it's approved, AgentK writes the key design decisions into the design and keeps it current
   while it codes and addresses reviews; each version goes to Meko, and the PR names the latest one.
+  Before a PR opens, AgentK has the task write the PR's title and description, with its Meko lines,
+  which the review checks the change against and the PR opens with; meanwhile, and while the review
+  runs, the task shows in Review & PR. Then AgentK reviews the change on your computer with the cloud reviewer's algorithm
+  (Sagittarius 3.0: five specialist passes and a scorer per finding; or the quicker Sirius 1.0), in a
+  review session shown as a magnifier on the task's tab, which opens the review's terminal while its passes run and its findings once the task is fixing them or the review is done. The task fixes what it finds, and the PR
+  says how it went (`me_ak_review:2 blockers,1 major addressed`, or `me_ak_review:LGTM`). Strategy,
+  re-review rounds and depth are in Settings, the project's settings and each session's own.
   You approve the design, opening the PR, and Merge & Close, which merges the PR and
   cleans up the branches, leaving the worktree for the next session. Pressed early, they wait:
   **Open PR after this turn** goes when AgentK's turn ends, and **Merge when ready** merges once CI
@@ -314,7 +329,9 @@ your phone can connect.
   subagents included, with its cost at API list prices (OpenCode sessions' tokens too, from AgentK's
   plugin); Kiro sessions count the credits Kiro billed,
   beside the cost and never added to it, with a Credits column by session and model and a credits
-  bar beside each day's tokens. **Usage** in the left panel adds it up across every project, closed ones
+  bar beside each day's tokens. Each day's bar stacks the tokens local code reviews spent, and a
+  **Code Reviews** section counts the reviews, the issues they found, the ones fixed and the PRs opened
+  after them. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
 - **Meko call log, for debugging:** turn on **Log Meko calls** in a project's settings and AgentK
   keeps every Meko call made for each session, its own (recall at start, design uploads, the learn
@@ -334,7 +351,8 @@ your phone can connect.
   and the Usage page. On Pro and Max plans, the rail also shows your Claude 5-hour and weekly usage limits
   and when they reset, and once you've run a session on Kiro, the Kiro credits your plan has used.
 - **Usage stats:** once a day (hourly in its first day) AgentK sends anonymous counts to YugabyteDB: how many
-  projects, sessions, PRs, commits and tokens (by model) it handled, and which file types changed.
+  projects, sessions, PRs, commits and tokens (by model) it handled, which file types changed, and
+  how its local code reviews went (reviews, issues found and fixed, tokens and cost).
   It never sends names, paths, prompts, code, or who you are. Turn it off in Settings › General
   (details in [docs/design/usage-stats.md](docs/design/usage-stats.md)).
 - **Survives restarts:** after a host reboot, every open session is brought back with

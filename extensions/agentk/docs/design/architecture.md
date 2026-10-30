@@ -78,7 +78,8 @@ mount can hang while that host is down):
 the launcher's `cd`, `--settings`, `--add-dir` and `--plugin-dir`, `HOME`, `AK_HOOK_SOCK`
 (Claude Code refuses a mod's `$.http.fetch` to a socket under `/net`, "a network location is not
 reached from here", so the mod would never reach AgentK), the allow rules in the hooks settings
-file, and the design file, questions file and image paths in prompts. What
+file, the design file, questions file and image paths in prompts, and the worktree and folder a
+local review's steps are told (one Read through `/net` stops the review at a permission prompt). What
 AgentK stores (worktree and repo paths, repo keys, the worktree pool) keeps its own spelling,
 so the Design guard checks an edit against both, the learn step leaves out a fact that names
 either (a path counts only whole, so a short local spelling such as `/data` doesn't catch
@@ -149,7 +150,7 @@ AgentK's mod reports it (`/mod/turn`) and the server ends the turn as a `Stop` w
 (`SessionManager.endTurn`): the session is idle again, the activity log says *You interrupted the
 turn*, and what waited for the turn's end goes at once (review comments, a queued Open PR or
 approval, review prompts). It isn't a turn Claude died in, so it's never continued by itself
-(`interrupted` stays 0). It didn't do what it was sent for either: in PR & Review a review, CI or
+(`interrupted` stays 0). It didn't do what it was sent for either: in Review & PR a review, CI or
 conflicts prompt the turn got stays sent, and the findings stay *addressing* (so a queued merge
 waits), until the next turn ends; a Review a PR session's update summary stays sent the same way.
 Without the mod, the session shows as working until the next turn ends.

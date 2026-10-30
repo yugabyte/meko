@@ -3,7 +3,9 @@ import type { Session } from '../../shared/types';
 import { api, errorMessage } from '../api';
 import { useTouch } from '../hooks/useMedia';
 import { instructionsBlocker, openPrGate } from '../util';
-import { Busy, Dialog, ErrorText, InstructionsField } from './common';
+import { Busy, Dialog, ErrorText, InstructionsField, ReviewFields } from './common';
+import type { ReviewOverrides } from '../../shared/codereview';
+import { inheritedReview, useReviewDefaults } from '../reviewdefaults';
 
 /**
  * Open PR with instructions for AgentK, sent after the PR prompt (`OpenPrRequest`). Mid-turn it
@@ -11,10 +13,18 @@ import { Busy, Dialog, ErrorText, InstructionsField } from './common';
  * opens on the instructions it goes with (`Session.queuedInstructions`), and saving replaces them:
  * an emptied box removes them.
  */
-export function OpenPrDialog({ session, onClose }: { session: Session; onClose: () => void }) {
+export function OpenPrDialog({ session, projectReview, onClose }: {
+  session: Session;
+  /** The project's local review settings, what the session's "Default" stands for over the global ones. */
+  projectReview: ReviewOverrides;
+  onClose: () => void;
+}) {
   // On touch, the keyboard comes up only when a field is tapped.
   const touch = useTouch();
   const [instructions, setInstructions] = useState(session.queuedInstructions ?? '');
+  // The session's own local review settings: saved before the PR prompt goes, when changed here.
+  const [review, setReview] = useState<ReviewOverrides>(session.review ?? {});
+  const reviewDefaults = useReviewDefaults();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -34,6 +44,7 @@ export function OpenPrDialog({ session, onClose }: { session: Session; onClose: 
     setBusy(true);
     try {
       // Always sent, blank too: for a queued Open PR, blank removes its instructions.
+      if (JSON.stringify(review) !== JSON.stringify(session.review ?? {})) await api.updateSession(session.id, { review });
       await api.openPr(session.id, { instructions: instructions.trim() });
       onClose();
     } catch (e) {
@@ -79,6 +90,17 @@ export function OpenPrDialog({ session, onClose }: { session: Session; onClose: 
           }
           placeholder="e.g. Open it as a draft, and target release-2.4."
         />
+        <fieldset className="ns-review">
+          <legend className="label">Local review</legend>
+          <ReviewFields
+            id="pr-review"
+            scoped
+            inherited={inheritedReview(reviewDefaults, projectReview)}
+            value={review}
+            disabled={busy}
+            onChange={setReview}
+          />
+        </fieldset>
         <ErrorText error={error} />
       </form>
     </Dialog>

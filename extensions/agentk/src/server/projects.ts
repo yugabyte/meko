@@ -1,20 +1,22 @@
+import { readOverrides } from '../shared/codereview.js';
 import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type {
-  ActivityItem, AttachDatapackRequest, ClosedProject, CreateProjectRequest, DatapackChoice, DatapackRef, MekoGap, MekoGapMarkRequest, MekoGapPage,
+  ActivityItem, AttachDatapackRequest, ClosedProject, CreateProjectRequest, DatapackChoice, DatapackRef, LearnScope, MekoGap, MekoGapMarkRequest, MekoGapPage,
   MekoTeachRequest, OpenedProject, Project, ProjectHome, RepoBranches, ReposResponse, SearchResult, SetDedicatedDatapackRequest, UpdateProjectRequest,
 } from '../shared/types.js';
-import { MEKO_TEACH_MAX, newRepoNameProblem, REVIEWER_LABELS } from '../shared/types.js';
+import { LEARN_MONTHS_MAX, LEARN_TEXT_MAX, MEKO_TEACH_MAX, newRepoNameProblem, REVIEWER_LABELS } from '../shared/types.js';
 import { mekoCaptureDir } from './capture.js';
 import type { Core } from './core.js';
 import { all, get, run, tx, type Db } from './db.js';
 import { normaliseRemote, projectDatapackDescription } from '../shared/datapacks.js';
 import {
-  canonicalRemote, cloneRepo, defaultBranch, ensureFirstCommit, initFolder, initRepo, isFreshRepo, isMainRepo, listBranches, readRemotes, repoNameFromUrl, scanRepos,
+  canonicalRemote, checkBranchName, cloneRepo, defaultBranch, ensureFirstCommit, initFolder, initRepo, isFreshRepo, isMainRepo, listBranches, readRemotes, repoNameFromUrl, scanRepos,
 } from './git.js';
 import { errMsg } from './log.js';
 import { AGENTK_AGENT_ID, pinSlug } from './meko.js';
 import { findGap, gapPage, markGap } from './mekogaps.js';
+import { learnScope } from './learnscope.js';
 import { expandHome, repoKey } from './paths.js';
 import { repoRoots } from './config.js';
 import { projectUsage } from './usage.js';
@@ -458,6 +460,8 @@ export class ProjectService {
         throw new HttpError(400, 'Reviewer must be AgentK only, AgentK + People, All reviewers or People only.');
       }
       if (typeof next.mekoLog !== 'boolean') throw new HttpError(400, 'Log Meko calls must be true or false.');
+      // What isn't a valid setting goes back to the global value (readOverrides drops it).
+      if (req.settings.codeReview !== undefined) next.codeReview = readOverrides(req.settings.codeReview);
       run(this.db, 'UPDATE projects SET settings_json = ? WHERE id = ?', JSON.stringify(next), id);
     }
     if (req.position !== undefined) this.move(id, req.position);
@@ -504,6 +508,33 @@ export class ProjectService {
 
   async branches(id: string): Promise<string[]> {
     return listBranches(this.row(id).repo_path);
+  }
+
+  /**
+   * How much a learn session's brief would cover (`LearnScope`), for the New session dialog's
+   * estimate: in <repoPath> (the project's repo when left out), on <base> (its default branch when
+   * left out), for <where> and <months> as the brief gives them. A 400 for anything off.
+   */
+  async learnScope(id: string, q: { repoPath?: unknown; base?: unknown; where?: unknown; months?: unknown }): Promise<LearnScope> {
+    const p = this.row(id);
+    const repo = this.sessionRepo(p, q.repoPath);
+    if (q.where != null && typeof q.where !== 'string') throw new HttpError(400, 'Where its files are must be text.');
+    const where = (q.where ?? '').trim();
+    if (where.length > LEARN_TEXT_MAX) throw new HttpError(400, `Keep where its files are to ${LEARN_TEXT_MAX.toLocaleString('en-US')} characters.`);
+    const months = Number(q.months);
+    if (typeof q.months !== 'string' || !/^\d+$/.test(q.months) || months > LEARN_MONTHS_MAX) {
+      throw new HttpError(400, `Pick how many months of PRs to read: a whole number from 0 to ${LEARN_MONTHS_MAX}.`);
+    }
+    if (q.base != null && typeof q.base !== 'string') throw new HttpError(400, 'The base branch must be text.');
+    const base = (typeof q.base === 'string' ? q.base.trim() : '') || (repo === p.repo_path ? p.default_branch : await defaultBranch(repo));
+    try {
+      await checkBranchName(repo, base);
+    } catch (e) {
+      throw new HttpError(400, errMsg(e));
+    }
+    const scope = await learnScope(repo, base, where, months, Date.now());
+    if (!scope) throw new HttpError(400, `Branch ${base} isn't in ${basename(repo)} or on its origin.`);
+    return scope;
   }
 
   /**

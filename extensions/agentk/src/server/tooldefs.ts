@@ -10,7 +10,7 @@ export const TOOLS_SERVER = 'agentk_sessions';
 /** The tools' input, and the server's answers, change only in ways this version number tells apart. */
 export const TOOLS_VERSION = 1;
 
-export type ToolName = 'list' | 'start_sessions' | 'move_session' | 'open_pr' | 'open_project';
+export type ToolName = 'list' | 'start_sessions' | 'move_session' | 'open_pr' | 'open_project' | 'review_report' | 'review_score' | 'review_outcome';
 
 export interface ToolDef {
   name: ToolName;
@@ -58,6 +58,17 @@ export const TOOL_DEFS: ToolDef[] = [
                 description: 'Run to merge: AgentK opens the PR when the coding turn ends and merges it once nothing blocks it. ' +
                   'Only when the user asks for it, and only for a task (or an issue) with stage code.',
               },
+              review: {
+                type: 'object',
+                description: "The task's own local review before its PR opens, only what the user asked for (the rest keeps the " +
+                  'project\'s settings): strategy (off for no review, sirius-1.0, or sagittarius-3.0), rounds (re-reviews after the ' +
+                  'first, 0 to 5) and depth (sweeps per review, 1 to 5: "3 deep reviews" is depth 3).',
+                properties: {
+                  strategy: { type: 'string', enum: ['off', 'sirius-1.0', 'sagittarius-3.0'] },
+                  rounds: { type: 'integer', minimum: 0, maximum: 5 },
+                  depth: { type: 'integer', minimum: 1, maximum: 5 },
+                },
+              },
             },
           },
         },
@@ -68,7 +79,7 @@ export const TOOL_DEFS: ToolDef[] = [
   {
     name: 'move_session',
     description:
-      "Moves an AgentK session to another stage (explore, design, code, or review for PR & Review), as the user's move dialog " +
+      "Moves an AgentK session to another stage (explore, design, code, or review for Review & PR), as the user's move dialog " +
       "does. This session's own move goes once this turn ends, so ask for it last. instructions: what the user asked for in " +
       'that stage, if anything.',
     inputSchema: {
@@ -105,6 +116,43 @@ export const TOOL_DEFS: ToolDef[] = [
         datapack: { type: 'string' },
       },
       required: ['repo'],
+    },
+  },
+  {
+    name: 'review_report',
+    readOnly: true,
+    description:
+      "One pass of AgentK's local code review reports what it found. Only for a review step whose file names this tool: " +
+      'step is the step id the file gives, report the JSON its schema asks for. An error says what to fix; call again.',
+    inputSchema: { type: 'object', properties: { step: { type: 'string' }, report: { type: 'object' } }, required: ['step', 'report'] },
+  },
+  {
+    name: 'review_score',
+    readOnly: true,
+    description:
+      "A scorer of AgentK's local code review reports its verdict on one finding. Only for a step whose file names this tool: " +
+      'step is the step id the file gives, score the JSON its schema asks for. An error says what to fix; call again.',
+    inputSchema: { type: 'object', properties: { step: { type: 'string' }, score: { type: 'object' } }, required: ['step', 'score'] },
+  },
+  {
+    name: 'review_outcome',
+    readOnly: true,
+    description:
+      "Tells AgentK what you did with each finding of its local code review, by the key AgentK gave it ([1:2]: key 1:2): " +
+      'status fixed or declined, and note: what you changed, or why the finding is wrong.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        outcomes: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { key: { type: 'string' }, status: { type: 'string', enum: ['fixed', 'declined'] }, note: { type: 'string' } },
+            required: ['key', 'status', 'note'],
+          },
+        },
+      },
+      required: ['outcomes'],
     },
   },
 ];

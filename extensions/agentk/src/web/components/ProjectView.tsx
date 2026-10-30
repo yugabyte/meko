@@ -19,14 +19,16 @@ import { approveDesign, changingDecisions } from '../design-answers';
 import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { disposeTerminal } from '../terminals';
-import { closingText, cx, dotState, designGate, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, reviewTarget, runToMergeShown, runToMergeTitle, sessionTabTitle, totalTokens, updateShowing, usageTitle } from '../util';
+import { closingText, cx, dotState, designGate, isReviewChild, joinedPartSelected, reviewGatesPr, reviewOpens, reviewParent, shownStep, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, reviewTarget, runToMergeShown, runToMergeTitle, sessionTabTitle, sidewaysWheel, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
-import { Busy, Check, ConfirmButton, ContextRing, DatapackName, Elapsed, HarnessLogo, NotesIcon, RunToMergeCheck, RunToMergeMark, StageChip, StatusDot } from './common';
+import { Busy, Check, ConfirmButton, ContextRing, DatapackName, Elapsed, HarnessLogo, NotesIcon, ReviewSegment, RunToMergeCheck, RunToMergeMark, StageChip, StatusDot } from './common';
+import { ReviewFindings } from './ReviewFindings';
+import { DESCRIBE_LOST, countsText, reviewDoneText, reviewHolds, reviewRunning, reviewSegmentText, type CodeReviewSummary } from '../../shared/codereview';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
 import type { MovePreset } from './MoveSessionDialog';
-import { EndSessionButton, SessionSheet } from './SessionSheet';
+import { EndSessionButton, LocalReviewRows, SessionSheet } from './SessionSheet';
 import { newCommitsText, ReviewPrGate } from './ReviewPrGate';
 import { MekoLinkDialog } from './MekoLinkDialog';
 import { ShareDialog } from './ShareDialog';
@@ -88,6 +90,10 @@ export function ProjectView({
   onMenu,
   showTabs,
   harnessLogos,
+  findingsRequest,
+  onFindingsTaken,
+  onFindingsShown,
+  onOpenFindings,
   onError,
 }: {
   project: ProjectWithSessions;
@@ -111,12 +117,33 @@ export function ProjectView({
   showTabs: boolean;
   /** Show each session's harness logo in its tab: open sessions run on more than one harness and the setting is on. */
   harnessLogos: boolean;
+  /** A task's findings asked open (its magnifier in the rail) or closed (the rail's task part), until taken. */
+  findingsRequest: { id: string; open: boolean } | null;
+  /** The request was acted on. */
+  onFindingsTaken: () => void;
+  /** The task whose findings are open beside its terminal, or null: for the rail's row. */
+  onFindingsShown: (taskId: string | null) => void;
+  /** Shows a task's local review findings, beside its terminal: from its magnifier, the gate or the ⋯ sheet. */
+  onOpenFindings: (task: Session) => void;
   onError: (msg: string) => void;
 }) {
   const mobile = useIsMobile();
   // One side panel at a time.
-  const [panel, setPanel] = useState<'design' | 'changes' | null>(null);
-  const toggle = (p: 'design' | 'changes') => setPanel((o) => (o === p ? null : p));
+  const [panel, setPanel] = useState<'design' | 'changes' | 'findings' | null>(null);
+  const toggle = (p: 'design' | 'changes' | 'findings') => setPanel((o) => (o === p ? null : p));
+  // A task's code-review session (its part of the task's tab) and the task it reviews.
+  const child = session && isReviewChild(session) ? session : null;
+  const parent = session ? reviewParent(project.sessions, session) : undefined;
+  // The review's screen (its terminal, its findings beside it) while its steps run (or it failed); its
+  // findings beside the task's terminal while the task fixes a round's findings and once it's done.
+  const openReviewTerminal = (task: Session) => {
+    if (task.codeReview?.sessionId) navigate({ view: 'project', projectId: project.id, sessionId: task.codeReview.sessionId });
+  };
+  const openFindings = (task: Session) => {
+    if (task.id === session?.id) setPanel('findings');
+    else onOpenFindings(task);
+  };
+  const openReview = (task: Session) => (reviewOpens(task) === 'session' ? openReviewTerminal(task) : openFindings(task));
   const [sheet, setSheet] = useState(false);
   // Bumped to show the design's questions (Design Review, or Approve pressed with questions open).
   const [questionsAt, setQuestionsAt] = useState(0);
@@ -144,10 +171,26 @@ export function ProjectView({
     setHeldOpen(false);
     setQuestionsAt(0);
     setApproveAt(0);
+    // A review's findings open beside its terminal, on a desktop; a phone opens them from the ⋯ sheet.
+    if (child && !mobile) setPanel('findings');
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when another session comes on screen
   }, [session?.id]);
+  // After the reset above: a request for this task's findings, taken once (it stays in App, which
+  // outlives this view, so a request left untaken would open them again on the way back).
+  useEffect(() => {
+    if (!findingsRequest || findingsRequest.id !== session?.id) return;
+    setPanel((p) => (findingsRequest.open ? 'findings' : p === 'findings' ? null : p));
+    onFindingsTaken();
+  }, [findingsRequest, session?.id, onFindingsTaken]);
+  // Which task's findings are open, for the rail's row; none once this view goes.
+  const findingsTask = session && !child && session.codeReview && panel === 'findings' ? session.id : null;
+  useEffect(() => {
+    onFindingsShown(findingsTask);
+  }, [findingsTask, onFindingsShown]);
+  useEffect(() => () => onFindingsShown(null), [onFindingsShown]);
   // Also when the desktop tabs mount, as the rail stops listing the sessions or is hidden.
   useEffect(() => {
-    tabsRef.current?.querySelector('.tab.sel')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    tabsRef.current?.querySelector('.tab.sel, .review-seg.sel')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [session?.id, showTabs]);
   // Showing the questions is for the panel open now: one opened later starts on the design.
   useEffect(() => {
@@ -193,11 +236,13 @@ export function ProjectView({
     actingRef.current = true;
     setActingOn({ id: session.id, action });
     const pr = session.reviewingPr;
+    // The local review's actions are its task's, also from the review's own screen.
+    const target = action.startsWith('review-') && session.parentId ? session.parentId : session.id;
     try {
       if (action === 'approve-design') await approveDesign(session.id);
       else {
         // A Discard that waits for the learn step leaves the session (and its terminal) running until then.
-        if ((await api.sessionAction(session.id, action, req)).desired === 'archived') disposeTerminal(session.id);
+        if ((await api.sessionAction(target, action, req)).desired === 'archived') disposeTerminal(target);
         if (action === 'update-pr' && pr) setUpdated({ id: session.id, pr });
       }
     } catch (e) {
@@ -209,7 +254,7 @@ export function ProjectView({
   };
   // Design Review: the design, on its questions when there are any to answer; with the panel open
   // already, its approve button. The approval itself goes from the panel, with the answers.
-  const openReview = () => {
+  const openDesignReview = () => {
     if (!session) return;
     setSheet(false);
     const target = reviewTarget(session.designQuestions.open, changingDecisions(session.id), panel === 'design');
@@ -326,24 +371,47 @@ export function ProjectView({
   // desktop they sit above the terminal. Neither shows them while the rail lists the sessions (a setting)
   // and is shown; the phone's bar then names the session, with its dot, and marks the drawer button while
   // another session needs you.
+  // A task with a local review is one joined tab: the task's part, then the review's (the magnifier),
+  // inside one border. The task's part opens its session, the review's its findings beside it.
   const tabs = (
-    <div className="tabs" role="tablist" ref={tabsRef}>
-      {sessions.map((s) => (
-        <button
-          key={s.id}
-          role="tab"
-          aria-selected={s.id === session?.id}
-          className={cx('tab', s.id === session?.id && 'sel')}
-          onClick={() => navigate({ view: 'project', projectId: project.id, sessionId: s.id })}
-          onDoubleClick={mobile ? undefined : () => onRename(s.id)}
-          title={sessionTabTitle(s) + (mobile ? '' : '\nDouble-click to rename')}
-        >
-          <StatusDot status={dotState(s)} phase={s.id} />
-          {harnessLogos && <HarnessLogo harness={s.harness} />}
-          <span className="tab-name">{s.name}</span>
-          <StageChip session={s} />
-        </button>
-      ))}
+    <div
+      className="tabs"
+      role="tablist"
+      ref={tabsRef}
+      onWheel={(e) => {
+        e.currentTarget.scrollLeft += sidewaysWheel(e, e.currentTarget.clientWidth);
+      }}
+    >
+      {sessions.map((s) => {
+        const part = joinedPartSelected(s, session?.id, panel === 'findings');
+        const tab = (
+          <button
+            key={s.id}
+            role="tab"
+            aria-selected={part === 'task'}
+            className={cx('tab', part === 'task' && 'sel')}
+            onClick={() => {
+              // The task's part, while its findings are open, goes back to its terminal alone.
+              if (s.id !== session?.id) navigate({ view: 'project', projectId: project.id, sessionId: s.id });
+              else if (part === 'review') setPanel(null);
+            }}
+            onDoubleClick={mobile ? undefined : () => onRename(s.id)}
+            title={sessionTabTitle(s) + (mobile ? '' : '\nDouble-click to rename')}
+          >
+            <StatusDot status={dotState(s)} phase={s.id} />
+            {harnessLogos && <HarnessLogo harness={s.harness} />}
+            <span className="tab-name">{s.name}</span>
+            <StageChip session={s} />
+          </button>
+        );
+        if (!s.codeReview) return tab;
+        return (
+          <span key={s.id} className={cx('tab-joined', part && 'has-sel')}>
+            {tab}
+            <ReviewSegment review={s.codeReview} selected={part === 'review'} className="tab-review" tab onOpen={() => openReview(s)} />
+          </span>
+        );
+      })}
       <button className="tab new" onClick={onNewSession} title="New session" aria-label="New session">
         +
       </button>
@@ -357,7 +425,7 @@ export function ProjectView({
           onMenu={onMenu}
           menuDot={!showTabs && sessions.some((s) => s.id !== session?.id && dotState(s) === 'needs_input')}
           sub={showTabs || !session ? undefined : project.name}
-          title={showTabs ? undefined : (session?.name ?? project.name)}
+          title={showTabs ? undefined : child ? `Local review of ${parent?.name ?? 'a task'}` : (session?.name ?? project.name)}
           icon={!showTabs && session ? <StatusDot status={dotState(session)} phase={session.id} /> : undefined}
         >
           {showTabs && tabs}
@@ -395,7 +463,9 @@ export function ProjectView({
           session={session}
           project={project}
           onAct={act}
-          onReview={openReview}
+          onReview={openDesignReview}
+          onOpenLocalReview={session && !child ? () => openFindings(session) : undefined}
+          onOpenReviewTerminal={session && !child ? () => openReviewTerminal(session) : undefined}
           designOpen={panel === 'design'}
           onAutoRun={setAutoRun}
           learnTo={mergeLearnTo}
@@ -405,7 +475,23 @@ export function ProjectView({
           onHeld={() => setHeldOpen(true)}
           acting={acting}
           updating={updating}
-          actions={
+          actions={child ? (
+            <>
+              {parent && (
+                <button className="btn small" onClick={() => navigate({ view: 'project', projectId: project.id, sessionId: parent.id })} title={`Back to ${parent.name}`}>
+                  ← {parent.name}
+                </button>
+              )}
+              <button className={cx('btn small', panel === 'findings' && 'on')} onClick={() => toggle('findings')}>
+                Findings
+              </button>
+              {child.status === 'exited' && (
+                <button className="btn small primary" disabled={acting} onClick={() => act('resume')}>
+                  Resume
+                </button>
+              )}
+            </>
+          ) : (
             <>
               {session?.prUrl && (
                 <a className="btn small" href={session.prUrl} target="_blank" rel="noreferrer" title={session.prUrl}>
@@ -442,7 +528,7 @@ export function ProjectView({
               )}
               {session && <EndSessionButton key={session.id} session={session} onAct={act} learnTo={learnTo} disabled={acting} />}
             </>
-          }
+          )}
         />
       )}
 
@@ -478,6 +564,14 @@ export function ProjectView({
           />
         )}
         {session && panel === 'changes' && <ChangesPanel key={`changes-${session.id}`} session={session} onClose={() => setPanel(null)} />}
+        {session && panel === 'findings' && (child || session.codeReview) && (
+          <ReviewFindings
+            key={`findings-${session.id}`}
+            session={session}
+            onClose={() => setPanel(null)}
+            onTerminal={!child && session.codeReview?.sessionId ? () => openReviewTerminal(session) : undefined}
+          />
+        )}
       </div>
 
       {session && (
@@ -510,7 +604,15 @@ export function ProjectView({
               session={session}
               project={project}
               onAct={act}
-              onReview={openReview}
+              onReview={openDesignReview}
+              onOpenLocalReview={!child ? () => {
+                setSheet(false);
+                openFindings(session);
+              } : undefined}
+              onOpenReviewTerminal={!child ? () => {
+                setSheet(false);
+                openReviewTerminal(session);
+              } : undefined}
               designOpen={panel === 'design'}
               onAutoRun={setAutoRun}
               learnTo={mergeLearnTo}
@@ -565,6 +667,21 @@ export function ProjectView({
           onToTop={sessions[0]?.id !== session.id ? () => onToTop(session.id) : undefined}
           onAct={act}
           onClose={() => setSheet(false)}
+          child={!!child}
+          reviewRows={
+            <LocalReviewRows
+              session={session}
+              parent={parent}
+              projectReview={project.settings.codeReview ?? {}}
+              acting={acting}
+              onOpen={() => openReview(session)}
+              onFindings={() => setPanel('findings')}
+              onBack={() => parent && navigate({ view: 'project', projectId: project.id, sessionId: parent.id })}
+              onAct={act}
+              onClose={() => setSheet(false)}
+              onError={onError}
+            />
+          }
         />
       )}
       {session && asking && <AskSheet session={session} onClose={() => setAsking(false)} />}
@@ -636,11 +753,131 @@ function queuedGate(
   );
 }
 
+/**
+ * A task's local review in its stage bar's gate (in Code, while it holds Open PR) or in the review
+ * session's own: where it is with Cancel while it runs, the task fixing a round's findings, or why
+ * it stopped with Retry and Open anyway (or only that it stopped, for one cancelled because the task
+ * left Code, which holds nothing). While the review waits on you in its terminal, Open terminal goes
+ * there. The actions are the task's (`act` sends them there).
+ */
+function reviewGate(
+  r: CodeReviewSummary,
+  blocked: boolean,
+  onAct: (a: SessionAction) => Promise<void>,
+  onOpen?: () => void,
+  onTerminal?: () => void,
+  midTurn = false,
+): ReactNode {
+  // Past an interrupted turn of the task's (its PR description, or a round's fixes), Open PR goes on.
+  const reviewNow = (title: string) => (
+    <button className="gate" disabled={blocked || midTurn} onClick={() => onAct('open-pr')} title={title}>
+      Review now
+    </button>
+  );
+  const open = onOpen && (
+    <button className="btn small" onClick={onOpen} title="Show the local review's findings">
+      Show findings
+    </button>
+  );
+  if (reviewHolds(r)) {
+    return (
+      <span className="gate-group">
+        <span className="gate-pill warn" title={r.detail ?? undefined}>
+          {r.state === 'failed' ? 'Local review failed' : 'Local review cancelled'}
+        </span>
+        {open}
+        <button className="btn small" disabled={blocked} onClick={() => onAct('review-open-anyway')} title="Send the PR prompt without a me_ak_review line">
+          Open anyway
+        </button>
+        <button className="gate" disabled={blocked} onClick={() => onAct('review-retry')} title="Review again, reusing the steps already reported">
+          Retry
+        </button>
+      </span>
+    );
+  }
+  if (r.state === 'cancelled') {
+    return (
+      <span className="gate-group">
+        <span className="gate-pill warn" title={r.detail ?? undefined}>
+          Local review cancelled
+        </span>
+        {open}
+      </span>
+    );
+  }
+  if (r.state === 'describing') {
+    return (
+      <span className="gate-group">
+        {/* Past an interrupted description turn or a lost ask (`detail`), the review waits for Review now. */}
+        <span className="gate-pill" title={r.detail ?? "AgentK writes the PR's title and description first, for the local review to check the change against"}>
+          {r.detail ? 'Local review waits to start' : <Busy label="Writing the PR description" />}
+        </span>
+        <button className="btn small" disabled={blocked} onClick={() => onAct('review-cancel')} title="Stop the review; then Retry or Open anyway">
+          Cancel
+        </button>
+        {reviewNow(r.detail === DESCRIBE_LOST ? 'Ask for the PR description again' : 'Start the review with the PR description as it is now')}
+      </span>
+    );
+  }
+  if (r.state === 'fixing') {
+    return (
+      <span className="gate-group">
+        <span className="gate-pill" title={`AgentK is fixing what round ${r.round} found (${countsText(r.counts)}); round ${r.round + 1} follows`}>
+          <Busy label={`Fixing round ${r.round}'s findings`} />
+        </span>
+        {open}
+        {reviewNow(`Start round ${r.round + 1} with the fixes as they are now`)}
+      </span>
+    );
+  }
+  if (r.state === 'done') {
+    return (
+      <span className="gate-group">
+        <span className="gate-pill done">{reviewDoneText(r)}</span>
+        {open}
+      </span>
+    );
+  }
+  if (r.waiting) {
+    return (
+      <span className="gate-group">
+        <span className="gate-pill warn" title="A permission prompt or a question in the review's terminal">
+          Local review waits on you
+        </span>
+        {onTerminal && (
+          <button className="gate" onClick={onTerminal} title="Show the review's terminal">
+            Open terminal
+          </button>
+        )}
+        {open}
+        <button className="btn small" disabled={blocked} onClick={() => onAct('review-cancel')} title="Stop the review; then Retry or Open anyway">
+          Cancel
+        </button>
+      </span>
+    );
+  }
+  return (
+    <span className="gate-group">
+      <span className="gate-pill" title="The PR prompt goes once the local review is done">
+        <Busy label="Reviewing locally" /> <span className="mono">{reviewSegmentText(r)}</span>
+      </span>
+      {open}
+      {reviewRunning(r) && (
+        <button className="btn small" disabled={blocked} onClick={() => onAct('review-cancel')} title="Stop the review; then Retry or Open anyway">
+          Cancel
+        </button>
+      )}
+    </span>
+  );
+}
+
 function StageBar({
   session,
   project,
   onAct,
   onReview,
+  onOpenLocalReview,
+  onOpenReviewTerminal,
   designOpen = false,
   onAutoRun,
   onMove,
@@ -658,6 +895,10 @@ function StageBar({
   onAct: (a: SessionAction, req?: CloseSessionRequest) => Promise<void>;
   /** Design Review: opens the design panel, or brings its approve button into view (`reviewTarget`). */
   onReview: () => void;
+  /** Shows the task's local review findings; left out on the review's own screen. */
+  onOpenLocalReview?: () => void;
+  /** Shows the task's review session's terminal, while it waits on you; left out on the review's own screen. */
+  onOpenReviewTerminal?: () => void;
   /** The design panel is open. */
   designOpen?: boolean;
   /** Turns Run to merge on or off (its checkbox beside Design Review, Open PR and Merge & Close). */
@@ -694,11 +935,14 @@ function StageBar({
   }
   const kind = kindOf(session.kind);
   const stages: Stage[] = KIND_STAGES[kind];
-  const idx = session.stage === 'done' ? stages.length : stages.indexOf(stepOf(session.stage));
+  // A task whose local review holds its Open PR shows in Review & PR, while it stays in Code.
+  const step = shownStep(session);
+  const idx = session.stage === 'done' ? stages.length : stages.indexOf(step);
   // A task's steps are numbered from 0 (Explore), so Design is 1 and Merge & Close 4.
   const first = kind === 'task' ? 0 : 1;
-  // Other stages the session can be moved to open the move dialog.
-  const targets: Stage[] = moveBlockedIn(session.stage) ? [] : moveTargets(kind);
+  // Other stages the session can be moved to open the move dialog: not its own stage (a move there
+  // changes nothing), which differs from the step it shows while a local review holds its Open PR.
+  const targets: Stage[] = moveBlockedIn(session.stage) ? [] : moveTargets(kind).filter((t) => t !== stepOf(session.stage));
   const midTurn = session.status === 'working' || session.status === 'starting';
   const blocked = session.busy || acting;
   // Why the Design or Code gate is closed, if it is.
@@ -754,6 +998,11 @@ function StageBar({
       break;
     }
     case 'code': {
+      if (reviewGatesPr(session) && session.codeReview) {
+        gate = reviewGate(session.codeReview, blocked, onAct, onOpenLocalReview, onOpenReviewTerminal, midTurn);
+        reason = reviewHolds(session.codeReview) ? session.codeReview.detail : null;
+        break;
+      }
       if (session.queued === 'open-pr') {
         gate = queuedGate(session, blocked, onAct, onAutoRun, 'The PR prompt goes to AgentK when its turn ends', onOpenPr);
         break;
@@ -847,6 +1096,10 @@ function StageBar({
     case 'done':
       gate = <span className="gate-pill done">Done</span>;
       break;
+    case 'reviewing-code':
+      gate = session.codeReview ? reviewGate(session.codeReview, blocked, onAct) : null;
+      reason = session.codeReview && reviewHolds(session.codeReview) ? session.codeReview.detail : null;
+      break;
     case 'reviewing-pr': {
       reason = midTurn
         ? 'Wait for AgentK to finish its turn.'
@@ -901,7 +1154,7 @@ function StageBar({
           {/* The phone layout shows only the current stage's name, here. */}
           <span className="stg-now">
             <b>
-              {STAGE_LABELS[session.stage]}
+              {STAGE_LABELS[step]}
               <RunToMergeMark session={session} size={10} />
             </b>
             {session.stage !== 'done' && stages.length > 1 && idx + first > 0 && (

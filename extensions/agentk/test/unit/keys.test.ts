@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BAR_KEYS, FLING_MAX, type BarKey, MORE_KEYS, FONT_MAX, FONT_MIN, clampFont, ctrlSequence, decayVelocity, flingVelocity, insertedChar, isTap, isTerminalReport, keySequence, pastePath, pasteText, TAP_MAX_MOVE, TAP_MAX_MS, touchCol, touchRow, wheelReport, wheelSteps,
+  BAR_KEYS, FLING_MAX, type BarKey, MORE_KEYS, FONT_MAX, FONT_MIN, clampFont, ctrlSequence, decayVelocity, editKeySequence, flingVelocity, insertedChar, isTap, isTerminalReport, keySequence, pastePath, pasteText, TAP_MAX_MOVE, TAP_MAX_MS, touchCol, touchRow, wheelReport, wheelSteps,
 } from '../../src/web/keys.js';
 import { keyboardOpen } from '../../src/web/hooks/useMedia.js';
 import { isPassiveReport } from '../../src/shared/termreports.js';
@@ -18,6 +18,48 @@ describe('terminal key bar', () => {
 
   it('has a sequence for every key on the bar and in the ▾ row', () => {
     for (const k of [...BAR_KEYS, ...MORE_KEYS]) expect(keySequence(k.key)).not.toBe('');
+  });
+});
+
+describe('keys the terminal maps itself', () => {
+  type Mods = Partial<Record<'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey' | 'isComposing', boolean>>;
+  const key = (k: string, mods: Mods = {}) => ({
+    key: k, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, isComposing: false, ...mods,
+  });
+
+  it.each([
+    // [what, key, on a Mac, sent]
+    ['Shift+Enter starts a new line on a Mac', key('Enter', { shiftKey: true }), true, '\x1b\r'],
+    ['Shift+Enter starts a new line elsewhere', key('Enter', { shiftKey: true }), false, '\x1b\r'],
+    ['⌘← goes to the start of the line', key('ArrowLeft', { metaKey: true }), true, '\x01'],
+    ['⌘→ goes to the end of the line', key('ArrowRight', { metaKey: true }), true, '\x05'],
+    ['⌥← goes back a word', key('ArrowLeft', { altKey: true }), true, '\x1bb'],
+    ['⌥→ goes forward a word', key('ArrowRight', { altKey: true }), true, '\x1bf'],
+    ['⌘⌫ deletes to the start of the line', key('Backspace', { metaKey: true }), true, '\x15'],
+    ['Ctrl+Backspace deletes a word elsewhere', key('Backspace', { ctrlKey: true }), false, '\x1b\x7f'],
+  ])('%s', (_name, e, mac, sent) => {
+    expect(editKeySequence(e, mac)).toBe(sent);
+  });
+
+  it.each([
+    ['Enter, which submits', key('Enter'), [true, false]],
+    // xterm already sends ESC CR for it.
+    ['Alt+Enter', key('Enter', { altKey: true }), [true, false]],
+    ['Ctrl+Enter', key('Enter', { ctrlKey: true }), [true, false]],
+    ['⇧⌘Enter', key('Enter', { shiftKey: true, metaKey: true }), [true]],
+    ['Ctrl+Shift+Enter', key('Enter', { shiftKey: true, ctrlKey: true }), [false]],
+    ['a plain arrow', key('ArrowLeft'), [true, false]],
+    ['⇧⌘←, which selects in a text field', key('ArrowLeft', { shiftKey: true, metaKey: true }), [true]],
+    // Off a Mac, Alt is Alt: xterm's own Alt+← is what Linux terminals send.
+    ['Alt+← elsewhere', key('ArrowLeft', { altKey: true }), [false]],
+    ['Ctrl+← elsewhere', key('ArrowLeft', { ctrlKey: true }), [false]],
+    ['Meta+Backspace elsewhere', key('Backspace', { metaKey: true }), [false]],
+    // On a Mac, ⌥⌫ deletes a word (xterm sends ESC DEL), and Ctrl+Backspace stays ^H.
+    ['Ctrl+Backspace on a Mac', key('Backspace', { ctrlKey: true }), [true]],
+    ['a plain Backspace', key('Backspace'), [true, false]],
+    ['a key typed into an input method', key('Enter', { shiftKey: true, isComposing: true }), [true, false]],
+  ])('leaves %s to xterm', (_name, e, platforms) => {
+    for (const mac of platforms) expect(editKeySequence(e, mac), mac ? 'on a Mac' : 'elsewhere').toBeNull();
   });
 });
 

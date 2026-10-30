@@ -20,7 +20,8 @@ Point Claude Code, Codex, OpenCode, Kiro, Cursor or another agent at the repo an
 want. It starts from [AGENTS.md](AGENTS.md), which maps the repo and leads to each part's own guide
 with its build, test and lint commands: [backend/AGENTS.md](backend/AGENTS.md) for Meko,
 [extensions/agentk/AGENTS.md](extensions/agentk/AGENTS.md) for AgentK and
-[extensions/presenter/AGENTS.md](extensions/presenter/AGENTS.md) for Presenter.
+[extensions/presenter/AGENTS.md](extensions/presenter/AGENTS.md) for Presenter. The Meko datapacks
+that hold the repo's context are listed in [MEKO.md](MEKO.md).
 
 ## The rules
 

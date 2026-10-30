@@ -4,7 +4,7 @@
 // with --settings), records its argv, and turns each stdin line into a turn.
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { dirname, join } from 'node:path';
 
@@ -71,11 +71,11 @@ let sessionId = opt('--session-id') ?? opt('--resume');
 const dir = process.env.FAKE_CLAUDE_DIR;
 mkdirSync(dir, { recursive: true });
 let transcript = join(dir, `${sessionId}.jsonl`);
-appendFileSync(join(dir, 'argv.jsonl'), JSON.stringify({ args, cwd: process.cwd(), env: { MEKO_AGENT_ID: process.env.MEKO_AGENT_ID, MEKO_DATAPACK_ID: process.env.MEKO_DATAPACK_ID, MEKO_CHECKPOINT_INTERVAL: process.env.MEKO_CHECKPOINT_INTERVAL, CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: process.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS } }) + '\n');
+appendFileSync(join(dir, 'argv.jsonl'), JSON.stringify({ args, cwd: process.cwd(), env: { MEKO_AGENT_ID: process.env.MEKO_AGENT_ID, MEKO_DATAPACK_ID: process.env.MEKO_DATAPACK_ID, MEKO_CHECKPOINT_INTERVAL: process.env.MEKO_CHECKPOINT_INTERVAL, CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: process.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF: process.env.CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF } }) + '\n');
 
 // Positional prompt: the last argument that isn't a flag value; everything after "--" is positional
 // (like Claude Code's CLI, which rejects a prompt starting with "-" before "--" as an unknown option).
-const valued = new Set(['--settings', '--session-id', '--resume', '--name', '--permission-mode', '--append-system-prompt', '--add-dir', '--plugin-dir', '--mcp-config', '--setting-sources']);
+const valued = new Set(['--settings', '--session-id', '--resume', '--name', '--permission-mode', '--append-system-prompt', '--add-dir', '--plugin-dir', '--mcp-config', '--setting-sources', '--agents', '--disallowedTools']);
 let prompt = null;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--') {
@@ -146,6 +146,17 @@ let modTurns = Promise.resolve();
 const held = new Set();
 const reportHeld = () => modPost('/mod/held', { held: [...held] }).catch(() => undefined);
 
+// Like Claude Code moving its conversation to its background sessions just after taking a prompt:
+// with an `exit-unrun` file, a prompt (through the mod, or typed) that contains its text ends Claude
+// before its turn starts (SessionEnd, then exit 0), once: the file goes with it.
+function exitUnrun(text) {
+  const f = join(dir, 'exit-unrun');
+  if (!existsSync(f) || !text.includes(readFileSync(f, 'utf8'))) return;
+  rmSync(f);
+  hook('SessionEnd', { reason: 'other' });
+  process.exit(0);
+}
+
 const LEARN_USAGE = { input_tokens: 10, output_tokens: 200, cache_read_input_tokens: 5000, cache_creation_input_tokens: 0 };
 
 /** Like the mod's learn step: the fork's reply to an `extract` part, the duplicate check's to a `check`. */
@@ -176,6 +187,7 @@ async function modLoop() {
           const ack = await modPost('/mod/ack', { id: p.id, state: 'accepted' });
           appendFileSync(join(dir, 'mod-acks.jsonl'), JSON.stringify({ id: p.id, status: ack.status }) + '\n');
           if (ack.status !== 204) continue;
+          exitUnrun(p.text);
           held.add(p.id);
           if (existsSync(join(dir, 'mod-drop'))) {
             await modPost('/mod/ack', { id: p.id, state: 'dropped', reason: 'held by another plugin', filled: true });
@@ -275,6 +287,10 @@ async function turn(text) {
     return;
   }
   if (text.includes('DESIGN_MD')) writeFileSync(process.env.AK_DESIGN_FILE, '# Design\n\nDo the thing.\n');
+  // Asked for the PR description before a local review: `pr-description.md` in the fake's dir, when there, beside the design file.
+  if (text.includes('pr-description.md') && text.includes("write the PR's title and description") && existsSync(join(dir, 'pr-description.md'))) {
+    writeFileSync(join(dirname(process.env.AK_DESIGN_FILE), 'pr-description.md'), readFileSync(join(dir, 'pr-description.md')));
+  }
   // A learn session that's done: its summary, beside the design file (learnedPath).
   if (text.includes('LEARN_DONE')) writeFileSync(join(dirname(process.env.AK_DESIGN_FILE), 'learned.md'), 'Covered billing and 12 PRs.\nSaved 5 facts.\n');
   if (text.includes('DESIGN_QUESTIONS') || text.includes('RESOLVE_STORE')) {
@@ -350,9 +366,37 @@ async function turn(text) {
   }
   if (text.includes('MEKO_SEARCH')) await mekoSearch();
   if (text.includes('ASK_USER') && modOn) await askUser();
+  if (text.includes('agentk-review-')) await reviewSteps(text);
   respond();
   hook('Stop', {});
   modMeasure();
+}
+
+// Like a code-review session running its steps in subagents (AgentK's local review): each step's
+// file names its report tool and step id, and the subagent reports through AgentK's tools route.
+// `review-reports.json` in the fake's dir maps a pass name to its report (default LGTM), and
+// `review-scores.json` a step id to its score (default confirmed at 90); a `review-skip` file lists
+// steps to leave unreported. Every call and its answer go to `review-calls.jsonl`.
+async function reviewSteps(text) {
+  const read = (f, d) => {
+    try {
+      return JSON.parse(readFileSync(join(dir, f), 'utf8'));
+    } catch {
+      return d;
+    }
+  };
+  const skip = read('review-skip', []);
+  for (const m of text.matchAll(/Read (\S+) and do what it says\./g)) {
+    const file = readFileSync(m[1], 'utf8');
+    const step = /"step": "([^"]+)"/.exec(file)?.[1];
+    const tool = /call `([^`]+)` once/.exec(file)?.[1]?.split('__').pop();
+    if (!step || !tool || skip.includes(step)) continue;
+    const input = tool === 'review_score'
+      ? { step, score: read('review-scores.json', {})[step] ?? { read: ['src/a.ts:1-5'], refutation: '', verdict: 'confirmed', confidence: 90, reason: 'Read it; it holds.' } }
+      : { step, report: read('review-reports.json', {})[step.split(':')[1]] ?? { summary: 'LGTM', findings: [] } };
+    const r = await modPost('/tools', { v: 1, tool, input }).catch((e) => ({ status: 0, text: String(e) }));
+    appendFileSync(join(dir, 'review-calls.jsonl'), JSON.stringify({ step, tool, status: r.status, text: r.text }) + '\n');
+  }
 }
 
 // Like Claude Code calling the Meko MCP server: a memory_search that finds one memory. With the mod,
@@ -456,6 +500,7 @@ process.stdin.on('data', async (chunk) => {
     }
     // Like Claude crashing: gone without a SessionEnd hook.
     if (line === 'crash') process.exit(1);
+    exitUnrun(line);
     if (line === '/clear') {
       // Like Claude Code: /clear starts a new conversation with a new session id and transcript.
       hook('SessionEnd', { reason: 'clear' });

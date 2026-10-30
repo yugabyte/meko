@@ -63,3 +63,25 @@ func TestClipAndTrivial(t *testing.T) {
 		t.Error("trivial")
 	}
 }
+
+// A harness's command must be an absolute path to its program that can run; none (Meko didn't find
+// it) says so rather than asking for a path the web UI never sends.
+func TestCheckHarnessCommand(t *testing.T) {
+	dir := t.TempDir()
+	claude := filepath.Join(dir, "claude")
+	if err := os.WriteFile(claude, []byte("#!/bin/sh\n"), 0o700); err != nil { //nolint:gosec // G306: a test script
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ harness, command, want string }{
+		{"claude", claude, ""},
+		{"claude", "", "Meko can't find claude on this computer"},
+		{"claude", "claude", "absolute path"},
+		{"claude", filepath.Join(dir, "missing", "claude"), "isn't a program"},
+		{"codex", claude, "harness must be claude"},
+	} {
+		err := checkHarnessCommand(c.harness, c.command)
+		if c.want == "" && err != nil || c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)) {
+			t.Errorf("%s %q: %v, want %q", c.harness, c.command, err, c.want)
+		}
+	}
+}

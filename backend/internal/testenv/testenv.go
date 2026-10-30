@@ -62,6 +62,11 @@ type Options struct {
 	Cloud *cloudlink.Service
 	// ExtractorHarness, if set, answers the memory extractor's calls instead of a real CLI.
 	ExtractorHarness memory.Harness
+	// Answerer, if set, writes search answers instead of a real CLI.
+	Answerer memory.Answerer
+	// Credential, if set, is the REST routes' credential check instead of the server's, for a
+	// request with credentials the API listener doesn't give (a session, local access).
+	Credential func(echo.Context) string
 }
 
 // backendDir is this module's root, found from this file.
@@ -143,7 +148,8 @@ func Start(t *testing.T, o Options) *Env {
 	port := addr.Port
 	url := fmt.Sprintf("http://127.0.0.1:%d", port)
 	svc := memory.New(st, memoryengine.NewClient(l.MemoryEngineSock, internal), memory.Options{UserID: userID, Log: log,
-		FilesDir: l.KnowledgeFiles, BaseURL: url, ExtractorHarness: o.ExtractorHarness})
+		FilesDir: l.KnowledgeFiles, BaseURL: url, ExtractorHarness: o.ExtractorHarness,
+		Answerer: o.Answerer})
 	// The sweep that embeds turns and knowledge-base chunks, and the indexer, as serve runs them.
 	sweep, stopSweep := context.WithCancel(context.Background())
 	swept := make(chan struct{}, 2)
@@ -167,7 +173,11 @@ func Start(t *testing.T, o Options) *Env {
 	}
 	usage := callhome.New(callhome.Options{Store: st, Config: callHome, Tools: mcp.ToolNames(), Log: log})
 	mcpOpts := mcp.Options{Service: svc, Version: "test", Log: log, Credential: server.CredentialOf}
-	restOpts := rest.Options{Service: svc, Port: port, ClientToken: ClientToken, Credential: server.Credential,
+	credential := server.Credential
+	if o.Credential != nil {
+		credential = o.Credential
+	}
+	restOpts := rest.Options{Service: svc, Port: port, ClientToken: ClientToken, Credential: credential,
 		UsageStats: usage, Log: log, Cloud: o.Cloud,
 		Tool: func(ctx context.Context, cred, name string, args map[string]any) (string, error) {
 			return mcp.Call(ctx, mcpOpts, cred, name, args)

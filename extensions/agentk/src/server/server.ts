@@ -16,6 +16,7 @@ import { ACTIONS_MAX, LINK_GRANTS, MAX_KB_UPLOAD_BYTES, MAX_PASTE_BYTES, MEKO_CA
 import { AGENTK_PATH, shareLinkToken, shareLinkUrl } from '../shared/mekourls.js';
 import { HARNESS_IDS, isHarnessId } from '../shared/harnesses.js';
 import { EMAIL_RE, MAX_SHARE_EMAILS } from '../shared/emails.js';
+import { MAX_DEPTH, MAX_ROUNDS, STRATEGIES, isStrategySetting, type CodeReviewDetail } from '../shared/codereview.js';
 import { checkActions, runActions } from './actions.js';
 import { ybCallHomeDisabled } from './callhome.js';
 import { forgetContact, learnNames, listContacts, recordShares } from './contacts.js';
@@ -24,7 +25,7 @@ import { audit, get } from './db.js';
 import { errMsg } from './log.js';
 import type { MekoDatapackRow } from './meko.js';
 import { MekoApiError, asGrant, routeMissing, type MekoShareLinkChange, type RedeemedShareLink, type ShareLinkRow } from './mekoapi.js';
-import { resolveMekoWebUrl } from './config.js';
+import { globalReview, resolveMekoWebUrl } from './config.js';
 import { setUpClaudeMeko, setUpKiroMeko } from './mekosettings.js';
 import { prDesignSource } from './prdesign.js';
 import { HttpError } from './projects.js';
@@ -40,10 +41,12 @@ import { MAX_IDLE_DAYS, MAX_IDLE_PER_REPO } from './worktrees.js';
 const MAX_BUFFERED_STATE = 4 * 1024 * 1024;
 /** How long opening Settings waits for a read of the Meko on this computer (`meko` itself may take 5 s). */
 const LOCAL_MEKO_WAIT_MS = 1500;
-const ACTIONS: SessionAction[] = [
-  'approve-design', 'cancel-approval', 'open-pr', 'merge', 'cancel-queued', 'request-review', 'force-review', 'resume', 'archive', 'discard', 'update-pr', 'close-review',
-  'learn',
-];
+/** Every SessionAction, keyed so a new one can't be left out (the route refuses what isn't here). */
+const ACTIONS: Record<SessionAction, true> = {
+  'approve-design': true, 'cancel-approval': true, 'open-pr': true, merge: true, 'cancel-queued': true, 'request-review': true, 'force-review': true,
+  resume: true, archive: true, discard: true, 'update-pr': true, 'close-review': true, learn: true,
+  'review-cancel': true, 'review-retry': true, 'review-open-anyway': true,
+};
 /**
  * The app page's Content-Security-Policy. No script-src: the design panel's Artifact frame is a
  * srcdoc iframe, which takes this policy on top of its own (design-frame.ts), and Artifacts run
@@ -374,6 +377,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     return reply.code(204).send();
   });
   app.get<{ Params: { id: string } }>('/api/projects/:id/branches', async (req) => core.projects.branches(req.params.id));
+  app.get<{ Params: { id: string }; Querystring: { repoPath?: string; base?: string; where?: string; months?: string } }>(
+    '/api/projects/:id/learn-scope', async (req) => core.projects.learnScope(req.params.id, req.query));
   app.post<{ Params: { id: string }; Body: AttachDatapackRequest }>('/api/projects/:id/datapacks', async (req) => core.projects.attachDatapack(req.params.id, req.body));
   app.post<{ Params: { id: string }; Body: SetDedicatedDatapackRequest }>('/api/projects/:id/dedicated-datapack', async (req) =>
     core.projects.setDedicatedDatapack(req.params.id, req.body));
@@ -446,7 +451,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   });
   app.post<{ Params: { id: string; action: string }; Body: unknown }>('/api/sessions/:id/actions/:action', async (req) => {
     const action = req.params.action as SessionAction;
-    if (!ACTIONS.includes(action)) throw new HttpError(400, `Unknown action ${action}.`);
+    if (!Object.hasOwn(ACTIONS, action)) throw new HttpError(400, `Unknown action ${action}.`);
     return core.sessions.action(req.params.id, action, req.body);
   });
   app.patch<{ Params: { id: string }; Body: UpdateSessionRequest | null }>('/api/sessions/:id', async (req) =>
@@ -480,6 +485,10 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.delete<{ Params: { id: string } }>('/api/sessions/:id/meko-calls', async (req, reply) => {
     core.sessions.clearMekoLog(req.params.id);
     return reply.code(204).send();
+  });
+  app.get<{ Params: { id: string } }>('/api/sessions/:id/code-review', async (req): Promise<CodeReviewDetail> => {
+    core.sessions.row(req.params.id);
+    return core.reviews.detail(req.params.id);
   });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/discard-check', async (req): Promise<DiscardCheck> => core.sessions.discardCheck(req.params.id));
   app.get<{ Params: { id: string }; Querystring: { commit?: string } }>('/api/sessions/:id/changes', async (req): Promise<SessionChanges> =>
@@ -566,6 +575,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     workQueueSlack: core.config.workQueue.slack,
     workQueueSlackList: core.config.workQueue.slackList,
     workQueueSyncMinutes: core.config.workQueue.syncMinutes,
+    codeReviewStrategy: globalReview(core.config).strategy,
+    codeReviewRounds: core.config.codeReview.rounds,
+    codeReviewDepth: core.config.codeReview.depth,
   });
   app.get('/api/settings', async () => {
     // Opening Settings reads the Meko on this computer and its Meko Cloud link again (it may have
@@ -605,6 +617,15 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (b.workQueueSlackList !== undefined && (typeof b.workQueueSlackList !== 'string' || (b.workQueueSlackList.trim() && !slackListId(b.workQueueSlackList)))) {
       throw new HttpError(400, "That isn't a link to a Slack list: in the list, use ⋯ › Copy link.");
     }
+    if (b.codeReviewStrategy !== undefined && !isStrategySetting(b.codeReviewStrategy)) {
+      throw new HttpError(400, `The review strategy must be off or one of ${STRATEGIES.map((x) => x.id).join(', ')}.`);
+    }
+    if (b.codeReviewRounds !== undefined && (!Number.isInteger(b.codeReviewRounds) || b.codeReviewRounds < 0 || b.codeReviewRounds > MAX_ROUNDS)) {
+      throw new HttpError(400, `Re-review rounds must be a whole number from 0 to ${MAX_ROUNDS}.`);
+    }
+    if (b.codeReviewDepth !== undefined && (!Number.isInteger(b.codeReviewDepth) || b.codeReviewDepth < 1 || b.codeReviewDepth > MAX_DEPTH)) {
+      throw new HttpError(400, `Review depth must be a whole number from 1 to ${MAX_DEPTH}.`);
+    }
     for (const k of ['claudeEnabled', 'opencodeEnabled', 'opencodeDisableTracking', 'kiroEnabled', 'kiroTrustTools', 'workQueueGithub', 'workQueueSlack'] as const) {
       if (b[k] !== undefined && typeof b[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false.`);
     }
@@ -630,6 +651,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.workQueueSlack !== undefined) c.workQueue.slack = b.workQueueSlack;
       if (b.workQueueSlackList !== undefined) c.workQueue.slackList = b.workQueueSlackList.trim();
       if (b.workQueueSyncMinutes !== undefined) c.workQueue.syncMinutes = b.workQueueSyncMinutes;
+      if (b.codeReviewStrategy !== undefined) c.codeReview.strategy = b.codeReviewStrategy;
+      if (b.codeReviewRounds !== undefined) c.codeReview.rounds = b.codeReviewRounds;
+      if (b.codeReviewDepth !== undefined) c.codeReview.depth = b.codeReviewDepth;
     });
     // An agent turned on: its version (and Kiro's agent file) follow, in the background. One turned
     // off forgets its last read, so it isn't offered on that read once it's turned on again.
@@ -772,18 +796,25 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     }, 250);
     check.unref();
   };
-  core.on('change', () => {
+  const pushState = () => {
     pending ??= setTimeout(() => {
       pending = null;
       if (clients.size) broadcast({ type: 'state', state: core.state() });
     }, 100);
-  });
-  // A push still due when the server closes would read state after the database may be closed.
+  };
+  const notify = (ev: ServerEvent) => broadcast(ev);
+  core.on('change', pushState);
+  core.on('notify', notify);
+  // A push after the server closes would read state after the database may be closed. A page's
+  // socket can still be in `clients` then, closing, and the core can still change until its stop()
+  // begins (shutdown, and a test's cleanup, close the server first): so the server stops listening
+  // to the core here, as well as dropping the push already due.
   app.addHook('onClose', async () => {
+    core.off('change', pushState);
+    core.off('notify', notify);
     if (pending) clearTimeout(pending);
     pending = null;
   });
-  core.on('notify', (ev: ServerEvent) => broadcast(ev));
 
   const wsGuard = (socket: WebSocket, req: FastifyRequest): boolean => {
     if (!sameOrigin(req)) {

@@ -10,6 +10,7 @@ import { KIND_STAGES, REVIEWER_LABELS } from '../shared/types.js';
 import { kindOf, skippedSteps, stepOf } from '../shared/stages.js';
 import { DEFAULT_BRANCH_PREFIX } from '../shared/branches.js';
 import { harnessOf } from '../shared/harnesses.js';
+import { readOverrides, type CodeReviewSummary, type ReviewOverrides } from '../shared/codereview.js';
 
 /**
  * What new task sessions store in `sessions.kind` (see StoredKind): a name a release or page from
@@ -25,6 +26,7 @@ export const DEFAULT_SETTINGS: ProjectSettings = {
   mergeMethod: 'repo-default',
   notify: true,
   mekoLog: false,
+  codeReview: {},
 };
 
 export interface ProjectRow {
@@ -144,6 +146,10 @@ export interface SessionRow {
   untrusted: number | null;
   /** What it's for beyond its kind (`SessionPurpose`: 'learn'); NULL for the rest. */
   purpose: string | null;
+  /** A code-review session's task (Session.parentId); NULL for every other session. */
+  parent_id: string | null;
+  /** The session's own local review settings (ReviewOverrides, JSON); NULL for none. */
+  review_json: string | null;
 }
 
 export function parseSettings(json: string): ProjectSettings {
@@ -155,6 +161,7 @@ export function parseSettings(json: string): ProjectSettings {
   }
   // A mode this version doesn't know (from a newer one) falls back to the default.
   if (!Object.hasOwn(REVIEWER_LABELS, s.reviewer)) s.reviewer = DEFAULT_SETTINGS.reviewer;
+  s.codeReview = readOverrides(s.codeReview);
   return s;
 }
 
@@ -260,6 +267,18 @@ export interface SessionRuntime {
   asking: AskRequest | null;
   mekoCall: boolean;
   approvalQueued: boolean;
+  /** The task's latest local review, or a code-review session's own (review/runner.ts). */
+  codeReview: CodeReviewSummary | null;
+}
+
+/** A session's own local review settings, from `review_json`. */
+export function sessionReview(r: Pick<SessionRow, 'review_json'>): ReviewOverrides {
+  if (!r.review_json) return {};
+  try {
+    return readOverrides(JSON.parse(r.review_json));
+  } catch {
+    return {};
+  }
 }
 
 /**
@@ -319,6 +338,9 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     designQuestions: { open: openQuestions },
     heldReviews: heldSummary(db, r.id, r.pr_number),
     reviewingPr: reviewingPr(r, design ?? null),
+    parentId: r.parent_id,
+    codeReview: rt.codeReview,
+    review: sessionReview(r),
     usage: rt.usage,
     contextPercent: rt.contextPercent,
     modLive: rt.modLive,

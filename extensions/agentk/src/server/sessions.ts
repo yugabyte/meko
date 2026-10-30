@@ -32,8 +32,10 @@ import { HttpError, projectConversationKey } from './projects.js';
 import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, savePastedFile, savePastedImage, stageImage } from './pastes.js';
 import { kindOf } from '../shared/stages.js';
 import { expandBranchPrefix } from '../shared/branches.js';
+import { noOverrides, readOverrides } from '../shared/codereview.js';
 import { agentName, harnessOf } from '../shared/harnesses.js';
 import type { Harness } from './harness/index.js';
+import type { TranscriptMark } from './harness/types.js';
 import { writeLauncher } from './launcher.js';
 import { MekoCalls, MekoHold } from './mekocalls.js';
 import { ModLinks, type DroppedPrompt } from './modlink.js';
@@ -89,16 +91,26 @@ export function askDetail(question: string): string {
  * a task's stages, with what Explore means while it's there, or what a Review a PR is.
  */
 export function workflowLine(kind: SessionKind, stage: Stage): string {
+  if (kind === 'code-review') {
+    return "This is AgentK's local code review of a task's change, before its PR opens. You don't review the code yourself and you change no file: you run the review's steps as AgentK's prompts list them, each in a fresh subagent, and each step reports to AgentK with AgentK's tools.";
+  }
   if (kind === 'review-pr') {
     return "This is a Review a PR session: the user is reviewing someone else's pull request and you assist them. Don't review it on your own; answer what they ask. Don't push to the PR's branch or post on GitHub unless they ask. The user ends the session from the AgentK UI.";
   }
-  const stages = 'Stages: Explore → Design → Code → PR & Review → Merge & Close; the user moves the session between stages, and approves the design, opening the PR, and merging, from the AgentK UI.';
+  const stages = 'Stages: Explore → Design → Code → Review & PR → Merge & Close; the user moves the session between stages, and approves the design, opening the PR, and merging, from the AgentK UI.';
   if (stage !== 'explore') return stages;
   return `${stages} It's in Explore now: investigate, answer questions, build POCs and run experiments in this worktree, and push experimental branches when useful. AgentK runs no design approval, PR, review or merge until the user moves it on.`;
 }
 
 /** The old session types a create request may still name, and where each starts. */
 const LEGACY_STARTS: Partial<Record<string, StartStage>> = { explore: 'explore', plan: 'design', quick: 'code' };
+
+/** A prompt sent between turns that hasn't started its turn: its text, what its sender does if it's lost, where the transcript stood. */
+interface Unstarted {
+  text: string;
+  lost: () => void;
+  mark: TranscriptMark | null;
+}
 
 /** The PR a new Review a PR session checks out: its repo on GitHub, what GitHub says about it, and the clone's remote it's fetched from. */
 interface ReviewTarget {
@@ -253,6 +265,16 @@ export class SessionManager {
   private awaitingStart = new Set<string>();
   /** The tail of each session's prompt submissions, so two prompts are never pasted at once. */
   private submitting = new Map<string, Promise<void>>();
+  /**
+   * A prompt submitted between turns whose turn hasn't started yet (no UserPromptSubmit), with what
+   * its sender does if Claude goes first: an acked or typed prompt counts as sent, but a Claude that
+   * exits before running it (Claude Code moving the conversation to its background sessions, say)
+   * loses it. Its text and where the transcript stood tell a lost hook from a prompt that never ran
+   * (`notStarted`).
+   */
+  private unstarted = new Map<string, Unstarted>();
+  /** Sessions whose Claude was launched with a prompt it hasn't started yet (its first, or a continue): it isn't back between turns. */
+  private launchPrompt = new Set<string>();
   /** After a failed recovery, when to try again (Infinity: not until the user resumes it). */
   private recoverRetryAt = new Map<string, number>();
   /** Token totals per session, refreshed after each transcript read. */
@@ -333,9 +355,15 @@ export class SessionManager {
       midTurn: this.midTurn(id),
       promptsHeld: this.promptsHeld(id),
       asking: this.core.config.claude.mod ? this.mod.asking(id) : null,
-      mekoCall: (this.core.config.claude.mod && this.mod.callingMeko(id)) || this.hookMeko.active(id) || this.mekoHold.active(id),
+      mekoCall: this.mekoCalling(id),
       approvalQueued: this.core.lifecycle.approvalQueued(id),
+      codeReview: this.core.reviews.summary(id),
     };
+  }
+
+  /** The session's agent is in a Meko tool call, or started one a moment ago (Session.mekoCall). */
+  mekoCalling(id: string): boolean {
+    return (this.core.config.claude.mod && this.mod.callingMeko(id)) || this.hookMeko.active(id) || this.mekoHold.active(id);
   }
 
   /**
@@ -505,6 +533,8 @@ export class SessionManager {
     if (autoRun && (kind !== 'task' || learn || start !== 'code')) {
       throw new HttpError(400, 'Run to merge can only be picked for a task that starts at Code. For one at Design, turn it on when you approve the design.');
     }
+    // The task's own local review settings; a review or a learn session opens no PR to review.
+    const reviewSettings = req.review != null && kind === 'task' && !learn ? readOverrides(req.review) : {};
     const repo = this.core.projects.sessionRepo(p, req.repoPath);
     // A project's repo moved or deleted since it was opened. Checked here because the first git
     // calls below don't notice (hasCommits counts a git error as having commits), so the first to
@@ -606,6 +636,7 @@ export class SessionManager {
     const missed = claimStaged(this.core.paths.pastes, projectId, images, id);
     const moved = images.filter((i) => !missed.includes(i)).map((i) => claimedPath(this.core.paths.pastes, id, i));
     if (moved.length) this.update(id, { start_images: JSON.stringify(moved) });
+    if (!noOverrides(reviewSettings)) this.update(id, { review_json: JSON.stringify(reviewSettings) });
     if (missed.length) {
       // Removed meanwhile (by the daily sweep, the project closing, or another start that took them).
       const what = missed.length === 1 ? "An image you added wasn't" : `${missed.length} of the images you added weren't`;
@@ -623,6 +654,40 @@ export class SessionManager {
         this.relinks.delete(id);
       });
     return { session: this.get(id), done };
+  }
+
+  /**
+   * Starts a task's code-review session (review/runner.ts): a child of the task (`parent_id`) on the
+   * task's harness, in the task's own worktree, which it doesn't own (`worktree_released`), so
+   * archiving it never frees the worktree or touches the branch. `prompt` is its first.
+   */
+  async startReviewSession(task: SessionRow, reviewId: string, prompt: string | null): Promise<SessionRow> {
+    const slug = `${task.slug}-review-${randomBytes(3).toString('hex')}`;
+    const id = `${task.project_id}--${slug}`;
+    const now = Date.now();
+    run(this.db, `INSERT INTO sessions(id, project_id, slug, name, harness, claude_session_id, branch, base_branch, repo_path, branch_reused,
+                    worktree_path, worktree_released, tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode,
+                    meko_agent_id, parent_id, position)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 1, ?, ?, 'running', 'starting', 'code-review', 'reviewing-code', ?, ?, ?, 0, ?, ?, ?)`,
+      id, task.project_id, slug, `Local review of ${task.name}`, task.harness, randomUUID(), task.branch, task.base_branch, task.repo_path,
+      task.worktree_path, paneName(task.project_id, slug), randomBytes(24).toString('base64url'), `Review the change on ${task.branch}`, now, now,
+      sessionAgentId({ id, slug, harness: harnessOf(task.harness) }), task.id, task.position);
+    run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, 'reviewing-code', ?, 'auto')`, id, now);
+    this.event(id, 'created', `Started for review ${reviewId} of ${task.name}`);
+    this.creating.add(id);
+    this.setStartup(id, 'launch', { resumed: false, hasPrompt: !!prompt });
+    try {
+      await this.launch(this.row(id), { resume: false, prompt });
+    } catch (e) {
+      this.startup.delete(id);
+      this.setStatus(id, 'exited', `Launch failed: ${errMsg(e)}`);
+      throw e;
+    } finally {
+      this.creating.delete(id);
+    }
+    this.setStartup(id, 'loading');
+    this.core.changed();
+    return this.row(id);
   }
 
   /**
@@ -948,6 +1013,16 @@ export class SessionManager {
     return claudePath(this.learnedPath(row));
   }
 
+  /** Where Claude writes the PR's title and description before a local review (outside the repo), beside the design. */
+  prDescriptionPath(row: SessionRow): string {
+    return join(this.core.paths.designs, row.id, 'pr-description.md');
+  }
+
+  /** prDescriptionPath as Claude is told it. */
+  prDescriptionFile(row: SessionRow): string {
+    return claudePath(this.prDescriptionPath(row));
+  }
+
   /** Where Claude lists the design's open questions, beside the markdown design. */
   questionsFile(row: SessionRow): string {
     return claudePath(join(this.core.paths.designs, row.id, 'questions.json'));
@@ -1069,7 +1144,7 @@ export class SessionManager {
     const lines = [
       `This ${this.harness(row).caps.label} session is managed by AgentK. Project: ${p?.name ?? row.project_id}. Task: ${row.name}. ${row.repo_path && p && row.repo_path !== p.repo_path ? `Repo: ${row.repo_path}. ` : ''}${row.kind === 'review-pr' && row.pr_repo ? `PR: ${row.pr_repo}#${row.pr_number} (${row.pr_url}). ` : ''}Branch: ${row.branch} (base ${row.base_branch}). ${workflowLine(kindOf(row.kind), row.stage)}`,
     ];
-    if (row.kind !== 'review-pr' && row.branch_reused) {
+    if (row.kind !== 'review-pr' && row.kind !== 'code-review' && row.branch_reused) {
       lines.push(`The branch existed before this session${row.pr_number ? ` and is the branch of PR #${row.pr_number} (${row.pr_url ?? ''})` : ''}: build on its commits rather than starting over.${row.push_remote ? ` ${pushLine(row)}` : ''}`);
     }
     if (dedicated) {
@@ -1183,19 +1258,23 @@ export class SessionManager {
     // A harness with no flag for it gets these lines from its context hook, at every start.
     this.systemLines.set(row.id, systemPrompt);
     const untrusted = !repoConfigTrusted(row);
+    // A code-review session reads its steps' prompts from its review's run folder, and always has
+    // AgentK's MCP server: its steps report through it, whatever `[tools] enabled` says.
+    const review = row.kind === 'code-review' ? this.core.reviews.launchForSession(row) : null;
     const script = writeLauncher(this.core.paths, h.launcher(this.core.paths, this.core.config, {
       row,
       resume: opts.resume,
       prompt: opts.prompt,
       systemPrompt,
-      addDirs: [designDir],
+      addDirs: review ? [designDir, review.runDir] : [designDir],
       modDir,
       planMode: row.stage === 'design' && !!row.plan_mode,
       env: this.env(row),
       unsetEnv: SESSION_ENV_UNSET,
       untrusted,
       // The session tools act on other sessions: not for a PR head whose code isn't trusted (the route refuses it too).
-      tools: !untrusted && toolsReady(this.core.paths, this.core.config.tools.enabled),
+      tools: review ? toolsReady(this.core.paths, true) : !untrusted && toolsReady(this.core.paths, this.core.config.tools.enabled),
+      review,
     }));
     const pane = (await this.core.host.panes()).get(row.tmux_name);
     // Archived (or its project deleted) while it was starting: Claude must not start behind its back.
@@ -1206,6 +1285,8 @@ export class SessionManager {
     // A new Claude process: the last one's mod and measurements are gone with it.
     this.forgetClaude(row.id);
     this.contextFill.delete(row.id);
+    if (opts.prompt) this.launchPrompt.add(row.id);
+    else this.launchPrompt.delete(row.id);
     try {
       await this.core.host.spawn(row.tmux_name, claudePath(row.worktree_path), ['/bin/sh', script]);
     } catch (e) {
@@ -1235,14 +1316,17 @@ export class SessionManager {
   /**
    * Submits a prompt to the session's Claude: through AgentK's mod while it's live and `[claude] mod`
    * is on (Claude takes it when it's next idle), else typed into the TUI. Submissions to one session go one at a time; one
-   * that had to wait is refused if the one before it started a turn.
+   * that had to wait is refused if the one before it started a turn. `lost` runs if Claude goes
+   * (exits, or is relaunched) after a prompt sent between turns counted as sent but before its turn started.
    */
-  submit(id: string, text: string): Promise<void> {
+  submit(id: string, text: string, lost?: () => void): Promise<void> {
     const prev = this.submitting.get(id);
     const next = (prev ?? Promise.resolve()).then(async () => {
       const r = this.row(id);
       if (r.desired !== 'running') throw new HttpError(409, 'This session is archived.');
       if (prev && r.status === 'working') throw new HttpError(409, 'AgentK is working on another prompt. Try again when the turn ends.');
+      // Where the transcript ends before the prompt can reach it.
+      const unstarted: Unstarted = { text, lost: lost ?? (() => undefined), mark: this.harness(r).transcriptMark?.(r) ?? null };
       if (this.modLive(id)) {
         // Mid-turn (answers to a design sent while AgentK works), Claude holds the prompt until the
         // turn ends, and its UserPromptSubmit says when it starts: the status stays as it is, so a
@@ -1254,10 +1338,21 @@ export class SessionManager {
           this.core.changed();
           return;
         }
+        // Before the mod hears the ack's answer, so before the turn's UserPromptSubmit can come.
+        this.unstarted.set(id, unstarted);
       } else {
-        await this.core.host.submit(r.tmux_name, text);
+        // Before the paste: its UserPromptSubmit may come before the session host answers.
+        this.unstarted.set(id, unstarted);
+        try {
+          await this.core.host.submit(r.tmux_name, text);
+        } catch (e) {
+          this.unstarted.delete(id);
+          throw e;
+        }
       }
-      this.setStatus(id, 'working');
+      // Unless its turn started meanwhile (its hooks set the status), or Claude went first and the
+      // prompt was reported lost (the session is exited, not working).
+      if (this.unstarted.get(id) === unstarted) this.setStatus(id, 'working');
     });
     const tail = next.catch(() => undefined);
     this.submitting.set(id, tail);
@@ -1276,7 +1371,8 @@ export class SessionManager {
    */
   guard(token: string, raw: HookPayload): GuardDecision {
     const row = this.byToken(token);
-    if (!row || row.stage !== 'design' || row.plan_mode) return null;
+    const review = row?.kind === 'code-review';
+    if (!row || (!review && (row.stage !== 'design' || row.plan_mode))) return null;
     const h = this.harness(row);
     const p = h.normalize(raw);
     const paths = p && h.editedPaths(p);
@@ -1286,6 +1382,7 @@ export class SessionManager {
     const roots = [row.worktree_path, repo].filter((d): d is string => !!d).flatMap((d) => [d, realpath(d), claudePath(d)]);
     const inRepo = (file: string) => roots.some((d) => file === d || file.startsWith(d + sep));
     if (!paths.some((f) => inRepo(resolve(p.cwd || row.worktree_path, f)))) return null;
+    if (review) return h.deny("This is AgentK's local code review: it reads the change and changes no file. Report what you found with AgentK's review tools.");
     return h.deny(
       `This session is in the Design stage: AgentK blocks changes to the repo until the user approves the design. ` +
       (h.caps.artifacts ? `Publish the design as an Artifact, or write it to ${this.designFile(row)}.` : `Write the design to ${this.designFile(row)}.`),
@@ -1455,6 +1552,32 @@ export class SessionManager {
     this.core.lifecycle.dropApproval(id, ended);
     // The turn a queued Open PR waited for is gone with it.
     this.core.lifecycle.dropQueued(id, ended, 'open-pr');
+    // A prompt it took but never started is lost with it: its sender sends it again later.
+    const lost = this.notStarted(id);
+    this.unstarted.delete(id);
+    lost?.lost();
+  }
+
+  /**
+   * The prompt sent between turns that never started its turn, if any: no UserPromptSubmit or Stop
+   * came for it, and the transcript, read again, has no message for it either (a hook can be lost:
+   * hooks fail open). Null when the harness can't tell from its transcript: the prompt may have run,
+   * and a prompt runs once at most.
+   */
+  private notStarted(id: string): Unstarted | null {
+    const u = this.unstarted.get(id);
+    const row = sessionRow(this.db, id);
+    if (!u?.mark || !row) return null;
+    const started = this.harness(row).promptStarted;
+    return started && !started(row, u.mark, u.text) ? u : null;
+  }
+
+  /**
+   * Claude is up after a launch: unless the launch gave it a prompt to take (its first, a recovery's
+   * continue), it's back between turns, and a PR prompt the last Claude lost goes now (claudeBack).
+   */
+  private back(id: string): void {
+    if (!this.launchPrompt.has(id)) void this.core.lifecycle.claudeBack(id);
   }
 
   /** A measurement from the mod: the context window's fill, and the account's plan limits. */
@@ -1510,6 +1633,8 @@ export class SessionManager {
     if (this.planPending.has(id)) return;
     this.update(id, { interrupted: 0 });
     this.turns.delete(id);
+    // A turn ran, whether or not its UserPromptSubmit reached the server.
+    this.unstarted.delete(id);
     if (how === 'interrupted') this.event(id, 'turn', 'You interrupted the turn');
     // A tool call doesn't outlive its turn.
     this.mod.endAsk(id);
@@ -1575,11 +1700,17 @@ export class SessionManager {
         } else if (row.status === 'starting' || row.status === 'exited' || trustPrompt) {
           this.clearStartup(id);
           this.setStatus(id, 'idle');
+          this.back(id);
+        } else if (row.status === 'recovered') {
+          // A recovery, whose status was set before Claude got here.
+          this.back(id);
         }
         break;
       }
       case 'UserPromptSubmit':
         this.turns.add(id);
+        this.unstarted.delete(id);
+        this.launchPrompt.delete(id);
         // A mod too old to report what it holds (until it reloads): this may be a held prompt starting.
         this.mod.started(id);
         this.clearStartup(id);
@@ -1642,16 +1773,21 @@ export class SessionManager {
         // OpenCode's plugin marks a turn the user interrupted (Claude Code's comes from the mod, /mod/turn).
         await this.endTurn(row, p.interrupted === true ? 'interrupted' : 'stop');
         break;
-      case 'SessionEnd':
+      case 'SessionEnd': {
         this.ingestUsage(id);
         // /clear ends one conversation and starts the next (SessionStart follows); Claude keeps running.
         if (p.reason === 'clear') break;
+        // Working only on a prompt that never started: no turn was cut short.
+        const cut = row.status === 'working' && !this.notStarted(id);
         this.forgetClaude(id, 'Claude exited before taking the prompt', 'Claude exited');
         this.clearStartup(id);
+        // A prompt's sender keeps the session busy until its turn ends, which won't come now.
+        this.busy.delete(id);
         if (this.stopping.has(id)) break;
-        if (row.status === 'working') this.update(id, { interrupted: 1 });
+        if (cut) this.update(id, { interrupted: 1 });
         this.setStatus(id, 'exited', p.reason ? `Claude exited (${String(p.reason)})` : 'Claude exited');
         break;
+      }
     }
     this.core.changed();
   }
@@ -1756,7 +1892,7 @@ export class SessionManager {
         this.startup.delete(row.id);
         this.hookless.delete(row.id);
         this.awaitingStart.delete(row.id);
-        if (row.status === 'working') this.update(row.id, { interrupted: 1 });
+        if (row.status === 'working' && !this.notStarted(row.id)) this.update(row.id, { interrupted: 1 });
         this.planPending.delete(row.id);
         this.busy.delete(row.id);
         // No SessionEnd came (Claude crashed, or its pane was killed; Kiro has no such hook at all).
@@ -1871,6 +2007,9 @@ export class SessionManager {
     });
     this.event(row.id, 'recovered', detail);
     if (parked) this.notifyUser(row.id, 'Needs you', detail);
+    // Claude already up (its SessionStart came before the status above): what the last Claude lost
+    // goes now. Otherwise that SessionStart sends it.
+    if (!this.awaitingStart.has(row.id)) this.back(row.id);
     this.core.log.info(`recovered ${row.id}: ${detail}`);
   }
 
@@ -1901,6 +2040,9 @@ export class SessionManager {
       case 'update-pr': await lc.updatePr(row); break;
       case 'close-review': await this.closeReview(row); break;
       case 'learn': await this.core.learn.start(row, 'manual'); break;
+      case 'review-cancel': await this.core.reviews.cancel(row.id); break;
+      case 'review-retry': await this.core.reviews.retry(row.id); break;
+      case 'review-open-anyway': await this.core.reviews.openAnyway(row.id); break;
       default: throw new HttpError(400, `Unknown action ${String(action)}.`);
     }
     return this.get(id);
@@ -1963,6 +2105,15 @@ export class SessionManager {
     if (req.name !== undefined) sessionName(req.name);
     if (req.toTop !== undefined && typeof req.toTop !== 'boolean') throw new HttpError(400, 'toTop must be true or false.');
     if (req.autoRun !== undefined && typeof req.autoRun !== 'boolean') throw new HttpError(400, 'autoRun must be true or false.');
+    if (req.review !== undefined) {
+      if (!req.review || typeof req.review !== 'object') throw new HttpError(400, 'review must be an object of strategy, rounds and depth.');
+      const r = this.row(id);
+      if (r.desired === 'archived') throw new HttpError(409, "This session is archived, so its review settings can't change.");
+      if (r.kind === 'review-pr' || r.kind === 'code-review') throw new HttpError(409, 'Only a task has local review settings.');
+      const o = readOverrides(req.review);
+      this.update(id, { review_json: noOverrides(o) ? null : JSON.stringify(o) });
+      this.core.changed();
+    }
     if (req.baseBranch !== undefined) await this.setBase(id, req.baseBranch);
     if (req.toTop) this.toTop(id);
     if (req.autoRun !== undefined) await this.core.lifecycle.setAutoRun(this.row(id), req.autoRun);
@@ -2075,6 +2226,8 @@ export class SessionManager {
     row = await this.checkHead(row.id);
     const firstPrompt = resume ? null : this.hasFirstPrompt(row) ? this.prompt(row, this.firstPrompt(row)) : null;
     this.setStatus(row.id, 'starting', 'Resuming');
+    // As at a recovery: the turn a prompt's sender waited for is gone with the last Claude.
+    this.busy.delete(row.id);
     this.startup.delete(row.id);
     this.setStartup(row.id, 'launch', { resumed: resume, hasPrompt: !!firstPrompt });
     await this.launch(row, { resume, prompt: firstPrompt });
@@ -2203,6 +2356,8 @@ export class SessionManager {
   async archive(row: SessionRow, opts: { keepBranch: boolean; force?: boolean; stage?: Stage }): Promise<{ worktreeFreed: boolean; worktree: WorktreeFate }> {
     // A session still starting would bring its worktree back, or start Claude after the kill.
     await this.settle(row.id);
+    // A task's review stops with it, and its review session goes first.
+    if (row.kind !== 'code-review') await this.core.reviews.taskGone(row.id, 'the task was archived');
     row = this.row(row.id);
     this.recall.drop(row.id);
     // Archiving again (a cleanup finishing after the user archived by hand) keeps the first time.
@@ -2216,14 +2371,21 @@ export class SessionManager {
       await this.core.host.kill(row.tmux_name);
       const p = projectRow(this.db, row.project_id);
       const repo = p ? (sessionRepo(this.db, row) ?? p.repo_path) : null;
-      const worktree: WorktreeFate = repo ? await this.freeWorktree(row, repo, !!opts.force) : 'stuck';
+      // A code-review session reads its task's worktree and branch, which stay the task's.
+      const child = row.kind === 'code-review';
+      const worktree: WorktreeFate = child ? 'earlier' : repo ? await this.freeWorktree(row, repo, !!opts.force) : 'stuck';
       const worktreeFreed = FREED.includes(worktree);
-      if (repo && worktreeFreed && !opts.keepBranch) await tryGit(repo, 'branch', '-D', row.branch);
+      if (repo && worktreeFreed && !opts.keepBranch && !child) await tryGit(repo, 'branch', '-D', row.branch);
       // A review's copy of the PR's head (fetched again by any later review of it).
       if (repo && row.kind === 'review-pr' && row.pr_number) await tryGit(repo, 'update-ref', '-d', prRef(row.pr_number));
       rmSync(join(this.core.paths.run, `${row.id}.sh`), { force: true });
       removePastes(this.core.paths.pastes, row.id);
-      removeMekoLog(this.core.paths.designs, row.id);
+      // A review session's Meko call log (its passes' gotcha searches) stays with its task, which
+      // archives it when the review is done, so the Meko calls page keeps it until the task goes.
+      if (!child) {
+        removeMekoLog(this.core.paths.designs, row.id);
+        for (const c of all<{ id: string }>(this.db, `SELECT id FROM sessions WHERE parent_id = ? AND kind = 'code-review'`, row.id)) removeMekoLog(this.core.paths.designs, c.id);
+      }
       this.core.questions.forget(row.id);
       this.core.learn.forget(row.id);
       this.busy.delete(row.id);
@@ -2234,6 +2396,8 @@ export class SessionManager {
       this.diffs.delete(row.id);
       this.forgetClaude(row.id, 'The session was archived');
       this.core.lifecycle.dropQueued(row.id, 'The session was archived');
+      this.core.lifecycle.dropLostPr(row.id, null);
+      this.launchPrompt.delete(row.id);
       this.contextFill.delete(row.id);
       // A kept branch is one that existed before the session (see Discard in action()).
       const kept = `branch ${row.branch} kept (it existed before the session)`;

@@ -1,3 +1,4 @@
+import type { CodeReviewDetail } from '../shared/codereview';
 import type {
   AppState,
   CloseWorkItemsRequest,
@@ -56,6 +57,7 @@ import type {
   PrReviewers,
   RepoInfo,
   ReviewablePrs,
+  LearnScope,
   TaskPrs,
   LinkPlan,
   StartFromLinkRequest,
@@ -174,6 +176,11 @@ export const api = {
   closeProject: (id: string) => request<void>('DELETE', `/api/projects/${enc(id)}`),
   project: (id: string) => get<Project>(`/api/projects/${enc(id)}`),
   branches: (id: string) => get<string[]>(`/api/projects/${enc(id)}/branches`),
+  learnScope: (id: string, q: { months: number; where: string; base: string; repoPath?: string }) => {
+    const qs = new URLSearchParams({ months: String(q.months), where: q.where, base: q.base });
+    if (q.repoPath) qs.set('repoPath', q.repoPath);
+    return get<LearnScope>(`/api/projects/${enc(id)}/learn-scope?${qs}`);
+  },
   attachDatapack: (id: string, b: AttachDatapackRequest) => post<Project>(`/api/projects/${enc(id)}/datapacks`, b),
   setDedicatedDatapack: (id: string, b: SetDedicatedDatapackRequest) => post<Project>(`/api/projects/${enc(id)}/dedicated-datapack`, b),
   detachDatapack: (id: string, dpId: string) =>
@@ -220,6 +227,8 @@ export const api = {
   /** Open PR with the user's instructions (the plain gate uses sessionAction). */
   openPr: (id: string, b: OpenPrRequest) => post<Session>(`/api/sessions/${enc(id)}/actions/open-pr`, b),
   updateSession: (id: string, b: UpdateSessionRequest) => request<Session>('PATCH', `/api/sessions/${enc(id)}`, b),
+  /** A task's latest local review (or a code-review session's own), in full; 404 when it has none. */
+  codeReview: (id: string) => get<CodeReviewDetail>(`/api/sessions/${enc(id)}/code-review`),
   changes: (id: string, commit?: string | null) => get<SessionChanges>(`/api/sessions/${enc(id)}/changes${commit ? `?commit=${enc(commit)}` : ''}`),
   baseBranches: (id: string) => get<string[]>(`/api/sessions/${enc(id)}/base-branches`),
   /** URL of one side of a changed image; `v` busts the cache when the diff is refetched. */

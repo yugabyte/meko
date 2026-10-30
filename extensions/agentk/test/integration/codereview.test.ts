@@ -1,0 +1,387 @@
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// GitHub is mocked (nothing in these tests reaches a PR); git, the session host and the fake claude are real.
+vi.mock('../../src/server/github.js', async (orig) => {
+  const real = await orig<typeof import('../../src/server/github.js')>();
+  return { ...real, findPr: async () => null, viewerLogin: async () => 'me', repoVisibility: async () => 'private' };
+});
+
+const { makeEnv, readJsonl, waitFor } = await import('../helpers.js');
+const { all, run } = await import('../../src/server/db.js');
+const { mekoLogPath } = await import('../../src/server/mekolog.js');
+const { DESCRIBE_INTERRUPTED, DESCRIBE_LOST, REVIEW_LEFT_CODE } = await import('../../src/shared/codereview.js');
+type TestEnv = Awaited<ReturnType<typeof makeEnv>>;
+
+/** Reports for the ledger passes that clear the change: the dependents and claims passes need their ledgers. */
+const LEDGERS = {
+  dependents: { state_ledger: [], summary: 'LGTM', findings: [] },
+  claims: { claims: [], summary: 'LGTM', findings: [] },
+};
+
+describe('local code review before the PR (real session host + git, fake claude running the review steps)', { timeout: 60000 }, () => {
+  let env: TestEnv;
+  beforeEach(async () => {
+    env = await makeEnv({ review: true });
+  });
+  afterEach(async () => {
+    await env.cleanup();
+  });
+
+  const prompts = (claudeSessionId: string) => readJsonl<{ type: string; text: string }>(join(env.fakeDir, `${claudeSessionId}.jsonl`)).filter((e) => e.type === 'user' && typeof e.text === 'string').map((e) => e.text);
+  const fake = (file: string, v: unknown) => writeFileSync(join(env.fakeDir, file), JSON.stringify(v));
+  /** The task's PR prompt, once it has reached Claude (the stage moves to PR just before it's typed). */
+  const prPrompt = (id: string) => waitFor(() => prompts(id).at(-1) ?? '', (p) => p.includes('Open a pull request'), 10000, 'the PR prompt');
+
+  /** A task at Code (or where `req.start` says) whose worktree has a new file with six lines, ready for Open PR. */
+  async function task(req: Record<string, unknown> = {}, datapack: Parameters<TestEnv['core']['projects']['create']>[0]['datapack'] = { mode: 'none' }) {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack });
+    const s = await env.core.sessions.create(p.id, { name: 'Fix the thing', prompt: 'do it', start: 'code', ...req });
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'first turn');
+    const wt = env.core.sessions.row(s.id).worktree_path;
+    mkdirSync(join(wt, 'src'), { recursive: true });
+    writeFileSync(join(wt, 'src', 'a.ts'), ['export function f(n: number) {', '  return n + 1;', '}', 'export const x = f(1);', 'export const y = f(2);', ''].join('\n'));
+    return s;
+  }
+
+  it('reviews the change at Open PR in a child session, then sends the PR prompt with the findings and the me_ak_review line', async () => {
+    const s = await task();
+    fake('review-reports.json', {
+      ...LEDGERS,
+      diff: { summary: 'LGTM', findings: [{ file: 'src/a.ts', line: 2, severity: 'blocker', comment: 'Off by one.', gotchas: [] }] },
+      guide: { summary: 'LGTM', findings: [{ file: 'src/a.ts', line: 4, severity: 'major', comment: 'Breaks the guide.', gotchas: [{ id: 'MG-3', quote: 'Never do this.' }] }] },
+      // Outside the diff: Validate withholds it.
+      history: { summary: 'LGTM', findings: [{ file: 'README.md', line: 1, severity: 'minor', comment: 'Not this change.', gotchas: [] }] },
+    });
+    await env.core.sessions.action(s.id, 'open-pr');
+    // The review holds the PR: the task stays in Code, with its review running.
+    expect(env.core.sessions.get(s.id).stage).toBe('code');
+    const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the review');
+    expect(done.codeReview).toMatchObject({ strategy: 'sagittarius-3.0', state: 'done', counts: { blocker: 1, major: 1, minor: 0 } });
+    const pr = await prPrompt(s.claudeSessionId);
+    expect(pr).toContain('AgentK reviewed this change locally (Sagittarius 3.0) before this PR.');
+    expect(pr).toContain('[1:1] `src/a.ts:2` **blocker**: Off by one.');
+    expect(pr).toContain('`src/a.ts:4` **major** (Meko gotcha MG-3): Breaks the guide.');
+    expect(pr).not.toContain('Not this change.');
+    expect(pr).toContain('me_ak_review:1 blocker,1 major addressed');
+
+    // The review ran in a code-review session on the task's worktree, with read-only subagents.
+    const childId = all<{ id: string }>(env.core.db, 'SELECT id FROM sessions WHERE parent_id = ?', s.id)[0].id;
+    const child = env.core.sessions.row(childId);
+    expect(child).toMatchObject({ kind: 'code-review', parent_id: s.id, stage: 'reviewing-code', worktree_path: env.core.sessions.row(s.id).worktree_path, worktree_released: 1 });
+    const launch = readJsonl<{ args: string[]; env: Record<string, string | undefined> }>(join(env.fakeDir, 'argv.jsonl')).find((a) => a.args.includes('--agents'))!;
+    const argv = launch.args;
+    expect(Object.keys(JSON.parse(argv[argv.indexOf('--agents') + 1]))).toEqual(['agentk-review-large', 'agentk-review-mid', 'agentk-review-small']);
+    // Subagents in the foreground: a backgrounded one ends the turn, the sweep, before it reports.
+    expect(launch.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe('1');
+    expect(argv[argv.indexOf('--disallowedTools') + 1]).toContain('Edit');
+    // Five passes, then a scorer for each of the three candidates.
+    const calls = readJsonl<{ step: string; status: number }>(join(env.fakeDir, 'review-calls.jsonl'));
+    expect(calls.map((c) => c.step)).toEqual(['r1s1:guide', 'r1s1:diff', 'r1s1:dependents', 'r1s1:history', 'r1s1:claims', 'r1c1', 'r1c2', 'r1c3']);
+
+    // The findings panel has every candidate, with why the one outside the diff was dropped.
+    const detail = env.core.reviews.detail(s.id);
+    expect(detail.findings.map((f) => [f.file, f.line, f.kept, f.dropped])).toEqual(
+      expect.arrayContaining([['src/a.ts', 2, true, null], ['src/a.ts', 4, true, null], ['README.md', 1, false, 'file is not changed by this change']]),
+    );
+    // Its datapacks are names, the gotchas one marked: what each holds is for the prompt only.
+    run(env.core.db, 'UPDATE code_reviews SET datapacks_json = ? WHERE task_id = ?', JSON.stringify([{ name: 'adlc/repo/demo-repo/gotchas', id: 'g-id', about: 'Gotchas.', gotchas: true }]), s.id);
+    expect(env.core.reviews.detail(s.id).datapacks).toEqual([{ name: 'adlc/repo/demo-repo/gotchas', id: 'g-id', gotchas: true }]);
+    // Once done, the review session stops (its findings stay with the review); the task's worktree stays.
+    await waitFor(() => env.core.sessions.row(childId), (x) => x.desired === 'archived', 10000, 'the review session to stop');
+    expect(env.core.sessions.get(s.id).codeReview!.sessionId).toBeNull();
+    expect(env.core.sessions.row(s.id).worktree_released).toBe(0);
+
+    // The tab shows the counts until the task says what it did with each finding, then LGTM.
+    expect(done.codeReview!.addressed).toBe(false);
+    const kept = detail.findings.filter((f) => f.kept);
+    env.core.reviews.onTool(env.core.sessions.row(s.id), 'review_outcome', { outcomes: kept.slice(1).map((f) => ({ key: f.key, status: 'fixed', note: 'Done.' })) });
+    expect(env.core.sessions.get(s.id).codeReview!.addressed).toBe(false);
+    env.core.reviews.onTool(env.core.sessions.row(s.id), 'review_outcome', { outcomes: [{ key: kept[0].key, status: 'declined', note: 'On purpose.' }] });
+    expect(env.core.sessions.get(s.id).codeReview).toMatchObject({ addressed: true, counts: { blocker: 1, major: 1, minor: 0 } });
+  });
+
+  it('asks the task for the PR description with its Meko lines first, reviews the change against it, then opens the PR with it', async () => {
+    // A datapack id as Meko gives them: hex, which a PR description's datapack line is told by.
+    const DP = '0f1e2d3c-1111';
+    const s = await task({ review: { strategy: 'sirius-1.0' } }, { mode: 'existing', id: DP, name: 'team/demo' });
+    mkdirSync(env.fakeDir, { recursive: true });
+    writeFileSync(join(env.fakeDir, 'pr-description.md'), `feat(demo): add f\n\nAdds f and calls it twice.\n\ncloud.mekodata.ai://${DP};team/demo\nmeko_conversation_id:conv-1\n`);
+    await env.core.sessions.action(s.id, 'open-pr');
+    const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the review');
+    const file = env.core.sessions.prDescriptionFile(env.core.sessions.row(s.id));
+    const asked = prompts(s.claudeSessionId).find((p) => p.includes(`write the PR's title and description to ${file}`))!;
+    expect(asked).toMatch(/End the PR description with these lines.*cloud\.mekodata\.ai:\/\/0f1e2d3c-1111;team\/demo\s+meko_conversation_id:conv-1$/s);
+    // The passes read it as the PR's title and description, the task it was written for after it.
+    const base = readFileSync(join(env.core.paths.run, 'reviews', done.codeReview!.id, 'r1', 'base.md'), 'utf8');
+    // Its title too, quoted: the change's heading stays the task's own name.
+    expect(base).toContain('# The change: Fix the thing');
+    expect(base).toContain(`> feat(demo): add f\n>\n> Adds f and calls it twice.\n>\n> cloud.mekodata.ai://${DP};team/demo\n> meko_conversation_id:conv-1\n\nThe task it was written for:`);
+    expect(await prPrompt(s.claudeSessionId)).toContain(`Use the title and description you wrote to ${file} for the PR`);
+  });
+
+  it.each([['Open PR', false], ['Retry', true]])('waits on a PR description turn the user interrupted, through a restart, and goes on at %s', async (_how, retry) => {
+    // Through the mod, which reports an interrupted turn (no Stop hook fires for one).
+    mkdirSync(env.fakeDir, { recursive: true });
+    writeFileSync(join(env.fakeDir, 'mod'), '');
+    const s = await task({ review: { strategy: 'sirius-1.0' } });
+    await waitFor(() => env.core.sessions.mod.live(s.id), (l) => l, 10000, 'the mod to poll');
+    writeFileSync(join(env.fakeDir, 'interrupt'), '');
+    await env.core.sessions.action(s.id, 'open-pr');
+    const interrupted = () => all<{ text: string }>(env.core.db, "SELECT text FROM session_events WHERE session_id = ? AND kind = 'turn'", s.id).some((e) => e.text === 'You interrupted the turn');
+    await waitFor(() => interrupted() && env.core.sessions.get(s.id).status === 'idle', (x) => x, 30000, 'the interrupted description turn');
+    expect(env.core.sessions.get(s.id).codeReview).toMatchObject({ state: 'describing', detail: DESCRIBE_INTERRUPTED });
+    rmSync(join(env.fakeDir, 'interrupt'));
+    // A restart leaves it waiting on the user, as an interrupted fix turn does.
+    await env.core.reviews.recover();
+    const id = env.core.sessions.get(s.id).codeReview!.id;
+    await env.core.reviews.settled(id);
+    expect(env.core.sessions.get(s.id).codeReview!.state).toBe('describing');
+    const asks = () => prompts(s.claudeSessionId).filter((p) => p.includes("write the PR's title and description")).length;
+    if (retry) {
+      // Cancelled before round 1 had a description, a Retry asks for it again.
+      await env.core.sessions.action(s.id, 'review-cancel');
+      await env.core.sessions.action(s.id, 'review-retry');
+      await waitFor(asks, (n) => n === 2, 10000, 'the ask again');
+    } else {
+      await env.core.sessions.action(s.id, 'open-pr');
+    }
+    const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the review');
+    expect(done.codeReview).toMatchObject({ round: 1, state: 'done' });
+    if (!retry) expect(asks()).toBe(1);
+  });
+
+  it('asks for the PR description again at Open PR when Claude exited before taking the ask', async () => {
+    mkdirSync(env.fakeDir, { recursive: true });
+    writeFileSync(join(env.fakeDir, 'mod'), '');
+    const s = await task({ review: { strategy: 'sirius-1.0' } });
+    await waitFor(() => env.core.sessions.mod.live(s.id), (l) => l, 10000, 'the mod to poll');
+    writeFileSync(join(env.fakeDir, 'exit-unrun'), "write the PR's title and description");
+    await env.core.sessions.action(s.id, 'open-pr');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'exited' && x.codeReview?.detail === DESCRIBE_LOST, 30000, 'the lost ask');
+    expect(env.core.sessions.get(s.id)).toMatchObject({ busy: false, codeReview: { state: 'describing' } });
+    await env.core.sessions.action(s.id, 'resume');
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'Claude back');
+    await env.core.sessions.action(s.id, 'open-pr');
+    const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the review');
+    expect(done.codeReview).toMatchObject({ round: 1, state: 'done' });
+    expect(prompts(s.claudeSessionId).filter((p) => p.includes("write the PR's title and description"))).toHaveLength(1);
+  });
+
+  it('opens the PR with me_ak_review:LGTM when Sirius 1.0 finds nothing, set for the session alone', async () => {
+    const s = await task({ review: { strategy: 'sirius-1.0' } });
+    expect(env.core.sessions.get(s.id).review).toEqual({ strategy: 'sirius-1.0' });
+    await env.core.sessions.action(s.id, 'open-pr');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the review');
+    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM');
+    expect(readJsonl<{ step: string }>(join(env.fakeDir, 'review-calls.jsonl')).map((c) => c.step)).toEqual(['r1s1:all']);
+  });
+
+  it('asks the task to fix a round\'s findings, reviews again with what it did, and adds both rounds up in the line', async () => {
+    const s = await task({ review: { rounds: 1 } });
+    fake('review-reports.json', { ...LEDGERS, diff: { summary: 'LGTM', findings: [{ file: 'src/a.ts', line: 2, severity: 'blocker', comment: 'Off by one.', gotchas: [] }] } });
+    await env.core.sessions.action(s.id, 'open-pr');
+    // Round 1's findings go to the task as a fix prompt; the PR waits.
+    await waitFor(() => prompts(s.claudeSessionId).at(-1)!, (p) => p.includes('round 1'), 30000, 'the fix prompt');
+    const fix = prompts(s.claudeSessionId).at(-1)!;
+    expect(fix).toContain("Don't commit, push or open the PR yet");
+    expect(fix).toContain('[1:1] `src/a.ts:2` **blocker**: Off by one.');
+    // Round 2 finds a minor; its prompt names round 1's finding.
+    fake('review-reports.json', { ...LEDGERS, diff: { summary: 'LGTM', findings: [{ file: 'src/a.ts', line: 5, severity: 'minor', comment: 'Name it better.', gotchas: [] }] } });
+    const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after round 2');
+    expect(done.codeReview).toMatchObject({ round: 2, state: 'done', counts: { blocker: 1, major: 0, minor: 1 } });
+    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:1 blocker,1 minor addressed');
+    // Round 2 running isn't round 1's outcome: the counts stay until the task reports both rounds'.
+    const outcome = (key: string) => env.core.reviews.onTool(env.core.sessions.row(s.id), 'review_outcome', { outcomes: [{ key, status: 'fixed', note: 'Done.' }] });
+    outcome('2:1');
+    expect(env.core.sessions.get(s.id).codeReview!.addressed).toBe(false);
+    outcome('1:1');
+    expect(env.core.sessions.get(s.id).codeReview!.addressed).toBe(true);
+    const round2 = readFileSync(join(env.core.paths.run, 'reviews', done.codeReview!.id, 'r2', 'base.md'), 'utf8');
+    expect(round2).toContain('Off by one.');
+  });
+
+  it('holds the PR when no pass reports, until Open anyway sends it without a line', async () => {
+    const s = await task({ review: { strategy: 'sirius-1.0' } });
+    fake('review-skip', ['r1s1:all']);
+    await env.core.sessions.action(s.id, 'open-pr');
+    const failed = await waitFor(() => env.core.sessions.get(s.id), (x) => x.codeReview?.state === 'failed', 30000, 'the review to fail');
+    expect(failed.stage).toBe('code');
+    expect(failed.codeReview!.detail).toBe('no review pass reported');
+    await expect(env.core.sessions.action(s.id, 'open-pr')).rejects.toThrow(/Retry it, or open the PR anyway/);
+    // A move to Review & PR is refused alike: it would open the PR past the stopped review. So it is
+    // with the review turned off since, as Open PR is.
+    await expect(env.core.sessions.move(s.id, { stage: 'review' })).rejects.toThrow(/Retry it, or open the PR anyway/);
+    env.core.projects.update(s.projectId, { settings: { codeReview: { strategy: 'off' } } });
+    await expect(env.core.sessions.move(s.id, { stage: 'review' })).rejects.toThrow(/Retry it, or open the PR anyway/);
+    expect(env.core.sessions.get(s.id).stage).toBe('code');
+    await env.core.sessions.action(s.id, 'review-open-anyway');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 10000, 'the PR prompt');
+    expect(await prPrompt(s.claudeSessionId)).not.toContain('me_ak_review');
+  });
+
+  it('runs the review for Run to merge\'s Open PR too, and the PR goes when it\'s done', async () => {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'none' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Fix the thing', prompt: 'do it', start: 'code', autoRun: true, review: { strategy: 'sirius-1.0' } });
+    const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the review');
+    expect(done.codeReview).toMatchObject({ strategy: 'sirius-1.0', state: 'done' });
+    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM');
+  });
+
+  it.each([['through the mod', true], ['typed', false]])('sends the PR prompt again once Claude is back, when Claude exits before taking it (%s)', async (_how, mod) => {
+    if (mod) {
+      mkdirSync(env.fakeDir, { recursive: true });
+      writeFileSync(join(env.fakeDir, 'mod'), '');
+    }
+    const s = await task({ review: { strategy: 'sirius-1.0' } });
+    // Like Claude Code moving the conversation to its background sessions as the PR prompt comes.
+    writeFileSync(join(env.fakeDir, 'exit-unrun'), 'Open a pull request');
+    // Typed: Claude's SessionEnd lands before the session host answers the paste.
+    let answered: Promise<void> = Promise.resolve();
+    if (!mod) {
+      const submit = env.core.host.submit.bind(env.core.host);
+      vi.spyOn(env.core.host, 'submit').mockImplementation(async (name, text) => {
+        if (!text.includes('Open a pull request')) return submit(name, text);
+        vi.mocked(env.core.host.submit).mockRestore();
+        answered = (async () => {
+          await submit(name, text);
+          await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'exited', 10000, 'SessionEnd');
+        })();
+        return answered;
+      });
+    }
+    await env.core.sessions.action(s.id, 'open-pr');
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'exited', 30000, 'Claude to exit with the PR prompt');
+    // Typed, the send finishes after the exit: it mustn't count the prompt as sent, or the session as working.
+    await answered;
+    // Past the send's end too (sendReviewedPr runs in the session's serial queue).
+    await (env.core.lifecycle as unknown as { serial(id: string, f: () => Promise<void>): Promise<void> }).serial(s.id, async () => undefined);
+    await new Promise((r) => setImmediate(r));
+    const lost = env.core.sessions.get(s.id);
+    if (mod) expect(readJsonl<{ text: string }>(join(env.fakeDir, 'mod-prompts.jsonl')).some((p) => p.text.includes('Open a pull request'))).toBe(true);
+    // Back where it was, not busy, and no turn was cut short: the review's PR counts as not sent.
+    expect(lost).toMatchObject({ status: 'exited', stage: 'code', busy: false, codeReview: { state: 'done' } });
+    expect(env.core.sessions.row(s.id).interrupted).toBe(0);
+    const finished = () => all<{ finished_at: number | null }>(env.core.db, 'SELECT finished_at FROM code_reviews WHERE task_id = ?', s.id)[0].finished_at;
+    expect(finished()).toBeNull();
+    expect(all<{ text: string }>(env.core.db, "SELECT text FROM session_events WHERE session_id = ? AND kind = 'pr'", s.id).map((e) => e.text))
+      .toEqual(['Claude exited before taking the PR prompt; it goes again once Claude is back']);
+    await env.core.sessions.action(s.id, 'resume');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 10000, 'the PR prompt again');
+    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM');
+    expect(prompts(s.claudeSessionId).filter((p) => p.includes('Open a pull request'))).toHaveLength(1);
+    expect(finished()).not.toBeNull();
+  });
+
+  it('reviews the change in Code when the session is moved to Review & PR by hand, then sends the PR prompt with the move\'s instructions', async () => {
+    const s = await task({ start: 'explore', review: { strategy: 'sirius-1.0' } });
+    await env.core.sessions.move(s.id, { stage: 'review', instructions: 'Mention the demo.' });
+    // The review holds the PR, in Code, as for Open PR.
+    expect(env.core.sessions.get(s.id).stage).toBe('code');
+    const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the review');
+    expect(done.codeReview).toMatchObject({ strategy: 'sirius-1.0', state: 'done' });
+    const pr = await prPrompt(s.claudeSessionId);
+    // Claude's system prompt still says Explore (no PR): the moved line leads the review's first prompt to it, the ask for the PR description.
+    const asked = prompts(s.claudeSessionId).find((p) => p.includes("write the PR's title and description"))!;
+    expect(asked.startsWith('AgentK moved this session to the Code stage.')).toBe(true);
+    expect(pr.startsWith('AgentK moved this session')).toBe(false);
+    expect(pr).toContain('me_ak_review:LGTM');
+    expect(pr).toContain('Mention the demo.');
+    expect(all<{ stage: string }>(env.core.db, 'SELECT stage FROM session_stages WHERE session_id = ? ORDER BY rowid', s.id).map((r) => r.stage)).toEqual(['explore', 'code', 'pr']);
+  });
+
+  it('starts a new review on a move to Review & PR from outside Code, past one that failed in Code', async () => {
+    const s = await task({ review: { strategy: 'sirius-1.0' } });
+    fake('review-skip', ['r1s1:all']);
+    await env.core.sessions.action(s.id, 'open-pr');
+    const failed = await waitFor(() => env.core.sessions.get(s.id), (x) => x.codeReview?.state === 'failed', 30000, 'the review to fail');
+    // Its Retry and Open anyway are Code's: leaving Code lets it go.
+    await env.core.sessions.move(s.id, { stage: 'explore', prompt: false });
+    expect(env.core.sessions.get(s.id).codeReview).toMatchObject({ state: 'cancelled', detail: REVIEW_LEFT_CODE });
+    fake('review-skip', []);
+    await env.core.sessions.move(s.id, { stage: 'review' });
+    const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the new review');
+    expect(done.codeReview).toMatchObject({ state: 'done' });
+    expect(done.codeReview!.id).not.toBe(failed.codeReview!.id);
+    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM');
+  });
+
+  describe('a fix turn the user interrupted', () => {
+    /** Round 1 finds a blocker whose fix turn is interrupted (the fake interrupts a prompt saying INTERRUPT): the review waits for fixes. */
+    async function interruptedFix() {
+      // Through the mod, which reports an interrupted turn (no Stop hook fires for one).
+      mkdirSync(env.fakeDir, { recursive: true });
+      writeFileSync(join(env.fakeDir, 'mod'), '');
+      const s = await task({ review: { rounds: 1 } });
+      await waitFor(() => env.core.sessions.mod.live(s.id), (l) => l, 10000, 'the mod to poll');
+      fake('review-reports.json', { ...LEDGERS, diff: { summary: 'LGTM', findings: [{ file: 'src/a.ts', line: 2, severity: 'blocker', comment: 'Off by one. INTERRUPT', gotchas: [] }] } });
+      await env.core.sessions.action(s.id, 'open-pr');
+      const interrupted = () => all<{ text: string }>(env.core.db, "SELECT text FROM session_events WHERE session_id = ? AND kind = 'turn'", s.id).some((e) => e.text === 'You interrupted the turn');
+      await waitFor(() => interrupted() && env.core.sessions.get(s.id).status === 'idle', (x) => x, 30000, 'the interrupted fix turn');
+      expect(env.core.sessions.get(s.id).codeReview!.state).toBe('fixing');
+      fake('review-reports.json', LEDGERS);
+      return s;
+    }
+
+    it('goes on with the next round at Open PR', async () => {
+      const s = await interruptedFix();
+      await env.core.sessions.action(s.id, 'open-pr');
+      const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after round 2');
+      expect(done.codeReview).toMatchObject({ round: 2, state: 'done' });
+    });
+
+    it('is cancelled by a move out of Code, and a move back to Review & PR starts a new review', async () => {
+      const s = await interruptedFix();
+      const first = env.core.sessions.get(s.id).codeReview!.id;
+      await env.core.sessions.move(s.id, { stage: 'explore', prompt: false });
+      expect(env.core.sessions.get(s.id).codeReview).toMatchObject({ state: 'cancelled', detail: REVIEW_LEFT_CODE });
+      await env.core.sessions.move(s.id, { stage: 'review' });
+      const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the new review');
+      expect(done.codeReview).toMatchObject({ round: 1, state: 'done' });
+      expect(done.codeReview!.id).not.toBe(first);
+    });
+  });
+
+  it('skips the review when the project turns it off', async () => {
+    const s = await task();
+    env.core.projects.update(s.projectId, { settings: { codeReview: { strategy: 'off' } } });
+    await env.core.sessions.action(s.id, 'open-pr');
+    expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'pr', codeReview: null });
+  });
+
+  it('says the review waits on you while its session asks in its terminal, and only while its steps run', async () => {
+    const s = await task({ review: { strategy: 'sirius-1.0' } });
+    fake('review-skip', ['r1s1:all']);
+    await env.core.sessions.action(s.id, 'open-pr');
+    const r = await waitFor(() => env.core.sessions.get(s.id), (x) => x.codeReview?.state === 'failed', 30000, 'the review to fail');
+    const childId = r.codeReview!.sessionId!;
+    run(env.core.db, `UPDATE sessions SET status = 'needs_input' WHERE id = ?`, childId);
+    expect(env.core.sessions.get(s.id).codeReview!.waiting).toBe(false);
+    run(env.core.db, `UPDATE code_reviews SET state = 'fixing' WHERE id = ?`, r.codeReview!.id);
+    expect(env.core.sessions.get(s.id).codeReview!.waiting).toBe(false);
+    run(env.core.db, `UPDATE code_reviews SET state = 'sweeping' WHERE id = ?`, r.codeReview!.id);
+    expect(env.core.sessions.get(s.id).codeReview!.waiting).toBe(true);
+    run(env.core.db, `UPDATE sessions SET status = 'working' WHERE id = ?`, childId);
+    expect(env.core.sessions.get(s.id).codeReview!.waiting).toBe(false);
+  });
+
+  it('archives the review session with its task, and leaves the task\'s worktree and branch alone', async () => {
+    const s = await task({ review: { strategy: 'sirius-1.0' } });
+    fake('review-skip', ['r1s1:all']);
+    await env.core.sessions.action(s.id, 'open-pr');
+    const r = await waitFor(() => env.core.sessions.get(s.id), (x) => x.codeReview?.state === 'failed', 30000, 'the review to fail');
+    const childId = all<{ id: string }>(env.core.db, 'SELECT id FROM sessions WHERE parent_id = ?', s.id)[0].id;
+    const log = mekoLogPath(env.core.paths.designs, childId);
+    mkdirSync(dirname(log), { recursive: true });
+    writeFileSync(log, '');
+    // Archiving the review session alone keeps the task's worktree, and its Meko call log for the task's life.
+    await env.core.sessions.archive(env.core.sessions.row(childId), { keepBranch: false });
+    expect(env.core.sessions.row(s.id).worktree_released).toBe(0);
+    expect(r.codeReview!.sessionId).toBe(childId);
+    expect(env.core.sessions.get(s.id).codeReview!.sessionId).toBeNull();
+    expect(existsSync(log)).toBe(true);
+    await env.core.sessions.archive(env.core.sessions.row(s.id), { keepBranch: true });
+    expect(existsSync(log)).toBe(false);
+  });
+});

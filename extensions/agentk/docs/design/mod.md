@@ -81,8 +81,25 @@ paste, then Enter). A prompt is never sent both ways:
   and the caller keeps the prompt queued; a late ack gets 410, so the mod never runs it;
 - a relaunch, `SessionEnd`, archive, project delete or stop resets the link and fails what was on
   its way, and those prompts' acks get 410 too;
-- the one gap left is on the other side: if the 204 answering an ack never reaches the mod, the
-  prompt counts as sent but doesn't run. That costs a prompt, never a duplicate;
+- one gap is on the other side: if the 204 answering an ack never reaches the mod, the prompt
+  counts as sent but doesn't run. That costs a prompt, never a duplicate;
+- a prompt sent between turns (through the mod or typed) counts as sent, but stays *unstarted*
+  until its `UserPromptSubmit` or the turn's `Stop`. If Claude goes first (`SessionEnd`, a dead
+  pane, a relaunch), a hook may still just have been lost (hooks fail open), so the harness reads
+  its transcript from where it ended when the prompt went (`transcriptMark`, `promptStarted`: a
+  user message with the prompt's first line). Only when that shows no turn either is the prompt
+  lost, and `submit()`'s `lost` callback tells its sender; a harness that can't tell counts it as
+  started, so a prompt runs once at most. Only the PR prompt acts on it (`prLost` in
+  `lifecycle.ts`): the session goes back to where it was, a local review's own PR prompt counts as
+  not sent, and the prompt goes again once Claude is back with no prompt of its own (`claudeBack`:
+  a Resume or a recovery whose launch had none), or is dropped (logged) when anything comes first
+  (see [Queued gates](lifecycle.md#queued-gates)). A send whose prompt is reported lost while it's
+  still being typed neither marks the session working nor counts a review's PR as sent. The resend
+  is kept in memory; after a server restart, Open PR (or a move to Review & PR) sends the prompt.
+  The case seen was Claude Code moving the conversation into its
+  background sessions (a TUI that exits with background tasks running: a `continued-in` line in
+  the transcript) just as the PR prompt arrived. Sessions launch with
+  `CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF=1` against that;
 - a `dropped` ack comes after the send resolved, so the caller already counts the prompt as sent.
   The session goes to **Needs you**, naming the prompt (its first line) and the plugin's reason.
   When Claude's prompt box was empty, the mod put the prompt's text there, and the detail says to

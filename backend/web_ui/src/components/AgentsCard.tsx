@@ -63,7 +63,7 @@ export function AgentsCard() {
       {list.error && <ErrorNote error={list.error} />}
       {data && data.agents.length === 0 && (
         <p className="text-sm text-muted-foreground">
-          No agents found on this computer: Meko works with Claude Code, Codex, Kiro CLI and OpenCode
+          No agents found on this computer: Meko works with Claude Code, Codex, Kiro CLI, OpenCode and Cursor
         </p>
       )}
       {data && data.agents.length > 0 && (

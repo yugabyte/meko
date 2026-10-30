@@ -241,10 +241,10 @@ Kiro isn't available.
 - **Where it shows.** The session footer and tab tooltip show the session's total and output
   tokens. The rail tooltip shows the project total. The project home has a **Token usage**
   section: headline numbers with **Est. cost**, a 14-day chart with a table view, the Meko section,
-  and breakdowns by session (the most recently used first, with a **Meko** column, found / lookups,
+  the Code Reviews section, and breakdowns by session (the most recently used first, with a **Meko** column, found / lookups,
   when any session called Meko) and by model. **Usage** in the rail (and the command palette) opens `/usage`: totals with Est.
-  cost, merged PRs and commits pushed straight to a base branch, a 14-day chart, the Meko section
-  for every project, and breakdowns by project (current ones first, then deleted ones, which keep
+  cost, merged PRs and commits pushed straight to a base branch, a 14-day chart, the Meko and Code
+  Reviews sections for every project, and breakdowns by project (current ones first, then deleted ones, which keep
   their sessions and usage, each group the most recently used first; each row shows its repo folder
   and when it was last active, and has **Cost**, **Meko** and **Est. saved** columns, which a phone
   leaves out) and by model. Every column header of the Usage page's tables, and of the project
@@ -270,6 +270,20 @@ Kiro isn't available.
   the tiles says how many questions Meko couldn't answer, with the split (`gapsLine` in
   `src/web/util.ts`), and links to [What Meko doesn't know](recall-and-learn.md#what-meko-doesnt-know);
   it's left out while none are open.
+- **Code reviews** ([the local code review](code-review.md)) show on both pages once one has run.
+  The 14-day chart stacks each day's tokens that review sessions (`kind = 'code-review'`) spent at
+  the bottom of its bar (`DailyUsage.reviewTokens`, its own color, `--chart-review`), with a legend
+  (**Other work**, **Code reviews**), a **Code reviews** row in the day's tooltip and a **Code
+  reviews** column in the table view, all only once one of the 14 days has some. Under the Meko
+  section, the **Code Reviews** section (`CodeReviewUsageSection`, from `codeReviews` on
+  `ProjectUsage` and `UsageOverview`, built by `reviewUsage()` in `src/server/usage.ts`) has tiles
+  for **Reviews** (`code_reviews` rows, with the rounds they ran and the failed, cancelled and
+  running ones under it), **Issues found** (kept findings, every round's, by severity), **Fixed**
+  (and declined, as the task reported them) and **PRs opened** (reviews whose PR prompt went, Open
+  anyway included; the LGTM ones under it), plus **Kiro credits** when the review sessions billed
+  some. It shows neither the candidates the passes raised nor the review sessions' cost; the usage
+  report still sends both ([Usage stats](usage-stats.md), `codeReview`). The task's own turns fixing the findings
+  run in the task's session, so they count as the task's, not the review's.
 - **What's counted.** Four numbers, kept separate: uncached input, cache writes, cache reads and
   output. Cache reads dominate long sessions, so the headline total is shown next to output. The
   cost is an estimate at API list prices, not a bill.

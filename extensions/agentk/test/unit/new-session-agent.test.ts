@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HARNESS_CAPS } from '../../src/shared/harnesses.js';
 import type { CreateSessionRequest, HarnessMekoState, HarnessStatus, MekoStatus, Project, Settings } from '../../src/shared/types.js';
 import { NewSessionDialog } from '../../src/web/components/NewSessionDialog.js';
-import { AgentSettings, HarnessBar, MekoLinks } from '../../src/web/components/SettingsDialog.js';
+import { AgentSettings, CodeReviewSettings, HarnessBar, MekoLinks } from '../../src/web/components/SettingsDialog.js';
 import { connectToMeko, setUpWithMeko } from '../../src/web/mekoagents.js';
 import { defaultAgentChoice } from '../../src/web/util.js';
 
@@ -217,6 +217,17 @@ describe('Settings › General', () => {
       .toEqual(['set-meko-cloud /settings/meko-cloud', 'set-meko-account /account']);
     // The ⓘ's text opens under the setting, after its status line.
     expect(html).toMatch(/<span class="hint">AgentK uses the Meko on this computer\.<\/span><p id="set-meko-info" class="info-panel" hidden="">Meko opens AgentK on this computer without a sign-in\./);
+  });
+});
+
+describe('Settings › Code review', () => {
+  it('holds the global review settings, each showing its saved value', () => {
+    const s = { codeReviewStrategy: 'sirius-1.0', codeReviewRounds: 2, codeReviewDepth: 3 } as Settings;
+    const html = renderToStaticMarkup(createElement(CodeReviewSettings, { s, change: () => undefined }));
+    const selected = (id: string) => html.match(new RegExp(`<select id="${id}"[\\s\\S]*?<option[^>]*selected=""[^>]*>([^<]+)<`))?.[1];
+    expect([selected('set-review-strategy'), selected('set-review-rounds'), selected('set-review-depth')]).toEqual(['Sirius 1.0', '2', '3']);
+    // No "Default (…)" choice: these are the defaults.
+    expect(html).not.toContain('Default');
   });
 });
 

@@ -14,13 +14,14 @@ import { paneName } from '../../src/server/hostclient.js';
 import { tempDir } from '../helpers.js';
 
 describe('the hooks settings file', () => {
-  it('allows editing designs, publishing Artifacts, reading pasted images and listing sessions with the session tools, with Edit() rules only for edits', () => {
+  it('allows editing designs, publishing Artifacts, reading pasted images, listing sessions and reporting local review steps with the session tools, with Edit() rules only for edits', () => {
     const paths = getPaths(join(tempDir('akl-hooks-'), 'ak'));
     writeHookFiles(paths);
     const allow: string[] = JSON.parse(readFileSync(hooksSettingsPath(paths), 'utf8')).permissions.allow;
     // Claude Code ignores Write() rules and warns about them at every session start; Edit() covers Write.
-    // The session tools that change something ask first.
-    expect(allow).toEqual([`Edit(/${paths.designs}/**)`, 'Artifact', `Read(/${paths.pastes}/**)`, 'mcp__agentk_sessions__list']);
+    // The session tools that change something ask first; a local review's reports only report.
+    expect(allow).toEqual([`Edit(/${paths.designs}/**)`, 'Artifact', `Read(/${paths.pastes}/**)`, 'mcp__agentk_sessions__list',
+      'mcp__agentk_sessions__review_report', 'mcp__agentk_sessions__review_score', 'mcp__agentk_sessions__review_outcome']);
   });
 
   it('turns off the plugins it is given, and leaves plugins alone otherwise', () => {
@@ -133,6 +134,18 @@ for v in "$PWD" "\${PROFILE_RAN-unset}" "\${MEKO_AGENT_ID-unset}" "\${MEKO_CHECK
     expect(env).toEqual([s.worktree, 'yes', 'claude_code:demo', 'unset', 'unset', 'unset', 'unset', s.env.AK_TRICKY]);
     // ~/.local/bin is where the installer puts Claude Code and gh, even when the profile leaves it out.
     expect(readFileSync(out + '.path', 'utf8').split(':')).toContain(join(home, '.local', 'bin'));
+  });
+
+  it("gives a code-review session its review subagents, on their models or the session's own, and takes its writes away", () => {
+    const { args } = run(spec({
+      agents: [{ name: 'agentk-review-large', description: 'A step.', prompt: 'Do the step.', model: 'opus' }, { name: 'agentk-review-mid', description: 'A step.', prompt: 'Do the step.', model: '' }],
+      disallowedTools: ['Bash', 'Edit'],
+    }));
+    expect(JSON.parse(args[args.indexOf('--agents') + 1])).toEqual({
+      'agentk-review-large': { description: 'A step.', prompt: 'Do the step.', model: 'opus' },
+      'agentk-review-mid': { description: 'A step.', prompt: 'Do the step.' },
+    });
+    expect(args[args.indexOf('--disallowedTools') + 1]).toBe('Bash Edit');
   });
 
   it('keeps a variable it sets even when it is also listed to unset', () => {

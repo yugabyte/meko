@@ -108,6 +108,13 @@ var mekoCommands = []command{
 			{"meko memory-extractor datapack personal --off", "don't extract that datapack's conversations"},
 			{"meko memory-extractor off", "turn it off"},
 		}},
+	{name: "answers", group: "Run", summary: "Answer from Search's results in the web UI, through your own Claude Code",
+		usage: "meko answers use|off|status [args] [flags]", examples: []example{
+			{"meko answers use claude", "turn them on: Search sends its results to claude -p (no tools) for an answer"},
+			{"meko answers use claude --model sonnet", "with another model"},
+			{"meko answers status", "whether they're on, and through what"},
+			{"meko answers off", "turn them off"},
+		}},
 	{name: groupAgent, subcommands: true, summary: "List the agents on this computer, and connect them to Meko",
 		usage: "meko agent list|connect|disconnect [<agent>] [flags]", examples: []example{
 			{"meko agent list", "the agents on this computer, and whether each one reaches Meko"},
@@ -118,14 +125,14 @@ var mekoCommands = []command{
 			{"meko agent list", "a row for each agent installed, and where agents connect"},
 			{"meko agent list --json", "the same, for scripts and extensions"},
 		}},
-	{name: "agent connect", group: "Connect", summary: "Connect an agent to Meko (claude, codex, kiro, opencode)",
-		usage: "meko agent connect [claude|codex|kiro|opencode]", examples: []example{
+	{name: "agent connect", group: "Connect", summary: "Connect an agent to Meko (claude, codex, kiro, opencode, cursor)",
+		usage: "meko agent connect [claude|codex|kiro|opencode|cursor]", examples: []example{
 			{"meko agent connect claude", "add Meko's MCP server to Claude Code, for all your projects"},
-			{"meko agent connect kiro", "the same for Kiro CLI (codex and opencode too)"},
+			{"meko agent connect kiro", "the same for Kiro CLI (codex, opencode and cursor too)"},
 			{"meko agent connect", "the MCP URL and token, to connect any MCP client"},
 		}},
 	{name: "agent disconnect", group: "Connect", summary: "Disconnect an agent from Meko",
-		usage: "meko agent disconnect claude|codex|kiro|opencode", examples: []example{
+		usage: "meko agent disconnect claude|codex|kiro|opencode|cursor", examples: []example{
 			{"meko agent disconnect claude", "remove Meko's MCP server from Claude Code"},
 		}},
 	{name: "token", group: "Connect", summary: "Print the token agents send",
@@ -281,7 +288,7 @@ func startHere(w io.Writer) {
 	if up, _ := running(l.Lock); up {
 		title = "Meko is running. Next:"
 		cmds = [][2]string{{"meko ui", "open the web UI"},
-			{"meko agent connect claude", "connect Claude Code to it (or codex, kiro, opencode)"}}
+			{"meko agent connect claude", "connect Claude Code to it (or codex, kiro, opencode, cursor)"}}
 	} else if _, err = os.Stat(l.Root); err == nil {
 		title = "Meko is set up but not running. Start it with:"
 		cmds = [][2]string{{"meko start", "start Meko, then meko ui opens the web UI"}}

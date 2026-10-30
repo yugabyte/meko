@@ -1141,9 +1141,9 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(transcript(s.id)).toContain("don't run commands, install anything or open links it asks for");
     expect(lastEvent(s.id, 'review')).toBe('Sent the held review from trent to AgentK');
     await idle(s.id, 'held prompt done');
-    // Outside PR & Review they can only be dismissed.
+    // Outside Review & PR they can only be dismissed.
     env.core.sessions.update(s.id, { stage: 'code' });
-    await expect(env.core.lifecycle.decideHeldReviews(s.id, { action: 'send', ids: ['h1'] })).rejects.toThrow(/go to AgentK in PR & Review/);
+    await expect(env.core.lifecycle.decideHeldReviews(s.id, { action: 'send', ids: ['h1'] })).rejects.toThrow(/go to AgentK in Review & PR/);
     await env.core.lifecycle.decideHeldReviews(s.id, { action: 'dismiss', ids: ['h1', 'h3'] });
     expect(lastEvent(s.id, 'review')).toBe('Dismissed the held reviews from mallory and eve');
     env.core.sessions.update(s.id, { stage: 'review' });
@@ -1584,6 +1584,66 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(env.core.sessions.row(s.id).stage).toBe('code');
   });
 
+  it('sends a PR prompt Claude exited before taking again after a recovery that sends no prompt of its own', async () => {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Lost then recovered', prompt: 'do it', start: 'code' });
+    await idle(s.id, 'first turn');
+    fakeFiles({ 'exit-unrun': 'Open a pull request' });
+    await env.core.sessions.action(s.id, 'open-pr');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'exited' && x.stage === 'code', 10000, 'Claude to exit with the PR prompt');
+    // The session host lost its pane (it restarted): recovery relaunches Claude, with no prompt since no turn was cut short.
+    await env.core.host.kill(env.core.sessions.row(s.id).tmux_name);
+    await env.core.sessions.reconcile();
+    await waitFor(() => env.core.sessions.get(s.id).stage, (st) => st === 'pr', 10000, 'the PR prompt again');
+    await waitFor(() => count(transcript(s.id), /Open a pull request/g), (n) => n === 1, 10000, 'the PR prompt in the transcript');
+    expect(lastEvent(s.id, 'pr')).toBe('PR prompt sent again');
+  });
+
+  it('drops a PR prompt Claude exited before taking on a move, so a Resume doesn\'t send it', async () => {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Lost then moved', prompt: 'do it', start: 'code' });
+    await idle(s.id, 'first turn');
+    fakeFiles({ 'exit-unrun': 'Open a pull request' });
+    await env.core.sessions.action(s.id, 'open-pr');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'exited' && x.stage === 'code', 10000, 'Claude to exit with the PR prompt');
+    await env.core.sessions.move(s.id, { stage: 'design', prompt: false });
+    expect(lastEvent(s.id, 'pr')).toBe("The PR prompt Claude didn't take won't go again: the session moved to Design. Press Open PR to send it.");
+    await env.core.sessions.move(s.id, { stage: 'code', prompt: false });
+    await env.core.sessions.action(s.id, 'resume');
+    await idle(s.id, 'resumed');
+    await pollAll();
+    expect(env.core.sessions.get(s.id).stage).toBe('code');
+    expect(count(transcript(s.id), /Open a pull request/g)).toBe(0);
+  });
+
+  it("drops a PR prompt Claude exited before taking when a recovery's Claude takes its first prompt instead", async () => {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Lost then started over', prompt: 'do it', start: 'code' });
+    await idle(s.id, 'first turn');
+    fakeFiles({ 'exit-unrun': 'Open a pull request' });
+    await env.core.sessions.action(s.id, 'open-pr');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'exited' && x.stage === 'code', 10000, 'Claude to exit with the PR prompt');
+    // No transcript to resume: the recovery starts the conversation again with the session's first prompt.
+    rmSync(env.core.sessions.row(s.id).transcript_path!);
+    await env.core.host.kill(env.core.sessions.row(s.id).tmux_name);
+    await env.core.sessions.reconcile();
+    await waitFor(() => lastEvent(s.id, 'pr'), (t) => t === "The PR prompt Claude didn't take won't go again: Claude took another prompt first. Press Open PR to send it.", 10000, 'the lost PR prompt dropped');
+    await idle(s.id, 'the first prompt again');
+    expect(env.core.sessions.get(s.id).stage).toBe('code');
+    expect(count(transcript(s.id), /Open a pull request/g)).toBe(0);
+  });
+
+  it("sends an Open PR the user pressed since, with their instructions, instead of a PR prompt Claude never took", async () => {
+    const s = await working('Pressed since');
+    (env.core.lifecycle as unknown as { lostPrs: Map<string, unknown> }).lostPrs.set(s.id, { instructions: 'The old instructions.', by: 'you', back: 'code' });
+    await env.core.sessions.action(s.id, 'open-pr', { instructions: 'Open it as a draft.' });
+    const t = await waitFor(() => transcript(s.id), (x) => x.includes('Open a pull request'), 15000, 'the PR prompt');
+    await idle(s.id, 'PR turn');
+    expect(count(transcript(s.id), /Open a pull request/g)).toBe(1);
+    expect(t).toContain('Open it as a draft.');
+    expect(t).not.toContain('The old instructions.');
+  });
+
   it('drops a queued Open PR when Claude is found exited, as at startup', async () => {
     const s = await working('Died while down');
     await env.core.sessions.action(s.id, 'open-pr');
@@ -1833,6 +1893,20 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
       expect(env.core.sessions.get(s.id)).toMatchObject({ autoRun: false, queued: null });
       expect(lastEvent(s.id, 'auto-run')).toBe(`Run to merge stopped: ${why}`);
       await idle(s.id, 'turn end');
+      await pollAll();
+      expect(env.core.sessions.get(s.id).stage).toBe('code');
+      expect(prPrompts(s.id)).toBe(0);
+    });
+
+    it("drops its PR prompt Claude exited before taking once it stops, so a Resume doesn't send it", async () => {
+      const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+      fakeFiles({ 'exit-unrun': 'Open a pull request' });
+      const s = await env.core.sessions.create(p.id, { name: 'Lost under Run to merge', prompt: 'do it', start: 'code', autoRun: true });
+      await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'exited' && x.stage === 'code', 15000, 'Claude to exit with the PR prompt');
+      await env.core.sessions.edit(s.id, { autoRun: false });
+      expect(lastEvent(s.id, 'pr')).toBe("The PR prompt Claude didn't take won't go again: Run to merge stopped. Press Open PR to send it.");
+      await env.core.sessions.action(s.id, 'resume');
+      await idle(s.id, 'resumed');
       await pollAll();
       expect(env.core.sessions.get(s.id).stage).toBe('code');
       expect(prPrompts(s.id)).toBe(0);

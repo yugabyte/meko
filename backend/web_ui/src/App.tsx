@@ -25,6 +25,7 @@ import { MetricsPage } from "./pages/MetricsPage";
 import { ArtifactsPage } from "./pages/ArtifactsPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { SearchPage } from "./pages/SearchPage";
+import { SettingsPage } from "./pages/SettingsPage";
 import { StatusPage } from "./pages/StatusPage";
 
 // A page's padding: tighter on a phone.
@@ -57,7 +58,6 @@ export default function App({ auth, onAuthChanged }: { auth: AuthStatus; onAuthC
         datapacks={list.data ?? []}
         activeId={route.view ? undefined : activeId}
         view={route.view}
-        auth={auth}
         version={health.data?.version}
         theme={theme}
         onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
@@ -81,6 +81,10 @@ export default function App({ auth, onAuthChanged }: { auth: AuthStatus; onAuthC
           ) : route.view === "extensions" ? (
             <div className={PAGE}>
               <ExtensionsPage />
+            </div>
+          ) : route.view === "settings" ? (
+            <div className={PAGE}>
+              <SettingsPage auth={auth} />
             </div>
           ) : route.view === "meko-cloud" ? (
             <div className={PAGE}>

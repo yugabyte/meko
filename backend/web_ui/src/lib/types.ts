@@ -166,6 +166,7 @@ export interface MapPoint {
   created_at?: string;
   x: number;
   y: number;
+  z?: number; // the 3D view's depth
   similarity?: number; // to the query, when there is one
 }
 
@@ -173,6 +174,7 @@ export interface MemoryMap {
   points: MapPoint[];
   links: { a: number; b: number; similarity: number }[];
   query?: [number, number];
+  query_z?: number;
 }
 
 export interface Conversation {
@@ -292,6 +294,27 @@ export interface ConversationHit {
   message_id: string;
   content: string;
   distance: number;
+}
+
+// GET /settings/answers: whether Search writes an answer from its results, and through what.
+export interface AnswerStatus {
+  enabled: boolean;
+  harness: string;
+  model: string;
+}
+
+// One search result an answer is written from.
+export interface Passage {
+  source: MapSource;
+  id: string;
+  text: string;
+}
+
+// An answer, with the passages it cites by number, from 1.
+export interface SearchAnswer {
+  answer: string;
+  cited: number[];
+  model: string;
 }
 
 // A source is null when it wasn't searched, as while the memory engine is starting.

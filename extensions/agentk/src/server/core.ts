@@ -1,3 +1,4 @@
+import { CodeReviews } from './review/runner.js';
 import { EventEmitter } from 'node:events';
 import type { Server } from 'node:http';
 import { mkdirSync, rmSync } from 'node:fs';
@@ -165,6 +166,8 @@ export class Core extends EventEmitter {
   readonly askAgentk: AskAgentk;
   /** AgentK's session tools: the calls `agentk mcp` makes from sessions. */
   readonly tools: SessionTools;
+  /** AgentK's local code review before a task's PR opens (review/runner.ts). */
+  readonly reviews: CodeReviews;
   readonly limits: PlanLimitsStore;
   /** Kiro's plan allowance for the rail. */
   readonly kiroPlan: KiroPlanStore;
@@ -301,6 +304,7 @@ export class Core extends EventEmitter {
       },
     });
     this.tools = new SessionTools(this);
+    this.reviews = new CodeReviews(this);
     this.limits = new PlanLimitsStore(this.db, () => this.changed());
     this.kiroPlan = new KiroPlanStore({
       db: this.db,
@@ -734,6 +738,7 @@ export class Core extends EventEmitter {
     this.hooksOn = true;
     this.learn.recover();
     await this.sessions.recover();
+    await this.reviews.recover().catch((e: unknown) => this.log.warn('recovering local reviews failed', errMsg(e)));
     void this.sessions.refreshDiffStats().catch(() => undefined);
     pruneSessionEvents(this.db);
     this.prunePins();

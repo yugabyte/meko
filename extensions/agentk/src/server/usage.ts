@@ -1,8 +1,11 @@
 import { closeSync, existsSync, fstatSync, openSync, readSync, readdirSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { DEFAULT_HARNESS, HARNESS_IDS, harnessOf } from '../shared/harnesses.js';
+import { addCounts, noCounts, totalCount, type SeverityCounts } from '../shared/codereview.js';
 import { costOf, priceFor } from '../shared/pricing.js';
-import type { DailyUsage, ModelUsage, ProjectUsage, ProjectUsageSummary, SessionUsage, TokenUsage, UsageCost, UsageOverview } from '../shared/types.js';
+import type {
+  CodeReviewCounts, CodeReviewUsage, DailyUsage, ModelUsage, ProjectUsage, ProjectUsageSummary, SessionUsage, TokenUsage, UsageCost, UsageOverview,
+} from '../shared/types.js';
 import { all, get, run, tx, type Db } from './db.js';
 import {
   firstTurnMeko, learningOf, learnRuns, mekoBy, mekoCallOf, mekoCalls, mekoResultOf, parseMekoCalls, parseMekoResults, queryKey, sessionMeko, summarizeMeko,
@@ -388,6 +391,109 @@ function usageByModel(db: Db, projectId?: string): ModelUsage[] {
     .sort((a, b) => totalTokens(b.usage) - totalTokens(a.usage));
 }
 
+/** A local review as the usage counts read it from `code_reviews`. */
+export interface ReviewRun {
+  /** When it started. */
+  at: number;
+  state: string;
+  /** Rounds that reached their passes. */
+  round: number;
+  /** Its PR prompt went. */
+  sent: boolean;
+  counts: SeverityCounts;
+  candidates: number;
+  fixed: number;
+  declined: number;
+}
+
+const parsed = <T>(s: string | null, fallback: T): T => {
+  try {
+    return s ? ((JSON.parse(s) as T | null) ?? fallback) : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+/** Every local review, or one project's (its task's project), oldest first. A row that doesn't parse counts as finding nothing. */
+export function reviewRuns(db: Db, projectId?: string): ReviewRun[] {
+  // `reported`: a step of the review's current round (r<round>s…, r<round>c…) has reported.
+  return all<{
+    created_at: number; state: string; round: number; finished_at: number | null; counts_json: string; findings_json: string; candidates_json: string; reported: number;
+  }>(db,
+    `SELECT r.created_at, r.state, r.round, r.finished_at, r.counts_json, r.findings_json, r.candidates_json,
+            EXISTS (SELECT 1 FROM code_review_steps s WHERE s.review_id = r.id
+                    AND (s.step LIKE 'r' || r.round || 's%' OR s.step LIKE 'r' || r.round || 'c%')) AS reported
+     FROM code_reviews r ${projectId ? 'JOIN sessions t ON t.id = r.task_id WHERE t.project_id = ?' : ''} ORDER BY r.created_at`, ...(projectId ? [projectId] : []))
+    .map((r) => {
+      const findings = parsed<{ round?: unknown; kept?: unknown; outcome?: { status?: unknown } | null }[]>(r.findings_json, []);
+      const list = Array.isArray(findings) ? findings : [];
+      const kept = list.filter((f) => f?.kept === true);
+      // The current round reached its passes: it's sweeping, scoring or fixing, or a step of it
+      // reported. One that stopped (or found nothing changed) while preparing never ran. nextRound
+      // bumps `round` and leaves the last round's candidates_json until beginRound resets it, so
+      // its candidates_json is the earlier round's, already in findings_json.
+      const ran = !!r.reported || r.state === 'sweeping' || r.state === 'scoring' || r.state === 'fixing';
+      // A round's candidates move into findings_json only when it finishes; until then (or for good,
+      // once it failed or was cancelled) they're in candidates_json.
+      const open = ran && !list.some((f) => f?.round === r.round) ? parsed<unknown[]>(r.candidates_json, []) : [];
+      return {
+        at: r.created_at, state: r.state, round: Math.max(0, r.round - (ran ? 0 : 1)), sent: r.finished_at != null,
+        counts: { ...noCounts(), ...parsed<Partial<SeverityCounts>>(r.counts_json, {}) },
+        candidates: list.length + (Array.isArray(open) ? open.length : 0),
+        fixed: kept.filter((f) => f.outcome?.status === 'fixed').length,
+        declined: kept.filter((f) => f.outcome?.status === 'declined').length,
+      };
+    });
+}
+
+/** Reviews added up: each by its state now, and what their rounds found and the task did with them. */
+export function countReviews(runs: ReviewRun[]): CodeReviewCounts {
+  const c: CodeReviewCounts = {
+    runs: runs.length, byOutcome: { done: 0, failed: 0, cancelled: 0, running: 0 }, lgtm: 0, prs: 0, rounds: 0, candidates: 0,
+    findings: noCounts(), fixed: 0, declined: 0,
+  };
+  for (const r of runs) {
+    c.byOutcome[r.state === 'done' || r.state === 'failed' || r.state === 'cancelled' ? r.state : 'running']++;
+    if (r.state === 'done' && !totalCount(r.counts)) c.lgtm++;
+    if (r.sent) c.prs++;
+    c.rounds += Math.max(0, r.round);
+    c.candidates += r.candidates;
+    c.findings = addCounts(c.findings, r.counts);
+    c.fixed += r.fixed;
+    c.declined += r.declined;
+  }
+  return c;
+}
+
+/** Local reviews' counts, and their sessions' tokens, for every project or one. */
+export function reviewUsage(db: Db, projectId?: string): CodeReviewUsage {
+  const where = `s.kind = 'code-review'${projectId ? ' AND s.project_id = ?' : ''}`;
+  const args = projectId ? [projectId] : [];
+  return {
+    ...countReviews(reviewRuns(db, projectId)),
+    usage: toUsage(get<SumRow>(db, `SELECT ${SUMS} FROM usage_messages u JOIN sessions s ON s.id = u.session_id WHERE ${where}`, ...args)),
+  };
+}
+
+/** Local reviews' sessions' tokens and cost per UTC day from `since`, for the usage report. Days with none are left out. */
+export function reviewSpendByDay(db: Db, since: number): Map<string, { usage: TokenUsage; cost: UsageCost }> {
+  const day = "strftime('%Y-%m-%d', u.at / 1000, 'unixepoch')";
+  const from = `FROM usage_messages u JOIN sessions s ON s.id = u.session_id WHERE s.kind = 'code-review' AND u.at >= ?`;
+  const out = new Map<string, { usage: TokenUsage; cost: UsageCost }>();
+  for (const r of all<SumRow & { day: string }>(db, `SELECT ${day} AS day, ${SUMS} ${from} GROUP BY day`, since)) {
+    out.set(r.day, { usage: toUsage(r), cost: { usd: 0, unpricedMessages: 0 } });
+  }
+  const costs = new Map<string, CostRow[]>();
+  for (const r of all<CostRow & { day: string }>(db, `SELECT ${day} AS day, ${COST_SUMS} ${from} AND ${PRICED} GROUP BY day, u.model`, since)) {
+    costs.set(r.day, [...(costs.get(r.day) ?? []), r]);
+  }
+  for (const [d, rows] of costs) {
+    const o = out.get(d);
+    if (o) o.cost = toCost(rows);
+  }
+  return out;
+}
+
 /** Usage breakdown for the project home: totals, by model, by session, and the last `days` days. */
 export function projectUsage(db: Db, projectId: string, days = 14, now = Date.now()): ProjectUsage {
   const total = toUsage(get<SumRow>(db,
@@ -414,7 +520,7 @@ export function projectUsage(db: Db, projectId: string, days = 14, now = Date.no
   const daily = dailyUsage(db, days, now, projectId);
   return {
     total, cost, meko: summarizeMeko(calls), mekoGaps: openGapCounts(db, projectId), mekoFirstTurn: firstTurnMeko(db, projectId),
-    mekoLearning: learningOf(learnRuns(db, projectId)), byModel, bySession, daily,
+    mekoLearning: learningOf(learnRuns(db, projectId)), codeReviews: reviewUsage(db, projectId), byModel, bySession, daily,
   };
 }
 
@@ -423,26 +529,29 @@ function dailyUsage(db: Db, days: number, now: number, projectId?: string): Dail
   const start = new Date(now);
   start.setHours(0, 0, 0, 0);
   start.setDate(start.getDate() - (days - 1));
-  const buckets = new Map<string, TokenUsage>();
+  const buckets = new Map<string, DailyUsage>();
   for (let i = 0; i < days; i++) {
     const d = new Date(start);
     d.setDate(start.getDate() + i);
-    buckets.set(localDay(d.getTime()), { ...ZERO_USAGE });
+    const day = localDay(d.getTime());
+    buckets.set(day, { day, usage: { ...ZERO_USAGE }, reviewTokens: 0 });
   }
-  const rows = all<{ at: number; input: number; output: number; cache_read: number; cache_write: number; credits: number | null }>(db,
-    `SELECT u.at, u.input, u.output, u.cache_read, u.cache_write, u.credits FROM usage_messages u JOIN sessions s ON s.id = u.session_id
+  const rows = all<{ at: number; kind: string; input: number; output: number; cache_read: number; cache_write: number; credits: number | null }>(db,
+    `SELECT u.at, s.kind, u.input, u.output, u.cache_read, u.cache_write, u.credits FROM usage_messages u JOIN sessions s ON s.id = u.session_id
      WHERE u.at >= ?${projectId ? ' AND s.project_id = ?' : ''}`, ...(projectId ? [start.getTime(), projectId] : [start.getTime()]));
   for (const r of rows) {
-    const b = buckets.get(localDay(r.at));
-    if (!b) continue;
+    const d = buckets.get(localDay(r.at));
+    if (!d) continue;
+    const b = d.usage;
     b.input += r.input;
     b.output += r.output;
     b.cacheRead += r.cache_read;
     b.cacheWrite += r.cache_write;
     b.messages += 1;
     if (r.credits) b.credits = (b.credits ?? 0) + r.credits;
+    if (r.kind === 'code-review') d.reviewTokens += r.input + r.output + r.cache_read + r.cache_write;
   }
-  return [...buckets].map(([day, usage]) => ({ day, usage }));
+  return [...buckets.values()];
 }
 
 /** Usage across every project, deleted ones included: tokens, merged PRs and direct pushes. */
@@ -502,6 +611,7 @@ export function usageOverview(db: Db, days = 14, now = Date.now(), calls = mekoC
     meko: summarizeMeko(calls),
     mekoFirstTurn: firstTurnMeko(db),
     mekoLearning: learningOf(learnRuns(db)),
+    codeReviews: reviewUsage(db),
     mergedPrs: sum((p) => p.mergedPrs),
     directPushes: sum((p) => p.directPushes),
     directCommits: sum((p) => p.directCommits),

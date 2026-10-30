@@ -6,8 +6,8 @@ import { useIsMobile, useTouch } from '../hooks/useMedia';
 import { RAIL_DEFAULT, clampRailWidth, railCollapsedSaved, saveRailCollapsed } from '../rail';
 import type { ThemePref } from '../theme';
 import { queueBadge } from '../workqueue';
-import { aggregateDot, creditsNumber, type DotState, cx, dotState, formatCredits, formatTokens, isMac, kiroPlanLines, limitLevel, openSessions, relativeTime, repoFolder, sessionTabTitle, totalTokens } from '../util';
-import { HarnessLogo, Ring, StageChip, StatusDot } from './common';
+import { aggregateDot, creditsNumber, type DotState, cx, dotState, formatCredits, formatTokens, isMac, joinedPartSelected, kiroPlanLines, limitLevel, openSessions, relativeTime, repoFolder, sessionTabTitle, totalTokens } from '../util';
+import { HarnessLogo, ReviewSegment, Ring, StageChip, StatusDot } from './common';
 import { HARNESS_CAPS, type HarnessId } from '../../shared/harnesses';
 
 export function Rail({
@@ -31,6 +31,9 @@ export function Rail({
   sessionsShown,
   harnessLogos,
   onSelectSession,
+  onOpenReview,
+  findingsOpenFor,
+  onCloseFindings,
   onNewSession,
   onRenameSession,
   onSessionToTop,
@@ -71,6 +74,12 @@ export function Rail({
   /** Show each listed session's harness logo: open sessions run on more than one harness and the setting is on. */
   harnessLogos: boolean;
   onSelectSession: (s: Session) => void;
+  /** A task's magnifier: the task on screen with its local review's findings open. */
+  onOpenReview: (task: Session) => void;
+  /** The task whose findings are open on screen: its row selects the review's part. */
+  findingsOpenFor: string | null;
+  /** The task's part of its row while its findings are open: closes them. */
+  onCloseFindings: (task: Session) => void;
   /** New session in this project, offered at the end of each listed project's sessions. */
   onNewSession: (projectId: string) => void;
   /** Double-clicking a session renames it; the phone layout uses Rename session in the ⋯ sheet. */
@@ -201,13 +210,16 @@ export function Rail({
               </div>
               {listed && !folded && (
                 <div className={cx('rail-sessions', harnessLogos && 'logos')} id={`rail-sessions-${p.id}`} role="group" aria-label={`Sessions in ${p.name}`}>
-                  {sessions.map((s, j) => (
+                  {sessions.map((s, j) => {
+                    const part = joinedPartSelected(s, currentSessionId, findingsOpenFor === s.id);
+                    const review = s.codeReview;
+                    const row = (
                     <div key={s.id} className="rail-sess-row">
                       <button
-                        className={cx('rail-sess', s.id === currentSessionId && 'sel')}
-                        onClick={() => onSelectSession(s)}
+                        className={cx('rail-sess', part === 'task' && 'sel')}
+                        onClick={() => (part === 'review' && s.id === currentSessionId ? onCloseFindings(s) : onSelectSession(s))}
                         onDoubleClick={mobile ? undefined : () => onRenameSession(s.id)}
-                        aria-current={s.id === currentSessionId ? 'page' : undefined}
+                        aria-current={part === 'task' ? 'page' : undefined}
                         title={sessionTabTitle(s) + (mobile ? '' : '\nDouble-click to rename')}
                       >
                         <StatusDot status={dotState(s)} phase={s.id} />
@@ -228,7 +240,16 @@ export function Rail({
                         </button>
                       )}
                     </div>
-                  ))}
+                    );
+                    // A task with a local review keeps one row: its part, then the review's (the magnifier).
+                    if (!review) return row;
+                    return (
+                      <div key={s.id} className={cx('rail-joined', part === 'review' && 'review-sel')}>
+                        {row}
+                        <ReviewSegment review={review} selected={part === 'review'} className="rail-review" onOpen={() => onOpenReview(s)} />
+                      </div>
+                    );
+                  })}
                   <button className="rail-sess rail-sess-new" onClick={() => onNewSession(p.id)}>
                     + New session
                   </button>
