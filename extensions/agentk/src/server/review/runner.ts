@@ -249,6 +249,9 @@ export class CodeReviews {
       // Pressed again while it runs: the instructions given now go with the PR, and a move's line before the next prompt.
       if (opts.instructions) this.set(last.id, { instructions: opts.instructions });
       if (opts.lead) this.set(last.id, { lead: opts.lead });
+      // Open PR (or a move) is only taken between turns: a review still waiting for fixes then had its
+      // fix turn interrupted, and the press says to go on with the next round.
+      if (last.state === 'fixing') this.kick(last.id, () => this.nextRound(last.id));
       return true;
     }
     this.checkNotHeld(task.id);
@@ -328,6 +331,8 @@ export class CodeReviews {
     rmSync(dir, { recursive: true, force: true });
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const { ctx, diff } = await this.readChange(r, task, dir);
+    // Cancelled while the change was read (the user, or the task leaving Code): it stays cancelled.
+    if (this.mustReview(id).state !== 'preparing') return;
     if (!diff.files.length) {
       // Nothing to review: the PR goes as it would have.
       this.set(id, { state: 'done', detail: 'nothing changed against the base' });
@@ -777,6 +782,8 @@ export class CodeReviews {
   /** The task fixed a round's findings: the next round reviews the change again. */
   private async nextRound(id: string): Promise<void> {
     const r = this.mustReview(id);
+    // Asked for twice (a fix turn's end and an Open PR right after it): the first one moved it on.
+    if (r.state !== 'fixing') return;
     if (this.taskMovedOn(r)) return;
     this.set(id, { round: r.round + 1, sweep: 1, asked: 0, state: 'preparing' });
     await this.beginRound(id);
@@ -831,6 +838,19 @@ export class CodeReviews {
     this.set(r.id, { state: 'cancelled', detail: REVIEW_LEFT_CODE });
     if (r.session_id) void this.archiveSession(r.session_id);
     return true;
+  }
+
+  /**
+   * A move took the task out of Code, or a move to Review & PR found it outside Code: its review,
+   * running or stopped, holds nothing now (Retry and Open anyway are Code's). It's cancelled as left
+   * Code and its session goes, so the next Open PR or move starts a new review on the change as it is.
+   */
+  leftCode(taskId: string): void {
+    const r = this.latest(taskId);
+    if (!r || !(RUNNING.includes(r.state) || reviewHolds(r))) return;
+    this.set(r.id, { state: 'cancelled', detail: REVIEW_LEFT_CODE });
+    this.core.sessions.event(taskId, 'review', 'Local review stopped: the task left Code');
+    if (r.session_id) void this.archiveSession(r.session_id);
   }
 
   /** The review couldn't go on: the task's Open PR waits for the user's Retry or Open anyway. */

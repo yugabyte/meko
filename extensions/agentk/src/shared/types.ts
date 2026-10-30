@@ -2758,8 +2758,8 @@ export type TermServerMessage =
 // POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to, a
 //        missing task, or instructions that aren't text or are too long; 409 while AgentK is mid-turn, in Merge & Close,
 //        or a prompt (the stage's, or the user's instructions) is due and Claude is waiting or exited, and for a move to
-//        Review & PR with work to push, while prompts from the user wait or a stopped local review holds the PR (Retry
-//        it, or Open anyway); 502 when its prompt couldn't be sent: the move stays made, except a PR prompt's, which
+//        Review & PR with work to push, while prompts from the user wait or a stopped local review holds the PR in Code
+//        (Retry it, or Open anyway), whether the review is on or off now, as for Open PR; 502 when its prompt couldn't be sent: the move stays made, except a PR prompt's, which
 //        goes back to where it was. A move to Review & PR that the local review takes over answers with the session
 //        in Code, the review running)
 // GET    /api/sessions/:id/design              → DesignDoc

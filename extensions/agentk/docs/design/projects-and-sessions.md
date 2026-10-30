@@ -221,7 +221,7 @@ CREATE TABLE work_items (      -- the work queue (workqueue.ts, docs/design/work
   unplaced INTEGER, github_done_at INTEGER, created_at INTEGER, closed_at INTEGER);
 CREATE TABLE work_item_links (item_id TEXT, ord INTEGER, key TEXT, kind TEXT, url TEXT, label TEXT,
   PRIMARY KEY (item_id, key));  -- indexed on key, for the palette's lookup by link
-CREATE TABLE code_reviews (    -- a task's local reviews (review/runner.ts, docs/design/code-review.md), one per Open PR
+CREATE TABLE code_reviews (    -- a task's local reviews (review/runner.ts, docs/design/code-review.md), one per Open PR or move to Review & PR
   id TEXT PRIMARY KEY, task_id TEXT, session_id TEXT,  -- the task, and its code-review session
   strategy TEXT, rounds INTEGER, depth INTEGER,        -- what it runs with, stamped when it starts
   state TEXT,                  -- preparing | sweeping | scoring | fixing | done | failed | cancelled
@@ -230,6 +230,8 @@ CREATE TABLE code_reviews (    -- a task's local reviews (review/runner.ts, docs
                                --   findings (the panel), the passes' notes, the MEKO.md datapacks
   counts_json TEXT, last_kept INTEGER,                 -- every round's kept findings by severity (the PR line)
   instructions TEXT, by TEXT,  -- the Open PR's instructions it holds, and who pressed it (you | auto)
+  lead TEXT,                   -- the `moved` line of a move to Review & PR from Explore or Design, sent before the
+                               --   review's first prompt to the task (its fixes or the PR prompt), cleared once that goes
   detail TEXT, created_at INTEGER, updated_at INTEGER, finished_at INTEGER);  -- finished_at: its PR prompt went
 CREATE TABLE code_review_steps (review_id TEXT, step TEXT, report_json TEXT, at INTEGER,  -- each step's report, as
   PRIMARY KEY (review_id, step));  --   review_report or review_score took it (r1s1:guide, r1c3)

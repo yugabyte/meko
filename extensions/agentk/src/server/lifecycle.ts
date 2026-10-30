@@ -929,6 +929,7 @@ export class Lifecycle {
     if (movesStep(cur.stage, stage)) {
       dropQueued();
       if (cur.stage === 'pr' || cur.stage === 'review') this.leaveReview(id);
+      if (cur.stage === 'code') this.core.reviews.leftCode(id);
       if (cur.stage === 'design') this.leaveDesign(id, stage === 'code');
       this.sessions.setStage(id, stage, 'you');
       // Back in Design, what an approval left to AgentK is open again.
@@ -971,6 +972,13 @@ export class Lifecycle {
     };
     check(cur);
     this.checkBetweenTurns(cur);
+    if (!adopt || !pr) {
+      // As for Open PR: the user's prompts go first, and a stopped local review holds the PR. Outside
+      // Code an earlier review holds nothing (its Retry and Open anyway are Code's).
+      if (cur.stage !== 'code') this.core.reviews.leftCode(cur.id);
+      if (this.sessions.promptsHeld(cur.id) > 0) throw new HttpError(409, 'AgentK has prompts from you to take first. Move the session once it has.');
+      this.core.reviews.checkNotHeld(cur.id);
+    }
     if ((!adopt || !pr) && this.core.reviews.applies(cur)) {
       await this.reviewBeforePr(cur, instructions);
       return;
@@ -1009,17 +1017,16 @@ export class Lifecycle {
 
   /**
    * A move to Review & PR with work to push, on a task whose local review runs: as with Open PR, the
-   * review goes first, in Code (from Explore or Design too), and sends the PR prompt when it's done.
+   * review goes first, in Code (from Explore or Design too, past the design approval), and sends the
+   * PR prompt when it's done. moveToReview has checked what Open PR checks.
    */
   private async reviewBeforePr(row: SessionRow, instructions: string): Promise<void> {
     this.checkPromptable(row);
-    if (this.sessions.promptsHeld(row.id) > 0) throw new HttpError(409, 'AgentK has prompts from you to take first. Move the session once it has.');
-    this.core.reviews.checkNotHeld(row.id);
     // Claude's system prompt still says where it was (Explore: no PR): the `moved` line goes before the
     // review's first prompt to the task, its fixes or the PR prompt.
     let lead: string | undefined;
     if (row.stage !== 'code') {
-      if (row.stage === 'design') this.leaveDesign(row.id, false);
+      if (row.stage === 'design') this.leaveDesign(row.id, true);
       this.sessions.setStage(row.id, 'code', 'you', { event: false });
       this.sessions.event(row.id, 'stage', 'Moved to Code: AgentK reviews the change locally before it opens the PR');
       lead = this.movedLine(this.sessions.row(row.id));

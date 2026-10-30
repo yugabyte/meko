@@ -141,9 +141,14 @@ after `adoptPr` when Claude left it out (`syncReviewLine`).
 **Stopping.** A failed review (no pass reported, or an error) or one the user cancelled holds the
 PR: Open PR answers 409, Run to merge waits, and the task offers **Retry** (the round again from
 the step it stopped at, reusing every step already reported, from `code_review_steps`) and **Open
-anyway** (the PR prompt with no line). A task that leaves Code cancels its review, with the detail
-`the task left Code` (`REVIEW_LEFT_CODE`): that one doesn't hold the PR (`reviewHolds`), so the
-next Open PR, or a move to Review & PR, starts a new review.
+anyway** (the PR prompt with no line). A move out of Code (or a move to Review & PR that finds
+the task outside Code) cancels its review, running or stopped, with the detail `the task left Code`
+(`REVIEW_LEFT_CODE`, `CodeReviews.leftCode`; `taskMovedOn` catches one the review session's turn
+end finds there): that one doesn't hold the PR (`reviewHolds`), since Retry and Open anyway are
+Code's, so the next Open PR, or a move to Review & PR, starts a new review on the change as it is.
+A move to Review & PR checks what Open PR does, whether the review is on or off: the user's
+prompts go first, and a stopped review in Code answers 409. Open PR, or a move, while a review
+waits for fixes whose turn was interrupted moves it on to the next round.
 
 **Recovery.** `code_reviews` and `code_review_steps` keep a review's state and every step's
 report. After a restart, `CodeReviews.recover()` asks an idle review session again for the steps

@@ -140,7 +140,10 @@ describe('local code review before the PR (real session host + git, fake claude 
     expect(failed.stage).toBe('code');
     expect(failed.codeReview!.detail).toBe('no review pass reported');
     await expect(env.core.sessions.action(s.id, 'open-pr')).rejects.toThrow(/Retry it, or open the PR anyway/);
-    // A move to Review & PR is refused alike: it would open the PR past the stopped review.
+    // A move to Review & PR is refused alike: it would open the PR past the stopped review. So it is
+    // with the review turned off since, as Open PR is.
+    await expect(env.core.sessions.move(s.id, { stage: 'review' })).rejects.toThrow(/Retry it, or open the PR anyway/);
+    env.core.projects.update(s.projectId, { settings: { codeReview: { strategy: 'off' } } });
     await expect(env.core.sessions.move(s.id, { stage: 'review' })).rejects.toThrow(/Retry it, or open the PR anyway/);
     expect(env.core.sessions.get(s.id).stage).toBe('code');
     await env.core.sessions.action(s.id, 'review-open-anyway');
@@ -171,17 +174,56 @@ describe('local code review before the PR (real session host + git, fake claude 
     expect(all<{ stage: string }>(env.core.db, 'SELECT stage FROM session_stages WHERE session_id = ? ORDER BY rowid', s.id).map((r) => r.stage)).toEqual(['explore', 'code', 'pr']);
   });
 
-  it('starts a new review on a move to Review & PR after the last one stopped because the task left Code', async () => {
+  it('starts a new review on a move to Review & PR from outside Code, past one that failed in Code', async () => {
     const s = await task({ review: { strategy: 'sirius-1.0' } });
+    fake('review-skip', ['r1s1:all']);
     await env.core.sessions.action(s.id, 'open-pr');
+    const failed = await waitFor(() => env.core.sessions.get(s.id), (x) => x.codeReview?.state === 'failed', 30000, 'the review to fail');
+    // Its Retry and Open anyway are Code's: leaving Code lets it go.
     await env.core.sessions.move(s.id, { stage: 'explore', prompt: false });
-    const left = await waitFor(() => env.core.sessions.get(s.id), (x) => x.codeReview?.state === 'cancelled', 30000, 'the review to stop');
-    expect(left.codeReview!.detail).toBe(REVIEW_LEFT_CODE);
+    expect(env.core.sessions.get(s.id).codeReview).toMatchObject({ state: 'cancelled', detail: REVIEW_LEFT_CODE });
+    fake('review-skip', []);
     await env.core.sessions.move(s.id, { stage: 'review' });
     const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the new review');
     expect(done.codeReview).toMatchObject({ state: 'done' });
-    expect(done.codeReview!.id).not.toBe(left.codeReview!.id);
+    expect(done.codeReview!.id).not.toBe(failed.codeReview!.id);
     expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM');
+  });
+
+  describe('a fix turn the user interrupted', () => {
+    /** Round 1 finds a blocker whose fix turn is interrupted (the fake interrupts a prompt saying INTERRUPT): the review waits for fixes. */
+    async function interruptedFix() {
+      // Through the mod, which reports an interrupted turn (no Stop hook fires for one).
+      mkdirSync(env.fakeDir, { recursive: true });
+      writeFileSync(join(env.fakeDir, 'mod'), '');
+      const s = await task({ review: { rounds: 1 } });
+      await waitFor(() => env.core.sessions.mod.live(s.id), (l) => l, 10000, 'the mod to poll');
+      fake('review-reports.json', { ...LEDGERS, diff: { summary: 'LGTM', findings: [{ file: 'src/a.ts', line: 2, severity: 'blocker', comment: 'Off by one. INTERRUPT', gotchas: [] }] } });
+      await env.core.sessions.action(s.id, 'open-pr');
+      const interrupted = () => all<{ text: string }>(env.core.db, "SELECT text FROM session_events WHERE session_id = ? AND kind = 'turn'", s.id).some((e) => e.text === 'You interrupted the turn');
+      await waitFor(() => interrupted() && env.core.sessions.get(s.id).status === 'idle', (x) => x, 30000, 'the interrupted fix turn');
+      expect(env.core.sessions.get(s.id).codeReview!.state).toBe('fixing');
+      fake('review-reports.json', LEDGERS);
+      return s;
+    }
+
+    it('goes on with the next round at Open PR', async () => {
+      const s = await interruptedFix();
+      await env.core.sessions.action(s.id, 'open-pr');
+      const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after round 2');
+      expect(done.codeReview).toMatchObject({ round: 2, state: 'done' });
+    });
+
+    it('is cancelled by a move out of Code, and a move back to Review & PR starts a new review', async () => {
+      const s = await interruptedFix();
+      const first = env.core.sessions.get(s.id).codeReview!.id;
+      await env.core.sessions.move(s.id, { stage: 'explore', prompt: false });
+      expect(env.core.sessions.get(s.id).codeReview).toMatchObject({ state: 'cancelled', detail: REVIEW_LEFT_CODE });
+      await env.core.sessions.move(s.id, { stage: 'review' });
+      const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the new review');
+      expect(done.codeReview).toMatchObject({ round: 1, state: 'done' });
+      expect(done.codeReview!.id).not.toBe(first);
+    });
   });
 
   it('skips the review when the project turns it off', async () => {
