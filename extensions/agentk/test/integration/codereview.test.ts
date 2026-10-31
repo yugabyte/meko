@@ -102,6 +102,30 @@ describe('local code review before the PR (real session host + git, fake claude 
     expect(env.core.sessions.get(s.id).codeReview).toMatchObject({ addressed: true, counts: { blocker: 1, major: 1, minor: 0 } });
   });
 
+  it('scores the candidates in batches of 5, and asks again for a missing score in a batch of its own', async () => {
+    const s = await task();
+    const wt = env.core.sessions.row(s.id).worktree_path;
+    writeFileSync(join(wt, 'src', 'b.ts'), Array.from({ length: 8 }, (_, i) => `export const b${i} = ${i};`).join('\n') + '\n');
+    const findings = Array.from({ length: 7 }, (_, i) => ({ file: 'src/b.ts', line: i + 1, severity: 'minor', comment: `Finding ${i + 1}.`, gotchas: [] }));
+    fake('review-reports.json', { ...LEDGERS, diff: { summary: 'LGTM', findings } });
+    fake('review-skip-once', ['r1c6']);
+    await env.core.sessions.action(s.id, 'open-pr');
+    const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the review');
+    expect(done.codeReview).toMatchObject({ state: 'done', counts: { blocker: 0, major: 0, minor: 7 } });
+
+    const childId = all<{ id: string }>(env.core.db, 'SELECT id FROM sessions WHERE parent_id = ?', s.id)[0].id;
+    const scoring = prompts(env.core.sessions.row(childId).claude_session_id).filter((p) => p.includes('score 7 findings'));
+    expect(scoring).toHaveLength(2);
+    const [first, again] = scoring;
+    expect(first).toContain('Batch 2:');
+    // Asked again, only the missing one, in a batch of its own.
+    expect(again).toMatch(/Batch 1:\s+1\. score 6: subagent `agentk-review-small`/);
+    expect(again).not.toContain('score 1:');
+    const calls = readJsonl<{ step: string }>(join(env.fakeDir, 'review-calls.jsonl')).map((c) => c.step).filter((c) => /^r1c/.test(c));
+    expect(calls).toEqual(['r1c1', 'r1c2', 'r1c3', 'r1c4', 'r1c5', 'r1c7', 'r1c6']);
+    expect(env.core.reviews.detail(s.id).findings.map((f) => f.verdict)).toEqual(Array(7).fill('confirmed'));
+  });
+
   it('asks the task for the PR description with its Meko lines first, reviews the change against it, then opens the PR with it', async () => {
     // A datapack id as Meko gives them: hex, which a PR description's datapack line is told by.
     const DP = '0f1e2d3c-1111';

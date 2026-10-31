@@ -68,8 +68,8 @@ sequenceDiagram
       R->>S: a fresh subagent per pass, on its tier
       S->>AK: review_report {step, report}
     end
-    AK->>R: code-review-score: one step per candidate
-    R->>S: a fresh subagent per scorer
+    AK->>R: code-review-score: one step per candidate, in batches of 5
+    R->>S: a fresh subagent per scorer, a batch at a time
     S->>AK: review_score {step, score}
     AK->>AK: keepScored(50), Validate, counts
     AK->>T: code-review-fix (a re-review follows)
@@ -129,9 +129,13 @@ as the cloud's separate processes do (`HARNESS_CAPS.reviewSteps`):
   (`agentk-review-large`, `-mid`, `-small`: Claude Code's `--agents`, OpenCode's `agent` config),
   and one prompt lists the steps, each in its subagent with the prompt "Read {file} and do what it
   says." A sweep's passes start all at once, in one message, as the cloud runs them; the scorers
-  run one after another. The turn's end is the sweep's end, so the subagents must run
-  inside it: Claude Code backgrounds a subagent by default, which ends the turn before any step
-  reports, so a Claude Code review session launches with `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`.
+  run in batches of 5 (`SCORE_BATCH`), since a round can have dozens: AgentK numbers the batches
+  in the prompt (`stepList`), and each batch starts in one message once the one before has
+  finished. Asking again for missing scores batches only the missing ones. The runner doesn't
+  depend on the order: reports are keyed by step. The turn's end is the sweep's end, so the
+  subagents must run inside it: Claude Code backgrounds a subagent by default, which ends the turn
+  before any step reports, so a Claude Code review session launches with
+  `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`.
 - `turns` (Kiro): each step is a prompt of its own, after `/clear` and, when the tier has a model,
   `/model`. Kiro's sessions share one agent file, which has AgentK's MCP server only while
   `[tools] enabled` is on, so a Kiro review needs the session tools on; without them no step can
@@ -225,7 +229,8 @@ task writes the PR description (describing) or the review prepares, then how far
 has got (`reviewSteps()`: each pass of a sweep, then scoring as one step, so Sagittarius 3.0 counts
 `1/6` to `6/6` and Sirius 1.0, unscored, `1/1`, moving on as each pass reports, whether the passes
 run at once, on Claude Code and OpenCode, or one after another, on Kiro; with depth > 1 the passes
-count again for each sweep; the tooltip says how many passes have reported, and names the sweep),
+count again for each sweep; the tooltip says how many passes have reported, and names the sweep,
+and while scoring how many candidates have been scored, since a batch of scorers runs at once),
 `R1` while the task fixes round 1's findings, the result (`2·1`,
 blockers·majors, until the task has said what it did with every kept finding, every round's,
 through `review_outcome`: `CodeReviewSummary.addressed`; then, or with none, `LGTM`) or a red `!`.

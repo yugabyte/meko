@@ -25,7 +25,7 @@ import { readDiff } from './diff.js';
 import { findGuides, findMekoMds } from './guides.js';
 import { readCommits, readHistory } from './history.js';
 import { MIN_CONFIDENCE, applyScore, countsOf, keepScored, mergeNotes, mergeSweep, validate } from './merge.js';
-import { basePrompt, passPrompt, scoreBase, scorePrompt, sweepContext } from './prompt.js';
+import { basePrompt, passPrompt, scoreBase, scorePrompt, stepList, sweepContext } from './prompt.js';
 import { checkOutcomes, checkReport, checkScore } from './schemas.js';
 import { strategyFor } from './strategies.js';
 import type { Candidate, Diff, PassReport, PriorRound, ReviewContext, ReviewDatapack, ReviewIssue, ScoreReport, Tier } from './types.js';
@@ -43,6 +43,12 @@ export const REVIEW_AGENTS: Record<Tier, string> = {
 
 /** The subagent each scorer runs on: the cloud's scorers run on the small model. */
 const SCORER_TIER: Tier = 'small';
+
+/**
+ * The most scorers started at once: a round can have dozens of candidates, so they run in batches
+ * of this many, each batch once the one before has finished (a sweep's passes all start at once).
+ */
+const SCORE_BATCH = 5;
 
 /** How many times AgentK asks again for the steps a turn left unreported, before it goes on without them. */
 const ASK_AGAIN = 1;
@@ -562,15 +568,20 @@ export class CodeReviews {
       writeFileSync(file, scorePrompt(base, c, { tool: agentToolName(harness, 'review_score'), step: `r${r.round}c${n}` }));
       return { name: `score ${n}`, tier: SCORER_TIER, file };
     });
-    await this.sendSteps(r, task, 'code-review-score', steps, { what: `${cands.length} finding${cands.length === 1 ? '' : 's'}`, tool: agentToolName(harness, 'review_score') });
+    await this.sendSteps(r, task, 'code-review-score', steps, {
+      what: `${cands.length} finding${cands.length === 1 ? '' : 's'}`,
+      tool: agentToolName(harness, 'review_score'),
+      batch: SCORE_BATCH,
+    });
   }
 
   /**
    * Gives the review session its steps: in a harness with subagents, one prompt that runs each as
-   * a fresh subagent on its tier; in one without (`turns`), each step as a prompt of its own after
-   * clearing the conversation, the model for its tier set first when one is configured.
+   * a fresh subagent on its tier, listed in batches of `v.batch` when it's set; in one without
+   * (`turns`), each step as a prompt of its own after clearing the conversation, the model for its
+   * tier set first when one is configured.
    */
-  private async sendSteps(r: ReviewRow, task: SessionRow, name: 'code-review-sweep' | 'code-review-score', steps: { name: string; tier: Tier; file: string }[], v: { what: string; tool: string }): Promise<void> {
+  private async sendSteps(r: ReviewRow, task: SessionRow, name: 'code-review-sweep' | 'code-review-score', steps: { name: string; tier: Tier; file: string }[], v: { what: string; tool: string; batch?: number }): Promise<void> {
     const harness = harnessOf(task.harness);
     const read = (file: string) => `Read ${claudePath(file)} and do what it says.`;
     if (HARNESS_CAPS[harness].reviewSteps === 'turns') {
@@ -583,7 +594,7 @@ export class CodeReviews {
       }
       return;
     }
-    const list = steps.map((s, i) => `${i + 1}. ${s.name}: subagent \`${REVIEW_AGENTS[s.tier]}\`, prompt: \`${read(s.file)}\``).join('\n');
+    const list = stepList(steps.map((s) => ({ name: s.name, agent: REVIEW_AGENTS[s.tier], prompt: read(s.file) })), v.batch);
     const session = sessionRow(this.db, r.session_id ?? '');
     const text = this.core.sessions.prompt(session ?? task, name, { steps: list, what: v.what, reportTool: v.tool, task: task.name, branch: task.branch, base: task.base_branch });
     if (!session || session.desired !== 'running') {
