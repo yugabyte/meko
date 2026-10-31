@@ -95,6 +95,8 @@ test("the Access card says only local or remote", async () => {
   await render({ access: "remote", local_access: false, signed_in: true });
   const access = () => [...document.querySelectorAll("h3")].find((h) => h.textContent === "Access")?.parentElement?.textContent;
   expect(access()).toBe("AccessRemote");
+  // The web UI has no login, so Settings has no account card.
+  expect(document.body.textContent).not.toContain("Account");
   act(() => root.unmount());
   await render(local);
   expect(access()).toBe("AccessLocal");
