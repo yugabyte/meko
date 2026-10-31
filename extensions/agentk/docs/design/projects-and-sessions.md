@@ -112,7 +112,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 # sync_minutes = 15          # how often the work queue syncs by itself (0: only when you press Sync, up to 1440)
 # slack_model = "sonnet"     # the model of the claude -p that reads that list through your Slack connector
 # slack_timeout_seconds = 180 # a Slack read that takes longer is stopped (30 to 600)
-# slack_tools = ["mcp__claude_ai_Slack__slack_read_file"] # the only tools that read may call, besides ToolSearch
+# slack_tools = ["mcp__claude_ai_Slack__slack_read_file", "mcp__claude_ai_Slack__slack_read_user_profile"] # the only tools that read may call, besides ToolSearch
 ```
 
 | Action | What the server does |

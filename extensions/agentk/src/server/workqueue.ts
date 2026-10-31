@@ -92,6 +92,12 @@ export function checkLinks(v: unknown): WorkLink[] {
 }
 
 /** A synced message's title: its first line, cut to SYNCED_TITLE_MAX characters. */
+/** A Slack list row's notes, started with its reporter the way Slack starts a message with its author. */
+function slackNotes(m: SlackListItem): string {
+  const notes = m.reporter && m.notes ? `${m.reporter}: ${m.notes}` : m.notes || (m.reporter && `From ${m.reporter}`);
+  return notes.slice(0, WORK_NOTES_MAX);
+}
+
 function firstLine(s: string, fallback: string): string {
   const line = s.split('\n').find((l) => l.trim())?.trim() ?? '';
   if (!line) return fallback;
@@ -335,7 +341,7 @@ export class WorkQueue {
       const link = parseWorkLink(m.url);
       if (!link || link.kind !== 'slack' || this.seen(link.key)) continue;
       if (m.channel) link.label = `Slack #${m.channel.replace(/^#/, '')}`.slice(0, 80);
-      this.insert({ title: firstLine(m.text, 'Slack message'), links: [link], source: 'slack', sourceKey: link.key });
+      this.insert({ title: firstLine(m.text, 'Slack message'), notes: slackNotes(m), links: [link], source: 'slack', sourceKey: link.key });
       added++;
     }
     return { ok: true, added, error: null };

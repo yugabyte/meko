@@ -214,6 +214,7 @@ export function WorkQueueView({
                 {s ? <StatusDot status={dotState(s)} phase={s.id} /> : <i className="dot none" title="No session" aria-label="No session" />}
                 <button className="wq-title" onClick={() => onEdit(item)} title="Edit">
                   {item.title}
+                  {item.notes && <span className="wq-notes">{item.notes}</span>}
                 </button>
                 <button className="btn small wq-dismiss" onClick={() => void dismiss(item)} title="Take it off the queue (it stays under Dismissed)">
                   Dismiss

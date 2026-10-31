@@ -89,13 +89,19 @@ and the timer does nothing (`WorkSync.sources` tells the page). The timer ticks 
   column marks done. A list is private until it's shared, but sharing one of its items gives the
   people it goes to edit access to the whole list, so its rows are still data written by people.
   The rows are read by one `claude -p` through your own Slack
-  connector (`src/server/slack.ts`), titled with a summary the run writes from the row's text (its name or title column, else its first column of text), at most 80 characters, without greetings or mentions. When a message is added to a list, Slack copies its raw text into the row's name, starting with whatever opens the message ("Hi <@U…>"), so its first line makes a poor title. A row with no text gets "Slack message". Unlike Ask AgentK, it loads your
+  connector (`src/server/slack.ts`), titled with a summary the run writes from the row's text (its name or title column, else its first column of text), at most 80 characters, without greetings or mentions. When a message is added to a list, Slack copies its raw text into the row's name, starting with whatever opens the message ("Hi <@U…>"), so its first line makes a poor title. A row with no text gets "Slack message". The row's text
+  itself goes in the item's notes, with mentions written as `@<display name>` from the user's
+  profile, started with the reporter the way Slack starts a message with its author ("<reporter>:
+  …", from a reporter, requester or author column, as the list has it: an email stays an email,
+  since the profile read takes only user IDs). The queue page shows an item's notes in two lines
+  under its title. Unlike Ask AgentK, it loads your
   MCP servers and claude.ai connectors (no `--strict-mcp-config`). It reads messages other people
   wrote, so it's kept to reading Slack: no built-in tools but ToolSearch (`--tools ToolSearch`);
   none of your Claude Code settings but `env` and `apiKeyHelper`, which signing in needs (`signInSettings()`, with
   `--setting-sources project` in AgentK's empty `run/work-sync` folder), so your allow rules and
   default mode don't apply; `--permission-mode default`; and only `[work_queue] slack_tools` allowed
-  (only the claude.ai Slack connector's `slack_read_file` by default, so the run can't search Slack or
+  (only the claude.ai Slack connector's `slack_read_file`, and `slack_read_user_profile` to name the
+  people a row mentions, by default, so the run can't search Slack or
   read a channel or thread, even when a row's text asks it to. That tool takes any file ID, so only
   the prompt keeps it on the configured list: a row asking for another file could get the rows of
   another list or canvas the user can open added as items, which only adds to the queue; a `slack_tools` set in config.toml

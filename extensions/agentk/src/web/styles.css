@@ -6581,6 +6581,17 @@ div[id^='dak-mermaid-'] .label {
   cursor: pointer;
   overflow-wrap: anywhere;
 }
+.wq-notes {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  margin-top: 2px;
+  font-weight: 400;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: pre-line;
+}
 .wq-title.closed {
   cursor: default;
   font-weight: 500;

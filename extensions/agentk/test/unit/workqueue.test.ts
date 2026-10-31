@@ -151,11 +151,12 @@ describe('the work queue', () => {
   });
 
   it('turns away an empty session id, and keeps a synced link\'s label when the item is edited', async () => {
-    const { q, state } = setup({ slack: [{ url: 'https://acme.slack.com/archives/C1/p1700000000000001', text: 'look', channel: 'db-dev' }] });
+    const { q, state } = setup({ slack: [{ url: 'https://acme.slack.com/archives/C1/p1700000000000001', text: 'look', notes: 'Hi @Alice, can you look?', reporter: 'Bob', channel: 'db-dev' }] });
     const a = await q.create({ title: 'A' });
     expect(() => q.update(a.id, { sessionId: '' })).toThrow(/must be its id/);
     await q.sync(true);
     const msg = q.list()[1];
+    expect(msg.notes).toBe('Bob: Hi @Alice, can you look?');
     q.update(msg.id, { title: 'Look at it', links: [msg.links[0].url!, 'DB-1'] });
     expect(q.get(msg.id).links.map((l) => l.label)).toEqual(['Slack #db-dev', 'DB-1']);
     expect(state.slackReads).toBe(1);
@@ -174,7 +175,7 @@ describe('the work queue', () => {
 
 describe('syncing the work queue', () => {
   const pr = (n: number): ReviewRequest => ({ repo: 'o/r', number: n, title: `PR ${n}`, url: `https://github.com/o/r/pull/${n}` });
-  const msg = (ts: string, text: string): SlackListItem => ({ url: `https://acme.slack.com/archives/C1/p${ts}`, text, channel: 'db-dev' });
+  const msg = (ts: string, text: string): SlackListItem => ({ url: `https://acme.slack.com/archives/C1/p${ts}`, text, notes: '', reporter: '', channel: 'db-dev' });
 
   it('adds review requests and Slack list messages at the bottom, new, and never again once closed', async () => {
     const { q, state } = setup({ reviews: [pr(1), pr(2)], slack: [msg('1700000000000001', 'can you look at\nthe flaky test')] });
@@ -291,7 +292,7 @@ describe("reading the user's Slack list", () => {
   });
 
   it.each([
-    ['the messages it found', ran({ structured_output: { found: true, items: [{ url: 'u', text: ' hi ', channel: 'c' }, { text: 'no url' }] } }), [{ url: 'u', text: 'hi', channel: 'c' }]],
+    ['the messages it found', ran({ structured_output: { found: true, items: [{ url: 'u', text: ' hi ', notes: ' Hi @Alice ', reporter: ' Bob ', channel: 'c' }, { url: 'v', text: 'no notes' }, { text: 'no url' }] } }), [{ url: 'u', text: 'hi', notes: 'Hi @Alice', reporter: 'Bob', channel: 'c' }, { url: 'v', text: 'no notes', notes: '', reporter: '', channel: '' }]],
     ['that it could not reach the list', ran({ structured_output: { found: false, items: [] } }), /couldn't read your Slack list.*slack_read_file/],
     ['a sign-in it needs', ran({ is_error: true, result: 'Not logged in · Please run /login' }, { code: 1 }), /isn't signed in/],
     ['a timeout', ran({}, { timedOut: true, code: null }), /over 180 seconds/],

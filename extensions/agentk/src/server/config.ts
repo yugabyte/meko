@@ -98,7 +98,8 @@ export interface Config {
    * to the Slack list that Slack sync reads. slackModel: the model of the `claude -p` that reads it through your
    * Slack connector (slack.ts), and
    * slackTimeoutSeconds how long it may take (30 to 600). slackTools: the tools that run may call, your Slack
-   * connector's tool that reads a file (the claude.ai Slack connector's `slack_read_file` by default), besides ToolSearch, which needs no
+   * connector's tool that reads a file (the claude.ai Slack connector's `slack_read_file` by default, with
+   * `slack_read_user_profile` to name the people a row mentions), besides ToolSearch, which needs no
    * permission and only loads tools. It loads none of your Claude Code settings but the sign-in part, so
    * nothing else is allowed (slack.ts).
    */
@@ -123,11 +124,12 @@ export interface ReviewModels {
 export { DEFAULT_MEKO_URL, DEFAULT_MEKO_WEB_URL, mekoWebUrl };
 
 /**
- * The Slack sync may call only the claude.ai Slack connector's file read: no search, and no channel or
- * thread read that a row's text could ask for. The tool takes any file ID, so it's the prompt, not this
- * limit, that keeps the run on the configured list.
+ * The Slack sync may call only the claude.ai Slack connector's file read, and its profile read to name
+ * the people a row mentions: no search, and no channel or thread read that a row's text could ask for.
+ * The file read takes any file ID, so it's the prompt, not this limit, that keeps the run on the
+ * configured list.
  */
-const SLACK_READ_TOOLS = ['mcp__claude_ai_Slack__slack_read_file'];
+const SLACK_READ_TOOLS = ['mcp__claude_ai_Slack__slack_read_file', 'mcp__claude_ai_Slack__slack_read_user_profile'];
 
 export const DEFAULT_CONFIG: Config = {
   server: { bind: '0.0.0.0', port: 7777, name: '' },
