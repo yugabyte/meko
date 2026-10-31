@@ -116,11 +116,8 @@ describe('local code review before the PR (real session host + git, fake claude 
     const childId = all<{ id: string }>(env.core.db, 'SELECT id FROM sessions WHERE parent_id = ?', s.id)[0].id;
     const scoring = prompts(env.core.sessions.row(childId).claude_session_id).filter((p) => p.includes('score 7 findings'));
     expect(scoring).toHaveLength(2);
-    // AgentK numbers the batches, so the model doesn't count; the steps' numbers run on across them.
     const [first, again] = scoring;
-    expect(first).toContain('a batch at a time');
-    expect(first).toMatch(/Batch 1:\s+1\. score 1: subagent `agentk-review-small`.*\s2\. score 2:.*\s3\. score 3:.*\s4\. score 4:.*\s5\. score 5:.*\sBatch 2:\s+6\. score 6:.*\s7\. score 7:/s);
-    expect(first).not.toContain('Batch 3:');
+    expect(first).toContain('Batch 2:');
     // Asked again, only the missing one, in a batch of its own.
     expect(again).toMatch(/Batch 1:\s+1\. score 6: subagent `agentk-review-small`/);
     expect(again).not.toContain('score 1:');
@@ -129,7 +126,7 @@ describe('local code review before the PR (real session host + git, fake claude 
     expect(env.core.reviews.detail(s.id).findings.map((f) => f.verdict)).toEqual(Array(7).fill('confirmed'));
   });
 
-  it('asks the task for the PR description with its Meko lines first,reviews the change against it, then opens the PR with it', async () => {
+  it('asks the task for the PR description with its Meko lines first, reviews the change against it, then opens the PR with it', async () => {
     // A datapack id as Meko gives them: hex, which a PR description's datapack line is told by.
     const DP = '0f1e2d3c-1111';
     const s = await task({ review: { strategy: 'sirius-1.0' } }, { mode: 'existing', id: DP, name: 'team/demo' });

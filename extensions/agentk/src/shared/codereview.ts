@@ -274,9 +274,10 @@ export function reviewSegmentLabel(r: CodeReviewSummary): string {
   let what: string;
   switch (r.state) {
     case 'preparing': what = 'preparing'; break;
-    // The passes may all be running, so no "step n" here: only how many have reported.
+    // The passes may all be running, and the scorers a batch at a time, so no "step n" or
+    // "scoring n" here: only how many have reported.
     case 'sweeping': what = `${r.passesDone} of ${r.passes} passes reported`; break;
-    case 'scoring': what = `step ${reviewSteps(r)} of ${reviewSteps(r)}, scoring ${Math.min(r.scoresDone + 1, r.candidates)} of ${r.candidates}`; break;
+    case 'scoring': what = `step ${reviewSteps(r)} of ${reviewSteps(r)}, ${r.scoresDone} of ${r.candidates} scored`; break;
     case 'describing': what = 'waiting for the PR description'; break;
     case 'fixing': what = 'waiting for the fixes'; break;
     case 'done': what = doneShowsCounts(r) ? countsText(r.counts) : totalCount(r.counts) ? `LGTM, ${countsText(r.counts)} addressed` : 'LGTM'; break;

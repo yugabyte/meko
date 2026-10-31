@@ -178,13 +178,13 @@ describe('the steps a prompt lists', () => {
     );
   });
 
-  it('groups them into numbered batches of at most the batch size, the steps numbered on across them', () => {
-    const text = stepList(steps(11), 5);
-    expect(text.match(/^Batch \d+:$/gm)).toEqual(['Batch 1:', 'Batch 2:', 'Batch 3:']);
-    expect(text).toContain('5. score 5: subagent `agentk-review-small`, prompt: `Read /run/score-5.md and do what it says.`\n\nBatch 2:\n6. score 6:');
-    expect(text.endsWith('Batch 3:\n11. score 11: subagent `agentk-review-small`, prompt: `Read /run/score-11.md and do what it says.`')).toBe(true);
-    expect(stepList(steps(5), 5)).not.toContain('Batch 2:');
-    expect(stepList(steps(1), 5)).toBe('Batch 1:\n1. score 1: subagent `agentk-review-small`, prompt: `Read /run/score-1.md and do what it says.`');
+  it.each([
+    [11, [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11]]],
+    [5, [[1, 2, 3, 4, 5]]],
+    [1, [[1]]],
+  ])('groups %i steps into numbered batches of at most 5, the steps numbered on across them', (n, batches) => {
+    const line = (i: number) => `${i}. score ${i}: subagent \`agentk-review-small\`, prompt: \`Read /run/score-${i}.md and do what it says.\``;
+    expect(stepList(steps(n), 5)).toBe(batches.map((b, i) => `Batch ${i + 1}:\n${b.map(line).join('\n')}`).join('\n\n'));
   });
 });
 

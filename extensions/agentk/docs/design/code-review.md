@@ -229,7 +229,8 @@ task writes the PR description (describing) or the review prepares, then how far
 has got (`reviewSteps()`: each pass of a sweep, then scoring as one step, so Sagittarius 3.0 counts
 `1/6` to `6/6` and Sirius 1.0, unscored, `1/1`, moving on as each pass reports, whether the passes
 run at once, on Claude Code and OpenCode, or one after another, on Kiro; with depth > 1 the passes
-count again for each sweep; the tooltip says how many passes have reported, and names the sweep),
+count again for each sweep; the tooltip says how many passes have reported, and names the sweep,
+and while scoring how many candidates have been scored, since a batch of scorers runs at once),
 `R1` while the task fixes round 1's findings, the result (`2·1`,
 blockers·majors, until the task has said what it did with every kept finding, every round's,
 through `review_outcome`: `CodeReviewSummary.addressed`; then, or with none, `LGTM`) or a red `!`.
