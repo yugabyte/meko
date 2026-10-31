@@ -8,7 +8,7 @@ import { dateTime } from "../lib/format";
 import { href, navigate } from "../lib/route";
 import type { AuthStatus, UsageStats } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
-import { Card, Code, ErrorNote, Spinner, Toggle } from "../components/ui";
+import { Card, ErrorNote, Spinner, Toggle } from "../components/ui";
 
 const HARNESS = "claude";
 
@@ -41,30 +41,12 @@ export function SettingsPage({ auth }: { auth: AuthStatus }) {
   );
 }
 
-// Who reaches this page: [web] access, which has no login either way, and how to turn it off.
+// Who reaches this page: [web] access, local or remote.
 function AccessCard({ auth }: { auth: AuthStatus }) {
   return (
     <Card className="space-y-2 p-4">
       <h3 className="font-medium">Access</h3>
-      <p className="text-sm text-muted-foreground">
-        {auth.access === "remote" ? (
-          <>
-            Meko is open to other devices, over HTTPS, with no sign-in: anyone who can reach this computer's port can
-            use it, and AgentK. To take only this computer's requests, set <Code>[web] access = "local"</Code> in{" "}
-            <Code>config.toml</Code> in Meko's data folder and restart Meko.
-          </>
-        ) : (
-          <>
-            Meko takes only requests from this computer, with no sign-in. To reach it from other devices, set{" "}
-            <Code>[web] access = "remote"</Code> in <Code>config.toml</Code> in Meko's data folder and restart Meko:
-            anyone who can reach this computer's port can then use it.
-          </>
-        )}
-      </p>
-      <p className="text-sm text-muted-foreground">
-        Not using the web UI? <Code>meko ui stop</Code> turns it off, AgentK's page with it, until{" "}
-        <Code>meko ui start</Code>.
-      </p>
+      <p className="text-sm text-muted-foreground">{auth.access === "remote" ? "Remote" : "Local"}</p>
     </Card>
   );
 }
