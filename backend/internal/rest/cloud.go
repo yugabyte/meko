@@ -318,10 +318,11 @@ func (a *api) addMemory(c echo.Context) error {
 		"agent_id": body.AgentID, "conversation_id": body.ConversationID})
 }
 
-// defaultLocation is where a listing or a create that names no location goes: def, unless the
-// request comes from a browser (local or remote access). The web UI always names one, so
-// a browser that doesn't is a tab still running a bundle from before Meko Cloud's datapacks were on
-// these routes, which lists, opens and makes only this Meko's: it gets this Meko's.
+// defaultLocation is where a listing that names no location goes: def, unless the request comes
+// from a browser (local or remote access). The web UI always names one, so a browser that doesn't is
+// a tab still running a bundle from before Meko Cloud's datapacks were on these routes, which lists
+// and opens only this Meko's: it gets this Meko's. A create isn't asked: while Meko Cloud is linked,
+// every create goes there (createDatapack).
 func (a *api) defaultLocation(c echo.Context, def string) string {
 	switch a.Credential(c) {
 	case "remote", "local":

@@ -8,9 +8,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -22,6 +24,7 @@ type fakeMCP struct {
 	url      string
 	sessions atomic.Int32
 	h        atomic.Pointer[http.Handler]
+	revoked  atomic.Bool // refuse the key, as Meko Cloud does once it's revoked
 }
 
 func newFakeMCP(t *testing.T) *fakeMCP {
@@ -29,7 +32,7 @@ func newFakeMCP(t *testing.T) *fakeMCP {
 	f := &fakeMCP{}
 	f.renew()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer "+key {
+		if r.Header.Get("Authorization") != "Bearer "+key || f.revoked.Load() {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -262,5 +265,91 @@ func TestPassDropsCredentials(t *testing.T) {
 	if _, err = s.Pass(context.Background(), http.MethodGet, "/datapacks", nil, ""); !errors.As(err, &ce) ||
 		ce.Code != CodeCallFailed {
 		t.Fatalf("a reply over the limit: %v", err)
+	}
+}
+
+// A key revoked under a session already open is CodeKeyRefused, and the session is dropped, so the
+// call after the key works again connects anew.
+func TestForwardKeyRevoked(t *testing.T) {
+	f := newFakeMCP(t)
+	s := linkedTo(t, f.url)
+	ctx := context.Background()
+	if _, err := s.Forward(ctx, "echo", nil); err != nil {
+		t.Fatal(err)
+	}
+	f.revoked.Store(true)
+	var ce *CallError
+	if _, err := s.Forward(ctx, "echo", nil); !errors.As(err, &ce) || ce.Code != CodeKeyRefused {
+		t.Fatalf("a revoked key: %v", err)
+	}
+	f.revoked.Store(false)
+	if _, err := s.Forward(ctx, "echo", nil); err != nil {
+		t.Fatalf("after the key works again: %v", err)
+	}
+	if n := f.sessions.Load(); n != 2 {
+		t.Fatalf("sessions: %d", n)
+	}
+}
+
+// A connect that hangs (Meko Cloud black-holed) holds up neither an unlink nor a read of the link.
+func TestHungConnectDoesntHoldUpALinkChange(t *testing.T) {
+	hang := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-hang:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(func() { close(hang); ts.Close() })
+	s := linkedTo(t, ts.URL+"/mcp")
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _, _ = s.Forward(ctx, "echo", nil) }()
+	time.Sleep(200 * time.Millisecond) // the connect is under way
+	done := make(chan error, 1)
+	go func() { _, err := s.Unlink(context.Background()); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the unlink waited on the hung connect")
+	}
+	if linked, err := s.IsLinked(); err != nil || linked {
+		t.Fatalf("after the unlink: %v %v", linked, err)
+	}
+}
+
+// A save that fails partway drops the link as last read, so the next read takes it from the store.
+func TestFailedSaveForgetsTheCachedLink(t *testing.T) {
+	f := newFakeMCP(t)
+	s := linkedTo(t, f.url)
+	gen := s.gen
+	if err := os.Remove(s.Store.File); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(s.Store.File, 0o700); err != nil { // cloud.toml can't be written now
+		t.Fatal(err)
+	}
+	if _, err := s.Link(context.Background(), Update{Key: ptr("mko_tkn_other_0123456789")}); err == nil {
+		t.Fatal("a link whose cloud.toml can't be written was saved")
+	}
+	s.stateMu.Lock()
+	cached, newGen := s.state, s.gen
+	s.stateMu.Unlock()
+	if cached != nil || newGen == gen {
+		t.Fatalf("after a failed save: state %+v, gen %d (was %d)", cached, newGen, gen)
+	}
+}
+
+// Account is pinned: AgentK works out the same hash for an older Meko's link (core.ts
+// mekoCloudAccount), so the two must agree.
+func TestAccount(t *testing.T) {
+	if got := (Link{URL: "https://mcp.example.com/mcp", Key: "mko_tkn_x"}).Account(); got != "8adf4764ab826787" {
+		t.Errorf("Account = %q", got)
+	}
+	if got := (Link{URL: "https://mcp.example.com/mcp"}).Account(); got != "" {
+		t.Errorf("Account with no key = %q", got)
 	}
 }

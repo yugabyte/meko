@@ -66,8 +66,8 @@ every extension the same way (`internal/cloudlink`).
   unlinked, Meko Cloud's while linked. A link that can't be read (a secret store that refused) counts
   as linked: its calls fail with `cloud_call_failed` and the reason in the log, rather than land in
   this Meko's datapacks. A session already running keeps the tool list it read at
-  `initialize`; a stateless server can't tell it of a change, so a link change needs agents'
-  sessions restarted, as `meko cloud_link` says.
+  `initialize`; a stateless server can't tell it of a change, so agents' sessions see a link
+  change once restarted. `meko cloud_link` says so only for the agents it moved back.
 - **The tools** are Meko Cloud's own, as its `tools/list` gives them (names, schemas,
   annotations), and so are the `initialize` instructions. They're read at start, after each link
   change, and again once 15 minutes old; a request before the first read waits for it up to 10 s.

@@ -12,13 +12,17 @@ per user in Meko, so a member sees their own memories plus the datapack's shared
 Meko's share routes (`POST /datapacks/:id/share`, `GET …/member-list`, `GET …/outgoing-shares`,
 `POST …/invite/:id/resend`, `DELETE …/invite/:id`, `GET /datapacks/incoming-shares`,
 `POST /datapacks/invite-action`, and the share link's `GET`/`PUT …/share-link` and
-`POST /share/:token/redeem`) are REST, not MCP. `src/server/mekoapi.ts` calls them with the
-same API key (a Meko personal access token), at `[meko] api_url` (by default the web app URL plus
-`/api/v1`). AgentK can share when Meko is on and that API URL is known (`resolveMekoApiUrl()`, from
-the config, not by asking Meko); the state sent to the browser carries it as `MekoStatus.sharing`.
-Without an API URL the share routes answer 409, saying to set the web app URL, and the invite sync
-skips Meko's invites. The Meko on this computer has no share routes and usually no API URL, so
-while AgentK uses it, Share doesn't open the Share dialog. (An API URL on its own origin, kept in
+`POST /share/:token/redeem`) are REST, not MCP. `src/server/mekoapi.ts` calls them at Meko's API URL
+(`resolveMekoApiUrl()`) with AgentK's Meko key. While the Meko on this computer is linked to Meko
+Cloud, that's the local Meko's client token and its pass-through, `<local origin>/api/v1/cloud`,
+which sends each call on to Meko Cloud's REST API with the link's key: Meko keeps the key, and Share
+opens the Share dialog. Under an older Meko that still hands out the link's key, it's that key at
+the link's API URL; with AgentK's own key from before Meko owned the link, `[meko] api_url` (by
+default the web app URL plus `/api/v1`). AgentK can share when Meko is on and the API URL is known;
+the state sent to the browser carries it as `MekoStatus.sharing`. Without an API URL the share
+routes answer 409, saying to set the web app URL, and the invite sync skips Meko's invites. The Meko
+on this computer unlinked has no share routes, so while AgentK uses it unlinked, Share doesn't open
+the Share dialog. (An API URL on its own origin, kept in
 config.toml from before Meko owned the link, is the exception: `forKey()` in `config.ts` keeps it,
 and Share then opens the Share dialog.) It opens **Share through Meko Cloud** instead
 (`MekoLinkDialog.tsx`), as Meko's own Invite points to Meko Cloud: **Sign up for Meko Cloud ↗**

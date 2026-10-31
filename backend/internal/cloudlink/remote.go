@@ -55,19 +55,18 @@ type remote struct {
 	reading chan struct{} // closed when the read in progress ends
 }
 
-// reset drops the session and the tool list, for the link of generation gen, after a change. A read
-// still running for the old link no longer holds up the new link's.
-func (r *remote) reset(gen int) {
+// reset drops the session and the tool list, for the link of generation gen, after a change, and
+// returns the old session for the caller to close. A read still running for the old link no longer
+// holds up the new link's. r.mu is never held over the network (session), so this never waits on one.
+func (r *remote) reset(gen int) *mcp.ClientSession {
 	r.mu.Lock()
 	cs := r.cs
 	r.cs, r.gen = nil, gen
 	r.mu.Unlock()
-	if cs != nil {
-		_ = cs.Close()
-	}
 	r.toolsMu.Lock()
 	r.tools, r.readAt, r.tried, r.reading = nil, time.Time{}, time.Time{}, nil
 	r.toolsMu.Unlock()
+	return cs
 }
 
 // generation is the link generation the kept session is for.
@@ -78,21 +77,39 @@ func (r *remote) generation() int {
 }
 
 // session is the kept session for l, of generation gen, connecting when there's none; errLinkChanged
-// when a change has replaced l since it was read.
+// when a change has replaced l since it was read. The handshake runs outside r.mu, so a slow Meko
+// Cloud holds up neither a link change nor calls that already have the session; two calls that
+// connect at once keep the first session made and close the other.
 func (r *remote) session(ctx context.Context, l Link, gen int) (*mcp.ClientSession, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if gen != r.gen {
+	switch {
+	case gen != r.gen:
+		r.mu.Unlock()
 		return nil, errLinkChanged
+	case r.cs != nil:
+		cs := r.cs
+		r.mu.Unlock()
+		return cs, nil
 	}
-	if r.cs != nil {
-		return r.cs, nil
-	}
+	r.mu.Unlock()
 	cs, err := connectCloud(ctx, l)
 	if err != nil {
 		return nil, err
 	}
-	r.cs = cs
+	r.mu.Lock()
+	kept, stale := r.cs, gen != r.gen
+	if !stale && kept == nil {
+		r.cs = cs
+	}
+	r.mu.Unlock()
+	switch {
+	case stale:
+		_ = cs.Close()
+		return nil, errLinkChanged
+	case kept != nil:
+		_ = cs.Close()
+		return kept, nil
+	}
 	return cs, nil
 }
 
@@ -115,7 +132,7 @@ func connectCloud(ctx context.Context, l Link) (*mcp.ClientSession, error) {
 	cs, err := c.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: l.MCPURL(), HTTPClient: hc, MaxRetries: -1,
 		DisableStandaloneSSE: true}, nil)
 	if err != nil {
-		if strings.Contains(err.Error(), "Unauthorized") || strings.Contains(err.Error(), "401") {
+		if refused(err) {
 			return nil, keyRefused()
 		}
 		return nil, &CallError{Code: CodeUnreachable, msg: "Couldn't reach Meko Cloud's MCP server: " +
@@ -128,6 +145,11 @@ func connectCloud(ctx context.Context, l Link) (*mcp.ClientSession, error) {
 // connection is closed. Only then is the session dropped.
 func sessionGone(err error) bool {
 	return errors.Is(err, mcp.ErrSessionMissing) || errors.Is(err, mcp.ErrConnectionClosed)
+}
+
+// refused says a call failed because Meko Cloud refused the key (an HTTP 401).
+func refused(err error) bool {
+	return strings.Contains(err.Error(), "Unauthorized") || strings.Contains(err.Error(), "401")
 }
 
 // current is the saved link and its generation, read together; a CodeNotLinked CallError when
@@ -169,6 +191,11 @@ func (s *Service) Forward(ctx context.Context, name string, args json.RawMessage
 		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: a})
 		if err == nil {
 			return res, nil
+		}
+		if refused(err) {
+			// The key was revoked under a session already open: the next call connects again.
+			s.remote.drop(cs)
+			return nil, keyRefused()
 		}
 		if sessionGone(err) {
 			s.remote.drop(cs)

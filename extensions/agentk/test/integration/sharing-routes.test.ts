@@ -421,6 +421,11 @@ describe('HTTP API: sharing, invites and Meko', () => {
     env.local.cloud = { ...env.local.cloud, account: 'bbbb000000000002' };
     expect((await call('POST', '/_meko/changed', { what: 'cloud' })).statusCode).toBe(204);
     await waitFor(() => forget.mock.calls.length, (n) => n === 4, 5000, 'the new account forgets the old one');
+    // Only the web app's URL set or changed, for the same account: nothing is forgotten.
+    env.local.cloud = { ...env.local.cloud, webUrl: 'https://meko.example.com' };
+    expect((await call('POST', '/_meko/changed', { what: 'cloud' })).statusCode).toBe(204);
+    await waitFor(() => env.core.mekoStatus.webUrl, (u) => u === 'https://meko.example.com', 5000, 'the new web app');
+    expect(forget).toHaveBeenCalledTimes(4);
     vi.unstubAllEnvs();
   });
 

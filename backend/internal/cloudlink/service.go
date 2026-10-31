@@ -58,14 +58,24 @@ func (s *Service) loadLocked() (State, error) {
 	return st, nil
 }
 
-// saved records a saved link, and drops the session and the tool list of the link before it, at
-// once: a call or a read that started before the change finds its link stale (remote.session).
-func (s *Service) saved(st State) {
+// saved records a saved link, and drops the session and the tool list of the link before it: a
+// call or a read that started before the change finds its link stale (remote.session). The old
+// session is closed after stateMu is released, so a slow Meko Cloud never holds up a read of the link.
+func (s *Service) saved(st State) { s.replace(&st) }
+
+// unsure forgets the link as last read, after a save that failed partway (the key written but not
+// cloud.toml, say): the next read takes it from the store again, as meko token --json does.
+func (s *Service) unsure() { s.replace(nil) }
+
+func (s *Service) replace(st *State) {
 	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-	s.state = &st
+	s.state = st
 	s.gen++
-	s.remote.reset(s.gen)
+	old := s.remote.reset(s.gen)
+	s.stateMu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
 }
 
 // Update is a change: a nil field is left as it is. An empty Key keeps the saved one.
@@ -246,6 +256,7 @@ func (s *Service) link(ctx context.Context, u Update) (Status, bool, error) {
 		}
 	}
 	if err := s.Store.save(true, next); err != nil {
+		s.unsure()
 		return Status{}, false, err
 	}
 	after := State{Set: true, Linked: true, Link: next}
@@ -276,6 +287,7 @@ func (s *Service) unlink(ctx context.Context) (Status, bool, error) {
 	link := cur.Link
 	link.Key = ""
 	if err := s.Store.save(false, link); err != nil {
+		s.unsure()
 		return Status{}, false, err
 	}
 	after := State{Set: true, Link: link}

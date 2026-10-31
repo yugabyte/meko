@@ -304,8 +304,10 @@ start, so an edit made while it runs takes effect after a restart, and a save fr
 differ from the defaults are written, so a changed default reaches existing installs; a value of the wrong type is ignored with a warning. An older
 install's `[server] bind` and `port` and `[tls]` stay in the file for Meko's handoff
 ([security.md](security.md)), and nothing else reads them. The Meko
-URL and key are Meko's: its Meko Cloud link, else the Meko running on this computer with its own URL
-and token, both read from Meko (`meko token --json`) and never written here. `[meko] url`, `api_key`,
+URL and key are Meko's: the Meko running on this computer with its own URL and token, linked to Meko
+Cloud or not (while linked it passes AgentK's calls on to Meko Cloud: `/mcp`, and `/api/v1/cloud` for
+its REST API), or under an older Meko that still hands out its link's key, that link's URL and key;
+all read from Meko (`meko token --json`) and never written here. `[meko] url`, `api_key`,
 `web_url` and `api_url`, `MEKO_MCP_URL`/`MEKO_API_KEY` and the `env` block of Claude Code's user
 `settings.json` are read only to hand a key from before to Meko, once, and under a Meko too old to
 keep the link ([datapacks.md](datapacks.md)). An `enabled` key left in `[meko]` by older versions is ignored and

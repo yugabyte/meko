@@ -7,7 +7,7 @@ import {
   ownMekoKey, resolveMekoWithSource, saveConfig,
 } from '../../src/server/config.js';
 import { forgetContact, listContacts, recordShares } from '../../src/server/contacts.js';
-import { shortHost } from '../../src/server/core.js';
+import { mekoCloudAccount, shortHost } from '../../src/server/core.js';
 import { LocalMekoReader, setMekoLinkHandedOver, type LocalMekoProbe } from '../../src/server/mekolocal.js';
 import { all, kvGet, openDb, run, schemaVersion, snapshotDb } from '../../src/server/db.js';
 import { githubRepo, prettyRemote } from '../../src/server/git.js';
@@ -1130,5 +1130,11 @@ describe('Meko credentials', () => {
     }
     claudeSettings(null);
     expect(readClaudeSettingsEnv()).toEqual({});
+  });
+});
+
+describe('mekoCloudAccount', () => {
+  it("is Meko's account for a link's MCP URL and key (backend/internal/cloudlink Link.Account)", () => {
+    expect(mekoCloudAccount('https://mcp.example.com/mcp', 'mko_tkn_x')).toBe('8adf4764ab826787');
   });
 });

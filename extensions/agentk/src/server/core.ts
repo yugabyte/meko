@@ -1,4 +1,5 @@
 import { CodeReviews } from './review/runner.js';
+import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import type { Server } from 'node:http';
 import { mkdirSync, rmSync } from 'node:fs';
@@ -117,15 +118,25 @@ const MEKO_HANDED_OVER_KEY = 'meko-link-handed-over';
 
 /**
  * Which Meko account a Meko is, for whether a change forgets the account's invites: the Meko on
- * this computer is one account on any port or token; Meko Cloud reached through it is the link's
- * web app (Meko keeps its key); any other is its server's origin and key. Null with no Meko.
+ * this computer is one account on any port or token; a Meko Cloud link Meko keeps is its account
+ * (Meko's `account`, a hash of the link's MCP URL and key), and an older Meko's link, which handed
+ * out the key, the same hash worked out here, so the upgrade between them isn't a new account; any
+ * other is its server's origin and key. Null with no Meko.
  */
 function mekoAccountOf(m: { url: string; apiKey: string; keySource: MekoKeySource | null }): string | null {
   if (!m.apiKey) return null;
   if (m.keySource === 'local') return 'local';
-  const cloud = localMeko().cloud;
-  if (m.keySource === 'meko' && linkedThroughMeko(cloud)) return `cloud ${cloud?.webUrl ?? ''} ${cloud?.account ?? ''}`;
+  if (m.keySource === 'meko') {
+    const cloud = localMeko().cloud;
+    if (linkedThroughMeko(cloud)) return `cloud ${cloud?.account ?? ''}`;
+    return `cloud ${mekoCloudAccount(m.url, m.apiKey)}`;
+  }
   return `${originOf(m.url)} ${m.apiKey}`;
+}
+
+/** Meko's `account` for a Meko Cloud link: the first 16 hex digits of the SHA-256 of its MCP URL and key. */
+export function mekoCloudAccount(mcpUrl: string, key: string): string {
+  return createHash('sha256').update(`${mcpUrl}\n${key}`).digest('hex').slice(0, 16);
 }
 
 /** How often the server checks that its hook socket file is still there. */
