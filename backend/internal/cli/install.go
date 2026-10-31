@@ -32,7 +32,7 @@ var runningRelease = update.Running
 // runInstall sets this meko up: as a release install, app/current and the meko command point at
 // it; then the client token, the web listener's access, and the login service, which it starts. It
 // installs Meko alone: extensions are meko extension install's.
-func runInstall(l paths.Layout, noService bool, access string, stdout, stderr io.Writer) int {
+func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout, stderr io.Writer) int {
 	r := newReport(stdout)
 	if access != "" && access != config.AccessLocal && access != config.AccessRemote {
 		return fail(stderr, fmt.Errorf("--access takes local or remote, not %q", access))
@@ -87,7 +87,7 @@ func runInstall(l paths.Layout, noService bool, access string, stdout, stderr io
 	}
 	r.step(stepOK, "Data", fmt.Sprintf("%s (secrets %s)", l.Root, map[string]string{
 		"keychain": "in your login Keychain", "file": "in it, readable only by you"}[ct.Store.Kind()]))
-	if err = setWebAccess(l, cfg, access, home, stdout); err != nil {
+	if err = setWebAccess(l, access, noUI, home, stdout); err != nil {
 		return fail(stderr, err)
 	}
 	if noService {
@@ -134,6 +134,9 @@ func runInstall(l paths.Layout, noService bool, access string, stdout, stderr io
 	}
 	r.step(stepOK, "Server", fmt.Sprintf("running at http://127.0.0.1:%d (pid %d)", st.Port, st.PID))
 	next := [][2]string{{"meko ui", "open the web UI"}, {"meko status", "check on Meko at any time"}}
+	if noUI {
+		next[0] = [2]string{"meko ui start", "turn the web UI on, when you want it"}
+	}
 	if !agentKRegistered(l) {
 		next = append(next, [2]string{"meko extension install agentk", "add AgentK, your coding team"})
 	}
@@ -144,13 +147,39 @@ func runInstall(l paths.Layout, noService bool, access string, stdout, stderr io
 }
 
 // setWebAccess writes the web listener's access to web.toml (config.AddWeb) when neither it nor
-// config.toml has a [web] table: with access, or, unless an
-// AgentK is on this computer (whose own access Meko takes over when it hands over its port), with
-// the default AgentK had: remote over SSH or on Linux with no display, local otherwise.
-func setWebAccess(l paths.Layout, cfg config.Config, access, home string, stdout io.Writer) error {
+// config.toml sets one: with access, or, unless an AgentK is on this computer (whose own access Meko
+// takes over when it hands over its port), with the default AgentK had: remote over SSH or on Linux
+// with no display, local otherwise. With noUI it turns the web UI off there too (config.SetWebEnabled).
+func setWebAccess(l paths.Layout, access string, noUI bool, home string, stdout io.Writer) error {
+	if noUI {
+		if err := config.SetWebEnabled(l.Config, false); errors.Is(err, config.ErrWebEnabledSet) {
+			return errors.New("config.toml sets [web] enabled, which --no-ui would change: change it there instead")
+		} else if err != nil {
+			return err
+		}
+	}
+	added, err := addWebAccess(l, access, home)
+	switch {
+	case err != nil:
+		return err
+	case noUI:
+		newReport(stdout).step(stepOK, "Web UI", fmt.Sprintf("%s, in %s", webOffNote, config.WebFile(l.Config)))
+	case added != "":
+		note := "from this computer"
+		if added == config.AccessRemote {
+			note = "every address, over HTTPS, no login"
+		}
+		newReport(stdout).step(stepOK, "Web UI", fmt.Sprintf("%s access (%s), in %s; [web] in config.toml overrides it",
+			added, note, config.WebFile(l.Config)))
+	}
+	return nil
+}
+
+// addWebAccess is setWebAccess's access: the one it wrote, or "" when it wrote none.
+func addWebAccess(l paths.Layout, access, home string) (string, error) {
 	if access == "" {
 		if cat := extensions.Known["agentk"]; cat.Find("agentk", home, l.Root) != "" {
-			return nil
+			return "", nil
 		}
 		access = config.AccessLocal
 		if headless() {
@@ -159,16 +188,9 @@ func setWebAccess(l paths.Layout, cfg config.Config, access, home string, stdout
 	}
 	added, err := config.AddWeb(l.Config, config.Web{Access: access}, config.TLS{})
 	if err != nil || !added {
-		return err
+		return "", err
 	}
-	cfg.Web.Access = access
-	note := "browsers on this computer open it with no login"
-	if access == config.AccessRemote {
-		note = "every address, over HTTPS; meko setup_link makes the login"
-	}
-	newReport(stdout).step(stepOK, "Web UI", fmt.Sprintf("%s access (%s), in %s; [web] in config.toml overrides it",
-		access, note, config.WebFile(l.Config)))
-	return nil
+	return access, nil
 }
 
 // headless reports whether this looks like a machine reached from elsewhere: an SSH session, or Linux

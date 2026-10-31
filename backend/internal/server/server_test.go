@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -325,5 +326,34 @@ func TestServerStatusForClients(t *testing.T) {
 	m, _ := env.Data.(map[string]any)
 	if code != 200 || m["version"] != "test" || m["memory_engine"] == nil {
 		t.Errorf("client token: %d %+v", code, env)
+	}
+}
+
+// POST /api/v1/web/reload (meko ui start and stop) is the API listener's, for the admin token only.
+func TestReloadWeb(t *testing.T) {
+	reloads := 0
+	s := New(Options{Info: Info{Version: "test"}, Port: 7790, Token: token, ClientToken: clientToken,
+		Logger: slog.New(slog.DiscardHandler), ReloadWeb: func() { reloads++ }})
+	for _, tc := range []struct {
+		name, bearer string
+		want         int
+	}{
+		{name: "nothing", want: 401},
+		{name: "the client token", bearer: clientToken, want: 403},
+		{name: "the admin token", bearer: token, want: 200},
+	} {
+		req := httptest.NewRequest(http.MethodPost, reloadWebRoute, nil)
+		req.Host = "127.0.0.1:7790"
+		if tc.bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+tc.bearer)
+		}
+		rec := httptest.NewRecorder()
+		s.ServeHTTP(rec, req)
+		if rec.Code != tc.want {
+			t.Errorf("%s: %d, want %d", tc.name, rec.Code, tc.want)
+		}
+	}
+	if reloads != 1 {
+		t.Errorf("reloads %d, want 1", reloads)
 	}
 }

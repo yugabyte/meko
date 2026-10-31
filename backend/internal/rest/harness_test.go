@@ -11,7 +11,7 @@ import (
 )
 
 // Setting up extraction or answers makes the server run a program, so only the owner may: the
-// admin token, a session or local access. Only the admin token names the program; local access is
+// admin token, remote or local access. Only the admin token names the program; local access is
 // every user of the computer's, so the others get the claude the server finds, or a 400 without one.
 func TestHarnessSetup(t *testing.T) {
 	claude := fakeClaude(t)
@@ -30,14 +30,14 @@ func TestHarnessSetup(t *testing.T) {
 			as = cred
 			wantErr(t, e, "PUT", settings, map[string]any{"harness": "claude"}, 403, "FORBIDDEN")
 		}
-		for _, cred := range []string{"session", "local"} {
+		for _, cred := range []string{"remote", "local"} {
 			as = cred
 			wantErr(t, e, "PUT", settings, map[string]any{"harness": "claude", "command": elsewhere}, 403,
 				"FORBIDDEN")
 			wantErr(t, e, "PUT", settings, map[string]any{"harness": "claude"}, 400, "VALIDATION_ERROR")
 		}
 		t.Setenv("PATH", filepath.Dir(claude)+":/usr/bin:/bin")
-		for _, cred := range []string{"session", "local"} {
+		for _, cred := range []string{"remote", "local"} {
 			as = cred
 			if st := obj(okData(t, e, "PUT", settings, map[string]any{"harness": "claude"}, 200)); st["command"] != claude {
 				t.Errorf("%s %s: %v", cred, settings, st)

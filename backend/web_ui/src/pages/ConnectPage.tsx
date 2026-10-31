@@ -18,8 +18,9 @@ export function ConnectPage({ datapack }: { datapack: Datapack }) {
   if (error) return <ErrorNote error={error} />;
   if (!data) return null;
 
-  // The token comes only to a signed-in owner: with local access (anyone on this computer) or auth
-  // off, this page gets none, and `meko token` on the host prints it.
+  // The token never comes to a browser: with local access (anyone on this computer), remote access
+  // (anyone who reaches its port) or auth off, this page gets none, and `meko token` on the host
+  // prints it.
   const token = data.mcp_api_key;
   const masked = token ? `${token.slice(0, 6)}${"•".repeat(20)}` : "(not shown here: run meko token on this computer)";
   const header = token ? ` --header "Authorization: Bearer ${token}"` : "";

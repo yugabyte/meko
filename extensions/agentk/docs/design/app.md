@@ -183,7 +183,13 @@ disk (in a commit's view, its parent's and its own, from git), only for those ty
 a sandboxing content policy so the bytes can never run as a page. The footer counts use the same
 comparison, so they always match. The file list is the header's **Files** menu, with a filter, so
 you can jump to any file from anywhere in a long diff; each file's header shows its position
-(*4 / 12*), and `[` / `]` step to the previous or next file.
+(*4 / 12*), and `[` / `]` step to the previous or next file. The filter keeps a file whose path or
+old path holds what's typed as plain text or matches it as a regular expression, both ignoring case
+(`pathFilter()` in `src/web/diff.ts`), so `\.tsx?$` or `^src/web/` work, and a name with regex
+characters in it (`[id].tsx`, `page (1).tsx`) is still found as typed. While what's typed isn't a
+valid expression (a group typed partway, `src/(`), the longest start of it that is one filters
+instead (`src/`), so the list doesn't go blank before the `)`. The commit and base menus match plain
+text.
 
 The header's commit menu (**All changes ▾**) shows either that whole comparison or one of the
 branch's commits alone: the commits since the merge base, newest first (at most 200,
@@ -434,7 +440,7 @@ hides the offer in that browser for good (`localStorage`, as the other banners d
 per browser and device, so the server doesn't keep it). The page catches the browser's
 `beforeinstallprompt` as it loads and holds it, so Android Chrome doesn't show its own install bar
 as well (`src/web/installapp.ts`). The banner doesn't show in the installed app, once the app is
-installed (Chrome stops making the offer in its tabs), or before sign-in. While the browser can
+installed (Chrome stops making the offer in its tabs), or before a sign-in on a Meko that has one. While the browser can
 still install it, **Install AgentK as an app** is in the `⌘K` palette too, even after Not now.
 Tapping Install doesn't also ask for notification permission (the first-click ask waits for the
 next click), so one tap never brings up two prompts.
@@ -467,7 +473,7 @@ the page for a focused field, its offset), so the on-screen keyboard shrinks the
 covering the prompt or a dialog's fields. On a touch screen the keyboard comes up only when you tap
 a field: opening a dialog (New project, New session, Open PR) or the Changes panel's Files, commit
 and base menus doesn't focus a text field. The page itself never scrolls, since the app puts its
-scroll back at the top. (Signing in is Meko's page.)
+scroll back at the top. (Signing in, on a Meko that has a login, is Meko's page.)
 While you type, the terminal stays scrolled to its newest line. On
 touch screens the terminal gets a key bar (Tab, arrows, Ctrl+C, Enter, select mode, typing mode,
 and at the far right a ▾ key that opens a second row of more keys: a sticky Ctrl, Esc, Shift+Tab,

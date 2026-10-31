@@ -398,28 +398,16 @@ export interface UsageStats {
   url?: string;
 }
 
-// GET /auth/status, which needs no credential.
+// GET /auth/status, which needs no credential. There's no login: Meko still sends setup_required,
+// reset, username and totp_enabled, always empty, for older pages.
 export interface AuthStatus {
-  // How [web] access in config.toml opens the web listener: "local" (this computer, no login) or
-  // "remote" (any address, HTTPS, a password login).
+  // How [web] access in config.toml opens the web listener: "local" (this computer only) or
+  // "remote" (every address, over HTTPS). Neither has a login.
   access: "local" | "remote";
-  // This request came in as a local one, which needs no login.
+  // This request came in as a local one.
   local_access: boolean;
+  // Whether Meko lets this request in.
   signed_in: boolean;
-  // Remote access needs a login made from a setup link (meko setup_link) first.
-  setup_required: boolean;
-  // setup_required while a login exists: the setup link replaces it.
-  reset: boolean;
-  // The login's username, or null when there's none.
-  username: string | null;
-  totp_enabled: boolean;
-}
-
-// POST /auth/totp/enroll: the authenticator's secret, as text and as the otpauth:// URL its QR
-// code holds.
-export interface TotpEnroll {
-  secret: string;
-  otpauth_url: string;
 }
 
 // GET /extensions: every extension Meko knows, whether it's installed (registered with Meko), its

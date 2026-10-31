@@ -58,10 +58,11 @@ says so and changes nothing, unless given `--reinstall` or another version.
   and names the `meko-cli` command instead (exit 2), so a `~/.local/bin/mekosh` link stays.
 - It makes the client token (in the secret store) and sets up the login service (below), stopping
   a server started by hand on the same data folder first. `--no-service` skips the service.
-- It writes the web listener's access to `web.toml` when neither it nor `config.toml` has a `[web]`
-  table: `--access local|remote`, or by AgentK's old rule (remote over SSH or on Linux with no
-  display, else local), unless AgentK is on this computer, whose access the handoff takes over
-  instead ([web.md](web.md#settings)). It prints the web UI's URL.
+- It writes the web listener's access to `web.toml` when neither it nor `config.toml` sets one:
+  `--access local|remote`, or by AgentK's old rule (remote over SSH or on Linux with no display,
+  else local), unless AgentK is on this computer, whose access the handoff takes over instead
+  ([web.md](web.md#settings)). Neither access has a login. `--no-ui` turns the web UI off there
+  too (`[web] enabled = false`; `meko ui start` turns it on). It prints the web UI's URL.
 - It installs Meko alone. AgentK is `meko extension install agentk`.
 
 `meko uninstall` removes the service, `~/.local/bin/meko`, `~/.local/bin/meko-cli`,
@@ -342,8 +343,8 @@ follows on stderr.
   Extensions page) with that folder first on PATH (`extensions.CommandEnv`).
 - An extension whose catalog entry has `WebUI` (AgentK, Presenter) is served to browsers by the web listener at
   `/ext/<name>/`, on the unix socket `<command> _handoff --json` names; at every start, that handoff
-  also brings over the web settings, certificate and login the extension had when it served
-  browsers itself ([web.md](web.md#the-handoff-from-agentk)). AgentK listens only on its socket.
+  also brings over the web settings and certificate the extension had when it served browsers
+  itself (its old login is ignored) ([web.md](web.md#the-handoff-from-agentk)). AgentK listens only on its socket.
 - `meko start` starts the extensions after Meko; `meko stop` stops them first (`agentk stop`
   ends AgentK's sessions too; they resume on start), unless given `--keep-extensions`. An
   extension that fails is reported, and the rest go on. `meko restart`, Meko's updates and crashes

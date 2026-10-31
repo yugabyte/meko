@@ -15,8 +15,8 @@ import (
 )
 
 // Updates is the Status page's way to Meko's updates: serve's update.Updater. Only the web
-// listener has the routes (GET /api/v1/update, POST /update/check and /update/apply), behind its
-// sign-in; the CLI has meko update.
+// listener has the routes (GET /api/v1/update, POST /update/check and /update/apply), for its
+// browsers; the CLI has meko update.
 type Updates interface {
 	Status() update.Status
 	CheckNow(ctx context.Context) (update.Status, error)

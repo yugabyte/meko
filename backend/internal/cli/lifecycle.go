@@ -94,7 +94,7 @@ var webWait = 10 * time.Second
 // listening, and not saying why) reads it again until ctx ends. It returns the last status it read.
 func waitWebListening(ctx context.Context, c *client) (server.StatusReply, error) {
 	st, err := c.status(ctx)
-	for err == nil && st.Web != nil && !st.Web.Listening && st.Web.Error == "" {
+	for err == nil && st.Web != nil && st.Web.Enabled && !st.Web.Listening && st.Web.Error == "" {
 		select {
 		case <-ctx.Done():
 			return st, nil
@@ -133,6 +133,8 @@ func printRunning(l paths.Layout, title string, next [][2]string, stdout io.Writ
 	r.step(k, "Memory engine", text)
 	if w := st.Web; w != nil {
 		switch {
+		case !w.Enabled:
+			r.step(stepWarn, "Web UI", webOffNote)
 		case w.Listening:
 			r.step(stepOK, "Web UI", "listening")
 		case w.Error != "":

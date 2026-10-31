@@ -97,7 +97,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 
 ## 2. Security
 
-- [ ] The server listens only on its unix socket and has no login of its own: Meko signs people in
+- [ ] The server listens only on its unix socket and has no login of its own: Meko decides who gets in
       and serves AgentK at `/ext/agentk/` (AGENTS.md invariant 3). Nothing adds a TCP listener, a
       login, or trust in a forwarding header. Access checks key on the matched route, never the raw
       URL (the router decodes `/%61pi/`).
@@ -120,8 +120,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       checked without the key. Remote URLs lose their credentials before they go into a datapack
       description (`withoutCredentials`).
 - [ ] Nothing sent to a browser can queue in memory without limit (terminal output pauses the pty;
-      state snapshots are skipped). A socket that closes abnormally (1006: Meko refused it or closed
-      a signed-out session's) asks Meko about the sign-in alongside its retry, throttled.
+      state snapshots are skipped). A socket that closes abnormally (1006: Meko refused it, or closed
+      it as its web listener stopped) asks Meko about the sign-in alongside its retry, throttled.
 - [ ] The web socket and the hook socket stay owner-only (directory 0700, socket 0600; bound under a
       temporary name and renamed, `listenPrivate`), and hook events are matched by per-session token.
 - [ ] Nothing internal (hostnames, mount paths, tokens) is committed; the repo will be public.
