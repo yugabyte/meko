@@ -39,19 +39,15 @@ describe('findingGroups', () => {
     ]);
   });
 
-  it("puts each group's dropped findings under dismissed, apart from its kept ones, both in the order they came", () => {
-    const groups = findingGroups([f('a', 1, 1, false), f('b', 1, 1), f('c', 1, 1, false), f('d', 1, 1), f('e', 2, 1, false)]);
+  it("puts each group's dropped findings under dismissed, apart from its kept ones and the running round's pending ones, in the order they came", () => {
+    const groups = findingGroups([
+      f('a', 1, 1, false), f('b', 1, 1), f('c', 1, 1, false), f('d', 1, 1), f('e', 2, 1, false),
+      f('f', 3, 1, false, true), f('g', 3, 1, false, true),
+    ]);
     expect(groups.map((g) => [g.label, g.findings.map((x) => x.key), g.dismissed.map((x) => x.key)])).toEqual([
       ['Round 1', ['b', 'd'], ['a', 'c']],
       ['Round 2', [], ['e']],
-    ]);
-  });
-
-  it("keeps the running round's candidates, not yet kept or dropped, out of dismissed", () => {
-    const groups = findingGroups([f('a', 1, 1), f('b', 1, 1, false), f('c', 2, 1, false, true), f('d', 2, 1, false, true)]);
-    expect(groups.map((g) => [g.label, g.findings.map((x) => x.key), g.dismissed.map((x) => x.key)])).toEqual([
-      ['Round 1', ['a'], ['b']],
-      ['Round 2', ['c', 'd'], []],
+      ['Round 3', ['f', 'g'], []],
     ]);
   });
 });
