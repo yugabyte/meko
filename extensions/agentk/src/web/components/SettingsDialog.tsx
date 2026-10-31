@@ -262,7 +262,7 @@ function WorkQueueTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefOb
             <>
               <p>
                 Make a Slack list (for example "Meko work queue"), add the messages you want worked on, and paste its link
-                from the list's ⋯ › Copy link. Slack's own To-dos can't be read, so the sync uses a list of yours.
+                here. Slack's own To-dos can't be read, so the sync uses a list of yours.
               </p>
               <p>It reads these columns, by name, and ignores the rest:</p>
               <ul>
