@@ -58,7 +58,7 @@ export function SettingsDialog({
   // One saver for General, Harness, Code review and Work queue, so a save from a tab that has since closed
   // still shows how it went. General's usage-stats box saves on its own.
   const auto = useAutoSave();
-  // What the General tab holds typed and not saved yet, saved before Settings closes.
+  // What the General or Work queue tab holds typed and not saved yet, saved before Settings closes.
   const typed = useRef<(() => void) | null>(null);
   // A close waited for the saves out and one failed: closing again leaves it unsaved.
   const [held, setHeld] = useState(false);
@@ -109,7 +109,7 @@ export function SettingsDialog({
         <HarnessTab auto={auto} harnesses={harnesses} twoAgents={twoAgents} serverName={serverName} meko={meko} initialAgent={initialAgent} />
       )}
       {tab === 'code-review' && <CodeReviewTab auto={auto} />}
-      {tab === 'work-queue' && <WorkQueueTab auto={auto} />}
+      {tab === 'work-queue' && <WorkQueueTab auto={auto} typed={typed} />}
       {tab === 'updates' && <UpdatesTab initial={update} onWhatsNew={(from, to) => leave(() => onWhatsNew(from, to))} />}
       <SaveStatus status={auto.status} held={held} />
     </Dialog>
@@ -203,10 +203,11 @@ const clampOr = (typed: string, max: number, saved: number) => {
 };
 
 /**
- * The work queue's sync: which sources it reads (both off turns sync off, the Sync button too) and how
- * often it runs by itself. The minutes save when the field loses focus or takes Enter.
+ * The work queue's sync: which sources it reads (both off turns sync off, the Sync button too), the
+ * Slack list's link and how often it runs by itself. The link and the minutes save when their field
+ * loses focus or takes Enter, and, as General's do, when the tab or Settings closes.
  */
-function WorkQueueTab({ auto }: { auto: AutoSettings }) {
+function WorkQueueTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObject<(() => void) | null> }) {
   const { s, load, change } = auto;
   const [minutes, setMinutes] = useState('');
   const [list, setList] = useState('');
@@ -217,16 +218,31 @@ function WorkQueueTab({ auto }: { auto: AutoSettings }) {
       setList(x.workQueueSlackList);
     }, (e) => setError(errorMessage(e)));
   }, [load]);
-  if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
-  const off = !s.workQueueGithub && !s.workQueueSlack;
   const saveMinutes = () => {
+    if (!s) return;
     const m = clampOr(minutes, WORK_SYNC_MINUTES_MAX, s.workQueueSyncMinutes);
     setMinutes(String(m));
     if (m !== s.workQueueSyncMinutes) change({ workQueueSyncMinutes: m });
   };
   const saveList = () => {
-    if (list.trim() !== s.workQueueSlackList) change({ workQueueSlackList: list.trim() });
+    if (s && list.trim() !== s.workQueueSlackList) change({ workQueueSlackList: list.trim() });
   };
+  const latest = useRef(() => {});
+  useEffect(() => {
+    latest.current = () => {
+      saveList();
+      saveMinutes();
+    };
+  });
+  useEffect(() => {
+    typed.current = () => latest.current();
+    return () => {
+      typed.current?.();
+      typed.current = null;
+    };
+  }, [typed]);
+  if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
+  const off = !s.workQueueGithub && !s.workQueueSlack;
   return (
     <div className="stack">
       <p className="muted small">What Sync adds to the queue; both off turns it off.</p>

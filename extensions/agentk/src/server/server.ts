@@ -629,6 +629,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     for (const k of ['claudeEnabled', 'opencodeEnabled', 'opencodeDisableTracking', 'kiroEnabled', 'kiroTrustTools', 'workQueueGithub', 'workQueueSlack'] as const) {
       if (b[k] !== undefined && typeof b[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false.`);
     }
+    const slackListBefore = core.config.workQueue.slackList;
     const enabledBefore = Object.fromEntries(HARNESS_IDS.map((id) => [id, core.config[id].enabled]));
     const before = { cap: core.worktrees.cap(), days: core.worktrees.idleDays() };
     core.updateConfig((c) => {
@@ -655,6 +656,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.codeReviewRounds !== undefined) c.codeReview.rounds = b.codeReviewRounds;
       if (b.codeReviewDepth !== undefined) c.codeReview.depth = b.codeReviewDepth;
     });
+    if (core.config.workQueue.slackList !== slackListBefore) core.workQueue.slackListChanged();
     // An agent turned on: its version (and Kiro's agent file) follow, in the background. One turned
     // off forgets its last read, so it isn't offered on that read once it's turned on again.
     for (const id of HARNESS_IDS) {

@@ -123,8 +123,9 @@ export interface ReviewModels {
 export { DEFAULT_MEKO_URL, DEFAULT_MEKO_WEB_URL, mekoWebUrl };
 
 /**
- * The Slack sync reads one list and nothing else, so it may call only the claude.ai Slack connector's
- * file read: no search, and no channel or thread read that a row's text could ask for.
+ * The Slack sync may call only the claude.ai Slack connector's file read: no search, and no channel or
+ * thread read that a row's text could ask for. The tool takes any file ID, so it's the prompt, not this
+ * limit, that keeps the run on the configured list.
  */
 const SLACK_READ_TOOLS = ['mcp__claude_ai_Slack__slack_read_file'];
 

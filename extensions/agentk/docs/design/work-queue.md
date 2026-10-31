@@ -96,7 +96,9 @@ and the timer does nothing (`WorkSync.sources` tells the page). The timer ticks 
   `--setting-sources project` in AgentK's empty `run/work-sync` folder), so your allow rules and
   default mode don't apply; `--permission-mode default`; and only `[work_queue] slack_tools` allowed
   (only the claude.ai Slack connector's `slack_read_file` by default, so the run can't search Slack or
-  read a channel or thread, even when a row's text asks it to; a `slack_tools` set in config.toml
+  read a channel or thread, even when a row's text asks it to. That tool takes any file ID, so only
+  the prompt keeps it on the configured list: a row asking for another file could get the rows of
+  another list or canvas the user can open added as items, which only adds to the queue; a `slack_tools` set in config.toml
   before this keeps its old list and needs `mcp__claude_ai_Slack__slack_read_file` added). ToolSearch runs too, since it
   needs no permission, but it only loads tools' schemas. In `-p` nothing can be asked, so every other
   tool, another connector's included, is refused; the claude.ai connector's write
@@ -121,7 +123,9 @@ out (a timed one while Slack isn't on the timer).
 
 Reading Slack is a model call, so the timer reads it only while the last Slack read worked: a
 Sync you press that reaches Slack turns that on (`kv` `work-slack-auto`), and any failure turns it
-off until a Sync you press works again. GitHub is read on every run.
+off until a Sync you press works again. Saving a new `slack_list` drops the last Slack result
+(`slackListChanged()`), so the line says Slack waits for a Sync press instead of showing the old
+list's error. GitHub is read on every run.
 
 ## The command palette
 

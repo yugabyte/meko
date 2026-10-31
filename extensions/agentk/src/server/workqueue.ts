@@ -380,6 +380,17 @@ export class WorkQueue {
     return this.syncState();
   }
 
+  /**
+   * A new Slack list link: the last Slack result was about the old one (often "Set the link…"), so
+   * it's dropped, and the sync line says Slack waits for a Sync press, which reads the new list and
+   * puts it back on the timer.
+   */
+  slackListChanged(): void {
+    if (!this.last.slack) return;
+    this.last = { ...this.last, slack: null };
+    this.deps.changed();
+  }
+
   /** The timer's tick (every minute): a sync once `[work_queue] sync_minutes` have passed since the last, so a change in Settings applies at once. */
   async tick(now = Date.now()): Promise<void> {
     const minutes = this.deps.settings().syncMinutes;

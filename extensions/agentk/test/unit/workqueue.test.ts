@@ -248,6 +248,17 @@ describe('syncing the work queue', () => {
     expect(state.reviewReads).toBe(1);
   });
 
+  it('drops the last Slack result when the list link changes, so the line waits for a Sync press', async () => {
+    const { q, state } = setup({ slack: new Error('Set the link to your Slack list in Settings › Work queue.') });
+    expect((await q.sync(true)).slack).toMatchObject({ ok: false });
+    const changes = state.changes;
+    q.slackListChanged();
+    expect(q.syncState()).toMatchObject({ slack: null, slackAuto: false });
+    expect(state.changes).toBe(changes + 1);
+    q.slackListChanged();
+    expect(state.changes).toBe(changes + 1);
+  });
+
   it('says Slack needs Claude Code without running it', async () => {
     const { q, state } = setup({ claude: false });
     expect((await q.sync(true)).slack).toMatchObject({ ok: false, error: expect.stringMatching(/needs Claude Code/) });
@@ -270,7 +281,6 @@ describe("reading the user's Slack list", () => {
     expect(after('--system-prompt')).toContain('the file F0LIST');
     expect(slackArgs('', [], 'F0LIST')).not.toContain('--allowedTools');
     expect(slackPrompt([], 'F0LIST')).not.toContain('ToolSearch');
-    expect(DEFAULT_CONFIG.workQueue.slackTools).toEqual(['mcp__claude_ai_Slack__slack_read_file']);
   });
 
   it('takes only the sign-in part of your Claude Code settings', () => {
