@@ -29,6 +29,10 @@ describe("OpenCode's events as AgentK's", () => {
     ['its answer', { hook_event_name: 'permission.replied' }, { hook_event_name: 'PostToolUse' }],
     ['the end of a turn', { hook_event_name: 'session.idle', session_id: 'ses_1' }, { hook_event_name: 'Stop', agent_session_id: 'ses_1' }],
     ['the end of a turn the user interrupted', { hook_event_name: 'session.idle', interrupted: true, session_id: 'ses_1' }, { hook_event_name: 'Stop', interrupted: true, agent_session_id: 'ses_1' }],
+    ['the end of a turn, with its background work', { hook_event_name: 'session.idle', background_tasks: [{ type: 'shell', command: 'npm test' }], session_id: 'ses_1' },
+      { hook_event_name: 'Stop', background_tasks: [{ type: 'shell', command: 'npm test' }], agent_session_id: 'ses_1' }],
+    ['background work ending between turns', { hook_event_name: 'agentk.background', background_tasks: [], session_id: 'ses_1' },
+      { hook_event_name: 'BackgroundTasks', background_tasks: [], agent_session_id: 'ses_1' }],
     ['anything else', { hook_event_name: 'session.compacted' }, null],
   ])('%s', (_, raw, expected) => {
     expect(normalizeOpenCode(raw)).toEqual(expected);

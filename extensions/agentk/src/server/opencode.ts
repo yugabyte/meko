@@ -82,9 +82,11 @@ export function openCodeCommand(command: string, home = homedir(), path = proces
  * AgentK's plugin, loaded only into the sessions AgentK starts (`OPENCODE_CONFIG_CONTENT`), as an
  * OpenCode 2 plugin: a folder whose default export is `{ id, setup }`. It forwards OpenCode's hooks
  * and events to the hook socket under the names `normalizeOpenCode` maps (`chat.message` for a
- * prompt, `session.idle` for the end of a turn, which OpenCode 2 reports as `session.execution.*`),
- * asks the guard before a file edit and throws its reason, adds AgentK's Meko recall to a new
- * session's system prompt, and logs each finished step's tokens to the session's `messages.jsonl`.
+ * prompt, `session.idle` for the end of a turn, which OpenCode 2 reports as `session.execution.*`,
+ * with the work the turn left running in the background: its bash commands' shells still running,
+ * from `shell.created` and `shell.exited`, and subagent sessions mid-turn; `agentk.background` when
+ * one of those ends between turns), asks the guard before a file edit and throws its reason, adds
+ * AgentK's Meko recall to a new session's system prompt, and logs each finished step's tokens to the session's `messages.jsonl`.
  * It never holds OpenCode up for long, and without AgentK's session variables it does nothing. A
  * subagent's session sends its events without its id, so they never become the session's
  * conversation, and not its turn's end, so it never ends the turn; its tool calls and permission
@@ -163,9 +165,24 @@ export default {
     const ids = (id) => (id && id === main ? { session_id: id } : {});
     const isMain = (id) => !!id && id === main;
 
+    // Work the main session left running in the background, which OpenCode wakes it for when it's
+    // done: its bash commands' shells still running (by shell id) and subagent sessions mid-turn.
+    // Sent with each turn's end, and again when one ends between turns.
+    const shells = new Map();
+    const subagents = new Set();
+    let between = false;
+    const background = () => [
+      ...[...shells.values()].filter((s) => isMain(s.sessionID)).map((s) => ({ type: 'shell', command: s.command })),
+      ...[...subagents].map(() => ({ type: 'subagent', description: 'subagent' })),
+    ];
+    const backgroundEnded = (gone) => {
+      if (gone && between && main) send({ hook_event_name: 'agentk.background', session_id: main, background_tasks: background() });
+    };
+
     await ctx.session.hook('prompt', async (e) => {
       if (!e || !e.sessionID || (await isChild(e.sessionID))) return;
       main = e.sessionID;
+      between = false;
       send({ hook_event_name: 'chat.message', session_id: main });
     });
     // Each step's model, from its start, for the usage line at its end (and its Meko calls').
@@ -231,11 +248,36 @@ export default {
       if (TURN_ENDS.has(ev.type)) {
         // An interrupted turn (Esc) says so: AgentK handles it as Claude Code's mod reports one.
         if (isMain(p.sessionID) && once(ev)) {
-          send({ hook_event_name: 'session.idle', session_id: p.sessionID, ...(ev.type === 'session.execution.interrupted' ? { interrupted: true } : {}) });
+          between = true;
+          send({
+            hook_event_name: 'session.idle', session_id: p.sessionID, background_tasks: background(),
+            ...(ev.type === 'session.execution.interrupted' ? { interrupted: true } : {}),
+          });
+        } else if (children.has(p.sessionID)) {
+          backgroundEnded(subagents.delete(p.sessionID));
         }
         return;
       }
       switch (ev.type) {
+        case 'session.execution.started':
+          if (isMain(p.sessionID)) between = false;
+          else if (children.has(p.sessionID)) subagents.add(p.sessionID);
+          break;
+        case 'shell.created': {
+          const info = p.info || {};
+          const meta = info.metadata || {};
+          if (info.id && info.status === 'running' && typeof meta.sessionID === 'string') {
+            shells.set(info.id, { sessionID: meta.sessionID, command: String(info.command || '') });
+          }
+          break;
+        }
+        case 'shell.exited':
+        case 'shell.deleted': {
+          const s = shells.get(p.id);
+          shells.delete(p.id);
+          backgroundEnded(!!s && isMain(s.sessionID));
+          break;
+        }
         case 'session.created':
           if (p.parentID) children.add(p.sessionID);
           break;

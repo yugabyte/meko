@@ -4,7 +4,7 @@ import { heldSummary } from './heldreviews.js';
 import type {
   StartupState,
   TokenUsage,
-  AskRequest, CiState, CloseStep, DatapackRef, DiffStat, LearnProgress, Project, ProjectSettings, QueuedGate, ReviewState, ReviewingPr, Session, SessionStatus, Stage, StoredKind,
+  AskRequest, BackgroundTask, CiState, CloseStep, DatapackRef, DiffStat, LearnProgress, Project, ProjectSettings, QueuedGate, ReviewState, ReviewingPr, Session, SessionStatus, Stage, StoredKind,
 } from '../shared/types.js';
 import { KIND_STAGES, REVIEWER_LABELS } from '../shared/types.js';
 import { kindOf, skippedSteps, stepOf } from '../shared/stages.js';
@@ -266,6 +266,7 @@ export interface SessionRuntime {
   promptsHeld: number;
   asking: AskRequest | null;
   mekoCall: boolean;
+  background: BackgroundTask[];
   approvalQueued: boolean;
   /** The task's latest local review, or a code-review session's own (review/runner.ts). */
   codeReview: CodeReviewSummary | null;
@@ -348,6 +349,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     promptsHeld: rt.promptsHeld,
     asking: rt.asking,
     mekoCall: rt.mekoCall,
+    background: rt.background,
     approvalQueued: rt.approvalQueued,
     learning: !!learnProgress,
     learnProgress,

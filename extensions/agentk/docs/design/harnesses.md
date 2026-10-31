@@ -208,6 +208,7 @@ agent choice and sign-in check:
 | Usage | transcript tokens, priced | tokens from the plugin's log, priced | credits from Kiro's session file |
 | Meko calls (counts, What Meko doesn't know, call log) | from the transcript (counts) and the mod (call log) | the plugin's `meko` lines in its log | Kiro's session log (`<conversation>.jsonl`) |
 | The dot's Meko m | the mod | the plugin's `execute.before`/`after` on Meko tools | `preToolUse` on `@<Meko server>`, `postToolUse` |
+| The dot's work in the background (`Session.background`) | `Stop`'s `background_tasks` | the plugin's `shell.*` and subagent `session.execution.*` events, with `session.idle` and `agentk.background` | none: plain idle (see [Kiro](#kiro)) |
 | By-model usage rows | the model id | the agent first: **OpenCode · claude-sonnet-4-5** | the agent first: **Kiro · auto** (`labelModels`) |
 | A public repo's PR head | `--setting-sources user` | `OPENCODE_DISABLE_PROJECT_CONFIG=1` | refused while the workspace has config |
 
@@ -277,7 +278,8 @@ OpenCode's order, and gives up on each after 3 seconds. It sends them under the 
 | the tool `execute.after` hook | `tool.execute.after` with `call_id` | `PostToolUse` (and a Meko call closes); for a Meko tool, also a `meko` line in `messages.jsonl` with the call and its reply, see [Token usage](token-usage.md#meko-calls) |
 | event `permission.asked` | `permission.asked` with its `action` | `PermissionRequest`: **Needs you**, "Permission needed for shell" |
 | event `permission.replied` | `permission.replied` | `PostToolUse` (working again) |
-| event `session.execution.succeeded`, `.failed` or `.interrupted` (OpenCode 2 doesn't send `session.idle`) | `session.idle`, with `interrupted: true` for `.interrupted` | `Stop`; an interrupted one ends the turn as interrupted, as the mod's `/mod/turn` does for Claude Code |
+| event `session.execution.succeeded`, `.failed` or `.interrupted` (OpenCode 2 doesn't send `session.idle`) | `session.idle`, with `interrupted: true` for `.interrupted`, and `background_tasks`: the session's shells still running and its subagents mid-turn | `Stop`; an interrupted one ends the turn as interrupted, as the mod's `/mod/turn` does for Claude Code; `background_tasks` replaces `Session.background` |
+| events `shell.created`, `.exited`, `.deleted`; a subagent's `session.execution.started` and its end | `agentk.background` with `background_tasks`, when one of those ends between turns | `BackgroundTasks` (AgentK's own name): replaces `Session.background` |
 
 A tool called from OpenCode's code mode (its `execute` tool) goes through `execute.before` under its
 own name too, so the guard sees those edits. Events come as `{ id, type, data }`; one the stream
@@ -289,6 +291,16 @@ the session's conversation, and never its turn's end, so it never ends the turn;
 mark the session working, its permission asks still show **Needs you** (one waiting on the user does
 need them), and its edits still go to the guard. OpenCode fires nothing when it exits: reconcile
 finds the dead pane, as for Kiro.
+
+**Work in the background.** OpenCode 2's bash and subagent tools take `background: true`: the call
+returns at once, the work runs on as one of OpenCode's jobs, and OpenCode wakes the session with
+its result. Every bash command runs in a shell OpenCode announces with `shell.created` (its
+`info.metadata.sessionID` the session that ran it, `info.command` the command) and ends with
+`shell.exited` and `shell.deleted`, so a shell of the main session still running when its turn
+ends is background work; a subagent's session is running from its `session.execution.started` to
+its turn's end. OpenCode 2.1.4 has no event for a job itself. The plugin sends the list with each
+`session.idle`, and again as `agentk.background` whenever one ends between turns, so the dot's ring
+goes when the work does even before OpenCode's wake turn ends. A subagent shows as "subagent".
 
 **No session tabs.** OpenCode 2's TUI can keep several of its sessions open as tabs (`tabs.mode` in
 its CLI config, `cli.json`: `auto`, the default, is on outside the herdr terminal). In an AgentK
@@ -436,6 +448,12 @@ in the folder, which can be an earlier session's).
 or when it exits. A session waiting on a permission prompt shows as working until you answer in the
 terminal; an interrupted turn ends with the next turn's `stop`; an exit is found by reconcile's dead
 pane, as Claude's crash is. With no hooks at all, the hookless fallback follows the session file.
+
+**No background dot.** Kiro CLI 2.34 has background shells only behind a feature flag that's off
+for nearly everyone (`background_execution`, dark-shipped), and its `stop` hook carries no list of
+what's running, so a Kiro session between turns always shows the plain idle dot. AgentK doesn't
+guess from the processes still running under the idle agent: Kiro always runs its MCP servers and
+can run language servers there, so nothing tells a background command from those.
 
 **Prompts, designs, learn.** The paths Claude Code takes without the mod: prompts are typed into
 the terminal (a bracketed paste, Enter 300 ms later, which Kiro's TUI takes multi-line), designs are
