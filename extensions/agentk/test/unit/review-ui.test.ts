@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { REVIEW_LEFT_CODE, type CodeReviewDetail, type CodeReviewFinding, type CodeReviewSummary } from '../../src/shared/codereview';
+import { DESCRIBE_INTERRUPTED, REVIEW_LEFT_CODE, type CodeReviewDetail, type CodeReviewFinding, type CodeReviewSummary } from '../../src/shared/codereview';
 import type { Session } from '../../src/shared/types';
 import { findingGroups, findingsCountsText, findingsReviewing, stageChipText, withOverride } from '../../src/web/util.js';
 
@@ -39,37 +39,33 @@ describe('findingGroups', () => {
 });
 
 describe('findings panel while the review runs', () => {
-  const review = (state: CodeReviewSummary['state']) => ({ state }) as CodeReviewSummary;
-  const detail = (major: number) => ({ review: { counts: { blocker: 0, major, minor: 0 } } }) as CodeReviewDetail;
+  const review = (state: CodeReviewSummary['state'], detail: string | null = null) => ({ state, detail }) as CodeReviewSummary;
 
   it.each([
-    ['preparing', true],
-    ['sweeping', true],
-    ['scoring', true],
-    // Waiting on the task's PR description, before round 1.
-    ['describing', true],
+    ['preparing', null, true],
+    ['sweeping', null, true],
+    ['scoring', null, true],
+    // The task writes its PR description, before round 1.
+    ['describing', null, true],
+    // Past an interrupted description turn, it waits on the user's Review now.
+    ['describing', DESCRIBE_INTERRUPTED, false],
     // The round's findings are final while the task fixes them.
-    ['fixing', false],
-    ['done', false],
-    ['failed', false],
-    ['cancelled', false],
-  ] as const)('reads Reviewing in %s: %s', (state, reviewing) => {
-    expect(findingsReviewing(review(state))).toBe(reviewing);
+    ['fixing', null, false],
+    ['done', null, false],
+    ['failed', 'no review pass reported', false],
+    ['cancelled', 'you cancelled it', false],
+  ] as const)('reads Reviewing in %s (%s): %s', (state, detail, reviewing) => {
+    expect(findingsReviewing(review(state, detail))).toBe(reviewing);
   });
 
-  it('reads nothing without a review', () => {
-    expect(findingsReviewing(null)).toBe(false);
-    expect(findingsCountsText(null, null)).toBeNull();
-  });
-
-  it('leaves the counts out of the header while it reads Reviewing', () => {
-    expect(findingsCountsText(review('sweeping'), detail(0))).toBeNull();
-    expect(findingsCountsText(review('describing'), detail(2))).toBeNull();
-  });
-
-  it('shows the counts once the review stops running, no findings included', () => {
-    expect(findingsCountsText(review('done'), detail(0))).toBe('no findings');
-    expect(findingsCountsText(review('fixing'), detail(2))).toBe('2 major');
+  it.each([
+    [null, null, null],
+    ['sweeping', 0, null],
+    ['done', 0, 'no findings'],
+    ['fixing', 2, '2 major'],
+  ] as const)('heads a %s review with %s major findings with counts %s', (state, major, text) => {
+    const detail = major === null ? null : ({ review: { counts: { blocker: 0, major, minor: 0 } } }) as CodeReviewDetail;
+    expect(findingsCountsText(state ? review(state) : null, detail)).toBe(text);
   });
 });
 

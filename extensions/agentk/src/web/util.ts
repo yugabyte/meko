@@ -941,15 +941,16 @@ export function findingGroups(findings: CodeReviewFinding[]): { key: string; lab
 }
 
 /**
- * The findings panel reads Reviewing: the review runs, or waits on the task's PR description to
- * start. Not in fixing, where the round's findings are final.
+ * The findings panel reads Reviewing: the review runs, or waits on the task writing its PR
+ * description to start. Not past an interrupted description turn or a lost ask (`detail`), where
+ * it waits on the user's Review now, nor in fixing, where the round's findings are final.
  */
-export function findingsReviewing(r: Pick<CodeReviewSummary, 'state'> | null): boolean {
-  return reviewRunning(r) || r?.state === 'describing';
+export function findingsReviewing(r: Pick<CodeReviewSummary, 'state' | 'detail'> | null): boolean {
+  return reviewRunning(r) || (r?.state === 'describing' && !r.detail);
 }
 
 /** The findings panel header's counts, or null while it reads Reviewing (partial counts read as final). */
-export function findingsCountsText(r: Pick<CodeReviewSummary, 'state'> | null, detail: CodeReviewDetail | null): string | null {
+export function findingsCountsText(r: Pick<CodeReviewSummary, 'state' | 'detail'> | null, detail: CodeReviewDetail | null): string | null {
   return detail && !findingsReviewing(r) ? countsText(detail.review.counts) : null;
 }
 
