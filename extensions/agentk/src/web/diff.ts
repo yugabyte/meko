@@ -220,17 +220,23 @@ export function sameItems<T>(a: readonly T[], b: readonly T[]): boolean {
 /**
  * The Files menu's filter: a file whose path or old path holds `q` as plain text, or matches it as a
  * regular expression, both ignoring case. The plain text keeps a name with regex characters in it
- * (`[id].tsx`, `page (1).tsx`) findable as typed, and covers a `q` that isn't a valid expression
- * (`c++`, an unclosed `(` while typing).
+ * (`[id].tsx`, `page (1).tsx`) findable as typed. While `q` isn't a valid expression (a group typed
+ * partway, `src/(`), the longest start of it that is one filters instead, so the list doesn't go blank.
  */
 export function pathFilter(q: string): (file: { path: string; oldPath?: string | null }) => boolean {
   const needle = q.toLowerCase();
-  let re: RegExp | null = null;
-  try {
-    re = new RegExp(q, 'i');
-  } catch {
-    // Plain text only.
-  }
-  const test = (s: string) => s.toLowerCase().includes(needle) || !!re?.test(s);
+  const re = longestPattern(q);
+  const test = (s: string) => s.toLowerCase().includes(needle) || re.test(s);
   return (f) => test(f.path) || (!!f.oldPath && test(f.oldPath));
+}
+
+/** The longest start of `q` that compiles as a case-insensitive regular expression; '' always does. */
+function longestPattern(q: string): RegExp {
+  for (let n = q.length; ; n--) {
+    try {
+      return new RegExp(q.slice(0, n), 'i');
+    } catch {
+      // Try a shorter start.
+    }
+  }
 }

@@ -172,7 +172,9 @@ describe('filtering the Files menu', () => {
     expect(shown('^test/old')).toEqual(['test/unit/new.test.ts']);
   });
 
-  it('matches plain text, ignoring case, when the expression is not valid', () => {
-    expect(shown('C++')).toEqual(['docs/c++/notes.md']);
+  it('filters by the longest start that is a valid expression while it is not one', () => {
+    expect(shown('WEB/(')).toEqual(['src/web/diff.ts', 'src/web/App.tsx']);
+    expect(shown('(diff')).toEqual(files.map((f) => f.path));
+    expect(shown('c++')).toContain('docs/c++/notes.md');
   });
 });

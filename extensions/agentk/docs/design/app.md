@@ -186,8 +186,10 @@ you can jump to any file from anywhere in a long diff; each file's header shows 
 (*4 / 12*), and `[` / `]` step to the previous or next file. The filter keeps a file whose path or
 old path holds what's typed as plain text or matches it as a regular expression, both ignoring case
 (`pathFilter()` in `src/web/diff.ts`), so `\.tsx?$` or `^src/web/` work, and a name with regex
-characters in it (`[id].tsx`, `page (1).tsx`) or text that isn't a valid expression (`c++`, a
-half-typed `(`) is still found as typed. The commit and base menus match plain text.
+characters in it (`[id].tsx`, `page (1).tsx`) is still found as typed. While what's typed isn't a
+valid expression (a group typed partway, `src/(`), the longest start of it that is one filters
+instead (`src/`), so the list doesn't go blank before the `)`. The commit and base menus match plain
+text.
 
 The header's commit menu (**All changes ▾**) shows either that whole comparison or one of the
 branch's commits alone: the commits since the merge base, newest first (at most 200,
