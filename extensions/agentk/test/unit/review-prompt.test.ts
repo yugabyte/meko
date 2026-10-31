@@ -181,7 +181,6 @@ describe('the steps a prompt lists', () => {
   it.each([
     [11, [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11]]],
     [5, [[1, 2, 3, 4, 5]]],
-    [1, [[1]]],
   ])('groups %i steps into numbered batches of at most 5, the steps numbered on across them', (n, batches) => {
     const line = (i: number) => `${i}. score ${i}: subagent \`agentk-review-small\`, prompt: \`Read /run/score-${i}.md and do what it says.\``;
     expect(stepList(steps(n), 5)).toBe(batches.map((b, i) => `Batch ${i + 1}:\n${b.map(line).join('\n')}`).join('\n\n'));

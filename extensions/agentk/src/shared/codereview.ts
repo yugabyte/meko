@@ -274,8 +274,9 @@ export function reviewSegmentLabel(r: CodeReviewSummary): string {
   let what: string;
   switch (r.state) {
     case 'preparing': what = 'preparing'; break;
-    // The passes may all be running, and the scorers a batch at a time, so no "step n" or
-    // "scoring n" here: only how many have reported.
+    // The passes may all be running, and the scorers a batch at a time, so neither counts the
+    // pass or scorer under way: only how many have reported. Scoring's "step n of n" is the
+    // review's own step (`reviewSteps`), which stays.
     case 'sweeping': what = `${r.passesDone} of ${r.passes} passes reported`; break;
     case 'scoring': what = `step ${reviewSteps(r)} of ${reviewSteps(r)}, ${r.scoresDone} of ${r.candidates} scored`; break;
     case 'describing': what = 'waiting for the PR description'; break;
