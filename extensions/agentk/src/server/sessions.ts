@@ -1655,11 +1655,15 @@ export class SessionManager {
    * A turn's end: its `Stop` hook, or (`interrupted`) the mod reporting a turn you interrupted
    * (Ctrl+C, Esc), which fires no `Stop`. Either way the session is between turns again and what
    * waited for the turn's end goes. A turn you interrupted isn't one Claude died in: it's never
-   * continued by itself (`interrupted` stays 0).
+   * continued by itself (`interrupted` stays 0). `background` is the hook's `background_tasks`: it
+   * replaces what the session has running in the background, and a turn end without it (the mod's
+   * interrupt, an older Claude Code) leaves none, rather than keep a list nothing will update.
    */
-  private async endTurn(row: SessionRow, how: 'stop' | 'interrupted'): Promise<void> {
+  private async endTurn(row: SessionRow, how: 'stop' | 'interrupted', background?: unknown): Promise<void> {
     const id = row.id;
     void this.captureTranscript(id);
+    // Before the plan's early return below: a Stop while a plan waits for approval still says what runs.
+    this.setBackground(id, background);
     // No Meko call outlives its turn, the plan approval's included.
     this.mod.endMeko(id);
     this.hookMeko.clear(id);
@@ -1806,10 +1810,8 @@ export class SessionManager {
         break;
       }
       case 'Stop':
-        // What the turn left running in the background, before endTurn (a plan waiting for approval returns early).
-        this.setBackground(id, p.background_tasks);
         // OpenCode's plugin marks a turn the user interrupted (Claude Code's comes from the mod, /mod/turn).
-        await this.endTurn(row, p.interrupted === true ? 'interrupted' : 'stop');
+        await this.endTurn(row, p.interrupted === true ? 'interrupted' : 'stop', p.background_tasks);
         break;
       case 'BackgroundTasks':
         // OpenCode's plugin, when background work ends between turns.

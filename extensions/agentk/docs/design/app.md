@@ -88,8 +88,9 @@ Session states, shown with a dot on each session (on its tab, or in the rail) an
   gate win over it (`dotState()`). The tooltip and the palette name what's running ("running in
   the background: npm test", up to three, then how many more: `backgroundText()`). The rail ranks
   it like queued. The server keeps the list in memory (`SessionManager.background`), replaced at
-  each turn's end (a `Stop` without the field, from a Claude Code too old to send it, empties it)
-  and dropped when the agent exits or relaunches, so after a server restart it shows again only
+  each turn's end (`endTurn`): a turn end without the field (a `Stop` from a Claude Code too old to
+  send it, or a turn you interrupted, which the mod reports with no list) empties it, so the dot
+  never keeps a ring nothing will update. It's dropped when the agent exits or relaunches, so after a server restart it shows again only
   from the next turn's end. Claude Code fires no hook when a background task ends or is stopped
   between turns: its list holds until the turn the task's end wakes Claude for ends.
 

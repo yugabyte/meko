@@ -84,6 +84,20 @@ describe("AgentK's mod in Claude (real session host + git, fake claude)", () => 
     expect(env.core.sessions.row(s.id).interrupted).toBe(0);
   });
 
+  it('drops what ran in the background at a turn the person interrupted, which no Stop reports', async () => {
+    env = await makeEnv();
+    fakeFiles(env, { mod: '' });
+    const s = await session();
+    await waitFor(() => env.core.sessions.mod.live(s.id), (l) => l, 10000, 'the mod to poll');
+    await env.core.sessions.submit(s.id, 'run the tests BACKGROUND');
+    await waitFor(() => env.core.sessions.get(s.id).background, (b) => b.length === 2, 10000, 'the background turn');
+    // The work woke Claude into a turn the person interrupted: the old list would never be updated.
+    await env.core.sessions.submit(s.id, 'INTERRUPT this turn');
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'working', 10000, 'the turn to start');
+    const idle = await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle', 10000, 'the interrupted turn to end');
+    expect(idle.background).toEqual([]);
+  });
+
   it('types prompts into the terminal when Claude runs without the mod', async () => {
     env = await makeEnv();
     fakeFiles(env, { debug: '' });
