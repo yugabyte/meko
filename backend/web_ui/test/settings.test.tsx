@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 // The Settings page's switches for the features that run the user's Claude Code, against a faked
-// /api/v1: turning one on sends only the harness, and a failed test call leaves it off with why.
+// /api/v1: turning one on sends only the harness, and a failed test call leaves it off with why. And
+// its Access card, which says who reaches Meko: there's no login.
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -10,7 +11,7 @@ import { SettingsPage } from "../src/pages/SettingsPage";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const auth = { access: "local", local_access: true, signed_in: false, username: null } as unknown as AuthStatus;
+const local: AuthStatus = { access: "local", local_access: true, signed_in: true };
 
 let root: Root;
 let sent: { method: string; url: string; body?: string }[];
@@ -37,7 +38,7 @@ function toggle(label: string): HTMLButtonElement {
   return b;
 }
 
-async function render() {
+async function render(auth: AuthStatus = local) {
   const el = document.createElement("div");
   document.body.append(el);
   root = createRoot(el);
@@ -87,4 +88,13 @@ test("a failed test call leaves memory extraction off and says why", async () =>
   await act(async () => toggle("Memory extraction").click());
   expect(toggle("Memory extraction").getAttribute("aria-checked")).toBe("false");
   expect(document.body.textContent).toContain("is claude installed and signed in?");
+});
+
+test("the Access card says who reaches Meko, and how to turn the web UI off", async () => {
+  serve({});
+  await render({ access: "remote", local_access: false, signed_in: true });
+  const text = document.body.textContent ?? "";
+  expect(text).toContain("Meko is open to other devices, over HTTPS, with no sign-in");
+  expect(text).toContain("meko ui stop turns it off");
+  expect(text).not.toContain("Account");
 });

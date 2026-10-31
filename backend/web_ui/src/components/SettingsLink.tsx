@@ -1,5 +1,5 @@
-// The sidebar's link to the Settings page: what Meko does with your Claude Code, usage stats, and the
-// ways to Meko Cloud and the account.
+// The sidebar's link to the Settings page: what Meko does with your Claude Code, usage stats, Meko
+// Cloud and who can reach Meko.
 
 import { Settings } from "lucide-react";
 import { href, navigate, SETTINGS } from "../lib/route";

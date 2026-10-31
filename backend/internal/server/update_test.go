@@ -121,14 +121,15 @@ func TestUpdateRoutesWhenOff(t *testing.T) {
 	}
 }
 
-// The routes need the owner's session without local access, and the API listener has none of them.
-func TestUpdateRoutesNeedTheOwner(t *testing.T) {
+// Another site's page gets none of the routes, and the API listener has none of them.
+func TestUpdateRoutesRefuseOtherSites(t *testing.T) {
 	f := &fakeUpdates{}
 	base, _ := startWeb(t, config.AccessRemote, "", noProxies, func(w *Web) { w.Updates = f })
-	if code, _ := get(t, base+"/api/v1/update", nil, ""); code != 401 {
+	crossSite := map[string]string{"Sec-Fetch-Site": "cross-site"}
+	if code, _ := get(t, base+"/api/v1/update", crossSite, ""); code != 403 {
 		t.Errorf("status: %d", code)
 	}
-	if code, _ := post(t, base+"/api/v1/update/apply", nil); code != 401 || f.applies != 0 {
+	if code, _ := post(t, base+"/api/v1/update/apply", crossSite); code != 403 || f.applies != 0 {
 		t.Errorf("apply: %d", code)
 	}
 	_, api, _ := start(t)

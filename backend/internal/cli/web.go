@@ -18,7 +18,6 @@ import (
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/extproxy"
-	"github.com/yugabyte/meko/backend/internal/login"
 	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/server"
 	"github.com/yugabyte/meko/backend/internal/store"
@@ -52,13 +51,14 @@ func webBind(w config.Web) string {
 }
 
 // webListener runs the web listener for serve: it hands over from the extensions that serve a web
-// UI (handoff), takes the port (waiting while it's held), and serves until ctx ends. Status reads
-// its state; Shutdown drains it.
+// UI (handoff), takes the port (waiting while it's held), and serves until ctx ends, while [web]
+// enabled is on; Reload has it read its settings again (meko ui start and stop). Status reads its
+// state; Shutdown drains it.
 type webListener struct {
 	l       paths.Layout
 	st      *store.Store
-	login   *login.Service
 	log     *slog.Logger
+	reload  chan struct{}                          // Reload's, one waiting at most
 	newOpts func(cfg config.Config) server.Options // the web listener's server, for its settings
 
 	mu      sync.Mutex
@@ -78,11 +78,20 @@ type webListener struct {
 	waiting map[string]string // why an extension's automatic update waits
 }
 
-func newWebListener(l paths.Layout, st *store.Store, lg *login.Service, log *slog.Logger) *webListener {
-	return &webListener{l: l, st: st, login: lg, log: log, sockets: map[string]string{},
+// newWebListener is serve's web listener, reported on (Enabled) until Run has read the settings.
+func newWebListener(l paths.Layout, st *store.Store, log *slog.Logger) *webListener {
+	return &webListener{l: l, st: st, log: log, reload: make(chan struct{}, 1), sockets: map[string]string{},
 		handed: map[string]bool{}, asked: map[string]time.Time{}, warned: map[string]string{},
 		proxied: map[string]*extproxy.Proxy{}, jobs: server.NewExtensionJobs(), lock: update.NewLock(l.Root),
-		waiting: map[string]string{}}
+		waiting: map[string]string{}, status: server.WebStatus{Enabled: true}}
+}
+
+// Reload has Run read the settings again, and start or stop the listener as [web] enabled says.
+func (w *webListener) Reload() {
+	select {
+	case w.reload <- struct{}{}:
+	default:
+	}
 }
 
 // socket is where an extension listens. An extension registered since the server started (meko
@@ -104,12 +113,10 @@ func (w *webListener) socket(name string) func() string {
 }
 
 // Status is the web listener's state, for status.
-func (w *webListener) Status(ctx context.Context) *server.WebStatus {
+func (w *webListener) Status() *server.WebStatus {
 	w.mu.Lock()
+	defer w.mu.Unlock()
 	st := w.status
-	w.mu.Unlock()
-	o, err := w.login.Owner(ctx)
-	st.Login = err == nil && o != nil
 	return &st
 }
 
@@ -128,28 +135,10 @@ func (w *webListener) forget(name string) {
 	delete(w.handed, name)
 }
 
-// RevokeEnded closes the WebSockets of sessions that ended: at a sign-out, a password change or a
-// new login (login.Service.OnRevoke), and every minute for ones that ran out.
-func (w *webListener) RevokeEnded() {
-	w.mu.Lock()
-	proxies := make([]*extproxy.Proxy, 0, len(w.proxied))
-	for _, p := range w.proxied {
-		proxies = append(proxies, p)
-	}
-	w.mu.Unlock()
-	for _, p := range proxies {
-		p.Revoke(func(hash string) bool { return w.login.Live(context.Background(), hash) })
-	}
-}
-
 // Run serves until ctx ends. A port that's taken is tried again every webRetry, and so is a handoff
 // that failed: once one works, its extension's settings are in web.toml, read before the port is.
+// While [web] enabled is off it takes no port, until a Reload finds it on.
 func (w *webListener) Run(ctx context.Context) {
-	go func() {
-		for sleep(ctx, time.Minute) {
-			w.RevokeEnded()
-		}
-	}()
 	logged := ""
 	for ctx.Err() == nil {
 		pending := w.handoff(ctx)
@@ -161,12 +150,30 @@ func (w *webListener) Run(ctx context.Context) {
 			}
 			continue
 		}
-		w.set(func(s *server.WebStatus) { s.URL, s.Access = webURL(cfg.Web), cfg.Web.Access })
+		w.set(func(s *server.WebStatus) {
+			s.URL, s.Access, s.Enabled = webURL(cfg.Web), cfg.Web.Access, cfg.Web.Enabled
+			if !s.Enabled {
+				s.Error = ""
+			}
+		})
+		if !cfg.Web.Enabled {
+			w.log.Info("the web UI is off ([web] enabled = false; meko ui start turns it on)")
+			logged = ""
+			select {
+			case <-ctx.Done():
+				return
+			case <-w.reload:
+			}
+			continue
+		}
 		ln, pair, err := w.listen(cfg)
 		if err != nil {
 			w.fail(&logged, "the web listener can't start", err)
-			if !sleep(ctx, webRetry) {
+			select {
+			case <-ctx.Done():
 				return
+			case <-w.reload:
+			case <-time.After(webRetry):
 			}
 			continue
 		}
@@ -192,6 +199,8 @@ func (w *webListener) Run(ctx context.Context) {
 			w.log.Error("the web listener stopped", "error", err)
 		case <-restart:
 			w.log.Info("restarting the web listener with the settings an extension handed over")
+		case <-w.reload:
+			w.log.Info("reading the web listener's settings again")
 		}
 		stopWatch()
 		w.shutdownServer()
@@ -246,10 +255,21 @@ func (w *webListener) Shutdown(ctx context.Context) error {
 	return srv.Shutdown(ctx)
 }
 
+// shutdownServer drains the web listener, then closes the WebSockets it proxied, which a shutdown
+// leaves open.
 func (w *webListener) shutdownServer() {
 	ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
 	defer cancel()
 	_ = w.Shutdown(ctx)
+	w.mu.Lock()
+	proxies := make([]*extproxy.Proxy, 0, len(w.proxied))
+	for _, p := range w.proxied {
+		proxies = append(proxies, p)
+	}
+	w.mu.Unlock()
+	for _, p := range proxies {
+		p.CloseAll()
+	}
 	w.set(func(s *server.WebStatus) { s.Listening = false })
 }
 
@@ -311,9 +331,10 @@ func (w *webListener) watchHandoffs(ctx context.Context, pending bool, cfg confi
 }
 
 // handoff asks each registered extension with a web UI where it listens, once per server start, and
-// takes over the web settings and login it had when it served browsers itself, filling in only what
-// Meko doesn't have yet (so it's safe to repeat): [web] (and [tls] for a certificate its config
-// named), its self-signed certificate, and its owner. It reports whether one is still to ask.
+// takes over the web settings it had when it served browsers itself, filling in only what Meko
+// doesn't have yet (so it's safe to repeat): [web] (and [tls] for a certificate its config named)
+// and its self-signed certificate. Its owner (login) is ignored: Meko has none. It reports whether
+// one is still to ask.
 func (w *webListener) handoff(ctx context.Context) (pending bool) {
 	reg, err := extensions.Load(w.l.Root)
 	if err != nil {
@@ -362,9 +383,8 @@ func (w *webListener) warnOnce(name, msg string, err error) {
 // socketKey is where the last socket an extension named is kept, for a start whose handoff fails.
 func socketKey(name string) string { return "extension_socket." + name }
 
-// tookOverKey records that an extension's old web settings and login were taken over, which
-// happens once: the extension keeps reporting them, and a [web] the owner removed later, or a
-// password changed since, must not come back from it.
+// tookOverKey records that an extension's old web settings were taken over, which happens once: the
+// extension keeps reporting them, and a [web] the owner removed later must not come back from it.
 func tookOverKey(name string) string { return "extension_took_over." + name }
 
 func (w *webListener) useKnownSocket(ctx context.Context, name string) {
@@ -384,26 +404,16 @@ func (w *webListener) takeOver(ctx context.Context, name string, h extensions.Ha
 	if _, done, err := w.st.Setting(ctx, tookOverKey(name)); err != nil || done {
 		return err
 	}
-	if err := w.importLegacy(ctx, name, h.Legacy); err != nil {
+	if err := w.importLegacy(name, h.Legacy); err != nil {
 		return err
 	}
 	return w.st.SetSetting(ctx, tookOverKey(name), time.Now().UTC().Format(time.RFC3339))
 }
 
 // importLegacy takes over what an extension had when it served browsers itself (nil: nothing).
-func (w *webListener) importLegacy(ctx context.Context, name string, lg *extensions.Legacy) error {
+func (w *webListener) importLegacy(name string, lg *extensions.Legacy) error {
 	if lg == nil {
 		return nil
-	}
-	if lg.Owner != nil {
-		added, err := w.login.ImportOwner(ctx, store.Owner{Username: lg.Owner.Username, PWScrypt: lg.Owner.PWScrypt,
-			TOTPSecret: lg.Owner.TOTPSecret})
-		if err != nil {
-			return err
-		}
-		if added {
-			w.log.Info("took over the extension's login", "extension", name)
-		}
 	}
 	var tlsFiles config.TLS
 	if t := lg.TLS; t != nil && t.Cert != "" && t.Key != "" {
@@ -487,21 +497,24 @@ func sleep(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// webAccessNote says how browsers reach the web listener: from this computer without a login, or from
-// anywhere with the owner's.
+// webAccessNote says which browsers reach the web listener: this computer's, or any that reaches it.
 func webAccessNote(w *server.WebStatus) string {
 	if w.Access != config.AccessRemote {
-		return "local, no login from this computer"
+		return "local, from this computer"
 	}
-	if !w.Login {
-		return "remote; no login yet: meko setup_link makes one"
-	}
-	return "remote, sign in with the owner's login"
+	return "remote, from every address"
 }
+
+// webOffNote is what status and start say while [web] enabled is off.
+const webOffNote = "off (meko ui start turns it on)"
 
 // printWeb is status --verbose's lines about the web listener.
 func printWeb(stdout io.Writer, w *server.WebStatus) {
 	if w == nil {
+		return
+	}
+	if !w.Enabled {
+		fmt.Fprintf(stdout, "  Humans:        web UI %s\n", webOffNote)
 		return
 	}
 	fmt.Fprintf(stdout, "  Humans:        %s (web UI), %s\n", w.URL, webAccessNote(w))

@@ -53,7 +53,8 @@ var mekoCommands = []command{
 	{name: "install", group: "Get started", summary: "Set Meko up and start it at login",
 		usage: "meko install [flags]", examples: []example{
 			{"meko install", "set Meko up with a login service (launchd or systemd), and start it"},
-			{"meko install --access remote", "let browsers on other computers reach the web UI, over HTTPS with a login"},
+			{"meko install --access remote", "let browsers on other computers reach the web UI, over HTTPS, with no login"},
+			{"meko install --no-ui", "set Meko up with the web UI off (meko ui start turns it on)"},
 			{"meko install --no-service", "set it up without a service; start it with meko start"},
 		}},
 	{name: "start", group: "Get started", summary: "Start Meko and its extensions",
@@ -71,7 +72,16 @@ var mekoCommands = []command{
 		usage: "meko ui [path] [flags]", examples: []example{
 			{"meko ui", "open Meko's web UI"},
 			{"meko ui /ext/agentk/", "open AgentK's page"},
-			{"meko ui --no-open", "only print the link (with remote access and no login yet, a setup link)"},
+			{"meko ui --no-open", "only print the link"},
+			{"meko ui stop", "turn the web UI off, and meko ui start to turn it on again"},
+		}},
+	{name: "ui start", group: "Run", summary: "Turn the web UI on, and keep it on",
+		usage: "meko ui start", examples: []example{
+			{"meko ui start", "serve the web UI again after meko ui stop or meko install --no-ui"},
+		}},
+	{name: "ui stop", group: "Run", summary: "Turn the web UI off, and keep it off",
+		usage: "meko ui stop", examples: []example{
+			{"meko ui stop", "close the web UI's port, AgentK's page with it, until meko ui start"},
 		}},
 	{name: "stop", group: "Run", summary: "Stop Meko and its extensions",
 		usage: "meko stop [flags]", examples: []example{
@@ -145,10 +155,6 @@ var mekoCommands = []command{
 			{"meko cloud_link", "link Meko Cloud for the extensions: asks for the API key, or reads it from stdin"},
 			{"meko cloud_link --off", "unlink it: the extensions use this Meko"},
 			{"meko cloud_link --url https://meko.example.com/mcp", "link another Meko server"},
-		}},
-	{name: "setup_link", group: "Connect", summary: "Make or reset the web UI's login for remote access",
-		usage: "meko setup_link", examples: []example{
-			{"meko setup_link", "print a one-time link that sets up the login, or replaces a lost one"},
 		}},
 	{name: groupExtension, subcommands: true, summary: "List, install, update and delete Meko's extensions",
 		usage: "meko extension list|install|update|delete [<name>] [flags]", examples: []example{

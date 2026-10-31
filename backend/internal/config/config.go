@@ -43,12 +43,29 @@ type Config struct {
 type Web struct {
 	// Port is the web listener's (default 7777). Also MEKO_WEB_PORT.
 	Port int `toml:"port"`
-	// Access is "local" (the default: 127.0.0.1 over HTTP, and a request from this computer needs no
-	// login) or "remote" (every address over HTTPS, with the owner's login). Also MEKO_WEB_ACCESS.
+	// Access is "local" (the default: 127.0.0.1 over HTTP, for requests from this computer) or
+	// "remote" (every address over HTTPS). Neither has a login. Also MEKO_WEB_ACCESS.
 	Access string `toml:"access"`
 	// Name is the host name links to the web listener use; empty is this host's FQDN (remote) or
 	// 127.0.0.1 (local).
 	Name string `toml:"name"`
+	// Enabled is whether serve runs the web listener at all (true by default): meko ui stop and
+	// meko ui start set it in web.toml (SetWebEnabled), and meko install --no-ui sets it off.
+	Enabled bool `toml:"enabled"`
+}
+
+// webTable is web.toml's [web]: Web, with Enabled unset when the file doesn't name it.
+type webTable struct {
+	Port    int    `toml:"port"`
+	Access  string `toml:"access"`
+	Name    string `toml:"name"`
+	Enabled *bool  `toml:"enabled"`
+}
+
+// webFile is web.toml.
+type webFile struct {
+	Web *webTable `toml:"web"`
+	TLS *TLS      `toml:"tls"`
 }
 
 // Web access modes.
@@ -161,7 +178,7 @@ type Log struct {
 // Default is the configuration with nothing set.
 func Default() Config {
 	return Config{Server: Server{Port: DefaultPort, Auth: AuthToken}, Log: Log{Level: "info"},
-		Web:      Web{Port: DefaultWebPort, Access: AccessLocal},
+		Web:      Web{Port: DefaultWebPort, Access: AccessLocal, Enabled: true},
 		Update:   Update{Channel: "stable", Auto: true, IntervalHours: 6, Repo: "yugabyte/meko"},
 		CallHome: CallHome{Enabled: true}}
 }
@@ -177,13 +194,9 @@ type Overrides struct {
 func Load(path string, env func(string) string, o Overrides) (Config, error) {
 	c := Default()
 	// web.toml first: config.toml's own [web] and [tls] keys win over what Meko chose (AddWeb).
-	var chosen struct {
-		Web *Web `toml:"web"`
-		TLS *TLS `toml:"tls"`
-	}
-	chosenPath := WebFile(path)
-	if _, err := toml.DecodeFile(chosenPath, &chosen); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return Config{}, fmt.Errorf("%s: %w", chosenPath, err)
+	chosen, err := readWebFile(WebFile(path))
+	if err != nil {
+		return Config{}, err
 	}
 	if chosen.Web != nil {
 		c.Web = mergeWeb(c.Web, *chosen.Web)
@@ -354,15 +367,25 @@ func (l Log) SlogLevel() (slog.Level, error) {
 }
 
 // WebFile is web.toml beside config.toml at path: the [web] (and [tls]) settings Meko chose
-// itself, from meko install's access and the handoff from AgentK (AddWeb). It's a file of its own,
-// not part of config.toml, because a release from before the web listener refuses config.toml's
-// unknown keys: a rollback after an update that failed its probation, or a downgrade, would then
-// leave a Meko that can't start. Older releases don't read web.toml at all.
+// itself, from meko install's access, the handoff from AgentK (AddWeb) and meko ui start and stop
+// (SetWebEnabled). It's a file of its own, not part of config.toml, because a release from before
+// the web listener refuses config.toml's unknown keys: a rollback after an update that failed its
+// probation, or a downgrade, would then leave a Meko that can't start. Older releases don't read
+// web.toml at all, and ones that do ignore a key they don't know there (enabled).
 func WebFile(configPath string) string {
 	return filepath.Join(filepath.Dir(configPath), "web.toml")
 }
 
-func mergeWeb(base, over Web) Web {
+// readWebFile reads web.toml; a missing one is empty.
+func readWebFile(path string) (webFile, error) {
+	var f webFile
+	if _, err := toml.DecodeFile(path, &f); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return webFile{}, fmt.Errorf("%s: %w", path, err)
+	}
+	return f, nil
+}
+
+func mergeWeb(base Web, over webTable) Web {
 	if over.Port != 0 {
 		base.Port = over.Port
 	}
@@ -372,13 +395,17 @@ func mergeWeb(base, over Web) Web {
 	if over.Name != "" {
 		base.Name = over.Name
 	}
+	if over.Enabled != nil {
+		base.Enabled = *over.Enabled
+	}
 	return base
 }
 
-// AddWeb writes web.toml (WebFile) with web, and tls when it names files, unless config.toml at
-// path or web.toml already has a [web] table: config.toml's is the user's, and web.toml's an earlier
-// choice. It reports whether it wrote. Meko writes these settings only this way: meko install, with
-// the access it picked, and the handoff from AgentK, with the access and port AgentK had.
+// AddWeb writes web, and tls when it names files, to web.toml (WebFile), unless config.toml at path
+// or web.toml already sets [web]'s port, access or name: config.toml's are the user's, and
+// web.toml's an earlier choice. web.toml's enabled is kept. It reports whether it wrote. Meko
+// writes these settings only this way: meko install, with the access it picked, and the handoff
+// from AgentK, with the access and port AgentK had.
 func AddWeb(path string, web Web, tls TLS) (bool, error) {
 	webPath := WebFile(path)
 	for _, p := range []string{path, webPath} {
@@ -390,28 +417,73 @@ func AddWeb(path string, web Web, tls TLS) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("%s: %w", p, err)
 		}
-		if md.IsDefined("web") {
+		if md.IsDefined("web", "port") || md.IsDefined("web", "access") || md.IsDefined("web", "name") {
 			return false, nil
 		}
 	}
-	var add strings.Builder
-	add.WriteString("# The web listener's settings Meko chose (meko install, or the handoff from AgentK).\n" +
-		"# A [web] or [tls] key in config.toml overrides the one here. access = \"local\" needs no login\n" +
-		"# from this computer; \"remote\" listens on every address, over HTTPS, with a login.\n[web]\n")
-	if web.Port != 0 {
-		fmt.Fprintf(&add, "port = %d\n", web.Port)
-	}
-	if web.Access != "" {
-		fmt.Fprintf(&add, "access = %q\n", web.Access)
-	}
-	if web.Name != "" {
-		fmt.Fprintf(&add, "name = %q\n", web.Name)
-	}
-	if tls.Cert != "" && tls.Key != "" {
-		fmt.Fprintf(&add, "\n[tls]\ncert = %q\nkey = %q\n", tls.Cert, tls.Key)
-	}
-	if err := paths.WriteFile(webPath, []byte(add.String())); err != nil {
+	f, err := readWebFile(webPath)
+	if err != nil {
 		return false, err
 	}
-	return true, nil
+	t := webTable{Port: web.Port, Access: web.Access, Name: web.Name}
+	if f.Web != nil {
+		t.Enabled = f.Web.Enabled
+	}
+	f.Web = &t
+	if tls.Cert != "" && tls.Key != "" {
+		f.TLS = &tls
+	}
+	return true, writeWebFile(webPath, f)
+}
+
+// ErrWebEnabledSet is SetWebEnabled's refusal when config.toml sets [web] enabled itself.
+var ErrWebEnabledSet = errors.New("config.toml sets [web] enabled")
+
+// SetWebEnabled turns the web listener on or off in web.toml (WebFile), keeping its other
+// settings, unless config.toml at path sets [web] enabled, which wins over it (ErrWebEnabledSet).
+func SetWebEnabled(path string, on bool) error {
+	var c Config
+	md, err := toml.DecodeFile(path, &c)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	if err == nil && md.IsDefined("web", "enabled") {
+		return ErrWebEnabledSet
+	}
+	webPath := WebFile(path)
+	f, err := readWebFile(webPath)
+	if err != nil {
+		return err
+	}
+	if f.Web == nil {
+		f.Web = &webTable{}
+	}
+	f.Web.Enabled = &on
+	return writeWebFile(webPath, f)
+}
+
+// writeWebFile writes web.toml with what f sets.
+func writeWebFile(path string, f webFile) error {
+	var b strings.Builder
+	b.WriteString("# The web listener's settings Meko chose (meko install, the handoff from AgentK, meko ui\n" +
+		"# start and stop). A [web] or [tls] key in config.toml overrides the one here. access = \"local\"\n" +
+		"# takes requests from this computer only; \"remote\" listens on every address, over HTTPS.\n[web]\n")
+	if w := f.Web; w != nil {
+		if w.Port != 0 {
+			fmt.Fprintf(&b, "port = %d\n", w.Port)
+		}
+		if w.Access != "" {
+			fmt.Fprintf(&b, "access = %q\n", w.Access)
+		}
+		if w.Name != "" {
+			fmt.Fprintf(&b, "name = %q\n", w.Name)
+		}
+		if w.Enabled != nil {
+			fmt.Fprintf(&b, "enabled = %t\n", *w.Enabled)
+		}
+	}
+	if t := f.TLS; t != nil && t.Cert != "" && t.Key != "" {
+		fmt.Fprintf(&b, "\n[tls]\ncert = %q\nkey = %q\n", t.Cert, t.Key)
+	}
+	return paths.WriteFile(path, []byte(b.String()))
 }

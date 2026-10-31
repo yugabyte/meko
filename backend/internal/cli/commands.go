@@ -246,7 +246,11 @@ func printStatusShort(l paths.Layout, st server.StatusReply, exts func() extensi
 		(time.Duration(st.UptimeSeconds)*time.Second).String()))
 	k, text := memoryEngineStep(st.MemoryEngine)
 	r.step(k, "Memory engine", text)
-	if st.Web != nil && !st.Web.Listening && st.Web.Error != "" {
+	switch {
+	case st.Web == nil:
+	case !st.Web.Enabled:
+		r.step(stepWarn, "Web UI", webOffNote)
+	case !st.Web.Listening && st.Web.Error != "":
 		r.step(stepFail, "Web UI", "not listening: "+st.Web.Error)
 	}
 	if st.Auth == config.AuthNone {
@@ -323,7 +327,7 @@ func memoryEngineStep(e memory.EngineStatus) (stepKind, string) {
 // linkRows are where people and agents reach Meko, and its data folder.
 func linkRows(st server.StatusReply, root string) [][2]string {
 	var rows [][2]string
-	if w := st.Web; w != nil && w.URL != "" {
+	if w := st.Web; w != nil && w.URL != "" && w.Enabled {
 		rows = append(rows, [2]string{"Humans (web UI)", w.URL + " (" + webAccessNote(w) + ")"})
 	}
 	return append(rows,
@@ -552,22 +556,27 @@ func runToken(l paths.Layout, asJSON bool, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, a.token)
 		return exitOK
 	}
-	// web_url is where browsers find Meko's web UI and its extensions' (AgentK's at /ext/agentk/).
-	web := webURL(cfg.Web)
+	// web_url is where browsers find Meko's web UI and its extensions' (AgentK's at /ext/agentk/):
+	// "" while it's off ([web] enabled), when web_off says so.
+	web, off := webURL(cfg.Web), !cfg.Web.Enabled
 	if a.running {
 		if c, cerr := newClient(l); cerr == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			if st, serr := c.status(ctx); serr == nil && st.Web != nil && st.Web.URL != "" {
-				web = st.Web.URL
+				web, off = st.Web.URL, !st.Web.Enabled
 			}
 			cancel()
 		}
 	}
+	reply := map[string]any{"url": a.url, "token": a.token, "running": a.running, "web_url": web,
+		"cloud": cloudTokenFor(l, cfg)}
+	if off {
+		reply["web_url"], reply["web_off"] = "", true
+	}
 	// cloud is the Meko Cloud link the extensions use (docs/cloud.md). One that can't be read (a
 	// bad cloud.toml, a locked Keychain) says so rather than failing the reply: this Meko's own
 	// URL and token still are, and an extension keeps the link it last read.
-	b, _ := json.Marshal(map[string]any{"url": a.url, "token": a.token, "running": a.running, "web_url": web,
-		"cloud": cloudTokenFor(l, cfg)})
+	b, _ := json.Marshal(reply)
 	fmt.Fprintln(stdout, string(b))
 	return exitOK
 }

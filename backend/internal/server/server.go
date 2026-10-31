@@ -1,6 +1,6 @@
 // Package server is Meko's HTTP servers: the API listener on 127.0.0.1, which agents and the CLI
 // call with a Bearer token, and the web listener (Options.Web), which browsers use, for the web UI
-// at / (Options.UI) and the extensions' at /ext/<name>/, with local access or the owner's login.
+// at / (Options.UI) and the extensions' at /ext/<name>/, with local or remote access and no login.
 // Both have the Host and Origin checks, the credential check, /mcp (Options.MCP) and the rest of
 // /api/v1 (Options.REST); replies use internal/envelope.
 package server
@@ -28,7 +28,6 @@ import (
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/envelope"
 	"github.com/yugabyte/meko/backend/internal/extproxy"
-	"github.com/yugabyte/meko/backend/internal/login"
 	"github.com/yugabyte/meko/backend/internal/memory"
 	"github.com/yugabyte/meko/backend/internal/store"
 	"github.com/yugabyte/meko/backend/internal/supervisor"
@@ -77,12 +76,11 @@ type Options struct {
 	UI http.Handler
 	// Web, if set, makes this the web listener instead of the API listener.
 	Web *Web
-	// Login is the owner's sign-in: the web listener's, and the API listener's setup link route.
-	Login *login.Service
-	// WebURL, if set, is the web listener's URL, for the links meko setup_link prints.
-	WebURL func() string
 	// WebStatus, if set, is the web listener's state, for status.
 	WebStatus func() *WebStatus
+	// ReloadWeb, if set, serves POST /api/v1/web/reload on the API listener (admin token only), for
+	// meko ui start and stop: the web listener reads its settings again, and starts or stops.
+	ReloadWeb func()
 	// Cloud, if set, serves the Meko Cloud link's routes (/api/v1/settings/meko-cloud): to the web UI
 	// on the web listener, and to the CLI's admin token (meko cloud_link) on the API listener. The
 	// linked Meko Cloud's datapacks go through the REST routes (internal/rest's cloud.go).
@@ -99,7 +97,8 @@ type WebStatus struct {
 	Error       string `json:"error,omitempty"`       // why it isn't listening
 	Fingerprint string `json:"fingerprint,omitempty"` // its certificate's SHA-256, with remote access
 	SelfSigned  bool   `json:"self_signed,omitempty"`
-	Login       bool   `json:"login"` // the owner's login is set up
+	// Enabled is [web] enabled: false while meko ui stop keeps the web listener off.
+	Enabled bool `json:"enabled"`
 }
 
 // UploadBodyLimit caps an upload link's body: a 50 MiB file and its multipart framing.
@@ -164,8 +163,8 @@ func New(opts Options) *Server {
 	if opts.Web == nil {
 		v1.GET("/status", s.status)
 		v1.GET("/version", s.version)
-		if opts.Login != nil {
-			v1.POST("/auth/setup-link", s.issueSetupLink)
+		if opts.ReloadWeb != nil {
+			v1.POST("/web/reload", s.reloadWeb)
 		}
 		s.registerCloud(v1)
 	} else {
@@ -252,8 +251,8 @@ func (s *Server) accessLog(next echo.HandlerFunc) echo.HandlerFunc {
 // from another site's page (an Origin header that isn't this server's own): only the web UI
 // Meko serves may call it from a browser. There are no CORS headers, so no other page can read a
 // reply either. The web listener with remote access has no Host list, as AgentK had none: it's
-// HTTPS, so a rebound page can't pass TLS for another name, and the session cookie is host-only.
-// Its Origin must still be its own, https://<Host>.
+// HTTPS, so a rebound page can't pass TLS for another name. Its Origin must still be its own,
+// https://<Host>.
 func (s *Server) guard(next echo.HandlerFunc) echo.HandlerFunc {
 	port := strconv.Itoa(s.opts.Port)
 	allowed := map[string]bool{"127.0.0.1:" + port: true, "localhost:" + port: true}
@@ -292,9 +291,10 @@ const (
 	CredentialClient = "client" // the client token: MCP and REST clients
 	CredentialNone   = "none"   // nothing, with [server] auth = "none"
 	CredentialTicket = "ticket" // a knowledge-file link's ticket, on its route only
-	// The web listener's: the owner's session cookie, or a request from this computer with local access.
-	CredentialSession = "session"
-	CredentialLocal   = "local"
+	// The web listener's: a request from this computer with local access, or any same-site request
+	// with remote access.
+	CredentialLocal  = "local"
+	CredentialRemote = "remote"
 )
 
 const credentialKey = "meko.credential" //nolint:gosec // G101: a context key, not a secret
@@ -314,10 +314,18 @@ func Credential(c echo.Context) string {
 }
 
 // adminOnly are the routes only the CLI's admin token opens, whatever the auth setting: they
-// describe the server itself, make a setup link, or change the Meko Cloud link (which an agent's
-// client token mustn't redirect). On the API listener; the web listener has its own check.
-var adminOnly = map[string]bool{"/api/v1/status": true, "/api/v1/version": true, setupLinkRoute: true,
+// describe the server itself, start or stop the web listener, or change the Meko Cloud link (which
+// an agent's client token mustn't redirect). On the API listener; the web listener has its own check.
+var adminOnly = map[string]bool{"/api/v1/status": true, "/api/v1/version": true, reloadWebRoute: true,
 	cloudRoute: true}
+
+// reloadWebRoute is the API listener's, for meko ui start and stop.
+const reloadWebRoute = "/api/v1/web/reload"
+
+func (s *Server) reloadWeb(c echo.Context) error {
+	s.opts.ReloadWeb()
+	return envelope.OK(c, map[string]bool{"reloading": true})
+}
 
 // requireToken is the API listener's credential check: /healthz needs none, nor do the
 // knowledge-file links (their ticket is the credential); the admin-only routes need the admin

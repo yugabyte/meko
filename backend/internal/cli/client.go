@@ -46,18 +46,9 @@ func (c *client) get(ctx context.Context, path string, data any) error {
 	return c.do(ctx, http.MethodGet, path, data)
 }
 
-// setupLinkReply is POST /api/v1/auth/setup-link.
-type setupLinkReply struct {
-	Token     string `json:"token"`
-	URL       string `json:"url"`
-	ExpiresIn int    `json:"expires_in"` // seconds
-}
-
-// setupLink makes a one-time link that sets up (or replaces) the web listener's login.
-func (c *client) setupLink(ctx context.Context) (setupLinkReply, error) {
-	var out setupLinkReply
-	err := c.do(ctx, http.MethodPost, "/api/v1/auth/setup-link", &out)
-	return out, err
+// reloadWeb has the server read the web listener's settings again (meko ui start and stop).
+func (c *client) reloadWeb(ctx context.Context) error {
+	return c.do(ctx, http.MethodPost, "/api/v1/web/reload", nil)
 }
 
 func (c *client) do(ctx context.Context, method, path string, data any) error {

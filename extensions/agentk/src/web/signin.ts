@@ -1,8 +1,9 @@
 /**
- * Signing in is Meko's: it serves AgentK under BASE and decides who gets in. These call Meko's own
- * routes, root-absolute rather than under BASE. Under `npm run dev` there's no Meko, so they fail:
- * then a refused request is shown as an error and retried as before. Signing out is on Meko's
- * account page (Settings › General links to it), not in AgentK.
+ * Who gets in is Meko's call: it serves AgentK under BASE. A Meko from before it dropped its login
+ * signs people in, with remote access; a newer one has no login, and always says signed in. These
+ * call Meko's own routes, root-absolute rather than under BASE. Under `npm run dev` there's no Meko,
+ * so they fail: then a refused request is shown as an error and retried as before. Signing out, on
+ * a Meko with a login, is on its account page (Settings › General links to it), not in AgentK.
  */
 
 /** What Meko says about this browser (`GET /api/v1/auth/status`). */
@@ -10,6 +11,8 @@ export interface MekoAuth {
   /** `remote`: Meko takes sign-ins from other devices; `local`: it opens on this computer with none. */
   access: 'local' | 'remote';
   signedIn: boolean;
+  /** The login's username: only a Meko from before it dropped its login has one; else null. */
+  username: string | null;
 }
 
 /** Close codes a WebSocket gets when it was refused (no sign-in, or another site's page): it waits for checkSignIn before retrying. */
@@ -27,10 +30,11 @@ export async function mekoAuth(): Promise<MekoAuth | null> {
   try {
     const res = await fetch('/api/v1/auth/status', { credentials: 'same-origin' });
     if (!res.ok) return null;
-    const body = (await res.json()) as { data?: { access?: unknown; signed_in?: unknown } } | null;
+    const body = (await res.json()) as { data?: { access?: unknown; signed_in?: unknown; username?: unknown } } | null;
     const access = body?.data?.access;
     if (access !== 'local' && access !== 'remote') return null;
-    return { access, signedIn: body?.data?.signed_in === true };
+    const username = body?.data?.username;
+    return { access, signedIn: body?.data?.signed_in === true, username: typeof username === 'string' && username ? username : null };
   } catch {
     return null;
   }
@@ -48,7 +52,7 @@ export const SIGN_IN_CHECK_MS = 5000;
 
 /**
  * After AgentK's API answered 401, or a WebSocket closed with a WS_UNAUTHORIZED code: Meko may have
- * refused the request. Where Meko signs people in and this browser isn't signed in any more, goes
+ * refused the request. Where Meko has a login and this browser isn't signed in any more, goes
  * to its sign-in screen (back to this page after) and resolves false. Else resolves true, so the
  * caller keeps retrying.
  */

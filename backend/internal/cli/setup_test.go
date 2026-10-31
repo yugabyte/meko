@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -240,6 +241,38 @@ func TestAFailingExtensionGetsAFailRow(t *testing.T) {
 	want(t, "the failing extension's row", code, 0, out, "  ✗ AgentK          didn't stop: ")
 	want(t, "the damaged extension's row", code, 0, out, "  ✗ Presenter       is damaged (")
 	want(t, "Meko's row", code, 0, out, "  ✓ Server          isn't running\n")
+}
+
+// install --no-ui writes [web] enabled = false into web.toml beside the access it picks, says so,
+// and offers meko ui start; the server then never takes the web port. config.toml's own enabled
+// stops it.
+func TestInstallWithoutTheWebUI(t *testing.T) {
+	dir, port := setup(t)
+	noRealExtensions(t)
+	configurePort(t, dir, port)
+	useFakeService(t)
+	code, out, errs := run("install", "--data-dir", dir, "--no-ui", "--access", "local")
+	want(t, "install --no-ui", code, 0, out+errs, "  ✓ Web UI          off (meko ui start turns it on), in ")
+	want(t, "install --no-ui's next steps", code, 0, out, "meko ui start")
+	cfg, err := config.Load(paths.New(dir).Config, func(string) string { return "" }, config.Overrides{})
+	if err != nil || cfg.Web.Enabled || cfg.Web.Access != config.AccessLocal {
+		t.Fatalf("settings after install --no-ui: %+v %v", cfg.Web, err)
+	}
+	code, out, _ = run("status", "--data-dir", dir)
+	want(t, "status", code, 0, out, "Web UI          off (meko ui start turns it on)")
+	//nolint:gosec // G704: the test's own server
+	if c, derr := net.DialTimeout("tcp", "127.0.0.1:"+os.Getenv("MEKO_WEB_PORT"), time.Second); derr == nil {
+		_ = c.Close()
+		t.Error("the web port answers after install --no-ui")
+	}
+
+	dir2, _ := setup(t)
+	if err = os.WriteFile(paths.New(dir2).Config, []byte("[web]\nenabled = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errs = run("install", "--data-dir", dir2, "--no-ui", "--no-service")
+	want(t, "install --no-ui with config.toml's enabled", code, exitError, errs,
+		"config.toml sets [web] enabled, which --no-ui would change: change it there instead")
 }
 
 func TestInstallWithoutAServiceLeavesStartToTheUser(t *testing.T) {
