@@ -89,7 +89,7 @@ and the timer does nothing (`WorkSync.sources` tells the page). The timer ticks 
   column marks done. A list is private until it's shared, but sharing one of its items gives the
   people it goes to edit access to the whole list, so its rows are still data written by people.
   The rows are read by one `claude -p` through your own Slack
-  connector (`src/server/slack.ts`), titled with their name or title column, else their first column of text (a row with neither gets "Slack message"). Unlike Ask AgentK, it loads your
+  connector (`src/server/slack.ts`), titled with a summary the run writes from the row's text (its name or title column, else its first column of text), at most 80 characters, without greetings or mentions. When a message is added to a list, Slack copies its raw text into the row's name, starting with whatever opens the message ("Hi <@U…>"), so its first line makes a poor title. A row with no text gets "Slack message". Unlike Ask AgentK, it loads your
   MCP servers and claude.ai connectors (no `--strict-mcp-config`). It reads messages other people
   wrote, so it's kept to reading Slack: no built-in tools but ToolSearch (`--tools ToolSearch`);
   none of your Claude Code settings but `env` and `apiKeyHelper`, which signing in needs (`signInSettings()`, with
