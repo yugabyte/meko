@@ -71,29 +71,50 @@ up to 99 and then 99+ (`queueBadge()`).
 
 **Sync** (`POST /api/work-items/sync`) and a timer every `[work_queue] sync_minutes` (15 by default;
 0 turns it off) add to the bottom of the queue, from the sources `[work_queue] github` and `slack` turn
-on (both off by default, so there's no sync until you turn one on). All three are in Settings › Work queue, reached from **Sync settings** on the
+on (both off by default, so there's no sync until you turn one on). All four, with `slack_list` (the Slack list's link), are in Settings › Work queue, reached from **Sync settings** on the
 queue page too. With both sources off there's no sync: the button is disabled, a pressed Sync is a 409,
 and the timer does nothing (`WorkSync.sources` tells the page). The timer ticks every minute
 (`WorkQueue.tick`) and syncs once the minutes have passed, so a change in Settings applies at once:
 
 - **GitHub:** the open PRs asking for your review (`gh search prs --review-requested=@me --state=open
   --limit 100`, `reviewRequests()` in `github.ts`), titled `Review <owner/name>#<n>: <title>`.
-- **Slack:** the messages on your To-dos, the list that [replaced Later](https://slack.com/help/articles/55757634348435-Later-is-now-To-dos)
-  (Later's items without a reminder went to Saved, which the sync doesn't read). The prompt has Claude
-  search with Slack's `is:todo` modifier and leave out completed to-dos when its tools say which are.
-  They're read by one `claude -p` through your own Slack
-  connector (`src/server/slack.ts`), titled with their first line. Unlike Ask AgentK, it loads your
+- **Slack:** the messages on a [Slack list](https://slack.com/help/articles/27452748828179-Use-lists-in-Slack)
+  of yours, whose link is `[work_queue] slack_list` (Settings › Work queue; `slackListId()` reads the
+  list's file ID from it, and with none there the read fails without running anything). Not Slack's
+  To-dos: the claude.ai Slack connector's search ignores modifiers it doesn't know, `is:todo` among
+  them (it returns the newest messages anywhere), its results don't say what's a to-do or done, and
+  no tool of its lists To-dos or Saved. Its `slack_read_file` returns a list as CSV with the list's
+  own columns, so the prompt has Claude read that one file, without searching Slack or reading the
+  messages. It reads only columns with these exact names (`LIST_COLUMNS` in `slack.ts`, matched
+  ignoring case), and ignores the rest, so nothing rests on guessing what a column means:
+  **Message** (the message's link; required, and a list without it fails with "Your Slack list has
+  no Message column"; rows whose Message isn't a Slack message link are left out), **Name** (the
+  title column Slack fills with an added message's text), **Reporter** (optional) and **Done** (an
+  optional checkbox; checked rows are left out). A list is private until it's shared, but sharing one of its items gives the
+  people it goes to edit access to the whole list, so its rows are still data written by people.
+  The rows are read by one `claude -p` through your own Slack
+  connector (`src/server/slack.ts`), titled with a summary the run writes from the row's text (its name or title column, else its first column of text), at most 80 characters, without greetings or mentions. When a message is added to a list, Slack copies its raw text into the row's name, starting with whatever opens the message ("Hi <@U…>"), so its first line makes a poor title. A row with no text gets "Slack message". The row's text
+  itself goes in the item's notes, with mentions written as `@<display name>` from the user's
+  profile, started with the reporter the way Slack starts a message with its author ("<reporter>:
+  …", from the Reporter column, as the list has it: an email stays an email,
+  since the profile read takes only user IDs). The queue page shows an item's notes in two lines
+  under its title. Unlike Ask AgentK, it loads your
   MCP servers and claude.ai connectors (no `--strict-mcp-config`). It reads messages other people
   wrote, so it's kept to reading Slack: no built-in tools but ToolSearch (`--tools ToolSearch`);
   none of your Claude Code settings but `env` and `apiKeyHelper`, which signing in needs (`signInSettings()`, with
   `--setting-sources project` in AgentK's empty `run/work-sync` folder), so your allow rules and
   default mode don't apply; `--permission-mode default`; and only `[work_queue] slack_tools` allowed
-  (the claude.ai Slack connector's search and read tools by default). ToolSearch runs too, since it
+  (only the claude.ai Slack connector's `slack_read_file`, and `slack_read_user_profile` to name the
+  people a row mentions, by default, so the run can't search Slack or
+  read a channel or thread, even when a row's text asks it to. That tool takes any file ID, so only
+  the prompt keeps it on the configured list: a row asking for another file could get the rows of
+  another list or canvas the user can open added as items, which only adds to the queue; a `slack_tools` set in config.toml
+  before this keeps its old list and needs `mcp__claude_ai_Slack__slack_read_file` added). ToolSearch runs too, since it
   needs no permission, but it only loads tools' schemas. In `-p` nothing can be asked, so every other
   tool, another connector's included, is refused; the claude.ai connector's write
-  tools are also denied by name. The prompt calls the messages' text data, not instructions.
+  tools are also denied by name. The prompt calls the rows' text data, not instructions.
   The answer follows a JSON schema; `found: false` (no Slack tools, or no way to the list) is an
-  error, not an empty list. It needs Claude Code; the model is `[work_queue] slack_model`.
+  error, not an empty list (a list with no rows left is `found: true`). It needs Claude Code; the model is `[work_queue] slack_model`.
   Claude.ai connectors are still connecting when a `-p` run's first turn starts, so with no tools
   at all the run never saw Slack and always answered `found: false`; ToolSearch waits for a
   connecting server, so the prompt (`slackPrompt()`) has Claude load `slack_tools` with
@@ -117,7 +138,9 @@ out (a timed one while Slack isn't on the timer).
 
 Reading Slack is a model call, so the timer reads it only while the last Slack read worked: a
 Sync you press that reaches Slack turns that on (`kv` `work-slack-auto`), and any failure turns it
-off until a Sync you press works again. GitHub is read on every run.
+off until a Sync you press works again. Saving a new `slack_list` drops the last Slack result
+(`slackListChanged()`), so the line says Slack waits for a Sync press instead of showing the old
+list's error. GitHub is read on every run.
 
 ## The command palette
 

@@ -185,6 +185,14 @@ export type CiState = 'none' | 'pending' | 'success' | 'failure';
  */
 export type QueuedGate = 'open-pr' | 'merge';
 
+/** A piece of work a session's agent left running in the background (`Session.background`). */
+export interface BackgroundTask {
+  /** What it is, as the agent names it: `shell`, `subagent`, `monitor`, `workflow`… */
+  type: string;
+  /** It in one line: a shell's command, else the agent's description of it. */
+  description: string;
+}
+
 /**
  * Whose reviews go straight to Claude: `agentk` (AgentK only, the default for new projects),
  * `agentk-people` (AgentK and people), `all` (AgentK, people and other bots) or `people` (people
@@ -962,6 +970,14 @@ export interface Session {
    * OpenCode's as their hooks do), or started one less than 1.5 s ago, so a quick call still shows.
    */
   mekoCall: boolean;
+  /**
+   * Work the agent left running in the background when its last turn ended, which wakes it again
+   * when it's done: Claude Code's background shells, subagents and monitors (its `Stop` hook's
+   * `background_tasks`), OpenCode's background shells and subagents (from AgentK's plugin). Empty
+   * when there's none, and always for Kiro, whose hooks don't say. Kept in memory: replaced at each
+   * turn's end, and cleared when the agent exits or relaunches.
+   */
+  background: BackgroundTask[];
   /** Discard was asked for: the session is discarded once its learn step ends. */
   discarding: boolean;
   /** The PR a Review a PR session reviews; null for other kinds. */
@@ -1671,7 +1687,7 @@ export interface WorkLink {
   label: string;
 }
 
-/** Where a work item came from: added by hand, or by a sync (a GitHub review request, a message on Slack's To-dos). */
+/** Where a work item came from: added by hand, or by a sync (a GitHub review request, a message on the user's Slack list). */
 export type WorkItemSource = 'manual' | 'github' | 'slack';
 
 /** One thing on the work queue. */
@@ -1971,10 +1987,12 @@ export interface Settings {
   kiroTrustTools: boolean;
   /** `[work_queue] github`: the work queue's sync pulls in the PRs asking for your review (Settings › Work queue). */
   workQueueGithub: boolean;
-  /** `[work_queue] slack`: the work queue's sync pulls in your Slack To-dos. */
+  /** `[work_queue] slack`: the work queue's sync pulls in the messages on your Slack list. */
   workQueueSlack: boolean;
   /** `[work_queue] close_closed_prs`: the GitHub sync closes the review requests whose PR was merged or closed. */
   workQueueCloseClosedPrs: boolean;
+  /** `[work_queue] slack_list`: that list's link (`https://<workspace>.slack.com/lists/<team>/<F…>`), or empty. */
+  workQueueSlackList: string;
   /** `[work_queue] sync_minutes`: how often it syncs by itself (0 to WORK_SYNC_MINUTES_MAX; 0: only when you press Sync). */
   workQueueSyncMinutes: number;
   /** `[code_review] strategy`: the local review before a PR opens, or `off`. */
@@ -2671,7 +2689,7 @@ export type TermServerMessage =
 // Some errors add a machine-readable `code` next to `error`: DATAPACK_LIMIT (402, the Meko plan's
 // datapack limit), MEKO_OFF (409).
 // The server listens only on its unix socket (`Paths.webSock`), and Meko serves it to browsers at
-// /ext/agentk/ with the prefix stripped: Meko signs people in, so every request on the socket is
+// /ext/agentk/ with the prefix stripped: Meko decides who gets in, so every request on the socket is
 // let in. Writes and WebSocket upgrades still refuse a cross-origin `Origin`.
 //
 // GET    /healthz                              → { ok: true, version }
@@ -2755,7 +2773,7 @@ export type TermServerMessage =
 //        session for a closed item)
 // PUT    /api/work-items/order ReorderWorkItemsRequest → 204   (409 when `ids` isn't exactly the open items)
 // POST   /api/work-items/close CloseWorkItemsRequest → { closed }   (Dismiss all: closes the open items among `ids`; 400 for no list of ids)
-// POST   /api/work-items/sync                  → WorkSync   (GitHub review requests and Slack's To-dos into the queue; 409 while one runs)
+// POST   /api/work-items/sync                  → WorkSync   (GitHub review requests and your Slack list's messages into the queue; 409 while one runs)
 // GET    /api/work-items/by-link?link=         → WorkLinkMatch[]   (open and closed items holding the link's key, open first; 400 for a
 //        link parseWorkLink can't read)
 // GET    /api/usage                            → UsageOverview

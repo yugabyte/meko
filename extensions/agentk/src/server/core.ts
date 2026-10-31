@@ -1,4 +1,5 @@
 import { CodeReviews } from './review/runner.js';
+import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import type { Server } from 'node:http';
 import { mkdirSync, rmSync } from 'node:fs';
@@ -15,7 +16,7 @@ import { AskAgentk } from './askagentk.js';
 import { GithubLinkService } from './ghlinks.js';
 import { PrReviewService } from './prreview.js';
 import {
-  envMekoWebUrl, isLoopback, mekoConfigured, mekoWebUrlWarning, ownMekoKey, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, resolveMekoWithSource,
+  envMekoWebUrl, isLoopback, mekoConfigured, mekoStorageHttp, mekoWebUrlWarning, ownMekoKey, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, resolveMekoWithSource,
   saveConfig, type Config,
 } from './config.js';
 import { all, kvGet, kvSet, run, type Db } from './db.js';
@@ -37,7 +38,7 @@ import { MekoCallLog } from './mekolog.js';
 import { MekoAgents, mekoMcpGaps, readMekoAgents, type MekoAgentsRead } from './mekoagents.js';
 import { MekoClaudeWatch } from './mekoclaude.js';
 import {
-  LocalMekoReader, isLocalMeko, localMeko, lookForLocalMeko, mekoLinkHandedOver, originOf, probeLocalMeko, setMekoLinkHandedOver, type LocalMekoProbe,
+  LocalMekoReader, isLocalMeko, linkedThroughMeko, localMeko, lookForLocalMeko, mekoLinkHandedOver, originOf, probeLocalMeko, setMekoLinkHandedOver, type LocalMekoProbe,
 } from './mekolocal.js';
 import { handOverMekoKey } from './mekohandover.js';
 import { mekoDirOf } from './movehome.js';
@@ -57,7 +58,7 @@ import { legacyTmuxPanes } from './legacytmux.js';
 import { servicesFor, type ServiceManager } from './service.js';
 import { ZERO_USAGE, addUsage } from './usage.js';
 import { WorktreePool } from './worktrees.js';
-import { readTodoList } from './slack.js';
+import { readList } from './slack.js';
 import { WorkQueue } from './workqueue.js';
 
 export interface CoreOptions {
@@ -117,12 +118,25 @@ const MEKO_HANDED_OVER_KEY = 'meko-link-handed-over';
 
 /**
  * Which Meko account a Meko is, for whether a change forgets the account's invites: the Meko on
- * this computer is one account on any port or token; any other is its server's origin and key.
- * Null with no Meko.
+ * this computer is one account on any port or token; a Meko Cloud link Meko keeps is its account
+ * (Meko's `account`, a hash of the link's MCP URL and key), and an older Meko's link, which handed
+ * out the key, the same hash worked out here, so the upgrade between them isn't a new account; any
+ * other is its server's origin and key. Null with no Meko.
  */
 function mekoAccountOf(m: { url: string; apiKey: string; keySource: MekoKeySource | null }): string | null {
   if (!m.apiKey) return null;
-  return m.keySource === 'local' ? 'local' : `${originOf(m.url)} ${m.apiKey}`;
+  if (m.keySource === 'local') return 'local';
+  if (m.keySource === 'meko') {
+    const cloud = localMeko().cloud;
+    if (linkedThroughMeko(cloud)) return `cloud ${cloud?.account ?? ''}`;
+    return `cloud ${mekoCloudAccount(m.url, m.apiKey)}`;
+  }
+  return `${originOf(m.url)} ${m.apiKey}`;
+}
+
+/** Meko's `account` for a Meko Cloud link: the first 16 hex digits of the SHA-256 of its MCP URL and key. */
+export function mekoCloudAccount(mcpUrl: string, key: string): string {
+  return createHash('sha256').update(`${mcpUrl}\n${key}`).digest('hex').slice(0, 16);
 }
 
 /** How often the server checks that its hook socket file is still there. */
@@ -287,7 +301,7 @@ export class Core extends EventEmitter {
       changed: () => this.changed(),
       warn: (m, d) => this.log.warn(m, d),
       reviewRequests: () => github.reviewRequests(homedir()),
-      readSlack: () => readTodoList(this.cfg, join(this.paths.run, 'work-sync')),
+      readSlack: () => readList(this.cfg, join(this.paths.run, 'work-sync')),
       claudeAvailable: () => this.harnesses.of('claude').status(this.cfg).available,
       githubTitle: async (repo, number) => (await github.issueOrPr(homedir(), repo, number)).title,
       prState: (repo, number) => github.prState(homedir(), repo, number),
@@ -337,7 +351,9 @@ export class Core extends EventEmitter {
     this.ybCallHome = new CallHomeService({
       target: 'yugabyte', db: this.db, config: () => this.cfg, version: this.version, log: this.log, fetch: o.callHomeFetch,
     });
-    const mekoApi = o.mekoApi ?? new MekoApi(() => ({ baseUrl: resolveMekoApiUrl(this.cfg), apiKey: resolveMeko(this.cfg).apiKey }));
+    const mekoApi = o.mekoApi ?? new MekoApi(() => ({
+      baseUrl: resolveMekoApiUrl(this.cfg), apiKey: resolveMeko(this.cfg).apiKey, storageHttp: mekoStorageHttp(this.cfg),
+    }));
     this.invites = new InviteService(this, mekoApi);
     this.knowledge = new KnowledgeService(this, mekoApi);
   }
@@ -536,10 +552,13 @@ export class Core extends EventEmitter {
     const after = resolveMekoWithSource(this.cfg);
     const status = this.mekoStatusFor(this.cfg);
     const apiAfter = resolveMekoApiUrl(this.cfg);
-    const reconnect = before.url !== after.url || before.apiKey !== after.apiKey;
     // Kept on every read (a copy of the local token becoming the live local Meko changes nothing to
     // connect to, but names the account); compared only when there's another Meko to connect to.
     const account = mekoAccountOf(after);
+    // Linking or unlinking keeps the Meko on this computer's URL and token, but changes the Meko behind
+    // them, and so does linking it to another Meko Cloud account (Meko's account marker).
+    const relinked = !!account?.startsWith('cloud ') && !!this.mekoAccount?.startsWith('cloud ') && account !== this.mekoAccount;
+    const reconnect = before.url !== after.url || before.apiKey !== after.apiKey || (before.keySource === 'meko') !== (after.keySource === 'meko') || relinked;
     const switched = reconnect && !!account && !!this.mekoAccount && account !== this.mekoAccount;
     if (account) this.mekoAccount = account;
     if (!reconnect && status.source === shown.source && status.webUrl === shown.webUrl && apiAfter === apiBefore) {
@@ -557,7 +576,7 @@ export class Core extends EventEmitter {
       return;
     }
     this.log.info(
-      after.keySource === 'meko' ? `using Meko's Meko Cloud link (${after.url})`
+      after.keySource === 'meko' ? (linkedThroughMeko(localMeko().cloud) ? "using Meko Cloud through the Meko on this computer" : `using Meko's Meko Cloud link (${after.url})`)
         : after.apiKey ? `using the Meko on this computer (${after.url})` : 'the Meko on this computer stopped; Meko is not set up',
     );
     // As in updateConfig: a harness may have written the old key somewhere of its own.
@@ -656,7 +675,7 @@ export class Core extends EventEmitter {
       },
       update: this.updateStatus(),
       version: this.version,
-      // The Unix account: Meko signs people in, and its page shows the login's name.
+      // The Unix account the server runs as: Meko has no login whose name to show.
       username: this.username,
       ghLogin: this.ghUser,
       serverName: this.serverName(),

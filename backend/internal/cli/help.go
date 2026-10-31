@@ -53,7 +53,8 @@ var mekoCommands = []command{
 	{name: "install", group: "Get started", summary: "Set Meko up and start it at login",
 		usage: "meko install [flags]", examples: []example{
 			{"meko install", "set Meko up with a login service (launchd or systemd), and start it"},
-			{"meko install --access remote", "let browsers on other computers reach the web UI, over HTTPS with a login"},
+			{"meko install --access remote", "let browsers on other computers reach the web UI, over HTTPS, with no login"},
+			{"meko install --no-ui", "set Meko up with the web UI off (meko ui start turns it on)"},
 			{"meko install --no-service", "set it up without a service; start it with meko start"},
 		}},
 	{name: "start", group: "Get started", summary: "Start Meko and its extensions",
@@ -71,7 +72,16 @@ var mekoCommands = []command{
 		usage: "meko ui [path] [flags]", examples: []example{
 			{"meko ui", "open Meko's web UI"},
 			{"meko ui /ext/agentk/", "open AgentK's page"},
-			{"meko ui --no-open", "only print the link (with remote access and no login yet, a setup link)"},
+			{"meko ui --no-open", "only print the link"},
+			{"meko ui stop", "turn the web UI off, and meko ui start to turn it on again"},
+		}},
+	{name: "ui start", group: "Run", summary: "Turn the web UI on, and keep it on",
+		usage: "meko ui start", examples: []example{
+			{"meko ui start", "serve the web UI again after meko ui stop or meko install --no-ui"},
+		}},
+	{name: "ui stop", group: "Run", summary: "Turn the web UI off, and keep it off",
+		usage: "meko ui stop", examples: []example{
+			{"meko ui stop", "close the web UI's port, AgentK's page with it, until meko ui start"},
 		}},
 	{name: "stop", group: "Run", summary: "Stop Meko and its extensions",
 		usage: "meko stop [flags]", examples: []example{
@@ -125,14 +135,14 @@ var mekoCommands = []command{
 			{"meko agent list", "a row for each agent installed, and where agents connect"},
 			{"meko agent list --json", "the same, for scripts and extensions"},
 		}},
-	{name: "agent connect", group: "Connect", summary: "Connect an agent to Meko (claude, codex, kiro, opencode)",
-		usage: "meko agent connect [claude|codex|kiro|opencode]", examples: []example{
+	{name: "agent connect", group: "Connect", summary: "Connect an agent to Meko (claude, codex, kiro, opencode, cursor)",
+		usage: "meko agent connect [claude|codex|kiro|opencode|cursor]", examples: []example{
 			{"meko agent connect claude", "add Meko's MCP server to Claude Code, for all your projects"},
-			{"meko agent connect kiro", "the same for Kiro CLI (codex and opencode too)"},
+			{"meko agent connect kiro", "the same for Kiro CLI (codex, opencode and cursor too)"},
 			{"meko agent connect", "the MCP URL and token, to connect any MCP client"},
 		}},
 	{name: "agent disconnect", group: "Connect", summary: "Disconnect an agent from Meko",
-		usage: "meko agent disconnect claude|codex|kiro|opencode", examples: []example{
+		usage: "meko agent disconnect claude|codex|kiro|opencode|cursor", examples: []example{
 			{"meko agent disconnect claude", "remove Meko's MCP server from Claude Code"},
 		}},
 	{name: "token", group: "Connect", summary: "Print the token agents send",
@@ -145,10 +155,6 @@ var mekoCommands = []command{
 			{"meko cloud_link", "link Meko Cloud for the extensions: asks for the API key, or reads it from stdin"},
 			{"meko cloud_link --off", "unlink it: the extensions use this Meko"},
 			{"meko cloud_link --url https://meko.example.com/mcp", "link another Meko server"},
-		}},
-	{name: "setup_link", group: "Connect", summary: "Make or reset the web UI's login for remote access",
-		usage: "meko setup_link", examples: []example{
-			{"meko setup_link", "print a one-time link that sets up the login, or replaces a lost one"},
 		}},
 	{name: groupExtension, subcommands: true, summary: "List, install, update and delete Meko's extensions",
 		usage: "meko extension list|install|update|delete [<name>] [flags]", examples: []example{
@@ -198,24 +204,21 @@ var mekoCommands = []command{
 var mekoCLIGroups = []string{"Datapacks", "Memory and knowledge", "At the prompt only"}
 
 var mekoCLICommands = []command{
-	{name: "datapacks", group: "Datapacks", summary: "List the datapacks, and the linked Meko Cloud's",
+	{name: "datapacks", group: "Datapacks", summary: "List the datapacks",
 		usage: "meko-cli datapacks [flags]", examples: []example{
-			{"meko-cli datapacks", "this Meko's and the linked Meko Cloud's, by name, with their descriptions"},
-			{"meko-cli datapacks --local", "only this Meko's"},
-			{"meko-cli datapacks --json", "with each one's id, and whether it's this Meko's or Meko Cloud's (and shared)"},
+			{"meko-cli datapacks", "by name, with their descriptions: the linked Meko Cloud's while it's linked"},
+			{"meko-cli datapacks --json", "with each one's id"},
 		}},
 	{name: "create_datapack", group: "Datapacks", summary: "Create a datapack",
 		usage: "meko-cli create_datapack <name> [flags]", examples: []example{
-			{"meko-cli create_datapack research", "create the datapack research"},
-			{"meko-cli create_datapack team-notes --cloud", "create it in the linked Meko Cloud"},
+			{"meko-cli create_datapack research", "create the datapack research: in the linked Meko Cloud while it's linked"},
 		}},
 	{name: "delete_datapack", group: "Datapacks", summary: "Delete a datapack and everything in it",
 		usage: "meko-cli delete_datapack <name|id> [flags]", examples: []example{
 			{"meko-cli delete_datapack research", "delete it and everything in it, for good, after asking"},
 			{"meko-cli delete_datapack research --force", "don't ask"},
-			{"meko-cli delete_datapack cloud:team-notes", "the linked Meko Cloud's, when this Meko has one named so too"},
 		}},
-	{name: "export", group: "Datapacks", summary: "Write a datapack to a zip",
+	{name: "export", group: "Datapacks", summary: "Write one of this computer's datapacks to a zip",
 		usage: "meko-cli export [<name|id>] [flags]", examples: []example{
 			{"meko-cli export", "write the default datapack to meko-<name>-<date>.zip here"},
 			{"meko-cli export research -o research.zip", "write another datapack to a file you name"},
@@ -225,7 +228,6 @@ var mekoCLICommands = []command{
 			{`meko-cli search "why is the web listener separate"`, "search the default datapack"},
 			{`meko-cli search "release steps" --source knowledge_base --limit 3`, "only the knowledge base, three results"},
 			{`meko-cli search "owner's login" --datapack research --json`, "another datapack, the tool's raw reply"},
-			{`meko-cli search "deploy steps" --datapack cloud:team-runbooks`, "a datapack in the linked Meko Cloud"},
 		}},
 	{name: "add_memory", group: "Memory and knowledge", summary: "Save a memory, word for word",
 		usage: `meko-cli add_memory "<text>" [flags]`, examples: []example{
@@ -244,7 +246,6 @@ var mekoCLICommands = []command{
 	{name: "use", group: "At the prompt only", promptOnly: true, summary: "Set the datapack later commands use",
 		usage: "use [<name|id>]", examples: []example{
 			{"use research", "search, add_memory, upload and upload_status use research unless a line names another"},
-			{"use cloud:team-notes", "a datapack in the linked Meko Cloud (cloud: only when this Meko has one named so)"},
 			{"use", "print the datapack in use"},
 		}},
 	{name: "help", group: "At the prompt only", promptOnly: true, summary: "This list, or help <command>",
@@ -288,7 +289,7 @@ func startHere(w io.Writer) {
 	if up, _ := running(l.Lock); up {
 		title = "Meko is running. Next:"
 		cmds = [][2]string{{"meko ui", "open the web UI"},
-			{"meko agent connect claude", "connect Claude Code to it (or codex, kiro, opencode)"}}
+			{"meko agent connect claude", "connect Claude Code to it (or codex, kiro, opencode, cursor)"}}
 	} else if _, err = os.Stat(l.Root); err == nil {
 		title = "Meko is set up but not running. Start it with:"
 		cmds = [][2]string{{"meko start", "start Meko, then meko ui opens the web UI"}}

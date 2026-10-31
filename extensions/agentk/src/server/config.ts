@@ -8,7 +8,7 @@ import { DEFAULT_HARNESS, HARNESS_IDS, isHarnessId, type HarnessId } from '../sh
 import {
   DEFAULT_DEPTH, DEFAULT_ROUNDS, DEFAULT_STRATEGY, MAX_DEPTH, MAX_ROUNDS, STRATEGIES, isStrategySetting, type ReviewSettings,
 } from '../shared/codereview.js';
-import { isLocalMeko, isMekoCloudKey, localMeko, mekoLinkHandedOver, originOf } from './mekolocal.js';
+import { isLocalMeko, isMekoCloudKey, linkedThroughMeko, localMeko, mekoLinkHandedOver, originOf } from './mekolocal.js';
 import { expandHome, type Paths } from './paths.js';
 
 export interface Config {
@@ -95,14 +95,16 @@ export interface Config {
   /**
    * The work queue's sync (workqueue.ts), also in Settings › Work queue. github and slack: which sources it reads (both
    * off, the default: no sync at all). syncMinutes: how often it syncs by itself (0: only Sync). closeClosedPrs: the
-   * GitHub sync closes the items whose PR was merged or closed (off by default: they're only marked). slackModel: the
-   * model of the `claude -p` that reads Slack's To-dos through your Slack connector (slack.ts), and
+   * GitHub sync closes the items whose PR was merged or closed (off by default: they're only marked). slackList: the link
+   * to the Slack list that Slack sync reads. slackModel: the model of the `claude -p` that reads it through your
+   * Slack connector (slack.ts), and
    * slackTimeoutSeconds how long it may take (30 to 600). slackTools: the tools that run may call, your Slack
-   * connector's read tools (the claude.ai Slack connector's by default), besides ToolSearch, which needs no
+   * connector's tool that reads a file (the claude.ai Slack connector's `slack_read_file` by default, with
+   * `slack_read_user_profile` to name the people a row mentions), besides ToolSearch, which needs no
    * permission and only loads tools. It loads none of your Claude Code settings but the sign-in part, so
    * nothing else is allowed (slack.ts).
    */
-  workQueue: { github: boolean; slack: boolean; syncMinutes: number; closeClosedPrs: boolean; slackModel: string; slackTimeoutSeconds: number; slackTools: string[] };
+  workQueue: { github: boolean; slack: boolean; syncMinutes: number; closeClosedPrs: boolean; slackList: string; slackModel: string; slackTimeoutSeconds: number; slackTools: string[] };
   /**
    * The local code review before a PR opens (review/runner.ts, docs/design/code-review.md), also in Settings › Code review;
    * a project's settings and a session's own go over these. strategy: `off`, `sirius-1.0` or `sagittarius-3.0`. rounds:
@@ -122,9 +124,13 @@ export interface ReviewModels {
 
 export { DEFAULT_MEKO_URL, DEFAULT_MEKO_WEB_URL, mekoWebUrl };
 
-/** The claude.ai Slack connector's read tools: the Slack sync may call these and nothing else. */
-const SLACK_READ_TOOLS = ['search_public_and_private', 'search_public', 'read_channel', 'read_thread', 'search_channels', 'read_user_profile']
-  .map((t) => `mcp__claude_ai_Slack__slack_${t}`);
+/**
+ * The Slack sync may call only the claude.ai Slack connector's file read, and its profile read to name
+ * the people a row mentions: no search, and no channel or thread read that a row's text could ask for.
+ * The file read takes any file ID, so it's the prompt, not this limit, that keeps the run on the
+ * configured list.
+ */
+const SLACK_READ_TOOLS = ['mcp__claude_ai_Slack__slack_read_file', 'mcp__claude_ai_Slack__slack_read_user_profile'];
 
 export const DEFAULT_CONFIG: Config = {
   server: { bind: '0.0.0.0', port: 7777, name: '' },
@@ -141,7 +147,7 @@ export const DEFAULT_CONFIG: Config = {
   pr: { resolveConflicts: true },
   askAgentk: { enabled: true, model: 'sonnet', timeoutSeconds: 45 },
   tools: { enabled: true },
-  workQueue: { github: false, slack: false, syncMinutes: 15, closeClosedPrs: false, slackModel: 'sonnet', slackTimeoutSeconds: 180, slackTools: [...SLACK_READ_TOOLS] },
+  workQueue: { github: false, slack: false, syncMinutes: 15, closeClosedPrs: false, slackList: '', slackModel: 'sonnet', slackTimeoutSeconds: 180, slackTools: [...SLACK_READ_TOOLS] },
   codeReview: {
     strategy: DEFAULT_STRATEGY,
     rounds: DEFAULT_ROUNDS,
@@ -296,7 +302,9 @@ export function onLoopback(url: string): boolean {
 /**
  * Meko credentials. Meko owns the Meko Cloud link (`cloud` in `meko token --json`): once it has had
  * one (linked, or unlinked since), or once AgentK handed it its own key (`mekoLinkHandedOver`),
- * AgentK uses Meko's link, else the Meko running on this computer, and nothing else.
+ * AgentK uses the Meko running on this computer, and nothing else. While it's linked, that Meko
+ * reaches Meko Cloud for AgentK (`linkedThroughMeko`): its URL and token are AgentK's, with the
+ * source `meko`. An older Meko handed out the link's key instead, which AgentK then uses itself.
  *
  * Before that (a Meko too old to keep a link, or one that was never set, with the handover still to
  * run) AgentK's own sources stand in: config first, then the environment, then Claude Code's
@@ -349,6 +357,7 @@ export function resolveMekoWithSource(cfg: Config): { url: string; apiKey: strin
   const fromLocal = local ? { url: local.url, apiKey: local.token, keySource: 'local' as const } : null;
   if (cloud?.set || mekoLinkHandedOver()) {
     if (cloud?.apiKey) return { url: cloud.url, apiKey: cloud.apiKey, keySource: 'meko' };
+    if (linkedThroughMeko(cloud)) return local ? { url: local.url, apiKey: local.token, keySource: 'meko' } : { url: DEFAULT_MEKO_URL, apiKey: '', keySource: null };
     return fromLocal ?? { url: DEFAULT_MEKO_URL, apiKey: '', keySource: null };
   }
   const own = ownMekoKey(cfg);
@@ -404,12 +413,29 @@ export function mekoHost(cfg: Config): string {
 }
 
 /**
- * Meko's REST API base (used for sharing): Meko's link's; else config first, then MEKO_API_URL, then
- * the web app URL plus /api/v1 (the Meko web app serves its API on the same origin). Null when
- * neither is known.
+ * Whether the Meko behind AgentK's REST API may hand out plain-http upload links: while the Meko on
+ * this computer reaches Meko Cloud for AgentK, the Meko Cloud it's linked to (its web app on http, a
+ * self-hosted Meko), not the pass-through's own http base; undefined otherwise (MekoApi then asks of
+ * its base).
+ */
+export function mekoStorageHttp(cfg: Config): boolean | undefined {
+  if (resolveMekoWithSource(cfg).keySource !== 'meko') return undefined;
+  const cloud = localMeko().cloud;
+  return linkedThroughMeko(cloud) ? (cloud?.webUrl ?? '').startsWith('http:') : undefined;
+}
+
+/**
+ * Meko's REST API base (used for sharing): while Meko is linked, its own pass-through to Meko Cloud's
+ * API (`/api/v1/cloud` on the Meko on this computer), or an older Meko's link's API URL; else config
+ * first, then MEKO_API_URL, then the web app URL plus /api/v1 (the Meko web app serves its API on
+ * the same origin). Null when neither is known.
  */
 export function resolveMekoApiUrl(cfg: Config): string | null {
-  if (resolveMekoWithSource(cfg).keySource === 'meko') return localMeko().cloud?.apiUrl || null;
+  const eff = resolveMekoWithSource(cfg);
+  if (eff.keySource === 'meko') {
+    const cloud = localMeko().cloud;
+    return linkedThroughMeko(cloud) ? `${originOf(eff.url)}/api/v1/cloud` : cloud?.apiUrl || null;
+  }
   const override = forKey(cfg.meko.apiUrl.trim() || process.env.MEKO_API_URL?.trim() || '', resolveMekoWithSource(cfg));
   if (override) return override.replace(/\/+$/, '');
   const web = resolveMekoWebUrl(cfg);

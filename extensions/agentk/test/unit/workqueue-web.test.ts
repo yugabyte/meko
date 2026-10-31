@@ -9,8 +9,8 @@ const item = (o: Partial<WorkItem>): WorkItem => ({
   createdAt: 1, closedAt: null, ...o,
 });
 const projects = [
-  { id: 'p1', name: 'One', sessions: [{ id: 's1', desired: 'running', status: 'needs_input', prUrl: null }] },
-  { id: 'p2', name: 'Two', sessions: [{ id: 's2', desired: 'running', status: 'working', prUrl: 'https://github.com/O/R/pull/3' }] },
+  { id: 'p1', name: 'One', sessions: [{ id: 's1', desired: 'running', status: 'needs_input', prUrl: null, background: [] }] },
+  { id: 'p2', name: 'Two', sessions: [{ id: 's2', desired: 'running', status: 'working', prUrl: 'https://github.com/O/R/pull/3', background: [] }] },
 ] as unknown as ProjectWithSessions[];
 
 describe('the work queue page', () => {

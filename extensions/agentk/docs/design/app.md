@@ -20,7 +20,7 @@ finding, then `LGTM`) or a red `!`. While the review works and its session waits
 terminal, the magnifier takes the needs-you color and its lens knocks. Clicking it opens the
 review's own screen (its terminal, its findings beside it) while its passes run (or it failed),
 and its findings beside the task's terminal while the task fixes them and once the review is done
-(the review session stops then). In the rail, the magnifier sits under the stage, with no divider,
+(the review session stops then). In the rail, the magnifier sits under the stage chip, their right edges lined up, with no divider,
 so the name keeps one column. The tabs and the rail list a project's sessions in the same order, kept on the server
 (`sessions.position`) so every browser sees it: a new session goes first, and **Move to top** puts
 any other there, to keep the work that matters most at the top as priorities change. It's the ↑ that
@@ -63,8 +63,8 @@ Session states, shown with a dot on each session (on its tab, or in the rail) an
   long, then pauses. It also shows in Review & PR while a merge blocker only you can clear stands
   (`Session.waitsOnYou`: a held review, CI or merge conflicts AgentK handed over, or with Run to
   merge any blocker that doesn't clear by itself; see *Waiting on you* in
-  [the task lifecycle](lifecycle.md)), over idle, recovered and working, and over learning, queued
-  and Meko (`dotState()`); the tab's tooltip names what to clear
+  [the task lifecycle](lifecycle.md)), over idle, recovered and working, and over learning, queued,
+  Meko and running in the background (`dotState()`); the tab's tooltip names what to clear
 - **Idle**, waiting for your next prompt
 - **Recovered** after a restart
 - **Exited**
@@ -80,6 +80,19 @@ Session states, shown with a dot on each session (on its tab, or in the rail) an
   turns once every 3 s. It shows over idle and recovered only; a learn step wins over it
   (`dotState()`). The session's tooltip says what the gate waits on (a merge's from `queuedText()`;
   an Open PR is going now), then the status detail as for any dot; the palette says *queued*. The rail ranks it above idle and recovered, under working.
+- **Running in the background:** the agent is between turns with work it left running in the
+  background, which wakes it again when it's done (`Session.background`: Claude Code's background
+  shells, subagents and monitors, from its `Stop` hook's `background_tasks`; OpenCode's background
+  shells and subagents, from AgentK's plugin; never Kiro's, see [Harnesses](harnesses.md)). The
+  same turning ring as queued. It shows over idle and recovered only; a learn step and a queued
+  gate win over it (`dotState()`). The tooltip and the palette name what's running ("running in
+  the background: npm test", up to three, then how many more: `backgroundText()`). The rail ranks
+  it like queued. The server keeps the list in memory (`SessionManager.background`), replaced at
+  each turn's end (`endTurn`): a turn end without the field (a `Stop` from a Claude Code too old to
+  send it, or a turn you interrupted, which the mod reports with no list) empties it, so the dot
+  never keeps a ring nothing will update. It's dropped when the agent exits or relaunches, so after a server restart it shows again only
+  from the next turn's end. Claude Code fires no hook when a background task ends or is stopped
+  between turns: its list holds until the turn the task's end wakes Claude for ends.
 
 The working and needs-you signals run on one 100 ms clock (`src/web/blink.ts`), played on every
 dot with the Web Animations API, pinned to the page's timeline. Each dot starts at its own point
@@ -183,7 +196,13 @@ disk (in a commit's view, its parent's and its own, from git), only for those ty
 a sandboxing content policy so the bytes can never run as a page. The footer counts use the same
 comparison, so they always match. The file list is the header's **Files** menu, with a filter, so
 you can jump to any file from anywhere in a long diff; each file's header shows its position
-(*4 / 12*), and `[` / `]` step to the previous or next file.
+(*4 / 12*), and `[` / `]` step to the previous or next file. The filter keeps a file whose path or
+old path holds what's typed as plain text or matches it as a regular expression, both ignoring case
+(`pathFilter()` in `src/web/diff.ts`), so `\.tsx?$` or `^src/web/` work, and a name with regex
+characters in it (`[id].tsx`, `page (1).tsx`) is still found as typed. While what's typed isn't a
+valid expression (a group typed partway, `src/(`), the longest start of it that is one filters
+instead (`src/`), so the list doesn't go blank before the `)`. The commit and base menus match plain
+text.
 
 The header's commit menu (**All changes ▾**) shows either that whole comparison or one of the
 branch's commits alone: the commits since the merge base, newest first (at most 200,
@@ -434,7 +453,7 @@ hides the offer in that browser for good (`localStorage`, as the other banners d
 per browser and device, so the server doesn't keep it). The page catches the browser's
 `beforeinstallprompt` as it loads and holds it, so Android Chrome doesn't show its own install bar
 as well (`src/web/installapp.ts`). The banner doesn't show in the installed app, once the app is
-installed (Chrome stops making the offer in its tabs), or before sign-in. While the browser can
+installed (Chrome stops making the offer in its tabs), or before a sign-in on a Meko that has one. While the browser can
 still install it, **Install AgentK as an app** is in the `⌘K` palette too, even after Not now.
 Tapping Install doesn't also ask for notification permission (the first-click ask waits for the
 next click), so one tap never brings up two prompts.
@@ -467,7 +486,7 @@ the page for a focused field, its offset), so the on-screen keyboard shrinks the
 covering the prompt or a dialog's fields. On a touch screen the keyboard comes up only when you tap
 a field: opening a dialog (New project, New session, Open PR) or the Changes panel's Files, commit
 and base menus doesn't focus a text field. The page itself never scrolls, since the app puts its
-scroll back at the top. (Signing in is Meko's page.)
+scroll back at the top. (Signing in, on a Meko that has a login, is Meko's page.)
 While you type, the terminal stays scrolled to its newest line. On
 touch screens the terminal gets a key bar (Tab, arrows, Ctrl+C, Enter, select mode, typing mode,
 and at the far right a ▾ key that opens a second row of more keys: a sticky Ctrl, Esc, Shift+Tab,

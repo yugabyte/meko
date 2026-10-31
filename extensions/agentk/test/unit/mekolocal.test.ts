@@ -31,6 +31,11 @@ echo "{\\"url\\":\\"http://127.0.0.1:7778/mcp\\",\\"token\\":\\"tok-$MEKO_HOME\\
     expect(await probe()).toEqual({ state: 'running', meko: { url: 'http://127.0.0.1:7778/mcp', token: 'tok-', webUrl: null } });
   });
 
+  it('says when the web UI is off (meko ui stop), with no URL to open', async () => {
+    meko(`echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":true,"web_url":"","web_off":true}'`);
+    expect(await probe()).toEqual({ state: 'running', meko: { url: 'http://127.0.0.1:7778/mcp', token: 'abc', webUrl: null, webOff: true } });
+  });
+
   it("reads Meko's Meko Cloud link, running or not, and none from a Meko too old to keep one", async () => {
     const link = '"cloud":{"set":true,"url":"https://mcp.mekodata.ai/mcp","api_key":"mko_tkn_x","web_url":"https://cloud.mekodata.ai","api_url":"https://cloud.mekodata.ai/api/v1"}';
     meko(`echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":false,${link}}'`);
@@ -41,6 +46,11 @@ echo "{\\"url\\":\\"http://127.0.0.1:7778/mcp\\",\\"token\\":\\"tok-$MEKO_HOME\\
     // Unlinked: no key, so no URLs either.
     meko(`echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":true,"cloud":{"set":true,"url":"https://x/mcp","api_key":""}}'`);
     expect((await probe()).cloud).toEqual({ set: true, url: '', apiKey: '', webUrl: '', apiUrl: '' });
+    // A Meko that keeps the key says only whether it's linked, and its web app while it is.
+    meko(`echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":true,"cloud":{"set":true,"linked":true,"web_url":"https://cloud.mekodata.ai","account":"0123456789abcdef"}}'`);
+    expect((await probe()).cloud).toEqual({ set: true, url: '', apiKey: '', webUrl: 'https://cloud.mekodata.ai', apiUrl: '', linked: true, account: '0123456789abcdef' });
+    meko(`echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":true,"cloud":{"set":true,"linked":false,"web_url":"https://cloud.mekodata.ai"}}'`);
+    expect((await probe()).cloud).toEqual({ set: true, url: '', apiKey: '', webUrl: '', apiUrl: '', linked: false, account: '' });
     meko(`echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":true,"cloud":"what"}'`);
     expect(await probe()).not.toHaveProperty('cloud');
     // One Meko couldn't read says so, for the reader to keep the link it had.

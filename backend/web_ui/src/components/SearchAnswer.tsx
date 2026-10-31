@@ -1,5 +1,5 @@
 // Search's answer: the user's own Claude Code, run by Meko with no tools, writes an answer to the
-// question from the results the search returned, citing them. Off until meko answers use claude.
+// question from the results the search returned, citing them. Off until turned on in Settings.
 
 import { Fragment } from "react";
 import { Sparkles } from "lucide-react";
@@ -7,6 +7,7 @@ import { api } from "../lib/api";
 import type { ContextSearch, Passage } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
 import { SOURCE_COLOR, SOURCE_LABEL } from "./MemoryMapView";
+import { SettingsHere } from "./SettingsHere";
 import { Card, cx, ErrorNote, Spinner } from "./ui";
 
 // The most results an answer is written from (the server takes no more).
@@ -41,7 +42,8 @@ export function SearchAnswer({
     return (
       <p className="text-sm text-muted-foreground">
         <Sparkles className="mr-1 inline size-4 text-primary" />
-        Get a written answer from these results with your own Claude Code: run <b>meko answers use claude</b>.
+        Get a written answer from these results with your own Claude Code: turn on Search answers in{" "}
+        <SettingsHere />, or run <b>meko answers use claude</b>.
       </p>
     );
   if (passages.length === 0) return null;

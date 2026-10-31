@@ -31,6 +31,7 @@ func (a *fakeAnswerer) Answer(_ context.Context, _, input string) (memory.Search
 // call says so without the text.
 func TestSearchAnswers(t *testing.T) {
 	a := &fakeAnswerer{}
+	claude := fakeClaude(t)
 	e := testenv.Start(t, testenv.Options{Answerer: a})
 	const settings = "/settings/answers"
 	path := "/datapacks/" + e.DatapackID + "/answer"
@@ -46,7 +47,8 @@ func TestSearchAnswers(t *testing.T) {
 		t.Errorf("an unknown harness: %+v", r)
 	}
 	r := asAdmin(t, e, settings, map[string]any{"harness": "claude"})
-	if r.Status != 200 || obj(r.Data)["enabled"] != true || obj(r.Data)["model"] != "haiku" || len(a.inputs) != 1 {
+	if r.Status != 200 || obj(r.Data)["enabled"] != true || obj(r.Data)["command"] != claude ||
+		obj(r.Data)["model"] != "haiku" || len(a.inputs) != 1 {
 		t.Fatalf("set up: %+v, %d test calls", r, len(a.inputs))
 	}
 

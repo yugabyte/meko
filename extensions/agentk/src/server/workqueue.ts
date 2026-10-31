@@ -11,7 +11,7 @@ import { all, get, kvDelete, kvGet, kvSet, run, tx, type Db } from './db.js';
 import { REVIEW_REQUESTS_MAX, type ReviewRequest } from './github.js';
 import { errMsg } from './log.js';
 import { HttpError } from './projects.js';
-import type { SlackTodo } from './slack.js';
+import type { SlackListItem } from './slack.js';
 
 /** kv: '1' while Slack is synced on the timer too, which a Sync that reached Slack turns on and any failure off. */
 const SLACK_AUTO_KEY = 'work-slack-auto';
@@ -25,8 +25,8 @@ export interface WorkQueueDeps {
   warn: (msg: string, detail?: string) => void;
   /** The open PRs asking for the user's review. */
   reviewRequests: () => Promise<ReviewRequest[]>;
-  /** The messages on the user's Slack To-dos; throws with what went wrong. */
-  readSlack: () => Promise<SlackTodo[]>;
+  /** The messages on the user's Slack list; throws with what went wrong. */
+  readSlack: () => Promise<SlackListItem[]>;
   /** Whether Claude Code can run, which the Slack read needs. */
   claudeAvailable: () => boolean;
   /** A GitHub PR's or issue's title, for an item added with a link and no title. */
@@ -95,6 +95,12 @@ export function checkLinks(v: unknown): WorkLink[] {
 }
 
 /** A synced message's title: its first line, cut to SYNCED_TITLE_MAX characters. */
+/** A Slack list row's notes, started with its reporter the way Slack starts a message with its author. */
+function slackNotes(m: SlackListItem): string {
+  const notes = m.reporter && m.notes ? `${m.reporter}: ${m.notes}` : m.notes || (m.reporter && `From ${m.reporter}`);
+  return notes.slice(0, WORK_NOTES_MAX);
+}
+
 function firstLine(s: string, fallback: string): string {
   const line = s.split('\n').find((l) => l.trim())?.trim() ?? '';
   if (!line) return fallback;
@@ -355,14 +361,14 @@ export class WorkQueue {
       const link = parseWorkLink(m.url);
       if (!link || link.kind !== 'slack' || this.seen(link.key)) continue;
       if (m.channel) link.label = `Slack #${m.channel.replace(/^#/, '')}`.slice(0, 80);
-      this.insert({ title: firstLine(m.text, 'Slack message'), links: [link], source: 'slack', sourceKey: link.key });
+      this.insert({ title: firstLine(m.text, 'Slack message'), notes: slackNotes(m), links: [link], source: 'slack', sourceKey: link.key });
       added++;
     }
     return { ok: true, added, error: null };
   }
 
   /**
-   * Adds the open PRs asking for your review and the messages on Slack's To-dos to the bottom of
+   * Adds the open PRs asking for your review and the messages on the user's Slack list to the bottom of
    * the queue, marked as new, skipping any already on an item. Slack is read when `manual`, or on the
    * timer while the last Slack read worked: each one is a model call. Each source fails on its own.
    */
@@ -398,6 +404,17 @@ export class WorkQueue {
       this.deps.changed();
     }
     return this.syncState();
+  }
+
+  /**
+   * A new Slack list link: the last Slack result was about the old one (often "Set the link…"), so
+   * it's dropped, and the sync line says Slack waits for a Sync press, which reads the new list and
+   * puts it back on the timer.
+   */
+  slackListChanged(): void {
+    if (!this.last.slack) return;
+    this.last = { ...this.last, slack: null };
+    this.deps.changed();
   }
 
   /** The timer's tick (every minute): a sync once `[work_queue] sync_minutes` have passed since the last, so a change in Settings applies at once. */

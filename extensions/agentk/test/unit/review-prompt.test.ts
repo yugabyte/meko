@@ -6,7 +6,7 @@ vi.mock('../../src/server/paths.js', async (orig) => ({
   claudePath: (p: string) => p.replace(/^\/net\/box(?=\/)/, ''),
 }));
 
-import { basePrompt, clipDescription, passPrompt, priorRounds, scoreBase, scorePrompt, sweepContext, trimPriorRounds } from '../../src/server/review/prompt.js';
+import { basePrompt, clipDescription, passPrompt, priorRounds, scoreBase, scorePrompt, stepList, sweepContext, trimPriorRounds } from '../../src/server/review/prompt.js';
 import { PASS_FOOTER, strategyFor } from '../../src/server/review/strategies.js';
 import type { Candidate, Diff, PriorRound, ReviewContext } from '../../src/server/review/types.js';
 
@@ -165,6 +165,25 @@ describe('the scorer', () => {
     expect(p).toContain('`src/app.ts:3` (major)\nRaised by: diff, claims');
     expect(p).toContain('"step": "r1-score-1"');
     expect(base).toContain('You are not reviewing the PR and you must not report problems of your own.');
+  });
+});
+
+describe('the steps a prompt lists', () => {
+  const steps = (n: number) => Array.from({ length: n }, (_, i) => ({ name: `score ${i + 1}`, agent: 'agentk-review-small', prompt: `Read /run/score-${i + 1}.md and do what it says.` }));
+
+  it('numbers each step with its subagent and prompt, in one list without a batch', () => {
+    expect(stepList(steps(2))).toBe(
+      '1. score 1: subagent `agentk-review-small`, prompt: `Read /run/score-1.md and do what it says.`\n'
+      + '2. score 2: subagent `agentk-review-small`, prompt: `Read /run/score-2.md and do what it says.`',
+    );
+  });
+
+  it.each([
+    [11, [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11]]],
+    [5, [[1, 2, 3, 4, 5]]],
+  ])('groups %i steps into numbered batches of at most 5, the steps numbered on across them', (n, batches) => {
+    const line = (i: number) => `${i}. score ${i}: subagent \`agentk-review-small\`, prompt: \`Read /run/score-${i}.md and do what it says.\``;
+    expect(stepList(steps(n), 5)).toBe(batches.map((b, i) => `Batch ${i + 1}:\n${b.map(line).join('\n')}`).join('\n\n'));
   });
 });
 

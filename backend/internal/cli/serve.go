@@ -24,7 +24,6 @@ import (
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/logging"
-	"github.com/yugabyte/meko/backend/internal/login"
 	"github.com/yugabyte/meko/backend/internal/mcp"
 	"github.com/yugabyte/meko/backend/internal/memory"
 	"github.com/yugabyte/meko/backend/internal/memoryengine"
@@ -308,16 +307,13 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		Libs: libs, DataDir: l.Root, PID: pid, StartedAt: time.Now().UTC(),
 	}
 	mcpOpts := mcp.Options{Service: svc, Version: version.Version, Log: log, Credential: server.CredentialOf}
-	mcpHandler := mcp.NewHandler(mcpOpts)
 	// A datapack's search and memories routes answer what the tools do, recorded as /mcp's calls are.
 	restOpts.Tool = func(ctx context.Context, cred, name string, args map[string]any) (string, error) {
 		return mcp.Call(ctx, mcpOpts, cred, name, args)
 	}
 	registerREST := func(g *echo.Group) { rest.Register(g, restOpts) }
-	logins := login.New(st)
-	// The web listener: the web UI and the extensions' for browsers, with local access or the login.
-	web := newWebListener(l, st, logins, log)
-	logins.OnRevoke(web.RevokeEnded)
+	// The web listener: the web UI and the extensions' for browsers, with local or remote access.
+	web := newWebListener(l, st, log)
 	// Updates: a release install checks for them, and the Status page checks and installs them.
 	restart := make(chan struct{})
 	updCtx, stopUpdates := context.WithCancel(context.Background())
@@ -340,29 +336,32 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		agents.StopLoginShell()
 		agents.Log = nil
 	}()
-	// The agents on this computer connect to the linked Meko Cloud, else to this Meko.
+	// The agents on this computer connect to this Meko, linked to Meko Cloud or not.
 	local := agents.Target{Kind: agents.KindLocal, URL: fmt.Sprintf("http://127.0.0.1:%d/mcp", cfg.Server.Port),
 		Token: clientToken}
-	agentsMgr := &agents.Manager{Lock: agentsLock(l), Target: func() (agents.Target, error) {
-		link, err := cloudSt.Load()
-		return agentTarget(link, local), err
-	}}
-	// The Meko Cloud link: the web UI and meko cloud_link change it; the agents connected to Meko
-	// follow it, and the running extensions hear.
-	cloud := &cloudlink.Service{Store: cloudSt, Check: cloudlink.CheckMCP, CheckAPI: cloudlink.CheckAPI,
-		List:    cloudlink.ListDatapacks,
-		Changed: func(ctx context.Context) { web.notify(ctx, "cloud") },
-		Moved: func(ctx context.Context, before, after cloudlink.State) agents.Moves {
-			m := agentsMgr.Move(ctx, agentTarget(before, local), agentTarget(after, local))
+	agentsMgr := &agents.Manager{Lock: agentsLock(l), Target: func() (agents.Target, error) { return local, nil }}
+	// The Meko Cloud link: the web UI and meko cloud_link change it; /mcp then offers its tools, the
+	// agents an older Meko connected to it come back here, and the running extensions hear.
+	var cloud *cloudlink.Service
+	cloud = &cloudlink.Service{Store: cloudSt, Check: cloudlink.CheckMCP, CheckAPI: cloudlink.CheckAPI,
+		List: cloudlink.ListDatapacks,
+		Changed: func(ctx context.Context) {
+			go cloud.CloudTools(context.WithoutCancel(ctx))
+			web.notify(ctx, "cloud")
+		},
+		Moved: func(ctx context.Context, before, _ cloudlink.State) agents.Moves {
+			m := moveBack(ctx, agentsMgr, before, local)
 			logMoves(log, m)
 			return m
 		}}
+	mcpOpts.Cloud = cloud
 	// The routes that take a datapack send one this Meko doesn't have to the linked Meko Cloud.
 	restOpts.Cloud = cloud
+	mcpHandler := mcp.NewHandler(mcpOpts)
 	web.newOpts = func(wcfg config.Config) server.Options {
 		return server.Options{Info: info, Port: wcfg.Web.Port, Auth: cfg.Server.Auth, Logger: log,
 			Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, MCP: mcpHandler,
-			REST: registerREST, Upload: upload, Download: download, UI: ui, Login: logins, Cloud: cloud,
+			REST: registerREST, Upload: upload, Download: download, UI: ui, Cloud: cloud,
 			Agents: agentsMgr, Web: &server.Web{Access: wcfg.Web.Access, Extensions: web.Proxies, Installed: web.Installed,
 				Run: web.RunExtension, ExtensionUpdates: web.ExtensionUpdates, CheckExtensions: web.CheckExtensions,
 				SetAutoUpdate: web.SetAutoUpdate, Jobs: web.jobs, Updates: updates}}
@@ -370,14 +369,8 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	srv := server.New(server.Options{
 		Info: info, Port: cfg.Server.Port, Token: token, ClientToken: clientToken, Auth: cfg.Server.Auth, Logger: log,
 		Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, MCP: mcpHandler,
-		REST: registerREST, Upload: upload, Download: download, Login: logins, Cloud: cloud, Agents: agentsMgr,
-		WebURL: func() string {
-			if u := web.Status(context.Background()).URL; u != "" {
-				return u
-			}
-			return webURL(cfg.Web)
-		},
-		WebStatus: func() *server.WebStatus { return web.Status(context.Background()) },
+		REST: registerREST, Upload: upload, Download: download, Cloud: cloud, Agents: agentsMgr,
+		WebStatus: web.Status, ReloadWeb: web.Reload,
 	})
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
@@ -388,13 +381,15 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		defer close(webDone)
 		web.Run(webCtx)
 	}()
-	// An already-linked Meko moves its agents to Meko Cloud once, at its first start that does.
+	// An already-linked Meko moves back the agents it connected to Meko Cloud, once, at its first
+	// start where agents stay here; and reads what Meko Cloud offers before the first agent asks.
 	followCtx, stopFollow := context.WithCancel(context.Background())
 	followDone := make(chan struct{})
 	go func() {
 		defer close(followDone)
-		followLinkOnce(followCtx, st, cloud, log)
+		moveBackOnce(followCtx, st, cloud, log)
 	}()
+	go cloud.CloudTools(followCtx)
 	log.Info("Meko started", "url", fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.Port),
 		"pid", pid, "data_dir", l.Root, "version", version.Version, "auth", cfg.Server.Auth)
 	if cfg.Server.Auth == config.AuthNone {
@@ -661,29 +656,29 @@ func removeRunFiles(l paths.Layout) {
 	}
 }
 
-// keyAgentsFollowedLink records that this Meko moved its agents to the Meko Cloud linked before it
-// managed their connections, so it runs once.
-const keyAgentsFollowedLink = "agents_followed_link"
+// keyAgentsOnThisMeko records that this Meko moved back the agents it had connected to the linked
+// Meko Cloud before agents stayed on this Meko, so it runs once.
+const keyAgentsOnThisMeko = "agents_on_this_meko"
 
-// followLinkOnce moves the agents connected to this Meko to the linked Meko Cloud, at the first
-// start of a Meko that moves them on a link change: one linked before then has agents connected
-// here. It runs once, whether or not Meko Cloud is linked then; a stop during it leaves it for the
-// next start.
-func followLinkOnce(ctx context.Context, st *store.Store, cloud *cloudlink.Service, log *slog.Logger) {
-	if _, done, err := st.Setting(ctx, keyAgentsFollowedLink); err != nil || done {
+// moveBackOnce moves back to this Meko the agents connected to the linked Meko Cloud with its key,
+// at the first start of a Meko whose agents stay here: one linked before then has agents connected
+// to Meko Cloud. It runs once, whether or not Meko Cloud is linked then; a stop during it leaves it
+// for the next start.
+func moveBackOnce(ctx context.Context, st *store.Store, cloud *cloudlink.Service, log *slog.Logger) {
+	if _, done, err := st.Setting(ctx, keyAgentsOnThisMeko); err != nil || done {
 		return
 	}
-	// Under the link's lock (MoveAgents), so it can't move them to a Meko Cloud just unlinked. The
-	// service's Moved logs what it did.
+	// Under the link's lock (MoveAgents), so it runs in order with a change's own move. The service's
+	// Moved logs what it did.
 	if _, err := cloud.MoveAgents(ctx); err != nil {
-		log.Warn("can't read the Meko Cloud link to move the agents to it", "error", err)
+		log.Warn("can't read the Meko Cloud link to move the agents back from it", "error", err)
 		return
 	}
 	if ctx.Err() != nil {
 		return
 	}
-	if err := st.SetSetting(ctx, keyAgentsFollowedLink, time.Now().UTC().Format(time.RFC3339)); err != nil {
-		log.Warn("can't record that the agents followed the Meko Cloud link", "error", err)
+	if err := st.SetSetting(ctx, keyAgentsOnThisMeko, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		log.Warn("can't record that the agents came back from Meko Cloud", "error", err)
 	}
 }
 

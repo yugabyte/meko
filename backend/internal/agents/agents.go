@@ -1,6 +1,6 @@
-// Package agents connects the agents on this computer (Claude Code, Codex, Kiro CLI and OpenCode) to
-// Meko. It finds each one (its command on PATH, in its usual folders or on the user's login shell's
-// PATH), reads from the agent's own config whether its meko MCP server reaches Meko's target, and
+// Package agents connects the agents on this computer (Claude Code, Codex, Kiro CLI, OpenCode and
+// Cursor) to Meko. It finds each one (its command on PATH, in its usual folders or on the user's login
+// shell's PATH), reads from the agent's own config whether its meko MCP server reaches Meko's target, and
 // adds or removes that server each agent's own way. Meko keeps no record of its own: the configs are
 // read every time, since the user and the agents edit them too. The CLI (meko agent), the server's
 // /api/v1/agents routes and the Meko Cloud link's changes (Move) share it (docs/api.md#agents).
@@ -28,7 +28,9 @@ const ServerName = "meko"
 // The targets an agent connects to.
 const (
 	KindLocal = "local" // this Meko, with its client token
-	KindCloud = "cloud" // the linked Meko Cloud, with the link's key
+	// KindCloud is a linked Meko Cloud's MCP URL and key, where a Meko before agents stayed on this
+	// Meko connected them: only ever a move's from.
+	KindCloud = "cloud"
 )
 
 // An installed agent's state.
@@ -39,8 +41,8 @@ const (
 	StateNone      = "none"      // no meko server
 )
 
-// Target is where agents connect: this Meko's MCP URL and client token, or while Meko Cloud is
-// linked its MCP URL and key.
+// Target is where agents connect: this Meko's MCP URL and client token, linked to Meko Cloud or
+// not (this Meko's /mcp sends their calls there). A move's from may be a Meko Cloud link's.
 type Target struct {
 	Kind  string
 	URL   string
@@ -51,6 +53,14 @@ type Target struct {
 // or the linked Meko Cloud.
 func (t Target) ours(u string) bool {
 	return onThisComputer(u) || t.Kind == KindCloud && sameURL(u, t.URL)
+}
+
+// owns says whether a meko server is one Meko put there for the target: on this computer's
+// loopback, or at a Meko Cloud link's URL with that link's key. One at Meko Cloud with another key
+// is the user's own.
+func (t Target) owns(s *server) bool {
+	return onThisComputer(s.url) || t.Kind == KindCloud && sameURL(s.url, t.URL) && !s.unresolved &&
+		bearerToken(s.auth) == t.Token
 }
 
 // state is what a meko server (nil with none) is to the target.
@@ -121,8 +131,11 @@ func shownURL(raw string) string {
 // how Meko reads, adds and removes its meko server.
 type Agent struct {
 	Name, Title, Command string
-	// folders are its own install folders, under the home folder, beside the usual ones.
-	folders []string
+	// also are other commands that mean it's installed (Cursor's CLI beside its editor).
+	also []string
+	// folders are its own install folders, under the home folder, beside the usual ones; apps are
+	// under Applications (inside a macOS app).
+	folders, apps []string
 	// read returns the user-level meko server (nil with none) and notes on others that win over it
 	// (Claude Code's folders).
 	read func(t Target) (*server, []string, error)
@@ -139,10 +152,12 @@ var Catalog = []Agent{
 		read: readClaude, connect: connectClaude, disconnect: disconnectClaude},
 	{Name: "codex", Title: "Codex", Command: "codex", read: readCodex, connect: connectCodex,
 		disconnect: disconnectCodex},
-	{Name: "kiro", Title: "Kiro CLI", Command: "kiro-cli", read: readKiro, connect: connectKiro,
-		disconnect: disconnectKiro},
+	{Name: "kiro", Title: "Kiro CLI", Command: "kiro-cli", read: kiro.read, connect: kiro.connect,
+		disconnect: kiro.disconnect},
 	{Name: "opencode", Title: "OpenCode", Command: "opencode", folders: []string{".opencode/bin"},
 		read: readOpenCode, connect: connectOpenCode, disconnect: disconnectOpenCode},
+	{Name: "cursor", Title: "Cursor", Command: "cursor", also: []string{"cursor-agent"}, apps: []string{cursorApp},
+		read: cursor.read, connect: cursor.connect, disconnect: cursor.disconnect},
 }
 
 // Names are the catalog's names.
@@ -168,10 +183,29 @@ func Lookup(name string) (Agent, bool) {
 // folder's ~/.local/bin: a service runs with a thin PATH. Tests empty it.
 var SystemFolders = []string{"/usr/local/bin", "/opt/homebrew/bin"}
 
-// Find is the agent's command: on PATH, else in its usual folders, else on the user's login shell's
-// PATH (LoginShell), as an absolute path.
+// Applications is where macOS apps are installed, for an agent's apps folders. Tests empty it.
+var Applications = "/Applications"
+
+// Find is the agent's command, or else one of also: on PATH, else in its usual folders, else on the
+// user's login shell's PATH (LoginShell), as an absolute path. The shell runs only when no command
+// is found otherwise.
 func (a Agent) Find() (string, bool) {
-	if p, err := lookPath(a.Command); err == nil {
+	commands := append([]string{a.Command}, a.also...)
+	for _, c := range commands {
+		if p, ok := a.find(c); ok {
+			return p, true
+		}
+	}
+	for _, c := range commands {
+		if p, ok := findIn(loginPath(), c); ok {
+			return p, true
+		}
+	}
+	return "", false
+}
+
+func (a Agent) find(command string) (string, bool) {
+	if p, err := lookPath(command); err == nil {
 		return p, true
 	}
 	var dirs []string
@@ -181,10 +215,12 @@ func (a Agent) Find() (string, bool) {
 			dirs = append(dirs, filepath.Join(home, f))
 		}
 	}
-	if p, ok := findIn(append(dirs, SystemFolders...), a.Command); ok {
-		return p, true
+	if Applications != "" {
+		for _, f := range a.apps {
+			dirs = append(dirs, filepath.Join(Applications, f))
+		}
 	}
-	return findIn(loginPath(), a.Command)
+	return findIn(append(dirs, SystemFolders...), command)
 }
 
 // findIn is the first executable file called name in the folders.
@@ -462,11 +498,11 @@ type Failed struct {
 	Error string `json:"error"`
 }
 
-// Move follows a link change: every installed agent whose meko server is one of Meko's own under
-// the old target or the new one (this computer's, the old link's or the new link's) and isn't
-// already connected to the new target is connected to it. Unlinking moves them back to this Meko,
-// which takes Meko Cloud's key out of their configs. One elsewhere is left as it is. Errors never
-// hold either target's token or key.
+// Move connects to the target to every installed agent whose meko server Meko put there for from
+// or to (this computer's, or the Meko Cloud link's with its key: owns) and isn't already connected
+// to it: a link change moves back to this Meko the agents a Meko before agents stayed on this Meko
+// connected to Meko Cloud, which takes the key out of their configs. One elsewhere is left as it
+// is. Errors never hold either target's token or key.
 func (m *Manager) Move(ctx context.Context, from, to Target) Moves {
 	ctx, cancel := context.WithTimeout(ctx, MoveTimeout)
 	defer cancel()
@@ -494,7 +530,7 @@ func (m *Manager) Move(ctx context.Context, from, to Target) Moves {
 			continue
 		case s == nil || to.state(s) == StateConnected:
 			continue
-		case !from.ours(s.url) && !to.ours(s.url):
+		case !from.owns(s) && !to.owns(s):
 			out.Left = append(out.Left, Left{a.Name, a.Title, shownURL(s.url)})
 			continue
 		}

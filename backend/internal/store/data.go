@@ -41,6 +41,12 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 	return err
 }
 
+// DeleteSetting removes a setting; a missing one is fine.
+func (s *Store) DeleteSetting(ctx context.Context, key string) error {
+	_, err := s.w.ExecContext(ctx, "DELETE FROM settings WHERE key = ?", key)
+	return err
+}
+
 // EnsureInstallID returns this install's id, making one the first time.
 func (s *Store) EnsureInstallID(ctx context.Context) (string, error) {
 	return s.ensureID(ctx, keyInstallID)

@@ -112,12 +112,12 @@ func TestAgentCommands(t *testing.T) {
 			t.Errorf("meko %s: exit %d, %q %q", strings.Join(args, " "), code, out, errs)
 		}
 	}
-	code, _, errs = run("agent", "connect", "cursor", "--data-dir", t.TempDir())
-	want(t, "agent connect cursor", code, exitUsage, errs,
-		`meko agent connect: unknown agent "cursor" (claude, codex, kiro, opencode)`)
+	code, _, errs = run("agent", "connect", "windsurf", "--data-dir", t.TempDir())
+	want(t, "agent connect windsurf", code, exitUsage, errs,
+		`meko agent connect: unknown agent "windsurf" (claude, codex, kiro, opencode, cursor)`)
 	code, _, errs = run("agent", "disconnect", "--data-dir", t.TempDir())
 	want(t, "agent disconnect alone", code, exitUsage, errs,
-		"meko agent disconnect: name the agent (claude, codex, kiro, opencode)")
+		"meko agent disconnect: name the agent (claude, codex, kiro, opencode, cursor)")
 }
 
 // meko agent list shows the agents installed and whether each reaches Meko, and where they connect;
@@ -126,8 +126,8 @@ func TestAgentList(t *testing.T) {
 	dir, port := setup(t)
 	t.Setenv("PATH", "/usr/bin:/bin")
 	code, out, errs := run("agent", "list", "--data-dir", dir)
-	if code != 0 || errs != "" || out != "No agents found on this computer: Meko works with Claude Code, Codex, Kiro CLI "+
-		"and OpenCode\n" {
+	if code != 0 || errs != "" || out != "No agents found on this computer: Meko works with Claude Code, Codex, "+
+		"Kiro CLI, OpenCode and Cursor\n" {
 		t.Fatalf("none installed: %d %q %q", code, out, errs)
 	}
 	fakeAgents(t, false)
@@ -229,127 +229,141 @@ func TestAgentConnect(t *testing.T) {
 		t.Errorf("the error shows the token: %s", out+errs)
 	}
 
-	// While Meko Cloud is linked, agents connect there, and the help names its URL but never its key.
+	// While Meko Cloud is linked, agents still connect here: this Meko's /mcp sends their calls on.
 	cloud := fakeCloud(t)
 	fakeAgents(t, false, "kiro-cli")
 	withStdin(t, testCloudKey+"\n")
 	code, out, errs = run("cloud_link", "--data-dir", dir, "--url", cloud+"/mcp", "--web-url", cloud)
 	want(t, "cloud_link", code, 0, out+errs, "Linked to")
 	code, out, _ = run("agent", "connect", "--data-dir", dir)
-	want(t, "agent connect alone, linked", code, 0, out, "  URL      "+cloud+"/mcp\n")
-	want(t, "agent connect alone, linked", code, 0, out, "the key is in Settings › Meko Cloud")
-	if strings.Contains(out, testCloudKey) || strings.Contains(out, tok) || strings.Contains(out, "isn't running") {
+	want(t, "agent connect alone, linked", code, 0, out, "  URL      http://127.0.0.1:7778/mcp\n")
+	if strings.Contains(out, testCloudKey) || strings.Contains(out, cloud) {
 		t.Errorf("agent connect alone, linked:\n%s", out)
 	}
 	_, out, _ = run("agent", "list", "--data-dir", dir)
-	want(t, "agent list, linked", 0, 0, out, "Kiro CLI   connected\nAgents connect to Meko Cloud ("+cloud+"/mcp)\n")
+	want(t, "agent list, linked", 0, 0, out, "Kiro CLI   connected\nAgents connect to http://127.0.0.1:7778/mcp "+
+		"(Meko on this computer)\n")
 }
 
-// A link change moves the agents connected to Meko to the new target, with the server stopped and
-// through it: linking moves them to Meko Cloud and leaves one elsewhere, a new key rewrites them,
-// unlinking moves them back with no key left in their configs, and a failed move is reported while
-// the link stays.
-func TestCloudLinkMovesAgents(t *testing.T) {
+// A link change moves back to this Meko the agents a Meko from before connected to Meko Cloud (at the
+// link's URL with its key), with the server stopped and through it; it leaves one at Meko Cloud
+// with another key, and agents already here, as they are, and reports a failed move while the link
+// stays.
+func TestCloudLinkMovesAgentsBack(t *testing.T) {
 	dir, port := setup(t)
 	cloud := fakeCloud(t)
 	fakeAgents(t, false, "codex", "kiro-cli")
 	home := os.Getenv("HOME")
 	_, tok, _ := run("token", "--data-dir", dir)
 	tok = strings.TrimSpace(tok)
+	local := "http://127.0.0.1:" + port + "/mcp"
 	code, out, errs := run("agent", "connect", "--data-dir", dir, "kiro")
 	want(t, "agent connect kiro", code, 0, out+errs, "Connected Kiro CLI to Meko")
-	codex := filepath.Join(home, ".codex", "config.toml")
-	elsewhere := "[mcp_servers.meko]\nurl = \"https://meko.example.com/mcp\"\n"
-	writeFile(t, codex, elsewhere)
 
+	// Linking moves nothing: Kiro CLI stays here.
+	connected := readFile(t, kiroFile(t))
 	withStdin(t, testCloudKey+"\n")
 	code, out, errs = run("cloud_link", "--data-dir", dir, "--url", cloud+"/mcp", "--web-url", cloud)
-	if code != 0 || errs != "" || out != "Linked to "+cloud+"/mcp (key …wxyz)\n"+
-		"Moved Kiro CLI to Meko Cloud; their sessions already running need a restart\n" {
+	if code != 0 || errs != "" || out != "Linked to "+cloud+"/mcp (key …wxyz)\n" {
 		t.Fatalf("cloud_link with no server: %d %q %q", code, out, errs)
 	}
-	if k := readFile(t, kiroFile(t)); !strings.Contains(k, cloud+"/mcp") || !strings.Contains(k, "Bearer "+testCloudKey) {
+	if k := readFile(t, kiroFile(t)); k != connected {
 		t.Errorf("mcp.json after linking: %s", k)
 	}
-	if readFile(t, codex) != elsewhere {
+
+	// Through the server (whose first start moves back what's at Meko Cloud with the link's key): a
+	// new key moves back the agent a Meko from before put at Meko Cloud with the link's key, and
+	// leaves one elsewhere. (fakeCloud is on this computer's loopback, which is always Meko's, so
+	// one at Meko Cloud with a key of its own is internal/agents' TestMoveBack's.)
+	codex := filepath.Join(home, ".codex", "config.toml")
+	own := "[mcp_servers.meko]\nurl = \"https://meko.example.com/mcp\"\n"
+	writeFile(t, codex, own)
+	code, out, errs = run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "is running")
+	waitStart := time.Now().Add(20 * time.Second)
+	for !strings.Contains(readFile(t, kiroFile(t)), local) {
+		if time.Now().After(waitStart) {
+			t.Fatalf("the start didn't connect Kiro CLI here: %s", readFile(t, kiroFile(t)))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	time.Sleep(500 * time.Millisecond) // the first start's move is done
+	kiroAt(t, cloud+"/mcp", testCloudKey)
+	withStdin(t, testCloudKey2+"\n")
+	code, out, errs = run("cloud_link", "--data-dir", dir)
+	want(t, "a new key", code, 0, out+errs, "Moved Kiro CLI back to Meko on this computer")
+	if k := readFile(t, kiroFile(t)); strings.Contains(k, "mko_tkn") || !strings.Contains(k, local) ||
+		!strings.Contains(k, "Bearer "+tok) {
+		t.Errorf("mcp.json after a new key: %s", k)
+	}
+	if readFile(t, codex) != own {
 		t.Errorf("codex's config changed: %s", readFile(t, codex))
 	}
 
-	// Through the server: a new key rewrites Kiro CLI's, and the reply says what moved.
-	code, out, errs = run("start", "--data-dir", dir, "--port", port)
-	want(t, "start", code, 0, out+errs, "is running")
-	withStdin(t, testCloudKey2+"\n")
-	code, out, errs = run("cloud_link", "--data-dir", dir)
-	want(t, "a new key", code, 0, out+errs, "Moved Kiro CLI to Meko Cloud")
-	if k := readFile(t, kiroFile(t)); !strings.Contains(k, "Bearer "+testCloudKey2) {
-		t.Errorf("mcp.json after a new key: %s", k)
-	}
-
-	// Unlinking moves it back to this Meko, and no config keeps the key.
+	// Unlinking moves back one at the link with its key, too.
+	kiroAt(t, cloud+"/mcp", testCloudKey2)
 	code, out, errs = run("cloud_link", "--data-dir", dir, "--off")
 	if code != 0 || out != "Meko Cloud is unlinked: extensions use this Meko\n"+
-		"Moved Kiro CLI to Meko on this computer; their sessions already running need a restart\n" {
+		"Moved Kiro CLI back to Meko on this computer; their sessions already running need a restart\n" {
 		t.Fatalf("cloud_link --off: %d %q %q", code, out, errs)
 	}
-	if k := readFile(t, kiroFile(t)); strings.Contains(k, "mko_tkn") ||
-		!strings.Contains(k, "http://127.0.0.1:"+port+"/mcp") || !strings.Contains(k, "Bearer "+tok) {
+	if k := readFile(t, kiroFile(t)); strings.Contains(k, "mko_tkn") || !strings.Contains(k, local) {
 		t.Errorf("mcp.json after unlinking: %s", k)
 	}
 
-	// A move that fails is reported, and the link is kept: the agent shows as needing reconnecting.
-	// (With the server stopped: the running one has its own PATH.)
+	// A move that fails is reported, and the link is kept. (With the server stopped: the running one
+	// has its own PATH.)
 	code, out, errs = run("stop", "--data-dir", dir, "--keep-extensions")
 	want(t, "stop", code, 0, out+errs, "stopped")
-	fakeAgents(t, true, "claude", "kiro-cli")
-	writeFile(t, filepath.Join(home, ".claude.json"), `{"mcpServers": {"meko": {"url": "http://127.0.0.1:`+port+`/mcp", `+
-		`"headers": {"Authorization": "Bearer `+tok+`"}}}}`)
 	withStdin(t, testCloudKey+"\n")
 	code, out, errs = run("cloud_link", "--data-dir", dir)
+	want(t, "link again", code, 0, out+errs, "Linked to")
+	fakeAgents(t, true, "claude", "kiro-cli")
+	writeFile(t, filepath.Join(home, ".claude.json"), `{"mcpServers": {"meko": {"url": "`+cloud+`/mcp", `+
+		`"headers": {"Authorization": "Bearer `+testCloudKey+`"}}}}`)
+	withStdin(t, testCloudKey2+"\n")
+	code, out, errs = run("cloud_link", "--data-dir", dir)
 	want(t, "a failed move", code, 0, out+errs,
-		"Moved Kiro CLI to Meko Cloud; their sessions already running need a restart\n"+
-			"Couldn't move Claude Code: claude mcp failed: refused: mcp add --scope user --transport http meko "+
-			cloud+"/mcp "+
-			"--header Authorization: Bearer <token>; run meko agent connect claude\n")
-	if strings.Contains(out+errs, testCloudKey) {
+		"Couldn't move Claude Code: claude mcp failed: refused: mcp add --scope user --transport http meko "+
+			"http://127.0.0.1:")
+	want(t, "a failed move", code, 0, out+errs,
+		"/mcp --header Authorization: Bearer <token>; run meko agent connect claude\n")
+	if strings.Contains(out+errs, testCloudKey) || strings.Contains(out+errs, testCloudKey2) {
 		t.Errorf("the output shows the key: %s", out+errs)
 	}
-	if c := readCloudToken(t, dir); !c.Set || c.APIKey != testCloudKey {
+	if c := readCloudToken(t, dir); !c.Set || !c.Linked {
 		t.Errorf("the link after a failed move: %+v", c)
 	}
-	_, out, _ = run("agent", "list", "--data-dir", dir)
-	want(t, "agent list after a failed move", 0, 0, out, "Claude Code   needs reconnecting   meko agent connect claude\n")
 }
 
-// A Meko linked before it moved agents on a link change moves them to Meko Cloud at its first start,
-// and only then.
-func TestFirstStartMovesAgentsOnce(t *testing.T) {
+// A Meko linked while its agents followed the link moves them back from Meko Cloud at its first
+// start where they stay here, and only then.
+func TestFirstStartMovesAgentsBackOnce(t *testing.T) {
 	dir, port := setup(t)
 	cloud := fakeCloud(t)
 	fakeAgents(t, false, "kiro-cli")
 	withStdin(t, testCloudKey+"\n")
 	code, out, errs := run("cloud_link", "--data-dir", dir, "--url", cloud+"/mcp", "--web-url", cloud)
 	want(t, "cloud_link", code, 0, out+errs, "Linked to")
-	_, tok, _ := run("token", "--data-dir", dir)
-	tok = strings.TrimSpace(tok)
 	local := "http://127.0.0.1:" + port + "/mcp"
-	kiroAt(t, local, tok)
+	kiroAt(t, cloud+"/mcp", testCloudKey)
 
 	code, out, errs = run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
 	deadline := time.Now().Add(20 * time.Second)
-	for !strings.Contains(readFile(t, kiroFile(t)), "Bearer "+testCloudKey) {
+	for !strings.Contains(readFile(t, kiroFile(t)), local) {
 		if time.Now().After(deadline) {
-			t.Fatalf("the first start didn't move Kiro CLI: %s", readFile(t, kiroFile(t)))
+			t.Fatalf("the first start didn't move Kiro CLI back: %s", readFile(t, kiroFile(t)))
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	code, out, errs = run("stop", "--data-dir", dir, "--keep-extensions")
 	want(t, "stop", code, 0, out+errs, "stopped")
-	kiroAt(t, local, tok)
+	kiroAt(t, cloud+"/mcp", testCloudKey)
 	code, out, errs = run("start", "--data-dir", dir, "--port", port)
 	want(t, "start again", code, 0, out+errs, "is running")
 	time.Sleep(time.Second)
-	if k := readFile(t, kiroFile(t)); !strings.Contains(k, local) {
+	if k := readFile(t, kiroFile(t)); !strings.Contains(k, cloud+"/mcp") {
 		t.Errorf("the second start moved Kiro CLI again: %s", k)
 	}
 	if _, err := os.Stat(agentsLock(paths.New(dir))); err != nil {

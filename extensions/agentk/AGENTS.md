@@ -98,6 +98,7 @@ agents should read it before changing code there.
 | `packaging/`, `scripts/`, `.github/` | Launcher wrapper (`packaging/agentk`: runs the bundled Node, and hands `serve` and `host` to Meko's launcher, `meko _launch`, which runs a new version's probation and rollback), systemd and launchd templates, the prerequisites and release scripts, and (at the repo root, running from `extensions/agentk`) CI and releases (Linux and macOS) and Dependabot (`dependabot.yml`). The repo root's `scripts/check-title.sh` holds the commit subject and PR title rules, and `scripts/release/release-notes.sh` decides which types and components release each product (AgentK or Meko, `--product`; `scripts/release/product.sh` names each one's tags and components); their type lists are the ones the tests check (the docs, the commit skill and What's new's `RELEASE_TYPES` in `src/server/releasenotes.ts` repeat them, so change those too), and both scripts are tested in `test/unit/check-title.test.ts` and against Dependabot's prefixes in `test/unit/dependabot.test.ts`; `test/unit/release-scripts.test.ts` tests what each product counts (versions, notes, pruning). The repo root's `scripts/ci-scope.sh` decides which components' CI jobs a PR runs; `test/unit/ci-scope.test.ts` tests it, checks that every root file a test here reads (`../../../../…`) runs AgentK's job, that the Markdown a backend test globs or AgentK's release packs runs its component's, and that the `CI gate` job needs every other job. |
 | `test/` | Unit tests, and integration tests against a real session host (in the test process) and git with a stub `claude` (`test/fixtures/fake-claude.mjs`), and stubs of `kiro-cli` and `opencode` (`fake-kiro.mjs`; `fake-opencode.mjs`, which runs AgentK's real OpenCode plugin as OpenCode 2 does). |
 | `docs/` | The design: [docs/design.md](docs/design.md) is its index (the decisions so far, and which part covers what), with one file per area under `docs/design/`. Also the usage report's schema (`call-home-report.schema.json`) and the screenshots. |
+| `MEKO.md` | The Meko datapacks that hold context for AgentK, beside the repo root's [MEKO.md](../../MEKO.md). Search them before any work here. |
 
 ## Invariants (don't break these)
 
@@ -118,7 +119,7 @@ agents should read it before changing code there.
    that is still starting; `launch()` never replaces a live pane.
 3. **Only through Meko.** The server listens on nothing but its unix socket (`Paths.webSock`, in a
    folder only the user can open) and has no login of its own: the Meko on this computer serves it
-   to browsers at `/ext/agentk/` after its own sign-in (local access, or the owner's login), and
+   to browsers at `/ext/agentk/` after its own access check (local or remote access, no login), and
    every request on the socket is let in. Never add a TCP listener, a login, or a route that trusts
    a header to say who sent it. Writes and WebSocket upgrades refuse an `Origin` that isn't the
    page's own (Meko passes the browser's `Host` and `Origin` on unchanged), keyed on the matched
@@ -136,8 +137,9 @@ agents should read it before changing code there.
    holds a lock on that folder while the host runs.
 7. **Meko is Meko's Meko Cloud link, else the Meko on this computer; a project has at most one
    dedicated datapack.** It can't be turned off. Meko owns the link (its web UI's Settings › Meko
-   Cloud, `meko cloud_link`); AgentK reads it, and the local Meko's URL and token, from `meko token
-   --json` (`mekolocal.ts`), keeps them in memory and never writes them to `config.toml`, and has no
+   Cloud, `meko cloud_link`) and keeps its key: while it's linked, AgentK reaches Meko Cloud through
+   the local Meko (its `/mcp`, and `/api/v1/cloud` for REST) with that Meko's token. AgentK reads
+   the link, and the local Meko's URL and token, from `meko token --json` (`mekolocal.ts`), keeps them in memory and never writes them to `config.toml`, and has no
    route or UI that sets a key. A key AgentK kept itself before is handed to Meko once
    (`mekohandover.ts`) and never read again; until then, or under a Meko too old to keep a link,
    AgentK keeps using it rather than move to the local Meko unasked. The local token goes only to

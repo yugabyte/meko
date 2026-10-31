@@ -53,14 +53,14 @@ type api struct {
 	Options
 }
 
-// keyFor is the client token for a request that sent a credential or came from the owner signed in
-// on the web listener, and "" otherwise. Not for local access, which every user of the computer
-// has, nor auth = "none": the token lets a caller do what neither does (knowledgebase_upload_file
-// reads a path as Meko's user), and keeps working when access or auth changes. The Connect page
-// then says to run meko token.
+// keyFor is the client token for a request that sent a credential, and "" otherwise. Not for the
+// web listener's browsers, with local access (every user of the computer) or remote (anyone who
+// reaches its port: there's no login), nor auth = "none": the token lets a caller do what neither
+// does (knowledgebase_upload_file reads a path as Meko's user), and keeps working when access or
+// auth changes. The Connect page then says to run meko token.
 func (a *api) keyFor(c echo.Context) string {
 	switch a.Credential(c) {
-	case "admin", "client", "session":
+	case "admin", "client":
 		return a.ClientToken
 	}
 	return ""
@@ -70,7 +70,7 @@ func (a *api) keyFor(c echo.Context) string {
 // that came in on the web listener with that listener's own origin, which its browser can reach
 // (from another computer, with remote access). Other links are given as they are.
 func (a *api) here(c echo.Context, link string) string {
-	if cred := a.Credential(c); cred != "session" && cred != "local" {
+	if cred := a.Credential(c); cred != "remote" && cred != "local" {
 		return link
 	}
 	base := a.Service.URL("")
@@ -108,6 +108,8 @@ func Register(g *echo.Group, o Options) {
 	g.POST("/settings/memory-extractor/run", a.runExtractor)
 	g.GET("/settings/answers", a.answersStatus)
 	g.PUT("/settings/answers", a.setAnswers)
+
+	g.Any("/cloud/*", a.passToCloud)
 
 	g.GET("/datapacks", a.listDatapacks)
 	g.POST("/datapacks", a.createDatapack)

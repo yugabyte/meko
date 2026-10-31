@@ -1,5 +1,6 @@
 // Package mcp is Meko's MCP server at /mcp: Meko Cloud's tools, with their names, arguments and
-// reply shapes, on the official MCP Go SDK in stateless mode with JSON replies.
+// reply shapes, on the official MCP Go SDK in stateless mode with JSON replies. While Meko Cloud is
+// linked, it offers Meko Cloud's own tools and sends every call there (cloud.go).
 //
 // Tools take their arguments raw (the SDK's low-level AddTool, which validates nothing), so they
 // read them as loosely as Cloud does and ignore ones they don't know. Each result is the reply's
@@ -32,9 +33,12 @@ type Options struct {
 	Version string
 	Log     *slog.Logger
 	// Credential is the credential a request got in with (admin, client, none, or the web
-	// listener's session or local), recorded with
+	// listener's remote or local), recorded with
 	// each call. The server's auth check sets it before the handler runs.
 	Credential func(*http.Request) string
+	// Cloud, if set, is the linked Meko Cloud: while it's linked, /mcp offers its tools and sends
+	// every call there (cloud.go).
+	Cloud Cloud
 }
 
 // instructions is what initialize tells clients about Meko.
@@ -81,14 +85,23 @@ func NewHandler(o Options) http.Handler {
 	}
 	// One server per credential, so each call knows (and logs) what it got in with. Made up front:
 	// the SDK calls getServer from concurrent requests.
-	for _, cred := range []string{"admin", "client", "none", "session", "local", ""} {
+	for _, cred := range []string{"admin", "client", "none", "remote", "local", ""} {
 		serverFor(cred)
 	}
+	cloud := &cloudServers{}
 	return sdk.NewStreamableHTTPHandler(func(r *http.Request) *sdk.Server {
-		if s, ok := servers[o.Credential(r)]; ok {
-			return s
+		cred := o.Credential(r)
+		if _, ok := servers[cred]; !ok {
+			cred = ""
 		}
-		return servers[""]
+		// A link that can't be read (a Keychain that refused, say) may be a linked one: its calls
+		// then fail with the reason in the log, rather than land in this Meko's datapacks.
+		if o.Cloud != nil {
+			if linked, err := o.Cloud.IsLinked(); err != nil || linked {
+				return o.cloudServerFor(r.Context(), cloud, cred)
+			}
+		}
+		return servers[cred]
 	}, &sdk.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: MaxBody})
 }
 

@@ -221,6 +221,7 @@ async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceL
 async function webUrl(paths: Paths, cfg: Config): Promise<{ url: string | null; why: string }> {
   const p = await probeLocalMeko(mekoDirOf(paths.home) ?? (cfg.meko.home || null));
   if (p.meko?.webUrl) return { url: `${p.meko.webUrl}${BASE_PATH}`, why: '' };
+  if (p.meko?.webOff) return { url: null, why: "Meko's web UI is off: turn it on with meko ui start" };
   if (p.meko) return { url: null, why: 'the Meko on this computer is too old to serve AgentK: update it with meko update' };
   if (p.state === 'stopped') return { url: null, why: "Meko isn't running: start it with meko start" };
   return { url: null, why: 'no Meko on this computer serves AgentK: install Meko, then run meko extension install agentk' };
@@ -477,8 +478,6 @@ async function main(): Promise<void> {
     case 'serve': return serve();
     case 'install': return (await import('./install.js')).runInstall(args);
     case 'uninstall': return (await import('./install.js')).runUninstall(args);
-    case 'setup-link':
-      throw new Error('Meko signs people in to AgentK now: run meko setup_link for a link that sets up (or resets) the login.');
     case 'selftest': return selftest();
     case 'status': return status();
     case 'ui': return ui();

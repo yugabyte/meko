@@ -148,6 +148,18 @@ describe('a deck in its datapack', () => {
     else expect((await decks.state(d.id)).id).toBe(d.id);
   });
 
+  it('keeps a Meko Cloud draft named by its MCP host when Meko now names that Meko Cloud by its web app', async () => {
+    meko.where = { kind: 'cloud', host: 'mcp.meko.example' };
+    const decks = new DeckStore(getPaths(join(dir, 'home')), meko);
+    const d = await decks.create({ title: 'Renamed host', brief: emptyBrief(), sources: { content: [], template: null, animations: [] } });
+    meko.where = { kind: 'cloud', host: 'cloud.meko.example' };
+    expect((await decks.state(d.id)).id).toBe(d.id);
+    // Another Meko Cloud, which hasn't its datapack, still can't edit it.
+    meko.where = { kind: 'cloud', host: 'other.example' };
+    meko.datapacks = [];
+    await expect(decks.state(d.id)).rejects.toThrow(/saved in Meko Cloud \(cloud\.meko\.example\)/);
+  });
+
   it('names a new deck the Meko it was made in, though the link changed as it was made', async () => {
     const decks = new DeckStore(getPaths(join(dir, 'home')), meko);
     const make = meko.createDatapack.bind(meko);

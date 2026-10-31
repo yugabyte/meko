@@ -92,8 +92,8 @@ export function AgentPicker({
 }
 
 /**
- * A session's status dot; `learning` is a dotted ring turning around Meko's m, `queued` the idle
- * ring with a gap, turning, and `meko` the working dot with Meko's m in it (`dotState()`). Working
+ * A session's status dot; `learning` is a dotted ring turning around Meko's m, `queued` and
+ * `background` the idle ring with a gap, turning, and `meko` the working dot with Meko's m in it (`dotState()`). Working
  * (`meko` too) and needs-you dots blink their halo (`blink.ts`), each `phase` (the session's or
  * project's id) at its own point in the signal.
  */
@@ -107,8 +107,8 @@ export function StatusDot({ status, title, phase = '' }: { status: DotState; tit
           ? 'idle'
           : status === 'meko'
             ? 'working meko'
-            : status === 'queued'
-              ? 'idle queued'
+            : status === 'queued' || status === 'background'
+              ? `idle ${status}`
               : status;
   const text = status === 'learning' ? LEARNING_TITLE : STATUS_TEXT[status];
   return <i ref={ref} className={cx('dot', cls)} title={title ?? text} aria-label={STATUS_TEXT[status]} />;
@@ -423,9 +423,9 @@ export function InfoButton({ id, label }: { id: string; label: string }) {
 export function InfoPanel({ id, children }: { id: string; children: ReactNode }) {
   const open = useInfoOpen(id);
   return (
-    <p id={id} className="info-panel" hidden={!open}>
+    <div id={id} className="info-panel" hidden={!open}>
       {children}
-    </p>
+    </div>
   );
 }
 

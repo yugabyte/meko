@@ -117,3 +117,38 @@ export function Empty({ icon, title, children }: { icon: ReactNode; title: strin
 export function Code({ children }: { children: ReactNode }) {
   return <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[12px]">{children}</code>;
 }
+
+// An on/off switch, for a setting saved as soon as it's flipped.
+export function Toggle({
+  checked,
+  disabled,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (on: boolean) => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={cx(
+        "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors disabled:opacity-50",
+        checked ? "bg-primary" : "bg-muted-foreground/30",
+      )}
+    >
+      <span
+        className={cx(
+          "inline-block size-4 rounded-full bg-background shadow transition-transform",
+          checked ? "translate-x-4.5" : "translate-x-0.5",
+        )}
+      />
+    </button>
+  );
+}

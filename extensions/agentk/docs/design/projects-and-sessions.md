@@ -107,12 +107,13 @@ idle_days = 14            # an idle worktree no session used for this many days 
 
 [work_queue]
 # github = true              # Sync pulls in GitHub review requests (Settings › Work queue); off by default
-# slack = true               # Sync reads your Slack To-dos; off by default (both off, the default: no sync)
+# slack = true               # Sync reads the messages on your Slack list; off by default (both off, the default: no sync)
+# slack_list = "https://<workspace>.slack.com/lists/<team>/<F…>" # that list's link (its ⋯ › Copy link)
 # close_closed_prs = true    # the GitHub sync closes the review requests whose PR was merged or closed; off by default
 # sync_minutes = 15          # how often the work queue syncs by itself (0: only when you press Sync, up to 1440)
-# slack_model = "sonnet"     # the model of the claude -p that reads Slack's To-dos through your Slack connector
+# slack_model = "sonnet"     # the model of the claude -p that reads that list through your Slack connector
 # slack_timeout_seconds = 180 # a Slack read that takes longer is stopped (30 to 600)
-# slack_tools = ["mcp__claude_ai_Slack__slack_search_public_and_private", …] # the only tools that read may call, besides ToolSearch
+# slack_tools = ["mcp__claude_ai_Slack__slack_read_file", "mcp__claude_ai_Slack__slack_read_user_profile"] # the only tools that read may call, besides ToolSearch
 ```
 
 | Action | What the server does |
@@ -305,8 +306,10 @@ start, so an edit made while it runs takes effect after a restart, and a save fr
 differ from the defaults are written, so a changed default reaches existing installs; a value of the wrong type is ignored with a warning. An older
 install's `[server] bind` and `port` and `[tls]` stay in the file for Meko's handoff
 ([security.md](security.md)), and nothing else reads them. The Meko
-URL and key are Meko's: its Meko Cloud link, else the Meko running on this computer with its own URL
-and token, both read from Meko (`meko token --json`) and never written here. `[meko] url`, `api_key`,
+URL and key are Meko's: the Meko running on this computer with its own URL and token, linked to Meko
+Cloud or not (while linked it passes AgentK's calls on to Meko Cloud: `/mcp`, and `/api/v1/cloud` for
+its REST API), or under an older Meko that still hands out its link's key, that link's URL and key;
+all read from Meko (`meko token --json`) and never written here. `[meko] url`, `api_key`,
 `web_url` and `api_url`, `MEKO_MCP_URL`/`MEKO_API_KEY` and the `env` block of Claude Code's user
 `settings.json` are read only to hand a key from before to Meko, once, and under a Meko too old to
 keep the link ([datapacks.md](datapacks.md)). An `enabled` key left in `[meko]` by older versions is ignored and

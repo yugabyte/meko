@@ -138,8 +138,9 @@ func (a *api) createDatapack(c echo.Context) error {
 	var body struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
-		// Location (Meko's own) picks where: "cloud" the linked Meko Cloud, "local" this Meko. Without
-		// it, the linked Meko Cloud while there's one, else this Meko.
+		// Location (Meko's own) names where: "cloud" the linked Meko Cloud, "local" this Meko. Without
+		// it, the linked Meko Cloud while there's one, else this Meko. No datapack is made here while
+		// Meko Cloud is linked: "local" is then a 409 CLOUD_LINKED.
 		Location string `json:"location"`
 	}
 	if ok, err := bind(c, &body); !ok {
@@ -152,11 +153,15 @@ func (a *api) createDatapack(c echo.Context) error {
 	if body.Location == "" {
 		body.Location = "local"
 		if linked {
-			body.Location = a.defaultLocation(c, "cloud")
+			body.Location = "cloud"
 		}
 	}
 	switch body.Location {
 	case "local":
+		if linked {
+			return envelope.Fail(c, http.StatusConflict, codeCloudLinked, "Meko is linked to Meko Cloud, so new "+
+				"datapacks go there. Unlink it to create one on this computer.")
+		}
 	case "cloud":
 		if !linked {
 			return notLinkedOr(c, nil)

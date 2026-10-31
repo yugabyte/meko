@@ -178,6 +178,12 @@ export class DeckStore {
       e.meko = m;
       this.persist(e);
     }
+    // The same Meko Cloud may be named by another host: its MCP one when Presenter held the link's key,
+    // its web app's now. The datapack is in one Meko only, so the Meko that lists it is the draft's.
+    if (!sameMeko(e.meko, at) && e.meko.kind === 'cloud' && at.kind === 'cloud' && (await this.untagged(e.id, at)) === at) {
+      e.meko = at;
+      this.persist(e);
+    }
     if (!sameMeko(e.meko, at)) {
       throw new HttpError(409, `This deck is saved in ${mekoLabel(e.meko)}, and Presenter now uses ${mekoLabel(at)}. ${reopenHint(e.meko)}`);
     }

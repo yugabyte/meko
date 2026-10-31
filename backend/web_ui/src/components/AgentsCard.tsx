@@ -1,5 +1,5 @@
 // The Connect page's Agents card: the agents installed on this computer (GET /agents), whether each
-// reaches Meko (or the linked Meko Cloud), and Connect or Disconnect, which post the agent's route and
+// reaches Meko (which sends their calls to the linked Meko Cloud), and Connect or Disconnect, which post the agent's route and
 // then read the list again. A server older than the card (a 404) shows nothing.
 
 import { useState } from "react";
@@ -56,14 +56,14 @@ export function AgentsCard() {
         <h3 className="font-medium">Agents</h3>
         {data && (
           <p className="text-sm text-muted-foreground">
-            Agents connect to {data.target.kind === "cloud" ? "Meko Cloud" : "Meko on this computer"}.
+            Agents connect to Meko on this computer. While Meko Cloud is linked, it sends their calls there.
           </p>
         )}
       </div>
       {list.error && <ErrorNote error={list.error} />}
       {data && data.agents.length === 0 && (
         <p className="text-sm text-muted-foreground">
-          No agents found on this computer: Meko works with Claude Code, Codex, Kiro CLI and OpenCode
+          No agents found on this computer: Meko works with Claude Code, Codex, Kiro CLI, OpenCode and Cursor
         </p>
       )}
       {data && data.agents.length > 0 && (

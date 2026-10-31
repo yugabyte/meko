@@ -4,7 +4,8 @@
 // and drives their hooks the way OpenCode 2.1 does: the session `prompt` hook for a prompt, tool
 // `execute.before` (whose throw denies the call) and `.after` around a tool, the session `context`
 // hook before a response, and the `session.created`, `permission.asked`/`.replied`,
-// `session.step.started`/`.ended` and `session.execution.succeeded` (or `.interrupted`) events, as `{ id, type, data }`.
+// `session.step.started`/`.ended`, `session.execution.started` and `.succeeded` (or `.interrupted`)
+// and `shell.created`/`.exited`/`.deleted` events, as `{ id, type, data }`.
 // Each stdin line is a prompt. Like OpenCode 2 under AgentK, every command but `--version` and
 // `upgrade` needs `--standalone`. Everything it does is recorded in $FAKE_OPENCODE_DIR.
 import { randomBytes } from 'node:crypto';
@@ -125,6 +126,12 @@ const event = async (type, data) => {
   const ev = { id: `evt_${++evn}`, created: Date.now(), type, data };
   for (const push of streams) push(ev);
   await sleep(10);
+  return ev;
+};
+// An event handed over again, as the stream does after it reconnects.
+const replay = async (ev) => {
+  for (const push of streams) push(ev);
+  await sleep(10);
 };
 
 let n = 0;
@@ -168,6 +175,7 @@ async function turn(text) {
     return;
   }
   await call('session', 'prompt', { sessionID: sessionId, messageID: `msg_u${n}`, prompt: { text }, delivery: 'steer' });
+  await event('session.execution.started', { sessionID: sessionId });
   await sleep(100);
   // "write <file>": OpenCode's write tool on that file (relative to the worktree), which the guard may deny.
   const w = /write (\S+)/.exec(text);
@@ -205,6 +213,34 @@ async function turn(text) {
     await event('session.created', { sessionID: child, parentID: sessionId });
     await respond(child, 'claude-haiku-4-5');
     await event('session.execution.succeeded', { sessionID: child });
+  }
+  // "background <ms>": a bash command run in the background, its shell still running when the turn
+  // ends and exiting <ms> later (its shell.created then handed over again, as after a reconnect);
+  // "bgagent <ms>": a subagent run in the background, alike, which runs a subagent of its own.
+  const bg = /\bbackground (\d+)/.exec(text);
+  if (bg) {
+    const id = `shl_${n}`;
+    const created = await event('shell.created', { info: { id, status: 'running', command: 'npm test', cwd: process.cwd(), metadata: { sessionID: sessionId }, time: { started: Date.now() } } });
+    void sleep(Number(bg[1])).then(async () => {
+      await event('shell.exited', { id, exit: 0, status: 'exited' });
+      await event('shell.deleted', { id });
+      await replay(created);
+    });
+  }
+  const bga = /\bbgagent (\d+)/.exec(text);
+  if (bga) {
+    const child = `${sessionId}_bg${n}`;
+    const grandchild = `${child}_sub`;
+    parents.set(child, sessionId);
+    parents.set(grandchild, child);
+    await event('session.created', { sessionID: child, parentID: sessionId });
+    await event('session.execution.started', { sessionID: child });
+    await event('session.created', { sessionID: grandchild, parentID: child });
+    await event('session.execution.started', { sessionID: grandchild });
+    void sleep(Number(bga[1])).then(async () => {
+      await event('session.execution.succeeded', { sessionID: grandchild });
+      await event('session.execution.succeeded', { sessionID: child });
+    });
   }
   // "run <cmd>": the shell needs the user's answer, the next line.
   if (/^run /.test(text)) {

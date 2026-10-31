@@ -224,12 +224,13 @@ func TestExtensionActionsNeedAnInstall(t *testing.T) {
 	}
 }
 
-// Without local access, an action needs the owner's session.
-func TestExtensionActionsNeedASession(t *testing.T) {
+// With remote access, another site's page can't run an action.
+func TestExtensionActionsRefuseOtherSites(t *testing.T) {
 	f := &fakeRun{release: make(chan struct{})}
 	base, _ := startWeb(t, config.AccessRemote, "", installed("agentk"), func(w *Web) { w.Run = f.run })
-	if code, _ := post(t, base+"/api/v1/extensions/agentk/start", nil); code != 401 {
-		t.Errorf("no session: %d", code)
+	crossSite := map[string]string{"Sec-Fetch-Site": "cross-site"}
+	if code, _ := post(t, base+"/api/v1/extensions/agentk/start", crossSite); code != 403 {
+		t.Errorf("another site's page: %d", code)
 	}
 	if len(f.calls) != 0 {
 		t.Errorf("ran %v", f.calls)

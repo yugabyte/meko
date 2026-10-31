@@ -7,7 +7,8 @@ import { StatusDot } from '../../src/web/components/common.js';
 import { LEARNING_TITLE, STATUS_TEXT, aggregateDot, dotState, dotTitle, harnessLogos, offersLearn, runningSessions, type DotState } from '../../src/web/util.js';
 
 const session = (status: SessionStatus, desired: Session['desired'] = 'running', learning = false, mekoCall = false, queued: QueuedGate | null = null) =>
-  ({ id: status, status, desired, learning, mekoCall, queued, stage: 'code', mergeBlockers: [] as string[], waitsOnYou: [] as string[] }) as Session;
+  ({ id: status, status, desired, learning, mekoCall, queued, background: [], stage: 'code', mergeBlockers: [] as string[], waitsOnYou: [] as string[] }) as unknown as Session;
+const tests = { type: 'shell', description: 'npm test' };
 
 describe('runningSessions', () => {
   it('counts sessions whose Claude is up', () => {
@@ -47,7 +48,22 @@ describe('dotState', () => {
     ['exited', false, false, 'merge', 'exited'],
     ['starting', false, false, 'merge', 'starting'],
   ])('%s, learning %s, Meko call %s, queued %s → %s', (status, learning, mekoCall, queued, dot) => {
-    expect(dotState({ status, learning, mekoCall, queued, stage: 'code', waitsOnYou: [] })).toBe(dot);
+    expect(dotState({ status, learning, mekoCall, queued, background: [], stage: 'code', waitsOnYou: [] })).toBe(dot);
+  });
+
+  // Work in the background shows between turns (idle, recovered) only, under a queued gate and a learn step.
+  it.each<[SessionStatus, Partial<Session>, DotState]>([
+    ['idle', {}, 'background'],
+    ['recovered', {}, 'background'],
+    ['working', {}, 'working'],
+    ['working', { mekoCall: true }, 'meko'],
+    ['needs_input', {}, 'needs_input'],
+    ['starting', {}, 'starting'],
+    ['exited', {}, 'exited'],
+    ['idle', { learning: true }, 'learning'],
+    ['idle', { queued: 'merge' }, 'queued'],
+  ])('%s with work in the background, and %o → %s', (status, over, dot) => {
+    expect(dotState({ ...session(status), background: [tests], ...over })).toBe(dot);
   });
 
   // Review & PR waiting on the user shows Needs you over Claude at its prompt or in a turn, and over
@@ -69,6 +85,17 @@ describe('dotState', () => {
     expect(aggregateDot(project(session('working', 'running', false, true), session('exited')))).toBe('exited');
     expect(aggregateDot(project(session('idle'), session('recovered'), session('idle', 'running', false, false, 'merge')))).toBe('queued');
     expect(aggregateDot(project(session('idle', 'running', false, false, 'merge'), session('working')))).toBe('working');
+    const background = { ...session('idle'), background: [tests] } as Session;
+    expect(aggregateDot(project(session('idle'), session('recovered'), background))).toBe('background');
+    expect(aggregateDot(project(background, session('working')))).toBe('working');
+    expect(aggregateDot(project(background, session('needs_input')))).toBe('needs_input');
+  });
+
+  it("titles a session's tab, and its palette row, with what's running in the background", () => {
+    const s = (...descriptions: string[]) => ({ ...session('idle'), background: descriptions.map((description) => ({ type: 'shell', description })) }) as Session;
+    expect(dotTitle(s('npm test'))).toBe('running in the background: npm test');
+    expect(dotTitle(s('a', 'b', 'c', 'd', 'e'))).toBe('running in the background: a, b, c and 2 more');
+    expect(renderToStaticMarkup(createElement(StatusDot, { status: 'background' }))).toContain('class="dot idle background"');
   });
 
   it.each<[QueuedGate, string]>([

@@ -36,7 +36,7 @@ export function SettingsDialog({
   onClose,
   onWhatsNew,
 }: {
-  /** What Meko, which signs people in to AgentK, says about this browser (null without Meko). */
+  /** What Meko, which decides who reaches AgentK, says about this browser (null without Meko). */
   mekoAuth: MekoAuth | null;
   update: UpdateStatus;
   meko: MekoStatus;
@@ -58,7 +58,7 @@ export function SettingsDialog({
   // One saver for General, Harness, Code review and Work queue, so a save from a tab that has since closed
   // still shows how it went. General's usage-stats box saves on its own.
   const auto = useAutoSave();
-  // What the General tab holds typed and not saved yet, saved before Settings closes.
+  // What the General or Work queue tab holds typed and not saved yet, saved before Settings closes.
   const typed = useRef<(() => void) | null>(null);
   // A close waited for the saves out and one failed: closing again leaves it unsaved.
   const [held, setHeld] = useState(false);
@@ -109,7 +109,7 @@ export function SettingsDialog({
         <HarnessTab auto={auto} harnesses={harnesses} twoAgents={twoAgents} serverName={serverName} meko={meko} initialAgent={initialAgent} />
       )}
       {tab === 'code-review' && <CodeReviewTab auto={auto} />}
-      {tab === 'work-queue' && <WorkQueueTab auto={auto} />}
+      {tab === 'work-queue' && <WorkQueueTab auto={auto} typed={typed} />}
       {tab === 'updates' && <UpdatesTab initial={update} onWhatsNew={(from, to) => leave(() => onWhatsNew(from, to))} />}
       <SaveStatus status={auto.status} held={held} />
     </Dialog>
@@ -203,23 +203,46 @@ const clampOr = (typed: string, max: number, saved: number) => {
 };
 
 /**
- * The work queue's sync: which sources it reads (both off turns sync off, the Sync button too) and how
- * often it runs by itself. The minutes save when the field loses focus or takes Enter.
+ * The work queue's sync: which sources it reads (both off turns sync off, the Sync button too), the
+ * Slack list's link and how often it runs by itself. The link and the minutes save when their field
+ * loses focus or takes Enter, and, as General's do, when the tab or Settings closes.
  */
-function WorkQueueTab({ auto }: { auto: AutoSettings }) {
+function WorkQueueTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObject<(() => void) | null> }) {
   const { s, load, change } = auto;
   const [minutes, setMinutes] = useState('');
+  const [list, setList] = useState('');
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    load().then((x) => setMinutes(String(x.workQueueSyncMinutes)), (e) => setError(errorMessage(e)));
+    load().then((x) => {
+      setMinutes(String(x.workQueueSyncMinutes));
+      setList(x.workQueueSlackList);
+    }, (e) => setError(errorMessage(e)));
   }, [load]);
-  if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
-  const off = !s.workQueueGithub && !s.workQueueSlack;
   const saveMinutes = () => {
+    if (!s) return;
     const m = clampOr(minutes, WORK_SYNC_MINUTES_MAX, s.workQueueSyncMinutes);
     setMinutes(String(m));
     if (m !== s.workQueueSyncMinutes) change({ workQueueSyncMinutes: m });
   };
+  const saveList = () => {
+    if (s && list.trim() !== s.workQueueSlackList) change({ workQueueSlackList: list.trim() });
+  };
+  const latest = useRef(() => {});
+  useEffect(() => {
+    latest.current = () => {
+      saveList();
+      saveMinutes();
+    };
+  });
+  useEffect(() => {
+    typed.current = () => latest.current();
+    return () => {
+      typed.current?.();
+      typed.current = null;
+    };
+  }, [typed]);
+  if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
+  const off = !s.workQueueGithub && !s.workQueueSlack;
   return (
     <div className="stack">
       <p className="muted small">What Sync adds to the queue; both off turns it off.</p>
@@ -235,10 +258,53 @@ function WorkQueueTab({ auto }: { auto: AutoSettings }) {
       >
         A GitHub item whose PR was merged or closed leaves the queue at the next sync. Off, it stays, marked Done on GitHub.
       </InfoCheck>
-      <InfoCheck id="set-wq-slack" label="Slack To-dos" checked={s.workQueueSlack} onChange={(on) => change({ workQueueSlack: on })}>
-        The messages on your To-dos, read by Claude Code through your Slack connector. Each read is a model call; on the
-        timer it runs only while the last read worked.
+      <InfoCheck id="set-wq-slack" label="Slack list" checked={s.workQueueSlack} onChange={(on) => change({ workQueueSlack: on })}>
+        The messages on a Slack list of yours, read by Claude Code through your Slack connector. Each read is a model
+        call, so after one fails, timed syncs skip Slack until a Sync you press reads it.
       </InfoCheck>
+      <Field
+        label="Slack list link"
+        hint={s.workQueueSlack && !s.workQueueSlackList ? 'Paste the link to your list.' : undefined}
+        info={{
+          for: 'set-wq-slack-list',
+          text: (
+            <>
+              <p>
+                Make a Slack list (for example "Meko work queue"), add the messages you want worked on, and paste its link
+                here. Slack's own To-dos can't be read, so the sync uses a list of yours.
+              </p>
+              <p>It reads these columns, by name, and ignores the rest:</p>
+              <ul>
+                <li><b>Message</b> (required): the message's link.</li>
+                <li><b>Name</b>: the message's text. Slack fills it in when you add a message.</li>
+                <li><b>Reporter</b> (optional): who asked. It starts the item's notes.</li>
+                <li><b>Done</b> (optional checkbox): ticked rows are left out.</li>
+              </ul>
+              <p>
+                A list is private until you share it. Sharing one of its items gives the people you share it with edit
+                access to the whole list.
+              </p>
+            </>
+          ),
+        }}
+      >
+        <input
+          id="set-wq-slack-list"
+          className="input"
+          type="url"
+          placeholder="https://<workspace>.slack.com/lists/…"
+          value={list}
+          disabled={!s.workQueueSlack}
+          onChange={(e) => setList(e.target.value)}
+          onBlur={saveList}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              saveList();
+            }
+          }}
+        />
+      </Field>
       <Field label="Sync every (minutes)" hint={off ? 'Sync is off.' : '0 syncs only when you press Sync.'}>
         <input
           id="set-wq-minutes"
@@ -813,10 +879,12 @@ const OWN_KEY_FIX = 'Link Meko Cloud on Meko’s Meko Cloud page to move it ther
 
 /**
  * Settings › General's ways to Meko's own pages: the Meko Cloud link (Meko keeps it for AgentK and
- * its other extensions) and the account that signs people in to both.
+ * its other extensions) and, on a Meko from before it dropped its login, the account that signs
+ * people in to both. A newer Meko has no account page: its status has no username.
  */
 export function MekoLinks({ meko, auth }: { meko: MekoStatus; auth: MekoAuth | null }) {
-  const host = httpHost(meko.url ?? '');
+  // Meko Cloud reached through the Meko on this computer is named by its web app, not that Meko's URL.
+  const host = httpHost((meko.source === 'meko' && meko.webUrl) || meko.url || '');
   return (
     <div className="field" id="set-meko-links">
       <div className="info-row">
@@ -831,16 +899,18 @@ export function MekoLinks({ meko, auth }: { meko: MekoStatus; auth: MekoAuth | n
           : 'Meko isn’t set up: start Meko on this computer (meko start), or link Meko Cloud.'}
       </span>
       <InfoPanel id="set-meko-info">
-        {auth?.access === 'local' ? 'Meko opens AgentK on this computer without a sign-in.' : 'Meko signs you in to AgentK.'} Who can
+        {auth?.access === 'remote' && auth.username ? 'Meko signs you in to AgentK.' : auth?.access === 'local' ? 'Meko opens AgentK on this computer without a sign-in.' : 'Meko opens AgentK without a sign-in.'} Who can
         reach AgentK, and on which port, are set in Meko’s config.toml, in its <code>[web]</code> table.
       </InfoPanel>
       <div className="settings-actions">
         <a className="btn small" id="set-meko-cloud" href={MEKO_CLOUD_PATH}>
           Meko Cloud ↗
         </a>
-        <a className="btn small" id="set-meko-account" href={MEKO_ACCOUNT_PATH}>
-          Account ↗
-        </a>
+        {auth?.username && (
+          <a className="btn small" id="set-meko-account" href={MEKO_ACCOUNT_PATH}>
+            Account ↗
+          </a>
+        )}
       </div>
     </div>
   );

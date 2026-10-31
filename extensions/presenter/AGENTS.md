@@ -28,7 +28,7 @@ sh scripts/smoke-release.sh out/presenter-<version>-linux-x64.tar.gz <version>
 
 Under `npm run dev` the pages are at `http://127.0.0.1:5179/` with no `<base>`; Meko's web
 listener isn't involved, but the server still asks `meko token --json` which Meko to use: a Meko
-on this computer (`meko start`), or the Meko Cloud link it keeps (`meko cloud_link`). To try it behind Meko: `npm run build`, put `dist/server/cli.js` on PATH as
+on this computer (`meko start`), and through it the Meko Cloud link it keeps (`meko cloud_link`). To try it behind Meko: `npm run build`, put `dist/server/cli.js` on PATH as
 `meko_presenter` (`npm link`), and run `meko extension install presenter`, then `meko ui /ext/presenter/`.
 
 ## Map
@@ -45,7 +45,7 @@ on this computer (`meko start`), or the Meko Cloud link it keeps (`meko cloud_li
 | `src/server/summary.ts` | That row: Meko's format (`  ✓ Presenter       started`), colored only on a terminal without `NO_COLOR` (Meko's `docs/install.md`, "The summary rows"). |
 | `src/server/server.ts` | Fastify on the socket: pages (`<base href="/ext/presenter/">`, no framing), API, WebSockets, the same-origin check, `POST /_meko/changed` (Meko's notice that its Meko Cloud link changed) and `GET /_meko/busy` (whether a talk is live, for `_busy`). |
 | `src/server/paths.ts` | The home by Meko's rule (`resolve-cases.json`), the socket path (under `/tmp` for a long home, not `$TMPDIR`), `refuseOtherMeko`. |
-| `src/server/meko.ts` | `MekoPort` and its MCP + REST client (`datapack_create` never sent twice, `mayRetry`). Which Meko is Meko's to say, from `meko token --json` and never stored (`probeMeko`, `mekoFinder`): its Meko Cloud link when linked (REST on the link's own `api_url`, another host), else the Meko on this computer; a link Meko couldn't read keeps the last one, or finds no Meko before one was read. One connection at a time; `current()` (Claude's runs) reads Meko afresh. `reset()` (forgetting the link too) when Meko posts `/_meko/changed`. |
+| `src/server/meko.ts` | `MekoPort` and its MCP + REST client (`datapack_create` never sent twice, `mayRetry`). Which Meko is Meko's to say, from `meko token --json` and never stored (`probeMeko`, `mekoFinder`): always the Meko on this computer, which passes calls on to Meko Cloud while it links it (REST then at its `/api/v1/cloud`; Meko Cloud named by the link's `web_url`), or Meko Cloud itself when an older Meko hands out the link's key (REST on the link's own `api_url`, another host); a link Meko couldn't read keeps the last one, or finds no Meko before one was read. One connection at a time; `current()` (Claude's runs) reads Meko afresh. `reset()` (forgetting the link too) when Meko posts `/_meko/changed`. |
 | `src/server/decks.ts` | Drafts, undo and redo, assets, save, load, versions, restore. Each draft names the Meko its datapack is in (`mine`): one of another Meko can be played but not edited, saved or given to Claude. |
 | `src/server/pieces.ts` | Hashing, uploads (four at a time, manifest last, only what the datapack lacks), checked fetches, the cache. |
 | `src/server/claude.ts`, `jobs.ts`, `prompts.ts` | `claude -p` with the deck's session; the per-deck job queue (map, build on forks, ask); what Claude is told and must answer. |

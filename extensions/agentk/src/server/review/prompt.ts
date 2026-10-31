@@ -674,3 +674,18 @@ confirmed or unverified. If the call answers with an error, fix what it names
 and call it again.
 `;
 }
+
+/**
+ * The steps a code-review prompt lists, each numbered with its subagent and its prompt. With
+ * `batch`, they're grouped under numbered batches of at most that many, so the model doesn't
+ * count; the steps' numbers run on across batches.
+ */
+export function stepList(steps: { name: string; agent: string; prompt: string }[], batch?: number): string {
+  const line = (s: (typeof steps)[number], i: number) => `${i + 1}. ${s.name}: subagent \`${s.agent}\`, prompt: \`${s.prompt}\``;
+  if (!batch) return steps.map(line).join('\n');
+  const out: string[] = [];
+  for (let i = 0; i < steps.length; i += batch) {
+    out.push(`Batch ${i / batch + 1}:\n${steps.slice(i, i + batch).map((s, j) => line(s, i + j)).join('\n')}`);
+  }
+  return out.join('\n\n');
+}

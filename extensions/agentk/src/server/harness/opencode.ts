@@ -32,6 +32,8 @@ const EVENTS: Record<string, string> = {
   'permission.asked': 'PermissionRequest',
   'permission.replied': 'PostToolUse',
   'session.idle': 'Stop',
+  // AgentK's own: the session's background work changed between turns (Session.background).
+  'agentk.background': 'BackgroundTasks',
 };
 
 /**

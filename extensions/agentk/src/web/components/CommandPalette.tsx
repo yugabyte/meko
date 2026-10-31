@@ -13,7 +13,7 @@ import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, doAllActions, filterItem
 import { workLinkKey } from '../../shared/worklinks';
 import { navigate } from '../router';
 import { attachFiles, getTerminal } from '../terminals';
-import { STATUS_TEXT, cx, dotState, isMac, liveSessions, stageWords, type DotState } from '../util';
+import { STATUS_TEXT, cx, dotState, dotTitle, isMac, liveSessions, stageWords, type DotState } from '../util';
 import { Busy, ErrorText, StatusDot, trapTab } from './common';
 
 interface Item {
@@ -491,12 +491,14 @@ export function CommandPalette({
     }
     for (const p of projects) {
       for (const s of liveSessions(p)) {
+        const dot = dotState(s);
         out.push({
           id: `s-${s.id}`,
           label: [{ session: s.name }],
-          hint: `${p.name} · ${stageWords(s)} · ${STATUS_TEXT[dotState(s)]}`,
+          // What's running in the background, by name; every other dot by its word.
+          hint: `${p.name} · ${stageWords(s)} · ${dot === 'background' ? dotTitle(s) : STATUS_TEXT[dot]}`,
           keywords: `${p.name} ${s.name} ${s.branch}`,
-          dot: dotState(s),
+          dot,
           phase: s.id,
           run: () => navigate({ view: 'project', projectId: p.id, sessionId: s.id }),
         });
@@ -524,7 +526,7 @@ export function CommandPalette({
     out.push({ id: 'work-queue', label: ['Work queue'], hint: 'View', keywords: 'work queue items todo tasks priorities list', run: () => navigate({ view: 'queue' }) });
     out.push({ id: 'work-add', label: ['Add a work item'], hint: 'Action', keywords: 'work queue item add new todo task', run: onAddWorkItem });
     out.push({
-      id: 'work-sync', label: ['Sync the work queue'], hint: 'GitHub review requests and Slack To-dos', keywords: 'work queue sync github review requests slack todos to-dos later',
+      id: 'work-sync', label: ['Sync the work queue'], hint: 'GitHub review requests and your Slack list', keywords: 'work queue sync github review requests slack list todos to-dos',
       run: () => void api.syncWork().catch((e: unknown) => onError(errorMessage(e))),
     });
     out.push({ id: 'usage', label: ['Usage'], hint: 'View', keywords: 'usage tokens prs commits pushes projects', run: () => navigate({ view: 'usage' }) });

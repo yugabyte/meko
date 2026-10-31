@@ -1,10 +1,13 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/BurntSushi/toml"
 
 	"github.com/yugabyte/meko/backend/internal/update"
 )
@@ -244,7 +247,7 @@ func TestCallHomeSettings(t *testing.T) {
 func TestWebSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	c, err := Load(path, func(string) string { return "" }, Overrides{})
-	if err != nil || c.Web != (Web{Port: 7777, Access: AccessLocal}) {
+	if err != nil || c.Web != (Web{Port: 7777, Access: AccessLocal, Enabled: true}) {
 		t.Fatalf("defaults: %+v %v", c.Web, err)
 	}
 	file := "[web]\nport = 8443\naccess = \"remote\"\nname = \"dev.example.com\"\n"
@@ -252,7 +255,7 @@ func TestWebSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, err = Load(path, func(string) string { return "" }, Overrides{})
-	if err != nil || c.Web != (Web{Port: 8443, Access: AccessRemote, Name: "dev.example.com"}) {
+	if err != nil || c.Web != (Web{Port: 8443, Access: AccessRemote, Name: "dev.example.com", Enabled: true}) {
 		t.Fatalf("from the file: %+v %v", c.Web, err)
 	}
 	env := map[string]string{"MEKO_WEB_PORT": "9443", "MEKO_WEB_ACCESS": "local"}
@@ -303,5 +306,56 @@ func TestAddWeb(t *testing.T) {
 	}
 	if wrote, err = AddWeb(fresh, Web{Access: AccessRemote}, TLS{}); err != nil || wrote {
 		t.Fatalf("add with the user's [web]: %v %v", wrote, err)
+	}
+}
+
+// meko ui stop and start set [web] enabled in web.toml, keeping what else it holds; config.toml's
+// own enabled wins and stops them; and meko install's access still goes in after an earlier stop.
+func TestSetWebEnabled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	load := func() Config {
+		t.Helper()
+		c, err := Load(path, func(string) string { return "" }, Overrides{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	if err := SetWebEnabled(path, false); err != nil {
+		t.Fatal(err)
+	}
+	if c := load(); c.Web.Enabled || c.Web.Access != AccessLocal {
+		t.Fatalf("off: %+v", c.Web)
+	}
+	// An earlier stop isn't a choice of access: install's still goes in, and the switch stays off.
+	wrote, err := AddWeb(path, Web{Access: AccessRemote}, TLS{Cert: "/a/c.pem", Key: "/a/k.pem"})
+	if err != nil || !wrote {
+		t.Fatalf("add after a stop: %v %v", wrote, err)
+	}
+	if c := load(); c.Web.Enabled || c.Web.Access != AccessRemote || c.TLS.Cert != "/a/c.pem" {
+		t.Fatalf("after the add: %+v %+v", c.Web, c.TLS)
+	}
+	if err := SetWebEnabled(path, true); err != nil {
+		t.Fatal(err)
+	}
+	if c := load(); !c.Web.Enabled || c.Web.Access != AccessRemote || c.TLS.Key != "/a/k.pem" {
+		t.Fatalf("on again: %+v %+v", c.Web, c.TLS)
+	}
+	// A release before the switch reads web.toml's [web] without it, and must still start.
+	var old struct {
+		Web struct {
+			Port   int    `toml:"port"`
+			Access string `toml:"access"`
+			Name   string `toml:"name"`
+		} `toml:"web"`
+	}
+	if _, err := toml.DecodeFile(WebFile(path), &old); err != nil || old.Web.Access != AccessRemote {
+		t.Fatalf("as an older release reads it: %+v %v", old, err)
+	}
+	if err := os.WriteFile(path, []byte("[web]\nenabled = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetWebEnabled(path, false); !errors.Is(err, ErrWebEnabledSet) {
+		t.Fatalf("with config.toml's own enabled: %v", err)
 	}
 }

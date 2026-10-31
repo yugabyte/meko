@@ -7,10 +7,11 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// The Connect page gets the client token only for a caller that holds a credential: never for local
-// access, which every user of the computer has, nor auth = "none".
+// The Connect page gets the client token only for a caller that holds a credential: never for the
+// web listener's browsers (local access, which every user of the computer has, or remote, which
+// anyone who reaches its port has), nor auth = "none".
 func TestKeyFor(t *testing.T) {
-	for cred, want := range map[string]string{"admin": "tok", "client": "tok", "session": "tok", "local": "",
+	for cred, want := range map[string]string{"admin": "tok", "client": "tok", "remote": "", "local": "",
 		"none": "", "": ""} {
 		a := &api{Options{ClientToken: "tok", Credential: func(echo.Context) string { return cred }}}
 		c := echo.New().NewContext(httptest.NewRequest("GET", "/", nil), httptest.NewRecorder())

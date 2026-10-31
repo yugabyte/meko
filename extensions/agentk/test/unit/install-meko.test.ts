@@ -7,6 +7,8 @@ import { MekoSetupError } from '../../src/server/mekosetup.js';
 const LOCAL = { url: 'http://127.0.0.1:7778/mcp', token: 'local-token' };
 const UNSET: MekoCloudLink = { set: false, url: '', apiKey: '', webUrl: '', apiUrl: '' };
 const LINKED: MekoCloudLink = { set: true, url: DEFAULT_MEKO_URL, apiKey: 'mko_tkn_linked', webUrl: 'https://cloud.mekodata.ai', apiUrl: 'https://cloud.mekodata.ai/api/v1' };
+/** A link from a Meko that keeps the key and reaches Meko Cloud itself. */
+const THROUGH: MekoCloudLink = { set: true, url: '', apiKey: '', webUrl: 'https://cloud.mekodata.ai', apiUrl: '', linked: true };
 
 /**
  * The installer's Meko step with scripted answers, recording what it did. `cloud` is the link
@@ -76,6 +78,7 @@ describe("installer: Meko's Meko Cloud link, or the Meko on this computer", () =
   it.each([
     ['the Meko on this computer', { local: true, cloud: UNSET }, `claude ${LOCAL.url} local-token (local)`, /ok Meko on this computer \(127\.0\.0\.1:7778\)/],
     ["Meko's link", { local: true, cloud: LINKED }, `claude ${DEFAULT_MEKO_URL} mko_tkn_linked`, /ok Meko Meko Cloud, linked in Meko \(mcp\.mekodata\.ai\)/],
+    ["Meko's link through the Meko on this computer", { local: true, cloud: THROUGH }, `claude ${LOCAL.url} local-token (local)`, /ok Meko Meko Cloud, linked in Meko \(cloud\.mekodata\.ai\)/],
   ])('uses %s and stores nothing', async (_, o, claude, line) => {
     const c = cfg();
     const { d, said, calls } = deps(o);
@@ -122,6 +125,11 @@ describe("installer: Meko's Meko Cloud link, or the Meko on this computer", () =
     expect(refused.calls).toEqual([`link ${DEFAULT_MEKO_URL} mko_tkn_own`, `claude ${DEFAULT_MEKO_URL} mko_tkn_own`]);
     expect(refused.said.join('\n')).toMatch(/warn Meko Cloud Meko didn't take AgentK's key \(401 Unauthorized\)/);
     expect(kept.meko.apiKey).toBe('mko_tkn_own');
+
+    // A Meko that keeps the key takes it, and the agents use the Meko on this computer.
+    const through = deps({ local: true, cloud: { ...UNSET, linked: false } });
+    expect(await installMeko(cfg(), { keyArg: 'mko_tkn_given', noMeko: false }, through.d)).toBe(true);
+    expect(through.calls).toEqual([`link ${DEFAULT_MEKO_URL} mko_tkn_given`, `claude ${LOCAL.url} local-token (local)`]);
 
     // Once Meko has had a link (unlinked since), AgentK's own key isn't offered.
     const unlinked = deps({ local: true, cloud: { ...UNSET, set: true } });

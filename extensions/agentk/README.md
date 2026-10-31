@@ -44,7 +44,7 @@ You need Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon, and a codin
 [Claude Code](https://claude.com/claude-code), [OpenCode](https://opencode.ai) 2.0.0 or later,
 [Kiro CLI](https://kiro.dev/cli/) 2.32 or later, or more than one.
 You also need [Meko](https://mekodata.ai) on this computer: it serves AgentK to your browser, at
-`/ext/agentk/` on its own port (7777), and signs you in. Meko also gives projects datapacks (shared
+`/ext/agentk/` on its own port (7777), and decides who can reach it. Meko also gives projects datapacks (shared
 memory) and lets you share projects. For datapacks, AgentK uses Meko Cloud once you link it in Meko's
 web UI (Settings › Meko Cloud, which links to Meko Cloud's sign-up and login pages to make a key; or
 `meko cloud_link` on a computer without a browser), and otherwise the Meko on this computer. Install Meko, and then Meko installs AgentK:
@@ -64,13 +64,13 @@ missing (git, gh, and Claude Code, OpenCode or Kiro CLI when none is there: it a
 each agent, asking first. Then it prints the address to open.
 
 Who can open it is Meko's setting (`[web] access`: chosen when Meko was installed, in its
-`web.toml`, and `config.toml` can override it): **local** (this computer only, no login) or **remote** (other devices too, like your
-phone, over HTTPS with a login); remote is the default over SSH or on a machine with no display.
-For remote access, `meko setup_link` on the host prints a one-time link that creates your login.
-Local access trusts everyone who can log in to the computer, so pick remote on a shared host.
-An AgentK that served browsers itself (on port 7777, before Meko did) hands its port, access,
-certificate and login over to Meko by itself, so the same password signs in; its address moves to
-`/ext/agentk/` on the same port.
+`web.toml`, and `config.toml` can override it): **local** (this computer only) or **remote** (other
+devices too, like your phone, over HTTPS); remote is the default over SSH or on a machine with no
+display. Neither has a login: with remote access, anyone who can reach the port can open AgentK and
+its terminals, so pick it only where that's who you mean. `meko ui stop` on the host turns the web
+UI off, AgentK's page with it, until `meko ui start`.
+An AgentK that served browsers itself (on port 7777, before Meko did) hands its port, access and
+certificate over to Meko by itself; its address moves to `/ext/agentk/` on the same port.
 
 Meko installs AgentK's updates too: on its own when it finds one (each extension has an **Update
 automatically** switch on Meko's Extensions page and in AgentK's Settings › Updates, on by
@@ -81,9 +81,6 @@ To change AgentK's setup (repos folder, Meko) or set up its services again, run 
 or `meko extension install agentk` again (`--version <v>` installs another release).
 `meko extension delete agentk` removes AgentK (it stops, ending its sessions) and keeps its home;
 `--purge` deletes that too.
-
-Forgot your password? Run `meko setup_link` on the host and open the link it prints to choose a
-new username and password (Meko's sign-in screen says the same).
 
 AgentK keeps its data in Meko's data folder, under `extensions/agentk`: `~/.meko/extensions/agentk`,
 or under `MEKO_HOME` when you set that for Meko. You don't pick another place. If your home directory
@@ -162,7 +159,7 @@ your phone can connect.
   team is. A project datapack shared with you shows a banner and a notification, and opens as a new
   project with the repo and name filled in; a share link pasted into Ask AgentK joins it and opens
   it the same way. The Meko server and key are Meko's, linked in its web UI (Settings › Meko Cloud),
-  for your own Meko server too; AgentK's Settings › General links there, and to Meko's account page.
+  for your own Meko server too; AgentK's Settings › General links there (and, behind an older Meko that still has a login, to its account page).
   When Claude Code isn't connected to Meko, is set up for another Meko server, or holds a token
   that can't see the projects' datapacks there, a banner says so and offers to set Claude Code up
   with AgentK's Meko (Settings › Harness shows each agent's Meko);
@@ -193,7 +190,7 @@ your phone can connect.
   them from each item's menu on a phone), and dismiss them when done (or all at once). Turn on
   **Sync** in Settings › Work queue (it's off until you do) and it pulls in, when you press it and
   every 15 minutes, the PRs waiting for your review and, through your agent's Slack connector, the
-  messages on your Slack To-dos, marked **New** until you give them their place. Each item has one session,
+  messages on a Slack list of yours, marked **New** until you give them their place. Each item has one session,
   whose status shows on it; **Start session** opens New session with the item filled in. Paste a
   GitHub, Jira or Slack link into `⌘K` to jump to the session working on it.
 - **Find a session by what it's about:** type a few words into Ask AgentK (`⌘K`), such as "totp
@@ -251,7 +248,7 @@ your phone can connect.
   worktrees when sessions end).
 - **Changes panel:** click the `N files · +N −N` diff size in a session's footer to see every changed file
   (committed, uncommitted and untracked) with a diff per file. Jump between files with the
-  **Files** menu or `[` / `]`, and leave review comments on lines (drag the **+** to cover a range) that go to Claude as one prompt. The
+  **Files** menu (its filter takes a regex too) or `[` / `]`, and leave review comments on lines (drag the **+** to cover a range) that go to Claude as one prompt. The
   **All changes ▾** menu shows one of the branch's commits alone instead (read-only).
   Compare with another branch (a release branch for a backport, say) from the base in its header;
   when the branch has clearly moved onto another branch, the panel offers to switch.

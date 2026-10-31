@@ -11,7 +11,7 @@ import (
 )
 
 // cloudRoute is the Meko Cloud link's (docs/cloud.md): GET reads it, PUT links (cloudlink.Update),
-// DELETE unlinks. The web listener takes the owner (local access or the session); the API listener
+// DELETE unlinks. The web listener takes its browsers (local or remote access); the API listener
 // only the admin token (adminOnly), for meko cloud_link. Replies never carry the key.
 const cloudRoute = "/api/v1/settings/meko-cloud"
 

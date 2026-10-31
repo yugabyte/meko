@@ -22,6 +22,7 @@ import (
 // every config folder an environment variable could point at is the test's.
 func TestMain(m *testing.M) {
 	SystemFolders = nil
+	Applications = ""
 	LoginShell = ""
 	for _, k := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "KIRO_HOME", "XDG_CONFIG_HOME"} {
 		_ = os.Unsetenv(k)
@@ -232,7 +233,7 @@ func TestListStates(t *testing.T) {
 		err.Error() != "Kiro CLI isn't installed" {
 		t.Errorf("connect kiro, not installed: %v", err)
 	}
-	if _, err := manager(local).Disconnect(context.Background(), "cursor"); !isCode(err, CodeUnknown) {
+	if _, err := manager(local).Disconnect(context.Background(), "windsurf"); !isCode(err, CodeUnknown) {
 		t.Errorf("an unknown agent: %v", err)
 	}
 	t.Setenv("PATH", "/usr/bin:/bin")
@@ -692,6 +693,50 @@ func TestKiro(t *testing.T) {
 	}
 }
 
+// Cursor: found as the editor's command inside the macOS app (not on PATH) or as cursor-agent, and
+// connected in ~/.cursor/mcp.json, which the editor and the CLI share, keeping its other servers.
+func TestCursor(t *testing.T) {
+	home, _ := fakeAgents(t, false, "codex")
+	m := manager(local)
+	if _, ok := rows(t, m)["cursor"]; ok {
+		t.Fatal("found without the app or cursor-agent")
+	}
+	apps := t.TempDir()
+	Applications = apps
+	t.Cleanup(func() { Applications = "" })
+	write(t, filepath.Join(apps, cursorApp, "cursor"), "#!/bin/sh\n")
+	if err := os.Chmod(filepath.Join(apps, cursorApp, "cursor"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if r, ok := rows(t, m)["cursor"]; !ok || r.State != StateNone || r.Title != "Cursor" {
+		t.Fatalf("the app's command: %+v", r)
+	}
+	path := filepath.Join(home, ".cursor", "mcp.json")
+	write(t, path, `{"mcpServers": {"git": {"command": "git-mcp"}}}`)
+	r, err := m.Connect(context.Background(), "cursor")
+	if err != nil || r.Agent.State != StateConnected {
+		t.Fatalf("connect cursor: %+v %v", r, err)
+	}
+	if doc := readKiroDoc(t, path); doc.MCPServers["git"].Command != "git-mcp" ||
+		doc.MCPServers["meko"].URL != localURL || doc.MCPServers["meko"].Headers["Authorization"] != "Bearer "+token {
+		t.Errorf("mcp.json %+v", doc)
+	}
+	if r, err = m.Disconnect(context.Background(), "cursor"); err != nil || !r.Changed || r.Agent.State != StateNone {
+		t.Errorf("disconnect cursor: %+v %v", r, err)
+	}
+
+	Applications = ""
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "cursor-agent"), "#!/bin/sh\n")
+	if err = os.Chmod(filepath.Join(bin, "cursor-agent"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":/usr/bin:/bin")
+	if r, ok := rows(t, m)["cursor"]; !ok || !strings.HasSuffix(r.Command, "/cursor-agent") {
+		t.Errorf("the CLI alone: %+v", r)
+	}
+}
+
 // Codex: config.toml in CODEX_HOME gets an [mcp_servers.meko] table with the header; the old one and
 // its subtables go, and the rest of the file stays as it was, comments too. Disconnect takes the
 // table out the same way.
@@ -844,9 +889,32 @@ func TestRemoveMember(t *testing.T) {
 	}
 }
 
-// A link change moves every agent at Meko's old target, or at one of its own, to the new one; one
-// elsewhere is left, and one that fails is reported, without either target's token or key. Unlinking
-// moves them back, which takes the key out of their configs.
+// A link change's move back takes from Meko Cloud only what Meko put there, the link's URL with the
+// link's key: one there with a key of its own is the user's and is left.
+func TestMoveBack(t *testing.T) {
+	home, _ := fakeAgents(t, false)
+	kiro := filepath.Join(home, ".kiro", "settings", "mcp.json")
+	codex := filepath.Join(home, ".codex", "config.toml")
+	own := "[mcp_servers.meko]\nurl = \"" + cloudURL + "\"\nhttp_headers = { Authorization = \"Bearer user-key\" }\n"
+	write(t, kiro, `{"mcpServers": {"meko": `+entry(cloudURL, cloudKey)+`}}`)
+	write(t, codex, own)
+	m := &Manager{Lock: filepath.Join(t.TempDir(), "agents.lock")}
+	mv := m.Move(context.Background(), cloud, local)
+	if len(mv.Moved) != 1 || mv.Moved[0].Name != "kiro" || len(mv.Left) != 1 || mv.Left[0].Name != "codex" ||
+		len(mv.Failed) != 0 {
+		t.Fatalf("move back: %+v", mv)
+	}
+	if s := readKiroDoc(t, kiro).MCPServers["meko"]; s.URL != localURL || s.Headers["Authorization"] != "Bearer "+token {
+		t.Errorf("kiro: %+v", s)
+	}
+	if b, _ := os.ReadFile(codex); string(b) != own { //nolint:gosec // G304: the test's own file
+		t.Errorf("codex changed: %s", b)
+	}
+}
+
+// Move connects every agent at either target's own servers to the new one; one elsewhere is left, and
+// one that fails is reported, without either target's token or key. Moving back from Meko Cloud
+// takes the key out of their configs.
 func TestMove(t *testing.T) {
 	home, _ := fakeAgents(t, true)
 	kiro := filepath.Join(home, ".kiro", "settings", "mcp.json")

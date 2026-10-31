@@ -5,18 +5,25 @@ import { withLocalBin } from './paths.js';
 
 /**
  * A Meko running on this computer: its MCP URL, the client token its clients send, and its web
- * listener's URL, where browsers find AgentK at /ext/agentk/ (null from a Meko too old to serve it).
+ * listener's URL, where browsers find AgentK at /ext/agentk/ (null from a Meko too old to serve it,
+ * or while its web UI is off: `webOff`, after `meko ui stop`).
  */
 export interface LocalMeko {
   url: string;
   token: string;
   webUrl?: string | null;
+  webOff?: true;
 }
 
 /**
  * The Meko Cloud link Meko keeps for its extensions (`cloud` in `meko token --json`, Meko's
  * docs/cloud.md). `set`: Meko has had a link, linked or since unlinked; until then AgentK may hand
- * it a key of its own, once. Linked, `url` and `apiKey` are set; unlinked, they're ''.
+ * it a key of its own, once.
+ *
+ * Meko keeps the key and reaches Meko Cloud for its extensions itself (its `/mcp`, and its REST API
+ * under `/api/v1/cloud`): its `cloud` says only whether it's linked (`linked`, set only from such a
+ * Meko) and the web app, and `url`, `apiKey` and `apiUrl` are ''. An older Meko handed out the key:
+ * linked, its `url` and `apiKey` are set, and AgentK calls Meko Cloud with them; unlinked, they're ''.
  */
 export interface MekoCloudLink {
   set: boolean;
@@ -24,6 +31,9 @@ export interface MekoCloudLink {
   apiKey: string;
   webUrl: string;
   apiUrl: string;
+  linked?: boolean;
+  /** The linked account, named without its key (Meko's `account`): a new key is another account. */
+  account?: string;
 }
 
 /**
@@ -45,6 +55,10 @@ const str = (v: unknown) => (typeof v === 'string' ? v : '');
 function cloudOf(v: unknown): MekoCloudLink | undefined {
   if (!v || typeof v !== 'object' || typeof (v as { set?: unknown }).set !== 'boolean' || (v as { error?: unknown }).error) return undefined;
   const c = v as Record<string, unknown>;
+  if (typeof c.linked === 'boolean' && !('api_key' in c)) {
+    const webUrl = c.linked && /^https?:\/\//.test(str(c.web_url)) ? str(c.web_url) : '';
+    return { set: c.set as boolean, url: '', apiKey: '', webUrl, apiUrl: '', linked: c.linked, account: c.linked ? str(c.account) : '' };
+  }
   const url = /^https?:\/\//.test(str(c.url)) ? str(c.url) : '';
   const apiKey = url ? str(c.api_key) : '';
   return { set: c.set as boolean, url: apiKey ? url : '', apiKey, webUrl: apiKey ? str(c.web_url) : '', apiUrl: apiKey ? str(c.api_url) : '' };
@@ -70,13 +84,15 @@ export function probeLocalMeko(mekoHome: string | null, env: NodeJS.ProcessEnv =
     execFile('meko', ['token', '--json'], { env: run, timeout: TIMEOUT_MS, encoding: 'utf8' }, (err, stdout) => {
       if (err) return resolve((err as NodeJS.ErrnoException).code === 'ENOENT' ? none : failed);
       try {
-        const r = JSON.parse(stdout) as { url?: unknown; token?: unknown; running?: unknown; web_url?: unknown; cloud?: unknown };
+        const r = JSON.parse(stdout) as { url?: unknown; token?: unknown; running?: unknown; web_url?: unknown; web_off?: unknown; cloud?: unknown };
         if (typeof r.url !== 'string' || !/^https?:\/\//.test(r.url) || typeof r.token !== 'string' || !r.token) return resolve(failed);
         const webUrl = typeof r.web_url === 'string' && /^https?:\/\//.test(r.web_url) ? r.web_url : null;
         const cloud = cloudOf(r.cloud);
         const unreadable = !!r.cloud && typeof r.cloud === 'object' && !!(r.cloud as { error?: unknown }).error;
         resolve({
-          ...(r.running === true ? { state: 'running', meko: { url: r.url, token: r.token, webUrl } } : { state: 'stopped', meko: null }),
+          ...(r.running === true
+            ? { state: 'running', meko: { url: r.url, token: r.token, webUrl, ...(r.web_off === true ? { webOff: true as const } : {}) } }
+            : { state: 'stopped', meko: null }),
           ...(cloud ? { cloud } : {}),
           ...(unreadable ? { cloudUnreadable: true as const } : {}),
         });
@@ -105,6 +121,14 @@ export function originOf(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Meko is linked to Meko Cloud and reaches it for AgentK itself: through its `/mcp`, and its REST
+ * API under `/api/v1/cloud` (`MekoCloudLink`). False under an older Meko, which handed out the key.
+ */
+export function linkedThroughMeko(cloud: MekoCloudLink | undefined): boolean {
+  return cloud?.linked === true;
 }
 
 /**

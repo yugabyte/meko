@@ -62,7 +62,7 @@ to your agent, for all your projects:
 
 ```sh
 meko agent list                # the agents on this computer, and whether each reaches Meko
-meko agent connect claude      # or codex, kiro, opencode
+meko agent connect claude      # or codex, kiro, opencode, cursor
 meko agent connect             # the MCP URL and token, for any other MCP client
 ```
 
@@ -83,8 +83,8 @@ meko cloud_link          # asks for the key, or reads it from stdin; --off unlin
 Or use the web UI's Settings › Meko Cloud.
 [127.0.0.1:7777/settings/meko-cloud](http://127.0.0.1:7777/settings/meko-cloud)
 
-Once linked, `meko-cli` works on both local and Meko Cloud datapacks, and the agents connected to
-Meko connect to Meko Cloud.
+Once linked, Meko works on Meko Cloud's datapacks: the agents stay connected to Meko on your
+computer, which sends their calls to Meko Cloud, and `meko-cli` and new datapacks go there too.
 
 ## Commands
 
@@ -93,10 +93,10 @@ Meko connect to Meko Cloud.
 | Command | What it does |
 |---|---|
 | `meko start` / `stop` / `status` | Start or stop the server, or see whether it's running and its links |
-| `meko ui` | Open the web UI in your browser |
+| `meko ui` | Open the web UI in your browser. It has no login; `meko ui stop` turns it off, and `meko ui start` on |
 | `meko agent connect claude` | Add Meko to Claude Code (or `codex`, `kiro`, `opencode`), for all your projects |
-| `meko memory-extractor use claude` | Extract memories from your conversations with your own Claude Code, every 5 minutes. It's off until you run this; `status`, `run` and `off` check, run or stop it. See [memory extraction](backend/docs/memory-extraction.md) |
-| `meko answers use claude` | Have your own Claude Code write an answer from each search's results in the web UI, citing them. Off until you run this; `status` and `off` check or stop it |
+| `meko memory-extractor use claude` | Extract memories from your conversations with your own Claude Code, every 5 minutes. It's off until you run this or turn it on in the web UI's Settings; `status`, `run` and `off` check, run or stop it. See [memory extraction](backend/docs/memory-extraction.md) |
+| `meko answers use claude` | Have your own Claude Code write an answer from each search's results in the web UI, citing them. Off until you run this or turn it on in Settings; `status` and `off` check or stop it |
 | `meko update` | Install Meko's newest release now, then every extension's |
 | `meko-cli search "<question>"` | Search memories, the knowledge base and past conversations |
 | `meko-cli add_memory "<text>"` | Save a memory, word for word |

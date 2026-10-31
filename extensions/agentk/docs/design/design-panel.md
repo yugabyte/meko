@@ -6,7 +6,7 @@ During Design the panel opens as soon as the design exists and again whenever it
 about 60% of the work area. An Artifact design is shown in a sandboxed frame (scripts allowed, no
 same-origin access, and a content policy that blocks network requests and limits scripts, styles
 and fonts to what Artifacts use, placed first in the frame's document so nothing of the page runs
-before it), so the page can't read Meko's session cookie or call the API. **Open on claude.ai** links to
+before it), so the page can't read the app's cookies or call the API. **Open on claude.ai** links to
 the published Artifact. A markdown design is rendered as sanitized HTML with no forms or styles,
 and its links open in a new tab. Its ` ```mermaid ` blocks are drawn as diagrams (the Design prompt
 tells Claude they are): Mermaid is loaded only when a design has one and draws with SVG text in a

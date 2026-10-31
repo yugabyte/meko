@@ -17,7 +17,7 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       (`/api/v1/knowledge-uploads/:ticket`, `/api/v1/knowledge-downloads/:ticket`) take a one-time
       ticket instead: 256 random bits, 5 minutes, an upload's bound to its datapack, key, size and
       SHA-256 ([docs/knowledge.md](docs/knowledge.md)). Otherwise it's the admin token on
-      `/api/v1/status`, `/api/v1/version` and `/api/v1/auth/setup-link`, the admin or client token
+      `/api/v1/status`, `/api/v1/version` and `/api/v1/web/reload`, the admin or client token
       everywhere else, and nothing there only with `[server] auth = "none"`
       ([docs/api.md](docs/api.md)). Tokens and call-log rows never hold memory or turn text. The store
       API and the memory engine's API listen only on their unix sockets (0600) and need the internal
@@ -27,20 +27,19 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       `knowledgebase_upload_file` reads a path as the server's user, so it refuses a call that came
       in with no token.
 - [ ] The web listener ([docs/web.md](docs/web.md)) never takes a Bearer token and has no
-      admin-only routes. A request gets in by local access (`LocalAccess`, only with
-      `[web] access = "local"`) or the owner's session cookie, checked on the matched route; only
-      `/healthz`, the UI's files, `/api/v1/auth/status|setup|login|logout`, `/ext/<name>` (the
-      slash redirect) and the knowledge-file links go without. Remote access is HTTPS; its Origin
-      must be `https://<Host>`; the cookie is HttpOnly, SameSite=Strict and Secure, stored only as a
-      SHA-256. Failed sign-ins are counted by the connection's address, never a header. Passwords
-      keep AgentK's scrypt format; a TOTP code is used once; a password change or new login signs
-      the other browsers out and closes their WebSockets.
+      admin-only routes, and no login. A request gets in by local access (`LocalAccess`, only with
+      `[web] access = "local"`) or, with remote access, by the site check (`SameSite`: no other
+      site's page sent it), checked on the matched route; only `/healthz`, the UI's files,
+      `/api/v1/auth/status`, `/ext/<name>` (the slash redirect) and the knowledge-file links go
+      without. Remote access is HTTPS; its Origin must be `https://<Host>`. A stop of the listener
+      (`meko ui stop`, a restart) closes the WebSockets the proxy upgraded (`CloseAll`).
+      `[web] enabled` is written to `web.toml`, never `config.toml`.
 - [ ] `/ext/<name>/*` passes the browser's Host and Origin to the extension's socket, drops the
       Cookie and adds no `X-Forwarded-*` (the extension trusts its socket and checks only the
       origin). The handoff (`_handoff --json`) takes an extension's old settings over once and only
       fills in what Meko lacks, writing `web.toml`, never `config.toml` (an older release refuses
       its unknown keys after a rollback); its secrets never reach a log. The client token goes
-      only to a request with a token or a signed-in session, never to local access.
+      only to a request with a token, never to a browser (local or remote access).
 - [ ] Files in the data folder are owner-only (folders 0700, files 0600), and tokens and memory text
       never reach logs or error replies (internal errors get the generic message), in Go or in the
       memory engine (`logs/memory_engine.log`).
@@ -65,10 +64,12 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       the client token's file, and never reach a log, an error, or a command line other than an
       installer's own `--meko-key` and the agent CLIs `internal/agents` runs (`claude mcp add` and
       `add-json`, `opencode mcp add`: their only way to take a header, for the second they run).
-      The one place Meko writes the client token, or the linked Meko Cloud's key, outside them is
-      the agent config files it writes for the user (Kiro's `mcp.json`, Codex's `config.toml`),
-      0600 when new, and only for the owner or the admin token or on a link change, never for a
-      client token ([docs/api.md](docs/api.md#agents)). The Keychain is written through `security -i` on stdin.
+      The one place Meko writes the client token outside them is the agent config files it writes
+      for the user (Kiro's `mcp.json`, Codex's `config.toml`), 0600 when new, and only for the owner
+      or the admin token or on a link change, never for a client token
+      ([docs/api.md](docs/api.md#agents)). The linked Meko Cloud's key leaves Meko only in its own
+      calls to Meko Cloud: never in `meko token --json`, an agent's config or a reply
+      ([docs/cloud.md](docs/cloud.md)). The Keychain is written through `security -i` on stdin.
 - [ ] The service files keep their stop timeout above serve's own shutdown (35 s), exit 75 stays
       "don't restart" for systemd and a launchd-run serve waits for the folder instead, and the CLI
       uses a service only for the data folder it runs. Releases stay outside the data folder.

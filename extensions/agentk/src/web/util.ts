@@ -2,16 +2,17 @@ import { HARNESS_CAPS, harnessOf, type HarnessId } from '../shared/harnesses';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, LEARN_WARN_FILES, LEARN_WARN_PRS, STAGE_LABELS, type LearnScope } from '../shared/types';
 import { mekoDatapackPath } from '../shared/mekourls';
-import { isStrategySetting, reviewHolds, type CodeReviewFinding, type ReviewOverrides } from '../shared/codereview';
+import { countsText, isStrategySetting, reviewHolds, reviewRunning, type CodeReviewDetail, type CodeReviewFinding, type CodeReviewSummary, type ReviewOverrides } from '../shared/codereview';
 import { stepOf } from '../shared/stages';
 import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoStatus, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, Stage, TokenUsage } from '../shared/types';
 
 /**
  * What a status dot shows: the session's status, `learning` while AgentK saves what it learned to
- * Meko, `queued` while a gate waits to go between turns, or `meko` while Claude runs a Meko tool
- * call in a working turn.
+ * Meko, `queued` while a gate waits to go between turns, `background` while the agent is between
+ * turns with work still running in the background, or `meko` while Claude runs a Meko tool call in
+ * a working turn.
  */
-export type DotState = SessionStatus | 'learning' | 'queued' | 'meko';
+export type DotState = SessionStatus | 'learning' | 'queued' | 'background' | 'meko';
 
 /** Higher is more urgent. Used for the project's aggregate dot in the rail. */
 const URGENCY: Record<DotState, number> = {
@@ -22,8 +23,10 @@ const URGENCY: Record<DotState, number> = {
   working: 5,
   starting: 5,
   learning: 5,
-  // Above idle and recovered, so a project whose only activity is a queued merge shows the ring.
+  // Above idle and recovered, so a project whose only activity is a queued merge, or work in the
+  // background, shows the ring.
   queued: 4,
+  background: 4,
   recovered: 3,
   idle: 2,
   archived: 0,
@@ -232,12 +235,14 @@ function waitsOnYou(s: Pick<Session, 'stage' | 'waitsOnYou'>): boolean {
 /**
  * What a session's dot shows: Needs you while Review & PR waits on the user, over idle, recovered
  * and working; then `Session.learning` over idle, recovered and working, then `Session.queued` over
- * idle and recovered, then `Session.mekoCall` over working.
+ * idle and recovered, then `Session.background` over idle and recovered, then `Session.mekoCall`
+ * over working.
  */
-export function dotState(s: Pick<Session, 'status' | 'learning' | 'queued' | 'mekoCall' | 'stage' | 'waitsOnYou'>): DotState {
+export function dotState(s: Pick<Session, 'status' | 'learning' | 'queued' | 'background' | 'mekoCall' | 'stage' | 'waitsOnYou'>): DotState {
   if (waitsOnYou(s) && YOURS_SHOWS.has(s.status)) return 'needs_input';
   if (s.learning && LEARNING_SHOWS.has(s.status)) return 'learning';
   if (s.queued && QUEUED_SHOWS.has(s.status)) return 'queued';
+  if (s.background.length && QUEUED_SHOWS.has(s.status)) return 'background';
   return s.mekoCall && s.status === 'working' ? 'meko' : s.status;
 }
 
@@ -266,8 +271,15 @@ export const STATUS_TEXT: Record<DotState, string> = {
   archived: 'archived',
   learning: 'learning',
   queued: 'queued',
+  background: 'running in the background',
   meko: 'calling Meko',
 };
+
+/** What a session has running in the background, in words: each task's line, with how many more past three. */
+export function backgroundText(tasks: Session['background']): string {
+  const shown = tasks.slice(0, 3).map((t) => t.description);
+  return tasks.length > shown.length ? `${shown.join(', ')} and ${tasks.length - shown.length} more` : shown.join(', ');
+}
 
 /** A learning dot's tooltip. */
 export const LEARNING_TITLE = 'learning (saving what it learned to Meko)';
@@ -817,7 +829,7 @@ export function sessionTabTitle(s: Session): string {
 
 /**
  * A session's dot in words, for its tab's tooltip: the long learning text, what the user is to
- * clear in Review & PR, or what a queued gate waits on. The queued dot shows between turns, when a
+ * clear in Review & PR, what a queued gate waits on, or what's running in the background. The queued dot shows between turns, when a
  * queued Open PR is already going (the pill's "goes when the turn ends" is for mid-turn).
  */
 export function dotTitle(s: Session): string {
@@ -825,6 +837,7 @@ export function dotTitle(s: Session): string {
   if (dot === 'needs_input' && s.status !== 'needs_input') return `${STATUS_TEXT.needs_input}: ${s.waitsOnYou.join(' ')}`;
   if (dot === 'learning') return LEARNING_TITLE;
   if (dot === 'queued') return s.queued === 'open-pr' ? 'Open PR queued: going now' : (queuedText(s)?.replace(/^✓ /, '') ?? STATUS_TEXT.queued);
+  if (dot === 'background') return `${STATUS_TEXT.background}: ${backgroundText(s.background)}`;
   return STATUS_TEXT[dot];
 }
 
@@ -919,25 +932,46 @@ export function designLanding(prev: Landing, on: boolean, at: number | null, now
 
 /**
  * A review's findings grouped for its panel: by round, then by the sweep that first raised them,
- * in that order. A round or sweep is named only when the review had more than one.
+ * in that order, each group's dropped findings (`dismissed`, shown under Dismissed) apart from the
+ * rest, its kept ones and the running round's candidates not yet kept or dropped. A round or sweep
+ * is named only when the review had more than one.
  */
-export function findingGroups(findings: CodeReviewFinding[]): { key: string; label: string; findings: CodeReviewFinding[] }[] {
+export function findingGroups(
+  findings: CodeReviewFinding[],
+): { key: string; label: string; findings: CodeReviewFinding[]; dismissed: CodeReviewFinding[] }[] {
   const rounds = new Set(findings.map((f) => f.round)).size > 1;
   const sweeps = new Set(findings.map((f) => f.sweep)).size > 1;
-  const groups = new Map<string, { key: string; label: string; round: number; sweep: number; findings: CodeReviewFinding[] }>();
+  const groups = new Map<
+    string,
+    { key: string; label: string; round: number; sweep: number; findings: CodeReviewFinding[]; dismissed: CodeReviewFinding[] }
+  >();
   for (const f of findings) {
     const key = `${f.round}:${f.sweep}`;
     let g = groups.get(key);
     if (!g) {
       const label = [rounds ? `Round ${f.round}` : '', sweeps ? `sweep ${f.sweep}` : ''].filter(Boolean).join(', ');
-      g = { key, label: label ? label[0].toUpperCase() + label.slice(1) : 'Findings', round: f.round, sweep: f.sweep, findings: [] };
+      g = { key, label: label ? label[0].toUpperCase() + label.slice(1) : 'Findings', round: f.round, sweep: f.sweep, findings: [], dismissed: [] };
       groups.set(key, g);
     }
-    g.findings.push(f);
+    (f.kept || f.pending ? g.findings : g.dismissed).push(f);
   }
   return [...groups.values()]
     .sort((a, b) => a.round - b.round || a.sweep - b.sweep)
-    .map(({ key, label, findings: fs }) => ({ key, label, findings: fs }));
+    .map(({ key, label, findings: fs, dismissed }) => ({ key, label, findings: fs, dismissed }));
+}
+
+/**
+ * The findings panel reads Reviewing: the review runs, or waits on the task writing its PR
+ * description to start. Not past an interrupted description turn or a lost ask (`detail`), where
+ * it waits on the user's Review now, nor in fixing, where the round's findings are final.
+ */
+export function findingsReviewing(r: Pick<CodeReviewSummary, 'state' | 'detail'> | null): boolean {
+  return reviewRunning(r) || (r?.state === 'describing' && !r.detail);
+}
+
+/** The findings panel header's counts, or null while it reads Reviewing (partial counts read as final). */
+export function findingsCountsText(r: Pick<CodeReviewSummary, 'state' | 'detail'> | null, detail: CodeReviewDetail | null): string | null {
+  return detail && !findingsReviewing(r) ? countsText(detail.review.counts) : null;
 }
 
 /**

@@ -33,7 +33,7 @@ export function ExtensionsPage() {
     <div className="max-w-4xl">
       <h1 className="text-xl font-semibold">Extensions</h1>
       <p className="mb-6 mt-1 text-sm text-muted-foreground">
-        Apps that plug into Meko, served on its port behind its sign-in.
+        Apps that plug into Meko, served on its port.
       </p>
       <SectionHeader label="Installed" />
       <Cards rows={installed} empty="No extension is installed yet." />

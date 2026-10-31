@@ -83,19 +83,15 @@ func runPrompt(dataDir string, in io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "Connected to Meko %s at http://127.0.0.1:%d, datapack default\n", st.Version, st.Port)
 		fmt.Fprintln(stdout, "Type help for the commands, exit to leave")
 	}
-	// The datapack the prompt's use picked: this Meko's or the linked Meko Cloud's, by its id, which
-	// later lines pass (it still names it after a rename), and its name, which the prompt shows. The
-	// zero value is the default.
+	// The datapack the prompt's use picked, by its id, which later lines pass (it still names it after
+	// a rename), and its name, which the prompt shows. The zero value is the default.
 	var datapack target
 	code := exitOK
 	for {
 		if interactive {
 			label := datapack.name
-			switch {
-			case label == "":
+			if label == "" {
 				label = "default"
-			case datapack.cloud:
-				label = cloudPrefix + label
 			}
 			fmt.Fprintf(stdout, "meko-cli %s> ", label)
 		}
@@ -125,9 +121,9 @@ func runPrompt(dataDir string, in io.Reader, stdout, stderr io.Writer) int {
 			if words[0] == "delete_datapack" && datapack.id != "" {
 				deleting, found = promptResolve(l, firstArg(words[1:]))
 			}
-			lc = runProg(progMekoCLI, promptArgs(words, datapack.spec(), dataDir), stdout, stderr)
+			lc = runProg(progMekoCLI, promptArgs(words, datapack.id, dataDir), stdout, stderr)
 			// The datapack in use is gone: later lines go to the default one again.
-			if lc == exitOK && found && deleting.cloud == datapack.cloud && strings.EqualFold(deleting.id, datapack.id) {
+			if lc == exitOK && found && strings.EqualFold(deleting.id, datapack.id) {
 				datapack = target{}
 				fmt.Fprintln(stdout, "Using the default datapack")
 			}
@@ -205,16 +201,6 @@ func promptUse(l paths.Layout, args []string, datapack *target, stdout, stderr i
 	if err != nil {
 		fmt.Fprintf(stderr, "meko-cli: %v\n", err)
 		return exitError
-	}
-	// cloud:<id> is taken without a lookup; the prompt shows the name, so look it up here, once.
-	if c, cerr := t.cloudSide(); dp.cloud && dp.name == dp.id && cerr == nil {
-		if rows, lerr := c.datapacks(ctx); lerr == nil {
-			for _, r := range rows {
-				if strings.EqualFold(r.DatapackID, dp.id) {
-					dp.id, dp.name = r.DatapackID, r.DatapackName
-				}
-			}
-		}
 	}
 	*datapack = dp
 	fmt.Fprintf(stdout, "Using %s\n", dp.noun())
