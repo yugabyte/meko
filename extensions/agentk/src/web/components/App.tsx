@@ -137,7 +137,7 @@ if (typeof window !== 'undefined') {
   if (document.hasFocus()) notifier.claim();
 }
 
-/** `mekoAuth`: what Meko, which signs people in to AgentK, says about this browser (null without Meko). */
+/** `mekoAuth`: what Meko, which decides who reaches AgentK, says about this browser (null without Meko). */
 export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
   const route = useRoute();
   const [theme, cycleTheme] = useTheme();

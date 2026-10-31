@@ -52,8 +52,9 @@ describe('signing in through Meko', () => {
   });
 
   it.each([
-    [{ data: { access: 'remote', signed_in: true } }, { access: 'remote', signedIn: true }],
-    [{ data: { access: 'local', signed_in: false } }, { access: 'local', signedIn: false }],
+    [{ data: { access: 'remote', signed_in: true, username: null } }, { access: 'remote', signedIn: true, username: null }],
+    [{ data: { access: 'remote', signed_in: true, username: 'ana' } }, { access: 'remote', signedIn: true, username: 'ana' }],
+    [{ data: { access: 'local', signed_in: false } }, { access: 'local', signedIn: false, username: null }],
     [{ data: { access: 'other' } }, null],
     [404, null],
   ] as const)('reads what Meko says about this browser (%j)', async (reply, auth) => {

@@ -25,11 +25,11 @@ import (
 // it. The server calls Meko Cloud with the link's key, which never leaves it.
 
 // owner says whether a request may act on the linked Meko Cloud: the admin token (meko-cli) or the
-// owner on the web listener. An agent's client token mayn't: the key acts on the whole Meko Cloud
-// account. Listing its datapacks takes any credential.
+// web listener's browsers (local or remote access). An agent's client token mayn't: the key acts on
+// the whole Meko Cloud account. Listing its datapacks takes any credential.
 func (a *api) owner(c echo.Context) bool {
 	switch a.Credential(c) {
-	case "admin", "session", "local":
+	case "admin", "remote", "local":
 		return true
 	}
 	return false
@@ -319,12 +319,12 @@ func (a *api) addMemory(c echo.Context) error {
 }
 
 // defaultLocation is where a listing or a create that names no location goes: def, unless the
-// request comes from a browser (the owner's session or local access). The web UI always names one, so
+// request comes from a browser (local or remote access). The web UI always names one, so
 // a browser that doesn't is a tab still running a bundle from before Meko Cloud's datapacks were on
 // these routes, which lists, opens and makes only this Meko's: it gets this Meko's.
 func (a *api) defaultLocation(c echo.Context, def string) string {
 	switch a.Credential(c) {
-	case "session", "local":
+	case "remote", "local":
 		return "local"
 	}
 	return def

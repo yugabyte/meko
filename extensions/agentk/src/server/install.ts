@@ -511,13 +511,14 @@ export async function runInstall(args: string[]): Promise<void> {
       ui.blank();
       ui.text(`    ${style.cyan(`${meko.meko.webUrl}${AGENTK_PATH}`)}`);
       ui.blank();
-      ui.row('Sign-in', "Meko's: meko setup_link makes (or resets) the login for remote access");
     } else {
       ui.text(style.bold('Done.'));
       ui.blank();
-      ui.row('Browser', meko.meko
-        ? 'the Meko on this computer is too old to serve AgentK: update it with meko update'
-        : "Meko isn't running: start it with meko start, then open AgentK with agentk ui");
+      ui.row('Browser', meko.meko?.webOff
+        ? "Meko's web UI is off: turn it on with meko ui start, then open AgentK with agentk ui"
+        : meko.meko
+          ? 'the Meko on this computer is too old to serve AgentK: update it with meko update'
+          : "Meko isn't running: start it with meko start, then open AgentK with agentk ui");
     }
     ui.row('Status', 'agentk status');
     ui.row('Logs', 'agentk logs -f');

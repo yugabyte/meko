@@ -9,7 +9,7 @@
 # production npm packages, which its tarballs bundle), so they cut a Meko release
 # (meko-release.yml); the memory engine's dev-only bumps are `chore(meko/memory-engine): ...`.
 # The web UI's (backend/web_ui) are `deps(meko/web-ui): ...` for its dependencies (react,
-# react-dom, lucide-react, qrcode), which Vite bundles into the web_ui/dist that Meko's release
+# react-dom, lucide-react), which Vite bundles into the web_ui/dist that Meko's release
 # serves, so they cut a Meko release; and `chore(meko/web-ui): ...` for its devDependencies (the
 # Vite and Tailwind build, TypeScript, types, Vitest and happy-dom), which run only at build and
 # test time and ship with the next Meko release rather than cutting one each. A grouped PR with

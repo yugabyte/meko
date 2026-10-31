@@ -47,7 +47,7 @@ describe('HTTP API: access control', () => {
     return env.core.paths.webSock;
   }
 
-  it('lets a request with no cookie reach the API: the server trusts its socket, and Meko signs people in', async () => {
+  it('lets a request with no cookie reach the API: the server trusts its socket, and Meko decides who gets in', async () => {
     const sock = await listen();
     const reply = await new Promise<{ status: number; headers: IncomingHttpHeaders; body: string }>((resolve, reject) => {
       const r = request({ socketPath: sock, path: '/api/state', headers: { host: 'localhost' } }, (res) => {

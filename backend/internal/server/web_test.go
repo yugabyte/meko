@@ -16,7 +16,6 @@ import (
 
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/extproxy"
-	"github.com/yugabyte/meko/backend/internal/login"
 	"github.com/yugabyte/meko/backend/internal/store"
 )
 
@@ -62,9 +61,9 @@ func shortTemp(t *testing.T) string {
 	return dir
 }
 
-// startWeb runs a web listener with access, one extension (agentk) on sock, and the sign-in; each
-// of with changes its Web first.
-func startWeb(t *testing.T, access, sock string, with ...func(*Web)) (string, *login.Service) {
+// startWeb runs a web listener with access and one extension (agentk) on sock; each of with changes
+// its Web first. It returns the listener's URL and the extension's proxy.
+func startWeb(t *testing.T, access, sock string, with ...func(*Web)) (string, *extproxy.Proxy) {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "meko.db"))
 	if err != nil {
@@ -78,22 +77,18 @@ func startWeb(t *testing.T, access, sock string, with ...func(*Web)) (string, *l
 	if err != nil {
 		t.Fatal(err)
 	}
-	logins := login.New(st)
 	ext := extproxy.New("agentk", "AgentK", func() string { return sock }, slog.New(slog.DiscardHandler))
-	// As serve wires it (webListener.RevokeEnded): a session that ends closes its WebSockets.
-	logins.OnRevoke(func() { ext.Revoke(func(h string) bool { return logins.Live(context.Background(), h) }) })
 	web := &Web{Access: access, Extensions: func() []*extproxy.Proxy { return []*extproxy.Proxy{ext} }}
 	for _, f := range with {
 		f(web)
 	}
 	s := New(Options{Info: Info{Version: "test"}, Port: tcpPort(t, ln), Logger: slog.New(slog.DiscardHandler),
-		Login: logins,
-		UI:    http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ui") }),
-		Web:   web})
+		UI:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ui") }),
+		Web: web})
 	probe(s)
 	go func() { _ = s.Serve(ln) }()
 	t.Cleanup(func() { _ = s.Shutdown(context.Background()) })
-	return fmt.Sprintf("http://127.0.0.1:%d", tcpPort(t, ln)), logins
+	return fmt.Sprintf("http://127.0.0.1:%d", tcpPort(t, ln)), ext
 }
 
 func body(t *testing.T, req *http.Request) (int, string, http.Header) {
@@ -145,7 +140,7 @@ func TestWebLocalAccess(t *testing.T) {
 		m["setup_required"] != false {
 		t.Errorf("auth status: %d %+v", code, env)
 	}
-	for _, path := range []string{"/api/v1/status", "/api/v1/version", setupLinkRoute} {
+	for _, path := range []string{"/api/v1/status", "/api/v1/version", reloadWebRoute} {
 		if code, _ := get(t, base+path, nil, ""); code != 404 {
 			t.Errorf("%s on the web listener: %d, want 404", path, code)
 		}
@@ -156,71 +151,76 @@ func TestWebLocalAccess(t *testing.T) {
 	}
 }
 
-// With remote access: a setup link makes the login, the session cookie is the credential, a page
-// of an extension's without one goes to the sign-in, and the proxy passes the browser's Host on
-// with neither Meko's cookie nor forwarding headers.
-func TestWebRemoteSignInAndProxy(t *testing.T) {
-	base, logins := startWeb(t, config.AccessRemote, fakeExtension(t))
+// With remote access there's no login: any request another site's page didn't send is let in, from
+// any address. The proxy passes the browser's Host on with no cookie or forwarding headers, and the
+// WebSockets it upgraded close at CloseAll (as the listener's shutdown runs it).
+func TestWebRemoteAccessAndProxy(t *testing.T) {
+	base, ext := startWeb(t, config.AccessRemote, fakeExtension(t))
 	host := strings.TrimPrefix(base, "http://")
 	code, env := get(t, base+authStatusRoute, nil, "")
-	if m, _ := env.Data.(map[string]any); code != 200 || m["setup_required"] != true || m["signed_in"] != false {
-		t.Fatalf("status before setup: %d %+v", code, env)
+	if m, _ := env.Data.(map[string]any); code != 200 || m["access"] != "remote" || m["signed_in"] != true ||
+		m["setup_required"] != false || m["username"] != nil {
+		t.Fatalf("auth status: %d %+v", code, env)
 	}
-	if code, _ = get(t, base+"/api/v1/probe", nil, ""); code != 401 {
-		t.Fatalf("no credential: %d", code)
+	own := "https://" + host
+	cases := []struct {
+		name   string
+		header map[string]string
+		want   int
+	}{
+		{name: "no credential", want: 200},
+		{name: "through a proxy", header: map[string]string{"X-Forwarded-For": "10.0.0.9"}, want: 200},
+		{name: "its own page", header: map[string]string{"Origin": own, "Sec-Fetch-Site": "same-origin"}, want: 200},
+		{name: "typed in the address bar", header: map[string]string{"Sec-Fetch-Site": "none"}, want: 200},
+		{name: "another site's page", header: map[string]string{"Sec-Fetch-Site": "cross-site"}, want: 403},
+		{name: "a sibling site's page", header: map[string]string{"Sec-Fetch-Site": "same-site"}, want: 403},
+		{name: "another origin", header: map[string]string{"Origin": "https://example.com"}, want: 403},
+		{name: "an http Origin on the HTTPS listener", header: map[string]string{"Origin": base}, want: 403},
 	}
-	if code, _ = get(t, base+"/healthz", map[string]string{"Origin": base}, ""); code != 403 {
-		t.Errorf("an http Origin on the HTTPS listener: %d, want 403", code)
-	}
-
-	token, err := logins.IssueSetupLink(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	req, _ := http.NewRequest(http.MethodPost, base+authSetupRoute,
-		strings.NewReader(`{"token":"`+token+`","username":"ana","password":"a long password"}`))
-	req.Header.Set("Content-Type", "application/json")
-	code, _, h := body(t, req)
-	cookie := ""
-	for _, c := range (&http.Response{Header: h}).Cookies() {
-		if c.Name == SessionCookie {
-			cookie = c.Value
-			if !c.HttpOnly || c.SameSite != http.SameSiteStrictMode || c.Path != "/" {
-				t.Errorf("cookie %+v", c)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, env := get(t, base+"/api/v1/probe", tc.header, "")
+			if got != tc.want {
+				t.Fatalf("%d, want %d (%+v)", got, tc.want, env)
 			}
+			if got == 200 && env.Data != CredentialRemote {
+				t.Errorf("credential %v, want remote", env.Data)
+			}
+		})
+	}
+	// The login's routes are gone.
+	for _, path := range []string{"/api/v1/auth/setup", "/api/v1/auth/login", "/api/v1/auth/logout",
+		"/api/v1/auth/password", "/api/v1/auth/totp/enroll"} {
+		req, _ := http.NewRequest(http.MethodPost, base+path, strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		if got, _, _ := body(t, req); got != 404 {
+			t.Errorf("%s: %d, want 404", path, got)
 		}
 	}
-	if code != 200 || cookie == "" {
-		t.Fatalf("setup: %d, cookie %q", code, cookie)
-	}
-	signed := map[string]string{"Cookie": SessionCookie + "=" + cookie}
-	if code, env = get(t, base+"/api/v1/probe", signed, ""); code != 200 || env.Data != CredentialSession {
-		t.Fatalf("signed in: %d %+v", code, env)
-	}
 
-	// An extension's page without a session goes to the sign-in, and comes back after it.
-	req, _ = http.NewRequest(http.MethodGet, base+"/ext/agentk/p/42?x=1", nil)
+	// An extension's page opens straight away, and its address without the slash gets one.
+	req, _ := http.NewRequest(http.MethodGet, base+"/ext/agentk/p/42?x=1", nil)
 	req.Header.Set("Accept", "text/html")
-	if got, _, h := body(t, req); got != 302 || h.Get("Location") != "/signin?next=%2Fext%2Fagentk%2Fp%2F42%3Fx%3D1" {
-		t.Errorf("page without a session: %d %s", got, h.Get("Location"))
+	if got, b, _ := body(t, req); got != 200 || !strings.HasPrefix(b, "path=/p/42 ") {
+		t.Errorf("page: %d %q", got, b)
 	}
 	req, _ = http.NewRequest(http.MethodGet, base+"/ext/agentk", nil)
 	if got, _, h := body(t, req); got != 308 || h.Get("Location") != "/ext/agentk/" {
 		t.Errorf("no trailing slash: %d %s", got, h.Get("Location"))
 	}
 	req, _ = http.NewRequest(http.MethodGet, base+"/ext/agentk/api/state", nil)
-	req.Header.Set("Cookie", SessionCookie+"="+cookie+"; other=1")
+	req.Header.Set("Cookie", "meko_session=old; other=1")
 	req.Header.Set("X-Forwarded-For", "10.0.0.9")
 	code, b, _ := body(t, req)
 	if want := fmt.Sprintf("path=/api/state host=%s cookie=\"\" xff=\"\"", host); code != 200 || b != want {
 		t.Errorf("proxied: %d %q, want %q", code, b, want)
 	}
-	if code, _ = get(t, base+"/ext/nope/x", signed, ""); code != 404 {
+	if code, _ = get(t, base+"/ext/nope/x", nil, ""); code != 404 {
 		t.Errorf("an unknown extension: %d", code)
 	}
 
-	// A WebSocket through the proxy stays open while its session lasts, and closes at sign-out.
-	ws := dialWebSocket(t, host, "/ext/agentk/ws/events", cookie)
+	// A WebSocket through the proxy stays open until the proxy closes it.
+	ws := dialWebSocket(t, host, "/ext/agentk/ws/events")
 	if _, err := ws.Write([]byte("ping")); err != nil {
 		t.Fatal(err)
 	}
@@ -228,18 +228,10 @@ func TestWebRemoteSignInAndProxy(t *testing.T) {
 	if _, err := io.ReadFull(ws, buf); err != nil || string(buf) != "ping" {
 		t.Fatalf("echo: %q %v", buf, err)
 	}
-	req, _ = http.NewRequest(http.MethodPost, base+authLogoutRoute, strings.NewReader(`{}`))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Cookie", SessionCookie+"="+cookie)
-	if code, _, _ := body(t, req); code != 200 {
-		t.Fatalf("logout: %d", code)
-	}
+	ext.CloseAll()
 	_ = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
 	if _, err := ws.Read(buf); err == nil {
-		t.Fatal("the WebSocket stayed open after sign-out")
-	}
-	if code, _ := get(t, base+"/api/v1/probe", signed, ""); code != 401 {
-		t.Errorf("after sign-out: %d", code)
+		t.Fatal("the WebSocket stayed open after CloseAll")
 	}
 }
 
@@ -259,7 +251,7 @@ func TestWebExtensionDown(t *testing.T) {
 	}
 }
 
-func dialWebSocket(t *testing.T, host, path, cookie string) net.Conn {
+func dialWebSocket(t *testing.T, host, path string) net.Conn {
 	t.Helper()
 	c, err := net.Dial("tcp", host)
 	if err != nil {
@@ -267,8 +259,7 @@ func dialWebSocket(t *testing.T, host, path, cookie string) net.Conn {
 	}
 	t.Cleanup(func() { _ = c.Close() })
 	_, _ = fmt.Fprintf(c, "GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"+
-		"Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nCookie: %s=%s\r\n\r\n",
-		path, host, SessionCookie, cookie)
+		"Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n", path, host)
 	br := bufio.NewReader(c)
 	resp, err := http.ReadResponse(br, nil)
 	if err != nil || resp.StatusCode != http.StatusSwitchingProtocols {

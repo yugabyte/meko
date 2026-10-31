@@ -274,9 +274,11 @@ export function reviewSegmentLabel(r: CodeReviewSummary): string {
   let what: string;
   switch (r.state) {
     case 'preparing': what = 'preparing'; break;
-    // The passes may all be running, so no "step n" here: only how many have reported.
+    // The passes may all be running, and the scorers a batch at a time, so neither counts the
+    // pass or scorer under way: only how many have reported. Scoring's "step n of n" is the
+    // review's own step (`reviewSteps`), which stays.
     case 'sweeping': what = `${r.passesDone} of ${r.passes} passes reported`; break;
-    case 'scoring': what = `step ${reviewSteps(r)} of ${reviewSteps(r)}, scoring ${Math.min(r.scoresDone + 1, r.candidates)} of ${r.candidates}`; break;
+    case 'scoring': what = `step ${reviewSteps(r)} of ${reviewSteps(r)}, ${r.scoresDone} of ${r.candidates} scored`; break;
     case 'describing': what = 'waiting for the PR description'; break;
     case 'fixing': what = 'waiting for the fixes'; break;
     case 'done': what = doneShowsCounts(r) ? countsText(r.counts) : totalCount(r.counts) ? `LGTM, ${countsText(r.counts)} addressed` : 'LGTM'; break;
@@ -356,6 +358,8 @@ export interface CodeReviewFinding {
   kept: boolean;
   /** Why it was dropped (`refuted`, `below 50`, `line is outside the diff`, …); null when kept. */
   dropped: string | null;
+  /** The running round's candidate, not yet kept or dropped (sent while sweeping or scoring, never stored). */
+  pending?: boolean;
   outcome: FindingOutcome | null;
 }
 

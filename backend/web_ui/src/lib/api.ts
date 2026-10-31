@@ -1,7 +1,7 @@
 // Meko's API from the browser: /api/v1 routes in the {data, error} envelope, search and adding a
-// memory included (Meko's own routes, which run the MCP tools on this computer's datapack). The credential is the session cookie (or, with local
-// access, none), which the browser sends itself; a 401 UNAUTHORIZED tells the app through
-// onUnauthorized.
+// memory included (Meko's own routes, which run the MCP tools on this computer's datapack). There's
+// no credential: Meko takes the browser by its access (local or remote); a 401 UNAUTHORIZED (local
+// access that didn't look local) tells the app through onUnauthorized.
 
 import type {
   AgentChange,
@@ -34,7 +34,6 @@ import type {
   ProvisionStatus,
   SearchAnswer,
   ServerStatus,
-  TotpEnroll,
   UpdateStatus,
   UploadOffer,
   Usage,
@@ -125,17 +124,8 @@ export const api = {
   server: () => request<ServerStatus>("GET", "/server"),
   connect: (id: string) => request<ProvisionStatus>("GET", `/datapacks/${id}/provision-status`),
 
-  // Sign-in (backend/docs/web-ui.md): the status needs no credential, nor do setup and login.
+  // How Meko takes this browser (backend/docs/web-ui.md): local or remote access, with no login.
   authStatus: () => request<AuthStatus>("GET", "/auth/status"),
-  setup: (token: string, username: string, password: string) =>
-    request<unknown>("POST", "/auth/setup", { token, username, password }),
-  login: (username: string, password: string, totp?: string) =>
-    request<unknown>("POST", "/auth/login", { username, password, totp }),
-  logout: () => request<unknown>("POST", "/auth/logout", {}),
-  changePassword: (current: string, next: string) => request<unknown>("POST", "/auth/password", { current, next }),
-  totpEnroll: () => request<TotpEnroll>("POST", "/auth/totp/enroll", {}),
-  totpConfirm: (code: string) => request<unknown>("POST", "/auth/totp/confirm", { code }),
-  totpDisable: (code: string) => request<unknown>("POST", "/auth/totp/disable", { code }),
   extensions: () => request<Extension[]>("GET", "/extensions"),
   // Starts an action as the extension's job; the list shows how it goes.
   extensionAction: (name: string, action: ExtensionAction) =>

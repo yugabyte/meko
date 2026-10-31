@@ -93,7 +93,7 @@ computer, which sends their calls to Meko Cloud, and `meko-cli` and new datapack
 | Command | What it does |
 |---|---|
 | `meko start` / `stop` / `status` | Start or stop the server, or see whether it's running and its links |
-| `meko ui` | Open the web UI in your browser |
+| `meko ui` | Open the web UI in your browser. It has no login; `meko ui stop` turns it off, and `meko ui start` on |
 | `meko agent connect claude` | Add Meko to Claude Code (or `codex`, `kiro`, `opencode`), for all your projects |
 | `meko memory-extractor use claude` | Extract memories from your conversations with your own Claude Code, every 5 minutes. It's off until you run this or turn it on in the web UI's Settings; `status`, `run` and `off` check, run or stop it. See [memory extraction](backend/docs/memory-extraction.md) |
 | `meko answers use claude` | Have your own Claude Code write an answer from each search's results in the web UI, citing them. Off until you run this or turn it on in Settings; `status` and `off` check or stop it |

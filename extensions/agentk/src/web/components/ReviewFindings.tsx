@@ -1,17 +1,18 @@
 import { useEffect, useState } from 'react';
-import { countsText, strategyName, type CodeReviewDetail, type CodeReviewFinding } from '../../shared/codereview';
+import { strategyName, type CodeReviewDetail, type CodeReviewFinding } from '../../shared/codereview';
 import type { Session } from '../../shared/types';
 import { api, ApiError, errorMessage } from '../api';
-import { findingGroups } from '../util';
+import { findingGroups, findingsCountsText, findingsReviewing } from '../util';
 import { Busy } from './common';
 import { SidePanel } from './SidePanel';
 
 /**
  * A local review's findings (GET /api/sessions/:id/code-review), beside its task's terminal:
- * every candidate by round and sweep, kept or dropped and why, the scorer's verdict, the Meko
+ * every candidate by round and sweep, kept, pending or dropped (under Dismissed) and why, the scorer's verdict, the Meko
  * gotchas it credits and what the task did with it; the passes' notes and the datapacks the
  * MEKO.md files listed, by name with the gotchas one tagged (what each holds is for the review's
- * prompt, not the panel). Fetched again whenever the review moves on.
+ * prompt, not the panel). Fetched again whenever the review moves on. While the review runs it reads
+ * Reviewing, under the findings so far, with a bar along its header and no counts yet.
  */
 export function ReviewFindings({ session, onClose, onTerminal }: {
   session: Session;
@@ -23,6 +24,8 @@ export function ReviewFindings({ session, onClose, onTerminal }: {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const r = session.codeReview;
+  const reviewing = findingsReviewing(r);
+  const counts = findingsCountsText(r, detail);
   // Anything the summary says moving on is a reason to read the findings again.
   const key = r ? `${r.id}:${r.state}:${r.round}:${r.sweep}:${r.passesDone}:${r.scoresDone}:${r.candidates}:${r.addressed}` : '';
   useEffect(() => {
@@ -51,11 +54,13 @@ export function ReviewFindings({ session, onClose, onTerminal }: {
         <b>Findings</b>
         {detail && (
           <span className="muted small">
-            {strategyName(detail.review.strategy)} · {countsText(detail.review.counts)}
+            {strategyName(detail.review.strategy)}
+            {counts ? ` · ${counts}` : ''}
           </span>
         )}
         <span className="sp" />
-        {loading && <Busy label="Loading" />}
+        {/* Fetched again at every step while it runs: Reviewing says enough. */}
+        {loading && !reviewing && <Busy label="Loading" />}
         {onTerminal && (
           <button className="btn small" onClick={onTerminal} title="Show the review's terminal">
             Terminal
@@ -65,10 +70,12 @@ export function ReviewFindings({ session, onClose, onTerminal }: {
           <span className="desktop-only">×</span>
           <span className="mobile-only">← Back</span>
         </button>
+        {reviewing && <span className="design-edge" aria-hidden="true" />}
       </div>
       <div className="review-body">
         {error && <p className="error">{error}</p>}
-        {!detail && !loading && !error && <p className="muted">No findings yet. They show here as the passes report them.</p>}
+        {!detail && !error && reviewing && <p className="muted"><Busy label="Reviewing" /></p>}
+        {!detail && !loading && !error && !reviewing && <p className="muted">No findings yet. They show here as the passes report them.</p>}
         {detail && (
           <>
             {detail.datapacks.length > 0 && (
@@ -93,12 +100,26 @@ export function ReviewFindings({ session, onClose, onTerminal }: {
             {findingGroups(detail.findings).map((g) => (
               <section key={g.key} className="rv-section">
                 <h3>{g.label}</h3>
-                <ul className="rv-findings">
-                  {g.findings.map((f) => <FindingRow key={f.key} f={f} />)}
-                </ul>
+                {g.findings.length > 0 && (
+                  <ul className="rv-findings">
+                    {g.findings.map((f) => <FindingRow key={f.key} f={f} />)}
+                  </ul>
+                )}
+                {g.dismissed.length > 0 && (
+                  <>
+                    <h4>Dismissed</h4>
+                    <ul className="rv-findings">
+                      {g.dismissed.map((f) => <FindingRow key={f.key} f={f} />)}
+                    </ul>
+                  </>
+                )}
               </section>
             ))}
-            {detail.findings.length === 0 && <p className="muted">No findings.</p>}
+            {reviewing ? (
+              <p className="muted"><Busy label="Reviewing" /></p>
+            ) : (
+              detail.findings.length === 0 && <p className="muted">No findings.</p>
+            )}
           </>
         )}
       </div>
@@ -108,11 +129,11 @@ export function ReviewFindings({ session, onClose, onTerminal }: {
 
 function FindingRow({ f }: { f: CodeReviewFinding }) {
   return (
-    <li className={`rv-finding${f.kept ? '' : ' dropped'}`}>
+    <li className={`rv-finding${f.kept || f.pending ? '' : ' dropped'}`}>
       <div className="rv-head">
         <span className={`rv-sev ${f.severity}`}>{f.severity}</span>
         <span className="mono rv-where">{f.file}:{f.line}</span>
-        <span className="rv-kept">{f.kept ? 'kept' : `dropped${f.dropped ? `: ${f.dropped}` : ''}`}</span>
+        <span className="rv-kept">{f.kept ? 'kept' : f.pending ? 'pending' : `dropped${f.dropped ? `: ${f.dropped}` : ''}`}</span>
       </div>
       <p className="rv-comment">{f.comment}</p>
       <div className="rv-meta muted">

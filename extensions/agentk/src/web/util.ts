@@ -2,7 +2,7 @@ import { HARNESS_CAPS, harnessOf, type HarnessId } from '../shared/harnesses';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, LEARN_WARN_FILES, LEARN_WARN_PRS, STAGE_LABELS, type LearnScope } from '../shared/types';
 import { mekoDatapackPath } from '../shared/mekourls';
-import { isStrategySetting, reviewHolds, type CodeReviewFinding, type ReviewOverrides } from '../shared/codereview';
+import { countsText, isStrategySetting, reviewHolds, reviewRunning, type CodeReviewDetail, type CodeReviewFinding, type CodeReviewSummary, type ReviewOverrides } from '../shared/codereview';
 import { stepOf } from '../shared/stages';
 import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoStatus, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, Stage, TokenUsage } from '../shared/types';
 
@@ -919,25 +919,46 @@ export function designLanding(prev: Landing, on: boolean, at: number | null, now
 
 /**
  * A review's findings grouped for its panel: by round, then by the sweep that first raised them,
- * in that order. A round or sweep is named only when the review had more than one.
+ * in that order, each group's dropped findings (`dismissed`, shown under Dismissed) apart from the
+ * rest, its kept ones and the running round's candidates not yet kept or dropped. A round or sweep
+ * is named only when the review had more than one.
  */
-export function findingGroups(findings: CodeReviewFinding[]): { key: string; label: string; findings: CodeReviewFinding[] }[] {
+export function findingGroups(
+  findings: CodeReviewFinding[],
+): { key: string; label: string; findings: CodeReviewFinding[]; dismissed: CodeReviewFinding[] }[] {
   const rounds = new Set(findings.map((f) => f.round)).size > 1;
   const sweeps = new Set(findings.map((f) => f.sweep)).size > 1;
-  const groups = new Map<string, { key: string; label: string; round: number; sweep: number; findings: CodeReviewFinding[] }>();
+  const groups = new Map<
+    string,
+    { key: string; label: string; round: number; sweep: number; findings: CodeReviewFinding[]; dismissed: CodeReviewFinding[] }
+  >();
   for (const f of findings) {
     const key = `${f.round}:${f.sweep}`;
     let g = groups.get(key);
     if (!g) {
       const label = [rounds ? `Round ${f.round}` : '', sweeps ? `sweep ${f.sweep}` : ''].filter(Boolean).join(', ');
-      g = { key, label: label ? label[0].toUpperCase() + label.slice(1) : 'Findings', round: f.round, sweep: f.sweep, findings: [] };
+      g = { key, label: label ? label[0].toUpperCase() + label.slice(1) : 'Findings', round: f.round, sweep: f.sweep, findings: [], dismissed: [] };
       groups.set(key, g);
     }
-    g.findings.push(f);
+    (f.kept || f.pending ? g.findings : g.dismissed).push(f);
   }
   return [...groups.values()]
     .sort((a, b) => a.round - b.round || a.sweep - b.sweep)
-    .map(({ key, label, findings: fs }) => ({ key, label, findings: fs }));
+    .map(({ key, label, findings: fs, dismissed }) => ({ key, label, findings: fs, dismissed }));
+}
+
+/**
+ * The findings panel reads Reviewing: the review runs, or waits on the task writing its PR
+ * description to start. Not past an interrupted description turn or a lost ask (`detail`), where
+ * it waits on the user's Review now, nor in fixing, where the round's findings are final.
+ */
+export function findingsReviewing(r: Pick<CodeReviewSummary, 'state' | 'detail'> | null): boolean {
+  return reviewRunning(r) || (r?.state === 'describing' && !r.detail);
+}
+
+/** The findings panel header's counts, or null while it reads Reviewing (partial counts read as final). */
+export function findingsCountsText(r: Pick<CodeReviewSummary, 'state' | 'detail'> | null, detail: CodeReviewDetail | null): string | null {
+  return detail && !findingsReviewing(r) ? countsText(detail.review.counts) : null;
 }
 
 /**

@@ -1221,13 +1221,57 @@ func TestUI(t *testing.T) {
 		t.Errorf("ui /ext/agentk/: %d %q, opened %v", code, out, opened)
 	}
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
-	want(t, "status's web line", code, 0, out, "Humans:        "+web+" (web UI), local, no login from this computer")
-
-	code, out, errs = run("setup_link", "--data-dir", dir)
-	want(t, "setup_link", code, 0, out, web+"/setup?token=")
-	want(t, "setup_link says local access needs no login", code, 0, errs, "Access is local")
+	want(t, "status's web line", code, 0, out, "Humans:        "+web+" (web UI), local, from this computer")
 	code, out, _ = run("token", "--data-dir", dir, "--json")
 	want(t, "token --json's web URL", code, 0, out, `"web_url":"`+web+`"`)
+	code, _, errs = run("setup_link", "--data-dir", dir)
+	want(t, "setup_link is gone", code, exitUsage, errs, "unknown command")
+
+	// meko ui stop closes the port at once, and it stays closed across a restart until meko ui start.
+	code, out, _ = run("ui", "stop", "--data-dir", dir)
+	want(t, "ui stop", code, 0, out, "Stopped the web UI")
+	//nolint:gosec // G704: the test's own server
+	if c, err := net.DialTimeout("tcp", strings.TrimPrefix(web, "http://"), time.Second); err == nil {
+		_ = c.Close()
+		t.Error("the web port still answers after ui stop")
+	}
+	code, out, _ = run("ui", "stop", "--data-dir", dir)
+	want(t, "ui stop again", code, 0, out, "The web UI is already off")
+	code, _, errs = run("ui", "--data-dir", dir, "--no-open")
+	want(t, "ui while off", code, exitError, errs, "the web UI is off. Turn it on with meko ui start")
+	code, out, _ = run("status", "--data-dir", dir)
+	want(t, "status while off", code, 0, out, "Web UI          off (meko ui start turns it on)")
+	code, out, _ = run("token", "--data-dir", dir, "--json")
+	want(t, "token --json while off", code, 0, out, `"web_off":true,"web_url":""`)
+	code, out, errs = run("stop", "--data-dir", dir)
+	want(t, "stop", code, 0, out+errs, "Server          stopped")
+	code, out, errs = run("start", "--data-dir", dir, "--port", port)
+	want(t, "start while off", code, 0, out+errs, "Web UI          off (meko ui start turns it on)")
+	code, out, _ = run("ui", "start", "--data-dir", dir)
+	want(t, "ui start", code, 0, out, "Started the web UI at "+web)
+	code, out, _ = run("ui", "--data-dir", dir, "--no-open")
+	if code != 0 || strings.TrimSpace(out) != web+"/" {
+		t.Errorf("ui after ui start: %d %q", code, out)
+	}
+}
+
+// With Meko stopped, meko ui stop and start only set the switch, which the next start reads; and
+// config.toml's own [web] enabled stops them.
+func TestUISwitchWhileStopped(t *testing.T) {
+	dir, _ := setup(t)
+	code, out, _ := run("ui", "stop", "--data-dir", dir)
+	want(t, "ui stop", code, 0, out, "Turned the web UI off; it stays off when Meko starts")
+	code, out, _ = run("ui", "start", "--data-dir", dir)
+	want(t, "ui start", code, 0, out, "Turned the web UI on; it starts with Meko (meko start)")
+	cfgPath := paths.New(dir).Config
+	if err := os.WriteFile(cfgPath, []byte("[web]\nenabled = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errs := run("ui", "stop", "--data-dir", dir)
+	want(t, "ui stop with config.toml's enabled", code, exitError, errs,
+		"config.toml sets [web] enabled; change it there and run meko restart")
+	code, _, errs = run("ui", "nope", "stop", "--data-dir", dir)
+	want(t, "a path and a word", code, exitUsage, errs, "unexpected argument")
 }
 
 func TestSuggestedName(t *testing.T) {

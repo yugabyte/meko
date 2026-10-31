@@ -1,4 +1,4 @@
-# Login and security
+# Access and security
 
 Part of the [AgentK design](../design.md).
 
@@ -6,12 +6,13 @@ The terminal is a shell running as your Unix user, so whoever can open AgentK ca
 key can. Each install serves exactly one owner. Sharing the app means other people install their
 own copy.
 
-- **Meko is the front door.** AgentK doesn't listen on the network and has no login of its own.
+- **Meko is the front door.** AgentK doesn't listen on the network and has no login of its own,
+  and Meko has none either.
   Its server listens only on a unix socket (`Paths.webSock`, `web.sock` in its home, or in its
   private socket folder in the temp dir when that path is too long), in a folder only you can open,
   and lets in every request that arrives there. The Meko on this computer serves it to browsers at
-  `/ext/agentk/` on its web listener (`:7777`), with the path stripped, after its own sign-in
-  ([Meko's web.md](../../../../backend/docs/web.md)):
+  `/ext/agentk/` on its web listener (`:7777`), with the path stripped, after its own access
+  check ([Meko's web.md](../../../../backend/docs/web.md)):
   - **Local access** (Meko's `[web] access = "local"`): Meko listens on 127.0.0.1 over plain HTTP,
     and a request from this computer needs no login: a loopback peer, a `Host` of `localhost`,
     `127.0.0.1` or `[::1]` (so a DNS-rebound page, which sends its own host name, gets nothing), no
@@ -20,17 +21,13 @@ own copy.
     It trusts everything that can connect to 127.0.0.1, every user of the computer and any tunnel or
     proxy on it included: on a shared host, choose remote.
   - **Remote access** (`"remote"`): Meko listens on every address over HTTPS, with its own
-    certificate or a self-signed one (`meko status` shows its fingerprint), and every browser signs
-    in with the owner's username and password and, if turned on, a code from an authenticator app.
-    The session is Meko's `meko_session` cookie: HttpOnly, SameSite=Strict, Secure, 14 days,
-    renewed as you use the app. `meko setup_link` on the host prints a one-time link that creates
-    the login, or replaces a lost one (turning the authenticator off and signing every browser out):
-    there's no email or self-service reset, on purpose, since a reset needs someone who can already
-    run commands on the host. Failed sign-ins are rate-limited by Meko (5 per 15 minutes from one
-    address or IPv6 /64, 50 across all clients), and a code works once. Signing out, changing the
-    password or a new login closes the terminals and event sockets the session opened.
-- **What reaches AgentK.** Meko passes the browser's `Host` and `Origin` on as they are, drops its
-  cookie, and adds no forwarding headers. AgentK refuses a write (any `/api/*` request but GET) or a
+    certificate or a self-signed one (`meko status` shows its fingerprint), and lets in every
+    request another site's page didn't send. Anyone who can reach the port can open AgentK, and its
+    terminals: choose it only where that's who you mean. `meko ui stop` on the host closes the port
+    (AgentK's page with it) until `meko ui start`, and closes the terminals and event sockets Meko
+    proxied.
+- **What reaches AgentK.** Meko passes the browser's `Host` and `Origin` on as they are, drops the
+  `Cookie` header, and adds no forwarding headers. AgentK refuses a write (any `/api/*` request but GET) or a
   WebSocket upgrade whose `Origin` isn't the page's own (403, or close code 1008), so another site's
   page can't act through a browser Meko let in. The API only takes JSON bodies, so a plain HTML form
   can't post to it; the routes that take a file (pasted images and files, knowledge-base uploads)
@@ -46,16 +43,18 @@ own copy.
   buffer without limit: its terminal stops reading from the session host until it catches up (the
   host skips a viewer that stops reading and sends it the screen afresh once it does; Claude never
   waits on a viewer), and it skips state snapshots until it has drained, then gets the current one.
-  When Meko says a request isn't signed in (a 401, or a socket it refused), the page goes to Meko's
-  sign-in with remote access, and keeps retrying with local access.
+  When Meko refuses a request (a 401, or a socket it refused), the page asks Meko's
+  `/api/v1/auth/status`, and goes to Meko's sign-in only when it says remote access and not signed
+  in, which only a Meko with a login says; otherwise it keeps retrying.
 - **The handoff.** At each of its starts Meko runs `agentk _handoff --json` (`handoff.ts`), which
   says where the socket is and, for an install that served browsers itself (on port 7777, over
   HTTPS with its own login), its old `[server]` bind and port, its certificate (self-signed in
-  `certs/`, or `[tls]`'s) and its login (`owner` in `state.db`). Meko takes those over once, copying
-  what it doesn't have yet, so the same URL, certificate fingerprint, password and authenticator
-  keep working. Nothing else in AgentK reads them any more. `state.db` is read read-only, the one
-  read outside the server's lease, and only on the host whose server holds it: `_handoff` refuses
-  while the home's server runs on another host, whose socket this host can't reach anyway. On
+  `certs/`, or `[tls]`'s) and its login (`owner` in `state.db`). Meko takes the port, access and
+  certificate over once, copying what it doesn't have yet, so the same URL and certificate
+  fingerprint keep working; it ignores the login, having none. Nothing else in AgentK reads them.
+  `state.db` is read read-only, the one read outside the server's lease, and only on the host whose
+  server holds it: `_handoff` refuses while the home's server runs on another host, whose socket
+  this host can't reach anyway. On
   shutdown the server removes `web.sock` only while it's still the file it bound (`socketId`), as it
   does the hook socket: after a lost lease another server may have bound its own.
 - **Guard rails.** AgentK has no route that sets or shows a Meko key: Meko owns the Meko Cloud
@@ -64,7 +63,7 @@ own copy.
   memory and never writes to `config.toml`). A key of its own from before is handed to Meko on
   stdin, once, then never read again, though it stays in `config.toml` for a rollback. No
   response carries it. Meko's own page refuses to send a saved key to another server (the MCP, web
-  app or API URL) until it's typed again, so someone with a stolen login can't point it at their
+  app or API URL) until it's typed again, so someone who reaches the page can't point it at their
   own server and read the key off it. `POST /_meko/changed` only makes AgentK read Meko again, and
   refuses another origin. The Meko on this computer's client token, which AgentK uses when
   Meko has no Meko Cloud link, is read from Meko (`meko token --json`), held in memory, never written to
@@ -81,7 +80,7 @@ own copy.
   CDNs (`design-frame.ts`). Markdown is sanitized (DOMPurify) and the frame runs without
   `allow-same-origin`, so scripts are kept out by those instead.
 - **Files on disk.** `state.db` (hook tokens, and an older install's password hash and TOTP secret,
-  kept for Meko's handoff) is owner-only
+  which Meko's handoff reads and ignores) is owner-only
   (0600) whatever folder it's in, and so are its `-wal` and `-shm` files, which SQLite gives the
   database's mode, and so are the snapshots a version takes of it before migrating it after an update
   (`state.db.bak-<version>`); ones made before this are fixed when the server opens the database.

@@ -5,7 +5,7 @@ import {
   type SessionChanges,
 } from '../../shared/types';
 import { ApiError, api, errorMessage } from '../api';
-import { anchorComment, defaultOpen, DESKTOP_BUDGET, keepUnchanged, PHONE_BUDGET, pickComment, reparse, sameItems, showsLine, sideLine, type DiffLine } from '../diff';
+import { anchorComment, defaultOpen, DESKTOP_BUDGET, keepUnchanged, pathFilter, PHONE_BUDGET, pickComment, reparse, sameItems, showsLine, sideLine, type DiffLine } from '../diff';
 import { matches, MOBILE_QUERY, useTouch, watchSideways } from '../hooks/useMedia';
 import { useRangeDrag, type CommentPick } from '../hooks/useRangeDrag';
 import { agentName, cx, relativeTime } from '../util';
@@ -545,10 +545,10 @@ function FilesMenu({ files, counts, onJump }: { files: ChangedFile[]; counts: Ma
       title="Jump to a changed file"
       name="Changed files"
       listName="Files"
-      placeholder="Filter files"
+      placeholder="Filter files, or a regex"
       items={files}
       itemKey={(f) => f.path}
-      matches={(f, needle) => `${f.oldPath ?? ''} ${f.path}`.toLowerCase().includes(needle)}
+      filter={pathFilter}
       none={(q) => `No changed files match “${q}”.`}
       onChoose={(f) => onJump(f.path)}
       renderItem={(f) => (
@@ -577,7 +577,7 @@ function CommitMenu({ commits, current, onPick }: { commits: BranchCommit[]; cur
       align="left"
       items={items}
       itemKey={(c) => (c === 'all' ? 'all' : c.sha)}
-      matches={(c, needle) => c === 'all' || `${c.sha} ${c.subject}`.toLowerCase().includes(needle)}
+      filter={commitFilter}
       none={(q) => `No commit matches “${q}”.`}
       onChoose={(c) => onPick(c === 'all' ? null : c.sha)}
       renderItem={(c) =>
@@ -592,6 +592,16 @@ function CommitMenu({ commits, current, onPick }: { commits: BranchCommit[]; cur
       }
     />
   );
+}
+
+function commitFilter(q: string): (c: CommitItem) => boolean {
+  const needle = q.toLowerCase();
+  return (c) => c === 'all' || `${c.sha} ${c.subject}`.toLowerCase().includes(needle);
+}
+
+function branchFilter(q: string): (b: string) => boolean {
+  const needle = q.toLowerCase();
+  return (b) => b.toLowerCase().includes(needle);
 }
 
 /** The header's base: a menu of the branches the session can be compared with, which makes the picked one its base. */
@@ -618,7 +628,7 @@ function BaseMenu({ session, base, onPick }: { session: Session; base: string; o
       items={branches}
       error={error}
       itemKey={(b) => b}
-      matches={(b, needle) => b.toLowerCase().includes(needle)}
+      filter={branchFilter}
       none={(q) => `No branch matches “${q}”.`}
       onOpen={load}
       onChoose={(b) => b !== session.baseBranch && onPick(b)}
@@ -640,7 +650,8 @@ function FilterMenu<T>(props: {
   items: T[] | null;
   error?: string | null;
   itemKey: (item: T) => string;
-  matches: (item: T, needle: string) => boolean;
+  /** The test for the items the trimmed, non-empty filter `q` keeps. Pass a stable function: its test is kept per query. */
+  filter: (q: string) => (item: T) => boolean;
   none: (q: string) => string;
   renderItem: (item: T) => ReactNode;
   onChoose: (item: T) => void;
@@ -649,7 +660,7 @@ function FilterMenu<T>(props: {
   /** A line under the filter, about what picking does. */
   note?: string;
 }) {
-  const { items, itemKey, matches, renderItem, onChoose } = props;
+  const { items, itemKey, filter, renderItem, onChoose } = props;
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const [sel, setSel] = useState(0);
@@ -667,8 +678,9 @@ function FilterMenu<T>(props: {
     return () => document.removeEventListener('mousedown', down);
   }, [open]);
 
-  const needle = q.trim().toLowerCase();
-  const shown = !items ? [] : needle ? items.filter((it) => matches(it, needle)) : items;
+  const needle = q.trim();
+  const keep = useMemo(() => (needle ? filter(needle) : null), [filter, needle]);
+  const shown = !items ? [] : keep ? items.filter(keep) : items;
   const cur = Math.min(sel, Math.max(0, shown.length - 1));
 
   useEffect(() => {

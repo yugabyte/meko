@@ -376,7 +376,8 @@ async function turn(text) {
 // file names its report tool and step id, and the subagent reports through AgentK's tools route.
 // `review-reports.json` in the fake's dir maps a pass name to its report (default LGTM), and
 // `review-scores.json` a step id to its score (default confirmed at 90); a `review-skip` file lists
-// steps to leave unreported. Every call and its answer go to `review-calls.jsonl`.
+// steps to leave unreported, and `review-skip-once` steps to leave unreported only the first time
+// they're asked for. Every call and its answer go to `review-calls.jsonl`.
 async function reviewSteps(text) {
   const read = (f, d) => {
     try {
@@ -386,11 +387,16 @@ async function reviewSteps(text) {
     }
   };
   const skip = read('review-skip', []);
+  const once = read('review-skip-once', []);
   for (const m of text.matchAll(/Read (\S+) and do what it says\./g)) {
     const file = readFileSync(m[1], 'utf8');
     const step = /"step": "([^"]+)"/.exec(file)?.[1];
     const tool = /call `([^`]+)` once/.exec(file)?.[1]?.split('__').pop();
     if (!step || !tool || skip.includes(step)) continue;
+    if (once.includes(step)) {
+      writeFileSync(join(dir, 'review-skip-once'), JSON.stringify(once.filter((s) => s !== step)));
+      continue;
+    }
     const input = tool === 'review_score'
       ? { step, score: read('review-scores.json', {})[step] ?? { read: ['src/a.ts:1-5'], refutation: '', verdict: 'confirmed', confidence: 90, reason: 'Read it; it holds.' } }
       : { step, report: read('review-reports.json', {})[step.split(':')[1]] ?? { summary: 'LGTM', findings: [] } };

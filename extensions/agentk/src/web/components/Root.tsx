@@ -3,7 +3,7 @@ import { mekoAuth, type MekoAuth } from '../signin';
 import { App } from './App';
 
 /**
- * AgentK has no login of its own: Meko, which serves it, signs people in before the page loads.
+ * AgentK has no login of its own: Meko, which serves it, decides who reaches the page.
  * What Meko says about this browser decides whether there's a Sign out.
  */
 export function Root() {

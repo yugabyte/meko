@@ -29,7 +29,8 @@ import type { LearnBrief, MoveTarget } from '../shared/types.js';
  * The local code review's prompts (review/runner.ts): `pr-description` goes to the task first and gets {{prDescriptionFile}},
  * where the task writes the PR's title and description (the PR prompt's Meko lines follow it, and the PR prompt then
  * points at the file: `prDescriptionUseLine`); `code-review-sweep` and `code-review-score` go to a code-review
- * session and get {{steps}} (a numbered line per step: its subagent and the prompt to give it), {{what}} (which sweep, or how
+ * session and get {{steps}} (a numbered line per step: its subagent and the prompt to give it; the scorers' grouped
+ * into numbered batches, `stepList`), {{what}} (which sweep, or how
  * many findings) and {{reportTool}}; `code-review-fix` goes to the task between review rounds and `code-review-findings`
  * before the PR prompt after the last one, both with {{strategy}}, {{round}}, {{findings}} (a line per finding, with its key)
  * and {{outcomeHow}} (how to say what was done with each); the PR prompt then gets the `me_ak_review:` line (`meAkReviewFooter`).
@@ -216,7 +217,7 @@ Run them all at once: start every step in the same message, each in a fresh suba
 
 {{steps}}
 
-Run them one at a time, in this order: start a step only after the one before it has finished. Start each in a fresh subagent of the type named for it, and give it exactly the prompt shown, with nothing added. Each one reports to AgentK itself with {{reportTool}}; don't report for it or judge the findings yourself. When every step has finished, say "Done" and stop. Change no file.`,
+Run them a batch at a time, in this order: start every step of a batch in the same message, each in a fresh subagent of the type named for it, and give each exactly the prompt shown, with nothing added. Then wait for all of them to finish before you start the next batch. Each one reports to AgentK itself with {{reportTool}}; don't report for it or judge the findings yourself. When every step has finished, say "Done" and stop. Change no file.`,
 
   'code-review-fix': `AgentK reviewed this change locally ({{strategy}}, round {{round}}) before opening the PR. Address each finding below:
 

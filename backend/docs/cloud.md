@@ -19,7 +19,7 @@ every extension the same way (`internal/cloudlink`).
 | **The URLs go in `cloud.toml` beside `config.toml` (0600), and the key in the secret store** as `meko_cloud_key` ([install.md](install.md#secrets)) | `cloud.toml` is a file Meko writes itself, as `web.toml` is, so `config.toml` stays the user's. The key never sits in a file of its own outside the secret store, and never reaches a log or a reply. The CLI reads both without the server, so `meko token --json` works while Meko is stopped. `cloud.toml` existing means the link was set, linked (`linked = true`) or unlinked since. |
 | **Set in the web UI (Settings › Meko Cloud, `/settings/meko-cloud`) or with `meko cloud_link`** | The page is for a person at a browser; `meko cloud_link` is for a computer without one (with local access, a headless server's web UI can't be reached from another computer) and for an extension handing over a key. |
 | **A change is checked before it's saved**: a new server or key with an MCP `initialize` handshake carrying the key (10 s, `CheckMCP`); a web app or API URL that was typed, when it moves the API URL, by asking its `/datapacks/incoming-shares` without the key, which must answer in Meko's `{data}` or `{error: {code}}` envelope (`CheckAPI`) | A link that doesn't work isn't saved, and a mistyped API host never gets the key. No ping follows the handshake: a stateless server on the MCP Go SDK, as Meko's own is, refuses a ping that carries no protocol version. |
-| **A saved key goes only where it already goes, or to Meko Cloud** (`Service.Link`): a change of the MCP, web app or API URL to another origin without the key typed again is refused, before anything is sent | Otherwise anyone with the browser's login could point the link at their own server and read the key off the check, or off an extension's next call. |
+| **A saved key goes only where it already goes, or to Meko Cloud** (`Service.Link`): a change of the MCP, web app or API URL to another origin without the key typed again is refused, before anything is sent | Otherwise anyone who reaches the web UI could point the link at their own server and read the key off the check, or off an extension's next call. |
 | **Meko Cloud's MCP URL is saved as empty**, and its web app and API URLs are worked out (`https://cloud.mekodata.ai`, plus `/api/v1`); another server's web app must be set | The same rule AgentK's `mekoWebUrl` had. A server whose web app isn't known has no datapack links or sharing until it's set, which the page says. |
 | **Unlink keeps the URLs and removes the key** | Linking again takes only the key. Unlinked, `/mcp` and the extensions use this Meko's datapacks again. `meko destroy` removes the key from the secret store with the client token, so none is left in the Keychain. |
 | **Extensions read the link from `meko token --json`**, and are told when it changes (below) | Extensions already run it for this Meko's own MCP URL and token; one command gives them both. |
@@ -41,8 +41,8 @@ every extension the same way (`internal/cloudlink`).
   key. `PUT` takes `{url?, web_url?, api_url?, api_key?}` (a field left out is unchanged; an empty
   `api_key` keeps the saved one) and answers the same shape, or 400 `VALIDATION_ERROR` with why it
   was refused. `DELETE` unlinks.
-- On the web listener they take the owner: local access or the session cookie, from Meko's own
-  origin. On the API listener they take only the admin token (`adminOnly`), for `meko
+- On the web listener they take the owner: its browsers, with local or remote access, from Meko's
+  own origin. On the API listener they take only the admin token (`adminOnly`), for `meko
   cloud_link`; an agent's client token gets 403, so it can't read the link's state or redirect
   the key.
 - `meko cloud_link [--url U] [--web-url W] [--api-url A]` reads the key from stdin, or asks for it
@@ -167,9 +167,9 @@ but the listing's 10 s):
     Cloud for the owner or the admin token while it's linked. For a client token it stays this
     Meko's 404, so linking Meko Cloud doesn't change what a missing datapack looks like to an
     agent.
-- **A browser that names no location** (the owner's session or local access) gets this Meko's
-  datapacks from a listing. The web UI always names one, so such a request is a tab still running a
-  bundle from before these routes listed Meko Cloud's.
+- **A browser that names no location** (local or remote access) gets this Meko's datapacks from a
+  listing. The web UI always names one, so such a request is a tab still running a bundle from before
+  these routes listed Meko Cloud's.
 - **Search and memories on this Meko's datapacks:** they run the tools in-process as `/mcp` does
   (`mcp.Call`), recorded in the call log the same way. Their reply is the tool's.
 - **A tool's error reply** (`{"error", "detail"}`) maps by its code, on either side:
@@ -186,7 +186,7 @@ but the listing's 10 s):
     agent's client token gets 403.
   - The listing takes the credential every data route does: the client token too, or nothing with
     `[server] auth = "none"`.
-- **Failures:** they keep the reply off 401, which the web UI reads as its own sign-in lost.
+- **Failures:** they keep the reply off 401, which the web UI reads as Meko refusing the browser.
   - Meko Cloud's own 4xx keeps its status, code and message (`NOT_FOUND`, a 409 `CONFLICT`, a 403).
   - The rest are 502s with a code:
     - `CLOUD_NO_API_URL`: the link has no API URL;
