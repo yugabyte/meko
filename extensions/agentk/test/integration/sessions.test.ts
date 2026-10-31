@@ -173,6 +173,23 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(env.core.state().projects[0].usage.messages).toBe(2); // archived sessions still count
   });
 
+  it("keeps what Claude's turn left running in the background until the next Stop, or Claude's exit", async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Background', prompt: 'run the tests BACKGROUND', kind: 'quick' });
+    const get = () => env.core.sessions.get(s.id);
+    // Claude Code's Stop lists the shell and the subagent still running: a shell by its command, others by their description.
+    const idle = await waitFor(get, (x) => x.status === 'idle', 10000, 'first turn to finish');
+    expect(idle.background).toEqual([{ type: 'shell', description: 'npm test' }, { type: 'subagent', description: 'Review the change' }]);
+    // Each Stop replaces the list: one without it (a turn with none, or a Claude Code too old to send it) leaves none.
+    await env.core.sessions.submit(s.id, 'next');
+    await waitFor(get, (x) => x.status === 'idle' && x.background.length === 0, 10000, 'second turn');
+    // Claude's exit takes its background work with it.
+    await env.core.sessions.submit(s.id, 'again BACKGROUND');
+    await waitFor(get, (x) => x.background.length === 2, 10000, 'third turn');
+    await env.core.host.submit(s.paneName, 'exit');
+    expect(await waitFor(get, (x) => x.status === 'exited', 10000, 'Claude to exit')).toMatchObject({ background: [] });
+  });
+
   it("creates the session's Meko conversation before Claude starts, and launches even if that fails", async () => {
     const p = await newProject();
     const launchedBefore: number[] = [];

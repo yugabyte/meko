@@ -7,7 +7,7 @@ import { runsToMerge, sessionTabTitle, stageWords } from '../../src/web/util.js'
 
 const session = (over: Partial<Session> = {}) =>
   ({
-    name: 'Fix the login', harness: 'claude', status: 'idle', statusDetail: null, stage: 'code', autoRun: false,
+    name: 'Fix the login', harness: 'claude', status: 'idle', statusDetail: null, stage: 'code', autoRun: false, background: [],
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, ...over,
   }) as Session;
 

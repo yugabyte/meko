@@ -368,7 +368,14 @@ async function turn(text) {
   if (text.includes('ASK_USER') && modOn) await askUser();
   if (text.includes('agentk-review-')) await reviewSteps(text);
   respond();
-  hook('Stop', {});
+  // BACKGROUND: the turn ends with a shell and a subagent still running in the background, as
+  // Claude Code's Stop reports them.
+  hook('Stop', text.includes('BACKGROUND') ? {
+    background_tasks: [
+      { id: 'b1', type: 'shell', status: 'running', description: 'Run the tests', command: 'npm test' },
+      { id: 'a2', type: 'subagent', status: 'running', description: 'Review the change', agent_type: 'general-purpose' },
+    ],
+  } : {});
   modMeasure();
 }
 

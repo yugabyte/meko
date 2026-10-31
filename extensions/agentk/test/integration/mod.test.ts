@@ -72,12 +72,17 @@ describe("AgentK's mod in Claude (real session host + git, fake claude)", () => 
     fakeFiles(env, { mod: '', 'turn-ms': '1500' });
     const s = await session();
     await waitFor(() => env.core.sessions.mod.live(s.id), (l) => l, 10000, 'the mod to poll');
+    await env.core.sessions.submit(s.id, 'run the tests BACKGROUND');
+    await waitFor(() => env.core.sessions.get(s.id).background, (b) => b.length === 2, 10000, 'the background turn');
     await env.core.sessions.submit(s.id, 'INTERRUPT this turn');
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'working', 10000, 'the turn to start');
     // Sent mid-turn: queued for the turn's end, which Ctrl+C brings without a Stop hook.
     env.core.comments.add(s.id, { path: 'a.txt', side: 'new', line: 1, endLine: 1, excerpt: 'a', body: 'Try it another way.' });
     expect(await env.core.comments.send(s.id)).toEqual({ sent: 0, queued: 1 });
     await waitFor(() => modPrompts(env).map((p) => p.text), (t) => t.some((x) => x.includes('Try it another way.')), 10000, 'the queued comments');
+    // The interrupted turn's end carried no list, so the earlier turn's background work went with
+    // it (checked while the comments turn runs, before its own Stop).
+    expect(env.core.sessions.get(s.id).background).toEqual([]);
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'the comments turn');
     expect(all<{ text: string }>(env.core.db, "SELECT text FROM session_events WHERE session_id = ? AND kind = 'turn'", s.id)).toEqual([{ text: 'You interrupted the turn' }]);
     // Not a turn Claude died in: never continued by itself.

@@ -185,6 +185,14 @@ export type CiState = 'none' | 'pending' | 'success' | 'failure';
  */
 export type QueuedGate = 'open-pr' | 'merge';
 
+/** A piece of work a session's agent left running in the background (`Session.background`). */
+export interface BackgroundTask {
+  /** What it is, as the agent names it: `shell`, `subagent`, `monitor`, `workflow`… */
+  type: string;
+  /** It in one line: a shell's command, else the agent's description of it. */
+  description: string;
+}
+
 /**
  * Whose reviews go straight to Claude: `agentk` (AgentK only, the default for new projects),
  * `agentk-people` (AgentK and people), `all` (AgentK, people and other bots) or `people` (people
@@ -962,6 +970,14 @@ export interface Session {
    * OpenCode's as their hooks do), or started one less than 1.5 s ago, so a quick call still shows.
    */
   mekoCall: boolean;
+  /**
+   * Work the agent left running in the background when its last turn ended, which wakes it again
+   * when it's done: Claude Code's background shells, subagents and monitors (its `Stop` hook's
+   * `background_tasks`), OpenCode's background shells and subagents (from AgentK's plugin). Empty
+   * when there's none, and always for Kiro, whose hooks don't say. Kept in memory: replaced at each
+   * turn's end, and cleared when the agent exits or relaunches.
+   */
+  background: BackgroundTask[];
   /** Discard was asked for: the session is discarded once its learn step ends. */
   discarding: boolean;
   /** The PR a Review a PR session reviews; null for other kinds. */

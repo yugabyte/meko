@@ -63,8 +63,8 @@ Session states, shown with a dot on each session (on its tab, or in the rail) an
   long, then pauses. It also shows in Review & PR while a merge blocker only you can clear stands
   (`Session.waitsOnYou`: a held review, CI or merge conflicts AgentK handed over, or with Run to
   merge any blocker that doesn't clear by itself; see *Waiting on you* in
-  [the task lifecycle](lifecycle.md)), over idle, recovered and working, and over learning, queued
-  and Meko (`dotState()`); the tab's tooltip names what to clear
+  [the task lifecycle](lifecycle.md)), over idle, recovered and working, and over learning, queued,
+  Meko and running in the background (`dotState()`); the tab's tooltip names what to clear
 - **Idle**, waiting for your next prompt
 - **Recovered** after a restart
 - **Exited**
@@ -80,6 +80,19 @@ Session states, shown with a dot on each session (on its tab, or in the rail) an
   turns once every 3 s. It shows over idle and recovered only; a learn step wins over it
   (`dotState()`). The session's tooltip says what the gate waits on (a merge's from `queuedText()`;
   an Open PR is going now), then the status detail as for any dot; the palette says *queued*. The rail ranks it above idle and recovered, under working.
+- **Running in the background:** the agent is between turns with work it left running in the
+  background, which wakes it again when it's done (`Session.background`: Claude Code's background
+  shells, subagents and monitors, from its `Stop` hook's `background_tasks`; OpenCode's background
+  shells and subagents, from AgentK's plugin; never Kiro's, see [Harnesses](harnesses.md)). The
+  same turning ring as queued. It shows over idle and recovered only; a learn step and a queued
+  gate win over it (`dotState()`). The tooltip and the palette name what's running ("running in
+  the background: npm test", up to three, then how many more: `backgroundText()`). The rail ranks
+  it like queued. The server keeps the list in memory (`SessionManager.background`), replaced at
+  each turn's end (`endTurn`): a turn end without the field (a `Stop` from a Claude Code too old to
+  send it, or a turn you interrupted, which the mod reports with no list) empties it, so the dot
+  never keeps a ring nothing will update. It's dropped when the agent exits or relaunches, so after a server restart it shows again only
+  from the next turn's end. Claude Code fires no hook when a background task ends or is stopped
+  between turns: its list holds until the turn the task's end wakes Claude for ends.
 
 The working and needs-you signals run on one 100 ms clock (`src/web/blink.ts`), played on every
 dot with the Web Animations API, pinned to the page's timeline. Each dot starts at its own point

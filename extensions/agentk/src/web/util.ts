@@ -8,10 +8,11 @@ import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirs
 
 /**
  * What a status dot shows: the session's status, `learning` while AgentK saves what it learned to
- * Meko, `queued` while a gate waits to go between turns, or `meko` while Claude runs a Meko tool
- * call in a working turn.
+ * Meko, `queued` while a gate waits to go between turns, `background` while the agent is between
+ * turns with work still running in the background, or `meko` while Claude runs a Meko tool call in
+ * a working turn.
  */
-export type DotState = SessionStatus | 'learning' | 'queued' | 'meko';
+export type DotState = SessionStatus | 'learning' | 'queued' | 'background' | 'meko';
 
 /** Higher is more urgent. Used for the project's aggregate dot in the rail. */
 const URGENCY: Record<DotState, number> = {
@@ -22,8 +23,10 @@ const URGENCY: Record<DotState, number> = {
   working: 5,
   starting: 5,
   learning: 5,
-  // Above idle and recovered, so a project whose only activity is a queued merge shows the ring.
+  // Above idle and recovered, so a project whose only activity is a queued merge, or work in the
+  // background, shows the ring.
   queued: 4,
+  background: 4,
   recovered: 3,
   idle: 2,
   archived: 0,
@@ -232,12 +235,14 @@ function waitsOnYou(s: Pick<Session, 'stage' | 'waitsOnYou'>): boolean {
 /**
  * What a session's dot shows: Needs you while Review & PR waits on the user, over idle, recovered
  * and working; then `Session.learning` over idle, recovered and working, then `Session.queued` over
- * idle and recovered, then `Session.mekoCall` over working.
+ * idle and recovered, then `Session.background` over idle and recovered, then `Session.mekoCall`
+ * over working.
  */
-export function dotState(s: Pick<Session, 'status' | 'learning' | 'queued' | 'mekoCall' | 'stage' | 'waitsOnYou'>): DotState {
+export function dotState(s: Pick<Session, 'status' | 'learning' | 'queued' | 'background' | 'mekoCall' | 'stage' | 'waitsOnYou'>): DotState {
   if (waitsOnYou(s) && YOURS_SHOWS.has(s.status)) return 'needs_input';
   if (s.learning && LEARNING_SHOWS.has(s.status)) return 'learning';
   if (s.queued && QUEUED_SHOWS.has(s.status)) return 'queued';
+  if (s.background.length && QUEUED_SHOWS.has(s.status)) return 'background';
   return s.mekoCall && s.status === 'working' ? 'meko' : s.status;
 }
 
@@ -266,8 +271,15 @@ export const STATUS_TEXT: Record<DotState, string> = {
   archived: 'archived',
   learning: 'learning',
   queued: 'queued',
+  background: 'running in the background',
   meko: 'calling Meko',
 };
+
+/** What a session has running in the background, in words: each task's line, with how many more past three. */
+export function backgroundText(tasks: Session['background']): string {
+  const shown = tasks.slice(0, 3).map((t) => t.description);
+  return tasks.length > shown.length ? `${shown.join(', ')} and ${tasks.length - shown.length} more` : shown.join(', ');
+}
 
 /** A learning dot's tooltip. */
 export const LEARNING_TITLE = 'learning (saving what it learned to Meko)';
@@ -817,7 +829,7 @@ export function sessionTabTitle(s: Session): string {
 
 /**
  * A session's dot in words, for its tab's tooltip: the long learning text, what the user is to
- * clear in Review & PR, or what a queued gate waits on. The queued dot shows between turns, when a
+ * clear in Review & PR, what a queued gate waits on, or what's running in the background. The queued dot shows between turns, when a
  * queued Open PR is already going (the pill's "goes when the turn ends" is for mid-turn).
  */
 export function dotTitle(s: Session): string {
@@ -825,6 +837,7 @@ export function dotTitle(s: Session): string {
   if (dot === 'needs_input' && s.status !== 'needs_input') return `${STATUS_TEXT.needs_input}: ${s.waitsOnYou.join(' ')}`;
   if (dot === 'learning') return LEARNING_TITLE;
   if (dot === 'queued') return s.queued === 'open-pr' ? 'Open PR queued: going now' : (queuedText(s)?.replace(/^✓ /, '') ?? STATUS_TEXT.queued);
+  if (dot === 'background') return `${STATUS_TEXT.background}: ${backgroundText(s.background)}`;
   return STATUS_TEXT[dot];
 }
 

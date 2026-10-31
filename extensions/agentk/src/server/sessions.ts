@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
-import type { ChangeSide, CloseSessionRequest, DiffStat, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, LearnBrief, MekoCallBy, MekoCallDetail, MekoCallPage, MekoLogInfo, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
+import type { BackgroundTask, ChangeSide, CloseSessionRequest, DiffStat, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, LearnBrief, MekoCallBy, MekoCallDetail, MekoCallPage, MekoLogInfo, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
 import { LEARN_MONTHS_DEFAULT, LEARN_MONTHS_MAX, LEARN_TEXT_MAX, SESSION_NAME_MAX, START_STAGES, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
@@ -84,6 +84,30 @@ export function closeRequest(body: unknown): CloseSessionRequest {
 export function askDetail(question: string): string {
   const q = question.replace(/\s+/g, ' ').trim();
   return `AgentK asks: ${q.length > 120 ? `${q.slice(0, 119)}…` : q}`;
+}
+
+/** The most background tasks a session keeps, and the longest line each keeps. */
+const BACKGROUND_MAX = 10;
+const BACKGROUND_TEXT_MAX = 200;
+
+/**
+ * A turn end's `background_tasks` (Claude Code's `Stop`, OpenCode's from AgentK's plugin) as
+ * `Session.background`: each task's type and one line about it (a shell's command, else its
+ * description, else a subagent's type). Missing, as from a Claude Code too old to send it, is none.
+ */
+export function backgroundTasks(raw: unknown): BackgroundTask[] {
+  if (!Array.isArray(raw)) return [];
+  const out: BackgroundTask[] = [];
+  for (const t of raw as unknown[]) {
+    if (!t || typeof t !== 'object') continue;
+    const r = t as Record<string, unknown>;
+    const type = typeof r.type === 'string' && r.type ? r.type : 'task';
+    const text = [r.command, r.description, r.agent_type].find((v): v is string => typeof v === 'string' && !!v.trim()) ?? type;
+    const line = text.replace(/\s+/g, ' ').trim();
+    out.push({ type, description: line.length > BACKGROUND_TEXT_MAX ? `${line.slice(0, BACKGROUND_TEXT_MAX - 1)}…` : line });
+    if (out.length === BACKGROUND_MAX) break;
+  }
+  return out;
 }
 
 /**
@@ -300,6 +324,8 @@ export class SessionManager {
   private hookMeko = new MekoCalls();
   /** Keeps the dot's Meko m up a little while after a quick call of either kind (mekocalls.ts). */
   private mekoHold = new MekoHold(() => this.core.changed());
+  /** What each session's agent left running in the background at its last turn's end (Session.background). */
+  private background = new Map<string, BackgroundTask[]>();
   /** How full each session's context window is (percent), from the mod's measurements (Kiro's: its session file). */
   private contextFill = new Map<string, number>();
   /** Each session's system-prompt lines at its last launch, for a harness that takes them from its context hook. */
@@ -356,9 +382,17 @@ export class SessionManager {
       promptsHeld: this.promptsHeld(id),
       asking: this.core.config.claude.mod ? this.mod.asking(id) : null,
       mekoCall: this.mekoCalling(id),
+      background: this.background.get(id) ?? [],
       approvalQueued: this.core.lifecycle.approvalQueued(id),
       codeReview: this.core.reviews.summary(id),
     };
+  }
+
+  /** Replaces what the session's agent has running in the background (Session.background) with a hook's `background_tasks`. */
+  private setBackground(id: string, raw: unknown): void {
+    const tasks = backgroundTasks(raw);
+    if (tasks.length) this.background.set(id, tasks);
+    else this.background.delete(id);
   }
 
   /** The session's agent is in a Meko tool call, or started one a moment ago (Session.mekoCall). */
@@ -1545,6 +1579,9 @@ export class SessionManager {
    */
   private forgetClaude(id: string, why?: string, ended = why ?? 'Claude restarted'): void {
     this.mod.reset(id, why);
+    // Its background work ended with it: every Claude Code launch sets CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF,
+    // so an exit hands none on to Claude Code's background sessions.
+    this.background.delete(id);
     this.hookMeko.clear(id);
     this.mekoHold.clear(id);
     this.core.learn.interrupted(id);
@@ -1619,11 +1656,15 @@ export class SessionManager {
    * A turn's end: its `Stop` hook, or (`interrupted`) the mod reporting a turn you interrupted
    * (Ctrl+C, Esc), which fires no `Stop`. Either way the session is between turns again and what
    * waited for the turn's end goes. A turn you interrupted isn't one Claude died in: it's never
-   * continued by itself (`interrupted` stays 0).
+   * continued by itself (`interrupted` stays 0). `background` is the hook's `background_tasks`: it
+   * replaces what the session has running in the background, and a turn end without it (the mod's
+   * interrupt, an older Claude Code) leaves none, rather than keep a list nothing will update.
    */
-  private async endTurn(row: SessionRow, how: 'stop' | 'interrupted'): Promise<void> {
+  private async endTurn(row: SessionRow, how: 'stop' | 'interrupted', background?: unknown): Promise<void> {
     const id = row.id;
     void this.captureTranscript(id);
+    // Before the plan's early return below: a Stop while a plan waits for approval still says what runs.
+    this.setBackground(id, background);
     // No Meko call outlives its turn, the plan approval's included.
     this.mod.endMeko(id);
     this.hookMeko.clear(id);
@@ -1771,7 +1812,11 @@ export class SessionManager {
       }
       case 'Stop':
         // OpenCode's plugin marks a turn the user interrupted (Claude Code's comes from the mod, /mod/turn).
-        await this.endTurn(row, p.interrupted === true ? 'interrupted' : 'stop');
+        await this.endTurn(row, p.interrupted === true ? 'interrupted' : 'stop', p.background_tasks);
+        break;
+      case 'BackgroundTasks':
+        // OpenCode's plugin, when background work ends between turns.
+        this.setBackground(id, p.background_tasks);
         break;
       case 'SessionEnd': {
         this.ingestUsage(id);

@@ -132,6 +132,24 @@ describe('sessions on OpenCode (real session host + git, fake opencode running A
     expect(env.core.sessions.mekoLogs(p.id)).toEqual([expect.objectContaining({ sessionId: s.id, harness: 'opencode' })]);
   });
 
+  it('keeps what a turn left running in the background, and drops each as it ends between turns', async () => {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'create', name: 'agent-k-local/test/demo' } });
+    const s = await env.core.sessions.create(p.id, { name: 'OpenCode background', prompt: 'background 1500 bgagent 3000', start: 'code', harness: 'opencode' });
+    const get = () => env.core.sessions.get(s.id);
+    const idle = await waitFor(get, (x) => x.status === 'idle', 10000, 'the turn to end');
+    expect(idle.background).toEqual([{ type: 'shell', description: 'npm test' }, { type: 'subagent', description: 'subagent' }]);
+    // The shell exits first (its shell.created handed over again after, which doesn't bring it
+    // back), then the subagent's turn ends: the session is still idle through both. The subagent
+    // the background one runs isn't the session's own, so it's never listed.
+    await waitFor(get, (x) => x.background.length === 1, 10000, 'the shell to exit');
+    expect(get()).toMatchObject({ status: 'idle', background: [{ type: 'subagent', description: 'subagent' }] });
+    await waitFor(get, (x) => x.background.length === 0, 10000, 'the subagent to end');
+    // A turn with nothing in the background leaves none, the replayed shell included.
+    await env.core.sessions.submit(s.id, 'hello');
+    await waitFor(get, (x) => x.status === 'idle', 10000, 'the second turn');
+    expect(get().background).toEqual([]);
+  });
+
   it("leaves the user's own Meko server in OpenCode's config alone", async () => {
     const dir = join(process.env.HOME!, '.config', 'opencode');
     mkdirSync(dir, { recursive: true });
