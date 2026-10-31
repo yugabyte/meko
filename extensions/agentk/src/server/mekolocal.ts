@@ -30,6 +30,8 @@ export interface MekoCloudLink {
   webUrl: string;
   apiUrl: string;
   linked?: boolean;
+  /** The linked account, named without its key (Meko's `account`): a new key is another account. */
+  account?: string;
 }
 
 /**
@@ -53,7 +55,7 @@ function cloudOf(v: unknown): MekoCloudLink | undefined {
   const c = v as Record<string, unknown>;
   if (typeof c.linked === 'boolean' && !('api_key' in c)) {
     const webUrl = c.linked && /^https?:\/\//.test(str(c.web_url)) ? str(c.web_url) : '';
-    return { set: c.set as boolean, url: '', apiKey: '', webUrl, apiUrl: '', linked: c.linked };
+    return { set: c.set as boolean, url: '', apiKey: '', webUrl, apiUrl: '', linked: c.linked, account: c.linked ? str(c.account) : '' };
   }
   const url = /^https?:\/\//.test(str(c.url)) ? str(c.url) : '';
   const apiKey = url ? str(c.api_key) : '';

@@ -30,9 +30,11 @@ type Service struct {
 
 	mu sync.Mutex
 	// state is the link as last read or saved, so a call that asks about it (every tools/call while
-	// linked) doesn't read the secret store, which on macOS runs a program each time.
+	// linked) doesn't read the secret store, which on macOS runs a program each time. gen counts the
+	// changes saved, so a call that read the link before one can't use it after (remote.go).
 	stateMu sync.Mutex
 	state   *State
+	gen     int
 	// remote is the kept session with the linked Meko Cloud's MCP server (remote.go).
 	remote remote
 }
@@ -41,6 +43,10 @@ type Service struct {
 func (s *Service) load() (State, error) {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
+	return s.loadLocked()
+}
+
+func (s *Service) loadLocked() (State, error) {
 	if s.state != nil {
 		return *s.state, nil
 	}
@@ -52,12 +58,14 @@ func (s *Service) load() (State, error) {
 	return st, nil
 }
 
-// saved records a saved link, and drops the session with the link before it.
+// saved records a saved link, and drops the session and the tool list of the link before it, at
+// once: a call or a read that started before the change finds its link stale (remote.session).
 func (s *Service) saved(st State) {
 	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
 	s.state = &st
-	s.stateMu.Unlock()
-	s.remote.reset()
+	s.gen++
+	s.remote.reset(s.gen)
 }
 
 // Update is a change: a nil field is left as it is. An empty Key keeps the saved one.

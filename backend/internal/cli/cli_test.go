@@ -309,7 +309,7 @@ func TestClientTokenIsKeptAcrossRestarts(t *testing.T) {
 	code, mcpOut, _ := run("agent", "connect", "--data-dir", dir)
 	want(t, "agent connect with no server", code, 0, mcpOut, "http://127.0.0.1:7778/mcp")
 	code, js, _ := run("token", "--data-dir", dir, "--json")
-	want(t, "token --json with no server", code, 0, js, `{"cloud":{"set":false,"linked":false,"web_url":""},`+
+	want(t, "token --json with no server", code, 0, js, `{"cloud":{"set":false,"linked":false,"web_url":"","account":""},`+
 		`"running":false,"token":"`+strings.TrimSpace(tok)+
 		`","url":"http://127.0.0.1:7778/mcp","web_url":"http://127.0.0.1:`+os.Getenv("MEKO_WEB_PORT")+`"}`)
 	for i := 0; i < 2; i++ {

@@ -94,8 +94,10 @@ func NewHandler(o Options) http.Handler {
 		if _, ok := servers[cred]; !ok {
 			cred = ""
 		}
+		// A link that can't be read (a Keychain that refused, say) may be a linked one: its calls
+		// then fail with the reason in the log, rather than land in this Meko's datapacks.
 		if o.Cloud != nil {
-			if linked, err := o.Cloud.IsLinked(); err == nil && linked {
+			if linked, err := o.Cloud.IsLinked(); err != nil || linked {
 				return o.cloudServerFor(r.Context(), cloud, cred)
 			}
 		}

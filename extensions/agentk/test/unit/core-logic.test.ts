@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  DEFAULT_CONFIG, DEFAULT_MEKO_URL, loadConfig, mekoHost, mekoWebUrl, mekoWebUrlWarning, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl,
+  DEFAULT_CONFIG, DEFAULT_MEKO_URL, loadConfig, mekoHost, mekoStorageHttp, mekoWebUrl, mekoWebUrlWarning, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl,
   ownMekoKey, resolveMekoWithSource, saveConfig,
 } from '../../src/server/config.js';
 import { forgetContact, listContacts, recordShares } from '../../src/server/contacts.js';
@@ -1057,6 +1057,8 @@ describe('Meko credentials', () => {
       await reader.refresh();
       expect(resolveMekoWithSource(cfg)).toEqual({ url: local.url, apiKey: 'local-token', keySource: 'meko' });
       expect([resolveMekoWebUrl(cfg), resolveMekoApiUrl(cfg)]).toEqual(['https://cloud.mekodata.ai', 'http://127.0.0.1:7778/api/v1/cloud']);
+      // Upload links must be https: the pass-through is on http, Meko Cloud's storage isn't.
+      expect(mekoStorageHttp(cfg)).toBe(false);
       await reader.refresh();
       expect(resolveMekoWithSource(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: '', keySource: null });
     } finally {

@@ -410,12 +410,17 @@ describe('HTTP API: sharing, invites and Meko', () => {
 
     // Linked again in a Meko that keeps the key: the same local URL and token, now Meko Cloud's
     // account, so it reconnects, forgets the local account's invites, and shares through Meko.
-    env.local.cloud = { set: true, url: '', apiKey: '', webUrl: 'https://cloud.mekodata.ai', apiUrl: '', linked: true };
+    env.local.cloud = { set: true, url: '', apiKey: '', webUrl: 'https://cloud.mekodata.ai', apiUrl: '', linked: true, account: 'aaaa000000000001' };
     expect((await call('POST', '/_meko/changed', { what: 'cloud' })).statusCode).toBe(204);
     await waitFor(() => env.core.mekoStatus.source, (src) => src === 'meko', 5000, 'Meko Cloud through the local Meko');
     expect(env.core.mekoStatus).toMatchObject({ url: 'http://127.0.0.1:7778/mcp', webUrl: 'https://cloud.mekodata.ai', sharing: true });
     expect(env.meko.calls.filter((c) => c.name === 'reset').length).toBe(resets + 2);
     expect(forget).toHaveBeenCalledTimes(3);
+    // Linked again to another account of the same Meko Cloud: nothing AgentK connects to changes, but
+    // Meko's account marker does, so the old account's invites are forgotten.
+    env.local.cloud = { ...env.local.cloud, account: 'bbbb000000000002' };
+    expect((await call('POST', '/_meko/changed', { what: 'cloud' })).statusCode).toBe(204);
+    await waitFor(() => forget.mock.calls.length, (n) => n === 4, 5000, 'the new account forgets the old one');
     vi.unstubAllEnvs();
   });
 

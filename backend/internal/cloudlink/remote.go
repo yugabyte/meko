@@ -36,56 +36,68 @@ type Tools struct {
 	Instructions string
 }
 
-// remote is the kept session with the linked Meko Cloud's MCP server and the tools it offers. A
-// link change drops both (reset).
+// errLinkChanged is a call or read that started with a link a change has since replaced.
+var errLinkChanged = &CallError{Code: CodeCallFailed,
+	msg: "The Meko Cloud link changed while the call was being made. Make it again."}
+
+// remote is the kept session with the linked Meko Cloud's MCP server and the tools it offers, for
+// one generation of the link (Service.gen): a change resets both, and a session or a tool list for
+// an older generation is never kept.
 type remote struct {
-	mu       sync.Mutex
-	cs       *mcp.ClientSession
-	url, key string
+	mu  sync.Mutex
+	gen int
+	cs  *mcp.ClientSession
 
 	toolsMu sync.Mutex
-	gen     int // counts resets, so a read that started before one is dropped
 	tools   *Tools
 	readAt  time.Time
 	tried   time.Time
 	reading chan struct{} // closed when the read in progress ends
 }
 
-// reset drops the session and the tool list, after a link change.
-func (r *remote) reset() {
+// reset drops the session and the tool list, for the link of generation gen, after a change. A read
+// still running for the old link no longer holds up the new link's.
+func (r *remote) reset(gen int) {
 	r.mu.Lock()
 	cs := r.cs
-	r.cs, r.url, r.key = nil, "", ""
+	r.cs, r.gen = nil, gen
 	r.mu.Unlock()
 	if cs != nil {
 		_ = cs.Close()
 	}
 	r.toolsMu.Lock()
-	r.gen++
-	r.tools, r.readAt, r.tried = nil, time.Time{}, time.Time{}
+	r.tools, r.readAt, r.tried, r.reading = nil, time.Time{}, time.Time{}, nil
 	r.toolsMu.Unlock()
 }
 
-// session is the kept session for l, connecting when there's none (or it's for another link).
-func (r *remote) session(ctx context.Context, l Link) (*mcp.ClientSession, error) {
+// generation is the link generation the kept session is for.
+func (r *remote) generation() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.cs != nil && r.url == l.MCPURL() && r.key == l.Key {
-		return r.cs, nil
+	return r.gen
+}
+
+// session is the kept session for l, of generation gen, connecting when there's none; errLinkChanged
+// when a change has replaced l since it was read.
+func (r *remote) session(ctx context.Context, l Link, gen int) (*mcp.ClientSession, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if gen != r.gen {
+		return nil, errLinkChanged
 	}
 	if r.cs != nil {
-		_ = r.cs.Close()
-		r.cs = nil
+		return r.cs, nil
 	}
 	cs, err := connectCloud(ctx, l)
 	if err != nil {
 		return nil, err
 	}
-	r.cs, r.url, r.key = cs, l.MCPURL(), l.Key
+	r.cs = cs
 	return cs, nil
 }
 
-// drop forgets cs when it's still the kept session, so the next call connects again.
+// drop forgets cs when it's still the kept session, so the next call connects again. Only for a
+// session that's gone (sessionGone): closing it fails every call still on it.
 func (r *remote) drop(cs *mcp.ClientSession) {
 	r.mu.Lock()
 	if r.cs == cs {
@@ -112,18 +124,34 @@ func connectCloud(ctx context.Context, l Link) (*mcp.ClientSession, error) {
 	return cs, nil
 }
 
-// sessionGone says a call failed because the session was gone before the server ran it, so making
-// it again on a new session can't run it twice.
+// sessionGone says a call failed because its session is gone: Meko Cloud doesn't have it, or its
+// connection is closed. Only then is the session dropped.
 func sessionGone(err error) bool {
 	return errors.Is(err, mcp.ErrSessionMissing) || errors.Is(err, mcp.ErrConnectionClosed)
 }
 
+// current is the saved link and its generation, read together; a CodeNotLinked CallError when
+// there's none.
+func (s *Service) current() (Link, int, error) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	st, err := s.loadLocked()
+	if err != nil {
+		return Link{}, 0, err
+	}
+	if !st.Linked {
+		return Link{}, 0, notLinked()
+	}
+	return st.Link, s.gen, nil
+}
+
 // Forward calls one of the linked Meko Cloud's MCP tools with the arguments as they came (raw JSON,
 // or nil for none) on the kept session, within ForwardTimeout, and returns its result as it is. A
-// session the server no longer has is replaced, and the call made once more. A failure is a
-// *CallError, a CodeNotLinked one while unlinked.
+// call Meko Cloud answered with a missing session never ran there, so it's made once more on a new
+// session; any other failure is reported and never retried, since the call may have run. A failure
+// is a *CallError, a CodeNotLinked one while unlinked.
 func (s *Service) Forward(ctx context.Context, name string, args json.RawMessage) (*mcp.CallToolResult, error) {
-	l, err := s.linked()
+	l, gen, err := s.current()
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +162,7 @@ func (s *Service) Forward(ctx context.Context, name string, args json.RawMessage
 		a = args
 	}
 	for again := true; ; again = false {
-		cs, err := s.remote.session(ctx, l)
+		cs, err := s.remote.session(ctx, l, gen)
 		if err != nil {
 			return nil, err
 		}
@@ -142,8 +170,10 @@ func (s *Service) Forward(ctx context.Context, name string, args json.RawMessage
 		if err == nil {
 			return res, nil
 		}
-		s.remote.drop(cs)
-		if !again || !sessionGone(err) || ctx.Err() != nil {
+		if sessionGone(err) {
+			s.remote.drop(cs)
+		}
+		if !again || !errors.Is(err, mcp.ErrSessionMissing) || ctx.Err() != nil {
 			return nil, &CallError{Code: CodeCallFailed, msg: "Meko Cloud's " + name + " failed: " +
 				strings.TrimSuffix(shortError(ctx, err).Error(), ".") + "."}
 		}
@@ -154,7 +184,7 @@ func (s *Service) Forward(ctx context.Context, name string, args json.RawMessage
 // list couldn't be read yet. A list older than toolsTTL is read again in the background; before the
 // first read the call waits for it up to toolsWait.
 func (s *Service) CloudTools(ctx context.Context) *Tools {
-	l, err := s.linked()
+	l, gen, err := s.current()
 	if err != nil {
 		return nil
 	}
@@ -165,7 +195,7 @@ func (s *Service) CloudTools(ctx context.Context) *Tools {
 	if stale && reading == nil {
 		reading = make(chan struct{})
 		r.reading, r.tried = reading, time.Now()
-		go s.readTools(l, r.gen, reading) //nolint:gosec // G118: the read outlives the request that starts it
+		go s.readTools(l, gen, reading) //nolint:gosec // G118: the read outlives the request that starts it
 	}
 	r.toolsMu.Unlock()
 	if t != nil || reading == nil {
@@ -182,26 +212,27 @@ func (s *Service) CloudTools(ctx context.Context) *Tools {
 	return r.tools
 }
 
-// readTools reads the tool list and the instructions on the kept session, every page, and keeps
-// them unless the link changed meanwhile.
+// readTools reads the tool list and the instructions for the link of generation gen, and keeps them
+// unless the link changed meanwhile.
 func (s *Service) readTools(l Link, gen int, done chan struct{}) {
 	r := &s.remote
 	ctx, cancel := context.WithTimeout(context.Background(), CallTimeout)
 	defer cancel()
-	t, err := s.listTools(ctx, l)
+	t, err := s.listTools(ctx, l, gen)
+	// The generation is checked under toolsMu: a reset after it clears the tool list after this.
 	r.toolsMu.Lock()
 	defer r.toolsMu.Unlock()
 	if r.reading == done {
 		r.reading = nil
 	}
 	close(done)
-	if err == nil && r.gen == gen {
+	if err == nil && r.generation() == gen {
 		r.tools, r.readAt = t, time.Now()
 	}
 }
 
-func (s *Service) listTools(ctx context.Context, l Link) (*Tools, error) {
-	cs, err := s.remote.session(ctx, l)
+func (s *Service) listTools(ctx context.Context, l Link, gen int) (*Tools, error) {
+	cs, err := s.remote.session(ctx, l, gen)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +244,9 @@ func (s *Service) listTools(ctx context.Context, l Link) (*Tools, error) {
 	for range 100 {
 		res, err := cs.ListTools(ctx, &mcp.ListToolsParams{Cursor: cursor})
 		if err != nil {
-			s.remote.drop(cs)
+			if sessionGone(err) {
+				s.remote.drop(cs)
+			}
 			return nil, err
 		}
 		t.Tools = append(t.Tools, res.Tools...)

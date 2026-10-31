@@ -79,9 +79,14 @@ func toolExport(ctx context.Context, t *tools, f toolFlags, stdout io.Writer) er
 // localDatapack is the id of this Meko's datapack named, or of its default datapack for "".
 func (t *tools) localDatapack(ctx context.Context, named string) (string, error) {
 	if named == "" {
-		if t.isLinked(ctx) {
+		// /mcp's default is Meko Cloud's while it's linked, so one that may be needs a name.
+		switch linked, known := t.linkOf(ctx); {
+		case linked:
 			return "", errors.New("this Meko is linked to Meko Cloud: name this computer's datapack to export, " +
 				"meko-cli export <name|id>")
+		case !known:
+			return "", errors.New("can't tell whether this Meko is linked to Meko Cloud: name this computer's " +
+				"datapack to export, meko-cli export <name|id>")
 		}
 		id, err := t.defaultDatapackID(ctx)
 		if err == nil && id == "" {

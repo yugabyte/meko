@@ -176,6 +176,9 @@ type cloudToken struct {
 	Set    bool   `json:"set"`
 	Linked bool   `json:"linked"`
 	WebURL string `json:"web_url"`
+	// Account names the linked account without its key (AccountOf), so an extension knows a new key
+	// is another account; "" while unlinked.
+	Account string `json:"account"`
 	// Error, when set, is why the link couldn't be read; the rest is then empty.
 	Error string `json:"error,omitempty"`
 }
@@ -196,7 +199,7 @@ func cloudTokenOf(st cloudlink.State) cloudToken {
 	if !st.Linked {
 		return cloudToken{Set: st.Set}
 	}
-	return cloudToken{Set: true, Linked: true, WebURL: st.Link.EffectiveWebURL()}
+	return cloudToken{Set: true, Linked: true, WebURL: st.Link.EffectiveWebURL(), Account: st.Link.Account()}
 }
 
 // readSecret reads one line: typed at prompt with echo off on a terminal, else from the input as

@@ -49,8 +49,8 @@ func localTarget(a mcpAccess) agents.Target {
 	return agents.Target{Kind: agents.KindLocal, URL: a.url, Token: a.token}
 }
 
-// agentManager is the CLI's agents.Manager, its target read from the client token and the link
-// each time it's asked (under the agents' lock, for a connect), and the target now.
+// agentManager is the CLI's agents.Manager and its target: this Meko's MCP URL and client token,
+// read once, linked to Meko Cloud or not.
 func agentManager(l paths.Layout) (*agents.Manager, agents.Target, mcpAccess, error) {
 	_, a, err := readMCPAccess(l)
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/yugabyte/meko/backend/internal/auth"
@@ -135,29 +136,39 @@ func (d target) noun() string {
 type tools struct {
 	*toolSession
 	l      paths.Layout
-	linked *bool
+	linked *linkState
 }
+
+// linkState is whether the running server is linked to Meko Cloud, and whether it could say.
+type linkState struct{ linked, known bool }
 
 func newTools(t *toolSession, l paths.Layout) *tools { return &tools{toolSession: t, l: l} }
 
 func (t *tools) close() { _ = t.s.Close() }
 
-// isLinked says whether the running server is linked to Meko Cloud, asked once; false when it can't
-// say. It only words the messages: /mcp picks the side.
-func (t *tools) isLinked(ctx context.Context) bool {
+// linkOf says whether the running server is linked to Meko Cloud (/mcp then serves its datapacks),
+// asked once; known is false when it can't say.
+func (t *tools) linkOf(ctx context.Context) (linked, known bool) {
 	if t.linked == nil {
-		linked := false
+		st := linkState{}
 		if c, err := newClient(t.l); err == nil {
-			var st struct {
+			var reply struct {
 				Linked bool `json:"linked"`
 			}
-			if c.send(ctx, http.MethodGet, "/api/v1/settings/meko-cloud", nil, &st) == nil {
-				linked = st.Linked
+			if c.send(ctx, http.MethodGet, "/api/v1/settings/meko-cloud", nil, &reply) == nil {
+				st = linkState{linked: reply.Linked, known: true}
 			}
 		}
-		t.linked = &linked
+		t.linked = &st
 	}
-	return *t.linked
+	return t.linked.linked, t.linked.known
+}
+
+// isLinked says whether the running server is linked to Meko Cloud, false when it can't say: for
+// the words of a message, never for a choice (linkOf).
+func (t *tools) isLinked(ctx context.Context) bool {
+	linked, _ := t.linkOf(ctx)
+	return linked
 }
 
 // datapackRow is a datapack as datapack_list and GET /api/v1/datapacks list it.
@@ -188,22 +199,40 @@ func pick(rows []datapackRow, named, lists string) (datapackRow, error) {
 		named, lists)
 }
 
-// resolve finds the datapack named, by name or id, among the ones /mcp lists: this Meko's, or while
-// Meko Cloud is linked, its. "" is the default datapack.
+// resolve finds the datapack named, by id or name, among the ones /mcp serves: this Meko's, or while
+// Meko Cloud is linked, its. "" is the default datapack. An id is looked up with datapack_describe,
+// and a name with datapack_search's exact name, so neither lists every datapack (Meko Cloud refuses
+// to list an account with very many).
 func (t *tools) resolve(ctx context.Context, named string) (target, error) {
 	cloud := t.isLinked(ctx)
 	if named == "" {
 		return target{cloud: cloud}, nil
 	}
-	text, err := t.call(ctx, "datapack_list", map[string]any{})
+	if id, err := uuid.Parse(named); err == nil && len(named) == len(id.String()) {
+		text, err := t.call(ctx, "datapack_describe", map[string]any{"datapack_id": id.String()})
+		if te := (*toolError)(nil); errors.As(err, &te) && (te.code == "datapack_access_denied" || te.code == "not_found") {
+			return target{}, fmt.Errorf("no datapack has the id %s (meko-cli datapacks lists them)", named)
+		}
+		if err != nil {
+			return target{}, err
+		}
+		var d datapackRow
+		if err = json.Unmarshal([]byte(text), &d); err != nil {
+			return target{}, err
+		}
+		return target{cloud: cloud, id: d.ID, name: d.Name}, nil
+	}
+	text, err := t.call(ctx, "datapack_search", map[string]any{"name": named, "limit": 100})
 	if err != nil {
 		return target{}, err
 	}
-	var rows []datapackRow
-	if err = json.Unmarshal([]byte(text), &rows); err != nil {
+	var page struct {
+		Datapacks []datapackRow `json:"datapacks"`
+	}
+	if err = json.Unmarshal([]byte(text), &page); err != nil {
 		return target{}, err
 	}
-	r, err := pick(rows, named, "meko-cli datapacks")
+	r, err := pick(page.Datapacks, named, "meko-cli datapacks")
 	return target{cloud: cloud, id: r.ID, name: r.Name}, err
 }
 

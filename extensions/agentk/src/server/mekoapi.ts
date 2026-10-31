@@ -110,7 +110,11 @@ function toShareLink(r: Json | undefined): ShareLinkRow {
  * URL Meko gives, goes without the key.
  */
 export class MekoApi {
-  constructor(private creds: () => { baseUrl: string | null; apiKey: string }, private fetchImpl: Fetch = fetch) {}
+  /**
+   * `storageHttp`: whether the Meko behind the API may hand out plain-http upload links (a
+   * self-hosted Meko). Unset, it's whether the API itself is on http.
+   */
+  constructor(private creds: () => { baseUrl: string | null; apiKey: string; storageHttp?: boolean }, private fetchImpl: Fetch = fetch) {}
 
   /** A `body` goes as JSON. */
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -251,8 +255,9 @@ export class MekoApi {
 
   /**
    * Posts a file where `requestUpload` said: the signed fields, then the file last (S3 ignores
-   * fields after it), without Meko's key. Only over https, unless Meko's own API is on http (a
-   * self-hosted Meko's storage). Errors name the storage's host, never the URL or fields.
+   * fields after it), without Meko's key. Only over https, unless the Meko behind the API is on http
+   * (a self-hosted Meko's storage): the Meko on this computer's pass-through to Meko Cloud is on
+   * http, but Meko Cloud's storage isn't. Errors name the storage's host, never the URL or fields.
    */
   async postPresigned(upload: PresignedUpload, filename: string, bytes: Uint8Array): Promise<void> {
     let target: URL;
@@ -261,7 +266,8 @@ export class MekoApi {
     } catch {
       throw badReply('the upload request');
     }
-    const httpOk = this.creds().baseUrl?.startsWith('http:') ?? false;
+    const { baseUrl, storageHttp } = this.creds();
+    const httpOk = storageHttp ?? baseUrl?.startsWith('http:') ?? false;
     if (target.protocol !== 'https:' && !(httpOk && target.protocol === 'http:')) {
       throw new MekoApiError(200, 'BAD_REPLY', `Meko gave an upload address AgentK won't send a file to (${target.protocol}).`);
     }

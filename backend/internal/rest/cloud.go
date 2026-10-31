@@ -334,11 +334,11 @@ func (a *api) defaultLocation(c echo.Context, def string) string {
 const cloudPrefix = "/api/v1/cloud"
 
 // passToCloud answers /api/v1/cloud/<path>: the request goes to the linked Meko Cloud's REST API at
-// <path>, with its method, query and body, and the link's key, and Meko Cloud's reply comes back as
-// it is (cloudlink.Service.Pass). It's how extensions reach Meko Cloud's REST API without its key, so
-// it takes any credential the data routes take. Unlinked it's a 409 CLOUD_NOT_LINKED, and a call
-// that doesn't reach Meko Cloud a 502 with its code. Meko Cloud takes its API key only on its own
-// datapack routes, so its account's routes (its API keys among them) refuse it there too.
+// <path>, with its method, query and body, and the link's key, and Meko Cloud's status, content type
+// and body come back, without the credentials a JSON body holds (cloudlink.Service.Pass). It's how
+// extensions reach Meko Cloud's REST API without its key, so it takes any credential the data routes
+// take; every path passes, so what it reaches is what Meko Cloud accepts the key on. Unlinked it's a
+// 409 CLOUD_NOT_LINKED, and a call that doesn't reach Meko Cloud a 502 with its code.
 func (a *api) passToCloud(c echo.Context) error {
 	if a.Cloud == nil {
 		return notLinkedOr(c, nil)

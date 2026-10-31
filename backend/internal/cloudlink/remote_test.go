@@ -193,3 +193,74 @@ func TestPostUploadTakesAny2xx(t *testing.T) {
 		}
 	}
 }
+
+// A call or a list read that started under a link a change has since replaced can't connect it again:
+// the session is the new link's, and a read in progress no longer holds up the new link's.
+func TestLinkChangeStalesSessions(t *testing.T) {
+	f := newFakeMCP(t)
+	s := linkedTo(t, f.url)
+	l, gen, err := s.current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.remote.toolsMu.Lock()
+	s.remote.reading = make(chan struct{})
+	s.remote.toolsMu.Unlock()
+	if _, err = s.Link(context.Background(), Update{Key: ptr(key), WebURL: ptr("https://other.example.com")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.remote.session(context.Background(), l, gen); !errors.Is(err, errLinkChanged) {
+		t.Fatalf("a session for the old link: %v", err)
+	}
+	s.remote.toolsMu.Lock()
+	reading := s.remote.reading
+	s.remote.toolsMu.Unlock()
+	if reading != nil {
+		t.Fatal("the old link's read still holds up the new one's")
+	}
+	if tl := s.CloudTools(context.Background()); tl == nil || len(tl.Tools) != 1 {
+		t.Fatalf("the new link's tools: %+v", tl)
+	}
+}
+
+// Pass takes the credentials out of a JSON reply, at any depth, keeping the rest as it was, and
+// refuses a reply too large to pass whole.
+func TestPassDropsCredentials(t *testing.T) {
+	reply := `{"data":[{"datapack_id":"d1","datapack_name":"notes","count":12345678901234567890,` +
+		`"datapack_ysql_connection_string":"postgresql://db.example.com/dp","db_access":{"user_name":"u","password":"p"},` +
+		`"mcp_server":{"url":"https://mcp.example.com/mcp","api_key":"mko_tkn_x"}}]}`
+	big := false
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if big {
+			_, _ = w.Write(bytes.Repeat([]byte("x"), maxCallBytes+1))
+			return
+		}
+		_, _ = w.Write([]byte(reply))
+	}))
+	t.Cleanup(api.Close)
+	s, _ := newService(t)
+	s.saved(State{Set: true, Linked: true, Link: Link{URL: "https://mcp.example.com/mcp", APIURL: api.URL + "/api/v1",
+		Key: key}})
+	r, err := s.Pass(context.Background(), http.MethodGet, "/datapacks", nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(r.Body)
+	for _, gone := range []string{"postgresql", "db_access", "password", "mko_tkn_x", "api_key"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("the reply still holds %q: %s", gone, body)
+		}
+	}
+	for _, kept := range []string{`"datapack_name":"notes"`, `"count":12345678901234567890`,
+		`"url":"https://mcp.example.com/mcp"`} {
+		if !strings.Contains(body, kept) {
+			t.Errorf("the reply lost %s: %s", kept, body)
+		}
+	}
+	big = true
+	var ce *CallError
+	if _, err = s.Pass(context.Background(), http.MethodGet, "/datapacks", nil, ""); !errors.As(err, &ce) ||
+		ce.Code != CodeCallFailed {
+		t.Fatalf("a reply over the limit: %v", err)
+	}
+}

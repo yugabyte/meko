@@ -15,7 +15,7 @@ every extension the same way (`internal/cloudlink`).
 | **Meko owns the link, and extensions read whether it's on** | One place to link Meko Cloud, whatever extensions are installed, rather than a key in each extension's own settings. AgentK, which used to keep the key itself, hands its key to Meko once. |
 | **While linked, `/mcp` is Meko Cloud's** ([below](#mcp-while-linked)): it offers Meko Cloud's tools and sends every call there, whatever datapack it names; this Meko's own datapacks aren't served | Once linked, there are no local datapacks for agents: they get Meko Cloud's ids, defaults and listings exactly as if connected to it, without its key. Routing call by call (a datapack this Meko has stays here) was the alternative; one side at a time leaves nothing ambiguous. Moving the datapacks already here into Meko Cloud needs an import API Meko Cloud doesn't have yet, so they stay on disk, in the web UI and `meko-cli export`, until then. |
 | **No datapack is made here while linked**: MCP's `datapack_create`, REST's `POST /datapacks`, the web UI's **+** and `meko-cli create_datapack` make it in Meko Cloud, and `location: "local"` is a 409 `CLOUD_LINKED` | New work goes where the agents work. The web UI and REST still show the datapacks already here: hiding them takes a linked state on every page, and they're the only way to reach that data while linked. |
-| **Extensions reach Meko Cloud through this Meko**: `meko token --json` says whether it's linked and its web app, never the key, and `/api/v1/cloud/…` passes any REST request on with the key ([below](#apiv1cloud)) | The key stays in Meko's secret store: no extension, agent or agent config holds it. A prefix of its own keeps Meko Cloud's routes apart from this Meko's same-shaped ones. It passes every path: Meko Cloud takes an API key only on its datapack routes, so its account's routes (its API keys among them) refuse it anyway. |
+| **Extensions reach Meko Cloud through this Meko**: `meko token --json` says whether it's linked and its web app, never the key, and `/api/v1/cloud/…` passes any REST request on with the key ([below](#apiv1cloud)) | The key stays in Meko's secret store: no extension, agent or agent config holds it. A prefix of its own keeps Meko Cloud's routes apart from this Meko's same-shaped ones. It passes every path, as the owner chose: what the key reaches through it is what Meko Cloud lets the key reach (its datapack routes and a share link's redeem today, not its account's API keys), and that's Meko Cloud's to decide, routes it adds later included. Its replies lose the credentials no caller of a client-token route should get (below). |
 | **The URLs go in `cloud.toml` beside `config.toml` (0600), and the key in the secret store** as `meko_cloud_key` ([install.md](install.md#secrets)) | `cloud.toml` is a file Meko writes itself, as `web.toml` is, so `config.toml` stays the user's. The key never sits in a file of its own outside the secret store, and never reaches a log or a reply. The CLI reads both without the server, so `meko token --json` works while Meko is stopped. `cloud.toml` existing means the link was set, linked (`linked = true`) or unlinked since. |
 | **Set in the web UI (Settings › Meko Cloud, `/settings/meko-cloud`) or with `meko cloud_link`** | The page is for a person at a browser; `meko cloud_link` is for a computer without one (with local access, a headless server's web UI can't be reached from another computer) and for an extension handing over a key. |
 | **A change is checked before it's saved**: a new server or key with an MCP `initialize` handshake carrying the key (10 s, `CheckMCP`); a web app or API URL that was typed, when it moves the API URL, by asking its `/datapacks/incoming-shares` without the key, which must answer in Meko's `{data}` or `{error: {code}}` envelope (`CheckAPI`) | A link that doesn't work isn't saved, and a mistyped API host never gets the key. No ping follows the handshake: a stateless server on the MCP Go SDK, as Meko's own is, refuses a ping that carries no protocol version. |
@@ -26,7 +26,7 @@ every extension the same way (`internal/cloudlink`).
 | **The server reads the link once**, at its first use, and keeps it as changes save it | Every tool call asks whether Meko Cloud is linked, and on macOS each read of the key runs a program. A key changed behind Meko's back (in the Keychain, or the secrets file) is read at the next start; `meko cloud_link` goes through the running server. |
 | **Meko lists the linked Meko Cloud's datapacks itself** (`GET /api/v1/datapacks`, after this Meko's, or `?location=cloud`; `Service.Datapacks`), asking the link's REST API for `GET /datapacks` with the key | The web UI and `meko-cli datapacks` show them beside this Meko's, and the key never leaves Meko. It's the REST API and key AgentK's knowledge uploads and Presenter's decks already use with Meko Cloud. A link to another server with no web app or API URL has no API to ask, so it says to set one. |
 | **Any client token can list them**, unlike the link's own routes | An agent or extension may want to know which datapacks the linked account has. The reply holds names, descriptions and grants, never the key, and the client token still can't read or change the link. |
-| **Only the fields Meko shows are copied** from Meko Cloud's rows | Cloud's rows also carry each datapack's database user and connection string, which no caller of a route that takes the client token should get. |
+| **Only the fields Meko shows are copied** from Meko Cloud's rows, and `/api/v1/cloud/…` takes the credentials out of every reply it passes on | Cloud's rows also carry each datapack's database user and connection string (and a create's reply an MCP key), which no caller of a route that takes the client token should get. |
 | **This Meko's own `/api/v1` routes act on the linked Meko Cloud's datapacks** ([below](#meko-clouds-datapacks-on-this-mekos-routes)): a datapack id this Meko doesn't have goes to Meko Cloud, and where there's no id `location` picks the side: a listing names both by default, and a create goes to Meko Cloud while it's linked. The server makes the call with the link's key | One API for the web UI and `meko-cli`, with Meko Cloud's paths and shapes, and the key never leaves the server. The id is enough to tell the sides apart: both are UUIDs. Meko Cloud's REST API serves what it has a route for; it has none that searches a datapack or adds a memory with an API key, so those two use its MCP tools. A saved key goes only where the link sends it: the routes take no URL, and another Meko Cloud is set with `meko cloud_link --url --api-url`. |
 | **These routes act on Meko Cloud for the owner or the admin token**, not an agent's client token; listing takes any | They're the web UI's and `meko-cli`'s. A client reaches Meko Cloud through `/mcp` and `/api/v1/cloud/…`, which take its client token. |
 | **Through `/mcp` and `/api/v1/cloud/…`, any credential may do anything on Meko Cloud**, deletes included, and `auth = "none"` too | The owner chose to link, and agents held the key itself before they stayed here, which could already do all of it. Per-client keys, which could scope it, aren't planned. |
@@ -63,7 +63,9 @@ every extension the same way (`internal/cloudlink`).
 `internal/mcp`'s `cloud.go`, over `cloudlink.Service` (`CloudTools`, `Forward`; `remote.go`):
 
 - **Which server:** each request's server is picked by the link's state: this Meko's tools while
-  unlinked, Meko Cloud's while linked. A session already running keeps the tool list it read at
+  unlinked, Meko Cloud's while linked. A link that can't be read (a secret store that refused) counts
+  as linked: its calls fail with `cloud_call_failed` and the reason in the log, rather than land in
+  this Meko's datapacks. A session already running keeps the tool list it read at
   `initialize`; a stateless server can't tell it of a change, so a link change needs agents'
   sessions restarted, as `meko cloud_link` says.
 - **The tools** are Meko Cloud's own, as its `tools/list` gives them (names, schemas,
@@ -79,11 +81,14 @@ every extension the same way (`internal/cloudlink`).
   only), asks Meko Cloud's `knowledgebase_upload_document` for an upload link, posts the file there,
   and answers with Meko Cloud's `knowledgebase_document_status` reply plus `already_uploaded`.
   Meko Cloud's own tool of that name, if it had one, isn't offered.
-- **One session is kept** with Meko Cloud's MCP server, with the key; it's replaced when Meko Cloud
-  no longer has it (the call is made once more only when it can't have run: a session Meko Cloud
-  says it lacks, or a connection already closed), and dropped at every link change. A call takes at
-  most 2 minutes. The REST routes' search and memories for a Meko Cloud datapack use the same
-  session.
+- **One session is kept** with Meko Cloud's MCP server, with the key, and shared by every call.
+  It's dropped only when it's gone (Meko Cloud says it lacks it, or its connection closed), never for
+  one call's timeout or cancel, which would fail the others on it. A call is made once more only when
+  Meko Cloud said it lacks the session, so it never ran; any other failure is reported, since the call
+  may have run. A link change drops the session and the tool list at once, and a call or a list read
+  that started under the old link can't connect it again or keep its result (each carries the link's
+  generation). A call takes at most 2 minutes. The REST routes' search and memories for a Meko Cloud
+  datapack use the same session.
 - **A call that doesn't reach Meko Cloud** replies `cloud_unreachable`, `cloud_key_refused`,
   `cloud_not_linked` or `cloud_call_failed`, with what to do (`Link it again in Settings › Meko
   Cloud, or with meko cloud_link`). Nothing falls back to this Meko's datapacks.
@@ -95,12 +100,20 @@ every extension the same way (`internal/cloudlink`).
 
 `/api/v1/cloud/<path>` (`internal/rest`'s `passToCloud`, over `cloudlink.Service.Pass`) sends the
 request to the link's REST API at `<path>`, with its method, query, body and content type, and the
-key as a Bearer token, within 30 s, and answers with Meko Cloud's status, content type and body as
-they came. It takes any credential the data routes take: it's how extensions (AgentK's sharing,
-invites and uploads, Presenter's decks) reach Meko Cloud's REST API without its key. Unlinked it's a
-409 `CLOUD_NOT_LINKED`; a 401 from Meko Cloud is a 502 `CLOUD_KEY_REFUSED` (the key is Meko's, not
-the caller's); a link with no API URL is a 502 `CLOUD_NO_API_URL`, and one that doesn't reach Meko
-Cloud a 502 `CLOUD_UNREACHABLE`, each in Meko's `{data, error: {code, message}}` envelope.
+key as a Bearer token, within 30 s, and answers with Meko Cloud's status, content type and body; no
+other header is passed either way. It takes any credential the data routes take: it's how extensions
+(AgentK's sharing, invites and uploads, Presenter's decks) reach Meko Cloud's REST API without its
+key. It passes every path, so what it reaches is what Meko Cloud accepts the key on.
+
+- **Credentials never pass:** a JSON reply loses, at any depth, every field whose name holds
+  `password`, `conn_str`, `connection_string`, `ysql`, `db_access`, `db_user` or `api_key`: a
+  datapack's database user, password and connection string, and an MCP server's key. Numbers and the
+  rest keep their values; a reply that isn't JSON passes as it came.
+- **Failures:** unlinked it's a 409 `CLOUD_NOT_LINKED`; a 401 from Meko Cloud is a 502
+  `CLOUD_KEY_REFUSED` (the key is Meko's, not the caller's); a link with no API URL is a 502
+  `CLOUD_NO_API_URL`, one that doesn't reach Meko Cloud a 502 `CLOUD_UNREACHABLE`, and a reply over
+  8 MiB a 502 `CLOUD_CALL_FAILED` rather than a body cut short, each in Meko's `{data, error: {code,
+  message}}` envelope.
 
 ## Agents stay on this Meko
 
@@ -213,11 +226,16 @@ the one named among them (`GET /api/v1/datapacks?location=local`), and while lin
 
 ## What extensions see
 
-`meko token --json` carries `cloud`: whether this Meko is linked and its web app, never the key.
+`meko token --json` carries `cloud`: whether this Meko is linked, its web app and which account,
+never the key.
 
 ```json
-"cloud": {"set": true, "linked": true, "web_url": "https://cloud.mekodata.ai"}
+"cloud": {"set": true, "linked": true, "web_url": "https://cloud.mekodata.ai", "account": "3f1c09a4be7d5e21"}
 ```
+
+- `account` names the linked account without giving its key away: the first 16 hex digits of the
+  SHA-256 of the MCP URL and the key. A new key or server is a new account, which an extension
+  tells apart even when nothing it connects to changes (AgentK forgets the old account's invites).
 
 - `linked` true: this Meko's `/mcp` (the reply's `url` and `token`) works on Meko Cloud's datapacks,
   and `/api/v1/cloud/…` on this Meko's origin reaches Meko Cloud's REST API; link to a datapack at

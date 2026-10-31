@@ -16,6 +16,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/yugabyte/meko/backend/internal/cloudlink"
 	"github.com/yugabyte/meko/backend/internal/paths"
 )
 
@@ -115,7 +116,11 @@ func TestCloudLink(t *testing.T) {
 	code, out, errs := run("cloud_link", "--data-dir", dir, "--url", cloud+"/mcp", "--web-url", cloud)
 	want(t, "cloud_link with no server", code, 0, out+errs, "Linked to "+cloud+"/mcp (key …wxyz)")
 	c := readCloudToken(t, dir)
-	wantCloud := cloudToken{Set: true, Linked: true, WebURL: cloud}
+	wantCloud := cloudToken{Set: true, Linked: true, WebURL: cloud,
+		Account: cloudlink.Link{URL: cloud + "/mcp", Key: testCloudKey}.Account()}
+	if len(c.Account) != 16 {
+		t.Fatalf("token --json account = %q", c.Account)
+	}
 	if c != wantCloud {
 		t.Fatalf("token --json cloud = %+v, want %+v", c, wantCloud)
 	}
@@ -269,6 +274,11 @@ func TestCloudDatapacks(t *testing.T) {
 		t.Fatalf("linked tools/list: %v", names)
 	}
 	dp := datapackID(t, dir, "team-notes")
+	// An id is looked up by itself (datapack_describe), not in a list of every datapack.
+	code, out, errs = runSh("search", "--data-dir", dir, runbook, "--datapack", dp, "--source", "memory")
+	want(t, "search a Cloud datapack by id", code, 0, out+errs, runbook)
+	code, _, errs = runSh("search", "--data-dir", dir, "x", "--datapack", "c0ffee00-0000-4000-8000-0000000000ff")
+	want(t, "a missing id", code, 1, errs, "no datapack has the id c0ffee00-0000-4000-8000-0000000000ff")
 	faq := filepath.Join(t.TempDir(), "faq.md")
 	if err = os.WriteFile(faq, []byte("# FAQ\n\nThe staging cluster restarts at noon.\n"), 0o600); err != nil {
 		t.Fatal(err)

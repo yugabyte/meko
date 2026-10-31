@@ -406,6 +406,18 @@ export function mekoHost(cfg: Config): string {
 }
 
 /**
+ * Whether the Meko behind AgentK's REST API may hand out plain-http upload links: while the Meko on
+ * this computer reaches Meko Cloud for AgentK, the Meko Cloud it's linked to (its web app on http, a
+ * self-hosted Meko), not the pass-through's own http base; undefined otherwise (MekoApi then asks of
+ * its base).
+ */
+export function mekoStorageHttp(cfg: Config): boolean | undefined {
+  if (resolveMekoWithSource(cfg).keySource !== 'meko') return undefined;
+  const cloud = localMeko().cloud;
+  return linkedThroughMeko(cloud) ? (cloud?.webUrl ?? '').startsWith('http:') : undefined;
+}
+
+/**
  * Meko's REST API base (used for sharing): while Meko is linked, its own pass-through to Meko Cloud's
  * API (`/api/v1/cloud` on the Meko on this computer), or an older Meko's link's API URL; else config
  * first, then MEKO_API_URL, then the web app URL plus /api/v1 (the Meko web app serves its API on

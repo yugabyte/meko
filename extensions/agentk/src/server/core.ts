@@ -15,7 +15,7 @@ import { AskAgentk } from './askagentk.js';
 import { GithubLinkService } from './ghlinks.js';
 import { PrReviewService } from './prreview.js';
 import {
-  envMekoWebUrl, isLoopback, mekoConfigured, mekoWebUrlWarning, ownMekoKey, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, resolveMekoWithSource,
+  envMekoWebUrl, isLoopback, mekoConfigured, mekoStorageHttp, mekoWebUrlWarning, ownMekoKey, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, resolveMekoWithSource,
   saveConfig, type Config,
 } from './config.js';
 import { all, kvGet, kvSet, run, type Db } from './db.js';
@@ -124,7 +124,7 @@ function mekoAccountOf(m: { url: string; apiKey: string; keySource: MekoKeySourc
   if (!m.apiKey) return null;
   if (m.keySource === 'local') return 'local';
   const cloud = localMeko().cloud;
-  if (m.keySource === 'meko' && linkedThroughMeko(cloud)) return `cloud ${cloud?.webUrl ?? ''}`;
+  if (m.keySource === 'meko' && linkedThroughMeko(cloud)) return `cloud ${cloud?.webUrl ?? ''} ${cloud?.account ?? ''}`;
   return `${originOf(m.url)} ${m.apiKey}`;
 }
 
@@ -339,7 +339,9 @@ export class Core extends EventEmitter {
     this.ybCallHome = new CallHomeService({
       target: 'yugabyte', db: this.db, config: () => this.cfg, version: this.version, log: this.log, fetch: o.callHomeFetch,
     });
-    const mekoApi = o.mekoApi ?? new MekoApi(() => ({ baseUrl: resolveMekoApiUrl(this.cfg), apiKey: resolveMeko(this.cfg).apiKey }));
+    const mekoApi = o.mekoApi ?? new MekoApi(() => ({
+      baseUrl: resolveMekoApiUrl(this.cfg), apiKey: resolveMeko(this.cfg).apiKey, storageHttp: mekoStorageHttp(this.cfg),
+    }));
     this.invites = new InviteService(this, mekoApi);
     this.knowledge = new KnowledgeService(this, mekoApi);
   }
@@ -538,11 +540,13 @@ export class Core extends EventEmitter {
     const after = resolveMekoWithSource(this.cfg);
     const status = this.mekoStatusFor(this.cfg);
     const apiAfter = resolveMekoApiUrl(this.cfg);
-    // Linking or unlinking keeps the Meko on this computer's URL and token, but changes the Meko behind them.
-    const reconnect = before.url !== after.url || before.apiKey !== after.apiKey || (before.keySource === 'meko') !== (after.keySource === 'meko');
     // Kept on every read (a copy of the local token becoming the live local Meko changes nothing to
     // connect to, but names the account); compared only when there's another Meko to connect to.
     const account = mekoAccountOf(after);
+    // Linking or unlinking keeps the Meko on this computer's URL and token, but changes the Meko behind
+    // them, and so does linking it to another Meko Cloud account (Meko's account marker).
+    const relinked = !!account?.startsWith('cloud ') && !!this.mekoAccount?.startsWith('cloud ') && account !== this.mekoAccount;
+    const reconnect = before.url !== after.url || before.apiKey !== after.apiKey || (before.keySource === 'meko') !== (after.keySource === 'meko') || relinked;
     const switched = reconnect && !!account && !!this.mekoAccount && account !== this.mekoAccount;
     if (account) this.mekoAccount = account;
     if (!reconnect && status.source === shown.source && status.webUrl === shown.webUrl && apiAfter === apiBefore) {

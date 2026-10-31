@@ -3,6 +3,7 @@ package mcp_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -23,19 +24,20 @@ import (
 // fakeCloud is a linked Meko Cloud as /mcp sees it: its tools, and the calls sent to it, answered
 // by reply (by tool name) or with the tool's name and arguments.
 type fakeCloud struct {
-	mu     sync.Mutex
-	linked bool
-	tools  *cloudlink.Tools
-	calls  []string
-	args   []map[string]any
-	reply  map[string]string
-	err    error
+	mu      sync.Mutex
+	linked  bool
+	linkErr error
+	tools   *cloudlink.Tools
+	calls   []string
+	args    []map[string]any
+	reply   map[string]string
+	err     error
 }
 
 func (f *fakeCloud) IsLinked() (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.linked, nil
+	return f.linked, f.linkErr
 }
 
 func (f *fakeCloud) CloudTools(context.Context) *cloudlink.Tools {
@@ -161,7 +163,18 @@ func TestCloudPassThrough(t *testing.T) {
 		t.Fatalf("linked tools/list without Meko Cloud's: %v", n)
 	}
 
-	cloud.linked = false
+	// A link that can't be read may be a linked one: calls fail rather than land here.
+	cloud.linked, cloud.linkErr = false, errors.New("can't read the Meko Cloud key: the Keychain refused")
+	cloud.err = cloud.linkErr
+	if n = toolNames(t, e); n["datapack_metrics"] {
+		t.Fatalf("an unreadable link serves this Meko's tools: %v", n)
+	}
+	if r = call(t, e, "datapack_create", map[string]any{"name": "x"}); str(r.JSON["error"]) != "cloud_call_failed" ||
+		strings.Contains(r.Text, "Keychain") {
+		t.Fatalf("an unreadable link: %s", r.Text)
+	}
+	cloud.linkErr, cloud.err = nil, nil
+
 	if r = call(t, e, "datapack_describe", map[string]any{"conversation_id": "x"}); str(r.JSON["datapack_id"]) !=
 		e.DatapackID {
 		t.Fatalf("unlinked, this Meko's again: %s", r.Text)

@@ -35,10 +35,14 @@ func (s *Service) linked() (Link, error) {
 		return Link{}, err
 	}
 	if !st.Linked {
-		return Link{}, &CallError{Status: http.StatusConflict, Code: CodeNotLinked,
-			msg: "This Meko isn't linked to Meko Cloud. Link it in Settings › Meko Cloud, or with meko cloud_link."}
+		return Link{}, notLinked()
 	}
 	return st.Link, nil
+}
+
+func notLinked() error {
+	return &CallError{Status: http.StatusConflict, Code: CodeNotLinked,
+		msg: "This Meko isn't linked to Meko Cloud. Link it in Settings › Meko Cloud, or with meko cloud_link."}
 }
 
 // API calls the linked Meko Cloud's REST API with the key: method on path, which follows the API URL
@@ -151,8 +155,10 @@ type Reply struct {
 
 // Pass sends a request to the linked Meko Cloud's REST API as it came, with the key: method, the
 // path after the API URL with its query (such as /datapacks?limit=10), and body (nil for none) of
-// contentType. Meko Cloud's reply comes back as it is, but for a 401, which is CodeKeyRefused: the
-// key is Meko's, not the caller's. A request that doesn't reach Meko Cloud is a *CallError.
+// contentType. Meko Cloud's status, content type and body come back, with two exceptions: a JSON
+// body loses its database and MCP credentials (withoutCredentials), which no caller of Meko's
+// routes gets, and a 401 is CodeKeyRefused, since the key is Meko's, not the caller's. A request
+// that doesn't reach Meko Cloud, or a reply over maxCallBytes, is a *CallError.
 func (s *Service) Pass(ctx context.Context, method, pathQuery string, body io.Reader, contentType string) (Reply,
 	error) {
 	l, err := s.linked()
@@ -187,11 +193,72 @@ func (s *Service) Pass(ctx context.Context, method, pathQuery string, body io.Re
 	if res.StatusCode == http.StatusUnauthorized {
 		return Reply{}, keyRefused()
 	}
-	b, err := io.ReadAll(io.LimitReader(res.Body, maxCallBytes))
+	b, err := io.ReadAll(io.LimitReader(res.Body, maxCallBytes+1))
 	if err != nil {
 		return Reply{}, unreachable(err)
 	}
-	return Reply{Status: res.StatusCode, ContentType: res.Header.Get("Content-Type"), Body: b}, nil
+	if len(b) > maxCallBytes {
+		return Reply{}, &CallError{Code: CodeCallFailed,
+			msg: "Meko Cloud's reply is larger than the 8 MiB Meko passes on."}
+	}
+	return Reply{Status: res.StatusCode, ContentType: res.Header.Get("Content-Type"), Body: withoutCredentials(b)},
+		nil
+}
+
+// credentialKeys are the parts of a key's name that mark a credential in Meko Cloud's replies: a
+// datapack's database user, password and connection string, and an MCP server's key.
+var credentialKeys = []string{"password", "conn_str", "connection_string", "ysql", "db_access", "db_user", "api_key"}
+
+func isCredentialKey(k string) bool {
+	k = strings.ToLower(k)
+	for _, c := range credentialKeys {
+		if strings.Contains(k, c) {
+			return true
+		}
+	}
+	return false
+}
+
+// withoutCredentials is a JSON body with every credential (isCredentialKey) taken out, at any
+// depth; a body that isn't JSON comes back as it is.
+func withoutCredentials(b []byte) []byte {
+	var v any
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.UseNumber() // numbers come back as they were written
+	if d.Decode(&v) != nil {
+		return b
+	}
+	if !dropCredentials(v) {
+		return b
+	}
+	out, err := json.Marshal(v)
+	if err != nil {
+		return b
+	}
+	return out
+}
+
+// dropCredentials deletes the credentials in v, and says whether there were any.
+func dropCredentials(v any) bool {
+	dropped := false
+	switch x := v.(type) {
+	case map[string]any:
+		for k, e := range x {
+			if isCredentialKey(k) {
+				delete(x, k)
+				dropped = true
+			} else if dropCredentials(e) {
+				dropped = true
+			}
+		}
+	case []any:
+		for _, e := range x {
+			if dropCredentials(e) {
+				dropped = true
+			}
+		}
+	}
+	return dropped
 }
 
 // PostUpload posts a file to an upload link that a knowledge base's upload-url gave: its fields,

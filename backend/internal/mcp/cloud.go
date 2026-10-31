@@ -125,7 +125,7 @@ func (o Options) forwarder(name, cred string) sdk.ToolHandler {
 		rec := forwardedCall(start, name, cred, req.Params.Arguments)
 		res, err := o.Cloud.Forward(ctx, name, req.Params.Arguments)
 		if err != nil {
-			res = cloudFailure(&rec, err)
+			res = o.cloudFailure(&rec, err)
 		} else {
 			markResult(&rec, res)
 		}
@@ -175,10 +175,13 @@ func markResult(rec *store.Call, res *sdk.CallToolResult) {
 
 // cloudFailure is the error reply for a call that didn't reach Meko Cloud, or that it didn't answer:
 // cloud_unreachable, cloud_key_refused, cloud_not_linked or cloud_call_failed, with what to do.
-func cloudFailure(rec *store.Call, err error) *sdk.CallToolResult {
+func (o Options) cloudFailure(rec *store.Call, err error) *sdk.CallToolResult {
 	code, detail := "cloud_call_failed", genericDetail
 	var ce *cloudlink.CallError
-	if errors.As(err, &ce) {
+	if !errors.As(err, &ce) {
+		// The link couldn't be read: the reply stays generic, and the log says why.
+		o.Log.Warn("can't send a call to Meko Cloud", "tool", rec.Tool, "error", err)
+	} else {
 		detail = ce.Error()
 		switch ce.Code {
 		case cloudlink.CodeUnreachable:
@@ -259,7 +262,7 @@ func (o Options) uploadToCloud(ctx context.Context, rec *store.Call, raw json.Ra
 		b, _ := json.Marshal(args) //nolint:errchkjson // plain values
 		res, ferr := o.Cloud.Forward(ctx, name, b)
 		if ferr != nil {
-			return cloudFailure(rec, ferr), nil, ferr
+			return o.cloudFailure(rec, ferr), nil, ferr
 		}
 		var reply map[string]any
 		if !res.IsError && len(res.Content) > 0 {
