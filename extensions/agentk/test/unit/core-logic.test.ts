@@ -3,11 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  DEFAULT_CONFIG, DEFAULT_MEKO_URL, loadConfig, mekoHost, mekoWebUrl, mekoWebUrlWarning, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl,
+  DEFAULT_CONFIG, DEFAULT_MEKO_URL, loadConfig, mekoHost, mekoStorageHttp, mekoWebUrl, mekoWebUrlWarning, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl,
   ownMekoKey, resolveMekoWithSource, saveConfig,
 } from '../../src/server/config.js';
 import { forgetContact, listContacts, recordShares } from '../../src/server/contacts.js';
-import { shortHost } from '../../src/server/core.js';
+import { mekoCloudAccount, shortHost } from '../../src/server/core.js';
 import { LocalMekoReader, setMekoLinkHandedOver, type LocalMekoProbe } from '../../src/server/mekolocal.js';
 import { all, kvGet, openDb, run, schemaVersion, snapshotDb } from '../../src/server/db.js';
 import { githubRepo, prettyRemote } from '../../src/server/git.js';
@@ -1050,6 +1050,17 @@ describe('Meko credentials', () => {
       setMekoLinkHandedOver(true);
       await reader.refresh();
       expect(resolveMekoWithSource(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: '', keySource: null });
+      // A Meko that keeps the key reaches Meko Cloud for AgentK: its own URL and token, REST under
+      // /api/v1/cloud, and datapack links to the link's web app. Stopped, there's no Meko to use.
+      const through = { set: true, url: '', apiKey: '', webUrl: 'https://cloud.mekodata.ai', apiUrl: '', linked: true };
+      probes.push({ state: 'running', meko: local, cloud: through }, { state: 'stopped', meko: null, cloud: through });
+      await reader.refresh();
+      expect(resolveMekoWithSource(cfg)).toEqual({ url: local.url, apiKey: 'local-token', keySource: 'meko' });
+      expect([resolveMekoWebUrl(cfg), resolveMekoApiUrl(cfg)]).toEqual(['https://cloud.mekodata.ai', 'http://127.0.0.1:7778/api/v1/cloud']);
+      // Upload links must be https: the pass-through is on http, Meko Cloud's storage isn't.
+      expect(mekoStorageHttp(cfg)).toBe(false);
+      await reader.refresh();
+      expect(resolveMekoWithSource(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: '', keySource: null });
     } finally {
       setMekoLinkHandedOver(false);
       reader.clear();
@@ -1119,5 +1130,11 @@ describe('Meko credentials', () => {
     }
     claudeSettings(null);
     expect(readClaudeSettingsEnv()).toEqual({});
+  });
+});
+
+describe('mekoCloudAccount', () => {
+  it("is Meko's account for a link's MCP URL and key (backend/internal/cloudlink Link.Account)", () => {
+    expect(mekoCloudAccount('https://mcp.example.com/mcp', 'mko_tkn_x')).toBe('8adf4764ab826787');
   });
 });

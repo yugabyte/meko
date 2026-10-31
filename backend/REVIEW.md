@@ -64,10 +64,12 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       the client token's file, and never reach a log, an error, or a command line other than an
       installer's own `--meko-key` and the agent CLIs `internal/agents` runs (`claude mcp add` and
       `add-json`, `opencode mcp add`: their only way to take a header, for the second they run).
-      The one place Meko writes the client token, or the linked Meko Cloud's key, outside them is
-      the agent config files it writes for the user (Kiro's `mcp.json`, Codex's `config.toml`),
-      0600 when new, and only for the owner or the admin token or on a link change, never for a
-      client token ([docs/api.md](docs/api.md#agents)). The Keychain is written through `security -i` on stdin.
+      The one place Meko writes the client token outside them is the agent config files it writes
+      for the user (Kiro's `mcp.json`, Codex's `config.toml`), 0600 when new, and only for the owner
+      or the admin token or on a link change, never for a client token
+      ([docs/api.md](docs/api.md#agents)). The linked Meko Cloud's key leaves Meko only in its own
+      calls to Meko Cloud: never in `meko token --json`, an agent's config or a reply
+      ([docs/cloud.md](docs/cloud.md)). The Keychain is written through `security -i` on stdin.
 - [ ] The service files keep their stop timeout above serve's own shutdown (35 s), exit 75 stays
       "don't restart" for systemd and a launchd-run serve waits for the folder instead, and the CLI
       uses a service only for the data folder it runs. Releases stay outside the data folder.

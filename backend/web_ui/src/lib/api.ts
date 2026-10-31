@@ -1,7 +1,7 @@
-// Meko's API from the browser: /api/v1 routes in the {data, error} envelope, and MCP tools at
-// /mcp for what has no REST route (search). There's no credential: Meko takes the browser by its
-// access (local or remote); a 401 UNAUTHORIZED (local access that didn't look local) tells the app
-// through onUnauthorized.
+// Meko's API from the browser: /api/v1 routes in the {data, error} envelope, search and adding a
+// memory included (Meko's own routes, which run the MCP tools on this computer's datapack). There's
+// no credential: Meko takes the browser by its access (local or remote); a 401 UNAUTHORIZED (local
+// access that didn't look local) tells the app through onUnauthorized.
 
 import type {
   AgentChange,
@@ -89,24 +89,6 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return env.data;
 }
 
-async function callTool<T>(name: string, args: Record<string, unknown>): Promise<T> {
-  const res = await fetch("/mcp", {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
-  });
-  if (!res.ok) throw await failure(res, "HTTP_ERROR");
-  const rpc = await res.json();
-  if (rpc.error) throw new ApiError(rpc.error.message, 500, "MCP_ERROR");
-  const text: string = rpc.result?.content?.[0]?.text ?? "{}";
-  const reply = JSON.parse(text);
-  if (reply && typeof reply === "object" && "error" in reply && typeof reply.error === "string") {
-    throw new ApiError(reply.detail ?? reply.error, 400, reply.error);
-  }
-  return reply as T;
-}
-
 const enc = encodeURIComponent;
 
 export type SearchSource = "auto" | "memory" | "knowledge_base" | "conversation";
@@ -119,10 +101,10 @@ export const api = {
 
   datapacks: () => request<Datapack[]>("GET", "/datapacks?location=local"),
   datapack: (id: string) => request<Datapack>("GET", `/datapacks/${id}`),
-  createDatapack: (name: string, description: string) =>
-    // On this computer: the UI browses only this Meko's datapacks (the route's default is the linked
-    // Meko Cloud's).
-    request<Datapack>("POST", "/datapacks", { name, description, location: "local" }),
+  // In the linked Meko Cloud while it's linked (Meko makes none on this computer then), else on this
+  // computer. The location is always named: the route's default differs for a tab from before.
+  createDatapack: (name: string, description: string, inCloud: boolean) =>
+    request<Datapack>("POST", "/datapacks", { name, description, location: inCloud ? "cloud" : "local" }),
   updateDatapack: (id: string, fields: { name?: string; description?: string }) =>
     request<unknown>("PATCH", `/datapacks/${id}`, fields),
   deleteDatapack: (id: string) => request<unknown>("DELETE", `/datapacks/${id}`),
@@ -206,9 +188,10 @@ export const api = {
     request<unknown>("DELETE", `/promoted-memories/${memoryId}?datapack_id=${id}`),
   promoted: (id: string) =>
     request<{ promoted_memories: PromotedMemory[]; total: number }>("GET", `/promoted-memories?datapack_id=${id}`),
+  // memory_add and context_search on this computer's datapack, through Meko's own routes rather than
+  // /mcp, which while Meko Cloud is linked sends every call there.
   addMemory: (id: string, text: string) =>
-    callTool<unknown>("memory_add", {
-      datapack_id: id,
+    request<unknown>("POST", `/datapacks/${id}/memories?location=local`, {
       agent_id: UI_AGENT_ID,
       conversation_id: UI_CONVERSATION_ID,
       text,
@@ -256,10 +239,9 @@ export const api = {
 
   // source narrows it to one of memory, knowledge_base or conversation; auto searches all three.
   search: (id: string, query: string, source: SearchSource = "auto") =>
-    callTool<ContextSearch>("context_search", {
+    request<ContextSearch>("POST", `/datapacks/${id}/search?location=local`, {
       query,
       force_source: source,
-      datapack_id: id,
       agent_id: UI_AGENT_ID,
       conversation_id: UI_CONVERSATION_ID,
     }),

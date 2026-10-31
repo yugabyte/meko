@@ -161,8 +161,8 @@ func TestMovedFollowsAChange(t *testing.T) {
 	}
 }
 
-// MoveAgents moves the agents from this Meko to the current link, holding the changes' lock, and does
-// nothing while unlinked.
+// MoveAgents moves back the agents at the current link (its before is the link, with its key),
+// holding the changes' lock, and does nothing while unlinked.
 func TestMoveAgents(t *testing.T) {
 	s, _ := newService(t)
 	var calls []string
@@ -184,7 +184,7 @@ func TestMoveAgents(t *testing.T) {
 	if m, err := s.MoveAgents(context.Background()); m == nil || err != nil {
 		t.Fatalf("linked: %v %v", m, err)
 	}
-	if strings.Join(calls, ",") != "false→true "+key+" locked=true" {
+	if strings.Join(calls, ",") != "true→true "+key+" locked=true" {
 		t.Fatalf("calls %v", calls)
 	}
 }

@@ -54,7 +54,7 @@ func (s *Store) CallDays(ctx context.Context, since time.Time) ([]CallDay, error
 	// at is RFC 3339 in UTC, so its first 10 characters are the UTC day.
 	rows, err := s.r.QueryContext(ctx, "SELECT substr(at, 1, 10) AS day, tool, agent_id, count(*), "+
 		"sum(CASE WHEN ok THEN 0 ELSE 1 END), sum(ms), sum(tokens_sent), sum(tokens_saved) "+
-		"FROM call_log WHERE at >= ? GROUP BY day, tool, agent_id ORDER BY day, tool, agent_id",
+		"FROM call_log WHERE location = '' AND at >= ? GROUP BY day, tool, agent_id ORDER BY day, tool, agent_id",
 		since.UTC().Format(timeLayout))
 	if err != nil {
 		return nil, err

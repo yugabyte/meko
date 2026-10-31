@@ -132,7 +132,7 @@ func (s *Store) DatapackAgents(ctx context.Context, datapack string) ([]AgentSee
 		"SELECT agent_id, created_at t FROM memories WHERE datapack_id = ? "+
 		"UNION ALL SELECT agent_id, created_at FROM conversations WHERE datapack_id = ? "+
 		"UNION ALL SELECT agent_id, updated_at FROM conversations WHERE datapack_id = ? "+
-		"UNION ALL SELECT agent_id, at FROM call_log WHERE datapack_id = ?) "+
+		"UNION ALL SELECT agent_id, at FROM call_log WHERE datapack_id = ? AND location = '') "+
 		"WHERE agent_id != '' GROUP BY agent_id ORDER BY 3 DESC, 1", datapack, datapack, datapack, datapack)
 	if err != nil {
 		return nil, err

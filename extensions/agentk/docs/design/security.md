@@ -58,9 +58,10 @@ own copy.
   shutdown the server removes `web.sock` only while it's still the file it bound (`socketId`), as it
   does the hook socket: after a lost lease another server may have bound its own.
 - **Guard rails.** AgentK has no route that sets or shows a Meko key: Meko owns the Meko Cloud
-  link, and AgentK reads it from `meko token --json`, holds it in memory and never writes it to
-  `config.toml` (a key of its own from before is handed to Meko on stdin, once, then never read
-  again, though it stays in `config.toml` for a rollback). No
+  link and keeps its key, and AgentK reaches Meko Cloud through the Meko on this computer with that
+  Meko's token (an older Meko handed out the key in `meko token --json`, which AgentK then holds in
+  memory and never writes to `config.toml`). A key of its own from before is handed to Meko on
+  stdin, once, then never read again, though it stays in `config.toml` for a rollback. No
   response carries it. Meko's own page refuses to send a saved key to another server (the MCP, web
   app or API URL) until it's typed again, so someone who reaches the page can't point it at their
   own server and read the key off it. `POST /_meko/changed` only makes AgentK read Meko again, and

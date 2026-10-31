@@ -6,7 +6,7 @@
 
 import { useState } from "react";
 import { Database, Laptop, Moon, Plus, RefreshCw, Search, Sun, X } from "lucide-react";
-import { isCloudFailure, matchesName, useCloudDatapacks } from "../lib/cloud";
+import { isCloudFailure, matchesName, notifyCloudChanged, useCloudDatapacks } from "../lib/cloud";
 import { href, navigate, type Route } from "../lib/route";
 import type { Theme } from "../lib/theme";
 import { useUpdateAvailable } from "../lib/update";
@@ -206,10 +206,13 @@ export function Sidebar({
 
       {creating && (
         <DatapackDialog
+          inCloud={linked}
           onClose={() => setCreating(false)}
           onSaved={(id) => {
             setCreating(false);
-            onCreated(id);
+            // A Meko Cloud datapack shows in the Cloud rows, and opens in Meko Cloud's web app.
+            if (linked) notifyCloudChanged();
+            else onCreated(id);
           }}
         />
       )}

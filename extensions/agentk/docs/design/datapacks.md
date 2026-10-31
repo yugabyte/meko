@@ -110,8 +110,14 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > Meko (`cloud.toml` and Meko's secret store; Meko's `docs/cloud.md`), set in Meko's web UI
 > (**Settings › Meko Cloud**, `/settings/meko-cloud`) or with `meko cloud_link`. AgentK uses that
 > link when Meko has one, and else the Meko running on this computer; it can't be turned off. Meko
-> is *set up* when there's either (`MekoStatus.configured`; `MekoStatus.source` says which,
-> `'meko'` or `'local'`, and `url` names the server). With neither, AgentK still works without
+> keeps the link's key: while it's linked, AgentK reaches Meko Cloud through the Meko on this
+> computer, with that Meko's URL and token. Its `/mcp` passes every call on to Meko Cloud, and its
+> REST API passes `/api/v1/cloud/<path>` on to Meko Cloud's `/<path>`, which AgentK's sharing
+> and uploads use (`resolveMekoApiUrl`). Links to datapacks go to the link's web app (`cloud.web_url`).
+> An older Meko handed out the key instead (`cloud.api_key`, with `url` and `api_url`), and under one
+> AgentK still calls Meko Cloud with it itself. Meko is *set up* when there's either
+> (`MekoStatus.configured`; `MekoStatus.source` says which, `'meko'` or `'local'`, and `url` names
+> the server AgentK calls). Linked, with the Meko on this computer stopped, there's no Meko to use. With neither, AgentK still works without
 > datapacks: it doesn't talk to Meko, projects get no datapack, and sessions get no datapack, pin
 > or Meko lines in their prompt (even a project that has a datapack).
 >
@@ -119,7 +125,8 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > that holds AgentK's home (`<meko>/extensions/agentk`, `mekoDirOf`), else the one `[meko] home`
 > names (a home the move hasn't reached yet), else `meko`'s own default (a dev home set with
 > `AK_HOME`) (`probeLocalMeko` in `mekolocal.ts`): the local Meko's MCP URL and client token, and
-> `cloud`, the link with its key (`MekoCloudLink`). It asks rather than reading Meko's files: on
+> `cloud`, the link (`MekoCloudLink`: whether it's set and linked, and its web app; an older Meko's
+> also has its URLs and key). It asks rather than reading Meko's files: on
 > macOS the secrets are in the Keychain, and whether Meko runs is a lock only `meko` checks. The
 > answer is kept in memory (`LocalMekoReader`) and never written to `config.toml`, so a new port,
 > token or link is picked up without a reinstall. A read that can't ask `meko` (it failed or took
@@ -131,9 +138,10 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > or no `meko` on this computer (Meko normally starts AgentK, so it's up first). A read that changes
 > what AgentK shows (the Meko, the key's source, the web app or API URL) shows it at once, and a new
 > API URL syncs invites again. One that changes the Meko it connects to reconnects
-> (`Core.refreshMeko`): on the same account (the local Meko on any port or token, or the same
-> server with the same key) it keeps the invites and shares AgentK knows, and on another it forgets
-> them (`Core.mekoChanged`). A spell with no Meko at all (the local Meko stopped) isn't a change of
+> (`Core.refreshMeko`), and so does linking or unlinking, which keeps the local Meko's URL and token
+> but changes the Meko behind them: on the same account (the local Meko on any port or token, Meko
+> Cloud through it with the same web app, or the same server with the same key) it keeps the
+> invites and shares AgentK knows, and on another it forgets them (`Core.mekoChanged`). A spell with no Meko at all (the local Meko stopped) isn't a change of
 > account: AgentK compares with the last account it used (`mekoAccountOf`). The local token goes only to the local Meko, with its own URL; a
 > key that's a copy of it (its token, or any key for its URL's origin: Meko's setup for Claude
 > Code writes one into Claude Code's settings, older installs and `meko extension install agentk`

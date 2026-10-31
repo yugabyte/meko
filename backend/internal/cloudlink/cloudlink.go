@@ -8,6 +8,8 @@
 package cloudlink
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -50,6 +52,16 @@ func (l Link) MCPURL() string {
 		return DefaultURL
 	}
 	return l.URL
+}
+
+// Account names the link's account without giving its key away: the first 16 hex digits of the
+// SHA-256 of the MCP URL and the key, "" with no key. A new key or server is another account.
+func (l Link) Account() string {
+	if l.Key == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(l.MCPURL() + "\n" + l.Key))
+	return hex.EncodeToString(sum[:8])
 }
 
 // EffectiveWebURL is the web app that goes with the link, or "" when it can't be known (a server

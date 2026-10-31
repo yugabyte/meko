@@ -81,6 +81,9 @@ describe('MekoApi', () => {
     local.handle(() => ({ status: 204 }));
     await local.api.postPresigned(up('http://minio.test/b'), 'a.md', Buffer.from('a'));
     expect(local.calls.map((c) => c.path)).toEqual(['http://minio.test/b']);
+    // The Meko on this computer's pass-through to Meko Cloud is on http, but Meko Cloud's storage isn't.
+    const through = new MekoApi(() => ({ baseUrl: 'http://127.0.0.1:7778/api/v1/cloud', apiKey: 'k', storageHttp: false }));
+    await expect(through.postPresigned(up('http://minio.test/b'), 'a.md', Buffer.from('a'))).rejects.toMatchObject({ code: 'BAD_REPLY' });
 
     f.handle(() => ({ status: 400, body: '<?xml version="1.0"?><Error><Code>EntityTooLarge</Code><Message>Your proposed upload exceeds the maximum allowed size</Message></Error>' }));
     const e = await f.api.postPresigned(up('https://bucket.s3.test/?sig=s'), 'a.md', Buffer.from('a')).catch((x: unknown) => x);

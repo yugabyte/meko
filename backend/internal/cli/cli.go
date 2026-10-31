@@ -207,19 +207,13 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&c.service, "service", false, "only the service's stderr (service.log)")
 	}
 	if cmd == "search" || cmd == "add_memory" || cmd == "upload" || cmd == "upload_status" {
-		fs.StringVar(&t.datapack, "datapack", "", "the datapack, by name or id (cloud: or local: before it picks the side)")
+		fs.StringVar(&t.datapack, "datapack", "", "the datapack, by name or id")
 	}
 	if cmd == "upload" {
 		fs.BoolVar(&t.noWait, "no-wait", false, "return once the files are uploaded, before they're indexed")
 	}
 	if cmd == "delete_datapack" {
 		fs.BoolVar(&t.force, "force", false, "delete without asking")
-	}
-	if cmd == "create_datapack" {
-		fs.BoolVar(&t.cloud, "cloud", false, "create it in the linked Meko Cloud")
-	}
-	if cmd == "datapacks" {
-		fs.BoolVar(&t.local, "local", false, "only this Meko's datapacks, not the linked Meko Cloud's")
 	}
 	if cmd == "search" {
 		fs.StringVar(&t.source, "source", "auto", "auto, memory, knowledge_base or conversation")

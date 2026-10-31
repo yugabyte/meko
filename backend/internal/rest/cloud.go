@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -96,10 +97,13 @@ func (a *api) toCloud(c echo.Context, status int, method, path string, body any)
 	return c.JSON(status, envelope.Response{Data: data})
 }
 
+// codeCloudLinked is a datapack create for this Meko while Meko Cloud is linked: new datapacks go there.
+const codeCloudLinked = "CLOUD_LINKED"
+
 func forbiddenCloud(c echo.Context) error {
 	return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN",
-		"Meko Cloud's datapacks take the owner or the admin token (meko-cli), not a client token. "+
-			"To make a datapack on this Meko, send location \"local\".")
+		"These routes act on Meko Cloud's datapacks for the owner or the admin token (meko-cli), not a client "+
+			"token: a client reaches Meko Cloud through /mcp, or /api/v1/cloud for its REST API.")
 }
 
 // cloudError replies for a call Meko Cloud didn't make: its status (a 502 unless Meko Cloud answered
@@ -314,14 +318,51 @@ func (a *api) addMemory(c echo.Context) error {
 		"agent_id": body.AgentID, "conversation_id": body.ConversationID})
 }
 
-// defaultLocation is where a listing or a create that names no location goes: def, unless the
-// request comes from a browser (local or remote access). The web UI always names one, so
-// a browser that doesn't is a tab still running a bundle from before Meko Cloud's datapacks were on
-// these routes, which lists, opens and makes only this Meko's: it gets this Meko's.
+// defaultLocation is where a listing that names no location goes: def, unless the request comes
+// from a browser (local or remote access). The web UI always names one, so a browser that doesn't is
+// a tab still running a bundle from before Meko Cloud's datapacks were on these routes, which lists
+// and opens only this Meko's: it gets this Meko's. A create isn't asked: while Meko Cloud is linked,
+// every create goes there (createDatapack).
 func (a *api) defaultLocation(c echo.Context, def string) string {
 	switch a.Credential(c) {
 	case "remote", "local":
 		return "local"
 	}
 	return def
+}
+
+// cloudPrefix is the routes that pass requests to the linked Meko Cloud's REST API as they came.
+const cloudPrefix = "/api/v1/cloud"
+
+// passToCloud answers /api/v1/cloud/<path>: the request goes to the linked Meko Cloud's REST API at
+// <path>, with its method, query and body, and the link's key, and Meko Cloud's status, content type
+// and body come back, without the credentials a JSON body holds (cloudlink.Service.Pass). It's how
+// extensions reach Meko Cloud's REST API without its key, so it takes any credential the data routes
+// take; every path passes, so what it reaches is what Meko Cloud accepts the key on. Unlinked it's a
+// 409 CLOUD_NOT_LINKED, and a call that doesn't reach Meko Cloud a 502 with its code.
+func (a *api) passToCloud(c echo.Context) error {
+	if a.Cloud == nil {
+		return notLinkedOr(c, nil)
+	}
+	r := c.Request()
+	path := strings.TrimPrefix(r.URL.EscapedPath(), cloudPrefix)
+	if path == "" || path[0] != '/' {
+		path = "/" + path
+	}
+	if r.URL.RawQuery != "" {
+		path += "?" + r.URL.RawQuery
+	}
+	var body io.Reader
+	if r.ContentLength != 0 && r.Method != http.MethodGet && r.Method != http.MethodHead {
+		body = r.Body
+	}
+	reply, err := a.Cloud.Pass(ctx(c), r.Method, path, body, r.Header.Get("Content-Type"))
+	if err != nil {
+		return cloudError(c, err)
+	}
+	ct := reply.ContentType
+	if ct == "" {
+		ct = echo.MIMEApplicationJSON
+	}
+	return c.Blob(reply.Status, ct, reply.Body)
 }

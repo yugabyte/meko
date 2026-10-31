@@ -11,7 +11,7 @@ import { cliVersion, harnessCommand } from './harness/version.js';
 import { DEFAULT_MEKO_URL, dbPath, envMekoWebUrl, loadConfig, onLoopback, ownMekoKey, saveConfig, type Config } from './config.js';
 import { assertFree, InstanceBusyError } from './instance.js';
 import { checkMeko, tryMekoToken } from './meko.js';
-import { isLocalMeko, probeLocalMeko, type LocalMekoProbe } from './mekolocal.js';
+import { isLocalMeko, linkedThroughMeko, probeLocalMeko, type LocalMekoProbe } from './mekolocal.js';
 import { handOverMekoKey, type OwnMekoLink } from './mekohandover.js';
 import { AGENTK_PATH, MEKO_INSTALL_COMMAND } from '../shared/mekourls.js';
 import {
@@ -232,8 +232,9 @@ export async function installMeko(cfg: Config, o: { keyArg?: string; urlArg?: st
       const r = await d.link(hand);
       if (r.ok) {
         // AgentK's own key stays in config.toml: the server never reads it again, and a rollback to
-        // the release before, which reads only it, still finds it.
-        meko = { url: hand.url, apiKey: hand.apiKey };
+        // the release before, which reads only it, still finds it. A Meko that keeps the key (its
+        // `cloud` has `linked`) reaches Meko Cloud for the agents through its own server.
+        meko = cloud.linked !== undefined && local ? { url: local.url, apiKey: local.token } : { url: hand.url, apiKey: hand.apiKey };
         label = `Meko Cloud, linked in Meko (${hostOf(hand.url)})`;
       } else if (given) {
         await giveUp(`Meko didn't link ${hand.url}: ${r.error}`, 'Fix the key, or run the installer without one to use the Meko on this computer.');
@@ -248,6 +249,10 @@ export async function installMeko(cfg: Config, o: { keyArg?: string; urlArg?: st
     if (!meko && cloud.apiKey) {
       meko = { url: cloud.url, apiKey: cloud.apiKey };
       label = `Meko Cloud, linked in Meko (${hostOf(cloud.url)})`;
+    }
+    if (!meko && linkedThroughMeko(cloud) && local) {
+      meko = { url: local.url, apiKey: local.token };
+      label = `Meko Cloud, linked in Meko${cloud.webUrl ? ` (${hostOf(cloud.webUrl)})` : ''}`;
     }
   } else {
     // A Meko too old to keep the link: AgentK keeps a key itself, as before.

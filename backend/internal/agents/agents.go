@@ -28,7 +28,9 @@ const ServerName = "meko"
 // The targets an agent connects to.
 const (
 	KindLocal = "local" // this Meko, with its client token
-	KindCloud = "cloud" // the linked Meko Cloud, with the link's key
+	// KindCloud is a linked Meko Cloud's MCP URL and key, where a Meko before agents stayed on this
+	// Meko connected them: only ever a move's from.
+	KindCloud = "cloud"
 )
 
 // An installed agent's state.
@@ -39,8 +41,8 @@ const (
 	StateNone      = "none"      // no meko server
 )
 
-// Target is where agents connect: this Meko's MCP URL and client token, or while Meko Cloud is
-// linked its MCP URL and key.
+// Target is where agents connect: this Meko's MCP URL and client token, linked to Meko Cloud or
+// not (this Meko's /mcp sends their calls there). A move's from may be a Meko Cloud link's.
 type Target struct {
 	Kind  string
 	URL   string
@@ -51,6 +53,14 @@ type Target struct {
 // or the linked Meko Cloud.
 func (t Target) ours(u string) bool {
 	return onThisComputer(u) || t.Kind == KindCloud && sameURL(u, t.URL)
+}
+
+// owns says whether a meko server is one Meko put there for the target: on this computer's
+// loopback, or at a Meko Cloud link's URL with that link's key. One at Meko Cloud with another key
+// is the user's own.
+func (t Target) owns(s *server) bool {
+	return onThisComputer(s.url) || t.Kind == KindCloud && sameURL(s.url, t.URL) && !s.unresolved &&
+		bearerToken(s.auth) == t.Token
 }
 
 // state is what a meko server (nil with none) is to the target.
@@ -488,11 +498,11 @@ type Failed struct {
 	Error string `json:"error"`
 }
 
-// Move follows a link change: every installed agent whose meko server is one of Meko's own under
-// the old target or the new one (this computer's, the old link's or the new link's) and isn't
-// already connected to the new target is connected to it. Unlinking moves them back to this Meko,
-// which takes Meko Cloud's key out of their configs. One elsewhere is left as it is. Errors never
-// hold either target's token or key.
+// Move connects to the target to every installed agent whose meko server Meko put there for from
+// or to (this computer's, or the Meko Cloud link's with its key: owns) and isn't already connected
+// to it: a link change moves back to this Meko the agents a Meko before agents stayed on this Meko
+// connected to Meko Cloud, which takes the key out of their configs. One elsewhere is left as it
+// is. Errors never hold either target's token or key.
 func (m *Manager) Move(ctx context.Context, from, to Target) Moves {
 	ctx, cancel := context.WithTimeout(ctx, MoveTimeout)
 	defer cancel()
@@ -520,7 +530,7 @@ func (m *Manager) Move(ctx context.Context, from, to Target) Moves {
 			continue
 		case s == nil || to.state(s) == StateConnected:
 			continue
-		case !from.ours(s.url) && !to.ours(s.url):
+		case !from.owns(s) && !to.owns(s):
 			out.Left = append(out.Left, Left{a.Name, a.Title, shownURL(s.url)})
 			continue
 		}

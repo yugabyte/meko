@@ -1,5 +1,6 @@
 // Creates a datapack, or edits one's name and description when given it. Names are 3 to 60
-// characters.
+// characters. While Meko Cloud is linked, a new datapack is made there: Meko makes none on this
+// computer then.
 
 import { useState } from "react";
 import { api } from "../lib/api";
@@ -9,10 +10,13 @@ import { Button, ErrorNote, Input } from "./ui";
 
 export function DatapackDialog({
   datapack,
+  inCloud = false,
   onClose,
   onSaved,
 }: {
   datapack?: Datapack;
+  // Create it in the linked Meko Cloud.
+  inCloud?: boolean;
   onClose: () => void;
   // The new datapack's id when one was created, else the edited one's.
   onSaved: (id: string) => void;
@@ -30,7 +34,7 @@ export function DatapackDialog({
         await api.updateDatapack(datapack.datapack_id, { name: name.trim(), description: description.trim() });
         onSaved(datapack.datapack_id);
       } else {
-        onSaved((await api.createDatapack(name.trim(), description.trim())).datapack_id);
+        onSaved((await api.createDatapack(name.trim(), description.trim(), inCloud)).datapack_id);
       }
     } catch (e) {
       setError(e as Error);
@@ -40,7 +44,7 @@ export function DatapackDialog({
 
   return (
     <Dialog
-      title={datapack ? "Edit datapack" : "New datapack"}
+      title={datapack ? "Edit datapack" : inCloud ? "New Meko Cloud datapack" : "New datapack"}
       onClose={onClose}
       actions={
         <>
@@ -61,6 +65,11 @@ export function DatapackDialog({
         <span className="font-medium">Description</span>
         <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional" />
       </label>
+      {!datapack && inCloud && (
+        <p className="text-sm text-muted-foreground">
+          Meko is linked to Meko Cloud, so the datapack is made there. It opens in Meko Cloud.
+        </p>
+      )}
       {error && <ErrorNote error={error} />}
     </Dialog>
   );

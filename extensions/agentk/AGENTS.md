@@ -137,8 +137,9 @@ agents should read it before changing code there.
    holds a lock on that folder while the host runs.
 7. **Meko is Meko's Meko Cloud link, else the Meko on this computer; a project has at most one
    dedicated datapack.** It can't be turned off. Meko owns the link (its web UI's Settings › Meko
-   Cloud, `meko cloud_link`); AgentK reads it, and the local Meko's URL and token, from `meko token
-   --json` (`mekolocal.ts`), keeps them in memory and never writes them to `config.toml`, and has no
+   Cloud, `meko cloud_link`) and keeps its key: while it's linked, AgentK reaches Meko Cloud through
+   the local Meko (its `/mcp`, and `/api/v1/cloud` for REST) with that Meko's token. AgentK reads
+   the link, and the local Meko's URL and token, from `meko token --json` (`mekolocal.ts`), keeps them in memory and never writes them to `config.toml`, and has no
    route or UI that sets a key. A key AgentK kept itself before is handed to Meko once
    (`mekohandover.ts`) and never read again; until then, or under a Meko too old to keep a link,
    AgentK keeps using it rather than move to the local Meko unasked. The local token goes only to

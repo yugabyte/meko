@@ -113,17 +113,17 @@ test("the card shows each agent's state, its notes and the buttons that fit it",
   expect(text()).not.toContain("coding agents");
 });
 
-test("while linked, the card says agents connect to Meko Cloud", async () => {
+test("the card says agents connect to this Meko, which sends their calls to a linked Meko Cloud", async () => {
   serve({
     "GET /api/v1/agents": () => ({
       data: {
-        target: { kind: "cloud", url: "https://meko.example.com/mcp" },
+        target: { kind: "local", url: LOCAL },
         agents: [agent("kiro", "Kiro CLI", "none")],
       },
     }),
   });
   await render(<AgentsCard />);
-  expect(text()).toContain("Agents connect to Meko Cloud");
+  expect(text()).toContain("Agents connect to Meko on this computer. While Meko Cloud is linked, it sends their calls there.");
 });
 
 test("with no agent installed, the card names the ones Meko works with", async () => {
@@ -243,7 +243,7 @@ async function type(id: string, value: string) {
   });
 }
 
-test("linking says which agents moved to Meko Cloud and which couldn't", async () => {
+test("linking says which agents moved back to this Meko and which couldn't", async () => {
   serve({
     "GET /api/v1/settings/meko-cloud": () => ({ data: cloud(false) }),
     "PUT /api/v1/settings/meko-cloud": () => ({
@@ -261,7 +261,7 @@ test("linking says which agents moved to Meko Cloud and which couldn't", async (
   await type("meko-cloud-key", "test-token");
   await act(async () => document.querySelector("form")!.requestSubmit());
 
-  expect(text()).toContain("Moved Claude Code and OpenCode to Meko Cloud. Couldn't move Kiro CLI: kiro-cli exited 1");
+  expect(text()).toContain("Moved Claude Code and OpenCode back to this Meko. Couldn't move Kiro CLI: kiro-cli exited 1");
 });
 
 test("unlinking says which agents moved back, and nothing when none moved", async () => {

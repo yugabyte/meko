@@ -21,14 +21,61 @@ type Service struct {
 	CheckAPI func(ctx context.Context, apiURL string) error
 	// Changed, if set, hears that the link changed (it tells the running extensions).
 	Changed func(ctx context.Context)
-	// Moved, if set, moves the agents connected to Meko from the link before a saved change to the
-	// link after it (internal/agents' Move); what it did goes in the reply. A failed move never
-	// undoes the change.
+	// Moved, if set, moves back to this Meko the agents Meko had connected to the link before a saved
+	// change (internal/agents' Move); what it did goes in the reply. A failed move never undoes the
+	// change.
 	Moved func(ctx context.Context, before, after State) agents.Moves
 	// List asks a REST API URL for the key's datapacks (ListDatapacks, when nil); tests swap it out.
 	List func(ctx context.Context, apiURL, key string) ([]Datapack, error)
 
 	mu sync.Mutex
+	// state is the link as last read or saved, so a call that asks about it (every tools/call while
+	// linked) doesn't read the secret store, which on macOS runs a program each time. gen counts the
+	// changes saved, so a call that read the link before one can't use it after (remote.go).
+	stateMu sync.Mutex
+	state   *State
+	gen     int
+	// remote is the kept session with the linked Meko Cloud's MCP server (remote.go).
+	remote remote
+}
+
+// load is the link: as last read or saved, else read now.
+func (s *Service) load() (State, error) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.loadLocked()
+}
+
+func (s *Service) loadLocked() (State, error) {
+	if s.state != nil {
+		return *s.state, nil
+	}
+	st, err := s.Store.Load()
+	if err != nil {
+		return State{}, err
+	}
+	s.state = &st
+	return st, nil
+}
+
+// saved records a saved link, and drops the session and the tool list of the link before it: a
+// call or a read that started before the change finds its link stale (remote.session). The old
+// session is closed after stateMu is released, so a slow Meko Cloud never holds up a read of the link.
+func (s *Service) saved(st State) { s.replace(&st) }
+
+// unsure forgets the link as last read, after a save that failed partway (the key written but not
+// cloud.toml, say): the next read takes it from the store again, as meko token --json does.
+func (s *Service) unsure() { s.replace(nil) }
+
+func (s *Service) replace(st *State) {
+	s.stateMu.Lock()
+	s.state = st
+	s.gen++
+	old := s.remote.reset(s.gen)
+	s.stateMu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
 }
 
 // Update is a change: a nil field is left as it is. An empty Key keeps the saved one.
@@ -89,7 +136,7 @@ func StatusOf(st State) Status {
 
 // Status reads the link.
 func (s *Service) Status() (Status, error) {
-	st, err := s.Store.Load()
+	st, err := s.load()
 	if err != nil {
 		return Status{}, err
 	}
@@ -139,7 +186,7 @@ func (s *Service) Link(ctx context.Context, u Update) (Status, error) {
 func (s *Service) link(ctx context.Context, u Update) (Status, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cur, err := s.Store.Load()
+	cur, err := s.load()
 	if err != nil {
 		return Status{}, false, err
 	}
@@ -209,9 +256,11 @@ func (s *Service) link(ctx context.Context, u Update) (Status, bool, error) {
 		}
 	}
 	if err := s.Store.save(true, next); err != nil {
+		s.unsure()
 		return Status{}, false, err
 	}
 	after := State{Set: true, Linked: true, Link: next}
+	s.saved(after)
 	return s.moved(ctx, cur, after), true, nil
 }
 
@@ -228,7 +277,7 @@ func (s *Service) Unlink(ctx context.Context) (Status, error) {
 func (s *Service) unlink(ctx context.Context) (Status, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cur, err := s.Store.Load()
+	cur, err := s.load()
 	if err != nil {
 		return Status{}, false, err
 	}
@@ -238,9 +287,12 @@ func (s *Service) unlink(ctx context.Context) (Status, bool, error) {
 	link := cur.Link
 	link.Key = ""
 	if err := s.Store.save(false, link); err != nil {
+		s.unsure()
 		return Status{}, false, err
 	}
-	return s.moved(ctx, cur, State{Set: true, Link: link}), true, nil
+	after := State{Set: true, Link: link}
+	s.saved(after)
+	return s.moved(ctx, cur, after), true, nil
 }
 
 // moved moves the agents after a saved change, still under the lock so the moves happen in the
@@ -260,16 +312,17 @@ func (s *Service) changed(ctx context.Context) {
 	}
 }
 
-// MoveAgents moves the agents from this Meko to the link as it is now, through Moved: for a Meko
-// that was linked before its agents followed the link. It holds the changes' lock, so it never runs
-// between a change and that change's own move. While unlinked, or without Moved, it does nothing.
+// MoveAgents moves back to this Meko the agents Meko connected to the linked Meko Cloud before
+// agents stayed on this Meko, through Moved: for a Meko linked while its agents followed the link.
+// It holds the changes' lock, so it never runs between a change and that change's own move. While
+// unlinked, or without Moved, it does nothing.
 func (s *Service) MoveAgents(ctx context.Context) (*agents.Moves, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cur, err := s.Store.Load()
+	cur, err := s.load()
 	if err != nil || !cur.Linked || s.Moved == nil {
 		return nil, err
 	}
-	m := s.Moved(ctx, State{Set: true}, cur)
+	m := s.Moved(ctx, cur, cur)
 	return &m, nil
 }

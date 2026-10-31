@@ -17,7 +17,6 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/yugabyte/meko/backend/internal/auth"
-	"github.com/yugabyte/meko/backend/internal/cloudlink"
 	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/version"
 )
@@ -41,7 +40,6 @@ type toolFlags struct {
 	files                  []string
 	limit                  int
 	json, force            bool
-	cloud, local           bool // create_datapack's --cloud, datapacks' --local
 	noWait                 bool
 	out                    string // export's -o
 }
@@ -118,25 +116,8 @@ func (t *toolSession) call(ctx context.Context, name string, args map[string]any
 	return text, nil
 }
 
-// The prefixes that pick a datapack's side: the linked Meko Cloud's, or this Meko's.
-const (
-	cloudPrefix = "cloud:"
-	localPrefix = "local:"
-)
-
-// splitSide parses a datapack's name or id, with cloud: or local: before it to pick the side.
-func splitSide(named string) (side, rest string) {
-	if rest, ok := strings.CutPrefix(named, cloudPrefix); ok {
-		return "cloud", rest
-	}
-	if rest, ok := strings.CutPrefix(named, localPrefix); ok {
-		return "local", rest
-	}
-	return "", named
-}
-
-// target is the datapack a command names: this Meko's, or the linked Meko Cloud's (cloud). The zero
-// value is this Meko's default datapack.
+// target is the datapack a command names, by id and name, and whether it's Meko Cloud's: while Meko
+// Cloud is linked, /mcp serves only its datapacks. The zero value is this Meko's default datapack.
 type target struct {
 	cloud    bool
 	id, name string
@@ -150,124 +131,109 @@ func (d target) noun() string {
 	return "datapack " + d.name
 }
 
-// spec names the datapack for a later command: cloud:<id> for Meko Cloud's, so it isn't looked up
-// again.
-func (d target) spec() string {
-	if d.cloud {
-		return cloudPrefix + d.id
-	}
-	return d.id
-}
-
-// tools is a command's way to the datapacks it names: the running server's MCP session, and the
-// linked Meko Cloud, opened only when the command needs it.
+// tools is a command's way to the datapacks: the running server's MCP session, which serves the
+// linked Meko Cloud's datapacks while it's linked (docs/cloud.md).
 type tools struct {
 	*toolSession
-	l        paths.Layout
-	cloud    *cloudSide
-	cloudErr error
-	opened   bool
+	l      paths.Layout
+	linked *linkState
 }
+
+// linkState is whether the running server is linked to Meko Cloud, and whether it could say.
+type linkState struct{ linked, known bool }
 
 func newTools(t *toolSession, l paths.Layout) *tools { return &tools{toolSession: t, l: l} }
 
 func (t *tools) close() { _ = t.s.Close() }
 
-// cloudSide is the way to the linked Meko Cloud's datapacks, opened on first use.
-func (t *tools) cloudSide() (*cloudSide, error) {
-	if !t.opened {
-		t.cloud, t.cloudErr = openCloud(t.l)
-		t.opened = true
+// linkOf says whether the running server is linked to Meko Cloud (/mcp then serves its datapacks),
+// asked once; known is false when it can't say.
+func (t *tools) linkOf(ctx context.Context) (linked, known bool) {
+	if t.linked == nil {
+		st := linkState{}
+		if c, err := newClient(t.l); err == nil {
+			var reply struct {
+				Linked bool `json:"linked"`
+			}
+			if c.send(ctx, http.MethodGet, "/api/v1/settings/meko-cloud", nil, &reply) == nil {
+				st = linkState{linked: reply.Linked, known: true}
+			}
+		}
+		t.linked = &st
 	}
-	return t.cloud, t.cloudErr
+	return t.linked.linked, t.linked.known
 }
 
-// cloudCall calls one of the running server's /api/v1 routes for a Meko Cloud datapack, and returns
-// its reply's data as text, as a tool's reply is.
-func (t *tools) cloudCall(ctx context.Context, method, path string, body any) (string, error) {
-	c, err := t.cloudSide()
-	if err != nil {
-		return "", err
-	}
-	data, err := c.api(ctx, method, path, body)
-	return string(data), err
+// isLinked says whether the running server is linked to Meko Cloud, false when it can't say: for
+// the words of a message, never for a choice (linkOf).
+func (t *tools) isLinked(ctx context.Context) bool {
+	linked, _ := t.linkOf(ctx)
+	return linked
 }
 
-// tool calls a tool on a datapack: this Meko's through /mcp, or the linked Meko Cloud's through the
-// server's route that runs it there (path, under the datapack's), with the same arguments.
-func (t *tools) tool(ctx context.Context, d target, name, path string, args map[string]any) (string, error) {
-	if !d.cloud {
-		return t.call(ctx, name, args)
-	}
-	delete(args, "datapack_id")
-	args["agent_id"], args["conversation_id"] = cliAgent, cliConversation
-	return t.cloudCall(ctx, http.MethodPost, cloudDatapackPath(d.id, path), args)
+// datapackRow is a datapack as datapack_list and GET /api/v1/datapacks list it.
+type datapackRow struct {
+	ID          string `json:"datapack_id"`
+	Name        string `json:"datapack_name"`
+	Description string `json:"description"`
 }
 
-// resolve finds the datapack named: "" is this Meko's default. A name or id is looked up among this
-// Meko's datapacks, then, while Meko Cloud is linked, among its, so a name both have is this Meko's.
-// cloud: or local: before it looks on that side only, and cloud:<id> is taken as it is (Meko Cloud
-// says when it's wrong), so the prompt's use doesn't list Meko Cloud's datapacks on every line.
+// pick finds the datapack named among rows, by id or name; what lists them goes in the errors.
+func pick(rows []datapackRow, named, lists string) (datapackRow, error) {
+	var found []datapackRow
+	for _, r := range rows {
+		if strings.EqualFold(r.ID, named) {
+			return r, nil
+		}
+		if r.Name == named {
+			found = append(found, r)
+		}
+	}
+	switch len(found) {
+	case 1:
+		return found[0], nil
+	case 0:
+		return datapackRow{}, fmt.Errorf("no datapack is named %q (%s lists them)", named, lists)
+	}
+	return datapackRow{}, fmt.Errorf("%d datapacks are named %q: give its id (%s --json lists them)", len(found),
+		named, lists)
+}
+
+// resolve finds the datapack named, by id or name, among the ones /mcp serves: this Meko's, or while
+// Meko Cloud is linked, its. "" is the default datapack. An id is looked up with datapack_describe,
+// and a name with datapack_search's exact name, so neither lists every datapack (Meko Cloud refuses
+// to list an account with very many).
 func (t *tools) resolve(ctx context.Context, named string) (target, error) {
+	cloud := t.isLinked(ctx)
 	if named == "" {
-		return target{}, nil
+		return target{cloud: cloud}, nil
 	}
-	side, rest := splitSide(named)
-	if rest == "" {
-		return target{}, fmt.Errorf("name the datapack after %s: (meko-cli datapacks lists them)", side)
-	}
-	if side != "cloud" {
-		text, err := t.call(ctx, "datapack_list", map[string]any{})
+	if id, err := uuid.Parse(named); err == nil && len(named) == len(id.String()) {
+		text, err := t.call(ctx, "datapack_describe", map[string]any{"datapack_id": id.String()})
+		if te := (*toolError)(nil); errors.As(err, &te) && (te.code == "datapack_access_denied" || te.code == "not_found") {
+			return target{}, fmt.Errorf("no datapack has the id %s (meko-cli datapacks lists them)", named)
+		}
 		if err != nil {
 			return target{}, err
 		}
-		var rows []struct {
-			ID   string `json:"datapack_id"`
-			Name string `json:"datapack_name"`
-		}
-		if err := json.Unmarshal([]byte(text), &rows); err != nil {
+		var d datapackRow
+		if err = json.Unmarshal([]byte(text), &d); err != nil {
 			return target{}, err
 		}
-		for _, r := range rows {
-			if strings.EqualFold(r.ID, rest) || r.Name == rest {
-				return target{id: r.ID, name: r.Name}, nil
-			}
-		}
+		return target{cloud: cloud, id: d.ID, name: d.Name}, nil
 	}
-	if side == "local" {
-		return target{}, fmt.Errorf("no datapack is named %q here (meko-cli datapacks --local lists them)", rest)
-	}
-	c, err := t.cloudSide()
+	text, err := t.call(ctx, "datapack_search", map[string]any{"name": named, "limit": 100})
 	if err != nil {
 		return target{}, err
 	}
-	if _, perr := uuid.Parse(rest); perr == nil && side == "cloud" {
-		return target{cloud: true, id: rest, name: rest}, nil
+	var page struct {
+		Datapacks []datapackRow `json:"datapacks"`
 	}
-	rows, err := c.datapacks(ctx)
-	if side == "" && errors.Is(err, errNotLinked) {
-		return target{}, fmt.Errorf("no datapack is named %q (meko-cli datapacks lists them)", rest)
-	}
-	if err != nil {
+	if err = json.Unmarshal([]byte(text), &page); err != nil {
 		return target{}, err
 	}
-	var found []target
-	for _, d := range rows {
-		if strings.EqualFold(d.DatapackID, rest) || d.DatapackName == rest {
-			found = append(found, target{cloud: true, id: d.DatapackID, name: d.DatapackName})
-		}
-	}
-	switch {
-	case len(found) == 1:
-		return found[0], nil
-	case len(found) > 1:
-		return target{}, fmt.Errorf(
-			"%d Meko Cloud datapacks are named %q: give its id (meko-cli datapacks --json lists them)", len(found), rest)
-	case side == "cloud":
-		return target{}, fmt.Errorf("no Meko Cloud datapack is named %q (meko-cli datapacks --json lists them "+
-			"under cloud)", rest)
-	}
-	return target{}, fmt.Errorf("no datapack is named %q here or in Meko Cloud (meko-cli datapacks lists them)", rest)
+	r, err := pick(page.Datapacks, named, "meko-cli datapacks")
+	return target{cloud: cloud, id: r.ID, name: r.Name}, err
 }
 
 // defaultDatapackID is the default datapack's id, or "" once it has been deleted (Meko makes it
@@ -311,7 +277,7 @@ func runTool(l paths.Layout, prog, cmd string, f toolFlags, stdin io.Reader, std
 	defer t.close()
 	switch cmd {
 	case "datapacks":
-		err = toolDatapacks(ctx, t.toolSession, l, f, stdout, stderr)
+		err = toolDatapacks(ctx, t.toolSession, f, stdout)
 	case "add_memory":
 		err = toolAdd(ctx, t, f, stdin, stdout)
 	case "search":
@@ -331,9 +297,14 @@ func runTool(l paths.Layout, prog, cmd string, f toolFlags, stdin io.Reader, std
 		fmt.Fprintln(stderr, "Nothing was deleted")
 		return exitError
 	}
-	if te := (*toolError)(nil); errors.As(err, &te) && te.code == "datapack_id_required" {
+	te := (*toolError)(nil)
+	switch {
+	case errors.As(err, &te) && te.code == "datapack_id_required":
 		err = errors.New("there's no default datapack (it was deleted): pass --datapack NAME|ID " +
 			"(meko-cli datapacks lists them)")
+	case errors.As(err, &te) && strings.HasPrefix(te.code, "cloud_"):
+		// Meko Cloud wasn't reached, or refused the key: its detail says what to do.
+		err = errors.New(strings.TrimSuffix(te.detail, "."))
 	}
 	if err != nil {
 		return failAs(prog, stderr, err)
@@ -341,99 +312,43 @@ func runTool(l paths.Layout, prog, cmd string, f toolFlags, stdin io.Reader, std
 	return exitOK
 }
 
-// toolDatapacks lists this Meko's datapacks and, while Meko Cloud is linked and --local isn't given,
-// the linked Meko Cloud's, by name: just names and descriptions, fitted to the terminal. Where each
-// lives, whether it's shared and its id are --json's. A Meko Cloud that fails leaves a warning after
-// the local rows: they're still right.
-func toolDatapacks(ctx context.Context, t *toolSession, l paths.Layout, f toolFlags, stdout, stderr io.Writer) error {
+// toolDatapacks lists the datapacks /mcp lists (the linked Meko Cloud's while it's linked), by
+// name: just names and descriptions, fitted to the terminal. Ids are --json's.
+func toolDatapacks(ctx context.Context, t *toolSession, f toolFlags, stdout io.Writer) error {
 	text, err := t.call(ctx, "datapack_list", map[string]any{})
-	if err != nil || (f.json && f.local) {
+	if err != nil || f.json {
 		fmt.Fprintln(stdout, text)
 		return err
 	}
-	var rows []struct {
-		Name        string `json:"datapack_name"`
-		Description string `json:"description"`
-	}
+	var rows []datapackRow
 	if err := json.Unmarshal([]byte(text), &rows); err != nil {
 		return err
 	}
-	var cloud []cloudlink.Datapack
-	var cloudErr error
-	linked := false
-	if !f.local {
-		var c *cloudSide
-		if c, cloudErr = openCloud(l); cloudErr == nil {
-			cloud, cloudErr = c.datapacks(ctx)
-		}
-		linked = cloudErr == nil
-		if errors.Is(cloudErr, errNotLinked) {
-			cloudErr = nil
-		} else if cloudErr != nil {
-			cloudErr = fmt.Errorf("couldn't list Meko Cloud's datapacks: %w", cloudErr)
-		}
-	}
-	if f.json {
-		out := map[string]any{"local": json.RawMessage(text), "cloud": map[string]any{"linked": linked,
-			"datapacks": append([]cloudlink.Datapack{}, cloud...)}}
-		if cloudErr != nil {
-			out["cloud"] = map[string]string{"error": cloudErr.Error()}
-		}
-		b, _ := json.Marshal(out)
-		fmt.Fprintln(stdout, string(b))
-		return nil
-	}
-	local := make([]nameDesc, 0, len(rows))
+	list := make([]nameDesc, 0, len(rows))
 	for _, r := range rows {
-		local = append(local, nameDesc{r.Name, r.Description})
-	}
-	list := datapackList(local, cloud)
-	if len(list) == 0 && cloudErr == nil {
-		fmt.Fprintln(stdout, "No datapacks")
-	}
-	fmt.Fprint(stdout, nameDescTable(list, termWidth(stdout)))
-	if cloudErr != nil {
-		fmt.Fprintf(stderr, "%s: %v (meko-cli datapacks --local skips Meko Cloud)\n", progMekoCLI, cloudErr)
-	}
-	return nil
-}
-
-// datapackList is this Meko's datapacks and Meko Cloud's in one list, by name ignoring case. It's
-// stable, so this Meko's datapack comes first when Meko Cloud has one of the same name, as
-// --datapack picks it.
-func datapackList(local []nameDesc, cloud []cloudlink.Datapack) []nameDesc {
-	list := slices.Clone(local)
-	for _, d := range cloud {
-		list = append(list, nameDesc{d.DatapackName, d.Description})
+		list = append(list, nameDesc{r.Name, r.Description})
 	}
 	slices.SortStableFunc(list, func(a, b nameDesc) int {
 		return strings.Compare(strings.ToLower(a.name), strings.ToLower(b.name))
 	})
-	return list
+	if len(list) == 0 {
+		fmt.Fprintln(stdout, "No datapacks")
+	}
+	fmt.Fprint(stdout, nameDescTable(list, termWidth(stdout)))
+	return nil
 }
 
-// toolCreateDatapack creates a datapack here, or with --cloud in the linked Meko Cloud, through its
-// REST API.
+// toolCreateDatapack creates a datapack through datapack_create: in the linked Meko Cloud while
+// it's linked, else here.
 func toolCreateDatapack(ctx context.Context, t *tools, f toolFlags, stdout io.Writer) error {
 	name := strings.TrimSpace(f.text)
 	if name == "" {
 		return errors.New("give the new datapack's name: meko-cli create_datapack <name>")
 	}
-	var reply string
-	where := "datapack"
-	if f.cloud {
-		var err error
-		if reply, err = t.cloudCall(ctx, http.MethodPost, "/datapacks",
-			map[string]string{"name": name, "location": "cloud"}); err != nil {
-			return err
-		}
-		where = "Meko Cloud datapack"
-	} else {
-		var err error
-		if reply, err = t.call(ctx, "datapack_create", map[string]any{"name": name}); err != nil {
-			fmt.Fprintln(stdout, reply)
-			return err
-		}
+	reply, err := t.call(ctx, "datapack_create", map[string]any{"name": name})
+	if err != nil {
+		fmt.Fprintln(stdout, reply)
+		return err
 	}
 	if f.json {
 		fmt.Fprintln(stdout, reply)
@@ -446,14 +361,14 @@ func toolCreateDatapack(ctx context.Context, t *tools, f toolFlags, stdout io.Wr
 	if err := json.Unmarshal([]byte(reply), &r); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Created %s %s (%s)\n", where, r.Name, r.ID)
+	fmt.Fprintf(stdout, "Created %s (%s)\n", target{cloud: t.isLinked(ctx), name: r.Name}.noun(), r.ID)
 	return nil
 }
 
 // errDeclined means the user answered no to a command's question.
 var errDeclined = errors.New("declined")
 
-// toolDeleteDatapack deletes a datapack, named or by id, here or in the linked Meko Cloud, after asking
+// toolDeleteDatapack deletes a datapack, named or by id, through /mcp, after asking
 // (unless --force): everything in it goes for good.
 func toolDeleteDatapack(ctx context.Context, t *tools, f toolFlags, stdin io.Reader, stdout io.Writer) error {
 	named := strings.TrimSpace(f.text)
@@ -479,12 +394,8 @@ func toolDeleteDatapack(ctx context.Context, t *tools, f toolFlags, stdin io.Rea
 		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), toolTimeout)
 		defer cancel()
 	}
-	var reply string
-	if dp.cloud {
-		if reply, err = t.cloudCall(ctx, http.MethodDelete, cloudDatapackPath(dp.id, ""), nil); err != nil {
-			return err
-		}
-	} else if reply, err = t.call(ctx, "datapack_delete", map[string]any{"datapack_id": dp.id}); err != nil {
+	reply, err := t.call(ctx, "datapack_delete", map[string]any{"datapack_id": dp.id})
+	if err != nil {
 		fmt.Fprintln(stdout, reply)
 		return err
 	}
@@ -515,8 +426,7 @@ func toolAdd(ctx context.Context, t *tools, f toolFlags, stdin io.Reader, stdout
 	if err != nil {
 		return err
 	}
-	reply, err := t.tool(ctx, dp, "memory_add", "/memories",
-		map[string]any{"text": strings.TrimSpace(text), "datapack_id": dp.id})
+	reply, err := t.call(ctx, "memory_add", map[string]any{"text": strings.TrimSpace(text), "datapack_id": dp.id})
 	if err != nil || f.json {
 		fmt.Fprintln(stdout, reply)
 		return err
@@ -547,7 +457,7 @@ func toolSearch(ctx context.Context, t *tools, f toolFlags, stdout io.Writer) er
 	if err != nil {
 		return err
 	}
-	reply, err := t.tool(ctx, dp, "context_search", "/search", map[string]any{"query": f.text, "datapack_id": dp.id,
+	reply, err := t.call(ctx, "context_search", map[string]any{"query": f.text, "datapack_id": dp.id,
 		"force_source": f.source, "limit": f.limit})
 	if err != nil || f.json {
 		fmt.Fprintln(stdout, reply)
