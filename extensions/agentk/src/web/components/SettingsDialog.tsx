@@ -251,14 +251,32 @@ function WorkQueueTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefOb
       </InfoCheck>
       <InfoCheck id="set-wq-slack" label="Slack list" checked={s.workQueueSlack} onChange={(on) => change({ workQueueSlack: on })}>
         The messages on a Slack list of yours, read by Claude Code through your Slack connector. Each read is a model
-        call; on the timer it runs only while the last read worked.
+        call, so after one fails, timed syncs skip Slack until a Sync you press reads it.
       </InfoCheck>
       <Field
         label="Slack list link"
         hint={s.workQueueSlack && !s.workQueueSlackList ? 'Paste the link to your list.' : undefined}
         info={{
           for: 'set-wq-slack-list',
-          text: "Slack's To-dos can't be read by its connector, so keep a list of your own (for example Meko work queue), add the messages you want worked on, and paste its link from the list's ⋯ › Copy link. The sync reads only these columns: Message, the message's link (the list must have it), Name, its text (Slack fills it in), Reporter (optional), and Done, a checkbox (optional): rows with Done ticked are left out. A list is private until you share it; sharing one of its items gives the people you share it with edit access to the whole list.",
+          text: (
+            <>
+              <p>
+                Make a Slack list (for example "Meko work queue"), add the messages you want worked on, and paste its link
+                from the list's ⋯ › Copy link. Slack's own To-dos can't be read, so the sync uses a list of yours.
+              </p>
+              <p>It reads these columns, by name, and ignores the rest:</p>
+              <ul>
+                <li><b>Message</b> (required): the message's link.</li>
+                <li><b>Name</b>: the message's text. Slack fills it in when you add a message.</li>
+                <li><b>Reporter</b> (optional): who asked. It starts the item's notes.</li>
+                <li><b>Done</b> (optional checkbox): ticked rows are left out.</li>
+              </ul>
+              <p>
+                A list is private until you share it. Sharing one of its items gives the people you share it with edit
+                access to the whole list.
+              </p>
+            </>
+          ),
         }}
       >
         <input

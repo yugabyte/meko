@@ -423,9 +423,9 @@ export function InfoButton({ id, label }: { id: string; label: string }) {
 export function InfoPanel({ id, children }: { id: string; children: ReactNode }) {
   const open = useInfoOpen(id);
   return (
-    <p id={id} className="info-panel" hidden={!open}>
+    <div id={id} className="info-panel" hidden={!open}>
       {children}
-    </p>
+    </div>
   );
 }
 
