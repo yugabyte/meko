@@ -8,7 +8,7 @@ import { SidePanel } from './SidePanel';
 
 /**
  * A local review's findings (GET /api/sessions/:id/code-review), beside its task's terminal:
- * every candidate by round and sweep, kept or dropped and why, the scorer's verdict, the Meko
+ * every candidate by round and sweep, kept, pending or dropped (under Dismissed) and why, the scorer's verdict, the Meko
  * gotchas it credits and what the task did with it; the passes' notes and the datapacks the
  * MEKO.md files listed, by name with the gotchas one tagged (what each holds is for the review's
  * prompt, not the panel). Fetched again whenever the review moves on.
@@ -93,9 +93,9 @@ export function ReviewFindings({ session, onClose, onTerminal }: {
             {findingGroups(detail.findings).map((g) => (
               <section key={g.key} className="rv-section">
                 <h3>{g.label}</h3>
-                {g.kept.length > 0 && (
+                {g.findings.length > 0 && (
                   <ul className="rv-findings">
-                    {g.kept.map((f) => <FindingRow key={f.key} f={f} />)}
+                    {g.findings.map((f) => <FindingRow key={f.key} f={f} />)}
                   </ul>
                 )}
                 {g.dismissed.length > 0 && (
@@ -118,11 +118,11 @@ export function ReviewFindings({ session, onClose, onTerminal }: {
 
 function FindingRow({ f }: { f: CodeReviewFinding }) {
   return (
-    <li className={`rv-finding${f.kept ? '' : ' dropped'}`}>
+    <li className={`rv-finding${f.kept || f.pending ? '' : ' dropped'}`}>
       <div className="rv-head">
         <span className={`rv-sev ${f.severity}`}>{f.severity}</span>
         <span className="mono rv-where">{f.file}:{f.line}</span>
-        <span className="rv-kept">{f.kept ? 'kept' : `dropped${f.dropped ? `: ${f.dropped}` : ''}`}</span>
+        <span className="rv-kept">{f.kept ? 'kept' : f.pending ? 'pending' : `dropped${f.dropped ? `: ${f.dropped}` : ''}`}</span>
       </div>
       <p className="rv-comment">{f.comment}</p>
       <div className="rv-meta muted">

@@ -237,7 +237,7 @@ follows `reviewOpens()` in `src/web/util.ts`: while the review has a running ses
 waiting for the task's fixes (preparing, sweeping, scoring, or failed, which keeps its session for
 Retry), it opens the review's own screen, its terminal with the findings beside it on a desktop;
 otherwise (describing, which has no review session yet, fixing, done, cancelled) the findings panel beside the task's terminal (`ReviewFindings`:
-the MEKO.md files' datapacks, each by name with the gotchas one tagged; every candidate by round and sweep, the kept ones first and the dropped ones under **Dismissed**, with its passes, verdict, confidence, kept or why dropped,
+the MEKO.md files' datapacks, each by name with the gotchas one tagged; every candidate by round and sweep, the dropped ones under **Dismissed** below the kept ones and the running round's candidates, which the server marks `pending`, with its passes, verdict, confidence, kept, pending or why dropped,
 credited gotchas and what the task did), whose **Terminal** button goes to the review's screen while
 it has one. While the review holds the PR, the stage bar and the task's chip show the task in Review & PR
 (`shownStep()` in `src/web/util.ts`), though it stays in Code, and its gate shows the review, with Cancel, or Retry and

@@ -919,31 +919,32 @@ export function designLanding(prev: Landing, on: boolean, at: number | null, now
 
 /**
  * A review's findings grouped for its panel: by round, then by the sweep that first raised them,
- * in that order, each group's kept findings apart from its dropped ones (shown under Dismissed,
- * below them). A round or sweep is named only when the review had more than one.
+ * in that order, each group's dropped findings (`dismissed`, shown under Dismissed) apart from the
+ * rest, its kept ones and the running round's candidates not yet kept or dropped. A round or sweep
+ * is named only when the review had more than one.
  */
 export function findingGroups(
   findings: CodeReviewFinding[],
-): { key: string; label: string; kept: CodeReviewFinding[]; dismissed: CodeReviewFinding[] }[] {
+): { key: string; label: string; findings: CodeReviewFinding[]; dismissed: CodeReviewFinding[] }[] {
   const rounds = new Set(findings.map((f) => f.round)).size > 1;
   const sweeps = new Set(findings.map((f) => f.sweep)).size > 1;
   const groups = new Map<
     string,
-    { key: string; label: string; round: number; sweep: number; kept: CodeReviewFinding[]; dismissed: CodeReviewFinding[] }
+    { key: string; label: string; round: number; sweep: number; findings: CodeReviewFinding[]; dismissed: CodeReviewFinding[] }
   >();
   for (const f of findings) {
     const key = `${f.round}:${f.sweep}`;
     let g = groups.get(key);
     if (!g) {
       const label = [rounds ? `Round ${f.round}` : '', sweeps ? `sweep ${f.sweep}` : ''].filter(Boolean).join(', ');
-      g = { key, label: label ? label[0].toUpperCase() + label.slice(1) : 'Findings', round: f.round, sweep: f.sweep, kept: [], dismissed: [] };
+      g = { key, label: label ? label[0].toUpperCase() + label.slice(1) : 'Findings', round: f.round, sweep: f.sweep, findings: [], dismissed: [] };
       groups.set(key, g);
     }
-    (f.kept ? g.kept : g.dismissed).push(f);
+    (f.kept || f.pending ? g.findings : g.dismissed).push(f);
   }
   return [...groups.values()]
     .sort((a, b) => a.round - b.round || a.sweep - b.sweep)
-    .map(({ key, label, kept, dismissed }) => ({ key, label, kept, dismissed }));
+    .map(({ key, label, findings: fs, dismissed }) => ({ key, label, findings: fs, dismissed }));
 }
 
 /**

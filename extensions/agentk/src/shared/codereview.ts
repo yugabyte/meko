@@ -356,6 +356,8 @@ export interface CodeReviewFinding {
   kept: boolean;
   /** Why it was dropped (`refuted`, `below 50`, `line is outside the diff`, …); null when kept. */
   dropped: string | null;
+  /** The running round's candidate, not yet kept or dropped (sent while sweeping or scoring, never stored). */
+  pending?: boolean;
   outcome: FindingOutcome | null;
 }
 

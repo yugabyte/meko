@@ -221,7 +221,7 @@ export class CodeReviews {
       return {
         key: `${r.round}:${i + 1}`, round: r.round, sweep: c.sweep, file: c.finding.file, line: c.finding.line, severity: c.finding.severity,
         comment: c.finding.comment, passes: c.passes, gotchas: c.finding.gotchas, verdict: s?.verdict ?? null, confidence: s?.confidence ?? null,
-        reason: s ? (s.verdict === 'refuted' ? s.refutation : s.reason) : null, kept: false, dropped: null, outcome: null,
+        reason: s ? (s.verdict === 'refuted' ? s.refutation : s.reason) : null, kept: false, dropped: null, pending: true, outcome: null,
       };
     });
   }
