@@ -6,7 +6,7 @@ vi.mock('../../src/server/paths.js', async (orig) => ({
   claudePath: (p: string) => p.replace(/^\/net\/box(?=\/)/, ''),
 }));
 
-import { basePrompt, clipDescription, passPrompt, priorRounds, scoreBase, scorePrompt, sweepContext, trimPriorRounds } from '../../src/server/review/prompt.js';
+import { basePrompt, clipDescription, passPrompt, priorRounds, scoreBase, scorePrompt, stepList, sweepContext, trimPriorRounds } from '../../src/server/review/prompt.js';
 import { PASS_FOOTER, strategyFor } from '../../src/server/review/strategies.js';
 import type { Candidate, Diff, PriorRound, ReviewContext } from '../../src/server/review/types.js';
 
@@ -165,6 +165,26 @@ describe('the scorer', () => {
     expect(p).toContain('`src/app.ts:3` (major)\nRaised by: diff, claims');
     expect(p).toContain('"step": "r1-score-1"');
     expect(base).toContain('You are not reviewing the PR and you must not report problems of your own.');
+  });
+});
+
+describe('the steps a prompt lists', () => {
+  const steps = (n: number) => Array.from({ length: n }, (_, i) => ({ name: `score ${i + 1}`, agent: 'agentk-review-small', prompt: `Read /run/score-${i + 1}.md and do what it says.` }));
+
+  it('numbers each step with its subagent and prompt, in one list without a batch', () => {
+    expect(stepList(steps(2))).toBe(
+      '1. score 1: subagent `agentk-review-small`, prompt: `Read /run/score-1.md and do what it says.`\n'
+      + '2. score 2: subagent `agentk-review-small`, prompt: `Read /run/score-2.md and do what it says.`',
+    );
+  });
+
+  it('groups them into numbered batches of at most the batch size, the steps numbered on across them', () => {
+    const text = stepList(steps(11), 5);
+    expect(text.match(/^Batch \d+:$/gm)).toEqual(['Batch 1:', 'Batch 2:', 'Batch 3:']);
+    expect(text).toContain('5. score 5: subagent `agentk-review-small`, prompt: `Read /run/score-5.md and do what it says.`\n\nBatch 2:\n6. score 6:');
+    expect(text.endsWith('Batch 3:\n11. score 11: subagent `agentk-review-small`, prompt: `Read /run/score-11.md and do what it says.`')).toBe(true);
+    expect(stepList(steps(5), 5)).not.toContain('Batch 2:');
+    expect(stepList(steps(1), 5)).toBe('Batch 1:\n1. score 1: subagent `agentk-review-small`, prompt: `Read /run/score-1.md and do what it says.`');
   });
 });
 
