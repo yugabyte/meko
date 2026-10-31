@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yugabyte/meko/backend/internal/auth"
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/paths"
@@ -21,13 +20,13 @@ import (
 )
 
 // An AgentK from before Meko served it hands over at Meko's start: its port and remote access go
-// into config.toml, its self-signed certificate and its login come along, and the web listener then
-// serves it at /ext/agentk/ over HTTPS with that login. A second start changes nothing.
+// into web.toml and its self-signed certificate comes along, and the web listener then serves it at
+// /ext/agentk/ over HTTPS with no login: its owner is ignored. A second start changes nothing.
 func TestHandoff(t *testing.T) {
 	dir, port := setup(t)
 	webPort := os.Getenv("MEKO_WEB_PORT")
 
-	// AgentK's side: its socket, its own certificate, and its login.
+	// AgentK's side: its socket, its own certificate, and its old login.
 	agentk := shortDir(t)
 	sock := filepath.Join(agentk, "web.sock")
 	ln, err := net.Listen("unix", sock)
@@ -44,11 +43,11 @@ func TestHandoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hash, _ := auth.HashPassword("a long password")
+	const oldHash = "scrypt$16384$8$1$c2FsdA$aGFzaA" //nolint:gosec // G101: a made-up hash, which Meko ignores
 	handoff, _ := json.Marshal(extensions.Handoff{Socket: sock, Legacy: &extensions.Legacy{Bind: "0.0.0.0",
 		Port: atoi(t, webPort), TLS: &extensions.LegacyTLS{Cert: filepath.Join(agentk, "certs", tlscert.CertName),
 			Key: filepath.Join(agentk, "certs", tlscert.KeyName), SelfSigned: true},
-		Owner: &extensions.LegacyOwner{Username: "ana", PWScrypt: hash}}})
+		Owner: &extensions.LegacyOwner{Username: "ana", PWScrypt: oldHash}}})
 	cmd := filepath.Join(agentk, "agentk")
 	script := fmt.Sprintf("#!/bin/sh\n[ \"$1\" = _handoff ] && { printf '%%s\\n' '%s'; exit 0; }\nexit 0\n", handoff)
 	if err = os.WriteFile(cmd, []byte(script), 0o700); err != nil { //nolint:gosec // G306: test script
@@ -80,35 +79,20 @@ func TestHandoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	b, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	if resp.StatusCode != 401 {
-		t.Fatalf("AgentK without signing in: %d", resp.StatusCode)
+	if resp.StatusCode != 200 || string(b) != "agentk /hello" {
+		t.Fatalf("AgentK through Meko: %d %q", resp.StatusCode, b)
 	}
+	// There's no login to sign in to, AgentK's or any other.
 	resp, err = client.Post(base+"/api/v1/auth/login", "application/json", //nolint:gosec // G704: as above
 		strings.NewReader(`{"username":"ana","password":"a long password"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	var session *http.Cookie
-	for _, ck := range resp.Cookies() {
-		if ck.Name == "meko_session" {
-			session = ck
-		}
-	}
-	if resp.StatusCode != 200 || session == nil || !session.Secure {
-		t.Fatalf("AgentK's login: %d %+v", resp.StatusCode, session)
-	}
-	req, _ := http.NewRequest(http.MethodGet, base+"/ext/agentk/hello", nil) //nolint:gosec // G704: as above
-	req.AddCookie(session)
-	resp, err = client.Do(req) //nolint:gosec // G704: as above
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, _ := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if resp.StatusCode != 200 || string(b) != "agentk /hello" {
-		t.Fatalf("AgentK through Meko: %d %q", resp.StatusCode, b)
+	if resp.StatusCode != 404 {
+		t.Errorf("the login route: %d", resp.StatusCode)
 	}
 
 	// What Meko chose is in web.toml, so config.toml stays readable by a release from before it.

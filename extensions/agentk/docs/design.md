@@ -28,7 +28,7 @@ The design is split by area. Read this page first, then the part you need:
 | [Meko recall and the learn step](design/recall-and-learn.md) | What Meko gives a session at start, and what it saves at the end |
 | [Token usage](design/token-usage.md) | Reading transcripts, totals and costs, Meko's savings |
 | [Usage stats](design/usage-stats.md) | The anonymous usage report |
-| [Login and security](design/security.md) | Meko as the front door (its sign-in, local or remote access, TLS), the socket AgentK listens on, origin checks, the handoff of AgentK's old login |
+| [Access and security](design/security.md) | Meko as the front door (local or remote access with no login, TLS), the socket AgentK listens on, origin checks, the handoff of AgentK's old web settings |
 | [Surviving crashes, restarts and updates](design/recovery.md) | Recovery, auto-continue, one server per home |
 | [Releases and updates](design/releases.md) | Release builds, installing through Meko, Meko's updates and rollback |
 
@@ -52,7 +52,7 @@ Below: [Decisions so far](#decisions-so-far) · [Tech stack](#tech-stack) · [Mi
 | Project sharing | A project is shared by sharing its dedicated datapack in Meko, from the project home or, for a PR's reviewers, from its Review & PR step. A project datapack shared with you shows a banner and a notification, and opens as a new project with its repo and name filled in. |
 | Reviewing a PR | A **Review a PR** session checks out someone else's PR, in any repo, and AgentK assists the user who reviews it: a short summary to get them oriented, then answers to what they ask, with the PR's design (named in its description, fetched from Meko) open beside it and Meko searched for the decisions behind it. It posts to GitHub only when the user says. |
 | Runtime | Node 22 (bundled in releases). State uses the built-in `node:sqlite`; node-pty is the only native module. |
-| Network | Served by the Meko on this computer at `/ext/agentk/` on its port: from other devices over HTTPS behind Meko's login (remote access), or from this computer only with no login (local access). AgentK itself listens only on a unix socket. |
+| Network | Served by the Meko on this computer at `/ext/agentk/` on its port: from other devices over HTTPS (remote access), or from this computer only (local access), with no login either way; `meko ui stop` closes the port. AgentK itself listens only on a unix socket. |
 | Other terminal sessions | Not adopted. Only sessions created by AgentK are shown. |
 | Crash behaviour | After a host reboot, the server automatically brings back every open project and session with `claude --resume`. Sessions that were mid-turn are told to continue. |
 | Token usage | Tracked per session and per project (per model and per day too), read from Claude Code transcripts including subagents, with an estimated cost at API list prices. Meko calls are counted from the same transcripts (Kiro's and OpenCode's from their own logs), with an estimate of what Meko searches saved. |

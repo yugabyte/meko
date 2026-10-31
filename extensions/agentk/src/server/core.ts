@@ -655,7 +655,7 @@ export class Core extends EventEmitter {
       },
       update: this.updateStatus(),
       version: this.version,
-      // The Unix account: Meko signs people in, and its page shows the login's name.
+      // The Unix account the server runs as: Meko has no login whose name to show.
       username: this.username,
       ghLogin: this.ghUser,
       serverName: this.serverName(),

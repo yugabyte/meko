@@ -1,5 +1,5 @@
 // Package cli is the meko and meko-cli commands, one binary run by either name. meko runs Meko:
-// install, start, stop, restart, status, logs, update, version, token, ui, setup_link, cloud_link,
+// install, start, stop, restart, status, logs, update, version, token, ui, ui start|stop, cloud_link,
 // destroy, uninstall, extension list|install|update|delete, agent list|connect|disconnect (agent.go)
 // and serve. meko-cli
 // works with what it keeps, through the running server, and with the linked Meko Cloud's datapacks
@@ -40,14 +40,14 @@ var stdin io.Reader = os.Stdin
 
 // cmdFlags are the flags of the commands that aren't MCP calls.
 type cmdFlags struct {
-	keepExtensions, noService, purge, check, follow, force, noOpen, withExtensions bool
-	verbose                                                                        bool
-	lines                                                                          int
-	server, memoryEngine, service                                                  bool
-	access                                                                         string
-	all                                                                            bool
-	auto, version                                                                  string
-	extra                                                                          []string // after --
+	keepExtensions, noService, noUI, purge, check, follow, force, noOpen, withExtensions bool
+	verbose                                                                              bool
+	lines                                                                                int
+	server, memoryEngine, service                                                        bool
+	access                                                                               string
+	all                                                                                  bool
+	auto, version                                                                        string
+	extra                                                                                []string // after --
 }
 
 // Main runs the program argv0 names (meko-cli, or else meko) with args and returns the exit code.
@@ -121,6 +121,10 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		}
 		cmd, rest = cmd+" "+rest[0], rest[1:]
 	}
+	// meko ui start and meko ui stop are commands of their own; meko ui alone, or with a path, opens it.
+	if cmd == "ui" && prog == progMeko && len(rest) > 0 && (rest[0] == "start" || rest[0] == "stop") {
+		cmd, rest = cmd+" "+rest[0], rest[1:]
+	}
 	info, ok := lookup(prog, cmd)
 	if !ok || cmd == args[0] && strings.Contains(cmd, " ") { // a subcommand is two words
 		return unknownCommand(prog, cmd, rest, stderr)
@@ -160,6 +164,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	case "install":
 		fs.BoolVar(&c.noService, "no-service", false, "don't set up the login service")
 		fs.StringVar(&c.access, "access", "", "how browsers reach the web UI: local or remote")
+		fs.BoolVar(&c.noUI, "no-ui", false, "leave the web UI off (meko ui start turns it on)")
 	case "uninstall":
 		fs.BoolVar(&c.purge, "purge", false, "also destroy the data folder and its secrets")
 		fs.BoolVar(&c.force, "force", false, "with --purge, destroy without asking (keeping the extensions' data)")
@@ -315,14 +320,16 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 			service: c.service, json: t.json}, stdout)
 	case "ui":
 		return runUI(l, t.text, !c.noOpen, stdout, stderr)
-	case "setup_link":
-		return runSetupLink(l, stdout, stderr)
+	case "ui start":
+		return runUISwitch(l, true, stdout, stderr)
+	case "ui stop":
+		return runUISwitch(l, false, stdout, stderr)
 	case "cloud_link":
 		return runCloudLink(l, cl, stdin, stdout, stderr)
 	case "destroy":
 		return runDestroy(l, destroyOptions{force: c.force, withExtensions: c.withExtensions}, stdin, stdout, stderr)
 	case "install":
-		return runInstall(l, c.noService, c.access, stdout, stderr)
+		return runInstall(l, c.noService, c.access, c.noUI, stdout, stderr)
 	case "uninstall":
 		return runUninstall(l, c.purge, destroyOptions{force: c.force, withExtensions: c.withExtensions}, stdout, stderr)
 	case "extension list":

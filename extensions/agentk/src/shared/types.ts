@@ -2671,7 +2671,7 @@ export type TermServerMessage =
 // Some errors add a machine-readable `code` next to `error`: DATAPACK_LIMIT (402, the Meko plan's
 // datapack limit), MEKO_OFF (409).
 // The server listens only on its unix socket (`Paths.webSock`), and Meko serves it to browsers at
-// /ext/agentk/ with the prefix stripped: Meko signs people in, so every request on the socket is
+// /ext/agentk/ with the prefix stripped: Meko decides who gets in, so every request on the socket is
 // let in. Writes and WebSocket upgrades still refuse a cross-origin `Origin`.
 //
 // GET    /healthz                              → { ok: true, version }

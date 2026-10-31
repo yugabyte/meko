@@ -208,15 +208,27 @@ describe('Settings › Harness', () => {
 });
 
 describe('Settings › General', () => {
-  it("links to Meko's Meko Cloud and account pages", () => {
-    const html = renderToStaticMarkup(createElement(MekoLinks, {
-      meko: { configured: true, url: 'http://127.0.0.1:7778/mcp', source: 'local', webUrl: null, sharing: false, local: 'running', claude: { gaps: [], capture: [], unchecked: [], checking: false }, kiro: null, opencode: null, agentList: 'unread' },
-      auth: { access: 'local', signedIn: true },
-    }));
-    expect([...html.matchAll(/<a[^>]*id="(set-meko-[\w-]+)"[^>]*href="([^"]+)"/g)].map(([, id, href]) => `${id} ${href}`))
-      .toEqual(['set-meko-cloud /settings/meko-cloud', 'set-meko-account /account']);
+  const localMeko: MekoStatus = { configured: true, url: 'http://127.0.0.1:7778/mcp', source: 'local', webUrl: null, sharing: false, local: 'running', claude: { gaps: [], capture: [], unchecked: [], checking: false }, kiro: null, opencode: null, agentList: 'unread' };
+  const links = (html: string) =>
+    [...html.matchAll(/<a[^>]*id="(set-meko-[\w-]+)"[^>]*href="([^"]+)"/g)].map(([, id, href]) => `${id} ${href}`);
+
+  it("links to Meko's Meko Cloud page, and to no account on a Meko with no login", () => {
+    const html = renderToStaticMarkup(createElement(MekoLinks, { meko: localMeko, auth: { access: 'local', signedIn: true, username: null } }));
+    expect(links(html)).toEqual(['set-meko-cloud /settings/meko-cloud']);
     // The ⓘ's text opens under the setting, after its status line.
     expect(html).toMatch(/<span class="hint">AgentK uses the Meko on this computer\.<\/span><p id="set-meko-info" class="info-panel" hidden="">Meko opens AgentK on this computer without a sign-in\./);
+    const remote = renderToStaticMarkup(createElement(MekoLinks, { meko: localMeko, auth: { access: 'remote', signedIn: true, username: null } }));
+    expect(remote).toContain('Meko opens AgentK without a sign-in.');
+  });
+
+  it('links to the account page of a Meko from before it dropped its login', () => {
+    const html = renderToStaticMarkup(createElement(MekoLinks, { meko: localMeko, auth: { access: 'remote', signedIn: true, username: 'ana' } }));
+    expect(links(html)).toEqual(['set-meko-cloud /settings/meko-cloud', 'set-meko-account /account']);
+    expect(html).toContain('Meko signs you in to AgentK.');
+    // With local access, that Meko reports its login's name too, but nobody signs in.
+    const local = renderToStaticMarkup(createElement(MekoLinks, { meko: localMeko, auth: { access: 'local', signedIn: true, username: 'ana' } }));
+    expect(links(local)).toEqual(['set-meko-cloud /settings/meko-cloud', 'set-meko-account /account']);
+    expect(local).toContain('Meko opens AgentK on this computer without a sign-in.');
   });
 });
 

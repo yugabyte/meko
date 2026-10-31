@@ -36,7 +36,7 @@ export function SettingsDialog({
   onClose,
   onWhatsNew,
 }: {
-  /** What Meko, which signs people in to AgentK, says about this browser (null without Meko). */
+  /** What Meko, which decides who reaches AgentK, says about this browser (null without Meko). */
   mekoAuth: MekoAuth | null;
   update: UpdateStatus;
   meko: MekoStatus;
@@ -836,7 +836,8 @@ const OWN_KEY_FIX = 'Link Meko Cloud on Meko’s Meko Cloud page to move it ther
 
 /**
  * Settings › General's ways to Meko's own pages: the Meko Cloud link (Meko keeps it for AgentK and
- * its other extensions) and the account that signs people in to both.
+ * its other extensions) and, on a Meko from before it dropped its login, the account that signs
+ * people in to both. A newer Meko has no account page: its status has no username.
  */
 export function MekoLinks({ meko, auth }: { meko: MekoStatus; auth: MekoAuth | null }) {
   const host = httpHost(meko.url ?? '');
@@ -854,16 +855,18 @@ export function MekoLinks({ meko, auth }: { meko: MekoStatus; auth: MekoAuth | n
           : 'Meko isn’t set up: start Meko on this computer (meko start), or link Meko Cloud.'}
       </span>
       <InfoPanel id="set-meko-info">
-        {auth?.access === 'local' ? 'Meko opens AgentK on this computer without a sign-in.' : 'Meko signs you in to AgentK.'} Who can
+        {auth?.access === 'remote' && auth.username ? 'Meko signs you in to AgentK.' : auth?.access === 'local' ? 'Meko opens AgentK on this computer without a sign-in.' : 'Meko opens AgentK without a sign-in.'} Who can
         reach AgentK, and on which port, are set in Meko’s config.toml, in its <code>[web]</code> table.
       </InfoPanel>
       <div className="settings-actions">
         <a className="btn small" id="set-meko-cloud" href={MEKO_CLOUD_PATH}>
           Meko Cloud ↗
         </a>
-        <a className="btn small" id="set-meko-account" href={MEKO_ACCOUNT_PATH}>
-          Account ↗
-        </a>
+        {auth?.username && (
+          <a className="btn small" id="set-meko-account" href={MEKO_ACCOUNT_PATH}>
+            Account ↗
+          </a>
+        )}
       </div>
     </div>
   );

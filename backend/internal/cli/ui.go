@@ -2,8 +2,10 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/paths"
+	"github.com/yugabyte/meko/backend/internal/server"
 )
 
 // openBrowser opens a URL in the user's browser; tests replace it.
@@ -23,8 +26,7 @@ var openBrowser = func(url string) error {
 }
 
 // runUI opens the web listener's page at path ("/" for Meko's web UI, /ext/agentk/ for AgentK's).
-// The link carries no credential: with local access a browser on this computer needs none, and with
-// remote access the page signs in. With remote access and no login yet, it prints a setup link instead.
+// The link carries no credential: there's no login, with local or remote access.
 func runUI(l paths.Layout, path string, open bool, stdout, stderr io.Writer) int {
 	up, err := running(l.Lock)
 	if err != nil {
@@ -51,6 +53,9 @@ func runUI(l paths.Layout, path string, open bool, stdout, stderr io.Writer) int
 	if w == nil || w.URL == "" {
 		return fail(stderr, fmt.Errorf("this server has no web listener"))
 	}
+	if !w.Enabled {
+		return fail(stderr, errWebOff)
+	}
 	if !w.Listening {
 		// Another program may hold the port (an AgentK from before Meko served it): don't open its page.
 		why := w.Error
@@ -58,15 +63,6 @@ func runUI(l paths.Layout, path string, open bool, stdout, stderr io.Writer) int
 			why = "it's starting"
 		}
 		return fail(stderr, fmt.Errorf("the web UI isn't listening at %s yet: %s", w.URL, why))
-	}
-	if w.Access == config.AccessRemote && !w.Login {
-		link, lerr := c.setupLink(ctx)
-		if lerr != nil {
-			return fail(stderr, lerr)
-		}
-		fmt.Fprintln(stderr, "No login is set up yet. Open this link to make one; it works once, within 7 days")
-		fmt.Fprintln(stdout, link.URL)
-		return exitOK
 	}
 	if path == "" {
 		path = "/"
@@ -84,41 +80,85 @@ func runUI(l paths.Layout, path string, open bool, stdout, stderr io.Writer) int
 	return exitOK
 }
 
-// runSetupLink prints a one-time link that sets up the web listener's login, or replaces it (the way
-// back in after a lost password: it turns two-step sign-in off and signs every browser out).
-func runSetupLink(l paths.Layout, stdout, stderr io.Writer) int {
+var errWebOff = errors.New("the web UI is off. Turn it on with meko ui start")
+
+// runUISwitch is meko ui start (on) and meko ui stop: it sets [web] enabled in web.toml, and has a
+// running server start or stop the web listener now; a stopped one reads it when it starts.
+func runUISwitch(l paths.Layout, on bool, stdout, stderr io.Writer) int {
+	cfg, err := config.Load(l.Config, os.Getenv, config.Overrides{})
+	if err != nil {
+		return fail(stderr, err)
+	}
+	state := map[bool]string{true: "on", false: "off"}[on]
+	if cfg.Web.Enabled == on {
+		fmt.Fprintf(stdout, "The web UI is already %s\n", state)
+		return exitOK
+	}
+	if err = config.SetWebEnabled(l.Config, on); errors.Is(err, config.ErrWebEnabledSet) {
+		return fail(stderr, errors.New("config.toml sets [web] enabled; change it there and run meko restart"))
+	} else if err != nil {
+		return fail(stderr, err)
+	}
 	up, err := running(l.Lock)
 	if err != nil {
 		return fail(stderr, err)
 	}
 	if !up {
-		fmt.Fprintln(stderr, "meko: Meko isn't running. Start it with meko start")
-		return exitNotRunning
+		if on {
+			fmt.Fprintln(stdout, "Turned the web UI on; it starts with Meko (meko start)")
+		} else {
+			fmt.Fprintln(stdout, "Turned the web UI off; it stays off when Meko starts")
+		}
+		return exitOK
 	}
 	c, err := newClient(l)
 	if err != nil {
 		return fail(stderr, err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), webWait+drainTimeout)
 	defer cancel()
-	st, err := c.status(ctx)
-	if err != nil {
+	if err = c.reloadWeb(ctx); err != nil {
 		return fail(stderr, err)
 	}
-	link, err := c.setupLink(ctx)
-	if err != nil {
+	st, err := waitWebSwitched(ctx, c, on)
+	switch {
+	case err != nil:
 		return fail(stderr, err)
-	}
-	fmt.Fprintln(stdout, link.URL)
-	if st.Web != nil && st.Web.Login {
-		fmt.Fprintln(stderr, "The link works once, within 7 days. Using it replaces the login, "+
-			"turns two-step sign-in off and signs every browser out")
-	} else {
-		fmt.Fprintln(stderr, "The link works once, within 7 days")
-	}
-	if st.Web != nil && st.Web.Access != config.AccessRemote {
-		fmt.Fprintln(stderr, "Access is local, so this computer's browser needs no login; the login is for "+
-			"remote access ([web] access = \"remote\" in config.toml)")
+	case on && !st.Listening:
+		why := st.Error
+		if why == "" {
+			why = "it's still starting (meko status says when it's up)"
+		}
+		return fail(stderr, fmt.Errorf("the web UI is on, but isn't listening at %s yet: %s", st.URL, why))
+	case on:
+		fmt.Fprintf(stdout, "Started the web UI at %s\n", st.URL)
+	case st.Listening:
+		return fail(stderr, errors.New("the web UI is off, but is still stopping (meko status says when it has)"))
+	default:
+		fmt.Fprintln(stdout, "Stopped the web UI")
 	}
 	return exitOK
+}
+
+// waitWebSwitched waits, until ctx ends, for the web listener to take up [web] enabled = on: to
+// listen, or say why it can't, when on; to stop listening when off.
+func waitWebSwitched(ctx context.Context, c *client, on bool) (server.WebStatus, error) {
+	for {
+		st, err := c.status(ctx)
+		if err != nil {
+			return server.WebStatus{}, err
+		}
+		if st.Web == nil {
+			return server.WebStatus{}, errors.New("this server has no web listener")
+		}
+		w := *st.Web
+		if w.Enabled == on && (on && (w.Listening || w.Error != "") || !on && !w.Listening) {
+			return w, nil
+		}
+		select {
+		case <-ctx.Done():
+			return w, nil
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
 }
