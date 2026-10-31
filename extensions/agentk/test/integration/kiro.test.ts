@@ -84,7 +84,7 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
     expect(lines(env, 'argv.jsonl')[1].args).toEqual(['chat', '--agent', 'agentk', '--resume-id', row.agent_session_id]);
   });
 
-  it("shows Meko's m while Kiro calls Meko, and records its calls for the counts, What Meko doesn't know and the call log", async () => {
+  it("shows Meko's m while Kiro calls Meko, and records its calls for the counts and the call log", async () => {
     // Kiro has no mod: its Meko calls are told by a hook before each call to a Meko server.
     env.core.config.claude.mod = false;
     const agent = JSON.parse(readFileSync(join(process.env.KIRO_HOME!, 'agents', 'agentk.json'), 'utf8'));
@@ -106,16 +106,15 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
 
     // The refused call is recorded as failed, as Claude's refused calls are.
     await waitFor(() => all<{ n: number }>(env.core.db, 'SELECT COUNT(*) AS n FROM meko_calls WHERE session_id = ?', s.id)[0].n, (n) => n === 3, 10000, 'the refused call');
-    const calls = all(env.core.db, 'SELECT tool, kind, agent, outcome, results, quality, query, model FROM meko_calls WHERE session_id = ? ORDER BY at, query', s.id);
+    const calls = all(env.core.db, 'SELECT tool, kind, agent, outcome, results, model FROM meko_calls WHERE session_id = ? ORDER BY at, rowid', s.id);
     expect(calls).toEqual([
-      { tool: 'memory_search', kind: 'lookup', agent: null, outcome: 'found', results: 1, quality: null, query: 'meko 1500', model: null },
-      { tool: 'memory_search', kind: 'lookup', agent: null, outcome: 'empty', results: 0, quality: 'empty', query: 'meko 10 empty', model: null },
-      { tool: 'memory_search', kind: 'lookup', agent: null, outcome: 'error', results: null, quality: null, query: 'meko 1500 refused', model: null },
+      { tool: 'memory_search', kind: 'lookup', agent: null, outcome: 'found', results: 1, model: null },
+      { tool: 'memory_search', kind: 'lookup', agent: null, outcome: 'empty', results: 0, model: null },
+      { tool: 'memory_search', kind: 'lookup', agent: null, outcome: 'error', results: null, model: null },
     ]);
     const usage = (await env.core.projects.home(p.id)).usage;
     expect(usage.bySession.find((u) => u.sessionId === s.id)?.meko).toEqual({ lookups: 3, found: 1, saves: 0 });
     expect(usage.meko).toMatchObject({ lookups: 3, found: 1, empty: 1 });
-    expect(env.core.projects.mekoGaps(p.id, 'open', undefined, undefined).gaps.map((g) => g.query)).toContain('meko 10 empty');
     // The call log has them as the session's agent's, with no time taken (Kiro doesn't say).
     const page = await env.core.sessions.mekoCalls(s.id, { by: 'claude' });
     expect(page.calls.map((c) => ({ tool: c.tool, ok: c.ok, ms: c.ms, error: c.error }))).toEqual([

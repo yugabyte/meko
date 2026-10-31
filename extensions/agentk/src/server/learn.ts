@@ -5,7 +5,7 @@ import { all, get, run } from './db.js';
 import type { ModReply } from './hooks.js';
 import { errMsg } from './log.js';
 import { launchedAgentId, mekoTag, withMekoScope, type SimilarMemory } from './meko.js';
-import { learnGaps, markGap, projectGaps, type GapAction } from './mekogaps.js';
+import type { MekoQuestion, QuestionMark } from './mekoquestions.js';
 import { LEARN_AGENT } from './mekousage.js';
 import { claudePath } from './paths.js';
 import { HttpError } from './projects.js';
@@ -29,6 +29,19 @@ const FACT_CHARS = 2000;
 /** The most facts from earlier learn steps a new one is told about (the latest), and how much of each. */
 const COVERED_MAX = 60;
 const COVERED_CHARS = 400;
+/** The most of Meko's open questions a learn step is offered (the session's own first), and how much of each. */
+export const LEARN_QUESTIONS_MAX = 50;
+export const LEARN_QUESTION_CHARS = 300;
+
+/**
+ * The open questions on Meko's Context Gaps a learn step offers the fork: those the session's own
+ * conversation asked first, then the rest, each in Meko's order (latest asked first), at most
+ * LEARN_QUESTIONS_MAX, each query on one line and cut to LEARN_QUESTION_CHARS.
+ */
+export function learnQuestions(open: MekoQuestion[]): { key: string; query: string; own: boolean }[] {
+  return [...open.filter((q) => q.own), ...open.filter((q) => !q.own)].slice(0, LEARN_QUESTIONS_MAX)
+    .map((q) => ({ key: q.key, query: q.query.replace(/\s+/g, ' ').trim().slice(0, LEARN_QUESTION_CHARS), own: q.own }));
+}
 
 const KINDS: Record<string, string> = {
   'how-it-works': 'How it works',
@@ -42,8 +55,8 @@ const KINDS: Record<string, string> = {
  * What the fork is asked: the facts this session learned, as JSON, leaving out what it already
  * saved itself and what earlier learn steps covered (`covered`; a fork leaves nothing in the
  * transcript, so it can't see them). It states the saving rule in full: a session launched before
- * the rule was in the system prompt doesn't have it. With `questions` (the project's searches Meko
- * couldn't answer, the session's own first, `learnGaps`), each fact also names the ones it answers, by number.
+ * the rule was in the system prompt doesn't have it. With `questions` (the open questions on Meko's
+ * Context Gaps, the session's own first, `learnQuestions`), each fact also names the ones it answers, by number.
  */
 export function extractPrompt(covered: string[], questions: { query: string; own: boolean }[] = []): string {
   const facts = questions.length
@@ -58,7 +71,8 @@ Reply {"facts":[]} when there is nothing new worth saving.`;
 
 /**
  * The questions part of the fork's prompt: the searches Meko couldn't answer, numbered in one run,
- * this session's (they come first) and then other sessions' on the project. Empty when there are none.
+ * this session's (they come first) and then the others on the datapack (any agent's that searched it
+ * through Meko). Empty when there are none.
  */
 function questionsText(questions: { query: string; own: boolean }[]): string {
   if (!questions.length) return '';
@@ -67,9 +81,9 @@ function questionsText(questions: { query: string; own: boolean }[]): string {
   const others = numbered.filter((q) => !q.own).map((q) => q.line).join('\n');
   const lists = [
     own && `Meko couldn't answer these searches from this session:\n${own}`,
-    others && (own ? `Nor these, from other sessions on this project:\n${others}` : `Meko couldn't answer these searches from other sessions on this project:\n${others}`),
+    others && (own ? `Nor these, other searches on this datapack:\n${others}` : `Meko couldn't answer these other searches on this datapack:\n${others}`),
   ].filter(Boolean).join('\n\n');
-  return `\n\n${lists}\nFor each one this session found the answer to, include a fact that answers it, and list its number in that fact's "answers" (a fact that answers none has "answers":[]). One fact can answer several that ask the same thing. Include it even if you saved the answer to Meko yourself: AgentK checks it against what Meko has. Leave a question out when this session didn't find the answer, or when the only answer is about this task or this machine. Don't guess: answer another session's question only when this session established the answer itself.`;
+  return `\n\n${lists}\nFor each one this session found the answer to, include a fact that answers it, and list its number in that fact's "answers" (a fact that answers none has "answers":[]). One fact can answer several that ask the same thing. Include it even if you saved the answer to Meko yourself: AgentK checks it against what Meko has. Leave a question out when this session didn't find the answer, or when the only answer is about this task or this machine. Don't guess: answer another search's question only when this session established the answer itself.`;
 }
 
 /**
@@ -245,8 +259,10 @@ interface Job {
   step: 'extract' | 'search' | 'check' | 'save';
   facts: Fact[];
   similar: SimilarMemory[][];
-  /** The project's questions Meko couldn't answer, as offered to the fork (its numbers are their places, from 1). */
+  /** Meko's open questions on the datapack, as offered to the fork (its numbers are their places, from 1). */
   questions: { key: string; query: string }[];
+  /** The session's Meko conversation, which the questions were read for and its marks are made in (null when Meko didn't give it). */
+  conversation: string | null;
   saves: number;
   updates: number;
   skips: number;
@@ -434,19 +450,36 @@ export class Learner {
 
   // ---- through the mod ----
 
+  /**
+   * Starts a step through the mod and returns at once, its timeout armed: nothing that starts one
+   * (the hook socket's `/mod/learn/start`, Merge & Close, Discard) waits on Meko. The session's
+   * conversation and Meko's open questions on the datapack (the session's own first; none when Meko
+   * doesn't keep them) are read in the background, then the fork's prompt is handed to the mod.
+   */
   private startMod(row: SessionRow, trigger: LearnTrigger, dp: DatapackRef): void {
     const id = randomUUID();
     this.insert(row.id, id, trigger, 'mod', null);
-    const questions = learnGaps(this.db, row.project_id, row.id);
     const timer = setTimeout(() => {
       const job = this.jobs.get(id);
       if (job) this.fail(job, job.step, TIMED_OUT[job.step]);
     }, this.timeoutMs);
     timer.unref?.();
-    this.jobs.set(id, { id, sessionId: row.id, trigger, datapack: dp, step: 'extract', facts: [], similar: [], questions, saves: 0, updates: 0, skips: 0, tried: 0, taught: 0, dismissed: 0, timer });
-    run(this.db, 'UPDATE meko_learns SET questions = ? WHERE id = ?', questions.length, id);
-    this.core.sessions.mod.queueLearn(row.id, { id, kind: 'extract', prompt: extractPrompt(this.covered(row.id, dp.id), questions) });
+    const job: Job = { id, sessionId: row.id, trigger, datapack: dp, step: 'extract', facts: [], similar: [], questions: [], conversation: null, saves: 0, updates: 0, skips: 0, tried: 0, taught: 0, dismissed: 0, timer };
+    this.jobs.set(id, job);
     this.core.log.info(`saving what ${row.id} learned to ${dp.name} through AgentK's mod`);
+    void (async () => {
+      const conversation = await this.core.sessions.conversationId(row, dp).catch(() => null);
+      const questions = learnQuestions((await this.core.mekoQuestions.openQuestions(dp.id, conversation)) ?? []);
+      // Closed meanwhile (timed out, the turn was interrupted, or the session went): nothing to hand the mod.
+      if (this.jobs.get(id) !== job) return;
+      job.questions = questions;
+      job.conversation = conversation;
+      run(this.db, 'UPDATE meko_learns SET questions = ? WHERE id = ?', questions.length, id);
+      this.core.sessions.mod.queueLearn(row.id, { id, kind: 'extract', prompt: extractPrompt(this.covered(row.id, dp.id), questions) });
+    })().catch((e: unknown) => {
+      const live = this.jobs.get(id);
+      if (live) this.fail(live, 'extract', errMsg(e));
+    });
   }
 
   /**
@@ -531,19 +564,19 @@ export class Learner {
               job.skips++;
               // Meko already says it: the questions it answers are duplicates of what Meko has.
               const known = (job.similar[i] ?? []).find((m) => m.id === d.id);
-              this.markQuestions(row, job, questions, { kind: 'dismiss', session: row.id, memory: known?.text ?? null });
+              await this.markQuestions(job, questions, { state: 'dismissed', memoryId: known?.id ?? null });
             } else if (target) {
               written = d.text && !machineSpecific(d.text, local) ? d.text : written;
               await this.core.meko.updateMemory(target.id, written, job.datapack.id, target.agentId, conv);
               job.updates++;
-              this.markQuestions(row, job, questions, { kind: 'teach', text: written, datapack: job.datapack.name, session: row.id });
+              await this.markQuestions(job, questions, { state: 'taught', text: written, memoryId: target.id });
             } else {
               await this.core.meko.addMemory(written, job.datapack.id, agent, conv, {
                 source: 'agent-k-local', kind: 'learned', fact: f.kind, component: f.component || null, session: row.id, learn: job.id,
                 ...(questions.length ? { questions: questions.map((q) => q.query) } : {}),
               });
               job.saves++;
-              this.markQuestions(row, job, questions, { kind: 'teach', text: written, datapack: job.datapack.name, session: row.id });
+              await this.markQuestions(job, questions, { state: 'taught', text: written });
             }
             this.cover(job, written);
           } catch (e) {
@@ -561,19 +594,20 @@ export class Learner {
   }
 
   /**
-   * Marks the questions a fact answers taught or dismissed, each only while it's still open: one a
-   * person taught or dismissed while the step ran keeps their mark, and one asked again and answered
-   * since is off the list. Nothing once the step has closed (its time ran out while the write was
-   * on its way): its counts are written, and it said what it got done.
+   * Marks the questions a fact answers taught or dismissed on Meko's Context Gaps, in the session's
+   * conversation, each only while it's still open: one a person taught or dismissed while the step
+   * ran keeps their mark, and one asked again and answered since is off the list. Nothing once the
+   * step has closed (its time ran out while the write was on its way), or when Meko doesn't answer:
+   * its counts are only what Meko took.
    */
-  private markQuestions(row: SessionRow, job: Job, questions: { key: string }[], action: GapAction & { kind: 'teach' | 'dismiss' }): void {
+  private async markQuestions(job: Job, questions: { key: string }[], mark: QuestionMark & { state: 'taught' | 'dismissed' }): Promise<void> {
     if (!questions.length || !this.jobs.has(job.id)) return;
-    const open = new Set(projectGaps(this.db, row.project_id).filter((g) => g.state === 'open').map((g) => g.key));
+    const open = new Set(((await this.core.mekoQuestions.openQuestions(job.datapack.id, null)) ?? []).map((q) => q.key));
     for (const q of questions) {
-      if (!open.has(q.key)) continue;
-      markGap(this.db, row.project_id, q.key, action);
+      if (!open.has(q.key) || !this.jobs.has(job.id)) continue;
       open.delete(q.key);
-      if (action.kind === 'teach') job.taught++;
+      if (!(await this.core.mekoQuestions.mark(job.datapack.id, q.key, mark, job.conversation))) continue;
+      if (mark.state === 'taught') job.taught++;
       else job.dismissed++;
     }
   }
@@ -675,6 +709,27 @@ export class Learner {
     run(this.db, "UPDATE meko_learns SET ended_at = ?, outcome = 'interrupted', saves = ?, updates = ?, skips = ?, taught = ?, dismissed = ? WHERE id = ?",
       Date.now(), job?.saves ?? 0, job?.updates ?? 0, job?.skips ?? 0, job?.taught ?? 0, job?.dismissed ?? 0, open.id);
     this.core.lifecycle.afterLearn(sessionId);
+  }
+
+  /**
+   * A learn session left Explore: moved on (from then on it's a task like any other), or closed. Its
+   * searches while it seeded checked before each save into the datapack it was filling, so finding
+   * nothing was expected, not something Meko should be taught: Meko forgets them as questions (its
+   * Context Gaps). One that found something already answered another session's question there. In
+   * the background, never failing the move or the close; nothing with Meko off or not answering.
+   */
+  seeded(row: SessionRow): void {
+    const dp = this.core.mekoStatus.configured ? sessionDatapack(this.db, row) : null;
+    if (row.purpose !== 'learn' || !dp) return;
+    // Only its first time in Explore was seeding: moved back there later, it's a task like any other,
+    // and its searches since are questions. With one Explore ever, every ask before now was made in it.
+    if ((get<{ n: number }>(this.db, "SELECT COUNT(*) AS n FROM session_stages WHERE session_id = ? AND stage = 'explore'", row.id)?.n ?? 0) > 1) return;
+    const before = Date.now();
+    void (async () => {
+      const conversation = await this.core.sessions.conversationId(row, dp);
+      if (!(await this.core.mekoQuestions.forgetAsks(dp.id, conversation, before))) return;
+      this.core.log.info(`Meko forgot ${row.id}'s searches while it seeded ${dp.name}`);
+    })().catch((e: unknown) => this.core.log.warn(`forgetting ${row.id}'s searches while it seeded failed`, errMsg(e)));
   }
 
   /**

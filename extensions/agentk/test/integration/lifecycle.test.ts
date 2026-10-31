@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PrStatus } from '../../src/server/github.js';
 import { mekoScope, sessionAgentId } from '../../src/server/meko.js';
 import type { CreateProjectRequest, CreateSessionRequest, ReviewerMode } from '../../src/shared/types.js';
+import type { FakeQuestion } from '../helpers.js';
 
 // GitHub is mocked; git, the session host and the (fake) claude process are real.
 const gh = vi.hoisted(() => ({
@@ -77,10 +78,9 @@ function tip(dir: string): string {
   }
 }
 
-const { makeEnv, readJsonl, waitFor } = await import('../helpers.js');
+const { fakeMekoQuestions, makeEnv, readJsonl, useLocalMeko, waitFor } = await import('../helpers.js');
 const { all, get: dbGet, run } = await import('../../src/server/db.js');
 const { SKIPPED_TEXT } = await import('../../src/server/learn.js');
-const { markGap, projectGaps } = await import('../../src/server/mekogaps.js');
 type TestEnv = Awaited<ReturnType<typeof makeEnv>>;
 
 function status(over: Partial<PrStatus> = {}): PrStatus {
@@ -489,97 +489,98 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(env.meko.calls.find((c) => c.name === 'updateMemory')?.args.slice(0, 2)).toEqual(['m1', 'Gotcha (x.ts): The cache is per process.']);
   });
 
-  it("teaches Meko the project's open questions the session found the answers to, its own first, and dismisses those Meko already knew", async () => {
-    fakeFiles({ mod: '' });
-    const s = await inReview('Questions');
-    await waitFor(() => env.core.sessions.mod.learnReady(s.id), (r) => r, 10000, 'the mod to poll');
-    const projectId = env.core.sessions.row(s.id).project_id;
-    run(env.core.db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
-      hook_token, desired, status, stage, created_at) VALUES ('other', ?, 'other', 'Other', 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`, projectId);
-    const search = (sessionId: string, id: string, query: string, at: number) =>
-      run(env.core.db, `INSERT INTO meko_calls(session_id, tool_use_id, tool, kind, at, input_chars, outcome, results, query, query_key, quality)
-        VALUES (?, ?, 'context_search', 'lookup', ?, 40, 'empty', 0, ?, ?, 'empty')`, sessionId, id, at, query, query.toLowerCase());
-    // Latest first, as offered: 1 and 2 are one question in two wordings, 3 and 4 are known to Meko.
-    search(s.id, 'q1', 'Poll queue order', 4000);
-    search(s.id, 'q2', 'Which order do polls run in', 3000);
-    search(s.id, 'q3', 'Why migrations are append-only', 2000);
-    search(s.id, 'q4', 'Can a shipped migration change', 1000);
-    // Another session's question is offered after this session's own, though it was asked later.
-    // AgentK's search at start and one already dismissed are not offered.
-    // Another session asking one of this session's questions later doesn't move it up this session's list.
-    search('other', 'q5', 'Release tag retention', 5000);
-    search('other', 'q7', 'Can a shipped migration change', 6000);
-    run(env.core.db, `INSERT OR REPLACE INTO meko_preloads(session_id, at, outcome, results, chars, ms, query, query_key, quality) VALUES (?, 4500, 'empty', 0, 0, 900, 'do it', 'do it', 'empty')`, s.id);
-    search(s.id, 'q6', 'Old question', 500);
-    markGap(env.core.db, projectId, 'old question', { kind: 'dismiss' });
-    fakeFiles({
-      'learn-facts': JSON.stringify({ facts: [
-        { kind: 'decision', component: 'lifecycle.ts', text: 'Polls for a session run one at a time.', answers: [1, 2] },
-        { kind: 'gotcha', component: 'db.ts', text: 'Migrations are append-only.', answers: [3, 4] },
-        { kind: 'how-it-works', component: 'release.yml', text: 'Release tags are kept forever.', answers: [5] },
-      ] }),
-      'learn-decisions': '{"decisions":[{"n":1,"action":"add"},{"n":2,"action":"skip","id":"m2"},{"n":3,"action":"add"}]}',
-    });
-    Object.assign(env.meko, {
-      similar: async (query: string) => {
-        // Someone dismisses question 4 on the page while the step runs: theirs stands.
-        markGap(env.core.db, projectId, 'can a shipped migration change', { kind: 'dismiss' });
-        return query.startsWith('Gotcha') ? [{ id: 'm2', text: 'Never edit a shipped migration.', agentId: 'a' }] : [];
-      },
-    });
-    await env.core.sessions.action(s.id, 'learn');
-    await waitFor(() => env.core.sessions.get(s.id).learning, (l) => !l, 10000, 'the learn step');
+  it("teaches Meko the datapack's open questions the session found the answers to, its own first, and dismisses those Meko already knew", async () => {
+    const meko = await fakeMekoQuestions();
+    try {
+      fakeFiles({ mod: '' });
+      await useLocalMeko(env, meko.url);
+      const s = await inReview('Questions');
+      await waitFor(() => env.core.sessions.mod.learnReady(s.id), (r) => r, 10000, 'the mod to poll');
+      // Meko's open questions, latest asked first: 1 and 2 are one question in two wordings, 3 and 4
+      // are known to Meko. Another session's is offered after this session's own (conv-1's), though
+      // asked later; one already dismissed isn't offered.
+      const questions: FakeQuestion[] = [
+        { key: 'release tag retention', query: 'Release tag retention', askedBy: ['conv-other'] },
+        { key: 'poll queue order', query: 'Poll queue order', askedBy: ['conv-1'] },
+        { key: 'which order do polls run in', query: 'Which order do polls run in', askedBy: ['conv-1'] },
+        { key: 'why migrations are append-only', query: 'Why migrations are append-only', askedBy: ['conv-1'] },
+        { key: 'can a shipped migration change', query: 'Can a shipped migration change', askedBy: ['conv-other', 'conv-1'] },
+        { key: 'old question', query: 'Old question', askedBy: ['conv-1'], state: 'dismissed' },
+      ];
+      meko.datapacks.set('dp-1', questions);
+      fakeFiles({
+        'learn-facts': JSON.stringify({ facts: [
+          { kind: 'decision', component: 'lifecycle.ts', text: 'Polls for a session run one at a time.', answers: [1, 2] },
+          { kind: 'gotcha', component: 'db.ts', text: 'Migrations are append-only.', answers: [3, 4] },
+          { kind: 'how-it-works', component: 'release.yml', text: 'Release tags are kept forever.', answers: [5] },
+        ] }),
+        'learn-decisions': '{"decisions":[{"n":1,"action":"add"},{"n":2,"action":"skip","id":"m2"},{"n":3,"action":"add"}]}',
+      });
+      Object.assign(env.meko, {
+        similar: async (query: string) => {
+          // Someone dismisses question 4 in Meko while the step runs: theirs stands.
+          questions[4].state = 'dismissed';
+          return query.startsWith('Gotcha') ? [{ id: 'm2', text: 'Never edit a shipped migration.', agentId: 'a' }] : [];
+        },
+      });
+      await env.core.sessions.action(s.id, 'learn');
+      await waitFor(() => env.core.sessions.get(s.id).learning, (l) => !l, 10000, 'the learn step');
 
-    expect(modLearn()[0].job.prompt).toContain(
-      "Meko couldn't answer these searches from this session:\n1. Poll queue order\n2. Which order do polls run in\n3. Why migrations are append-only\n4. Can a shipped migration change\n\n" +
-      'Nor these, from other sessions on this project:\n5. Release tag retention\nFor each',
-    );
-    const added = env.meko.calls.filter((c) => c.name === 'addMemory');
-    expect(added.map((c) => [c.args[0], (c.args[4] as { questions?: string[] }).questions])).toEqual([
-      ['Decision (lifecycle.ts): Polls for a session run one at a time.', ['Poll queue order', 'Which order do polls run in']],
-      ['How it works (release.yml): Release tags are kept forever.', ['Release tag retention']],
-    ]);
-    const gaps = projectGaps(env.core.db, projectId);
-    const of = (key: string) => gaps.find((g) => g.key === key);
-    const bySession = { id: s.id, name: 'Questions', archived: false };
-    for (const key of ['poll queue order', 'which order do polls run in']) {
-      expect(of(key)).toMatchObject({ state: 'taught', taught: { text: 'Decision (lifecycle.ts): Polls for a session run one at a time.', datapack: 'team/demo', session: bySession } });
+      expect(meko.requests[0]).toMatchObject({ method: 'GET', datapack: 'dp-1', query: { state: 'open', conversation_id: 'conv-1' } });
+      expect(modLearn()[0].job.prompt).toContain(
+        "Meko couldn't answer these searches from this session:\n1. Poll queue order\n2. Which order do polls run in\n3. Why migrations are append-only\n4. Can a shipped migration change\n\n" +
+        'Nor these, other searches on this datapack:\n5. Release tag retention\nFor each',
+      );
+      const added = env.meko.calls.filter((c) => c.name === 'addMemory');
+      expect(added.map((c) => [c.args[0], (c.args[4] as { questions?: string[] }).questions])).toEqual([
+        ['Decision (lifecycle.ts): Polls for a session run one at a time.', ['Poll queue order', 'Which order do polls run in']],
+        ['How it works (release.yml): Release tags are kept forever.', ['Release tag retention']],
+      ]);
+      const polls = 'Decision (lifecycle.ts): Polls for a session run one at a time.';
+      expect(meko.requests.filter((r) => r.path === '/mark').map((r) => r.body)).toEqual([
+        { key: 'poll queue order', state: 'taught', text: polls, conversation_id: 'conv-1' },
+        { key: 'which order do polls run in', state: 'taught', text: polls, conversation_id: 'conv-1' },
+        { key: 'why migrations are append-only', state: 'dismissed', memory_id: 'm2', conversation_id: 'conv-1' },
+        { key: 'release tag retention', state: 'taught', text: 'How it works (release.yml): Release tags are kept forever.', conversation_id: 'conv-1' },
+      ]);
+      expect(dbGet(env.core.db, 'SELECT questions, taught, dismissed FROM meko_learns WHERE session_id = ?', s.id)).toEqual({ questions: 5, taught: 3, dismissed: 1 });
+      expect(lastEvent(s.id, 'learned')).toBe("Saved 2 memories and corrected 0 in team/demo; taught Meko 3 questions it couldn't answer and dismissed 1 question it knew already");
+    } finally {
+      await meko.close();
     }
-    expect(of('why migrations are append-only')).toMatchObject({ state: 'dismissed', dismissal: { session: bySession, memory: 'Never edit a shipped migration.' } });
-    expect(of('can a shipped migration change')).toMatchObject({ state: 'dismissed', dismissal: { session: null, memory: null } });
-    expect(of('release tag retention')).toMatchObject({ state: 'taught', taught: { session: bySession } });
-    expect(of('do it')?.state).toBe('open');
-    expect(dbGet(env.core.db, 'SELECT questions, taught, dismissed FROM meko_learns WHERE session_id = ?', s.id)).toEqual({ questions: 5, taught: 3, dismissed: 1 });
-    expect(lastEvent(s.id, 'learned')).toBe("Saved 2 memories and corrected 0 in team/demo; taught Meko 3 questions it couldn't answer and dismissed 1 question it knew already");
   });
 
   it('marks no question for a write that lands after the learn step ran out of time', async () => {
-    fakeFiles({ mod: '' });
-    const s = await inReview('Slow');
-    await waitFor(() => env.core.sessions.mod.learnReady(s.id), (r) => r, 10000, 'the mod to poll');
-    const projectId = env.core.sessions.row(s.id).project_id;
-    run(env.core.db, `INSERT INTO meko_calls(session_id, tool_use_id, tool, kind, at, input_chars, outcome, results, query, query_key, quality)
-      VALUES (?, 'q1', 'context_search', 'lookup', 1000, 40, 'empty', 0, 'Poll queue order', 'poll queue order', 'empty')`, s.id);
-    fakeFiles({
-      'learn-facts': '{"facts":[{"kind":"decision","component":"lifecycle.ts","text":"Polls run one at a time.","answers":[1]}]}',
-      'learn-decisions': '{"decisions":[{"n":1,"action":"add"}]}',
-    });
-    let land = () => {};
-    let writing = false;
-    Object.assign(env.meko, {
-      addMemory: () => {
-        writing = true;
-        return new Promise<void>((r) => (land = r));
-      },
-    });
-    env.core.learn.timeoutMs = 3000;
-    await env.core.sessions.action(s.id, 'learn');
-    await waitFor(() => writing, (w) => w, 5000, 'the write');
-    await waitFor(() => env.core.sessions.get(s.id).learning, (l) => !l, 5000, 'the timeout');
-    land();
-    await new Promise((r) => setTimeout(r, 50));
-    expect(projectGaps(env.core.db, projectId).find((g) => g.key === 'poll queue order')).toMatchObject({ state: 'open', taught: null });
-    expect(dbGet(env.core.db, 'SELECT outcome, taught FROM meko_learns WHERE session_id = ?', s.id)).toEqual({ outcome: 'failed', taught: 0 });
+    const meko = await fakeMekoQuestions();
+    try {
+      fakeFiles({ mod: '' });
+      await useLocalMeko(env, meko.url);
+      const s = await inReview('Slow');
+      await waitFor(() => env.core.sessions.mod.learnReady(s.id), (r) => r, 10000, 'the mod to poll');
+      meko.datapacks.set('dp-1', [{ key: 'poll queue order', query: 'Poll queue order', askedBy: ['conv-1'] }]);
+      fakeFiles({
+        'learn-facts': '{"facts":[{"kind":"decision","component":"lifecycle.ts","text":"Polls run one at a time.","answers":[1]}]}',
+        'learn-decisions': '{"decisions":[{"n":1,"action":"add"}]}',
+      });
+      let land = () => {};
+      let writing = false;
+      Object.assign(env.meko, {
+        addMemory: () => {
+          writing = true;
+          return new Promise<void>((r) => (land = r));
+        },
+      });
+      env.core.learn.timeoutMs = 3000;
+      await env.core.sessions.action(s.id, 'learn');
+      await waitFor(() => writing, (w) => w, 5000, 'the write');
+      await waitFor(() => env.core.sessions.get(s.id).learning, (l) => !l, 5000, 'the timeout');
+      land();
+      await new Promise((r) => setTimeout(r, 50));
+      expect(meko.requests.filter((r) => r.path === '/mark')).toEqual([]);
+      expect(dbGet(env.core.db, 'SELECT outcome, taught FROM meko_learns WHERE session_id = ?', s.id)).toEqual({ outcome: 'failed', taught: 0 });
+    } finally {
+      await meko.close();
+    }
   });
 
   it('tells a later learn step what earlier ones wrote or found known, in the datapack it writes to', async () => {

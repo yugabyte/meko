@@ -92,17 +92,26 @@ func (s *Store) UpdateDatapack(ctx context.Context, id string, name, description
 // DeleteDatapack deletes a datapack and everything in it (memories, entities, history,
 // conversations, and their vectors), or returns ErrNoDatapack.
 func (s *Store) DeleteDatapack(ctx context.Context, id string) error {
-	res, err := s.w.ExecContext(ctx, "DELETE FROM datapacks WHERE id = ?", id)
+	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	if n, err := res.RowsAffected(); err != nil || n == 0 {
-		if err == nil {
-			err = ErrNoDatapack
-		}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, "DELETE FROM datapacks WHERE id = ?", id)
+	if err != nil {
 		return err
 	}
-	return nil
+	if n, rerr := res.RowsAffected(); rerr != nil || n == 0 {
+		if rerr == nil {
+			rerr = ErrNoDatapack
+		}
+		return rerr
+	}
+	// Its questions have no foreign key to it (0011_questions.sql); their asks go with them.
+	if _, err = tx.ExecContext(ctx, "DELETE FROM questions WHERE datapack_id = ?", id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // getDatapackW reads a datapack on the writer, so it sees a write just made.

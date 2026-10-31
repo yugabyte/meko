@@ -48,7 +48,6 @@ import { SettingsDialog, type SettingsTab } from './SettingsDialog';
 import { TopBar } from './TopBar';
 import { UsageView } from './UsageView';
 import { MekoCallsView } from './MekoCallsView';
-import { MekoGapsView } from './MekoGapsView';
 import { WhatsNewDialog, whatsNewBack, type WhatsNewOpener } from './WhatsNewDialog';
 import { LinkWorkItemDialog } from './LinkWorkItemDialog';
 import { WorkItemDialog } from './WorkItemDialog';
@@ -626,8 +625,6 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
             onMenu={openDrawer}
             onError={showToast}
           />
-        ) : currentProject && route.view === 'meko-gaps' ? (
-          <MekoGapsView key={currentProject.id} project={currentProject} mekoConfigured={state.meko.configured} onMenu={openDrawer} onToast={showToast} />
         ) : currentProject && route.view === 'home' ? (
           <ProjectHomeView
             key={currentProject.id}

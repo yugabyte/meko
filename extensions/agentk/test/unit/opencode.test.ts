@@ -172,7 +172,7 @@ describe("an OpenCode session's Meko calls", () => {
     expect(openCodeMekoTool(p)).toBe(key);
   });
 
-  it("are read from the plugin's lines: counted, judged, logged once, and left out of the responses", () => {
+  it("are read from the plugin's lines: counted, logged once, and left out of the responses", () => {
     const db = openDb(':memory:');
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('p', 'P', '/r', 'main', 0)`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
@@ -193,15 +193,15 @@ describe("an OpenCode session's Meko calls", () => {
     ].join('\n') + '\n');
     const read = ingestOpenCodeUsage(db, 's1', file, 'ses_main');
     expect(read.changed).toBe(true);
-    expect(all(db, 'SELECT tool_use_id, agent, tool, kind, outcome, results, quality, query, model FROM meko_calls ORDER BY tool_use_id')).toEqual([
-      { tool_use_id: 'opencode:call_1:meko_memory_search#1', agent: null, tool: 'memory_search', kind: 'lookup', outcome: 'found', results: 1, quality: null, query: 'where is X', model: 'claude-sonnet-4-5' },
-      { tool_use_id: 'opencode:call_2:meko_memory_search#1', agent: 'ses_child', tool: 'memory_search', kind: 'lookup', outcome: 'empty', results: 0, quality: 'empty', query: 'nothing here', model: 'claude-sonnet-4-5' },
-      { tool_use_id: 'opencode:call_3:meko_memory_add#1', agent: null, tool: 'memory_add', kind: 'save', outcome: 'error', results: null, quality: null, query: null, model: 'claude-sonnet-4-5' },
+    expect(all(db, 'SELECT tool_use_id, agent, tool, kind, outcome, results, model FROM meko_calls ORDER BY tool_use_id')).toEqual([
+      { tool_use_id: 'opencode:call_1:meko_memory_search#1', agent: null, tool: 'memory_search', kind: 'lookup', outcome: 'found', results: 1, model: 'claude-sonnet-4-5' },
+      { tool_use_id: 'opencode:call_2:meko_memory_search#1', agent: 'ses_child', tool: 'memory_search', kind: 'lookup', outcome: 'empty', results: 0, model: 'claude-sonnet-4-5' },
+      { tool_use_id: 'opencode:call_3:meko_memory_add#1', agent: null, tool: 'memory_add', kind: 'save', outcome: 'error', results: null, model: 'claude-sonnet-4-5' },
       // A reply too long to log counts as found.
-      { tool_use_id: 'opencode:call_4:meko_context_search#1', agent: null, tool: 'context_search', kind: 'lookup', outcome: 'found', results: null, quality: null, query: 'where is X', model: 'claude-sonnet-4-5' },
+      { tool_use_id: 'opencode:call_4:meko_context_search#1', agent: null, tool: 'context_search', kind: 'lookup', outcome: 'found', results: null, model: 'claude-sonnet-4-5' },
       // A save's long reply is just ok; a failed call stays an error whatever its size.
-      { tool_use_id: 'opencode:call_6:meko_memory_add#1', agent: null, tool: 'memory_add', kind: 'save', outcome: 'ok', results: null, quality: null, query: null, model: 'claude-sonnet-4-5' },
-      { tool_use_id: 'opencode:call_7:meko_memory_search#1', agent: null, tool: 'memory_search', kind: 'lookup', outcome: 'error', results: null, quality: null, query: 'where is X', model: 'claude-sonnet-4-5' },
+      { tool_use_id: 'opencode:call_6:meko_memory_add#1', agent: null, tool: 'memory_add', kind: 'save', outcome: 'ok', results: null, model: 'claude-sonnet-4-5' },
+      { tool_use_id: 'opencode:call_7:meko_memory_search#1', agent: null, tool: 'memory_search', kind: 'lookup', outcome: 'error', results: null, model: 'claude-sonnet-4-5' },
     ]);
     expect(read.mekoCalls.map((c) => ({ tool: c.tool, ms: c.ms, ok: c.ok, error: c.error, subagent: c.subagent }))).toEqual([
       { tool: 'memory_search', ms: 1200, ok: true, error: null, subagent: false },

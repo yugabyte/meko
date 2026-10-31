@@ -36,6 +36,7 @@ import { KnowledgeService } from './knowledge.js';
 import { MekoClient } from './meko.js';
 import { MekoCallLog } from './mekolog.js';
 import { MekoAgents, mekoMcpGaps, readMekoAgents, type MekoAgentsRead } from './mekoagents.js';
+import { MekoQuestions } from './mekoquestions.js';
 import { MekoClaudeWatch } from './mekoclaude.js';
 import {
   LocalMekoReader, isLocalMeko, linkedThroughMeko, localMeko, lookForLocalMeko, mekoLinkHandedOver, originOf, probeLocalMeko, setMekoLinkHandedOver, type LocalMekoProbe,
@@ -192,6 +193,8 @@ export class Core extends EventEmitter {
   readonly claudeMeko: MekoClaudeWatch;
   /** Meko's list of the agents on this computer, which new sessions are gated on (mekoagents.ts). */
   readonly mekoAgents: MekoAgents;
+  /** Meko's Context Gaps (the questions it couldn't answer), on the Meko on this computer while AgentK uses it. */
+  readonly mekoQuestions: MekoQuestions;
   readonly callHome: CallHomeService;
   /** The same report to YugabyteDB's call home service, from release installs (to be the only one later). */
   readonly ybCallHome: CallHomeService;
@@ -283,6 +286,16 @@ export class Core extends EventEmitter {
     this.updateStatus = () => ({ current: this.version, justUpdatedFrom: null, lastUpdatedFrom: null });
     this.claudeCode = new ClaudeCode({ config: () => this.cfg, changed: () => this.claudeChanged() });
     this.mekoAgents = new MekoAgents({ db: this.db, read: o.mekoAgents ?? (() => readMekoAgents(localMeko().meko)), changed: () => this.changed(), log: this.log });
+    // Meko's Context Gaps are on the Meko AgentK's calls go to: the one on this computer, its own datapacks' and,
+    // while it passes calls on to a linked Meko Cloud, Meko Cloud's. Not with an older Meko that handed out Cloud's key.
+    this.mekoQuestions = new MekoQuestions({
+      meko: () => {
+        const m = resolveMekoWithSource(this.cfg);
+        const local = localMeko().meko;
+        return local && isLocalMeko(local, m.url, m.apiKey) ? local : null;
+      },
+      log: this.log,
+    });
     this.harnesses = new Harnesses({
       claudeCode: this.claudeCode, paths: this.paths, log: this.log, changed: () => this.changed(), kiroVersion: o.kiroVersion, openCodeVersion: o.openCodeVersion,
       meko: () => this.mekoAgents.current(), refreshMeko: () => this.mekoAgents.refresh(),
