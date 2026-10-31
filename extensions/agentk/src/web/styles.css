@@ -3700,6 +3700,16 @@ div[id^='dak-mermaid-'] .label {
   font-size: 12px;
   color: var(--muted);
 }
+.info-panel p {
+  margin: 0 0 4px;
+}
+.info-panel ul {
+  margin: 0 0 4px;
+  padding-left: 18px;
+}
+.info-panel li + li {
+  margin-top: 2px;
+}
 .info-panel[hidden] {
   display: none;
 }
@@ -6594,6 +6604,17 @@ div[id^='dak-mermaid-'] .label {
   padding: 0;
   cursor: pointer;
   overflow-wrap: anywhere;
+}
+.wq-notes {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  margin-top: 2px;
+  font-weight: 400;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: pre-line;
 }
 .wq-title.closed {
   cursor: default;

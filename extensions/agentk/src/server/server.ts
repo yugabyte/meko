@@ -30,6 +30,7 @@ import { setUpClaudeMeko, setUpKiroMeko } from './mekosettings.js';
 import { prDesignSource } from './prdesign.js';
 import { HttpError } from './projects.js';
 import { searchSessions } from './sessionsearch.js';
+import { slackListId } from './slack.js';
 import { attachTerminal, type TermQuery } from './terminal.js';
 import { notesRange, type Updates } from './updates.js';
 import { usageOverview } from './usage.js';
@@ -572,6 +573,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     kiroTrustTools: core.config.kiro.trustTools,
     workQueueGithub: core.config.workQueue.github,
     workQueueSlack: core.config.workQueue.slack,
+    workQueueSlackList: core.config.workQueue.slackList,
     workQueueSyncMinutes: core.config.workQueue.syncMinutes,
     codeReviewStrategy: globalReview(core.config).strategy,
     codeReviewRounds: core.config.codeReview.rounds,
@@ -612,6 +614,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (b.workQueueSyncMinutes !== undefined && (!Number.isInteger(b.workQueueSyncMinutes) || b.workQueueSyncMinutes < 0 || b.workQueueSyncMinutes > WORK_SYNC_MINUTES_MAX)) {
       throw new HttpError(400, `Sync every must be a whole number of minutes from 0 to ${WORK_SYNC_MINUTES_MAX}.`);
     }
+    if (b.workQueueSlackList !== undefined && (typeof b.workQueueSlackList !== 'string' || (b.workQueueSlackList.trim() && !slackListId(b.workQueueSlackList)))) {
+      throw new HttpError(400, "That isn't a link to a Slack list: in the list, use ⋯ › Copy link.");
+    }
     if (b.codeReviewStrategy !== undefined && !isStrategySetting(b.codeReviewStrategy)) {
       throw new HttpError(400, `The review strategy must be off or one of ${STRATEGIES.map((x) => x.id).join(', ')}.`);
     }
@@ -624,6 +629,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     for (const k of ['claudeEnabled', 'opencodeEnabled', 'opencodeDisableTracking', 'kiroEnabled', 'kiroTrustTools', 'workQueueGithub', 'workQueueSlack'] as const) {
       if (b[k] !== undefined && typeof b[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false.`);
     }
+    const slackListBefore = core.config.workQueue.slackList;
     const enabledBefore = Object.fromEntries(HARNESS_IDS.map((id) => [id, core.config[id].enabled]));
     const before = { cap: core.worktrees.cap(), days: core.worktrees.idleDays() };
     core.updateConfig((c) => {
@@ -644,11 +650,13 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.kiroTrustTools !== undefined) c.kiro.trustTools = b.kiroTrustTools;
       if (b.workQueueGithub !== undefined) c.workQueue.github = b.workQueueGithub;
       if (b.workQueueSlack !== undefined) c.workQueue.slack = b.workQueueSlack;
+      if (b.workQueueSlackList !== undefined) c.workQueue.slackList = b.workQueueSlackList.trim();
       if (b.workQueueSyncMinutes !== undefined) c.workQueue.syncMinutes = b.workQueueSyncMinutes;
       if (b.codeReviewStrategy !== undefined) c.codeReview.strategy = b.codeReviewStrategy;
       if (b.codeReviewRounds !== undefined) c.codeReview.rounds = b.codeReviewRounds;
       if (b.codeReviewDepth !== undefined) c.codeReview.depth = b.codeReviewDepth;
     });
+    if (core.config.workQueue.slackList !== slackListBefore) core.workQueue.slackListChanged();
     // An agent turned on: its version (and Kiro's agent file) follow, in the background. One turned
     // off forgets its last read, so it isn't offered on that read once it's turned on again.
     for (const id of HARNESS_IDS) {

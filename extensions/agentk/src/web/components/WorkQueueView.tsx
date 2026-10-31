@@ -160,7 +160,7 @@ export function WorkQueueView({
             className="btn"
             disabled={syncing || sync.running || syncOff}
             onClick={() => void runSync()}
-            title="Pull in GitHub review requests and your Slack To-dos"
+            title="Pull in GitHub review requests and your Slack list"
           >
             {syncing || sync.running ? <Busy label="Syncing" /> : 'Sync'}
           </button>
@@ -185,7 +185,7 @@ export function WorkQueueView({
       {!shown.length && (
         <p className="muted wq-empty">
           Nothing on the queue. Add what you're working on, or {syncOff ? 'turn on Sync in Sync settings' : 'press Sync'} to pull in the PRs waiting
-          for your review and your Slack To-dos.
+          for your review and the messages on your Slack list.
         </p>
       )}
       <ol className="wq-list">
@@ -214,6 +214,7 @@ export function WorkQueueView({
                 {s ? <StatusDot status={dotState(s)} phase={s.id} /> : <i className="dot none" title="No session" aria-label="No session" />}
                 <button className="wq-title" onClick={() => onEdit(item)} title="Edit">
                   {item.title}
+                  {item.notes && <span className="wq-notes">{item.notes}</span>}
                 </button>
                 <button className="btn small wq-dismiss" onClick={() => void dismiss(item)} title="Take it off the queue (it stays under Dismissed)">
                   Dismiss
@@ -237,7 +238,7 @@ export function WorkQueueView({
                   </span>
                 )}
                 {item.source === 'github' && <span className="wq-chip wq-src">Review request</span>}
-                {item.source === 'slack' && <span className="wq-chip wq-src">Slack To-do</span>}
+                {item.source === 'slack' && <span className="wq-chip wq-src">Slack list</span>}
                 {item.githubDone && <span className="wq-chip wq-done" title="Merged, closed, or your review isn't requested any more">Done on GitHub</span>}
                 {item.links.map((l) => (
                   <WorkLinkChip key={l.key} link={l} />
