@@ -22,10 +22,12 @@ describe('stageChipText', () => {
 });
 
 describe('findingGroups', () => {
-  const f = (key: string, round: number, sweep: number) => ({ key, round, sweep }) as CodeReviewFinding;
+  const f = (key: string, round: number, sweep: number, kept = true, pending?: boolean) => ({ key, round, sweep, kept, pending }) as CodeReviewFinding;
 
   it('is one unnamed group for a one-round, one-sweep review', () => {
-    expect(findingGroups([f('a', 1, 1), f('b', 1, 1)])).toEqual([{ key: '1:1', label: 'Findings', findings: [f('a', 1, 1), f('b', 1, 1)] }]);
+    expect(findingGroups([f('a', 1, 1), f('b', 1, 1)])).toEqual([
+      { key: '1:1', label: 'Findings', findings: [f('a', 1, 1), f('b', 1, 1)], dismissed: [] },
+    ]);
   });
 
   it('groups by round, then sweep, naming only what had more than one', () => {
@@ -34,6 +36,18 @@ describe('findingGroups', () => {
       ['Round 1, sweep 1', ['b']],
       ['Round 1, sweep 2', ['a']],
       ['Round 2, sweep 1', ['c']],
+    ]);
+  });
+
+  it("puts each group's dropped findings under dismissed, apart from its kept ones and the running round's pending ones, in the order they came", () => {
+    const groups = findingGroups([
+      f('a', 1, 1, false), f('b', 1, 1), f('c', 1, 1, false), f('d', 1, 1), f('e', 2, 1, false),
+      f('f', 3, 1, false, true), f('g', 3, 1, false, true),
+    ]);
+    expect(groups.map((g) => [g.label, g.findings.map((x) => x.key), g.dismissed.map((x) => x.key)])).toEqual([
+      ['Round 1', ['b', 'd'], ['a', 'c']],
+      ['Round 2', [], ['e']],
+      ['Round 3', ['f', 'g'], []],
     ]);
   });
 });

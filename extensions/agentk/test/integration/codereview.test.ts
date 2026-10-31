@@ -88,6 +88,14 @@ describe('local code review before the PR (real session host + git, fake claude 
     // Its datapacks are names, the gotchas one marked: what each holds is for the prompt only.
     run(env.core.db, 'UPDATE code_reviews SET datapacks_json = ? WHERE task_id = ?', JSON.stringify([{ name: 'adlc/repo/demo-repo/gotchas', id: 'g-id', about: 'Gotchas.', gotchas: true }]), s.id);
     expect(env.core.reviews.detail(s.id).datapacks).toEqual([{ name: 'adlc/repo/demo-repo/gotchas', id: 'g-id', gotchas: true }]);
+    expect(detail.findings.some((f) => f.pending)).toBe(false);
+    // While a round runs, after the stored findings, every candidate of the round comes marked pending.
+    run(env.core.db, `UPDATE code_reviews SET state = 'sweeping' WHERE task_id = ?`, s.id);
+    const live = env.core.reviews.detail(s.id).findings;
+    expect(live.slice(detail.findings.length).map((f) => [f.file, f.kept, f.dropped, f.pending])).toEqual(
+      expect.arrayContaining([['src/a.ts', false, null, true], ['README.md', false, null, true]]),
+    );
+    run(env.core.db, `UPDATE code_reviews SET state = 'done' WHERE task_id = ?`, s.id);
     // Once done, the review session stops (its findings stay with the review); the task's worktree stays.
     await waitFor(() => env.core.sessions.row(childId), (x) => x.desired === 'archived', 10000, 'the review session to stop');
     expect(env.core.sessions.get(s.id).codeReview!.sessionId).toBeNull();
