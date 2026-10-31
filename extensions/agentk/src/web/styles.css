@@ -1701,12 +1701,15 @@ textarea.input {
   right: auto;
   height: auto;
 }
+/* The right margin is the task button's right padding, which insets the chip above (a subgrid's
+   padding acts as margin on its edge items), so the two boxes' right edges line up. */
 .rail-review {
   position: relative;
   grid-column: -2;
   grid-row: 2;
   align-self: start;
   justify-self: end;
+  margin: 4px 8px 0 0;
   border-left: 0;
   border-radius: 6px;
   padding: 2px 8px 4px;
