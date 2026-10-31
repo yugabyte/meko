@@ -577,10 +577,7 @@ function CommitMenu({ commits, current, onPick }: { commits: BranchCommit[]; cur
       align="left"
       items={items}
       itemKey={(c) => (c === 'all' ? 'all' : c.sha)}
-      filter={(q) => {
-        const needle = q.toLowerCase();
-        return (c) => c === 'all' || `${c.sha} ${c.subject}`.toLowerCase().includes(needle);
-      }}
+      filter={commitFilter}
       none={(q) => `No commit matches “${q}”.`}
       onChoose={(c) => onPick(c === 'all' ? null : c.sha)}
       renderItem={(c) =>
@@ -595,6 +592,16 @@ function CommitMenu({ commits, current, onPick }: { commits: BranchCommit[]; cur
       }
     />
   );
+}
+
+function commitFilter(q: string): (c: CommitItem) => boolean {
+  const needle = q.toLowerCase();
+  return (c) => c === 'all' || `${c.sha} ${c.subject}`.toLowerCase().includes(needle);
+}
+
+function branchFilter(q: string): (b: string) => boolean {
+  const needle = q.toLowerCase();
+  return (b) => b.toLowerCase().includes(needle);
 }
 
 /** The header's base: a menu of the branches the session can be compared with, which makes the picked one its base. */
@@ -621,10 +628,7 @@ function BaseMenu({ session, base, onPick }: { session: Session; base: string; o
       items={branches}
       error={error}
       itemKey={(b) => b}
-      filter={(q) => {
-        const needle = q.toLowerCase();
-        return (b) => b.toLowerCase().includes(needle);
-      }}
+      filter={branchFilter}
       none={(q) => `No branch matches “${q}”.`}
       onOpen={load}
       onChoose={(b) => b !== session.baseBranch && onPick(b)}
@@ -646,7 +650,7 @@ function FilterMenu<T>(props: {
   items: T[] | null;
   error?: string | null;
   itemKey: (item: T) => string;
-  /** The test for the items the trimmed, non-empty filter `q` keeps. */
+  /** The test for the items the trimmed, non-empty filter `q` keeps. Pass a stable function: its test is kept per query. */
   filter: (q: string) => (item: T) => boolean;
   none: (q: string) => string;
   renderItem: (item: T) => ReactNode;
@@ -675,7 +679,8 @@ function FilterMenu<T>(props: {
   }, [open]);
 
   const needle = q.trim();
-  const shown = !items ? [] : needle ? items.filter(filter(needle)) : items;
+  const keep = useMemo(() => (needle ? filter(needle) : null), [filter, needle]);
+  const shown = !items ? [] : keep ? items.filter(keep) : items;
   const cur = Math.min(sel, Math.max(0, shown.length - 1));
 
   useEffect(() => {

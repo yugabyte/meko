@@ -153,26 +153,26 @@ describe('filtering the Files menu', () => {
     { path: 'src/web/diff.ts', oldPath: null },
     { path: 'src/web/App.tsx', oldPath: null },
     { path: 'docs/c++/notes.md', oldPath: null },
+    { path: 'src/pages/[id].tsx', oldPath: null },
     { path: 'test/unit/new.test.ts', oldPath: 'test/old.test.ts' },
   ];
   const shown = (q: string) => files.filter(pathFilter(q)).map((f) => f.path);
 
   it('takes a regular expression, ignoring case', () => {
-    expect(shown('\\.tsx?$')).toEqual(['src/web/diff.ts', 'src/web/App.tsx', 'test/unit/new.test.ts']);
+    expect(shown('\\.tsx?$')).toEqual(['src/web/diff.ts', 'src/web/App.tsx', 'src/pages/[id].tsx', 'test/unit/new.test.ts']);
     expect(shown('^src/.*app')).toEqual(['src/web/App.tsx']);
     expect(shown('diff|notes')).toEqual(['src/web/diff.ts', 'docs/c++/notes.md']);
   });
 
-  it('still matches plain text as a substring', () => {
-    expect(shown('WEB/')).toEqual(['src/web/diff.ts', 'src/web/App.tsx']);
+  it('finds a name with regex characters in it as typed', () => {
+    expect(shown('[ID].tsx')).toEqual(['src/pages/[id].tsx']);
   });
 
   it('matches a renamed file by its old path too', () => {
     expect(shown('^test/old')).toEqual(['test/unit/new.test.ts']);
   });
 
-  it('falls back to plain text when the expression is not valid', () => {
-    expect(shown('c++')).toEqual(['docs/c++/notes.md']);
-    expect(shown('src/(')).toEqual([]);
+  it('matches plain text, ignoring case, when the expression is not valid', () => {
+    expect(shown('C++')).toEqual(['docs/c++/notes.md']);
   });
 });

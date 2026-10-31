@@ -218,18 +218,19 @@ export function sameItems<T>(a: readonly T[], b: readonly T[]): boolean {
 }
 
 /**
- * The Files menu's filter: `q` as a case-insensitive regular expression tested against a file's path
- * and its old path, or as plain text (a case-insensitive substring) when it isn't a valid one, so
- * `c++` or an unclosed `(` while typing still filters.
+ * The Files menu's filter: a file whose path or old path holds `q` as plain text, or matches it as a
+ * regular expression, both ignoring case. The plain text keeps a name with regex characters in it
+ * (`[id].tsx`, `page (1).tsx`) findable as typed, and covers a `q` that isn't a valid expression
+ * (`c++`, an unclosed `(` while typing).
  */
 export function pathFilter(q: string): (file: { path: string; oldPath?: string | null }) => boolean {
-  let test: (s: string) => boolean;
+  const needle = q.toLowerCase();
+  let re: RegExp | null = null;
   try {
-    const re = new RegExp(q, 'i');
-    test = (s) => re.test(s);
+    re = new RegExp(q, 'i');
   } catch {
-    const needle = q.toLowerCase();
-    test = (s) => s.toLowerCase().includes(needle);
+    // Plain text only.
   }
+  const test = (s: string) => s.toLowerCase().includes(needle) || !!re?.test(s);
   return (f) => test(f.path) || (!!f.oldPath && test(f.oldPath));
 }
