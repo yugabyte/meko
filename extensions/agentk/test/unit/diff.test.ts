@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { anchorComment, defaultOpen, DESKTOP_BUDGET, keepUnchanged, parsePatch, PHONE_BUDGET, pickComment, pickRange, reparse, sameLine, showsLine, type RowBudget } from '../../src/web/diff.js';
+import { anchorComment, defaultOpen, DESKTOP_BUDGET, keepUnchanged, parsePatch, pathFilter, PHONE_BUDGET, pickComment, pickRange, reparse, sameLine, showsLine, type RowBudget } from '../../src/web/diff.js';
 
 const rows = (patch: string) => parsePatch(patch).map((l) => [l.kind, l.old, l.new, l.text]);
 
@@ -145,5 +145,36 @@ describe('parsing again after a refetch', () => {
     expect(next[0]).toBe(prev[0]);
     expect(next.slice(1)).toEqual([{ path: 'b', added: 2, patch: 'y' }, { path: 'c', added: 1, patch: 'z' }]);
     expect(next[1]).not.toBe(prev[1]);
+  });
+});
+
+describe('filtering the Files menu', () => {
+  const files = [
+    { path: 'src/web/diff.ts', oldPath: null },
+    { path: 'src/web/App.tsx', oldPath: null },
+    { path: 'docs/c++/notes.md', oldPath: null },
+    { path: 'src/pages/[id].tsx', oldPath: null },
+    { path: 'test/unit/new.test.ts', oldPath: 'test/old.test.ts' },
+  ];
+  const shown = (q: string) => files.filter(pathFilter(q)).map((f) => f.path);
+
+  it('takes a regular expression, ignoring case', () => {
+    expect(shown('\\.tsx?$')).toEqual(['src/web/diff.ts', 'src/web/App.tsx', 'src/pages/[id].tsx', 'test/unit/new.test.ts']);
+    expect(shown('^src/.*app')).toEqual(['src/web/App.tsx']);
+    expect(shown('diff|notes')).toEqual(['src/web/diff.ts', 'docs/c++/notes.md']);
+  });
+
+  it('finds a name with regex characters in it as typed', () => {
+    expect(shown('[ID].tsx')).toEqual(['src/pages/[id].tsx']);
+  });
+
+  it('matches a renamed file by its old path too', () => {
+    expect(shown('^test/old')).toEqual(['test/unit/new.test.ts']);
+  });
+
+  it('filters by the longest start that is a valid expression while it is not one', () => {
+    expect(shown('WEB/(')).toEqual(['src/web/diff.ts', 'src/web/App.tsx']);
+    expect(shown('(diff')).toEqual(files.map((f) => f.path));
+    expect(shown('c++')).toContain('docs/c++/notes.md');
   });
 });
