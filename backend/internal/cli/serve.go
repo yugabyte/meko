@@ -24,7 +24,6 @@ import (
 	"github.com/yugabyte/meko/backend/internal/config"
 	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/logging"
-	"github.com/yugabyte/meko/backend/internal/login"
 	"github.com/yugabyte/meko/backend/internal/mcp"
 	"github.com/yugabyte/meko/backend/internal/memory"
 	"github.com/yugabyte/meko/backend/internal/memoryengine"
@@ -314,10 +313,8 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		return mcp.Call(ctx, mcpOpts, cred, name, args)
 	}
 	registerREST := func(g *echo.Group) { rest.Register(g, restOpts) }
-	logins := login.New(st)
-	// The web listener: the web UI and the extensions' for browsers, with local access or the login.
-	web := newWebListener(l, st, logins, log)
-	logins.OnRevoke(web.RevokeEnded)
+	// The web listener: the web UI and the extensions' for browsers, with local or remote access.
+	web := newWebListener(l, st, log)
 	// Updates: a release install checks for them, and the Status page checks and installs them.
 	restart := make(chan struct{})
 	updCtx, stopUpdates := context.WithCancel(context.Background())
@@ -362,7 +359,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	web.newOpts = func(wcfg config.Config) server.Options {
 		return server.Options{Info: info, Port: wcfg.Web.Port, Auth: cfg.Server.Auth, Logger: log,
 			Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, MCP: mcpHandler,
-			REST: registerREST, Upload: upload, Download: download, UI: ui, Login: logins, Cloud: cloud,
+			REST: registerREST, Upload: upload, Download: download, UI: ui, Cloud: cloud,
 			Agents: agentsMgr, Web: &server.Web{Access: wcfg.Web.Access, Extensions: web.Proxies, Installed: web.Installed,
 				Run: web.RunExtension, ExtensionUpdates: web.ExtensionUpdates, CheckExtensions: web.CheckExtensions,
 				SetAutoUpdate: web.SetAutoUpdate, Jobs: web.jobs, Updates: updates}}
@@ -370,14 +367,8 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	srv := server.New(server.Options{
 		Info: info, Port: cfg.Server.Port, Token: token, ClientToken: clientToken, Auth: cfg.Server.Auth, Logger: log,
 		Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, MCP: mcpHandler,
-		REST: registerREST, Upload: upload, Download: download, Login: logins, Cloud: cloud, Agents: agentsMgr,
-		WebURL: func() string {
-			if u := web.Status(context.Background()).URL; u != "" {
-				return u
-			}
-			return webURL(cfg.Web)
-		},
-		WebStatus: func() *server.WebStatus { return web.Status(context.Background()) },
+		REST: registerREST, Upload: upload, Download: download, Cloud: cloud, Agents: agentsMgr,
+		WebStatus: web.Status, ReloadWeb: web.Reload,
 	})
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()

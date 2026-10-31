@@ -1,19 +1,17 @@
 // Meko's settings: memory extraction and Search's answers, which run the user's own Claude Code (each
-// turned on after one test call), usage stats, and the ways to the Meko Cloud link and the account.
+// turned on after one test call), usage stats, the way to the Meko Cloud link, and who can reach Meko.
 
 import { useState, type ReactNode } from "react";
-import { Cloud, UserRound } from "lucide-react";
+import { Cloud } from "lucide-react";
 import { api } from "../lib/api";
 import { dateTime } from "../lib/format";
 import { href, navigate } from "../lib/route";
 import type { AuthStatus, UsageStats } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
-import { hasAccount, LocalAccessNote } from "./AccountPage";
-import { Card, ErrorNote, Spinner, Toggle } from "../components/ui";
+import { Card, Code, ErrorNote, Spinner, Toggle } from "../components/ui";
 
 const HARNESS = "claude";
 
-const ACCOUNT = { tab: "overview" as const, view: "account" as const };
 const MEKO_CLOUD = { tab: "overview" as const, view: "meko-cloud" as const };
 
 const LINK_CLASS =
@@ -38,26 +36,40 @@ export function SettingsPage({ auth }: { auth: AuthStatus }) {
         </p>
         <PageLink to={MEKO_CLOUD} icon={<Cloud className="size-3.5" />} label="Meko Cloud" />
       </Card>
-      <Card className="space-y-2 p-4">
-        {hasAccount(auth) ? (
-          <>
-            <h3 className="font-medium">Account</h3>
-            <p className="text-sm text-muted-foreground">
-              {auth.username
-                ? `${auth.signed_in ? "Signed in as" : "The login is"} ${auth.username}. Change its password, turn two-step sign-in on or off, or sign out.`
-                : "No login yet: run meko setup_link on the computer Meko runs on to create one."}
-            </p>
-            <PageLink to={ACCOUNT} icon={<UserRound className="size-3.5" />} label="Account settings" />
-          </>
-        ) : (
-          <LocalAccessNote />
-        )}
-      </Card>
+      <AccessCard auth={auth} />
     </div>
   );
 }
 
-function PageLink({ to, icon, label }: { to: typeof ACCOUNT | typeof MEKO_CLOUD; icon: ReactNode; label: string }) {
+// Who reaches this page: [web] access, which has no login either way, and how to turn it off.
+function AccessCard({ auth }: { auth: AuthStatus }) {
+  return (
+    <Card className="space-y-2 p-4">
+      <h3 className="font-medium">Access</h3>
+      <p className="text-sm text-muted-foreground">
+        {auth.access === "remote" ? (
+          <>
+            Meko is open to other devices, over HTTPS, with no sign-in: anyone who can reach this computer's port can
+            use it, and AgentK. To take only this computer's requests, set <Code>[web] access = "local"</Code> in{" "}
+            <Code>config.toml</Code> in Meko's data folder and restart Meko.
+          </>
+        ) : (
+          <>
+            Meko takes only requests from this computer, with no sign-in. To reach it from other devices, set{" "}
+            <Code>[web] access = "remote"</Code> in <Code>config.toml</Code> in Meko's data folder and restart Meko:
+            anyone who can reach this computer's port can then use it.
+          </>
+        )}
+      </p>
+      <p className="text-sm text-muted-foreground">
+        Not using the web UI? <Code>meko ui stop</Code> turns it off, AgentK's page with it, until{" "}
+        <Code>meko ui start</Code>.
+      </p>
+    </Card>
+  );
+}
+
+function PageLink({ to, icon, label }: { to: typeof MEKO_CLOUD; icon: ReactNode; label: string }) {
   return (
     <a href={href(to)} onClick={(e) => (e.preventDefault(), navigate(to))} className={LINK_CLASS}>
       {icon} {label}

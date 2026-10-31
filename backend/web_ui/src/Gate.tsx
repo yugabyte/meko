@@ -1,60 +1,38 @@
-// What a page load shows first, from /api/v1/auth/status: the setup screens while remote access has
-// no login (or a setup link waits), the sign-in screen while this browser isn't signed in, else the
-// app. A request Meko later refuses (401 UNAUTHORIZED) puts a remote browser back on the sign-in
-// screen, and tells a local one its request didn't look local.
+// What a page load shows first, from /api/v1/auth/status: the app, since there's no login. The
+// old sign-in screens' addresses (/signin, /setup) go on to where they were headed, and the old
+// account page's (/account) to Settings; a page outside the app (an extension's, /ext/<name>/) is
+// loaded itself. A request Meko later refuses (401 UNAUTHORIZED, which only local access sends)
+// says it didn't look local.
 
 import { useEffect, useState } from "react";
 import App from "./App";
 import { api, onUnauthorized } from "./lib/api";
-import { SETUP_PATH, SIGNIN_PATH, safeNext, signinHref } from "./lib/auth";
+import { oldAddressTarget } from "./lib/auth";
+import { isAppPath } from "./lib/route";
 import { useLoad } from "./lib/useLoad";
 import { Loading } from "./components/ui";
-import { NotLocalPage, SetupNeededPage, SetupPage, SignInPage, UnreachablePage } from "./pages/AuthPages";
+import { NotLocalPage, UnreachablePage } from "./pages/AuthPages";
 
 export function Gate() {
   const status = useLoad(() => api.authStatus(), []);
   const [refused, setRefused] = useState(false);
   const auth = status.data;
-  const path = window.location.pathname;
 
+  useEffect(() => onUnauthorized(() => setRefused(true)), []);
+  // The app reads its route from the address, so an old one is replaced before it renders.
   useEffect(() => {
-    onUnauthorized(() => {
-      if (auth?.access === "remote") history.replaceState(null, "", signinHref());
-      setRefused(true);
-    });
-  }, [auth?.access]);
-
-  // With no login there's nothing to sign in to, and a setup link's page keeps its address: sending
-  // /setup?token=... to /signin would drop the token the setup form posts. A login that a waiting
-  // setup link would replace still signs in everywhere else until the link is used.
-  const needsSignIn =
-    auth?.access === "remote" &&
-    !auth.signed_in &&
-    !auth.local_access &&
-    !(auth.setup_required && (!auth.reset || path === SETUP_PATH));
-  const inApp = auth && !refused && !auth.setup_required && !needsSignIn;
-  // The sign-in screens' addresses mean nothing inside the app: go where the sign-in was headed.
-  useEffect(() => {
-    if (inApp && (path === SIGNIN_PATH || path === SETUP_PATH)) {
-      history.replaceState(null, "", safeNext(new URLSearchParams(window.location.search).get("next")));
-      // The app read its route from the old address; popstate has it read the new one.
-      window.dispatchEvent(new PopStateEvent("popstate"));
+    const to = oldAddressTarget(window.location.pathname, window.location.search);
+    if (to === null) return;
+    if (!isAppPath(new URL(to, window.location.origin).pathname)) {
+      window.location.replace(to);
+      return;
     }
-  }, [inApp, path]);
-  // Any other page asks for the sign-in screen first, coming back to it after.
-  useEffect(() => {
-    if (needsSignIn && path !== SIGNIN_PATH) history.replaceState(null, "", signinHref());
-  }, [needsSignIn, path]);
+    history.replaceState(null, "", to);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }, []);
 
   if (!auth) return status.error ? <UnreachablePage error={status.error} onRetry={status.reload} /> : <Loading />;
   // Shown in place, not loaded again, so a server that keeps refusing can't loop the page.
-  if (refused) return auth.access === "remote" ? <SignInPage /> : <NotLocalPage />;
-  if (auth.setup_required) {
-    const token = new URLSearchParams(window.location.search).get("token");
-    if (path === SETUP_PATH && token) return <SetupPage reset={auth.reset} />;
-    if (needsSignIn) return <SignInPage />;
-    return <SetupNeededPage reset={auth.reset} />;
-  }
-  if (needsSignIn) return <SignInPage />;
-  return <App auth={auth} onAuthChanged={status.reload} />;
+  if (refused) return <NotLocalPage />;
+  return <App auth={auth} />;
 }

@@ -5,12 +5,14 @@ import { withLocalBin } from './paths.js';
 
 /**
  * A Meko running on this computer: its MCP URL, the client token its clients send, and its web
- * listener's URL, where browsers find AgentK at /ext/agentk/ (null from a Meko too old to serve it).
+ * listener's URL, where browsers find AgentK at /ext/agentk/ (null from a Meko too old to serve it,
+ * or while its web UI is off: `webOff`, after `meko ui stop`).
  */
 export interface LocalMeko {
   url: string;
   token: string;
   webUrl?: string | null;
+  webOff?: true;
 }
 
 /**
@@ -70,13 +72,15 @@ export function probeLocalMeko(mekoHome: string | null, env: NodeJS.ProcessEnv =
     execFile('meko', ['token', '--json'], { env: run, timeout: TIMEOUT_MS, encoding: 'utf8' }, (err, stdout) => {
       if (err) return resolve((err as NodeJS.ErrnoException).code === 'ENOENT' ? none : failed);
       try {
-        const r = JSON.parse(stdout) as { url?: unknown; token?: unknown; running?: unknown; web_url?: unknown; cloud?: unknown };
+        const r = JSON.parse(stdout) as { url?: unknown; token?: unknown; running?: unknown; web_url?: unknown; web_off?: unknown; cloud?: unknown };
         if (typeof r.url !== 'string' || !/^https?:\/\//.test(r.url) || typeof r.token !== 'string' || !r.token) return resolve(failed);
         const webUrl = typeof r.web_url === 'string' && /^https?:\/\//.test(r.web_url) ? r.web_url : null;
         const cloud = cloudOf(r.cloud);
         const unreadable = !!r.cloud && typeof r.cloud === 'object' && !!(r.cloud as { error?: unknown }).error;
         resolve({
-          ...(r.running === true ? { state: 'running', meko: { url: r.url, token: r.token, webUrl } } : { state: 'stopped', meko: null }),
+          ...(r.running === true
+            ? { state: 'running', meko: { url: r.url, token: r.token, webUrl, ...(r.web_off === true ? { webOff: true as const } : {}) } }
+            : { state: 'stopped', meko: null }),
           ...(cloud ? { cloud } : {}),
           ...(unreadable ? { cloudUnreadable: true as const } : {}),
         });

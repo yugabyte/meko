@@ -1,5 +1,5 @@
 // The app shell, once the gate (Gate.tsx) let this browser in: loads the datapacks, and shows the
-// open datapack's tab, or the Status, Extensions, Meko Cloud or Account page, beside the sidebar (on
+// open datapack's tab, or the Status, Extensions, Settings or Meko Cloud page, beside the sidebar (on
 // a phone, a drawer opened from the top bar).
 
 import { useCallback, useEffect, useState } from "react";
@@ -20,7 +20,6 @@ import { ExtensionsPage } from "./pages/ExtensionsPage";
 import { KnowledgePage } from "./pages/KnowledgePage";
 import { MekoCloudPage } from "./pages/MekoCloudPage";
 import { MemoriesPage } from "./pages/MemoriesPage";
-import { AccountPage } from "./pages/AccountPage";
 import { MetricsPage } from "./pages/MetricsPage";
 import { ArtifactsPage } from "./pages/ArtifactsPage";
 import { OverviewPage } from "./pages/OverviewPage";
@@ -31,7 +30,7 @@ import { StatusPage } from "./pages/StatusPage";
 // A page's padding: tighter on a phone.
 const PAGE = "p-4 sm:p-8";
 
-export default function App({ auth, onAuthChanged }: { auth: AuthStatus; onAuthChanged: () => void }) {
+export default function App({ auth }: { auth: AuthStatus }) {
   const [theme, setTheme] = useState<Theme>(initialTheme);
   useEffect(() => applyTheme(theme), [theme]);
 
@@ -89,10 +88,6 @@ export default function App({ auth, onAuthChanged }: { auth: AuthStatus; onAuthC
           ) : route.view === "meko-cloud" ? (
             <div className={PAGE}>
               <MekoCloudPage />
-            </div>
-          ) : route.view === "account" ? (
-            <div className={PAGE}>
-              <AccountPage auth={auth} onChanged={onAuthChanged} />
             </div>
           ) : list.loading && !list.data ? (
             <Loading />

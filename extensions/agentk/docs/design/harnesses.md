@@ -89,7 +89,7 @@ says "Update Meko (meko update) to manage agent connections" for the 404, and of
 
 AgentK's server never posts to Meko (its client token can't: connecting may write Meko Cloud's
 account-wide key into an agent's config, so it's the owner's). **Connect to Meko** in Settings ›
-Harness is the page's own call to Meko's web route, root-absolute on Meko's origin with its sign-in,
+Harness is the page's own call to Meko's web route, root-absolute on Meko's origin with its access,
 as updates are (`connectAgent()` in `src/web/mekoagents.ts`: `POST /api/v1/agents/<id>/connect`, in
 Meko's `{ data, error }` envelope), followed by **Check again**'s `POST /api/harnesses/refresh`,
 which reads Meko's list again. Meko's notes (a server it replaced) show under the row.

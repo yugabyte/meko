@@ -1,11 +1,11 @@
 // Package extproxy serves an extension's web UI on the web listener at /ext/<name>/: it passes each
 // request to the unix socket the extension listens on, with the prefix stripped, and keeps the
-// WebSockets it upgrades by the browser session that opened them, so a sign-out closes them.
+// WebSockets it upgrades, so the web listener closes them when it stops (CloseAll).
 //
 // The extension trusts every request on its socket (only the user who runs Meko can connect to it),
 // so what reaches it is only what the web listener let in. The browser's Host and Origin are passed
-// as they are, so the extension's own same-origin checks still hold; its Cookie header (Meko's
-// session) is dropped, and no X-Forwarded-* headers are added.
+// as they are, so the extension's own same-origin checks still hold; its Cookie header (the host's
+// cookies, none of them the extension's) is dropped, and no X-Forwarded-* headers are added.
 package extproxy
 
 import (
@@ -40,13 +40,13 @@ type Proxy struct {
 	tr     *http.Transport
 
 	mu    sync.Mutex
-	conns map[string]map[net.Conn]struct{} // a session's hash to its upgraded connections
+	conns map[net.Conn]struct{} // the upgraded connections still open
 }
 
 // New returns the proxy for an extension whose socket's path socket reports ("" while unknown).
 func New(name, title string, socket func() string, log *slog.Logger) *Proxy {
 	p := &Proxy{Name: name, Title: title, prefix: "/ext/" + name, socket: socket, log: log,
-		conns: map[string]map[net.Conn]struct{}{}}
+		conns: map[net.Conn]struct{}{}}
 	p.tr = &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			path := p.socket()
@@ -182,35 +182,21 @@ func (p *Proxy) unavailable(w http.ResponseWriter, r *http.Request, err error) {
 	_, _ = fmt.Fprintf(w, `{"error":{"code":"EXTENSION_UNAVAILABLE","message":%q}}`, msg)
 }
 
-type sessionKey struct{}
-
-// WithSession tags a request with the hash of the browser session it came with ("" for none), so a
-// WebSocket it upgrades is closed when that session ends.
-func WithSession(r *http.Request, hash string) *http.Request {
-	return r.WithContext(context.WithValue(r.Context(), sessionKey{}, hash))
-}
-
 // ServeHTTP passes a request on. The caller has checked who sent it.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	hash, _ := r.Context().Value(sessionKey{}).(string)
-	if hash != "" && strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
-		w = &tracking{ResponseWriter: w, track: func(c net.Conn) net.Conn { return p.track(hash, c) }}
+	if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		w = &tracking{ResponseWriter: w, track: p.track}
 	}
 	p.rp.ServeHTTP(w, r)
 }
 
-// Revoke closes the upgraded connections of every session live no longer reports as signed in.
-func (p *Proxy) Revoke(live func(hash string) bool) {
+// CloseAll closes the WebSockets the proxy upgraded: the web listener's shutdown doesn't, since
+// they're hijacked from its server, so without this one would outlive meko ui stop.
+func (p *Proxy) CloseAll() {
 	p.mu.Lock()
-	var closing []net.Conn
-	for hash, set := range p.conns {
-		if live(hash) {
-			continue
-		}
-		for c := range set {
-			closing = append(closing, c)
-		}
-		delete(p.conns, hash)
+	closing := make([]net.Conn, 0, len(p.conns))
+	for c := range p.conns {
+		closing = append(closing, c)
 	}
 	p.mu.Unlock()
 	for _, c := range closing {
@@ -218,22 +204,16 @@ func (p *Proxy) Revoke(live func(hash string) bool) {
 	}
 }
 
-func (p *Proxy) track(hash string, c net.Conn) net.Conn {
+func (p *Proxy) track(c net.Conn) net.Conn {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.conns[hash] == nil {
-		p.conns[hash] = map[net.Conn]struct{}{}
-	}
 	tc := &trackedConn{Conn: c}
 	tc.done = func() {
 		p.mu.Lock()
 		defer p.mu.Unlock()
-		delete(p.conns[hash], tc)
-		if len(p.conns[hash]) == 0 {
-			delete(p.conns, hash)
-		}
+		delete(p.conns, tc)
 	}
-	p.conns[hash][tc] = struct{}{}
+	p.conns[tc] = struct{}{}
 	return tc
 }
 

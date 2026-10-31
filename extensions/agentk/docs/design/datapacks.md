@@ -226,9 +226,9 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   created with **No datapack** and get one later.
 > - **In Settings:** the Meko Cloud link is set on Meko's own page, not AgentK's. AgentK's Settings
 >   › General has a **Meko** section that says which Meko AgentK uses (`MekoStatus.source`), with
->   **Meko Cloud ↗** (`/settings/meko-cloud`) and **Account ↗** (`/account`, Meko's password,
->   two-step sign-in and Sign out) as plain links on Meko's origin (`MEKO_CLOUD_PATH`,
->   `MEKO_ACCOUNT_PATH`). **Set up Meko** on a project's home (while there's no Meko) says what to do
+>   **Meko Cloud ↗** (`/settings/meko-cloud`) as a plain link on Meko's origin (`MEKO_CLOUD_PATH`),
+>   and **Account ↗** (`/account`, `MEKO_ACCOUNT_PATH`) only when Meko's status names a username,
+>   which only a Meko that still has a login does (its password, two-step sign-in and Sign out). **Set up Meko** on a project's home (while there's no Meko) says what to do
 >   and links to the same page. Meko's page checks a new server or key before saving it (a MCP
 >   handshake with the key, and a typed web app or API URL must answer like Meko's API), sends a
 >   saved key only where it already goes or to Meko Cloud (otherwise it must be typed again), asks

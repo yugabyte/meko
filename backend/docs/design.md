@@ -10,7 +10,7 @@ an HTTP server with auth, and a supervisor for child processes. The rest builds 
 | [api.md](api.md) | MCP at `/mcp`, REST at `/api/v1`, the client token, the call log, the CLI's tool commands |
 | [knowledge.md](knowledge.md) | Knowledge files: uploads, ingestion, hybrid search with a reranker |
 | [install.md](install.md) | Release builds, releases, the installer, the login service, extensions, updates, secrets |
-| [web.md](web.md) | The web listener browsers use: local or remote access, the login, TLS, extensions at `/ext/<name>/`, the handoff from AgentK |
+| [web.md](web.md) | The web listener browsers use: local or remote access (no login), turning it off, TLS, extensions at `/ext/<name>/`, the handoff from AgentK |
 | [web-ui.md](web-ui.md) | The web UI served at `/` |
 | [callhome.md](callhome.md) | Usage stats |
 
@@ -303,10 +303,11 @@ AgentK, and the **web listener** for browsers ([web.md](web.md)).
   sends it as `Authorization: Bearer <token>`. It's compared in constant time and never logged.
 - **The client token**, for MCP and REST clients, kept across restarts ([api.md](api.md#auth)).
 - Every route needs one of them, or nothing with the opt-in `[server] auth = "none"`, except:
-  `/api/v1/status`, `/api/v1/version` and `/api/v1/auth/setup-link` take only the admin token;
+  `/api/v1/status`, `/api/v1/version` and `/api/v1/web/reload` take only the admin token;
   `/healthz` and the knowledge-file links (a one-time ticket instead) take none
   ([api.md](api.md#auth)). The check runs on the matched route (`c.Path()`), never the raw URL. The
-  web listener has its own check: local access or the owner's session ([web.md](web.md)).
+  web listener has its own check, with no login: local access, or remote access's site check
+  ([web.md](web.md)).
 - Host check: requests must name `127.0.0.1:<port>` or `localhost:<port>`, which stops DNS
   rebinding. A request with an `Origin` header is refused unless it's this server's own
   (`http://127.0.0.1:<port>` or `http://localhost:<port>`), so no page can call it from a browser;
@@ -392,19 +393,22 @@ In `make test` on Linux and macOS:
   (401 without it or with a wrong one); a foreign Host gets 403; an `Origin` other than the server's
   own is refused; replies use the envelope with `error` omitted on success; an internal error
   returns the generic message and logs the cause. The web listener: local access and its refusals
-  (a proxy's headers, another site, a foreign Host, a Bearer token); with remote access the setup
-  link, the cookie, sign-in for an extension's page, the proxy's headers, and a WebSocket closed at
-  sign-out; an extension that isn't answering.
-- **login**, **auth** and **tlscert**: an AgentK hash verifies; TOTP's RFC vector, its window and
-  replay; the rate limit by /64 and site-wide; sessions slide and run out; a password change keeps
-  this browser only; a self-signed pair names localhost and is renewed near its end.
+  (a proxy's headers, another site, a foreign Host, a Bearer token); with remote access, no
+  credential needed, another site's page refused, the login's routes gone, the proxy's headers, and
+  a WebSocket closed by `CloseAll`; an extension that isn't answering; `POST /api/v1/web/reload`
+  for the admin token only.
+- **auth** and **tlscert**: the tokens; a self-signed pair names localhost and is renewed near its
+  end.
+- **config**: `[web] enabled` set and cleared in `web.toml` with its other keys kept, refused
+  while `config.toml` sets it, and still readable as a release without it reads `web.toml`.
 - **supervisor** (the test binary re-run as a stub child): starts and reports healthy; restarts with
   backoff after a crash; marks the child failed after 5 crashes in 10 minutes; stop sends SIGTERM,
   then SIGKILL to the whole process group, including a grandchild that outlives the child;
   `UnixHTTPCheck` passes on 2xx and fails on other answers or a missing socket.
-- **cli**: `start`, `status`, `stop` against a temp data folder; `ui`, `setup_link` and
-  `token --json`'s `web_url`; the handoff from a fake AgentK (its port, remote access, certificate
-  and login taken over, then AgentK reached through Meko over HTTPS, and nothing added twice); a second `serve` on the same
+- **cli**: `start`, `status`, `stop` against a temp data folder; `ui`, `ui stop` (the port closed,
+  and kept closed across a restart) and `ui start`, running or not, and `token --json`'s `web_url`;
+  the handoff from a fake AgentK (its port, remote access and certificate taken over, its login
+  ignored, then AgentK reached through Meko over HTTPS, and nothing added twice); a second `serve` on the same
   folder fails on the lock; a stale pid file doesn't block `start` and is replaced by the new
   server's pid; a taken port gives the clear error; `destroy`'s refusals and what it keeps; every
   printed line ends without a period (`TestOutputLinesEndWithoutPeriod`).

@@ -297,3 +297,24 @@ func TestSnapshot(t *testing.T) {
 		t.Errorf("after the snapshot: %d datapacks, want 2", len(all))
 	}
 }
+
+func TestSettings(t *testing.T) {
+	s, ctx := open(t), context.Background()
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetSetting(ctx, "k", "v"); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok, err := s.Setting(ctx, "k"); err != nil || !ok || v != "v" {
+		t.Fatalf("read back: %q %v %v", v, ok, err)
+	}
+	for range 2 { // a missing one is fine
+		if err := s.DeleteSetting(ctx, "k"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok, _ := s.Setting(ctx, "k"); ok {
+		t.Fatal("setting still there")
+	}
+}

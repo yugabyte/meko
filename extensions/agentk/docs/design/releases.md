@@ -118,7 +118,7 @@ meko extension install agentk -- --agent kiro      # options after -- go to `age
 #     Meko's data folder once the server has started
 #  5. installs both background services: systemd user units with linger if allowed,
 #     or LaunchAgents on macOS (needs a desktop login)
-#  6. prints the address Meko serves it at (meko setup_link makes the login for remote access)
+#  6. prints the address Meko serves it at
 ```
 
 **Tags.** The repo releases three products. AgentK's releases are tagged `agentk-v<version>`

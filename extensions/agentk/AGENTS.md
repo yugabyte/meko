@@ -118,7 +118,7 @@ agents should read it before changing code there.
    that is still starting; `launch()` never replaces a live pane.
 3. **Only through Meko.** The server listens on nothing but its unix socket (`Paths.webSock`, in a
    folder only the user can open) and has no login of its own: the Meko on this computer serves it
-   to browsers at `/ext/agentk/` after its own sign-in (local access, or the owner's login), and
+   to browsers at `/ext/agentk/` after its own access check (local or remote access, no login), and
    every request on the socket is let in. Never add a TCP listener, a login, or a route that trusts
    a header to say who sent it. Writes and WebSocket upgrades refuse an `Origin` that isn't the
    page's own (Meko passes the browser's `Host` and `Origin` on unchanged), keyed on the matched
