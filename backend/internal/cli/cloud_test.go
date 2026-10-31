@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +15,8 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/yugabyte/meko/backend/internal/paths"
 )
 
 const testCloudKey = "mko_tkn_cloud_0123456789wxyz"
@@ -24,11 +28,29 @@ const testCloudKey2 = "mko_tkn_cloud_9876543210abcd"
 // list none.
 var fakeCloudDown, fakeCloudEmpty atomic.Bool
 
-// fakeCloud is a Meko server for the link's checks: MCP at /mcp, taking testCloudKey (or testCloudKey2), and the
-// REST API's envelope at /api/v1, where GET /datapacks gives two rows to testCloudKey.
+// fakeCloudRows are fakeCloud's two datapacks, as its datapack_list tool and GET /datapacks give them.
+const fakeCloudRows = `[{"datapack_id":"c0ffee00-0000-4000-8000-000000000001",` +
+	`"datapack_name":"team-runbooks","grant":"viewer","created_at":"2026-10-02T00:00:00Z",` +
+	`"datapack_ysql_connection_string":"postgresql://db.example.com/dp"},` +
+	`{"datapack_id":"c0ffee00-0000-4000-8000-000000000002","datapack_name":"cloud-notes",` +
+	`"description":"mine","grant":"owner","created_at":"2026-10-01T00:00:00Z"}]`
+
+// fakeCloud is a Meko server for the link's checks: MCP at /mcp, taking testCloudKey (or testCloudKey2), with a
+// datapack_list tool, and the REST API's envelope at /api/v1, where GET /datapacks gives two rows to testCloudKey.
 func fakeCloud(t *testing.T) string {
 	t.Helper()
 	srv := mcp.NewServer(&mcp.Implementation{Name: "fake", Version: "1"}, nil)
+	srv.AddTool(&mcp.Tool{Name: "datapack_list", InputSchema: map[string]any{"type": "object"}},
+		func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			text := fakeCloudRows
+			switch {
+			case fakeCloudDown.Load():
+				text = `{"error":"list_failed","detail":"Cloud is down."}`
+			case fakeCloudEmpty.Load():
+				text = "[]"
+			}
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, nil
+		})
 	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv },
 		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -42,11 +64,7 @@ func fakeCloud(t *testing.T) string {
 			case fakeCloudEmpty.Load():
 				_, _ = w.Write([]byte(`{"data":[]}`))
 			default:
-				_, _ = w.Write([]byte(`{"data":[{"datapack_id":"c0ffee00-0000-4000-8000-000000000001",` +
-					`"datapack_name":"team-runbooks","grant":"viewer","created_at":"2026-10-02T00:00:00Z",` +
-					`"datapack_ysql_connection_string":"postgresql://db.example.com/dp"},` +
-					`{"datapack_id":"c0ffee00-0000-4000-8000-000000000002","datapack_name":"cloud-notes",` +
-					`"description":"mine","grant":"owner","created_at":"2026-10-01T00:00:00Z"}]}`))
+				_, _ = w.Write([]byte(`{"data":` + fakeCloudRows + `}`))
 			}
 			return
 		}
@@ -97,9 +115,14 @@ func TestCloudLink(t *testing.T) {
 	code, out, errs := run("cloud_link", "--data-dir", dir, "--url", cloud+"/mcp", "--web-url", cloud)
 	want(t, "cloud_link with no server", code, 0, out+errs, "Linked to "+cloud+"/mcp (key …wxyz)")
 	c := readCloudToken(t, dir)
-	wantCloud := cloudToken{Set: true, URL: cloud + "/mcp", APIKey: testCloudKey, WebURL: cloud, APIURL: cloud + "/api/v1"}
+	wantCloud := cloudToken{Set: true, Linked: true, WebURL: cloud}
 	if c != wantCloud {
 		t.Fatalf("token --json cloud = %+v, want %+v", c, wantCloud)
+	}
+	// The key stays in Meko: extensions reach Meko Cloud through it.
+	if _, js, _ := run("token", "--data-dir", dir, "--json"); strings.Contains(js, testCloudKey) ||
+		strings.Contains(js, "api_key") {
+		t.Fatalf("token --json shows the key: %s", js)
 	}
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
 	want(t, "status", code, exitNotRunning, out, "Meko Cloud:    linked to "+cloud+"/mcp (key …wxyz)")
@@ -123,16 +146,15 @@ func TestCloudLink(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "cloud.toml"), []byte("linked = ["), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if c := readCloudToken(t, dir); c.Error == "" || c.Set || c.APIKey != "" {
+	if c := readCloudToken(t, dir); c.Error == "" || c.Set || c.Linked {
 		t.Fatalf("an unreadable link: %+v", c)
 	}
 }
 
-// meko-cli datapacks lists this Meko's datapacks and, while Meko Cloud is linked, its datapacks,
-// through the running server, as one list of names and descriptions by name (where each lives, and
-// its id, are --json's); --local leaves Meko Cloud out, and a Cloud that fails leaves a warning after
-// the local rows.
-func TestDatapacksCloud(t *testing.T) {
+// meko-cli datapacks lists the datapacks /mcp lists: this Meko's while unlinked, and only the linked
+// Meko Cloud's while it's linked, as names and descriptions by name (ids are --json's, the tool's
+// reply as it is). A Meko Cloud that fails says so.
+func TestDatapacksLinked(t *testing.T) {
 	dir, port := setup(t)
 	t.Setenv("MEKO_SECRETS", "file")
 	cloud := fakeCloud(t)
@@ -141,70 +163,40 @@ func TestDatapacksCloud(t *testing.T) {
 
 	code, out, errs = runSh("datapacks", "--data-dir", dir)
 	want(t, "unlinked", code, 0, out, "default   Created by Meko on first start.\n")
-	if errs != "" || strings.Contains(out, "local") {
-		t.Fatalf("unlinked, the list is unmarked and says nothing of Meko Cloud:\n%s%s", out, errs)
+	if errs != "" {
+		t.Fatalf("unlinked: %s", errs)
 	}
-	code, out, _ = runSh("datapacks", "--data-dir", dir, "--json")
-	want(t, "--json unlinked", code, 0, out, `"cloud":{"datapacks":[],"linked":false}`)
 
 	withStdin(t, testCloudKey+"\n")
 	code, out, errs = run("cloud_link", "--data-dir", dir, "--url", cloud+"/mcp", "--web-url", cloud)
 	want(t, "cloud_link", code, 0, out+errs, "Linked to")
 
 	code, out, errs = runSh("datapacks", "--data-dir", dir)
-	if code != 0 || errs != "" || out != "cloud-notes     mine\n"+
-		"default         Created by Meko on first start.\n"+
-		"team-runbooks\n" {
-		t.Fatalf("linked, one list by name of just names and descriptions: %d\n%s%s", code, out, errs)
+	if code != 0 || errs != "" || out != "cloud-notes     mine\nteam-runbooks\n" {
+		t.Fatalf("linked, Meko Cloud's by name: %d\n%s%s", code, out, errs)
 	}
-	code, out, _ = runSh("datapacks", "--data-dir", dir, "--local")
-	if code != 0 || strings.Contains(out, "team-runbooks") || strings.Contains(out, "local") {
-		t.Fatalf("--local leaves Meko Cloud out: %d\n%s", code, out)
-	}
-	code, out, _ = runSh("datapacks", "--data-dir", dir, "--local", "--json")
-	if code != 0 || !strings.HasPrefix(out, "[") {
-		t.Fatalf("--local --json is the tool's reply: %d\n%s", code, out)
-	}
-
-	code, out, errs = runSh("datapacks", "--data-dir", dir, "--json")
-	var j struct {
-		Local []map[string]any `json:"local"`
-		Cloud struct {
-			Linked    bool             `json:"linked"`
-			Datapacks []map[string]any `json:"datapacks"`
-		} `json:"cloud"`
-	}
-	if code != 0 || json.Unmarshal([]byte(out), &j) != nil || len(j.Local) == 0 || !j.Cloud.Linked ||
-		len(j.Cloud.Datapacks) != 2 ||
-		j.Cloud.Datapacks[0]["web_url"] != cloud+"/datapacks/c0ffee00-0000-4000-8000-000000000001" {
-		t.Fatalf("--json: %d %s %s", code, out, errs)
+	code, out, _ = runSh("datapacks", "--data-dir", dir, "--json")
+	if code != 0 || !strings.Contains(out, `"team-runbooks"`) || strings.Contains(out, `"default"`) {
+		t.Fatalf("--json is Meko Cloud's reply: %d\n%s", code, out)
 	}
 
 	fakeCloudDown.Store(true)
 	t.Cleanup(func() { fakeCloudDown.Store(false) })
-	code, out, errs = runSh("datapacks", "--data-dir", dir)
-	want(t, "Cloud down", code, 0, errs,
-		"meko-cli: couldn't list Meko Cloud's datapacks: Meko Cloud couldn't list datapacks: Cloud is down "+
-			"(meko-cli datapacks --local skips Meko Cloud)")
-	want(t, "Cloud down", code, 0, out, "default   Created by Meko on first start.\n")
+	code, _, errs = runSh("datapacks", "--data-dir", dir)
+	want(t, "Cloud down", code, 1, errs, "meko-cli: list_failed: Cloud is down")
 	fakeCloudDown.Store(false)
 
-	// With no datapack here and none in Meko Cloud, the list says so.
-	code, out, errs = runSh("delete_datapack", "--data-dir", dir, "default", "--force")
-	want(t, "delete_datapack default --force", code, 0, out+errs, "Deleted datapack default\n")
 	fakeCloudEmpty.Store(true)
 	t.Cleanup(func() { fakeCloudEmpty.Store(false) })
 	if code, out, errs = runSh("datapacks", "--data-dir", dir); code != 0 || out != "No datapacks\n" || errs != "" {
 		t.Fatalf("no datapacks, linked: %d\n%s%s", code, out, errs)
 	}
-	if code, out, errs = runSh("datapacks", "--data-dir", dir, "--local"); code != 0 || out != "No datapacks\n" {
-		t.Fatalf("no datapacks, --local: %d\n%s%s", code, out, errs)
-	}
 }
 
-// meko-cli works on the linked Meko Cloud's datapacks. The "Meko Cloud" here is a second Meko server,
-// which serves the REST routes and MCP tools meko-cli calls with Cloud's shapes: a name only it has
-// goes there, cloud: picks it when both have one, and every message about its datapacks says so.
+// While Meko Cloud is linked, this Meko's /mcp works on its datapacks, and no datapack is made here.
+// The "Meko Cloud" here is a second Meko server, which serves the MCP tools and REST routes with
+// Cloud's shapes: meko-cli's commands, an agent's MCP session with the client token, REST's creates
+// and /api/v1/cloud all reach it, and unlinking brings this Meko's own datapacks back.
 func TestCloudDatapacks(t *testing.T) {
 	withMemoryEngine(t)
 	t.Setenv("MEKO_SECRETS", "file")
@@ -215,91 +207,129 @@ func TestCloudDatapacks(t *testing.T) {
 	t.Cleanup(func() { run("stop", "--data-dir", cloudDir, "--keep-extensions") })
 	startReady(t, cloudDir, cloudPort)
 
-	// Unlinked: cloud: says so, and a missing name is only missing here.
-	code, _, errs := runSh("add_memory", "--data-dir", dir, "x", "--datapack", "cloud:team-notes")
-	want(t, "cloud: unlinked", code, 1, errs, "meko-cli: this Meko isn't linked to Meko Cloud: meko cloud_link links it\n")
-	code, _, errs = runSh("search", "--data-dir", dir, "x", "--datapack", "nope")
-	want(t, "a missing name unlinked", code, 1, errs, `no datapack is named "nope" (meko-cli datapacks lists them)`)
+	code, _, errs := runSh("search", "--data-dir", dir, "x", "--datapack", "nope")
+	want(t, "a missing name", code, 1, errs, `no datapack is named "nope" (meko-cli datapacks lists them)`)
+	code, out, errs := runSh("create_datapack", "--data-dir", dir, "kept-here")
+	want(t, "create_datapack unlinked", code, 0, out+errs, "Created datapack kept-here (")
 
 	_, key, _ := run("token", "--data-dir", cloudDir)
 	withStdin(t, key)
 	cloud := "http://127.0.0.1:" + cloudPort
-	code, out, errs := run("cloud_link", "--data-dir", dir, "--url", cloud+"/mcp", "--api-url", cloud+"/api/v1")
+	code, out, errs = run("cloud_link", "--data-dir", dir, "--url", cloud+"/mcp", "--api-url", cloud+"/api/v1")
 	want(t, "cloud_link", code, 0, out+errs, "Linked to "+cloud+"/mcp")
 
-	code, out, errs = runSh("create_datapack", "--data-dir", dir, "team-notes", "--cloud")
-	want(t, "create_datapack --cloud", code, 0, out+errs, "Created Meko Cloud datapack team-notes (")
-	if _, out, _ = runSh("datapacks", "--data-dir", dir, "--local"); strings.Contains(out, "team-notes") {
-		t.Fatalf("create_datapack --cloud made it here:\n%s", out)
+	code, out, errs = runSh("create_datapack", "--data-dir", dir, "team-notes")
+	want(t, "create_datapack linked", code, 0, out+errs, "Created Meko Cloud datapack team-notes (")
+	if _, out, _ = runSh("datapacks", "--data-dir", cloudDir); !strings.Contains(out, "team-notes") {
+		t.Fatalf("create_datapack didn't make it in Cloud:\n%s", out)
 	}
 	code, out, errs = runSh("datapacks", "--data-dir", dir)
-	want(t, "datapacks", code, 0, "\n"+out+errs, "\nteam-notes\n")
-	want(t, "datapacks", code, 0, "\n"+out, "\ndefault ")
+	want(t, "datapacks linked", code, 0, "\n"+out+errs, "\nteam-notes\n")
+	if strings.Contains(out, "kept-here") {
+		t.Fatalf("linked, this Meko's datapacks are listed:\n%s", out)
+	}
 
 	const runbook = "the deploy runbook lives in the team wiki"
 	code, out, errs = runSh("add_memory", "--data-dir", dir, runbook, "--datapack", "team-notes")
-	want(t, "add_memory to a name only Cloud has", code, 0, out+errs, " to Meko Cloud datapack team-notes\n")
+	want(t, "add_memory", code, 0, out+errs, " to Meko Cloud datapack team-notes\n")
 	code, out, errs = runSh("search", "--data-dir", cloudDir, runbook, "--datapack", "team-notes", "--source", "memory")
 	want(t, "the memory is in Cloud", code, 0, out+errs, runbook+"  (meko_cli, ")
-	code, out, errs = runSh("search", "--data-dir", dir, runbook, "--datapack", "cloud:team-notes", "--source", "memory")
+	code, out, errs = runSh("search", "--data-dir", dir, runbook, "--datapack", "team-notes", "--source", "memory")
 	want(t, "search a Cloud datapack", code, 0, out+errs, runbook)
-	code, out, _ = runSh("search", "--data-dir", dir, runbook, "--source", "memory")
-	if code != 0 || strings.Contains(out, runbook) {
-		t.Fatalf("the memory went to this Meko too: %d\n%s", code, out)
-	}
 
-	// A name both have is this Meko's; cloud: picks Meko Cloud's.
-	for _, args := range [][]string{{"notes"}, {"notes", "--cloud"}} {
-		if code, out, errs = runSh(append([]string{"create_datapack", "--data-dir", dir}, args...)...); code != 0 {
-			t.Fatalf("create_datapack %v: %s%s", args, out, errs)
-		}
-	}
-	code, out, errs = runSh("add_memory", "--data-dir", dir, "a fact kept here", "--datapack", "notes")
-	if code != 0 || strings.Contains(out+errs, "Meko Cloud") {
-		t.Fatalf("add_memory to a name both have: %d\n%s%s", code, out, errs)
-	}
-	code, out, errs = runSh("add_memory", "--data-dir", dir, "a fact kept in Cloud", "--datapack", "cloud:notes")
-	want(t, "add_memory to cloud:", code, 0, out+errs, " to Meko Cloud datapack notes\n")
-	code, out, errs = runSh("search", "--data-dir", cloudDir, "a fact kept", "--datapack", "notes", "--source", "memory")
-	want(t, "cloud: went to Cloud", code, 0, out+errs, "a fact kept in Cloud")
-	if strings.Contains(out, "a fact kept here") {
-		t.Fatalf("the name both have went to Cloud:\n%s", out)
-	}
-
-	// Files go to Cloud's knowledge base through its REST API.
+	// Files go to Cloud's knowledge base.
 	notes := filepath.Join(t.TempDir(), "notes.md")
 	if err := os.WriteFile(notes, []byte("# Deploys\n\nDeploys go out on Tuesdays.\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	code, out, errs = runSh("upload", "--data-dir", dir, notes, "--datapack", "team-notes")
 	want(t, "upload to Cloud", code, 0, out+errs, notes+": indexed in Meko Cloud datapack team-notes, 1 chunk (key ")
-	code, out, errs = runSh("search", "--data-dir", cloudDir, "when do deploys go out", "--datapack", "team-notes",
-		"--source", "knowledge_base")
-	want(t, "the file is in Cloud", code, 0, out+errs, "Deploys go out on Tuesdays")
 	code, out, errs = runSh("upload", "--data-dir", dir, notes, "--datapack", "team-notes", "--json")
 	var offer struct{ Key string }
 	if err := json.Unmarshal([]byte(strings.SplitN(out, "\n", 2)[0]), &offer); code != 0 || err != nil {
 		t.Fatalf("upload --json: %d %v\n%s%s", code, err, out, errs)
 	}
-	code, out, errs = runSh("upload_status", "--data-dir", dir, offer.Key, "--datapack", "cloud:team-notes")
+	code, out, errs = runSh("upload_status", "--data-dir", dir, offer.Key, "--datapack", "team-notes")
 	want(t, "upload_status in Cloud", code, 0, out+errs, offer.Key+": completed.")
 
-	zip := filepath.Join(t.TempDir(), "team-notes.zip")
-	code, _, errs = runSh("export", "--data-dir", dir, "team-notes", "-o", zip)
-	want(t, "export a Cloud datapack", code, 1, errs,
-		"export works only on this Meko's datapacks, and team-notes is in Meko Cloud")
-	if _, err := os.Stat(zip); !os.IsNotExist(err) {
-		t.Fatalf("export of a Cloud datapack wrote a file: %v", err)
+	// An agent's session with the client token: Meko Cloud's tools (the second Meko's, so its
+	// datapack_metrics too), and this Meko's knowledgebase_upload_file reading a file here.
+	l := paths.New(dir)
+	_, clientTok, _ := run("token", "--data-dir", dir)
+	cs := clientSession(t, "http://127.0.0.1:"+port+"/mcp", strings.TrimSpace(clientTok))
+	tools, err := cs.ListTools(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
 	}
+	names := map[string]bool{}
+	for _, tl := range tools.Tools {
+		names[tl.Name] = true
+	}
+	if !names["knowledgebase_upload_file"] || !names["context_search"] || !names["datapack_metrics"] {
+		t.Fatalf("linked tools/list: %v", names)
+	}
+	dp := datapackID(t, dir, "team-notes")
+	faq := filepath.Join(t.TempDir(), "faq.md")
+	if err = os.WriteFile(faq, []byte("# FAQ\n\nThe staging cluster restarts at noon.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	text := callText(t, cs, "knowledgebase_upload_file", map[string]any{"path": faq, "datapack_id": dp,
+		"conversation_id": "c0ffee0000004000800000000000000a"})
+	if !strings.Contains(text, `"already_uploaded":false`) || !strings.Contains(text, `"document_key"`) {
+		t.Fatalf("knowledgebase_upload_file to Cloud: %s", text)
+	}
+	text = callText(t, cs, "datapack_list", map[string]any{"conversation_id": "c0ffee0000004000800000000000000a"})
+	if !strings.Contains(text, "team-notes") || strings.Contains(text, "kept-here") {
+		t.Fatalf("datapack_list through this Meko, linked: %s", text)
+	}
+
+	// REST: a create goes to Cloud, and one for this Meko is refused.
+	c, err := newClient(l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var made struct {
+		Location string `json:"location"`
+	}
+	if err = c.send(t.Context(), http.MethodPost, "/api/v1/datapacks", map[string]string{"name": "rest-made"},
+		&made); err != nil || made.Location != "cloud" {
+		t.Fatalf("REST create linked: %v %+v", err, made)
+	}
+	err = c.send(t.Context(), http.MethodPost, "/api/v1/datapacks", map[string]string{"name": "x-local",
+		"location": "local"}, nil)
+	if ae := (*apiError)(nil); !errors.As(err, &ae) || ae.code != "CLOUD_LINKED" {
+		t.Fatalf("REST create for this Meko, linked: %v", err)
+	}
+	// /api/v1/cloud passes the client token's request on to Cloud's REST API.
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet,
+		"http://127.0.0.1:"+port+"/api/v1/cloud/datapacks?location=local", nil)
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(clientTok))
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	if res.StatusCode != http.StatusOK || !strings.Contains(string(body), "rest-made") ||
+		strings.Contains(string(body), "kept-here") {
+		t.Fatalf("/api/v1/cloud/datapacks: %d %s", res.StatusCode, body)
+	}
+
+	// export still works on this Meko's datapacks, by name; a Cloud one isn't one of them.
+	zip := filepath.Join(t.TempDir(), "kept-here.zip")
+	code, out, errs = runSh("export", "--data-dir", dir, "kept-here", "-o", zip)
+	want(t, "export this Meko's, linked", code, 0, out+errs, "Exported to "+zip)
+	code, _, errs = runSh("export", "--data-dir", dir, "team-notes")
+	want(t, "export a Cloud datapack", code, 1, errs, `no datapack is named "team-notes" (the web UI lists them)`)
+	code, _, errs = runSh("export", "--data-dir", dir)
+	want(t, "export with no name, linked", code, 1, errs, "name this computer's datapack to export")
 
 	// The prompt: use finds Cloud's datapack, later lines go there, and deleting it goes back to the
 	// default.
-	withStdin(t, "use team-notes\nadd_memory \"kept from the prompt\"\nuse\ndelete_datapack cloud:team-notes\ny\n"+
-		"use\n")
+	withStdin(t, "use team-notes\nadd_memory \"kept from the prompt\"\nuse\ndelete_datapack team-notes\ny\nuse\n")
 	code, out, errs = runSh("--data-dir", dir)
-	want(t, "the prompt's use of Cloud's", code, 0, out+errs, "Using Meko Cloud datapack team-notes\nAdded memory ")
+	want(t, "the prompt's use", code, 0, out+errs, "Using Meko Cloud datapack team-notes\nAdded memory ")
 	want(t, "the prompt's add_memory", code, 0, out, " to Meko Cloud datapack ")
-	want(t, "the prompt's use, alone", code, 0, out, "\nUsing Meko Cloud datapack team-notes\n")
 	want(t, "the prompt's delete_datapack", code, 0, out, "This deletes Meko Cloud datapack team-notes and "+
 		"everything in it (memories, conversations, artifacts) for good\nDelete it? [y/N] \n"+
 		"Deleted Meko Cloud datapack team-notes\nUsing the default datapack\nUsing the default datapack\n")
@@ -307,33 +337,61 @@ func TestCloudDatapacks(t *testing.T) {
 		t.Fatalf("the prompt's delete_datapack left it in Cloud:\n%s", out)
 	}
 
-	// At the prompt, use cloud:<id> shows Cloud's name, and deleting this Meko's datapack of the same
-	// name leaves Cloud's in use; deleting Cloud's, named another way, goes back to the default.
-	for _, args := range [][]string{{"pair"}, {"pair", "--cloud"}} {
-		if code, out, errs = runSh(append([]string{"create_datapack", "--data-dir", dir}, args...)...); code != 0 {
-			t.Fatalf("create_datapack %v: %s%s", args, out, errs)
+	// Unlinked, this Meko's datapacks are back.
+	code, out, errs = run("cloud_link", "--data-dir", dir, "--off")
+	want(t, "cloud_link --off", code, 0, out+errs, "unlinked")
+	code, out, errs = runSh("datapacks", "--data-dir", dir)
+	want(t, "datapacks unlinked", code, 0, "\n"+out+errs, "\nkept-here\n")
+	if strings.Contains(out, "rest-made") {
+		t.Fatalf("unlinked, Cloud's datapacks are listed:\n%s", out)
+	}
+}
+
+// clientSession is an MCP session with url, sending tok as an agent does.
+func clientSession(t *testing.T, url, tok string) *mcp.ClientSession {
+	t.Helper()
+	c := mcp.NewClient(&mcp.Implementation{Name: "test-agent", Version: "1"}, nil)
+	cs, err := c.Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: url,
+		HTTPClient: &http.Client{Transport: bearer{tok}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+	return cs
+}
+
+// callText calls a tool and returns its reply's text.
+func callText(t *testing.T, cs *mcp.ClientSession, name string, args map[string]any) string {
+	t.Helper()
+	res, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: name, Arguments: args})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := ""
+	if len(res.Content) > 0 {
+		if tc, ok := res.Content[0].(*mcp.TextContent); ok {
+			text = tc.Text
 		}
 	}
-	pairID := strings.TrimSuffix(out[strings.LastIndex(out, "(")+1:], ")\n")
-	withStdin(t, "use cloud:"+pairID+"\ndelete_datapack pair\ny\nuse\ndelete_datapack cloud:pair\ny\nuse\n")
-	code, out, errs = runSh("--data-dir", dir)
-	want(t, "the prompt's use cloud:<id>", code, 0, out+errs, "Using Meko Cloud datapack pair\n")
-	want(t, "the prompt keeps Cloud's after this Meko's is deleted", code, 0, out,
-		"Deleted datapack pair\nUsing Meko Cloud datapack pair\n")
-	want(t, "the prompt drops Cloud's once it's deleted", code, 0, out,
-		"Deleted Meko Cloud datapack pair\nUsing the default datapack\nUsing the default datapack\n")
-
-	withStdin(t, "y\n")
-	code, out, errs = runSh("delete_datapack", "--data-dir", dir, "cloud:notes")
-	want(t, "delete_datapack cloud:", code, 0, out+errs, "Deleted Meko Cloud datapack notes\n")
-	if _, out, _ = runSh("datapacks", "--data-dir", dir, "--local"); !strings.Contains("\n"+out, "\nnotes") {
-		t.Fatalf("delete_datapack cloud:notes deleted this Meko's:\n%s", out)
+	if res.IsError {
+		t.Fatalf("%s failed: %s", name, text)
 	}
-	code, _, errs = runSh("search", "--data-dir", dir, "x", "--datapack", "cloud:nosuch")
-	want(t, "a missing Cloud name", code, 1, errs, `no Meko Cloud datapack is named "nosuch"`)
-	code, _, errs = runSh("search", "--data-dir", dir, "x", "--datapack", "nosuch")
-	want(t, "a name missing on both sides", code, 1, errs,
-		`no datapack is named "nosuch" here or in Meko Cloud (meko-cli datapacks lists them)`)
+	return text
+}
+
+// datapackID is the id of the datapack named in the Meko at dir, through meko-cli datapacks --json.
+func datapackID(t *testing.T, dir, name string) string {
+	t.Helper()
+	_, out, _ := runSh("datapacks", "--data-dir", dir, "--json")
+	var rows []datapackRow
+	if err := json.Unmarshal([]byte(out), &rows); err != nil {
+		t.Fatalf("datapacks --json: %v\n%s", err, out)
+	}
+	r, err := pick(rows, name, "datapacks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r.ID
 }
 
 // A key Meko Cloud refuses says so, without the key.
@@ -341,17 +399,17 @@ func TestCloudDatapacksKeyRefused(t *testing.T) {
 	dir, port := setup(t)
 	t.Setenv("MEKO_SECRETS", "file")
 	cloud := fakeCloud(t)
-	code, out, errs := run("start", "--data-dir", dir, "--port", port)
-	want(t, "start", code, 0, out+errs, "is running")
 	withStdin(t, testCloudKey+"\n")
-	code, out, errs = run("cloud_link", "--data-dir", dir, "--url", cloud+"/mcp", "--web-url", cloud)
+	code, out, errs := run("cloud_link", "--data-dir", dir, "--url", cloud+"/mcp", "--web-url", cloud)
 	want(t, "cloud_link", code, 0, out+errs, "Linked to")
+	// The key changes behind Meko's back (the server reads it at start).
 	const stale = "mko_tkn_stale_0123456789abcd"
 	if err := os.WriteFile(filepath.Join(dir, "secrets", "meko_cloud_key"), []byte(stale), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"search", "x", "--datapack", "team-runbooks"},
-		{"create_datapack", "x", "--cloud"}} {
+	code, out, errs = run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "is running")
+	for _, args := range [][]string{{"datapacks"}, {"create_datapack", "x"}} {
 		code, out, errs = runSh(append(args, "--data-dir", dir)...)
 		want(t, args[0]+" with a refused key", code, 1, errs,
 			"meko-cli: Meko Cloud refused the key. Link it again in Settings › Meko Cloud, or with meko cloud_link\n")
@@ -361,46 +419,25 @@ func TestCloudDatapacksKeyRefused(t *testing.T) {
 	}
 }
 
-func TestSplitSide(t *testing.T) {
-	for _, c := range []struct{ in, side, rest string }{
-		{"notes", "", "notes"},
-		{"cloud:notes", "cloud", "notes"},
-		{"local:notes", "local", "notes"},
-		{"cloud:", "cloud", ""},
-		{"Cloud:notes", "", "Cloud:notes"},
-	} {
-		if side, rest := splitSide(c.in); side != c.side || rest != c.rest {
-			t.Errorf("splitSide(%q) = %q, %q, want %q, %q", c.in, side, rest, c.side, c.rest)
-		}
-	}
+func TestTarget(t *testing.T) {
 	d := target{cloud: true, id: "c0ffee00-0000-4000-8000-000000000001", name: "team-notes"}
-	if d.spec() != "cloud:"+d.id || d.noun() != "Meko Cloud datapack team-notes" {
-		t.Errorf("a Cloud target: %q, %q", d.spec(), d.noun())
+	if d.noun() != "Meko Cloud datapack team-notes" || (target{name: "notes"}).noun() != "datapack notes" {
+		t.Errorf("nouns: %q, %q", d.noun(), target{name: "notes"}.noun())
 	}
-	if got := statusHint(d, "k"); got != "meko-cli upload_status k --datapack cloud:"+d.id {
+	if got := statusHint(d, "k"); got != "meko-cli upload_status k --datapack "+d.id {
 		t.Errorf("statusHint = %q", got)
 	}
 	if got := statusHint(target{}, "k"); got != "meko-cli upload_status k" {
 		t.Errorf("statusHint of the default = %q", got)
 	}
-}
-
-// postUpload takes any 2xx as a file received: Meko's link answers 204, and an S3 POST can be told
-// to answer 200 or 201.
-func TestPostUploadTakesAny2xx(t *testing.T) {
-	for _, status := range []int{http.StatusNoContent, http.StatusCreated, http.StatusOK} {
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-			if err != nil || !strings.Contains(string(body), "name=\"key\"\r\n\r\nk\r\n") {
-				http.Error(w, "bad form", http.StatusBadRequest)
-				return
-			}
-			w.WriteHeader(status)
-		}))
-		err := postUpload(t.Context(), ts.URL, map[string]string{"key": "k"}, "a.md", []byte("# a\n"))
-		ts.Close()
-		if err != nil {
-			t.Errorf("%d: %v", status, err)
-		}
+	rows := []datapackRow{{ID: "a", Name: "notes"}, {ID: "b", Name: "twin"}, {ID: "c", Name: "twin"}}
+	if r, err := pick(rows, "A", "x"); err != nil || r.Name != "notes" {
+		t.Errorf("pick by id: %+v %v", r, err)
+	}
+	if _, err := pick(rows, "twin", "x"); err == nil || !strings.Contains(err.Error(), "2 datapacks are named") {
+		t.Errorf("pick of a name two have: %v", err)
+	}
+	if _, err := pick(rows, "nope", "x"); err == nil || !strings.Contains(err.Error(), `no datapack is named "nope"`) {
+		t.Errorf("pick of a missing name: %v", err)
 	}
 }

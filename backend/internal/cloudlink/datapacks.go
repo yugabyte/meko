@@ -124,7 +124,7 @@ func shorten(s string) string {
 // app; linked false when it isn't linked. It doesn't take the change lock: a listing never changes
 // the link.
 func (s *Service) Datapacks(ctx context.Context) (Datapacks, error) {
-	st, err := s.Store.Load()
+	st, err := s.load()
 	if err != nil {
 		return Datapacks{}, err
 	}

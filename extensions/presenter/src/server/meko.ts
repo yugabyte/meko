@@ -1,7 +1,9 @@
 // Presenter's door to Meko: datapacks and artifacts, through Meko's MCP tools, and the artifact list
 // through its REST route (artifact_get only takes a hash, so finding the newest deck.json needs the
-// list). Which Meko is Meko's to say: its Meko Cloud link when linked, else the Meko on this computer,
-// both from `meko token --json` (Meko's docs/cloud.md).
+// list). It always talks to the Meko on this computer, from `meko token --json` (Meko's
+// docs/cloud.md): while Meko links Meko Cloud, that Meko passes the calls on to Meko Cloud with the
+// link's key, which Presenter never sees. A Meko from before that handed out the link's key, and
+// Presenter then talks to Meko Cloud itself.
 
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -62,13 +64,18 @@ export interface MekoPort {
 }
 
 export interface MekoCreds {
-  /** Meko's MCP URL: http://127.0.0.1:7778/mcp, or Meko Cloud's. */
+  /** Meko's MCP URL: http://127.0.0.1:7778/mcp, or, from an older Meko, Meko Cloud's. */
   url: string;
   key: string;
-  /** Meko's REST API base: <origin>/api/v1 here, the link's own for Meko Cloud (another host). */
+  /**
+   * Meko's REST API base: <origin>/api/v1 here, <origin>/api/v1/cloud for Meko Cloud through this
+   * Meko, or, from an older Meko, the link's own (another host).
+   */
   apiUrl: string;
-  /** The Meko on this computer, or the one Meko links to (Meko Cloud). */
+  /** The Meko the datapacks are in: the one on this computer, or the one Meko links to (Meko Cloud). */
   kind: MekoAt['kind'];
+  /** The host that names Meko Cloud when it's reached through this Meko: its web app's ('' when unknown). */
+  cloudHost?: string;
 }
 
 export interface Found {
@@ -84,11 +91,14 @@ export interface Finder {
   forget?(): void;
 }
 
-/** Meko's Meko Cloud link: linked, `url` and `apiKey` are set; unlinked (or never set), they're ''. */
+/**
+ * Meko's Meko Cloud link: whether it's linked, and its web app's URL ('' when unknown). `direct` is
+ * set only by an older Meko that handed out the link's MCP URL, key and REST API URL.
+ */
 export interface CloudLink {
-  url: string;
-  apiKey: string;
-  apiUrl: string;
+  linked: boolean;
+  webUrl: string;
+  direct?: { url: string; apiKey: string; apiUrl: string };
 }
 
 /**
@@ -111,10 +121,15 @@ const HTTP = /^https?:\/\//;
 export function cloudOf(v: unknown): CloudLink | undefined {
   if (!v || typeof v !== 'object' || typeof (v as { set?: unknown }).set !== 'boolean' || (v as { error?: unknown }).error) return undefined;
   const c = v as Record<string, unknown>;
+  const webUrl = HTTP.test(str(c.web_url)) ? str(c.web_url) : '';
+  // An older Meko: linked means it handed out the link's URL and key.
   const url = HTTP.test(str(c.url)) ? str(c.url) : '';
   const apiKey = url ? str(c.api_key) : '';
-  const apiUrl = apiKey && HTTP.test(str(c.api_url)) ? str(c.api_url) : '';
-  return { url: apiKey ? url : '', apiKey, apiUrl };
+  if (apiKey) {
+    const apiUrl = HTTP.test(str(c.api_url)) ? str(c.api_url) : '';
+    return { linked: true, webUrl, direct: { url, apiKey, apiUrl } };
+  }
+  return { linked: c.linked === true, webUrl };
 }
 
 /** Meko's REST API base on the MCP URL's own origin, as the Meko on this computer serves it. */
@@ -122,10 +137,23 @@ export function apiUrlOf(mcpUrl: string): string {
   return `${new URL(mcpUrl).origin}/api/v1`;
 }
 
+/** Meko Cloud's REST API as the Meko on this computer passes it on: <origin>/api/v1/cloud. */
+export function cloudApiUrlOf(mcpUrl: string): string {
+  return `${apiUrlOf(mcpUrl)}/cloud`;
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return '';
+  }
+}
+
 /**
  * Asks `meko token --json` (`meko` on PATH or in ~/.local/bin) about the data folder this home is in.
- * Meko answers it while its server is stopped too, and keeps its token and the link's key in the
- * Keychain on macOS, so Presenter asks rather than read its files.
+ * Meko answers it while its server is stopped too, and keeps its token in the Keychain on macOS, so
+ * Presenter asks rather than read its files.
  */
 export function probeMeko(paths: Paths, env: NodeJS.ProcessEnv = process.env): Promise<MekoProbe> {
   const mekoDir = mekoDirOf(paths.home);
@@ -153,12 +181,13 @@ export function probeMeko(paths: Paths, env: NodeJS.ProcessEnv = process.env): P
 const RELINK = "link it again in Meko's Settings › Meko Cloud";
 
 /**
- * Finds Meko's URL and key each time it's called: Meko's Meko Cloud link when linked, else the Meko
- * on this computer. A read that couldn't ask `meko`, or whose link Meko couldn't read, keeps the link
- * last read (in memory only), so a slow `meko` or a locked Keychain doesn't move decks to another
- * Meko. Before any link is read (a start, or after `forget()`), such a read finds no Meko rather than
- * the one on this computer, for the same reason. A Meko too old to keep a link means the Meko on this
- * computer.
+ * Finds Meko's URL and key each time it's called: always the Meko on this computer, whose datapacks
+ * are Meko Cloud's while it links Meko Cloud (REST then goes to its /api/v1/cloud). Only an older
+ * Meko that hands out the link's key sends Presenter to Meko Cloud itself. A read that couldn't ask
+ * `meko`, or whose link Meko couldn't read, keeps the link last read (in memory only), so a slow
+ * `meko` or a locked Keychain doesn't move decks to another Meko. Before any link is read (a start,
+ * or after `forget()`), such a read finds no Meko rather than the one on this computer, for the same
+ * reason. A Meko too old to keep a link means the Meko on this computer.
  */
 export function mekoFinder(probe: () => Promise<MekoProbe>): Finder {
   let last: CloudLink | undefined;
@@ -175,10 +204,14 @@ export function mekoFinder(probe: () => Promise<MekoProbe>): Finder {
       last = p.cloud;
       known = true;
     }
-    if (last?.url && last.apiKey) {
+    const direct = last?.direct;
+    if (direct) {
       // Meko Cloud's REST API isn't on its MCP host, so there's no working it out from the MCP URL.
-      if (!last.apiUrl) return { state: 'failed', creds: null, why: `Meko's Meko Cloud link has no API URL: ${RELINK}.` };
-      return { state: 'ready', creds: { url: last.url, key: last.apiKey, apiUrl: last.apiUrl, kind: 'cloud' } };
+      if (!direct.apiUrl) return { state: 'failed', creds: null, why: `Meko's Meko Cloud link has no API URL: ${RELINK}.` };
+      return { state: 'ready', creds: { url: direct.url, key: direct.apiKey, apiUrl: direct.apiUrl, kind: 'cloud' } };
+    }
+    if (p.local && last?.linked) {
+      return { state: 'ready', creds: { url: p.local.url, key: p.local.token, apiUrl: cloudApiUrlOf(p.local.url), kind: 'cloud', cloudHost: hostOf(last.webUrl) } };
     }
     if (p.local) return { state: 'ready', creds: { url: p.local.url, key: p.local.token, apiUrl: apiUrlOf(p.local.url), kind: 'local' } };
     return { state: p.state === 'failed' ? 'failed' : 'none', creds: null };
@@ -193,12 +226,16 @@ export function mekoFinder(probe: () => Promise<MekoProbe>): Finder {
 
 /** Which Meko some credentials reach, as the pages and the drafts name it. */
 export function atOf(creds: MekoCreds): MekoAt {
-  return { kind: creds.kind, host: new URL(creds.url).host };
+  return { kind: creds.kind, host: creds.cloudHost ?? new URL(creds.url).host };
 }
 
-/** A refusal of Meko Cloud's key, which only linking again fixes. */
-function refusedKey(status: number | undefined, creds: MekoCreds): MekoError | null {
-  return creds.kind === 'cloud' && (status === 401 || status === 403)
+/**
+ * A refusal of Meko Cloud's key, which only linking again fixes: Meko Cloud's own 401 or 403 when
+ * Presenter holds the key (an older Meko), or the code Meko answers with when it does.
+ */
+function refusedKey(status: number | undefined, creds: MekoCreds, code = ''): MekoError | null {
+  const direct = creds.kind === 'cloud' && creds.cloudHost === undefined;
+  return code === 'CLOUD_KEY_REFUSED' || (direct && (status === 401 || status === 403))
     ? new MekoError(`Meko Cloud refused the key: ${RELINK}.`) : null;
 }
 
@@ -421,7 +458,8 @@ export class MekoClient implements MekoPort {
 
   /**
    * REST: GET <apiUrl>/datapacks/:id/artifacts?q=, every page, filtered to the exact filename. Meko
-   * on this computer serves Meko Cloud's routes and shapes, so only the base differs.
+   * on this computer serves Meko Cloud's routes and shapes, and passes them on to Meko Cloud under
+   * /api/v1/cloud, so only the base differs.
    */
   async listArtifacts(datapackId: string, filename: string): Promise<ArtifactRow[]> {
     await this.connect();
@@ -430,7 +468,11 @@ export class MekoClient implements MekoPort {
     for (let page = 1; page <= 100; page++) {
       const url = `${creds.apiUrl}/datapacks/${encodeURIComponent(datapackId)}/artifacts?q=${encodeURIComponent(filename)}&page=${page}&page_size=200`;
       const res = await fetch(url, { headers: { Authorization: `Bearer ${creds.key}` }, signal: AbortSignal.timeout(30000) });
-      if (!res.ok) throw refusedKey(res.status, creds) ?? new MekoError(`Meko's artifact list answered ${res.status}`);
+      if (!res.ok) {
+        const err = ((await res.json().catch(() => null)) as { error?: { code?: unknown; message?: unknown } } | null)?.error;
+        throw refusedKey(res.status, creds, str(err?.code))
+          ?? new MekoError(str(err?.message) || `Meko's artifact list answered ${res.status}`);
+      }
       const body = (await res.json()) as { data?: { items?: Json[]; has_more?: boolean } };
       for (const a of body.data?.items ?? []) {
         if (a.filename !== filename) continue;

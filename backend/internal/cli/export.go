@@ -14,25 +14,14 @@ import (
 )
 
 // toolExport writes a datapack's export (GET /api/v1/datapacks/:id/export) to f.out, or to the
-// file name the server suggests in the current folder. The datapack is the one named, or the default;
-// the route is Meko's own, so a Meko Cloud datapack can't be exported.
+// file name the server suggests in the current folder. The route is Meko's own, so it exports this
+// Meko's datapacks only, Meko Cloud linked or not: the one named, found among them
+// (GET /api/v1/datapacks?location=local), or the default. While Meko Cloud is linked, /mcp's default
+// is Meko Cloud's, so the datapack must be named.
 func toolExport(ctx context.Context, t *tools, f toolFlags, stdout io.Writer) error {
-	dp, err := t.resolve(ctx, f.text)
+	id, err := t.localDatapack(ctx, strings.TrimSpace(f.text))
 	if err != nil {
 		return err
-	}
-	if dp.cloud {
-		return fmt.Errorf("export works only on this Meko's datapacks, and %s is in Meko Cloud", dp.name)
-	}
-	id := dp.id
-	if id == "" {
-		if id, err = t.defaultDatapackID(ctx); err != nil {
-			return err
-		}
-		if id == "" {
-			return errors.New("there's no default datapack (it was deleted): name one, meko-cli export <name|id> " +
-				"(meko-cli datapacks --local lists them)")
-		}
 	}
 	c, err := newClient(t.l)
 	if err != nil {
@@ -85,6 +74,31 @@ func toolExport(ctx context.Context, t *tools, f toolFlags, stdout io.Writer) er
 	fmt.Fprintf(stdout, "Exported to %s (%d bytes): memories, collective memories, conversations, knowledge files "+
 		"and artifacts with their contents and embeddings, and the call log\n", out, n)
 	return nil
+}
+
+// localDatapack is the id of this Meko's datapack named, or of its default datapack for "".
+func (t *tools) localDatapack(ctx context.Context, named string) (string, error) {
+	if named == "" {
+		if t.isLinked(ctx) {
+			return "", errors.New("this Meko is linked to Meko Cloud: name this computer's datapack to export, " +
+				"meko-cli export <name|id>")
+		}
+		id, err := t.defaultDatapackID(ctx)
+		if err == nil && id == "" {
+			err = errors.New("there's no default datapack (it was deleted): name one, meko-cli export <name|id>")
+		}
+		return id, err
+	}
+	c, err := newClient(t.l)
+	if err != nil {
+		return "", err
+	}
+	var rows []datapackRow
+	if err = c.send(ctx, http.MethodGet, "/api/v1/datapacks?location=local", nil, &rows); err != nil {
+		return "", err
+	}
+	r, err := pick(rows, named, "the web UI")
+	return r.ID, err
 }
 
 // checkExport opens a downloaded export: a complete zip that holds its datapack.json.

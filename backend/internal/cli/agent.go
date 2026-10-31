@@ -17,8 +17,8 @@ import (
 
 // meko agent list|connect|disconnect: the agents on this computer and whether each reaches Meko,
 // through internal/agents, in this process whether or not a server runs, holding the same lock as
-// the server's routes. Agents connect to the linked Meko Cloud while one is linked, else to this
-// Meko.
+// the server's routes. Agents connect to this Meko, linked to Meko Cloud or not: its /mcp sends
+// their calls to Meko Cloud while it's linked.
 
 // groupAgent is the command whose subcommands work on agents: meko agent list|connect|disconnect.
 const groupAgent = "agent"
@@ -26,12 +26,22 @@ const groupAgent = "agent"
 // agentsLock is the lock file connect, disconnect and a link change's move hold.
 func agentsLock(l paths.Layout) string { return filepath.Join(l.RunDir, "agents.lock") }
 
-// agentTarget is where agents connect with the link in st: the linked Meko Cloud, else local.
-func agentTarget(st cloudlink.State, local agents.Target) agents.Target {
+// linkTarget is the Meko Cloud link in st as the target a Meko before agents stayed on this Meko
+// connected them to, which a move takes them from; local while unlinked.
+func linkTarget(st cloudlink.State, local agents.Target) agents.Target {
 	if st.Linked {
 		return agents.Target{Kind: agents.KindCloud, URL: st.Link.MCPURL(), Token: st.Link.Key}
 	}
 	return local
+}
+
+// moveBack is a link change's move: the agents Meko connected to the link before the change (with
+// its key) come back to this Meko. With no link before, there's nothing to move.
+func moveBack(ctx context.Context, m *agents.Manager, before cloudlink.State, local agents.Target) agents.Moves {
+	if !before.Linked {
+		return agents.Moves{Moved: []agents.Moved{}, Left: []agents.Left{}, Failed: []agents.Failed{}}
+	}
+	return m.Move(ctx, linkTarget(before, local), local)
 }
 
 // localTarget is this Meko's MCP URL and client token.
@@ -42,22 +52,12 @@ func localTarget(a mcpAccess) agents.Target {
 // agentManager is the CLI's agents.Manager, its target read from the client token and the link
 // each time it's asked (under the agents' lock, for a connect), and the target now.
 func agentManager(l paths.Layout) (*agents.Manager, agents.Target, mcpAccess, error) {
-	cfg, a, err := readMCPAccess(l)
+	_, a, err := readMCPAccess(l)
 	if err != nil {
 		return nil, agents.Target{}, a, err
 	}
-	store, err := cloudStore(l, cfg)
-	if err != nil {
-		return nil, agents.Target{}, a, err
-	}
-	target := func() (agents.Target, error) {
-		st, lerr := store.Load()
-		return agentTarget(st, localTarget(a)), lerr
-	}
-	t, err := target()
-	if err != nil {
-		return nil, agents.Target{}, a, err
-	}
+	t := localTarget(a)
+	target := func() (agents.Target, error) { return t, nil }
 	return &agents.Manager{Lock: agentsLock(l), Target: target}, t, a, nil
 }
 
@@ -101,11 +101,7 @@ func runAgentList(l paths.Layout, asJSON bool, stdout, stderr io.Writer) int {
 	for _, n := range notes {
 		fmt.Fprintln(stdout, n)
 	}
-	if list.Target.Kind == agents.KindCloud {
-		fmt.Fprintf(stdout, "Agents connect to Meko Cloud (%s)\n", list.Target.URL)
-	} else {
-		fmt.Fprintf(stdout, "Agents connect to %s (Meko on this computer)\n", list.Target.URL)
-	}
+	fmt.Fprintf(stdout, "Agents connect to %s (Meko on this computer)\n", list.Target.URL)
 	return exitOK
 }
 
@@ -191,19 +187,14 @@ func runAgentDisconnect(l paths.Layout, name string, stdout, stderr io.Writer) i
 }
 
 // printConnectHelp prints what any MCP client needs to reach the target, and the installed agents
-// meko agent connect adds Meko to. While Meko Cloud is linked it names its URL, never its key.
+// meko agent connect adds Meko to.
 func printConnectHelp(t agents.Target, running bool, w io.Writer) {
 	fmt.Fprintln(w, "Add Meko to any MCP client as a Streamable HTTP server:")
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
 	fmt.Fprintf(tw, "  Name\t%s (AgentK knows Meko's tools by it)\n", agents.ServerName)
 	fmt.Fprintf(tw, "  URL\t%s\n", t.URL)
-	if t.Kind == agents.KindCloud {
-		fmt.Fprintf(tw, "  Header\tAuthorization: Bearer <key>\n")
-		fmt.Fprintf(tw, "  Key\tyour Meko Cloud API key: the key is in Settings › Meko Cloud\n")
-	} else {
-		fmt.Fprintf(tw, "  Header\tAuthorization: Bearer %s\n", t.Token)
-		fmt.Fprintf(tw, "  Token\t%s\n", t.Token)
-	}
+	fmt.Fprintf(tw, "  Header\tAuthorization: Bearer %s\n", t.Token)
+	fmt.Fprintf(tw, "  Token\t%s\n", t.Token)
 	_ = tw.Flush()
 	var found []agents.Agent
 	for _, a := range agents.Catalog {
@@ -219,14 +210,14 @@ func printConnectHelp(t agents.Target, running bool, w io.Writer) {
 		}
 		_ = tw.Flush()
 	}
-	if t.Kind == agents.KindLocal && !running {
+	if !running {
 		fmt.Fprintln(w, "\nMeko isn't running: start it with meko start")
 	}
 }
 
 // moveLines are meko cloud_link's lines on what a link change did to the agents: who moved, and
 // who couldn't be.
-func moveLines(m *agents.Moves, linked bool) []string {
+func moveLines(m *agents.Moves) []string {
 	if m == nil {
 		return nil
 	}
@@ -236,12 +227,8 @@ func moveLines(m *agents.Moves, linked bool) []string {
 		for _, a := range m.Moved {
 			names = append(names, a.Title)
 		}
-		to := "Meko Cloud"
-		if !linked {
-			to = "Meko on this computer"
-		}
-		lines = append(lines, fmt.Sprintf("Moved %s to %s; their sessions already running need a restart",
-			joinAnd(names), to))
+		lines = append(lines, fmt.Sprintf("Moved %s back to Meko on this computer; their sessions already "+
+			"running need a restart", joinAnd(names)))
 	}
 	for _, f := range m.Failed {
 		lines = append(lines, fmt.Sprintf("Couldn't move %s: %s; run meko agent connect %s", f.Title,
@@ -258,12 +245,11 @@ func joinAnd(names []string) string {
 	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
 }
 
-// cloudMover is the move of a link change the CLI makes itself, with the server stopped: from the
-// link before to the link after, this Meko's side being local.
+// cloudMover is the move of a link change the CLI makes itself, with the server stopped (moveBack).
 func cloudMover(l paths.Layout, local agents.Target) func(context.Context, cloudlink.State,
 	cloudlink.State) agents.Moves {
 	m := &agents.Manager{Lock: agentsLock(l)}
-	return func(ctx context.Context, before, after cloudlink.State) agents.Moves {
-		return m.Move(ctx, agentTarget(before, local), agentTarget(after, local))
+	return func(ctx context.Context, before, _ cloudlink.State) agents.Moves {
+		return moveBack(ctx, m, before, local)
 	}
 }

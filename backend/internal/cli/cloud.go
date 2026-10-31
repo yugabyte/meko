@@ -94,7 +94,7 @@ func runCloudLink(l paths.Layout, f cloudFlags, in io.Reader, stdout, stderr io.
 	} else {
 		fmt.Fprintln(stdout, "Meko Cloud is unlinked: extensions use this Meko")
 	}
-	for _, line := range moveLines(st.Agents, st.Linked) {
+	for _, line := range moveLines(st.Agents) {
 		fmt.Fprintln(stdout, line)
 	}
 	return exitOK
@@ -167,16 +167,15 @@ func cloudStatusLine(l paths.Layout) string {
 	return "linked to " + cloudLine(cloudlink.StatusOf(st))
 }
 
-// cloudToken is meko token --json's cloud: the link the extensions use, with its key. set says
-// whether the link was ever set: until it is, an extension may hand Meko a key of its own (AgentK
-// does, once, with meko cloud_link). Unlinked, its URLs and key are empty. With error, it couldn't
-// be read, and an extension keeps what it last read.
+// cloudToken is meko token --json's cloud: whether the extensions' Meko is linked to Meko Cloud,
+// never its key. Linked, they reach Meko Cloud through this Meko (its /mcp, and /api/v1/cloud for
+// its REST API), which holds the key, and link to its web app at web_url. set says whether the link
+// was ever set: until it is, an extension may hand Meko a key of its own (AgentK does, once, with
+// meko cloud_link). With error, it couldn't be read, and an extension keeps what it last read.
 type cloudToken struct {
 	Set    bool   `json:"set"`
-	URL    string `json:"url"`
-	APIKey string `json:"api_key"`
+	Linked bool   `json:"linked"`
 	WebURL string `json:"web_url"`
-	APIURL string `json:"api_url"`
 	// Error, when set, is why the link couldn't be read; the rest is then empty.
 	Error string `json:"error,omitempty"`
 }
@@ -197,8 +196,7 @@ func cloudTokenOf(st cloudlink.State) cloudToken {
 	if !st.Linked {
 		return cloudToken{Set: st.Set}
 	}
-	l := st.Link
-	return cloudToken{Set: true, URL: l.MCPURL(), APIKey: l.Key, WebURL: l.EffectiveWebURL(), APIURL: l.EffectiveAPIURL()}
+	return cloudToken{Set: true, Linked: true, WebURL: st.Link.EffectiveWebURL()}
 }
 
 // readSecret reads one line: typed at prompt with echo off on a terminal, else from the input as

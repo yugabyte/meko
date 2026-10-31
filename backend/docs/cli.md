@@ -28,8 +28,8 @@ agents (MCP and the REST API, on 7778), and what to run next.
 | `meko agent list [--json]` | The agents installed on this computer (Claude Code, Codex, Kiro CLI, OpenCode, Cursor: their command on PATH or in its usual folders; Cursor's editor command also inside the macOS app, or its `cursor-agent` CLI), whether each one's `meko` MCP server reaches Meko (connected, needs reconnecting, elsewhere with its URL, or not connected, with the command that connects it), and where agents connect: this Meko, or the linked Meko Cloud. `--json` prints what `GET /api/v1/agents` answers. It needs no running server |
 | `meko agent connect [claude\|codex\|kiro\|opencode\|cursor]` | Add Meko's MCP server, named `meko`, to Claude Code (at user scope), Codex, Kiro CLI, OpenCode or Cursor, for all your projects, replacing one it has: at this Meko with its token, or while Meko Cloud is linked at Meko Cloud with its key. Alone, it prints what any MCP client needs (Streamable HTTP, the URL, `Authorization: Bearer <token>`; while linked, Meko Cloud's URL and where its key is, never the key) and the agents installed. How it adds itself to each is in [api.md](api.md#agents) |
 | `meko agent disconnect claude\|codex\|kiro\|opencode\|cursor` | Remove the agent's `meko` MCP server when it's Meko's (this computer's, or the linked Meko Cloud's); one pointing elsewhere is left as it is |
-| `meko token [--json]` | The token MCP and REST clients send; `--json` the MCP URL, the web UI's URL, the token and the Meko Cloud link |
-| `meko cloud_link [--url U] [--web-url W] [--api-url A] [--off]` | Link Meko Cloud (or another Meko server) for the extensions, such as AgentK: reads the API key from stdin, or asks for it on a terminal, checks it and saves it; `--off` unlinks. The web UI's Settings › Meko Cloud does the same. Linking, a new key and unlinking move the agents connected to Meko to the new target, with a line saying which moved and which couldn't |
+| `meko token [--json]` | The token MCP and REST clients send; `--json` the MCP URL, the web UI's URL, the token and whether Meko Cloud is linked (never its key) |
+| `meko cloud_link [--url U] [--web-url W] [--api-url A] [--off]` | Link Meko Cloud (or another Meko server): reads the API key from stdin, or asks for it on a terminal, checks it and saves it; `--off` unlinks. While linked, Meko's `/mcp`, the extensions and `meko-cli` work on Meko Cloud's datapacks, and agents stay connected to this Meko. The web UI's Settings › Meko Cloud does the same. A change moves back the agents an older Meko connected to Meko Cloud, with a line saying which moved and which couldn't |
 | `meko setup_link` | Print a one-time link that creates the web UI's login for remote access, or resets a lost one |
 | `meko extension` | Alone, list its commands: `list`, `install`, `update` and `delete` (exits 2). |
 | `meko extension list [--json]` | A row for each extension Meko knows, installed or not: its state (running, not running, didn't answer in 3s, damaged, not installed), the release Meko installed, and whether Meko installs its updates on its own and a newer one waits. It needs no running server. A damaged extension is registered, but its command is missing and can't be found again; `--json` prints the rows with what the Extensions page shows of their updates |
@@ -44,10 +44,10 @@ agents (MCP and the REST API, on 7778), and what to run next.
 | `meko-cli` | What it does |
 |---|---|
 | `meko-cli` | A prompt (`meko-cli default>`) that takes the commands below, one a line, plus `use <datapack>` (later `search`, `add_memory`, `upload` and `upload_status` lines use it unless they name another; a `delete_datapack` of it goes back to the default), `help` and `exit`. There's no history or line editing yet, and Ctrl-C leaves. Given a file or pipe instead of a terminal, it runs the lines as a script and exits with the first failing line's code |
-| `meko-cli datapacks [--local]` | List the datapacks and the linked Meko Cloud's by name, with their descriptions; `--local` leaves Meko Cloud out, and `--json` adds each one's id and where it lives |
-| `meko-cli create_datapack <name> [--cloud]` | Create a datapack, here or with `--cloud` in the linked Meko Cloud |
+| `meko-cli datapacks` | List the datapacks by name, with their descriptions (the linked Meko Cloud's while it's linked); `--json` adds each one's id |
+| `meko-cli create_datapack <name>` | Create a datapack (in the linked Meko Cloud while it's linked) |
 | `meko-cli delete_datapack <name\|id> [--force]` | Delete a datapack and everything in it, for good. It asks first; `--force` doesn't |
-| `meko-cli export [<name\|id>] [-o FILE] [--force]` | Write a datapack (default: the default one) to one zip: memories, collective memories, conversations, knowledge files and artifacts with their embeddings and file contents, and the call log. It won't replace a file unless `--force` |
+| `meko-cli export [<name\|id>] [-o FILE] [--force]` | Write one of this computer's datapacks (default: the default one; name one while Meko Cloud is linked) to one zip: memories, collective memories, conversations, knowledge files and artifacts with their embeddings and file contents, and the call log. It won't replace a file unless `--force` |
 | `meko-cli search "<question>" [--source S] [--limit N]` | Search memories, the knowledge base and past conversations (`context_search`); `--source memory`, `knowledge_base` or `conversation` searches one (default `auto`, all three), and `--limit` caps the results per source (default 8) |
 | `meko-cli add_memory "<text>"` | Save a memory, word for word; `-` or no text reads stdin (not at the prompt) |
 | `meko-cli upload <file>... [--no-wait]` | Add PDF, text, Markdown, JSON, CSV, XML or HTML files (up to 50 MiB) to the knowledge base, and wait until they're indexed |
@@ -63,7 +63,6 @@ SQLite's locking doesn't work over the network; `meko status` prints where it is
 `upload_status` take `--datapack NAME|ID`, and use
 the default datapack without it. Meko makes the default datapack only on first start, so once
 it's deleted, they need `--datapack`. While Meko Cloud is linked (`meko cloud_link`), they work on
-its datapacks too: a name or id this Meko doesn't have is looked up there, and `cloud:` or `local:`
-before it picks the side (`--datapack cloud:team-notes`; the same for `delete_datapack` and the
-prompt's `use`). `export` works only on this Meko's. `--json` prints the raw reply: `meko-cli`'s commands other than
+its datapacks only, as agents do: a name is looked up among them, and the default is Meko Cloud's.
+`export` works only on this computer's datapacks, linked or not. `--json` prints the raw reply: `meko-cli`'s commands other than
 `export`, and `meko status`, `token`, `logs`, `version`, `memory-extractor` and `answers`.

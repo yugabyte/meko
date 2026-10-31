@@ -120,10 +120,10 @@ export const api = {
 
   datapacks: () => request<Datapack[]>("GET", "/datapacks?location=local"),
   datapack: (id: string) => request<Datapack>("GET", `/datapacks/${id}`),
-  createDatapack: (name: string, description: string) =>
-    // On this computer: the UI browses only this Meko's datapacks (the route's default is the linked
-    // Meko Cloud's).
-    request<Datapack>("POST", "/datapacks", { name, description, location: "local" }),
+  // In the linked Meko Cloud while it's linked (Meko makes none on this computer then), else on this
+  // computer. The location is always named: the route's default differs for a tab from before.
+  createDatapack: (name: string, description: string, inCloud: boolean) =>
+    request<Datapack>("POST", "/datapacks", { name, description, location: inCloud ? "cloud" : "local" }),
   updateDatapack: (id: string, fields: { name?: string; description?: string }) =>
     request<unknown>("PATCH", `/datapacks/${id}`, fields),
   deleteDatapack: (id: string) => request<unknown>("DELETE", `/datapacks/${id}`),

@@ -170,6 +170,7 @@ func TestCloudDatapacks(t *testing.T) {
 	// Unlinked is a 409 whatever the credential.
 	wantErr(t, e, "POST", "/datapacks", map[string]any{"name": "x", "location": "cloud"}, 409, "CLOUD_NOT_LINKED")
 	wantErr(t, e, "DELETE", "/datapacks/"+cloudDP+"?location=cloud", nil, 409, "CLOUD_NOT_LINKED")
+	wantErr(t, e, "GET", "/cloud/datapacks", nil, 409, "CLOUD_NOT_LINKED")
 	made := obj(okData(t, e, "POST", "/datapacks", map[string]any{"name": "made-here"}, 201))
 	if id, _ := made["datapack_id"].(string); !dpExists(e, id) {
 		t.Fatalf("a create with no location, unlinked, is this Meko's: %v", made)
@@ -219,9 +220,18 @@ func TestCloudDatapacks(t *testing.T) {
 	wantErr(t, e, "POST", "/datapacks", map[string]any{"name": "x", "location": "cloud"}, 403, "FORBIDDEN")
 	// Linked, a create with no location is Meko Cloud's, so the client token can't make one.
 	wantErr(t, e, "POST", "/datapacks", map[string]any{"name": "x"}, 403, "FORBIDDEN")
-	local := obj(okData(t, e, "POST", "/datapacks", map[string]any{"name": "kept-here", "location": "local"}, 201))
-	if id, _ := local["datapack_id"].(string); !dpExists(e, id) {
-		t.Fatalf("location local while linked: %v", local)
+	// /api/v1/cloud passes a client token's request on to Meko Cloud's REST API, with the key.
+	rows = arr(okData(t, e, "GET", "/cloud/datapacks?q=team", nil, 200))
+	if len(rows) != 1 || obj(rows[0])["datapack_name"] != "team-notes" ||
+		!strings.HasPrefix(cloud.last(), "GET /api/v1/datapacks?q=team") {
+		t.Fatalf("/cloud/datapacks: %v (Cloud got %q)", rows, cloud.last())
+	}
+
+	// Linked, no datapack is made here, whatever the credential.
+	wantErr(t, e, "POST", "/datapacks", map[string]any{"name": "kept-here", "location": "local"}, 409, "CLOUD_LINKED")
+	if r := admin("POST", "/datapacks", map[string]any{"name": "kept-here", "location": "local"}); r.Status != 409 ||
+		r.Error.Code != "CLOUD_LINKED" {
+		t.Fatalf("location local while linked, admin: %+v", r)
 	}
 	wantErr(t, e, "DELETE", "/datapacks/"+cloudDP+"?location=cloud", nil, 403, "FORBIDDEN")
 	wantErr(t, e, "POST", "/datapacks/"+cloudDP+"/search?location=cloud", map[string]any{"query": "x"}, 403,

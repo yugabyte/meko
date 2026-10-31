@@ -407,6 +407,15 @@ describe('HTTP API: sharing, invites and Meko', () => {
     expect(env.handOvers).toHaveLength(1);
     // Another site's page can't make it read.
     expect((await call('POST', '/_meko/changed', { what: 'cloud' }, { origin: 'https://evil.example.com' })).statusCode).toBe(403);
+
+    // Linked again in a Meko that keeps the key: the same local URL and token, now Meko Cloud's
+    // account, so it reconnects, forgets the local account's invites, and shares through Meko.
+    env.local.cloud = { set: true, url: '', apiKey: '', webUrl: 'https://cloud.mekodata.ai', apiUrl: '', linked: true };
+    expect((await call('POST', '/_meko/changed', { what: 'cloud' })).statusCode).toBe(204);
+    await waitFor(() => env.core.mekoStatus.source, (src) => src === 'meko', 5000, 'Meko Cloud through the local Meko');
+    expect(env.core.mekoStatus).toMatchObject({ url: 'http://127.0.0.1:7778/mcp', webUrl: 'https://cloud.mekodata.ai', sharing: true });
+    expect(env.meko.calls.filter((c) => c.name === 'reset').length).toBe(resets + 2);
+    expect(forget).toHaveBeenCalledTimes(3);
     vi.unstubAllEnvs();
   });
 
@@ -440,6 +449,12 @@ describe('HTTP API: sharing, invites and Meko', () => {
     expect((await call('POST', '/api/settings/meko/claude-setup')).statusCode).toBe(200);
     expect(env.mekoTools.calls.filter((c) => c.name === 'setUpClaude').pop()).toEqual({ name: 'setUpClaude', args: ['https://mcp.mekodata.ai/mcp', 'mko_tkn_abcdefghij1234'] });
     expect(env.mekoTools.state.manuals.pop()).toBe('npx @yugabytedb/meko-mcp --client claude-code --url https://mcp.mekodata.ai/mcp');
+    // A Meko that keeps the key: Meko Cloud through the local Meko, so the setup gets its URL and token.
+    env.local.cloud = { set: true, url: '', apiKey: '', webUrl: 'https://cloud.mekodata.ai', apiUrl: '', linked: true };
+    await env.core.refreshMeko();
+    expect((await call('POST', '/api/settings/meko/claude-setup')).statusCode).toBe(200);
+    expect(env.mekoTools.calls.filter((c) => c.name === 'setUpClaude').pop()).toEqual({ name: 'setUpClaude', args: ['http://127.0.0.1:7778/mcp', 'local-token'] });
+    expect(env.mekoTools.state.manuals.pop()).toMatch(/--url http:\/\/127\.0\.0\.1:7778\/mcp --api-key "\$\((MEKO_HOME=\S+ )?meko token\)"$/);
   });
 
   it("keeps AgentK's own key when Meko won't take it, and doesn't offer it again", async () => {

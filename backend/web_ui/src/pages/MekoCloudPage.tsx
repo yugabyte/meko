@@ -1,7 +1,8 @@
 // Settings › Meko Cloud at /settings/meko-cloud: the Meko Cloud (or another Meko server) this Meko's
 // extensions use, and its API key. Meko checks a new server or key before saving it, and tells the
-// running extensions; Unlink sends them back to this Meko. Either moves the agents connected to the
-// old one to the new one, and the page says which moved (or couldn't).
+// running extensions; Unlink sends them back to this Meko. Agents stay on this Meko, which sends their
+// calls to Meko Cloud while it's linked: a change moves back the agents a Meko from before connected
+// to Meko Cloud itself, and the page says which moved (or couldn't).
 
 import { useEffect, useState, type FormEvent } from "react";
 import { api } from "../lib/api";
@@ -83,7 +84,7 @@ function LinkForm({ cloud, onSaved }: { cloud: MekoCloud; onSaved: (c: MekoCloud
     try {
       const c = await api.linkMekoCloud(next);
       show(c);
-      setMoves(movesLine(c.agents, "to Meko Cloud"));
+      setMoves(movesLine(c.agents, "back to this Meko"));
       notifyCloudChanged();
       setConfirmHost(null);
       setSaved("Linked. The running extensions use it now.");

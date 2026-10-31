@@ -1,4 +1,5 @@
 import { resolveMekoWithSource } from './config.js';
+import { localMeko } from './mekolocal.js';
 import type { Core } from './core.js';
 import { errMsg } from './log.js';
 import { tryMekoToken, type TokenTry } from './meko.js';
@@ -50,7 +51,8 @@ export const defaultMekoTools: MekoTools = {
 
 /** The command to run Meko's setup by hand: with `meko token` only for the Meko on this computer. */
 function manualFor(core: Core, meko: { url: string; keySource: MekoKeySource | null }, client: MekoSetupClient): string {
-  return manualMekoSetup(meko.url, client, meko.keySource === 'local' ? { home: core.mekoHome() } : null);
+  const onThisMeko = meko.keySource === 'local' || (meko.keySource === 'meko' && meko.url === localMeko().meko?.url);
+  return manualMekoSetup(meko.url, client, onThisMeko ? { home: core.mekoHome() } : null);
 }
 
 /** Why a setup can't run: there's no Meko to set up with. */

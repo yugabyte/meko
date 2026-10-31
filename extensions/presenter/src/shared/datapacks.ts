@@ -15,7 +15,8 @@ export interface DatapackRow {
 
 /**
  * The Meko a deck's datapack is in: the one on this computer, or the one Meko links to (Meko Cloud),
- * named by its MCP host. A deck's id is its datapack's, so it exists only there.
+ * named by its web app's host ('' when Meko doesn't know it), or by its MCP host from a Meko that
+ * handed out the link's key. A deck's id is its datapack's, so it exists only there.
  */
 export interface MekoAt {
   kind: 'local' | 'cloud';
@@ -31,7 +32,8 @@ export const LOCAL_MEKO: MekoAt = { kind: 'local', host: '' };
 
 /** A Meko as the pages name it: "Meko Cloud (host)", or "the Meko on this computer". */
 export function mekoLabel(at: MekoAt): string {
-  return at.kind === 'cloud' ? `Meko Cloud (${at.host})` : 'the Meko on this computer';
+  if (at.kind !== 'cloud') return 'the Meko on this computer';
+  return at.host ? `Meko Cloud (${at.host})` : 'Meko Cloud';
 }
 
 /** What gets a deck saved in `at` back, while Presenter uses another Meko. */

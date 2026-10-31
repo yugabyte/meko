@@ -27,8 +27,7 @@ flowchart TB
   API --> D
   J --> AL
   D --> AL
-  J -.->|"when Meko links it"| MC["Meko Cloud\nMCP and REST, on two hosts"]
-  D -.-> MC
+  AL -.->|"when Meko links it, with the link's key"| MC["Meko Cloud\nMCP and REST"]
 ```
 
 ## Which Meko
@@ -38,8 +37,9 @@ answers whether or not Meko's server runs:
 
 | Meko says | Presenter uses |
 |---|---|
-| `cloud` linked (`url`, `api_key`) | Meko Cloud: MCP at `cloud.url`, REST at `cloud.api_url` (another host than the MCP one), the link's key. With no `api_url`, no Meko: the error says to link again |
+| `cloud.linked` | Meko Cloud, through the Meko on this computer: its `url` and `token` for MCP, which Meko passes on to Meko Cloud, and REST at the same origin's `/api/v1/cloud`, which Meko passes on to Meko Cloud's REST API. Presenter never sees the link's key. Meko Cloud is named by `cloud.web_url`'s host. With Meko's server stopped, no Meko |
 | `cloud` unlinked or never set, or no `cloud` (a Meko from before the link) | The Meko on this computer: its `url` and `token`, REST at the same origin's `/api/v1` |
+| `cloud` with `url` and `api_key` (an older Meko, which handed out the link's key) | Meko Cloud itself: MCP at `cloud.url`, REST at `cloud.api_url` (another host than the MCP one), the link's key. With no `api_url`, no Meko: the error says to link again |
 | `cloud.error`, or `meko` failed or is gone, after a link was read | The link last read, kept in memory only, so a slow `meko` or a locked Keychain never moves decks |
 | The same before any link was read (a start, or right after Meko's notice) | No Meko, rather than the one on this computer, for the same reason |
 
@@ -51,7 +51,8 @@ changed (the local Meko on a new port, a new client token), then gets that Meko'
 key through `PRESENTER_MEKO_KEY`). A deck's id is its datapack's, which exists in one Meko only, so
 each draft records the Meko it belongs to, read before Meko is asked to make or load it. A draft from
 before Presenter kept it is the current Meko's when that Meko lists its datapack, else the Meko on
-this computer's. The decks list shows another Meko's drafts greyed out, with what brings them back
+this computer's. A Meko Cloud draft named by another host (its MCP host, from when Presenter held the
+link's key) becomes the current Meko Cloud's when that one lists its datapack. The decks list shows another Meko's drafts greyed out, with what brings them back
 (unlink Meko Cloud, or link that Meko Cloud again). Editing, saving and Claude's jobs refuse them,
 checked again as each job and each Claude run starts, so a job queued before the link changed
 doesn't run on the other Meko. A run of one plays on, so a talk under way outlives a change of the
@@ -187,7 +188,7 @@ answer, isn't busy. An update someone asks for doesn't wait.
 | Meko installs and updates the releases; no installer or updater of Presenter's | Meko already stages, checks, switches and rolls back its own releases (`internal/update`); one place does it | An `install.sh` per release and a `presenter update` |
 | The launcher hands `serve` to Meko's `meko _launch`, which counts starts, rolls back and finishes the update | A release that can't start goes back to the one before by itself, and the rules live in Meko once, for itself and every extension | Each extension's launcher counting and rolling back on its own; Meko watching the start from outside |
 | `_busy` makes Meko's automatic update wait during a talk | A restart would drop the console and the audience's window mid-talk | Updating whenever a check finds one; turning automatic updates off before each talk |
-| Meko's Meko Cloud link, read from `meko token --json` and followed on Meko's notice | One place links Meko Cloud for every extension; the REST host comes from Meko, since Meko Cloud's isn't the MCP one | A key in Presenter's own `config.json`; the REST base worked out from the MCP URL |
+| Meko's Meko Cloud link, read from `meko token --json` and followed on Meko's notice; Meko Cloud reached through the Meko on this computer | One place links Meko Cloud for every extension, and its key stays in Meko | A key in Presenter's own `config.json`; Meko handing extensions the link's key |
 | Drafts name their Meko; another Meko's can be played, not edited | A deck's datapack exists in one Meko only; a talk under way outlives a change of the link | Hiding such drafts; letting their save fail with Meko's "not found" |
 | One build job packages every platform | No native modules: only the bundled Node differs | AgentK's per-platform builds (needed for node-pty) |
 

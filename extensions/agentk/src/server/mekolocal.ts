@@ -16,7 +16,12 @@ export interface LocalMeko {
 /**
  * The Meko Cloud link Meko keeps for its extensions (`cloud` in `meko token --json`, Meko's
  * docs/cloud.md). `set`: Meko has had a link, linked or since unlinked; until then AgentK may hand
- * it a key of its own, once. Linked, `url` and `apiKey` are set; unlinked, they're ''.
+ * it a key of its own, once.
+ *
+ * Meko keeps the key and reaches Meko Cloud for its extensions itself (its `/mcp`, and its REST API
+ * under `/api/v1/cloud`): its `cloud` says only whether it's linked (`linked`, set only from such a
+ * Meko) and the web app, and `url`, `apiKey` and `apiUrl` are ''. An older Meko handed out the key:
+ * linked, its `url` and `apiKey` are set, and AgentK calls Meko Cloud with them; unlinked, they're ''.
  */
 export interface MekoCloudLink {
   set: boolean;
@@ -24,6 +29,7 @@ export interface MekoCloudLink {
   apiKey: string;
   webUrl: string;
   apiUrl: string;
+  linked?: boolean;
 }
 
 /**
@@ -45,6 +51,10 @@ const str = (v: unknown) => (typeof v === 'string' ? v : '');
 function cloudOf(v: unknown): MekoCloudLink | undefined {
   if (!v || typeof v !== 'object' || typeof (v as { set?: unknown }).set !== 'boolean' || (v as { error?: unknown }).error) return undefined;
   const c = v as Record<string, unknown>;
+  if (typeof c.linked === 'boolean' && !('api_key' in c)) {
+    const webUrl = c.linked && /^https?:\/\//.test(str(c.web_url)) ? str(c.web_url) : '';
+    return { set: c.set as boolean, url: '', apiKey: '', webUrl, apiUrl: '', linked: c.linked };
+  }
   const url = /^https?:\/\//.test(str(c.url)) ? str(c.url) : '';
   const apiKey = url ? str(c.api_key) : '';
   return { set: c.set as boolean, url: apiKey ? url : '', apiKey, webUrl: apiKey ? str(c.web_url) : '', apiUrl: apiKey ? str(c.api_url) : '' };
@@ -105,6 +115,14 @@ export function originOf(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Meko is linked to Meko Cloud and reaches it for AgentK itself: through its `/mcp`, and its REST
+ * API under `/api/v1/cloud` (`MekoCloudLink`). False under an older Meko, which handed out the key.
+ */
+export function linkedThroughMeko(cloud: MekoCloudLink | undefined): boolean {
+  return cloud?.linked === true;
 }
 
 /**

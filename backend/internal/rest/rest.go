@@ -109,6 +109,8 @@ func Register(g *echo.Group, o Options) {
 	g.GET("/settings/answers", a.answersStatus)
 	g.PUT("/settings/answers", a.setAnswers)
 
+	g.Any("/cloud/*", a.passToCloud)
+
 	g.GET("/datapacks", a.listDatapacks)
 	g.POST("/datapacks", a.createDatapack)
 	g.GET("/datapacks/:id", a.describeDatapack)

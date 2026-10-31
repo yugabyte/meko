@@ -198,24 +198,21 @@ var mekoCommands = []command{
 var mekoCLIGroups = []string{"Datapacks", "Memory and knowledge", "At the prompt only"}
 
 var mekoCLICommands = []command{
-	{name: "datapacks", group: "Datapacks", summary: "List the datapacks, and the linked Meko Cloud's",
+	{name: "datapacks", group: "Datapacks", summary: "List the datapacks",
 		usage: "meko-cli datapacks [flags]", examples: []example{
-			{"meko-cli datapacks", "this Meko's and the linked Meko Cloud's, by name, with their descriptions"},
-			{"meko-cli datapacks --local", "only this Meko's"},
-			{"meko-cli datapacks --json", "with each one's id, and whether it's this Meko's or Meko Cloud's (and shared)"},
+			{"meko-cli datapacks", "by name, with their descriptions: the linked Meko Cloud's while it's linked"},
+			{"meko-cli datapacks --json", "with each one's id"},
 		}},
 	{name: "create_datapack", group: "Datapacks", summary: "Create a datapack",
 		usage: "meko-cli create_datapack <name> [flags]", examples: []example{
-			{"meko-cli create_datapack research", "create the datapack research"},
-			{"meko-cli create_datapack team-notes --cloud", "create it in the linked Meko Cloud"},
+			{"meko-cli create_datapack research", "create the datapack research: in the linked Meko Cloud while it's linked"},
 		}},
 	{name: "delete_datapack", group: "Datapacks", summary: "Delete a datapack and everything in it",
 		usage: "meko-cli delete_datapack <name|id> [flags]", examples: []example{
 			{"meko-cli delete_datapack research", "delete it and everything in it, for good, after asking"},
 			{"meko-cli delete_datapack research --force", "don't ask"},
-			{"meko-cli delete_datapack cloud:team-notes", "the linked Meko Cloud's, when this Meko has one named so too"},
 		}},
-	{name: "export", group: "Datapacks", summary: "Write a datapack to a zip",
+	{name: "export", group: "Datapacks", summary: "Write one of this computer's datapacks to a zip",
 		usage: "meko-cli export [<name|id>] [flags]", examples: []example{
 			{"meko-cli export", "write the default datapack to meko-<name>-<date>.zip here"},
 			{"meko-cli export research -o research.zip", "write another datapack to a file you name"},
@@ -225,7 +222,6 @@ var mekoCLICommands = []command{
 			{`meko-cli search "why is the web listener separate"`, "search the default datapack"},
 			{`meko-cli search "release steps" --source knowledge_base --limit 3`, "only the knowledge base, three results"},
 			{`meko-cli search "owner's login" --datapack research --json`, "another datapack, the tool's raw reply"},
-			{`meko-cli search "deploy steps" --datapack cloud:team-runbooks`, "a datapack in the linked Meko Cloud"},
 		}},
 	{name: "add_memory", group: "Memory and knowledge", summary: "Save a memory, word for word",
 		usage: `meko-cli add_memory "<text>" [flags]`, examples: []example{
@@ -244,7 +240,6 @@ var mekoCLICommands = []command{
 	{name: "use", group: "At the prompt only", promptOnly: true, summary: "Set the datapack later commands use",
 		usage: "use [<name|id>]", examples: []example{
 			{"use research", "search, add_memory, upload and upload_status use research unless a line names another"},
-			{"use cloud:team-notes", "a datapack in the linked Meko Cloud (cloud: only when this Meko has one named so)"},
 			{"use", "print the datapack in use"},
 		}},
 	{name: "help", group: "At the prompt only", promptOnly: true, summary: "This list, or help <command>",

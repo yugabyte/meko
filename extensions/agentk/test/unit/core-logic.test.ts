@@ -1050,6 +1050,15 @@ describe('Meko credentials', () => {
       setMekoLinkHandedOver(true);
       await reader.refresh();
       expect(resolveMekoWithSource(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: '', keySource: null });
+      // A Meko that keeps the key reaches Meko Cloud for AgentK: its own URL and token, REST under
+      // /api/v1/cloud, and datapack links to the link's web app. Stopped, there's no Meko to use.
+      const through = { set: true, url: '', apiKey: '', webUrl: 'https://cloud.mekodata.ai', apiUrl: '', linked: true };
+      probes.push({ state: 'running', meko: local, cloud: through }, { state: 'stopped', meko: null, cloud: through });
+      await reader.refresh();
+      expect(resolveMekoWithSource(cfg)).toEqual({ url: local.url, apiKey: 'local-token', keySource: 'meko' });
+      expect([resolveMekoWebUrl(cfg), resolveMekoApiUrl(cfg)]).toEqual(['https://cloud.mekodata.ai', 'http://127.0.0.1:7778/api/v1/cloud']);
+      await reader.refresh();
+      expect(resolveMekoWithSource(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: '', keySource: null });
     } finally {
       setMekoLinkHandedOver(false);
       reader.clear();

@@ -250,6 +250,7 @@ newer than the binary knows is refused with a message saying so.
 | `0006_knowledge.sql` | Knowledge files and the knowledge base's chunks | [knowledge.md](knowledge.md#storage-0006_knowledgesql) |
 | `0008_memory_extraction.sql` | The turns waiting for memory extraction, and each datapack's say in it | [memory-extraction.md](memory-extraction.md) |
 | `0009_call_log_baseline.sql` | `context_search`'s baseline per call, for context efficiency | [api.md](api.md#context-efficiency-and-quality) |
+| `0010_call_log_location.sql` | Where a call ran: this Meko, or the linked Meko Cloud | [api.md](api.md#the-call-log) |
 
 ### Ids
 

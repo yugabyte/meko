@@ -41,6 +41,11 @@ echo "{\\"url\\":\\"http://127.0.0.1:7778/mcp\\",\\"token\\":\\"tok-$MEKO_HOME\\
     // Unlinked: no key, so no URLs either.
     meko(`echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":true,"cloud":{"set":true,"url":"https://x/mcp","api_key":""}}'`);
     expect((await probe()).cloud).toEqual({ set: true, url: '', apiKey: '', webUrl: '', apiUrl: '' });
+    // A Meko that keeps the key says only whether it's linked, and its web app while it is.
+    meko(`echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":true,"cloud":{"set":true,"linked":true,"web_url":"https://cloud.mekodata.ai"}}'`);
+    expect((await probe()).cloud).toEqual({ set: true, url: '', apiKey: '', webUrl: 'https://cloud.mekodata.ai', apiUrl: '', linked: true });
+    meko(`echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":true,"cloud":{"set":true,"linked":false,"web_url":"https://cloud.mekodata.ai"}}'`);
+    expect((await probe()).cloud).toEqual({ set: true, url: '', apiKey: '', webUrl: '', apiUrl: '', linked: false });
     meko(`echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":true,"cloud":"what"}'`);
     expect(await probe()).not.toHaveProperty('cloud');
     // One Meko couldn't read says so, for the reader to keep the link it had.

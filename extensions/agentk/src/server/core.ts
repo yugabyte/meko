@@ -37,7 +37,7 @@ import { MekoCallLog } from './mekolog.js';
 import { MekoAgents, mekoMcpGaps, readMekoAgents, type MekoAgentsRead } from './mekoagents.js';
 import { MekoClaudeWatch } from './mekoclaude.js';
 import {
-  LocalMekoReader, isLocalMeko, localMeko, lookForLocalMeko, mekoLinkHandedOver, originOf, probeLocalMeko, setMekoLinkHandedOver, type LocalMekoProbe,
+  LocalMekoReader, isLocalMeko, linkedThroughMeko, localMeko, lookForLocalMeko, mekoLinkHandedOver, originOf, probeLocalMeko, setMekoLinkHandedOver, type LocalMekoProbe,
 } from './mekolocal.js';
 import { handOverMekoKey } from './mekohandover.js';
 import { mekoDirOf } from './movehome.js';
@@ -117,12 +117,15 @@ const MEKO_HANDED_OVER_KEY = 'meko-link-handed-over';
 
 /**
  * Which Meko account a Meko is, for whether a change forgets the account's invites: the Meko on
- * this computer is one account on any port or token; any other is its server's origin and key.
- * Null with no Meko.
+ * this computer is one account on any port or token; Meko Cloud reached through it is the link's
+ * web app (Meko keeps its key); any other is its server's origin and key. Null with no Meko.
  */
 function mekoAccountOf(m: { url: string; apiKey: string; keySource: MekoKeySource | null }): string | null {
   if (!m.apiKey) return null;
-  return m.keySource === 'local' ? 'local' : `${originOf(m.url)} ${m.apiKey}`;
+  if (m.keySource === 'local') return 'local';
+  const cloud = localMeko().cloud;
+  if (m.keySource === 'meko' && linkedThroughMeko(cloud)) return `cloud ${cloud?.webUrl ?? ''}`;
+  return `${originOf(m.url)} ${m.apiKey}`;
 }
 
 /** How often the server checks that its hook socket file is still there. */
@@ -535,7 +538,8 @@ export class Core extends EventEmitter {
     const after = resolveMekoWithSource(this.cfg);
     const status = this.mekoStatusFor(this.cfg);
     const apiAfter = resolveMekoApiUrl(this.cfg);
-    const reconnect = before.url !== after.url || before.apiKey !== after.apiKey;
+    // Linking or unlinking keeps the Meko on this computer's URL and token, but changes the Meko behind them.
+    const reconnect = before.url !== after.url || before.apiKey !== after.apiKey || (before.keySource === 'meko') !== (after.keySource === 'meko');
     // Kept on every read (a copy of the local token becoming the live local Meko changes nothing to
     // connect to, but names the account); compared only when there's another Meko to connect to.
     const account = mekoAccountOf(after);
@@ -556,7 +560,7 @@ export class Core extends EventEmitter {
       return;
     }
     this.log.info(
-      after.keySource === 'meko' ? `using Meko's Meko Cloud link (${after.url})`
+      after.keySource === 'meko' ? (linkedThroughMeko(localMeko().cloud) ? "using Meko Cloud through the Meko on this computer" : `using Meko's Meko Cloud link (${after.url})`)
         : after.apiKey ? `using the Meko on this computer (${after.url})` : 'the Meko on this computer stopped; Meko is not set up',
     );
     // As in updateConfig: a harness may have written the old key somewhere of its own.

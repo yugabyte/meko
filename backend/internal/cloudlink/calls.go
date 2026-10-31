@@ -4,14 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-
-	"github.com/yugabyte/meko/backend/internal/version"
 )
 
 // CallTimeout bounds one call to Meko Cloud made for a route: a search of a large datapack takes
@@ -23,13 +24,13 @@ const maxCallBytes = 8 << 20
 
 // IsLinked says whether Meko Cloud is linked.
 func (s *Service) IsLinked() (bool, error) {
-	st, err := s.Store.Load()
+	st, err := s.load()
 	return st.Linked, err
 }
 
 // linked is the saved link a call goes through; a CodeNotLinked CallError when there's none.
 func (s *Service) linked() (Link, error) {
-	st, err := s.Store.Load()
+	st, err := s.load()
 	if err != nil {
 		return Link{}, err
 	}
@@ -114,32 +115,19 @@ func keyRefused() error {
 		msg: "Meko Cloud refused the key. Link it again in Settings › Meko Cloud, or with meko cloud_link."}
 }
 
-// Tool calls one of the linked Meko Cloud's MCP tools with the key, and returns its reply's text:
-// an error a caller can act on ({"error", "detail"}) is a reply too, as on this Meko's /mcp. args
-// must hold only arguments the tool takes, since Meko Cloud refuses others.
+// Tool calls one of the linked Meko Cloud's MCP tools with the key, within CallTimeout, and returns
+// its reply's text: an error a caller can act on ({"error", "detail"}) is a reply too, as on this
+// Meko's /mcp. args must hold only arguments the tool takes, since Meko Cloud refuses others.
 func (s *Service) Tool(ctx context.Context, name string, args map[string]any) (string, error) {
-	l, err := s.linked()
+	raw, err := json.Marshal(args)
 	if err != nil {
 		return "", err
 	}
 	ctx, cancel := context.WithTimeout(ctx, CallTimeout)
 	defer cancel()
-	hc := &http.Client{Transport: bearer{key: l.Key, next: http.DefaultTransport}}
-	c := mcp.NewClient(&mcp.Implementation{Name: "meko", Version: version.Version}, nil)
-	cs, err := c.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: l.MCPURL(), HTTPClient: hc, MaxRetries: -1,
-		DisableStandaloneSSE: true}, nil)
+	res, err := s.Forward(ctx, name, raw)
 	if err != nil {
-		if strings.Contains(err.Error(), "Unauthorized") || strings.Contains(err.Error(), "401") {
-			return "", keyRefused()
-		}
-		return "", &CallError{Code: CodeUnreachable, msg: "Couldn't reach Meko Cloud's MCP server: " +
-			strings.TrimSuffix(shortError(ctx, err).Error(), ".") + "."}
-	}
-	defer func() { _ = cs.Close() }()
-	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
-	if err != nil {
-		return "", &CallError{Code: CodeCallFailed,
-			msg: "Meko Cloud's " + name + " failed: " + strings.TrimSuffix(shortError(ctx, err).Error(), ".") + "."}
+		return "", err
 	}
 	text := ""
 	if len(res.Content) > 0 {
@@ -152,4 +140,99 @@ func (s *Service) Tool(ctx context.Context, name string, args map[string]any) (s
 			strings.TrimSuffix(shorten(text), ".") + "."}
 	}
 	return text, nil
+}
+
+// Reply is the linked Meko Cloud's REST reply as it came: its status, content type and body.
+type Reply struct {
+	Status      int
+	ContentType string
+	Body        []byte
+}
+
+// Pass sends a request to the linked Meko Cloud's REST API as it came, with the key: method, the
+// path after the API URL with its query (such as /datapacks?limit=10), and body (nil for none) of
+// contentType. Meko Cloud's reply comes back as it is, but for a 401, which is CodeKeyRefused: the
+// key is Meko's, not the caller's. A request that doesn't reach Meko Cloud is a *CallError.
+func (s *Service) Pass(ctx context.Context, method, pathQuery string, body io.Reader, contentType string) (Reply,
+	error) {
+	l, err := s.linked()
+	if err != nil {
+		return Reply{}, err
+	}
+	base := strings.TrimRight(l.EffectiveAPIURL(), "/")
+	if base == "" {
+		return Reply{}, &CallError{Code: CodeNoAPIURL, msg: "The Meko Cloud link has no API URL. " +
+			"Set the web app or API URL in Settings › Meko Cloud, or meko cloud_link --api-url."}
+	}
+	ctx, cancel := context.WithTimeout(ctx, CallTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, method, base+pathQuery, body)
+	if err != nil {
+		return Reply{}, &CallError{Code: CodeCallFailed, msg: "Meko Cloud's API URL isn't one Meko can call."}
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+l.Key)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	unreachable := func(err error) error {
+		return &CallError{Code: CodeUnreachable,
+			msg: "Couldn't reach Meko Cloud: " + strings.TrimSuffix(shortError(ctx, err).Error(), ".") + "."}
+	}
+	res, err := http.DefaultClient.Do(req) //nolint:gosec // G704: the link's API URL, checked when it was saved
+	if err != nil {
+		return Reply{}, unreachable(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode == http.StatusUnauthorized {
+		return Reply{}, keyRefused()
+	}
+	b, err := io.ReadAll(io.LimitReader(res.Body, maxCallBytes))
+	if err != nil {
+		return Reply{}, unreachable(err)
+	}
+	return Reply{Status: res.StatusCode, ContentType: res.Header.Get("Content-Type"), Body: b}, nil
+}
+
+// PostUpload posts a file to an upload link that a knowledge base's upload-url gave: its fields,
+// then the file, as multipart/form-data, with no key. Any 2xx is the file received: this Meko's link
+// answers 204, as Meko Cloud's presigned S3 POST does by default.
+func PostUpload(ctx context.Context, url string, fields map[string]string, name string, data io.Reader) error {
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	for k, v := range fields {
+		if err := w.WriteField(k, v); err != nil {
+			return err
+		}
+	}
+	fw, err := w.CreateFormFile("file", name)
+	if err != nil {
+		return err
+	}
+	if _, err = io.Copy(fw, data); err != nil {
+		return err
+	}
+	if err = w.Close(); err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec // G704: the upload link the knowledge base gave
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+		return nil
+	}
+	var env struct {
+		Error *struct{ Message string } `json:"error"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&env) == nil && env.Error != nil {
+		return errors.New(env.Error.Message)
+	}
+	return fmt.Errorf("the upload answered %s", resp.Status)
 }

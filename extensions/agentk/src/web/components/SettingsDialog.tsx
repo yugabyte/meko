@@ -807,7 +807,8 @@ const OWN_KEY_FIX = 'Link Meko Cloud on Meko’s Meko Cloud page to move it ther
  * its other extensions) and the account that signs people in to both.
  */
 export function MekoLinks({ meko, auth }: { meko: MekoStatus; auth: MekoAuth | null }) {
-  const host = httpHost(meko.url ?? '');
+  // Meko Cloud reached through the Meko on this computer is named by its web app, not that Meko's URL.
+  const host = httpHost((meko.source === 'meko' && meko.webUrl) || meko.url || '');
   return (
     <div className="field" id="set-meko-links">
       <div className="info-row">

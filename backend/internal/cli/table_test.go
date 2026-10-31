@@ -6,8 +6,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-
-	"github.com/yugabyte/meko/backend/internal/cloudlink"
 )
 
 // The datapacks AgentK makes: long names, and descriptions that end in a repo's URL.
@@ -144,17 +142,5 @@ func TestCells(t *testing.T) {
 		if got := cells(s); got != want {
 			t.Errorf("cells(%q) = %d, want %d", s, got, want)
 		}
-	}
-}
-
-// meko-cli datapacks sorts this Meko's datapacks and Meko Cloud's together by name, ignoring case,
-// with this Meko's first on a tie, as --datapack picks it.
-func TestDatapackList(t *testing.T) {
-	local := []nameDesc{{"notes", "here"}, {"beta", ""}}
-	cloud := []cloudlink.Datapack{{DatapackName: "Zeta"}, {DatapackName: "notes", Description: "Cloud's"},
-		{DatapackName: "Alpha"}}
-	want := []nameDesc{{"Alpha", ""}, {"beta", ""}, {"notes", "here"}, {"notes", "Cloud's"}, {"Zeta", ""}}
-	if got := datapackList(local, cloud); !reflect.DeepEqual(got, want) {
-		t.Fatalf("datapackList = %q, want %q", got, want)
 	}
 }

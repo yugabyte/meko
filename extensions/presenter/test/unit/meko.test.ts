@@ -75,38 +75,50 @@ describe('where Meko is', () => {
   }
 
   const LOCAL = { url: 'http://127.0.0.1:7778/mcp', token: 'local-token' };
+  /** The link as an older Meko gave it, with its key. */
   const LINK = { set: true, url: 'https://mcp.meko.example/mcp', api_key: 'cloud-key', web_url: 'https://cloud.meko.example', api_url: 'https://cloud.meko.example/api/v1' };
+  /** The link as Meko gives it now: no key, no Meko Cloud URLs but its web app's. */
+  const LINKED = { set: true, linked: true, web_url: 'https://cloud.meko.example' };
 
   it.each<[string, unknown, MekoProbe]>([
     ['the Meko on this computer, running, from a Meko too old to keep a link', { ...LOCAL, running: true },
       { state: 'running', local: { url: LOCAL.url, token: LOCAL.token } }],
-    ['the link, while the Meko on this computer is stopped', { ...LOCAL, running: false, cloud: LINK },
-      { state: 'stopped', local: null, cloud: { url: LINK.url, apiKey: 'cloud-key', apiUrl: LINK.api_url } }],
-    ['an unlinked link as empty', { ...LOCAL, running: true, cloud: { set: true, url: '', api_key: '', web_url: '', api_url: '' } },
-      { state: 'running', local: { url: LOCAL.url, token: LOCAL.token }, cloud: { url: '', apiKey: '', apiUrl: '' } }],
+    ['the link, while the Meko on this computer runs', { ...LOCAL, running: true, cloud: LINKED },
+      { state: 'running', local: { url: LOCAL.url, token: LOCAL.token }, cloud: { linked: true, webUrl: LINKED.web_url } }],
+    ['an unlinked link', { ...LOCAL, running: true, cloud: { set: true, linked: false, web_url: '' } },
+      { state: 'running', local: { url: LOCAL.url, token: LOCAL.token }, cloud: { linked: false, webUrl: '' } }],
+    ['an older Meko\'s link with its key, while the Meko on this computer is stopped', { ...LOCAL, running: false, cloud: LINK },
+      { state: 'stopped', local: null, cloud: { linked: true, webUrl: LINK.web_url, direct: { url: LINK.url, apiKey: 'cloud-key', apiUrl: LINK.api_url } } }],
+    ['an older Meko\'s unlinked link as empty', { ...LOCAL, running: true, cloud: { set: true, url: '', api_key: '', web_url: '', api_url: '' } },
+      { state: 'running', local: { url: LOCAL.url, token: LOCAL.token }, cloud: { linked: false, webUrl: '' } }],
     ['a link Meko couldn\'t read as unreadable', { ...LOCAL, running: true, cloud: { error: 'the Keychain refused' } },
       { state: 'running', local: { url: LOCAL.url, token: LOCAL.token }, cloudUnreadable: true }],
-    ['a link URL that isn\'t http as no link', { ...LOCAL, running: true, cloud: { ...LINK, url: 'file:///etc/passwd' } },
-      { state: 'running', local: { url: LOCAL.url, token: LOCAL.token }, cloud: { url: '', apiKey: '', apiUrl: '' } }],
+    ['an older Meko\'s link URL that isn\'t http as no link', { ...LOCAL, running: true, cloud: { ...LINK, url: 'file:///etc/passwd' } },
+      { state: 'running', local: { url: LOCAL.url, token: LOCAL.token }, cloud: { linked: false, webUrl: LINK.web_url } }],
     ['something else as failed', { hello: 'world' }, { state: 'failed', local: null }],
   ])('reads %s', async (_n, out, want) => {
     expect(await probeMeko(getPaths(join(dir, 'home')), fakeMeko(JSON.stringify(out)))).toEqual(want);
   });
 
   const local: MekoProbe = { state: 'running', local: { url: 'http://127.0.0.1:7790/mcp', token: 't' } };
-  const linked: MekoProbe = { ...local, cloud: { url: LINK.url, apiKey: 'cloud-key', apiUrl: LINK.api_url } };
+  const linked: MekoProbe = { ...local, cloud: { linked: true, webUrl: LINKED.web_url } };
+  const unlinked: MekoProbe = { ...local, cloud: { linked: false, webUrl: '' } };
+  const direct: MekoProbe = { ...local, cloud: { linked: true, webUrl: LINK.web_url, direct: { url: LINK.url, apiKey: 'cloud-key', apiUrl: LINK.api_url } } };
   const LOCAL_CREDS = { url: 'http://127.0.0.1:7790/mcp', key: 't', apiUrl: 'http://127.0.0.1:7790/api/v1', kind: 'local' };
-  const CLOUD_CREDS = { url: LINK.url, key: 'cloud-key', apiUrl: LINK.api_url, kind: 'cloud' };
+  const CLOUD_CREDS = { url: 'http://127.0.0.1:7790/mcp', key: 't', apiUrl: 'http://127.0.0.1:7790/api/v1/cloud', kind: 'cloud', cloudHost: 'cloud.meko.example' };
+  const DIRECT_CREDS = { url: LINK.url, key: 'cloud-key', apiUrl: LINK.api_url, kind: 'cloud' };
 
   it.each<[string, MekoProbe[], unknown]>([
-    ['uses Meko Cloud, with its own REST host, when Meko links it', [linked], CLOUD_CREDS],
-    ['uses the Meko on this computer when unlinked', [linked, { ...local, cloud: { url: '', apiKey: '', apiUrl: '' } }], LOCAL_CREDS],
+    ['uses Meko Cloud through the Meko on this computer, with its token, when Meko links it', [linked], CLOUD_CREDS],
+    ['finds none when Meko links Meko Cloud but its server is stopped', [{ ...linked, state: 'stopped', local: null }], null],
+    ['uses Meko Cloud itself, with its own REST host, when an older Meko hands out the link\'s key', [direct], DIRECT_CREDS],
+    ['uses the Meko on this computer when unlinked', [linked, unlinked], LOCAL_CREDS],
     ['uses the Meko on this computer with a Meko too old to keep a link', [linked, local], LOCAL_CREDS],
     ['keeps the link when Meko couldn\'t read it', [linked, { ...local, cloudUnreadable: true }], CLOUD_CREDS],
-    ['keeps the link when meko failed', [linked, { state: 'failed', local: null }], CLOUD_CREDS],
+    ['keeps an older Meko\'s link when meko failed', [direct, { state: 'failed', local: null }], DIRECT_CREDS],
     ['finds none with no meko and no link read before', [{ state: 'none', local: null }], null],
     ['finds none, not the Meko on this computer, when the first read couldn\'t read the link', [{ ...local, cloudUnreadable: true }], null],
-    ['finds none when a linked Meko names no REST API URL, rather than guess it from the MCP host', [{ ...local, cloud: { url: LINK.url, apiKey: 'cloud-key', apiUrl: '' } }], null],
+    ['finds none when an older Meko names no REST API URL, rather than guess it from the MCP host', [{ ...local, cloud: { linked: true, webUrl: '', direct: { url: LINK.url, apiKey: 'cloud-key', apiUrl: '' } } }], null],
   ])('%s', async (_n, probes, want) => {
     const find = mekoFinder(async () => probes.shift()!);
     let found;
@@ -154,7 +166,7 @@ describe('Meko Cloud\'s REST API', () => {
   const client = (url: string, apiUrl: string) =>
     new MekoClient(async () => ({ state: 'ready', creds: { url, key: 'cloud-key', apiUrl, kind: 'cloud' } }), 'test');
 
-  it('lists artifacts on the link\'s REST host, not the MCP one', async () => {
+  it('lists artifacts on the link\'s REST host, not the MCP one (an older Meko\'s link)', async () => {
     const seen: { url: string; auth: string | undefined }[] = [];
     const api = await listen((req, res) => {
       seen.push({ url: req.url!, auth: req.headers.authorization });
@@ -175,11 +187,29 @@ describe('Meko Cloud\'s REST API', () => {
   it.each([
     ['its MCP endpoint', 401, 200],
     ['its REST API', 200, 403],
-  ])('says to link again when Meko Cloud refuses the key at %s', async (_n, mcpStatus, apiStatus) => {
+  ])('says to link again when Meko Cloud refuses an older Meko\'s key at %s', async (_n, mcpStatus, apiStatus) => {
     const api = await listen((_req, res) => void res.writeHead(apiStatus).end());
     const m = client(await mcp(mcpStatus === 200 ? undefined : mcpStatus), `${api}/api/v1`);
     try {
       await expect(m.listArtifacts('dp1', 'deck.json')).rejects.toThrow(/Meko Cloud refused the key: link it again in Meko's Settings › Meko Cloud/);
+    } finally {
+      await m.close();
+    }
+  });
+
+  it.each<[string, number, unknown, RegExp]>([
+    ['says to link again when Meko on this computer says Meko Cloud refused the key', 502,
+      { error: { code: 'CLOUD_KEY_REFUSED', message: 'Meko Cloud refused the key.' } }, /Meko Cloud refused the key: link it again in Meko's Settings › Meko Cloud/],
+    ['gives Meko\'s own message when the link went away', 409,
+      { error: { code: 'CLOUD_NOT_LINKED', message: "This Meko isn't linked to Meko Cloud." } }, /^This Meko isn't linked to Meko Cloud\.$/],
+    ['doesn\'t blame Meko Cloud\'s key when Meko refuses its own token', 401, {}, /^Meko's artifact list answered 401$/],
+  ])('through the Meko on this computer, %s', async (_n, status, body, want) => {
+    const api = await listen((_req, res) => void res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body)));
+    const url = await mcp();
+    const m = new MekoClient(async () => ({ state: 'ready', creds: { url, key: 'local-token', apiUrl: `${api}/api/v1/cloud`, kind: 'cloud', cloudHost: 'cloud.meko.example' } }), 'test');
+    try {
+      expect(await m.at()).toEqual({ kind: 'cloud', host: 'cloud.meko.example' });
+      await expect(m.listArtifacts('dp1', 'deck.json')).rejects.toThrow(want);
     } finally {
       await m.close();
     }

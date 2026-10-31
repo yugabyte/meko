@@ -60,6 +60,8 @@ type Options struct {
 	CallHome *config.CallHome
 	// Cloud is the Meko Cloud link the REST routes send other datapacks to; nil leaves it out.
 	Cloud *cloudlink.Service
+	// MCPCloud, if set, is the linked Meko Cloud /mcp sends calls to while it's linked.
+	MCPCloud mcp.Cloud
 	// ExtractorHarness, if set, answers the memory extractor's calls instead of a real CLI.
 	ExtractorHarness memory.Harness
 	// Answerer, if set, writes search answers instead of a real CLI.
@@ -172,7 +174,7 @@ func Start(t *testing.T, o Options) *Env {
 		callHome = *o.CallHome
 	}
 	usage := callhome.New(callhome.Options{Store: st, Config: callHome, Tools: mcp.ToolNames(), Log: log})
-	mcpOpts := mcp.Options{Service: svc, Version: "test", Log: log, Credential: server.CredentialOf}
+	mcpOpts := mcp.Options{Service: svc, Version: "test", Log: log, Credential: server.CredentialOf, Cloud: o.MCPCloud}
 	credential := server.Credential
 	if o.Credential != nil {
 		credential = o.Credential

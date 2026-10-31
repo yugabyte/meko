@@ -8,7 +8,7 @@ import { DEFAULT_HARNESS, HARNESS_IDS, isHarnessId, type HarnessId } from '../sh
 import {
   DEFAULT_DEPTH, DEFAULT_ROUNDS, DEFAULT_STRATEGY, MAX_DEPTH, MAX_ROUNDS, STRATEGIES, isStrategySetting, type ReviewSettings,
 } from '../shared/codereview.js';
-import { isLocalMeko, isMekoCloudKey, localMeko, mekoLinkHandedOver, originOf } from './mekolocal.js';
+import { isLocalMeko, isMekoCloudKey, linkedThroughMeko, localMeko, mekoLinkHandedOver, originOf } from './mekolocal.js';
 import { expandHome, type Paths } from './paths.js';
 
 export interface Config {
@@ -295,7 +295,9 @@ export function onLoopback(url: string): boolean {
 /**
  * Meko credentials. Meko owns the Meko Cloud link (`cloud` in `meko token --json`): once it has had
  * one (linked, or unlinked since), or once AgentK handed it its own key (`mekoLinkHandedOver`),
- * AgentK uses Meko's link, else the Meko running on this computer, and nothing else.
+ * AgentK uses the Meko running on this computer, and nothing else. While it's linked, that Meko
+ * reaches Meko Cloud for AgentK (`linkedThroughMeko`): its URL and token are AgentK's, with the
+ * source `meko`. An older Meko handed out the link's key instead, which AgentK then uses itself.
  *
  * Before that (a Meko too old to keep a link, or one that was never set, with the handover still to
  * run) AgentK's own sources stand in: config first, then the environment, then Claude Code's
@@ -348,6 +350,7 @@ export function resolveMekoWithSource(cfg: Config): { url: string; apiKey: strin
   const fromLocal = local ? { url: local.url, apiKey: local.token, keySource: 'local' as const } : null;
   if (cloud?.set || mekoLinkHandedOver()) {
     if (cloud?.apiKey) return { url: cloud.url, apiKey: cloud.apiKey, keySource: 'meko' };
+    if (linkedThroughMeko(cloud)) return local ? { url: local.url, apiKey: local.token, keySource: 'meko' } : { url: DEFAULT_MEKO_URL, apiKey: '', keySource: null };
     return fromLocal ?? { url: DEFAULT_MEKO_URL, apiKey: '', keySource: null };
   }
   const own = ownMekoKey(cfg);
@@ -403,12 +406,17 @@ export function mekoHost(cfg: Config): string {
 }
 
 /**
- * Meko's REST API base (used for sharing): Meko's link's; else config first, then MEKO_API_URL, then
- * the web app URL plus /api/v1 (the Meko web app serves its API on the same origin). Null when
- * neither is known.
+ * Meko's REST API base (used for sharing): while Meko is linked, its own pass-through to Meko Cloud's
+ * API (`/api/v1/cloud` on the Meko on this computer), or an older Meko's link's API URL; else config
+ * first, then MEKO_API_URL, then the web app URL plus /api/v1 (the Meko web app serves its API on
+ * the same origin). Null when neither is known.
  */
 export function resolveMekoApiUrl(cfg: Config): string | null {
-  if (resolveMekoWithSource(cfg).keySource === 'meko') return localMeko().cloud?.apiUrl || null;
+  const eff = resolveMekoWithSource(cfg);
+  if (eff.keySource === 'meko') {
+    const cloud = localMeko().cloud;
+    return linkedThroughMeko(cloud) ? `${originOf(eff.url)}/api/v1/cloud` : cloud?.apiUrl || null;
+  }
   const override = forKey(cfg.meko.apiUrl.trim() || process.env.MEKO_API_URL?.trim() || '', resolveMekoWithSource(cfg));
   if (override) return override.replace(/\/+$/, '');
   const web = resolveMekoWebUrl(cfg);

@@ -889,9 +889,32 @@ func TestRemoveMember(t *testing.T) {
 	}
 }
 
-// A link change moves every agent at Meko's old target, or at one of its own, to the new one; one
-// elsewhere is left, and one that fails is reported, without either target's token or key. Unlinking
-// moves them back, which takes the key out of their configs.
+// A link change's move back takes from Meko Cloud only what Meko put there, the link's URL with the
+// link's key: one there with a key of its own is the user's and is left.
+func TestMoveBack(t *testing.T) {
+	home, _ := fakeAgents(t, false)
+	kiro := filepath.Join(home, ".kiro", "settings", "mcp.json")
+	codex := filepath.Join(home, ".codex", "config.toml")
+	own := "[mcp_servers.meko]\nurl = \"" + cloudURL + "\"\nhttp_headers = { Authorization = \"Bearer user-key\" }\n"
+	write(t, kiro, `{"mcpServers": {"meko": `+entry(cloudURL, cloudKey)+`}}`)
+	write(t, codex, own)
+	m := &Manager{Lock: filepath.Join(t.TempDir(), "agents.lock")}
+	mv := m.Move(context.Background(), cloud, local)
+	if len(mv.Moved) != 1 || mv.Moved[0].Name != "kiro" || len(mv.Left) != 1 || mv.Left[0].Name != "codex" ||
+		len(mv.Failed) != 0 {
+		t.Fatalf("move back: %+v", mv)
+	}
+	if s := readKiroDoc(t, kiro).MCPServers["meko"]; s.URL != localURL || s.Headers["Authorization"] != "Bearer "+token {
+		t.Errorf("kiro: %+v", s)
+	}
+	if b, _ := os.ReadFile(codex); string(b) != own { //nolint:gosec // G304: the test's own file
+		t.Errorf("codex changed: %s", b)
+	}
+}
+
+// Move connects every agent at either target's own servers to the new one; one elsewhere is left, and
+// one that fails is reported, without either target's token or key. Moving back from Meko Cloud
+// takes the key out of their configs.
 func TestMove(t *testing.T) {
 	home, _ := fakeAgents(t, true)
 	kiro := filepath.Join(home, ".kiro", "settings", "mcp.json")
