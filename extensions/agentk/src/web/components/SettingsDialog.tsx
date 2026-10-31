@@ -258,7 +258,7 @@ function WorkQueueTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefOb
         hint={s.workQueueSlack && !s.workQueueSlackList ? 'Paste the link to your list.' : undefined}
         info={{
           for: 'set-wq-slack-list',
-          text: "Slack's To-dos can't be read by its connector, so keep a list of your own (for example Meko work queue), add the messages you want worked on, and paste its link from the list's ⋯ › Copy link. A list is private until you share it; sharing one of its items gives the people you share it with edit access to the whole list. Rows ticked done in a checkbox or status column are left out.",
+          text: "Slack's To-dos can't be read by its connector, so keep a list of your own (for example Meko work queue), add the messages you want worked on, and paste its link from the list's ⋯ › Copy link. The sync reads only these columns: Message, the message's link (the list must have it), Name, its text (Slack fills it in), Reporter (optional), and Done, a checkbox (optional): rows with Done ticked are left out. A list is private until you share it; sharing one of its items gives the people you share it with edit access to the whole list.",
         }}
       >
         <input

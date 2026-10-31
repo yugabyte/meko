@@ -85,14 +85,18 @@ and the timer does nothing (`WorkSync.sources` tells the page). The timer ticks 
   them (it returns the newest messages anywhere), its results don't say what's a to-do or done, and
   no tool of its lists To-dos or Saved. Its `slack_read_file` returns a list as CSV with the list's
   own columns, so the prompt has Claude read that one file, without searching Slack or reading the
-  messages, and give each row with a Slack message link, leaving out rows a checkbox or status
-  column marks done. A list is private until it's shared, but sharing one of its items gives the
+  messages. It reads only columns with these exact names (`LIST_COLUMNS` in `slack.ts`, matched
+  ignoring case), and ignores the rest, so nothing rests on guessing what a column means:
+  **Message** (the message's link; required, and a list without it fails with "Your Slack list has
+  no Message column"; rows whose Message isn't a Slack message link are left out), **Name** (the
+  title column Slack fills with an added message's text), **Reporter** (optional) and **Done** (an
+  optional checkbox; checked rows are left out). A list is private until it's shared, but sharing one of its items gives the
   people it goes to edit access to the whole list, so its rows are still data written by people.
   The rows are read by one `claude -p` through your own Slack
   connector (`src/server/slack.ts`), titled with a summary the run writes from the row's text (its name or title column, else its first column of text), at most 80 characters, without greetings or mentions. When a message is added to a list, Slack copies its raw text into the row's name, starting with whatever opens the message ("Hi <@U…>"), so its first line makes a poor title. A row with no text gets "Slack message". The row's text
   itself goes in the item's notes, with mentions written as `@<display name>` from the user's
   profile, started with the reporter the way Slack starts a message with its author ("<reporter>:
-  …", from a reporter, requester or author column, as the list has it: an email stays an email,
+  …", from the Reporter column, as the list has it: an email stays an email,
   since the profile read takes only user IDs). The queue page shows an item's notes in two lines
   under its title. Unlike Ask AgentK, it loads your
   MCP servers and claude.ai connectors (no `--strict-mcp-config`). It reads messages other people
