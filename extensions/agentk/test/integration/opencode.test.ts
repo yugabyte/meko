@@ -138,11 +138,13 @@ describe('sessions on OpenCode (real session host + git, fake opencode running A
     const get = () => env.core.sessions.get(s.id);
     const idle = await waitFor(get, (x) => x.status === 'idle', 10000, 'the turn to end');
     expect(idle.background).toEqual([{ type: 'shell', description: 'npm test' }, { type: 'subagent', description: 'subagent' }]);
-    // The shell exits first, then the subagent's turn ends: the session is still idle through both.
+    // The shell exits first (its shell.created handed over again after, which doesn't bring it
+    // back), then the subagent's turn ends: the session is still idle through both. The subagent
+    // the background one runs isn't the session's own, so it's never listed.
     await waitFor(get, (x) => x.background.length === 1, 10000, 'the shell to exit');
     expect(get()).toMatchObject({ status: 'idle', background: [{ type: 'subagent', description: 'subagent' }] });
     await waitFor(get, (x) => x.background.length === 0, 10000, 'the subagent to end');
-    // A turn with nothing in the background leaves none.
+    // A turn with nothing in the background leaves none, the replayed shell included.
     await env.core.sessions.submit(s.id, 'hello');
     await waitFor(get, (x) => x.status === 'idle', 10000, 'the second turn');
     expect(get().background).toEqual([]);

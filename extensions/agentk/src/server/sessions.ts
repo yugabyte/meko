@@ -1579,7 +1579,8 @@ export class SessionManager {
    */
   private forgetClaude(id: string, why?: string, ended = why ?? 'Claude restarted'): void {
     this.mod.reset(id, why);
-    // Its background work ended with it (AgentK's launches keep Claude Code from handing it on).
+    // Its background work ended with it: every Claude Code launch sets CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF,
+    // so an exit hands none on to Claude Code's background sessions.
     this.background.delete(id);
     this.hookMeko.clear(id);
     this.mekoHold.clear(id);

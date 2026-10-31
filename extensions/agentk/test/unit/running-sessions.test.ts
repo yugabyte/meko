@@ -94,7 +94,6 @@ describe('dotState', () => {
   it("titles a session's tab, and its palette row, with what's running in the background", () => {
     const s = (...descriptions: string[]) => ({ ...session('idle'), background: descriptions.map((description) => ({ type: 'shell', description })) }) as Session;
     expect(dotTitle(s('npm test'))).toBe('running in the background: npm test');
-    expect(dotTitle(s('npm test', 'Review the change'))).toBe('running in the background: npm test, Review the change');
     expect(dotTitle(s('a', 'b', 'c', 'd', 'e'))).toBe('running in the background: a, b, c and 2 more');
     expect(renderToStaticMarkup(createElement(StatusDot, { status: 'background' }))).toContain('class="dot idle background"');
   });

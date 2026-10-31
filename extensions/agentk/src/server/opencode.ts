@@ -84,7 +84,7 @@ export function openCodeCommand(command: string, home = homedir(), path = proces
  * and events to the hook socket under the names `normalizeOpenCode` maps (`chat.message` for a
  * prompt, `session.idle` for the end of a turn, which OpenCode 2 reports as `session.execution.*`,
  * with the work the turn left running in the background: its bash commands' shells still running,
- * from `shell.created` and `shell.exited`, and subagent sessions mid-turn; `agentk.background` when
+ * from `shell.created` and `shell.exited`, and its own subagents mid-turn; `agentk.background` when
  * one of those ends between turns), asks the guard before a file edit and throws its reason, adds
  * AgentK's Meko recall to a new session's system prompt, and logs each finished step's tokens to the session's `messages.jsonl`.
  * It never holds OpenCode up for long, and without AgentK's session variables it does nothing. A
@@ -144,7 +144,8 @@ export default {
     };
     // The session the user last prompted (a resumed one's from the start); subagents' sessions apart.
     let main = process.env.AK_OPENCODE_SESSION || null;
-    const children = new Set();
+    // Subagents' sessions, each with the session that started it.
+    const children = new Map();
     const checked = new Set();
     // A prompt can come before its session's session.created event: OpenCode's record says.
     const isChild = async (id) => {
@@ -152,7 +153,7 @@ export default {
         checked.add(id);
         try {
           const s = await ctx.session.get({ sessionID: id });
-          if (s && s.parentID) children.add(id);
+          if (s && s.parentID) children.set(id, s.parentID);
         } catch {
           // Not known yet: a main session.
         }
@@ -166,14 +167,16 @@ export default {
     const isMain = (id) => !!id && id === main;
 
     // Work the main session left running in the background, which OpenCode wakes it for when it's
-    // done: its bash commands' shells still running (by shell id) and subagent sessions mid-turn.
-    // Sent with each turn's end, and again when one ends between turns.
+    // done: its bash commands' shells still running (by shell id) and its own subagents' sessions
+    // mid-turn (not ones a subagent started). Sent with each turn's end, and again when one ends
+    // between turns.
     const shells = new Map();
     const subagents = new Set();
     let between = false;
+    const isMainChild = (id) => isMain(children.get(id));
     const background = () => [
       ...[...shells.values()].filter((s) => isMain(s.sessionID)).map((s) => ({ type: 'shell', command: s.command })),
-      ...[...subagents].map(() => ({ type: 'subagent', description: 'subagent' })),
+      ...[...subagents].filter(isMainChild).map(() => ({ type: 'subagent', description: 'subagent' })),
     ];
     const backgroundEnded = (gone) => {
       if (gone && between && main) send({ hook_event_name: 'agentk.background', session_id: main, background_tasks: background() });
@@ -254,19 +257,21 @@ export default {
             ...(ev.type === 'session.execution.interrupted' ? { interrupted: true } : {}),
           });
         } else if (children.has(p.sessionID)) {
-          backgroundEnded(subagents.delete(p.sessionID));
+          backgroundEnded(subagents.delete(p.sessionID) && isMainChild(p.sessionID));
         }
         return;
       }
       switch (ev.type) {
+        // Once each: one handed over again after its work ended would bring that work back.
         case 'session.execution.started':
+          if (!once(ev)) break;
           if (isMain(p.sessionID)) between = false;
           else if (children.has(p.sessionID)) subagents.add(p.sessionID);
           break;
         case 'shell.created': {
           const info = p.info || {};
           const meta = info.metadata || {};
-          if (info.id && info.status === 'running' && typeof meta.sessionID === 'string') {
+          if (once(ev) && info.id && info.status === 'running' && typeof meta.sessionID === 'string') {
             shells.set(info.id, { sessionID: meta.sessionID, command: String(info.command || '') });
           }
           break;
@@ -279,7 +284,7 @@ export default {
           break;
         }
         case 'session.created':
-          if (p.parentID) children.add(p.sessionID);
+          if (p.parentID) children.set(p.sessionID, p.parentID);
           break;
         case 'permission.asked':
           if (once(ev)) send({ hook_event_name: 'permission.asked', permission: p.action || '', ...ids(p.sessionID) });

@@ -126,6 +126,12 @@ const event = async (type, data) => {
   const ev = { id: `evt_${++evn}`, created: Date.now(), type, data };
   for (const push of streams) push(ev);
   await sleep(10);
+  return ev;
+};
+// An event handed over again, as the stream does after it reconnects.
+const replay = async (ev) => {
+  for (const push of streams) push(ev);
+  await sleep(10);
 };
 
 let n = 0;
@@ -209,23 +215,32 @@ async function turn(text) {
     await event('session.execution.succeeded', { sessionID: child });
   }
   // "background <ms>": a bash command run in the background, its shell still running when the turn
-  // ends and exiting <ms> later; "bgagent <ms>": a subagent run in the background, alike.
+  // ends and exiting <ms> later (its shell.created then handed over again, as after a reconnect);
+  // "bgagent <ms>": a subagent run in the background, alike, which runs a subagent of its own.
   const bg = /\bbackground (\d+)/.exec(text);
   if (bg) {
     const id = `shl_${n}`;
-    await event('shell.created', { info: { id, status: 'running', command: 'npm test', cwd: process.cwd(), metadata: { sessionID: sessionId }, time: { started: Date.now() } } });
+    const created = await event('shell.created', { info: { id, status: 'running', command: 'npm test', cwd: process.cwd(), metadata: { sessionID: sessionId }, time: { started: Date.now() } } });
     void sleep(Number(bg[1])).then(async () => {
       await event('shell.exited', { id, exit: 0, status: 'exited' });
       await event('shell.deleted', { id });
+      await replay(created);
     });
   }
   const bga = /\bbgagent (\d+)/.exec(text);
   if (bga) {
     const child = `${sessionId}_bg${n}`;
+    const grandchild = `${child}_sub`;
     parents.set(child, sessionId);
+    parents.set(grandchild, child);
     await event('session.created', { sessionID: child, parentID: sessionId });
     await event('session.execution.started', { sessionID: child });
-    void sleep(Number(bga[1])).then(() => event('session.execution.succeeded', { sessionID: child }));
+    await event('session.created', { sessionID: grandchild, parentID: child });
+    await event('session.execution.started', { sessionID: grandchild });
+    void sleep(Number(bga[1])).then(async () => {
+      await event('session.execution.succeeded', { sessionID: grandchild });
+      await event('session.execution.succeeded', { sessionID: child });
+    });
   }
   // "run <cmd>": the shell needs the user's answer, the next line.
   if (/^run /.test(text)) {
