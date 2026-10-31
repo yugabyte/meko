@@ -1730,12 +1730,20 @@ textarea.input {
 .rv-section + .rv-section {
   margin-top: 14px;
 }
-.rv-section h3 {
+.rv-section h3,
+.rv-section h4 {
   margin: 0 0 6px;
   font-size: 12px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--muted);
+}
+/* Dismissed: a group's dropped findings, below its kept ones. */
+.rv-section h4 {
+  font-size: 11px;
+}
+.rv-section ul + h4 {
+  margin-top: 12px;
 }
 .rv-findings,
 .rv-datapacks {

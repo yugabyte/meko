@@ -93,9 +93,19 @@ export function ReviewFindings({ session, onClose, onTerminal }: {
             {findingGroups(detail.findings).map((g) => (
               <section key={g.key} className="rv-section">
                 <h3>{g.label}</h3>
-                <ul className="rv-findings">
-                  {g.findings.map((f) => <FindingRow key={f.key} f={f} />)}
-                </ul>
+                {g.kept.length > 0 && (
+                  <ul className="rv-findings">
+                    {g.kept.map((f) => <FindingRow key={f.key} f={f} />)}
+                  </ul>
+                )}
+                {g.dismissed.length > 0 && (
+                  <>
+                    <h4>Dismissed</h4>
+                    <ul className="rv-findings">
+                      {g.dismissed.map((f) => <FindingRow key={f.key} f={f} />)}
+                    </ul>
+                  </>
+                )}
               </section>
             ))}
             {detail.findings.length === 0 && <p className="muted">No findings.</p>}

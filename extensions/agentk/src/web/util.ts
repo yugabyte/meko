@@ -919,25 +919,31 @@ export function designLanding(prev: Landing, on: boolean, at: number | null, now
 
 /**
  * A review's findings grouped for its panel: by round, then by the sweep that first raised them,
- * in that order. A round or sweep is named only when the review had more than one.
+ * in that order, each group's kept findings apart from its dropped ones (shown under Dismissed,
+ * below them). A round or sweep is named only when the review had more than one.
  */
-export function findingGroups(findings: CodeReviewFinding[]): { key: string; label: string; findings: CodeReviewFinding[] }[] {
+export function findingGroups(
+  findings: CodeReviewFinding[],
+): { key: string; label: string; kept: CodeReviewFinding[]; dismissed: CodeReviewFinding[] }[] {
   const rounds = new Set(findings.map((f) => f.round)).size > 1;
   const sweeps = new Set(findings.map((f) => f.sweep)).size > 1;
-  const groups = new Map<string, { key: string; label: string; round: number; sweep: number; findings: CodeReviewFinding[] }>();
+  const groups = new Map<
+    string,
+    { key: string; label: string; round: number; sweep: number; kept: CodeReviewFinding[]; dismissed: CodeReviewFinding[] }
+  >();
   for (const f of findings) {
     const key = `${f.round}:${f.sweep}`;
     let g = groups.get(key);
     if (!g) {
       const label = [rounds ? `Round ${f.round}` : '', sweeps ? `sweep ${f.sweep}` : ''].filter(Boolean).join(', ');
-      g = { key, label: label ? label[0].toUpperCase() + label.slice(1) : 'Findings', round: f.round, sweep: f.sweep, findings: [] };
+      g = { key, label: label ? label[0].toUpperCase() + label.slice(1) : 'Findings', round: f.round, sweep: f.sweep, kept: [], dismissed: [] };
       groups.set(key, g);
     }
-    g.findings.push(f);
+    (f.kept ? g.kept : g.dismissed).push(f);
   }
   return [...groups.values()]
     .sort((a, b) => a.round - b.round || a.sweep - b.sweep)
-    .map(({ key, label, findings: fs }) => ({ key, label, findings: fs }));
+    .map(({ key, label, kept, dismissed }) => ({ key, label, kept, dismissed }));
 }
 
 /**
