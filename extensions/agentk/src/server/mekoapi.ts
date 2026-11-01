@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { DatapackMember, DatapackPeople, DatapackPendingInvite, LinkGrant, ShareGrant } from '../shared/types.js';
 import { SHARE_GRANTS } from '../shared/types.js';
 import { strOrNull } from './meko.js';
+import { originOf } from './mekolocal.js';
 
 /**
  * Meko's answer to a request to add a file to a knowledge base: where to post it, or that the
@@ -256,8 +257,9 @@ export class MekoApi {
   /**
    * Posts a file where `requestUpload` said: the signed fields, then the file last (S3 ignores
    * fields after it), without Meko's key. Only over https, unless the Meko behind the API is on http
-   * (a self-hosted Meko's storage): the Meko on this computer's pass-through to Meko Cloud is on
-   * http, but Meko Cloud's storage isn't. Errors name the storage's host, never the URL or fields.
+   * (a self-hosted Meko's storage) or the link is on the API's own origin (the Meko on this computer
+   * taking a file for one of its own datapacks): that Meko is on http while it reaches Meko Cloud for
+   * AgentK, but Meko Cloud's storage isn't. Errors name the storage's host, never the URL or fields.
    */
   async postPresigned(upload: PresignedUpload, filename: string, bytes: Uint8Array): Promise<void> {
     let target: URL;
@@ -267,7 +269,8 @@ export class MekoApi {
       throw badReply('the upload request');
     }
     const { baseUrl, storageHttp } = this.creds();
-    const httpOk = storageHttp ?? baseUrl?.startsWith('http:') ?? false;
+    const ownOrigin = !!baseUrl && originOf(baseUrl) === target.origin;
+    const httpOk = ownOrigin || (storageHttp ?? baseUrl?.startsWith('http:') ?? false);
     if (target.protocol !== 'https:' && !(httpOk && target.protocol === 'http:')) {
       throw new MekoApiError(200, 'BAD_REPLY', `Meko gave an upload address AgentK won't send a file to (${target.protocol}).`);
     }

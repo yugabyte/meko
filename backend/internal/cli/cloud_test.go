@@ -1,17 +1,23 @@
 package cli
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -116,7 +122,7 @@ func TestCloudLink(t *testing.T) {
 	want(t, "cloud_link with no server", code, 0, out+errs, "Linked to "+cloud+"/mcp (key …wxyz)")
 	c := readCloudToken(t, dir)
 	wantCloud := cloudToken{Set: true, Linked: true, WebURL: cloud,
-		Account: cloudlink.Link{URL: cloud + "/mcp", Key: testCloudKey}.Account()}
+		Account: cloudlink.Link{URL: cloud + "/mcp", Key: testCloudKey}.Account(), DatapackRouting: true}
 	if len(c.Account) != 16 {
 		t.Fatalf("token --json account = %q", c.Account)
 	}
@@ -135,7 +141,7 @@ func TestCloudLink(t *testing.T) {
 	want(t, "start", code, 0, out+errs, "is running")
 	code, out, errs = run("cloud_link", "--data-dir", dir, "--off")
 	want(t, "cloud_link --off through the server", code, 0, out+errs, "Meko Cloud is unlinked")
-	if c := readCloudToken(t, dir); c != (cloudToken{Set: true}) {
+	if c := readCloudToken(t, dir); c != (cloudToken{Set: true, DatapackRouting: true}) {
 		t.Fatalf("unlinked: %+v", c)
 	}
 	// Linking again with only the key keeps the URLs saved before.
@@ -203,8 +209,8 @@ func TestDatapacksLinked(t *testing.T) {
 // While Meko Cloud is linked, this Meko's /mcp works on its datapacks and on this Meko's own, each by
 // name or id with nothing saying which is which, and new datapacks are made there. The "Meko Cloud"
 // here is a second Meko server, which serves the MCP tools and REST routes with Cloud's shapes:
-// meko-cli's commands, an agent's MCP session with the client token, REST's creates and
-// /api/v1/cloud all reach it, and unlinking leaves this Meko's own datapacks alone.
+// meko-cli's commands, an agent's MCP session with the client token, REST's creates and the client
+// token's REST calls all reach it, and unlinking leaves this Meko's own datapacks alone.
 func TestCloudDatapacks(t *testing.T) {
 	withMemoryEngine(t)
 	t.Setenv("MEKO_SECRETS", "file")
@@ -321,19 +327,56 @@ func TestCloudDatapacks(t *testing.T) {
 	if _, out, _ = runSh("datapacks", "--data-dir", cloudDir); !strings.Contains(out, "x-local") {
 		t.Fatalf("REST's create didn't make it in Cloud:\n%s", out)
 	}
-	// /api/v1/cloud passes the client token's request on to Cloud's REST API.
-	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet,
-		"http://127.0.0.1:"+port+"/api/v1/cloud/datapacks", nil)
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(clientTok))
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
+	// REST with the client token, as extensions call it: /api/v1 serves this Meko's datapacks and
+	// passes Meko Cloud's on to it, and /api/v1/cloud is gone. AgentK's knowledge upload works on
+	// each side: the upload link comes from the Meko that has the datapack, and its status reads
+	// completed there.
+	tok := strings.TrimSpace(clientTok)
+	base := "http://127.0.0.1:" + port + "/api/v1"
+	if status, body := restAs(t, tok, http.MethodGet, base+"/cloud/datapacks", nil); status != 404 {
+		t.Fatalf("/api/v1/cloud/datapacks: %d %s", status, body)
 	}
-	body, _ := io.ReadAll(res.Body)
-	_ = res.Body.Close()
-	if res.StatusCode != http.StatusOK || !strings.Contains(string(body), "rest-made") ||
-		strings.Contains(string(body), "kept-here") {
-		t.Fatalf("/api/v1/cloud/datapacks: %d %s", res.StatusCode, body)
+	for _, side := range []struct{ name, id, port string }{{"this Meko", dpHere, port}, {"Cloud", dp, cloudPort}} {
+		kb := "http://127.0.0.1:" + port + "/api/v1/datapacks/" + side.id + "/knowledge-bases"
+		file := []byte("# Releases\n\nReleases on " + side.name + " are cut on Mondays.\n")
+		sum := sha256.Sum256(file)
+		status, body := restAs(t, tok, http.MethodPost, kb+"/upload-url", map[string]any{"filename": "releases.md",
+			"size": len(file), "content_hash": hex.EncodeToString(sum[:]), "client": "agent-k-local"})
+		var offer struct {
+			Data struct {
+				URL    string            `json:"url"`
+				Key    string            `json:"key"`
+				Fields map[string]string `json:"fields"`
+			} `json:"data"`
+		}
+		if err = json.Unmarshal([]byte(body), &offer); status != 200 || err != nil ||
+			!strings.HasPrefix(offer.Data.URL, "http://127.0.0.1:"+side.port+"/") {
+			t.Fatalf("upload-url on %s: %d %s", side.name, status, body)
+		}
+		postFile(t, offer.Data.URL, offer.Data.Fields, "releases.md", file)
+		state := ""
+		for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+			_, body = restAs(t, tok, http.MethodGet, kb+"/document-status?document_key="+url.QueryEscape(offer.Data.Key), nil)
+			var st struct{ Data struct{ State string } }
+			_ = json.Unmarshal([]byte(body), &st)
+			if state = st.Data.State; state == "completed" || state == "failed" {
+				break
+			}
+		}
+		if state != "completed" {
+			t.Fatalf("the upload on %s: %q", side.name, state)
+		}
+	}
+	// Only Meko Cloud shares: this Meko's datapack says why it can't be, and Cloud's routes pass on.
+	status, body := restAs(t, tok, http.MethodGet,
+		"http://127.0.0.1:"+port+"/api/v1/datapacks/"+dpHere+"/member-list", nil)
+	if status != http.StatusConflict || !strings.Contains(body, `"DATAPACK_LOCAL"`) {
+		t.Fatalf("member-list of this Meko's datapack: %d %s", status, body)
+	}
+	// The second Meko has no sharing routes of its own: unlinked, it answers that it isn't linked.
+	status, body = restAs(t, tok, http.MethodGet, "http://127.0.0.1:"+port+"/api/v1/datapacks/incoming-shares", nil)
+	if status != http.StatusConflict || !strings.Contains(body, `"CLOUD_NOT_LINKED"`) {
+		t.Fatalf("incoming-shares passed on: %d %s", status, body)
 	}
 
 	// export still works on this Meko's datapacks, by name; Cloud's can't be exported.
@@ -469,5 +512,49 @@ func TestTarget(t *testing.T) {
 	}
 	if _, err := pick(rows, "nope", "x"); err == nil || !strings.Contains(err.Error(), `no datapack is named "nope"`) {
 		t.Errorf("pick of a missing name: %v", err)
+	}
+}
+
+// restAs calls this Meko's REST API at link with a token, as an extension does, and returns the
+// status and body.
+func restAs(t *testing.T, tok, method, link string, body any) (int, string) {
+	t.Helper()
+	var in io.Reader
+	if body != nil {
+		b, _ := json.Marshal(body)
+		in = bytes.NewReader(b)
+	}
+	req, _ := http.NewRequestWithContext(t.Context(), method, link, in)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	return res.StatusCode, string(out)
+}
+
+// postFile posts a file to an upload link as AgentK does: the signed fields, then the file, no key.
+func postFile(t *testing.T, link string, fields map[string]string, name string, data []byte) {
+	t.Helper()
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	for k, v := range fields {
+		_ = w.WriteField(k, v)
+	}
+	fw, _ := w.CreateFormFile("file", name)
+	_, _ = fw.Write(data)
+	_ = w.Close()
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, link, &body)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode > 299 {
+		t.Fatalf("the upload link answered %d", res.StatusCode)
 	}
 }

@@ -61,6 +61,12 @@ export interface MekoPort {
   getArtifact(datapackId: string, hash: string): Promise<Uint8Array | null>;
   /** The datapack's artifacts named exactly `filename`, newest first. */
   listArtifacts(datapackId: string, filename: string): Promise<ArtifactRow[]>;
+  /**
+   * The datapacks the Meko on this computer serves itself while it links Meko Cloud and routes by
+   * datapack id (`routed`), so their decks are that Meko's, not Meko Cloud's; null when Presenter's
+   * Meko doesn't route by id.
+   */
+  localIds(): Promise<Set<string> | null>;
 }
 
 export interface MekoCreds {
@@ -68,14 +74,20 @@ export interface MekoCreds {
   url: string;
   key: string;
   /**
-   * Meko's REST API base: <origin>/api/v1 here, <origin>/api/v1/cloud for Meko Cloud through this
-   * Meko, or, from an older Meko, the link's own (another host).
+   * Meko's REST API base: <origin>/api/v1 here, also while it links Meko Cloud and routes by id;
+   * <origin>/api/v1/cloud for Meko Cloud through a Meko from before that; or, from an older Meko, the
+   * link's own (another host).
    */
   apiUrl: string;
   /** The Meko the datapacks are in: the one on this computer, or the one Meko links to (Meko Cloud). */
   kind: MekoAt['kind'];
   /** The host that names Meko Cloud when it's reached through this Meko: its web app's ('' when unknown). */
   cloudHost?: string;
+  /**
+   * This Meko serves its own datapacks while it links Meko Cloud, and sends any other id there, on
+   * `/mcp` and `/api/v1` (Meko's `datapack_routing`): decks are in either.
+   */
+  routed?: true;
 }
 
 export interface Found {
@@ -92,12 +104,14 @@ export interface Finder {
 }
 
 /**
- * Meko's Meko Cloud link: whether it's linked, and its web app's URL ('' when unknown). `direct` is
- * set only by an older Meko that handed out the link's MCP URL, key and REST API URL.
+ * Meko's Meko Cloud link: whether it's linked, and its web app's URL ('' when unknown). `routed`:
+ * Meko routes each call by its datapack's id (`datapack_routing`). `direct` is set only by an older
+ * Meko that handed out the link's MCP URL, key and REST API URL.
  */
 export interface CloudLink {
   linked: boolean;
   webUrl: string;
+  routed?: true;
   direct?: { url: string; apiKey: string; apiUrl: string };
 }
 
@@ -129,7 +143,7 @@ export function cloudOf(v: unknown): CloudLink | undefined {
     const apiUrl = HTTP.test(str(c.api_url)) ? str(c.api_url) : '';
     return { linked: true, webUrl, direct: { url, apiKey, apiUrl } };
   }
-  return { linked: c.linked === true, webUrl };
+  return { linked: c.linked === true, webUrl, ...(c.datapack_routing === true ? { routed: true as const } : {}) };
 }
 
 /** Meko's REST API base on the MCP URL's own origin, as the Meko on this computer serves it. */
@@ -137,7 +151,7 @@ export function apiUrlOf(mcpUrl: string): string {
   return `${new URL(mcpUrl).origin}/api/v1`;
 }
 
-/** Meko Cloud's REST API as the Meko on this computer passes it on: <origin>/api/v1/cloud. */
+/** Meko Cloud's REST API as a Meko from before it routed by id passes it on: <origin>/api/v1/cloud. */
 export function cloudApiUrlOf(mcpUrl: string): string {
   return `${apiUrlOf(mcpUrl)}/cloud`;
 }
@@ -182,7 +196,8 @@ const RELINK = "link it again in Meko's Settings › Meko Cloud";
 
 /**
  * Finds Meko's URL and key each time it's called: always the Meko on this computer, whose datapacks
- * are Meko Cloud's while it links Meko Cloud (REST then goes to its /api/v1/cloud). Only an older
+ * are Meko Cloud's while it links Meko Cloud, and its own too when it routes by id (REST then stays on
+ * its /api/v1; before that, it went to its /api/v1/cloud). Only an older
  * Meko that hands out the link's key sends Presenter to Meko Cloud itself. A read that couldn't ask
  * `meko`, or whose link Meko couldn't read, keeps the link last read (in memory only), so a slow
  * `meko` or a locked Keychain doesn't move decks to another Meko. Before any link is read (a start,
@@ -211,7 +226,11 @@ export function mekoFinder(probe: () => Promise<MekoProbe>): Finder {
       return { state: 'ready', creds: { url: direct.url, key: direct.apiKey, apiUrl: direct.apiUrl, kind: 'cloud' } };
     }
     if (p.local && last?.linked) {
-      return { state: 'ready', creds: { url: p.local.url, key: p.local.token, apiUrl: cloudApiUrlOf(p.local.url), kind: 'cloud', cloudHost: hostOf(last.webUrl) } };
+      const apiUrl = last.routed ? apiUrlOf(p.local.url) : cloudApiUrlOf(p.local.url);
+      return {
+        state: 'ready',
+        creds: { url: p.local.url, key: p.local.token, apiUrl, kind: 'cloud', cloudHost: hostOf(last.webUrl), ...(last.routed ? { routed: true as const } : {}) },
+      };
     }
     if (p.local) return { state: 'ready', creds: { url: p.local.url, key: p.local.token, apiUrl: apiUrlOf(p.local.url), kind: 'local' } };
     return { state: p.state === 'failed' ? 'failed' : 'none', creds: null };
@@ -240,6 +259,8 @@ function refusedKey(status: number | undefined, creds: MekoCreds, code = ''): Me
 }
 
 type Json = Record<string, unknown>;
+/** How long `localIds` keeps an answer: a deck's every edit asks it while Meko links Meko Cloud. */
+const LOCAL_IDS_MS = 30_000;
 const HASH = /^[0-9a-f]{64}$/;
 
 /** Meko over MCP and REST, with credentials found again when a connection fails. */
@@ -252,6 +273,8 @@ export class MekoClient implements MekoPort {
   private conversation: string | null = null;
   /** Counts drops, so a connection made for the Meko before one isn't kept. */
   private gen = 0;
+  /** `localIds`' last answer, for the credentials it was read with: kept `LOCAL_IDS_MS`. */
+  private here: { creds: MekoCreds; ids: Set<string>; at: number } | null = null;
 
   constructor(private find: Finder, private version: string) {}
 
@@ -291,6 +314,7 @@ export class MekoClient implements MekoPort {
     this.client = null;
     this.creds = null;
     this.conversation = null;
+    this.here = null;
     this.gen++;
     void c?.close().catch(() => undefined);
   }
@@ -458,8 +482,8 @@ export class MekoClient implements MekoPort {
 
   /**
    * REST: GET <apiUrl>/datapacks/:id/artifacts?q=, every page, filtered to the exact filename. Meko
-   * on this computer serves Meko Cloud's routes and shapes, and passes them on to Meko Cloud under
-   * /api/v1/cloud, so only the base differs.
+   * on this computer serves Meko Cloud's routes and shapes, and passes a datapack it doesn't have on
+   * to Meko Cloud (under /api/v1/cloud before it routed by id), so only the base differs.
    */
   async listArtifacts(datapackId: string, filename: string): Promise<ArtifactRow[]> {
     await this.connect();
@@ -483,5 +507,31 @@ export class MekoClient implements MekoPort {
     // Meko lists them newest first. Its times drop trailing zeros, so a string sort could swap two
     // saves made in the same second.
     return out;
+  }
+
+  /**
+   * REST: GET <apiUrl>/datapacks, whose rows of the Meko on this computer's own datapacks open on its
+   * web UI (a `web_url` that's a path, /datapacks/<id>) and Meko Cloud's in its web app. Only from a
+   * Meko that routes by id, read again once `LOCAL_IDS_MS` old. The listing fails while Meko Cloud
+   * does, and so does this.
+   */
+  async localIds(): Promise<Set<string> | null> {
+    await this.connect();
+    const creds = this.creds!;
+    if (!creds.routed) return null;
+    if (this.here?.creds === creds && Date.now() - this.here.at < LOCAL_IDS_MS) return this.here.ids;
+    const res = await fetch(`${creds.apiUrl}/datapacks`, { headers: { Authorization: `Bearer ${creds.key}` }, signal: AbortSignal.timeout(30000) });
+    if (!res.ok) {
+      const err = ((await res.json().catch(() => null)) as { error?: { code?: unknown; message?: unknown } } | null)?.error;
+      throw refusedKey(res.status, creds, str(err?.code))
+        ?? new MekoError(str(err?.message) || `Meko's datapack list answered ${res.status}`);
+    }
+    const rows = ((await res.json()) as { data?: unknown }).data;
+    const ids = new Set<string>();
+    for (const r of Array.isArray(rows) ? (rows as Json[]) : []) {
+      if (typeof r.web_url === 'string' && r.web_url.startsWith('/') && typeof r.datapack_id === 'string') ids.add(r.datapack_id);
+    }
+    if (this.creds === creds) this.here = { creds, ids, at: Date.now() };
+    return ids;
   }
 }

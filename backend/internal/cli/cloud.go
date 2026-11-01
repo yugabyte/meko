@@ -168,8 +168,9 @@ func cloudStatusLine(l paths.Layout) string {
 }
 
 // cloudToken is meko token --json's cloud: whether the extensions' Meko is linked to Meko Cloud,
-// never its key. Linked, they reach Meko Cloud through this Meko (its /mcp, and /api/v1/cloud for
-// its REST API), which holds the key, and link to its web app at web_url. set says whether the link
+// never its key. Linked, they reach Meko Cloud through this Meko, which holds the key: its /mcp and
+// its /api/v1 serve this Meko's datapacks and send the rest to Meko Cloud (datapack_routing), and
+// they link to its web app at web_url. set says whether the link
 // was ever set: until it is, an extension may hand Meko a key of its own (AgentK does, once, with
 // meko cloud_link). With error, it couldn't be read, and an extension keeps what it last read.
 type cloudToken struct {
@@ -179,6 +180,9 @@ type cloudToken struct {
 	// Account names the linked account without its key (AccountOf), so an extension knows a new key
 	// is another account; "" while unlinked.
 	Account string `json:"account"`
+	// DatapackRouting says this Meko's /api/v1 routes a datapack by its id, so extensions call it
+	// rather than /api/v1/cloud, which an older Meko has and this one doesn't.
+	DatapackRouting bool `json:"datapack_routing,omitempty"`
 	// Error, when set, is why the link couldn't be read; the rest is then empty.
 	Error string `json:"error,omitempty"`
 }
@@ -197,9 +201,10 @@ func cloudTokenFor(l paths.Layout, cfg config.Config) cloudToken {
 
 func cloudTokenOf(st cloudlink.State) cloudToken {
 	if !st.Linked {
-		return cloudToken{Set: st.Set}
+		return cloudToken{Set: st.Set, DatapackRouting: true}
 	}
-	return cloudToken{Set: true, Linked: true, WebURL: st.Link.EffectiveWebURL(), Account: st.Link.Account()}
+	return cloudToken{Set: true, Linked: true, WebURL: st.Link.EffectiveWebURL(), Account: st.Link.Account(),
+		DatapackRouting: true}
 }
 
 // readSecret reads one line: typed at prompt with echo off on a terminal, else from the input as

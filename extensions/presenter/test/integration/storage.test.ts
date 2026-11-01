@@ -1,10 +1,11 @@
 import { randomBytes } from 'node:crypto';
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { applyOps } from '../../src/shared/ops.js';
 import { INDEX_BYTES, joinBytes, MANIFEST_FILE, PART_BYTES, POINTER_FORMAT, bytesJson, splitBytes } from '../../src/shared/manifest.js';
 import { emptyBrief, type Deck } from '../../src/shared/deck.js';
+import type { MekoAt } from '../../src/shared/datapacks.js';
 import type { DeckState } from '../../src/shared/types.js';
 import { DeckStore } from '../../src/server/decks.js';
 import { MekoError } from '../../src/server/meko.js';
@@ -142,10 +143,86 @@ describe('a deck in its datapack', () => {
       meko.datapacks = kept;
     } else {
       expect((await decks.state(d.id)).id).toBe(d.id);
+      // Meko Cloud's datapack: the Meko on this computer doesn't list it once unlinked.
+      meko.datapacks = [];
     }
     meko.where = { kind: 'local', host: '127.0.0.1:7778' };
     if (refusedLocally) await expect(decks.state(d.id)).rejects.toThrow(refusedLocally);
     else expect((await decks.state(d.id)).id).toBe(d.id);
+  });
+
+  it('keeps a deck in a datapack of the Meko on this computer its own while that Meko serves it beside Meko Cloud\'s', async () => {
+    const cloud: MekoAt = { kind: 'cloud', host: 'cloud.meko.example' };
+    meko.where = null;
+    const decks = new DeckStore(getPaths(join(dir, 'home')), meko);
+    const untagged = await decks.create({ title: 'Made here', brief: emptyBrief(), sources: { content: [], template: null, animations: [] } });
+    meko.where = { kind: 'local', host: '127.0.0.1:7778' };
+    const mislabeled = await decks.create({ title: 'Mislabeled', brief: emptyBrief(), sources: { content: [], template: null, animations: [] } });
+    await decks.save(untagged.id);
+    // Linked, through a Meko that routes by id: it lists its own datapacks with Meko Cloud's.
+    meko.where = cloud;
+    meko.here = new Set([untagged.id, mislabeled.id]);
+    expect((await decks.list()).filter((d) => d.elsewhere)).toEqual([]);
+    expect((await decks.state(untagged.id)).id).toBe(untagged.id);
+    expect((await decks.save(untagged.id)).dirty).toBe(false);
+    // A draft a Meko from before routing tagged as Meko Cloud's is the Meko on this computer's again.
+    const stateFile = join(dir, 'home', 'decks', mislabeled.id, 'state.json');
+    writeFileSync(stateFile, JSON.stringify({ ...JSON.parse(readFileSync(stateFile, 'utf8')), meko: cloud }));
+    const fresh = new DeckStore(getPaths(join(dir, 'home')), meko);
+    expect((await fresh.state(mislabeled.id)).id).toBe(mislabeled.id);
+    // Unlinked, both still open; a deck of Meko Cloud's doesn't.
+    meko.where = { kind: 'local', host: '127.0.0.1:7778' };
+    meko.here = null;
+    expect((await fresh.state(untagged.id)).id).toBe(untagged.id);
+    expect((await fresh.state(mislabeled.id)).id).toBe(mislabeled.id);
+    meko.where = cloud;
+    meko.here = new Set();
+    const inCloud = await fresh.create({ title: 'In Cloud', brief: emptyBrief(), sources: { content: [], template: null, animations: [] } });
+    // Unlinked, the Meko on this computer lists its own datapacks alone.
+    meko.datapacks = meko.datapacks.filter((d) => d.id !== inCloud.id);
+    meko.where = { kind: 'local', host: '127.0.0.1:7778' };
+    meko.here = null;
+    await expect(fresh.state(inCloud.id)).rejects.toThrow(/saved in Meko Cloud \(cloud\.meko\.example\)/);
+  });
+
+  it('opens a draft tagged as Meko Cloud\'s once unlinked when the Meko on this computer lists its datapack', async () => {
+    const cloud: MekoAt = { kind: 'cloud', host: 'cloud.meko.example' };
+    const decks = new DeckStore(getPaths(join(dir, 'home')), meko);
+    const d = await decks.create({ title: 'Mislabeled', brief: emptyBrief(), sources: { content: [], template: null, animations: [] } });
+    // A Meko that listed both sides before it routed by id led an earlier Presenter to tag it so.
+    const stateFile = join(dir, 'home', 'decks', d.id, 'state.json');
+    writeFileSync(stateFile, JSON.stringify({ ...JSON.parse(readFileSync(stateFile, 'utf8')), meko: cloud }));
+    const fresh = new DeckStore(getPaths(join(dir, 'home')), meko);
+    expect((await fresh.state(d.id)).id).toBe(d.id);
+    expect(JSON.parse(readFileSync(stateFile, 'utf8')).meko).toEqual({ kind: 'local', host: '' });
+  });
+
+  it('doesn\'t grey out the Meko on this computer\'s drafts while its list of them can\'t be read', async () => {
+    const decks = new DeckStore(getPaths(join(dir, 'home')), meko);
+    const d = await decks.create({ title: 'Made here', brief: emptyBrief(), sources: { content: [], template: null, animations: [] } });
+    meko.where = { kind: 'cloud', host: 'cloud.meko.example' };
+    const down = async (): Promise<never> => {
+      throw new MekoError('CLOUD_UNREACHABLE: Couldn\'t reach Meko Cloud');
+    };
+    meko.listDatapacks = down;
+    meko.localIds = down;
+    const listed = (await decks.list()).find((x) => x.id === d.id);
+    expect(listed?.draft).toBe(true);
+    expect(listed?.elsewhere).toBeUndefined();
+    await expect(decks.state(d.id)).rejects.toThrow(/CLOUD_UNREACHABLE/);
+  });
+
+  it('opens a deck with no draft here from a datapack of the Meko on this computer, as that Meko\'s, while it links Meko Cloud', async () => {
+    const decks = new DeckStore(getPaths(join(dir, 'one')), meko);
+    const d = await decks.create({ title: 'Saved here', brief: emptyBrief(), sources: { content: [], template: null, animations: [] } });
+    await decks.save(d.id);
+    meko.where = { kind: 'cloud', host: 'cloud.meko.example' };
+    meko.here = new Set([d.id]);
+    const elsewhere = new DeckStore(getPaths(join(dir, 'two')), meko);
+    expect((await elsewhere.entry(d.id)).meko).toEqual({ kind: 'local', host: '' });
+    meko.where = { kind: 'local', host: '127.0.0.1:7778' };
+    meko.here = null;
+    expect((await elsewhere.state(d.id)).id).toBe(d.id);
   });
 
   it('keeps a Meko Cloud draft named by its MCP host when Meko now names that Meko Cloud by its web app', async () => {

@@ -5,7 +5,6 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"github.com/google/uuid"
@@ -27,21 +26,22 @@ const (
 )
 
 // registerKnowledge adds the knowledge-base routes meko_ui calls, under
-// /datapacks/:id/knowledge-bases.
+// /datapacks/:id/knowledge-bases; Meko Cloud has them all, so one this Meko doesn't have goes there
+// (byID).
 func (a *api) registerKnowledge(g *echo.Group) {
 	kb := g.Group("/datapacks/:id/knowledge-bases")
-	kb.POST("/upload-url", a.uploadURL)
-	kb.POST("/upload-complete", a.uploadComplete)
-	kb.POST("/create", a.createKnowledgeBase)
-	kb.GET("/document-status", a.documentStatus)
-	kb.GET("/status", a.knowledgeStatus)
-	kb.GET("/documents", a.listDocuments)
-	kb.DELETE("/documents/:document", a.deleteDocument)
-	kb.GET("/summary", a.knowledgeSummary)
-	kb.GET("/pending-uploads", a.pendingUploads)
-	kb.DELETE("/pending-uploads", a.cancelUpload)
-	kb.GET("/activity-log", a.activityLog)
-	kb.POST("/download-url", a.downloadURL)
+	kb.POST("/upload-url", a.byID(a.uploadURL))
+	kb.POST("/upload-complete", a.byID(a.uploadComplete))
+	kb.POST("/create", a.byID(a.createKnowledgeBase))
+	kb.GET("/document-status", a.byID(a.documentStatus))
+	kb.GET("/status", a.byID(a.knowledgeStatus))
+	kb.GET("/documents", a.byID(a.listDocuments))
+	kb.DELETE("/documents/:document", a.byID(a.deleteDocument))
+	kb.GET("/summary", a.byID(a.knowledgeSummary))
+	kb.GET("/pending-uploads", a.byID(a.pendingUploads))
+	kb.DELETE("/pending-uploads", a.byID(a.cancelUpload))
+	kb.GET("/activity-log", a.byID(a.activityLog))
+	kb.POST("/download-url", a.byID(a.downloadURL))
 }
 
 // knowledgeError replies for the knowledge-file errors a caller can act on, as Cloud's API does.
@@ -67,16 +67,6 @@ func (a *api) uploadURL(c echo.Context) error {
 		Size        int64  `json:"size"`
 		ContentHash string `json:"content_hash"`
 		Client      string `json:"client"`
-	}
-	cloud, ok, err := a.inCloud(c)
-	if !ok {
-		return err
-	}
-	if cloud {
-		if bound, berr := bind(c, &body); !bound {
-			return berr
-		}
-		return a.toCloud(c, http.StatusOK, http.MethodPost, cloudPath(c, "/knowledge-bases/upload-url"), body)
 	}
 	dp, ok, err := a.pathDatapack(c)
 	if !ok {
@@ -134,16 +124,6 @@ func (a *api) createKnowledgeBase(c echo.Context) error {
 
 func (a *api) documentStatus(c echo.Context) error {
 	key := c.QueryParam("document_key")
-	if cloud, ok, err := a.inCloud(c); !ok || cloud {
-		if !ok {
-			return err
-		}
-		if key == "" {
-			return badRequest(c, "document_key query parameter is required")
-		}
-		return a.toCloud(c, http.StatusOK, http.MethodGet,
-			cloudPath(c, "/knowledge-bases/document-status?document_key="+url.QueryEscape(key)), nil)
-	}
 	dp, ok, err := a.pathDatapack(c)
 	if !ok {
 		return err

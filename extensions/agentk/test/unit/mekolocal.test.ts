@@ -49,6 +49,9 @@ echo "{\\"url\\":\\"http://127.0.0.1:7778/mcp\\",\\"token\\":\\"tok-$MEKO_HOME\\
     // A Meko that keeps the key says only whether it's linked, and its web app while it is.
     meko(`echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":true,"cloud":{"set":true,"linked":true,"web_url":"https://cloud.mekodata.ai","account":"0123456789abcdef"}}'`);
     expect((await probe()).cloud).toEqual({ set: true, url: '', apiKey: '', webUrl: 'https://cloud.mekodata.ai', apiUrl: '', linked: true, account: '0123456789abcdef' });
+    // One whose /api/v1 routes datapacks by id says so.
+    meko(`echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":true,"cloud":{"set":true,"linked":true,"web_url":"https://cloud.mekodata.ai","account":"0123456789abcdef","datapack_routing":true}}'`);
+    expect((await probe()).cloud).toMatchObject({ linked: true, routed: true });
     meko(`echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":true,"cloud":{"set":true,"linked":false,"web_url":"https://cloud.mekodata.ai"}}'`);
     expect((await probe()).cloud).toEqual({ set: true, url: '', apiKey: '', webUrl: '', apiUrl: '', linked: false, account: '' });
     meko(`echo '{"url":"http://127.0.0.1:7778/mcp","token":"abc","running":true,"cloud":"what"}'`);
