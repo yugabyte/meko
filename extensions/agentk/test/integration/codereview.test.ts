@@ -330,7 +330,7 @@ describe('local code review before the PR (real session host + git, fake claude 
       expect(all<{ by: string }>(env.core.db, 'SELECT by FROM code_reviews WHERE task_id = ?', s.id)[0].by).toBe('you');
     });
 
-    it.each([['a move to Review & PR', 'move'], ['Open PR', 'open-pr']])('sends it at %s between turns, once the queued Open PR was withdrawn', async (_what, how) => {
+    it('sends it at a move to Review & PR between turns, once the queued Open PR was withdrawn', async () => {
       const s = await task({ review: { strategy: 'sirius-1.0' } });
       userTurnAtFinish(s.id);
       await env.core.sessions.action(s.id, 'open-pr');
@@ -339,9 +339,31 @@ describe('local code review before the PR (real session host + git, fake claude 
       await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, "the user's turn to end");
       expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'code', codeReview: { state: 'done' } });
       expect(finished(s.id)).toBeNull();
-      if (how === 'move') await env.core.sessions.move(s.id, { stage: 'review' });
-      else await env.core.sessions.action(s.id, 'open-pr');
+      await env.core.sessions.move(s.id, { stage: 'review' });
       await sentAfterTurn(s.id, s.claudeSessionId);
+    });
+
+    it('sends nothing when the queued Open PR is withdrawn while its PR prompt is being prepared', async () => {
+      const s = await task({ review: { strategy: 'sirius-1.0' } });
+      userTurnAtFinish(s.id);
+      await env.core.sessions.action(s.id, 'open-pr');
+      await waitFor(() => env.core.sessions.row(s.id).queued_gate, (g) => g === 'open-pr', 30000, 'Open PR queued for the turn');
+      // The Cancel lands while sendPr waits on Meko for the PR's lines, after the turn's end took the queued Open PR.
+      const lc = env.core.lifecycle as unknown as { prFooter(row: unknown): Promise<string> };
+      const footer = lc.prFooter.bind(lc);
+      let cancelled = false;
+      vi.spyOn(lc, 'prFooter').mockImplementationOnce(async (row) => {
+        await env.core.sessions.action(s.id, 'cancel-queued');
+        cancelled = true;
+        return footer(row);
+      });
+      await waitFor(() => cancelled, (c) => c, 10000, 'the Cancel while the PR prompt is prepared');
+      expect(await stepsDone(s.id)).toBe('done');
+      expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'code', status: 'idle', queued: null, codeReview: { state: 'done' } });
+      expect(finished(s.id)).toBeNull();
+      expect(prompts(s.claudeSessionId).some((p) => p.includes('Open a pull request'))).toBe(false);
+      expect(events(s.id, 'queued').at(-1)).toBe('Queued Open PR withdrawn');
+      expect(events(s.id, 'review').some((e) => e.startsWith("The PR prompt didn't go"))).toBe(false);
     });
   });
 

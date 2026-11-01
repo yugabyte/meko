@@ -249,10 +249,10 @@ export class CodeReviews {
   /**
    * Open PR (or a move to Review & PR with work to push) on a task: true when a review now holds it
    * (one just started, or one already running), false when the PR prompt may go (review Off, not a
-   * task). A finished review whose PR prompt didn't go sends it now; a stopped one waiting on Retry
-   * or Open anyway answers 409 (checkNotHeld).
+   * task). A finished review whose PR prompt didn't go sends it now (unless a queued Open PR, `queued`,
+   * is withdrawn meanwhile); a stopped one waiting on Retry or Open anyway answers 409 (checkNotHeld).
    */
-  async openPr(task: SessionRow, opts: { instructions: string; by: 'you' | 'auto'; lead?: string }): Promise<boolean> {
+  async openPr(task: SessionRow, opts: { instructions: string; by: 'you' | 'auto'; lead?: string; queued?: boolean }): Promise<boolean> {
     if (task.kind === 'code-review' || task.kind === 'review-pr') return false;
     const last = this.latest(task.id);
     if (last && RUNNING.includes(last.state)) {
@@ -273,7 +273,7 @@ export class CodeReviews {
       if (opts.instructions) this.set(last.id, { instructions: opts.instructions });
       if (opts.lead) this.set(last.id, { lead: opts.lead });
       if (opts.by === 'you' && last.by !== 'you') this.set(last.id, { by: 'you' });
-      await this.finish(last.id);
+      await this.finish(last.id, opts.queued);
       return true;
     }
     const settings = this.settingsFor(task);
@@ -865,8 +865,11 @@ export class CodeReviews {
     await this.beginRound(id);
   }
 
-  /** The review is done: the PR prompt goes, with the line and the last round's findings when it had some. */
-  private async finish(id: string): Promise<void> {
+  /**
+   * The review is done: the PR prompt goes, with the line and the last round's findings when it had
+   * some. `queued`: for a queued Open PR, which a Cancel or Run to merge stopping still withdraws.
+   */
+  private async finish(id: string, queued = false): Promise<void> {
     const r = this.mustReview(id);
     const task = this.core.sessions.row(r.task_id);
     const counts = json<SeverityCounts>(r.counts_json, noCounts());
@@ -878,7 +881,7 @@ export class CodeReviews {
     this.core.changed();
     const sent = await this.core.lifecycle.sendReviewedPr(task, {
       line: meAkReviewLine(counts), findings, outcomeHow: this.outcomeHow(task), strategy: strategyName(r.strategy), instructions: r.instructions ?? '', by: r.by === 'auto' ? 'auto' : 'you',
-      moved: r.lead, description: this.descriptionFile(task),
+      moved: r.lead, description: this.descriptionFile(task), queued,
     });
     if (sent) this.set(id, { finished_at: Date.now(), lead: null });
   }

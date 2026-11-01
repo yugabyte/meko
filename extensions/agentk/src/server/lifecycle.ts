@@ -765,7 +765,7 @@ export class Lifecycle {
       const instructions = row.queued_instructions;
       try {
         // A local review takes the queued Open PR, and sends the PR prompt itself when it's done.
-        if (await this.core.reviews.openPr(row, { instructions: instructions ?? '', by: row.auto_run ? 'auto' : 'you' })) {
+        if (await this.core.reviews.openPr(row, { instructions: instructions ?? '', by: row.auto_run ? 'auto' : 'you', queued: true })) {
           // Unless a finished review's PR prompt couldn't go because a turn is running again: it stays queued for that turn's end (sendReviewedPr).
           if (!(this.core.reviews.prUnsent(id) && this.waitsForTurn(this.sessions.row(id)))) this.setQueued(id, null);
           return;
@@ -962,20 +962,23 @@ export class Lifecycle {
    * stopped review), after a move's `moved` line still waiting on the review (the ask for the PR description
    * normally took it), and pointing at the PR description file the task wrote (`description`).
    * False when it couldn't go: a finished review's goes when the task's turn ends, when it's mid-turn
-   * (a queued Open PR), else the user's Open PR sends it later.
+   * (a queued Open PR), else the user's Open PR sends it later. `queued`: sent for a queued Open PR,
+   * which a withdrawal while the prompt is prepared (Cancel, Run to merge stopping) stops, unsaid.
    */
-  async sendReviewedPr(task: SessionRow, o: { line: string | null; findings: string; outcomeHow: string; strategy: string; instructions: string; by: 'you' | 'auto'; moved?: string | null; description?: string | null }): Promise<boolean> {
+  async sendReviewedPr(task: SessionRow, o: { line: string | null; findings: string; outcomeHow: string; strategy: string; instructions: string; by: 'you' | 'auto'; moved?: string | null; description?: string | null; queued?: boolean }): Promise<boolean> {
     const row = this.sessions.row(task.id);
     if (row.stage !== 'code' || row.desired !== 'running') return false;
     const findings = o.findings ? this.sessions.prompt(row, 'code-review-findings', { strategy: o.strategy, findings: o.findings, outcomeHow: o.outcomeHow }) : '';
     const lead = [o.moved, findings].filter(Boolean).join('\n\n') || undefined;
     try {
-      await this.serial(row.id, () => this.sendPr(row, this.prCheck(row.id, false), { lead, instructions: o.instructions, by: o.by, reviewLine: o.line, description: o.description }));
+      await this.serial(row.id, () => this.sendPr(row, this.prCheck(row.id, !!o.queued), { lead, instructions: o.instructions, by: o.by, reviewLine: o.line, description: o.description }));
       // Claude exited while it was being typed (prLost): it didn't go, and goes again once Claude is back.
       if (this.lostPrs.has(row.id)) return false;
       this.core.reviews.markSent(row.id);
       return true;
     } catch (e) {
+      // Withdrawn while sendPr waited: whatever withdrew it said so in the activity log, and Open PR sends it.
+      if (e instanceof QueueWithdrawn) return false;
       // A prompt of the user's (or AgentK's) went while the review ran: the PR prompt goes when the turn
       // ends, as an Open PR queued then would. Open anyway's (no line) is pressed between turns, and Run
       // to merge's goes by itself only while Run to merge is on (stopping it couldn't drop the gate after).
@@ -1397,7 +1400,9 @@ export class Lifecycle {
   private serial<T>(id: string, fn: () => Promise<T>): Promise<T> {
     // Called from a running step of the same session's (a queued Open PR's step sending a local
     // review's PR prompt, which serializes itself): it runs now, as part of that step. Queued, it
-    // would wait for the step that waits for it, and every later step behind them, for good.
+    // would wait for the step that waits for it, and every later step behind them, for good. That
+    // can't tell a call the step waits for from work it started without waiting: such work that
+    // reaches serial while the step still runs runs now too, alongside it: a step mustn't leave any running.
     const outer = this.steps.getStore() ?? [];
     if (outer.some((s) => s.id === id && s.running)) return fn();
     const step = { id, running: true };
