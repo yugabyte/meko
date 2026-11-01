@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -200,4 +201,22 @@ func TestExportDatapack(t *testing.T) {
 		t.Errorf("call log %s", files["call_log.jsonl"])
 	}
 	wantErr(t, e, "GET", "/datapacks/00000000-0000-0000-0000-000000000000/export", nil, 404, "NOT_FOUND")
+
+	// By name too (meko-cli's way, which never asks Meko Cloud), escaped as a path segment.
+	if _, err := e.Service.CreateDatapack(context.Background(), "team/notes 50%", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"default", url.PathEscape("team/notes 50%")} {
+		req, _ := http.NewRequest("GET", e.URL+"/api/v1/datapacks/"+name+"/export", nil)
+		req.Header.Set("Authorization", "Bearer "+testenv.AdminToken)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Errorf("export by name %s: %d", name, resp.StatusCode)
+		}
+	}
+	wantErr(t, e, "GET", "/datapacks/no-such-name/export", nil, 404, "NOT_FOUND")
 }

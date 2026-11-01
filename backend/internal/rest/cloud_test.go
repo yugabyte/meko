@@ -33,6 +33,8 @@ type fakeCloud struct {
 	mu    sync.Mutex
 	calls []string
 	args  map[string]map[string]any
+	// twin, if set, is a datapack id Meko Cloud lists too, as "cloud-twin".
+	twin string
 }
 
 func newFakeCloud(t *testing.T) *fakeCloud {
@@ -87,8 +89,12 @@ func newFakeCloud(t *testing.T) *fakeCloud {
 		}
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/v1/datapacks":
+			twin := ""
+			if f.twin != "" {
+				twin = `,{"datapack_id":"` + f.twin + `","datapack_name":"cloud-twin","grant":"owner"}`
+			}
 			reply(200, `{"data":[{"datapack_id":"`+cloudDP+`","datapack_name":"team-notes","grant":"owner",`+
-				`"created_at":"2026-10-01T00:00:00Z","datapack_ysql_connection_string":"postgresql://x"}]}`)
+				`"created_at":"2026-10-01T00:00:00Z","datapack_ysql_connection_string":"postgresql://x"}`+twin+`]}`)
 		case "POST /api/v1/datapacks":
 			reply(201, `{"data":{"datapack_id":"`+cloudDP+`","name":"team-notes","agent_id":"meko_agent",`+
 				`"mcp_server":{"url":"","api_key":"secret"}}}`)
@@ -139,8 +145,8 @@ func doAs(t *testing.T, e *testenv.Env, token, method, path string, body any) re
 }
 
 // The routes that take a datapack serve this Meko's and send one it doesn't have to the linked Meko
-// Cloud, with the link's key, for the owner or the admin token only; GET /datapacks?location= lists
-// Meko Cloud's for any credential.
+// Cloud, with the link's key, for the owner or the admin token only; GET /datapacks lists both sides
+// as one list for any credential. No route takes or says a location: one sent is ignored.
 func TestCloudDatapacks(t *testing.T) {
 	cloud := newFakeCloud(t)
 	dir := t.TempDir()
@@ -154,26 +160,21 @@ func TestCloudDatapacks(t *testing.T) {
 		return doAs(t, e, testenv.AdminToken, method, path, body)
 	}
 
-	// Unlinked: no Cloud listing, and a datapack this Meko doesn't have is a 404 as before.
-	wantErr(t, e, "GET", "/datapacks?location=cloud", nil, 409, "CLOUD_NOT_LINKED")
-	wantErr(t, e, "GET", "/datapacks?location=elsewhere", nil, 400, "VALIDATION_ERROR")
-	all := arr(okData(t, e, "GET", "/datapacks", nil, 200))
-	if len(all) != 1 || obj(all[0])["location"] != "local" || obj(all[0])["datapack_id"] != e.DatapackID {
-		t.Fatalf("the default listing (all), unlinked: %v", all)
+	// Unlinked: this Meko's datapacks alone, each opened by its page here, and a datapack this Meko
+	// doesn't have is a 404 as before. A location is ignored.
+	all := arr(okData(t, e, "GET", "/datapacks?location=cloud", nil, 200))
+	if len(all) != 1 || obj(all[0])["datapack_id"] != e.DatapackID ||
+		obj(all[0])["web_url"] != "/datapacks/"+e.DatapackID || strings.Contains(toJSON(all), "location") {
+		t.Fatalf("the listing, unlinked: %v", all)
 	}
-	if r := admin("DELETE", "/datapacks/"+cloudDP, nil); r.Status != 404 || r.Error.Code != "NOT_FOUND" {
+	if r := admin("DELETE", "/datapacks/"+cloudDP+"?location=cloud", nil); r.Status != 404 || r.Error.Code != "NOT_FOUND" {
 		t.Fatalf("delete unlinked: %+v", r)
 	}
-	if r := admin("POST", "/datapacks", map[string]any{"name": "x", "location": "cloud"}); r.Status != 409 {
-		t.Fatalf("create in Cloud unlinked: %+v", r)
-	}
-	// Unlinked is a 409 whatever the credential.
-	wantErr(t, e, "POST", "/datapacks", map[string]any{"name": "x", "location": "cloud"}, 409, "CLOUD_NOT_LINKED")
-	wantErr(t, e, "DELETE", "/datapacks/"+cloudDP+"?location=cloud", nil, 409, "CLOUD_NOT_LINKED")
 	wantErr(t, e, "GET", "/cloud/datapacks", nil, 409, "CLOUD_NOT_LINKED")
-	made := obj(okData(t, e, "POST", "/datapacks", map[string]any{"name": "made-here"}, 201))
-	if id, _ := made["datapack_id"].(string); !dpExists(e, id) {
-		t.Fatalf("a create with no location, unlinked, is this Meko's: %v", made)
+	made := obj(okData(t, e, "POST", "/datapacks", map[string]any{"name": "made-here", "location": "cloud"}, 201))
+	if id, _ := made["datapack_id"].(string); !dpExists(e, id) || made["location"] != nil ||
+		made["web_url"] != "/datapacks/"+id {
+		t.Fatalf("a create, unlinked, is this Meko's: %v", made)
 	}
 
 	// This Meko's datapack: search and memories answer what the tools do.
@@ -197,53 +198,46 @@ func TestCloudDatapacks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Listing takes any credential, and copies only the fields Meko shows.
-	rows := arr(okData(t, e, "GET", "/datapacks?location=cloud", nil, 200))
-	if len(rows) != 1 || obj(rows[0])["location"] != "cloud" || obj(rows[0])["datapack_name"] != "team-notes" ||
-		strings.Contains(toJSON(rows), "postgresql") {
-		t.Fatalf("location=cloud: %v", rows)
+	// Listing takes any credential, copies only the fields Meko shows, and sorts both sides by name,
+	// one row per id: Meko Cloud's copy of this Meko's datapack is left out. Meko Cloud's rows open in
+	// its web app, unknown for this link.
+	cloud.twin = e.DatapackID
+	here, _ := e.Service.Datapack(context.Background(), e.DatapackID)
+	all = arr(okData(t, e, "GET", "/datapacks?location=local", nil, 200))
+	byID := map[string]map[string]any{}
+	for i, row := range all {
+		byID[str(obj(row)["datapack_id"])] = obj(row)
+		if i > 0 && strings.ToLower(str(obj(all[i-1])["datapack_name"])) > strings.ToLower(str(obj(row)["datapack_name"])) {
+			t.Errorf("not sorted by name: %v", all)
+		}
 	}
-	// This Meko's two (the default and made-here), then Meko Cloud's one.
-	if all = arr(okData(t, e, "GET", "/datapacks?location=all", nil, 200)); len(all) != 3 ||
-		obj(all[1])["location"] != "local" || obj(all[2])["location"] != "cloud" {
-		t.Fatalf("location=all: %v", all)
+	if len(all) != 3 || byID[e.DatapackID]["datapack_name"] != here.Name ||
+		byID[e.DatapackID]["web_url"] != "/datapacks/"+e.DatapackID || byID[cloudDP]["datapack_name"] != "team-notes" ||
+		byID[cloudDP]["web_url"] != nil || strings.Contains(toJSON(all), "postgresql") ||
+		strings.Contains(toJSON(all), "location") {
+		t.Fatalf("the listing, linked: %v", all)
 	}
-	if all = arr(okData(t, e, "GET", "/datapacks", nil, 200)); len(all) != 3 || obj(all[2])["location"] != "cloud" {
-		t.Fatalf("the default listing is both: %v", all)
-	}
-	if local := arr(okData(t, e, "GET", "/datapacks?location=local", nil, 200)); len(local) != 2 ||
-		obj(local[0])["location"] != nil {
-		t.Fatalf("location=local is this Meko's, as before: %v", local)
-	}
+	cloud.twin = ""
 
-	// Acting on Meko Cloud takes the admin token (or the owner on the web listener).
-	wantErr(t, e, "POST", "/datapacks", map[string]any{"name": "x", "location": "cloud"}, 403, "FORBIDDEN")
-	// Linked, a create with no location is Meko Cloud's, so the client token can't make one.
+	// Linked, a create is Meko Cloud's, whatever location it names, so the client token can't make one.
 	wantErr(t, e, "POST", "/datapacks", map[string]any{"name": "x"}, 403, "FORBIDDEN")
+	wantErr(t, e, "POST", "/datapacks", map[string]any{"name": "kept-here", "location": "local"}, 403, "FORBIDDEN")
 	// /api/v1/cloud passes a client token's request on to Meko Cloud's REST API, with the key.
-	rows = arr(okData(t, e, "GET", "/cloud/datapacks?q=team", nil, 200))
+	rows := arr(okData(t, e, "GET", "/cloud/datapacks?q=team", nil, 200))
 	if len(rows) != 1 || obj(rows[0])["datapack_name"] != "team-notes" ||
 		!strings.HasPrefix(cloud.last(), "GET /api/v1/datapacks?q=team") {
 		t.Fatalf("/cloud/datapacks: %v (Cloud got %q)", rows, cloud.last())
 	}
 
-	// Linked, no datapack is made here, whatever the credential.
-	wantErr(t, e, "POST", "/datapacks", map[string]any{"name": "kept-here", "location": "local"}, 409, "CLOUD_LINKED")
-	if r := admin("POST", "/datapacks", map[string]any{"name": "kept-here", "location": "local"}); r.Status != 409 ||
-		r.Error.Code != "CLOUD_LINKED" {
-		t.Fatalf("location local while linked, admin: %+v", r)
-	}
-	wantErr(t, e, "DELETE", "/datapacks/"+cloudDP+"?location=cloud", nil, 403, "FORBIDDEN")
-	wantErr(t, e, "POST", "/datapacks/"+cloudDP+"/search?location=cloud", map[string]any{"query": "x"}, 403,
-		"FORBIDDEN")
 	// A client token's id this Meko doesn't have is this Meko's 404, linked or not.
-	wantErr(t, e, "DELETE", "/datapacks/"+cloudDP, nil, 404, "NOT_FOUND")
+	wantErr(t, e, "DELETE", "/datapacks/"+cloudDP+"?location=cloud", nil, 404, "NOT_FOUND")
 	wantErr(t, e, "POST", "/datapacks/"+missingCloud+"/memories", map[string]any{"text": "x"}, 404, "NOT_FOUND")
 	wantErr(t, e, "GET", "/datapacks/"+cloudDP+"/knowledge-bases/document-status?document_key=k1", nil, 404,
 		"NOT_FOUND")
 
-	r := admin("POST", "/datapacks", map[string]any{"name": "team-notes"})
+	r := admin("POST", "/datapacks", map[string]any{"name": "team-notes", "location": "local"})
 	if r.Status != 201 || obj(r.Data)["datapack_id"] != cloudDP || strings.Contains(toJSON(r.Data), "secret") ||
+		obj(r.Data)["web_url"] != nil || !strings.Contains(toJSON(r.Data), `"web_url":null`) ||
 		!strings.HasPrefix(cloud.last(), `POST /api/v1/datapacks {"name":"team-notes"}`) {
 		t.Fatalf("create in Cloud: %+v (Cloud got %q)", r, cloud.last())
 	}
@@ -270,21 +264,20 @@ func TestCloudDatapacks(t *testing.T) {
 	if r.Status != 200 || !strings.Contains(toJSON(r.Data), "m-1") || cloud.args["memory_add"]["agent_id"] != "a" {
 		t.Fatalf("memories in Cloud: %+v %v", r, cloud.args["memory_add"])
 	}
-	// location says which side, even for an id this Meko has (an export keeps ids).
-	if r = admin("DELETE", "/datapacks/"+e.DatapackID+"?location=cloud", nil); r.Status != 404 ||
-		!dpExists(e, e.DatapackID) || !strings.HasPrefix(cloud.last(), "DELETE /api/v1/datapacks/"+e.DatapackID+" ") {
-		t.Fatalf("location=cloud for an id this Meko has: %+v (Cloud got %q)", r, cloud.last())
+	// An id this Meko has is served here, even when Meko Cloud has it too (an export keeps ids), and
+	// whatever location the request names.
+	r = admin("POST", "/datapacks/"+e.DatapackID+"/search?location=cloud",
+		map[string]any{"query": "the nightly build runs at two", "force_source": "memory"})
+	if r.Status != 200 || !strings.Contains(toJSON(r.Data), "the nightly build runs at two") ||
+		cloud.args["context_search"]["datapack_id"] == e.DatapackID {
+		t.Fatalf("search of this Meko's datapack while linked: %+v", r)
 	}
-	if r = admin("DELETE", "/datapacks/"+cloudDP+"?location=local", nil); r.Status != 404 {
-		t.Fatalf("location=local for Cloud's id: %+v", r)
-	}
-	wantErr(t, e, "DELETE", "/datapacks/"+cloudDP+"?location=elsewhere", nil, 400, "VALIDATION_ERROR")
 	// A datapack neither side has is a 404 from search and memories too.
 	if r = admin("POST", "/datapacks/"+missingCloud+"/search", map[string]any{"query": "x"}); r.Status != 404 ||
 		r.Error.Code != "NOT_FOUND" {
 		t.Fatalf("search of a datapack Cloud hasn't: %+v", r)
 	}
-	if r = admin("DELETE", "/datapacks/"+cloudDP, nil); r.Status != 200 {
+	if r = admin("DELETE", "/datapacks/"+cloudDP+"?location=local", nil); r.Status != 200 {
 		t.Fatalf("delete in Cloud: %+v", r)
 	}
 
@@ -295,7 +288,8 @@ func TestCloudDatapacks(t *testing.T) {
 	if _, err := link.Link(context.Background(), cloudlink.Update{Key: ptr("mko_tkn_stale_0123456789abcd")}); err != nil {
 		t.Fatal(err)
 	}
-	wantErr(t, e, "GET", "/datapacks?location=cloud", nil, 502, "CLOUD_KEY_REFUSED")
+	// The listing fails with Meko Cloud: there's no whole list without it.
+	wantErr(t, e, "GET", "/datapacks", nil, 502, "CLOUD_KEY_REFUSED")
 	if r = admin("POST", "/datapacks/"+cloudDP+"/search", map[string]any{"query": "x"}); r.Status != 502 ||
 		r.Error.Code != "CLOUD_KEY_REFUSED" || strings.Contains(r.Error.Message, "mko_tkn") {
 		t.Fatalf("search with a refused key: %+v", r)

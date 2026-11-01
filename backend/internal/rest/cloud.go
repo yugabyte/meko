@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -19,10 +20,10 @@ import (
 )
 
 // The linked Meko Cloud on this Meko's own routes (docs/cloud.md): GET /datapacks lists its
-// datapacks after this Meko's (location=all, the default; local or cloud lists one side), POST
-// /datapacks with location "cloud" makes one there, and the routes that take a datapack in the path
-// (delete, upload-url, document-status, search, memories) send a datapack this Meko doesn't have to
-// it. The server calls Meko Cloud with the link's key, which never leaves it.
+// datapacks with this Meko's, POST /datapacks makes one there, and the routes that take a datapack
+// in the path (delete, upload-url, document-status, search, memories) send a datapack this Meko
+// doesn't have to it. No route takes or says a location: the datapack's id decides. The server calls
+// Meko Cloud with the link's key, which never leaves it.
 
 // owner says whether a request may act on the linked Meko Cloud: the admin token (meko-cli) or the
 // web listener's browsers (local or remote access). An agent's client token mayn't: the key acts on
@@ -35,25 +36,12 @@ func (a *api) owner(c echo.Context) bool {
 	return false
 }
 
-// inCloud says whether the datapack in the path is the linked Meko Cloud's. ?location= says so:
-// "cloud" is Meko Cloud's (a 409 while unlinked), "local" this Meko's. Without it, an id this Meko
-// doesn't have is Meko Cloud's for the owner or the admin token while it's linked, and this Meko's
-// otherwise: a client token gets this Meko's 404 for a missing id, whether or not Meko Cloud is
-// linked. Anything this Meko's is its route's to answer (a 400 or 404 too). ok is false when the
-// reply has been written.
+// inCloud says whether the datapack in the path is the linked Meko Cloud's: an id this Meko doesn't
+// have is, for the owner or the admin token while it's linked. A datapack this Meko has is this
+// Meko's, even when Meko Cloud has the same id, and a client token gets this Meko's 404 for a missing
+// id, whether or not Meko Cloud is linked. Anything this Meko's is its route's to answer (a 400 or
+// 404 too). ok is false when the reply has been written.
 func (a *api) inCloud(c echo.Context) (cloud, ok bool, err error) {
-	switch c.QueryParam("location") {
-	case "local":
-		return false, true, nil
-	case "cloud":
-		if linked, lerr := a.linked(); lerr != nil || !linked {
-			return false, false, notLinkedOr(c, lerr)
-		}
-		return true, true, nil
-	case "":
-	default:
-		return false, false, badRequest(c, "location must be local or cloud")
-	}
 	if a.Cloud == nil || !a.owner(c) {
 		return false, true, nil
 	}
@@ -97,9 +85,6 @@ func (a *api) toCloud(c echo.Context, status int, method, path string, body any)
 	return c.JSON(status, envelope.Response{Data: data})
 }
 
-// codeCloudLinked is a datapack create for this Meko while Meko Cloud is linked: new datapacks go there.
-const codeCloudLinked = "CLOUD_LINKED"
-
 func forbiddenCloud(c echo.Context) error {
 	return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN",
 		"These routes act on Meko Cloud's datapacks for the owner or the admin token (meko-cli), not a client "+
@@ -126,53 +111,42 @@ func cloudPath(c echo.Context, rest string) string {
 	return "/datapacks/" + url.PathEscape(strings.TrimSpace(c.Param("id"))) + rest
 }
 
-// cloudRow is a Meko Cloud datapack as GET /datapacks?location= lists it.
-type cloudRow struct {
-	cloudlink.Datapack
-	Location string `json:"location"`
-}
-
-// listLocation answers GET /datapacks?location=cloud (the linked Meko Cloud's datapacks, newest
-// first; a 409 while unlinked) and location=all, the default (this Meko's, then Meko Cloud's while
-// linked, each with its location). Meko Cloud's failures are 502s with their code.
-func (a *api) listLocation(c echo.Context, location string, local []datapackRow) error {
-	if a.Cloud == nil {
-		if location == "all" {
-			return envelope.OK(c, localRows(local))
+// withCloud replies to GET /datapacks with this Meko's rows and, while Meko Cloud is linked, its own,
+// leaving out one whose id this Meko has: it's served here. All are sorted by name. Meko Cloud's
+// failures are 502s with their code, as there's no whole list without it.
+func (a *api) withCloud(c echo.Context, local []datapackRow) error {
+	type named struct {
+		name string
+		row  any
+	}
+	rows := make([]named, 0, len(local))
+	ids := map[string]bool{}
+	for _, r := range local {
+		rows = append(rows, named{r.DatapackName, r})
+		ids[r.DatapackID] = true
+	}
+	if a.Cloud != nil {
+		list, err := a.Cloud.Datapacks(ctx(c))
+		if err != nil {
+			return cloudError(c, err)
 		}
-		return envelope.Fail(c, http.StatusConflict, cloudlink.CodeNotLinked, "This Meko has no Meko Cloud link.")
+		for _, d := range list.Datapacks {
+			if !ids[d.DatapackID] {
+				rows = append(rows, named{d.DatapackName, d})
+			}
+		}
 	}
-	list, err := a.Cloud.Datapacks(ctx(c))
-	if err != nil {
-		return cloudError(c, err)
-	}
-	if !list.Linked && location == "cloud" {
-		return envelope.Fail(c, http.StatusConflict, cloudlink.CodeNotLinked,
-			"This Meko isn't linked to Meko Cloud. Link it in Settings › Meko Cloud, or with meko cloud_link.")
-	}
-	out := []any{}
-	if location == "all" {
-		out = localRows(local)
-	}
-	for _, d := range list.Datapacks {
-		out = append(out, cloudRow{Datapack: d, Location: "cloud"})
+	sort.SliceStable(rows, func(i, j int) bool { return strings.ToLower(rows[i].name) < strings.ToLower(rows[j].name) })
+	out := make([]any, len(rows))
+	for i, r := range rows {
+		out[i] = r.row
 	}
 	return envelope.OK(c, out)
 }
 
-func localRows(rows []datapackRow) []any {
-	out := make([]any, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, struct {
-			datapackRow
-			Location string `json:"location"`
-		}{r, "local"})
-	}
-	return out
-}
-
 // createInCloud makes a datapack in the linked Meko Cloud, replying as this Meko's create does: only
-// the id, name and agent id are copied from Meko Cloud's reply.
+// the id, name and agent id are copied from Meko Cloud's reply, with web_url, the datapack in the
+// link's web app (null when that isn't known).
 func (a *api) createInCloud(c echo.Context, name, description string) error {
 	if !a.owner(c) {
 		return forbiddenCloud(c)
@@ -194,8 +168,12 @@ func (a *api) createInCloud(c echo.Context, name, description string) error {
 		return envelope.Fail(c, http.StatusBadGateway, cloudlink.CodeCallFailed,
 			"Meko Cloud's reply to the create isn't a datapack.")
 	}
-	return created(c, map[string]any{"datapack_id": d.ID, "agent_id": d.AgentID, "name": d.Name,
-		"location": "cloud"})
+	var web *string
+	if st, serr := a.Cloud.Status(); serr == nil && st.EffectiveWebURL != nil {
+		u := *st.EffectiveWebURL + "/datapacks/" + d.ID
+		web = &u
+	}
+	return created(c, map[string]any{"datapack_id": d.ID, "agent_id": d.AgentID, "name": d.Name, "web_url": web})
 }
 
 // restConversation is the conversation id the search and memories routes pass when the caller gives
@@ -316,19 +294,6 @@ func (a *api) addMemory(c echo.Context) error {
 	}
 	return a.callTool(c, "memory_add", map[string]any{"text": strings.TrimSpace(body.Text),
 		"agent_id": body.AgentID, "conversation_id": body.ConversationID})
-}
-
-// defaultLocation is where a listing that names no location goes: def, unless the request comes
-// from a browser (local or remote access). The web UI always names one, so a browser that doesn't is
-// a tab still running a bundle from before Meko Cloud's datapacks were on these routes, which lists
-// and opens only this Meko's: it gets this Meko's. A create isn't asked: while Meko Cloud is linked,
-// every create goes there (createDatapack).
-func (a *api) defaultLocation(c echo.Context, def string) string {
-	switch a.Credential(c) {
-	case "remote", "local":
-		return "local"
-	}
-	return def
 }
 
 // cloudPrefix is the routes that pass requests to the linked Meko Cloud's REST API as they came.

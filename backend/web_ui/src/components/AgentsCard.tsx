@@ -56,7 +56,7 @@ export function AgentsCard() {
         <h3 className="font-medium">Agents</h3>
         {data && (
           <p className="text-sm text-muted-foreground">
-            Agents connect to Meko on this computer. While Meko Cloud is linked, it sends their calls there.
+            Agents connect to Meko on this computer, which reaches Meko Cloud for them while it's linked.
           </p>
         )}
       </div>

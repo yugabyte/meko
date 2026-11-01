@@ -14,11 +14,12 @@ import (
 
 	"github.com/yugabyte/meko/backend/internal/cloudlink"
 	"github.com/yugabyte/meko/backend/internal/knowledge"
+	"github.com/yugabyte/meko/backend/internal/memory"
 	"github.com/yugabyte/meko/backend/internal/store"
 )
 
-// Cloud is the linked Meko Cloud as /mcp uses it (cloudlink.Service): while it's linked, every call
-// goes there, and this Meko's own datapacks aren't served.
+// Cloud is the linked Meko Cloud as /mcp uses it (cloudlink.Service): while it's linked, a call that
+// names one of this Meko's datapacks runs here, and every other call goes there.
 type Cloud interface {
 	IsLinked() (bool, error)
 	// CloudTools is what Meko Cloud offers, nil when it couldn't be read.
@@ -30,8 +31,7 @@ type Cloud interface {
 // cloudInstructions is what initialize says while Meko Cloud is linked, until its own instructions
 // are read.
 const cloudInstructions = `Meko is your memory: facts, conversations and files that last across sessions and are
-shared by every agent that uses the same datapack. This server is Meko on this machine, linked to Meko Cloud:
-every call works on Meko Cloud's datapacks.
+shared by every agent that uses the same datapack. This server is Meko on this machine, linked to Meko Cloud.
 
 Start with context_search. Save a fact with memory_add. To add a file on this machine, pass its path to
 knowledgebase_upload_file. Pass the same conversation_id to every call of a session. datapack_list shows the
@@ -62,9 +62,10 @@ func (o Options) cloudServerFor(ctx context.Context, cs *cloudServers, cred stri
 	return s
 }
 
-// newCloudServer is a server with Meko Cloud's tools, each sent on to it as it came, and this Meko's
-// knowledgebase_upload_file, which reads a file on this machine. Without Meko Cloud's list, it has
-// the tools this Meko shares with Meko Cloud.
+// newCloudServer is a server with Meko Cloud's tools and this Meko's knowledgebase_upload_file, which
+// reads a file on this machine. A call that names a datapack this Meko has runs here, with this
+// Meko's tool of that name; any other is sent on to Meko Cloud as it came (routed). Without Meko
+// Cloud's list, it has the tools this Meko shares with Meko Cloud.
 func (o Options) newCloudServer(t *cloudlink.Tools, cred string) *sdk.Server {
 	instr := cloudInstructions
 	var tools []*sdk.Tool
@@ -80,16 +81,83 @@ func (o Options) newCloudServer(t *cloudlink.Tools, cred string) *sdk.Server {
 			}
 		}
 	}
+	local := map[string]*tool{}
+	for _, lt := range allTools() {
+		local[lt.name] = lt
+	}
 	s := sdk.NewServer(&sdk.Implementation{Name: "Meko", Version: o.Version}, &sdk.ServerOptions{Instructions: instr})
 	for _, ct := range tools {
 		// A path is this machine's: Meko Cloud's tool of that name, if it had one, would read its own.
 		if ct == nil || ct.InputSchema == nil || ct.Name == uploadFileTool.name {
 			continue
 		}
-		addTool(s, ct, o.forwarder(ct.Name, cred), o)
+		addTool(s, ct, o.routed(ct.Name, local[ct.Name], cred), o)
 	}
-	addTool(s, uploadFileTool.sdkTool(), o.cloudUploadFile(cred), o)
+	addTool(s, uploadFileTool.sdkTool(), o.byDatapack(uploadFileTool, cred, o.cloudUploadFile(cred)), o)
 	return s
+}
+
+// routed is the handler for Meko Cloud's tool name while linked. datapack_list and datapack_search
+// add this Meko's datapacks to Meko Cloud's reply (mergeList, mergeSearch). A tool this Meko has that
+// works in one datapack runs here when the call names one of this Meko's (byDatapack). Anything else
+// (datapack_create, a blank datapack_id, a tool only Meko Cloud has) goes to Meko Cloud.
+func (o Options) routed(name string, lt *tool, cred string) sdk.ToolHandler {
+	switch {
+	case lt == nil || name == "datapack_create":
+		return o.forwarder(name, cred)
+	case name == "datapack_list":
+		return o.forwardAnd(name, lt.failCode, cred, o.mergeList)
+	case name == "datapack_search":
+		return o.forwardAnd(name, lt.failCode, cred, o.mergeSearch)
+	}
+	for _, p := range lt.params {
+		if p.name == "datapack_id" {
+			return o.byDatapack(lt, cred, o.forwarder(name, cred))
+		}
+	}
+	return o.forwarder(name, cred)
+}
+
+// byDatapack runs t here when the call's datapack_id is one this Meko has (servedHere), and hands it
+// to elsewhere otherwise. When that can't be told, the call fails here: it's never sent to Meko Cloud
+// on a guess.
+func (o Options) byDatapack(t *tool, cred string, elsewhere sdk.ToolHandler) sdk.ToolHandler {
+	here := o.handler(t, cred)
+	return func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+		start := time.Now()
+		ok, err := o.servedHere(ctx, req.Params.Arguments)
+		switch {
+		case err != nil:
+			o.Log.Error("can't tell whether this Meko has a datapack", "tool", t.name, "error", err)
+			rec := forwardedCall(start, t.name, cred, req.Params.Arguments)
+			rec.Location, rec.ErrorCode = "", t.failCode
+			rec.Ms = time.Since(start).Milliseconds()
+			o.Service.RecordCall(ctx, rec)
+			return textResult(fail(t.failCode, genericDetail)), nil
+		case ok:
+			return here(ctx, req)
+		}
+		return elsewhere(ctx, req)
+	}
+}
+
+// servedHere says whether a call's datapack_id names a datapack this Meko serves while Meko Cloud is
+// linked: one its store has. An id on both sides is this Meko's until it's synced. Arguments that
+// don't name one (blank, or not an object) are Meko Cloud's to answer.
+func (o Options) servedHere(ctx context.Context, raw json.RawMessage) (bool, error) {
+	a, err := parseArgs(raw)
+	if err != nil {
+		return false, nil
+	}
+	id, err := a.str("datapack_id")
+	if id = strings.TrimSpace(id); err != nil || id == "" {
+		return false, nil
+	}
+	_, err = o.Service.Datapack(ctx, id)
+	if errors.Is(err, memory.ErrNoDatapack) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // addTool adds a tool, skipping (and logging) one whose schema the SDK refuses: Meko Cloud's list
@@ -120,6 +188,15 @@ var uploadFileTool = func() *tool {
 // forwarder sends a call on to Meko Cloud as it came and answers with its result, recording it in
 // the call log as Meko Cloud's.
 func (o Options) forwarder(name, cred string) sdk.ToolHandler {
+	return o.forwardAnd(name, "", cred, nil)
+}
+
+// merger adds to a reply Meko Cloud answered without an error, given the call's arguments.
+type merger func(ctx context.Context, a args, reply string) (any, error)
+
+// forwardAnd is forwarder, with Meko Cloud's reply, when it isn't an error, passed through merge.
+// When merge fails, the call fails with failCode.
+func (o Options) forwardAnd(name, failCode, cred string, merge merger) sdk.ToolHandler {
 	return func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 		start := time.Now()
 		rec := forwardedCall(start, name, cred, req.Params.Arguments)
@@ -129,10 +206,32 @@ func (o Options) forwarder(name, cred string) sdk.ToolHandler {
 		} else {
 			markResult(&rec, res)
 		}
+		if text, ok := resultText(res); ok && rec.OK && merge != nil {
+			a, _ := parseArgs(req.Params.Arguments) // Meko Cloud took them
+			if merged, merr := merge(ctx, a, text); merr != nil {
+				o.Log.Error("couldn't add this Meko's datapacks", "tool", name, "error", merr)
+				rec.OK, rec.ErrorCode = false, failCode
+				res = textResult(fail(failCode, genericDetail))
+			} else if merged != nil {
+				res = textResult(merged)
+			}
+		}
 		rec.Ms = time.Since(start).Milliseconds()
 		o.Service.RecordCall(ctx, rec)
 		return res, nil
 	}
+}
+
+// resultText is a result's text, unless it failed.
+func resultText(res *sdk.CallToolResult) (string, bool) {
+	if res == nil || res.IsError || len(res.Content) == 0 {
+		return "", false
+	}
+	tc, ok := res.Content[0].(*sdk.TextContent)
+	if !ok {
+		return "", false
+	}
+	return tc.Text, true
 }
 
 // forwardedCall is a call log row for a call sent on to Meko Cloud, with the ids its arguments name.

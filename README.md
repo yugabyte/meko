@@ -83,8 +83,10 @@ meko cloud_link          # asks for the key, or reads it from stdin; --off unlin
 Or use the web UI's Settings › Meko Cloud.
 [127.0.0.1:7777/settings/meko-cloud](http://127.0.0.1:7777/settings/meko-cloud)
 
-Once linked, Meko works on Meko Cloud's datapacks: the agents stay connected to Meko on your
-computer, which sends their calls to Meko Cloud, and `meko-cli` and new datapacks go there too.
+Once linked, Meko works on Meko Cloud's datapacks and keeps serving the ones already on your
+computer until they're moved: the agents stay connected to Meko on your computer, which sends each
+call to the side that has its datapack, `meko-cli` works the same way, and new datapacks are made in
+Meko Cloud.
 
 ## Commands
 

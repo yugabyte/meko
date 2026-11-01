@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
 	"github.com/yugabyte/meko/backend/internal/version"
@@ -21,7 +23,7 @@ var unsafeName = regexp.MustCompile(`[^a-z0-9_-]+`)
 // reply. One after it can't change the 200 already sent, so the connection is cut instead: the
 // download then fails (an unexpected EOF) rather than ending cleanly with a short file.
 func (a *api) exportDatapack(c echo.Context) error {
-	id, ok, err := a.pathDatapack(c)
+	id, ok, err := a.exportTarget(c)
 	if !ok {
 		return err
 	}
@@ -51,4 +53,31 @@ func (a *api) exportDatapack(c echo.Context) error {
 	}
 	a.Log.Error("export failed partway", "datapack_id", id, "error", err)
 	panic(http.ErrAbortHandler) // net/http closes the connection without ending the body
+}
+
+// exportTarget is the datapack the export route names: by its id, or by the name of one of this
+// Meko's datapacks (unique here). meko-cli exports by name this way, so an export never asks Meko
+// Cloud, which only the listing would: it works while Meko Cloud is down or refuses the key. A
+// name or id this Meko doesn't have (a Meko Cloud datapack's) is a 404.
+func (a *api) exportTarget(c echo.Context) (string, bool, error) {
+	named := c.Param("id")
+	// Echo leaves a parameter escaped when the path had a character it can't unescape safely (%2F).
+	if c.Request().URL.RawPath != "" {
+		if u, err := url.PathUnescape(named); err == nil {
+			named = u
+		}
+	}
+	if _, err := uuid.Parse(strings.TrimSpace(named)); err == nil {
+		return a.datapack(c, named)
+	}
+	ds, err := a.Service.Datapacks(ctx(c))
+	if err != nil {
+		return "", false, err
+	}
+	for _, d := range ds {
+		if d.Name == named {
+			return d.ID, true, nil
+		}
+	}
+	return "", false, notFound(c, fmt.Sprintf("no datapack on this computer is named %q", named))
 }

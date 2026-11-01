@@ -113,7 +113,7 @@ test("the card shows each agent's state, its notes and the buttons that fit it",
   expect(text()).not.toContain("coding agents");
 });
 
-test("the card says agents connect to this Meko, which sends their calls to a linked Meko Cloud", async () => {
+test("the card says agents connect to this Meko, which reaches a linked Meko Cloud for them", async () => {
   serve({
     "GET /api/v1/agents": () => ({
       data: {
@@ -123,7 +123,7 @@ test("the card says agents connect to this Meko, which sends their calls to a li
     }),
   });
   await render(<AgentsCard />);
-  expect(text()).toContain("Agents connect to Meko on this computer. While Meko Cloud is linked, it sends their calls there.");
+  expect(text()).toContain("Agents connect to Meko on this computer, which reaches Meko Cloud for them while it's linked.");
 });
 
 test("with no agent installed, the card names the ones Meko works with", async () => {

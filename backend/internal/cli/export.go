@@ -8,16 +8,17 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
 // toolExport writes a datapack's export (GET /api/v1/datapacks/:id/export) to f.out, or to the
-// file name the server suggests in the current folder. The route is Meko's own, so it exports this
-// Meko's datapacks only, Meko Cloud linked or not: the one named, found among them
-// (GET /api/v1/datapacks?location=local), or the default. While Meko Cloud is linked, /mcp's default
-// is Meko Cloud's, so the datapack must be named.
+// file name the server suggests in the current folder. The route is Meko's own, so it exports the
+// datapacks this Meko serves itself, Meko Cloud linked or not: the one named (the route takes a name
+// or an id, and never asks Meko Cloud), or the default. While Meko Cloud is linked, /mcp's default is
+// Meko Cloud's, so the datapack must be named.
 func toolExport(ctx context.Context, t *tools, f toolFlags, stdout io.Writer) error {
 	id, err := t.localDatapack(ctx, strings.TrimSpace(f.text))
 	if err != nil {
@@ -28,7 +29,7 @@ func toolExport(ctx context.Context, t *tools, f toolFlags, stdout io.Writer) er
 		return err
 	}
 	// G704: the URL is always 127.0.0.1 on the port serve wrote to the data folder.
-	url := c.base + "/api/v1/datapacks/" + id + "/export"
+	url := c.base + "/api/v1/datapacks/" + neturl.PathEscape(id) + "/export"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil) //nolint:gosec
 	if err != nil {
 		return err
@@ -39,6 +40,9 @@ func toolExport(ctx context.Context, t *tools, f toolFlags, stdout io.Writer) er
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("%q isn't one of this computer's datapacks: only those can be exported", id)
+	}
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("export failed (%s): %s", resp.Status, strings.TrimSpace(string(b)))
@@ -76,7 +80,8 @@ func toolExport(ctx context.Context, t *tools, f toolFlags, stdout io.Writer) er
 	return nil
 }
 
-// localDatapack is the id of this Meko's datapack named, or of its default datapack for "".
+// localDatapack is the datapack named (a name or an id, which the export route looks up among this
+// Meko's), or the id of its default datapack for "".
 func (t *tools) localDatapack(ctx context.Context, named string) (string, error) {
 	if named == "" {
 		// /mcp's default is Meko Cloud's while it's linked, so one that may be needs a name.
@@ -94,16 +99,7 @@ func (t *tools) localDatapack(ctx context.Context, named string) (string, error)
 		}
 		return id, err
 	}
-	c, err := newClient(t.l)
-	if err != nil {
-		return "", err
-	}
-	var rows []datapackRow
-	if err = c.send(ctx, http.MethodGet, "/api/v1/datapacks?location=local", nil, &rows); err != nil {
-		return "", err
-	}
-	r, err := pick(rows, named, "the web UI")
-	return r.ID, err
+	return named, nil
 }
 
 // checkExport opens a downloaded export: a complete zip that holds its datapack.json.
