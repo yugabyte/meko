@@ -732,7 +732,7 @@ export interface MekoCallPage {
 /**
  * The open questions on Meko's Context Gaps for a project's dedicated datapack (the searches Meko
  * found nothing, or nothing relevant, for), by how their latest ask went: the project home's line,
- * which links to the tab. Meko keeps them; AgentK only reads the counts.
+ * which links to the tab (both counts 0 with none open). Meko keeps them; AgentK only reads the counts.
  */
 export interface MekoGaps {
   datapackId: string;

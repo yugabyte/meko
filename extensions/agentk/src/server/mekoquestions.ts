@@ -10,7 +10,7 @@ import { originOf, type LocalMeko } from './mekolocal.js';
  * Meko calls go to it (`meko`: null otherwise, as with an older Meko that handed out Meko Cloud's
  * key). That covers a linked Meko Cloud's datapacks too: their searches pass through this Meko, which
  * keeps their questions, and its list says so (`location`). The project home's line
- * counts the open ones, a learn step answers them, and a learn session's searches while it seeds are
+ * counts the open ones and links to them, a learn step answers them, and a learn session's searches while it seeds are
  * forgotten. Nothing here fails what calls it: a Meko that's down, or too old to keep questions
  * (404), is no list.
  */
@@ -45,13 +45,11 @@ const count = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v 
 export class MekoQuestions {
   constructor(private o: { meko: () => LocalMeko | null; log: Logger; fetch?: Fetch }) {}
 
-  /** The open questions' counts for the project home's line, or null with no list (or none open). */
+  /** The open questions' counts for the project home's line (both 0 with none open), or null with no list. */
   async openCounts(datapackId: string): Promise<MekoGaps | null> {
     const data = await this.request('GET', datapackId, '', { state: 'open' });
     if (!isRecord(data) || !isRecord(data.open)) return null;
-    const empty = count(data.open.empty);
-    const weak = count(data.open.weak);
-    return empty + weak > 0 ? { datapackId, cloud: data.location === 'cloud', empty, weak } : null;
+    return { datapackId, cloud: data.location === 'cloud', empty: count(data.open.empty), weak: count(data.open.weak) };
   }
 
   /**

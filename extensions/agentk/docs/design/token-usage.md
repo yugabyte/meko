@@ -267,9 +267,9 @@ Kiro isn't available.
   step ran. It shows once there's any Meko call, seed or learn step, or before that while Meko is on
   (and, on the project home, the project has a datapack). On the project home only, a line under
   the tiles says how many questions on Meko's Context Gaps are open for the dedicated datapack,
-  with the split (`gapsLine` in `src/web/util.ts`), and opens that tab in Meko's web UI
-  ([Meko's Context Gaps](recall-and-learn.md#mekos-context-gaps)); it's left out while none are
-  open, and while AgentK doesn't use the Meko on this computer.
+  with the split (`gapsLine` in `src/web/util.ts`), or that none are, and opens that tab in Meko's
+  web UI ([Meko's Context Gaps](recall-and-learn.md#mekos-context-gaps)); it's left out while
+  AgentK doesn't use the Meko on this computer, or that Meko keeps no list for the datapack.
 - **Code reviews** ([the local code review](code-review.md)) show on both pages once one has run.
   The 14-day chart stacks each day's tokens that review sessions (`kind = 'code-review'`) spent at
   the bottom of its bar (`DailyUsage.reviewTokens`, its own color, `--chart-review`), with a legend

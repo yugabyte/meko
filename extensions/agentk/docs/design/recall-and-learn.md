@@ -292,9 +292,9 @@ fails.
   every request (`MEKO_CLIENT_HEADER` in `meko.ts`), and Meko records no question for those calls:
   the search at start (its query is the task) and the learn step's lookups. A header rather than a
   tool argument, which Meko Cloud refuses.
-- **The project home's line.** Under the Meko stats, while the dedicated datapack has open
-  questions: *9 questions Meko couldn't answer · 5 found nothing · 4 nothing relevant*, read with
-  the home (`ProjectHome.mekoGaps`, `GET …/questions?state=open`'s counts), opening the datapack's
+- **The project home's line.** Under the Meko stats: *9 questions Meko couldn't answer · 5 found
+  nothing · 4 nothing relevant*, or *No open questions Meko couldn't answer*, read with the home
+  (`ProjectHome.mekoGaps`, `GET …/questions?state=open`'s counts), opening the datapack's
   Context Gaps (`/datapacks/<id>/gaps` on this origin, or `/gaps/<id>` for a Meko Cloud datapack:
   `mekoGapsPath`) in a new tab.
 - **The learn step** is offered the datapack's open questions and marks those it answered
