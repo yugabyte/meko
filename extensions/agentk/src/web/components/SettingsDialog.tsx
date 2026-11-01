@@ -58,7 +58,7 @@ export function SettingsDialog({
   // One saver for General, Harness, Code review and Work queue, so a save from a tab that has since closed
   // still shows how it went. General's usage-stats box saves on its own.
   const auto = useAutoSave();
-  // What the General tab holds typed and not saved yet, saved before Settings closes.
+  // What the General or Work queue tab holds typed and not saved yet, saved before Settings closes.
   const typed = useRef<(() => void) | null>(null);
   // A close waited for the saves out and one failed: closing again leaves it unsaved.
   const [held, setHeld] = useState(false);
@@ -109,7 +109,7 @@ export function SettingsDialog({
         <HarnessTab auto={auto} harnesses={harnesses} twoAgents={twoAgents} serverName={serverName} meko={meko} initialAgent={initialAgent} />
       )}
       {tab === 'code-review' && <CodeReviewTab auto={auto} />}
-      {tab === 'work-queue' && <WorkQueueTab auto={auto} />}
+      {tab === 'work-queue' && <WorkQueueTab auto={auto} typed={typed} />}
       {tab === 'updates' && <UpdatesTab initial={update} onWhatsNew={(from, to) => leave(() => onWhatsNew(from, to))} />}
       <SaveStatus status={auto.status} held={held} />
     </Dialog>
@@ -203,33 +203,99 @@ const clampOr = (typed: string, max: number, saved: number) => {
 };
 
 /**
- * The work queue's sync: which sources it reads (both off turns sync off, the Sync button too) and how
- * often it runs by itself. The minutes save when the field loses focus or takes Enter.
+ * The work queue's sync: which sources it reads (both off turns sync off, the Sync button too), the
+ * Slack list's link and how often it runs by itself. The link and the minutes save when their field
+ * loses focus or takes Enter, and, as General's do, when the tab or Settings closes.
  */
-function WorkQueueTab({ auto }: { auto: AutoSettings }) {
+function WorkQueueTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObject<(() => void) | null> }) {
   const { s, load, change } = auto;
   const [minutes, setMinutes] = useState('');
+  const [list, setList] = useState('');
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    load().then((x) => setMinutes(String(x.workQueueSyncMinutes)), (e) => setError(errorMessage(e)));
+    load().then((x) => {
+      setMinutes(String(x.workQueueSyncMinutes));
+      setList(x.workQueueSlackList);
+    }, (e) => setError(errorMessage(e)));
   }, [load]);
-  if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
-  const off = !s.workQueueGithub && !s.workQueueSlack;
   const saveMinutes = () => {
+    if (!s) return;
     const m = clampOr(minutes, WORK_SYNC_MINUTES_MAX, s.workQueueSyncMinutes);
     setMinutes(String(m));
     if (m !== s.workQueueSyncMinutes) change({ workQueueSyncMinutes: m });
   };
+  const saveList = () => {
+    if (s && list.trim() !== s.workQueueSlackList) change({ workQueueSlackList: list.trim() });
+  };
+  const latest = useRef(() => {});
+  useEffect(() => {
+    latest.current = () => {
+      saveList();
+      saveMinutes();
+    };
+  });
+  useEffect(() => {
+    typed.current = () => latest.current();
+    return () => {
+      typed.current?.();
+      typed.current = null;
+    };
+  }, [typed]);
+  if (!s) return error ? <ErrorText error={error} /> : <p className="muted"><Busy label="Loading" /></p>;
+  const off = !s.workQueueGithub && !s.workQueueSlack;
   return (
     <div className="stack">
       <p className="muted small">What Sync adds to the queue; both off turns it off.</p>
       <InfoCheck id="set-wq-github" label="GitHub review requests" checked={s.workQueueGithub} onChange={(on) => change({ workQueueGithub: on })}>
         Open PRs that ask for your review, through your gh login.
       </InfoCheck>
-      <InfoCheck id="set-wq-slack" label="Slack To-dos" checked={s.workQueueSlack} onChange={(on) => change({ workQueueSlack: on })}>
-        The messages on your To-dos, read by Claude Code through your Slack connector. Each read is a model call; on the
-        timer it runs only while the last read worked.
+      <InfoCheck id="set-wq-slack" label="Slack list" checked={s.workQueueSlack} onChange={(on) => change({ workQueueSlack: on })}>
+        The messages on a Slack list of yours, read by Claude Code through your Slack connector. Each read is a model
+        call, so after one fails, timed syncs skip Slack until a Sync you press reads it.
       </InfoCheck>
+      <Field
+        label="Slack list link"
+        hint={s.workQueueSlack && !s.workQueueSlackList ? 'Paste the link to your list.' : undefined}
+        info={{
+          for: 'set-wq-slack-list',
+          text: (
+            <>
+              <p>
+                Make a Slack list (for example "Meko work queue"), add the messages you want worked on, and paste its link
+                here. Slack's own To-dos can't be read, so the sync uses a list of yours.
+              </p>
+              <p>It reads these columns, by name, and ignores the rest:</p>
+              <ul>
+                <li><b>Message</b> (required): the message's link.</li>
+                <li><b>Name</b>: the message's text. Slack fills it in when you add a message.</li>
+                <li><b>Reporter</b> (optional): who asked. It starts the item's notes.</li>
+                <li><b>Done</b> (optional checkbox): ticked rows are left out.</li>
+              </ul>
+              <p>
+                A list is private until you share it. Sharing one of its items gives the people you share it with edit
+                access to the whole list.
+              </p>
+            </>
+          ),
+        }}
+      >
+        <input
+          id="set-wq-slack-list"
+          className="input"
+          type="url"
+          placeholder="https://<workspace>.slack.com/lists/…"
+          value={list}
+          disabled={!s.workQueueSlack}
+          onChange={(e) => setList(e.target.value)}
+          onBlur={saveList}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              saveList();
+            }
+          }}
+        />
+      </Field>
       <Field label="Sync every (minutes)" hint={off ? 'Sync is off.' : '0 syncs only when you press Sync.'}>
         <input
           id="set-wq-minutes"

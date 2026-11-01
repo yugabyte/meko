@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // The Settings page's switches for the features that run the user's Claude Code, against a faked
 // /api/v1: turning one on sends only the harness, and a failed test call leaves it off with why. And
-// its Access card, which says who reaches Meko: there's no login.
+// its Access card, which says only whether Meko takes local or remote requests.
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -90,11 +90,14 @@ test("a failed test call leaves memory extraction off and says why", async () =>
   expect(document.body.textContent).toContain("is claude installed and signed in?");
 });
 
-test("the Access card says who reaches Meko, and how to turn the web UI off", async () => {
+test("the Access card says only local or remote", async () => {
   serve({});
   await render({ access: "remote", local_access: false, signed_in: true });
-  const text = document.body.textContent ?? "";
-  expect(text).toContain("Meko is open to other devices, over HTTPS, with no sign-in");
-  expect(text).toContain("meko ui stop turns it off");
-  expect(text).not.toContain("Account");
+  const access = () => [...document.querySelectorAll("h3")].find((h) => h.textContent === "Access")?.parentElement?.textContent;
+  expect(access()).toBe("AccessRemote");
+  // The web UI has no login, so Settings has no account card.
+  expect(document.body.textContent).not.toContain("Account");
+  act(() => root.unmount());
+  await render(local);
+  expect(access()).toBe("AccessLocal");
 });

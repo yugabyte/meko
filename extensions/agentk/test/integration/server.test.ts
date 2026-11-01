@@ -63,6 +63,27 @@ describe('HTTP API: origin checks, projects', () => {
     expect((await state()).serverName).toBe(shortHost(hostname()));
   });
 
+  it("saves the Slack list's link trimmed, refuses anything else, and clears it", async () => {
+    const put = (workQueueSlackList: unknown) => app.inject({ method: 'PUT', url: '/api/settings', payload: { workQueueSlackList } });
+    const link = 'https://acme.slack.com/lists/T0ACME/F0LIST1';
+    expect((await app.inject({ url: '/api/settings' })).json().workQueueSlackList).toBe('');
+
+    const saved = await put(`  ${link}  `);
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json().workQueueSlackList).toBe(link);
+    expect(env.core.config.workQueue.slackList).toBe(link);
+
+    for (const bad of ['https://acme.slack.com/archives/C1/p1700000000000001', 'F0LIST1', 5]) {
+      const res = await put(bad);
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/isn't a link to a Slack list/);
+    }
+    expect(env.core.config.workQueue.slackList).toBe(link);
+
+    expect((await put('')).json().workQueueSlackList).toBe('');
+    expect(env.core.config.workQueue.slackList).toBe('');
+  });
+
   it.each([
     ['usage stats', 'callHomeEnabled', (c: Config) => c.callHome.enabled, '[call_home]\nenabled = false', 'call_home'],
     ['resolving merge conflicts', 'resolveConflicts', (c: Config) => c.pr.resolveConflicts, '[pr]\nresolve_conflicts = false', 'resolve_conflicts'],

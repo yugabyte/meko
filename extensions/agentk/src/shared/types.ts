@@ -1610,7 +1610,7 @@ export interface WorkLink {
   label: string;
 }
 
-/** Where a work item came from: added by hand, or by a sync (a GitHub review request, a message on Slack's To-dos). */
+/** Where a work item came from: added by hand, or by a sync (a GitHub review request, a message on the user's Slack list). */
 export type WorkItemSource = 'manual' | 'github' | 'slack';
 
 /** One thing on the work queue. */
@@ -1912,8 +1912,10 @@ export interface Settings {
   kiroTrustTools: boolean;
   /** `[work_queue] github`: the work queue's sync pulls in the PRs asking for your review (Settings › Work queue). */
   workQueueGithub: boolean;
-  /** `[work_queue] slack`: the work queue's sync pulls in your Slack To-dos. */
+  /** `[work_queue] slack`: the work queue's sync pulls in the messages on your Slack list. */
   workQueueSlack: boolean;
+  /** `[work_queue] slack_list`: that list's link (`https://<workspace>.slack.com/lists/<team>/<F…>`), or empty. */
+  workQueueSlackList: string;
   /** `[work_queue] sync_minutes`: how often it syncs by itself (0 to WORK_SYNC_MINUTES_MAX; 0: only when you press Sync). */
   workQueueSyncMinutes: number;
   /** `[code_review] strategy`: the local review before a PR opens, or `off`. */
@@ -2686,7 +2688,7 @@ export type TermServerMessage =
 //        session for a closed item)
 // PUT    /api/work-items/order ReorderWorkItemsRequest → 204   (409 when `ids` isn't exactly the open items)
 // POST   /api/work-items/close CloseWorkItemsRequest → { closed }   (Dismiss all: closes the open items among `ids`; 400 for no list of ids)
-// POST   /api/work-items/sync                  → WorkSync   (GitHub review requests and Slack's To-dos into the queue; 409 while one runs)
+// POST   /api/work-items/sync                  → WorkSync   (GitHub review requests and your Slack list's messages into the queue; 409 while one runs)
 // GET    /api/work-items/by-link?link=         → WorkLinkMatch[]   (open and closed items holding the link's key, open first; 400 for a
 //        link parseWorkLink can't read)
 // GET    /api/usage                            → UsageOverview
