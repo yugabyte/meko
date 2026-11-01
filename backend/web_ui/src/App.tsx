@@ -26,6 +26,8 @@ import { MetricsPage } from "./pages/MetricsPage";
 import { ArtifactsPage } from "./pages/ArtifactsPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { SearchPage } from "./pages/SearchPage";
+import { ProjectPage } from "./pages/ProjectPage";
+import { ProjectsPage } from "./pages/ProjectsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { StatusPage } from "./pages/StatusPage";
 
@@ -92,6 +94,14 @@ export default function App({ auth }: { auth: AuthStatus }) {
           ) : route.view === "settings" ? (
             <div className={PAGE}>
               <SettingsPage auth={auth} />
+            </div>
+          ) : route.view === "projects" ? (
+            <div className={PAGE}>
+              <ProjectsPage />
+            </div>
+          ) : route.view === "project" && route.projectId ? (
+            <div className={PAGE}>
+              <ProjectPage id={route.projectId} />
             </div>
           ) : route.view === "meko-cloud" ? (
             <div className={PAGE}>

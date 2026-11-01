@@ -167,9 +167,14 @@ func addTool(s *sdk.Server, t *sdk.Tool, h sdk.ToolHandler, o Options) {
 	s.AddTool(t, h)
 }
 
-// localOnly are this Meko's tools Meko Cloud doesn't have: datapack_metrics reads this Meko's call
-// log, and knowledgebase_upload_file is this Meko's own while linked too (cloudUploadFile).
-var localOnly = map[string]bool{"datapack_metrics": true, "knowledgebase_upload_file": true}
+// localOnly are this Meko's tools that don't stand in for Meko Cloud's: datapack_metrics reads this
+// Meko's call log, knowledgebase_upload_file is this Meko's own while linked too (cloudUploadFile), and
+// Meko Cloud has the project tools only where MEKO_ENABLE_PROJECTS is on.
+var localOnly = map[string]bool{"datapack_metrics": true, "knowledgebase_upload_file": true,
+	"project_list": true, "project_describe": true, "project_stats": true, "project_create": true,
+	"project_update": true, "project_folder_create": true, "project_folder_update": true,
+	"project_folder_delete": true, "project_add_datapack": true, "project_remove_datapack": true,
+	"project_delete": true}
 
 // uploadFileTool is knowledgebase_upload_file's definition.
 var uploadFileTool = func() *tool {
