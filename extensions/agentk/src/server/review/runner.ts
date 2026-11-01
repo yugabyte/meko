@@ -272,6 +272,7 @@ export class CodeReviews {
     if (last?.state === 'done' && !last.finished_at) {
       if (opts.instructions) this.set(last.id, { instructions: opts.instructions });
       if (opts.lead) this.set(last.id, { lead: opts.lead });
+      if (opts.by === 'you' && last.by !== 'you') this.set(last.id, { by: 'you' });
       await this.finish(last.id);
       return true;
     }
@@ -880,6 +881,12 @@ export class CodeReviews {
       moved: r.lead, description: this.descriptionFile(task),
     });
     if (sent) this.set(id, { finished_at: Date.now(), lead: null });
+  }
+
+  /** The task's latest review is done, but its PR prompt hasn't gone yet. */
+  prUnsent(taskId: string): boolean {
+    const r = this.latest(taskId);
+    return r?.state === 'done' && !r.finished_at;
   }
 
   /** The PR prompt went for a finished review whose prompt couldn't go before (Open PR pressed again). */

@@ -184,7 +184,9 @@ sent, withdrawn or dropped.
   saving replaces them, and an emptied box removes them (a request with `instructions` replaces them,
   blank ones included; one without, like the plain gate's, keeps them). An Open PR pressed after the
   turn ended but before the queued one went goes at once, with them unless it gives its own. If the
-  queued PR prompt can't be typed, the activity log keeps them, so they can be given again.
+  queued PR prompt can't be typed, the activity log keeps them, so they can be given again. A
+  [local review](code-review.md) that finishes mid-turn queues one too (Run to merge's, when the
+  review was, and only while Run to merge is still on), for its PR prompt with the findings and the `me_ak_review:` line.
 - **A PR prompt Claude exited before taking.** The PR prompt that went but whose turn never started
   (see [AgentK's mod](mod.md)) isn't a queued gate: it shows no pill and waits for nothing. It's the
   press that sent it (yours, or Run to merge's) carried over to Claude's return. The session goes

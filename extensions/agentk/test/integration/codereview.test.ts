@@ -261,6 +261,90 @@ describe('local code review before the PR (real session host + git, fake claude 
     expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM');
   });
 
+  describe("a review that finishes while the task's turn runs", () => {
+    const finished = (id: string) => all<{ finished_at: number | null }>(env.core.db, 'SELECT finished_at FROM code_reviews WHERE task_id = ?', id)[0].finished_at;
+    const events = (id: string, kind: string) => all<{ text: string }>(env.core.db, 'SELECT text FROM session_events WHERE session_id = ? AND kind = ? ORDER BY id', id, kind).map((e) => e.text);
+    /** Resolves once every step queued for the session is done: a stuck one never lets it (#415). */
+    const stepsDone = (id: string) => Promise.race([
+      (env.core.lifecycle as unknown as { serial(id: string, f: () => Promise<string>): Promise<string> }).serial(id, async () => 'done'),
+      new Promise((r) => setTimeout(() => r('stuck'), 5000)),
+    ]);
+    /** A prompt of the user's starts a turn on the task just as the review's PR prompt is to go, so it finds AgentK working. */
+    function userTurnAtFinish(id: string) {
+      const send = env.core.lifecycle.sendReviewedPr.bind(env.core.lifecycle);
+      vi.spyOn(env.core.lifecycle, 'sendReviewedPr').mockImplementationOnce(async (t, o) => {
+        writeFileSync(join(env.fakeDir, 'turn-ms'), '1500');
+        await env.core.sessions.submit(id, 'Tidy up the tests.');
+        await waitFor(() => env.core.sessions.get(id).status, (st) => st === 'working', 10000, "the user's turn");
+        rmSync(join(env.fakeDir, 'turn-ms'), { force: true });
+        return send(t, o);
+      });
+    }
+    /** The PR prompt went at the end of the user's turn, with the review's line, and nothing is left queued. */
+    async function sentAfterTurn(id: string, claudeSessionId: string) {
+      await waitFor(() => env.core.sessions.get(id), (x) => x.stage === 'pr', 15000, "the PR prompt at the turn's end");
+      expect(await prPrompt(claudeSessionId)).toContain('me_ak_review:LGTM');
+      const sent = prompts(claudeSessionId);
+      expect(sent.at(-2)).toBe('Tidy up the tests.');
+      expect(sent.filter((p) => p.includes('Open a pull request'))).toHaveLength(1);
+      expect(finished(id)).not.toBeNull();
+      expect(env.core.sessions.row(id).queued_gate).toBeNull();
+      expect(await stepsDone(id)).toBe('done');
+    }
+
+    it('queues Open PR, and its PR prompt goes when the turn ends', async () => {
+      const s = await task({ review: { strategy: 'sirius-1.0' } });
+      userTurnAtFinish(s.id);
+      await env.core.sessions.action(s.id, 'open-pr');
+      await waitFor(() => events(s.id, 'review'), (e) => e.includes('The local review is done: the PR prompt goes when AgentK finishes its turn'), 30000, 'the review to finish');
+      expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'code', status: 'working', queued: 'open-pr', codeReview: { state: 'done' } });
+      expect(env.core.sessions.row(s.id).queued_auto).toBe(0);
+      expect(finished(s.id)).toBeNull();
+      await sentAfterTurn(s.id, s.claudeSessionId);
+      expect(events(s.id, 'review').some((e) => e.startsWith("The PR prompt didn't go"))).toBe(false);
+    });
+
+    it("sends it at the turn's end with Run to merge's Open PR, queued at the turn's start", async () => {
+      const s = await task({ review: { strategy: 'sirius-1.0' } });
+      userTurnAtFinish(s.id);
+      await env.core.sessions.edit(s.id, { autoRun: true });
+      await waitFor(() => events(s.id, 'review'), (e) => e.includes('The local review is done: the PR prompt goes when AgentK finishes its turn'), 30000, 'the review to finish');
+      expect(env.core.sessions.row(s.id)).toMatchObject({ queued_gate: 'open-pr', queued_auto: 1 });
+      await sentAfterTurn(s.id, s.claudeSessionId);
+    });
+
+    it("doesn't queue Run to merge's review PR once Run to merge is off: it waits for your Open PR", async () => {
+      const s = await task({ review: { strategy: 'sirius-1.0' } });
+      userTurnAtFinish(s.id);
+      await env.core.sessions.edit(s.id, { autoRun: true });
+      expect(env.core.sessions.get(s.id).codeReview).toMatchObject({ state: expect.stringMatching(/describing|preparing|sweeping|scoring/) });
+      await env.core.sessions.edit(s.id, { autoRun: false });
+      await waitFor(() => events(s.id, 'review'), (e) => e.some((t) => t.startsWith("The PR prompt didn't go after the local review: AgentK is still working.")), 30000, 'the review to finish');
+      expect(env.core.sessions.row(s.id)).toMatchObject({ queued_gate: null, auto_run: 0 });
+      await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, "the user's turn to end");
+      expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'code', codeReview: { state: 'done' } });
+      expect(finished(s.id)).toBeNull();
+      // Your Open PR sends it, as yours.
+      await env.core.sessions.action(s.id, 'open-pr');
+      await sentAfterTurn(s.id, s.claudeSessionId);
+      expect(all<{ by: string }>(env.core.db, 'SELECT by FROM code_reviews WHERE task_id = ?', s.id)[0].by).toBe('you');
+    });
+
+    it.each([['a move to Review & PR', 'move'], ['Open PR', 'open-pr']])('sends it at %s between turns, once the queued Open PR was withdrawn', async (_what, how) => {
+      const s = await task({ review: { strategy: 'sirius-1.0' } });
+      userTurnAtFinish(s.id);
+      await env.core.sessions.action(s.id, 'open-pr');
+      await waitFor(() => env.core.sessions.row(s.id).queued_gate, (g) => g === 'open-pr', 30000, 'Open PR queued for the turn');
+      await env.core.sessions.action(s.id, 'cancel-queued');
+      await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, "the user's turn to end");
+      expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'code', codeReview: { state: 'done' } });
+      expect(finished(s.id)).toBeNull();
+      if (how === 'move') await env.core.sessions.move(s.id, { stage: 'review' });
+      else await env.core.sessions.action(s.id, 'open-pr');
+      await sentAfterTurn(s.id, s.claudeSessionId);
+    });
+  });
+
   it.each([['through the mod', true], ['typed', false]])('sends the PR prompt again once Claude is back, when Claude exits before taking it (%s)', async (_how, mod) => {
     if (mod) {
       mkdirSync(env.fakeDir, { recursive: true });
