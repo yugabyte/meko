@@ -223,7 +223,7 @@ CREATE TABLE work_items (      -- the work queue (workqueue.ts, docs/design/work
   unplaced INTEGER, github_done_at INTEGER, created_at INTEGER, closed_at INTEGER);
 CREATE TABLE work_item_links (item_id TEXT, ord INTEGER, key TEXT, kind TEXT, url TEXT, label TEXT,
   PRIMARY KEY (item_id, key));  -- indexed on key, for the palette's lookup by link
-CREATE TABLE code_reviews (    -- a task's local reviews (review/runner.ts, docs/design/code-review.md), one per Open PR or move to Review & PR
+CREATE TABLE code_reviews (    -- a task's local reviews (review/runner.ts, docs/design/code-review.md), one per Open PR, move to Review & PR or review-run
   id TEXT PRIMARY KEY, task_id TEXT, session_id TEXT,  -- the task, and its code-review session
   strategy TEXT, rounds INTEGER, depth INTEGER,        -- what it runs with, stamped when it starts
   state TEXT,                  -- describing | preparing | sweeping | scoring | fixing | done | failed | cancelled
@@ -234,6 +234,8 @@ CREATE TABLE code_reviews (    -- a task's local reviews (review/runner.ts, docs
   instructions TEXT, by TEXT,  -- the Open PR's instructions it holds, and who pressed it (you | auto)
   lead TEXT,                   -- the `moved` line of a move to Review & PR from Explore or Design, sent before the
                                --   review's first prompt to the task (its fixes or the PR prompt), cleared once that goes
+  purpose TEXT, stage TEXT,    -- pr (an Open PR's) | demand (the user ran it: no PR prompt); code | review: where it runs
+  stale INTEGER,               -- 1 once the task left Code after it finished with its PR prompt unsent (Open PR reviews again)
   detail TEXT, created_at INTEGER, updated_at INTEGER, finished_at INTEGER);  -- finished_at: its PR prompt went
 CREATE TABLE code_review_steps (review_id TEXT, step TEXT, report_json TEXT, at INTEGER,  -- each step's report, as
   PRIMARY KEY (review_id, step));  --   review_report or review_score took it (r1s1:guide, r1c3)
@@ -307,8 +309,8 @@ differ from the defaults are written, so a changed default reaches existing inst
 install's `[server] bind` and `port` and `[tls]` stay in the file for Meko's handoff
 ([security.md](security.md)), and nothing else reads them. The Meko
 URL and key are Meko's: the Meko running on this computer with its own URL and token, linked to Meko
-Cloud or not (while linked it passes AgentK's calls on to Meko Cloud: `/mcp`, and `/api/v1/cloud` for
-its REST API), or under an older Meko that still hands out its link's key, that link's URL and key;
+Cloud or not (while linked its `/mcp` and `/api/v1` serve its own datapacks and pass any other id on
+to Meko Cloud; one from before that passes REST on under `/api/v1/cloud`), or under an older Meko that still hands out its link's key, that link's URL and key;
 all read from Meko (`meko token --json`) and never written here. `[meko] url`, `api_key`,
 `web_url` and `api_url`, `MEKO_MCP_URL`/`MEKO_API_KEY` and the `env` block of Claude Code's user
 `settings.json` are read only to hand a key from before to Meko, once, and under a Meko too old to

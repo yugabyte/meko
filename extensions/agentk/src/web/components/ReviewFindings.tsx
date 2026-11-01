@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { strategyName, type CodeReviewDetail, type CodeReviewFinding } from '../../shared/codereview';
-import type { Session } from '../../shared/types';
+import type { Session, SessionAction } from '../../shared/types';
 import { api, ApiError, errorMessage } from '../api';
-import { findingGroups, findingsCountsText, findingsReviewing } from '../util';
+import { canRunReview, findingGroups, findingsCountsText, findingsReviewing, onDemandControls } from '../util';
 import { Busy } from './common';
 import { SidePanel } from './SidePanel';
 
@@ -14,11 +14,17 @@ import { SidePanel } from './SidePanel';
  * prompt, not the panel). Fetched again whenever the review moves on. While the review runs it reads
  * Reviewing, under the findings so far, with a bar along its header and no counts yet.
  */
-export function ReviewFindings({ session, onClose, onTerminal }: {
+export function ReviewFindings({ session, onClose, onTerminal, onAct }: {
   session: Session;
   onClose: () => void;
   /** Shows the review session's terminal: beside the task, while the review has one. */
   onTerminal?: () => void;
+  /**
+   * The task's review actions, on the task's panel (not the review session's): Review again
+   * (`review-run`, canRunReview), and Cancel or Retry for a review the user ran (onDemandControls),
+   * which the Code gate doesn't show. Absent while an action is under way.
+   */
+  onAct?: (a: SessionAction) => void;
 }) {
   const [detail, setDetail] = useState<CodeReviewDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -26,6 +32,8 @@ export function ReviewFindings({ session, onClose, onTerminal }: {
   const r = session.codeReview;
   const reviewing = findingsReviewing(r);
   const counts = findingsCountsText(r, detail);
+  const run = onAct ? canRunReview(session) : null;
+  const controls = onAct ? onDemandControls(session) : { cancel: false, retry: false };
   // Anything the summary says moving on is a reason to read the findings again.
   const key = r ? `${r.id}:${r.state}:${r.round}:${r.sweep}:${r.passesDone}:${r.scoresDone}:${r.candidates}:${r.addressed}` : '';
   useEffect(() => {
@@ -66,6 +74,22 @@ export function ReviewFindings({ session, onClose, onTerminal }: {
             Terminal
           </button>
         )}
+        {controls.cancel && (
+          <button className="btn small" onClick={() => onAct?.('review-cancel')} title="Stop the local review you ran">
+            Cancel
+          </button>
+        )}
+        {controls.retry && (
+          <button className="btn small" onClick={() => onAct?.('review-retry')} title="Review again, reusing the steps already reported">
+            Retry
+          </button>
+        )}
+        {run?.offered && (
+          <button className="btn small" disabled={!run.ready} onClick={() => onAct?.('review-run')} title="Run the local review again on the change as it is now">
+            Review again
+          </button>
+        )}
+        {run?.wait && <span className="muted small">{run.wait}</span>}
         <button className="icon-btn panel-close" onClick={onClose} aria-label="Close findings">
           <span className="desktop-only">×</span>
           <span className="mobile-only">← Back</span>

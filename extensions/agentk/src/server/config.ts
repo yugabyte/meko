@@ -415,8 +415,9 @@ export function mekoHost(cfg: Config): string {
 /**
  * Whether the Meko behind AgentK's REST API may hand out plain-http upload links: while the Meko on
  * this computer reaches Meko Cloud for AgentK, the Meko Cloud it's linked to (its web app on http, a
- * self-hosted Meko), not the pass-through's own http base; undefined otherwise (MekoApi then asks of
- * its base).
+ * self-hosted Meko), not the local base's own http; undefined otherwise (MekoApi then asks of its
+ * base). A link on the base's own origin, for a datapack that Meko serves itself, is always allowed
+ * (`MekoApi.postPresigned`).
  */
 export function mekoStorageHttp(cfg: Config): boolean | undefined {
   if (resolveMekoWithSource(cfg).keySource !== 'meko') return undefined;
@@ -425,8 +426,9 @@ export function mekoStorageHttp(cfg: Config): boolean | undefined {
 }
 
 /**
- * Meko's REST API base (used for sharing): while Meko is linked, its own pass-through to Meko Cloud's
- * API (`/api/v1/cloud` on the Meko on this computer), or an older Meko's link's API URL; else config
+ * Meko's REST API base (used for sharing and uploads): while Meko is linked, the Meko on this
+ * computer's own `/api/v1`, which serves its datapacks and sends the rest to Meko Cloud (`routed`), or
+ * its `/api/v1/cloud` pass-through from before it routed by id, or an older Meko's link's API URL; else config
  * first, then MEKO_API_URL, then the web app URL plus /api/v1 (the Meko web app serves its API on
  * the same origin). Null when neither is known.
  */
@@ -434,7 +436,8 @@ export function resolveMekoApiUrl(cfg: Config): string | null {
   const eff = resolveMekoWithSource(cfg);
   if (eff.keySource === 'meko') {
     const cloud = localMeko().cloud;
-    return linkedThroughMeko(cloud) ? `${originOf(eff.url)}/api/v1/cloud` : cloud?.apiUrl || null;
+    if (!linkedThroughMeko(cloud)) return cloud?.apiUrl || null;
+    return `${originOf(eff.url)}${cloud?.routed ? '/api/v1' : '/api/v1/cloud'}`;
   }
   const override = forKey(cfg.meko.apiUrl.trim() || process.env.MEKO_API_URL?.trim() || '', resolveMekoWithSource(cfg));
   if (override) return override.replace(/\/+$/, '');

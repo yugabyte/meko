@@ -128,7 +128,7 @@ func (c *call) datapack(ctx context.Context, a args) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	named = strings.TrimSpace(named)
+	named = memory.CanonicalID(named)
 	id, err := c.svc.ResolveDatapack(ctx, named)
 	switch {
 	case errors.Is(err, memory.ErrNoDefault):

@@ -570,6 +570,7 @@ export function ProjectView({
             session={session}
             onClose={() => setPanel(null)}
             onTerminal={!child && session.codeReview?.sessionId ? () => openReviewTerminal(session) : undefined}
+            onAct={!child && !acting ? (a) => void act(a) : undefined}
           />
         )}
       </div>

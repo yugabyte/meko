@@ -6,7 +6,7 @@ import { reviewHolds, reviewRunning, reviewSegmentLabel, type ReviewOverrides } 
 import { inheritedReview, useReviewDefaults } from '../reviewdefaults';
 import { FONT_MAX, FONT_MIN } from '../keys';
 import { getTerminal, setTerminalFontSize, terminalFontSize } from '../terminals';
-import { agentName, discardingText, isReviewChild } from '../util';
+import { agentName, canRunReview, discardingText, isReviewChild, onDemandControls } from '../util';
 import { Busy, Elapsed, ReviewFields, ReviewGlass, trapTab } from './common';
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -446,6 +446,7 @@ export function LocalReviewRows({ session, parent, projectReview, acting, onOpen
     );
   }
   if (session.kind === 'review-pr') return null;
+  const run = canRunReview(session);
   const save = async (review: ReviewOverrides) => {
     setSaving(true);
     try {
@@ -466,7 +467,7 @@ export function LocalReviewRows({ session, parent, projectReview, acting, onOpen
           </span>
         </SheetItem>
       )}
-      {r && reviewRunning(r) && (
+      {r && (reviewRunning(r) || onDemandControls(session).cancel) && (
         <SheetItem disabled={acting} onClick={then(() => void onAct('review-cancel'))}>
           Cancel the local review
         </SheetItem>
@@ -480,6 +481,16 @@ export function LocalReviewRows({ session, parent, projectReview, acting, onOpen
             Open the PR without it
           </SheetItem>
         </>
+      )}
+      {onDemandControls(session).retry && (
+        <SheetItem disabled={acting} onClick={then(() => void onAct('review-retry'))}>
+          Retry the local review
+        </SheetItem>
+      )}
+      {run.offered && (
+        <SheetItem disabled={acting || !run.ready} hint={run.wait ?? undefined} onClick={then(() => void onAct('review-run'))}>
+          Run local review
+        </SheetItem>
       )}
       <SheetItem hint={settingsOpen ? '⌄' : '›'} onClick={() => setSettingsOpen((o) => !o)}>
         Local review settings

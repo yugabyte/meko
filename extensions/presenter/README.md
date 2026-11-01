@@ -43,8 +43,10 @@ meko ui /ext/presenter/                 # opens Presenter
 Meko serves it at `/ext/presenter/` on its web listener, behind Meko's login, and its sidebar links
 to it. Decks are saved where Meko says: in Meko Cloud when Meko links it (Settings › Meko Cloud, or
 `meko cloud_link`), else in the Meko on this computer. Either way Presenter talks to the Meko on
-this computer, which passes its calls on to Meko Cloud with the link's key. Presenter follows a change of the link at
-once; a draft made under the other Meko stays listed, and opens again once Meko links it again. Presenter's command is `meko_presenter`: `meko_presenter status` says whether it runs. Meko
+this computer, which passes its calls on to Meko Cloud with the link's key. While it links Meko
+Cloud, the decks in its own datapacks (made before the link) keep working beside Meko Cloud's.
+Presenter follows a change of the link at once; a draft made under the other Meko stays listed, and
+opens again once Meko links it again. Presenter's command is `meko_presenter`: `meko_presenter status` says whether it runs. Meko
 updates it on its own when a new release comes out (unless its **Update automatically** switch on
 the Extensions page is off), waiting while a talk is live; `meko extension update presenter` (or
 Update on the Extensions page) updates it now. A release that fails to start three times is rolled

@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Database, Menu } from "lucide-react";
 import { api } from "./lib/api";
+import { rowLink, useCloudChanged } from "./lib/cloud";
 import { href, navigate, useNavigated, useRoute } from "./lib/route";
 import { applyTheme, initialTheme, type Theme } from "./lib/theme";
 import type { AuthStatus } from "./lib/types";
@@ -38,7 +39,10 @@ export default function App({ auth }: { auth: AuthStatus }) {
   const route = useRoute();
   const health = useLoad(() => api.health(), []);
   const list = useLoad(() => api.datapacks(), []);
-  const activeId = route.datapackId ?? list.data?.[0]?.datapack_id;
+  // Linking or unlinking Meko Cloud changes which datapacks there are.
+  useCloudChanged(list.reload);
+  // With none in the address, the first datapack this UI opens: a Meko Cloud one opens in its web app.
+  const activeId = route.datapackId ?? list.data?.find((d) => rowLink(d).kind === "here")?.datapack_id;
   const current = useLoad(() => (activeId ? api.datapack(activeId) : Promise.resolve(undefined)), [activeId]);
 
   useShortcuts(activeId);
@@ -56,14 +60,17 @@ export default function App({ auth }: { auth: AuthStatus }) {
         open={menu}
         onClose={() => setMenu(false)}
         datapacks={list.data ?? []}
+        loading={list.loading}
+        error={list.error}
+        onRefresh={list.reload}
         activeId={route.view ? undefined : activeId}
         view={route.view}
         version={health.data?.version}
         theme={theme}
         onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
-        onCreated={(id) => {
+        onCreated={(id, open) => {
           list.reload();
-          navigate({ datapackId: id, tab: "overview" });
+          if (open) navigate({ datapackId: id, tab: "overview" });
         }}
       />
       <main className="flex min-w-0 flex-1 flex-col overflow-y-auto">
@@ -94,12 +101,20 @@ export default function App({ auth }: { auth: AuthStatus }) {
             <div className={PAGE}>
               <CloudContextGapsPage id={route.datapackId} />
             </div>
-          ) : list.loading && !list.data ? (
+          ) : list.loading && !list.data && !route.datapackId ? (
+            // A datapack in the address doesn't wait for the listing, which waits for Meko Cloud while
+            // it's linked; nor does a failed listing (Meko Cloud down) stop it from opening: the
+            // sidebar shows the listing's error.
             <Loading />
-          ) : list.error ? (
+          ) : list.error && !route.datapackId ? (
             <div className={PAGE}>
               <ErrorNote error={list.error} />
             </div>
+          ) : !activeId && list.data?.length ? (
+            // Every datapack listed opens in Meko Cloud's web app (or nowhere): none has pages here.
+            <Empty icon={<Database className="size-8" />} title="Your datapacks are in Meko Cloud">
+              Pick one under Datapacks to open it in Meko Cloud's web app. New ones made with the + go there too.
+            </Empty>
           ) : !activeId ? (
             <Empty icon={<Database className="size-8" />} title="No datapacks">
               Create one with the + beside Datapacks.

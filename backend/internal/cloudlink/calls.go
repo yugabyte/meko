@@ -114,6 +114,21 @@ func (s *Service) API(ctx context.Context, method, path string, body any) (json.
 	return env.Data, nil
 }
 
+// serverFailed is Meko Cloud's own failure (a 5xx) as CodeCallFailed, with the message its envelope
+// holds, if any.
+func serverFailed(status string, b []byte) error {
+	var env struct {
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(b, &env) == nil && env.Error != nil && env.Error.Message != "" {
+		return &CallError{Code: CodeCallFailed,
+			msg: "Meko Cloud: " + strings.TrimSuffix(shorten(env.Error.Message), ".") + "."}
+	}
+	return &CallError{Code: CodeCallFailed, msg: "Meko Cloud answered " + status + "."}
+}
+
 func keyRefused() error {
 	return &CallError{Code: CodeKeyRefused,
 		msg: "Meko Cloud refused the key. Link it again in Settings › Meko Cloud, or with meko cloud_link."}
@@ -155,9 +170,10 @@ type Reply struct {
 
 // Pass sends a request to the linked Meko Cloud's REST API as it came, with the key: method, the
 // path after the API URL with its query (such as /datapacks?limit=10), and body (nil for none) of
-// contentType. Meko Cloud's status, content type and body come back, with two exceptions: a JSON
+// contentType. Meko Cloud's status, content type and body come back, with three exceptions: a JSON
 // body loses its database and MCP credentials (withoutCredentials), which no caller of Meko's
-// routes gets, and a 401 is CodeKeyRefused, since the key is Meko's, not the caller's. A request
+// routes gets, a 401 is CodeKeyRefused, since the key is Meko's, not the caller's, and a 5xx is
+// CodeCallFailed (serverFailed), as on Meko's other routes that call Meko Cloud. A request
 // that doesn't reach Meko Cloud, or a reply over maxCallBytes, is a *CallError.
 func (s *Service) Pass(ctx context.Context, method, pathQuery string, body io.Reader, contentType string) (Reply,
 	error) {
@@ -200,6 +216,9 @@ func (s *Service) Pass(ctx context.Context, method, pathQuery string, body io.Re
 	if len(b) > maxCallBytes {
 		return Reply{}, &CallError{Code: CodeCallFailed,
 			msg: "Meko Cloud's reply is larger than the 8 MiB Meko passes on."}
+	}
+	if res.StatusCode >= 500 {
+		return Reply{}, serverFailed(res.Status, b)
 	}
 	return Reply{Status: res.StatusCode, ContentType: res.Header.Get("Content-Type"), Body: withoutCredentials(b)},
 		nil

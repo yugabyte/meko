@@ -14,9 +14,11 @@ Meko's share routes (`POST /datapacks/:id/share`, `GET …/member-list`, `GET �
 `POST /datapacks/invite-action`, and the share link's `GET`/`PUT …/share-link` and
 `POST /share/:token/redeem`) are REST, not MCP. `src/server/mekoapi.ts` calls them at Meko's API URL
 (`resolveMekoApiUrl()`) with AgentK's Meko key. While the Meko on this computer is linked to Meko
-Cloud, that's the local Meko's client token and its pass-through, `<local origin>/api/v1/cloud`,
-which sends each call on to Meko Cloud's REST API with the link's key: Meko keeps the key, and Share
-opens the Share dialog. Under an older Meko that still hands out the link's key, it's that key at
+Cloud, that's the local Meko's client token and its own `<local origin>/api/v1`, which sends each
+share call on to Meko Cloud's REST API with the link's key (`<local origin>/api/v1/cloud` under a
+Meko from before it routed by id): Meko keeps the key, and Share opens the Share dialog. A project
+whose datapack is still on the Meko on this computer can't be shared: Meko answers 409
+`DATAPACK_LOCAL`, saying it can be shared once it's in Meko Cloud. Under an older Meko that still hands out the link's key, it's that key at
 the link's API URL; with AgentK's own key from before Meko owned the link, `[meko] api_url` (by
 default the web app URL plus `/api/v1`). AgentK can share when Meko is on and the API URL is known;
 the state sent to the browser carries it as `MekoStatus.sharing`. Without an API URL the share

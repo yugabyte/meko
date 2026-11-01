@@ -2,8 +2,6 @@ package rest
 
 import (
 	"fmt"
-	"net/http"
-	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -97,24 +95,25 @@ type datapackRow struct {
 	LearningsCount           int    `json:"learnings_count"`
 	CollectiveMemoryCount    int    `json:"collective_memory_count"`
 	ConversationSearchOptOut bool   `json:"conversation_search_opt_out"`
+	// WebURL opens it in the web UI: this Meko's page for it.
+	WebURL string `json:"web_url"`
 }
 
-// listDatapacks is this Meko's datapacks and the linked Meko Cloud's (location=all, the default), or
-// with ?location=local only this Meko's, or with location=cloud only Meko Cloud's (cloud.go).
+// listDatapacks is GET /datapacks: this Meko's datapacks and, while Meko Cloud is linked, its
+// datapacks too (cloud.go), as one list sorted by name with one row per id. Each row's web_url opens
+// it: this web UI's page for this Meko's, Meko Cloud's web app for its own. Nothing says where a
+// datapack lives: the routes that take one send it to the right place. A web UI tab from before gets
+// this Meko's alone (staleTab).
 func (a *api) listDatapacks(c echo.Context) error {
-	location := c.QueryParam("location")
-	if location == "" {
-		location = a.defaultLocation(c, "all")
+	linked, err := a.linked()
+	if err != nil {
+		return err
 	}
-	switch location {
-	case "local", "cloud", "all":
-	default:
-		return badRequest(c, "location must be local, cloud or all")
+	list := a.Service.Datapacks
+	if linked { // the datapacks this Meko serves while linked (memory.Service.ServesHere)
+		list = a.Service.ServedDatapacks
 	}
-	if location == "cloud" {
-		return a.listLocation(c, location, nil)
-	}
-	ds, err := a.Service.Datapacks(ctx(c))
+	ds, err := list(ctx(c))
 	if err != nil {
 		return err
 	}
@@ -122,26 +121,24 @@ func (a *api) listDatapacks(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	sort.SliceStable(ds, func(i, j int) bool { return ds[i].CreatedAt.After(ds[j].CreatedAt) })
 	out := make([]datapackRow, len(ds))
 	for i, d := range ds {
 		out[i] = datapackRow{Datapack: wire.DatapackRow(d, a.Service.UserID()), OwnerName: fullName(p),
-			OwnerEmail: p.Email, ConversationSearchOptOut: d.ConversationSearchOptOut}
+			OwnerEmail: p.Email, ConversationSearchOptOut: d.ConversationSearchOptOut, WebURL: "/datapacks/" + d.ID}
 	}
-	if location == "all" {
-		return a.listLocation(c, location, out)
+	if a.staleTab(c) {
+		return envelope.OK(c, out)
 	}
-	return envelope.OK(c, out)
+	return a.withCloud(c, out)
 }
 
+// createDatapack is POST /datapacks: a new datapack goes to Meko Cloud while it's linked, and is made
+// here otherwise, and the reply's web_url says where it opens, as the listing's rows do. A location
+// in the body (sent by an older meko-cli or web UI) is ignored.
 func (a *api) createDatapack(c echo.Context) error {
 	var body struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
-		// Location (Meko's own) names where: "cloud" the linked Meko Cloud, "local" this Meko. Without
-		// it, the linked Meko Cloud while there's one, else this Meko. No datapack is made here while
-		// Meko Cloud is linked: "local" is then a 409 CLOUD_LINKED.
-		Location string `json:"location"`
 	}
 	if ok, err := bind(c, &body); !ok {
 		return err
@@ -150,35 +147,18 @@ func (a *api) createDatapack(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	if body.Location == "" {
-		body.Location = "local"
-		if linked {
-			body.Location = "cloud"
-		}
-	}
-	switch body.Location {
-	case "local":
-		if linked {
-			return envelope.Fail(c, http.StatusConflict, codeCloudLinked, "Meko is linked to Meko Cloud, so new "+
-				"datapacks go there. Unlink it to create one on this computer.")
-		}
-	case "cloud":
-		if !linked {
-			return notLinkedOr(c, nil)
-		}
+	if linked {
 		if strings.TrimSpace(body.Name) == "" {
 			return badRequest(c, "name is required")
 		}
 		return a.createInCloud(c, strings.TrimSpace(body.Name), body.Description)
-	default:
-		return badRequest(c, "location must be local or cloud")
 	}
 	d, err := a.Service.CreateDatapack(ctx(c), body.Name, body.Description)
 	if err != nil {
 		return serviceError(c, err)
 	}
 	return created(c, map[string]any{"datapack_id": d.ID, "agent_id": memory.DefaultAgentID, "name": d.Name,
-		"mcp_user_name": "", "mcp_server": map[string]string{"url": "", "api_key": ""},
+		"web_url": "/datapacks/" + d.ID, "mcp_user_name": "", "mcp_server": map[string]string{"url": "", "api_key": ""},
 		"db_access": map[string]string{"user_name": "", "password": "", "conn_str": ""}})
 }
 
@@ -225,12 +205,6 @@ func (a *api) updateDatapack(c echo.Context) error {
 }
 
 func (a *api) deleteDatapack(c echo.Context) error {
-	if cloud, ok, err := a.inCloud(c); !ok || cloud {
-		if !ok {
-			return err
-		}
-		return a.toCloud(c, http.StatusOK, http.MethodDelete, cloudPath(c, ""), nil)
-	}
 	id, ok, err := a.pathDatapack(c)
 	if !ok {
 		return err

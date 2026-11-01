@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { DESCRIBE_INTERRUPTED, REVIEW_LEFT_CODE, type CodeReviewDetail, type CodeReviewFinding, type CodeReviewSummary } from '../../src/shared/codereview';
 import type { Session } from '../../src/shared/types';
-import { findingGroups, findingsCountsText, findingsReviewing, stageChipText, withOverride } from '../../src/web/util.js';
+import { canRunReview, findingGroups, findingsCountsText, findingsReviewing, stageChipText, withOverride } from '../../src/web/util.js';
 
 describe('stageChipText', () => {
-  const review = (state: CodeReviewSummary['state'], detail: string | null) => ({ state, detail }) as CodeReviewSummary;
+  const review = (state: CodeReviewSummary['state'], detail: string | null, onDemand = false) => ({ state, detail, onDemand }) as CodeReviewSummary;
   it.each([
     ['code', null, null, 'Code'],
     ['code', 'describing', null, 'Review & PR'],
@@ -16,8 +16,32 @@ describe('stageChipText', () => {
     ['code', 'cancelled', REVIEW_LEFT_CODE, 'Code'],
     ['code', 'done', null, 'Code'],
     ['review', 'done', null, 'Review & PR'],
+    // One the user ran holds nothing: the task stays in Code with its Open PR.
+    ['code', 'sweeping', 'on demand', 'Code'],
+    ['code', 'failed', 'on demand', 'Code'],
   ] as const)('in %s with a %s review (%s) reads %s', (stage, state, detail, text) => {
-    expect(stageChipText({ stage, codeReview: state ? review(state, detail) : null } as Session)).toBe(text);
+    const onDemand = detail === 'on demand';
+    expect(stageChipText({ stage, codeReview: state ? review(state, onDemand ? null : detail, onDemand) : null } as Session)).toBe(text);
+  });
+});
+
+describe('canRunReview', () => {
+  const s = (over: Partial<Session>) => ({ kind: 'task', stage: 'code', prNumber: null, codeReview: null, status: 'idle', busy: false, ...over }) as Session;
+  const review = (state: CodeReviewSummary['state']) => ({ state, detail: null }) as CodeReviewSummary;
+  it.each([
+    ['a task in Code', s({}), { offered: true, ready: true, wait: null }],
+    ['mid-turn', s({ status: 'working' }), { offered: true, ready: false, wait: "After AgentK's turn" }],
+    ['waiting on the user', s({ status: 'needs_input' }), { offered: true, ready: false, wait: 'Answer AgentK in the terminal first' }],
+    ['exited', s({ status: 'exited' }), { offered: true, ready: false, wait: 'Resume the session first' }],
+    ['past a finished review', s({ codeReview: review('done') }), { offered: true, ready: true, wait: null }],
+    ['while one runs', s({ codeReview: review('sweeping') }), { offered: false, ready: false, wait: null }],
+    ['while one waits for fixes', s({ codeReview: review('fixing') }), { offered: false, ready: false, wait: null }],
+    ['in Review & PR with its PR', s({ stage: 'review', prNumber: 7 }), { offered: true, ready: true, wait: null }],
+    ['in Review & PR before the PR is found', s({ stage: 'review' }), { offered: false, ready: false, wait: null }],
+    ['in Design', s({ stage: 'design' }), { offered: false, ready: false, wait: null }],
+    ['on a Review a PR session', s({ kind: 'review-pr', stage: 'reviewing-pr' }), { offered: false, ready: false, wait: null }],
+  ] as const)('%s: %j', (_, session, want) => {
+    expect(canRunReview(session)).toEqual(want);
   });
 });
 

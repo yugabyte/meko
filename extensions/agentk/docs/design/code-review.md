@@ -7,9 +7,9 @@ algorithm (its `pkg/agenticreview`, the cloud AgentK's Golum 1.0), so the task f
 finds before anyone else reads the PR. The PR description then says how it went, on one line:
 
 ```
-me_ak_review:4 blockers,4 major addressed
-me_ak_review:1 blocker,2 major,3 minor addressed
-me_ak_review:LGTM
+me_ak_review:4 blockers,4 major addressed;Sagittarius3.0
+me_ak_review:1 blocker,2 major,3 minor addressed;Sirius1.0
+me_ak_review:LGTM;Sagittarius3.0
 ```
 
 The code is in `src/server/review/` (the algorithm, ported) and `src/shared/codereview.ts` (the
@@ -163,15 +163,17 @@ earlier rounds' findings and what the task did with them (prior rounds). The las
 findings lead the PR prompt (`code-review-findings`).
 
 **The line** (`meAkReviewLine`) adds up every round's kept findings, by severity in the order
-blocker, major, minor; `LGTM` when no round kept one. AgentK writes it into the PR's description
-after `adoptPr` when Claude left it out (`syncReviewLine`).
+blocker, major, minor; `LGTM` when no round kept one. After a `;` it names the strategy that ran,
+its name without spaces (`strategyTag`: `Sagittarius3.0`, `Sirius1.0`); `parseMeAkReviewLine` still
+reads a line from before it did. AgentK writes it into the PR's description after `adoptPr` when
+Claude left it out or it differs (`syncReviewLine`).
 
 **Stopping.** A failed review (no pass reported, or an error) or one the user cancelled holds the
 PR: Open PR answers 409, Run to merge waits, and the task offers **Retry** (the round again from
 the step it stopped at, reusing every step already reported, from `code_review_steps`) and **Open
 anyway** (the PR prompt with no line). A move out of Code (or a move to Review & PR that finds
 the task outside Code) cancels its review, running or stopped, with the detail `the task left Code`
-(`REVIEW_LEFT_CODE`, `CodeReviews.leftCode`; `taskMovedOn` catches one the review session's turn
+(`REVIEW_LEFT_CODE`, `CodeReviews.leftStage`; `taskMovedOn` catches one the review session's turn
 end finds there): that one doesn't hold the PR (`reviewHolds`), since Retry and Open anyway are
 Code's, so the next Open PR, or a move to Review & PR, starts a new review on the change as it is.
 A move to Review & PR checks what Open PR does, whether the review is on or off: the user's
@@ -182,11 +184,84 @@ waits for fixes whose turn was interrupted moves it on to the next round.
 Review & PR) on a done review without it sends the PR prompt with the findings and the line, and
 starts no new review. It's set when the prompt is sent, and cleared again (`markUnsent`) when
 Claude exits before taking it: the task goes back to Code, and the prompt goes again once Claude
-is back ([AgentK's mod](mod.md)).
+is back ([AgentK's mod](mod.md)). A review that finishes while the task's turn runs (a prompt of
+the user's went meanwhile) queues Open PR (Run to merge's, when the review was, and only while Run to merge is still on), so
+its PR prompt goes when that turn ends ([Queued gates](lifecycle.md#queued-gates)). The queued Open PR's step
+sends it from inside the session's serial queue (`Lifecycle.serial`), as a move to Review & PR's
+does: a step's own call to `serial` for its session runs right away, as part of the step, since
+queued it would wait for the step that waits for it. `serial` can't tell that call from work the
+step started without waiting for it, so such work that reaches `serial` while the step still runs
+runs alongside it too, and a step mustn't leave any running; once the step is done, it queues as
+usual. A Cancel of that queued Open PR, or Run to merge stopping, while the PR prompt waits on
+GitHub and Meko still stops it, as for any queued Open PR.
 
 **Recovery.** `code_reviews` and `code_review_steps` keep a review's state and every step's
 report. After a restart, `CodeReviews.recover()` asks an idle review session again for the steps
 still missing; a review whose session is gone fails, for Retry.
+
+## On demand
+
+The user can run the review at any time in Code, or in Review & PR once the PR is found: the
+`review-run` action (`CodeReviews.runNow`). On a desktop it's **Run the local review of …** in the
+command palette and, once the task has a review, **Review again** in the findings panel's header
+(the magnifier opens it); on a phone, **Run local review** in the task's ⋯ sheet too. While AgentK
+can't take it, each of these says why (after its turn, answer it in the terminal, resume the
+session), and the server's refusal says so again. For
+a review the user ran, the findings header also has **Cancel** while it runs and **Retry** once it
+stopped, in its own stage (`onDemandControls`), as the ⋯ sheet does on a phone: the Code gate
+doesn't show it. A stopped review it replaces passes on the Open PR instructions and a move's
+`moved` line it held. It's refused (409) mid-turn,
+while AgentK waits on the user or has exited, while a review runs, outside those two stages, and in
+Review & PR while the last one's fix or push prompt hasn't been taken. With the strategy Off it runs
+the default one (Sagittarius 3.0), with the resolved depth and rounds. It's an ordinary review row
+with `purpose = 'demand'` and the `stage` it runs in (`code_reviews.purpose`, `.stage`), not a state
+of its own: the states are listed by hand in many places (the runner, `recover`, the UI's helpers,
+the usage counts), and nothing flags one left out.
+
+It runs as Open PR's review does, rounds and fix prompts included, but sends no PR prompt. Its last
+round's findings go to the task as a fix prompt too (`code-review-fix` ending "Don't open the PR
+yet", `FixAfter`), since no PR prompt carries them. Its fix (and push) prompts go through the task's
+prompt queue as `local-review`, in Code as in Review & PR, since the user may be working with the
+task meanwhile: one goes only once AgentK is between turns, never into a turn or a question in the
+terminal, and the end of the turn that took it starts the next round, interrupted or not (there's
+no Review now for it; Cancel stops it). A prompt Claude loses before its turn starts (it exits
+first) goes back to queued and is sent again when Claude is back (`claudeBack`, or the next look
+at the PR), and Open PR on a finished review whose last fix prompt was never taken sends those
+findings with the PR prompt instead, so the line never says they were addressed when the task
+never saw them. A stopped one holds nothing (`reviewHolds` is false
+for `CodeReviewSummary.onDemand`): it offers Retry, not Open anyway, and Open PR starts a review of
+its own (and a queued Open PR stays queued: `reviewStopped`). Leaving the stage it runs in cancels
+it, running or stopped (`leftStage`, `taskMovedOn`; `the task left Review & PR` for one there), so
+its Retry stays in that stage, and `retry` refuses it elsewhere.
+
+**In Code**, the task writes its PR description first, as for Open PR. Once it's done, Open PR (a
+move to Review & PR, Run to merge's queued Open PR) sends the PR with its line and starts no review,
+through `openPr`'s path for a done review whose PR prompt didn't go, even with the strategy Off
+(`applies` is true then, and while one runs); the PR prompt has no findings block, since they went
+as a fix prompt. Leaving Code (a move, or one to Review & PR that picks up the branch's open PR)
+marks such a review stale (`code_reviews.stale`): Open PR then reviews again, or, with the strategy
+Off, opens the PR with no line (`prLine` ignores a stale review). Open PR while one runs takes it
+over: its `purpose` becomes `pr` and it sends the PR prompt when it's done (not past a fix prompt still queued: the turn that takes it moves the
+review on). So does an Open PR
+queued during its fix turn (the user's, or Run to merge's), at that turn's end (`takeOver`), rather
+than being dropped as one queued during an Open PR review's turn is.
+
+**In Review & PR**, there's no describing turn: the passes read the open PR's own title and
+description (`Lifecycle.prText`), quoted like the task's. Its fix prompts go through the stage's
+prompt queue as `local-review` (after the people's review prompts, before conflicts and CI), so
+they never collide with a GitHub review, conflict or CI prompt, and the next round starts when the
+turn that took the prompt ends (`localReviewTurnEnded`), not at whichever turn ends first. The fixes
+are pushed once, after the last round: a fix prompt with a re-review to follow says not to commit or
+push yet, the last round's says to commit and push, and a re-review that finds nothing after
+earlier fixes sends `code-review-push` when the worktree has changes not on the PR (uncommitted
+files, or a branch tip the PR's head doesn't contain, read from the PR's own repo:
+`Lifecycle.unpushedToPr`). When it's done,
+AgentK puts its line in the PR's description (`syncReviewLine`). While it runs, or its prompt waits
+in the queue, the merge waits on "The local review is still running." (a blocker that clears by
+itself, so Merge & Close and Run to merge queue behind it), and the uncommitted-files and
+unpushed-commits blockers wait too, as they do mid-turn. Only while Claude is there to take the
+prompts: once it has exited, they're blockers only the user clears, and a queued merge is dropped
+with a notice. Cancelling or leaving the review drops its prompt, queued or out.
 
 ## Context the passes get
 
@@ -252,7 +327,9 @@ writes the PR description the gate says so, with Cancel and **Review now** (Open
 interrupted turn it starts round 1 with the description as it is, past a lost ask it asks again);
 while the task fixes a round's findings it offers **Review now** too, which starts the next round
 past an interrupted fix turn. Both are off while the task's turn runs. The step the stage bar shows
-isn't a move target then, and neither is Code, the session's own stage.
+isn't a move target then, and neither is Code, the session's own stage. A review the user ran
+(`onDemand`) holds no PR, so none of this applies to it: the task shows in Code with its Open PR
+gate, and its findings header (and the ⋯ sheet on a phone) offers Cancel and Retry.
 
 The Usage page and the project home count reviews in their **Code Reviews** section, and stack the
 review sessions' tokens on the Token usage chart ([Token usage](token-usage.md)); the usage report

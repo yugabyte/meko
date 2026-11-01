@@ -144,21 +144,36 @@ function severityPart(s: Severity, n: number): string {
 /** The prefix of the PR description's line. */
 export const ME_AK_REVIEW = 'me_ak_review:';
 
-/**
- * The PR description's line for a finished local review: every round's findings added up, each
- * severity that has some, in the order blocker, major, minor; `LGTM` when no round found any.
- */
-export function meAkReviewLine(counts: SeverityCounts): string {
-  const parts = SEVERITIES.filter((s) => counts[s] > 0).map((s) => severityPart(s, counts[s]));
-  return ME_AK_REVIEW + (parts.length ? `${parts.join(',')} addressed` : 'LGTM');
+/** A strategy as the line names it: its display name without spaces (`Sagittarius3.0`). */
+export function strategyTag(id: string): string {
+  return strategyName(id).replace(/\s+/g, '');
 }
 
-/** Reads a `me_ak_review:` line back: its counts, or null when it isn't one. */
-export function parseMeAkReviewLine(line: string): SeverityCounts | null {
+/** What a `me_ak_review:` line says: the findings and, after `;`, the strategy's tag (null on a line without one). */
+export interface MeAkReview {
+  counts: SeverityCounts;
+  strategy: string | null;
+}
+
+/**
+ * The PR description's line for a finished local review: every round's findings added up, each
+ * severity that has some, in the order blocker, major, minor; `LGTM` when no round found any; then
+ * `;` and the strategy that ran (`strategyTag`).
+ */
+export function meAkReviewLine(counts: SeverityCounts, strategy: string): string {
+  const parts = SEVERITIES.filter((s) => counts[s] > 0).map((s) => severityPart(s, counts[s]));
+  return `${ME_AK_REVIEW}${parts.length ? `${parts.join(',')} addressed` : 'LGTM'};${strategyTag(strategy)}`;
+}
+
+/** Reads a `me_ak_review:` line back, with or without its strategy, or null when it isn't one. */
+export function parseMeAkReviewLine(line: string): MeAkReview | null {
   const t = line.trim();
   if (!t.startsWith(ME_AK_REVIEW)) return null;
-  const rest = t.slice(ME_AK_REVIEW.length).trim();
-  if (rest === 'LGTM') return noCounts();
+  const body = t.slice(ME_AK_REVIEW.length).trim();
+  const sm = /^(.*);([^\s;]+)$/.exec(body);
+  const rest = (sm ? sm[1] : body).trim();
+  const strategy = sm ? sm[2] : null;
+  if (rest === 'LGTM') return { counts: noCounts(), strategy };
   const m = /^(.*)\s+addressed$/.exec(rest);
   if (!m) return null;
   const counts = noCounts();
@@ -168,7 +183,7 @@ export function parseMeAkReviewLine(line: string): SeverityCounts | null {
     const sev = (pm[2].startsWith('blocker') ? 'blocker' : pm[2]) as Severity;
     counts[sev] += Number(pm[1]);
   }
-  return totalCount(counts) ? counts : null;
+  return totalCount(counts) ? { counts, strategy } : null;
 }
 
 /** The `me_ak_review:` line in a PR description, or null when it has none. */
@@ -224,6 +239,13 @@ export interface CodeReviewSummary {
   waiting: boolean;
   /** Why it failed or was cancelled, or why a `describing` review waits on you, in plain words; null otherwise. */
   detail: string | null;
+  /**
+   * The user ran it (the `review-run` action), not an Open PR: it sends no PR prompt when it's done,
+   * and a stopped one holds nothing. An Open PR while it runs takes it over (false from then on).
+   */
+  onDemand: boolean;
+  /** Where it runs: in Code, or in Review & PR on the open PR. Leaving that stage cancels it. */
+  stage: 'code' | 'review';
 }
 
 /**
@@ -282,8 +304,8 @@ export function reviewSegmentLabel(r: CodeReviewSummary): string {
     case 'describing': what = 'waiting for the PR description'; break;
     case 'fixing': what = 'waiting for the fixes'; break;
     case 'done': what = doneShowsCounts(r) ? countsText(r.counts) : totalCount(r.counts) ? `LGTM, ${countsText(r.counts)} addressed` : 'LGTM'; break;
-    case 'failed': what = `failed${r.detail ? `: ${r.detail}` : ''}. Retry or Open anyway`; break;
-    case 'cancelled': what = reviewHolds(r) ? 'cancelled. Retry or Open anyway' : `cancelled: ${r.detail}`; break;
+    case 'failed': what = `failed${r.detail ? `: ${r.detail}` : ''}. ${r.onDemand ? 'Retry it' : 'Retry or Open anyway'}`; break;
+    case 'cancelled': what = reviewHolds(r) ? 'cancelled. Retry or Open anyway' : r.onDemand && r.detail === YOU_CANCELLED ? 'cancelled. Retry it' : `cancelled: ${r.detail}`; break;
   }
   const meko = r.mekoCall ? ', searching Meko' : '';
   const waiting = r.waiting ? ', waiting on you in its terminal' : '';
@@ -311,15 +333,22 @@ export const DESCRIBE_LOST = "the task's agent exited before taking the ask for 
 
 /** Why a review stopped when its task left Code: it doesn't hold the next Open PR, which starts a new review. */
 export const REVIEW_LEFT_CODE = 'the task left Code';
+/** Why a review run in Review & PR stopped when its task left that stage. */
+export const REVIEW_LEFT_REVIEW = 'the task left Review & PR';
+/** Why a review stopped when the user cancelled it (the `review-cancel` action). */
+export const YOU_CANCELLED = 'you cancelled it';
 
 /** The review failed or was cancelled: its magnifier shows it stopped, whether or not it holds the PR. */
 export function reviewStopped(r: Pick<CodeReviewSummary, 'state'> | null | undefined): boolean {
   return !!r && (r.state === 'failed' || r.state === 'cancelled');
 }
 
-/** The review holds the task's Open PR for the user to pick Retry or Open anyway. */
-export function reviewHolds(r: Pick<CodeReviewSummary, 'state' | 'detail'> | null | undefined): boolean {
-  return !!r && (r.state === 'failed' || (r.state === 'cancelled' && r.detail !== REVIEW_LEFT_CODE));
+/**
+ * The review holds the task's Open PR for the user to pick Retry or Open anyway. One the user ran
+ * (`onDemand`) never does: Open PR starts a review of its own.
+ */
+export function reviewHolds(r: Pick<CodeReviewSummary, 'state' | 'detail' | 'onDemand'> | null | undefined): boolean {
+  return !!r && !r.onDemand && (r.state === 'failed' || (r.state === 'cancelled' && r.detail !== REVIEW_LEFT_CODE));
 }
 
 /** The review is still working (its lens pulses): its steps run, not the task's fixes. */

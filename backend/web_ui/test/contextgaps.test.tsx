@@ -245,10 +245,10 @@ test("the Overview shows the open questions' line only while there are some", as
   expect(text()).toBe("");
 });
 
-test("a Meko Cloud datapack's Context Gaps has a page of its own, named from Meko Cloud's listing", async () => {
+test("a Meko Cloud datapack's Context Gaps has a page of its own, named from the datapacks' listing", async () => {
   serve({
     [`${LIST}open`]: () => ({ data: page([gap("Who owns the pager?")]) }),
-    "GET /api/v1/datapacks?location=cloud": () => ({
+    "GET /api/v1/datapacks": () => ({
       data: [{ datapack_id: ID, datapack_name: "team-cloud", description: "", grant: "owner" }],
     }),
   });

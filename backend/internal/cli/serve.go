@@ -390,6 +390,10 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		moveBackOnce(followCtx, st, cloud, log)
 	}()
 	go cloud.CloudTools(followCtx)
+	// The extensions still running from before this start read the link again: an update or a rollback
+	// may have changed how they reach Meko Cloud through this Meko (meko token --json's
+	// datapack_routing), and nothing else tells them.
+	go web.notify(followCtx, "cloud")
 	log.Info("Meko started", "url", fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.Port),
 		"pid", pid, "data_dir", l.Root, "version", version.Version, "auth", cfg.Server.Auth)
 	if cfg.Server.Auth == config.AuthNone {

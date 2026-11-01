@@ -23,8 +23,9 @@ export function MekoCloudPage() {
       <div className="space-y-1">
         <h1 className="text-xl font-semibold">Meko Cloud</h1>
         <p className="text-sm text-muted-foreground">
-          The Meko Cloud your extensions use for their memory, in place of this Meko. AgentK keeps each project's datapack
-          there, and shares projects through it.
+          The Meko Cloud your agents and extensions use for their memory. While it's linked, new datapacks are made there,
+          and the ones already on this Meko keep working. AgentK keeps each new project's datapack there, and shares
+          projects through it.
         </p>
       </div>
       {cloud ? <LinkForm cloud={cloud} onSaved={setCloud} /> : loadError ? <ErrorNote error={loadError} /> : <Loading />}

@@ -1,6 +1,7 @@
 // Package mcp is Meko's MCP server at /mcp: Meko Cloud's tools, with their names, arguments and
 // reply shapes, on the official MCP Go SDK in stateless mode with JSON replies. While Meko Cloud is
-// linked, it offers Meko Cloud's own tools and sends every call there (cloud.go).
+// linked, it offers Meko Cloud's own tools and sends each call there, unless it names a datapack
+// this Meko has (cloud.go).
 //
 // Tools take their arguments raw (the SDK's low-level AddTool, which validates nothing), so they
 // read them as loosely as Cloud does and ignore ones they don't know. Each result is the reply's
@@ -38,7 +39,7 @@ type Options struct {
 	// each call. The server's auth check sets it before the handler runs.
 	Credential func(*http.Request) string
 	// Cloud, if set, is the linked Meko Cloud: while it's linked, /mcp offers its tools and sends
-	// every call there (cloud.go).
+	// each call there, unless it names a datapack this Meko has (cloud.go).
 	Cloud Cloud
 }
 
@@ -95,8 +96,9 @@ func NewHandler(o Options) http.Handler {
 		if _, ok := servers[cred]; !ok {
 			cred = ""
 		}
-		// A link that can't be read (a Keychain that refused, say) may be a linked one: its calls
-		// then fail with the reason in the log, rather than land in this Meko's datapacks.
+		// A link that can't be read (a Keychain that refused, say) may be a linked one: a call that
+		// names one of this Meko's datapacks still runs here, and the others fail with the reason in
+		// the log, rather than land in this Meko's default datapack.
 		if o.Cloud != nil {
 			if linked, err := o.Cloud.IsLinked(); err != nil || linked {
 				return o.cloudServerFor(r.Context(), cloud, cred)

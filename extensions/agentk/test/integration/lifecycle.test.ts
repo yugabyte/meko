@@ -223,6 +223,28 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
   const stages = (id: string) => all<{ stage: string }>(env.core.db, 'SELECT stage FROM session_stages WHERE session_id = ? ORDER BY rowid', id).map((r) => r.stage);
   const cleanups = (id: string) => all(env.core.db, "SELECT 1 FROM session_events WHERE session_id = ? AND kind = 'cleanup'", id).length;
 
+  it("runs a serial step's own call for its session inside it, and queues work the step left running once it's done", async () => {
+    const lc = env.core.lifecycle as unknown as { serial<T>(id: string, f: () => Promise<T>): Promise<T> };
+    const order: string[] = [];
+    let release!: () => void;
+    const released = new Promise<void>((r) => (release = r));
+    let later!: Promise<unknown>;
+    await lc.serial('s1', async () => {
+      // Queued behind the step that waits for it, it would never run (#415), nor anything after it.
+      await lc.serial('s1', async () => order.push('nested'));
+      // Through another session's step and back.
+      await lc.serial('s2', () => lc.serial('s1', async () => order.push('s2 → s1')));
+      later = released.then(() => lc.serial('s1', async () => order.push('later')));
+    });
+    const next = lc.serial('s1', async () => {
+      release();
+      await new Promise((r) => setTimeout(r, 20));
+      order.push('next');
+    });
+    await Promise.all([next, later]);
+    expect(order).toEqual(['nested', 's2 → s1', 'next', 'later']);
+  });
+
   it("closes a session whose PR was merged on GitHub once when polls overlap, even without the PR's size", async () => {
     const s = await inReview('Merged elsewhere');
     gh.stats = new Error('gh: rate limited');

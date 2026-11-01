@@ -271,12 +271,7 @@ export class Core extends EventEmitter {
     setMekoLinkHandedOver(kvGet(this.db, MEKO_HANDED_OVER_KEY) === '1');
     // Meko restarted on another port, or with a new token, or its Meko Cloud link changed while
     // AgentK didn't hear: read it again before the retry.
-    this.meko.onConnectFail = async () => {
-      const source = resolveMekoWithSource(this.cfg).keySource;
-      if ((source !== 'local' && source !== 'meko') || Date.now() - this.localRecheckAt < LOCAL_MEKO_RECHECK_MS) return;
-      this.localRecheckAt = Date.now();
-      await this.refreshMeko();
-    };
+    this.meko.onConnectFail = () => this.recheckMeko();
     this.services = o.services ?? (() => servicesFor(o.paths.home));
     this.legacyTmuxPanes = o.legacyTmuxPanes ?? (() => legacyTmuxPanes(o.paths));
     this.host = o.host ?? new SessionHost(o.paths, { services: this.services, onHello: () => this.changed() });
@@ -367,6 +362,9 @@ export class Core extends EventEmitter {
     const mekoApi = o.mekoApi ?? new MekoApi(() => ({
       baseUrl: resolveMekoApiUrl(this.cfg), apiKey: resolveMeko(this.cfg).apiKey, storageHttp: mekoStorageHttp(this.cfg),
     }));
+    // A 404 from Meko's REST API may be a Meko updated or rolled back under AgentK, whose REST base
+    // moved (`datapack_routing`), when its start's notice didn't reach AgentK: read it again.
+    mekoApi.onNotFound = () => void this.recheckMeko().catch((e: unknown) => this.log.warn('reading Meko again failed', errMsg(e)));
     this.invites = new InviteService(this, mekoApi);
     this.knowledge = new KnowledgeService(this, mekoApi);
   }
@@ -533,6 +531,18 @@ export class Core extends EventEmitter {
   /** The Meko data folder AgentK's home is in (movehome.ts), else `[meko] home`; null lets `meko` pick. */
   mekoHome(): string | null {
     return mekoDirOf(this.paths.home) ?? (this.cfg.meko.home || null);
+  }
+
+  /**
+   * Reads the Meko on this computer again after a sign that it changed under AgentK (a failed MCP
+   * connection, a 404 from its REST API), at most once every LOCAL_MEKO_RECHECK_MS, and only while
+   * AgentK uses that Meko.
+   */
+  private async recheckMeko(): Promise<void> {
+    const source = resolveMekoWithSource(this.cfg).keySource;
+    if ((source !== 'local' && source !== 'meko') || Date.now() - this.localRecheckAt < LOCAL_MEKO_RECHECK_MS) return;
+    this.localRecheckAt = Date.now();
+    await this.refreshMeko();
   }
 
   /**

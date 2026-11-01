@@ -120,15 +120,11 @@ func uploadOne(ctx context.Context, kb toolKB, dp target, path string, f toolFla
 	if f.json {
 		fmt.Fprintln(stdout, reply)
 	}
-	in := ""
-	if dp.cloud {
-		in = " in " + dp.noun()
-	}
 	// Bytes the datapack already has may still be queued, indexing, or failed and queued again: they
 	// are waited for like a new upload.
 	if offer.AlreadyUploaded {
 		if !f.json {
-			fmt.Fprintf(stdout, "%s: already in the knowledge base%s as %s (key %s)\n", path, in,
+			fmt.Fprintf(stdout, "%s: already in the knowledge base as %s (key %s)\n", path,
 				offer.ExistingFilename, offer.Key)
 		}
 	} else if err = cloudlink.PostUpload(ctx, offer.URL, offer.Fields, filepath.Base(path),
@@ -137,7 +133,7 @@ func uploadOne(ctx context.Context, kb toolKB, dp target, path string, f toolFla
 	}
 	if f.noWait {
 		if !f.json && !offer.AlreadyUploaded {
-			fmt.Fprintf(stdout, "%s: uploaded%s; %s says when it's indexed\n", path, in, statusHint(dp, offer.Key))
+			fmt.Fprintf(stdout, "%s: uploaded; %s says when it's indexed\n", path, statusHint(dp, offer.Key))
 		}
 		return nil
 	}
@@ -151,7 +147,7 @@ func uploadOne(ctx context.Context, kb toolKB, dp target, path string, f toolFla
 			if f.json {
 				fmt.Fprintln(stdout, raw)
 			} else if st.State == "completed" {
-				fmt.Fprintf(stdout, "%s: indexed%s, %s (key %s)\n", path, in, chunks(st.Document.ChunksProcessed),
+				fmt.Fprintf(stdout, "%s: indexed, %s (key %s)\n", path, chunks(st.Document.ChunksProcessed),
 					offer.Key)
 			}
 			if st.State != "completed" {

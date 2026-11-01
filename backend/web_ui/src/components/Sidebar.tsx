@@ -1,17 +1,18 @@
 // The left rail: the Meko mark, the Status link, the Extensions group, the Settings link, the
 // datapacks, and the version (with a chip to the Status page's Updates card when a newer release is
-// out) and theme toggle. Below md it's a drawer over the page, opened from the top bar. While Meko Cloud is
-// linked, the datapacks are one list: this Meko's (a laptop) and then Meko Cloud's (a cloud). The
-// Find a datapack box above them narrows both to the names that hold what's typed, like Meko Cloud's.
+// out) and theme toggle. Below md it's a drawer over the page, opened from the top bar. The datapacks
+// are one list, by name, each opened where its row's web_url says: this UI's pages, or Meko Cloud's
+// web app in a new tab. The Find a datapack box above them narrows it to the names that hold what's
+// typed, like Meko Cloud's.
 
 import { useState } from "react";
-import { Database, Laptop, Moon, Plus, RefreshCw, Search, Sun, X } from "lucide-react";
-import { isCloudFailure, matchesName, notifyCloudChanged, useCloudDatapacks } from "../lib/cloud";
+import { Database, ExternalLink, Moon, Plus, RefreshCw, Search, Sun, Users, X } from "lucide-react";
+import { ApiError } from "../lib/api";
+import { isShared, matchesName, ROWS_SHOWN, rowLink, useCloudLinked } from "../lib/cloud";
 import { href, navigate, type Route } from "../lib/route";
 import type { Theme } from "../lib/theme";
 import { useUpdateAvailable } from "../lib/update";
 import type { Datapack } from "../lib/types";
-import { CloudDatapackRows } from "./CloudDatapackRows";
 import { DatapackDialog } from "./DatapackDialog";
 import { ExtensionsLink } from "./ExtensionsLink";
 import { SettingsLink } from "./SettingsLink";
@@ -34,6 +35,9 @@ export function Sidebar({
   open,
   onClose,
   datapacks,
+  loading,
+  error,
+  onRefresh,
   activeId,
   view,
   version,
@@ -44,32 +48,28 @@ export function Sidebar({
   open: boolean;
   onClose: () => void;
   datapacks: Datapack[];
+  loading: boolean;
+  error?: Error;
+  onRefresh: () => void;
   activeId?: string;
   view: Route["view"];
   version?: string;
   theme: Theme;
   onToggleTheme: () => void;
-  onCreated: (id: string) => void;
+  // open says whether the new datapack opens here (it was made on this computer).
+  onCreated: (id: string, open: boolean) => void;
 }) {
   const [creating, setCreating] = useState(false);
   const [query, setQuery] = useState("");
   const update = useUpdateAvailable();
-  const cloud = useCloudDatapacks();
-  const linked = !!cloud.data?.linked || isCloudFailure(cloud.error);
-  const LocalIcon = linked ? Laptop : Database;
+  const linked = !!useCloudLinked().data;
   const status = { tab: "overview" as const, view: "status" as const };
   const filtering = query.trim() !== "";
-  const local = datapacks.filter((d) => matchesName(d.datapack_name, query));
-  const cloudRows = linked ? (cloud.data?.datapacks ?? []) : [];
-  // Nothing matched, and Meko Cloud's rows aren't something else instead: its first listing, which
-  // may still bring matches (and until which `linked` can't be known), or its error note. A refresh
-  // keeps the rows it had, so the query is matched against them.
-  const noMatch =
-    filtering &&
-    local.length === 0 &&
-    !(cloud.loading && !cloud.data) &&
-    !(linked && cloud.error) &&
-    !cloudRows.some((d) => matchesName(d.datapack_name, query));
+  const [all, setAll] = useState(false);
+  const matches = datapacks.filter((d) => matchesName(d.datapack_name, query));
+  // A match is the row being looked for, so none waits behind Show all.
+  const shown = filtering || all ? matches : matches.slice(0, ROWS_SHOWN);
+  const noMatch = filtering && matches.length === 0 && !loading && !error;
   return (
     <>
       {open && <div className="fixed inset-0 z-40 bg-black/50 md:hidden" onClick={onClose} />}
@@ -96,21 +96,15 @@ export function Sidebar({
           <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Datapacks</span>
           <div className="flex items-center">
             {linked && (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={cloud.reload}
-                disabled={cloud.loading}
-                title="Refresh Meko Cloud's datapacks"
-              >
-                <RefreshCw className={cx("size-3.5", cloud.loading && "animate-spin")} />
+              <Button size="sm" variant="ghost" onClick={onRefresh} disabled={loading} title="Refresh the datapacks">
+                <RefreshCw className={cx("size-3.5", loading && "animate-spin")} />
               </Button>
             )}
             <Button
               size="sm"
               variant="ghost"
               onClick={() => setCreating(true)}
-              title={linked ? "New datapack on this computer" : "New datapack"}
+              title={linked ? "New datapack in Meko Cloud" : "New datapack"}
             >
               <Plus className="size-3.5" />
             </Button>
@@ -145,36 +139,20 @@ export function Sidebar({
           )}
         </div>
         <nav className="flex-1 space-y-0.5 overflow-y-auto px-2">
-          {local.map((d) => (
-            <a
-              key={d.datapack_id}
-              href={href({ datapackId: d.datapack_id, tab: "overview" })}
-              onClick={(e) => {
-                e.preventDefault();
-                navigate({ datapackId: d.datapack_id, tab: "overview" });
-              }}
-              title={linked ? "On this computer" : undefined}
-              className={cx(
-                "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm",
-                d.datapack_id === activeId ? "bg-accent font-medium" : "text-muted-foreground hover:bg-accent",
-              )}
-            >
-              <LocalIcon
-                className={cx("size-4 shrink-0", d.datapack_id === activeId && "text-primary")}
-                aria-hidden
-              />
-              <span className="truncate">{d.datapack_name}</span>
-              {linked && <span className="sr-only">, on this computer</span>}
-            </a>
+          {shown.map((d) => (
+            <DatapackRow key={d.datapack_id} d={d} active={d.datapack_id === activeId} />
           ))}
-          {linked && (
-            <CloudDatapackRows
-              datapacks={cloud.data?.datapacks ?? []}
-              loading={cloud.loading}
-              error={cloud.error}
-              query={query}
-            />
+          {!filtering && matches.length > ROWS_SHOWN && (
+            <button
+              type="button"
+              aria-expanded={all}
+              onClick={() => setAll(!all)}
+              className="w-full rounded-lg px-2 py-1.5 text-left text-xs font-medium text-primary hover:bg-accent"
+            >
+              {all ? "Show fewer" : `Show all ${matches.length}`}
+            </button>
           )}
+          {error && <ListError error={error} />}
           {noMatch && (
             <div className="px-2 py-1.5 text-sm italic text-muted-foreground">
               No datapacks match “{query.trim()}”
@@ -208,14 +186,103 @@ export function Sidebar({
         <DatapackDialog
           inCloud={linked}
           onClose={() => setCreating(false)}
-          onSaved={(id) => {
+          onSaved={(id, created) => {
             setCreating(false);
-            // A Meko Cloud datapack shows in the Cloud rows, and opens in Meko Cloud's web app.
-            if (linked) notifyCloudChanged();
-            else onCreated(id);
+            // Meko decides where it's made, and its reply's web_url says where it opens: one made in
+            // Meko Cloud shows in the list, and opens in Meko Cloud's web app.
+            onCreated(id, !!created && rowLink(created).kind === "here");
           }}
         />
       )}
     </>
+  );
+}
+
+const ROW = "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm";
+
+// A datapack's row: a link to its pages here, a link to Meko Cloud's web app in a new tab, or, when
+// that web app isn't known, a row that opens nothing. One shared with the user ends with Meko Cloud's
+// two-people icon.
+function DatapackRow({ d, active }: { d: Datapack; active: boolean }) {
+  const link = rowLink(d);
+  const body = (
+    <>
+      <Database className={cx("size-4 shrink-0", active && "text-primary")} aria-hidden />
+      <span className="min-w-0 flex-1 truncate">{d.datapack_name}</span>
+      {isShared(d.grant) && (
+        <span title="Shared with you" className="shrink-0">
+          <Users className="size-3.5 text-primary" aria-hidden />
+          <span className="sr-only">, shared with you</span>
+        </span>
+      )}
+      {link.kind === "web" && (
+        <>
+          <ExternalLink className="size-3.5 shrink-0" aria-hidden />
+          <span className="sr-only">, opens in a new tab</span>
+        </>
+      )}
+    </>
+  );
+  if (link.kind === "here") {
+    const to = { datapackId: d.datapack_id, tab: "overview" as const };
+    return (
+      <a
+        href={href(to)}
+        onClick={(e) => (e.preventDefault(), navigate(to))}
+        aria-current={active ? "page" : undefined}
+        className={cx(ROW, active ? "bg-accent font-medium" : "text-muted-foreground hover:bg-accent")}
+      >
+        {body}
+      </a>
+    );
+  }
+  if (link.kind === "web") {
+    return (
+      <a
+        href={link.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Opens in a new tab"
+        className={cx(ROW, "text-muted-foreground hover:bg-accent")}
+      >
+        {body}
+      </a>
+    );
+  }
+  return (
+    <div
+      aria-disabled="true"
+      title="Can't be opened from here. Set the web app URL in Settings › Meko Cloud to open it"
+      className={cx(ROW, "text-muted-foreground opacity-60")}
+    >
+      {body}
+    </div>
+  );
+}
+
+const settings = { tab: "overview" as const, view: "meko-cloud" as const };
+
+// The codes whose fix is on Settings › Meko Cloud.
+const FIX_IN_SETTINGS = new Set(["CLOUD_KEY_REFUSED", "CLOUD_NO_API_URL"]);
+
+// A listing that failed: one note, linking to Settings › Meko Cloud when the fix is there.
+function ListError({ error }: { error: Error }) {
+  const fix = error instanceof ApiError && FIX_IN_SETTINGS.has(error.code);
+  return (
+    <div className="mx-2 my-1 rounded-lg bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
+      {error.message}
+      {fix && (
+        <>
+          {" "}
+          <a
+            href={href(settings)}
+            onClick={(e) => (e.preventDefault(), navigate(settings))}
+            className="font-medium underline"
+          >
+            Open Meko Cloud settings
+          </a>
+        </>
+      )}
+    </div>
   );
 }

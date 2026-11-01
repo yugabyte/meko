@@ -206,7 +206,7 @@ var mekoCLIGroups = []string{"Datapacks", "Memory and knowledge", "At the prompt
 var mekoCLICommands = []command{
 	{name: "datapacks", group: "Datapacks", summary: "List the datapacks",
 		usage: "meko-cli datapacks [flags]", examples: []example{
-			{"meko-cli datapacks", "by name, with their descriptions: the linked Meko Cloud's while it's linked"},
+			{"meko-cli datapacks", "by name, with their descriptions: Meko Cloud's and this computer's while it's linked"},
 			{"meko-cli datapacks --json", "with each one's id"},
 		}},
 	{name: "create_datapack", group: "Datapacks", summary: "Create a datapack",

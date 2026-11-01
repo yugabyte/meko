@@ -732,7 +732,7 @@ export interface MekoCallPage {
 /**
  * The open questions on Meko's Context Gaps for a project's dedicated datapack (the searches Meko
  * found nothing, or nothing relevant, for), by how their latest ask went: the project home's line,
- * which links to the tab. Meko keeps them; AgentK only reads the counts.
+ * which links to the tab (both counts 0 with none open). Meko keeps them; AgentK only reads the counts.
  */
 export interface MekoGaps {
   datapackId: string;
@@ -2522,11 +2522,16 @@ export type SessionAction =
   | 'close-review'
   /** Save what the session learned to its project's dedicated datapack (the learn step); 409 while Claude is busy or one runs. */
   | 'learn'
-  /** A task's local review: stop it; Open PR then waits for Retry or Open anyway. */
+  /**
+   * A task's local review, run now in Code or Review & PR (with the strategy Off, the default one).
+   * It sends no PR prompt: Open PR later sends the PR with its line instead of reviewing again.
+   */
+  | 'review-run'
+  /** A task's local review: stop it; Open PR then waits for Retry or Open anyway (not after one the user ran). */
   | 'review-cancel'
   /** A task's failed or cancelled local review: review again, reusing the steps already reported. */
   | 'review-retry'
-  /** A task's failed or cancelled local review: send the PR prompt without a `me_ak_review:` line. */
+  /** A task's failed or cancelled local review (not one the user ran): send the PR prompt without a `me_ak_review:` line. */
   | 'review-open-anyway';
 
 // ---- WebSockets ----
@@ -2742,9 +2747,14 @@ export type TermServerMessage =
 //        dedicated datapack or Meko, while Claude is busy, starting or exited, or while one runs. merge and discard take
 //        an optional CloseSessionRequest (400 for a skipLearn that isn't a boolean): skipLearn skips the learn step they
 //        run first. A discard that runs one answers with the session still running (Session.discarding) and discards it
-//        when the step ends; asked again with skipLearn, it discards now). review-cancel stops a task's running local review
+//        when the step ends; asked again with skipLearn, it discards now). review-run starts a task's local review now, in
+//        Code or Review & PR (409 for a session that isn't a task, in another stage, in Review & PR before the PR is found or
+//        while the last one's fixes wait to be taken, while one runs, and while AgentK is mid-turn, waiting on the user or
+//        exited). review-cancel stops a task's running local review
 //        (409 when none runs); review-retry reviews again, reusing the steps already reported, and review-open-anyway sends
-//        the PR prompt without a me_ak_review line: both 409 unless the review failed or was cancelled)
+//        the PR prompt without a me_ak_review line: both 409 unless the review failed or was cancelled; review-retry
+//        409 too for a review the user ran in another stage than the task's now, and review-open-anyway for any review
+//        the user ran)
 // POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to, a
 //        missing task, or instructions that aren't text or are too long; 409 while AgentK is mid-turn, in Merge & Close,
 //        or a prompt (the stage's, or the user's instructions) is due and Claude is waiting or exited, and for a move to

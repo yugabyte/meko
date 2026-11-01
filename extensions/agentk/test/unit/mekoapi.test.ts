@@ -32,6 +32,18 @@ describe('MekoApi', () => {
     expect(e).toMatchObject({ status: 409, code: 'CONFLICT', message: 'bob@example.com is already a member' });
   });
 
+  it('says when Meko answers 404, so Meko can be read again, and only then', async () => {
+    const f = fakeMekoApi();
+    let told = 0;
+    f.api.onNotFound = () => told++;
+    f.handle(() => ({ status: 409, body: { error: { code: 'CONFLICT', message: 'taken' } } }));
+    await expect(f.api.incomingShares()).rejects.toMatchObject({ status: 409 });
+    expect(told).toBe(0);
+    f.handle(() => ({ status: 404, body: { error: { code: 'NOT_FOUND', message: 'Not Found' } } }));
+    await expect(f.api.incomingShares()).rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' });
+    expect(told).toBe(1);
+  });
+
   it('passes on a refused key as an error', async () => {
     const f = fakeMekoApi();
     await expect(f.api.incomingShares()).rejects.toMatchObject({ status: 401, code: 'UNAUTHORIZED', message: 'invalid or expired token' });
@@ -71,7 +83,7 @@ describe('MekoApi', () => {
     await expect(f.api.requestUpload('dp', 'a.md', Buffer.from('a'))).rejects.toMatchObject({ code: 'BAD_REPLY' });
   });
 
-  it("posts only over https, unless Meko's own API is on http, and words the storage's refusal without its URL", async () => {
+  it("posts only over https, unless Meko's own API is on http or the link is on its origin, and words the storage's refusal without its URL", async () => {
     const up = (url: string) => ({ url, fields: [['policy', 'p'] as [string, string]], key: 'k', alreadyUploaded: false });
     const f = fakeMekoApi();
     await expect(f.api.postPresigned(up('http://minio.test/b?X-Amz-Signature=s'), 'a.md', Buffer.from('a'))).rejects.toMatchObject({ code: 'BAD_REPLY' });
@@ -81,9 +93,18 @@ describe('MekoApi', () => {
     local.handle(() => ({ status: 204 }));
     await local.api.postPresigned(up('http://minio.test/b'), 'a.md', Buffer.from('a'));
     expect(local.calls.map((c) => c.path)).toEqual(['http://minio.test/b']);
-    // The Meko on this computer's pass-through to Meko Cloud is on http, but Meko Cloud's storage isn't.
-    const through = new MekoApi(() => ({ baseUrl: 'http://127.0.0.1:7778/api/v1/cloud', apiKey: 'k', storageHttp: false }));
+    // The Meko on this computer is on http while it reaches Meko Cloud, but Meko Cloud's storage isn't;
+    // a link on that Meko's own origin is for one of its own datapacks.
+    const calls: string[] = [];
+    const through = new MekoApi(() => ({ baseUrl: 'http://127.0.0.1:7778/api/v1', apiKey: 'k', storageHttp: false }),
+      (async (u: string | URL | Request) => {
+        calls.push(String(u));
+        return new Response(null, { status: 204 });
+      }) as typeof fetch);
     await expect(through.postPresigned(up('http://minio.test/b'), 'a.md', Buffer.from('a'))).rejects.toMatchObject({ code: 'BAD_REPLY' });
+    await expect(through.postPresigned(up('http://127.0.0.1:7779/api/v1/knowledge-uploads/t'), 'a.md', Buffer.from('a'))).rejects.toMatchObject({ code: 'BAD_REPLY' });
+    await through.postPresigned(up('http://127.0.0.1:7778/api/v1/knowledge-uploads/t'), 'a.md', Buffer.from('a'));
+    expect(calls).toEqual(['http://127.0.0.1:7778/api/v1/knowledge-uploads/t']);
 
     f.handle(() => ({ status: 400, body: '<?xml version="1.0"?><Error><Code>EntityTooLarge</Code><Message>Your proposed upload exceeds the maximum allowed size</Message></Error>' }));
     const e = await f.api.postPresigned(up('https://bucket.s3.test/?sig=s'), 'a.md', Buffer.from('a')).catch((x: unknown) => x);

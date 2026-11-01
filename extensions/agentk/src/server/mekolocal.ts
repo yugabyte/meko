@@ -21,9 +21,10 @@ export interface LocalMeko {
  * it a key of its own, once.
  *
  * Meko keeps the key and reaches Meko Cloud for its extensions itself (its `/mcp`, and its REST API
- * under `/api/v1/cloud`): its `cloud` says only whether it's linked (`linked`, set only from such a
- * Meko) and the web app, and `url`, `apiKey` and `apiUrl` are ''. An older Meko handed out the key:
- * linked, its `url` and `apiKey` are set, and AgentK calls Meko Cloud with them; unlinked, they're ''.
+ * under `/api/v1`, or `/api/v1/cloud` before it routed datapacks by id): its `cloud` says only whether
+ * it's linked (`linked`, set only from such a Meko), the web app and whether it routes by id
+ * (`routed`), and `url`, `apiKey` and `apiUrl` are ''. An older Meko handed out the key: linked, its
+ * `url` and `apiKey` are set, and AgentK calls Meko Cloud with them; unlinked, they're ''.
  */
 export interface MekoCloudLink {
   set: boolean;
@@ -34,6 +35,11 @@ export interface MekoCloudLink {
   linked?: boolean;
   /** The linked account, named without its key (Meko's `account`): a new key is another account. */
   account?: string;
+  /**
+   * Meko's `/api/v1` serves its own datapacks and sends any other id to Meko Cloud, and it has no
+   * `/api/v1/cloud` (Meko's `datapack_routing`).
+   */
+  routed?: true;
 }
 
 /**
@@ -57,7 +63,10 @@ function cloudOf(v: unknown): MekoCloudLink | undefined {
   const c = v as Record<string, unknown>;
   if (typeof c.linked === 'boolean' && !('api_key' in c)) {
     const webUrl = c.linked && /^https?:\/\//.test(str(c.web_url)) ? str(c.web_url) : '';
-    return { set: c.set as boolean, url: '', apiKey: '', webUrl, apiUrl: '', linked: c.linked, account: c.linked ? str(c.account) : '' };
+    return {
+      set: c.set as boolean, url: '', apiKey: '', webUrl, apiUrl: '', linked: c.linked, account: c.linked ? str(c.account) : '',
+      ...(c.datapack_routing === true ? { routed: true as const } : {}),
+    };
   }
   const url = /^https?:\/\//.test(str(c.url)) ? str(c.url) : '';
   const apiKey = url ? str(c.api_key) : '';
@@ -125,7 +134,7 @@ export function originOf(url: string): string | null {
 
 /**
  * Meko is linked to Meko Cloud and reaches it for AgentK itself: through its `/mcp`, and its REST
- * API under `/api/v1/cloud` (`MekoCloudLink`). False under an older Meko, which handed out the key.
+ * API (`MekoCloudLink`). False under an older Meko, which handed out the key.
  */
 export function linkedThroughMeko(cloud: MekoCloudLink | undefined): boolean {
   return cloud?.linked === true;

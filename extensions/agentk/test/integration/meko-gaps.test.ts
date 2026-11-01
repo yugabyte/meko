@@ -30,7 +30,7 @@ describe("Meko's Context Gaps in AgentK", () => {
       hook_token, desired, status, stage, created_at, purpose) VALUES (?, ?, ?, ?, ?, 'b', 'main', '/w', 't', 'tok', 'running', 'idle', ?, 0, ?)`,
       id, projectId, id, id, `claude-${id}`, stage, purpose);
 
-  it("counts the dedicated datapack's open questions from the Meko on this computer, and shows none without them", async () => {
+  it("counts the dedicated datapack's open questions from the Meko on this computer, none open too", async () => {
     const p = await project('Alpha');
     meko.datapacks.set('dp-Alpha', [
       { key: 'release tag retention', query: 'Release tag retention' },
@@ -49,9 +49,11 @@ describe("Meko's Context Gaps in AgentK", () => {
     expect((await home(p.id)).mekoGaps).toEqual({ datapackId: 'dp-Alpha', cloud: true, empty: 1, weak: 1 });
     // The line opens the tab, or for Meko Cloud's datapack, Meko's page for its Context Gaps.
     expect([mekoGapsPath('dp-Alpha'), mekoGapsPath('dp-Alpha', true)]).toEqual(['/datapacks/dp-Alpha/gaps', '/gaps/dp-Alpha']);
-    // Nothing open, a Meko too old to keep questions, and a project with no dedicated datapack: no line.
+    // Nothing open: the line still links to the tab.
+    meko.cloud.delete('dp-Alpha');
     meko.datapacks.set('dp-Alpha', [{ key: 'old', query: 'Old', state: 'dismissed' }]);
-    expect((await home(p.id)).mekoGaps).toBeNull();
+    expect((await home(p.id)).mekoGaps).toEqual({ datapackId: 'dp-Alpha', cloud: false, empty: 0, weak: 0 });
+    // A Meko too old to keep questions, and a project with no dedicated datapack: no line.
     meko.state.old = true;
     expect((await home(p.id)).mekoGaps).toBeNull();
     const plain = await project('Plain', false);

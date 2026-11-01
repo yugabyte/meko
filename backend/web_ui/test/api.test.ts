@@ -1,5 +1,5 @@
-// The UI's search and Add memory go to this computer's datapack through Meko's own REST routes, not
-// /mcp, which sends every call to Meko Cloud while it's linked.
+// The UI's listing, create, search and Add memory: Meko's own REST routes, which name no location
+// (Meko routes each datapack itself).
 
 import { afterEach, expect, test, vi } from "vitest";
 import { api } from "../src/lib/api";
@@ -13,7 +13,7 @@ function serve(data: unknown) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
-      calls.push({ url, method: init?.method ?? "GET", body: JSON.parse(String(init?.body)) });
+      calls.push({ url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined });
       return Response.json({ data, error: null });
     }),
   );
@@ -21,16 +21,26 @@ function serve(data: unknown) {
 
 afterEach(() => vi.unstubAllGlobals());
 
-test("search posts to the datapack's search route on this computer", async () => {
+test("search posts to the datapack's search route", async () => {
   serve({ results: { memory: [] } });
   expect(await api.search(DP, "deploys", "memory")).toEqual({ results: { memory: [] } });
-  expect(calls).toEqual([{ url: `/api/v1/datapacks/${DP}/search?location=local`, method: "POST",
+  expect(calls).toEqual([{ url: `/api/v1/datapacks/${DP}/search`, method: "POST",
     body: { query: "deploys", force_source: "memory", agent_id: "meko_web_ui", conversation_id: "meko_web_ui" } }]);
 });
 
-test("Add memory posts to the datapack's memories route on this computer", async () => {
+test("Add memory posts to the datapack's memories route", async () => {
   serve({ results: [] });
   await api.addMemory(DP, "a fact");
-  expect(calls).toEqual([{ url: `/api/v1/datapacks/${DP}/memories?location=local`, method: "POST",
+  expect(calls).toEqual([{ url: `/api/v1/datapacks/${DP}/memories`, method: "POST",
     body: { agent_id: "meko_web_ui", conversation_id: "meko_web_ui", text: "a fact" } }]);
+});
+
+test("the datapacks are one listing, and a create names no location", async () => {
+  serve([]);
+  await api.datapacks();
+  await api.createDatapack("research", "");
+  expect(calls).toEqual([
+    { url: "/api/v1/datapacks", method: "GET", body: undefined },
+    { url: "/api/v1/datapacks", method: "POST", body: { name: "research", description: "" } },
+  ]);
 });

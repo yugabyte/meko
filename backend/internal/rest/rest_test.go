@@ -112,8 +112,8 @@ func TestDatapackRoutes(t *testing.T) {
 	wantErr(t, e, "GET", "/datapacks/00000000-0000-0000-0000-000000000000", nil, 404, "NOT_FOUND")
 	// Any form of the id Cloud's uuid column takes finds the datapack.
 	okData(t, e, "GET", "/datapacks/"+strings.ToUpper(id), nil, 200)
-	if list = arr(okData(t, e, "GET", "/datapacks", nil, 200)); obj(list[0])["datapack_id"] != id {
-		t.Errorf("newest first: %v", list)
+	if list = arr(okData(t, e, "GET", "/datapacks", nil, 200)); len(list) != 2 || obj(list[1])["datapack_id"] != id {
+		t.Errorf("by name (default, then notes): %v", list)
 	}
 
 	okData(t, e, "PATCH", "/datapacks/"+id, map[string]string{"description": "my notes"}, 200)

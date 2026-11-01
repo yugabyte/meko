@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"sort"
@@ -343,7 +344,7 @@ func datapackUpdate(ctx context.Context, c *call, a args) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(id) == "" {
+	if id = memory.CanonicalID(id); id == "" {
 		return nil, fail("datapack_id_required", "Pass datapack_id (UUID). Use datapack_search(query=...) to find it.")
 	}
 	c.rec.DatapackID = id
@@ -387,7 +388,7 @@ func datapackDelete(ctx context.Context, c *call, a args) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(id) == "" {
+	if id = memory.CanonicalID(id); id == "" {
 		return nil, fail("datapack_id_required", "Pass datapack_id (UUID). Use datapack_search(query=...) to find it.")
 	}
 	c.rec.DatapackID = id
@@ -395,4 +396,113 @@ func datapackDelete(ctx context.Context, c *call, a args) (any, error) {
 		return nil, datapackError(err)
 	}
 	return map[string]string{"message": "datapack deleted"}, nil
+}
+
+// While Meko Cloud is linked, datapack_list and datapack_search add this Meko's datapacks to Meko
+// Cloud's reply (cloud.go's routed), in the same row shape and with no word of where each lives: a
+// call that names one runs here. A datapack both sides have that this Meko lists is listed once, as
+// this Meko's; when this Meko's copy doesn't match the query, Meko Cloud's row stays. This Meko's
+// rows carry no user_id: the user's account id is Meko Cloud's, and AgentK reads it from an owner
+// row's user_id.
+
+// cloudRowID is the id of one of Meko Cloud's datapack rows.
+func cloudRowID(row json.RawMessage) string {
+	var r struct {
+		ID string `json:"datapack_id"`
+	}
+	_ = json.Unmarshal(row, &r)
+	return r.ID
+}
+
+// localMatches is this Meko's datapacks that match query and name, sorted by, with no user_id, and
+// their ids.
+func (o Options) localMatches(ctx context.Context, query, name, by string) ([]wire.Datapack, map[string]bool, error) {
+	ds, err := o.Service.ServedDatapacks(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	ds = matching(ds, query, name)
+	sortDatapacks(ds, by)
+	ids := map[string]bool{}
+	for _, d := range ds {
+		ids[d.ID] = true
+	}
+	return datapackRows(ds, ""), ids, nil
+}
+
+// withoutIDs is rows without those whose id is in ids, and how many it left out.
+func withoutIDs(rows []json.RawMessage, ids map[string]bool) ([]any, int) {
+	out := make([]any, 0, len(rows))
+	for _, r := range rows {
+		if !ids[cloudRowID(r)] {
+			out = append(out, r)
+		}
+	}
+	return out, len(rows) - len(out)
+}
+
+// mergeList is datapack_list's reply while linked: Meko Cloud's rows, then this Meko's matching
+// query, newest first, cut to limit. A reply that isn't a list passes as it came.
+func (o Options) mergeList(ctx context.Context, a args, reply string) (any, error) {
+	var rows []json.RawMessage
+	if json.Unmarshal([]byte(reply), &rows) != nil {
+		return nil, nil
+	}
+	query, _ := a.str("query")
+	limit, _ := a.integer("limit", 0)
+	local, ids, err := o.localMatches(ctx, query, "", "created")
+	if err != nil {
+		return nil, err
+	}
+	out, _ := withoutIDs(rows, ids)
+	for _, d := range local {
+		out = append(out, d)
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// mergeSearch is datapack_search's page while linked. The first page (no cursor) has this Meko's
+// matches first (every one, so the page can be longer than limit), then Meko Cloud's; a page asked
+// for with a cursor is Meko Cloud's, whose cursor it is. Every page leaves out Meko Cloud's rows of
+// the ids this Meko lists. A total Meko Cloud gave (include_total) counts this Meko's matches too,
+// less the rows this page left out: one of an id on both sides on another page is counted twice. A
+// reply that isn't a page passes as it came.
+func (o Options) mergeSearch(ctx context.Context, a args, reply string) (any, error) {
+	var page map[string]json.RawMessage
+	var rows []json.RawMessage
+	if json.Unmarshal([]byte(reply), &page) != nil || json.Unmarshal(page["datapacks"], &rows) != nil {
+		return nil, nil
+	}
+	cursor, _ := a.str("cursor")
+	query, _ := a.str("query")
+	name, _ := a.str("name")
+	grant, _ := a.str("grant")
+	by, _ := a.str("sort")
+	local, ids, err := o.localMatches(ctx, query, name, by)
+	if err != nil {
+		return nil, err
+	}
+	if grant == "shared" { // the local user owns every datapack here
+		local, ids = nil, nil
+	}
+	cloudRows, dropped := withoutIDs(rows, ids)
+	out := make([]any, 0, len(local)+len(cloudRows))
+	if cursor == "" {
+		for _, d := range local {
+			out = append(out, d)
+		}
+	}
+	merged := map[string]any{}
+	for k, v := range page {
+		merged[k] = v
+	}
+	merged["datapacks"] = append(out, cloudRows...)
+	var total *int
+	if json.Unmarshal(page["total"], &total) == nil && total != nil {
+		merged["total"] = *total + len(local) - dropped
+	}
+	return merged, nil
 }

@@ -109,28 +109,31 @@ func Register(g *echo.Group, o Options) {
 	g.GET("/settings/answers", a.answersStatus)
 	g.PUT("/settings/answers", a.setAnswers)
 
-	g.Any("/cloud/*", a.passToCloud)
-
+	// The routes that take a datapack in the path and that Meko Cloud has too go through byID: one
+	// this Meko doesn't have goes to Meko Cloud while it's linked. Meko's own (usage, export, the maps,
+	// answer, memory extraction) answer for this Meko's alone; search and memories call Meko Cloud's
+	// tools (callTool), and Context Gaps keeps Meko Cloud's datapacks' questions here (questions.go).
 	g.GET("/datapacks", a.listDatapacks)
 	g.POST("/datapacks", a.createDatapack)
-	g.GET("/datapacks/:id", a.describeDatapack)
-	g.PATCH("/datapacks/:id", a.updateDatapack)
-	g.DELETE("/datapacks/:id", a.deleteDatapack)
-	g.GET("/datapacks/:id/provision-status", a.provisionStatus)
-	g.GET("/datapacks/:id/agents", a.agents)
-	g.GET("/datapacks/:id/metrics", a.metrics)
-	g.GET("/datapacks/:id/token-savings", a.tokenSavings)
+	g.GET("/datapacks/:id", a.byID(a.describeDatapack))
+	g.PATCH("/datapacks/:id", a.byID(a.updateDatapack))
+	g.DELETE("/datapacks/:id", a.byID(a.deleteDatapack))
+	g.GET("/datapacks/:id/provision-status", a.byID(a.provisionStatus))
+	g.GET("/datapacks/:id/agents", a.byID(a.agents))
+	g.GET("/datapacks/:id/metrics", a.byID(a.metrics))
+	g.GET("/datapacks/:id/token-savings", a.byID(a.tokenSavings))
 	g.GET("/datapacks/:id/usage", a.callUsage)
 	g.GET("/datapacks/:id/export", a.exportDatapack)
+	g.GET("/datapacks/export", a.exportDatapack) // ?name=: one of this Meko's, by name
 	g.GET("/datapacks/:id/memory-map", a.memoryMap)
 	g.GET("/datapacks/:id/search-map", a.searchMap)
 	g.POST("/datapacks/:id/search", a.search)
 	g.POST("/datapacks/:id/answer", a.answer)
 	g.POST("/datapacks/:id/memories", a.addMemory)
 
-	g.GET("/datapacks/:id/artifacts", a.listArtifacts)
-	g.POST("/datapacks/:id/artifacts/:hash/download-url", a.artifactDownloadURL)
-	g.GET("/datapacks/:id/artifacts/:hash", a.getArtifact)
+	g.GET("/datapacks/:id/artifacts", a.byID(a.listArtifacts))
+	g.POST("/datapacks/:id/artifacts/:hash/download-url", a.byID(a.artifactDownloadURL))
+	g.GET("/datapacks/:id/artifacts/:hash", a.byID(a.getArtifact))
 
 	g.GET("/memories", a.listMemories)
 	g.DELETE("/memories/:memory", a.deleteMemory)
@@ -140,12 +143,24 @@ func Register(g *echo.Group, o Options) {
 	g.GET("/promoted-memories", a.listPromoted)
 	g.DELETE("/promoted-memories/:memory", a.deletePromoted)
 
-	g.GET("/datapacks/:id/conversations", a.listConversations)
-	g.GET("/datapacks/:id/conversations/count", a.countConversations)
-	g.GET("/datapacks/:id/conversations/:conversation", a.conversation)
-	g.PATCH("/datapacks/:id/conversation-search-opt-out", a.setOptOut)
+	g.GET("/datapacks/:id/conversations", a.byID(a.listConversations))
+	g.GET("/datapacks/:id/conversations/count", a.byID(a.countConversations))
+	g.GET("/datapacks/:id/conversations/:conversation", a.byID(a.conversation))
+	g.PATCH("/datapacks/:id/conversation-search-opt-out", a.byID(a.setOptOut))
 	g.GET("/datapacks/:id/memory-extraction", a.datapackExtraction)
 	g.PATCH("/datapacks/:id/memory-extraction", a.setDatapackExtraction)
+
+	// Only Meko Cloud shares datapacks: these go there while it's linked (cloudOnly).
+	g.GET("/datapacks/incoming-shares", a.cloudOnly)
+	g.POST("/datapacks/invite-action", a.cloudOnly)
+	g.POST("/share/:token/redeem", a.cloudOnly)
+	g.POST("/datapacks/:id/share", a.cloudOnly)
+	g.POST("/datapacks/:id/invite/:invite/resend", a.cloudOnly)
+	g.DELETE("/datapacks/:id/invite/:invite", a.cloudOnly)
+	g.GET("/datapacks/:id/member-list", a.cloudOnly)
+	g.GET("/datapacks/:id/outgoing-shares", a.cloudOnly)
+	g.GET("/datapacks/:id/share-link", a.cloudOnly)
+	g.PUT("/datapacks/:id/share-link", a.cloudOnly)
 
 	a.registerKnowledge(g)
 	a.registerQuestions(g)

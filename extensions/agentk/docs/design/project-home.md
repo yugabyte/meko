@@ -125,7 +125,7 @@ file) and **Clear** (deletes it) are there too. With the setting off, the page s
 The searches Meko couldn't answer are Meko's: the dedicated datapack's **Context Gaps** tab in
 Meko's web UI (for a Meko Cloud datapack, Meko's page for its Context Gaps). While AgentK's Meko
 calls go to the Meko on this computer, the line under the Meko stats in the project home's Token
-usage section says how many are open and opens that page in a new tab. How
+usage section says how many are open (or that none are) and opens that page in a new tab. How
 AgentK reads and marks them is in [Meko's Context Gaps](recall-and-learn.md#mekos-context-gaps).
 
 When the project on screen loses its last open session (Archive, Discard, Merge & Close, or a merge

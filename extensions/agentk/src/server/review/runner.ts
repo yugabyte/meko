@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import {
-  DESCRIBE_INTERRUPTED, DESCRIBE_LOST, MIN_SWEEPS, REVIEW_LEFT_CODE, addCounts, countsText, meAkReviewLine, noCounts, resolveReview, reviewHolds, reviewRunning, strategyName, totalCount,
+  DEFAULT_STRATEGY, DESCRIBE_INTERRUPTED, DESCRIBE_LOST, MIN_SWEEPS, REVIEW_LEFT_CODE, REVIEW_LEFT_REVIEW, YOU_CANCELLED, addCounts, countsText, meAkReviewLine, noCounts, resolveReview, reviewHolds, reviewRunning, strategyName, totalCount,
   type CodeReviewDetail, type CodeReviewFinding, type CodeReviewState, type CodeReviewSummary, type FindingOutcome,
   type ReviewSettings, type ReviewStrategyId, type SeverityCounts,
 } from '../../shared/codereview.js';
@@ -19,6 +19,7 @@ import { repoConfigTrusted } from '../headtrust.js';
 import { errMsg } from '../log.js';
 import { claudePath } from '../paths.js';
 import { HttpError } from '../projects.js';
+import type { FixAfter } from '../prompts.js';
 import { parseSettings, projectRow, sessionRepo, sessionReview, sessionRow, type SessionRow } from '../store.js';
 import { TOOLS_SERVER } from '../tooldefs.js';
 import { readDiff } from './diff.js';
@@ -78,6 +79,12 @@ interface ReviewRow {
   by: string;
   detail: string | null;
   lead: string | null;
+  /** 'pr': an Open PR started it; 'demand': the user ran it (`review-run`), and it sends no PR prompt. */
+  purpose: 'pr' | 'demand';
+  /** Where it runs: Code, or Review & PR on the open PR. */
+  stage: 'code' | 'review';
+  /** 1 once the task left Code after it finished with its PR prompt unsent: Open PR doesn't reuse it. */
+  stale: number;
   created_at: number;
   updated_at: number;
   finished_at: number | null;
@@ -85,6 +92,15 @@ interface ReviewRow {
 
 /** The running states: a review in one of them holds the task's Open PR. */
 const RUNNING: CodeReviewState[] = ['describing', 'preparing', 'sweeping', 'scoring', 'fixing'];
+
+/** How a fix prompt ends: in Code or Review & PR, with a re-review to follow (`more`) or not. */
+const fixAfter = (stage: 'code' | 'review', more: boolean): FixAfter => (stage === 'review' ? (more ? 'hold-push' : 'push') : more ? 'review-again' : 'open-later');
+
+/** A stopped review holds the task's Open PR (`reviewHolds`): never one the user ran. */
+const holds = (r: ReviewRow | undefined) => reviewHolds(r && { ...r, onDemand: r.purpose === 'demand' });
+
+/** A finished Code review whose PR prompt hasn't gone, which Open PR sends with its line rather than reviewing again. */
+const unsent = (r: ReviewRow | undefined): boolean => r?.state === 'done' && !r.finished_at && !r.stale && r.stage === 'code';
 
 
 /** What the subagent definitions say, for each harness that has them (`ReviewLaunch`). */
@@ -128,7 +144,8 @@ const json = <T>(s: string | null, fallback: T): T => {
  * scoring, then the task fixes the findings (re-review rounds) or opens the PR with the
  * `me_ak_review:` line. A review in a running state holds the task's Open PR; a failed one, or one the
  * user cancelled, holds it for the user's Retry or Open anyway (one cancelled because the task left
- * Code doesn't: `reviewHolds`).
+ * Code doesn't: `reviewHolds`). The user can also run one (`runNow`), in Code or in Review & PR: it
+ * sends no PR prompt, and Open PR then sends the PR with its line rather than reviewing again.
  */
 export class CodeReviews {
   /** Reviews being moved on now, so a turn end and a tool call never advance one twice at once. */
@@ -201,6 +218,8 @@ export class CodeReviews {
       // while its steps run: in fixing the UI opens the findings and has no terminal button.
       waiting: !!r.session_id && reviewRunning(r) && sessionRow(this.db, r.session_id)?.status === 'needs_input',
       detail: r.detail,
+      onDemand: r.purpose === 'demand',
+      stage: r.stage,
     };
   }
 
@@ -238,10 +257,17 @@ export class CodeReviews {
     return !!r && RUNNING.includes(r.state);
   }
 
+  /** The task's latest review runs, and it started in `stage` (a merge waits for one in Review & PR). */
+  runningIn(taskId: string, stage: 'code' | 'review'): boolean {
+    const r = this.latest(taskId);
+    return !!r && r.stage === stage && RUNNING.includes(r.state);
+  }
+
   /** The PR line a finished review gives the task's PR, or null when its last review didn't finish (or none ran). */
   prLine(taskId: string): string | null {
     const r = this.latest(taskId);
-    return r?.state === 'done' ? meAkReviewLine(json<SeverityCounts>(r.counts_json, noCounts())) : null;
+    // A stale one reviewed the change as it was before the task left Code.
+    return r?.state === 'done' && !r.stale ? meAkReviewLine(json<SeverityCounts>(r.counts_json, noCounts()), r.strategy) : null;
   }
 
   // ---- starting ----
@@ -249,13 +275,19 @@ export class CodeReviews {
   /**
    * Open PR (or a move to Review & PR with work to push) on a task: true when a review now holds it
    * (one just started, or one already running), false when the PR prompt may go (review Off, not a
-   * task). A finished review whose PR prompt didn't go sends it now; a stopped one waiting on Retry
-   * or Open anyway answers 409 (checkNotHeld).
+   * task). A finished review whose PR prompt didn't go sends it now (unless a queued Open PR, `queued`,
+   * is withdrawn meanwhile), one the user ran included, with the strategy Off too; a stopped one
+   * waiting on Retry or Open anyway answers 409 (checkNotHeld). A review the user ran that's still
+   * running is taken over: it sends the PR prompt when it's done.
    */
-  async openPr(task: SessionRow, opts: { instructions: string; by: 'you' | 'auto'; lead?: string }): Promise<boolean> {
+  async openPr(task: SessionRow, opts: { instructions: string; by: 'you' | 'auto'; lead?: string; queued?: boolean }): Promise<boolean> {
     if (task.kind === 'code-review' || task.kind === 'review-pr') return false;
     const last = this.latest(task.id);
     if (last && RUNNING.includes(last.state)) {
+      if (last.purpose === 'demand') {
+        this.set(last.id, { purpose: 'pr' });
+        this.core.sessions.event(task.id, 'review', 'The PR prompt goes when the local review you ran is done');
+      }
       // Pressed again while it runs: the instructions given now go with the PR, and a move's line before the next prompt.
       if (opts.instructions) this.set(last.id, { instructions: opts.instructions });
       if (opts.lead) this.set(last.id, { lead: opts.lead });
@@ -264,15 +296,21 @@ export class CodeReviews {
       // Open PR (or a move) is only taken between turns: a review still waiting for the task's PR
       // description or fixes then had that turn interrupted (or its ask lost), and the press says to go on.
       if (last.state === 'describing') this.kick(last.id, () => (last.detail === DESCRIBE_LOST ? this.describe(last.id) : this.beginRound(last.id)));
-      if (last.state === 'fixing') this.kick(last.id, () => this.nextRound(last.id));
+      // Not while its fix prompt waits in the queue (one the user ran): the end of the turn that takes it moves it on.
+      if (last.state === 'fixing' && !this.core.lifecycle.localReviewPending(task.id)) this.kick(last.id, () => this.nextRound(last.id));
       return true;
     }
     this.checkNotHeld(task.id);
-    // A finished review whose PR prompt didn't go (Claude was busy): the PR goes with its line now.
-    if (last?.state === 'done' && !last.finished_at) {
-      if (opts.instructions) this.set(last.id, { instructions: opts.instructions });
-      if (opts.lead) this.set(last.id, { lead: opts.lead });
-      await this.finish(last.id);
+    // A finished review whose PR prompt didn't go (Claude was busy, or the user ran it): the PR goes
+    // with its line now. One the user ran gave the task its last findings as a fix prompt; one still
+    // waiting in the queue (Claude lost it, or never took it) goes with the PR prompt instead.
+    if (last && unsent(last)) {
+      this.set(last.id, { instructions: opts.instructions || last.instructions, lead: opts.lead || last.lead, by: opts.by === 'you' ? 'you' : last.by });
+      if (last.purpose === 'demand') {
+        const untaken = this.core.lifecycle.localReviewPending(task.id);
+        this.core.lifecycle.clearLocalReview(task.id);
+        await this.sendPr(last.id, opts.queued, untaken);
+      } else await this.finish(last.id, opts.queued);
       return true;
     }
     const settings = this.settingsFor(task);
@@ -281,9 +319,15 @@ export class CodeReviews {
     return true;
   }
 
-  /** A review runs at the task's Open PR: a task whose review settings aren't Off. */
+  /**
+   * A review runs at the task's Open PR, or one already ran for it: a task whose review settings
+   * aren't Off, whose finished review Open PR sends the PR with, or whose review in Code still runs
+   * (Open PR takes it over, one the user ran with the strategy Off included).
+   */
   applies(task: SessionRow): boolean {
-    return task.kind !== 'code-review' && task.kind !== 'review-pr' && this.settingsFor(task).strategy !== 'off';
+    const last = this.latest(task.id);
+    return task.kind !== 'code-review' && task.kind !== 'review-pr'
+      && (this.settingsFor(task).strategy !== 'off' || unsent(last) || (!!last && last.stage === 'code' && RUNNING.includes(last.state)));
   }
 
   /**
@@ -291,21 +335,62 @@ export class CodeReviews {
    * because the task left Code doesn't: the next Open PR (or move to Review & PR) starts a new one.
    */
   checkNotHeld(taskId: string): void {
-    if (reviewHolds(this.latest(taskId))) throw new HttpError(409, 'The local review stopped. Retry it, or open the PR anyway.');
+    if (holds(this.latest(taskId))) throw new HttpError(409, 'The local review stopped. Retry it, or open the PR anyway.');
   }
 
-  private async start(task: SessionRow, settings: ReviewSettings, opts: { instructions: string; by: 'you' | 'auto'; lead?: string }): Promise<void> {
+  /**
+   * The `review-run` action: the task's local review runs now, at the user's request, in Code (the
+   * task writes its PR description first, as for Open PR) or in Review & PR (on the open PR, with its
+   * title and description). With the strategy Off it runs the default one. It sends no PR prompt:
+   * Open PR sends the PR with its line later.
+   */
+  async runNow(task: SessionRow): Promise<void> {
+    if (task.kind === 'code-review' || task.kind === 'review-pr') throw new HttpError(409, 'Only a task has a local review.');
+    if (task.desired !== 'running') throw new HttpError(409, 'This session is archived.');
+    if (task.stage !== 'code' && task.stage !== 'review') throw new HttpError(409, 'The local review runs in Code, or in Review & PR once the PR is open.');
+    if (task.stage === 'review' && !task.pr_number) throw new HttpError(409, "AgentK hasn't found the PR yet. Try again once it has.");
+    const last = this.latest(task.id);
+    if (last && RUNNING.includes(last.state)) throw new HttpError(409, 'A local review is already running.');
+    if (this.core.lifecycle.localReviewPending(task.id)) {
+      throw new HttpError(409, "AgentK hasn't taken the last local review's fixes yet. Run it again once it has.");
+    }
+    this.core.lifecycle.checkPromptable(task);
+    const settings = this.settingsFor(task);
+    // A stopped review it replaces may hold the Open PR's instructions and a move's `moved` line: they go on with this one.
+    const held = task.stage === 'code' && last && holds(last) && !last.finished_at ? last : undefined;
+    await this.start(task, settings.strategy === 'off' ? { ...settings, strategy: DEFAULT_STRATEGY } : settings,
+      { instructions: held?.instructions ?? '', lead: held?.lead ?? undefined, by: 'you', purpose: 'demand', stage: task.stage });
+  }
+
+  /**
+   * An Open PR queued during a turn of a review the user ran in Code (its PR description or fixes)
+   * takes it over at the turn's end: it sends the PR prompt when it's done, with the queued
+   * instructions, as a press between turns would (openPr).
+   */
+  takeOver(taskId: string, opts: { instructions: string; by: 'you' | 'auto' }): void {
+    const r = this.latest(taskId);
+    if (!r || r.purpose !== 'demand' || r.stage !== 'code' || !RUNNING.includes(r.state)) return;
+    this.set(r.id, { purpose: 'pr', instructions: opts.instructions || r.instructions, by: opts.by });
+    this.core.sessions.event(taskId, 'review', 'The PR prompt goes when the local review you ran is done');
+  }
+
+  private async start(task: SessionRow, settings: ReviewSettings, opts: { instructions: string; by: 'you' | 'auto'; lead?: string; purpose?: 'pr' | 'demand'; stage?: 'code' | 'review' }): Promise<void> {
     if (settings.strategy === 'off') return;
     const id = `${task.id}--review-${randomBytes(4).toString('hex')}`;
     const now = Date.now();
+    const purpose = opts.purpose ?? 'pr';
+    const stage = opts.stage ?? 'code';
     // An earlier review's session goes: the task's tab shows only the latest.
     const prev = this.latest(task.id);
-    run(this.db, `INSERT INTO code_reviews(id, task_id, strategy, rounds, depth, state, instructions, by, lead, created_at, updated_at)
-                  VALUES (?, ?, ?, ?, ?, 'describing', ?, ?, ?, ?, ?)`, id, task.id, settings.strategy, settings.rounds, settings.depth, opts.instructions || null, opts.by, opts.lead || null, now, now);
-    this.core.sessions.event(task.id, 'review', `Local review started (${strategyName(settings.strategy)}${settings.depth > 1 ? `, depth ${settings.depth}` : ''}${settings.rounds ? `, up to ${settings.rounds} re-review${settings.rounds === 1 ? '' : 's'}` : ''})`);
+    // In Review & PR the PR has its title and description already: the first round starts at once.
+    run(this.db, `INSERT INTO code_reviews(id, task_id, strategy, rounds, depth, state, instructions, by, lead, purpose, stage, created_at, updated_at)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, task.id, settings.strategy, settings.rounds, settings.depth, stage === 'code' ? 'describing' : 'preparing',
+    opts.instructions || null, opts.by, opts.lead || null, purpose, stage, now, now);
+    const how = `${strategyName(settings.strategy)}${settings.depth > 1 ? `, depth ${settings.depth}` : ''}${settings.rounds ? `, up to ${settings.rounds} re-review${settings.rounds === 1 ? '' : 's'}` : ''}`;
+    this.core.sessions.event(task.id, 'review', `${purpose === 'demand' ? 'You ran the local review' : 'Local review started'} (${how})`);
     this.core.changed();
     if (prev?.session_id) void this.archiveSession(prev.session_id);
-    this.kick(id, () => this.describe(id));
+    this.kick(id, () => (stage === 'code' ? this.describe(id) : this.beginRound(id)));
   }
 
   /**
@@ -418,7 +503,8 @@ export class CodeReviews {
     const trusted = repoConfigTrusted(task);
     const datapacks = trusted && this.core.mekoStatus.configured ? this.datapacks(wt, paths) : [];
     const repo = sessionRepo(this.db, task);
-    const prDescription = this.readDescription(task);
+    // In Review & PR, the open PR's own title and description.
+    const prDescription = r.stage === 'review' ? await this.core.lifecycle.prText(task) : this.readDescription(task);
     return {
       diff,
       ctx: {
@@ -717,7 +803,9 @@ export class CodeReviews {
       return true;
     }
     const r = this.latest(row.id);
-    if (r?.state !== 'describing' && r?.state !== 'fixing') return false;
+    if ((r?.state !== 'describing' && r?.state !== 'fixing') || r.stage !== 'code') return false;
+    // Its fix prompt waits in the queue (one the user ran): the end of the turn that takes it moves it on (Lifecycle).
+    if (r.state === 'fixing' && this.core.lifecycle.localReviewPending(row.id)) return true;
     // An interrupted turn is the user stepping in: the review waits for the next turn to end, or Open
     // PR. A describing review keeps why, so a restart leaves it waiting too.
     if (interrupted) {
@@ -726,6 +814,15 @@ export class CodeReviews {
     }
     this.kick(r.id, () => (r.state === 'describing' ? this.beginRound(r.id) : this.nextRound(r.id)));
     return true;
+  }
+
+  /**
+   * The turn that took a review's fix prompt from the queue ended (Lifecycle, at its `local-review`
+   * entry): the next round reviews the change again.
+   */
+  localReviewTurnEnded(taskId: string): void {
+    const r = this.latest(taskId);
+    if (r?.state === 'fixing') this.kick(r.id, () => this.nextRound(r.id));
   }
 
   /** The review session's turn ended: every step reported, or ask again once for the missing ones. */
@@ -841,18 +938,24 @@ export class CodeReviews {
     const task = this.core.sessions.row(r.task_id);
     const roundCounts = countsOf(post);
     this.core.sessions.event(task.id, 'review', `Local review, round ${r.round}: ${totalCount(roundCounts) ? countsText(roundCounts) : 'LGTM'}`);
-    if (post.length && r.round <= r.rounds) {
-      this.set(id, { state: 'fixing' });
+    const more = r.round <= r.rounds;
+    // A review the user ran gives the task its last round's findings to fix too, as there's no PR prompt to carry them.
+    if (post.length && (more || r.purpose === 'demand')) {
+      if (more) this.set(id, { state: 'fixing' });
       await this.core.lifecycle.sendReviewFix(task, {
         strategy: strategyName(r.strategy), round: r.round, findings: this.findingsText(this.mustReview(id), r.round), outcomeHow: this.outcomeHow(task), moved: r.lead,
-        description: this.descriptionFile(task),
+        description: r.stage === 'code' ? this.descriptionFile(task) : null, why: r.purpose === 'demand' ? 'demand' : 'pr', after: fixAfter(r.stage, more),
       });
       if (r.lead) this.set(id, { lead: null });
-      return;
+      if (more) return;
+    } else if (r.stage === 'review' && r.round > 1 && await this.core.lifecycle.unpushedToPr(task)) {
+      // Fixes from earlier rounds wait uncommitted: in Review & PR they're pushed once, now that a re-review found nothing.
+      await this.core.lifecycle.sendReviewPush(task, { strategy: strategyName(r.strategy), round: r.round });
     }
     this.set(id, { state: 'done' });
     await this.finish(id);
   }
+
 
   /** The task fixed a round's findings: the next round reviews the change again. */
   private async nextRound(id: string): Promise<void> {
@@ -860,26 +963,46 @@ export class CodeReviews {
     // Asked for twice (a fix turn's end and an Open PR right after it): the first one moved it on.
     if (r.state !== 'fixing') return;
     if (this.taskMovedOn(r)) return;
+    // A fix prompt still queued (Claude lost it) isn't wanted once the next round reads the change.
+    this.core.lifecycle.clearLocalReview(r.task_id);
     this.set(id, { round: r.round + 1, sweep: 1, asked: 0, state: 'preparing' });
     await this.beginRound(id);
   }
 
-  /** The review is done: the PR prompt goes, with the line and the last round's findings when it had some. */
-  private async finish(id: string): Promise<void> {
+  /**
+   * The review is done: the PR prompt goes, with the line and the last round's findings when it had
+   * some. `queued`: for a queued Open PR, which a Cancel or Run to merge stopping still withdraws.
+   * One the user ran sends no PR prompt: in Code, Open PR sends it later (openPr); in Review & PR,
+   * its line goes in the PR's description.
+   */
+  private async finish(id: string, queued = false): Promise<void> {
+    const r = this.mustReview(id);
+    const counts = json<SeverityCounts>(r.counts_json, noCounts());
+    this.core.sessions.event(r.task_id, 'review', `Local review done: ${totalCount(counts) ? countsText(counts) : 'LGTM'}`);
+    // Its session has nothing left to do: the findings are kept with the review, and the task's tab opens them.
+    if (r.session_id) void this.archiveSession(r.session_id);
+    this.core.changed();
+    if (r.purpose === 'pr') await this.sendPr(id, queued, true);
+    else if (r.stage === 'review') await this.core.lifecycle.syncReviewLine(r.task_id);
+  }
+
+  /** A done review's PR prompt, with its line, and its last round's findings unless they went as a fix prompt (`findings`). */
+  private async sendPr(id: string, queued: boolean | undefined, withFindings: boolean): Promise<void> {
     const r = this.mustReview(id);
     const task = this.core.sessions.row(r.task_id);
     const counts = json<SeverityCounts>(r.counts_json, noCounts());
     const last = json<CodeReviewFinding[]>(r.findings_json, []).filter((f) => f.round === r.round && f.kept);
-    const findings = last.length ? this.findingsText(r, r.round) : '';
-    this.core.sessions.event(task.id, 'review', `Local review done: ${totalCount(counts) ? countsText(counts) : 'LGTM'}`);
-    // Its session has nothing left to do: the findings are kept with the review, and the task's tab opens them.
-    if (r.session_id) void this.archiveSession(r.session_id);
-    this.core.changed();
+    const findings = withFindings && last.length ? this.findingsText(r, r.round) : '';
     const sent = await this.core.lifecycle.sendReviewedPr(task, {
-      line: meAkReviewLine(counts), findings, outcomeHow: this.outcomeHow(task), strategy: strategyName(r.strategy), instructions: r.instructions ?? '', by: r.by === 'auto' ? 'auto' : 'you',
-      moved: r.lead, description: this.descriptionFile(task),
+      line: meAkReviewLine(counts, r.strategy), findings, outcomeHow: this.outcomeHow(task), strategy: strategyName(r.strategy), instructions: r.instructions ?? '', by: r.by === 'auto' ? 'auto' : 'you',
+      moved: r.lead, description: this.descriptionFile(task), queued,
     });
     if (sent) this.set(id, { finished_at: Date.now(), lead: null });
+  }
+
+  /** The task's latest review is done, but its PR prompt hasn't gone yet. */
+  prUnsent(taskId: string): boolean {
+    return unsent(this.latest(taskId));
   }
 
   /** The PR prompt went for a finished review whose prompt couldn't go before (Open PR pressed again). */
@@ -912,25 +1035,42 @@ export class CodeReviews {
 
   // ---- stopping ----
 
-  /** The task left Code (a move by hand, an archive) while its review ran: the review stops, its session goes. */
+  /** The task left the review's stage (a move by hand, a merge, an archive) while it ran: the review stops, its session goes. */
   private taskMovedOn(r: ReviewRow): boolean {
     const task = sessionRow(this.db, r.task_id);
-    if (task?.desired === 'running' && task.stage === 'code') return false;
-    this.set(r.id, { state: 'cancelled', detail: REVIEW_LEFT_CODE });
+    if (task?.desired === 'running' && task.stage === r.stage) return false;
+    this.set(r.id, { state: 'cancelled', detail: r.stage === 'code' ? REVIEW_LEFT_CODE : REVIEW_LEFT_REVIEW });
     if (r.session_id) void this.archiveSession(r.session_id);
     return true;
   }
 
   /**
-   * A move took the task out of Code, or a move to Review & PR found it outside Code: its review,
-   * running or stopped, holds nothing now (Retry and Open anyway are Code's). It's cancelled as left
-   * Code and its session goes, so the next Open PR or move starts a new review on the change as it is.
+   * A move took the task out of a stage (or a move to Review & PR found it outside Code): its review
+   * from that stage, running or stopped, holds nothing now (Retry and Open anyway are Code's). It's
+   * cancelled as left and its session goes, so the next Open PR or move starts a new review on the
+   * change as it is. A finished Code review whose PR prompt hasn't gone turns stale: Open PR reviews
+   * again rather than reuse it.
    */
-  leftCode(taskId: string): void {
+  leftStage(taskId: string, stage: 'code' | 'review'): void {
     const r = this.latest(taskId);
-    if (!r || !(RUNNING.includes(r.state) || reviewHolds(r))) return;
-    this.set(r.id, { state: 'cancelled', detail: REVIEW_LEFT_CODE });
-    this.core.sessions.event(taskId, 'review', 'Local review stopped: the task left Code');
+    if (!r || r.stage !== stage) return;
+    // Its fix or push prompt isn't wanted outside its stage.
+    this.core.lifecycle.clearLocalReview(taskId);
+    if (unsent(r)) {
+      this.set(r.id, { stale: 1 });
+      return;
+    }
+    const why = stage === 'code' ? REVIEW_LEFT_CODE : REVIEW_LEFT_REVIEW;
+    // A stopped one the user ran has its Retry in its own stage only: it's left behind too, and a
+    // failed one's session, kept for that Retry, goes.
+    if (r.purpose === 'demand' && (r.state === 'failed' || r.state === 'cancelled')) {
+      if (r.detail !== why) this.set(r.id, { state: 'cancelled', detail: why });
+      if (r.session_id) void this.archiveSession(r.session_id);
+      return;
+    }
+    if (!(RUNNING.includes(r.state) || holds(r))) return;
+    this.set(r.id, { state: 'cancelled', detail: why });
+    this.core.sessions.event(taskId, 'review', `Local review stopped: ${why}`);
     if (r.session_id) void this.archiveSession(r.session_id);
   }
 
@@ -940,9 +1080,10 @@ export class CodeReviews {
     if (!r || !RUNNING.includes(r.state)) return;
     this.set(id, { state: 'failed', detail: why });
     this.core.log.warn(`local review ${id} failed: ${why}`);
-    this.core.sessions.event(r.task_id, 'review', `Local review failed: ${why}. Retry it, or open the PR anyway.`);
-    this.core.sessions.notifyUser(r.task_id, 'Local review failed', `${why}. Retry it, or open the PR anyway.`);
-    this.core.lifecycle.reviewStopped(r.task_id);
+    const next = r.purpose === 'demand' ? 'Retry it, or run it again later.' : 'Retry it, or open the PR anyway.';
+    this.core.sessions.event(r.task_id, 'review', `Local review failed: ${why}. ${next}`);
+    this.core.sessions.notifyUser(r.task_id, 'Local review failed', `${why}. ${next}`);
+    this.core.lifecycle.reviewStopped(r.task_id, r.purpose === 'pr');
     this.core.changed();
   }
 
@@ -950,10 +1091,10 @@ export class CodeReviews {
   async cancel(taskId: string): Promise<void> {
     const r = this.latest(taskId);
     if (!r || !RUNNING.includes(r.state)) throw new HttpError(409, 'No local review is running.');
-    this.set(r.id, { state: 'cancelled', detail: 'you cancelled it' });
-    this.core.sessions.event(taskId, 'review', 'You cancelled the local review. Retry it, or open the PR anyway.');
+    this.set(r.id, { state: 'cancelled', detail: YOU_CANCELLED });
+    this.core.sessions.event(taskId, 'review', `You cancelled the local review.${r.purpose === 'demand' ? '' : ' Retry it, or open the PR anyway.'}`);
     if (r.session_id) await this.archiveSession(r.session_id);
-    this.core.lifecycle.reviewStopped(taskId);
+    this.core.lifecycle.reviewStopped(taskId, r.purpose === 'pr');
     this.core.changed();
   }
 
@@ -961,10 +1102,14 @@ export class CodeReviews {
   async retry(taskId: string): Promise<void> {
     const r = this.latest(taskId);
     if (!r || (r.state !== 'failed' && r.state !== 'cancelled')) throw new HttpError(409, 'There is no stopped local review to retry.');
+    if (r.purpose === 'demand' && sessionRow(this.db, taskId)?.stage !== r.stage) {
+      throw new HttpError(409, `That local review ran in ${r.stage === 'code' ? 'Code' : 'Review & PR'}. Run the local review again here instead.`);
+    }
     const dir = this.runDir(r);
     const resumable = existsSync(join(dir, 'base.md')) && existsSync(join(dir, 'context.json'));
-    // Stopped before round 1 had the task's PR description: the task is asked for it again first.
-    const describe = !resumable && r.round === 1 && !existsSync(this.core.sessions.prDescriptionPath(this.core.sessions.row(taskId)));
+    // Stopped before round 1 had the task's PR description: the task is asked for it again first
+    // (not in Review & PR, where the PR has one).
+    const describe = !resumable && r.round === 1 && r.stage === 'code' && !existsSync(this.core.sessions.prDescriptionPath(this.core.sessions.row(taskId)));
     const state = resumable ? (json<Candidate[]>(r.candidates_json, []).length && this.steps(r.id, `r${r.round}c`).length ? 'scoring' : 'sweeping') : describe ? 'describing' : 'preparing';
     this.set(r.id, { state, detail: null, asked: 0 });
     this.core.sessions.event(taskId, 'review', 'Local review retried');
@@ -987,7 +1132,7 @@ export class CodeReviews {
   /** The `review-open-anyway` action: the PR prompt goes without a `me_ak_review:` line. */
   async openAnyway(taskId: string): Promise<void> {
     const r = this.latest(taskId);
-    if (!r || (r.state !== 'failed' && r.state !== 'cancelled')) throw new HttpError(409, 'There is no stopped local review to open the PR past.');
+    if (!r || (r.state !== 'failed' && r.state !== 'cancelled') || r.purpose === 'demand') throw new HttpError(409, 'There is no stopped local review to open the PR past.');
     const task = this.core.sessions.row(taskId);
     const sent = await this.core.lifecycle.sendReviewedPr(task, {
       line: null, findings: '', outcomeHow: '', strategy: strategyName(r.strategy), instructions: r.instructions ?? '', by: 'you', moved: r.lead, description: this.descriptionFile(task),
