@@ -11,7 +11,7 @@ const ESTIMATE =
  * Meko lookups and saves Claude made, what they're estimated to have saved, how many tokens Meko brought into
  * sessions' first turns, and what the learn step saved and cost: the project home and the Usage page. `gaps`
  * (the project home only): the open questions on Meko's Context Gaps for the project's dedicated datapack,
- * as a line under the stats linking to that tab in Meko's web UI.
+ * as a line under the stats linking to that tab in Meko's web UI, there with none open too.
  */
 export function MekoUsageSection({
   meko,
@@ -61,17 +61,18 @@ export function MekoUsageSection({
 }
 
 /**
- * "9 questions Meko couldn't answer · 5 found nothing · 4 nothing relevant", opening the datapack's
- * Context Gaps in Meko's web UI (on this origin: the server sends the counts only while AgentK uses the
- * Meko on this computer) in a new tab; nothing when there are none.
+ * "9 questions Meko couldn't answer · 5 found nothing · 4 nothing relevant", or "No open questions
+ * Meko couldn't answer", opening the datapack's Context Gaps in Meko's web UI (on this origin: the
+ * server sends the counts only while AgentK uses the Meko on this computer) in a new tab.
  */
 function GapsLine({ gaps }: { gaps: MekoGaps }) {
   const line = gapsLine(gaps);
-  if (!line) return null;
   return (
     <a className="meko-gaps" href={mekoGapsPath(gaps.datapackId, gaps.cloud)} target="_blank" rel="noopener noreferrer">
       <span className="meko-gaps-text">
-        <b>{line.count}</b> Meko couldn't answer <span className="muted">· {line.split}</span>
+        {line
+          ? <><b>{line.count}</b> Meko couldn't answer <span className="muted">· {line.split}</span></>
+          : <span className="muted">No open questions Meko couldn't answer</span>}
       </span>
       <span className="meko-gaps-link">See Context Gaps in Meko ›</span>
     </a>
