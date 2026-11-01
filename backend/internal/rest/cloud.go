@@ -7,7 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/url"
+	"slices"
 	"sort"
 	"strings"
 
@@ -19,14 +19,15 @@ import (
 )
 
 // The linked Meko Cloud on this Meko's own routes (docs/cloud.md): GET /datapacks lists its
-// datapacks with this Meko's, POST /datapacks makes one there, and the routes that take a datapack
-// in the path (delete, upload-url, document-status, search, memories) send a datapack this Meko
-// doesn't have to it. No route takes or says a location: the datapack's id decides. The server calls
-// Meko Cloud with the link's key, which never leaves it.
+// datapacks with this Meko's, POST /datapacks makes one there, the routes that take a datapack in
+// the path and that Meko Cloud has too send a datapack this Meko doesn't have to it (byID), as /mcp
+// does, and the routes only Meko Cloud has (sharing) go there (cloudOnly). No route takes or says a
+// location: the datapack's id decides. The server calls Meko Cloud with the link's key, which never
+// leaves it.
 
-// owner says whether a request may act on the linked Meko Cloud: the admin token (meko-cli) or the
-// web listener's browsers (local or remote access). An agent's client token mayn't: the key acts on
-// the whole Meko Cloud account. Listing its datapacks takes any credential.
+// owner says whether the request is the owner's: the admin token (meko-cli) or a browser on the web
+// listener (local or remote access), not an agent's client token. The owner's settings and a create
+// in the linked Meko Cloud take it; a client creates one through /mcp.
 func (a *api) owner(c echo.Context) bool {
 	switch a.Credential(c) {
 	case "admin", "remote", "local":
@@ -36,12 +37,12 @@ func (a *api) owner(c echo.Context) bool {
 }
 
 // inCloud says whether the datapack in the path is the linked Meko Cloud's: an id this Meko doesn't
-// have is, for the owner or the admin token while it's linked. A datapack this Meko has is this
-// Meko's, even when Meko Cloud has the same id, and a client token gets this Meko's 404 for a missing
-// id, whether or not Meko Cloud is linked. Anything this Meko's is its route's to answer (a 400 or
-// 404 too). ok is false when the reply has been written.
+// have is, while it's linked, for any credential the data routes take, as on /mcp. A datapack this
+// Meko has is this Meko's, even when Meko Cloud has the same id, and unlinked a missing id is this
+// Meko's 404. Anything this Meko's is its route's to answer (a 400 or 404 too). ok is false when the
+// reply has been written.
 func (a *api) inCloud(c echo.Context) (cloud, ok bool, err error) {
-	if a.Cloud == nil || !a.owner(c) || a.staleTab(c) {
+	if a.Cloud == nil || a.staleTab(c) {
 		return false, true, nil
 	}
 	id, perr := uuid.Parse(strings.TrimSpace(c.Param("id")))
@@ -62,9 +63,14 @@ func (a *api) inCloud(c echo.Context) (cloud, ok bool, err error) {
 // search and memories to this Meko, so it's answered as before: this Meko's datapacks alone, and its
 // :id routes never sent to Meko Cloud. Any other location, and any from a token, is ignored.
 func (a *api) staleTab(c echo.Context) bool {
+	return a.browser(c) && c.QueryParam("location") == "local"
+}
+
+// browser says whether the request is a browser's on the web listener (local or remote access).
+func (a *api) browser(c echo.Context) bool {
 	switch a.Credential(c) {
 	case "remote", "local":
-		return c.QueryParam("location") == "local"
+		return true
 	}
 	return false
 }
@@ -86,22 +92,57 @@ func notLinkedOr(c echo.Context, err error) error {
 		"This Meko isn't linked to Meko Cloud. Link it in Settings › Meko Cloud, or with meko cloud_link.")
 }
 
-// toCloud calls the linked Meko Cloud's REST API for the owner and replies with its data, at status.
-func (a *api) toCloud(c echo.Context, status int, method, path string, body any) error {
-	if !a.owner(c) {
-		return forbiddenCloud(c)
+// byID serves a route that takes a datapack in the path and that Meko Cloud's REST API has too: h for
+// a datapack this Meko has, and Meko Cloud's same route for one it doesn't while it's linked
+// (inCloud), passed on as it came (pass). A browser's stays here: the web UI opens Meko Cloud's
+// datapacks in its web app, never on this Meko's pages.
+func (a *api) byID(h echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		if a.browser(c) {
+			return h(c)
+		}
+		cloud, ok, err := a.inCloud(c)
+		if !ok {
+			return err
+		}
+		if cloud {
+			return a.pass(c)
+		}
+		return h(c)
 	}
-	data, err := a.Cloud.API(ctx(c), method, path, body)
-	if err != nil {
-		return cloudError(c, err)
+}
+
+// codeDatapackLocal is a sharing route for a datapack this Meko has: only Meko Cloud shares.
+const codeDatapackLocal = "DATAPACK_LOCAL"
+
+// cloudOnly answers a route only Meko Cloud has (sharing and invites): passed on to it while it's
+// linked, and a 409 CLOUD_NOT_LINKED otherwise. A datapack in the path must be a UUID, as on every
+// route, and one that this Meko has is a 409 DATAPACK_LOCAL, since it can't be shared until it's in
+// Meko Cloud.
+func (a *api) cloudOnly(c echo.Context) error {
+	linked, err := a.linked()
+	if err != nil || !linked {
+		return notLinkedOr(c, err)
 	}
-	return c.JSON(status, envelope.Response{Data: data})
+	if slices.Contains(c.ParamNames(), "id") {
+		u, perr := uuid.Parse(strings.TrimSpace(c.Param("id")))
+		if perr != nil {
+			return badRequest(c, "datapack_id must be a valid UUID")
+		}
+		if here, herr := a.Service.ServesHere(ctx(c), u.String()); herr != nil {
+			return herr
+		} else if here {
+			return envelope.Fail(c, http.StatusConflict, codeDatapackLocal,
+				"This datapack is on this Meko, not in Meko Cloud. It can be shared once it's in Meko Cloud.")
+		}
+	}
+	return a.pass(c)
 }
 
 func forbiddenCloud(c echo.Context) error {
 	return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN",
-		"These routes act on Meko Cloud's datapacks for the owner or the admin token (meko-cli), not a client "+
-			"token: a client reaches Meko Cloud through /mcp, or /api/v1/cloud for its REST API.")
+		"A datapack is made in Meko Cloud here by the owner or the admin token (meko-cli), not a client "+
+			"token: a client makes one through /mcp.")
 }
 
 // cloudError replies for a call Meko Cloud didn't make: its status (a 502 unless Meko Cloud answered
@@ -117,11 +158,6 @@ func cloudError(c echo.Context, err error) error {
 		status = http.StatusBadGateway
 	}
 	return envelope.Fail(c, status, failed.Code, failed.Error())
-}
-
-// cloudPath is a Meko Cloud datapack's REST path, plus rest.
-func cloudPath(c echo.Context, rest string) string {
-	return "/datapacks/" + url.PathEscape(strings.TrimSpace(c.Param("id"))) + rest
 }
 
 // withCloud replies to GET /datapacks with this Meko's rows and, while Meko Cloud is linked, its own,
@@ -227,7 +263,7 @@ func toolReply(c echo.Context, name, text string, cloud bool) error {
 }
 
 // callTool runs a tool on the datapack in the path: this Meko's, in-process as /mcp does, or the
-// linked Meko Cloud's for the owner. args hold only arguments both take (Meko Cloud refuses others).
+// linked Meko Cloud's (inCloud). args hold only arguments both take (Meko Cloud refuses others).
 func (a *api) callTool(c echo.Context, name string, args map[string]any) error {
 	if args["conversation_id"] == "" {
 		args["conversation_id"] = restConversation
@@ -240,9 +276,6 @@ func (a *api) callTool(c echo.Context, name string, args map[string]any) error {
 		return err
 	}
 	if cloud {
-		if !a.owner(c) {
-			return forbiddenCloud(c)
-		}
 		args["datapack_id"] = strings.TrimSpace(c.Param("id"))
 		text, terr := a.Cloud.Tool(ctx(c), name, args)
 		if terr != nil {
@@ -309,24 +342,23 @@ func (a *api) addMemory(c echo.Context) error {
 		"agent_id": body.AgentID, "conversation_id": body.ConversationID})
 }
 
-// cloudPrefix is the routes that pass requests to the linked Meko Cloud's REST API as they came.
-const cloudPrefix = "/api/v1/cloud"
+// apiPrefix is where the routes are served: pass sends the path after it to Meko Cloud.
+const apiPrefix = "/api/v1"
 
-// passToCloud answers /api/v1/cloud/<path>: the request goes to the linked Meko Cloud's REST API at
-// <path>, with its method, query and body, and the link's key, and Meko Cloud's status, content type
-// and body come back, without the credentials a JSON body holds (cloudlink.Service.Pass). It's how
-// extensions reach Meko Cloud's REST API without its key, so it takes any credential the data routes
-// take; every path passes, so what it reaches is what Meko Cloud accepts the key on. Unlinked it's a
-// 409 CLOUD_NOT_LINKED, and a call that doesn't reach Meko Cloud a 502 with its code.
-func (a *api) passToCloud(c echo.Context) error {
-	if a.Cloud == nil {
-		return notLinkedOr(c, nil)
+// pass sends the request to the linked Meko Cloud's REST API at the same path after /api/v1, with
+// its method, query and body, and the link's key, and Meko Cloud's status, content type and body
+// come back, without the credentials a JSON body holds (cloudlink.Service.Pass). A call that doesn't
+// reach Meko Cloud is a 502 with its code. A path parameter that could name another path there (.,
+// .., or one holding a slash, a backslash or an escape: Echo routes on the raw path) is a 400, so
+// only the routes listed reach Meko Cloud with the key.
+func (a *api) pass(c echo.Context) error {
+	for i, n := range c.ParamNames() {
+		if v := c.ParamValues()[i]; v == "." || v == ".." || strings.ContainsAny(v, `/\%`) {
+			return badRequest(c, n+" isn't a valid path segment")
+		}
 	}
 	r := c.Request()
-	path := strings.TrimPrefix(r.URL.EscapedPath(), cloudPrefix)
-	if path == "" || path[0] != '/' {
-		path = "/" + path
-	}
+	path := strings.TrimPrefix(r.URL.EscapedPath(), apiPrefix)
 	if r.URL.RawQuery != "" {
 		path += "?" + r.URL.RawQuery
 	}

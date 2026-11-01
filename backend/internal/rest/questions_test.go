@@ -205,12 +205,10 @@ func TestContextGapsCloud(t *testing.T) {
 		"conversation_id": "c9"}); s != 204 {
 		t.Fatalf("an agent's dismissal: %d", s)
 	}
-	wantErr(t, e, http.MethodPost, base+"/teach", map[string]any{"key": "who owns the pager?", "text": "Ops."}, 403,
-		"FORBIDDEN")
-	q := obj(doAs(t, e, testenv.AdminToken, http.MethodPost, base+"/teach",
-		map[string]any{"key": "who owns the pager?", "text": "Ops owns the pager."}).Data)
+	q := obj(okData(t, e, http.MethodPost, base+"/teach",
+		map[string]any{"key": "who owns the pager?", "text": "Ops owns the pager."}, http.StatusOK))
 	if q["state"] != "taught" || obj(q["taught"])["memory_id"] != "m-1" {
-		t.Fatalf("taught in Meko Cloud: %v", q)
+		t.Fatalf("taught in Meko Cloud with the client token: %v", q)
 	}
 	if a := cloud.args["memory_add"]; a["datapack_id"] != cloudDP || a["text"] != "Ops owns the pager." {
 		t.Errorf("memory_add sent to Meko Cloud: %v", a)

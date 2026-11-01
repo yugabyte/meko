@@ -2,7 +2,6 @@ package rest
 
 import (
 	"fmt"
-	"net/http"
 	"strings"
 	"unicode/utf8"
 
@@ -206,12 +205,6 @@ func (a *api) updateDatapack(c echo.Context) error {
 }
 
 func (a *api) deleteDatapack(c echo.Context) error {
-	if cloud, ok, err := a.inCloud(c); !ok || cloud {
-		if !ok {
-			return err
-		}
-		return a.toCloud(c, http.StatusOK, http.MethodDelete, cloudPath(c, ""), nil)
-	}
 	id, ok, err := a.pathDatapack(c)
 	if !ok {
 		return err

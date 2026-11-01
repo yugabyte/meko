@@ -141,12 +141,21 @@ func TestForwardKeyRefused(t *testing.T) {
 }
 
 // Pass sends a REST request as it came, with the key, and answers with Meko Cloud's reply as it is,
-// but for a 401.
+// but for a 401 and a 5xx.
 func TestPass(t *testing.T) {
 	var got string
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+key {
 			http.Error(w, `{"error":{"code":"UNAUTHORIZED"}}`, http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/api/v1/datapacks/down":
+			http.Error(w, "upstream gone", http.StatusServiceUnavailable)
+			return
+		case "/api/v1/datapacks/broken":
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":{"code":"INTERNAL","message":"database is busy"}}`))
 			return
 		}
 		b, _ := io.ReadAll(r.Body)
@@ -168,9 +177,16 @@ func TestPass(t *testing.T) {
 	if got != `POST /api/v1/datapacks/d1/share?x=1 application/json {"a":1}` {
 		t.Errorf("Meko Cloud got %q", got)
 	}
+	var ce *CallError
+	for path, msg := range map[string]string{"/datapacks/down": "Meko Cloud answered 503 Service Unavailable.",
+		"/datapacks/broken": "Meko Cloud: database is busy."} {
+		if _, err = s.Pass(context.Background(), http.MethodGet, path, nil, ""); !errors.As(err, &ce) ||
+			ce.Code != CodeCallFailed || ce.Status != 0 || ce.Error() != msg {
+			t.Errorf("Meko Cloud's 5xx on %s: %v", path, err)
+		}
+	}
 	s.saved(State{Set: true, Linked: true, Link: Link{URL: "https://mcp.example.com/mcp", APIURL: api.URL + "/api/v1",
 		Key: "mko_tkn_stale_0123456789"}})
-	var ce *CallError
 	if _, err = s.Pass(context.Background(), http.MethodGet, "/datapacks", nil, ""); !errors.As(err, &ce) ||
 		ce.Code != CodeKeyRefused {
 		t.Fatalf("a refused key: %v", err)

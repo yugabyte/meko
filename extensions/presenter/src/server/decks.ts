@@ -35,7 +35,9 @@ interface Stored {
   assetPieces: Record<string, Piece>;
   /**
    * The Meko its datapack is in. A draft from before Presenter kept it is the current Meko's when that
-   * Meko has its datapack, else the Meko on this computer's (`untagged`).
+   * Meko has its datapack, else the Meko on this computer's (`untagged`). While the Meko on this
+   * computer links Meko Cloud and routes by id, it serves both, and a deck in one of its own datapacks
+   * is its own (`localIds`).
    */
   meko?: MekoAt;
 }
@@ -50,6 +52,15 @@ function writeJson(file: string, v: unknown): void {
   const tmp = `${file}.tmp`;
   writeFileSync(tmp, JSON.stringify(v), { mode: 0o600 });
   renameSync(tmp, file);
+}
+
+/**
+ * Whether Presenter, using `at`, serves a deck saved in `m`: the same Meko, or the Meko on this
+ * computer while it links Meko Cloud and serves its own datapacks (`here`, from `localIds`), this
+ * deck's among them.
+ */
+function serves(at: MekoAt, m: MekoAt, id: string, here: Set<string> | null): boolean {
+  return sameMeko(m, at) || (m.kind === 'local' && !!here?.has(id));
 }
 
 export class DeckStore {
@@ -115,6 +126,17 @@ export class DeckStore {
       /* drafts alone, when Meko can't be reached */
     }
     const at = await this.meko.at();
+    // Without the Meko on this computer's own list, its drafts aren't called another Meko's: opening
+    // one says why it can't be told (mine).
+    let here: Set<string> | null = null;
+    let unsure = false;
+    if (at?.kind === 'cloud') {
+      try {
+        here = await this.meko.localIds();
+      } catch {
+        unsure = true;
+      }
+    }
     const out: DeckSummary[] = rows.map((d) => {
       const s = this.open.get(d.id) ?? local.get(d.id);
       return { id: d.id, name: d.name, title: s?.deck.title ?? d.name.slice(DECK_PREFIX.length), savedAt: s?.savedAt ?? null, draft: !!s };
@@ -123,7 +145,7 @@ export class DeckStore {
       if (out.some((d) => d.id === id)) continue;
       // The current Meko didn't list it: an untagged draft is the Meko on this computer's.
       const m = s.meko ?? (listed ? LOCAL_MEKO : undefined);
-      const elsewhere = at && m && !sameMeko(m, at) ? { elsewhere: m } : {};
+      const elsewhere = at && m && !serves(at, m, id, here) && !(unsure && m.kind === 'local') ? { elsewhere: m } : {};
       out.push({ id, name: s.name, title: s.deck.title, savedAt: s.savedAt, draft: true, ...elsewhere });
     }
     return out.sort((a, b) => a.title.localeCompare(b.title));
@@ -178,13 +200,30 @@ export class DeckStore {
       e.meko = m;
       this.persist(e);
     }
+    // While the Meko on this computer links Meko Cloud and routes by id, it serves its own datapacks
+    // too. A deck in one is that Meko's, even one tagged as Meko Cloud's, which a Meko that listed both
+    // sides before it routed by id led Presenter to do, so it still opens once Meko Cloud is unlinked.
+    // Unlinked, that Meko's own listing tells such a deck too.
+    let here: Set<string> | null = null;
+    if (at.kind === 'cloud') {
+      try {
+        here = await this.meko.localIds();
+      } catch (err) {
+        // Without the list, a deck of the Meko on this computer can't be told from one elsewhere.
+        if (e.meko.kind === 'local') throw err;
+      }
+    }
+    if (e.meko.kind === 'cloud' && (here?.has(e.id) || (at.kind === 'local' && (await this.listsHere(e.id))))) {
+      e.meko = LOCAL_MEKO;
+      this.persist(e);
+    }
     // The same Meko Cloud may be named by another host: its MCP one when Presenter held the link's key,
     // its web app's now. The datapack is in one Meko only, so the Meko that lists it is the draft's.
     if (!sameMeko(e.meko, at) && e.meko.kind === 'cloud' && at.kind === 'cloud' && (await this.untagged(e.id, at)) === at) {
       e.meko = at;
       this.persist(e);
     }
-    if (!sameMeko(e.meko, at)) {
+    if (!serves(at, e.meko, e.id, here)) {
       throw new HttpError(409, `This deck is saved in ${mekoLabel(e.meko)}, and Presenter now uses ${mekoLabel(at)}. ${reopenHint(e.meko)}`);
     }
     return e;
@@ -193,10 +232,12 @@ export class DeckStore {
   /**
    * The Meko a draft from before Presenter kept it belongs to: the one Presenter uses now when it has
    * the deck's datapack, else the Meko on this computer (the only one an older Presenter used, short of
-   * a hand-written config.json). Null while Meko can't be asked.
+   * a hand-written config.json). A datapack the Meko on this computer serves itself while it links
+   * Meko Cloud is its own, though it lists it with Meko Cloud's. Null while Meko can't be asked.
    */
   private async untagged(id: string, at: MekoAt): Promise<MekoAt | null> {
     try {
+      if (at.kind === 'cloud' && (await this.meko.localIds())?.has(id)) return LOCAL_MEKO;
       return (await this.meko.listDatapacks()).some((d) => d.id === id) ? at : LOCAL_MEKO;
     } catch {
       return null;
@@ -222,10 +263,21 @@ export class DeckStore {
     return loading;
   }
 
+  /** Whether the Meko on this computer, used unlinked, lists the datapack; false while it can't say. */
+  private async listsHere(id: string): Promise<boolean> {
+    try {
+      return (await this.meko.listDatapacks()).some((d) => d.id === id);
+    } catch {
+      return false;
+    }
+  }
+
   /** A deck with no draft here, from its newest save in its datapack. */
   private async load(id: string): Promise<Entry> {
-    // Read before Meko is asked anything: the deck comes from the Meko Presenter uses now.
-    const meko = (await this.meko.at()) ?? undefined;
+    // Read before Meko is asked anything: the deck comes from the Meko Presenter uses now, or the Meko
+    // on this computer's own datapacks while it serves them beside Meko Cloud's.
+    const at = (await this.meko.at()) ?? undefined;
+    const meko = at?.kind === 'cloud' && (await this.meko.localIds())?.has(id) ? LOCAL_MEKO : at;
     const row = (await this.meko.listDatapacks()).find((d) => d.id === id);
     if (!row) throw new HttpError(404, 'There\'s no such deck.');
     const versions = await this.pieces.versions(id);

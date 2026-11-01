@@ -31,8 +31,9 @@ func (a *api) registerQuestions(g *echo.Group) {
 
 // questionsDatapack is the datapack in the path: this Meko's, or, while Meko Cloud is linked, an id
 // this Meko doesn't have, taken as Meko Cloud's (cloud). Any credential gets a Meko Cloud datapack's
-// questions, unlike the routes that act on Meko Cloud: they're what this Meko recorded of the
-// searches it passed on, and reading them never calls Meko Cloud or uses its key. ?location= picks
+// questions: they're what this Meko recorded of the searches it passed on, and reading them never
+// calls Meko Cloud or uses its key. Teaching one writes its memory to Meko Cloud with the key, for
+// any credential too, as POST /datapacks/:id/memories does. ?location= picks
 // the side: the one route left that takes it, since AgentK links a Meko Cloud datapack's questions
 // to their own page. ok is false when the reply has been written.
 func (a *api) questionsDatapack(c echo.Context) (id string, cloud, ok bool, err error) {
@@ -223,9 +224,6 @@ func (a *api) teachQuestion(c echo.Context) error {
 		"conversation_id": restConversation, "metadata": string(md)}
 	var reply string
 	switch {
-	case cloud && !a.owner(c):
-		// The memory is written to Meko Cloud with the link's key.
-		return forbiddenCloud(c)
 	case cloud:
 		if reply, err = a.Cloud.Tool(ctx(c), "memory_add", args); err != nil {
 			return cloudError(c, err)
