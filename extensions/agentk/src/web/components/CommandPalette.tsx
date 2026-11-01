@@ -13,7 +13,7 @@ import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, doAllActions, filterItem
 import { workLinkKey } from '../../shared/worklinks';
 import { navigate } from '../router';
 import { attachFiles, getTerminal } from '../terminals';
-import { STATUS_TEXT, cx, dotState, dotTitle, isMac, liveSessions, stageWords, type DotState } from '../util';
+import { STATUS_TEXT, canRunReview, cx, dotState, dotTitle, isMac, liveSessions, stageWords, type DotState } from '../util';
 import { Busy, ErrorText, StatusDot, trapTab } from './common';
 
 interface Item {
@@ -431,6 +431,16 @@ export function CommandPalette({
         hint: 'Action',
         keywords: 'open pr pull request instructions notes draft',
         run: onOpenPr,
+      });
+    }
+    if (currentSession && canRunReview(currentSession).ready) {
+      const id = currentSession.id;
+      out.push({
+        id: 'review-run',
+        label: ['Run the local review of ', { session: currentSession.name }],
+        hint: 'Action',
+        keywords: 'local code review run again findings',
+        run: () => void api.sessionAction(id, 'review-run').catch((e: unknown) => onError(errorMessage(e))),
       });
     }
     if (currentSession) {

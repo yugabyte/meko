@@ -22,7 +22,7 @@ import {
 import { launchedAgentId, withMekoScope } from './meko.js';
 import type { HookPayload, ModReply } from './hooks.js';
 import { fetchPrDesign, markPrDesignTold, prDesignSource, savePrDesign } from './prdesign.js';
-import { meAkReviewFooter, mekoDatapackLineId, mekoPrFooter, movePrompt, prDescriptionFixLine, prDescriptionUseLine } from './prompts.js';
+import { fixAfterLine, fixWhy, meAkReviewFooter, mekoDatapackLineId, mekoPrFooter, movePrompt, prDescriptionFixLine, prDescriptionUseLine, type FixAfter } from './prompts.js';
 import { HttpError } from './projects.js';
 import {
   INSTRUCTIONS_MAX, KIND_LABELS, STAGE_LABELS, type CloseSessionRequest, type HeldReview, type HeldReviewAuthor, type HeldReviewsResult, type MoveSessionRequest, type QueuedGate,
@@ -106,6 +106,9 @@ class QueueWithdrawn extends Error {
 /** A queued gate as the activity log names it. */
 const GATE_NAMES: Record<QueuedGate, string> = { 'open-pr': 'Open PR', merge: 'merge' };
 
+/** The merge blocker while a local review the user ran in Review & PR runs, or its fixes wait to be taken. */
+const LOCAL_REVIEW_RUNNING = 'The local review is still running.';
+
 /** The status detail while a markdown or Artifact design waits for approval. */
 export const DESIGN_READY = 'Design ready for your approval';
 
@@ -117,8 +120,11 @@ const IN_TERMINAL = 'AgentK is waiting on you in the terminal.';
 /** GitHub's own BLOCKED on a new head when nothing else blocks: required checks not reported yet. */
 const CHECKS_PENDING = "GitHub's required checks haven't reported on the latest push yet.";
 
-/** Prompts queued for Claude in the Review stage, in the order they go out. */
-const QUEUE_ORDER = ['review', 'review-people', 'review-held', 'conflicts', 'ci'] as const;
+/**
+ * Prompts queued for Claude in the Review stage, in the order they go out. `local-review`: a fix or
+ * push prompt of a local review the user ran in Review & PR (review/runner.ts), its text in `vars.text`.
+ */
+const QUEUE_ORDER = ['review', 'review-people', 'review-held', 'local-review', 'conflicts', 'ci'] as const;
 /** The prompts queued in a Review a PR session: the summary after Update to latest, or the PR's new design alone. */
 const REVIEWING_ORDER = ['review-pr-update', 'review-pr-design'] as const;
 type QueuedPrompt = (typeof QUEUE_ORDER)[number] | (typeof REVIEWING_ORDER)[number];
@@ -913,22 +919,81 @@ export class Lifecycle {
   }
 
   /** Refuses while Claude can't take a prompt: mid-turn, waiting on the user (a ready design aside), or exited. */
-  private checkPromptable(row: SessionRow): void {
+  checkPromptable(row: SessionRow): void {
     this.checkBetweenTurns(row);
     if (row.status === 'needs_input' && row.status_detail !== DESIGN_READY) throw new HttpError(409, 'AgentK is waiting on you in the terminal. Answer it first.');
     if (row.status === 'exited') throw new HttpError(409, `${agentName(row)} has exited. Resume the session first.`);
   }
 
   /**
-   * A task's local review asks it to fix a round's findings before the next round (review/runner.ts).
-   * The task stays in Code, and its turn's end starts the next round. `moved`: a move's `moved` line
-   * still waiting on the review (`code_reviews.lead`: the ask for the PR description normally took it), first.
+   * A task's local review asks it to fix a round's findings (review/runner.ts): before the next
+   * round, or, for a review the user ran, after its last. In Code it goes now, the task stays there,
+   * and its turn's end starts the next round. In Review & PR it goes through the stage's queue
+   * (`local-review`), and the end of the turn that took it starts the next round. `moved`: a move's
+   * `moved` line still waiting on the review (`code_reviews.lead`: the ask for the PR description
+   * normally took it), first. `after`: what follows the fixes (a repo's own prompt without
+   * {{after}} gets it at the end).
    */
-  async sendReviewFix(task: SessionRow, o: { strategy: string; round: number; findings: string; outcomeHow: string; moved?: string | null; description?: string | null }): Promise<void> {
+  async sendReviewFix(task: SessionRow, o: {
+    strategy: string; round: number; findings: string; outcomeHow: string; why: 'pr' | 'demand'; after: FixAfter; moved?: string | null; description?: string | null;
+  }): Promise<void> {
     const row = this.sessions.row(task.id);
-    if (row.stage !== 'code' || row.desired !== 'running') throw new Error('the task left Code');
-    const fix = this.sessions.prompt(row, 'code-review-fix', { strategy: o.strategy, round: o.round, findings: o.findings, outcomeHow: o.outcomeHow });
-    await this.sessions.submit(row.id, [o.moved, fix, o.description ? prDescriptionFixLine(o.description) : ''].filter(Boolean).join('\n\n'));
+    const stage = o.after === 'hold-push' || o.after === 'push' ? 'review' : 'code';
+    if (row.stage !== stage || row.desired !== 'running') throw new Error(`the task left ${STAGE_LABELS[stage]}`);
+    // Rendered with a mark in {{after}}'s place, to tell a repo's own prompt without it.
+    const mark = '\u0000after\u0000';
+    const rendered = this.sessions.prompt(row, 'code-review-fix', { strategy: o.strategy, round: o.round, findings: o.findings, outcomeHow: o.outcomeHow, why: fixWhy(o.why), after: mark });
+    const fix = rendered.includes(mark) ? rendered.split(mark).join(fixAfterLine(o.after)) : `${rendered.trimEnd()}\n\n${fixAfterLine(o.after)}`;
+    const text = [o.moved, fix, o.description ? prDescriptionFixLine(o.description) : ''].filter(Boolean).join('\n\n');
+    if (stage === 'review') this.queueLocalReview(row.id, text);
+    else await this.sessions.submit(row.id, text);
+  }
+
+  /** In Review & PR, a local review's re-review found nothing more: the task pushes the earlier rounds' fixes (through the queue). */
+  async sendReviewPush(task: SessionRow, o: { strategy: string; round: number }): Promise<void> {
+    const row = this.sessions.row(task.id);
+    if (row.stage !== 'review' || row.desired !== 'running') throw new Error('the task left Review & PR');
+    this.queueLocalReview(row.id, this.sessions.prompt(row, 'code-review-push', { strategy: o.strategy, round: o.round }));
+  }
+
+  /** Queues a local review's prompt in Review & PR, and sends it now when the task is between turns. */
+  private queueLocalReview(id: string, text: string): void {
+    this.enqueue(id, 'local-review', { text });
+    void this.serial(id, () => this.deliverNext(id)).catch((e) => this.warn(id, "Sending the local review's prompt", e));
+  }
+
+  /** A local review's prompt waits in Review & PR's queue, or its turn hasn't ended. */
+  localReviewPending(id: string): boolean {
+    return !!this.queue(id)['local-review'];
+  }
+
+  /**
+   * The task's worktree has work the PR doesn't: uncommitted files, or a branch tip the PR's head
+   * doesn't contain (compared on the PR's own repo, so a fork's PR counts right). True when GitHub
+   * can't say, so a local review's fixes are pushed rather than left behind.
+   */
+  async unpushedToPr(row: SessionRow): Promise<boolean> {
+    if ((await uncommittedCount(row.worktree_path)) > 0) return true;
+    const repo = sessionRepo(this.db, row);
+    if (!row.pr_number || !repo) return true;
+    try {
+      return await lacksLocalCommits(repo, row.branch, await github.prStatus(this.ghCwd(row), row.pr_number, prRepoOf(row.pr_url)));
+    } catch (e) {
+      this.warn(row.id, "Comparing the branch with the PR's head", e);
+      return true;
+    }
+  }
+
+  /** The open PR's title and description, for a local review run in Review & PR to read; null when GitHub can't say. */
+  async prText(row: SessionRow): Promise<string | null> {
+    if (!row.pr_number) return null;
+    try {
+      const st = await github.prStatus(this.ghCwd(row), row.pr_number, prRepoOf(row.pr_url));
+      return `${st.title}\n\n${st.body ?? ''}`.trim() || null;
+    } catch (e) {
+      this.warn(row.id, "Reading the PR's description for the local review", e);
+      return null;
+    }
   }
 
   /**
@@ -995,17 +1060,27 @@ export class Lifecycle {
     }
   }
 
-  /** A task's local review failed or was cancelled: its Open PR waits for Retry or Open anyway, Run to merge's too. */
-  reviewStopped(id: string): void {
+  /**
+   * A task's local review failed or was cancelled: its Open PR waits for Retry or Open anyway, Run to
+   * merge's too (`holds`: not for one the user ran, which holds nothing, so a queued Open PR still
+   * goes at the turn's end). In Review & PR, a fix prompt of its still queued doesn't go.
+   */
+  reviewStopped(id: string, holds = true): void {
     const row = sessionRow(this.db, id);
-    if (row?.queued_gate === 'open-pr') this.setQueued(id, null);
+    if (holds && row?.queued_gate === 'open-pr') this.setQueued(id, null);
+    const q = this.queue(id);
+    if (q['local-review']?.state === 'queued') {
+      delete q['local-review'];
+      this.setQueue(id, q);
+    }
   }
 
   /**
-   * After the PR is found: a task whose local review finished has the review's `me_ak_review:` line
-   * in the description, written in by AgentK when Claude left it out. Never throws.
+   * After the PR is found, or a local review the user ran in Review & PR is done: a task whose local
+   * review finished has the review's `me_ak_review:` line in the description, written in by AgentK
+   * when Claude left it out. Never throws.
    */
-  private async syncReviewLine(id: string): Promise<void> {
+  async syncReviewLine(id: string): Promise<void> {
     const row = sessionRow(this.db, id);
     const line = row?.pr_number ? this.core.reviews.prLine(id) : null;
     if (!row?.pr_number || !line) return;
@@ -1097,7 +1172,7 @@ export class Lifecycle {
     if (movesStep(cur.stage, stage)) {
       dropQueued();
       if (cur.stage === 'pr' || cur.stage === 'review') this.leaveReview(id);
-      if (cur.stage === 'code') this.core.reviews.leftCode(id);
+      if (cur.stage === 'code' || cur.stage === 'review') this.core.reviews.leftStage(id, cur.stage);
       if (cur.stage === 'design') this.leaveDesign(id, stage === 'code');
       this.sessions.setStage(id, stage, 'you');
       // Back in Design, what an approval left to AgentK is open again.
@@ -1143,7 +1218,7 @@ export class Lifecycle {
     if (!adopt || !pr) {
       // As for Open PR: the user's prompts go first, and a stopped local review holds the PR. Outside
       // Code an earlier review holds nothing (its Retry and Open anyway are Code's).
-      if (cur.stage !== 'code') this.core.reviews.leftCode(cur.id);
+      if (cur.stage !== 'code') this.core.reviews.leftStage(cur.id, 'code');
       if (this.sessions.promptsHeld(cur.id) > 0) throw new HttpError(409, 'AgentK has prompts from you to take first. Move the session once it has.');
       this.core.reviews.checkNotHeld(cur.id);
     }
@@ -1160,6 +1235,8 @@ export class Lifecycle {
     }
     if (instructions) this.checkPromptable(cur);
     if (cur.stage === 'design') this.leaveDesign(row.id, false);
+    // Picking up the PR leaves Code too: a finished review there whose PR prompt didn't go is stale now.
+    if (cur.stage === 'code') this.core.reviews.leftStage(row.id, 'code');
     // As sendPr does, the stage moves first and the session is busy until the turn ends: review
     // prompts waiting for the session go after the instructions' turn, not before or during it.
     if (instructions) this.sessions.setBusy(row.id, true);
@@ -1227,6 +1304,8 @@ export class Lifecycle {
   private leaveReview(id: string): void {
     const q = this.queue(id);
     for (const n of QUEUE_ORDER) if (q[n]?.state === 'sent') delete q[n];
+    // A local review's prompt belongs to the review, which leaving Review & PR cancels.
+    delete q['local-review'];
     this.setQueue(id, q);
     if (!reviewQueued(q) && this.sessions.row(id).review_state === 'addressing') {
       this.sessions.update(id, { review_state: 'addressed' });
@@ -1310,7 +1389,12 @@ export class Lifecycle {
     if (row.stage === 'code') {
       // A turn that fixed a local review's findings starts the review's next round, which opens the PR itself.
       if (await this.core.reviews.onTurnEnd(row, interrupted)) {
-        if (this.sessions.row(id).queued_gate === 'open-pr') this.setQueued(id, null);
+        const cur = this.sessions.row(id);
+        if (cur.queued_gate === 'open-pr') {
+          // One the user ran sends no PR prompt: the queued Open PR takes it over, as a press between turns does.
+          this.core.reviews.takeOver(id, { instructions: cur.queued_instructions ?? '', by: cur.queued_auto ? 'auto' : 'you' });
+          this.setQueued(id, null);
+        }
         return;
       }
       await this.takeQueuedPr(id).catch((e) => this.warn(id, 'Sending the queued Open PR', e));
@@ -1320,17 +1404,20 @@ export class Lifecycle {
       await this.serial(id, async () => {
         // The turn that got a prompt is over. Only that turn addresses a review: one still queued isn't.
         const q = this.queue(id);
+        const fixed = !interrupted && q['local-review']?.state === 'sent';
         if (!interrupted) {
           for (const n of QUEUE_ORDER) if (q[n]?.state === 'sent') delete q[n];
           this.setQueue(id, q);
         }
+        // The turn that took a local review's fixes: the review's next round starts.
+        if (fixed) this.core.reviews.localReviewTurnEnded(id);
         const review = reviewQueued(q);
         if (!review && this.sessions.row(id).review_state === 'addressing') {
           this.sessions.update(id, { review_state: 'addressed' });
         }
-        // A queued review goes out now. Anything else waits for a fresh look at the PR, so a CI
-        // prompt never goes out for a head this turn's push replaced.
-        if (review) await this.deliverNext(id);
+        // A queued review (or local review prompt) goes out now. Anything else waits for a fresh look
+        // at the PR, so a CI prompt never goes out for a head this turn's push replaced.
+        if (review || q['local-review']?.state === 'queued') await this.deliverNext(id);
         else await this.doPollReview(id);
       }).catch((e) => this.warn(id, 'PR status failed', e));
     } else if (row.stage === 'merge') {
@@ -1976,6 +2063,12 @@ export class Lifecycle {
       this.setQueue(id, q);
     }
     const row = this.sessions.row(id);
+    // Claude was relaunched after a restart during a local review's fix turn: that turn is over, and the review goes on.
+    if (row.stage === 'review' && row.status === 'recovered' && q['local-review']?.state === 'sent' && !this.sessions.runtime(id).busy) {
+      delete q['local-review'];
+      this.setQueue(id, q);
+      this.core.reviews.localReviewTurnEnded(id);
+    }
     const order = queueOrder(row.stage);
     const name = order.find((n) => q[n]?.state === 'queued');
     if (!name) return;
@@ -1993,7 +2086,8 @@ export class Lifecycle {
     q[name] = { ...entry, state: 'sent' };
     this.setQueue(id, q);
     try {
-      await this.sessions.submit(id, this.sessions.prompt(row, name, entry.vars ?? {}));
+      // A local review's prompt was written when it was queued.
+      await this.sessions.submit(id, name === 'local-review' ? (entry.vars?.text ?? '') : this.sessions.prompt(row, name, entry.vars ?? {}));
     } catch (e) {
       const back = this.queue(id);
       if (back[name]?.state === 'sent') {
@@ -2038,11 +2132,14 @@ export class Lifecycle {
     const handedOver = (fixes: number, max: number, at: string | null) => fixes > max && !!st.headRefOid && at === st.headRefOid;
     const working = row.status === 'working' || this.sessions.runtime(row.id).busy;
     const turn = this.inTurn(row);
+    // A local review the user ran here: its fixes wait uncommitted until its last round, and are pushed then.
+    const localReview = this.core.reviews.runningIn(row.id, 'review') || this.localReviewPending(row.id);
     if (st.state !== 'OPEN') block('The PR is not open.');
     if (working) block('AgentK is still working.', true);
     else if (row.status === 'needs_input') block(IN_TERMINAL, turn, 'never');
-    if (unpushed) block("The branch has commits that aren't pushed to the PR.", turn || !!opts.turnAtStart);
-    if (uncommitted) block(`The worktree has ${uncommitted === 1 ? '1 uncommitted file' : `${uncommitted} uncommitted files`}: commit or discard them.`, turn || !!opts.turnAtStart);
+    if (localReview) block(LOCAL_REVIEW_RUNNING, true);
+    if (unpushed) block("The branch has commits that aren't pushed to the PR.", turn || !!opts.turnAtStart || localReview);
+    if (uncommitted) block(`The worktree has ${uncommitted === 1 ? '1 uncommitted file' : `${uncommitted} uncommitted files`}: commit or discard them.`, turn || !!opts.turnAtStart || localReview);
     const ci = github.ciState(st.statusCheckRollup);
     // AgentK's to fix until it hands it over.
     if (ci === 'failure') block(CI_FAILING, false, handedOver(row.ci_fixes, MAX_CI_FIXES, row.ci_fix_head) ? 'always' : 'never');

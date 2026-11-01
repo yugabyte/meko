@@ -45,7 +45,7 @@ const LOCAL_MEKO_WAIT_MS = 1500;
 const ACTIONS: Record<SessionAction, true> = {
   'approve-design': true, 'cancel-approval': true, 'open-pr': true, merge: true, 'cancel-queued': true, 'request-review': true, 'force-review': true,
   resume: true, archive: true, discard: true, 'update-pr': true, 'close-review': true, learn: true,
-  'review-cancel': true, 'review-retry': true, 'review-open-anyway': true,
+  'review-run': true, 'review-cancel': true, 'review-retry': true, 'review-open-anyway': true,
 };
 /**
  * The app page's Content-Security-Policy. No script-src: the design panel's Artifact frame is a

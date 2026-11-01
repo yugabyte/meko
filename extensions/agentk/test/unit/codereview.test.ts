@@ -71,7 +71,7 @@ describe('review settings', () => {
 describe("the review's part of a task's tab", () => {
   const r = (over: Partial<CodeReviewSummary>): CodeReviewSummary => ({
     id: 'r', sessionId: 's', strategy: 'sagittarius-3.0', state: 'sweeping', round: 1, rounds: 1, sweep: 1, depth: 1,
-    passesDone: 2, passes: 5, scoresDone: 3, candidates: 9, counts: noCounts(), addressed: false, mekoCall: false, waiting: false, detail: null, ...over,
+    passesDone: 2, passes: 5, scoresDone: 3, candidates: 9, counts: noCounts(), addressed: false, mekoCall: false, waiting: false, detail: null, onDemand: false, stage: 'code', ...over,
   });
 
   // Steps: each pass, then scoring as one, so Sagittarius 3.0 has 6 and Sirius 1.0 (no scorers) 1.
@@ -97,6 +97,9 @@ describe("the review's part of a task's tab", () => {
     [r({ state: 'describing' }), 'Local review: Sagittarius 3.0, waiting for the PR description'],
     [r({ state: 'done', counts: counts(1, 0, 0), addressed: true }), 'Local review: Sagittarius 3.0, LGTM, 1 blocker addressed'],
     [r({ waiting: true }), 'Local review: Sagittarius 3.0, 2 of 5 passes reported, waiting on you in its terminal'],
+    // One the user ran holds no Open PR: Retry is all it offers.
+    [r({ state: 'failed', detail: 'no review pass reported', onDemand: true }), 'Local review: Sagittarius 3.0, failed: no review pass reported. Retry it'],
+    [r({ state: 'cancelled', detail: 'you cancelled it', onDemand: true }), 'Local review: Sagittarius 3.0, cancelled. Retry it'],
   ])('spells %j out as %s', (summary, label) => {
     expect(reviewSegmentLabel(summary)).toBe(label);
   });
