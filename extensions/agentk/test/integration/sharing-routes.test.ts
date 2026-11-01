@@ -7,6 +7,7 @@ import { buildServer } from '../../src/server/server.js';
 import type { MekoDatapackRow } from '../../src/server/meko.js';
 import { makeEnv, waitFor, type ApiCall, type TestEnv } from '../helpers.js';
 import { all } from '../../src/server/db.js';
+import { resolveMekoApiUrl } from '../../src/server/config.js';
 
 describe('HTTP API: sharing, invites and Meko', () => {
   let env: TestEnv;
@@ -351,6 +352,19 @@ describe('HTTP API: sharing, invites and Meko', () => {
     // The datapack list the dialog fetches never carries account ids.
     const list = (await call('GET', '/api/meko/datapacks')).json();
     expect(list[0]).not.toHaveProperty('ownerUserId');
+  });
+
+  it('reads Meko again when its REST API answers 404, as when Meko updated under AgentK without telling it', async () => {
+    env.local.state = 'running';
+    env.local.meko = { url: 'http://127.0.0.1:7778/mcp', token: 'local-token' };
+    env.local.cloud = { set: true, linked: true, url: '', apiKey: '', webUrl: 'https://cloud.mekodata.ai', apiUrl: '' };
+    await env.core.refreshMeko();
+    expect(resolveMekoApiUrl(env.core.config)).toBe('http://127.0.0.1:7778/api/v1/cloud');
+    // The new Meko routes by id and has no /api/v1/cloud.
+    env.local.cloud = { ...env.local.cloud, routed: true };
+    env.mekoApi.handle(() => ({ status: 404, body: { error: { code: 'NOT_FOUND', message: 'Not Found' } } }));
+    await call('POST', '/api/invites/check');
+    await waitFor(() => resolveMekoApiUrl(env.core.config), (u) => u === 'http://127.0.0.1:7778/api/v1', 5000, 'the new REST base');
   });
 
   it("hands AgentK's own key to Meko once, then uses Meko's link, and reads it again when Meko says it changed", async () => {

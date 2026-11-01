@@ -113,9 +113,12 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > keeps the link's key: while it's linked, AgentK reaches Meko Cloud through the Meko on this
 > computer, with that Meko's URL and token. Its `/mcp` and its REST API under `/api/v1`, which
 > AgentK's sharing and uploads use (`resolveMekoApiUrl`), serve a datapack that Meko has (one made
-> there before the link) and pass any other id on to Meko Cloud; sharing always goes to Meko Cloud,
-> which answers 409 `DATAPACK_LOCAL` for a datapack still on that Meko. A Meko from before it routed
-> by id (no `cloud.datapack_routing` in `meko token --json`) passes REST on under `/api/v1/cloud`.
+> there before the link) and pass any other id on to Meko Cloud; sharing goes to Meko Cloud, but for
+> a datapack still on that Meko, which it answers itself with a 409 `DATAPACK_LOCAL`. A Meko from
+> before it routed by id (no `cloud.datapack_routing` in `meko token --json`) passes REST on under
+> `/api/v1/cloud`. AgentK reads Meko again when it says so (`POST /_meko/changed`, also sent at each
+> start of Meko's server, so an update under AgentK is heard) and after a 404 from its REST API (at
+> most every 30 s), which covers a rollback to a Meko that doesn't send it.
 > An upload link on that Meko's own origin (`http://127.0.0.1:…`, for one of its own datapacks) may be
 > plain http (`MekoApi.postPresigned`). Links to datapacks go to the link's web app (`cloud.web_url`).
 > An older Meko handed out the key instead (`cloud.api_key`, with `url` and `api_url`), and under one

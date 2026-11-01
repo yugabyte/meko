@@ -177,16 +177,21 @@ MCP tools on the kept session, each within 30 s but the listing's 10 s):
 |---|---|
 | `GET /datapacks` | This Meko's rows and its datapacks (below) as one list, sorted by name (ignoring case), one row per id: Meko Cloud's row of an id this Meko has is left out. Each row's `web_url` opens it: `/datapacks/<id>`, this web UI's page, for this Meko's; Meko Cloud's web app for its own. Only this Meko's while unlinked, and a 502 when Meko Cloud fails. Any credential |
 | `POST /datapacks {name, description?}` | `POST /datapacks` while linked; replies 201 `{datapack_id, agent_id, name, web_url}`, nothing else of Cloud's reply (`web_url`, as a listing row's, is Meko Cloud's web app, and `/datapacks/<id>` for one made here), so the web UI opens a new datapack where the server made it. Unlinked it's made here. A client token's create while linked acts on Meko Cloud and gets 403: it creates through `/mcp` |
-| `GET`, `PATCH`, `DELETE /datapacks/:id`; `…/provision-status`, `…/agents`, `…/metrics`, `…/token-savings`; `…/artifacts`, `…/artifacts/:hash`, `POST …/artifacts/:hash/download-url`; `…/conversations`, `…/conversations/count`, `…/conversations/:conversation`, `PATCH …/conversation-search-opt-out`; every `…/knowledge-bases/…` route | The same route, passed on as it came (`byID`; [above](#passing-a-request-on-to-meko-cloud)). Meko Cloud answers what the key may do: `DELETE` only the account's own; `upload-url` gives a presigned link the file goes to from the caller, with no key; `document-status`'s `state` is `awaiting_upload`, `indexing`, `completed`, `failed`, `abandoned` or `oversized` |
+| `GET`, `PATCH`, `DELETE /datapacks/:id`; `…/provision-status`, `…/agents`, `…/metrics`, `…/token-savings`; `…/artifacts`, `…/artifacts/:hash`, `POST …/artifacts/:hash/download-url`; `…/conversations`, `…/conversations/count`, `…/conversations/:conversation`, `PATCH …/conversation-search-opt-out`; every `…/knowledge-bases/…` route | The same route, passed on as it came (`byID`; [above](#passing-a-request-on-to-meko-cloud)), for a token; a browser's stays here (below). Meko Cloud answers what the key may do: `DELETE` only the account's own; `upload-url` gives a presigned link the file goes to from the caller, with no key; `document-status`'s `state` is `awaiting_upload`, `indexing`, `completed`, `failed`, `abandoned` or `oversized` |
 | `POST /datapacks/:id/search {query, limit?, force_source?, agent_id?, conversation_id?}` | MCP `context_search` (Meko's own route: Cloud's REST API has none) |
 | `POST /datapacks/:id/memories {text, agent_id?, conversation_id?}` | MCP `memory_add` (Meko's own route, likewise) |
 | `…/usage`, `…/export`, `…/memory-map`, `…/search-map`, `POST …/answer`, `…/memory-extraction` | None: Meko's own, for this Meko's datapacks alone (a 404 for any other id). Context Gaps' `…/questions` routes keep the questions of Meko Cloud's datapacks here ([api.md](api.md#context-gaps)) |
-| `GET /datapacks/incoming-shares`, `POST /datapacks/invite-action`, `POST /share/:token/redeem`, `POST /datapacks/:id/share`, `POST …/invite/:invite/resend`, `DELETE …/invite/:invite`, `GET …/member-list`, `GET …/outgoing-shares`, `GET` and `PUT …/share-link` | The same route, passed on (`cloudOnly`): only Meko Cloud shares. Unlinked it's a 409 `CLOUD_NOT_LINKED`; a datapack in the path that this Meko has is a 409 `DATAPACK_LOCAL` (it can be shared once it's in Meko Cloud) |
+| `GET /datapacks/incoming-shares`, `POST /datapacks/invite-action`, `POST /share/:token/redeem`, `POST /datapacks/:id/share`, `POST …/invite/:invite/resend`, `DELETE …/invite/:invite`, `GET …/member-list`, `GET …/outgoing-shares`, `GET` and `PUT …/share-link` | The same route, passed on (`cloudOnly`): only Meko Cloud shares. Unlinked it's a 409 `CLOUD_NOT_LINKED`; a datapack in the path must be a UUID (a 400 `VALIDATION_ERROR` otherwise), and one that this Meko has is a 409 `DATAPACK_LOCAL` (it can be shared once it's in Meko Cloud) |
 
 - **Which side:** the id decides (`inCloud`), as on `/mcp`. A route that takes `:id` serves this
   Meko's datapack, even when Meko Cloud has one of the same id. A UUID this Meko doesn't have goes to
-  Meko Cloud while it's linked, for any credential, and Meko Cloud's answer comes back (its 404 or
-  403 for an id it doesn't have either). Unlinked it's this Meko's 404.
+  Meko Cloud while it's linked, for any token, and Meko Cloud's answer comes back (its 404 or 403
+  for an id it doesn't have either). Unlinked it's this Meko's 404. A browser's (local or remote
+  access) `byID` routes stay here, a 404 for such an id: the web UI opens Meko Cloud's datapacks in
+  its web app, so this Meko's pages never show one.
+- **Only the routes listed reach Meko Cloud:** a path parameter that could name another path
+  there (`.`, `..`, or one holding `/`, `\` or an escape such as `%2F`: Echo routes on the raw path,
+  and nothing cleans it) is a 400 `VALIDATION_ERROR` before anything is passed on (`pass`).
 - **No location:** no route takes one or says one, but Context Gaps' ([api.md](api.md#context-gaps)).
   A `?location=` or a body's `location`, which an older `meko-cli` sends, is ignored. One exception
   keeps a web UI tab from before working as it did (`staleTab`): a browser's (local or remote access)
@@ -283,4 +288,7 @@ never the key.
 After every change, once it's saved and the change's lock is released (so a slow extension holds
 up neither the reply nor the next change), Meko posts `{"what": "cloud"}` to `/_meko/changed` on each running
 extension's socket, with no Origin, best effort with a 5 s timeout ([web.md](web.md)); the
-extension reads `meko token --json` again. A failure to reach one is logged, never the link.
+extension reads `meko token --json` again. A failure to reach one is logged, never the link. `serve`
+posts it once at each start too: an update or a rollback restarts it under extensions that keep
+running, and may change how they reach Meko Cloud (`datapack_routing`). A rollback to a Meko from
+before that doesn't post it, so extensions also read Meko again when its REST API answers 404.

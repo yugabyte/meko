@@ -287,6 +287,25 @@ func TestCloudDatapacks(t *testing.T) {
 		409, "DATAPACK_LOCAL")
 	wantErr(t, e, "GET", "/datapacks/"+e.DatapackID+"/share-link", nil, 409, "DATAPACK_LOCAL")
 
+	// Only the routes listed reach Meko Cloud: a datapack that isn't a UUID, or a path parameter that
+	// could name another path there, is this Meko's 400.
+	sent := cloud.last()
+	for _, call := range [][2]string{{"GET", "/datapacks/not-a-uuid/member-list"},
+		{"GET", "/datapacks/../member-list"}, {"POST", "/datapacks/" + cloudDP + "/invite/../resend"},
+		{"POST", "/datapacks/" + cloudDP + "/invite/..%2F..%2Fadmin/resend"}, {"POST", "/share/a%2Fb/redeem"},
+		{"GET", "/datapacks/" + cloudDP + "/artifacts/.."}} {
+		wantErr(t, e, call[0], call[1], nil, 400, "VALIDATION_ERROR")
+	}
+	// A browser opens Meko Cloud's datapacks in its web app, never on this Meko's pages: its :id
+	// routes stay here.
+	as = "local"
+	wantErr(t, e, "GET", "/datapacks/"+cloudDP, nil, 404, "NOT_FOUND")
+	wantErr(t, e, "GET", "/datapacks/"+cloudDP+"/artifacts", nil, 404, "NOT_FOUND")
+	as = ""
+	if cloud.last() != sent {
+		t.Fatalf("Meko Cloud got %q", cloud.last())
+	}
+
 	r := admin("POST", "/datapacks", map[string]any{"name": "team-notes", "location": "local"})
 	if r.Status != 201 || obj(r.Data)["datapack_id"] != cloudDP || strings.Contains(toJSON(r.Data), "secret") ||
 		obj(r.Data)["web_url"] != nil || !strings.Contains(toJSON(r.Data), `"web_url":null`) ||

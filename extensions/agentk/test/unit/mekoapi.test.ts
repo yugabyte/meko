@@ -32,6 +32,18 @@ describe('MekoApi', () => {
     expect(e).toMatchObject({ status: 409, code: 'CONFLICT', message: 'bob@example.com is already a member' });
   });
 
+  it('says when Meko answers 404, so Meko can be read again, and only then', async () => {
+    const f = fakeMekoApi();
+    let told = 0;
+    f.api.onNotFound = () => told++;
+    f.handle(() => ({ status: 409, body: { error: { code: 'CONFLICT', message: 'taken' } } }));
+    await expect(f.api.incomingShares()).rejects.toMatchObject({ status: 409 });
+    expect(told).toBe(0);
+    f.handle(() => ({ status: 404, body: { error: { code: 'NOT_FOUND', message: 'Not Found' } } }));
+    await expect(f.api.incomingShares()).rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' });
+    expect(told).toBe(1);
+  });
+
   it('passes on a refused key as an error', async () => {
     const f = fakeMekoApi();
     await expect(f.api.incomingShares()).rejects.toMatchObject({ status: 401, code: 'UNAUTHORIZED', message: 'invalid or expired token' });

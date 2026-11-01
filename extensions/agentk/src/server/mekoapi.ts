@@ -117,6 +117,9 @@ export class MekoApi {
    */
   constructor(private creds: () => { baseUrl: string | null; apiKey: string; storageHttp?: boolean }, private fetchImpl: Fetch = fetch) {}
 
+  /** Called when Meko's API answers 404: the Meko behind it may have changed (Core reads it again). */
+  onNotFound?: () => void;
+
   /** A `body` goes as JSON. */
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const { baseUrl, apiKey } = this.creds();
@@ -148,6 +151,7 @@ export class MekoApi {
     const env = (parsed && typeof parsed === 'object' ? parsed : {}) as Json;
     const err = env.error;
     if (!res.ok || err) {
+      if (res.status === 404) this.onNotFound?.();
       const e = (err && typeof err === 'object' ? err : {}) as Json;
       const message = strOrNull(e.message) ?? (typeof err === 'string' ? err : null) ?? `Meko answered ${res.status}.`;
       throw new MekoApiError(res.status, str(e.code) || `HTTP_${res.status}`, message);

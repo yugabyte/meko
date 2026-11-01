@@ -261,6 +261,8 @@ function refusedKey(status: number | undefined, creds: MekoCreds, code = ''): Me
 type Json = Record<string, unknown>;
 /** How long `localIds` keeps an answer: a deck's every edit asks it while Meko links Meko Cloud. */
 const LOCAL_IDS_MS = 30_000;
+/** How often a REST 404 from the Meko on this computer makes Presenter find it again (`notFound`). */
+const RECHECK_MS = 30_000;
 const HASH = /^[0-9a-f]{64}$/;
 
 /** Meko over MCP and REST, with credentials found again when a connection fails. */
@@ -275,6 +277,8 @@ export class MekoClient implements MekoPort {
   private gen = 0;
   /** `localIds`' last answer, for the credentials it was read with: kept `LOCAL_IDS_MS`. */
   private here: { creds: MekoCreds; ids: Set<string>; at: number } | null = null;
+  /** When a REST 404 last made it find Meko again. */
+  private recheckAt = 0;
 
   constructor(private find: Finder, private version: string) {}
 
@@ -326,6 +330,18 @@ export class MekoClient implements MekoPort {
   reset(): void {
     this.find.forget?.();
     this.drop();
+  }
+
+  /**
+   * A REST 404 from the Meko on this computer may be that Meko updated or rolled back under
+   * Presenter, so that its REST base moved (`datapack_routing`), when its start's notice didn't
+   * arrive: the next call finds it again, at most once every `RECHECK_MS`.
+   */
+  private notFound(status: number, creds: MekoCreds): void {
+    const direct = creds.kind === 'cloud' && creds.cloudHost === undefined;
+    if (status !== 404 || direct || Date.now() - this.recheckAt < RECHECK_MS || this.creds !== creds) return;
+    this.recheckAt = Date.now();
+    this.reset();
   }
 
   async status(): Promise<'ready' | 'none' | 'failed'> {
@@ -494,6 +510,7 @@ export class MekoClient implements MekoPort {
       const res = await fetch(url, { headers: { Authorization: `Bearer ${creds.key}` }, signal: AbortSignal.timeout(30000) });
       if (!res.ok) {
         const err = ((await res.json().catch(() => null)) as { error?: { code?: unknown; message?: unknown } } | null)?.error;
+        this.notFound(res.status, creds);
         throw refusedKey(res.status, creds, str(err?.code))
           ?? new MekoError(str(err?.message) || `Meko's artifact list answered ${res.status}`);
       }
@@ -523,6 +540,7 @@ export class MekoClient implements MekoPort {
     const res = await fetch(`${creds.apiUrl}/datapacks`, { headers: { Authorization: `Bearer ${creds.key}` }, signal: AbortSignal.timeout(30000) });
     if (!res.ok) {
       const err = ((await res.json().catch(() => null)) as { error?: { code?: unknown; message?: unknown } } | null)?.error;
+      this.notFound(res.status, creds);
       throw refusedKey(res.status, creds, str(err?.code))
         ?? new MekoError(str(err?.message) || `Meko's datapack list answered ${res.status}`);
     }

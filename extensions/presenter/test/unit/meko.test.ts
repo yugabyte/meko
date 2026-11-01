@@ -219,6 +219,28 @@ describe('Meko Cloud\'s REST API', () => {
     }
   });
 
+  it('finds the Meko on this computer again after its REST API answers 404, as when it updated under Presenter', async () => {
+    const api = await listen((req, res) => {
+      if (req.url!.startsWith('/api/v1/cloud/')) {
+        return void res.writeHead(404, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'Not Found' } }));
+      }
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: { items: [], has_more: false } }));
+    });
+    const url = await mcp();
+    let finds = 0;
+    // The Meko before the update passed REST on under /api/v1/cloud; the new one routes by id.
+    const m = new MekoClient(async () => ({ state: 'ready', creds: finds++ === 0
+      ? { url, key: 'local-token', apiUrl: `${api}/api/v1/cloud`, kind: 'cloud', cloudHost: 'cloud.meko.example' }
+      : { url, key: 'local-token', apiUrl: `${api}/api/v1`, kind: 'cloud', cloudHost: 'cloud.meko.example', routed: true } }), 'test');
+    try {
+      await expect(m.listArtifacts('dp1', 'deck.json')).rejects.toThrow(/^Not Found$/);
+      expect(await m.listArtifacts('dp1', 'deck.json')).toEqual([]);
+      expect(finds).toBe(2);
+    } finally {
+      await m.close();
+    }
+  });
+
   it('reads which datapacks the Meko on this computer serves itself, only when it routes by id', async () => {
     let asked = 0;
     const api = await listen((req, res) => {

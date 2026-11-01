@@ -44,9 +44,11 @@ answers whether or not Meko's server runs:
 | `cloud.error`, or `meko` failed or is gone, after a link was read | The link last read, kept in memory only, so a slow `meko` or a locked Keychain never moves decks |
 | The same before any link was read (a start, or right after Meko's notice) | No Meko, rather than the one on this computer, for the same reason |
 
-When the link changes, Meko posts `{"what":"cloud"}` to `/_meko/changed` on Presenter's socket; the
-client drops its connection, its conversation and the link it last read, and the next call finds
-Meko again. One connection is made at a time, so the client and the credentials it reports are
+When the link changes, and at each start of Meko's server (an update or a rollback may move its REST
+base, `datapack_routing`), Meko posts `{"what":"cloud"}` to `/_meko/changed` on Presenter's socket;
+the client drops its connection, its conversation and the link it last read, and the next call finds
+Meko again. A 404 from the Meko on this computer's REST API does the same, at most every 30 s, for a
+rollback to a Meko that doesn't post it. One connection is made at a time, so the client and the credentials it reports are
 always one Meko's. Each Claude run asks `meko token --json` again and reconnects when the URL or key
 changed (the local Meko on a new port, a new client token), then gets that Meko's URL and key (the
 key through `PRESENTER_MEKO_KEY`). A deck's id is its datapack's, which exists in one Meko only, so
