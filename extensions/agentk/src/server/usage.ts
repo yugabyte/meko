@@ -8,11 +8,9 @@ import type {
 } from '../shared/types.js';
 import { all, get, run, tx, type Db } from './db.js';
 import {
-  firstTurnMeko, learningOf, learnRuns, mekoBy, mekoCallOf, mekoCalls, mekoResultOf, parseMekoCalls, parseMekoResults, queryKey, sessionMeko, summarizeMeko,
+  firstTurnMeko, learningOf, learnRuns, mekoBy, mekoCallOf, mekoCalls, mekoResultOf, parseMekoCalls, parseMekoResults, sessionMeko, summarizeMeko,
   type MekoCall, type MekoResult, type PendingCall,
 } from './mekousage.js';
-import { openGapCounts } from './mekogaps.js';
-import { readSavedReplySync } from './savedreply.js';
 import { parseKiroMekoCalls, type KiroTurn } from './kiro.js';
 import type { AgentMekoCall } from './mekolog.js';
 import { parseOpenCodeMekoCalls, parseOpenCodeMessages } from './opencode.js';
@@ -33,8 +31,6 @@ export function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
 }
 
 const CHUNK = 1024 * 1024;
-/** The largest reply Claude Code saved to a file that's read for a Meko search's quality. */
-export const SAVED_REPLY_MAX = 8 * 1024 * 1024;
 
 /**
  * Transcript files for a session: the main conversation plus any subagent
@@ -199,8 +195,6 @@ export function ingestSessionUsage(db: Db, sessionId: string, mainTranscript: st
   const pending = new Map<string, PendingCall>(
     all<{ tool_use_id: string } & PendingCall>(db, 'SELECT tool_use_id, kind, tool FROM meko_calls WHERE session_id = ? AND outcome IS NULL', sessionId)
       .map((r) => [r.tool_use_id, { kind: r.kind, tool: r.tool }]));
-  // A search's reply too large for Claude is read from the file Claude Code saved, beside the main transcript.
-  const readSaved = (notice: string) => readSavedReplySync(notice, mainTranscript, SAVED_REPLY_MAX);
   for (const { path, agent } of transcriptFiles(mainTranscript)) {
     const prev = get<{ offset: number }>(db, 'SELECT offset FROM usage_files WHERE session_id = ? AND path = ?', sessionId, path);
     let offset = prev?.offset ?? 0;
@@ -247,7 +241,7 @@ export function ingestSessionUsage(db: Db, sessionId: string, mainTranscript: st
             calls.push(c);
             pending.set(c.toolUseId, { kind: c.kind, tool: c.tool });
           }
-          for (const res of parseMekoResults(line, pending, readSaved)) {
+          for (const res of parseMekoResults(line, pending)) {
             results.push(res);
             pending.delete(res.toolUseId);
           }
@@ -285,20 +279,19 @@ export function ingestSessionUsage(db: Db, sessionId: string, mainTranscript: st
 /**
  * Writes Meko calls and their results into `meko_calls` (inside the caller's transaction): a call
  * already there is left as it is, and a result fills in its call's outcome. The same for every
- * agent's calls, so they're counted and judged alike. Returns the ids of the calls that were new.
+ * agent's calls, so they're counted alike. Returns the ids of the calls that were new.
  */
 export function recordMekoCalls(db: Db, sessionId: string, agent: string | null, calls: MekoCall[], results: MekoResult[]): Set<string> {
   const added = new Set<string>();
   for (const c of calls) {
-    const r = run(db, `INSERT INTO meko_calls(session_id, tool_use_id, agent, tool, kind, at, input_chars, model, context_tokens, query, query_key)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
-      sessionId, c.toolUseId, agent, c.tool, c.kind, c.at, c.inputChars, c.model, c.contextTokens, c.query, c.query === null ? null : queryKey(c.query));
+    const r = run(db, `INSERT INTO meko_calls(session_id, tool_use_id, agent, tool, kind, at, input_chars, model, context_tokens)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+      sessionId, c.toolUseId, agent, c.tool, c.kind, c.at, c.inputChars, c.model, c.contextTokens);
     if (Number(r.changes)) added.add(c.toolUseId);
   }
   for (const r of results) {
-    run(db, `UPDATE meko_calls SET outcome = ?, results = ?, result_chars = ?, top_score = ?, top_raw = ?, quality = ?
-             WHERE session_id = ? AND tool_use_id = ?`,
-      r.outcome, r.results, r.resultChars, r.topScore, r.topRaw, r.quality, sessionId, r.toolUseId);
+    run(db, 'UPDATE meko_calls SET outcome = ?, results = ?, result_chars = ? WHERE session_id = ? AND tool_use_id = ?',
+      r.outcome, r.results, r.resultChars, sessionId, r.toolUseId);
   }
   return added;
 }
@@ -519,7 +512,7 @@ export function projectUsage(db: Db, projectId: string, days = 14, now = Date.no
 
   const daily = dailyUsage(db, days, now, projectId);
   return {
-    total, cost, meko: summarizeMeko(calls), mekoGaps: openGapCounts(db, projectId), mekoFirstTurn: firstTurnMeko(db, projectId),
+    total, cost, meko: summarizeMeko(calls), mekoFirstTurn: firstTurnMeko(db, projectId),
     mekoLearning: learningOf(learnRuns(db, projectId)), codeReviews: reviewUsage(db, projectId), byModel, bySession, daily,
   };
 }

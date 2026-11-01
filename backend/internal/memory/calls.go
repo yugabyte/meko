@@ -24,17 +24,26 @@ func (s *Service) RecordCall(ctx context.Context, c store.Call) {
 	}
 }
 
-// RunCallPruner deletes calls older than CallRetention now and then every day, until ctx ends.
+// RunCallPruner deletes calls older than CallRetention now and then every day, until ctx ends, and
+// Context Gaps' asks with them.
 func (s *Service) RunCallPruner(ctx context.Context) {
 	t := time.NewTicker(pruneEvery)
 	defer t.Stop()
 	for {
-		n, err := s.st.PruneCalls(ctx, time.Now().Add(-CallRetention))
+		before := time.Now().Add(-CallRetention)
+		n, err := s.st.PruneCalls(ctx, before)
 		switch {
 		case err != nil && ctx.Err() == nil && s.log != nil:
 			s.log.Warn("couldn't prune the call log", "error", err)
 		case n > 0 && s.log != nil:
 			s.log.Info("pruned the call log", "calls", n)
+		}
+		n, err = s.st.PruneAsks(ctx, before)
+		switch {
+		case err != nil && ctx.Err() == nil && s.log != nil:
+			s.log.Warn("couldn't prune Context Gaps", "error", err)
+		case n > 0 && s.log != nil:
+			s.log.Info("pruned Context Gaps", "asks", n)
 		}
 		select {
 		case <-ctx.Done():

@@ -185,6 +185,7 @@ func memorySearch(ctx context.Context, c *call, a args) (any, error) {
 		IDs: memory.IDsOf(res)}}
 	c.rec.MemoryN = len(res)
 	c.rec.ScoreHigh, c.rec.ScoreMid, c.rec.ScoreLow = wire.Bands(memory.ContextResults{Memory: res})
+	c.search = &memory.AskedSearch{Query: query, Answer: memory.Answer{Memories: res}}
 	return map[string]any{"results": res}, nil
 }
 

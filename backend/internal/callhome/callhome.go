@@ -116,6 +116,16 @@ type Day struct {
 	ByClient    map[string]int `json:"byClient"`
 	TokensSent  int64          `json:"tokensSent"`
 	TokensSaved int64          `json:"tokensSaved"`
+	ContextGaps ContextGaps    `json:"contextGaps"`
+}
+
+// ContextGaps is one day's searches Meko answered poorly, by how (found nothing, or nothing
+// relevant), and the questions people dismissed and taught on Context Gaps. Never a query.
+type ContextGaps struct {
+	Empty     int `json:"empty"`
+	Weak      int `json:"weak"`
+	Dismissed int `json:"dismissed"`
+	Taught    int `json:"taught"`
 }
 
 // Report is the payload.
@@ -350,11 +360,18 @@ func (s *Sender) report(ctx context.Context, now time.Time, days int) (Report, e
 		d.ByTool[tool] += r.Calls
 		d.ByClient[Client(r.AgentID)] += r.Calls
 	}
+	// Context Gaps' counts are an extra: a failure to read them leaves them at 0, not the report unsent.
+	gaps, _ := s.o.Store.QuestionDays(ctx, start)
+	for _, g := range gaps {
+		if d := index[g.Day]; d != nil {
+			d.ContextGaps = ContextGaps{Empty: g.Empty, Weak: g.Weak, Dismissed: g.Dismissed, Taught: g.Taught}
+		}
+	}
 	install := s.o.Facts(ctx)
 	if install.Extensions == nil {
 		install.Extensions = map[string]bool{}
 	}
-	return Report{Schema: 2, Install: install, Totals: Totals{Datapacks: t.Datapacks, Memories: t.Memories,
+	return Report{Schema: 3, Install: install, Totals: Totals{Datapacks: t.Datapacks, Memories: t.Memories,
 		Learnings: t.Learnings, PromotedMemories: t.PromotedMemories, Artifacts: t.Artifacts,
 		Conversations: t.Conversations, KBDocuments: t.KBDocuments, KBBytes: t.KBBytes, DBBytes: t.DBBytes},
 		Days: out}, nil

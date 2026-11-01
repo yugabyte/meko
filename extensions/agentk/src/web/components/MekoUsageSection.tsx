@@ -1,6 +1,6 @@
-import type { MekoFirstTurn, MekoGapCounts, MekoLearning, MekoSavings, MekoUsage } from '../../shared/types';
+import { mekoGapsPath } from '../../shared/mekourls';
+import type { MekoFirstTurn, MekoGaps, MekoLearning, MekoSavings, MekoUsage } from '../../shared/types';
 import { appUrl } from '../base';
-import { navigate, routePath } from '../router';
 import { cx, firstTurnText, formatCost, formatTokens, gapsLine, learningText, type LearningTile } from '../util';
 
 const ESTIMATE =
@@ -10,8 +10,8 @@ const ESTIMATE =
 /**
  * Meko lookups and saves Claude made, what they're estimated to have saved, how many tokens Meko brought into
  * sessions' first turns, and what the learn step saved and cost: the project home and the Usage page. `gaps`
- * (the project home only): the questions Meko couldn't answer, as a line under the stats linking to What
- * Meko doesn't know.
+ * (the project home only): the open questions on Meko's Context Gaps for the project's dedicated datapack,
+ * as a line under the stats linking to that tab in Meko's web UI.
  */
 export function MekoUsageSection({
   meko,
@@ -22,7 +22,7 @@ export function MekoUsageSection({
   meko: MekoUsage;
   firstTurn: MekoFirstTurn;
   learning: MekoLearning;
-  gaps?: { projectId: string; counts: MekoGapCounts };
+  gaps?: MekoGaps | null;
 }) {
   const learned = learningText(learning);
   const f = (n: number) => n.toLocaleString();
@@ -55,30 +55,25 @@ export function MekoUsageSection({
         <LearningStat tile={learned.learned} label="Learned" />
         <LearningStat tile={learned.cost} label="Learning cost" />
       </div>
-      {gaps && <GapsLine projectId={gaps.projectId} counts={gaps.counts} />}
+      {gaps && <GapsLine gaps={gaps} />}
     </div>
   );
 }
 
-/** "9 questions Meko couldn't answer · 5 found nothing · 4 nothing relevant", linking to What Meko doesn't know; nothing when there are none. */
-function GapsLine({ projectId, counts }: { projectId: string; counts: MekoGapCounts }) {
-  const line = gapsLine(counts);
+/**
+ * "9 questions Meko couldn't answer · 5 found nothing · 4 nothing relevant", opening the datapack's
+ * Context Gaps in Meko's web UI (on this origin: the server sends the counts only while AgentK uses the
+ * Meko on this computer) in a new tab; nothing when there are none.
+ */
+function GapsLine({ gaps }: { gaps: MekoGaps }) {
+  const line = gapsLine(gaps);
   if (!line) return null;
-  const route = { view: 'meko-gaps', projectId } as const;
   return (
-    <a
-      className="meko-gaps"
-      href={routePath(route)}
-      onClick={(e) => {
-        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-        e.preventDefault();
-        navigate(route);
-      }}
-    >
+    <a className="meko-gaps" href={mekoGapsPath(gaps.datapackId, gaps.cloud)} target="_blank" rel="noopener noreferrer">
       <span className="meko-gaps-text">
         <b>{line.count}</b> Meko couldn't answer <span className="muted">· {line.split}</span>
       </span>
-      <span className="meko-gaps-link">See what Meko doesn't know ›</span>
+      <span className="meko-gaps-link">See Context Gaps in Meko ›</span>
     </a>
   );
 }

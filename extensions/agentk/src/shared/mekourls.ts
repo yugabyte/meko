@@ -37,6 +37,14 @@ export function mekoDatapackPath(datapackId: string): string {
 }
 
 /**
+ * A datapack's Context Gaps in that web UI, the questions Meko couldn't answer: its tab, or for the
+ * linked Meko Cloud's (`cloud`), whose other pages are Meko Cloud's web app's, a page of their own.
+ */
+export function mekoGapsPath(datapackId: string, cloud = false): string {
+  return cloud ? `/gaps/${encodeURIComponent(datapackId)}` : `${mekoDatapackPath(datapackId)}/gaps`;
+}
+
+/**
  * Installs Meko on this computer: the installer of the repo's latest release, which is Meko's
  * (the README's install line). The banner shown while there's no Meko here gives it.
  */

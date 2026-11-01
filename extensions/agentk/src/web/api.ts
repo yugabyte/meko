@@ -34,13 +34,8 @@ import type {
   MekoCallPage,
   MekoDatapack,
   MekoCallBy,
-  MekoGap,
   KnowledgeUpload,
-  MekoGapMarkRequest,
-  MekoGapPage,
-  MekoGapState,
   MekoLogInfo,
-  MekoTeachRequest,
   MoveSessionRequest,
   OpenedProject,
   OpenPrRequest,
@@ -277,18 +272,6 @@ export const api = {
   /** Where the browser downloads the session's Meko call log (a plain link: Meko's sign-in cookie goes with it). */
   mekoLogUrl: (id: string) => appUrl(`/api/sessions/${enc(id)}/meko-calls.jsonl`),
   clearMekoLog: (id: string) => request<void>('DELETE', `/api/sessions/${enc(id)}/meko-calls`),
-  mekoGaps: (projectId: string, q: { state?: MekoGapState | 'all'; after?: { lastAt: number; key: string } } = {}) => {
-    const qs = new URLSearchParams();
-    if (q.state) qs.set('state', q.state);
-    if (q.after) {
-      qs.set('before', String(q.after.lastAt));
-      qs.set('beforeKey', q.after.key);
-    }
-    const tail = qs.toString();
-    return get<MekoGapPage>(`/api/projects/${enc(projectId)}/meko-gaps${tail ? `?${tail}` : ''}`);
-  },
-  markMekoGap: (projectId: string, b: MekoGapMarkRequest) => post<void>(`/api/projects/${enc(projectId)}/meko-gaps/mark`, b),
-  teachMeko: (projectId: string, b: MekoTeachRequest) => post<MekoGap>(`/api/projects/${enc(projectId)}/meko-gaps/teach`, b),
 
   settings: () => get<Settings>('/api/settings'),
   saveSettings: (b: SettingsUpdate) => request<Settings>('PUT', '/api/settings', b),

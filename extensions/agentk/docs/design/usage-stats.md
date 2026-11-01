@@ -77,7 +77,7 @@ reports.
   (optional, so older installs' reports still check): about how many tokens Claude's calls sent to
   Meko (their input, characters ÷ 4), also by tool; [learn steps](recall-and-learn.md#the-learn-step) by trigger
   (`discard` optional, added later), path and outcome, the facts they proposed, added, corrected and skipped, the questions
-  on What Meko doesn't know they marked taught and dismissed (`taught`, `dismissed`, optional, added later; how many they
+  on Meko's Context Gaps they marked taught and dismissed (`taught`, `dismissed`, optional, added later; how many they
   were offered isn't sent, since the 7-day report with every count at its largest has no room left in 64 KB), their Meko searches,
   failed calls and tokens sent, and their model calls' tokens (the fork, the duplicate check, and
   typed turns) with their price in whole cents; AgentK's own Meko calls (`meko_agentk_calls`,
@@ -85,11 +85,10 @@ reports.
   failures, tokens sent, time taken and the 9 most used tools (the rest as `other`); and the Meko
   plugin's transcript captures AgentK ran (`meko_capture_runs`: runs, failures, time). What a
   capture sends isn't counted: AgentK can't see it. Each goes on the day it began, and is left out
-  when there was none. Also optional: searches that found nothing relevant (`weak`), and the
-  questions on [What Meko doesn't know](recall-and-learn.md#what-meko-doesnt-know) people dismissed (and
-  not restored) and taught, each on the day of its latest dismissal or teach (asking again undoes
-  neither, nor does a learn step marking it later: it counts what users did; a learn step's marks are in its counts
-  instead), left out when there were none.
+  when there was none. Versions from before Meko kept its [Context Gaps](recall-and-learn.md#mekos-context-gaps)
+  also sent searches that found nothing relevant (`weak`) and the questions people dismissed and
+  taught (`gaps`); the schema keeps both so their reports still check, and Meko's own report counts
+  them now.
 
 Never sent: project, session, repo, branch, datapack or file names, paths, prompts (and what's asked of Ask AgentK), designs,
 transcripts or code, PR titles, URLs or numbers, user names, emails, GitHub logins, host names and

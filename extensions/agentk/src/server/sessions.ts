@@ -498,12 +498,15 @@ export class SessionManager {
 
   setStage(id: string, stage: Stage, by: 'you' | 'auto', opts: { event?: boolean } = {}): void {
     const now = Date.now();
+    const was = sessionRow(this.db, id);
     tx(this.db, () => {
       run(this.db, 'UPDATE session_stages SET left_at = ? WHERE session_id = ? AND left_at IS NULL', now, id);
       run(this.db, 'INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, ?)', id, stage, now, by);
       run(this.db, 'UPDATE sessions SET stage = ? WHERE id = ?', stage, id);
     });
     if (opts.event !== false) this.event(id, 'stage', stage === 'done' ? 'Done' : `Moved to ${STAGE_LABELS[stage]}`);
+    // A learn session moved on from Explore has stopped seeding.
+    if (was?.stage === 'explore' && stage !== 'explore') this.core.learn.seeded(was);
     this.core.changed();
   }
 
@@ -2408,6 +2411,8 @@ export class SessionManager {
     // Archiving again (a cleanup finishing after the user archived by hand) keeps the first time.
     const wasArchived = row.desired === 'archived';
     this.stopping.add(row.id);
+    // A learn session closed while it seeded (it's done, or discarded) has stopped seeding.
+    if (!wasArchived && row.stage === 'explore') this.core.learn.seeded(row);
     try {
       this.ingestUsage(row.id);
       run(this.db, `UPDATE sessions SET desired = 'archived', status = 'archived', discarding = 0, archived_at = COALESCE(?, archived_at) WHERE id = ?`,

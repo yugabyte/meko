@@ -20,6 +20,9 @@ import type {
   Extension,
   ExtractorStatus,
   ExtensionAction,
+  Gap,
+  GapPage,
+  GapState,
   Health,
   KnowledgeActivity,
   MapSource,
@@ -80,6 +83,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!res.ok) throw await failure(res, "HTTP_ERROR");
+  if (res.status === 204) return undefined as T;
   const env = (await res.json().catch(() => null)) as
     | { data: T; error: { code: string; message: string } | null }
     | null;
@@ -196,6 +200,20 @@ export const api = {
       conversation_id: UI_CONVERSATION_ID,
       text,
     }),
+
+  // Context Gaps: a page of the questions in a state (open by default), after the last one shown.
+  gaps: (id: string, state: GapState | "all" = "open", after?: { last_at: string; key: string }) =>
+    request<GapPage>(
+      "GET",
+      `/datapacks/${id}/questions?state=${state}` +
+        (after ? `&after=${enc(after.last_at)}&after_key=${enc(after.key)}` : ""),
+    ),
+  // Dismiss a question, or restore one (null): open again, what was taught kept.
+  markGap: (id: string, key: string, state: "dismissed" | null) =>
+    request<void>("POST", `/datapacks/${id}/questions/mark`, { key, state }),
+  // Saves text as a memory in the datapack and marks the question taught.
+  teachGap: (id: string, key: string, text: string) =>
+    request<Gap>("POST", `/datapacks/${id}/questions/teach`, { key, text }),
 
   conversations: (id: string, q: string, offset: number) =>
     request<{ conversations: Conversation[]; has_more: boolean }>(

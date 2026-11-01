@@ -1,8 +1,9 @@
 // A datapack at a glance: what to do first in a new one, how knowledge moves through it, what it
-// holds (each count opening its tab), how it's used, and the last 30 days of searches.
+// holds (each count opening its tab), the questions Meko couldn't answer (opening Context Gaps), how
+// it's used, and the last 30 days of searches.
 
 import type { ReactNode } from "react";
-import { Brain, FileText, MessagesSquare, Package, Search, Sparkles, Users } from "lucide-react";
+import { Brain, ChevronRight, FileText, HelpCircle, MessagesSquare, Package, Search, Sparkles, Users } from "lucide-react";
 import { api } from "../lib/api";
 import { bytes, count, timeAgo } from "../lib/format";
 import { href, navigate, type Tab } from "../lib/route";
@@ -70,6 +71,7 @@ export function OverviewPage({ datapack }: { datapack: Datapack }) {
       <ContextTiles d={derive(m, datapack)} />
       <GetStarted datapack={datapack} metrics={m} />
       {SHOW_COLLECTIVE && <LearningPipeline datapack={datapack} />}
+      <GapsLine datapackId={id} />
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
         <Stat
           icon={<Brain className="size-3.5" />}
@@ -137,5 +139,38 @@ export function OverviewPage({ datapack }: { datapack: Datapack }) {
         )}
       </Card>
     </div>
+  );
+}
+
+// "9 questions Meko couldn't answer · 5 found nothing · 4 nothing relevant", opening Context Gaps,
+// while any is open. Nothing at all when there are none, or the server has no such route.
+export function GapsLine({ datapackId }: { datapackId: string }) {
+  const { data } = useLoad(() => api.gaps(datapackId, "open").catch(() => undefined), [datapackId]);
+  const open = data ? data.open.empty + data.open.weak : 0;
+  if (!data || open === 0) return null;
+  const to = { datapackId, tab: "gaps" as const };
+  const split = [
+    data.open.empty > 0 && `${data.open.empty.toLocaleString()} found nothing`,
+    data.open.weak > 0 && `${data.open.weak.toLocaleString()} nothing relevant`,
+  ].filter(Boolean);
+  return (
+    <a
+      href={href(to)}
+      onClick={(e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+        e.preventDefault();
+        navigate(to);
+      }}
+      className="group flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border bg-card px-4 py-3 text-sm transition-colors hover:border-primary/60 hover:bg-accent/40 focus-visible:outline-2 focus-visible:outline-primary"
+    >
+      <HelpCircle className="size-4 text-warning" aria-hidden />
+      <span className="font-medium">
+        {open.toLocaleString()} {open === 1 ? "question" : "questions"} Meko couldn't answer
+      </span>
+      {split.length > 0 && <span className="text-muted-foreground">· {split.join(" · ")}</span>}
+      <span className="ml-auto inline-flex items-center gap-0.5 text-muted-foreground group-hover:text-foreground">
+        Context Gaps <ChevronRight className="size-3.5" />
+      </span>
+    </a>
   );
 }

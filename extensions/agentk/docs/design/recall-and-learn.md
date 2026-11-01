@@ -15,8 +15,8 @@ while it's being created share the one `conversation_create`.
   issue the task names (`#N`, at most 3, through `gh issue view`; one that can't be read is left
   out), on one line of at most 1,500 characters.
 - **Picking.** Up to 3 knowledge-base items first, then memories scoring at least 0.75
-  (`MIN_MEMORY_SCORE` in `mekosavings.ts`, the same bar [What Meko doesn't know](#what-meko-doesnt-know)
-  uses; it was 0.55 until off-topic memories were seen scoring 0.74–0.76), best
+  (`MIN_MEMORY_SCORE` in `mekosavings.ts`, the same bar Meko's [Context Gaps](#mekos-context-gaps)
+  judge a search by; it was 0.55 until off-topic memories were seen scoring 0.74–0.76), best
   first. Conversation-cache hits are left out. Duplicates (same id or same text) are dropped; at
   most 6 items, each cut at a word to 500 characters, 2,500 in all. A datapack whose search fails
   (15 seconds each) is skipped; the search fails only when every datapack's did.
@@ -32,10 +32,10 @@ while it's being created share the one `conversation_create`.
   minutes; a server restart loses it, and the session just starts without it. A session that
   fails to start, or is archived, drops its result, so a later session with the same id never
   gets it.
-- **Record.** `meko_preloads(session_id, at, outcome, results, chars, ms, query, query_key)` keeps each search's
+- **Record.** `meko_preloads(session_id, at, outcome, results, chars, ms)` keeps each search's
   outcome for the [first-turn stats](token-usage.md): `found` (handed to Claude), `empty`, `error`,
-  or `late` (it found something after the hook gave up, or the hook never asked). It keeps the
-  query too (NULL for a failed search), so an empty one shows on [What Meko doesn't know](#what-meko-doesnt-know).
+  or `late` (it found something after the hook gave up, or the hook never asked). Meko keeps no
+  question for it, since its query is the task ([Context Gaps](#mekos-context-gaps)).
 
 Nothing waits for the search: the session starts the same when it's slow, fails, or there's no Meko
 (then there's no search at all).
@@ -157,18 +157,21 @@ under the saving rule itself. The step ends with that turn (`Lifecycle.onTurnEnd
 the Meko calls in the transcript during it. It isn't offered the session's questions: AgentK
 couldn't tell which of Claude's saves answers which, so it couldn't mark them.
 
-**The project's open questions.** A session that found out something Meko couldn't answer has
+**The datapack's open questions.** A session that found out something Meko couldn't answer has
 the answer in its context, whether it searched for it or another session did. So every step
 through the mod (Save learnings, `/agentk_learn`, Merge & Close and Discard alike) is offered the
-project's open questions on [What Meko doesn't know](#what-meko-doesnt-know) (`learnGaps()` in
-`mekogaps.ts`), only those asked in Claude's own searches (subagents' included; one asked only by
-AgentK's search at start isn't, since its query is a task, and neither is a learn session's while it
-seeds, as on the page):
+open questions on Meko's [Context Gaps](#mekos-context-gaps) for the datapack it writes to, read
+from Meko with the session's Meko conversation (`MekoQuestions.openQuestions`, `learnQuestions()`
+in `learn.ts`):
 
-- first the session's own, the ones it asked last first (by its own asks: another session asking
-  one later doesn't move it up);
-- then other sessions', latest asked first (the page's order);
-- at most 50 in all (`GAP_LEARN_MAX`), each as last asked, cut to 300 characters.
+- first those the session's own conversation asked, then the rest, each in Meko's order (latest
+  asked first);
+- at most 50 in all (`LEARN_QUESTIONS_MAX`), each as last asked, on one line and cut to 300
+  characters.
+
+AgentK's own searches (at start, and the step's lookups) are never questions, so none of these is
+a task's text. With no list (AgentK on a Meko Cloud link, a Meko too old to keep questions, or
+Meko not answering) the step runs without questions.
 
 The prompt numbers them in one run, in two lists ("from this session", then "from other sessions
 on this project"). It asks for a fact answering each question the session found the answer to,
@@ -176,18 +179,19 @@ with the question numbers in its `answers` (one fact can answer several wordings
 and to leave out a question it didn't find out about, or whose only answer is about the task or
 the machine. The fork knows only this session, so it's told not to guess: another session's
 question is answered only when this session established the answer itself. A wrong mark shows on
-the page with the session that made it, and **Restore** opens the question again. Such a fact goes
-through the rule, the local-path filter and the duplicate check like any other, and then:
+Meko's tab with the conversation that made it, and **Restore** there opens the question again.
+Such a fact goes through the rule, the local-path filter and the duplicate check like any other,
+and then Meko is told (`POST …/questions/mark`, with the session's conversation):
 
 - written (added, or a correction): each question it answers is marked **taught** with the text
-  written, the datapack, and the session (`meko_gap_marks.taught_session`);
+  written (and, for a correction, the memory's id);
 - skipped, since a saved memory already says it: each is **dismissed** as a duplicate of what Meko
-  has, with the session and the text of the memory the check named
-  (`dismissed_session`, `dismissed_memory`);
+  has, with the id of the memory the check named;
 - not written (its write failed, it was filtered out, or the step ran out of time): nothing is marked.
 
-A question is marked only while it's still open, so one a person (or another session's learn step)
-taught or dismissed while the step ran keeps their mark. The step records how many it offered, taught and dismissed
+A question is marked only while it's still open (Meko's list is read again before the marks), so one
+a person (or another session's learn step) taught or dismissed while the step ran keeps their mark.
+The step records how many it offered, and how many marks Meko took, taught and dismissed
 (`meko_learns.questions`, `taught`, `dismissed`).
 
 **Record.** `meko_learns(id, session_id, trigger, path, started_at, ended_at, outcome, failed_step,
@@ -245,7 +249,8 @@ start brings it back.
   rejected alternatives, root causes, review findings that became rules), naming the PR as
   "(PR #123)", never a summary of the change. Metadata adds `"seed": true` and `"pr"`. It changes no
   files; nothing enforces that beyond the prompt (the edit guard is Design's). The searches it
-  makes before each save, while it's in Explore, stay off [What Meko doesn't know](#what-meko-doesnt-know).
+  makes before each save, while it's in Explore, aren't questions Meko should be taught: when it
+  leaves Explore, AgentK has Meko forget them ([Context Gaps](#mekos-context-gaps)).
 - **When it's done, it closes.** Claude writes its summary to `learned.md` beside the design file
   (`SessionManager.learnedPath`, outside the repo), only once it has finished; a session that stops
   to ask something doesn't write it. At each turn's end, a learn session still in Explore whose turn
@@ -264,106 +269,41 @@ start brings it back.
   project** in place of **Move on…**; it can still be moved from the stage bar, and then it no
   longer closes by itself.
 
-## What Meko doesn't know
+## Meko's Context Gaps
 
-The project's Meko searches that found nothing, or nothing relevant, grouped by question, so
-someone can see what Meko is missing and teach it (`src/server/mekogaps.ts`). No model judges a
-search's answer; the [learn step](#the-learn-step) teaches Meko the answers a session found out to
-the project's open questions, and dismisses those Meko already knew (*The project's open questions*). The list stays
-in AgentK's database (it isn't shared with the team on the datapack).
+The searches Meko found nothing, or nothing relevant, for, grouped by question, so someone can see
+what Meko is missing and teach it. Meko keeps them: it judges every search an agent makes on its
+`/mcp` when it answers it, keeps the poor ones per datapack, and lists them on the datapack's
+**Context Gaps** tab in its web UI, with Teach, Dismiss and Restore (Meko's `docs/api.md` and
+`docs/web-ui.md` have the rules and the routes). AgentK reads them and marks them; it no longer
+judges searches itself. Earlier versions kept their own list, from the agents' transcripts, in
+`state.db`; migration 45 dropped it (its marks, and each search's query and how poor its answer
+was): Meko's list starts empty.
 
-**What's recorded.** The [usage readers](token-usage.md#meko-calls) keep, for each of the
-session's agent's searches (`context_search`, `memory_search`, `knowledgebase_search`: Claude's from
-its transcript, main and subagents, Kiro's from its session log, OpenCode's from AgentK's plugin's
-lines): `meko_calls.query` (its `query`, cut to 1,000 characters) and `query_key` (the same
-lower-cased with its whitespace collapsed, which groups asks of one question), the best memory
-`score` and `raw_similarity_score` of the reply (`top_score`, `top_raw`), and `quality`
-(`searchQuality()` in `mekousage.ts`). AgentK's search at start keeps its query in
-`meko_preloads`, with the quality and best memory score of what Meko returned before picking
-(`startQuality()` in `recall.ts`, by the same rules): its `empty` outcome only says that picking
-kept nothing, which also happens when Meko returned only conversation hits (a real answer) or
-only memories below the bar (*Nothing relevant*). Searches from before this have NULL there:
-transcripts weren't read again.
+AgentK talks to it while its Meko calls go to the Meko on this computer (`MekoQuestions` in
+`mekoquestions.ts`, on Meko's API listener with the client token, as `mekoagents.ts` reads the
+agents). That includes a linked Meko Cloud's datapacks: Meko passes every `/mcp` call on to Meko
+Cloud and keeps their questions too, and its list says so (`location: "cloud"`). Not with an older
+Meko that handed out Meko Cloud's key, whose agents' searches go to Meko Cloud directly. Anything
+Meko doesn't answer, or a Meko too old to keep questions (a 404), is no list; nothing that needs it
+fails.
 
-**What Meko's scores can tell.** A `context_search` returns three buckets. Knowledge-base chunks
-and conversation hits pass Meko's own distance cutoffs before they're returned, so one that comes
-back is a real hit. The memory bucket has no cutoff: Meko always returns its top memories, each
-with `score` (mem0's hybrid rank) and `raw_similarity_score` (cosine). `memory_search` drops
-memories below a raw floor (0.2 by default). `knowledgebase_search` keeps at least one chunk
-whatever its distance. A score far below the bar means noise, but a high one doesn't mean the
-memory was what the session needed: on 2026-10-13 a search returned ten near-duplicate,
-off-topic memories scoring 0.74–0.76 (raw about 0.57), while a relevant one scored 0.77 (raw
-0.49). So the rules flag only what the scores can show, and every search keeps its top scores so
-the bar can be tuned from real data.
-
-**The rules** (`quality`):
-
-- `empty`, *Found nothing*: the search's outcome was empty (no items in any bucket).
-- `weak`, *Nothing relevant*: it found items, but no knowledge-base chunk, no conversation hit,
-  and only memories, each with a score and all below `MIN_MEMORY_SCORE` (0.75). A memory with no
-  score, or a `knowledgebase_search` that found a chunk, is never weak.
-- NULL otherwise: found something relevant, failed (Meko down isn't Meko not knowing), moved to
-  the background, or not a search.
-
-A reply too large for Claude's context reaches the transcript only as Claude Code's notice that it
-saved the reply to a file. For a search, the reader reads that file for the scores and quality
-(`readSavedReplySync()` in `savedreply.ts`: only a file in the transcript's own session's
-`tool-results` folder, `<transcripts>/<claude session>/tool-results/` for
-`<transcripts>/<claude session>.jsonl`, after `realpath`, up to 8 MB; the same check the Meko
-call log's `claudeReply()` uses). `outcome`, `results` and `result_chars` still describe the notice, which is
-what the usage counts and the savings estimate count. A file it can't read leaves no quality.
-
-**The questions** (`projectGaps()`): every poor search in the project's sessions, the session's
-agent's (Claude's, Kiro's or OpenCode's) and AgentK's at start, grouped by `query_key`, latest asked first (ties by key). A question shows the
-query as last asked, how the latest ask went and with which tool (or *AgentK's search at start*),
-how many times it was asked and by which sessions, and the latest ask's item count, best memory
-score and best raw similarity (which may be two different memories'). A question whose latest ask
-found something relevant is left out: Meko knows it now. The searches a [learn
-session](#learn-sessions) makes while it seeds, in Explore (by `session_stages`), its own and
-AgentK's at start, aren't questions (`seeding()`): it searches before each save to skip what Meko
-already has, into a datapack it's seeding, so a search that finds nothing is what it expects, not
-something Meko should be taught. One that found something still answers another session's
-question, and the page's count of searches recorded still has them all. Moved on from Explore, it's
-a task like any other, and its searches from then on are questions. Pages are 100 questions, and the next
-starts after the last one's `lastAt` and key, since searches Claude makes in one response share a
-time.
-
-**What the user does with one** (`meko_gap_marks(project_id, query_key, dismissed_at, taught_at,
-taught_text, taught_datapack, opened_at, taught_session, dismissed_session, dismissed_memory,
-person_dismissed_at, person_taught_at)`, each action's latest time; the latest one at or after the
-question's last ask decides its state; the `*_session` columns name the session whose learn step
-made the mark, and a person's own action clears them; `person_*_at` keep a person's latest dismissal
-and teach for the usage report, which a learn step's later mark doesn't overwrite, and a restore
-clears the person's dismissal only when it restores theirs): **Dismiss** marks it dismissed; **Teach Meko** saves what the user writes
-(1 to 2,000 characters, as typed) as a memory in the project's dedicated datapack, as AgentK
-(`agent-k-local`) in the project's Meko conversation, with metadata `{ source: "agent-k-local",
-kind: "taught", question }` (the question cut to 300 characters), and marks it taught with the
-text and the datapack's name. Nothing checks it against what Meko has: the person wrote it on
-purpose and the dialog says where it goes. Teaching needs Meko on and a dedicated datapack (409
-otherwise, with `MEKO_OFF` or `NO_DEDICATED_DATAPACK`); a failed save is a 502 with Meko's error
-and marks nothing. **Restore** clears a dismissal and opens the question again (what was taught,
-and the memory in Meko, stay). A mark applies to the asks before it: a question asked again later
-is open again, and a taught one shows what was taught, since Meko had the answer and the search
-still missed it; dismissing it then keeps that too.
-
-**Where it shows.** On the project home, the Meko section has a line under its stats while any
-question is open: *9 questions Meko couldn't answer · 5 found nothing · 4 nothing relevant*,
-linking to **What Meko doesn't know** (`/p/:id/meko-gaps`, `MekoGapsView.tsx`); the all-projects
-Usage page doesn't show it, and there's no command palette entry. The page lists the questions
-latest asked first, 100 at a time (`GET /api/projects/:id/meko-gaps?state=&before=&beforeKey=`), filtered
-**Open**, **Taught**, **Dismissed** or **All**, with the searches recorded since when. Each has
-**Teach Meko** (open ones; disabled, with why, when Meko is off or there's no dedicated
-datapack), **Copy** (the query) and **Dismiss** or **Restore**; **Copy all** copies the list
-shown. A mark a learn step made says so: *Taught by AgentK from <session> on Oct 14 in <datapack>:*
-with what was written, and *Dismissed by AgentK from <session> on Oct 14: Meko already had this:*
-with the memory that said it (the session a link while it runs). The usage stats count weak
-searches and the questions people dismissed and taught (`gaps`), and those learn steps taught and
-dismissed (`learn.taught`, `learn.dismissed`), never a query.
-
-**Why the database.** The page groups every session's asks, applies the marks and pages in one
-query, the rows are written in the same transaction that moves a transcript's read offset (a
-transcript read again upserts rather than adding asks twice), and the list outlives archived
-sessions, whose Meko call logs are deleted. The [Meko call log](project-home.md) has the session's
-agent's calls with their full replies too, but only while the project has Log Meko calls on, so it isn't the
-source.
-
+- **AgentK's own searches aren't questions.** Its MCP client sends `X-Meko-Client: agentk` on
+  every request (`MEKO_CLIENT_HEADER` in `meko.ts`), and Meko records no question for those calls:
+  the search at start (its query is the task) and the learn step's lookups. A header rather than a
+  tool argument, which Meko Cloud refuses.
+- **The project home's line.** Under the Meko stats, while the dedicated datapack has open
+  questions: *9 questions Meko couldn't answer · 5 found nothing · 4 nothing relevant*, read with
+  the home (`ProjectHome.mekoGaps`, `GET …/questions?state=open`'s counts), opening the datapack's
+  Context Gaps (`/datapacks/<id>/gaps` on this origin, or `/gaps/<id>` for a Meko Cloud datapack:
+  `mekoGapsPath`) in a new tab.
+- **The learn step** is offered the datapack's open questions and marks those it answered
+  ([above](#the-learn-step)).
+- **A learn session's searches while it seeds** check before each save into the datapack it's
+  filling, so finding nothing there is expected, not something Meko should be taught. When it
+  leaves Explore (moved on by hand, after which it's a task like any other, or closed),
+  `Learner.seeded` has Meko forget its conversation's asks made until then (`DELETE
+  …/questions/asks?conversation_id=&before=`), once, in the background. One that found something
+  had already answered another session's question there.
+- **The usage report** counts the questions learn steps taught and dismissed (`learn.taught`,
+  `learn.dismissed`); Meko's own report counts the rest, never a query.

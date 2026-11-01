@@ -46,6 +46,8 @@ type tool struct {
 type call struct {
 	svc *memory.Service
 	rec store.Call
+	// search is a search tool's question and answer, for Context Gaps (memory.RecordSearch).
+	search *memory.AskedSearch
 }
 
 // toolError is an error a tool returns in its result, as Meko Cloud does: {"error", "detail"},
