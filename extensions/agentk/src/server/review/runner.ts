@@ -296,16 +296,21 @@ export class CodeReviews {
       // Open PR (or a move) is only taken between turns: a review still waiting for the task's PR
       // description or fixes then had that turn interrupted (or its ask lost), and the press says to go on.
       if (last.state === 'describing') this.kick(last.id, () => (last.detail === DESCRIBE_LOST ? this.describe(last.id) : this.beginRound(last.id)));
-      if (last.state === 'fixing') this.kick(last.id, () => this.nextRound(last.id));
+      // Not while its fix prompt waits in the queue (one the user ran): the end of the turn that takes it moves it on.
+      if (last.state === 'fixing' && !this.core.lifecycle.localReviewPending(task.id)) this.kick(last.id, () => this.nextRound(last.id));
       return true;
     }
     this.checkNotHeld(task.id);
     // A finished review whose PR prompt didn't go (Claude was busy, or the user ran it): the PR goes
-    // with its line now. One the user ran already sent its last findings as a fix prompt.
+    // with its line now. One the user ran gave the task its last findings as a fix prompt; one still
+    // waiting in the queue (Claude lost it, or never took it) goes with the PR prompt instead.
     if (last && unsent(last)) {
       this.set(last.id, { instructions: opts.instructions || last.instructions, lead: opts.lead || last.lead, by: opts.by === 'you' ? 'you' : last.by });
-      if (last.purpose === 'demand') await this.sendPr(last.id, opts.queued, false);
-      else await this.finish(last.id, opts.queued);
+      if (last.purpose === 'demand') {
+        const untaken = this.core.lifecycle.localReviewPending(task.id);
+        this.core.lifecycle.clearLocalReview(task.id);
+        await this.sendPr(last.id, opts.queued, untaken);
+      } else await this.finish(last.id, opts.queued);
       return true;
     }
     const settings = this.settingsFor(task);
@@ -346,7 +351,7 @@ export class CodeReviews {
     if (task.stage === 'review' && !task.pr_number) throw new HttpError(409, "AgentK hasn't found the PR yet. Try again once it has.");
     const last = this.latest(task.id);
     if (last && RUNNING.includes(last.state)) throw new HttpError(409, 'A local review is already running.');
-    if (task.stage === 'review' && this.core.lifecycle.localReviewPending(task.id)) {
+    if (this.core.lifecycle.localReviewPending(task.id)) {
       throw new HttpError(409, "AgentK hasn't taken the last local review's fixes yet. Run it again once it has.");
     }
     this.core.lifecycle.checkPromptable(task);
@@ -799,6 +804,8 @@ export class CodeReviews {
     }
     const r = this.latest(row.id);
     if ((r?.state !== 'describing' && r?.state !== 'fixing') || r.stage !== 'code') return false;
+    // Its fix prompt waits in the queue (one the user ran): the end of the turn that takes it moves it on (Lifecycle).
+    if (r.state === 'fixing' && this.core.lifecycle.localReviewPending(row.id)) return true;
     // An interrupted turn is the user stepping in: the review waits for the next turn to end, or Open
     // PR. A describing review keeps why, so a restart leaves it waiting too.
     if (interrupted) {
@@ -810,12 +817,12 @@ export class CodeReviews {
   }
 
   /**
-   * In Review & PR, the turn that took a review's fix prompt from the stage's queue ended (Lifecycle,
-   * at its `local-review` entry): the next round reviews the change again.
+   * The turn that took a review's fix prompt from the queue ended (Lifecycle, at its `local-review`
+   * entry): the next round reviews the change again.
    */
   localReviewTurnEnded(taskId: string): void {
     const r = this.latest(taskId);
-    if (r?.state === 'fixing' && r.stage === 'review') this.kick(r.id, () => this.nextRound(r.id));
+    if (r?.state === 'fixing') this.kick(r.id, () => this.nextRound(r.id));
   }
 
   /** The review session's turn ended: every step reported, or ask again once for the missing ones. */
@@ -956,6 +963,8 @@ export class CodeReviews {
     // Asked for twice (a fix turn's end and an Open PR right after it): the first one moved it on.
     if (r.state !== 'fixing') return;
     if (this.taskMovedOn(r)) return;
+    // A fix prompt still queued (Claude lost it) isn't wanted once the next round reads the change.
+    this.core.lifecycle.clearLocalReview(r.task_id);
     this.set(id, { round: r.round + 1, sweep: 1, asked: 0, state: 'preparing' });
     await this.beginRound(id);
   }
@@ -1045,14 +1054,18 @@ export class CodeReviews {
   leftStage(taskId: string, stage: 'code' | 'review'): void {
     const r = this.latest(taskId);
     if (!r || r.stage !== stage) return;
+    // Its fix or push prompt isn't wanted outside its stage.
+    this.core.lifecycle.clearLocalReview(taskId);
     if (unsent(r)) {
       this.set(r.id, { stale: 1 });
       return;
     }
     const why = stage === 'code' ? REVIEW_LEFT_CODE : REVIEW_LEFT_REVIEW;
-    // A stopped one the user ran has its Retry in its own stage only: it's left behind too.
+    // A stopped one the user ran has its Retry in its own stage only: it's left behind too, and a
+    // failed one's session, kept for that Retry, goes.
     if (r.purpose === 'demand' && (r.state === 'failed' || r.state === 'cancelled')) {
       if (r.detail !== why) this.set(r.id, { state: 'cancelled', detail: why });
+      if (r.session_id) void this.archiveSession(r.session_id);
       return;
     }
     if (!(RUNNING.includes(r.state) || holds(r))) return;

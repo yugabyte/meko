@@ -203,7 +203,7 @@ sent, withdrawn or dropped.
 - **Merge when ready.** In Review, the merge blockers are of two kinds. Some clear by themselves:
   AgentK working or waiting on you mid-turn, CI running, AgentK's review still to come, its findings
   being addressed (while Claude runs), a [local review](code-review.md#on-demand) the user ran in
-  Review & PR (running, or its fix or push prompt still queued or out), and, mid-turn or while that
+  Review & PR (running, or its fix or push prompt still queued or out, while Claude hasn't exited), and, mid-turn or while that
   local review runs only, unpushed commits and uncommitted files (AgentK's work in progress;
   mid-turn when they were measured counts too, since a turn can push and end during the look at the
   PR; the local review's fixes are pushed once, after its last round). The others don't: CI failing, changes requested, required approvals

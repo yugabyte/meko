@@ -205,7 +205,8 @@ The user can run the review at any time in Code, or in Review & PR once the PR i
 `review-run` action (`CodeReviews.runNow`). On a desktop it's **Run the local review of …** in the
 command palette and, once the task has a review, **Review again** in the findings panel's header
 (the magnifier opens it); on a phone, **Run local review** in the task's ⋯ sheet too. While AgentK
-can't take it, these say why (after its turn, answer it in the terminal, resume the session). For
+can't take it, each of these says why (after its turn, answer it in the terminal, resume the
+session), and the server's refusal says so again. For
 a review the user ran, the findings header also has **Cancel** while it runs and **Retry** once it
 stopped, in its own stage (`onDemandControls`), as the ⋯ sheet does on a phone: the Code gate
 doesn't show it. A stopped review it replaces passes on the Open PR instructions and a move's
@@ -219,7 +220,15 @@ the usage counts), and nothing flags one left out.
 
 It runs as Open PR's review does, rounds and fix prompts included, but sends no PR prompt. Its last
 round's findings go to the task as a fix prompt too (`code-review-fix` ending "Don't open the PR
-yet", `FixAfter`), since no PR prompt carries them. A stopped one holds nothing (`reviewHolds` is false
+yet", `FixAfter`), since no PR prompt carries them. Its fix (and push) prompts go through the task's
+prompt queue as `local-review`, in Code as in Review & PR, since the user may be working with the
+task meanwhile: one goes only once AgentK is between turns, never into a turn or a question in the
+terminal, and the end of the turn that took it starts the next round, interrupted or not (there's
+no Review now for it; Cancel stops it). A prompt Claude loses before its turn starts (it exits
+first) goes back to queued and is sent again when Claude is back (`claudeBack`, or the next look
+at the PR), and Open PR on a finished review whose last fix prompt was never taken sends those
+findings with the PR prompt instead, so the line never says they were addressed when the task
+never saw them. A stopped one holds nothing (`reviewHolds` is false
 for `CodeReviewSummary.onDemand`): it offers Retry, not Open anyway, and Open PR starts a review of
 its own (and a queued Open PR stays queued: `reviewStopped`). Leaving the stage it runs in cancels
 it, running or stopped (`leftStage`, `taskMovedOn`; `the task left Review & PR` for one there), so
@@ -232,7 +241,8 @@ through `openPr`'s path for a done review whose PR prompt didn't go, even with t
 as a fix prompt. Leaving Code (a move, or one to Review & PR that picks up the branch's open PR)
 marks such a review stale (`code_reviews.stale`): Open PR then reviews again, or, with the strategy
 Off, opens the PR with no line (`prLine` ignores a stale review). Open PR while one runs takes it
-over: its `purpose` becomes `pr` and it sends the PR prompt when it's done. So does an Open PR
+over: its `purpose` becomes `pr` and it sends the PR prompt when it's done (not past a fix prompt still queued: the turn that takes it moves the
+review on). So does an Open PR
 queued during its fix turn (the user's, or Run to merge's), at that turn's end (`takeOver`), rather
 than being dropped as one queued during an Open PR review's turn is.
 
@@ -249,7 +259,9 @@ files, or a branch tip the PR's head doesn't contain, read from the PR's own rep
 AgentK puts its line in the PR's description (`syncReviewLine`). While it runs, or its prompt waits
 in the queue, the merge waits on "The local review is still running." (a blocker that clears by
 itself, so Merge & Close and Run to merge queue behind it), and the uncommitted-files and
-unpushed-commits blockers wait too, as they do mid-turn.
+unpushed-commits blockers wait too, as they do mid-turn. Only while Claude is there to take the
+prompts: once it has exited, they're blockers only the user clears, and a queued merge is dropped
+with a notice. Cancelling or leaving the review drops its prompt, queued or out.
 
 ## Context the passes get
 

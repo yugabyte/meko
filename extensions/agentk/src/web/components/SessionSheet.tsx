@@ -467,7 +467,7 @@ export function LocalReviewRows({ session, parent, projectReview, acting, onOpen
           </span>
         </SheetItem>
       )}
-      {r && reviewRunning(r) && (
+      {r && (reviewRunning(r) || onDemandControls(session).cancel) && (
         <SheetItem disabled={acting} onClick={then(() => void onAct('review-cancel'))}>
           Cancel the local review
         </SheetItem>

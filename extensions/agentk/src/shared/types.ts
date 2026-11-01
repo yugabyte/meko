@@ -2750,8 +2750,9 @@ export type TermServerMessage =
 //        while the last one's fixes wait to be taken, while one runs, and while AgentK is mid-turn, waiting on the user or
 //        exited). review-cancel stops a task's running local review
 //        (409 when none runs); review-retry reviews again, reusing the steps already reported, and review-open-anyway sends
-//        the PR prompt without a me_ak_review line: both 409 unless the review failed or was cancelled, and
-//        review-open-anyway 409 for a review the user ran)
+//        the PR prompt without a me_ak_review line: both 409 unless the review failed or was cancelled; review-retry
+//        409 too for a review the user ran in another stage than the task's now, and review-open-anyway for any review
+//        the user ran)
 // POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to, a
 //        missing task, or instructions that aren't text or are too long; 409 while AgentK is mid-turn, in Merge & Close,
 //        or a prompt (the stage's, or the user's instructions) is due and Claude is waiting or exited, and for a move to
