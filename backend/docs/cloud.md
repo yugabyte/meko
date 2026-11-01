@@ -14,7 +14,7 @@ every extension the same way (`internal/cloudlink`).
 |---|---|
 | **Meko owns the link, and extensions read whether it's on** | One place to link Meko Cloud, whatever extensions are installed, rather than a key in each extension's own settings. AgentK, which used to keep the key itself, hands its key to Meko once. |
 | **While linked, `/mcp` offers Meko Cloud's tools and routes each call by its datapack id** ([below](#mcp-while-linked)): a call that names a datapack this Meko has runs here, and every other call (a blank id, an id this Meko doesn't have, a tool only Meko Cloud has) goes to Meko Cloud. The listings hold both sides, and nothing tells a client which side a datapack is on | Moving the datapacks already here into Meko Cloud takes time, needs an import API Meko Cloud doesn't have yet, and may meet the account's datapack limit, so many stay here for a while; they must keep working for the agents and projects that use them. Agents see one Meko of names and ids: the id is enough to route by, since both sides use UUIDs and no datapack is made here while linked. Serving only Meko Cloud's while linked, with this Meko's datapacks out of agents' view until they're moved, was the alternative; so was a second MCP server or separate tool names for this Meko's, which would make every agent pick a side. |
-| **An id on both sides is this Meko's, until it's moved** (`servedHere`) | An export keeps ids, so Meko Cloud can hold a datapack of the same id. Serving this Meko's copy loses nothing the user can't see; the move to Meko Cloud, when it's built, keeps ids too, so it must stop serving the copy here, the one predicate's to change. |
+| **An id on both sides is this Meko's, until it's moved**: one rule says which datapacks this Meko serves while linked (`internal/memory`'s `servedWhileLinked`, asked through `ServesHere` and `ServedDatapacks`), and everything that routes or lists by it asks it: MCP's per-call routing and merged listings (`servedHere`, `localMatches`), and REST's `:id` routes and `GET /datapacks` (`inCloud`, `listDatapacks`) | An export keeps ids, so Meko Cloud can hold a datapack of the same id. Serving this Meko's copy loses nothing the user can't see; the move to Meko Cloud, when it's built, keeps ids too, so it must stop serving the copy here. Changing that one rule then moves calls, the web UI's routes and every listing together. |
 | **No datapack is made here while linked**, and a blank `datapack_id` is Meko Cloud's default: MCP's `datapack_create`, REST's `POST /datapacks`, the web UI's **+** and `meko-cli create_datapack` make it in Meko Cloud | New work goes where the agents work. A blank id meaning this Meko's default would quietly split one session across two Mekos. |
 | **Extensions reach Meko Cloud through this Meko**: `meko token --json` says whether it's linked and its web app, never the key, and `/api/v1/cloud/…` passes any REST request on with the key ([below](#apiv1cloud)) | The key stays in Meko's secret store: no extension, agent or agent config holds it. A prefix of its own keeps Meko Cloud's routes apart from this Meko's same-shaped ones. It passes every path, as the owner chose: what the key reaches through it is what Meko Cloud lets the key reach (its datapack routes and a share link's redeem today, not its account's API keys), and that's Meko Cloud's to decide, routes it adds later included. Its replies lose the credentials no caller of a client-token route should get (below). |
 | **The URLs go in `cloud.toml` beside `config.toml` (0600), and the key in the secret store** as `meko_cloud_key` ([install.md](install.md#secrets)) | `cloud.toml` is a file Meko writes itself, as `web.toml` is, so `config.toml` stays the user's. The key never sits in a file of its own outside the secret store, and never reaches a log or a reply. The CLI reads both without the server, so `meko token --json` works while Meko is stopped. `cloud.toml` existing means the link was set, linked (`linked = true`) or unlinked since. |
@@ -77,7 +77,8 @@ every extension the same way (`internal/cloudlink`).
   Until a read works, the tools this Meko shares with Meko Cloud stand in (not `datapack_metrics`,
   which reads this Meko's call log) with instructions of Meko's own.
 - **A call that names a datapack this Meko has runs here** (`routed`, `byDatapack`): a tool this
-  Meko has that takes `datapack_id`, whose trimmed id is one its store has (`servedHere`), runs this
+  Meko has that takes `datapack_id`, whose id (in any form a UUID takes, as on REST's routes) is one
+  this Meko serves (`servedHere`, over `ServesHere`), runs this
   Meko's tool of that name, recorded as this Meko's call, exactly as while unlinked. Meko Cloud's
   schemas fit: this Meko's tools take Cloud's arguments and ignore ones they don't know. When the
   store can't say, the call fails with the tool's own failure code (the reason in the log), never
@@ -187,8 +188,12 @@ but the listing's 10 s):
   even when Meko Cloud has one of the same id. A UUID this Meko doesn't have goes to Meko Cloud for
   the owner or the admin token while it's linked. For a client token it stays this Meko's 404, so
   linking Meko Cloud doesn't change what a missing datapack looks like to an agent.
-- **No location:** no route takes one or says one, but Context Gaps' ([api.md](api.md#context-gaps)). A `?location=` or a body's `location`, which an
-  older `meko-cli` or web UI tab sends, is ignored.
+- **No location:** no route takes one or says one, but Context Gaps' ([api.md](api.md#context-gaps)).
+  A `?location=` or a body's `location`, which an older `meko-cli` sends, is ignored. One exception
+  keeps a web UI tab from before working as it did (`staleTab`): a browser's (local or remote access)
+  `?location=local`, which only those bundles send, gets this Meko's datapacks alone from the
+  listing, and keeps its search and memories here. Such a tab takes every row it lists as this
+  Meko's, so Meko Cloud's rows would open as local pages that 404.
 - **Search and memories on this Meko's datapacks:** they run the tools in-process as `/mcp` does
   (`mcp.Call`), recorded in the call log the same way. Their reply is the tool's.
 - **A tool's error reply** (`{"error", "detail"}`) maps by its code, on either side:
@@ -239,8 +244,9 @@ an agent's do: `datapacks` lists both, a name is looked up among both (`datapack
 page), `create_datapack` makes one in Meko Cloud, and `upload` goes to the knowledge base of the
 datapack's side. Their messages never say which side a datapack is on (`Using datapack team-notes`). `meko-cli` never
 reads the key. `export` works only on this Meko's datapacks, linked or not, since its route is
-Meko's own: it passes the name or id to the route, which looks it up among this Meko's alone, so an
-export never asks Meko Cloud and works while it's down or refuses the key. One this Meko doesn't
+Meko's own: it passes an id to `GET /api/v1/datapacks/:id/export`, and a name to
+`GET /api/v1/datapacks/export?name=`, which looks it up among this Meko's alone, so an export never
+asks Meko Cloud and works while it's down or refuses the key. One this Meko doesn't
 have is refused (`"team-notes" isn't one of this computer's datapacks: only those can be
 exported`). While linked it takes no default (`/mcp`'s is Meko Cloud's), so the datapack must be
 named; it asks the link's state (`GET /api/v1/settings/meko-cloud`) only for that, and for the

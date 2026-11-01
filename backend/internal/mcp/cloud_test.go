@@ -209,6 +209,12 @@ func TestCloudServesLocalDatapacks(t *testing.T) {
 	if str(r.JSON["datapack_id"]) != e.DatapackID || r.JSON["cloud_tool"] != nil {
 		t.Fatalf("describe of this Meko's datapack: %s", r.Text)
 	}
+	// Any form of a UUID finds this Meko's datapack, as on REST's routes.
+	r = call(t, e, "datapack_describe", map[string]any{"datapack_id": strings.ToUpper(e.DatapackID),
+		"conversation_id": "c0ffee00-0000-4000-8000-00000000000a"})
+	if str(r.JSON["datapack_id"]) != e.DatapackID {
+		t.Fatalf("describe of this Meko's datapack by an uppercase id: %s", r.Text)
+	}
 	r = call(t, e, "memory_add", map[string]any{"text": "deploys go out on Tuesdays", "datapack_id": e.DatapackID,
 		"conversation_id": "c0ffee00-0000-4000-8000-00000000000a"})
 	if r.JSON["error"] != nil || r.JSON["cloud_tool"] != nil {
@@ -218,7 +224,7 @@ func TestCloudServesLocalDatapacks(t *testing.T) {
 		t.Fatalf("Meko Cloud was called for this Meko's datapack: %v", cloud.calls)
 	}
 	time.Sleep(50 * time.Millisecond) // recorded after the reply
-	if calls, _ := e.Store.Calls(ctx, e.DatapackID, time.Time{}); len(calls) != 2 {
+	if calls, _ := e.Store.Calls(ctx, e.DatapackID, time.Time{}); len(calls) != 3 {
 		t.Fatalf("this Meko's call log: %+v", calls)
 	}
 

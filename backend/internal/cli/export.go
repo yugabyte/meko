@@ -12,13 +12,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // toolExport writes a datapack's export (GET /api/v1/datapacks/:id/export) to f.out, or to the
 // file name the server suggests in the current folder. The route is Meko's own, so it exports the
-// datapacks this Meko serves itself, Meko Cloud linked or not: the one named (the route takes a name
-// or an id, and never asks Meko Cloud), or the default. While Meko Cloud is linked, /mcp's default is
-// Meko Cloud's, so the datapack must be named.
+// datapacks this Meko serves itself, Meko Cloud linked or not: the one named (by id, or by name on
+// GET /api/v1/datapacks/export?name=; neither asks Meko Cloud), or the default. While Meko Cloud is
+// linked, /mcp's default is Meko Cloud's, so the datapack must be named.
 func toolExport(ctx context.Context, t *tools, f toolFlags, stdout io.Writer) error {
 	id, err := t.localDatapack(ctx, strings.TrimSpace(f.text))
 	if err != nil {
@@ -29,7 +31,10 @@ func toolExport(ctx context.Context, t *tools, f toolFlags, stdout io.Writer) er
 		return err
 	}
 	// G704: the URL is always 127.0.0.1 on the port serve wrote to the data folder.
-	url := c.base + "/api/v1/datapacks/" + neturl.PathEscape(id) + "/export"
+	url := c.base + "/api/v1/datapacks/export?name=" + neturl.QueryEscape(id)
+	if u, perr := uuid.Parse(id); perr == nil && len(id) == len(u.String()) {
+		url = c.base + "/api/v1/datapacks/" + u.String() + "/export"
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil) //nolint:gosec
 	if err != nil {
 		return err
@@ -80,7 +85,7 @@ func toolExport(ctx context.Context, t *tools, f toolFlags, stdout io.Writer) er
 	return nil
 }
 
-// localDatapack is the datapack named (a name or an id, which the export route looks up among this
+// localDatapack is the datapack named (a name or an id, which the export routes look up among this
 // Meko's), or the id of its default datapack for "".
 func (t *tools) localDatapack(ctx context.Context, named string) (string, error) {
 	if named == "" {

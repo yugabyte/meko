@@ -344,7 +344,7 @@ func datapackUpdate(ctx context.Context, c *call, a args) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(id) == "" {
+	if id = memory.CanonicalID(id); id == "" {
 		return nil, fail("datapack_id_required", "Pass datapack_id (UUID). Use datapack_search(query=...) to find it.")
 	}
 	c.rec.DatapackID = id
@@ -388,7 +388,7 @@ func datapackDelete(ctx context.Context, c *call, a args) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(id) == "" {
+	if id = memory.CanonicalID(id); id == "" {
 		return nil, fail("datapack_id_required", "Pass datapack_id (UUID). Use datapack_search(query=...) to find it.")
 	}
 	c.rec.DatapackID = id
@@ -417,7 +417,7 @@ func cloudRowID(row json.RawMessage) string {
 // localMatches is this Meko's datapacks that match query and name, sorted by, with no user_id, and
 // their ids.
 func (o Options) localMatches(ctx context.Context, query, name, by string) ([]wire.Datapack, map[string]bool, error) {
-	ds, err := o.Service.Datapacks(ctx)
+	ds, err := o.Service.ServedDatapacks(ctx)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -153,11 +153,7 @@ func (o Options) servedHere(ctx context.Context, raw json.RawMessage) (bool, err
 	if id = strings.TrimSpace(id); err != nil || id == "" {
 		return false, nil
 	}
-	_, err = o.Service.Datapack(ctx, id)
-	if errors.Is(err, memory.ErrNoDatapack) {
-		return false, nil
-	}
-	return err == nil, err
+	return o.Service.ServesHere(ctx, id)
 }
 
 // addTool adds a tool, skipping (and logging) one whose schema the SDK refuses: Meko Cloud's list

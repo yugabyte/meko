@@ -4,12 +4,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
 	"github.com/yugabyte/meko/backend/internal/version"
@@ -55,20 +53,18 @@ func (a *api) exportDatapack(c echo.Context) error {
 	panic(http.ErrAbortHandler) // net/http closes the connection without ending the body
 }
 
-// exportTarget is the datapack the export route names: by its id, or by the name of one of this
-// Meko's datapacks (unique here). meko-cli exports by name this way, so an export never asks Meko
-// Cloud, which only the listing would: it works while Meko Cloud is down or refuses the key. A
-// name or id this Meko doesn't have (a Meko Cloud datapack's) is a 404.
+// exportTarget is the datapack to export: the one in the path (GET /datapacks/:id/export, a UUID as
+// on every route), or for GET /datapacks/export?name= the one of this Meko's datapacks with that name
+// (unique here). meko-cli exports by name this way, so an export never asks Meko Cloud, which only the
+// listing would: it works while Meko Cloud is down or refuses the key. A name this Meko doesn't have
+// (a Meko Cloud datapack's) is a 404.
 func (a *api) exportTarget(c echo.Context) (string, bool, error) {
-	named := c.Param("id")
-	// Echo leaves a parameter escaped when the path had a character it can't unescape safely (%2F).
-	if c.Request().URL.RawPath != "" {
-		if u, err := url.PathUnescape(named); err == nil {
-			named = u
-		}
+	if c.Param("id") != "" {
+		return a.pathDatapack(c)
 	}
-	if _, err := uuid.Parse(strings.TrimSpace(named)); err == nil {
-		return a.datapack(c, named)
+	named := c.QueryParam("name")
+	if strings.TrimSpace(named) == "" {
+		return "", false, badRequest(c, "name is required")
 	}
 	ds, err := a.Service.Datapacks(ctx(c))
 	if err != nil {

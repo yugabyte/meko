@@ -16,7 +16,6 @@ import (
 
 	"github.com/yugabyte/meko/backend/internal/cloudlink"
 	"github.com/yugabyte/meko/backend/internal/envelope"
-	"github.com/yugabyte/meko/backend/internal/memory"
 )
 
 // The linked Meko Cloud on this Meko's own routes (docs/cloud.md): GET /datapacks lists its
@@ -42,18 +41,32 @@ func (a *api) owner(c echo.Context) bool {
 // id, whether or not Meko Cloud is linked. Anything this Meko's is its route's to answer (a 400 or
 // 404 too). ok is false when the reply has been written.
 func (a *api) inCloud(c echo.Context) (cloud, ok bool, err error) {
-	if a.Cloud == nil || !a.owner(c) {
+	if a.Cloud == nil || !a.owner(c) || a.staleTab(c) {
 		return false, true, nil
 	}
 	id, perr := uuid.Parse(strings.TrimSpace(c.Param("id")))
 	if perr != nil {
 		return false, true, nil
 	}
-	if _, err = a.Service.Datapack(ctx(c), id.String()); !errors.Is(err, memory.ErrNoDatapack) {
+	// A failed lookup is this Meko's to answer too: its route then fails here, never in Meko Cloud.
+	if here, herr := a.Service.ServesHere(ctx(c), id.String()); here || herr != nil {
 		return false, true, nil
 	}
 	linked, err := a.Cloud.IsLinked()
 	return linked, err == nil, err
+}
+
+// staleTab says whether the request is a web UI tab still running a bundle from before these routes
+// took no location: a browser (local or remote access) sending ?location=local, which only those
+// bundles send. Such a tab takes every row it lists as this Meko's and opens it here, and holds its
+// search and memories to this Meko, so it's answered as before: this Meko's datapacks alone, and its
+// :id routes never sent to Meko Cloud. Any other location, and any from a token, is ignored.
+func (a *api) staleTab(c echo.Context) bool {
+	switch a.Credential(c) {
+	case "remote", "local":
+		return c.QueryParam("location") == "local"
+	}
+	return false
 }
 
 // linked says whether Meko Cloud is linked.

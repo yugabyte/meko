@@ -103,9 +103,18 @@ type datapackRow struct {
 // listDatapacks is GET /datapacks: this Meko's datapacks and, while Meko Cloud is linked, its
 // datapacks too (cloud.go), as one list sorted by name with one row per id. Each row's web_url opens
 // it: this web UI's page for this Meko's, Meko Cloud's web app for its own. Nothing says where a
-// datapack lives: the routes that take one send it to the right place.
+// datapack lives: the routes that take one send it to the right place. A web UI tab from before gets
+// this Meko's alone (staleTab).
 func (a *api) listDatapacks(c echo.Context) error {
-	ds, err := a.Service.Datapacks(ctx(c))
+	linked, err := a.linked()
+	if err != nil {
+		return err
+	}
+	list := a.Service.Datapacks
+	if linked { // the datapacks this Meko serves while linked (memory.Service.ServesHere)
+		list = a.Service.ServedDatapacks
+	}
+	ds, err := list(ctx(c))
 	if err != nil {
 		return err
 	}
@@ -117,6 +126,9 @@ func (a *api) listDatapacks(c echo.Context) error {
 	for i, d := range ds {
 		out[i] = datapackRow{Datapack: wire.DatapackRow(d, a.Service.UserID()), OwnerName: fullName(p),
 			OwnerEmail: p.Email, ConversationSearchOptOut: d.ConversationSearchOptOut, WebURL: "/datapacks/" + d.ID}
+	}
+	if a.staleTab(c) {
+		return envelope.OK(c, out)
 	}
 	return a.withCloud(c, out)
 }

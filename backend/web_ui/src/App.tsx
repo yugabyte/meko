@@ -101,14 +101,20 @@ export default function App({ auth }: { auth: AuthStatus }) {
             <div className={PAGE}>
               <CloudContextGapsPage id={route.datapackId} />
             </div>
-          ) : list.loading && !list.data ? (
+          ) : list.loading && !list.data && !route.datapackId ? (
+            // A datapack in the address doesn't wait for the listing, which waits for Meko Cloud while
+            // it's linked; nor does a failed listing (Meko Cloud down) stop it from opening: the
+            // sidebar shows the listing's error.
             <Loading />
           ) : list.error && !route.datapackId ? (
-            // A failed listing (Meko Cloud down while linked) doesn't stop a datapack in the address
-            // from opening: the sidebar shows the listing's error.
             <div className={PAGE}>
               <ErrorNote error={list.error} />
             </div>
+          ) : !activeId && list.data?.length ? (
+            // Every datapack listed opens in Meko Cloud's web app (or nowhere): none has pages here.
+            <Empty icon={<Database className="size-8" />} title="Your datapacks are in Meko Cloud">
+              Pick one under Datapacks to open it in Meko Cloud's web app. New ones made with the + go there too.
+            </Empty>
           ) : !activeId ? (
             <Empty icon={<Database className="size-8" />} title="No datapacks">
               Create one with the + beside Datapacks.

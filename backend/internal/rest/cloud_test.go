@@ -12,10 +12,12 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/labstack/echo/v4"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/yugabyte/meko/backend/internal/cloudlink"
 	"github.com/yugabyte/meko/backend/internal/secrets"
+	"github.com/yugabyte/meko/backend/internal/server"
 	"github.com/yugabyte/meko/backend/internal/testenv"
 )
 
@@ -155,7 +157,13 @@ func TestCloudDatapacks(t *testing.T) {
 		Check:    func(context.Context, string, string) error { return nil },
 		CheckAPI: func(context.Context, string) error { return nil },
 	}
-	e := testenv.Start(t, testenv.Options{Cloud: link})
+	as := "" // a credential to answer as instead of the request's: "local" is a browser on local access
+	e := testenv.Start(t, testenv.Options{Cloud: link, Credential: func(c echo.Context) string {
+		if as != "" {
+			return as
+		}
+		return server.Credential(c)
+	}})
 	admin := func(method, path string, body any) reply {
 		return doAs(t, e, testenv.AdminToken, method, path, body)
 	}
@@ -218,6 +226,20 @@ func TestCloudDatapacks(t *testing.T) {
 		t.Fatalf("the listing, linked: %v", all)
 	}
 	cloud.twin = ""
+
+	// A web UI tab from before (a browser sending location=local) gets this Meko's datapacks alone,
+	// and its search stays here; a tab of this UI, which names no location, gets both.
+	as = "local"
+	if rows := arr(okData(t, e, "GET", "/datapacks?location=local", nil, 200)); len(rows) != 2 ||
+		strings.Contains(toJSON(rows), cloudDP) {
+		t.Fatalf("a stale tab's listing: %v", rows)
+	}
+	if rows := arr(okData(t, e, "GET", "/datapacks", nil, 200)); len(rows) != 3 {
+		t.Fatalf("this UI's listing: %v", rows)
+	}
+	wantErr(t, e, "POST", "/datapacks/"+cloudDP+"/search?location=local", map[string]any{"query": "x"}, 404,
+		"NOT_FOUND")
+	as = ""
 
 	// Linked, a create is Meko Cloud's, whatever location it names, so the client token can't make one.
 	wantErr(t, e, "POST", "/datapacks", map[string]any{"name": "x"}, 403, "FORBIDDEN")

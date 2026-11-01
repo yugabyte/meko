@@ -202,21 +202,24 @@ func TestExportDatapack(t *testing.T) {
 	}
 	wantErr(t, e, "GET", "/datapacks/00000000-0000-0000-0000-000000000000/export", nil, 404, "NOT_FOUND")
 
-	// By name too (meko-cli's way, which never asks Meko Cloud), escaped as a path segment.
+	// By name too, on a route of its own (meko-cli's way, which never asks Meko Cloud): the :id
+	// routes still take only a UUID.
 	if _, err := e.Service.CreateDatapack(context.Background(), "team/notes 50%", ""); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"default", url.PathEscape("team/notes 50%")} {
-		req, _ := http.NewRequest("GET", e.URL+"/api/v1/datapacks/"+name+"/export", nil)
+	for _, name := range []string{"default", "team/notes 50%"} {
+		req, _ := http.NewRequest("GET", e.URL+"/api/v1/datapacks/export?name="+url.QueryEscape(name), nil)
 		req.Header.Set("Authorization", "Bearer "+testenv.AdminToken)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
 		_ = resp.Body.Close()
-		if resp.StatusCode != 200 {
+		if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "application/zip" {
 			t.Errorf("export by name %s: %d", name, resp.StatusCode)
 		}
 	}
-	wantErr(t, e, "GET", "/datapacks/no-such-name/export", nil, 404, "NOT_FOUND")
+	wantErr(t, e, "GET", "/datapacks/export?name=no-such-name", nil, 404, "NOT_FOUND")
+	wantErr(t, e, "GET", "/datapacks/export", nil, 400, "VALIDATION_ERROR")
+	wantErr(t, e, "GET", "/datapacks/default/export", nil, 400, "VALIDATION_ERROR")
 }
