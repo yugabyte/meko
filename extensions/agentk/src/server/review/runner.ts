@@ -241,7 +241,7 @@ export class CodeReviews {
   /** The PR line a finished review gives the task's PR, or null when its last review didn't finish (or none ran). */
   prLine(taskId: string): string | null {
     const r = this.latest(taskId);
-    return r?.state === 'done' ? meAkReviewLine(json<SeverityCounts>(r.counts_json, noCounts())) : null;
+    return r?.state === 'done' ? meAkReviewLine(json<SeverityCounts>(r.counts_json, noCounts()), r.strategy) : null;
   }
 
   // ---- starting ----
@@ -880,7 +880,7 @@ export class CodeReviews {
     if (r.session_id) void this.archiveSession(r.session_id);
     this.core.changed();
     const sent = await this.core.lifecycle.sendReviewedPr(task, {
-      line: meAkReviewLine(counts), findings, outcomeHow: this.outcomeHow(task), strategy: strategyName(r.strategy), instructions: r.instructions ?? '', by: r.by === 'auto' ? 'auto' : 'you',
+      line: meAkReviewLine(counts, r.strategy), findings, outcomeHow: this.outcomeHow(task), strategy: strategyName(r.strategy), instructions: r.instructions ?? '', by: r.by === 'auto' ? 'auto' : 'you',
       moved: r.lead, description: this.descriptionFile(task), queued,
     });
     if (sent) this.set(id, { finished_at: Date.now(), lead: null });

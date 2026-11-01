@@ -144,21 +144,36 @@ function severityPart(s: Severity, n: number): string {
 /** The prefix of the PR description's line. */
 export const ME_AK_REVIEW = 'me_ak_review:';
 
-/**
- * The PR description's line for a finished local review: every round's findings added up, each
- * severity that has some, in the order blocker, major, minor; `LGTM` when no round found any.
- */
-export function meAkReviewLine(counts: SeverityCounts): string {
-  const parts = SEVERITIES.filter((s) => counts[s] > 0).map((s) => severityPart(s, counts[s]));
-  return ME_AK_REVIEW + (parts.length ? `${parts.join(',')} addressed` : 'LGTM');
+/** A strategy as the line names it: its display name without spaces (`Sagittarius3.0`). */
+export function strategyTag(id: string): string {
+  return strategyName(id).replace(/\s+/g, '');
 }
 
-/** Reads a `me_ak_review:` line back: its counts, or null when it isn't one. */
-export function parseMeAkReviewLine(line: string): SeverityCounts | null {
+/** What a `me_ak_review:` line says: the findings and, after `;`, the strategy's tag (null on a line without one). */
+export interface MeAkReview {
+  counts: SeverityCounts;
+  strategy: string | null;
+}
+
+/**
+ * The PR description's line for a finished local review: every round's findings added up, each
+ * severity that has some, in the order blocker, major, minor; `LGTM` when no round found any; then
+ * `;` and the strategy that ran (`strategyTag`).
+ */
+export function meAkReviewLine(counts: SeverityCounts, strategy: string): string {
+  const parts = SEVERITIES.filter((s) => counts[s] > 0).map((s) => severityPart(s, counts[s]));
+  return `${ME_AK_REVIEW}${parts.length ? `${parts.join(',')} addressed` : 'LGTM'};${strategyTag(strategy)}`;
+}
+
+/** Reads a `me_ak_review:` line back, with or without its strategy, or null when it isn't one. */
+export function parseMeAkReviewLine(line: string): MeAkReview | null {
   const t = line.trim();
   if (!t.startsWith(ME_AK_REVIEW)) return null;
-  const rest = t.slice(ME_AK_REVIEW.length).trim();
-  if (rest === 'LGTM') return noCounts();
+  const body = t.slice(ME_AK_REVIEW.length).trim();
+  const sm = /^(.*);([^\s;]+)$/.exec(body);
+  const rest = (sm ? sm[1] : body).trim();
+  const strategy = sm ? sm[2] : null;
+  if (rest === 'LGTM') return { counts: noCounts(), strategy };
   const m = /^(.*)\s+addressed$/.exec(rest);
   if (!m) return null;
   const counts = noCounts();
@@ -168,7 +183,7 @@ export function parseMeAkReviewLine(line: string): SeverityCounts | null {
     const sev = (pm[2].startsWith('blocker') ? 'blocker' : pm[2]) as Severity;
     counts[sev] += Number(pm[1]);
   }
-  return totalCount(counts) ? counts : null;
+  return totalCount(counts) ? { counts, strategy } : null;
 }
 
 /** The `me_ak_review:` line in a PR description, or null when it has none. */
