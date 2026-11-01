@@ -1,4 +1,5 @@
 import { findMeAkReviewLine, withMeAkReviewLine } from '../shared/codereview.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { basename } from 'node:path';
 import { mekoHost } from './config.js';
@@ -224,6 +225,8 @@ export class Lifecycle {
   private merging = new Set<string>();
   /** Per session, the tail of the GitHub work (polls, review requests, merge) queued for it. */
   private chains = new Map<string, Promise<void>>();
+  /** The serial steps the running code is part of, each with its session and whether it's still running. */
+  private steps = new AsyncLocalStorage<readonly { id: string; running: boolean }[]>();
   /** Per session, the tail of its design sends to Meko. */
   private designSends = new Map<string, Promise<void>>();
   /** Per task, when updating its PR's design line last failed. */
@@ -743,6 +746,11 @@ export class Lifecycle {
     return row.status === 'working' || row.status === 'starting' || this.sessions.midTurn(row.id);
   }
 
+  /** A running task in Code whose turn hasn't ended yet: a queued Open PR goes at its end (takeQueuedPr). */
+  private waitsForTurn(row: SessionRow): boolean {
+    return row.stage === 'code' && row.desired === 'running' && (this.turnRunning(row) || this.sessions.runtime(row.id).busy);
+  }
+
   /** Sends an Open PR queued during a turn, once Claude is between turns; it stays queued until then. */
   private takeQueuedPr(id: string): Promise<void> {
     return this.serial(id, async () => {
@@ -757,8 +765,9 @@ export class Lifecycle {
       const instructions = row.queued_instructions;
       try {
         // A local review takes the queued Open PR, and sends the PR prompt itself when it's done.
-        if (await this.core.reviews.openPr(row, { instructions: instructions ?? '', by: row.auto_run ? 'auto' : 'you' })) {
-          this.setQueued(id, null);
+        if (await this.core.reviews.openPr(row, { instructions: instructions ?? '', by: row.auto_run ? 'auto' : 'you', queued: true })) {
+          // Unless a finished review's PR prompt couldn't go because a turn is running again: it stays queued for that turn's end (sendReviewedPr).
+          if (!(this.core.reviews.prUnsent(id) && this.waitsForTurn(this.sessions.row(id)))) this.setQueued(id, null);
           return;
         }
         await this.sendPr(row, this.prCheck(id, true), { by: row.auto_run ? 'auto' : 'you' });
@@ -952,20 +961,33 @@ export class Lifecycle {
    * led by the last round's findings when it had some, with the `me_ak_review:` line (none past a
    * stopped review), after a move's `moved` line still waiting on the review (the ask for the PR description
    * normally took it), and pointing at the PR description file the task wrote (`description`).
-   * False when it couldn't go; the user's Open PR sends it later.
+   * False when it couldn't go: a finished review's goes when the task's turn ends, when it's mid-turn
+   * (a queued Open PR), else the user's Open PR sends it later. `queued`: sent for a queued Open PR,
+   * which a withdrawal while the prompt is prepared (Cancel, Run to merge stopping) stops, unsaid.
    */
-  async sendReviewedPr(task: SessionRow, o: { line: string | null; findings: string; outcomeHow: string; strategy: string; instructions: string; by: 'you' | 'auto'; moved?: string | null; description?: string | null }): Promise<boolean> {
+  async sendReviewedPr(task: SessionRow, o: { line: string | null; findings: string; outcomeHow: string; strategy: string; instructions: string; by: 'you' | 'auto'; moved?: string | null; description?: string | null; queued?: boolean }): Promise<boolean> {
     const row = this.sessions.row(task.id);
     if (row.stage !== 'code' || row.desired !== 'running') return false;
     const findings = o.findings ? this.sessions.prompt(row, 'code-review-findings', { strategy: o.strategy, findings: o.findings, outcomeHow: o.outcomeHow }) : '';
     const lead = [o.moved, findings].filter(Boolean).join('\n\n') || undefined;
     try {
-      await this.serial(row.id, () => this.sendPr(row, this.prCheck(row.id, false), { lead, instructions: o.instructions, by: o.by, reviewLine: o.line, description: o.description }));
+      await this.serial(row.id, () => this.sendPr(row, this.prCheck(row.id, !!o.queued), { lead, instructions: o.instructions, by: o.by, reviewLine: o.line, description: o.description }));
       // Claude exited while it was being typed (prLost): it didn't go, and goes again once Claude is back.
       if (this.lostPrs.has(row.id)) return false;
       this.core.reviews.markSent(row.id);
       return true;
     } catch (e) {
+      // Withdrawn while sendPr waited: whatever withdrew it said so in the activity log, and Open PR sends it.
+      if (e instanceof QueueWithdrawn) return false;
+      // A prompt of the user's (or AgentK's) went while the review ran: the PR prompt goes when the turn
+      // ends, as an Open PR queued then would. Open anyway's (no line) is pressed between turns, and Run
+      // to merge's goes by itself only while Run to merge is on (stopping it couldn't drop the gate after).
+      const cur = this.sessions.row(row.id);
+      if (o.line !== null && (o.by === 'you' || cur.auto_run) && this.waitsForTurn(cur)) {
+        if (cur.queued_gate !== 'open-pr') this.setQueued(row.id, 'open-pr', '', o.by === 'auto');
+        this.sessions.event(row.id, 'review', 'The local review is done: the PR prompt goes when AgentK finishes its turn');
+        return false;
+      }
       this.warn(row.id, 'Sending the PR prompt after the local review', e);
       this.sessions.event(row.id, 'review', `The PR prompt didn't go after the local review: ${errMsg(e)}. Press Open PR to send it.`);
       this.sessions.notifyUser(row.id, 'Open PR not sent', `The local review is done, but the PR prompt couldn't be sent (${errMsg(e)}). Press Open PR to send it.`);
@@ -1376,8 +1398,20 @@ export class Lifecycle {
    * and merges never interleave and each one sees the others' writes.
    */
   private serial<T>(id: string, fn: () => Promise<T>): Promise<T> {
-    const next = (this.chains.get(id) ?? Promise.resolve()).then(fn);
-    const tail = next.then(() => undefined, () => undefined);
+    // Called from a running step of the same session's (a queued Open PR's step sending a local
+    // review's PR prompt, which serializes itself): it runs now, as part of that step. Queued, it
+    // would wait for the step that waits for it, and every later step behind them, for good. That
+    // can't tell a call the step waits for from work it started without waiting: such work that
+    // reaches serial while the step still runs runs now too, alongside it: a step mustn't leave any running.
+    const outer = this.steps.getStore() ?? [];
+    if (outer.some((s) => s.id === id && s.running)) return fn();
+    const step = { id, running: true };
+    const next = (this.chains.get(id) ?? Promise.resolve()).then(() => this.steps.run([...outer, step], fn));
+    // Work the step started without waiting for it queues behind later steps once it's done.
+    const done = () => {
+      step.running = false;
+    };
+    const tail = next.then(done, done);
     this.chains.set(id, tail);
     void tail.then(() => {
       if (this.chains.get(id) === tail) this.chains.delete(id);
