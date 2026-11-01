@@ -181,3 +181,11 @@ test("a datapack the server made in Meko Cloud doesn't open here, even when the 
 test("a datapack the server made here opens here", async () => {
   expect(await createOne({ linked: true, createdURL: `/datapacks/${CLOUD}` })).toEqual([true]);
 });
+
+test("Settings is a gear at the foot of the sidebar, not a row in the top links", async () => {
+  await render();
+  const gear = document.querySelector<HTMLAnchorElement>('a[aria-label="Settings"]')!;
+  expect(gear.getAttribute("href")).toBe("/settings");
+  expect(gear.closest(".border-t")).not.toBeNull();
+  expect(gear.textContent).toBe("");
+});
