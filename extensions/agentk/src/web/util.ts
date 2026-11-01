@@ -2,7 +2,7 @@ import { HARNESS_CAPS, harnessOf, type HarnessId } from '../shared/harnesses';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, LEARN_WARN_FILES, LEARN_WARN_PRS, STAGE_LABELS, type LearnScope } from '../shared/types';
 import { mekoDatapackPath } from '../shared/mekourls';
-import { countsText, isStrategySetting, reviewHolds, reviewRunning, type CodeReviewDetail, type CodeReviewFinding, type CodeReviewSummary, type ReviewOverrides } from '../shared/codereview';
+import { YOU_CANCELLED, countsText, isStrategySetting, reviewHolds, reviewRunning, type CodeReviewDetail, type CodeReviewFinding, type CodeReviewSummary, type ReviewOverrides } from '../shared/codereview';
 import { stepOf } from '../shared/stages';
 import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGaps, MekoLearning, MekoStatus, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, Stage, TokenUsage } from '../shared/types';
 
@@ -741,11 +741,37 @@ export function runsToMerge(s: Session): boolean {
 /**
  * The task's local review holds its Open PR: a review runs (or waits for the task's fixes between
  * rounds) before the PR prompt goes, or failed or was cancelled and waits for Retry or Open anyway
- * (not one cancelled because the task left Code: the next Open PR starts a new review).
+ * (not one cancelled because the task left Code: the next Open PR starts a new review). Not one the
+ * user ran: the task stays in Code with its Open PR, which takes the review over.
  */
 export function reviewGatesPr(s: Pick<Session, 'stage' | 'codeReview'>): boolean {
   const r = s.codeReview;
-  return s.stage === 'code' && !!r && r.state !== 'done' && (r.state !== 'cancelled' || reviewHolds(r));
+  return s.stage === 'code' && !!r && !r.onDemand && r.state !== 'done' && (r.state !== 'cancelled' || reviewHolds(r));
+}
+
+/**
+ * The task's local review can be run now (the `review-run` action): a task in Code, or in Review &
+ * PR once its PR is found, with no review running. `ready`: AgentK can take a prompt now (between
+ * turns, not waiting on the user or exited), as the server checks; until then it's offered disabled,
+ * with `wait` saying what it waits for.
+ */
+export function canRunReview(s: Pick<Session, 'kind' | 'stage' | 'prNumber' | 'codeReview' | 'status' | 'busy'>): { offered: boolean; ready: boolean; wait: string | null } {
+  const r = s.codeReview;
+  const running = !!r && (r.state === 'describing' || r.state === 'fixing' || reviewRunning(r));
+  const offered = s.kind !== 'code-review' && s.kind !== 'review-pr' && (s.stage === 'code' || (s.stage === 'review' && !!s.prNumber)) && !running;
+  const wait = !offered ? null
+    : s.status === 'exited' ? 'Resume the session first'
+      : s.status === 'needs_input' ? 'Answer AgentK in the terminal first'
+        : s.status === 'starting' ? 'Once AgentK has started'
+          : s.busy || (s.status !== 'idle' && s.status !== 'recovered') ? "After AgentK's turn" : null;
+  return { offered, ready: offered && !wait, wait };
+}
+
+/** A local review the user ran, in the task's own stage, that's running (`cancel`) or stopped by a failure or the user (`retry`). */
+export function onDemandControls(s: Pick<Session, 'stage' | 'codeReview'>): { cancel: boolean; retry: boolean } {
+  const r = s.codeReview;
+  if (!r?.onDemand || r.stage !== stepOf(s.stage)) return { cancel: false, retry: false };
+  return { cancel: r.state === 'describing' || r.state === 'fixing' || reviewRunning(r), retry: r.state === 'failed' || (r.state === 'cancelled' && r.detail === YOU_CANCELLED) };
 }
 
 /**

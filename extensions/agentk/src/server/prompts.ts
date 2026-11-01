@@ -34,11 +34,15 @@ import type { LearnBrief, MoveTarget } from '../shared/types.js';
  * many findings) and {{reportTool}}; `code-review-fix` goes to the task between review rounds and `code-review-findings`
  * before the PR prompt after the last one, both with {{strategy}}, {{round}}, {{findings}} (a line per finding, with its key)
  * and {{outcomeHow}} (how to say what was done with each); the PR prompt then gets the `me_ak_review:` line (`meAkReviewFooter`).
+ * `code-review-fix` also gets {{why}} (whether an Open PR or the user ran the review: `fixWhy`) and {{after}} (what follows the
+ * fixes: `fixAfterLine`, added at the end of a repo's own version without it). A review the user ran also sends its last
+ * round's findings as `code-review-fix`, and in Review & PR, `code-review-push` (with {{strategy}} and {{round}}) asks the task
+ * to push the fixes once a re-review found nothing more.
  */
 export type PromptName =
   | 'explore' | 'design' | 'design-plan' | 'design-answers' | 'approved' | 'approved-answers' | 'code' | 'pr' | 'review' | 'review-people' | 'review-held' | 'conflicts' | 'ci' | 'continue' | 'continue-review' | 'comments'
   | 'moved' | 'move-design' | 'move-code' | 'instructions' | 'attached' | 'review-pr' | 'review-pr-update' | 'review-pr-design' | 'review-pr-comments' | 'learn'
-  | 'seed' | 'pr-description' | 'code-review-sweep' | 'code-review-score' | 'code-review-fix' | 'code-review-findings';
+  | 'seed' | 'pr-description' | 'code-review-sweep' | 'code-review-score' | 'code-review-fix' | 'code-review-findings' | 'code-review-push';
 
 /** How to design, after the task: shared by `design` and `move-design`. */
 const DESIGN_STEPS = `Read the relevant code, then design the change: the goal, the approach, the files you expect to change, risks and open questions, and a test plan. Don't change anything in the repo yet: no file edits, commits, or commands that modify files. AgentK blocks edits in the repo until the user approves the design.
@@ -219,10 +223,10 @@ Run them all at once: start every step in the same message, each in a fresh suba
 
 Run them a batch at a time, in this order: start every step of a batch in the same message, each in a fresh subagent of the type named for it, and give each exactly the prompt shown, with nothing added. Then wait for all of them to finish before you start the next batch. Each one reports to AgentK itself with {{reportTool}}; don't report for it or judge the findings yourself. When every step has finished, say "Done" and stop. Change no file.`,
 
-  'code-review-fix': `AgentK reviewed this change locally ({{strategy}}, round {{round}}) before opening the PR. Address each finding below:
+  'code-review-fix': `AgentK reviewed this change locally ({{strategy}}, round {{round}}) {{why}}. Address each finding below:
 
 1. Verify it against the code before changing anything. If a finding is wrong, don't change working code: say why, with evidence.
-2. Fix every valid one, and run the repo's tests and checks. Don't commit, push or open the PR yet: AgentK reviews the change again first.
+2. Fix every valid one, and run the repo's tests and checks. {{after}}
 3. {{outcomeHow}}
 
 {{findings}}`,
@@ -230,6 +234,8 @@ Run them a batch at a time, in this order: start every step of a batch in the sa
   'code-review-findings': `AgentK reviewed this change locally ({{strategy}}) before this PR. Before you open it, address each finding below: verify it against the code, fix every valid one, and for one you decline, say why in the PR description. {{outcomeHow}}
 
 {{findings}}`,
+
+  'code-review-push': `AgentK reviewed this PR's change locally again ({{strategy}}, round {{round}}) and found nothing more. Commit the fixes you made for its earlier rounds, following the repo's commit conventions, and push them to the PR's branch.`,
 };
 
 /**
@@ -532,6 +538,27 @@ export function render(template: string, vars: Record<string, string | number | 
  */
 export function prDescriptionUseLine(file: string): string {
   return `Use the title and description you wrote to ${file} for the PR (its first line is the title, the rest is the description), brought up to date with anything that changed since you wrote it, such as fixes for the review's findings.`;
+}
+
+/**
+ * What a local review's fix prompt (`code-review-fix`) says follows the fixes: in Code, a re-review
+ * (`review-again`), or, for the last round of a review the user ran, the user's Open PR later
+ * (`open-later`); in Review & PR, a re-review before one push (`hold-push`), or the push (`push`).
+ */
+export type FixAfter = 'review-again' | 'open-later' | 'hold-push' | 'push';
+
+export function fixAfterLine(after: FixAfter): string {
+  switch (after) {
+    case 'review-again': return "Don't commit, push or open the PR yet: AgentK reviews the change again first.";
+    case 'open-later': return "Don't open the PR yet: when it's opened, it goes with this review's result.";
+    case 'hold-push': return "Don't commit or push yet: AgentK reviews the change again first.";
+    case 'push': return "Then commit the fixes, following the repo's commit conventions, and push them to the PR's branch.";
+  }
+}
+
+/** Why a local review ran, for its fix prompt's first line: an Open PR, or the user. */
+export function fixWhy(why: 'pr' | 'demand'): string {
+  return why === 'pr' ? 'before opening the PR' : "at the user's request";
 }
 
 /** Added to a local review's fix prompt when the task wrote its PR description first: fixes keep it true. */

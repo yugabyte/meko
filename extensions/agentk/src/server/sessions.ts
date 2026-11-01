@@ -2088,6 +2088,7 @@ export class SessionManager {
       case 'update-pr': await lc.updatePr(row); break;
       case 'close-review': await this.closeReview(row); break;
       case 'learn': await this.core.learn.start(row, 'manual'); break;
+      case 'review-run': await this.core.reviews.runNow(row); break;
       case 'review-cancel': await this.core.reviews.cancel(row.id); break;
       case 'review-retry': await this.core.reviews.retry(row.id); break;
       case 'review-open-anyway': await this.core.reviews.openAnyway(row.id); break;
