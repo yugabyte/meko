@@ -64,7 +64,7 @@ describe('local code review before the PR (real session host + git, fake claude 
     expect(pr).toContain('[1:1] `src/a.ts:2` **blocker**: Off by one.');
     expect(pr).toContain('`src/a.ts:4` **major** (Meko gotcha MG-3): Breaks the guide.');
     expect(pr).not.toContain('Not this change.');
-    expect(pr).toContain('me_ak_review:1 blocker,1 major addressed');
+    expect(pr).toContain('me_ak_review:1 blocker,1 major addressed;Sagittarius3.0');
 
     // The review ran in a code-review session on the task's worktree, with read-only subagents.
     const childId = all<{ id: string }>(env.core.db, 'SELECT id FROM sessions WHERE parent_id = ?', s.id)[0].id;
@@ -201,12 +201,12 @@ describe('local code review before the PR (real session host + git, fake claude 
     expect(prompts(s.claudeSessionId).filter((p) => p.includes("write the PR's title and description"))).toHaveLength(1);
   });
 
-  it('opens the PR with me_ak_review:LGTM when Sirius 1.0 finds nothing, set for the session alone', async () => {
+  it('opens the PR with me_ak_review:LGTM;Sirius1.0 when Sirius 1.0 finds nothing, set for the session alone', async () => {
     const s = await task({ review: { strategy: 'sirius-1.0' } });
     expect(env.core.sessions.get(s.id).review).toEqual({ strategy: 'sirius-1.0' });
     await env.core.sessions.action(s.id, 'open-pr');
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the review');
-    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM');
+    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM;Sirius1.0');
     expect(readJsonl<{ step: string }>(join(env.fakeDir, 'review-calls.jsonl')).map((c) => c.step)).toEqual(['r1s1:all']);
   });
 
@@ -223,7 +223,7 @@ describe('local code review before the PR (real session host + git, fake claude 
     fake('review-reports.json', { ...LEDGERS, diff: { summary: 'LGTM', findings: [{ file: 'src/a.ts', line: 5, severity: 'minor', comment: 'Name it better.', gotchas: [] }] } });
     const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after round 2');
     expect(done.codeReview).toMatchObject({ round: 2, state: 'done', counts: { blocker: 1, major: 0, minor: 1 } });
-    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:1 blocker,1 minor addressed');
+    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:1 blocker,1 minor addressed;Sagittarius3.0');
     // Round 2 running isn't round 1's outcome: the counts stay until the task reports both rounds'.
     const outcome = (key: string) => env.core.reviews.onTool(env.core.sessions.row(s.id), 'review_outcome', { outcomes: [{ key, status: 'fixed', note: 'Done.' }] });
     outcome('2:1');
@@ -258,7 +258,7 @@ describe('local code review before the PR (real session host + git, fake claude 
     const s = await env.core.sessions.create(p.id, { name: 'Fix the thing', prompt: 'do it', start: 'code', autoRun: true, review: { strategy: 'sirius-1.0' } });
     const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the review');
     expect(done.codeReview).toMatchObject({ strategy: 'sirius-1.0', state: 'done' });
-    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM');
+    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM;Sirius1.0');
   });
 
   describe("a review that finishes while the task's turn runs", () => {
@@ -283,7 +283,7 @@ describe('local code review before the PR (real session host + git, fake claude 
     /** The PR prompt went at the end of the user's turn, with the review's line, and nothing is left queued. */
     async function sentAfterTurn(id: string, claudeSessionId: string) {
       await waitFor(() => env.core.sessions.get(id), (x) => x.stage === 'pr', 15000, "the PR prompt at the turn's end");
-      expect(await prPrompt(claudeSessionId)).toContain('me_ak_review:LGTM');
+      expect(await prPrompt(claudeSessionId)).toContain('me_ak_review:LGTM;Sirius1.0');
       const sent = prompts(claudeSessionId);
       expect(sent.at(-2)).toBe('Tidy up the tests.');
       expect(sent.filter((p) => p.includes('Open a pull request'))).toHaveLength(1);
@@ -407,7 +407,7 @@ describe('local code review before the PR (real session host + git, fake claude 
       .toEqual(['Claude exited before taking the PR prompt; it goes again once Claude is back']);
     await env.core.sessions.action(s.id, 'resume');
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 10000, 'the PR prompt again');
-    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM');
+    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM;Sirius1.0');
     expect(prompts(s.claudeSessionId).filter((p) => p.includes('Open a pull request'))).toHaveLength(1);
     expect(finished()).not.toBeNull();
   });
@@ -424,7 +424,7 @@ describe('local code review before the PR (real session host + git, fake claude 
     const asked = prompts(s.claudeSessionId).find((p) => p.includes("write the PR's title and description"))!;
     expect(asked.startsWith('AgentK moved this session to the Code stage.')).toBe(true);
     expect(pr.startsWith('AgentK moved this session')).toBe(false);
-    expect(pr).toContain('me_ak_review:LGTM');
+    expect(pr).toContain('me_ak_review:LGTM;Sirius1.0');
     expect(pr).toContain('Mention the demo.');
     expect(all<{ stage: string }>(env.core.db, 'SELECT stage FROM session_stages WHERE session_id = ? ORDER BY rowid', s.id).map((r) => r.stage)).toEqual(['explore', 'code', 'pr']);
   });
@@ -442,7 +442,7 @@ describe('local code review before the PR (real session host + git, fake claude 
     const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the new review');
     expect(done.codeReview).toMatchObject({ state: 'done' });
     expect(done.codeReview!.id).not.toBe(failed.codeReview!.id);
-    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM');
+    expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM;Sirius1.0');
   });
 
   describe('a fix turn the user interrupted', () => {

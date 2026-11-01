@@ -7,9 +7,9 @@ algorithm (its `pkg/agenticreview`, the cloud AgentK's Golum 1.0), so the task f
 finds before anyone else reads the PR. The PR description then says how it went, on one line:
 
 ```
-me_ak_review:4 blockers,4 major addressed
-me_ak_review:1 blocker,2 major,3 minor addressed
-me_ak_review:LGTM
+me_ak_review:4 blockers,4 major addressed;Sagittarius3.0
+me_ak_review:1 blocker,2 major,3 minor addressed;Sirius1.0
+me_ak_review:LGTM;Sagittarius3.0
 ```
 
 The code is in `src/server/review/` (the algorithm, ported) and `src/shared/codereview.ts` (the
@@ -163,8 +163,10 @@ earlier rounds' findings and what the task did with them (prior rounds). The las
 findings lead the PR prompt (`code-review-findings`).
 
 **The line** (`meAkReviewLine`) adds up every round's kept findings, by severity in the order
-blocker, major, minor; `LGTM` when no round kept one. AgentK writes it into the PR's description
-after `adoptPr` when Claude left it out (`syncReviewLine`).
+blocker, major, minor; `LGTM` when no round kept one. After a `;` it names the strategy that ran,
+its name without spaces (`strategyTag`: `Sagittarius3.0`, `Sirius1.0`); `parseMeAkReviewLine` still
+reads a line from before it did. AgentK writes it into the PR's description after `adoptPr` when
+Claude left it out or it differs (`syncReviewLine`).
 
 **Stopping.** A failed review (no pass reported, or an error) or one the user cancelled holds the
 PR: Open PR answers 409, Run to merge waits, and the task offers **Retry** (the round again from
