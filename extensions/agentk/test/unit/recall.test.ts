@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SearchResult } from '../../src/shared/types.js';
 import {
-  ITEM_CHARS, MAX_ITEMS, QUERY_MAX, RecallStore, TOTAL_CHARS, clip, formatRecall, issueRefs, pickResults, recallQuery, runRecall, startQuality, withoutMekoLines,
+  ITEM_CHARS, MAX_ITEMS, QUERY_MAX, RecallStore, TOTAL_CHARS, clip, formatRecall, issueRefs, pickResults, recallQuery, runRecall, withoutMekoLines,
   type PreloadRecord, type RecallRun,
 } from '../../src/server/recall.js';
 
@@ -101,18 +101,6 @@ describe('runRecall', () => {
     expect(queries).toEqual(['Fix #10 Fix #10 and #11 #10: Sessions rarely search Meko']);
     expect(r.results).toBe(1);
     expect(r.text).toContain('a gotcha about this');
-    expect(r).toMatchObject({ quality: null, topScore: 0.9 });
-  });
-
-  // By what Meko returned, before picking: picking drops conversation hits and memories below the bar.
-  it.each<[string, SearchResult[], object]>([
-    ['nothing back', [], { quality: 'empty', topScore: null }],
-    ['only memories below the bar', [mem('near', 0.7), mem('far', 0.5)], { quality: 'weak', topScore: 0.7 }],
-    ['only a conversation hit', [{ source: 'conversation', text: 'an old reply', score: 0.2, datapackName: null }], { quality: null }],
-    ['a knowledge-base item beside weak memories', [kb('a note'), mem('far', 0.5)], { quality: null, topScore: 0.5 }],
-    ['a memory without a score', [mem('unscored', null)], { quality: null, topScore: null }],
-  ])('says how poor a search at start was: %s', (_what, results, want) => {
-    expect(startQuality(results)).toMatchObject(want);
   });
 
   it('fails when the search does', async () => {
@@ -132,12 +120,10 @@ describe('RecallStore', () => {
 
   const setup = (keepMs?: number) => {
     const records: [string, PreloadRecord['outcome'], number][] = [];
-    const queries: [string, string | null][] = [];
     const store = new RecallStore((id, r) => {
       records.push([id, r.outcome, r.results]);
-      queries.push([id, r.query ?? null]);
     }, keepMs);
-    return { store, records, queries };
+    return { store, records };
   };
   const deferred = () => {
     let resolve!: (r: RecallRun) => void;
@@ -151,7 +137,7 @@ describe('RecallStore', () => {
 
   it('hands over a finished search once, and records it as found', async () => {
     const { store, records } = setup();
-    store.start('s', Promise.resolve({ text: 'block', results: 2, query: 'the task' }));
+    store.start('s', Promise.resolve({ text: 'block', results: 2}));
     await Promise.resolve();
     expect(await store.take('s', 10)).toBe('block');
     expect(await store.take('s', 10)).toBeNull();
@@ -162,7 +148,7 @@ describe('RecallStore', () => {
     const { store, records } = setup();
     const d = deferred();
     store.start('s', d.promise);
-    setTimeout(() => d.resolve({ text: 'block', results: 1, query: 'the task' }), 20);
+    setTimeout(() => d.resolve({ text: 'block', results: 1}), 20);
     expect(await store.take('s', 2000)).toBe('block');
     expect(records).toEqual([['s', 'found', 1]]);
   });
@@ -173,22 +159,20 @@ describe('RecallStore', () => {
     store.start('s', d.promise);
     expect(await store.take('s', 10)).toBeNull();
     expect(records).toEqual([]);
-    d.resolve({ text: 'block', results: 1, query: 'the task' });
+    d.resolve({ text: 'block', results: 1});
     await new Promise((r) => setTimeout(r, 0));
     expect(records).toEqual([['s', 'late', 1]]);
     expect(await store.take('s', 10)).toBeNull();
   });
 
   it('records empty and failed searches when they end, and hands nothing over', async () => {
-    const { store, records, queries } = setup();
-    store.start('a', Promise.resolve({ text: null, results: 0, query: 'the task' }));
+    const { store, records } = setup();
+    store.start('a', Promise.resolve({ text: null, results: 0}));
     const d = deferred();
     store.start('b', d.promise);
     d.reject(new Error('Meko is down'));
     await new Promise((r) => setTimeout(r, 0));
     expect(records).toEqual([['a', 'empty', 0], ['b', 'error', 0]]);
-    // An empty search keeps what it asked, for What Meko doesn't know; a failed one never said.
-    expect(queries).toEqual([['a', 'the task'], ['b', null]]);
     expect(await store.take('a', 10)).toBeNull();
     expect(await store.take('b', 10)).toBeNull();
   });
@@ -196,7 +180,7 @@ describe('RecallStore', () => {
   it("records a result the hook never asked for as late, and keeps it no longer", async () => {
     vi.useFakeTimers();
     const { store, records } = setup(1000);
-    store.start('s', Promise.resolve({ text: 'block', results: 1, query: 'the task' }));
+    store.start('s', Promise.resolve({ text: 'block', results: 1}));
     await vi.advanceTimersByTimeAsync(0);
     expect(records).toEqual([]);
     await vi.advanceTimersByTimeAsync(1000);
@@ -209,14 +193,14 @@ describe('RecallStore', () => {
     const d = deferred();
     store.start('s', d.promise);
     store.drop('s');
-    d.resolve({ text: null, results: 0, query: 'the task' });
+    d.resolve({ text: null, results: 0});
     await new Promise((r) => setTimeout(r, 0));
     expect(records).toEqual([]);
 
     const failing = new RecallStore(() => {
       throw new Error('FOREIGN KEY constraint failed');
     });
-    failing.start('gone', Promise.resolve({ text: null, results: 0, query: 'the task' }));
+    failing.start('gone', Promise.resolve({ text: null, results: 0}));
     await new Promise((r) => setTimeout(r, 0));
   });
 });

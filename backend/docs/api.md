@@ -107,6 +107,81 @@ knowledge-base chunk (promoted memories' included) and 200 a memory, so it reads
 and a conversation turn by its length, about 4 bytes a token, since turns run from "yes" to a pasted
 log. `datapack_metrics` gives the same three numbers to an agent.
 
+## Context Gaps
+
+The searches Meko answered poorly, grouped by question, so someone can see what Meko is missing and
+teach it: the web UI's **Context Gaps** tab ([web-ui.md](web-ui.md)), and AgentK's project home and
+learn step. No model judges a reply; the rules flag only what the scores can show
+(`internal/memory/questions.go`).
+
+**What's recorded.** After `context_search`, `memory_search` or `knowledgebase_search` succeeds on
+this Meko's `/mcp` (or through `mcp.Call`, as REST's search route runs it), Meko judges its reply
+(`memory.Answer.Quality`):
+
+- `empty`, *found nothing*: no item in any bucket.
+- `weak`, *nothing relevant*: no knowledge-base chunk, no conversation hit, and only memories, each
+  with a `score` below 0.75 (`memory.WeakMemoryScore`). Chunks and conversation hits pass their own
+  distance cutoffs, so one that comes back is a real hit. The memory bucket has none, and a score
+  far below the bar is noise, while a high one doesn't prove the memory was what was needed: on one
+  datapack ten off-topic near-duplicates scored 0.74 to 0.76 while the relevant memory scored 0.77.
+  A memory with no score counts as relevant. `knowledgebase_search` keeps at least one chunk however
+  far, so it's only ever empty.
+- Otherwise it found something relevant.
+
+A poor search is an ask of its question (`question_asks`): the query, cut to 1,000 characters, with
+its key (the query lower-cased with its whitespace collapsed, which groups asks of one question),
+quality, tool, agent, conversation, result count, and best memory `score` and
+`raw_similarity_score`. A relevant one sets its question's `answered_at`, when the datapack has that
+question; nothing else is kept of it. Not recorded: failed calls; the web UI's own searches (agent
+`meko_web_ui`); and AgentK's own calls, which carry `X-Meko-Client: agentk` (its search at a
+session's start, whose query is the task, and its learn step's lookups). That's an HTTP header
+rather than a tool argument because Meko Cloud refuses arguments it doesn't know. A failure to
+record is logged and never fails the search.
+
+**Storage** (`0011_questions.sql`): `questions`, one row per question with the latest time of each
+thing done about it, and `question_asks`. Unlike the call log they hold the query's text: they're
+the datapack's own content, deleted with it (`DeleteDatapack`; there's no foreign key, so a Meko
+Cloud datapack's questions can be kept too once its searches pass through this Meko). Asks older
+than 90 days are pruned with the call log, and a question left with none goes with them. They aren't
+in the export.
+
+**The list.** A question shows its query as last asked, how its latest ask went and with which tool,
+how many times it was asked, by which agents and conversations (the latest 20 of each), and when.
+One whose latest ask was followed by a relevant answer is left off: Meko knows it now. Its state is
+the latest of dismissed, taught and restored at or after its last ask, else open, so a question
+asked again after a mark is open again (and a taught one still shows what was taught: Meko had the
+answer and the search still missed it). Pages are 100 questions, latest asked first, ties by key;
+the next starts after the last one's `last_at` and key, since searches in one response can share a
+time.
+
+**What's done with one.** A person dismisses it, restores it (a dismissal is cleared; what was
+taught, and the memory, stay), or teaches it: the text (1 to 2,000 characters) is saved as a memory
+in the datapack as `memory_add` saves one, agent `meko_web_ui`, metadata `{source: "meko", kind:
+"taught", question}` (the question cut to 300 characters), and the question is marked taught.
+Nothing checks it against what Meko has: the person wrote it on purpose. An agent marks a question
+dismissed (with the memory that already said the answer, whose text the list shows while the
+datapack has it) or taught with its `conversation_id` (AgentK's learn step, which saves its memory itself
+first); the list then says an agent did it, in that conversation. A person's own latest dismissal and
+teach are kept apart (`person_*_at`) for the usage stats, which count them and the poor searches by
+quality a day, never a query; an agent's later mark doesn't overwrite them, and a restore clears a
+person's dismissal only when it restores theirs. An agent that searches before saving into a datapack
+it's filling (AgentK's learn session) forgets its conversation's asks afterwards, since finding
+nothing there is expected.
+
+**Meko Cloud's datapacks.** While Meko Cloud is linked, `/mcp` passes every call on to it
+([cloud.md](cloud.md)), so this Meko still sees each search: it judges Meko Cloud's reply text by the
+same rules (`memory.AnswerOf`, reading Meko Cloud's reply shapes loosely; a reply it can't read
+isn't judged) and keeps the question here, under the Meko Cloud datapack's id. A search that names
+no datapack (Meko Cloud's default, whose id this Meko doesn't know) isn't recorded. The routes take
+that id like this Meko's own: an id this Meko doesn't have is Meko Cloud's while it's linked (a 404
+otherwise; `?location=` picks the side as on the other routes), and the list says which
+(`location`: `local` or `cloud`). Any credential reads and marks a Meko Cloud datapack's questions,
+unlike the routes that act on Meko Cloud: they're what this Meko recorded of the searches it passed
+on, and reading them never calls Meko Cloud or uses its key. Teaching one saves the memory in Meko
+Cloud with the link's key, so it takes the owner or the admin token (a client token gets 403
+`FORBIDDEN`). Its searches counted are the ones this Meko passed on. The web UI shows them at
+`/gaps/<id>` ([web-ui.md](web-ui.md)), since Meko Cloud's datapacks' other pages are its web app's.
+
 ## MCP at /mcp
 
 `internal/mcp` serves Meko Cloud's tools on the official `modelcontextprotocol/go-sdk` (v1.8.0),
@@ -378,6 +453,10 @@ client token themselves, so they work with the server stopped.
 - `search`;
 - `putArtifact`, `getArtifact`.
 
+Every call carries `X-Meko-Client: agentk`, so none of AgentK's own searches is a question on
+[Context Gaps](#context-gaps). AgentK reads and marks a project's questions through the Context Gaps
+routes, with the client token.
+
 It checks each reply has every field MekoClient reads. When a method in `meko.ts` changes a call
 or reads a new field, change its step there. Once AgentK's own tests run against a real Meko,
 this replay can go.
@@ -408,6 +487,7 @@ the server takes. (The CLI calls `/api/v1/status`, which `internal/server` serve
 | Memory map (Meko's own) | `GET /datapacks/:id/memory-map` | The datapack's newest 300 memories and up to 300 collective memories, laid out by meaning for the web UI's memory graph: `{points: [{id, text, state (learning, kept or collective), agent_id, conversation_id, message_id, created_at, x, y, z, similarity}], links: [{a, b, similarity}], query: [x, y], query_z}`. `x` and `y` are the embeddings projected onto their two main directions (PCA by power iteration), scaled into [-1, 1]; `z` (and `query_z`) is the third, on the same scale, for the 3D view. Each memory is linked to its 3 nearest at a cosine of 0.35 or more (MiniLM scores short related facts 0.3 to 0.5); `a` and `b` index `points`. With `?q=`, the query is embedded and placed the same way (`query`), and each point gets its cosine to it (`similarity`). `?ids=` (comma-separated, up to 100) adds those memories even when they're older than the newest 300, as a turn's trace asks for what its searches returned; unknown or deleted ids are skipped. A memory whose promotion stopped partway is drawn once, as collective. A memory the sweep hasn't embedded yet is left out. |
 | Search map (Meko's own) | `GET /datapacks/:id/search-map` | Search's Graph view: the 100 memories, knowledge-base chunks (promoted memories' included) and conversation turns nearest `?q=` (required) among `?sources=` (`memory`, `knowledge_base`, `conversation`, comma-separated; all by default), laid out as the memory map is, with the query placed among them: `{points: [{id, text, source, conversation_id, message_id, x, y, z, similarity}], links: [], query: [x, y], query_z}`. A turn is one point, at its nearest chunk, with its message id as `id`. `?hits=` (what the search returned: memory and chunk ids, turns' message ids) are drawn even past the nearest 100, as long as they're among their source's nearest 100 by vector (turns: those in the nearest 400 chunks), so a keyword-only knowledge-base match further than that isn't. A memory whose promotion stopped partway is drawn once, as its chunk. No links: on a map whose point is the question they're clutter. |
 | Usage (Meko's own) | `GET /datapacks/:id/usage` | From the call log (90 days), for the web UI's Metrics tab; Cloud has no such route. `{calls, errors, tools: [{tool, calls, errors, p50_ms, p95_ms}], steps: [{step, calls, p50_ms, p95_ms}], agents: [{agent_id, calls, searches, last_at}], recent: [{id, at, tool, agent_id, ok, error_code, ms, memory_n, kb_n, conversation_n, steps: [{step, ms, n, ids}]}] (the latest 25), input_tokens, output_tokens}`, over 90 days or `?days=N`. The token counts are the call log's, which no tool writes, so new calls add nothing to them. |
+| Context Gaps (Meko's own) | `GET /datapacks/:id/questions`, `POST .../questions/mark`, `POST .../questions/teach`, `DELETE .../questions/asks` | [Context Gaps](#context-gaps). `GET ?state=open\|dismissed\|taught\|all` (open by default) `&after=<last_at>&after_key=<key>` `&conversation_id=` → `{questions: [{key, query, quality (empty or weak), tool, results, top_score, top_raw, asks, agents, conversations, asked_by_conversation, first_at, last_at, state (open, dismissed or taught), marked_at, taught: {text, memory_id, at, conversation_id} or null, dismissal: {conversation_id, memory_id, memory_text} or null}], more, counts: {open, dismissed, taught}, open: {empty, weak}, searches, since}`; `searches` counts the datapack's searches in the call log (90 days, not the web UI's) since `since`, and `asked_by_conversation` says whether `conversation_id` asked the question. `mark {key, state: "dismissed" \| "taught" \| null, text?, memory_id?, conversation_id?}` → 204: `null` restores, `taught` needs `text`, and `conversation_id` names the agent's conversation (a person's mark has none). `teach {key, text}` → the question, taught (on a Meko Cloud datapack, the owner or the admin token only). `DELETE asks?conversation_id=&before=` (RFC 3339, now by default) → `{deleted}`. The list also says `location` (`local` or `cloud`). An unknown key is a 404 `NOT_FOUND`. |
 | Artifacts | `GET /datapacks/:id/artifacts`, `POST .../artifacts/:hash/download-url`, `GET .../artifacts/:hash` | Pages from 1 (25, at most 200), newest first, `q` on the filename. `download-url` has no `url` (the bytes are in the database), so a client reads them from the `GET`. A hash that isn't 64 hex: 400 `INVALID_PARAM`; missing: 404 `ARTIFACT_NOT_FOUND`. |
 | Search answers (Meko's own) | `GET`, `PUT /settings/answers`, `POST /datapacks/:id/answer` | The web UI's Search writes an answer from its results through the user's own Claude Code, run as memory extraction runs it ([memory-extraction.md](memory-extraction.md#search-answers)). `GET` is `{enabled, harness, command, model}`; `PUT {harness, command, model}` takes the owner only (the admin token, remote or local access; 403 `FORBIDDEN` otherwise), `harness` `claude` or `""` for off, `command` its absolute path (the admin token only: 403 for anyone else) or left out for the server to find it, `model` `haiku` by default, and makes one test call first (400 with why when it fails). `answer` takes `{query, passages: [{source, id, text}]}`, the first 10 passages each cut to 2,000 characters, and replies `{answer, cited, model}`: `cited` numbers the passages used, from 1, only ones it was given. 409 `ANSWERS_OFF` while off, 502 `ANSWER_FAILED` when the call fails (saying why, never the text). |
 | Memory extraction (Meko's own) | `GET`, `PUT /settings/memory-extractor`, `POST /settings/memory-extractor/run`, `GET`, `PATCH /datapacks/:id/memory-extraction` | [memory-extraction.md](memory-extraction.md). `GET` is `{enabled, harness, command, model, interval_seconds, queued, last_run_at, last_error, extracted}`. `PUT {harness, command, model, interval_seconds}` takes the owner only (the admin token, remote or local access; 403 `FORBIDDEN` otherwise): `harness` is `claude` (`""` turns it off), `command` its absolute path (the admin token only: 403 for anyone else) or left out for the server to find it as it finds agents (400 when it can't), `model` defaults to `haiku`, the interval to 300 seconds (60 at least); it makes one test call first and replies 400 with why when that fails. `run` extracts the waiting turns now (up to 50 conversations) and replies `{conversations, turns, memories, failed, last_error}`: `failed` counts the conversations whose call failed, their turns still queued; 409 `EXTRACTOR_OFF` while off. A datapack's is `{datapack_id, opt_out, profile, instructions, profiles}`; `PATCH` takes any of the three (`profile` `general` or `coding`, `instructions` up to 2,000 characters). |

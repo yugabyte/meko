@@ -125,6 +125,13 @@ const NOT_IDEMPOTENT = new Set(['datapack_create', 'memory_add', 'artifact_put',
 
 /** How long connecting (the MCP handshake) may take. */
 const CONNECT_TIMEOUT_MS = 15000;
+
+/**
+ * The header on every request AgentK's own client sends Meko: Meko records no question on its
+ * Context Gaps for these calls (the search at session start, whose query is the task, and the learn
+ * step's lookups), only for the agents' own searches. Not a tool argument, which Meko Cloud refuses.
+ */
+export const MEKO_CLIENT_HEADER = { 'X-Meko-Client': 'agentk' } as const;
 /** How long the health check waits for Meko. */
 const CHECK_TIMEOUT_MS = 10000;
 
@@ -177,7 +184,7 @@ export class MekoClient {
         const { url, apiKey } = this.creds();
         if (!apiKey) throw new MekoError('No Meko API key is configured.');
         const transport = new StreamableHTTPClientTransport(new URL(url), {
-          requestInit: { headers: { Authorization: `Bearer ${apiKey}` } },
+          requestInit: { headers: { Authorization: `Bearer ${apiKey}`, ...MEKO_CLIENT_HEADER } },
         });
         const c = new Client({ name: 'agent-k-local', version: this.version });
         await c.connect(transport, { timeout: CONNECT_TIMEOUT_MS });

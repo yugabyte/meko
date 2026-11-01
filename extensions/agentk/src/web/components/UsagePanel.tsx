@@ -1,5 +1,5 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { DailyUsage, ProjectUsage, SessionUsage, TokenUsage, UsageCost } from '../../shared/types';
+import type { DailyUsage, MekoGaps, ProjectUsage, SessionUsage, TokenUsage, UsageCost } from '../../shared/types';
 import { STAGE_LABELS } from '../../shared/types';
 import { navigate } from '../router';
 import { nextSort, sortRows, type SortState } from '../sort';
@@ -15,9 +15,9 @@ const sessionValue = (s: SessionUsage, k: SessionKey): number | string =>
 /**
  * Token usage for a project: headline numbers, a 14-day chart (code reviews' tokens stacked on each
  * day's bar), Meko use, code reviews once one has run, and per-session and per-model tables. `mekoOn`: Meko is on and the project has a datapack, so the Meko section shows
- * before any call is made.
+ * before any call is made. `gaps`: the open questions on Meko's Context Gaps, for the line under the Meko stats.
  */
-export function UsagePanel({ projectId, usage, mekoOn }: { projectId: string; usage: ProjectUsage; mekoOn: boolean }) {
+export function UsagePanel({ projectId, usage, mekoOn, gaps }: { projectId: string; usage: ProjectUsage; mekoOn: boolean; gaps: MekoGaps | null }) {
   const [showTable, setShowTable] = useState(false);
   const t = usage.total;
   const empty = t.messages === 0;
@@ -70,7 +70,7 @@ export function UsagePanel({ projectId, usage, mekoOn }: { projectId: string; us
                 meko={usage.meko}
                 firstTurn={usage.mekoFirstTurn}
                 learning={usage.mekoLearning}
-                gaps={{ projectId, counts: usage.mekoGaps }}
+                gaps={gaps}
               />
             </div>
           )}

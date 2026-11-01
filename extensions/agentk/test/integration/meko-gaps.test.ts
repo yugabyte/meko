@@ -2,164 +2,91 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../../src/server/server.js';
 import { run } from '../../src/server/db.js';
-import { learnGaps, markGap } from '../../src/server/mekogaps.js';
-import type { MekoGapPage, ProjectHome } from '../../src/shared/types.js';
-import { makeEnv, type TestEnv } from '../helpers.js';
+import { mekoGapsPath } from '../../src/shared/mekourls.js';
+import type { ProjectHome } from '../../src/shared/types.js';
+import { fakeMekoQuestions, makeEnv, useLocalMeko, waitFor, type TestEnv } from '../helpers.js';
 
-describe("What Meko doesn't know", () => {
+describe("Meko's Context Gaps in AgentK", () => {
   let env: TestEnv;
   let app: FastifyInstance;
+  let meko: Awaited<ReturnType<typeof fakeMekoQuestions>>;
 
   beforeEach(async () => {
     env = await makeEnv({ start: false });
     app = await buildServer(env.core, { webDir: null, updates: null });
+    meko = await fakeMekoQuestions();
   });
   afterEach(async () => {
     await app.close();
+    await meko.close();
     await env.cleanup();
   });
 
-  const call = (method: 'GET' | 'POST', url: string, payload?: object) =>
-    app.inject({ method, url, ...(payload ? { payload } : {}) });
-  const page = async (projectId: string, state = 'open') => (await call('GET', `/api/projects/${projectId}/meko-gaps?state=${state}`)).json() as MekoGapPage;
-
+  const home = async (projectId: string) => (await app.inject({ method: 'GET', url: `/api/projects/${projectId}/home` })).json() as ProjectHome;
   const project = (name: string, datapack = true) =>
     env.core.projects.create({ repoPath: env.repo, name, datapack: datapack ? { mode: 'existing', id: `dp-${name}`, name: `team/${name}` } : { mode: 'none' } });
-  const session = (projectId: string, id: string, name: string) =>
+  const session = (projectId: string, id: string, purpose: string | null, stage = 'explore') =>
     run(env.core.db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
-      hook_token, desired, status, stage, created_at) VALUES (?, ?, ?, ?, 'c', 'b', 'main', '/w', 't', 'tok', 'running', 'idle', 'code', 0)`, id, projectId, id, name);
-  /** A search Claude made, as the transcript reader records it. */
-  const search = (sessionId: string, id: string, query: string, at: number, outcome: 'found' | 'empty', quality: 'empty' | 'weak' | null) =>
-    run(env.core.db, `INSERT INTO meko_calls(session_id, tool_use_id, tool, kind, at, input_chars, outcome, results, query, query_key, top_score, quality)
-      VALUES (?, ?, 'context_search', 'lookup', ?, 40, ?, ?, ?, ?, ?, ?)`,
-      sessionId, id, at, outcome, outcome === 'found' ? 10 : 0, query, query.replace(/\s+/g, ' ').trim().toLowerCase(), quality === 'weak' ? 0.71 : null, quality);
+      hook_token, desired, status, stage, created_at, purpose) VALUES (?, ?, ?, ?, ?, 'b', 'main', '/w', 't', 'tok', 'running', 'idle', ?, 0, ?)`,
+      id, projectId, id, id, `claude-${id}`, stage, purpose);
 
-  it('groups poor searches by question, and keeps what the user did with each until it is asked again', async () => {
+  it("counts the dedicated datapack's open questions from the Meko on this computer, and shows none without them", async () => {
     const p = await project('Alpha');
-    session(p.id, 's1', 'tags');
-    session(p.id, 's2', 'release-cleanup');
-    search('s1', 't1', 'Release tag retention', 1000, 'empty', 'empty');
-    search('s2', 't2', 'release  tag retention', 2000, 'found', 'weak');
-    // Found something relevant: not a question. Asked poorly, then answered later: left out.
-    search('s1', 't3', 'how the mod works', 3000, 'found', null);
-    search('s1', 't4', 'later answered', 1500, 'empty', 'empty');
-    search('s2', 't5', 'later answered', 2500, 'found', null);
-    // AgentK's searches at start, by what Meko returned: nothing, and (picked away, but a real answer) only a conversation hit.
-    const start = (sessionId: string, at: number, query: string, quality: 'empty' | null) =>
-      run(env.core.db, `INSERT INTO meko_preloads(session_id, at, outcome, results, chars, ms, query, query_key, quality) VALUES (?, ?, 'empty', 0, 0, 900, ?, ?, ?)`,
-        sessionId, at, query, query.toLowerCase(), quality);
-    start('s2', 1800, 'Offline mode', 'empty');
-    start('s1', 1700, 'Cache hit', null);
-    // A learn session's searches while it seeds (in Explore) check before each save: not questions, though
-    // one that found something answers another session's. Moved on to Code, it's a task like any other.
-    session(p.id, 'seed', 'Learn the project');
-    run(env.core.db, "UPDATE sessions SET purpose = 'learn' WHERE id = 'seed'");
-    run(env.core.db, `INSERT INTO session_stages(session_id, stage, entered_at, left_at, moved_by)
-      VALUES ('seed', 'explore', 100, 2200, 'you'), ('seed', 'code', 2200, NULL, 'you')`);
-    start('seed', 100, 'Seed the datapack', 'empty');
-    search('seed', 't7', 'How it works: the release train', 1200, 'empty', 'empty');
-    search('seed', 't8', 'offline mode', 1300, 'empty', 'empty');
-    search('s1', 't9', 'answered by the seed', 1600, 'empty', 'empty');
-    search('seed', 't10', 'answered by the seed', 1900, 'found', null);
-    search('seed', 't11', 'Code stage question', 2300, 'empty', 'empty');
-
-    const open = await page(p.id);
-    expect(open.gaps.map((g) => [g.query, g.quality, g.source, g.asks, g.sessions.map((s) => s.name)])).toEqual([
-      ['Code stage question', 'empty', 'claude', 1, ['Learn the project']],
-      ['release  tag retention', 'weak', 'claude', 2, ['release-cleanup', 'tags']],
-      ['Offline mode', 'empty', 'start', 1, ['release-cleanup']],
+    meko.datapacks.set('dp-Alpha', [
+      { key: 'release tag retention', query: 'Release tag retention' },
+      { key: 'offline mode', query: 'Offline mode', quality: 'weak' },
+      { key: 'old', query: 'Old', state: 'dismissed' },
     ]);
-    // Every search recorded counts, the seed's too.
-    expect(open).toMatchObject({ counts: { open: 3, dismissed: 0, taught: 0 }, open: { empty: 2, weak: 1 }, searches: 13, since: 100, more: false });
-    expect(((await call('GET', `/api/projects/${p.id}/home`)).json() as ProjectHome).usage.mekoGaps).toEqual({ empty: 2, weak: 1 });
-    // A learn step isn't offered a question only the seed's search made Claude's (offline mode: else AgentK's at start).
-    expect(learnGaps(env.core.db, p.id, 's1').map((g) => [g.key, g.own])).toEqual([['release tag retention', true], ['code stage question', false]]);
-    expect(learnGaps(env.core.db, p.id, 'seed').map((g) => [g.key, g.own])).toEqual([['code stage question', true], ['release tag retention', false]]);
+    // With a Meko Cloud key (or any Meko but the one on this computer), Meko isn't asked.
+    expect((await home(p.id)).mekoGaps).toBeNull();
+    expect(meko.requests).toEqual([]);
 
-    const key = open.gaps[1].key; // release tag retention
-    expect((await call('POST', `/api/projects/${p.id}/meko-gaps/mark`, { key, state: 'dismissed' })).statusCode).toBe(204);
-    expect((await page(p.id)).gaps.map((g) => g.query)).toEqual(['Code stage question', 'Offline mode']);
-    expect((await page(p.id, 'dismissed')).gaps.map((g) => g.state)).toEqual(['dismissed']);
-    // Asked again: open again.
-    search('s1', 't6', 'Release tag retention', Date.now() + 1000, 'empty', 'empty');
-    expect((await page(p.id)).gaps[0]).toMatchObject({ key, asks: 3, state: 'open', quality: 'empty' });
-    // Put back after a dismissal.
-    await call('POST', `/api/projects/${p.id}/meko-gaps/mark`, { key, state: 'dismissed' });
-    await call('POST', `/api/projects/${p.id}/meko-gaps/mark`, { key, state: null });
-    expect((await page(p.id)).counts).toEqual({ open: 3, dismissed: 0, taught: 0 });
-
-    expect((await call('POST', `/api/projects/${p.id}/meko-gaps/mark`, { key: 'nothing like it', state: 'dismissed' })).statusCode).toBe(404);
-    expect((await call('POST', `/api/projects/${p.id}/meko-gaps/mark`, { key, state: 'taught' })).statusCode).toBe(400);
-    expect((await call('GET', `/api/projects/${p.id}/meko-gaps?state=closed`)).statusCode).toBe(400);
-  });
-
-  it("teaches Meko into the dedicated datapack as AgentK, and says why when it can't", async () => {
-    const p = await project('Alpha');
-    session(p.id, 's1', 'tags');
-    search('s1', 't1', 'Release tag retention', 1000, 'empty', 'empty');
-    const key = 'release tag retention';
-    const teach = (projectId: string, text: string, k = key) => call('POST', `/api/projects/${projectId}/meko-gaps/teach`, { key: k, text });
-
-    expect((await teach(p.id, '   ')).statusCode).toBe(400);
-    expect((await teach(p.id, 'x'.repeat(2001))).statusCode).toBe(400);
-    expect((await teach(p.id, 'An answer', 'not asked')).statusCode).toBe(404);
-
-    // Meko refuses: nothing is marked.
-    const add = env.meko.addMemory;
-    (env.meko as { addMemory: unknown }).addMemory = async () => {
-      throw new Error('quota exceeded');
-    };
-    const refused = await teach(p.id, 'Releases keep the last 30 tags.');
-    expect(refused.statusCode).toBe(502);
-    expect(refused.json().error).toContain('quota exceeded');
-    expect((await page(p.id)).counts.taught).toBe(0);
-    (env.meko as { addMemory: unknown }).addMemory = add;
-
-    // A learn step taught it first: the person's teach replaces it, and says a person did it.
-    markGap(env.core.db, p.id, key, { kind: 'teach', text: 'Tags are kept.', datapack: 'team/Alpha', session: 's1' }, Date.now() - 10);
-    expect((await page(p.id, 'taught')).gaps[0].taught).toMatchObject({ text: 'Tags are kept.', session: { id: 's1', name: 'tags', archived: false } });
-    const ok = await teach(p.id, '  Releases keep the last 30 tags.  ');
-    expect(ok.statusCode).toBe(200);
-    expect(ok.json()).toMatchObject({ key, state: 'taught', taught: { text: 'Releases keep the last 30 tags.', datapack: 'team/Alpha', session: null }, dismissal: null });
-    expect(env.meko.calls.filter((c) => c.name === 'addMemory').map((c) => c.args)).toEqual([
-      ['Releases keep the last 30 tags.', 'dp-Alpha', 'agent-k-local', 'conv-1', { source: 'agent-k-local', kind: 'taught', question: 'Release tag retention' }],
-    ]);
-    expect((await page(p.id, 'taught')).gaps).toHaveLength(1);
-    // Asked again after it was taught: open again, with what was taught (Meko had it, and the search missed it).
-    search('s1', 't2', 'Release tag retention', Date.now() + 5, 'found', 'weak');
-    expect((await page(p.id)).gaps[0]).toMatchObject({ state: 'open', taught: { text: 'Releases keep the last 30 tags.' } });
-    // Dismissed then, it keeps what was taught, and a restore keeps it too.
-    await new Promise((r) => setTimeout(r, 20));
-    await call('POST', `/api/projects/${p.id}/meko-gaps/mark`, { key, state: 'dismissed' });
-    expect((await page(p.id, 'dismissed')).gaps[0]).toMatchObject({ state: 'dismissed', taught: { text: 'Releases keep the last 30 tags.', datapack: 'team/Alpha' } });
-    await call('POST', `/api/projects/${p.id}/meko-gaps/mark`, { key, state: null });
-    expect((await page(p.id)).gaps[0]).toMatchObject({ state: 'open', taught: { text: 'Releases keep the last 30 tags.' } });
-
-    // No dedicated datapack, or Meko off: a 409 that says so.
+    await useLocalMeko(env, meko.url);
+    expect((await home(p.id)).mekoGaps).toEqual({ datapackId: 'dp-Alpha', cloud: false, empty: 1, weak: 1 });
+    expect(meko.requests.at(-1)).toMatchObject({ method: 'GET', datapack: 'dp-Alpha', query: { state: 'open' }, headers: { authorization: 'Bearer local-token' } });
+    // A linked Meko Cloud's datapack: its searches pass through this Meko, which keeps its questions.
+    meko.cloud.add('dp-Alpha');
+    expect((await home(p.id)).mekoGaps).toEqual({ datapackId: 'dp-Alpha', cloud: true, empty: 1, weak: 1 });
+    // The line opens the tab, or for Meko Cloud's datapack, Meko's page for its Context Gaps.
+    expect([mekoGapsPath('dp-Alpha'), mekoGapsPath('dp-Alpha', true)]).toEqual(['/datapacks/dp-Alpha/gaps', '/gaps/dp-Alpha']);
+    // Nothing open, a Meko too old to keep questions, and a project with no dedicated datapack: no line.
+    meko.datapacks.set('dp-Alpha', [{ key: 'old', query: 'Old', state: 'dismissed' }]);
+    expect((await home(p.id)).mekoGaps).toBeNull();
+    meko.state.old = true;
+    expect((await home(p.id)).mekoGaps).toBeNull();
     const plain = await project('Plain', false);
-    session(plain.id, 's9', 'plain');
-    search('s9', 't9', 'Release tag retention', 1000, 'empty', 'empty');
-    expect((await teach(plain.id, 'An answer')).json()).toMatchObject({ code: 'NO_DEDICATED_DATAPACK' });
-    env.core.updateConfig((c) => {
-      c.meko.apiKey = '';
-    });
-    expect((await teach(p.id, 'An answer')).json()).toMatchObject({ code: 'MEKO_OFF' });
+    const asked = meko.requests.length;
+    expect((await home(plain.id)).mekoGaps).toBeNull();
+    expect(meko.requests).toHaveLength(asked);
+    // AgentK's own page is gone.
+    expect((await app.inject({ method: 'GET', url: `/api/projects/${p.id}/meko-gaps` })).statusCode).toBe(404);
   });
 
-  it('pages through questions asked at once without skipping any at the page boundary', async () => {
+  it("has Meko forget a learn session's searches while it seeded, once, when it moves on from Explore", async () => {
     const p = await project('Alpha');
-    session(p.id, 's1', 'many');
-    // Claude's parallel searches in one response share its timestamp: 99 asked earlier, then 4 at once across the boundary.
-    for (let i = 0; i < 99; i++) search('s1', `t${i}`, `question ${String(i).padStart(3, '0')}`, 1000 + i, 'empty', 'empty');
-    for (const k of ['a', 'b', 'c', 'd']) search('s1', `same-${k}`, `asked at once ${k}`, 500, 'empty', 'empty');
-    const first = await page(p.id);
-    expect(first.gaps).toHaveLength(100);
-    expect(first.more).toBe(true);
-    const last = first.gaps.at(-1)!;
-    expect(last.lastAt).toBe(500);
-    const rest = (await call('GET', `/api/projects/${p.id}/meko-gaps?before=${last.lastAt}&beforeKey=${encodeURIComponent(last.key)}`)).json() as MekoGapPage;
-    expect(rest.more).toBe(false);
-    expect(new Set([...first.gaps, ...rest.gaps].map((g) => g.key)).size).toBe(103);
-    expect((await call('GET', `/api/projects/${p.id}/meko-gaps?before=500`)).statusCode).toBe(400);
+    meko.datapacks.set('dp-Alpha', [
+      { key: 'how releases work', query: 'How releases work', askedBy: ['conv-claude-seed'] },
+      { key: 'offline mode', query: 'Offline mode', askedBy: ['conv-claude-seed', 'conv-claude-task'] },
+    ]);
+    Object.assign(env.meko, { ensureConversation: async (_agent: string, _dp: string, key: string) => `conv-${key}` });
+    await useLocalMeko(env, meko.url);
+    session(p.id, 'seed', 'learn');
+    run(env.core.db, "INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES ('seed', 'explore', 0, 'auto')");
+    session(p.id, 'task', null);
+    const forgets = () => meko.requests.filter((r) => r.method === 'DELETE');
+
+    env.core.sessions.setStage('task', 'code', 'you');
+    const before = Date.now();
+    env.core.sessions.setStage('seed', 'code', 'you');
+    await waitFor(forgets, (f) => f.length === 1, 5000, "Meko to be asked to forget the seed's searches");
+    expect(forgets()[0]).toMatchObject({ datapack: 'dp-Alpha', path: '/asks', query: { conversation_id: 'conv-claude-seed' } });
+    expect(Date.parse(forgets()[0].query.before)).toBeGreaterThanOrEqual(before - 1000);
+    // Moved on again, it's a task: nothing more is forgotten, even back through Explore, whose
+    // searches are then a task's questions.
+    env.core.sessions.setStage('seed', 'explore', 'you');
+    env.core.sessions.setStage('seed', 'code', 'you');
+    env.core.sessions.setStage('seed', 'pr', 'you');
+    await new Promise((r) => setTimeout(r, 100));
+    expect(forgets()).toHaveLength(1);
   });
 });

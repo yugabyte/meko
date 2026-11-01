@@ -148,6 +148,7 @@ func Register(g *echo.Group, o Options) {
 	g.PATCH("/datapacks/:id/memory-extraction", a.setDatapackExtraction)
 
 	a.registerKnowledge(g)
+	a.registerQuestions(g)
 }
 
 // Errors as Meko Cloud's API replies them.

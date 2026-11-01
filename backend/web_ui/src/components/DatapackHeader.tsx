@@ -19,6 +19,7 @@ const LABELS: Record<Tab, string> = {
   knowledge: "Knowledge",
   artifacts: "Artifacts",
   search: "Search",
+  gaps: "Context Gaps",
   connect: "Connect",
 };
 

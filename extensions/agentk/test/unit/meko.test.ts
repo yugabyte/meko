@@ -13,6 +13,8 @@ class FakeMeko {
   http: HttpServer | null = null;
   port = 0;
   calls: { name: string; args: Record<string, unknown> }[] = [];
+  /** Every request's headers, in order. */
+  headers: IncomingMessage['headers'][] = [];
   tools: Record<string, Handler> = {};
   /** Tools whose HTTP connection is cut once the call has reached the server. */
   drop = new Set<string>();
@@ -34,6 +36,7 @@ class FakeMeko {
   }
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    this.headers.push(req.headers);
     let raw = '';
     for await (const c of req) raw += c;
     const body = raw ? JSON.parse(raw) : undefined;
@@ -71,6 +74,13 @@ describe('Meko client', () => {
   afterEach(async () => {
     await client.close();
     await meko.stop();
+  });
+
+  it("sends its key and says the calls are AgentK's own on every request, so Meko keeps no question for them", async () => {
+    meko.tools.context_search = () => ({ results: { memory: [] } });
+    await client.search('the task', { id: 'dp-1', name: 'team/demo' }, 'agent', 'conv-1');
+    expect(meko.headers.length).toBeGreaterThan(1);
+    for (const h of meko.headers) expect(h).toMatchObject({ authorization: 'Bearer test-key', 'x-meko-client': 'agentk' });
   });
 
   it('checks health with a real round trip every time', async () => {
