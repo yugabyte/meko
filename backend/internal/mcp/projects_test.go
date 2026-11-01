@@ -6,7 +6,7 @@ import (
 	"github.com/yugabyte/meko/backend/internal/testenv"
 )
 
-// The project tools, as meko-mcp-server's: a project starts with the folders named (one at least),
+// The project tools, as Meko Cloud's: a project starts with the folders named (one at least),
 // a datapack is filed in one folder and moved by filing it again, datapack_create files a new one in
 // a folder it checks first, datapack_describe says where one is filed (nulls when Unfiled), and
 // deleting a folder or a project unfiles without deleting.

@@ -190,7 +190,7 @@ func TestCloudServesLocalDatapacks(t *testing.T) {
 	cloudRow := `{"datapack_id":"` + cloudDP + `","datapack_name":"cloud-notes","grant":"owner"}`
 	cloud := &fakeCloud{linked: true, tools: &cloudlink.Tools{Tools: []*sdk.Tool{cloudTool("memory_add"),
 		cloudTool("datapack_describe"), cloudTool("datapack_list"), cloudTool("datapack_search"),
-		cloudTool("datapack_create"), cloudTool("amp_cluster_list")}}}
+		cloudTool("datapack_create"), cloudTool("amp_cluster_list"), cloudTool("project_add_datapack")}}}
 	e := testenv.Start(t, testenv.Options{MCPCloud: cloud})
 	ctx := context.Background()
 	here, err := e.Service.Datapack(ctx, e.DatapackID)
@@ -228,13 +228,15 @@ func TestCloudServesLocalDatapacks(t *testing.T) {
 		t.Fatalf("this Meko's call log: %+v", calls)
 	}
 
-	// A blank id, an id only Meko Cloud has, a create and a tool only Meko Cloud has go there.
+	// A blank id, an id only Meko Cloud has, a create, a tool only Meko Cloud has and a project tool
+	// (whose folder is one of Meko Cloud's) go there.
 	for _, c := range []struct {
 		tool string
 		args map[string]any
 	}{{"memory_add", map[string]any{"text": "x"}}, {"memory_add", map[string]any{"text": "x", "datapack_id": cloudDP}},
 		{"datapack_create", map[string]any{"name": "new-one", "datapack_id": e.DatapackID}},
-		{"amp_cluster_list", map[string]any{"datapack_id": e.DatapackID}}} {
+		{"amp_cluster_list", map[string]any{"datapack_id": e.DatapackID}},
+		{"project_add_datapack", map[string]any{"datapack_id": e.DatapackID, "folder_id": "f"}}} {
 		if r = call(t, e, c.tool, c.args); str(r.JSON["cloud_tool"]) != c.tool {
 			t.Errorf("%s %v wasn't sent to Meko Cloud: %s", c.tool, c.args, r.Text)
 		}

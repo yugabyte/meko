@@ -1,6 +1,6 @@
 // Files datapacks in a project's folder: this Meko's own, picked from a list that says where each
 // one is filed now (filing one moves it). Each is filed on its own, so one that fails leaves the rest
-// filed and says which.
+// filed, names the ones that failed and keeps only them picked, to try again.
 
 import { useState } from "react";
 import { api } from "../lib/api";
@@ -42,10 +42,14 @@ export function AddDatapacksDialog({
   const file = async () => {
     setBusy(true);
     setError(undefined);
-    const results = await Promise.allSettled([...picked].map((id) => api.placeDatapack(id, folder.folder_id)));
-    const failed = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    const ids = [...picked];
+    const results = await Promise.allSettled(ids.map((id) => api.placeDatapack(id, folder.folder_id)));
+    const failed = ids.filter((_, i) => results[i].status === "rejected");
     if (failed.length === 0) return onFiled();
-    setError(new Error(`${failed.length} of ${results.length} couldn't be filed: ${(failed[0].reason as Error).message}`));
+    const name = (id: string) => loaded.data?.mine.find((d) => d.datapack_id === id)?.datapack_name ?? id;
+    const why = (results.find((r) => r.status === "rejected") as PromiseRejectedResult).reason as Error;
+    setError(new Error(`Couldn't file ${failed.map(name).join(", ")}: ${why.message}`));
+    setPicked(new Set(failed));
     setBusy(false);
   };
 

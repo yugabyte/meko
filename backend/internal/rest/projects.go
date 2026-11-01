@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
 	"github.com/yugabyte/meko/backend/internal/envelope"
@@ -231,9 +232,15 @@ func (a *api) placements(c echo.Context) error {
 	var ids []string
 	if q := c.QueryParam("datapack_ids"); q != "" {
 		for _, id := range strings.Split(q, ",") {
-			if id = strings.TrimSpace(id); id != "" {
-				ids = append(ids, memory.CanonicalID(id))
+			if id = strings.TrimSpace(id); id == "" {
+				continue
 			}
+			u, err := uuid.Parse(id)
+			if err != nil {
+				return envelope.Fail(c, http.StatusBadRequest, "INVALID_DATAPACK_IDS",
+					"datapack_ids takes datapack UUIDs, separated by commas")
+			}
+			ids = append(ids, u.String())
 		}
 		if len(ids) > maxPlacementIDs {
 			return envelope.Fail(c, http.StatusBadRequest, "INVALID_DATAPACK_IDS",

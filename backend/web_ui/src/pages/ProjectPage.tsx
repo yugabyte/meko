@@ -85,11 +85,18 @@ export function ProjectPage({ id }: { id: string }) {
 function FoldersTab({ detail, onChanged }: { detail: ProjectDetail; onChanged: () => void }) {
   const { project, folders, datapacks } = detail;
   const [openID, setOpenID] = useState(folders[0]?.folder_id);
+  // A folder just made, which opens once the reloaded project lists it.
+  const [made, setMade] = useState<string>();
   const [dialog, setDialog] = useState<"add-folder" | "edit-folder" | "delete-folder" | "add-datapacks">();
-  // A folder deleted, or one just made, moves the selection.
   useEffect(() => {
-    if (!folders.some((f) => f.folder_id === openID)) setOpenID(folders[0]?.folder_id);
-  }, [folders, openID]);
+    if (made && folders.some((f) => f.folder_id === made)) {
+      setOpenID(made);
+      setMade(undefined);
+    } else if (!made && !folders.some((f) => f.folder_id === openID)) {
+      // The open folder was deleted.
+      setOpenID(folders[0]?.folder_id);
+    }
+  }, [folders, openID, made]);
   const open = folders.find((f) => f.folder_id === openID);
   const inOpen = datapacks.filter((d) => d.folder_id === openID);
   const done = () => {
@@ -159,7 +166,7 @@ function FoldersTab({ detail, onChanged }: { detail: ProjectDetail; onChanged: (
           projectId={project.project_id}
           onClose={() => setDialog(undefined)}
           onSaved={(fid) => {
-            setOpenID(fid);
+            setMade(fid);
             done();
           }}
         />

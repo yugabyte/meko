@@ -229,9 +229,12 @@ func (s *Store) CreateFolder(ctx context.Context, project string, f NewFolder) (
 		return Folder{}, err
 	}
 	fs, err := s.Folders(ctx, project)
+	if err != nil {
+		return Folder{}, err
+	}
 	for _, x := range fs {
 		if x.ID == id {
-			return x, err
+			return x, nil
 		}
 	}
 	return Folder{}, ErrNoFolder
@@ -284,18 +287,19 @@ func (s *Store) FiledDatapacks(ctx context.Context, project string) ([]FiledData
 	return out, rows.Err()
 }
 
-// FolderExists says whether there's a folder with this id.
-func (s *Store) FolderExists(ctx context.Context, id string) (bool, error) {
-	var n int
-	err := s.r.QueryRowContext(ctx, "SELECT count(*) FROM project_folders WHERE id = ?", id).Scan(&n)
-	return n > 0, err
-}
-
 // PlaceDatapack files a datapack in a folder, moving it from where it was, or returns
 // ErrNoDatapack or ErrNoFolder.
 func (s *Store) PlaceDatapack(ctx context.Context, datapack, folder string) error {
-	now := time.Now().UTC().Format(timeLayout)
-	res, err := s.w.ExecContext(ctx, "INSERT INTO datapack_placements(datapack_id, project_id, folder_id, "+
+	return placeIn(ctx, s.w, datapack, folder, time.Now().UTC().Format(timeLayout))
+}
+
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// placeIn files a datapack in a folder, or returns ErrNoDatapack or ErrNoFolder.
+func placeIn(ctx context.Context, db execer, datapack, folder, now string) error {
+	res, err := db.ExecContext(ctx, "INSERT INTO datapack_placements(datapack_id, project_id, folder_id, "+
 		"placed_at, updated_at) SELECT ?, f.project_id, f.id, ?, ? FROM project_folders f WHERE f.id = ? "+
 		"ON CONFLICT(datapack_id) DO UPDATE SET project_id = excluded.project_id, folder_id = excluded.folder_id, "+
 		"placed_at = excluded.placed_at, updated_at = excluded.updated_at", datapack, now, now, folder)
@@ -394,7 +398,8 @@ func (s *Store) ProjectActivity(ctx context.Context, project string, after *Acti
 
 func jsonStrings(s string) ([]string, error) {
 	out := []string{}
-	return out, json.Unmarshal([]byte(s), &out)
+	err := json.Unmarshal([]byte(s), &out)
+	return out, err
 }
 
 // affected is err, or else missing when the statement changed no row.
@@ -413,7 +418,7 @@ func affected(res sql.Result, err, missing error) error {
 
 // ProjectStats is what a project's datapacks hold in all, as Meko Cloud's project stats: searches by
 // tool (the call log's, which keeps 90 days), conversations, knowledge files (by MIME type) and their
-// embedded chunks, and artifacts.
+// embedded chunks (not promoted memories'), and artifacts.
 type ProjectStats struct {
 	KBFilesByType  map[string]int64
 	SearchesHybrid int64
@@ -435,7 +440,7 @@ func (s *Store) ProjectStats(ctx context.Context, project string) (ProjectStats,
 		"(SELECT count(*) FROM call_log WHERE ok = 1 AND tool = 'knowledgebase_search' AND datapack_id "+in+"), "+
 		"(SELECT count(*) FROM call_log WHERE ok = 1 AND tool = 'memory_search' AND datapack_id "+in+"), "+
 		"(SELECT count(*) FROM conversations WHERE datapack_id "+in+"), "+
-		"(SELECT count(*) FROM kb_chunks WHERE embedded = 1 AND datapack_id "+in+"), "+
+		"(SELECT count(*) FROM kb_chunks WHERE embedded = 1 AND document_rowid IS NOT NULL AND datapack_id "+in+"), "+
 		"(SELECT count(*) FROM artifacts WHERE datapack_id "+in+"), "+
 		"(SELECT coalesce(sum(size_bytes), 0) FROM artifacts WHERE datapack_id "+in+")",
 		project, project, project, project, project, project, project).Scan(&out.SearchesHybrid, &out.SearchesKB,

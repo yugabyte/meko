@@ -100,10 +100,12 @@ func (o Options) newCloudServer(t *cloudlink.Tools, cred string) *sdk.Server {
 // routed is the handler for Meko Cloud's tool name while linked. datapack_list and datapack_search
 // add this Meko's datapacks to Meko Cloud's reply (mergeList, mergeSearch). A tool this Meko has that
 // works in one datapack runs here when the call names one of this Meko's (byDatapack). Anything else
-// (datapack_create, a blank datapack_id, a tool only Meko Cloud has) goes to Meko Cloud.
+// (datapack_create, a blank datapack_id, a tool only Meko Cloud has) goes to Meko Cloud, and so do the
+// project tools, whatever datapack they name: the projects an agent sees while linked are Meko
+// Cloud's, so a folder_id it has is one of Cloud's folders.
 func (o Options) routed(name string, lt *tool, cred string) sdk.ToolHandler {
 	switch {
-	case lt == nil || name == "datapack_create":
+	case lt == nil || name == "datapack_create" || strings.HasPrefix(name, "project_"):
 		return o.forwarder(name, cred)
 	case name == "datapack_list":
 		return o.forwardAnd(name, lt.failCode, cred, o.mergeList)
@@ -169,7 +171,7 @@ func addTool(s *sdk.Server, t *sdk.Tool, h sdk.ToolHandler, o Options) {
 
 // localOnly are this Meko's tools that don't stand in for Meko Cloud's: datapack_metrics reads this
 // Meko's call log, knowledgebase_upload_file is this Meko's own while linked too (cloudUploadFile), and
-// Meko Cloud has the project tools only where MEKO_ENABLE_PROJECTS is on.
+// Meko Cloud doesn't always offer the project tools.
 var localOnly = map[string]bool{"datapack_metrics": true, "knowledgebase_upload_file": true,
 	"project_list": true, "project_describe": true, "project_stats": true, "project_create": true,
 	"project_update": true, "project_folder_create": true, "project_folder_update": true,

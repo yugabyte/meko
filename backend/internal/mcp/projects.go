@@ -9,7 +9,7 @@ import (
 	"github.com/yugabyte/meko/backend/internal/wire"
 )
 
-// The project tools: Meko Cloud's eleven (meko-mcp-server's project_*), with the same names,
+// The project tools: Meko Cloud's eleven project_* tools, with the same names,
 // arguments and replies, over this Meko's projects. Every project here is the owner's, so none
 // answers "not found" for a project shared with the caller.
 

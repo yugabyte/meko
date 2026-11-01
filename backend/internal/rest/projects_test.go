@@ -49,6 +49,18 @@ func TestProjects(t *testing.T) {
 		"NOT_FOUND")
 	wantErr(t, e, "POST", "/datapacks/00000000-0000-0000-0000-000000000000/placement",
 		map[string]any{"folder_id": folder}, 404, "NOT_FOUND")
+	made := obj(okData(t, e, "POST", "/datapacks", map[string]any{"name": "specs", "folder_id": folder}, 201))
+	if p := obj(okData(t, e, "GET", "/projects/placements?datapack_ids="+str(made["datapack_id"]), nil,
+		200)); obj(p[str(made["datapack_id"])])["folder_id"] != folder {
+		t.Errorf("a create in a folder: %v", p)
+	}
+	wantErr(t, e, "POST", "/datapacks", map[string]any{"name": "nowhere", "folder_id": "nope"}, 404, "NOT_FOUND")
+	for _, d := range arr(okData(t, e, "GET", "/datapacks", nil, 200)) {
+		if obj(d)["datapack_name"] == "nowhere" {
+			t.Errorf("a wrong folder made a datapack")
+		}
+	}
+	wantErr(t, e, "GET", "/projects/placements?datapack_ids=nope", nil, 400, "INVALID_DATAPACK_IDS")
 	pl := obj(obj(okData(t, e, "GET", "/projects/placements?datapack_ids="+e.DatapackID, nil, 200))[e.DatapackID])
 	if pl["path"] != "web/design" || pl["folder_id"] != folder {
 		t.Fatalf("placement %v", pl)
@@ -56,14 +68,14 @@ func TestProjects(t *testing.T) {
 
 	d := obj(okData(t, e, "GET", "/projects/"+id, nil, 200))
 	if obj(d["project"])["description"] != "the web site" || len(arr(d["folders"])) != 4 ||
-		len(arr(d["datapacks"])) != 1 || obj(arr(d["datapacks"])[0])["folder_id"] != folder {
+		len(arr(d["datapacks"])) != 2 || obj(arr(d["datapacks"])[0])["folder_id"] != folder {
 		t.Fatalf("detail %v", d)
 	}
 	types := map[string]int{}
 	for _, it := range arr(obj(okData(t, e, "GET", "/projects/"+id+"/activity-log", nil, 200))["items"]) {
 		types[str(obj(it)["type"])]++
 	}
-	if types["folder_created"] != 4 || types["datapack_filed"] != 1 {
+	if types["folder_created"] != 4 || types["datapack_filed"] != 2 {
 		t.Errorf("activity %v", types)
 	}
 	page := obj(okData(t, e, "GET", "/projects/"+id+"/activity-log?limit=2", nil, 200))

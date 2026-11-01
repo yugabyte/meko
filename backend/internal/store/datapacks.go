@@ -54,15 +54,34 @@ func (s *Store) DefaultDatapackID(ctx context.Context) (string, error) {
 
 // CreateDatapack adds a datapack with a new UUID, or returns ErrDuplicateName.
 func (s *Store) CreateDatapack(ctx context.Context, name, description string) (Datapack, error) {
+	return s.CreateDatapackIn(ctx, name, description, "")
+}
+
+// CreateDatapackIn adds a datapack with a new UUID filed in a project's folder ("" for none), both or
+// neither: ErrNoFolder or ErrDuplicateName make nothing.
+func (s *Store) CreateDatapackIn(ctx context.Context, name, description, folder string) (Datapack, error) {
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return Datapack{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
 	id := uuid.NewString()
 	now := time.Now().UTC().Format(timeLayout)
-	_, err := s.w.ExecContext(ctx,
+	_, err = tx.ExecContext(ctx,
 		"INSERT INTO datapacks(id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
 		id, name, description, now, now)
 	if isUniqueViolation(err) {
 		return Datapack{}, ErrDuplicateName
 	}
 	if err != nil {
+		return Datapack{}, err
+	}
+	if folder != "" {
+		if err = placeIn(ctx, tx, id, folder, now); err != nil {
+			return Datapack{}, err
+		}
+	}
+	if err = tx.Commit(); err != nil {
 		return Datapack{}, err
 	}
 	return s.getDatapackW(ctx, id)

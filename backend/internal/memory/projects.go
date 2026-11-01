@@ -216,23 +216,18 @@ func (s *Service) PlaceDatapack(ctx context.Context, datapack, folder string) er
 	return projectError(s.st.PlaceDatapack(ctx, datapack, folder))
 }
 
-// CreateDatapackIn makes a datapack filed in a folder ("" for none). The folder is checked first, so a
-// wrong one makes nothing.
+// CreateDatapackIn makes a datapack filed in a folder ("" for none), in one transaction: a wrong
+// folder makes nothing.
 func (s *Service) CreateDatapackIn(ctx context.Context, name, description, folder string) (store.Datapack, error) {
-	if folder = strings.TrimSpace(folder); folder != "" {
-		ok, err := s.st.FolderExists(ctx, folder)
-		if err != nil {
-			return store.Datapack{}, err
-		}
-		if !ok {
-			return store.Datapack{}, ErrNoFolder
-		}
+	name = strings.TrimSpace(name)
+	if err := checkName(name); err != nil {
+		return store.Datapack{}, err
 	}
-	d, err := s.CreateDatapack(ctx, name, description)
-	if err != nil || folder == "" {
-		return d, err
+	d, err := s.st.CreateDatapackIn(ctx, name, description, strings.TrimSpace(folder))
+	if errors.Is(err, store.ErrDuplicateName) {
+		return d, ErrDuplicateName
 	}
-	return d, projectError(s.st.PlaceDatapack(ctx, d.ID, folder))
+	return d, projectError(err)
 }
 
 // UnplaceDatapack unfiles one of this Meko's datapacks.
