@@ -186,7 +186,7 @@ var uploadFileTool = func() *tool {
 }()
 
 // forwarder sends a call on to Meko Cloud as it came and answers with its result, recording it in
-// the call log as Meko Cloud's.
+// the call log as Meko Cloud's, and a search for Context Gaps as this Meko's own are.
 func (o Options) forwarder(name, cred string) sdk.ToolHandler {
 	return o.forwardAnd(name, "", cred, nil)
 }
@@ -218,6 +218,9 @@ func (o Options) forwardAnd(name, failCode, cred string, merge merger) sdk.ToolH
 		}
 		rec.Ms = time.Since(start).Milliseconds()
 		o.Service.RecordCall(ctx, rec)
+		if rec.OK && rec.AgentID != memory.WebUIAgent && !fromAgentK(req) {
+			o.recordCloudSearch(ctx, rec, req.Params.Arguments, res)
+		}
 		return res, nil
 	}
 }
@@ -232,6 +235,28 @@ func resultText(res *sdk.CallToolResult) (string, bool) {
 		return "", false
 	}
 	return tc.Text, true
+}
+
+// recordCloudSearch records a search Meko Cloud answered for Context Gaps, under its datapack's id,
+// judged from its reply's text by the same rules as this Meko's (memory.AnswerOf). A search that
+// names no datapack (Meko Cloud's default, whose id this Meko doesn't know) or whose reply can't be
+// read isn't recorded.
+func (o Options) recordCloudSearch(ctx context.Context, rec store.Call, raw json.RawMessage, res *sdk.CallToolResult) {
+	if rec.DatapackID == "" || len(res.Content) == 0 {
+		return
+	}
+	tc, isText := res.Content[0].(*sdk.TextContent)
+	a, err := parseArgs(raw)
+	if !isText || err != nil {
+		return
+	}
+	query, _ := a.str("query")
+	answer, ok := memory.AnswerOf(rec.Tool, tc.Text)
+	if !ok {
+		return
+	}
+	o.Service.RecordSearch(ctx, memory.AskedSearch{DatapackID: rec.DatapackID, Query: query, Tool: rec.Tool,
+		AgentID: rec.AgentID, ConversationID: rec.ConversationID, At: rec.At, Answer: answer})
 }
 
 // forwardedCall is a call log row for a call sent on to Meko Cloud, with the ids its arguments name.

@@ -43,7 +43,7 @@ func newFakeCloud(t *testing.T) *fakeCloud {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "fake", Version: "1"}, nil)
 	for _, name := range []string{"context_search", "memory_add"} {
 		known := map[string]bool{"conversation_id": true, "agent_id": true, "datapack_id": true, "query": true,
-			"limit": true, "force_source": true, "text": true}
+			"limit": true, "force_source": true, "text": true, "metadata": true}
 		srv.AddTool(&mcp.Tool{Name: name, InputSchema: map[string]any{"type": "object"}},
 			func(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 				var a map[string]any

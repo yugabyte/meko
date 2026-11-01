@@ -159,7 +159,7 @@ describe('Settings › Harness', () => {
       onEnable: () => undefined, onChange: () => undefined, onCheck: () => undefined, onUpdate: () => undefined,
     }));
     expect(html).toMatch(/<\/label><button type="button" class="icon-btn info-btn" aria-expanded="false" aria-controls="set-kiro-trust-info"/);
-    expect(html).toMatch(/<\/button><\/div><p id="set-kiro-trust-info" class="info-panel" hidden="">/);
+    expect(html).toMatch(/<\/button><\/div><div id="set-kiro-trust-info" class="info-panel" hidden="">/);
   });
 
   it.each([
@@ -216,7 +216,7 @@ describe('Settings › General', () => {
     const html = renderToStaticMarkup(createElement(MekoLinks, { meko: localMeko, auth: { access: 'local', signedIn: true, username: null } }));
     expect(links(html)).toEqual(['set-meko-cloud /settings/meko-cloud']);
     // The ⓘ's text opens under the setting, after its status line.
-    expect(html).toMatch(/<span class="hint">AgentK uses the Meko on this computer\.<\/span><p id="set-meko-info" class="info-panel" hidden="">Meko opens AgentK on this computer without a sign-in\./);
+    expect(html).toMatch(/<span class="hint">AgentK uses the Meko on this computer\.<\/span><div id="set-meko-info" class="info-panel" hidden="">Meko opens AgentK on this computer without a sign-in\./);
     const remote = renderToStaticMarkup(createElement(MekoLinks, { meko: localMeko, auth: { access: 'remote', signedIn: true, username: null } }));
     expect(remote).toContain('Meko opens AgentK without a sign-in.');
   });

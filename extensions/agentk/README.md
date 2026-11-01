@@ -190,7 +190,7 @@ your phone can connect.
   them from each item's menu on a phone), and dismiss them when done (or all at once). Turn on
   **Sync** in Settings › Work queue (it's off until you do) and it pulls in, when you press it and
   every 15 minutes, the PRs waiting for your review and, through your agent's Slack connector, the
-  messages on your Slack To-dos, marked **New** until you give them their place. Each item has one session,
+  messages on a Slack list of yours, marked **New** until you give them their place. Each item has one session,
   whose status shows on it; **Start session** opens New session with the item filled in. Paste a
   GitHub, Jira or Slack link into `⌘K` to jump to the session working on it.
 - **Find a session by what it's about:** type a few words into Ask AgentK (`⌘K`), such as "totp
@@ -336,10 +336,11 @@ your phone can connect.
   Claude's context included), with what was sent and what came back, in a file in the session's
   folder that's deleted with the session. **View calls** opens them, a session at a time, with
   filters for the tool, who made the call (AgentK or the session's agent) and failed calls.
-- **What Meko doesn't know:** the project home says how many questions Meko couldn't answer, and
-  links to a list of the searches that found nothing, or only memories scoring below the bar,
-  grouped by question (a learn session's searches while it seeds, which check before each save, aren't questions). **Teach Meko** saves your answer to the project's datapack; **Dismiss**
-  hides a question until a session asks it again. When AgentK saves what a session learned through
+- **Context Gaps:** Meko keeps the searches it couldn't answer, on each datapack's
+  **Context Gaps** tab in its web UI (Meko Cloud's datapacks' too, as their searches pass through
+  it). With the Meko on this computer, the project home says how many
+  are open for the project's datapack and opens that tab (a learn session's searches while it seeds,
+  which check before each save, are forgotten). When AgentK saves what a session learned through
   its mod in Claude, it also answers the open questions that session found out, its own and other
   sessions'.
 - **Meko usage**: the Meko lookups and saves each session made, an estimate of the tokens and

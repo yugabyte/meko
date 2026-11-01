@@ -16,6 +16,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Logo, Sidebar } from "./components/Sidebar";
 import { Button, Empty, ErrorNote, Loading } from "./components/ui";
 import { ConnectPage } from "./pages/ConnectPage";
+import { CloudContextGapsPage, ContextGapsPage } from "./pages/ContextGapsPage";
 import { ConversationsPage } from "./pages/ConversationsPage";
 import { ExtensionsPage } from "./pages/ExtensionsPage";
 import { KnowledgePage } from "./pages/KnowledgePage";
@@ -96,6 +97,10 @@ export default function App({ auth }: { auth: AuthStatus }) {
             <div className={PAGE}>
               <MekoCloudPage />
             </div>
+          ) : route.view === "cloud-gaps" && route.datapackId ? (
+            <div className={PAGE}>
+              <CloudContextGapsPage id={route.datapackId} />
+            </div>
           ) : list.loading && !list.data ? (
             <Loading />
           ) : list.error && !route.datapackId ? (
@@ -132,6 +137,7 @@ export default function App({ auth }: { auth: AuthStatus }) {
                 {route.tab === "overview" && <OverviewPage datapack={current.data} />}
                 {route.tab === "metrics" && <MetricsPage datapack={current.data} onChanged={onChanged} />}
                 {route.tab === "search" && <SearchPage datapack={current.data} />}
+                {route.tab === "gaps" && <ContextGapsPage datapack={current.data} />}
                 {route.tab === "memories" && <MemoriesPage datapack={current.data} routeScope={route.itemId} onChanged={onChanged} />}
                 {route.tab === "knowledge" && <KnowledgePage datapack={current.data} onChanged={onChanged} />}
                 {route.tab === "conversations" && (

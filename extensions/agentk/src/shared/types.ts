@@ -253,8 +253,6 @@ export interface MekoUsage {
   found: number;
   /** Lookups that returned nothing. */
   empty: number;
-  /** Searches that found something, but nothing relevant: only memories, all scoring below the bar (What Meko doesn't know). */
-  weak: number;
   /** Lookups and saves that failed. */
   errors: number;
   saves: number;
@@ -376,8 +374,6 @@ export interface ProjectUsage {
   total: TokenUsage;
   cost: UsageCost;
   meko: MekoUsage;
-  /** Open questions on What Meko doesn't know, for the line under the Meko stats. */
-  mekoGaps: MekoGapCounts;
   mekoFirstTurn: MekoFirstTurn;
   mekoLearning: MekoLearning;
   codeReviews: CodeReviewUsage;
@@ -505,10 +501,6 @@ export interface CallHomeMeko {
   agentk?: CallHomeAgentkMeko;
   /** The Meko plugin's transcript captures AgentK ran; left out when there were none. */
   capture?: { runs: number; failures: number; ms: number };
-  /** Searches that found nothing relevant (`MekoUsage.weak`); left out by installs from before it. */
-  weak?: number;
-  /** Questions on What Meko doesn't know a person dismissed or taught: each one's latest dismissal (unless restored) and latest teach, by when; asking again undoes neither. A learn step's marks are in `learn`. Left out when there were none. */
-  gaps?: { dismissed: number; taught: number };
 }
 
 /** Learn steps as the report counts them, by when they began. */
@@ -527,7 +519,7 @@ export interface CallHomeLearn {
   /** Steps that ended done with nothing saved or corrected. */
   empty: number;
   /**
-   * Questions on What Meko doesn't know the steps marked taught (a fact answering them was saved)
+   * Questions on Meko's Context Gaps the steps marked taught (a fact answering them was saved)
    * or dismissed (Meko already had the answer). Optional in the schema: reports from before lack
    * them. How many were offered isn't sent: the report has no room left for it in 64 KB.
    */
@@ -737,87 +729,18 @@ export interface MekoCallPage {
   more: boolean;
 }
 
-/** How a search Meko answered poorly went: it found nothing, or found nothing relevant (memories all below the bar). */
-export type MekoGapQuality = 'empty' | 'weak';
-/** A question on What Meko doesn't know: still open, dismissed, or taught (an answer saved to Meko). */
-export type MekoGapState = 'open' | 'dismissed' | 'taught';
-
 /**
- * A question Meko couldn't answer: every poor search in a project with the same query (by
- * `key`, the query lower-cased with its whitespace collapsed), Claude's or AgentK's at session start.
+ * The open questions on Meko's Context Gaps for a project's dedicated datapack (the searches Meko
+ * found nothing, or nothing relevant, for), by how their latest ask went: the project home's line,
+ * which links to the tab. Meko keeps them; AgentK only reads the counts.
  */
-export interface MekoGap {
-  key: string;
-  /** The query as last asked. */
-  query: string;
-  /** From the latest ask: how it went, who asked (`start`: AgentK's search at session start), and with which tool. */
-  quality: MekoGapQuality;
-  source: 'claude' | 'start';
-  tool: string;
-  /** The latest ask's items, its best memory `score` and best `raw_similarity_score`, which may be different memories' (null when not known). */
-  results: number | null;
-  topScore: number | null;
-  topRaw: number | null;
-  asks: number;
-  /** The sessions that asked, latest first. */
-  sessions: { id: string; name: string; archived: boolean }[];
-  firstAt: number;
-  lastAt: number;
-  state: MekoGapState;
-  /** When it was dismissed or taught (null when it's open). */
-  markedAt: number | null;
-  /**
-   * What was last taught for it, kept when it's asked again (open again) or dismissed after.
-   * `session`: the session whose learn step taught it (null: a person did, with Teach Meko).
-   */
-  taught: { text: string; datapack: string | null; at: number; session: MekoGapSession | null } | null;
-  /**
-   * While it's dismissed: who dismissed it (`session`: the session whose learn step found Meko
-   * already had the answer; null: a person did) and, for a learn step, the memory that already said it.
-   */
-  dismissal: { session: MekoGapSession | null; memory: string | null } | null;
-}
-
-/** The session whose learn step taught or dismissed a question. */
-export interface MekoGapSession {
-  id: string;
-  name: string;
-  archived: boolean;
-}
-
-/** GET /api/projects/:id/meko-gaps: What Meko doesn't know, latest asked first. */
-export interface MekoGapPage {
-  gaps: MekoGap[];
-  /** More match: ask again with `before` set to the last one's `lastAt` and `beforeKey` to its `key` (questions asked at once share a `lastAt`). */
-  more: boolean;
-  counts: Record<MekoGapState, number>;
-  /** The open ones by how their latest ask went. */
-  open: MekoGapCounts;
-  /** Searches recorded with their query (Claude's, and AgentK's at start), and since when (null: none yet). */
-  searches: number;
-  since: number | null;
-}
-
-/** Open questions on What Meko doesn't know, by how their latest ask went. */
-export interface MekoGapCounts {
+export interface MekoGaps {
+  datapackId: string;
+  /** The datapack is the linked Meko Cloud's: Meko's web UI shows its Context Gaps on a page of their own. */
+  cloud: boolean;
   empty: number;
   weak: number;
 }
-
-/** POST /api/projects/:id/meko-gaps/mark: dismiss a question (`dismissed`), or put a dismissed or taught one back (`null`). */
-export interface MekoGapMarkRequest {
-  key: string;
-  state: 'dismissed' | null;
-}
-
-/** POST /api/projects/:id/meko-gaps/teach: save what Meko should know about a question to the project's dedicated datapack. */
-export interface MekoTeachRequest {
-  key: string;
-  text: string;
-}
-
-/** The longest text Teach Meko saves, in characters. */
-export const MEKO_TEACH_MAX = 2000;
 
 export interface DatapackRef {
   id: string;
@@ -1687,7 +1610,7 @@ export interface WorkLink {
   label: string;
 }
 
-/** Where a work item came from: added by hand, or by a sync (a GitHub review request, a message on Slack's To-dos). */
+/** Where a work item came from: added by hand, or by a sync (a GitHub review request, a message on the user's Slack list). */
 export type WorkItemSource = 'manual' | 'github' | 'slack';
 
 /** One thing on the work queue. */
@@ -1931,6 +1854,8 @@ export interface ProjectHome {
   learnSessionOpen: boolean;
   activity: ActivityItem[];
   usage: ProjectUsage;
+  /** Open questions on Meko's Context Gaps, while AgentK uses the Meko on this computer and it answers (null otherwise). */
+  mekoGaps: MekoGaps | null;
 }
 
 export interface SearchResult {
@@ -1987,8 +1912,10 @@ export interface Settings {
   kiroTrustTools: boolean;
   /** `[work_queue] github`: the work queue's sync pulls in the PRs asking for your review (Settings › Work queue). */
   workQueueGithub: boolean;
-  /** `[work_queue] slack`: the work queue's sync pulls in your Slack To-dos. */
+  /** `[work_queue] slack`: the work queue's sync pulls in the messages on your Slack list. */
   workQueueSlack: boolean;
+  /** `[work_queue] slack_list`: that list's link (`https://<workspace>.slack.com/lists/<team>/<F…>`), or empty. */
+  workQueueSlackList: string;
   /** `[work_queue] sync_minutes`: how often it syncs by itself (0 to WORK_SYNC_MINUTES_MAX; 0: only when you press Sync). */
   workQueueSyncMinutes: number;
   /** `[code_review] strategy`: the local review before a PR opens, or `off`. */
@@ -2731,14 +2658,6 @@ export type TermServerMessage =
 //        409 if `replace` isn't the dedicated datapack any more)
 // DELETE /api/projects/:id/datapacks/:dpId     → Project
 // GET    /api/projects/:id/home                → ProjectHome
-// GET    /api/projects/:id/meko-gaps?state=open|dismissed|taught|all&before=&beforeKey= → MekoGapPage   (What Meko doesn't
-//        know: the project's poor Meko searches grouped by query, latest asked first (ties by key), 100 at a time, after the
-//        question `before` (its lastAt) and `beforeKey` (its key) name; default open)
-// POST   /api/projects/:id/meko-gaps/mark  MekoGapMarkRequest → 204   (dismiss, or restore: open again, what was taught kept;
-//        404 for a question the project doesn't have)
-// POST   /api/projects/:id/meko-gaps/teach MekoTeachRequest → MekoGap   (saves the text as a memory in the project's
-//        dedicated datapack and marks the question taught; 400 for empty or too long text, 404 for an unknown
-//        question, 409 when Meko is off or there's no dedicated datapack, 502 with Meko's error when the save fails)
 // GET    /api/projects/:id/meko-logs           → MekoLogInfo[]   (the project's sessions with a Meko call log, newest first)
 // GET    /api/projects/:id/pr-reviewers        → PrReviewers[]   (the open PRs of the project's running sessions)
 // GET    /api/projects/:id/review-prs?pr=&repoPath= → ReviewablePrs   (open PRs whose description names one of the
@@ -2769,7 +2688,7 @@ export type TermServerMessage =
 //        session for a closed item)
 // PUT    /api/work-items/order ReorderWorkItemsRequest → 204   (409 when `ids` isn't exactly the open items)
 // POST   /api/work-items/close CloseWorkItemsRequest → { closed }   (Dismiss all: closes the open items among `ids`; 400 for no list of ids)
-// POST   /api/work-items/sync                  → WorkSync   (GitHub review requests and Slack's To-dos into the queue; 409 while one runs)
+// POST   /api/work-items/sync                  → WorkSync   (GitHub review requests and your Slack list's messages into the queue; 409 while one runs)
 // GET    /api/work-items/by-link?link=         → WorkLinkMatch[]   (open and closed items holding the link's key, open first; 400 for a
 //        link parseWorkLink can't read)
 // GET    /api/usage                            → UsageOverview

@@ -283,10 +283,11 @@
             "ms": { "$ref": "#/$defs/count" }
           }
         },
-        "weak": { "$ref": "#/$defs/count" },
+        "weak": { "$ref": "#/$defs/count", "description": "Sent only by versions before Meko judged searches itself (its Context Gaps); kept so their reports still validate." },
         "gaps": {
           "type": "object",
           "additionalProperties": false,
+          "description": "Sent only by versions before Meko kept the questions it couldn't answer (its Context Gaps); kept so their reports still validate.",
           "required": ["dismissed", "taught"],
           "properties": {
             "dismissed": { "$ref": "#/$defs/count" },

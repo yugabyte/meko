@@ -525,3 +525,42 @@ export interface MekoCloudUpdate {
   api_url?: string;
   api_key?: string;
 }
+
+// Context Gaps: the datapack's searches Meko answered poorly, grouped by question.
+// empty: the search found nothing. weak: it found only memories, each scoring below 0.75.
+export type GapQuality = "empty" | "weak";
+export type GapState = "open" | "dismissed" | "taught";
+
+// One question: the query as last asked, how its latest ask went, and what was done about it. A null
+// conversation_id on taught or dismissal means a person did it; a set one, an agent in that
+// conversation.
+export interface Gap {
+  key: string;
+  query: string;
+  quality: GapQuality;
+  tool: string;
+  results: number | null;
+  top_score: number | null;
+  top_raw: number | null;
+  asks: number;
+  agents: string[];
+  conversations: string[];
+  asked_by_conversation: boolean;
+  first_at: string;
+  last_at: string;
+  state: GapState;
+  marked_at: string | null;
+  taught: { text: string; memory_id: string | null; at: string; conversation_id: string | null } | null;
+  dismissal: { conversation_id: string | null; memory_id: string | null; memory_text: string | null } | null;
+}
+
+// GET /datapacks/:id/questions: a page of questions, latest asked first, with the counts by state, the
+// open ones by quality, and the searches recorded since when.
+export interface GapPage {
+  questions: Gap[];
+  more: boolean;
+  counts: Record<GapState, number>;
+  open: Record<GapQuality, number>;
+  searches: number;
+  since: string | null;
+}

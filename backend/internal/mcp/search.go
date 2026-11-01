@@ -78,5 +78,10 @@ func contextSearch(ctx context.Context, c *call, a args) (any, error) {
 	c.rec.TokensSent, c.rec.TokensSaved = reply.TokenSavings.Sent(), reply.TokenSavings.Saved()
 	c.rec.TokensIfRaw = reply.TokenSavings.Baseline
 	c.rec.Steps = res.Steps
+	strong := len(res.KnowledgeBase)
+	if res.Conversation != nil {
+		strong += len(res.Conversation.Hits)
+	}
+	c.search = &memory.AskedSearch{Query: query, Answer: memory.Answer{Memories: res.Memory, Strong: strong}}
 	return reply, nil
 }

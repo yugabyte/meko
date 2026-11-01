@@ -57,8 +57,7 @@ Claude.
 **Meko calls.** The same transcript pass finds Claude's calls to the Meko MCP server
 (`mcp__meko__<tool>`, or a plugin's `mcp__plugin_…_meko__<tool>`) and their results, in the main
 transcript and subagents: `meko_calls(session_id, tool_use_id, agent, tool, kind, at, outcome,
-results, input_chars, result_chars, model, context_tokens, query, query_key, top_score, top_raw, quality)`
-(the last five for [What Meko doesn't know](recall-and-learn.md#what-meko-doesnt-know)). A **lookup** searches or fetches
+results, input_chars, result_chars, model, context_tokens)`. A **lookup** searches or fetches
 (`memory_search`, `knowledgebase_search`, `context_search`, `memory_get_all`, `memory_get_by_id`,
 `conversation_get`, `artifact_get`); a **save** writes (`memory_add`, `memory_update`,
 `memory_promote`, `artifact_put`, `conversation_add_message`); anything else (datapacks,
@@ -77,7 +76,7 @@ sessions got their calls and 1-hour writes.
 
 Kiro's and OpenCode's calls go into the same table, judged by the same code (`mekoCallOf`,
 `mekoResultOf` in `mekousage.ts`, written by `recordMekoCalls` in `usage.ts`), so the counts, the
-usage report and What Meko doesn't know treat every agent's calls alike:
+usage report treat every agent's calls alike:
 
 - **Kiro** (`ingestKiroMekoCalls`, from the adapter's `readUsage`): its session log
   (`~/.kiro/sessions/cli/<conversation>.jsonl`), read from the offset kept in `usage_files` under its
@@ -267,9 +266,10 @@ Kiro isn't available.
   with their tokens under it (tokens alone when no model had a price). Both are a dash before any
   step ran. It shows once there's any Meko call, seed or learn step, or before that while Meko is on
   (and, on the project home, the project has a datapack). On the project home only, a line under
-  the tiles says how many questions Meko couldn't answer, with the split (`gapsLine` in
-  `src/web/util.ts`), and links to [What Meko doesn't know](recall-and-learn.md#what-meko-doesnt-know);
-  it's left out while none are open.
+  the tiles says how many questions on Meko's Context Gaps are open for the dedicated datapack,
+  with the split (`gapsLine` in `src/web/util.ts`), and opens that tab in Meko's web UI
+  ([Meko's Context Gaps](recall-and-learn.md#mekos-context-gaps)); it's left out while none are
+  open, and while AgentK doesn't use the Meko on this computer.
 - **Code reviews** ([the local code review](code-review.md)) show on both pages once one has run.
   The 14-day chart stacks each day's tokens that review sessions (`kind = 'code-review'`) spent at
   the bottom of its bar (`DailyUsage.reviewTokens`, its own color, `--chart-review`), with a legend

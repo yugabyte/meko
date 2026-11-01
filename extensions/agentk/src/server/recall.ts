@@ -3,7 +3,6 @@ import { run, type Db } from './db.js';
 import type { IssueText } from './github.js';
 import { isDesignLine } from './design.js';
 import { MIN_MEMORY_SCORE } from './mekosavings.js';
-import { queryKey, weakAnswer, type MekoQuality } from './mekousage.js';
 import { mekoDatapackLineId } from './prompts.js';
 
 /**
@@ -136,25 +135,6 @@ export interface RecallSource {
 export interface RecallRun {
   text: string | null;
   results: number;
-  /** What was searched for. */
-  query: string;
-  /** How poor what Meko returned was, before picking (`startQuality`), and its best memory score. */
-  quality?: MekoQuality | null;
-  topScore?: number | null;
-}
-
-/**
- * How poor what a search at start got back from Meko was, by the rules for Claude's searches
- * (`searchQuality` in mekousage.ts), before `pickResults` dropped anything: `empty` when Meko
- * returned nothing, `weak` when it returned only scored memories all below the bar. Conversation
- * hits, which picking leaves out, still count as a real answer.
- */
-export function startQuality(results: SearchResult[]): { quality: MekoQuality | null; topScore: number | null } {
-  const memories = results.filter((r) => r.source === 'memory');
-  const scores = memories.map((m) => m.score);
-  const topScore = scores.reduce<number | null>((m, s) => (s !== null && (m === null || s > m) ? s : m), null);
-  if (!results.length) return { quality: 'empty', topScore };
-  return { quality: weakAnswer(scores, results.length - memories.length) ? 'weak' : null, topScore };
 }
 
 /** Searches the datapacks for the task. An issue that can't be read is left out of the query. */
@@ -165,7 +145,7 @@ export async function runRecall(name: string, task: string, src: RecallSource): 
   const query = recallQuery(name, task, issues);
   const found = await src.search(query);
   const items = pickResults(found);
-  return { text: formatRecall(items), results: items.length, query, ...startQuality(found) };
+  return { text: formatRecall(items), results: items.length };
 }
 
 export interface PreloadRecord {
@@ -174,24 +154,14 @@ export interface PreloadRecord {
   chars: number;
   /** From the start of the search to its end. */
   ms: number;
-  /** What was searched for, and how poor Meko's answer was; null or left out when not known (the search failed). */
-  query?: string | null;
-  quality?: MekoQuality | null;
-  topScore?: number | null;
 }
 
-/**
- * Keeps the outcome of a session's search at start, for the first-turn Meko stats, with its query
- * and how poor Meko's answer was for What Meko doesn't know.
- */
+/** Keeps the outcome of a session's search at start, for the first-turn Meko stats. */
 export function recordPreload(db: Db, sessionId: string, r: PreloadRecord, at = Date.now()): void {
-  const query = r.query == null ? null : r.query.slice(0, QUERY_MAX);
-  run(db, `INSERT INTO meko_preloads(session_id, at, outcome, results, chars, ms, query, query_key, quality, top_score)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  run(db, `INSERT INTO meko_preloads(session_id, at, outcome, results, chars, ms) VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT(session_id) DO UPDATE SET at = excluded.at, outcome = excluded.outcome, results = excluded.results,
-             chars = excluded.chars, ms = excluded.ms, query = excluded.query, query_key = excluded.query_key,
-             quality = excluded.quality, top_score = excluded.top_score`,
-    sessionId, at, r.outcome, r.results, r.chars, r.ms, query, query === null ? null : queryKey(query), r.quality ?? null, r.topScore ?? null);
+             chars = excluded.chars, ms = excluded.ms`,
+    sessionId, at, r.outcome, r.results, r.chars, r.ms);
 }
 
 interface Entry {
@@ -222,7 +192,7 @@ export class RecallStore {
     const rec = (outcome: RecallOutcome, r: RecallRun | null) => {
       if (this.entries.get(sessionId) === e) {
         this.save(sessionId, {
-          outcome, results: r?.results ?? 0, chars: r?.text?.length ?? 0, ms: e.ms, query: r?.query ?? null, quality: r?.quality ?? null, topScore: r?.topScore ?? null,
+          outcome, results: r?.results ?? 0, chars: r?.text?.length ?? 0, ms: e.ms,
         });
       }
     };
@@ -273,7 +243,7 @@ export class RecallStore {
       return null;
     }
     const text = e.run?.text ?? null;
-    if (text) this.save(sessionId, { outcome: 'found', results: e.run!.results, chars: text.length, ms: e.ms, query: e.run!.query, quality: e.run!.quality, topScore: e.run!.topScore });
+    if (text) this.save(sessionId, { outcome: 'found', results: e.run!.results, chars: text.length, ms: e.ms });
     this.forget(sessionId, e);
     return text;
   }

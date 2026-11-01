@@ -323,3 +323,107 @@ export async function waitFor<T>(fn: () => T | Promise<T>, pred: (v: T) => boole
   }
   throw new Error(`timed out waiting for ${what}; last value: ${JSON.stringify(last)}`);
 }
+
+/** A question on the fake Meko's Context Gaps: `askedBy` are the conversations that asked it. */
+export interface FakeQuestion {
+  key: string;
+  query: string;
+  quality?: 'empty' | 'weak';
+  askedBy?: string[];
+  state?: 'open' | 'dismissed' | 'taught';
+}
+
+/** A request the fake Meko's Context Gaps routes got. */
+export interface FakeQuestionsRequest {
+  method: string;
+  datapack: string;
+  /** What follows `/questions` in the path ('' for the list). */
+  path: string;
+  query: Record<string, string>;
+  body: Record<string, unknown> | null;
+  headers: Record<string, string | string[] | undefined>;
+}
+
+/**
+ * A stand-in for the Meko on this computer's Context Gaps routes (`/api/v1/datapacks/:id/questions`,
+ * its mark and its asks), on a port of its own, with the questions of each datapack it has. A datapack
+ * it doesn't have, or every request while `old` is set (a Meko too old to keep questions), is a 404.
+ */
+export async function fakeMekoQuestions() {
+  const { createServer } = await import('node:http');
+  const datapacks = new Map<string, FakeQuestion[]>();
+  const requests: FakeQuestionsRequest[] = [];
+  const state = { old: false };
+  /** The datapacks the fake keeps as the linked Meko Cloud's: its list says `location: "cloud"`. */
+  const cloud = new Set<string>();
+  const server = createServer((req, res) => {
+    let raw = '';
+    req.on('data', (c) => (raw += c));
+    req.on('end', () => {
+      const u = new URL(req.url ?? '/', 'http://x');
+      const m = /^\/api\/v1\/datapacks\/([^/]+)\/questions(\/[a-z]+)?$/.exec(u.pathname);
+      const send = (status: number, data?: unknown) => {
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end(data === undefined ? undefined : JSON.stringify(status < 300 ? { data } : { error: { code: 'NOT_FOUND', message: 'not found' } }));
+      };
+      if (!m) return send(404, null);
+      const r: FakeQuestionsRequest = {
+        method: req.method ?? 'GET', datapack: decodeURIComponent(m[1]), path: m[2] ?? '', query: Object.fromEntries(u.searchParams),
+        body: raw ? JSON.parse(raw) : null, headers: req.headers,
+      };
+      requests.push(r);
+      const qs = datapacks.get(r.datapack);
+      if (state.old || !qs) return send(404, null);
+      if (r.method === 'GET' && r.path === '') {
+        const want = r.query.state || 'open';
+        const open = qs.filter((q) => (q.state ?? 'open') === 'open');
+        return send(200, {
+          questions: qs.filter((q) => want === 'all' || (q.state ?? 'open') === want).map((q, i) => ({
+            key: q.key, query: q.query, quality: q.quality ?? 'empty', state: q.state ?? 'open', last_at: new Date(10_000 - i).toISOString(),
+            asked_by_conversation: !!r.query.conversation_id && (q.askedBy ?? []).includes(r.query.conversation_id),
+          })),
+          more: false,
+          open: { empty: open.filter((q) => (q.quality ?? 'empty') === 'empty').length, weak: open.filter((q) => q.quality === 'weak').length },
+          location: cloud.has(r.datapack) ? 'cloud' : 'local',
+        });
+      }
+      if (r.method === 'POST' && r.path === '/mark') {
+        const q = qs.find((x) => x.key === r.body?.key);
+        if (!q) return send(404, null);
+        q.state = (r.body?.state as FakeQuestion['state'] | null) ?? 'open';
+        res.writeHead(204).end();
+        return;
+      }
+      if (r.method === 'DELETE' && r.path === '/asks') {
+        const conv = r.query.conversation_id;
+        const before = qs.length;
+        datapacks.set(r.datapack, qs.filter((q) => !(q.askedBy?.length === 1 && q.askedBy[0] === conv)));
+        return send(200, { deleted: before - datapacks.get(r.datapack)!.length });
+      }
+      send(404, null);
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const { port } = server.address() as { port: number };
+  return {
+    url: `http://127.0.0.1:${port}`,
+    datapacks,
+    requests,
+    state,
+    cloud,
+    close: () => new Promise<void>((r) => {
+      server.closeAllConnections();
+      server.close(() => r());
+    }),
+  };
+}
+
+/** Makes `env` use the Meko on this computer, at `url` (the fake's), as AgentK does once it has no key of its own. */
+export async function useLocalMeko(env: TestEnv, url: string): Promise<void> {
+  env.core.updateConfig((c) => {
+    c.meko.apiKey = '';
+  });
+  env.local.state = 'running';
+  env.local.meko = { url: `${url}/mcp`, token: 'local-token' };
+  await env.core.refreshMeko();
+}

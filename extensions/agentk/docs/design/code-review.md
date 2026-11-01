@@ -182,7 +182,16 @@ waits for fixes whose turn was interrupted moves it on to the next round.
 Review & PR) on a done review without it sends the PR prompt with the findings and the line, and
 starts no new review. It's set when the prompt is sent, and cleared again (`markUnsent`) when
 Claude exits before taking it: the task goes back to Code, and the prompt goes again once Claude
-is back ([AgentK's mod](mod.md)).
+is back ([AgentK's mod](mod.md)). A review that finishes while the task's turn runs (a prompt of
+the user's went meanwhile) queues Open PR (Run to merge's, when the review was, and only while Run to merge is still on), so
+its PR prompt goes when that turn ends ([Queued gates](lifecycle.md#queued-gates)). The queued Open PR's step
+sends it from inside the session's serial queue (`Lifecycle.serial`), as a move to Review & PR's
+does: a step's own call to `serial` for its session runs right away, as part of the step, since
+queued it would wait for the step that waits for it. `serial` can't tell that call from work the
+step started without waiting for it, so such work that reaches `serial` while the step still runs
+runs alongside it too, and a step mustn't leave any running; once the step is done, it queues as
+usual. A Cancel of that queued Open PR, or Run to merge stopping, while the PR prompt waits on
+GitHub and Meko still stops it, as for any queued Open PR.
 
 **Recovery.** `code_reviews` and `code_review_steps` keep a review's state and every step's
 report. After a restart, `CodeReviews.recover()` asks an idle review session again for the steps

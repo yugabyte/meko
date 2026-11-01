@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -147,8 +148,26 @@ func (o Options) handler(t *tool, cred string) sdk.ToolHandler {
 		res := o.result(t, c, reply, err)
 		c.rec.Ms = time.Since(start).Milliseconds()
 		o.Service.RecordCall(ctx, c.rec)
+		if s := c.search; s != nil && c.rec.OK && c.rec.AgentID != memory.WebUIAgent && !fromAgentK(req) {
+			s.DatapackID, s.Tool, s.AgentID, s.ConversationID, s.At = c.rec.DatapackID, t.name, c.rec.AgentID,
+				c.rec.ConversationID, start
+			o.Service.RecordSearch(ctx, *s)
+		}
 		return res, nil
 	}
+}
+
+// ClientHeader names the client a request comes from. AgentK sends ClientAgentK on its own calls (its
+// search at a session's start, its learn step's lookups), which aren't questions for Context Gaps: a
+// header, not a tool argument, since Meko Cloud refuses arguments it doesn't know.
+const (
+	ClientHeader = "X-Meko-Client"
+	ClientAgentK = "agentk"
+)
+
+// fromAgentK says whether a call is AgentK's own.
+func fromAgentK(req *sdk.CallToolRequest) bool {
+	return req.Extra != nil && strings.EqualFold(strings.TrimSpace(req.Extra.Header.Get(ClientHeader)), ClientAgentK)
 }
 
 // result is the MCP result for a tool's reply or error, and marks the call log row.

@@ -130,6 +130,7 @@ func knowledgeSearch(ctx context.Context, c *call, a args) (any, error) {
 			c.rec.ScoreLow++
 		}
 	}
+	c.search = &memory.AskedSearch{Query: query, Answer: memory.Answer{Strong: len(res), OnlyEmpty: true}}
 	return wire.KnowledgeSearch{Results: res, Count: len(res)}, nil
 }
 

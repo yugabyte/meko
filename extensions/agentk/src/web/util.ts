@@ -4,7 +4,7 @@ import { INSTRUCTIONS_MAX, LEARN_WARN_FILES, LEARN_WARN_PRS, STAGE_LABELS, type 
 import { mekoDatapackPath } from '../shared/mekourls';
 import { countsText, isStrategySetting, reviewHolds, reviewRunning, type CodeReviewDetail, type CodeReviewFinding, type CodeReviewSummary, type ReviewOverrides } from '../shared/codereview';
 import { stepOf } from '../shared/stages';
-import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGapCounts, MekoGapQuality, MekoLearning, MekoStatus, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, Stage, TokenUsage } from '../shared/types';
+import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGaps, MekoLearning, MekoStatus, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, Stage, TokenUsage } from '../shared/types';
 
 /**
  * What a status dot shows: the session's status, `learning` while AgentK saves what it learned to
@@ -550,19 +550,11 @@ export function learningText(l: MekoLearning): { learned: LearningTile; cost: Le
   };
 }
 
-/** How a question's latest ask went, as What Meko doesn't know names it. */
-export const GAP_QUALITY_LABEL: Record<MekoGapQuality, string> = { empty: 'Found nothing', weak: 'Nothing relevant' };
-
-/** "Asked once", "Asked 3 times". */
-export function askedText(asks: number): string {
-  return asks === 1 ? 'Asked once' : `Asked ${asks.toLocaleString()} times`;
-}
-
 /**
  * The line under the Meko stats on the project home: how many questions Meko couldn't answer, and
  * the split (a part with none is left out); null when there are none.
  */
-export function gapsLine(c: MekoGapCounts): { count: string; split: string } | null {
+export function gapsLine(c: Pick<MekoGaps, 'empty' | 'weak'>): { count: string; split: string } | null {
   const total = c.empty + c.weak;
   if (total === 0) return null;
   const parts = [c.empty > 0 && `${c.empty.toLocaleString()} found nothing`, c.weak > 0 && `${c.weak.toLocaleString()} nothing relevant`].filter(Boolean);

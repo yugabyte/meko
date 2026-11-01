@@ -700,6 +700,23 @@ const MIGRATIONS: string[] = [
   // the PR description, since that was added; its fixes or the PR prompt before) and cleared once that
   // has gone; NULL for none.
   `ALTER TABLE code_reviews ADD COLUMN lead TEXT;`,
+  // 45: What Meko doesn't know moved into Meko, which judges every search itself and keeps the
+  // questions per datapack (its Context Gaps; mekoquestions.ts). What 34 and 35 added for AgentK's own
+  // list goes, with what it held: the questions' marks, and each search's query and how poor its
+  // answer was. meko_learns keeps its counts of the questions a learn step marked.
+  `
+  DROP TABLE meko_gap_marks;
+  DROP INDEX meko_calls_quality;
+  ALTER TABLE meko_calls DROP COLUMN query;
+  ALTER TABLE meko_calls DROP COLUMN query_key;
+  ALTER TABLE meko_calls DROP COLUMN top_score;
+  ALTER TABLE meko_calls DROP COLUMN top_raw;
+  ALTER TABLE meko_calls DROP COLUMN quality;
+  ALTER TABLE meko_preloads DROP COLUMN query;
+  ALTER TABLE meko_preloads DROP COLUMN query_key;
+  ALTER TABLE meko_preloads DROP COLUMN quality;
+  ALTER TABLE meko_preloads DROP COLUMN top_score;
+  `,
 ];
 
 export function openDb(path: string): Db {

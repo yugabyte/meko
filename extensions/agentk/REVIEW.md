@@ -175,7 +175,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       `--permission-mode default`, `--setting-sources project` in its empty folder with only the
       sign-in part of the user's settings (`signInSettings()`: no allow rules or default mode),
       hooks off, only `[work_queue] slack_tools` allowed and the Slack connector's writes denied; its
-      prompt calls the messages data. What it returns only adds items to the queue.
+      prompt calls the list's rows data. What it returns only adds items to the queue.
 - [ ] AgentK's session tools (`actions.ts`, `mcp.ts`) act only through `runActions()`, the same core
       calls the UI's routes make, after `checkActions()`: the hook socket's `/tools` names the caller
       by its token, refuses a PR head `repoConfigTrusted()` doesn't trust (not checked yet included)
@@ -336,16 +336,15 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       per session. Its model calls' usage is
       recorded (`usage_messages`, agent `agentk:learn`), and the usage report carries counts and
       tokens only, never a fact's text.
-- [ ] What Meko doesn't know (`mekogaps.ts`) only reads what the usage readers (Claude's
-      transcript reader, Kiro's session log reader `ingestKiroMekoCalls`, OpenCode's plugin lines
-      in `ingestOpenCodeUsage`) and recall at start recorded: no Meko call lists or judges it. Teach Meko is the one write: what the user
-      typed, into the project's dedicated datapack only, as AgentK in the project's conversation,
-      and a question is marked taught only once Meko took it. A learn step marks only questions
-      still open when it writes, offered from Claude's own searches (never one asked only by
-      AgentK's search at start), the session's own first. Queries stay in the database: the
-      usage report gets counts only. A reply too large for Claude is read for a search's quality
-      only from the session's `tool-results` folder (`savedreply.ts`), and never changes what the
-      usage counts (the notice is what Claude read).
+- [ ] Meko owns the searches it couldn't answer (its Context Gaps): AgentK never judges a search
+      or keeps a query again. It reaches them only through `MekoQuestions` (`mekoquestions.ts`),
+      on the Meko on this computer with the client token, only while AgentK uses that Meko (the
+      local token goes nowhere else), and a 404, a failure or no Meko is no list: never a reason a
+      project home, a learn step, a move or a close fails or waits long. A learn step marks only
+      questions still open in Meko when it writes, in the session's own conversation, for the
+      datapack it wrote to; a learn session's seeding asks are forgotten once, when it leaves
+      Explore. AgentK's own MCP client keeps sending `X-Meko-Client: agentk`, so its own searches
+      (at start, the learn step's lookups) never become questions.
 - [ ] Nothing changes Claude Code's Meko setup (its settings, `~/.claude.json`, the plugin) unless
       the user asked: the installer's question (or `--install-deps`), **Connect to Meko** or **Set
       up Claude Code with this Meko**. A Claude Code token is only ever sent to AgentK's server, and
