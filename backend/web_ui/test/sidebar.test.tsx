@@ -188,4 +188,5 @@ test("Settings is a gear at the foot of the sidebar, not a row in the top links"
   expect(gear.getAttribute("href")).toBe("/settings");
   expect(gear.closest(".border-t")).not.toBeNull();
   expect(gear.textContent).toBe("");
+  expect(document.querySelectorAll('a[href="/settings"]')).toHaveLength(1);
 });
