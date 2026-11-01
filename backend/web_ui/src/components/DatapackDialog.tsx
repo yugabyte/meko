@@ -15,11 +15,12 @@ export function DatapackDialog({
   onSaved,
 }: {
   datapack?: Datapack;
-  // Create it in the linked Meko Cloud.
+  // Meko Cloud is linked, so Meko makes it there: the dialog says so.
   inCloud?: boolean;
   onClose: () => void;
-  // The new datapack's id when one was created, else the edited one's.
-  onSaved: (id: string) => void;
+  // The new datapack's id when one was created, with the create's reply (whose web_url says where it
+  // opens), else the edited one's.
+  onSaved: (id: string, created?: Datapack) => void;
 }) {
   const [name, setName] = useState(datapack?.datapack_name ?? "");
   const [description, setDescription] = useState(datapack?.description ?? "");
@@ -34,7 +35,8 @@ export function DatapackDialog({
         await api.updateDatapack(datapack.datapack_id, { name: name.trim(), description: description.trim() });
         onSaved(datapack.datapack_id);
       } else {
-        onSaved((await api.createDatapack(name.trim(), description.trim(), inCloud)).datapack_id);
+        const created = await api.createDatapack(name.trim(), description.trim());
+        onSaved(created.datapack_id, created);
       }
     } catch (e) {
       setError(e as Error);

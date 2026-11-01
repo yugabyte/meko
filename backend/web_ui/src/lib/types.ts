@@ -7,6 +7,13 @@ export interface Datapack {
   description: string;
   created_at: string;
   updated_at: string;
+  // GET /datapacks only. owner for the user's own; any other (maintainer, contributor, viewer) was
+  // shared with them in Meko Cloud.
+  grant?: string;
+  // GET /datapacks only: where the row opens. This UI's path (/datapacks/<id>) for a datapack Meko
+  // serves here, Meko Cloud's web app for one of its own, null when that web app isn't known.
+  // Absent from a server older than the UI, whose rows are all its own.
+  web_url?: string | null;
   memory_count?: number;
   learnings_count?: number;
   collective_memory_count?: number;
@@ -509,26 +516,6 @@ export interface Agents {
 export interface AgentChange {
   agent: Agent;
   notes: string[];
-}
-
-// GET /datapacks?location=cloud: the linked Meko Cloud's datapacks, newest first.
-export interface CloudDatapack {
-  datapack_id: string;
-  datapack_name: string;
-  description: string;
-  // owner for the account's own; any other (maintainer, contributor, viewer) was shared with it.
-  grant: string;
-  created_at: string;
-  updated_at: string;
-  // Opens it in the link's web app; null when that can't be known.
-  web_url: string | null;
-  location: "cloud";
-}
-
-// The sidebar's Cloud rows: none while unlinked.
-export interface CloudDatapacks {
-  linked: boolean;
-  datapacks: CloudDatapack[];
 }
 
 // PUT /settings/meko-cloud: a field left out is unchanged; an empty api_key keeps the saved one.

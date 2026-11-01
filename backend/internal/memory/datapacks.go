@@ -7,6 +7,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
+
 	"github.com/yugabyte/meko/backend/internal/store"
 )
 
@@ -39,6 +41,51 @@ func (s *Service) ResolveDatapack(ctx context.Context, id string) (string, error
 		return s.DefaultDatapack(ctx)
 	}
 	return id, s.needDatapack(ctx, id)
+}
+
+// While Meko Cloud is linked, Meko serves a datapack here when the datapack is one ServesHere says
+// it serves, and sends any other to Meko Cloud. servedWhileLinked is that one rule, and every place
+// that routes or lists by it asks ServesHere or ServedDatapacks: MCP's per-call routing and its merged
+// listings (internal/mcp's servedHere, localMatches), and REST's :id routes and GET /datapacks
+// (internal/rest's inCloud, listDatapacks). Today it's every datapack the store has, so an id on
+// both sides is this Meko's. The move to Meko Cloud, when it's built, keeps ids, so it changes this
+// rule for the datapacks it moved, and nothing else.
+func servedWhileLinked(store.Datapack) bool { return true }
+
+// ServesHere says whether this Meko serves the datapack id names while Meko Cloud is linked. id is
+// taken in any form a UUID has (as REST takes it); one that isn't a UUID is looked up as it is.
+func (s *Service) ServesHere(ctx context.Context, id string) (bool, error) {
+	d, err := s.Datapack(ctx, CanonicalID(id))
+	if errors.Is(err, ErrNoDatapack) {
+		return false, nil
+	}
+	return err == nil && servedWhileLinked(d), err
+}
+
+// ServedDatapacks is the datapacks this Meko serves while Meko Cloud is linked, oldest first.
+func (s *Service) ServedDatapacks(ctx context.Context) ([]store.Datapack, error) {
+	ds, err := s.Datapacks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := ds[:0]
+	for _, d := range ds {
+		if servedWhileLinked(d) {
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
+// CanonicalID is a datapack id as the store keeps it: a UUID lowercase with hyphens, in whatever
+// form it came (as REST's routes and Meko Cloud's uuid column take it), trimmed. Anything else is
+// only trimmed.
+func CanonicalID(id string) string {
+	id = strings.TrimSpace(id)
+	if u, err := uuid.Parse(id); err == nil {
+		return u.String()
+	}
+	return id
 }
 
 // Datapacks is every datapack, oldest first.

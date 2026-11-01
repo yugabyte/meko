@@ -10,7 +10,6 @@ import type {
   Artifact,
   ArtifactList,
   AuthStatus,
-  CloudDatapack,
   ContextSearch,
   ConversationDetail,
   Conversation,
@@ -103,12 +102,14 @@ export const api = {
     return (await res.json()).data;
   },
 
-  datapacks: () => request<Datapack[]>("GET", "/datapacks?location=local"),
+  // Every datapack, by name: each row's web_url says where it opens (this UI's path, or Meko Cloud's
+  // web app while it's linked).
+  datapacks: () => request<Datapack[]>("GET", "/datapacks"),
   datapack: (id: string) => request<Datapack>("GET", `/datapacks/${id}`),
-  // In the linked Meko Cloud while it's linked (Meko makes none on this computer then), else on this
-  // computer. The location is always named: the route's default differs for a tab from before.
-  createDatapack: (name: string, description: string, inCloud: boolean) =>
-    request<Datapack>("POST", "/datapacks", { name, description, location: inCloud ? "cloud" : "local" }),
+  // Meko makes it in the linked Meko Cloud while it's linked, else on this computer; the reply's
+  // web_url says where it opens.
+  createDatapack: (name: string, description: string) =>
+    request<Datapack>("POST", "/datapacks", { name, description }),
   updateDatapack: (id: string, fields: { name?: string; description?: string }) =>
     request<unknown>("PATCH", `/datapacks/${id}`, fields),
   deleteDatapack: (id: string) => request<unknown>("DELETE", `/datapacks/${id}`),
@@ -149,7 +150,6 @@ export const api = {
   mekoCloud: () => request<MekoCloud>("GET", "/settings/meko-cloud"),
   linkMekoCloud: (u: MekoCloudUpdate) => request<MekoCloud>("PUT", "/settings/meko-cloud", u),
   unlinkMekoCloud: () => request<MekoCloud>("DELETE", "/settings/meko-cloud"),
-  cloudDatapacks: () => request<CloudDatapack[]>("GET", "/datapacks?location=cloud"),
 
   // The agents installed on this computer and whether each reaches Meko (or the linked Meko Cloud).
   agents: () => request<Agents>("GET", "/agents"),
@@ -192,10 +192,10 @@ export const api = {
     request<unknown>("DELETE", `/promoted-memories/${memoryId}?datapack_id=${id}`),
   promoted: (id: string) =>
     request<{ promoted_memories: PromotedMemory[]; total: number }>("GET", `/promoted-memories?datapack_id=${id}`),
-  // memory_add and context_search on this computer's datapack, through Meko's own routes rather than
-  // /mcp, which while Meko Cloud is linked sends every call there.
+  // memory_add and context_search on the datapack, through Meko's own routes rather than /mcp, so the
+  // UI shows what an agent would get.
   addMemory: (id: string, text: string) =>
-    request<unknown>("POST", `/datapacks/${id}/memories?location=local`, {
+    request<unknown>("POST", `/datapacks/${id}/memories`, {
       agent_id: UI_AGENT_ID,
       conversation_id: UI_CONVERSATION_ID,
       text,
@@ -257,7 +257,7 @@ export const api = {
 
   // source narrows it to one of memory, knowledge_base or conversation; auto searches all three.
   search: (id: string, query: string, source: SearchSource = "auto") =>
-    request<ContextSearch>("POST", `/datapacks/${id}/search?location=local`, {
+    request<ContextSearch>("POST", `/datapacks/${id}/search`, {
       query,
       force_source: source,
       agent_id: UI_AGENT_ID,

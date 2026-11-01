@@ -33,7 +33,8 @@ func (a *api) registerQuestions(g *echo.Group) {
 // this Meko doesn't have, taken as Meko Cloud's (cloud). Any credential gets a Meko Cloud datapack's
 // questions, unlike the routes that act on Meko Cloud: they're what this Meko recorded of the
 // searches it passed on, and reading them never calls Meko Cloud or uses its key. ?location= picks
-// the side as on the other routes. ok is false when the reply has been written.
+// the side: the one route left that takes it, since AgentK links a Meko Cloud datapack's questions
+// to their own page. ok is false when the reply has been written.
 func (a *api) questionsDatapack(c echo.Context) (id string, cloud, ok bool, err error) {
 	switch c.QueryParam("location") {
 	case "local":

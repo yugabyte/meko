@@ -45,16 +45,3 @@ func TestToolReply(t *testing.T) {
 		}
 	}
 }
-
-// A browser that names no location is a web UI tab from before these routes: it gets this Meko's
-// datapacks. Tokens get the routes' defaults.
-func TestDefaultLocation(t *testing.T) {
-	for cred, want := range map[string]string{"remote": "local", "local": "local", "admin": "all", "client": "all",
-		"none": "all"} {
-		a := &api{Options{Credential: func(echo.Context) string { return cred }}}
-		ec := echo.New().NewContext(httptest.NewRequest(http.MethodGet, "/", nil), httptest.NewRecorder())
-		if got := a.defaultLocation(ec, "all"); got != want {
-			t.Errorf("%s: %q, want %q", cred, got, want)
-		}
-	}
-}

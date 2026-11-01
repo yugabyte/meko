@@ -40,9 +40,9 @@ async function copyText(text: string): Promise<boolean> {
 // The datapack the page is for: its id and name are all it needs.
 type GapsDatapack = Pick<Datapack, "datapack_id" | "datapack_name">;
 
-// A Meko Cloud datapack's Context Gaps, named from Meko Cloud's listing (its id when that fails).
+// A Meko Cloud datapack's Context Gaps, named from the datapacks' listing (its id when that fails).
 export function CloudContextGapsPage({ id }: { id: string }) {
-  const { data } = useLoad(() => api.cloudDatapacks().catch(() => []), []);
+  const { data } = useLoad(() => api.datapacks().catch((): Datapack[] => []), []);
   const name = data?.find((d) => d.datapack_id === id)?.datapack_name ?? id;
   return (
     <div className="space-y-4">

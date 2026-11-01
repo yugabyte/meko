@@ -1363,7 +1363,7 @@ func TestExport(t *testing.T) {
 	code, out, errs = runSh("export", "--data-dir", dir, "-o", filepath.Join(here, "first.zip"), "default")
 	want(t, "export with -o before the name", code, 0, out+errs, "first.zip")
 	code, _, errs = runSh("export", "nope", "--data-dir", dir)
-	want(t, "export an unknown name", code, 1, errs, `no datapack is named "nope"`)
+	want(t, "export an unknown name", code, 1, errs, `"nope" isn't one of this computer's datapacks`)
 }
 
 // An export is complete only if it opens as a zip holding its datapack.json.

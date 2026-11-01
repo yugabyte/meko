@@ -122,6 +122,7 @@ func Register(g *echo.Group, o Options) {
 	g.GET("/datapacks/:id/token-savings", a.tokenSavings)
 	g.GET("/datapacks/:id/usage", a.callUsage)
 	g.GET("/datapacks/:id/export", a.exportDatapack)
+	g.GET("/datapacks/export", a.exportDatapack) // ?name=: one of this Meko's, by name
 	g.GET("/datapacks/:id/memory-map", a.memoryMap)
 	g.GET("/datapacks/:id/search-map", a.searchMap)
 	g.POST("/datapacks/:id/search", a.search)

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-// The New datapack dialog: on this computer while unlinked, in Meko Cloud while it's linked, against
-// a faked /api/v1.
+// The New datapack dialog against a faked /api/v1: Meko decides where the datapack is made, and the
+// dialog says it's Meko Cloud while that's linked.
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -48,15 +48,15 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-test("unlinked, a new datapack is made on this computer", async () => {
+test("unlinked, the create names no location, and the dialog doesn't mention Meko Cloud", async () => {
   expect(await create(false)).toEqual(["11111111-1111-4111-8111-111111111111"]);
-  expect(bodies).toEqual([{ name: "research", description: "", location: "local" }]);
+  expect(bodies).toEqual([{ name: "research", description: "" }]);
   expect(document.body.textContent).not.toContain("Meko Cloud");
 });
 
-test("linked, a new datapack is made in Meko Cloud, and the dialog says so", async () => {
+test("linked, the create names no location either", async () => {
   const saved = await create(true);
-  expect(bodies).toEqual([{ name: "research", description: "", location: "cloud" }]);
+  expect(bodies).toEqual([{ name: "research", description: "" }]);
   expect(saved).toEqual(["11111111-1111-4111-8111-111111111111"]);
 });
 

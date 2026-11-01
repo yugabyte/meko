@@ -116,23 +116,17 @@ func (t *toolSession) call(ctx context.Context, name string, args map[string]any
 	return text, nil
 }
 
-// target is the datapack a command names, by id and name, and whether it's Meko Cloud's: while Meko
-// Cloud is linked, /mcp serves only its datapacks. The zero value is this Meko's default datapack.
+// target is the datapack a command names, by id and name. The zero value is the default datapack.
+// Nothing says where it lives: the server sends each call to the right place (docs/cloud.md).
 type target struct {
-	cloud    bool
 	id, name string
 }
 
-// noun names the datapack in a message, saying when it's Meko Cloud's.
-func (d target) noun() string {
-	if d.cloud {
-		return "Meko Cloud datapack " + d.name
-	}
-	return "datapack " + d.name
-}
+// noun names the datapack in a message.
+func (d target) noun() string { return "datapack " + d.name }
 
-// tools is a command's way to the datapacks: the running server's MCP session, which serves the
-// linked Meko Cloud's datapacks while it's linked (docs/cloud.md).
+// tools is a command's way to the datapacks: the running server's MCP session, which serves this
+// Meko's datapacks and, while Meko Cloud is linked, its datapacks too (docs/cloud.md).
 type tools struct {
 	*toolSession
 	l      paths.Layout
@@ -164,14 +158,7 @@ func (t *tools) linkOf(ctx context.Context) (linked, known bool) {
 	return t.linked.linked, t.linked.known
 }
 
-// isLinked says whether the running server is linked to Meko Cloud, false when it can't say: for
-// the words of a message, never for a choice (linkOf).
-func (t *tools) isLinked(ctx context.Context) bool {
-	linked, _ := t.linkOf(ctx)
-	return linked
-}
-
-// datapackRow is a datapack as datapack_list and GET /api/v1/datapacks list it.
+// datapackRow is a datapack as datapack_list and datapack_search list it.
 type datapackRow struct {
 	ID          string `json:"datapack_id"`
 	Name        string `json:"datapack_name"`
@@ -199,14 +186,13 @@ func pick(rows []datapackRow, named, lists string) (datapackRow, error) {
 		named, lists)
 }
 
-// resolve finds the datapack named, by id or name, among the ones /mcp serves: this Meko's, or while
+// resolve finds the datapack named, by id or name, among the ones /mcp serves: this Meko's and, while
 // Meko Cloud is linked, its. "" is the default datapack. An id is looked up with datapack_describe,
 // and a name with datapack_search's exact name, so neither lists every datapack (Meko Cloud refuses
 // to list an account with very many).
 func (t *tools) resolve(ctx context.Context, named string) (target, error) {
-	cloud := t.isLinked(ctx)
 	if named == "" {
-		return target{cloud: cloud}, nil
+		return target{}, nil
 	}
 	if id, err := uuid.Parse(named); err == nil && len(named) == len(id.String()) {
 		text, err := t.call(ctx, "datapack_describe", map[string]any{"datapack_id": id.String()})
@@ -220,7 +206,7 @@ func (t *tools) resolve(ctx context.Context, named string) (target, error) {
 		if err = json.Unmarshal([]byte(text), &d); err != nil {
 			return target{}, err
 		}
-		return target{cloud: cloud, id: d.ID, name: d.Name}, nil
+		return target{id: d.ID, name: d.Name}, nil
 	}
 	text, err := t.call(ctx, "datapack_search", map[string]any{"name": named, "limit": 100})
 	if err != nil {
@@ -233,7 +219,7 @@ func (t *tools) resolve(ctx context.Context, named string) (target, error) {
 		return target{}, err
 	}
 	r, err := pick(page.Datapacks, named, "meko-cli datapacks")
-	return target{cloud: cloud, id: r.ID, name: r.Name}, err
+	return target{id: r.ID, name: r.Name}, err
 }
 
 // defaultDatapackID is the default datapack's id, or "" once it has been deleted (Meko makes it
@@ -361,7 +347,7 @@ func toolCreateDatapack(ctx context.Context, t *tools, f toolFlags, stdout io.Wr
 	if err := json.Unmarshal([]byte(reply), &r); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Created %s (%s)\n", target{cloud: t.isLinked(ctx), name: r.Name}.noun(), r.ID)
+	fmt.Fprintf(stdout, "Created %s (%s)\n", target{name: r.Name}.noun(), r.ID)
 	return nil
 }
 
@@ -382,7 +368,9 @@ func toolDeleteDatapack(ctx context.Context, t *tools, f toolFlags, stdin io.Rea
 	if !f.force {
 		fmt.Fprintf(stdout, "This deletes %s and everything in it (memories, conversations, "+
 			"artifacts) for good\n", dp.noun())
-		if def, derr := t.defaultDatapackID(ctx); !dp.cloud && derr == nil && def == dp.id {
+		// While Meko Cloud is linked, /mcp's default is Meko Cloud's, which this note doesn't describe.
+		linked, _ := t.linkOf(ctx)
+		if def, derr := t.defaultDatapackID(ctx); !linked && derr == nil && def == dp.id {
 			fmt.Fprintln(stdout, "It's the default datapack: Meko doesn't make another, so search and "+
 				"add_memory will need --datapack afterwards")
 		}
@@ -440,11 +428,7 @@ func toolAdd(ctx context.Context, t *tools, f toolFlags, stdin io.Reader, stdout
 		return err
 	}
 	for _, m := range r.Results {
-		if dp.cloud {
-			fmt.Fprintf(stdout, "Added memory %s to %s\n", m.ID, dp.noun())
-		} else {
-			fmt.Fprintf(stdout, "Added memory %s\n", m.ID)
-		}
+		fmt.Fprintf(stdout, "Added memory %s\n", m.ID)
 	}
 	return nil
 }
