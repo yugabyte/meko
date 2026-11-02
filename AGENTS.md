@@ -19,7 +19,7 @@ from the extension's folder) and which docs to keep current. Meko's own Go backe
 | `scripts/check-title.sh` | The commit subject and PR title rules for the whole repo. |
 | `scripts/ci-scope.sh` | Which components' CI jobs a PR runs, from the paths it changes (Markdown only people read runs none). |
 | `scripts/release/` | The release scripts the three products share, with `--product agentk\|meko\|presenter`: the next version, the release notes (and whether to release), and pruning old releases; and `fetch-node.sh`, which downloads, checks and unpacks the Node a release bundles, with retries. |
-| `.github/` | CI (`ci.yml`: a job per component, in `extensions/agentk`, `extensions/presenter` or `backend`, run only when a PR changes it, and the `CI gate` over them), the PR title check, the three release trains (`agentk-release.yml` for AgentK, tags `agentk-v…`; `meko-release.yml` for Meko, tags `meko-v…`, the repo's latest release; `presenter-release.yml` for Presenter, tags `presenter-v…`), Dependabot, and the issue forms (`ISSUE_TEMPLATE/`: bug, feature and task; blank issues are off). |
+| `.github/` | CI (`ci.yml`: a job per component, in `extensions/agentk`, `extensions/presenter` or `backend`, run only when a PR changes it, and the `CI gate` over them), the PR title check, the three release trains (`agentk-release.yml` for AgentK, tags `agentk-v…`; `meko-release.yml` for Meko, tags `meko-v…`, the repo's latest release; `presenter-release.yml` for Presenter, tags `presenter-v…`), Dependabot, and the issue forms (`ISSUE_TEMPLATE/`: bug, feature and task; blank issues are off, and `config.yml` links "Report a vulnerability" to `SECURITY.md`). |
 | `.claude/skills/commit/` | The commit skill: how to write commits, PR titles and PR descriptions here. |
 | `.claude/skills/issue/` | The issue skill: how to write, file and edit GitHub issues here, with the forms' sections, types and labels. |
 | `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE` | The repo's README (Meko: what it is, installing and building it, its main commands, and AgentK), how to contribute (with AgentK, or any coding agent starting from this file, and the rules), how to report a vulnerability (privately, never in an issue), and the license for everything in it. Every command is in `backend/docs/cli.md`. AgentK's README is `extensions/agentk/README.md`. |
@@ -34,7 +34,8 @@ from the extension's folder) and which docs to keep current. Meko's own Go backe
   releases each product it names: `feat(agentk,meko): …`. They're
   checked by `sh scripts/check-title.sh "<title>"` and the `PR title` workflow. Follow the commit
   skill (`.claude/skills/commit/SKILL.md`). PRs are squash-merged, so the PR title is the subject.
-- **Changes reach `main` only through PRs** that pass the `CI gate` and `PR title` checks. A PR
+- **Changes reach `main` only through PRs** that pass the `CI gate` and `PR title` checks and
+  have an approval from the `meko-maintainers` team (the `approvals` ruleset). A PR
   runs only the jobs of the components it changes (`scripts/ci-scope.sh`); a push to `main` runs
   them all. Root Markdown, and Markdown only people read inside a component (READMEs,
   `AGENTS.md`, `REVIEW.md`, `docs/`), run no job, but Markdown a test reads (`backend/docs/`,
@@ -56,8 +57,8 @@ from the extension's folder) and which docs to keep current. Meko's own Go backe
 - **Keep the docs current** in the same commit as the code, and check the change against the
   REVIEW.md of the part you changed (`extensions/agentk/REVIEW.md` for AgentK, `backend/REVIEW.md`
   for the backend).
-- **Treat the repo as public** (it's internal today): no internal hostnames, mount paths, tokens
-  or keys in code, docs, tests or commit messages.
+- **The repo is public**: no internal hostnames, mount paths, tokens or keys in code, docs,
+  tests or commit messages.
 - **No secrets or personal data (PII)** in anything the repo or its pages on GitHub keep: code,
   comments, docs, tests and their fixtures, screenshots, commit messages, PR titles and
   descriptions, review replies and issues. Secrets are passwords, tokens, API keys, private keys

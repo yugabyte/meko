@@ -4,9 +4,7 @@
 #
 #   curl -fsSL https://mekodata.ai/install.sh | sh
 #
-# mekodata.ai/install.sh redirects to the latest release's install.sh, which is Meko's. While the repo
-# is internal that needs a signed-in `gh` (or GITHUB_TOKEN):
-#   gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
+# mekodata.ai/install.sh redirects to the latest release's install.sh, which is Meko's.
 #
 # Options (pass through `sh -s -- ...` when piping):
 #   --version <X.Y.Z>   install that release instead of the newest

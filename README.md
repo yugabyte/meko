@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/yugabyte/meko/releases/latest"><img src="https://img.shields.io/badge/Meko-release-blue" alt="Meko release"></a>
+  <a href="https://github.com/yugabyte/meko/releases/latest"><img src="https://img.shields.io/github/v/release/yugabyte/meko?filter=meko-v*&label=Meko" alt="Meko release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-green" alt="License: Apache-2.0"></a>
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey" alt="Platform: Linux | macOS">
   <a href="https://docs.mekodata.ai/"><img src="https://img.shields.io/badge/docs-orange" alt="Docs"></a>
@@ -38,10 +38,6 @@ On Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon:
 ```sh
 curl -fsSL https://mekodata.ai/install.sh | sh
 ```
-
-Until the repo is public, that link answers 404 to anyone not signed in to GitHub: fetch the
-installer with a signed-in `gh` instead,
-`gh release download --repo yugabyte/meko --pattern install.sh --output - | sh`.
 
 Add a memory and search:
 ```sh

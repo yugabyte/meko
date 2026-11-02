@@ -292,14 +292,14 @@ function MekoClaudeBanner({ state, onDetails, onError }: { state: AppState; onDe
  * No Meko on the server's computer (`MekoStatus.local` is `none`): how to install it. It can't be
  * dismissed, and goes once the server finds `meko` (it looks every minute while there's none).
  */
-function MekoInstallBanner({ state }: { state: AppState }) {
+export function MekoInstallBanner({ state }: { state: AppState }) {
   const [copied, setCopied] = useState(false);
   if (state.meko.local !== 'none') return null;
   return (
     <div className="banner warn" role="alert">
       <span className="banner-text">
-        Meko isn’t installed on {state.serverName}. AgentK keeps each project’s memory in Meko. Install it there, with gh
-        signed in: <code className="mono">{MEKO_INSTALL_COMMAND}</code>. This goes away once AgentK finds it.
+        Meko isn’t installed on {state.serverName}. AgentK keeps each project’s memory in Meko. Install it there:{' '}
+        <code className="mono">{MEKO_INSTALL_COMMAND}</code>. This goes away once AgentK finds it.
       </span>
       <button className="btn small" onClick={() => void copyText(MEKO_INSTALL_COMMAND).then(setCopied)}>
         {copied ? 'Copied' : 'Copy'}

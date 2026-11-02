@@ -18,16 +18,10 @@ meko extension install agentk      # then, for AgentK
 repo's "latest" (AgentK's and Presenter's are published `--latest=false`), so that is the newest
 Meko release's `install.sh` (`backend/scripts/install.sh`), and a release needs no change on the
 website. It's a 302, not a 301, so no cache keeps it for good. The link is `mekodata.ai`:
-`www.mekodata.ai` redirects elsewhere. While the repo is internal, GitHub answers 404 to anyone not
-signed in (`curl -f` then fails and `sh` runs nothing), so the installer is fetched with a
-signed-in `gh` instead:
+`www.mekodata.ai` redirects elsewhere.
 
-```sh
-gh release download --repo yugabyte/meko --pattern install.sh --output - | sh
-```
-
-It downloads with a signed-in `gh`, else with curl and `GITHUB_TOKEN`, else with curl and no
-token, which needs a public repo. With no token it reads the newest version from where
+The installer downloads with a signed-in `gh`, else with curl and `GITHUB_TOKEN`, else with curl
+and no token. With no token it reads the newest version from where
 `github.com/yugabyte/meko/releases/latest` redirects rather than from GitHub's API, which allows 60
 calls an hour per address without one. Everything runs from a `main` function called on the
 script's last line, so a download cut short runs nothing and `meko install` doesn't read the rest

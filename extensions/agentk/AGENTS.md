@@ -160,7 +160,7 @@ agents should read it before changing code there.
    ever read, or a Meko too old to give one, nothing is gated, and while Meko doesn't answer the
    last list read stands. Nothing that needs Meko may stop the install, a project or a session when there's no Meko or
    it's down: it's skipped or offered later.
-8. **Treat the repo as public** (it's internal today). No internal hostnames, mount paths, tokens or
+8. **The repo is public.** No internal hostnames, mount paths, tokens or
    keys in code, docs, tests or commit messages, and no personal data: no real person's name,
    email, handle or other details, and nothing a user wrote or stored. Tests and docs use made-up
    values (`alice@example.com`, `github.com/acme/demo-repo`). The repo root's AGENTS.md has the
@@ -193,7 +193,7 @@ agents should read it before changing code there.
   `feat`/`fix`/`perf`/`deps` commits trigger a release (`0.YYYYMMDD.N`) when pushed to `main`;
   `ci`/`test`/`docs`/`nit`/`chore` don't. PRs are squash-merged, so the PR title is the subject;
   the `PR title` workflow (`pr-title.yml`) checks it. Changes reach `main` only through PRs that
-  pass CI and that check.
+  pass CI and that check, and that the `meko-maintainers` team approves (the `approvals` ruleset).
 
 ## Keep the docs current
 

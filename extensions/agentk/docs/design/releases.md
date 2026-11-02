@@ -13,7 +13,8 @@ Part of the [AgentK design](../design.md).
   Integration tests run against a real session host and git, with a stub `claude` binary that fakes the TUI and fires the hooks.
   A separate `PR title` workflow checks the title with the repo root's `scripts/check-title.sh` and reruns when
   the PR is edited. Changes reach `main` only through PRs, squash-merged once the `CI gate` check (over
-  every component's jobs, run or skipped) and the title check pass.
+  every component's jobs, run or skipped) and the title check pass and the `meko-maintainers` team
+  approves (the `approvals` ruleset).
 - **Versioning (on push to main).** Versions are `0.YYYYMMDD.N`: the UTC date, and `N` counting
   from 0 for each release that day. Commit subjects are `<type>(<component>[/<area>])[!]: <summary>`
   with one of nine types and one of the repo's components (`agentk`, `meko`, `presenter`, `repo`:
@@ -88,7 +89,7 @@ meko extension install agentk -- --agent kiro      # options after -- go to `age
 
 # what it does (Meko's extension install, backend/docs/install.md)
 #  0. downloads the newest agentk-<version>-<platform>-<arch>.tar.gz and SHA256SUMS (with
-#     GITHUB_TOKEN or gh's token while the repo is internal), checks it, unpacks it owner-only into
+#     GITHUB_TOKEN, else gh's token, else no token), checks it, unpacks it owner-only into
 #     <Meko's data folder>/extensions/agentk/app/<version>, checks that it runs (`agentk version
 #     --json`, `agentk selftest`), points app/current at it and links ~/.local/bin/agentk; an
 #     install AgentK already has (one still in ~/.agent-k-local too) is set up again in place
