@@ -1,5 +1,5 @@
-// The UI's routes, on the History API: /datapacks/<id>/<tab>, /status, /extensions, /settings and
-// /settings/meko-cloud.
+// The UI's routes, on the History API: /datapacks/<id>/<tab>, /projects, /projects/<id>, /status,
+// /extensions, /settings and /settings/meko-cloud.
 // meko serve answers every such path with index.html. The gate (Gate.tsx) sends the old sign-in and
 // account addresses (/signin, /setup, /account) on into these (lib/auth).
 
@@ -24,7 +24,9 @@ export interface Route {
   // A conversation open in the conversations tab, or the memories tab's scope.
   itemId?: string;
   // A page of the whole install rather than of a datapack.
-  view?: "status" | "extensions" | "settings" | "meko-cloud" | "cloud-gaps";
+  view?: "status" | "extensions" | "settings" | "meko-cloud" | "cloud-gaps" | "projects" | "project";
+  // The project open on the project view.
+  projectId?: string;
   // Something on the page to scroll to and point out, as the address's #fragment: a conversation's
   // turn, by its message id.
   focus?: string;
@@ -35,6 +37,7 @@ export function parse(path: string): Route {
   if (root === "status" || root === "extensions") return { tab: "overview", view: root };
   if (root === "settings" && id === "meko-cloud") return { tab: "overview", view: "meko-cloud" };
   if (root === "settings" && !id) return { tab: "overview", view: "settings" };
+  if (root === "projects") return id ? { tab: "overview", view: "project", projectId: id } : { tab: "overview", view: "projects" };
   // A Meko Cloud datapack's Context Gaps: its other pages are Meko Cloud's web app's.
   if (root === "gaps" && id) return { tab: "gaps", view: "cloud-gaps", datapackId: id };
   if (root !== "datapacks" || !id) return { tab: "overview" };
@@ -49,16 +52,20 @@ export function parse(path: string): Route {
 // (an extension's page, /ext/<name>/) is a page of its own, for the browser to load.
 export function isAppPath(path: string): boolean {
   const root = path.split("/")[1];
-  return ["", "datapacks", "status", "extensions", "settings", "gaps"].includes(root);
+  return ["", "datapacks", "status", "extensions", "settings", "gaps", "projects"].includes(root);
 }
 
 export function href(r: Route): string {
   if (r.view === "meko-cloud") return "/settings/meko-cloud";
   if (r.view === "cloud-gaps") return `/gaps/${r.datapackId ?? ""}`;
+  if (r.view === "project") return `/projects/${r.projectId ?? ""}`;
   if (r.view) return `/${r.view}`;
   if (!r.datapackId) return "/";
   return `/datapacks/${r.datapackId}/${r.tab}${r.itemId ? `/${r.itemId}` : ""}${r.focus ? `#${r.focus}` : ""}`;
 }
+
+export const PROJECTS: Route = { tab: "overview", view: "projects" };
+export const project = (projectId: string): Route => ({ tab: "overview", view: "project", projectId });
 
 // The Settings page, which the sidebar and the "it's off" notes link to.
 export const SETTINGS: Route = { tab: "overview", view: "settings" };

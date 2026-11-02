@@ -306,6 +306,10 @@ your phone can connect.
   review session shown as a magnifier on the task's tab, which opens the review's terminal while its passes run and its findings once the task is fixing them or the review is done. The task fixes what it finds, and the PR
   says how it went (`me_ak_review:2 blockers,1 major addressed;Sagittarius3.0`, or `me_ak_review:LGTM;Sirius1.0`). Strategy,
   re-review rounds and depth are in Settings, the project's settings and each session's own.
+  You can also run the review whenever you like, in Code or on the open PR in Review & PR: from the
+  command palette, **Review again** on its findings (which also has Cancel and Retry for it), or
+  **Run local review** in the ⋯ sheet on a phone. One run in Code is the one Open PR uses, so the PR
+  opens without reviewing again.
   You approve the design, opening the PR, and Merge & Close, which merges the PR and
   cleans up the branches, leaving the worktree for the next session. Pressed early, they wait:
   **Open PR after this turn** goes when AgentK's turn ends, and **Merge when ready** merges once CI

@@ -239,6 +239,13 @@ export interface CodeReviewSummary {
   waiting: boolean;
   /** Why it failed or was cancelled, or why a `describing` review waits on you, in plain words; null otherwise. */
   detail: string | null;
+  /**
+   * The user ran it (the `review-run` action), not an Open PR: it sends no PR prompt when it's done,
+   * and a stopped one holds nothing. An Open PR while it runs takes it over (false from then on).
+   */
+  onDemand: boolean;
+  /** Where it runs: in Code, or in Review & PR on the open PR. Leaving that stage cancels it. */
+  stage: 'code' | 'review';
 }
 
 /**
@@ -297,8 +304,8 @@ export function reviewSegmentLabel(r: CodeReviewSummary): string {
     case 'describing': what = 'waiting for the PR description'; break;
     case 'fixing': what = 'waiting for the fixes'; break;
     case 'done': what = doneShowsCounts(r) ? countsText(r.counts) : totalCount(r.counts) ? `LGTM, ${countsText(r.counts)} addressed` : 'LGTM'; break;
-    case 'failed': what = `failed${r.detail ? `: ${r.detail}` : ''}. Retry or Open anyway`; break;
-    case 'cancelled': what = reviewHolds(r) ? 'cancelled. Retry or Open anyway' : `cancelled: ${r.detail}`; break;
+    case 'failed': what = `failed${r.detail ? `: ${r.detail}` : ''}. ${r.onDemand ? 'Retry it' : 'Retry or Open anyway'}`; break;
+    case 'cancelled': what = reviewHolds(r) ? 'cancelled. Retry or Open anyway' : r.onDemand && r.detail === YOU_CANCELLED ? 'cancelled. Retry it' : `cancelled: ${r.detail}`; break;
   }
   const meko = r.mekoCall ? ', searching Meko' : '';
   const waiting = r.waiting ? ', waiting on you in its terminal' : '';
@@ -326,15 +333,22 @@ export const DESCRIBE_LOST = "the task's agent exited before taking the ask for 
 
 /** Why a review stopped when its task left Code: it doesn't hold the next Open PR, which starts a new review. */
 export const REVIEW_LEFT_CODE = 'the task left Code';
+/** Why a review run in Review & PR stopped when its task left that stage. */
+export const REVIEW_LEFT_REVIEW = 'the task left Review & PR';
+/** Why a review stopped when the user cancelled it (the `review-cancel` action). */
+export const YOU_CANCELLED = 'you cancelled it';
 
 /** The review failed or was cancelled: its magnifier shows it stopped, whether or not it holds the PR. */
 export function reviewStopped(r: Pick<CodeReviewSummary, 'state'> | null | undefined): boolean {
   return !!r && (r.state === 'failed' || r.state === 'cancelled');
 }
 
-/** The review holds the task's Open PR for the user to pick Retry or Open anyway. */
-export function reviewHolds(r: Pick<CodeReviewSummary, 'state' | 'detail'> | null | undefined): boolean {
-  return !!r && (r.state === 'failed' || (r.state === 'cancelled' && r.detail !== REVIEW_LEFT_CODE));
+/**
+ * The review holds the task's Open PR for the user to pick Retry or Open anyway. One the user ran
+ * (`onDemand`) never does: Open PR starts a review of its own.
+ */
+export function reviewHolds(r: Pick<CodeReviewSummary, 'state' | 'detail' | 'onDemand'> | null | undefined): boolean {
+  return !!r && !r.onDemand && (r.state === 'failed' || (r.state === 'cancelled' && r.detail !== REVIEW_LEFT_CODE));
 }
 
 /** The review is still working (its lens pulses): its steps run, not the task's fixes. */

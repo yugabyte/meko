@@ -717,6 +717,16 @@ const MIGRATIONS: string[] = [
   ALTER TABLE meko_preloads DROP COLUMN quality;
   ALTER TABLE meko_preloads DROP COLUMN top_score;
   `,
+  // 46: local reviews run on demand (the review-run action; review/runner.ts). purpose: 'pr' for one
+  // an Open PR started, 'demand' for one the user ran (it sends no PR prompt, and a stopped one holds
+  // nothing). stage: where it runs, 'code' or 'review' (Review & PR); leaving that stage cancels it.
+  // stale: 1 once its task left Code after it finished with its PR prompt unsent, so Open PR doesn't
+  // reuse it.
+  `
+  ALTER TABLE code_reviews ADD COLUMN purpose TEXT NOT NULL DEFAULT 'pr';
+  ALTER TABLE code_reviews ADD COLUMN stage TEXT NOT NULL DEFAULT 'code';
+  ALTER TABLE code_reviews ADD COLUMN stale INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 export function openDb(path: string): Db {

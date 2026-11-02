@@ -752,9 +752,9 @@ func kbFTSQuery(datapack string, terms []string) string {
 
 // Activity is one event of a datapack's knowledge base: a file uploaded or a memory promoted.
 type Activity struct {
-	Type      string // "file_upload" or "memory_promotion"
+	Type      string // "file_upload" or "memory_promotion"; a project's also "folder_created" or "datapack_filed"
 	Timestamp time.Time
-	ID        string // the file's or the memory's id
+	ID        string // the file's, the memory's, the folder's or the filed datapack's id
 	// A file upload's.
 	DocumentKey     string
 	DocumentType    string
@@ -764,6 +764,8 @@ type Activity struct {
 	Content        string
 	AgentID        string
 	ConversationID string
+	// A project's events': the datapack (but for a folder made) and the folder.
+	DatapackID, DatapackName, FolderID, FolderName string
 }
 
 // ActivityCursor is where a page of activity starts: after the event at this time with this id.
