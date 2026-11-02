@@ -14,7 +14,7 @@ export function reviewOutcomeNote(r: CodeReviewUsage): string {
 }
 
 /**
- * Local code reviews (docs/design/code-review.md), under the Meko section on the project home and the
+ * Code reviews (docs/design/code-review.md), under the Meko section on the project home and the
  * Usage page: the reviews, the issues they found, what the task fixed, the PRs opened after them, and
  * the Kiro credits their sessions billed. Their tokens are in the Token usage chart, stacked on each
  * day's bar. Shown only once a review has run.

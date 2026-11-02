@@ -193,13 +193,13 @@ describe('usage across projects', () => {
   });
 });
 
-describe('local code reviews', () => {
+describe('code reviews', () => {
   it("counts each project's reviews, and their sessions' tokens, which the daily series stacks", () => {
     const { db } = setup();
     const now = new Date(2026, 8, 24, 15, 0, 0).getTime();
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('q', 'Q', '/q', 'main', 0)`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
-             hook_token, desired, status, stage, kind, parent_id, created_at) VALUES ('r1', 'p', 'r1', 'Local review of S1', 'c', 'b', 'main', '/w', 't',
+             hook_token, desired, status, stage, kind, parent_id, created_at) VALUES ('r1', 'p', 'r1', 'Code review of S1', 'c', 'b', 'main', '/w', 't',
              'tok-r1', 'running', 'idle', 'reviewing-code', 'code-review', 's1', ?)`, now);
     const review = (id: string, state: string, round: number, sent: boolean, counts: string, findings: string, candidates = '[]', reported = round) => {
       run(db, `INSERT INTO code_reviews(id, task_id, session_id, strategy, rounds, depth, state, round, counts_json, findings_json, candidates_json,

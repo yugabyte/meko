@@ -4,7 +4,7 @@ import type { Settings } from '../shared/types';
 import { api } from './api';
 
 /**
- * The global local review settings (`[code_review]`), for what "Default (…)" stands for in a
+ * The global code review settings (`[code_review]`), for what "Default (…)" stands for in a
  * project's and a session's review settings: read from GET /api/settings once per page, when a view
  * first needs them, and set again by Settings when it loads or saves. Null until read (or when the
  * read failed: "Default" then shows without its value).

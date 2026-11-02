@@ -559,7 +559,7 @@ export function StageChip({ session }: { session: Session }) {
 }
 
 /**
- * The local review's magnifier: blue, its lens pulsing while the review works (still with reduced
+ * The code review's magnifier: blue, its lens pulsing while the review works (still with reduced
  * motion), Meko's m in the lens while the review is in a Meko tool call, the needs-you color with
  * its lens knocking while the review waits on you in its terminal (over the m), and red with a
  * still lens when it failed or was cancelled. Decorative: the button around it names the review.
@@ -580,7 +580,7 @@ export function ReviewGlass({ review }: { review: CodeReviewSummary }) {
 }
 
 /**
- * A task's local review joined to its tab or rail row: the magnifier and its short count
+ * A task's code review joined to its tab or rail row: the magnifier and its short count
  * (`reviewSegmentText`), spelled out for its tooltip and screen readers (`reviewSegmentLabel`).
  * Opens the review's screen while it runs, else its findings beside the task's terminal
  * (`reviewOpens`; the review's session stops once it's done).
@@ -802,7 +802,7 @@ const ROUND_CHOICES = Array.from({ length: MAX_ROUNDS + 1 }, (_, i) => i);
 const DEPTH_CHOICES = Array.from({ length: MAX_DEPTH }, (_, i) => i + 1);
 
 /**
- * The local review's three settings (strategy, depth, re-review rounds) as selects, each with its
+ * The code review's three settings (strategy, depth, re-review rounds) as selects, each with its
  * ⓘ. The global ones always have a value; a project's or a session's (`scoped`) start with
  * "Default (…)", the value they'd inherit, which leaves the setting out (null). `onChange` gets
  * the whole set after one change.

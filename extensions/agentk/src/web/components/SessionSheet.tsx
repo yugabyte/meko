@@ -276,7 +276,7 @@ export function SessionSheet({
   session: Session;
   /** A task's code-review session: only its own rows (`reviewRows`), Find and Project home. */
   child?: boolean;
-  /** The local review's rows: open it or its findings, back to its task, its settings and actions. */
+  /** The code review's rows: open it or its findings, back to its task, its settings and actions. */
   reviewRows?: ReactNode;
   /** The stage bar with its gate (Design Review, Open PR, Merge & Close). */
   stage: ReactNode;
@@ -390,11 +390,11 @@ export function SessionSheet({
 }
 
 /**
- * The ⋯ sheet's local review rows. On a task's code-review session: its findings and back to its
+ * The ⋯ sheet's code review rows. On a task's code-review session: its findings and back to its
  * task. On a task: its review (open it, Cancel while it runs, Retry or Open anyway once it stopped)
  * and the task's own review settings, over its project's (`Session.review`, saved at once).
  */
-export function LocalReviewRows({ session, parent, projectReview, acting, onOpen, onFindings, onBack, onAct, onClose, onError }: {
+export function CodeReviewRows({ session, parent, projectReview, acting, onOpen, onFindings, onBack, onAct, onClose, onError }: {
   session: Session;
   /** The task, on its code-review session's sheet. */
   parent?: Session;
@@ -429,13 +429,13 @@ export function LocalReviewRows({ session, parent, projectReview, acting, onOpen
         )}
         {r && reviewRunning(r) && (
           <SheetItem disabled={acting} onClick={then(() => void onAct('review-cancel'))}>
-            Cancel the local review
+            Cancel the code review
           </SheetItem>
         )}
         {r && reviewHolds(r) && (
           <>
             <SheetItem className="primary" disabled={acting} onClick={then(() => void onAct('review-retry'))}>
-              Retry the local review
+              Retry the code review
             </SheetItem>
             <SheetItem disabled={acting} onClick={then(() => void onAct('review-open-anyway'))}>
               Open the PR without it
@@ -469,13 +469,13 @@ export function LocalReviewRows({ session, parent, projectReview, acting, onOpen
       )}
       {r && (reviewRunning(r) || onDemandControls(session).cancel) && (
         <SheetItem disabled={acting} onClick={then(() => void onAct('review-cancel'))}>
-          Cancel the local review
+          Cancel the code review
         </SheetItem>
       )}
       {r && reviewHolds(r) && (
         <>
           <SheetItem className="primary" disabled={acting} onClick={then(() => void onAct('review-retry'))}>
-            Retry the local review
+            Retry the code review
           </SheetItem>
           <SheetItem disabled={acting} onClick={then(() => void onAct('review-open-anyway'))}>
             Open the PR without it
@@ -484,16 +484,16 @@ export function LocalReviewRows({ session, parent, projectReview, acting, onOpen
       )}
       {onDemandControls(session).retry && (
         <SheetItem disabled={acting} onClick={then(() => void onAct('review-retry'))}>
-          Retry the local review
+          Retry the code review
         </SheetItem>
       )}
       {run.offered && (
         <SheetItem disabled={acting || !run.ready} hint={run.wait ?? undefined} onClick={then(() => void onAct('review-run'))}>
-          Run local review
+          Run code review
         </SheetItem>
       )}
       <SheetItem hint={settingsOpen ? '⌄' : '›'} onClick={() => setSettingsOpen((o) => !o)}>
-        Local review settings
+        Code review settings
       </SheetItem>
       {settingsOpen && (
         <div className="sheet-review-settings">

@@ -1,5 +1,5 @@
 /**
- * The local code review's data (docs/design/code-review.md), ported from the agent-k reviewer's
+ * The code review's data (docs/design/code-review.md), ported from the agent-k reviewer's
  * `pkg/agenticreview`: passes and strategies, the diff they read, findings, candidates and scores.
  * The algorithm is in `merge.ts` (merging, the refutation gate, keepScored, Validate), the prompts in
  * `prompt.ts`, the diff and its withholding in `diff.ts`; `runner.ts` drives a review through its

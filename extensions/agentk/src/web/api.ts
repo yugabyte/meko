@@ -222,7 +222,7 @@ export const api = {
   /** Open PR with the user's instructions (the plain gate uses sessionAction). */
   openPr: (id: string, b: OpenPrRequest) => post<Session>(`/api/sessions/${enc(id)}/actions/open-pr`, b),
   updateSession: (id: string, b: UpdateSessionRequest) => request<Session>('PATCH', `/api/sessions/${enc(id)}`, b),
-  /** A task's latest local review (or a code-review session's own), in full; 404 when it has none. */
+  /** A task's latest code review (or a code-review session's own), in full; 404 when it has none. */
   codeReview: (id: string) => get<CodeReviewDetail>(`/api/sessions/${enc(id)}/code-review`),
   changes: (id: string, commit?: string | null) => get<SessionChanges>(`/api/sessions/${enc(id)}/changes${commit ? `?commit=${enc(commit)}` : ''}`),
   baseBranches: (id: string) => get<string[]>(`/api/sessions/${enc(id)}/base-branches`),

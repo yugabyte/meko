@@ -81,7 +81,7 @@ from the extension's folder) and which docs to keep current. Meko's own Go backe
 A `MEKO.md` lists the Meko datapacks that hold context for the folder it sits in, with each one's
 ID and what it covers; the root's [MEKO.md](MEKO.md) covers the whole repo. Like `REVIEW.md`, it
 belongs to its subtree: use every `MEKO.md` from the root down to the files you're working on,
-as AgentK's local code review does. Search their datapacks before any work here, even before
+as AgentK's code review does. Search their datapacks before any work here, even before
 reading the code. Datapacks are shared per person: ask a datapack's owner for access.
 
 Save new facts to the datapack in those `MEKO.md` files that owns the topic, or, when none does,

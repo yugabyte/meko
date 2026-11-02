@@ -40,7 +40,7 @@ export interface HarnessCaps {
   /** What it loads before it takes a session's first prompt, for the Starting view: "Kiro loads <this> first". */
   loads: string;
   /**
-   * How a local code review runs its steps (docs/design/code-review.md): `subagents`, each pass and
+   * How a code review runs its steps (docs/design/code-review.md): `subagents`, each pass and
    * scorer as a subagent defined for the review session, on its tier's model; `turns`, each as a
    * prompt of its own after clearing the conversation, for a CLI with no subagents AgentK can define.
    */

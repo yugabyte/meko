@@ -1,5 +1,5 @@
 /**
- * The change a local review reads (`diff.go`, `withhold.go`, `generated.go` in agent-k's
+ * The change a code review reads (`diff.go`, `withhold.go`, `generated.go` in agent-k's
  * `pkg/agenticreview`): from where the branch left its base to the working tree, uncommitted and
  * untracked files included, since the PR prompt is what commits them. Each file's patch, the lines a
  * finding may anchor on, the base-side ranges the history blames, and the files whose patches stay
