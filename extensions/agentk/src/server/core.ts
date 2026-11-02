@@ -312,6 +312,7 @@ export class Core extends EventEmitter {
       readSlack: () => readList(this.cfg, join(this.paths.run, 'work-sync')),
       claudeAvailable: () => this.harnesses.of('claude').status(this.cfg).available,
       githubTitle: async (repo, number) => (await github.issueOrPr(homedir(), repo, number)).title,
+      prState: (repo, number) => github.prState(homedir(), repo, number),
       settings: () => this.cfg.workQueue,
     });
     this.askAgentk = new AskAgentk({

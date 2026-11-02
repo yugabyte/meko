@@ -94,7 +94,8 @@ export interface Config {
   tools: { enabled: boolean };
   /**
    * The work queue's sync (workqueue.ts), also in Settings › Work queue. github and slack: which sources it reads (both
-   * off, the default: no sync at all). syncMinutes: how often it syncs by itself (0: only Sync). slackList: the link
+   * off, the default: no sync at all). syncMinutes: how often it syncs by itself (0: only Sync). closeClosedPrs: the
+   * GitHub sync closes the items whose PR was merged or closed (off by default: they're only marked). slackList: the link
    * to the Slack list that Slack sync reads. slackModel: the model of the `claude -p` that reads it through your
    * Slack connector (slack.ts), and
    * slackTimeoutSeconds how long it may take (30 to 600). slackTools: the tools that run may call, your Slack
@@ -103,7 +104,7 @@ export interface Config {
    * permission and only loads tools. It loads none of your Claude Code settings but the sign-in part, so
    * nothing else is allowed (slack.ts).
    */
-  workQueue: { github: boolean; slack: boolean; syncMinutes: number; slackList: string; slackModel: string; slackTimeoutSeconds: number; slackTools: string[] };
+  workQueue: { github: boolean; slack: boolean; syncMinutes: number; closeClosedPrs: boolean; slackList: string; slackModel: string; slackTimeoutSeconds: number; slackTools: string[] };
   /**
    * The code review before a PR opens (review/runner.ts, docs/design/code-review.md), also in Settings › Code review;
    * a project's settings and a session's own go over these. strategy: `off`, `sirius-1.0` or `sagittarius-3.0`. rounds:
@@ -146,7 +147,7 @@ export const DEFAULT_CONFIG: Config = {
   pr: { resolveConflicts: true },
   askAgentk: { enabled: true, model: 'sonnet', timeoutSeconds: 45 },
   tools: { enabled: true },
-  workQueue: { github: false, slack: false, syncMinutes: 15, slackList: '', slackModel: 'sonnet', slackTimeoutSeconds: 180, slackTools: [...SLACK_READ_TOOLS] },
+  workQueue: { github: false, slack: false, syncMinutes: 15, closeClosedPrs: false, slackList: '', slackModel: 'sonnet', slackTimeoutSeconds: 180, slackTools: [...SLACK_READ_TOOLS] },
   codeReview: {
     strategy: DEFAULT_STRATEGY,
     rounds: DEFAULT_ROUNDS,

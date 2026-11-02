@@ -249,6 +249,15 @@ function WorkQueueTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefOb
       <InfoCheck id="set-wq-github" label="GitHub review requests" checked={s.workQueueGithub} onChange={(on) => change({ workQueueGithub: on })}>
         Open PRs that ask for your review, through your gh login.
       </InfoCheck>
+      <InfoCheck
+        id="set-wq-close-closed"
+        label="Close review requests whose PR closed"
+        checked={s.workQueueCloseClosedPrs}
+        disabled={!s.workQueueGithub}
+        onChange={(on) => change({ workQueueCloseClosedPrs: on })}
+      >
+        A GitHub item whose PR was merged or closed leaves the queue at the next sync. Off, it stays, marked Done on GitHub.
+      </InfoCheck>
       <InfoCheck id="set-wq-slack" label="Slack list" checked={s.workQueueSlack} onChange={(on) => change({ workQueueSlack: on })}>
         The messages on a Slack list of yours, read by Claude Code through your Slack connector. Each read is a model
         call, so after one fails, timed syncs skip Slack until a Sync you press reads it.

@@ -1906,6 +1906,8 @@ export interface Settings {
   workQueueGithub: boolean;
   /** `[work_queue] slack`: the work queue's sync pulls in the messages on your Slack list. */
   workQueueSlack: boolean;
+  /** `[work_queue] close_closed_prs`: the GitHub sync closes the review requests whose PR was merged or closed. */
+  workQueueCloseClosedPrs: boolean;
   /** `[work_queue] slack_list`: that list's link (`https://<workspace>.slack.com/lists/<team>/<F…>`), or empty. */
   workQueueSlackList: string;
   /** `[work_queue] sync_minutes`: how often it syncs by itself (0 to WORK_SYNC_MINUTES_MAX; 0: only when you press Sync). */

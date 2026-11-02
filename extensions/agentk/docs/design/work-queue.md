@@ -128,7 +128,12 @@ item keeps it gone. A synced item is `unplaced` (the **New** chip) until it's mo
 is pressed. A GitHub item that a sync no longer finds (merged, closed, or your review no longer
 requested) gets `github_done_at` (**Done on GitHub**); it's cleared if the review is requested again.
 A read that comes back full (`REVIEW_REQUESTS_MAX`, 100) may have left some out, in no set order,
-so it marks nothing done. Nothing closes by itself. `WorkSync.slack` is null when a run left Slack
+so it marks nothing done. Nothing closes by itself, unless `[work_queue] close_closed_prs` is on
+(**Close review requests whose PR closed** in Settings › Work queue, off by default): then each item
+the sync no longer finds has its PR read (`gh pr view --json state`), and one merged or closed is
+closed as if you closed it, so it stays gone; one still open (your review no longer requested) stays,
+marked done, and is read again at each sync. A read that fails, or takes over 20 s, leaves the item as it was. An item
+you reopen by hand stays open (`github_kept`) until the sync finds its review request again. `WorkSync.slack` is null when a run left Slack
 out (a timed one while Slack isn't on the timer).
 
 Reading Slack is a model call, so the timer reads it only while the last Slack read worked: a

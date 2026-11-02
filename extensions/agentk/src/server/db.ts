@@ -774,6 +774,10 @@ const MIGRATIONS: string[] = [
   `,
   // 47: the AgentK GitHub reviewer is gone (AGENTK_REVIEWER_GONE, which every start runs again).
   AGENTK_REVIEWER_GONE,
+  // 48: work_items.github_kept: set on any item reopened by hand; only GitHub items read it:
+  // `[work_queue] close_closed_prs` leaves them open though their PR is closed. The sync clears it
+  // when it finds the item's review request again.
+  `ALTER TABLE work_items ADD COLUMN github_kept INTEGER NOT NULL DEFAULT 0;`,
 ];
 
 export function openDb(path: string): Db {
