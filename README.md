@@ -39,7 +39,7 @@ On Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon:
 curl -fsSL https://mekodata.ai/install.sh | sh
 ```
 
-While the repo is internal, that link answers 404 to anyone not signed in to GitHub: fetch the
+Until the repo is public, that link answers 404 to anyone not signed in to GitHub: fetch the
 installer with a signed-in `gh` instead,
 `gh release download --repo yugabyte/meko --pattern install.sh --output - | sh`.
 

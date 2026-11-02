@@ -33,6 +33,7 @@ that hold the repo's context are listed in [MEKO.md](MEKO.md).
 - Docs change in the same PR as the code they describe.
 - File issues through GitHub's issue forms (bug, feature or task).
 - Treat the repo as public: no internal hostnames, paths, tokens or keys.
+- Report a vulnerability privately, as [SECURITY.md](SECURITY.md) says, never in an issue or PR.
 
 Questions and ideas: [Meko's Discord](https://mekodata.ai/discord/) or
 [Slack](https://inviter.co/yugabytedb).

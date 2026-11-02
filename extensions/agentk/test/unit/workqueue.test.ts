@@ -16,8 +16,8 @@ describe('work item links', () => {
     ['https://github.com/Yugabyte/yugabyte-db/pull/29811', 'github', 'gh:yugabyte/yugabyte-db#29811', 'yugabyte-db#29811'],
     ['https://github.com/yugabyte/yugabyte-db/issues/29811#issuecomment-1', 'github', 'gh:yugabyte/yugabyte-db#29811', 'yugabyte-db#29811'],
     ['yugabyte/yugabyte-db#29811', 'github', 'gh:yugabyte/yugabyte-db#29811', 'yugabyte-db#29811'],
-    ['https://yugabyte.atlassian.net/browse/DB-18234', 'jira', 'jira:DB-18234', 'DB-18234'],
-    ['https://yugabyte.atlassian.net/jira/software/projects/DB/boards/1?selectedIssue=DB-18234', 'jira', 'jira:DB-18234', 'DB-18234'],
+    ['https://acme.atlassian.net/browse/DB-18234', 'jira', 'jira:DB-18234', 'DB-18234'],
+    ['https://acme.atlassian.net/jira/software/projects/DB/boards/1?selectedIssue=DB-18234', 'jira', 'jira:DB-18234', 'DB-18234'],
     ['DB-18234', 'jira', 'jira:DB-18234', 'DB-18234'],
     ['https://acme.slack.com/archives/C024BE91L/p1700000000123456', 'slack', 'slack:C024BE91L/p1700000000123456', 'Slack'],
     ['https://acme.slack.com/archives/C024BE91L/p1700000000123456?thread_ts=1700000000.000100&cid=C024BE91L', 'slack', 'slack:C024BE91L/p1700000000123456', 'Slack'],
@@ -64,7 +64,7 @@ const titles = (q: WorkQueue) => q.list().map((i) => i.title);
 describe('the work queue', () => {
   it('adds items at the bottom, reads a missing title from GitHub, and keeps each link once', async () => {
     const { q } = setup();
-    await q.create({ title: 'First', links: ['DB-1', 'https://yugabyte.atlassian.net/browse/DB-1'] });
+    await q.create({ title: 'First', links: ['DB-1', 'https://acme.atlassian.net/browse/DB-1'] });
     const second = await q.create({ links: ['https://github.com/o/r/pull/7'] });
     expect(titles(q)).toEqual(['First', 'Title from GitHub']);
     expect(q.list()[0].links.map((l) => l.key)).toEqual(['jira:DB-1']);

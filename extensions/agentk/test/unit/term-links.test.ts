@@ -23,13 +23,13 @@ function tap(rs: TermRow[], y: number, needle: string): string | null {
   return linkAt((i) => rs[i], y, col);
 }
 
-const SLACK = 'https://yugabyte.slack.com/archives/C0BE0G1N9ND/p1792458792999779';
+const SLACK = 'https://acme.slack.com/archives/C024BE91L/p1700000000123456';
 
 describe('the link under a tap', () => {
   // Each URL is longer than its text's width, so wrap-ansi broke it, and carried it on at the margin.
   it.each([
-    ['after a bullet (the reported screen)', rows('● I posted in #amp-data-plane-dev: https://yugabyte.slack.co', '  m/archives/C0BE0G1N9ND/p1792458792999779'), SLACK, [[0, 'https'], [0, 'slack.co'], [1, 'm/archives'], [1, '9779']]],
-    ['under a nested list item', rows('  - Tags: a thread reply: https://yugabyte.slack.co', '    m/archives/C0BE0G1N9ND/p1792458792999779'), SLACK, [[0, 'https'], [1, 'archives']]],
+    ['after a bullet (the reported screen)', rows('● I posted in #team-updates: https://acme.slack.co', '  m/archives/C024BE91L/p1700000000123456'), SLACK, [[0, 'https'], [0, 'slack.co'], [1, 'm/archives'], [1, '3456']]],
+    ['under a nested list item', rows('  - Tags: a thread reply: https://acme.slack.co', '    m/archives/C024BE91L/p1700000000123456'), SLACK, [[0, 'https'], [1, 'archives']]],
     ['under a numbered item', rows('1. see https://example.com/abcdefghij', '   klmnopqrstuvwxyz'), 'https://example.com/abcdefghijklmnopqrstuvwxyz', [[1, 'klm']]],
     ['over three rows', rows('- see https://example.com/a', '  bcdefghijklmnopqrstuvwxyz', '  /end and more'), 'https://example.com/abcdefghijklmnopqrstuvwxyz/end', [[0, 'https'], [1, 'q'], [2, 'end']]],
     ['with no margin', rows('x https://example.com/abcdefghijklmnopqrst', 'uvwxyz/ ok'), 'https://example.com/abcdefghijklmnopqrstuvwxyz/', [[1, 'uvw']]],
@@ -38,7 +38,7 @@ describe('the link under a tap', () => {
   });
 
   it('leaves the indent before a carried-on URL to Claude', () => {
-    const rs = rows('● I posted in #amp-data-plane-dev: https://yugabyte.slack.co', '  m/archives/C0BE0G1N9ND/p1792458792999779');
+    const rs = rows('● I posted in #team-updates: https://acme.slack.co', '  m/archives/C024BE91L/p1700000000123456');
     expect(linkAt((i) => rs[i], 1, 0)).toBeNull();
     expect(linkAt((i) => rs[i], 1, 1)).toBeNull();
     expect(tap(rs, 0, 'posted')).toBeNull();
