@@ -121,14 +121,6 @@ export interface PrReview {
   submittedAt: string;
 }
 
-export interface PrComment {
-  id: string;
-  author: Author | null;
-  authorAssociation?: string;
-  body: string;
-  createdAt: string;
-}
-
 interface CheckRun {
   __typename?: string;
   name?: string;
@@ -163,7 +155,6 @@ export interface PrStatus {
   body: string;
   state: 'OPEN' | 'CLOSED' | 'MERGED';
   reviews: PrReview[];
-  comments: PrComment[];
   statusCheckRollup: CheckRun[] | null;
   reviewDecision: '' | 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED';
   mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
@@ -174,7 +165,7 @@ export interface PrStatus {
 
 export async function prStatus(worktree: string, number: number, repo?: string | null): Promise<PrStatus> {
   const out = await gh(worktree, 'pr', 'view', String(number), ...repoArg(repo), '--json',
-    'number,url,title,body,state,reviews,comments,statusCheckRollup,reviewDecision,mergeable,mergeStateStatus,headRefOid');
+    'number,url,title,body,state,reviews,statusCheckRollup,reviewDecision,mergeable,mergeStateStatus,headRefOid');
   return JSON.parse(out) as PrStatus;
 }
 
@@ -253,12 +244,12 @@ export function isLogin(author: Author | null, login: string): boolean {
 }
 
 /**
- * Whether feedback from this author may be acted on: someone with a role on the repo, or the
- * AgentK reviewer (whose association is NONE). Bots are looked up separately (`botLogins`).
+ * Whether feedback from this author may be acted on: someone with a role on the repo. Bots are
+ * looked up separately (`botLogins`).
  */
-export function isTrustedAuthor(item: { author: Author | null; authorAssociation?: string }, reviewerLogin: string): boolean {
+export function isTrustedAuthor(item: { author: Author | null; authorAssociation?: string }): boolean {
   if (!item.author) return false;
-  return TRUSTED_ASSOCIATIONS.includes(item.authorAssociation ?? '') || isLogin(item.author, reviewerLogin);
+  return TRUSTED_ASSOCIATIONS.includes(item.authorAssociation ?? '');
 }
 
 /**
@@ -314,10 +305,6 @@ export async function reviewDetails(cwd: string, ids: string[]): Promise<Map<str
     for (const [id, d] of parseReviewDetails(await gh(cwd, 'api', 'graphql', '-f', `query=${query}`))) out.set(id, d);
   }
   return out;
-}
-
-export async function comment(worktree: string, number: number, body: string, repo?: string | null): Promise<void> {
-  await gh(worktree, 'pr', 'comment', String(number), ...repoArg(repo), '--body', body);
 }
 
 export async function resolveMergeMethod(worktree: string, method: MergeMethod): Promise<'squash' | 'merge' | 'rebase'> {

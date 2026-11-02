@@ -22,7 +22,7 @@ import { disposeTerminal } from '../terminals';
 import { closingText, cx, dotState, designGate, isReviewChild, joinedPartSelected, reviewGatesPr, reviewOpens, reviewParent, shownStep, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, reviewTarget, runToMergeShown, runToMergeTitle, sessionTabTitle, sidewaysWheel, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
-import { Busy, Check, ConfirmButton, ContextRing, DatapackName, Elapsed, HarnessLogo, NotesIcon, ReviewSegment, RunToMergeCheck, RunToMergeMark, StageChip, StatusDot } from './common';
+import { Busy, Check, ContextRing, DatapackName, Elapsed, HarnessLogo, NotesIcon, ReviewSegment, RunToMergeCheck, RunToMergeMark, StageChip, StatusDot } from './common';
 import { ReviewFindings } from './ReviewFindings';
 import { DESCRIBE_LOST, countsText, reviewDoneText, reviewHolds, reviewRunning, reviewSegmentText, type CodeReviewSummary } from '../../shared/codereview';
 import { ChangesPanel } from './ChangesPanel';
@@ -62,8 +62,6 @@ function firstReviewDesign(id: string): boolean {
 const REVIEW_TEXT: Record<Session['reviewState'], string> = {
   none: 'no PR',
   waiting: 'waiting for review',
-  in_review: 'AgentK reviewing',
-  refused: 'AgentK declined',
   addressing: 'addressing review',
   addressed: 'review addressed',
   approved: 'approved',
@@ -461,7 +459,6 @@ export function ProjectView({
       {!mobile && (
         <StageBar
           session={session}
-          project={project}
           onAct={act}
           onReview={openDesignReview}
           onOpenCodeReview={session && !child ? () => openFindings(session) : undefined}
@@ -603,7 +600,6 @@ export function ProjectView({
           stage={
             <StageBar
               session={session}
-              project={project}
               onAct={act}
               onReview={openDesignReview}
               onOpenCodeReview={!child ? () => {
@@ -874,7 +870,6 @@ function reviewGate(
 
 function StageBar({
   session,
-  project,
   onAct,
   onReview,
   onOpenCodeReview,
@@ -892,7 +887,6 @@ function StageBar({
   reasons = false,
 }: {
   session: Session | null;
-  project: ProjectWithSessions;
   onAct: (a: SessionAction, req?: CloseSessionRequest) => Promise<void>;
   /** Design Review: opens the design panel, or brings its approve button into view (`reviewTarget`). */
   onReview: () => void;
@@ -1039,26 +1033,6 @@ function StageBar({
           {onShare && session.prNumber && (
             <button className="btn small" onClick={onShare} title="Share this project with the PR's reviewers, so they can review it with AgentK">
               Share with reviewers
-            </button>
-          )}
-          {session.reviewState === 'refused' && (
-            <ConfirmButton
-              className="btn small"
-              label="Force review"
-              confirmLabel="Force AgentK review"
-              prompt="AgentK declined this PR."
-              onConfirm={() => onAct('force-review')}
-              disabled={blocked}
-            />
-          )}
-          {project.settings.reviewer !== 'people' && session.reviewState !== 'refused' && (
-            <button
-              className="btn small"
-              disabled={blocked || midTurn || session.reviewState === 'in_review' || session.reviewState === 'addressing'}
-              onClick={() => onAct('request-review')}
-              title="Ask AgentK to review the latest push"
-            >
-              {session.agentkSeen ? 'Request another round' : 'Request AgentK review'}
             </button>
           )}
           {session.queued === 'merge' ? (

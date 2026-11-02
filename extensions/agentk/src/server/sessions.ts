@@ -1082,8 +1082,6 @@ export class SessionManager {
   }
 
   prompt(row: SessionRow, name: PromptName, extra: Record<string, string | number | null> = {}): string {
-    const p = projectRow(this.db, row.project_id);
-    const settings = p ? parseSettings(p.settings_json) : null;
     const meko = this.sessionDatapacks(row.project_id).length ? [mekoRecallLine(name), mekoQuestionLine(name), mekoLearnLine(name, row.id)].filter(Boolean) : [];
     // A review names its PR's repo outright: the clone may be a fork, where gh's {owner}/{repo} is the
     // fork. Its base is the remote's branch the review fetched, since the local one may follow a
@@ -1106,7 +1104,6 @@ export class SessionManager {
       base: row.base_branch,
       pr: row.pr_number,
       prUrl: row.pr_url,
-      reviewer: settings?.reviewerLogin ?? 'the reviewer',
       // A review-people prompt queued before it named its reviewers.
       reviewers: 'its reviewers',
       reviews: '(none named: ask the user which reviews to address)',
@@ -2077,8 +2074,6 @@ export class SessionManager {
       case 'cancel-queued': lc.cancelQueued(row); break;
       case 'open-pr': await lc.openPr(row, body); break;
       case 'merge': await lc.merge(row, closeRequest(body)); break;
-      case 'request-review': await lc.requestReview(row, false); break;
-      case 'force-review': await lc.requestReview(row, true); break;
       case 'resume': await this.resume(row); break;
       case 'archive':
         await this.refuseUncommitted(row, 'Ask AgentK to commit, or Discard the session to throw the changes away.');

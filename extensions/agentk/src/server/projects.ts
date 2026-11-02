@@ -453,7 +453,7 @@ export class ProjectService {
       const next = { ...toProject(this.db, r).settings, ...req.settings };
       if (!next.branchPrefix.trim()) throw new HttpError(400, 'The branch prefix can\'t be empty.');
       if (!Object.hasOwn(REVIEWER_LABELS, next.reviewer)) {
-        throw new HttpError(400, 'Reviewer must be AgentK only, AgentK + People, All reviewers or People only.');
+        throw new HttpError(400, 'Reviewer must be Yours only, People or All reviewers.');
       }
       if (typeof next.mekoLog !== 'boolean') throw new HttpError(400, 'Log Meko calls must be true or false.');
       // What isn't a valid setting goes back to the global value (readOverrides drops it).

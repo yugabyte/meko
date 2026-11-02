@@ -170,8 +170,6 @@ export const STAGE_LABELS: Record<Stage, string> = {
 export type ReviewState =
   | 'none' // no PR yet
   | 'waiting' // PR open, no review yet
-  | 'in_review' // AgentK acked and is reviewing
-  | 'refused' // AgentK declined (e.g. PR too large); user may force
   | 'addressing' // a review arrived and Claude is working through it
   | 'addressed' // Claude finished addressing the latest review
   | 'approved'; // required approvals are in / nothing left to address
@@ -194,19 +192,17 @@ export interface BackgroundTask {
 }
 
 /**
- * Whose reviews go straight to Claude: `agentk` (AgentK only, the default for new projects),
- * `agentk-people` (AgentK and people), `all` (AgentK, people and other bots) or `people` (people
- * only). Every other review is held for the user to send or dismiss (`HeldReview`); the user's own
- * reviews always go straight to Claude. Merge waits for AgentK's review only once AgentK is active
- * on the PR, and never in `people`; in every mode it waits while a review is held.
+ * Whose reviews go straight to Claude besides the user's own, which always do: `mine` (none: yours
+ * only, the default for new projects), `people` (people with a role on the repo) or `all` (people
+ * and bots). Every other review is held for the user to send or dismiss (`HeldReview`), and merge
+ * waits while one is held.
  */
-export type ReviewerMode = 'agentk' | 'agentk-people' | 'all' | 'people';
+export type ReviewerMode = 'mine' | 'people' | 'all';
 
 export const REVIEWER_LABELS: Record<ReviewerMode, string> = {
-  agentk: 'AgentK only',
-  'agentk-people': 'AgentK + People',
+  mine: 'Yours only',
+  people: 'People',
   all: 'All reviewers',
-  people: 'People only',
 };
 
 export type MergeMethod = 'repo-default' | 'squash' | 'merge' | 'rebase';
@@ -648,8 +644,6 @@ export interface ProjectSettings {
   /** Send a continue prompt to sessions that were mid-turn when the host went down. */
   autoContinue: boolean;
   reviewer: ReviewerMode;
-  /** GitHub login of the AgentK bot, matched with or without a `[bot]` suffix. */
-  reviewerLogin: string;
   /** New sessions' branches start with it; `{login}` in it is your GitHub login (expandBranchPrefix). */
   branchPrefix: string;
   mergeMethod: MergeMethod;
@@ -817,16 +811,14 @@ export interface Session {
   prUrl: string | null;
   reviewState: ReviewState;
   ciState: CiState;
-  /** AgentK has commented on or reviewed the PR, or someone asked it to (`/agentk review`). */
-  agentkSeen: boolean;
   /** True when the Merge gate may be passed. */
   canMerge: boolean;
   /** Why Merge is disabled, in plain words. Empty when canMerge. */
   mergeBlockers: string[];
   /**
    * Merge & Close can be queued: it isn't mergeable yet, but every blocker clears by itself (AgentK
-   * working or waiting on you mid-turn, CI running, AgentK's review to come or its findings being
-   * addressed). The gate reads Merge when ready.
+   * working or waiting on you mid-turn, CI running, or a review's findings being addressed). The
+   * gate reads Merge when ready.
    */
   mergeQueueable: boolean;
   /**
@@ -2110,11 +2102,10 @@ export interface NewComment {
 }
 
 /**
- * Who wrote a held review: AgentK (held in People only), a person with a role on the repo (held
- * in AgentK only), a bot (held except in All reviewers), or someone with no role on the repo
- * (held in every mode).
+ * Who wrote a held review: a person with a role on the repo (held in Yours only), a bot (held
+ * except in All reviewers), or someone with no role on the repo (held in every mode).
  */
-export type HeldReviewAuthor = 'agentk' | 'person' | 'bot' | 'outsider';
+export type HeldReviewAuthor = 'person' | 'bot' | 'outsider';
 
 /** An inline comment of a held review. */
 export interface HeldReviewComment {
@@ -2509,8 +2500,6 @@ export type SessionAction =
   | 'merge'
   /** Withdraws a queued Open PR or merge (`Session.queued`). */
   | 'cancel-queued'
-  | 'request-review'
-  | 'force-review'
   | 'resume'
   | 'archive'
   | 'discard'

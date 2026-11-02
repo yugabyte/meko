@@ -175,7 +175,7 @@ CREATE TABLE sessions (
   queued_auto INTEGER,             -- 1 when Run to merge queued queued_gate, not the user's press (stopping it drops only its own)
   skip_learn INTEGER,              -- 1: the last Merge & Close press asked to skip the learn step (kept until the PR merges)
   discarding INTEGER,              -- 1: Discard was asked for and waits for the learn step (cleared by Archive)
-  agentk_seen INTEGER,             -- 1 once AgentK commented on or reviewed the PR, or was asked to
+  agentk_seen INTEGER,             -- unused since migration 47 (the AgentK GitHub reviewer, removed); kept for a rollback
   meko_datapack_id TEXT, meko_datapack_name TEXT,  -- the dedicated datapack at the last launch, where AgentK's
                                    --   writes for the session go (NULL: launched before this or without one; the project's is used)
   first_turn_end_at INTEGER,       -- when the first turn ended (from the transcript), for the Meko stats
@@ -203,7 +203,7 @@ CREATE TABLE review_comments ( -- comments on a session's diff: draft → queued
   excerpt TEXT, body TEXT, state TEXT, created_at INTEGER, updated_at INTEGER, sent_at INTEGER);
 CREATE TABLE held_reviews (    -- reviews on a session's PR held for the user: held → sent | dismissed
   session_id TEXT, review_id TEXT, pr_number INTEGER, db_id INTEGER,  -- GitHub's node id; the REST id the prompt names
-  author TEXT, kind TEXT, state TEXT, body TEXT, url TEXT,  -- kind: 'agentk' | 'person' | 'bot' | 'outsider'
+  author TEXT, kind TEXT, state TEXT, body TEXT, url TEXT,  -- kind: 'person' | 'bot' | 'outsider'
   comments_json TEXT, more_comments INTEGER, submitted_at TEXT, held_at INTEGER,  -- the first 50 inline comments
   status TEXT, decided_at INTEGER, PRIMARY KEY (session_id, review_id));
 CREATE TABLE session_stages (  -- stage history: who moved it, and when
