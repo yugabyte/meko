@@ -7,9 +7,9 @@ import { saveBlob } from "../lib/download";
 import { href, navigate, type Tab } from "../lib/route";
 import type { Datapack } from "../lib/types";
 import { CloudBanner } from "./CloudBanner";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { DatapackDialog } from "./DatapackDialog";
-import { Dialog } from "./Dialog";
-import { Button, cx, ErrorNote, Input } from "./ui";
+import { Button, cx } from "./ui";
 
 const LABELS: Record<Tab, string> = {
   overview: "Overview",
@@ -113,42 +113,19 @@ export function DatapackHeader({
 
 // Deleting takes everything in the datapack, so it asks for the name.
 function DeleteDialog({ datapack, onClose, onDeleted }: { datapack: Datapack; onClose: () => void; onDeleted: () => void }) {
-  const [typed, setTyped] = useState("");
-  const [error, setError] = useState<Error>();
-  const remove = async () => {
-    try {
-      await api.deleteDatapack(datapack.datapack_id);
-      onDeleted();
-    } catch (e) {
-      setError(e as Error);
-    }
-  };
   return (
-    <Dialog
+    <ConfirmDialog
       title="Delete datapack"
+      name={datapack.datapack_name}
+      action="Delete for good"
       onClose={onClose}
-      actions={
-        <>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            variant="primary"
-            className="bg-destructive text-white"
-            disabled={typed !== datapack.datapack_name}
-            onClick={remove}
-          >
-            Delete for good
-          </Button>
-        </>
-      }
+      onConfirm={async () => {
+        await api.deleteDatapack(datapack.datapack_id);
+        onDeleted();
+      }}
     >
-      <p className="text-sm">
-        This removes <b>{datapack.datapack_name}</b> and every memory, conversation and knowledge file in it. It can't
-        be undone. Type its name to confirm.
-      </p>
-      <Input autoFocus value={typed} onChange={(e) => setTyped(e.target.value)} />
-      {error && <ErrorNote error={error} />}
-    </Dialog>
+      This removes <b>{datapack.datapack_name}</b> and every memory, conversation and knowledge file in it. It can't be
+      undone. Type its name to confirm.
+    </ConfirmDialog>
   );
 }

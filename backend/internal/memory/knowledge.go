@@ -434,6 +434,17 @@ func (s *Service) Activity(ctx context.Context, datapack, cursor string, limit i
 	if err := s.needDatapack(ctx, datapack); err != nil {
 		return nil, "", err
 	}
+	return activityPage(cursor, limit, func(after *store.ActivityCursor) ([]store.Activity, *store.ActivityCursor,
+		error) {
+		return s.st.KBActivity(ctx, datapack, after, limit)
+	})
+}
+
+// activityPage reads a page of activity from the opaque cursor a page before gave ("" for the
+// newest), and gives the next page's ("" when there's none).
+func activityPage(cursor string, limit int,
+	read func(after *store.ActivityCursor) ([]store.Activity, *store.ActivityCursor, error)) (
+	[]store.Activity, string, error) {
 	var after *store.ActivityCursor
 	if b, err := base64.RawURLEncoding.DecodeString(cursor); cursor != "" && err == nil {
 		var c store.ActivityCursor
@@ -441,7 +452,7 @@ func (s *Service) Activity(ctx context.Context, datapack, cursor string, limit i
 			after = &c
 		}
 	}
-	items, last, err := s.st.KBActivity(ctx, datapack, after, limit)
+	items, last, err := read(after)
 	if err != nil || len(items) < limit || last == nil {
 		return items, "", err
 	}

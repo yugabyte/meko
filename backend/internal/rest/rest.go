@@ -164,6 +164,7 @@ func Register(g *echo.Group, o Options) {
 
 	a.registerKnowledge(g)
 	a.registerQuestions(g)
+	a.registerProjects(g)
 }
 
 // Errors as Meko Cloud's API replies them.

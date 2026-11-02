@@ -24,6 +24,12 @@ import type {
   GapState,
   Health,
   KnowledgeActivity,
+  Placement,
+  Project,
+  ProjectDetail,
+  ProjectFolder,
+  ProjectStats,
+  ProjectTheme,
   MapSource,
   MemoryChange,
   MemoryMap,
@@ -113,6 +119,30 @@ export const api = {
   updateDatapack: (id: string, fields: { name?: string; description?: string }) =>
     request<unknown>("PATCH", `/datapacks/${id}`, fields),
   deleteDatapack: (id: string) => request<unknown>("DELETE", `/datapacks/${id}`),
+
+  projectThemes: () => request<ProjectTheme[]>("GET", "/projects/themes"),
+  projects: () => request<{ owned: Project[] }>("GET", "/projects").then((r) => r.owned),
+  project: (id: string) => request<ProjectDetail>("GET", `/projects/${id}`),
+  createProject: (body: { project_name: string; description: string; theme_key: string; folders?: string[] }) =>
+    request<Project>("POST", "/projects", body),
+  updateProject: (id: string, body: { project_name?: string; description?: string }) =>
+    request<unknown>("PATCH", `/projects/${id}`, body),
+  deleteProject: (id: string) => request<unknown>("DELETE", `/projects/${id}`),
+  projectStats: (id: string) => request<ProjectStats>("GET", `/projects/${id}/stats`),
+  projectActivity: (id: string, cursor: string) =>
+    request<{ items: KnowledgeActivity[]; has_more: boolean; next_cursor: string }>(
+      "GET",
+      `/projects/${id}/activity-log?limit=20&cursor=${enc(cursor)}`,
+    ),
+  createFolder: (project: string, body: { folder_name: string; folder_description: string }) =>
+    request<ProjectFolder>("POST", `/projects/${project}/folders`, body),
+  updateFolder: (project: string, folder: string, body: { folder_name?: string; folder_description?: string }) =>
+    request<unknown>("PATCH", `/projects/${project}/folders/${folder}`, body),
+  deleteFolder: (project: string, folder: string) => request<unknown>("DELETE", `/projects/${project}/folders/${folder}`),
+  placeDatapack: (datapack: string, folder: string) =>
+    request<unknown>("POST", `/datapacks/${datapack}/placement`, { folder_id: folder }),
+  unplaceDatapack: (datapack: string) => request<unknown>("DELETE", `/datapacks/${datapack}/placement`),
+  placements: () => request<Record<string, Placement>>("GET", "/projects/placements"),
   // days 0 is the server's default window: 90 days of totals, 30 of activity.
   metrics: (id: string, days: number) => request<Metrics>("GET", `/datapacks/${id}/metrics?days=${days}`),
   artifacts: (id: string, q: string, page: number) =>

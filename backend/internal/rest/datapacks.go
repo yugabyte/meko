@@ -139,6 +139,7 @@ func (a *api) createDatapack(c echo.Context) error {
 	var body struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
+		FolderID    string `json:"folder_id"` // a project folder here to file it in
 	}
 	if ok, err := bind(c, &body); !ok {
 		return err
@@ -148,14 +149,18 @@ func (a *api) createDatapack(c echo.Context) error {
 		return err
 	}
 	if linked {
+		if strings.TrimSpace(body.FolderID) != "" {
+			return badRequest(c, "folder_id is a project folder on this Meko, which files only its own datapacks: "+
+				"while Meko Cloud is linked, new ones are made there")
+		}
 		if strings.TrimSpace(body.Name) == "" {
 			return badRequest(c, "name is required")
 		}
 		return a.createInCloud(c, strings.TrimSpace(body.Name), body.Description)
 	}
-	d, err := a.Service.CreateDatapack(ctx(c), body.Name, body.Description)
+	d, err := a.Service.CreateDatapackIn(ctx(c), body.Name, body.Description, body.FolderID)
 	if err != nil {
-		return serviceError(c, err)
+		return projectError(c, err)
 	}
 	return created(c, map[string]any{"datapack_id": d.ID, "agent_id": memory.DefaultAgentID, "name": d.Name,
 		"web_url": "/datapacks/" + d.ID, "mcp_user_name": "", "mcp_server": map[string]string{"url": "", "api_key": ""},

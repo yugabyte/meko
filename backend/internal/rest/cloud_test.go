@@ -257,6 +257,11 @@ func TestCloudDatapacks(t *testing.T) {
 	wantErr(t, e, "POST", "/datapacks", map[string]any{"name": "x"}, 403, "FORBIDDEN")
 	wantErr(t, e, "POST", "/datapacks", map[string]any{"name": "kept-here", "location": "local"}, 403, "FORBIDDEN")
 	wantErr(t, e, "GET", "/cloud/datapacks", nil, 404, "NOT_FOUND")
+	// A project folder here files only this Meko's datapacks, and a new one is Meko Cloud's.
+	if r := admin("POST", "/datapacks", map[string]any{"name": "filed", "folder_id": "f"}); r.Status != 400 ||
+		r.Error.Code != "VALIDATION_ERROR" {
+		t.Fatalf("a create in a folder, linked: %+v", r)
+	}
 
 	// A client token's id this Meko doesn't have goes to Meko Cloud, as on /mcp: the same path and
 	// query with the key, and Meko Cloud's reply without its credentials.
