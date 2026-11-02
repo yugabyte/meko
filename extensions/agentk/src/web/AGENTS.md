@@ -55,7 +55,8 @@ with a finger. Before you finish a UI change:
 - **Where do new controls go on a phone?** A new header or footer button on the session screen
   also needs a row in the ⋯ sheet (`SessionSheet.tsx`), because the phone layout doesn't render the
   crumb header or the stage bar (the sheet shows the stage bar instead) and shortens the footer. A new project-level action belongs in the drawer (`Rail.tsx`).
-- **Touch targets** are at least 36 px tall (40 px for icon buttons). Don't rely on hover,
+- **Touch targets** are at least 36 px tall (40 px for icon buttons), except the rail's code
+  review box (`.rail-review`), kept 13 px tall so a task's row stays short. Don't rely on hover,
   right-click, Shift/⌘-click, drag and drop, or keyboard shortcuts alone; give each one a tap
   equivalent. Tooltips (`title`) aren't seen on touch, so don't hide needed information in them.
 - **Text inputs are 16 px or larger on phones**, or iOS zooms in on focus. The phone section

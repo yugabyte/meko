@@ -21,7 +21,8 @@ terminal, the magnifier takes the needs-you color and its lens knocks. Clicking 
 review's own screen (its terminal, its findings beside it) while its passes run (or it failed),
 and its findings beside the task's terminal while the task fixes them and once the review is done
 (the review session stops then). In the rail, the magnifier sits under the stage chip, their right edges lined up, with no divider,
-so the name keeps one column. The tabs and the rail list a project's sessions in the same order, kept on the server
+so the name keeps one column; it's drawn smaller there (13 px, on touch screens too), so a task's
+row grows by a short line. The tabs and the rail list a project's sessions in the same order, kept on the server
 (`sessions.position`) so every browser sees it: a new session goes first, and **Move to top** puts
 any other there, to keep the work that matters most at the top as priorities change. It's the ↑ that
 takes a rail row's stage chip's place on hover (the first line only), and is in the ⋯ sheet and the command palette (where
