@@ -33,7 +33,7 @@ const URGENCY: Record<DotState, number> = {
 };
 
 /**
- * A code-review session: a task's local review (`Session.parentId`). It never shows as a tab, a
+ * A code-review session: a task's code review (`Session.parentId`). It never shows as a tab, a
  * rail row or a list entry of its own: it's the magnifier joined to its task's tab, which opens its
  * screen while it runs (`reviewOpens`).
  */
@@ -738,7 +738,7 @@ export function runsToMerge(s: Session): boolean {
 }
 
 /**
- * The task's local review holds its Open PR: a review runs (or waits for the task's fixes between
+ * The task's code review holds its Open PR: a review runs (or waits for the task's fixes between
  * rounds) before the PR prompt goes, or failed or was cancelled and waits for Retry or Open anyway
  * (not one cancelled because the task left Code: the next Open PR starts a new review). Not one the
  * user ran: the task stays in Code with its Open PR, which takes the review over.
@@ -749,7 +749,7 @@ export function reviewGatesPr(s: Pick<Session, 'stage' | 'codeReview'>): boolean
 }
 
 /**
- * The task's local review can be run now (the `review-run` action): a task in Code, or in Review &
+ * The task's code review can be run now (the `review-run` action): a task in Code, or in Review &
  * PR once its PR is found, with no review running. `ready`: AgentK can take a prompt now (between
  * turns, not waiting on the user or exited), as the server checks; until then it's offered disabled,
  * with `wait` saying what it waits for.
@@ -766,7 +766,7 @@ export function canRunReview(s: Pick<Session, 'kind' | 'stage' | 'prNumber' | 'c
   return { offered, ready: offered && !wait, wait };
 }
 
-/** A local review the user ran, in the task's own stage, that's running (`cancel`) or stopped by a failure or the user (`retry`). */
+/** A code review the user ran, in the task's own stage, that's running (`cancel`) or stopped by a failure or the user (`retry`). */
 export function onDemandControls(s: Pick<Session, 'stage' | 'codeReview'>): { cancel: boolean; retry: boolean } {
   const r = s.codeReview;
   if (!r?.onDemand || r.stage !== stepOf(s.stage)) return { cancel: false, retry: false };
@@ -774,7 +774,7 @@ export function onDemandControls(s: Pick<Session, 'stage' | 'codeReview'>): { ca
 }
 
 /**
- * The step a session shows in the stage bar and its chip: Review & PR while its local review holds
+ * The step a session shows in the stage bar and its chip: Review & PR while its code review holds
  * the Open PR (the session stays in Code, where the review runs: docs/design/code-review.md), else
  * its stage's step.
  */

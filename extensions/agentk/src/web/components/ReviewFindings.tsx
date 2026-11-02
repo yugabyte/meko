@@ -7,7 +7,7 @@ import { Busy } from './common';
 import { SidePanel } from './SidePanel';
 
 /**
- * A local review's findings (GET /api/sessions/:id/code-review), beside its task's terminal:
+ * A code review's findings (GET /api/sessions/:id/code-review), beside its task's terminal:
  * every candidate by round and sweep, kept, pending or dropped (under Dismissed) and why, the scorer's verdict, the Meko
  * gotchas it credits and what the task did with it; the passes' notes and the datapacks the
  * MEKO.md files listed, by name with the gotchas one tagged (what each holds is for the review's
@@ -75,7 +75,7 @@ export function ReviewFindings({ session, onClose, onTerminal, onAct }: {
           </button>
         )}
         {controls.cancel && (
-          <button className="btn small" onClick={() => onAct?.('review-cancel')} title="Stop the local review you ran">
+          <button className="btn small" onClick={() => onAct?.('review-cancel')} title="Stop the code review you ran">
             Cancel
           </button>
         )}
@@ -85,7 +85,7 @@ export function ReviewFindings({ session, onClose, onTerminal, onAct }: {
           </button>
         )}
         {run?.offered && (
-          <button className="btn small" disabled={!run.ready} onClick={() => onAct?.('review-run')} title="Run the local review again on the change as it is now">
+          <button className="btn small" disabled={!run.ready} onClick={() => onAct?.('review-run')} title="Run the code review again on the change as it is now">
             Review again
           </button>
         )}

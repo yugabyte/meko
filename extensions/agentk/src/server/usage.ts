@@ -384,7 +384,7 @@ function usageByModel(db: Db, projectId?: string): ModelUsage[] {
     .sort((a, b) => totalTokens(b.usage) - totalTokens(a.usage));
 }
 
-/** A local review as the usage counts read it from `code_reviews`. */
+/** A code review as the usage counts read it from `code_reviews`. */
 export interface ReviewRun {
   /** When it started. */
   at: number;
@@ -407,7 +407,7 @@ const parsed = <T>(s: string | null, fallback: T): T => {
   }
 };
 
-/** Every local review, or one project's (its task's project), oldest first. A row that doesn't parse counts as finding nothing. */
+/** Every code review, or one project's (its task's project), oldest first. A row that doesn't parse counts as finding nothing. */
 export function reviewRuns(db: Db, projectId?: string): ReviewRun[] {
   // `reported`: a step of the review's current round (r<round>s…, r<round>c…) has reported.
   return all<{
@@ -458,7 +458,7 @@ export function countReviews(runs: ReviewRun[]): CodeReviewCounts {
   return c;
 }
 
-/** Local reviews' counts, and their sessions' tokens, for every project or one. */
+/** Code reviews' counts, and their sessions' tokens, for every project or one. */
 export function reviewUsage(db: Db, projectId?: string): CodeReviewUsage {
   const where = `s.kind = 'code-review'${projectId ? ' AND s.project_id = ?' : ''}`;
   const args = projectId ? [projectId] : [];
@@ -468,7 +468,7 @@ export function reviewUsage(db: Db, projectId?: string): CodeReviewUsage {
   };
 }
 
-/** Local reviews' sessions' tokens and cost per UTC day from `since`, for the usage report. Days with none are left out. */
+/** Code reviews' sessions' tokens and cost per UTC day from `since`, for the usage report. Days with none are left out. */
 export function reviewSpendByDay(db: Db, since: number): Map<string, { usage: TokenUsage; cost: UsageCost }> {
   const day = "strftime('%Y-%m-%d', u.at / 1000, 'unixepoch')";
   const from = `FROM usage_messages u JOIN sessions s ON s.id = u.session_id WHERE s.kind = 'code-review' AND u.at >= ?`;

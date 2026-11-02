@@ -146,7 +146,7 @@ export interface SessionRow {
   purpose: string | null;
   /** A code-review session's task (Session.parentId); NULL for every other session. */
   parent_id: string | null;
-  /** The session's own local review settings (ReviewOverrides, JSON); NULL for none. */
+  /** The session's own code review settings (ReviewOverrides, JSON); NULL for none. */
   review_json: string | null;
 }
 
@@ -268,11 +268,11 @@ export interface SessionRuntime {
   mekoCall: boolean;
   background: BackgroundTask[];
   approvalQueued: boolean;
-  /** The task's latest local review, or a code-review session's own (review/runner.ts). */
+  /** The task's latest code review, or a code-review session's own (review/runner.ts). */
   codeReview: CodeReviewSummary | null;
 }
 
-/** A session's own local review settings, from `review_json`. */
+/** A session's own code review settings, from `review_json`. */
 export function sessionReview(r: Pick<SessionRow, 'review_json'>): ReviewOverrides {
   if (!r.review_json) return {};
   try {

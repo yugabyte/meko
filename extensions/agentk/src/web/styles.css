@@ -1511,7 +1511,7 @@ textarea.input {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* A task with a local review: one joined tab, the task's part then the review's (the magnifier),
+/* A task with a code review: one joined tab, the task's part then the review's (the magnifier),
    inside one hairline border; each part is a button, and only the one on screen is selected. */
 .tab-joined {
   display: flex;
@@ -1658,7 +1658,7 @@ textarea.input {
     opacity: 1;
   }
 }
-/* The rail's row for a task with a local review: one grid, which the task's button covers whole
+/* The rail's row for a task with a code review: one grid, which the task's button covers whole
    and passes its columns to (subgrid). The name takes the middle column on every line; the right
    column holds the stage chip on the first line and the review's part (the magnifier) under it,
    drawn over the task's button, so the chip stays the task's and the column is as wide as the
@@ -1705,17 +1705,25 @@ textarea.input {
   height: auto;
 }
 /* The right margin is the task button's right padding, which insets the chip above (a subgrid's
-   padding acts as margin on its edge items), so the two boxes' right edges line up. */
+   padding acts as margin on its edge items), so the two boxes' right edges line up. As tall as its
+   13 px magnifier, with no padding above or below, so the row's second line stays short. */
 .rail-review {
   position: relative;
   grid-column: -2;
   grid-row: 2;
   align-self: start;
   justify-self: end;
-  margin: 4px 8px 0 0;
+  margin: 3px 8px 0 0;
   border-left: 0;
   border-radius: 6px;
-  padding: 2px 8px 4px;
+  padding: 0 5px;
+  gap: 3px;
+  font-size: 11px;
+  line-height: 13px;
+}
+/* Zoomed rather than resized: Meko's m over the lens is sized for the 16 px glass and scales with it. */
+.rail-review .review-glass {
+  zoom: 0.8125;
 }
 .rail-review.sel {
   background: var(--accent-soft);
@@ -1726,7 +1734,7 @@ textarea.input {
   border-color: color-mix(in srgb, var(--bad) 45%, var(--rule));
   border-style: solid;
 }
-/* A local review's findings (ReviewFindings), beside its session's terminal. */
+/* A code review's findings (ReviewFindings), beside its session's terminal. */
 .review-body {
   flex: 1;
   min-height: 0;
@@ -1838,7 +1846,7 @@ textarea.input {
 .rv-outcome.declined {
   color: var(--warn);
 }
-/* The ⋯ sheet's local review rows and its settings; New session's Local review group. */
+/* The ⋯ sheet's code review rows and its settings; New session's Code review group. */
 .sheet-review {
   display: inline-flex;
   align-items: center;
@@ -6653,12 +6661,19 @@ a.wq-chip:hover {
   border-color: var(--accent);
 }
 
-/* The local review's part of a tab or rail row is a finger's width on a touch screen. */
+/* The code review's part of a tab is a finger's width on a touch screen. The rail's keeps its
+   desktop size, so a task's row stays short: below the 36 px touch target on purpose (REVIEW.md
+   names it). On a phone the task's ⋯ sheet also has a full-height row for its code review; on a
+   tablet's desktop layout there's no sheet, and this box is the rail's way in. */
 @media (pointer: coarse) {
   .review-seg {
     min-width: 40px;
     min-height: 36px;
     justify-content: center;
+  }
+  .rail-review {
+    min-width: 0;
+    min-height: 0;
   }
 }
 @media (max-width: 760px) {

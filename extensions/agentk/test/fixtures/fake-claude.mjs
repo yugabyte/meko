@@ -287,7 +287,7 @@ async function turn(text) {
     return;
   }
   if (text.includes('DESIGN_MD')) writeFileSync(process.env.AK_DESIGN_FILE, '# Design\n\nDo the thing.\n');
-  // Asked for the PR description before a local review: `pr-description.md` in the fake's dir, when there, beside the design file.
+  // Asked for the PR description before a code review: `pr-description.md` in the fake's dir, when there, beside the design file.
   if (text.includes('pr-description.md') && text.includes("write the PR's title and description") && existsSync(join(dir, 'pr-description.md'))) {
     writeFileSync(join(dirname(process.env.AK_DESIGN_FILE), 'pr-description.md'), readFileSync(join(dir, 'pr-description.md')));
   }
@@ -379,7 +379,7 @@ async function turn(text) {
   modMeasure();
 }
 
-// Like a code-review session running its steps in subagents (AgentK's local review): each step's
+// Like a code-review session running its steps in subagents (AgentK's code review): each step's
 // file names its report tool and step id, and the subagent reports through AgentK's tools route.
 // `review-reports.json` in the fake's dir maps a pass name to its report (default LGTM), and
 // `review-scores.json` a step id to its score (default confirmed at 90); a `review-skip` file lists

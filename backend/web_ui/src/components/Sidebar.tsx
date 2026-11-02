@@ -1,6 +1,6 @@
-// The left rail: the Meko mark, the Status link, the Extensions group, Projects, the Settings link,
-// the datapacks, and the version (with a chip to the Status page's Updates card when a newer release is
-// out) and theme toggle. Below md it's a drawer over the page, opened from the top bar. The datapacks
+// The left rail: the Meko mark, the Status link, the Extensions group, Projects, the datapacks, and
+// the version (with a chip to the Status page's Updates card when a newer release is out), the
+// Settings gear and the theme toggle. Below md it's a drawer over the page, opened from the top bar. The datapacks
 // are one list, by name, each opened where its row's web_url says: this UI's pages, or Meko Cloud's
 // web app in a new tab. The Find a datapack box above them narrows it to the names that hold what's
 // typed, like Meko Cloud's.
@@ -91,7 +91,6 @@ export function Sidebar({
           <StatusLink active={view === "status"} />
           <ExtensionsLink active={view === "extensions"} />
           <ProjectsLink active={view === "projects" || view === "project"} />
-          <SettingsLink active={view === "settings"} />
         </div>
 
         <div className="flex items-center justify-between px-4 pb-1 pt-2">
@@ -177,6 +176,7 @@ export function Sidebar({
             )}
           </span>
           <div className="flex items-center">
+            <SettingsLink active={view === "settings"} />
             <Button size="sm" variant="ghost" onClick={onToggleTheme} title="Toggle theme">
               {theme === "dark" ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
             </Button>

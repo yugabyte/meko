@@ -86,7 +86,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 [pr]
 # resolve_conflicts = false  # don't have AgentK resolve a PR's merge conflicts with its base (Settings → General); on by default
 
-[code_review]                # the local review before a PR opens (docs/design/code-review.md), also in Settings › Code review
+[code_review]                # the code review before a PR opens (docs/design/code-review.md), also in Settings › Code review
 # strategy = "off"           # off, sirius-1.0, or sagittarius-3.0 (the default); a project's and a session's own go over it
 # depth = 3                  # times a review runs before AgentK gets the findings to fix (1 to 5; 1 by default); more than one is a deep review: each sweep looks past what the earlier ones found, up to this count, and from the second on, one that finds nothing new ends it; costs more tokens
 # rounds = 1                 # times the code review runs again after AgentK fixes the last review's findings (0 to 5; 0 by default); a review that finds nothing ends it early
@@ -153,7 +153,7 @@ CREATE TABLE sessions (
                                   -- stages (older releases and pages index their stage lists with it); kindOf() reads all three as a task
   stage TEXT,                     -- explore | design | code | pr | review | merge (Merge & Close) | done | reviewing-pr | reviewing-code
   parent_id TEXT,                 -- a code-review session's task (code-review.md); NULL for the rest
-  review_json TEXT,               -- the session's own local review settings (ReviewOverrides); NULL: its project's
+  review_json TEXT,               -- the session's own code review settings (ReviewOverrides); NULL: its project's
   pr_number INTEGER, pr_url TEXT, review_state TEXT, ci_state TEXT,
   pr_repo TEXT, pr_title TEXT, pr_author TEXT,  -- Review a PR only: the PR's owner/name on GitHub, title and author
   review_sha TEXT, pr_head_sha TEXT,  -- Review a PR: the commit checked out; the PR's head at the last look
@@ -163,7 +163,7 @@ CREATE TABLE sessions (
   push_remote TEXT, push_branch TEXT,  -- a task on a PR whose head isn't origin's branch of its name (a fork's):
                                    --   the remote and branch it pushes to (NULL: origin, the session's branch)
   plan_mode INTEGER,               -- 1: designs in Claude's plan mode (sessions created before designs moved out of it)
-  pending_prompts TEXT,            -- prompts queued for Claude: JSON map of 'review' | 'review-people' | 'review-held' | 'conflicts' | 'ci' | 'review-pr-update' | 'review-pr-design' to
+  pending_prompts TEXT,            -- prompts queued for Claude: JSON map of 'review' | 'review-people' | 'review-held' | 'local-review' | 'conflicts' | 'ci' | 'review-pr-update' | 'review-pr-design' to
                                    --   { state: 'queued' | 'sent' (until that turn ends), vars }; replaces pending_review
   ci_fix_head TEXT, ci_fixes INTEGER,  -- the PR head that last got a CI-fix prompt; how many heads in a row did
   conflict_head TEXT, conflict_fixes INTEGER,  -- the PR head that last got a prompt to resolve merge conflicts; how many
@@ -222,7 +222,7 @@ CREATE TABLE work_items (      -- the work queue (workqueue.ts, docs/design/work
   unplaced INTEGER, github_done_at INTEGER, created_at INTEGER, closed_at INTEGER);
 CREATE TABLE work_item_links (item_id TEXT, ord INTEGER, key TEXT, kind TEXT, url TEXT, label TEXT,
   PRIMARY KEY (item_id, key));  -- indexed on key, for the palette's lookup by link
-CREATE TABLE code_reviews (    -- a task's local reviews (review/runner.ts, docs/design/code-review.md), one per Open PR, move to Review & PR or review-run
+CREATE TABLE code_reviews (    -- a task's code reviews (review/runner.ts, docs/design/code-review.md), one per Open PR, move to Review & PR or review-run
   id TEXT PRIMARY KEY, task_id TEXT, session_id TEXT,  -- the task, and its code-review session
   strategy TEXT, rounds INTEGER, depth INTEGER,        -- what it runs with, stamped when it starts
   state TEXT,                  -- describing | preparing | sweeping | scoring | fixing | done | failed | cancelled

@@ -105,7 +105,7 @@ export interface Config {
    */
   workQueue: { github: boolean; slack: boolean; syncMinutes: number; slackList: string; slackModel: string; slackTimeoutSeconds: number; slackTools: string[] };
   /**
-   * The local code review before a PR opens (review/runner.ts, docs/design/code-review.md), also in Settings › Code review;
+   * The code review before a PR opens (review/runner.ts, docs/design/code-review.md), also in Settings › Code review;
    * a project's settings and a session's own go over these. strategy: `off`, `sirius-1.0` or `sagittarius-3.0`. rounds:
    * re-reviews after the first (0 to MAX_ROUNDS). depth: sweeps in each review (1 to MAX_DEPTH). models: the model each
    * tier of review step runs on, per harness (`[code_review.models.<harness>]`: large, mid, small); empty runs it on the
@@ -476,7 +476,7 @@ export function readClaudeSettingsEnv(): Record<string, unknown> {
   }
 }
 
-/** The global local review settings, as `resolveReview` takes them. */
+/** The global code review settings, as `resolveReview` takes them. */
 export function globalReview(cfg: Config): ReviewSettings {
   return { strategy: cfg.codeReview.strategy as ReviewSettings['strategy'], rounds: cfg.codeReview.rounds, depth: cfg.codeReview.depth };
 }

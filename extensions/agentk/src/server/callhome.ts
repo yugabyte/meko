@@ -408,7 +408,7 @@ export function buildReport(db: Db, o: ReportOptions): CallHomeReport {
     t.actions += n(a.actions);
   }
 
-  // Local code reviews: each on the day it started, its sessions' tokens on the day they were spent.
+  // Code reviews: each on the day it started, its sessions' tokens on the day they were spent.
   // A day with neither leaves `codeReview` out.
   const reviewDays = new Map<string, ReviewRun[]>();
   for (const r of reviewRuns(db)) {

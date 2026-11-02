@@ -308,7 +308,7 @@ your phone can connect.
   re-review rounds and depth are in Settings, the project's settings and each session's own.
   You can also run the review whenever you like, in Code or on the open PR in Review & PR: from the
   command palette, **Review again** on its findings (which also has Cancel and Retry for it), or
-  **Run local review** in the ⋯ sheet on a phone. One run in Code is the one Open PR uses, so the PR
+  **Run code review** in the ⋯ sheet on a phone. One run in Code is the one Open PR uses, so the PR
   opens without reviewing again.
   You approve the design, opening the PR, and Merge & Close, which merges the PR and
   cleans up the branches, leaving the worktree for the next session. Pressed early, they wait:
@@ -330,7 +330,7 @@ your phone can connect.
   subagents included, with its cost at API list prices (OpenCode sessions' tokens too, from AgentK's
   plugin); Kiro sessions count the credits Kiro billed,
   beside the cost and never added to it, with a Credits column by session and model and a credits
-  bar beside each day's tokens. Each day's bar stacks the tokens local code reviews spent, and a
+  bar beside each day's tokens. Each day's bar stacks the tokens code reviews spent, and a
   **Code Reviews** section counts the reviews, the issues they found, the ones fixed and the PRs opened
   after them. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
@@ -354,7 +354,7 @@ your phone can connect.
   and when they reset, and once you've run a session on Kiro, the Kiro credits your plan has used.
 - **Usage stats:** once a day (hourly in its first day) AgentK sends anonymous counts to YugabyteDB: how many
   projects, sessions, PRs, commits and tokens (by model) it handled, which file types changed, and
-  how its local code reviews went (reviews, issues found and fixed, tokens and cost).
+  how its code reviews went (reviews, issues found and fixed, tokens and cost).
   It never sends names, paths, prompts, code, or who you are. Turn it off in Settings › General
   (details in [docs/design/usage-stats.md](docs/design/usage-stats.md)).
 - **Survives restarts:** after a host reboot, every open session is brought back with

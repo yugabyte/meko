@@ -90,7 +90,7 @@ paste, then Enter). A prompt is never sent both ways:
   user message with the prompt's first line). Only when that shows no turn either is the prompt
   lost, and `submit()`'s `lost` callback tells its sender; a harness that can't tell counts it as
   started, so a prompt runs once at most. Only the PR prompt acts on it (`prLost` in
-  `lifecycle.ts`): the session goes back to where it was, a local review's own PR prompt counts as
+  `lifecycle.ts`): the session goes back to where it was, a code review's own PR prompt counts as
   not sent, and the prompt goes again once Claude is back with no prompt of its own (`claudeBack`:
   a Resume or a recovery whose launch had none), or is dropped (logged) when anything comes first
   (see [Queued gates](lifecycle.md#queued-gates)). A send whose prompt is reported lost while it's

@@ -32,7 +32,7 @@ const LEDGERS = {
   claims: { claims: [], summary: 'LGTM', findings: [] },
 };
 
-describe('local code review before the PR (real session host + git, fake claude running the review steps)', { timeout: 60000 }, () => {
+describe('code review before the PR (real session host + git, fake claude running the review steps)', { timeout: 60000 }, () => {
   let env: TestEnv;
   beforeEach(async () => {
     env = await makeEnv({ review: true });
@@ -308,7 +308,7 @@ describe('local code review before the PR (real session host + git, fake claude 
       const s = await task({ review: { strategy: 'sirius-1.0' } });
       userTurnAtFinish(s.id);
       await env.core.sessions.action(s.id, 'open-pr');
-      await waitFor(() => events(s.id, 'review'), (e) => e.includes('The local review is done: the PR prompt goes when AgentK finishes its turn'), 30000, 'the review to finish');
+      await waitFor(() => events(s.id, 'review'), (e) => e.includes('The code review is done: the PR prompt goes when AgentK finishes its turn'), 30000, 'the review to finish');
       expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'code', status: 'working', queued: 'open-pr', codeReview: { state: 'done' } });
       expect(env.core.sessions.row(s.id).queued_auto).toBe(0);
       expect(finished(s.id)).toBeNull();
@@ -320,7 +320,7 @@ describe('local code review before the PR (real session host + git, fake claude 
       const s = await task({ review: { strategy: 'sirius-1.0' } });
       userTurnAtFinish(s.id);
       await env.core.sessions.edit(s.id, { autoRun: true });
-      await waitFor(() => events(s.id, 'review'), (e) => e.includes('The local review is done: the PR prompt goes when AgentK finishes its turn'), 30000, 'the review to finish');
+      await waitFor(() => events(s.id, 'review'), (e) => e.includes('The code review is done: the PR prompt goes when AgentK finishes its turn'), 30000, 'the review to finish');
       expect(env.core.sessions.row(s.id)).toMatchObject({ queued_gate: 'open-pr', queued_auto: 1 });
       await sentAfterTurn(s.id, s.claudeSessionId);
     });
@@ -331,7 +331,7 @@ describe('local code review before the PR (real session host + git, fake claude 
       await env.core.sessions.edit(s.id, { autoRun: true });
       expect(env.core.sessions.get(s.id).codeReview).toMatchObject({ state: expect.stringMatching(/describing|preparing|sweeping|scoring/) });
       await env.core.sessions.edit(s.id, { autoRun: false });
-      await waitFor(() => events(s.id, 'review'), (e) => e.some((t) => t.startsWith("The PR prompt didn't go after the local review: AgentK is still working.")), 30000, 'the review to finish');
+      await waitFor(() => events(s.id, 'review'), (e) => e.some((t) => t.startsWith("The PR prompt didn't go after the code review: AgentK is still working.")), 30000, 'the review to finish');
       expect(env.core.sessions.row(s.id)).toMatchObject({ queued_gate: null, auto_run: 0 });
       await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, "the user's turn to end");
       expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'code', codeReview: { state: 'done' } });
@@ -531,15 +531,15 @@ describe('local code review before the PR (real session host + git, fake claude 
       // AgentK waits on the user in the terminal: the fix prompt isn't typed into it.
       run(env.core.db, `UPDATE sessions SET status = 'needs_input' WHERE id = ?`, s.id);
       await waitFor(() => env.core.sessions.get(s.id).codeReview!.state, (st) => st === 'done', 30000, 'the review to finish');
-      expect(env.core.lifecycle.localReviewPending(s.id)).toBe(true);
+      expect(env.core.lifecycle.codeReviewPending(s.id)).toBe(true);
       expect(prompts(s.claudeSessionId).some((p) => p.includes('Off by one.'))).toBe(false);
-      await expect(env.core.sessions.action(s.id, 'review-run')).rejects.toThrow(/hasn't taken the last local review's fixes/);
+      await expect(env.core.sessions.action(s.id, 'review-run')).rejects.toThrow(/hasn't taken the last code review's fixes/);
       run(env.core.db, `UPDATE sessions SET status = 'idle' WHERE id = ?`, s.id);
       await env.core.sessions.action(s.id, 'open-pr');
       const pr = await prPrompt(s.claudeSessionId);
       expect(pr).toContain('[1:1] `src/a.ts:2` **blocker**: Off by one.');
       expect(pr).toContain('me_ak_review:1 blocker addressed;Sirius1.0');
-      expect(env.core.lifecycle.localReviewPending(s.id)).toBe(false);
+      expect(env.core.lifecycle.codeReviewPending(s.id)).toBe(false);
     });
 
     it('is taken over by a move to Review & PR while it runs, with the strategy Off, and the PR goes when it is done', async () => {
@@ -572,11 +572,11 @@ describe('local code review before the PR (real session host + git, fake claude 
 
     it("doesn't hold Open PR once cancelled, and goes stale once the task leaves Code", async () => {
       const s = await task({ review: { strategy: 'sirius-1.0' } });
-      await expect(env.core.sessions.action(s.id, 'review-cancel')).rejects.toThrow(/No local review is running/);
+      await expect(env.core.sessions.action(s.id, 'review-cancel')).rejects.toThrow(/No code review is running/);
       await env.core.sessions.action(s.id, 'review-run');
       await env.core.sessions.action(s.id, 'review-cancel');
       expect(env.core.sessions.get(s.id).codeReview).toMatchObject({ state: 'cancelled', onDemand: true });
-      await expect(env.core.sessions.action(s.id, 'review-open-anyway')).rejects.toThrow(/no stopped local review/);
+      await expect(env.core.sessions.action(s.id, 'review-open-anyway')).rejects.toThrow(/no stopped code review/);
       // Run again, to the end: leaving Code makes it stale, so a move back to Review & PR reviews again.
       await described(s, 1);
       await env.core.sessions.action(s.id, 'review-run');
@@ -597,10 +597,10 @@ describe('local code review before the PR (real session host + git, fake claude 
       const st = await (await import('../../src/server/github.js')).prStatus('', 7);
       const info = env.core.lifecycle.mergeInfo(env.core.sessions.row(s.id), st, { uncommitted: 1 });
       expect(info).toMatchObject({ canMerge: false, queueable: true, hard: [] });
-      expect(info.blockers).toContain('The local review is still running.');
+      expect(info.blockers).toContain('The code review is still running.');
       // With Claude gone, nothing clears it by itself: a queued merge is dropped, with a notice.
       const exited = env.core.lifecycle.mergeInfo({ ...env.core.sessions.row(s.id), status: 'exited' }, st, { uncommitted: 1 });
-      expect(exited.hard).toEqual(expect.arrayContaining(['The local review is still running.', 'The worktree has 1 uncommitted file: commit or discard them.']));
+      expect(exited.hard).toEqual(expect.arrayContaining(['The code review is still running.', 'The worktree has 1 uncommitted file: commit or discard them.']));
       // No PR description turn: round 1 reads the PR's own title and description.
       const fix = await waitFor(() => prompts(s.claudeSessionId).at(-1)!, (p) => p.includes('round 1'), 30000, 'the fix prompt');
       expect(fix).toContain("Don't commit or push yet: AgentK reviews the change again first.");
@@ -614,7 +614,7 @@ describe('local code review before the PR (real session host + git, fake claude 
       expect(done).toMatchObject({ stage: 'review', codeReview: { round: 2, onDemand: true, stage: 'review' } });
       await waitFor(() => gh.body, (b) => b.includes('me_ak_review:1 blocker addressed;Sagittarius3.0'), 10000, "the review's line in the PR");
       expect(prompts(s.claudeSessionId).filter((p) => p.includes("write the PR's title and description"))).toHaveLength(0);
-      await waitFor(() => env.core.lifecycle.localReviewPending(s.id), (p) => !p, 10000, 'the push turn to end');
+      await waitFor(() => env.core.lifecycle.codeReviewPending(s.id), (p) => !p, 10000, 'the push turn to end');
     });
 
     it('is cancelled when the task leaves Review & PR', async () => {
