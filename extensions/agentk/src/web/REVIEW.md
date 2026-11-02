@@ -14,6 +14,8 @@ a **major** finding.
 - [ ] Nothing needs hover, right-click, modifier-click, drag and drop, or a keyboard shortcut
       without a tap equivalent. Needed information isn't only in a `title` tooltip.
 - [ ] Touch targets are at least 36 px tall (40 px for icon buttons) under `(pointer: coarse)`.
+      The one exception is the rail's local review box (`.rail-review`), kept 13 px tall so a
+      task's row stays short.
 - [ ] A setting (Settings, Project settings) shows at most one short line of hint, about 50
       characters; a longer explanation goes behind an ⓘ (`InfoButton` and `InfoPanel`,
       `InfoCheck` or `Field`'s `info` in `common.tsx`), whose text opens under the whole setting.

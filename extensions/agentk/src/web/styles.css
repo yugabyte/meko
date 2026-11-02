@@ -1705,17 +1705,25 @@ textarea.input {
   height: auto;
 }
 /* The right margin is the task button's right padding, which insets the chip above (a subgrid's
-   padding acts as margin on its edge items), so the two boxes' right edges line up. */
+   padding acts as margin on its edge items), so the two boxes' right edges line up. As tall as its
+   13 px magnifier, with no padding above or below, so the row's second line stays short. */
 .rail-review {
   position: relative;
   grid-column: -2;
   grid-row: 2;
   align-self: start;
   justify-self: end;
-  margin: 4px 8px 0 0;
+  margin: 3px 8px 0 0;
   border-left: 0;
   border-radius: 6px;
-  padding: 2px 8px 4px;
+  padding: 0 5px;
+  gap: 3px;
+  font-size: 11px;
+  line-height: 13px;
+}
+/* Zoomed rather than resized: Meko's m over the lens is sized for the 16 px glass and scales with it. */
+.rail-review .review-glass {
+  zoom: 0.8125;
 }
 .rail-review.sel {
   background: var(--accent-soft);
@@ -6653,12 +6661,19 @@ a.wq-chip:hover {
   border-color: var(--accent);
 }
 
-/* The local review's part of a tab or rail row is a finger's width on a touch screen. */
+/* The local review's part of a tab is a finger's width on a touch screen. The rail's keeps its
+   desktop size, so a task's row stays short: below the 36 px touch target on purpose (REVIEW.md
+   names it). On a phone the task's ⋯ sheet also has a full-height row for its local review; on a
+   tablet's desktop layout there's no sheet, and this box is the rail's way in. */
 @media (pointer: coarse) {
   .review-seg {
     min-width: 40px;
     min-height: 36px;
     justify-content: center;
+  }
+  .rail-review {
+    min-width: 0;
+    min-height: 0;
   }
 }
 @media (max-width: 760px) {

@@ -87,6 +87,58 @@ describe("a rail session's name", () => {
   });
 });
 
+describe("a rail task's local review", () => {
+  // Every rule in the file, in order, with the @media it sits in ('' outside one).
+  const css = STYLES.replace(/\/\*[\s\S]*?\*\//g, '');
+  const rules: { media: string; sel: string; body: string; at: number }[] = [];
+  for (const m of css.matchAll(/@media([^{]+)\{((?:[^{}]*\{[^{}]*\})*[^{}]*)\}|@[^{]+\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}|([^{}@]+)\{([^{}]*)\}/g)) {
+    if (m[1]) for (const r of m[2]!.matchAll(/([^{}]+)\{([^{}]*)\}/g)) rules.push({ media: m[1].trim(), sel: r[1]!.trim(), body: r[2]!, at: m.index + r.index });
+    else if (m[3]) rules.push({ media: '', sel: m[3].trim(), body: m[4]!, at: m.index });
+  }
+  // A property's value on an element with these classes, where the given media match: the last
+  // declaration of the most specific selector whose subject has no other class (states left out).
+  const value = (classes: string[], prop: string, media: string[]) => {
+    let best: { spec: number; at: number; v: string } | null = null;
+    for (const r of rules) {
+      if (r.media && !media.includes(r.media)) continue;
+      const v = r.body.match(new RegExp(`(?:^|;)\\s*${prop}:\\s*([^;]+)`))?.[1]?.trim();
+      if (!v) continue;
+      for (const part of r.sel.split(',')) {
+        if (/:(hover|focus|active|disabled)|\.(sel|stopped|running|waiting|meko)\b/.test(part)) continue;
+        const subject = part.trim().split(/\s*[\s>+~]\s*/).pop()!;
+        const own = [...subject.matchAll(/\.([\w-]+)/g)].map((c) => c[1]!);
+        if (!own.length || !own.every((c) => classes.includes(c)) || !/^\.[\w.-]+$/.test(subject)) continue;
+        const spec = (part.match(/\./g) ?? []).length;
+        if (!best || spec > best.spec || (spec === best.spec && r.at >= best.at)) best = { spec, at: r.at, v };
+      }
+    }
+    return best?.v;
+  };
+  const px = (v: string | undefined) => (v ? parseFloat(v) : 0);
+  // The box's height: its line or its glass, whichever is taller, and its padding, at least its min-height.
+  const boxHeight = (media: string[]) => {
+    const box = ['review-seg', 'rail-review'];
+    const pad = (value(box, 'padding', media) ?? '0').split(/\s+/).map(px);
+    const line = value(box, 'line-height', media);
+    const font = px(value(box, 'font-size', media));
+    const lineHeight = line?.endsWith('px') ? px(line) : font * (line ? parseFloat(line) : 1.45);
+    // The glass is 16 px (the SVG's own size) times any zoom a rule on .rail-review .review-glass gives it.
+    const zoom = rules.filter((r) => !r.media && r.sel === '.rail-review .review-glass').map((r) => parseFloat(r.body.match(/zoom:\s*([\d.]+)/)?.[1] ?? '1'))[0] ?? 1;
+    const height = Math.max(lineHeight, 16 * zoom) + pad[0]! + (pad[2] ?? pad[0]!);
+    return Math.max(height, px(value(box, 'min-height', media)));
+  };
+
+  // Its box once took 23.4 px (a 17.4 px line, 12 px at 1.45, and 6 px of padding) under a 4 px gap.
+  it('is no taller than its 13 px magnifier', () => {
+    expect(boxHeight([])).toBe(13);
+  });
+
+  it("keeps that height on a touch screen, where a tab's part is a finger's size", () => {
+    expect(boxHeight(['(pointer: coarse)'])).toBe(13);
+    expect(value(['review-seg', 'tab-review'], 'min-height', ['(pointer: coarse)'])).toBe('36px');
+  });
+});
+
 describe("Kiro's plan lines", () => {
   const plan = (over: KiroPlan['overage'], bonus: KiroPlan['bonus'] = null): Pick<KiroPlan, 'bonus' | 'overage'> => ({ bonus, overage: over });
 
