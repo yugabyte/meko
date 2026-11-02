@@ -15,14 +15,14 @@ import { inheritedReview, useReviewDefaults } from '../reviewdefaults';
  */
 export function OpenPrDialog({ session, projectReview, onClose }: {
   session: Session;
-  /** The project's local review settings, what the session's "Default" stands for over the global ones. */
+  /** The project's code review settings, what the session's "Default" stands for over the global ones. */
   projectReview: ReviewOverrides;
   onClose: () => void;
 }) {
   // On touch, the keyboard comes up only when a field is tapped.
   const touch = useTouch();
   const [instructions, setInstructions] = useState(session.queuedInstructions ?? '');
-  // The session's own local review settings: saved before the PR prompt goes, when changed here.
+  // The session's own code review settings: saved before the PR prompt goes, when changed here.
   const [review, setReview] = useState<ReviewOverrides>(session.review ?? {});
   const reviewDefaults = useReviewDefaults();
   const [error, setError] = useState<string | null>(null);
@@ -91,7 +91,7 @@ export function OpenPrDialog({ session, projectReview, onClose }: {
           placeholder="e.g. Open it as a draft, and target release-2.4."
         />
         <fieldset className="ns-review">
-          <legend className="label">Local review</legend>
+          <legend className="label">Code review</legend>
           <ReviewFields
             id="pr-review"
             scoped

@@ -69,7 +69,7 @@ export function MekoCallsView({
   }, [project.id, reload]);
 
   // The session shown: the one asked for, else the one written to last, else the newest running one.
-  // A task's local review makes Meko calls of its own (the passes' gotcha searches), so it's listed too.
+  // A task's code review makes Meko calls of its own (the passes' gotcha searches), so it's listed too.
   const live = liveWithReviews(project);
   const sid = sessionId ?? logs?.[0]?.sessionId ?? (logs ? (live.at(-1)?.id ?? null) : null);
   const choices: { id: string; name: string }[] = (logs ?? []).map((l) => ({ id: l.sessionId, name: l.name }));

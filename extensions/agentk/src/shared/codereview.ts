@@ -1,5 +1,5 @@
 /**
- * AgentK's local code review (docs/design/code-review.md): the review strategies, the three
+ * AgentK's code review (docs/design/code-review.md): the review strategies, the three
  * settings (strategy, re-review rounds, depth) and how a session's, its project's and the global
  * values resolve, the `me_ak_review:` line a PR description carries, and the short label the
  * review's part of a task's tab shows. Used by the server and the web UI.
@@ -8,7 +8,7 @@
 /** A review strategy's id, stamped on every review and never reused (`STRATEGIES`). */
 export type ReviewStrategyId = 'sagittarius-3.0' | 'sirius-1.0';
 
-/** The strategy setting: a strategy, or no local review. */
+/** The strategy setting: a strategy, or no code review. */
 export type ReviewStrategySetting = ReviewStrategyId | 'off';
 
 export interface ReviewStrategyInfo {
@@ -156,7 +156,7 @@ export interface MeAkReview {
 }
 
 /**
- * The PR description's line for a finished local review: every round's findings added up, each
+ * The PR description's line for a finished code review: every round's findings added up, each
  * severity that has some, in the order blocker, major, minor; `LGTM` when no round found any; then
  * `;` and the strategy that ran (`strategyTag`).
  */
@@ -205,12 +205,12 @@ export function withMeAkReviewLine(body: string, line: string): string {
 }
 
 /**
- * Where a local review is (`CodeReviewSummary.state`): `describing` while the task writes the PR's
+ * Where a code review is (`CodeReviewSummary.state`): `describing` while the task writes the PR's
  * title and description for the passes to read, before the first round.
  */
 export type CodeReviewState = 'describing' | 'preparing' | 'sweeping' | 'scoring' | 'fixing' | 'done' | 'failed' | 'cancelled';
 
-/** What a task's tab and rail row show of its local review (`Session.codeReview`). */
+/** What a task's tab and rail row show of its code review (`Session.codeReview`). */
 export interface CodeReviewSummary {
   /** The review's id (`code_reviews.id`). */
   id: string;
@@ -309,7 +309,7 @@ export function reviewSegmentLabel(r: CodeReviewSummary): string {
   }
   const meko = r.mekoCall ? ', searching Meko' : '';
   const waiting = r.waiting ? ', waiting on you in its terminal' : '';
-  return `Local review: ${[name, ...where, what].join(', ')}${meko}${waiting}`;
+  return `Code review: ${[name, ...where, what].join(', ')}${meko}${waiting}`;
 }
 
 /** The Code gate's line for a done review: what it found until the task addressed it, then LGTM. */

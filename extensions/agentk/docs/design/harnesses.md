@@ -162,7 +162,7 @@ session manager, projects and Ask AgentK call a session's adapter rather than as
 runs on. The adapter says how to prepare its files and settle what a launch needs first
 (`prepare`, `beforeLaunch`: Claude Code's folder trust, Kiro's agent file), which folders to trust
 and what its trust dialog looks like (`trustFolder`, `trustPrompt`, Claude Code only), its command line
-(`launcher`, which also takes `LaunchInput.tools`: launch with [AgentK's session tools](tools.md), and `LaunchInput.review`: a [local review](code-review.md)'s read-only subagents, one per model tier, as Claude Code's `--agents` and OpenCode's `agent` config; Kiro, whose `HARNESS_CAPS.reviewSteps` is `turns`, runs each step as a prompt of its own after `/clear`), its hooks (`normalize`, `deny`, `context`, `editedPaths`, and `mekoTool` for a CLI without the mod: which events open and close a Meko call for the dot's m), its conversation on disk
+(`launcher`, which also takes `LaunchInput.tools`: launch with [AgentK's session tools](tools.md), and `LaunchInput.review`: a [code review](code-review.md)'s read-only subagents, one per model tier, as Claude Code's `--agents` and OpenCode's `agent` config; Kiro, whose `HARNESS_CAPS.reviewSteps` is `turns`, runs each step as a prompt of its own after `/clear`), its hooks (`normalize`, `deny`, `context`, `editedPaths`, and `mekoTool` for a CLI without the mod: which events open and close a Meko call for the dot's m), its conversation on disk
 (`canResume`, and `findConversation` for a CLI that picks its own id), the files a session's
 progress shows in (`activityFiles`, for the hookless fallback), whether a prompt sent between turns
 started its turn when its hook never came (`transcriptMark`, `promptStarted`, Claude Code only: see

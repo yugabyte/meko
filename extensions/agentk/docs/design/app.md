@@ -12,7 +12,7 @@ plain mouse wheel (`sidewaysWheel()`), and the selected tab is always scrolled i
 under it in the rail instead of the tabs, one row each with its status dot, its full name
 (wrapped, not cut off) and its stage (with a » after it while [Run to merge](lifecycle.md#run-to-merge)
 is on, as on the tabs) at the right of the name's first line, so many show at once and any can be
-opened with one click, in any project. A task's [local code review](code-review.md) is never a tab or a row of its own: it's
+opened with one click, in any project. A task's [code review](code-review.md) is never a tab or a row of its own: it's
 a part joined to its task's tab and rail row, a blue magnifier (its lens pulses while the review
 works, and shows Meko's "m" during a Meko call) and how far it has got (`3/6`: each pass, then
 scoring as one step, moving on as each pass reports), its result (`2·1` blockers·majors until the task has said what it did with each

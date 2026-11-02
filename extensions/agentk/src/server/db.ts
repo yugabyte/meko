@@ -653,7 +653,7 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX work_item_links_key ON work_item_links(key);
   `,
-  // 43: the local code review (review/runner.ts, docs/design/code-review.md). parent_id: a code-review
+  // 43: the code review (review/runner.ts, docs/design/code-review.md). parent_id: a code-review
   // session's task; review_json: a session's own review settings (ReviewOverrides), NULL for none.
   // code_reviews: one row per review a task's Open PR started (its rounds, sweeps and state; the
   // current round's candidates, every round's findings for the panel, the counts for the PR line, the
@@ -717,7 +717,7 @@ const MIGRATIONS: string[] = [
   ALTER TABLE meko_preloads DROP COLUMN quality;
   ALTER TABLE meko_preloads DROP COLUMN top_score;
   `,
-  // 46: local reviews run on demand (the review-run action; review/runner.ts). purpose: 'pr' for one
+  // 46: code reviews run on demand (the review-run action; review/runner.ts). purpose: 'pr' for one
   // an Open PR started, 'demand' for one the user ran (it sends no PR prompt, and a stopped one holds
   // nothing). stage: where it runs, 'code' or 'review' (Review & PR); leaving that stage cancels it.
   // stale: 1 once its task left Code after it finished with its PR prompt unsent, so Open PR doesn't

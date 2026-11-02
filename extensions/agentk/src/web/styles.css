@@ -1511,7 +1511,7 @@ textarea.input {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* A task with a local review: one joined tab, the task's part then the review's (the magnifier),
+/* A task with a code review: one joined tab, the task's part then the review's (the magnifier),
    inside one hairline border; each part is a button, and only the one on screen is selected. */
 .tab-joined {
   display: flex;
@@ -1658,7 +1658,7 @@ textarea.input {
     opacity: 1;
   }
 }
-/* The rail's row for a task with a local review: one grid, which the task's button covers whole
+/* The rail's row for a task with a code review: one grid, which the task's button covers whole
    and passes its columns to (subgrid). The name takes the middle column on every line; the right
    column holds the stage chip on the first line and the review's part (the magnifier) under it,
    drawn over the task's button, so the chip stays the task's and the column is as wide as the
@@ -1726,7 +1726,7 @@ textarea.input {
   border-color: color-mix(in srgb, var(--bad) 45%, var(--rule));
   border-style: solid;
 }
-/* A local review's findings (ReviewFindings), beside its session's terminal. */
+/* A code review's findings (ReviewFindings), beside its session's terminal. */
 .review-body {
   flex: 1;
   min-height: 0;
@@ -1838,7 +1838,7 @@ textarea.input {
 .rv-outcome.declined {
   color: var(--warn);
 }
-/* The ⋯ sheet's local review rows and its settings; New session's Local review group. */
+/* The ⋯ sheet's code review rows and its settings; New session's Code review group. */
 .sheet-review {
   display: inline-flex;
   align-items: center;
@@ -6653,7 +6653,7 @@ a.wq-chip:hover {
   border-color: var(--accent);
 }
 
-/* The local review's part of a tab or rail row is a finger's width on a touch screen. */
+/* The code review's part of a tab or rail row is a finger's width on a touch screen. */
 @media (pointer: coarse) {
   .review-seg {
     min-width: 40px;
