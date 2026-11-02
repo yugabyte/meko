@@ -269,6 +269,79 @@ export interface KnowledgeActivity {
   memory_id?: string;
   content?: string; // a promoted memory's text
   agent_id?: string;
+  // A project's events': the datapack (none on a folder made) and the folder.
+  datapack_id?: string;
+  datapack_name?: string;
+  folder_id?: string;
+  folder_name?: string;
+}
+
+// Projects, as Meko Cloud's: a project files datapacks in folders, one level deep.
+export interface Project {
+  project_id: string;
+  project_name: string;
+  theme_key: string;
+  description: string;
+  folder_names: string[];
+  folder_count: number;
+  datapack_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectFolder {
+  folder_id: string;
+  project_id: string;
+  folder_name: string;
+  folder_description: string;
+  datapack_count: number;
+  created_at: string;
+}
+
+export interface FiledDatapack {
+  datapack_id: string;
+  datapack_name: string;
+  folder_id: string;
+  updated_at: string;
+  placed_at: string;
+  memory_count: number;
+  awaiting_review_count: number;
+  promoted_count: number;
+  knowledge_count: number;
+}
+
+export interface ProjectDetail {
+  project: Project;
+  folders: ProjectFolder[];
+  datapacks: FiledDatapack[];
+}
+
+export interface ProjectTheme {
+  key: string;
+  label: string;
+  description: string;
+  folders: string[];
+}
+
+export interface Placement {
+  datapack_id: string;
+  project_id: string;
+  project_name: string;
+  folder_id: string;
+  folder_name: string;
+  path: string;
+}
+
+export interface ProjectStats {
+  kb_files_by_type: Record<string, number>;
+  kb_files: number;
+  kb_chunks: number;
+  searches_hybrid: number;
+  searches_kb: number;
+  searches_memory: number;
+  conversations: number;
+  artifacts: number;
+  artifact_bytes: number;
 }
 
 export interface ProvisionStatus {

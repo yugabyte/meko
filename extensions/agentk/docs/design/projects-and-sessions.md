@@ -86,7 +86,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 [pr]
 # resolve_conflicts = false  # don't have AgentK resolve a PR's merge conflicts with its base (Settings → General); on by default
 
-[code_review]                # the local review before a PR opens (docs/design/code-review.md), also in Settings › Code review
+[code_review]                # the code review before a PR opens (docs/design/code-review.md), also in Settings › Code review
 # strategy = "off"           # off, sirius-1.0, or sagittarius-3.0 (the default); a project's and a session's own go over it
 # depth = 3                  # times a review runs before AgentK gets the findings to fix (1 to 5; 1 by default); more than one is a deep review: each sweep looks past what the earlier ones found, up to this count, and from the second on, one that finds nothing new ends it; costs more tokens
 # rounds = 1                 # times the code review runs again after AgentK fixes the last review's findings (0 to 5; 0 by default); a review that finds nothing ends it early
@@ -154,7 +154,7 @@ CREATE TABLE sessions (
                                   -- stages (older releases and pages index their stage lists with it); kindOf() reads all three as a task
   stage TEXT,                     -- explore | design | code | pr | review | merge (Merge & Close) | done | reviewing-pr | reviewing-code
   parent_id TEXT,                 -- a code-review session's task (code-review.md); NULL for the rest
-  review_json TEXT,               -- the session's own local review settings (ReviewOverrides); NULL: its project's
+  review_json TEXT,               -- the session's own code review settings (ReviewOverrides); NULL: its project's
   pr_number INTEGER, pr_url TEXT, review_state TEXT, ci_state TEXT,
   pr_repo TEXT, pr_title TEXT, pr_author TEXT,  -- Review a PR only: the PR's owner/name on GitHub, title and author
   review_sha TEXT, pr_head_sha TEXT,  -- Review a PR: the commit checked out; the PR's head at the last look
@@ -164,7 +164,7 @@ CREATE TABLE sessions (
   push_remote TEXT, push_branch TEXT,  -- a task on a PR whose head isn't origin's branch of its name (a fork's):
                                    --   the remote and branch it pushes to (NULL: origin, the session's branch)
   plan_mode INTEGER,               -- 1: designs in Claude's plan mode (sessions created before designs moved out of it)
-  pending_prompts TEXT,            -- prompts queued for Claude: JSON map of 'review' | 'review-people' | 'review-held' | 'conflicts' | 'ci' | 'review-pr-update' | 'review-pr-design' to
+  pending_prompts TEXT,            -- prompts queued for Claude: JSON map of 'review' | 'review-people' | 'review-held' | 'local-review' | 'conflicts' | 'ci' | 'review-pr-update' | 'review-pr-design' to
                                    --   { state: 'queued' | 'sent' (until that turn ends), vars }; replaces pending_review
   ci_fix_head TEXT, ci_fixes INTEGER,  -- the PR head that last got a CI-fix prompt; how many heads in a row did
   conflict_head TEXT, conflict_fixes INTEGER,  -- the PR head that last got a prompt to resolve merge conflicts; how many
@@ -176,7 +176,7 @@ CREATE TABLE sessions (
   queued_auto INTEGER,             -- 1 when Run to merge queued queued_gate, not the user's press (stopping it drops only its own)
   skip_learn INTEGER,              -- 1: the last Merge & Close press asked to skip the learn step (kept until the PR merges)
   discarding INTEGER,              -- 1: Discard was asked for and waits for the learn step (cleared by Archive)
-  agentk_seen INTEGER,             -- 1 once AgentK commented on or reviewed the PR, or was asked to
+  agentk_seen INTEGER,             -- unused since migration 47 (the AgentK GitHub reviewer, removed); kept for a rollback
   meko_datapack_id TEXT, meko_datapack_name TEXT,  -- the dedicated datapack at the last launch, where AgentK's
                                    --   writes for the session go (NULL: launched before this or without one; the project's is used)
   first_turn_end_at INTEGER,       -- when the first turn ended (from the transcript), for the Meko stats
@@ -204,7 +204,7 @@ CREATE TABLE review_comments ( -- comments on a session's diff: draft → queued
   excerpt TEXT, body TEXT, state TEXT, created_at INTEGER, updated_at INTEGER, sent_at INTEGER);
 CREATE TABLE held_reviews (    -- reviews on a session's PR held for the user: held → sent | dismissed
   session_id TEXT, review_id TEXT, pr_number INTEGER, db_id INTEGER,  -- GitHub's node id; the REST id the prompt names
-  author TEXT, kind TEXT, state TEXT, body TEXT, url TEXT,  -- kind: 'agentk' | 'person' | 'bot' | 'outsider'
+  author TEXT, kind TEXT, state TEXT, body TEXT, url TEXT,  -- kind: 'person' | 'bot' | 'outsider'
   comments_json TEXT, more_comments INTEGER, submitted_at TEXT, held_at INTEGER,  -- the first 50 inline comments
   status TEXT, decided_at INTEGER, PRIMARY KEY (session_id, review_id));
 CREATE TABLE session_stages (  -- stage history: who moved it, and when
@@ -223,7 +223,7 @@ CREATE TABLE work_items (      -- the work queue (workqueue.ts, docs/design/work
   unplaced INTEGER, github_done_at INTEGER, created_at INTEGER, closed_at INTEGER);
 CREATE TABLE work_item_links (item_id TEXT, ord INTEGER, key TEXT, kind TEXT, url TEXT, label TEXT,
   PRIMARY KEY (item_id, key));  -- indexed on key, for the palette's lookup by link
-CREATE TABLE code_reviews (    -- a task's local reviews (review/runner.ts, docs/design/code-review.md), one per Open PR, move to Review & PR or review-run
+CREATE TABLE code_reviews (    -- a task's code reviews (review/runner.ts, docs/design/code-review.md), one per Open PR, move to Review & PR or review-run
   id TEXT PRIMARY KEY, task_id TEXT, session_id TEXT,  -- the task, and its code-review session
   strategy TEXT, rounds INTEGER, depth INTEGER,        -- what it runs with, stamped when it starts
   state TEXT,                  -- describing | preparing | sweeping | scoring | fixing | done | failed | cancelled

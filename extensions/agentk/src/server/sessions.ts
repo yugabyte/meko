@@ -116,7 +116,7 @@ export function backgroundTasks(raw: unknown): BackgroundTask[] {
  */
 export function workflowLine(kind: SessionKind, stage: Stage): string {
   if (kind === 'code-review') {
-    return "This is AgentK's local code review of a task's change, before its PR opens. You don't review the code yourself and you change no file: you run the review's steps as AgentK's prompts list them, each in a fresh subagent, and each step reports to AgentK with AgentK's tools.";
+    return "This is AgentK's code review of a task's change, before its PR opens. You don't review the code yourself and you change no file: you run the review's steps as AgentK's prompts list them, each in a fresh subagent, and each step reports to AgentK with AgentK's tools.";
   }
   if (kind === 'review-pr') {
     return "This is a Review a PR session: the user is reviewing someone else's pull request and you assist them. Don't review it on your own; answer what they ask. Don't push to the PR's branch or post on GitHub unless they ask. The user ends the session from the AgentK UI.";
@@ -570,7 +570,7 @@ export class SessionManager {
     if (autoRun && (kind !== 'task' || learn || start !== 'code')) {
       throw new HttpError(400, 'Run to merge can only be picked for a task that starts at Code. For one at Design, turn it on when you approve the design.');
     }
-    // The task's own local review settings; a review or a learn session opens no PR to review.
+    // The task's own code review settings; a review or a learn session opens no PR to review.
     const reviewSettings = req.review != null && kind === 'task' && !learn ? readOverrides(req.review) : {};
     const repo = this.core.projects.sessionRepo(p, req.repoPath);
     // A project's repo moved or deleted since it was opened. Checked here because the first git
@@ -706,7 +706,7 @@ export class SessionManager {
                     worktree_path, worktree_released, tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode,
                     meko_agent_id, parent_id, position)
                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 1, ?, ?, 'running', 'starting', 'code-review', 'reviewing-code', ?, ?, ?, 0, ?, ?, ?)`,
-      id, task.project_id, slug, `Local review of ${task.name}`, task.harness, randomUUID(), task.branch, task.base_branch, task.repo_path,
+      id, task.project_id, slug, `Code review of ${task.name}`, task.harness, randomUUID(), task.branch, task.base_branch, task.repo_path,
       task.worktree_path, paneName(task.project_id, slug), randomBytes(24).toString('base64url'), `Review the change on ${task.branch}`, now, now,
       sessionAgentId({ id, slug, harness: harnessOf(task.harness) }), task.id, task.position);
     run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, 'reviewing-code', ?, 'auto')`, id, now);
@@ -1050,7 +1050,7 @@ export class SessionManager {
     return claudePath(this.learnedPath(row));
   }
 
-  /** Where Claude writes the PR's title and description before a local review (outside the repo), beside the design. */
+  /** Where Claude writes the PR's title and description before a code review (outside the repo), beside the design. */
   prDescriptionPath(row: SessionRow): string {
     return join(this.core.paths.designs, row.id, 'pr-description.md');
   }
@@ -1082,8 +1082,6 @@ export class SessionManager {
   }
 
   prompt(row: SessionRow, name: PromptName, extra: Record<string, string | number | null> = {}): string {
-    const p = projectRow(this.db, row.project_id);
-    const settings = p ? parseSettings(p.settings_json) : null;
     const meko = this.sessionDatapacks(row.project_id).length ? [mekoRecallLine(name), mekoQuestionLine(name), mekoLearnLine(name, row.id)].filter(Boolean) : [];
     // A review names its PR's repo outright: the clone may be a fork, where gh's {owner}/{repo} is the
     // fork. Its base is the remote's branch the review fetched, since the local one may follow a
@@ -1106,7 +1104,6 @@ export class SessionManager {
       base: row.base_branch,
       pr: row.pr_number,
       prUrl: row.pr_url,
-      reviewer: settings?.reviewerLogin ?? 'the reviewer',
       // A review-people prompt queued before it named its reviewers.
       reviewers: 'its reviewers',
       reviews: '(none named: ask the user which reviews to address)',
@@ -1419,7 +1416,7 @@ export class SessionManager {
     const roots = [row.worktree_path, repo].filter((d): d is string => !!d).flatMap((d) => [d, realpath(d), claudePath(d)]);
     const inRepo = (file: string) => roots.some((d) => file === d || file.startsWith(d + sep));
     if (!paths.some((f) => inRepo(resolve(p.cwd || row.worktree_path, f)))) return null;
-    if (review) return h.deny("This is AgentK's local code review: it reads the change and changes no file. Report what you found with AgentK's review tools.");
+    if (review) return h.deny("This is AgentK's code review: it reads the change and changes no file. Report what you found with AgentK's review tools.");
     return h.deny(
       `This session is in the Design stage: AgentK blocks changes to the repo until the user approves the design. ` +
       (h.caps.artifacts ? `Publish the design as an Artifact, or write it to ${this.designFile(row)}.` : `Write the design to ${this.designFile(row)}.`),
@@ -2077,8 +2074,6 @@ export class SessionManager {
       case 'cancel-queued': lc.cancelQueued(row); break;
       case 'open-pr': await lc.openPr(row, body); break;
       case 'merge': await lc.merge(row, closeRequest(body)); break;
-      case 'request-review': await lc.requestReview(row, false); break;
-      case 'force-review': await lc.requestReview(row, true); break;
       case 'resume': await this.resume(row); break;
       case 'archive':
         await this.refuseUncommitted(row, 'Ask AgentK to commit, or Discard the session to throw the changes away.');
@@ -2158,7 +2153,7 @@ export class SessionManager {
       if (!req.review || typeof req.review !== 'object') throw new HttpError(400, 'review must be an object of strategy, rounds and depth.');
       const r = this.row(id);
       if (r.desired === 'archived') throw new HttpError(409, "This session is archived, so its review settings can't change.");
-      if (r.kind === 'review-pr' || r.kind === 'code-review') throw new HttpError(409, 'Only a task has local review settings.');
+      if (r.kind === 'review-pr' || r.kind === 'code-review') throw new HttpError(409, 'Only a task has code review settings.');
       const o = readOverrides(req.review);
       this.update(id, { review_json: noOverrides(o) ? null : JSON.stringify(o) });
       this.core.changed();

@@ -92,14 +92,14 @@ describe("the review's part of a task's tab", () => {
   });
 
   it.each([
-    [r({}), 'Local review: Sagittarius 3.0, 2 of 5 passes reported'],
-    [r({ state: 'scoring' }), 'Local review: Sagittarius 3.0, step 6 of 6, 3 of 9 scored'],
-    [r({ state: 'describing' }), 'Local review: Sagittarius 3.0, waiting for the PR description'],
-    [r({ state: 'done', counts: counts(1, 0, 0), addressed: true }), 'Local review: Sagittarius 3.0, LGTM, 1 blocker addressed'],
-    [r({ waiting: true }), 'Local review: Sagittarius 3.0, 2 of 5 passes reported, waiting on you in its terminal'],
+    [r({}), 'Code review: Sagittarius 3.0, 2 of 5 passes reported'],
+    [r({ state: 'scoring' }), 'Code review: Sagittarius 3.0, step 6 of 6, 3 of 9 scored'],
+    [r({ state: 'describing' }), 'Code review: Sagittarius 3.0, waiting for the PR description'],
+    [r({ state: 'done', counts: counts(1, 0, 0), addressed: true }), 'Code review: Sagittarius 3.0, LGTM, 1 blocker addressed'],
+    [r({ waiting: true }), 'Code review: Sagittarius 3.0, 2 of 5 passes reported, waiting on you in its terminal'],
     // One the user ran holds no Open PR: Retry is all it offers.
-    [r({ state: 'failed', detail: 'no review pass reported', onDemand: true }), 'Local review: Sagittarius 3.0, failed: no review pass reported. Retry it'],
-    [r({ state: 'cancelled', detail: 'you cancelled it', onDemand: true }), 'Local review: Sagittarius 3.0, cancelled. Retry it'],
+    [r({ state: 'failed', detail: 'no review pass reported', onDemand: true }), 'Code review: Sagittarius 3.0, failed: no review pass reported. Retry it'],
+    [r({ state: 'cancelled', detail: 'you cancelled it', onDemand: true }), 'Code review: Sagittarius 3.0, cancelled. Retry it'],
   ])('spells %j out as %s', (summary, label) => {
     expect(reviewSegmentLabel(summary)).toBe(label);
   });

@@ -39,7 +39,7 @@ const PR = { number: 7, url: 'https://github.com/acme/demo/pull/7', state: 'OPEN
 function status(over: Partial<PrStatus> = {}): PrStatus {
   return {
     number: 7, url: PR.url, title: 'Fix the thing', body: 'Summary of the change.',
-    state: 'OPEN', reviews: [], comments: [], statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
+    state: 'OPEN', reviews: [], statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
     reviewDecision: '', mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', headRefOid: '', ...over,
   };
 }
@@ -151,11 +151,12 @@ describe('moves: moving a task session between stages', () => {
 
   it('moves back to Code from Review & PR, keeps the PR, and holds reviews until it comes back', async () => {
     const s = await session({ start: 'code', prompt: 'do it' });
+    env.core.projects.update(projectId!, { settings: { reviewer: 'people' } });
     gh.pr = PR;
     gh.status = status();
     await move(s.id, { stage: 'review' });
     // A CI prompt for an old head, and one whose turn is over (its Stop not handled yet).
-    env.core.sessions.update(s.id, { pending_prompts: JSON.stringify({ ci: { state: 'queued', vars: { sha: 'abc', checks: '- test' } }, review: { state: 'sent' } }) });
+    env.core.sessions.update(s.id, { pending_prompts: JSON.stringify({ ci: { state: 'queued', vars: { sha: 'abc', checks: '- test' } }, 'review-people': { state: 'sent', vars: { reviewers: 'olivia' } } }) });
 
     const sent = typed();
     await move(s.id, { stage: 'code' });
@@ -165,7 +166,7 @@ describe('moves: moving a task session between stages', () => {
 
     // A review that arrives while in Code waits.
     gh.status = status({
-      reviews: [{ id: 'r1', author: { login: 'yb-agentk-dev' }, state: 'COMMENTED', body: '**1 inline comment — 0 blocker, 1 major.**', submittedAt: new Date().toISOString() }],
+      reviews: [{ id: 'r1', author: { login: 'olivia' }, authorAssociation: 'MEMBER', state: 'COMMENTED', body: 'Add a test.', submittedAt: new Date().toISOString() }],
     });
     await env.core.lifecycle.pollReview(row(s.id));
     expect(get(s.id).reviewState).toBe('waiting');
@@ -175,17 +176,17 @@ describe('moves: moving a task session between stages', () => {
     await move(s.id, { stage: 'review' });
     expect(events(s.id, 'pr-again')).toEqual(['Back on PR #7']);
     expect(events(s.id, 'pr')).toEqual(['Picked up PR #7']);
-    await waitFor(() => transcript(s.id), (x) => x.includes('A review from yb-agentk-dev arrived on PR #7'), 10000, 'review prompt');
-    expect(sent().filter((x) => x.startsWith('A review from'))).toHaveLength(1);
+    await waitFor(() => transcript(s.id), (x) => x.includes('Reviewers left feedback on PR #7 (https://github.com/acme/demo/pull/7) from olivia.'), 10000, 'review prompt');
+    expect(sent().filter((x) => x.startsWith('Reviewers left feedback'))).toHaveLength(1);
     // CI is green at the PR's head: the old CI prompt is dropped, never sent.
     await waitFor(() => JSON.parse(queue(s.id)) as object, (q) => !('ci' in q), 10000, 'stale CI prompt dropped');
     expect(sent().some((x) => x.startsWith('CI failed'))).toBe(false);
   });
 
-  it("keeps an AgentK approval when it comes back to the same PR", async () => {
+  it("keeps an approval when it comes back to the same PR", async () => {
     const s = await session({ start: 'code', prompt: 'do it' });
     gh.pr = PR;
-    gh.status = status({ reviews: [{ id: 'r1', author: { login: 'yb-agentk-dev' }, state: 'COMMENTED', body: '**0 inline comments.**', submittedAt: new Date().toISOString() }] });
+    gh.status = status({ reviewDecision: 'APPROVED' });
     await move(s.id, { stage: 'review' });
     expect(get(s.id)).toMatchObject({ reviewState: 'approved', canMerge: true });
     await move(s.id, { stage: 'code' });

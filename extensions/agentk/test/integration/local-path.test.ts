@@ -76,7 +76,7 @@ describe('a session whose home Claude reaches by its local spelling (real sessio
     expect(edit(env.core.sessions.designFile(row))).toBeNull();
   });
 
-  it("names the worktree and the review's folder to a local review's steps by that spelling", async () => {
+  it("names the worktree and the review's folder to a code review's steps by that spelling", async () => {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'none' } });
     const s = await env.core.sessions.create(p.id, { name: 'Fix it', prompt: 'hi', start: 'code', review: { strategy: 'sirius-1.0' } });
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'the session to start');

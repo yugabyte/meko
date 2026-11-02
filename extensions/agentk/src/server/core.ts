@@ -181,7 +181,7 @@ export class Core extends EventEmitter {
   readonly askAgentk: AskAgentk;
   /** AgentK's session tools: the calls `agentk mcp` makes from sessions. */
   readonly tools: SessionTools;
-  /** AgentK's local code review before a task's PR opens (review/runner.ts). */
+  /** AgentK's code review before a task's PR opens (review/runner.ts). */
   readonly reviews: CodeReviews;
   readonly limits: PlanLimitsStore;
   /** Kiro's plan allowance for the rail. */
@@ -781,7 +781,7 @@ export class Core extends EventEmitter {
     this.hooksOn = true;
     this.learn.recover();
     await this.sessions.recover();
-    await this.reviews.recover().catch((e: unknown) => this.log.warn('recovering local reviews failed', errMsg(e)));
+    await this.reviews.recover().catch((e: unknown) => this.log.warn('recovering code reviews failed', errMsg(e)));
     void this.sessions.refreshDiffStats().catch(() => undefined);
     pruneSessionEvents(this.db);
     this.prunePins();

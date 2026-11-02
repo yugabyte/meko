@@ -6,7 +6,7 @@ import { Busy, Dialog } from './common';
 import { MarkdownView } from './MarkdownView';
 
 const VERBS: Record<string, string> = { CHANGES_REQUESTED: 'requested changes', COMMENTED: 'commented' };
-const KINDS: Record<HeldReview['kind'], string> = { agentk: 'AgentK', person: '', bot: 'bot', outsider: 'not a collaborator' };
+const KINDS: Record<HeldReview['kind'], string> = { person: '', bot: 'bot', outsider: 'not a collaborator' };
 
 /**
  * The reviews on the session's PR held for the user (`Session.heldReviews`): each one's text and

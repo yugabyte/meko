@@ -331,7 +331,8 @@ export function buildReport(db: Db, o: ReportOptions): CallHomeReport {
     const d = dayOf(e.at);
     if (!d) continue;
     if (e.kind === 'pr') d.prsOpened++;
-    // Reviews handed to Claude; not the "Requested another AgentK review" notes.
+    // Reviews that arrived on the PR; not the session's other review notes. `AgentK review:` events,
+    // the AgentK GitHub reviewer's before it was removed, are kept 30 days and reported again.
     else if (e.kind === 'review' && /^(AgentK review:|Review from )/.test(e.text ?? '')) d.reviews++;
     else if (e.kind === 'ci') d.ciFailures++;
     else if (e.kind === 'comments') d.commentBatches++;
@@ -407,7 +408,7 @@ export function buildReport(db: Db, o: ReportOptions): CallHomeReport {
     t.actions += n(a.actions);
   }
 
-  // Local code reviews: each on the day it started, its sessions' tokens on the day they were spent.
+  // Code reviews: each on the day it started, its sessions' tokens on the day they were spent.
   // A day with neither leaves `codeReview` out.
   const reviewDays = new Map<string, ReviewRun[]>();
   for (const r of reviewRuns(db)) {

@@ -439,9 +439,9 @@ export function CommandPalette({
       // While AgentK can't take it, the hint says why (and the server's refusal says so again if it's picked).
       out.push({
         id: 'review-run',
-        label: ['Run the local review of ', { session: currentSession.name }],
+        label: ['Run the code review of ', { session: currentSession.name }],
         hint: review.wait ?? 'Action',
-        keywords: 'local code review run again findings',
+        keywords: 'code review run again findings',
         run: () => void api.sessionAction(id, 'review-run').catch((e: unknown) => onError(errorMessage(e))),
       });
     }

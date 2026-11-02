@@ -43,7 +43,7 @@ const MAX_BUFFERED_STATE = 4 * 1024 * 1024;
 const LOCAL_MEKO_WAIT_MS = 1500;
 /** Every SessionAction, keyed so a new one can't be left out (the route refuses what isn't here). */
 const ACTIONS: Record<SessionAction, true> = {
-  'approve-design': true, 'cancel-approval': true, 'open-pr': true, merge: true, 'cancel-queued': true, 'request-review': true, 'force-review': true,
+  'approve-design': true, 'cancel-approval': true, 'open-pr': true, merge: true, 'cancel-queued': true,
   resume: true, archive: true, discard: true, 'update-pr': true, 'close-review': true, learn: true,
   'review-run': true, 'review-cancel': true, 'review-retry': true, 'review-open-anyway': true,
 };

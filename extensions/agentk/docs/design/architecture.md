@@ -79,7 +79,7 @@ the launcher's `cd`, `--settings`, `--add-dir` and `--plugin-dir`, `HOME`, `AK_H
 (Claude Code refuses a mod's `$.http.fetch` to a socket under `/net`, "a network location is not
 reached from here", so the mod would never reach AgentK), the allow rules in the hooks settings
 file, the design file, questions file and image paths in prompts, and the worktree and folder a
-local review's steps are told (one Read through `/net` stops the review at a permission prompt). What
+code review's steps are told (one Read through `/net` stops the review at a permission prompt). What
 AgentK stores (worktree and repo paths, repo keys, the worktree pool) keeps its own spelling,
 so the Design guard checks an edit against both, the learn step leaves out a fact that names
 either (a path counts only whole, so a short local spelling such as `/data` doesn't catch

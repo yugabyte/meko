@@ -135,7 +135,7 @@ function seeded(): Db {
   event('s1', 'p1', 'pr', 'Opened PR #7', '2026-09-27T13:00:00Z', { url: 'https://github.com/alice/zeta/pull/7' });
   event('s1', 'p1', 'pr', 'Opened PR #3', '2026-09-01T13:00:00Z', { url: 'https://github.com/alice/zeta/pull/3' });
   event('s1', 'p1', 'review', 'AgentK review: 2 findings in secret-branch', '2026-09-27T14:30:00Z');
-  event('s1', 'p1', 'review', 'Requested another AgentK review', '2026-09-27T14:40:00Z');
+  event('s1', 'p1', 'review', 'Dismissed the held review from bob', '2026-09-27T14:40:00Z');
   event('s1', 'p1', 'ci', 'CI failed: build', '2026-09-27T14:50:00Z');
   event('s1', 'p1', 'comments', 'Sent 3 to AgentK', '2026-09-27T15:10:00Z');
   event('s1', 'p1', 'recovered', 'Relaunched', '2026-09-27T16:10:00Z');
@@ -448,10 +448,10 @@ describe('the usage stats report', () => {
     expect(validate(r, SCHEMA)).toEqual([]);
   });
 
-  it("counts local code reviews on the day each started, and their sessions' tokens on the day they were spent", () => {
+  it("counts code reviews on the day each started, and their sessions' tokens on the day they were spent", () => {
     const db = seeded();
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name, hook_token,
-             desired, status, stage, kind, parent_id, created_at) VALUES ('r1', 'p1', 'r1', 'Local review of Secret task', 'c', 'ak/secret-branch', 'main',
+             desired, status, stage, kind, parent_id, created_at) VALUES ('r1', 'p1', 'r1', 'Code review of Secret task', 'c', 'ak/secret-branch', 'main',
              '/home/alice/wt-1', 't', 'tok-r1', 'running', 'idle', 'reviewing-code', 'code-review', 's1', ?)`, at('2026-09-27T23:00:00Z'));
     const finding = (key: string, kept: boolean, status?: 'fixed' | 'declined') =>
       ({ key, kept, comment: 'Secret task leaks /home/alice', outcome: status ? { status, note: 'done' } : null });

@@ -241,6 +241,8 @@ type ActivityItem struct {
 	Content         string `json:"content,omitempty"`
 	AgentID         string `json:"agent_id,omitempty"`
 	ConversationID  string `json:"conversation_id,omitempty"`
+	FolderID        string `json:"folder_id,omitempty"` // a project's events'
+	FolderName      string `json:"folder_name,omitempty"`
 }
 
 // ActivityItemOf is a knowledge-base event in Cloud's shape.
@@ -253,5 +255,16 @@ func ActivityItemOf(a store.Activity, d store.Datapack, email string) ActivityIt
 		return out
 	}
 	out.MemoryID, out.Content, out.AgentID, out.ConversationID = a.ID, a.Content, a.AgentID, a.ConversationID
+	return out
+}
+
+// ProjectActivityItemOf is a project's event in Cloud's shape. A folder made names no datapack.
+func ProjectActivityItemOf(a store.Activity, email string) ActivityItem {
+	out := ActivityItem{Type: a.Type, Timestamp: Time(a.Timestamp)}
+	if a.Type == "file_upload" || a.Type == "memory_promotion" {
+		out = ActivityItemOf(a, store.Datapack{}, email)
+	}
+	out.DatapackID, out.DatapackName, out.FolderID, out.FolderName = a.DatapackID, a.DatapackName, a.FolderID,
+		a.FolderName
 	return out
 }

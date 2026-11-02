@@ -33,12 +33,12 @@ the stages Explore → Design → Code → Review & PR → Merge & Close. Users 
      to a merged PR by itself ("run it to merge", "open the PR and merge it when it's done"). It
      needs `"stage": "code"`, and for a ref only an issue takes it. AgentK then opens the PR when
      the coding turn ends and merges once nothing blocks it.
-   - Add `"review"` only with what the user asked for of the task's local code review before its
+   - Add `"review"` only with what the user asked for of the task's code review before its
      PR opens, leaving the rest to the project's settings: `"depth": 3` for "3 deep reviews",
      `"rounds": 1` for "review again after the fixes", `"strategy": "sirius-1.0"` for the quick one,
      `"strategy": "off"` for no review. "Start a code session with 3 deep reviews and run it to
      merge" is `{ name, prompt, "stage": "code", "autoRun": true, "review": { "depth": 3 } }`.
-   - `review_report`, `review_score` and `review_outcome` belong to AgentK's local code review: use
+   - `review_report`, `review_score` and `review_outcome` belong to AgentK's code review: use
      them only when an AgentK prompt or a review step's file tells you to.
    - `move_session` moves one session to `explore`, `design`, `code` or `review` (Review & PR).
      Pass what the user asked for in that stage as `instructions`. This session's own move goes

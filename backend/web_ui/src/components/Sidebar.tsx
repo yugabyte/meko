@@ -1,6 +1,6 @@
-// The left rail: the Meko mark, the Status link, the Extensions group, the Settings link, the
-// datapacks, and the version (with a chip to the Status page's Updates card when a newer release is
-// out) and theme toggle. Below md it's a drawer over the page, opened from the top bar. The datapacks
+// The left rail: the Meko mark, the Status link, the Extensions group, Projects, the datapacks, and
+// the version (with a chip to the Status page's Updates card when a newer release is out), the
+// Settings gear and the theme toggle. Below md it's a drawer over the page, opened from the top bar. The datapacks
 // are one list, by name, each opened where its row's web_url says: this UI's pages, or Meko Cloud's
 // web app in a new tab. The Find a datapack box above them narrows it to the names that hold what's
 // typed, like Meko Cloud's.
@@ -15,6 +15,7 @@ import { useUpdateAvailable } from "../lib/update";
 import type { Datapack } from "../lib/types";
 import { DatapackDialog } from "./DatapackDialog";
 import { ExtensionsLink } from "./ExtensionsLink";
+import { ProjectsLink } from "./ProjectsLink";
 import { SettingsLink } from "./SettingsLink";
 import { StatusLink } from "./StatusLink";
 import { Button, cx, Input } from "./ui";
@@ -89,7 +90,7 @@ export function Sidebar({
         <div className="px-2 pb-2">
           <StatusLink active={view === "status"} />
           <ExtensionsLink active={view === "extensions"} />
-          <SettingsLink active={view === "settings"} />
+          <ProjectsLink active={view === "projects" || view === "project"} />
         </div>
 
         <div className="flex items-center justify-between px-4 pb-1 pt-2">
@@ -175,6 +176,7 @@ export function Sidebar({
             )}
           </span>
           <div className="flex items-center">
+            <SettingsLink active={view === "settings"} />
             <Button size="sm" variant="ghost" onClick={onToggleTheme} title="Toggle theme">
               {theme === "dark" ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
             </Button>

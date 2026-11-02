@@ -340,7 +340,7 @@ function CodeReviewTab({ auto }: { auto: AutoSettings }) {
 }
 
 /**
- * The local review before a PR opens (docs/design/code-review.md): the global strategy, re-review
+ * The code review before a PR opens (docs/design/code-review.md): the global strategy, re-review
  * rounds and depth, which projects and sessions can override. Each saves as it's picked.
  */
 export function CodeReviewSettings({ s, change }: { s: Settings; change: (patch: Patch) => void }) {

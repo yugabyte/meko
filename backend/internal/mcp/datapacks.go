@@ -54,13 +54,17 @@ func datapackTools() []*tool {
 			desc: "Create a datapack: a separate space of memories, conversations and files.",
 			params: []param{
 				{name: "name", typ: "string", required: true, desc: "Its name: 3 to 60 characters, unique."},
-				pTrace, pDatapack},
+				pTrace, pDatapack,
+				{name: "folder_id", typ: "string", def: "",
+					desc: "A project folder to file it in (project_describe finds the id), checked before the " +
+						"datapack is made; blank leaves it Unfiled."}},
 			run: datapackCreate,
 		},
 		{
 			name: "datapack_describe", title: "Describe Datapack", kind: readOnly, failCode: "describe_failed",
 			desc: "Describe a datapack and count what it holds: memories, learnings (memories waiting to be kept " +
-				"or promoted), collective memories and conversations.",
+				"or promoted), collective memories and conversations, and say where it's filed: project, folder " +
+				"and path (project/folder), each null when it's Unfiled.",
 			params: []param{
 				{name: "datapack_id", typ: "string", def: "", desc: "The datapack's UUID; blank for the default."},
 				{name: "include_status", typ: "boolean", def: false, desc: "Also report its status."},
@@ -222,9 +226,13 @@ func datapackCreate(ctx context.Context, c *call, a args) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	d, err := c.svc.CreateDatapack(ctx, name, "")
+	folder, err := a.str("folder_id")
 	if err != nil {
-		return nil, datapackError(err)
+		return nil, err
+	}
+	d, err := c.svc.CreateDatapackIn(ctx, name, "", folder)
+	if err != nil {
+		return nil, projectToolError(err)
 	}
 	c.rec.DatapackID = d.ID
 	return map[string]string{"datapack_id": d.ID, "agent_id": memory.DefaultAgentID, "name": d.Name}, nil
@@ -266,13 +274,23 @@ func datapackDescribe(ctx context.Context, c *call, a args) (any, error) {
 		return nil, err
 	}
 	desc := wire.Describe(d, c.svc.UserID(), counts)
+	placed, err := c.svc.Placements(ctx, []string{dp})
+	if err != nil {
+		return nil, err
+	}
+	filed := wire.FiledAs(placed[dp])
 	if !withStatus {
-		return desc, nil
+		return struct {
+			wire.DatapackDescription
+			wire.FiledPath
+		}{desc, filed}, nil
 	}
 	return struct {
 		wire.DatapackDescription
+		wire.FiledPath
 		Status map[string]any `json:"status"`
-	}{desc, map[string]any{"agent_count": 0, "knowledge_base_count": desc.KnowledgeBaseFileCount, "status": "ready"}}, nil
+	}{desc, filed, map[string]any{"agent_count": 0, "knowledge_base_count": desc.KnowledgeBaseFileCount,
+		"status": "ready"}}, nil
 }
 
 // datapackMetrics is the Overview's three context tiles, from the same numbers /metrics gives the web

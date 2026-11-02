@@ -6,6 +6,51 @@ export type Db = DatabaseSync;
 type Param = null | number | bigint | string | Uint8Array;
 export type Row = Record<string, Param>;
 
+/** A project's login for the AgentK reviewer (the default one when it never set it), per project id. */
+const AGENTK_LOGIN = `(SELECT id AS pid, COALESCE(CASE WHEN json_valid(settings_json) THEN json_extract(settings_json, '$.reviewerLogin') END,
+  'yb-agentk-dev') AS login FROM projects) l`;
+
+/**
+ * Migration 47: the AgentK GitHub reviewer is gone. Its reviewer modes become Yours only ('agentk' →
+ * 'mine') and People ('agentk-people' → 'people'), and its login setting goes. A review prompt for its
+ * findings becomes review-people naming that login, so the work finishes: merged into one still
+ * queued, queued after one being addressed, or in place of none (one already sent is the turn's).
+ * Its held reviews are a bot's, and its review states are waiting. Each start runs it again, for
+ * what the release before wrote after a rollback (Meko's restores only the program, so this one's
+ * migrated database is what that release runs on); for the same reason sessions.agentk_seen stays,
+ * unused, for a later migration to drop.
+ */
+const AGENTK_REVIEWER_GONE = `
+  UPDATE sessions SET pending_prompts = json_set(pending_prompts, '$."review-people".vars.reviewers',
+      json_extract(pending_prompts, '$."review-people".vars.reviewers') || ', ' || l.login)
+    FROM ${AGENTK_LOGIN}
+    WHERE l.pid = sessions.project_id AND json_valid(pending_prompts)
+      AND json_extract(pending_prompts, '$.review.state') = 'queued'
+      AND json_extract(pending_prompts, '$."review-people".state') = 'queued'
+      AND json_type(pending_prompts, '$."review-people".vars.reviewers') = 'text';
+  UPDATE sessions SET pending_prompts = json_set(pending_prompts, '$."review-people"',
+      json_object('state', 'queued', 'vars', json_object('reviewers', l.login)))
+    FROM ${AGENTK_LOGIN}
+    WHERE l.pid = sessions.project_id AND json_valid(pending_prompts)
+      AND json_extract(pending_prompts, '$.review.state') = 'queued'
+      AND json_extract(pending_prompts, '$."review-people".state') = 'sent';
+  UPDATE sessions SET pending_prompts = json_set(pending_prompts, '$."review-people"',
+      json_object('state', json_extract(pending_prompts, '$.review.state'), 'vars', json_object('reviewers', l.login)))
+    FROM ${AGENTK_LOGIN}
+    WHERE l.pid = sessions.project_id AND json_valid(pending_prompts)
+      AND json_type(pending_prompts, '$.review') IS NOT NULL AND json_type(pending_prompts, '$."review-people"') IS NULL;
+  UPDATE sessions SET pending_prompts = json_remove(pending_prompts, '$.review')
+    WHERE json_valid(pending_prompts) AND json_type(pending_prompts, '$.review') IS NOT NULL;
+  UPDATE sessions SET review_state = 'waiting' WHERE review_state IN ('in_review', 'refused');
+  UPDATE held_reviews SET kind = 'bot' WHERE kind = 'agentk';
+  UPDATE projects SET settings_json = json_set(settings_json, '$.reviewer', 'mine')
+    WHERE json_valid(settings_json) AND json_extract(settings_json, '$.reviewer') = 'agentk';
+  UPDATE projects SET settings_json = json_set(settings_json, '$.reviewer', 'people')
+    WHERE json_valid(settings_json) AND json_extract(settings_json, '$.reviewer') = 'agentk-people';
+  UPDATE projects SET settings_json = json_remove(settings_json, '$.reviewerLogin')
+    WHERE json_valid(settings_json) AND json_type(settings_json, '$.reviewerLogin') IS NOT NULL;
+`;
+
 /**
  * Schema migrations, applied in order. PRAGMA user_version records how many
  * have run. Never edit a shipped migration; append a new one.
@@ -653,7 +698,7 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX work_item_links_key ON work_item_links(key);
   `,
-  // 43: the local code review (review/runner.ts, docs/design/code-review.md). parent_id: a code-review
+  // 43: the code review (review/runner.ts, docs/design/code-review.md). parent_id: a code-review
   // session's task; review_json: a session's own review settings (ReviewOverrides), NULL for none.
   // code_reviews: one row per review a task's Open PR started (its rounds, sweeps and state; the
   // current round's candidates, every round's findings for the panel, the counts for the PR line, the
@@ -717,7 +762,7 @@ const MIGRATIONS: string[] = [
   ALTER TABLE meko_preloads DROP COLUMN quality;
   ALTER TABLE meko_preloads DROP COLUMN top_score;
   `,
-  // 46: local reviews run on demand (the review-run action; review/runner.ts). purpose: 'pr' for one
+  // 46: code reviews run on demand (the review-run action; review/runner.ts). purpose: 'pr' for one
   // an Open PR started, 'demand' for one the user ran (it sends no PR prompt, and a stopped one holds
   // nothing). stage: where it runs, 'code' or 'review' (Review & PR); leaving that stage cancels it.
   // stale: 1 once its task left Code after it finished with its PR prompt unsent, so Open PR doesn't
@@ -727,7 +772,9 @@ const MIGRATIONS: string[] = [
   ALTER TABLE code_reviews ADD COLUMN stage TEXT NOT NULL DEFAULT 'code';
   ALTER TABLE code_reviews ADD COLUMN stale INTEGER NOT NULL DEFAULT 0;
   `,
-  // 47: work_items.github_kept: set on any item reopened by hand; only GitHub items read it:
+  // 47: the AgentK GitHub reviewer is gone (AGENTK_REVIEWER_GONE, which every start runs again).
+  AGENTK_REVIEWER_GONE,
+  // 48: work_items.github_kept: set on any item reopened by hand; only GitHub items read it:
   // `[work_queue] close_closed_prs` leaves them open though their PR is closed. The sync clears it
   // when it finds the item's review request again.
   `ALTER TABLE work_items ADD COLUMN github_kept INTEGER NOT NULL DEFAULT 0;`,
@@ -775,6 +822,8 @@ function migrate(db: Db): void {
       db.exec(`PRAGMA user_version = ${i + 1}`);
     });
   }
+  // What the release before 47 wrote after a rollback to it, on a database already past 47.
+  if (current >= 47) tx(db, () => db.exec(AGENTK_REVIEWER_GONE));
 }
 
 export function tx<T>(db: Db, fn: () => T): T {

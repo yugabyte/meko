@@ -75,8 +75,11 @@ every extension the same way (`internal/cloudlink`).
   annotations), and so are the `initialize` instructions. They're read at start, after each link
   change, and again once 15 minutes old; a request before the first read waits for it up to 10 s.
   Until a read works, the tools this Meko shares with Meko Cloud stand in (not `datapack_metrics`,
-  which reads this Meko's call log) with instructions of Meko's own.
-- **A call that names a datapack this Meko has runs here** (`routed`, `byDatapack`): a tool this
+  which reads this Meko's call log, nor the `project_*` tools, which Meko Cloud doesn't always
+  offer) with instructions of Meko's own.
+- **A call that names a datapack this Meko has runs here** (`routed`, `byDatapack`), but for the
+  `project_*` tools, which are always Meko Cloud's while linked (its folders are the ones an agent
+  sees there): a tool this
   Meko has that takes `datapack_id`, whose id (in any form a UUID takes, as on REST's routes) is one
   this Meko serves (`servedHere`, over `ServesHere`), runs this
   Meko's tool of that name, recorded as this Meko's call, exactly as while unlinked. Meko Cloud's

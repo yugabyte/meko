@@ -70,7 +70,7 @@ export function MetricsPage({ datapack, onChanged }: { datapack: Datapack; onCha
             promoted={d.promoted}
             kept={d.kept}
             pending={d.pending}
-            onReview={() => navigate({ datapackId: id, tab: "memories" })}
+            onReview={() => navigate({ datapackId: id, tab: "memories", itemId: "learnings" })}
           />
         )}
       </div>
