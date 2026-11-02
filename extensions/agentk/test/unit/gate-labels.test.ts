@@ -33,9 +33,9 @@ describe('mergeGate', () => {
   });
 
   it('offers Merge when ready while only blockers that clear by themselves are left', () => {
-    const gate = mergeGate(session({ mergeQueueable: true, mergeBlockers: ['CI is still running.', 'Waiting for the AgentK review.'] }));
+    const gate = mergeGate(session({ mergeQueueable: true, mergeBlockers: ['CI is still running.', 'AgentK is addressing review findings.'] }));
     expect(gate).toMatchObject({ label: 'Merge when ready', reason: null });
-    expect(gate.title).toContain('CI is still running.\nWaiting for the AgentK review.');
+    expect(gate.title).toContain('CI is still running.\nAgentK is addressing review findings.');
   });
 
   it('is closed, with the blockers, otherwise', () => {
@@ -50,7 +50,7 @@ describe('queuedText', () => {
     expect(queuedText(session())).toBeNull();
     expect(queuedText(session({ queued: 'open-pr' }))).toBe('✓ Open PR queued: goes when the turn ends');
     expect(queuedText(session({ queued: 'merge', mergeBlockers: ['CI is still running.'] }))).toBe('✓ Merge queued: waiting on CI');
-    expect(queuedText(session({ queued: 'merge', mergeBlockers: ['Waiting for the AgentK review.'] }))).toBe('✓ Merge queued: waiting on the AgentK review');
+    expect(queuedText(session({ queued: 'merge', mergeBlockers: ['AgentK is waiting on you in the terminal.'] }))).toBe('✓ Merge queued: waiting on you in the terminal');
     expect(queuedText(session({ queued: 'merge', mergeBlockers: ['AgentK is still working.', 'CI is still running.'] }))).toBe('✓ Merge queued: waiting on AgentK');
   });
 

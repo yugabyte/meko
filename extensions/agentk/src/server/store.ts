@@ -20,8 +20,7 @@ export const STORED_TASK_KIND: StoredKind = 'plan';
 
 export const DEFAULT_SETTINGS: ProjectSettings = {
   autoContinue: true,
-  reviewer: 'agentk',
-  reviewerLogin: 'yb-agentk-dev',
+  reviewer: 'mine',
   branchPrefix: DEFAULT_BRANCH_PREFIX,
   mergeMethod: 'repo-default',
   notify: true,
@@ -96,7 +95,6 @@ export interface SessionRow {
   conflict_head: string | null;
   /** Conflict prompts for consecutive conflicting heads since the PR last merged cleanly. */
   conflict_fixes: number;
-  agentk_seen: number;
   /** The dedicated datapack the session was last launched with (see sessionDatapack). */
   meko_datapack_id: string | null;
   meko_datapack_name: string | null;
@@ -161,6 +159,8 @@ export function parseSettings(json: string): ProjectSettings {
   }
   // A mode this version doesn't know (from a newer one) falls back to the default.
   if (!Object.hasOwn(REVIEWER_LABELS, s.reviewer)) s.reviewer = DEFAULT_SETTINGS.reviewer;
+  // The AgentK reviewer's login, gone since migration 47, from a page loaded before it.
+  delete (s as { reviewerLogin?: unknown }).reviewerLogin;
   s.codeReview = readOverrides(s.codeReview);
   return s;
 }
@@ -321,7 +321,6 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     prUrl: r.pr_url,
     reviewState: r.review_state,
     ciState: r.ci_state,
-    agentkSeen: !!r.agentk_seen,
     canMerge: rt.canMerge,
     mergeBlockers: rt.mergeBlockers,
     mergeQueueable: rt.mergeQueueable,

@@ -244,11 +244,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       (`ensureFirstCommit()`, at project open or session start; a repo with files is refused, and an
       empty folder typed under Other folder is made a repo only after the name check), never a
       reset or force.
-- [ ] `/agentk review force` is only posted when the user asks.
 - [ ] Nothing from someone without a role on the repo (`authorAssociation` other than OWNER,
-      MEMBER or COLLABORATOR, and not AgentK, an allowed bot or the user) starts a turn or counts
-      as a `/agentk review` request: such a review is only held, and reaches Claude only when the
-      user sends it, marked as from someone with no role. Prompts that put PR text in front of
+      MEMBER or COLLABORATOR, and not an allowed bot or the user) starts a turn: such a review is
+      only held, and reaches Claude only when the user sends it, marked as from someone with no
+      role. Nothing waits for, or asks for, a GitHub reviewer of AgentK's own. Prompts that put PR text in front of
       Claude call it untrusted, not instructions. Where a review goes in each mode is
       `reviewRoute()` in `heldreviews.ts`; don't route reviews anywhere else.
 - [ ] CI-fix prompts go out once per PR head, never ahead of a queued review prompt, and stop after
@@ -257,7 +256,6 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       `mergeable` CONFLICTING (never UNKNOWN), have Claude merge the base rather than rebase or
       force-push, and are never sent once `[pr] resolve_conflicts` is off (`deliverNext` drops a queued one, even when
       the poll fails).
-- [ ] Merge waits for AgentK only once AgentK is active on the PR, and never in *People only*.
 - [ ] A Review a PR session only gets ready and sums up on its own: its prompts and workflow line
       never have Claude review, post on GitHub, commit or push unless the user asks, and nothing
       is sent to it by itself (new commits wait for **Update to latest**). Its review branch has

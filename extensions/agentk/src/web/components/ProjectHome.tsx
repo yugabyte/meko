@@ -477,8 +477,7 @@ function ProjectSettingsForm({
           info={{
             for: 'ps-reviewer',
             text:
-              'Whose reviews go straight to AgentK. Other reviews wait for you to send or dismiss them; your own always go. ' +
-              'Merge waits for the AgentK reviewer once it’s active on the PR.',
+              'Whose reviews go straight to AgentK. Other reviews wait for you to send or dismiss them; your own always go.',
           }}
         >
           <select
@@ -491,15 +490,6 @@ function ProjectSettingsForm({
               <option key={m} value={m}>{REVIEWER_LABELS[m]}</option>
             ))}
           </select>
-        </Field>
-        <Field label="AgentK login" info={{ for: 'ps-login', text: 'The GitHub login whose reviews are AgentK’s.' }}>
-          <input
-            id="ps-login"
-            className="input mono"
-            value={s.reviewerLogin}
-            disabled={s.reviewer === 'people'}
-            onChange={(e) => set('reviewerLogin', e.target.value)}
-          />
         </Field>
         <Field label="Merge method">
           <select

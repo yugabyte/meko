@@ -168,7 +168,7 @@ describe('sessions on an existing branch or an open PR (real session host + git,
     // Moving to Review & PR picks up the linked PR, not a new one.
     gh.byNumber.set(12, { number: 12, url: got.prUrl!, state: 'OPEN', createdAt: '2026-01-01T00:00:00Z', baseRefName: 'release' });
     gh.status = {
-      number: 12, url: got.prUrl!, title: 'Add the widget', body: '', state: 'OPEN', reviews: [], comments: [],
+      number: 12, url: got.prUrl!, title: 'Add the widget', body: '', state: 'OPEN', reviews: [],
       statusCheckRollup: [], reviewDecision: '', mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', headRefOid: '',
     };
     await env.core.sessions.move(s.id, { stage: 'review' });

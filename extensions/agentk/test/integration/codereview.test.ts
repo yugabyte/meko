@@ -10,7 +10,7 @@ vi.mock('../../src/server/github.js', async (orig) => {
   return {
     ...real, findPr: async () => null, viewerLogin: async () => 'me', repoVisibility: async () => 'private',
     prStatus: async (_cwd: string, number: number) => ({
-      number, url: `https://github.com/acme/demo-repo/pull/${number}`, title: 'feat(demo): add f', body: gh.body, state: 'OPEN', reviews: [], comments: [],
+      number, url: `https://github.com/acme/demo-repo/pull/${number}`, title: 'feat(demo): add f', body: gh.body, state: 'OPEN', reviews: [],
       statusCheckRollup: [], reviewDecision: '', mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', headRefOid: 'abc123',
     }),
     prBody: async () => gh.body,
@@ -595,11 +595,11 @@ describe('local code review before the PR (real session host + git, fake claude 
       fake('review-reports.json', { ...LEDGERS, diff: { summary: 'LGTM', findings: [{ file: 'src/a.ts', line: 2, severity: 'blocker', comment: 'Off by one.', gotchas: [] }] } });
       await env.core.sessions.action(s.id, 'review-run');
       const st = await (await import('../../src/server/github.js')).prStatus('', 7);
-      const info = env.core.lifecycle.mergeInfo(env.core.sessions.row(s.id), st, 'people', { uncommitted: 1 });
+      const info = env.core.lifecycle.mergeInfo(env.core.sessions.row(s.id), st, { uncommitted: 1 });
       expect(info).toMatchObject({ canMerge: false, queueable: true, hard: [] });
       expect(info.blockers).toContain('The local review is still running.');
       // With Claude gone, nothing clears it by itself: a queued merge is dropped, with a notice.
-      const exited = env.core.lifecycle.mergeInfo({ ...env.core.sessions.row(s.id), status: 'exited' }, st, 'people', { uncommitted: 1 });
+      const exited = env.core.lifecycle.mergeInfo({ ...env.core.sessions.row(s.id), status: 'exited' }, st, { uncommitted: 1 });
       expect(exited.hard).toEqual(expect.arrayContaining(['The local review is still running.', 'The worktree has 1 uncommitted file: commit or discard them.']));
       // No PR description turn: round 1 reads the PR's own title and description.
       const fix = await waitFor(() => prompts(s.claudeSessionId).at(-1)!, (p) => p.includes('round 1'), 30000, 'the fix prompt');

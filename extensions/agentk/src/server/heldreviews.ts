@@ -2,9 +2,6 @@ import type { HeldReview, HeldReviewAuthor, HeldReviewComment, HeldReviewsReques
 import { all, get, run, type Db } from './db.js';
 import { HttpError } from './projects.js';
 
-/** The `kv` key migration 36 set to when reviews started being held (ms). */
-export const HELD_SINCE_KEY = 'held-reviews-since';
-
 /** Longest held review body kept, in characters; the rest is on GitHub. */
 export const HELD_BODY_MAX = 10_000;
 /** Inline comments kept per held review. */
@@ -25,10 +22,8 @@ export function reviewRoute(mode: ReviewerMode, who: ReviewWho): 'claude' | 'hol
       return 'claude';
     case 'outsider':
       return 'hold';
-    case 'agentk':
-      return mode === 'people' ? 'hold' : 'claude';
     case 'person':
-      return mode === 'agentk' ? 'hold' : 'claude';
+      return mode === 'mine' ? 'hold' : 'claude';
     case 'bot':
       return mode === 'all' ? 'claude' : 'hold';
   }

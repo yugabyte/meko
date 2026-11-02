@@ -684,7 +684,7 @@ textarea.input {
   -webkit-mask: url('/meko-m.png') center / 8px 8px no-repeat;
   mask: url('/meko-m.png') center / 8px 8px no-repeat;
 }
-/* A gate is queued (Merge when ready, waiting on CI or the AgentK review), or the agent is between
+/* A gate is queued (Merge when ready, waiting on CI), or the agent is between
    turns with work running in the background: the idle ring with its top quarter open, turning once
    every 3 s. Same 10px box as idle. */
 .dot.queued,
