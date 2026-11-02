@@ -1,18 +1,23 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EXIT_BUSY } from '../../src/server/instance.js';
 import {
   dropOldNames,
   hostServices,
   LaunchdServices,
   parseLaunchdState,
+  refreshServiceFiles,
+  removeServiceLauncher,
   renderServiceFiles,
   renderTemplate,
   ServiceError,
   serviceHome,
+  serviceLauncher,
   servicesFor,
   SystemdServices,
+  writeServiceLauncher,
   type Runner,
 } from '../../src/server/service.js';
 import { tempDir } from '../helpers.js';
@@ -64,8 +69,10 @@ describe('service templates', () => {
       expect(text).toContain('<string>en_US.UTF-8</string>');
     }
     expect(out.host).toContain('<string>com.yugabyte.agentk.host</string>');
-    expect(out.host).toMatch(/<string>\/Users\/me\/.agent-k-local\/app\/current\/bin\/agentk<\/string>\s*<string>host<\/string>/);
-    expect(out.server).toContain('<string>/Users/me/.agent-k-local/app/current/bin/agentk</string>');
+    // The launcher, which updates never replace, so macOS doesn't announce the jobs again after each one.
+    expect(out.host).toMatch(/<string>\/Users\/me\/.agent-k-local\/service\/me_agentk<\/string>\s*<string>host<\/string>/);
+    expect(out.server).toMatch(/<string>\/Users\/me\/.agent-k-local\/service\/me_agentk<\/string>\s*<string>serve<\/string>/);
+    for (const text of Object.values(out)) expect(text).not.toContain('app/current/bin/agentk</string>');
     // The server never starts a host of its own under its job, so nothing it starts must outlive it.
     expect(out.server).not.toContain('AbandonProcessGroup');
   });
@@ -318,6 +325,30 @@ describe('LaunchdServices', () => {
     ]);
   });
 
+  it('leaves files whose content is the same alone, since macOS announces a rewritten one as a new background item', () => {
+    const { svc } = make({ loaded: ['com.yugabyte.agentk.host', 'com.yugabyte.agentk'] });
+    svc.install(files);
+    const before = statSync(svc.file('host'), { bigint: true });
+    svc.install(files);
+    expect(svc.refresh(files)).toEqual([]);
+    const after = statSync(svc.file('host'), { bigint: true });
+    expect([after.ino, after.mtimeNs]).toEqual([before.ino, before.mtimeNs]);
+  });
+
+  it('refreshes changed files of installed jobs without reloading them', () => {
+    const { svc, calls } = make({ loaded: ['com.yugabyte.agentk.host', 'com.yugabyte.agentk'] });
+    mkdirSync(agents(), { recursive: true });
+    writeFileSync(svc.file('server'), 'older server file\n');
+    writeFileSync(svc.file('host'), files.host);
+    expect(svc.refresh(files)).toEqual(['server']);
+    expect(readFileSync(svc.file('server'), 'utf8')).toBe(files.server);
+    expect(calls).toEqual([]);
+    // A job that isn't installed stays that way.
+    rmSync(svc.file('host'));
+    expect(svc.refresh({ ...files, server: 'newer\n' })).toEqual(['server']);
+    expect(existsSync(svc.file('host'))).toBe(false);
+  });
+
   it('refuses to install without a desktop login', () => {
     const { svc } = make({ gui: false });
     expect(() => svc.preflight()).toThrow(ServiceError);
@@ -367,5 +398,61 @@ describe('LaunchdServices', () => {
     expect(existsSync(svc.file('server'))).toBe(false);
     expect(existsSync(svc.file('host'))).toBe(false);
     expect(svc.legacyTmuxInstalled()).toBe(false);
+  });
+});
+
+describe('the LaunchAgents launcher', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = tempDir('akl-launcher-');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A release home whose app/current/bin/agentk prints its arguments. */
+  function releaseHome(name: string): string {
+    const home = join(dir, name);
+    mkdirSync(join(home, 'app', '1.0', 'bin'), { recursive: true });
+    writeFileSync(join(home, 'app', '1.0', 'bin', 'agentk'), '#!/bin/sh\nprintf \'%s|\' "$@"\n', { mode: 0o755 });
+    symlinkSync('1.0', join(home, 'app', 'current'));
+    return home;
+  }
+
+  it("runs app/current/bin/agentk with the job's arguments, and is written only when it changes", () => {
+    const home = releaseHome("it's home");
+    expect(writeServiceLauncher(home)).toBe(true);
+    const launcher = serviceLauncher(home);
+    expect(launcher).toBe(join(home, 'service', 'me_agentk'));
+    expect(statSync(launcher).mode & 0o777).toBe(0o755);
+    expect(execFileSync(launcher, ['serve', 'a b'], { encoding: 'utf8' })).toBe('serve|a b|');
+    const before = statSync(launcher, { bigint: true });
+    expect(writeServiceLauncher(home)).toBe(false);
+    const after = statSync(launcher, { bigint: true });
+    expect([after.ino, after.mtimeNs]).toEqual([before.ino, before.mtimeNs]);
+    removeServiceLauncher(home);
+    expect(existsSync(join(home, 'service'))).toBe(false);
+  });
+
+  it("moves a release's LaunchAgents that ran app/current/bin/agentk onto the launcher at the server's start", () => {
+    const home = releaseHome('home');
+    const svc = new LaunchdServices(() => ok, join(dir, 'user'), 501, () => {});
+    const vars = { AK_HOME: home, HOST: 'mac' };
+    const current = renderServiceFiles(svc, vars);
+    const old = (text: string) => text.replaceAll(`${home}/service/me_agentk`, `${home}/app/current/bin/agentk`);
+    mkdirSync(dirname(svc.file('server')), { recursive: true });
+    writeFileSync(svc.file('server'), old(current.server));
+    writeFileSync(svc.file('host'), old(current.host));
+
+    expect(refreshServiceFiles(home, svc, 'mac')).toEqual([]); // not a release (no AK_APP_DIR)
+    vi.stubEnv('AK_APP_DIR', join(home, 'app', '1.0'));
+    expect(refreshServiceFiles(home, null, 'mac')).toEqual([]);
+    expect(refreshServiceFiles(home, new SystemdServices(() => ok, { XDG_CONFIG_HOME: dir }, dir), 'box')).toEqual([]);
+    expect(refreshServiceFiles(home, svc, 'mac')).toEqual(['host', 'server']);
+    expect(readFileSync(svc.file('server'), 'utf8')).toBe(current.server);
+    expect(readFileSync(svc.file('host'), 'utf8')).toBe(current.host);
+    expect(existsSync(serviceLauncher(home))).toBe(true);
+    expect(refreshServiceFiles(home, svc, 'mac')).toEqual([]);
   });
 });

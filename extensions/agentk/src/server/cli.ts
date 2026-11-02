@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import { closeSync, existsSync, openSync, readFileSync, readSync, rmSync, statSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -18,7 +19,7 @@ import { MekoClient } from './meko.js';
 import { getPaths, SHARED_TMP, tildify, type Paths } from './paths.js';
 import { buildServer, findWebDir } from './server.js';
 import { AGENTK_PATH as BASE_PATH } from '../shared/mekourls.js';
-import { hostServices, moveJobLog, servicesFor, startMoveJob } from './service.js';
+import { hostServices, moveJobLog, refreshServiceFiles, servicesFor, startMoveJob } from './service.js';
 import { linkCommand } from './cmdlink.js';
 import { openBrowser } from './browser.js';
 import { NoHostError, SessionHost, startDetached } from './hostclient.js';
@@ -131,6 +132,13 @@ async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceL
     if (linkCommand(paths)) log.info('added the agentk command (~/.local/bin/agentk) beside agent-k-local, its name before the rename');
   } catch (e) {
     log.warn(`couldn't add the agentk command to ~/.local/bin: ${errMsg(e)}`);
+  }
+  // Jobs that ran app/current/bin/agentk move to the launcher (macOS announced them after every update).
+  try {
+    const changed = refreshServiceFiles(paths.home, servicesFor(paths.home), hostname());
+    if (changed.length) log.info(`updated the LaunchAgents of the ${changed.join(' and ')}; they run from them from the next login`);
+  } catch (e) {
+    log.warn(`couldn't update the LaunchAgents: ${errMsg(e)}`);
   }
   // A version Meko just updated to keeps a copy of the database as the old version left it, before
   // its migrations run: for going back by hand (Meko's rollback restores only the program).

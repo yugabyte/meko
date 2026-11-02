@@ -52,6 +52,16 @@ one. The host runs in the foreground, as launchd wants. Both jobs set
 restart the server with `launchctl kickstart -k`, or by exiting and letting `KeepAlive` bring it
 back; reinstalling never reloads a loaded host job.
 
+Both jobs run `<home>/service/me_agentk`, a script that execs `app/current/bin/agentk`; macOS
+lists a job under its program's file name, so Login Items shows AgentK as `me_agentk`. macOS's
+Background Task Management shows "Background Items Added" again whenever the program a LaunchAgent
+names turns out to be another file, and `app/current/bin/agentk` is another file after every
+update. An update never replaces the launcher. `install` and the server's start
+(`refreshServiceFiles`) write it, and the plists, only when their text changes, since a rewritten
+file is announced too. At its start the server also brings plists from before the launcher onto it
+without reloading the jobs, which run from the new plists from the next login. That move shows the
+alert one last time.
+
 **Their PATH.** systemd and launchd start both services with a thin PATH (launchd's is
 `/usr/bin:/bin:/usr/sbin:/sbin`). At its start, each one reads PATH from the user's login shell
 (`adoptLoginPath` in `launcher.ts`), then adds `~/.local/bin`, `/usr/local/bin` and `/opt/homebrew/bin`

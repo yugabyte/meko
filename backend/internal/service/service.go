@@ -129,8 +129,9 @@ func render(tmpl string, s Spec) ([]byte, error) {
 	var b bytes.Buffer
 	err = t.Execute(&b, struct {
 		Spec
-		Label string
-	}{s, Label})
+		Label    string
+		Launcher string
+	}{s, Label, Launcher(s.DataDir)})
 	return b.Bytes(), err
 }
 

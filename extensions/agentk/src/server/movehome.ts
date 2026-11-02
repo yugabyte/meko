@@ -26,7 +26,7 @@ import { heldLease } from './instance.js';
 import { moveKiroSessions } from './kiro.js';
 import { errMsg } from './log.js';
 import { claudePath, expandHome, getPaths, homeIn, MekoHomeError, mekoHome, releaseHome, SHARED_TMP, withLocalBin, type MekoHomeOptions, type Paths } from './paths.js';
-import { dropOldNames, hostServices, removeMoveJob, renderServiceFiles, samePath, servicesFor, startMoveJob, type ServiceManager } from './service.js';
+import { dropOldNames, hostServices, removeMoveJob, renderServiceFiles, samePath, servicesFor, startMoveJob, writeServiceLauncher, type ServiceManager } from './service.js';
 import { copyClaudeProjects } from './trust.js';
 import { onProbation } from './updates.js';
 
@@ -599,6 +599,7 @@ export async function moveHome(plan: MovePlan, d: MoveDeps): Promise<string> {
   const svc = d.services;
   if (svc && (svc.installed('server') || svc.installed('host'))) {
     for (const [old, now] of dropOldNames(svc)) d.log.info(`${now} replaces ${old}, its name before the rename to AgentK`);
+    if (svc.kind === 'launchd') writeServiceLauncher(j.to);
     svc.install(renderServiceFiles(svc, { AK_HOME: j.to, HOST: hostname() }));
     d.log.info(`the services run AgentK from ${j.to}`);
     if (d.waitHealthy && !(await d.waitHealthy(getPaths(j.to)))) {

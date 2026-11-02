@@ -150,7 +150,7 @@ AgentK or Presenter release is never taken for Meko's, nor the other way round.
 
 | | launchd (`~/Library/LaunchAgents/com.yugabyte.meko.plist`) | systemd (`~/.config/systemd/user/meko.service`) |
 |---|---|---|
-| Runs | `<app>/current/bin/meko serve --detached --data-dir <data>`, with `MEKO_SERVICE` set | the same |
+| Runs | `<data>/service/meko serve --detached --data-dir <data>`, a script that execs `<app>/current/bin/meko`, with `MEKO_SERVICE` set | `<app>/current/bin/meko serve --detached --data-dir <data>`, with `MEKO_SERVICE` set |
 | At login | `RunAtLoad` | `WantedBy=default.target`, and lingering turned on where it can be |
 | Restart | `KeepAlive`, `ThrottleInterval 5` | `Restart=always`, `RestartSec=2`, `RestartPreventExitStatus=75` |
 | Stop | `ExitTimeOut 35` | `TimeoutStopSec=35`, `KillMode=mixed` |
@@ -165,6 +165,14 @@ AgentK or Presenter release is never taken for Meko's, nor the other way round.
   folder: the service passes only `--data-dir`, so set them in `config.toml`.
 - The stop timeouts are 35 s because `serve` drains requests for up to 10 s, then stops its
   children for up to 15 s more; launchd's default of 20 s would kill it partway.
+- The LaunchAgent runs `<data>/service/meko`, never `app/current/bin/meko` itself. macOS's
+  Background Task Management shows "Background Items Added" again whenever the program a
+  LaunchAgent names turns out to be another file, which `app/current/bin/meko` is after every
+  update. An update never replaces the launcher, and `meko install` and `serve` rewrite it, or the
+  plist, only when their content changes, since a rewritten file is announced too. `serve` under
+  launchd brings the plist up to date at every start (`refreshLaunchAgent`) without reloading the
+  job, which runs from the new plist from the next login: that moves an install from before the
+  launcher onto it, with one last alert.
 - The data folder is written into the service file, so the CLI uses a service only when the
   service's `--data-dir` is the folder it's working on (`serviceOf`). A meko on another data folder
   (a test's, say) never touches it.

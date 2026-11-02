@@ -31,6 +31,7 @@ import (
 	"github.com/yugabyte/meko/backend/internal/rest"
 	"github.com/yugabyte/meko/backend/internal/secrets"
 	"github.com/yugabyte/meko/backend/internal/server"
+	"github.com/yugabyte/meko/backend/internal/service"
 	"github.com/yugabyte/meko/backend/internal/store"
 	"github.com/yugabyte/meko/backend/internal/storeapi"
 	"github.com/yugabyte/meko/backend/internal/supervisor"
@@ -160,6 +161,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			makeMekoCLI(app, log)
 		}
 	}
+	refreshLaunchAgent(l, log)
 
 	st, err := store.Open(l.DB)
 	if err != nil {
@@ -551,6 +553,37 @@ func makeMekoCLI(app update.App, log *slog.Logger) {
 	}
 	if err != nil {
 		log.Warn("can't make the meko-cli command", "error", err)
+	}
+}
+
+// refreshLaunchAgent brings the LaunchAgent that runs this data folder up to date with this
+// version's (service.Launchd.Refresh), without reloading it: an install whose plist ran
+// app/current/bin/meko, which macOS announced as a new background item after every update, moves
+// to the launcher that updates leave alone. It runs only under launchd.
+func refreshLaunchAgent(l paths.Layout, log *slog.Logger) {
+	if os.Getenv("MEKO_SERVICE") != "launchd" {
+		return
+	}
+	m := serviceOf(l)
+	d, ok := m.(*service.Launchd)
+	if !ok {
+		return
+	}
+	exe, err := os.Executable()
+	if app, _, isRelease := runningRelease(); isRelease {
+		exe, err = app.CurrentExe(), nil
+	}
+	if err != nil {
+		log.Warn("can't update the LaunchAgent", "error", err)
+		return
+	}
+	// The data folder as the plist spells it, so an unchanged plist stays unchanged.
+	dir := d.DataDir()
+	changed, err := d.Refresh(service.Spec{Exe: exe, DataDir: dir, ServiceLog: paths.New(dir).ServiceLog})
+	if err != nil {
+		log.Warn("can't update the LaunchAgent", "error", err)
+	} else if changed {
+		log.Info("updated the LaunchAgent; it takes effect at the next login", "file", d.File())
 	}
 }
 
