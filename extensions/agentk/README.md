@@ -54,9 +54,6 @@ curl -fsSL https://mekodata.ai/install.sh | sh
 meko extension install agentk
 ```
 
-While the repo is internal, fetch Meko's installer with a signed-in `gh` instead:
-`gh release download --repo yugabyte/meko --pattern install.sh --output - | sh`.
-
 (or **Install** on Meko's Extensions page). Meko downloads AgentK's newest release, checks it and
 unpacks it into its data folder, then runs AgentK's setup, which offers to install anything that's
 missing (git, gh, and Claude Code, OpenCode or Kiro CLI when none is there: it asks which, or pass

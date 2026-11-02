@@ -1,7 +1,9 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { shareLinkToken, shareLinkUrl } from '../../src/shared/mekourls.js';
+import { MEKO_INSTALL_COMMAND, shareLinkToken, shareLinkUrl } from '../../src/shared/mekourls.js';
+import type { AppState } from '../../src/shared/types.js';
+import { MekoInstallBanner } from '../../src/web/components/Banners.js';
 import { MekoLinkDialog } from '../../src/web/components/MekoLinkDialog.js';
 import { MekoHomeLink } from '../../src/web/components/Rail.js';
 import { httpHost } from '../../src/web/util.js';
@@ -59,5 +61,20 @@ describe("the projects pane's Meko link", () => {
     expect(html).toMatch(/^<a [^>]*href="\/"/);
     expect(html).not.toContain('target=');
     expect(html).toContain('aria-label="Open Meko"');
+  });
+});
+
+describe('the banner shown while there is no Meko', () => {
+  const banner = (local: string) =>
+    renderToStaticMarkup(createElement(MekoInstallBanner, { state: { serverName: 'devbox', meko: { local } } as unknown as AppState }));
+
+  it('gives the install command, with no GitHub sign-in', () => {
+    const html = banner('none');
+    expect(html).toContain(`<code class="mono">${MEKO_INSTALL_COMMAND}</code>`);
+    expect(html).not.toMatch(/\bgh\b|signed in/);
+  });
+
+  it('shows nothing once Meko is found', () => {
+    expect(banner('running')).toBe('');
   });
 });

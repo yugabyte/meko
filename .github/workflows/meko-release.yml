@@ -304,7 +304,7 @@ jobs:
           set -eu
           sh scripts/release/release-notes.sh --product meko > notes.md || echo "Maintenance release." > notes.md
           # The repo's latest release: its install.sh is the one-line install
-          # (gh release download --pattern install.sh). AgentK's releases are published --latest=false.
+          # (mekodata.ai/install.sh redirects to it). AgentK's releases are published --latest=false.
           gh release create "$TAG" --target "$SHA" --title "$TAG" --notes-file notes.md --latest --repo "$GITHUB_REPOSITORY" \
             dist-release/*.tar.gz dist-release/SHA256SUMS dist-release/install.sh
 

@@ -26,7 +26,8 @@ that hold the repo's context are listed in [MEKO.md](MEKO.md).
 ## The rules
 
 - Changes reach `main` only through PRs. CI runs the jobs of the parts a PR changes, and PRs are
-  squash-merged once the `CI gate` and `PR title` checks pass.
+  squash-merged once the `CI gate` and `PR title` checks pass and a member of the
+  `meko-maintainers` team approves (the `approvals` ruleset).
 - PR titles are `<type>(<component>[/<area>])[!]: <summary>`, such as `fix(agentk/web): …`. Check
   one with `sh scripts/check-title.sh "<title>"`; the types and components are in the
   [commit skill](.claude/skills/commit/SKILL.md).

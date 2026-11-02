@@ -75,6 +75,10 @@ needs one (`alice@example.com`, `github.com/acme/demo-repo`). Write `~` for a ho
 `meko status` and many logs print the web UI's hostname, the data folder's path, and user,
 datapack and project names: cut or replace them. Screenshots need the same care.
 
+A vulnerability is never an issue: it's reported privately, as the repo root's `SECURITY.md`
+says. The issue chooser's **Report a vulnerability** link (`.github/ISSUE_TEMPLATE/config.yml`)
+points there.
+
 ## Filing
 
 Show the user the title, labels, type and body, and file once they say so. If they've already
