@@ -1,7 +1,6 @@
 # Security
 
-This policy covers everything in this repo: Meko (`backend/`), AgentK (`extensions/agentk`) and
-Presenter (`extensions/presenter`), and the releases built from them.
+This policy covers everything in this repo.
 
 ## Reporting a vulnerability
 
