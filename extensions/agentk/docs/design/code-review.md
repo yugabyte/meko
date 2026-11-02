@@ -1,4 +1,4 @@
-# Local code review
+# Code review
 
 Part of the [AgentK design](../design.md).
 
@@ -202,9 +202,9 @@ still missing; a review whose session is gone fails, for Retry.
 ## On demand
 
 The user can run the review at any time in Code, or in Review & PR once the PR is found: the
-`review-run` action (`CodeReviews.runNow`). On a desktop it's **Run the local review of …** in the
+`review-run` action (`CodeReviews.runNow`). On a desktop it's **Run the code review of …** in the
 command palette and, once the task has a review, **Review again** in the findings panel's header
-(the magnifier opens it); on a phone, **Run local review** in the task's ⋯ sheet too. While AgentK
+(the magnifier opens it); on a phone, **Run code review** in the task's ⋯ sheet too. While AgentK
 can't take it, each of these says why (after its turn, answer it in the terminal, resume the
 session), and the server's refusal says so again. For
 a review the user ran, the findings header also has **Cancel** while it runs and **Retry** once it
@@ -221,7 +221,8 @@ the usage counts), and nothing flags one left out.
 It runs as Open PR's review does, rounds and fix prompts included, but sends no PR prompt. Its last
 round's findings go to the task as a fix prompt too (`code-review-fix` ending "Don't open the PR
 yet", `FixAfter`), since no PR prompt carries them. Its fix (and push) prompts go through the task's
-prompt queue as `local-review`, in Code as in Review & PR, since the user may be working with the
+prompt queue as `local-review` (the review's old name, kept since `sessions.pending_prompts` stores it
+and a release rolled back to reads it), in Code as in Review & PR, since the user may be working with the
 task meanwhile: one goes only once AgentK is between turns, never into a turn or a question in the
 terminal, and the end of the turn that took it starts the next round, interrupted or not (there's
 no Review now for it; Cancel stops it). A prompt Claude loses before its turn starts (it exits
@@ -250,14 +251,14 @@ than being dropped as one queued during an Open PR review's turn is.
 description (`Lifecycle.prText`), quoted like the task's. Its fix prompts go through the stage's
 prompt queue as `local-review` (after the people's review prompts, before conflicts and CI), so
 they never collide with a GitHub review, conflict or CI prompt, and the next round starts when the
-turn that took the prompt ends (`localReviewTurnEnded`), not at whichever turn ends first. The fixes
+turn that took the prompt ends (`codeReviewTurnEnded`), not at whichever turn ends first. The fixes
 are pushed once, after the last round: a fix prompt with a re-review to follow says not to commit or
 push yet, the last round's says to commit and push, and a re-review that finds nothing after
 earlier fixes sends `code-review-push` when the worktree has changes not on the PR (uncommitted
 files, or a branch tip the PR's head doesn't contain, read from the PR's own repo:
 `Lifecycle.unpushedToPr`). When it's done,
 AgentK puts its line in the PR's description (`syncReviewLine`). While it runs, or its prompt waits
-in the queue, the merge waits on "The local review is still running." (a blocker that clears by
+in the queue, the merge waits on "The code review is still running." (a blocker that clears by
 itself, so Merge & Close and Run to merge queue behind it), and the uncommitted-files and
 unpushed-commits blockers wait too, as they do mid-turn. Only while Claude is there to take the
 prompts: once it has exited, they're blockers only the user clears, and a queued merge is dropped
@@ -322,7 +323,7 @@ credited gotchas and what the task did; while the review runs or the task writes
 `findingsReviewing()`, it reads **Reviewing** under the findings so far, with a bar along its header
 and no counts), whose **Terminal** button goes to the review's screen while it has one. While the review holds the PR, the stage bar and the task's chip show the task in Review & PR
 (`shownStep()` in `src/web/util.ts`), though it stays in Code, and its gate shows the review, with Cancel, or Retry and
-Open anyway, and **Local review waits on you** with **Open terminal** while it waits. While the task
+Open anyway, and **Code review waits on you** with **Open terminal** while it waits. While the task
 writes the PR description the gate says so, with Cancel and **Review now** (Open PR: past an
 interrupted turn it starts round 1 with the description as it is, past a lost ask it asks again);
 while the task fixes a round's findings it offers **Review now** too, which starts the next round

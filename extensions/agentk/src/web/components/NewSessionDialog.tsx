@@ -71,7 +71,7 @@ export function NewSessionDialog({
   const [prompt, setPrompt] = useState(initial?.prompt ?? '');
   // Run to merge, offered for a start at Code (at Design it's picked beside Approve).
   const [autoRun, setAutoRun] = useState(!!initial?.autoRun);
-  // The task's own local review settings (CreateSessionRequest.review), over the project's.
+  // The task's own code review settings (CreateSessionRequest.review), over the project's.
   const [reviewOver, setReviewOver] = useState<ReviewOverrides>(() => readOverrides(initial?.review));
   const reviewDefaults = useReviewDefaults();
   // A learn session saves to the project's dedicated datapack, so it needs one and Meko on. It seeds a
@@ -780,7 +780,7 @@ export function NewSessionDialog({
               )}
               {!review && !learn && (
                 <fieldset className="ns-review">
-                  <legend className="label">Local review</legend>
+                  <legend className="label">Code review</legend>
                   <ReviewFields
                     id="ns-review"
                     scoped

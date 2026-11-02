@@ -417,7 +417,7 @@ export function DailyTable({ daily }: { daily: DailyUsage[] }) {
             <th className="num">Cache read</th>
             <th className="num">Total</th>
             {reviews && (
-              <th className="num" title="The part of the total local code reviews spent">
+              <th className="num" title="The part of the total code reviews spent">
                 Code reviews
               </th>
             )}

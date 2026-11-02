@@ -334,7 +334,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
   }, []);
 
   // A task's magnifier (its tab, its rail row), while the task fixes a round's findings or once the
-  // review is done (`reviewOpens`), asks for the task on screen with its local review's findings open, and the rail's task part, while they're open, for them closed: a request
+  // review is done (`reviewOpens`), asks for the task on screen with its code review's findings open, and the rail's task part, while they're open, for them closed: a request
   // ProjectView takes once. `findingsOpenFor` is the task whose findings ProjectView shows.
   const [findingsRequest, setFindingsRequest] = useState<{ id: string; open: boolean } | null>(null);
   const [findingsOpenFor, setFindingsOpenFor] = useState<string | null>(null);

@@ -195,11 +195,11 @@ export async function runActions(core: Core, actions: AskAgentkAction[], by: Act
 }
 
 /**
- * Where a move left a session, in words: a move to Review & PR that a local review took over leaves it
+ * Where a move left a session, in words: a move to Review & PR that a code review took over leaves it
  * in Code until the review sends the PR prompt (Lifecycle.reviewBeforePr).
  */
 function movedTo(asked: MoveTarget, s: Pick<Session, 'stage'>): string {
-  return asked === 'review' && s.stage === 'code' ? 'Code, for its local review before the PR opens' : STAGE_LABELS[asked];
+  return asked === 'review' && s.stage === 'code' ? 'Code, for its code review before the PR opens' : STAGE_LABELS[asked];
 }
 
 /** What an action does, for an event on the session it changed. */
@@ -384,7 +384,7 @@ export class SessionTools {
   }
 
   private async callNow(row: SessionRow, body: Record<string, unknown>): Promise<ModReply> {
-    // A local review's reports: from its steps and its task, whatever `[tools] enabled` says. They
+    // A code review's reports: from its steps and its task, whatever `[tools] enabled` says. They
     // only report on the session's own review, so they're answered for an untrusted head too.
     const reviewTool = REVIEW_TOOLS.find((t) => t === body.tool);
     if (reviewTool) {

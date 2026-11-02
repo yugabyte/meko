@@ -60,7 +60,7 @@ export const TOOL_DEFS: ToolDef[] = [
               },
               review: {
                 type: 'object',
-                description: "The task's own local review before its PR opens, only what the user asked for (the rest keeps the " +
+                description: "The task's own code review before its PR opens, only what the user asked for (the rest keeps the " +
                   'project\'s settings): strategy (off for no review, sirius-1.0, or sagittarius-3.0), rounds (re-reviews after the ' +
                   'first, 0 to 5) and depth (sweeps per review, 1 to 5: "3 deep reviews" is depth 3).',
                 properties: {
@@ -122,7 +122,7 @@ export const TOOL_DEFS: ToolDef[] = [
     name: 'review_report',
     readOnly: true,
     description:
-      "One pass of AgentK's local code review reports what it found. Only for a review step whose file names this tool: " +
+      "One pass of AgentK's code review reports what it found. Only for a review step whose file names this tool: " +
       'step is the step id the file gives, report the JSON its schema asks for. An error says what to fix; call again.',
     inputSchema: { type: 'object', properties: { step: { type: 'string' }, report: { type: 'object' } }, required: ['step', 'report'] },
   },
@@ -130,7 +130,7 @@ export const TOOL_DEFS: ToolDef[] = [
     name: 'review_score',
     readOnly: true,
     description:
-      "A scorer of AgentK's local code review reports its verdict on one finding. Only for a step whose file names this tool: " +
+      "A scorer of AgentK's code review reports its verdict on one finding. Only for a step whose file names this tool: " +
       'step is the step id the file gives, score the JSON its schema asks for. An error says what to fix; call again.',
     inputSchema: { type: 'object', properties: { step: { type: 'string' }, score: { type: 'object' } }, required: ['step', 'score'] },
   },
@@ -138,7 +138,7 @@ export const TOOL_DEFS: ToolDef[] = [
     name: 'review_outcome',
     readOnly: true,
     description:
-      "Tells AgentK what you did with each finding of its local code review, by the key AgentK gave it ([1:2]: key 1:2): " +
+      "Tells AgentK what you did with each finding of its code review, by the key AgentK gave it ([1:2]: key 1:2): " +
       'status fixed or declined, and note: what you changed, or why the finding is wrong.',
     inputSchema: {
       type: 'object',

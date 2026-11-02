@@ -216,7 +216,7 @@ export function tempDir(prefix: string): string {
 
 /**
  * `kiro`: offer Kiro, run by the fake (`fake-kiro.mjs`) with its home in the test's folder; `opencode`:
- * offer OpenCode, run by `fake-opencode.mjs`. Both off by default. `review`: the local code review before
+ * offer OpenCode, run by `fake-opencode.mjs`. Both off by default. `review`: the code review before
  * a PR opens on its default strategy (`[code_review]`); off by default, so Open PR sends the PR prompt at once.
  */
 export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?: boolean; opencode?: boolean; review?: boolean } = {}): Promise<TestEnv> {

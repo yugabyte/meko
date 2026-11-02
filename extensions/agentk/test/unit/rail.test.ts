@@ -77,7 +77,7 @@ describe('projects pane', () => {
 });
 
 describe("a rail session's name", () => {
-  // A task with a local review (its row joined with the magnifier) once cut its name with an ellipsis.
+  // A task with a code review (its row joined with the magnifier) once cut its name with an ellipsis.
   it('wraps in every row, never cut', () => {
     // Innermost rules only (no `{` in a body), so one nested in an @media block is checked too.
     const rules = [...STYLES.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(([, sel]) => sel!.includes('.rail-sess-name'));
@@ -87,7 +87,7 @@ describe("a rail session's name", () => {
   });
 });
 
-describe("a rail task's local review", () => {
+describe("a rail task's code review", () => {
   // Every rule in the file, in order, with the @media it sits in ('' outside one).
   const css = STYLES.replace(/\/\*[\s\S]*?\*\//g, '');
   const rules: { media: string; sel: string; body: string; at: number }[] = [];

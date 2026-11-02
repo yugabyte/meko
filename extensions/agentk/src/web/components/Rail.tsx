@@ -74,7 +74,7 @@ export function Rail({
   /** Show each listed session's harness logo: open sessions run on more than one harness and the setting is on. */
   harnessLogos: boolean;
   onSelectSession: (s: Session) => void;
-  /** A task's magnifier: the task on screen with its local review's findings open. */
+  /** A task's magnifier: the task on screen with its code review's findings open. */
   onOpenReview: (task: Session) => void;
   /** The task whose findings are open on screen: its row selects the review's part. */
   findingsOpenFor: string | null;
@@ -241,7 +241,7 @@ export function Rail({
                       )}
                     </div>
                     );
-                    // A task with a local review keeps one row: its part, then the review's (the magnifier).
+                    // A task with a code review keeps one row: its part, then the review's (the magnifier).
                     if (!review) return row;
                     return (
                       <div key={s.id} className={cx('rail-joined', part === 'review' && 'review-sel')}>

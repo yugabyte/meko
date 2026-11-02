@@ -1,5 +1,5 @@
-// The sidebar's link to the Settings page: what Meko does with your Claude Code, usage stats, Meko
-// Cloud and who can reach Meko.
+// The Settings gear in the sidebar's footer, beside the theme toggle, as AgentK's rail has it: what
+// Meko does with your Claude Code, usage stats, Meko Cloud and who can reach Meko.
 
 import { Settings } from "lucide-react";
 import { href, navigate, SETTINGS } from "../lib/route";
@@ -10,13 +10,15 @@ export function SettingsLink({ active }: { active: boolean }) {
     <a
       href={href(SETTINGS)}
       onClick={(e) => (e.preventDefault(), navigate(SETTINGS))}
+      title="Settings"
+      aria-label="Settings"
+      aria-current={active ? "page" : undefined}
       className={cx(
-        "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm",
-        active ? "bg-accent font-medium" : "text-muted-foreground hover:bg-accent",
+        "inline-flex h-7 items-center justify-center rounded-lg px-2 transition hover:bg-accent",
+        active && "bg-accent text-primary",
       )}
     >
-      <Settings className={cx("size-4 shrink-0", active && "text-primary")} />
-      Settings
+      <Settings className="size-3.5" />
     </a>
   );
 }

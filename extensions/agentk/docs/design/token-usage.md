@@ -270,7 +270,7 @@ Kiro isn't available.
   with the split (`gapsLine` in `src/web/util.ts`), or that none are, and opens that tab in Meko's
   web UI ([Meko's Context Gaps](recall-and-learn.md#mekos-context-gaps)); it's left out while
   AgentK doesn't use the Meko on this computer, or that Meko keeps no list for the datapack.
-- **Code reviews** ([the local code review](code-review.md)) show on both pages once one has run.
+- **Code reviews** ([the code review](code-review.md)) show on both pages once one has run.
   The 14-day chart stacks each day's tokens that review sessions (`kind = 'code-review'`) spent at
   the bottom of its bar (`DailyUsage.reviewTokens`, its own color, `--chart-review`), with a legend
   (**Other work**, **Code reviews**), a **Code reviews** row in the day's tooltip and a **Code
