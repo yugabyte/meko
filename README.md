@@ -211,3 +211,6 @@ The snippets load the badges from this repo's `main` branch on raw.githubusercon
 
 The Meko logo in `backend/assets/` is Meko's mark, from Meko Cloud's web app, and the badges in
 `backend/assets/badges/` are made from it.
+
+<!-- Scarf pixel meko-github-readme: counts README views. -->
+<img referrerpolicy="no-referrer-when-downgrade" src="https://static.scarf.sh/a.png?x-pxid=437e0be7-bfef-40e8-83ca-dd7d4a7ea7da" alt="" width="1" height="1" />
