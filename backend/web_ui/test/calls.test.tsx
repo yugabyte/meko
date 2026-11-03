@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// The Calls page against a faked /api/v1: the agent filter AgentK's sessions put in the address,
+// The Calls page against a faked /api/v1: the agent filter in the address,
 // paging back with before (dropped when the filter changed meanwhile), and a call opening to what it
 // sent and got back, or to a note that it isn't kept.
 
@@ -53,7 +53,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-test("a session's link opens its agent's calls, and Load older pages back from the last one", async () => {
+test("an agent in the address opens its calls, and Load older pages back from the last one", async () => {
   const q = `agent=${encodeURIComponent(AGENT)}`;
   serve({
     [`/api/v1/calls?${q}`]: { calls: [call(9, "context_search", { client: "agentk" }), call(7, "memory_add")], more: true },

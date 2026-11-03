@@ -23,7 +23,7 @@ import {
 import { parseSettings, sessionDatapack, sessionRow, slugify } from '../../src/server/store.js';
 import { shq } from '../../src/server/launcher.js';
 import { repoFolder } from '../../src/server/worktrees.js';
-import { mekoCallsUrl, mekoDatapackUrl } from '../../src/web/util.js';
+import { mekoDatapackUrl } from '../../src/web/util.js';
 
 describe('config and db', () => {
   it('keeps the database owner-only, its WAL and update snapshots included, and fixes ones made before', () => {
@@ -160,12 +160,6 @@ describe('config and db', () => {
     for (const source of ['meko', 'config', 'env', 'claude', null] as const) {
       expect(mekoDatapackUrl({ webUrl: null, source }, id)).toBeNull();
     }
-  });
-
-  it("links a session's calls on Meko's Calls page, by its agent id, only when Meko has the page", () => {
-    expect(mekoCallsUrl({ calls: true }, 'claude_code:fix-it-1a2b3c4d')).toBe('/calls?agent=claude_code%3Afix-it-1a2b3c4d');
-    expect(mekoCallsUrl({ calls: true }, null)).toBeNull();
-    expect(mekoCallsUrl({ calls: false }, 'claude_code:fix-it-1a2b3c4d')).toBeNull();
   });
 
   it("deletes the Meko call logs AgentK kept itself once, and nothing else in a session's folder", () => {

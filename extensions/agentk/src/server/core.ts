@@ -207,7 +207,7 @@ export class Core extends EventEmitter {
   /** The last read of OpenCode's own Meko server (openCodeMeko). */
   private openCodeMekoAt: { at: number; own: boolean } | null = null;
   /** Meko's status as last worked out; `state()` adds the parts read live (`local`, the agents'). */
-  mekoStatus: Omit<MekoStatus, 'local' | 'agentList' | 'calls'>;
+  mekoStatus: Omit<MekoStatus, 'local' | 'agentList'>;
   /** The Meko on this computer, read when needed (mekolocal.ts); used when no key is set. */
   private localReader: LocalMekoReader;
   /** When a failed connection last read the local Meko again. */
@@ -384,7 +384,7 @@ export class Core extends EventEmitter {
     return next;
   }
 
-  private mekoStatusFor(cfg: Config): Omit<MekoStatus, 'local' | 'agentList' | 'calls'> {
+  private mekoStatusFor(cfg: Config): Omit<MekoStatus, 'local' | 'agentList'> {
     const m = resolveMekoWithSource(cfg);
     return {
       configured: !!m.apiKey, url: m.apiKey ? m.url : null, source: m.keySource, webUrl: resolveMekoWebUrl(cfg),
@@ -430,16 +430,6 @@ export class Core extends EventEmitter {
     const now = Date.now();
     if (!this.openCodeMekoAt || now - this.openCodeMekoAt.at > AGENT_MEKO_TTL_MS) this.openCodeMekoAt = { at: now, own: this.harnesses.openCodeOwnMeko() };
     return { own: this.openCodeMekoAt.own };
-  }
-
-  /**
-   * `MekoStatus.calls`: the Meko calls go through the Meko on this computer (its own, or Meko Cloud's
-   * it passes on), whose web UI has the Calls page.
-   */
-  private mekoCallsPage(): boolean {
-    const { source } = this.mekoStatus;
-    const throughLocal = source === 'local' || (source === 'meko' && linkedThroughMeko(localMeko().cloud));
-    return throughLocal && localMeko().meko?.calls === true;
   }
 
   /**
@@ -689,7 +679,7 @@ export class Core extends EventEmitter {
       })(),
       meko: {
         ...this.mekoStatus, claude: this.claudeMekoStatus(), kiro: this.kiroMeko(), opencode: this.openCodeMeko(),
-        agentList: this.mekoAgents.known(), local: localMeko().state, calls: this.mekoCallsPage(),
+        agentList: this.mekoAgents.known(), local: localMeko().state,
       },
       update: this.updateStatus(),
       version: this.version,

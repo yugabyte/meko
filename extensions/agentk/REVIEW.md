@@ -314,9 +314,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       version read), only while Claude Code is available, in the background, only for a token that isn't
       AgentK's own, and reuses results for 10 minutes; one it couldn't check never raises the banner.
 - [ ] A new place AgentK calls Meko for a session passes the session's agent id
-      (`launchedAgentId(row)`), so Meko's Calls page shows the call with the session's own; AgentK
-      keeps no log of what its Meko calls send or get back (Meko does, while its Keep call contents
-      is on). The usage read of Kiro's and OpenCode's own files counts their Meko calls in
+      (`launchedAgentId(row)`), so Meko files the call under the session's agent with the agent's
+      own; AgentK keeps no log of what its Meko calls send or get back. The usage read of Kiro's and OpenCode's own files counts their Meko calls in
       `meko_calls`, once per call, and passes nothing on.
 - [ ] The learn step (`learn.ts`) writes only to the session's dedicated datapack, never a shared
       one, and on the mod path never a fact that names this machine (home, AgentK's home,

@@ -288,10 +288,6 @@ never the key.
   before the key stayed in Meko sends `url`, `api_key` and `api_url` too, which an extension may still
   use.
 
-Beside `cloud`, `features` lists the web UI's pages an extension may link to: `calls`, the Calls
-page, which takes `/calls?agent=<agent id>` (AgentK's sessions open it). A Meko without it leaves
-`features` out, so an extension shows no such link.
-
 After every change, once it's saved and the change's lock is released (so a slow extension holds
 up neither the reply nor the next change), Meko posts `{"what": "cloud"}` to `/_meko/changed` on each running
 extension's socket, with no Origin, best effort with a 5 s timeout ([web.md](web.md)); the

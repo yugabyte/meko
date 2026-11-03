@@ -9,7 +9,7 @@ const DONE_KEY = 'meko-call-logs-removed';
 const OLD_LOG_FILE = 'meko-calls.jsonl';
 
 /**
- * Deletes every session's Meko call log from before Meko kept each call's contents (its Calls page),
+ * Deletes every session's Meko call log AgentK kept before it stopped keeping one,
  * once: they hold what was sent to Meko and what came back, and nothing deletes them any more.
  * Returns how many it deleted. Throws when `designs` can't be read or a log can't be deleted (the
  * first such error, after trying every one); then it isn't marked done and runs again next start.

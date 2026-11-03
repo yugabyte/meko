@@ -263,7 +263,6 @@ export function SessionSheet({
   onDesign,
   onAsk,
   onHome,
-  mekoCallsUrl,
   onMove,
   onRename,
   onToTop,
@@ -297,8 +296,6 @@ export function SessionSheet({
   /** Opens the questions Claude is asking (Session.asking). */
   onAsk: () => void;
   onHome: () => void;
-  /** The session's calls on Meko's Calls page (`mekoCallsUrl`), opened in a new tab; null when Meko has none. */
-  mekoCallsUrl: string | null;
   /** Opens the Move to another stage dialog. */
   onMove: () => void;
   /** Opens the Rename session dialog. */
@@ -361,11 +358,6 @@ export function SessionSheet({
               {session.workItemId ? 'Change its work item' : 'Link to a work item'}
             </SheetItem>
           </>
-        )}
-        {mekoCallsUrl && (
-          <SheetItem href={mekoCallsUrl} hint="↗" onClick={onClose}>
-            Meko calls
-          </SheetItem>
         )}
         <SheetItem hint="›" onClick={then(onHome)}>
           Project home

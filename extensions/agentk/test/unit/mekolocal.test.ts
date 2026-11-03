@@ -21,12 +21,12 @@ describe('probeLocalMeko', () => {
   };
   const probe = (mekoHome: string | null = null) => probeLocalMeko(mekoHome, { HOME: home, PATH: '/usr/bin:/bin' });
 
-  it('reads the URLs and token of a running Meko, and whether it has the Calls page, asking the Meko whose folder it is given', async () => {
-    // Only the Meko in /data/meko names its web listener and has the Calls page: the other is too old for either.
-    meko(`w=''; [ -n "$MEKO_HOME" ] && w=',"web_url":"https://box:7777","features":["calls"]'
+  it('reads the URLs and token of a running Meko, asking the Meko whose folder it is given', async () => {
+    // Only the Meko in /data/meko names its web listener: the other is too old to serve AgentK.
+    meko(`w=''; [ -n "$MEKO_HOME" ] && w=',"web_url":"https://box:7777"'
 echo "{\\"url\\":\\"http://127.0.0.1:7778/mcp\\",\\"token\\":\\"tok-$MEKO_HOME\\",\\"running\\":true$w}"`);
     expect(await probe('/data/meko')).toEqual({
-      state: 'running', meko: { url: 'http://127.0.0.1:7778/mcp', token: 'tok-/data/meko', webUrl: 'https://box:7777', calls: true },
+      state: 'running', meko: { url: 'http://127.0.0.1:7778/mcp', token: 'tok-/data/meko', webUrl: 'https://box:7777' },
     });
     expect(await probe()).toEqual({ state: 'running', meko: { url: 'http://127.0.0.1:7778/mcp', token: 'tok-', webUrl: null } });
   });

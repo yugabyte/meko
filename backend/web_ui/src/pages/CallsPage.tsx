@@ -1,6 +1,6 @@
 // Every MCP call Meko answered, newest first, a page at a time, filtered by agent, tool, AgentK's own
 // and failed ones; a call opens to its trace and, while Settings keeps call contents, what it sent and
-// got back. Reached from Settings, and from AgentK, whose sessions open /calls?agent=<their agent id>.
+// got back. Reached from Settings; the filters are in the address (/calls?agent=<agent id>).
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { CheckCircle2, ChevronRight, XCircle } from "lucide-react";

@@ -52,18 +52,11 @@ row is demoted or detached in the same transaction as the new one is added, the 
 server-side Meko conversation (used for search) is made again in the new datapack. Pins are per session, so a running
 session's stays on the old datapack and the next one to start pins the new one.
 
-**Meko calls are in Meko.** Every call AgentK and a session's agent make reaches the Meko on this
-computer's `/mcp` (Meko Cloud's datapacks included: Meko passes those on), and Meko logs each one.
-Meko's **Calls** page lists them, and, while **Keep call contents** is on in Meko's Settings (off by
-default, kept 7 days), shows what each sent and got back. A session's ⋯ sheet and the command
-palette have **Meko calls**, which opens that page in a new tab on the session's agent id
-(`mekoCallsPath`: `/calls?agent=<Session.mekoAgentId>`), the id both the agent's calls and AgentK's
-own for the session carry. It's offered only while the calls go through the Meko on this computer
-and it has the page (`MekoStatus.calls`, from `features` in `meko token --json`), and once the
-session has its own agent id (its first launch). Calls that name no agent id (`datapack_list`, the
-recall at start under AgentK's own id) are on the page unfiltered. AgentK kept a log of its own
-before (`designs/<session>/meko-calls.jsonl`, the project setting Log Meko calls); a start of this
-version deletes those files once (`removeOldMekoLogs`, kv `meko-call-logs-removed`).
+**AgentK keeps no log of Meko calls.** What AgentK's and a session's agent's Meko calls send and get
+back is Meko's to keep, not AgentK's. AgentK kept a log of its own before
+(`designs/<session>/meko-calls.jsonl`, the project setting Log Meko calls); a start of this version
+deletes those files once (`removeOldMekoLogs`, kv `meko-call-logs-removed`), and is marked done only
+once every one is gone.
 
 The searches Meko couldn't answer are Meko's: the dedicated datapack's **Context Gaps** tab in
 Meko's web UI (for a Meko Cloud datapack, Meko's page for its Context Gaps). While AgentK's Meko

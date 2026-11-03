@@ -776,7 +776,6 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
           askAgentk={!!state.askAgentk}
           onEditSession={(projectId, initial) => setModal({ kind: 'new-session', projectId, initial })}
           mekoWebUrl={state.meko.webUrl}
-          mekoCalls={state.meko.calls}
           onOpenInvite={(invite) => setModal({ kind: 'new-project', invite })}
           onStarted={({ project, session }) => {
             // As after Open project and New session: both shown until a state push brings them.

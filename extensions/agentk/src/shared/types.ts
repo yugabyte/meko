@@ -819,12 +819,6 @@ export interface Session {
    */
   mekoCall: boolean;
   /**
-   * The agent id the session's Meko calls carry (`sessionAgentId`), set at its first launch; null
-   * before, and for a session from before sessions had their own. Its "Meko calls" opens Meko's
-   * Calls page on it (`MekoStatus.calls`).
-   */
-  mekoAgentId: string | null;
-  /**
    * Work the agent left running in the background when its last turn ended, which wakes it again
    * when it's done: Claude Code's background shells, subagents and monitors (its `Stop` hook's
    * `background_tasks`), OpenCode's background shells and subagents (from AgentK's plugin). Empty
@@ -1018,12 +1012,6 @@ export interface MekoStatus {
    * unless it's `read`.
    */
   agentList: 'read' | 'old' | 'unread';
-  /**
-   * AgentK's and the agents' Meko calls go through the Meko on this computer, and its web UI has the
-   * Calls page (Meko's `features`): a session's "Meko calls" opens it on that session's agent id
-   * (`mekoCallsPath`). False with a Meko too old to have it, or when the calls go elsewhere.
-   */
-  calls: boolean;
   /**
    * The Meko on this computer, as last read. While it's `none` (no `meko` at all), a banner that
    * can't be dismissed says to install Meko, with a Meko Cloud link too.

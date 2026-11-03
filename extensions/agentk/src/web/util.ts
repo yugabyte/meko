@@ -1,7 +1,7 @@
 import { HARNESS_CAPS, harnessOf, type HarnessId } from '../shared/harnesses';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, LEARN_WARN_FILES, LEARN_WARN_PRS, STAGE_LABELS, type LearnScope } from '../shared/types';
-import { mekoCallsPath, mekoDatapackPath } from '../shared/mekourls';
+import { mekoDatapackPath } from '../shared/mekourls';
 import { YOU_CANCELLED, countsText, isStrategySetting, reviewHolds, reviewRunning, type CodeReviewDetail, type CodeReviewFinding, type CodeReviewSummary, type ReviewOverrides } from '../shared/codereview';
 import { stepOf } from '../shared/stages';
 import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGaps, MekoLearning, MekoStatus, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, Stage, TokenUsage } from '../shared/types';
@@ -348,15 +348,6 @@ export function slugify(s: string): string {
 export function mekoDatapackUrl(meko: Pick<MekoStatus, 'webUrl' | 'source'>, datapackId: string): string | null {
   if (meko.source === 'local') return mekoDatapackPath(datapackId);
   return meko.webUrl ? `${meko.webUrl}${mekoDatapackPath(datapackId)}` : null;
-}
-
-/**
- * A session's calls on Meko's Calls page (`mekoCallsPath`), root-absolute on this origin like
- * `mekoDatapackUrl`'s; null when Meko has no such page for it (`MekoStatus.calls`) or the session
- * has no Meko agent id.
- */
-export function mekoCallsUrl(meko: Pick<MekoStatus, 'calls'>, agentId: string | null): string | null {
-  return meko.calls && agentId ? mekoCallsPath(agentId) : null;
 }
 
 /** An http(s) URL's host, lowercased; null for anything else (never a `javascript:` link). */

@@ -71,7 +71,7 @@ export const project = (projectId: string): Route => ({ tab: "overview", view: "
 // The Settings page, which the sidebar and the "it's off" notes link to.
 export const SETTINGS: Route = { tab: "overview", view: "settings" };
 
-// The Calls page, which Settings links to and AgentK's sessions open as /calls?agent=<their agent id>.
+// The Calls page, which Settings links to; its filters are in the address (/calls?agent=<agent id>).
 export const CALLS: Route = { tab: "overview", view: "calls" };
 
 // The Calls page's filters, from its address's query.

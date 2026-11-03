@@ -197,8 +197,7 @@ The step records how many it offered, and how many marks Meko took, taught and d
 **Record.** `meko_learns(id, session_id, trigger, path, started_at, ended_at, outcome, failed_step,
 candidates, saves, updates, skips, lookups, errors, sent_chars, questions, taught, dismissed)`, with `trigger` `merge`, `discard`
 or `manual` and `path` `mod`, `turn` or `none` (skipped). The step's own Meko calls are in `meko_agentk_calls` with its id,
-and on Meko's Calls page under the session's agent id, with what was sent and what came back while
-Meko keeps call contents (see [Project home](project-home.md)).
+and go to Meko under the session's agent id.
 
 ## Learn sessions
 

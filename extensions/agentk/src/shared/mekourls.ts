@@ -45,17 +45,6 @@ export function mekoGapsPath(datapackId: string, cloud = false): string {
 }
 
 /**
- * Meko's Calls page on that web UI, on one agent's calls: every Meko call, with what it sent and got
- * back while Meko keeps call contents (its Settings). A session's "Meko calls" opens it on the
- * session's agent id, which the agent's calls and most of AgentK's for the session carry. AgentK's
- * search at a session's start (`searchDatapacks`) and the project conversation it and the PR design
- * fetch ensure go under AgentK's own id (`AGENTK_AGENT_ID`), so they're on the page unfiltered only.
- */
-export function mekoCallsPath(agentId: string): string {
-  return `/calls?agent=${encodeURIComponent(agentId)}`;
-}
-
-/**
  * Installs Meko on this computer: the installer of the repo's latest release, which is Meko's
  * (the README's install line). The banner shown while there's no Meko here gives it.
  */

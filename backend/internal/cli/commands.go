@@ -545,12 +545,8 @@ func readMCPAccess(l paths.Layout) (config.Config, mcpAccess, error) {
 	return cfg, mcpAccess{url: fmt.Sprintf("http://127.0.0.1:%d/mcp", port), token: tok, running: up}, nil
 }
 
-// tokenFeatures are what this Meko has that an extension may link to, in token --json: "calls", the
-// web UI's Calls page (/calls?agent=<id>), which AgentK's sessions open.
-var tokenFeatures = []string{"calls"}
-
 // runToken prints the client token (readMCPAccess), and with asJSON the MCP URL, the token, whether
-// a server runs, the Meko Cloud link and the features extensions may use, for extensions (AgentK reads it).
+// a server runs and the Meko Cloud link, for extensions (AgentK reads it).
 func runToken(l paths.Layout, asJSON bool, stdout, stderr io.Writer) int {
 	cfg, a, err := readMCPAccess(l)
 	if err != nil {
@@ -573,7 +569,7 @@ func runToken(l paths.Layout, asJSON bool, stdout, stderr io.Writer) int {
 		}
 	}
 	reply := map[string]any{"url": a.url, "token": a.token, "running": a.running, "web_url": web,
-		"cloud": cloudTokenFor(l, cfg), "features": tokenFeatures}
+		"cloud": cloudTokenFor(l, cfg)}
 	if off {
 		reply["web_url"], reply["web_off"] = "", true
 	}
