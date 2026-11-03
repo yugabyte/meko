@@ -626,6 +626,11 @@ textarea.input {
 .dot.idle {
   border: 2px solid var(--idle);
 }
+/* AgentK stopped the agent for sitting idle: a faint dashed ring, quieter than idle. */
+.dot.stopped {
+  border: 2px dashed var(--idle);
+  opacity: 0.6;
+}
 .dot.exited {
   background: var(--bad);
   border-radius: 2px;

@@ -774,6 +774,9 @@ const MIGRATIONS: string[] = [
   `,
   // 47: the AgentK GitHub reviewer is gone (AGENTK_REVIEWER_GONE, which every start runs again).
   AGENTK_REVIEWER_GONE,
+  // 48: when AgentK stopped a session's agent for sitting idle (SessionManager.stopIdle); recovery
+  // leaves such a session stopped, and any launch clears it.
+  `ALTER TABLE sessions ADD COLUMN idle_stopped_at INTEGER;`,
 ];
 
 export function openDb(path: string): Db {

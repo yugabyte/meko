@@ -855,6 +855,13 @@ export interface Session {
   createdAt: number;
   archivedAt: number | null;
   recoveredAt: number | null;
+  /**
+   * When AgentK stopped the session's agent because it sat idle past `[sessions] idle_stop_hours`
+   * (ms); null otherwise. The status is `exited` meanwhile, and the agent starts again with
+   * `--resume` on Resume, a key typed into its terminal, an action that sends it a prompt, or an
+   * AgentK step that needs it.
+   */
+  idleStoppedAt: number | null;
 }
 
 /** What a Review a PR session knows about the PR it reviews, from its last look at GitHub. */
@@ -1806,6 +1813,8 @@ export interface Settings {
   idleWorktreesPerRepo: number;
   /** Days an idle worktree may go unused before it's removed (0 to 365; 0 keeps it until the cap trims it). */
   idleWorktreeDays: number;
+  /** `[sessions] idle_stop_hours`: hours a session's agent may sit idle before AgentK stops it (0 to MAX_IDLE_STOP_HOURS; 0 never stops one). */
+  idleStopHours: number;
   /** `[call_home] enabled`: send anonymous usage stats (the checkbox on Settings › General). */
   callHomeEnabled: boolean;
   /**
@@ -1871,6 +1880,9 @@ export type MekoKeySource = 'meko' | 'local' | 'config' | 'env' | 'claude';
 export type LocalMekoState = 'running' | 'stopped' | 'none' | 'failed';
 
 export type SettingsUpdate = Partial<Omit<Settings, 'hostName'>>;
+
+/** The most hours `[sessions] idle_stop_hours` takes (30 days). */
+export const MAX_IDLE_STOP_HOURS = 720;
 
 /** What Discard would throw away. */
 export interface DiscardCheck {
@@ -2734,7 +2746,8 @@ export type TermServerMessage =
 //                                                           Settings › Meko Cloud, PUT /api/v1/settings/meko-cloud there)
 // PUT    /api/settings        SettingsUpdate   → Settings   (bind and port are read-only: set them in config.toml;
 //                                                           a lower idleWorktreesPerRepo or idleWorktreeDays removes
-//                                                           the idle worktrees now beyond it; serverName is trimmed,
+//                                                           the idle worktrees now beyond it; idleStopHours is a whole
+//                                                           number from 0 to MAX_IDLE_STOP_HOURS; serverName is trimmed,
 //                                                           at most 64 characters with no control characters, and
 //                                                           '' goes back to the host name; callHomeEnabled,
 //                                                           resolveConflicts and toolsEnabled are booleans; defaultHarness must be a

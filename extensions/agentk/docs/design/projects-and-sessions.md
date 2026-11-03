@@ -52,6 +52,9 @@ clone_into = "~/code"     # where "Clone from URL" and "New repo" put new repos
 idle_per_repo = 3         # idle worktrees each repo keeps for its next session (0 to 20; 0 removes them)
 idle_days = 14            # an idle worktree no session used for this many days is removed (0 to 365; 0 keeps it)
 
+[sessions]
+idle_stop_hours = 24      # a session's agent idle this long is stopped, and resumed when needed (0 to 720; 0 never stops one)
+
 [meko]
 # The Meko Cloud link is Meko's (its web UI's Settings › Meko Cloud, or meko cloud_link). url, api_key,
 # web_url and api_url from before are handed to Meko once, then never read again (kept for a rollback).

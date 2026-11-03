@@ -350,7 +350,12 @@ your phone can connect.
   It never sends names, paths, prompts, code, or who you are. Turn it off in Settings › General
   (details in [docs/design/usage-stats.md](docs/design/usage-stats.md)).
 - **Survives restarts:** after a host reboot, every open session is brought back with
-  `claude --resume`, and sessions that were mid-turn are told to continue.
+  `claude --resume`, and sessions that were mid-turn are told to continue. A session whose agent
+  was stopped for sitting idle stays stopped until it's needed.
+- **Stops idle agents:** a session's agent idle for 24 hours is stopped to free its memory; the
+  session, its worktree and conversation stay. It starts again with `--resume` when you resume it,
+  type in its terminal, take an action that sends it a prompt, or AgentK has work for it. Change
+  the hours, or turn it off with 0, in Settings › General.
 - **Updates through Meko** from GitHub Releases, automatic or one click, without interrupting running
   sessions, and rollback if a new version won't start.
 

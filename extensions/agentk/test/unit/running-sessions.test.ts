@@ -72,6 +72,7 @@ describe('dotState', () => {
     ['over learning and a queued gate', 'review', 'idle', { learning: true, queued: 'merge' }, 'needs_input'],
     ['over a turn calling Meko', 'review', 'working', { mekoCall: true }, 'needs_input'],
     ['not over exited', 'review', 'exited', {}, 'exited'],
+    ['over an agent stopped for sitting idle', 'review', 'exited', { idleStoppedAt: 1 }, 'needs_input'],
     ['not outside Review & PR', 'code', 'idle', {}, 'idle'],
     ["the code review's findings waiting on you, in Code too", 'code', 'working', { codeReview: { state: 'triage' } as Session['codeReview'] }, 'needs_input'],
   ])('a blocker only the user can clear: %s', (_, stage, status, over, dot) => {
@@ -90,6 +91,13 @@ describe('dotState', () => {
     expect(aggregateDot(project(session('idle'), session('recovered'), background))).toBe('background');
     expect(aggregateDot(project(background, session('working')))).toBe('working');
     expect(aggregateDot(project(background, session('needs_input')))).toBe('needs_input');
+  });
+
+  it('shows an agent AgentK stopped for sitting idle as stopped, not exited, and quieter than idle in the rail', () => {
+    const project = (...sessions: Session[]) => ({ sessions }) as ProjectWithSessions;
+    const stopped = { ...session('exited'), idleStoppedAt: 1 } as Session;
+    expect(dotState(stopped)).toBe('stopped');
+    expect(aggregateDot(project(stopped, session('idle')))).toBe('idle');
   });
 
   it("titles a session's tab, and its palette row, with what's running in the background", () => {

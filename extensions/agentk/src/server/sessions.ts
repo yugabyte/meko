@@ -184,6 +184,13 @@ const MAX_FAILED_STARTS = 20;
 const SETTLE_MS = 60000;
 /** How long recovery waits before trying again after a failed restart (each try may fetch from the remote). */
 const RECOVERY_BACKOFF_MS = 5 * 60 * 1000;
+/** How long an action that needs the agent of a session stopped for sitting idle waits for it to start again. */
+const WAKE_WAIT_MS = 60_000;
+/**
+ * How long an idle stop waits for the stopped agent's SessionEnd, so a late one can't end the agent
+ * a wake starts next (a harness with no such hook, Kiro, waits it out).
+ */
+const STOP_END_MS = 5000;
 /**
  * Session variables the launcher clears when it doesn't set them, so a value inherited from
  * the session host's environment or the user's profile can't leak in. MEKO_CHECKPOINT_INTERVAL is only
@@ -289,6 +296,19 @@ export class SessionManager {
   private relinks = new Map<string, { item: string; prev: string | null }>();
   /** Sessions we are deliberately stopping; their exit isn't an event. */
   private stopping = new Set<string>();
+  /**
+   * Activity the session's row doesn't show, for the idle stop: a key typed into its terminal from
+   * any screen, or an action that needs its agent starting (`awake`), which may then wait on GitHub.
+   */
+  private usedAt = new Map<string, number>();
+  /** Sessions whose agent is being stopped for sitting idle (stopIdleOne): their own set, as archive's stops share `stopping`. */
+  private idleStopping = new Set<string>();
+  /** Starts of agents AgentK stopped for sitting idle, under way: until the agent is up (`awake`). */
+  private waking = new Map<string, Promise<void>>();
+  /** stopIdle is running (one pass at a time). */
+  private stoppingIdle = false;
+  /** An idle stop waiting for its agent's SessionEnd: called when it comes. */
+  private stopEnds = new Map<string, () => void>();
   /** Sessions being discarded now (discardNow). */
   private discardingNow = new Set<string>();
   /** Sessions whose Claude was launched but hasn't sent SessionStart yet (it may be showing the folder-trust dialog). */
@@ -1322,6 +1342,8 @@ export class SessionManager {
     if (sessionRow(this.db, row.id)?.desired !== 'running') throw new HttpError(409, 'This session was archived while it was starting.');
     // Never replace a live Claude (the host refuses to as well).
     if (pane && !pane.dead) throw new HttpError(409, `${agentName(row)} is already running in this session.`);
+    // Stopped for sitting idle: running again from now on, and recovery looks after it again.
+    if (row.idle_stopped_at) this.update(row.id, { idle_stopped_at: null });
     this.awaitingStart.add(row.id);
     // A new Claude process: the last one's mod and measurements are gone with it.
     this.forgetClaude(row.id);
@@ -1850,7 +1872,9 @@ export class SessionManager {
         this.clearStartup(id);
         // A prompt's sender keeps the session busy until its turn ends, which won't come now.
         this.busy.delete(id);
-        if (this.stopping.has(id)) break;
+        // An exit we caused (an archive, an idle stop, which says so itself) isn't news.
+        this.stopEnds.get(id)?.();
+        if (this.stopping.has(id) || this.idleStopping.has(id) || sessionRow(this.db, id)?.idle_stopped_at) break;
         if (cut) this.update(id, { interrupted: 1 });
         this.setStatus(id, 'exited', p.reason ? `Claude exited (${String(p.reason)})` : 'Claude exited');
         break;
@@ -1903,9 +1927,13 @@ export class SessionManager {
     }
   }
 
-  /** Sessions recovery and reconcile may touch: running, and not being created, launched or stopped. */
+  /**
+   * Sessions recovery and reconcile may touch: running, and not being created, launched or stopped,
+   * nor stopped for sitting idle (stopIdle), which stays stopped until something needs it (`awake`).
+   */
   private recoverable(row: SessionRow): boolean {
-    return row.desired === 'running' && !this.creating.has(row.id) && !this.launching.has(row.id) && !this.stopping.has(row.id);
+    return row.desired === 'running' && !row.idle_stopped_at && !this.creating.has(row.id) && !this.launching.has(row.id) && !this.stopping.has(row.id)
+      && !this.idleStopping.has(row.id);
   }
 
   /** Recovers a session whose pane is gone; after a failure, waits a while before trying again. */
@@ -2078,6 +2106,158 @@ export class SessionManager {
     // goes now. Otherwise that SessionStart sends it.
     if (!this.awaitingStart.has(row.id)) this.back(row.id);
     this.core.log.info(`recovered ${row.id}: ${detail}`);
+  }
+
+  // ---- stopping idle agents ----
+
+  /** Input typed into the session's terminal from a screen (terminal.ts): activity, for the idle stop. */
+  typed(id: string): void {
+    this.usedAt.set(id, Date.now());
+  }
+
+  /**
+   * When the session last saw activity: a hook event or a status change (last_event_at), a key
+   * typed into its terminal, or an action that needed its agent (`usedAt`).
+   */
+  private activeAt(row: SessionRow): number {
+    return Math.max(row.last_event_at ?? row.created_at, this.usedAt.get(row.id) ?? 0);
+  }
+
+  /**
+   * The session's agent may be stopped for sitting idle: between turns (idle or recovered, never
+   * waiting on the user), with no activity for `limit` ms, and nothing running, on its way or
+   * waiting for it: background tasks, a prompt being sent or held, a queued gate or Run to merge, a
+   * queued prompt or review comment, a learn step, a discard, a code review, Merge & Close. Never a
+   * code-review session, which its review drives, nor one whose conversation can't be resumed.
+   */
+  private stoppable(row: SessionRow, limit: number, now: number): boolean {
+    const id = row.id;
+    if (row.desired !== 'running' || row.idle_stopped_at || row.kind === 'code-review' || row.stage === 'merge') return false;
+    if ((row.status !== 'idle' && row.status !== 'recovered') || now - this.activeAt(row) < limit) return false;
+    if ([this.creating, this.launching, this.busy, this.submitting, this.unstarted, this.launchPrompt, this.turns, this.planPending, this.awaitingStart].some((s) => s.has(id))) {
+      return false;
+    }
+    if (this.background.get(id)?.length || this.promptsHeld(id) > 0) return false;
+    if (row.queued_gate || row.auto_run || row.discarding || this.core.lifecycle.hasQueued(id) || this.core.lifecycle.approvalQueued(id)) return false;
+    if (get(this.db, "SELECT 1 AS x FROM review_comments WHERE session_id = ? AND state = 'queued'", id)) return false;
+    if (this.core.learn.running(id) || this.core.reviews.running(id)) return false;
+    return this.transcriptExists(row);
+  }
+
+  /**
+   * Stops the agents of sessions idle past `[sessions] idle_stop_hours` (Core's timer, each
+   * minute), one at a time, to free their memory. Each keeps its stage, worktree and conversation,
+   * shows as exited with `idle_stopped_at` set, and starts again with `--resume` when something
+   * needs it (`awake`, `wakeSoon`, or Resume).
+   */
+  async stopIdle(): Promise<void> {
+    const hours = this.core.config.sessions.idleStopHours;
+    if (!hours || this.stoppingIdle) return;
+    this.stoppingIdle = true;
+    try {
+      for (const { id } of sessionRows(this.db)) {
+        // Read again: the stop before this one may have taken a while.
+        const row = sessionRow(this.db, id);
+        if (!row || this.stopping.has(id) || this.idleStopping.has(id) || !this.stoppable(row, hours * HOUR, Date.now())) continue;
+        await this.stopIdleOne(row, hours).catch((e) => this.core.log.error(`stopping the idle agent of ${row.id} failed`, e));
+      }
+    } finally {
+      this.stoppingIdle = false;
+    }
+  }
+
+  private async stopIdleOne(row: SessionRow, hours: number): Promise<void> {
+    const id = row.id;
+    const name = agentName(row);
+    this.idleStopping.add(id);
+    try {
+      // Its last turns reach Meko first, as at an archive.
+      this.ingestUsage(id);
+      await within(this.captureTranscript(id), FINAL_CAPTURE_MS);
+      // Anything since (a prompt, a key, an action, an archive) keeps it running.
+      const now = sessionRow(this.db, id);
+      if (!now || this.stopping.has(id) || !this.stoppable(now, hours * HOUR, Date.now()) || this.activeAt(now) !== this.activeAt(row)) return;
+      this.update(id, { idle_stopped_at: Date.now() });
+      const ended = new Promise<void>((r) => this.stopEnds.set(id, r));
+      await this.core.host.kill(row.tmux_name);
+      await within(ended, STOP_END_MS);
+      this.stopEnds.delete(id);
+      // Archived meanwhile: the archive says how the session ended.
+      if (sessionRow(this.db, id)?.desired !== 'running') return;
+      this.startup.delete(id);
+      this.hookless.delete(id);
+      this.awaitingStart.delete(id);
+      this.contextFill.delete(id);
+      this.forgetClaude(id, `${name} was stopped for sitting idle`);
+      const idle = hours === 1 ? '1 hour' : `${hours} hours`;
+      this.setStatus(id, 'exited', `Stopped after ${idle} idle to free memory. Resume to pick up where it left off.`);
+      this.event(id, 'idle-stopped', `${name} stopped after ${idle} idle`);
+      this.core.log.info(`stopped ${id}'s ${name}: idle for ${idle}`);
+    } finally {
+      this.idleStopping.delete(id);
+    }
+  }
+
+  /**
+   * The session, with its agent started again first when AgentK stopped it for sitting idle, for
+   * an action that sends it a prompt. `why` says what for in its activity ("for Open PR"). Waits up
+   * to `waitMs` for the agent to be up, and refuses (409) when it isn't by then. Counts as activity
+   * either way, so an idle stop can't begin under an action still on its way (one waiting on GitHub).
+   */
+  async awake(row: SessionRow, why: string, waitMs = WAKE_WAIT_MS): Promise<SessionRow> {
+    this.usedAt.set(row.id, Date.now());
+    const w = this.waking.get(row.id) ?? (row.idle_stopped_at && row.desired === 'running' ? this.wake(row.id, why, waitMs) : null);
+    if (!w) return row;
+    await w;
+    return this.row(row.id);
+  }
+
+  /** As `awake`, for AgentK's own queued work: starts the agent and returns at once; what waits goes once it's up. */
+  wakeSoon(id: string, why: string): void {
+    const row = sessionRow(this.db, id);
+    if (!row?.idle_stopped_at || row.desired !== 'running' || this.waking.has(id)) return;
+    this.wake(id, why, WAKE_WAIT_MS).catch((e) => this.core.log.warn(`starting the idle-stopped agent of ${id} again failed`, errMsg(e)));
+  }
+
+  private wake(id: string, why: string, waitMs: number): Promise<void> {
+    const w = (async () => {
+      const until = Date.now() + waitMs;
+      // A stop under way finishes first.
+      while (this.idleStopping.has(id) && Date.now() < until) await sleep(100);
+      if (this.idleStopping.has(id)) throw new HttpError(409, `AgentK is still stopping ${agentName(this.row(id))}. Try again in a moment.`);
+      const row = this.row(id);
+      // A Resume already under way is waited for like this start.
+      if (row.idle_stopped_at && row.desired === 'running' && !this.launching.has(id)) {
+        try {
+          await this.starting(id, () => this.resumeNow(row, why));
+        } catch (e) {
+          this.wakeFailed(id, e);
+          throw e;
+        }
+      }
+      while (sessionRow(this.db, id)?.status === 'starting' && Date.now() < until) await sleep(100);
+      const now = this.row(id);
+      if (now.status === 'starting') throw new HttpError(409, `${agentName(now)} is still starting again after it was stopped for sitting idle. Try again in a moment.`);
+      if (now.status === 'exited') throw new HttpError(409, now.status_detail ?? `${agentName(now)} exited as it started again.`);
+    })();
+    this.waking.set(id, w);
+    void w.catch(() => undefined).finally(() => {
+      if (this.waking.get(id) === w) this.waking.delete(id);
+    });
+    return w;
+  }
+
+  /**
+   * Starting a stopped agent again failed before its launch (its branch is gone, say): the session
+   * says why and becomes an ordinary exited one, which recovery tries again with its own backoff,
+   * rather than every poll trying again unseen.
+   */
+  private wakeFailed(id: string, e: unknown): void {
+    const row = sessionRow(this.db, id);
+    if (!row?.idle_stopped_at || row.desired !== 'running') return;
+    this.recoverRetryAt.set(id, Date.now() + RECOVERY_BACKOFF_MS);
+    this.update(id, { idle_stopped_at: null });
+    this.setStatus(id, 'exited', `Couldn't start ${agentName(row)} again: ${errMsg(e)}. AgentK tries again in 5 minutes, or Resume it now.`);
   }
 
   // ---- actions ----
@@ -2274,7 +2454,8 @@ export class SessionManager {
     return this.starting(row.id, () => this.resumeNow(row));
   }
 
-  private async resumeNow(row: SessionRow): Promise<void> {
+  /** `why`, for an agent stopped for sitting idle that's started again for something: what it's for ("for Open PR"). */
+  private async resumeNow(row: SessionRow, why?: string): Promise<void> {
     // Claude's SessionEnd hook fires just before its process ends, so give a pane
     // that is still shutting down a moment before calling it "already running".
     let pane = (await this.core.host.panes()).get(row.tmux_name);
@@ -2299,7 +2480,7 @@ export class SessionManager {
     this.setStartup(row.id, 'launch', { resumed: resume, hasPrompt: !!firstPrompt });
     await this.launch(row, { resume, prompt: firstPrompt });
     this.setStartup(row.id, 'loading');
-    this.event(row.id, 'resumed', 'Resumed');
+    this.event(row.id, 'resumed', why ? `Resumed ${why}` : 'Resumed');
   }
 
   /**
@@ -2402,6 +2583,7 @@ export class SessionManager {
       this.planPending.delete(row.id);
       this.awaitingStart.delete(row.id);
       this.recoverRetryAt.delete(row.id);
+      this.usedAt.delete(row.id);
       this.mergeInfo.delete(row.id);
       this.diffs.delete(row.id);
       this.forgetClaude(row.id, 'The session was archived');

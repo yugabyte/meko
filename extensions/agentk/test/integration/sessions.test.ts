@@ -1142,6 +1142,117 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(JSON.parse(env.core.sessions.row(s.id).auto_continue_at)).toEqual(history);
   });
 
+  /** Runs the idle stop as if `ms` had passed. */
+  async function stopIdleIn(ms: number): Promise<void> {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + ms);
+      await env.core.sessions.stopIdle();
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it("stops a session's agent idle past [sessions] idle_stop_hours, keeps it stopped through recovery, and resumes it", async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Sleepy', prompt: 'hi', kind: 'quick' });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'idle');
+    const notes: unknown[] = [];
+    env.core.on('notify', (n) => notes.push(n));
+    const live = async () => (await env.core.host.panes()).has(s.paneName);
+    const set = (fields: string, ...values: (string | number | null)[]) => run(env.core.db, `UPDATE sessions SET ${fields} WHERE id = ?`, ...values, s.id);
+    const HOUR = 60 * 60 * 1000;
+    env.core.config.sessions.idleStopHours = 1;
+
+    // Each of these keeps the agent running, however long it has been idle.
+    const kept: [string, number, () => void, () => void][] = [
+      ['not idle for the limit yet', 50 * 60 * 1000, () => undefined, () => undefined],
+      ['waiting on you', 2 * HOUR, () => set("status = 'needs_input'"), () => set("status = 'idle'")],
+      ['a queued Open PR', 2 * HOUR, () => set("queued_gate = 'open-pr'"), () => set('queued_gate = NULL')],
+      ['Run to merge', 2 * HOUR, () => set('auto_run = 1'), () => set('auto_run = 0')],
+      ['the stop turned off', 2 * HOUR, () => (env.core.config.sessions.idleStopHours = 0), () => (env.core.config.sessions.idleStopHours = 1)],
+      // Hooks quiet for hours, but a key typed into its terminal half an hour ago.
+      ['a key typed in its terminal', 30 * 60 * 1000, () => {
+        set('last_event_at = ?', Date.now() - 2 * HOUR);
+        env.core.sessions.typed(s.id);
+      }, () => undefined],
+      // An action that needed the agent may still be waiting on GitHub.
+      ['an action on its way', 30 * 60 * 1000, () => {
+        set('last_event_at = ?', Date.now() - 2 * HOUR);
+        void env.core.sessions.awake(env.core.sessions.row(s.id), 'for a test');
+      }, () => undefined],
+    ];
+    for (const [why, after, before, undo] of kept) {
+      before();
+      await stopIdleIn(after);
+      expect([why, await live(), env.core.sessions.get(s.id).idleStoppedAt]).toEqual([why, true, null]);
+      undo();
+    }
+
+    await stopIdleIn(2 * HOUR);
+    const stopped = env.core.sessions.get(s.id);
+    expect(stopped).toMatchObject({ status: 'exited', statusDetail: 'Stopped after 1 hour idle to free memory. Resume to pick up where it left off.' });
+    expect(stopped.idleStoppedAt).not.toBeNull();
+    expect(await live()).toBe(false);
+    expect(events(s.id).at(-1)).toEqual({ kind: 'idle-stopped', text: 'Claude stopped after 1 hour idle' });
+
+    // Neither reconcile nor a recovery after the host restarted brings it back.
+    const launches = argvLog(env).length;
+    await env.core.sessions.reconcile();
+    await env.killHost();
+    await env.core.sessions.reconcile();
+    expect(argvLog(env).length).toBe(launches);
+    expect(env.core.sessions.get(s.id)).toMatchObject({ status: 'exited', idleStoppedAt: stopped.idleStoppedAt });
+    expect(notes).toEqual([]);
+
+    await env.core.sessions.action(s.id, 'resume');
+    await waitFor(() => argvLog(env).length, (n) => n > launches, 10000, 'resume launch');
+    expect(argvLog(env).at(-1)!.args).toEqual(expect.arrayContaining(['--resume', s.claudeSessionId]));
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'resumed');
+    expect(env.core.sessions.get(s.id).idleStoppedAt).toBeNull();
+  });
+
+  it('starts a stopped agent again for what needs it, and sends what waited once it is up', async () => {
+    const p = await newProject();
+    const s = await env.core.sessions.create(p.id, { name: 'Wake me', prompt: 'hi', kind: 'quick' });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'idle');
+    env.core.config.sessions.idleStopHours = 1;
+    const stop = async () => {
+      await stopIdleIn(2 * 60 * 60 * 1000);
+      expect(env.core.sessions.get(s.id).idleStoppedAt).not.toBeNull();
+    };
+
+    // Review comments: queued, the agent starts again, and they go once it's up.
+    await stop();
+    env.core.comments.add(s.id, { path: 'src/a.ts', side: 'new', line: 1, endLine: 1, excerpt: 'const a = 1;', body: 'Rename it.' });
+    expect(await env.core.comments.send(s.id)).toEqual({ sent: 0, queued: 1 });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'started again');
+    expect(events(s.id).filter((e) => e.kind === 'resumed').at(-1)?.text).toBe('Resumed for your review comments');
+    expect(await env.core.comments.deliver(s.id)).toBe(1);
+    await waitFor(() => transcriptText(s.claudeSessionId), (t) => t.includes('Rename it.'), 10000, 'comment prompt');
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'comment turn');
+
+    // A move that sends nothing leaves it stopped; one that sends something starts it first, and its prompt follows.
+    await stop();
+    await env.core.sessions.move(s.id, { stage: 'explore', prompt: false });
+    expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'explore', status: 'exited' });
+    expect(env.core.sessions.get(s.id).idleStoppedAt).not.toBeNull();
+    await env.core.sessions.move(s.id, { stage: 'design', instructions: 'Sketch it first.' });
+    expect(events(s.id).filter((e) => e.kind === 'resumed').at(-1)?.text).toBe('Resumed for the move to Design');
+    await waitFor(() => transcriptText(s.claudeSessionId), (t) => t.includes('Sketch it first.'), 10000, 'move prompt');
+    expect(env.core.sessions.get(s.id).idleStoppedAt).toBeNull();
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'move turn');
+
+    // A start that fails (its branch and worktree are gone) says why, and recovery takes it from there.
+    await stop();
+    rmSync(s.worktreePath, { recursive: true, force: true });
+    execFileSync('git', ['worktree', 'prune'], { cwd: env.repo });
+    execFileSync('git', ['branch', '-D', s.branch], { cwd: env.repo });
+    env.core.sessions.wakeSoon(s.id, 'for a test');
+    const failed = await waitFor(() => env.core.sessions.get(s.id), (x) => x.idleStoppedAt === null, 10000, 'failed start');
+    expect(failed).toMatchObject({ status: 'exited', statusDetail: expect.stringMatching(/^Couldn't start Claude again: .*AgentK tries again in 5 minutes, or Resume it now\.$/) });
+  });
+
   it('follows /clear to the new conversation, so Resume continues that one', async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Clear me', prompt: 'hi', kind: 'quick' });

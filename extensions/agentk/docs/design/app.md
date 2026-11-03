@@ -90,6 +90,13 @@ Session states, shown with a dot on each session (on its tab, or in the rail) an
 - **Idle**, waiting for your next prompt
 - **Recovered** after a restart
 - **Exited**
+- **Agent stopped while idle:** AgentK stopped the session's agent after `[sessions] idle_stop_hours`
+  idle to free its memory (`Session.idleStoppedAt`; [Stopping idle agents](recovery.md#stopping-idle-agents)).
+  A faint dashed ring, quieter than idle: the rail ranks it under idle. Needs you shows over it while
+  something only you can clear waits (`Session.waitsOnYou`). The terminal says so, with
+  **Resume**; opening the session doesn't start the agent, but Resume, a key typed into the terminal
+  (the phone's key bar and compose box too),
+  an action that sends it a prompt or AgentK's own work for it does, so the gates don't block on it.
 - **Learning:** AgentK is saving what the session learned to Meko (the
   [learn step](recall-and-learn.md#the-learn-step), `Session.learning`). The dot becomes a ring of dots turning around
   Meko's m. It shows over idle, recovered and working (a learn step through the mod leaves the

@@ -2,7 +2,7 @@ import { useEffect, useReducer, useRef, useState, type ReactNode } from 'react';
 import type { Session } from '../../shared/types';
 import { useTouch } from '../hooks/useMedia';
 import { getTerminal, screenLabel } from '../terminals';
-import { agentName } from '../util';
+import { agentName, idleStopped } from '../util';
 import { AskBar } from './AskSheet';
 import { Busy } from './common';
 import { HeldImages } from './HeldImages';
@@ -13,9 +13,11 @@ import { TermKeys } from './TermKeys';
 
 /**
  * `onAsk` opens the questions Claude is asking (Session.asking), offered in a bar above the terminal.
+ * `onResume` resumes the session: the overlay's Resume for an agent AgentK stopped for sitting idle,
+ * and the first key typed into its terminal.
  * `mekoTo` is the datapack the held files' Upload to Meko sends to: null hides it (Meko off, or no datapack).
  */
-export function TerminalPane({ session, onAsk, mekoTo }: { session: Session; onAsk?: () => void; mekoTo: string | null }) {
+export function TerminalPane({ session, onAsk, onResume, mekoTo }: { session: Session; onAsk?: () => void; onResume?: () => void; mekoTo: string | null }) {
   const { id: sessionId, status } = session;
   const hostRef = useRef<HTMLDivElement>(null);
   const [, rerender] = useReducer((x: number) => x + 1, 0);
@@ -26,6 +28,21 @@ export function TerminalPane({ session, onAsk, mekoTo }: { session: Session; onA
   const startKey = `${sessionId}:${session.startup?.startedAt ?? ''}`;
   const [peeked, setPeeked] = useState<string | null>(null);
   const showStartup = status === 'starting' && peeked !== startKey;
+  const stopped = idleStopped(session);
+  const resume = useRef(onResume);
+  useEffect(() => {
+    resume.current = onResume;
+  });
+  // While the agent is stopped for sitting idle, the first key typed (keyboard, key bar or compose
+  // box) resumes it, once for each stop.
+  useEffect(() => {
+    if (!stopped) return;
+    const typed = () => resume.current?.();
+    term.whenTyped = typed;
+    return () => {
+      if (term.whenTyped === typed) term.whenTyped = null;
+    };
+  }, [stopped, session.idleStoppedAt, term]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -112,13 +129,23 @@ export function TerminalPane({ session, onAsk, mekoTo }: { session: Session; onA
           </div>
         )}
         {!(term.find.open && !showStartup) && toast}
-        {status === 'exited' && (
+        {status === 'exited' && !stopped && (
           <div className="term-overlay">{agentName(session)} exited. Use Resume to continue this conversation in the same worktree.</div>
+        )}
+        {stopped && (
+          <div className="term-overlay">
+            {agentName(session)} was stopped while idle, to free memory. Resume, or type here, to pick up where it left off.
+            {onResume && (
+              <button className="btn small primary" onClick={onResume}>
+                Resume
+              </button>
+            )}
+          </div>
         )}
       </div>
       {/* Touch screens show held images and files above the compose box instead. */}
       {!touch && <HeldImages held={term.held} hint="sent with your next Enter" actions={mekoTo && <MekoUpload term={term} datapack={mekoTo} />} />}
-      {touch && <TermKeys term={term} sessionId={sessionId} agent={agentName(session)} disabled={status === 'exited'} mekoTo={mekoTo} />}
+      {touch && <TermKeys term={term} sessionId={sessionId} agent={agentName(session)} disabled={status === 'exited' && !stopped} mekoTo={mekoTo} />}
     </div>
   );
 }

@@ -20,7 +20,7 @@ import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { actionsOn, sessionActions, sessionMenuKeys, type SessionActionId } from '../sessionactions';
 import { disposeTerminal, getTerminal } from '../terminals';
-import { closingText, cx, dotState, designGate, isMac, isReviewChild, joinedPartSelected, reviewGatesPr, reviewOpens, reviewParent, shownStep, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, reviewTarget, runToMergeShown, runToMergeTitle, sessionTabTitle, sidewaysWheel, totalTokens, updateShowing, usageTitle } from '../util';
+import { closingText, cx, dotState, designGate, idleStopped, isMac, isReviewChild, joinedPartSelected, reviewGatesPr, reviewOpens, reviewParent, shownStep, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, reviewTarget, runToMergeShown, runToMergeTitle, sessionTabTitle, sidewaysWheel, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
 import { Busy, Check, ContextRing, DatapackName, Dialog, Elapsed, HarnessLogo, ReviewSegment, RunToMergeCheck, RunToMergeMark, StageChip, StatusDot } from './common';
@@ -314,7 +314,7 @@ export function ProjectView({
   const canLearn = !!session && offersLearn(session, !!dedicated, meko.configured);
   // Merge & Close and Discard save what the session learned first, unless asked not to. The merge's
   // step runs once the PR is merged, so it's offered even while Claude has exited (Resume may come first).
-  const learnTo = session && session.status !== 'exited' && dedicated && meko.configured ? dedicated.name : null;
+  const learnTo = session && (session.status !== 'exited' || idleStopped(session)) && dedicated && meko.configured ? dedicated.name : null;
   const mergeLearnTo = dedicated && meko.configured ? dedicated.name : null;
   // Files held in the terminal's strip can go to the dedicated datapack's knowledge base (Upload to Meko).
   const mekoTo = dedicated && meko.configured ? dedicated.name : null;
@@ -597,7 +597,7 @@ export function ProjectView({
         {/* Siblings need distinct keys: with the same key, React lost the terminal of a session left with
             its design or changes open, and kept it on screen beside the next one. */}
         {session ? (
-          <TerminalPane key={`term-${session.id}`} session={session} onAsk={() => setAsking(true)} mekoTo={mekoTo} />
+          <TerminalPane key={`term-${session.id}`} session={session} onAsk={() => setAsking(true)} onResume={() => void act('resume')} mekoTo={mekoTo} />
         ) : (
           <div className="empty-main">
             <h2>No sessions in {project.name}</h2>
@@ -1078,7 +1078,7 @@ function StageBar({
         ? 'Wait for AgentK to finish its turn.'
         : session.status === 'needs_input'
           ? 'AgentK is waiting on you in the terminal.'
-          : session.status === 'exited'
+          : session.status === 'exited' && !idleStopped(session)
             ? 'Resume the session first.'
             : null;
       gate = <ReviewPrGate session={session} reason={reason} blocked={blocked} midTurn={midTurn} updating={updating} onAct={onAct} />;
