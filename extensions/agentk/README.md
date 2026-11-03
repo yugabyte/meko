@@ -338,10 +338,10 @@ your phone can connect.
   which check before each save, are forgotten). When AgentK saves what a session learned through
   its mod in Claude, it also answers the open questions that session found out, its own and other
   sessions'.
-- **Meko usage**: the Meko lookups and saves each session made, an estimate of the tokens and
-  cost that Meko searches saved, how many sessions had something from Meko in their first
-  turn, and what the learn step saved (memories added and corrected) and cost, on the project home
-  and the Usage page. On Pro and Max plans, the rail also shows your Claude 5-hour and weekly usage limits
+- **Meko usage**: the Meko lookups and saves each session made, how many sessions had something
+  from Meko in their first turn, and what the learn step saved (memories added and corrected) and
+  the tokens it used, on the project home and the Usage page, whose table by project also estimates
+  what Meko searches saved. On Pro and Max plans, the rail also shows your Claude 5-hour and weekly usage limits
   and when they reset, and once you've run a session on Kiro, the Kiro credits your plan has used.
 - **Usage stats:** once a day (hourly in its first day) AgentK sends anonymous counts to YugabyteDB: how many
   projects, sessions, PRs, commits and tokens (by model) it handled, which file types changed, and

@@ -4338,16 +4338,7 @@ div[id^='dak-mermaid-'] .label {
 .usage-num.muted {
   color: var(--muted);
 }
-/* Est. saved: green for a saving (bold, so it reads as large text on the pale green). */
-.usage-stat.saved {
-  background: var(--diff-add-bg);
-  border-radius: 6px;
-  padding: 4px 8px;
-}
-.usage-stat.saved .usage-num {
-  color: var(--ok);
-  font-weight: 600;
-}
+/* Est. saved in the Usage page's table by project: green for a saving. */
 .usage-table td.saved {
   color: var(--ok);
 }

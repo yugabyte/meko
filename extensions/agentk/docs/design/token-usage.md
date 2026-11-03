@@ -246,7 +246,8 @@ Kiro isn't available.
   Reviews sections for every project, and breakdowns by project (current ones first, then deleted ones, which keep
   their sessions and usage, each group the most recently used first; each row shows its repo folder
   and when it was last active, and has **Cost**, **Meko** and **Est. saved** columns, which a phone
-  leaves out) and by model. Every column header of the Usage page's tables, and of the project
+  leaves out; Est. saved is in USD, or tokens when no model had a price, green for a saving, and a
+  dash means no search found anything and no session was seeded) and by model. Every column header of the Usage page's tables, and of the project
   home's table by session, sorts its table; tapping it again reverses the order. The tables by session and by project show about 10 rows and scroll inside
   their box for the rest, as the project home's Recent activity does, with their header row kept
   in view (`.rows-scroll` in `styles.css`).
@@ -256,14 +257,12 @@ Kiro isn't available.
   more line, `Seeded ≈ 3.3k · Searched ≈ 12k`, or `Seeded none yet` before AgentK's search at
   start has run in any of them; a dash before any first turn has ended; the
   tooltip says how many sessions the search at start ran in; `firstTurnText` in
-  `src/web/util.ts`), tokens found, and **Est. saved** in USD and tokens (searches and seeds), green for a saving
-  (a negative estimate is in the normal text color, and a dash means no search has found
-  anything and no session was seeded), then two tiles for the [learn step](recall-and-learn.md#the-learn-step)
+  `src/web/util.ts`) and tokens found, then two tiles for the [learn step](recall-and-learn.md#the-learn-step)
   (`MekoLearning`, from `meko_learns` and the steps' own `usage_messages` rows; `learningText` in
   `src/web/util.ts`): **Learned**, the memories it saved, with `2 corrected · 3 steps` on the line
   under it and a tooltip that adds the facts found already known, the steps that didn't finish and
-  the Merge & Close sessions it was skipped in; and **Learning cost**, the steps' model calls in USD
-  with their tokens under it (tokens alone when no model had a price). Both are a dash before any
+  the Merge & Close sessions it was skipped in; and **Learning tokens**, the tokens the steps'
+  model calls used. Both are a dash before any
   step ran. It shows once there's any Meko call, seed or learn step, or before that while Meko is on
   (and, on the project home, the project has a datapack). On the project home only, a line under
   the tiles says how many questions on Meko's Context Gaps are open for the dedicated datapack,

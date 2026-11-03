@@ -495,9 +495,7 @@ export function summarizeLearn(runs: LearnRun[]): CallHomeLearn {
 
 /** Learn steps as the project home and the Usage page show them (`MekoLearning`). */
 export function learningOf(runs: LearnRun[]): MekoLearning {
-  const l: MekoLearning = { runs: 0, failed: 0, skipped: 0, saves: 0, updates: 0, skips: 0, tokens: 0, usd: null };
-  let usd = 0;
-  let priced = false;
+  const l: MekoLearning = { runs: 0, failed: 0, skipped: 0, saves: 0, updates: 0, skips: 0, tokens: 0 };
   for (const r of runs) {
     if (r.outcome === 'skipped') {
       l.skipped++;
@@ -508,15 +506,8 @@ export function learningOf(runs: LearnRun[]): MekoLearning {
     l.saves += r.saves;
     l.updates += r.updates;
     l.skips += r.skips;
-    for (const t of r.tokens) {
-      l.tokens += t.input + t.output + t.cacheRead + t.cacheWrite;
-      const price = priceFor(t.model);
-      if (!price) continue;
-      usd += costOf(t, price);
-      priced = true;
-    }
+    for (const t of r.tokens) l.tokens += t.input + t.output + t.cacheRead + t.cacheWrite;
   }
-  l.usd = priced ? usd : null;
   return l;
 }
 
