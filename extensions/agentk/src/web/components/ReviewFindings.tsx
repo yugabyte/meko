@@ -105,6 +105,7 @@ export function ReviewFindings({ session, onClose, onTerminal, onAct }: {
         <b>Findings</b>
         {detail && (
           <span className="muted small">
+            {detail.review.firstLook ? 'First look · ' : ''}
             {strategyName(detail.review.strategy)}
             {counts ? ` · ${counts}` : ''}
           </span>
@@ -250,9 +251,14 @@ function FindingRow({ f, onChoose, draft, onDraft }: {
           </span>
         )}
         {f.gotchas.map((g) => (
-          <span key={g} className="rv-tag">Meko gotcha {g}</span>
+          <span key={g} className="rv-tag" title="A Meko gotcha, mined from the repo's history, led the review to this">Caught with Meko · {g}</span>
         ))}
       </div>
+      {(f.credits ?? []).filter((c) => c.quote).map((c) => (
+        <blockquote key={c.id} className="rv-quote">
+          <span className="rv-quote-id">{c.id}</span> {c.quote}
+        </blockquote>
+      ))}
       {f.reason && <p className="rv-reason muted">{f.reason}</p>}
       {editing ? (
         <textarea

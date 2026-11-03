@@ -20,7 +20,7 @@ import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { actionsOn, sessionActions, sessionMenuKeys, type SessionActionId } from '../sessionactions';
 import { disposeTerminal, getTerminal } from '../terminals';
-import { closingText, cx, dotState, designGate, isMac, isReviewChild, joinedPartSelected, reviewGatesPr, reviewOpens, reviewParent, shownStep, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, reviewTarget, runToMergeShown, runToMergeTitle, sessionTabTitle, sidewaysWheel, totalTokens, updateShowing, usageTitle } from '../util';
+import { closingText, cx, demoReviewGate, dotState, designGate, isMac, isReviewChild, joinedPartSelected, reviewGatesPr, reviewOpens, reviewParent, shownStep, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, reviewTarget, runToMergeShown, runToMergeTitle, sessionTabTitle, sidewaysWheel, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
 import { Busy, Check, ContextRing, DatapackName, Dialog, Elapsed, HarnessLogo, ReviewSegment, RunToMergeCheck, RunToMergeMark, StageChip, StatusDot } from './common';
@@ -330,6 +330,7 @@ export function ProjectView({
     atTop: sessions[0]?.id === session.id,
     parent,
     mac,
+    noPr: !!project.workshop,
   }) : [];
   const runAction = (id: SessionActionId) => {
     if (!session) return;
@@ -537,6 +538,7 @@ export function ProjectView({
           onHeld={() => setHeldOpen(true)}
           acting={acting}
           updating={updating}
+          noPr={!!project.workshop}
           actions={child ? (
             <>
               {parent && (
@@ -684,6 +686,7 @@ export function ProjectView({
               }}
               acting={acting}
               updating={updating}
+              noPr={!!project.workshop}
               actions={null}
               reasons
             />
@@ -902,6 +905,7 @@ function StageBar({
   onHeld,
   acting = false,
   updating = false,
+  noPr = false,
   actions,
   reasons = false,
 }: {
@@ -924,6 +928,8 @@ function StageBar({
   acting?: boolean;
   /** This session's Update to latest is in flight, or its result hasn't reached the state yet. */
   updating?: boolean;
+  /** The project opens no PR (a workshop's demo): the Code gate runs the code review instead, and there's no Run to merge. */
+  noPr?: boolean;
   actions: ReactNode;
   /** Say under the stages why a disabled gate can't be passed (the phone's sheet, where there are no tooltips). */
   reasons?: boolean;
@@ -962,6 +968,10 @@ function StageBar({
         <span className="gate-pill" title="AgentK closes this session once it has saved what it learned">
           Learning the project
         </span>
+      ) : session.purpose === 'guide' ? (
+        <span className="gate-pill" title="This session hosts the tour: it starts the sessions you work in">
+          Guiding you
+        </span>
       ) : (
         <button
           className="gate"
@@ -974,7 +984,7 @@ function StageBar({
       );
       break;
     case 'design': {
-      const runToMerge = <RunToMergeCheck session={session} disabled={blocked} onChange={onAutoRun} />;
+      const runToMerge = noPr ? null : <RunToMergeCheck session={session} disabled={blocked} onChange={onAutoRun} />;
       if (session.approvalQueued) {
         gate = (
           <span className="gate-group">
@@ -1010,6 +1020,30 @@ function StageBar({
       }
       if (session.queued === 'open-pr') {
         gate = queuedGate(session, blocked, onAct, onAutoRun, 'The PR prompt goes to AgentK when its turn ends');
+        break;
+      }
+      if (noPr) {
+        const run = demoReviewGate(session);
+        const r = session.codeReview;
+        reason = run?.reason ?? null;
+        // Findings that wait on the user, or a review waiting in its terminal, show as they do before a
+        // PR. Not the fixes: their Review now is Open PR's.
+        const review = !run && r && (r.state === 'triage' || r.waiting)
+          ? reviewGate(r, blocked, onAct, onOpenCodeReview, onOpenReviewTerminal, midTurn) : null;
+        gate = (
+          <span className="gate-group">
+            <span className="gate-note" title="The demo has no GitHub repo, so its tasks end at Code">No PR in the demo</span>
+            {run ? (
+              <button className="gate" disabled={blocked || !!run.reason} title={run.title} onClick={() => onAct('review-run')}>
+                {run.label}
+              </button>
+            ) : review ?? (
+              <span className="gate-pill">
+                <Busy label={r?.state === 'fixing' ? `Fixing round ${r.round}'s findings` : 'Reviewing'} />
+              </span>
+            )}
+          </span>
+        );
         break;
       }
       const pr = openPrGate(session);

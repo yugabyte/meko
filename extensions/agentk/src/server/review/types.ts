@@ -47,6 +47,8 @@ export interface Finding {
   comment: string;
   /** Meko gotchas (`MG-<n>`) the finding is a direct instance of. */
   gotchas: string[];
+  /** The sentence of each of those gotchas it instantiates, by id; absent in candidates from before they were kept. */
+  quotes?: Record<string, string>;
 }
 
 /** A pass's report, as `review_report` took it (already checked against the pass's schema). */

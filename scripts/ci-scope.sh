@@ -13,7 +13,8 @@
 # run none. Nor does Markdown only people read: a component's README, CONTRIBUTING,
 # AGENTS, CLAUDE and REVIEW files and its docs/. Markdown a test reads or a release
 # ships runs its component like code: Meko's docs (backend/docs/docs_test.go checks
-# them), test fixtures, and AgentK's session tools skill (src/tools/skill/SKILL.md).
+# them), test fixtures, AgentK's session tools skill (src/tools/skill/SKILL.md) and
+# its bundled workshops (src/workshops/, whose demo repos' READMEs ship and are tested).
 # AgentK's tests read root files under scripts/ and .github/, so those run AgentK,
 # and Meko's resolution cases (backend/internal/paths/testdata/resolve-cases.json),
 # which AgentK's and Presenter's tests read too, run all three
@@ -49,7 +50,7 @@ elif [ $# -eq 0 ]; then
       backend/internal/paths/testdata/resolve-cases.json) agentk=true backend=true presenter=true ;;
       # Markdown a test reads: Meko's docs and test fixtures. These match before a component's docs.
       backend/docs/* | backend/*/test/* | backend/*/testdata/*) backend=true ;;
-      extensions/agentk/test/*) agentk=true ;;
+      extensions/agentk/test/* | extensions/agentk/src/workshops/*) agentk=true ;;
       extensions/presenter/test/*) presenter=true ;;
       # A component's docs check nothing; its other Markdown (such as a skill a release ships) runs it.
       extensions/presenter/*) doc "$path" || presenter=true ;;

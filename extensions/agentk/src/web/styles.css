@@ -1282,6 +1282,12 @@ textarea.input {
   max-width: 460px;
   margin: 0 auto;
 }
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
 
 /* ---------- Project view ---------- */
 .project-view {
@@ -1532,6 +1538,12 @@ textarea.input {
 .gate-pill.done {
   color: var(--ok);
   border-style: solid;
+}
+/* Beside a gate, what stands in for a step a project skips (a workshop's demo opens no PR). */
+.gate-note {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
 }
 /* A running time after a Busy label (Elapsed in common.tsx): the learn step a Discard or Merge & Close waits on. */
 .elapsed {
@@ -1918,6 +1930,18 @@ textarea.input {
   border-radius: 999px;
   background: var(--meko-soft);
   color: var(--meko);
+}
+/* The sentence of a Meko gotcha a finding credits (Caught with Meko). */
+.rv-quote {
+  margin: 6px 0 0;
+  padding: 2px 0 2px 8px;
+  border-left: 2px solid var(--meko);
+  font-size: 12px;
+  color: var(--muted);
+}
+.rv-quote-id {
+  color: var(--meko);
+  font-weight: 600;
 }
 .rv-outcome {
   margin: 6px 0 0;

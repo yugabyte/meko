@@ -49,6 +49,16 @@ describe('the link to AgentK\'s mod', () => {
     expect(await next).toBeNull();
   });
 
+  it('marks a hidden prompt for the mod, which draws it as nothing', async () => {
+    links.hello('s1');
+    void links.send('s1', 'AgentK events:\n- A turn ended', true);
+    void links.send('s1', 'Implement the design.');
+    expect((await links.poll('s1'))?.prompts).toEqual([
+      { id: expect.any(String), text: 'AgentK events:\n- A turn ended', hidden: true },
+      { id: expect.any(String), text: 'Implement the design.' },
+    ]);
+  });
+
   it('fails a send the mod never acks, tells a late ack not to run it, and never hands it out again', async () => {
     links.hello('s1');
     const send = links.send('s1', 'Fix the review.');

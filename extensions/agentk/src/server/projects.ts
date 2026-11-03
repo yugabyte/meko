@@ -39,7 +39,7 @@ export class HttpError extends Error {
  * (FREE_TIER_DATAPACK_LIMIT, STANDARD_TIER_DATAPACK_LIMIT), its reason, or its upgrade message
  * ("Upgrade to Standard to create a new datapack."), not just any refusal that mentions datapacks.
  */
-function isDatapackLimit(e: unknown): boolean {
+export function isDatapackLimit(e: unknown): boolean {
   return /TIER_DATAPACK_LIMIT|tier datapack limit reached|Upgrade to \w+ to create a new datapack/i.test(errMsg(e));
 }
 

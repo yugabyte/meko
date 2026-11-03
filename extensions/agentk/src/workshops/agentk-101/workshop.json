@@ -1,0 +1,23 @@
+{
+  "id": "agentk-101",
+  "title": "AgentK tour",
+  "summary": "A guided tour of AgentK and what Meko adds, on a small Snake game with a teammate's fix to review.",
+  "guide": "GUIDE.md",
+  "repo": {
+    "dir": "repo",
+    "folder": "agentk-demo",
+    "author": { "name": "AgentK Demo", "email": "demo@example.com" },
+    "date": "2026-10-01T09:00:00Z",
+    "message": "Start the AgentK tour's demo",
+    "branches": [{ "name": "demo/score-fix", "patch": "branches/demo-score-fix.patch" }]
+  },
+  "gotchas": {
+    "file": "gotchas.md",
+    "datapack": "adlc/repo/agentk-demo/gotchas",
+    "about": "Traps earlier work on the demo game hit: how the arcade cabinet build uses its rules"
+  },
+  "codeReview": { "strategy": "sirius-1.0" },
+  "levels": [
+    { "id": "1-review", "title": "AgentK reviews a change, with Meko", "prompt": "levels/1-review.md", "needs": ["meko"], "review": { "branch": "demo/score-fix", "gotchasAfterFirst": true } }
+  ]
+}

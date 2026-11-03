@@ -105,6 +105,10 @@ idle_days = 14            # an idle worktree no session used for this many days 
 # enabled = false            # sessions get no session tools (agentk_sessions MCP server and its skill: open projects,
 #                            # start and move sessions); on by default, and also in Settings → General
 
+[welcome]
+# tour = "agentk-101"        # written only by a fresh install: the server's start runs the AgentK tour once while
+#                            # there are no projects (docs/design/workshops.md), then removes it
+
 [work_queue]
 # github = true              # Sync pulls in GitHub review requests (Settings › Work queue); off by default
 # slack = true               # Sync reads the messages on your Slack list; off by default (both off, the default: no sync)
@@ -130,7 +134,8 @@ idle_days = 14            # an idle worktree no session used for this many days 
 CREATE TABLE projects (
   id TEXT PRIMARY KEY,            -- slug of the repo, e.g. billing-api; later projects on it add their name: billing-api-release-tooling
   name TEXT NOT NULL, repo_path TEXT NOT NULL, default_branch TEXT NOT NULL,   -- the repo's real path; several projects may share a repo
-  position INTEGER, settings_json TEXT, created_at INTEGER, deleted_at INTEGER);
+  position INTEGER, settings_json TEXT, created_at INTEGER, deleted_at INTEGER,
+  workshop TEXT);                 -- the bundled workshop that opened it (docs/design/workshops.md); it opens no PR
 CREATE TABLE project_datapacks (
   project_id TEXT REFERENCES projects, datapack_id TEXT, name TEXT,
   role TEXT CHECK (role IN ('dedicated','shared')),
@@ -235,6 +240,7 @@ CREATE TABLE code_reviews (    -- a task's code reviews (review/runner.ts, docs/
                                --   review's first prompt to the task (its fixes or the PR prompt), cleared once that goes
   purpose TEXT, stage TEXT,    -- pr (an Open PR's) | demand (the user ran it: no PR prompt); code | review: where it runs
   stale INTEGER,               -- 1 once the task left Code after it finished with its PR prompt unsent (Open PR reviews again)
+  hand_off INTEGER,            -- 0: a first look (a workshop's), whose findings stay with it, never sent to the task; 1 for the rest
   detail TEXT, created_at INTEGER, updated_at INTEGER, finished_at INTEGER);  -- finished_at: its PR prompt went
 CREATE TABLE code_review_steps (review_id TEXT, step TEXT, report_json TEXT, at INTEGER,  -- each step's report, as
   PRIMARY KEY (review_id, step));  --   review_report or review_score took it (r1s1:guide, r1c3)

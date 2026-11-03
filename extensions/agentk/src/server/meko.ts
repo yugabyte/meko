@@ -327,6 +327,11 @@ export class MekoClient {
     return { id, name: String(d.datapack_name ?? d.name ?? name) };
   }
 
+  /** Deletes a datapack and everything in it: only for one AgentK just made and nothing uses (a workshop whose demo couldn't be built). */
+  async deleteDatapack(id: string): Promise<void> {
+    await this.call('datapack_delete', { datapack_id: id, conversation_id: await this.serviceConv() }, 60000);
+  }
+
   async setDatapackDescription(id: string, description: string): Promise<void> {
     await this.call('datapack_update', { datapack_id: id, description, conversation_id: await this.serviceConv() }, 60000);
   }

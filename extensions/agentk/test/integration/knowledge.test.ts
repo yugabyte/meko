@@ -191,6 +191,22 @@ describe('adding files to a knowledge base', () => {
       await new Promise((r) => setTimeout(r, 50));
       expect(env.mekoApi.calls.length).toBe(asked);
       expect(events).toHaveLength(5);
+
+      // A file AgentK uploads itself (a workshop's gotchas) always hears how it ended: a Meko change
+      // while it's followed or on its way ends it as unknown, and a stopping server says nothing.
+      const ends: string[] = [];
+      const dp = { id: 'dp-g', name: 'adlc/repo/demo/gotchas' };
+      statuses['dk-g'] = ['indexing'];
+      await kb.uploadFile(dp, 'g.md', Buffer.from('g'), (r) => ends.push(`g ${r}`));
+      kb.forget();
+      statuses['dk-h'] = ['indexing'];
+      const onItsWay = kb.uploadFile(dp, 'h.md', Buffer.from('h'), (r) => ends.push(`h ${r}`));
+      kb.forget();
+      await onItsWay;
+      statuses['dk-i'] = ['indexing'];
+      await kb.uploadFile(dp, 'i.md', Buffer.from('i'), (r) => ends.push(`i ${r}`));
+      kb.stop();
+      expect(ends).toEqual(['g unknown', 'h unknown']);
     } finally {
       kb.stop();
     }

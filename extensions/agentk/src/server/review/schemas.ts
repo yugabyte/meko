@@ -354,11 +354,15 @@ export function cleanPath(p: string): string {
 function finding(raw: Record<string, unknown>): Finding {
   const credits = Array.isArray(raw.gotchas) ? (raw.gotchas as Record<string, unknown>[]) : [];
   const gotchas: string[] = [];
+  const quotes: Record<string, string> = {};
   for (const g of credits) {
     const id = typeof g.id === 'string' ? g.id.trim() : '';
     const quote = typeof g.quote === 'string' ? g.quote.trim() : '';
     // A credit without the sentence it instantiates is the near-miss the rules forbid.
-    if (GOTCHA_ID.test(id) && quote && !gotchas.includes(id)) gotchas.push(id);
+    if (GOTCHA_ID.test(id) && quote && !gotchas.includes(id)) {
+      gotchas.push(id);
+      quotes[id] = quote;
+    }
   }
   return {
     file: cleanPath(raw.file as string),
@@ -366,6 +370,7 @@ function finding(raw: Record<string, unknown>): Finding {
     severity: raw.severity as Severity,
     comment: (raw.comment as string).trim(),
     gotchas,
+    quotes,
   };
 }
 

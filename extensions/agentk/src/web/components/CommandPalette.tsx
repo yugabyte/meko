@@ -55,6 +55,7 @@ export function CommandPalette({
   currentSession,
   onClose,
   onNewProject,
+  onStartTour,
   onNewSession,
   onMoveSession,
   onOpenPr,
@@ -80,6 +81,8 @@ export function CommandPalette({
   currentSession: Session | null;
   onClose: () => void;
   onNewProject: () => void;
+  /** Starts the AgentK tour (or goes to its host when its project is open). */
+  onStartTour: () => void;
   onNewSession: (projectId: string) => void;
   /** Opens the Move to another stage dialog for the session on screen. */
   onMoveSession: () => void;
@@ -448,6 +451,7 @@ export function CommandPalette({
         atTop: !onSessionToTop,
         workItemTitle: item?.title,
         mac: isMac(),
+        noPr: !!current?.workshop,
       });
       for (const a of actionsOn(list, 'palette')) {
         const go = run[a.id];
@@ -490,6 +494,7 @@ export function CommandPalette({
       }
     }
     out.push({ id: 'new-project', label: ['Open project'], hint: 'Action', keywords: 'open new create project repo add', run: onNewProject });
+    out.push({ id: 'start-tour', label: ['Start the AgentK tour'], hint: 'Action', keywords: 'tour workshop demo guide tutorial learn agentk meko', run: onStartTour });
     out.push({ id: 'work-queue', label: ['Work queue'], hint: 'View', keywords: 'work queue items todo tasks priorities list', run: () => navigate({ view: 'queue' }) });
     out.push({ id: 'work-add', label: ['Add a work item'], hint: 'Action', keywords: 'work queue item add new todo task', run: onAddWorkItem });
     out.push({
@@ -501,7 +506,7 @@ export function CommandPalette({
     // Still offered after the banner's Not now, while the browser can install it.
     if (canInstall) out.push({ id: 'install', label: ['Install AgentK as an app'], hint: 'Action', keywords: 'install app window dock home screen pwa', run: () => void install() });
     return out;
-  }, [projects, currentProjectId, currentSession, onNewProject, onNewSession, onMoveSession, onOpenPr, onRenameSession, onSessionToTop, onSettings, canInstall, install, workItems, onAddWorkItem, onShowWorkItem, onLinkWorkItem, mekoConfigured, onError]);
+  }, [projects, currentProjectId, currentSession, onNewProject, onStartTour, onNewSession, onMoveSession, onOpenPr, onRenameSession, onSessionToTop, onSettings, canInstall, install, workItems, onAddWorkItem, onShowWorkItem, onLinkWorkItem, mekoConfigured, onError]);
 
   const findItems = useMemo<Item[]>(() => {
     if (!found || found.key !== findKey) return [];

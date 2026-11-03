@@ -254,6 +254,8 @@ export interface CodeReviewSummary {
   onDemand: boolean;
   /** Where it runs: in Code, or in Review & PR on the open PR. Leaving that stage cancels it. */
   stage: 'code' | 'review';
+  /** A first look (a workshop's, before its gotchas are in Meko): its findings stay with it, never sent to the task. */
+  firstLook?: boolean;
 }
 
 /**
@@ -335,6 +337,17 @@ export function countsText(c: SeverityCounts): string {
 }
 
 /**
+ * `1 caught with Meko (MG-2)`: how many kept findings credit a Meko gotcha, and which gotchas, for
+ * the review's done event (which a workshop's host reads too); '' when none do.
+ */
+export function caughtWithMeko(findings: Pick<CodeReviewFinding, 'kept' | 'gotchas'>[]): string {
+  const credited = findings.filter((f) => f.kept && f.gotchas.length);
+  if (!credited.length) return '';
+  const ids = [...new Set(credited.flatMap((f) => f.gotchas))];
+  return `${credited.length} caught with Meko (${ids.join(', ')})`;
+}
+
+/**
  * Why a `describing` review waits on the user (its `detail`): the task's PR description turn was
  * interrupted, or its agent exited before taking the ask. Open PR (the gate's Review now) then
  * starts the review, or asks again for a lost ask; a restart leaves either waiting.
@@ -396,6 +409,12 @@ export interface FindingOutcome {
   note: string;
 }
 
+/** A finding's credit to a Meko gotcha: its id and the sentence of its body the finding instantiates. */
+export interface GotchaCredit {
+  id: string;
+  quote: string;
+}
+
 /** One candidate in the review's findings panel (GET /api/sessions/:id/code-review). */
 export interface CodeReviewFinding {
   /** Stable within the review: `<round>:<index>`. */
@@ -410,6 +429,11 @@ export interface CodeReviewFinding {
   passes: string[];
   /** Meko gotchas it credits (`MG-<n>`). */
   gotchas: string[];
+  /**
+   * The same credits with the sentence of each gotcha the finding instantiates, quoted (the UI's
+   * Caught with Meko); a review from before they were kept has an empty quote.
+   */
+  credits: GotchaCredit[];
   verdict: ScoreVerdict | null;
   confidence: number | null;
   /** The scorer's reason, or its refutation for a refuted one. */

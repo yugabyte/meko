@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import type { AppState, CreateSessionRequest, DatapackInvite, FailedStart, Project, ProjectWithSessions, Session, WorkItem } from '../../shared/types';
+import { AGENTK_TOUR, type AppState, type CreateSessionRequest, type DatapackInvite, type FailedStart, type Project, type ProjectWithSessions, type Session, type WorkItem } from '../../shared/types';
 import type { HarnessId } from '../../shared/harnesses';
 import { api, ApiError, errorMessage } from '../api';
 import { appUrl } from '../base';
@@ -434,6 +434,20 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
     }
   };
 
+  // The AgentK tour: its demo project and host, or the host of the one already open.
+  const [tourStarting, setTourStarting] = useState(false);
+  const startTour = async () => {
+    setTourStarting(true);
+    try {
+      const r = await api.startWorkshop(AGENTK_TOUR);
+      navigate({ view: 'project', projectId: r.projectId, sessionId: r.sessionId });
+    } catch (e) {
+      showToast(errorMessage(e));
+    } finally {
+      setTourStarting(false);
+    }
+  };
+
   const sessionToTop = async (id: string) => {
     try {
       await api.updateSession(id, { toTop: true });
@@ -674,9 +688,14 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
               <p className="muted">
                 A project is an effort to build or improve a feature, product or service, worked on in one of your git repos. Each task you start in it gets its own worktree and Claude session.
               </p>
-              <button className="btn primary" onClick={() => setModal({ kind: 'new-project' })}>
-                Open project
-              </button>
+              <div className="empty-actions">
+                <button className="btn primary" disabled={tourStarting} onClick={() => void startTour()} title="A demo project and a session that walks you through AgentK and what Meko adds">
+                  {tourStarting ? <Busy label="Starting the tour" /> : 'Take the AgentK tour'}
+                </button>
+                <button className="btn" onClick={() => setModal({ kind: 'new-project' })}>
+                  Open project
+                </button>
+              </div>
             </div>
           </>
         )}
@@ -771,6 +790,10 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
           currentSession={currentSession}
           onClose={() => setModal({ kind: 'none' })}
           onNewProject={() => setModal({ kind: 'new-project' })}
+          onStartTour={() => {
+            setModal({ kind: 'none' });
+            void startTour();
+          }}
           onNewSession={(projectId) => setModal({ kind: 'new-session', projectId })}
           onMoveSession={() => currentSession && setModal({ kind: 'move', sessionId: currentSession.id })}
           onOpenPr={() => currentSession && setModal({ kind: 'open-pr', sessionId: currentSession.id })}

@@ -29,6 +29,8 @@ the stages Explore → Design → Code → Review & PR → Merge & Close. Users 
    - Every session to start goes in one `start_sessions` call (up to 8): `{ ref }` for an issue or
      a PR (a PR starts a review), or `{ name, prompt }` for a task, with the user's own words as
      the prompt. Each starts at Design unless the user names another stage.
+   - Add `"branch"` to a task only to work on a branch that already exists (the user names it, or
+     your instructions do): the task works on it as it is, instead of a new branch.
    - Add `"autoRun": true` (Run to merge) only when the user asks AgentK to take a task all the way
      to a merged PR by itself ("run it to merge", "open the PR and merge it when it's done"). It
      needs `"stage": "code"`, and for a ref only an issue takes it. AgentK then opens the PR when

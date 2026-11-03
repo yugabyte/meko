@@ -4,7 +4,7 @@ import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { basename } from 'node:path';
 import { mekoHost } from './config.js';
 import type { Core } from './core.js';
-import { get, run } from './db.js';
+import { get, run, type Db } from './db.js';
 import { designAnswers, type CheckedAnswers } from './answers.js';
 import {
   artifactUrlIn, checkToolQuestions, designLine, isArtifactPublish, mekoDesignName, parseDesignLine, readArtifactHtml, readDesignFile, sha256Hex,
@@ -197,11 +197,23 @@ async function lacksLocalCommits(repo: string, branch: string, st: github.PrStat
 }
 
 /**
+ * A workshop's project (`Project.workshop`) is on a demo repo with no remote, so it opens no PR:
+ * Open PR, Run to merge and a move to Review & PR are refused there (409), rather than leave the
+ * session in Review & PR with nothing to push to.
+ */
+export function checkOpensPr(db: Db, row: Pick<SessionRow, 'project_id'>): void {
+  if (projectRow(db, row.project_id)?.workshop) throw new HttpError(409, NO_PR_IN_WORKSHOP);
+}
+
+/**
  * The task lifecycle: Design → Code → Review & PR → Merge & Close (merge, then cleanup).
  * Gates (approve design, open PR, merge) come from the user; everything else
  * is driven by hook events and by polling GitHub from the server, so waiting
  * on reviews and CI costs no Claude tokens.
  */
+
+export const NO_PR_IN_WORKSHOP = "The demo has no GitHub repo, so it opens no PR. Run the code review from the stage bar instead.";
+
 export class Lifecycle {
   private timer: NodeJS.Timeout | null = null;
   private lastPoll = new Map<string, number>();
@@ -704,6 +716,7 @@ export class Lifecycle {
   async openPr(row: SessionRow, body?: unknown): Promise<void> {
     const given = openPrInstructions(body);
     if (row.stage !== 'code') throw new HttpError(409, 'Open PR is only available in the Code stage.');
+    checkOpensPr(this.db, row);
     if (row.desired === 'running' && !this.sessions.runtime(row.id).busy && this.turnRunning(row)) {
       if (row.queued_gate !== 'open-pr') {
         const text = given ? 'Open PR queued with your instructions: it goes when AgentK finishes its turn' : 'Open PR queued: it goes when AgentK finishes its turn';
@@ -1164,6 +1177,7 @@ export class Lifecycle {
     if (this.merging.has(id) || this.closing.has(id)) throw new HttpError(409, 'A merge is in progress.');
     const bad = moveError(cur, stage);
     if (bad) throw new HttpError(400, bad);
+    if (stage === 'review') checkOpensPr(this.db, cur);
     if (cur.stage === 'design' && cur.plan_mode) {
       throw new HttpError(409, "This session designs in Claude's plan mode. Approve or reject the plan in the terminal first.");
     }
@@ -2434,6 +2448,7 @@ export class Lifecycle {
       throw new HttpError(409, row.stage === 'explore' ? 'Run to merge starts at Design or later. Move the session on first.' : 'This session is already past its merge.');
     }
     if (row.stage === 'design' && row.plan_mode) throw new HttpError(409, "This session designs in Claude's plan mode, so Run to merge isn't available for it.");
+    if (on) checkOpensPr(this.db, row);
     if (!!row.auto_run === on) return;
     if (!on) {
       if (this.merging.has(row.id)) throw new HttpError(409, 'The merge is already being requested.');

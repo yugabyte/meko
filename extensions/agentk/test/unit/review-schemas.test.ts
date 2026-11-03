@@ -17,7 +17,7 @@ describe("a pass's report", () => {
     expect(checkReport(pass('guide'), input)).toEqual({ error });
   });
 
-  it('cleans paths and comments, and keeps only gotcha credits with an MG id and a quote', () => {
+  it('cleans paths and comments, and keeps only gotcha credits with an MG id and a quote, with the quote', () => {
     const out = checkReport(pass('diff'), {
       summary: ' LGTM ',
       findings: [{
@@ -25,7 +25,9 @@ describe("a pass's report", () => {
         gotchas: [{ id: 'MG-12', quote: 'Retries drop the lease.' }, { id: 'MG-0', quote: 'x' }, { id: 'MG-3', quote: ' ' }, { id: 'MG-12', quote: 'again' }],
       }],
     });
-    expect(out).toEqual({ summary: 'LGTM', findings: [{ file: 'a.go', line: 3, severity: 'major', comment: 'bug', gotchas: ['MG-12'] }] });
+    expect(out).toEqual({
+      summary: 'LGTM', findings: [{ file: 'a.go', line: 3, severity: 'major', comment: 'bug', gotchas: ['MG-12'], quotes: { 'MG-12': 'Retries drop the lease.' } }],
+    });
   });
 
   it('needs the dependents ledger, and files every survivor not cleared with a citation', () => {

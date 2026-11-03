@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Snake</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <h1>Snake</h1>
+    <div class="bar">
+      <span>Score <strong id="score">0</strong></span>
+      <span>Best <strong id="best">0</strong></span>
+      <button id="new-game" type="button">New game</button>
+    </div>
+    <canvas id="board" aria-label="Snake board"></canvas>
+    <p id="status" role="status"></p>
+    <p class="help">Arrow keys or WASD to turn.</p>
+  </main>
+  <script src="src/game.js"></script>
+  <script src="src/ui.js"></script>
+</body>
+</html>

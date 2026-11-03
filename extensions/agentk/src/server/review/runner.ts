@@ -2,9 +2,9 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import {
-  DEFAULT_STRATEGY, DESCRIBE_INTERRUPTED, DESCRIBE_LOST, DISMISSED_BY_YOU, MAX_FINDING_NOTE, MIN_SWEEPS, REVIEW_LEFT_CODE, REVIEW_LEFT_REVIEW, YOU_CANCELLED, countsText, meAkReviewLine, noCounts, resolveReview,
-  reviewHolds, reviewRunning, strategyName, totalCount,
-  type CodeReviewDetail, type CodeReviewFinding, type CodeReviewState, type CodeReviewSummary, type FindingChoice, type FindingOutcome,
+  DEFAULT_STRATEGY, DESCRIBE_INTERRUPTED, DESCRIBE_LOST, DISMISSED_BY_YOU, MAX_FINDING_NOTE, MIN_SWEEPS, REVIEW_LEFT_CODE, REVIEW_LEFT_REVIEW, YOU_CANCELLED, caughtWithMeko, countsText, meAkReviewLine, noCounts,
+  resolveReview, reviewHolds, reviewRunning, strategyName, totalCount,
+  type CodeReviewDetail, type CodeReviewFinding, type CodeReviewState, type CodeReviewSummary, type FindingChoice, type FindingOutcome, type GotchaCredit,
   type ReviewSettings, type ReviewStrategyId, type SeverityCounts,
 } from '../../shared/codereview.js';
 import { HARNESS_CAPS, harnessOf, type HarnessId } from '../../shared/harnesses.js';
@@ -31,6 +31,11 @@ import { basePrompt, passPrompt, scoreBase, scorePrompt, stepList, sweepContext 
 import { checkOutcomes, checkReport, checkScore } from './schemas.js';
 import { strategyFor } from './strategies.js';
 import type { Candidate, Diff, PassReport, PriorRound, ReviewContext, ReviewDatapack, ReviewIssue, ScoreReport, Tier } from './types.js';
+
+/** A candidate's credits, with the quote each was given (`Finding.quotes`). */
+function findingCredits(f: Candidate['finding']): GotchaCredit[] {
+  return f.gotchas.map((id) => ({ id, quote: f.quotes?.[id] ?? '' }));
+}
 
 /** The review tools' names, as AgentK's MCP server (`agentk_sessions`) has them. */
 export const REVIEW_TOOLS = ['review_report', 'review_score', 'review_outcome'] as const;
@@ -86,6 +91,8 @@ interface ReviewRow {
   stage: 'code' | 'review';
   /** 1 once the task left Code after it finished with its PR prompt unsent: Open PR doesn't reuse it. */
   stale: number;
+  /** 0: its findings stay with it, never sent to the task (a workshop's first look); 1 for the rest. */
+  hand_off: number;
   created_at: number;
   updated_at: number;
   finished_at: number | null;
@@ -239,6 +246,7 @@ export class CodeReviews {
       waiting: !!r.session_id && reviewRunning(r) && sessionRow(this.db, r.session_id)?.status === 'needs_input',
       detail: r.detail,
       onDemand: r.purpose === 'demand',
+      ...(r.hand_off ? {} : { firstLook: true }),
       stage: r.stage,
     };
   }
@@ -247,7 +255,8 @@ export class CodeReviews {
   detail(sessionId: string): CodeReviewDetail {
     const r = this.reviewOf(sessionId);
     if (!r) throw new HttpError(404, 'This session has no code review.');
-    const findings = json<CodeReviewFinding[]>(r.findings_json, []);
+    // A review from before the credits' quotes were kept has its ids only.
+    const findings = json<CodeReviewFinding[]>(r.findings_json, []).map((f) => ({ ...f, credits: f.credits ?? f.gotchas.map((id) => ({ id, quote: '' })) }));
     // The current round's candidates, before they're kept or dropped.
     if (r.state === 'sweeping' || r.state === 'scoring') findings.push(...this.pendingFindings(r));
     return {
@@ -265,7 +274,7 @@ export class CodeReviews {
       const s = scores.get(`r${r.round}c${i + 1}`);
       return {
         key: `${r.round}:${i + 1}`, round: r.round, sweep: c.sweep, file: c.finding.file, line: c.finding.line, severity: c.finding.severity,
-        comment: c.finding.comment, passes: c.passes, gotchas: c.finding.gotchas, verdict: s?.verdict ?? null, confidence: s?.confidence ?? null,
+        comment: c.finding.comment, passes: c.passes, gotchas: c.finding.gotchas, credits: findingCredits(c.finding), verdict: s?.verdict ?? null, confidence: s?.confidence ?? null,
         reason: s ? (s.verdict === 'refuted' ? s.refutation : s.reason) : null, kept: false, dropped: null, pending: true, outcome: null,
       };
     });
@@ -369,8 +378,15 @@ export class CodeReviews {
    * task writes its PR description first, as for Open PR) or in Review & PR (on the open PR, with its
    * title and description). With the strategy Off it runs the default one. It sends no PR prompt:
    * Open PR sends the PR with its line later.
+   *
+   * `by`: the user (the review-run action), or AgentK itself (a workshop's level, src/server/workshops.ts).
+   * `describe: false` skips the PR description the task writes first, as a workshop's project always
+   * does, since it opens no PR: nothing goes to the task until the findings (queued for its turn's
+   * end), so it may be mid-turn. `handOff: false` keeps the findings with the review: shown, never
+   * sent to the task.
    */
-  async runNow(task: SessionRow): Promise<void> {
+  async runNow(task: SessionRow, by: 'you' | 'auto' = 'you', o: { describe?: boolean; handOff?: boolean } = {}): Promise<void> {
+    const describe = o.describe !== false && !projectRow(this.core.db, task.project_id)?.workshop;
     if (task.kind === 'code-review' || task.kind === 'review-pr') throw new HttpError(409, 'Only a task has a code review.');
     if (task.desired !== 'running') throw new HttpError(409, 'This session is archived.');
     if (task.stage !== 'code' && task.stage !== 'review') throw new HttpError(409, 'The code review runs in Code, or in Review & PR once the PR is open.');
@@ -380,12 +396,12 @@ export class CodeReviews {
     if (this.core.lifecycle.codeReviewPending(task.id)) {
       throw new HttpError(409, "AgentK hasn't taken the last code review's fixes yet. Run it again once it has.");
     }
-    this.core.lifecycle.checkPromptable(task);
+    if (describe) this.core.lifecycle.checkPromptable(task);
     const settings = this.settingsFor(task);
     // A stopped review it replaces may hold the Open PR's instructions and a move's `moved` line: they go on with this one.
     const held = task.stage === 'code' && last && holds(last) && !last.finished_at ? last : undefined;
     await this.start(task, settings.strategy === 'off' ? { ...settings, strategy: DEFAULT_STRATEGY } : settings,
-      { instructions: held?.instructions ?? '', lead: held?.lead ?? undefined, by: 'you', purpose: 'demand', stage: task.stage });
+      { instructions: held?.instructions ?? '', lead: held?.lead ?? undefined, by, purpose: 'demand', stage: task.stage, describe, handOff: o.handOff !== false });
   }
 
   /**
@@ -400,23 +416,29 @@ export class CodeReviews {
     this.core.sessions.event(taskId, 'review', 'The PR prompt goes when the code review you ran is done');
   }
 
-  private async start(task: SessionRow, settings: ReviewSettings, opts: { instructions: string; by: 'you' | 'auto'; lead?: string; purpose?: 'pr' | 'demand'; stage?: 'code' | 'review' }): Promise<void> {
+  private async start(task: SessionRow, settings: ReviewSettings, opts: {
+    instructions: string; by: 'you' | 'auto'; lead?: string; purpose?: 'pr' | 'demand'; stage?: 'code' | 'review'; describe?: boolean; handOff?: boolean;
+  }): Promise<void> {
     if (settings.strategy === 'off') return;
     const id = `${task.id}--review-${randomBytes(4).toString('hex')}`;
     const now = Date.now();
     const purpose = opts.purpose ?? 'pr';
     const stage = opts.stage ?? 'code';
+    // In Code the task writes the PR description first, unless there's no PR to describe.
+    const describe = stage === 'code' && opts.describe !== false;
     // An earlier review's session goes: the task's tab shows only the latest.
     const prev = this.latest(task.id);
     // In Review & PR the PR has its title and description already: the first round starts at once.
-    run(this.db, `INSERT INTO code_reviews(id, task_id, strategy, rounds, depth, state, instructions, by, lead, purpose, stage, created_at, updated_at)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, task.id, settings.strategy, settings.rounds, settings.depth, stage === 'code' ? 'describing' : 'preparing',
-    opts.instructions || null, opts.by, opts.lead || null, purpose, stage, now, now);
+    run(this.db, `INSERT INTO code_reviews(id, task_id, strategy, rounds, depth, state, instructions, by, lead, purpose, stage, hand_off, created_at, updated_at)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, task.id, settings.strategy, settings.rounds, settings.depth, describe ? 'describing' : 'preparing',
+    opts.instructions || null, opts.by, opts.lead || null, purpose, stage, opts.handOff === false ? 0 : 1, now, now);
     const how = `${strategyName(settings.strategy)}${settings.depth > 1 ? `, depth ${settings.depth}` : ''}${settings.rounds ? `, up to ${settings.rounds} re-review${settings.rounds === 1 ? '' : 's'}` : ''}`;
-    this.core.sessions.event(task.id, 'review', `${purpose === 'demand' ? 'You ran the code review' : 'Code review started'} (${how})`);
+    const started = purpose === 'pr' ? 'Code review started' : opts.handOff === false ? 'AgentK ran a first look (its findings stay with the review)'
+      : opts.by === 'auto' ? 'AgentK ran the code review' : 'You ran the code review';
+    this.core.sessions.event(task.id, 'review', `${started} (${how})`);
     this.core.changed();
     if (prev?.session_id) void this.archiveSession(prev.session_id);
-    this.kick(id, () => (stage === 'code' ? this.describe(id) : this.beginRound(id)));
+    this.kick(id, () => (describe ? this.describe(id) : this.beginRound(id)));
   }
 
   /**
@@ -962,14 +984,21 @@ export class CodeReviews {
       const s = scores.get(`r${r.round}c${keyOf.get(c)!.split(':')[1]}`);
       findings.push({
         key: keyOf.get(c)!, round: r.round, sweep: c.sweep, file: c.finding.file, line: c.finding.line, severity: c.finding.severity, comment: c.finding.comment,
-        passes: c.passes, gotchas: c.finding.gotchas, verdict: c.verdict, confidence: c.scored ? c.score : null,
+        passes: c.passes, gotchas: c.finding.gotchas, credits: findingCredits(c.finding), verdict: c.verdict, confidence: c.scored ? c.score : null,
         reason: s ? (s.verdict === 'refuted' ? s.refutation : s.reason) : null, kept: post.includes(c), dropped: post.includes(c) ? null : dropReason.get(c) ?? null, outcome: null,
       });
     }
     this.set(id, { findings_json: JSON.stringify(findings), counts_json: JSON.stringify(keptCounts(findings)), last_kept: post.length });
     const task = this.core.sessions.row(r.task_id);
     const roundCounts = countsOf(post);
-    this.core.sessions.event(task.id, 'review', `Code review, round ${r.round}: ${totalCount(roundCounts) ? countsText(roundCounts) : 'LGTM'}`);
+    const caught = caughtWithMeko(findings.filter((f) => f.round === r.round));
+    this.core.sessions.event(task.id, 'review', `Code review, round ${r.round}: ${totalCount(roundCounts) ? countsText(roundCounts) : 'LGTM'}${caught ? `, ${caught}` : ''}`);
+    // A first look's findings stay with it: the review is done, and nothing goes to the task.
+    if (!r.hand_off) {
+      this.set(id, { state: 'done' });
+      await this.finish(id);
+      return;
+    }
     if (post.length && this.checksFindings(task)) {
       this.set(id, { state: 'triage' });
       this.core.sessions.event(task.id, 'review', `Round ${r.round}'s findings wait on you: add notes or dismiss some, then send them to AgentK`);
@@ -1091,12 +1120,15 @@ export class CodeReviews {
   private async finish(id: string, queued = false): Promise<void> {
     const r = this.mustReview(id);
     const counts = json<SeverityCounts>(r.counts_json, noCounts());
-    this.core.sessions.event(r.task_id, 'review', `Code review done: ${totalCount(counts) ? countsText(counts) : 'LGTM'}`);
+    const caught = caughtWithMeko(json<CodeReviewFinding[]>(r.findings_json, []));
+    this.core.sessions.event(r.task_id, 'review', `${r.hand_off ? 'Code review' : 'First look'} done: ${totalCount(counts) ? countsText(counts) : 'LGTM'}${caught ? `, ${caught}` : ''}`);
     // Its session has nothing left to do: the findings are kept with the review, and the task's tab opens them.
     if (r.session_id) void this.archiveSession(r.session_id);
     this.core.changed();
     if (r.purpose === 'pr') await this.sendPr(id, queued, true);
     else if (r.stage === 'review') await this.core.lifecycle.syncReviewLine(r.task_id);
+    // A workshop's level may review again once its gotchas are in Meko (src/server/workshops.ts).
+    if (!r.hand_off) this.core.workshops.firstLookDone(r.task_id);
   }
 
   /** A done review's PR prompt, with its line, and its last round's findings unless they went as a fix prompt (`findings`). */
