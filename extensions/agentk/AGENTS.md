@@ -193,7 +193,8 @@ agents should read it before changing code there.
   `feat`/`fix`/`perf`/`deps` commits trigger a release (`0.YYYYMMDD.N`) when pushed to `main`;
   `ci`/`test`/`docs`/`nit`/`chore` don't. PRs are squash-merged, so the PR title is the subject;
   the `PR title` workflow (`pr-title.yml`) checks it. Changes reach `main` only through PRs that
-  pass CI and that check, and that the `meko-maintainers` team approves (the `approvals` ruleset).
+  pass CI, that check and the CLA check (`license/cla`), and that the `meko-maintainers` team
+  approves (the `approvals` ruleset).
 
 ## Keep the docs current
 

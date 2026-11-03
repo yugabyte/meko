@@ -99,7 +99,7 @@ else
   command -v curl >/dev/null 2>&1 || die "curl is required (or a signed-in gh)"
   [ -n "${GITHUB_TOKEN:-}" ] && auth="Authorization: Bearer $GITHUB_TOKEN"
 fi
-internal_hint="If $repo is still internal, sign in with gh auth login (or set GITHUB_TOKEN) and run this again"
+private_hint="If $repo is private, sign in with gh auth login (or set GITHUB_TOKEN) and run this again"
 
 # ---- already installed ----
 installed=$(readlink "$app/current" 2>/dev/null) || installed=""
@@ -129,7 +129,7 @@ if [ -z "$version" ]; then
     case $tag in meko-v[0-9]*.[0-9]*.[0-9]*) ;; *) tag="" ;; esac
   fi
   if [ -z "$tag" ]; then
-    $have_gh || [ -n "$auth" ] || die "could not find a Meko release in $repo. $internal_hint"
+    $have_gh || [ -n "$auth" ] || die "could not find a Meko release in $repo. $private_hint"
     die "could not find a Meko release in $repo"
   fi
   version=${tag#meko-v}
@@ -147,7 +147,7 @@ else
   base="https://github.com/$repo/releases/download/$tag"
   for f in "$tarball" SHA256SUMS; do
     if ! curl -fsSL ${auth:+-H "$auth"} -o "$tmp/$f" "$base/$f"; then
-      [ -n "$auth" ] || die "download of $f failed. $internal_hint"
+      [ -n "$auth" ] || die "download of $f failed. $private_hint"
       die "download of $f failed"
     fi
   done

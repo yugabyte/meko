@@ -625,11 +625,11 @@ func TestTokenlessRefusalsSayWhy(t *testing.T) {
 		{"rate limit", 403, map[string]string{"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1793300000"}, "",
 			"60 calls an hour without a token and they're spent: try again after "},
 		{"too many requests", 429, nil, "", "try again within the hour, or sign in with gh auth login"},
-		{"internal repo", 404, nil, "", "If the repo is still internal, sign in with gh auth login"},
-		{"forbidden", 403, map[string]string{"X-RateLimit-Remaining": "59"}, "", "If the repo is still internal"},
+		{"private repo", 404, nil, "", "If the repo is private, sign in with gh auth login"},
+		{"forbidden", 403, map[string]string{"X-RateLimit-Remaining": "59"}, "", "If the repo is private"},
 		// The call that spends the last of the 60 gets its usual answer, with the header at 0.
-		{"internal repo on the last call", 404, map[string]string{"X-RateLimit-Remaining": "0"}, "",
-			"If the repo is still internal, sign in with gh auth login"},
+		{"private repo on the last call", 404, map[string]string{"X-RateLimit-Remaining": "0"}, "",
+			"If the repo is private, sign in with gh auth login"},
 		{"with a token", 404, nil, "tok", ""},
 		{"server error", 502, nil, "", ""},
 	}
@@ -649,7 +649,7 @@ func TestTokenlessRefusalsSayWhy(t *testing.T) {
 			}
 			msg := err.Error()
 			if tc.want == "" {
-				if strings.Contains(msg, "sign in") || strings.Contains(msg, "internal") {
+				if strings.Contains(msg, "sign in") || strings.Contains(msg, "private") {
 					t.Errorf("no hint wanted: %s", msg)
 				}
 			} else if !strings.Contains(msg, tc.want) {
