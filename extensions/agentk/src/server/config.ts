@@ -78,7 +78,7 @@ export interface Config {
    * Anonymous usage stats (callhome.ts). enabled: send the report (daily; hourly in an install's first day). url: where to POST it
    * (the collector's full report URL); empty uses the one release builds carry (CALL_HOME_URL next to VERSION), and with neither
    * nothing is sent. The same report also goes to YugabyteDB's call home service: diagnosticsUrl, or else
-   * https://diagnostics.yugabyte.com from release installs only. enabled (or YB_DISABLE_CALLHOME) turns off both.
+   * YB_DIAGNOSTICS_URL (callhome.ts) from release installs only. enabled (or YB_DISABLE_CALLHOME) turns off both.
    */
   callHome: { enabled: boolean; url: string; diagnosticsUrl: string };
   /**

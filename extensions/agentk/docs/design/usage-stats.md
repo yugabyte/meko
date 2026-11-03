@@ -5,8 +5,7 @@ Part of the [AgentK design](../design.md).
 Each install sends a small report of counts once a day (every hour in its first day) to a
 collector run by the AgentK team, so we know how many installs are active and how much work
 goes through them. Release installs also send it to YugabyteDB's call home service
-(diagnostics.yugabyte.com, described below), which is to replace the
-AgentK team's collector. That collector is a
+(described below), which is to replace the AgentK team's collector. That collector is a
 separate service (`services/ak-local-call-home` in yugabyte/agent-k). What it receives is
 `CallHomeReport` in `src/shared/types.ts`, and [`docs/call-home-report.schema.json`](../call-home-report.schema.json)
 is the same contract as a JSON Schema. The collector keeps an identical copy
@@ -115,10 +114,10 @@ written by `scripts/package-release.sh` from the `CALL_HOME_URL` repo variable, 
 appears in the repo. Dev servers and tests have neither, so they send nothing. Node's `fetch`
 ignores `HTTPS_PROXY`, so an install behind a proxy doesn't report.
 
-**YugabyteDB's call home service.** The same report also goes to `https://diagnostics.yugabyte.com`,
-where yugabyted and YugabyteDB's other products report (a Flask app on App Engine,
-`diagnostics_v2` in yugabyte/yugabyte-growth, writing to BigQuery `callhome_data`), so AgentK's
-numbers sit with theirs. This is the call home that stays when AgentK's own collector is retired.
+**YugabyteDB's call home service.** The same report also goes to `YB_DIAGNOSTICS_URL` (in
+`src/server/callhome.ts`), Meko's address for the call home service yugabyted and YugabyteDB's
+other products report to: a host of its own serving the same app (`diagnostics_v2` in
+yugabyte/yugabyte-growth). This is the call home that stays when AgentK's own collector is retired.
 A second `CallHomeService` (target `yugabyte`) sends it on its own schedule, the same as above but
 kept apart (`kv` `yb_call_home_last_sent`, `yb_call_home_first_sent`; the install id and first day
 are shared), so one service being down never holds back the other. The body is yugabyted's

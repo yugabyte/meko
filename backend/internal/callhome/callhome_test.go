@@ -239,7 +239,7 @@ func TestSwitches(t *testing.T) {
 	if st, _ := dev.State(ctx); !st.Enabled || st.Sends {
 		t.Errorf("dev state: %+v", st)
 	}
-	if got := r.sender(true).Endpoint(); got != DefaultURL {
+	if got := r.sender(true).Endpoint(); got != "https://diagnostics.meko.yugabyte.com" {
 		t.Errorf("a release sends to %q", got)
 	}
 
