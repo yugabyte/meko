@@ -91,9 +91,16 @@ const BACKGROUND_MAX = 10;
 const BACKGROUND_TEXT_MAX = 200;
 
 /**
+ * Claude Code's watch on an Artifact the agent published, a `monitor` it keeps for the rest of the
+ * session: `live updates for artifact <url> (…)`.
+ */
+const ARTIFACT_WATCH = /^live updates for artifact /;
+
+/**
  * A turn end's `background_tasks` (Claude Code's `Stop`, OpenCode's from AgentK's plugin) as
  * `Session.background`: each task's type and one line about it (a shell's command, else its
  * description, else a subagent's type). Missing, as from a Claude Code too old to send it, is none.
+ * Claude Code's Artifact watches are left out: they never end, and nothing waits on them.
  */
 export function backgroundTasks(raw: unknown): BackgroundTask[] {
   if (!Array.isArray(raw)) return [];
@@ -101,6 +108,7 @@ export function backgroundTasks(raw: unknown): BackgroundTask[] {
   for (const t of raw as unknown[]) {
     if (!t || typeof t !== 'object') continue;
     const r = t as Record<string, unknown>;
+    if (r.type === 'monitor' && typeof r.description === 'string' && ARTIFACT_WATCH.test(r.description)) continue;
     const type = typeof r.type === 'string' && r.type ? r.type : 'task';
     const text = [r.command, r.description, r.agent_type].find((v): v is string => typeof v === 'string' && !!v.trim()) ?? type;
     const line = text.replace(/\s+/g, ' ').trim();

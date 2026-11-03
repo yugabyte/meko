@@ -888,9 +888,10 @@ export interface Session {
   /**
    * Work the agent left running in the background when its last turn ended, which wakes it again
    * when it's done: Claude Code's background shells, subagents and monitors (its `Stop` hook's
-   * `background_tasks`), OpenCode's background shells and subagents (from AgentK's plugin). Empty
-   * when there's none, and always for Kiro, whose hooks don't say. Kept in memory: replaced at each
-   * turn's end, and cleared when the agent exits or relaunches.
+   * `background_tasks`), less the watch on each Artifact the agent publishes, which never ends;
+   * OpenCode's background shells and subagents (from AgentK's plugin). Empty when there's none, and
+   * always for Kiro, whose hooks don't say. Kept in memory: replaced at each turn's end, and cleared
+   * when the agent exits or relaunches.
    */
   background: BackgroundTask[];
   /** Discard was asked for: the session is discarded once its learn step ends. */
