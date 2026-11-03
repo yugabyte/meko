@@ -265,7 +265,7 @@ describe('what Meko saved', () => {
     });
   });
 
-  it('shows what learn steps saved and cost, for the project and across projects', () => {
+  it('shows what learn steps saved and the tokens they used, for the project and across projects', () => {
     const { db } = setup();
     expect(projectUsage(db, 'p').mekoLearning).toEqual({ runs: 0, failed: 0, skipped: 0, saves: 0, updates: 0, skips: 0, tokens: 0 });
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('q', 'Q', '/q', 'main', 0)`);

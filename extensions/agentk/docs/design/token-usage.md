@@ -150,8 +150,8 @@ carry     (X − R) × k       cache-read price
 ```
 
 The saving is the sum, in tokens and in USD at the calling model's price. A search (or seed) on a
-model with no known price counts in the tokens but not the dollars, and the tile says how many
-searches and seeds were left out.
+model with no known price counts in the tokens but not the dollars, and the Usage page's Est.
+saved cell says in its tooltip (`savedTitle`) how many searches and seeds were left out.
 An index on `usage_messages(session_id, agent, at)` keeps counting *k* cheap. A result over 6,000
 tokens makes the content and carry terms negative, and they're kept. Session, project and overall
 figures are plain sums, so the pages agree. With a context of 216k, a 1,420-token result and 10

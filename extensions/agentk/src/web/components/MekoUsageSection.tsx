@@ -123,9 +123,9 @@ export function credited(s: MekoSavings): boolean {
   return s.searches + s.seeds > 0;
 }
 
-/** Searches and seeds in words, leaving out a zero: "3 searches and 1 seed", "2 unpriced seeds". */
-function countText(searches: number, seeds: number, adjective = ''): string {
-  const n = (k: number, one: string, many: string) => `${k.toLocaleString()} ${adjective}${k === 1 ? one : many}`;
+/** Searches and seeds in words, leaving out a zero: "3 searches and 1 seed", "2 seeds". */
+function countText(searches: number, seeds: number): string {
+  const n = (k: number, one: string, many: string) => `${k.toLocaleString()} ${k === 1 ? one : many}`;
   return [searches > 0 && n(searches, 'search', 'searches'), seeds > 0 && n(seeds, 'seed', 'seeds')].filter(Boolean).join(' and ');
 }
 
