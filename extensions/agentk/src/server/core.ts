@@ -198,8 +198,6 @@ export class Core extends EventEmitter {
   /** Meko's Context Gaps (the questions it couldn't answer), on the Meko on this computer while AgentK uses it. */
   readonly mekoQuestions: MekoQuestions;
   readonly callHome: CallHomeService;
-  /** The same report to YugabyteDB's call home service, from release installs (to be the only one later). */
-  readonly ybCallHome: CallHomeService;
   /** The Claude Code sessions launch with: its version (for AgentK's mod) and updating it. */
   readonly claudeCode: ClaudeCode;
   /** Claude Code was available at its last version change (`claudeChanged`). */
@@ -345,9 +343,6 @@ export class Core extends EventEmitter {
     this.mekoAccount = mekoAccountOf(resolveMekoWithSource(o.config));
     this.callHome = new CallHomeService({
       db: this.db, config: () => this.cfg, version: this.version, log: this.log, fetch: o.callHomeFetch,
-    });
-    this.ybCallHome = new CallHomeService({
-      target: 'yugabyte', db: this.db, config: () => this.cfg, version: this.version, log: this.log, fetch: o.callHomeFetch,
     });
     const mekoApi = o.mekoApi ?? new MekoApi(() => ({
       baseUrl: resolveMekoApiUrl(this.cfg), apiKey: resolveMeko(this.cfg).apiKey, storageHttp: mekoStorageHttp(this.cfg),
@@ -799,7 +794,6 @@ export class Core extends EventEmitter {
       // install of Meko while the banner asks for one (with a Meko Cloud link too).
       this.every(LOCAL_MEKO_EVERY_MS, () => (lookForLocalMeko(mekoConfigured(this.cfg), localMeko().state) ? this.refreshMeko() : undefined));
       this.callHome.start((ms, fn) => this.every(ms, fn));
-      this.ybCallHome.start((ms, fn) => this.every(ms, fn));
       // Not awaited: startup doesn't wait on Meko's API.
       void this.syncInvites();
       this.lifecycle.start();
@@ -811,7 +805,6 @@ export class Core extends EventEmitter {
     for (const i of this.intervals) clearInterval(i);
     this.intervals = [];
     this.callHome.stop();
-    this.ybCallHome.stop();
     this.lifecycle.stop();
     // No new plan read may start now: a turn reaching onTurnEnd during shutdown (hooks aren't
     // awaited) must not run `/usage` after the settled() wait below has already passed.

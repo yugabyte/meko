@@ -149,8 +149,6 @@ jobs:
     env:
       VERSION: ${{ needs.plan.outputs.version }}
       ARCH: ${{ matrix.arch }}
-      # The usage stats collector, written into the tarball as CALL_HOME_URL (empty: none).
-      AK_CALL_HOME_URL: ${{ vars.CALL_HOME_URL }}
     steps:
       - name: Install build toolchain
         # Before checkout: extensions/agentk doesn't exist yet.
@@ -244,7 +242,6 @@ jobs:
     env:
       ARCH: arm64
       VERSION: ${{ needs.plan.outputs.version }}
-      AK_CALL_HOME_URL: ${{ vars.CALL_HOME_URL }}
     steps:
       # The workflow's own commit first, for scripts/release/fetch-node.sh: a tag being rebuilt can
       # be older than the script. A rebuild then checks out its tag for the build.

@@ -22,7 +22,6 @@
 #     lib/packaging/launchd/   service templates used by `me_koder install` (macOS)
 #     lib/scripts/deps.sh      the prerequisites check `me_koder install` runs first (git, curl, gh, a coding agent)
 #     VERSION
-#     CALL_HOME_URL            the usage stats collector, when AK_CALL_HOME_URL is set
 #
 # and the same files as <out-dir>/agent-k-local-<version>-<linux|darwin>-<arch>.tar.gz, in
 # agent-k-local-<version>/: the name and layout the updaters and installers from before the rename
@@ -79,10 +78,6 @@ cp "$repo/scripts/deps.sh" "$root/lib/scripts/deps.sh"
 # The license covers the whole repo, so it sits at the root, above extensions/agentk.
 cp "$repo/../../LICENSE" "$root/LICENSE"
 printf '%s\n' "$version" > "$root/VERSION"
-# Kept out of the repo: release builds get it from the CALL_HOME_URL repo variable.
-if [ -n "${AK_CALL_HOME_URL:-}" ]; then
-  printf '%s\n' "$AK_CALL_HOME_URL" > "$root/CALL_HOME_URL"
-fi
 
 # node-pty ships prebuilds for some platforms; we compile it ourselves.
 rm -rf "$root/lib/node_modules/node-pty/prebuilds"

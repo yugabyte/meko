@@ -47,7 +47,7 @@ Part of the [AgentK design](../design.md).
   takes only tags from after the move to `extensions/agentk`. Each release also includes
   `SHA256SUMS`, a build provenance attestation and `install.sh`, which only says that Meko installs
   AgentK (`meko extension install agentk`): the Mekos from before Meko installed AgentK ran the
-  newest release's `install.sh`, and an older AgentK's own instructions still name it. Release tarballs carry the usage stats collector's URL (`CALL_HOME_URL`, from the repo variable of that name) when it's set ([Usage stats](usage-stats.md)). Afterwards, AgentK's releases beyond the newest 5 in each lane (`stable`, or the
+  newest release's `install.sh`, and an older AgentK's own instructions still name it. Afterwards, AgentK's releases beyond the newest 5 in each lane (`stable`, or the
   prerelease identifier such as `beta`, per tag prefix) are deleted, except the newest `v…` one;
   their tags stay, and Meko's are left alone.
 - **By hand.** Run the AgentK release workflow (`agentk-release.yml`) with **force** to release
@@ -78,7 +78,6 @@ agentk-<version>/
   node/bin/node            a link to it, which the MCP configs AgentK writes for sessions name (tools.ts)
   lib/                     package.json, dist/, node_modules/, packaging/{systemd,launchd}/, scripts/deps.sh
   VERSION
-  CALL_HOME_URL            the usage stats collector (only when the repo variable is set)
 ```
 
 > **glibc.** RHEL 8 devservers ship glibc 2.28, and node-pty is a native module. Linux builds run

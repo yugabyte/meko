@@ -443,9 +443,9 @@ export interface UsageOverview {
 
 // ---- usage stats (Call Home) ----
 //
-// The report each install sends once a day (hourly in its first day) to the usage stats collector
-// (yugabyte/agent-k, services/ak-local-call-home). docs/call-home-report.schema.json is the same contract as a JSON
-// Schema, and the collector keeps an identical copy; change all three together.
+// The report each release install sends once a day (hourly in its first day) to YugabyteDB's call home
+// service, as the payload of YbCallHome. docs/call-home-report.schema.json is the same contract as a JSON
+// Schema; change both together.
 // Only counts, enums, version strings, model ids and file extensions: never a name, path, prompt
 // or anything else that says who someone is or what they work on.
 
@@ -651,7 +651,7 @@ export interface CallHomeReport {
 }
 
 /**
- * The same report as YugabyteDB's call home service (YB_DIAGNOSTICS_URL in callhome.ts) takes it: yugabyted's
+ * The report as YugabyteDB's call home service (YB_DIAGNOSTICS_URL in callhome.ts) takes it: yugabyted's
  * envelope, with the report as its payload. The service routes it by callhome_type to a table of its own.
  */
 export interface YbCallHome {

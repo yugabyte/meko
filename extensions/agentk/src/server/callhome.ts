@@ -1,7 +1,5 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { promisify } from 'node:util';
 import {
   type CallHomeKind, type FileTypeCount, type MekoUsage, type Stage, type CallHomeDay, type CallHomeInstall, type CallHomeMeko,
@@ -20,14 +18,11 @@ import { countReviews, reviewRuns, reviewSpendByDay, usageOverview, type ReviewR
 import { HARNESS_CAPS, HARNESS_IDS, harnessOf, type HarnessId } from '../shared/harnesses.js';
 import { priceFor } from '../shared/pricing.js';
 
-// Anonymous usage stats ("Call Home"). Once a day (hourly in an install's first day) each install
-// sends counts to a collector run by the AgentK team: no names, paths, prompts, code or
-// anything that says who someone is.
+// Anonymous usage stats ("Call Home"). Once a day (hourly in an install's first day) each release
+// install sends counts to YugabyteDB's call home service (YB_DIAGNOSTICS_URL), in yugabyted's
+// envelope (YbCallHome): no names, paths, prompts, code or anything that says who someone is.
 // Every string in the report is an enum, a version, a model id or a file extension, and the
-// report's shape is the collector's contract (CallHomeReport, docs/call-home-report.schema.json;
-// the collector is yugabyte/agent-k's services/ak-local-call-home).
-// The same report also goes to YugabyteDB's call home service (YB_DIAGNOSTICS_URL), in
-// yugabyted's envelope (YbCallHome): a second CallHomeService with target `yugabyte`.
+// report's shape is its contract (CallHomeReport, docs/call-home-report.schema.json).
 
 const execFileP = promisify(execFile);
 
@@ -49,8 +44,8 @@ export const FIRST_CHECK_MS: [number, number] = [10 * 60 * 1000, 60 * 60 * 1000]
 /** A new install (no report yet, or its first one under a day ago) checks sooner: its first report goes out within 5 minutes. */
 export const NEW_INSTALL_FIRST_CHECK_MS: [number, number] = [60 * 1000, 5 * 60 * 1000];
 /**
- * The largest body the collector takes. A busy install's 30-day first report can be bigger (every
- * day's file types and models full); a report over it drops its oldest days until it fits.
+ * The largest report sent. A busy install's 30-day first report can be bigger (every day's file
+ * types and models full); a report over it drops its oldest days until it fits.
  */
 export const MAX_REPORT_BYTES = 64 * 1024;
 const SEND_TIMEOUT_MS = 15_000;
@@ -68,19 +63,14 @@ const KV_FIRST_DAY = 'call_home_first_day';
 /** YugabyteDB's call home service: release installs send there unless `[call_home] diagnostics_url` names another. */
 export const YB_DIAGNOSTICS_URL = 'https://diagnostics.meko.yugabyte.com';
 
-/** Where a CallHomeService sends: AgentK's own collector, or YugabyteDB's call home service. */
-export type CallHomeTarget = 'agentk' | 'yugabyte';
-
 /**
- * Each target's schedule: when its last report was received, and its first (installs that reported
- * before the first was kept have none and report daily). The install id and first day are shared.
+ * The schedule: when the last report was received, and the first. Named `yb_` from when reports also
+ * went to AgentK's own collector, whose `call_home_last_sent` and `call_home_first_sent` are no longer read.
  */
-const KV_SENT: Record<CallHomeTarget, { last: string; first: string }> = {
-  agentk: { last: 'call_home_last_sent', first: 'call_home_first_sent' },
-  yugabyte: { last: 'yb_call_home_last_sent', first: 'yb_call_home_first_sent' },
-};
+const KV_LAST_SENT = 'yb_call_home_last_sent';
+const KV_FIRST_SENT = 'yb_call_home_first_sent';
 
-/** yugabyted's opt-out: YB_DISABLE_CALLHOME set to one of its true words turns off both targets. */
+/** yugabyted's opt-out: YB_DISABLE_CALLHOME set to one of its true words turns usage stats off. */
 export function ybCallHomeDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return /^(true|t|yes|y|1)$/i.test(env.YB_DISABLE_CALLHOME?.trim() ?? '');
 }
@@ -90,17 +80,17 @@ export function ybTimestamp(ms: number): string {
   return new Date(ms).toISOString().slice(0, 23) + '000';
 }
 
-/** Plain model ids (`claude-opus-5-5`), as the collector's schema has them. Anything else is `other`. */
+/** Plain model ids (`claude-opus-5-5`), as the report's schema has them. Anything else is `other`. */
 export const MODEL_RE = /^[a-z0-9][a-z0-9.-]{0,63}$/;
 /**
- * Versions (ours, Node's, Claude Code's), as the collector's schema has them: dotted
+ * Versions (ours, Node's, Claude Code's), as the report's schema has them: dotted
  * numbers, one letter after them, and a prerelease that is a lane word or a number, so a version
  * can't spell a name.
  */
 export const VERSION_RE = /^v?[0-9]{1,9}(\.[0-9]{1,9}){0,3}[a-z]?(-(alpha|beta|rc|pre|dev|canary|nightly|next|[0-9]{1,9})(\.[0-9]{1,9}){0,3})?(\+[0-9]{1,14})?$/;
 
 /**
- * A version as the report sends it: as is when the collector keeps it, else its leading dotted
+ * A version as the report sends it: as is when the schema takes it, else its leading dotted
  * numbers (a Node nightly `24.0.0-nightly20250101abc` gives `24.0.0`, a build `0.20261001.1-3-gabc`
  * gives `0.20261001.1`), else `0.0.0`.
  */
@@ -521,18 +511,8 @@ export async function installFacts(o: InstallInputs): Promise<CallHomeInstall> {
   };
 }
 
-/** The collector URL release builds carry: a CALL_HOME_URL file next to VERSION (see package-release.sh). */
-export function bakedCallHomeUrl(appDir = process.env.AK_APP_DIR): string {
-  if (!appDir) return '';
-  try {
-    return readFileSync(join(appDir, 'CALL_HOME_URL'), 'utf8').trim();
-  } catch {
-    return '';
-  }
-}
-
 /** An http(s) URL, or null. */
-function collectorUrl(raw: string): string | null {
+function httpUrl(raw: string): string | null {
   const s = raw.trim();
   try {
     const u = new URL(s);
@@ -543,17 +523,13 @@ function collectorUrl(raw: string): string | null {
 }
 
 export interface CallHomeOptions {
-  /** Where reports go; `agentk` by default. */
-  target?: CallHomeTarget;
   db: Db;
   config: () => Config;
   version: string;
   log: Logger;
   fetch?: typeof fetch;
   now?: () => number;
-  /** The collector URL release builds carry; by default read from AK_APP_DIR. */
-  bakedUrl?: () => string;
-  /** Whether this is a release install, which sends to YugabyteDB with no URL configured; by default AK_APP_DIR is set. */
+  /** Whether this is a release install, which sends with no URL configured; by default AK_APP_DIR is set. */
   release?: () => boolean;
   /** Where YB_DISABLE_CALLHOME is read; process.env by default. */
   env?: NodeJS.ProcessEnv;
@@ -563,39 +539,25 @@ export interface CallHomeOptions {
   maxReportBytes?: number;
 }
 
-/** Sends the report (hourly in an install's first day, then daily) while `[call_home] enabled` is on and there is a collector URL. */
+/** Sends the report (hourly in an install's first day, then daily) while `[call_home] enabled` is on and there is a URL. */
 export class CallHomeService {
-  private readonly target: CallHomeTarget;
-  private readonly kv: { last: string; first: string };
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
-  private baked: string | null = null;
   private sending: Promise<boolean> | null = null;
   /** The last send failed: failures are logged once until a send works again. */
   private failing = false;
   private firstCheck: NodeJS.Timeout | null = null;
 
   constructor(private o: CallHomeOptions) {
-    this.target = o.target ?? 'agentk';
-    this.kv = KV_SENT[this.target];
     this.fetchImpl = o.fetch ?? fetch;
     this.now = o.now ?? Date.now;
   }
 
-  /**
-   * Where reports go. AgentK's collector (its full report URL): `[call_home] url`, else the one this build
-   * carries. YugabyteDB's: `[call_home] diagnostics_url`, else YB_DIAGNOSTICS_URL from a release install. Null when there's none.
-   */
+  /** Where reports go: `[call_home] diagnostics_url`, else YB_DIAGNOSTICS_URL from a release install. Null when there's neither. */
   endpoint(): string | null {
-    if (this.target === 'yugabyte') {
-      const configured = this.o.config().callHome.diagnosticsUrl;
-      if (configured.trim()) return collectorUrl(configured);
-      return (this.o.release ?? (() => !!process.env.AK_APP_DIR))() ? YB_DIAGNOSTICS_URL : null;
-    }
-    const configured = this.o.config().callHome.url;
-    if (configured.trim()) return collectorUrl(configured);
-    this.baked ??= (this.o.bakedUrl ?? bakedCallHomeUrl)();
-    return this.baked ? collectorUrl(this.baked) : null;
+    const configured = this.o.config().callHome.diagnosticsUrl;
+    if (configured.trim()) return httpUrl(configured);
+    return (this.o.release ?? (() => !!process.env.AK_APP_DIR))() ? YB_DIAGNOSTICS_URL : null;
   }
 
   enabled(): boolean {
@@ -613,20 +575,19 @@ export class CallHomeService {
 
   /** When the last report was received; 0 before the first. */
   private lastSent(): number {
-    return Number(kvGet(this.o.db, this.kv.last) ?? 0);
+    return Number(kvGet(this.o.db, KV_LAST_SENT) ?? 0);
   }
 
   /** True until a day after the first report: no report yet, or the first one under FIRST_DAY_MS ago. */
   private firstDay(last: number, now: number): boolean {
     if (!last) return true;
-    const first = Number(kvGet(this.o.db, this.kv.first) ?? 0);
+    const first = Number(kvGet(this.o.db, KV_FIRST_SENT) ?? 0);
     return first > 0 && now - first < FIRST_DAY_MS;
   }
 
   /**
-   * The body the next send carries. One over the collector's limit would be refused every hour from
-   * then on, so it drops its oldest days until it fits (the totals don't depend on the days). YugabyteDB's
-   * gets the same report, as the payload of yugabyted's envelope.
+   * The body the next send carries: the report, as the payload of yugabyted's envelope. One over
+   * MAX_REPORT_BYTES drops its oldest days until it fits (the totals don't depend on the days).
    */
   async body(): Promise<string> {
     const now = this.now();
@@ -636,7 +597,7 @@ export class CallHomeService {
       kvSet(this.o.db, KV_FIRST_DAY, firstDay);
     }
     const install = await installFacts({ config: this.o.config(), version: this.o.version, firstDay, probe: this.o.probe });
-    const first = !kvGet(this.o.db, this.kv.last);
+    const first = !kvGet(this.o.db, KV_LAST_SENT);
     let r = buildReport(this.o.db, { installId: this.installId(), install, days: first ? FIRST_REPORT_DAYS : REPORT_DAYS, now });
     const max = this.o.maxReportBytes ?? MAX_REPORT_BYTES;
     let body = JSON.stringify(r);
@@ -644,7 +605,6 @@ export class CallHomeService {
       r = { ...r, days: all.slice(drop) };
       body = JSON.stringify(r);
     }
-    if (this.target === 'agentk') return body;
     const yb: YbCallHome = {
       callhome_type: 'agentk', command: 'heartbeat', timestamp: ybTimestamp(now), install_id: r.installId, version: r.install.version, payload: r,
     };
@@ -674,26 +634,21 @@ export class CallHomeService {
       if (!this.enabled()) return false;
       const res = await this.fetchImpl(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'User-Agent': `${this.target === 'agentk' ? 'agent-k-local' : 'agentk'}/${this.o.version}` },
+        headers: { 'Content-Type': 'application/json', 'User-Agent': `agentk/${this.o.version}` },
         body,
         signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
       });
-      if (!res.ok) throw new Error(`the collector answered ${res.status}`);
-      if (!last) kvSet(this.o.db, this.kv.first, String(now));
-      kvSet(this.o.db, this.kv.last, String(now));
-      if (this.failing) this.o.log.info(`usage stats sent${this.to()}`);
+      if (!res.ok) throw new Error(`the call home service answered ${res.status}`);
+      if (!last) kvSet(this.o.db, KV_FIRST_SENT, String(now));
+      kvSet(this.o.db, KV_LAST_SENT, String(now));
+      if (this.failing) this.o.log.info('usage stats sent to YugabyteDB');
       this.failing = false;
       return true;
     } catch (e) {
-      if (!this.failing) this.o.log.warn(`sending usage stats${this.to()} failed; trying again every hour`, errMsg(e));
+      if (!this.failing) this.o.log.warn('sending usage stats to YugabyteDB failed; trying again every hour', errMsg(e));
       this.failing = true;
       return false;
     }
-  }
-
-  /** Where reports go, for log lines: nothing for AgentK's collector, as before there were two. */
-  private to(): string {
-    return this.target === 'yugabyte' ? ' to YugabyteDB' : '';
   }
 
   /**
