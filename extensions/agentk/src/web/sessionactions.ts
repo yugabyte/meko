@@ -83,19 +83,22 @@ export function sessionActions(s: Session, ctx: SessionActionContext): SessionAc
   const name = { session: s.name };
   const child = isReviewChild(s);
   const blocked = ctx.acting || s.busy;
+  // Why an action waits while another one, or a gate or stage change, is under way.
+  const busyWait = blocked ? 'Another action is under way' : undefined;
+  const actingWait = ctx.acting ? 'Another action is under way' : undefined;
   const r = s.codeReview;
 
   if (s.asking) add({ id: 'answer', group: 'you', label: `Answer AgentK: ${s.asking.questions[0]?.question ?? ''}`, opens: true, primary: true, on: ['sheet'] });
-  if (s.status === 'exited') add({ id: 'resume', group: 'you', label: `Resume ${agentName(s)}`, primary: true, disabled: ctx.acting, on: ['sheet'] });
+  if (s.status === 'exited') add({ id: 'resume', group: 'you', label: `Resume ${agentName(s)}`, primary: true, hint: actingWait, disabled: ctx.acting, on: ['sheet'] });
 
   if (child) {
     add({ id: 'review-findings', group: 'review', label: 'Findings', opens: true, on: ['sheet'] });
     if (ctx.parent) add({ id: 'review-back', group: 'review', label: `Back to ${ctx.parent.name}`, opens: true, on: ['sheet'] });
     // The review's own gate shows these on a desktop.
-    if (r && reviewRunning(r)) add({ id: 'review-cancel', group: 'review', label: 'Cancel the code review', disabled: ctx.acting, on: ['sheet'] });
+    if (r && reviewRunning(r)) add({ id: 'review-cancel', group: 'review', label: 'Cancel the code review', hint: actingWait, disabled: ctx.acting, on: ['sheet'] });
     if (r && reviewHolds(r)) {
-      add({ id: 'review-retry', group: 'review', label: 'Retry the code review', primary: true, disabled: ctx.acting, on: ['sheet'] });
-      add({ id: 'review-open-anyway', group: 'review', label: 'Open the PR without it', disabled: ctx.acting, on: ['sheet'] });
+      add({ id: 'review-retry', group: 'review', label: 'Retry the code review', primary: true, hint: actingWait, disabled: ctx.acting, on: ['sheet'] });
+      add({ id: 'review-open-anyway', group: 'review', label: 'Open the PR without it', hint: actingWait, disabled: ctx.acting, on: ['sheet'] });
     }
   } else if (s.kind !== 'review-pr') {
     const demand = onDemandControls(s);
@@ -105,19 +108,19 @@ export function sessionActions(s: Session, ctx: SessionActionContext): SessionAc
     if (r && (reviewRunning(r) || demand.cancel)) {
       add({
         id: 'review-cancel', group: 'review', label: 'Cancel the code review', palette: ['Cancel the code review of ', name],
-        keywords: 'code review stop cancel', disabled: ctx.acting, on: review,
+        keywords: 'code review stop cancel', hint: actingWait, disabled: ctx.acting, on: review,
       });
     }
     if (r && (reviewHolds(r) || demand.retry)) {
       add({
         id: 'review-retry', group: 'review', label: 'Retry the code review', palette: ['Retry the code review of ', name],
-        keywords: 'code review retry again', primary: reviewHolds(r), disabled: ctx.acting, on: review,
+        keywords: 'code review retry again', primary: reviewHolds(r), hint: actingWait, disabled: ctx.acting, on: review,
       });
     }
     if (r && reviewHolds(r)) {
       add({
         id: 'review-open-anyway', group: 'review', label: 'Open the PR without it', palette: ['Open the PR of ', name, ' without its code review'],
-        keywords: 'code review skip open pr anyway', disabled: ctx.acting, on: review,
+        keywords: 'code review skip open pr anyway', hint: actingWait, disabled: ctx.acting, on: review,
       });
     }
     const run = canRunReview(s);
@@ -125,7 +128,7 @@ export function sessionActions(s: Session, ctx: SessionActionContext): SessionAc
       // While AgentK can't take it, the hint says why (and the server's refusal says so again).
       add({
         id: 'review-run', group: 'review', label: 'Run code review', palette: ['Run the code review of ', name],
-        hint: run.wait ?? undefined, keywords: 'code review run again findings', disabled: ctx.acting || !run.ready, on: ALL,
+        hint: run.wait ?? actingWait, keywords: 'code review run again findings', disabled: ctx.acting || !run.ready, on: ALL,
       });
     }
     add({ id: 'review-settings', group: 'review', label: 'Code review settings', opens: true, on: ['menu', 'sheet'] });
@@ -140,7 +143,11 @@ export function sessionActions(s: Session, ctx: SessionActionContext): SessionAc
       on: open > 0 ? ['sheet'] : ['menu', 'sheet'],
     });
   }
-  if (s.prUrl) add({ id: 'pr-link', group: 'stage', label: `PR #${s.prNumber} on GitHub`, href: s.prUrl, on: ['menu', 'sheet'] });
+  if (s.prUrl) {
+    // A reviewed PR is someone else's, often in another repo than the project's: its repo names it.
+    const repo = s.reviewingPr ? `${s.reviewingPr.repo.split('/')[1] ?? s.reviewingPr.repo} ` : '';
+    add({ id: 'pr-link', group: 'stage', label: `${repo}PR #${s.prNumber} on GitHub`, href: s.prUrl, on: ['menu', 'sheet'] });
+  }
   if (s.stage === 'code') {
     const queued = s.queued === 'open-pr';
     const reason = queued ? null : openPrGate(s).reason;
@@ -149,7 +156,7 @@ export function sessionActions(s: Session, ctx: SessionActionContext): SessionAc
       id: 'open-pr', group: 'stage',
       label: queued ? 'Instructions for the queued Open PR' : 'Open PR with instructions',
       palette: queued ? ['Instructions for the queued Open PR of ', name] : ['Open PR for ', name, ' with instructions'],
-      hint: reason ?? undefined, keywords: 'open pr pull request instructions notes draft', opens: true,
+      hint: reason ?? busyWait, keywords: 'open pr pull request instructions notes draft', opens: true,
       disabled: blocked || !!reason, on: reviewGatesPr(s) ? ['palette'] : ALL,
     });
   }
@@ -157,7 +164,7 @@ export function sessionActions(s: Session, ctx: SessionActionContext): SessionAc
     const merge = mergeGate(s);
     add({
       id: 'merge-skip-learn', group: 'stage', label: `${merge.label} without saving learnings`,
-      hint: merge.reason ?? undefined, disabled: blocked || !!merge.reason, on: ['menu', 'sheet'],
+      hint: merge.reason ?? busyWait, disabled: blocked || !!merge.reason, on: ['menu', 'sheet'],
     });
   }
   if (s.stage === 'review' && ctx.canShare && s.prNumber) {
@@ -167,7 +174,7 @@ export function sessionActions(s: Session, ctx: SessionActionContext): SessionAc
   if (ctx.canLearn && !child) {
     add({
       id: 'learn', group: 'session', label: 'Save learnings to Meko', palette: ['Save what ', name, ' learned to Meko'],
-      busy: s.learning ? 'Saving learnings to Meko' : undefined, keywords: 'save learnings learn meko memory',
+      busy: s.learning ? 'Saving learnings to Meko' : undefined, hint: s.learning ? undefined : busyWait, keywords: 'save learnings learn meko memory',
       disabled: ctx.acting || s.busy || !!s.learning, on: ALL,
     });
   }
@@ -227,7 +234,7 @@ export function actionsOn(items: SessionActionItem[], on: Surface): SessionActio
   return items.filter((i) => i.on.includes(on));
 }
 
-/** The menu's and the palette's shortcut that opens the session's ⋯: ⌘. on a Mac, Ctrl+. elsewhere. */
+/** The shortcut that opens the session's ⋯, for the ⋯ button's tooltip: ⌘. on a Mac, Ctrl+. elsewhere. */
 export function sessionMenuKeys(mac: boolean): string {
   return mac ? '⌘.' : 'Ctrl+.';
 }

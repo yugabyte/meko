@@ -233,7 +233,7 @@ your phone can connect.
   screen has gone 10 seconds without being used, or right away if that screen isn't showing it.
 - **Find in the terminal:** `⌘F` (`Ctrl+Shift+F` on Linux and Windows) in a session's terminal
   searches all of it, scrollback included, highlighting each match, with match case, whole word
-  and regex. On a phone, **Find in terminal** is in the ⋯ sheet and the command palette.
+  and regex. **Find in terminal** is also in the session's ⋯ menu (the ⋯ sheet on a phone) and the command palette.
 - **Multi-line prompts:** Shift+Enter starts a new line in a session's terminal, and Enter sends
   the prompt. On a Mac, ⌘← and ⌘→ go to the start and end of the line, ⌥← and ⌥→ move by a word,
   and ⌘⌫ deletes to the start of the line. On Linux and Windows, Ctrl+Backspace deletes a word.
@@ -284,8 +284,8 @@ your phone can connect.
   go straight to code. Or pick *Review a PR* (above). A task moves between stages, forward or back,
   at any point between turns: an exploration that should ship moves on to Code or opens a PR with
   **Move on…**, and a session in review can go back to Code or Design. A move carries on from what the
-  session has discussed or done, not its first prompt. A move, and **Open PR** (its **+** notes
-  button), takes optional instructions for AgentK, sent after the stage's prompt. Rename a session any time
+  session has discussed or done, not its first prompt. A move, and **Open PR with instructions** in the
+  session's ⋯ menu, take optional instructions for AgentK, sent after the stage's prompt. Rename a session any time
   (double-click its tab, or its row in the rail): its branch and worktree keep their names.
 - **Task lifecycle:** (Explore →) Design → Code → Review & PR (AgentK) → Merge & Close. Complex designs are
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
@@ -304,9 +304,9 @@ your phone can connect.
   review session shown as a magnifier on the task's tab, which opens the review's terminal while its passes run and its findings once the task is fixing them or the review is done. The task fixes what it finds, and the PR
   says how it went (`me_ak_review:2 blockers,1 major addressed;Sagittarius3.0`, or `me_ak_review:LGTM;Sirius1.0`). Strategy,
   re-review rounds and depth are in Settings, the project's settings and each session's own.
-  You can also run the review whenever you like, in Code or on the open PR in Review & PR: from the
-  command palette, **Review again** on its findings (which also has Cancel and Retry for it), or
-  **Run code review** in the ⋯ sheet on a phone. One run in Code is the one Open PR uses, so the PR
+  You can also run the review whenever you like, in Code or on the open PR in Review & PR: with
+  **Run code review** in the session's ⋯ menu (the ⋯ sheet on a phone), from the command palette,
+  or with **Review again** on its findings (which also has Cancel and Retry for it). One run in Code is the one Open PR uses, so the PR
   opens without reviewing again.
   You approve the design, opening the PR, and Merge & Close, which merges the PR and
   cleans up the branches, leaving the worktree for the next session. Pressed early, they wait:

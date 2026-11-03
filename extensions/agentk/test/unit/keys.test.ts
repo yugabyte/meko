@@ -238,17 +238,17 @@ describe('terminal reports', () => {
 describe('the session menu shortcut', () => {
   const key = (k: string, mods: Partial<Record<'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey', boolean>> = {}) =>
     ({ key: k, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, ...mods });
-  it('is ⌘. on a Mac and Ctrl+. elsewhere', () => {
-    expect(isSessionMenuKey(key('.', { metaKey: true }), true)).toBe(true);
-    expect(isSessionMenuKey(key('.', { ctrlKey: true }), false)).toBe(true);
-  });
-  it('takes no other modifier, and not the other platform\'s', () => {
-    expect(isSessionMenuKey(key('.', { ctrlKey: true }), true)).toBe(false);
-    expect(isSessionMenuKey(key('.', { metaKey: true }), false)).toBe(false);
-    expect(isSessionMenuKey(key('.', { metaKey: true, shiftKey: true }), true)).toBe(false);
-    expect(isSessionMenuKey(key('.', { ctrlKey: true, altKey: true }), false)).toBe(false);
-    expect(isSessionMenuKey(key('.', { metaKey: true, ctrlKey: true }), true)).toBe(false);
-    expect(isSessionMenuKey(key('.'), false)).toBe(false);
-    expect(isSessionMenuKey(key(',', { ctrlKey: true }), false)).toBe(false);
+  it.each([
+    ['⌘. on a Mac', key('.', { metaKey: true }), true, true],
+    ['Ctrl+. elsewhere', key('.', { ctrlKey: true }), false, true],
+    ['Ctrl+. on a Mac', key('.', { ctrlKey: true }), true, false],
+    ['⌘. elsewhere', key('.', { metaKey: true }), false, false],
+    ['⌘⇧. on a Mac', key('.', { metaKey: true, shiftKey: true }), true, false],
+    ['Ctrl+Alt+. elsewhere', key('.', { ctrlKey: true, altKey: true }), false, false],
+    ['⌘Ctrl+. on a Mac', key('.', { metaKey: true, ctrlKey: true }), true, false],
+    ['a bare .', key('.'), false, false],
+    ['Ctrl+, elsewhere', key(',', { ctrlKey: true }), false, false],
+  ])('%s → %s', (_name, e, mac, expected) => {
+    expect(isSessionMenuKey(e, mac)).toBe(expected);
   });
 });

@@ -386,8 +386,10 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
         setModal((m) => (m.kind === 'palette' ? { kind: 'none' } : { kind: 'palette' }));
         return;
       }
-      // The session's ⋯, from anywhere on its screen (the terminal leaves the key alone).
-      if (isSessionMenuKey(e, isMac()) && modalKind === 'none' && currentSession) {
+      // The session's ⋯, from anywhere on its screen (the terminal leaves the key alone). Not over a
+      // dialog or sheet, App's or the session view's own (Code review settings, Share, the asks, the
+      // held reviews, the ⋯ sheet): the menu would open behind it and take its Escape.
+      if (isSessionMenuKey(e, isMac()) && modalKind === 'none' && currentSession && !document.querySelector('[role="dialog"]')) {
         e.preventDefault();
         setMenuAt((n) => n + 1);
         return;

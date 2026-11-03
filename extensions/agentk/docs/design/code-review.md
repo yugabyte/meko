@@ -19,7 +19,7 @@ settings, the line, the tab's label); the UI is the magnifier joined to the task
 
 Three settings, each set globally (`[code_review]` in config.toml, Settings › Code review), overridden
 per project (`ProjectSettings.codeReview`, the project's settings) and again per session
-(`sessions.review_json`: the New session dialog's Advanced, the session's ⋯ sheet, Open PR with
+(`sessions.review_json`: the New session dialog's Advanced, the session's ⋯ menu and sheet, Open PR with
 instructions, and the `review` argument of the `start_sessions` tool, so "start a code session with
 3 deep reviews" asks for `depth: 3`). A value left out keeps the next level's (`resolveReview`).
 
@@ -313,7 +313,7 @@ through `review_outcome`: `CodeReviewSummary.addressed`; then, or with none, `LG
 A task that answers in its reply instead (tools off, or an untrusted PR head) records no outcomes,
 so its counts stay. While the review session waits on the user in its terminal (a permission prompt
 or a question, while its steps run: `CodeReviewSummary.waiting`), the magnifier takes the needs-you color and its lens
-knocks, since that session has no tab to show it. Clicking it (in the tab, the rail or the ⋯ sheet)
+knocks, since that session has no tab to show it. Clicking it (in the tab, the rail, or the ⋯ menu or sheet)
 follows `reviewOpens()` in `src/web/util.ts`: while the review has a running session and isn't
 waiting for the task's fixes (preparing, sweeping, scoring, or failed, which keeps its session for
 Retry), it opens the review's own screen, its terminal with the findings beside it on a desktop;
@@ -330,7 +330,7 @@ while the task fixes a round's findings it offers **Review now** too, which star
 past an interrupted fix turn. Both are off while the task's turn runs. The step the stage bar shows
 isn't a move target then, and neither is Code, the session's own stage. A review the user ran
 (`onDemand`) holds no PR, so none of this applies to it: the task shows in Code with its Open PR
-gate, and its findings header (and the ⋯ sheet on a phone) offers Cancel and Retry.
+gate, and its findings header and the session's ⋯ menu (the ⋯ sheet on a phone) offer Cancel and Retry.
 
 The Usage page and the project home count reviews in their **Code Reviews** section, and stack the
 review sessions' tokens on the Token usage chart ([Token usage](token-usage.md)); the usage report

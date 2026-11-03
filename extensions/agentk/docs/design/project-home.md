@@ -108,7 +108,7 @@ written starts on a line of its own. The API key
 is never in it: it's only ever in a header. The file is the owner's alone (`0600`).
 
 **View calls**, beside the setting, opens the **Meko calls** page (`/p/<project>/meko`, or
-`/p/<project>/meko/<session>` from the session's ⋯ sheet or the command palette, both offered while
+`/p/<project>/meko/<session>` from the session's ⋯ menu (the ⋯ sheet on a phone) or the command palette, all offered while
 the setting is on). It shows one session at a time (the one written to last unless one is named),
 newest first, 50 at a time with **Load older**, filtered by tool, by who made the call (**AgentK**,
 **Claude**, each call tagged with it) or **Failed only**. The server reads

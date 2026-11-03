@@ -428,8 +428,8 @@ export const register: Register = (on) => {
     if (!l) return { text: 'This session is not run by AgentK.' }
     const r = await post($, l, '/mod/learn/start', {}).catch(() => null)
     const text = json(r?.text).text
-    return { text: typeof text === 'string' ? text : "AgentK didn't answer. Use Save learnings in the session's header in AgentK (⋯ on a phone) instead." }
-  }).catch(() => ({ text: "AgentK didn't answer. Use Save learnings in the session's header in AgentK (⋯ on a phone) instead." }))
+    return { text: typeof text === 'string' ? text : "AgentK didn't answer. Use Save learnings to Meko in the session's ⋯ menu in AgentK instead." }
+  }).catch(() => ({ text: "AgentK didn't answer. Use Save learnings to Meko in the session's ⋯ menu in AgentK instead." }))
 
   on('tool.call', { tool: 'mcp__agentk__design_questions' }, async ($, e) => {
     const l = await linkOf($).catch(() => null)

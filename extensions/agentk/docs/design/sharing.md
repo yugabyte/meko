@@ -68,8 +68,8 @@ the whole entry, all of a name's words included, followed by `, `; its **×** st
 an error is logged. The list stays on this machine: it's not in the usage report or Meko. When it
 can't be read, the dialog shows no suggestions.
 
-**Sharing with a PR's reviewers.** Once a session has a PR, its Review & PR step has **Share with
-reviewers** (on a phone, in the ⋯ sheet), while the project has a dedicated datapack and Meko
+**Sharing with a PR's reviewers.** Once a session has a PR, its ⋯ menu (the ⋯ sheet on a
+phone) has **Share with reviewers** in Review & PR, while the project has a dedicated datapack and Meko
 is on. While AgentK can't share (`MekoStatus.sharing` false), it opens the same Meko Cloud dialog as
 the project home's Share. Otherwise it opens the Share dialog with a **Reviewers on the
 project's open PRs** section above the email form: for each open PR of the project's running sessions (in Review & PR or Merge & Close),

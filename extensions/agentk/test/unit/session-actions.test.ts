@@ -10,7 +10,7 @@ const session = (over: Partial<Session> = {}) =>
   ({
     id: 's1', name: 'Fix login', kind: 'task', harness: 'claude', stage: 'code', status: 'idle', busy: false, midTurn: false,
     promptsHeld: 0, queued: null, asking: null, codeReview: null, prNumber: null, prUrl: null, hasDesign: false,
-    designQuestions: { open: 0 }, learning: false, discarding: false, workItemId: null, canMerge: false,
+    designQuestions: { open: 0 }, learning: false, discarding: false, workItemId: null, reviewingPr: null, canMerge: false,
     mergeQueueable: false, mergeBlockers: [], ...over,
   }) as unknown as Session;
 
@@ -104,6 +104,25 @@ describe('sessionActions', () => {
     expect(ids(session(), 'menu', { atTop: true })).not.toContain('session-to-top');
     expect(ids(session(), 'menu').at(-1)).toBe('end');
     expect(ids(session({ discarding: true }), 'menu')).not.toContain('end');
+  });
+
+  it('says why an action waits while another one is under way', () => {
+    for (const id of ['learn', 'open-pr', 'review-run']) {
+      expect(item(session(), id, { acting: true })).toMatchObject({ disabled: true, hint: 'Another action is under way' });
+    }
+    expect(item(session({ busy: true }), 'open-pr')).toMatchObject({ disabled: true, hint: 'Another action is under way' });
+    const failed = session({ codeReview: review({ state: 'failed' }) });
+    expect(item(failed, 'review-retry', { acting: true })?.hint).toBe('Another action is under way');
+    expect(item(failed, 'review-retry')?.hint).toBeUndefined();
+  });
+
+  it("names a reviewed PR's repo on its link", () => {
+    const reviewing = session({
+      kind: 'review-pr', stage: 'reviewing-pr', prNumber: 12, prUrl: 'https://github.com/acme/other-repo/pull/12',
+      reviewingPr: { repo: 'acme/other-repo' } as Session['reviewingPr'],
+    });
+    expect(item(reviewing, 'pr-link')?.label).toBe('other-repo PR #12 on GitHub');
+    expect(item(session({ prNumber: 7, prUrl: 'https://github.com/acme/demo-repo/pull/7' }), 'pr-link')?.label).toBe('PR #7 on GitHub');
   });
 
   it('waits Save learnings while another action or a learn step runs', () => {

@@ -52,7 +52,7 @@ waiting for the turn's end, Opening PR, Closing, Done, or a code review holding 
 buttons). Beside it stay only what needs you: **N reviews for you**, **Resume** while the agent has
 exited, **Design doc** with its count while the design has open questions, and a discard waiting on
 its learn step. Everything else is in the ⋯ menu at the row's right end: the task's code review,
-**Run code review**, **Code review settings…** (a dialog), the design, the PR on GitHub, **Open PR
+**Run code review**, **Code review settings** (a dialog), the design, the PR on GitHub, **Open PR
 with instructions**, **Merge & Close without saving learnings**, **Share with reviewers**, **Save
 learnings to Meko**, **Move to another stage**, **Find in terminal**, **Rename session**, **Move to
 top**, the work item, **Meko calls**, **Project home**, and **Archive or discard…**, which opens
@@ -155,7 +155,7 @@ turn's end and a reset clear it with the rest.
   (`PostToolUse`) but the start of only a few. A `PreToolUse` matcher would add a process per call
   and leave a failed or interrupted call to a guess. The mod brackets each call exactly.
 
-**Renaming a session.** Double-click its tab or its row in the rail (on a phone, **Rename session** in the ⋯ sheet; or
+**Renaming a session.** Double-click its tab or its row in the rail (or **Rename session** in the session's ⋯ menu, the ⋯ sheet on a phone; or
 **Rename** in the `⌘K` palette) to give it a new name (`PATCH /api/sessions/:id`). Only the name
 changes: the branch, worktree, pane and Meko agent id were named from it once, at the start,
 and stay. The name is trimmed, its line breaks and runs of spaces made one space, and it can't be
@@ -345,8 +345,8 @@ bytes, not only the agent: in vim's insert mode, Shift+Enter is Esc then Enter.
 **Finding text in the terminal.** With the terminal focused, `⌘F` (`Ctrl+Shift+F` on Linux and
 Windows, so `Ctrl+F` still reaches the agent) opens a find bar over its top right (`TermFind.tsx`);
 anywhere else on the page the browser's own find works as usual, which can't see the terminal's
-scrollback (xterm draws only the rows on screen, and WebGL on touch screens). On a phone, **Find in
-terminal** in the ⋯ sheet opens it, as does **Find in ‹session›'s terminal** in the palette. It
+scrollback (xterm draws only the rows on screen, and WebGL on touch screens). **Find in terminal**
+in the session's ⋯ menu (the ⋯ sheet on a phone) opens it, as does **Find in ‹session›'s terminal** in the palette. It
 searches the screen and the 10,000 lines of scrollback with xterm's search addon, highlights every
 match and the current one in colors for the terminal's theme (`termfind.ts`), and says where you
 are ("3 of 12"; past 1,000 matches only the oldest 1,000 are highlighted and it says "More than
@@ -373,7 +373,7 @@ Claude Code made itself isn't found.
 **The projects pane's width, and hiding it.** In the wide layout, dragging the pane's right edge
 (or the arrow keys on it) sets its width, from 180 to 480 px; a double-click on the edge goes back
 to 248 px. The pane button at the right of the rail's foot shrinks the rail to a strip holding a
-button that shows it again. While it's hidden, the session tabs show above the terminal even when
+button that shows it again. While it's hidden, the session tabs show above the stage bar even when
 the rail lists the sessions. Its width and whether it's hidden are kept in this browser
 (`ak-rail-width`, `ak-rail-hidden`; `src/web/rail.ts`).
 
