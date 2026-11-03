@@ -779,6 +779,7 @@ export class Core extends EventEmitter {
     this.sweepStaged();
     if (this.timersOn) {
       this.every(5000, () => this.sessions.reconcile());
+      this.every(60_000, () => this.sessions.stopIdle());
       this.every(HOOK_SOCKET_CHECK_MS, () => this.checkHookSocket());
       this.every(60000, () => this.sessions.refreshDiffStats());
       this.every(IDLE_WORKTREE_CHECK_MS, () => this.worktrees.expire());

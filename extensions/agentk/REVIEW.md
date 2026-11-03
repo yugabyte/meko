@@ -23,7 +23,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       don't explain (a bind mount) isn't another. A home that hasn't moved there yet isn't
       covered: another Meko's commands still act on it.
 - [ ] `recover()` / `reconcile()` stay idempotent: live panes are left alone, missing panes are resumed,
-      and sessions still being created or launched are skipped (so Claude never starts twice).
+      and sessions still being created or launched are skipped (so Claude never starts twice), as
+      are sessions whose agent was stopped for sitting idle (`idle_stopped_at`), which start again
+      only when something needs them (`awake`, `wakeSoon`, Resume).
 - [ ] Nothing respawns a live pane, and a session host error other than "no host" is never read as
       every pane being gone.
 - [ ] Creating a session answers once its row is in (`begin()`): only the checks that must fail in
@@ -35,7 +37,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       mid-turn recovery is parked).
 - [ ] Status changes come from hook events or pane checks, not guesses (the one fallback: a starting
       session whose hooks never came follows its transcript). Deliberate stops (archive,
-      cleanup) don't show up as "exited".
+      cleanup) don't show up as "exited". The one deliberate stop that does is the idle stop
+      (`stopIdle`), on purpose and marked: `Session.idleStoppedAt` gives it its own dot, and the
+      gates don't block on it, since anything that needs the agent starts it first.
 - [ ] The home may be seen by other hosts (a home shared over NFS). Only the server holding the
       `server.lock` lease opens the database or binds the hook socket, the systemd units keep
       `ConditionHost=`, and nothing removes a socket or file another server may own.

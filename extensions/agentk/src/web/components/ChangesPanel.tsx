@@ -8,7 +8,7 @@ import { ApiError, api, errorMessage } from '../api';
 import { anchorComment, defaultOpen, DESKTOP_BUDGET, keepUnchanged, pathFilter, PHONE_BUDGET, pickComment, reparse, sameItems, showsLine, sideLine, type DiffLine } from '../diff';
 import { matches, MOBILE_QUERY, useTouch, watchSideways } from '../hooks/useMedia';
 import { useRangeDrag, type CommentPick } from '../hooks/useRangeDrag';
-import { agentName, cx, relativeTime } from '../util';
+import { agentName, cx, idleStopped, relativeTime } from '../util';
 import { Busy, ConfirmButton } from './common';
 import { SidePanel } from './SidePanel';
 
@@ -330,7 +330,8 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
     }
   };
 
-  const exited = session.status === 'exited';
+  // Comments to an agent stopped for sitting idle start it again.
+  const exited = session.status === 'exited' && !idleStopped(session);
   /** A review's base, and a session's with a PR, is its PR's (the server refuses a change). */
   const fixedBase = session.kind === 'review-pr' ? 'A review compares with its PR\'s base.' : session.prNumber ? `The base of PR #${session.prNumber}.` : null;
   const changeBase = (branch: string) => {

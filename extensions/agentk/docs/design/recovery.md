@@ -139,7 +139,7 @@ sees the same `~/.config/systemd/user`, so its systemd starts the enabled units 
 | A phone's page goes to the background, or its network changes | Everything | The server drops the page's sockets once they stop answering its pings. When the page is shown again, it pings its events socket and opens a new one if there's no answer, so it shows the current state instead of the one it had when it was hidden. After 30 seconds or more hidden, it also lets go of its terminals and reconnects the ones on screen, even if the phone kept its timers from running. |
 | Server crash or update | Everything | systemd (or launchd) restarts the server. It matches `state.db` against the session host's panes, and browsers reconnect automatically. An open page that finds the server on another version reloads itself (see [Releases and updates](releases.md)). |
 | A second server starts on the same home (another host that mounts it) | Everything | The units don't start on other hosts, and a server started by hand refuses while the lease is held. If the hook socket goes missing anyway, the running server binds it again within 10 seconds. |
-| Session host crash or restart | Worktrees, transcripts, state | The unit restarts the host, and the server relaunches every session with `desired: running` using `claude --resume`. |
+| Session host crash or restart | Worktrees, transcripts, state | The unit restarts the host, and the server relaunches every session with `desired: running` using `claude --resume`, except one whose agent AgentK stopped for sitting idle ([below](#stopping-idle-agents)). |
 | Host reboot or crash | Worktrees, transcripts, state (after a crash or power cut, less the last `state.db` commits before it: `synchronous=NORMAL`, see [Projects and sessions](projects-and-sessions.md)) | Both units start at boot (on macOS, when you log in) and the same recovery runs. Sessions show as *recovered* until you interact. |
 
 ```mermaid
@@ -152,7 +152,7 @@ sequenceDiagram
   SD->>S: start
   S->>S: open state.db
   S->>T: list panes
-  loop each session with desired = running and no pane (not one still being created, launched or stopped)
+  loop each session with desired = running and no pane (not one still being created, launched or stopped, nor stopped for sitting idle)
     S->>S: verify worktree, recreate from its branch (or origin/branch) if missing; fail if the branch is gone
     S->>T: spawn pane in worktree
     alt session was mid-turn
@@ -182,6 +182,55 @@ comes back. **Auto-continue is on by default**, with guards:
   is gone, it waits for you to resume or discard it. A session host error other than "no host
   running" skips that check rather than being read as every pane being gone, and a live pane is never
   replaced.
+
+## Stopping idle agents
+
+An idle agent spends no tokens but keeps its memory: measured on Linux, about 350–510 MB for each
+idle `claude`, plus its session-tools MCP server (#445). So AgentK stops a session's agent once it
+has sat idle for `[sessions] idle_stop_hours` (24 by default; Settings › General; 0 never stops
+one), and starts it again with `--resume` when it's needed. The session keeps its stage, worktree,
+branch and conversation (`SessionManager.stopIdle`, `src/server/sessions.ts`, on Core's one-minute
+timer).
+
+- **Only what's truly idle.** The session is between turns (*idle* or *recovered*: never *needs
+  you*, so a permission prompt or question stays open), with no hook event and no key typed into
+  its terminal for that long, and nothing running, on its way or waiting for it: no background
+  tasks, prompt being sent or held, queued gate, Run to merge, queued prompt or review comment,
+  learn step, discard, code review or Merge & Close. A code-review session is never stopped, nor
+  one whose conversation can't be resumed.
+- **The stop.** Its usage and transcript reach Meko first, as at an archive; the session is checked
+  again (any activity meanwhile keeps it running); then `sessions.idle_stopped_at` is set and its
+  pane killed, and the stop waits up to 5 s for that agent's `SessionEnd`, so a late one can't end
+  the agent a wake starts next. The status is *exited* with "Stopped after 24 hours idle…", an
+  `idle-stopped` event is logged, and nobody is notified. The page shows a faint dashed dot,
+  quieter than idle, and the terminal says it was stopped, with **Resume**.
+- **Stopped stays stopped.** `recoverable()` leaves a session with `idle_stopped_at` out, so
+  neither reconcile nor recovery after a host restart relaunches it (a plain kill would be back
+  within 5 s). Any launch clears it.
+- **Starting again.** Opening the session doesn't start its agent. **Resume** does, and so does the
+  first key typed into its terminal, from the keyboard, the phone's key bar or its compose box
+  (`whenTyped` in `src/web/terminals.ts`; the key itself doesn't go out). An action that sends the
+  agent a prompt starts it first and waits for it, up to 60 s (`SessionManager.awake`), then runs
+  as it would have: a move that sends a prompt or instructions (a move that sends nothing, or one to
+  Review & PR that only picks up the PR, leaves it stopped), Approve design, answers to the design,
+  Open PR, Run to merge, Update to latest, Run code review, a code review's Retry and Open anyway,
+  Save learnings, and the learn step of Merge & Close and Discard, whose wait counts against the
+  step's own timeout. The page's gates don't block on a stopped agent, and a stopped session that
+  waits on you still shows Needs you. AgentK's own queued work (CI fixes, conflicts, reviews, a
+  code review's fixes, a Review a PR's new design, review comments) starts it without waiting
+  (`wakeSoon`), and the prompt goes at a later pass, once it's up. Each start is logged as
+  "Resumed for …". A start that fails before its launch (the branch is gone, say) clears the mark
+  and says why: the session is then an ordinary exited one, which recovery tries again every 5
+  minutes, as after a failed restart.
+- **Nothing starts it while an action is on its way.** Every `awake` counts as activity, so a stop
+  can't begin under an action still waiting on GitHub, and the idle stop keeps its own set
+  (`idleStopping`), apart from archive's `stopping`, so an archive meanwhile still ends the session
+  as archived.
+
+Rejected: a new `desired = 'stopped'`, which every `desired === 'running'` check would read as
+archived; a dead pane kept with no mark, which a host restart drops and recovery relaunches; and a
+new `stopped` session status, which every `exited` check on the server and in the UI would need
+too, where one missed would let a prompt go to a missing pane.
 
 ## Moving the home into Meko's data folder
 

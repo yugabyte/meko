@@ -1886,6 +1886,24 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
       expect(prPrompts(s.id)).toBe(0);
     });
 
+    it('starts an agent stopped for sitting idle again when it is turned on, and sends its Open PR', async () => {
+      const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+      const s = await env.core.sessions.create(p.id, { name: 'Stopped then run', prompt: 'do it', start: 'code' });
+      await idle(s.id, 'first turn');
+      env.core.config.sessions.idleStopHours = 1;
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        vi.setSystemTime(Date.now() + 2 * 60 * 60 * 1000);
+        await env.core.sessions.stopIdle();
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(env.core.sessions.get(s.id).idleStoppedAt).not.toBeNull();
+      await env.core.sessions.edit(s.id, { autoRun: true });
+      expect(lastEvent(s.id, 'resumed')).toBe('Resumed for Run to merge');
+      await waitFor(() => prPrompts(s.id), (n) => n === 1, 10000, 'the PR prompt');
+    });
+
     it("drops its PR prompt Claude exited before taking once it stops, so a Resume doesn't send it", async () => {
       const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
       fakeFiles({ 'exit-unrun': 'Open a pull request' });

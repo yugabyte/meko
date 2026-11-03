@@ -38,7 +38,7 @@ describe('terminal socket', () => {
   });
 
   const coreFor = (lines: string[] = []) =>
-    ({ sessions: { row: () => ({ desired: 'running', tmux_name: 'x' }) }, host, log: { info: (m: string) => lines.push(m), warn: () => {}, error: () => {} } }) as unknown as Core;
+    ({ sessions: { row: () => ({ desired: 'running', tmux_name: 'x' }), typed: () => {} }, host, log: { info: (m: string) => lines.push(m), warn: () => {}, error: () => {} } }) as unknown as Core;
   const text = (ws: ReturnType<typeof fakeSocket>) => ws.sent.filter((m): m is Buffer => m instanceof Buffer).map((b) => b.toString('utf8')).join('');
   const sizeMessage = (ws: ReturnType<typeof fakeSocket>) => ws.sent.find((m): m is string => typeof m === 'string' && m.includes('"size"'));
 

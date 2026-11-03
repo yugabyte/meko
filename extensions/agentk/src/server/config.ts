@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { parse, stringify } from 'smol-toml';
 import { claudeUserDir } from './claude.js';
 import { DEFAULT_MEKO_URL, DEFAULT_MEKO_WEB_URL, mekoWebUrl } from '../shared/mekourls.js';
-import type { MekoKeySource } from '../shared/types.js';
+import { MAX_IDLE_STOP_HOURS, type MekoKeySource } from '../shared/types.js';
 import { DEFAULT_HARNESS, HARNESS_IDS, isHarnessId, type HarnessId } from '../shared/harnesses.js';
 import {
   DEFAULT_CHECK, DEFAULT_DEPTH, DEFAULT_ROUNDS, DEFAULT_STRATEGY, MAX_DEPTH, MAX_ROUNDS, STRATEGIES, isStrategySetting, type ReviewSettings,
@@ -68,6 +68,12 @@ export interface Config {
    * idleDays: an idle worktree no session has used for this many days is removed (0 to 365; 0 keeps it).
    */
   worktrees: { idlePerRepo: number; idleDays: number };
+  /**
+   * idleStopHours: a session's agent idle this many hours is stopped to free its memory, and started again with `--resume`
+   * when it's needed (SessionManager.stopIdle, docs/design/recovery.md); 0 to MAX_IDLE_STOP_HOURS, 0 never stops one.
+   * Set in Settings › General.
+   */
+  sessions: { idleStopHours: number };
   /**
    * Anonymous usage stats (callhome.ts). enabled: send the report (daily; hourly in an install's first day). url: where to POST it
    * (the collector's full report URL); empty uses the one release builds carry (CALL_HOME_URL next to VERSION), and with neither
@@ -143,6 +149,7 @@ export const DEFAULT_CONFIG: Config = {
   kiro: { command: 'kiro-cli', enabled: true, trustTools: false },
   opencode: { command: 'opencode', enabled: true, disableTracking: false },
   worktrees: { idlePerRepo: 3, idleDays: 14 },
+  sessions: { idleStopHours: 24 },
   callHome: { enabled: true, url: '', diagnosticsUrl: '' },
   pr: { resolveConflicts: true },
   askAgentk: { enabled: true, model: 'sonnet', timeoutSeconds: 45 },
@@ -227,6 +234,11 @@ function readConfigFile(paths: Paths, warn: (msg: string) => void): Config {
   if (!Number.isInteger(depth) || depth < 1 || depth > MAX_DEPTH) {
     warn(`config.toml: code_review.depth should be a whole number from 1 to ${MAX_DEPTH}; using ${DEFAULT_DEPTH}`);
     cfg.codeReview.depth = DEFAULT_DEPTH;
+  }
+  const hours = cfg.sessions.idleStopHours;
+  if (!Number.isInteger(hours) || hours < 0 || hours > MAX_IDLE_STOP_HOURS) {
+    warn(`config.toml: sessions.idle_stop_hours should be a whole number from 0 to ${MAX_IDLE_STOP_HOURS}; using ${DEFAULT_CONFIG.sessions.idleStopHours}`);
+    cfg.sessions.idleStopHours = DEFAULT_CONFIG.sessions.idleStopHours;
   }
   if (!isHarnessId(cfg.agents.default)) {
     warn(`config.toml: agents.default should be one of ${HARNESS_IDS.join(', ')}; using ${DEFAULT_HARNESS}`);

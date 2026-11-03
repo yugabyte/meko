@@ -114,7 +114,8 @@ agents should read it before changing code there.
    in the new home.
 2. **Recovery is idempotent.** `recover()` and `reconcile()` may run at any time. A session with a live
    pane is left alone, and so is one still being created or launched (it has no pane yet); a missing
-   pane is relaunched with `claude --resume`; auto-continue is guarded (once per 15 minutes; after two
+   pane is relaunched with `claude --resume`, except a session whose agent AgentK stopped for sitting
+   idle (`sessions.idle_stopped_at`), which stays stopped until something needs it; auto-continue is guarded (once per 15 minutes; after two
    auto-continues in an hour the next one is parked). Archive and project delete wait for a session
    that is still starting; `launch()` never replaces a live pane.
 3. **Only through Meko.** The server listens on nothing but its unix socket (`Paths.webSock`, in a

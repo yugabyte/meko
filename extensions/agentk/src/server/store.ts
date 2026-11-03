@@ -80,6 +80,8 @@ export interface SessionRow {
   created_at: number;
   archived_at: number | null;
   recovered_at: number | null;
+  /** When AgentK stopped its agent for sitting idle (Session.idleStoppedAt); NULL otherwise. */
+  idle_stopped_at: number | null;
   interrupted: number;
   /** 1 for sessions whose Design stage runs in Claude's plan mode (created before designs moved out of it). */
   plan_mode: number;
@@ -366,6 +368,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     createdAt: r.created_at,
     archivedAt: r.archived_at,
     recoveredAt: r.recovered_at,
+    idleStoppedAt: r.idle_stopped_at,
   };
 }
 

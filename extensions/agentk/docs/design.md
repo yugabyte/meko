@@ -29,7 +29,7 @@ The design is split by area. Read this page first, then the part you need:
 | [Token usage](design/token-usage.md) | Reading transcripts, totals and costs, Meko's savings |
 | [Usage stats](design/usage-stats.md) | The anonymous usage report |
 | [Access and security](design/security.md) | Meko as the front door (local or remote access with no login, TLS), the socket AgentK listens on, origin checks, the handoff of AgentK's old web settings |
-| [Surviving crashes, restarts and updates](design/recovery.md) | Recovery, auto-continue, one server per home |
+| [Surviving crashes, restarts and updates](design/recovery.md) | Recovery, auto-continue, stopping idle agents, one server per home |
 | [Releases and updates](design/releases.md) | Release builds, installing through Meko, Meko's updates and rollback |
 
 Below: [Decisions so far](#decisions-so-far) · [Tech stack](#tech-stack) · [Milestones](#milestones) ·
@@ -55,6 +55,7 @@ Below: [Decisions so far](#decisions-so-far) · [Tech stack](#tech-stack) · [Mi
 | Network | Served by the Meko on this computer at `/ext/agentk/` on its port: from other devices over HTTPS (remote access), or from this computer only (local access), with no login either way; `meko ui stop` closes the port. AgentK itself listens only on a unix socket. |
 | Other terminal sessions | Not adopted. Only sessions created by AgentK are shown. |
 | Crash behaviour | After a host reboot, the server automatically brings back every open project and session with `claude --resume`. Sessions that were mid-turn are told to continue. |
+| Idle agents | A session's agent idle for 24 hours (Settings › General) is stopped to free its memory, and started again with `--resume` on Resume, a key typed into its terminal, an action that sends it a prompt, or AgentK's own work for it. Recovery leaves it stopped. |
 | Token usage | Tracked per session and per project (per model and per day too), read from Claude Code transcripts including subagents, with an estimated cost at API list prices. Meko calls are counted from the same transcripts (Kiro's and OpenCode's from their own logs), with an estimate of what Meko searches saved. |
 | Usage stats | Each install sends anonymous counts (projects, sessions, PRs, commits, file types, tokens by model) once a day, hourly in a new install's first day, to a collector the AgentK team runs as a separate service, and from release installs also to YugabyteDB's call home service (diagnostics.yugabyte.com, where yugabyted reports). On by default; one checkbox in Settings › General turns off both. |
 | Code review | Before a task's PR opens, AgentK reviews the change on this computer with the agent-k reviewer's algorithm (Sagittarius 3.0 by default: five passes, then a scorer per finding that drops one only by refuting it; or Sirius 1.0, one pass), in a review session of its own shown as part of the task's tab, on the task's harness. Each round's findings wait for the user to add notes or dismiss some (unless Run to merge is on, or the check is turned off), then the task fixes the rest, and the PR says how it went (`me_ak_review:`). Strategy, re-review rounds, depth and the check are set globally, per project and per session. |
