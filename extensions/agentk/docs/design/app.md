@@ -4,7 +4,7 @@ Part of the [AgentK design](../design.md).
 
 The left rail holds projects, each with its repo's folder name in small type under the project
 name and the most urgent session state shown on it. Drag a project to reorder the list; on a touch
-screen, use **Move up** / **Move down** in the project home's settings. The tabs above the terminal
+screen, use **Move up** / **Move down** in the project home's settings. The tabs above the stage bar
 hold the project's sessions; when there are more than fit, they scroll sideways with no scrollbar
 (one drawn over the tabs, as macOS and phones do, hid their names): swipe, Shift with the wheel, or the
 plain mouse wheel (`sidewaysWheel()`), and the selected tab is always scrolled into view. With **List sessions in the projects pane** ticked in Settings › General
@@ -25,7 +25,7 @@ so the name keeps one column; it's drawn smaller there (13 px, on touch screens 
 row grows by a short line. The tabs and the rail list a project's sessions in the same order, kept on the server
 (`sessions.position`) so every browser sees it: a new session goes first, and **Move to top** puts
 any other there, to keep the work that matters most at the top as priorities change. It's the ↑ that
-takes a rail row's stage chip's place on hover (the first line only), and is in the ⋯ sheet and the command palette (where
+takes a rail row's stage chip's place on hover (the first line only), and is in the session's ⋯ menu (the ⋯ sheet on a phone) and the command palette (where
 touch screens find it). Each takes one below the project's lowest position, so no other row is
 renumbered. The session on screen is highlighted (its project's name turns bold instead), and
 **+ New session** follows each project's list (the project on screen shows it even with no
@@ -43,6 +43,26 @@ shows the user and the server (`hari@dev-box`) with the version, so windows on d
 are easy to tell apart. The server name is `[server] name` (set in Settings), else the machine's
 host name up to its first dot; the tooltip adds the full host name. When space is short, the
 version moves below it first, then the user name is cut off before the server name.
+
+**The stage bar and the session's ⋯.** On a desktop, under the tabs, one row holds the session's
+stages (each one it can move to is a button) and its gate: **Run to merge** and the next-stage
+button (Move on…, Design Review, Open PR, Merge & Close; a Review a PR session's Update to latest
+and Close review), or the state that stands in for it (a queued gate with Cancel, an approval
+waiting for the turn's end, Opening PR, Closing, Done, or a code review holding Open PR with its own
+buttons). Beside it stay only what needs you: **N reviews for you**, **Resume** while the agent has
+exited, **Design doc** with its count while the design has open questions, and a discard waiting on
+its learn step. Everything else is in the ⋯ menu at the row's right end: the task's code review,
+**Run code review**, **Code review settings…** (a dialog), the design, the PR on GitHub, **Open PR
+with instructions**, **Merge & Close without saving learnings**, **Share with reviewers**, **Save
+learnings to Meko**, **Move to another stage**, **Find in terminal**, **Rename session**, **Move to
+top**, the work item, **Meko calls**, **Project home**, and **Archive or discard…**, which opens
+Archive's confirmation in the row. One list says which actions a session has, when, and why one
+waits (`sessionActions()` in `src/web/sessionactions.ts`), and the menu (`SessionMenu.tsx`), the
+phone's ⋯ sheet and the command palette each show their part of it. The menu is a standard menu
+button: Enter, Space or ↓ opens it on its first item, ↑ on its last; the arrows, Home and End move
+between items, skipping the disabled ones, which say why they wait; Escape closes it and gives focus
+back; a click outside closes it. `⌘.` (`Ctrl+.` elsewhere) opens it from anywhere on the session's
+screen, the terminal included, and gives focus back to the terminal when it closes.
 
 The app follows the system's light or dark theme, or the one picked with the theme button at the
 foot of the rail. The terminals have their own colors: dark by default, whatever the app's theme,
@@ -292,7 +312,9 @@ terminal**, which hides it for that start in this page.
 ## Keyboard
 
 `⌘1–9` switches projects, `⌃Tab` cycles sessions (browsers keep `⌃Tab` for themselves in a
-normal tab, so it works in the installed app window), and `⌘K` opens a palette to jump to any
+normal tab, so it works in the installed app window), `⌘.` (`Ctrl+.` elsewhere) opens the session's
+⋯ menu (the ⋯ sheet on a phone; the terminal never gets the key, and an input method that takes
+`Ctrl+.` itself, such as some Linux emoji pickers, keeps it from AgentK), and `⌘K` opens a palette to jump to any
 session or project home, create a session, or move or rename the one on screen (or, with a GitHub
 PR or issue pasted, start a session on it: see [Starting from a GitHub link](palette.md#starting-from-a-github-link);
 or ask in plain words: see [Ask AgentK](palette.md#ask-agentk); or find a session by what it's about: see
@@ -475,10 +497,11 @@ top of the screen, in place of `⌘K`), and, with the setting on, lists the sess
 With the setting off, the app bar holds the project's sessions as tabs, between the drawer button and ⋯, so a phone
 can switch sessions without opening the drawer (each tab shows its status and stage; a swipe scrolls them, with no scrollbar); with it on, the drawer
 lists them instead and the app bar names the session and its project, with the session's status dot, and puts
-a dot on the drawer button while another session in the project needs you. The session header,
-the stage bar with its gate button (Design Review, Open PR, Merge & Close) and the footer details
-move into a ⋯ sheet, leaving the screen to the terminal; a dot on ⋯ marks a gate that is ready for
-you, and the sheet says why a closed gate is closed. The sheet closes with the × at its top right, a
+a dot on the drawer button while another session in the project needs you. The stage bar
+with its gate button (Design Review, Open PR, Merge & Close), the actions of the desktop's ⋯ menu
+(from the same list, as rows) and the footer details move into a ⋯ sheet, leaving the screen to the
+terminal; a dot on ⋯ marks a gate that is ready for you, and the sheet says why a closed gate is
+closed. The sheet closes with the × at its top right, a
 tap outside it, or Escape. Dialogs open as bottom sheets, with tabs in a
 header (Settings) on their own row under the title and its × (focus still goes from the tabs to the
 ×, as on a desktop). The app and the

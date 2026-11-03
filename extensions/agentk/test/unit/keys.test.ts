@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BAR_KEYS, FLING_MAX, type BarKey, MORE_KEYS, FONT_MAX, FONT_MIN, clampFont, ctrlSequence, decayVelocity, editKeySequence, flingVelocity, insertedChar, isTap, isTerminalReport, keySequence, pastePath, pasteText, TAP_MAX_MOVE, TAP_MAX_MS, touchCol, touchRow, wheelReport, wheelSteps,
+  BAR_KEYS, FLING_MAX, type BarKey, MORE_KEYS, FONT_MAX, FONT_MIN, clampFont, ctrlSequence, decayVelocity, editKeySequence, flingVelocity, insertedChar, isSessionMenuKey, isTap, isTerminalReport, keySequence, pastePath, pasteText, TAP_MAX_MOVE, TAP_MAX_MS, touchCol, touchRow, wheelReport, wheelSteps,
 } from '../../src/web/keys.js';
 import { keyboardOpen } from '../../src/web/hooks/useMedia.js';
 import { isPassiveReport } from '../../src/shared/termreports.js';
@@ -232,5 +232,23 @@ describe('terminal reports', () => {
     for (const t of ['a', '\r', '\x1b', '\x1b[A', '\x1bOR', '\x1b[1;2R', '\x1b[1;5R', '\x1b[I', '\x1b[O', '\x1b[200~text\x1b[201~', '\x1b[<64;10;5M']) {
       expect(isTerminalReport(t), JSON.stringify(t)).toBe(false);
     }
+  });
+});
+
+describe('the session menu shortcut', () => {
+  const key = (k: string, mods: Partial<Record<'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey', boolean>> = {}) =>
+    ({ key: k, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, ...mods });
+  it('is ⌘. on a Mac and Ctrl+. elsewhere', () => {
+    expect(isSessionMenuKey(key('.', { metaKey: true }), true)).toBe(true);
+    expect(isSessionMenuKey(key('.', { ctrlKey: true }), false)).toBe(true);
+  });
+  it('takes no other modifier, and not the other platform\'s', () => {
+    expect(isSessionMenuKey(key('.', { ctrlKey: true }), true)).toBe(false);
+    expect(isSessionMenuKey(key('.', { metaKey: true }), false)).toBe(false);
+    expect(isSessionMenuKey(key('.', { metaKey: true, shiftKey: true }), true)).toBe(false);
+    expect(isSessionMenuKey(key('.', { ctrlKey: true, altKey: true }), false)).toBe(false);
+    expect(isSessionMenuKey(key('.', { metaKey: true, ctrlKey: true }), true)).toBe(false);
+    expect(isSessionMenuKey(key('.'), false)).toBe(false);
+    expect(isSessionMenuKey(key(',', { ctrlKey: true }), false)).toBe(false);
   });
 });

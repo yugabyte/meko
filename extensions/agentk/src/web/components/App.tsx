@@ -23,6 +23,7 @@ import {
   liveSessions,
   liveWithReviews,
   openSessions,
+  isMac,
   modKey,
   withCreated,
   withOpened,
@@ -31,6 +32,7 @@ import {
   sessionToOpen,
   type LiveCount,
 } from '../util';
+import { isSessionMenuKey } from '../keys';
 import { Banners } from './Banners';
 import { CloseProjectDialog } from './CloseProjectDialog';
 import { CommandPalette } from './CommandPalette';
@@ -337,6 +339,8 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
   // review is done (`reviewOpens`), asks for the task on screen with its code review's findings open, and the rail's task part, while they're open, for them closed: a request
   // ProjectView takes once. `findingsOpenFor` is the task whose findings ProjectView shows.
   const [findingsRequest, setFindingsRequest] = useState<{ id: string; open: boolean } | null>(null);
+  // Bumped by ⌘. / Ctrl+.: the session on screen opens or closes its ⋯ (ProjectView).
+  const [menuAt, setMenuAt] = useState(0);
   const [findingsOpenFor, setFindingsOpenFor] = useState<string | null>(null);
   const openFindings = (s: Session) => {
     navigate({ view: 'project', projectId: s.projectId, sessionId: s.id }, { replace: isDrawerEntry() });
@@ -380,6 +384,12 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
       if (modKey(e) && (e.key === 'k' || e.key === 'K')) {
         e.preventDefault();
         setModal((m) => (m.kind === 'palette' ? { kind: 'none' } : { kind: 'palette' }));
+        return;
+      }
+      // The session's ⋯, from anywhere on its screen (the terminal leaves the key alone).
+      if (isSessionMenuKey(e, isMac()) && modalKind === 'none' && currentSession) {
+        e.preventDefault();
+        setMenuAt((n) => n + 1);
         return;
       }
       if (modKey(e) && /^[1-9]$/.test(e.key) && !e.altKey && !e.shiftKey) {
@@ -653,6 +663,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
             onLinkWorkItem={(sessionId) => setModal({ kind: 'link-work', sessionId })}
             onToTop={(sessionId) => void sessionToTop(sessionId)}
             onMenu={openDrawer}
+            menuAt={menuAt}
             showTabs={sessionTabsShown(railSessions, railHidden, mobile)}
             harnessLogos={logos}
             findingsRequest={findingsRequest}
@@ -781,6 +792,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
           }}
           onStartForItem={startForItem}
           onLinkWorkItem={() => currentSession && setModal({ kind: 'link-work', sessionId: currentSession.id })}
+          mekoConfigured={state.meko.configured}
           onError={showToast}
           askAgentk={!!state.askAgentk}
           onEditSession={(projectId, initial) => setModal({ kind: 'new-session', projectId, initial })}

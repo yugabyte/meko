@@ -14,7 +14,7 @@ import { HeldImages, type HeldImage } from './heldImages';
 import { isPastableImage, mekoPlan, mekoSummary, pickFiles, type MekoResult } from './knowledge';
 import { MOBILE_QUERY, TOUCH_QUERY, matches } from './hooks/useMedia';
 import {
-  clampFont, ctrlSequence, decayVelocity, editKeySequence, flingVelocity, isTap, isTerminalReport, keySequence, pastePath, pasteText, touchCol, touchRow, wheelReport, wheelSteps,
+  clampFont, ctrlSequence, decayVelocity, editKeySequence, flingVelocity, isSessionMenuKey, isTap, isTerminalReport, keySequence, pastePath, pasteText, touchCol, touchRow, wheelReport, wheelSteps,
   FLING_WINDOW_MS,
   type BarKey, type TouchSample,
 } from './keys';
@@ -308,6 +308,8 @@ class SessionTerminal {
         this.openFind();
         return false;
       }
+      // The session's ⋯ (App's shortcut): never typed into the agent.
+      if (isSessionMenuKey(e, IS_MAC)) return false;
       const mod = IS_MAC ? e.metaKey : e.ctrlKey;
       // With text selected, ⌘C (Ctrl+C or Ctrl+Shift+C elsewhere) copies it instead of interrupting Claude.
       // Not a match the find bar selected: Ctrl+C interrupts Claude while the bar is open.

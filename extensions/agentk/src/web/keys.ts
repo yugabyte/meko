@@ -208,4 +208,13 @@ export function clampFont(size: number): number {
   return Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round(size)));
 }
 
+/**
+ * The shortcut that opens the session's ⋯ (the desktop menu, the phone's sheet): ⌘. on a Mac,
+ * Ctrl+. elsewhere, with no other modifier. App's shortcuts catch it, and the terminal leaves it to them.
+ */
+export function isSessionMenuKey(e: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>, mac: boolean): boolean {
+  if (e.key !== '.' || e.shiftKey || e.altKey) return false;
+  return mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+}
+
 export { isTerminalReport } from '../shared/termreports';

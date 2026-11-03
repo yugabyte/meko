@@ -177,7 +177,7 @@ sent, withdrawn or dropped.
   Claude exited, or waiting on you with no turn behind it, Open PR is still refused. It doesn't need
   AgentK's mod. Instructions given with it (see [Instructions with a move or Open PR](#instructions-with-a-move-or-open-pr))
   wait with it in `sessions.queued_instructions` (`Session.queuedInstructions`), cleared whenever the
-  queued gate is. The **+** notes button stays beside the queued pill and opens the dialog on them:
+  queued gate is. *Instructions for the queued Open PR* in the session's ⋯ menu opens the dialog on them:
   saving replaces them, and an emptied box removes them (a request with `instructions` replaces them,
   blank ones included; one without, like the plain gate's, keeps them). An Open PR pressed after the
   turn ended but before the queued one went goes at once, with them unless it gives its own. If the
@@ -382,9 +382,10 @@ from before start stages is ignored. The rules are in `src/shared/stages.ts`, sh
 
 The move dialog and **Open PR** take optional instructions for AgentK, in the user's words
 ("Open it as a draft", "Keep the public API as it is"). Left empty, nothing changes. **Open PR**
-stays one click; the **+** notes button beside it (and *Open PR … with instructions* in the command
-palette) opens the Open PR with instructions dialog (`OpenPrDialog.tsx`). The button is just the
-**+** and the notes icon, with no caption, and is 40 px square under a coarse pointer. Approve design takes none
+stays one click; **Open PR with instructions** in the session's ⋯ menu (the ⋯ sheet on a phone, and
+*Open PR … with instructions* in the command palette) opens the Open PR with instructions dialog
+(`OpenPrDialog.tsx`). It's left out of the menu while a code review holds Open PR, whose gate shows
+the review. Approve design takes none
 of its own: the design's **Other feedback** already goes with the approval. Merge & Close prompts
 Claude for nothing, so it takes none either.
 

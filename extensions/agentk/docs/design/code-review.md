@@ -202,13 +202,13 @@ still missing; a review whose session is gone fails, for Retry.
 ## On demand
 
 The user can run the review at any time in Code, or in Review & PR once the PR is found: the
-`review-run` action (`CodeReviews.runNow`). On a desktop it's **Run the code review of …** in the
-command palette and, once the task has a review, **Review again** in the findings panel's header
-(the magnifier opens it); on a phone, **Run code review** in the task's ⋯ sheet too. While AgentK
+`review-run` action (`CodeReviews.runNow`): **Run code review** in the task's ⋯ menu (the ⋯
+sheet on a phone), **Run the code review of …** in the command palette and, once the task has a
+review, **Review again** in the findings panel's header (the magnifier opens it). While AgentK
 can't take it, each of these says why (after its turn, answer it in the terminal, resume the
 session), and the server's refusal says so again. For
 a review the user ran, the findings header also has **Cancel** while it runs and **Retry** once it
-stopped, in its own stage (`onDemandControls`), as the ⋯ sheet does on a phone: the Code gate
+stopped, in its own stage (`onDemandControls`), as the ⋯ menu and sheet do: the Code gate
 doesn't show it. A stopped review it replaces passes on the Open PR instructions and a move's
 `moved` line it held. It's refused (409) mid-turn,
 while AgentK waits on the user or has exited, while a review runs, outside those two stages, and in
