@@ -89,7 +89,7 @@ export function serviceFailure(svc: ServiceManager, message: string, logsDir: st
   const where = svc.kind === 'launchd' ? ` and ${tildify(join(logsDir, 'launchd*.log'))}` : '';
   return (
     `${message}\nCheck: ${svc.statusHint('server')}${where}.\n` +
-    'Or rerun with --no-service to skip the service setup, and start the server with: agentk serve'
+    'Or rerun with --no-service to skip the service setup, and start the server with: me_koder serve'
   );
 }
 
@@ -117,9 +117,9 @@ function installServices(paths: Paths): boolean {
       ui.ok('tmux', "removed an older version's tmux service; its sessions resume in the session host");
     }
   }
-  for (const [old, now] of dropOldNames(svc)) ui.ok(now, `replaces ${old}, its name before the rename to AgentK`);
+  for (const [old, now] of dropOldNames(svc)) ui.ok(now, `replaces ${old}, its name before`);
   try {
-    if (svc.kind === 'launchd') writeServiceLauncher(paths.home);
+    writeServiceLauncher(paths.home);
     svc.install(renderServiceFiles(svc, { AK_HOME: paths.home, HOST: hostname() }));
   } catch (e) {
     if (e instanceof ServiceError) throw new ServiceError(serviceFailure(svc, e.message, paths.logs), { cause: e });
@@ -493,14 +493,14 @@ export async function runInstall(args: string[]): Promise<void> {
     ui.section('Services');
     let running = false;
     if (values['no-service']) {
-      ui.warn('Services', 'skipped (--no-service). Start the server with: agentk serve');
+      ui.warn('Services', 'skipped (--no-service). Start the server with: me_koder serve');
     } else if (installServices(paths)) {
       const probe = await waitForServer(paths);
       if (probe.ok) {
         ui.ok('Server', `answering (version ${probe.version})`);
         running = true;
       } else {
-        ui.warn('Server', `not answering yet (${probe.error}). See: agentk logs`);
+        ui.warn('Server', `not answering yet (${probe.error}). See: me_koder logs`);
       }
     }
 
@@ -516,13 +516,13 @@ export async function runInstall(args: string[]): Promise<void> {
       ui.text(style.bold('Done.'));
       ui.blank();
       ui.row('Browser', meko.meko?.webOff
-        ? "Meko's web UI is off: turn it on with meko ui start, then open AgentK with agentk ui"
+        ? "Meko's web UI is off: turn it on with meko ui start, then open AgentK with me_koder ui"
         : meko.meko
           ? 'the Meko on this computer is too old to serve AgentK: update it with meko update'
-          : "Meko isn't running: start it with meko start, then open AgentK with agentk ui");
+          : "Meko isn't running: start it with meko start, then open AgentK with me_koder ui");
     }
-    ui.row('Status', 'agentk status');
-    ui.row('Logs', 'agentk logs -f');
+    ui.row('Status', 'me_koder status');
+    ui.row('Logs', 'me_koder logs -f');
     ui.blank();
   } catch (e) {
     if (e instanceof InstallError || e instanceof ServiceError || e instanceof PrivateDirError) {

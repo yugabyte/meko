@@ -12,7 +12,8 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 Environment=AK_HOME=@AK_HOME@
-ExecStart=@AK_HOME@/app/current/bin/agentk serve
+# service/me_koder in the home execs app/current/bin/me_koder (bin/agentk in a release from before).
+ExecStart=@AK_HOME@/service/me_koder serve
 Restart=always
 RestartSec=2
 # 75: another server holds this home (instance.ts); restarting won't help.

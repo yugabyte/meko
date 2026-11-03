@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The meko_presenter command: the server, and the commands Meko runs for an extension (start, stop,
+// The me_presenter command: the server, and the commands Meko runs for an extension (start, stop,
 // status, install, uninstall, _handoff, which names the socket Meko serves at /ext/presenter/, and
 // _busy, which says whether a talk is live).
 
@@ -39,7 +39,7 @@ function onPath(cmd: string): boolean {
 }
 
 /**
- * Whether a pid is a Presenter server: `meko_presenter serve` (the release's launcher, before it
+ * Whether a pid is a Presenter server: `me_presenter serve` (the release's launcher, before it
  * execs Node; its `presenter serve` end matches) or `cli.js serve` (Node, as start and the launcher
  * run it).
  */
@@ -135,7 +135,7 @@ async function start(paths: Paths): Promise<void> {
   mkdirSync(paths.logs, { recursive: true, mode: 0o700 });
   mkdirSync(paths.run, { recursive: true, mode: 0o700 });
   const log = openSync(join(paths.logs, 'server.log'), 'a', 0o600);
-  // A release starts it through its launcher (packaging/meko_presenter), which hands it to Meko's
+  // A release starts it through its launcher (packaging/me_presenter), which hands it to Meko's
   // (`meko _launch`): Meko counts the starts of a version on probation and rolls back one that keeps
   // failing. Otherwise Node's own flags too (a loader under `tsx`), so the server runs the way this
   // command did.
@@ -247,16 +247,16 @@ async function uninstall(paths: Paths, args: string[]): Promise<void> {
   }
 }
 
-const HELP = `meko_presenter: Presenter, interactive, branching presentations from Meko datapacks
+const HELP = `me_presenter: Presenter, interactive, branching presentations from Meko datapacks
 
-  meko_presenter serve        run the server in the foreground
-  meko_presenter start        start the server in the background
-  meko_presenter stop         stop it
-  meko_presenter status       whether it runs, and where
-  meko_presenter install      --meko-url <url> --meko-key <key> [--non-interactive]
-  meko_presenter uninstall    [--purge] [--non-interactive]
-  meko_presenter version      [--json]
-  meko_presenter _busy        exit 0 while a talk is live (Meko's automatic updates wait for it)
+  me_presenter serve        run the server in the foreground
+  me_presenter start        start the server in the background
+  me_presenter stop         stop it
+  me_presenter status       whether it runs, and where
+  me_presenter install      --meko-url <url> --meko-key <key> [--non-interactive]
+  me_presenter uninstall    [--purge] [--non-interactive]
+  me_presenter version      [--json]
+  me_presenter _busy        exit 0 while a talk is live (Meko's automatic updates wait for it)
 
 Meko serves the pages at /ext/presenter/ on its web listener.`;
 
@@ -289,13 +289,13 @@ export async function main(argv: string[]): Promise<void> {
       console.log(HELP);
       return;
     default:
-      throw new Error(`Unknown command ${cmd}. Run meko_presenter help.`);
+      throw new Error(`Unknown command ${cmd}. Run me_presenter help.`);
   }
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(process.argv[1])) {
   main(process.argv.slice(2)).catch((e: Error) => {
-    console.error(`meko_presenter: ${e.message}`);
+    console.error(`me_presenter: ${e.message}`);
     process.exit(1);
   });
 }

@@ -28,7 +28,12 @@ func TestExtensionDeleteKeepsTheData(t *testing.T) {
 	noRealExtensions(t)
 	app, data := withAgentKData(t, dir)
 	home, _ := os.UserHomeDir()
-	link := filepath.Join(home, ".local", "bin", "agentk")
+	link := filepath.Join(home, ".local", "bin", "me_koder")
+	// The link to its old name that an install from before me_koder left goes too.
+	oldLink := filepath.Join(home, ".local", "bin", "agentk")
+	if err := os.Symlink(app.CurrentExe(), oldLink); err != nil {
+		t.Fatal(err)
+	}
 	uninstalled := filepath.Join(dir, "agentk-uninstall.log")
 
 	stdin = strings.NewReader("n\n")
@@ -51,8 +56,10 @@ func TestExtensionDeleteKeepsTheData(t *testing.T) {
 	if _, err := os.Stat(app.Root); !os.IsNotExist(err) {
 		t.Errorf("the releases are still there: %v", err)
 	}
-	if _, err := os.Lstat(link); !os.IsNotExist(err) {
-		t.Errorf("the command is still linked: %v", err)
+	for _, l := range []string{link, oldLink} {
+		if _, err := os.Lstat(l); !os.IsNotExist(err) {
+			t.Errorf("%s is still linked: %v", l, err)
+		}
 	}
 	if _, err := os.Stat(data); err != nil {
 		t.Errorf("its data went: %v", err)

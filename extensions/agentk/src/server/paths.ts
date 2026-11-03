@@ -121,7 +121,7 @@ export interface Paths {
   hookSock: string;
   /**
    * The server's socket, its only listener: Meko's web listener serves it to browsers at /ext/agentk/
-   * (`agentk _handoff --json` tells Meko where it is). Only this user can connect to it.
+   * (`me_koder _handoff --json` tells Meko where it is). Only this user can connect to it.
    */
   webSock: string;
   /** The session host's socket (host/host.ts): every Claude runs in a pty the host holds. */

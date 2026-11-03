@@ -1,6 +1,6 @@
 /**
  * AgentK's session tools as an agent sees them: the `agentk_sessions` MCP server's tools, with
- * their descriptions and input schemas. Kept on their own, with no imports, so `agentk mcp`
+ * their descriptions and input schemas. Kept on their own, with no imports, so `me_koder mcp`
  * (mcp.ts) loads nothing else; the server answers them in actions.ts (`SessionTools.call`).
  */
 

@@ -10,9 +10,11 @@
 # <out-dir>/presenter-<version>-<platform>-<arch>.tar.gz containing:
 #
 #   presenter-<version>/
-#     bin/meko_presenter       POSIX sh launcher (packaging/meko_presenter): the command, which Meko
-#                              links as ~/.local/bin/meko_presenter
-#     node/bin/node            bundled Node runtime
+#     bin/me_presenter         POSIX sh launcher (packaging/me_presenter): the command, which Meko
+#                              links as ~/.local/bin/me_presenter
+#     bin/meko_presenter       a link to it: its name before, which older Mekos run
+#     node/bin/me_presenter    bundled Node runtime, named so its process says it's Presenter's
+#     node/bin/node            a link to it
 #     node/LICENSE
 #     lib/package.json
 #     lib/dist/                compiled server + web pages
@@ -54,10 +56,12 @@ trap 'rm -rf "$stage"' EXIT INT TERM
 root="$stage/$name"
 
 mkdir -p "$root/bin" "$root/node/bin" "$root/lib"
-cp "$repo/packaging/meko_presenter" "$root/bin/meko_presenter"
-chmod 755 "$root/bin/meko_presenter"
+cp "$repo/packaging/me_presenter" "$root/bin/me_presenter"
+chmod 755 "$root/bin/me_presenter"
+ln -s me_presenter "$root/bin/meko_presenter"
 
-cp "$node_dir/bin/node" "$root/node/bin/node"
+cp "$node_dir/bin/node" "$root/node/bin/me_presenter"
+ln -s me_presenter "$root/node/bin/node"
 cp "$node_dir/LICENSE" "$root/node/LICENSE"
 
 cp "$repo/package.json" "$root/lib/package.json"

@@ -3,7 +3,7 @@ import { createInterface } from 'node:readline';
 import { TOOL_DEFS, TOOLS_SERVER, TOOLS_VERSION } from './tooldefs.js';
 
 /**
- * `agentk mcp`: AgentK's session tools as a stdio MCP server, started by a session's CLI (Claude
+ * `me_koder mcp`: AgentK's session tools as a stdio MCP server, started by a session's CLI (Claude
  * Code's `--mcp-config`, Kiro's `agentk` agent) as its own child. It lists the tools and forwards
  * each call to the server over the hook socket with the session's token, both from the environment
  * the session's CLI passes on, so the server knows which session asked. It loads no config, no

@@ -5,23 +5,31 @@ Part of the [AgentK design](../design.md).
 Two systemd user units run with lingering enabled, so they start at boot without anyone logging
 in:
 
-- `agentk-host.service` runs the session host (`agentk host`). It is never
+- `me_koder-host.service` runs the session host (`me_koder host`). It is never
   restarted by updates or reinstalls.
-- `agentk.service` is the web server, with `Restart=always`. Updates restart only this unit.
+- `me_koder.service` is the web server, with `Restart=always`. Updates restart only this unit.
 
-(On macOS they're the LaunchAgents `com.yugabyte.agentk.host` and `com.yugabyte.agentk`.) Until the
-rename to AgentK they were `agent-k-local-host.service` and `agent-k-local.service`
-(`com.yugabyte.agent-k-local.host` and `com.yugabyte.agent-k-local`). A service installed under
-its old name keeps it: `service.ts` names whichever is installed, and an update doesn't touch the
-units, which start `bin/agent-k-local`, a link to `bin/agentk` in every release since. `agentk
-install` moves them to the new names (`dropOldNames`): the server's at once, since it restarts the
-server anyway, and the host's only while the host isn't running, since stopping it would end every
-session. Until the host stops, the server's new unit names the host by its old name.
+(On macOS they're the LaunchAgents `com.yugabyte.me_koder.host` and `com.yugabyte.me_koder`.)
+They're named for the command, `me_koder`, so the services say they're a Meko extension's. Before
+that they were `agentk-host.service` and `agentk.service` (`com.yugabyte.agentk.host` and
+`com.yugabyte.agentk`), and until the rename to AgentK `agent-k-local-host.service` and
+`agent-k-local.service` (`com.yugabyte.agent-k-local.host` and `com.yugabyte.agent-k-local`). A
+service installed under an old name keeps it: `service.ts` names whichever is installed, and an
+update doesn't touch the units, which start `bin/agentk` or `bin/agent-k-local`, links to
+`bin/me_koder` in every release since. `me_koder install` moves them to the new names
+(`dropOldNames`): the server's at once, since it restarts the server anyway, and the host's only
+while the host isn't running, since stopping it would end every session. Until the host stops, the
+server's new unit names the host by its old name. Only `install` moves them, never an update, so a
+version rolled back to (which knows only the names before its own) still finds them.
+
+Both units run `<home>/service/me_koder`, the launcher the LaunchAgents run too (below), so a unit
+says `me_koder`, and the processes are `me_koder` too: a release's Node is
+`node/bin/me_koder`.
 
 Keeping the session host in its own unit is the key point. If it were a child of the server's unit,
 systemd would kill every Claude session on each update. The server never starts a host of its own
 while the host service is installed (it reports the service as down), nor while it runs as a
-service itself without the host's (it says to run `agentk install`); without services (a
+service itself without the host's (it says to run `me_koder install`); without services (a
 source checkout, `--no-service`) it starts one detached, in its own process group.
 
 **The host keeps its version.** A running host keeps the code it started with across updates:
@@ -30,21 +38,21 @@ started from is never deleted while it runs (node-pty runs a helper from it on m
 launcher, which starts the host (`meko _launch`), holds a lock on that folder for as long as the
 host runs, and Meko's pruning skips a locked folder ([Releases](releases.md)). The
 server works with hosts of its own protocol back to `MIN_PROTOCOL`; an older one has to be
-restarted (`agentk host restart`), which the server's log says. `agentk host stop`
+restarted (`me_koder host restart`), which the server's log says. `me_koder host stop`
 ends every session in the host, and refuses while the server for this home runs: it would start
 the host again at once and resume them all. With the server stopped, they resume when it starts.
-`agentk stop` stops both, the server first, and `agentk start` starts them again.
+`me_koder stop` stops both, the server first, and `me_koder start` starts them again.
 Installed services stop through systemd (`systemctl --user stop`) or launchd (`bootout`), since
 both restart a process that is only killed or exits on its own. Then it checks the server's lease:
 a server outside the service (`serve` by hand, or any server without services) gets SIGTERM, but
-only when the lease names this machine and its pid is an `agentk serve` (after a crash the
+only when the lease names this machine and its pid is a `me_koder serve` (after a crash the
 pid can be another process's); a lease held on another host is refused. The host goes last:
 its service is stopped, then any host still on the socket (a detached one a server started before
 the services were installed) gets a stop request. The services still start again at the next login (or
 boot, with lingering) or reinstall; `start` starts them sooner.
 
 **On macOS** the same two services are LaunchAgents in your `gui/<uid>` domain
-(`~/Library/LaunchAgents/com.yugabyte.agentk.plist` and `….host.plist`), with `RunAtLoad`
+(`~/Library/LaunchAgents/com.yugabyte.me_koder.plist` and `….host.plist`), with `RunAtLoad`
 and `KeepAlive`. They start when you log in, not at boot: Claude Code keeps its login in the
 Keychain, which is only unlocked during a desktop login, so the installer refuses to run without
 one. The host runs in the foreground, as launchd wants. Both jobs set
@@ -53,15 +61,19 @@ restart the server with `launchctl kickstart -k`, or by exiting and letting `Kee
 back. Reinstalling never reloads a loaded host job, and always reloads the server's (with
 `bootout` and `bootstrap`), since the file on disk may be newer than the job launchd loaded.
 
-Both jobs run `<home>/service/me_agentk`, a script that execs `app/current/bin/agentk`; macOS
-lists a job under its program's file name, so Login Items shows AgentK as `me_agentk`. macOS's
+Both jobs run `<home>/service/me_koder`, a script that execs `app/current/bin/me_koder` (or
+`bin/agentk` in a release from before the program was `me_koder`, one rolled back to); macOS
+lists a job under its program's file name, so Login Items shows AgentK as `me_koder`. macOS's
 Background Task Management shows "Background Items Added" again whenever the program a LaunchAgent
-names turns out to be another file, and `app/current/bin/agentk` is another file after every
+names turns out to be another file, and `app/current/bin/me_koder` is another file after every
 update. An update never replaces the launcher. `install` and the server's start
 (`refreshServiceFiles`) write it, and the plists, only when their text changes, since a rewritten
 file is announced too. At its start the server also brings plists from before the launcher onto it
 without reloading the jobs, which run from the new plists from the next login (or, for the server,
-the next `install`). That move shows the alert one last time.
+the next `install`). That move shows the alert one last time. The launcher was
+`<home>/service/me_agentk` (#430) before the program was `me_koder`; plists that name it move to
+`service/me_koder` the same way (one more alert), and the old file stays until `uninstall`, since
+a job launchd loaded from them runs it until the next login.
 
 **Their PATH.** systemd and launchd start both services with a thin PATH (launchd's is
 `/usr/bin:/bin:/usr/sbin:/sbin`). At its start, each one reads PATH from the user's login shell
@@ -72,7 +84,7 @@ folder, and the shell waits for the answer. macOS asks again after each Meko upd
 `meko` program is a new one. When the shell gives no PATH, the service keeps the thin PATH with
 those three folders, and `server.log` (or `host.log`) says why. If AgentK still can't find `gh`, its
 error says so in words (`ghMissing` in `github.ts`), not as `spawn gh ENOENT`. It says to install
-`gh`, or, when the shell gave no PATH, to allow macOS's prompt, and then to run `agentk restart`.
+`gh`, or, when the shell gave no PATH, to allow macOS's prompt, and then to run `me_koder restart`.
 Sessions don't depend on this: their launcher runs the login shell itself.
 
 **Versions before the session host** ran every Claude in tmux, in a tmux service. The server
@@ -80,15 +92,15 @@ moved an install off it by itself on its first start after the update (it added 
 ended the sessions in tmux, and removed the tmux service once the update was final). That shipped
 on 2026-10-09 and was removed about a week later. A Claude must never run in tmux and in the host at
 once, so what's left is a guard (`Core.start`): while the tmux service is installed
-(`legacyTmuxInstalled`), the server refuses to start, saying to run `agentk install`, unless
+(`legacyTmuxInstalled`), the server refuses to start, saying to run `me_koder install`, unless
 the host service is installed too and none of this home's sessions that aren't archived is in
 tmux (`legacytmux.ts` lists the sessions on the old socket). An
 install updated from a tmux version therefore fails to start and is rolled back to it (Meko's
 launcher; see [Releases](releases.md)), with its sessions still running in tmux.
-`agentk install`, which `meko extension install agentk` runs, moves it: before it installs the services it
+`me_koder install`, which `meko extension install agentk` runs, moves it: before it installs the services it
 removes the old ones, stopping the old server first and then the tmux service, which ends the
 Claudes in it, and the new server's recovery resumes them in the host (auto-continuing a turn that
-was cut off). `agentk uninstall` removes the tmux service too. Removing it ends the tmux
+was cut off). `me_koder uninstall` removes the tmux service too. Removing it ends the tmux
 server on its socket, which every AgentK home on the account shared.
 
 An install can have both services: the move kept the tmux service while any `ak-` pane it didn't
@@ -98,7 +110,7 @@ a warning, and leaves the tmux service running rather than end the Claudes still
 (Refusing there, as versions 0.20261018.3 to 0.20261020.2 did, rolled back every update.) The host
 service alone doesn't prove the move finished: a tmux version reinstalled by hand after it keeps
 the host's file and resumes its sessions in tmux, which is why the guard also looks for this home's
-sessions there. With both services installed, `agentk install` stops the server (it may be
+sessions there. With both services installed, `me_koder install` stops the server (it may be
 the tmux version's, which would start them in tmux again) and removes the tmux service, ending any
 Claude still in it, and leaves the host and its sessions alone.
 
@@ -117,7 +129,7 @@ sees the same `~/.config/systemd/user`, so its systemd starts the enabled units 
 
 - **The units run only on the install host.** Both systemd units carry `ConditionHost=` with the
   host name at install time. On any other host systemd skips them: nothing starts and nothing is
-  logged. Renaming the host means running `agentk install` again (or `meko extension install
+  logged. Renaming the host means running `me_koder install` again (or `meko extension install
   agentk`), which rewrites the units.
 - **A lease backs it up** (`src/server/instance.ts`). Before `serve` opens the database or binds
   anything it takes `server.lock`, which holds the host, pid, version, port and a heartbeat it
@@ -258,12 +270,13 @@ session that was mid-turn gets its continue prompt as after any host restart.
   or launchd would end it with them). The server starts a one-shot job outside both: a transient
   unit (`systemd-run --user --unit agentk-move-home`, `Restart=on-failure`) or a LaunchAgent of its
   own (`com.yugabyte.agentk.move-home`, which removes itself at the end), running the release's
-  hidden `agentk _move-home --to <dir>`. It logs to `agentk-move-home.log` beside the new home (in
+  hidden `me_koder _move-home --to <dir>`. The job keeps its `agentk` name: a server of a newer
+  version must still find a move an older one started. It logs to `agentk-move-home.log` beside the new home (in
   Meko's `extensions/`), which survives a copy's removal of the old home. Without services, `serve`
   does the move itself at its next start, before it opens anything, unless another server holds the
   home's lease (then the start is refused as ever).
 - **What.**
-  1. Stop the server, then the host (`stopAll`, which `agentk stop` uses too).
+  1. Stop the server, then the host (`stopAll`, which `me_koder stop` uses too).
   2. Put the home in place: `rename(2)` on one filesystem; on another (a home folder on NFS moving
      to local disk), copy it to `<new>.partial` (modes, links and times kept; sockets skipped),
      rename that into place, and move the original aside to `<old>.moved`, removed once the server
@@ -298,6 +311,6 @@ session that was mid-turn gets its continue prompt as after any host restart.
   path; `servicesFor` (`samePath`) takes the two for the same home when they're spelled alike, have
   the same real path, or are the same folder (device and inode), so `stop`, `start`, `status`, the
   trigger and a start mid-move all find the services.
-- **Meko.** Meko finds AgentK by its command, `~/.local/bin/agentk`, which the move repoints;
+- **Meko.** Meko finds AgentK by its command, `~/.local/bin/me_koder` (or an old name's link), which the move repoints;
   `meko destroy` leaves `extensions/` alone unless asked ([Meko's install
   docs](../../../../backend/docs/install.md)).

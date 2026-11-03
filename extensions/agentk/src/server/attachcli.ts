@@ -15,7 +15,7 @@ export function findPane(panes: Map<string, PaneInfo>, name: string): string | n
 }
 
 /**
- * `agentk attach [session]`: shows a session's terminal in this one, alongside any
+ * `me_koder attach [session]`: shows a session's terminal in this one, alongside any
  * browser. With no name, lists the sessions. Ctrl+\ detaches; Claude keeps running.
  */
 export async function runAttach(paths: Paths, args: string[]): Promise<void> {
@@ -32,14 +32,14 @@ export async function runAttach(paths: Paths, args: string[]): Promise<void> {
       console.log('No sessions are running.');
       return;
     }
-    console.log('Sessions (attach with: agentk attach <name>):');
+    console.log('Sessions (attach with: me_koder attach <name>):');
     for (const p of [...panes.values()].sort((a, b) => a.session.localeCompare(b.session))) {
       console.log(`  ${p.session}${p.dead ? '  (Claude exited)' : ''}`);
     }
     return;
   }
   const pane = findPane(panes, name);
-  if (!pane) throw new Error(`No session named ${name}. Run agentk attach to list them.`);
+  if (!pane) throw new Error(`No session named ${name}. Run me_koder attach to list them.`);
   const { stdin, stdout } = process;
   if (!stdin.isTTY || !stdout.isTTY) throw new Error('attach needs a terminal.');
 

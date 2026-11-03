@@ -345,7 +345,7 @@ func TestLinkCommand(t *testing.T) {
 }
 
 // An extension's releases (Presenter's) go through the same App: its tarball and top folder named for
-// its package (presenter), its binary and its link in ~/.local/bin for its program (meko_presenter).
+// its package (presenter), its binary and its link in ~/.local/bin for its program (me_presenter).
 func TestNamedAppStagesAnExtensionsRelease(t *testing.T) {
 	const next = "0.20261024.0"
 	goos, arch := Platform()
@@ -353,7 +353,7 @@ func TestNamedAppStagesAnExtensionsRelease(t *testing.T) {
 	if want := "presenter-" + next + "-" + goos + "-" + arch + ".tar.gz"; name != want {
 		t.Fatalf("PackageTarball = %q, want %q", name, want)
 	}
-	tgz := tarballOf(t, "presenter", "meko_presenter", next)
+	tgz := tarballOf(t, "presenter", "me_presenter", next)
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -386,23 +386,94 @@ func TestNamedAppStagesAnExtensionsRelease(t *testing.T) {
 	if _, _, ok := PickPackage(rels, []string{"presenter-v"}, "presenter", goos, arch, map[string]bool{next: true}); ok {
 		t.Error("a bad version was picked")
 	}
-	a := App{Root: filepath.Join(t.TempDir(), "app"), Name: "meko_presenter", Package: "presenter"}
+	a := App{Root: filepath.Join(t.TempDir(), "app"), Name: "me_presenter", Package: "presenter"}
 	if err = a.Stage(context.Background(), c, r, v); err != nil {
 		t.Fatal(err)
 	}
 	if err = a.Repoint(v); err != nil {
 		t.Fatal(err)
 	}
-	if a.Exe(v) != filepath.Join(a.Root, v, "bin", "meko_presenter") {
+	if a.Exe(v) != filepath.Join(a.Root, v, "bin", "me_presenter") {
 		t.Errorf("Exe = %s", a.Exe(v))
 	}
 	home := t.TempDir()
 	link, err := a.LinkCommand(home)
-	if err != nil || link != filepath.Join(home, ".local", "bin", "meko_presenter") {
+	if err != nil || link != filepath.Join(home, ".local", "bin", "me_presenter") {
 		t.Fatalf("link %q %v", link, err)
 	}
 	if got, ver, ok := Of(link); !ok || ver != next || got.Root != realPath(t, a.Root) {
 		t.Errorf("Of(link) = %v %q %v", got, ver, ok)
+	}
+}
+
+// A release from before its program's rename (only bin/me_presenter's old name, meko_presenter) gets the
+// new name as a link when it's unpacked, and a version already installed gets it when app/current is
+// pointed at it, or when a failed update rolls back to it: Exe, CurrentExe and the link in
+// ~/.local/bin run it whichever version is current.
+func TestAppAdoptsAReleaseFromBeforeItsRename(t *testing.T) {
+	const old, older = "0.20261024.0", "0.20261023.0"
+	a := App{Root: filepath.Join(t.TempDir(), "app"), Name: "me_presenter", OldNames: []string{"meko_presenter"},
+		Package: "presenter", Private: true}
+	if err := os.MkdirAll(a.Root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(t.TempDir(), "x.tar.gz")
+	if err := os.WriteFile(f, tarballOf(t, "presenter", "meko_presenter", old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Unpack(f, old); err != nil {
+		t.Fatal(err)
+	}
+	if target, err := os.Readlink(a.Exe(old)); err != nil || target != "meko_presenter" {
+		t.Errorf("unpacked: bin/me_presenter -> %q (%v)", target, err)
+	}
+	// Unpacked by a Meko from before the rename: only the old name.
+	bin := filepath.Join(a.Dir(older), "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "meko_presenter"), []byte("#!/bin/sh\n"), 0o700); err != nil { //nolint:gosec // G306: a test's program
+		t.Fatal(err)
+	}
+	if err := a.Repoint(older); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(a.CurrentExe()); err != nil {
+		t.Errorf("app/current/bin/me_presenter: %v", err)
+	}
+	// Adopting again changes nothing, and a version with neither name is left alone.
+	if err := a.AdoptAll(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(a.Dir("0.20261022.0"), "bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Adopt("0.20261022.0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(a.Exe("0.20261022.0")); !os.IsNotExist(err) {
+		t.Errorf("a version with no program got a link: %v", err)
+	}
+	// An update from a version nothing has adopted yet (Meko's start hasn't run since the rename) to
+	// one that keeps failing still rolls back to it: Started adopts the version it returns to.
+	const unadopted = "0.20261021.0"
+	ubin := filepath.Join(a.Dir(unadopted), "bin")
+	if err := os.MkdirAll(ubin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ubin, "meko_presenter"), []byte("#!/bin/sh\n"), 0o700); err != nil { //nolint:gosec // G306: a test's program
+		t.Fatal(err)
+	}
+	if err := a.Switch(unadopted, old, 4); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < MaxFailedStarts; i++ {
+		if p, err := a.Started(old); err != nil || p != nil {
+			t.Fatalf("start %d: rollback %v, %v", i+1, p, err)
+		}
+	}
+	if p, err := a.Started(old); err != nil || p == nil || p.From != unadopted {
+		t.Fatalf("no rollback to the version from before the rename: %+v, %v", p, err)
 	}
 }
 
@@ -411,21 +482,21 @@ func TestNamedAppStagesAnExtensionsRelease(t *testing.T) {
 func TestPrivateAppUnpacksOwnerOnly(t *testing.T) {
 	const v = "0.20261024.0"
 	f := filepath.Join(t.TempDir(), "x.tar.gz")
-	if err := os.WriteFile(f, tarballOf(t, "presenter", "meko_presenter", v), 0o600); err != nil {
+	if err := os.WriteFile(f, tarballOf(t, "presenter", "me_presenter", v), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, private := range []bool{true, false} {
-		a := App{Root: filepath.Join(t.TempDir(), "app"), Name: "meko_presenter", Package: "presenter", Private: private}
+		a := App{Root: filepath.Join(t.TempDir(), "app"), Name: "me_presenter", Package: "presenter", Private: private}
 		if err := os.MkdirAll(a.Root, 0o700); err != nil {
 			t.Fatal(err)
 		}
 		if err := a.Unpack(f, v); err != nil {
 			t.Fatal(err)
 		}
-		want := map[string]os.FileMode{"bin": 0o755, "bin/meko_presenter": 0o755, "VERSION": 0o644,
+		want := map[string]os.FileMode{"bin": 0o755, "bin/me_presenter": 0o755, "VERSION": 0o644,
 			"memory_engine/dist/main.js": 0o644}
 		if private {
-			want = map[string]os.FileMode{"bin": 0o700, "bin/meko_presenter": 0o700, "VERSION": 0o600,
+			want = map[string]os.FileMode{"bin": 0o700, "bin/me_presenter": 0o700, "VERSION": 0o600,
 				"memory_engine/dist/main.js": 0o600}
 		}
 		for p, mode := range want {

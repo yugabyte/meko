@@ -21,19 +21,23 @@ import (
 // releases (Presenter's, in <data folder>/extensions/presenter/app). Name is the program, which
 // names its binary (<version>/bin/<name>) and its link in ~/.local/bin; empty is meko. Package
 // names its tarballs (<package>-<version>-<os>-<arch>.tar.gz, one folder <package>-<version>/);
-// empty is Name. Presenter's program is meko_presenter, its package presenter. Private unpacks
+// empty is Name. Presenter's program is me_presenter, its package presenter. OldNames are names the
+// program had before (AgentK's agentk): a version unpacked then has only bin/<old name>, and Adopt
+// gives it bin/<name> too, so app/current/bin/<name> and the links to it resolve whichever version is
+// current. Private unpacks
 // releases owner-only (folders and programs 0700, files 0600), as files in Meko's data folder must
 // be: an extension's app folder is in it, Meko's own isn't. Legacy, when set, is a folder that
 // held update-pending.json and bad-versions before they moved into the app folder (AgentK's home):
 // a record found there is moved in, and its bad versions count too. Checks are commands run on a
 // staged version's binary, after version --json, before it's moved into place (AgentK's selftest).
 type App struct {
-	Root    string
-	Name    string
-	Package string
-	Private bool
-	Legacy  string
-	Checks  [][]string
+	Root     string
+	Name     string
+	OldNames []string
+	Package  string
+	Private  bool
+	Legacy   string
+	Checks   [][]string
 	// Running are files ({"pid", "appDir", "version"}) in which a running process names the version
 	// it runs from (AgentK's run/host.json): Prune keeps that version while the pid is alive, as it
 	// keeps one whose in-use lock is held. A process started before meko _launch existed, or not
@@ -115,8 +119,39 @@ func (a App) Current() string {
 	return filepath.Base(t)
 }
 
+// Adopt gives a version unpacked before the program's rename its new name: bin/<name>, a link to
+// the first bin/<old name> it has. A version that has bin/<name>, or none of the names, is left as
+// it is.
+func (a App) Adopt(version string) error {
+	return adopt(filepath.Join(a.Dir(version), "bin"), a.name(), a.OldNames)
+}
+
+// AdoptAll is Adopt for every installed version.
+func (a App) AdoptAll() error {
+	var errs []error
+	for _, v := range a.Versions() {
+		errs = append(errs, a.Adopt(v))
+	}
+	return errors.Join(errs...)
+}
+
+func adopt(bin, name string, old []string) error {
+	if _, err := os.Lstat(filepath.Join(bin, name)); !errors.Is(err, fs.ErrNotExist) {
+		return nil //nolint:nilerr // there already, or not ours to judge
+	}
+	for _, o := range old {
+		if _, err := os.Stat(filepath.Join(bin, o)); err == nil {
+			return os.Symlink(o, filepath.Join(bin, name))
+		}
+	}
+	return nil
+}
+
 // Repoint points app/current at version, atomically (a new link renamed over the old one).
 func (a App) Repoint(version string) error {
+	if err := a.Adopt(version); err != nil {
+		return err
+	}
 	if _, err := os.Stat(a.Exe(version)); err != nil {
 		return fmt.Errorf("version %s isn't installed in %s: %w", version, a.Root, err)
 	}

@@ -217,8 +217,10 @@ jobs:
           set -eu
           mkdir -p /tmp/smoke
           tar -xzf out/agentk-*.tar.gz -C /tmp/smoke
-          v=$(/tmp/smoke/agentk-*/bin/agentk version)
+          v=$(/tmp/smoke/agentk-*/bin/me_koder version)
           test "$v" = "$VERSION"
+          /tmp/smoke/agentk-*/bin/me_koder selftest
+          # Its name before, which services installed then and older Mekos run.
           /tmp/smoke/agentk-*/bin/agentk selftest
           # The copy under the old name, by the path installs from before the rename to AgentK run.
           tar -xzf out/agent-k-local-*.tar.gz -C /tmp/smoke
@@ -296,8 +298,10 @@ jobs:
           smoke="$RUNNER_TEMP/smoke"
           mkdir -p "$smoke"
           tar -xzf out/agentk-*.tar.gz -C "$smoke"
-          v=$("$smoke"/agentk-*/bin/agentk version)
+          v=$("$smoke"/agentk-*/bin/me_koder version)
           test "$v" = "$VERSION"
+          "$smoke"/agentk-*/bin/me_koder selftest
+          # Its name before, which services installed then and older Mekos run.
           "$smoke"/agentk-*/bin/agentk selftest
           # The copy under the old name, by the path installs from before the rename to AgentK run.
           tar -xzf out/agent-k-local-*.tar.gz -C "$smoke"

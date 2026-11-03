@@ -16,15 +16,18 @@ version=$2
 dir=$(mktemp -d /tmp/pres-smoke.XXXXXX)
 trap '"$bin" stop >/dev/null 2>&1 || true; rm -rf "$dir"' EXIT INT TERM
 tar -xzf "$tarball" -C "$dir"
-bin="$dir/presenter-$version/bin/meko_presenter"
+bin="$dir/presenter-$version/bin/me_presenter"
 MEKO_HOME="$dir/meko"
 export MEKO_HOME
 
 got=$("$bin" version --json)
 [ "$got" = "{\"version\":\"$version\"}" ] || { echo "version --json said $got, not $version" >&2; exit 1; }
+# Its name before, which older Mekos run, still runs it.
+old=$("$dir/presenter-$version/bin/meko_presenter" version --json)
+[ "$old" = "$got" ] || { echo "bin/meko_presenter version --json said $old" >&2; exit 1; }
 
 "$bin" start || { cat "$MEKO_HOME/extensions/presenter/logs/server.log" >&2; exit 1; }
-sock=$("$bin" _handoff --json | "$dir/presenter-$version/node/bin/node" -e 'process.stdin.on("data", (b) => process.stdout.write(JSON.parse(b).socket))')
+sock=$("$bin" _handoff --json | "$dir/presenter-$version/node/bin/me_presenter" -e 'process.stdin.on("data", (b) => process.stdout.write(JSON.parse(b).socket))')
 page=$(curl -fsS --unix-socket "$sock" http://presenter/)
 case $page in
   *'<base href="/ext/presenter/"'*) ;;

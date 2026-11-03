@@ -9,7 +9,7 @@
     "node": ">=22.13"
   },
   "bin": {
-    "agentk": "dist/server/cli.js"
+    "me_koder": "dist/server/cli.js"
   },
   "scripts": {
     "dev": "concurrently -k -n server,web \"npm:dev:server\" \"npm:dev:web\"",

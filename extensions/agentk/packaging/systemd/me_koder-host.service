@@ -11,7 +11,8 @@ Type=simple
 Environment=AK_HOME=@AK_HOME@
 # Runs the version that was current when it started, and keeps running across updates:
 # restarting it ends every Claude session (the server resumes them).
-ExecStart=@AK_HOME@/app/current/bin/agentk host
+# service/me_koder in the home execs app/current/bin/me_koder (bin/agentk in a release from before).
+ExecStart=@AK_HOME@/service/me_koder host
 Restart=always
 RestartSec=2
 # 75: another host already runs on this home; restarting won't help.

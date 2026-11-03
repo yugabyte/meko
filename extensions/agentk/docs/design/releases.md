@@ -37,11 +37,11 @@ Part of the [AgentK design](../design.md).
   `linux-arm64`, and on a `macos-15` runner for `darwin-arm64`. Each bundles the Node 22 runtime,
   node-pty (built from source: gcc-toolset-13 on Linux, Xcode's clang on macOS) and the web assets.
   Each is published twice: as `agentk-<version>-<platform>-<arch>.tar.gz` (in `agentk-<version>/`,
-  with `bin/agentk`), and as `agent-k-local-<version>-…` (in `agent-k-local-<version>/`), the name
+  with `bin/me_koder`), and as `agent-k-local-<version>-…` (in `agent-k-local-<version>/`), the name
   and layout that the updaters and installers from before the rename to AgentK look for. An
   updater from then skips any release without its name, so without the second copy those installs
-  would never update again. Both hold `bin/agent-k-local`, a link to `bin/agentk`, which the
-  services installed then start. Meko reads only the new name. The copy goes a week after the first release that has it (#238): an install still on a release from before the rename by then needs a reinstall.
+  would never update again. Both hold `bin/agentk` and `bin/agent-k-local`, links to
+  `bin/me_koder`, which the services installed then start. Meko reads only the new name. The copy goes a week after the first release that has it (#238): an install still on a release from before the rename by then needs a reinstall.
   Meko picks the tarball for its platform, and skips releases with no build for it. Releases
   since macOS support always include the macOS build: publishing waits for it. A hand-run rebuild
   takes only tags from after the move to `extensions/agentk`. Each release also includes
@@ -71,9 +71,11 @@ The tarball (`agentk-<version>-<linux|darwin>-<arch>.tar.gz`):
 
 ```
 agentk-<version>/
-  bin/agentk               launcher (packaging/agentk): hands serve and host to Meko's launcher (meko _launch), which runs an update's probation and rollback
+  bin/me_koder             launcher (packaging/me_koder): hands serve and host to Meko's launcher (meko _launch), which runs an update's probation and rollback
+  bin/agentk               a link to it, by its name before, which services installed then and older Mekos run
   bin/agent-k-local        a link to it, by its name before the rename to AgentK
-  node/bin/node            bundled Node runtime
+  node/bin/me_koder        bundled Node runtime, so AgentK's processes are me_koder, not node
+  node/bin/node            a link to it, which the MCP configs AgentK writes for sessions name (tools.ts)
   lib/                     package.json, dist/, node_modules/, packaging/{systemd,launchd}/, scripts/deps.sh
   VERSION
   CALL_HOME_URL            the usage stats collector (only when the repo variable is set)
@@ -86,15 +88,15 @@ agentk-<version>/
 # The repo's one-line install (curl -fsSL https://mekodata.ai/install.sh | sh, which redirects to
 # its latest release's install.sh, Meko's) installs Meko. Then:
 meko extension install agentk                      # or Install on Meko's Extensions page
-meko extension install agentk -- --agent kiro      # options after -- go to `agentk install`
+meko extension install agentk -- --agent kiro      # options after -- go to `me_koder install`
 
 # what it does (Meko's extension install, backend/docs/install.md)
 #  0. downloads the newest agentk-<version>-<platform>-<arch>.tar.gz and SHA256SUMS (with
 #     GITHUB_TOKEN, else gh's token, else no token), checks it, unpacks it owner-only into
-#     <Meko's data folder>/extensions/agentk/app/<version>, checks that it runs (`agentk version
-#     --json`, `agentk selftest`), points app/current at it and links ~/.local/bin/agentk; an
+#     <Meko's data folder>/extensions/agentk/app/<version>, checks that it runs (`me_koder version
+#     --json`, `me_koder selftest`), points app/current at it and links ~/.local/bin/me_koder; an
 #     install AgentK already has (one still in ~/.agent-k-local too) is set up again in place
-# then `agentk install --meko-url … --meko-key …`, on the terminal it was started from:
+# then `me_koder install --meko-url … --meko-key …`, on the terminal it was started from:
 #  1. scripts/deps.sh (lib/scripts/deps.sh in a release): checks for git, curl, gh and a coding
 #     agent (Claude Code, OpenCode or Kiro CLI; one is enough); offers to install whatever is
 #     missing (it shows the commands and asks first): brew on macOS, the package manager with sudo
@@ -156,8 +158,8 @@ sees of it:
    it saves its config.
 2. **The update.** `POST /api/v1/extensions/agentk/update` starts Meko's job: it downloads the
    tarball and checks it against `SHA256SUMS`, unpacks it next to the current version, checks that
-   it runs (`agentk version --json`, `agentk selftest`), writes its record
-   (`app/update-pending.json`) and points `app/current` at it, then runs `agentk restart`. That
+   it runs (`me_koder version --json`, `me_koder selftest`), writes its record
+   (`app/update-pending.json`) and points `app/current` at it, then runs `me_koder restart`. That
    restarts only the server's service, and waits up to 100 s for the server to answer as the
    version `app/current` names. Sessions keep running. The job lives in Meko, so it outlasts
    AgentK's restart; the page follows it (every 2 s while it runs) and shows the Installing banner.
@@ -170,7 +172,7 @@ sees of it:
    up. Closing, the server gives each browser's socket 1 second to answer its close and then
    drops it, so a page that can't answer (a sleeping phone or laptop) doesn't hold the restart for
    the 30 seconds `ws` would wait.
-4. **Probation.** The launcher (`packaging/agentk`) hands `serve` and `host` to Meko's launcher
+4. **Probation.** The launcher (`packaging/me_koder`) hands `serve` and `host` to Meko's launcher
    (`meko _launch agentk <its own path> …`), which runs it again with `MEKO_LAUNCHED` set. For
    `serve`, Meko counts each start of a version on probation, and if it fails to come up three
    times in a row (the service manager restarts it) before it has run 5 minutes, points

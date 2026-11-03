@@ -1479,7 +1479,7 @@ export class SessionManager {
    * terminal's dialog does (`/mod/ask/done`); and the design's questions from its
    * design_questions tool (`/mod/questions`); Claude's Meko calls starting and ending
    * (`/mod/meko`), for the session's dot; and a turn you interrupted (`/mod/turn`), which fires
-   * no `Stop` hook. Also `/tools`: AgentK's session tools, called by `agentk mcp` in a session of any harness.
+   * no `Stop` hook. Also `/tools`: AgentK's session tools, called by `me_koder mcp` in a session of any harness.
    */
   async onMod(token: string, route: string, body: Record<string, unknown>, signal: AbortSignal): Promise<ModReply> {
     const row = this.byToken(token);
@@ -1547,7 +1547,7 @@ export class SessionManager {
         }
         return { status: 204 };
       case '/tools':
-        // AgentK's session tools, from `agentk mcp` in the session (any harness's).
+        // AgentK's session tools, from `me_koder mcp` in the session (any harness's).
         return this.core.tools.call(row, body);
       case '/mod/learn/start':
         // /agentk_learn in the terminal: the answer is the command's output there.
