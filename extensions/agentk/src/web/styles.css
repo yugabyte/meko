@@ -626,6 +626,16 @@ textarea.input {
 .dot.idle {
   border: 2px solid var(--idle);
 }
+/* AgentK stopped the agent for sitting idle: a thin grey ring with a pause sign (‖) inside, still.
+   Not dashed: a broken ring at this size reads as a spinner that has frozen. The bars are placed
+   from the border edge, so their offsets are on the dot's 10px box. */
+.dot.stopped {
+  border: 1.5px solid var(--idle);
+  background:
+    linear-gradient(var(--idle), var(--idle)) 3px 3px / 1.5px 4px no-repeat,
+    linear-gradient(var(--idle), var(--idle)) 5.5px 3px / 1.5px 4px no-repeat;
+  background-origin: border-box;
+}
 .dot.exited {
   background: var(--bad);
   border-radius: 2px;

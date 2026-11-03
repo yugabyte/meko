@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { LEARN_MONTHS_DEFAULT, LEARN_MONTHS_MAX, LEARN_TEXT_MAX, MAX_PASTE_BYTES, MAX_START_IMAGES, START_EXAMPLES, type CreateSessionRequest, type HarnessStatus, type LearnScope, type Project, type RepoInfo, type ReviewablePr, type ReviewablePrs, type Session, type TaskPr } from '../../shared/types';
-import { HARNESS_CAPS, noAgentText, notConnectedText, onlyMekoBlocks, type HarnessId } from '../../shared/harnesses';
+import { checkModel, HARNESS_CAPS, modelLabel, noAgentText, notConnectedText, onlyMekoBlocks, type HarnessId, type ModelChoice } from '../../shared/harnesses';
 import { expandBranchPrefix } from '../../shared/branches';
 import { api, errorMessage } from '../api';
 import { pastedImages } from '../clipboard';
@@ -27,6 +27,12 @@ const WORK_ON: { value: WorkOn; label: string }[] = [
   { value: 'branch', label: 'Existing branch' },
   { value: 'pr', label: 'Pull request' },
 ];
+
+/** The Model picker's Other…: never a model name (it starts with a space). */
+const OTHER_MODEL = ' other';
+
+/** What Other…'s field suggests for each agent. */
+const MODEL_PLACEHOLDER: Record<HarnessId, string> = { claude: 'claude-opus-5-5', opencode: 'provider/model', kiro: 'model id' };
 
 export function NewSessionDialog({
   project,
@@ -123,6 +129,30 @@ export function NewSessionDialog({
   const harness = (agents.find((h) => h.id === chosen) ?? agents.find((h) => h.isDefault) ?? agents[0])?.id ?? null;
   const agentCaps = harness ? HARNESS_CAPS[harness] : null;
   const pickAgent = agents.length > 1;
+  // The model: Default (the agent's own), one on its list, or one typed under Other…; a retry keeps
+  // the one it asked for. Another agent starts on Default again.
+  const [modelPick, setModelPick] = useState(initial?.model ?? '');
+  const [otherModel, setOtherModel] = useState('');
+  const modelsOf = useRef(harness);
+  useEffect(() => {
+    if (modelsOf.current === harness) return;
+    const was = modelsOf.current;
+    modelsOf.current = harness;
+    // Not when the agents first arrive (none available yet, just after a start): a retry keeps its model.
+    if (!was) return;
+    setModelPick('');
+    setOtherModel('');
+  }, [harness]);
+  // The lists OpenCode and Kiro give (HarnessCaps.models `cli`), read once Advanced shows the field.
+  const [cliModels, setCliModels] = useState<Partial<Record<HarnessId, string[]>>>({});
+  const fixedModels = agentCaps?.models ?? [];
+  const cliList = harness && fixedModels === 'cli' ? cliModels[harness] : [];
+  const modelChoices: ModelChoice[] = fixedModels === 'cli' ? (cliList ?? []).map((id) => ({ id, label: id })) : [...fixedModels];
+  // One a retry asked for that isn't listed (yet) is still offered.
+  if (modelPick && modelPick !== OTHER_MODEL && !modelChoices.some((m) => m.id === modelPick)) modelChoices.push({ id: modelPick, label: modelPick });
+  const model = modelPick === OTHER_MODEL ? otherModel.trim() : modelPick;
+  const modelError = modelPick === OTHER_MODEL && model ? checkModel(model) : null;
+  const modelOk = modelPick !== OTHER_MODEL || (!!model && !modelError);
   const none = noAgent(harnesses);
   // Agents only Meko keeps off: not connected to it (Meko's list of agents). Said under the agent in
   // Advanced, or at the top when it's the default agent, which the dialog would otherwise start on.
@@ -339,7 +369,7 @@ export function NewSessionDialog({
     ? !!picked?.localRepo && !busy
     : learn
       ? !!about.trim() && monthsOk && !busy && !!branches
-      : !!name.trim() && !busy && !!branches && ready);
+      : !!name.trim() && !busy && !!branches && ready) && modelOk;
   const chooseRepo = (path: string) => {
     setRepoPath(path);
     // Another repo has other PRs.
@@ -353,6 +383,16 @@ export function NewSessionDialog({
     : workOn === 'branch'
       ? `on ${existing.trim() || 'an existing branch'}`
       : `from ${baseBranch || 'its default branch'} · ${branch.trim() || autoBranch}`;
+
+  useEffect(() => {
+    if (!advanced || !harness || HARNESS_CAPS[harness].models !== 'cli' || cliModels[harness]) return;
+    let live = true;
+    const done = (models: string[]) => live && setCliModels((m) => ({ ...m, [harness]: models }));
+    api.harnessModels(harness).then((r) => done(r.models), () => done([]));
+    return () => {
+      live = false;
+    };
+  }, [advanced, harness, cliModels]);
 
   const create = async () => {
     setError(null);
@@ -368,6 +408,7 @@ export function NewSessionDialog({
           ? {
             name: sessionName,
             harness: harness ?? undefined,
+            model: model || undefined,
             kind: 'task',
             learn: { about: about.trim(), where: where.trim(), months: monthsN },
             baseBranch,
@@ -377,6 +418,7 @@ export function NewSessionDialog({
             ? {
               name: name.trim(),
               harness: harness ?? undefined,
+              model: model || undefined,
               prompt: prompt.trim() || undefined,
               kind: 'review-pr',
               repoPath: inProjectRepo ? undefined : repoPath,
@@ -387,6 +429,7 @@ export function NewSessionDialog({
             : {
               name: name.trim(),
               harness: harness ?? undefined,
+              model: model || undefined,
               prompt: prompt.trim() || undefined,
               baseBranch: workOn === 'pr' ? undefined : baseBranch,
               kind: 'task',
@@ -634,6 +677,7 @@ export function NewSessionDialog({
             {!advanced && (
               <span className="advanced-summary mono">
                 {pickAgent && agentCaps && `${agentCaps.label} · `}
+                {harness && model && `${modelLabel(harness, model)} · `}
                 {review
                   ? `${repoFolder(repoPath)}${picked ? ` · PR #${picked.number} · ${reviewBranch}` : ''}`
                   : `${repoFolder(repoPath)} · ${workSummary}`}
@@ -660,6 +704,44 @@ export function NewSessionDialog({
                     </span>
                   )}
                 </div>
+              )}
+              {harness && agentCaps && (
+                <Field
+                  label="Model"
+                  hint={
+                    cliList === undefined
+                      ? <Busy label={`Reading ${agentCaps.label}'s models`} />
+                      : fixedModels === 'cli' && !cliList.length
+                        ? `${agentCaps.label} didn't list its models: pick Other… to name one.`
+                        : undefined
+                  }
+                >
+                  <select id="ns-model" className="input" value={modelPick} onChange={(e) => setModelPick(e.target.value)}>
+                    <option value="">Default ({agentCaps.label}&apos;s own)</option>
+                    {modelChoices.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))}
+                    <option value={OTHER_MODEL}>Other…</option>
+                  </select>
+                </Field>
+              )}
+              {harness && modelPick === OTHER_MODEL && (
+                <Field label="Model name" hint={modelError ?? `Passed to ${agentCaps?.label} as it is.`}>
+                  <input
+                    id="ns-model-other"
+                    className="input mono"
+                    value={otherModel}
+                    onChange={(e) => setOtherModel(e.target.value)}
+                    placeholder={MODEL_PLACEHOLDER[harness]}
+                    autoFocus={!touch}
+                    autoComplete="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    aria-invalid={!!modelError}
+                  />
+                </Field>
               )}
               {!defaultOff && notConnectedNote}
               <Field

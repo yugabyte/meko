@@ -17,8 +17,9 @@ the stages Explore → Design → Code → Review & PR → Merge & Close. Users 
 ## How to use them
 
 1. **Call `list` first.** It gives the open projects (id, name, repo folder, `github` owner/name)
-   and their running sessions (id, name, stage, status, branch, PR). Your own session is marked
-   `self`. Use only the ids it gives; never guess one.
+   and their running sessions (id, name, stage, status, branch, PR), and the agents new sessions
+   can start on (`agents`: the default marked, with the models each takes). Your own session is
+   marked `self`. Use only the ids it gives; never guess one.
 2. **Work out what the user means.**
    - A project: the one they name, else this session's project.
    - A session: match the name they give loosely (any case, part of the name, the PR number). When
@@ -40,6 +41,12 @@ the stages Explore → Design → Code → Review & PR → Merge & Close. Users 
      `"rounds": 1` for "review again after the fixes", `"strategy": "sirius-1.0"` for the quick one,
      `"strategy": "off"` for no review, `"check": false` for "fix the findings without asking me". "Start a code session with 3 deep reviews and run it to
      merge" is `{ name, prompt, "stage": "code", "autoRun": true, "review": { "depth": 3 } }`.
+   - Add `"agent"` (`claude`, `opencode` or `kiro`) and `"model"` only when the user names them
+     ("start it on Kiro", "use opus for this"). `list` gives the agents sessions can start on, the
+     default marked, and the model names each takes: use one of those, or the user's own words
+     for a model it doesn't list. With a model but no agent, the session runs on the default
+     agent, so add the agent too when the model is another agent's. "Start a session on opus to
+     fix the login bug" is `{ name, prompt, "agent": "claude", "model": "opus" }`.
    - `review_report`, `review_score` and `review_outcome` belong to AgentK's code review: use
      them only when an AgentK prompt or a review step's file tells you to.
    - `move_session` moves one session to `explore`, `design`, `code` or `review` (Review & PR).

@@ -623,8 +623,17 @@ function dropV38(db: ReturnType<typeof openDb>) {
   dropSessionColumns(db, 'untrusted');
 }
 
-/** Undoes migration 48 (workshops, and first looks), for tests that rewind the schema. */
+/** Undoes migration 48 (agents stopped for sitting idle), for tests that rewind the schema. */
 function dropV48(db: ReturnType<typeof openDb>) {
+  db.exec('ALTER TABLE sessions DROP COLUMN idle_stopped_at');
+}
+
+function dropV49(db: ReturnType<typeof openDb>) {
+  db.exec('ALTER TABLE sessions DROP COLUMN model');
+}
+
+/** Undoes migration 50 (workshops, and first looks), for tests that rewind the schema. */
+function dropV50(db: ReturnType<typeof openDb>) {
   db.exec('ALTER TABLE projects DROP COLUMN workshop; ALTER TABLE code_reviews DROP COLUMN hand_off');
 }
 
@@ -789,12 +798,12 @@ function dropV12(db: ReturnType<typeof openDb>) {
 const V11_COLUMNS = ['kind'];
 
 /**
- * Undoes migrations 47 down to `oldest`, newest first, for tests that rewind the schema (29 and 47
+ * Undoes migrations 50 down to `oldest`, newest first, for tests that rewind the schema (29 and 47
  * changed no schema, and 44's and 46's columns go with 43's table).
  */
 function undoMigrations(db: ReturnType<typeof openDb>, oldest: number) {
-  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35, dropV36, dropV37, dropV38, dropV39, dropV40, dropV41, dropV42, dropV43, () => {}, dropV45, () => {}, () => {}, dropV48];
-  for (let v = 48; v >= oldest; v--) undo[v - 12](db);
+  const undo = [dropV12, dropV13, dropV14, dropV15, dropV16, dropV17, dropV18, dropV19, dropV20, dropV21, dropV22, dropV23, dropV24, dropV25, dropV26, dropV27, dropV28, () => {}, dropV30, dropV31, dropV32, dropV33, dropV34, dropV35, dropV36, dropV37, dropV38, dropV39, dropV40, dropV41, dropV42, dropV43, () => {}, dropV45, () => {}, () => {}, dropV48, dropV49, dropV50];
+  for (let v = 50; v >= oldest; v--) undo[v - 12](db);
 }
 
 function dropSessionColumns(db: ReturnType<typeof openDb>, ...cols: string[]) {

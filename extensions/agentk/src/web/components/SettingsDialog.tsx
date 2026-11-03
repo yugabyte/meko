@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type MutableRefObject, type ReactNode } from 'react';
 import {
-  WORK_SYNC_MINUTES_MAX, type HarnessMekoState, type HarnessStatus, type MekoKeySource, type MekoStatus, type Settings, type SettingsUpdate, type UpdateStatus,
+  MAX_IDLE_STOP_HOURS, WORK_SYNC_MINUTES_MAX, type HarnessMekoState, type HarnessStatus, type MekoKeySource, type MekoStatus, type Settings, type SettingsUpdate, type UpdateStatus,
 } from '../../shared/types';
 import { HARNESS_CAPS, HARNESS_IDS, onlyMekoBlocks, type HarnessId } from '../../shared/harnesses';
 import { MEKO_ACCOUNT_PATH, MEKO_CLOUD_PATH } from '../../shared/mekourls';
@@ -361,7 +361,7 @@ export function CodeReviewSettings({ s, change }: { s: Settings; change: (patch:
 }
 
 /** The fields General saves when they lose focus. */
-type TypedField = 'reposRoots' | 'reposDepth' | 'idleWorktreesPerRepo' | 'idleWorktreeDays' | 'cloneInto' | 'serverName';
+type TypedField = 'reposRoots' | 'reposDepth' | 'idleWorktreesPerRepo' | 'idleWorktreeDays' | 'idleStopHours' | 'cloneInto' | 'serverName';
 
 function GeneralTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObject<(() => void) | null> }) {
   const { s, load, change } = auto;
@@ -371,6 +371,7 @@ function GeneralTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObje
   const [depth, setDepth] = useState('');
   const [idle, setIdle] = useState('');
   const [idleDays, setIdleDays] = useState('');
+  const [stopHours, setStopHours] = useState('');
   const [cloneInto, setCloneInto] = useState('');
   const [serverName, setServerName] = useState('');
   // The fields above hold what was loaded: until then there's nothing typed to save.
@@ -385,6 +386,7 @@ function GeneralTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObje
         setDepth(String(x.reposDepth));
         setIdle(String(x.idleWorktreesPerRepo));
         setIdleDays(String(x.idleWorktreeDays));
+        setStopHours(String(x.idleStopHours));
         setCloneInto(x.cloneInto);
         setServerName(x.serverName);
       })
@@ -404,6 +406,8 @@ function GeneralTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObje
     if (cap !== s.idleWorktreesPerRepo) patch.idleWorktreesPerRepo = cap;
     const days = clampOr(idleDays, 365, s.idleWorktreeDays);
     if (days !== s.idleWorktreeDays) patch.idleWorktreeDays = days;
+    const hours = clampOr(stopHours, MAX_IDLE_STOP_HOURS, s.idleStopHours);
+    if (hours !== s.idleStopHours) patch.idleStopHours = hours;
     if (cloneInto.trim() && cloneInto.trim() !== s.cloneInto) patch.cloneInto = cloneInto.trim();
     if (serverName.trim() !== s.serverName) patch.serverName = serverName.trim();
     return patch;
@@ -538,6 +542,26 @@ function GeneralTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObje
           />
         </Field>
       </div>
+      <Field
+        label="Stop idle agents after (hours)"
+        info={{
+          for: 'set-idle-stop-hours',
+          text:
+            'A session’s agent idle this long is stopped to free its memory. The session, its worktree and its conversation stay, ' +
+            'and the agent starts again when you resume it, type in its terminal, or AgentK needs it. 0 keeps agents running.',
+        }}
+      >
+        <input
+          id="set-idle-stop-hours"
+          className="input"
+          type="number"
+          min={0}
+          max={MAX_IDLE_STOP_HOURS}
+          value={stopHours}
+          onChange={(e) => setStopHours(e.target.value)}
+          {...saveOn('idleStopHours', () => setStopHours(String(clampOr(stopHours, MAX_IDLE_STOP_HOURS, s.idleStopHours))))}
+        />
+      </Field>
       <InfoCheck
         id="set-resolve-conflicts"
         label="Resolve merge conflicts on PRs"

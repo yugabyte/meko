@@ -396,7 +396,7 @@ export class CodeReviews {
     if (this.core.lifecycle.codeReviewPending(task.id)) {
       throw new HttpError(409, "AgentK hasn't taken the last code review's fixes yet. Run it again once it has.");
     }
-    if (describe) this.core.lifecycle.checkPromptable(task);
+    if (describe) this.core.lifecycle.checkPromptable(await this.core.sessions.awake(task, 'for the code review'));
     const settings = this.settingsFor(task);
     // A stopped review it replaces may hold the Open PR's instructions and a move's `moved` line: they go on with this one.
     const held = task.stage === 'code' && last && holds(last) && !last.finished_at ? last : undefined;

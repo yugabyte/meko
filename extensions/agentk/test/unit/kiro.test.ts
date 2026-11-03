@@ -2,7 +2,7 @@ import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { agentkHooks, kiroArgs, kiroMekoTool, normalizeKiro } from '../../src/server/harness/kiro.js';
-import { agentkAgent, findKiroSession, parseKiroMekoCalls, parseKiroPlan, parseKiroTurns, readKiroAgent, readKiroRun, writeKiroAgent } from '../../src/server/kiro.js';
+import { agentkAgent, findKiroSession, parseKiroMekoCalls, parseKiroModels, parseKiroPlan, parseKiroTurns, readKiroAgent, readKiroRun, writeKiroAgent } from '../../src/server/kiro.js';
 import { kiroMekoGaps, kiroMekoServerNames } from '../../src/server/mekokiro.js';
 import { getPaths } from '../../src/server/paths.js';
 import { tempDir } from '../helpers.js';
@@ -57,6 +57,7 @@ describe("a Kiro session's command line", () => {
     ["a resume of the session's own conversation, by id", { conversation: 'k-1', trustTools: false, prompt: null }, ['--resume-id', 'k-1']],
     // Never --resume (the newest in the folder can be an earlier session's) nor --trust-all-tools (Kiro asks on screen, "No, exit" first).
     ['tools trusted for this run only ([kiro] trust_tools)', { conversation: 'k-1', trustTools: true, prompt: 'continue' }, ['--trust-tools=*', '--resume-id', 'k-1', 'continue']],
+    ["the session's model, at a resume too", { conversation: 'k-1', trustTools: false, prompt: null, model: 'claude-sonnet-4.5' }, ['--model', 'claude-sonnet-4.5', '--resume-id', 'k-1']],
   ])('%s', (_, o, rest) => {
     expect(kiroArgs(o)).toEqual(['chat', '--agent', 'agentk', ...rest]);
   });
@@ -212,5 +213,17 @@ describe("Kiro's Meko setup", () => {
   it("says so only when the agent Kiro sessions are built from doesn't load Kiro's MCP config (its MCP server is Meko's to report)", () => {
     expect(kiroMekoGaps(true)).toEqual([]);
     expect(kiroMekoGaps(false)).toEqual([expect.stringMatching(/^Kiro's default agent doesn't load your MCP servers/)]);
+  });
+});
+
+describe("Kiro's model list", () => {
+  it.each([
+    ['its ModelListResult, in order', JSON.stringify({ models: [{ model_name: 'Auto', model_id: 'auto' }, { model_id: 'claude-sonnet-4.5' }, { model_id: 'auto' }], default_model: 'auto' }),
+      ['auto', 'claude-sonnet-4.5']],
+    ['plain ids', JSON.stringify(['auto', 'claude-haiku-4.5']), ['auto', 'claude-haiku-4.5']],
+    ['anything else', 'Not logged in', []],
+    ['a list of something else', JSON.stringify({ models: [1, null, {}] }), []],
+  ])('%s', (_, out, ids) => {
+    expect(parseKiroModels(out)).toEqual(ids);
   });
 });

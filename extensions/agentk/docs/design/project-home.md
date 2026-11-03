@@ -70,3 +70,8 @@ datapacks stay), **New session** or **Keep it open**. It asks only on the projec
 with no other dialog open, and in a visible page, so a background tab stays quiet; loading or
 switching to a project that has no sessions doesn't ask. It closes by itself when the project is
 closed or gets an open session elsewhere.
+
+The project's session view with no open sessions offers **New session** and, beside it in red,
+**Close project**, which closes it at once: with no sessions there's nothing to stop. It shows only
+while the project has no open sessions, code reviews included, so a render whose route names no
+session before the app opens one of the project's can't close it unasked.

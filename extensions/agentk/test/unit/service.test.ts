@@ -26,13 +26,13 @@ const ok = { ok: true, out: '', err: '' };
 const fail = (err: string) => ({ ok: false, out: '', err });
 const files = { server: 'server file\n', host: 'host file\n' };
 
-const PRINT_RUNNING = `gui/501/com.yugabyte.agentk = {
+const PRINT_RUNNING = `gui/501/com.yugabyte.me_koder = {
 \tactive count = 1
-\tpath = /Users/me/Library/LaunchAgents/com.yugabyte.agentk.plist
+\tpath = /Users/me/Library/LaunchAgents/com.yugabyte.me_koder.plist
 \ttype = LaunchAgent
 \tstate = running
 
-\tprogram = /Users/me/.agent-k-local/app/current/bin/agentk
+\tprogram = /Users/me/.agent-k-local/service/me_koder
 \tendpoints = {
 \t\tstate = active
 \t}
@@ -68,11 +68,11 @@ describe('service templates', () => {
       expect(text).toContain('<key>KeepAlive</key>\n  <true/>');
       expect(text).toContain('<string>en_US.UTF-8</string>');
     }
-    expect(out.host).toContain('<string>com.yugabyte.agentk.host</string>');
+    expect(out.host).toContain('<string>com.yugabyte.me_koder.host</string>');
     // The launcher, which updates never replace, so macOS doesn't announce the jobs again after each one.
-    expect(out.host).toMatch(/<string>\/Users\/me\/.agent-k-local\/service\/me_agentk<\/string>\s*<string>host<\/string>/);
-    expect(out.server).toMatch(/<string>\/Users\/me\/.agent-k-local\/service\/me_agentk<\/string>\s*<string>serve<\/string>/);
-    for (const text of Object.values(out)) expect(text).not.toContain('app/current/bin/agentk</string>');
+    expect(out.host).toMatch(/<string>\/Users\/me\/.agent-k-local\/service\/me_koder<\/string>\s*<string>host<\/string>/);
+    expect(out.server).toMatch(/<string>\/Users\/me\/.agent-k-local\/service\/me_koder<\/string>\s*<string>serve<\/string>/);
+    for (const text of Object.values(out)) expect(text).not.toMatch(/app\/current\/bin\/[\w-]+<\/string>/);
     // The server never starts a host of its own under its job, so nothing it starts must outlive it.
     expect(out.server).not.toContain('AbandonProcessGroup');
   });
@@ -80,9 +80,10 @@ describe('service templates', () => {
   it('renders the systemd units: the session host, and the server that wants it, run only on this host and not restarted when busy', () => {
     const svc = new SystemdServices(() => ok, {}, '/home/me');
     const out = renderServiceFiles(svc, { AK_HOME: '/home/me/.agent-k-local', HOST: 'box' });
-    expect(out.host).toContain('ExecStart=/home/me/.agent-k-local/app/current/bin/agentk host\n');
-    expect(out.server).toContain('ExecStart=/home/me/.agent-k-local/app/current/bin/agentk serve');
-    expect(out.server).toContain('Wants=agentk-host.service\n');
+    // The launcher, as on macOS: it runs a release from before the program was me_koder too.
+    expect(out.host).toContain('ExecStart=/home/me/.agent-k-local/service/me_koder host\n');
+    expect(out.server).toContain('ExecStart=/home/me/.agent-k-local/service/me_koder serve\n');
+    expect(out.server).toContain('Wants=me_koder-host.service\n');
     expect(out.server).not.toContain('tmux');
     // A home shared over NFS: every other host that mounts it would start its own server on it.
     for (const text of Object.values(out)) {
@@ -152,13 +153,13 @@ describe('SystemdServices', () => {
   it('writes both units, starts the host without restarting it, and restarts the server', () => {
     const { svc, calls } = make();
     svc.install(files);
-    expect(readFileSync(join(dir, 'systemd', 'user', 'agentk-host.service'), 'utf8')).toBe(files.host);
+    expect(readFileSync(join(dir, 'systemd', 'user', 'me_koder-host.service'), 'utf8')).toBe(files.host);
     expect(readFileSync(svc.file('server'), 'utf8')).toBe(files.server);
     expect(calls).toEqual([
       'systemctl --user daemon-reload',
-      'systemctl --user enable --now agentk-host.service',
-      'systemctl --user enable agentk.service',
-      'systemctl --user restart agentk.service',
+      'systemctl --user enable --now me_koder-host.service',
+      'systemctl --user enable me_koder.service',
+      'systemctl --user restart me_koder.service',
     ]);
     expect(svc.installed('host')).toBe(true);
   });
@@ -166,13 +167,13 @@ describe('SystemdServices', () => {
   it('stops a unit', () => {
     const { svc, calls } = make();
     svc.stop('server');
-    expect(calls).toEqual(['systemctl --user stop agentk.service']);
+    expect(calls).toEqual(['systemctl --user stop me_koder.service']);
   });
 
   it('reports a failed systemctl call as a ServiceError', () => {
     const { svc } = make((a) => (a.includes('restart') ? fail('Unit failed') : ok));
     expect(() => svc.install(files)).toThrow(ServiceError);
-    expect(() => svc.install(files)).toThrow(/restart agentk.service failed: Unit failed/);
+    expect(() => svc.install(files)).toThrow(/restart me_koder.service failed: Unit failed/);
   });
 
   it('reads the state that is-active prints, even when it exits non-zero', () => {
@@ -204,7 +205,7 @@ describe('SystemdServices', () => {
     expect([svc.id('server'), svc.id('host')]).toEqual(['agent-k-local.service', 'agent-k-local-host.service']);
     expect(svc.statusHint('host')).toBe('systemctl --user status agent-k-local-host.service');
 
-    expect(dropOldNames(svc)).toEqual([['agent-k-local.service', 'agentk.service']]);
+    expect(dropOldNames(svc)).toEqual([['agent-k-local.service', 'me_koder.service']]);
     expect(calls).toEqual([
       'systemctl --user is-active agent-k-local-host.service',
       'systemctl --user disable --now agent-k-local.service',
@@ -216,10 +217,32 @@ describe('SystemdServices', () => {
 
     // Once the host stops, the next install moves it too; uninstalling removes either name.
     const stopped = make().svc;
-    expect(dropOldNames(stopped)).toEqual([['agent-k-local-host.service', 'agentk-host.service']]);
-    expect(renderServiceFiles(stopped, vars).server).toContain('Wants=agentk-host.service\n');
+    expect(dropOldNames(stopped)).toEqual([['agent-k-local-host.service', 'me_koder-host.service']]);
+    expect(renderServiceFiles(stopped, vars).server).toContain('Wants=me_koder-host.service\n');
     writeFileSync(join(units, 'agent-k-local-host.service'), 'old host\n');
     stopped.remove();
+    expect(readdirSync(units)).toEqual([]);
+  });
+
+  it('keeps units installed as agentk under that name until install moves them, and drops both old names', () => {
+    const units = join(dir, 'systemd', 'user');
+    mkdirSync(units, { recursive: true });
+    writeFileSync(join(units, 'agentk.service'), 'server\n');
+    writeFileSync(join(units, 'agentk-host.service'), 'host\n');
+    // Left by a version before the rename to AgentK too: agentk's is the one in use.
+    writeFileSync(join(units, 'agent-k-local.service'), 'older server\n');
+    const { svc, calls } = make();
+    expect([svc.id('server'), svc.id('host')]).toEqual(['agentk.service', 'agentk-host.service']);
+    expect(renderServiceFiles(svc, { AK_HOME: '/home/me/.agent-k-local', HOST: 'box' }).server).toContain('Wants=agentk-host.service\n');
+    expect(dropOldNames(svc)).toEqual([['agentk-host.service', 'me_koder-host.service'], ['agentk.service', 'me_koder.service']]);
+    expect(calls).toEqual([
+      'systemctl --user is-active agentk-host.service',
+      'systemctl --user disable --now agentk-host.service',
+      'systemctl --user daemon-reload',
+      'systemctl --user disable --now agentk.service',
+      'systemctl --user disable --now agent-k-local.service',
+      'systemctl --user daemon-reload',
+    ]);
     expect(readdirSync(units)).toEqual([]);
   });
 
@@ -235,8 +258,8 @@ describe('SystemdServices', () => {
     expect(existsSync(svc.file('host'))).toBe(false);
     expect(svc.legacyTmuxInstalled()).toBe(false);
     expect(calls).toEqual([
-      'systemctl --user disable --now agentk.service',
-      'systemctl --user disable --now agentk-host.service',
+      'systemctl --user disable --now me_koder.service',
+      'systemctl --user disable --now me_koder-host.service',
       'systemctl --user disable --now agent-k-local-tmux.service',
       'systemctl --user daemon-reload',
     ]);
@@ -283,51 +306,51 @@ describe('LaunchdServices', () => {
     const { svc, calls, loaded } = make();
     expect(svc.state('host')).toEqual({ running: false, text: 'not loaded' });
     svc.install(files);
-    const host = join(agents(), 'com.yugabyte.agentk.host.plist');
-    expect(calls).toEqual([`bootstrap gui/501 ${host}`, `bootstrap gui/501 ${join(agents(), 'com.yugabyte.agentk.plist')}`]);
-    expect([...loaded]).toEqual(['com.yugabyte.agentk.host', 'com.yugabyte.agentk']);
+    const host = join(agents(), 'com.yugabyte.me_koder.host.plist');
+    expect(calls).toEqual([`bootstrap gui/501 ${host}`, `bootstrap gui/501 ${join(agents(), 'com.yugabyte.me_koder.plist')}`]);
+    expect([...loaded]).toEqual(['com.yugabyte.me_koder.host', 'com.yugabyte.me_koder']);
     expect(readFileSync(host, 'utf8')).toBe(files.host);
     expect(svc.state('server')).toEqual({ running: true, text: 'running' });
   });
 
   it('never reloads a loaded host job, and reloads the server even when its file is unchanged', () => {
     // The server's start may have written the file without reloading the job (refresh).
-    const { svc, calls } = make({ loaded: ['com.yugabyte.agentk.host', 'com.yugabyte.agentk'] });
+    const { svc, calls } = make({ loaded: ['com.yugabyte.me_koder.host', 'com.yugabyte.me_koder'] });
     mkdirSync(agents(), { recursive: true });
     writeFileSync(svc.file('host'), 'older host file\n');
     writeFileSync(svc.file('server'), files.server);
     svc.install(files);
-    expect(calls).toEqual(['bootout gui/501/com.yugabyte.agentk', `bootstrap gui/501 ${svc.file('server')}`]);
+    expect(calls).toEqual(['bootout gui/501/com.yugabyte.me_koder', `bootstrap gui/501 ${svc.file('server')}`]);
     expect(readFileSync(svc.file('host'), 'utf8')).toBe(files.host);
   });
 
   it('unloads a job to stop it, and leaves an unloaded one alone', () => {
-    const { svc, calls, loaded } = make({ loaded: ['com.yugabyte.agentk'] });
+    const { svc, calls, loaded } = make({ loaded: ['com.yugabyte.me_koder'] });
     svc.stop('server');
     svc.stop('host');
-    expect(calls).toEqual(['bootout gui/501/com.yugabyte.agentk']);
+    expect(calls).toEqual(['bootout gui/501/com.yugabyte.me_koder']);
     expect(loaded.size).toBe(0);
   });
 
   it('says so when a job is still loaded after bootout', () => {
     // launchctl print keeps finding the job: bootout failed, or it's still exiting.
     const stuck = new LaunchdServices(() => ok, home, 501, () => {});
-    expect(() => stuck.stop('server')).toThrow(/com.yugabyte.agentk didn't stop/);
+    expect(() => stuck.stop('server')).toThrow(/com.yugabyte.me_koder didn't stop/);
   });
 
   it('reloads the server job when its file changed', () => {
-    const { svc, calls } = make({ loaded: ['com.yugabyte.agentk.host', 'com.yugabyte.agentk'] });
+    const { svc, calls } = make({ loaded: ['com.yugabyte.me_koder.host', 'com.yugabyte.me_koder'] });
     mkdirSync(agents(), { recursive: true });
     writeFileSync(svc.file('server'), 'older server file\n');
     svc.install(files);
     expect(calls).toEqual([
-      'bootout gui/501/com.yugabyte.agentk',
+      'bootout gui/501/com.yugabyte.me_koder',
       `bootstrap gui/501 ${svc.file('server')}`,
     ]);
   });
 
   it('leaves files whose content is the same alone, since macOS announces a rewritten one as a new background item', () => {
-    const { svc } = make({ loaded: ['com.yugabyte.agentk.host', 'com.yugabyte.agentk'] });
+    const { svc } = make({ loaded: ['com.yugabyte.me_koder.host', 'com.yugabyte.me_koder'] });
     svc.install(files);
     const before = statSync(svc.file('host'), { bigint: true });
     svc.install(files);
@@ -337,7 +360,7 @@ describe('LaunchdServices', () => {
   });
 
   it('refreshes changed files of installed jobs without reloading them', () => {
-    const { svc, calls } = make({ loaded: ['com.yugabyte.agentk.host', 'com.yugabyte.agentk'] });
+    const { svc, calls } = make({ loaded: ['com.yugabyte.me_koder.host', 'com.yugabyte.me_koder'] });
     mkdirSync(agents(), { recursive: true });
     writeFileSync(svc.file('server'), 'older server file\n');
     writeFileSync(svc.file('host'), files.host);
@@ -358,9 +381,9 @@ describe('LaunchdServices', () => {
   });
 
   it('starts a job without disturbing a running one', () => {
-    const running = make({ loaded: ['com.yugabyte.agentk.host'] });
+    const running = make({ loaded: ['com.yugabyte.me_koder.host'] });
     running.svc.start('host');
-    expect(running.calls).toEqual(['kickstart gui/501/com.yugabyte.agentk.host']);
+    expect(running.calls).toEqual(['kickstart gui/501/com.yugabyte.me_koder.host']);
 
     const unloaded = make();
     mkdirSync(dirname(unloaded.svc.file('host')), { recursive: true });
@@ -377,11 +400,11 @@ describe('LaunchdServices', () => {
     const vars = { AK_HOME: '/Users/me/.agent-k-local', HOST: 'mac' };
     // The file under the old name keeps its label, or launchctl wouldn't find the job it loads.
     expect(renderServiceFiles(svc, vars).server).toContain('<key>Label</key>\n  <string>com.yugabyte.agent-k-local</string>');
-    expect(dropOldNames(svc)).toEqual([['com.yugabyte.agent-k-local', 'com.yugabyte.agentk']]);
+    expect(dropOldNames(svc)).toEqual([['com.yugabyte.agent-k-local', 'com.yugabyte.me_koder']]);
     expect(calls).toEqual(['bootout gui/501/com.yugabyte.agent-k-local']);
     expect(loaded.size).toBe(0);
     expect(existsSync(join(agents(), 'com.yugabyte.agent-k-local.plist'))).toBe(false);
-    expect(renderServiceFiles(svc, vars).server).toContain('<key>Label</key>\n  <string>com.yugabyte.agentk</string>');
+    expect(renderServiceFiles(svc, vars).server).toContain('<key>Label</key>\n  <string>com.yugabyte.me_koder</string>');
   });
 
   it('removes both jobs and their files, and the tmux job of a version before the session host', () => {
@@ -393,7 +416,7 @@ describe('LaunchdServices', () => {
     calls.length = 0;
     svc.remove();
     expect(calls).toEqual([
-      'bootout gui/501/com.yugabyte.agentk', 'bootout gui/501/com.yugabyte.agentk.host', 'bootout gui/501/com.yugabyte.agent-k-local.tmux',
+      'bootout gui/501/com.yugabyte.me_koder', 'bootout gui/501/com.yugabyte.me_koder.host', 'bootout gui/501/com.yugabyte.agent-k-local.tmux',
     ]);
     expect(loaded.size).toBe(0);
     expect(existsSync(svc.file('server'))).toBe(false);
@@ -412,22 +435,22 @@ describe('the LaunchAgents launcher', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  /** A release home whose app/current/bin/agentk prints its arguments. */
-  function releaseHome(name: string): string {
+  /** A release home whose app/current/bin/<command> (me_koder, or agentk before) prints its name and arguments. */
+  function releaseHome(name: string, command = 'me_koder'): string {
     const home = join(dir, name);
     mkdirSync(join(home, 'app', '1.0', 'bin'), { recursive: true });
-    writeFileSync(join(home, 'app', '1.0', 'bin', 'agentk'), '#!/bin/sh\nprintf \'%s|\' "$@"\n', { mode: 0o755 });
+    writeFileSync(join(home, 'app', '1.0', 'bin', command), `#!/bin/sh\nprintf '%s|' ${command} "$@"\n`, { mode: 0o755 });
     symlinkSync('1.0', join(home, 'app', 'current'));
     return home;
   }
 
-  it("runs app/current/bin/agentk with the job's arguments, and is written only when it changes", () => {
+  it("runs app/current/bin/me_koder with the job's arguments, and is written only when it changes", () => {
     const home = releaseHome("it's home");
     expect(writeServiceLauncher(home)).toBe(true);
     const launcher = serviceLauncher(home);
-    expect(launcher).toBe(join(home, 'service', 'me_agentk'));
+    expect(launcher).toBe(join(home, 'service', 'me_koder'));
     expect(statSync(launcher).mode & 0o777).toBe(0o755);
-    expect(execFileSync(launcher, ['serve', 'a b'], { encoding: 'utf8' })).toBe('serve|a b|');
+    expect(execFileSync(launcher, ['serve', 'a b'], { encoding: 'utf8' })).toBe('me_koder|serve|a b|');
     const before = statSync(launcher, { bigint: true });
     expect(writeServiceLauncher(home)).toBe(false);
     const after = statSync(launcher, { bigint: true });
@@ -436,15 +459,31 @@ describe('the LaunchAgents launcher', () => {
     expect(existsSync(join(home, 'service'))).toBe(false);
   });
 
-  it("moves a release's LaunchAgents that ran app/current/bin/agentk onto the launcher at the server's start", () => {
+  it('runs bin/agentk in a release from before the program was me_koder (one rolled back to)', () => {
+    const home = releaseHome('home', 'agentk');
+    writeServiceLauncher(home);
+    expect(execFileSync(serviceLauncher(home), ['host'], { encoding: 'utf8' })).toBe('agentk|host|');
+  });
+
+  it.each([
+    // Before the launcher (#430), the jobs ran the release's program.
+    ['app/current/bin/agentk', false],
+    // The launcher's name before the program was me_koder: the jobs launchd loaded run it until the
+    // next login, so it stays until uninstall.
+    ['service/me_agentk', true],
+  ])("moves a release's LaunchAgents that ran %s onto the launcher at the server's start, under the label they're installed with", (program, oldLauncher) => {
     const home = releaseHome('home');
     const svc = new LaunchdServices(() => ok, join(dir, 'user'), 501, () => {});
     const vars = { AK_HOME: home, HOST: 'mac' };
     const current = renderServiceFiles(svc, vars);
-    const old = (text: string) => text.replaceAll(`${home}/service/me_agentk`, `${home}/app/current/bin/agentk`);
+    const old = (text: string) => text.replaceAll(`${home}/service/me_koder`, `${home}/${program}`);
     mkdirSync(dirname(svc.file('server')), { recursive: true });
     writeFileSync(svc.file('server'), old(current.server));
     writeFileSync(svc.file('host'), old(current.host));
+    if (oldLauncher) {
+      mkdirSync(join(home, 'service'));
+      writeFileSync(join(home, program), '#!/bin/sh\n', { mode: 0o755 });
+    }
 
     expect(refreshServiceFiles(home, svc, 'mac')).toEqual([]); // not a release (no AK_APP_DIR)
     vi.stubEnv('AK_APP_DIR', join(home, 'app', '1.0'));
@@ -455,5 +494,10 @@ describe('the LaunchAgents launcher', () => {
     expect(readFileSync(svc.file('host'), 'utf8')).toBe(current.host);
     expect(existsSync(serviceLauncher(home))).toBe(true);
     expect(refreshServiceFiles(home, svc, 'mac')).toEqual([]);
+    if (oldLauncher) {
+      expect(existsSync(join(home, program))).toBe(true);
+      removeServiceLauncher(home);
+      expect(existsSync(join(home, 'service'))).toBe(false);
+    }
   });
 });

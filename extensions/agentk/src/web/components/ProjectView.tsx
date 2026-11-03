@@ -20,7 +20,7 @@ import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { actionsOn, sessionActions, sessionMenuKeys, type SessionActionId } from '../sessionactions';
 import { disposeTerminal, getTerminal } from '../terminals';
-import { closingText, cx, demoReviewGate, dotState, designGate, isMac, isReviewChild, joinedPartSelected, reviewGatesPr, reviewOpens, reviewParent, shownStep, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, reviewTarget, runToMergeShown, runToMergeTitle, sessionTabTitle, sidewaysWheel, totalTokens, updateShowing, usageTitle } from '../util';
+import { closingText, cx, demoReviewGate, dotState, designGate, findingsAutoOpen, idleStopped, isMac, isReviewChild, joinedPartSelected, reviewBadge, reviewGatesPr, reviewOpens, reviewParent, shownStep, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, reviewTarget, runToMergeShown, runToMergeTitle, sessionTabTitle, sidewaysWheel, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
 import { Busy, Check, ContextRing, DatapackName, Dialog, Elapsed, HarnessLogo, ReviewSegment, RunToMergeCheck, RunToMergeMark, StageChip, StatusDot } from './common';
@@ -28,6 +28,7 @@ import { ReviewFindings } from './ReviewFindings';
 import { DESCRIBE_LOST, countsText, reviewDoneText, reviewHolds, reviewRunning, reviewSegmentText, type CodeReviewSummary } from '../../shared/codereview';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
+import { EmptyProject } from './EmptyProject';
 import type { MovePreset } from './MoveSessionDialog';
 import { EndSessionButton, SessionReviewFields, SessionSheet } from './SessionSheet';
 import { MoreIcon, SessionMenu } from './SessionMenu';
@@ -221,6 +222,12 @@ export function ProjectView({
   useEffect(() => {
     if (designAt) setPanel('design');
   }, [session?.id, designAt]);
+  // While a task's code review runs or its findings wait on you, show them beside its terminal as
+  // the task comes on screen, and again as they come to wait on you or a new review starts.
+  const findingsAt = findingsAutoOpen(session);
+  useEffect(() => {
+    if (findingsAt) setPanel('findings');
+  }, [session?.id, findingsAt]);
   // A review whose PR has a design opens it once, the first time the session shows with it.
   const reviewDesign = session?.stage === 'reviewing-pr' && session.hasDesign ? session.id : null;
   useEffect(() => {
@@ -314,7 +321,7 @@ export function ProjectView({
   const canLearn = !!session && offersLearn(session, !!dedicated, meko.configured);
   // Merge & Close and Discard save what the session learned first, unless asked not to. The merge's
   // step runs once the PR is merged, so it's offered even while Claude has exited (Resume may come first).
-  const learnTo = session && session.status !== 'exited' && dedicated && meko.configured ? dedicated.name : null;
+  const learnTo = session && (session.status !== 'exited' || idleStopped(session)) && dedicated && meko.configured ? dedicated.name : null;
   const mergeLearnTo = dedicated && meko.configured ? dedicated.name : null;
   // Files held in the terminal's strip can go to the dedicated datapack's knowledge base (Upload to Meko).
   const mekoTo = dedicated && meko.configured ? dedicated.name : null;
@@ -459,9 +466,10 @@ export function ProjectView({
             aria-selected={part === 'task'}
             className={cx('tab', part === 'task' && 'sel')}
             onClick={() => {
-              // The task's part, while its findings are open, goes back to its terminal alone.
+              // The task's part, while its findings are open, goes back to its terminal alone (also
+              // once its review is settled, when the review's part is gone and the task's is selected).
               if (s.id !== session?.id) navigate({ view: 'project', projectId: project.id, sessionId: s.id });
-              else if (part === 'review') setPanel(null);
+              else if (panel === 'findings') setPanel(null);
             }}
             onDoubleClick={mobile ? undefined : () => onRename(s.id)}
             title={sessionTabTitle(s) + (mobile ? '' : '\nDouble-click to rename')}
@@ -472,11 +480,13 @@ export function ProjectView({
             <StageChip session={s} />
           </button>
         );
-        if (!s.codeReview) return tab;
+        // A settled review (done, LGTM) leaves the tab; its findings open from the ⋯ menu.
+        const review = reviewBadge(s);
+        if (!review) return tab;
         return (
           <span key={s.id} className={cx('tab-joined', part && 'has-sel')}>
             {tab}
-            <ReviewSegment review={s.codeReview} selected={part === 'review'} className="tab-review" tab onOpen={() => openReview(s)} />
+            <ReviewSegment review={review} selected={part === 'review'} className="tab-review" tab onOpen={() => openReview(s)} />
           </span>
         );
       })}
@@ -599,18 +609,9 @@ export function ProjectView({
         {/* Siblings need distinct keys: with the same key, React lost the terminal of a session left with
             its design or changes open, and kept it on screen beside the next one. */}
         {session ? (
-          <TerminalPane key={`term-${session.id}`} session={session} onAsk={() => setAsking(true)} mekoTo={mekoTo} />
+          <TerminalPane key={`term-${session.id}`} session={session} onAsk={() => setAsking(true)} onResume={() => void act('resume')} mekoTo={mekoTo} />
         ) : (
-          <div className="empty-main">
-            <h2>No sessions in {project.name}</h2>
-            <p className="muted">
-              Start a session for a task. It gets its own branch and worktree. Pick what it's for: exploring, planning
-              then implementing, or coding straight away.
-            </p>
-            <button className="btn primary" onClick={onNewSession}>
-              New session
-            </button>
-          </div>
+          <EmptyProject project={project} onNewSession={onNewSession} onClosed={() => navigate({ view: 'root' })} onError={onError} />
         )}
         {session && panel === 'design' && (
           <DesignPanel
@@ -1112,7 +1113,7 @@ function StageBar({
         ? 'Wait for AgentK to finish its turn.'
         : session.status === 'needs_input'
           ? 'AgentK is waiting on you in the terminal.'
-          : session.status === 'exited'
+          : session.status === 'exited' && !idleStopped(session)
             ? 'Resume the session first.'
             : null;
       gate = <ReviewPrGate session={session} reason={reason} blocked={blocked} midTurn={midTurn} updating={updating} onAct={onAct} />;

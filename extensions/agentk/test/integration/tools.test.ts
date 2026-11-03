@@ -32,7 +32,7 @@ type TestEnv = Awaited<ReturnType<typeof makeEnv>>;
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
-describe("AgentK's session tools through agentk mcp (real session host + git, fake claude, GitHub mocked)", () => {
+describe("AgentK's session tools through me_koder mcp (real session host + git, fake claude, GitHub mocked)", () => {
   let env: TestEnv;
   let projectId: string;
   let lead: string;
@@ -43,7 +43,7 @@ describe("AgentK's session tools through agentk mcp (real session host + git, fa
   } as IssueOrPr);
   const idle = (id: string) => waitFor(() => env.core.sessions.get(id), (x) => x.status === 'idle' || x.status === 'needs_input', 10000, 'first turn');
   /**
-   * The tools as an agent in `sessionId` sees them: `agentk mcp` with that session's token, its
+   * The tools as an agent in `sessionId` sees them: `me_koder mcp` with that session's token, its
    * messages carried in memory from the MCP SDK's own client.
    */
   async function connect(sessionId: string | null, token?: string) {
@@ -144,6 +144,35 @@ describe("AgentK's session tools through agentk mcp (real session host + git, fa
       'Moved to Code by its agent, at the turn\'s end',
       expect.stringMatching(/^Couldn't open the PR for "Lead"/),
     ]);
+  });
+
+  it('lists the agents with their models, and starts sessions on the agent and model asked for', async () => {
+    const t = await connect(lead);
+    const listed = JSON.parse((await t.call('list')).text);
+    expect(listed.agents).toEqual([{ id: 'claude', name: 'Claude Code', default: true, models: ['fable', 'opus', 'sonnet', 'haiku'] }]);
+
+    issue(7, 'Speed up');
+    const started = await t.call('start_sessions', {
+      sessions: [
+        { name: 'Fast', prompt: 'make it fast', model: 'haiku' },
+        { ref: 'acme/demo#7', agent: 'claude', model: 'claude-sonnet-5-5' },
+        // One on an agent that isn't available fails alone (a malformed one is left out: test/unit/ask-agentk.test.ts).
+        { name: 'On Kiro', prompt: 'x', agent: 'kiro' },
+      ],
+    });
+    expect(started.isError).toBe(false);
+    expect(started.text.split('\n')).toEqual([
+      'Started "Fast" in Demo at Design on Claude Code (Haiku).',
+      'Started a task on acme/demo#7, "#7 Speed up", in Demo on Claude Code (claude-sonnet-5-5).',
+      expect.stringMatching(/^Couldn't start "On Kiro": Kiro isn't available for new sessions/),
+    ]);
+    const byName = (name: string) => env.core.sessions.listForProject(projectId).find((s) => s.name === name)!;
+    expect(byName('Fast')).toMatchObject({ harness: 'claude', model: 'haiku' });
+    expect(byName('#7 Speed up')).toMatchObject({ harness: 'claude', model: 'claude-sonnet-5-5' });
+    const launch = (s: { claudeSessionId: string }) =>
+      waitFor(() => readJsonl<{ args: string[] }>(join(env.fakeDir, 'argv.jsonl')).find((a) => a.args.includes(s.claudeSessionId))?.args, (a) => !!a, 10000, 'launch');
+    expect((await launch(byName('Fast')))!.join(' ')).toContain('--model haiku');
+    expect((await launch(byName('#7 Speed up')))!.join(' ')).toContain('--model claude-sonnet-5-5');
   });
 
   it('refuses calls with the tools turned off, from a session on an untrusted PR head, and outside a session', async () => {

@@ -215,7 +215,10 @@ export function attachTerminal(
       return;
     }
     if (m.type === 'input' && typeof m.data === 'string') {
-      if (!isPassiveReport(m.data)) b.used(screen);
+      if (!isPassiveReport(m.data)) {
+        b.used(screen);
+        core.sessions.typed(sessionId);
+      }
       stream.write(m.data);
     } else if (m.type === 'resize') stream.resize(cols!, rows!);
     else if (m.type === 'active') stream.active();

@@ -180,7 +180,7 @@ export class Core extends EventEmitter {
   readonly githubLinks: GithubLinkService;
   readonly workQueue: WorkQueue;
   readonly askAgentk: AskAgentk;
-  /** AgentK's session tools: the calls `agentk mcp` makes from sessions. */
+  /** AgentK's session tools: the calls `me_koder mcp` makes from sessions. */
   readonly tools: SessionTools;
   /** AgentK's code review before a task's PR opens (review/runner.ts). */
   readonly reviews: CodeReviews;
@@ -721,9 +721,9 @@ export class Core extends EventEmitter {
     if (svc?.legacyTmuxInstalled()) {
       const inTmux = svc.installed('host') ? await this.legacyTmuxPanes() : null;
       if (!inTmux || sessionRows(this.db).some((r) => r.status !== 'archived' && inTmux.has(r.tmux_name))) {
-        throw new Error("An AgentK version from before the session host is still installed here, and its sessions may still run in tmux. Run: agentk install (it ends them there, and they resume in the session host)");
+        throw new Error("An AgentK version from before the session host is still installed here, and its sessions may still run in tmux. Run: me_koder install (it ends them there, and they resume in the session host)");
       }
-      this.log.warn("the tmux service of a version before the session host is still installed, though sessions run in the session host now. It's left running, since removing it ends any Claude still in tmux. To remove it: agentk install");
+      this.log.warn("the tmux service of a version before the session host is still installed, though sessions run in the session host now. It's left running, since removing it ends any Claude still in tmux. To remove it: me_koder install");
     }
     // AgentK's hook files: a server that can't write them doesn't start, since every session's hooks
     // (Claude Code's --settings file, the scripts Kiro's agent runs) and the Design guard depend on
@@ -786,6 +786,7 @@ export class Core extends EventEmitter {
     this.sweepStaged();
     if (this.timersOn) {
       this.every(5000, () => this.sessions.reconcile());
+      this.every(60_000, () => this.sessions.stopIdle());
       this.every(HOOK_SOCKET_CHECK_MS, () => this.checkHookSocket());
       this.every(60000, () => this.sessions.refreshDiffStats());
       this.every(IDLE_WORKTREE_CHECK_MS, () => this.worktrees.expire());

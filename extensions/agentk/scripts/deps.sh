@@ -1,6 +1,6 @@
 #!/bin/sh
 # AgentK's prerequisites: git, curl, gh and a coding agent (Claude Code, OpenCode or Kiro CLI; one is
-# enough), each agent signed in, and gh signed in to GitHub. `agentk install` runs it first, on the
+# enough), each agent signed in, and gh signed in to GitHub. `me_koder install` runs it first, on the
 # terminal Meko's `meko extension install agentk` attached (a release has it as lib/scripts/deps.sh),
 # and passes its options on:
 #

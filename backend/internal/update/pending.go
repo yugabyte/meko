@@ -123,6 +123,11 @@ func (a App) Started(running string) (*Pending, error) {
 		return nil, nil
 	}
 	if p.Attempts >= MaxFailedStarts {
+		// A version from before the program's rename (OldNames) gets its new name first, so it's found
+		// to roll back to even before Meko's start has adopted it.
+		if _, isVersion := ParseVersion(p.From); isVersion {
+			_ = a.Adopt(p.From)
+		}
 		if _, err := os.Stat(a.Exe(p.From)); err == nil {
 			return p, nil
 		}

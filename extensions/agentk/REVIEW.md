@@ -23,7 +23,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       don't explain (a bind mount) isn't another. A home that hasn't moved there yet isn't
       covered: another Meko's commands still act on it.
 - [ ] `recover()` / `reconcile()` stay idempotent: live panes are left alone, missing panes are resumed,
-      and sessions still being created or launched are skipped (so Claude never starts twice).
+      and sessions still being created or launched are skipped (so Claude never starts twice), as
+      are sessions whose agent was stopped for sitting idle (`idle_stopped_at`), which start again
+      only when something needs them (`awake`, `wakeSoon`, Resume).
 - [ ] Nothing respawns a live pane, and a session host error other than "no host" is never read as
       every pane being gone.
 - [ ] Creating a session answers once its row is in (`begin()`): only the checks that must fail in
@@ -35,7 +37,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       mid-turn recovery is parked).
 - [ ] Status changes come from hook events or pane checks, not guesses (the one fallback: a starting
       session whose hooks never came follows its transcript). Deliberate stops (archive,
-      cleanup) don't show up as "exited".
+      cleanup) don't show up as "exited". The one deliberate stop that does is the idle stop
+      (`stopIdle`), on purpose and marked: `Session.idleStoppedAt` gives it its own dot, and the
+      gates don't block on it, since anything that needs the agent starts it first.
 - [ ] The home may be seen by other hosts (a home shared over NFS). Only the server holding the
       `server.lock` lease opens the database or binds the hook socket, the systemd units keep
       `ConditionHost=`, and nothing removes a socket or file another server may own.
@@ -85,7 +89,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       server still works with hosts back to `MIN_PROTOCOL` (a running host keeps its code across
       updates). Nothing restarts the host by itself (the home's one-time move aside), and the program
       never waits on a viewer. `serve` and `host` keep going through Meko's launcher
-      (`packaging/agentk`: `meko _launch`), which runs an update's probation and locks the host's
+      (`packaging/me_koder`: `meko _launch`), which runs an update's probation and locks the host's
       version folder against Meko's pruning; nothing in AgentK writes Meko's update records
       (`app/update-pending.json`, `bad-versions`).
 - [ ] The prerequisites check (`scripts/deps.sh`) never installs a tool (or runs Meko's setup) without first showing what it
@@ -182,7 +186,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       and the tools turned off, never opens the caller's own PR, holds the caller's own move for its
       turn's end, answers calls still running when the hook socket closes (`SessionTools.pause`), and
       leaves a `tools` event on both sessions. Only read-only tools (`readOnly` in `tooldefs.ts`) are
-      pre-allowed, and never in the user's Kiro agent; `agentk mcp` checks nothing itself and loads
+      pre-allowed, and never in the user's Kiro agent; `me_koder mcp` checks nothing itself and loads
       nothing of the server's.
 - [ ] Every path AgentK hands Claude (launcher arguments, `HOME`, `AK_HOOK_SOCK`, allow rules,
       file paths in prompts) goes through `claudePath()`, so a home under `/net` doesn't make

@@ -34,7 +34,7 @@ func TestExtensionListShowsEachExtension(t *testing.T) {
 		"AgentK      running         "+version+"   by hand (meko extension update agentk)")
 
 	// Presenter from source: no version, and why Meko doesn't update it.
-	src := filepath.Join(t.TempDir(), "meko_presenter")
+	src := filepath.Join(t.TempDir(), "me_presenter")
 	fakeExtension(t, src)
 	reg, _ := extensions.Load(dir)
 	reg.Entries["presenter"] = extensions.Entry{Command: src}
@@ -64,7 +64,7 @@ func TestExtensionListDamagedAndSlow(t *testing.T) {
 	old := extensions.StatusTimeout
 	extensions.StatusTimeout = 200 * time.Millisecond
 	t.Cleanup(func() { extensions.StatusTimeout = old })
-	missing := filepath.Join(t.TempDir(), "gone", "meko_presenter")
+	missing := filepath.Join(t.TempDir(), "gone", "me_presenter")
 	// AgentK's command moved into its release install in the data folder, where Find looks.
 	moved := filepath.Join(extensions.Dir(dir, "agentk"), "app", "current", "bin", "agentk")
 	fakeExtension(t, moved)
@@ -83,7 +83,7 @@ func TestExtensionListDamagedAndSlow(t *testing.T) {
 		t.Errorf("list changed the registry:\n%s", after)
 	}
 
-	slow := filepath.Join(t.TempDir(), "meko_presenter")
+	slow := filepath.Join(t.TempDir(), "me_presenter")
 	if err := os.WriteFile(slow, []byte("#!/bin/sh\nsleep 5\n"), 0o700); err != nil { //nolint:gosec // G306: test script
 		t.Fatal(err)
 	}

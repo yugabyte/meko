@@ -66,7 +66,7 @@ result in the PR. The tour itself shows the same contrast once: the first look, 
    (`GIT_CONFIG_GLOBAL=/dev/null`, no hooks, no signing), so every install gets the same history
    apart from MEKO.md. No remote: nothing is fetched and nothing can be pushed.
 4. The project (`projects.create`, with the dedicated datapack as an existing one), marked
-   `projects.workshop` (migration 48). The gotchas datapack isn't attached: only the code review
+   `projects.workshop` (migration 50). The gotchas datapack isn't attached: only the code review
    reads it, through MEKO.md, as on a real repo, and the dedicated datapack starts empty for a
    later level's Learn the project.
 5. The host: `sessions.begin(…, { purpose: 'guide' })`, a task at Explore on the default harness.
@@ -80,7 +80,7 @@ result in the PR. The tour itself shows the same contrast once: the first look, 
 
 A build that fails leaves no project and answers 500 with the reason.
 
-**A fresh install.** `agentk install` writes `[welcome] tour = "agentk-101"` into config.toml only
+**A fresh install.** `me_koder install` writes `[welcome] tour = "agentk-101"` into config.toml only
 when it made config.toml (`welcomeTour`), and an interactive install whose server answers opens
 AgentK in the browser (`opensBrowser`: not with `--non-interactive`, which Meko's Extensions page
 uses, and not over SSH or without a display). The server's start (`startOnFreshInstall`, after

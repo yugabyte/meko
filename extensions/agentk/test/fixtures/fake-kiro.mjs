@@ -23,6 +23,22 @@ if (args[0] === '--version') {
   process.stdout.write(existsSync(v) ? readFileSync(v, 'utf8') : 'kiro-cli 2.32.0\n');
   process.exit(0);
 }
+// Like `kiro-cli whoami`: signed in, unless the test put `signed-out` in the fake's dir.
+if (args[0] === 'whoami') {
+  if (existsSync(join(dir, 'signed-out'))) {
+    process.stdout.write('Not logged in\n');
+    process.exit(1);
+  }
+  process.stdout.write('Logged in with Builder ID\n');
+  process.exit(0);
+}
+// Like `kiro-cli chat --list-models -f json`: Kiro's ModelListResult.
+if (args[0] === 'chat' && args.includes('--list-models')) {
+  process.stdout.write(JSON.stringify({
+    models: [{ model_name: 'Auto', model_id: 'auto' }, { model_name: 'Claude Sonnet 4.5', model_id: 'claude-sonnet-4.5' }], default_model: 'auto',
+  }) + '\n');
+  process.exit(0);
+}
 mkdirSync(dir, { recursive: true });
 // Like `kiro-cli agent create <name> --from kiro_default --directory <dir>`: Kiro's built-in default.
 if (args[0] === 'agent' && args[1] === 'create') {

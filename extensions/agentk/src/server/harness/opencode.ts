@@ -6,7 +6,7 @@ import type { HookPayload } from '../hooks.js';
 import { errMsg, type Logger } from '../log.js';
 import {
   OPENCODE_NO_TRACKING_ENV, OPENCODE_SESSION_CLI_CONFIG, openCodeCanResume, openCodeCommand, openCodeHasOwnMeko, openCodeMessagesFile,
-  openCodePluginPath, openCodeSessionConfig, openCodeSessionDir, removeOpenCodeMeko, removeOpenCodeSession, writeOpenCodeInstructions, writeOpenCodeMeko, writeOpenCodePlugin,
+  openCodePluginPath, openCodeSessionConfig, parseOpenCodeModels, openCodeSessionDir, removeOpenCodeMeko, removeOpenCodeSession, writeOpenCodeInstructions, writeOpenCodeMeko, writeOpenCodePlugin,
 } from '../opencode.js';
 import { serverMekoTool } from '../mekousage.js';
 import { claudePath, type Paths } from '../paths.js';
@@ -16,6 +16,8 @@ import { ingestOpenCodeUsage } from '../usage.js';
 import type { Harness } from './types.js';
 import { cliState } from './version.js';
 
+/** How long `opencode models` may take. */
+const MODELS_TIMEOUT_MS = 15_000;
 /** How long `opencode upgrade` may run before it's stopped. */
 const UPDATE_TIMEOUT_MS = 5 * 60 * 1000;
 /** OpenCode's file-writing tools, as its plugin's `tool.execute.before` names them. */
@@ -146,6 +148,7 @@ export function openCodeHarness(deps: {
           ...(conv ? { AK_OPENCODE_SESSION: conv } : {}),
           OPENCODE_CONFIG_CONTENT: openCodeSessionConfig({
             plugin: claudePath(openCodePluginPath(paths)), instructions: claudePath(instructions), dirs: l.addDirs.map((d) => claudePath(d)),
+            model: l.model,
             tools: l.tools ? openCodeTools(paths) : null,
             agents: l.review?.agents ?? null,
           }),
@@ -159,6 +162,13 @@ export function openCodeHarness(deps: {
         unsetEnv: l.unsetEnv,
       };
     },
+    // Without the free Zen models while [opencode] disable_tracking hides them from sessions.
+    models: (cfg) => new Promise((resolve) => {
+      execFile(command(cfg), ['models', '--standalone'], {
+        timeout: MODELS_TIMEOUT_MS,
+        env: { ...process.env, NO_COLOR: '1', ...(cfg.opencode.disableTracking ? OPENCODE_NO_TRACKING_ENV : {}) },
+      }, (err, stdout) => resolve(err ? [] : parseOpenCodeModels(String(stdout)))).stdin?.end();
+    }),
     normalize: normalizeOpenCode,
     // The plugin throws this as the tool call's error.
     deny: (reason) => reason,

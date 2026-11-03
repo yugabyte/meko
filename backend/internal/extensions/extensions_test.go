@@ -134,7 +134,7 @@ func TestCatalogFindsTheCommandInItsHome(t *testing.T) {
 	}
 }
 
-// One ~/.local/bin/meko_presenter serves all of a user's Meko data folders, but a release belongs to
+// One ~/.local/bin/me_presenter serves all of a user's Meko data folders, but a release belongs to
 // one: Find skips the link when it runs another data folder's release, and takes it when it runs
 // this one's (or isn't a release at all).
 func TestCatalogFindSkipsAnotherDataFoldersRelease(t *testing.T) {
@@ -178,6 +178,82 @@ func TestCatalogFindSkipsAnotherDataFoldersRelease(t *testing.T) {
 	}
 	if pr.Release(b, "presenter", link) != "" || pr.Release(a, "presenter", link) != "0.20261024.0" {
 		t.Error("Release judged the link by the wrong data folder")
+	}
+}
+
+// An AgentK installed while its command was agentk moves onto me_koder: its version gets the new
+// name, ~/.local/bin/me_koder links to it, the registry runs that, and the links of its old names
+// into this data folder go. An old name's link into another data folder's release stays.
+func TestRenameMovesAnInstallOntoItsNewCommand(t *testing.T) {
+	const v = "0.20261030.0"
+	home, root, other := t.TempDir(), t.TempDir(), t.TempDir()
+	ak := Known["agentk"]
+	oldRelease := func(root string) update.App {
+		app := ak.App(root, "agentk")
+		bin := filepath.Join(app.Dir(v), "bin")
+		if err := os.MkdirAll(bin, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		//nolint:gosec // G306: a test's program
+		if err := os.WriteFile(filepath.Join(bin, "agentk"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("agentk", filepath.Join(bin, "agent-k-local")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(app.Dir(v), "VERSION"), []byte(v+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(v, filepath.Join(app.Root, "current")); err != nil {
+			t.Fatal(err)
+		}
+		return app
+	}
+	app := oldRelease(root)
+	theirs := oldRelease(other)
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	links := map[string]string{
+		"agentk":        filepath.Join(app.Root, "current", "bin", "agentk"),
+		"agent-k-local": filepath.Join(theirs.Root, "current", "bin", "agent-k-local"),
+	}
+	for name, target := range links {
+		if err := os.Symlink(target, filepath.Join(bin, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, _ := Load(root)
+	r.Entries["agentk"] = Entry{Command: filepath.Join(bin, "agentk"), InstalledByMeko: true}
+	if err := r.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Rename(root, home); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(bin, "me_koder")
+	if target, err := os.Readlink(link); err != nil || target != app.CurrentExe() {
+		t.Errorf("~/.local/bin/me_koder -> %q (%v)", target, err)
+	}
+	if _, err := os.Stat(link); err != nil {
+		t.Errorf("~/.local/bin/me_koder doesn't run: %v", err)
+	}
+	if again, _ := Load(root); again.Entries["agentk"].Command != link || !again.Entries["agentk"].InstalledByMeko {
+		t.Errorf("registry %+v", again.Entries["agentk"])
+	}
+	if _, err := os.Lstat(filepath.Join(bin, "agentk")); !os.IsNotExist(err) {
+		t.Errorf("~/.local/bin/agentk is left: %v", err)
+	}
+	if target, _ := os.Readlink(filepath.Join(bin, "agent-k-local")); target != links["agent-k-local"] {
+		t.Errorf("another data folder's link now points at %q", target)
+	}
+	// Run again (every start), nothing changes.
+	if err := r.Rename(root, home); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := Load(root); again.Entries["agentk"].Command != link {
+		t.Errorf("registry after a second run %+v", again.Entries["agentk"])
 	}
 }
 

@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { parse, stringify } from 'smol-toml';
 import { claudeUserDir } from './claude.js';
 import { DEFAULT_MEKO_URL, DEFAULT_MEKO_WEB_URL, mekoWebUrl } from '../shared/mekourls.js';
-import { AGENTK_TOUR, type MekoKeySource } from '../shared/types.js';
+import { AGENTK_TOUR, MAX_IDLE_STOP_HOURS, type MekoKeySource } from '../shared/types.js';
 import { DEFAULT_HARNESS, HARNESS_IDS, isHarnessId, type HarnessId } from '../shared/harnesses.js';
 import {
   DEFAULT_CHECK, DEFAULT_DEPTH, DEFAULT_ROUNDS, DEFAULT_STRATEGY, MAX_DEPTH, MAX_ROUNDS, STRATEGIES, isStrategySetting, type ReviewSettings,
@@ -16,7 +16,7 @@ export interface Config {
    * name: shown in the rail next to the user name; empty uses the machine's short host name.
    * bind and port, and [tls]: where AgentK listened, and its certificate, when it served browsers
    * itself. Meko serves it now (on AgentK's old port, at /ext/agentk/), and its handoff takes them
-   * over once (`agentk _handoff`, handoff.ts); nothing else reads them, and they're kept in
+   * over once (`me_koder _handoff`, handoff.ts); nothing else reads them, and they're kept in
    * config.toml only for that.
    */
   server: { bind: string; port: number; name: string };
@@ -37,7 +37,7 @@ export interface Config {
   meko: { url: string; apiKey: string; webUrl: string; apiUrl: string; captureTranscripts: boolean; home: string };
   /**
    * dbPath: where state.db is when the home is on a network filesystem, which only a home from before
-   * the move into Meko's data folder can be (Meko keeps its folder on a local disk). `agentk install`
+   * the move into Meko's data folder can be (Meko keeps its folder on a local disk). `me_koder install`
    * sets it for such a home (`localDbLocation`), and the move brings the database into the new home
    * and clears it (movehome.ts).
    */
@@ -69,6 +69,12 @@ export interface Config {
    */
   worktrees: { idlePerRepo: number; idleDays: number };
   /**
+   * idleStopHours: a session's agent idle this many hours is stopped to free its memory, and started again with `--resume`
+   * when it's needed (SessionManager.stopIdle, docs/design/recovery.md); 0 to MAX_IDLE_STOP_HOURS, 0 never stops one.
+   * Set in Settings › General.
+   */
+  sessions: { idleStopHours: number };
+  /**
    * Anonymous usage stats (callhome.ts). enabled: send the report (daily; hourly in an install's first day). url: where to POST it
    * (the collector's full report URL); empty uses the one release builds carry (CALL_HOME_URL next to VERSION), and with neither
    * nothing is sent. The same report also goes to YugabyteDB's call home service: diagnosticsUrl, or else
@@ -87,7 +93,7 @@ export interface Config {
    */
   askAgentk: { enabled: boolean; model: string; timeoutSeconds: number };
   /**
-   * AgentK's session tools (tools.ts): enabled gives every session the `agentk_sessions` MCP server (`agentk mcp`) and its
+   * AgentK's session tools (tools.ts): enabled gives every session the `agentk_sessions` MCP server (`me_koder mcp`) and its
    * skill, which open projects, start sessions and move them between stages, from each session's next launch. Off, the
    * tools' route refuses calls from sessions that still have them. Set in Settings → General.
    */
@@ -114,7 +120,7 @@ export interface Config {
    */
   codeReview: { strategy: string; rounds: number; depth: number; check: boolean; models: Record<HarnessId, ReviewModels> };
   /**
-   * tour: the bundled workshop a fresh install starts by itself (`agentk-101`), written by `agentk
+   * tour: the bundled workshop a fresh install starts by itself (`agentk-101`), written by `me_koder
    * install` only when it made config.toml. The server's start runs it once while there are no
    * projects (src/server/workshops.ts) and then removes the key; empty starts nothing.
    */
@@ -152,6 +158,7 @@ export const DEFAULT_CONFIG: Config = {
   kiro: { command: 'kiro-cli', enabled: true, trustTools: false },
   opencode: { command: 'opencode', enabled: true, disableTracking: false },
   worktrees: { idlePerRepo: 3, idleDays: 14 },
+  sessions: { idleStopHours: 24 },
   callHome: { enabled: true, url: '', diagnosticsUrl: '' },
   pr: { resolveConflicts: true },
   askAgentk: { enabled: true, model: 'sonnet', timeoutSeconds: 45 },
@@ -237,6 +244,11 @@ function readConfigFile(paths: Paths, warn: (msg: string) => void): Config {
   if (!Number.isInteger(depth) || depth < 1 || depth > MAX_DEPTH) {
     warn(`config.toml: code_review.depth should be a whole number from 1 to ${MAX_DEPTH}; using ${DEFAULT_DEPTH}`);
     cfg.codeReview.depth = DEFAULT_DEPTH;
+  }
+  const hours = cfg.sessions.idleStopHours;
+  if (!Number.isInteger(hours) || hours < 0 || hours > MAX_IDLE_STOP_HOURS) {
+    warn(`config.toml: sessions.idle_stop_hours should be a whole number from 0 to ${MAX_IDLE_STOP_HOURS}; using ${DEFAULT_CONFIG.sessions.idleStopHours}`);
+    cfg.sessions.idleStopHours = DEFAULT_CONFIG.sessions.idleStopHours;
   }
   if (!isHarnessId(cfg.agents.default)) {
     warn(`config.toml: agents.default should be one of ${HARNESS_IDS.join(', ')}; using ${DEFAULT_HARNESS}`);

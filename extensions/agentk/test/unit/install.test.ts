@@ -64,12 +64,12 @@ describe('service failures', () => {
 
   it('say what to check and how to skip the services', () => {
     const mac = serviceFailure(new LaunchdServices(ok, '/Users/me', 501), 'launchctl bootstrap … failed: Bootstrap failed: 5', '/Users/me/.agent-k-local/logs');
-    expect(mac).toContain('launchctl bootstrap … failed: Bootstrap failed: 5\nCheck: launchctl print gui/501/com.yugabyte.agentk and ');
+    expect(mac).toContain('launchctl bootstrap … failed: Bootstrap failed: 5\nCheck: launchctl print gui/501/com.yugabyte.me_koder and ');
     expect(mac).toMatch(/logs\/launchd\*\.log\./);
     expect(mac).toContain('--no-service');
 
-    const linux = serviceFailure(new SystemdServices(ok, {}, '/home/me'), 'systemctl --user restart agentk.service failed', '/home/me/.agent-k-local/logs');
-    expect(linux).toContain('Check: systemctl --user status agentk.service.\n');
+    const linux = serviceFailure(new SystemdServices(ok, {}, '/home/me'), 'systemctl --user restart me_koder.service failed', '/home/me/.agent-k-local/logs');
+    expect(linux).toContain('Check: systemctl --user status me_koder.service.\n');
     expect(linux).not.toContain('launchd');
   });
 });
@@ -206,6 +206,6 @@ describe('server PATH', () => {
 describe('CLI labels', () => {
   it('always leave a space before the detail, even when the label is long', () => {
     expect(pad('Meko')).toBe('Meko'.padEnd(14));
-    expect(pad('com.yugabyte.agentk.host')).toBe('com.yugabyte.agentk.host ');
+    expect(pad('com.yugabyte.me_koder.host')).toBe('com.yugabyte.me_koder.host ');
   });
 });

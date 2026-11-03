@@ -6,13 +6,13 @@ import fastifyWebsocket from '@fastify/websocket';
 import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck,
-  EventsClientMessage, HarnessStatus, KnowledgeUpload, MekoDatapack, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, StagedImage,
+  EventsClientMessage, HarnessModels, HarnessStatus, KnowledgeUpload, MekoDatapack, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, StagedImage,
   HeldReview, HeldReviewsResult, Workshop, WorkshopStart, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, RunActionsRequest, RunActionsResult, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
   JoinByLinkRequest, JoinByLinkResult, LinkGrant, ShareLink, ShareLinkChange, ShareLinkState,
   CloseWorkItemsRequest, CreateWorkItemRequest, ReorderWorkItemsRequest, UpdateWorkItemRequest, WorkItem, WorkLinkMatch, WorkSync,
 } from '../shared/types.js';
-import { ACTIONS_MAX, LINK_GRANTS, MAX_KB_UPLOAD_BYTES, MAX_PASTE_BYTES, SHARE_GRANTS, WORK_SYNC_MINUTES_MAX } from '../shared/types.js';
+import { ACTIONS_MAX, LINK_GRANTS, MAX_IDLE_STOP_HOURS, MAX_KB_UPLOAD_BYTES, MAX_PASTE_BYTES, SHARE_GRANTS, WORK_SYNC_MINUTES_MAX } from '../shared/types.js';
 import { AGENTK_PATH, shareLinkToken, shareLinkUrl } from '../shared/mekourls.js';
 import { HARNESS_IDS, isHarnessId } from '../shared/harnesses.js';
 import { EMAIL_RE, MAX_SHARE_EMAILS } from '../shared/emails.js';
@@ -538,6 +538,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     hostName: core.hostName(),
     idleWorktreesPerRepo: core.worktrees.cap(),
     idleWorktreeDays: core.worktrees.idleDays(),
+    idleStopHours: core.config.sessions.idleStopHours,
     callHomeEnabled: core.config.callHome.enabled,
     ...(ybCallHomeDisabled() ? { callHomeOffBy: 'YB_DISABLE_CALLHOME' as const } : {}),
     resolveConflicts: core.config.pr.resolveConflicts,
@@ -581,6 +582,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (b.idleWorktreeDays !== undefined && (!Number.isInteger(b.idleWorktreeDays) || b.idleWorktreeDays < 0 || b.idleWorktreeDays > MAX_IDLE_DAYS)) {
       throw new HttpError(400, `Days to keep an unused idle worktree must be a whole number from 0 to ${MAX_IDLE_DAYS}.`);
     }
+    if (b.idleStopHours !== undefined && (!Number.isInteger(b.idleStopHours) || b.idleStopHours < 0 || b.idleStopHours > MAX_IDLE_STOP_HOURS)) {
+      throw new HttpError(400, `Hours before an idle agent is stopped must be a whole number from 0 to ${MAX_IDLE_STOP_HOURS}.`);
+    }
     // eslint-disable-next-line no-control-regex
     if (b.serverName !== undefined && (typeof b.serverName !== 'string' || b.serverName.trim().length > 64 || /[\u0000-\u001f\u007f]/.test(b.serverName))) {
       throw new HttpError(400, 'Server name must be 64 characters or fewer, with no line breaks.');
@@ -617,6 +621,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.serverName !== undefined) c.server.name = b.serverName.trim();
       if (b.idleWorktreesPerRepo !== undefined) c.worktrees.idlePerRepo = b.idleWorktreesPerRepo;
       if (b.idleWorktreeDays !== undefined) c.worktrees.idleDays = b.idleWorktreeDays;
+      if (b.idleStopHours !== undefined) c.sessions.idleStopHours = b.idleStopHours;
       if (b.callHomeEnabled !== undefined) c.callHome.enabled = b.callHomeEnabled;
       if (b.resolveConflicts !== undefined) c.pr.resolveConflicts = b.resolveConflicts;
       if (b.toolsEnabled !== undefined) c.tools.enabled = b.toolsEnabled;
@@ -692,6 +697,11 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   // Check again (Settings → Harness), and Connect to Meko after the page connected an agent through
   // Meko's own route: a version or Meko list that changed reaches every page through `changed()`.
   app.post('/api/harnesses/refresh', async (): Promise<HarnessStatus[]> => core.refreshHarnesses(true));
+  // New session's Model choices for an agent whose list comes from its CLI (OpenCode's, Kiro's).
+  app.get<{ Params: { id: string } }>('/api/harnesses/:id/models', async (req): Promise<HarnessModels> => {
+    if (!isHarnessId(req.params.id)) throw new HttpError(404, 'There is no such agent.');
+    return { models: await core.harnesses.models(core.config, req.params.id) };
+  });
   app.post<{ Params: { id: string } }>('/api/harnesses/:id/update', async (req): Promise<HarnessStatus> => {
     if (!isHarnessId(req.params.id)) throw new HttpError(404, 'There is no such agent.');
     const h = core.harnesses.of(req.params.id);

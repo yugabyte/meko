@@ -4,7 +4,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import {
-  caughtWithMeko, findMeAkReviewLine, meAkReviewLine, noCounts, parseMeAkReviewLine, readOverrides, resolveReview, reviewSegmentLabel, reviewSegmentText, strategyTag, withMeAkReviewLine,
+  caughtWithMeko, findMeAkReviewLine, meAkReviewLine, noCounts, parseMeAkReviewLine, readOverrides, resolveReview, reviewSegmentLabel, reviewSegmentText, reviewSettled, strategyTag, withMeAkReviewLine,
   type CodeReviewState, type CodeReviewSummary, type SeverityCounts,
 } from '../../src/shared/codereview.js';
 import { ReviewFields, ReviewSegment } from '../../src/web/components/common.js';
@@ -104,6 +104,17 @@ describe("the review's part of a task's tab", () => {
   ])('shows %j as %s', (summary, text) => {
     expect(reviewSegmentText(summary)).toBe(text);
   });
+
+  // The tab and the rail leave the magnifier out of a settled review: exactly a done one reading LGTM.
+  it.each(['describing', 'preparing', 'sweeping', 'scoring', 'triage', 'fixing', 'done', 'failed', 'cancelled'] as CodeReviewState[])(
+    'is settled in %s only when done and LGTM',
+    (state) => {
+      for (const over of [{}, { counts: counts(2, 1, 4) }, { counts: counts(2, 1, 4), addressed: true }, { counts: counts(0, 0, 1) }]) {
+        const summary = r({ state, ...over });
+        expect(reviewSettled(summary)).toBe(state === 'done' && reviewSegmentText(summary) === 'LGTM');
+      }
+    },
+  );
 
   it.each([
     [r({}), 'Code review: Sagittarius 3.0, 2 of 5 passes reported'],

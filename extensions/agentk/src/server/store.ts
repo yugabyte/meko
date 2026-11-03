@@ -48,6 +48,8 @@ export interface SessionRow {
   name: string;
   /** The harness the session runs on (`HarnessId`; `harnessOf()` reads an unknown one as Claude Code). */
   harness: string;
+  /** The model its agent runs on, passed on every launch; null for the agent's default. */
+  model: string | null;
   /** AgentK's key for the conversation: Claude Code's session id, and the Meko conversation's key for every harness. */
   claude_session_id: string;
   /** The conversation id a harness picks itself (Kiro's session id), once AgentK has learned it; null for Claude Code. */
@@ -82,6 +84,8 @@ export interface SessionRow {
   created_at: number;
   archived_at: number | null;
   recovered_at: number | null;
+  /** When AgentK stopped its agent for sitting idle (Session.idleStoppedAt); NULL otherwise. */
+  idle_stopped_at: number | null;
   interrupted: number;
   /** 1 for sessions whose Design stage runs in Claude's plan mode (created before designs moved out of it). */
   plan_mode: number;
@@ -307,6 +311,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     projectId: r.project_id,
     name: r.name,
     harness: harnessOf(r.harness),
+    model: r.model ?? null,
     claudeSessionId: r.claude_session_id,
     branch: r.branch,
     baseBranch: r.base_branch,
@@ -369,6 +374,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     createdAt: r.created_at,
     archivedAt: r.archived_at,
     recoveredAt: r.recovered_at,
+    idleStoppedAt: r.idle_stopped_at,
   };
 }
 

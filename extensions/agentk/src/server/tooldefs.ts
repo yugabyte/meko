@@ -1,6 +1,6 @@
 /**
  * AgentK's session tools as an agent sees them: the `agentk_sessions` MCP server's tools, with
- * their descriptions and input schemas. Kept on their own, with no imports, so `agentk mcp`
+ * their descriptions and input schemas. Kept on their own, with no imports, so `me_koder mcp`
  * (mcp.ts) loads nothing else; the server answers them in actions.ts (`SessionTools.call`).
  */
 
@@ -28,7 +28,8 @@ export const TOOL_DEFS: ToolDef[] = [
     readOnly: true,
     description:
       "Lists AgentK's open projects (id, name, repo folder and GitHub owner/name) and their running sessions (id, name, stage, " +
-      'status, branch, PR), with this session marked self. Call it first, and use only the ids it gives; see the agentk-sessions ' +
+      'status, branch, PR), with this session marked self, and the agents new sessions can start on (the default marked, with ' +
+      'the models each takes). Call it first, and use only the ids it gives; see the agentk-sessions ' +
       'skill for how to use these tools.',
     inputSchema: { type: 'object', properties: { projectId: { type: 'string', description: 'Only this project.' } } },
   },
@@ -37,7 +38,8 @@ export const TOOL_DEFS: ToolDef[] = [
     description:
       'Starts up to 8 AgentK sessions in one call, in order. Each is either a GitHub issue or PR (ref: owner/name#N or its link; ' +
       'for a bare #N use the project\'s github from list), which starts a task on the issue or a review of the PR, or a task ' +
-      "(name and prompt, the user's words kept). Returns one line per session: what started, or why it didn't.",
+      "(name and prompt, the user's words kept). Each runs on the default agent and its own model unless the user names " +
+      "another (agent, model; list names the agents and their models). Returns one line per session: what started, or why it didn't.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -57,6 +59,15 @@ export const TOOL_DEFS: ToolDef[] = [
                 type: 'string',
                 description: "A task without a ref: an existing branch (in the project's repo, or on its origin) to work on as it is, " +
                   'instead of a new branch. Default: a new branch.',
+              },
+              agent: {
+                type: 'string', enum: ['claude', 'opencode', 'kiro'],
+                description: 'The coding agent it runs on, only when the user names one (list says which are available). Default: the default agent.',
+              },
+              model: {
+                type: 'string',
+                description: "The model its agent runs on, only when the user names one: as they said it, or a name list gives for the agent " +
+                  "(such as opus or sonnet for Claude Code, provider/model for OpenCode). Default: the agent's own.",
               },
               autoRun: {
                 type: 'boolean',

@@ -8,16 +8,19 @@
 # <out-dir>/agentk-<version>-<linux|darwin>-<arch>.tar.gz containing:
 #
 #   agentk-<version>/
-#     bin/agentk               POSIX sh wrapper (packaging/agentk)
-#     bin/agent-k-local        a link to it: its name before the rename, which older services start
-#     node/bin/node            bundled Node runtime
+#     bin/me_koder             POSIX sh wrapper (packaging/me_koder): the command
+#     bin/agentk               a link to it: its name before, which services installed then, older
+#                              Mekos and their registries run
+#     bin/agent-k-local        a link to it: its name before the rename to AgentK, which older services start
+#     node/bin/me_koder        bundled Node runtime, named so its processes say they're AgentK's
+#     node/bin/node            a link to it, which the MCP configs AgentK writes for sessions name
 #     node/LICENSE
 #     lib/package.json
 #     lib/dist/                compiled server + web assets, AgentK's mod for Claude Code (dist/mod), the session tools' skill (dist/tools) and the bundled workshops (dist/workshops)
 #     lib/node_modules/        production dependencies only
-#     lib/packaging/systemd/   service templates used by `agentk install` (Linux)
-#     lib/packaging/launchd/   service templates used by `agentk install` (macOS)
-#     lib/scripts/deps.sh      the prerequisites check `agentk install` runs first (git, curl, gh, a coding agent)
+#     lib/packaging/systemd/   service templates used by `me_koder install` (Linux)
+#     lib/packaging/launchd/   service templates used by `me_koder install` (macOS)
+#     lib/scripts/deps.sh      the prerequisites check `me_koder install` runs first (git, curl, gh, a coding agent)
 #     VERSION
 #     CALL_HOME_URL            the usage stats collector, when AK_CALL_HOME_URL is set
 #
@@ -58,11 +61,13 @@ trap 'rm -rf "$stage"' EXIT INT TERM
 root="$stage/$name"
 
 mkdir -p "$root/bin" "$root/node/bin" "$root/lib/packaging" "$root/lib/scripts"
-cp "$repo/packaging/agentk" "$root/bin/agentk"
-chmod 755 "$root/bin/agentk"
-ln -s agentk "$root/bin/agent-k-local"
+cp "$repo/packaging/me_koder" "$root/bin/me_koder"
+chmod 755 "$root/bin/me_koder"
+ln -s me_koder "$root/bin/agentk"
+ln -s me_koder "$root/bin/agent-k-local"
 
-cp "$node_dir/bin/node" "$root/node/bin/node"
+cp "$node_dir/bin/node" "$root/node/bin/me_koder"
+ln -s me_koder "$root/node/bin/node"
 cp "$node_dir/LICENSE" "$root/node/LICENSE"
 
 cp "$repo/package.json" "$root/lib/package.json"

@@ -2,17 +2,17 @@ import { HARNESS_CAPS, harnessOf, type HarnessId } from '../shared/harnesses';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, LEARN_WARN_FILES, LEARN_WARN_PRS, STAGE_LABELS, type LearnScope } from '../shared/types';
 import { mekoDatapackPath } from '../shared/mekourls';
-import { YOU_CANCELLED, countsText, isStrategySetting, reviewHolds, reviewRunning, reviewWaitsOnYou, type CodeReviewDetail, type CodeReviewFinding, type CodeReviewSummary, type ReviewOverrides } from '../shared/codereview';
+import { YOU_CANCELLED, countsText, isStrategySetting, reviewHolds, reviewRunning, reviewSettled, reviewWaitsOnYou, type CodeReviewDetail, type CodeReviewFinding, type CodeReviewSummary, type ReviewOverrides } from '../shared/codereview';
 import { stepOf } from '../shared/stages';
 import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGaps, MekoLearning, MekoStatus, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, Stage, TokenUsage } from '../shared/types';
 
 /**
  * What a status dot shows: the session's status, `learning` while AgentK saves what it learned to
  * Meko, `queued` while a gate waits to go between turns, `background` while the agent is between
- * turns with work still running in the background, or `meko` while Claude runs a Meko tool call in
- * a working turn.
+ * turns with work still running in the background, `meko` while Claude runs a Meko tool call in
+ * a working turn, or `stopped` while AgentK has stopped the agent for sitting idle (`Session.idleStoppedAt`).
  */
-export type DotState = SessionStatus | 'learning' | 'queued' | 'background' | 'meko';
+export type DotState = SessionStatus | 'learning' | 'queued' | 'background' | 'meko' | 'stopped';
 
 /** Higher is more urgent. Used for the project's aggregate dot in the rail. */
 const URGENCY: Record<DotState, number> = {
@@ -29,8 +29,23 @@ const URGENCY: Record<DotState, number> = {
   background: 4,
   recovered: 3,
   idle: 2,
+  // Nothing to look at: the agent starts again when it's needed.
+  stopped: 1,
   archived: 0,
 };
+
+/**
+ * AgentK stopped the session's agent for sitting idle: it shows as exited, but anything that needs
+ * the agent (an action, AgentK's own steps) starts it again first, so it doesn't block them.
+ */
+export function idleStopped(s: Pick<Session, 'status'> & Partial<Pick<Session, 'idleStoppedAt'>>): boolean {
+  return s.status === 'exited' && s.idleStoppedAt != null;
+}
+
+/** The agent has exited and only Resume brings it back (not stopped for sitting idle: `idleStopped`). */
+function exitedForGood(s: Pick<Session, 'status'> & Partial<Pick<Session, 'idleStoppedAt'>>): boolean {
+  return s.status === 'exited' && !idleStopped(s);
+}
 
 /**
  * A code-review session: a task's code review (`Session.parentId`). It never shows as a tab, a
@@ -47,17 +62,29 @@ export function liveSessions(p: ProjectWithSessions): Session[] {
 }
 
 /** A project's open sessions with its tasks' code-review sessions: what a terminal or the route may show. */
-export function liveWithReviews(p: ProjectWithSessions): Session[] {
+export function liveWithReviews(p: Pick<ProjectWithSessions, 'sessions'>): Session[] {
   return p.sessions.filter((s) => s.desired !== 'archived' && s.status !== 'archived');
 }
 
 /**
+ * The review a task's tab and rail row join to it (the magnifier), or null: none, or one that's
+ * settled (done and LGTM: nothing left to address). A settled review's findings still open from
+ * the ⋯ menu and sheet (`review-open`), which read `codeReview` itself.
+ */
+export function reviewBadge(task: Pick<Session, 'codeReview'>): CodeReviewSummary | null {
+  const r = task.codeReview;
+  return r && !reviewSettled(r) ? r : null;
+}
+
+/**
  * Which part of a task's joined tab (or rail row) is on screen: the task's, its review's (the task
- * with its findings open, or its code-review session on screen), or neither.
+ * with its findings open, or its code-review session on screen), or neither. With the task on
+ * screen and no review part shown (`reviewBadge()`), the task's part stands for it, its findings
+ * open or not.
  */
 export function joinedPartSelected(task: Pick<Session, 'id' | 'codeReview'>, currentId: string | null | undefined, findingsOpen = false): 'task' | 'review' | null {
   if (!currentId) return null;
-  if (task.id === currentId) return findingsOpen && task.codeReview ? 'review' : 'task';
+  if (task.id === currentId) return findingsOpen && reviewBadge(task) ? 'review' : 'task';
   return task.codeReview?.sessionId === currentId ? 'review' : null;
 }
 
@@ -230,7 +257,7 @@ const YOURS_SHOWS: ReadonlySet<SessionStatus> = new Set(['idle', 'recovered', 'w
 /** The dot's words for a task whose code review findings wait on the user, outside Review & PR's blockers. */
 const REVIEW_WAITS_TITLE = "The code review's findings wait on you.";
 
-type DotFields = Pick<Session, 'status' | 'learning' | 'queued' | 'background' | 'mekoCall' | 'stage' | 'waitsOnYou'> & Partial<Pick<Session, 'codeReview'>>;
+type DotFields = Pick<Session, 'status' | 'learning' | 'queued' | 'background' | 'mekoCall' | 'stage' | 'waitsOnYou'> & Partial<Pick<Session, 'codeReview' | 'idleStoppedAt'>>;
 
 /**
  * The session is in Review & PR and a merge blocker only the user can clear stands
@@ -244,10 +271,13 @@ function waitsOnYou(s: Pick<DotFields, 'stage' | 'waitsOnYou' | 'codeReview'>): 
  * What a session's dot shows: Needs you while Review & PR or the code review's findings wait on the user, over idle, recovered
  * and working; then `Session.learning` over idle, recovered and working, then `Session.queued` over
  * idle and recovered, then `Session.background` over idle and recovered, then `Session.mekoCall`
- * over working.
+ * over working; an exited session whose agent AgentK stopped for sitting idle is `stopped`, under
+ * Needs you.
  */
 export function dotState(s: DotFields): DotState {
-  if (waitsOnYou(s) && YOURS_SHOWS.has(s.status)) return 'needs_input';
+  // A stopped agent starts again for whatever the user does about it, so what waits on them still shows.
+  if (waitsOnYou(s) && (YOURS_SHOWS.has(s.status) || idleStopped(s))) return 'needs_input';
+  if (idleStopped(s)) return 'stopped';
   if (s.learning && LEARNING_SHOWS.has(s.status)) return 'learning';
   if (s.queued && QUEUED_SHOWS.has(s.status)) return 'queued';
   if (s.background.length && QUEUED_SHOWS.has(s.status)) return 'background';
@@ -281,6 +311,7 @@ export const STATUS_TEXT: Record<DotState, string> = {
   queued: 'queued',
   background: 'running in the background',
   meko: 'calling Meko',
+  stopped: 'agent stopped while idle',
 };
 
 /** What a session has running in the background, in words: each task's line, with how many more past three. */
@@ -296,8 +327,8 @@ export const LEARNING_TITLE = 'learning (saving what it learned to Meko)';
  * Whether Save learnings is offered: AgentK saves to the project's datapack, so it needs one, Meko and
  * Claude there. Not while a Discard waits for its learn step: the Discard row already says so.
  */
-export function offersLearn(s: Pick<Session, 'status' | 'discarding'>, datapack: boolean, mekoConfigured: boolean): boolean {
-  return datapack && mekoConfigured && s.status !== 'exited' && !s.discarding;
+export function offersLearn(s: Pick<Session, 'status' | 'discarding'> & Partial<Pick<Session, 'idleStoppedAt'>>, datapack: boolean, mekoConfigured: boolean): boolean {
+  return datapack && mekoConfigured && !exitedForGood(s) && !s.discarding;
 }
 
 export { agentName } from '../shared/harnesses';
@@ -627,7 +658,7 @@ function otherPrompt(session: Session): boolean {
  * Mirrors checkPromptable in lifecycle.ts; the move dialog checks the turn itself.
  */
 export function promptBlocker(session: Session): string | null {
-  if (session.status === 'exited') return 'Claude has exited. Resume the session first.';
+  if (exitedForGood(session)) return 'Claude has exited. Resume the session first.';
   if (session.status === 'needs_input' && session.statusDetail !== DESIGN_READY) return 'AgentK is waiting on you in the terminal. Answer it first.';
   return null;
 }
@@ -651,7 +682,7 @@ export function heldForTurnEnd(session: Session): boolean {
 export function designApprovalBlocker(session: Session): string | null {
   if (!session.hasDesign) return 'AgentK hasn’t proposed a design yet.';
   if (session.approvalQueued) return 'You approved the design: it goes to AgentK when this turn ends.';
-  if (session.status === 'exited') return 'Claude has exited. Resume the session first.';
+  if (exitedForGood(session)) return 'Claude has exited. Resume the session first.';
   if (session.status === 'starting') return 'Wait for AgentK to finish its turn.';
   if (session.promptsHeld > 0) return 'AgentK has answers from you to take first. Approve once it has revised the design.';
   // With the mod, an approval made mid-turn waits for the turn to end.
@@ -686,7 +717,7 @@ export function demoReviewGate(session: Session): GateButton | null {
 /** The Open PR gate in Code. Mid-turn, a press queues the PR prompt for the turn's end. Mirrors the server's checks. */
 export function openPrGate(session: Session): GateButton {
   const gate = (reason: string | null, title = 'Commit, push and open a pull request'): GateButton => ({ label: 'Open PR', reason, title: reason ?? title });
-  if (session.status === 'exited') return gate('Claude has exited. Resume the session first.');
+  if (exitedForGood(session)) return gate('Claude has exited. Resume the session first.');
   if (!session.busy && (session.status === 'working' || session.status === 'starting' || session.midTurn)) {
     return { label: 'Open PR after this turn', reason: null, title: 'AgentK is mid-turn: the PR prompt goes when the turn ends' };
   }
@@ -772,11 +803,11 @@ export function reviewGatesPr(s: Pick<Session, 'stage' | 'codeReview'>): boolean
  * turns, not waiting on the user or exited), as the server checks; until then it's offered disabled,
  * with `wait` saying what it waits for.
  */
-export function canRunReview(s: Pick<Session, 'kind' | 'stage' | 'prNumber' | 'codeReview' | 'status' | 'busy'>): { offered: boolean; ready: boolean; wait: string | null } {
+export function canRunReview(s: Pick<Session, 'kind' | 'stage' | 'prNumber' | 'codeReview' | 'status' | 'busy'> & Partial<Pick<Session, 'idleStoppedAt'>>): { offered: boolean; ready: boolean; wait: string | null } {
   const r = s.codeReview;
   const running = !!r && (r.state === 'describing' || r.state === 'triage' || r.state === 'fixing' || reviewRunning(r));
   const offered = s.kind !== 'code-review' && s.kind !== 'review-pr' && (s.stage === 'code' || (s.stage === 'review' && !!s.prNumber)) && !running;
-  const wait = !offered ? null
+  const wait = !offered || idleStopped(s) ? null
     : s.status === 'exited' ? 'Resume the session first'
       : s.status === 'needs_input' ? 'Answer AgentK in the terminal first'
         : s.status === 'starting' ? 'Once AgentK has started'
@@ -881,7 +912,7 @@ export function dotTitle(s: Session): string {
 /** Why answers can't be sent for AgentK to revise the design right now, or null when they can. */
 export function designReviseBlocker(session: Session): string | null {
   if (session.approvalQueued) return 'You approved the design. Cancel the approval to send answers instead.';
-  if (session.status === 'exited') return 'Claude has exited. Resume the session first.';
+  if (exitedForGood(session)) return 'Claude has exited. Resume the session first.';
   if (session.status === 'starting') return 'Wait for AgentK to finish its turn.';
   if (heldForTurnEnd(session)) return null;
   if (session.status === 'working') return 'Wait for AgentK to finish its turn.';
@@ -901,9 +932,9 @@ export interface RevisionSent {
   started: boolean;
 }
 
-/** Whether a session can take or run a turn: not exited or starting, and not waiting on the user. */
+/** Whether a session can take or run a turn: not exited (stopped for sitting idle starts again) or starting, and not waiting on the user. */
 function canWork(session: Session): boolean {
-  return session.status !== 'exited' && session.status !== 'starting' && !otherPrompt(session);
+  return !exitedForGood(session) && session.status !== 'starting' && !otherPrompt(session);
 }
 
 /** AgentK is in a turn, or Claude holds answers for the next one (through the mod). */
@@ -1005,6 +1036,21 @@ export function findingGroups(
  */
 export function findingsReviewing(r: Pick<CodeReviewSummary, 'state' | 'detail'> | null): boolean {
   return reviewRunning(r) || (r?.state === 'describing' && !r.detail);
+}
+
+/**
+ * When a task's findings open beside its terminal by themselves (`ProjectView`, as the design does
+ * in Design): a key that changes only with the review and its phase, or null. `running` while the
+ * findings read Reviewing (`findingsReviewing()`), `triage` while they wait for the user to send
+ * them. Not in fixing (they were sent), nor once the review is over; not on a code-review session,
+ * whose own screen opens them on a desktop.
+ */
+export function findingsAutoOpen(s: Pick<Session, 'kind' | 'codeReview'> | null | undefined): string | null {
+  const r = s?.codeReview;
+  if (!r || !s || isReviewChild(s)) return null;
+  if (findingsReviewing(r)) return `${r.id}:running`;
+  if (reviewWaitsOnYou(r)) return `${r.id}:triage`;
+  return null;
 }
 
 /** The findings panel header's counts, or null while it reads Reviewing (partial counts read as final). */

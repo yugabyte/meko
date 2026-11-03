@@ -156,6 +156,11 @@ class SessionTerminal {
   typing = false;
   /** Sticky Ctrl from the key bar: the next character typed is sent with Ctrl. */
   ctrl = false;
+  /**
+   * Set while AgentK has stopped the session's agent for sitting idle (TerminalPane): the first key
+   * typed, from the keyboard, the key bar or the compose box, calls it once instead of going out.
+   */
+  whenTyped: (() => void) | null = null;
   /** Select mode from the key bar (touch screens): a drag selects whole lines and copies them. */
   selecting = false;
   conn: TermConn = 'connecting';
@@ -493,6 +498,7 @@ class SessionTerminal {
    * turn. Returns false when the input couldn't be sent or queued (not connected).
    */
   private input(data: string): boolean {
+    if (this.takeTyped()) return true;
     if (this.queued) {
       // Esc or Ctrl+C while a send waits on an upload calls the send off, then goes through.
       if (data === '\x1b' || data === '\x03') this.cancelWait?.();
@@ -897,6 +903,15 @@ class SessionTerminal {
     return this.input(keySequence(key, this.term.modes.applicationCursorKeysMode));
   }
 
+  /** Calls `whenTyped` once, if it's set: true when it did. */
+  private takeTyped(): boolean {
+    const typed = this.whenTyped;
+    if (!typed) return false;
+    this.whenTyped = null;
+    typed();
+    return true;
+  }
+
   /** Arms or cancels the sticky Ctrl. */
   setCtrl(on: boolean) {
     if (this.ctrl === on) return;
@@ -922,6 +937,8 @@ class SessionTerminal {
    */
   submit(text: string): Promise<boolean> {
     if (this.sending) return Promise.resolve(false);
+    // The text stays in the compose box, to send once the agent is back.
+    if (this.takeTyped()) return Promise.resolve(false);
     return this.flush(text, 'Not connected to the session. Your message is kept; send it again once it reconnects.');
   }
 

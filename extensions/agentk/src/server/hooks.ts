@@ -55,7 +55,7 @@ function answer(res: ServerResponse, v: Record<string, unknown> | string | null)
 /** The routes AgentK's mod in Claude calls (src/mod/agentk); see modlink.ts. */
 export const MOD_ROUTES = ['/mod/hello', '/mod/poll', '/mod/ack', '/mod/measure', '/mod/held', '/mod/ask', '/mod/ask/done', '/mod/questions', '/mod/learn', '/mod/learn/start', '/mod/meko', '/mod/turn'];
 
-/** The route AgentK's session tools call (`agentk mcp`, src/server/mcp.ts), answered like the mod's routes. */
+/** The route AgentK's session tools call (`me_koder mcp`, src/server/mcp.ts), answered like the mod's routes. */
 export const TOOLS_ROUTE = '/tools';
 
 /** The routes that take a JSON body and answer JSON (`onMod`): the mod's and the session tools'. */
@@ -75,7 +75,7 @@ export interface ModReply {
  * what it gets (Kiro's guard reason and context), 204 when there is none.
  * The `/mod/*` routes are AgentK's mod in Claude: `onMod` answers them, and may hold a
  * `/mod/poll` open (its signal aborts when the mod's connection closes). `onMod` also answers
- * `/tools`, the session tools' calls from `agentk mcp` in any harness's session.
+ * `/tools`, the session tools' calls from `me_koder mcp` in any harness's session.
  *
  * The socket is bound under a temporary name and renamed into place. Closing a
  * server unlinks the path it was bound to, so this way closing never removes a

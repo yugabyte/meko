@@ -369,6 +369,8 @@ export function writeOpenCodePlugin(paths: Paths): void {
  */
 export function openCodeSessionConfig(o: {
   plugin: string; instructions: string; dirs: string[]; tools?: Record<string, unknown> | null;
+  /** The session's model (`provider/model`), over the user's own `model`; null or left out keeps theirs. */
+  model?: string | null;
   /** A code-review session's subagents, read-only, each on its model ('' the session's own). */
   agents?: { name: string; description: string; prompt: string; model: string }[] | null;
 }): string {
@@ -382,6 +384,7 @@ export function openCodeSessionConfig(o: {
     }
     : {};
   return JSON.stringify({
+    ...(o.model ? { model: o.model } : {}),
     plugin: [o.plugin],
     instructions: [o.instructions],
     ...tools,
@@ -708,4 +711,9 @@ export function deleteOpenCodeSession(command: string, id: string, cwd: string, 
 /** Resolves once no session delete is running (including ones started meanwhile). Never throws. */
 export async function openCodeDeletesSettled(): Promise<void> {
   while (deleting.size) await Promise.all(deleting);
+}
+
+/** The models in `opencode models`: one `provider/model` a line, in its order. */
+export function parseOpenCodeModels(stdout: string): string[] {
+  return [...new Set(stdout.split('\n').map((l) => l.trim()).filter((l) => /^[^\s/]+\/\S+$/.test(l)))];
 }

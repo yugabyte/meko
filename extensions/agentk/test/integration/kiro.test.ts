@@ -23,6 +23,23 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
     await env.cleanup();
   });
 
+  it("lists Kiro's models once it's signed in, and starts a session on the one picked", async () => {
+    // Signed out, the list would start Kiro's sign-in: AgentK doesn't ask for it.
+    writeFileSync(join(process.env.FAKE_KIRO_DIR!, 'signed-out'), '');
+    expect(await env.core.harnesses.models(env.core.config, 'kiro')).toEqual([]);
+    rmSync(join(process.env.FAKE_KIRO_DIR!, 'signed-out'));
+    // Kept for a while; Check again reads it again.
+    expect(await env.core.harnesses.models(env.core.config, 'kiro')).toEqual([]);
+    await env.core.harnesses.refresh(env.core.config, true);
+    expect(await env.core.harnesses.models(env.core.config, 'kiro')).toEqual(['auto', 'claude-sonnet-4.5']);
+
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'none' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Kiro on Sonnet', prompt: 'hi', start: 'code', harness: 'kiro', model: 'claude-sonnet-4.5' });
+    expect(s.model).toBe('claude-sonnet-4.5');
+    const [first] = await waitFor(() => lines(env, 'argv.jsonl'), (l) => l.length > 0, 10000, 'launch');
+    expect(first.args.slice(0, 5)).toEqual(['chat', '--agent', 'agentk', '--model', 'claude-sonnet-4.5']);
+  });
+
   it("runs a session as AgentK's Kiro agent: system lines at spawn, the Design guard, credits and Kiro's plan, exit and Resume", async () => {
     const agent = JSON.parse(readFileSync(join(process.env.KIRO_HOME!, 'agents', 'agentk.json'), 'utf8'));
     // Built from Kiro's built-in default (exported with `agent create --from`), its upgrade bookkeeping left out, with AgentK's session tools.

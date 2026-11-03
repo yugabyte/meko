@@ -233,12 +233,12 @@ func TestStatusAsksTheExtensionsAtOnce(t *testing.T) {
 		t.Errorf("status took %s", took)
 	}
 	want(t, "status", code, 0, out, "  ✓ AgentK          running, AgentK 1.0\n"+
-		"  ! Presenter       didn't answer in 2s (meko_presenter status)\n")
+		"  ! Presenter       didn't answer in 2s (me_presenter status)\n")
 	want(t, "status's links", code, 0, out, "  Agents (MCP, API)   http://127.0.0.1:"+port+"/mcp\n")
 
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
 	want(t, "status --verbose", code, 0, out, "  Extension:     agentk, running (AgentK 1.0)\n"+
-		"  Extension:     presenter, didn't answer in 2s (meko_presenter status)\n")
+		"  Extension:     presenter, didn't answer in 2s (me_presenter status)\n")
 }
 
 func TestStartStatusStop(t *testing.T) {

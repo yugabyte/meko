@@ -774,7 +774,13 @@ const MIGRATIONS: string[] = [
   `,
   // 47: the AgentK GitHub reviewer is gone (AGENTK_REVIEWER_GONE, which every start runs again).
   AGENTK_REVIEWER_GONE,
-  // 48: workshop: the bundled workshop that opened the project (src/server/workshops.ts), NULL for
+  // 48: when AgentK stopped a session's agent for sitting idle (SessionManager.stopIdle); recovery
+  // leaves such a session stopped, and any launch clears it.
+  `ALTER TABLE sessions ADD COLUMN idle_stopped_at INTEGER;`,
+  // 49: the model picked for the session's agent at the start (CreateSessionRequest.model), passed on
+  // every launch; NULL for the agent's own default.
+  `ALTER TABLE sessions ADD COLUMN model TEXT;`,
+  // 50: workshop: the bundled workshop that opened the project (src/server/workshops.ts), NULL for
   // the rest. Its demo repo has no remote, so the project opens no PR. code_reviews.hand_off: 0 for
   // a review whose findings stay with it, never sent to the task (a workshop's first look, before
   // its gotchas are in Meko); 1 for the rest.

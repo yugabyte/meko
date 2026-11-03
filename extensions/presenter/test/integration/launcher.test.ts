@@ -1,5 +1,6 @@
-// packaging/meko_presenter, the release's launcher, in a release install laid out as Meko lays it
-// out: app/<version>/{bin/meko_presenter, node/bin/node, lib/dist/server/cli.js} and app/current.
+// packaging/me_presenter, the release's launcher, in a release install laid out as Meko lays it
+// out: app/<version>/{bin/me_presenter, bin/meko_presenter (its name before, a link), node/bin/me_presenter,
+// lib/dist/server/cli.js} and app/current.
 // Each version's cli.js is a stub that says which version ran, with what. A fake `meko` on PATH
 // stands in for Meko's launcher, which counts the starts of an update and rolls one back.
 import { spawnSync } from 'node:child_process';
@@ -9,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { tempDir } from '../helpers.js';
 
-const LAUNCHER = fileURLToPath(new URL('../../packaging/meko_presenter', import.meta.url));
+const LAUNCHER = fileURLToPath(new URL('../../packaging/me_presenter', import.meta.url));
 const NEW = '0.20261025.0';
 let dir: string;
 let app: string;
@@ -21,13 +22,15 @@ beforeEach(() => {
   mkdirSync(join(v, 'bin'), { recursive: true });
   mkdirSync(join(v, 'node', 'bin'), { recursive: true });
   mkdirSync(join(v, 'lib', 'dist', 'server'), { recursive: true });
-  copyFileSync(LAUNCHER, join(v, 'bin', 'meko_presenter'));
-  symlinkSync(process.execPath, join(v, 'node', 'bin', 'node'));
+  copyFileSync(LAUNCHER, join(v, 'bin', 'me_presenter'));
+  symlinkSync('me_presenter', join(v, 'bin', 'meko_presenter'));
+  symlinkSync(process.execPath, join(v, 'node', 'bin', 'me_presenter'));
   writeFileSync(join(v, 'lib', 'dist', 'server', 'cli.js'),
     `console.log(JSON.stringify({ version: ${JSON.stringify(NEW)}, args: process.argv.slice(2), appDir: process.env.PRESENTER_APP_DIR, launcher: process.env.PRESENTER_LAUNCHER, launched: process.env.MEKO_LAUNCHED ?? null }));\n`);
   symlinkSync(NEW, join(app, 'current'));
-  // ~/.local/bin/meko_presenter, as Meko links it.
+  // ~/.local/bin/me_presenter, as Meko links it, and meko_presenter, as an older Meko did.
   mkdirSync(join(dir, 'bin'));
+  symlinkSync(join(app, 'current', 'bin', 'me_presenter'), join(dir, 'bin', 'me_presenter'));
   symlinkSync(join(app, 'current', 'bin', 'meko_presenter'), join(dir, 'bin', 'meko_presenter'));
   mkdirSync(join(dir, 'home'));
 });
@@ -51,7 +54,11 @@ MEKO_LAUNCHED=1 exec "$(sed -n 3p "${join(dir, 'launch-args')}")" "$@"
 }
 
 function presenter(env: Record<string, string>, ...args: string[]) {
-  const r = spawnSync('sh', [join(dir, 'bin', 'meko_presenter'), ...args], {
+  return presenterAs('me_presenter', env, ...args);
+}
+
+function presenterAs(command: string, env: Record<string, string>, ...args: string[]) {
+  const r = spawnSync('sh', [join(dir, 'bin', command), ...args], {
     encoding: 'utf8',
     // HOME and XDG_DATA_HOME in the test folder, so the machine's own meko is never found.
     env: { ...process.env, PATH: `${join(dir, 'meko-bin')}:/usr/bin:/bin`, HOME: join(dir, 'home'), XDG_DATA_HOME: join(dir, 'home', 'share'), MEKO_LAUNCHED: '', ...env },
@@ -65,7 +72,9 @@ describe('the release launcher', () => {
   it('runs the bundled server of the release app/current names, naming its folder and itself', () => {
     fakeMeko(true);
     const { ran } = presenter({}, 'status');
-    expect(ran).toEqual({ version: NEW, args: ['status'], appDir: join(app, NEW), launcher: join(app, NEW, 'bin', 'meko_presenter'), launched: '' });
+    expect(ran).toEqual({ version: NEW, args: ['status'], appDir: join(app, NEW), launcher: join(app, NEW, 'bin', 'me_presenter'), launched: '' });
+    // Run by its name before (an older Meko's registry), it's the same program.
+    expect(presenterAs('meko_presenter', {}, 'status').ran.launcher).toBe(join(app, NEW, 'bin', 'me_presenter'));
     // Only serve goes through Meko.
     expect(launchArgs()).toBeNull();
   });
@@ -73,7 +82,7 @@ describe('the release launcher', () => {
   it('hands serve to Meko\'s launcher, which runs it again', () => {
     fakeMeko(true);
     const { ran, stderr } = presenter({}, 'serve');
-    expect(launchArgs()).toEqual(['_launch', 'presenter', join(app, NEW, 'bin', 'meko_presenter'), 'serve']);
+    expect(launchArgs()).toEqual(['_launch', 'presenter', join(app, NEW, 'bin', 'me_presenter'), 'serve']);
     expect([ran.args, ran.launched, stderr]).toEqual([['serve'], '1', '']);
   });
 

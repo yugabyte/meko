@@ -212,6 +212,29 @@ func serveUntilUp(t *testing.T, dir, port string) {
 	}
 }
 
+// The extensions installed under their commands' old names move onto the new ones, like meko-cli,
+// only once the release is past probation: a Meko rolled back after moving them would have a
+// registry naming links its catalog doesn't know.
+func TestServeRenamesExtensionsPastProbation(t *testing.T) {
+	dir, port := setup(t)
+	noRealExtensions(t)
+	release := "0.20261021.0"
+	app := releaseInstall(t, release, "0.20261022.0")
+	if err := app.Switch("0.20261020.0", release, 1); err != nil {
+		t.Fatal(err)
+	}
+	old := agentkFromBeforeTheRename(t, dir)
+	serveUntilUp(t, dir, port)
+	if target, err := os.Readlink(old); err != nil || filepath.Base(target) != "agentk" {
+		t.Fatalf("on probation ~/.local/bin/agentk -> %q, %v", target, err)
+	}
+	if _, err := os.Lstat(filepath.Join(filepath.Dir(old), "me_koder")); !os.IsNotExist(err) {
+		t.Fatalf("~/.local/bin/me_koder on probation: %v", err)
+	}
+	finishUpdate(context.Background(), app, release, 0, paths.New(dir), slog.New(slog.DiscardHandler))
+	wantRenamed(t, dir, old)
+}
+
 // A release on probation doesn't make meko-cli at its start, since one rolled back would leave
 // meko-cli pointing at an older meko that runs as meko by that name. It makes it once the update is
 // done, and a release past probation makes it at its start.
@@ -232,7 +255,7 @@ func TestServeMakesMekoCLIPastProbation(t *testing.T) {
 	if _, err := os.Lstat(mekoCLI); !os.IsNotExist(err) { //nolint:gosec // G703: the test's home
 		t.Fatalf("meko-cli on probation: %v", err)
 	}
-	finishUpdate(context.Background(), app, release, 0, slog.New(slog.DiscardHandler))
+	finishUpdate(context.Background(), app, release, 0, paths.New(dir), slog.New(slog.DiscardHandler))
 	if p, _ := app.ReadPending(); p != nil {
 		t.Fatalf("the update isn't done: %+v", p)
 	}

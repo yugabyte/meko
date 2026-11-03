@@ -393,7 +393,7 @@ export function Banners({
         <div className="banner warn" role="alert">
           <span className="banner-text">
             The session host on {state.serverName} runs version {state.sessionHost.version}, too old for this version of
-            AgentK, so sessions can’t start. Run agentk host restart there: running sessions restart and resume.
+            AgentK, so sessions can’t start. Run me_koder host restart there: running sessions restart and resume.
           </span>
         </div>
       )}
