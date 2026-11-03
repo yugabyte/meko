@@ -128,8 +128,9 @@ func (a App) Adopt(version string) error {
 
 // AdoptAll is Adopt for every installed version.
 func (a App) AdoptAll() error {
-	var errs []error
-	for _, v := range a.Versions() {
+	versions := a.Versions()
+	errs := make([]error, 0, len(versions))
+	for _, v := range versions {
 		errs = append(errs, a.Adopt(v))
 	}
 	return errors.Join(errs...)

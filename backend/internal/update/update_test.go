@@ -432,7 +432,8 @@ func TestAppAdoptsAReleaseFromBeforeItsRename(t *testing.T) {
 	if err := os.MkdirAll(bin, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(bin, "meko_presenter"), []byte("#!/bin/sh\n"), 0o700); err != nil { //nolint:gosec // G306: a test's program
+	//nolint:gosec // G306: a test's program
+	if err := os.WriteFile(filepath.Join(bin, "meko_presenter"), []byte("#!/bin/sh\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.Repoint(older); err != nil {
@@ -461,7 +462,8 @@ func TestAppAdoptsAReleaseFromBeforeItsRename(t *testing.T) {
 	if err := os.MkdirAll(ubin, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(ubin, "meko_presenter"), []byte("#!/bin/sh\n"), 0o700); err != nil { //nolint:gosec // G306: a test's program
+	//nolint:gosec // G306: a test's program
+	if err := os.WriteFile(filepath.Join(ubin, "meko_presenter"), []byte("#!/bin/sh\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.Switch(unadopted, old, 4); err != nil {

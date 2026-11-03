@@ -194,7 +194,8 @@ func TestRenameMovesAnInstallOntoItsNewCommand(t *testing.T) {
 		if err := os.MkdirAll(bin, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(bin, "agentk"), []byte("#!/bin/sh\n"), 0o700); err != nil { //nolint:gosec // G306: test
+		//nolint:gosec // G306: a test's program
+		if err := os.WriteFile(filepath.Join(bin, "agentk"), []byte("#!/bin/sh\n"), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Symlink("agentk", filepath.Join(bin, "agent-k-local")); err != nil {

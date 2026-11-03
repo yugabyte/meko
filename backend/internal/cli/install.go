@@ -464,9 +464,9 @@ func installRelease(ctx context.Context, l paths.Layout, repo, name, version, ho
 			cat.Command, cat.Title, app.CurrentExe())
 		return app.CurrentExe(), nil
 	}
-	link, err := app.LinkCommand(home)
-	if err != nil {
-		return "", err
+	link, lerr := app.LinkCommand(home)
+	if lerr != nil {
+		return "", lerr
 	}
 	// Its command's old names (agentk before me_koder) go once the new one is there.
 	return link, cat.UnlinkOldCommands(app, home)

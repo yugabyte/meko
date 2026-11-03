@@ -351,7 +351,7 @@ func (c Catalog) isOldName(command string) bool {
 // into app (update.App.UnlinkCommandAs): once ~/.local/bin/<command> is there, it's the one way to
 // run it.
 func (c Catalog) UnlinkOldCommands(app update.App, home string) error {
-	var errs []error
+	errs := make([]error, 0, len(c.OldCommands))
 	for _, o := range c.OldCommands {
 		errs = append(errs, app.UnlinkCommandAs(home, o))
 	}
