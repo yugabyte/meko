@@ -273,8 +273,16 @@ function reviewStep(r: CodeReviewSummary): number {
 }
 
 /** What a done review shows: LGTM once nothing is left to address, else what it found. */
-function doneShowsCounts(r: CodeReviewSummary): boolean {
+function doneShowsCounts(r: Pick<CodeReviewSummary, 'counts' | 'addressed'>): boolean {
   return totalCount(r.counts) > 0 && !r.addressed;
+}
+
+/**
+ * The review is done and reads LGTM: it kept no findings, or the task said what it did with every
+ * one (`addressed`). Its task's tab and rail row then leave its magnifier out (`reviewBadge()`).
+ */
+export function reviewSettled(r: Pick<CodeReviewSummary, 'state' | 'counts' | 'addressed'> | null | undefined): boolean {
+  return !!r && r.state === 'done' && !doneShowsCounts(r);
 }
 
 /** The review's part of a task's tab: the short count after the magnifier. */
