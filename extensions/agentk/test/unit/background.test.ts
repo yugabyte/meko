@@ -13,6 +13,12 @@ describe("a turn end's background tasks", () => {
     ['one with nothing to say about it', [{ id: 'm1', type: 'monitor' }, {}], [{ type: 'monitor', description: 'monitor' }, { type: 'task', description: 'task' }]],
     ['a command over lines', [{ type: 'shell', command: 'npm run build &&\n  npm test' }], [{ type: 'shell', description: 'npm run build && npm test' }]],
     ['entries that are not tasks', [null, 'npm test', 3], []],
+    ["Claude Code's watch on a published Artifact, left out beside a shell, a subagent and a monitor, which stay", [
+      { type: 'shell', command: 'npm test' },
+      { type: 'monitor', description: 'live updates for artifact https://claude.ai/artifact/abc (watch)' },
+      { type: 'subagent', description: 'Review the change' },
+      { type: 'monitor', description: 'Tail the build log' },
+    ], [{ type: 'shell', description: 'npm test' }, { type: 'subagent', description: 'Review the change' }, { type: 'monitor', description: 'Tail the build log' }]],
   ])('%s', (_, raw, tasks) => {
     expect(backgroundTasks(raw)).toEqual(tasks);
   });

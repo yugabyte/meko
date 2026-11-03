@@ -22,7 +22,7 @@ const review = (over: Partial<CodeReviewSummary> = {}) =>
   }) as unknown as CodeReviewSummary;
 
 const ctx = (over: Partial<SessionActionContext> = {}): SessionActionContext => ({
-  acting: false, canLearn: true, mergeLearns: true, canShare: true, mekoLog: false, atTop: false, mac: true, ...over,
+  acting: false, canLearn: true, mergeLearns: true, canShare: true, atTop: false, mac: true, ...over,
 });
 
 const ids = (s: Session, on: Surface, c: Partial<SessionActionContext> = {}) => actionsOn(sessionActions(s, ctx(c)), on).map((a) => a.id);

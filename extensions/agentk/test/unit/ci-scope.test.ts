@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 // The repo root's scripts/ci-scope.sh decides which components' jobs a PR runs in
-// .github/workflows/ci.yml, and the CI gate job is the one check merging requires.
+// .github/workflows/ci.yml, and the CI gate job is the one CI check merging requires.
 const SCOPE = fileURLToPath(new URL('../../../../scripts/ci-scope.sh', import.meta.url));
 const WORKFLOWS = fileURLToPath(new URL('../../../../.github/workflows/', import.meta.url));
 const TESTS = fileURLToPath(new URL('..', import.meta.url));

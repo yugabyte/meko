@@ -55,7 +55,7 @@ its learn step. Everything else is in the ⋯ menu at the row's right end: the t
 **Run code review**, **Code review settings** (a dialog), the design, the PR on GitHub, **Open PR
 with instructions**, **Merge & Close without saving learnings**, **Share with reviewers**, **Save
 learnings to Meko**, **Move to another stage**, **Find in terminal**, **Rename session**, **Move to
-top**, the work item, **Meko calls**, **Project home**, and **Archive or discard…**, which opens
+top**, the work item, **Project home**, and **Archive or discard…**, which opens
 Archive's confirmation in the row. One list says which actions a session has, when, and why one
 waits (`sessionActions()` in `src/web/sessionactions.ts`), and the menu (`SessionMenu.tsx`), the
 phone's ⋯ sheet and the command palette each show their part of it. The menu is a standard menu
@@ -103,8 +103,10 @@ Session states, shown with a dot on each session (on its tab, or in the rail) an
   an Open PR is going now), then the status detail as for any dot; the palette says *queued*. The rail ranks it above idle and recovered, under working.
 - **Running in the background:** the agent is between turns with work it left running in the
   background, which wakes it again when it's done (`Session.background`: Claude Code's background
-  shells, subagents and monitors, from its `Stop` hook's `background_tasks`; OpenCode's background
-  shells and subagents, from AgentK's plugin; never Kiro's, see [Harnesses](harnesses.md)). The
+  shells, subagents and monitors, from its `Stop` hook's `background_tasks`, less the watch it
+  keeps on each Artifact the agent publishes, a monitor that never ends (`backgroundTasks()`);
+  OpenCode's background shells and subagents, from AgentK's plugin; never Kiro's, see
+  [Harnesses](harnesses.md)). The
   same turning ring as queued. It shows over idle and recovered only; a learn step and a queued
   gate win over it (`dotState()`). The tooltip and the palette name what's running ("running in
   the background: npm test", up to three, then how many more: `backgroundText()`). The rail ranks

@@ -19,7 +19,7 @@ export type SessionActionId =
   | 'review-retry' | 'review-open-anyway' | 'review-run' | 'review-settings' | 'design' | 'pr-link'
   | 'open-pr' | 'merge-skip-learn' | 'share' | 'learn' | 'move-session' | 'find-terminal'
   | 'rename-session' | 'session-to-top' | 'work-link' | 'work-show' | 'work-unlink' | 'attach-files'
-  | 'meko-calls' | 'home' | 'end';
+  | 'home' | 'end';
 
 /** Groups follow one another in the list; the menu draws a line between two. */
 export type ActionGroup = 'you' | 'review' | 'stage' | 'session' | 'go' | 'end';
@@ -62,8 +62,6 @@ export interface SessionActionContext {
   mergeLearns: boolean;
   /** The project can be shared with the PR's reviewers from here. */
   canShare: boolean;
-  /** The project keeps a Meko call log. */
-  mekoLog: boolean;
   /** The session is first in its project's list. */
   atTop: boolean;
   /** The task, on its code-review session's screen. */
@@ -219,9 +217,6 @@ export function sessionActions(s: Session, ctx: SessionActionContext): SessionAc
     id: 'attach-files', group: 'session', label: 'Attach files', palette: ['Attach files to ', name],
     keywords: 'attach file upload image pdf markdown document knowledge base kb meko', on: ['palette'],
   });
-  if (ctx.mekoLog) {
-    add({ id: 'meko-calls', group: 'session', label: 'Meko calls', palette: ['Meko calls of ', name], keywords: 'meko calls log debug memory search', opens: true, view: true, on: ALL });
-  }
 
   add({ id: 'home', group: 'go', label: 'Project home', opens: true, on: ['menu', 'sheet'] });
   // The sheet ends with its own Archive or discard… block; a discard under way shows in the bar.

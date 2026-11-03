@@ -650,77 +650,10 @@ export interface ProjectSettings {
   /** Browser notifications for this project. */
   notify: boolean;
   /**
-   * Keep each session's Meko calls, AgentK's and Claude's (what was sent and what came back), in
-   * meko-calls.jsonl in the session's folder, deleted with the session. Off by default.
-   */
-  mekoLog: boolean;
-  /**
    * The project's code review settings over the global ones (`[code_review]`): each one left out
    * keeps the global value. A session's own (`Session.review`) go over these.
    */
   codeReview: ReviewOverrides;
-}
-
-/** The Meko tools AgentK and Claude call for a session: the Meko calls page's tool filter. */
-export const MEKO_LOG_TOOLS = [
-  'context_search', 'memory_search', 'knowledgebase_search', 'memory_get_all', 'memory_get_by_id', 'conversation_get',
-  'artifact_get', 'memory_add', 'memory_update', 'memory_promote', 'conversation_create', 'conversation_update',
-  'conversation_add_message', 'artifact_put',
-] as const;
-
-/**
- * Who made a call in a session's Meko call log: AgentK, or the session's agent through its Meko
- * tools (`claude` whichever agent it is: Claude, Kiro or OpenCode; the page names it).
- */
-export const MEKO_CALL_BY = ['agentk', 'claude'] as const;
-export type MekoCallBy = (typeof MEKO_CALL_BY)[number];
-
-/** GET /api/projects/:id/meko-logs: a session of the project that has a Meko call log. */
-export interface MekoLogInfo {
-  sessionId: string;
-  name: string;
-  /** The session's agent, which made its `claude` calls. */
-  harness: HarnessId;
-  bytes: number;
-  updatedAt: number;
-}
-
-/** One call in a session's Meko call log, without what was sent and what came back. */
-export interface MekoCallSummary {
-  id: string;
-  /** Where its line starts in the file: the detail route's key, and `before` for the next page. */
-  offset: number;
-  at: number;
-  tool: string;
-  by: MekoCallBy;
-  /** The agent's call, made by one of its subagents. */
-  subagent: boolean;
-  /** The learn step that made it, if any. */
-  learn: string | null;
-  /** How long it took; null when the agent doesn't say (Kiro). */
-  ms: number | null;
-  ok: boolean;
-  attempts: number;
-  error: string | null;
-}
-
-/** GET /api/sessions/:id/meko-calls/:offset: one call, with what was sent and what came back. */
-export interface MekoCallDetail extends MekoCallSummary {
-  args: unknown;
-  /** The parsed reply, its text when it isn't JSON, or null when none came. */
-  result: unknown;
-  /**
-   * Claude's call whose reply was too large for its context: the notice Claude read in its place.
-   * `result` is then the reply Claude Code saved to a file, when it could be read.
-   */
-  notice: string | null;
-}
-
-/** GET /api/sessions/:id/meko-calls: a page of a session's Meko calls, newest first. */
-export interface MekoCallPage {
-  calls: MekoCallSummary[];
-  /** Older calls match too: ask again with `before` set to the last call's offset. */
-  more: boolean;
 }
 
 /**
@@ -888,9 +821,10 @@ export interface Session {
   /**
    * Work the agent left running in the background when its last turn ended, which wakes it again
    * when it's done: Claude Code's background shells, subagents and monitors (its `Stop` hook's
-   * `background_tasks`), OpenCode's background shells and subagents (from AgentK's plugin). Empty
-   * when there's none, and always for Kiro, whose hooks don't say. Kept in memory: replaced at each
-   * turn's end, and cleared when the agent exits or relaunches.
+   * `background_tasks`), less the watch on each Artifact the agent publishes, which never ends;
+   * OpenCode's background shells and subagents (from AgentK's plugin). Empty when there's none, and
+   * always for Kiro, whose hooks don't say. Kept in memory: replaced at each turn's end, and cleared
+   * when the agent exits or relaunches.
    */
   background: BackgroundTask[];
   /** Discard was asked for: the session is discarded once its learn step ends. */
@@ -2652,7 +2586,6 @@ export type TermServerMessage =
 //        409 if `replace` isn't the dedicated datapack any more)
 // DELETE /api/projects/:id/datapacks/:dpId     → Project
 // GET    /api/projects/:id/home                → ProjectHome
-// GET    /api/projects/:id/meko-logs           → MekoLogInfo[]   (the project's sessions with a Meko call log, newest first)
 // GET    /api/projects/:id/pr-reviewers        → PrReviewers[]   (the open PRs of the project's running sessions)
 // GET    /api/projects/:id/review-prs?pr=&repoPath= → ReviewablePrs   (open PRs whose description names one of the
 //        project's datapacks, in any repo; with `pr` (a number, #number, owner/name#number or PR link) that one PR,
@@ -2760,12 +2693,6 @@ export type TermServerMessage =
 // GET    /api/sessions/:id/code-review          → CodeReviewDetail   (a task's latest code review, or a code-review
 //        session's own, with every candidate, kept or dropped, and what the task did with it; 404 when it has none)
 // GET    /api/sessions/:id/discard-check       → DiscardCheck
-// GET    /api/sessions/:id/meko-calls?before=&limit=&tool=&by=agentk|claude&failed=1 → MekoCallPage   (the session's Meko
-//        call log, AgentK's calls and Claude's, newest first, read backwards from the byte offset `before`; limit 1 to 200,
-//        default 50; an empty page when it has none)
-// GET    /api/sessions/:id/meko-calls/:offset?id= → MekoCallDetail   (404 when no call with that id starts there)
-// GET    /api/sessions/:id/meko-calls.jsonl    → the log file, as a download (404 when it has none)
-// DELETE /api/sessions/:id/meko-calls          → 204   (deletes the log; the session's next calls start a new one)
 // GET    /api/sessions/:id/changes?commit=     → SessionChanges   (commit: one of the branch's commits alone, by full sha)
 // GET    /api/sessions/:id/changes/image?path=&side=old|new&commit= → image bytes (previewable types only)
 // POST   /api/sessions/:id/images  image bytes → PastedImage   (the body is the image, with an image/* Content-Type;

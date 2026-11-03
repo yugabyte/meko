@@ -34,7 +34,6 @@ import { consoleLogger, errMsg, type Logger } from './log.js';
 import { InviteService } from './invites.js';
 import { KnowledgeService } from './knowledge.js';
 import { MekoClient } from './meko.js';
-import { MekoCallLog } from './mekolog.js';
 import { MekoAgents, mekoMcpGaps, readMekoAgents, type MekoAgentsRead } from './mekoagents.js';
 import { MekoQuestions } from './mekoquestions.js';
 import { MekoClaudeWatch } from './mekoclaude.js';
@@ -51,7 +50,8 @@ import { HttpError, ProjectService } from './projects.js';
 import { SessionManager } from './sessions.js';
 import { Learner } from './learn.js';
 import { Lifecycle } from './lifecycle.js';
-import { openProjectDatapacks, parseSettings, projectRow, projectRows, pruneSessionEvents, sessionRow, sessionRows, toProject } from './store.js';
+import { removeOldMekoLogs } from './mekologcleanup.js';
+import { openProjectDatapacks, projectRows, pruneSessionEvents, sessionRows, toProject } from './store.js';
 import { CallHomeService } from './callhome.js';
 import { ClaudeCode } from './claudecode.js';
 import { SessionHost } from './hostclient.js';
@@ -161,8 +161,6 @@ export class Core extends EventEmitter {
   readonly hostFull: string;
   readonly meko: MekoClient;
   readonly capture: TranscriptCapture;
-  /** Each session's Meko calls, with their content, when its project has Log Meko calls on. */
-  readonly mekoLog: MekoCallLog;
   readonly host: SessionHost;
   readonly services: () => ServiceManager | null;
   readonly legacyTmuxPanes: () => Promise<Set<string>>;
@@ -254,18 +252,6 @@ export class Core extends EventEmitter {
     // AgentK's own Meko calls, for the usage report (counts and sizes, never their content).
     this.meko.onCall = (r) => this.record('INSERT INTO meko_agentk_calls(at, tool, input_chars, result_chars, ok, ms, learn_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
       r.at, r.tool, r.inputChars, r.resultChars, r.ok ? 1 : 0, r.ms, r.tag);
-    this.mekoLog = new MekoCallLog({
-      designs: this.paths.designs,
-      enabled: (s) => {
-        if (this.stopped) return false;
-        const r = sessionRow(this.db, s.id);
-        // Not a failed start's late calls landing in the log of the start that reused its id.
-        const p = r && r.created_at === s.createdAt && r.desired !== 'archived' ? projectRow(this.db, r.project_id) : undefined;
-        return !!p && parseSettings(p.settings_json).mekoLog;
-      },
-      log: this.log,
-    });
-    this.meko.onTrace = (t) => this.mekoLog.record(t);
     this.localReader = new LocalMekoReader(o.localMeko ?? (() => probeLocalMeko(this.mekoHome())));
     this.handOver = o.mekoHandOver ?? handOverMekoKey;
     setMekoLinkHandedOver(kvGet(this.db, MEKO_HANDED_OVER_KEY) === '1');
@@ -761,6 +747,12 @@ export class Core extends EventEmitter {
     // In the background: it may remove large build trees, and every change it makes to an idle
     // worktree is skipped once a session has claimed it.
     void this.worktrees.sweep().catch((e) => this.log.warn('checking idle worktrees failed', errMsg(e)));
+    try {
+      const removed = removeOldMekoLogs(this.db, this.paths.designs);
+      if (removed) this.log.info(`removed ${removed} Meko call logs: Meko keeps call contents itself now`);
+    } catch (e) {
+      this.log.warn("couldn't remove the old Meko call logs; trying again at the next start", errMsg(e));
+    }
     // Before the sessions are recovered, so a relaunch gets the Meko on this computer and Meko's
     // link. Bounded by `meko`'s own 5 s timeout: handing Meko AgentK's own key runs in the background.
     await this.refreshMeko();
@@ -819,18 +811,21 @@ export class Core extends EventEmitter {
     this.hooksOn = false;
     await this.hookCheck?.catch(() => undefined);
     this.sessions.mod.closeAll();
-    this.sessions.stop();
     this.learn.stop();
     this.knowledge.stop();
     await this.closeHooks();
     // Let the last turns reach Meko; one cut off here catches up when the server starts again. Kiro's
     // and OpenCode's one-shot runs already going (the plan read, deleting a run's session) get as long
-    // to end; one slower than that is left to finish on its own, as nothing kills it.
+    // to end, and so do turn ends still being handled (the diff refresh, a PR poll's git calls); one
+    // slower than that is left to finish on its own, as nothing kills it.
     await Promise.all([
       this.capture.settled(STOP_CAPTURE_MS),
+      within(this.sessions.turnEndsSettled(), STOP_CAPTURE_MS),
       within(this.kiroPlan.settled().then(kiroDeletesSettled), STOP_CAPTURE_MS),
       within(openCodeDeletesSettled(), STOP_CAPTURE_MS),
     ]);
+    // After the turn ends: a Kiro one schedules a second usage read, which mustn't run after the database closes.
+    this.sessions.stop();
     await this.meko.close();
     this.localReader.clear();
   }

@@ -212,7 +212,7 @@ export default {
       send({ hook_event_name: 'tool.execute.after', tool: e.tool, call_id: e.id, ...ids(e.sessionID) });
       if (dir && typeof e.tool === 'string' && MEKO_TOOL.test(e.tool)) logMeko(e);
     });
-    // A Meko call with its reply, for AgentK's Meko counts and call log.
+    // A Meko call with its reply, for AgentK's Meko counts (meko_calls).
     const logMeko = (e) => {
       const key = e.id + ':' + e.tool;
       const starts = mekoStarts.get(key) || [];

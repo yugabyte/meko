@@ -4,7 +4,7 @@ import type { Core } from './core.js';
 import { all, get, run } from './db.js';
 import type { ModReply } from './hooks.js';
 import { errMsg } from './log.js';
-import { launchedAgentId, mekoTag, withMekoScope, type SimilarMemory } from './meko.js';
+import { launchedAgentId, mekoTag, type SimilarMemory } from './meko.js';
 import type { MekoQuestion, QuestionMark } from './mekoquestions.js';
 import { LEARN_AGENT } from './mekousage.js';
 import { claudePath } from './paths.js';
@@ -524,8 +524,8 @@ export class Learner {
     try {
       const conv = await this.core.sessions.conversationId(row, job.datapack);
       const agent = launchedAgentId(row);
-      job.similar = await withMekoScope(row, () => mekoTag.run(job.id, () => Promise.all(job.facts.map((f) =>
-        this.core.meko.similar(memoryText(f), job.datapack.id, agent, conv, SIMILAR).catch((): SimilarMemory[] => [])))));
+      job.similar = await mekoTag.run(job.id, () => Promise.all(job.facts.map((f) =>
+        this.core.meko.similar(memoryText(f), job.datapack.id, agent, conv, SIMILAR).catch((): SimilarMemory[] => []))));
     } catch (e) {
       if (this.jobs.has(job.id)) this.fail(job, 'search', `Meko couldn't be searched (${errMsg(e)})`);
       return;
@@ -551,7 +551,7 @@ export class Learner {
     try {
       const conv = await this.core.sessions.conversationId(row, job.datapack);
       const agent = launchedAgentId(row);
-      await withMekoScope(row, () => mekoTag.run(job.id, async () => {
+      await mekoTag.run(job.id, async () => {
         for (const [i, f] of job.facts.entries()) {
           if (!this.jobs.has(job.id)) return; // the time was up: the timer closed the step
           const d = decided.get(i + 1) ?? { action: 'add', id: null, text: null };
@@ -585,7 +585,7 @@ export class Learner {
           job.tried++;
           this.core.changed(); // the count saved so far
         }
-      }));
+      });
     } catch (e) {
       if (this.jobs.has(job.id)) this.fail(job, 'save', `Meko couldn't be reached (${errMsg(e)})`);
       return;

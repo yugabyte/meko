@@ -203,19 +203,11 @@ describe("an OpenCode session's Meko calls", () => {
       { tool_use_id: 'opencode:call_6:meko_memory_add#1', agent: null, tool: 'memory_add', kind: 'save', outcome: 'ok', results: null, model: 'claude-sonnet-4-5' },
       { tool_use_id: 'opencode:call_7:meko_memory_search#1', agent: null, tool: 'memory_search', kind: 'lookup', outcome: 'error', results: null, model: 'claude-sonnet-4-5' },
     ]);
-    expect(read.mekoCalls.map((c) => ({ tool: c.tool, ms: c.ms, ok: c.ok, error: c.error, subagent: c.subagent }))).toEqual([
-      { tool: 'memory_search', ms: 1200, ok: true, error: null, subagent: false },
-      { tool: 'memory_search', ms: 1200, ok: true, error: null, subagent: true },
-      { tool: 'memory_add', ms: 1200, ok: false, error: 'Meko is down', subagent: false },
-      { tool: 'context_search', ms: 1200, ok: true, error: null, subagent: false },
-      { tool: 'memory_add', ms: 1200, ok: true, error: null, subagent: false },
-      { tool: 'memory_search', ms: 1200, ok: false, error: 'timed out', subagent: false },
-    ]);
     // None of them is a response.
     expect(all(db, 'SELECT * FROM usage_messages')).toEqual([]);
-    // Read again from the start (the file was rewritten): nothing is recorded or logged twice.
+    // Read again from the start (the file was rewritten): nothing is recorded twice.
     run(db, 'DELETE FROM usage_files');
-    expect(ingestOpenCodeUsage(db, 's1', file, 'ses_main')).toEqual({ changed: false, mekoCalls: [] });
+    expect(ingestOpenCodeUsage(db, 's1', file, 'ses_main')).toEqual({ changed: false });
   });
 });
 

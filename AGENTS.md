@@ -34,8 +34,9 @@ from the extension's folder) and which docs to keep current. Meko's own Go backe
   releases each product it names: `feat(agentk,meko): …`. They're
   checked by `sh scripts/check-title.sh "<title>"` and the `PR title` workflow. Follow the commit
   skill (`.claude/skills/commit/SKILL.md`). PRs are squash-merged, so the PR title is the subject.
-- **Changes reach `main` only through PRs** that pass the `CI gate` and `PR title` checks and
-  have an approval from the `meko-maintainers` team (the `approvals` ruleset). A PR
+- **Changes reach `main` only through PRs** that pass the `CI gate`, `PR title` and `license/cla`
+  checks and have an approval from the `meko-maintainers` team (the `approvals` ruleset).
+  `license/cla` is CLA Assistant's: it passes once the PR's author has signed the CLA. A PR
   runs only the jobs of the components it changes (`scripts/ci-scope.sh`); a push to `main` runs
   them all. Root Markdown, and Markdown only people read inside a component (READMEs,
   `AGENTS.md`, `REVIEW.md`, `docs/`), run no job, but Markdown a test reads (`backend/docs/`,

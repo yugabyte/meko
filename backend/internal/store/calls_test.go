@@ -23,7 +23,7 @@ func TestCallLog(t *testing.T) {
 		{At: now, Tool: "memory_add", DatapackID: "d2", OK: false, ErrorCode: "memory_engine_unavailable"},
 	}
 	for _, c := range calls {
-		if err := s.AddCall(ctx, c); err != nil {
+		if err := s.AddCall(ctx, c, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -51,5 +51,76 @@ func TestCallLog(t *testing.T) {
 	}
 	if all, _ := s.Calls(ctx, "", time.Time{}); len(all) != 2 {
 		t.Errorf("after pruning: %+v", all)
+	}
+}
+
+func TestCallContents(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	add := func(c Call, cc *CallContents) {
+		t.Helper()
+		if err := s.AddCall(ctx, c, cc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add(Call{At: now.Add(-10 * 24 * time.Hour), Tool: "memory_add", AgentID: "a", OK: true},
+		&CallContents{Args: `{"text":"old"}`, Reply: "added"})
+	add(Call{At: now.Add(-time.Hour), Tool: "context_search", AgentID: "a", Client: "agentk", OK: true},
+		&CallContents{Args: `{"query":"q"}`, Reply: `{"results":[]}`, Cut: true})
+	add(Call{At: now, Tool: "datapack_list", AgentID: "b", Location: LocationCloud, OK: false, ErrorCode: "x"}, nil)
+
+	got, more, err := s.ListCalls(ctx, CallFilter{}, 2)
+	if err != nil || !more || len(got) != 2 || got[0].Tool != "datapack_list" || got[0].HasContents ||
+		got[0].Location != LocationCloud || got[1].Client != "agentk" || !got[1].HasContents {
+		t.Fatalf("first page: %+v %v %v", got, more, err)
+	}
+	older, more, err := s.ListCalls(ctx, CallFilter{Before: got[1].ID}, 2)
+	if err != nil || more || len(older) != 1 || older[0].Tool != "memory_add" || !older[0].HasContents {
+		t.Fatalf("older page: %+v %v %v", older, more, err)
+	}
+	for _, c := range []struct {
+		f    CallFilter
+		want int
+	}{{CallFilter{AgentID: "a"}, 2}, {CallFilter{Client: "agentk"}, 1}, {CallFilter{Failed: true}, 1},
+		{CallFilter{Tool: "memory_add"}, 1}, {CallFilter{AgentID: "a", Tool: "datapack_list"}, 0}} {
+		if cs, _, _ := s.ListCalls(ctx, c.f, 50); len(cs) != c.want {
+			t.Errorf("%+v: %d calls, want %d", c.f, len(cs), c.want)
+		}
+	}
+
+	c, cc, ok, err := s.CallByID(ctx, got[1].ID)
+	if err != nil || !ok || c.Tool != "context_search" || cc == nil || cc.Args != `{"query":"q"}` || !cc.Cut {
+		t.Fatalf("by id: %+v %+v %v %v", c, cc, ok, err)
+	}
+	if _, cc, ok, _ = s.CallByID(ctx, got[0].ID); !ok || cc != nil {
+		t.Errorf("a call without contents: %+v %v", cc, ok)
+	}
+	if _, _, ok, _ = s.CallByID(ctx, 999); ok {
+		t.Error("an unknown id was found")
+	}
+	if n, bytes, err := s.CallContentsSize(ctx); err != nil || n != 2 || bytes == 0 {
+		t.Errorf("size: %d %d %v", n, bytes, err)
+	}
+
+	if n, err := s.PruneCallContents(ctx, now.Add(-7*24*time.Hour)); err != nil || n != 1 {
+		t.Fatalf("pruned %d contents, %v", n, err)
+	}
+	// Pruning a call takes its contents with it.
+	if _, err := s.PruneCalls(ctx, now.Add(-30*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if n, _, _ := s.CallContentsSize(ctx); n != 0 {
+		t.Errorf("contents left after pruning their calls: %d", n)
+	}
+	add(Call{At: now, Tool: "memory_get_all", OK: true}, &CallContents{Args: "{}", Reply: "[]"})
+	if n, err := s.ClearCallContents(ctx); err != nil || n != 1 {
+		t.Errorf("cleared %d, %v", n, err)
+	}
+	if cs, _, _ := s.ListCalls(ctx, CallFilter{}, 50); len(cs) != 2 || cs[0].HasContents {
+		t.Errorf("clearing kept the calls: %+v", cs)
 	}
 }

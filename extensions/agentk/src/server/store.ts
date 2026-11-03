@@ -24,7 +24,6 @@ export const DEFAULT_SETTINGS: ProjectSettings = {
   branchPrefix: DEFAULT_BRANCH_PREFIX,
   mergeMethod: 'repo-default',
   notify: true,
-  mekoLog: false,
   codeReview: {},
 };
 
@@ -161,6 +160,8 @@ export function parseSettings(json: string): ProjectSettings {
   if (!Object.hasOwn(REVIEWER_LABELS, s.reviewer)) s.reviewer = DEFAULT_SETTINGS.reviewer;
   // The AgentK reviewer's login, gone since migration 47, from a page loaded before it.
   delete (s as { reviewerLogin?: unknown }).reviewerLogin;
+  // Log Meko calls, gone since Meko keeps each call's contents itself.
+  delete (s as { mekoLog?: unknown }).mekoLog;
   s.codeReview = readOverrides(s.codeReview);
   return s;
 }

@@ -327,7 +327,6 @@ export function ProjectView({
     canLearn,
     mergeLearns: !!mergeLearnTo,
     canShare,
-    mekoLog: !!project.settings.mekoLog,
     atTop: sessions[0]?.id === session.id,
     parent,
     mac,
@@ -355,7 +354,6 @@ export function ProjectView({
       'rename-session': () => onRename(session.id),
       'session-to-top': () => onToTop(session.id),
       'work-link': () => onLinkWorkItem(session.id),
-      'meko-calls': () => navigate({ view: 'meko', projectId: project.id, sessionId: session.id }),
       home: goHome,
       end: () => setEnding(true),
     };

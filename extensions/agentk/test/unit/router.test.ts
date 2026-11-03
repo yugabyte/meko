@@ -14,15 +14,12 @@ describe('router', () => {
       expect(at('p/a/home')).toEqual({ view: 'home', projectId: 'a' });
       expect(at('p/a/s/b')).toEqual({ view: 'project', projectId: 'a', sessionId: 'b' });
       expect(at('p/a/s/b/design')).toEqual({ view: 'design', projectId: 'a', sessionId: 'b' });
-      expect(at('p/a/meko')).toEqual({ view: 'meko', projectId: 'a', sessionId: null });
-      expect(at('p/a/meko/b')).toEqual({ view: 'meko', projectId: 'a', sessionId: 'b' });
     });
 
     it('round-trips every view under the base, ids that need encoding included', () => {
       const routes: Route[] = [
         { view: 'root' }, { view: 'usage' }, { view: 'home', projectId: 'a b' }, { view: 'design', projectId: 'a', sessionId: 's/1' },
         { view: 'project', projectId: 'my repo/x', sessionId: 'a%b' }, { view: 'project', projectId: 'a', sessionId: null },
-        { view: 'meko', projectId: 'a b', sessionId: 's/1' }, { view: 'meko', projectId: 'a', sessionId: null },
       ];
       for (const r of routes) {
         const path = routePath(r, base);

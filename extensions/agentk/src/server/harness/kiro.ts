@@ -20,7 +20,7 @@ import type { SessionRow } from '../store.js';
 import { TOOLS_SERVER } from '../tooldefs.js';
 import { kiroToolsServer, skillPath, toolsReady } from '../tools.js';
 import { ingestKiroMekoCalls, recordKiroTurns } from '../usage.js';
-import type { Harness, UsageRead } from './types.js';
+import type { Harness } from './types.js';
 import { cliState } from './version.js';
 
 /** How long `kiro-cli update` may run before it's stopped. */
@@ -189,15 +189,13 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
         // The context fill from the same read still counts.
         deps.log.warn(`reading Kiro's usage for ${row.id} failed`, errMsg(e));
       }
-      let mekoCalls: UsageRead['mekoCalls'] = [];
       try {
-        const meko = ingestKiroMekoCalls(db, row.id, kiroSessionLog(conv));
-        changed ||= meko.changed;
-        mekoCalls = meko.mekoCalls;
+        // Not `changed ||= …`, which would skip the read once the turns changed something.
+        if (ingestKiroMekoCalls(db, row.id, kiroSessionLog(conv)).changed) changed = true;
       } catch (e) {
         deps.log.warn(`reading Kiro's Meko calls for ${row.id} failed`, errMsg(e));
       }
-      return { changed, contextPercent: turns.at(-1)?.contextPercent, mekoCalls };
+      return { changed, contextPercent: turns.at(-1)?.contextPercent };
     },
     ask: kiroAsker,
     status: cli.status,

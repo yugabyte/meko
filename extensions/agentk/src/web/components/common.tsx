@@ -431,7 +431,7 @@ export function InfoPanel({ id, children }: { id: string; children: ReactNode })
 
 /**
  * A checkbox with its ⓘ beside it, outside its label so a tap on it doesn't tick the box, and its
- * explanation under them. `extra` sits in the row after the ⓘ (Log Meko calls' View calls).
+ * explanation under them.
  */
 export function InfoCheck({
   id,
@@ -439,7 +439,6 @@ export function InfoCheck({
   checked,
   disabled,
   onChange,
-  extra,
   children,
 }: {
   id: string;
@@ -447,7 +446,6 @@ export function InfoCheck({
   checked: boolean;
   disabled?: boolean;
   onChange: (on: boolean) => void;
-  extra?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -458,7 +456,6 @@ export function InfoCheck({
           <span>{label}</span>
         </label>
         <InfoButton id={`${id}-info`} label={label} />
-        {extra}
       </div>
       <InfoPanel id={`${id}-info`}>{children}</InfoPanel>
     </div>

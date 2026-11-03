@@ -438,14 +438,12 @@ export function CommandPalette({
         'work-unlink': () => void api.updateWorkItem(currentSession.workItemId ?? '', { sessionId: null }).catch((e: unknown) => onError(errorMessage(e))),
         'attach-files': () => attachFiles(id),
         'find-terminal': () => getTerminal(id).openFind(),
-        'meko-calls': current ? () => navigate({ view: 'meko', projectId: current.id, sessionId: id }) : undefined,
       };
       const list = sessionActions(currentSession, {
         acting: false,
         canLearn: offersLearn(currentSession, datapack, mekoConfigured),
         mergeLearns: false,
         canShare: false,
-        mekoLog: !!current?.settings.mekoLog,
         atTop: !onSessionToTop,
         workItemTitle: item?.title,
         mac: isMac(),

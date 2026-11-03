@@ -3761,10 +3761,6 @@ div[id^='dak-mermaid-'] .label {
 .info-row > p {
   margin: 0;
 }
-/* Log Meko calls' View calls, after the ⓘ. */
-.info-row > .view-calls {
-  margin-left: 10px;
-}
 /* Its negative margin keeps a label row as tall as a plain label's, so fields side by side line up. */
 .info-btn {
   padding: 2px 4px;
@@ -3804,134 +3800,6 @@ div[id^='dak-mermaid-'] .label {
 }
 .check-hint {
   display: block;
-}
-
-/* ---------- Meko calls page ---------- */
-.mc-off {
-  border-radius: 10px;
-}
-.mc-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 10px;
-}
-.mc-bar .input {
-  width: auto;
-  max-width: 100%;
-}
-.mc-failed {
-  align-items: center;
-  font-size: 13px;
-}
-.mc-failed input {
-  margin-top: 0;
-}
-.mc-list {
-  display: flex;
-  flex-direction: column;
-}
-.mc-call {
-  border-top: 1px solid var(--rule);
-  min-width: 0;
-}
-.mc-row {
-  display: grid;
-  grid-template-columns: 150px minmax(0, 1fr) auto auto;
-  gap: 4px 14px;
-  align-items: baseline;
-  width: 100%;
-  padding: 9px 6px;
-  border: 0;
-  background: none;
-  color: var(--ink);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.mc-row:hover {
-  background: var(--sunk);
-}
-.mc-row:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-.mc-time,
-.mc-ms {
-  font: 12px var(--mono);
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-}
-.mc-tool-name {
-  font: 500 13px var(--mono);
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.mc-tag {
-  font: 11px var(--mono);
-  color: var(--accent);
-  margin-left: 8px;
-}
-/* Who made the call: AgentK's own calls are the quieter tag, so Claude's stand out. */
-.mc-tag.agentk {
-  color: var(--muted);
-}
-.mc-pill {
-  font: 500 11px/1 var(--mono);
-  padding: 3px 7px;
-  border: 1px solid currentColor;
-  border-radius: 99px;
-  white-space: nowrap;
-}
-.mc-pill.ok {
-  color: var(--ok);
-}
-.mc-pill.bad {
-  color: var(--bad);
-}
-.mc-detail {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-  padding: 2px 6px 12px;
-}
-.mc-error {
-  color: var(--bad);
-  font: 12.5px var(--mono);
-  overflow-wrap: anywhere;
-}
-.mc-label {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-/* What was sent or came back: scrolls in its own box, both ways, so the page never does. */
-.mc-json {
-  margin: 0;
-  max-height: 480px;
-  overflow: auto;
-  padding: 10px 12px;
-  border-radius: 7px;
-  background: var(--sunk);
-  font: 12px/1.5 var(--mono);
-  white-space: pre;
-}
-.mc-more {
-  display: flex;
-  justify-content: center;
-  padding: 10px 0 2px;
-}
-@media (pointer: coarse) {
-  .mc-bar .btn.small,
-  .mc-label .btn.small,
-  .mc-more .btn.small {
-    min-height: 36px;
-  }
-  .mc-row {
-    min-height: 44px;
-  }
 }
 
 /* settings dialog */
@@ -6210,31 +6078,6 @@ div[id^='dak-mermaid-'] .label {
   }
   .dp .tag {
     justify-self: start;
-  }
-  /* A Meko call takes two lines: when and how it went, then the tool and how long it took. */
-  .mc-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-  .mc-time {
-    grid-row: 1;
-    grid-column: 1;
-  }
-  .mc-pill {
-    grid-row: 1;
-    grid-column: 2;
-    justify-self: end;
-  }
-  .mc-tool-name {
-    grid-row: 2;
-    grid-column: 1;
-  }
-  .mc-ms {
-    grid-row: 2;
-    grid-column: 2;
-    justify-self: end;
-  }
-  .mc-json {
-    max-height: calc(var(--app-h, 100dvh) * 0.6);
   }
   /* Datapack names are long and differ at the end: on a phone they wrap, with the tags below. */
   .dp-row {

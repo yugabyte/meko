@@ -455,7 +455,6 @@ export class ProjectService {
       if (!Object.hasOwn(REVIEWER_LABELS, next.reviewer)) {
         throw new HttpError(400, 'Reviewer must be Yours only, People or All reviewers.');
       }
-      if (typeof next.mekoLog !== 'boolean') throw new HttpError(400, 'Log Meko calls must be true or false.');
       // What isn't a valid setting goes back to the global value (readOverrides drops it).
       if (req.settings.codeReview !== undefined) next.codeReview = readOverrides(req.settings.codeReview);
       run(this.db, 'UPDATE projects SET settings_json = ? WHERE id = ?', JSON.stringify(next), id);

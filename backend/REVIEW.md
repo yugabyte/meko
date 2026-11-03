@@ -19,7 +19,9 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       SHA-256 ([docs/knowledge.md](docs/knowledge.md)). Otherwise it's the admin token on
       `/api/v1/status`, `/api/v1/version` and `/api/v1/web/reload`, the admin or client token
       everywhere else, and nothing there only with `[server] auth = "none"`
-      ([docs/api.md](docs/api.md)). Tokens and call-log rows never hold memory or turn text. The store
+      ([docs/api.md](docs/api.md)). Tokens and call-log rows never hold memory or turn text: a call's
+      arguments and reply go only in `call_contents`, only while Settings keeps them, for 7 days, and
+      never into an export, usage stats or a log. The store
       API and the memory engine's API listen only on their unix sockets (0600) and need the internal
       token on every route, the memory engine's `/healthz` too (its reply can say why the memory
       engine failed). The API listener binds 127.0.0.1 only, checks `Host`, and refuses requests
@@ -49,7 +51,8 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 - [ ] MCP tools keep Meko Cloud's names, arguments and reply shapes ([docs/api.md](docs/api.md)),
       built in `internal/wire` when REST shares them; errors a caller can act on are replies
       (`{"error", "detail"}`, `isError: false`); every call is recorded in the call log without its
-      arguments or text. A search takes a search slot; nothing holds the writer while it waits on
+      arguments or text, through `Options.record` (with its contents while they're kept, and its
+      client), the forwarded ones too. A search takes a search slot; nothing holds the writer while it waits on
       the memory engine. A change to what AgentK's `meko.ts` sends or reads updates the replay in
       `internal/mcp/agentk_contract_test.go`.
 - [ ] The memory engine stores only through the store API, its dependencies stay pinned, and nothing copies

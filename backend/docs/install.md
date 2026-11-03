@@ -252,7 +252,7 @@ follows on stderr.
   `App.Private`: folders and programs 0700, files 0600, as everything in the data folder), with
   `app/current` and `~/.local/bin/<command>` pointing at it. Without `GITHUB_TOKEN` or a signed-in
   `gh`, a refusal from GitHub says why: GitHub's 60 API calls an hour for a caller with no token are
-  spent (it names when they come back), or, for a 401, 403 or 404, the repo may still be internal;
+  spent (it names when they come back), or, for a 401, 403 or 404, the repo may be private;
   either way it offers signing in (`update.tokenlessHint`). Then it runs
   `<command> install --meko-url <url> --meko-key <client token>` on the terminal, with
   `--non-interactive` without one, and whatever followed `--` on the command line (AgentK's
