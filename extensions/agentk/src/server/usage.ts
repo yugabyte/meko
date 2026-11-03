@@ -12,7 +12,6 @@ import {
   type MekoCall, type MekoResult, type PendingCall,
 } from './mekousage.js';
 import { parseKiroMekoCalls, type KiroTurn } from './kiro.js';
-import type { AgentMekoCall } from './mekolog.js';
 import { parseOpenCodeMekoCalls, parseOpenCodeMessages } from './opencode.js';
 import type { SessionRow } from './store.js';
 
@@ -665,10 +664,9 @@ function keepOffset(db: Db, sessionId: string, file: string, offset: number): vo
            ON CONFLICT(session_id, path) DO UPDATE SET offset = excluded.offset`, sessionId, file, offset);
 }
 
-/** What a read of an agent's own files added: whether anything did, and the Meko calls new to `meko_calls`, for the call log. */
+/** What a read of an agent's own files added: whether anything did. */
 export interface AgentUsageRead {
   changed: boolean;
-  mekoCalls: AgentMekoCall[];
 }
 
 /**
@@ -679,10 +677,9 @@ export interface AgentUsageRead {
  */
 export function ingestOpenCodeUsage(db: Db, sessionId: string, file: string, main: string | null): AgentUsageRead {
   const read = newLines(db, sessionId, file);
-  if (!read) return { changed: false, mekoCalls: [] };
+  if (!read) return { changed: false };
   const agentOf = (session: string) => (session && session !== main ? session : null);
   let added = 0;
-  const logged: AgentMekoCall[] = [];
   tx(db, () => {
     for (const m of parseOpenCodeMessages(read.text)) {
       const r = run(db, `INSERT INTO usage_messages(session_id, message_id, agent, model, at, input, output, cache_read, cache_write, cache_write_1h)
@@ -695,13 +692,11 @@ export function ingestOpenCodeUsage(db: Db, sessionId: string, file: string, mai
       const call = mekoCallOf({ toolUseId: id, tool: c.tool, at: c.at, input: c.input, model: c.model, contextTokens: null });
       // A reply too long to log counts as found, as one too large for Claude does.
       const res = mekoResultOf(id, call, c.big ? null : c.text ?? '', !c.ok);
-      if (!recordMekoCalls(db, sessionId, agentOf(c.session), [call], [res]).size) continue;
-      added++;
-      logged.push({ tool: c.tool, at: c.at, ms: c.ms, ok: c.ok, error: c.error, args: c.input, text: c.text, notice: null, subagent: !!agentOf(c.session) });
+      added += recordMekoCalls(db, sessionId, agentOf(c.session), [call], [res]).size;
     }
     keepOffset(db, sessionId, file, read.offset);
   });
-  return { changed: added > 0, mekoCalls: logged };
+  return { changed: added > 0 };
 }
 
 /**
@@ -711,17 +706,16 @@ export function ingestOpenCodeUsage(db: Db, sessionId: string, file: string, mai
  */
 export function ingestKiroMekoCalls(db: Db, sessionId: string, file: string, now = Date.now()): AgentUsageRead {
   const read = newLines(db, sessionId, file);
-  if (!read) return { changed: false, mekoCalls: [] };
-  const logged: AgentMekoCall[] = [];
+  if (!read) return { changed: false };
+  let added = 0;
   tx(db, () => {
     for (const c of parseKiroMekoCalls(read.text, now)) {
       const call = mekoCallOf({ toolUseId: c.id, tool: c.tool, at: c.at, input: c.input, model: null, contextTokens: null });
-      if (!recordMekoCalls(db, sessionId, null, [call], [mekoResultOf(c.id, call, c.text, c.isError)]).size) continue;
-      logged.push({ tool: c.tool, at: c.at, ms: null, ok: !c.isError, error: c.isError ? c.text.slice(0, 300) || 'failed' : null, args: c.input, text: c.text, notice: null, subagent: false });
+      added += recordMekoCalls(db, sessionId, null, [call], [mekoResultOf(c.id, call, c.text, c.isError)]).size;
     }
     keepOffset(db, sessionId, file, read.offset);
   });
-  return { changed: logged.length > 0, mekoCalls: logged };
+  return { changed: added > 0 };
 }
 
 /** Where a session's main transcript is, preferring the path Claude reported. */

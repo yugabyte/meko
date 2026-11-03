@@ -1,8 +1,13 @@
 import { costOf, priceFor } from '../shared/pricing.js';
-import { MEKO_LOG_TOOLS, type CallHomeAgentkMeko, type CallHomeLearn, type CallHomeMekoTool, type CallHomeTokens, type MekoFirstTurn, type MekoLearning, type MekoUsage, type SessionUsage } from '../shared/types.js';
+import { type CallHomeAgentkMeko, type CallHomeLearn, type CallHomeMekoTool, type CallHomeTokens, type MekoFirstTurn, type MekoLearning, type MekoUsage, type SessionUsage } from '../shared/types.js';
 import { all, get, type Db } from './db.js';
 import { CARRY_TURNS, SEARCH_TOOL_NAMES, SEARCH_TOOLS, searchSaving } from './mekosavings.js';
-import { TOO_LARGE } from './savedreply.js';
+
+/**
+ * Claude Code's notice for a tool result too large for Claude's context, which it saved to a file
+ * instead. Only the notice reaches Claude and the transcript.
+ */
+const TOO_LARGE = /^Error: result \(([\d,]+) characters\) exceeds maximum allowed tokens/;
 
 export type MekoKind = 'lookup' | 'save' | 'other';
 export type MekoOutcome = 'found' | 'empty' | 'error' | 'ok';
@@ -25,7 +30,12 @@ export function mekoTool(name: string): string | null {
   return MEKO_TOOL.exec(name)?.[1] ?? null;
 }
 
-const KNOWN_TOOLS: ReadonlySet<string> = new Set<string>(MEKO_LOG_TOOLS);
+/** The Meko tools agents call in a session, which `serverMekoTool` prefers when a name splits more than one way. */
+const KNOWN_TOOLS: ReadonlySet<string> = new Set<string>([
+  'context_search', 'memory_search', 'knowledgebase_search', 'memory_get_all', 'memory_get_by_id', 'conversation_get',
+  'artifact_get', 'memory_add', 'memory_update', 'memory_promote', 'conversation_create', 'conversation_update',
+  'conversation_add_message', 'artifact_put',
+]);
 
 /**
  * The Meko tool a name made of a Meko server's name, `_` and the tool calls (OpenCode's

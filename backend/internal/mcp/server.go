@@ -147,7 +147,7 @@ func (o Options) handler(t *tool, cred string) sdk.ToolHandler {
 		}
 		res := o.result(t, c, reply, err)
 		c.rec.Ms = time.Since(start).Milliseconds()
-		o.Service.RecordCall(ctx, c.rec)
+		o.record(ctx, c.rec, req, res)
 		if s := c.search; s != nil && c.rec.OK && c.rec.AgentID != memory.WebUIAgent && !fromAgentK(req) {
 			s.DatapackID, s.Tool, s.AgentID, s.ConversationID, s.At = c.rec.DatapackID, t.name, c.rec.AgentID,
 				c.rec.ConversationID, start
@@ -164,6 +164,32 @@ const (
 	ClientHeader = "X-Meko-Client"
 	ClientAgentK = "agentk"
 )
+
+// record adds a call to the call log, with the client it came from, and what it sent and got back for
+// Settings' "Keep call contents".
+func (o Options) record(ctx context.Context, rec store.Call, req *sdk.CallToolRequest, res *sdk.CallToolResult) {
+	if fromAgentK(req) {
+		rec.Client = ClientAgentK
+	}
+	o.Service.RecordCall(ctx, rec, req.Params.Arguments, replyText(res))
+}
+
+// replyText is a result's text, an error's too.
+func replyText(res *sdk.CallToolResult) string {
+	if res == nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, c := range res.Content {
+		if tc, ok := c.(*sdk.TextContent); ok {
+			if b.Len() > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString(tc.Text)
+		}
+	}
+	return b.String()
+}
 
 // fromAgentK says whether a call is AgentK's own.
 func fromAgentK(req *sdk.CallToolRequest) bool {

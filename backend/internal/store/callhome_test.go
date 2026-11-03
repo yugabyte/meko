@@ -32,7 +32,7 @@ func TestUsageTotalsAndCallDays(t *testing.T) {
 		{At: day.Add(3 * time.Hour), Tool: "memory_add", AgentID: "meko_cli", OK: true, Ms: 7},
 		{At: day.Add(25 * time.Hour), Tool: "memory_add", AgentID: "meko_cli", OK: true},
 	} {
-		if err = s.AddCall(ctx, c); err != nil {
+		if err = s.AddCall(ctx, c, nil); err != nil {
 			t.Fatal(err)
 		}
 	}

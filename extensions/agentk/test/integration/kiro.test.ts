@@ -84,13 +84,12 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
     expect(lines(env, 'argv.jsonl')[1].args).toEqual(['chat', '--agent', 'agentk', '--resume-id', row.agent_session_id]);
   });
 
-  it("shows Meko's m while Kiro calls Meko, and records its calls for the counts and the call log", async () => {
+  it("shows Meko's m while Kiro calls Meko, and records its calls for the counts", async () => {
     // Kiro has no mod: its Meko calls are told by a hook before each call to a Meko server.
     env.core.config.claude.mod = false;
     const agent = JSON.parse(readFileSync(join(process.env.KIRO_HOME!, 'agents', 'agentk.json'), 'utf8'));
     expect(agent.hooks.preToolUse).toContainEqual({ matcher: '@meko', command: expect.stringMatching(/hook\.sh'$/), timeout_ms: 5000 });
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'create', name: 'agent-k-local/test/demo' } });
-    env.core.projects.update(p.id, { settings: { mekoLog: true } });
     const s = await env.core.sessions.create(p.id, { name: 'Kiro meko', prompt: 'meko 1500', start: 'code', harness: 'kiro' });
     const get = (id: string) => env.core.sessions.get(id);
     expect((await waitFor(() => get(s.id), (x) => x.mekoCall, 10000, 'the Meko call')).status).toBe('working');
@@ -115,14 +114,6 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
     const usage = (await env.core.projects.home(p.id)).usage;
     expect(usage.bySession.find((u) => u.sessionId === s.id)?.meko).toEqual({ lookups: 3, found: 1, saves: 0 });
     expect(usage.meko).toMatchObject({ lookups: 3, found: 1, empty: 1 });
-    // The call log has them as the session's agent's, with no time taken (Kiro doesn't say).
-    const page = await env.core.sessions.mekoCalls(s.id, { by: 'claude' });
-    expect(page.calls.map((c) => ({ tool: c.tool, ok: c.ok, ms: c.ms, error: c.error }))).toEqual([
-      { tool: 'memory_search', ok: false, ms: null, error: 'Permission request failed: denied' },
-      { tool: 'memory_search', ok: true, ms: null, error: null },
-      { tool: 'memory_search', ok: true, ms: null, error: null },
-    ]);
-    expect(env.core.sessions.mekoLogs(p.id)).toEqual([expect.objectContaining({ sessionId: s.id, harness: 'kiro' })]);
 
     // A call that ends at once, in a turn that goes on: the hold keeps its m, then lets it go.
     await env.core.sessions.submit(s.id, 'meko 0 then 4000');

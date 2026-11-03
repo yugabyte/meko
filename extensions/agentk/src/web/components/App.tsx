@@ -47,7 +47,6 @@ import { PaneIcon, Rail } from './Rail';
 import { SettingsDialog, type SettingsTab } from './SettingsDialog';
 import { TopBar } from './TopBar';
 import { UsageView } from './UsageView';
-import { MekoCallsView } from './MekoCallsView';
 import { WhatsNewDialog, whatsNewBack, type WhatsNewOpener } from './WhatsNewDialog';
 import { LinkWorkItemDialog } from './LinkWorkItemDialog';
 import { WorkItemDialog } from './WorkItemDialog';
@@ -616,14 +615,6 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
             onStartSession={startForItem}
             onError={showToast}
             onSettings={() => setModal({ kind: 'settings', tab: 'work-queue' })}
-          />
-        ) : currentProject && route.view === 'meko' ? (
-          <MekoCallsView
-            key={currentProject.id}
-            project={currentProject}
-            sessionId={route.sessionId}
-            onMenu={openDrawer}
-            onError={showToast}
           />
         ) : currentProject && route.view === 'home' ? (
           <ProjectHomeView

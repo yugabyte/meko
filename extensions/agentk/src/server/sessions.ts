@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
-import type { BackgroundTask, ChangeSide, CloseSessionRequest, DiffStat, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, LearnBrief, MekoCallBy, MekoCallDetail, MekoCallPage, MekoLogInfo, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
+import type { BackgroundTask, ChangeSide, CloseSessionRequest, DiffStat, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, LearnBrief, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
 import { LEARN_MONTHS_DEFAULT, LEARN_MONTHS_MAX, LEARN_TEXT_MAX, SESSION_NAME_MAX, START_STAGES, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
@@ -20,9 +20,7 @@ import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall,
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
 import { checkStartItem, setItemSession } from './workqueue.js';
-import { AGENTK_AGENT_ID, launchedAgentId, sessionAgentId, withMekoScope } from './meko.js';
-import { claudeReply, mekoLogPath, removeMekoLog } from './mekolog.js';
-import { mekoTool } from './mekousage.js';
+import { AGENTK_AGENT_ID, launchedAgentId, sessionAgentId } from './meko.js';
 import {
   AUTO_RUN_PROMPTS, autoRunLine, DESIGN_UPKEEP_PROMPTS, designQaLine, designQuestionsLine, designUpkeepLine, designWhere, learnTask, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine,
   mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, reviewDesignLine, taskWithName, withAttachedImages, type PromptName,
@@ -863,7 +861,6 @@ export class SessionManager {
     release();
     // Its images go too: Try again says to add them again.
     removePastes(this.core.paths.pastes, id);
-    removeMekoLog(this.core.paths.designs, id);
     if (row?.kind === 'review-pr') removePrDesignFiles(this.core, id);
     // Deleting the row unlinks its work item; the session the item had before gets it back.
     const relink = this.relinks.get(id);
@@ -1449,7 +1446,7 @@ export class SessionManager {
    * Claude's AskUserQuestion calls, held until the user answers them here (`/mod/ask`) or the
    * terminal's dialog does (`/mod/ask/done`); and the design's questions from its
    * design_questions tool (`/mod/questions`); Claude's Meko calls starting and ending
-   * (`/mod/meko`), for the session's dot and, with their content, its Meko call log; and a turn you interrupted (`/mod/turn`), which fires
+   * (`/mod/meko`), for the session's dot; and a turn you interrupted (`/mod/turn`), which fires
    * no `Stop` hook. Also `/tools`: AgentK's session tools, called by `agentk mcp` in a session of any harness.
    */
   async onMod(token: string, route: string, body: Record<string, unknown>, signal: AbortSignal): Promise<ModReply> {
@@ -1505,12 +1502,6 @@ export class SessionManager {
       case '/mod/meko': {
         // Held like the call it shows: only while the mod is on (a session keeps it until relaunched).
         if (this.mod.mekoCall(row.id, body.id, body.state) && this.core.config.claude.mod) this.mekoHold.started(row.id);
-        const scope = { id: row.id, createdAt: row.created_at };
-        // `{ log: true }`: the project keeps a Meko call log, so the call's end carries the call.
-        if (body.state === 'start') return this.core.mekoLog.wants(scope) ? { status: 200, body: { log: true } } : { status: 204 };
-        // Answered once it's written (the mod doesn't wait for the answer). The log keeps the order
-        // the ends came in, a saved reply still being read included.
-        if (body.state === 'end' && body.tool !== undefined) await this.logClaudeMeko(row, body);
         return { status: 204 };
       }
       case '/mod/turn':
@@ -2323,59 +2314,6 @@ export class SessionManager {
     return img;
   }
 
-  // ---- the Meko call log (mekolog.ts) ----
-
-  /**
-   * One of Claude's Meko calls, as AgentK's mod reports its end (`/mod/meko`), into the session's
-   * Meko call log: a reply too large for Claude's context is read from the file Claude Code saved it
-   * to, the call keeping its place in the log meanwhile. Never rejects.
-   */
-  private logClaudeMeko(row: SessionRow, body: Record<string, unknown>): Promise<void> {
-    const tool = typeof body.tool === 'string' ? mekoTool(body.tool) : null;
-    const scope = { id: row.id, createdAt: row.created_at };
-    if (!tool || !this.core.mekoLog.wants(scope)) return Promise.resolve();
-    const end = Date.now();
-    const ms = typeof body.ms === 'number' && Number.isFinite(body.ms) && body.ms >= 0 ? Math.round(body.ms) : 0;
-    const str = (v: unknown) => (typeof v === 'string' ? v : null);
-    const call = claudeReply(str(body.text), row.transcript_path).then((reply) => ({
-      tool, at: end - ms, ms, ok: body.ok === true, error: str(body.error), args: body.args ?? null,
-      text: reply.text, notice: reply.notice, subagent: body.subagent === true,
-    }));
-    return this.core.mekoLog.recordAgent(scope, call);
-  }
-
-  /** The project's sessions that have a Meko call log, the latest written to first. */
-  mekoLogs(projectId: string): MekoLogInfo[] {
-    if (!projectRow(this.db, projectId)) throw new HttpError(404, 'That project no longer exists.');
-    const out: MekoLogInfo[] = [];
-    for (const r of sessionRows(this.db, projectId)) {
-      const s = r.desired === 'archived' ? null : this.core.mekoLog.stat(r.id);
-      if (s) out.push({ sessionId: r.id, name: r.name, harness: harnessOf(r.harness), ...s });
-    }
-    return out.sort((a, b) => b.updatedAt - a.updatedAt);
-  }
-
-  mekoCalls(id: string, q: { before?: number; limit?: number; tool?: string; by?: MekoCallBy; failed?: boolean }): Promise<MekoCallPage> {
-    return this.core.mekoLog.page(this.row(id).id, q);
-  }
-
-  async mekoCall(id: string, offset: number, callId: string): Promise<MekoCallDetail> {
-    const d = await this.core.mekoLog.detail(this.row(id).id, offset, callId);
-    if (!d) throw new HttpError(404, 'That call is no longer in the session\'s Meko call log.');
-    return d;
-  }
-
-  /** The session's Meko call log file, for a download. */
-  mekoLogFile(id: string): string {
-    const file = mekoLogPath(this.core.paths.designs, this.row(id).id);
-    if (!existsSync(file)) throw new HttpError(404, 'This session has no Meko call log.');
-    return file;
-  }
-
-  clearMekoLog(id: string): void {
-    this.core.mekoLog.clear(this.row(id).id);
-  }
-
   async discardCheck(id: string): Promise<DiscardCheck> {
     const row = this.row(id);
     const p = projectRow(this.db, row.project_id);
@@ -2426,12 +2364,6 @@ export class SessionManager {
       if (repo && row.kind === 'review-pr' && row.pr_number) await tryGit(repo, 'update-ref', '-d', prRef(row.pr_number));
       rmSync(join(this.core.paths.run, `${row.id}.sh`), { force: true });
       removePastes(this.core.paths.pastes, row.id);
-      // A review session's Meko call log (its passes' gotcha searches) stays with its task, which
-      // archives it when the review is done, so the Meko calls page keeps it until the task goes.
-      if (!child) {
-        removeMekoLog(this.core.paths.designs, row.id);
-        for (const c of all<{ id: string }>(this.db, `SELECT id FROM sessions WHERE parent_id = ? AND kind = 'code-review'`, row.id)) removeMekoLog(this.core.paths.designs, c.id);
-      }
       this.core.questions.forget(row.id);
       this.core.learn.forget(row.id);
       this.busy.delete(row.id);
@@ -2545,7 +2477,6 @@ export class SessionManager {
       // What its harness keeps for it (OpenCode's instructions and usage log): it can't run again.
       this.harness(row).forget?.(row);
       removePastes(this.core.paths.pastes, row.id);
-      removeMekoLog(this.core.paths.designs, row.id);
       this.core.questions.forget(row.id);
       this.core.learn.forget(row.id);
     }
@@ -2591,16 +2522,14 @@ export class SessionManager {
     if (!task || !this.sessionDatapacks(r.project_id).length) return;
     const pid = r.project_id;
     const cwd = sessionRepo(this.db, r) ?? r.worktree_path;
-    const work = withMekoScope(r, () => {
-      this.core.projects.ensureConversation(pid, SEARCH_TIMEOUT_MS).catch(() => undefined); // searchDatapacks reports a failure
-      return runRecall(r.name, task, {
-        issue: (n) => issueText(cwd, n),
-        search: async (q) => {
-          const s = await this.core.projects.searchDatapacks(pid, q, SEARCH_TIMEOUT_MS);
-          if (s.searched && s.failed === s.searched) throw s.error;
-          return s.results;
-        },
-      });
+    this.core.projects.ensureConversation(pid, SEARCH_TIMEOUT_MS).catch(() => undefined); // searchDatapacks reports a failure
+    const work = runRecall(r.name, task, {
+      issue: (n) => issueText(cwd, n),
+      search: async (q) => {
+        const s = await this.core.projects.searchDatapacks(pid, q, SEARCH_TIMEOUT_MS);
+        if (s.searched && s.failed === s.searched) throw s.error;
+        return s.results;
+      },
     });
     work.catch((e) => this.core.log.warn(`the Meko search at start failed for ${r.id}`, errMsg(e)));
     this.recall.start(r.id, work);
@@ -2643,8 +2572,7 @@ export class SessionManager {
     if (!dp || !this.core.mekoStatus.configured) return;
     try {
       const conv = await this.conversationId(r, dp);
-      await withMekoScope(r, () =>
-        this.core.meko.retitleConversation(launchedAgentId(r), dp.id, conv, conversationTitle(r.name, projectRow(this.db, r.project_id)?.name ?? r.project_id)));
+      await this.core.meko.retitleConversation(launchedAgentId(r), dp.id, conv, conversationTitle(r.name, projectRow(this.db, r.project_id)?.name ?? r.project_id));
     } catch (e) {
       this.core.log.warn(`renaming the Meko conversation for ${r.id} failed`, errMsg(e));
     }
@@ -2657,7 +2585,7 @@ export class SessionManager {
    */
   conversationId(r: SessionRow, dp: DatapackRef): Promise<string> {
     const title = conversationTitle(r.name, projectRow(this.db, r.project_id)?.name ?? r.project_id);
-    return withMekoScope(r, () => this.core.meko.ensureConversation(launchedAgentId(r), dp.id, r.claude_session_id, title));
+    return this.core.meko.ensureConversation(launchedAgentId(r), dp.id, r.claude_session_id, title);
   }
 
   /**
@@ -2712,11 +2640,6 @@ export class SessionManager {
       return;
     }
     let changed = read.changed;
-    // The agent's Meko calls its files showed (Kiro's, OpenCode's), into the session's call log.
-    if (read.mekoCalls?.length) {
-      const scope = { id: r.id, createdAt: r.created_at };
-      if (this.core.mekoLog.wants(scope)) for (const c of read.mekoCalls) void this.core.mekoLog.recordAgent(scope, Promise.resolve(c));
-    }
     if (typeof read.contextPercent === 'number') {
       const fill = Math.round(Math.min(100, Math.max(0, read.contextPercent)));
       if (this.contextFill.get(id) !== fill) {

@@ -492,15 +492,6 @@ export function CommandPalette({
         run: () => getTerminal(currentSession.id).openFind(),
       });
     }
-    if (currentSession && current?.settings.mekoLog) {
-      out.push({
-        id: 'meko-calls',
-        label: ['Meko calls of ', { session: currentSession.name }],
-        hint: 'View',
-        keywords: 'meko calls log debug memory search',
-        run: () => navigate({ view: 'meko', projectId: current.id, sessionId: currentSession.id }),
-      });
-    }
     for (const p of projects) {
       for (const s of liveSessions(p)) {
         const dot = dotState(s);
