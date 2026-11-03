@@ -90,9 +90,8 @@ export function uploadError(e: unknown, datapackName: string): HttpError {
 
 /**
  * Files added to a session's knowledge base (POST /api/sessions/:id/knowledge): checked, sent to
- * the project's dedicated datapack through Meko's presigned upload (the key stays on the server), put
- * in the session's Meko call log, and followed while Meko indexes them, with a `knowledge` event
- * when it's done.
+ * the project's dedicated datapack through Meko's presigned upload (the key stays on the server), and
+ * followed while Meko indexes them, with a `knowledge` event when it's done.
  */
 export class KnowledgeService {
   private followed = new Map<string, Followed>();
@@ -114,7 +113,6 @@ export class KnowledgeService {
     if (!body.length) throw new HttpError(400, `${filename} is empty.`);
     if (body.length > MAX_KB_UPLOAD_BYTES) throw new HttpError(413, `${filename} is over ${MAX_KB_UPLOAD_BYTES / 1024 / 1024} MB.`);
 
-    const at = Date.now();
     const generation = this.generation;
     let upload: PresignedUpload | null = null;
     let error: unknown = null;
@@ -125,14 +123,6 @@ export class KnowledgeService {
     } catch (e) {
       error = e;
     }
-    // Never the upload's URL or fields: they're a credential for the file.
-    this.core.mekoLog.record({
-      tool: 'knowledge_base_upload', at, ms: Date.now() - at, ok: !error, attempts: 1,
-      args: { datapack_id: dp.id, filename, size: body.length },
-      text: upload ? JSON.stringify({ key: upload.key, already_uploaded: upload.alreadyUploaded }) : null,
-      error: error ? errMsg(error) : null, tag: null,
-      session: { id: row.id, createdAt: row.created_at },
-    });
     if (error || !upload) throw uploadError(error, dp.name);
     const status = upload.alreadyUploaded ? 'already_uploaded' : 'processing';
     // Meko's settings changed while it uploaded: its document may not be on the Meko AgentK asks now.

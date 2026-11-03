@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { shq } from './launcher.js';
 
 /**
  * The two background services: the web server, and the session host that holds
@@ -52,6 +53,11 @@ export interface ServiceManager {
    * reinstall or upgrade runs the new version.
    */
   install(files: Record<Service, string>): void;
+  /**
+   * Rewrites the installed services' files whose content changed, without reloading them, and
+   * returns those services: launchd only (`refreshServiceFiles`). systemd doesn't need it.
+   */
+  refresh(files: Record<Service, string>): Service[];
   /** Restarts a service (for the host, this ends every Claude; recovery resumes them). */
   restart(s: Service): void;
   /** Whether the tmux service of versions before the session host is installed. */
@@ -161,6 +167,10 @@ export class SystemdServices implements ServiceManager {
     must(this.run, 'systemctl', ['--user', 'enable', '--now', this.id('host')]);
     must(this.run, 'systemctl', ['--user', 'enable', this.id('server')]);
     must(this.run, 'systemctl', ['--user', 'restart', this.id('server')]);
+  }
+
+  refresh(): Service[] {
+    return [];
   }
 
   start(s: Service): void {
@@ -324,21 +334,24 @@ export class LaunchdServices implements ServiceManager {
   install(files: Record<Service, string>): void {
     mkdirSync(dirname(this.file('server')), { recursive: true });
     for (const s of SERVICES) {
-      const f = this.file(s);
-      const changed = !existsSync(f) || readFileSync(f, 'utf8') !== files[s];
-      writeFileSync(f, files[s]);
+      // Only a changed file is written: macOS announces a rewritten one as a new background item.
+      writeIfChanged(this.file(s), files[s]);
       if (s === 'host') {
         // Never reload a loaded host job: that ends every session. A changed file applies at the next login.
         if (!this.loaded(s)) this.bootstrap(s);
-      } else if (!changed && this.loaded(s)) {
-        must(this.run, 'launchctl', ['kickstart', '-k', this.target(s)]);
       } else {
-        // launchd keeps the definition it loaded; reload the job to pick up the new file.
+        // launchd keeps the definition it loaded, which needn't be the file's even when the file is
+        // unchanged: the server's start rewrites it without reloading (`refresh`). Reload the job.
         this.unload(s);
         this.bootstrap(s);
       }
     }
     for (const s of SERVICES) this.waitRunning(s);
+  }
+
+  refresh(files: Record<Service, string>): Service[] {
+    // launchd keeps the job it loaded until the next login or install; Background Task Management reads the files.
+    return SERVICES.filter((s) => this.installed(s) && writeIfChanged(this.file(s), files[s]));
   }
 
   start(s: Service): void {
@@ -403,6 +416,76 @@ export class LaunchdServices implements ServiceManager {
 }
 
 // ---------------------------------------------------------------------------
+
+/**
+ * Writes a file unless it already holds exactly this text (and has this mode, when given), renaming
+ * it into place. Returns whether it wrote.
+ */
+function writeIfChanged(file: string, text: string, mode?: number): boolean {
+  try {
+    if (readFileSync(file, 'utf8') === text && (mode === undefined || (statSync(file).mode & 0o777) === mode)) return false;
+  } catch {
+    // missing: write it
+  }
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmp, text);
+  if (mode !== undefined) chmodSync(tmp, mode);
+  renameSync(tmp, file);
+  return true;
+}
+
+/**
+ * The program the LaunchAgents run, `<home>/service/me_agentk`: a script that execs
+ * `app/current/bin/agentk`. macOS's Background Task Management announces "Background Items Added"
+ * again whenever the program a LaunchAgent names turns out to be another file, as
+ * app/current/bin/agentk is after every update, so the jobs name this one, which an update never
+ * replaces (#430). macOS lists the jobs under this file's name, `me_agentk`.
+ */
+export function serviceLauncher(home: string): string {
+  return join(home, 'service', 'me_agentk');
+}
+
+/** Writes the LaunchAgents' launcher for this home, only when its text changed. Returns whether it wrote. */
+export function writeServiceLauncher(home: string): boolean {
+  const text = [
+    '#!/bin/sh',
+    "# AgentK's LaunchAgents run this file, written by `agentk install`. Updates leave it alone, so",
+    "# macOS doesn't announce AgentK as a new background item after each one.",
+    `exec ${shq(join(home, 'app', 'current', 'bin', 'agentk'))} "$@"`,
+    '',
+  ].join('\n');
+  return writeIfChanged(serviceLauncher(home), text, 0o755);
+}
+
+/** Deletes the launcher (`uninstall`), and its folder once empty. */
+export function removeServiceLauncher(home: string): void {
+  rmSync(serviceLauncher(home), { force: true });
+  try {
+    rmdirSync(dirname(serviceLauncher(home)));
+  } catch {
+    // not empty, or gone
+  }
+}
+
+/**
+ * At the server's start, brings the LaunchAgents running this home up to date with this release's
+ * templates and launcher, without reloading them: an install whose jobs ran app/current/bin/agentk,
+ * which macOS announced again after every update, moves to the launcher with its next update, with
+ * one last alert. The jobs run from the new files from the next login. Returns the services whose
+ * file changed; nothing on Linux, or without services or a release.
+ */
+export function refreshServiceFiles(home: string, svc: ServiceManager | null, host: string): Service[] {
+  if (svc?.kind !== 'launchd' || !process.env.AK_APP_DIR) return [];
+  const file = svc.installed('server') ? svc.file('server') : svc.installed('host') ? svc.file('host') : null;
+  if (!file) return [];
+  // The home as the jobs spell it, so files that are up to date stay as they are.
+  const named = serviceHome(readFileSync(file, 'utf8'), svc.kind);
+  const spelled = named !== null && samePath(named, home) ? named : home;
+  if (!existsSync(join(spelled, 'app', 'current', 'bin', 'agentk'))) return [];
+  writeServiceLauncher(spelled);
+  return svc.refresh(renderServiceFiles(svc, { AK_HOME: spelled, HOST: host }));
+}
 
 /**
  * Before `install` writes the services, drops the ones installed under their names from before the

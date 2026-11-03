@@ -52,74 +52,11 @@ row is demoted or detached in the same transaction as the new one is added, the 
 server-side Meko conversation (used for search) is made again in the new datapack. Pins are per session, so a running
 session's stays on the old datapack and the next one to start pins the new one.
 
-**Log Meko calls** (Project settings, off by default; shown while Meko is on, or while it's on for
-the project so it can be turned off) keeps, for each of the project's sessions, every Meko call
-AgentK makes for it and every one Claude makes in it, with what was sent and what came back, in
-`<home>/designs/<session>/meko-calls.jsonl`. Claude in that session can read the file
-(the folder is one of its `--add-dir`s). These are the session's recall at start, its Meko
-conversation (created and renamed), design uploads, and the learn step's searches and writes:
-the call sites wrap their work in `withMekoScope(session)`, an AsyncLocalStorage that
-`MekoClient.call()` reads for its `onTrace` listener (`mekolog.ts`). The
-scope names the session's id and when that start of it was made: Try again reuses a failed start's
-id, and a call the failed start still had in flight is dropped rather than logged as the new
-start's. Calls
-that belong to no session (the project home's search and Datapacks box, sharing, the invite sync,
-Settings → Meko's checks) aren't kept, nor are transcript capture runs (their failures go to
-`server.log`).
-
-Claude's calls come from AgentK's mod, whose hook on every Meko `tool.call` already tells the server
-when one starts and ends (for the session's dot). The server answers its `start` with `{ log: true }`
-while the project has the setting on, and then the `end` carries the call: the tool, what Claude
-sent (the input without the engine's own keys), the reply as Claude read it, whether it failed
-(the reply was an error, the call was refused, or it threw or was interrupted) and why, how long it
-took (from just before it ran, a permission prompt included), and whether a subagent made it. A
-call too large for the hook socket (over about 3.5 MB) is sent without its reply, then without its
-args too, and says so in its error. When Claude read only Claude Code's notice that a reply was too
-large for its context ("…Output has been saved to `<path>`"), the server reads the reply from that
-file, but only from the transcript's own session's `tool-results` folder
-(`<transcripts>/<claude session>/tool-results/` for `<claude session>.jsonl`), and keeps the notice beside it; a file it can't
-read leaves the notice as the reply. Without a live mod (Claude Code older than the mod needs, or
-`[claude] mod = false`), Claude's calls aren't logged: there's no fallback to the `PostToolUse`
-hook, which misses failed calls.
-
-Kiro's and OpenCode's calls, which have no mod, come from the usage read of their own files, the
-read that records them in `meko_calls` (see [Token usage](token-usage.md#meko-calls)): Kiro's
-session log (`<conversation>.jsonl`, the call's input and reply, but not how long it took) and the
-`meko` lines AgentK's OpenCode plugin adds to the session's `messages.jsonl` (with the time it
-took). `readUsage` hands back the calls it recorded for the first time (`UsageRead.mekoCalls`), and
-`SessionManager.ingestUsage` writes them to the log with `recordAgent`, so a file read again from
-the start never logs a call twice. They're logged as `by: 'claude'`, which names the session's
-agent whichever it is: the page labels them with the session's agent (`MekoLogInfo.harness`,
-`agentName()`), and a Kiro call shows no time.
-
-Each line holds the tool (Claude's without its MCP server's prefix), who made it (`by`: `agentk`
-or `claude`, the session's agent; lines from before Claude's calls were logged have none and are
-AgentK's), its args and its reply (parsed, or its text), the error, how long it took (null for
-Kiro's calls), the tries (2 when it was sent again
-after a transport failure: a read, or a write that surely never reached Meko; always 1 for
-Claude's), the learn step that made it, and for Claude's whether a subagent made it and the notice
-Claude read. Lines are in the order the server heard of the calls ending: while one of Claude's
-waits for its saved reply to be read, the session's later lines, AgentK's included, wait behind it
-(a queue per session in `MekoCallLog`), so the page's newest first holds. The
-summary's keys come first, before `args`. Nothing is cut and the
-file has no cap: it's deleted when the session is archived, when its start fails and when the
-project is closed. A line a crash cut short is skipped when the file is read, and the next line
-written starts on a line of its own. The API key
-is never in it: it's only ever in a header. The file is the owner's alone (`0600`).
-
-**View calls**, beside the setting, opens the **Meko calls** page (`/p/<project>/meko`, or
-`/p/<project>/meko/<session>` from the session's ⋯ sheet or the command palette, both offered while
-the setting is on). It shows one session at a time (the one written to last unless one is named),
-newest first, 50 at a time with **Load older**, filtered by tool, by who made the call (**AgentK**,
-**Claude**, each call tagged with it) or **Failed only**. The server reads
-the file backwards from the end in 64 KB chunks, asynchronously so it never holds up other requests
-(`GET /api/sessions/:id/meko-calls?before=`, the byte offset the page stopped at), parsing only each
-line's summary. An unfiltered page reads only as far back as its own calls; a filter that matches
-few calls may read the whole file. A call opens to **Sent** and **Got
-back** by the offset its line starts at, checked against its id (and **Claude read**, the notice, for
-a reply too large for Claude). **Copy call**, **Download** (the
-file) and **Clear** (deletes it) are there too. With the setting off, the page says so and offers
-**Turn on**.
+**AgentK keeps no log of Meko calls.** What AgentK's and a session's agent's Meko calls send and get
+back is Meko's to keep, not AgentK's. AgentK kept a log of its own before
+(`designs/<session>/meko-calls.jsonl`, the project setting Log Meko calls); a start of this version
+deletes those files once (`removeOldMekoLogs`, kv `meko-call-logs-removed`), and is marked done only
+once every one is gone.
 
 The searches Meko couldn't answer are Meko's: the dedicated datapack's **Context Gaps** tab in
 Meko's web UI (for a Meko Cloud datapack, Meko's page for its Context Gaps). While AgentK's Meko

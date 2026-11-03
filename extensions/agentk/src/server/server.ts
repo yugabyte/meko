@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import fastifyStatic from '@fastify/static';
@@ -6,13 +6,13 @@ import fastifyWebsocket from '@fastify/websocket';
 import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck,
-  EventsClientMessage, HarnessStatus, KnowledgeUpload, MekoCallBy, MekoCallDetail, MekoCallPage, MekoDatapack, MekoLogInfo, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, StagedImage,
+  EventsClientMessage, HarnessStatus, KnowledgeUpload, MekoDatapack, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, StagedImage,
   HeldReview, HeldReviewsResult, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, RunActionsRequest, RunActionsResult, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
   JoinByLinkRequest, JoinByLinkResult, LinkGrant, ShareLink, ShareLinkChange, ShareLinkState,
   CloseWorkItemsRequest, CreateWorkItemRequest, ReorderWorkItemsRequest, UpdateWorkItemRequest, WorkItem, WorkLinkMatch, WorkSync,
 } from '../shared/types.js';
-import { ACTIONS_MAX, LINK_GRANTS, MAX_KB_UPLOAD_BYTES, MAX_PASTE_BYTES, MEKO_CALL_BY, SHARE_GRANTS, WORK_SYNC_MINUTES_MAX } from '../shared/types.js';
+import { ACTIONS_MAX, LINK_GRANTS, MAX_KB_UPLOAD_BYTES, MAX_PASTE_BYTES, SHARE_GRANTS, WORK_SYNC_MINUTES_MAX } from '../shared/types.js';
 import { AGENTK_PATH, shareLinkToken, shareLinkUrl } from '../shared/mekourls.js';
 import { HARNESS_IDS, isHarnessId } from '../shared/harnesses.js';
 import { EMAIL_RE, MAX_SHARE_EMAILS } from '../shared/emails.js';
@@ -451,33 +451,6 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.get<{ Params: { id: string } }>('/api/sessions/:id/base-branches', async (req) => core.sessions.baseBranches(req.params.id));
   app.post<{ Params: { id: string }; Body: MoveSessionRequest }>('/api/sessions/:id/move', async (req) =>
     core.sessions.move(req.params.id, req.body));
-  app.get<{ Params: { id: string } }>('/api/projects/:id/meko-logs', async (req): Promise<MekoLogInfo[]> => core.sessions.mekoLogs(req.params.id));
-  app.get<{ Params: { id: string }; Querystring: { before?: string; limit?: string; tool?: string; by?: string; failed?: string } }>(
-    '/api/sessions/:id/meko-calls', async (req): Promise<MekoCallPage> => {
-      const { before, limit, tool, by, failed } = req.query;
-      if (by && !(MEKO_CALL_BY as readonly string[]).includes(by)) throw new HttpError(400, 'by must be agentk or claude.');
-      const num = (v: string | undefined, what: string) => {
-        if (v === undefined || v === '') return undefined;
-        const n = Number(v);
-        if (!Number.isSafeInteger(n) || n < 0) throw new HttpError(400, `${what} must be a whole number.`);
-        return n;
-      };
-      return core.sessions.mekoCalls(req.params.id, {
-        before: num(before, 'before'), limit: num(limit, 'limit'), tool: tool || undefined, by: (by || undefined) as MekoCallBy | undefined,
-        failed: failed === '1' || failed === 'true',
-      });
-    });
-  app.get<{ Params: { id: string } }>('/api/sessions/:id/meko-calls.jsonl', async (req, reply) => {
-    const file = core.sessions.mekoLogFile(req.params.id);
-    const name = `${req.params.id.replace(/[^A-Za-z0-9._-]+/g, '_')}-meko-calls.jsonl`;
-    return reply.type('application/x-ndjson').header('Content-Disposition', `attachment; filename="${name}"`).send(createReadStream(file));
-  });
-  app.get<{ Params: { id: string; offset: string }; Querystring: { id?: string } }>('/api/sessions/:id/meko-calls/:offset',
-    async (req): Promise<MekoCallDetail> => core.sessions.mekoCall(req.params.id, Number(req.params.offset), req.query.id ?? ''));
-  app.delete<{ Params: { id: string } }>('/api/sessions/:id/meko-calls', async (req, reply) => {
-    core.sessions.clearMekoLog(req.params.id);
-    return reply.code(204).send();
-  });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/code-review', async (req): Promise<CodeReviewDetail> => {
     core.sessions.row(req.params.id);
     return core.reviews.detail(req.params.id);

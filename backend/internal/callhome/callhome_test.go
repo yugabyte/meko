@@ -128,7 +128,7 @@ func TestSendsCountsOnly(t *testing.T) {
 		{At: now0.Add(-3 * time.Hour), Tool: "hush_tool", AgentID: "hush-bot", OK: true},
 		{At: now0.Add(-24 * time.Hour), Tool: "memory_add", AgentID: "meko_cli", OK: true},
 	} {
-		if err := r.st.AddCall(ctx, c); err != nil {
+		if err := r.st.AddCall(ctx, c, nil); err != nil {
 			t.Fatal(err)
 		}
 	}

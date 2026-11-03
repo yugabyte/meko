@@ -2,9 +2,13 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/yugabyte/meko/backend/internal/store"
 )
@@ -24,8 +28,8 @@ func TestCallLogRecordsAndPrunes(t *testing.T) {
 	recent := store.Call{At: time.Now(), Tool: "context_search", OK: true}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	svc.RecordCall(canceled, old) // recorded even when the request is already over
-	svc.RecordCall(ctx, recent)
+	svc.RecordCall(canceled, old, nil, "") // recorded even when the request is already over
+	svc.RecordCall(ctx, recent, nil, "")
 
 	run, stop := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -76,7 +80,7 @@ func TestCallUsage(t *testing.T) {
 			c.DatapackID = "dp"
 		}
 		c.At = now.Add(time.Duration(i) * time.Second)
-		if err = st.AddCall(ctx, c); err != nil {
+		if err = st.AddCall(ctx, c, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -146,7 +150,7 @@ func TestCallWindow(t *testing.T) {
 	svc := New(st, nil, Options{})
 	for _, ago := range []int{1, 10, 60} {
 		c := store.Call{At: time.Now().AddDate(0, 0, -ago), Tool: "context_search", DatapackID: "dp", OK: true}
-		if err = st.AddCall(ctx, c); err != nil {
+		if err = st.AddCall(ctx, c, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -196,7 +200,7 @@ func TestContextStats(t *testing.T) {
 		{Tool: "context_search", OK: false, TokensSent: 200, TokensIfRaw: 900}, // failed
 	} {
 		c.At, c.DatapackID = now, "d"
-		if err = st.AddCall(ctx, c); err != nil {
+		if err = st.AddCall(ctx, c, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -211,11 +215,70 @@ func TestContextStats(t *testing.T) {
 	// An older call's saving was measured against another baseline (here a 50-chunk knowledge base):
 	// it's counted against the default, so saved never exceeds the baseline.
 	if err = st.AddCall(ctx, store.Call{At: now, DatapackID: "d", Tool: "context_search", OK: true, TokensSent: 400,
-		TokensSaved: 49600}); err != nil {
+		TokensSaved: 49600}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ = svc.CallStats(ctx, "d", 0); got.Context.IfRaw != 38000 || got.Context.Requests != 3 ||
 		got.Context.Saved != 26000+9600 || got.Context.Sent != 2400 {
 		t.Errorf("an older call: %+v", got.Context)
+	}
+}
+
+func TestCallContents(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "meko.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err = st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	svc := New(st, nil, Options{})
+	sent := json.RawMessage(`{"query":"what broke"}`)
+
+	svc.RecordCall(ctx, store.Call{At: time.Now(), Tool: "context_search", OK: true}, sent, "nothing")
+	if st0, _ := svc.CallContentsState(ctx); st0.Keep || st0.Calls != 0 || st0.RetentionDays != 7 {
+		t.Fatalf("kept while off: %+v", st0)
+	}
+	if err = svc.SetKeepCallContents(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	svc.RecordCall(ctx, store.Call{At: time.Now(), Tool: "context_search", OK: true}, sent, "found it")
+	calls, _, _ := svc.ListCalls(ctx, store.CallFilter{}, 10)
+	if len(calls) != 2 || !calls[0].HasContents || calls[1].HasContents {
+		t.Fatalf("calls: %+v", calls)
+	}
+	_, cc, err := svc.Call(ctx, calls[0].ID)
+	if err != nil || cc == nil || cc.Args != string(sent) || cc.Reply != "found it" || cc.Cut {
+		t.Fatalf("contents: %+v %v", cc, err)
+	}
+	if _, _, err = svc.Call(ctx, 999); !errors.Is(err, ErrNotFound) {
+		t.Errorf("unknown call: %v", err)
+	}
+	if err = svc.SetKeepCallContents(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := svc.CallContentsState(ctx); s.Keep || s.Calls != 1 || s.Bytes == 0 {
+		t.Errorf("turned off: %+v", s)
+	}
+	if err = svc.ClearCallContents(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := svc.CallContentsState(ctx); s.Calls != 0 {
+		t.Errorf("cleared: %+v", s)
+	}
+}
+
+func TestCallContentsCut(t *testing.T) {
+	cc := callContents(json.RawMessage(`{"filename":"a.pdf","content_base64":"AAAAAAAA"}`), "ok")
+	if !strings.Contains(cc.Args, `"content_base64":"<6 bytes>"`) || !strings.Contains(cc.Args, "a.pdf") ||
+		cc.Cut {
+		t.Errorf("base64 left in: %s", cc.Args)
+	}
+	long := strings.Repeat("é", CallContentsMax) // 2 bytes each: cut mid-way, on a character
+	cc = callContents(nil, long)
+	if !cc.Cut || len(cc.Reply) != CallContentsMax || !utf8.ValidString(cc.Reply) || cc.Args != "{}" {
+		t.Errorf("cut: %d bytes, valid %v, cut %v, args %q", len(cc.Reply), utf8.ValidString(cc.Reply), cc.Cut, cc.Args)
 	}
 }

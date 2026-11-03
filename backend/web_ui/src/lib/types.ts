@@ -84,6 +84,42 @@ export interface MekoCall {
   conversation_n: number;
   // Whether the tool only reads, as its definition says; in a turn's trace only.
   read_only?: boolean;
+  // On the Calls page's calls only: its ids, "agentk" for AgentK's own calls, and whether what it sent
+  // and got back is kept.
+  datapack_id?: string;
+  conversation_id?: string;
+  client?: string;
+  has_contents?: boolean;
+}
+
+// GET /calls/:id: a call, with what it sent (JSON) and got back while Settings keeps call contents.
+export interface CallDetail extends MekoCall {
+  args?: string;
+  reply?: string;
+  // Either was cut to fit.
+  cut?: boolean;
+}
+
+// GET /calls: a page of the call log, newest first; more says older ones match too.
+export interface CallPage {
+  calls: MekoCall[];
+  more: boolean;
+}
+
+// The Calls page's filters, as its address's query has them.
+export interface CallFilter {
+  agent?: string;
+  tool?: string;
+  client?: string;
+  failed?: boolean;
+}
+
+// GET /settings/call-contents: whether calls' contents are kept, for how long, and what's kept now.
+export interface CallContents {
+  keep: boolean;
+  retention_days: number;
+  calls: number;
+  bytes: number;
 }
 
 // GET /datapacks/:id/usage: Meko local's own view of the call log.

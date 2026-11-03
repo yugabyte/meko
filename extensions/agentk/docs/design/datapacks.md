@@ -346,8 +346,8 @@ case (`isKnowledgeFile()` in `src/shared/knowledge.ts`).
   (`STORAGE_<S3 code>`), a 403 there being the link expiring (try again), anything else its
   message plus try again or use Meko's web app; anything else, try again or use Meko's web app. Only 400,
   403, 413 and 415 keep their status; the rest are 502, so the browser never gets a 401, which
-  would sign it out. The upload is in the session's Meko call log (`knowledge_base_upload`), with
-  the key and never the URL or fields: they're a credential for the file until they expire.
+  would sign it out. The upload's URL and fields are never logged: they're a credential for the
+  file until they expire.
 - **Indexing.** For a `processing` upload the server follows
   `/datapacks/:id/knowledge-bases/document-status?document_key=` (its `state`, or from an older
   Meko its `document_status`) every

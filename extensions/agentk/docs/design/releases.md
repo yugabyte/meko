@@ -13,8 +13,9 @@ Part of the [AgentK design](../design.md).
   Integration tests run against a real session host and git, with a stub `claude` binary that fakes the TUI and fires the hooks.
   A separate `PR title` workflow checks the title with the repo root's `scripts/check-title.sh` and reruns when
   the PR is edited. Changes reach `main` only through PRs, squash-merged once the `CI gate` check (over
-  every component's jobs, run or skipped) and the title check pass and the `meko-maintainers` team
-  approves (the `approvals` ruleset).
+  every component's jobs, run or skipped), the title check and CLA Assistant's `license/cla` check
+  (the author has signed the CLA) pass and the `meko-maintainers` team approves (the `approvals`
+  ruleset).
 - **Versioning (on push to main).** Versions are `0.YYYYMMDD.N`: the UTC date, and `N` counting
   from 0 for each release that day. Commit subjects are `<type>(<component>[/<area>])[!]: <summary>`
   with one of nine types and one of the repo's components (`agentk`, `meko`, `presenter`, `repo`:
@@ -202,7 +203,10 @@ The launcher finds the home from its own folder (`<home>/app/<version>`), so a r
 move runs the previous version from the new home. An install still in an older home moves at its
 first start of a release Meko launches; Meko updates it once it's in Meko's data folder.
 
-The rail shows "Updated to v0.4.1 (from v0.4.0)" with a **What's new** link. Updates never need a
+The rail shows "Updated to v0.4.1 (from v0.4.0)" with a **What's new** link. It goes on
+**Dismiss**, or by itself once the page has been in view for 2 minutes in all (`hideWhenSeen` in
+`Banners.tsx`: the clock runs only while the tab is shown, so an update that lands in a
+background tab is still seen), and stays gone for that update in that browser. Updates never need a
 maintenance window, because they never touch the session host.
 
 **What's new.** Releases come out several times a day and each one's notes cover only the commits

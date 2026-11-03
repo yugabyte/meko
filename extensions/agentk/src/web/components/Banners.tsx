@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { AppState, DatapackInvite, FailedStart } from '../../shared/types';
 import { notConnectedText, onlyMekoBlocks } from '../../shared/harnesses';
 import { MEKO_INSTALL_COMMAND } from '../../shared/mekourls';
@@ -14,6 +14,40 @@ import { Busy } from './common';
 const DISMISS_KEY = 'ak-dismissed-updated-from';
 /** The failed update whose banner was dismissed: its job's start. */
 const FAILED_KEY = 'ak-dismissed-update-failed';
+
+/** How long the "Updated to" banner shows, counting only while the page is in view, before it dismisses itself. */
+export const UPDATED_BANNER_MS = 2 * 60_000;
+
+/**
+ * Calls `hide` once the page has been in view for `ms` in all: the clock runs only while it's shown,
+ * so a banner in a background tab still gets seen. Returns the cleanup.
+ */
+export function hideWhenSeen(
+  page: Pick<Document, 'visibilityState' | 'addEventListener' | 'removeEventListener'>,
+  ms: number,
+  hide: () => void,
+): () => void {
+  let left = ms;
+  let since = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const tick = () => {
+    if (page.visibilityState === 'visible') {
+      if (timer !== undefined) return;
+      since = Date.now();
+      timer = setTimeout(hide, left);
+    } else if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+      left -= Date.now() - since;
+    }
+  };
+  page.addEventListener('visibilitychange', tick);
+  tick();
+  return () => {
+    page.removeEventListener('visibilitychange', tick);
+    clearTimeout(timer);
+  };
+}
 
 function readDismissed(key = DISMISS_KEY): string | null {
   try {
@@ -343,6 +377,15 @@ export function Banners({
   const failedKey = failed && meko?.job ? meko.job.started_at : null;
   const [dismissedFailure, setDismissedFailure] = useState<string | null>(() => readDismissed(FAILED_KEY));
   const updatedKey = u.justUpdatedFrom ? `${u.justUpdatedFrom}->${u.current}` : null;
+  const shownUpdate = !stale && updatedKey && dismissed !== updatedKey ? updatedKey : null;
+  // The "Updated to" banner dismisses itself once it has been seen for a while, as Dismiss does.
+  useEffect(() => {
+    if (!shownUpdate) return;
+    return hideWhenSeen(document, UPDATED_BANNER_MS, () => {
+      saveDismissed(DISMISS_KEY, shownUpdate);
+      setDismissed(shownUpdate);
+    });
+  }, [shownUpdate]);
 
   return (
     <div className="banners">
@@ -382,7 +425,7 @@ export function Banners({
         </div>
       )}
       {/* After an update this shows once the page has reloaded, not beside the Reload banner. */}
-      {!stale && updatedKey && dismissed !== updatedKey && (
+      {shownUpdate && (
         <div className="banner info">
           Updated to v{u.current} (from v{u.justUpdatedFrom}).
           <button className="link-btn" onClick={() => u.justUpdatedFrom && onWhatsNew(u.justUpdatedFrom, u.current)}>
@@ -391,8 +434,8 @@ export function Banners({
           <button
             className="link-btn"
             onClick={() => {
-              saveDismissed(DISMISS_KEY, updatedKey);
-              setDismissed(updatedKey);
+              saveDismissed(DISMISS_KEY, shownUpdate);
+              setDismissed(shownUpdate);
             }}
           >
             Dismiss

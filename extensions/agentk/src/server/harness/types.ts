@@ -9,7 +9,6 @@ import type { Db } from '../db.js';
 import type { GuardDecision, HookContext, HookPayload } from '../hooks.js';
 import type { LauncherSpec } from '../launcher.js';
 import type { Logger } from '../log.js';
-import type { AgentMekoCall } from '../mekolog.js';
 import type { Paths } from '../paths.js';
 import type { SessionRow } from '../store.js';
 import type { ReviewLaunch } from '../review/runner.js';
@@ -70,11 +69,6 @@ export interface UsageRead {
   changed: boolean;
   /** How full its context window is after its last turn (percent), when the harness's files say (Kiro's). */
   contextPercent?: number | null;
-  /**
-   * The agent's Meko calls the read found for the first time, with what was sent and what came back,
-   * for the session's Meko call log (Kiro's and OpenCode's; Claude's reach it through the mod).
-   */
-  mekoCalls?: AgentMekoCall[];
 }
 
 /**

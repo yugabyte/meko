@@ -341,32 +341,6 @@ test("tells AgentK when each of Claude's Meko calls starts and ends, failed ones
   ])
 })
 
-test("sends each of Claude's Meko calls whole while AgentK logs them, and what it can of one too large to send", async ($, on) => {
-  mock.env(on, ENV)
-  const clock = mock.clock(on)
-  const calls = routes(on, (path, body) => (path === '/mod/meko' && body.state === 'start' ? answer(200, { log: true }) : answer(204)))
-  on('tool.call', { tool: 'mcp__meko__context_search' }, () => ({ result: '{"results":[]}' }))
-  // A refusal of any length is cut like a failed reply, so no error makes the call too large to send.
-  on('tool.call', { tool: 'mcp__meko__memory_search' }, () => ({ deny: `Not allowed: ${'n'.repeat(5000)}` }))
-  on('tool.call', { tool: 'mcp__meko__memory_add' }, () => {
-    throw new Error('Meko is down')
-  })
-  on('tool.call', { tool: 'mcp__meko__artifact_put' }, () => ({ result: 'ok' }))
-  await $.tool.call({ tool: 'mcp__meko__context_search', tool_use_id: 'tm1', query: 'login', datapack_id: 'd1' })
-  await $.tool.call({ tool: 'mcp__meko__memory_search', tool_use_id: 'tm2', query: 'x' }).catch(() => null)
-  await $.tool.call({ tool: 'mcp__meko__memory_add', tool_use_id: 'tm3', text: 'a fact' }).catch(() => null)
-  const big = 'b'.repeat(4 * 1024 * 1024)
-  await $.tool.call({ tool: 'mcp__meko__artifact_put', tool_use_id: 'tm4', content_base64: big })
-  await clock.advance(1)
-  const ends = calls.filter((c) => c.body.state === 'end').map((c) => c.body)
-  expect(ends).toEqual([
-    { id: 'tm1', state: 'end', tool: 'mcp__meko__context_search', args: { query: 'login', datapack_id: 'd1' }, ms: expect.any(Number), ok: true, text: '{"results":[]}', error: null, subagent: false },
-    expect.objectContaining({ id: 'tm2', tool: 'mcp__meko__memory_search', args: { query: 'x' }, ok: false, text: null, error: `Not allowed: ${'n'.repeat(287)}` }),
-    expect.objectContaining({ id: 'tm3', tool: 'mcp__meko__memory_add', args: { text: 'a fact' }, ok: false, text: null, error: expect.any(String) }),
-    expect.objectContaining({ id: 'tm4', tool: 'mcp__meko__artifact_put', args: null, ok: true, text: null, error: expect.stringMatching(/^The call was too large to log/) }),
-  ])
-})
-
 test("leaves Claude's Meko calls alone outside an AgentK session", async ($, on) => {
   mock.env(on, {})
   const calls = routes(on, () => answer(204))

@@ -36,7 +36,6 @@ goes idle for the next session on the repo (see [Worktree reuse](#worktree-reuse
   designs/<session>/design.md      # markdown design written during Design (Artifact designs live on claude.ai)
   designs/<session>/questions.json # the design's open questions for the user, written beside it
   designs/<session>/questions-approval.json # what an approval left to AgentK, undone on a move back to Design
-  designs/<session>/meko-calls.jsonl # the session's Meko calls, AgentK's and Claude's, with their content, while its project has Log Meko calls on (removed on archive)
   pastes/<session>/<time>-<random>.<ext>  # images pasted into the terminal, for Claude to read (removed on archive)
   pastes/.new/<project>/<time>-<random>.<ext>  # images added in the New session dialog, until a session starts with them (or a day)
 

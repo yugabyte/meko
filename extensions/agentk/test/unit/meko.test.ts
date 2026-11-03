@@ -4,7 +4,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MekoClient, mekoTag, withMekoScope, type MekoCallRecord, type MekoTrace } from '../../src/server/meko.js';
+import { MekoClient, mekoTag, type MekoCallRecord } from '../../src/server/meko.js';
 
 type Handler = (args: Record<string, unknown>) => unknown | Promise<unknown>;
 
@@ -192,40 +192,7 @@ describe('Meko client', () => {
     await client.addMemory('z', 'd1', 'agent', 'conv');
   });
 
-  it('traces each call with what was sent and what came back, and the session and step it was for', async () => {
-    const traces: MekoTrace[] = [];
-    client.onTrace = (t) => traces.push(t);
-    meko.tools.memory_add = () => ({ results: [{ id: 'm1' }] });
-    meko.tools.memory_update = () => ({ error: 'not_found', detail: 'no such memory' });
-    meko.tools.context_search = () => ({ results: { memory: [] } });
-    await withMekoScope({ id: 's1', created_at: 5 }, () => mekoTag.run('L1', () => client.addMemory('Gotcha: x.', 'd1', 'agent', 'conv')));
-    await expect(withMekoScope({ id: 's1', created_at: 5 }, () => client.updateMemory('m9', 'y', 'd1', null, 'conv'))).rejects.toThrow(/not_found/);
-    await client.search('q', { id: 'd1', name: 'dp' }, 'agent', 'conv');
-    expect(traces).toEqual([
-      {
-        tool: 'memory_add', at: expect.any(Number), ms: expect.any(Number), ok: true, attempts: 1,
-        args: { text: 'Gotcha: x.', datapack_id: 'd1', agent_id: 'agent', conversation_id: 'conv', metadata: null },
-        text: '{"results":[{"id":"m1"}]}', error: null, tag: 'L1', session: { id: 's1', createdAt: 5 },
-      },
-      {
-        tool: 'memory_update', at: expect.any(Number), ms: expect.any(Number), ok: false, attempts: 1,
-        args: { memory_id: 'm9', text: 'y', datapack_id: 'd1', agent_id: null, conversation_id: 'conv' },
-        text: '{"error":"not_found","detail":"no such memory"}', error: 'not_found: no such memory', tag: null, session: { id: 's1', createdAt: 5 },
-      },
-      expect.objectContaining({ tool: 'context_search', ok: true, session: null, tag: null }),
-    ]);
-    // The key is in a header only: never in a trace.
-    expect(JSON.stringify(traces)).not.toContain('test-key');
-    // A listener that throws never fails the call.
-    client.onTrace = () => {
-      throw new Error('disk full');
-    };
-    await client.addMemory('z', 'd1', 'agent', 'conv');
-  });
-
-  it('never sends a write twice after it may have reached Meko, but retries reads, tracing that as two attempts with no reply', async () => {
-    const traces: MekoTrace[] = [];
-    client.onTrace = (t) => traces.push(t);
+  it('never sends a write twice after it may have reached Meko, but retries reads', async () => {
     meko.drop.add('memory_add');
     await expect(client.addMemory('x', 'd1', 'agent', 'conv')).rejects.toThrow();
     expect(meko.calls.filter((c) => c.name === 'memory_add')).toHaveLength(1);
@@ -233,10 +200,6 @@ describe('Meko client', () => {
     meko.drop.add('context_search');
     await expect(client.search('q', { id: 'd1', name: 'dp' }, 'agent', 'conv')).rejects.toThrow();
     expect(meko.calls.filter((c) => c.name === 'context_search')).toHaveLength(2);
-    expect(traces).toEqual([
-      expect.objectContaining({ tool: 'memory_add', ok: false, attempts: 1 }),
-      expect.objectContaining({ tool: 'context_search', ok: false, attempts: 2, text: null, error: expect.any(String) }),
-    ]);
   });
 
   it('drops a connection opened with the old URL when it is reset while connecting', async () => {

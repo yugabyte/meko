@@ -35,7 +35,7 @@ esac
 
 // fakeCurl answers install.sh's curl calls without gh: the latest release's redirect and the
 // asset downloads, logging each call's arguments. FAKE_CURL_404 answers 404, as GitHub does
-// for an internal repo without a token.
+// for a private repo without a token.
 const fakeCurl = `#!/bin/sh
 echo "$*" >> "$FAKE_CURL_LOG"
 [ -z "$FAKE_CURL_404" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }

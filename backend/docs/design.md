@@ -252,6 +252,7 @@ newer than the binary knows is refused with a message saying so.
 | `0009_call_log_baseline.sql` | `context_search`'s baseline per call, for context efficiency | [api.md](api.md#context-efficiency-and-quality) |
 | `0010_call_log_location.sql` | Where a call ran: this Meko, or the linked Meko Cloud | [api.md](api.md#the-call-log) |
 | `0011_questions.sql` | Context Gaps: the searches Meko answered poorly, and what was done about each | [api.md](api.md#context-gaps) |
+| `0013_call_contents.sql` | Which client sent a call, and what calls sent and got back while Settings keeps them | [api.md](api.md#call-contents) |
 
 ### Ids
 
@@ -272,7 +273,8 @@ CREATE TABLE memories (
 
 - `settings(key, value)`: the install id, the embedding model and dimension once known, the local
   user's profile (`profile_first_name`, `profile_last_name`, `profile_email`,
-  `profile_onboarding_done`), the usage stats' switch and schedule, and other small state.
+  `profile_onboarding_done`), the usage stats' switch and schedule, whether calls' contents are
+  kept (`call_contents.keep`), and other small state.
 - `datapacks(id, name UNIQUE, description, created_at, updated_at, conversation_search_opt_out)`: a
   local default datapack is created on first start. It isn't named `meko_default_datapack*`, which
   Meko Cloud reserves for its own default datapacks.

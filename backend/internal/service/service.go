@@ -33,7 +33,7 @@ const (
 
 // Spec is what the service runs.
 type Spec struct {
-	Exe        string // the meko binary: app/current/bin/meko once installed from a release
+	Exe        string // the meko binary: app/current/bin/meko once installed from a release (see Launcher)
 	DataDir    string // passed as --data-dir, so the service and the CLI agree on it
 	ServiceLog string // the service's stderr: errors from before serve's own log opens
 	Host       string // systemd: the only host the unit runs on
@@ -129,8 +129,9 @@ func render(tmpl string, s Spec) ([]byte, error) {
 	var b bytes.Buffer
 	err = t.Execute(&b, struct {
 		Spec
-		Label string
-	}{s, Label})
+		Label    string
+		Launcher string
+	}{s, Label, Launcher(s.Exe)})
 	return b.Bytes(), err
 }
 
@@ -143,6 +144,20 @@ func writeFile(path string, data []byte) error {
 }
 
 var plistDataDir = regexp.MustCompile(`--data-dir</string>\s*<string>([^<]*)</string>`)
+
+var plistProgram = regexp.MustCompile(`<key>ProgramArguments</key>\s*<array>\s*<string>([^<]*)</string>`)
+
+// programOf reads the program a plist runs ("" if none).
+func programOf(file string) string {
+	b, err := os.ReadFile(file) //nolint:gosec // G304: our own service file
+	if err != nil {
+		return ""
+	}
+	if m := plistProgram.FindSubmatch(b); m != nil {
+		return html.UnescapeString(string(m[1]))
+	}
+	return ""
+}
 
 // dataDirOf reads the --data-dir a service file passes ("" if none).
 func dataDirOf(file string) string {

@@ -101,10 +101,9 @@ describe('sessions on OpenCode (real session host + git, fake opencode running A
     expect(existsSync(openCodeSessionDir(env.core.paths, s.id))).toBe(false);
   });
 
-  it("shows Meko's m while OpenCode calls Meko, and records its calls, code mode's too, for the counts and the call log", async () => {
+  it("shows Meko's m while OpenCode calls Meko, and records its calls, code mode's too, for the counts", async () => {
     env.core.config.claude.mod = false;
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'create', name: 'agent-k-local/test/demo' } });
-    env.core.projects.update(p.id, { settings: { mekoLog: true } });
     const s = await env.core.sessions.create(p.id, { name: 'OpenCode meko', prompt: 'meko 1500', start: 'code', harness: 'opencode' });
     const get = (id: string) => env.core.sessions.get(id);
     expect((await waitFor(() => get(s.id), (x) => x.mekoCall, 10000, 'the Meko call')).status).toBe('working');
@@ -123,12 +122,6 @@ describe('sessions on OpenCode (real session host + git, fake opencode running A
     ]);
     const usage = (await env.core.projects.home(p.id)).usage;
     expect(usage.bySession.find((u) => u.sessionId === s.id)?.meko).toEqual({ lookups: 3, found: 2, saves: 0 });
-    // The call log has them as the session's agent's, with the time each took.
-    const page = await env.core.sessions.mekoCalls(s.id, { by: 'claude' });
-    expect(page.calls).toHaveLength(3);
-    expect(page.calls.every((c) => c.tool === 'memory_search' && c.ok && typeof c.ms === 'number')).toBe(true);
-    expect(page.calls.some((c) => (c.ms ?? 0) >= 1000)).toBe(true);
-    expect(env.core.sessions.mekoLogs(p.id)).toEqual([expect.objectContaining({ sessionId: s.id, harness: 'opencode' })]);
   });
 
   it('keeps what a turn left running in the background, and drops each as it ends between turns', async () => {

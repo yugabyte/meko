@@ -19,7 +19,7 @@ import {
   andList, checkHeldRequest, decideHeld, dropOtherPrs, heldBlocker, heldPromptLines, heldReviews, heldSummary, holdReview, reviewRoute,
   type ReviewDetails, type ReviewWho,
 } from './heldreviews.js';
-import { launchedAgentId, withMekoScope } from './meko.js';
+import { launchedAgentId } from './meko.js';
 import type { HookPayload, ModReply } from './hooks.js';
 import { fetchPrDesign, markPrDesignTold, prDesignSource, savePrDesign } from './prdesign.js';
 import { fixAfterLine, fixWhy, meAkReviewFooter, mekoDatapackLineId, mekoPrFooter, movePrompt, prDescriptionFixLine, prDescriptionUseLine, type FixAfter } from './prompts.js';
@@ -325,7 +325,7 @@ export class Lifecycle {
     if (!parts.length) return;
     const conv = await this.sessions.conversationId(row, dp);
     await Promise.all(parts.map(async (p) => {
-      const hash = await withMekoScope(row, () => this.core.meko.putArtifact(p.name, p.text, p.type, dp.id, launchedAgentId(row), conv));
+      const hash = await this.core.meko.putArtifact(p.name, p.text, p.type, dp.id, launchedAgentId(row), conv);
       // The version is used, and is the one the PR names; it's the current design only if nothing
       // changed while it was sent.
       run(this.db, p.sent, p.version, hash, p.text, id);

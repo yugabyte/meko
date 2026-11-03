@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // GitHub is mocked (no PR is found; one set on a session by hand reads as open, with `gh.body`); git,
@@ -22,7 +22,6 @@ vi.mock('../../src/server/github.js', async (orig) => {
 
 const { makeEnv, readJsonl, waitFor } = await import('../helpers.js');
 const { all, run } = await import('../../src/server/db.js');
-const { mekoLogPath } = await import('../../src/server/mekolog.js');
 const { DESCRIBE_INTERRUPTED, DESCRIBE_LOST, REVIEW_LEFT_CODE, REVIEW_LEFT_REVIEW } = await import('../../src/shared/codereview.js');
 type TestEnv = Awaited<ReturnType<typeof makeEnv>>;
 
@@ -772,16 +771,10 @@ describe('code review before the PR (real session host + git, fake claude runnin
     await env.core.sessions.action(s.id, 'open-pr');
     const r = await waitFor(() => env.core.sessions.get(s.id), (x) => x.codeReview?.state === 'failed', 30000, 'the review to fail');
     const childId = all<{ id: string }>(env.core.db, 'SELECT id FROM sessions WHERE parent_id = ?', s.id)[0].id;
-    const log = mekoLogPath(env.core.paths.designs, childId);
-    mkdirSync(dirname(log), { recursive: true });
-    writeFileSync(log, '');
-    // Archiving the review session alone keeps the task's worktree, and its Meko call log for the task's life.
+    // Archiving the review session alone keeps the task's worktree.
     await env.core.sessions.archive(env.core.sessions.row(childId), { keepBranch: false });
     expect(env.core.sessions.row(s.id).worktree_released).toBe(0);
     expect(r.codeReview!.sessionId).toBe(childId);
     expect(env.core.sessions.get(s.id).codeReview!.sessionId).toBeNull();
-    expect(existsSync(log)).toBe(true);
-    await env.core.sessions.archive(env.core.sessions.row(s.id), { keepBranch: true });
-    expect(existsSync(log)).toBe(false);
   });
 });

@@ -9,7 +9,7 @@ import { Core } from '../src/server/core.js';
 import { openDb } from '../src/server/db.js';
 import { defaultDeps, type InstanceDeps } from '../src/server/instance.js';
 import { silentLogger } from '../src/server/log.js';
-import { mekoScope, pinSlug, sessionAgentId, type MekoClient, type TokenTry } from '../src/server/meko.js';
+import { pinSlug, sessionAgentId, type MekoClient, type TokenTry } from '../src/server/meko.js';
 import { MekoApi } from '../src/server/mekoapi.js';
 import type { MekoAgentsRead } from '../src/server/mekoagents.js';
 import type { MekoTools } from '../src/server/mekosettings.js';
@@ -36,18 +36,17 @@ export function gitRepo(dir: string): string {
   return dir;
 }
 
-/** A call the stand-in Meko client got: `scope` is the session it was made for (mekoScope), if any. */
+/** A call the stand-in Meko client got. */
 export interface StubMekoCall {
   name: string;
   args: unknown[];
-  scope?: string | null;
 }
 
 /** In-memory stand-in for the Meko MCP client. */
 export function stubMeko(overrides: Partial<Record<keyof MekoClient, unknown>> = {}): MekoClient & { calls: StubMekoCall[] } {
   const calls: StubMekoCall[] = [];
   const rec = (name: string, ret: unknown) => async (...args: unknown[]) => {
-    calls.push({ name, args, scope: mekoScope.getStore()?.id ?? null });
+    calls.push({ name, args });
     return typeof ret === 'function' ? (ret as (...a: unknown[]) => unknown)(...args) : ret;
   };
   const base = {
@@ -289,7 +288,8 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
       await killHost();
       db.close();
       // core.stop() waited for what writes into the home after a test: the transcript captures (into
-      // fakeDir) and Kiro's and OpenCode's one-shot runs (into FAKE_KIRO_DIR, FAKE_OPENCODE_DIR). Anything else still writing fails the
+      // fakeDir), Kiro's and OpenCode's one-shot runs (into FAKE_KIRO_DIR, FAKE_OPENCODE_DIR) and the
+      // turn ends still being handled (the diff refresh and a PR poll's git fetch, into the repo's .git). Anything else still writing fails the
       // removal with ENOTEMPTY, retries or not: they only try the folder again, and remove nothing
       // written after their first pass. Name what was left, to find the writer.
       try {

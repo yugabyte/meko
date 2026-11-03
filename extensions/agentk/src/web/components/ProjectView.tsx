@@ -657,7 +657,6 @@ export function ProjectView({
           onDesign={() => setPanel('design')}
           onAsk={() => setAsking(true)}
           onHome={goHome}
-          onMekoCalls={project.settings.mekoLog ? () => navigate({ view: 'meko', projectId: project.id, sessionId: session.id }) : undefined}
           onMove={() => onMove()}
           onRename={() => onRename(session.id)}
           onWorkItem={() => onLinkWorkItem(session.id)}

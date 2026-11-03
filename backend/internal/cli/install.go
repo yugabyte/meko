@@ -422,7 +422,7 @@ func installRelease(ctx context.Context, l paths.Layout, repo, name, version, ho
 	rels, err := c.Releases(dl)
 	looking.Clear()
 	if err != nil {
-		return "", err // with no token, GitHub's refusal says why: its rate limit, or an internal repo
+		return "", err // with no token, GitHub's refusal says why: its rate limit, or a private repo
 	}
 	app := cat.App(l.Root, name)
 	goos, arch := update.Platform()
