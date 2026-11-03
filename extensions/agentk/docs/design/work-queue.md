@@ -58,7 +58,7 @@ replaces the item's own. `Session.workItemId` is read back from it.
   the one open item holding that link, when it's the only one and it has no open session
   (`soleItemFor()`).
 - **By hand:** Link a session… on an item, or Link to a work item / Change its work item from the
-  session's ⋯ sheet and the palette (`LinkWorkItemDialog.tsx`), which says when a pick moves a link.
+  session's ⋯ menu (the ⋯ sheet on a phone) and the palette (`LinkWorkItemDialog.tsx`), which says when a pick moves a link.
 - **A closed session** keeps its link: the item says its session is closed and offers Start session
   again, which replaces the link.
 

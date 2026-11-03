@@ -3,13 +3,9 @@ import type { MekoFirstTurn, MekoGaps, MekoLearning, MekoSavings, MekoUsage } fr
 import { appUrl } from '../base';
 import { cx, firstTurnText, formatCost, formatTokens, gapsLine, learningText, type LearningTile } from '../util';
 
-const ESTIMATE =
-  'Estimate: each Meko search that found something, and each seed AgentK passed at session start, is credited with the exploring it most likely replaced ' +
-  '(3 tool calls, each re-reading the context and adding about 2,000 tokens). Anthropic API list prices.';
-
 /**
- * Meko lookups and saves Claude made, what they're estimated to have saved, how many tokens Meko brought into
- * sessions' first turns, and what the learn step saved and cost: the project home and the Usage page. `gaps`
+ * Meko lookups and saves Claude made, how many tokens Meko brought into sessions' first turns, and what
+ * the learn step saved and the tokens it used: the project home and the Usage page. `gaps`
  * (the project home only): the open questions on Meko's Context Gaps for the project's dedicated datapack,
  * as a line under the stats linking to that tab in Meko's web UI, there with none open too.
  */
@@ -51,9 +47,8 @@ export function MekoUsageSection({
           <span className="usage-num">≈ {formatTokens(meko.foundTokens)}</span>
           <span className="usage-lbl">Tokens found</span>
         </div>
-        <SavedStat savings={meko.savings} />
         <LearningStat tile={learned.learned} label="Learned" />
-        <LearningStat tile={learned.cost} label="Learning cost" />
+        <LearningStat tile={learned.tokens} label="Learning tokens" />
       </div>
       {gaps && <GapsLine gaps={gaps} />}
     </div>
@@ -76,31 +71,6 @@ function GapsLine({ gaps }: { gaps: MekoGaps }) {
       </span>
       <span className="meko-gaps-link">See Context Gaps in Meko ›</span>
     </a>
-  );
-}
-
-function SavedStat({ savings: s }: { savings: MekoSavings }) {
-  if (!credited(s)) {
-    return (
-      <div className="usage-stat" title="No Meko search has found anything, and AgentK hasn't seeded a session, yet.">
-        <span className="usage-num muted">—</span>
-        <span className="usage-lbl">Est. saved</span>
-      </div>
-    );
-  }
-  const title = `${ESTIMATE} ${s.tokens.toLocaleString()} tokens from ${countText(s.searches, s.seeds)}.`;
-  // Dollars that leave out searches or seeds on unpriced models say so in the label (tooltips aren't seen on touch).
-  const partial = s.usd !== null && s.unpricedSearches + s.unpricedSeeds > 0;
-  return (
-    <div className={cx('usage-stat', savedClass(s))} title={title}>
-      <span className="usage-num">{s.usd !== null ? formatCost(s.usd) : `≈ ${signedTokens(s.tokens)}`}</span>
-      <span className="usage-lbl">{s.usd !== null ? `Est. saved · ≈ ${signedTokens(s.tokens)} tokens` : 'Est. tokens saved'}</span>
-      {partial && (
-        <span className="usage-lbl">
-          $ leaves out {countText(s.unpricedSearches, s.unpricedSeeds, 'unpriced ')}
-        </span>
-      )}
-    </div>
   );
 }
 
@@ -153,9 +123,9 @@ export function credited(s: MekoSavings): boolean {
   return s.searches + s.seeds > 0;
 }
 
-/** Searches and seeds in words, leaving out a zero: "3 searches and 1 seed", "2 unpriced seeds". */
-function countText(searches: number, seeds: number, adjective = ''): string {
-  const n = (k: number, one: string, many: string) => `${k.toLocaleString()} ${adjective}${k === 1 ? one : many}`;
+/** Searches and seeds in words, leaving out a zero: "3 searches and 1 seed", "2 seeds". */
+function countText(searches: number, seeds: number): string {
+  const n = (k: number, one: string, many: string) => `${k.toLocaleString()} ${k === 1 ? one : many}`;
   return [searches > 0 && n(searches, 'search', 'searches'), seeds > 0 && n(seeds, 'seed', 'seeds')].filter(Boolean).join(' and ');
 }
 

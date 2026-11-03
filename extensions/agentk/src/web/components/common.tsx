@@ -609,16 +609,6 @@ export function ReviewSegment({ review, selected, className, tab = false, onOpen
   );
 }
 
-/** A note with lines: shown beside a gate to add instructions for AgentK (Open PR with instructions). */
-export function NotesIcon({ size = 14 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M3.5 1.75h6l3 3v9.5h-9z" />
-      <path d="M6 7.5h4M6 10h4M6 12.5h2.5" />
-    </svg>
-  );
-}
-
 /**
  * Optional instructions for AgentK, sent after a move's or Open PR's prompt; left empty, nothing
  * extra goes. Says so in place of the hint when the text is too long (instructionsBlocker).
