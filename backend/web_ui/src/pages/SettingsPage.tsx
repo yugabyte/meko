@@ -1,6 +1,6 @@
-// Meko's settings: memory extraction and Search's answers, which run the user's own Claude Code (each
-// turned on after one test call), usage stats, keeping calls' contents and the way to the Calls page,
-// the way to the Meko Cloud link, and who can reach Meko.
+// Meko's settings, in this order: the way to the Meko Cloud link; memory extraction and Search's
+// answers, which run the user's own Claude Code (each turned on after one test call); who can reach
+// Meko; keeping calls' contents and the way to the Calls page; and anonymous usage stats.
 
 import { useState, type ReactNode } from "react";
 import { Cloud, ListTree } from "lucide-react";
@@ -29,9 +29,6 @@ export function SettingsPage({ auth }: { auth: AuthStatus }) {
   return (
     <div className="max-w-3xl space-y-4">
       <h2 className="text-lg font-semibold">Settings</h2>
-      <ClaudeFeatures />
-      <UsageStatsCard />
-      <CallContentsCard />
       <Card className="space-y-2 p-4">
         <h3 className="font-medium">Meko Cloud</h3>
         <p className="text-sm text-muted-foreground">
@@ -39,7 +36,10 @@ export function SettingsPage({ auth }: { auth: AuthStatus }) {
         </p>
         <PageLink to={MEKO_CLOUD} icon={<Cloud className="size-3.5" />} label="Meko Cloud" />
       </Card>
+      <ClaudeFeatures />
       <AccessCard auth={auth} />
+      <CallContentsCard />
+      <UsageStatsCard />
     </div>
   );
 }
@@ -177,7 +177,7 @@ function UsageStatsCard() {
     <Card className="space-y-2 p-4">
       <div className="flex items-start justify-between gap-4">
         <div className="space-y-0.5">
-          <h3 className="font-medium">Usage stats</h3>
+          <h3 className="font-medium">Anonymous usage stats</h3>
           <p className="text-sm text-muted-foreground">Send usage stats to YugabyteDB.</p>
           {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
         </div>

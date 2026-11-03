@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // The Settings page's switches for the features that run the user's Claude Code, against a faked
 // /api/v1: turning one on sends only the harness, and a failed test call leaves it off with why. And
-// its Access card, which says only whether Meko takes local or remote requests.
+// its Access card, which says only whether Meko takes local or remote requests, and the cards' order.
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -125,4 +125,11 @@ test("Keep call contents turns on with keep alone, and clearing asks first", asy
   await act(async () => button("Clear")!.click());
   expect(sent.find((c) => c.method === "DELETE")?.url).toBe("/api/v1/calls/contents");
   expect(document.body.textContent).toContain("None kept now.");
+});
+
+test("the cards come in order: Meko Cloud, Claude Code, Access, Calls, then anonymous usage stats", async () => {
+  serve({});
+  await render();
+  const headings = [...document.querySelectorAll("h3")].map((h) => h.textContent);
+  expect(headings).toEqual(["Meko Cloud", "Uses your Claude Code", "Access", "Calls", "Anonymous usage stats"]);
 });
