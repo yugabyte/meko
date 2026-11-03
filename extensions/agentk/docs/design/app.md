@@ -16,11 +16,17 @@ opened with one click, in any project. A task's [code review](code-review.md) is
 a part joined to its task's tab and rail row, a blue magnifier (its lens pulses while the review
 works, and shows Meko's "m" during a Meko call) and how far it has got (`3/6`: each pass, then
 scoring as one step, moving on as each pass reports), its result (`2·1` blockers·majors until the task has said what it did with each
-finding, then `LGTM`) or a red `!`. While the review works and its session waits on you in its
+finding) or a red `!`. Once the review reads `LGTM` (it kept nothing, or the task has said what it
+did with every finding) it's settled, and its part leaves the tab and the row (`reviewBadge()`):
+the task looks like one with no review, and its findings open from the ⋯ menu's or sheet's review
+row. While the review works and its session waits on you in its
 terminal, the magnifier takes the needs-you color and its lens knocks. Clicking it opens the
 review's own screen (its terminal, its findings beside it) while its passes run (or it failed),
-and its findings beside the task's terminal while the task fixes them and once the review is done
-(the review session stops then). In the rail, the magnifier sits under the stage chip, their right edges lined up, with no divider,
+and its findings beside the task's terminal while they wait on you, while the task fixes them and
+once the review is done (the review session stops then). The findings also open by themselves
+beside the task's terminal, as the design does in Design: whenever the task comes on screen while
+the review runs or its findings wait on you, and again as they come to wait or a new review starts
+(`findingsAutoOpen()`). With them open, a click on the task's part closes them. In the rail, the magnifier sits under the stage chip, their right edges lined up, with no divider,
 so the name keeps one column; it's drawn smaller there (13 px, on touch screens too), so a task's
 row grows by a short line. The tabs and the rail list a project's sessions in the same order, kept on the server
 (`sessions.position`) so every browser sees it: a new session goes first, and **Move to top** puts

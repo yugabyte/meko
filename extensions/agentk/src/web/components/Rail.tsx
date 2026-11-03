@@ -6,7 +6,7 @@ import { useIsMobile, useTouch } from '../hooks/useMedia';
 import { RAIL_DEFAULT, clampRailWidth, railCollapsedSaved, saveRailCollapsed } from '../rail';
 import type { ThemePref } from '../theme';
 import { queueBadge } from '../workqueue';
-import { aggregateDot, creditsNumber, type DotState, cx, dotState, formatCredits, formatTokens, isMac, joinedPartSelected, kiroPlanLines, limitLevel, openSessions, relativeTime, repoFolder, sessionTabTitle, totalTokens } from '../util';
+import { aggregateDot, creditsNumber, type DotState, cx, dotState, formatCredits, formatTokens, isMac, joinedPartSelected, kiroPlanLines, reviewBadge, limitLevel, openSessions, relativeTime, repoFolder, sessionTabTitle, totalTokens } from '../util';
 import { HarnessLogo, ReviewSegment, Ring, StageChip, StatusDot } from './common';
 import { HARNESS_CAPS, type HarnessId } from '../../shared/harnesses';
 
@@ -212,12 +212,15 @@ export function Rail({
                 <div className={cx('rail-sessions', harnessLogos && 'logos')} id={`rail-sessions-${p.id}`} role="group" aria-label={`Sessions in ${p.name}`}>
                   {sessions.map((s, j) => {
                     const part = joinedPartSelected(s, currentSessionId, findingsOpenFor === s.id);
-                    const review = s.codeReview;
+                    // A settled review (done, LGTM) leaves the row; its findings open from the ⋯ menu.
+                    const review = reviewBadge(s);
                     const row = (
                     <div key={s.id} className="rail-sess-row">
                       <button
                         className={cx('rail-sess', part === 'task' && 'sel')}
-                        onClick={() => (part === 'review' && s.id === currentSessionId ? onCloseFindings(s) : onSelectSession(s))}
+                        // With its findings open, the task's part closes them, also once its review is settled
+                        // (its part gone, the task's selected).
+                        onClick={() => (findingsOpenFor === s.id && s.id === currentSessionId ? onCloseFindings(s) : onSelectSession(s))}
                         onDoubleClick={mobile ? undefined : () => onRenameSession(s.id)}
                         aria-current={part === 'task' ? 'page' : undefined}
                         title={sessionTabTitle(s) + (mobile ? '' : '\nDouble-click to rename')}

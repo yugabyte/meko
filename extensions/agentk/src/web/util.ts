@@ -2,7 +2,7 @@ import { HARNESS_CAPS, harnessOf, type HarnessId } from '../shared/harnesses';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, LEARN_WARN_FILES, LEARN_WARN_PRS, STAGE_LABELS, type LearnScope } from '../shared/types';
 import { mekoDatapackPath } from '../shared/mekourls';
-import { YOU_CANCELLED, countsText, isStrategySetting, reviewHolds, reviewRunning, reviewWaitsOnYou, type CodeReviewDetail, type CodeReviewFinding, type CodeReviewSummary, type ReviewOverrides } from '../shared/codereview';
+import { YOU_CANCELLED, countsText, isStrategySetting, reviewHolds, reviewRunning, reviewSettled, reviewWaitsOnYou, type CodeReviewDetail, type CodeReviewFinding, type CodeReviewSummary, type ReviewOverrides } from '../shared/codereview';
 import { stepOf } from '../shared/stages';
 import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGaps, MekoLearning, MekoStatus, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, Stage, TokenUsage } from '../shared/types';
 
@@ -67,12 +67,24 @@ export function liveWithReviews(p: Pick<ProjectWithSessions, 'sessions'>): Sessi
 }
 
 /**
+ * The review a task's tab and rail row join to it (the magnifier), or null: none, or one that's
+ * settled (done and LGTM: nothing left to address). A settled review's findings still open from
+ * the ⋯ menu and sheet (`review-open`), which read `codeReview` itself.
+ */
+export function reviewBadge(task: Pick<Session, 'codeReview'>): CodeReviewSummary | null {
+  const r = task.codeReview;
+  return r && !reviewSettled(r) ? r : null;
+}
+
+/**
  * Which part of a task's joined tab (or rail row) is on screen: the task's, its review's (the task
- * with its findings open, or its code-review session on screen), or neither.
+ * with its findings open, or its code-review session on screen), or neither. With the task on
+ * screen and no review part shown (`reviewBadge()`), the task's part stands for it, its findings
+ * open or not.
  */
 export function joinedPartSelected(task: Pick<Session, 'id' | 'codeReview'>, currentId: string | null | undefined, findingsOpen = false): 'task' | 'review' | null {
   if (!currentId) return null;
-  if (task.id === currentId) return findingsOpen && task.codeReview ? 'review' : 'task';
+  if (task.id === currentId) return findingsOpen && reviewBadge(task) ? 'review' : 'task';
   return task.codeReview?.sessionId === currentId ? 'review' : null;
 }
 
@@ -1013,6 +1025,21 @@ export function findingGroups(
  */
 export function findingsReviewing(r: Pick<CodeReviewSummary, 'state' | 'detail'> | null): boolean {
   return reviewRunning(r) || (r?.state === 'describing' && !r.detail);
+}
+
+/**
+ * When a task's findings open beside its terminal by themselves (`ProjectView`, as the design does
+ * in Design): a key that changes only with the review and its phase, or null. `running` while the
+ * findings read Reviewing (`findingsReviewing()`), `triage` while they wait for the user to send
+ * them. Not in fixing (they were sent), nor once the review is over; not on a code-review session,
+ * whose own screen opens them on a desktop.
+ */
+export function findingsAutoOpen(s: Pick<Session, 'kind' | 'codeReview'> | null | undefined): string | null {
+  const r = s?.codeReview;
+  if (!r || !s || isReviewChild(s)) return null;
+  if (findingsReviewing(r)) return `${r.id}:running`;
+  if (reviewWaitsOnYou(r)) return `${r.id}:triage`;
+  return null;
 }
 
 /** The findings panel header's counts, or null while it reads Reviewing (partial counts read as final). */

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DESCRIBE_INTERRUPTED, REVIEW_LEFT_CODE, type CodeReviewDetail, type CodeReviewFinding, type CodeReviewSummary } from '../../src/shared/codereview';
 import type { Session } from '../../src/shared/types';
-import { canRunReview, findingGroups, findingsCountsText, findingsReviewing, stageChipText, withOverride } from '../../src/web/util.js';
+import { canRunReview, findingGroups, findingsAutoOpen, findingsCountsText, findingsReviewing, reviewBadge, stageChipText, withOverride } from '../../src/web/util.js';
 
 describe('stageChipText', () => {
   const review = (state: CodeReviewSummary['state'], detail: string | null, onDemand = false) => ({ state, detail, onDemand }) as CodeReviewSummary;
@@ -122,5 +122,53 @@ describe('withOverride', () => {
     [{ check: false }, 'check', '', {}],
   ] as const)('%j with %s set to %j is %j', (value, key, raw, out) => {
     expect(withOverride(value, key, raw)).toEqual(out);
+  });
+});
+
+describe('findingsAutoOpen', () => {
+  const task = (over: Partial<CodeReviewSummary> | null, kind: Session['kind'] = 'plan') =>
+    ({ kind, codeReview: over && { id: 'r1', state: 'sweeping', detail: null, passesDone: 0, scoresDone: 0, ...over } }) as Session;
+  // Open while the review runs (the panel reads Reviewing) and while its findings wait to be sent.
+  it.each([
+    ['describing', null, 'r1:running'],
+    ['preparing', null, 'r1:running'],
+    ['sweeping', null, 'r1:running'],
+    ['scoring', null, 'r1:running'],
+    ['triage', null, 'r1:triage'],
+    // Past an interrupted description turn it waits on Review now, not on the findings.
+    ['describing', DESCRIBE_INTERRUPTED, null],
+    // The findings went to the task; then it's over.
+    ['fixing', null, null],
+    ['done', null, null],
+    ['failed', 'no review pass reported', null],
+    ['cancelled', 'you cancelled it', null],
+  ] as const)('in %s (%s) is %s', (state, detail, key) => {
+    expect(findingsAutoOpen(task({ state, detail }))).toBe(key);
+  });
+
+  it('keeps its key through the progress steps, and changes it with the phase and the review', () => {
+    const running = findingsAutoOpen(task({ state: 'sweeping' }));
+    expect(findingsAutoOpen(task({ state: 'sweeping', passesDone: 3 }))).toBe(running);
+    expect(findingsAutoOpen(task({ state: 'scoring', passesDone: 5, scoresDone: 2 }))).toBe(running);
+    expect(findingsAutoOpen(task({ state: 'triage' }))).not.toBe(running);
+    expect(findingsAutoOpen(task({ id: 'r2', state: 'sweeping' }))).not.toBe(running);
+  });
+
+  it('is null with no review, no session, and on the review\'s own session', () => {
+    expect(findingsAutoOpen(task(null))).toBeNull();
+    expect(findingsAutoOpen(null)).toBeNull();
+    expect(findingsAutoOpen(task({ state: 'sweeping' }, 'code-review'))).toBeNull();
+  });
+});
+
+describe('reviewBadge', () => {
+  const task = (over: Partial<CodeReviewSummary>) =>
+    ({ codeReview: { state: 'done', counts: { blocker: 0, major: 0, minor: 0 }, addressed: false, detail: null, ...over } }) as Session;
+  // Which reviews are settled is reviewSettled's table (codereview.test.ts); this is the badge's side of it.
+  it('is the review until it settles, then null, as with no review', () => {
+    const shown = task({ counts: { blocker: 1, major: 2, minor: 0 } });
+    expect(reviewBadge(shown)).toBe(shown.codeReview);
+    expect(reviewBadge(task({}))).toBeNull();
+    expect(reviewBadge({ codeReview: null } as Session)).toBeNull();
   });
 });

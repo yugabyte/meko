@@ -67,6 +67,17 @@ describe('joinedPartSelected', () => {
     expect(joinedPartSelected(task, 'task', true)).toBe('review');
     expect(joinedPartSelected({ id: 'plain', codeReview: null } as Session, 'plain', true)).toBe('task');
   });
+
+  it("selects the task's part once its review is settled, as the review's part is gone", () => {
+    const settled = { id: 'task', codeReview: { state: 'done', sessionId: null, counts: { blocker: 1, major: 0, minor: 0 }, addressed: true } } as Session;
+    expect(joinedPartSelected(settled, 'task', true)).toBe('task');
+    expect(joinedPartSelected({ ...settled, codeReview: { ...settled.codeReview!, addressed: false } }, 'task', true)).toBe('review');
+  });
+
+  it("selects the review's part while its session is on screen, settled or not", () => {
+    const settled = { id: 'task', codeReview: { state: 'done', sessionId: 'rv', counts: { blocker: 0, major: 0, minor: 0 }, addressed: false } } as Session;
+    expect(joinedPartSelected(settled, 'rv')).toBe('review');
+  });
 });
 
 describe('reviewOpens', () => {

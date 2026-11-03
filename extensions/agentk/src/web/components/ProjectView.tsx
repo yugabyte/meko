@@ -20,7 +20,7 @@ import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { actionsOn, sessionActions, sessionMenuKeys, type SessionActionId } from '../sessionactions';
 import { disposeTerminal, getTerminal } from '../terminals';
-import { closingText, cx, dotState, designGate, idleStopped, isMac, isReviewChild, joinedPartSelected, reviewGatesPr, reviewOpens, reviewParent, shownStep, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, reviewTarget, runToMergeShown, runToMergeTitle, sessionTabTitle, sidewaysWheel, totalTokens, updateShowing, usageTitle } from '../util';
+import { closingText, cx, dotState, designGate, findingsAutoOpen, idleStopped, isMac, isReviewChild, joinedPartSelected, reviewBadge, reviewGatesPr, reviewOpens, reviewParent, shownStep, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, reviewTarget, runToMergeShown, runToMergeTitle, sessionTabTitle, sidewaysWheel, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
 import { Busy, Check, ContextRing, DatapackName, Dialog, Elapsed, HarnessLogo, ReviewSegment, RunToMergeCheck, RunToMergeMark, StageChip, StatusDot } from './common';
@@ -222,6 +222,12 @@ export function ProjectView({
   useEffect(() => {
     if (designAt) setPanel('design');
   }, [session?.id, designAt]);
+  // While a task's code review runs or its findings wait on you, show them beside its terminal as
+  // the task comes on screen, and again as they come to wait on you or a new review starts.
+  const findingsAt = findingsAutoOpen(session);
+  useEffect(() => {
+    if (findingsAt) setPanel('findings');
+  }, [session?.id, findingsAt]);
   // A review whose PR has a design opens it once, the first time the session shows with it.
   const reviewDesign = session?.stage === 'reviewing-pr' && session.hasDesign ? session.id : null;
   useEffect(() => {
@@ -459,9 +465,10 @@ export function ProjectView({
             aria-selected={part === 'task'}
             className={cx('tab', part === 'task' && 'sel')}
             onClick={() => {
-              // The task's part, while its findings are open, goes back to its terminal alone.
+              // The task's part, while its findings are open, goes back to its terminal alone (also
+              // once its review is settled, when the review's part is gone and the task's is selected).
               if (s.id !== session?.id) navigate({ view: 'project', projectId: project.id, sessionId: s.id });
-              else if (part === 'review') setPanel(null);
+              else if (panel === 'findings') setPanel(null);
             }}
             onDoubleClick={mobile ? undefined : () => onRename(s.id)}
             title={sessionTabTitle(s) + (mobile ? '' : '\nDouble-click to rename')}
@@ -472,11 +479,13 @@ export function ProjectView({
             <StageChip session={s} />
           </button>
         );
-        if (!s.codeReview) return tab;
+        // A settled review (done, LGTM) leaves the tab; its findings open from the ⋯ menu.
+        const review = reviewBadge(s);
+        if (!review) return tab;
         return (
           <span key={s.id} className={cx('tab-joined', part && 'has-sel')}>
             {tab}
-            <ReviewSegment review={s.codeReview} selected={part === 'review'} className="tab-review" tab onOpen={() => openReview(s)} />
+            <ReviewSegment review={review} selected={part === 'review'} className="tab-review" tab onOpen={() => openReview(s)} />
           </span>
         );
       })}
