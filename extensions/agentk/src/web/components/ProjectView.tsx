@@ -28,6 +28,7 @@ import { ReviewFindings } from './ReviewFindings';
 import { DESCRIBE_LOST, countsText, reviewDoneText, reviewHolds, reviewRunning, reviewSegmentText, type CodeReviewSummary } from '../../shared/codereview';
 import { ChangesPanel } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
+import { EmptyProject } from './EmptyProject';
 import type { MovePreset } from './MoveSessionDialog';
 import { EndSessionButton, SessionReviewFields, SessionSheet } from './SessionSheet';
 import { MoreIcon, SessionMenu } from './SessionMenu';
@@ -599,16 +600,7 @@ export function ProjectView({
         {session ? (
           <TerminalPane key={`term-${session.id}`} session={session} onAsk={() => setAsking(true)} onResume={() => void act('resume')} mekoTo={mekoTo} />
         ) : (
-          <div className="empty-main">
-            <h2>No sessions in {project.name}</h2>
-            <p className="muted">
-              Start a session for a task. It gets its own branch and worktree. Pick what it's for: exploring, planning
-              then implementing, or coding straight away.
-            </p>
-            <button className="btn primary" onClick={onNewSession}>
-              New session
-            </button>
-          </div>
+          <EmptyProject project={project} onNewSession={onNewSession} onClosed={() => navigate({ view: 'root' })} onError={onError} />
         )}
         {session && panel === 'design' && (
           <DesignPanel

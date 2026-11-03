@@ -1292,6 +1292,12 @@ textarea.input {
   max-width: 460px;
   margin: 0 auto;
 }
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
 
 /* ---------- Project view ---------- */
 .project-view {
