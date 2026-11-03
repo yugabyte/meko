@@ -21,6 +21,17 @@ describe('sessions on OpenCode (real session host + git, fake opencode running A
     await env.cleanup();
   });
 
+  it("lists OpenCode's models, and starts a session on the one picked through its config", async () => {
+    expect(await env.core.harnesses.models(env.core.config, 'opencode')).toEqual(['anthropic/claude-sonnet-4-5', 'opencode/big-pickle-free']);
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'none' } });
+    const s = await env.core.sessions.create(p.id, { name: 'OpenCode on Sonnet', prompt: 'hi', start: 'code', harness: 'opencode', model: 'anthropic/claude-sonnet-4-5' });
+    expect(s.model).toBe('anthropic/claude-sonnet-4-5');
+    const [first] = await waitFor(() => lines('argv.jsonl'), (l) => l.length > 0, 10000, 'launch');
+    // OpenCode 2's TUI has no --model: the model goes in the session's config.
+    expect(first.config.model).toBe('anthropic/claude-sonnet-4-5');
+    expect(first.args.join(' ')).not.toContain('model');
+  });
+
   it("runs a session with AgentK's plugin: instructions, the Design guard, Needs you, priced usage, subagents, exit and Resume", async () => {
     const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'create', name: 'agent-k-local/test/demo' } });
     const s = await env.core.sessions.create(p.id, { name: 'OpenCode task', prompt: 'write src.ts now', start: 'design', harness: 'opencode' });

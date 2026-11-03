@@ -37,6 +37,35 @@ exception, which moves the default to another available agent. Both choices are 
 `common.tsx`, each agent's logo then its name. Before deciding, `pick` reads versions again (see
 [Reading versions](#reading-versions) below). The session's harness is `sessions.harness` (`Session.harness`).
 
+### Picking a model
+
+New session's **Model**, under **Agent** in **Advanced** (shown with any agent, even one alone),
+picks the model the session's agent runs on: **Default** (the agent's own: Claude Code's `model`
+setting, OpenCode's config, Kiro's settings), one on the agent's list, or **Other…**, which takes
+any name. Claude Code's list is fixed in `HARNESS_CAPS.models`: its aliases Fable, Opus, Sonnet
+and Haiku, which follow its newest models. OpenCode's and Kiro's (`models: 'cli'`) depend on the
+providers and plan the user has, so they're read from the CLI (`Harness.models`): `opencode models
+--standalone` (with `[opencode] disable_tracking`'s variables, so Zen's free models it hides aren't
+offered) and `kiro-cli chat --list-models -f json` (Kiro's `ModelListResult`, `parseKiroModels`),
+asked only once `kiro-cli whoami` says someone is signed in, since signed out the list starts Kiro's
+sign-in and opens a browser. `Harnesses.models` keeps each list 10 minutes (`MODELS_TTL_MS`, read
+again for a new version or setting, and after **Check again**; the last list read stays for
+`modelsKept` until the new one lands), and `GET /api/harnesses/:id/models`
+serves it; a list that can't be read is empty, and the dialog then offers Other alone. AgentK has
+no default model of its own: Default is the agent's.
+
+The pick is `CreateSessionRequest.model`, kept in `sessions.model` (`Session.model`; NULL for
+Default) and passed on every launch of the session (`LaunchInput.model`), its resumes, recoveries
+and wakes included: Claude Code resumed without `--model` runs on its default, not the model the
+conversation used. A model changed with `/model` in the terminal is lost at the next relaunch. Each
+adapter passes it in its CLI's terms: Claude Code's and Kiro's `--model`, and OpenCode's `model` in
+the session's `OPENCODE_CONFIG_CONTENT`, since OpenCode 2's TUI has no `--model` (passing `-m`
+prints its help and exits). AgentK checks only the name's form (`checkModel`: letters, digits and
+`._:/@[]-`, not starting with `-`, at most 200 characters; a 400 otherwise); a model the agent
+doesn't know fails in its terminal. A task's code review doesn't take the task's model: its steps
+run on `[code_review.models.<harness>]`. The [session tools](tools.md)' `start_sessions` takes
+`agent` and `model` too.
+
 **Settings › Harness** holds every agent setting. At its top are **Default agent** and the logo
 setting (below); under them a bar lists every harness in `HARNESS_IDS` order, each with its logo
 and name (`HarnessBar`, a tab list), off or not installed ones too, since that's where an agent is
@@ -195,7 +224,7 @@ agent choice and sign-in check:
 
 | | Claude Code | OpenCode | Kiro |
 |---|---|---|---|
-| Launch | `claude --settings … --session-id/--resume …` | `opencode --standalone [--session=<id>] [--prompt=<prompt>]` with `OPENCODE_CONFIG_CONTENT`, and `OPENCODE_CLI_CONFIG_CONTENT` for session tabs off | `kiro-cli chat --agent agentk [--trust-tools=*] [--resume-id <id>] [prompt]` |
+| Launch | `claude --settings … --session-id/--resume … [--model <model>] …` | `opencode --standalone [--session=<id>] [--prompt=<prompt>]` with `OPENCODE_CONFIG_CONTENT` (the session's `model` there: no `--model` in the TUI), and `OPENCODE_CLI_CONFIG_CONTENT` for session tabs off | `kiro-cli chat --agent agentk [--trust-tools=*] [--model <model>] [--resume-id <id>] [prompt]` |
 | Hooks | `run/hooks.json` via `--settings` | AgentK's plugin, `run/opencode/agentk-plugin-<hash>/` | the `agentk` agent's inline hooks |
 | System prompt | `--append-system-prompt` | an `instructions` file written at each launch | printed by the context hook at every `agentSpawn` |
 | Design guard | JSON deny | the plugin throws the reason | `kiro-guard.sh`: exit 2, the reason on stderr |

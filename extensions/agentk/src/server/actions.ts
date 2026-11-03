@@ -3,6 +3,7 @@ import { REVIEW_TOOLS } from './review/runner.js';
 import { basename } from 'node:path';
 import { defaultProjectDatapackName, freeDatapackName } from '../shared/datapacks.js';
 import { parseGithubRef } from '../shared/github-refs.js';
+import { checkModel, HARNESS_CAPS, HARNESS_IDS, isHarnessId, modelLabel, type HarnessId } from '../shared/harnesses.js';
 import { MOVE_TARGETS, moveBlockedIn, moveError } from '../shared/stages.js';
 import {
   ACTIONS_MAX, INSTRUCTIONS_MAX, STAGE_LABELS, START_STAGES,
@@ -35,6 +36,9 @@ export interface ActionProject {
   sessions: Session[];
 }
 
+/** The most models `list` names for one agent. */
+const LIST_MODELS_MAX = 50;
+
 /** A started task's name and prompt, as the agent wrote them, are cut to these. */
 const NAME_MAX = 80;
 const PROMPT_MAX = 8000;
@@ -53,6 +57,33 @@ function autoRunFor(r: Record<string, unknown>, stage: string, what: string, not
   notes.push(`Left out Run to merge for ${what}: it's only for a task that starts at Code.`);
   return false;
 }
+/**
+ * The agent and model a proposed start asks for (`harness`, `model`: AgentK's session tools give
+ * them), or null when either can't be used, with a note naming `what`. Whether the agent is
+ * available is the start's to say (`Harnesses.pick`), as for the New session dialog.
+ */
+function agentFor(r: Record<string, unknown>, what: string, notes: string[]): { harness?: HarnessId; model?: string } | null {
+  const harness = r.harness == null || r.harness === '' ? undefined : r.harness;
+  if (harness !== undefined && !isHarnessId(harness)) {
+    notes.push(`Left out ${what}: ${typeof harness === 'string' ? harness : 'that'} isn't an agent AgentK runs (${HARNESS_IDS.join(', ')}).`);
+    return null;
+  }
+  const model = str(r.model);
+  const bad = model && checkModel(model);
+  if (bad) {
+    notes.push(`Left out ${what}: ${bad}`);
+    return null;
+  }
+  return { ...(harness ? { harness } : {}), ...(model ? { model } : {}) };
+}
+
+/** What a start's result line adds for the agent and model it was asked for: " on Kiro", " on Claude Code (Opus)". */
+function onAgent(a: { harness?: HarnessId; model?: string }, s: Session): string {
+  if (!a.harness && !a.model) return '';
+  const label = HARNESS_CAPS[s.harness].label;
+  return a.model ? ` on ${label} (${modelLabel(s.harness, a.model)})` : ` on ${label}`;
+}
+
 /** The review settings a proposed start asks for, when it asks for any (`review`, the task's own). */
 function reviewFor(r: Record<string, unknown>): { review?: ReviewOverrides } {
   const o = readOverrides(r.review);
@@ -95,10 +126,11 @@ export function checkActions(raw: unknown, projects: ActionProject[], max = ACTI
         const prompt = cut(str(r.prompt), PROMPT_MAX);
         const start = (START_STAGES as string[]).includes(str(r.stage) || str(r.start)) ? ((str(r.stage) || str(r.start)) as StartStage) : 'design';
         const name = oneLine(str(r.name), NAME_MAX) || oneLine(prompt, 60);
+        const agent = p && prompt ? agentFor(r, `"${name}"`, notes) : null;
         if (!p) notes.push('Left out a task in a project that isn\'t open.');
         else if (!prompt) notes.push('Left out a task with no prompt.');
-        else {
-          actions.push({ type: 'start', projectId: p.id, start, name, prompt, ...(autoRunFor(r, start, name, notes) ? { autoRun: true } : {}), ...reviewFor(r) });
+        else if (agent) {
+          actions.push({ type: 'start', projectId: p.id, start, name, prompt, ...(autoRunFor(r, start, name, notes) ? { autoRun: true } : {}), ...reviewFor(r), ...agent });
         }
         break;
       }
@@ -106,15 +138,17 @@ export function checkActions(raw: unknown, projects: ActionProject[], max = ACTI
         const ref = str(r.ref);
         const projectId = str(r.projectId);
         const stage = str(r.stage) || str(r.start);
+        const agent = parseGithubRef(ref) && !(projectId && !project(projectId)) ? agentFor(r, ref, notes) : null;
         if (!parseGithubRef(ref)) notes.push('Left out a link that isn\'t a GitHub PR or issue.');
         else if (projectId && !project(projectId)) notes.push(`Left out ${ref} in a project that isn't open.`);
-        else {
+        else if (agent) {
           actions.push({
             type: 'link', ref,
             ...(projectId ? { projectId } : {}),
             ...(stage === 'design' || stage === 'code' ? { start: stage } : {}),
             ...(autoRunFor(r, stage, ref, notes) ? { autoRun: true } : {}),
             ...reviewFor(r),
+            ...agent,
           });
         }
         break;
@@ -233,15 +267,25 @@ function describe(core: Core, a: AskAgentkAction): string {
 async function runOne(core: Core, a: Exclude<AskAgentkAction, { type: 'go' }>, by: ActionCaller): Promise<ActionResult> {
   switch (a.type) {
     case 'start': {
-      const { session, done } = await core.sessions.begin(a.projectId, { name: a.name, prompt: a.prompt, start: a.start, autoRun: a.autoRun, review: a.review });
+      const { session, done } = await core.sessions.begin(a.projectId, {
+        name: a.name, prompt: a.prompt, start: a.start, autoRun: a.autoRun, review: a.review, harness: a.harness, model: a.model,
+      });
       done.catch((e: unknown) => core.log.warn(`session ${session.id} didn't start`, errMsg(e)));
       const p = core.projects.get(a.projectId);
-      return { ok: true, text: `Started "${session.name}" in ${p.name} at ${STAGE_LABELS[a.start]}${a.autoRun ? ', with Run to merge' : ''}.`, projectId: p.id, sessionId: session.id };
+      return {
+        ok: true, text: `Started "${session.name}" in ${p.name} at ${STAGE_LABELS[a.start]}${onAgent(a, session)}${a.autoRun ? ', with Run to merge' : ''}.`,
+        projectId: p.id, sessionId: session.id,
+      };
     }
     case 'link': {
-      const { project, session } = await core.githubLinks.start({ ref: a.ref, projectId: a.projectId, start: a.start, autoRun: a.autoRun, review: a.review }, { once: true });
+      const { project, session } = await core.githubLinks.start({
+        ref: a.ref, projectId: a.projectId, start: a.start, autoRun: a.autoRun, review: a.review, harness: a.harness, model: a.model,
+      }, { once: true });
       const what = session.kind === 'review-pr' ? 'a review of' : 'a task on';
-      return { ok: true, text: `Started ${what} ${a.ref}, "${session.name}", in ${project.name}${a.autoRun ? ', with Run to merge' : ''}.`, projectId: project.id, sessionId: session.id };
+      return {
+        ok: true, text: `Started ${what} ${a.ref}, "${session.name}", in ${project.name}${onAgent(a, session)}${a.autoRun ? ', with Run to merge' : ''}.`,
+        projectId: project.id, sessionId: session.id,
+      };
     }
     case 'move': {
       // The calling session is mid-turn (its agent is running the tool), and a move waits for a
@@ -342,6 +386,18 @@ export class SessionTools {
 
   constructor(private core: Core) {}
 
+  /** The agents new sessions can start on now, the default first marked, with the models each is known to take. */
+  private agents(): ListedAgent[] {
+    const cfg = this.core.config;
+    const def = this.core.harnesses.defaultFor(cfg)?.id;
+    return this.core.harnesses.status(cfg).filter((h) => h.available).map((h) => {
+      const fixed = HARNESS_CAPS[h.id].models;
+      // At most LIST_MODELS_MAX of a CLI's list (OpenCode's can name hundreds): any other id still works.
+      const models = (fixed === 'cli' ? this.core.harnesses.modelsKept(cfg, h.id) : fixed.map((m) => m.id))?.slice(0, LIST_MODELS_MAX);
+      return { id: h.id, name: HARNESS_CAPS[h.id].label, ...(h.id === def ? { default: true as const } : {}), ...(models?.length ? { models } : {}) };
+    });
+  }
+
   /**
    * A tool call from `me_koder mcp` in `row`'s session: `{ v, tool, input }`. Answered at once if the
    * hook socket closes first: a call that clones a repo can take minutes, and the socket's close
@@ -403,7 +459,7 @@ export class SessionTools {
     try {
       switch (tool) {
         case 'list':
-          return answer(listText(projects, row, str(input.projectId)));
+          return answer(listText(projects, row, str(input.projectId), this.agents()));
         case 'start_sessions': {
           const list = Array.isArray(input.sessions) ? input.sessions : [];
           if (!list.length) return answer('Give at least one session to start.', true);
@@ -412,8 +468,8 @@ export class SessionTools {
             const s = isObject(e) ? e : {};
             const projectId = str(s.projectId) || row.project_id;
             return str(s.ref)
-              ? { type: 'link', ref: str(s.ref), projectId, stage: str(s.stage), autoRun: s.autoRun, review: s.review }
-              : { type: 'start', projectId, name: s.name, prompt: s.prompt, stage: str(s.stage), autoRun: s.autoRun, review: s.review };
+              ? { type: 'link', ref: str(s.ref), projectId, stage: str(s.stage), autoRun: s.autoRun, review: s.review, harness: s.agent, model: s.model }
+              : { type: 'start', projectId, name: s.name, prompt: s.prompt, stage: str(s.stage), autoRun: s.autoRun, review: s.review, harness: s.agent, model: s.model };
           });
           return this.run(row, raw, projects);
         }
@@ -440,8 +496,18 @@ export class SessionTools {
   }
 }
 
-/** `list`'s answer: the open projects and their running sessions, as JSON. */
-function listText(projects: ActionProject[], row: SessionRow, only: string): string {
+/** An agent new sessions can start on, as `list` names it for `start_sessions`' `agent` and `model`. */
+interface ListedAgent {
+  id: HarnessId;
+  name: string;
+  /** Sessions start on it when no agent is named. */
+  default?: true;
+  /** Model names it takes besides its own default (any other id works too), when known. */
+  models?: string[];
+}
+
+/** `list`'s answer: the agents new sessions can start on, and the open projects and their running sessions, as JSON. */
+function listText(projects: ActionProject[], row: SessionRow, only: string, agents: ListedAgent[] = []): string {
   const running = runningSessions(projects);
   const out = projects.filter((p) => !only || p.id === only).map((p) => ({
     id: p.id,
@@ -454,6 +520,6 @@ function listText(projects: ActionProject[], row: SessionRow, only: string): str
       ...(s.id === row.id ? { self: true } : {}),
     })),
   }));
-  return JSON.stringify({ projects: out });
+  return JSON.stringify({ ...(agents.length ? { agents } : {}), projects: out });
 }
 

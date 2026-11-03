@@ -65,7 +65,7 @@ export function claudeHarness(deps: { claudeCode: ClaudeCode; log: Logger }): Ha
     offersMod: (paths, cfg) => modReady(paths, cfg) && deps.claudeCode.status().supportsMod !== false,
     launcher: (paths, cfg, l) => claudeLauncher(paths, {
       sessionId: l.row.id, worktree: l.row.worktree_path, claudeCommand: cfg.claude.command, claudeSessionId: l.row.claude_session_id,
-      resume: l.resume, name: l.row.name, planMode: l.planMode, addDirs: l.addDirs,
+      resume: l.resume, name: l.row.name, model: l.model, planMode: l.planMode, addDirs: l.addDirs,
       pluginDirs: [...(l.modDir ? [l.modDir] : []), ...(l.tools ? [toolsPluginDir(paths)] : [])],
       mcpConfigs: l.tools ? [toolsMcpConfigPath(paths)] : [],
       appendSystemPrompt: l.systemPrompt, prompt: l.prompt, unsetEnv: l.unsetEnv, userSettingsOnly: l.untrusted,

@@ -31,7 +31,7 @@ import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, save
 import { kindOf } from '../shared/stages.js';
 import { expandBranchPrefix } from '../shared/branches.js';
 import { noOverrides, readOverrides } from '../shared/codereview.js';
-import { agentName, harnessOf } from '../shared/harnesses.js';
+import { agentName, checkModel, harnessOf } from '../shared/harnesses.js';
 import type { Harness } from './harness/index.js';
 import type { TranscriptMark } from './harness/types.js';
 import { writeLauncher } from './launcher.js';
@@ -563,7 +563,7 @@ export class SessionManager {
   async begin(projectId: string, req: CreateSessionRequest): Promise<{ session: Session; done: Promise<Session> }> {
     const p = projectRow(this.db, projectId);
     if (!p) throw new HttpError(404, 'That project no longer exists.');
-    for (const k of ['name', 'prompt', 'baseBranch', 'repoPath', 'branch'] as const) {
+    for (const k of ['name', 'prompt', 'baseBranch', 'repoPath', 'branch', 'model'] as const) {
       if (req[k] != null && typeof req[k] !== 'string') throw new HttpError(400, `The session's ${k} must be text.`);
     }
     if (req.existingBranch != null && typeof req.existingBranch !== 'boolean') throw new HttpError(400, 'existingBranch must be true or false.');
@@ -575,6 +575,10 @@ export class SessionManager {
     const images = learn ? [] : checkStaged(this.core.paths.pastes, projectId, req.images);
     // A harness that isn't available starts nothing.
     const harness = await this.core.harnesses.pick(this.core.config, req.harness);
+    // Only its form is checked: a model the agent doesn't know fails in its terminal.
+    const model = (req.model ?? '').trim() || null;
+    const badModel = model && checkModel(model);
+    if (badModel) throw new HttpError(400, badModel);
     const settings = parseSettings(p.settings_json);
     const asked = req.kind ?? 'task';
     const legacy = typeof asked === 'string' && Object.hasOwn(LEGACY_STARTS, asked) ? LEGACY_STARTS[asked] : undefined;
@@ -652,7 +656,7 @@ export class SessionManager {
     }
     // What Try again fills the New session dialog with, should the start fail.
     const request: CreateSessionRequest = {
-      name, harness: harness.id, prompt: learn ? undefined : (req.prompt ?? '').trim() || undefined, kind, start: review || learn ? undefined : start, learn: learn ?? undefined,
+      name, harness: harness.id, model: model ?? undefined, prompt: learn ? undefined : (req.prompt ?? '').trim() || undefined, kind, start: review || learn ? undefined : start, learn: learn ?? undefined,
       baseBranch: review || attach ? undefined : base, repoPath: req.repoPath, branch: attach ? undefined : wanted || undefined,
       existingBranch: existing || undefined, autoRun: autoRun || undefined,
       pr: review ? { repo: review.repo, number: review.info.number } : attach ? { repo: req.pr!.repo, number: attach.info.number } : undefined,
@@ -678,12 +682,12 @@ export class SessionManager {
       if (wanted) this.checkBranchFree(repo, wanted);
       const claimed = pool.claim(repo, id);
       const path = claimed ?? pool.add(repo, id);
-      run(this.db, `INSERT INTO sessions(id, project_id, slug, name, harness, claude_session_id, branch, base_branch, repo_path, branch_reused,
+      run(this.db, `INSERT INTO sessions(id, project_id, slug, name, harness, model, claude_session_id, branch, base_branch, repo_path, branch_reused,
                       worktree_path, tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode, meko_agent_id,
                       pr_number, pr_url, pr_repo, pr_title, pr_author, review_sha, pr_head_sha, pr_new_commits, pr_state, pr_remote, review_notes, push_remote, push_branch, purpose, auto_run, position)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                       (SELECT COALESCE(MIN(position), 0) - 1 FROM sessions WHERE project_id = ?))`,
-        id, projectId, slug, name, harness.id, randomUUID(), branch, base, repo, where ? 1 : 0, path, paneName(projectId, slug),
+        id, projectId, slug, name, harness.id, model, randomUUID(), branch, base, repo, where ? 1 : 0, path, paneName(projectId, slug),
         randomBytes(24).toString('base64url'), review ? 'review-pr' : STORED_TASK_KIND, stage, task || null, now, now, sessionAgentId({ id, slug, harness: harness.id }),
         review?.info.number ?? attach?.info.number ?? null, review?.info.url ?? attach?.info.url ?? null, review?.repo ?? null, review?.info.title ?? null,
         review?.info.author ?? null, sha, sha, review ? 0 : null, review ? 'OPEN' : null, review?.remote ?? null, notes || null,
@@ -1326,6 +1330,8 @@ export class SessionManager {
       row,
       resume: opts.resume,
       prompt: opts.prompt,
+      // Every launch, a resume's too: Claude Code resumed without --model runs on its default.
+      model: row.model ?? null,
       systemPrompt,
       addDirs: review ? [designDir, review.runDir] : [designDir],
       modDir,

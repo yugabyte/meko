@@ -46,6 +46,8 @@ export interface SessionRow {
   name: string;
   /** The harness the session runs on (`HarnessId`; `harnessOf()` reads an unknown one as Claude Code). */
   harness: string;
+  /** The model its agent runs on, passed on every launch; null for the agent's default. */
+  model: string | null;
   /** AgentK's key for the conversation: Claude Code's session id, and the Meko conversation's key for every harness. */
   claude_session_id: string;
   /** The conversation id a harness picks itself (Kiro's session id), once AgentK has learned it; null for Claude Code. */
@@ -306,6 +308,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     projectId: r.project_id,
     name: r.name,
     harness: harnessOf(r.harness),
+    model: r.model ?? null,
     claudeSessionId: r.claude_session_id,
     branch: r.branch,
     baseBranch: r.base_branch,

@@ -14,6 +14,9 @@ import type { Harness } from './types.js';
 
 export type { Harness, LaunchInput } from './types.js';
 
+/** How long a harness's model list is kept (`Harnesses.models`). */
+export const MODELS_TTL_MS = 10 * 60 * 1000;
+
 /**
  * Every harness sessions can run on, by id (src/shared/harnesses.ts). A new session starts only on
  * one Meko doesn't report unconnected (`HarnessStatus.meko` `none`, `stale` or `elsewhere`, from
@@ -24,6 +27,8 @@ export class Harnesses {
   private all: Record<HarnessId, Harness>;
   private mekoList: () => MekoAgentList | null;
   private rereadMeko: () => Promise<void>;
+  /** Each harness's last model list (or the read under way), and what it was read with: a new version or setting reads again. */
+  private modelLists = new Map<HarnessId, { at: number; key: string; models: Promise<string[]>; read?: string[] }>();
 
   constructor(deps: {
     claudeCode: ClaudeCode; paths: Paths; log: Logger; changed: () => void;
@@ -87,8 +92,42 @@ export class Harnesses {
    * update themselves. Nothing polls: this runs when a page opens, and on Check again.
    */
   async refresh(cfg: Config, force = false): Promise<HarnessStatus[]> {
+    // Check again reads the model lists again too (an agent signed in or set up since), at their next ask.
+    if (force) for (const kept of this.modelLists.values()) kept.at = 0;
     await Promise.all(this.list().map((h) => h.version(cfg, force)));
     return this.status(cfg);
+  }
+
+  /**
+   * The models a harness's CLI lists for New session (`HarnessCaps.models` `cli`), kept MODELS_TTL_MS
+   * and shared by reads meanwhile; empty for one whose list is fixed, that's off or not installed, or
+   * whose list can't be read.
+   */
+  async models(cfg: Config, id: HarnessId): Promise<string[]> {
+    const h = this.all[id];
+    const s = h.status(cfg);
+    if (!h.models || !s.enabled || s.version === null) return [];
+    const key = `${s.version}|${JSON.stringify(cfg[id])}`;
+    const kept = this.modelLists.get(id);
+    if (kept && kept.key === key && Date.now() - kept.at < MODELS_TTL_MS) return kept.models;
+    // The list last read stays until the new one lands, for `modelsKept`.
+    const entry: { at: number; key: string; models: Promise<string[]>; read?: string[] } = { at: Date.now(), key, models: Promise.resolve([]), read: kept?.read };
+    entry.models = h.models(cfg).catch(() => [] as string[]).then((list) => {
+      entry.read = list;
+      return list;
+    });
+    this.modelLists.set(id, entry);
+    return entry.models;
+  }
+
+  /**
+   * `models` without waiting: the list last read (one that has expired too, while the next read is
+   * under way, which this starts), or null while none has been. For answers that mustn't wait on a
+   * CLI, such as the session tools' `list`.
+   */
+  modelsKept(cfg: Config, id: HarnessId): string[] | null {
+    void this.models(cfg, id);
+    return this.modelLists.get(id)?.read ?? null;
   }
 
   /**

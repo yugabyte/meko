@@ -1212,6 +1212,37 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(env.core.sessions.get(s.id).idleStoppedAt).toBeNull();
   });
 
+  it('starts a session on the model picked, keeps it through an idle stop and a resume, and refuses a malformed one', async () => {
+    const p = await newProject();
+    await expect(env.core.sessions.create(p.id, { name: 'Bad', prompt: 'hi', kind: 'quick', model: '--dangerously-skip-permissions' }))
+      .rejects.toThrow("--dangerously-skip-permissions isn't a model name");
+    await expect(env.core.sessions.create(p.id, { name: 'Bad', prompt: 'hi', kind: 'quick', model: 'opus 5' })).rejects.toThrow("opus 5 isn't a model name");
+    const launches = (id: string) => argvLog(env).filter((a) => a.args.includes(id)).map((a) => a.args);
+    const modelArg = (args: string[]) => (args.includes('--model') ? args[args.indexOf('--model') + 1] : null);
+
+    const plain = await env.core.sessions.create(p.id, { name: 'Plain', prompt: 'hi', kind: 'quick' });
+    expect(plain.model).toBeNull();
+    await waitFor(() => launches(plain.claudeSessionId).length, (n) => n === 1, 10000, 'launch');
+    expect(launches(plain.claudeSessionId).map(modelArg)).toEqual([null]);
+
+    const s = await env.core.sessions.create(p.id, { name: 'On opus', prompt: 'hi', kind: 'quick', model: ' opus ' });
+    expect(s.model).toBe('opus');
+    await waitFor(() => launches(s.claudeSessionId).length, (n) => n === 1, 10000, 'launch');
+    expect(launches(s.claudeSessionId).map(modelArg)).toEqual(['opus']);
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'idle');
+
+    // Resumed with no --model, Claude Code would run on its default: every launch passes it.
+    env.core.config.sessions.idleStopHours = 1;
+    await stopIdleIn(2 * 60 * 60 * 1000);
+    expect(env.core.sessions.get(s.id).idleStoppedAt).not.toBeNull();
+    await env.core.sessions.action(s.id, 'resume');
+    await waitFor(() => launches(s.claudeSessionId).length, (n) => n === 2, 10000, 'resume launch');
+    const resumed = launches(s.claudeSessionId)[1];
+    expect(resumed).toEqual(expect.arrayContaining(['--resume', s.claudeSessionId]));
+    expect(modelArg(resumed)).toBe('opus');
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'resumed');
+  });
+
   it('starts a stopped agent again for what needs it, and sends what waited once it is up', async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Wake me', prompt: 'hi', kind: 'quick' });

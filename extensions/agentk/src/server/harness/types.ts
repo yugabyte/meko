@@ -26,6 +26,8 @@ export interface LaunchInput {
   resume: boolean;
   /** The first prompt (or a continue prompt), or null. */
   prompt: string | null;
+  /** The model picked for the session (`sessions.model`), in the CLI's own terms; null for its default. */
+  model: string | null;
   /** The session's system-prompt lines (project, task, branch, workflow, Meko). */
   systemPrompt: string;
   /** Extra folders the agent may work in (the session's design folder). */
@@ -166,6 +168,11 @@ export interface Harness {
   status(cfg: Config): CliStatus;
   /** Reads its version again when the last read is stale (or `force`). */
   version(cfg: Config, force?: boolean): Promise<string | null>;
+  /**
+   * The models its CLI lists, for New session (`HarnessCaps.models` `cli`): empty when they can't be
+   * read (a CLI that fails, or Kiro signed out). `Harnesses.models` keeps the answer.
+   */
+  models?(cfg: Config): Promise<string[]>;
   /** Runs its own updater, then reads the version again. 409 while one runs. */
   update(cfg: Config): Promise<CliStatus>;
 }
