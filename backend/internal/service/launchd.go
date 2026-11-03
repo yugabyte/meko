@@ -172,7 +172,8 @@ func (d *Launchd) Remove() error {
 	}
 	// The launcher the plist runs, unless it runs a build from source itself.
 	if l := programOf(d.File()); l != "" {
-		if b, err := os.ReadFile(l); err == nil && bytes.HasPrefix(b, []byte(launcherHead)) { //nolint:gosec // G304: the plist's program
+		b, err := os.ReadFile(l) //nolint:gosec // G304: the plist's program
+		if err == nil && bytes.HasPrefix(b, []byte(launcherHead)) {
 			if err = paths.RemoveIfExists(l); err != nil {
 				return err
 			}

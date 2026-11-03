@@ -613,7 +613,7 @@ func TestServeMovesTheLaunchAgentOntoTheLauncher(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldPlist := strings.Replace(string(b), launcher, "<string>"+app.CurrentExe()+"</string>", 1)
-	if err = os.WriteFile(d.File(), []byte(oldPlist), 0o600); err != nil {
+	if err = os.WriteFile(d.File(), []byte(oldPlist), 0o600); err != nil { //nolint:gosec // G703: the test's own HOME
 		t.Fatal(err)
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -632,7 +632,8 @@ func TestServeMovesTheLaunchAgentOntoTheLauncher(t *testing.T) {
 	if after, _ := os.Stat(d.File()); !os.SameFile(before, after) {
 		t.Error("an up-to-date plist was written again")
 	}
-	if b, _ = os.ReadFile(service.Launcher(app.CurrentExe())); !strings.Contains(string(b), "exec '"+app.CurrentExe()+"'") {
+	b, _ = os.ReadFile(service.Launcher(app.CurrentExe()))
+	if !strings.Contains(string(b), "exec '"+app.CurrentExe()+"'") {
 		t.Errorf("launcher:\n%s", b)
 	}
 }

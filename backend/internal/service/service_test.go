@@ -208,7 +208,8 @@ func TestLaunchdLauncherRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	exe := filepath.Join(dir, "meko")
-	if err := os.WriteFile(exe, []byte("#!/bin/sh\nprintf '%s|' \"$@\"\n"), 0o755); err != nil { //nolint:gosec // G306: a test program
+	prog := []byte("#!/bin/sh\nprintf '%s|' \"$@\"\n")
+	if err := os.WriteFile(exe, prog, 0o755); err != nil { //nolint:gosec // G306: a test program
 		t.Fatal(err)
 	}
 	launcher := filepath.Join(t.TempDir(), "service", "meko")
@@ -265,10 +266,11 @@ func TestLaunchdFilesChangeOnlyWithTheirContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := strings.Replace(string(b), "<string>"+launcher+"</string>", "<string>"+spec.Exe+"</string>", 1)
-	if err = os.WriteFile(d.File(), []byte(old), 0o600); err != nil {
+	if err = os.WriteFile(d.File(), []byte(old), 0o600); err != nil { //nolint:gosec // G703: the test's temp HOME
 		t.Fatal(err)
 	}
-	if changed, err := d.Refresh(spec); err != nil || !changed {
+	changed, err := d.Refresh(spec)
+	if err != nil || !changed {
 		t.Fatalf("Refresh of an old plist: changed %v, %v", changed, err)
 	}
 	if b, _ = os.ReadFile(d.File()); !strings.Contains(string(b), "<string>"+launcher+"</string>") {
