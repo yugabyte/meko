@@ -1670,8 +1670,9 @@ export class SessionManager {
   }
 
   /**
-   * Resolves once no turn end is being handled, including ones that start meanwhile: what one runs
-   * (a PR poll's git calls, a prompt it sends) is done.
+   * Resolves once no turn end is being handled, including ones that start meanwhile: what one awaits
+   * (the diff refresh, a PR poll's git calls, a prompt it sends) is done. Work it leaves running
+   * without awaiting it (the PR poll's sync of the PR's design line) may still be going.
    */
   async turnEndsSettled(): Promise<void> {
     while (this.turnEnds.size) await Promise.allSettled(this.turnEnds);
@@ -1709,7 +1710,8 @@ export class SessionManager {
     } else {
       this.setStatus(id, 'idle');
     }
-    this.refreshDiff(id).catch(() => undefined);
+    // Alongside what follows, but part of the turn end: its git calls run in the worktree.
+    const diff = this.refreshDiff(id).catch(() => undefined);
     this.ingestUsage(id);
     // Kiro may write the turn to its session file just after its stop hook: read it again shortly.
     if (this.harness(row).caps.usage === 'credits') {
@@ -1719,7 +1721,11 @@ export class SessionManager {
       }, USAGE_REREAD_MS).unref();
       this.rereads.add(t);
     }
-    await this.core.lifecycle.onTurnEnd(id, how === 'interrupted');
+    try {
+      await this.core.lifecycle.onTurnEnd(id, how === 'interrupted');
+    } finally {
+      await diff;
+    }
   }
 
   async onHook(token: string, raw: HookPayload): Promise<void> {

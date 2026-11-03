@@ -288,7 +288,7 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
       db.close();
       // core.stop() waited for what writes into the home after a test: the transcript captures (into
       // fakeDir), Kiro's and OpenCode's one-shot runs (into FAKE_KIRO_DIR, FAKE_OPENCODE_DIR) and the
-      // turn ends still being handled (a PR poll's git fetch, into the repo's .git). Anything else still writing fails the
+      // turn ends still being handled (the diff refresh and a PR poll's git fetch, into the repo's .git). Anything else still writing fails the
       // removal with ENOTEMPTY, retries or not: they only try the folder again, and remove nothing
       // written after their first pass. Name what was left, to find the writer.
       try {
