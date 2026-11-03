@@ -197,9 +197,8 @@ The step records how many it offered, and how many marks Meko took, taught and d
 **Record.** `meko_learns(id, session_id, trigger, path, started_at, ended_at, outcome, failed_step,
 candidates, saves, updates, skips, lookups, errors, sent_chars, questions, taught, dismissed)`, with `trigger` `merge`, `discard`
 or `manual` and `path` `mod`, `turn` or `none` (skipped). The step's own Meko calls are in `meko_agentk_calls` with its id,
-and, while the project has Log Meko calls on, in the session's Meko call log with what was sent and
-what came back (see [Project home](project-home.md)). A step at Merge & Close is deleted with the
-session moments later, so run `/agentk_learn` during the session to look at one.
+and on Meko's Calls page under the session's agent id, with what was sent and what came back while
+Meko keeps call contents (see [Project home](project-home.md)).
 
 ## Learn sessions
 

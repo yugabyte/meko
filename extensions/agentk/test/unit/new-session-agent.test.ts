@@ -150,7 +150,7 @@ describe('Settings › Harness', () => {
   });
 
   const meko = (o: Partial<MekoStatus> = {}): MekoStatus => ({
-    configured: true, url: 'https://mcp.mekodata.ai/mcp', source: 'meko', webUrl: null, sharing: true, local: 'running', agentList: 'read',
+    configured: true, url: 'https://mcp.mekodata.ai/mcp', source: 'meko', webUrl: null, sharing: true, local: 'running', agentList: 'read', calls: false,
     claude: { gaps: [], capture: [], unchecked: [], checking: false }, kiro: { gaps: [], capture: [] }, opencode: { own: false }, ...o,
   });
   it("keeps an agent's explanations behind a closed ⓘ, outside its checkbox's label, opening under the row", () => {
@@ -208,7 +208,7 @@ describe('Settings › Harness', () => {
 });
 
 describe('Settings › General', () => {
-  const localMeko: MekoStatus = { configured: true, url: 'http://127.0.0.1:7778/mcp', source: 'local', webUrl: null, sharing: false, local: 'running', claude: { gaps: [], capture: [], unchecked: [], checking: false }, kiro: null, opencode: null, agentList: 'unread' };
+  const localMeko: MekoStatus = { configured: true, url: 'http://127.0.0.1:7778/mcp', source: 'local', webUrl: null, sharing: false, local: 'running', claude: { gaps: [], capture: [], unchecked: [], checking: false }, kiro: null, opencode: null, agentList: 'unread', calls: false };
   const links = (html: string) =>
     [...html.matchAll(/<a[^>]*id="(set-meko-[\w-]+)"[^>]*href="([^"]+)"/g)].map(([, id, href]) => `${id} ${href}`);
 

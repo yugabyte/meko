@@ -24,6 +24,7 @@ import { MekoCloudPage } from "./pages/MekoCloudPage";
 import { MemoriesPage } from "./pages/MemoriesPage";
 import { MetricsPage } from "./pages/MetricsPage";
 import { ArtifactsPage } from "./pages/ArtifactsPage";
+import { CallsPage } from "./pages/CallsPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { SearchPage } from "./pages/SearchPage";
 import { ProjectPage } from "./pages/ProjectPage";
@@ -94,6 +95,10 @@ export default function App({ auth }: { auth: AuthStatus }) {
           ) : route.view === "settings" ? (
             <div className={PAGE}>
               <SettingsPage auth={auth} />
+            </div>
+          ) : route.view === "calls" ? (
+            <div className={PAGE}>
+              <CallsPage />
             </div>
           ) : route.view === "projects" ? (
             <div className={PAGE}>

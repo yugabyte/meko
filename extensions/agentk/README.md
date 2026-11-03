@@ -334,12 +334,11 @@ your phone can connect.
   **Code Reviews** section counts the reviews, the issues they found, the ones fixed and the PRs opened
   after them. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
-- **Meko call log, for debugging:** turn on **Log Meko calls** in a project's settings and AgentK
-  keeps every Meko call made for each session, its own (recall at start, design uploads, the learn
-  step) and its agent's (Claude's, Kiro's or OpenCode's searches and saves, a reply too large for
-  Claude's context included), with what was sent and what came back, in a file in the session's
-  folder that's deleted with the session. **View calls** opens them, a session at a time, with
-  filters for the tool, who made the call (AgentK or the session's agent) and failed calls.
+- **Meko calls, for debugging:** a session's **Meko calls** (its ⋯ menu, or the command palette)
+  opens Meko's **Calls** page on that session's calls: its agent's (Claude's, Kiro's or OpenCode's)
+  and most of AgentK's for it. AgentK's search at the session's start goes under AgentK's own id, so
+  it's on the page unfiltered. Turn on **Keep call contents** in Meko's Settings to see what each
+  sent and got back.
 - **Context Gaps:** Meko keeps the searches it couldn't answer, on each datapack's
   **Context Gaps** tab in its web UI (Meko Cloud's datapacks' too, as their searches pass through
   it). With the Meko on this computer, the project home says how many

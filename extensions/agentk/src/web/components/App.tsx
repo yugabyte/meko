@@ -47,7 +47,6 @@ import { PaneIcon, Rail } from './Rail';
 import { SettingsDialog, type SettingsTab } from './SettingsDialog';
 import { TopBar } from './TopBar';
 import { UsageView } from './UsageView';
-import { MekoCallsView } from './MekoCallsView';
 import { WhatsNewDialog, whatsNewBack, type WhatsNewOpener } from './WhatsNewDialog';
 import { LinkWorkItemDialog } from './LinkWorkItemDialog';
 import { WorkItemDialog } from './WorkItemDialog';
@@ -617,14 +616,6 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
             onError={showToast}
             onSettings={() => setModal({ kind: 'settings', tab: 'work-queue' })}
           />
-        ) : currentProject && route.view === 'meko' ? (
-          <MekoCallsView
-            key={currentProject.id}
-            project={currentProject}
-            sessionId={route.sessionId}
-            onMenu={openDrawer}
-            onError={showToast}
-          />
         ) : currentProject && route.view === 'home' ? (
           <ProjectHomeView
             key={currentProject.id}
@@ -785,6 +776,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
           askAgentk={!!state.askAgentk}
           onEditSession={(projectId, initial) => setModal({ kind: 'new-session', projectId, initial })}
           mekoWebUrl={state.meko.webUrl}
+          mekoCalls={state.meko.calls}
           onOpenInvite={(invite) => setModal({ kind: 'new-project', invite })}
           onStarted={({ project, session }) => {
             // As after Open project and New session: both shown until a state push brings them.

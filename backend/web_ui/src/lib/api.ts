@@ -10,6 +10,10 @@ import type {
   Artifact,
   ArtifactList,
   AuthStatus,
+  CallContents,
+  CallDetail,
+  CallFilter,
+  CallPage,
   ContextSearch,
   ConversationDetail,
   Conversation,
@@ -174,6 +178,23 @@ export const api = {
   checkUpdate: () => request<UpdateStatus>("POST", "/update/check"),
   // Starts installing the newest release; the status's job shows how it goes, and Meko restarts.
   applyUpdate: () => request<UpdateStatus>("POST", "/update/apply"),
+
+  // The call log, newest first, a page at a time (before: the last id of the page before).
+  calls: (f: CallFilter, before?: number) => {
+    const q = new URLSearchParams();
+    if (f.agent) q.set("agent", f.agent);
+    if (f.tool) q.set("tool", f.tool);
+    if (f.client) q.set("client", f.client);
+    if (f.failed) q.set("failed", "true");
+    if (before) q.set("before", String(before));
+    const qs = q.toString();
+    return request<CallPage>("GET", `/calls${qs ? `?${qs}` : ""}`);
+  },
+  call: (id: number) => request<CallDetail>("GET", `/calls/${id}`),
+  // "Keep call contents", the owner only to change; clearing keeps the calls.
+  callContents: () => request<CallContents>("GET", "/settings/call-contents"),
+  setCallContents: (keep: boolean) => request<CallContents>("PUT", "/settings/call-contents", { keep }),
+  clearCallContents: () => request<CallContents>("DELETE", "/calls/contents"),
 
   usageStats: () => request<UsageStats>("GET", "/settings/usage-stats"),
   setUsageStats: (enabled: boolean) => request<UsageStats>("PATCH", "/settings/usage-stats", { enabled }),

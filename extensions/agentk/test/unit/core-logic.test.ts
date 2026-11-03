@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -15,6 +15,7 @@ import { ciState, ciSummary, isLogin, isTrustedAuthor, parseReviewDetails, revie
 import { reviewRoute } from '../../src/server/heldreviews.js';
 import { extractPrompt } from '../../src/server/learn.js';
 import { launchedAgentId, pinSlug, sessionAgentId } from '../../src/server/meko.js';
+import { removeOldMekoLogs } from '../../src/server/mekologcleanup.js';
 import { getPaths } from '../../src/server/paths.js';
 import {
   DEFAULT_PROMPTS, learnTask, mekoPrFooter, mekoQuestionLine, mekoQuestionSystemLine, mekoRecallLine, mekoLearnLine, mekoSaveSystemLine, render, SAVING_RULE, type PromptName,
@@ -22,7 +23,7 @@ import {
 import { parseSettings, sessionDatapack, sessionRow, slugify } from '../../src/server/store.js';
 import { shq } from '../../src/server/launcher.js';
 import { repoFolder } from '../../src/server/worktrees.js';
-import { mekoDatapackUrl } from '../../src/web/util.js';
+import { mekoCallsUrl, mekoDatapackUrl } from '../../src/web/util.js';
 
 describe('config and db', () => {
   it('keeps the database owner-only, its WAL and update snapshots included, and fixes ones made before', () => {
@@ -159,6 +160,46 @@ describe('config and db', () => {
     for (const source of ['meko', 'config', 'env', 'claude', null] as const) {
       expect(mekoDatapackUrl({ webUrl: null, source }, id)).toBeNull();
     }
+  });
+
+  it("links a session's calls on Meko's Calls page, by its agent id, only when Meko has the page", () => {
+    expect(mekoCallsUrl({ calls: true }, 'claude_code:fix-it-1a2b3c4d')).toBe('/calls?agent=claude_code%3Afix-it-1a2b3c4d');
+    expect(mekoCallsUrl({ calls: true }, null)).toBeNull();
+    expect(mekoCallsUrl({ calls: false }, 'claude_code:fix-it-1a2b3c4d')).toBeNull();
+  });
+
+  it("deletes the Meko call logs AgentK kept itself once, and nothing else in a session's folder", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ak-designs-'));
+    const db = openDb(join(dir, 'state.db'));
+    const designs = join(dir, 'designs');
+    for (const s of ['s1', 's2']) mkdirSync(join(designs, s), { recursive: true });
+    writeFileSync(join(designs, 's1', 'meko-calls.jsonl'), '{}\n');
+    writeFileSync(join(designs, 's2', 'design.md'), '# Design\n');
+    expect(removeOldMekoLogs(db, designs)).toBe(1);
+    expect(existsSync(join(designs, 's1', 'meko-calls.jsonl'))).toBe(false);
+    expect(existsSync(join(designs, 's2', 'design.md'))).toBe(true);
+    // Once only: a file put back later is left alone.
+    writeFileSync(join(designs, 's1', 'meko-calls.jsonl'), '{}\n');
+    expect(removeOldMekoLogs(db, designs)).toBe(0);
+    expect(existsSync(join(designs, 's1', 'meko-calls.jsonl'))).toBe(true);
+    db.close();
+  });
+
+  it("isn't marked done while an old Meko call log can't be removed, and removes the rest", () => {
+    const db = openDb(join(mkdtempSync(join(tmpdir(), 'ak-db-')), 'state.db'));
+    const designs = mkdtempSync(join(tmpdir(), 'ak-designs-'));
+    mkdirSync(join(designs, 's1'));
+    writeFileSync(join(designs, 's1', 'meko-calls.jsonl'), '{}\n');
+    // A folder by the log's name: rmSync refuses it, as it would a file it may not delete.
+    mkdirSync(join(designs, 's2', 'meko-calls.jsonl'), { recursive: true });
+    writeFileSync(join(designs, 'loose-file'), '');
+    expect(() => removeOldMekoLogs(db, designs)).toThrow();
+    expect(existsSync(join(designs, 's1', 'meko-calls.jsonl'))).toBe(false);
+    rmSync(join(designs, 's2', 'meko-calls.jsonl'), { recursive: true });
+    expect(removeOldMekoLogs(db, designs)).toBe(0);
+    writeFileSync(join(designs, 's1', 'meko-calls.jsonl'), '{}\n');
+    expect(removeOldMekoLogs(db, designs)).toBe(0); // marked done by the run before
+    db.close();
   });
 
   it('moves projects on the old ak/ branch prefix to ak_{login}/, and keeps one someone set', () => {

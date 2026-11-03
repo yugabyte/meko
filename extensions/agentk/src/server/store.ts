@@ -24,7 +24,6 @@ export const DEFAULT_SETTINGS: ProjectSettings = {
   branchPrefix: DEFAULT_BRANCH_PREFIX,
   mergeMethod: 'repo-default',
   notify: true,
-  mekoLog: false,
   codeReview: {},
 };
 
@@ -161,6 +160,8 @@ export function parseSettings(json: string): ProjectSettings {
   if (!Object.hasOwn(REVIEWER_LABELS, s.reviewer)) s.reviewer = DEFAULT_SETTINGS.reviewer;
   // The AgentK reviewer's login, gone since migration 47, from a page loaded before it.
   delete (s as { reviewerLogin?: unknown }).reviewerLogin;
+  // Log Meko calls, gone since Meko keeps each call's contents itself (its Calls page).
+  delete (s as { mekoLog?: unknown }).mekoLog;
   s.codeReview = readOverrides(s.codeReview);
   return s;
 }
@@ -348,6 +349,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     promptsHeld: rt.promptsHeld,
     asking: rt.asking,
     mekoCall: rt.mekoCall,
+    mekoAgentId: r.meko_agent_id,
     background: rt.background,
     approvalQueued: rt.approvalQueued,
     learning: !!learnProgress,

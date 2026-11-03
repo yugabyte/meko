@@ -116,8 +116,7 @@ the session host like any other, so it survives restarts. It works in its task's
 owning it (`worktree_released`), so archiving it never frees the worktree or deletes the branch. It
 is archived as soon as the review is done (`finish()`: the findings stay with the review), when the
 user cancels it, when another review replaces it, and with its task; a failed review keeps it for
-Retry. Its Meko call log (the passes' gotcha searches, with Log Meko calls on) stays until its task
-is archived, so a done review's calls can still be read. Its edit guard denies every
+Retry. Its edit guard denies every
 edit in the repo, and on Claude Code `--disallowedTools` takes Bash and the edit and web tools away
 from it and its subagents; OpenCode's session config denies them. Its first prompt is the first
 sweep's, and AgentK sends each later step's prompt as the turn before ends.

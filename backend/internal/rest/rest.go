@@ -108,6 +108,11 @@ func Register(g *echo.Group, o Options) {
 	g.POST("/settings/memory-extractor/run", a.runExtractor)
 	g.GET("/settings/answers", a.answersStatus)
 	g.PUT("/settings/answers", a.setAnswers)
+	g.GET("/settings/call-contents", a.callContents)
+	g.PUT("/settings/call-contents", a.setCallContents)
+	g.GET("/calls", a.listCalls)
+	g.GET("/calls/:id", a.call)
+	g.DELETE("/calls/contents", a.clearCallContents)
 
 	// The routes that take a datapack in the path and that Meko Cloud has too go through byID: one
 	// this Meko doesn't have goes to Meko Cloud while it's linked. Meko's own (usage, export, the maps,

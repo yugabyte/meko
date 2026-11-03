@@ -91,8 +91,13 @@ func TestExportDatapack(t *testing.T) {
 			t.Fatalf("the sweep never embedded the turn and the collective memory: %v %v", cs, v != nil)
 		}
 	}
+	// A call's kept contents are never exported.
+	if err = e.Service.SetKeepCallContents(ctx, true); err != nil {
+		t.Fatal(err)
+	}
 	e.Service.RecordCall(ctx, store.Call{At: time.Now(), Tool: "memory_search", DatapackID: e.DatapackID,
-		AgentID: "claude_code:x", OK: true, Ms: 12})
+		AgentID: "claude_code:x", OK: true, Ms: 12}, json.RawMessage(`{"query":"kept-query-text"}`),
+		"kept-reply-text")
 
 	req, _ := http.NewRequest("GET", e.URL+"/api/v1/datapacks/"+e.DatapackID+"/export", nil)
 	req.Header.Set("Authorization", "Bearer "+testenv.ClientToken)
@@ -196,6 +201,11 @@ func TestExportDatapack(t *testing.T) {
 	if len(a) != 1 || a[0]["filename"] != "notes.md" || string(files[str(a[0]["path"])]) != "# notes" ||
 		!strings.HasPrefix(str(a[0]["path"]), "artifacts/") {
 		t.Errorf("artifacts %s", files["artifacts.jsonl"])
+	}
+	for name, b := range files {
+		if bytes.Contains(b, []byte("kept-query-text")) || bytes.Contains(b, []byte("kept-reply-text")) {
+			t.Errorf("%s holds a call's contents", name)
+		}
 	}
 	if calls := lines("call_log.jsonl"); len(calls) != 1 || calls[0]["tool"] != "memory_search" {
 		t.Errorf("call log %s", files["call_log.jsonl"])

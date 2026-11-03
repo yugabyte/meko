@@ -305,7 +305,7 @@ func TestDatapackMetrics(t *testing.T) {
 		{Tool: "context_search", OK: true, TokensSent: 400, TokensSaved: 13600, TokensIfRaw: 14000, ScoreLow: 2},
 	} {
 		c.At, c.DatapackID = time.Now(), e.DatapackID
-		if err := e.Store.AddCall(context.Background(), c); err != nil {
+		if err := e.Store.AddCall(context.Background(), c, nil); err != nil {
 			t.Fatal(err)
 		}
 	}

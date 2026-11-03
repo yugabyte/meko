@@ -1,14 +1,16 @@
 // Meko's settings: memory extraction and Search's answers, which run the user's own Claude Code (each
-// turned on after one test call), usage stats, the way to the Meko Cloud link, and who can reach Meko.
+// turned on after one test call), usage stats, keeping calls' contents and the way to the Calls page,
+// the way to the Meko Cloud link, and who can reach Meko.
 
 import { useState, type ReactNode } from "react";
-import { Cloud } from "lucide-react";
+import { Cloud, ListTree } from "lucide-react";
 import { api } from "../lib/api";
-import { dateTime } from "../lib/format";
-import { href, navigate } from "../lib/route";
+import { bytes, dateTime } from "../lib/format";
+import { CALLS, href, navigate, type Route } from "../lib/route";
 import type { AuthStatus, UsageStats } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
-import { Card, ErrorNote, Spinner, Toggle } from "../components/ui";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+import { Button, Card, ErrorNote, Spinner, Toggle } from "../components/ui";
 
 const HARNESS = "claude";
 
@@ -29,6 +31,7 @@ export function SettingsPage({ auth }: { auth: AuthStatus }) {
       <h2 className="text-lg font-semibold">Settings</h2>
       <ClaudeFeatures />
       <UsageStatsCard />
+      <CallContentsCard />
       <Card className="space-y-2 p-4">
         <h3 className="font-medium">Meko Cloud</h3>
         <p className="text-sm text-muted-foreground">
@@ -51,7 +54,7 @@ function AccessCard({ auth }: { auth: AuthStatus }) {
   );
 }
 
-function PageLink({ to, icon, label }: { to: typeof MEKO_CLOUD; icon: ReactNode; label: string }) {
+function PageLink({ to, icon, label }: { to: Route; icon: ReactNode; label: string }) {
   return (
     <a href={href(to)} onClick={(e) => (e.preventDefault(), navigate(to))} className={LINK_CLASS}>
       {icon} {label}
@@ -185,6 +188,74 @@ function UsageStatsCard() {
         )}
       </div>
       {(error ?? usage.error) && <ErrorNote error={(error ?? usage.error)!} />}
+    </Card>
+  );
+}
+
+// Keep call contents: what each MCP call sent and got back, kept for a few days for the Calls page,
+// which this card is the way to. Clearing deletes what's kept; the calls stay.
+function CallContentsCard() {
+  const state = useLoad(() => api.callContents(), []);
+  const [busy, setBusy] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [error, setError] = useState<Error>();
+  const s = state.data;
+  const flip = async (on: boolean) => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.setCallContents(on);
+    } catch (e) {
+      setError(e as Error);
+    } finally {
+      setBusy(false);
+      state.reload();
+    }
+  };
+  return (
+    <Card className="space-y-3 p-4">
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-0.5">
+          <h3 className="font-medium">Calls</h3>
+          <p className="text-sm text-muted-foreground">
+            Keep what each call to Meko sent and got back, to see on the Calls page what your agents asked and what
+            they were told.
+          </p>
+          {s && (
+            <p className="text-xs text-muted-foreground">
+              Kept for {s.retention_days} days. {s.calls ? `${s.calls} calls kept, ${bytes(s.bytes)}.` : "None kept now."}
+            </p>
+          )}
+        </div>
+        {s ? (
+          <Toggle label="Keep call contents" checked={s.keep} disabled={busy} onChange={flip} />
+        ) : (
+          !state.error && <Spinner />
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <PageLink to={CALLS} icon={<ListTree className="size-3.5" />} label="View calls" />
+        {s && s.calls > 0 && (
+          <Button size="sm" variant="ghost" onClick={() => setClearing(true)}>
+            Clear contents
+          </Button>
+        )}
+      </div>
+      {(error ?? state.error) && <ErrorNote error={(error ?? state.error)!} />}
+      {clearing && (
+        <ConfirmDialog
+          title="Clear call contents?"
+          action="Clear"
+          onClose={() => setClearing(false)}
+          onConfirm={async () => {
+            await api.clearCallContents();
+            setClearing(false);
+            state.reload();
+          }}
+        >
+          What every call sent and got back is deleted. The calls stay on the Calls page.
+        </ConfirmDialog>
+      )}
     </Card>
   );
 }

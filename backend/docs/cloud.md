@@ -33,7 +33,7 @@ every extension the same way (`internal/cloudlink`).
 | **Through `/mcp` and `/api/v1`, any credential may do anything on Meko Cloud**, deletes included, and `auth = "none"` too | The owner chose to link, and agents held the key itself before they stayed here, which could already do all of it. Per-client keys, which could scope it, aren't planned. |
 | **Agents stay on this Meko** ([below](#agents-stay-on-this-meko)): linked or not, they connect to this Meko's `/mcp` with the client token, and a link change moves back the ones a Meko from before connected to Meko Cloud | Every agent, AgentK and its capture use the same Meko, which sends their calls to Meko Cloud, and no agent config holds the key. |
 | **When Meko Cloud fails, the listings fail**: MCP's `datapack_list` and `datapack_search` and REST's `GET /datapacks` answer with its failure, not this Meko's datapacks alone, while calls that name one of this Meko's datapacks keep working | A list that silently lacks Meko Cloud's datapacks would look whole. |
-| **Forwarded calls are in this Meko's call log, marked as Meko Cloud's** (`location`, [api.md](api.md#the-call-log)) | What agents did through this Meko is on record; this Meko's metrics, usage and usage stats read only its own calls, so no Meko Cloud call counts toward a datapack here, even one of the same id. Context Gaps keeps the questions of the searches it passed on, under their datapack's id ([api.md](api.md#context-gaps)), but they aren't in the usage stats either. |
+| **Forwarded calls are in this Meko's call log, marked as Meko Cloud's** (`location`, [api.md](api.md#the-call-log)) | What agents did through this Meko is on record, and on the Calls page with what they sent and got back while Settings keeps call contents ([api.md](api.md#call-contents)), with no location shown; this Meko's metrics, usage and usage stats read only its own calls, so no Meko Cloud call counts toward a datapack here, even one of the same id. Context Gaps keeps the questions of the searches it passed on, under their datapack's id ([api.md](api.md#context-gaps)), but they aren't in the usage stats either. |
 
 ## Routes and command
 
@@ -287,6 +287,10 @@ never the key.
 - No `cloud` at all: a Meko from before the link; the extension keeps doing what it did. A Meko from
   before the key stayed in Meko sends `url`, `api_key` and `api_url` too, which an extension may still
   use.
+
+Beside `cloud`, `features` lists the web UI's pages an extension may link to: `calls`, the Calls
+page, which takes `/calls?agent=<agent id>` (AgentK's sessions open it). A Meko without it leaves
+`features` out, so an extension shows no such link.
 
 After every change, once it's saved and the change's lock is released (so a slow extension holds
 up neither the reply nor the next change), Meko posts `{"what": "cloud"}` to `/_meko/changed` on each running

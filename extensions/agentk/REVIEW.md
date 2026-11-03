@@ -313,15 +313,11 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       Meko on this computer, Settings open, session launch, after Claude Code's setup, Claude Code becoming available or not after a
       version read), only while Claude Code is available, in the background, only for a token that isn't
       AgentK's own, and reuses results for 10 minutes; one it couldn't check never raises the banner.
-- [ ] A new place AgentK calls Meko for a session wraps the call in `withMekoScope(session)`, so the
-      session's Meko call log (`mekolog.ts`) shows it; a call that belongs to no session isn't wrapped.
-      The log never holds the API key, is written only while the project has Log Meko calls on and
-      the session isn't archived, and is deleted wherever the session's pastes are (archive, failed
-      start, closing the project). Writing it never fails the call. Claude's calls reach it only
-      from the mod's `/mod/meko` end, never change what Claude gets back, and a reply read from a
-      file Claude Code saved comes only from the transcript's own session's `tool-results` folder.
-      Kiro's and OpenCode's reach it only from the usage read of their own files, once per call
-      (when its `meko_calls` row is new).
+- [ ] A new place AgentK calls Meko for a session passes the session's agent id
+      (`launchedAgentId(row)`), so Meko's Calls page shows the call with the session's own; AgentK
+      keeps no log of what its Meko calls send or get back (Meko does, while its Keep call contents
+      is on). The usage read of Kiro's and OpenCode's own files counts their Meko calls in
+      `meko_calls`, once per call, and passes nothing on.
 - [ ] The learn step (`learn.ts`) writes only to the session's dedicated datapack, never a shared
       one, and on the mod path never a fact that names this machine (home, AgentK's home,
       worktree, repo path, by the stored spelling and by `claudePath()`'s); the typed path relies

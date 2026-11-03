@@ -17,7 +17,7 @@ import { api, errorMessage } from '../api';
 import { useIsMobile, useTouch } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { cx, shortTime } from '../util';
-import { Busy, ConfirmButton, DatapackName, ErrorText, Field, InfoCheck, ReviewFields } from './common';
+import { Busy, ConfirmButton, DatapackName, ErrorText, Field, ReviewFields } from './common';
 import { useReviewDefaults } from '../reviewdefaults';
 import { AddDatapackDialog } from './AddDatapackDialog';
 import { MekoLinkDialog } from './MekoLinkDialog';
@@ -255,7 +255,7 @@ export function ProjectHomeView({
           </section>
         </div>
         {home && <UsagePanel projectId={project.id} usage={home.usage} mekoOn={mekoConfigured && project.datapacks.length > 0} gaps={home.mekoGaps} />}
-        <ProjectSettingsForm project={project} order={order} onMove={onMove} ghLogin={ghLogin} mekoConfigured={mekoConfigured} onError={onError} />
+        <ProjectSettingsForm project={project} order={order} onMove={onMove} ghLogin={ghLogin} onError={onError} />
       </div>
       {dialog?.kind === 'share' && dedicated && (
         <ShareDialog projectId={project.id} projectName={project.name} datapack={dedicated} onClose={() => setDialog(null)} />
@@ -411,15 +411,12 @@ function ProjectSettingsForm({
   order,
   onMove,
   ghLogin,
-  mekoConfigured,
   onError,
 }: {
   project: ProjectWithSessions;
   order: { index: number; count: number };
   onMove: (index: number) => void;
   ghLogin: string | null;
-  /** Meko is on: Log Meko calls is offered (and kept on show while it's on, so it can be turned off). */
-  mekoConfigured: boolean;
   onError: (m: string) => void;
 }) {
   const [name, setName] = useState(project.name);
@@ -525,21 +522,6 @@ function ProjectSettingsForm({
             <input id="ps-notify" type="checkbox" checked={s.notify} onChange={(e) => set('notify', e.target.checked)} />
             <span>Browser notifications</span>
           </label>
-          {(mekoConfigured || project.settings.mekoLog) && (
-            <InfoCheck
-              id="ps-mekolog"
-              label="Log Meko calls"
-              checked={s.mekoLog}
-              onChange={(on) => set('mekoLog', on)}
-              extra={
-                <button type="button" className="link-btn view-calls" onClick={() => navigate({ view: 'meko', projectId: project.id, sessionId: null })}>
-                  View calls
-                </button>
-              }
-            >
-              What AgentK and the agent send to Meko for each session, and what comes back. Deleted with the session.
-            </InfoCheck>
-          )}
         </div>
         {order.count > 1 && (
           <div className="settings-actions">

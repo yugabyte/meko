@@ -13,7 +13,7 @@ import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, doAllActions, filterItem
 import { workLinkKey } from '../../shared/worklinks';
 import { navigate } from '../router';
 import { attachFiles, getTerminal } from '../terminals';
-import { STATUS_TEXT, canRunReview, cx, dotState, dotTitle, isMac, liveSessions, stageWords, type DotState } from '../util';
+import { STATUS_TEXT, canRunReview, cx, dotState, dotTitle, isMac, liveSessions, mekoCallsUrl, stageWords, type DotState } from '../util';
 import { Busy, ErrorText, StatusDot, trapTab } from './common';
 
 interface Item {
@@ -65,6 +65,7 @@ export function CommandPalette({
   askAgentk,
   onEditSession,
   mekoWebUrl,
+  mekoCalls,
   onOpenInvite,
   workItems,
   onAddWorkItem,
@@ -97,6 +98,8 @@ export function CommandPalette({
   onEditSession: (projectId: string, initial: CreateSessionRequest) => void;
   /** Meko's web app: a share link pasted from it can be joined. */
   mekoWebUrl: string | null;
+  /** Meko has the Calls page for AgentK's calls (`MekoStatus.calls`): the current session's "Meko calls" opens it. */
+  mekoCalls: boolean;
   /** Opens Open project with a share chosen (one just joined by its link). */
   onOpenInvite: (invite: DatapackInvite) => void;
   /** The work queue's open items. */
@@ -492,13 +495,14 @@ export function CommandPalette({
         run: () => getTerminal(currentSession.id).openFind(),
       });
     }
-    if (currentSession && current?.settings.mekoLog) {
+    const callsUrl = currentSession ? mekoCallsUrl({ calls: mekoCalls }, currentSession.mekoAgentId) : null;
+    if (currentSession && callsUrl) {
       out.push({
         id: 'meko-calls',
         label: ['Meko calls of ', { session: currentSession.name }],
-        hint: 'View',
+        hint: 'Meko',
         keywords: 'meko calls log debug memory search',
-        run: () => navigate({ view: 'meko', projectId: current.id, sessionId: currentSession.id }),
+        run: () => void window.open(callsUrl, '_blank', 'noopener'),
       });
     }
     for (const p of projects) {
@@ -546,7 +550,7 @@ export function CommandPalette({
     // Still offered after the banner's Not now, while the browser can install it.
     if (canInstall) out.push({ id: 'install', label: ['Install AgentK as an app'], hint: 'Action', keywords: 'install app window dock home screen pwa', run: () => void install() });
     return out;
-  }, [projects, currentProjectId, currentSession, onNewProject, onNewSession, onMoveSession, onOpenPr, onRenameSession, onSessionToTop, onSettings, canInstall, install, workItems, onAddWorkItem, onShowWorkItem, onLinkWorkItem, onError]);
+  }, [projects, currentProjectId, currentSession, mekoCalls, onNewProject, onNewSession, onMoveSession, onOpenPr, onRenameSession, onSessionToTop, onSettings, canInstall, install, workItems, onAddWorkItem, onShowWorkItem, onLinkWorkItem, onError]);
 
   const findItems = useMemo<Item[]>(() => {
     if (!found || found.key !== findKey) return [];
