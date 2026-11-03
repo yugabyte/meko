@@ -64,7 +64,7 @@ plugin's advice not to call `memory_add`. The Explore prompt ends by saving unde
 **When.** At Merge & Close, before the cleanup (`Lifecycle.merged()` asks `Learner.beforeClose`,
 and runs again when any learn step ends there, `afterLearn`), once per session; at Discard, before
 the session ends (`Learner.beforeDiscard`); and when the user asks: the **learn** session action
-(**Save learnings** in the header, or the ⋯ sheet), or `/agentk_learn` in the terminal. It needs
+(**Save learnings to Meko** in the session's ⋯ menu, or the palette), or `/agentk_learn` in the terminal. It needs
 Meko on, a dedicated datapack, and Claude there and between turns; asked for otherwise, it's a 409
 that says why (exited: resume it; starting; busy). At Merge & Close or Discard a session whose
 Claude is gone or busy is recorded as skipped and closes as before. One runs at a time per session
@@ -72,9 +72,10 @@ Claude is gone or busy is recorded as skipped and closes as before. One runs at 
 still running when the PR merges, or when Discard is asked for, holds the close like one of its
 own, and a step that ended done since the session got to Merge & Close stands for it.
 
-**Skipping it.** **Merge & Close** and Discard's confirmation each have a **Don't save learnings**
-checkbox, shown when the project has a dedicated datapack and Meko is on, and unchecked by default.
-Checked, the action's `CloseSessionRequest` carries `skipLearn` (400 when it isn't a boolean), no
+**Skipping it.** The session's ⋯ menu (the ⋯ sheet on a phone) has **Merge & Close without saving
+learnings** beside the Merge & Close gate, and Discard's confirmation has a **Don't save learnings**
+checkbox, unchecked by default; both are offered when the project has a dedicated datapack and Meko
+is on. Either way the action's `CloseSessionRequest` carries `skipLearn` (400 when it isn't a boolean), no
 learn step runs, and the timeline says so (`learn-skipped`, once, and not for **Discard now**,
 whose step is recorded as interrupted). Merge & Close writes the choice to `sessions.skip_learn`
 only once the merge is requested or queued, and keeps it until the PR merges; a merge given up on

@@ -136,9 +136,10 @@ your phone can connect.
   replace it. Claude is told to leave out anything about your machine or one person's
   preferences. With AgentK's mod it runs out of sight (one cached look at the session, plus a small
   model for the duplicate check), and AgentK also drops any fact that names a local path; without
-  the mod, AgentK asks Claude in a turn of its own and Claude saves under the same rule. **Save learnings** in the session's
-  header (or the ⋯ sheet on a phone), or `/agentk_learn` in the terminal, does it any time.
-  Check **Don't save learnings** beside Merge & Close or Discard to close a session without it.
+  the mod, AgentK asks Claude in a turn of its own and Claude saves under the same rule. **Save learnings to Meko** in the
+  session's ⋯ menu, or `/agentk_learn` in the terminal, does it any time. **Merge & Close without
+  saving learnings** in the ⋯ menu, or **Don't save learnings** in Discard's confirmation, closes a
+  session without it.
 - **Learn the project to seed a new datapack.** When you open a project on a new datapack (or one
   with nothing in it yet), the New session dialog starts on **Learn the project**: say what the
   project is about, where its files are, and how many months of PRs to read (24 by default). The
@@ -161,7 +162,7 @@ your phone can connect.
   that can't see the projects' datapacks there, a banner says so and offers to set Claude Code up
   with AgentK's Meko (Settings › Harness shows each agent's Meko);
   AgentK never changes Claude Code's setup unless you ask.
-  Once a session has a PR, **Share with reviewers** lists the reviewers of the project's open PRs
+  Once a session has a PR, **Share with reviewers** in its ⋯ menu lists the reviewers of the project's open PRs
   (in every repo its sessions work in) with their emails, to share with in one click. The Share
   dialog suggests the people you share with most, in any project, to add with a tap.
 - **Review someone else's PR with AgentK:** a *Review a PR* session lists the open PRs, in any repo,
@@ -232,7 +233,7 @@ your phone can connect.
   screen has gone 10 seconds without being used, or right away if that screen isn't showing it.
 - **Find in the terminal:** `⌘F` (`Ctrl+Shift+F` on Linux and Windows) in a session's terminal
   searches all of it, scrollback included, highlighting each match, with match case, whole word
-  and regex. On a phone, **Find in terminal** is in the ⋯ sheet and the command palette.
+  and regex. **Find in terminal** is also in the session's ⋯ menu (the ⋯ sheet on a phone) and the command palette.
 - **Multi-line prompts:** Shift+Enter starts a new line in a session's terminal, and Enter sends
   the prompt. On a Mac, ⌘← and ⌘→ go to the start and end of the line, ⌥← and ⌥→ move by a word,
   and ⌘⌫ deletes to the start of the line. On Linux and Windows, Ctrl+Backspace deletes a word.
@@ -283,8 +284,8 @@ your phone can connect.
   go straight to code. Or pick *Review a PR* (above). A task moves between stages, forward or back,
   at any point between turns: an exploration that should ship moves on to Code or opens a PR with
   **Move on…**, and a session in review can go back to Code or Design. A move carries on from what the
-  session has discussed or done, not its first prompt. A move, and **Open PR** (its **+** notes
-  button), takes optional instructions for AgentK, sent after the stage's prompt. Rename a session any time
+  session has discussed or done, not its first prompt. A move, and **Open PR with instructions** in the
+  session's ⋯ menu, take optional instructions for AgentK, sent after the stage's prompt. Rename a session any time
   (double-click its tab, or its row in the rail): its branch and worktree keep their names.
 - **Task lifecycle:** (Explore →) Design → Code → Review & PR (AgentK) → Merge & Close. Complex designs are
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
@@ -303,9 +304,9 @@ your phone can connect.
   review session shown as a magnifier on the task's tab, which opens the review's terminal while its passes run and its findings once the task is fixing them or the review is done. The task fixes what it finds, and the PR
   says how it went (`me_ak_review:2 blockers,1 major addressed;Sagittarius3.0`, or `me_ak_review:LGTM;Sirius1.0`). Strategy,
   re-review rounds and depth are in Settings, the project's settings and each session's own.
-  You can also run the review whenever you like, in Code or on the open PR in Review & PR: from the
-  command palette, **Review again** on its findings (which also has Cancel and Retry for it), or
-  **Run code review** in the ⋯ sheet on a phone. One run in Code is the one Open PR uses, so the PR
+  You can also run the review whenever you like, in Code or on the open PR in Review & PR: with
+  **Run code review** in the session's ⋯ menu (the ⋯ sheet on a phone), from the command palette,
+  or with **Review again** on its findings (which also has Cancel and Retry for it). One run in Code is the one Open PR uses, so the PR
   opens without reviewing again.
   You approve the design, opening the PR, and Merge & Close, which merges the PR and
   cleans up the branches, leaving the worktree for the next session. Pressed early, they wait:

@@ -323,7 +323,8 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       on the saving rule in its prompt. It
       never holds Merge & Close or Discard past its timeout on the mod path (writes included), and
       a Discard waiting for it always ends (step done, failed, interrupted, or Discard now; a
-      restart finishes it), and **Don't save learnings** skips it entirely; it never holds a
+      restart finishes it), and skipping it (`skipLearn`: **Merge & Close without saving learnings**,
+      or Discard's **Don't save learnings**) skips it entirely; it never holds a
       hook-socket request while it works with Meko (`/mod/learn` answers at once; what follows goes
       on a poll), a failure at any step closes it and lets the close go on, and one runs at a time
       per session. Its model calls' usage is

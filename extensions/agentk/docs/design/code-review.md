@@ -19,7 +19,7 @@ settings, the line, the tab's label); the UI is the magnifier joined to the task
 
 Three settings, each set globally (`[code_review]` in config.toml, Settings › Code review), overridden
 per project (`ProjectSettings.codeReview`, the project's settings) and again per session
-(`sessions.review_json`: the New session dialog's Advanced, the session's ⋯ sheet, Open PR with
+(`sessions.review_json`: the New session dialog's Advanced, the session's ⋯ menu and sheet, Open PR with
 instructions, and the `review` argument of the `start_sessions` tool, so "start a code session with
 3 deep reviews" asks for `depth: 3`). A value left out keeps the next level's (`resolveReview`).
 
@@ -201,13 +201,13 @@ still missing; a review whose session is gone fails, for Retry.
 ## On demand
 
 The user can run the review at any time in Code, or in Review & PR once the PR is found: the
-`review-run` action (`CodeReviews.runNow`). On a desktop it's **Run the code review of …** in the
-command palette and, once the task has a review, **Review again** in the findings panel's header
-(the magnifier opens it); on a phone, **Run code review** in the task's ⋯ sheet too. While AgentK
+`review-run` action (`CodeReviews.runNow`): **Run code review** in the task's ⋯ menu (the ⋯
+sheet on a phone), **Run the code review of …** in the command palette and, once the task has a
+review, **Review again** in the findings panel's header (the magnifier opens it). While AgentK
 can't take it, each of these says why (after its turn, answer it in the terminal, resume the
 session), and the server's refusal says so again. For
 a review the user ran, the findings header also has **Cancel** while it runs and **Retry** once it
-stopped, in its own stage (`onDemandControls`), as the ⋯ sheet does on a phone: the Code gate
+stopped, in its own stage (`onDemandControls`), as the ⋯ menu and sheet do: the Code gate
 doesn't show it. A stopped review it replaces passes on the Open PR instructions and a move's
 `moved` line it held. It's refused (409) mid-turn,
 while AgentK waits on the user or has exited, while a review runs, outside those two stages, and in
@@ -312,7 +312,7 @@ through `review_outcome`: `CodeReviewSummary.addressed`; then, or with none, `LG
 A task that answers in its reply instead (tools off, or an untrusted PR head) records no outcomes,
 so its counts stay. While the review session waits on the user in its terminal (a permission prompt
 or a question, while its steps run: `CodeReviewSummary.waiting`), the magnifier takes the needs-you color and its lens
-knocks, since that session has no tab to show it. Clicking it (in the tab, the rail or the ⋯ sheet)
+knocks, since that session has no tab to show it. Clicking it (in the tab, the rail, or the ⋯ menu or sheet)
 follows `reviewOpens()` in `src/web/util.ts`: while the review has a running session and isn't
 waiting for the task's fixes (preparing, sweeping, scoring, or failed, which keeps its session for
 Retry), it opens the review's own screen, its terminal with the findings beside it on a desktop;
@@ -329,7 +329,7 @@ while the task fixes a round's findings it offers **Review now** too, which star
 past an interrupted fix turn. Both are off while the task's turn runs. The step the stage bar shows
 isn't a move target then, and neither is Code, the session's own stage. A review the user ran
 (`onDemand`) holds no PR, so none of this applies to it: the task shows in Code with its Open PR
-gate, and its findings header (and the ⋯ sheet on a phone) offers Cancel and Retry.
+gate, and its findings header and the session's ⋯ menu (the ⋯ sheet on a phone) offer Cancel and Retry.
 
 The Usage page and the project home count reviews in their **Code Reviews** section, and stack the
 review sessions' tokens on the Token usage chart ([Token usage](token-usage.md)); the usage report
