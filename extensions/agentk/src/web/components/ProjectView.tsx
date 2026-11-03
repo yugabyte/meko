@@ -816,6 +816,22 @@ function reviewGate(
       </span>
     );
   }
+  if (r.state === 'triage') {
+    return (
+      <span className="gate-group">
+        <span className="gate-pill warn" title={`Round ${r.round}'s findings wait for you: add notes to them or dismiss some in the findings, then send them to AgentK`}>
+          Findings wait on you
+        </span>
+        {open}
+        <button className="btn small" disabled={blocked} onClick={() => onAct('review-cancel')} title="Stop the review; then Retry or Open anyway">
+          Cancel
+        </button>
+        <button className="gate" disabled={blocked} onClick={() => onAct('review-send')} title="Send the findings to AgentK with your notes, leaving out the ones you dismissed">
+          Send to AgentK
+        </button>
+      </span>
+    );
+  }
   if (r.state === 'fixing') {
     return (
       <span className="gate-group">

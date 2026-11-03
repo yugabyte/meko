@@ -1,4 +1,4 @@
-import type { CodeReviewDetail } from '../shared/codereview';
+import type { CodeReviewDetail, CodeReviewFinding } from '../shared/codereview';
 import type {
   AppState,
   CloseWorkItemsRequest,
@@ -47,6 +47,7 @@ import type {
   RepoBranches,
   ReposResponse,
   HeldReview,
+  FindingChoiceRequest,
   HeldReviewsRequest,
   HeldReviewsResult,
   PrReviewers,
@@ -224,6 +225,7 @@ export const api = {
   updateSession: (id: string, b: UpdateSessionRequest) => request<Session>('PATCH', `/api/sessions/${enc(id)}`, b),
   /** A task's latest code review (or a code-review session's own), in full; 404 when it has none. */
   codeReview: (id: string) => get<CodeReviewDetail>(`/api/sessions/${enc(id)}/code-review`),
+  setFinding: (id: string, key: string, b: FindingChoiceRequest) => request<CodeReviewFinding>('PATCH', `/api/sessions/${enc(id)}/code-review/findings/${enc(key)}`, b),
   changes: (id: string, commit?: string | null) => get<SessionChanges>(`/api/sessions/${enc(id)}/changes${commit ? `?commit=${enc(commit)}` : ''}`),
   baseBranches: (id: string) => get<string[]>(`/api/sessions/${enc(id)}/base-branches`),
   /** URL of one side of a changed image; `v` busts the cache when the diff is refetched. */

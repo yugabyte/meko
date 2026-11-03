@@ -458,15 +458,23 @@ describe('code review before the PR (real session host + git, fake claude runnin
   });
 
   describe('a fix turn the user interrupted', () => {
-    /** Round 1 finds a blocker whose fix turn is interrupted (the fake interrupts a prompt saying INTERRUPT): the review waits for fixes. */
-    async function interruptedFix() {
+    /**
+     * Round 1 finds a blocker whose fix turn is interrupted (the fake interrupts a prompt saying
+     * INTERRUPT): the review waits for fixes. `check`: the findings wait on the user first, and Send
+     * queues the fix prompt (`local-review`) rather than typing it straight in.
+     */
+    async function interruptedFix(check = false) {
       // Through the mod, which reports an interrupted turn (no Stop hook fires for one).
       mkdirSync(env.fakeDir, { recursive: true });
       writeFileSync(join(env.fakeDir, 'mod'), '');
-      const s = await task({ review: { rounds: 1 } });
+      const s = await task({ review: { rounds: 1, check } });
       await waitFor(() => env.core.sessions.mod.live(s.id), (l) => l, 10000, 'the mod to poll');
       fake('review-reports.json', { ...LEDGERS, diff: { summary: 'LGTM', findings: [{ file: 'src/a.ts', line: 2, severity: 'blocker', comment: 'Off by one. INTERRUPT', gotchas: [] }] } });
       await env.core.sessions.action(s.id, 'open-pr');
+      if (check) {
+        await waitFor(() => env.core.sessions.get(s.id).codeReview?.state, (st) => st === 'triage', 30000, 'the findings to wait on you');
+        await env.core.sessions.action(s.id, 'review-send');
+      }
       const interrupted = () => all<{ text: string }>(env.core.db, "SELECT text FROM session_events WHERE session_id = ? AND kind = 'turn'", s.id).some((e) => e.text === 'You interrupted the turn');
       await waitFor(() => interrupted() && env.core.sessions.get(s.id).status === 'idle', (x) => x, 30000, 'the interrupted fix turn');
       expect(env.core.sessions.get(s.id).codeReview!.state).toBe('fixing');
@@ -474,8 +482,8 @@ describe('code review before the PR (real session host + git, fake claude runnin
       return s;
     }
 
-    it('goes on with the next round at Open PR', async () => {
-      const s = await interruptedFix();
+    it.each([['typed straight in', false], ['sent from triage, through the queue', true]])('goes on with the next round at Open PR, its fix prompt %s', async (_how, check) => {
+      const s = await interruptedFix(check);
       await env.core.sessions.action(s.id, 'open-pr');
       const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after round 2');
       expect(done.codeReview).toMatchObject({ round: 2, state: 'done' });
@@ -624,6 +632,114 @@ describe('code review before the PR (real session host + git, fake claude runnin
       await env.core.sessions.action(s.id, 'review-run');
       await env.core.sessions.move(s.id, { stage: 'code', prompt: false });
       expect(env.core.sessions.get(s.id).codeReview).toMatchObject({ state: 'cancelled', detail: REVIEW_LEFT_REVIEW, stage: 'review' });
+    });
+  });
+
+  describe('findings that wait on you (check)', () => {
+    const one = (line: number, severity: string, comment: string) => ({ file: 'src/a.ts', line, severity, comment, gotchas: [] });
+    const waiting = (id: string) => waitFor(() => env.core.sessions.get(id), (x) => x.codeReview?.state === 'triage', 30000, 'the findings to wait on you');
+    const keyAt = (id: string, line: number) => env.core.reviews.detail(id).findings.find((f) => f.line === line)!.key;
+
+    it("holds a round's findings for your notes and dismissals, through Open PR, then sends the rest with the notes", async () => {
+      const s = await task({ review: { rounds: 1, check: true } });
+      fake('review-reports.json', { ...LEDGERS, diff: { summary: 'LGTM', findings: [one(2, 'blocker', 'Off by one.'), one(4, 'major', 'Rename it.')] } });
+      await env.core.sessions.action(s.id, 'open-pr');
+      const held = await waiting(s.id);
+      expect(held).toMatchObject({ stage: 'code', codeReview: { round: 1, counts: { blocker: 1, major: 1, minor: 0 } } });
+      const asked = prompts(s.claudeSessionId).length;
+      // Open PR, or a move to Review & PR, keeps it waiting: only Send moves it on.
+      await env.core.sessions.action(s.id, 'open-pr');
+      await env.core.sessions.move(s.id, { stage: 'review' });
+      expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'code', codeReview: { state: 'triage' } });
+      env.core.reviews.setFinding(s.id, keyAt(s.id, 2), { note: 'Use <= here.' });
+      env.core.reviews.setFinding(s.id, keyAt(s.id, 4), { dismissed: true, note: 'The name is fine.' });
+      // A field left out keeps its value: a new note leaves the dismissal.
+      expect(env.core.reviews.setFinding(s.id, keyAt(s.id, 4), { note: 'The name reads fine.' }).you).toEqual({ dismissed: true, note: 'The name reads fine.' });
+      env.core.reviews.setFinding(s.id, keyAt(s.id, 4), { note: 'The name is fine.' });
+      expect(() => env.core.reviews.setFinding(s.id, '9:9', { note: 'x' })).toThrow(/no finding 9:9/);
+      expect(() => env.core.reviews.setFinding(s.id, keyAt(s.id, 2), { dismissed: 'yes' })).toThrow(/dismissed must be true or false/);
+      expect(prompts(s.claudeSessionId)).toHaveLength(asked);
+
+      fake('review-reports.json', LEDGERS);
+      await env.core.sessions.action(s.id, 'review-send');
+      const fix = await waitFor(() => prompts(s.claudeSessionId).at(-1)!, (p) => p.includes('round 1'), 30000, 'the fix prompt');
+      // Through the prompt queue, as the user may have been working with the task meanwhile.
+      expect(fix).toContain(`[${keyAt(s.id, 2)}] \`src/a.ts:2\` **blocker**: Off by one.`);
+      expect(fix).toContain("- The user's note: Use <= here.");
+      expect(fix).not.toContain('Rename it.');
+      await expect(env.core.sessions.action(s.id, 'review-send')).rejects.toThrow(/No code review findings wait on you/);
+      // Round 2 finds nothing: the PR goes, its line without the dismissed one, and round 2 was told of it.
+      const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after round 2');
+      expect(done.codeReview).toMatchObject({ round: 2, state: 'done', counts: { blocker: 1, major: 0, minor: 0 } });
+      expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:1 blocker addressed;Sagittarius3.0');
+      const round2 = readFileSync(join(env.core.paths.run, 'reviews', done.codeReview!.id, 'r2', 'base.md'), 'utf8');
+      expect(round2).toContain('  > Rename it.\n  - the user dismissed it:\n    > The name is fine.');
+      expect(env.core.reviews.detail(s.id).findings.find((f) => f.line === 4)).toMatchObject({ kept: false, dropped: 'dismissed by you' });
+    });
+
+    it('waits again with the round counted once after a Retry of a review cancelled while it waited', async () => {
+      const s = await task({ review: { check: true } });
+      fake('review-reports.json', { ...LEDGERS, diff: { summary: 'LGTM', findings: [one(2, 'blocker', 'Off by one.')] } });
+      await env.core.sessions.action(s.id, 'open-pr');
+      await waiting(s.id);
+      await env.core.sessions.action(s.id, 'review-cancel');
+      await env.core.sessions.action(s.id, 'review-retry');
+      const again = await waiting(s.id);
+      expect(again.codeReview!.counts).toEqual({ blocker: 1, major: 0, minor: 0 });
+      expect(env.core.reviews.detail(s.id).findings.filter((f) => f.kept)).toHaveLength(1);
+      await env.core.sessions.action(s.id, 'review-send');
+      await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt');
+      expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:1 blocker addressed;Sagittarius3.0');
+    });
+
+    it.each([['you dismiss every finding and send', 'dismiss'], ['Run to merge is turned on', 'auto']] as const)(
+      "sends the last round's PR prompt once %s",
+      async (_how, how) => {
+        const s = await task({ review: { check: true } });
+        fake('review-reports.json', { ...LEDGERS, diff: { summary: 'LGTM', findings: [one(2, 'blocker', 'Off by one.')] } });
+        await env.core.sessions.action(s.id, 'open-pr');
+        await waiting(s.id);
+        if (how === 'dismiss') {
+          env.core.reviews.setFinding(s.id, keyAt(s.id, 2), { dismissed: true });
+          await env.core.sessions.action(s.id, 'review-send');
+        } else await env.core.sessions.edit(s.id, { autoRun: true });
+        const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt');
+        const pr = await prPrompt(s.claudeSessionId);
+        if (how === 'dismiss') {
+          expect(pr).not.toContain('Off by one.');
+          expect(pr).toContain('me_ak_review:LGTM;Sagittarius3.0');
+          expect(done.codeReview!.counts).toEqual({ blocker: 0, major: 0, minor: 0 });
+        } else {
+          expect(pr).toContain('`src/a.ts:2` **blocker**: Off by one.');
+          expect(pr).toContain('me_ak_review:1 blocker addressed;Sagittarius3.0');
+        }
+      },
+    );
+
+    it("doesn't wait while Run to merge is on", async () => {
+      const s = await task({ review: { strategy: 'sirius-1.0', check: true } });
+      fake('review-reports.json', { all: { summary: 'LGTM', findings: [one(2, 'blocker', 'Off by one.')] } });
+      await env.core.sessions.edit(s.id, { autoRun: true });
+      await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt');
+      expect(await prPrompt(s.claudeSessionId)).toContain('Off by one.');
+      expect(all(env.core.db, `SELECT 1 FROM session_events WHERE session_id = ? AND text LIKE '%wait on you%'`, s.id)).toEqual([]);
+    });
+
+    it('blocks the merge in Review & PR as yours until you send them', async () => {
+      const s = await task({ review: { strategy: 'sirius-1.0', check: true } });
+      run(env.core.db, `UPDATE sessions SET stage = 'review', pr_number = 7, pr_url = 'https://github.com/acme/demo-repo/pull/7' WHERE id = ?`, s.id);
+      fake('review-reports.json', { all: { summary: 'LGTM', findings: [one(2, 'blocker', 'Off by one.')] } });
+      await env.core.sessions.action(s.id, 'review-run');
+      await waiting(s.id);
+      const st = await (await import('../../src/server/github.js')).prStatus('', 7);
+      const info = env.core.lifecycle.mergeInfo(env.core.sessions.row(s.id), st);
+      const waits = "The code review's findings wait on you: send them to AgentK or dismiss them.";
+      expect(info).toMatchObject({ canMerge: false, hard: [waits], yours: [waits] });
+      expect(info.blockers).not.toContain('The code review is still running.');
+      await env.core.sessions.action(s.id, 'review-send');
+      const fix = await waitFor(() => prompts(s.claudeSessionId).at(-1)!, (p) => p.includes('round 1'), 30000, 'the fix prompt');
+      expect(fix).toContain('Off by one.');
+      expect(env.core.lifecycle.mergeInfo(env.core.sessions.row(s.id), st).yours).toEqual([]);
     });
   });
 

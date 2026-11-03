@@ -2087,6 +2087,7 @@ export class SessionManager {
       case 'review-cancel': await this.core.reviews.cancel(row.id); break;
       case 'review-retry': await this.core.reviews.retry(row.id); break;
       case 'review-open-anyway': await this.core.reviews.openAnyway(row.id); break;
+      case 'review-send': await this.core.reviews.send(row.id); break;
       default: throw new HttpError(400, `Unknown action ${String(action)}.`);
     }
     return this.get(id);
@@ -2150,7 +2151,7 @@ export class SessionManager {
     if (req.toTop !== undefined && typeof req.toTop !== 'boolean') throw new HttpError(400, 'toTop must be true or false.');
     if (req.autoRun !== undefined && typeof req.autoRun !== 'boolean') throw new HttpError(400, 'autoRun must be true or false.');
     if (req.review !== undefined) {
-      if (!req.review || typeof req.review !== 'object') throw new HttpError(400, 'review must be an object of strategy, rounds and depth.');
+      if (!req.review || typeof req.review !== 'object') throw new HttpError(400, 'review must be an object of strategy, rounds, depth and check.');
       const r = this.row(id);
       if (r.desired === 'archived') throw new HttpError(409, "This session is archived, so its review settings can't change.");
       if (r.kind === 'review-pr' || r.kind === 'code-review') throw new HttpError(409, 'Only a task has code review settings.');

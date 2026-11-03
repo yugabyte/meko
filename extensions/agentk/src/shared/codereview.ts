@@ -1,6 +1,6 @@
 /**
- * AgentK's code review (docs/design/code-review.md): the review strategies, the three
- * settings (strategy, re-review rounds, depth) and how a session's, its project's and the global
+ * AgentK's code review (docs/design/code-review.md): the review strategies, the four
+ * settings (strategy, re-review rounds, depth, check) and how a session's, its project's and the global
  * values resolve, the `me_ak_review:` line a PR description carries, and the short label the
  * review's part of a task's tab shows. Used by the server and the web UI.
  */
@@ -53,6 +53,8 @@ export const DEFAULT_DEPTH = 1;
 export const MAX_DEPTH = 5;
 /** The sweep from which one that adds nothing new ends the review's sweeps; the ones before it always run. */
 export const MIN_SWEEPS = 2;
+/** A round's findings wait for the user to note or dismiss them before they go to the task (Run to merge never waits). */
+export const DEFAULT_CHECK = true;
 
 export function strategyInfo(id: string): ReviewStrategyInfo | undefined {
   return STRATEGIES.find((s) => s.id === id);
@@ -67,11 +69,13 @@ export function isStrategySetting(v: unknown): v is ReviewStrategySetting {
   return v === 'off' || (typeof v === 'string' && !!strategyInfo(v));
 }
 
-/** The three settings, as resolved for one review. */
+/** The four settings, as resolved for one review. */
 export interface ReviewSettings {
   strategy: ReviewStrategySetting;
   rounds: number;
   depth: number;
+  /** A round's findings wait for the user (`triage`) before they go to the task, unless Run to merge is on. */
+  check: boolean;
 }
 
 /** A project's or a session's overrides: a value left out (or null) keeps the next level's. */
@@ -79,9 +83,10 @@ export interface ReviewOverrides {
   strategy?: ReviewStrategySetting | null;
   rounds?: number | null;
   depth?: number | null;
+  check?: boolean | null;
 }
 
-export const DEFAULT_REVIEW: ReviewSettings = { strategy: DEFAULT_STRATEGY, rounds: DEFAULT_ROUNDS, depth: DEFAULT_DEPTH };
+export const DEFAULT_REVIEW: ReviewSettings = { strategy: DEFAULT_STRATEGY, rounds: DEFAULT_ROUNDS, depth: DEFAULT_DEPTH, check: DEFAULT_CHECK };
 
 /** Clamps a count setting into its range, or null when it isn't a whole number. */
 function count(v: unknown, min: number, max: number): number | null {
@@ -102,12 +107,13 @@ export function readOverrides(v: unknown): ReviewOverrides {
   if (rounds !== null) out.rounds = rounds;
   const depth = count(o.depth, 1, MAX_DEPTH);
   if (depth !== null) out.depth = depth;
+  if (typeof o.check === 'boolean') out.check = o.check;
   return out;
 }
 
 /** True when the overrides set nothing. */
 export function noOverrides(o: ReviewOverrides): boolean {
-  return o.strategy == null && o.rounds == null && o.depth == null;
+  return o.strategy == null && o.rounds == null && o.depth == null && o.check == null;
 }
 
 /** The settings a review runs with: the session's overrides, then the project's, then the global ones. */
@@ -116,6 +122,7 @@ export function resolveReview(global: ReviewSettings, project: ReviewOverrides, 
     strategy: session.strategy ?? project.strategy ?? global.strategy,
     rounds: session.rounds ?? project.rounds ?? global.rounds,
     depth: session.depth ?? project.depth ?? global.depth,
+    check: session.check ?? project.check ?? global.check,
   };
 }
 
@@ -206,9 +213,10 @@ export function withMeAkReviewLine(body: string, line: string): string {
 
 /**
  * Where a code review is (`CodeReviewSummary.state`): `describing` while the task writes the PR's
- * title and description for the passes to read, before the first round.
+ * title and description for the passes to read, before the first round; `triage` while a round's
+ * kept findings wait for the user to note or dismiss them and send them to the task.
  */
-export type CodeReviewState = 'describing' | 'preparing' | 'sweeping' | 'scoring' | 'fixing' | 'done' | 'failed' | 'cancelled';
+export type CodeReviewState = 'describing' | 'preparing' | 'sweeping' | 'scoring' | 'triage' | 'fixing' | 'done' | 'failed' | 'cancelled';
 
 /** What a task's tab and rail row show of its code review (`Session.codeReview`). */
 export interface CodeReviewSummary {
@@ -277,6 +285,8 @@ export function reviewSegmentText(r: CodeReviewSummary): string {
       return '!';
     case 'done':
       return doneShowsCounts(r) ? `${r.counts.blocker}·${r.counts.major}` : 'LGTM';
+    case 'triage':
+      return `${r.counts.blocker}·${r.counts.major}`;
     case 'sweeping':
     case 'scoring':
       return `${reviewStep(r)}/${reviewSteps(r)}`;
@@ -302,6 +312,7 @@ export function reviewSegmentLabel(r: CodeReviewSummary): string {
     case 'sweeping': what = `${r.passesDone} of ${r.passes} passes reported`; break;
     case 'scoring': what = `step ${reviewSteps(r)} of ${reviewSteps(r)}, ${r.scoresDone} of ${r.candidates} scored`; break;
     case 'describing': what = 'waiting for the PR description'; break;
+    case 'triage': what = 'its findings wait on you'; break;
     case 'fixing': what = 'waiting for the fixes'; break;
     case 'done': what = doneShowsCounts(r) ? countsText(r.counts) : totalCount(r.counts) ? `LGTM, ${countsText(r.counts)} addressed` : 'LGTM'; break;
     case 'failed': what = `failed${r.detail ? `: ${r.detail}` : ''}. ${r.onDemand ? 'Retry it' : 'Retry or Open anyway'}`; break;
@@ -351,6 +362,11 @@ export function reviewHolds(r: Pick<CodeReviewSummary, 'state' | 'detail' | 'onD
   return !!r && !r.onDemand && (r.state === 'failed' || (r.state === 'cancelled' && r.detail !== REVIEW_LEFT_CODE));
 }
 
+/** A round's findings wait for the user to note or dismiss them, then send them to the task (`triage`). */
+export function reviewWaitsOnYou(r: Pick<CodeReviewSummary, 'state'> | null | undefined): boolean {
+  return r?.state === 'triage';
+}
+
 /** The review is still working (its lens pulses): its steps run, not the task's fixes. */
 export function reviewRunning(r: Pick<CodeReviewSummary, 'state'> | null): boolean {
   return !!r && (r.state === 'preparing' || r.state === 'sweeping' || r.state === 'scoring');
@@ -358,6 +374,21 @@ export function reviewRunning(r: Pick<CodeReviewSummary, 'state'> | null): boole
 
 /** A scorer's verdict on a candidate (the cloud's score schema). */
 export type ScoreVerdict = 'refuted' | 'confirmed' | 'unverified';
+
+/**
+ * What the user did with a finding while its round waited on them (`triage`): a note for the task,
+ * or a dismissal (with an optional note), which leaves it out of the prompt and the counts.
+ */
+export interface FindingChoice {
+  dismissed: boolean;
+  note: string;
+}
+
+/** The longest note the user can give a finding. */
+export const MAX_FINDING_NOTE = 2000;
+
+/** Why a finding the user dismissed was dropped (`CodeReviewFinding.dropped`). */
+export const DISMISSED_BY_YOU = 'dismissed by you';
 
 /** What the task did with a finding (`review_outcome`), shown in the panel and sent to the next round. */
 export interface FindingOutcome {
@@ -389,6 +420,8 @@ export interface CodeReviewFinding {
   dropped: string | null;
   /** The running round's candidate, not yet kept or dropped (sent while sweeping or scoring, never stored). */
   pending?: boolean;
+  /** The user's note or dismissal, given while its round waited on them; absent or null when they gave none. */
+  you?: FindingChoice | null;
   outcome: FindingOutcome | null;
 }
 

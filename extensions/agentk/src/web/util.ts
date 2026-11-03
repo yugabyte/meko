@@ -2,7 +2,7 @@ import { HARNESS_CAPS, harnessOf, type HarnessId } from '../shared/harnesses';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, LEARN_WARN_FILES, LEARN_WARN_PRS, STAGE_LABELS, type LearnScope } from '../shared/types';
 import { mekoDatapackPath } from '../shared/mekourls';
-import { YOU_CANCELLED, countsText, isStrategySetting, reviewHolds, reviewRunning, type CodeReviewDetail, type CodeReviewFinding, type CodeReviewSummary, type ReviewOverrides } from '../shared/codereview';
+import { YOU_CANCELLED, countsText, isStrategySetting, reviewHolds, reviewRunning, reviewWaitsOnYou, type CodeReviewDetail, type CodeReviewFinding, type CodeReviewSummary, type ReviewOverrides } from '../shared/codereview';
 import { stepOf } from '../shared/stages';
 import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGaps, MekoLearning, MekoStatus, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, Stage, TokenUsage } from '../shared/types';
 
@@ -64,12 +64,12 @@ export function joinedPartSelected(task: Pick<Session, 'id' | 'codeReview'>, cur
 /**
  * What opening a task's review shows (its magnifier in the tab or the rail, its row in the ⋯ sheet):
  * the review's own screen, its terminal with its findings beside it, while its session runs and
- * isn't idle waiting for the task's fixes; else its findings beside the task's terminal (a done
- * review's session is gone).
+ * isn't idle waiting for the user's check or the task's fixes; else its findings beside the task's
+ * terminal (a done review's session is gone).
  */
 export function reviewOpens(task: Pick<Session, 'codeReview'>): 'session' | 'findings' {
   const r = task.codeReview;
-  return r?.sessionId && r.state !== 'fixing' ? 'session' : 'findings';
+  return r?.sessionId && r.state !== 'fixing' && r.state !== 'triage' ? 'session' : 'findings';
 }
 
 /** The task whose code-review session this is, among `sessions`; undefined for any other session. */
@@ -227,18 +227,26 @@ const QUEUED_SHOWS: ReadonlySet<SessionStatus> = new Set(['idle', 'recovered']);
 /** The statuses Review & PR waiting on the user shows Needs you over: Claude there, in a turn or not. */
 const YOURS_SHOWS: ReadonlySet<SessionStatus> = new Set(['idle', 'recovered', 'working']);
 
-/** The session is in Review & PR and a merge blocker only the user can clear stands (`Session.waitsOnYou`). */
-function waitsOnYou(s: Pick<Session, 'stage' | 'waitsOnYou'>): boolean {
-  return s.stage === 'review' && s.waitsOnYou.length > 0;
+/** The dot's words for a task whose code review findings wait on the user, outside Review & PR's blockers. */
+const REVIEW_WAITS_TITLE = "The code review's findings wait on you.";
+
+type DotFields = Pick<Session, 'status' | 'learning' | 'queued' | 'background' | 'mekoCall' | 'stage' | 'waitsOnYou'> & Partial<Pick<Session, 'codeReview'>>;
+
+/**
+ * The session is in Review & PR and a merge blocker only the user can clear stands
+ * (`Session.waitsOnYou`), or its code review's findings wait on the user (in Code too).
+ */
+function waitsOnYou(s: Pick<DotFields, 'stage' | 'waitsOnYou' | 'codeReview'>): boolean {
+  return (s.stage === 'review' && s.waitsOnYou.length > 0) || reviewWaitsOnYou(s.codeReview);
 }
 
 /**
- * What a session's dot shows: Needs you while Review & PR waits on the user, over idle, recovered
+ * What a session's dot shows: Needs you while Review & PR or the code review's findings wait on the user, over idle, recovered
  * and working; then `Session.learning` over idle, recovered and working, then `Session.queued` over
  * idle and recovered, then `Session.background` over idle and recovered, then `Session.mekoCall`
  * over working.
  */
-export function dotState(s: Pick<Session, 'status' | 'learning' | 'queued' | 'background' | 'mekoCall' | 'stage' | 'waitsOnYou'>): DotState {
+export function dotState(s: DotFields): DotState {
   if (waitsOnYou(s) && YOURS_SHOWS.has(s.status)) return 'needs_input';
   if (s.learning && LEARNING_SHOWS.has(s.status)) return 'learning';
   if (s.queued && QUEUED_SHOWS.has(s.status)) return 'queued';
@@ -756,7 +764,7 @@ export function reviewGatesPr(s: Pick<Session, 'stage' | 'codeReview'>): boolean
  */
 export function canRunReview(s: Pick<Session, 'kind' | 'stage' | 'prNumber' | 'codeReview' | 'status' | 'busy'>): { offered: boolean; ready: boolean; wait: string | null } {
   const r = s.codeReview;
-  const running = !!r && (r.state === 'describing' || r.state === 'fixing' || reviewRunning(r));
+  const running = !!r && (r.state === 'describing' || r.state === 'triage' || r.state === 'fixing' || reviewRunning(r));
   const offered = s.kind !== 'code-review' && s.kind !== 'review-pr' && (s.stage === 'code' || (s.stage === 'review' && !!s.prNumber)) && !running;
   const wait = !offered ? null
     : s.status === 'exited' ? 'Resume the session first'
@@ -770,7 +778,7 @@ export function canRunReview(s: Pick<Session, 'kind' | 'stage' | 'prNumber' | 'c
 export function onDemandControls(s: Pick<Session, 'stage' | 'codeReview'>): { cancel: boolean; retry: boolean } {
   const r = s.codeReview;
   if (!r?.onDemand || r.stage !== stepOf(s.stage)) return { cancel: false, retry: false };
-  return { cancel: r.state === 'describing' || r.state === 'fixing' || reviewRunning(r), retry: r.state === 'failed' || (r.state === 'cancelled' && r.detail === YOU_CANCELLED) };
+  return { cancel: r.state === 'describing' || r.state === 'triage' || r.state === 'fixing' || reviewRunning(r), retry: r.state === 'failed' || (r.state === 'cancelled' && r.detail === YOU_CANCELLED) };
 }
 
 /**
@@ -851,7 +859,9 @@ export function sessionTabTitle(s: Session): string {
  */
 export function dotTitle(s: Session): string {
   const dot = dotState(s);
-  if (dot === 'needs_input' && s.status !== 'needs_input') return `${STATUS_TEXT.needs_input}: ${s.waitsOnYou.join(' ')}`;
+  if (dot === 'needs_input' && s.status !== 'needs_input') {
+    return `${STATUS_TEXT.needs_input}: ${s.stage === 'review' && s.waitsOnYou.length ? s.waitsOnYou.join(' ') : REVIEW_WAITS_TITLE}`;
+  }
   if (dot === 'learning') return LEARNING_TITLE;
   if (dot === 'queued') return s.queued === 'open-pr' ? 'Open PR queued: going now' : (queuedText(s)?.replace(/^✓ /, '') ?? STATUS_TEXT.queued);
   if (dot === 'background') return `${STATUS_TEXT.background}: ${backgroundText(s.background)}`;
@@ -949,8 +959,9 @@ export function designLanding(prev: Landing, on: boolean, at: number | null, now
 
 /**
  * A review's findings grouped for its panel: by round, then by the sweep that first raised them,
- * in that order, each group's dropped findings (`dismissed`, shown under Dismissed) apart from the
- * rest, its kept ones and the running round's candidates not yet kept or dropped. A round or sweep
+ * in that order, each group's dropped findings (`dismissed`, shown under Dismissed, with the ones
+ * the user dismisses while the round waits on them) apart from the rest, its kept ones and the
+ * running round's candidates not yet kept or dropped. A round or sweep
  * is named only when the review had more than one.
  */
 export function findingGroups(
@@ -970,7 +981,7 @@ export function findingGroups(
       g = { key, label: label ? label[0].toUpperCase() + label.slice(1) : 'Findings', round: f.round, sweep: f.sweep, findings: [], dismissed: [] };
       groups.set(key, g);
     }
-    (f.kept || f.pending ? g.findings : g.dismissed).push(f);
+    ((f.kept || f.pending) && !f.you?.dismissed ? g.findings : g.dismissed).push(f);
   }
   return [...groups.values()]
     .sort((a, b) => a.round - b.round || a.sweep - b.sweep)
@@ -1000,10 +1011,13 @@ export function withOverride(value: ReviewOverrides, key: keyof ReviewOverrides,
   if (value.strategy != null) next.strategy = value.strategy;
   if (value.rounds != null) next.rounds = value.rounds;
   if (value.depth != null) next.depth = value.depth;
+  if (value.check != null) next.check = value.check;
   delete next[key];
   if (raw === '') return next;
   if (key === 'strategy') {
     if (isStrategySetting(raw)) next.strategy = raw;
+  } else if (key === 'check') {
+    if (raw === 'yes' || raw === 'no') next.check = raw === 'yes';
   } else {
     const n = Number(raw);
     if (Number.isInteger(n)) next[key] = n;

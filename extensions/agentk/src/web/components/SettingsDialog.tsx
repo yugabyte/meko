@@ -332,7 +332,7 @@ function CodeReviewTab({ auto }: { auto: AutoSettings }) {
 
 /**
  * The code review before a PR opens (docs/design/code-review.md): the global strategy, re-review
- * rounds and depth, which projects and sessions can override. Each saves as it's picked.
+ * rounds, depth and whether you check the findings first, which projects and sessions can override. Each saves as it's picked.
  */
 export function CodeReviewSettings({ s, change }: { s: Settings; change: (patch: Patch) => void }) {
   return (
@@ -343,12 +343,13 @@ export function CodeReviewSettings({ s, change }: { s: Settings; change: (patch:
           id="set-review"
           scoped={false}
           inherited={null}
-          value={{ strategy: s.codeReviewStrategy, rounds: s.codeReviewRounds, depth: s.codeReviewDepth }}
+          value={{ strategy: s.codeReviewStrategy, rounds: s.codeReviewRounds, depth: s.codeReviewDepth, check: s.codeReviewCheck }}
           onChange={(v) => {
             const patch = {
               codeReviewStrategy: v.strategy ?? s.codeReviewStrategy,
               codeReviewRounds: v.rounds ?? s.codeReviewRounds,
               codeReviewDepth: v.depth ?? s.codeReviewDepth,
+              codeReviewCheck: v.check ?? s.codeReviewCheck,
             };
             setReviewDefaults(patch);
             change(patch);

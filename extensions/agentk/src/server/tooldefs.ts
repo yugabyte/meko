@@ -62,11 +62,13 @@ export const TOOL_DEFS: ToolDef[] = [
                 type: 'object',
                 description: "The task's own code review before its PR opens, only what the user asked for (the rest keeps the " +
                   'project\'s settings): strategy (off for no review, sirius-1.0, or sagittarius-3.0), rounds (re-reviews after the ' +
-                  'first, 0 to 5) and depth (sweeps per review, 1 to 5: "3 deep reviews" is depth 3).',
+                  'first, 0 to 5), depth (sweeps per review, 1 to 5: "3 deep reviews" is depth 3) and check (false: the findings go to ' +
+                  'AgentK without waiting for the user to check them).',
                 properties: {
                   strategy: { type: 'string', enum: ['off', 'sirius-1.0', 'sagittarius-3.0'] },
                   rounds: { type: 'integer', minimum: 0, maximum: 5 },
                   depth: { type: 'integer', minimum: 1, maximum: 5 },
+                  check: { type: 'boolean' },
                 },
               },
             },

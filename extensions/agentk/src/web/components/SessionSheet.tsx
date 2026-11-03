@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { CloseSessionRequest, DiscardCheck, Session, SessionAction } from '../../shared/types';
 import { moveBlockedIn } from '../../shared/stages';
 import { api, errorMessage } from '../api';
-import { reviewHolds, reviewRunning, reviewSegmentLabel, type ReviewOverrides } from '../../shared/codereview';
+import { reviewHolds, reviewRunning, reviewSegmentLabel, reviewWaitsOnYou, type ReviewOverrides } from '../../shared/codereview';
 import { inheritedReview, useReviewDefaults } from '../reviewdefaults';
 import { FONT_MAX, FONT_MIN } from '../keys';
 import { getTerminal, setTerminalFontSize, terminalFontSize } from '../terminals';
@@ -465,6 +465,11 @@ export function CodeReviewRows({ session, parent, projectReview, acting, onOpen,
             <ReviewGlass review={r} />
             {reviewSegmentLabel(r)}
           </span>
+        </SheetItem>
+      )}
+      {r && reviewWaitsOnYou(r) && (
+        <SheetItem className="primary" disabled={acting} onClick={then(() => void onAct('review-send'))}>
+          Send the findings to AgentK
         </SheetItem>
       )}
       {r && (reviewRunning(r) || onDemandControls(session).cancel) && (

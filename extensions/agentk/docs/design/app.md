@@ -64,7 +64,8 @@ Session states, shown with a dot on each session (on its tab, or in the rail) an
   long, then pauses. It also shows in Review & PR while a merge blocker only you can clear stands
   (`Session.waitsOnYou`: a held review, CI or merge conflicts AgentK handed over, or with Run to
   merge any blocker that doesn't clear by itself; see *Waiting on you* in
-  [the task lifecycle](lifecycle.md)), over idle, recovered and working, and over learning, queued,
+  [the task lifecycle](lifecycle.md)), and in Code or Review & PR while a code review's findings
+  wait on you ([Findings that wait on you](code-review.md#findings-that-wait-on-you)), over idle, recovered and working, and over learning, queued,
   Meko and running in the background (`dotState()`); the tab's tooltip names what to clear
 - **Idle**, waiting for your next prompt
 - **Recovered** after a restart

@@ -73,6 +73,7 @@ describe('dotState', () => {
     ['over a turn calling Meko', 'review', 'working', { mekoCall: true }, 'needs_input'],
     ['not over exited', 'review', 'exited', {}, 'exited'],
     ['not outside Review & PR', 'code', 'idle', {}, 'idle'],
+    ["the code review's findings waiting on you, in Code too", 'code', 'working', { codeReview: { state: 'triage' } as Session['codeReview'] }, 'needs_input'],
   ])('a blocker only the user can clear: %s', (_, stage, status, over, dot) => {
     expect(dotState({ ...session(status), ...over, stage, waitsOnYou: ['CI is failing.'] })).toBe(dot);
   });

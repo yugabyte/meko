@@ -16,7 +16,7 @@ import { ACTIONS_MAX, LINK_GRANTS, MAX_KB_UPLOAD_BYTES, MAX_PASTE_BYTES, MEKO_CA
 import { AGENTK_PATH, shareLinkToken, shareLinkUrl } from '../shared/mekourls.js';
 import { HARNESS_IDS, isHarnessId } from '../shared/harnesses.js';
 import { EMAIL_RE, MAX_SHARE_EMAILS } from '../shared/emails.js';
-import { MAX_DEPTH, MAX_ROUNDS, STRATEGIES, isStrategySetting, type CodeReviewDetail } from '../shared/codereview.js';
+import { MAX_DEPTH, MAX_ROUNDS, STRATEGIES, isStrategySetting, type CodeReviewDetail, type CodeReviewFinding } from '../shared/codereview.js';
 import { checkActions, runActions } from './actions.js';
 import { ybCallHomeDisabled } from './callhome.js';
 import { forgetContact, learnNames, listContacts, recordShares } from './contacts.js';
@@ -45,7 +45,7 @@ const LOCAL_MEKO_WAIT_MS = 1500;
 const ACTIONS: Record<SessionAction, true> = {
   'approve-design': true, 'cancel-approval': true, 'open-pr': true, merge: true, 'cancel-queued': true,
   resume: true, archive: true, discard: true, 'update-pr': true, 'close-review': true, learn: true,
-  'review-run': true, 'review-cancel': true, 'review-retry': true, 'review-open-anyway': true,
+  'review-run': true, 'review-cancel': true, 'review-retry': true, 'review-open-anyway': true, 'review-send': true,
 };
 /**
  * The app page's Content-Security-Policy. No script-src: the design panel's Artifact frame is a
@@ -482,6 +482,10 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     core.sessions.row(req.params.id);
     return core.reviews.detail(req.params.id);
   });
+  app.patch<{ Params: { id: string; key: string }; Body: unknown }>('/api/sessions/:id/code-review/findings/:key', async (req): Promise<CodeReviewFinding> => {
+    core.sessions.row(req.params.id);
+    return core.reviews.setFinding(req.params.id, req.params.key, req.body);
+  });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/discard-check', async (req): Promise<DiscardCheck> => core.sessions.discardCheck(req.params.id));
   app.get<{ Params: { id: string }; Querystring: { commit?: string } }>('/api/sessions/:id/changes', async (req): Promise<SessionChanges> =>
     core.sessions.changes(req.params.id, req.query.commit || undefined));
@@ -570,6 +574,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     codeReviewStrategy: globalReview(core.config).strategy,
     codeReviewRounds: core.config.codeReview.rounds,
     codeReviewDepth: core.config.codeReview.depth,
+    codeReviewCheck: core.config.codeReview.check,
   });
   app.get('/api/settings', async () => {
     // Opening Settings reads the Meko on this computer and its Meko Cloud link again (it may have
@@ -618,7 +623,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (b.codeReviewDepth !== undefined && (!Number.isInteger(b.codeReviewDepth) || b.codeReviewDepth < 1 || b.codeReviewDepth > MAX_DEPTH)) {
       throw new HttpError(400, `Review depth must be a whole number from 1 to ${MAX_DEPTH}.`);
     }
-    for (const k of ['claudeEnabled', 'opencodeEnabled', 'opencodeDisableTracking', 'kiroEnabled', 'kiroTrustTools', 'workQueueGithub', 'workQueueSlack'] as const) {
+    for (const k of ['claudeEnabled', 'opencodeEnabled', 'opencodeDisableTracking', 'kiroEnabled', 'kiroTrustTools', 'workQueueGithub', 'workQueueSlack', 'codeReviewCheck'] as const) {
       if (b[k] !== undefined && typeof b[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false.`);
     }
     const slackListBefore = core.config.workQueue.slackList;
@@ -647,6 +652,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.codeReviewStrategy !== undefined) c.codeReview.strategy = b.codeReviewStrategy;
       if (b.codeReviewRounds !== undefined) c.codeReview.rounds = b.codeReviewRounds;
       if (b.codeReviewDepth !== undefined) c.codeReview.depth = b.codeReviewDepth;
+      if (b.codeReviewCheck !== undefined) c.codeReview.check = b.codeReviewCheck;
     });
     if (core.config.workQueue.slackList !== slackListBefore) core.workQueue.slackListChanged();
     // An agent turned on: its version (and Kiro's agent file) follow, in the background. One turned

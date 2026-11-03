@@ -6,7 +6,7 @@ import { DEFAULT_MEKO_URL, DEFAULT_MEKO_WEB_URL, mekoWebUrl } from '../shared/me
 import type { MekoKeySource } from '../shared/types.js';
 import { DEFAULT_HARNESS, HARNESS_IDS, isHarnessId, type HarnessId } from '../shared/harnesses.js';
 import {
-  DEFAULT_DEPTH, DEFAULT_ROUNDS, DEFAULT_STRATEGY, MAX_DEPTH, MAX_ROUNDS, STRATEGIES, isStrategySetting, type ReviewSettings,
+  DEFAULT_CHECK, DEFAULT_DEPTH, DEFAULT_ROUNDS, DEFAULT_STRATEGY, MAX_DEPTH, MAX_ROUNDS, STRATEGIES, isStrategySetting, type ReviewSettings,
 } from '../shared/codereview.js';
 import { isLocalMeko, isMekoCloudKey, linkedThroughMeko, localMeko, mekoLinkHandedOver, originOf } from './mekolocal.js';
 import { expandHome, type Paths } from './paths.js';
@@ -107,11 +107,12 @@ export interface Config {
   /**
    * The code review before a PR opens (review/runner.ts, docs/design/code-review.md), also in Settings › Code review;
    * a project's settings and a session's own go over these. strategy: `off`, `sirius-1.0` or `sagittarius-3.0`. rounds:
-   * re-reviews after the first (0 to MAX_ROUNDS). depth: sweeps in each review (1 to MAX_DEPTH). models: the model each
+   * re-reviews after the first (0 to MAX_ROUNDS). depth: sweeps in each review (1 to MAX_DEPTH). check: a round's findings
+   * wait for the user to note or dismiss them before they go to the task (Run to merge never waits). models: the model each
    * tier of review step runs on, per harness (`[code_review.models.<harness>]`: large, mid, small); empty runs it on the
    * session's own model.
    */
-  codeReview: { strategy: string; rounds: number; depth: number; models: Record<HarnessId, ReviewModels> };
+  codeReview: { strategy: string; rounds: number; depth: number; check: boolean; models: Record<HarnessId, ReviewModels> };
 }
 
 /** The model for each tier of a review step on one harness (`[code_review.models.<harness>]`); '' is the session's own. */
@@ -151,6 +152,7 @@ export const DEFAULT_CONFIG: Config = {
     strategy: DEFAULT_STRATEGY,
     rounds: DEFAULT_ROUNDS,
     depth: DEFAULT_DEPTH,
+    check: DEFAULT_CHECK,
     // Claude Code's aliases follow its newest models. OpenCode's and Kiro's model ids depend on the
     // providers and plans the user has, so their steps run on the session's own model unless set.
     models: {
@@ -478,5 +480,5 @@ export function readClaudeSettingsEnv(): Record<string, unknown> {
 
 /** The global code review settings, as `resolveReview` takes them. */
 export function globalReview(cfg: Config): ReviewSettings {
-  return { strategy: cfg.codeReview.strategy as ReviewSettings['strategy'], rounds: cfg.codeReview.rounds, depth: cfg.codeReview.depth };
+  return { strategy: cfg.codeReview.strategy as ReviewSettings['strategy'], rounds: cfg.codeReview.rounds, depth: cfg.codeReview.depth, check: cfg.codeReview.check };
 }

@@ -18,8 +18,13 @@ function emit() {
 }
 
 /** Settings loaded or saved: what "Default" stands for from now on. */
-export function setReviewDefaults(s: Pick<Settings, 'codeReviewStrategy' | 'codeReviewRounds' | 'codeReviewDepth'>): void {
-  global = { strategy: s.codeReviewStrategy ?? DEFAULT_REVIEW.strategy, rounds: s.codeReviewRounds ?? DEFAULT_REVIEW.rounds, depth: s.codeReviewDepth ?? DEFAULT_REVIEW.depth };
+export function setReviewDefaults(s: Pick<Settings, 'codeReviewStrategy' | 'codeReviewRounds' | 'codeReviewDepth' | 'codeReviewCheck'>): void {
+  global = {
+    strategy: s.codeReviewStrategy ?? DEFAULT_REVIEW.strategy,
+    rounds: s.codeReviewRounds ?? DEFAULT_REVIEW.rounds,
+    depth: s.codeReviewDepth ?? DEFAULT_REVIEW.depth,
+    check: s.codeReviewCheck ?? DEFAULT_REVIEW.check,
+  };
   emit();
 }
 

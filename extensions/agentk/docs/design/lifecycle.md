@@ -102,7 +102,9 @@ stateDiagram-v2
   working: the server's status doesn't change) while a merge blocker only you can clear stands:
   `mergeInfo()` returns them as `yours` and `yoursWithAutoRun`, and the state carries the one that
   fits `auto_run` now as `Session.waitsOnYou`, so turning Run to merge off or on shows at once
-  (`dotState()` in `src/web/util.ts`; the tab's tooltip names them). They are a held review; failing
+  (`dotState()` in `src/web/util.ts`; the tab's tooltip names them). They are a held review; a
+  [code review](code-review.md#findings-that-wait-on-you) whose findings wait on you (which shows
+  Needs you in Code too); failing
   CI or merge conflicts AgentK handed over on the PR's head (`ci_fixes`, `conflict_fixes` past their
   maximum mark a head handed over and told) or, for conflicts, while **Resolve merge conflicts on
   PRs** is off (no notification outside Run to merge: the dot and the merge gate say it; turning the
@@ -263,6 +265,9 @@ It runs on the [queued gates](#queued-gates):
   nothing blocking; if GitHub refuses the merge (a ruleset, say, which the blockers don't show), Run to
   merge stops, so the merge isn't asked for again at every pass. The pill reads
   *✓ Run to merge: waiting on …*. The gates it passes are logged as AgentK's (`moved_by = 'auto'`).
+- **The code review.** Its findings never wait on you (`checksFindings` reads `auto_run` when a round
+  ends), and turning it on while a round's findings wait sends them as they are, with your notes and
+  dismissals so far (`CodeReviews.autoSend`, before the gates are armed).
 - **Notifications.** It notifies only when it's done (*Merged*, once the PR merges, here or on
   GitHub: `autoRunDone`) or needs you: Needs you, a held review, *Run to merge waits on you*, the CI
   and conflict watchers handing over after three tries, a refused merge, Claude exiting. Progress
