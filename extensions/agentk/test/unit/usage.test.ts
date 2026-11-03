@@ -346,22 +346,24 @@ describe('token formatting (web)', () => {
 
   it("puts the Meko section's learn-step tiles in words", async () => {
     const { learningText } = await import('../../src/web/util.js');
-    const none = { runs: 0, failed: 0, skipped: 0, saves: 0, updates: 0, skips: 0, tokens: 0, usd: null };
+    const none = { runs: 0, failed: 0, skipped: 0, saves: 0, updates: 0, skips: 0, tokens: 0 };
     expect(learningText(none)).toEqual({
       learned: { num: '—', line: null, title: 'No learn step has run yet. One runs at Merge & Close and Discard, or when you choose Save learnings.' },
-      cost: { num: '—', line: null, title: 'No learn step has run yet. One runs at Merge & Close and Discard, or when you choose Save learnings.' },
+      tokens: { num: '—', line: null, title: 'No learn step has run yet. One runs at Merge & Close and Discard, or when you choose Save learnings.' },
     });
     expect(learningText({ ...none, skipped: 2 }).learned.title).toMatch(/Save learnings\. 2 sessions were closed without one, since Claude was gone or busy\.$/);
-    const some = learningText({ runs: 3, failed: 1, skipped: 1, saves: 12, updates: 2, skips: 5, tokens: 345_000, usd: 0.42 });
+    const some = learningText({ runs: 3, failed: 1, skipped: 1, saves: 12, updates: 2, skips: 5, tokens: 345_000 });
     expect(some.learned).toEqual({
       num: '12',
       line: '2 corrected · 3 steps',
       title: "3 learn steps saved 12 memories to the datapack, corrected 2 and found 5 facts already known; 1 didn't finish. 1 session was closed without one, since Claude was gone or busy.",
     });
-    expect(some.cost).toMatchObject({ num: '$0.42', line: '≈ 345k tokens' });
-    expect(some.cost.title).toContain('345,000 tokens, at Anthropic API list prices');
-    // Without a known price: tokens only.
-    expect(learningText({ ...none, runs: 1, saves: 1, tokens: 9_000, usd: null }).cost).toMatchObject({ num: '≈ 9k', line: null });
+    // Tokens only, never dollars.
+    expect(some.tokens).toEqual({
+      num: '≈ 345k',
+      line: null,
+      title: "345,000 tokens used by the learn steps' model calls: the look back over each session, the duplicate check and typed learn turns.",
+    });
   });
 
   it("says how many questions Meko couldn't answer under the Meko stats, leaving out a part with none", async () => {

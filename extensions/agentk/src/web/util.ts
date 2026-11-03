@@ -521,17 +521,17 @@ export interface LearningTile {
 }
 
 /**
- * The Meko section's Learned and Learning cost tiles in words: what the learn steps saved to the
- * datapack (memories added, with corrections and steps on the line under it), and what their model
- * calls cost.
+ * The Meko section's Learned and Learning tokens tiles in words: what the learn steps saved to the
+ * datapack (memories added, with corrections and steps on the line under it), and the tokens their
+ * model calls used.
  */
-export function learningText(l: MekoLearning): { learned: LearningTile; cost: LearningTile } {
+export function learningText(l: MekoLearning): { learned: LearningTile; tokens: LearningTile } {
   const f = (n: number) => n.toLocaleString();
   const n = (k: number, one: string, many: string) => `${f(k)} ${k === 1 ? one : many}`;
   const skipped = l.skipped > 0 ? ` ${n(l.skipped, 'session was', 'sessions were')} closed without one, since Claude was gone or busy.` : '';
   if (l.runs === 0) {
     const none = 'No learn step has run yet. One runs at Merge & Close and Discard, or when you choose Save learnings.';
-    return { learned: { num: '—', line: null, title: none + skipped }, cost: { num: '—', line: null, title: none } };
+    return { learned: { num: '—', line: null, title: none + skipped }, tokens: { num: '—', line: null, title: none } };
   }
   const failed = l.failed > 0 ? `; ${f(l.failed)} didn't finish` : '';
   return {
@@ -541,11 +541,10 @@ export function learningText(l: MekoLearning): { learned: LearningTile; cost: Le
       title: `${n(l.runs, 'learn step', 'learn steps')} saved ${n(l.saves, 'memory', 'memories')} to the datapack, corrected ${f(l.updates)} and ` +
         `found ${n(l.skips, 'fact', 'facts')} already known${failed}.${skipped}`,
     },
-    cost: {
-      num: l.usd !== null ? formatCost(l.usd) : `≈ ${formatTokens(l.tokens)}`,
-      line: l.usd !== null ? `≈ ${formatTokens(l.tokens)} tokens` : null,
-      title: `What the learn steps' model calls cost: the look back over each session, the duplicate check and typed learn turns ` +
-        `(${f(l.tokens)} tokens${l.usd !== null ? ', at Anthropic API list prices' : ', on models without a known price'}).`,
+    tokens: {
+      num: `≈ ${formatTokens(l.tokens)}`,
+      line: null,
+      title: `${f(l.tokens)} tokens used by the learn steps' model calls: the look back over each session, the duplicate check and typed learn turns.`,
     },
   };
 }

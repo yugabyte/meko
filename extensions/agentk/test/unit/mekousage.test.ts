@@ -265,9 +265,9 @@ describe('what Meko saved', () => {
     });
   });
 
-  it('shows what learn steps saved and cost, for the project and across projects', () => {
+  it('shows what learn steps saved and the tokens they used, for the project and across projects', () => {
     const { db } = setup();
-    expect(projectUsage(db, 'p').mekoLearning).toEqual({ runs: 0, failed: 0, skipped: 0, saves: 0, updates: 0, skips: 0, tokens: 0, usd: null });
+    expect(projectUsage(db, 'p').mekoLearning).toEqual({ runs: 0, failed: 0, skipped: 0, saves: 0, updates: 0, skips: 0, tokens: 0 });
     run(db, `INSERT INTO projects(id, name, repo_path, default_branch, created_at) VALUES ('q', 'Q', '/q', 'main', 0)`);
     run(db, `INSERT INTO sessions(id, project_id, slug, name, claude_session_id, branch, base_branch, worktree_path, tmux_name,
              hook_token, desired, status, stage, created_at) VALUES ('s2', 'q', 's2', 'S2', 'c2', 'b2', 'main', '/w2', 't2', 'tok2', 'running', 'idle', 'code', 0)`);
@@ -283,8 +283,7 @@ describe('what Meko saved', () => {
     usage('learn:L1:extract', 'claude-opus-5-5', [10, 200, 100_000, 0]);
     usage('learn:L1:dedup', 'claude-haiku-4-5-20251001', [800, 100, 0, 0]);
     const p = projectUsage(db, 'p').mekoLearning;
-    // Opus 5.5: 10 × 4 + 200 × 20 + 100,000 × 0.2 per million; Haiku 4.5: 800 × 1 + 100 × 5.
-    expect(p).toEqual({ runs: 2, failed: 1, skipped: 1, saves: 4, updates: 1, skips: 2, tokens: 101_110, usd: expect.closeTo((40 + 4000 + 20_000 + 800 + 500) / 1e6, 10) });
+    expect(p).toEqual({ runs: 2, failed: 1, skipped: 1, saves: 4, updates: 1, skips: 2, tokens: 101_110 });
     expect(usageOverview(db).mekoLearning).toMatchObject({ runs: 3, saves: 9, tokens: 101_110 });
     // The steps' own calls count in the project's tokens too.
     expect(projectUsage(db, 'p').total.output).toBe(300);

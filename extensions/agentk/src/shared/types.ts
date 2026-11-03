@@ -260,8 +260,8 @@ export interface MekoUsage {
 }
 
 /**
- * What the learn step (src/server/learn.ts) saved to Meko and what it cost, for the project home and
- * the Usage page.
+ * What the learn step (src/server/learn.ts) saved to Meko and the tokens it used, for the project home
+ * and the Usage page.
  */
 export interface MekoLearning {
   /** Learn steps that ran, and those of them that didn't finish (failed or interrupted). */
@@ -273,9 +273,8 @@ export interface MekoLearning {
   saves: number;
   updates: number;
   skips: number;
-  /** Tokens the steps' model calls used, all kinds together, and their price; null when none had a known price. */
+  /** Tokens the steps' model calls used, all kinds together. */
   tokens: number;
-  usd: number | null;
 }
 
 /**
