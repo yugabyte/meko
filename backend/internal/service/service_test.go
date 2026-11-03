@@ -66,7 +66,7 @@ func TestLaunchdPlist(t *testing.T) {
 	}
 	plist := string(b)
 	for _, want := range []string{
-		"<string>com.yugabyte.meko</string>", "<string>/home/a b/100% $data &amp; &#34;x&#34;/service/meko</string>",
+		"<string>com.yugabyte.meko</string>", "<string>/home/a b/.meko/app/service/meko</string>",
 		"<string>/home/a b/100% $data &amp; &#34;x&#34;</string>", "<key>KeepAlive</key>\n  <true/>",
 		"<key>ExitTimeOut</key>\n  <integer>35</integer>", "<string>launchd</string>",
 	} {
@@ -160,6 +160,7 @@ func TestLaunchdCommands(t *testing.T) {
 	d := &Launchd{Home: t.TempDir(), UID: 501, Run: run, Pause: func(time.Duration) {}}
 	spec := spec
 	spec.DataDir = t.TempDir()
+	spec.Exe = filepath.Join(t.TempDir(), "app", "current", "bin", "meko")
 	if err := d.Install(spec); err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +185,7 @@ func TestLaunchdCommands(t *testing.T) {
 	if _, err := os.Stat(d.File()); !os.IsNotExist(err) {
 		t.Error("the plist is still there")
 	}
-	if _, err := os.Stat(filepath.Dir(Launcher(spec.DataDir))); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Dir(Launcher(spec.Exe))); !os.IsNotExist(err) {
 		t.Error("the launcher is still there")
 	}
 	got := strings.Join(f.calls, "\n")
@@ -211,7 +212,7 @@ func TestLaunchdLauncherRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	launcher := filepath.Join(t.TempDir(), "service", "meko")
-	if _, err := writeIfChanged(launcher, launcherScript(exe), 0o755); err != nil {
+	if _, err := writeIfChanged(launcher, launcherScript(exe), 0o700, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	out, err := exec.Command(launcher, "serve", "--data-dir", "a b").Output()
@@ -230,10 +231,11 @@ func TestLaunchdFilesChangeOnlyWithTheirContent(t *testing.T) {
 	d := &Launchd{Home: t.TempDir(), UID: 501, Run: f.run}
 	spec := spec
 	spec.DataDir = t.TempDir()
+	spec.Exe = filepath.Join(t.TempDir(), "app", "current", "bin", "meko")
 	if err := d.Install(spec); err != nil {
 		t.Fatal(err)
 	}
-	launcher := Launcher(spec.DataDir)
+	launcher := Launcher(spec.Exe)
 	stat := func(p string) os.FileInfo {
 		t.Helper()
 		fi, err := os.Stat(p)
@@ -243,7 +245,7 @@ func TestLaunchdFilesChangeOnlyWithTheirContent(t *testing.T) {
 		return fi
 	}
 	l0, p0 := stat(launcher), stat(d.File())
-	if l0.Mode().Perm() != 0o755 {
+	if l0.Mode().Perm() != 0o700 || stat(filepath.Dir(launcher)).Mode().Perm() != 0o700 {
 		t.Errorf("launcher mode %v", l0.Mode())
 	}
 	if err := d.Install(spec); err != nil {
@@ -276,12 +278,33 @@ func TestLaunchdFilesChangeOnlyWithTheirContent(t *testing.T) {
 		t.Error("the unchanged launcher was replaced")
 	}
 
-	// Another binary (a build from source installed over a release) rewrites the launcher.
-	spec.Exe = "/elsewhere/meko"
+	// A build from source installed over the release runs itself, and Remove leaves it alone.
+	spec.Exe = filepath.Join(t.TempDir(), "meko")
+	if err = os.WriteFile(spec.Exe, []byte("a build"), 0o700); err != nil { //nolint:gosec // G306: a test program
+		t.Fatal(err)
+	}
 	if _, err = d.Refresh(spec); err != nil {
 		t.Fatal(err)
 	}
-	if b, _ = os.ReadFile(launcher); !strings.Contains(string(b), "exec '/elsewhere/meko' \"$@\"") {
-		t.Errorf("launcher:\n%s", b)
+	if b, _ = os.ReadFile(d.File()); !strings.Contains(string(b), "<string>"+spec.Exe+"</string>") {
+		t.Errorf("the plist doesn't run the build:\n%s", b)
+	}
+	if err = d.Remove(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(spec.Exe); err != nil {
+		t.Errorf("Remove deleted the binary: %v", err)
+	}
+}
+
+// A release's launcher is in its app folder, outside the data folder that meko destroy removes.
+func TestLauncher(t *testing.T) {
+	for exe, want := range map[string]string{
+		"/u/.local/share/meko/app/current/bin/meko": "/u/.local/share/meko/app/service/meko",
+		"/src/meko/backend/bin/meko":                "/src/meko/backend/bin/meko",
+	} {
+		if got := Launcher(exe); got != want {
+			t.Errorf("Launcher(%q) = %q, want %q", exe, got, want)
+		}
 	}
 }

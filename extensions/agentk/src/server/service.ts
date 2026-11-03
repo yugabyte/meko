@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSyn
 import { homedir, userInfo } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { shq } from './launcher.js';
 
 /**
  * The two background services: the web server, and the session host that holds
@@ -334,14 +335,13 @@ export class LaunchdServices implements ServiceManager {
     mkdirSync(dirname(this.file('server')), { recursive: true });
     for (const s of SERVICES) {
       // Only a changed file is written: macOS announces a rewritten one as a new background item.
-      const changed = writeIfChanged(this.file(s), files[s]);
+      writeIfChanged(this.file(s), files[s]);
       if (s === 'host') {
         // Never reload a loaded host job: that ends every session. A changed file applies at the next login.
         if (!this.loaded(s)) this.bootstrap(s);
-      } else if (!changed && this.loaded(s)) {
-        must(this.run, 'launchctl', ['kickstart', '-k', this.target(s)]);
       } else {
-        // launchd keeps the definition it loaded; reload the job to pick up the new file.
+        // launchd keeps the definition it loaded, which needn't be the file's even when the file is
+        // unchanged: the server's start rewrites it without reloading (`refresh`). Reload the job.
         this.unload(s);
         this.bootstrap(s);
       }
@@ -452,7 +452,7 @@ export function writeServiceLauncher(home: string): boolean {
     '#!/bin/sh',
     "# AgentK's LaunchAgents run this file, written by `agentk install`. Updates leave it alone, so",
     "# macOS doesn't announce AgentK as a new background item after each one.",
-    `exec '${join(home, 'app', 'current', 'bin', 'agentk').replace(/'/g, `'\\''`)}' "$@"`,
+    `exec ${shq(join(home, 'app', 'current', 'bin', 'agentk'))} "$@"`,
     '',
   ].join('\n');
   return writeIfChanged(serviceLauncher(home), text, 0o755);

@@ -607,7 +607,7 @@ func TestServeMovesTheLaunchAgentOntoTheLauncher(t *testing.T) {
 	if err := d.Install(spec); err != nil {
 		t.Fatal(err)
 	}
-	launcher := "<string>" + service.Launcher(data) + "</string>"
+	launcher := "<string>" + service.Launcher(app.CurrentExe()) + "</string>"
 	b, err := os.ReadFile(d.File())
 	if err != nil {
 		t.Fatal(err)
@@ -632,7 +632,7 @@ func TestServeMovesTheLaunchAgentOntoTheLauncher(t *testing.T) {
 	if after, _ := os.Stat(d.File()); !os.SameFile(before, after) {
 		t.Error("an up-to-date plist was written again")
 	}
-	if b, _ = os.ReadFile(service.Launcher(data)); !strings.Contains(string(b), "exec '"+app.CurrentExe()+"'") {
+	if b, _ = os.ReadFile(service.Launcher(app.CurrentExe())); !strings.Contains(string(b), "exec '"+app.CurrentExe()+"'") {
 		t.Errorf("launcher:\n%s", b)
 	}
 }

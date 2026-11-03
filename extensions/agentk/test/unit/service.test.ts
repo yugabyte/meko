@@ -290,13 +290,14 @@ describe('LaunchdServices', () => {
     expect(svc.state('server')).toEqual({ running: true, text: 'running' });
   });
 
-  it('never reloads a loaded host job, and restarts an unchanged server in place', () => {
+  it('never reloads a loaded host job, and reloads the server even when its file is unchanged', () => {
+    // The server's start may have written the file without reloading the job (refresh).
     const { svc, calls } = make({ loaded: ['com.yugabyte.agentk.host', 'com.yugabyte.agentk'] });
     mkdirSync(agents(), { recursive: true });
     writeFileSync(svc.file('host'), 'older host file\n');
     writeFileSync(svc.file('server'), files.server);
     svc.install(files);
-    expect(calls).toEqual(['kickstart -k gui/501/com.yugabyte.agentk']);
+    expect(calls).toEqual(['bootout gui/501/com.yugabyte.agentk', `bootstrap gui/501 ${svc.file('server')}`]);
     expect(readFileSync(svc.file('host'), 'utf8')).toBe(files.host);
   });
 

@@ -5,8 +5,8 @@
 <dict>
   <key>Label</key>
   <string>{{.Label}}</string>
-  <!-- service/meko in the data folder, which execs the binary: an update replaces the binary,
-       never this file, so macOS doesn't announce Meko as a new background item each time. -->
+  <!-- For a release, service/meko in the app folder, which execs the binary: an update replaces
+       the binary, never this file, so macOS doesn't announce Meko as a new background item each time. -->
   <key>ProgramArguments</key>
   <array>
     <string>{{xml .Launcher}}</string>
