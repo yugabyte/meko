@@ -126,7 +126,8 @@ agents should read it before changing code there.
    route (`req.routeOptions.url`), never the raw URL, which can be percent-encoded. Hooks use their
    own unix socket with a per-session token.
 4. **No shell interpolation of user input.** Use `execFile`/`spawn` with argument arrays. The only
-   shell text we generate is the launcher script, and every value in it goes through `shq()`.
+   shell text we generate is the session launcher script and the LaunchAgents' launcher
+   (`writeServiceLauncher`), and every value in them goes through `shq()`.
 5. **Migrations are append-only.** Add a new entry to `MIGRATIONS` in `db.ts`; never edit a shipped one.
 6. **The session host outlives updates.** A running host keeps the code it started with, and restarting
    it ends every Claude: nothing restarts it by itself, except the one-time move of the home into Meko's

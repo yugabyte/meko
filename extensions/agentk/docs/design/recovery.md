@@ -50,7 +50,18 @@ Keychain, which is only unlocked during a desktop login, so the installer refuse
 one. The host runs in the foreground, as launchd wants. Both jobs set
 `LANG=en_US.UTF-8`, because launchd sets no locale and Claude needs a UTF-8 one. Updates
 restart the server with `launchctl kickstart -k`, or by exiting and letting `KeepAlive` bring it
-back; reinstalling never reloads a loaded host job.
+back. Reinstalling never reloads a loaded host job, and always reloads the server's (with
+`bootout` and `bootstrap`), since the file on disk may be newer than the job launchd loaded.
+
+Both jobs run `<home>/service/me_agentk`, a script that execs `app/current/bin/agentk`; macOS
+lists a job under its program's file name, so Login Items shows AgentK as `me_agentk`. macOS's
+Background Task Management shows "Background Items Added" again whenever the program a LaunchAgent
+names turns out to be another file, and `app/current/bin/agentk` is another file after every
+update. An update never replaces the launcher. `install` and the server's start
+(`refreshServiceFiles`) write it, and the plists, only when their text changes, since a rewritten
+file is announced too. At its start the server also brings plists from before the launcher onto it
+without reloading the jobs, which run from the new plists from the next login (or, for the server,
+the next `install`). That move shows the alert one last time.
 
 **Their PATH.** systemd and launchd start both services with a thin PATH (launchd's is
 `/usr/bin:/bin:/usr/sbin:/sbin`). At its start, each one reads PATH from the user's login shell

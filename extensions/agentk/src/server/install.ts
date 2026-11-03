@@ -19,7 +19,7 @@ import {
 } from './mekosetup.js';
 import { claudeTokenGaps } from './mekoclaude.js';
 import { expandHome, getPaths, oldHome, tildify, type Paths } from './paths.js';
-import { dropOldNames, hostServices, renderServiceFiles, samePath, ServiceError, SERVICES, type ServiceManager } from './service.js';
+import { dropOldNames, hostServices, removeServiceLauncher, renderServiceFiles, samePath, ServiceError, SERVICES, writeServiceLauncher, type ServiceManager } from './service.js';
 import { SessionHost } from './hostclient.js';
 import { COMMAND, commandLinks } from './cmdlink.js';
 import { style, ui } from './tty.js';
@@ -119,6 +119,7 @@ function installServices(paths: Paths): boolean {
   }
   for (const [old, now] of dropOldNames(svc)) ui.ok(now, `replaces ${old}, its name before the rename to AgentK`);
   try {
+    if (svc.kind === 'launchd') writeServiceLauncher(paths.home);
     svc.install(renderServiceFiles(svc, { AK_HOME: paths.home, HOST: hostname() }));
   } catch (e) {
     if (e instanceof ServiceError) throw new ServiceError(serviceFailure(svc, e.message, paths.logs), { cause: e });
@@ -655,6 +656,7 @@ export async function runUninstall(args: string[]): Promise<void> {
     const svc = hostServices();
     if (svc && (svc.kind === 'launchd' || which('systemctl'))) {
       svc.remove();
+      removeServiceLauncher(paths.home);
       say('Services removed.');
     }
     // A session host started without a service (--no-service) ends with its sessions too.

@@ -7,9 +7,11 @@
 <dict>
   <key>Label</key>
   <string>@SERVER_ID@</string>
+  <!-- service/me_agentk in the home execs app/current/bin/agentk: an update replaces that file, never
+       this one, so macOS doesn't announce AgentK as a new background item each time. -->
   <key>ProgramArguments</key>
   <array>
-    <string>@AK_HOME@/app/current/bin/agentk</string>
+    <string>@AK_HOME@/service/me_agentk</string>
     <string>serve</string>
   </array>
   <key>EnvironmentVariables</key>

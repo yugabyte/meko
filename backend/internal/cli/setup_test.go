@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"github.com/yugabyte/meko/backend/internal/extensions"
 	"github.com/yugabyte/meko/backend/internal/paths"
 	"github.com/yugabyte/meko/backend/internal/service"
+	"github.com/yugabyte/meko/backend/internal/update"
 )
 
 // fakeService is a service manager that runs serve the way start does, as this test binary.
@@ -579,5 +581,59 @@ func TestUninstallRemovesTheCommands(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(mekosh); string(b) != "mine" { //nolint:gosec // G304: test file
 		t.Errorf("uninstall removed a mekosh that isn't a link into the app folder")
+	}
+}
+
+// serve under launchd moves a plist that ran app/current/bin/meko onto the launcher, and leaves
+// one already on it alone (#430).
+func TestServeMovesTheLaunchAgentOntoTheLauncher(t *testing.T) {
+	data := t.TempDir()
+	app := update.App{Root: filepath.Join(t.TempDir(), "app")}
+	oldRunning := runningRelease
+	runningRelease = func() (update.App, string, bool) { return app, "0.1.0", true }
+	t.Cleanup(func() { runningRelease = oldRunning })
+	never := func(name string, args ...string) (string, error) { // never loaded
+		if args[0] == "print" {
+			return "", fmt.Errorf("not loaded")
+		}
+		return "", nil
+	}
+	d := &service.Launchd{Home: t.TempDir(), UID: 501, Run: never}
+	old := newManager
+	newManager = func() (service.Manager, error) { return d, nil }
+	t.Cleanup(func() { newManager = old })
+	l := paths.New(data)
+	spec := service.Spec{Exe: app.CurrentExe(), DataDir: data, ServiceLog: l.ServiceLog}
+	if err := d.Install(spec); err != nil {
+		t.Fatal(err)
+	}
+	launcher := "<string>" + service.Launcher(app.CurrentExe()) + "</string>"
+	b, err := os.ReadFile(d.File())
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPlist := strings.Replace(string(b), launcher, "<string>"+app.CurrentExe()+"</string>", 1)
+	if err = os.WriteFile(d.File(), []byte(oldPlist), 0o600); err != nil { //nolint:gosec // G703: the test's own HOME
+		t.Fatal(err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	refreshLaunchAgent(l, log) // not run by launchd
+	if b, _ = os.ReadFile(d.File()); string(b) != oldPlist {
+		t.Fatal("serve outside launchd changed the plist")
+	}
+	t.Setenv("MEKO_SERVICE", "launchd")
+	refreshLaunchAgent(l, log)
+	if b, _ = os.ReadFile(d.File()); !strings.Contains(string(b), launcher) {
+		t.Fatalf("the plist doesn't run the launcher:\n%s", b)
+	}
+	before, _ := os.Stat(d.File())
+	refreshLaunchAgent(l, log)
+	if after, _ := os.Stat(d.File()); !os.SameFile(before, after) {
+		t.Error("an up-to-date plist was written again")
+	}
+	b, _ = os.ReadFile(service.Launcher(app.CurrentExe()))
+	if !strings.Contains(string(b), "exec '"+app.CurrentExe()+"'") {
+		t.Errorf("launcher:\n%s", b)
 	}
 }
