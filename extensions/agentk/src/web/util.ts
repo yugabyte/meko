@@ -62,7 +62,7 @@ export function liveSessions(p: ProjectWithSessions): Session[] {
 }
 
 /** A project's open sessions with its tasks' code-review sessions: what a terminal or the route may show. */
-export function liveWithReviews(p: ProjectWithSessions): Session[] {
+export function liveWithReviews(p: Pick<ProjectWithSessions, 'sessions'>): Session[] {
   return p.sessions.filter((s) => s.desired !== 'archived' && s.status !== 'archived');
 }
 
