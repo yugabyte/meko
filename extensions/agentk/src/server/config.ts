@@ -16,7 +16,7 @@ export interface Config {
    * name: shown in the rail next to the user name; empty uses the machine's short host name.
    * bind and port, and [tls]: where AgentK listened, and its certificate, when it served browsers
    * itself. Meko serves it now (on AgentK's old port, at /ext/agentk/), and its handoff takes them
-   * over once (`agentk _handoff`, handoff.ts); nothing else reads them, and they're kept in
+   * over once (`me_koder _handoff`, handoff.ts); nothing else reads them, and they're kept in
    * config.toml only for that.
    */
   server: { bind: string; port: number; name: string };
@@ -37,7 +37,7 @@ export interface Config {
   meko: { url: string; apiKey: string; webUrl: string; apiUrl: string; captureTranscripts: boolean; home: string };
   /**
    * dbPath: where state.db is when the home is on a network filesystem, which only a home from before
-   * the move into Meko's data folder can be (Meko keeps its folder on a local disk). `agentk install`
+   * the move into Meko's data folder can be (Meko keeps its folder on a local disk). `me_koder install`
    * sets it for such a home (`localDbLocation`), and the move brings the database into the new home
    * and clears it (movehome.ts).
    */
@@ -93,7 +93,7 @@ export interface Config {
    */
   askAgentk: { enabled: boolean; model: string; timeoutSeconds: number };
   /**
-   * AgentK's session tools (tools.ts): enabled gives every session the `agentk_sessions` MCP server (`agentk mcp`) and its
+   * AgentK's session tools (tools.ts): enabled gives every session the `agentk_sessions` MCP server (`me_koder mcp`) and its
    * skill, which open projects, start sessions and move them between stages, from each session's next launch. Off, the
    * tools' route refuses calls from sessions that still have them. Set in Settings → General.
    */

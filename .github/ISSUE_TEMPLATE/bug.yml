@@ -54,7 +54,7 @@ body:
     id: logs
     attributes:
       label: Logs or output
-      description: "The lines around the problem, from `meko logs -n 200`, `agentk status` or the terminal. They're shown as code, so no backticks are needed."
+      description: "The lines around the problem, from `meko logs -n 200`, `me_koder status` or the terminal. They're shown as code, so no backticks are needed."
       render: text
   - type: textarea
     id: environment

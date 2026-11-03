@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSyn
 import { homedir, userInfo } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { COMMAND, OLD_COMMANDS } from './cmdlink.js';
 import { shq } from './launcher.js';
 
 /**
@@ -15,9 +16,11 @@ import { shq } from './launcher.js';
  * run while the host runs them too, so the server refuses to start while it's installed, and
  * `install` and `uninstall` remove it (`removeLegacyTmux`), which ends them.
  *
- * Until the rename to AgentK the services were named agent-k-local (`agent-k-local.service`,
- * `com.yugabyte.agent-k-local`). A service installed under its old name keeps it, and `id` and
- * `file` name it, until `install` moves it to its new one (`dropOldName`).
+ * The services are named for the command, me_koder (`me_koder.service`, `com.yugabyte.me_koder`),
+ * so they say they're a Meko extension's. Before that they were agentk (`agentk.service`,
+ * `com.yugabyte.agentk`), and before the rename to AgentK agent-k-local. A service installed under an
+ * old name keeps it, and `id` and `file` name it, until `install` moves it to its new one
+ * (`dropOldName`): updates never touch the services, so a version rolled back to still finds them.
  */
 export type Service = 'server' | 'host';
 
@@ -43,9 +46,9 @@ export interface ServiceManager {
   /** Throws a ServiceError when this host can't run the services, saying how to fix it. */
   preflight(): void;
   installed(s: Service): boolean;
-  /** Whether the service is installed under its name from before the rename to AgentK. */
+  /** Whether the service is installed under one of its old names (`agentk…`, `agent-k-local…`) and not its new one. */
   oldName(s: Service): boolean;
-  /** Stops the service installed under its old name and deletes its file, so the next `install` writes it under its new one. */
+  /** Stops the service installed under its old names and deletes their files, so the next `install` writes it under its new one. */
   dropOldName(s: Service): void;
   /**
    * Writes both service files and starts them. A running host is never
@@ -107,14 +110,11 @@ const sleepSync = (ms: number) => void Atomics.wait(new Int32Array(new SharedArr
 // Linux: systemd user units
 
 const SYSTEMD_UNITS: Record<Service, string> = {
-  server: 'agentk.service',
-  host: 'agentk-host.service',
+  server: `${COMMAND}.service`,
+  host: `${COMMAND}-host.service`,
 };
-/** The units' names before the rename to AgentK. */
-const SYSTEMD_OLD_UNITS: Record<Service, string> = {
-  server: 'agent-k-local.service',
-  host: 'agent-k-local-host.service',
-};
+/** The units' names before, newest first: agentk's, then agent-k-local's from before the rename to AgentK. */
+const SYSTEMD_OLD_UNITS: Record<Service, string>[] = OLD_COMMANDS.map((c) => ({ server: `${c}.service`, host: `${c}-host.service` }));
 /** The tmux unit of versions before the session host. */
 const SYSTEMD_TMUX = 'agent-k-local-tmux.service';
 
@@ -129,21 +129,28 @@ export class SystemdServices implements ServiceManager {
   ) {}
 
   id(s: Service): string {
-    return this.oldName(s) ? SYSTEMD_OLD_UNITS[s] : SYSTEMD_UNITS[s];
+    return this.installedOld(s) ?? SYSTEMD_UNITS[s];
   }
 
   private dir(): string {
     return join(this.env.XDG_CONFIG_HOME || join(this.home, '.config'), 'systemd', 'user');
   }
 
+  /** The old name the service is installed under, when it isn't installed under its new one. */
+  private installedOld(s: Service): string | null {
+    if (existsSync(join(this.dir(), SYSTEMD_UNITS[s]))) return null;
+    return SYSTEMD_OLD_UNITS.map((u) => u[s]).find((u) => existsSync(join(this.dir(), u))) ?? null;
+  }
+
   oldName(s: Service): boolean {
-    return !existsSync(join(this.dir(), SYSTEMD_UNITS[s])) && existsSync(join(this.dir(), SYSTEMD_OLD_UNITS[s]));
+    return this.installedOld(s) !== null;
   }
 
   dropOldName(s: Service): void {
-    if (!this.oldName(s)) return;
-    this.run('systemctl', ['--user', 'disable', '--now', SYSTEMD_OLD_UNITS[s]]);
-    rmSync(join(this.dir(), SYSTEMD_OLD_UNITS[s]), { force: true });
+    for (let old = this.installedOld(s); old; old = this.installedOld(s)) {
+      this.run('systemctl', ['--user', 'disable', '--now', old]);
+      rmSync(join(this.dir(), old), { force: true });
+    }
     this.run('systemctl', ['--user', 'daemon-reload']);
   }
 
@@ -236,14 +243,11 @@ export class SystemdServices implements ServiceManager {
 // macOS: LaunchAgents in the gui/<uid> domain
 
 const LAUNCHD_LABELS: Record<Service, string> = {
-  server: 'com.yugabyte.agentk',
-  host: 'com.yugabyte.agentk.host',
+  server: `com.yugabyte.${COMMAND}`,
+  host: `com.yugabyte.${COMMAND}.host`,
 };
-/** The jobs' labels before the rename to AgentK. */
-const LAUNCHD_OLD_LABELS: Record<Service, string> = {
-  server: 'com.yugabyte.agent-k-local',
-  host: 'com.yugabyte.agent-k-local.host',
-};
+/** The jobs' labels before, newest first: agentk's, then agent-k-local's from before the rename to AgentK. */
+const LAUNCHD_OLD_LABELS: Record<Service, string>[] = OLD_COMMANDS.map((c) => ({ server: `com.yugabyte.${c}`, host: `com.yugabyte.${c}.host` }));
 /** The tmux job of versions before the session host. */
 const LAUNCHD_TMUX = 'com.yugabyte.agent-k-local.tmux';
 
@@ -263,21 +267,28 @@ export class LaunchdServices implements ServiceManager {
   ) {}
 
   id(s: Service): string {
-    return this.oldName(s) ? LAUNCHD_OLD_LABELS[s] : LAUNCHD_LABELS[s];
+    return this.installedOld(s) ?? LAUNCHD_LABELS[s];
   }
 
   private plist(label: string): string {
     return join(this.home, 'Library', 'LaunchAgents', `${label}.plist`);
   }
 
+  /** The old label the job is installed under, when it isn't installed under its new one. */
+  private installedOld(s: Service): string | null {
+    if (existsSync(this.plist(LAUNCHD_LABELS[s]))) return null;
+    return LAUNCHD_OLD_LABELS.map((l) => l[s]).find((l) => existsSync(this.plist(l))) ?? null;
+  }
+
   oldName(s: Service): boolean {
-    return !existsSync(this.plist(LAUNCHD_LABELS[s])) && existsSync(this.plist(LAUNCHD_OLD_LABELS[s]));
+    return this.installedOld(s) !== null;
   }
 
   dropOldName(s: Service): void {
-    if (!this.oldName(s)) return;
-    this.unloadLabel(LAUNCHD_OLD_LABELS[s]);
-    rmSync(this.plist(LAUNCHD_OLD_LABELS[s]), { force: true });
+    for (let old = this.installedOld(s); old; old = this.installedOld(s)) {
+      this.unloadLabel(old);
+      rmSync(this.plist(old), { force: true });
+    }
   }
 
   private domain(): string {
@@ -436,31 +447,45 @@ function writeIfChanged(file: string, text: string, mode?: number): boolean {
 }
 
 /**
- * The program the LaunchAgents run, `<home>/service/me_agentk`: a script that execs
- * `app/current/bin/agentk`. macOS's Background Task Management announces "Background Items Added"
- * again whenever the program a LaunchAgent names turns out to be another file, as
- * app/current/bin/agentk is after every update, so the jobs name this one, which an update never
- * replaces (#430). macOS lists the jobs under this file's name, `me_agentk`.
+ * The program the services run, `<home>/service/me_koder`: a script that execs
+ * `app/current/bin/me_koder`, or `bin/agentk` in a release from before the program was me_koder (one
+ * rolled back to under a Meko that doesn't give it the new name). macOS's Background Task Management
+ * announces "Background Items Added" again whenever the program a LaunchAgent names turns out to be
+ * another file, as app/current/bin/… is after every update, so the jobs name this one, which an
+ * update never replaces (#430). macOS lists the jobs under this file's name, `me_koder`, and
+ * systemd's units run it too, so their ExecStart says it.
  */
 export function serviceLauncher(home: string): string {
-  return join(home, 'service', 'me_agentk');
+  return join(home, 'service', COMMAND);
 }
 
-/** Writes the LaunchAgents' launcher for this home, only when its text changed. Returns whether it wrote. */
+/**
+ * The launcher's name before the program was me_koder, `<home>/service/me_agentk` (#430), which
+ * execs app/current/bin/agentk. Jobs launchd loaded from a plist naming it keep running it until
+ * the next login, after the server's start moved the plists onto `serviceLauncher` (one last
+ * "Background Items Added"), so it stays until `uninstall`.
+ */
+const OLD_LAUNCHER = 'me_agentk';
+
+/** Writes the services' launcher for this home, only when its text changed. Returns whether it wrote. */
 export function writeServiceLauncher(home: string): boolean {
+  const bin = join(home, 'app', 'current', 'bin');
   const text = [
     '#!/bin/sh',
-    "# AgentK's LaunchAgents run this file, written by `agentk install`. Updates leave it alone, so",
+    `# AgentK's services run this file, written by \`${COMMAND} install\`. Updates leave it alone, so`,
     "# macOS doesn't announce AgentK as a new background item after each one.",
-    `exec ${shq(join(home, 'app', 'current', 'bin', 'agentk'))} "$@"`,
+    `bin=${shq(bin)}`,
+    `[ -e "$bin/${COMMAND}" ] || exec "$bin/${OLD_COMMANDS[0]}" "$@"`,
+    `exec "$bin/${COMMAND}" "$@"`,
     '',
   ].join('\n');
   return writeIfChanged(serviceLauncher(home), text, 0o755);
 }
 
-/** Deletes the launcher (`uninstall`), and its folder once empty. */
+/** Deletes the launcher, and the one by its old name (`uninstall`), and their folder once empty. */
 export function removeServiceLauncher(home: string): void {
   rmSync(serviceLauncher(home), { force: true });
+  rmSync(join(home, 'service', OLD_LAUNCHER), { force: true });
   try {
     rmdirSync(dirname(serviceLauncher(home)));
   } catch {
@@ -482,14 +507,14 @@ export function refreshServiceFiles(home: string, svc: ServiceManager | null, ho
   // The home as the jobs spell it, so files that are up to date stay as they are.
   const named = serviceHome(readFileSync(file, 'utf8'), svc.kind);
   const spelled = named !== null && samePath(named, home) ? named : home;
-  if (!existsSync(join(spelled, 'app', 'current', 'bin', 'agentk'))) return [];
+  if (!existsSync(join(spelled, 'app', 'current', 'bin', COMMAND))) return [];
   writeServiceLauncher(spelled);
   return svc.refresh(renderServiceFiles(svc, { AK_HOME: spelled, HOST: host }));
 }
 
 /**
- * Before `install` writes the services, drops the ones installed under their names from before the
- * rename to AgentK, so they're written under their new ones: the server's always (`install`
+ * Before `install` writes the services, drops the ones installed under their old names (agentk's,
+ * or agent-k-local's from before the rename to AgentK), so they're written under their new ones: the server's always (`install`
  * restarts it anyway), the host's only while it isn't running, since stopping it would end every
  * session. A running host keeps its old name, which the server's unit then names, until it stops.
  * Returns each move, old name first.
@@ -514,7 +539,7 @@ export function dropOldNames(svc: ServiceManager): [string, string][] {
 export const MOVE_JOB = { systemd: 'agentk-move-home.service', launchd: 'com.yugabyte.agentk.move-home' } as const;
 
 export interface MoveJob {
-  /** The release's `agentk` to run (`_move-home --to <to>`). */
+  /** The release's `me_koder` to run (`_move-home --to <to>`). */
   bin: string;
   to: string;
   /** The home being moved, for the job's AK_HOME. */

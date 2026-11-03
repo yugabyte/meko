@@ -97,6 +97,9 @@ func Update(ctx context.Context, o UpdateOptions, name string) (bool, error) {
 	from := cur
 	if p, _ := app.ReadPending(); p != nil && p.To == cur {
 		_, isVersion := update.ParseVersion(p.From)
+		if isVersion {
+			_ = app.Adopt(p.From) // one from before the command's rename, not yet adopted at Meko's start
+		}
 		//nolint:gosec // G703: p.From is checked to be a bare version, a folder name in the app folder
 		if _, serr := os.Stat(app.Exe(p.From)); isVersion && serr == nil {
 			from = p.From

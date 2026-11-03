@@ -159,7 +159,10 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			onProbation = true
 		} else {
 			makeMekoCLI(app, log)
+			renameExtensions(l, log)
 		}
+	} else {
+		renameExtensions(l, log) // a build from source is never on probation
 	}
 	refreshLaunchAgent(l, log)
 
@@ -556,6 +559,24 @@ func makeMekoCLI(app update.App, log *slog.Logger) {
 	}
 }
 
+// renameExtensions moves this data folder's extensions installed under an older name of their
+// command onto the current one (extensions.Registry.Rename): AgentK's agentk becomes me_koder. Like
+// makeMekoCLI, serve runs it only once its release is past probation: a Meko rolled back after it
+// would have a registry naming links its catalog doesn't know, and old links it can't make again.
+func renameExtensions(l paths.Layout, log *slog.Logger) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	reg, err := extensions.Load(l.Root)
+	if err == nil {
+		err = reg.Rename(l.Root, home)
+	}
+	if err != nil {
+		log.Warn("can't rename the extensions' commands", "error", err)
+	}
+}
+
 // refreshLaunchAgent brings the LaunchAgent that runs this data folder up to date with this
 // version's (service.Launchd.Refresh), without reloading it: an install whose plist ran
 // app/current/bin/meko, which macOS announced as a new background item after every update, moves
@@ -588,8 +609,10 @@ func refreshLaunchAgent(l paths.Layout, log *slog.Logger) {
 }
 
 // finishUpdate finishes the update to release once it has run for after (update.HealthyAfter),
-// unless ctx ends first, and then makes the meko-cli command.
-func finishUpdate(ctx context.Context, app update.App, release string, after time.Duration, log *slog.Logger) {
+// unless ctx ends first, and then makes the meko-cli command and moves the extensions onto their
+// commands' new names (renameExtensions).
+func finishUpdate(ctx context.Context, app update.App, release string, after time.Duration, l paths.Layout,
+	log *slog.Logger) {
 	select {
 	case <-ctx.Done():
 	case <-time.After(after):
@@ -600,6 +623,7 @@ func finishUpdate(ctx context.Context, app update.App, release string, after tim
 		}
 		log.Info("the update is done", "version", release, "pruned", pruned)
 		makeMekoCLI(app, log)
+		renameExtensions(l, log)
 	}
 }
 
@@ -613,7 +637,7 @@ func finishUpdate(ctx context.Context, app update.App, release string, after tim
 func startUpdates(ctx context.Context, app update.App, release string, l paths.Layout, cfg config.Config,
 	log *slog.Logger, onProbation bool, restart chan struct{}, web *webListener) (*update.Updater, string) {
 	if onProbation {
-		go finishUpdate(ctx, app, release, update.HealthyAfter, log)
+		go finishUpdate(ctx, app, release, update.HealthyAfter, l, log)
 	}
 	schema, err := store.LatestSchema()
 	if err != nil {

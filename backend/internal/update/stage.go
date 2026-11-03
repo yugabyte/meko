@@ -95,6 +95,10 @@ func (a App) Unpack(tarball, version string) error {
 		return err
 	}
 	top := filepath.Join(staging, a.pkg()+"-"+version)
+	// A version from before the program's rename (installed with --version) gets its new name too.
+	if err := adopt(filepath.Join(top, "bin"), a.name(), a.OldNames); err != nil {
+		return err
+	}
 	if err := CheckBinary(filepath.Join(top, "bin", a.name()), version); err != nil {
 		return err
 	}

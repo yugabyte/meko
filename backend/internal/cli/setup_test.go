@@ -234,7 +234,7 @@ func TestAFailingExtensionGetsAFailRow(t *testing.T) {
 	}
 	reg, _ := extensions.Load(dir)
 	reg.Entries["agentk"] = extensions.Entry{Command: ext, InstalledByMeko: true}
-	reg.Entries["presenter"] = extensions.Entry{Command: filepath.Join(t.TempDir(), "gone", "meko_presenter")}
+	reg.Entries["presenter"] = extensions.Entry{Command: filepath.Join(t.TempDir(), "gone", "me_presenter")}
 	if err := reg.Save(); err != nil {
 		t.Fatal(err)
 	}

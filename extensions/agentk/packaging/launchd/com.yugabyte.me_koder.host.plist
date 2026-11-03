@@ -1,17 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- AgentK session host (holds every Claude session). Written by `agentk install`. -->
+<!-- AgentK session host (holds every Claude session). Written by `me_koder install`. -->
 <!-- It runs the version that was current when it started and keeps running across updates:
      restarting it ends every Claude session (the server resumes them). -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
   <string>@HOST_ID@</string>
-  <!-- service/me_agentk in the home execs app/current/bin/agentk: an update replaces that file, never
+  <!-- service/me_koder in the home execs app/current/bin/me_koder: an update replaces that file, never
        this one, so macOS doesn't announce AgentK as a new background item each time. -->
   <key>ProgramArguments</key>
   <array>
-    <string>@AK_HOME@/service/me_agentk</string>
+    <string>@AK_HOME@/service/me_koder</string>
     <string>host</string>
   </array>
   <key>EnvironmentVariables</key>

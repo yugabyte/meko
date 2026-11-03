@@ -112,7 +112,7 @@ gone keep their row: a relaunch exits at once and shows as exited, like a crash.
 only stops offering it for new sessions: Claude Code sessions still relaunch, resume and recover with
 AgentK's mod, whose version check (`supportsMod`) reads Claude Code's version even while it's off.
 
-The install needs one agent: `scripts/deps.sh`, which `agentk install` runs first, takes Claude Code, OpenCode (on the PATH or in
+The install needs one agent: `scripts/deps.sh`, which `me_koder install` runs first, takes Claude Code, OpenCode (on the PATH or in
 `~/.opencode/bin`) or `kiro-cli`, and with none asks which to install (Claude Code first, OpenCode
 second, Kiro CLI third; `--agent claude|opencode|kiro` for unattended runs, and `--install-deps` takes
 Claude Code without asking unless `--agent` says otherwise), with Anthropic's installer, OpenCode's
@@ -121,7 +121,7 @@ OpenCode 1) or Kiro's (`cli.kiro.dev/install`, which needs `unzip` on Linux), an
 declined or fails. It checks each agent's sign-in (`claude auth status`, `opencode auth list
 --standalone`: "No authenticated integrations", neither a stored credential nor a provider key in the
 environment, `kiro-cli whoami`) and offers `claude auth login`, `opencode auth login --standalone` or
-`kiro-cli login`. `agentk install` then reads each
+`kiro-cli login`. `me_koder install` then reads each
 agent's version (`settleAgents`): with none it stops, saying what to install (and, for OpenCode,
 `opencode upgrade --major` from 1.x); a default that isn't
 installed becomes the first agent that is; and Meko's setup is offered for each agent found whose

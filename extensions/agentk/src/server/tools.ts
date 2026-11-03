@@ -6,7 +6,7 @@ import { claudePath, type Paths } from './paths.js';
 import { TOOL_DEFS, TOOLS_SERVER } from './tooldefs.js';
 
 /**
- * AgentK's session tools: the `agentk_sessions` MCP server (`agentk mcp`, mcp.ts) every harness's
+ * AgentK's session tools: the `agentk_sessions` MCP server (`me_koder mcp`, mcp.ts) every harness's
  * sessions get, and the skill that says how to use it. Here are the files each harness launches with;
  * the server's side of a call (the hook socket's `/tools`) is `SessionTools` in actions.ts.
  */
@@ -23,7 +23,7 @@ export function toolsDir(paths: Paths): string {
   return join(paths.run, 'tools');
 }
 
-/** Claude Code's `--mcp-config` file, naming `agentk mcp`. */
+/** Claude Code's `--mcp-config` file, naming `me_koder mcp`. */
 export function toolsMcpConfigPath(paths: Paths): string {
   return join(toolsDir(paths), 'mcp.json');
 }
@@ -44,7 +44,7 @@ export function skillPath(paths: Paths): string {
 }
 
 /**
- * How a session's CLI starts `agentk mcp`: its own entry (mcpmain.js), which loads only the MCP
+ * How a session's CLI starts `me_koder mcp`: its own entry (mcpmain.js), which loads only the MCP
  * server, not the CLI's imports of the whole server. An install runs it through `app/current`, which
  * follows updates, so an MCP server started after an update runs the version installed then.
  * Elsewhere (a dev server) it's this Node, with this process's loader flags, on this build's entry.
