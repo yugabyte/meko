@@ -116,6 +116,9 @@ describe('the AgentK tour (a bundled workshop; real session host + git, fake cla
     const events = () => prompts(host.claudeSessionId).filter((t) => t.startsWith('AgentK events:')).join('\n');
     await waitFor(events, (t) => t.includes("AgentK waits for the user's go"), 20000, 'the pause');
     expect(reviews()).toEqual([{ by: 'auto', purpose: 'demand', strategy: 'sirius-1.0', hand_off: 0, state: 'done' }]);
+    // The review session starts on the workshop's model for its agent; the task keeps its own.
+    expect(get<{ model: string | null }>(env.core.db, 'SELECT s.model FROM code_reviews c JOIN sessions s ON s.id = c.session_id WHERE c.task_id = ?', task.id)?.model).toBe('sonnet');
+    expect(env.core.sessions.row(task.id).model).toBeNull();
     expect(env.mekoApi.calls.some((c) => c.path.endsWith('/upload-url'))).toBe(false);
     // Anything but a go leaves it waiting.
     await env.core.sessions.submit(host.id, 'What happens next?');

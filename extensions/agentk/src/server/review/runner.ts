@@ -747,7 +747,7 @@ export class CodeReviews {
       if (prompt) await this.core.sessions.submit(cur.id, prompt);
       return cur;
     }
-    const row = await this.core.sessions.startReviewSession(task, r.id, prompt);
+    const row = await this.core.sessions.startReviewSession(task, r.id, prompt, this.core.workshops.reviewModel(task));
     this.set(r.id, { session_id: row.id });
     return row;
   }

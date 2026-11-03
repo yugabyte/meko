@@ -734,19 +734,20 @@ export class SessionManager {
   /**
    * Starts a task's code-review session (review/runner.ts): a child of the task (`parent_id`) on the
    * task's harness, in the task's own worktree, which it doesn't own (`worktree_released`), so
-   * archiving it never frees the worktree or touches the branch. `prompt` is its first.
+   * archiving it never frees the worktree or touches the branch. `prompt` is its first; `model`, the
+   * one it starts on (a workshop's, `WorkshopService.reviewModel`), else its agent's default.
    */
-  async startReviewSession(task: SessionRow, reviewId: string, prompt: string | null): Promise<SessionRow> {
+  async startReviewSession(task: SessionRow, reviewId: string, prompt: string | null, model: string | null = null): Promise<SessionRow> {
     const slug = `${task.slug}-review-${randomBytes(3).toString('hex')}`;
     const id = `${task.project_id}--${slug}`;
     const now = Date.now();
     run(this.db, `INSERT INTO sessions(id, project_id, slug, name, harness, claude_session_id, branch, base_branch, repo_path, branch_reused,
                     worktree_path, worktree_released, tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode,
-                    meko_agent_id, parent_id, position)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 1, ?, ?, 'running', 'starting', 'code-review', 'reviewing-code', ?, ?, ?, 0, ?, ?, ?)`,
+                    meko_agent_id, parent_id, position, model)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 1, ?, ?, 'running', 'starting', 'code-review', 'reviewing-code', ?, ?, ?, 0, ?, ?, ?, ?)`,
       id, task.project_id, slug, `Code review of ${task.name}`, task.harness, randomUUID(), task.branch, task.base_branch, task.repo_path,
       task.worktree_path, paneName(task.project_id, slug), randomBytes(24).toString('base64url'), `Review the change on ${task.branch}`, now, now,
-      sessionAgentId({ id, slug, harness: harnessOf(task.harness) }), task.id, task.position);
+      sessionAgentId({ id, slug, harness: harnessOf(task.harness) }), task.id, task.position, model);
     run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, 'reviewing-code', ?, 'auto')`, id, now);
     this.event(id, 'created', `Started for review ${reviewId} of ${task.name}`);
     this.creating.add(id);

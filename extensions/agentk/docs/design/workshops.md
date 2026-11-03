@@ -13,7 +13,7 @@ server as the session tools' skill is: `WORKSHOPS_SOURCE` in `src/server/worksho
 
 | File | What it holds |
 |---|---|
-| `workshop.json` | id, title, summary, the host's script (`guide`), the demo repo (`repo`: its files' folder, the folder name in the repos folder, the made-up author and date of main's one commit and its message, and each branch's patch), the gotchas (`file`, the gotchas datapack's `datapack` name and what's in it) and the levels (id, title, prompt file, what each needs). `readWorkshop` checks it. |
+| `workshop.json` | id, title, summary, the host's script (`guide`), the demo repo (`repo`: its files' folder, the folder name in the repos folder, the made-up author and date of main's one commit and its message, and each branch's patch), the gotchas (`file`, the gotchas datapack's `datapack` name and what's in it), the code review's settings (`codeReview`) and the model its review sessions start on for each agent (`reviewModels`), and the levels (id, title, prompt file, what each needs). `readWorkshop` checks it. |
 | `GUIDE.md` | The host's first prompt. Placeholders: `{{projectId}}`, `{{repo}}` (the demo repo's path), `{{meko}}` (`on` or `off`), `{{harness}}`, `{{gotchas}}` (the gotchas datapack's name, from the demo's MEKO.md, or `none`) and `{{levels}}` (each level's prompt, fenced, for the host to pass to `start_sessions` word for word). |
 | `levels/*.md` | The prompt of each session the host starts, under the session tools' `PROMPT_MAX` (8,000 characters). |
 | `repo/` | The demo's files on main: a small Snake game with no build, plain scripts (no ES modules and no `fetch`, so `index.html` opens from disk, where browsers refuse both), rules in `src/game.js` (on a `Game` global, `module.exports` for `node --test`) apart from the drawing in `src/ui.js`, no dot-files (a `.gitignore` there would apply to AgentK's own repo). |
@@ -127,7 +127,10 @@ SessionKind, and no stage rules of its own.
   other session's tool list stays as it is. Both run with no
   PR description first, since the demo opens no PR, so neither waits for the task's turn. Without
   Meko there's no gotchas datapack and one review. The workshop's `codeReview` (the tour's:
-  `{ "strategy": "sirius-1.0" }`, one quick pass) becomes the project's code review settings. The
+  `{ "strategy": "sirius-1.0" }`, one quick pass) becomes the project's code review settings, and
+  its review sessions start on the workshop's `reviewModels` for their agent (the tour's: Sonnet on
+  Claude Code, `WorkshopService.reviewModel`, passed to `startReviewSession`) rather than the
+  agent's default; the pass and the scorers keep their tiers' models (`[code_review.models]`). The
   review proper's findings wait for the user to check them and send them to AgentK, as every
   review's do by default; the round's event counts the ones caught with Meko, so the host can point
   to them. The level's prompt runs no tests. A refusal is logged and told to the host. **Run code

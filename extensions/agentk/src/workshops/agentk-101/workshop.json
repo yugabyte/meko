@@ -17,6 +17,7 @@
     "about": "Traps earlier work on the demo game hit: how the arcade cabinet build uses its rules"
   },
   "codeReview": { "strategy": "sirius-1.0" },
+  "reviewModels": { "claude": "sonnet" },
   "levels": [
     { "id": "1-review", "title": "AgentK reviews a change, with Meko", "prompt": "levels/1-review.md", "needs": ["meko"], "review": { "branch": "demo/score-fix", "gotchasAfterFirst": true } }
   ]

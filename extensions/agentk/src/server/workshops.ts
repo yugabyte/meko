@@ -3,7 +3,7 @@ import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readOverrides, type ReviewOverrides } from '../shared/codereview.js';
 import { defaultProjectDatapackName, freeDatapackName } from '../shared/datapacks.js';
-import { HARNESS_CAPS, harnessOf } from '../shared/harnesses.js';
+import { HARNESS_CAPS, harnessOf, isHarnessId, type HarnessId } from '../shared/harnesses.js';
 import { isGotchasDatapack, parseMekoMd } from '../shared/mekomd.js';
 import type { DiffStat, Workshop, WorkshopStart } from '../shared/types.js';
 import type { Core } from './core.js';
@@ -54,6 +54,12 @@ export interface WorkshopBundle {
   /** The project's code review settings (`ProjectSettings.codeReview`): Sirius 1.0's single quick pass for the tour. */
   codeReview: ReviewOverrides | null;
   /**
+   * The model each agent's code-review sessions start on in the workshop's project (the tour's:
+   * Claude Code's Sonnet), by harness since model names differ; its passes and scorers keep their
+   * tiers' models (`[code_review.models]`). An agent left out starts on its own default.
+   */
+  reviewModels: Partial<Record<HarnessId, string>>;
+  /**
    * `review`: AgentK runs its code review itself on the level's session (a task in the project on
    * that branch) as soon as its worktree is made, so the user watches the review rather than starts it.
    * With `gotchasAfterFirst`, that first review runs while the gotchas datapack is still empty and
@@ -96,6 +102,8 @@ export function readWorkshop(id: string, root = WORKSHOPS_SOURCE): WorkshopBundl
     },
     gotchas: g ? { file: str(g.file, 'gotchas.file'), datapack: str(g.datapack, 'gotchas.datapack'), about: typeof g.about === 'string' ? g.about : '' } : null,
     codeReview: raw.codeReview ? readOverrides(raw.codeReview) : null,
+    reviewModels: Object.fromEntries(Object.entries((raw.reviewModels ?? {}) as Record<string, unknown>)
+      .filter((e): e is [HarnessId, string] => isHarnessId(e[0]) && typeof e[1] === 'string' && !!e[1].trim())),
     levels: levels.map((l) => {
       const review = l.review as Record<string, unknown> | null | undefined;
       return {
@@ -289,6 +297,17 @@ export class WorkshopService {
     // the gotchas are in (a replay) there's no empty datapack to look with: one review.
     const firstLook = !!level.review?.gotchasAfterFirst && !!this.gotchasOf(row.project_id) && !this.gotchasIn(row.project_id);
     await this.runLevelReview(row, firstLook);
+  }
+
+  /** The model <task>'s code-review session starts on, when its project is a workshop's that names one for its agent (`reviewModels`). */
+  reviewModel(task: SessionRow): string | null {
+    const workshop = projectRow(this.core.db, task.project_id)?.workshop;
+    if (!workshop) return null;
+    try {
+      return readWorkshop(workshop, this.root).reviewModels[harnessOf(task.harness)] ?? null;
+    } catch {
+      return null;
+    }
   }
 
   /** The level's first look is done: AgentK waits for the user's go (`go`) to add the gotchas and review again. */
