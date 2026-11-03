@@ -26,8 +26,8 @@ import { priceFor } from '../shared/pricing.js';
 // Every string in the report is an enum, a version, a model id or a file extension, and the
 // report's shape is the collector's contract (CallHomeReport, docs/call-home-report.schema.json;
 // the collector is yugabyte/agent-k's services/ak-local-call-home).
-// The same report also goes to YugabyteDB's call home service (diagnostics.yugabyte.com, where yugabyted
-// reports), in yugabyted's envelope (YbCallHome): a second CallHomeService with target `yugabyte`.
+// The same report also goes to YugabyteDB's call home service (YB_DIAGNOSTICS_URL), in
+// yugabyted's envelope (YbCallHome): a second CallHomeService with target `yugabyte`.
 
 const execFileP = promisify(execFile);
 
@@ -66,7 +66,7 @@ const KV_INSTALL_ID = 'call_home_install_id';
 const KV_FIRST_DAY = 'call_home_first_day';
 
 /** YugabyteDB's call home service: release installs send there unless `[call_home] diagnostics_url` names another. */
-export const YB_DIAGNOSTICS_URL = 'https://diagnostics.yugabyte.com';
+export const YB_DIAGNOSTICS_URL = 'https://diagnostics.meko.yugabyte.com';
 
 /** Where a CallHomeService sends: AgentK's own collector, or YugabyteDB's call home service. */
 export type CallHomeTarget = 'agentk' | 'yugabyte';

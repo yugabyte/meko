@@ -626,7 +626,7 @@ export interface CallHomeReport {
 }
 
 /**
- * The same report as YugabyteDB's call home service (diagnostics.yugabyte.com) takes it: yugabyted's
+ * The same report as YugabyteDB's call home service (YB_DIAGNOSTICS_URL in callhome.ts) takes it: yugabyted's
  * envelope, with the report as its payload. The service routes it by callhome_type to a table of its own.
  */
 export interface YbCallHome {

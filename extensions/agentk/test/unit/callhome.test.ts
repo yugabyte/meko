@@ -923,11 +923,11 @@ describe('sending the report to YugabyteDB', () => {
     return { db, cfg, clock, calls, status, logs, service, to };
   }
 
-  it("sends the same report in yugabyted's envelope to diagnostics.yugabyte.com from a release install", async () => {
+  it("sends the same report in yugabyted's envelope to YugabyteDB's call home service from a release install", async () => {
     const t = setup();
     expect(await t.service('yugabyte').tick()).toBe(true);
     expect(t.calls).toHaveLength(1);
-    expect(t.calls[0].url).toBe(YB_DIAGNOSTICS_URL);
+    expect(t.calls[0].url).toBe('https://diagnostics.meko.yugabyte.com');
     expect(t.calls[0].init.headers).toMatchObject({ 'Content-Type': 'application/json', 'User-Agent': 'agentk/0.20260928.0' });
     const sent = JSON.parse(String(t.calls[0].init.body)) as YbCallHome;
     expect(Object.keys(sent).sort()).toEqual(['callhome_type', 'command', 'install_id', 'payload', 'timestamp', 'version']);
