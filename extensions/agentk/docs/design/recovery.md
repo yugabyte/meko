@@ -202,8 +202,8 @@ timer).
   again (any activity meanwhile keeps it running); then `sessions.idle_stopped_at` is set and its
   pane killed, and the stop waits up to 5 s for that agent's `SessionEnd`, so a late one can't end
   the agent a wake starts next. The status is *exited* with "Stopped after 24 hours idle…", an
-  `idle-stopped` event is logged, and nobody is notified. The page shows a faint dashed dot,
-  quieter than idle, and the terminal says it was stopped, with **Resume**.
+  `idle-stopped` event is logged, and nobody is notified. The page shows a paused dot (a thin grey
+  ring with ‖ inside), ranked under idle, and the terminal says it was stopped, with **Resume**.
 - **Stopped stays stopped.** `recoverable()` leaves a session with `idle_stopped_at` out, so
   neither reconcile nor recovery after a host restart relaunches it (a plain kill would be back
   within 5 s). Any launch clears it.

@@ -92,7 +92,7 @@ Session states, shown with a dot on each session (on its tab, or in the rail) an
 - **Exited**
 - **Agent stopped while idle:** AgentK stopped the session's agent after `[sessions] idle_stop_hours`
   idle to free its memory (`Session.idleStoppedAt`; [Stopping idle agents](recovery.md#stopping-idle-agents)).
-  A faint dashed ring, quieter than idle: the rail ranks it under idle. Needs you shows over it while
+  A thin grey ring with a pause sign (‖) inside, still: the rail ranks it under idle. Needs you shows over it while
   something only you can clear waits (`Session.waitsOnYou`). The terminal says so, with
   **Resume**; opening the session doesn't start the agent, but Resume, a key typed into the terminal
   (the phone's key bar and compose box too),

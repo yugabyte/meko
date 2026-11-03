@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -98,6 +100,12 @@ describe('dotState', () => {
     const stopped = { ...session('exited'), idleStoppedAt: 1 } as Session;
     expect(dotState(stopped)).toBe('stopped');
     expect(aggregateDot(project(stopped, session('idle')))).toBe('idle');
+    expect(renderToStaticMarkup(createElement(StatusDot, { status: 'stopped' }))).toContain('class="dot stopped"');
+    // Still and solid: a broken or faded ring at 10px reads as a spinner that has frozen.
+    const css = readFileSync(join(import.meta.dirname, '../../src/web/styles.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(([, sel]) => /\.dot\.stopped\b/.test(sel!));
+    expect(rules.length).toBeGreaterThan(0);
+    expect(rules.map(([, , body]) => body).join('')).not.toMatch(/dashed|dotted|animation|opacity/);
   });
 
   it("titles a session's tab, and its palette row, with what's running in the background", () => {
