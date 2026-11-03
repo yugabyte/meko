@@ -307,6 +307,8 @@ export class SessionManager {
   private usageReadAt = new Map<string, number>();
   /** Kiro turns' second usage reads, cleared by `stop()` so none runs after the database closes. */
   private rereads = new Set<NodeJS.Timeout>();
+  /** Turn ends being handled (hooks aren't awaited), which `Core.stop` waits for: `turnEndsSettled`. */
+  private turnEnds = new Set<Promise<void>>();
   /** Startup progress, for the "Starting…" view. */
   private startup = new Map<string, StartupState>();
   /**
@@ -1659,8 +1661,23 @@ export class SessionManager {
    * continued by itself (`interrupted` stays 0). `background` is the hook's `background_tasks`: it
    * replaces what the session has running in the background, and a turn end without it (the mod's
    * interrupt, an older Claude Code) leaves none, rather than keep a list nothing will update.
+   * Kept in `turnEnds` until it's done.
    */
-  private async endTurn(row: SessionRow, how: 'stop' | 'interrupted', background?: unknown): Promise<void> {
+  private endTurn(row: SessionRow, how: 'stop' | 'interrupted', background?: unknown): Promise<void> {
+    const p = this.handleTurnEnd(row, how, background).finally(() => this.turnEnds.delete(p));
+    this.turnEnds.add(p);
+    return p;
+  }
+
+  /**
+   * Resolves once no turn end is being handled, including ones that start meanwhile: what one runs
+   * (a PR poll's git calls, a prompt it sends) is done.
+   */
+  async turnEndsSettled(): Promise<void> {
+    while (this.turnEnds.size) await Promise.allSettled(this.turnEnds);
+  }
+
+  private async handleTurnEnd(row: SessionRow, how: 'stop' | 'interrupted', background?: unknown): Promise<void> {
     const id = row.id;
     void this.captureTranscript(id);
     // Before the plan's early return below: a Stop while a plan waits for approval still says what runs.

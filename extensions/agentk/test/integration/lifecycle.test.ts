@@ -12,6 +12,9 @@ import type { FakeQuestion } from '../helpers.js';
 const gh = vi.hoisted(() => ({
   pr: null as null | { number: number; url: string; state: 'OPEN' | 'MERGED' | 'CLOSED'; createdAt?: string; baseRefName?: string },
   status: null as null | PrStatus,
+  /** How many times the PR's status was read, and what each read waits for before answering. */
+  statusCalls: 0,
+  statusHold: null as null | Promise<void>,
   merges: [] as string[],
   mergeError: null as null | Error,
   bots: [] as string[],
@@ -36,7 +39,11 @@ vi.mock('../../src/server/github.js', async (orig) => {
     ...real,
     findPr: async () => gh.pr,
     // Like GitHub after a push: the PR's head is the branch tip, unless a test says otherwise.
-    prStatus: async (w: string) => ({ ...gh.status!, headRefOid: gh.status!.headRefOid || tip(w) }),
+    prStatus: async (w: string) => {
+      gh.statusCalls++;
+      await gh.statusHold;
+      return { ...gh.status!, headRefOid: gh.status!.headRefOid || tip(w) };
+    },
     merge: async (_w: string, url: string) => {
       if (gh.mergeError) throw gh.mergeError;
       gh.merges.push(url);
@@ -105,6 +112,8 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     freshHeads = false;
     gh.pr = null;
     gh.status = null;
+    gh.statusCalls = 0;
+    gh.statusHold = null;
     gh.merges = [];
     gh.mergeError = null;
     gh.bots = [];
@@ -388,6 +397,26 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     await waitFor(() => env.core.sessions.row(s.id), (r) => r.stage === 'done', 10000, 'closed at turn end');
     expect(all(env.core.db, `SELECT 1 FROM session_events WHERE session_id = ? AND kind = 'merged'`, s.id)).toHaveLength(1);
     expect(cleanups(s.id)).toBe(1);
+  });
+
+  it("stops once a turn end's PR poll is done, its git fetch included", async () => {
+    const s = await inReview('Stopped mid-poll');
+    // A head the clone lacks: the poll fetches it (git writes FETCH_HEAD even with no origin).
+    gh.status = { ...gh.status!, headRefOid: 'abc123' };
+    const fetchHead = join(env.repo, '.git', 'FETCH_HEAD');
+    rmSync(fetchHead, { force: true });
+    let release!: () => void;
+    gh.statusHold = new Promise<void>((r) => (release = r));
+    const reads = gh.statusCalls;
+    await env.core.sessions.submit(s.id, 'go on');
+    await waitFor(() => gh.statusCalls, (n) => n > reads, 10000, "the turn end's PR poll");
+    let stopped = false;
+    const stop = env.core.stop().then(() => (stopped = true));
+    await new Promise((r) => setTimeout(r, 200));
+    expect(stopped).toBe(false);
+    release();
+    await stop;
+    expect(existsSync(fetchHead)).toBe(true);
   });
 
   it('finishes Merge & Close when the session was archived by hand while cleanup waited', async () => {
