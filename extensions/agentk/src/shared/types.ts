@@ -715,6 +715,11 @@ export interface Session {
   /** The coding agent the session runs on, fixed when it starts (`src/shared/harnesses.ts`). */
   harness: HarnessId;
   /**
+   * The model picked for it at the start (`CreateSessionRequest.model`), passed on every launch of
+   * its agent; null for the agent's own default.
+   */
+  model: string | null;
+  /**
    * AgentK's key for the session's conversation: Claude Code's session id (Resume continues it), and
    * for every harness the key of its Meko conversation.
    */
@@ -1077,6 +1082,11 @@ export interface AppState {
   workQueue: WorkItem[];
   /** The work queue's last sync and whether one is running. */
   workSync: WorkSync;
+}
+
+/** GET /api/harnesses/:id/models: the models a harness's CLI lists (`provider/model` for OpenCode). */
+export interface HarnessModels {
+  models: string[];
 }
 
 /** A coding agent sessions can run on (`[agents] default`, `[claude]`, `[opencode]`, `[kiro]` in config.toml). */
@@ -1499,6 +1509,10 @@ export interface StartFromLinkRequest {
   autoRun?: boolean;
   /** An issue's task: its own code review settings (CreateSessionRequest.review). Ignored for a PR. */
   review?: ReviewOverrides;
+  /** The agent the session runs on (CreateSessionRequest.harness). */
+  harness?: HarnessId;
+  /** The model its agent runs on (CreateSessionRequest.model). */
+  model?: string;
 }
 
 export interface StartFromLinkResult {
@@ -1665,14 +1679,23 @@ export interface AskAgentkTurn {
  * tools do (`src/server/actions.ts`).
  */
 export type AskAgentkAction =
-  /** `autoRun`: Run to merge (Session.autoRun), only with `start` `code`. */
-  | { type: 'start'; projectId: string; start: StartStage; name: string; prompt: string; autoRun?: boolean; review?: ReviewOverrides }
+  /**
+   * `autoRun`: Run to merge (Session.autoRun), only with `start` `code`. `harness` and `model`: the
+   * agent and its model (CreateSessionRequest's), which only AgentK's session tools give.
+   */
+  | {
+    type: 'start'; projectId: string; start: StartStage; name: string; prompt: string; autoRun?: boolean; review?: ReviewOverrides;
+    harness?: HarnessId; model?: string;
+  }
   /**
    * A PR or issue (`owner/name#N` or its link). In Do all (POST /api/actions/run) it runs as
    * `githubLinks.start` does, in `projectId` or the project the link fits: a PR as a Review a PR
    * session, an issue as a task at `start` (Design by default), refusing an issue a running task works on.
    */
-  | { type: 'link'; ref: string; projectId?: string; start?: 'design' | 'code'; autoRun?: boolean; review?: ReviewOverrides }
+  | {
+    type: 'link'; ref: string; projectId?: string; start?: 'design' | 'code'; autoRun?: boolean; review?: ReviewOverrides;
+    harness?: HarnessId; model?: string;
+  }
   | { type: 'go'; view: 'session'; projectId: string; sessionId: string }
   | { type: 'go'; view: 'home'; projectId: string }
   | { type: 'go'; view: 'usage' | 'settings' }
@@ -2349,6 +2372,13 @@ export interface CreateSessionRequest {
    * else the create is a 409 (NO_AGENT).
    */
   harness?: HarnessId;
+  /**
+   * The model the session's agent runs on, passed on every launch (Claude Code's and Kiro's
+   * `--model`, OpenCode's config): an alias (`opus`), a full id or OpenCode's `provider/model`,
+   * checked only for its form (`checkModel` in `src/shared/harnesses.ts`; a 400 otherwise). Left
+   * out or empty, the agent's own default.
+   */
+  model?: string;
   /** The first prompt. Left out, a task starting at Design or Code uses `name`; one starting at Explore starts with none. */
   prompt?: string;
   /** Defaults to the repo's default branch. */
@@ -2773,6 +2803,9 @@ export type TermServerMessage =
 //                                                           Outside /api, a write from another origin is refused)
 // POST   /api/harnesses/refresh                → HarnessStatus[]   (Check again in Settings: reads the version of every harness
 //        that's turned on again now (one that's off isn't read), and Meko's list of agents; a change is pushed to every page)
+// GET    /api/harnesses/:id/models             → HarnessModels   (the models New session offers for a harness whose list
+//        comes from its CLI (`HarnessCaps.models` `cli`: `opencode models`, `kiro-cli chat --list-models`), read at most
+//        every 10 minutes; an empty list when it can't be read, the harness is off, or its list is fixed (Claude Code's))
 // POST   /api/harnesses/:id/update             → HarnessStatus   (runs the harness's own updater (`claude update`,
 //        `opencode upgrade`, `kiro-cli update`), then reads its version again; 409 while one runs. Settings › Harness's
 //        Update OpenCode and Update Kiro call it; the UI updates Claude Code through POST /api/claude/update, whose answer carries the outcome)

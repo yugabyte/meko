@@ -560,3 +560,25 @@ export function deleteKiroSession(command: string, id: string, cwd: string): voi
 export async function kiroDeletesSettled(): Promise<void> {
   while (deleting.size) await Promise.all(deleting);
 }
+
+/**
+ * The model ids in `kiro-cli chat --list-models -f json` (a `ModelListResult`: `{ models, default_model }`,
+ * each model an object with its `model_id`, or a plain id), in its order, without repeats. Anything
+ * else reads as none.
+ */
+export function parseKiroModels(stdout: string): string[] {
+  let data: unknown;
+  try {
+    data = JSON.parse(stdout);
+  } catch {
+    return [];
+  }
+  const list = Array.isArray(data) ? data : isObject(data) && Array.isArray(data.models) ? data.models : [];
+  const ids = list.map((m: unknown) => {
+    if (typeof m === 'string') return m;
+    if (!isObject(m)) return '';
+    const id = m.model_id ?? m.modelId ?? m.id ?? m.model_name;
+    return typeof id === 'string' ? id.trim() : '';
+  });
+  return [...new Set(ids.filter(Boolean))];
+}

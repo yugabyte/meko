@@ -58,6 +58,13 @@ describe("Ask AgentK's answers", () => {
     ['an Open PR at Code', { type: 'openPr', sessionId: 's-code' }, { type: 'openPr', sessionId: 's-code', instructions: '' }, null],
     ['an Open PR at Design', { type: 'openPr', sessionId: 's-design' }, null, "Left out an Open PR for Agentic search: it isn't in Code."],
     ['an action AgentK doesn\'t have', { type: 'deploy' }, null, "Left out an action AgentK doesn't have."],
+    ['a task on an agent and model (the session tools give them)', { type: 'start', projectId: 'p1', name: 'Fast', prompt: 'x', harness: 'kiro', model: ' auto ' },
+      { type: 'start', projectId: 'p1', start: 'design', name: 'Fast', prompt: 'x', harness: 'kiro', model: 'auto' }, null],
+    ['a GitHub issue on a model', { type: 'link', ref: 'acme/demo#9', model: 'opus' }, { type: 'link', ref: 'acme/demo#9', model: 'opus' }, null],
+    ['a task on a model that can\'t be passed on', { type: 'start', projectId: 'p1', name: 'Fast', prompt: 'x', model: '-p' }, null,
+      'Left out "Fast": -p isn\'t a model name: use letters, digits and . _ : / @ [ ] - only.'],
+    ['a GitHub issue on an agent AgentK doesn\'t run', { type: 'link', ref: 'acme/demo#9', harness: 'codex' }, null,
+      "Left out acme/demo#9: codex isn't an agent AgentK runs (claude, opencode, kiro)."],
   ])('%s', (_what, raw, action, note) => {
     expect(checkActions([raw], projects)).toEqual({ actions: action ? [action] : [], notes: note ? [note] : [] });
   });

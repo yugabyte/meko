@@ -211,7 +211,9 @@ your phone can connect.
   installed and connected to Meko (Meko owns that connection: **Connect to Meko** in Settings ›
   Harness, or `meko agent connect <agent>`; one Meko doesn't find, or a Meko too old to list agents,
   isn't held back). Any one
-  alone is enough: with only Kiro, every session runs on Kiro. Settings › Harness
+  alone is enough: with only Kiro, every session runs on Kiro. **Model**, beside it, starts the
+  session on another model than the agent's own default (Opus, Sonnet, a model OpenCode or Kiro
+  lists, or any name), kept through every resume. Settings › Harness
   has a bar that picks an agent (Claude Code, OpenCode, Kiro) and shows its settings, and can stop
   offering an agent you have installed but don't want (**Offer … for new sessions**). An OpenCode
   session loads AgentK's own OpenCode plugin (nothing is written to your OpenCode config), which

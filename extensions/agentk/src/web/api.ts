@@ -21,7 +21,7 @@ import type {
   AttachDatapackRequest,
   ChangeSide,
   CloseSessionRequest,
-  ClaudeCodeStatus, HarnessStatus,
+  ClaudeCodeStatus, HarnessModels, HarnessStatus,
   CreateProjectRequest,
   CreateSessionRequest,
   CloneRepoRequest,
@@ -263,6 +263,7 @@ export const api = {
   updateClaude: () => post<ClaudeCodeStatus>('/api/claude/update'),
   refreshHarnesses: () => post<HarnessStatus[]>('/api/harnesses/refresh'),
   updateHarness: (id: HarnessId) => post<HarnessStatus>(`/api/harnesses/${id}/update`),
+  harnessModels: (id: HarnessId) => get<HarnessModels>(`/api/harnesses/${id}/models`),
   update: () => get<UpdateStatus>('/api/update'),
   updateNotes: (from: string, to: string) => get<ReleaseNotes>(`/api/update/notes?${new URLSearchParams({ from, to })}`),
 };

@@ -777,6 +777,9 @@ const MIGRATIONS: string[] = [
   // 48: when AgentK stopped a session's agent for sitting idle (SessionManager.stopIdle); recovery
   // leaves such a session stopped, and any launch clears it.
   `ALTER TABLE sessions ADD COLUMN idle_stopped_at INTEGER;`,
+  // 49: the model picked for the session's agent at the start (CreateSessionRequest.model), passed on
+  // every launch; NULL for the agent's own default.
+  `ALTER TABLE sessions ADD COLUMN model TEXT;`,
 ];
 
 export function openDb(path: string): Db {

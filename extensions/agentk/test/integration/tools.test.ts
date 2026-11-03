@@ -146,6 +146,35 @@ describe("AgentK's session tools through agentk mcp (real session host + git, fa
     ]);
   });
 
+  it('lists the agents with their models, and starts sessions on the agent and model asked for', async () => {
+    const t = await connect(lead);
+    const listed = JSON.parse((await t.call('list')).text);
+    expect(listed.agents).toEqual([{ id: 'claude', name: 'Claude Code', default: true, models: ['fable', 'opus', 'sonnet', 'haiku'] }]);
+
+    issue(7, 'Speed up');
+    const started = await t.call('start_sessions', {
+      sessions: [
+        { name: 'Fast', prompt: 'make it fast', model: 'haiku' },
+        { ref: 'acme/demo#7', agent: 'claude', model: 'claude-sonnet-5-5' },
+        // One on an agent that isn't available fails alone (a malformed one is left out: test/unit/ask-agentk.test.ts).
+        { name: 'On Kiro', prompt: 'x', agent: 'kiro' },
+      ],
+    });
+    expect(started.isError).toBe(false);
+    expect(started.text.split('\n')).toEqual([
+      'Started "Fast" in Demo at Design on Claude Code (Haiku).',
+      'Started a task on acme/demo#7, "#7 Speed up", in Demo on Claude Code (claude-sonnet-5-5).',
+      expect.stringMatching(/^Couldn't start "On Kiro": Kiro isn't available for new sessions/),
+    ]);
+    const byName = (name: string) => env.core.sessions.listForProject(projectId).find((s) => s.name === name)!;
+    expect(byName('Fast')).toMatchObject({ harness: 'claude', model: 'haiku' });
+    expect(byName('#7 Speed up')).toMatchObject({ harness: 'claude', model: 'claude-sonnet-5-5' });
+    const launch = (s: { claudeSessionId: string }) =>
+      waitFor(() => readJsonl<{ args: string[] }>(join(env.fakeDir, 'argv.jsonl')).find((a) => a.args.includes(s.claudeSessionId))?.args, (a) => !!a, 10000, 'launch');
+    expect((await launch(byName('Fast')))!.join(' ')).toContain('--model haiku');
+    expect((await launch(byName('#7 Speed up')))!.join(' ')).toContain('--model claude-sonnet-5-5');
+  });
+
   it('refuses calls with the tools turned off, from a session on an untrusted PR head, and outside a session', async () => {
     // Claude Code sessions launch with the tools' MCP server and skill plugin while they're on, and without them once they're off.
     const launches = () => readJsonl<{ args: string[] }>(join(env.fakeDir, 'argv.jsonl')).map((l) => l.args);
