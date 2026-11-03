@@ -72,12 +72,13 @@ describe('joinedPartSelected', () => {
 describe('reviewOpens', () => {
   const task = (state: string, sessionId: string | null = 'rv') => ({ codeReview: { state, sessionId } }) as Session;
   // The review's terminal while it runs (a failed one keeps its session for Retry); its findings once
-  // its session is gone, or while it sits idle waiting for the task's fixes.
+  // its session is gone, or while it sits idle waiting for the user's check or the task's fixes.
   it.each([
     ['preparing', 'rv', 'session'],
     ['sweeping', 'rv', 'session'],
     ['scoring', 'rv', 'session'],
     ['failed', 'rv', 'session'],
+    ['triage', 'rv', 'findings'],
     ['fixing', 'rv', 'findings'],
     ['done', null, 'findings'],
     ['cancelled', null, 'findings'],

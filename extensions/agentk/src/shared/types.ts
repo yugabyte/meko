@@ -336,7 +336,7 @@ export interface DailyUsage {
 export interface CodeReviewCounts {
   /** Reviews started; a Retry goes on in its review, so it isn't another. */
   runs: number;
-  /** By the review's state now: describing, preparing, sweeping, scoring and fixing are `running`. */
+  /** By the review's state now: describing, preparing, sweeping, scoring, triage and fixing are `running`. */
   byOutcome: { done: number; failed: number; cancelled: number; running: number };
   /** Done reviews that kept no finding. */
   lgtm: number;
@@ -1849,6 +1849,8 @@ export interface Settings {
   codeReviewRounds: number;
   /** `[code_review] depth`: sweeps in each review (1 to MAX_DEPTH). */
   codeReviewDepth: number;
+  /** `[code_review] check`: a round's findings wait for you to note or dismiss them before they go to the task (Run to merge never waits). */
+  codeReviewCheck: boolean;
 }
 
 /** The longest the work queue's sync interval can be (`Settings.workQueueSyncMinutes`), in minutes: a day. */
@@ -2063,6 +2065,12 @@ export interface HeldReview {
   comments: HeldReviewComment[];
   /** Inline comments beyond `comments`, left out (read them on GitHub). */
   moreComments: number;
+}
+
+/** PATCH /api/sessions/:id/code-review/findings/:key: a field left out keeps its value; the note is trimmed and clipped to MAX_FINDING_NOTE. */
+export interface FindingChoiceRequest {
+  dismissed?: boolean;
+  note?: string;
 }
 
 export interface HeldReviewsRequest {
@@ -2452,7 +2460,9 @@ export type SessionAction =
   /** A task's failed or cancelled code review: review again, reusing the steps already reported. */
   | 'review-retry'
   /** A task's failed or cancelled code review (not one the user ran): send the PR prompt without a `me_ak_review:` line. */
-  | 'review-open-anyway';
+  | 'review-open-anyway'
+  /** A task's code review whose findings wait on the user (`triage`): send them to the task, with the user's notes, leaving out the dismissed ones. */
+  | 'review-send';
 
 // ---- WebSockets ----
 //
@@ -2673,7 +2683,9 @@ export type TermServerMessage =
 //        (409 when none runs); review-retry reviews again, reusing the steps already reported, and review-open-anyway sends
 //        the PR prompt without a me_ak_review line: both 409 unless the review failed or was cancelled; review-retry
 //        409 too for a review the user ran in another stage than the task's now, and review-open-anyway for any review
-//        the user ran)
+//        the user ran. review-send sends the findings that wait on the user (a review in triage) to the task, with
+//        their notes and without the dismissed ones: the fix prompt through the prompt queue, or the PR prompt; 409
+//        when none wait, or when the task left the review's stage)
 // POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to, a
 //        missing task, or instructions that aren't text or are too long; 409 while AgentK is mid-turn, in Merge & Close,
 //        or a prompt (the stage's, or the user's instructions) is due and Claude is waiting or exited, and for a move to
@@ -2691,6 +2703,9 @@ export type TermServerMessage =
 //        400 for an answer that doesn't fit them, 409 once they're gone: answered in the terminal, or Claude moved on)
 // GET    /api/sessions/:id/code-review          → CodeReviewDetail   (a task's latest code review, or a code-review
 //        session's own, with every candidate, kept or dropped, and what the task did with it; 404 when it has none)
+// PATCH  /api/sessions/:id/code-review/findings/:key FindingChoiceRequest → CodeReviewFinding   (the user's note on a
+//        finding of the round that waits on them, or its dismissal, a field left out keeping its value; no note and no
+//        dismissal clears it; 400 for a field of the wrong type, 404 for a key that isn't a kept finding of that round, 409 when no findings wait)
 // GET    /api/sessions/:id/discard-check       → DiscardCheck
 // GET    /api/sessions/:id/changes?commit=     → SessionChanges   (commit: one of the branch's commits alone, by full sha)
 // GET    /api/sessions/:id/changes/image?path=&side=old|new&commit= → image bytes (previewable types only)

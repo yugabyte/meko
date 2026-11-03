@@ -301,9 +301,9 @@ your phone can connect.
   which the review checks the change against and the PR opens with; meanwhile, and while the review
   runs, the task shows in Review & PR. Then AgentK reviews the change on your computer with the cloud reviewer's algorithm
   (Sagittarius 3.0: five specialist passes and a scorer per finding; or the quicker Sirius 1.0), in a
-  review session shown as a magnifier on the task's tab, which opens the review's terminal while its passes run and its findings once the task is fixing them or the review is done. The task fixes what it finds, and the PR
-  says how it went (`me_ak_review:2 blockers,1 major addressed;Sagittarius3.0`, or `me_ak_review:LGTM;Sirius1.0`). Strategy,
-  re-review rounds and depth are in Settings, the project's settings and each session's own.
+  review session shown as a magnifier on the task's tab, which opens the review's terminal while its passes run and its findings once they wait on you, the task is fixing them or the review is done. Each round's findings wait for you first: add a note to any of them, or dismiss some with a note, then **Send to AgentK**, and the task fixes the rest (with Run to merge on, or **Check the findings first** set to No, they go to it at once). The PR
+  says how it went (`me_ak_review:2 blockers,1 major addressed;Sagittarius3.0`, or `me_ak_review:LGTM;Sirius1.0`); findings you dismissed aren't counted. Strategy,
+  re-review rounds, depth and Check the findings first are in Settings, the project's settings and each session's own.
   You can also run the review whenever you like, in Code or on the open PR in Review & PR: with
   **Run code review** in the session's ⋯ menu (the ⋯ sheet on a phone), from the command palette,
   or with **Review again** on its findings (which also has Cancel and Retry for it). One run in Code is the one Open PR uses, so the PR

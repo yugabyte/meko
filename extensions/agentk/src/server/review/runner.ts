@@ -2,8 +2,9 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import {
-  DEFAULT_STRATEGY, DESCRIBE_INTERRUPTED, DESCRIBE_LOST, MIN_SWEEPS, REVIEW_LEFT_CODE, REVIEW_LEFT_REVIEW, YOU_CANCELLED, addCounts, countsText, meAkReviewLine, noCounts, resolveReview, reviewHolds, reviewRunning, strategyName, totalCount,
-  type CodeReviewDetail, type CodeReviewFinding, type CodeReviewState, type CodeReviewSummary, type FindingOutcome,
+  DEFAULT_STRATEGY, DESCRIBE_INTERRUPTED, DESCRIBE_LOST, DISMISSED_BY_YOU, MAX_FINDING_NOTE, MIN_SWEEPS, REVIEW_LEFT_CODE, REVIEW_LEFT_REVIEW, YOU_CANCELLED, countsText, meAkReviewLine, noCounts, resolveReview,
+  reviewHolds, reviewRunning, strategyName, totalCount,
+  type CodeReviewDetail, type CodeReviewFinding, type CodeReviewState, type CodeReviewSummary, type FindingChoice, type FindingOutcome,
   type ReviewSettings, type ReviewStrategyId, type SeverityCounts,
 } from '../../shared/codereview.js';
 import { HARNESS_CAPS, harnessOf, type HarnessId } from '../../shared/harnesses.js';
@@ -91,7 +92,7 @@ interface ReviewRow {
 }
 
 /** The running states: a review in one of them holds the task's Open PR. */
-const RUNNING: CodeReviewState[] = ['describing', 'preparing', 'sweeping', 'scoring', 'fixing'];
+const RUNNING: CodeReviewState[] = ['describing', 'preparing', 'sweeping', 'scoring', 'triage', 'fixing'];
 
 /** How a fix prompt ends: in Code or Review & PR, with a re-review to follow (`more`) or not. */
 const fixAfter = (stage: 'code' | 'review', more: boolean): FixAfter => (stage === 'review' ? (more ? 'hold-push' : 'push') : more ? 'review-again' : 'open-later');
@@ -101,6 +102,25 @@ const holds = (r: ReviewRow | undefined) => reviewHolds(r && { ...r, onDemand: r
 
 /** A finished Code review whose PR prompt hasn't gone, which Open PR sends with its line rather than reviewing again. */
 const unsent = (r: ReviewRow | undefined): boolean => r?.state === 'done' && !r.finished_at && !r.stale && r.stage === 'code';
+
+/** Every round's kept findings, by severity: what the `me_ak_review:` line adds up (`counts_json`). */
+function keptCounts(findings: CodeReviewFinding[]): SeverityCounts {
+  const counts = noCounts();
+  for (const f of findings) if (f.kept) counts[f.severity]++;
+  return counts;
+}
+
+/**
+ * The user's choice for a finding, from a request: `{ dismissed?: boolean, note?: string }` over
+ * what it had (`was`), a field left out keeping its value; the note trimmed and clipped.
+ */
+function readChoice(body: unknown, was: FindingChoice | null | undefined): FindingChoice {
+  const b = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
+  if (b.dismissed !== undefined && typeof b.dismissed !== 'boolean') throw new HttpError(400, 'dismissed must be true or false.');
+  if (b.note !== undefined && typeof b.note !== 'string') throw new HttpError(400, 'note must be text.');
+  const note = typeof b.note === 'string' ? [...b.note.trim()].slice(0, MAX_FINDING_NOTE).join('') : was?.note ?? '';
+  return { dismissed: typeof b.dismissed === 'boolean' ? b.dismissed : !!was?.dismissed, note };
+}
 
 
 /** What the subagent definitions say, for each harness that has them (`ReviewLaunch`). */
@@ -232,7 +252,7 @@ export class CodeReviews {
     if (r.state === 'sweeping' || r.state === 'scoring') findings.push(...this.pendingFindings(r));
     return {
       review: this.summarize(r),
-      settings: { strategy: r.strategy as ReviewStrategyId, rounds: r.rounds, depth: r.depth },
+      settings: { strategy: r.strategy as ReviewStrategyId, rounds: r.rounds, depth: r.depth, check: this.settingsFor(this.core.sessions.row(r.task_id)).check },
       datapacks: json<ReviewDatapack[]>(r.datapacks_json, []).map((d) => ({ name: d.name, id: d.id, gotchas: d.gotchas })),
       notes: json<{ round: number; text: string }[]>(r.notes_json, []),
       findings,
@@ -261,6 +281,12 @@ export class CodeReviews {
   runningIn(taskId: string, stage: 'code' | 'review'): boolean {
     const r = this.latest(taskId);
     return !!r && r.stage === stage && RUNNING.includes(r.state);
+  }
+
+  /** The task's latest review, from `stage`, waits for the user to send its findings (`triage`). */
+  waitsOnYouIn(taskId: string, stage: 'code' | 'review'): boolean {
+    const r = this.latest(taskId);
+    return r?.state === 'triage' && r.stage === stage;
   }
 
   /** The PR line a finished review gives the task's PR, or null when its last review didn't finish (or none ran). */
@@ -600,13 +626,15 @@ export class CodeReviews {
     return out;
   }
 
-  /** The earlier rounds of this review, with what the task did with each finding. */
+  /** The earlier rounds of this review, with what the task did with each finding, and what the user said or dismissed. */
   private prior(r: ReviewRow): PriorRound[] {
-    const findings = json<CodeReviewFinding[]>(r.findings_json, []).filter((f) => f.kept && f.round < r.round);
+    const findings = json<CodeReviewFinding[]>(r.findings_json, []).filter((f) => (f.kept || f.dropped === DISMISSED_BY_YOU) && f.round < r.round);
     const rounds = [...new Set(findings.map((f) => f.round))];
     return rounds.map((round) => ({
       round,
-      findings: findings.filter((f) => f.round === round).map((f) => ({ file: f.file, line: f.line, severity: f.severity, comment: f.comment, outcome: f.outcome })),
+      findings: findings.filter((f) => f.round === round).map((f) => ({
+        file: f.file, line: f.line, severity: f.severity, comment: f.comment, outcome: f.outcome, dismissed: !f.kept, note: f.you?.note ?? '',
+      })),
     }));
   }
 
@@ -804,7 +832,7 @@ export class CodeReviews {
     }
     const r = this.latest(row.id);
     if ((r?.state !== 'describing' && r?.state !== 'fixing') || r.stage !== 'code') return false;
-    // Its fix prompt waits in the queue (one the user ran): the end of the turn that takes it moves it on (Lifecycle).
+    // Its fix prompt waits in the queue (one the user ran, or one sent from triage): the end of the turn that takes it moves it on (Lifecycle).
     if (r.state === 'fixing' && this.core.lifecycle.codeReviewPending(row.id)) return true;
     // An interrupted turn is the user stepping in: the review waits for the next turn to end, or Open
     // PR. A describing review keeps why, so a restart leaves it waiting too.
@@ -818,11 +846,15 @@ export class CodeReviews {
 
   /**
    * The turn that took a review's fix prompt from the queue ended (Lifecycle, at its `local-review`
-   * entry): the next round reviews the change again.
+   * entry): the next round reviews the change again. Past an interrupt, an Open PR's review in Code
+   * waits, as it does when its fix prompt goes straight to the task (onTurnEnd): the next turn's end,
+   * or Open PR (the gate's Review now), moves it on.
    */
-  codeReviewTurnEnded(taskId: string): void {
+  codeReviewTurnEnded(taskId: string, interrupted = false): void {
     const r = this.latest(taskId);
-    if (r?.state === 'fixing') this.kick(r.id, () => this.nextRound(r.id));
+    if (r?.state !== 'fixing') return;
+    if (interrupted && r.purpose === 'pr' && r.stage === 'code') return;
+    this.kick(r.id, () => this.nextRound(r.id));
   }
 
   /** The review session's turn ended: every step reported, or ask again once for the missing ones. */
@@ -900,8 +932,9 @@ export class CodeReviews {
 
   /**
    * A round is done: the scorers' verdicts applied (refuted findings dropped, unverified ones kept
-   * at MIN_CONFIDENCE and above), then Validate. Kept findings go to the task: to fix before a
-   * re-review while rounds are left, else with the PR prompt.
+   * at MIN_CONFIDENCE and above), then Validate. Kept findings go to the task (`handOff`), or first
+   * wait for the user to note or dismiss them (`triage`) when the task's settings check them and Run
+   * to merge is off. Run again for the same round (a Retry), it replaces that round's findings.
    */
   private async finishRound(id: string): Promise<void> {
     const r = this.mustReview(id);
@@ -924,7 +957,7 @@ export class CodeReviews {
       if (post.includes(c) || dropReason.has(c)) continue;
       dropReason.set(c, c.refuted ? 'refuted' : `confidence below ${MIN_CONFIDENCE}`);
     }
-    const findings = json<CodeReviewFinding[]>(r.findings_json, []);
+    const findings = json<CodeReviewFinding[]>(r.findings_json, []).filter((f) => f.round !== r.round);
     for (const c of cands) {
       const s = scores.get(`r${r.round}c${keyOf.get(c)!.split(':')[1]}`);
       findings.push({
@@ -933,18 +966,43 @@ export class CodeReviews {
         reason: s ? (s.verdict === 'refuted' ? s.refutation : s.reason) : null, kept: post.includes(c), dropped: post.includes(c) ? null : dropReason.get(c) ?? null, outcome: null,
       });
     }
-    const counts = addCounts(json<SeverityCounts>(r.counts_json, noCounts()), countsOf(post));
-    this.set(id, { findings_json: JSON.stringify(findings), counts_json: JSON.stringify(counts), last_kept: post.length });
+    this.set(id, { findings_json: JSON.stringify(findings), counts_json: JSON.stringify(keptCounts(findings)), last_kept: post.length });
     const task = this.core.sessions.row(r.task_id);
     const roundCounts = countsOf(post);
     this.core.sessions.event(task.id, 'review', `Code review, round ${r.round}: ${totalCount(roundCounts) ? countsText(roundCounts) : 'LGTM'}`);
+    if (post.length && this.checksFindings(task)) {
+      this.set(id, { state: 'triage' });
+      this.core.sessions.event(task.id, 'review', `Round ${r.round}'s findings wait on you: add notes or dismiss some, then send them to AgentK`);
+      this.core.sessions.notifyUser(task.id, 'Code review findings', `Round ${r.round} found ${countsText(roundCounts)}. Check them, then send them to AgentK.`);
+      this.core.lifecycle.codeReviewWaitsChanged(task.id);
+      return;
+    }
+    await this.handOff(id);
+  }
+
+  /** A round's findings wait for the user: the task's review settings check them, and Run to merge is off (read now, not from `by`). */
+  private checksFindings(task: SessionRow): boolean {
+    return this.settingsFor(task).check && !sessionRow(this.db, task.id)?.auto_run;
+  }
+
+  /**
+   * The round's kept findings go to the task: to fix before a re-review while rounds are left, else
+   * with the PR prompt (a review the user ran: as a fix prompt, as there's no PR prompt to carry
+   * them). With none kept (or every one dismissed), the review is done. `queued`: the fix prompt goes
+   * through the task's prompt queue, after any turn of the user's (it comes from `triage`, where the
+   * user may have been working with the task).
+   */
+  private async handOff(id: string, queued = false): Promise<void> {
+    const r = this.mustReview(id);
+    const task = this.core.sessions.row(r.task_id);
+    const post = json<CodeReviewFinding[]>(r.findings_json, []).filter((f) => f.round === r.round && f.kept);
     const more = r.round <= r.rounds;
     // A review the user ran gives the task its last round's findings to fix too, as there's no PR prompt to carry them.
     if (post.length && (more || r.purpose === 'demand')) {
       if (more) this.set(id, { state: 'fixing' });
       await this.core.lifecycle.sendReviewFix(task, {
-        strategy: strategyName(r.strategy), round: r.round, findings: this.findingsText(this.mustReview(id), r.round), outcomeHow: this.outcomeHow(task), moved: r.lead,
-        description: r.stage === 'code' ? this.descriptionFile(task) : null, why: r.purpose === 'demand' ? 'demand' : 'pr', after: fixAfter(r.stage, more),
+        strategy: strategyName(r.strategy), round: r.round, findings: this.findingsText(r, r.round), outcomeHow: this.outcomeHow(task), moved: r.lead,
+        description: r.stage === 'code' ? this.descriptionFile(task) : null, why: r.purpose === 'demand' ? 'demand' : 'pr', after: fixAfter(r.stage, more), queued,
       });
       if (r.lead) this.set(id, { lead: null });
       if (more) return;
@@ -956,6 +1014,61 @@ export class CodeReviews {
     await this.finish(id);
   }
 
+  /**
+   * The `review-send` action: the findings that waited on the user (`triage`) go to the task, with
+   * their notes, and the dismissed ones leave the prompt and the counts. `auto`: Run to merge was
+   * turned on while they waited.
+   */
+  async send(taskId: string, auto = false): Promise<void> {
+    const r = this.latest(taskId);
+    if (r?.state !== 'triage') throw new HttpError(409, 'No code review findings wait on you.');
+    const task = this.core.sessions.row(taskId);
+    if (task.desired !== 'running' || task.stage !== r.stage) throw new HttpError(409, `The code review ran in ${r.stage === 'code' ? 'Code' : 'Review & PR'}. Move the session back there first.`);
+    this.kick(r.id, async () => {
+      const cur = this.mustReview(r.id);
+      if (cur.state !== 'triage') return;
+      const findings = json<CodeReviewFinding[]>(cur.findings_json, []);
+      let sent = 0;
+      let dismissed = 0;
+      for (const f of findings) {
+        if (f.round !== cur.round || !f.kept) continue;
+        if (f.you?.dismissed) {
+          f.kept = false;
+          f.dropped = DISMISSED_BY_YOU;
+          dismissed++;
+        } else sent++;
+      }
+      // The PR prompt (the last round's) goes as the user's: they sent it.
+      this.set(r.id, { findings_json: JSON.stringify(findings), counts_json: JSON.stringify(keptCounts(findings)), last_kept: sent, ...(auto ? {} : { by: 'you' }) });
+      const what = `${sent} finding${sent === 1 ? '' : 's'}${dismissed ? ` (${dismissed} dismissed)` : ''}`;
+      this.core.sessions.event(taskId, 'review', auto ? `Run to merge sent round ${cur.round}'s ${what} to AgentK` : sent ? `You sent ${what} to AgentK` : `You dismissed round ${cur.round}'s findings`);
+      await this.handOff(r.id, true);
+      this.core.lifecycle.codeReviewWaitsChanged(taskId);
+    });
+    await this.settled(r.id);
+  }
+
+  /** Run to merge was turned on: findings waiting on the user go to the task as they are. */
+  async autoSend(taskId: string): Promise<void> {
+    if (this.latest(taskId)?.state === 'triage') await this.send(taskId, true);
+  }
+
+  /**
+   * PATCH /api/sessions/:id/code-review/findings/:key: the user's note on a finding of the round that
+   * waits on them, or its dismissal (with an optional note); a field left out keeps its value. An
+   * empty note and no dismissal clears it.
+   */
+  setFinding(taskId: string, key: string, body: unknown): CodeReviewFinding {
+    const r = this.latest(taskId);
+    if (r?.state !== 'triage') throw new HttpError(409, "No code review findings wait on you: they've gone to AgentK, or the review stopped.");
+    const findings = json<CodeReviewFinding[]>(r.findings_json, []);
+    const f = findings.find((x) => x.key === key && x.round === r.round && x.kept);
+    if (!f) throw new HttpError(404, `The code review has no finding ${key} waiting on you.`);
+    const choice = readChoice(body, f.you);
+    f.you = choice.dismissed || choice.note ? choice : null;
+    this.set(r.id, { findings_json: JSON.stringify(findings) });
+    return f;
+  }
 
   /** The task fixed a round's findings: the next round reviews the change again. */
   private async nextRound(id: string): Promise<void> {
@@ -1021,7 +1134,8 @@ export class CodeReviews {
   private findingsText(r: ReviewRow, round: number): string {
     return json<CodeReviewFinding[]>(r.findings_json, []).filter((f) => f.round === round && f.kept).map((f) => {
       const gotchas = f.gotchas.length ? ` (Meko gotcha ${f.gotchas.join(', ')})` : '';
-      return `- [${f.key}] \`${f.file}:${f.line}\` **${f.severity}**${gotchas}: ${f.comment.trim()}`;
+      const note = f.you?.note ? `\n  - The user's note: ${f.you.note.replace(/\s*\n\s*/g, ' ')}` : '';
+      return `- [${f.key}] \`${f.file}:${f.line}\` **${f.severity}**${gotchas}: ${f.comment.trim()}${note}`;
     }).join('\n');
   }
 
@@ -1084,6 +1198,8 @@ export class CodeReviews {
     this.core.sessions.event(r.task_id, 'review', `Code review failed: ${why}. ${next}`);
     this.core.sessions.notifyUser(r.task_id, 'Code review failed', `${why}. ${next}`);
     this.core.lifecycle.reviewStopped(r.task_id, r.purpose === 'pr');
+    // Its findings no longer wait on the user: the merge blockers are read again.
+    if (r.state === 'triage') this.core.lifecycle.codeReviewWaitsChanged(r.task_id);
     this.core.changed();
   }
 
@@ -1095,6 +1211,8 @@ export class CodeReviews {
     this.core.sessions.event(taskId, 'review', `You cancelled the code review.${r.purpose === 'demand' ? '' : ' Retry it, or open the PR anyway.'}`);
     if (r.session_id) await this.archiveSession(r.session_id);
     this.core.lifecycle.reviewStopped(taskId, r.purpose === 'pr');
+    // Its findings no longer wait on the user: the merge blockers are read again.
+    if (r.state === 'triage') this.core.lifecycle.codeReviewWaitsChanged(taskId);
     this.core.changed();
   }
 

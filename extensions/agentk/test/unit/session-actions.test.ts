@@ -57,6 +57,19 @@ describe('sessionActions', () => {
     expect(ids(session({ codeReview: review() }), 'menu')).not.toContain('review-cancel');
   });
 
+  it.each([
+    ['Code, holding Open PR: the gate has Send', review({ state: 'triage' }), 'code', false],
+    ['Review & PR: no gate shows it', review({ state: 'triage', stage: 'review' }), 'review', true],
+    ['a review you ran', review({ state: 'triage', onDemand: true }), 'code', true],
+  ] as const)('offers Send the findings while they wait on you (%s)', (_, r, stage, onMenu) => {
+    const waiting = session({ stage, codeReview: r });
+    expect(ids(waiting, 'menu').includes('review-send')).toBe(onMenu);
+    expect(ids(waiting, 'sheet')).toContain('review-send');
+    expect(ids(waiting, 'palette')).toContain('review-send');
+    expect(item(waiting, 'review-send', { acting: true })).toMatchObject({ disabled: true, primary: true });
+    expect(item(session({ codeReview: review({ state: 'fixing' }) }), 'review-send')).toBeUndefined();
+  });
+
   it('puts a review you ran on the menu, since the gate never shows it', () => {
     const running = session({ codeReview: review({ onDemand: true }) });
     expect(ids(running, 'menu')).toContain('review-cancel');

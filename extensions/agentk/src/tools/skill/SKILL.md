@@ -36,7 +36,7 @@ the stages Explore → Design → Code → Review & PR → Merge & Close. Users 
    - Add `"review"` only with what the user asked for of the task's code review before its
      PR opens, leaving the rest to the project's settings: `"depth": 3` for "3 deep reviews",
      `"rounds": 1` for "review again after the fixes", `"strategy": "sirius-1.0"` for the quick one,
-     `"strategy": "off"` for no review. "Start a code session with 3 deep reviews and run it to
+     `"strategy": "off"` for no review, `"check": false` for "fix the findings without asking me". "Start a code session with 3 deep reviews and run it to
      merge" is `{ name, prompt, "stage": "code", "autoRun": true, "review": { "depth": 3 } }`.
    - `review_report`, `review_score` and `review_outcome` belong to AgentK's code review: use
      them only when an AgentK prompt or a review step's file tells you to.

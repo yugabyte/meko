@@ -339,6 +339,7 @@ export function ProjectView({
       'review-open': () => openReview(session),
       'review-findings': () => setPanel('findings'),
       'review-back': () => parent && navigate({ view: 'project', projectId: project.id, sessionId: parent.id }),
+      'review-send': () => void act('review-send'),
       'review-cancel': () => void act('review-cancel'),
       'review-retry': () => void act('review-retry'),
       'review-open-anyway': () => void act('review-open-anyway'),
@@ -818,6 +819,22 @@ function reviewGate(
           Cancel
         </button>
         {reviewNow(r.detail === DESCRIBE_LOST ? 'Ask for the PR description again' : 'Start the review with the PR description as it is now')}
+      </span>
+    );
+  }
+  if (r.state === 'triage') {
+    return (
+      <span className="gate-group">
+        <span className="gate-pill warn" title={`Round ${r.round}'s findings wait for you: add notes to them or dismiss some in the findings, then send them to AgentK`}>
+          Findings wait on you
+        </span>
+        {open}
+        <button className="btn small" disabled={blocked} onClick={() => onAct('review-cancel')} title="Stop the review; then Retry or Open anyway">
+          Cancel
+        </button>
+        <button className="gate" disabled={blocked} onClick={() => onAct('review-send')} title="Send the findings to AgentK with your notes, leaving out the ones you dismissed">
+          Send to AgentK
+        </button>
       </span>
     );
   }

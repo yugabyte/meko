@@ -1,6 +1,6 @@
 // The session actions the desktop ⋯ menu, the phone's ⋯ sheet and the command palette offer, in one
 // list: which exist for a session, when, with what label and why one waits. Pure, so it's unit-tested.
-import { reviewHolds, reviewRunning, reviewSegmentLabel } from '../shared/codereview';
+import { reviewHolds, reviewRunning, reviewSegmentLabel, reviewWaitsOnYou } from '../shared/codereview';
 import { moveBlockedIn } from '../shared/stages';
 import type { Session } from '../shared/types';
 import type { LabelPart } from './palette';
@@ -15,7 +15,7 @@ export type Surface = 'menu' | 'sheet' | 'palette';
 
 /** The palette's ids are kept from before the list, so its items keep their names. */
 export type SessionActionId =
-  | 'answer' | 'resume' | 'review-open' | 'review-findings' | 'review-back' | 'review-cancel'
+  | 'answer' | 'resume' | 'review-open' | 'review-findings' | 'review-back' | 'review-send' | 'review-cancel'
   | 'review-retry' | 'review-open-anyway' | 'review-run' | 'review-settings' | 'design' | 'pr-link'
   | 'open-pr' | 'merge-skip-learn' | 'share' | 'learn' | 'move-session' | 'find-terminal'
   | 'rename-session' | 'session-to-top' | 'work-link' | 'work-show' | 'work-unlink' | 'attach-files'
@@ -103,6 +103,12 @@ export function sessionActions(s: Session, ctx: SessionActionContext): SessionAc
     // While the review holds Open PR, the Code gate shows its Cancel, Retry and Open anyway.
     const review: Surface[] = reviewGatesPr(s) ? ['sheet', 'palette'] : ALL;
     if (r) add({ id: 'review-open', group: 'review', label: reviewSegmentLabel(r), opens: true, on: ['menu', 'sheet'] });
+    if (r && reviewWaitsOnYou(r)) {
+      add({
+        id: 'review-send', group: 'review', label: 'Send the findings to AgentK', palette: ['Send the code review findings of ', name, ' to AgentK'],
+        keywords: 'code review findings send triage notes', primary: true, hint: actingWait, disabled: ctx.acting, on: review,
+      });
+    }
     if (r && (reviewRunning(r) || demand.cancel)) {
       add({
         id: 'review-cancel', group: 'review', label: 'Cancel the code review', palette: ['Cancel the code review of ', name],

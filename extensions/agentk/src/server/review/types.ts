@@ -151,7 +151,11 @@ export interface ReviewIssue {
 /** One earlier round of this review, as the next round is told about it (the cloud's prior rounds). */
 export interface PriorRound {
   round: number;
-  findings: { file: string; line: number; severity: Severity; comment: string; outcome: FindingOutcome | null }[];
+  /**
+   * `dismissed`: the user dismissed it, so the task never had it; `note`: what the user said of it ('' for nothing).
+   * Both absent in a context saved before the user could.
+   */
+  findings: { file: string; line: number; severity: Severity; comment: string; outcome: FindingOutcome | null; dismissed?: boolean; note?: string }[];
 }
 
 /** Everything the base prompt is built from, apart from the diff. */

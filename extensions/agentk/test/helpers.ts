@@ -217,6 +217,7 @@ export function tempDir(prefix: string): string {
  * `kiro`: offer Kiro, run by the fake (`fake-kiro.mjs`) with its home in the test's folder; `opencode`:
  * offer OpenCode, run by `fake-opencode.mjs`. Both off by default. `review`: the code review before
  * a PR opens on its default strategy (`[code_review]`); off by default, so Open PR sends the PR prompt at once.
+ * Its findings go to the task at once (`check` off): a session's `review: { check: true }` makes them wait on the user.
  */
 export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?: boolean; opencode?: boolean; review?: boolean } = {}): Promise<TestEnv> {
   const home = tempDir('akl-test-');
@@ -244,6 +245,7 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
   cfg.meko.apiKey = 'test-key';
   cfg.meko.captureTranscripts = opts.capture !== false;
   if (!opts.review) cfg.codeReview.strategy = 'off';
+  cfg.codeReview.check = false;
   const db = openDb(join(paths.home, 'state.db'));
   const meko = stubMeko();
   const mekoApi = fakeMekoApi();

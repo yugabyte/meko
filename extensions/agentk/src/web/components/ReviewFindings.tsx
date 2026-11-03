@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
-import { strategyName, type CodeReviewDetail, type CodeReviewFinding } from '../../shared/codereview';
-import type { Session, SessionAction } from '../../shared/types';
+import { useEffect, useRef, useState } from 'react';
+import { DISMISSED_BY_YOU, MAX_FINDING_NOTE, reviewWaitsOnYou, strategyName, type CodeReviewDetail, type CodeReviewFinding } from '../../shared/codereview';
+import type { FindingChoiceRequest, Session, SessionAction } from '../../shared/types';
 import { api, ApiError, errorMessage } from '../api';
+import { useTouch } from '../hooks/useMedia';
 import { canRunReview, findingGroups, findingsCountsText, findingsReviewing, onDemandControls } from '../util';
 import { Busy } from './common';
 import { SidePanel } from './SidePanel';
@@ -12,7 +13,9 @@ import { SidePanel } from './SidePanel';
  * gotchas it credits and what the task did with it; the passes' notes and the datapacks the
  * MEKO.md files listed, by name with the gotchas one tagged (what each holds is for the review's
  * prompt, not the panel). Fetched again whenever the review moves on. While the review runs it reads
- * Reviewing, under the findings so far, with a bar along its header and no counts yet.
+ * Reviewing, under the findings so far, with a bar along its header and no counts yet. While a
+ * round's findings wait on the user (`triage`), each of that round's kept findings takes a note or
+ * a dismissal (saved as it's made), and the header sends them to AgentK (`review-send`).
  */
 export function ReviewFindings({ session, onClose, onTerminal, onAct }: {
   session: Session;
@@ -34,6 +37,46 @@ export function ReviewFindings({ session, onClose, onTerminal, onAct }: {
   const counts = findingsCountsText(r, detail);
   const run = onAct ? canRunReview(session) : null;
   const controls = onAct ? onDemandControls(session) : { cancel: false, retry: false };
+  const triage = r && reviewWaitsOnYou(r) && detail?.review.round === r.round ? r.round : null;
+  const toSend = triage === null || !detail ? 0 : detail.findings.filter((f) => f.round === triage && f.kept && !f.you?.dismissed).length;
+  const [saveError, setSaveError] = useState<string | null>(null);
+  // Choices still being saved: Send waits for them (a note's save starts as its field loses focus to Send).
+  const saving = useRef(new Set<Promise<boolean>>());
+  // The note being written, kept here rather than in its row: a dismissal moves the row to the
+  // Dismissed list, which mounts it again, and the reason box it opened must stay open.
+  const [editing, setEditing] = useState<{ key: string; draft: string } | null>(null);
+  // A choice is saved as it's made; the finding it returns replaces the one shown. False when it failed.
+  const choose = (key: string, choice: FindingChoiceRequest): Promise<boolean> => {
+    setSaveError(null);
+    const p = api.setFinding(session.id, key, choice).then(
+      (f) => {
+        setDetail((d) => (d ? { ...d, findings: d.findings.map((x) => (x.key === f.key ? f : x)) } : d));
+        return true;
+      },
+      (e: unknown) => {
+        setSaveError(`Your note or dismissal wasn't saved: ${errorMessage(e)}`);
+        return false;
+      },
+    );
+    saving.current.add(p);
+    void p.finally(() => saving.current.delete(p));
+    return p;
+  };
+  // Not past a choice that didn't save: the findings would go without it.
+  const send = async () => {
+    const saved = await Promise.all([...saving.current]);
+    if (saveError || saved.includes(false)) return;
+    onAct?.('review-send');
+  };
+  const row = (f: CodeReviewFinding) => (
+    <FindingRow
+      key={f.key}
+      f={f}
+      onChoose={triage === f.round && f.kept ? (c) => choose(f.key, c) : undefined}
+      draft={editing?.key === f.key ? editing.draft : null}
+      onDraft={(draft) => setEditing(draft === null ? null : { key: f.key, draft })}
+    />
+  );
   // Anything the summary says moving on is a reason to read the findings again.
   const key = r ? `${r.id}:${r.state}:${r.round}:${r.sweep}:${r.passesDone}:${r.scoresDone}:${r.candidates}:${r.addressed}` : '';
   useEffect(() => {
@@ -96,8 +139,20 @@ export function ReviewFindings({ session, onClose, onTerminal, onAct }: {
         </button>
         {reviewing && <span className="design-edge" aria-hidden="true" />}
       </div>
+      {triage !== null && (
+        <div className="rv-triage">
+          <span className="gate-pill warn">Waits on you</span>
+          <span className="muted small rv-triage-text">Add notes or dismiss findings, then send the rest to AgentK.</span>
+          {onAct && (
+            <button className="btn small primary" disabled={!!saveError} onClick={() => void send()} title={saveError ? 'Save your note or dismissal again first' : 'AgentK gets the findings left, with your notes'}>
+              {toSend ? `Send ${toSend} to AgentK` : 'Finish review'}
+            </button>
+          )}
+        </div>
+      )}
       <div className="review-body">
         {error && <p className="error">{error}</p>}
+        {saveError && <p className="error">{saveError}</p>}
         {!detail && !error && reviewing && <p className="muted"><Busy label="Reviewing" /></p>}
         {!detail && !loading && !error && !reviewing && <p className="muted">No findings yet. They show here as the passes report them.</p>}
         {detail && (
@@ -126,14 +181,14 @@ export function ReviewFindings({ session, onClose, onTerminal, onAct }: {
                 <h3>{g.label}</h3>
                 {g.findings.length > 0 && (
                   <ul className="rv-findings">
-                    {g.findings.map((f) => <FindingRow key={f.key} f={f} />)}
+                    {g.findings.map(row)}
                   </ul>
                 )}
                 {g.dismissed.length > 0 && (
                   <>
                     <h4>Dismissed</h4>
                     <ul className="rv-findings">
-                      {g.dismissed.map((f) => <FindingRow key={f.key} f={f} />)}
+                      {g.dismissed.map(row)}
                     </ul>
                   </>
                 )}
@@ -151,13 +206,39 @@ export function ReviewFindings({ session, onClose, onTerminal, onAct }: {
   );
 }
 
-function FindingRow({ f }: { f: CodeReviewFinding }) {
+/**
+ * One finding. `onChoose`: it belongs to the round that waits on the user, who can give it a note
+ * (saved when the note loses focus) or dismiss it (and restore it), with the note as the reason.
+ * `draft`: the note being written, or null when its box is closed; held by the panel, since a
+ * dismissal moves the row to another list (`onDraft` opens, updates and closes it).
+ */
+function FindingRow({ f, onChoose, draft, onDraft }: {
+  f: CodeReviewFinding;
+  onChoose?: (c: FindingChoiceRequest) => Promise<boolean>;
+  draft: string | null;
+  onDraft: (draft: string | null) => void;
+}) {
+  const touch = useTouch();
+  const note = f.you?.note ?? '';
+  const dismissed = !!f.you?.dismissed || f.dropped === DISMISSED_BY_YOU;
+  const editing = draft !== null && !!onChoose;
+  const [saving, setSaving] = useState(false);
+  const save = async (c: FindingChoiceRequest) => {
+    if (!onChoose) return;
+    setSaving(true);
+    try {
+      await onChoose(c);
+    } finally {
+      setSaving(false);
+    }
+  };
+  const status = f.kept && !f.you?.dismissed ? 'kept' : dismissed ? 'dismissed by you' : f.pending ? 'pending' : `dropped${f.dropped ? `: ${f.dropped}` : ''}`;
   return (
-    <li className={`rv-finding${f.kept || f.pending ? '' : ' dropped'}`}>
+    <li className={`rv-finding${(f.kept || f.pending) && !dismissed ? '' : ' dropped'}`}>
       <div className="rv-head">
         <span className={`rv-sev ${f.severity}`}>{f.severity}</span>
         <span className="mono rv-where">{f.file}:{f.line}</span>
-        <span className="rv-kept">{f.kept ? 'kept' : f.pending ? 'pending' : `dropped${f.dropped ? `: ${f.dropped}` : ''}`}</span>
+        <span className="rv-kept">{status}</span>
       </div>
       <p className="rv-comment">{f.comment}</p>
       <div className="rv-meta muted">
@@ -173,6 +254,43 @@ function FindingRow({ f }: { f: CodeReviewFinding }) {
         ))}
       </div>
       {f.reason && <p className="rv-reason muted">{f.reason}</p>}
+      {editing ? (
+        <textarea
+          className="input rv-note-input"
+          aria-label={dismissed ? 'Why you dismissed it' : 'Your note for AgentK'}
+          placeholder={dismissed ? 'Why you dismissed it (optional)' : 'Your note for AgentK'}
+          autoFocus={!touch}
+          rows={2}
+          maxLength={MAX_FINDING_NOTE}
+          value={draft ?? ''}
+          onChange={(e) => onDraft(e.target.value)}
+          onBlur={() => {
+            onDraft(null);
+            // Only the note: the dismissal stays as it is now, even while its own save is out.
+            if (draft !== null && draft.trim() !== note) void save({ note: draft });
+          }}
+        />
+      ) : (
+        note && <p className="rv-you"><b>Your note:</b> {note}</p>
+      )}
+      {onChoose && !editing && (
+        <div className="rv-actions">
+          <button className="btn small" disabled={saving} onClick={() => onDraft(note)}>
+            {note ? 'Edit note' : dismissed ? 'Add a reason' : 'Add a note'}
+          </button>
+          <button
+            className="btn small"
+            disabled={saving}
+            onClick={() => {
+              void save({ dismissed: !f.you?.dismissed });
+              // A dismissal asks for its reason: the box stays open as the row moves under Dismissed.
+              if (!f.you?.dismissed) onDraft(note);
+            }}
+          >
+            {f.you?.dismissed ? 'Restore' : 'Dismiss'}
+          </button>
+        </div>
+      )}
       {f.outcome && (
         <p className={`rv-outcome ${f.outcome.status}`}>
           {f.outcome.status === 'fixed' ? 'Fixed' : 'Declined'}

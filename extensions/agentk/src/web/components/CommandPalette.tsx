@@ -424,6 +424,7 @@ export function CommandPalette({
       const send = (action: SessionAction) => () =>
         void api.sessionAction(id, action).catch((e: unknown) => onError(errorMessage(e)));
       const run: Partial<Record<SessionActionId, () => void>> = {
+        'review-send': send('review-send'),
         'review-cancel': send('review-cancel'),
         'review-retry': send('review-retry'),
         'review-open-anyway': send('review-open-anyway'),

@@ -1735,7 +1735,9 @@ textarea.input {
     opacity: 0.6;
   }
   /* Still, a waiting lens stays filled, so it differs from a working one by more than its color. */
-  .review-glass.running.waiting .lens {
+  .review-glass.running.waiting .lens,
+  .review-glass.waiting .lens {
+    animation: none;
     opacity: 1;
   }
 }
@@ -1926,6 +1928,37 @@ textarea.input {
 }
 .rv-outcome.declined {
   color: var(--warn);
+}
+/* A round's findings wait on you (triage): the bar under the panel's header, and each finding's note and actions. */
+.rv-triage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--rule);
+}
+.rv-triage-text {
+  flex: 1;
+  min-width: 12em;
+}
+.rv-you {
+  margin: 6px 0 0;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.rv-note-input {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  resize: vertical;
+}
+.rv-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
 }
 /* The ⋯ sheet's code review rows and its settings; New session's Code review group. */
 .sheet-review {
@@ -2719,7 +2752,9 @@ textarea.input {
     min-height: 40px;
   }
   .dq-actions .btn.small,
-  .dq-ref-src .btn.small {
+  .dq-ref-src .btn.small,
+  .rv-actions .btn.small,
+  .rv-triage .btn.small {
     min-height: 36px;
   }
   .dq-decided summary {

@@ -420,11 +420,11 @@ export function reviewRuns(db: Db, projectId?: string): ReviewRun[] {
       const findings = parsed<{ round?: unknown; kept?: unknown; outcome?: { status?: unknown } | null }[]>(r.findings_json, []);
       const list = Array.isArray(findings) ? findings : [];
       const kept = list.filter((f) => f?.kept === true);
-      // The current round reached its passes: it's sweeping, scoring or fixing, or a step of it
+      // The current round reached its passes: it's sweeping, scoring, waiting on the user or fixing, or a step of it
       // reported. One that stopped (or found nothing changed) while preparing never ran. nextRound
       // bumps `round` and leaves the last round's candidates_json until beginRound resets it, so
       // its candidates_json is the earlier round's, already in findings_json.
-      const ran = !!r.reported || r.state === 'sweeping' || r.state === 'scoring' || r.state === 'fixing';
+      const ran = !!r.reported || r.state === 'sweeping' || r.state === 'scoring' || r.state === 'triage' || r.state === 'fixing';
       // A round's candidates move into findings_json only when it finishes; until then (or for good,
       // once it failed or was cancelled) they're in candidates_json.
       const open = ran && !list.some((f) => f?.round === r.round) ? parsed<unknown[]>(r.candidates_json, []) : [];
