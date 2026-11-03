@@ -203,7 +203,10 @@ The launcher finds the home from its own folder (`<home>/app/<version>`), so a r
 move runs the previous version from the new home. An install still in an older home moves at its
 first start of a release Meko launches; Meko updates it once it's in Meko's data folder.
 
-The rail shows "Updated to v0.4.1 (from v0.4.0)" with a **What's new** link. Updates never need a
+The rail shows "Updated to v0.4.1 (from v0.4.0)" with a **What's new** link. It goes on
+**Dismiss**, or by itself once the page has been in view for 2 minutes in all (`hideWhenSeen` in
+`Banners.tsx`: the clock runs only while the tab is shown, so an update that lands in a
+background tab is still seen), and stays gone for that update in that browser. Updates never need a
 maintenance window, because they never touch the session host.
 
 **What's new.** Releases come out several times a day and each one's notes cover only the commits
