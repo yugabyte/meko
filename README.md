@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/yugabyte/meko/releases/latest"><img src="https://img.shields.io/github/v/release/yugabyte/meko?filter=meko-v*&label=Meko" alt="Meko release"></a>
+  <a href="https://github.com/yugabyte/meko/releases/latest"><img src="https://img.shields.io/github/v/release/yugabyte/meko?filter=meko-v*&label=Release" alt="Meko release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-green" alt="License: Apache-2.0"></a>
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey" alt="Platform: Linux | macOS">
   <a href="https://docs.mekodata.ai/"><img src="https://img.shields.io/badge/docs-orange" alt="Docs"></a>
@@ -150,6 +150,9 @@ This repo is agent-first. To work on it, point your coding agent (Claude Code, C
 Kiro, Cursor or another) at the repo and say what you want: it starts from
 [`AGENTS.md`](AGENTS.md), which maps the repo, sets its rules for commits and PRs, and leads to each
 part's own guide and docs.
+
+PRs need the Contributor License Agreement signed: CLA Assistant's `license/cla` check on your
+first PR links to a page where you sign it once with your GitHub account.
 
 - Meko's docs: [`backend/docs/`](backend/docs)
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)

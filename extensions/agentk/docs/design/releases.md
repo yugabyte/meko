@@ -13,8 +13,9 @@ Part of the [AgentK design](../design.md).
   Integration tests run against a real session host and git, with a stub `claude` binary that fakes the TUI and fires the hooks.
   A separate `PR title` workflow checks the title with the repo root's `scripts/check-title.sh` and reruns when
   the PR is edited. Changes reach `main` only through PRs, squash-merged once the `CI gate` check (over
-  every component's jobs, run or skipped) and the title check pass and the `meko-maintainers` team
-  approves (the `approvals` ruleset).
+  every component's jobs, run or skipped), the title check and CLA Assistant's `license/cla` check
+  (the author has signed the CLA) pass and the `meko-maintainers` team approves (the `approvals`
+  ruleset).
 - **Versioning (on push to main).** Versions are `0.YYYYMMDD.N`: the UTC date, and `N` counting
   from 0 for each release that day. Commit subjects are `<type>(<component>[/<area>])[!]: <summary>`
   with one of nine types and one of the repo's components (`agentk`, `meko`, `presenter`, `repo`:
