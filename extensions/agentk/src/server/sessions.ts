@@ -305,6 +305,8 @@ export class SessionManager {
   private usageReadAt = new Map<string, number>();
   /** Kiro turns' second usage reads, cleared by `stop()` so none runs after the database closes. */
   private rereads = new Set<NodeJS.Timeout>();
+  /** Turn ends being handled (hooks aren't awaited), which `Core.stop` waits for: `turnEndsSettled`. */
+  private turnEnds = new Set<Promise<void>>();
   /** Startup progress, for the "Starting…" view. */
   private startup = new Map<string, StartupState>();
   /**
@@ -1650,8 +1652,24 @@ export class SessionManager {
    * continued by itself (`interrupted` stays 0). `background` is the hook's `background_tasks`: it
    * replaces what the session has running in the background, and a turn end without it (the mod's
    * interrupt, an older Claude Code) leaves none, rather than keep a list nothing will update.
+   * Kept in `turnEnds` until it's done.
    */
-  private async endTurn(row: SessionRow, how: 'stop' | 'interrupted', background?: unknown): Promise<void> {
+  private endTurn(row: SessionRow, how: 'stop' | 'interrupted', background?: unknown): Promise<void> {
+    const p = this.handleTurnEnd(row, how, background).finally(() => this.turnEnds.delete(p));
+    this.turnEnds.add(p);
+    return p;
+  }
+
+  /**
+   * Resolves once no turn end is being handled, including ones that start meanwhile: what one awaits
+   * (the diff refresh, a PR poll's git calls, a prompt it sends) is done. Work it leaves running
+   * without awaiting it (the PR poll's sync of the PR's design line) may still be going.
+   */
+  async turnEndsSettled(): Promise<void> {
+    while (this.turnEnds.size) await Promise.allSettled(this.turnEnds);
+  }
+
+  private async handleTurnEnd(row: SessionRow, how: 'stop' | 'interrupted', background?: unknown): Promise<void> {
     const id = row.id;
     void this.captureTranscript(id);
     // Before the plan's early return below: a Stop while a plan waits for approval still says what runs.
@@ -1683,7 +1701,8 @@ export class SessionManager {
     } else {
       this.setStatus(id, 'idle');
     }
-    this.refreshDiff(id).catch(() => undefined);
+    // Alongside what follows, but part of the turn end: its git calls run in the worktree.
+    const diff = this.refreshDiff(id).catch(() => undefined);
     this.ingestUsage(id);
     // Kiro may write the turn to its session file just after its stop hook: read it again shortly.
     if (this.harness(row).caps.usage === 'credits') {
@@ -1693,7 +1712,11 @@ export class SessionManager {
       }, USAGE_REREAD_MS).unref();
       this.rereads.add(t);
     }
-    await this.core.lifecycle.onTurnEnd(id, how === 'interrupted');
+    try {
+      await this.core.lifecycle.onTurnEnd(id, how === 'interrupted');
+    } finally {
+      await diff;
+    }
   }
 
   async onHook(token: string, raw: HookPayload): Promise<void> {

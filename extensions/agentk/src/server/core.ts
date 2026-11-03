@@ -811,18 +811,21 @@ export class Core extends EventEmitter {
     this.hooksOn = false;
     await this.hookCheck?.catch(() => undefined);
     this.sessions.mod.closeAll();
-    this.sessions.stop();
     this.learn.stop();
     this.knowledge.stop();
     await this.closeHooks();
     // Let the last turns reach Meko; one cut off here catches up when the server starts again. Kiro's
     // and OpenCode's one-shot runs already going (the plan read, deleting a run's session) get as long
-    // to end; one slower than that is left to finish on its own, as nothing kills it.
+    // to end, and so do turn ends still being handled (the diff refresh, a PR poll's git calls); one
+    // slower than that is left to finish on its own, as nothing kills it.
     await Promise.all([
       this.capture.settled(STOP_CAPTURE_MS),
+      within(this.sessions.turnEndsSettled(), STOP_CAPTURE_MS),
       within(this.kiroPlan.settled().then(kiroDeletesSettled), STOP_CAPTURE_MS),
       within(openCodeDeletesSettled(), STOP_CAPTURE_MS),
     ]);
+    // After the turn ends: a Kiro one schedules a second usage read, which mustn't run after the database closes.
+    this.sessions.stop();
     await this.meko.close();
     this.localReader.clear();
   }
