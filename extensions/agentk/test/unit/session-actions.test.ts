@@ -42,6 +42,11 @@ describe('sessionActions', () => {
     expect(ids(exited, 'menu')).not.toContain('resume');
     // Open PR with instructions is the menu's; the gate keeps only Open PR.
     expect(ids(session(), 'menu')).toContain('open-pr');
+    // A workshop's demo opens no PR: there's none to give instructions for, and the code review stays.
+    for (const on of ['menu', 'sheet', 'palette'] as Surface[]) {
+      expect(ids(session(), on, { noPr: true })).not.toContain('open-pr');
+      expect(ids(session(), on, { noPr: true })).toContain('review-run');
+    }
   });
 
   it("leaves a code review's Cancel, Retry and Open anyway to the gate while it holds Open PR", () => {

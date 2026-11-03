@@ -921,6 +921,12 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     env.core.sessions.dismissFailedStart('demo-repo--retry');
     env.core.sessions.dismissFailedStart('demo-repo--other');
     expect(env.core.state().failedStarts).toEqual([]);
+    // A workshop's host isn't kept for Try again, which would start a plain task: the tour starts it again.
+    block('ak/host/x');
+    const host = await env.core.sessions.begin(p.id, { name: 'Host', prompt: 'the script', start: 'explore' }, { purpose: 'guide' });
+    await expect(host.done).rejects.toMatchObject({ status: 400 });
+    expect(env.core.state().failedStarts).toEqual([]);
+    expect(notes.at(-1)).toMatchObject({ title: "Host: Couldn't start", body: expect.stringMatching(/Start the AgentK tour again to retry\.$/) });
     // Its fake Claude writes its transcript into the test home until the turn ends: removing the home before then fails.
     await waitFor(() => env.core.sessions.get(again.id).status, (st) => st === 'idle', 10000, 'the started session\'s first turn');
   });

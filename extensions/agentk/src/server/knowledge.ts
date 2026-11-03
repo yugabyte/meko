@@ -12,6 +12,9 @@ const FAST_FOR_MS = 60_000;
 const SLOW_POLL_MS = 30_000;
 /** When AgentK stops following an upload that's still indexing. */
 const GIVE_UP_MS = 15 * 60_000;
+/** How an upload AgentK followed ended. */
+export type KnowledgeResult = 'indexed' | 'failed' | 'unknown';
+
 /** Meko's document states that end an upload without indexing it. */
 const FAILED_STATES = new Set(['failed', 'abandoned', 'oversized']);
 
@@ -26,7 +29,9 @@ const TIMING: KnowledgeTiming = { fastPollMs: FAST_POLL_MS, fastForMs: FAST_FOR_
 
 /** An upload Meko is still indexing, followed until it's done. Kept in memory only: a restart drops them. */
 interface Followed {
-  sessionId: string;
+  /** The session to tell (a `knowledge` event), or null for one AgentK uploaded itself (`onDone`). */
+  sessionId: string | null;
+  onDone: ((result: KnowledgeResult) => void) | null;
   datapackId: string;
   documentKey: string;
   filename: string;
@@ -126,8 +131,28 @@ export class KnowledgeService {
     if (error || !upload) throw uploadError(error, dp.name);
     const status = upload.alreadyUploaded ? 'already_uploaded' : 'processing';
     // Meko's settings changed while it uploaded: its document may not be on the Meko AgentK asks now.
-    if (status === 'processing' && generation === this.generation) this.follow(row.id, dp.id, upload.key, filename);
+    if (status === 'processing' && generation === this.generation) this.follow(row.id, null, dp.id, upload.key, filename);
     return { filename, documentKey: upload.key, datapackName: dp.name, status };
+  }
+
+  /**
+   * Adds a file AgentK has (a workshop's gotchas) to a datapack's knowledge base, and follows its
+   * indexing: <onDone> gets the result once (`indexed` at once when Meko already had these bytes,
+   * `unknown` when AgentK stops following it: Meko changed or went off). A refused upload throws,
+   * in uploadError's words. While the server stops, nothing more is called.
+   */
+  async uploadFile(datapack: { id: string; name: string }, filename: string, bytes: Uint8Array, onDone: (result: KnowledgeResult) => void): Promise<void> {
+    const generation = this.generation;
+    let upload: PresignedUpload;
+    try {
+      upload = await this.api.requestUpload(datapack.id, filename, bytes);
+      if (!upload.alreadyUploaded) await this.api.postPresigned(upload, filename, bytes);
+    } catch (e) {
+      throw uploadError(e, datapack.name);
+    }
+    if (upload.alreadyUploaded) onDone('indexed');
+    else if (generation !== this.generation) this.dropped(onDone);
+    else this.follow(null, onDone, datapack.id, upload.key, filename);
   }
 
   /** Stops following every upload (the server is stopping). */
@@ -136,21 +161,31 @@ export class KnowledgeService {
     this.forget();
   }
 
+  /** An upload with a callback that AgentK stopped following: it ends as `unknown`, unless the server is stopping. */
+  private dropped(onDone: Followed['onDone']): void {
+    if (onDone && !this.stopped) onDone('unknown');
+  }
+
   /**
-   * Stops following every upload, saying nothing: Meko was turned off, or its URL or key changed,
-   * so their datapack and document keys may not be on the Meko AgentK talks to now.
+   * Stops following every upload, telling no session: Meko was turned off, or its URL or key
+   * changed, so their datapack and document keys may not be on the Meko AgentK talks to now. An
+   * upload with a callback ends as `unknown`.
    */
   forget(): void {
     this.generation++;
-    for (const f of this.followed.values()) if (f.timer) clearTimeout(f.timer);
+    const gone = [...this.followed.values()];
+    for (const f of gone) if (f.timer) clearTimeout(f.timer);
     this.followed.clear();
+    for (const f of gone) this.dropped(f.onDone);
   }
 
-  private follow(sessionId: string, datapackId: string, documentKey: string, filename: string): void {
-    if (this.stopped) return;
+  private follow(sessionId: string | null, onDone: Followed['onDone'], datapackId: string, documentKey: string, filename: string): void {
     const key = `${datapackId}:${documentKey}`;
-    if (this.followed.has(key)) return;
-    const f: Followed = { sessionId, datapackId, documentKey, filename, startedAt: Date.now(), timer: null, warned: false };
+    if (this.stopped || this.followed.has(key)) {
+      this.dropped(onDone);
+      return;
+    }
+    const f: Followed = { sessionId, onDone, datapackId, documentKey, filename, startedAt: Date.now(), timer: null, warned: false };
     this.followed.set(key, f);
     this.schedule(key, f);
   }
@@ -166,6 +201,7 @@ export class KnowledgeService {
     // Meko turned off: no Meko calls at all.
     if (!this.core.mekoStatus.configured) {
       this.followed.delete(key);
+      this.dropped(f.onDone);
       return;
     }
     let status = '';
@@ -180,13 +216,14 @@ export class KnowledgeService {
     }
     if (this.stopped || this.followed.get(key) !== f) return;
     // An upload whose link expired unused, or bigger than it was signed for, never gets indexed.
-    const result = status === 'completed' ? 'indexed' : FAILED_STATES.has(status) ? 'failed'
+    const result: KnowledgeResult | null = status === 'completed' ? 'indexed' : FAILED_STATES.has(status) ? 'failed'
       : stuck || Date.now() - f.startedAt >= this.timing.giveUpMs ? 'unknown' : null;
     if (!result) {
       this.schedule(key, f);
       return;
     }
     this.followed.delete(key);
-    this.core.notifyKnowledge({ sessionId: f.sessionId, filename: f.filename, result });
+    if (f.onDone) f.onDone(result);
+    else if (f.sessionId) this.core.notifyKnowledge({ sessionId: f.sessionId, filename: f.filename, result });
   }
 }

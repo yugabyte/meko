@@ -70,6 +70,8 @@ export interface SessionActionContext {
   workItemTitle?: string | null;
   /** On a Mac: the shortcuts' names. */
   mac: boolean;
+  /** The project opens no PR (a workshop's demo, `Project.workshop`): no Open PR with instructions. */
+  noPr?: boolean;
 }
 
 const ALL: Surface[] = ['menu', 'sheet', 'palette'];
@@ -152,7 +154,7 @@ export function sessionActions(s: Session, ctx: SessionActionContext): SessionAc
     const repo = s.reviewingPr ? `${s.reviewingPr.repo.split('/')[1] ?? s.reviewingPr.repo} ` : '';
     add({ id: 'pr-link', group: 'stage', label: `${repo}PR #${s.prNumber} on GitHub`, href: s.prUrl, on: ['menu', 'sheet'] });
   }
-  if (s.stage === 'code') {
+  if (s.stage === 'code' && !ctx.noPr) {
     const queued = s.queued === 'open-pr';
     const reason = queued ? null : openPrGate(s).reason;
     // While the code review holds Open PR, its gate has no instructions button; the palette keeps it.

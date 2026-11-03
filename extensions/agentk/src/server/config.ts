@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { parse, stringify } from 'smol-toml';
 import { claudeUserDir } from './claude.js';
 import { DEFAULT_MEKO_URL, DEFAULT_MEKO_WEB_URL, mekoWebUrl } from '../shared/mekourls.js';
-import { MAX_IDLE_STOP_HOURS, type MekoKeySource } from '../shared/types.js';
+import { AGENTK_TOUR, MAX_IDLE_STOP_HOURS, type MekoKeySource } from '../shared/types.js';
 import { DEFAULT_HARNESS, HARNESS_IDS, isHarnessId, type HarnessId } from '../shared/harnesses.js';
 import {
   DEFAULT_CHECK, DEFAULT_DEPTH, DEFAULT_ROUNDS, DEFAULT_STRATEGY, MAX_DEPTH, MAX_ROUNDS, STRATEGIES, isStrategySetting, type ReviewSettings,
@@ -119,6 +119,12 @@ export interface Config {
    * session's own model.
    */
   codeReview: { strategy: string; rounds: number; depth: number; check: boolean; models: Record<HarnessId, ReviewModels> };
+  /**
+   * tour: the bundled workshop a fresh install starts by itself (`agentk-101`), written by `me_koder
+   * install` only when it made config.toml. The server's start runs it once while there are no
+   * projects (src/server/workshops.ts) and then removes the key; empty starts nothing.
+   */
+  welcome: { tour: string };
 }
 
 /** The model for each tier of a review step on one harness (`[code_review.models.<harness>]`); '' is the session's own. */
@@ -129,6 +135,9 @@ export interface ReviewModels {
 }
 
 export { DEFAULT_MEKO_URL, DEFAULT_MEKO_WEB_URL, mekoWebUrl };
+
+/** The workshop a fresh install starts by itself (`[welcome] tour`). */
+export const FRESH_INSTALL_TOUR = AGENTK_TOUR;
 
 /**
  * The Slack sync may call only the claude.ai Slack connector's file read, and its profile read to name
@@ -168,6 +177,7 @@ export const DEFAULT_CONFIG: Config = {
       kiro: { large: '', mid: '', small: '' },
     },
   },
+  welcome: { tour: '' },
 };
 
 // TOML uses snake_case keys; the in-memory config uses camelCase.

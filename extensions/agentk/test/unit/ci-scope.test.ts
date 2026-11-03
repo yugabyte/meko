@@ -35,6 +35,7 @@ describe('ci-scope.sh', () => {
     ['extensions/agentk/docs/design/releases.md', false, false, false],
     ['extensions/agentk/src/web/REVIEW.md', false, false, false],
     ['extensions/agentk/test/fixtures/a.md', true, false, false],
+    ['extensions/agentk/src/workshops/agentk-101/repo/README.md', true, false, false],
     ['backend/internal/paths/testdata/resolve-cases.json', true, true, true],
     ['.github/workflows/ci.yml', true, true, true],
     ['scripts/ci-scope.sh', true, true, true],

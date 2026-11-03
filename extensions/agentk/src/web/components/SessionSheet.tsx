@@ -111,7 +111,7 @@ export function EndSessionButton({
   onClosed?: () => void;
 }) {
   const [step, setStep] = useState<'closed' | 'choose' | 'checking' | 'discard'>('closed');
-  const [skipLearn, setSkipLearn] = useState(session.purpose === 'learn');
+  const [skipLearn, setSkipLearn] = useState(session.purpose === 'learn' || session.purpose === 'guide');
   /** What ending the session would leave or lose: undefined while checking, null if the check failed. */
   const [check, setCheck] = useState<DiscardCheck | null | undefined>(undefined);
   const [busy, setBusy] = useState(false);

@@ -22,6 +22,7 @@ The design is split by area. Read this page first, then the part you need:
 | [Code review](design/code-review.md) | The review AgentK runs before a task's PR opens: the agent-k reviewer's passes, sweeps and scorers in a review session joined to the task's tab, its strategies and settings, re-review rounds, Meko's gotchas, and the `me_ak_review:` line |
 | [The work queue](design/work-queue.md) | The list of what you're working on across projects: items, their links and one session each, the sync from GitHub review requests and a Slack list of yours, and finding sessions by a pasted link |
 | [GitHub links, Ask AgentK and finding a session](design/palette.md) | Starting from a pasted GitHub link, Ask AgentK (and its Do all) and finding a session by what it's about in the command palette |
+| [Workshops: the AgentK tour](design/workshops.md) | Bundled tours: the demo repo AgentK builds with no remote, its gotchas datapack, the host session that walks the user through, what it hears from the other sessions, and the fresh install's start |
 | [AgentK's session tools](design/tools.md) | The `agentk_sessions` MCP server and skill every session gets, on any harness, to open projects, start sessions and move them between stages |
 | [Datapacks](design/datapacks.md) | Meko datapacks: dedicated and shared, pins, invites, adding files to the knowledge base |
 | [Sharing a project](design/sharing.md) | Sharing a project's datapack with teammates and reviewers |

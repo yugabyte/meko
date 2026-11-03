@@ -4,7 +4,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import {
-  findMeAkReviewLine, meAkReviewLine, noCounts, parseMeAkReviewLine, readOverrides, resolveReview, reviewSegmentLabel, reviewSegmentText, reviewSettled, strategyTag, withMeAkReviewLine,
+  caughtWithMeko, findMeAkReviewLine, meAkReviewLine, noCounts, parseMeAkReviewLine, readOverrides, resolveReview, reviewSegmentLabel, reviewSegmentText, reviewSettled, strategyTag, withMeAkReviewLine,
   type CodeReviewState, type CodeReviewSummary, type SeverityCounts,
 } from '../../src/shared/codereview.js';
 import { ReviewFields, ReviewSegment } from '../../src/web/components/common.js';
@@ -43,6 +43,19 @@ describe('the me_ak_review line', () => {
   ])('sets it in %j', (body, want) => {
     expect(withMeAkReviewLine(body, meAkReviewLine(noCounts(), 'sirius-1.0'))).toBe(want);
     expect(findMeAkReviewLine(want)).toBe('me_ak_review:LGTM;Sirius1.0');
+  });
+});
+
+describe('Caught with Meko', () => {
+  it.each([
+    [[], ''],
+    [[{ kept: true, gotchas: [] }], ''],
+    // A dropped finding's credit doesn't count.
+    [[{ kept: false, gotchas: ['MG-1'] }], ''],
+    [[{ kept: true, gotchas: ['MG-2'] }, { kept: false, gotchas: ['MG-1'] }], '1 caught with Meko (MG-2)'],
+    [[{ kept: true, gotchas: ['MG-2', 'MG-3'] }, { kept: true, gotchas: ['MG-2'] }], '2 caught with Meko (MG-2, MG-3)'],
+  ])('counts kept findings that credit a gotcha: %j is %j', (findings, text) => {
+    expect(caughtWithMeko(findings)).toBe(text);
   });
 });
 

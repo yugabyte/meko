@@ -23,7 +23,7 @@ import { checkStartItem, setItemSession } from './workqueue.js';
 import { AGENTK_AGENT_ID, launchedAgentId, sessionAgentId } from './meko.js';
 import {
   AUTO_RUN_PROMPTS, autoRunLine, DESIGN_UPKEEP_PROMPTS, designQaLine, designQuestionsLine, designUpkeepLine, designWhere, learnTask, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine,
-  mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, reviewDesignLine, taskWithName, withAttachedImages, type PromptName,
+  guideSystemLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, reviewDesignLine, taskWithName, withAttachedImages, type PromptName,
 } from './prompts.js';
 import { PR_DESIGN_TIMEOUT_MS, markPrDesignTold, prDesignFile, prDesignSource, removePrDesignFiles } from './prdesign.js';
 import { HttpError, projectConversationKey } from './projects.js';
@@ -37,7 +37,7 @@ import type { TranscriptMark } from './harness/types.js';
 import { writeLauncher } from './launcher.js';
 import { MekoCalls, MekoHold } from './mekocalls.js';
 import { ModLinks, type DroppedPrompt } from './modlink.js';
-import { DESIGN_READY } from './lifecycle.js';
+import { DESIGN_READY, checkOpensPr } from './lifecycle.js';
 import { askAnswers, parseAsk } from './asks.js';
 import {
   STORED_TASK_KIND, dedicatedDatapack, parseSettings, projectDatapacks, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, slugify, toSession,
@@ -522,6 +522,8 @@ export class SessionManager {
     if (!r) return;
     run(this.db, 'INSERT INTO session_events(session_id, project_id, kind, text, payload_json, at) VALUES (?, ?, ?, ?, ?, ?)',
       id, r.project_id, kind, text, payload === undefined ? null : JSON.stringify(payload), Date.now());
+    // A workshop's host hears what happens in its project's other sessions.
+    this.core.workshops.noted(r, kind, text);
   }
 
   setStage(id: string, stage: Stage, by: 'you' | 'auto', opts: { event?: boolean } = {}): void {
@@ -558,9 +560,11 @@ export class SessionManager {
    * session dialog can close and the session's tab show its startup steps. `done` does the slow
    * part (on a big repo, minutes): fetching a review's PR head, making the worktree and launching
    * Claude. When the worktree or the PR head can't be had there, the session is removed and kept
-   * as a failed start (`failedStarts()`) for the user to try again.
+   * as a failed start (`failedStarts()`) for the user to try again. `own.purpose` `guide` is for the
+   * server's own starts only (a workshop's host, src/server/workshops.ts): a task at Explore whose
+   * first prompt is its workshop's script.
    */
-  async begin(projectId: string, req: CreateSessionRequest): Promise<{ session: Session; done: Promise<Session> }> {
+  async begin(projectId: string, req: CreateSessionRequest, own: { purpose?: 'guide' } = {}): Promise<{ session: Session; done: Promise<Session> }> {
     const p = projectRow(this.db, projectId);
     if (!p) throw new HttpError(404, 'That project no longer exists.');
     for (const k of ['name', 'prompt', 'baseBranch', 'repoPath', 'branch', 'model'] as const) {
@@ -596,9 +600,11 @@ export class SessionManager {
         throw new HttpError(400, "A learn session saves what it learns to the project's dedicated datapack, and this project has none. Add one on the project's home first.");
       }
     }
-    const start: StartStage = learn ? 'explore' : req.start ?? legacy ?? (req.skipDesign ? 'code' : 'design');
+    const guide = own.purpose === 'guide' && !learn && kind === 'task';
+    const start: StartStage = learn || guide ? 'explore' : req.start ?? legacy ?? (req.skipDesign ? 'code' : 'design');
     // Run to merge from the start is for a task at Code; at Design it's turned on beside Approve.
     const autoRun = !!req.autoRun;
+    if (autoRun) checkOpensPr(this.db, { project_id: projectId });
     if (autoRun && (kind !== 'task' || learn || start !== 'code')) {
       throw new HttpError(400, 'Run to merge can only be picked for a task that starts at Code. For one at Design, turn it on when you approve the design.');
     }
@@ -691,7 +697,7 @@ export class SessionManager {
         randomBytes(24).toString('base64url'), review ? 'review-pr' : STORED_TASK_KIND, stage, task || null, now, now, sessionAgentId({ id, slug, harness: harness.id }),
         review?.info.number ?? attach?.info.number ?? null, review?.info.url ?? attach?.info.url ?? null, review?.repo ?? null, review?.info.title ?? null,
         review?.info.author ?? null, sha, sha, review ? 0 : null, review ? 'OPEN' : null, review?.remote ?? null, notes || null,
-        push?.remote ?? null, push ? push.branch : null, learn ? 'learn' : null, autoRun ? 1 : 0, projectId);
+        push?.remote ?? null, push ? push.branch : null, learn ? 'learn' : guide ? 'guide' : null, autoRun ? 1 : 0, projectId);
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
       if (workItem) {
         this.relinks.set(id, { item: workItem, prev: get<{ session_id: string | null }>(this.db, 'SELECT session_id FROM work_items WHERE id = ?', workItem)?.session_id ?? null });
@@ -728,19 +734,20 @@ export class SessionManager {
   /**
    * Starts a task's code-review session (review/runner.ts): a child of the task (`parent_id`) on the
    * task's harness, in the task's own worktree, which it doesn't own (`worktree_released`), so
-   * archiving it never frees the worktree or touches the branch. `prompt` is its first.
+   * archiving it never frees the worktree or touches the branch. `prompt` is its first; `model`, the
+   * one it starts on (a workshop's, `WorkshopService.reviewModel`), else its agent's default.
    */
-  async startReviewSession(task: SessionRow, reviewId: string, prompt: string | null): Promise<SessionRow> {
+  async startReviewSession(task: SessionRow, reviewId: string, prompt: string | null, model: string | null = null): Promise<SessionRow> {
     const slug = `${task.slug}-review-${randomBytes(3).toString('hex')}`;
     const id = `${task.project_id}--${slug}`;
     const now = Date.now();
     run(this.db, `INSERT INTO sessions(id, project_id, slug, name, harness, claude_session_id, branch, base_branch, repo_path, branch_reused,
                     worktree_path, worktree_released, tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode,
-                    meko_agent_id, parent_id, position)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 1, ?, ?, 'running', 'starting', 'code-review', 'reviewing-code', ?, ?, ?, 0, ?, ?, ?)`,
+                    meko_agent_id, parent_id, position, model)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 1, ?, ?, 'running', 'starting', 'code-review', 'reviewing-code', ?, ?, ?, 0, ?, ?, ?, ?)`,
       id, task.project_id, slug, `Code review of ${task.name}`, task.harness, randomUUID(), task.branch, task.base_branch, task.repo_path,
       task.worktree_path, paneName(task.project_id, slug), randomBytes(24).toString('base64url'), `Review the change on ${task.branch}`, now, now,
-      sessionAgentId({ id, slug, harness: harnessOf(task.harness) }), task.id, task.position);
+      sessionAgentId({ id, slug, harness: harnessOf(task.harness) }), task.id, task.position, model);
     run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, 'reviewing-code', ?, 'auto')`, id, now);
     this.event(id, 'created', `Started for review ${reviewId} of ${task.name}`);
     this.creating.add(id);
@@ -880,11 +887,14 @@ export class SessionManager {
   /**
    * A new session whose worktree (or PR head) couldn't be had: it's removed, <release> frees its
    * worktree, and it's kept as a failed start, with a notification, since the New session dialog
-   * has closed by now. Returns the error for the caller to throw.
+   * has closed by now. Returns the error for the caller to throw. Not a workshop's host: Try again
+   * would start a plain task, so the notification sends the user back to the tour's own start.
    */
   private failStart(id: string, request: CreateSessionRequest, message: string, release: () => void): HttpError {
     const row = sessionRow(this.db, id);
-    if (row) {
+    if (row?.purpose === 'guide') {
+      this.notifyUser(id, "Couldn't start", `${message} Start the AgentK tour again to retry.`);
+    } else if (row) {
       this.notifyUser(id, "Couldn't start", message);
       this.failed.set(id, { id, projectId: row.project_id, name: row.name, error: message, at: Date.now(), request });
       // The oldest go first; nobody needs dozens.
@@ -1106,7 +1116,7 @@ export class SessionManager {
 
   /** The prompt a session's task starts with, for the stage it's in. */
   firstPrompt(row: SessionRow): PromptName {
-    if (row.stage === 'explore') return row.purpose === 'learn' ? 'seed' : 'explore';
+    if (row.stage === 'explore') return row.purpose === 'learn' ? 'seed' : row.purpose === 'guide' ? 'guide' : 'explore';
     if (row.stage === 'reviewing-pr') return 'review-pr';
     if (row.stage !== 'design') return 'code';
     return row.plan_mode ? 'design-plan' : 'design';
@@ -1127,8 +1137,9 @@ export class SessionManager {
         notes: reviewNotes(row),
       }
       : {};
+    // A workshop's host starts on its bundled script, never a repo's or the owner's own version.
     // A PR's .agent-k/stages can't stand in for AgentK's prompts until its code is known to be trusted.
-    const text = render(loadPrompt(this.db, name, repoConfigTrusted(row) ? row.worktree_path : null), {
+    const text = name === 'guide' ? this.core.workshops.guidePrompt(row) : render(loadPrompt(this.db, name, repoConfigTrusted(row) ? row.worktree_path : null), {
       // The images added in the New session dialog go with the task (a review's with its notes: its task is the PR).
       task: row.kind === 'review-pr' ? (row.initial_prompt ?? '') : withAttachedImages(taskWithName(row.name, row.initial_prompt ?? ''), startImages(row)),
       branch: row.branch,
@@ -1228,6 +1239,7 @@ export class SessionManager {
     }
     if (dedicated) lines.push(mekoSaveSystemLine(row.id));
     if (dps.length && row.kind === 'review-pr') lines.push(mekoQuestionSystemLine());
+    if (row.purpose === 'guide') lines.push(guideSystemLine(p?.name ?? row.project_id));
     return lines.join('\n');
   }
 
@@ -1387,8 +1399,9 @@ export class SessionManager {
    * is on (Claude takes it when it's next idle), else typed into the TUI. Submissions to one session go one at a time; one
    * that had to wait is refused if the one before it started a turn. `lost` runs if Claude goes
    * (exits, or is relaunched) after a prompt sent between turns counted as sent but before its turn started.
+   * A `hidden` one draws as nothing in Claude's transcript when the mod submits it (a workshop host's events).
    */
-  submit(id: string, text: string, lost?: () => void): Promise<void> {
+  submit(id: string, text: string, lost?: () => void, hidden = false): Promise<void> {
     const prev = this.submitting.get(id);
     const next = (prev ?? Promise.resolve()).then(async () => {
       const r = this.row(id);
@@ -1401,7 +1414,7 @@ export class SessionManager {
         // turn ends, and its UserPromptSubmit says when it starts: the status stays as it is, so a
         // permission prompt still shows as Needs you.
         const midTurn = this.midTurn(id);
-        const prompt = await this.mod.send(id, text);
+        const prompt = await this.mod.send(id, text, hidden);
         if (midTurn) {
           this.mod.hold(id, prompt);
           this.core.changed();
@@ -1752,6 +1765,8 @@ export class SessionManager {
       await this.core.lifecycle.onTurnEnd(id, how === 'interrupted');
     } finally {
       await diff;
+      // After the diff's refresh, so a workshop's host hears whether the turn changed it.
+      this.core.workshops.turnEnded(id, how === 'interrupted');
     }
   }
 
@@ -1809,6 +1824,7 @@ export class SessionManager {
         this.update(id, { interrupted: 0 });
         this.setStatus(id, 'working');
         this.core.lifecycle.onTurnStart(id);
+        if (row.purpose === 'guide') this.core.workshops.hostPrompt(row, p.prompt);
         break;
       case 'PreToolUse': {
         const meko = this.harness(row).mekoTool?.(p);
@@ -1863,6 +1879,7 @@ export class SessionManager {
       case 'Stop':
         // OpenCode's plugin marks a turn the user interrupted (Claude Code's comes from the mod, /mod/turn).
         await this.endTurn(row, p.interrupted === true ? 'interrupted' : 'stop', p.background_tasks);
+        if (row.purpose === 'guide') this.core.workshops.hostSaid(row, p.last_assistant_message);
         break;
       case 'BackgroundTasks':
         // OpenCode's plugin, when background work ends between turns.

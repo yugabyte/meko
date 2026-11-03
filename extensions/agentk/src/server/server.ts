@@ -7,7 +7,7 @@ import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck,
   EventsClientMessage, HarnessModels, HarnessStatus, KnowledgeUpload, MekoDatapack, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, StagedImage,
-  HeldReview, HeldReviewsResult, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
+  HeldReview, HeldReviewsResult, Workshop, WorkshopStart, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, RunActionsRequest, RunActionsResult, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
   JoinByLinkRequest, JoinByLinkResult, LinkGrant, ShareLink, ShareLinkChange, ShareLinkState,
   CloseWorkItemsRequest, CreateWorkItemRequest, ReorderWorkItemsRequest, UpdateWorkItemRequest, WorkItem, WorkLinkMatch, WorkSync,
@@ -365,6 +365,14 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   });
   app.post<{ Params: { id: string } }>('/api/invites/:id/later', async (req, reply) => {
     core.invites.later(req.params.id);
+    return reply.code(204).send();
+  });
+
+  // ---- workshops (bundled tours, src/server/workshops.ts) ----
+  app.get('/api/workshops', async (): Promise<Workshop[]> => core.workshops.list());
+  app.post<{ Params: { id: string } }>('/api/workshops/:id/start', async (req): Promise<WorkshopStart> => core.workshops.start(req.params.id));
+  app.post<{ Params: { id: string } }>('/api/workshops/:id/go', async (req, reply) => {
+    await core.workshops.go(req.params.id);
     return reply.code(204).send();
   });
 

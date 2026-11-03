@@ -68,9 +68,11 @@ export const START_STAGES: StartStage[] = ['explore', 'design', 'code'];
 /**
  * What a session is for, beyond its kind: `learn`, a learn session (`CreateSessionRequest.learn`),
  * a task started at Explore that seeds the project's dedicated datapack from the repo and its PRs,
- * and closes by itself when it's done. Null for every other session.
+ * and closes by itself when it's done; `guide`, a workshop's host (`src/server/workshops.ts`), a
+ * task at Explore that walks the user through a bundled workshop by starting other sessions. Null
+ * for every other session.
  */
-export type SessionPurpose = 'learn';
+export type SessionPurpose = 'learn' | 'guide';
 
 /** How many months back a learn session reads PRs, by default and at most (0 reads none). */
 export const LEARN_MONTHS_DEFAULT = 24;
@@ -91,6 +93,29 @@ export interface LearnBrief {
 /** Past either, the New session dialog warns that a learn session will read a lot (`LearnScope`). */
 export const LEARN_WARN_PRS = 200;
 export const LEARN_WARN_FILES = 5_000;
+
+/**
+ * A workshop bundled with AgentK (`src/workshops/<id>/`): a script for a host session (Session.purpose
+ * `guide`) and the demo repo it's played in, built locally with no remote (docs/design/workshops.md).
+ */
+export interface Workshop {
+  id: string;
+  title: string;
+  summary: string;
+  /** Its open project, or null when it isn't open. */
+  projectId: string | null;
+  /** That project's open host session, or null. */
+  hostId: string | null;
+}
+
+/** The AgentK tour: the workshop a fresh install starts by itself, and the empty state and palette offer. */
+export const AGENTK_TOUR = 'agentk-101';
+
+/** POST /api/workshops/:id/start: the workshop's project and its host session. */
+export interface WorkshopStart {
+  projectId: string;
+  sessionId: string;
+}
 
 /**
  * How much a learn session's brief covers, estimated from local git before it starts
@@ -683,6 +708,13 @@ export interface Project {
   settings: ProjectSettings;
   datapacks: DatapackRef[];
   createdAt: number;
+  /**
+   * The bundled workshop that opened it (`Workshop.id`), or null for a project the user opened. A
+   * workshop's project is on a demo repo AgentK built with no remote, so it opens no PR: Open PR,
+   * Run to merge and a move to Review & PR are refused there, and its Code gate offers Run code
+   * review instead.
+   */
+  workshop: string | null;
 }
 
 /** A running learn step's place (`Session.learnProgress`), for the UI to say what a Discard or Merge & Close waits on. */
@@ -1681,10 +1713,12 @@ export interface AskAgentkTurn {
 export type AskAgentkAction =
   /**
    * `autoRun`: Run to merge (Session.autoRun), only with `start` `code`. `harness` and `model`: the
-   * agent and its model (CreateSessionRequest's), which only AgentK's session tools give.
+   * agent and its model (CreateSessionRequest's), which only AgentK's session tools give. `branch`:
+   * an existing branch to work on as it is (the session tools' start_sessions), as the New session
+   * dialog's Existing branch.
    */
   | {
-    type: 'start'; projectId: string; start: StartStage; name: string; prompt: string; autoRun?: boolean; review?: ReviewOverrides;
+    type: 'start'; projectId: string; start: StartStage; name: string; prompt: string; branch?: string; autoRun?: boolean; review?: ReviewOverrides;
     harness?: HarnessId; model?: string;
   }
   /**
@@ -2622,6 +2656,13 @@ export type TermServerMessage =
 // POST   /api/invites/:datapackId/later        → 204   (hides it here; the invite stays in Meko)
 // POST   /api/projects        CreateProjectRequest → OpenedProject   (opens a project on a repo here, a clone, or a new repo;
 //        409 when a new repo's folder is already taken)
+// GET    /api/workshops                        → Workshop[]   (the bundled workshops, each with its open project and host)
+// POST   /api/workshops/:id/start              → WorkshopStart   (builds the demo repo, opens it as a project and starts its
+//        host; a workshop whose project is open goes to its host, starting one when none is open; 404 for an unknown
+//        workshop, 500 with the reason when the demo can't be built)
+// POST   /api/workshops/:id/go                 → 204   (the user's go at a level's pause, as "go" typed to its host does:
+//        after the first look, the gotchas go into Meko and AgentK reviews again; 404 when the workshop isn't open,
+//        409 when nothing waits for a go)
 // GET    /api/projects/:id                     → Project   (404 once it's closed: the UI asks for a project it just
 //        opened when a state push comes without it)
 // PATCH  /api/projects/:id    UpdateProjectRequest → Project

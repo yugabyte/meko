@@ -634,6 +634,52 @@ export async function isFreshRepo(dir: string): Promise<boolean> {
   return remotes === '' && count === '1' && files === '' && status === '';
 }
 
+// ---- A workshop's demo repo ----
+
+/** Who a demo repo's commits are by: made-up names a workshop's bundle gives. */
+export interface GitIdent {
+  name: string;
+  email: string;
+}
+
+/**
+ * The environment for building a demo repo: none of the user's git config (their identity, hooks,
+ * signing, templates or default branch), so every install gets the same history.
+ */
+function demoEnv(who: GitIdent, date: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env, ...GIT_ENV, LC_ALL: 'C', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+    GIT_AUTHOR_NAME: who.name, GIT_AUTHOR_EMAIL: who.email, GIT_AUTHOR_DATE: date,
+    GIT_COMMITTER_NAME: who.name, GIT_COMMITTER_EMAIL: who.email, GIT_COMMITTER_DATE: date,
+  };
+}
+
+/** Flags that keep a demo build from running anything of the user's. */
+const DEMO_FLAGS = ['-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null'];
+
+async function demoGit(dir: string, who: GitIdent, date: string, ...args: string[]): Promise<void> {
+  await exec('git', [...DEMO_FLAGS, ...args], { cwd: dir, timeout: FIRST_COMMIT_TIMEOUT_MS, env: demoEnv(who, date) });
+}
+
+/** `git init` in <dir> (a folder holding the demo's files) with HEAD on <branch>, and every file in one commit by <who> at <date>. */
+export async function commitDemoRepo(dir: string, branch: string, who: GitIdent, date: string, message: string): Promise<void> {
+  await demoGit(dir, who, date, 'init', '--quiet', '--template=');
+  await demoGit(dir, who, date, 'symbolic-ref', 'HEAD', `refs/heads/${branch}`);
+  await demoGit(dir, who, date, 'add', '-A');
+  await demoGit(dir, who, date, 'commit', '--quiet', '-m', message);
+}
+
+/**
+ * Branch <branch> from <base> in <dir> with <patch> (a `git format-patch` file) applied by `git am`,
+ * which keeps the patch's author, message and date; committed by <who>. HEAD goes back to <base>.
+ */
+export async function demoBranch(dir: string, base: string, branch: string, patch: string, who: GitIdent): Promise<void> {
+  const date = '2026-01-01T00:00:00Z';
+  await demoGit(dir, who, date, 'checkout', '--quiet', '-b', branch, base);
+  await demoGit(dir, who, date, 'am', '--quiet', '--committer-date-is-author-date', patch);
+  await demoGit(dir, who, date, 'checkout', '--quiet', base);
+}
+
 // ---- Review a PR ----
 
 /**

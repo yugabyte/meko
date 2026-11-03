@@ -16,7 +16,7 @@
 #     node/bin/node            a link to it, which the MCP configs AgentK writes for sessions name
 #     node/LICENSE
 #     lib/package.json
-#     lib/dist/                compiled server + web assets, AgentK's mod for Claude Code (dist/mod) and the session tools' skill (dist/tools)
+#     lib/dist/                compiled server + web assets, AgentK's mod for Claude Code (dist/mod), the session tools' skill (dist/tools) and the bundled workshops (dist/workshops)
 #     lib/node_modules/        production dependencies only
 #     lib/packaging/systemd/   service templates used by `me_koder install` (Linux)
 #     lib/packaging/launchd/   service templates used by `me_koder install` (macOS)
@@ -51,7 +51,7 @@ case $(uname -s) in
 esac
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
-for p in "$repo/dist/server/cli.js" "$repo/dist/server/mcpmain.js" "$repo/dist/web/index.html" "$repo/dist/mod/agentk/hooks/register.ts" "$repo/dist/tools/skill/SKILL.md" "$repo/node_modules" "$node_dir/bin/node"; do
+for p in "$repo/dist/server/cli.js" "$repo/dist/server/mcpmain.js" "$repo/dist/web/index.html" "$repo/dist/mod/agentk/hooks/register.ts" "$repo/dist/tools/skill/SKILL.md" "$repo/dist/workshops/agentk-101/GUIDE.md" "$repo/node_modules" "$node_dir/bin/node"; do
   [ -e "$p" ] || { echo "missing $p (build first)" >&2; exit 1; }
 done
 

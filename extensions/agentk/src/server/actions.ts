@@ -41,7 +41,7 @@ const LIST_MODELS_MAX = 50;
 
 /** A started task's name and prompt, as the agent wrote them, are cut to these. */
 const NAME_MAX = 80;
-const PROMPT_MAX = 8000;
+export const PROMPT_MAX = 8000;
 
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const live = (s: Session) => s.desired !== 'archived' && s.status !== 'archived';
@@ -126,11 +126,14 @@ export function checkActions(raw: unknown, projects: ActionProject[], max = ACTI
         const prompt = cut(str(r.prompt), PROMPT_MAX);
         const start = (START_STAGES as string[]).includes(str(r.stage) || str(r.start)) ? ((str(r.stage) || str(r.start)) as StartStage) : 'design';
         const name = oneLine(str(r.name), NAME_MAX) || oneLine(prompt, 60);
+        const branch = oneLine(str(r.branch), NAME_MAX);
         const agent = p && prompt ? agentFor(r, `"${name}"`, notes) : null;
         if (!p) notes.push('Left out a task in a project that isn\'t open.');
         else if (!prompt) notes.push('Left out a task with no prompt.');
         else if (agent) {
-          actions.push({ type: 'start', projectId: p.id, start, name, prompt, ...(autoRunFor(r, start, name, notes) ? { autoRun: true } : {}), ...reviewFor(r), ...agent });
+          actions.push({
+            type: 'start', projectId: p.id, start, name, prompt, ...(branch ? { branch } : {}), ...(autoRunFor(r, start, name, notes) ? { autoRun: true } : {}), ...reviewFor(r), ...agent,
+          });
         }
         break;
       }
@@ -268,12 +271,12 @@ async function runOne(core: Core, a: Exclude<AskAgentkAction, { type: 'go' }>, b
   switch (a.type) {
     case 'start': {
       const { session, done } = await core.sessions.begin(a.projectId, {
-        name: a.name, prompt: a.prompt, start: a.start, autoRun: a.autoRun, review: a.review, harness: a.harness, model: a.model,
+        name: a.name, prompt: a.prompt, start: a.start, autoRun: a.autoRun, review: a.review, harness: a.harness, model: a.model, ...(a.branch ? { branch: a.branch, existingBranch: true } : {}),
       });
       done.catch((e: unknown) => core.log.warn(`session ${session.id} didn't start`, errMsg(e)));
       const p = core.projects.get(a.projectId);
       return {
-        ok: true, text: `Started "${session.name}" in ${p.name} at ${STAGE_LABELS[a.start]}${onAgent(a, session)}${a.autoRun ? ', with Run to merge' : ''}.`,
+        ok: true, text: `Started "${session.name}" in ${p.name} at ${STAGE_LABELS[a.start]}${a.branch ? ` on ${a.branch}` : ''}${onAgent(a, session)}${a.autoRun ? ', with Run to merge' : ''}.`,
         projectId: p.id, sessionId: session.id,
       };
     }
@@ -469,7 +472,7 @@ export class SessionTools {
             const projectId = str(s.projectId) || row.project_id;
             return str(s.ref)
               ? { type: 'link', ref: str(s.ref), projectId, stage: str(s.stage), autoRun: s.autoRun, review: s.review, harness: s.agent, model: s.model }
-              : { type: 'start', projectId, name: s.name, prompt: s.prompt, stage: str(s.stage), autoRun: s.autoRun, review: s.review, harness: s.agent, model: s.model };
+              : { type: 'start', projectId, name: s.name, prompt: s.prompt, stage: str(s.stage), branch: s.branch, autoRun: s.autoRun, review: s.review, harness: s.agent, model: s.model };
           });
           return this.run(row, raw, projects);
         }

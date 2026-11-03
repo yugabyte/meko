@@ -25,6 +25,9 @@
 //   /mod/turn     a turn the person interrupted (Ctrl+C, Esc), which fires no Stop hook: AgentK ends
 //                 the turn and sends what waited for its end
 //
+// A prompt AgentK marks `hidden` (a workshop host's events) draws as nothing in the transcript, and so
+// does a reply of just "OK" in its turn; the full transcript (ctrl+o) shows both.
+//
 // It must never get in Claude's way: every failure is swallowed (a question is then left to the
 // terminal's dialog), and while the server doesn't hear from the mod it types prompts into the
 // terminal as it did before.
@@ -58,6 +61,8 @@ interface Link {
 interface Prompt {
   id: string
   text: string
+  /** Drawn as nothing in the transcript (a workshop host's AgentK events); the model reads it as any other. */
+  hidden?: boolean
 }
 
 /** A part of a learn step from the server: fork the session with `prompt` (extract), or run it on `model` (check). */
@@ -74,6 +79,14 @@ let link: Promise<Link | null> | null = null
 let polling = false
 /** The prompts submitted that Claude still holds (it runs each when it's next idle), by id. */
 const held = new Set<string>()
+/** The texts of the hidden prompts submitted: their rows draw as nothing but in the full transcript (ctrl+o). */
+const hiddenTexts = new Set<string>()
+/** A hidden prompt's turn is running: a reply of just "OK" (nothing to say) draws as nothing too. */
+let quietTurn = false
+/** Those replies' rows, by row id, so a redraw after the turn keeps them hidden. */
+const quietRows = new Set<string>()
+/** What a hidden row draws. */
+const NOTHING = { type: 'Box', props: { display: 'none' } } as const
 
 /** The server's socket and this session's token, or null outside an AgentK session. */
 function linkOf($: EngineInterface): Promise<Link | null> {
@@ -107,10 +120,14 @@ async function take($: EngineInterface, l: Link, prompts: Prompt[]) {
     const ack = await post($, l, '/mod/ack', { id: p.id, state: 'accepted' }).catch(() => null)
     if (ack?.status !== 204) continue
     held.add(p.id)
+    if (p.hidden) hiddenTexts.add(p.text)
     // Not awaited: it resolves only when the prompt's turn starts (or another plugin refused it),
     // and polling goes on meanwhile.
     void $.prompt.submit({ text: p.text, asUser: true })
-      .then((r) => (r.drop !== undefined ? refused($, l, p, r.drop) : undefined))
+      .then((r) => {
+        if (r.drop !== undefined) return refused($, l, p, r.drop)
+        if (p.hidden) quietTurn = true
+      })
       .catch(() => undefined)
       .finally(() => {
         held.delete(p.id)
@@ -320,6 +337,7 @@ export const register: Register = (on) => {
   // goes idle and runs a prompt it holds, so that prompt's turn never counts as the one that ended.
   // A subagent's turn, and every turn Stop covers, goes straight on.
   on('turn.complete', async ($, e, next) => {
+    if (!e.agentId) quietTurn = false
     if (!e.isAborted || e.agentId) return next(e)
     const l = await linkOf($).catch(() => null)
     if (l) await post($, l, '/mod/turn', { turnId: e.turnId, reason: 'aborted' }).catch(() => undefined)
@@ -379,6 +397,23 @@ export const register: Register = (on) => {
     const text = json(r?.text).text
     return { text: typeof text === 'string' ? text : "AgentK didn't answer. Use Save learnings to Meko in the session's ⋯ menu in AgentK instead." }
   }).catch(() => ({ text: "AgentK didn't answer. Use Save learnings to Meko in the session's ⋯ menu in AgentK instead." }))
+
+  // AgentK's hidden prompts, and a quiet "OK" in their turns, draw as nothing; the full transcript
+  // (ctrl+o) shows them. Registered in a try: a Claude Code without the hook still runs the rest.
+  try {
+    on('ui.render', { component: 'UserMessage' }, ($, e, next) => {
+      const p = e.props as { text?: unknown; origin?: { kind?: unknown }; isExpanded?: unknown }
+      if (p.isExpanded || p.origin?.kind !== 'plugin' || typeof p.text !== 'string' || !hiddenTexts.has(p.text)) return next(e)
+      return NOTHING
+    }).catch(($, e, next) => next(e))
+    on('ui.render', { component: 'AssistantMessage' }, ($, e, next) => {
+      const p = e.props as { text?: unknown }
+      if (quietTurn && typeof p.text === 'string' && p.text.trim() === 'OK') quietRows.add(e.requestId)
+      return quietRows.has(e.requestId) ? NOTHING : next(e)
+    }).catch(($, e, next) => next(e))
+  } catch {
+    // The rows draw as Claude Code draws them
+  }
 
   on('tool.call', { tool: 'mcp__agentk__design_questions' }, async ($, e) => {
     const l = await linkOf($).catch(() => null)

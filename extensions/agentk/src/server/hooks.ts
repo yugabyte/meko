@@ -17,6 +17,8 @@ export interface HookPayload {
   notification_type?: string;
   prompt?: string;
   reason?: string;
+  /** Stop: the turn's last reply (Claude Code). */
+  last_assistant_message?: string;
   [k: string]: unknown;
 }
 

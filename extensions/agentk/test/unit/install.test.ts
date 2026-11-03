@@ -2,7 +2,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, sta
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { purgeHome, removeDb, serviceFailure, sessionWorktrees } from '../../src/server/install.js';
+import { opensBrowser, purgeHome, removeDb, serviceFailure, sessionWorktrees, welcomeTour } from '../../src/server/install.js';
+import { DEFAULT_CONFIG } from '../../src/server/config.js';
 import { ensurePrivateDir, parseDfMountPoint, parseMountType } from '../../src/server/fstype.js';
 import { pad } from '../../src/server/tty.js';
 import { getPaths } from '../../src/server/paths.js';
@@ -37,6 +38,24 @@ describe('macOS filesystem type', () => {
     expect(parseMountType(MOUNT, '/')).toBe('apfs');
     expect(parseMountType(MOUNT, '/Volumes/Team Share')).toBe('smbfs');
     expect(parseMountType(MOUNT, '/Volumes/missing')).toBeNull();
+  });
+});
+
+describe("a fresh install's welcome", () => {
+  it.each([true, false])('starts the tour only on a fresh install (fresh: %s)', (fresh) => {
+    const cfg = structuredClone(DEFAULT_CONFIG);
+    welcomeTour(cfg, fresh);
+    expect(cfg.welcome.tour).toBe(fresh ? 'agentk-101' : '');
+  });
+
+  it.each([
+    [{ fresh: true, interactive: true, running: true }, true],
+    [{ fresh: false, interactive: true, running: true }, false],
+    // Meko's Extensions page installs with --non-interactive, already in a browser.
+    [{ fresh: true, interactive: false, running: true }, false],
+    [{ fresh: true, interactive: true, running: false }, false],
+  ])('opens the browser for %j: %s', (o, opens) => {
+    expect(opensBrowser(o)).toBe(opens);
   });
 });
 

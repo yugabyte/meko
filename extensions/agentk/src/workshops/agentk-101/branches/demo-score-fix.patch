@@ -1,0 +1,47 @@
+From 874b565bdb52c6b63911f035e097dd08262513a4 Mon Sep 17 00:00:00 2001
+From: Alice <alice@example.com>
+Date: Fri, 2 Oct 2026 14:30:00 +0000
+Subject: [PATCH] Reset the score when a new game starts
+
+Pressing New game kept the last game's score, so the next game started
+where the last one ended. newGame() now sets the score back to 0, and a
+test checks that a new game starts at 0 while the best score is kept.
+---
+ src/game.js       |  1 +
+ test/game.test.js | 11 +++++++++++
+ 2 files changed, 12 insertions(+)
+
+diff --git a/src/game.js b/src/game.js
+index 76d78db..9fcd2e8 100644
+--- a/src/game.js
++++ b/src/game.js
+@@ -37,6 +37,7 @@ var Game = (function () {
+     state.dir = 'right';
+     state.lastDir = 'right';
+     state.over = false;
++    state.score = 0;
+     placeFood(state);
+     return state;
+   }
+diff --git a/test/game.test.js b/test/game.test.js
+index 11f7fe8..78c965f 100644
+--- a/test/game.test.js
++++ b/test/game.test.js
+@@ -51,3 +51,14 @@ test('the best score is kept across games', () => {
+   assert.strictEqual(s.best, 1);
+   assert.strictEqual(s.over, false);
+ });
++
++test('a new game starts with a score of 0', () => {
++  const s = Game.create(10, 10, { rand: first });
++  const head = s.snake[0];
++  s.food = { x: head.x + 1, y: head.y };
++  Game.step(s);
++  assert.strictEqual(s.score, 1);
++  Game.newGame(s);
++  assert.strictEqual(s.score, 0);
++  assert.strictEqual(s.best, 1);
++});
+-- 
+2.43.7
+

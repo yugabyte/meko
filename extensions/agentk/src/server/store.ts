@@ -37,6 +37,8 @@ export interface ProjectRow {
   meko_conversation_id: string | null;
   created_at: number;
   deleted_at: number | null;
+  /** The bundled workshop that opened it (`Project.workshop`); NULL for the rest. */
+  workshop: string | null;
 }
 
 export interface SessionRow {
@@ -145,7 +147,7 @@ export interface SessionRow {
    * repo's own config (headtrust.ts). 0: trusted. NULL: no PR head, or not checked yet (at every launch).
    */
   untrusted: number | null;
-  /** What it's for beyond its kind (`SessionPurpose`: 'learn'); NULL for the rest. */
+  /** What it's for beyond its kind (`SessionPurpose`: 'learn' or 'guide'); NULL for the rest. */
   purpose: string | null;
   /** A code-review session's task (Session.parentId); NULL for every other session. */
   parent_id: string | null;
@@ -198,6 +200,7 @@ export function toProject(db: Db, r: ProjectRow): Project {
     settings: parseSettings(r.settings_json),
     datapacks: projectDatapacks(db, r.id),
     createdAt: r.created_at,
+    workshop: r.workshop ?? null,
   };
 }
 
@@ -322,7 +325,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     kind: r.kind,
     stage: r.stage,
     hasTask: !!r.initial_prompt,
-    purpose: r.purpose === 'learn' ? 'learn' : null,
+    purpose: r.purpose === 'learn' || r.purpose === 'guide' ? r.purpose : null,
     prNumber: r.pr_number,
     prUrl: r.pr_url,
     reviewState: r.review_state,

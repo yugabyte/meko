@@ -33,7 +33,7 @@ export interface LearnJob {
  * What a poll answers: the prompts to submit, a part of a learn step to run, and a line for the mod
  * to show (what a learn step saved); null for none of them.
  */
-export type PollAnswer = { prompts: { id: string; text: string }[]; learn?: LearnJob; toast?: string } | null;
+export type PollAnswer = { prompts: { id: string; text: string; hidden?: true }[]; learn?: LearnJob; toast?: string } | null;
 
 /** The mod protocol that runs learn steps (its /mod/hello and every poll say which it speaks). */
 export const LEARN_PROTOCOL = 2;
@@ -50,6 +50,8 @@ export interface DroppedPrompt {
 interface Pending {
   id: string;
   text: string;
+  /** The mod draws it as nothing in the transcript (a workshop host's events). */
+  hidden: boolean;
   /** Answered to a poll; waiting for the mod's ack. */
   handed: boolean;
   timer: NodeJS.Timeout;
@@ -263,20 +265,22 @@ export class ModLinks {
     for (const p of fresh) p.handed = true;
     l.learn = null;
     l.toast = null;
-    return { prompts: fresh.map((p) => ({ id: p.id, text: p.text })), ...(learn ? { learn } : {}), ...(toast ? { toast } : {}) };
+    return { prompts: fresh.map((p) => ({ id: p.id, text: p.text, ...(p.hidden ? { hidden: true as const } : {}) })), ...(learn ? { learn } : {}), ...(toast ? { toast } : {}) };
   }
 
   /**
    * Sends a prompt through the mod. Resolves with its id once the server has told the mod to submit
    * it (Claude runs it when it's next idle); rejects when the mod doesn't ack it within ACCEPT_MS, or the link
-   * is reset, and then the mod is told not to submit it.
+   * is reset, and then the mod is told not to submit it. A `hidden` one draws as nothing in Claude's
+   * transcript but its full view (ctrl+o).
    */
-  send(session: string, text: string): Promise<string> {
+  send(session: string, text: string, hidden = false): Promise<string> {
     const l = this.link(session);
     return new Promise((resolve, reject) => {
       const p: Pending = {
         id: randomUUID(),
         text,
+        hidden,
         handed: false,
         resolve,
         reject,

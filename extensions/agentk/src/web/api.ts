@@ -1,6 +1,8 @@
 import type { CodeReviewDetail, CodeReviewFinding } from '../shared/codereview';
 import type {
   AppState,
+  Workshop,
+  WorkshopStart,
   CloseWorkItemsRequest,
   CreateWorkItemRequest,
   ReorderWorkItemsRequest,
@@ -163,6 +165,8 @@ export const api = {
   declineInvite: (datapackId: string) => post<void>(`/api/invites/${enc(datapackId)}/decline`),
   laterInvite: (datapackId: string) => post<void>(`/api/invites/${enc(datapackId)}/later`),
 
+  workshops: () => get<Workshop[]>('/api/workshops'),
+  startWorkshop: (id: string) => post<WorkshopStart>(`/api/workshops/${enc(id)}/start`, {}),
   openProject: (b: CreateProjectRequest) => post<OpenedProject>('/api/projects', b),
   updateProject: (id: string, b: UpdateProjectRequest) => request<Project>('PATCH', `/api/projects/${enc(id)}`, b),
   closeProject: (id: string) => request<void>('DELETE', `/api/projects/${enc(id)}`),

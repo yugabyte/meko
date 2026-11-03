@@ -255,7 +255,13 @@ The user can run the review at any time in Code, or in Review & PR once the PR i
 sheet on a phone), **Run the code review of …** in the command palette and, once the task has a
 review, **Review again** in the findings panel's header (the magnifier opens it). While AgentK
 can't take it, each of these says why (after its turn, answer it in the terminal, resume the
-session), and the server's refusal says so again. For
+session), and the server's refusal says so again. A [workshop's](workshops.md) level runs one by
+itself on the level's session as soon as its worktree is made, first as a **first look** whose
+findings stay with the review (`handOff: false`, `code_reviews.hand_off = 0`, shown as First look in
+the findings header), then, on the user's go, again once its gotchas are in Meko (`runNow(task, 'auto', { describe:
+false })`: `by = 'auto'`, "AgentK ran the code review", with no PR description first, so it needn't
+wait for the task's turn), and the demo's Code gate offers **Run code review** in place of Open PR, which
+skips the PR description too. For
 a review the user ran, the findings header also has **Cancel** while it runs and **Retry** once it
 stopped, in its own stage (`onDemandControls`), as the ⋯ menu and sheet do: the Code gate
 doesn't show it. A stopped review it replaces passes on the Open PR instructions and a move's
@@ -342,7 +348,11 @@ changed file's ancestors': a table of Datapack, ID and What's in it, `src/shared
 lists their datapacks in the base prompt. The passes search the gotchas datapack (its name ends in
 `/gotchas`, as the cloud's miner names them) themselves with `knowledgebase_search` and its id, and
 may search the others with `context_search`; a finding credits a gotcha (`MG-<n>`) only with the
-sentence it instantiates, and AgentK drops a credit without one. With no `MEKO.md` the review runs
+sentence it instantiates, and AgentK drops a credit without one. A credit keeps that sentence
+(`Finding.quotes`, `CodeReviewFinding.credits`; a review from before has ids only), and the review's
+done event counts the kept findings that credit one: `Code review done: 1 major, 1 caught with Meko
+(MG-2)` (`caughtWithMeko`), which a [workshop's host](workshops.md) reads too; each round's event
+(`Code review, round 1: 1 major, 1 caught with Meko (MG-2)`) counts that round's the same way. With no `MEKO.md` the review runs
 without Meko. Retired gotchas aren't filtered: the cloud's roster of them isn't in Meko.
 
 ## In the UI
@@ -372,7 +382,7 @@ waiting for the user's check or the task's fixes (preparing, sweeping, scoring, 
 Retry), it opens the review's own screen, its terminal with the findings beside it on a desktop;
 otherwise (describing, which has no review session yet, triage, fixing, done, cancelled) the findings panel beside the task's terminal (`ReviewFindings`:
 the MEKO.md files' datapacks, each by name with the gotchas one tagged; every candidate by round and sweep, the dropped ones under **Dismissed** below the kept ones and the running round's candidates, which the server marks `pending`, with its passes, verdict, confidence, kept, pending or why dropped,
-credited gotchas, the user's note and what the task did; while the round's findings wait on the user, a **Waits on you** bar under its
+credited gotchas, each marked **Caught with Meko** with the gotcha's sentence under the comment, the user's note and what the task did; while the round's findings wait on the user, a **Waits on you** bar under its
 header with **Send N to AgentK** (**Finish review** with every one dismissed, waiting for notes still being saved), and on each of that
 round's kept findings **Add a note** and **Dismiss** (or **Restore**, under Dismissed), each saved as it's made; while the review runs or the task writes the PR description,
 `findingsReviewing()`, it reads **Reviewing** under the findings so far, with a bar along its header

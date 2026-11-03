@@ -9,17 +9,20 @@ const cand = (over: Partial<Candidate> = {}): Candidate => ({
 });
 
 describe('merging the passes', () => {
-  it('keys on file and line: one candidate per line, corroborated, worst severity and fuller comment kept, gotchas unioned', () => {
+  it('keys on file and line: one candidate per line, corroborated, worst severity and fuller comment kept, gotchas and their quotes unioned', () => {
     const { candidates, added } = mergeSweep([], [
-      report('guide', [f('./a.go', 3, 'minor', 'x', ['MG-1', 'MG-2']), f('a.go', 3, 'major', 'again from guide')]),
-      report('diff', [f('a.go', 3, 'blocker', 'the longest comment of all', ['MG-2', 'MG-3'])]),
+      report('guide', [{ ...f('./a.go', 3, 'minor', 'x', ['MG-1', 'MG-2']), quotes: { 'MG-1': 'one', 'MG-2': 'two' } }, f('a.go', 3, 'major', 'again from guide')]),
+      report('diff', [{ ...f('a.go', 3, 'blocker', 'the longest comment of all', ['MG-2', 'MG-3']), quotes: { 'MG-2': 'two again', 'MG-3': 'three' } }]),
       report('claims', [f('b.go', 1, 'minor', 'other')]),
     ], 1);
     expect(added).toBe(2);
     expect(candidates).toHaveLength(2);
     expect(candidates[0]).toMatchObject({
       passes: ['guide', 'diff'],
-      finding: { file: 'a.go', line: 3, severity: 'blocker', comment: 'the longest comment of all', gotchas: ['MG-1', 'MG-2', 'MG-3'] },
+      finding: {
+        file: 'a.go', line: 3, severity: 'blocker', comment: 'the longest comment of all', gotchas: ['MG-1', 'MG-2', 'MG-3'],
+        quotes: { 'MG-1': 'one', 'MG-2': 'two', 'MG-3': 'three' },
+      },
     });
   });
 

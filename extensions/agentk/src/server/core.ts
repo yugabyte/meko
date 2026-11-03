@@ -33,6 +33,7 @@ import { sweepStaged } from './pastes.js';
 import { consoleLogger, errMsg, type Logger } from './log.js';
 import { InviteService } from './invites.js';
 import { KnowledgeService } from './knowledge.js';
+import { WorkshopService } from './workshops.js';
 import { MekoClient } from './meko.js';
 import { MekoAgents, mekoMcpGaps, readMekoAgents, type MekoAgentsRead } from './mekoagents.js';
 import { MekoQuestions } from './mekoquestions.js';
@@ -94,6 +95,8 @@ export interface CoreOptions {
   mekoHandOver?: typeof handOverMekoKey;
   /** Reads Meko's list of agents (mekoagents.ts; tests fake it); by default GET /api/v1/agents on the Meko running on this computer. */
   mekoAgents?: () => Promise<MekoAgentsRead>;
+  /** Where the bundled workshops are (workshops.ts; tests point it at their own); by default the install's. */
+  workshopsRoot?: string;
 }
 
 type NotifyEvent = Extract<ServerEvent, { type: 'notify' }>;
@@ -186,6 +189,7 @@ export class Core extends EventEmitter {
   readonly kiroPlan: KiroPlanStore;
   readonly invites: InviteService;
   readonly knowledge: KnowledgeService;
+  readonly workshops: WorkshopService;
   readonly mekoTools: MekoTools;
   /** Whether Meko's capture in Claude Code's sessions reaches AgentK's Meko (MekoStatus.claude, with its MCP server from `mekoAgents`). */
   readonly claudeMeko: MekoClaudeWatch;
@@ -284,6 +288,7 @@ export class Core extends EventEmitter {
     this.projects = new ProjectService(this);
     this.worktrees = new WorktreePool(this);
     this.sessions = new SessionManager(this);
+    this.workshops = new WorkshopService(this, o.workshopsRoot);
     this.lifecycle = new Lifecycle(this);
     this.learn = new Learner(this);
     this.comments = new CommentService(this);
@@ -774,6 +779,8 @@ export class Core extends EventEmitter {
     await this.sessions.recover();
     await this.reviews.recover().catch((e: unknown) => this.log.warn('recovering code reviews failed', errMsg(e)));
     void this.sessions.refreshDiffStats().catch(() => undefined);
+    // A fresh install starts its tour (`[welcome] tour`) once its sessions are back; not awaited.
+    void this.workshops.startOnFreshInstall();
     pruneSessionEvents(this.db);
     this.prunePins();
     this.sweepStaged();
@@ -814,6 +821,7 @@ export class Core extends EventEmitter {
     this.sessions.mod.closeAll();
     this.learn.stop();
     this.knowledge.stop();
+    this.workshops.events.stop();
     await this.closeHooks();
     // Let the last turns reach Meko; one cut off here catches up when the server starts again. Kiro's
     // and OpenCode's one-shot runs already going (the plan read, deleting a run's session) get as long

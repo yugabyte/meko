@@ -8,8 +8,9 @@ import { parseArgs } from 'node:util';
 import { HARNESS_CAPS, HARNESS_IDS, versionAtLeast, type HarnessId } from '../shared/harnesses.js';
 import { claudeUserDir } from './claude.js';
 import { cliVersion, harnessCommand } from './harness/version.js';
-import { DEFAULT_MEKO_URL, dbPath, envMekoWebUrl, loadConfig, onLoopback, ownMekoKey, saveConfig, type Config } from './config.js';
+import { DEFAULT_MEKO_URL, FRESH_INSTALL_TOUR, dbPath, envMekoWebUrl, loadConfig, onLoopback, ownMekoKey, saveConfig, type Config } from './config.js';
 import { assertFree, InstanceBusyError } from './instance.js';
+import { openBrowser } from './browser.js';
 import { checkMeko, tryMekoToken } from './meko.js';
 import { isLocalMeko, linkedThroughMeko, probeLocalMeko, type LocalMekoProbe } from './mekolocal.js';
 import { handOverMekoKey, type OwnMekoLink } from './mekohandover.js';
@@ -359,6 +360,23 @@ function checkTools(args: string[]): void {
   if (r.status !== 0) throw new InstallError(r.error ? `couldn't check the tools: ${r.error.message}` : 'the tools AgentK needs aren\'t all there (see above).');
 }
 
+/**
+ * A fresh install starts the AgentK tour at the server's first start (`[welcome] tour`); an upgrade
+ * or a reinstall doesn't, and keeps the user's projects as they are.
+ */
+export function welcomeTour(cfg: Config, fresh: boolean): void {
+  if (fresh) cfg.welcome.tour = FRESH_INSTALL_TOUR;
+}
+
+/**
+ * Whether the install opens AgentK in the browser at its end: only a fresh, interactive install
+ * whose server answers, so a new user lands in the tour. `--non-interactive` (Meko's Extensions
+ * page, which is already in a browser) and upgrades open nothing.
+ */
+export function opensBrowser(o: { fresh: boolean; interactive: boolean; running: boolean }): boolean {
+  return o.fresh && o.interactive && o.running;
+}
+
 export async function runInstall(args: string[]): Promise<void> {
   const { values } = parseArgs({
     args,
@@ -481,6 +499,7 @@ export async function runInstall(args: string[]): Promise<void> {
       ui.ok('Database', tildify(db));
     }
 
+    welcomeTour(cfg, fresh);
     saveConfig(paths, cfg);
     ui.ok('Config', tildify(paths.config));
     const tmpWarning = tmpHomeWarning(paths.home);
@@ -512,6 +531,10 @@ export async function runInstall(args: string[]): Promise<void> {
       ui.blank();
       ui.text(`    ${style.cyan(`${meko.meko.webUrl}${AGENTK_PATH}`)}`);
       ui.blank();
+      // A new user lands in the tour; over SSH or with no display there's nothing to open here.
+      if (opensBrowser({ fresh, interactive, running }) && (await openBrowser(`${meko.meko.webUrl}${AGENTK_PATH}`))) {
+        ui.note('Opened it in your browser, where the AgentK tour starts.');
+      }
     } else {
       ui.text(style.bold('Done.'));
       ui.blank();

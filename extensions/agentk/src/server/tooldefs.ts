@@ -55,6 +55,11 @@ export const TOOL_DEFS: ToolDef[] = [
               name: { type: 'string', description: 'A task without a ref: its short title.' },
               prompt: { type: 'string', description: "A task without a ref: what to do, in the user's words." },
               stage: { type: 'string', enum: ['explore', 'design', 'code'], description: "Where a task starts (an issue's: design or code). Default design." },
+              branch: {
+                type: 'string',
+                description: "A task without a ref: an existing branch (in the project's repo, or on its origin) to work on as it is, " +
+                  'instead of a new branch. Default: a new branch.',
+              },
               agent: {
                 type: 'string', enum: ['claude', 'opencode', 'kiro'],
                 description: 'The coding agent it runs on, only when the user names one (list says which are available). Default: the default agent.',

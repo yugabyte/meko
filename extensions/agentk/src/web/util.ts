@@ -703,6 +703,17 @@ export interface GateButton {
   title: string;
 }
 
+/**
+ * The Code gate in a project that opens no PR (a workshop's demo, `Project.workshop`): Run code
+ * review where Open PR would be, while it's offered (`canRunReview`); null while a review runs, its
+ * findings are fixed, or they wait on the user, which the gate shows as a review's gate does.
+ */
+export function demoReviewGate(session: Session): GateButton | null {
+  const run = canRunReview(session);
+  if (!run.offered) return null;
+  return { label: 'Run code review', reason: run.wait, title: run.wait ?? "Run AgentK's code review on the change as it is now" };
+}
+
 /** The Open PR gate in Code. Mid-turn, a press queues the PR prompt for the turn's end. Mirrors the server's checks. */
 export function openPrGate(session: Session): GateButton {
   const gate = (reason: string | null, title = 'Commit, push and open a pull request'): GateButton => ({ label: 'Open PR', reason, title: reason ?? title });

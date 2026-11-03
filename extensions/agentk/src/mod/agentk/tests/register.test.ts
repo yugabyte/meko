@@ -167,6 +167,34 @@ test('tells AgentK of a turn the person interrupted, and of no other turn', asyn
   expect(calls).toEqual([{ path: '/mod/turn', body: { turnId: 't1', reason: 'aborted' }, socketPath: '/ak/hook.sock', token: 'tok' }])
 })
 
+test("draws AgentK's hidden prompts as nothing, and a bare OK in their turns, but in full with ctrl+o", async ($, on) => {
+  mock.env(on, ENV)
+  const clock = mock.clock(on)
+  const events = 'AgentK events:\n- Review the score fix: First look done'
+  server(on, [[{ id: 'p1', text: events, hidden: true }]])
+  engine(on)
+  on('ui.render', () => ({ type: 'Text', children: ['drawn'] }))
+  on('turn.complete', () => ({ text: '' }))
+  const drawn = expect.objectContaining({ type: 'Text' })
+  await $.session.start(START)
+  await clock.advance(5)
+  const origin = { kind: 'plugin', name: 'agentk', asUser: true } as const
+  const user = (text: string, isExpanded = false) =>
+    $.ui.render({ surface: 'terminal', component: 'UserMessage', requestId: `u-${text}`, props: { text, origin, isExpanded } })
+  const reply = (requestId: string, text: string) =>
+    $.ui.render({ surface: 'terminal', component: 'AssistantMessage', requestId, props: { text, isFirstOfReply: true } })
+  const hidden = expect.objectContaining({ type: 'Box', props: { display: 'none' } })
+  expect(await user(events)).toEqual(hidden)
+  expect(await user(events, true)).toEqual(drawn)
+  expect(await user('Implement the design.')).toEqual(drawn)
+  expect(await reply('a1', 'OK')).toEqual(hidden)
+  expect(await reply('a2', 'The first look missed the trap.')).toEqual(drawn)
+  // After the turn, an OK is the model's own, and the hidden one stays hidden.
+  await $.turn.complete({ answer: 'OK', durationMs: 900, turnId: 't1', reason: 'answer', isAborted: false })
+  expect(await reply('a3', 'OK')).toEqual(drawn)
+  expect(await reply('a1', 'OK')).toEqual(hidden)
+})
+
 test('does nothing outside an AgentK session', async ($, on) => {
   mock.env(on, {})
   const clock = mock.clock(on)

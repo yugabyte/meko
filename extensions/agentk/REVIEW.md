@@ -271,6 +271,11 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 ## 4. Data and Meko
 
 - [ ] Schema changes are a new migration; shipped migrations are unchanged.
+- [ ] A workshop's demo (`src/workshops/`, docs/design/workshops.md) stays local and the same on
+      every install: no remote, none of the user's git config, and its gotchas never in the repo.
+      A workshop's project opens no PR (`checkOpensPr`), and its host never passes a gate for the
+      user. A change to a level's patch or `gotchas.md` comes with a passing `npm run
+      check:demo-review` in the PR description.
 - [ ] Every project still has exactly one dedicated datapack; each session gets its own `MEKO_AGENT_ID` and pin (`sessionAgentId()`), never one keyed on the project id.
 - [ ] Several projects can share a repo, and many can run sessions on it at once: per-project state
       (pane names, lookups) is keyed by project id, not repo path, and git work on the repo only

@@ -45,11 +45,11 @@ export function mergeSweep(cands: Candidate[], reports: PassReport[], sweep: num
   const index = new Map<string, number>();
   cands.forEach((c, i) => index.set(key(c.finding.file, c.finding.line), i));
   const earlier = cands.length;
-  const out = cands.map((c) => ({ ...c, finding: { ...c.finding, gotchas: [...c.finding.gotchas] }, passes: [...c.passes] }));
+  const out: Candidate[] = cands.map((c) => ({ ...c, finding: { ...c.finding, gotchas: [...c.finding.gotchas], quotes: { ...c.finding.quotes } }, passes: [...c.passes] }));
   let added = 0;
   for (const r of reports) {
     for (const raw of r.findings) {
-      const f: Finding = { ...raw, file: raw.file.trim().replace(/^(\.\/)+/, ''), gotchas: [...raw.gotchas] };
+      const f: Finding = { ...raw, file: raw.file.trim().replace(/^(\.\/)+/, ''), gotchas: [...raw.gotchas], quotes: { ...raw.quotes } };
       const k = key(f.file, f.line);
       const i = index.get(k);
       if (i === undefined) {
@@ -61,7 +61,10 @@ export function mergeSweep(cands: Candidate[], reports: PassReport[], sweep: num
       const c = out[i];
       if (c.sweep < sweep) continue;
       if (!c.passes.includes(r.pass)) c.passes.push(r.pass);
-      for (const id of f.gotchas) if (!c.finding.gotchas.includes(id)) c.finding.gotchas.push(id);
+      for (const id of f.gotchas) {
+        if (!c.finding.gotchas.includes(id)) c.finding.gotchas.push(id);
+        if (!c.finding.quotes?.[id] && f.quotes?.[id]) c.finding.quotes = { ...c.finding.quotes, [id]: f.quotes[id] };
+      }
       if (rank(f.severity) < rank(c.finding.severity)) c.finding.severity = f.severity;
       if (f.comment.length > c.finding.comment.length) c.finding.comment = f.comment;
     }
