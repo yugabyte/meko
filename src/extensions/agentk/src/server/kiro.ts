@@ -21,6 +21,11 @@ export const KIRO_SESSION_MARKERS = ['KIRO_SESSION_ID', 'KIRO_CLI_IS_CHILD_PROCE
 
 /** The agent Kiro sessions run as (`--agent`), derived from the user's default agent with AgentK's hooks added. */
 export const AGENTK_AGENT = 'agentk';
+/**
+ * The agent Kiro 3.0 sessions run as with `[kiro] trust_tools`: `agentk` with a rule that allows
+ * every tool (`ALLOW_ALL`), since Kiro 3.0's engine ignores `--trust-tools`. Only while that's on.
+ */
+export const AGENTK_TRUSTED_AGENT = 'agentk-trusted';
 /** The agent Ask AgentK runs as: no tools, no MCP servers, no hooks. */
 export const ASK_AGENT = 'agentk-ask';
 /** The agent the plan usage read (`/usage`) runs as, likewise inert. */
@@ -156,6 +161,15 @@ export interface KiroHook {
 /** AgentK's hooks for each Kiro event, added after the base agent's own. */
 export type KiroHooks = Partial<Record<'agentSpawn' | 'userPromptSubmit' | 'preToolUse' | 'postToolUse' | 'stop', KiroHook[]>>;
 
+/** Kiro 3.0's permission rule that allows every tool (its `allow-all` preset). */
+const ALLOW_ALL = { capability: 'all', effect: 'allow' };
+
+/** Whether an agent's permission rules include `ALLOW_ALL`. */
+function allowsAll(a: Json): boolean {
+  const rules = isObject(a.permissions) ? a.permissions.rules : null;
+  return Array.isArray(rules) && rules.some((r) => isDeepStrictEqual(r, ALLOW_ALL));
+}
+
 /** AgentK's session tools in the `agentk` agent: their MCP server and their skill. */
 export interface KiroTools {
   name: string;
@@ -171,8 +185,13 @@ export interface KiroTools {
  * bookkeeping is left out. It grants nothing else the base doesn't: `[kiro] trust_tools` is a flag
  * on AgentK's launch (kiroArgs), so a chat someone starts as `agentk` outside AgentK asks as their
  * own agent would (and the tools there say it isn't an AgentK session).
+ *
+ * With `trustAll`, it's `agentk-trusted` instead, the agent AgentK launches Kiro 3.0 as with
+ * `[kiro] trust_tools` on: the same, with `ALLOW_ALL` after the base's own permission rules. Kiro
+ * 3.0 settles a call by a matching deny, then an ask, before an allow, so the user's own deny and
+ * ask rules still hold.
  */
-export function agentkAgent(base: Json, hooks: KiroHooks, o: { mekoCapture?: boolean; tools?: KiroTools | null } = {}): Json {
+export function agentkAgent(base: Json, hooks: KiroHooks, o: { mekoCapture?: boolean; tools?: KiroTools | null; trustAll?: boolean } = {}): Json {
   const { kiroUpgrade: _upgrade, ...rest } = base;
   void _upgrade;
   const merged: Record<string, unknown[]> = {};
@@ -183,7 +202,11 @@ export function agentkAgent(base: Json, hooks: KiroHooks, o: { mekoCapture?: boo
   for (const [event, list] of Object.entries(own)) if (Array.isArray(list)) merged[event] = list.filter(keep);
   for (const [event, list] of Object.entries(hooks)) merged[event] = [...(merged[event] ?? []), ...(list ?? [])];
   const from = typeof base.name === 'string' ? ` Based on ${base.name}.` : '';
-  const agent: Json = { ...rest, name: AGENTK_AGENT, description: `${MARK}${from}`, hooks: merged };
+  const agent: Json = { ...rest, name: o.trustAll ? AGENTK_TRUSTED_AGENT : AGENTK_AGENT, description: `${MARK}${from}`, hooks: merged };
+  if (o.trustAll) {
+    const perms = isObject(base.permissions) ? base.permissions : {};
+    agent.permissions = { ...perms, rules: [...(Array.isArray(perms.rules) ? perms.rules : []), ALLOW_ALL] };
+  }
   const t = o.tools;
   if (t) {
     const list = (v: unknown) => (Array.isArray(v) ? v : []);
@@ -238,10 +261,13 @@ function hookLines(hooks: unknown): string[] {
 
 /**
  * Whether an agent file runs what `agent` would, in the parts AgentK owns, whichever format it's
- * in: the same hooks (with this home's script paths) and the same MCP servers.
+ * in: the same hooks (with this home's script paths), the same MCP servers, and every tool allowed
+ * only when `agent` allows it (`agentk-trusted`, which Kiro 3.0 doesn't upgrade, since it has
+ * `permissions`: should a later Kiro drop the rule, it's written again).
  */
 function runsAsWritten(file: Json, agent: Json): boolean {
-  return isDeepStrictEqual(hookLines(file.hooks), hookLines(agent.hooks)) && isDeepStrictEqual(file.mcpServers ?? {}, agent.mcpServers ?? {});
+  return isDeepStrictEqual(hookLines(file.hooks), hookLines(agent.hooks)) && isDeepStrictEqual(file.mcpServers ?? {}, agent.mcpServers ?? {})
+    && allowsAll(file) === allowsAll(agent);
 }
 
 /**
@@ -276,11 +302,29 @@ export function writeKiroAgent(agent: Json, home = kiroHome(), written?: string)
 }
 
 /**
- * Removes the agent AgentK wrote in Kiro's home (uninstall). Ask AgentK's `agentk-ask` is a
+ * Removes the agents AgentK wrote in Kiro's home (uninstall). Ask AgentK's `agentk-ask` is a
  * workspace agent in AgentK's own run folder, which goes with the home.
  */
 export function removeKiroAgent(home = kiroHome()): void {
-  rmSync(join(home, 'agents', `${AGENTK_AGENT}.json`), { force: true });
+  for (const name of [AGENTK_AGENT, AGENTK_TRUSTED_AGENT]) rmSync(join(home, 'agents', `${name}.json`), { force: true });
+}
+
+/** Whether a global agent file AgentK wrote is there (and still AgentK's). */
+export function ownKiroAgentExists(name: string, home = kiroHome()): boolean {
+  return ours(readJson(join(home, 'agents', `${name}.json`)));
+}
+
+/**
+ * Removes a global agent file AgentK wrote when it's there and still AgentK's (`agentk-trusted`
+ * once `[kiro] trust_tools` is off), and AgentK's copy of what it last wrote there (`written`) in
+ * any case. True when it removed the agent file.
+ */
+export function removeOwnKiroAgent(name: string, home = kiroHome(), written?: string): boolean {
+  const file = join(home, 'agents', `${name}.json`);
+  if (written) rmSync(written, { force: true });
+  if (!ours(readJson(file))) return false;
+  rmSync(file, { force: true });
+  return true;
 }
 
 /** Kiro's file for one of its sessions (`<session id>.json`, beside its `.jsonl` history). */

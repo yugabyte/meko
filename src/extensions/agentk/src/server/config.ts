@@ -53,7 +53,8 @@ export interface Config {
   /**
    * Kiro CLI (src/server/harness/kiro.ts). command: how it's run. enabled: offer it for new sessions when
    * `<command> --version` answers. trustTools: Kiro sessions start with every tool trusted (`--trust-tools=*`,
-   * from a session's next launch or resume), so Kiro runs any tool without asking.
+   * and on Kiro 3.0, whose engine ignores that flag, as the `agentk-trusted` agent, which allows every
+   * tool; from a session's next launch or resume), so Kiro runs any tool without asking.
    */
   kiro: { command: string; enabled: boolean; trustTools: boolean };
   /**

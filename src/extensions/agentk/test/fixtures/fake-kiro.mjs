@@ -98,10 +98,11 @@ const agentFile = join(home, 'agents', `${opt('--agent')}.json`);
 const agent = JSON.parse(readFileSync(agentFile, 'utf8'));
 // Like Kiro 3.0, when the test put `kiro3` in the fake's dir: it upgrades the agent's file in place
 // as `kiro-cli agent upgrade` does (its hooks a list of named hooks, `fs_write` widened to `write`,
-// its own bookkeeping added), and its hooks get Claude Code's event names.
+// its own bookkeeping added), and its hooks get Claude Code's event names. A file that already has
+// `permissions` (AgentK's agentk-trusted) is "out of sync" to Kiro 3.0.0's upgrade and left as it is.
 const kiro3 = existsSync(join(dir, 'kiro3'));
 const EVENT_NAMES = { agentSpawn: 'SessionStart', userPromptSubmit: 'UserPromptSubmit', preToolUse: 'PreToolUse', postToolUse: 'PostToolUse', stop: 'Stop' };
-if (kiro3 && !agent.kiroUpgrade) {
+if (kiro3 && !agent.kiroUpgrade && !agent.permissions) {
   const hooks = Object.entries(agent.hooks ?? {}).flatMap(([trigger, list]) => list.map((h, i) => ({
     name: `${trigger}-${i}`, trigger, ...(h.matcher ? { matcher: h.matcher === 'fs_write' ? 'write' : h.matcher } : {}),
     action: { type: 'command', command: h.command }, timeout: (h.timeout_ms ?? 30000) / 1000,

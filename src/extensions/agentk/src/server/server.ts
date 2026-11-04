@@ -615,6 +615,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     }
     const slackListBefore = core.config.workQueue.slackList;
     const enabledBefore = Object.fromEntries(HARNESS_IDS.map((id) => [id, core.config[id].enabled]));
+    const harnessBefore = Object.fromEntries(HARNESS_IDS.map((id) => [id, JSON.stringify(core.config[id])]));
     const before = { cap: core.worktrees.cap(), days: core.worktrees.idleDays() };
     core.updateConfig((c) => {
       if (b.reposRoots) c.repos.roots = b.reposRoots.map((r) => r.trim());
@@ -645,11 +646,17 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (core.config.workQueue.slackList !== slackListBefore) core.workQueue.slackListChanged();
     // An agent turned on: its version (and Kiro's agent file) follow, in the background. One turned
     // off forgets its last read, so it isn't offered on that read once it's turned on again.
+    // Another of its own settings changed: its files follow now, not at its next launch (Kiro's
+    // agentk-trusted goes as soon as [kiro] trust_tools is off).
     for (const id of HARNESS_IDS) {
-      if (core.config[id].enabled === enabledBefore[id]) continue;
       const h = core.harnesses.of(id);
+      const prepare = () => h.prepare(core.paths, core.config).catch((e) => core.log.warn(`preparing ${h.caps.label} failed`, errMsg(e)));
+      if (core.config[id].enabled === enabledBefore[id]) {
+        if (JSON.stringify(core.config[id]) !== harnessBefore[id]) void prepare();
+        continue;
+      }
       if (!core.config[id].enabled) void h.version(core.config);
-      else void h.version(core.config, true).then(() => h.prepare(core.paths, core.config)).catch((e) => core.log.warn(`preparing ${h.caps.label} failed`, errMsg(e)));
+      else void h.version(core.config, true).then(prepare);
     }
     // Removing build trees can take a while, so it runs in the background, and only when a limit went down.
     const cleanup = (what: string, fn: () => Promise<void>) => void fn().catch((e) => core.log.warn(`${what} failed`, errMsg(e)));
