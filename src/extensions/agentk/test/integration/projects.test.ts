@@ -1,7 +1,7 @@
 import { symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { makeEnv, type TestEnv } from '../helpers.js';
+import { makeEnv, noMeko, type TestEnv } from '../helpers.js';
 import { all, get, run } from '../../src/server/db.js';
 
 describe('projects', () => {
@@ -136,9 +136,7 @@ describe('projects', () => {
 
   it("doesn't ask Meko for counts while it's off", async () => {
     const p = await create('Alpha');
-    env.core.updateConfig((c) => {
-      c.meko.apiKey = '';
-    });
+    await noMeko(env);
     const before = env.meko.calls.length;
     expect((await env.core.projects.home(p.id)).datapacks[0]).toMatchObject({ memoryCount: null });
     expect(env.meko.calls.slice(before).some((c) => c.name === 'describeDatapack')).toBe(false);

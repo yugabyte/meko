@@ -480,8 +480,12 @@ export interface CallHomeInstall {
   /** 'meko': the Meko on this computer serves AgentK to browsers. Older versions sent 'local' or 'remote'. */
   access: 'meko';
   service: 'systemd' | 'launchd' | 'none';
-  /** Sharing is 'api' when AgentK shares through Meko's API, 'none' when it can't (Meko off, or no API URL). */
-  meko: { enabled: boolean; keySource: MekoKeySource | 'none'; sharing: 'api' | 'none' };
+  /**
+   * `keySource`: 'meko' with a Meko (the one on this computer), 'none' without. `sharing`: 'api' when
+   * AgentK shares through Meko's API (whenever there's a Meko), 'none' when it can't. Older versions
+   * sent 'local', 'config', 'env' or 'claude' as the key's source.
+   */
+  meko: { enabled: boolean; keySource: 'meko' | 'none'; sharing: 'api' | 'none' };
   /** The UTC day this install first built a report. */
   firstDay: string;
 }
@@ -687,8 +691,6 @@ export interface ProjectSettings {
  */
 export interface MekoGaps {
   datapackId: string;
-  /** The datapack is the linked Meko Cloud's: Meko's web UI shows its Context Gaps on a page of their own. */
-  cloud: boolean;
   empty: number;
   weak: number;
 }
@@ -1010,23 +1012,16 @@ export interface ReleaseNotes {
 
 export interface MekoStatus {
   /**
-   * There's a Meko to use (Meko's Meko Cloud link, or the Meko on this computer); when false projects
-   * work without datapacks. Meko isn't polled: an action that needs it and fails says why.
+   * There's a Meko to use: the one running on this computer, which also reaches Meko Cloud once it's
+   * linked there. When false projects work without datapacks. Meko isn't polled: an action that
+   * needs it and fails says why. Sharing goes to Meko whenever it's true; a Meko that doesn't share
+   * says so itself.
    */
   configured: boolean;
   /** The Meko MCP server AgentK uses (and sets the agents up with); null when there's none. */
   url: string | null;
-  /** Where its key comes from (`MekoKeySource`); null when there's none. */
-  source: MekoKeySource | null;
-  /** Meko web app base URL, for links to datapacks. Null when unknown. */
+  /** The web app Meko names for share links (Meko Cloud's while it's linked to it); null when it names none, and there are no share links. */
   webUrl: string | null;
-  /**
-   * AgentK can share datapacks through Meko's API: there's a Meko and its API URL is known (what
-   * `InviteService.requireSharing()` checks). Usually false on the Meko on this computer, which has
-   * no share routes: Share then points to Meko Cloud's sign-up instead. An API URL on its own origin,
-   * kept in config.toml from before Meko owned the link (`forKey()` in config.ts), makes it true.
-   */
-  sharing: boolean;
   /**
    * Whether Claude Code's sessions reach the Meko AgentK uses: its `meko` MCP server, as Meko reports
    * it (`HarnessStatus.meko`), then what Meko's capture needs in Claude Code: the plugin, and the
@@ -1386,8 +1381,8 @@ export interface ShareLink {
 
 /**
  * GET /api/meko/datapacks/:id/share-link. With no link: `permission` (only the owner or a
- * maintainer can share by link), `unsupported` (this Meko has no share links), `no-web-url` (Meko's
- * web app URL isn't known, so the link can't be built).
+ * maintainer can share by link), `unsupported` (this Meko has no share links), `no-web-url` (Meko
+ * names no web app for share links, so the link can't be built).
  */
 export type ShareLinkState = { link: ShareLink } | { link: null; unavailable: 'permission' | 'unsupported' | 'no-web-url' };
 
@@ -1921,14 +1916,6 @@ export interface Settings {
 
 /** The longest the work queue's sync interval can be (`Settings.workQueueSyncMinutes`), in minutes: a day. */
 export const WORK_SYNC_MINUTES_MAX = 1440;
-
-/**
- * Where AgentK's Meko key comes from: Meko's Meko Cloud link (`meko`), or the Meko running on this
- * computer (`local`, its client token). Before Meko owns the link (a Meko too old to keep one, or
- * the one-time handover still to run), AgentK's own: config.toml, the environment or Claude Code's
- * settings.json.
- */
-export type MekoKeySource = 'meko' | 'local' | 'config' | 'env' | 'claude';
 
 /**
  * The Meko on this computer, as `meko token --json` last said: running, installed but stopped, none

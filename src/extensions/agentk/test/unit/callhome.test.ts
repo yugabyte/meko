@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CallHomeInstall, CallHomeReport, YbCallHome } from '../../src/shared/types.js';
 import { DEFAULT_CONFIG, type Config } from '../../src/server/config.js';
+import { LocalMekoReader } from '../../src/server/mekolocal.js';
 import { kvGet, kvSet, openDb, run, type Db } from '../../src/server/db.js';
 import { FILE_TYPE_LIMIT, countFileTypes, extOf, parseNumstatZ, readFileTypes, sumFileTypes } from '../../src/server/filetypes.js';
 import type { Logger } from '../../src/server/log.js';
@@ -90,7 +91,7 @@ const at = (iso: string) => Date.parse(iso);
 
 const INSTALL: CallHomeInstall = {
   version: '0.20260928.0', channel: 'stable', platform: 'linux', arch: 'x64', node: '22.18.0', claudeCode: '2.4.1',
-  access: 'meko', service: 'none', meko: { enabled: true, keySource: 'claude', sharing: 'api' }, firstDay: '2026-07-02',
+  access: 'meko', service: 'none', meko: { enabled: true, keySource: 'meko', sharing: 'api' }, firstDay: '2026-07-02',
 };
 const INSTALL_ID = '5f0c7a8e-3b1d-4c2e-9f6a-1b2c3d4e5f60';
 
@@ -607,20 +608,24 @@ describe('what the report says about the install', () => {
     return a;
   };
 
-  it("reads the agents' versions and Meko from the config, and says Meko serves AgentK", async () => {
+  it("reads the agents' versions from the config and Meko from the one on this computer, linked or not, and says Meko serves AgentK", async () => {
     const cfg = structuredClone(DEFAULT_CONFIG);
-    cfg.meko.apiKey = 'key';
-    const facts = await installFacts({
-      config: cfg, version: '0.20260928.0', firstDay: '2026-09-28', probe: probe({ claude: '2.4.1 (Claude Code)\n', opencode: '1.19.4\n' }),
-    });
-    expect(facts).toMatchObject({
-      version: '0.20260928.0', channel: 'stable', platform: process.platform, arch: process.arch, node: process.versions.node,
-      claudeCode: '2.4.1', opencode: '1.19.4', access: 'meko', meko: { enabled: true, keySource: 'config', sharing: 'api' }, firstDay: '2026-09-28',
-    });
-    // A self-hosted Meko with no web app or API URL set: AgentK can't share.
-    cfg.meko.url = 'https://meko.example.com/mcp';
-    const noApi = await installFacts({ config: cfg, version: '0.20260928.0', firstDay: '2026-09-28', probe: probe({}) });
-    expect(noApi.meko).toEqual({ enabled: true, keySource: 'config', sharing: 'none' });
+    const reader = new LocalMekoReader(async () => ({ state: 'running', meko: { url: 'http://127.0.0.1:7778/mcp', token: 't' }, cloud: { account: '', webUrl: '' } }));
+    await reader.refresh();
+    try {
+      const facts = await installFacts({
+        config: cfg, version: '0.20260928.0', firstDay: '2026-09-28', probe: probe({ claude: '2.4.1 (Claude Code)\n', opencode: '1.19.4\n' }),
+      });
+      expect(facts).toMatchObject({
+        version: '0.20260928.0', channel: 'stable', platform: process.platform, arch: process.arch, node: process.versions.node,
+        claudeCode: '2.4.1', opencode: '1.19.4', access: 'meko', meko: { enabled: true, keySource: 'meko', sharing: 'api' }, firstDay: '2026-09-28',
+      });
+    } finally {
+      reader.clear();
+    }
+    // No Meko running on this computer.
+    const none = await installFacts({ config: cfg, version: '0.20260928.0', firstDay: '2026-09-28', probe: probe({}) });
+    expect(none.meko).toEqual({ enabled: false, keySource: 'none', sharing: 'none' });
   });
 
   it('takes only versions the schema keeps: numbers, one letter after them, and a lane or number as prerelease', () => {

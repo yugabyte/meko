@@ -16,7 +16,7 @@ Claude (or OpenCode, or Kiro) process held by AgentK's session host; the agent a
 (`src/server/harness/`, [docs/design/harnesses.md](docs/design/harnesses.md)). A task runs on Explore → Design → Code → Review & PR → Merge & Close,
 starting at Explore, Design or Code (the user picks), and a Review a PR session (someone else's PR,
 with AgentK assisting the reviewer) stays in one Reviewing PR stage. The user can move a task
-between stages by hand (`src/shared/stages.ts`). Meko datapacks hold project memory (a Meko Cloud key, else the Meko on this computer). The design
+between stages by hand (`src/shared/stages.ts`). Meko datapacks hold project memory (the Meko on this computer, which reaches Meko Cloud once it's linked there). The design
 is in [docs/design.md](docs/design.md): an index, with one file per area under `docs/design/`.
 
 **Naming:** the product is **AgentK** (it was AgentK Local until October 2026) in anything people
@@ -96,7 +96,7 @@ agents should read it before changing code there.
 | `src/shared/termcolors.ts` | The terminals' two themes' foreground and background (`TERM_COLORS`, which the web UI's palettes start from), `parseTermTheme`, and a color as an OSC 10/11 answer gives it (`oscColor`). Used by the web UI, the server (the colors sessions start with) and the session host (its answers). |
 | `src/shared/termreports.ts` | Telling a terminal's answers to a program's queries from typing (`isTerminalReport`): the browser terminal and `me_koder attach` drop them, since the session host answers them. Also mouse motion with no button held and focus reports (`isPassiveReport`), which don't count as using a screen (`src/server/screens.ts`). |
 | `src/shared/emails.ts` | The email check, the parsing of a list of emails for the Share dialog (commas, semicolons, whitespace, `Name <address>`), pasting into its field and picking a suggested address (`typedEntry`, `pickEmail`, `suggestContacts`), and the most one invite can send to. Used by the server and the web UI. |
-| `src/shared/mekourls.ts` | Meko Cloud's MCP and web app URLs, the command that installs Meko on this computer (`MEKO_INSTALL_COMMAND`, for the banner shown while there's none), the web app that goes with an MCP URL (`mekoWebUrl`), and a datapack's share link on it (`shareLinkUrl`, and `shareLinkToken`, which reads a pasted one only from that web app), and Meko's own pages AgentK links to (`MEKO_HOME_PATH`, its main page, from the projects pane's "m"; `MEKO_CLOUD_PATH` and `MEKO_ACCOUNT_PATH`, from Settings; `mekoDatapackPath()`, a datapack's page, which datapack names link to while AgentK uses the Meko on this computer: `mekoDatapackUrl()` in `src/web/util.ts`; `mekoGapsPath()`, its Context Gaps tab, from the project home's Meko line). Used by the server and the web UI, so Ask AgentK offers to join only the links the server will. |
+| `src/shared/mekourls.ts` | Meko Cloud's MCP and web app URLs, the command that installs Meko on this computer (`MEKO_INSTALL_COMMAND`, for the banner shown while there's none), a datapack's share link on the web app Meko names (`shareLinkUrl`, and `shareLinkToken`, which reads a pasted one only from that web app), and Meko's own pages AgentK links to (`MEKO_HOME_PATH`, its main page, from the projects pane's "m"; `MEKO_CLOUD_PATH` and `MEKO_ACCOUNT_PATH`, from Settings; `mekoDatapackPath()`, a datapack's page, which datapack names link to: `mekoDatapackUrl()` in `src/web/util.ts`; `mekoGapsPath()`, its Context Gaps tab, from the project home's Meko line; Meko's web UI sends a Meko Cloud datapack's on to Meko Cloud's web app). Used by the server and the web UI, so Ask AgentK offers to join only the links the server will. |
 | `src/shared/pricing.ts` | Anthropic API list prices per model and the cost of a set of tokens (cache writes by duration). |
 | `src/mod/agentk/` | AgentK's mod: a Claude Code plugin of function hooks loaded into every session with `--plugin-dir`. It polls the hook socket for AgentK's prompts and submits them as the user's, reports the context fill and plan limits after each turn, forwards Claude's `AskUserQuestion` calls to AgentK while the terminal's dialog stays open (the first answer wins), reports when each of Claude's Meko tool calls starts and ends (for the session's dot), reports a turn you interrupt (Ctrl+C, Esc: no `Stop` hook fires, `/mod/turn`), gives Claude the `design_questions` tool, draws AgentK's hidden prompts (a workshop host's events) and a bare OK in their turns as nothing (`ui.render`; ctrl+o shows them), runs learn steps (`$.model.fork`, then `$.model.complete` for the duplicate check), and registers `/agentk_learn`. Compiled by Claude Code against its own declarations, not by the repo's tsc; checked with `claude plugin validate` / `claude plugin test src/mod/agentk` (`test/unit/mod.test.ts`, skipped without Claude Code). |
 | `src/tools/skill/SKILL.md` | The skill for AgentK's session tools (the `agentk_sessions` MCP server, `src/server/mcp.ts`): how an agent opens projects, starts sessions (from GitHub issues and PRs too), moves them and opens another session's PR. Its one source; the server copies it for every harness (`writeToolFiles` in `src/server/tools.ts`), and the build into `dist/tools`. See [docs/design/tools.md](docs/design/tools.md). |
@@ -144,17 +144,17 @@ agents should read it before changing code there.
    to `MIN_PROTOCOL`. Meko installs updates and deletes old versions, but never the folder a running
    host started from: the launcher starts `host` through Meko's launcher (`meko _launch`), which
    holds a lock on that folder while the host runs.
-7. **Meko is Meko's Meko Cloud link, else the Meko on this computer; a project has at most one
-   dedicated datapack.** It can't be turned off. Meko owns the link (its web UI's Settings › Meko
-   Cloud, `meko cloud_link`) and keeps its key: while it's linked, AgentK reaches Meko Cloud through
-   the local Meko (its `/mcp`, and its `/api/v1` for REST, which serve that Meko's own datapacks
-   and send any other id to Meko Cloud; `/api/v1/cloud` under a Meko from before that) with that
-   Meko's token. AgentK reads
-   the link, and the local Meko's URL and token, from `meko token --json` (`mekolocal.ts`), keeps them in memory and never writes them to `config.toml`, and has no
-   route or UI that sets a key. A key AgentK kept itself before is handed to Meko once
-   (`mekohandover.ts`) and never read again; until then, or under a Meko too old to keep a link,
-   AgentK keeps using it rather than move to the local Meko unasked. The local token goes only to
-   its own URL. With neither, AgentK doesn't talk to Meko: sessions get no datapack, pin or Meko
+7. **Meko is the Meko on this computer; a project has at most one dedicated datapack.** It can't be
+   turned off, and AgentK doesn't know or ask whether it's linked to Meko Cloud: no code branches on
+   local or Meko Cloud. Meko owns the link (its web UI's Settings › Meko Cloud, `meko cloud_link`)
+   and its key, and its `/mcp` and its `/api/v1` (on the same origin, `mekoApiBase`) serve its own
+   datapacks and pass any other id on to Meko Cloud while it's linked; what it can't do (sharing
+   while unlinked) it refuses with an error that says what to do, which AgentK shows. AgentK reads
+   that Meko's URL and token, and its link's account and web app, from `meko token --json`
+   (`mekolocal.ts`), keeps them in memory and never writes them to `config.toml`, and has no route or
+   UI that sets a key. It reads no key of its own (`config.toml`'s old `[meko]` keys, `MEKO_*`,
+   Claude Code's settings). The token goes only to that Meko's own URL. With no Meko running,
+   AgentK doesn't talk to Meko: sessions get no datapack, pin or Meko
    lines in their prompt, and nothing is saved there. Each session gets its own
    `MEKO_AGENT_ID` (`sessionAgentId()`: `claude_code:<slug>-<hash>`, or `opencode:…` or `kiro:…` for an OpenCode or Kiro session, never the project id), with
    the project's dedicated datapack pinned for it when it starts; AgentK's writes for a session use

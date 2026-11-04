@@ -36,7 +36,7 @@ interface Stored {
   /**
    * The Meko its datapack is in. A draft from before Presenter kept it is the current Meko's when that
    * Meko has its datapack, else the Meko on this computer's (`untagged`). While the Meko on this
-   * computer links Meko Cloud and routes by id, it serves both, and a deck in one of its own datapacks
+   * computer links Meko Cloud, it serves both, and a deck in one of its own datapacks
    * is its own (`localIds`).
    */
   meko?: MekoAt;
@@ -200,9 +200,9 @@ export class DeckStore {
       e.meko = m;
       this.persist(e);
     }
-    // While the Meko on this computer links Meko Cloud and routes by id, it serves its own datapacks
-    // too. A deck in one is that Meko's, even one tagged as Meko Cloud's, which a Meko that listed both
-    // sides before it routed by id led Presenter to do, so it still opens once Meko Cloud is unlinked.
+    // While the Meko on this computer links Meko Cloud, it serves its own datapacks too. A deck in one
+    // is that Meko's, even one tagged as Meko Cloud's, which an earlier Meko led Presenter to do, so it
+    // still opens once Meko Cloud is unlinked.
     // Unlinked, that Meko's own listing tells such a deck too.
     let here: Set<string> | null = null;
     if (at.kind === 'cloud') {

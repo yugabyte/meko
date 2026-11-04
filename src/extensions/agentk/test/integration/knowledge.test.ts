@@ -7,7 +7,7 @@ import { buildServer } from '../../src/server/server.js';
 import { run } from '../../src/server/db.js';
 import { KnowledgeService } from '../../src/server/knowledge.js';
 import type { ServerEvent } from '../../src/shared/types.js';
-import { makeEnv, waitFor, type ApiCall, type TestEnv } from '../helpers.js';
+import { makeEnv, noMeko, testMeko, waitFor, type ApiCall, type TestEnv } from '../helpers.js';
 
 describe('adding files to a knowledge base', () => {
   let env: TestEnv;
@@ -104,15 +104,11 @@ describe('adding files to a knowledge base', () => {
 
     const p = await project('beta');
     session(p.id, 's2');
-    env.core.updateConfig((c) => {
-      c.meko.apiKey = '';
-    });
+    await noMeko(env);
     const off = await upload('s2', 'notes.md', Buffer.from('# Hi'));
     expect(off.statusCode).toBe(409);
-    expect(off.json().error).toMatch(/Meko isn't set up/);
-    env.core.updateConfig((c) => {
-      c.meko.apiKey = 'test-key';
-    });
+    expect(off.json().error).toMatch(/Meko isn't running on this computer/);
+    await testMeko(env);
     run(env.core.db, "UPDATE sessions SET desired = 'archived' WHERE id = 's2'");
     expect((await upload('s2', 'notes.md', Buffer.from('# Hi'))).statusCode).toBe(409);
     expect(uploads()).toEqual([]);
@@ -174,14 +170,10 @@ describe('adding files to a knowledge base', () => {
       statuses['dk-d'] = ['indexing'];
       statuses['dk-e'] = ['indexing'];
       await kb.upload('s3', 'd.md', Buffer.from('d'));
-      env.core.updateConfig((c) => {
-        c.meko.apiKey = '';
-      });
+      await noMeko(env);
       kb.forget();
       await kb.upload('s3', 'e.md', Buffer.from('e')).catch(() => undefined);
-      env.core.updateConfig((c) => {
-        c.meko.apiKey = 'test-key';
-      });
+      await testMeko(env);
       // A change of Meko's settings while an upload is on its way: its document isn't followed on the new Meko.
       statuses['dk-f'] = ['indexing'];
       const late = kb.upload('s3', 'f.md', Buffer.from('f'));

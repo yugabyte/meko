@@ -58,17 +58,15 @@ own copy.
   shutdown the server removes `web.sock` only while it's still the file it bound (`socketId`), as it
   does the hook socket: after a lost lease another server may have bound its own.
 - **Guard rails.** AgentK has no route that sets or shows a Meko key: Meko owns the Meko Cloud
-  link and keeps its key, and AgentK reaches Meko Cloud through the Meko on this computer with that
-  Meko's token (an older Meko handed out the key in `meko token --json`, which AgentK then holds in
-  memory and never writes to `config.toml`). A key of its own from before is handed to Meko on
-  stdin, once, then never read again, though it stays in `config.toml` for a rollback. No
-  response carries it. Meko's own page refuses to send a saved key to another server (the MCP, web
+  link and keeps its key, and AgentK reads only the Meko on this computer's URL and token, never a
+  key of its own (an older Meko's handed-out key in `meko token --json` is ignored; a key from
+  before in `config.toml` is left there unread, for a rollback, and `MEKO_*` and Claude Code's
+  settings aren't read). No response carries a key. Meko's own page refuses to send a saved key to another server (the MCP, web
   app or API URL) until it's typed again, so someone who reaches the page can't point it at their
   own server and read the key off it. `POST /_meko/changed` only makes AgentK read Meko again, and
-  refuses another origin. The Meko on this computer's client token, which AgentK uses when
-  Meko has no Meko Cloud link, is read from Meko (`meko token --json`), held in memory, never written to
-  `config.toml`, and sent only to that Meko: no configured MCP URL takes it, and a web app or API URL
-  from config or the environment is used with it only on that Meko's own origin. Hooks use their
+  refuses another origin. The Meko on this computer's client token, which AgentK uses
+  whether or not that Meko is linked, is read from Meko (`meko token --json`), held in memory, never
+  written to `config.toml`, and sent only to that Meko's own origin (its `/mcp` and `/api/v1`). Hooks use their
   own unix socket with a per-session token, never the web socket. The Design-stage edit guard asks the server over the same socket;
   if it gets no answer it lets the edit go ahead, so Claude is never stuck.
 - **The page's policy.** Every app page carries a Content-Security-Policy (`appCsp()` in

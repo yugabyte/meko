@@ -37,22 +37,22 @@ describe("Meko's Context Gaps in AgentK", () => {
       { key: 'offline mode', query: 'Offline mode', quality: 'weak' },
       { key: 'old', query: 'Old', state: 'dismissed' },
     ]);
-    // With a Meko Cloud key (or any Meko but the one on this computer), Meko isn't asked.
+    // A Meko on this computer that doesn't answer (nothing listens at the test env's): no line.
     expect((await home(p.id)).mekoGaps).toBeNull();
     expect(meko.requests).toEqual([]);
 
     await useLocalMeko(env, meko.url);
-    expect((await home(p.id)).mekoGaps).toEqual({ datapackId: 'dp-Alpha', cloud: false, empty: 1, weak: 1 });
+    expect((await home(p.id)).mekoGaps).toEqual({ datapackId: 'dp-Alpha', empty: 1, weak: 1 });
     expect(meko.requests.at(-1)).toMatchObject({ method: 'GET', datapack: 'dp-Alpha', query: { state: 'open' }, headers: { authorization: 'Bearer local-token' } });
     // A linked Meko Cloud's datapack: its searches pass through this Meko, which keeps its questions.
     meko.cloud.add('dp-Alpha');
-    expect((await home(p.id)).mekoGaps).toEqual({ datapackId: 'dp-Alpha', cloud: true, empty: 1, weak: 1 });
-    // The line opens the tab, or for Meko Cloud's datapack, Meko's page for its Context Gaps.
-    expect([mekoGapsPath('dp-Alpha'), mekoGapsPath('dp-Alpha', true)]).toEqual(['/datapacks/dp-Alpha/gaps', '/gaps/dp-Alpha']);
+    expect((await home(p.id)).mekoGaps).toEqual({ datapackId: 'dp-Alpha', empty: 1, weak: 1 });
+    // The line opens the tab whichever side has the datapack: Meko's web UI sends Meko Cloud's on.
+    expect(mekoGapsPath('dp-Alpha')).toBe('/datapacks/dp-Alpha/gaps');
     // Nothing open: the line still links to the tab.
     meko.cloud.delete('dp-Alpha');
     meko.datapacks.set('dp-Alpha', [{ key: 'old', query: 'Old', state: 'dismissed' }]);
-    expect((await home(p.id)).mekoGaps).toEqual({ datapackId: 'dp-Alpha', cloud: false, empty: 0, weak: 0 });
+    expect((await home(p.id)).mekoGaps).toEqual({ datapackId: 'dp-Alpha', empty: 0, weak: 0 });
     // A Meko too old to keep questions, and a project with no dedicated datapack: no line.
     meko.state.old = true;
     expect((await home(p.id)).mekoGaps).toBeNull();

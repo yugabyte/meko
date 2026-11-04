@@ -5,8 +5,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Database, Menu } from "lucide-react";
 import { api } from "./lib/api";
-import { rowLink, useCloudChanged } from "./lib/cloud";
-import { href, navigate, useNavigated, useRoute } from "./lib/route";
+import { rowLink, sentOn, useCloudChanged } from "./lib/cloud";
+import { href, navigate, redirect, useNavigated, useRoute } from "./lib/route";
 import { applyTheme, initialTheme, type Theme } from "./lib/theme";
 import type { AuthStatus } from "./lib/types";
 import { useLoad } from "./lib/useLoad";
@@ -47,6 +47,15 @@ export default function App({ auth }: { auth: AuthStatus }) {
   // With none in the address, the first datapack this UI opens: a Meko Cloud one opens in its web app.
   const activeId = route.datapackId ?? list.data?.find((d) => rowLink(d).kind === "here")?.datapack_id;
   const current = useLoad(() => (activeId ? api.datapack(activeId) : Promise.resolve(undefined)), [activeId]);
+  // A Meko Cloud datapack's address here (an extension's link) goes on to where the listing opens it.
+  const away = sentOn(route, list.data);
+  const awayTo = away ? ("url" in away ? away.url : href(away.route)) : null;
+  useEffect(() => {
+    if (!away) return;
+    if ("url" in away) window.location.replace(away.url);
+    else redirect(away.route);
+    // awayTo stands for away, which is a new object every render.
+  }, [awayTo]);
 
   useShortcuts(activeId);
 
@@ -84,7 +93,9 @@ export default function App({ auth }: { auth: AuthStatus }) {
           <Logo theme={theme} />
         </div>
         <ErrorBoundary key={href(route)}>
-          {route.view === "status" ? (
+          {awayTo ? (
+            <Loading />
+          ) : route.view === "status" ? (
             <div className={PAGE}>
               <StatusPage />
             </div>

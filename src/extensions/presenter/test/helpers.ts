@@ -41,8 +41,8 @@ export class FakeMeko implements MekoPort {
   /** The Meko it stands for; set it to another to stand for Meko after its link changed. */
   where: MekoAt | null = { kind: 'local', host: '127.0.0.1:7778' };
   /**
-   * The datapacks the Meko on this computer serves itself while it links Meko Cloud and routes by id;
-   * null for a Meko that doesn't route by id.
+   * The datapacks the Meko on this computer serves itself while it links Meko Cloud;
+   * null while Presenter doesn't reach Meko Cloud through it.
    */
   here: Set<string> | null = null;
   private clock = Date.parse('2026-11-01T10:00:00Z');

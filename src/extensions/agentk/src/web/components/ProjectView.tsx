@@ -719,10 +719,10 @@ export function ProjectView({
       )}
       {session && asking && <AskSheet session={session} onClose={() => setAsking(false)} />}
       {session && heldOpen && <HeldReviewsSheet session={session} onClose={() => setHeldOpen(false)} />}
-      {session && sharing && dedicated && !meko.sharing && (
-        <MekoLinkDialog sharing={meko.source} local={meko.local} onClose={() => setSharing(false)} />
+      {session && sharing && dedicated && !meko.configured && (
+        <MekoLinkDialog reason="A project is shared through its Meko datapack, so sharing needs Meko." local={meko.local} onClose={() => setSharing(false)} />
       )}
-      {session && sharing && dedicated && meko.sharing && (
+      {session && sharing && dedicated && meko.configured && (
         <ShareDialog
           projectId={project.id}
           projectName={project.name}

@@ -28,8 +28,8 @@ describe('knowledge-base files', () => {
 
   it.each([
     [new MekoApiError(403, 'FORBIDDEN', 'forbidden'), 403, /only its owner and maintainers can/],
-    [new MekoApiError(401, 'UNAUTHORIZED', 'invalid or expired token'), 502, /refused AgentK's key/],
-    [new MekoApiError(403, 'INSUFFICIENT_SCOPE', 'needs write'), 502, /refused AgentK's key/],
+    [new MekoApiError(401, 'UNAUTHORIZED', 'invalid or expired token'), 502, /^Meko didn't accept AgentK's token\. Run meko restart/],
+    [new MekoApiError(403, 'INSUFFICIENT_SCOPE', 'needs write'), 502, /^Meko didn't accept AgentK's token\. Run meko restart/],
     [new MekoApiError(404, 'HTTP_404', 'Meko answered 404.'), 502, /doesn't take uploads from AgentK yet\. Add the file from Meko's web app/],
     [new MekoApiError(404, 'NOT_FOUND', 'datapack not found'), 502, /^Meko couldn't find adlc\/proj\/r\/p: datapack not found\. Check the project's datapack/],
     [new MekoApiError(500, 'INTERNAL', 'boom.'), 502, /^Meko couldn't add the file: boom\. Try again in a minute/],

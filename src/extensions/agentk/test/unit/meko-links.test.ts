@@ -6,12 +6,11 @@ import type { AppState } from '../../src/shared/types.js';
 import { MekoInstallBanner } from '../../src/web/components/Banners.js';
 import { MekoLinkDialog } from '../../src/web/components/MekoLinkDialog.js';
 import { MekoHomeLink } from '../../src/web/components/Rail.js';
-import { httpHost } from '../../src/web/util.js';
+import { mekoGapsPath } from '../../src/shared/mekourls.js';
 
-describe("a URL's host", () => {
-  it('is the host of an http(s) URL only', () => {
-    expect(httpHost('ftp://meko.example.com')).toBeNull();
-    expect(httpHost('https://Meko.Example.com:8443/x')).toBe('meko.example.com:8443');
+describe("a datapack's Context Gaps link", () => {
+  it("is Meko's own tab on this origin, whichever side has the datapack", () => {
+    expect(mekoGapsPath('dp/1')).toBe('/datapacks/dp%2F1/gaps');
   });
 });
 
@@ -40,18 +39,13 @@ describe('Meko share links', () => {
   });
 });
 
-describe("Share while AgentK can't share", () => {
-  const signup = '<a class="btn primary" id="meko-signup" href="https://cloud.mekodata.ai/signup?return_to=%2Fsettings" target="_blank" rel="noopener noreferrer">';
-  it.each([
-    ['the Meko on this computer', 'local' as const, 'Share through Meko Cloud', true],
-    ['another Meko without its web app URL', 'config' as const, 'Set Meko’s web app URL', false],
-    ['no Meko at all', undefined, 'Set up Meko', false],
-  ])("on %s, links to Meko's Meko Cloud page in this tab, and to Meko Cloud's sign-up only on the local Meko", (_, sharing, title, offersSignup) => {
-    const html = renderToStaticMarkup(createElement(MekoLinkDialog, { sharing, local: 'running', onClose: () => undefined }));
-    expect(html).toContain(`<h2>${title}</h2>`);
-    expect(html).toMatch(/<a class="btn( primary)?" id="meko-link-open" href="\/settings\/meko-cloud">/);
-    expect(html.includes(signup)).toBe(offersSignup);
-    expect(html.includes('signup')).toBe(offersSignup);
+describe('Set up Meko, while there is none', () => {
+  it("says what's wrong with the Meko on this computer and opens Meko in this tab, with no word of Meko Cloud", () => {
+    const html = renderToStaticMarkup(createElement(MekoLinkDialog, { local: 'stopped', onClose: () => undefined }));
+    expect(html).toContain('<h2>Set up Meko</h2>');
+    expect(html).toContain('start it with meko start');
+    expect(html).toMatch(/<a class="btn primary" id="meko-link-open" href="\/">/);
+    expect(html).not.toMatch(/Meko Cloud|signup/);
   });
 });
 

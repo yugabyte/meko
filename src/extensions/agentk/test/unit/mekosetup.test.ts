@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { tempDir } from '../helpers.js';
 import {
-  MekoSetupError, claudeSettingsToken, ensureMekoSetup, envKeyGap, latestMekoSetup, manualMekoSetup, matchesIntegrity, mekoClaudeGaps, readClaudeMeko,
+  MekoSetupError, claudeSettingsToken, ensureMekoSetup, latestMekoSetup, manualMekoSetup, matchesIntegrity, mekoClaudeGaps, readClaudeMeko,
   runMekoSetup, sameMekoUrl, type MekoSetupPackage,
 } from '../../src/server/mekosetup.js';
 import { defaultMekoTools } from '../../src/server/mekosettings.js';
@@ -75,15 +75,6 @@ describe('Meko in Claude Code: what is missing', () => {
   it('counts unset MEKO_MCP_URL as Meko Cloud, which the hooks then use', () => {
     ready();
     expect(mekoClaudeGaps(read(), OWN)).toEqual(["Claude Code's settings point at mcp.mekodata.ai, not meko.example.com."]);
-  });
-
-  it("flags a different key in Claude Code's settings only when AgentK's key came from the installer's environment", () => {
-    ready({ MEKO_API_KEY: 'other-account' });
-    expect(envKeyGap(read(), 'from-env', true)).toEqual([
-      "Claude Code's settings hold a different MEKO_API_KEY, which AgentK would use instead of this one once it runs as a service.",
-    ]);
-    expect(envKeyGap(read(), 'from-env', false)).toEqual([]);
-    expect(envKeyGap(read(), 'other-account', true)).toEqual([]);
   });
 
   it('compares URLs without a trailing slash and with the host in any case', () => {

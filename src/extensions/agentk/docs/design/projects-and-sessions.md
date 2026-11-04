@@ -56,8 +56,8 @@ idle_days = 14            # an idle worktree no session used for this many days 
 idle_stop_hours = 24      # a session's agent idle this long is stopped, and resumed when needed (0 to 720; 0 never stops one)
 
 [meko]
-# The Meko Cloud link is Meko's (its web UI's Settings › Meko Cloud, or meko cloud_link). url, api_key,
-# web_url and api_url from before are handed to Meko once, then never read again (kept for a rollback).
+# AgentK uses the Meko on this computer; its Meko Cloud link is Meko's (its web UI's Settings › Meko
+# Cloud, or meko cloud_link). url, api_key, web_url and api_url from before are kept, unread, for a rollback.
 # home = "…"                 # Meko's data folder, which AgentK's home is in; set by the installer and from Meko's MEKO_HOME
 # capture_transcripts = true   # send session transcripts to Meko conversations; off by default (MEKO-710)
 
@@ -315,13 +315,12 @@ start, so an edit made while it runs takes effect after a restart, and a save fr
 differ from the defaults are written, so a changed default reaches existing installs; a value of the wrong type is ignored with a warning. An older
 install's `[server] bind` and `port` and `[tls]` stay in the file for Meko's handoff
 ([security.md](security.md)), and nothing else reads them. The Meko
-URL and key are Meko's: the Meko running on this computer with its own URL and token, linked to Meko
-Cloud or not (while linked its `/mcp` and `/api/v1` serve its own datapacks and pass any other id on
-to Meko Cloud; one from before that passes REST on under `/api/v1/cloud`), or under an older Meko that still hands out its link's key, that link's URL and key;
-all read from Meko (`meko token --json`) and never written here. `[meko] url`, `api_key`,
-`web_url` and `api_url`, `MEKO_MCP_URL`/`MEKO_API_KEY` and the `env` block of Claude Code's user
-`settings.json` are read only to hand a key from before to Meko, once, and under a Meko too old to
-keep the link ([datapacks.md](datapacks.md)). An `enabled` key left in `[meko]` by older versions is ignored and
+URL and token are Meko's: the Meko running on this computer's own, linked to Meko Cloud or not
+(while linked its `/mcp` and `/api/v1` serve its own datapacks and pass any other id on to Meko
+Cloud), read from Meko (`meko token --json`) and never written here. `[meko] url`, `api_key`,
+`web_url` and `api_url` from before, `MEKO_MCP_URL`/`MEKO_API_KEY` and the `env` block of Claude
+Code's user `settings.json` aren't read ([datapacks.md](datapacks.md)); a save keeps those
+`[meko]` keys in the file, since a rollback to a release that read them restores only `state.db`. An `enabled` key left in `[meko]` by older versions is ignored and
 dropped at the next save: Meko can't be turned off.
 
 ## Worktree reuse
