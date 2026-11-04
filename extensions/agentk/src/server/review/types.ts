@@ -47,6 +47,8 @@ export interface Finding {
   comment: string;
   /** Meko gotchas (`MG-<n>`) the finding is a direct instance of. */
   gotchas: string[];
+  /** The sentence of each of those gotchas it instantiates, by id; absent in candidates from before they were kept. */
+  quotes?: Record<string, string>;
 }
 
 /** A pass's report, as `review_report` took it (already checked against the pass's schema). */
@@ -151,7 +153,11 @@ export interface ReviewIssue {
 /** One earlier round of this review, as the next round is told about it (the cloud's prior rounds). */
 export interface PriorRound {
   round: number;
-  findings: { file: string; line: number; severity: Severity; comment: string; outcome: FindingOutcome | null }[];
+  /**
+   * `dismissed`: the user dismissed it, so the task never had it; `note`: what the user said of it ('' for nothing).
+   * Both absent in a context saved before the user could.
+   */
+  findings: { file: string; line: number; severity: Severity; comment: string; outcome: FindingOutcome | null; dismissed?: boolean; note?: string }[];
 }
 
 /** Everything the base prompt is built from, apart from the diff. */

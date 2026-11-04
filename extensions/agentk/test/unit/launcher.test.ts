@@ -148,6 +148,12 @@ for v in "$PWD" "\${PROFILE_RAN-unset}" "\${MEKO_AGENT_ID-unset}" "\${MEKO_CHECK
     expect(args[args.indexOf('--disallowedTools') + 1]).toBe('Bash Edit');
   });
 
+  it("passes the session's model at every launch, a resume's too, and nothing for the default", () => {
+    expect(run(spec({ model: 'opus' })).args.slice(6, 8)).toEqual(['--model', 'opus']);
+    expect(run(spec({ model: 'claude-opus-5-5', resume: true })).args.slice(0, 6)).toEqual(['--settings', join(paths.run, 'hooks.json'), '--resume', 'c0ffee', '--model', 'claude-opus-5-5']);
+    expect(run(spec({ model: null })).args).not.toContain('--model');
+  });
+
   it('keeps a variable it sets even when it is also listed to unset', () => {
     const { env } = run(spec({ resume: true, env: { MEKO_AGENT_ID: 'x', MEKO_CHECKPOINT_INTERVAL: '2147483' } }));
     expect(env.slice(2, 4)).toEqual(['x', '2147483']);

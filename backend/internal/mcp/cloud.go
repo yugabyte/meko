@@ -134,8 +134,9 @@ func (o Options) byDatapack(t *tool, cred string, elsewhere sdk.ToolHandler) sdk
 			rec := forwardedCall(start, t.name, cred, req.Params.Arguments)
 			rec.Location, rec.ErrorCode = "", t.failCode
 			rec.Ms = time.Since(start).Milliseconds()
-			o.Service.RecordCall(ctx, rec)
-			return textResult(fail(t.failCode, genericDetail)), nil
+			res := textResult(fail(t.failCode, genericDetail))
+			o.record(ctx, rec, req, res)
+			return res, nil
 		case ok:
 			return here(ctx, req)
 		}
@@ -220,7 +221,7 @@ func (o Options) forwardAnd(name, failCode, cred string, merge merger) sdk.ToolH
 			}
 		}
 		rec.Ms = time.Since(start).Milliseconds()
-		o.Service.RecordCall(ctx, rec)
+		o.record(ctx, rec, req, res)
 		if rec.OK && rec.AgentID != memory.WebUIAgent && !fromAgentK(req) {
 			o.recordCloudSearch(ctx, rec, req.Params.Arguments, res)
 		}
@@ -339,7 +340,7 @@ func (o Options) cloudUploadFile(cred string) sdk.ToolHandler {
 		rec := forwardedCall(start, uploadFileTool.name, cred, req.Params.Arguments)
 		res := o.uploadToCloud(ctx, &rec, req.Params.Arguments)
 		rec.Ms = time.Since(start).Milliseconds()
-		o.Service.RecordCall(ctx, rec)
+		o.record(ctx, rec, req, res)
 		return res, nil
 	}
 }

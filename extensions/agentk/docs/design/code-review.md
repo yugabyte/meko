@@ -17,9 +17,9 @@ settings, the line, the tab's label); the UI is the magnifier joined to the task
 
 ## Settings
 
-Three settings, each set globally (`[code_review]` in config.toml, Settings › Code review), overridden
+Four settings, each set globally (`[code_review]` in config.toml, Settings › Code review), overridden
 per project (`ProjectSettings.codeReview`, the project's settings) and again per session
-(`sessions.review_json`: the New session dialog's Advanced, the session's ⋯ sheet, Open PR with
+(`sessions.review_json`: the New session dialog's Advanced, the session's ⋯ menu and sheet, Open PR with
 instructions, and the `review` argument of the `start_sessions` tool, so "start a code session with
 3 deep reviews" asks for `depth: 3`). A value left out keeps the next level's (`resolveReview`).
 
@@ -28,6 +28,7 @@ instructions, and the `review` argument of the `start_sessions` tool, so "start 
 | `strategy` | `sagittarius-3.0` | Which algorithm runs: `off` for no review, `sirius-1.0`, or `sagittarius-3.0`. |
 | `depth` | `1` | Sweeps in each round, 1 to 5: the number of times a review runs before AgentK gets the findings to fix. More than one sweep makes it a deep review: each sweep after the first is told what the earlier ones found and looks elsewhere, and the sweeps run up to this count, but from the second sweep on, one that finds nothing new ends it ([how a review runs](#how-a-review-runs)). Costs more tokens. |
 | `rounds` | `0` | Re-review rounds, 0 to 5: the number of times the code review runs again after AgentK fixes the last review's findings, before the PR opens. A review that finds nothing ends it early. |
+| `check` | `true` | Check the findings first: each round's kept findings wait for the user to add notes or dismiss some before they go to the task ([Findings that wait on you](#findings-that-wait-on-you)). Off, they go at once. Run to merge never waits. Read when each round ends, not stored on the review, so a change applies at the review's next round. |
 
 `[code_review.models.<harness>]` sets the model each tier of step runs on (`large`, `mid`,
 `small`): Claude Code's are `opus`, `sonnet` and `haiku`; OpenCode's and Kiro's are empty, which
@@ -72,6 +73,10 @@ sequenceDiagram
     R->>S: a fresh subagent per scorer, a batch at a time
     S->>AK: review_score {step, score}
     AK->>AK: keepScored(50), Validate, counts
+    opt kept findings, check on, Run to merge off
+      AK-->>U: the findings wait on you (triage)
+      U->>AK: notes, dismissals, then Send to AgentK
+    end
     AK->>T: code-review-fix (a re-review follows)
     T->>AK: review_outcome per finding
   end
@@ -116,8 +121,7 @@ the session host like any other, so it survives restarts. It works in its task's
 owning it (`worktree_released`), so archiving it never frees the worktree or deletes the branch. It
 is archived as soon as the review is done (`finish()`: the findings stay with the review), when the
 user cancels it, when another review replaces it, and with its task; a failed review keeps it for
-Retry. Its Meko call log (the passes' gotcha searches, with Log Meko calls on) stays until its task
-is archived, so a done review's calls can still be read. Its edit guard denies every
+Retry. Its edit guard denies every
 edit in the repo, and on Claude Code `--disallowedTools` takes Bash and the edit and web tools away
 from it and its subagents; OpenCode's session config denies them. Its first prompt is the first
 sweep's, and AgentK sends each later step's prompt as the turn before ends.
@@ -157,13 +161,15 @@ unverified kept at 50 or more, unscored kept) and Validate (the file must be in 
 line in a hunk, at most 100). No pass reporting in the first sweep fails the review.
 
 **Rounds.** A round that keeps findings, with rounds left, sends the task `code-review-fix` (fix
-or decline each, don't commit yet), and the task reports what it did with each by its key with
+or decline each, don't commit yet), once the user has checked them when they wait on the user
+([below](#findings-that-wait-on-you)), and the task reports what it did with each by its key with
 `review_outcome`. The task's next turn end starts the next round, whose passes are told the
 earlier rounds' findings and what the task did with them (prior rounds). The last round's
 findings lead the PR prompt (`code-review-findings`).
 
 **The line** (`meAkReviewLine`) adds up every round's kept findings, by severity in the order
-blocker, major, minor; `LGTM` when no round kept one. After a `;` it names the strategy that ran,
+blocker, major, minor; `LGTM` when no round kept one. A finding the user dismissed isn't kept, as
+one the scorer refuted isn't. After a `;` it names the strategy that ran,
 its name without spaces (`strategyTag`: `Sagittarius3.0`, `Sirius1.0`); `parseMeAkReviewLine` still
 reads a line from before it did. AgentK writes it into the PR's description after `adoptPr` when
 Claude left it out or it differs (`syncReviewLine`).
@@ -199,16 +205,65 @@ GitHub and Meko still stops it, as for any queued Open PR.
 report. After a restart, `CodeReviews.recover()` asks an idle review session again for the steps
 still missing; a review whose session is gone fails, for Retry.
 
+## Findings that wait on you
+
+A round that keeps findings doesn't hand them to the task at once: unless the task's `check`
+setting is off or Run to merge is on (`sessions.auto_run`, read when the round ends, never
+`code_reviews.by`, which stays `auto` after Run to merge stops: `checksFindings`), the review goes
+to `triage` and waits for the user. This is every hand-off of kept findings: a fix prompt before a
+re-review, the last round's findings with the PR prompt, and the last round of a review the user
+ran, in Code and in Review & PR (`finishRound`, then `handOff` when they go). The activity log says
+so, and the user is notified once.
+
+While it waits, the user can give each of that round's kept findings a note for the task, or
+dismiss it, with an optional note as the reason (`CodeReviewFinding.you`, kept in `findings_json`
+as each choice is made: `PATCH /api/sessions/:id/code-review/findings/:key`, `setFinding`, where a
+field left out keeps its value), and then sends them (`review-send`, `CodeReviews.send`). The panel's
+Send waits for choices still being saved and is refused past one that failed, so a note is never
+dropped unseen. A dismissed finding is dropped (`kept: false`,
+`dropped: 'dismissed by you'`), so it leaves the prompt and the counts, the line included. A note
+goes in the finding's line of `{{findings}}` (`- The user's note: …`), not a placeholder of its own,
+so a repo's own `code-review-fix` or `code-review-findings` carries it too. The next round's passes
+are told of both: a dismissal as a finding the author never had, not to raise again at that place,
+and a note beside what the author did (`priorRounds`). With every finding dismissed, the round ends
+as one that found nothing: no fix prompt and no re-review, and the PR prompt (or, in Review & PR,
+the push of earlier rounds' fixes) goes as for an LGTM round. The PR prompt then goes as the user's
+(`by = 'you'`), since they sent it.
+
+Sent from `triage`, a fix prompt always goes through the task's prompt queue as `local-review`, in
+Code too (`sendReviewFix`'s `queued`), since the user may have been working with the task while the
+review waited: it goes once AgentK is between turns, and the end of the turn that takes it starts
+the next round. For an Open PR's review in Code, an interrupted fix turn doesn't
+(`codeReviewTurnEnded`): the review waits in `fixing` for the next turn's end or **Review now**,
+as it does when its fix prompt goes straight to the task. `triage` is a running state (`RUNNING`): it holds Open PR, and Open PR, a move to
+Review & PR or a queued Open PR leaves it waiting (`openPr` changes nothing); Cancel stops it,
+leaving the stage cancels it as for `fixing`, `review-run` is refused, and `recover()` leaves it
+alone, so it waits through a restart. Turning Run to merge on sends the findings as they stand
+(`autoSend`, from `setAutoRun`, before the gates it arms). In Review & PR, its findings waiting is a
+merge blocker only the user clears (*The code review's findings wait on you: send them to AgentK or
+dismiss them.*, in `mergeInfo()`'s `hard` and `yours`, in place of *The code review is still
+running.*), so a queued Merge when ready is dropped and the session shows Needs you; entering it, and
+leaving it by Send, Cancel or a failure reads the PR again (`Lifecycle.codeReviewWaitsChanged`);
+leaving the stage needs no look, since the blocker is only read in Review & PR, and the next move
+back there reads the PR. A Retry of a review
+cancelled in `triage` scores the round again and replaces its findings, so the notes go.
+
 ## On demand
 
 The user can run the review at any time in Code, or in Review & PR once the PR is found: the
-`review-run` action (`CodeReviews.runNow`). On a desktop it's **Run the code review of …** in the
-command palette and, once the task has a review, **Review again** in the findings panel's header
-(the magnifier opens it); on a phone, **Run code review** in the task's ⋯ sheet too. While AgentK
+`review-run` action (`CodeReviews.runNow`): **Run code review** in the task's ⋯ menu (the ⋯
+sheet on a phone), **Run the code review of …** in the command palette and, once the task has a
+review, **Review again** in the findings panel's header (the magnifier opens it). While AgentK
 can't take it, each of these says why (after its turn, answer it in the terminal, resume the
-session), and the server's refusal says so again. For
+session), and the server's refusal says so again. A [workshop's](workshops.md) level runs one by
+itself on the level's session as soon as its worktree is made, first as a **first look** whose
+findings stay with the review (`handOff: false`, `code_reviews.hand_off = 0`, shown as First look in
+the findings header), then, on the user's go, again once its gotchas are in Meko (`runNow(task, 'auto', { describe:
+false })`: `by = 'auto'`, "AgentK ran the code review", with no PR description first, so it needn't
+wait for the task's turn), and the demo's Code gate offers **Run code review** in place of Open PR, which
+skips the PR description too. For
 a review the user ran, the findings header also has **Cancel** while it runs and **Retry** once it
-stopped, in its own stage (`onDemandControls`), as the ⋯ sheet does on a phone: the Code gate
+stopped, in its own stage (`onDemandControls`), as the ⋯ menu and sheet do: the Code gate
 doesn't show it. A stopped review it replaces passes on the Open PR instructions and a move's
 `moved` line it held. It's refused (409) mid-turn,
 while AgentK waits on the user or has exited, while a review runs, outside those two stages, and in
@@ -293,7 +348,11 @@ changed file's ancestors': a table of Datapack, ID and What's in it, `src/shared
 lists their datapacks in the base prompt. The passes search the gotchas datapack (its name ends in
 `/gotchas`, as the cloud's miner names them) themselves with `knowledgebase_search` and its id, and
 may search the others with `context_search`; a finding credits a gotcha (`MG-<n>`) only with the
-sentence it instantiates, and AgentK drops a credit without one. With no `MEKO.md` the review runs
+sentence it instantiates, and AgentK drops a credit without one. A credit keeps that sentence
+(`Finding.quotes`, `CodeReviewFinding.credits`; a review from before has ids only), and the review's
+done event counts the kept findings that credit one: `Code review done: 1 major, 1 caught with Meko
+(MG-2)` (`caughtWithMeko`), which a [workshop's host](workshops.md) reads too; each round's event
+(`Code review, round 1: 1 major, 1 caught with Meko (MG-2)`) counts that round's the same way. With no `MEKO.md` the review runs
 without Meko. Retired gotchas aren't filtered: the cloud's roster of them isn't in Meko.
 
 ## In the UI
@@ -307,30 +366,44 @@ has got (`reviewSteps()`: each pass of a sweep, then scoring as one step, so Sag
 run at once, on Claude Code and OpenCode, or one after another, on Kiro; with depth > 1 the passes
 count again for each sweep; the tooltip says how many passes have reported, and names the sweep,
 and while scoring how many candidates have been scored, since a batch of scorers runs at once),
-`R1` while the task fixes round 1's findings, the result (`2·1`,
+the counts (`2·1`) in the needs-you color with its lens knocking while the round's findings wait on
+the user (`triage`, `reviewWaitsOnYou()`), `R1` while the task fixes round 1's findings, the result (`2·1`,
 blockers·majors, until the task has said what it did with every kept finding, every round's,
 through `review_outcome`: `CodeReviewSummary.addressed`; then, or with none, `LGTM`) or a red `!`.
+Once it reads `LGTM` the review is settled (`reviewSettled()`), and the tab and the rail row leave its part
+out (`reviewBadge()` in `src/web/util.ts`): the task looks like one with no review, and its findings
+open from the ⋯ menu's or sheet's review row.
 A task that answers in its reply instead (tools off, or an untrusted PR head) records no outcomes,
 so its counts stay. While the review session waits on the user in its terminal (a permission prompt
 or a question, while its steps run: `CodeReviewSummary.waiting`), the magnifier takes the needs-you color and its lens
-knocks, since that session has no tab to show it. Clicking it (in the tab, the rail or the ⋯ sheet)
+knocks, since that session has no tab to show it. Clicking it (in the tab, the rail, or the ⋯ menu or sheet)
 follows `reviewOpens()` in `src/web/util.ts`: while the review has a running session and isn't
-waiting for the task's fixes (preparing, sweeping, scoring, or failed, which keeps its session for
+waiting for the user's check or the task's fixes (preparing, sweeping, scoring, or failed, which keeps its session for
 Retry), it opens the review's own screen, its terminal with the findings beside it on a desktop;
-otherwise (describing, which has no review session yet, fixing, done, cancelled) the findings panel beside the task's terminal (`ReviewFindings`:
+otherwise (describing, which has no review session yet, triage, fixing, done, cancelled) the findings panel beside the task's terminal (`ReviewFindings`:
 the MEKO.md files' datapacks, each by name with the gotchas one tagged; every candidate by round and sweep, the dropped ones under **Dismissed** below the kept ones and the running round's candidates, which the server marks `pending`, with its passes, verdict, confidence, kept, pending or why dropped,
-credited gotchas and what the task did; while the review runs or the task writes the PR description,
+credited gotchas, each marked **Caught with Meko** with the gotcha's sentence under the comment, the user's note and what the task did; while the round's findings wait on the user, a **Waits on you** bar under its
+header with **Send N to AgentK** (**Finish review** with every one dismissed, waiting for notes still being saved), and on each of that
+round's kept findings **Add a note** and **Dismiss** (or **Restore**, under Dismissed), each saved as it's made; while the review runs or the task writes the PR description,
 `findingsReviewing()`, it reads **Reviewing** under the findings so far, with a bar along its header
-and no counts), whose **Terminal** button goes to the review's screen while it has one. While the review holds the PR, the stage bar and the task's chip show the task in Review & PR
+and no counts), whose **Terminal** button goes to the review's screen while it has one. The findings
+also open by themselves beside the task's terminal, on a desktop and a phone, as the design does in
+Design (`findingsAutoOpen()` in `src/web/util.ts`, run by `ProjectView`): whenever the task comes on
+screen while they read Reviewing or wait on the user (`triage`), and again as a review moves into
+`triage` or a new one starts, but not at each step, in `fixing` or once the review is over. While the review holds the PR, the stage bar and the task's chip show the task in Review & PR
 (`shownStep()` in `src/web/util.ts`), though it stays in Code, and its gate shows the review, with Cancel, or Retry and
-Open anyway, and **Code review waits on you** with **Open terminal** while it waits. While the task
+Open anyway, **Code review waits on you** with **Open terminal** while it waits, and **Findings wait
+on you** with Show findings, Cancel and **Send to AgentK** while its findings wait (the ⋯ sheet on a phone
+and the command palette have **Send the findings to AgentK**, as the ⋯ menu does whenever no gate
+shows Send: in Review & PR and for a review the user ran). The dot shows Needs you then, in Code too (`dotState()`). While the task
 writes the PR description the gate says so, with Cancel and **Review now** (Open PR: past an
 interrupted turn it starts round 1 with the description as it is, past a lost ask it asks again);
 while the task fixes a round's findings it offers **Review now** too, which starts the next round
 past an interrupted fix turn. Both are off while the task's turn runs. The step the stage bar shows
 isn't a move target then, and neither is Code, the session's own stage. A review the user ran
 (`onDemand`) holds no PR, so none of this applies to it: the task shows in Code with its Open PR
-gate, and its findings header (and the ⋯ sheet on a phone) offers Cancel and Retry.
+gate, and its findings header and the session's ⋯ menu (the ⋯ sheet on a phone) offer Cancel and Retry, and Send while its
+findings wait.
 
 The Usage page and the project home count reviews in their **Code Reviews** section, and stack the
 review sessions' tokens on the Token usage chart ([Token usage](token-usage.md)); the usage report

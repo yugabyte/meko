@@ -51,7 +51,7 @@ reaches Claude Code.
 exit status, until it is started again or ended. It answers the program's terminal queries
 (device attributes, cursor position, colors) itself from its headless xterm, so Claude gets one
 answer whether or not anyone is watching; the viewers' own answers are dropped (a browser's, and a
-real terminal's with `agentk attach`). Sessions don't inherit this install's `AK_HOME`,
+real terminal's with `me_koder attach`). Sessions don't inherit this install's `AK_HOME`,
 `AK_APP_DIR` or `AK_VERSION`, so a checkout run inside one never takes them as its own. A pane counts
 as live only once its program has started. It listens only on
 `host.sock` (beside `hook.sock`, owner-only, bound under a temporary name and renamed into place),
@@ -118,12 +118,12 @@ that lost the session doesn't ask again until it shows it again, so two idle scr
 it. Screens are told apart by a page id the browser makes per page load (a reconnect keeps the
 session), and another tab of the same browser by a browser id in `localStorage`; the other screen
 is named by its browser and system from the user agent. The board lives in the server's memory:
-after a restart, the first screen to reconnect and ask gets the session. `agentk attach`
+after a restart, the first screen to reconnect and ask gets the session. `me_koder attach`
 talks to the host directly and is not part of this: it still takes the size when used. The server
 log has each terminal socket's attach (its address and browser) and close, numbered, and one line
 per move with its reason.
 
-**From a terminal.** `agentk attach <name>` shows a session's terminal in the one you run it
+**From a terminal.** `me_koder attach <name>` shows a session's terminal in the one you run it
 in, alongside any browser (the name is the pane's, `ak-<project>--<slug>`, or just the slug; with no
 name it lists them). `Ctrl+\` detaches, and Claude keeps running.
 
@@ -143,7 +143,10 @@ edit guard, it prints nothing when the server can't be reached, and its curl giv
 The hook forwarder gives up quietly when the socket isn't there, so the server makes sure it is.
 It binds the socket under a temporary name and renames it into place, removes it when it stops
 only if the file is still its own, and every 10 seconds binds it again if the file was removed or
-replaced (see [One server per home](recovery.md#one-server-per-home)).
+replaced (see [One server per home](recovery.md#one-server-per-home)). The server handles a hook
+event after answering it, so a server that is stopping waits up to 5 seconds for turn ends still
+being handled (what they await: the diff refresh, a PR poll's git calls, a prompt they send; not
+the PR poll's sync of the PR's design line, which it leaves running).
 
 **Interrupted turns.** Claude Code fires no `Stop` hook for a turn you interrupt (Ctrl+C or Esc), so
 AgentK's mod reports it (`/mod/turn`) and the server ends the turn as a `Stop` would

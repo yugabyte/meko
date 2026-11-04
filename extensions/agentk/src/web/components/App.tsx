@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import type { AppState, CreateSessionRequest, DatapackInvite, FailedStart, Project, ProjectWithSessions, Session, WorkItem } from '../../shared/types';
+import { AGENTK_TOUR, type AppState, type CreateSessionRequest, type DatapackInvite, type FailedStart, type Project, type ProjectWithSessions, type Session, type WorkItem } from '../../shared/types';
 import type { HarnessId } from '../../shared/harnesses';
 import { api, ApiError, errorMessage } from '../api';
 import { appUrl } from '../base';
@@ -23,6 +23,7 @@ import {
   liveSessions,
   liveWithReviews,
   openSessions,
+  isMac,
   modKey,
   withCreated,
   withOpened,
@@ -31,6 +32,7 @@ import {
   sessionToOpen,
   type LiveCount,
 } from '../util';
+import { isSessionMenuKey } from '../keys';
 import { Banners } from './Banners';
 import { CloseProjectDialog } from './CloseProjectDialog';
 import { CommandPalette } from './CommandPalette';
@@ -47,7 +49,6 @@ import { PaneIcon, Rail } from './Rail';
 import { SettingsDialog, type SettingsTab } from './SettingsDialog';
 import { TopBar } from './TopBar';
 import { UsageView } from './UsageView';
-import { MekoCallsView } from './MekoCallsView';
 import { WhatsNewDialog, whatsNewBack, type WhatsNewOpener } from './WhatsNewDialog';
 import { LinkWorkItemDialog } from './LinkWorkItemDialog';
 import { WorkItemDialog } from './WorkItemDialog';
@@ -337,6 +338,8 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
   // review is done (`reviewOpens`), asks for the task on screen with its code review's findings open, and the rail's task part, while they're open, for them closed: a request
   // ProjectView takes once. `findingsOpenFor` is the task whose findings ProjectView shows.
   const [findingsRequest, setFindingsRequest] = useState<{ id: string; open: boolean } | null>(null);
+  // Bumped by ⌘. / Ctrl+.: the session on screen opens or closes its ⋯ (ProjectView).
+  const [menuAt, setMenuAt] = useState(0);
   const [findingsOpenFor, setFindingsOpenFor] = useState<string | null>(null);
   const openFindings = (s: Session) => {
     navigate({ view: 'project', projectId: s.projectId, sessionId: s.id }, { replace: isDrawerEntry() });
@@ -382,6 +385,14 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
         setModal((m) => (m.kind === 'palette' ? { kind: 'none' } : { kind: 'palette' }));
         return;
       }
+      // The session's ⋯, from anywhere on its screen (the terminal leaves the key alone). Not over a
+      // dialog or sheet, App's or the session view's own (Code review settings, Share, the asks, the
+      // held reviews, the ⋯ sheet): the menu would open behind it and take its Escape.
+      if (isSessionMenuKey(e, isMac()) && modalKind === 'none' && currentSession && !document.querySelector('[role="dialog"]')) {
+        e.preventDefault();
+        setMenuAt((n) => n + 1);
+        return;
+      }
       if (modKey(e) && /^[1-9]$/.test(e.key) && !e.altKey && !e.shiftKey) {
         const p = projects[Number(e.key) - 1];
         if (p) {
@@ -420,6 +431,20 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
       await api.updateProject(id, { position: index });
     } catch (e) {
       showToast(errorMessage(e));
+    }
+  };
+
+  // The AgentK tour: its demo project and host, or the host of the one already open.
+  const [tourStarting, setTourStarting] = useState(false);
+  const startTour = async () => {
+    setTourStarting(true);
+    try {
+      const r = await api.startWorkshop(AGENTK_TOUR);
+      navigate({ view: 'project', projectId: r.projectId, sessionId: r.sessionId });
+    } catch (e) {
+      showToast(errorMessage(e));
+    } finally {
+      setTourStarting(false);
     }
   };
 
@@ -617,14 +642,6 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
             onError={showToast}
             onSettings={() => setModal({ kind: 'settings', tab: 'work-queue' })}
           />
-        ) : currentProject && route.view === 'meko' ? (
-          <MekoCallsView
-            key={currentProject.id}
-            project={currentProject}
-            sessionId={route.sessionId}
-            onMenu={openDrawer}
-            onError={showToast}
-          />
         ) : currentProject && route.view === 'home' ? (
           <ProjectHomeView
             key={currentProject.id}
@@ -653,6 +670,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
             onLinkWorkItem={(sessionId) => setModal({ kind: 'link-work', sessionId })}
             onToTop={(sessionId) => void sessionToTop(sessionId)}
             onMenu={openDrawer}
+            menuAt={menuAt}
             showTabs={sessionTabsShown(railSessions, railHidden, mobile)}
             harnessLogos={logos}
             findingsRequest={findingsRequest}
@@ -670,9 +688,14 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
               <p className="muted">
                 A project is an effort to build or improve a feature, product or service, worked on in one of your git repos. Each task you start in it gets its own worktree and Claude session.
               </p>
-              <button className="btn primary" onClick={() => setModal({ kind: 'new-project' })}>
-                Open project
-              </button>
+              <div className="empty-actions">
+                <button className="btn primary" disabled={tourStarting} onClick={() => void startTour()} title="A demo project and a session that walks you through AgentK and what Meko adds">
+                  {tourStarting ? <Busy label="Starting the tour" /> : 'Take the AgentK tour'}
+                </button>
+                <button className="btn" onClick={() => setModal({ kind: 'new-project' })}>
+                  Open project
+                </button>
+              </div>
             </div>
           </>
         )}
@@ -767,6 +790,10 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
           currentSession={currentSession}
           onClose={() => setModal({ kind: 'none' })}
           onNewProject={() => setModal({ kind: 'new-project' })}
+          onStartTour={() => {
+            setModal({ kind: 'none' });
+            void startTour();
+          }}
           onNewSession={(projectId) => setModal({ kind: 'new-session', projectId })}
           onMoveSession={() => currentSession && setModal({ kind: 'move', sessionId: currentSession.id })}
           onOpenPr={() => currentSession && setModal({ kind: 'open-pr', sessionId: currentSession.id })}
@@ -781,6 +808,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
           }}
           onStartForItem={startForItem}
           onLinkWorkItem={() => currentSession && setModal({ kind: 'link-work', sessionId: currentSession.id })}
+          mekoConfigured={state.meko.configured}
           onError={showToast}
           askAgentk={!!state.askAgentk}
           onEditSession={(projectId, initial) => setModal({ kind: 'new-session', projectId, initial })}

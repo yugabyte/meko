@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DESCRIBE_INTERRUPTED, REVIEW_LEFT_CODE, type CodeReviewDetail, type CodeReviewFinding, type CodeReviewSummary } from '../../src/shared/codereview';
 import type { Session } from '../../src/shared/types';
-import { canRunReview, findingGroups, findingsCountsText, findingsReviewing, stageChipText, withOverride } from '../../src/web/util.js';
+import { canRunReview, findingGroups, findingsAutoOpen, findingsCountsText, findingsReviewing, reviewBadge, stageChipText, withOverride } from '../../src/web/util.js';
 
 describe('stageChipText', () => {
   const review = (state: CodeReviewSummary['state'], detail: string | null, onDemand = false) => ({ state, detail, onDemand }) as CodeReviewSummary;
@@ -9,6 +9,7 @@ describe('stageChipText', () => {
     ['code', null, null, 'Code'],
     ['code', 'describing', null, 'Review & PR'],
     ['code', 'sweeping', null, 'Review & PR'],
+    ['code', 'triage', null, 'Review & PR'],
     ['code', 'fixing', null, 'Review & PR'],
     ['code', 'failed', 'no review pass reported', 'Review & PR'],
     ['code', 'cancelled', 'you cancelled it', 'Review & PR'],
@@ -35,6 +36,7 @@ describe('canRunReview', () => {
     ['exited', s({ status: 'exited' }), { offered: true, ready: false, wait: 'Resume the session first' }],
     ['past a finished review', s({ codeReview: review('done') }), { offered: true, ready: true, wait: null }],
     ['while one runs', s({ codeReview: review('sweeping') }), { offered: false, ready: false, wait: null }],
+    ['while its findings wait on you', s({ codeReview: review('triage') }), { offered: false, ready: false, wait: null }],
     ['while one waits for fixes', s({ codeReview: review('fixing') }), { offered: false, ready: false, wait: null }],
     ['in Review & PR with its PR', s({ stage: 'review', prNumber: 7 }), { offered: true, ready: true, wait: null }],
     ['in Review & PR before the PR is found', s({ stage: 'review' }), { offered: false, ready: false, wait: null }],
@@ -46,7 +48,8 @@ describe('canRunReview', () => {
 });
 
 describe('findingGroups', () => {
-  const f = (key: string, round: number, sweep: number, kept = true, pending?: boolean) => ({ key, round, sweep, kept, pending }) as CodeReviewFinding;
+  const f = (key: string, round: number, sweep: number, kept = true, pending?: boolean, dismissed?: boolean) =>
+    ({ key, round, sweep, kept, pending, ...(dismissed ? { you: { dismissed, note: '' } } : {}) }) as CodeReviewFinding;
 
   it('is one unnamed group for a one-round, one-sweep review', () => {
     expect(findingGroups([f('a', 1, 1), f('b', 1, 1)])).toEqual([
@@ -63,14 +66,14 @@ describe('findingGroups', () => {
     ]);
   });
 
-  it("puts each group's dropped findings under dismissed, apart from its kept ones and the running round's pending ones, in the order they came", () => {
+  it("puts each group's dropped findings, and the ones the user dismissed, under dismissed, apart from its kept ones and the running round's pending ones, in the order they came", () => {
     const groups = findingGroups([
-      f('a', 1, 1, false), f('b', 1, 1), f('c', 1, 1, false), f('d', 1, 1), f('e', 2, 1, false),
+      f('a', 1, 1, false), f('b', 1, 1), f('c', 1, 1, false), f('d', 1, 1), f('e', 2, 1, false), f('h', 2, 1, true, false, true), f('i', 2, 1),
       f('f', 3, 1, false, true), f('g', 3, 1, false, true),
     ]);
     expect(groups.map((g) => [g.label, g.findings.map((x) => x.key), g.dismissed.map((x) => x.key)])).toEqual([
       ['Round 1', ['b', 'd'], ['a', 'c']],
-      ['Round 2', [], ['e']],
+      ['Round 2', ['i'], ['e', 'h']],
       ['Round 3', ['f', 'g'], []],
     ]);
   });
@@ -87,7 +90,8 @@ describe('findings panel while the review runs', () => {
     ['describing', null, true],
     // Past an interrupted description turn, it waits on the user's Review now.
     ['describing', DESCRIBE_INTERRUPTED, false],
-    // The round's findings are final while the task fixes them.
+    // The round's findings are final while they wait on the user, and while the task fixes them.
+    ['triage', null, false],
     ['fixing', null, false],
     ['done', null, false],
     ['failed', 'no review pass reported', false],
@@ -114,7 +118,57 @@ describe('withOverride', () => {
     [{ depth: 3 }, 'depth', '1', { depth: 1 }],
     [{ rounds: null, depth: 2 }, 'rounds', '0', { rounds: 0, depth: 2 }],
     [{}, 'strategy', 'nope', {}],
+    [{ depth: 2 }, 'check', 'no', { depth: 2, check: false }],
+    [{ check: false }, 'check', '', {}],
   ] as const)('%j with %s set to %j is %j', (value, key, raw, out) => {
     expect(withOverride(value, key, raw)).toEqual(out);
+  });
+});
+
+describe('findingsAutoOpen', () => {
+  const task = (over: Partial<CodeReviewSummary> | null, kind: Session['kind'] = 'plan') =>
+    ({ kind, codeReview: over && { id: 'r1', state: 'sweeping', detail: null, passesDone: 0, scoresDone: 0, ...over } }) as Session;
+  // Open while the review runs (the panel reads Reviewing) and while its findings wait to be sent.
+  it.each([
+    ['describing', null, 'r1:running'],
+    ['preparing', null, 'r1:running'],
+    ['sweeping', null, 'r1:running'],
+    ['scoring', null, 'r1:running'],
+    ['triage', null, 'r1:triage'],
+    // Past an interrupted description turn it waits on Review now, not on the findings.
+    ['describing', DESCRIBE_INTERRUPTED, null],
+    // The findings went to the task; then it's over.
+    ['fixing', null, null],
+    ['done', null, null],
+    ['failed', 'no review pass reported', null],
+    ['cancelled', 'you cancelled it', null],
+  ] as const)('in %s (%s) is %s', (state, detail, key) => {
+    expect(findingsAutoOpen(task({ state, detail }))).toBe(key);
+  });
+
+  it('keeps its key through the progress steps, and changes it with the phase and the review', () => {
+    const running = findingsAutoOpen(task({ state: 'sweeping' }));
+    expect(findingsAutoOpen(task({ state: 'sweeping', passesDone: 3 }))).toBe(running);
+    expect(findingsAutoOpen(task({ state: 'scoring', passesDone: 5, scoresDone: 2 }))).toBe(running);
+    expect(findingsAutoOpen(task({ state: 'triage' }))).not.toBe(running);
+    expect(findingsAutoOpen(task({ id: 'r2', state: 'sweeping' }))).not.toBe(running);
+  });
+
+  it('is null with no review, no session, and on the review\'s own session', () => {
+    expect(findingsAutoOpen(task(null))).toBeNull();
+    expect(findingsAutoOpen(null)).toBeNull();
+    expect(findingsAutoOpen(task({ state: 'sweeping' }, 'code-review'))).toBeNull();
+  });
+});
+
+describe('reviewBadge', () => {
+  const task = (over: Partial<CodeReviewSummary>) =>
+    ({ codeReview: { state: 'done', counts: { blocker: 0, major: 0, minor: 0 }, addressed: false, detail: null, ...over } }) as Session;
+  // Which reviews are settled is reviewSettled's table (codereview.test.ts); this is the badge's side of it.
+  it('is the review until it settles, then null, as with no review', () => {
+    const shown = task({ counts: { blocker: 1, major: 2, minor: 0 } });
+    expect(reviewBadge(shown)).toBe(shown.codeReview);
+    expect(reviewBadge(task({}))).toBeNull();
+    expect(reviewBadge({ codeReview: null } as Session)).toBeNull();
   });
 });

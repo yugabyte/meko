@@ -128,7 +128,7 @@ release scripts with `--product meko`:
 | Tag | `agentk-v0.YYYYMMDD.N` (`v0.…` before) | `meko-v0.YYYYMMDD.N` | `presenter-v0.YYYYMMDD.N` |
 | Title | its tag | its tag | its tag |
 | Releases on | feat/fix/perf/deps subjects other than those naming only `meko` or `presenter` | feat/fix/perf/deps subjects naming `meko`, alone or in a list (`feat(agentk,meko): …`) | feat/fix/perf/deps subjects naming `presenter`, alone or in a list |
-| Assets | AgentK tarballs, `SHA256SUMS`, `SHA256SUMS.sig`, and a stub `install.sh` that tells an older Meko, which looks for it, to update first | Meko tarballs, `SHA256SUMS`, `SHA256SUMS.sig`, Meko's `install.sh` | `presenter-<version>-<os>-<arch>.tar.gz` (holding `bin/meko_presenter`), `SHA256SUMS`, `SHA256SUMS.sig`; no installer: Meko installs them |
+| Assets | AgentK tarballs, `SHA256SUMS`, `SHA256SUMS.sig`, and a stub `install.sh` that tells an older Meko, which looks for it, to update first | Meko tarballs, `SHA256SUMS`, `SHA256SUMS.sig`, Meko's `install.sh` | `presenter-<version>-<os>-<arch>.tar.gz` (holding `bin/me_presenter`, and `bin/meko_presenter`, its name before, as a link), `SHA256SUMS`, `SHA256SUMS.sig`; no installer: Meko installs them |
 | Latest | `--latest=false` | `--latest` | `--latest=false` |
 | Pruning | newest 5 per lane of its own tags | newest 5 `meko-v` releases | newest 5 `presenter-v` releases |
 
@@ -218,7 +218,7 @@ updates. A **lost key** with no backup allows no overlap, so installed Mekos rec
 
 | | launchd (`~/Library/LaunchAgents/com.yugabyte.meko.plist`) | systemd (`~/.config/systemd/user/meko.service`) |
 |---|---|---|
-| Runs | `<app>/current/bin/meko serve --detached --data-dir <data>`, with `MEKO_SERVICE` set | the same |
+| Runs | `<app>/service/meko serve --detached --data-dir <data>`, a script that execs `<app>/current/bin/meko` (a build from source: the binary), with `MEKO_SERVICE` set | `<app>/current/bin/meko serve --detached --data-dir <data>`, with `MEKO_SERVICE` set |
 | At login | `RunAtLoad` | `WantedBy=default.target`, and lingering turned on where it can be |
 | Restart | `KeepAlive`, `ThrottleInterval 5` | `Restart=always`, `RestartSec=2`, `RestartPreventExitStatus=75` |
 | Stop | `ExitTimeOut 35` | `TimeoutStopSec=35`, `KillMode=mixed` |
@@ -233,6 +233,17 @@ updates. A **lost key** with no backup allows no overlap, so installed Mekos rec
   folder: the service passes only `--data-dir`, so set them in `config.toml`.
 - The stop timeouts are 35 s because `serve` drains requests for up to 10 s, then stops its
   children for up to 15 s more; launchd's default of 20 s would kill it partway.
+- A release's LaunchAgent runs `<app>/service/meko`, never `app/current/bin/meko` itself. macOS's
+  Background Task Management shows "Background Items Added" again whenever the program a
+  LaunchAgent names turns out to be another file, which `app/current/bin/meko` is after every
+  update. An update never replaces the launcher, and `meko install` and `serve` rewrite it, or the
+  plist, only when their content changes, since a rewritten file is announced too. `serve` under
+  launchd brings the plist up to date at every start (`refreshLaunchAgent`) without reloading the
+  job, which runs from the new plist from the next login: that moves an install from before the
+  launcher onto it, with one last alert. The launcher (0700, in a 0700 folder) is in the app
+  folder, not the data folder, so the service `meko destroy` keeps still starts; `meko uninstall`
+  removes it with the plist. A build from source doesn't update itself, so its plist runs the
+  binary.
 - The data folder is written into the service file, so the CLI uses a service only when the
   service's `--data-dir` is the folder it's working on (`serviceOf`). A meko on another data folder
   (a test's, say) never touches it.
@@ -256,7 +267,7 @@ extension runs (AgentK and Presenter exit 3 when stopped), and its first line is
 status`'s row. Meko runs every extension's `status` at once and gives each 3 s
 (`extensions.StatusTimeout`); an update's check of whether the extension runs (`Entry.Status`)
 waits up to 15 s. Every command Meko runs of an extension
-(those, its installer and `agentk install`) gets `MEKO_HOME` naming Meko's data folder, so the
+(those, its installer and `me_koder install`) gets `MEKO_HOME` naming Meko's data folder, so the
 extension knows where its own folder is: `<data>/extensions/<name>` (`extensions.Dir`). AgentK's
 home is `<data>/extensions/agentk`, wherever Meko's rule puts the data folder (`MEKO_HOME`,
 `~/.meko`, or the network-home fallback; AgentK runs the same rule when Meko didn't tell it, and
@@ -272,9 +283,9 @@ line, a row of Meko's summary (`internal/cli/report.go`): two spaces, a mark (`�
 warning, `✗` failed), its title padded to 15 characters, a space, then what happened, such as
 `  ✓ AgentK          started; sessions resume in a few seconds`. The mark is colored (green,
 yellow, red) only when stdout is a terminal and `NO_COLOR` is unset. It leaves out hints Meko's own
-rows cover, such as `agentk status` after a start (`meko start` ends with what to run next), but
+rows cover, such as `me_koder status` after a start (`meko start` ends with what to run next), but
 keeps what only it knows: AgentK's stop row says where its sessions resume, `meko start`, or
-`agentk serve` when it runs without services. On a failure it prints its error
+`me_koder serve` when it runs without services. On a failure it prints its error
 to stderr as usual and exits non-zero, and Meko adds its own `✗` row after it. Run without
 `MEKO_SUMMARY` (by hand, by an older Meko, or by `meko extension update` and the Extensions page,
 which keep its output for their logs) it prints what it always has. AgentK and Presenter format the
@@ -310,12 +321,23 @@ follows on stderr.
   that empties it.
 
 - The catalog (`extensions.Known`) has AgentK and Presenter, both `Managed`: Meko installs and
-  updates them from their own releases, and neither ships an installer. Their commands are `agentk`
-  and `meko_presenter`; the extensions, their folders and tarballs are `agentk` and `presenter`
-  (tags `agentk-v*`, and `v*` from before releases were tagged by product; `presenter-v*`).
+  updates them from their own releases, and neither ships an installer. Their commands are
+  `me_koder` and `me_presenter`, so a process list, `~/.local/bin` and the services say they're
+  Meko's extensions (a release's Node is `node/bin/me_koder` or `node/bin/me_presenter` too); the
+  extensions, their folders and tarballs are `agentk` and `presenter` (tags `agentk-v*`, and `v*`
+  from before releases were tagged by product; `presenter-v*`).
+- The commands' old names (`Catalog.OldCommands`: AgentK's `agentk` and `agent-k-local`,
+  Presenter's `meko_presenter`) stay in their releases' `bin/` as links, for the services and older
+  Mekos that run them. A version unpacked before the rename has only its old name: before Meko
+  stages a version or points `app/current` at one (an install, an update, a rollback), and at its
+  start for every installed one, it adds `bin/<command>` as a link to the old name
+  (`update.App.Adopt`). At its start Meko also moves each extension installed under an old name onto
+  the new one (`Registry.Rename`): it links `~/.local/bin/<command>`, points the registry at it, and
+  removes the old names' links into this data folder's releases. `meko extension install` does the
+  same.
 - `meko extension install <name>` needs a running Meko. When the extension's command is on PATH or
-  in `~/.local/bin` (for AgentK also `agent-k-local`, its name before the rename, and the
-  `app/current/bin` of its old home `~/.agent-k-local`: `Catalog.OldCommands`, `OldHomes`), it's used
+  in `~/.local/bin` (or one of its old names, and for AgentK the `app/current/bin` of its old home
+  `~/.agent-k-local`: `Catalog.OldCommands`, `OldHomes`), it's used
   as it is, unless `--version` names a release, which is installed over it. Otherwise, or then,
   Meko picks the newest release with this platform's `<name>-<version>-<os>-<arch>.tar.gz` and
   `SHA256SUMS` (skipping its `bad-versions`), or the one `--version` names (even one rolled back),
@@ -326,7 +348,7 @@ follows on stderr.
   `App.Private`: folders and programs 0700, files 0600, as everything in the data folder), with
   `app/current` and `~/.local/bin/<command>` pointing at it. Without `GITHUB_TOKEN` or a signed-in
   `gh`, a refusal from GitHub says why: GitHub's 60 API calls an hour for a caller with no token are
-  spent (it names when they come back), or, for a 401, 403 or 404, the repo may still be internal;
+  spent (it names when they come back), or, for a 401, 403 or 404, the repo may be private;
   either way it offers signing in (`update.tokenlessHint`). Then it runs
   `<command> install --meko-url <url> --meko-key <client token>` on the terminal, with
   `--non-interactive` without one, and whatever followed `--` on the command line (AgentK's
@@ -338,8 +360,8 @@ follows on stderr.
   release belongs to one: a link that runs another data folder's release isn't this one's
   (`Catalog.Find` skips it), so Meko installs this folder's own, leaves the link alone
   (`App.MayLink`) and registers `app/current/bin/<command>`. Uninstalls are
-  `agentk uninstall --purge --delete-worktrees --non-interactive` and
-  `meko_presenter uninstall --purge --non-interactive`, which remove the extension's folder,
+  `me_koder uninstall --purge --delete-worktrees --non-interactive` and
+  `me_presenter uninstall --purge --non-interactive`, which remove the extension's folder,
   releases and all (`meko destroy --with-extensions` then removes the `~/.local/bin` link Meko made):
   Presenter's decks stay in their Meko datapacks.
 - `meko extension update <name>` (and the Extensions page's **Update**) moves a release install Meko
@@ -353,7 +375,7 @@ follows on stderr.
   - The version to roll back to is the current one, unless that's still on probation (its own
     update's record names it): then it's the one that update replaced, the last known to work.
   - It deletes the other versions, except any in use (below), and stages the new one beside them.
-  - With the catalog's `RestartArgs` (AgentK's `agentk restart`, which restarts only its server, so
+  - With the catalog's `RestartArgs` (AgentK's `me_koder restart`, which restarts only its server, so
     its session host and every session in it keep running), it switches `app/current` while the
     extension runs, with `update-pending.json` written (`App.Switch`), then runs them; they return
     once the extension answers. Without (Presenter), it stops the extension, switches, and starts
@@ -391,7 +413,7 @@ follows on stderr.
   missing is on, unless AgentK's own `config.toml` still has its old `[update] channel = "off"`,
   which Meko then saves as off: `Catalog.LegacyUpdatesOff`) and that has a newer release is updated as its Extensions-page job, marked
   `auto`. One whose last update is still on probation waits, and so does one that says it's busy:
-  the catalog's `BusyArgs` (Presenter's `meko_presenter _busy`, true while a talk is live) exit 0,
+  the catalog's `BusyArgs` (Presenter's `me_presenter _busy`, true while a talk is live) exit 0,
   within 15 s. It's tried again at the next check. Updates someone asks for never wait. When Meko
   installs its own update, it restarts first, and the new Meko's first check, a minute later,
   updates the extensions (a Meko on probation still checks; it only installs no update of its
@@ -413,7 +435,7 @@ follows on stderr.
   `/ext/<name>/`, on the unix socket `<command> _handoff --json` names; at every start, that handoff
   also brings over the web settings and certificate the extension had when it served browsers
   itself (its old login is ignored) ([web.md](web.md#the-handoff-from-agentk)). AgentK listens only on its socket.
-- `meko start` starts the extensions after Meko; `meko stop` stops them first (`agentk stop`
+- `meko start` starts the extensions after Meko; `meko stop` stops them first (`me_koder stop`
   ends AgentK's sessions too; they resume on start), unless given `--keep-extensions`. An
   extension that fails is reported, and the rest go on. `meko restart`, Meko's updates and crashes
   never touch them: they have their own services (AgentK) or processes (Presenter), and an
@@ -427,8 +449,9 @@ follows on stderr.
   `meko destroy --with-extensions` does for every extension. If the extension's uninstall fails,
   nothing is removed. If a version still runs after it (`App.Live`: a session host whose stop
   failed), the releases and the registration stay, and it says what runs. Meko removes only the
-  link it made into its releases (`UnlinkCommand`), never a build from source, but the extension's
-  own uninstall may remove its links: AgentK's removes `~/.local/bin/agentk` and `agent-k-local`
+  links it made into its releases (`UnlinkCommand`, and its old names'), never a build from source,
+  but the extension's own uninstall may remove its links: AgentK's removes `~/.local/bin/me_koder`,
+  `agentk` and `agent-k-local`
   whatever they point to, a link into another data folder's release too. A registered extension Meko
   doesn't know is only forgotten. A damaged extension (registered, but its command is missing and
   `Catalog.Find` doesn't find it again; `meko start`, `stop` and `update` say so, naming this
@@ -454,6 +477,7 @@ A release install's app folder:
 ~/.local/share/meko/app/     ($XDG_DATA_HOME/meko/app), outside the data folder
   <version>/                 one per installed release, each with bin/meko and VERSION
   current -> <version>       what the service runs
+  service/meko               what the launchd service runs: execs current/bin/meko
   update-pending.json        an update on probation
   bad-versions               versions rolled back; never offered again
 ```

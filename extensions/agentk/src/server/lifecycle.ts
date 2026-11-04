@@ -4,7 +4,7 @@ import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { basename } from 'node:path';
 import { mekoHost } from './config.js';
 import type { Core } from './core.js';
-import { get, run } from './db.js';
+import { get, run, type Db } from './db.js';
 import { designAnswers, type CheckedAnswers } from './answers.js';
 import {
   artifactUrlIn, checkToolQuestions, designLine, isArtifactPublish, mekoDesignName, parseDesignLine, readArtifactHtml, readDesignFile, sha256Hex,
@@ -19,7 +19,7 @@ import {
   andList, checkHeldRequest, decideHeld, dropOtherPrs, heldBlocker, heldPromptLines, heldReviews, heldSummary, holdReview, reviewRoute,
   type ReviewDetails, type ReviewWho,
 } from './heldreviews.js';
-import { launchedAgentId, withMekoScope } from './meko.js';
+import { launchedAgentId } from './meko.js';
 import type { HookPayload, ModReply } from './hooks.js';
 import { fetchPrDesign, markPrDesignTold, prDesignSource, savePrDesign } from './prdesign.js';
 import { fixAfterLine, fixWhy, meAkReviewFooter, mekoDatapackLineId, mekoPrFooter, movePrompt, prDescriptionFixLine, prDescriptionUseLine, type FixAfter } from './prompts.js';
@@ -108,6 +108,7 @@ const GATE_NAMES: Record<QueuedGate, string> = { 'open-pr': 'Open PR', merge: 'm
 
 /** The merge blocker while a code review the user ran in Review & PR runs, or its fixes wait to be taken. */
 const CODE_REVIEW_RUNNING = 'The code review is still running.';
+const CODE_REVIEW_WAITS = "The code review's findings wait on you: send them to AgentK or dismiss them.";
 
 /** The status detail while a markdown or Artifact design waits for approval. */
 export const DESIGN_READY = 'Design ready for your approval';
@@ -130,6 +131,17 @@ const QUEUE_ORDER = ['review-people', 'review-held', 'local-review', 'conflicts'
 /** The prompts queued in a Review a PR session: the summary after Update to latest, or the PR's new design alone. */
 const REVIEWING_ORDER = ['review-pr-update', 'review-pr-design'] as const;
 type QueuedPrompt = (typeof QUEUE_ORDER)[number] | (typeof REVIEWING_ORDER)[number];
+
+/** What each queued prompt starts an agent stopped for sitting idle again for, in its activity ("Resumed for …"). */
+const QUEUED_FOR: Record<QueuedPrompt, string> = {
+  'review-people': 'for a review on the PR',
+  'review-held': 'for the reviews you sent to AgentK',
+  'local-review': "for the code review's findings",
+  conflicts: 'to resolve merge conflicts',
+  ci: 'for a failing CI check',
+  'review-pr-update': 'for Update to latest',
+  'review-pr-design': "for the PR's new design",
+};
 
 /** The prompts that may go out in a stage, in order: none outside Review, Reviewing PR and (a code review's) Code. */
 function queueOrder(stage: Stage): readonly QueuedPrompt[] {
@@ -196,11 +208,23 @@ async function lacksLocalCommits(repo: string, branch: string, st: github.PrStat
 }
 
 /**
+ * A workshop's project (`Project.workshop`) is on a demo repo with no remote, so it opens no PR:
+ * Open PR, Run to merge and a move to Review & PR are refused there (409), rather than leave the
+ * session in Review & PR with nothing to push to.
+ */
+export function checkOpensPr(db: Db, row: Pick<SessionRow, 'project_id'>): void {
+  if (projectRow(db, row.project_id)?.workshop) throw new HttpError(409, NO_PR_IN_WORKSHOP);
+}
+
+/**
  * The task lifecycle: Design → Code → Review & PR → Merge & Close (merge, then cleanup).
  * Gates (approve design, open PR, merge) come from the user; everything else
  * is driven by hook events and by polling GitHub from the server, so waiting
  * on reviews and CI costs no Claude tokens.
  */
+
+export const NO_PR_IN_WORKSHOP = "The demo has no GitHub repo, so it opens no PR. Run the code review from the stage bar instead.";
+
 export class Lifecycle {
   private timer: NodeJS.Timeout | null = null;
   private lastPoll = new Map<string, number>();
@@ -324,7 +348,7 @@ export class Lifecycle {
     if (!parts.length) return;
     const conv = await this.sessions.conversationId(row, dp);
     await Promise.all(parts.map(async (p) => {
-      const hash = await withMekoScope(row, () => this.core.meko.putArtifact(p.name, p.text, p.type, dp.id, launchedAgentId(row), conv));
+      const hash = await this.core.meko.putArtifact(p.name, p.text, p.type, dp.id, launchedAgentId(row), conv);
       // The version is used, and is the one the PR names; it's the current design only if nothing
       // changed while it was sent.
       run(this.db, p.sent, p.version, hash, p.text, id);
@@ -524,6 +548,7 @@ export class Lifecycle {
    */
   async approveDesign(row: SessionRow, body?: unknown): Promise<void> {
     if (row.stage !== 'design') throw new HttpError(409, 'This session is past the Design stage.');
+    row = await this.sessions.awake(row, 'for the design approval');
     const answers = designAnswers(body, this.core.questions.get(row).questions);
     if (row.plan_mode) {
       if (answers) throw new HttpError(409, 'AgentK is in plan mode, so the approval is a choice in its terminal. Type your answers there.');
@@ -612,6 +637,14 @@ export class Lifecycle {
     return this.queuedApprovals.has(id);
   }
 
+  /** A prompt waits in the session's queue for its stage (deliverNext sends it), or one sent hasn't had its turn end. */
+  hasQueued(id: string): boolean {
+    const row = sessionRow(this.db, id);
+    if (!row) return false;
+    const q = this.queue(id);
+    return queueOrder(row.stage).some((n) => q[n]);
+  }
+
   /** Withdraws an approval waiting for the turn to end. */
   cancelApproval(row: SessionRow): void {
     if (!this.queuedApprovals.delete(row.id)) throw new HttpError(409, 'There is no approval waiting for AgentK.');
@@ -665,6 +698,7 @@ export class Lifecycle {
   async reviseDesign(row: SessionRow, body: unknown): Promise<void> {
     if (row.desired !== 'running') throw new HttpError(409, 'This session is archived.');
     if (row.stage !== 'design' || row.plan_mode) throw new HttpError(409, 'Answers to the design can only be sent while the session is in Design.');
+    row = await this.sessions.awake(row, 'for your answers to the design');
     if (this.queuedApprovals.has(row.id)) throw new HttpError(409, 'You approved the design: the approval goes when this turn ends. Cancel it to send answers instead.');
     // With the mod, answers sent mid-turn wait in Claude for the turn to end.
     if (this.sessions.modLive(row.id) && this.sessions.midTurn(row.id)) {
@@ -703,6 +737,8 @@ export class Lifecycle {
   async openPr(row: SessionRow, body?: unknown): Promise<void> {
     const given = openPrInstructions(body);
     if (row.stage !== 'code') throw new HttpError(409, 'Open PR is only available in the Code stage.');
+    checkOpensPr(this.db, row);
+    row = await this.sessions.awake(row, 'for Open PR');
     if (row.desired === 'running' && !this.sessions.runtime(row.id).busy && this.turnRunning(row)) {
       if (row.queued_gate !== 'open-pr') {
         const text = given ? 'Open PR queued with your instructions: it goes when AgentK finishes its turn' : 'Open PR queued: it goes when AgentK finishes its turn';
@@ -924,15 +960,19 @@ export class Lifecycle {
   /**
    * A task's code review asks it to fix a round's findings (review/runner.ts): before the next
    * round, or, for a review the user ran, after its last. An Open PR's review in Code sends it now
-   * (the gate holds the task), and its turn's end starts the next round. One the user ran queues it
+   * (the gate holds the task), and its turn's end starts the next round. One the user ran, one in
+   * Review & PR, and one whose findings waited on the user (`queued`, from `triage`) queue it
    * (`local-review`): it goes once the task is between turns (the user may be working with it), and
-   * the end of the turn that took it starts the next round. `moved`: a move's
+   * the end of the turn that took it starts the next round (past an interrupt too, except for an
+   * Open PR's review, which then waits for Review now or the next turn's end). `moved`: a move's
    * `moved` line still waiting on the review (`code_reviews.lead`: the ask for the PR description
    * normally took it), first. `after`: what follows the fixes (a repo's own prompt without
    * {{after}} gets it at the end).
    */
   async sendReviewFix(task: SessionRow, o: {
     strategy: string; round: number; findings: string; outcomeHow: string; why: 'pr' | 'demand'; after: FixAfter; moved?: string | null; description?: string | null;
+    /** Through the prompt queue in Code too: the findings waited on the user, who may be working with the task. */
+    queued?: boolean;
   }): Promise<void> {
     const row = this.sessions.row(task.id);
     const stage = o.after === 'hold-push' || o.after === 'push' ? 'review' : 'code';
@@ -942,7 +982,7 @@ export class Lifecycle {
     const rendered = this.sessions.prompt(row, 'code-review-fix', { strategy: o.strategy, round: o.round, findings: o.findings, outcomeHow: o.outcomeHow, why: fixWhy(o.why), after: mark });
     const fix = rendered.includes(mark) ? rendered.split(mark).join(fixAfterLine(o.after)) : `${rendered.trimEnd()}\n\n${fixAfterLine(o.after)}`;
     const text = [o.moved, fix, o.description ? prDescriptionFixLine(o.description) : ''].filter(Boolean).join('\n\n');
-    if (stage === 'review' || o.why === 'demand') this.queueCodeReview(row.id, text);
+    if (stage === 'review' || o.why === 'demand' || o.queued) this.queueCodeReview(row.id, text);
     else await this.sessions.submit(row.id, text);
   }
 
@@ -959,6 +999,16 @@ export class Lifecycle {
     void this.serial(id, () => this.deliverNext(id)).catch((e) => this.warn(id, "Sending the code review's prompt", e));
   }
 
+  /**
+   * A code review's findings began or stopped waiting on the user: in Review & PR the merge blockers
+   * are read again (outside the session's serial queue, which a review never runs in).
+   */
+  codeReviewWaitsChanged(id: string): void {
+    const row = sessionRow(this.db, id);
+    if (row?.stage === 'review') void this.pollReview(row).catch((e) => this.warn(id, 'PR status failed', e));
+    this.core.changed();
+  }
+
   /** A code review's prompt waits in the queue, or its turn hasn't ended. */
   codeReviewPending(id: string): boolean {
     return !!this.queue(id)['local-review'];
@@ -973,16 +1023,17 @@ export class Lifecycle {
   }
 
   /**
-   * The turn that took a code review's prompt ended, interrupted or not: the review goes on (its
-   * next round reviews the change as it is). An interrupt isn't kept for a later turn here, since a
-   * review the user ran has no Review now to move it on; Cancel stops it. True when there was one.
+   * The turn that took a code review's prompt ended: the review goes on (its next round reviews the
+   * change as it is), interrupted or not for a review the user ran, which has no Review now to move
+   * it on (Cancel stops it). An Open PR's review waits past an interrupt, as when its fix prompt goes
+   * straight to the task (`CodeReviews.codeReviewTurnEnded`). True when there was one.
    */
-  private codeReviewTurnEnd(id: string): boolean {
+  private codeReviewTurnEnd(id: string, interrupted: boolean): boolean {
     const q = this.queue(id);
     if (q['local-review']?.state !== 'sent') return false;
     delete q['local-review'];
     this.setQueue(id, q);
-    this.core.reviews.codeReviewTurnEnded(id);
+    this.core.reviews.codeReviewTurnEnded(id, interrupted);
     return true;
   }
 
@@ -1027,7 +1078,8 @@ export class Lifecycle {
    * agent exited before taking the ask (sessions.submit's), after the task stops being busy.
    */
   async sendPrDescription(task: SessionRow, o: { moved?: string | null; lost: () => void }): Promise<void> {
-    const row = this.sessions.row(task.id);
+    if (this.sessions.row(task.id).stage !== 'code') throw new Error('the task left Code');
+    const row = await this.sessions.awake(this.sessions.row(task.id), 'for the code review');
     if (row.stage !== 'code' || row.desired !== 'running') throw new Error('the task left Code');
     this.sessions.setBusy(row.id, true);
     try {
@@ -1052,7 +1104,8 @@ export class Lifecycle {
    * which a withdrawal while the prompt is prepared (Cancel, Run to merge stopping) stops, unsaid.
    */
   async sendReviewedPr(task: SessionRow, o: { line: string | null; findings: string; outcomeHow: string; strategy: string; instructions: string; by: 'you' | 'auto'; moved?: string | null; description?: string | null; queued?: boolean }): Promise<boolean> {
-    const row = this.sessions.row(task.id);
+    if (this.sessions.row(task.id).stage !== 'code') return false;
+    const row = await this.sessions.awake(this.sessions.row(task.id), 'for Open PR');
     if (row.stage !== 'code' || row.desired !== 'running') return false;
     const findings = o.findings ? this.sessions.prompt(row, 'code-review-findings', { strategy: o.strategy, findings: o.findings, outcomeHow: o.outcomeHow }) : '';
     const lead = [o.moved, findings].filter(Boolean).join('\n\n') || undefined;
@@ -1132,6 +1185,12 @@ export class Lifecycle {
     if (prompt != null && typeof prompt !== 'boolean') throw new HttpError(400, 'prompt must be true or false.');
     if (task != null && typeof task !== 'string') throw new HttpError(400, 'The task must be text.');
     const instructions = checkInstructions(req?.instructions);
+    // An agent stopped for sitting idle starts again only for a move that sends it something: its
+    // prompt or the user's instructions. A move to Review & PR decides in moveToReview.
+    if (row.idle_stopped_at && stage !== 'review' && !moveBlockedIn(row.stage) && !moveError(row, stage)
+      && (instructions || (offersPrompt(row.stage, stage) && (prompt ?? promptByDefault(row.stage, stage))))) {
+      await this.sessions.awake(row, `for the move to ${STAGE_LABELS[stage]}`);
+    }
     await this.serial(row.id, () => this.doMove(row.id, stage, prompt, (task ?? '').trim(), instructions));
   }
 
@@ -1148,6 +1207,7 @@ export class Lifecycle {
     if (this.merging.has(id) || this.closing.has(id)) throw new HttpError(409, 'A merge is in progress.');
     const bad = moveError(cur, stage);
     if (bad) throw new HttpError(400, bad);
+    if (stage === 'review') checkOpensPr(this.db, cur);
     if (cur.stage === 'design' && cur.plan_mode) {
       throw new HttpError(409, "This session designs in Claude's plan mode. Approve or reject the plan in the terminal first.");
     }
@@ -1225,12 +1285,17 @@ export class Lifecycle {
         && (!this.sessions.ownsWorktree(row) || (await uncommittedCount(row.worktree_path)) === 0);
     }
     // Recheck after the GitHub calls: Claude may have started a turn.
-    const cur = this.sessions.row(row.id);
+    let cur = this.sessions.row(row.id);
     const check = (r: SessionRow) => {
       if (r.desired !== 'running') throw new HttpError(409, 'This session is archived.');
       if (r.stage !== row.stage) throw new HttpError(409, `The session moved to ${STAGE_LABELS[r.stage]} meanwhile. Try again.`);
     };
     check(cur);
+    // Anything but picking up the PR alone sends the agent a prompt, or starts the review that does.
+    if (!adopt || !pr || instructions) {
+      cur = await this.sessions.awake(cur, 'for the move to Review & PR');
+      check(cur);
+    }
     this.checkBetweenTurns(cur);
     if (!adopt || !pr) {
       // As for Open PR: the user's prompts go first, and a stopped code review holds the PR. Outside
@@ -1406,7 +1471,7 @@ export class Lifecycle {
     if (row.stage === 'code') {
       // A code review the user ran: the turn that took its fix prompt starts the next round, and
       // any other turn's end lets that prompt go.
-      if (this.codeReviewTurnEnd(id) || this.queue(id)['local-review']) {
+      if (this.codeReviewTurnEnd(id, interrupted) || this.queue(id)['local-review']) {
         await this.serial(id, () => this.deliverNext(id)).catch((e) => this.warn(id, "Sending the code review's prompt", e));
         const cur = this.sessions.row(id);
         if (cur.queued_gate === 'open-pr') {
@@ -1434,7 +1499,7 @@ export class Lifecycle {
       await this.serial(id, async () => {
         // The turn that got a prompt is over. Only that turn addresses a review: one still queued isn't.
         // The turn that took a code review's fixes: the review's next round starts, interrupted or not.
-        this.codeReviewTurnEnd(id);
+        this.codeReviewTurnEnd(id, interrupted);
         const q = this.queue(id);
         if (!interrupted) {
           for (const n of QUEUE_ORDER) if (q[n]?.state === 'sent') delete q[n];
@@ -2051,6 +2116,11 @@ export class Lifecycle {
     const order = queueOrder(row.stage);
     const name = order.find((n) => q[n]?.state === 'queued');
     if (!name) return;
+    // An agent stopped for sitting idle starts again for it; it goes at a later pass, once the agent is up.
+    if (row.idle_stopped_at) {
+      this.sessions.wakeSoon(id, QUEUED_FOR[name]);
+      return;
+    }
     if (row.desired !== 'running' || (row.status !== 'idle' && row.status !== 'recovered')) return;
     if (this.sessions.runtime(id).busy) return;
     const sent = order.filter((n) => q[n]?.state === 'sent');
@@ -2121,12 +2191,15 @@ export class Lifecycle {
     const turn = this.inTurn(row);
     // A code review the user ran here: its fixes wait uncommitted until its last round, and are pushed
     // then. It clears by itself only while Claude is there to take its prompts and end their turns.
-    const codeReview = this.core.reviews.runningIn(row.id, 'review') || this.codeReviewPending(row.id);
-    const reviewWaits = codeReview && row.status !== 'exited';
+    // Its findings waiting on the user (`triage`) is a blocker only they clear.
+    const triage = this.core.reviews.waitsOnYouIn(row.id, 'review');
+    const codeReview = !triage && (this.core.reviews.runningIn(row.id, 'review') || this.codeReviewPending(row.id));
+    const reviewWaits = (codeReview && row.status !== 'exited') || triage;
     if (st.state !== 'OPEN') block('The PR is not open.');
     if (working) block('AgentK is still working.', true);
     else if (row.status === 'needs_input') block(IN_TERMINAL, turn, 'never');
-    if (codeReview) block(CODE_REVIEW_RUNNING, reviewWaits);
+    if (triage) block(CODE_REVIEW_WAITS, false, 'always');
+    else if (codeReview) block(CODE_REVIEW_RUNNING, reviewWaits);
     if (unpushed) block("The branch has commits that aren't pushed to the PR.", turn || !!opts.turnAtStart || reviewWaits);
     if (uncommitted) block(`The worktree has ${uncommitted === 1 ? '1 uncommitted file' : `${uncommitted} uncommitted files`}: commit or discard them.`, turn || !!opts.turnAtStart || reviewWaits);
     const ci = github.ciState(st.statusCheckRollup);
@@ -2279,6 +2352,7 @@ export class Lifecycle {
     if (row.kind !== 'review-pr' || row.stage !== 'reviewing-pr' || !row.pr_number || !row.pr_repo || !row.review_sha) {
       throw new HttpError(409, "Only a Review a PR session can update to its PR's latest commits.");
     }
+    await this.sessions.awake(row, 'for Update to latest');
     await this.serial(row.id, async () => {
       const cur = this.sessions.row(row.id);
       if (cur.desired !== 'running') throw new HttpError(409, 'This session is archived.');
@@ -2406,7 +2480,7 @@ export class Lifecycle {
   /**
    * Turns Run to merge on or off (`PATCH /api/sessions/:id`). On in Design waits for the approval;
    * in Code it queues Open PR (sent now when Claude is at its prompt), and in Review & PR the merge.
-   * Off drops the gate it queued.
+   * Off drops the gate it queued. On sends a code review's findings that wait on the user (`triage`) as they are.
    */
   async setAutoRun(row: SessionRow, on: boolean): Promise<void> {
     if (row.desired !== 'running') throw new HttpError(409, 'This session is archived.');
@@ -2415,6 +2489,7 @@ export class Lifecycle {
       throw new HttpError(409, row.stage === 'explore' ? 'Run to merge starts at Design or later. Move the session on first.' : 'This session is already past its merge.');
     }
     if (row.stage === 'design' && row.plan_mode) throw new HttpError(409, "This session designs in Claude's plan mode, so Run to merge isn't available for it.");
+    if (on) checkOpensPr(this.db, row);
     if (!!row.auto_run === on) return;
     if (!on) {
       if (this.merging.has(row.id)) throw new HttpError(409, 'The merge is already being requested.');
@@ -2426,11 +2501,17 @@ export class Lifecycle {
       ? 'Run to merge on: once you approve the design, AgentK opens the PR and merges it by itself'
       : 'Run to merge on: AgentK opens the PR and merges it by itself');
     this.core.changed();
-    if (row.stage === 'code' && row.status !== 'exited') {
+    // Findings waiting on the user go as they are, before the gates: Run to merge doesn't wait on anyone.
+    // Their PR prompt (the last round's) may have moved the session on.
+    await this.core.reviews.autoSend(row.id).catch((e) => this.warn(row.id, "Sending the code review's findings", e));
+    let cur = this.sessions.row(row.id);
+    // Its Open PR goes now: an agent stopped for sitting idle starts again for it.
+    if (cur.stage === 'code' && cur.idle_stopped_at) cur = await this.sessions.awake(cur, 'for Run to merge');
+    if (cur.stage === 'code' && cur.status !== 'exited') {
       // Mid-turn it goes when the turn ends; between turns, now (takeQueuedPr checks Claude can take it).
-      if (!row.queued_gate) this.queueGate(row.id, 'open-pr', 'Run to merge: Open PR queued', '', true);
+      if (!cur.queued_gate) this.queueGate(row.id, 'open-pr', 'Run to merge: Open PR queued', '', true);
       await this.takeQueuedPr(row.id).catch((e) => this.warn(row.id, 'Sending the queued Open PR', e));
-    } else if (row.stage === 'review') {
+    } else if (cur.stage === 'review') {
       this.armMerge(row.id);
       await this.pollReview(this.sessions.row(row.id)).catch((e) => this.warn(row.id, 'PR status failed', e));
     }

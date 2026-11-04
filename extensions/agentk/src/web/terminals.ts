@@ -14,7 +14,7 @@ import { HeldImages, type HeldImage } from './heldImages';
 import { isPastableImage, mekoPlan, mekoSummary, pickFiles, type MekoResult } from './knowledge';
 import { MOBILE_QUERY, TOUCH_QUERY, matches } from './hooks/useMedia';
 import {
-  clampFont, ctrlSequence, decayVelocity, editKeySequence, flingVelocity, isTap, isTerminalReport, keySequence, pastePath, pasteText, touchCol, touchRow, wheelReport, wheelSteps,
+  clampFont, ctrlSequence, decayVelocity, editKeySequence, flingVelocity, isSessionMenuKey, isTap, isTerminalReport, keySequence, pastePath, pasteText, touchCol, touchRow, wheelReport, wheelSteps,
   FLING_WINDOW_MS,
   type BarKey, type TouchSample,
 } from './keys';
@@ -156,6 +156,11 @@ class SessionTerminal {
   typing = false;
   /** Sticky Ctrl from the key bar: the next character typed is sent with Ctrl. */
   ctrl = false;
+  /**
+   * Set while AgentK has stopped the session's agent for sitting idle (TerminalPane): the first key
+   * typed, from the keyboard, the key bar or the compose box, calls it once instead of going out.
+   */
+  whenTyped: (() => void) | null = null;
   /** Select mode from the key bar (touch screens): a drag selects whole lines and copies them. */
   selecting = false;
   conn: TermConn = 'connecting';
@@ -308,6 +313,8 @@ class SessionTerminal {
         this.openFind();
         return false;
       }
+      // The session's ⋯ (App's shortcut): never typed into the agent.
+      if (isSessionMenuKey(e, IS_MAC)) return false;
       const mod = IS_MAC ? e.metaKey : e.ctrlKey;
       // With text selected, ⌘C (Ctrl+C or Ctrl+Shift+C elsewhere) copies it instead of interrupting Claude.
       // Not a match the find bar selected: Ctrl+C interrupts Claude while the bar is open.
@@ -491,6 +498,7 @@ class SessionTerminal {
    * turn. Returns false when the input couldn't be sent or queued (not connected).
    */
   private input(data: string): boolean {
+    if (this.takeTyped()) return true;
     if (this.queued) {
       // Esc or Ctrl+C while a send waits on an upload calls the send off, then goes through.
       if (data === '\x1b' || data === '\x03') this.cancelWait?.();
@@ -895,6 +903,15 @@ class SessionTerminal {
     return this.input(keySequence(key, this.term.modes.applicationCursorKeysMode));
   }
 
+  /** Calls `whenTyped` once, if it's set: true when it did. */
+  private takeTyped(): boolean {
+    const typed = this.whenTyped;
+    if (!typed) return false;
+    this.whenTyped = null;
+    typed();
+    return true;
+  }
+
   /** Arms or cancels the sticky Ctrl. */
   setCtrl(on: boolean) {
     if (this.ctrl === on) return;
@@ -920,6 +937,8 @@ class SessionTerminal {
    */
   submit(text: string): Promise<boolean> {
     if (this.sending) return Promise.resolve(false);
+    // The text stays in the compose box, to send once the agent is back.
+    if (this.takeTyped()) return Promise.resolve(false);
     return this.flush(text, 'Not connected to the session. Your message is kept; send it again once it reconnects.');
   }
 

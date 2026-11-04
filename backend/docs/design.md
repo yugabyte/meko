@@ -41,16 +41,13 @@ and `meko-cli` (`~/.local/bin/meko-cli`, a link to the same binary that `meko in
 that a release's serve makes for an install from before it once the release is past probation)
 works with what Meko keeps, through the running server, and with the linked Meko Cloud's datapacks ([cloud.md](cloud.md#meko-cli)):
 `datapacks`, `create_datapack`, `delete_datapack`, `export`, `search`, `add_memory`, `upload` and
-`upload_status`. Alone, `meko-cli` is a prompt (`shell.go`): it
-reads one command a line, split as a shell would, and runs each as `meko-cli <line>`; `use <datapack>`
-fills in `--datapack` for the commands that take it, and a confirmation (`delete_datapack`'s) reads
-the next line from the same buffer. From a pipe it runs the lines as a script. Given one of
-`meko-cli`'s commands, `meko` runs nothing and names the `meko-cli` command instead (exit 2). Run as
+`upload_status`. Like `meko`, it runs one command a run and, alone, prints its commands. It has no
+prompt: a script runs `meko-cli` once per command, naming the datapack with `--datapack` on each.
+Given one of `meko-cli`'s commands, `meko` runs nothing and names the `meko-cli` command instead (exit 2). Run as
 `mekosh`, the binary runs nothing and names the `meko-cli` command (exit 2).
 
 Each command's help comes from one table (`help.go`: its group, summary, usage and examples, and its
-flag set's flags), which `meko --help`, `meko help <cmd>`, `<cmd> --help` (exit 0) and the prompt's
-`help` all print. `install`, `start`, `stop`, `restart` and `status` print a summary
+flag set's flags), which `meko --help`, `meko help <cmd>` and `<cmd> --help` (exit 0) all print. `install`, `start`, `stop`, `restart` and `status` print a summary
 (`report.go`): a row per step marked `✓`, `!` or `✗`, the links (`Humans (web UI)` on the web
 listener, `Agents (MCP, API)` on the API listener), and the commands to run next; the extensions
 print their own rows ([install.md](install.md#the-summary-rows)). `status` is that checklist;
@@ -252,6 +249,7 @@ newer than the binary knows is refused with a message saying so.
 | `0009_call_log_baseline.sql` | `context_search`'s baseline per call, for context efficiency | [api.md](api.md#context-efficiency-and-quality) |
 | `0010_call_log_location.sql` | Where a call ran: this Meko, or the linked Meko Cloud | [api.md](api.md#the-call-log) |
 | `0011_questions.sql` | Context Gaps: the searches Meko answered poorly, and what was done about each | [api.md](api.md#context-gaps) |
+| `0013_call_contents.sql` | Which client sent a call, and what calls sent and got back while Settings keeps them | [api.md](api.md#call-contents) |
 
 ### Ids
 
@@ -272,7 +270,8 @@ CREATE TABLE memories (
 
 - `settings(key, value)`: the install id, the embedding model and dimension once known, the local
   user's profile (`profile_first_name`, `profile_last_name`, `profile_email`,
-  `profile_onboarding_done`), the usage stats' switch and schedule, and other small state.
+  `profile_onboarding_done`), the usage stats' switch and schedule, whether calls' contents are
+  kept (`call_contents.keep`), and other small state.
 - `datapacks(id, name UNIQUE, description, created_at, updated_at, conversation_search_opt_out)`: a
   local default datapack is created on first start. It isn't named `meko_default_datapack*`, which
   Meko Cloud reserves for its own default datapacks.

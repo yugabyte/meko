@@ -4,7 +4,7 @@
 // and serve. meko-cli
 // works with what it keeps, through the running server, and with the linked Meko Cloud's datapacks
 // (cloudtools.go): datapacks, create_datapack, delete_datapack, export, search, add_memory, upload
-// and upload_status, one at a time or at its prompt (shell.go). help.go has each command's help.
+// and upload_status, one command a run. help.go has each command's help.
 package cli
 
 import (
@@ -35,7 +35,8 @@ const (
 	exitLocked = 75
 )
 
-// stdin is what add_memory, destroy, uninstall --purge and extension delete read; tests replace it.
+// stdin is what add_memory, delete_datapack, cloud_link, destroy, uninstall --purge and extension
+// delete read; tests replace it.
 var stdin io.Reader = os.Stdin
 
 // cmdFlags are the flags of the commands that aren't MCP calls.
@@ -58,10 +59,40 @@ func Main(argv0 string, args []string, stdout, stderr io.Writer) int {
 		return RunMekoCLI(args, stdout, stderr)
 	case progMekosh:
 		fmt.Fprintf(stderr, "%s is %s now: %s\n", progMekosh, progMekoCLI,
-			shellQuote(append([]string{progMekoCLI}, args...)))
+			shellQuote(append([]string{progMekoCLI}, mekoshArgs(args)...)))
 		return exitUsage
 	}
 	return Run(args, stdout, stderr)
+}
+
+// mekoshArgs are a mekosh command line's args as meko-cli takes them. mekosh took --data-dir before
+// the command too, and meko-cli takes flags only after it, so a leading --data-dir moves after the
+// command. With no command, it's dropped: meko-cli alone only prints its help.
+func mekoshArgs(args []string) []string {
+	var lead []string
+flags:
+	for len(args) > 0 {
+		name := strings.TrimLeft(args[0], "-")
+		switch {
+		case name == args[0]:
+			break flags
+		case name == "data-dir" && len(args) > 1:
+			lead, args = append(lead, args[0], args[1]), args[2:]
+		case strings.HasPrefix(name, "data-dir="):
+			lead, args = append(lead, args[0]), args[1:]
+		default:
+			break flags
+		}
+	}
+	if len(args) == 0 {
+		return nil
+	}
+	return append(slices.Clone(args), lead...)
+}
+
+// RunMekoCLI runs meko-cli's command in args (without the program name) and returns the exit code.
+func RunMekoCLI(args []string, stdout, stderr io.Writer) int {
+	return runProg(progMekoCLI, args, stdout, stderr)
 }
 
 // Run runs meko's command in args (without the program name) and returns the exit code.
@@ -88,13 +119,8 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 			}
 			return runProg(prog, []string{g, rest[1], "--help"}, stdout, stderr)
 		}
-		c, ok := lookup(prog, rest[0])
-		if !ok {
+		if _, ok := lookup(prog, rest[0]); !ok {
 			return unknownCommand(prog, rest[0], nil, stderr)
-		}
-		if c.promptOnly {
-			printCommandHelp(stdout, prog, c, nil)
-			return exitOK
 		}
 		return runProg(prog, []string{rest[0], "--help"}, stdout, stderr)
 	case "--version":
@@ -128,10 +154,6 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	info, ok := lookup(prog, cmd)
 	if !ok || cmd == args[0] && strings.Contains(cmd, " ") { // a subcommand is two words
 		return unknownCommand(prog, cmd, rest, stderr)
-	}
-	if info.promptOnly {
-		fmt.Fprintf(stderr, "%s: %s works only at the prompt (run meko-cli alone)\n", prog, cmd)
-		return exitUsage
 	}
 	if cmd == "memory-extractor" {
 		return runMemoryExtractor(rest, stdout, stderr)
@@ -380,7 +402,7 @@ func unknownCommand(prog, cmd string, rest []string, stderr io.Writer) int {
 	if prog == progMekoCLI {
 		other = progMeko
 	}
-	if c, ok := lookup(other, cmd); ok && !c.hidden && !c.promptOnly {
+	if c, ok := lookup(other, cmd); ok && !c.hidden {
 		what := "is a meko-cli command now"
 		if other == progMeko {
 			what = "is a meko command"

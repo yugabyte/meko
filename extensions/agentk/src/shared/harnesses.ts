@@ -45,15 +45,61 @@ export interface HarnessCaps {
    * prompt of its own after clearing the conversation, for a CLI with no subagents AgentK can define.
    */
   reviewSteps: 'subagents' | 'turns';
+  /**
+   * The models New session offers for it besides Default and Other…: a fixed list (Claude Code's
+   * aliases, which follow its newest models), or `cli`, read from the CLI (`Harness.models`), since
+   * its models depend on the providers and plan the user has.
+   */
+  models: readonly ModelChoice[] | 'cli';
+}
+
+/** A model New session offers: the name passed to the CLI, and what the picker shows. */
+export interface ModelChoice {
+  id: string;
+  label: string;
+}
+
+/** Claude Code's model aliases (`claude --model`), largest first. */
+const CLAUDE_MODELS: readonly ModelChoice[] = [
+  { id: 'fable', label: 'Fable' },
+  { id: 'opus', label: 'Opus' },
+  { id: 'sonnet', label: 'Sonnet' },
+  { id: 'haiku', label: 'Haiku' },
+];
+
+/** The most characters a session's model name may have. */
+export const MODEL_MAX = 200;
+
+/**
+ * Why `model` can't be passed to an agent, or null when it can: AgentK checks only its form (a
+ * name the CLI doesn't know fails in the CLI). Letters, digits and `._:/@[]-`, not starting with
+ * `-` (it would read as an option), at most MODEL_MAX characters: an alias (`opus`), a full id
+ * (`claude-opus-5-5`, `opus[1m]`) or OpenCode's `provider/model`.
+ */
+export function checkModel(model: string): string | null {
+  if (!model) return 'Name a model.';
+  if (model.length > MODEL_MAX) return `A model name has at most ${MODEL_MAX} characters.`;
+  if (model.startsWith('-') || !/^[A-Za-z0-9._:/@[\]-]+$/.test(model)) {
+    return `${model} isn't a model name: use letters, digits and . _ : / @ [ ] - only.`;
+  }
+  return null;
+}
+
+/** The label of a model on a harness's fixed list (`Opus`), else the model as given. */
+export function modelLabel(harness: HarnessId, model: string): string {
+  const list = HARNESS_CAPS[harness].models;
+  return (list !== 'cli' && list.find((m) => m.id === model)?.label) || model;
 }
 
 export const HARNESS_CAPS: Record<HarnessId, HarnessCaps> = {
   claude: { label: 'Claude Code', short: 'Claude', login: 'claude auth login', mod: true, artifacts: true, usage: 'tokens', labelModels: false,
-    userModels: false, minVersion: null, loads: 'its plugins, MCP servers and startup hooks', reviewSteps: 'subagents' },
+    userModels: false, minVersion: null, loads: 'its plugins, MCP servers and startup hooks', reviewSteps: 'subagents',
+    models: CLAUDE_MODELS },
   opencode: { label: 'OpenCode', short: 'OpenCode', login: 'opencode auth login', mod: false, artifacts: false, usage: 'tokens', labelModels: true,
-    userModels: true, minVersion: '2.0.0', upgrade: 'opencode upgrade --major', loads: 'its plugins and MCP servers', reviewSteps: 'subagents' },
+    userModels: true, minVersion: '2.0.0', upgrade: 'opencode upgrade --major', loads: 'its plugins and MCP servers', reviewSteps: 'subagents',
+    models: 'cli' },
   kiro: { label: 'Kiro', short: 'Kiro', login: 'kiro-cli login', mod: false, artifacts: false, usage: 'credits', labelModels: true,
-    userModels: false, minVersion: '2.32.0', loads: 'its agent and MCP servers', reviewSteps: 'turns' },
+    userModels: false, minVersion: '2.32.0', loads: 'its agent and MCP servers', reviewSteps: 'turns', models: 'cli' },
 };
 
 /** Why nothing can start when no harness is available: a new session, Ask AgentK, the banner. */

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -72,7 +74,9 @@ describe('dotState', () => {
     ['over learning and a queued gate', 'review', 'idle', { learning: true, queued: 'merge' }, 'needs_input'],
     ['over a turn calling Meko', 'review', 'working', { mekoCall: true }, 'needs_input'],
     ['not over exited', 'review', 'exited', {}, 'exited'],
+    ['over an agent stopped for sitting idle', 'review', 'exited', { idleStoppedAt: 1 }, 'needs_input'],
     ['not outside Review & PR', 'code', 'idle', {}, 'idle'],
+    ["the code review's findings waiting on you, in Code too", 'code', 'working', { codeReview: { state: 'triage' } as Session['codeReview'] }, 'needs_input'],
   ])('a blocker only the user can clear: %s', (_, stage, status, over, dot) => {
     expect(dotState({ ...session(status), ...over, stage, waitsOnYou: ['CI is failing.'] })).toBe(dot);
   });
@@ -89,6 +93,19 @@ describe('dotState', () => {
     expect(aggregateDot(project(session('idle'), session('recovered'), background))).toBe('background');
     expect(aggregateDot(project(background, session('working')))).toBe('working');
     expect(aggregateDot(project(background, session('needs_input')))).toBe('needs_input');
+  });
+
+  it('shows an agent AgentK stopped for sitting idle as stopped, not exited, and quieter than idle in the rail', () => {
+    const project = (...sessions: Session[]) => ({ sessions }) as ProjectWithSessions;
+    const stopped = { ...session('exited'), idleStoppedAt: 1 } as Session;
+    expect(dotState(stopped)).toBe('stopped');
+    expect(aggregateDot(project(stopped, session('idle')))).toBe('idle');
+    expect(renderToStaticMarkup(createElement(StatusDot, { status: 'stopped' }))).toContain('class="dot stopped"');
+    // Still and solid: a broken or faded ring at 10px reads as a spinner that has frozen.
+    const css = readFileSync(join(import.meta.dirname, '../../src/web/styles.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(([, sel]) => /\.dot\.stopped\b/.test(sel!));
+    expect(rules.length).toBeGreaterThan(0);
+    expect(rules.map(([, , body]) => body).join('')).not.toMatch(/dashed|dotted|animation|opacity/);
   });
 
   it("titles a session's tab, and its palette row, with what's running in the background", () => {

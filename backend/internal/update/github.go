@@ -39,7 +39,7 @@ type Release struct {
 // Asset is a file attached to a release.
 type Asset struct {
 	Name       string `json:"name"`
-	URL        string `json:"url"`                  // the API's URL: needs a token on an internal repo
+	URL        string `json:"url"`                  // the API's URL: needs a token on a private repo
 	BrowserURL string `json:"browser_download_url"` // works without one on a public repo
 }
 
@@ -135,7 +135,7 @@ func (c *Client) get(ctx context.Context, url, accept string) (*http.Response, e
 }
 
 // tokenlessHint says what GitHub refusing a call with no token means: its limit of 60 API calls an
-// hour is spent (a 429, or a 403 with X-RateLimit-Remaining 0), or the repo is internal, which GitHub
+// hour is spent (a 429, or a 403 with X-RateLimit-Remaining 0), or the repo is private, which GitHub
 // hides behind a 401, 403 or 404 from anyone not signed in. The header alone isn't enough: GitHub
 // sends it as 0 on the call that spends the last one too, which gets its usual answer.
 func tokenlessHint(resp *http.Response) string {
@@ -150,7 +150,7 @@ func tokenlessHint(resp *http.Response) string {
 	}
 	switch resp.StatusCode {
 	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
-		return ". If the repo is still internal, " + signIn
+		return ". If the repo is private, " + signIn
 	}
 	return ""
 }

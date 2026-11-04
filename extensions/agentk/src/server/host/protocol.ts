@@ -1,6 +1,6 @@
 /**
  * The session host's protocol on `host.sock`, shared by the host, the server's client and
- * `agentk attach`. Each connection opens with one JSON line (a request). A request is
+ * `me_koder attach`. Each connection opens with one JSON line (a request). A request is
  * answered with one JSON line and the connection closes; `attach` is answered with one JSON
  * line and the connection then carries frames both ways (see `encodeFrame`).
  */

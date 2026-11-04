@@ -24,7 +24,6 @@ export const DEFAULT_SETTINGS: ProjectSettings = {
   branchPrefix: DEFAULT_BRANCH_PREFIX,
   mergeMethod: 'repo-default',
   notify: true,
-  mekoLog: false,
   codeReview: {},
 };
 
@@ -38,6 +37,8 @@ export interface ProjectRow {
   meko_conversation_id: string | null;
   created_at: number;
   deleted_at: number | null;
+  /** The bundled workshop that opened it (`Project.workshop`); NULL for the rest. */
+  workshop: string | null;
 }
 
 export interface SessionRow {
@@ -47,6 +48,8 @@ export interface SessionRow {
   name: string;
   /** The harness the session runs on (`HarnessId`; `harnessOf()` reads an unknown one as Claude Code). */
   harness: string;
+  /** The model its agent runs on, passed on every launch; null for the agent's default. */
+  model: string | null;
   /** AgentK's key for the conversation: Claude Code's session id, and the Meko conversation's key for every harness. */
   claude_session_id: string;
   /** The conversation id a harness picks itself (Kiro's session id), once AgentK has learned it; null for Claude Code. */
@@ -81,6 +84,8 @@ export interface SessionRow {
   created_at: number;
   archived_at: number | null;
   recovered_at: number | null;
+  /** When AgentK stopped its agent for sitting idle (Session.idleStoppedAt); NULL otherwise. */
+  idle_stopped_at: number | null;
   interrupted: number;
   /** 1 for sessions whose Design stage runs in Claude's plan mode (created before designs moved out of it). */
   plan_mode: number;
@@ -142,7 +147,7 @@ export interface SessionRow {
    * repo's own config (headtrust.ts). 0: trusted. NULL: no PR head, or not checked yet (at every launch).
    */
   untrusted: number | null;
-  /** What it's for beyond its kind (`SessionPurpose`: 'learn'); NULL for the rest. */
+  /** What it's for beyond its kind (`SessionPurpose`: 'learn' or 'guide'); NULL for the rest. */
   purpose: string | null;
   /** A code-review session's task (Session.parentId); NULL for every other session. */
   parent_id: string | null;
@@ -161,6 +166,8 @@ export function parseSettings(json: string): ProjectSettings {
   if (!Object.hasOwn(REVIEWER_LABELS, s.reviewer)) s.reviewer = DEFAULT_SETTINGS.reviewer;
   // The AgentK reviewer's login, gone since migration 47, from a page loaded before it.
   delete (s as { reviewerLogin?: unknown }).reviewerLogin;
+  // Log Meko calls, gone since Meko keeps each call's contents itself.
+  delete (s as { mekoLog?: unknown }).mekoLog;
   s.codeReview = readOverrides(s.codeReview);
   return s;
 }
@@ -193,6 +200,7 @@ export function toProject(db: Db, r: ProjectRow): Project {
     settings: parseSettings(r.settings_json),
     datapacks: projectDatapacks(db, r.id),
     createdAt: r.created_at,
+    workshop: r.workshop ?? null,
   };
 }
 
@@ -303,6 +311,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     projectId: r.project_id,
     name: r.name,
     harness: harnessOf(r.harness),
+    model: r.model ?? null,
     claudeSessionId: r.claude_session_id,
     branch: r.branch,
     baseBranch: r.base_branch,
@@ -316,7 +325,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     kind: r.kind,
     stage: r.stage,
     hasTask: !!r.initial_prompt,
-    purpose: r.purpose === 'learn' ? 'learn' : null,
+    purpose: r.purpose === 'learn' || r.purpose === 'guide' ? r.purpose : null,
     prNumber: r.pr_number,
     prUrl: r.pr_url,
     reviewState: r.review_state,
@@ -365,6 +374,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     createdAt: r.created_at,
     archivedAt: r.archived_at,
     recoveredAt: r.recovered_at,
+    idleStoppedAt: r.idle_stopped_at,
   };
 }
 

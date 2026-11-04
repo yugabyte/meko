@@ -8,8 +8,9 @@ import { parseArgs } from 'node:util';
 import { HARNESS_CAPS, HARNESS_IDS, versionAtLeast, type HarnessId } from '../shared/harnesses.js';
 import { claudeUserDir } from './claude.js';
 import { cliVersion, harnessCommand } from './harness/version.js';
-import { DEFAULT_MEKO_URL, dbPath, envMekoWebUrl, loadConfig, onLoopback, ownMekoKey, saveConfig, type Config } from './config.js';
+import { DEFAULT_MEKO_URL, FRESH_INSTALL_TOUR, dbPath, envMekoWebUrl, loadConfig, onLoopback, ownMekoKey, saveConfig, type Config } from './config.js';
 import { assertFree, InstanceBusyError } from './instance.js';
+import { openBrowser } from './browser.js';
 import { checkMeko, tryMekoToken } from './meko.js';
 import { isLocalMeko, linkedThroughMeko, probeLocalMeko, type LocalMekoProbe } from './mekolocal.js';
 import { handOverMekoKey, type OwnMekoLink } from './mekohandover.js';
@@ -19,7 +20,7 @@ import {
 } from './mekosetup.js';
 import { claudeTokenGaps } from './mekoclaude.js';
 import { expandHome, getPaths, oldHome, tildify, type Paths } from './paths.js';
-import { dropOldNames, hostServices, renderServiceFiles, samePath, ServiceError, SERVICES, type ServiceManager } from './service.js';
+import { dropOldNames, hostServices, removeServiceLauncher, renderServiceFiles, samePath, ServiceError, SERVICES, writeServiceLauncher, type ServiceManager } from './service.js';
 import { SessionHost } from './hostclient.js';
 import { COMMAND, commandLinks } from './cmdlink.js';
 import { style, ui } from './tty.js';
@@ -89,7 +90,7 @@ export function serviceFailure(svc: ServiceManager, message: string, logsDir: st
   const where = svc.kind === 'launchd' ? ` and ${tildify(join(logsDir, 'launchd*.log'))}` : '';
   return (
     `${message}\nCheck: ${svc.statusHint('server')}${where}.\n` +
-    'Or rerun with --no-service to skip the service setup, and start the server with: agentk serve'
+    'Or rerun with --no-service to skip the service setup, and start the server with: me_koder serve'
   );
 }
 
@@ -117,8 +118,9 @@ function installServices(paths: Paths): boolean {
       ui.ok('tmux', "removed an older version's tmux service; its sessions resume in the session host");
     }
   }
-  for (const [old, now] of dropOldNames(svc)) ui.ok(now, `replaces ${old}, its name before the rename to AgentK`);
+  for (const [old, now] of dropOldNames(svc)) ui.ok(now, `replaces ${old}, its name before`);
   try {
+    writeServiceLauncher(paths.home);
     svc.install(renderServiceFiles(svc, { AK_HOME: paths.home, HOST: hostname() }));
   } catch (e) {
     if (e instanceof ServiceError) throw new ServiceError(serviceFailure(svc, e.message, paths.logs), { cause: e });
@@ -358,6 +360,23 @@ function checkTools(args: string[]): void {
   if (r.status !== 0) throw new InstallError(r.error ? `couldn't check the tools: ${r.error.message}` : 'the tools AgentK needs aren\'t all there (see above).');
 }
 
+/**
+ * A fresh install starts the AgentK tour at the server's first start (`[welcome] tour`); an upgrade
+ * or a reinstall doesn't, and keeps the user's projects as they are.
+ */
+export function welcomeTour(cfg: Config, fresh: boolean): void {
+  if (fresh) cfg.welcome.tour = FRESH_INSTALL_TOUR;
+}
+
+/**
+ * Whether the install opens AgentK in the browser at its end: only a fresh, interactive install
+ * whose server answers, so a new user lands in the tour. `--non-interactive` (Meko's Extensions
+ * page, which is already in a browser) and upgrades open nothing.
+ */
+export function opensBrowser(o: { fresh: boolean; interactive: boolean; running: boolean }): boolean {
+  return o.fresh && o.interactive && o.running;
+}
+
 export async function runInstall(args: string[]): Promise<void> {
   const { values } = parseArgs({
     args,
@@ -480,6 +499,7 @@ export async function runInstall(args: string[]): Promise<void> {
       ui.ok('Database', tildify(db));
     }
 
+    welcomeTour(cfg, fresh);
     saveConfig(paths, cfg);
     ui.ok('Config', tildify(paths.config));
     const tmpWarning = tmpHomeWarning(paths.home);
@@ -492,14 +512,14 @@ export async function runInstall(args: string[]): Promise<void> {
     ui.section('Services');
     let running = false;
     if (values['no-service']) {
-      ui.warn('Services', 'skipped (--no-service). Start the server with: agentk serve');
+      ui.warn('Services', 'skipped (--no-service). Start the server with: me_koder serve');
     } else if (installServices(paths)) {
       const probe = await waitForServer(paths);
       if (probe.ok) {
         ui.ok('Server', `answering (version ${probe.version})`);
         running = true;
       } else {
-        ui.warn('Server', `not answering yet (${probe.error}). See: agentk logs`);
+        ui.warn('Server', `not answering yet (${probe.error}). See: me_koder logs`);
       }
     }
 
@@ -511,17 +531,21 @@ export async function runInstall(args: string[]): Promise<void> {
       ui.blank();
       ui.text(`    ${style.cyan(`${meko.meko.webUrl}${AGENTK_PATH}`)}`);
       ui.blank();
+      // A new user lands in the tour; over SSH or with no display there's nothing to open here.
+      if (opensBrowser({ fresh, interactive, running }) && (await openBrowser(`${meko.meko.webUrl}${AGENTK_PATH}`))) {
+        ui.note('Opened it in your browser, where the AgentK tour starts.');
+      }
     } else {
       ui.text(style.bold('Done.'));
       ui.blank();
       ui.row('Browser', meko.meko?.webOff
-        ? "Meko's web UI is off: turn it on with meko ui start, then open AgentK with agentk ui"
+        ? "Meko's web UI is off: turn it on with meko ui start, then open AgentK with me_koder ui"
         : meko.meko
           ? 'the Meko on this computer is too old to serve AgentK: update it with meko update'
-          : "Meko isn't running: start it with meko start, then open AgentK with agentk ui");
+          : "Meko isn't running: start it with meko start, then open AgentK with me_koder ui");
     }
-    ui.row('Status', 'agentk status');
-    ui.row('Logs', 'agentk logs -f');
+    ui.row('Status', 'me_koder status');
+    ui.row('Logs', 'me_koder logs -f');
     ui.blank();
   } catch (e) {
     if (e instanceof InstallError || e instanceof ServiceError || e instanceof PrivateDirError) {
@@ -655,6 +679,7 @@ export async function runUninstall(args: string[]): Promise<void> {
     const svc = hostServices();
     if (svc && (svc.kind === 'launchd' || which('systemctl'))) {
       svc.remove();
+      removeServiceLauncher(paths.home);
       say('Services removed.');
     }
     // A session host started without a service (--no-service) ends with its sessions too.

@@ -75,7 +75,7 @@ appendFileSync(join(dir, 'argv.jsonl'), JSON.stringify({ args, cwd: process.cwd(
 
 // Positional prompt: the last argument that isn't a flag value; everything after "--" is positional
 // (like Claude Code's CLI, which rejects a prompt starting with "-" before "--" as an unknown option).
-const valued = new Set(['--settings', '--session-id', '--resume', '--name', '--permission-mode', '--append-system-prompt', '--add-dir', '--plugin-dir', '--mcp-config', '--setting-sources', '--agents', '--disallowedTools']);
+const valued = new Set(['--settings', '--session-id', '--resume', '--name', '--permission-mode', '--append-system-prompt', '--add-dir', '--plugin-dir', '--mcp-config', '--setting-sources', '--agents', '--disallowedTools', '--model']);
 let prompt = null;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--') {
@@ -370,7 +370,9 @@ async function turn(text) {
   respond();
   // BACKGROUND: the turn ends with a shell and a subagent still running in the background, as
   // Claude Code's Stop reports them.
-  hook('Stop', text.includes('BACKGROUND') ? {
+  // SAY:<words>: the turn's reply is those words, a literal \n a line break (Stop's last_assistant_message).
+  const said = /SAY:(.*)$/.exec(text)?.[1]?.trim().replace(/\\n/g, '\n');
+  hook('Stop', said ? { last_assistant_message: said } : text.includes('BACKGROUND') ? {
     background_tasks: [
       { id: 'b1', type: 'shell', status: 'running', description: 'Run the tests', command: 'npm test' },
       { id: 'a2', type: 'subagent', status: 'running', description: 'Review the change', agent_type: 'general-purpose' },

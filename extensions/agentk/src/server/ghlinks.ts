@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { defaultProjectDatapackName, freeDatapackName, parseProjectDatapack } from '../shared/datapacks.js';
 import { parseGithubRef, type GithubRef } from '../shared/github-refs.js';
+import { checkModel, HARNESS_IDS, isHarnessId } from '../shared/harnesses.js';
 import type {
   CreateSessionRequest, DatapackChoice, LinkNewProject, LinkPlan, LinkProject, Project, StartFromLinkRequest, StartFromLinkResult,
 } from '../shared/types.js';
@@ -61,6 +62,11 @@ export class GithubLinkService {
     if (req.projectId != null && typeof req.projectId !== 'string') throw new HttpError(400, 'The project must be its id.');
     if (req.start != null && req.start !== 'design' && req.start !== 'code') throw new HttpError(400, "Start an issue's session at design or code.");
     if (req.autoRun != null && typeof req.autoRun !== 'boolean') throw new HttpError(400, 'autoRun must be true or false.');
+    // Checked before a project is opened for it; whether the agent is available is begin()'s to say.
+    if (req.harness != null && !isHarnessId(req.harness)) throw new HttpError(400, `Pick an agent: ${HARNESS_IDS.join(', ')}.`);
+    if (req.model != null && typeof req.model !== 'string') throw new HttpError(400, "The session's model must be text.");
+    const badModel = req.model?.trim() && checkModel(req.model.trim());
+    if (badModel) throw new HttpError(400, badModel);
     const { repo, item } = await this.read(req.ref);
     if (req.autoRun && (item.kind === 'pr' || req.start !== 'code')) {
       throw new HttpError(400, "Run to merge is only for an issue's task that starts at Code.");
@@ -109,8 +115,11 @@ export class GithubLinkService {
     const outsider = item.kind === 'issue' && !TRUSTED_ASSOCIATIONS.includes(item.authorAssociation ?? '')
       && !['private', 'internal'].includes((await this.core.sessions.headTrust.visibility(repo)) ?? '');
     const create: CreateSessionRequest = item.kind === 'pr'
-      ? { name: '', kind: 'review-pr', pr: { repo, number: item.number }, repoPath }
-      : { name: issueSessionName(item), kind: 'task', start: req.start ?? 'design', prompt: issuePrompt(repo, item, outsider), repoPath, autoRun: req.autoRun || undefined, review: req.review };
+      ? { name: '', kind: 'review-pr', pr: { repo, number: item.number }, repoPath, harness: req.harness, model: req.model }
+      : {
+        name: issueSessionName(item), kind: 'task', start: req.start ?? 'design', prompt: issuePrompt(repo, item, outsider), repoPath,
+        autoRun: req.autoRun || undefined, review: req.review, harness: req.harness, model: req.model,
+      };
     // The one open work item holding the link, when it has no open session, is what the session is for.
     create.workItemId = this.core.workQueue.soleItemFor(req.ref) ?? undefined;
     const { session, done } = await this.core.sessions.begin(projectId, create);

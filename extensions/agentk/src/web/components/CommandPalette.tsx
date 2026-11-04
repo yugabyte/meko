@@ -2,9 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { parseGithubRef } from '../../shared/github-refs';
 import {
   type ActionResult, type AskAgentkAction, type AskAgentkResult, type CreateSessionRequest, type DatapackInvite, type JoinByLinkResult, type LinkPlan,
-  type ProjectWithSessions, type Session, type SessionMatch, type StartFromLinkResult, type WorkItem, type WorkLinkMatch,
+  type ProjectWithSessions, type Session, type SessionAction, type SessionMatch, type StartFromLinkResult, type WorkItem, type WorkLinkMatch,
 } from '../../shared/types';
-import { moveBlockedIn } from '../../shared/stages';
 import { api, errorMessage } from '../api';
 import { appUrl } from '../base';
 import { useMedia, useTouch } from '../hooks/useMedia';
@@ -12,8 +11,9 @@ import { useInstall } from '../installapp';
 import { PALETTE_HINTS, PALETTE_HINT_STILL, askEntries, doAllActions, filterItems, findEntries, joinEntry, joinedText, linkEntries, workLinkEntries, type LabelPart } from '../palette';
 import { workLinkKey } from '../../shared/worklinks';
 import { navigate } from '../router';
+import { actionsOn, sessionActions, type SessionActionId } from '../sessionactions';
 import { attachFiles, getTerminal } from '../terminals';
-import { STATUS_TEXT, canRunReview, cx, dotState, dotTitle, isMac, liveSessions, stageWords, type DotState } from '../util';
+import { STATUS_TEXT, cx, dotState, dotTitle, isMac, liveSessions, offersLearn, stageWords, type DotState } from '../util';
 import { Busy, ErrorText, StatusDot, trapTab } from './common';
 
 interface Item {
@@ -55,6 +55,7 @@ export function CommandPalette({
   currentSession,
   onClose,
   onNewProject,
+  onStartTour,
   onNewSession,
   onMoveSession,
   onOpenPr,
@@ -71,6 +72,7 @@ export function CommandPalette({
   onShowWorkItem,
   onStartForItem,
   onLinkWorkItem,
+  mekoConfigured,
   onError,
 }: {
   projects: ProjectWithSessions[];
@@ -79,6 +81,8 @@ export function CommandPalette({
   currentSession: Session | null;
   onClose: () => void;
   onNewProject: () => void;
+  /** Starts the AgentK tour (or goes to its host when its project is open). */
+  onStartTour: () => void;
   onNewSession: (projectId: string) => void;
   /** Opens the Move to another stage dialog for the session on screen. */
   onMoveSession: () => void;
@@ -108,6 +112,8 @@ export function CommandPalette({
   onStartForItem: (item: WorkItem) => void;
   /** Opens the dialog that links the session on screen to a work item. */
   onLinkWorkItem: () => void;
+  /** AgentK talks to Meko (`MekoStatus.configured`): Save learnings is offered. */
+  mekoConfigured: boolean;
   onError: (msg: string) => void;
 }) {
   const [q, setQ] = useState('');
@@ -413,93 +419,46 @@ export function CommandPalette({
         run: () => onNewSession(current.id),
       });
     }
-    if (currentSession && !moveBlockedIn(currentSession.stage)) {
-      out.push({
-        id: 'move-session',
-        label: ['Move ', { session: currentSession.name }, ' to another stage'],
-        hint: 'Action',
-        keywords: 'change type stage move exploration explore plan quick code design pr review',
-        run: onMoveSession,
-      });
-    }
-    if (currentSession?.stage === 'code') {
-      out.push({
-        id: 'open-pr',
-        label: currentSession.queued === 'open-pr'
-          ? ['Instructions for the queued Open PR of ', { session: currentSession.name }]
-          : ['Open PR for ', { session: currentSession.name }, ' with instructions'],
-        hint: 'Action',
-        keywords: 'open pr pull request instructions notes draft',
-        run: onOpenPr,
-      });
-    }
-    const review = currentSession ? canRunReview(currentSession) : null;
-    if (currentSession && review?.offered) {
+    // The session's own actions: the list the ⋯ menu and the phone's sheet show too.
+    if (currentSession) {
       const id = currentSession.id;
-      // While AgentK can't take it, the hint says why (and the server's refusal says so again if it's picked).
-      out.push({
-        id: 'review-run',
-        label: ['Run the code review of ', { session: currentSession.name }],
-        hint: review.wait ?? 'Action',
-        keywords: 'code review run again findings',
-        run: () => void api.sessionAction(id, 'review-run').catch((e: unknown) => onError(errorMessage(e))),
-      });
-    }
-    if (currentSession) {
-      out.push({
-        id: 'rename-session',
-        label: ['Rename ', { session: currentSession.name }],
-        hint: 'Action',
-        keywords: 'rename name title session',
-        run: onRenameSession,
-      });
-    }
-    if (currentSession && onSessionToTop) {
-      out.push({
-        id: 'session-to-top',
-        label: ['Move ', { session: currentSession.name }, ' to top'],
-        hint: 'Action',
-        keywords: 'move top first pin priority order reorder session',
-        run: onSessionToTop,
-      });
-    }
-    if (currentSession) {
       const item = workItems.find((i) => i.id === currentSession.workItemId);
-      if (currentSession.workItemId) {
-        if (item) out.push({ id: 'work-show', label: ['Work item of ', { session: currentSession.name }, `: ${item.title}`], hint: 'View', keywords: 'work queue item show', run: () => onShowWorkItem(item.id) });
-        const itemId = currentSession.workItemId;
-        out.push({
-          id: 'work-unlink', label: ['Unlink ', { session: currentSession.name }, ' from its work item'], hint: 'Action', keywords: 'work queue item unlink remove',
-          run: () => void api.updateWorkItem(itemId, { sessionId: null }).catch((e: unknown) => onError(errorMessage(e))),
-        });
-      } else {
-        out.push({ id: 'work-link', label: ['Link ', { session: currentSession.name }, ' to a work item'], hint: 'Action', keywords: 'work queue item link attach', run: onLinkWorkItem });
+      const datapack = !!current?.datapacks.some((d) => d.role === 'dedicated');
+      const send = (action: SessionAction) => () =>
+        void api.sessionAction(id, action).catch((e: unknown) => onError(errorMessage(e)));
+      const run: Partial<Record<SessionActionId, () => void>> = {
+        'review-send': send('review-send'),
+        'review-cancel': send('review-cancel'),
+        'review-retry': send('review-retry'),
+        'review-open-anyway': send('review-open-anyway'),
+        'review-run': send('review-run'),
+        learn: send('learn'),
+        'open-pr': onOpenPr,
+        'move-session': onMoveSession,
+        'rename-session': onRenameSession,
+        'session-to-top': onSessionToTop,
+        'work-link': onLinkWorkItem,
+        'work-show': item ? () => onShowWorkItem(item.id) : undefined,
+        'work-unlink': () => void api.updateWorkItem(currentSession.workItemId ?? '', { sessionId: null }).catch((e: unknown) => onError(errorMessage(e))),
+        'attach-files': () => attachFiles(id),
+        'find-terminal': () => getTerminal(id).openFind(),
+      };
+      const list = sessionActions(currentSession, {
+        acting: false,
+        canLearn: offersLearn(currentSession, datapack, mekoConfigured),
+        mergeLearns: false,
+        canShare: false,
+        atTop: !onSessionToTop,
+        workItemTitle: item?.title,
+        mac: isMac(),
+        noPr: !!current?.workshop,
+      });
+      for (const a of actionsOn(list, 'palette')) {
+        const go = run[a.id];
+        if (!go || !a.palette) continue;
+        // While AgentK can't take it, the hint says why (and the server's refusal says so again if it's picked).
+        out.push({ id: a.id, label: a.palette, hint: a.hint ?? a.keys ?? (a.view ? 'View' : 'Action'), keywords: a.keywords ?? '', run: go });
       }
-    }
-    if (currentSession) {
-      out.push({
-        id: 'attach-files',
-        label: ['Attach files to ', { session: currentSession.name }],
-        hint: 'Action',
-        keywords: 'attach file upload image pdf markdown document knowledge base kb meko',
-        run: () => attachFiles(currentSession.id),
-      });
-      out.push({
-        id: 'find-terminal',
-        label: ['Find in ', { session: currentSession.name }, '’s terminal'],
-        hint: isMac() ? '⌘F' : 'Ctrl+Shift+F',
-        keywords: 'find search terminal scrollback text output',
-        run: () => getTerminal(currentSession.id).openFind(),
-      });
-    }
-    if (currentSession && current?.settings.mekoLog) {
-      out.push({
-        id: 'meko-calls',
-        label: ['Meko calls of ', { session: currentSession.name }],
-        hint: 'View',
-        keywords: 'meko calls log debug memory search',
-        run: () => navigate({ view: 'meko', projectId: current.id, sessionId: currentSession.id }),
-      });
     }
     for (const p of projects) {
       for (const s of liveSessions(p)) {
@@ -535,6 +494,7 @@ export function CommandPalette({
       }
     }
     out.push({ id: 'new-project', label: ['Open project'], hint: 'Action', keywords: 'open new create project repo add', run: onNewProject });
+    out.push({ id: 'start-tour', label: ['Start the AgentK tour'], hint: 'Action', keywords: 'tour workshop demo guide tutorial learn agentk meko', run: onStartTour });
     out.push({ id: 'work-queue', label: ['Work queue'], hint: 'View', keywords: 'work queue items todo tasks priorities list', run: () => navigate({ view: 'queue' }) });
     out.push({ id: 'work-add', label: ['Add a work item'], hint: 'Action', keywords: 'work queue item add new todo task', run: onAddWorkItem });
     out.push({
@@ -546,7 +506,7 @@ export function CommandPalette({
     // Still offered after the banner's Not now, while the browser can install it.
     if (canInstall) out.push({ id: 'install', label: ['Install AgentK as an app'], hint: 'Action', keywords: 'install app window dock home screen pwa', run: () => void install() });
     return out;
-  }, [projects, currentProjectId, currentSession, onNewProject, onNewSession, onMoveSession, onOpenPr, onRenameSession, onSessionToTop, onSettings, canInstall, install, workItems, onAddWorkItem, onShowWorkItem, onLinkWorkItem, onError]);
+  }, [projects, currentProjectId, currentSession, onNewProject, onStartTour, onNewSession, onMoveSession, onOpenPr, onRenameSession, onSessionToTop, onSettings, canInstall, install, workItems, onAddWorkItem, onShowWorkItem, onLinkWorkItem, mekoConfigured, onError]);
 
   const findItems = useMemo<Item[]>(() => {
     if (!found || found.key !== findKey) return [];

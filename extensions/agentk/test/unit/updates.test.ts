@@ -163,7 +163,7 @@ describe('after an update', () => {
     expect(switchedAway(undefined)).toBe(false);
   });
 
-  describe('agentk restart', () => {
+  describe('me_koder restart', () => {
     const services = (installed = true) => {
       const restarted: string[] = [];
       const svc = { installed: () => installed, restart: (s: string) => void restarted.push(s) } as unknown as ServiceManager;
@@ -189,7 +189,7 @@ describe('after an update', () => {
 });
 
 describe('the launcher', () => {
-  const launcher = resolve(__dirname, '../../packaging/agentk');
+  const launcher = resolve(__dirname, '../../packaging/me_koder');
   let root: string;
   let bin: string;
   let log: string;
@@ -201,9 +201,11 @@ describe('the launcher', () => {
     log = join(root, 'meko.log');
     const dir = join(root, 'home', 'app', '0.2.0');
     for (const d of ['bin', 'node/bin', 'lib/dist/server']) mkdirSync(join(dir, d), { recursive: true });
-    copyFileSync(launcher, join(dir, 'bin', 'agentk'));
-    chmodSync(join(dir, 'bin', 'agentk'), 0o755);
-    symlinkSync(process.execPath, join(dir, 'node', 'bin', 'node'));
+    copyFileSync(launcher, join(dir, 'bin', 'me_koder'));
+    chmodSync(join(dir, 'bin', 'me_koder'), 0o755);
+    // Its names before, as a release carries them, which services installed then and older Mekos run.
+    symlinkSync('me_koder', join(dir, 'bin', 'agentk'));
+    symlinkSync(process.execPath, join(dir, 'node', 'bin', 'me_koder'));
     writeFileSync(join(dir, 'VERSION'), '0.2.0\n');
     writeFileSync(join(dir, 'lib', 'dist', 'server', 'cli.js'), 'console.log("node", process.argv.slice(2).join(" "))\n');
     symlinkSync('0.2.0', join(root, 'home', 'app', 'current'));
@@ -216,18 +218,20 @@ describe('the launcher', () => {
     writeFileSync(join(bin, 'meko'), `#!/bin/sh\necho "meko $*" >> "${log}"\n[ "$1 $2" = "_launch --supported" ] && exit ${supported ? 0 : 2}\necho launched\n`);
     chmodSync(join(bin, 'meko'), 0o755);
   };
-  const run = (args: string[], env: Record<string, string> = {}) =>
-    execFileSync(join(root, 'home', 'app', 'current', 'bin', 'agentk'), args, {
+  const run = (args: string[], env: Record<string, string> = {}, command = 'me_koder') =>
+    execFileSync(join(root, 'home', 'app', 'current', 'bin', command), args, {
       encoding: 'utf8',
       env: { PATH: `${bin}:/usr/bin:/bin`, HOME: join(root, 'h'), ...env },
       stdio: ['ignore', 'pipe', 'pipe'],
     }).trim();
   const calls = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : []);
 
-  it.each(['serve', 'host'])('hands %s to Meko, naming its own resolved path', (cmd) => {
+  it.each(['serve', 'host'])('hands %s to Meko, naming its own resolved path, whichever name ran it', (cmd) => {
     meko(true);
     expect(run([cmd])).toBe('launched');
-    expect(calls()).toEqual(['meko _launch --supported', `meko _launch agentk ${join(root, 'home', 'app', '0.2.0', 'bin', 'agentk')} ${cmd}`]);
+    expect(run([cmd], {}, 'agentk')).toBe('launched');
+    const launch = `meko _launch agentk ${join(root, 'home', 'app', '0.2.0', 'bin', 'me_koder')} ${cmd}`;
+    expect(calls()).toEqual(['meko _launch --supported', launch, 'meko _launch --supported', launch]);
   });
 
   it("runs the server itself when Meko's launcher has started it, when no Meko can, and for other commands", () => {

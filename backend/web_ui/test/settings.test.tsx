@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // The Settings page's switches for the features that run the user's Claude Code, against a faked
 // /api/v1: turning one on sends only the harness, and a failed test call leaves it off with why. And
-// its Access card, which says only whether Meko takes local or remote requests.
+// its Access card, which says only whether Meko takes local or remote requests, and the cards' order.
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -100,4 +100,36 @@ test("the Access card says only local or remote", async () => {
   act(() => root.unmount());
   await render(local);
   expect(access()).toBe("AccessLocal");
+});
+
+test("Keep call contents turns on with keep alone, and clearing asks first", async () => {
+  let keep = false;
+  let calls = 3;
+  serve({
+    "GET /api/v1/settings/call-contents": () => ({ data: { keep, retention_days: 7, calls, bytes: 2048 } }),
+    "PUT /api/v1/settings/call-contents": () => ((keep = true), { data: { keep, retention_days: 7, calls, bytes: 2048 } }),
+    "DELETE /api/v1/calls/contents": () => ((calls = 0), { data: { keep, retention_days: 7, calls, bytes: 0 } }),
+  });
+  await render();
+  expect(document.body.textContent).toContain("Kept for 7 days. 3 calls kept, 2.0 KB.");
+  expect(document.querySelector<HTMLAnchorElement>('a[href="/calls"]')?.textContent).toContain("View calls");
+  await act(async () => toggle("Keep call contents").click());
+  expect(sent.find((c) => c.method === "PUT")).toMatchObject({
+    url: "/api/v1/settings/call-contents",
+    body: JSON.stringify({ keep: true }),
+  });
+  expect(toggle("Keep call contents").getAttribute("aria-checked")).toBe("true");
+  const button = (text: string) => [...document.querySelectorAll("button")].find((b) => b.textContent === text);
+  await act(async () => button("Clear contents")!.click());
+  expect(sent.some((c) => c.method === "DELETE")).toBe(false);
+  await act(async () => button("Clear")!.click());
+  expect(sent.find((c) => c.method === "DELETE")?.url).toBe("/api/v1/calls/contents");
+  expect(document.body.textContent).toContain("None kept now.");
+});
+
+test("the cards come in order: Meko Cloud, Claude Code, Access, Calls, then anonymous usage stats", async () => {
+  serve({});
+  await render();
+  const headings = [...document.querySelectorAll("h3")].map((h) => h.textContent);
+  expect(headings).toEqual(["Meko Cloud", "Uses your Claude Code", "Access", "Calls", "Anonymous usage stats"]);
 });

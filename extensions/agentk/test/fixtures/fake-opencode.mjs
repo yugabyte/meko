@@ -36,6 +36,12 @@ if (!args.includes('--standalone')) {
   process.stderr.write(`fake opencode: ${args.join(' ')} would run on the shared background service (no --standalone)\n`);
   process.exit(2);
 }
+// Like `opencode models`: one provider/model a line, Zen's free ones hidden by OPENCODE_DISABLE_FREE_MODELS.
+if (args[0] === 'models') {
+  const models = ['anthropic/claude-sonnet-4-5', 'opencode/big-pickle-free'].filter((m) => !process.env.OPENCODE_DISABLE_FREE_MODELS || !m.endsWith('-free'));
+  process.stdout.write(models.join('\n') + '\n');
+  process.exit(0);
+}
 if (args[0] === 'session' && args[1] === 'delete') {
   log('deleted.jsonl', { id: args.at(-1), cwd: process.cwd(), xdg: process.env.XDG_CONFIG_HOME ?? null });
   process.exit(0);

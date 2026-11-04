@@ -316,6 +316,8 @@ export interface LaunchSpec {
   resume: boolean;
   name: string;
   planMode: boolean;
+  /** `--model`: an alias or a full model id; null or left out for Claude Code's default. */
+  model?: string | null;
   /** Extra directories Claude may work in (the session's design folder). */
   addDirs: string[];
   /** Plugins Claude loads for the session (AgentK's mod, the session tools' skill), each a `--plugin-dir`. */
@@ -358,6 +360,7 @@ export function claudeLauncher(paths: Paths, spec: LaunchSpec): LauncherSpec {
   } else {
     args.push('--session-id', spec.claudeSessionId, '--name', spec.name);
   }
+  if (spec.model) args.push('--model', spec.model);
   if (spec.planMode) args.push('--permission-mode', 'plan');
   for (const d of spec.addDirs) args.push('--add-dir', claudePath(d));
   for (const d of spec.pluginDirs ?? []) args.push('--plugin-dir', claudePath(d));

@@ -4,7 +4,7 @@ import type { Core } from './core.js';
 import { all, get, run } from './db.js';
 import type { ModReply } from './hooks.js';
 import { errMsg } from './log.js';
-import { launchedAgentId, mekoTag, withMekoScope, type SimilarMemory } from './meko.js';
+import { launchedAgentId, mekoTag, type SimilarMemory } from './meko.js';
 import type { MekoQuestion, QuestionMark } from './mekoquestions.js';
 import { LEARN_AGENT } from './mekousage.js';
 import { claudePath } from './paths.js';
@@ -370,14 +370,15 @@ export class Learner {
    * Starts a learn step for the session: through the mod when it's live, else as a typed prompt.
    * Throws a 409 saying why it can't run now.
    */
-  async start(row: SessionRow, trigger: LearnTrigger): Promise<LearnPath> {
+  async start(row: SessionRow, trigger: LearnTrigger, spentMs = 0): Promise<LearnPath> {
     const dp = this.datapack(row);
     if (!dp) throw new HttpError(409, "This session's project has no Meko datapack to save to.");
     if (this.openRow(row.id)) throw new HttpError(409, 'AgentK is already saving what this session learned.');
+    row = await this.core.sessions.awake(row, 'to save what it learned');
     const why = this.notNow(row);
     if (why) throw new HttpError(409, why);
     if (this.core.config.claude.mod && this.core.sessions.mod.learnReady(row.id)) {
-      this.startMod(row, trigger, dp);
+      this.startMod(row, trigger, dp, spentMs);
       return 'mod';
     }
     await this.startTurn(row, trigger, dp);
@@ -427,12 +428,16 @@ export class Learner {
 
   /** Starts the learn step a closing session runs; false (recorded as skipped) when it can't run. */
   private async beforeEnd(row: SessionRow, trigger: 'merge' | 'discard'): Promise<boolean> {
+    // An agent stopped for sitting idle starts again for the step, within the step's own time (the
+    // close waits no longer than it would have); one that doesn't come up by then skips it.
+    const began = Date.now();
+    row = await this.core.sessions.awake(row, 'to save what it learned', this.timeoutMs).catch(() => this.core.sessions.row(row.id));
     if (this.notNow(row)) {
       this.insert(row.id, randomUUID(), trigger, 'none', 'skipped');
       return false;
     }
     try {
-      await this.start(row, trigger);
+      await this.start(row, trigger, Date.now() - began);
       return true;
     } catch (e) {
       this.core.log.warn(`the learn step didn't start for ${row.id}`, errMsg(e));
@@ -456,13 +461,14 @@ export class Learner {
    * conversation and Meko's open questions on the datapack (the session's own first; none when Meko
    * doesn't keep them) are read in the background, then the fork's prompt is handed to the mod.
    */
-  private startMod(row: SessionRow, trigger: LearnTrigger, dp: DatapackRef): void {
+  /** `spentMs`: what the step's time already went on (starting an agent stopped for sitting idle again), off its timeout. */
+  private startMod(row: SessionRow, trigger: LearnTrigger, dp: DatapackRef, spentMs = 0): void {
     const id = randomUUID();
     this.insert(row.id, id, trigger, 'mod', null);
     const timer = setTimeout(() => {
       const job = this.jobs.get(id);
       if (job) this.fail(job, job.step, TIMED_OUT[job.step]);
-    }, this.timeoutMs);
+    }, Math.max(0, this.timeoutMs - spentMs));
     timer.unref?.();
     const job: Job = { id, sessionId: row.id, trigger, datapack: dp, step: 'extract', facts: [], similar: [], questions: [], conversation: null, saves: 0, updates: 0, skips: 0, tried: 0, taught: 0, dismissed: 0, timer };
     this.jobs.set(id, job);
@@ -524,8 +530,8 @@ export class Learner {
     try {
       const conv = await this.core.sessions.conversationId(row, job.datapack);
       const agent = launchedAgentId(row);
-      job.similar = await withMekoScope(row, () => mekoTag.run(job.id, () => Promise.all(job.facts.map((f) =>
-        this.core.meko.similar(memoryText(f), job.datapack.id, agent, conv, SIMILAR).catch((): SimilarMemory[] => [])))));
+      job.similar = await mekoTag.run(job.id, () => Promise.all(job.facts.map((f) =>
+        this.core.meko.similar(memoryText(f), job.datapack.id, agent, conv, SIMILAR).catch((): SimilarMemory[] => []))));
     } catch (e) {
       if (this.jobs.has(job.id)) this.fail(job, 'search', `Meko couldn't be searched (${errMsg(e)})`);
       return;
@@ -551,7 +557,7 @@ export class Learner {
     try {
       const conv = await this.core.sessions.conversationId(row, job.datapack);
       const agent = launchedAgentId(row);
-      await withMekoScope(row, () => mekoTag.run(job.id, async () => {
+      await mekoTag.run(job.id, async () => {
         for (const [i, f] of job.facts.entries()) {
           if (!this.jobs.has(job.id)) return; // the time was up: the timer closed the step
           const d = decided.get(i + 1) ?? { action: 'add', id: null, text: null };
@@ -585,7 +591,7 @@ export class Learner {
           job.tried++;
           this.core.changed(); // the count saved so far
         }
-      }));
+      });
     } catch (e) {
       if (this.jobs.has(job.id)) this.fail(job, 'save', `Meko couldn't be reached (${errMsg(e)})`);
       return;

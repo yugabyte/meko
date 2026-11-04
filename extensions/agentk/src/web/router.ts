@@ -10,9 +10,7 @@ export type Route =
   /** The work queue, across every project. */
   | { view: 'queue' }
   /** A session's design doc on its own page (opened in a new tab). */
-  | { view: 'design'; projectId: string; sessionId: string }
-  /** The project's Meko call logs, on a session's (the latest logged when none is named). */
-  | { view: 'meko'; projectId: string; sessionId: string | null };
+  | { view: 'design'; projectId: string; sessionId: string };
 
 /** A path segment decoded, or as it is when it isn't valid percent-encoding (say `/p/foo%`). */
 function decode(segment: string): string {
@@ -33,7 +31,6 @@ export function parseRoute(pathname: string, base = BASE): Route {
     if (parts[2] === 's' && parts[3] && parts[4] === 'design') return { view: 'design', projectId: parts[1], sessionId: parts[3] };
     if (parts[2] === 's' && parts[3]) return { view: 'project', projectId: parts[1], sessionId: parts[3] };
     if (parts[2] === 'home') return { view: 'home', projectId: parts[1] };
-    if (parts[2] === 'meko' && parts.length <= 4) return { view: 'meko', projectId: parts[1], sessionId: parts[3] ?? null };
     return { view: 'project', projectId: parts[1], sessionId: null };
   }
   return { view: 'root' };
@@ -58,8 +55,6 @@ function routeRest(r: Route): string {
       return `p/${e(r.projectId)}/home`;
     case 'design':
       return `p/${e(r.projectId)}/s/${e(r.sessionId)}/design`;
-    case 'meko':
-      return r.sessionId ? `p/${e(r.projectId)}/meko/${e(r.sessionId)}` : `p/${e(r.projectId)}/meko`;
     case 'project':
       return r.sessionId ? `p/${e(r.projectId)}/s/${e(r.sessionId)}` : `p/${e(r.projectId)}`;
   }

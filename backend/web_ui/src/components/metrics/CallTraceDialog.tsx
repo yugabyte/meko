@@ -1,11 +1,15 @@
-// One call from the call log: what it was, how it went, and the time each of its steps took (a
-// search's sources run side by side, so steps can add up to more than the whole).
+// One call from the call log: what it was, how it went, the time each of its steps took (a search's
+// sources run side by side, so steps can add up to more than the whole), and, while Settings keeps
+// call contents, what it sent and got back.
 
+import { api } from "../../lib/api";
 import { dateTime, duration } from "../../lib/format";
 import type { MekoCall } from "../../lib/types";
+import { useLoad } from "../../lib/useLoad";
+import { CopyBlock } from "../CopyBlock";
 import { Dialog } from "../Dialog";
 import { KeyValues } from "../KeyValues";
-import { Badge, Button } from "../ui";
+import { Badge, Button, ErrorNote, Spinner } from "../ui";
 
 export function CallTraceDialog({ call, onClose }: { call: MekoCall; onClose: () => void }) {
   // An older server's calls carry no steps.
@@ -46,6 +50,45 @@ export function CallTraceDialog({ call, onClose }: { call: MekoCall; onClose: ()
           </div>
         )}
       </div>
+      {call.id !== undefined && <Contents id={call.id} />}
     </Dialog>
   );
+}
+
+// What the call sent and got back, when they're kept (Settings' "Keep call contents").
+function Contents({ id }: { id: number }) {
+  const detail = useLoad(() => api.call(id), [id]);
+  const d = detail.data;
+  if (detail.error) return <ErrorNote error={detail.error} />;
+  if (!d) return <Spinner />;
+  if (d.args === undefined) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        What this call sent and got back isn't kept: Keep call contents in Settings was off at the time, or they were
+        cleared, or the call is older than 7 days.
+      </p>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      <div>
+        <div className="mb-2 text-xs font-medium text-muted-foreground">Sent</div>
+        <CopyBlock text={pretty(d.args)} />
+      </div>
+      <div>
+        <div className="mb-2 text-xs font-medium text-muted-foreground">Got back</div>
+        {d.reply ? <CopyBlock text={pretty(d.reply ?? "")} /> : <p className="text-sm text-muted-foreground">Nothing.</p>}
+      </div>
+      {d.cut && <p className="text-xs text-muted-foreground">Cut to 1 MB to keep.</p>}
+    </div>
+  );
+}
+
+// JSON indented to read, anything else as it is.
+function pretty(text: string): string {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
 }

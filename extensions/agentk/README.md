@@ -74,7 +74,7 @@ automatically** switch on Meko's Extensions page and in AgentK's Settings › Up
 default), or when you click **Update** (the banner in AgentK, Settings › Updates, or Meko's
 Extensions page) or run `meko update` (Meko, then every extension). An update restarts only
 AgentK's web server, so sessions keep running, and Meko rolls back a version that fails to start.
-To change AgentK's setup (repos folder, Meko) or set up its services again, run `agentk install`,
+To change AgentK's setup (repos folder, Meko) or set up its services again, run `me_koder install`,
 or `meko extension install agentk` again (`--version <v>` installs another release).
 `meko extension delete agentk` removes AgentK (it stops, ending its sessions) and keeps its home;
 `--purge` deletes that too.
@@ -99,11 +99,17 @@ match), so sessions don't stop for that. In plain Claude Code, open your repos b
 On a Mac, install while you're logged in to the desktop (in person or with Screen Sharing): Claude
 Code keeps its login in your Keychain, so AgentK runs while you're logged in. For a Mac mini
 that stays on, turn on automatic login and stop it sleeping (System Settings > Energy). With the
-macOS firewall on, allow incoming connections for `~/.meko/extensions/agentk/app/current/node/bin/node` so
+macOS firewall on, allow incoming connections for `~/.meko/extensions/agentk/app/current/node/bin/me_koder` so
 your phone can connect.
 
 ## Features
 
+- **The AgentK tour.** A new install opens on a tour: a small Snake game AgentK ships, built as a
+  local demo project with no remote (nothing is fetched or pushed), and a host session that walks
+  you through. In Level 1 AgentK runs its code review on a teammate's fix waiting on a branch,
+  and the demo's gotchas datapack in Meko catches a trap the code alone doesn't show, marked
+  **Caught with Meko** with the gotcha's sentence. Take it any time from **Take the AgentK tour**
+  on the empty screen or **Start the AgentK tour** in the command palette. More levels follow.
 - **Projects** in a left rail you can widen by dragging its edge, or hide (with each one's open sessions listed under it, if you turn that on in Settings): each is an effort to build or improve a feature, product or service,
   worked on in a git repo picked from your repos folder (`~/code` by default), cloned into it, or
   started there as a new repo (git init and a first commit). A repo with no commits yet, or an
@@ -136,9 +142,10 @@ your phone can connect.
   replace it. Claude is told to leave out anything about your machine or one person's
   preferences. With AgentK's mod it runs out of sight (one cached look at the session, plus a small
   model for the duplicate check), and AgentK also drops any fact that names a local path; without
-  the mod, AgentK asks Claude in a turn of its own and Claude saves under the same rule. **Save learnings** in the session's
-  header (or the ⋯ sheet on a phone), or `/agentk_learn` in the terminal, does it any time.
-  Check **Don't save learnings** beside Merge & Close or Discard to close a session without it.
+  the mod, AgentK asks Claude in a turn of its own and Claude saves under the same rule. **Save learnings to Meko** in the
+  session's ⋯ menu, or `/agentk_learn` in the terminal, does it any time. **Merge & Close without
+  saving learnings** in the ⋯ menu, or **Don't save learnings** in Discard's confirmation, closes a
+  session without it.
 - **Learn the project to seed a new datapack.** When you open a project on a new datapack (or one
   with nothing in it yet), the New session dialog starts on **Learn the project**: say what the
   project is about, where its files are, and how many months of PRs to read (24 by default). The
@@ -161,7 +168,7 @@ your phone can connect.
   that can't see the projects' datapacks there, a banner says so and offers to set Claude Code up
   with AgentK's Meko (Settings › Harness shows each agent's Meko);
   AgentK never changes Claude Code's setup unless you ask.
-  Once a session has a PR, **Share with reviewers** lists the reviewers of the project's open PRs
+  Once a session has a PR, **Share with reviewers** in its ⋯ menu lists the reviewers of the project's open PRs
   (in every repo its sessions work in) with their emails, to share with in one click. The Share
   dialog suggests the people you share with most, in any project, to add with a tap.
 - **Review someone else's PR with AgentK:** a *Review a PR* session lists the open PRs, in any repo,
@@ -202,7 +209,7 @@ your phone can connect.
 - **One git worktree and one Claude session per task.** The real Claude Code terminal UI is shown
   in the browser, and sessions run in AgentK's own session host (no tmux needed), so they keep
   running when you disconnect or the server updates. You can still attach from iTerm:
-  `agentk attach <session>` (`Ctrl+\` detaches).
+  `me_koder attach <session>` (`Ctrl+\` detaches).
 - **Claude Code, OpenCode or Kiro, per session.** New sessions start on the default agent
   (Settings → Harness), or pick **Agent** under **Advanced** in New session once more than one of
   Claude Code, [OpenCode](https://opencode.ai) 2.0.0 or later (signed in to a model provider with
@@ -210,7 +217,9 @@ your phone can connect.
   installed and connected to Meko (Meko owns that connection: **Connect to Meko** in Settings ›
   Harness, or `meko agent connect <agent>`; one Meko doesn't find, or a Meko too old to list agents,
   isn't held back). Any one
-  alone is enough: with only Kiro, every session runs on Kiro. Settings › Harness
+  alone is enough: with only Kiro, every session runs on Kiro. **Model**, beside it, starts the
+  session on another model than the agent's own default (Opus, Sonnet, a model OpenCode or Kiro
+  lists, or any name), kept through every resume. Settings › Harness
   has a bar that picks an agent (Claude Code, OpenCode, Kiro) and shows its settings, and can stop
   offering an agent you have installed but don't want (**Offer … for new sessions**). An OpenCode
   session loads AgentK's own OpenCode plugin (nothing is written to your OpenCode config), which
@@ -232,7 +241,7 @@ your phone can connect.
   screen has gone 10 seconds without being used, or right away if that screen isn't showing it.
 - **Find in the terminal:** `⌘F` (`Ctrl+Shift+F` on Linux and Windows) in a session's terminal
   searches all of it, scrollback included, highlighting each match, with match case, whole word
-  and regex. On a phone, **Find in terminal** is in the ⋯ sheet and the command palette.
+  and regex. **Find in terminal** is also in the session's ⋯ menu (the ⋯ sheet on a phone) and the command palette.
 - **Multi-line prompts:** Shift+Enter starts a new line in a session's terminal, and Enter sends
   the prompt. On a Mac, ⌘← and ⌘→ go to the start and end of the line, ⌥← and ⌥→ move by a word,
   and ⌘⌫ deletes to the start of the line. On Linux and Windows, Ctrl+Backspace deletes a word.
@@ -283,8 +292,8 @@ your phone can connect.
   go straight to code. Or pick *Review a PR* (above). A task moves between stages, forward or back,
   at any point between turns: an exploration that should ship moves on to Code or opens a PR with
   **Move on…**, and a session in review can go back to Code or Design. A move carries on from what the
-  session has discussed or done, not its first prompt. A move, and **Open PR** (its **+** notes
-  button), takes optional instructions for AgentK, sent after the stage's prompt. Rename a session any time
+  session has discussed or done, not its first prompt. A move, and **Open PR with instructions** in the
+  session's ⋯ menu, take optional instructions for AgentK, sent after the stage's prompt. Rename a session any time
   (double-click its tab, or its row in the rail): its branch and worktree keep their names.
 - **Task lifecycle:** (Explore →) Design → Code → Review & PR (AgentK) → Merge & Close. Complex designs are
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
@@ -300,12 +309,12 @@ your phone can connect.
   which the review checks the change against and the PR opens with; meanwhile, and while the review
   runs, the task shows in Review & PR. Then AgentK reviews the change on your computer with the cloud reviewer's algorithm
   (Sagittarius 3.0: five specialist passes and a scorer per finding; or the quicker Sirius 1.0), in a
-  review session shown as a magnifier on the task's tab, which opens the review's terminal while its passes run and its findings once the task is fixing them or the review is done. The task fixes what it finds, and the PR
-  says how it went (`me_ak_review:2 blockers,1 major addressed;Sagittarius3.0`, or `me_ak_review:LGTM;Sirius1.0`). Strategy,
-  re-review rounds and depth are in Settings, the project's settings and each session's own.
-  You can also run the review whenever you like, in Code or on the open PR in Review & PR: from the
-  command palette, **Review again** on its findings (which also has Cancel and Retry for it), or
-  **Run code review** in the ⋯ sheet on a phone. One run in Code is the one Open PR uses, so the PR
+  review session shown as a magnifier on the task's tab, which opens the review's terminal while its passes run and its findings once they wait on you, the task is fixing them or the review is done. The findings also open by themselves beside the task's terminal while the review runs or they wait on you, and once the review reads LGTM the magnifier goes (the session's ⋯ menu still opens its findings). Each round's findings wait for you first: add a note to any of them, or dismiss some with a note, then **Send to AgentK**, and the task fixes the rest (with Run to merge on, or **Check the findings first** set to No, they go to it at once). The PR
+  says how it went (`me_ak_review:2 blockers,1 major addressed;Sagittarius3.0`, or `me_ak_review:LGTM;Sirius1.0`); findings you dismissed aren't counted. Strategy,
+  re-review rounds, depth and Check the findings first are in Settings, the project's settings and each session's own.
+  You can also run the review whenever you like, in Code or on the open PR in Review & PR: with
+  **Run code review** in the session's ⋯ menu (the ⋯ sheet on a phone), from the command palette,
+  or with **Review again** on its findings (which also has Cancel and Retry for it). One run in Code is the one Open PR uses, so the PR
   opens without reviewing again.
   You approve the design, opening the PR, and Merge & Close, which merges the PR and
   cleans up the branches, leaving the worktree for the next session. Pressed early, they wait:
@@ -331,12 +340,6 @@ your phone can connect.
   **Code Reviews** section counts the reviews, the issues they found, the ones fixed and the PRs opened
   after them. **Usage** in the left panel adds it up across every project, closed ones
   too, with what shipped: merged PRs and commits pushed straight to the base branch.
-- **Meko call log, for debugging:** turn on **Log Meko calls** in a project's settings and AgentK
-  keeps every Meko call made for each session, its own (recall at start, design uploads, the learn
-  step) and its agent's (Claude's, Kiro's or OpenCode's searches and saves, a reply too large for
-  Claude's context included), with what was sent and what came back, in a file in the session's
-  folder that's deleted with the session. **View calls** opens them, a session at a time, with
-  filters for the tool, who made the call (AgentK or the session's agent) and failed calls.
 - **Context Gaps:** Meko keeps the searches it couldn't answer, on each datapack's
   **Context Gaps** tab in its web UI (Meko Cloud's datapacks' too, as their searches pass through
   it). With the Meko on this computer, the project home says how many
@@ -344,10 +347,10 @@ your phone can connect.
   which check before each save, are forgotten). When AgentK saves what a session learned through
   its mod in Claude, it also answers the open questions that session found out, its own and other
   sessions'.
-- **Meko usage**: the Meko lookups and saves each session made, an estimate of the tokens and
-  cost that Meko searches saved, how many sessions had something from Meko in their first
-  turn, and what the learn step saved (memories added and corrected) and cost, on the project home
-  and the Usage page. On Pro and Max plans, the rail also shows your Claude 5-hour and weekly usage limits
+- **Meko usage**: the Meko lookups and saves each session made, how many sessions had something
+  from Meko in their first turn, and what the learn step saved (memories added and corrected) and
+  the tokens it used, on the project home and the Usage page, whose table by project also estimates
+  what Meko searches saved. On Pro and Max plans, the rail also shows your Claude 5-hour and weekly usage limits
   and when they reset, and once you've run a session on Kiro, the Kiro credits your plan has used.
 - **Usage stats:** once a day (hourly in its first day) AgentK sends anonymous counts to YugabyteDB: how many
   projects, sessions, PRs, commits and tokens (by model) it handled, which file types changed, and
@@ -355,7 +358,12 @@ your phone can connect.
   It never sends names, paths, prompts, code, or who you are. Turn it off in Settings › General
   (details in [docs/design/usage-stats.md](docs/design/usage-stats.md)).
 - **Survives restarts:** after a host reboot, every open session is brought back with
-  `claude --resume`, and sessions that were mid-turn are told to continue.
+  `claude --resume`, and sessions that were mid-turn are told to continue. A session whose agent
+  was stopped for sitting idle stays stopped until it's needed.
+- **Stops idle agents:** a session's agent idle for 24 hours is stopped to free its memory; the
+  session, its worktree and conversation stay. It starts again with `--resume` when you resume it,
+  type in its terminal, take an action that sends it a prompt, or AgentK has work for it. Change
+  the hours, or turn it off with 0, in Settings › General.
 - **Updates through Meko** from GitHub Releases, automatic or one click, without interrupting running
   sessions, and rollback if a new version won't start.
 
@@ -365,18 +373,19 @@ Design: [`docs/design.md`](docs/design.md), an index with one file per area unde
 
 | Command | What it does |
 |---|---|
-| `agentk ui` | Open AgentK in your browser through Meko (`open` on macOS, `xdg-open` on Linux); with no display to open it on, such as over SSH, it prints the URL |
-| `agentk status` | Services, the URL Meko serves it at, sessions, and whether the server answers; exits 3 when no server runs this home |
-| `agentk stop` / `start` | Stop the server and the session host, ending every session, and start them again (sessions resume). The services also start again at the next login |
-| `agentk restart` | Restart the web server only (sessions keep running), and wait until it answers; Meko runs it after installing an update |
-| `agentk logs -f` | Follow the server log (`logs/server.log` in AgentK's home) |
-| `agentk uninstall [--purge [--delete-worktrees]]` | Remove the services; `--purge` also deletes AgentK's home (in Meko's data folder) except session worktrees and designs, which only `--delete-worktrees` removes (after reporting uncommitted changes). Branches are always kept. |
-| `agentk attach [session]` | Show a session's terminal in yours (`Ctrl+\` detaches; Claude keeps running); with no name, list the sessions |
-| `agentk host restart` | Restart the session host (its sessions resume); with the server stopped, `host stop` ends every session until the server starts |
+| `me_koder ui` | Open AgentK in your browser through Meko (`open` on macOS, `xdg-open` on Linux); with no display to open it on, such as over SSH, it prints the URL |
+| `me_koder status` | Services, the URL Meko serves it at, sessions, and whether the server answers; exits 3 when no server runs this home |
+| `me_koder stop` / `start` | Stop the server and the session host, ending every session, and start them again (sessions resume). The services also start again at the next login |
+| `me_koder restart` | Restart the web server only (sessions keep running), and wait until it answers; Meko runs it after installing an update |
+| `me_koder logs -f` | Follow the server log (`logs/server.log` in AgentK's home) |
+| `me_koder uninstall [--purge [--delete-worktrees]]` | Remove the services; `--purge` also deletes AgentK's home (in Meko's data folder) except session worktrees and designs, which only `--delete-worktrees` removes (after reporting uncommitted changes). Branches are always kept. |
+| `me_koder attach [session]` | Show a session's terminal in yours (`Ctrl+\` detaches; Claude keeps running); with no name, list the sessions |
+| `me_koder host restart` | Restart the session host (its sessions resume); with the server stopped, `host stop` ends every session until the server starts |
 
-The command was `agent-k-local` before the rename to AgentK, and that name keeps working. An
-install from then gets `agentk` the next time its server starts after an update; its services keep
-their old names (`agent-k-local.service`, `com.yugabyte.agent-k-local`) until you run `agentk
+The command is `me_koder`, so a process list, `~/.local/bin` and the services say AgentK is a Meko
+extension. It was `agentk` before, and `agent-k-local` before the rename to AgentK. An install from
+then gets `me_koder` when Meko next starts, and the old commands go; its services keep their old
+names (`agentk.service`, `com.yugabyte.agentk`, or `agent-k-local…`) until you run `me_koder
 install`, which renames the server's at once and the session host's once the host isn't running.
 
 ## Develop

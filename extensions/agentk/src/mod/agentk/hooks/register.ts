@@ -21,11 +21,12 @@
 //                 come on polls
 //   /mod/learn/start  /agentk_learn in the terminal: start a learn step now
 //   /mod/meko     Claude's Meko tool calls: `start` before each runs, `end` once it's over (failed or
-//                 interrupted too), for the session's dot to show while one runs. While the project
-//                 keeps a Meko call log, `start` is answered `{ log: true }` and `end` carries the call:
-//                 the tool, what Claude sent, the reply as Claude read it, how it went and how long it took
+//                 interrupted too), for the session's dot to show while one runs
 //   /mod/turn     a turn the person interrupted (Ctrl+C, Esc), which fires no Stop hook: AgentK ends
 //                 the turn and sends what waited for its end
+//
+// A prompt AgentK marks `hidden` (a workshop host's events) draws as nothing in the transcript, and so
+// does a reply of just "OK" in its turn; the full transcript (ctrl+o) shows both.
 //
 // It must never get in Claude's way: every failure is swallowed (a question is then left to the
 // terminal's dialog), and while the server doesn't hear from the mod it types prompts into the
@@ -33,7 +34,7 @@
 //
 // This file is compiled by Claude Code, not by the repo's tsc: `claude-code` is the engine's own
 // module, typed by the declarations Claude Code writes into .claude-plugin/types when it loads the mod.
-import type { EngineInterface, ModelForkResult, Register, ToolCallInput, ToolCallResult } from 'claude-code'
+import type { EngineInterface, ModelForkResult, Register } from 'claude-code'
 
 /**
  * The protocol the server checks, on /mod/hello and on every poll: 2 runs learn steps. AgentK loads
@@ -49,12 +50,6 @@ const QUESTIONS_FAILED = "AgentK didn't take the questions. Write them to the qu
 const LEARN_COMMAND = 'agentk_learn'
 /** Meko's tools, under its own MCP server's name or a plugin's (`mcp__plugin_x_meko__…`), as mekousage.ts reads them. */
 const MEKO_TOOL = /^mcp__(?:[\w-]+_)?meko__/
-/** Keys of a `tool.call` input that aren't the tool's own arguments. */
-const RESERVED_KEYS = new Set(['tool', 'tool_use_id', 'consent', 'agentId', 'requestMeta'])
-/** The most a Meko call sent to the log may take: the hook socket drops a body over 4 MB. */
-const MAX_LOGGED_CHARS = 3.5 * 1024 * 1024
-/** The most of a call's error that's sent: a failed reply's text, a refusal or what was thrown. */
-const ERROR_CHARS = 300
 /** The most the duplicate check may write. */
 const DEDUP_MAX_TOKENS = 8000
 
@@ -66,6 +61,8 @@ interface Link {
 interface Prompt {
   id: string
   text: string
+  /** Drawn as nothing in the transcript (a workshop host's AgentK events); the model reads it as any other. */
+  hidden?: boolean
 }
 
 /** A part of a learn step from the server: fork the session with `prompt` (extract), or run it on `model` (check). */
@@ -82,6 +79,14 @@ let link: Promise<Link | null> | null = null
 let polling = false
 /** The prompts submitted that Claude still holds (it runs each when it's next idle), by id. */
 const held = new Set<string>()
+/** The texts of the hidden prompts submitted: their rows draw as nothing but in the full transcript (ctrl+o). */
+const hiddenTexts = new Set<string>()
+/** A hidden prompt's turn is running: a reply of just "OK" (nothing to say) draws as nothing too. */
+let quietTurn = false
+/** Those replies' rows, by row id, so a redraw after the turn keeps them hidden. */
+const quietRows = new Set<string>()
+/** What a hidden row draws. */
+const NOTHING = { type: 'Box', props: { display: 'none' } } as const
 
 /** The server's socket and this session's token, or null outside an AgentK session. */
 function linkOf($: EngineInterface): Promise<Link | null> {
@@ -115,10 +120,14 @@ async function take($: EngineInterface, l: Link, prompts: Prompt[]) {
     const ack = await post($, l, '/mod/ack', { id: p.id, state: 'accepted' }).catch(() => null)
     if (ack?.status !== 204) continue
     held.add(p.id)
+    if (p.hidden) hiddenTexts.add(p.text)
     // Not awaited: it resolves only when the prompt's turn starts (or another plugin refused it),
     // and polling goes on meanwhile.
     void $.prompt.submit({ text: p.text, asUser: true })
-      .then((r) => (r.drop !== undefined ? refused($, l, p, r.drop) : undefined))
+      .then((r) => {
+        if (r.drop !== undefined) return refused($, l, p, r.drop)
+        if (p.hidden) quietTurn = true
+      })
       .catch(() => undefined)
       .finally(() => {
         held.delete(p.id)
@@ -135,39 +144,6 @@ async function refused($: EngineInterface, l: Link, p: Prompt, reason: string) {
   const box = await $.prompt.read().catch(() => null)
   const filled = box?.text === '' && (await $.prompt.fill({ text: p.text }).catch(() => null))?.isFilled === true
   await post($, l, '/mod/ack', { id: p.id, state: 'dropped', reason, filled })
-}
-
-/** How a tool call ended: what `next(e)` resolved to, or what it threw. */
-type Settled = { r: ToolCallResult } | { thrown: unknown }
-
-/**
- * One of Claude's Meko calls, for the session's Meko call log: what it sent (its input without the
- * engine's keys), the reply as Claude read it, and how it went. A call too large for the hook
- * socket goes without its reply, then without its arguments too, so it's still logged.
- */
-function mekoCall(e: ToolCallInput, s: Settled, ms: number) {
-  const args: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(e)) if (!RESERVED_KEYS.has(k)) args[k] = v
-  let ok = false
-  let text: string | null = null
-  let error: string | null = null
-  if (!('r' in s)) {
-    error = s.thrown instanceof Error && s.thrown.message ? s.thrown.message : 'Interrupted'
-  } else if (s.r.deny !== undefined) {
-    error = s.r.deny
-  } else {
-    const { result } = s.r
-    text = typeof s.r.text === 'string' ? s.r.text : typeof result === 'string' ? result : result === undefined ? null : JSON.stringify(result)
-    ok = !s.r.isError
-    if (!ok) error = text || 'Meko reported an error'
-  }
-  if (error !== null) error = error.slice(0, ERROR_CHARS)
-  const call = { tool: e.tool, args: args as unknown, ms, ok, text, error, subagent: !!e.agentId }
-  const size = JSON.stringify(call).length
-  if (size <= MAX_LOGGED_CHARS) return call
-  const tooLarge = `The call was too large to log (${size} characters).`
-  const lean = { ...call, text: null, error: error ? `${error} ${tooLarge}` : tooLarge }
-  return JSON.stringify(lean).length <= MAX_LOGGED_CHARS ? lean : { ...lean, args: null }
 }
 
 /** A JSON body's fields, or {} when it isn't a JSON object. */
@@ -361,6 +337,7 @@ export const register: Register = (on) => {
   // goes idle and runs a prompt it holds, so that prompt's turn never counts as the one that ended.
   // A subagent's turn, and every turn Stop covers, goes straight on.
   on('turn.complete', async ($, e, next) => {
+    if (!e.agentId) quietTurn = false
     if (!e.isAborted || e.agentId) return next(e)
     const l = await linkOf($).catch(() => null)
     if (l) await post($, l, '/mod/turn', { turnId: e.turnId, reason: 'aborted' }).catch(() => undefined)
@@ -395,8 +372,7 @@ export const register: Register = (on) => {
   }).catch(($, e, next) => next(e))
 
   // Claude's Meko calls: AgentK hears of each before it runs (awaited, so `start` always comes
-  // before `end`) and once it's over, whatever the outcome; while the project keeps a Meko call log
-  // (`start` answered `{ log: true }`), the end carries the call. The call itself is left alone. The
+  // before `end`) and once it's over, whatever the outcome. The call itself is left alone. The
   // tool is checked here rather than with a RegExp matcher, which the oldest Claude Code the mod
   // runs in (MIN_MOD_CLAUDE) may not take; every other tool goes straight on. The `.catch` replays
   // what `next(e)` settled to, so a failed call never runs twice.
@@ -405,20 +381,11 @@ export const register: Register = (on) => {
     const l = await linkOf($).catch(() => null)
     if (!l) return next(e)
     const id = e.tool_use_id
-    const started = await post($, l, '/mod/meko', { id, state: 'start' }).catch(() => null)
-    const log = started?.status === 200 && json(started.text).log === true
-    const at = Date.now()
-    let settled: Settled = { thrown: undefined }
+    await post($, l, '/mod/meko', { id, state: 'start' }).catch(() => null)
     try {
-      const r = await next(e)
-      settled = { r }
-      return r
-    } catch (err) {
-      settled = { thrown: err }
-      throw err
+      return await next(e)
     } finally {
-      const end = log ? { id, state: 'end', ...mekoCall(e, settled, Date.now() - at) } : { id, state: 'end' }
-      void post($, l, '/mod/meko', end).catch(() => undefined)
+      void post($, l, '/mod/meko', { id, state: 'end' }).catch(() => undefined)
     }
   }).catch(($, e, next) => next(e))
 
@@ -428,8 +395,25 @@ export const register: Register = (on) => {
     if (!l) return { text: 'This session is not run by AgentK.' }
     const r = await post($, l, '/mod/learn/start', {}).catch(() => null)
     const text = json(r?.text).text
-    return { text: typeof text === 'string' ? text : "AgentK didn't answer. Use Save learnings in the session's header in AgentK (⋯ on a phone) instead." }
-  }).catch(() => ({ text: "AgentK didn't answer. Use Save learnings in the session's header in AgentK (⋯ on a phone) instead." }))
+    return { text: typeof text === 'string' ? text : "AgentK didn't answer. Use Save learnings to Meko in the session's ⋯ menu in AgentK instead." }
+  }).catch(() => ({ text: "AgentK didn't answer. Use Save learnings to Meko in the session's ⋯ menu in AgentK instead." }))
+
+  // AgentK's hidden prompts, and a quiet "OK" in their turns, draw as nothing; the full transcript
+  // (ctrl+o) shows them. Registered in a try: a Claude Code without the hook still runs the rest.
+  try {
+    on('ui.render', { component: 'UserMessage' }, ($, e, next) => {
+      const p = e.props as { text?: unknown; origin?: { kind?: unknown }; isExpanded?: unknown }
+      if (p.isExpanded || p.origin?.kind !== 'plugin' || typeof p.text !== 'string' || !hiddenTexts.has(p.text)) return next(e)
+      return NOTHING
+    }).catch(($, e, next) => next(e))
+    on('ui.render', { component: 'AssistantMessage' }, ($, e, next) => {
+      const p = e.props as { text?: unknown }
+      if (quietTurn && typeof p.text === 'string' && p.text.trim() === 'OK') quietRows.add(e.requestId)
+      return quietRows.has(e.requestId) ? NOTHING : next(e)
+    }).catch(($, e, next) => next(e))
+  } catch {
+    // The rows draw as Claude Code draws them
+  }
 
   on('tool.call', { tool: 'mcp__agentk__design_questions' }, async ($, e) => {
     const l = await linkOf($).catch(() => null)

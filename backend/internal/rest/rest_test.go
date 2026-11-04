@@ -377,7 +377,7 @@ func TestDecisionTrace(t *testing.T) {
 	ctx := context.Background()
 	const convID = "5a3c4b0f6d3e9b8a7c2d1e0f9a8b7c6d"
 	stale := store.Call{At: time.Now(), Tool: "memory_add", DatapackID: e.DatapackID, ConversationID: convID, OK: true}
-	e.Service.RecordCall(ctx, stale) // the earlier conversation's
+	e.Service.RecordCall(ctx, stale, nil, "") // the earlier conversation's
 	time.Sleep(5 * time.Millisecond)
 	conv, err := e.Service.CreateConversation(ctx, memory.CreateConversation{AgentID: "a", DatapackID: e.DatapackID,
 		SessionID: convID, Title: "trace"})
@@ -389,7 +389,7 @@ func TestDecisionTrace(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 		e.Service.RecordCall(ctx, store.Call{At: time.Now(), Tool: tool, DatapackID: datapack, AgentID: "a",
 			ConversationID: conv.ID, OK: ok, Ms: 12, MemoryN: 2,
-			Steps: []store.Step{{Step: "memory_search", Ms: 9, N: 2}}})
+			Steps: []store.Step{{Step: "memory_search", Ms: 9, N: 2}}}, nil, "")
 	}
 	turn := func(input, reasoning string, plan []string) {
 		t.Helper()

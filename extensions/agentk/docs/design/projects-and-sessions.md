@@ -36,7 +36,6 @@ goes idle for the next session on the repo (see [Worktree reuse](#worktree-reuse
   designs/<session>/design.md      # markdown design written during Design (Artifact designs live on claude.ai)
   designs/<session>/questions.json # the design's open questions for the user, written beside it
   designs/<session>/questions-approval.json # what an approval left to AgentK, undone on a move back to Design
-  designs/<session>/meko-calls.jsonl # the session's Meko calls, AgentK's and Claude's, with their content, while its project has Log Meko calls on (removed on archive)
   pastes/<session>/<time>-<random>.<ext>  # images pasted into the terminal, for Claude to read (removed on archive)
   pastes/.new/<project>/<time>-<random>.<ext>  # images added in the New session dialog, until a session starts with them (or a day)
 
@@ -52,6 +51,9 @@ clone_into = "~/code"     # where "Clone from URL" and "New repo" put new repos
 [worktrees]
 idle_per_repo = 3         # idle worktrees each repo keeps for its next session (0 to 20; 0 removes them)
 idle_days = 14            # an idle worktree no session used for this many days is removed (0 to 365; 0 keeps it)
+
+[sessions]
+idle_stop_hours = 24      # a session's agent idle this long is stopped, and resumed when needed (0 to 720; 0 never stops one)
 
 [meko]
 # The Meko Cloud link is Meko's (its web UI's Settings › Meko Cloud, or meko cloud_link). url, api_key,
@@ -80,8 +82,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 
 [call_home]
 # enabled = false            # stop sending anonymous usage stats (Settings › General); on by default
-# url = "https://…/v1/report" # where reports go (the collector's report URL); unset uses the one release builds carry
-# diagnostics_url = "http://127.0.0.1:8080/" # where the YugabyteDB copy goes; unset is https://diagnostics.yugabyte.com from release installs only
+# diagnostics_url = "http://127.0.0.1:8080/" # where reports go; unset is YugabyteDB's call home service from release installs only
 
 [pr]
 # resolve_conflicts = false  # don't have AgentK resolve a PR's merge conflicts with its base (Settings → General); on by default
@@ -90,6 +91,7 @@ idle_days = 14            # an idle worktree no session used for this many days 
 # strategy = "off"           # off, sirius-1.0, or sagittarius-3.0 (the default); a project's and a session's own go over it
 # depth = 3                  # times a review runs before AgentK gets the findings to fix (1 to 5; 1 by default); more than one is a deep review: each sweep looks past what the earlier ones found, up to this count, and from the second on, one that finds nothing new ends it; costs more tokens
 # rounds = 1                 # times the code review runs again after AgentK fixes the last review's findings (0 to 5; 0 by default); a review that finds nothing ends it early
+# check = false              # each round's findings wait for you to add notes or dismiss some before AgentK gets them (true by default); Run to merge never waits
 
 [code_review.models.opencode] # the model each tier of review step runs on; Claude Code's are opus, sonnet and haiku,
 # large = "anthropic/…"      # OpenCode's and Kiro's empty (the session's own model)
@@ -104,6 +106,10 @@ idle_days = 14            # an idle worktree no session used for this many days 
 [tools]
 # enabled = false            # sessions get no session tools (agentk_sessions MCP server and its skill: open projects,
 #                            # start and move sessions); on by default, and also in Settings → General
+
+[welcome]
+# tour = "agentk-101"        # written only by a fresh install: the server's start runs the AgentK tour once while
+#                            # there are no projects (docs/design/workshops.md), then removes it
 
 [work_queue]
 # github = true              # Sync pulls in GitHub review requests (Settings › Work queue); off by default
@@ -122,15 +128,16 @@ idle_days = 14            # an idle worktree no session used for this many days 
 | Close tab | Ends that attach only. The session host and Claude keep running. |
 | Claude exits | The pane dies and the status becomes *exited*. **Resume** relaunches `claude --resume <uuid>` in the same worktree (a Kiro session: `kiro-cli chat --agent agentk --resume-id <Kiro's id>`, see [Agents](harnesses.md)). It sends no prompt, except a PR prompt the last Claude exited before taking ([AgentK's mod](mod.md)). |
 | Archive | Refused (409) while the worktree has uncommitted or untracked files, which would keep the branch checked out there: commit them, or Discard. The Archive menu says so and greys out **Archive** (it waits for the check), and uncommitted files are a Merge & Close blocker too. Otherwise ends the session's pane. The clean worktree goes idle for the next session (HEAD detached, so the branch is free), or is removed when *Idle worktrees per repo* is 0; the branch is always kept. The record stays, so the session can be restored later. If the session is still starting, Archive (and Discard) waits up to a minute for Claude to start first, then refuses (409) until it has. |
-| Discard | Chosen in Archive's confirmation step. First runs the [learn step](recall-and-learn.md#the-learn-step) and waits for it, unless **Don't save learnings** is checked (it starts unchecked); then ends the session's pane, throws away uncommitted changes and untracked files (`git reset --hard`, `git clean -fd`: ignored build outputs stay), lets the worktree go idle (or force-removes it when it can't be cleaned or reuse is off), and deletes the local branch, unless the session started on an existing branch or a PR's (`branch_reused`), which it keeps. It first warns about uncommitted files and commits that no remote has (none, for a kept branch). The remote branch and any PR are left alone. The record and its token usage stay, as with Archive. |
-| Close project | After confirmation, stops the project's sessions and lets go of their worktrees as Archive does, keeping any worktree with uncommitted changes, and marks the project closed (`deleted_at`). Idle worktrees stay for the repo's other projects; the last project on a repo removes them. That goes for every repo the project's sessions used. Its sessions and token usage are kept for the Usage page. Never deletes the repo, its branches or the datapacks, so opening a project with its datapack (picking it under Project name in Open project) brings the project back (see [Opening a closed project again](open-project-and-new-session.md#open-project)). |
+| Discard | Chosen in Archive's confirmation step (on a desktop, **Archive or discard…** in the session's ⋯ menu opens it in the stage bar). First runs the [learn step](recall-and-learn.md#the-learn-step) and waits for it, unless **Don't save learnings** is checked (it starts unchecked); then ends the session's pane, throws away uncommitted changes and untracked files (`git reset --hard`, `git clean -fd`: ignored build outputs stay), lets the worktree go idle (or force-removes it when it can't be cleaned or reuse is off), and deletes the local branch, unless the session started on an existing branch or a PR's (`branch_reused`), which it keeps. It first warns about uncommitted files and commits that no remote has (none, for a kept branch). The remote branch and any PR are left alone. The record and its token usage stay, as with Archive. |
+| Close project | After confirmation (none on the session view of a project with no open sessions, which has nothing to stop and is the only time that view offers it), stops the project's sessions and lets go of their worktrees as Archive does, keeping any worktree with uncommitted changes, and marks the project closed (`deleted_at`). Idle worktrees stay for the repo's other projects; the last project on a repo removes them. That goes for every repo the project's sessions used. Its sessions and token usage are kept for the Usage page. Never deletes the repo, its branches or the datapacks, so opening a project with its datapack (picking it under Project name in Open project) brings the project back (see [Opening a closed project again](open-project-and-new-session.md#open-project)). |
 
 ```sql
 -- state.db (abridged). One writer: the server. Migrations keyed on PRAGMA user_version.
 CREATE TABLE projects (
   id TEXT PRIMARY KEY,            -- slug of the repo, e.g. billing-api; later projects on it add their name: billing-api-release-tooling
   name TEXT NOT NULL, repo_path TEXT NOT NULL, default_branch TEXT NOT NULL,   -- the repo's real path; several projects may share a repo
-  position INTEGER, settings_json TEXT, created_at INTEGER, deleted_at INTEGER);
+  position INTEGER, settings_json TEXT, created_at INTEGER, deleted_at INTEGER,
+  workshop TEXT);                 -- the bundled workshop that opened it (docs/design/workshops.md); it opens no PR
 CREATE TABLE project_datapacks (
   project_id TEXT REFERENCES projects, datapack_id TEXT, name TEXT,
   role TEXT CHECK (role IN ('dedicated','shared')),
@@ -235,6 +242,7 @@ CREATE TABLE code_reviews (    -- a task's code reviews (review/runner.ts, docs/
                                --   review's first prompt to the task (its fixes or the PR prompt), cleared once that goes
   purpose TEXT, stage TEXT,    -- pr (an Open PR's) | demand (the user ran it: no PR prompt); code | review: where it runs
   stale INTEGER,               -- 1 once the task left Code after it finished with its PR prompt unsent (Open PR reviews again)
+  hand_off INTEGER,            -- 0: a first look (a workshop's), whose findings stay with it, never sent to the task; 1 for the rest
   detail TEXT, created_at INTEGER, updated_at INTEGER, finished_at INTEGER);  -- finished_at: its PR prompt went
 CREATE TABLE code_review_steps (review_id TEXT, step TEXT, report_json TEXT, at INTEGER,  -- each step's report, as
   PRIMARY KEY (review_id, step));  --   review_report or review_score took it (r1s1:guide, r1c3)
@@ -252,7 +260,7 @@ CREATE TABLE code_review_steps (review_id TEXT, step TEXT, report_json TEXT, at 
   after 30 days, except `merged` events, which the Usage page counts.
 - **Not on NFS.** SQLite locking is unreliable on network filesystems. A home in Meko's data
   folder is on a local disk (below), so `state.db` is in it. Only a home from before the move can
-  be on NFS: for one, `agentk install` puts the database on local disk (`[state] db_path` in
+  be on NFS: for one, `me_koder install` puts the database on local disk (`[state] db_path` in
   `config.toml`, `$XDG_STATE_HOME/agent-k-local` or `/var/tmp/$USER/agent-k-local`), and the move
   brings it into the new home and clears the setting. A folder in `/var/tmp` must be a real directory owned by you that others can't write
   to, or AgentK stops rather than put its data (hook tokens, an older install's login) somewhere
@@ -270,7 +278,7 @@ above). Meko sets `MEKO_HOME` on every AgentK command it runs, and AgentK keeps 
 home`, since its own services don't have it. For `meko start` and `meko stop` it also sets
 `MEKO_SUMMARY=1`, and AgentK's `start` and `stop` then print one row of Meko's summary
 (`src/server/summary.ts`, the format in Meko's `backend/docs/install.md`) in place of their usual
-line and its `agentk status` hint. A home already in a Meko data folder refuses
+line and its `me_koder status` hint. A home already in a Meko data folder refuses
 `uninstall`, `start`, `stop`, `restart`, `status` and `_handoff` when `MEKO_HOME` names another
 folder (`refuseOtherMeko` in `src/server/movehome.ts`; `samePath` compares the folders, not their
 paths, so a second spelling of the same folder that links don't explain, such as a bind mount,
@@ -280,13 +288,13 @@ own tests) would otherwise stop or uninstall it, ending every session, and repoi
 home`. A home that hasn't moved into a Meko data folder yet isn't protected: it takes Meko's
 folder from `MEKO_HOME`, so another Meko's commands still act on it and its `[meko] home` (where
 it moves next) follows the last one. `install` isn't refused either: Meko's `extension install`
-sets the existing home up again in place, and `agentk install` keeps the Meko data folder its home is in as `[meko]
+sets the existing home up again in place, and `me_koder install` keeps the Meko data folder its home is in as `[meko]
 home`, over `MEKO_HOME`. The server takes `MEKO_HOME` and `XDG_STATE_HOME` from the login shell
-(as it does `PATH`), so it finds the same folder `agentk install` did. A relative `XDG_STATE_HOME`
+(as it does `PATH`), so it finds the same folder `me_koder install` did. A relative `XDG_STATE_HOME`
 is ignored, as the XDG spec says.
 
 - **A release's home is its own folder** (`<home>/app/<version>`, `AK_APP_DIR`), whatever
-  `AK_HOME` says; the CLI run through `~/.local/bin/agentk` finds it that way, and so does the
+  `AK_HOME` says; the CLI run through `~/.local/bin/me_koder` finds it that way, and so does the
   launcher. `AK_HOME` names a home only without a release (`npm run dev`, tests).
 - **Otherwise** (`akHome()`): `<Meko's data folder>/extensions/agentk` when it's there, else
   `~/.agent-k-local` when that's there (an install the move hasn't reached), else the new one.

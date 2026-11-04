@@ -6,7 +6,6 @@ import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../../src/server/server.js';
 import { run } from '../../src/server/db.js';
 import { KnowledgeService } from '../../src/server/knowledge.js';
-import { mekoLogPath } from '../../src/server/mekolog.js';
 import type { ServerEvent } from '../../src/shared/types.js';
 import { makeEnv, waitFor, type ApiCall, type TestEnv } from '../helpers.js';
 
@@ -43,7 +42,6 @@ describe('adding files to a knowledge base', () => {
   it("sends the file to the project datapack's knowledge base, same-origin only and only as raw bytes", async () => {
     const p = await project('alpha');
     session(p.id, 's1');
-    await app.inject({ method: 'PATCH', url: `/api/projects/${p.id}`, payload: { settings: { mekoLog: true } } });
     env.mekoApi.handle((c: ApiCall) => c.path.endsWith('/upload-url') ? presigned('dk-1')
       : c.path.startsWith(STORAGE) ? { status: 204 }
       : { status: 404, body: { error: { code: 'NOT_FOUND', message: 'not registered yet' } } });
@@ -68,10 +66,6 @@ describe('adding files to a knowledge base', () => {
     expect(post.auth).toBeNull();
     expect([...post.form!.keys()]).toEqual(['key', 'policy', 'x-amz-signature', 'file']);
     expect(await (post.form?.get('file') as File).text()).toBe('# Hi');
-    // In the session's Meko call log, as AgentK's call, without the signed post.
-    const log = readFileSync(mekoLogPath(env.core.paths.designs, 's1'), 'utf8');
-    expect(log).toContain('"tool":"knowledge_base_upload"');
-    expect(log).not.toMatch(/storage\.test|secret-sig/);
 
     // Meko's refusal comes back (worded by uploadError, tested on its own).
     env.mekoApi.handle(() => ({ status: 403, body: { error: { code: 'FORBIDDEN', message: 'forbidden' } } }));
@@ -197,6 +191,22 @@ describe('adding files to a knowledge base', () => {
       await new Promise((r) => setTimeout(r, 50));
       expect(env.mekoApi.calls.length).toBe(asked);
       expect(events).toHaveLength(5);
+
+      // A file AgentK uploads itself (a workshop's gotchas) always hears how it ended: a Meko change
+      // while it's followed or on its way ends it as unknown, and a stopping server says nothing.
+      const ends: string[] = [];
+      const dp = { id: 'dp-g', name: 'adlc/repo/demo/gotchas' };
+      statuses['dk-g'] = ['indexing'];
+      await kb.uploadFile(dp, 'g.md', Buffer.from('g'), (r) => ends.push(`g ${r}`));
+      kb.forget();
+      statuses['dk-h'] = ['indexing'];
+      const onItsWay = kb.uploadFile(dp, 'h.md', Buffer.from('h'), (r) => ends.push(`h ${r}`));
+      kb.forget();
+      await onItsWay;
+      statuses['dk-i'] = ['indexing'];
+      await kb.uploadFile(dp, 'i.md', Buffer.from('i'), (r) => ends.push(`i ${r}`));
+      kb.stop();
+      expect(ends).toEqual(['g unknown', 'h unknown']);
     } finally {
       kb.stop();
     }

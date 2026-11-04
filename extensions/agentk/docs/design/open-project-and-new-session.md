@@ -214,6 +214,10 @@ on: a new branch from a base, an existing branch, or an open pull request's bran
 them on one line (`meko · from main · ak/fix-retry-backoff`, `meko · on hsunder/foo`,
 or `meko · PR #123 · hsunder/foo`).
 
+- **Agent** and **Model.** The agent shows once more than one is available; the model shows with any
+  agent: **Default** (the agent's own), one on its list, or **Other…** with a name typed. A model
+  other than Default is named in Advanced's closed line, and **Try again** keeps it. See
+  [Picking a model](harnesses.md#picking-a-model).
 - **Repo.** The project's repo, or any other repo the Open project dialog lists (the scanned repos
   only, loaded when Advanced first opens; `GET /api/repos/branches` gives a repo's branches and
   default branch). A session in another repo still belongs to its project (datapack,

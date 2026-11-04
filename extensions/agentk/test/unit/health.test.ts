@@ -45,7 +45,7 @@ describe('health probe', () => {
     expect((await waitForServer(paths, 600)).ok).toBe(false);
   });
 
-  /** `agentk status` for this home, run as its own process (the probe answers in this one): its exit code. */
+  /** `me_koder status` for this home, run as its own process (the probe answers in this one): its exit code. */
   function status(): Promise<number> {
     const cli = fileURLToPath(new URL('../../src/server/cli.ts', import.meta.url));
     const tsx = fileURLToPath(new URL('../../node_modules/.bin/tsx', import.meta.url));
@@ -56,7 +56,7 @@ describe('health probe', () => {
   }
 
   // Meko reads it as running or not (meko status, and whether an update restarts AgentK).
-  it('agentk status exits 3 while no server runs the home, and 0 while one answers or holds the lease', async () => {
+  it('me_koder status exits 3 while no server runs the home, and 0 while one answers or holds the lease', async () => {
     expect(await status()).toBe(3);
     await serve();
     expect(await status()).toBe(0);

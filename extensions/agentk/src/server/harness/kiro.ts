@@ -8,7 +8,7 @@ import { run } from '../db.js';
 import type { HookPayload } from '../hooks.js';
 import {
   AGENTK_AGENT, agentkAgent, builtinKiroAgent, exportBuiltinKiroAgent, findKiroSession, kiroDefaultAgentName, kiroGuardScriptPath,
-  kiroSessionFile, kiroSessionLog, kiroTurns, readKiroAgent, writeKiroAgent, writeKiroGuardScript, type KiroHooks,
+  kiroSessionFile, kiroSessionLog, kiroTurns, parseKiroModels, readKiroAgent, writeKiroAgent, writeKiroGuardScript, type KiroHooks,
 } from '../kiro.js';
 import { kiroMekoServerNames } from '../mekokiro.js';
 import { kiroWorkspaceConfig } from '../headtrust.js';
@@ -20,9 +20,11 @@ import type { SessionRow } from '../store.js';
 import { TOOLS_SERVER } from '../tooldefs.js';
 import { kiroToolsServer, skillPath, toolsReady } from '../tools.js';
 import { ingestKiroMekoCalls, recordKiroTurns } from '../usage.js';
-import type { Harness, UsageRead } from './types.js';
+import type { Harness } from './types.js';
 import { cliState } from './version.js';
 
+/** How long reading Kiro's sign-in or model list may take. */
+const MODELS_TIMEOUT_MS = 15_000;
 /** How long `kiro-cli update` may run before it's stopped. */
 const UPDATE_TIMEOUT_MS = 5 * 60 * 1000;
 /** Kiro's file-writing tool, by the name its hook matchers take (Kiro 2.32 calls it `write` and keeps this alias). */
@@ -79,14 +81,34 @@ export function writeAgentkAgent(paths: Paths, cfg: Config): boolean {
  * Kiro's home grants it: `--trust-tools=*`, not `--trust-all-tools`, which makes Kiro 2.32 ask on
  * screen whether to go on with "No, exit" first (a typed prompt's Enter would pick it).
  */
-export function kiroArgs(o: { conversation: string | null; trustTools: boolean; prompt: string | null }): string[] {
+export function kiroArgs(o: { conversation: string | null; trustTools: boolean; prompt: string | null; model?: string | null }): string[] {
   const args = ['chat', '--agent', AGENTK_AGENT];
   if (o.trustTools) args.push('--trust-tools=*');
+  // Every launch, a resume's too, so the session stays on the model picked at its start.
+  if (o.model) args.push('--model', o.model);
   if (o.conversation) args.push('--resume-id', o.conversation);
   // Not after "--": with --agent, Kiro 2.32 then drops the first prompt. A leading space keeps a
   // prompt that starts with "-" (such as "---" front matter) from being read as an option.
   if (o.prompt) args.push(o.prompt.startsWith('-') ? ` ${o.prompt}` : o.prompt);
   return args;
+}
+
+/** A one-shot Kiro command's output, or null when it failed or ran out of time. */
+function kiroOutput(command: string, args: string[]): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(command, args, { timeout: MODELS_TIMEOUT_MS, env: { ...process.env, NO_COLOR: '1' } }, (err, stdout) => resolve(err ? null : String(stdout)))
+      .stdin?.end();
+  });
+}
+
+/**
+ * The models Kiro offers this sign-in (`chat --list-models`). Asked only once `whoami` says someone
+ * is signed in: signed out, the list starts Kiro's sign-in and opens a browser.
+ */
+export async function kiroModels(command: string): Promise<string[]> {
+  if ((await kiroOutput(command, ['whoami'])) === null) return [];
+  const out = await kiroOutput(command, ['chat', '--list-models', '-f', 'json']);
+  return out === null ? [] : parseKiroModels(out);
 }
 
 /** The session's own Kiro conversation, while Kiro still has it: the id a hook gave, or `findConversation` found. */
@@ -149,11 +171,12 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
         sessionId: l.row.id,
         worktree: l.row.worktree_path,
         command: cfg.kiro.command,
-        args: kiroArgs({ conversation: l.resume ? kiroConversation(l.row) : null, trustTools: cfg.kiro.trustTools, prompt: l.prompt }),
+        args: kiroArgs({ conversation: l.resume ? kiroConversation(l.row) : null, trustTools: cfg.kiro.trustTools, prompt: l.prompt, model: l.model }),
         env: l.env,
         unsetEnv: l.unsetEnv,
       };
     },
+    models: (cfg) => kiroModels(cfg.kiro.command),
     normalize: normalizeKiro,
     // Kiro's guard script exits 2 with this on stderr.
     deny: (reason) => reason,
@@ -189,15 +212,13 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
         // The context fill from the same read still counts.
         deps.log.warn(`reading Kiro's usage for ${row.id} failed`, errMsg(e));
       }
-      let mekoCalls: UsageRead['mekoCalls'] = [];
       try {
-        const meko = ingestKiroMekoCalls(db, row.id, kiroSessionLog(conv));
-        changed ||= meko.changed;
-        mekoCalls = meko.mekoCalls;
+        // Not `changed ||= …`, which would skip the read once the turns changed something.
+        if (ingestKiroMekoCalls(db, row.id, kiroSessionLog(conv)).changed) changed = true;
       } catch (e) {
         deps.log.warn(`reading Kiro's Meko calls for ${row.id} failed`, errMsg(e));
       }
-      return { changed, contextPercent: turns.at(-1)?.contextPercent, mekoCalls };
+      return { changed, contextPercent: turns.at(-1)?.contextPercent };
     },
     ask: kiroAsker,
     status: cli.status,

@@ -26,8 +26,12 @@ that hold the repo's context are listed in [MEKO.md](MEKO.md).
 ## The rules
 
 - Changes reach `main` only through PRs. CI runs the jobs of the parts a PR changes, and PRs are
-  squash-merged once the `CI gate` and `PR title` checks pass and a member of the
+  squash-merged once the `CI gate`, `PR title` and `license/cla` checks pass and a member of the
   `meko-maintainers` team approves (the `approvals` ruleset).
+- Sign the Contributor License Agreement (the YugabyteDB Individual CLA) before your first PR
+  can merge. CLA Assistant posts the `license/cla` check on each PR and links to a page where
+  you sign once with your GitHub account. If you've signed it for
+  [yugabyte-db](https://github.com/yugabyte/yugabyte-db), you're already covered.
 - PR titles are `<type>(<component>[/<area>])[!]: <summary>`, such as `fix(agentk/web): …`. Check
   one with `sh scripts/check-title.sh "<title>"`; the types and components are in the
   [commit skill](.claude/skills/commit/SKILL.md).

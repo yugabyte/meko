@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 // The repo root's scripts/ci-scope.sh decides which components' jobs a PR runs in
-// .github/workflows/ci.yml, and the CI gate job is the one check merging requires.
+// .github/workflows/ci.yml, and the CI gate job is the one CI check merging requires.
 const SCOPE = fileURLToPath(new URL('../../../../scripts/ci-scope.sh', import.meta.url));
 const WORKFLOWS = fileURLToPath(new URL('../../../../.github/workflows/', import.meta.url));
 const TESTS = fileURLToPath(new URL('..', import.meta.url));
@@ -35,6 +35,7 @@ describe('ci-scope.sh', () => {
     ['extensions/agentk/docs/design/releases.md', false, false, false],
     ['extensions/agentk/src/web/REVIEW.md', false, false, false],
     ['extensions/agentk/test/fixtures/a.md', true, false, false],
+    ['extensions/agentk/src/workshops/agentk-101/repo/README.md', true, false, false],
     ['backend/internal/paths/testdata/resolve-cases.json', true, true, true],
     ['.github/workflows/ci.yml', true, true, true],
     ['scripts/ci-scope.sh', true, true, true],

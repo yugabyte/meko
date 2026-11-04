@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import { closeSync, existsSync, openSync, readFileSync, readSync, rmSync, statSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -18,8 +19,8 @@ import { MekoClient } from './meko.js';
 import { getPaths, SHARED_TMP, tildify, type Paths } from './paths.js';
 import { buildServer, findWebDir } from './server.js';
 import { AGENTK_PATH as BASE_PATH } from '../shared/mekourls.js';
-import { hostServices, moveJobLog, servicesFor, startMoveJob } from './service.js';
-import { linkCommand } from './cmdlink.js';
+import { hostServices, moveJobLog, refreshServiceFiles, servicesFor, startMoveJob } from './service.js';
+import { COMMAND, linkCommand } from './cmdlink.js';
 import { openBrowser } from './browser.js';
 import { NoHostError, SessionHost, startDetached } from './hostclient.js';
 import { HostRunningError, startHost } from './host/host.js';
@@ -56,11 +57,11 @@ function logNoLoginPath(log: Logger, why: string | null): void {
 async function moveFirst(paths: Paths): Promise<Paths> {
   const j = readJournal(paths.home);
   const svc = servicesFor(paths.home);
-  const say = { info: (m: string) => console.error(`agentk: ${m}`), warn: (m: string, d?: string) => console.error(`agentk: ${m}${d ? `: ${d}` : ''}`) };
+  const say = { info: (m: string) => console.error(`me_koder: ${m}`), warn: (m: string, d?: string) => console.error(`me_koder: ${m}${d ? `: ${d}` : ''}`) };
   if (svc?.installed('server')) {
     if (j?.phase !== 'moving') return paths;
-    startMoveJob(svc.kind, { bin: join(process.env.AK_APP_DIR ?? join(paths.app, 'current'), 'bin', 'agentk'), from: j.from, to: j.to });
-    console.error(`agentk: AgentK's home is moving to ${j.to}; the move starts the server again when it's done. See: ${moveJobLog(j.to)}`);
+    startMoveJob(svc.kind, { bin: join(process.env.AK_APP_DIR ?? join(paths.app, 'current'), 'bin', COMMAND), from: j.from, to: j.to });
+    console.error(`me_koder: AgentK's home is moving to ${j.to}; the move starts the server again when it's done. See: ${moveJobLog(j.to)}`);
     process.exit(EXIT_BUSY);
   }
   // A version Meko just updated to moves the home only once it has proved healthy (its next start).
@@ -107,7 +108,7 @@ async function serve(): Promise<void> {
   } catch (e) {
     if (!(e instanceof InstanceBusyError)) throw e;
     // Not in server.log: that belongs to the server holding the home.
-    console.error(`agentk: ${e.message}`);
+    console.error(`me_koder: ${e.message}`);
     // Not a failed start of a version on probation: Meko's launcher counts only crashes, and this exit (75) isn't one.
     process.exit(EXIT_BUSY);
   }
@@ -128,9 +129,16 @@ async function serve(): Promise<void> {
 /** A start once it holds the home's lease: the database, Core and the web server. */
 async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceLock, log: Logger): Promise<void> {
   try {
-    if (linkCommand(paths)) log.info('added the agentk command (~/.local/bin/agentk) beside agent-k-local, its name before the rename');
+    if (linkCommand(paths)) log.info(`added the ${COMMAND} command (~/.local/bin/${COMMAND}) beside its old name`);
   } catch (e) {
-    log.warn(`couldn't add the agentk command to ~/.local/bin: ${errMsg(e)}`);
+    log.warn(`couldn't add the ${COMMAND} command to ~/.local/bin: ${errMsg(e)}`);
+  }
+  // Jobs that ran app/current/bin/agentk move to the launcher (macOS announced them after every update).
+  try {
+    const changed = refreshServiceFiles(paths.home, servicesFor(paths.home), hostname());
+    if (changed.length) log.info(`updated the LaunchAgents of the ${changed.join(' and ')}; they run from them from the next login`);
+  } catch (e) {
+    log.warn(`couldn't update the LaunchAgents: ${errMsg(e)}`);
   }
   // A version Meko just updated to keeps a copy of the database as the old version left it, before
   // its migrations run: for going back by hand (Meko's rollback restores only the program).
@@ -232,14 +240,14 @@ async function ui(): Promise<void> {
   const paths = getPaths();
   const cfg = loadConfig(paths);
   const probe = await probeLocal(paths);
-  if (!probe.ok) throw new Error(`AgentK isn't answering (${probe.error}). Start it with: agentk start (or agentk serve)`);
+  if (!probe.ok) throw new Error(`AgentK isn't answering (${probe.error}). Start it with: me_koder start (or me_koder serve)`);
   const web = await webUrl(paths, cfg);
   if (!web.url) throw new Error(`AgentK is running, but ${web.why}.`);
   if (await openBrowser(web.url)) console.log(`Opened ${web.url}`);
   else console.log(`Couldn't open a browser here. Open ${web.url} in yours.`);
 }
 
-/** `agentk _handoff --json`, which Meko runs at its start (handoff.ts): not for people to run. */
+/** `me_koder _handoff --json`, which Meko runs at its start (handoff.ts): not for people to run. */
 function runHandoff(): void {
   const paths = getPaths();
   console.log(JSON.stringify(handoff(paths, loadConfig(paths, () => undefined))));
@@ -252,7 +260,7 @@ async function logs(args: string[]): Promise<void> {
   const ni = args.findIndex((a) => a === '-n' || a === '--lines');
   const n = ni >= 0 ? Math.max(1, Number(args[ni + 1]) || 50) : 50;
   if (!existsSync(file)) {
-    console.error(`No log yet at ${file}. Is the server running? (agentk status)`);
+    console.error(`No log yet at ${file}. Is the server running? (me_koder status)`);
     process.exitCode = 1;
     return;
   }
@@ -356,7 +364,7 @@ async function host(args: string[]): Promise<void> {
       if (server) {
         throw new Error(
           `The AgentK server for this home is running (pid ${server.pid} on ${server.host}), and it would start the ` +
-            `session host again and resume every session. Stop both with: agentk stop, or use: agentk host restart`,
+            `session host again and resume every session. Stop both with: me_koder stop, or use: me_koder host restart`,
         );
       }
     }
@@ -393,7 +401,7 @@ async function host(args: string[]): Promise<void> {
     handle = await startHost({ paths, version: version(), appDir: process.env.AK_APP_DIR ?? null, log, onStop: exit });
   } catch (e) {
     if (!(e instanceof HostRunningError)) throw e;
-    console.error(`agentk: ${e.message}`);
+    console.error(`me_koder: ${e.message}`);
     process.exit(EXIT_BUSY);
   }
   // Only now: host.log belongs to the host holding the home, not to one refused above.
@@ -411,7 +419,7 @@ async function stop(): Promise<void> {
   rememberMekoHome(paths);
   const svc = servicesFor(paths.home);
   const { stopped, sessions: n } = await stopAll(paths, svc);
-  const resume = svc?.installed('server') ? 'agentk start' : 'agentk serve';
+  const resume = svc?.installed('server') ? 'me_koder start' : 'me_koder serve';
   if (forMekoSummary()) return void console.log(summaryRow('✓', 'AgentK', stopRowText(stopped, n, svc?.installed('server') === true)));
   if (!stopped) console.log('AgentK is not running.');
   else console.log(`Stopped AgentK${n ? ` and the ${n} session(s) in it. They resume at: ${resume}` : ''}.`);
@@ -430,7 +438,7 @@ async function start(): Promise<void> {
   const paths = getPaths();
   rememberMekoHome(paths);
   const svc = servicesFor(paths.home);
-  if (!svc?.installed('server')) throw new Error('No background services run this home: run agentk serve, or install them with agentk install.');
+  if (!svc?.installed('server')) throw new Error('No background services run this home: run me_koder serve, or install them with me_koder install.');
   for (const s of ['host', 'server'] as const) {
     if (!svc.installed(s)) continue;
     svc.start(s);
@@ -439,13 +447,13 @@ async function start(): Promise<void> {
   }
   console.log(forMekoSummary()
     ? summaryRow('✓', 'AgentK', 'started; sessions resume in a few seconds')
-    : 'Started AgentK; the server resumes the sessions in a few seconds. Check: agentk status');
+    : 'Started AgentK; the server resumes the sessions in a few seconds. Check: me_koder status');
 }
 
 function help(): void {
   console.log(`AgentK ${version()}
 
-Usage: agentk <command>
+Usage: me_koder <command>
 
   serve         Run the server (the background service runs this for you)
   install       Configure this host, set up Meko for Claude Code if needed (asks first; --install-deps

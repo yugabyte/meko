@@ -177,7 +177,8 @@ export class CommentService {
   /** Queues every draft, then pastes the queue into Claude if it's between turns. */
   async send(sessionId: string): Promise<SendCommentsResult> {
     const row = this.running(sessionId);
-    if (row.status === 'exited') throw new HttpError(409, 'Claude has exited. Resume the session to send comments.');
+    // An agent stopped for sitting idle starts again for them (deliver).
+    if (row.status === 'exited' && !row.idle_stopped_at) throw new HttpError(409, 'Claude has exited. Resume the session to send comments.');
     const moved = run(this.db, `UPDATE review_comments SET state = 'queued', updated_at = ? WHERE session_id = ? AND state = 'draft'`,
       Date.now(), sessionId).changes;
     if (!moved && !commentCounts(this.db, sessionId).queued) throw new HttpError(409, 'There are no draft comments to send.');
@@ -198,6 +199,12 @@ export class CommentService {
   async deliver(sessionId: string): Promise<number> {
     if (this.delivering.has(sessionId)) return 0;
     const row = this.core.sessions.row(sessionId);
+    // An agent stopped for sitting idle starts again for queued comments; they go once it's up.
+    if (row.idle_stopped_at && COMMENT_STAGES.includes(row.stage)
+      && get(this.db, "SELECT 1 AS x FROM review_comments WHERE session_id = ? AND state = 'queued'", sessionId)) {
+      this.core.sessions.wakeSoon(sessionId, 'for your review comments');
+      return 0;
+    }
     if (row.desired !== 'running' || (row.status !== 'idle' && row.status !== 'recovered')) return 0;
     if (!COMMENT_STAGES.includes(row.stage) || this.core.sessions.runtime(sessionId).busy) return 0;
     const queued = all<CommentRow>(this.db,

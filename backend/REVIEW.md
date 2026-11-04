@@ -5,10 +5,11 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 **major** (wrong behavior users will hit), **minor** (clarity, style, small gaps).
 
 - [ ] `make test` and `make lint` pass in `backend/`; new behavior has a test.
-- [ ] Tests never reach this machine's own extensions (an installed `agentk`): PATH stays
+- [ ] Tests never reach this machine's own extensions (an installed `me_koder`, or `agentk` and
+      `agent-k-local`, its old names): PATH stays
       `/usr/bin:/bin` (`noRealExtensions`) while anything can run one, and cleanups that run Meko
       commands leave the extensions alone (`setup`'s `stop --keep-extensions`), since cleanups run
-      last first and `t.Setenv` has restored PATH by then. A real `agentk stop` ends every session.
+      last first and `t.Setenv` has restored PATH by then. A real `me_koder stop` ends every session.
 - [ ] Every database call goes through `internal/store`, the only package that imports the SQLite
       driver.
       Migrations are append-only (`internal/store/migrations/`), like AgentK's.
@@ -19,7 +20,9 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
       SHA-256 ([docs/knowledge.md](docs/knowledge.md)). Otherwise it's the admin token on
       `/api/v1/status`, `/api/v1/version` and `/api/v1/web/reload`, the admin or client token
       everywhere else, and nothing there only with `[server] auth = "none"`
-      ([docs/api.md](docs/api.md)). Tokens and call-log rows never hold memory or turn text. The store
+      ([docs/api.md](docs/api.md)). Tokens and call-log rows never hold memory or turn text: a call's
+      arguments and reply go only in `call_contents`, only while Settings keeps them, for 7 days, and
+      never into an export, usage stats or a log. The store
       API and the memory engine's API listen only on their unix sockets (0600) and need the internal
       token on every route, the memory engine's `/healthz` too (its reply can say why the memory
       engine failed). The API listener binds 127.0.0.1 only, checks `Host`, and refuses requests
@@ -49,7 +52,8 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 - [ ] MCP tools keep Meko Cloud's names, arguments and reply shapes ([docs/api.md](docs/api.md)),
       built in `internal/wire` when REST shares them; errors a caller can act on are replies
       (`{"error", "detail"}`, `isError: false`); every call is recorded in the call log without its
-      arguments or text. A search takes a search slot; nothing holds the writer while it waits on
+      arguments or text, through `Options.record` (with its contents while they're kept, and its
+      client), the forwarded ones too. A search takes a search slot; nothing holds the writer while it waits on
       the memory engine. A change to what AgentK's `meko.ts` sends or reads updates the replay in
       `internal/mcp/agentk_contract_test.go`.
 - [ ] The memory engine stores only through the store API, its dependencies stay pinned, and nothing copies
@@ -81,7 +85,8 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 - [ ] A release keeps working offline: the tarball bundles the models, the embedder and the reranker
       (`MEKO_MODELS_OFFLINE`), and
       `scripts/smoke-release.sh` passes on each platform.
-- [ ] Tests never touch the user's own service, Keychain, `~/.meko` or `agentk`.
+- [ ] Tests never touch the user's own service, Keychain, `~/.meko` or `me_koder` (or its old
+      names, `agentk` and `agent-k-local`).
 - [ ] No internal hostnames, mount paths, tokens or personal data in the diff, the PR title or its
       description (the repo root's AGENTS.md): no real person's name, email, handle or IP
       address, no customer names, nothing a user wrote or stored (memories, turns, knowledge

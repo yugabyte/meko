@@ -23,7 +23,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       don't explain (a bind mount) isn't another. A home that hasn't moved there yet isn't
       covered: another Meko's commands still act on it.
 - [ ] `recover()` / `reconcile()` stay idempotent: live panes are left alone, missing panes are resumed,
-      and sessions still being created or launched are skipped (so Claude never starts twice).
+      and sessions still being created or launched are skipped (so Claude never starts twice), as
+      are sessions whose agent was stopped for sitting idle (`idle_stopped_at`), which start again
+      only when something needs them (`awake`, `wakeSoon`, Resume).
 - [ ] Nothing respawns a live pane, and a session host error other than "no host" is never read as
       every pane being gone.
 - [ ] Creating a session answers once its row is in (`begin()`): only the checks that must fail in
@@ -35,7 +37,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       mid-turn recovery is parked).
 - [ ] Status changes come from hook events or pane checks, not guesses (the one fallback: a starting
       session whose hooks never came follows its transcript). Deliberate stops (archive,
-      cleanup) don't show up as "exited".
+      cleanup) don't show up as "exited". The one deliberate stop that does is the idle stop
+      (`stopIdle`), on purpose and marked: `Session.idleStoppedAt` gives it its own dot, and the
+      gates don't block on it, since anything that needs the agent starts it first.
 - [ ] The home may be seen by other hosts (a home shared over NFS). Only the server holding the
       `server.lock` lease opens the database or binds the hook socket, the systemd units keep
       `ConditionHost=`, and nothing removes a socket or file another server may own.
@@ -85,7 +89,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       server still works with hosts back to `MIN_PROTOCOL` (a running host keeps its code across
       updates). Nothing restarts the host by itself (the home's one-time move aside), and the program
       never waits on a viewer. `serve` and `host` keep going through Meko's launcher
-      (`packaging/agentk`: `meko _launch`), which runs an update's probation and locks the host's
+      (`packaging/me_koder`: `meko _launch`), which runs an update's probation and locks the host's
       version folder against Meko's pruning; nothing in AgentK writes Meko's update records
       (`app/update-pending.json`, `bad-versions`).
 - [ ] The prerequisites check (`scripts/deps.sh`) never installs a tool (or runs Meko's setup) without first showing what it
@@ -182,7 +186,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       and the tools turned off, never opens the caller's own PR, holds the caller's own move for its
       turn's end, answers calls still running when the hook socket closes (`SessionTools.pause`), and
       leaves a `tools` event on both sessions. Only read-only tools (`readOnly` in `tooldefs.ts`) are
-      pre-allowed, and never in the user's Kiro agent; `agentk mcp` checks nothing itself and loads
+      pre-allowed, and never in the user's Kiro agent; `me_koder mcp` checks nothing itself and loads
       nothing of the server's.
 - [ ] Every path AgentK hands Claude (launcher arguments, `HOME`, `AK_HOOK_SOCK`, allow rules,
       file paths in prompts) goes through `claudePath()`, so a home under `/net` doesn't make
@@ -267,6 +271,11 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 ## 4. Data and Meko
 
 - [ ] Schema changes are a new migration; shipped migrations are unchanged.
+- [ ] A workshop's demo (`src/workshops/`, docs/design/workshops.md) stays local and the same on
+      every install: no remote, none of the user's git config, and its gotchas never in the repo.
+      A workshop's project opens no PR (`checkOpensPr`), and its host never passes a gate for the
+      user. A change to a level's patch or `gotchas.md` comes with a passing `npm run
+      check:demo-review` in the PR description.
 - [ ] Every project still has exactly one dedicated datapack; each session gets its own `MEKO_AGENT_ID` and pin (`sessionAgentId()`), never one keyed on the project id.
 - [ ] Several projects can share a repo, and many can run sessions on it at once: per-project state
       (pane names, lookups) is keyed by project id, not repo path, and git work on the repo only
@@ -313,22 +322,18 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       Meko on this computer, Settings open, session launch, after Claude Code's setup, Claude Code becoming available or not after a
       version read), only while Claude Code is available, in the background, only for a token that isn't
       AgentK's own, and reuses results for 10 minutes; one it couldn't check never raises the banner.
-- [ ] A new place AgentK calls Meko for a session wraps the call in `withMekoScope(session)`, so the
-      session's Meko call log (`mekolog.ts`) shows it; a call that belongs to no session isn't wrapped.
-      The log never holds the API key, is written only while the project has Log Meko calls on and
-      the session isn't archived, and is deleted wherever the session's pastes are (archive, failed
-      start, closing the project). Writing it never fails the call. Claude's calls reach it only
-      from the mod's `/mod/meko` end, never change what Claude gets back, and a reply read from a
-      file Claude Code saved comes only from the transcript's own session's `tool-results` folder.
-      Kiro's and OpenCode's reach it only from the usage read of their own files, once per call
-      (when its `meko_calls` row is new).
+- [ ] A new place AgentK calls Meko for a session passes the session's agent id
+      (`launchedAgentId(row)`), so Meko files the call under the session's agent with the agent's
+      own; AgentK keeps no log of what its Meko calls send or get back. The usage read of Kiro's and OpenCode's own files counts their Meko calls in
+      `meko_calls`, once per call, and passes nothing on.
 - [ ] The learn step (`learn.ts`) writes only to the session's dedicated datapack, never a shared
       one, and on the mod path never a fact that names this machine (home, AgentK's home,
       worktree, repo path, by the stored spelling and by `claudePath()`'s); the typed path relies
       on the saving rule in its prompt. It
       never holds Merge & Close or Discard past its timeout on the mod path (writes included), and
       a Discard waiting for it always ends (step done, failed, interrupted, or Discard now; a
-      restart finishes it), and **Don't save learnings** skips it entirely; it never holds a
+      restart finishes it), and skipping it (`skipLearn`: **Merge & Close without saving learnings**,
+      or Discard's **Don't save learnings**) skips it entirely; it never holds a
       hook-socket request while it works with Meko (`/mod/learn` answers at once; what follows goes
       on a poll), a failure at any step closes it and lets the close go on, and one runs at a time
       per session. Its model calls' usage is

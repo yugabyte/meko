@@ -441,9 +441,10 @@ func readClientToken(l paths.Layout, cfg config.Config) (string, error) {
 
 // installRelease installs a Managed extension from its newest release (its bad versions skipped),
 // or from the release of version, into its app folder, as Meko's own installs go: the tarball for
-// this platform checked against SHA256SUMS and its signature, unpacked, its binary checked to run here, app/current
-// pointed at it, and ~/.local/bin/<command> at app/current unless that's another data folder's. It
-// returns the link, or app/current's command when there's none.
+// this platform checked against SHA256SUMS and its signature, unpacked, its binary checked to run
+// here, app/current pointed at it, and ~/.local/bin/<command> at app/current unless that's another
+// data folder's (its old names' links into this app folder removed). It returns the link, or
+// app/current's command when there's none.
 func installRelease(ctx context.Context, l paths.Layout, upd config.Update, name, version, home string,
 	stdout io.Writer) (string, error) {
 	cat := extensions.Known[name]
@@ -455,7 +456,7 @@ func installRelease(ctx context.Context, l paths.Layout, upd config.Update, name
 	rels, err := c.Releases(dl)
 	looking.Clear()
 	if err != nil {
-		return "", err // with no token, GitHub's refusal says why: its rate limit, or an internal repo
+		return "", err // with no token, GitHub's refusal says why: its rate limit, or a private repo
 	}
 	app := cat.App(l.Root, name)
 	goos, arch := update.Platform()
@@ -497,7 +498,12 @@ func installRelease(ctx context.Context, l paths.Layout, upd config.Update, name
 			cat.Command, cat.Title, app.CurrentExe())
 		return app.CurrentExe(), nil
 	}
-	return app.LinkCommand(home)
+	link, lerr := app.LinkCommand(home)
+	if lerr != nil {
+		return "", lerr
+	}
+	// Its command's old names (agentk before me_koder) go once the new one is there.
+	return link, cat.UnlinkOldCommands(app, home)
 }
 
 // tooOld reports whether an installed AgentK is a release from before --meko-url: its
@@ -518,7 +524,7 @@ func tooOld(cmd string) bool {
 
 // runAttached runs a command with env and stdin (the terminal, where an installer asks its
 // questions, or nil for none), until it ends or ctx does. Without a terminal it runs in a process
-// group of its own, so ending ctx stops what it started too (an installer's agentk install).
+// group of its own, so ending ctx stops what it started too (an installer's me_koder install).
 func runAttached(ctx context.Context, name string, args, env []string, stdin io.Reader,
 	stdout, stderr io.Writer) error {
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // G204: an extension's own command or installer

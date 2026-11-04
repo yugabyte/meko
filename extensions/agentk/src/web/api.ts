@@ -1,6 +1,8 @@
-import type { CodeReviewDetail } from '../shared/codereview';
+import type { CodeReviewDetail, CodeReviewFinding } from '../shared/codereview';
 import type {
   AppState,
+  Workshop,
+  WorkshopStart,
   CloseWorkItemsRequest,
   CreateWorkItemRequest,
   ReorderWorkItemsRequest,
@@ -21,7 +23,7 @@ import type {
   AttachDatapackRequest,
   ChangeSide,
   CloseSessionRequest,
-  ClaudeCodeStatus, HarnessStatus,
+  ClaudeCodeStatus, HarnessModels, HarnessStatus,
   CreateProjectRequest,
   CreateSessionRequest,
   CloneRepoRequest,
@@ -30,12 +32,8 @@ import type {
   DesignDoc,
   DiscardCheck,
   InviteCheck,
-  MekoCallDetail,
-  MekoCallPage,
   MekoDatapack,
-  MekoCallBy,
   KnowledgeUpload,
-  MekoLogInfo,
   MoveSessionRequest,
   OpenedProject,
   OpenPrRequest,
@@ -47,6 +45,7 @@ import type {
   RepoBranches,
   ReposResponse,
   HeldReview,
+  FindingChoiceRequest,
   HeldReviewsRequest,
   HeldReviewsResult,
   PrReviewers,
@@ -166,6 +165,8 @@ export const api = {
   declineInvite: (datapackId: string) => post<void>(`/api/invites/${enc(datapackId)}/decline`),
   laterInvite: (datapackId: string) => post<void>(`/api/invites/${enc(datapackId)}/later`),
 
+  workshops: () => get<Workshop[]>('/api/workshops'),
+  startWorkshop: (id: string) => post<WorkshopStart>(`/api/workshops/${enc(id)}/start`, {}),
   openProject: (b: CreateProjectRequest) => post<OpenedProject>('/api/projects', b),
   updateProject: (id: string, b: UpdateProjectRequest) => request<Project>('PATCH', `/api/projects/${enc(id)}`, b),
   closeProject: (id: string) => request<void>('DELETE', `/api/projects/${enc(id)}`),
@@ -224,6 +225,7 @@ export const api = {
   updateSession: (id: string, b: UpdateSessionRequest) => request<Session>('PATCH', `/api/sessions/${enc(id)}`, b),
   /** A task's latest code review (or a code-review session's own), in full; 404 when it has none. */
   codeReview: (id: string) => get<CodeReviewDetail>(`/api/sessions/${enc(id)}/code-review`),
+  setFinding: (id: string, key: string, b: FindingChoiceRequest) => request<CodeReviewFinding>('PATCH', `/api/sessions/${enc(id)}/code-review/findings/${enc(key)}`, b),
   changes: (id: string, commit?: string | null) => get<SessionChanges>(`/api/sessions/${enc(id)}/changes${commit ? `?commit=${enc(commit)}` : ''}`),
   baseBranches: (id: string) => get<string[]>(`/api/sessions/${enc(id)}/base-branches`),
   /** URL of one side of a changed image; `v` busts the cache when the diff is refetched. */
@@ -257,21 +259,6 @@ export const api = {
   reviseDesign: (id: string, b: DesignAnswersRequest) => post<void>(`/api/sessions/${enc(id)}/design/answers`, b),
   answerAsk: (id: string, askId: string, b: AskAnswerRequest) => post<void>(`/api/sessions/${enc(id)}/ask/${enc(askId)}`, b),
   discardCheck: (id: string) => get<DiscardCheck>(`/api/sessions/${enc(id)}/discard-check`),
-  mekoLogs: (projectId: string) => get<MekoLogInfo[]>(`/api/projects/${enc(projectId)}/meko-logs`),
-  mekoCalls: (id: string, q: { before?: number; tool?: string; by?: MekoCallBy | ''; failed?: boolean } = {}) => {
-    const qs = new URLSearchParams();
-    if (q.before !== undefined) qs.set('before', String(q.before));
-    if (q.tool) qs.set('tool', q.tool);
-    if (q.by) qs.set('by', q.by);
-    if (q.failed) qs.set('failed', '1');
-    const tail = qs.toString();
-    return get<MekoCallPage>(`/api/sessions/${enc(id)}/meko-calls${tail ? `?${tail}` : ''}`);
-  },
-  mekoCall: (id: string, offset: number, callId: string) =>
-    get<MekoCallDetail>(`/api/sessions/${enc(id)}/meko-calls/${offset}?id=${enc(callId)}`),
-  /** Where the browser downloads the session's Meko call log (a plain link: Meko's sign-in cookie goes with it). */
-  mekoLogUrl: (id: string) => appUrl(`/api/sessions/${enc(id)}/meko-calls.jsonl`),
-  clearMekoLog: (id: string) => request<void>('DELETE', `/api/sessions/${enc(id)}/meko-calls`),
 
   settings: () => get<Settings>('/api/settings'),
   saveSettings: (b: SettingsUpdate) => request<Settings>('PUT', '/api/settings', b),
@@ -280,6 +267,7 @@ export const api = {
   updateClaude: () => post<ClaudeCodeStatus>('/api/claude/update'),
   refreshHarnesses: () => post<HarnessStatus[]>('/api/harnesses/refresh'),
   updateHarness: (id: HarnessId) => post<HarnessStatus>(`/api/harnesses/${id}/update`),
+  harnessModels: (id: HarnessId) => get<HarnessModels>(`/api/harnesses/${id}/models`),
   update: () => get<UpdateStatus>('/api/update'),
   updateNotes: (from: string, to: string) => get<ReleaseNotes>(`/api/update/notes?${new URLSearchParams({ from, to })}`),
 };

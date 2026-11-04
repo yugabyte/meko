@@ -1,4 +1,4 @@
-// The entry sessions start `agentk mcp` by (tools.ts, toolsCommand): the tools' MCP server alone,
+// The entry sessions start `me_koder mcp` by (tools.ts, toolsCommand): the tools' MCP server alone,
 // without the CLI's imports, which load the whole server.
 import { runMcp } from './mcp.js';
 

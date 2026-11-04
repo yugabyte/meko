@@ -21,7 +21,7 @@ import (
 	"github.com/yugabyte/meko/backend/internal/update"
 )
 
-// fakePresenter is a Presenter release's bin/meko_presenter, keeping its state in its folder in the data
+// fakePresenter is a Presenter release's bin/me_presenter, keeping its state in its folder in the data
 // folder (MEKO_HOME, which Meko sets): version --json, install and start log to its log, status
 // succeeds while it runs, its handoff names web.sock there, and it's busy while busy is there. With
 // rollBackTo, start fails three
@@ -50,14 +50,14 @@ esac
 `
 }
 
-// presenterTarball is presenter-<version>-<os>-<arch>.tar.gz holding bin/meko_presenter.
+// presenterTarball is presenter-<version>-<os>-<arch>.tar.gz holding bin/me_presenter.
 func presenterTarball(t *testing.T, version, rollBackTo string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
 	body := fakePresenter(version, rollBackTo)
-	if err := tw.WriteHeader(&tar.Header{Name: "presenter-" + version + "/bin/meko_presenter", Mode: 0o755,
+	if err := tw.WriteHeader(&tar.Header{Name: "presenter-" + version + "/bin/me_presenter", Mode: 0o755,
 		Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func presenterReleases(t *testing.T, version string, tgz []byte) {
 const installedVersion = "0.20261024.0"
 
 // installedPresenter is a release install of Presenter's installedVersion, as extension install
-// leaves it: app/<version>, app/current, ~/.local/bin/meko_presenter, and the registry naming that
+// leaves it: app/<version>, app/current, ~/.local/bin/me_presenter, and the registry naming that
 // link.
 func installedPresenter(t *testing.T, dir string) update.App {
 	t.Helper()
@@ -257,7 +257,7 @@ func TestUpdateExtensionRefuses(t *testing.T) {
 
 // extension install presenter, with no presenter here, installs Presenter's newest release itself:
 // no installer script, the tarball unpacked into its folder's app/, linked from ~/.local/bin, then
-// set up with meko_presenter install as one already there.
+// set up with me_presenter install as one already there.
 func TestInstallExtensionInstallsPresentersRelease(t *testing.T) {
 	const version = "0.20261024.0"
 	dir, port := setup(t)
@@ -274,13 +274,13 @@ func TestInstallExtensionInstallsPresentersRelease(t *testing.T) {
 	}
 	home, _ := os.UserHomeDir()
 	reg, _ := extensions.Load(dir)
-	if reg.Entries["presenter"].Command != filepath.Join(home, ".local", "bin", "meko_presenter") {
+	if reg.Entries["presenter"].Command != filepath.Join(home, ".local", "bin", "me_presenter") {
 		t.Errorf("registry %+v", reg.Entries)
 	}
 	got := readLog(t, filepath.Join(filepath.Dir(app.Root), "log"))
 	if !strings.HasPrefix(got, "install --meko-url http://127.0.0.1:"+port+"/mcp --meko-key ") ||
 		!strings.HasSuffix(got, " MEKO_HOME="+dir+"\n") {
-		t.Errorf("meko_presenter install got %q", got)
+		t.Errorf("me_presenter install got %q", got)
 	}
 }
 
@@ -292,7 +292,7 @@ func TestDestroyRemovesTheLinkToPresentersRelease(t *testing.T) {
 	dir := shortDir(t)
 	installedPresenter(t, dir)
 	home, _ := os.UserHomeDir()
-	link := filepath.Join(home, ".local", "bin", "meko_presenter")
+	link := filepath.Join(home, ".local", "bin", "me_presenter")
 	code, out, errs := run("destroy", "--data-dir", dir, "--force", "--with-extensions")
 	want(t, "destroy", code, 0, out+errs, "Uninstalling Presenter")
 	if _, err := os.Lstat(link); !os.IsNotExist(err) {
@@ -473,7 +473,7 @@ func TestRunExtensionUpdates(t *testing.T) {
 	}
 }
 
-// With ~/.local/bin/meko_presenter running another data folder's release, extension install
+// With ~/.local/bin/me_presenter running another data folder's release, extension install
 // presenter installs this one's own and leaves that link alone.
 func TestInstallExtensionLeavesAnotherDataFoldersLink(t *testing.T) {
 	const version = "0.20261025.0"
@@ -481,7 +481,7 @@ func TestInstallExtensionLeavesAnotherDataFoldersLink(t *testing.T) {
 	noRealExtensions(t)
 	other := installedPresenter(t, shortDir(t))
 	home, _ := os.UserHomeDir()
-	link := filepath.Join(home, ".local", "bin", "meko_presenter")
+	link := filepath.Join(home, ".local", "bin", "me_presenter")
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
 	presenterReleases(t, version, presenterTarball(t, version, ""))

@@ -1,6 +1,5 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { hostname, userInfo } from 'node:os';
-import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CallHomeInstall, CallHomeReport, YbCallHome } from '../../src/shared/types.js';
@@ -10,17 +9,15 @@ import { FILE_TYPE_LIMIT, countFileTypes, extOf, parseNumstatZ, readFileTypes, s
 import type { Logger } from '../../src/server/log.js';
 import {
   CHECK_EVERY_MS, FIRST_CHECK_MS, FIRST_DAY_MS, FIRST_DAY_SEND_AFTER_MS, FIRST_REPORT_DAYS, MAX_REPORT_BYTES, NEW_INSTALL_FIRST_CHECK_MS, REPORT_DAYS,
-  SEND_AFTER_MS, VERSION_RE, YB_DIAGNOSTICS_URL, CallHomeService, reportVersion, bakedCallHomeUrl, buildReport, callHomeKind,
-  installFacts, ybCallHomeDisabled, ybTimestamp, type CallHomeTarget, type Probe,
+  SEND_AFTER_MS, VERSION_RE, CallHomeService, reportVersion, buildReport, callHomeKind,
+  installFacts, ybCallHomeDisabled, ybTimestamp, type Probe,
 } from '../../src/server/callhome.js';
 import { REPORTED_TOOLS, firstTurnMeko } from '../../src/server/mekousage.js';
 import { usageOverview } from '../../src/server/usage.js';
-import { tempDir } from '../helpers.js';
 
 const SCHEMA = JSON.parse(readFileSync(fileURLToPath(new URL('../../docs/call-home-report.schema.json', import.meta.url)), 'utf8')) as Schema;
 
 // ---- a small JSON Schema checker for the keywords docs/call-home-report.schema.json uses ----
-// (The collector, yugabyte/agent-k services/ak-local-call-home, has an identical copy.)
 
 type Schema = { [k: string]: unknown };
 const KEYWORDS = new Set([
@@ -562,7 +559,7 @@ describe('the usage stats report', () => {
     expect([...tools.enum].sort()).toEqual([...REPORTED_TOOLS, 'other'].sort());
   });
 
-  it('fits the collector\'s 64 KB in 7 days with every list full', () => {
+  it('fits MAX_REPORT_BYTES in 7 days with every list full', () => {
     const r = report(seeded(), REPORT_DAYS);
     const big = 123_456_789_012;
     const meko = {
@@ -626,12 +623,12 @@ describe('what the report says about the install', () => {
     expect(noApi.meko).toEqual({ enabled: true, keySource: 'config', sharing: 'none' });
   });
 
-  it('takes only versions the collector keeps: numbers, one letter after them, and a lane or number as prerelease', () => {
+  it('takes only versions the schema keeps: numbers, one letter after them, and a lane or number as prerelease', () => {
     for (const v of ['0.20261001.1', 'v0.20261001.1', '0.0.0-dev', '1.2.3-beta.2', '22.18.0', '3.2a', '2.4.1', '1.0.0+20261001']) expect(VERSION_RE.test(v), v).toBe(true);
     for (const v of ['1.2.3-alice', '1.2.3-foo.1', '3.2-next-x', 'next-3.4', '1.2.3.4.5', '']) expect(VERSION_RE.test(v), v).toBe(false);
   });
 
-  it('cuts a version the collector would not keep to its leading numbers', () => {
+  it('cuts a version the schema would not keep to its leading numbers', () => {
     expect(reportVersion('0.20261001.1')).toBe('0.20261001.1');
     expect(reportVersion('24.0.0-nightly20250101abc')).toBe('24.0.0');
     expect(reportVersion('0.20261001.1-3-gabc1234')).toBe('0.20261001.1');
@@ -647,26 +644,18 @@ describe('what the report says about the install', () => {
     expect(facts).not.toHaveProperty('opencode');
     expect(facts).toMatchObject({ version: '0.0.0', claudeCode: '', meko: { enabled: false, keySource: 'none', sharing: 'none' } });
   });
-
-  it('reads the collector URL a release build carries', () => {
-    const dir = tempDir('akl-baked-');
-    expect(bakedCallHomeUrl(dir)).toBe('');
-    writeFileSync(join(dir, 'CALL_HOME_URL'), 'https://collector.test\n');
-    expect(bakedCallHomeUrl(dir)).toBe('https://collector.test');
-    expect(bakedCallHomeUrl(undefined)).toBe('');
-  });
 });
 
 describe('sending the report', () => {
   afterEach(() => vi.useRealTimers());
 
-  function setup(o: { url?: string; baked?: string; status?: number; maxReportBytes?: number } = {}) {
+  function setup(o: { diagnosticsUrl?: string; release?: boolean; env?: NodeJS.ProcessEnv; status?: number; maxReportBytes?: number } = {}) {
     const db = seeded();
     const cfg: Config = structuredClone(DEFAULT_CONFIG);
-    cfg.callHome.url = o.url ?? 'https://collector.test/v1/report';
+    cfg.callHome.diagnosticsUrl = o.diagnosticsUrl ?? '';
     const clock = { now: NOW };
     const calls: { url: string; init: RequestInit }[] = [];
-    const answer = { status: o.status ?? 204, error: null as Error | null };
+    const answer = { status: o.status ?? 200, error: null as Error | null };
     const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
       calls.push({ url: String(url), init: init ?? {} });
       if (answer.error) throw answer.error;
@@ -675,27 +664,41 @@ describe('sending the report', () => {
     const logs: string[] = [];
     const log: Logger = { info: (m) => logs.push(`info ${m}`), warn: (m) => logs.push(`warn ${m}`), error: (m) => logs.push(`error ${m}`) };
     const service = () => new CallHomeService({
-      db, config: () => cfg, version: '0.20260928.0', log,
-      fetch: fetchImpl, now: () => clock.now, bakedUrl: () => o.baked ?? '', probe: async () => { throw new Error('no probes in tests'); },
-      maxReportBytes: o.maxReportBytes, env: {},
+      db, config: () => cfg, version: '0.20260928.0', log, fetch: fetchImpl, now: () => clock.now,
+      release: () => o.release ?? true, env: o.env ?? {}, probe: async () => { throw new Error('no probes in tests'); },
+      maxReportBytes: o.maxReportBytes,
     });
-    const body = (i: number) => JSON.parse(String(calls[i].init.body)) as CallHomeReport;
-    return { db, cfg, clock, calls, answer, logs, service, body };
+    const sent = (i: number) => JSON.parse(String(calls[i].init.body)) as YbCallHome;
+    const body = (i: number) => sent(i).payload;
+    return { db, cfg, clock, calls, answer, logs, service, sent, body };
   }
+
+  it("sends the report in yugabyted's envelope to YugabyteDB's call home service from a release install", async () => {
+    const t = setup();
+    // A report AgentK's own collector received before doesn't count: the first one here is still 30 days.
+    kvSet(t.db, 'call_home_last_sent', String(NOW - CHECK_EVERY_MS));
+    expect(await t.service().tick()).toBe(true);
+    expect(t.calls).toHaveLength(1);
+    expect(t.calls[0].url).toBe('https://diagnostics.meko.yugabyte.com');
+    expect(t.calls[0].init.method).toBe('POST');
+    expect(t.calls[0].init.headers).toMatchObject({ 'Content-Type': 'application/json', 'User-Agent': 'agentk/0.20260928.0' });
+    const sent = t.sent(0);
+    expect(Object.keys(sent).sort()).toEqual(['callhome_type', 'command', 'install_id', 'payload', 'timestamp', 'version']);
+    expect(sent).toMatchObject({ callhome_type: 'agentk', command: 'heartbeat', timestamp: '2026-09-28T12:00:00.000000', version: '0.20260928.0' });
+    expect(sent.install_id).toBe(kvGet(t.db, 'call_home_install_id'));
+    expect(sent.payload.installId).toBe(sent.install_id);
+    expect(sent.payload.days).toHaveLength(FIRST_REPORT_DAYS);
+    expect(validate(sent.payload, SCHEMA)).toEqual([]);
+  });
 
   it('sends a first report of 30 days, then 7 days every hour for a day, then once a day', async () => {
     const t = setup();
     const svc = t.service();
     expect(await svc.tick()).toBe(true);
-    expect(t.calls).toHaveLength(1);
-    expect(t.calls[0].url).toBe('https://collector.test/v1/report');
-    expect(t.calls[0].init.method).toBe('POST');
-    expect(t.calls[0].init.headers).toMatchObject({ 'Content-Type': 'application/json', 'User-Agent': 'agent-k-local/0.20260928.0' });
     const first = t.body(0);
     expect(first.days).toHaveLength(FIRST_REPORT_DAYS);
     expect(first.install.firstDay).toBe('2026-09-28');
-    expect(validate(first, SCHEMA)).toEqual([]);
-    expect(kvGet(t.db, 'call_home_first_sent')).toBe(String(NOW));
+    expect(kvGet(t.db, 'yb_call_home_first_sent')).toBe(String(NOW));
 
     // The first day: a report at every hourly check, not between them.
     t.clock.now = NOW + FIRST_DAY_SEND_AFTER_MS - 60_000;
@@ -712,7 +715,7 @@ describe('sending the report', () => {
     }
     expect(t.calls).toHaveLength(24);
     // The first report's time stays put.
-    expect(kvGet(t.db, 'call_home_first_sent')).toBe(String(NOW));
+    expect(kvGet(t.db, 'yb_call_home_first_sent')).toBe(String(NOW));
 
     // Then once a day.
     const lastHourly = t.clock.now;
@@ -729,40 +732,39 @@ describe('sending the report', () => {
   it("stamps a report with its check's time, however long the send takes", async () => {
     const t = setup();
     const svc = new CallHomeService({
-      db: t.db, config: () => t.cfg, version: '0.20260928.0',
+      db: t.db, config: () => t.cfg, version: '0.20260928.0', release: () => true, env: {},
       log: { info() {}, warn() {}, error() {} }, now: () => t.clock.now, probe: async () => '',
       fetch: (async () => {
         t.clock.now += 6 * 60_000;
-        return new Response(null, { status: 204 });
+        return new Response(null, { status: 200 });
       }) as typeof fetch,
     });
     expect(await svc.tick()).toBe(true);
-    expect(kvGet(t.db, 'call_home_first_sent')).toBe(String(NOW));
-    expect(kvGet(t.db, 'call_home_last_sent')).toBe(String(NOW));
+    expect(kvGet(t.db, 'yb_call_home_first_sent')).toBe(String(NOW));
+    expect(kvGet(t.db, 'yb_call_home_last_sent')).toBe(String(NOW));
     t.clock.now = NOW + CHECK_EVERY_MS;
     expect(await svc.tick()).toBe(true);
-    expect(kvGet(t.db, 'call_home_last_sent')).toBe(String(NOW + CHECK_EVERY_MS));
+    expect(kvGet(t.db, 'yb_call_home_last_sent')).toBe(String(NOW + CHECK_EVERY_MS));
   });
 
   it('reports once a day from an install that reported before the first report was kept', async () => {
     const t = setup();
-    kvSet(t.db, 'call_home_last_sent', String(NOW - CHECK_EVERY_MS));
+    kvSet(t.db, 'yb_call_home_last_sent', String(NOW - CHECK_EVERY_MS));
     const svc = t.service();
     expect(await svc.tick()).toBe(false);
     t.clock.now += SEND_AFTER_MS - CHECK_EVERY_MS;
     expect(await svc.tick()).toBe(true);
-    expect(kvGet(t.db, 'call_home_first_sent')).toBeNull();
+    expect(kvGet(t.db, 'yb_call_home_first_sent')).toBeNull();
   });
 
-  it('drops the oldest days of a report too big for the collector until it fits', async () => {
+  it('drops the oldest days of a report too big for MAX_REPORT_BYTES until it fits', async () => {
     const size = (days: number) => JSON.stringify(report(seeded(), days)).length;
     const max = Math.round((size(REPORT_DAYS) + size(FIRST_REPORT_DAYS)) / 2);
     const t = setup({ maxReportBytes: max });
     expect(await t.service().tick()).toBe(true);
-    const sent = String(t.calls[0].init.body);
     const days = t.body(0).days;
     const all = report(seeded(), FIRST_REPORT_DAYS).days;
-    expect(Buffer.byteLength(sent)).toBeLessThanOrEqual(max);
+    expect(Buffer.byteLength(JSON.stringify(t.body(0)))).toBeLessThanOrEqual(max);
     expect(days.length).toBeGreaterThan(REPORT_DAYS);
     expect(days.length).toBeLessThan(FIRST_REPORT_DAYS);
     // The newest days, as many as fit: one more wouldn't have.
@@ -772,13 +774,13 @@ describe('sending the report', () => {
     // A later report too: a byte over drops its oldest day.
     const sendLater = async (maxReportBytes?: number) => {
       const s = setup({ maxReportBytes });
-      kvSet(s.db, 'call_home_last_sent', String(NOW - SEND_AFTER_MS));
+      kvSet(s.db, 'yb_call_home_last_sent', String(NOW - SEND_AFTER_MS));
       expect(await s.service().tick()).toBe(true);
       return s;
     };
     const full = await sendLater();
     expect(full.body(0).days).toHaveLength(REPORT_DAYS);
-    const later = await sendLater(Buffer.byteLength(String(full.calls[0].init.body)) - 1);
+    const later = await sendLater(Buffer.byteLength(JSON.stringify(full.body(0))) - 1);
     expect(later.body(0).days).toEqual(full.body(0).days.slice(1));
   });
 
@@ -795,7 +797,7 @@ describe('sending the report', () => {
     expect(t.calls).toHaveLength(2);
   });
 
-  it('sends nothing, and builds nothing, while turned off', async () => {
+  it('sends nothing, and builds nothing, while turned off by [call_home] enabled or YB_DISABLE_CALLHOME', async () => {
     const t = setup();
     t.cfg.callHome.enabled = false;
     expect(await t.service().tick()).toBe(false);
@@ -804,38 +806,36 @@ describe('sending the report', () => {
     // Turned back on: sent at the next check, with no restart.
     t.cfg.callHome.enabled = true;
     expect(await t.service().tick()).toBe(true);
+
+    const env = setup({ env: { YB_DISABLE_CALLHOME: 'true' } });
+    expect(await env.service().tick()).toBe(false);
+    expect(env.calls).toHaveLength(0);
   });
 
-  it("sends nothing without a collector URL, and uses a release build's URL when config.toml has none", async () => {
-    expect(await setup({ url: '' }).service().tick()).toBe(false);
-    expect(await setup({ url: 'not a url' }).service().tick()).toBe(false);
-    expect(await setup({ url: 'ftp://collector.test' }).service().tick()).toBe(false);
-
-    // The URL is the collector's full report URL, used as given.
-    const baked = setup({ url: '', baked: 'https://baked.test/v1/report' });
-    expect(await baked.service().tick()).toBe(true);
-    expect(baked.calls[0].url).toBe('https://baked.test/v1/report');
-
-    const both = setup({ url: 'https://mine.test/collect', baked: 'https://baked.test/v1/report' });
-    await both.service().tick();
-    expect(both.calls[0].url).toBe('https://mine.test/collect');
+  it('sends nothing from a dev server unless [call_home] diagnostics_url names an http(s) URL', async () => {
+    expect(await setup({ release: false }).service().tick()).toBe(false);
+    const mine = setup({ release: false, diagnosticsUrl: 'http://127.0.0.1:9/' });
+    expect(await mine.service().tick()).toBe(true);
+    expect(mine.calls[0].url).toBe('http://127.0.0.1:9/');
+    expect(await setup({ diagnosticsUrl: 'not a url' }).service().tick()).toBe(false);
+    expect(await setup({ diagnosticsUrl: 'ftp://diagnostics.test' }).service().tick()).toBe(false);
   });
 
   it('tries again every hour after a failure, logging it once', async () => {
     const t = setup({ status: 500 });
     const svc = t.service();
     expect(await svc.tick()).toBe(false);
-    t.answer.status = 204;
+    t.answer.status = 200;
     t.answer.error = new Error('ECONNREFUSED');
     t.clock.now += CHECK_EVERY_MS;
     expect(await svc.tick()).toBe(false);
-    expect(t.logs).toEqual(['warn sending usage stats failed; trying again every hour']);
-    expect(kvGet(t.db, 'call_home_last_sent')).toBeNull();
+    expect(t.logs).toEqual(['warn sending usage stats to YugabyteDB failed; trying again every hour']);
+    expect(kvGet(t.db, 'yb_call_home_last_sent')).toBeNull();
 
     t.answer.error = null;
     t.clock.now += CHECK_EVERY_MS;
     expect(await svc.tick()).toBe(true);
-    expect(t.logs.at(-1)).toBe('info usage stats sent');
+    expect(t.logs.at(-1)).toBe('info usage stats sent to YugabyteDB');
     // Still the first report: nothing had been received.
     expect(t.body(2).days).toHaveLength(FIRST_REPORT_DAYS);
   });
@@ -852,8 +852,8 @@ describe('sending the report', () => {
     vi.useFakeTimers();
     const t = setup();
     const service = () => new CallHomeService({
-      db: t.db, config: () => t.cfg, version: '0.20260928.0',
-      log: { info() {}, warn() {}, error() {} }, fetch: (async () => new Response(null, { status: 204 })) as typeof fetch,
+      db: t.db, config: () => t.cfg, version: '0.20260928.0', release: () => true, env: {},
+      log: { info() {}, warn() {}, error() {} }, fetch: (async () => new Response(null, { status: 200 })) as typeof fetch,
       now: () => Date.now(), probe: async () => '', random: () => 0.5,
     });
     vi.setSystemTime(NOW);
@@ -874,13 +874,13 @@ describe('sending the report', () => {
     // No report yet: the first one goes out within 5 minutes.
     expect(NEW_INSTALL_FIRST_CHECK_MS[1]).toBeLessThanOrEqual(5 * 60 * 1000);
     await firstCheck(NEW_INSTALL_FIRST_CHECK_MS);
-    expect(kvGet(t.db, 'call_home_first_sent')).not.toBeNull();
+    expect(kvGet(t.db, 'yb_call_home_first_sent')).not.toBeNull();
     // Restarted in its first day: still soon, but not before the next report is due, so the
     // hourly checks that follow don't skip one.
-    const sent = Number(kvGet(t.db, 'call_home_first_sent'));
+    const sent = Number(kvGet(t.db, 'yb_call_home_first_sent'));
     vi.setSystemTime(sent + 50 * 60_000);
     await firstCheck([FIRST_DAY_SEND_AFTER_MS - 50 * 60_000, FIRST_DAY_SEND_AFTER_MS - 50 * 60_000]);
-    expect(Number(kvGet(t.db, 'call_home_last_sent'))).toBe(sent + FIRST_DAY_SEND_AFTER_MS);
+    expect(Number(kvGet(t.db, 'yb_call_home_last_sent'))).toBe(sent + FIRST_DAY_SEND_AFTER_MS);
     vi.setSystemTime(sent + FIRST_DAY_MS - 60_000);
     await firstCheck(NEW_INSTALL_FIRST_CHECK_MS);
     // Past its first day: the usual spread.
@@ -895,94 +895,6 @@ describe('sending the report', () => {
     svc2.stop();
     await vi.advanceTimersByTimeAsync(FIRST_CHECK_MS[1]);
     expect(tick2).not.toHaveBeenCalled();
-  });
-});
-
-
-describe('sending the report to YugabyteDB', () => {
-  function setup(o: { diagnosticsUrl?: string; release?: boolean; env?: NodeJS.ProcessEnv } = {}) {
-    const db = seeded();
-    const cfg: Config = structuredClone(DEFAULT_CONFIG);
-    cfg.callHome.url = 'https://collector.test/v1/report';
-    cfg.callHome.diagnosticsUrl = o.diagnosticsUrl ?? '';
-    const clock = { now: NOW };
-    const calls: { url: string; init: RequestInit }[] = [];
-    // Status by URL: YugabyteDB's and AgentK's collector can fail apart.
-    const status = new Map<string, number>();
-    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
-      calls.push({ url: String(url), init: init ?? {} });
-      return new Response(null, { status: status.get(String(url)) ?? 200 });
-    }) as typeof fetch;
-    const logs: string[] = [];
-    const log: Logger = { info: (m) => logs.push(`info ${m}`), warn: (m) => logs.push(`warn ${m}`), error: (m) => logs.push(`error ${m}`) };
-    const service = (target: CallHomeTarget) => new CallHomeService({
-      target, db, config: () => cfg, version: '0.20260928.0', log, fetch: fetchImpl, now: () => clock.now,
-      bakedUrl: () => '', release: () => o.release ?? true, env: o.env ?? {}, probe: async () => { throw new Error('no probes in tests'); },
-    });
-    const to = (url: string) => calls.filter((c) => c.url === url);
-    return { db, cfg, clock, calls, status, logs, service, to };
-  }
-
-  it("sends the same report in yugabyted's envelope to diagnostics.yugabyte.com from a release install", async () => {
-    const t = setup();
-    expect(await t.service('yugabyte').tick()).toBe(true);
-    expect(t.calls).toHaveLength(1);
-    expect(t.calls[0].url).toBe(YB_DIAGNOSTICS_URL);
-    expect(t.calls[0].init.headers).toMatchObject({ 'Content-Type': 'application/json', 'User-Agent': 'agentk/0.20260928.0' });
-    const sent = JSON.parse(String(t.calls[0].init.body)) as YbCallHome;
-    expect(Object.keys(sent).sort()).toEqual(['callhome_type', 'command', 'install_id', 'payload', 'timestamp', 'version']);
-    expect(sent).toMatchObject({ callhome_type: 'agentk', command: 'heartbeat', timestamp: '2026-09-28T12:00:00.000000', version: '0.20260928.0' });
-    expect(sent.install_id).toBe(kvGet(t.db, 'call_home_install_id'));
-    expect(sent.payload.installId).toBe(sent.install_id);
-    expect(sent.payload.days).toHaveLength(FIRST_REPORT_DAYS);
-    expect(validate(sent.payload, SCHEMA)).toEqual([]);
-    // Its own schedule: AgentK's collector's isn't touched.
-    expect(kvGet(t.db, 'yb_call_home_last_sent')).toBe(String(NOW));
-    expect(kvGet(t.db, 'yb_call_home_first_sent')).toBe(String(NOW));
-    expect(kvGet(t.db, 'call_home_last_sent')).toBeNull();
-  });
-
-  it('sends nothing from a dev server unless [call_home] diagnostics_url names a URL', async () => {
-    expect(await setup({ release: false }).service('yugabyte').tick()).toBe(false);
-    const mine = setup({ release: false, diagnosticsUrl: 'http://127.0.0.1:9/' });
-    expect(await mine.service('yugabyte').tick()).toBe(true);
-    expect(mine.calls[0].url).toBe('http://127.0.0.1:9/');
-    expect(await setup({ diagnosticsUrl: 'not a url' }).service('yugabyte').tick()).toBe(false);
-  });
-
-  it('keeps its schedule apart from the AgentK collector: one failing never holds back the other', async () => {
-    const t = setup();
-    t.status.set(YB_DIAGNOSTICS_URL, 400);
-    const agentk = t.service('agentk');
-    const yb = t.service('yugabyte');
-    expect(await agentk.tick()).toBe(true);
-    expect(await yb.tick()).toBe(false);
-    expect(t.logs).toEqual(['warn sending usage stats to YugabyteDB failed; trying again every hour']);
-    expect(kvGet(t.db, 'yb_call_home_last_sent')).toBeNull();
-
-    t.status.delete(YB_DIAGNOSTICS_URL);
-    t.clock.now += CHECK_EVERY_MS;
-    expect(await yb.tick()).toBe(true);
-    expect(t.logs.at(-1)).toBe('info usage stats sent to YugabyteDB');
-    // Its first report received now, so still 30 days.
-    expect((JSON.parse(String(t.to(YB_DIAGNOSTICS_URL)[1].init.body)) as YbCallHome).payload.days).toHaveLength(FIRST_REPORT_DAYS);
-    // Both share the install id.
-    const ids = t.calls.map((c) => {
-      const b = JSON.parse(String(c.init.body)) as Partial<YbCallHome> & Partial<CallHomeReport>;
-      return b.install_id ?? b.installId;
-    });
-    expect(new Set(ids).size).toBe(1);
-  });
-
-  it('is turned off with AgentK\'s own, by [call_home] enabled or YB_DISABLE_CALLHOME', async () => {
-    const off = setup();
-    off.cfg.callHome.enabled = false;
-    expect(await off.service('yugabyte').tick()).toBe(false);
-
-    const env = setup({ env: { YB_DISABLE_CALLHOME: 'true' } });
-    expect(await env.service('yugabyte').tick()).toBe(false);
-    expect(await env.service('agentk').tick()).toBe(false);
-    expect(env.calls).toHaveLength(0);
   });
 
   it.each([

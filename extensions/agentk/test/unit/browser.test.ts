@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { browserCommand, openBrowser } from '../../src/server/browser.js';
 
-describe('agentk ui', () => {
+describe('me_koder ui', () => {
   it.each([
     ['darwin', {}, 'open'],
     ['linux', { DISPLAY: ':0' }, 'xdg-open'],

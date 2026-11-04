@@ -2,7 +2,7 @@ import { get, type Db } from './db.js';
 
 /**
  * The login AgentK had when it served browsers itself, before Meko took over its port and sign-in.
- * Meko imports it once, through `agentk _handoff --json` (handoff.ts), so the same password and
+ * Meko imports it once, through `me_koder _handoff --json` (handoff.ts), so the same password and
  * authenticator still sign in. Nothing else reads it: the table stays only for that import.
  */
 export interface LegacyOwner {

@@ -1,11 +1,13 @@
 #!/bin/sh
-# Presenter's launcher, in a release as presenter-<version>/bin/meko_presenter. Meko installs releases
+# Presenter's launcher, in a release as presenter-<version>/bin/me_presenter (and as
+# bin/meko_presenter, its name before, which older Mekos run). Meko installs releases
 # as <Meko's data folder>/extensions/presenter/app/<version>, with app/current and
-# ~/.local/bin/meko_presenter pointing at the one in use (meko extension install, meko
+# ~/.local/bin/me_presenter pointing at the one in use (meko extension install, meko
 # extension update).
 #
-# Runs the bundled Node on the bundled server, with PRESENTER_APP_DIR naming this release's folder
-# and PRESENTER_LAUNCHER this file (`meko_presenter start` runs `serve` through it). It hands `serve`
+# Runs the bundled Node (node/bin/me_presenter, so the kernel names the process me_presenter, not
+# node) on the bundled server, with PRESENTER_APP_DIR naming this release's folder
+# and PRESENTER_LAUNCHER this file (`me_presenter start` runs `serve` through it). It hands `serve`
 # to Meko (`meko _launch presenter`), which counts the starts of a version on probation after an
 # update, rolls back one that fails three times, takes a clean stop off the count, and finishes the
 # update once the version has served 5 minutes (backend/internal/update/pending.go, the rules Meko
@@ -25,10 +27,10 @@ while [ -h "$self" ]; do
 done
 bin_dir=$(cd -P "$(dirname "$self")" && pwd)
 PRESENTER_APP_DIR=$(cd -P "$bin_dir/.." && pwd)
-PRESENTER_LAUNCHER=$bin_dir/meko_presenter
+PRESENTER_LAUNCHER=$bin_dir/me_presenter
 export PRESENTER_APP_DIR PRESENTER_LAUNCHER
 
-node="$PRESENTER_APP_DIR/node/bin/node"
+node="$PRESENTER_APP_DIR/node/bin/me_presenter"
 cli="$PRESENTER_APP_DIR/lib/dist/server/cli.js"
 
 if [ -z "${MEKO_LAUNCHED:-}" ] && [ "${1:-}" = "serve" ]; then
@@ -39,7 +41,7 @@ if [ -z "${MEKO_LAUNCHED:-}" ] && [ "${1:-}" = "serve" ]; then
   if [ -x "$meko" ] && "$meko" _launch --supported >/dev/null 2>&1; then
     exec "$meko" _launch presenter "$PRESENTER_LAUNCHER" "$@"
   fi
-  echo "meko_presenter: no meko with _launch was found, so a failed update won't roll back" >&2
+  echo "me_presenter: no meko with _launch was found, so a failed update won't roll back" >&2
 fi
 
 exec "$node" --disable-warning=ExperimentalWarning "$cli" "$@"

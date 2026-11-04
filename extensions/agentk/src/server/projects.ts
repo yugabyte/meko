@@ -39,7 +39,7 @@ export class HttpError extends Error {
  * (FREE_TIER_DATAPACK_LIMIT, STANDARD_TIER_DATAPACK_LIMIT), its reason, or its upgrade message
  * ("Upgrade to Standard to create a new datapack."), not just any refusal that mentions datapacks.
  */
-function isDatapackLimit(e: unknown): boolean {
+export function isDatapackLimit(e: unknown): boolean {
   return /TIER_DATAPACK_LIMIT|tier datapack limit reached|Upgrade to \w+ to create a new datapack/i.test(errMsg(e));
 }
 
@@ -455,7 +455,6 @@ export class ProjectService {
       if (!Object.hasOwn(REVIEWER_LABELS, next.reviewer)) {
         throw new HttpError(400, 'Reviewer must be Yours only, People or All reviewers.');
       }
-      if (typeof next.mekoLog !== 'boolean') throw new HttpError(400, 'Log Meko calls must be true or false.');
       // What isn't a valid setting goes back to the global value (readOverrides drops it).
       if (req.settings.codeReview !== undefined) next.codeReview = readOverrides(req.settings.codeReview);
       run(this.db, 'UPDATE projects SET settings_json = ? WHERE id = ?', JSON.stringify(next), id);

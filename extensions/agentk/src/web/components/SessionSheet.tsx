@@ -1,12 +1,12 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { CloseSessionRequest, DiscardCheck, Session, SessionAction } from '../../shared/types';
-import { moveBlockedIn } from '../../shared/stages';
 import { api, errorMessage } from '../api';
-import { reviewHolds, reviewRunning, reviewSegmentLabel, type ReviewOverrides } from '../../shared/codereview';
+import type { CodeReviewSummary, ReviewOverrides } from '../../shared/codereview';
 import { inheritedReview, useReviewDefaults } from '../reviewdefaults';
 import { FONT_MAX, FONT_MIN } from '../keys';
-import { getTerminal, setTerminalFontSize, terminalFontSize } from '../terminals';
-import { agentName, canRunReview, discardingText, isReviewChild, onDemandControls } from '../util';
+import type { SessionActionId, SessionActionItem } from '../sessionactions';
+import { setTerminalFontSize, terminalFontSize } from '../terminals';
+import { discardingText } from '../util';
 import { Busy, Elapsed, ReviewFields, ReviewGlass, trapTab } from './common';
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -85,7 +85,7 @@ export function SheetItem({
  * learned to Meko first, unless Don't save learnings is checked (it starts unchecked, except for a
  * learn session, which saved what it learned as it went).
  * Archive waits for uncommitted files to be committed (the server refuses it too).
- * Shown in the session header on desktop and in the session sheet on phones.
+ * Shown in the session sheet on phones; on desktop, opened from the ⋯ menu (`autoOpen`) in the stage bar.
  */
 export function EndSessionButton({
   session,
@@ -94,6 +94,8 @@ export function EndSessionButton({
   label = 'Archive',
   className = 'btn small',
   disabled,
+  autoOpen = false,
+  onClosed,
 }: {
   session: Session;
   onAct: (a: SessionAction, req?: CloseSessionRequest) => Promise<void>;
@@ -103,14 +105,23 @@ export function EndSessionButton({
   className?: string;
   /** Another session action is in flight. */
   disabled?: boolean;
+  /** Starts on its confirmation, as when the button was pressed. */
+  autoOpen?: boolean;
+  /** The confirmation closed (Cancel, or the action went). */
+  onClosed?: () => void;
 }) {
   const [step, setStep] = useState<'closed' | 'choose' | 'checking' | 'discard'>('closed');
-  const [skipLearn, setSkipLearn] = useState(session.purpose === 'learn');
+  const [skipLearn, setSkipLearn] = useState(session.purpose === 'learn' || session.purpose === 'guide');
   /** What ending the session would leave or lose: undefined while checking, null if the check failed. */
   const [check, setCheck] = useState<DiscardCheck | null | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   // One check per opening, shared by Archive and Discard; a later opening's check replaces it.
   const pending = useRef<Promise<DiscardCheck | null> | null>(null);
+
+  const close = () => {
+    setStep('closed');
+    onClosed?.();
+  };
 
   const open = () => {
     setStep('choose');
@@ -129,9 +140,15 @@ export function EndSessionButton({
       await onAct(action, req);
     } finally {
       setBusy(false);
-      setStep('closed');
+      close();
     }
   };
+
+  // Opened from the desktop ⋯ menu: its confirmation at once.
+  useEffect(() => {
+    if (autoOpen) open();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, as it mounts
+  }, []);
 
   const askDiscard = async () => {
     setStep('checking');
@@ -164,7 +181,7 @@ export function EndSessionButton({
     );
   }
   const cancel = (
-    <button className="btn ghost" disabled={busy} onClick={() => setStep('closed')}>
+    <button className="btn ghost" disabled={busy} onClick={close}>
       Cancel
     </button>
   );
@@ -249,127 +266,89 @@ function FontSize() {
   );
 }
 
-/** The phone layout's session menu: what the desktop header and footer show, in one sheet. */
+/**
+ * The phone layout's session menu: the stage bar, then the session's actions (`sessionActions()`,
+ * its `sheet` items) as rows, the terminal's text size, Archive or discard, and the footer's lines.
+ */
 export function SessionSheet({
   session,
   stage,
-  canDesign,
-  canLearn,
-  learnDisabled,
+  items,
+  review,
+  reviewSettings,
   learnTo,
-  openQuestions,
   acting,
   info,
-  onDesign,
-  onAsk,
-  onHome,
-  onMekoCalls,
-  onMove,
-  onRename,
-  onToTop,
-  onWorkItem,
+  onPick,
   onAct,
   onClose,
   child = false,
-  reviewRows,
 }: {
   session: Session;
-  /** A task's code-review session: only its own rows (`reviewRows`), Find and Project home. */
+  /** A task's code-review session: no Archive or discard. */
   child?: boolean;
-  /** The code review's rows: open it or its findings, back to its task, its settings and actions. */
-  reviewRows?: ReactNode;
   /** The stage bar with its gate (Design Review, Open PR, Merge & Close). */
   stage: ReactNode;
-  canDesign: boolean;
-  /** Save learnings to Meko is offered (the project has a datapack, and Claude is there). */
-  canLearn: boolean;
-  /** It waits: another action is in flight, Claude is busy, or AgentK is already saving them. */
-  learnDisabled: boolean;
+  /** The session's actions on the sheet, in order. */
+  items: SessionActionItem[];
+  /** The task's code review, for its row's magnifier. */
+  review?: CodeReviewSummary | null;
+  /** The task's own code review settings, opened in place under their row. */
+  reviewSettings?: ReactNode;
   /** The datapack Discard saves learnings to first (EndSessionButton). */
   learnTo: string | null;
-  /** The design's open questions, shown on its row during Design. */
-  openQuestions: number;
-  /** A session action is in flight: Resume and Archive wait for it. */
+  /** A session action is in flight: Archive waits for it. */
   acting: boolean;
   /** Branch, tokens, Meko and review lines from the desktop footer. */
   info: ReactNode;
-  onDesign: () => void;
-  /** Opens the questions Claude is asking (Session.asking). */
-  onAsk: () => void;
-  onHome: () => void;
-  /** Opens the session's Meko call log; left out when the project doesn't log Meko calls. */
-  onMekoCalls?: () => void;
-  /** Opens the Move to another stage dialog. */
-  onMove: () => void;
-  /** Opens the Rename session dialog. */
-  onRename: () => void;
-  /** Moves the session to the top of its project's list; left out when it's already there. */
-  onToTop?: () => void;
-  /** Opens the dialog that links the session to a work item (or changes or removes its link). */
-  onWorkItem: () => void;
+  /** Runs an action; the sheet has closed by then. */
+  onPick: (id: SessionActionId) => void;
   onAct: (a: SessionAction, req?: CloseSessionRequest) => Promise<void>;
   onClose: () => void;
 }) {
-  const then = (f: () => void) => () => {
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const pick = (id: SessionActionId) => () => {
     onClose();
-    f();
+    onPick(id);
   };
   return (
     <Sheet label={`${session.name} actions`} onClose={onClose}>
       <div className="sheet-stage">{stage}</div>
       <div className="sheet-items">
-        {session.asking && (
-          <SheetItem className="primary ask" hint="›" onClick={then(onAsk)}>
-            Answer AgentK: {session.asking.questions[0]?.question}
-          </SheetItem>
-        )}
-        {session.status === 'exited' && (
-          <SheetItem className="primary" disabled={acting} onClick={then(() => void onAct('resume'))}>
-            Resume {agentName(session)}
-          </SheetItem>
-        )}
-        {reviewRows}
-        {canDesign && !child && (
-          <SheetItem hint="›" onClick={then(onDesign)}>
-            Design doc
-            {openQuestions > 0 && <span className="count-badge">{openQuestions === 1 ? '1 open question' : `${openQuestions} open questions`}</span>}
-          </SheetItem>
-        )}
-        {session.prUrl && (
-          <SheetItem href={session.prUrl} hint="↗" onClick={onClose}>
-            PR #{session.prNumber} on GitHub
-          </SheetItem>
-        )}
-        {canLearn && !child && (
-          <SheetItem disabled={learnDisabled} onClick={then(() => void onAct('learn'))}>
-            {session.learning ? <Busy label="Saving learnings to Meko" /> : 'Save learnings to Meko'}
-          </SheetItem>
-        )}
-        {!child && !moveBlockedIn(session.stage) && (
-          <SheetItem hint="›" onClick={then(onMove)}>
-            Move to another stage
-          </SheetItem>
-        )}
-        <SheetItem onClick={then(() => getTerminal(session.id).openFind())}>Find in terminal</SheetItem>
-        {!child && (
-          <>
-            <SheetItem hint="›" onClick={then(onRename)}>
-              Rename session
+        {items.map((it) => {
+          if (it.id === 'review-settings') {
+            return (
+              <Fragment key={it.id}>
+                <SheetItem hint={settingsOpen ? '⌄' : '›'} onClick={() => setSettingsOpen((o) => !o)}>
+                  {it.label}
+                </SheetItem>
+                {settingsOpen && <div className="sheet-review-settings">{reviewSettings}</div>}
+              </Fragment>
+            );
+          }
+          return (
+            <SheetItem
+              key={it.id}
+              className={it.id === 'answer' ? 'primary ask' : it.primary ? 'primary' : undefined}
+              disabled={it.disabled}
+              hint={it.hint ?? (it.href ? '↗' : it.opens ? '›' : undefined)}
+              href={it.href}
+              onClick={it.href ? onClose : pick(it.id)}
+            >
+              {it.id === 'review-open' && review ? (
+                <span className="sheet-review">
+                  <ReviewGlass review={review} />
+                  {it.label}
+                </span>
+              ) : it.busy ? (
+                <Busy label={it.busy} />
+              ) : (
+                it.label
+              )}
+              {it.count && <span className="count-badge">{it.count}</span>}
             </SheetItem>
-            {onToTop && <SheetItem onClick={then(onToTop)}>Move to top</SheetItem>}
-            <SheetItem hint="›" onClick={then(onWorkItem)}>
-              {session.workItemId ? 'Change its work item' : 'Link to a work item'}
-            </SheetItem>
-          </>
-        )}
-        {onMekoCalls && (
-          <SheetItem hint="›" onClick={then(onMekoCalls)}>
-            Meko calls
-          </SheetItem>
-        )}
-        <SheetItem hint="›" onClick={then(onHome)}>
-          Project home
-        </SheetItem>
+          );
+        })}
       </div>
       <FontSize />
       {!child && (
@@ -390,63 +369,17 @@ export function SessionSheet({
 }
 
 /**
- * The ⋯ sheet's code review rows. On a task's code-review session: its findings and back to its
- * task. On a task: its review (open it, Cancel while it runs, Retry or Open anyway once it stopped)
- * and the task's own review settings, over its project's (`Session.review`, saved at once).
+ * A task's own code review settings, over its project's (`Session.review`), saved at once: in place
+ * in the ⋯ sheet, and in the desktop ⋯ menu's Code review settings dialog.
  */
-export function CodeReviewRows({ session, parent, projectReview, acting, onOpen, onFindings, onBack, onAct, onClose, onError }: {
+export function SessionReviewFields({ session, projectReview, onError }: {
   session: Session;
-  /** The task, on its code-review session's sheet. */
-  parent?: Session;
   /** The project's review settings, what this task's "Default" stands for over the global ones. */
   projectReview: ReviewOverrides;
-  acting: boolean;
-  onOpen: () => void;
-  onFindings: () => void;
-  onBack: () => void;
-  onAct: (a: SessionAction) => Promise<void>;
-  onClose: () => void;
   onError: (msg: string) => void;
 }) {
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const global = useReviewDefaults();
-  const then = (f: () => void) => () => {
-    onClose();
-    f();
-  };
-  const r = session.codeReview;
-  if (isReviewChild(session)) {
-    return (
-      <>
-        <SheetItem hint="›" onClick={then(onFindings)}>
-          Findings
-        </SheetItem>
-        {parent && (
-          <SheetItem hint="›" onClick={then(onBack)}>
-            Back to {parent.name}
-          </SheetItem>
-        )}
-        {r && reviewRunning(r) && (
-          <SheetItem disabled={acting} onClick={then(() => void onAct('review-cancel'))}>
-            Cancel the code review
-          </SheetItem>
-        )}
-        {r && reviewHolds(r) && (
-          <>
-            <SheetItem className="primary" disabled={acting} onClick={then(() => void onAct('review-retry'))}>
-              Retry the code review
-            </SheetItem>
-            <SheetItem disabled={acting} onClick={then(() => void onAct('review-open-anyway'))}>
-              Open the PR without it
-            </SheetItem>
-          </>
-        )}
-      </>
-    );
-  }
-  if (session.kind === 'review-pr') return null;
-  const run = canRunReview(session);
   const save = async (review: ReviewOverrides) => {
     setSaving(true);
     try {
@@ -458,55 +391,13 @@ export function CodeReviewRows({ session, parent, projectReview, acting, onOpen,
     }
   };
   return (
-    <>
-      {r && (
-        <SheetItem hint="›" onClick={then(onOpen)}>
-          <span className="sheet-review">
-            <ReviewGlass review={r} />
-            {reviewSegmentLabel(r)}
-          </span>
-        </SheetItem>
-      )}
-      {r && (reviewRunning(r) || onDemandControls(session).cancel) && (
-        <SheetItem disabled={acting} onClick={then(() => void onAct('review-cancel'))}>
-          Cancel the code review
-        </SheetItem>
-      )}
-      {r && reviewHolds(r) && (
-        <>
-          <SheetItem className="primary" disabled={acting} onClick={then(() => void onAct('review-retry'))}>
-            Retry the code review
-          </SheetItem>
-          <SheetItem disabled={acting} onClick={then(() => void onAct('review-open-anyway'))}>
-            Open the PR without it
-          </SheetItem>
-        </>
-      )}
-      {onDemandControls(session).retry && (
-        <SheetItem disabled={acting} onClick={then(() => void onAct('review-retry'))}>
-          Retry the code review
-        </SheetItem>
-      )}
-      {run.offered && (
-        <SheetItem disabled={acting || !run.ready} hint={run.wait ?? undefined} onClick={then(() => void onAct('review-run'))}>
-          Run code review
-        </SheetItem>
-      )}
-      <SheetItem hint={settingsOpen ? '⌄' : '›'} onClick={() => setSettingsOpen((o) => !o)}>
-        Code review settings
-      </SheetItem>
-      {settingsOpen && (
-        <div className="sheet-review-settings">
-          <ReviewFields
-            id={`sheet-review-${session.id}`}
-            value={session.review ?? {}}
-            scoped
-            inherited={inheritedReview(global, projectReview)}
-            disabled={saving}
-            onChange={(v) => void save(v)}
-          />
-        </div>
-      )}
-    </>
+    <ReviewFields
+      id={`session-review-${session.id}`}
+      value={session.review ?? {}}
+      scoped
+      inherited={inheritedReview(global, projectReview)}
+      disabled={saving}
+      onChange={(v) => void save(v)}
+    />
   );
 }

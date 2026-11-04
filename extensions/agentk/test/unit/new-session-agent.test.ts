@@ -288,3 +288,33 @@ describe('Connect to Meko, from the page', () => {
     expect(calls).toEqual(want);
   });
 });
+
+describe("the New session dialog's Model choice", () => {
+  const html = (harnesses: HarnessStatus[], initial: Partial<CreateSessionRequest> = {}) =>
+    renderToStaticMarkup(createElement(NewSessionDialog, {
+      project, ghLogin: null, harnesses, initial: { name: 'x', repoPath: '/code/other', ...initial },
+      onClose: () => undefined, onCreated: () => undefined,
+    }));
+  /** The Model select's options: each value, `*` when it's picked. */
+  const options = (h: string) => {
+    const select = h.match(/<select id="ns-model"[^>]*>(.*?)<\/select>/)?.[1] ?? '';
+    return [...select.matchAll(/<option value="([^"]*)"( selected="")?>/g)].map(([, v, on]) => `${v}${on ? '*' : ''}`);
+  };
+
+  it("offers Claude Code's aliases, starting on its own default, even with only one agent", () => {
+    expect(options(html([status('claude')]))).toEqual(['*', 'fable', 'opus', 'sonnet', 'haiku', ' other']);
+    expect(html([status('claude')])).toContain('Default (Claude Code&#x27;s own)');
+  });
+
+  it('keeps the model a failed start asked for, on the list or not', () => {
+    expect(options(html([status('claude')], { model: 'opus' }))).toEqual(['', 'fable', 'opus*', 'sonnet', 'haiku', ' other']);
+    expect(options(html([status('claude')], { model: 'claude-opus-5-5' }))).toEqual(['', 'fable', 'opus', 'sonnet', 'haiku', 'claude-opus-5-5*', ' other']);
+    expect(options(html([status('kiro', { isDefault: true })], { harness: 'kiro', model: 'auto' }))).toEqual(['', 'auto*', ' other']);
+  });
+
+  it("reads OpenCode's and Kiro's models from their CLI", () => {
+    const h = html([status('opencode', { isDefault: true })], { harness: 'opencode' });
+    expect(options(h)).toEqual(['*', ' other']);
+    expect(h).toContain('Reading OpenCode');
+  });
+});

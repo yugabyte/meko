@@ -2,7 +2,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, sta
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { purgeHome, removeDb, serviceFailure, sessionWorktrees } from '../../src/server/install.js';
+import { opensBrowser, purgeHome, removeDb, serviceFailure, sessionWorktrees, welcomeTour } from '../../src/server/install.js';
+import { DEFAULT_CONFIG } from '../../src/server/config.js';
 import { ensurePrivateDir, parseDfMountPoint, parseMountType } from '../../src/server/fstype.js';
 import { pad } from '../../src/server/tty.js';
 import { getPaths } from '../../src/server/paths.js';
@@ -40,17 +41,35 @@ describe('macOS filesystem type', () => {
   });
 });
 
+describe("a fresh install's welcome", () => {
+  it.each([true, false])('starts the tour only on a fresh install (fresh: %s)', (fresh) => {
+    const cfg = structuredClone(DEFAULT_CONFIG);
+    welcomeTour(cfg, fresh);
+    expect(cfg.welcome.tour).toBe(fresh ? 'agentk-101' : '');
+  });
+
+  it.each([
+    [{ fresh: true, interactive: true, running: true }, true],
+    [{ fresh: false, interactive: true, running: true }, false],
+    // Meko's Extensions page installs with --non-interactive, already in a browser.
+    [{ fresh: true, interactive: false, running: true }, false],
+    [{ fresh: true, interactive: true, running: false }, false],
+  ])('opens the browser for %j: %s', (o, opens) => {
+    expect(opensBrowser(o)).toBe(opens);
+  });
+});
+
 describe('service failures', () => {
   const ok = () => ({ ok: true, out: '', err: '' });
 
   it('say what to check and how to skip the services', () => {
     const mac = serviceFailure(new LaunchdServices(ok, '/Users/me', 501), 'launchctl bootstrap … failed: Bootstrap failed: 5', '/Users/me/.agent-k-local/logs');
-    expect(mac).toContain('launchctl bootstrap … failed: Bootstrap failed: 5\nCheck: launchctl print gui/501/com.yugabyte.agentk and ');
+    expect(mac).toContain('launchctl bootstrap … failed: Bootstrap failed: 5\nCheck: launchctl print gui/501/com.yugabyte.me_koder and ');
     expect(mac).toMatch(/logs\/launchd\*\.log\./);
     expect(mac).toContain('--no-service');
 
-    const linux = serviceFailure(new SystemdServices(ok, {}, '/home/me'), 'systemctl --user restart agentk.service failed', '/home/me/.agent-k-local/logs');
-    expect(linux).toContain('Check: systemctl --user status agentk.service.\n');
+    const linux = serviceFailure(new SystemdServices(ok, {}, '/home/me'), 'systemctl --user restart me_koder.service failed', '/home/me/.agent-k-local/logs');
+    expect(linux).toContain('Check: systemctl --user status me_koder.service.\n');
     expect(linux).not.toContain('launchd');
   });
 });
@@ -187,6 +206,6 @@ describe('server PATH', () => {
 describe('CLI labels', () => {
   it('always leave a space before the detail, even when the label is long', () => {
     expect(pad('Meko')).toBe('Meko'.padEnd(14));
-    expect(pad('com.yugabyte.agentk.host')).toBe('com.yugabyte.agentk.host ');
+    expect(pad('com.yugabyte.me_koder.host')).toBe('com.yugabyte.me_koder.host ');
   });
 });

@@ -44,7 +44,7 @@ func TestStepAnimates(t *testing.T) {
 	waitFor(t, &b, Frames[1])
 	s.Done("meko 1.2.4 installed")
 	out := b.String()
-	if !strings.HasPrefix(out, "\r  "+Frames[0]+" Release         installing meko 1.2.4…\033[K") {
+	if !strings.HasPrefix(out, "\r  "+Frames[0]+" Release         installing meko 1.2.4\033[K") {
 		t.Errorf("first frame: %q", out)
 	}
 	if !strings.HasSuffix(out, "\r\033[K  ✓ Release         meko 1.2.4 installed\n") {

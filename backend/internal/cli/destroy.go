@@ -296,7 +296,9 @@ func uninstallExtensions(l paths.Layout, exts []extensionData, purge bool, stdou
 		if cat.Managed {
 			// The link Meko made into its releases goes too: they're gone with a purge, and extension
 			// delete removes them next.
-			_ = cat.App(l.Root, e.name).UnlinkCommand(home)
+			app := cat.App(l.Root, e.name)
+			_ = app.UnlinkCommand(home)
+			_ = cat.UnlinkOldCommands(app, home)
 		}
 	}
 	return nil

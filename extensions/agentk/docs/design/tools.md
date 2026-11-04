@@ -12,7 +12,7 @@ agent does it with the `agentk_sessions` MCP server's tools, following the `agen
 ```mermaid
 sequenceDiagram
   participant A as Agent (Claude Code, OpenCode or Kiro)
-  participant M as agentk mcp (stdio, the CLI's child)
+  participant M as me_koder mcp (stdio, the CLI's child)
   participant H as Hook socket /tools
   participant S as Server (actions.ts)
   A->>M: tools/call start_sessions
@@ -39,20 +39,20 @@ sequenceDiagram
   isn't running.
 - **The command.** An install starts it as `app/current/node/bin/node
   app/current/lib/dist/server/mcpmain.js`. Through `current`, an MCP server started after an update
-  runs the new version. `mcpmain.js` is used instead of `agentk mcp` because the CLI's static imports
-  load the whole server. `agentk mcp` exists too, unlisted, for running the server by hand. A dev
+  runs the new version. `mcpmain.js` is used instead of `me_koder mcp` because the CLI's static imports
+  load the whole server. `me_koder mcp` exists too, unlisted, for running the server by hand. A dev
   server starts its own Node with its loader flags (tsx's) on `mcpmain.ts` (`toolsCommand`,
   `loaderFlags` in `tools.ts`).
 - **The route.** `/tools` on the hook socket is answered like the mod's routes (`onMod` in
   `sessions.ts`). The session's token names the caller, and an unknown token gets 403. The body
-  carries `v` (`TOOLS_VERSION`), so a later change can tell an older `agentk mcp` apart. An older
+  carries `v` (`TOOLS_VERSION`), so a later change can tell an older `me_koder mcp` apart. An older
   server answers 404, and the tool says to update AgentK.
 - **The tools** (`src/server/tooldefs.ts`, which the MCP server and the server share):
 
 | Tool | Takes | Does |
 |---|---|---|
-| `list` | `projectId?` | The open projects (id, name, repo folder, `github`: `owner/name` from its upstream, else its origin) and their running sessions (id, name, stage, status, branch, harness, PR), with the caller marked `self`. Read only. |
-| `start_sessions` | `sessions`: 1 to 8 of `{ ref }` (a GitHub issue or PR) or `{ name, prompt }`, each with `projectId?` (default: the caller's), `stage?`, `autoRun?` and `review?` | A `link` action for a ref: `githubLinks.start` with the project, so an issue becomes a task (at Design, or the stage given) and a PR becomes a Review a PR session. A `start` action for a task. An issue that a running task already works on is refused (`once`), as a PR a running review is. `autoRun` is [Run to merge](lifecycle.md#run-to-merge), only for a task or an issue at Code: asked for at another stage it's left out with a note, and a PR refuses it. `review` is the task's own [code review](code-review.md) settings (`strategy`, `rounds`, `depth`: "with 3 deep reviews" is `depth: 3`), each left out keeping the project's. |
+| `list` | `projectId?` | The open projects (id, name, repo folder, `github`: `owner/name` from its upstream, else its origin) and their running sessions (id, name, stage, status, branch, harness, PR), with the caller marked `self`, and `agents`: the ones new sessions can start on (id, name, `default` on the one they start on unless told), each with the models it takes (Claude Code's aliases, or at most 50 of OpenCode's or Kiro's list as last read, kept while a newer read is under way: `list` never waits for a CLI, so a list never read yet is left out and read for next time, `Harnesses.modelsKept`). Read only. |
+| `start_sessions` | `sessions`: 1 to 8 of `{ ref }` (a GitHub issue or PR) or `{ name, prompt }`, each with `projectId?` (default: the caller's), `stage?`, `branch?` (a task's), `autoRun?` and `review?` | A `link` action for a ref: `githubLinks.start` with the project, so an issue becomes a task (at Design, or the stage given) and a PR becomes a Review a PR session. A `start` action for a task; with `branch`, on that existing branch as it is (the New session dialog's Existing branch: local, or on origin, else a 400), which is how a [workshop's host](workshops.md) starts a level on a teammate's branch. An issue that a running task already works on is refused (`once`), as a PR a running review is. `autoRun` is [Run to merge](lifecycle.md#run-to-merge), only for a task or an issue at Code: asked for at another stage it's left out with a note, and a PR refuses it. `review` is the task's own [code review](code-review.md) settings (`strategy`, `rounds`, `depth`, `check`: "with 3 deep reviews" is `depth: 3`, and `check: false` sends the findings to AgentK without waiting on the user), each left out keeping the project's. `agent` (`claude`, `opencode`, `kiro`) and `model` pick the session's agent and its model ([Picking a model](harnesses.md#picking-a-model)), only when the user names them: an agent AgentK doesn't run or a model name that can't be passed on (`checkModel`) leaves that session out with a note, and an agent that isn't available fails that start alone. The result line names them ("on Claude Code (Haiku)"). |
 | `move_session` | `sessionId`, `stage`, `instructions?` | The `move` action, with the move dialog's rules (`moveBlockedIn`, `moveError`). The calling session may move itself: its agent asks mid-turn, and a move waits for a turn's end, so the move is held for this one (`SessionTools.queueSelfMove`) and runs from `Lifecycle.onTurnEnd` (`turnEnded`), its outcome in the session's log. An interrupted turn drops it, and so does a restart (it's kept in memory). |
 | `open_pr` | `sessionId`, `instructions?` | Open PR on a session in Code. It's refused for the calling session, because a session's own PR stays the user's gate. |
 | `review_report`, `review_score` | `step`, and `report` or `score` | A [code review](code-review.md)'s step reports its pass's findings or its verdict on one finding, checked against the step's schema (an error says what to fix). Only from a code-review session, about the step its review waits for. Pre-allowed, answered whatever `[tools] enabled` says or the session's PR head. |
@@ -132,6 +132,8 @@ session, and when part of a session's work needs a PR of its own. It says:
 - Match a session's name loosely, and ask the user when nothing matches or several sessions do.
 - Read `#N` as an issue or PR of the project's `github` repo.
 - Put every start in one call, and report one line per action.
+- Pass `agent` and `model` only when the user names them, using the names `list` gives (or the
+  user's words for a model it doesn't list), and the agent too when the model is another agent's.
 - "AK" is short for AgentK (the description names it too, so "a new ak session" loads the skill).
 - A session makes one PR. Work the user asked for that needs another, independent PR goes in a new
   session, which the agent starts with `start_sessions`, the user's words as its prompt. Something

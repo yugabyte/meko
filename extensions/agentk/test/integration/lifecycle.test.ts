@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PrStatus } from '../../src/server/github.js';
-import { mekoScope, sessionAgentId } from '../../src/server/meko.js';
+import { sessionAgentId } from '../../src/server/meko.js';
 import type { CreateProjectRequest, CreateSessionRequest, ReviewerMode } from '../../src/shared/types.js';
 import type { FakeQuestion } from '../helpers.js';
 
@@ -12,6 +12,9 @@ import type { FakeQuestion } from '../helpers.js';
 const gh = vi.hoisted(() => ({
   pr: null as null | { number: number; url: string; state: 'OPEN' | 'MERGED' | 'CLOSED'; createdAt?: string; baseRefName?: string },
   status: null as null | PrStatus,
+  /** How many times the PR's status was read, and what each read waits for before answering. */
+  statusCalls: 0,
+  statusHold: null as null | Promise<void>,
   merges: [] as string[],
   mergeError: null as null | Error,
   bots: [] as string[],
@@ -36,7 +39,11 @@ vi.mock('../../src/server/github.js', async (orig) => {
     ...real,
     findPr: async () => gh.pr,
     // Like GitHub after a push: the PR's head is the branch tip, unless a test says otherwise.
-    prStatus: async (w: string) => ({ ...gh.status!, headRefOid: gh.status!.headRefOid || tip(w) }),
+    prStatus: async (w: string) => {
+      gh.statusCalls++;
+      await gh.statusHold;
+      return { ...gh.status!, headRefOid: gh.status!.headRefOid || tip(w) };
+    },
     merge: async (_w: string, url: string) => {
       if (gh.mergeError) throw gh.mergeError;
       gh.merges.push(url);
@@ -105,6 +112,8 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     freshHeads = false;
     gh.pr = null;
     gh.status = null;
+    gh.statusCalls = 0;
+    gh.statusHold = null;
     gh.merges = [];
     gh.mergeError = null;
     gh.bots = [];
@@ -390,6 +399,26 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(cleanups(s.id)).toBe(1);
   });
 
+  it("stops once a turn end's PR poll is done, its git fetch included", async () => {
+    const s = await inReview('Stopped mid-poll');
+    // A head the clone lacks: the poll fetches it (git writes FETCH_HEAD even with no origin).
+    gh.status = { ...gh.status!, headRefOid: 'abc123' };
+    const fetchHead = join(env.repo, '.git', 'FETCH_HEAD');
+    rmSync(fetchHead, { force: true });
+    let release!: () => void;
+    gh.statusHold = new Promise<void>((r) => (release = r));
+    const reads = gh.statusCalls;
+    await env.core.sessions.submit(s.id, 'go on');
+    await waitFor(() => gh.statusCalls, (n) => n > reads, 10000, "the turn end's PR poll");
+    let stopped = false;
+    const stop = env.core.stop().then(() => (stopped = true));
+    await new Promise((r) => setTimeout(r, 200));
+    expect(stopped).toBe(false);
+    release();
+    await stop;
+    expect(existsSync(fetchHead)).toBe(true);
+  });
+
   it('finishes Merge & Close when the session was archived by hand while cleanup waited', async () => {
     const s = await inReview('Archived by hand');
     env.core.sessions.setStage(s.id, 'merge', 'you');
@@ -434,9 +463,7 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
         { kind: 'gotcha', component: '', text: `The worktree at ${worktree} has a stale lock.` },
       ] }),
     });
-    const similarScopes: (string | undefined)[] = [];
     const similar = vi.fn(async (query: string, _datapack: string, _agent: string) => {
-      similarScopes.push(mekoScope.getStore()?.id);
       return query.startsWith('Decision') ? [{ id: 'm1', text: 'Polls run in parallel.', agentId: 'claude_code:other-1' }] : [];
     });
     Object.assign(env.meko, { similar });
@@ -466,8 +493,6 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
     expect(added).toHaveLength(1);
     const updated = env.meko.calls.find((c) => c.name === 'updateMemory');
     expect(updated?.args.slice(0, 4)).toEqual(['m1', 'Decision: polls run in one queue per session.', 'dp-1', 'claude_code:other-1']);
-    // Each of these calls is the session's, for its Meko call log.
-    expect([...similarScopes, ...added.map((c) => c.scope), updated?.scope]).toEqual([s.id, s.id, s.id, s.id]);
     expect(learns(s.id)).toEqual([{ trigger: 'merge', path: 'mod', outcome: 'done' }]);
     expect(dbGet(env.core.db, 'SELECT candidates, saves, updates, skips FROM meko_learns WHERE session_id = ?', s.id))
       .toEqual({ candidates: 2, saves: 1, updates: 1, skips: 0 });
@@ -1859,6 +1884,24 @@ describe('lifecycle: PR → AgentK review → Merge & Close', () => {
       await pollAll();
       expect(env.core.sessions.get(s.id).stage).toBe('code');
       expect(prPrompts(s.id)).toBe(0);
+    });
+
+    it('starts an agent stopped for sitting idle again when it is turned on, and sends its Open PR', async () => {
+      const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'existing', id: 'dp-1', name: 'team/demo' } });
+      const s = await env.core.sessions.create(p.id, { name: 'Stopped then run', prompt: 'do it', start: 'code' });
+      await idle(s.id, 'first turn');
+      env.core.config.sessions.idleStopHours = 1;
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        vi.setSystemTime(Date.now() + 2 * 60 * 60 * 1000);
+        await env.core.sessions.stopIdle();
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(env.core.sessions.get(s.id).idleStoppedAt).not.toBeNull();
+      await env.core.sessions.edit(s.id, { autoRun: true });
+      expect(lastEvent(s.id, 'resumed')).toBe('Resumed for Run to merge');
+      await waitFor(() => prPrompts(s.id), (n) => n === 1, 10000, 'the PR prompt');
     });
 
     it("drops its PR prompt Claude exited before taking once it stops, so a Resume doesn't send it", async () => {

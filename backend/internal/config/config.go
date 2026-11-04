@@ -89,7 +89,7 @@ type CallHome struct {
 	// The variables are read from serve's own environment, which under the login service is the unit's
 	// or plist's, not the shell's.
 	Enabled bool `toml:"enabled"`
-	// URL is where they go. Empty is https://diagnostics.yugabyte.com, from release installs only. Also
+	// URL is where they go. Empty is callhome.DefaultURL, from release installs only. Also
 	// MEKO_CALL_HOME_URL.
 	URL string `toml:"url"`
 	// OffBy names what turned them off ("config.toml", "MEKO_CALL_HOME" or "YB_DISABLE_CALLHOME"),

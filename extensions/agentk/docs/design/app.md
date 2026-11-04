@@ -4,7 +4,7 @@ Part of the [AgentK design](../design.md).
 
 The left rail holds projects, each with its repo's folder name in small type under the project
 name and the most urgent session state shown on it. Drag a project to reorder the list; on a touch
-screen, use **Move up** / **Move down** in the project home's settings. The tabs above the terminal
+screen, use **Move up** / **Move down** in the project home's settings. The tabs above the stage bar
 hold the project's sessions; when there are more than fit, they scroll sideways with no scrollbar
 (one drawn over the tabs, as macOS and phones do, hid their names): swipe, Shift with the wheel, or the
 plain mouse wheel (`sidewaysWheel()`), and the selected tab is always scrolled into view. With **List sessions in the projects pane** ticked in Settings › General
@@ -16,16 +16,22 @@ opened with one click, in any project. A task's [code review](code-review.md) is
 a part joined to its task's tab and rail row, a blue magnifier (its lens pulses while the review
 works, and shows Meko's "m" during a Meko call) and how far it has got (`3/6`: each pass, then
 scoring as one step, moving on as each pass reports), its result (`2·1` blockers·majors until the task has said what it did with each
-finding, then `LGTM`) or a red `!`. While the review works and its session waits on you in its
+finding) or a red `!`. Once the review reads `LGTM` (it kept nothing, or the task has said what it
+did with every finding) it's settled, and its part leaves the tab and the row (`reviewBadge()`):
+the task looks like one with no review, and its findings open from the ⋯ menu's or sheet's review
+row. While the review works and its session waits on you in its
 terminal, the magnifier takes the needs-you color and its lens knocks. Clicking it opens the
 review's own screen (its terminal, its findings beside it) while its passes run (or it failed),
-and its findings beside the task's terminal while the task fixes them and once the review is done
-(the review session stops then). In the rail, the magnifier sits under the stage chip, their right edges lined up, with no divider,
+and its findings beside the task's terminal while they wait on you, while the task fixes them and
+once the review is done (the review session stops then). The findings also open by themselves
+beside the task's terminal, as the design does in Design: whenever the task comes on screen while
+the review runs or its findings wait on you, and again as they come to wait or a new review starts
+(`findingsAutoOpen()`). With them open, a click on the task's part closes them. In the rail, the magnifier sits under the stage chip, their right edges lined up, with no divider,
 so the name keeps one column; it's drawn smaller there (13 px, on touch screens too), so a task's
 row grows by a short line. The tabs and the rail list a project's sessions in the same order, kept on the server
 (`sessions.position`) so every browser sees it: a new session goes first, and **Move to top** puts
 any other there, to keep the work that matters most at the top as priorities change. It's the ↑ that
-takes a rail row's stage chip's place on hover (the first line only), and is in the ⋯ sheet and the command palette (where
+takes a rail row's stage chip's place on hover (the first line only), and is in the session's ⋯ menu (the ⋯ sheet on a phone) and the command palette (where
 touch screens find it). Each takes one below the project's lowest position, so no other row is
 renumbered. The session on screen is highlighted (its project's name turns bold instead), and
 **+ New session** follows each project's list (the project on screen shows it even with no
@@ -43,6 +49,26 @@ shows the user and the server (`hari@dev-box`) with the version, so windows on d
 are easy to tell apart. The server name is `[server] name` (set in Settings), else the machine's
 host name up to its first dot; the tooltip adds the full host name. When space is short, the
 version moves below it first, then the user name is cut off before the server name.
+
+**The stage bar and the session's ⋯.** On a desktop, under the tabs, one row holds the session's
+stages (each one it can move to is a button) and its gate: **Run to merge** and the next-stage
+button (Move on…, Design Review, Open PR, Merge & Close; a Review a PR session's Update to latest
+and Close review), or the state that stands in for it (a queued gate with Cancel, an approval
+waiting for the turn's end, Opening PR, Closing, Done, or a code review holding Open PR with its own
+buttons). Beside it stay only what needs you: **N reviews for you**, **Resume** while the agent has
+exited, **Design doc** with its count while the design has open questions, and a discard waiting on
+its learn step. Everything else is in the ⋯ menu at the row's right end: the task's code review,
+**Run code review**, **Code review settings** (a dialog), the design, the PR on GitHub, **Open PR
+with instructions**, **Merge & Close without saving learnings**, **Share with reviewers**, **Save
+learnings to Meko**, **Move to another stage**, **Find in terminal**, **Rename session**, **Move to
+top**, the work item, **Project home**, and **Archive or discard…**, which opens
+Archive's confirmation in the row. One list says which actions a session has, when, and why one
+waits (`sessionActions()` in `src/web/sessionactions.ts`), and the menu (`SessionMenu.tsx`), the
+phone's ⋯ sheet and the command palette each show their part of it. The menu is a standard menu
+button: Enter, Space or ↓ opens it on its first item, ↑ on its last; the arrows, Home and End move
+between items, skipping the disabled ones, which say why they wait; Escape closes it and gives focus
+back; a click outside closes it. `⌘.` (`Ctrl+.` elsewhere) opens it from anywhere on the session's
+screen, the terminal included, and gives focus back to the terminal when it closes.
 
 The app follows the system's light or dark theme, or the one picked with the theme button at the
 foot of the rail. The terminals have their own colors: dark by default, whatever the app's theme,
@@ -64,11 +90,19 @@ Session states, shown with a dot on each session (on its tab, or in the rail) an
   long, then pauses. It also shows in Review & PR while a merge blocker only you can clear stands
   (`Session.waitsOnYou`: a held review, CI or merge conflicts AgentK handed over, or with Run to
   merge any blocker that doesn't clear by itself; see *Waiting on you* in
-  [the task lifecycle](lifecycle.md)), over idle, recovered and working, and over learning, queued,
+  [the task lifecycle](lifecycle.md)), and in Code or Review & PR while a code review's findings
+  wait on you ([Findings that wait on you](code-review.md#findings-that-wait-on-you)), over idle, recovered and working, and over learning, queued,
   Meko and running in the background (`dotState()`); the tab's tooltip names what to clear
 - **Idle**, waiting for your next prompt
 - **Recovered** after a restart
 - **Exited**
+- **Agent stopped while idle:** AgentK stopped the session's agent after `[sessions] idle_stop_hours`
+  idle to free its memory (`Session.idleStoppedAt`; [Stopping idle agents](recovery.md#stopping-idle-agents)).
+  A thin grey ring with a pause sign (‖) inside, still: the rail ranks it under idle. Needs you shows over it while
+  something only you can clear waits (`Session.waitsOnYou`). The terminal says so, with
+  **Resume**; opening the session doesn't start the agent, but Resume, a key typed into the terminal
+  (the phone's key bar and compose box too),
+  an action that sends it a prompt or AgentK's own work for it does, so the gates don't block on it.
 - **Learning:** AgentK is saving what the session learned to Meko (the
   [learn step](recall-and-learn.md#the-learn-step), `Session.learning`). The dot becomes a ring of dots turning around
   Meko's m. It shows over idle, recovered and working (a learn step through the mod leaves the
@@ -83,8 +117,10 @@ Session states, shown with a dot on each session (on its tab, or in the rail) an
   an Open PR is going now), then the status detail as for any dot; the palette says *queued*. The rail ranks it above idle and recovered, under working.
 - **Running in the background:** the agent is between turns with work it left running in the
   background, which wakes it again when it's done (`Session.background`: Claude Code's background
-  shells, subagents and monitors, from its `Stop` hook's `background_tasks`; OpenCode's background
-  shells and subagents, from AgentK's plugin; never Kiro's, see [Harnesses](harnesses.md)). The
+  shells, subagents and monitors, from its `Stop` hook's `background_tasks`, less the watch it
+  keeps on each Artifact the agent publishes, a monitor that never ends (`backgroundTasks()`);
+  OpenCode's background shells and subagents, from AgentK's plugin; never Kiro's, see
+  [Harnesses](harnesses.md)). The
   same turning ring as queued. It shows over idle and recovered only; a learn step and a queued
   gate win over it (`dotState()`). The tooltip and the palette name what's running ("running in
   the background: npm test", up to three, then how many more: `backgroundText()`). The rail ranks
@@ -135,7 +171,7 @@ turn's end and a reset clear it with the rest.
   (`PostToolUse`) but the start of only a few. A `PreToolUse` matcher would add a process per call
   and leave a failed or interrupted call to a guess. The mod brackets each call exactly.
 
-**Renaming a session.** Double-click its tab or its row in the rail (on a phone, **Rename session** in the ⋯ sheet; or
+**Renaming a session.** Double-click its tab or its row in the rail (or **Rename session** in the session's ⋯ menu, the ⋯ sheet on a phone; or
 **Rename** in the `⌘K` palette) to give it a new name (`PATCH /api/sessions/:id`). Only the name
 changes: the branch, worktree, pane and Meko agent id were named from it once, at the start,
 and stay. The name is trimmed, its line breaks and runs of spaces made one space, and it can't be
@@ -292,7 +328,9 @@ terminal**, which hides it for that start in this page.
 ## Keyboard
 
 `⌘1–9` switches projects, `⌃Tab` cycles sessions (browsers keep `⌃Tab` for themselves in a
-normal tab, so it works in the installed app window), and `⌘K` opens a palette to jump to any
+normal tab, so it works in the installed app window), `⌘.` (`Ctrl+.` elsewhere) opens the session's
+⋯ menu (the ⋯ sheet on a phone; the terminal never gets the key, and an input method that takes
+`Ctrl+.` itself, such as some Linux emoji pickers, keeps it from AgentK), and `⌘K` opens a palette to jump to any
 session or project home, create a session, or move or rename the one on screen (or, with a GitHub
 PR or issue pasted, start a session on it: see [Starting from a GitHub link](palette.md#starting-from-a-github-link);
 or ask in plain words: see [Ask AgentK](palette.md#ask-agentk); or find a session by what it's about: see
@@ -323,8 +361,8 @@ bytes, not only the agent: in vim's insert mode, Shift+Enter is Esc then Enter.
 **Finding text in the terminal.** With the terminal focused, `⌘F` (`Ctrl+Shift+F` on Linux and
 Windows, so `Ctrl+F` still reaches the agent) opens a find bar over its top right (`TermFind.tsx`);
 anywhere else on the page the browser's own find works as usual, which can't see the terminal's
-scrollback (xterm draws only the rows on screen, and WebGL on touch screens). On a phone, **Find in
-terminal** in the ⋯ sheet opens it, as does **Find in ‹session›'s terminal** in the palette. It
+scrollback (xterm draws only the rows on screen, and WebGL on touch screens). **Find in terminal**
+in the session's ⋯ menu (the ⋯ sheet on a phone) opens it, as does **Find in ‹session›'s terminal** in the palette. It
 searches the screen and the 10,000 lines of scrollback with xterm's search addon, highlights every
 match and the current one in colors for the terminal's theme (`termfind.ts`), and says where you
 are ("3 of 12"; past 1,000 matches only the oldest 1,000 are highlighted and it says "More than
@@ -351,7 +389,7 @@ Claude Code made itself isn't found.
 **The projects pane's width, and hiding it.** In the wide layout, dragging the pane's right edge
 (or the arrow keys on it) sets its width, from 180 to 480 px; a double-click on the edge goes back
 to 248 px. The pane button at the right of the rail's foot shrinks the rail to a strip holding a
-button that shows it again. While it's hidden, the session tabs show above the terminal even when
+button that shows it again. While it's hidden, the session tabs show above the stage bar even when
 the rail lists the sessions. Its width and whether it's hidden are kept in this browser
 (`ak-rail-width`, `ak-rail-hidden`; `src/web/rail.ts`).
 
@@ -475,10 +513,11 @@ top of the screen, in place of `⌘K`), and, with the setting on, lists the sess
 With the setting off, the app bar holds the project's sessions as tabs, between the drawer button and ⋯, so a phone
 can switch sessions without opening the drawer (each tab shows its status and stage; a swipe scrolls them, with no scrollbar); with it on, the drawer
 lists them instead and the app bar names the session and its project, with the session's status dot, and puts
-a dot on the drawer button while another session in the project needs you. The session header,
-the stage bar with its gate button (Design Review, Open PR, Merge & Close) and the footer details
-move into a ⋯ sheet, leaving the screen to the terminal; a dot on ⋯ marks a gate that is ready for
-you, and the sheet says why a closed gate is closed. The sheet closes with the × at its top right, a
+a dot on the drawer button while another session in the project needs you. The stage bar
+with its gate button (Design Review, Open PR, Merge & Close), the actions of the desktop's ⋯ menu
+(from the same list, as rows) and the footer details move into a ⋯ sheet, leaving the screen to the
+terminal; a dot on ⋯ marks a gate that is ready for you, and the sheet says why a closed gate is
+closed. The sheet closes with the × at its top right, a
 tap outside it, or Escape. Dialogs open as bottom sheets, with tabs in a
 header (Settings) on their own row under the title and its × (focus still goes from the tabs to the
 ×, as on a desktop). The app and the

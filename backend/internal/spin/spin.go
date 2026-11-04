@@ -74,7 +74,8 @@ type Step struct {
 	once         sync.Once
 }
 
-// Start begins a step whose row is label: "  ⣾ Release         installing meko 1.2.4…".
+// Start begins a step whose row is label: "  ⣾ Release         installing meko 1.2.4", with no "…" after
+// it since the dots already say it's under way.
 func Start(w io.Writer, label, doing string) *Step {
 	s := &Step{w: w, label: label, doing: doing}
 	switch {
@@ -100,7 +101,7 @@ func (s *Step) run() {
 			if s.label == "" {
 				fmt.Fprintf(s.w, "\r  %s %s…\033[K", Frames[i%len(Frames)], s.doing)
 			} else {
-				fmt.Fprintf(s.w, "\r  %s %-15s %s…\033[K", Frames[i%len(Frames)], s.label, s.doing)
+				fmt.Fprintf(s.w, "\r  %s %-15s %s\033[K", Frames[i%len(Frames)], s.label, s.doing)
 			}
 			select {
 			case <-s.stop:

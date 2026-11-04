@@ -31,6 +31,7 @@ import (
 	"github.com/yugabyte/meko/backend/internal/rest"
 	"github.com/yugabyte/meko/backend/internal/secrets"
 	"github.com/yugabyte/meko/backend/internal/server"
+	"github.com/yugabyte/meko/backend/internal/service"
 	"github.com/yugabyte/meko/backend/internal/store"
 	"github.com/yugabyte/meko/backend/internal/storeapi"
 	"github.com/yugabyte/meko/backend/internal/supervisor"
@@ -158,8 +159,12 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 			onProbation = true
 		} else {
 			makeMekoCLI(app, log)
+			renameExtensions(l, log)
 		}
+	} else {
+		renameExtensions(l, log) // a build from source is never on probation
 	}
+	refreshLaunchAgent(l, log)
 
 	st, err := store.Open(l.DB)
 	if err != nil {
@@ -554,9 +559,60 @@ func makeMekoCLI(app update.App, log *slog.Logger) {
 	}
 }
 
+// renameExtensions moves this data folder's extensions installed under an older name of their
+// command onto the current one (extensions.Registry.Rename): AgentK's agentk becomes me_koder. Like
+// makeMekoCLI, serve runs it only once its release is past probation: a Meko rolled back after it
+// would have a registry naming links its catalog doesn't know, and old links it can't make again.
+func renameExtensions(l paths.Layout, log *slog.Logger) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	reg, err := extensions.Load(l.Root)
+	if err == nil {
+		err = reg.Rename(l.Root, home)
+	}
+	if err != nil {
+		log.Warn("can't rename the extensions' commands", "error", err)
+	}
+}
+
+// refreshLaunchAgent brings the LaunchAgent that runs this data folder up to date with this
+// version's (service.Launchd.Refresh), without reloading it: an install whose plist ran
+// app/current/bin/meko, which macOS announced as a new background item after every update, moves
+// to the launcher that updates leave alone. It runs only under launchd.
+func refreshLaunchAgent(l paths.Layout, log *slog.Logger) {
+	if os.Getenv("MEKO_SERVICE") != "launchd" {
+		return
+	}
+	m := serviceOf(l)
+	d, ok := m.(*service.Launchd)
+	if !ok {
+		return
+	}
+	exe, err := os.Executable()
+	if app, _, isRelease := runningRelease(); isRelease {
+		exe, err = app.CurrentExe(), nil
+	}
+	if err != nil {
+		log.Warn("can't update the LaunchAgent", "error", err)
+		return
+	}
+	// The data folder as the plist spells it, so an unchanged plist stays unchanged.
+	dir := d.DataDir()
+	changed, err := d.Refresh(service.Spec{Exe: exe, DataDir: dir, ServiceLog: paths.New(dir).ServiceLog})
+	if err != nil {
+		log.Warn("can't update the LaunchAgent", "error", err)
+	} else if changed {
+		log.Info("updated the LaunchAgent; it takes effect at the next login", "file", d.File())
+	}
+}
+
 // finishUpdate finishes the update to release once it has run for after (update.HealthyAfter),
-// unless ctx ends first, and then makes the meko-cli command.
-func finishUpdate(ctx context.Context, app update.App, release string, after time.Duration, log *slog.Logger) {
+// unless ctx ends first, and then makes the meko-cli command and moves the extensions onto their
+// commands' new names (renameExtensions).
+func finishUpdate(ctx context.Context, app update.App, release string, after time.Duration, l paths.Layout,
+	log *slog.Logger) {
 	select {
 	case <-ctx.Done():
 	case <-time.After(after):
@@ -567,6 +623,7 @@ func finishUpdate(ctx context.Context, app update.App, release string, after tim
 		}
 		log.Info("the update is done", "version", release, "pruned", pruned)
 		makeMekoCLI(app, log)
+		renameExtensions(l, log)
 	}
 }
 
@@ -580,7 +637,7 @@ func finishUpdate(ctx context.Context, app update.App, release string, after tim
 func startUpdates(ctx context.Context, app update.App, release string, l paths.Layout, cfg config.Config,
 	log *slog.Logger, onProbation bool, restart chan struct{}, web *webListener) (*update.Updater, string) {
 	if onProbation {
-		go finishUpdate(ctx, app, release, update.HealthyAfter, log)
+		go finishUpdate(ctx, app, release, update.HealthyAfter, l, log)
 	}
 	schema, err := store.LatestSchema()
 	if err != nil {

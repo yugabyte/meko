@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import fastifyStatic from '@fastify/static';
@@ -6,17 +6,17 @@ import fastifyWebsocket from '@fastify/websocket';
 import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck,
-  EventsClientMessage, HarnessStatus, KnowledgeUpload, MekoCallBy, MekoCallDetail, MekoCallPage, MekoDatapack, MekoLogInfo, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, StagedImage,
-  HeldReview, HeldReviewsResult, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
+  EventsClientMessage, HarnessModels, HarnessStatus, KnowledgeUpload, MekoDatapack, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, StagedImage,
+  HeldReview, HeldReviewsResult, Workshop, WorkshopStart, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, RunActionsRequest, RunActionsResult, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
   JoinByLinkRequest, JoinByLinkResult, LinkGrant, ShareLink, ShareLinkChange, ShareLinkState,
   CloseWorkItemsRequest, CreateWorkItemRequest, ReorderWorkItemsRequest, UpdateWorkItemRequest, WorkItem, WorkLinkMatch, WorkSync,
 } from '../shared/types.js';
-import { ACTIONS_MAX, LINK_GRANTS, MAX_KB_UPLOAD_BYTES, MAX_PASTE_BYTES, MEKO_CALL_BY, SHARE_GRANTS, WORK_SYNC_MINUTES_MAX } from '../shared/types.js';
+import { ACTIONS_MAX, LINK_GRANTS, MAX_IDLE_STOP_HOURS, MAX_KB_UPLOAD_BYTES, MAX_PASTE_BYTES, SHARE_GRANTS, WORK_SYNC_MINUTES_MAX } from '../shared/types.js';
 import { AGENTK_PATH, shareLinkToken, shareLinkUrl } from '../shared/mekourls.js';
 import { HARNESS_IDS, isHarnessId } from '../shared/harnesses.js';
 import { EMAIL_RE, MAX_SHARE_EMAILS } from '../shared/emails.js';
-import { MAX_DEPTH, MAX_ROUNDS, STRATEGIES, isStrategySetting, type CodeReviewDetail } from '../shared/codereview.js';
+import { MAX_DEPTH, MAX_ROUNDS, STRATEGIES, isStrategySetting, type CodeReviewDetail, type CodeReviewFinding } from '../shared/codereview.js';
 import { checkActions, runActions } from './actions.js';
 import { ybCallHomeDisabled } from './callhome.js';
 import { forgetContact, learnNames, listContacts, recordShares } from './contacts.js';
@@ -45,7 +45,7 @@ const LOCAL_MEKO_WAIT_MS = 1500;
 const ACTIONS: Record<SessionAction, true> = {
   'approve-design': true, 'cancel-approval': true, 'open-pr': true, merge: true, 'cancel-queued': true,
   resume: true, archive: true, discard: true, 'update-pr': true, 'close-review': true, learn: true,
-  'review-run': true, 'review-cancel': true, 'review-retry': true, 'review-open-anyway': true,
+  'review-run': true, 'review-cancel': true, 'review-retry': true, 'review-open-anyway': true, 'review-send': true,
 };
 /**
  * The app page's Content-Security-Policy. No script-src: the design panel's Artifact frame is a
@@ -368,6 +368,14 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     return reply.code(204).send();
   });
 
+  // ---- workshops (bundled tours, src/server/workshops.ts) ----
+  app.get('/api/workshops', async (): Promise<Workshop[]> => core.workshops.list());
+  app.post<{ Params: { id: string } }>('/api/workshops/:id/start', async (req): Promise<WorkshopStart> => core.workshops.start(req.params.id));
+  app.post<{ Params: { id: string } }>('/api/workshops/:id/go', async (req, reply) => {
+    await core.workshops.go(req.params.id);
+    return reply.code(204).send();
+  });
+
   // ---- projects ----
   app.post<{ Body: CreateProjectRequest }>('/api/projects', async (req) => core.projects.open(req.body));
   app.get<{ Params: { id: string } }>('/api/projects/:id', async (req) => core.projects.get(req.params.id));
@@ -451,36 +459,13 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   app.get<{ Params: { id: string } }>('/api/sessions/:id/base-branches', async (req) => core.sessions.baseBranches(req.params.id));
   app.post<{ Params: { id: string }; Body: MoveSessionRequest }>('/api/sessions/:id/move', async (req) =>
     core.sessions.move(req.params.id, req.body));
-  app.get<{ Params: { id: string } }>('/api/projects/:id/meko-logs', async (req): Promise<MekoLogInfo[]> => core.sessions.mekoLogs(req.params.id));
-  app.get<{ Params: { id: string }; Querystring: { before?: string; limit?: string; tool?: string; by?: string; failed?: string } }>(
-    '/api/sessions/:id/meko-calls', async (req): Promise<MekoCallPage> => {
-      const { before, limit, tool, by, failed } = req.query;
-      if (by && !(MEKO_CALL_BY as readonly string[]).includes(by)) throw new HttpError(400, 'by must be agentk or claude.');
-      const num = (v: string | undefined, what: string) => {
-        if (v === undefined || v === '') return undefined;
-        const n = Number(v);
-        if (!Number.isSafeInteger(n) || n < 0) throw new HttpError(400, `${what} must be a whole number.`);
-        return n;
-      };
-      return core.sessions.mekoCalls(req.params.id, {
-        before: num(before, 'before'), limit: num(limit, 'limit'), tool: tool || undefined, by: (by || undefined) as MekoCallBy | undefined,
-        failed: failed === '1' || failed === 'true',
-      });
-    });
-  app.get<{ Params: { id: string } }>('/api/sessions/:id/meko-calls.jsonl', async (req, reply) => {
-    const file = core.sessions.mekoLogFile(req.params.id);
-    const name = `${req.params.id.replace(/[^A-Za-z0-9._-]+/g, '_')}-meko-calls.jsonl`;
-    return reply.type('application/x-ndjson').header('Content-Disposition', `attachment; filename="${name}"`).send(createReadStream(file));
-  });
-  app.get<{ Params: { id: string; offset: string }; Querystring: { id?: string } }>('/api/sessions/:id/meko-calls/:offset',
-    async (req): Promise<MekoCallDetail> => core.sessions.mekoCall(req.params.id, Number(req.params.offset), req.query.id ?? ''));
-  app.delete<{ Params: { id: string } }>('/api/sessions/:id/meko-calls', async (req, reply) => {
-    core.sessions.clearMekoLog(req.params.id);
-    return reply.code(204).send();
-  });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/code-review', async (req): Promise<CodeReviewDetail> => {
     core.sessions.row(req.params.id);
     return core.reviews.detail(req.params.id);
+  });
+  app.patch<{ Params: { id: string; key: string }; Body: unknown }>('/api/sessions/:id/code-review/findings/:key', async (req): Promise<CodeReviewFinding> => {
+    core.sessions.row(req.params.id);
+    return core.reviews.setFinding(req.params.id, req.params.key, req.body);
   });
   app.get<{ Params: { id: string } }>('/api/sessions/:id/discard-check', async (req): Promise<DiscardCheck> => core.sessions.discardCheck(req.params.id));
   app.get<{ Params: { id: string }; Querystring: { commit?: string } }>('/api/sessions/:id/changes', async (req): Promise<SessionChanges> =>
@@ -553,6 +538,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     hostName: core.hostName(),
     idleWorktreesPerRepo: core.worktrees.cap(),
     idleWorktreeDays: core.worktrees.idleDays(),
+    idleStopHours: core.config.sessions.idleStopHours,
     callHomeEnabled: core.config.callHome.enabled,
     ...(ybCallHomeDisabled() ? { callHomeOffBy: 'YB_DISABLE_CALLHOME' as const } : {}),
     resolveConflicts: core.config.pr.resolveConflicts,
@@ -570,6 +556,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     codeReviewStrategy: globalReview(core.config).strategy,
     codeReviewRounds: core.config.codeReview.rounds,
     codeReviewDepth: core.config.codeReview.depth,
+    codeReviewCheck: core.config.codeReview.check,
   });
   app.get('/api/settings', async () => {
     // Opening Settings reads the Meko on this computer and its Meko Cloud link again (it may have
@@ -595,6 +582,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (b.idleWorktreeDays !== undefined && (!Number.isInteger(b.idleWorktreeDays) || b.idleWorktreeDays < 0 || b.idleWorktreeDays > MAX_IDLE_DAYS)) {
       throw new HttpError(400, `Days to keep an unused idle worktree must be a whole number from 0 to ${MAX_IDLE_DAYS}.`);
     }
+    if (b.idleStopHours !== undefined && (!Number.isInteger(b.idleStopHours) || b.idleStopHours < 0 || b.idleStopHours > MAX_IDLE_STOP_HOURS)) {
+      throw new HttpError(400, `Hours before an idle agent is stopped must be a whole number from 0 to ${MAX_IDLE_STOP_HOURS}.`);
+    }
     // eslint-disable-next-line no-control-regex
     if (b.serverName !== undefined && (typeof b.serverName !== 'string' || b.serverName.trim().length > 64 || /[\u0000-\u001f\u007f]/.test(b.serverName))) {
       throw new HttpError(400, 'Server name must be 64 characters or fewer, with no line breaks.');
@@ -618,7 +608,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     if (b.codeReviewDepth !== undefined && (!Number.isInteger(b.codeReviewDepth) || b.codeReviewDepth < 1 || b.codeReviewDepth > MAX_DEPTH)) {
       throw new HttpError(400, `Review depth must be a whole number from 1 to ${MAX_DEPTH}.`);
     }
-    for (const k of ['claudeEnabled', 'opencodeEnabled', 'opencodeDisableTracking', 'kiroEnabled', 'kiroTrustTools', 'workQueueGithub', 'workQueueSlack'] as const) {
+    for (const k of ['claudeEnabled', 'opencodeEnabled', 'opencodeDisableTracking', 'kiroEnabled', 'kiroTrustTools', 'workQueueGithub', 'workQueueSlack', 'codeReviewCheck'] as const) {
       if (b[k] !== undefined && typeof b[k] !== 'boolean') throw new HttpError(400, `${k} must be true or false.`);
     }
     const slackListBefore = core.config.workQueue.slackList;
@@ -631,6 +621,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.serverName !== undefined) c.server.name = b.serverName.trim();
       if (b.idleWorktreesPerRepo !== undefined) c.worktrees.idlePerRepo = b.idleWorktreesPerRepo;
       if (b.idleWorktreeDays !== undefined) c.worktrees.idleDays = b.idleWorktreeDays;
+      if (b.idleStopHours !== undefined) c.sessions.idleStopHours = b.idleStopHours;
       if (b.callHomeEnabled !== undefined) c.callHome.enabled = b.callHomeEnabled;
       if (b.resolveConflicts !== undefined) c.pr.resolveConflicts = b.resolveConflicts;
       if (b.toolsEnabled !== undefined) c.tools.enabled = b.toolsEnabled;
@@ -647,6 +638,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       if (b.codeReviewStrategy !== undefined) c.codeReview.strategy = b.codeReviewStrategy;
       if (b.codeReviewRounds !== undefined) c.codeReview.rounds = b.codeReviewRounds;
       if (b.codeReviewDepth !== undefined) c.codeReview.depth = b.codeReviewDepth;
+      if (b.codeReviewCheck !== undefined) c.codeReview.check = b.codeReviewCheck;
     });
     if (core.config.workQueue.slackList !== slackListBefore) core.workQueue.slackListChanged();
     // An agent turned on: its version (and Kiro's agent file) follow, in the background. One turned
@@ -705,6 +697,11 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   // Check again (Settings → Harness), and Connect to Meko after the page connected an agent through
   // Meko's own route: a version or Meko list that changed reaches every page through `changed()`.
   app.post('/api/harnesses/refresh', async (): Promise<HarnessStatus[]> => core.refreshHarnesses(true));
+  // New session's Model choices for an agent whose list comes from its CLI (OpenCode's, Kiro's).
+  app.get<{ Params: { id: string } }>('/api/harnesses/:id/models', async (req): Promise<HarnessModels> => {
+    if (!isHarnessId(req.params.id)) throw new HttpError(404, 'There is no such agent.');
+    return { models: await core.harnesses.models(core.config, req.params.id) };
+  });
   app.post<{ Params: { id: string } }>('/api/harnesses/:id/update', async (req): Promise<HarnessStatus> => {
     if (!isHarnessId(req.params.id)) throw new HttpError(404, 'There is no such agent.');
     const h = core.harnesses.of(req.params.id);

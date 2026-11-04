@@ -104,9 +104,10 @@ func runDeleteExtension(l paths.Layout, name string, o extDeleteOptions, in io.R
 			"and registration were kept: stop it, then run this again", title, title, strings.Join(live, ", ")))
 	}
 	if cat.Managed {
-		// A damaged extension's uninstall didn't run, so the link Meko made is removed here.
+		// A damaged extension's uninstall didn't run, so the links Meko made are removed here.
 		if home, herr := os.UserHomeDir(); herr == nil {
 			_ = app.UnlinkCommand(home)
+			_ = cat.UnlinkOldCommands(app, home)
 		}
 	}
 	// Only a known extension's folders: a registered name Meko doesn't know is only forgotten.

@@ -9,7 +9,6 @@ import type { Db } from '../db.js';
 import type { GuardDecision, HookContext, HookPayload } from '../hooks.js';
 import type { LauncherSpec } from '../launcher.js';
 import type { Logger } from '../log.js';
-import type { AgentMekoCall } from '../mekolog.js';
 import type { Paths } from '../paths.js';
 import type { SessionRow } from '../store.js';
 import type { ReviewLaunch } from '../review/runner.js';
@@ -27,6 +26,8 @@ export interface LaunchInput {
   resume: boolean;
   /** The first prompt (or a continue prompt), or null. */
   prompt: string | null;
+  /** The model picked for the session (`sessions.model`), in the CLI's own terms; null for its default. */
+  model: string | null;
   /** The session's system-prompt lines (project, task, branch, workflow, Meko). */
   systemPrompt: string;
   /** Extra folders the agent may work in (the session's design folder). */
@@ -70,11 +71,6 @@ export interface UsageRead {
   changed: boolean;
   /** How full its context window is after its last turn (percent), when the harness's files say (Kiro's). */
   contextPercent?: number | null;
-  /**
-   * The agent's Meko calls the read found for the first time, with what was sent and what came back,
-   * for the session's Meko call log (Kiro's and OpenCode's; Claude's reach it through the mod).
-   */
-  mekoCalls?: AgentMekoCall[];
 }
 
 /**
@@ -172,6 +168,11 @@ export interface Harness {
   status(cfg: Config): CliStatus;
   /** Reads its version again when the last read is stale (or `force`). */
   version(cfg: Config, force?: boolean): Promise<string | null>;
+  /**
+   * The models its CLI lists, for New session (`HarnessCaps.models` `cli`): empty when they can't be
+   * read (a CLI that fails, or Kiro signed out). `Harnesses.models` keeps the answer.
+   */
+  models?(cfg: Config): Promise<string[]>;
   /** Runs its own updater, then reads the version again. 409 while one runs. */
   update(cfg: Config): Promise<CliStatus>;
 }

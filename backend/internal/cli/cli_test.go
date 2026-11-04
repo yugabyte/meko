@@ -233,12 +233,12 @@ func TestStatusAsksTheExtensionsAtOnce(t *testing.T) {
 		t.Errorf("status took %s", took)
 	}
 	want(t, "status", code, 0, out, "  ✓ AgentK          running, AgentK 1.0\n"+
-		"  ! Presenter       didn't answer in 2s (meko_presenter status)\n")
+		"  ! Presenter       didn't answer in 2s (me_presenter status)\n")
 	want(t, "status's links", code, 0, out, "  Agents (MCP, API)   http://127.0.0.1:"+port+"/mcp\n")
 
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
 	want(t, "status --verbose", code, 0, out, "  Extension:     agentk, running (AgentK 1.0)\n"+
-		"  Extension:     presenter, didn't answer in 2s (meko_presenter status)\n")
+		"  Extension:     presenter, didn't answer in 2s (me_presenter status)\n")
 }
 
 func TestStartStatusStop(t *testing.T) {
@@ -681,10 +681,6 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 	dir, port := setup(t)
 	code, _, errs := runSh("search", "--data-dir", dir, "anything")
 	want(t, "search with no server", code, exitNotRunning, errs, "isn't running")
-	withStdin(t, "datapacks\n")
-	code, _, errs = runSh("--data-dir", dir)
-	want(t, "the prompt with no server", code, exitNotRunning, errs,
-		"Meko isn't running (data in "+dir+"). Start it: meko start")
 
 	startReady(t, dir, port)
 	var out string
@@ -709,6 +705,12 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 	want(t, "create_datapack twice", code, 1, out+errs, "CONFLICT")
 	code, out, errs = runSh("add_memory", "--data-dir", dir, "kept in scratch", "--datapack", "scratch-notes")
 	want(t, "add_memory by name", code, 0, out+errs, "Added memory ")
+	withStdin(t, "piped into scratch\n")
+	code, out, errs = runSh("add_memory", "--data-dir", dir, "--datapack", "scratch-notes")
+	want(t, "add_memory from stdin", code, 0, out+errs, "Added memory ")
+	code, out, errs = runSh("search", "--data-dir", dir, "piped into scratch", "--datapack", "scratch-notes",
+		"--source", "memory", "--json")
+	want(t, "the memory add_memory read from stdin", code, 0, out+errs, "piped into scratch")
 	withStdin(t, "n\n")
 	code, out, errs = runSh("delete_datapack", "--data-dir", dir, "scratch-notes")
 	want(t, "delete_datapack answered n", code, 1, errs, "Nothing was deleted\n")
@@ -722,30 +724,6 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 	want(t, "delete_datapack", code, 0, out+errs, "Deleted datapack scratch-notes\n")
 	if _, out, _ = runSh("datapacks", "--data-dir", dir); strings.Contains(out, "scratch-notes") {
 		t.Errorf("the deleted datapack is still listed:\n%s", out)
-	}
-
-	// meko-cli's prompt, run as a script: use fills in --datapack, delete_datapack's question takes the
-	// next line, a failing line doesn't stop it but sets the exit code, and exit ends it.
-	withStdin(t, "create_datapack prompt-notes\nuse prompt-notes\nadd_memory \"kept by the prompt\"\n"+
-		"search \"kept by the prompt\" --source memory --json\nadd_memory\nsearch \"unclosed\nuse nosuch\nuse\n"+
-		"# a comment\nhelp\n\ndelete_datapack prompt-notes\ny\nsearch \"kept by the prompt\" --source memory --json\n"+
-		"exit\ncreate_datapack after-exit\n")
-	code, out, errs = runSh("--data-dir", dir)
-	want(t, "the prompt's use", code, exitError, out, "Using datapack prompt-notes\nAdded memory ")
-	want(t, "the prompt's search in the datapack it uses", code, exitError, out, "kept by the prompt")
-	want(t, "the prompt's use, alone", code, exitError, out, "\nUsing datapack prompt-notes\n")
-	want(t, "the prompt's help, with --data-dir", code, exitError, out, "Usage: meko-cli [<command> [flags]]")
-	want(t, "the prompt's delete_datapack of the datapack in use", code, exitError, out,
-		"Delete it? [y/N] \nDeleted datapack prompt-notes\nUsing the default datapack\n")
-	want(t, "add_memory at the prompt", code, exitError, errs, "meko-cli: give the memory's text: add_memory \"<text>\"\n")
-	want(t, "an unclosed quote", code, exitError, errs, "meko-cli: the line has an unclosed \" quote\n")
-	want(t, "use of a missing datapack", code, exitError, errs, `meko-cli: no datapack is named "nosuch"`)
-	if strings.Contains(errs, `"prompt-notes"`) || strings.Contains(errs, "unknown command") {
-		t.Errorf("a line after the datapack in use was deleted, or help, failed:\n%s", errs)
-	}
-	if _, out, _ = runSh("datapacks", "--data-dir", dir); strings.Contains(out, "prompt-notes") ||
-		strings.Contains(out, "after-exit") {
-		t.Errorf("the prompt's datapack wasn't deleted, or a line after exit ran:\n%s", out)
 	}
 
 	// upload adds files to the knowledge base and waits until they're indexed.

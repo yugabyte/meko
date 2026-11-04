@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import type { HarnessId } from '../../src/shared/harnesses.js';
+import { describe, expect, it, vi } from 'vitest';
+import { checkModel, modelLabel, type HarnessId } from '../../src/shared/harnesses.js';
 import { ClaudeCode } from '../../src/server/claudecode.js';
 import { DEFAULT_CONFIG, type Config } from '../../src/server/config.js';
 import { getPaths } from '../../src/server/paths.js';
@@ -122,5 +122,50 @@ describe('new sessions start only on agents Meko has connected', () => {
   ])("counts OpenCode's meko server Meko reports (%s) as its own, which AgentK then leaves alone", (_, state, own) => {
     const s = setup(installed, { meko: () => list({ opencode: state }) });
     expect(s.harnesses.openCodeOwnMeko()).toBe(own);
+  });
+});
+
+describe('a model name AgentK passes to an agent', () => {
+  it.each([
+    ['opus', null],
+    ['claude-opus-5-5', null],
+    ['opus[1m]', null],
+    ['anthropic/claude-sonnet-4-5', null],
+    ['ollama/qwen3:4b', null],
+    ['us.anthropic.claude-sonnet-4-5-v1:0@2025', null],
+    ['', 'Name a model.'],
+    ['-p', "-p isn't a model name: use letters, digits and . _ : / @ [ ] - only."],
+    ['opus 5', "opus 5 isn't a model name: use letters, digits and . _ : / @ [ ] - only."],
+    ['$(id)', "$(id) isn't a model name: use letters, digits and . _ : / @ [ ] - only."],
+    ['x'.repeat(201), 'A model name has at most 200 characters.'],
+  ])('%s', (model, error) => {
+    expect(checkModel(model)).toBe(error);
+  });
+
+  it("is shown by its label when it's on the agent's own list", () => {
+    expect(modelLabel('claude', 'opus')).toBe('Opus');
+    expect(modelLabel('claude', 'claude-opus-5-5')).toBe('claude-opus-5-5');
+    expect(modelLabel('kiro', 'auto')).toBe('auto');
+  });
+});
+
+describe("an agent's model list", () => {
+  it('keeps the last list read for modelsKept while a newer read is under way, after Check again or once it expires', async () => {
+    const s = setup({ kiro: '2.34.0' });
+    await s.readAll();
+    let release = (_: string[]) => undefined as void;
+    const kiro = s.harnesses.of('kiro');
+    kiro.models = vi.fn(async () => ['auto']);
+    expect(s.harnesses.modelsKept(s.cfg, 'kiro')).toBeNull();
+    expect(await s.harnesses.models(s.cfg, 'kiro')).toEqual(['auto']);
+    expect(s.harnesses.modelsKept(s.cfg, 'kiro')).toEqual(['auto']);
+
+    kiro.models = vi.fn(() => new Promise<string[]>((r) => (release = r)));
+    await s.harnesses.refresh(s.cfg, true);
+    // The read Check again asked for is still going: the last list stands.
+    expect(s.harnesses.modelsKept(s.cfg, 'kiro')).toEqual(['auto']);
+    expect(kiro.models).toHaveBeenCalledTimes(1);
+    release(['auto', 'claude-sonnet-4.5']);
+    await vi.waitFor(() => expect(s.harnesses.modelsKept(s.cfg, 'kiro')).toEqual(['auto', 'claude-sonnet-4.5']));
   });
 });

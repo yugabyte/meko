@@ -15,7 +15,7 @@ flowchart TB
     WL["web listener :7777\nlogin, proxy to the extension's socket"]
     AL["API listener 127.0.0.1:7778\nMCP and REST"]
   end
-  subgraph P["meko_presenter serve (run/web.sock)"]
+  subgraph P["me_presenter serve (run/web.sock)"]
     API["API and WebSockets"]
     J["jobs: claude -p on the deck's session"]
     D["decks: drafts, ops, pieces, cache"]
@@ -155,13 +155,17 @@ carries those, `SHA256SUMS` and its signature `SHA256SUMS.sig` (the release envi
 which only `main` can use: the backend's `docs/install.md`, "Signed releases"), and no installer.
 
 Meko installs and updates them (`meko extension install presenter`, `meko extension update
-presenter`, the Extensions page): it checks the signature and the checksum, unpacks a release into `<home>/app/<version>`, checks that
-`bin/meko_presenter version --json` names it, and points `app/current` and
-`~/.local/bin/meko_presenter` at it. The command is `meko_presenter`, and the extension `presenter`
-(its folder, tags, tarballs and pages). `bin/meko_presenter` is the launcher
-(`packaging/meko_presenter`): it runs the bundled Node on
+presenter`, the Extensions page): it checks the signature and the checksum, unpacks a release into
+`<home>/app/<version>`, checks that
+`bin/me_presenter version --json` names it, and points `app/current` and
+`~/.local/bin/me_presenter` at it. The command is `me_presenter`, so a process list and
+`~/.local/bin` say it's a Meko extension's, and the extension `presenter` (its folder, tags,
+tarballs and pages). It was `meko_presenter`, which a release still carries as a link
+(`bin/meko_presenter`) for older Mekos; Meko moves an install from then onto `me_presenter` when it
+starts, removing the old link. `bin/me_presenter` is the launcher (`packaging/me_presenter`): it
+runs the bundled Node (`node/bin/me_presenter`, so the process is named `me_presenter`) on
 `lib/dist/server/cli.js`, with `PRESENTER_APP_DIR` naming the release's folder and
-`PRESENTER_LAUNCHER` itself, and `meko_presenter start` runs `serve` through it. Run by `meko start`
+`PRESENTER_LAUNCHER` itself, and `me_presenter start` runs `serve` through it. Run by `meko start`
 and `meko stop`, which set `MEKO_SUMMARY=1`, `start` and `stop` print one row of Meko's summary
 (`  ✓ Presenter       started`, `src/server/summary.ts`; the format is in Meko's
 `backend/docs/install.md`) instead of their usual line.
@@ -171,7 +175,7 @@ An update is on probation until it has served for 5 minutes, and Meko runs it. T
 `MEKO_LAUNCHED` set, and then the launcher runs Node. Meko writes `app/update-pending.json` as it
 switches `app/current`, counts each start of the new version, and on the start after three failed
 ones points `app/current` back at the old version, adds the new one to `app/bad-versions` (which it
-skips from then on) and runs the old one. A clean stop (`meko_presenter stop`: the server exits 0)
+skips from then on) and runs the old one. A clean stop (`me_presenter stop`: the server exits 0)
 doesn't count, so only crashes do, and once the version has served 5 minutes Meko clears the
 record and prunes old versions. These are the rules Meko follows for its own releases, written
 once in Meko. With no `meko` that has `_launch` (one too old, or none on PATH, in `~/.local/bin` or
@@ -179,7 +183,7 @@ in Meko's `app/current/bin`), the launcher runs Node itself and says a failed up
 back. A build from source has no launcher and no record, and Meko never updates it.
 
 Meko updates Presenter on its own (its **Update automatically** switch, on unless turned off),
-but not during a talk. Before an automatic update it runs `meko_presenter _busy`, which asks the
+but not during a talk. Before an automatic update it runs `me_presenter _busy`, which asks the
 server on its socket (`GET /_meko/busy`) and exits 0 while a talk is live: a run has a window open
 (the console or the audience's), or moved in the last 5 minutes (`Runs.live`; its windows may be
 reconnecting). Meko then tries again at its next check. A server that isn't running, or doesn't

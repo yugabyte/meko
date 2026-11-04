@@ -4,7 +4,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import {
-  findMeAkReviewLine, meAkReviewLine, noCounts, parseMeAkReviewLine, readOverrides, resolveReview, reviewSegmentLabel, reviewSegmentText, strategyTag, withMeAkReviewLine,
+  caughtWithMeko, findMeAkReviewLine, meAkReviewLine, noCounts, parseMeAkReviewLine, readOverrides, resolveReview, reviewSegmentLabel, reviewSegmentText, reviewSettled, strategyTag, withMeAkReviewLine,
   type CodeReviewState, type CodeReviewSummary, type SeverityCounts,
 } from '../../src/shared/codereview.js';
 import { ReviewFields, ReviewSegment } from '../../src/web/components/common.js';
@@ -46,16 +46,29 @@ describe('the me_ak_review line', () => {
   });
 });
 
+describe('Caught with Meko', () => {
+  it.each([
+    [[], ''],
+    [[{ kept: true, gotchas: [] }], ''],
+    // A dropped finding's credit doesn't count.
+    [[{ kept: false, gotchas: ['MG-1'] }], ''],
+    [[{ kept: true, gotchas: ['MG-2'] }, { kept: false, gotchas: ['MG-1'] }], '1 caught with Meko (MG-2)'],
+    [[{ kept: true, gotchas: ['MG-2', 'MG-3'] }, { kept: true, gotchas: ['MG-2'] }], '2 caught with Meko (MG-2, MG-3)'],
+  ])('counts kept findings that credit a gotcha: %j is %j', (findings, text) => {
+    expect(caughtWithMeko(findings)).toBe(text);
+  });
+});
+
 describe('review settings', () => {
-  const global = { strategy: 'sagittarius-3.0' as const, rounds: 0, depth: 1 };
+  const global = { strategy: 'sagittarius-3.0' as const, rounds: 0, depth: 1, check: true };
 
   it('takes the session over the project over the global values, each on its own', () => {
-    expect(resolveReview(global, { strategy: 'sirius-1.0', depth: 3 }, { depth: 2, rounds: null })).toEqual({ strategy: 'sirius-1.0', rounds: 0, depth: 2 });
+    expect(resolveReview(global, { strategy: 'sirius-1.0', depth: 3, check: false }, { depth: 2, rounds: null })).toEqual({ strategy: 'sirius-1.0', rounds: 0, depth: 2, check: false });
   });
 
   it.each([
-    [{ strategy: 'off', rounds: 9, depth: 0 }, { strategy: 'off', rounds: 5, depth: 1 }],
-    [{ strategy: 'goliath-1.0', rounds: 1.5, depth: '3' }, {}],
+    [{ strategy: 'off', rounds: 9, depth: 0, check: false }, { strategy: 'off', rounds: 5, depth: 1, check: false }],
+    [{ strategy: 'goliath-1.0', rounds: 1.5, depth: '3', check: 'no' }, {}],
     [null, {}],
   ])('reads %j from untrusted input as %j', (input, want) => {
     expect(readOverrides(input)).toEqual(want);
@@ -81,6 +94,7 @@ describe("the review's part of a task's tab", () => {
     [r({ state: 'scoring' }), '6/6'],
     [r({ strategy: 'sirius-1.0', passes: 1, passesDone: 0 }), '1/1'],
     [r({ state: 'fixing' }), 'R1'],
+    [r({ state: 'triage', counts: counts(2, 1, 4) }), '2·1'],
     [r({ state: 'describing' }), '…'],
     [r({ state: 'done', counts: counts(2, 1, 4) }), '2·1'],
     [r({ state: 'done', counts: counts(2, 1, 4), addressed: true }), 'LGTM'],
@@ -91,10 +105,22 @@ describe("the review's part of a task's tab", () => {
     expect(reviewSegmentText(summary)).toBe(text);
   });
 
+  // The tab and the rail leave the magnifier out of a settled review: exactly a done one reading LGTM.
+  it.each(['describing', 'preparing', 'sweeping', 'scoring', 'triage', 'fixing', 'done', 'failed', 'cancelled'] as CodeReviewState[])(
+    'is settled in %s only when done and LGTM',
+    (state) => {
+      for (const over of [{}, { counts: counts(2, 1, 4) }, { counts: counts(2, 1, 4), addressed: true }, { counts: counts(0, 0, 1) }]) {
+        const summary = r({ state, ...over });
+        expect(reviewSettled(summary)).toBe(state === 'done' && reviewSegmentText(summary) === 'LGTM');
+      }
+    },
+  );
+
   it.each([
     [r({}), 'Code review: Sagittarius 3.0, 2 of 5 passes reported'],
     [r({ state: 'scoring' }), 'Code review: Sagittarius 3.0, step 6 of 6, 3 of 9 scored'],
     [r({ state: 'describing' }), 'Code review: Sagittarius 3.0, waiting for the PR description'],
+    [r({ state: 'triage' }), 'Code review: Sagittarius 3.0, its findings wait on you'],
     [r({ state: 'done', counts: counts(1, 0, 0), addressed: true }), 'Code review: Sagittarius 3.0, LGTM, 1 blocker addressed'],
     [r({ waiting: true }), 'Code review: Sagittarius 3.0, 2 of 5 passes reported, waiting on you in its terminal'],
     // One the user ran holds no Open PR: Retry is all it offers.
@@ -111,6 +137,7 @@ describe("the review's part of a task's tab", () => {
     [{ waiting: true }, 'review-glass running waiting'],
     [{ waiting: true, mekoCall: true }, 'review-glass running waiting'],
     [{ mekoCall: true }, 'review-glass running meko'],
+    [{ state: 'triage' }, 'review-glass waiting'],
     [{ state: 'failed', waiting: true }, 'review-glass stopped'],
   ])('draws the magnifier of %j as %s', (over, cls) => {
     const html = renderToStaticMarkup(createElement(ReviewSegment, { review: r(over), selected: false, onOpen: () => {} }));
@@ -140,7 +167,7 @@ describe("the review's part of a task's tab", () => {
     })
     .filter((sub) => sub.classes.length > 0);
   const own = ['review-seg', 'review-glass', 'review-seg-text', 'tab-review', 'rail-review', 'lens', 'rim', 'handle', 'glass-m'];
-  const states: CodeReviewState[] = ['failed', 'cancelled', 'sweeping', 'scoring', 'fixing', 'done'];
+  const states: CodeReviewState[] = ['failed', 'cancelled', 'sweeping', 'scoring', 'triage', 'fixing', 'done'];
 
   // A stopped review's `held` once matched the held-image tile's `.held` (44 px square, position:
   // relative), which put the magnifier at the top of a tall box and pushed the `!` out of the tab.

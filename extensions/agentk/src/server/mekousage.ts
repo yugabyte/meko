@@ -1,8 +1,13 @@
 import { costOf, priceFor } from '../shared/pricing.js';
-import { MEKO_LOG_TOOLS, type CallHomeAgentkMeko, type CallHomeLearn, type CallHomeMekoTool, type CallHomeTokens, type MekoFirstTurn, type MekoLearning, type MekoUsage, type SessionUsage } from '../shared/types.js';
+import { type CallHomeAgentkMeko, type CallHomeLearn, type CallHomeMekoTool, type CallHomeTokens, type MekoFirstTurn, type MekoLearning, type MekoUsage, type SessionUsage } from '../shared/types.js';
 import { all, get, type Db } from './db.js';
 import { CARRY_TURNS, SEARCH_TOOL_NAMES, SEARCH_TOOLS, searchSaving } from './mekosavings.js';
-import { TOO_LARGE } from './savedreply.js';
+
+/**
+ * Claude Code's notice for a tool result too large for Claude's context, which it saved to a file
+ * instead. Only the notice reaches Claude and the transcript.
+ */
+const TOO_LARGE = /^Error: result \(([\d,]+) characters\) exceeds maximum allowed tokens/;
 
 export type MekoKind = 'lookup' | 'save' | 'other';
 export type MekoOutcome = 'found' | 'empty' | 'error' | 'ok';
@@ -25,7 +30,12 @@ export function mekoTool(name: string): string | null {
   return MEKO_TOOL.exec(name)?.[1] ?? null;
 }
 
-const KNOWN_TOOLS: ReadonlySet<string> = new Set<string>(MEKO_LOG_TOOLS);
+/** The Meko tools agents call in a session, which `serverMekoTool` prefers when a name splits more than one way. */
+const KNOWN_TOOLS: ReadonlySet<string> = new Set<string>([
+  'context_search', 'memory_search', 'knowledgebase_search', 'memory_get_all', 'memory_get_by_id', 'conversation_get',
+  'artifact_get', 'memory_add', 'memory_update', 'memory_promote', 'conversation_create', 'conversation_update',
+  'conversation_add_message', 'artifact_put',
+]);
 
 /**
  * The Meko tool a name made of a Meko server's name, `_` and the tool calls (OpenCode's
@@ -485,9 +495,7 @@ export function summarizeLearn(runs: LearnRun[]): CallHomeLearn {
 
 /** Learn steps as the project home and the Usage page show them (`MekoLearning`). */
 export function learningOf(runs: LearnRun[]): MekoLearning {
-  const l: MekoLearning = { runs: 0, failed: 0, skipped: 0, saves: 0, updates: 0, skips: 0, tokens: 0, usd: null };
-  let usd = 0;
-  let priced = false;
+  const l: MekoLearning = { runs: 0, failed: 0, skipped: 0, saves: 0, updates: 0, skips: 0, tokens: 0 };
   for (const r of runs) {
     if (r.outcome === 'skipped') {
       l.skipped++;
@@ -498,15 +506,8 @@ export function learningOf(runs: LearnRun[]): MekoLearning {
     l.saves += r.saves;
     l.updates += r.updates;
     l.skips += r.skips;
-    for (const t of r.tokens) {
-      l.tokens += t.input + t.output + t.cacheRead + t.cacheWrite;
-      const price = priceFor(t.model);
-      if (!price) continue;
-      usd += costOf(t, price);
-      priced = true;
-    }
+    for (const t of r.tokens) l.tokens += t.input + t.output + t.cacheRead + t.cacheWrite;
   }
-  l.usd = priced ? usd : null;
   return l;
 }
 

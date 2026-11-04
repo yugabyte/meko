@@ -1,5 +1,5 @@
 // Package callhome sends Meko's usage stats to YugabyteDB's call home service
-// (diagnostics.yugabyte.com, where yugabyted reports): a heartbeat of counts once a day, every hour in
+// (DefaultURL): a heartbeat of counts once a day, every hour in
 // an install's first day, on AgentK's schedule (extensions/agentk/src/server/callhome.ts). The body
 // is yugabyted's envelope with Meko's report as its payload; the service routes it by callhome_type
 // to a table of its own.
@@ -27,7 +27,7 @@ import (
 
 // DefaultURL is YugabyteDB's call home service: release installs send there unless [call_home] url
 // names another.
-const DefaultURL = "https://diagnostics.yugabyte.com"
+const DefaultURL = "https://diagnostics.meko.yugabyte.com"
 
 // The schedule, AgentK's.
 const (

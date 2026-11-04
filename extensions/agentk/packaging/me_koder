@@ -1,13 +1,16 @@
 #!/bin/sh
-# AgentK launcher, installed as <AK_HOME>/app/<version>/bin/agentk (and as bin/agent-k-local, its
-# name before the rename to AgentK, which services installed then still start).
+# AgentK launcher, installed as <AK_HOME>/app/<version>/bin/me_koder (and as bin/agentk and
+# bin/agent-k-local, its names before, which services installed then and older Mekos still run).
 #
-# Runs the bundled Node on the bundled server. `serve` and `host` go through Meko's launcher
-# (`meko _launch`), which runs this file again with MEKO_LAUNCHED set. For `serve` Meko runs the
-# probation of a version it just updated to: it counts the version's starts, rolls back to the
-# version before after three failed ones, takes a clean stop off the count, and finishes the update
-# once the version has run 5 minutes. For both, it marks the version's folder in use while they run,
-# so Meko never deletes the folder a running session host started from.
+# Runs the bundled Node on the bundled server. The Node is node/bin/me_koder, so the kernel names
+# AgentK's processes me_koder (ps, top, Activity Monitor), not node.
+#
+# `serve` and `host` go through Meko's launcher (`meko _launch`), which runs this file again with
+# MEKO_LAUNCHED set. For `serve` Meko runs the probation of a version it just updated to: it counts
+# the version's starts, rolls back to the version before after three failed ones, takes a clean stop
+# off the count, and finishes the update once the version has run 5 minutes. For both, it marks the
+# version's folder in use while they run, so Meko never deletes the folder a running session host
+# started from.
 set -eu
 
 # Resolve our real location, following symlinks (~/.local/bin -> app/current -> app/<ver>).
@@ -25,7 +28,7 @@ AK_APP_DIR=$(cd -P "$bin_dir/.." && pwd)
 AK_VERSION=$(cat "$AK_APP_DIR/VERSION" 2>/dev/null || echo unknown)
 export AK_APP_DIR AK_VERSION
 
-node="$AK_APP_DIR/node/bin/node"
+node="$AK_APP_DIR/node/bin/me_koder"
 cli="$AK_APP_DIR/lib/dist/server/cli.js"
 
 # Meko runs the probation of a new version (counting starts, rolling back, finishing the update);
@@ -37,9 +40,9 @@ if [ -z "${MEKO_LAUNCHED:-}" ]; then
       [ -n "$meko" ] || meko=$HOME/.local/bin/meko
       [ -x "$meko" ] || meko=${XDG_DATA_HOME:-$HOME/.local/share}/meko/app/current/bin/meko
       if [ -x "$meko" ] && "$meko" _launch --supported >/dev/null 2>&1; then
-        exec "$meko" _launch agentk "$bin_dir/agentk" "$@"
+        exec "$meko" _launch agentk "$bin_dir/me_koder" "$@"
       fi
-      echo "agentk: no meko with _launch was found, so a failed update won't roll back" >&2
+      echo "me_koder: no meko with _launch was found, so a failed update won't roll back" >&2
       ;;
   esac
 fi

@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
-import type { BackgroundTask, ChangeSide, CloseSessionRequest, DiffStat, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, LearnBrief, MekoCallBy, MekoCallDetail, MekoCallPage, MekoLogInfo, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
+import type { BackgroundTask, ChangeSide, CloseSessionRequest, DiffStat, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, LearnBrief, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
 import { LEARN_MONTHS_DEFAULT, LEARN_MONTHS_MAX, LEARN_TEXT_MAX, SESSION_NAME_MAX, START_STAGES, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
@@ -20,12 +20,10 @@ import { HOOK_WAIT_MS, RecallStore, SEARCH_TIMEOUT_MS, recordPreload, runRecall,
 import { countFileTypes, parseNumstatZ } from './filetypes.js';
 import { errMsg } from './log.js';
 import { checkStartItem, setItemSession } from './workqueue.js';
-import { AGENTK_AGENT_ID, launchedAgentId, sessionAgentId, withMekoScope } from './meko.js';
-import { claudeReply, mekoLogPath, removeMekoLog } from './mekolog.js';
-import { mekoTool } from './mekousage.js';
+import { AGENTK_AGENT_ID, launchedAgentId, sessionAgentId } from './meko.js';
 import {
   AUTO_RUN_PROMPTS, autoRunLine, DESIGN_UPKEEP_PROMPTS, designQaLine, designQuestionsLine, designUpkeepLine, designWhere, learnTask, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine,
-  mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, reviewDesignLine, taskWithName, withAttachedImages, type PromptName,
+  guideSystemLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, reviewDesignLine, taskWithName, withAttachedImages, type PromptName,
 } from './prompts.js';
 import { PR_DESIGN_TIMEOUT_MS, markPrDesignTold, prDesignFile, prDesignSource, removePrDesignFiles } from './prdesign.js';
 import { HttpError, projectConversationKey } from './projects.js';
@@ -33,13 +31,13 @@ import { checkStaged, claimStaged, claimedPath, removePastes, removeStaged, save
 import { kindOf } from '../shared/stages.js';
 import { expandBranchPrefix } from '../shared/branches.js';
 import { noOverrides, readOverrides } from '../shared/codereview.js';
-import { agentName, harnessOf } from '../shared/harnesses.js';
+import { agentName, checkModel, harnessOf } from '../shared/harnesses.js';
 import type { Harness } from './harness/index.js';
 import type { TranscriptMark } from './harness/types.js';
 import { writeLauncher } from './launcher.js';
 import { MekoCalls, MekoHold } from './mekocalls.js';
 import { ModLinks, type DroppedPrompt } from './modlink.js';
-import { DESIGN_READY } from './lifecycle.js';
+import { DESIGN_READY, checkOpensPr } from './lifecycle.js';
 import { askAnswers, parseAsk } from './asks.js';
 import {
   STORED_TASK_KIND, dedicatedDatapack, parseSettings, projectDatapacks, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, slugify, toSession,
@@ -91,9 +89,16 @@ const BACKGROUND_MAX = 10;
 const BACKGROUND_TEXT_MAX = 200;
 
 /**
+ * Claude Code's watch on an Artifact the agent published, a `monitor` it keeps for the rest of the
+ * session: `live updates for artifact <url> (…)`.
+ */
+const ARTIFACT_WATCH = /^live updates for artifact /;
+
+/**
  * A turn end's `background_tasks` (Claude Code's `Stop`, OpenCode's from AgentK's plugin) as
  * `Session.background`: each task's type and one line about it (a shell's command, else its
  * description, else a subagent's type). Missing, as from a Claude Code too old to send it, is none.
+ * Claude Code's Artifact watches are left out: they never end, and nothing waits on them.
  */
 export function backgroundTasks(raw: unknown): BackgroundTask[] {
   if (!Array.isArray(raw)) return [];
@@ -101,6 +106,7 @@ export function backgroundTasks(raw: unknown): BackgroundTask[] {
   for (const t of raw as unknown[]) {
     if (!t || typeof t !== 'object') continue;
     const r = t as Record<string, unknown>;
+    if (r.type === 'monitor' && typeof r.description === 'string' && ARTIFACT_WATCH.test(r.description)) continue;
     const type = typeof r.type === 'string' && r.type ? r.type : 'task';
     const text = [r.command, r.description, r.agent_type].find((v): v is string => typeof v === 'string' && !!v.trim()) ?? type;
     const line = text.replace(/\s+/g, ' ').trim();
@@ -178,6 +184,13 @@ const MAX_FAILED_STARTS = 20;
 const SETTLE_MS = 60000;
 /** How long recovery waits before trying again after a failed restart (each try may fetch from the remote). */
 const RECOVERY_BACKOFF_MS = 5 * 60 * 1000;
+/** How long an action that needs the agent of a session stopped for sitting idle waits for it to start again. */
+const WAKE_WAIT_MS = 60_000;
+/**
+ * How long an idle stop waits for the stopped agent's SessionEnd, so a late one can't end the agent
+ * a wake starts next (a harness with no such hook, Kiro, waits it out).
+ */
+const STOP_END_MS = 5000;
 /**
  * Session variables the launcher clears when it doesn't set them, so a value inherited from
  * the session host's environment or the user's profile can't leak in. MEKO_CHECKPOINT_INTERVAL is only
@@ -283,6 +296,19 @@ export class SessionManager {
   private relinks = new Map<string, { item: string; prev: string | null }>();
   /** Sessions we are deliberately stopping; their exit isn't an event. */
   private stopping = new Set<string>();
+  /**
+   * Activity the session's row doesn't show, for the idle stop: a key typed into its terminal from
+   * any screen, or an action that needs its agent starting (`awake`), which may then wait on GitHub.
+   */
+  private usedAt = new Map<string, number>();
+  /** Sessions whose agent is being stopped for sitting idle (stopIdleOne): their own set, as archive's stops share `stopping`. */
+  private idleStopping = new Set<string>();
+  /** Starts of agents AgentK stopped for sitting idle, under way: until the agent is up (`awake`). */
+  private waking = new Map<string, Promise<void>>();
+  /** stopIdle is running (one pass at a time). */
+  private stoppingIdle = false;
+  /** An idle stop waiting for its agent's SessionEnd: called when it comes. */
+  private stopEnds = new Map<string, () => void>();
   /** Sessions being discarded now (discardNow). */
   private discardingNow = new Set<string>();
   /** Sessions whose Claude was launched but hasn't sent SessionStart yet (it may be showing the folder-trust dialog). */
@@ -307,6 +333,8 @@ export class SessionManager {
   private usageReadAt = new Map<string, number>();
   /** Kiro turns' second usage reads, cleared by `stop()` so none runs after the database closes. */
   private rereads = new Set<NodeJS.Timeout>();
+  /** Turn ends being handled (hooks aren't awaited), which `Core.stop` waits for: `turnEndsSettled`. */
+  private turnEnds = new Set<Promise<void>>();
   /** Startup progress, for the "Starting…" view. */
   private startup = new Map<string, StartupState>();
   /**
@@ -494,6 +522,8 @@ export class SessionManager {
     if (!r) return;
     run(this.db, 'INSERT INTO session_events(session_id, project_id, kind, text, payload_json, at) VALUES (?, ?, ?, ?, ?, ?)',
       id, r.project_id, kind, text, payload === undefined ? null : JSON.stringify(payload), Date.now());
+    // A workshop's host hears what happens in its project's other sessions.
+    this.core.workshops.noted(r, kind, text);
   }
 
   setStage(id: string, stage: Stage, by: 'you' | 'auto', opts: { event?: boolean } = {}): void {
@@ -530,12 +560,14 @@ export class SessionManager {
    * session dialog can close and the session's tab show its startup steps. `done` does the slow
    * part (on a big repo, minutes): fetching a review's PR head, making the worktree and launching
    * Claude. When the worktree or the PR head can't be had there, the session is removed and kept
-   * as a failed start (`failedStarts()`) for the user to try again.
+   * as a failed start (`failedStarts()`) for the user to try again. `own.purpose` `guide` is for the
+   * server's own starts only (a workshop's host, src/server/workshops.ts): a task at Explore whose
+   * first prompt is its workshop's script.
    */
-  async begin(projectId: string, req: CreateSessionRequest): Promise<{ session: Session; done: Promise<Session> }> {
+  async begin(projectId: string, req: CreateSessionRequest, own: { purpose?: 'guide' } = {}): Promise<{ session: Session; done: Promise<Session> }> {
     const p = projectRow(this.db, projectId);
     if (!p) throw new HttpError(404, 'That project no longer exists.');
-    for (const k of ['name', 'prompt', 'baseBranch', 'repoPath', 'branch'] as const) {
+    for (const k of ['name', 'prompt', 'baseBranch', 'repoPath', 'branch', 'model'] as const) {
       if (req[k] != null && typeof req[k] !== 'string') throw new HttpError(400, `The session's ${k} must be text.`);
     }
     if (req.existingBranch != null && typeof req.existingBranch !== 'boolean') throw new HttpError(400, 'existingBranch must be true or false.');
@@ -547,6 +579,10 @@ export class SessionManager {
     const images = learn ? [] : checkStaged(this.core.paths.pastes, projectId, req.images);
     // A harness that isn't available starts nothing.
     const harness = await this.core.harnesses.pick(this.core.config, req.harness);
+    // Only its form is checked: a model the agent doesn't know fails in its terminal.
+    const model = (req.model ?? '').trim() || null;
+    const badModel = model && checkModel(model);
+    if (badModel) throw new HttpError(400, badModel);
     const settings = parseSettings(p.settings_json);
     const asked = req.kind ?? 'task';
     const legacy = typeof asked === 'string' && Object.hasOwn(LEGACY_STARTS, asked) ? LEGACY_STARTS[asked] : undefined;
@@ -564,9 +600,11 @@ export class SessionManager {
         throw new HttpError(400, "A learn session saves what it learns to the project's dedicated datapack, and this project has none. Add one on the project's home first.");
       }
     }
-    const start: StartStage = learn ? 'explore' : req.start ?? legacy ?? (req.skipDesign ? 'code' : 'design');
+    const guide = own.purpose === 'guide' && !learn && kind === 'task';
+    const start: StartStage = learn || guide ? 'explore' : req.start ?? legacy ?? (req.skipDesign ? 'code' : 'design');
     // Run to merge from the start is for a task at Code; at Design it's turned on beside Approve.
     const autoRun = !!req.autoRun;
+    if (autoRun) checkOpensPr(this.db, { project_id: projectId });
     if (autoRun && (kind !== 'task' || learn || start !== 'code')) {
       throw new HttpError(400, 'Run to merge can only be picked for a task that starts at Code. For one at Design, turn it on when you approve the design.');
     }
@@ -624,7 +662,7 @@ export class SessionManager {
     }
     // What Try again fills the New session dialog with, should the start fail.
     const request: CreateSessionRequest = {
-      name, harness: harness.id, prompt: learn ? undefined : (req.prompt ?? '').trim() || undefined, kind, start: review || learn ? undefined : start, learn: learn ?? undefined,
+      name, harness: harness.id, model: model ?? undefined, prompt: learn ? undefined : (req.prompt ?? '').trim() || undefined, kind, start: review || learn ? undefined : start, learn: learn ?? undefined,
       baseBranch: review || attach ? undefined : base, repoPath: req.repoPath, branch: attach ? undefined : wanted || undefined,
       existingBranch: existing || undefined, autoRun: autoRun || undefined,
       pr: review ? { repo: review.repo, number: review.info.number } : attach ? { repo: req.pr!.repo, number: attach.info.number } : undefined,
@@ -650,16 +688,16 @@ export class SessionManager {
       if (wanted) this.checkBranchFree(repo, wanted);
       const claimed = pool.claim(repo, id);
       const path = claimed ?? pool.add(repo, id);
-      run(this.db, `INSERT INTO sessions(id, project_id, slug, name, harness, claude_session_id, branch, base_branch, repo_path, branch_reused,
+      run(this.db, `INSERT INTO sessions(id, project_id, slug, name, harness, model, claude_session_id, branch, base_branch, repo_path, branch_reused,
                       worktree_path, tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode, meko_agent_id,
                       pr_number, pr_url, pr_repo, pr_title, pr_author, review_sha, pr_head_sha, pr_new_commits, pr_state, pr_remote, review_notes, push_remote, push_branch, purpose, auto_run, position)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'starting', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                       (SELECT COALESCE(MIN(position), 0) - 1 FROM sessions WHERE project_id = ?))`,
-        id, projectId, slug, name, harness.id, randomUUID(), branch, base, repo, where ? 1 : 0, path, paneName(projectId, slug),
+        id, projectId, slug, name, harness.id, model, randomUUID(), branch, base, repo, where ? 1 : 0, path, paneName(projectId, slug),
         randomBytes(24).toString('base64url'), review ? 'review-pr' : STORED_TASK_KIND, stage, task || null, now, now, sessionAgentId({ id, slug, harness: harness.id }),
         review?.info.number ?? attach?.info.number ?? null, review?.info.url ?? attach?.info.url ?? null, review?.repo ?? null, review?.info.title ?? null,
         review?.info.author ?? null, sha, sha, review ? 0 : null, review ? 'OPEN' : null, review?.remote ?? null, notes || null,
-        push?.remote ?? null, push ? push.branch : null, learn ? 'learn' : null, autoRun ? 1 : 0, projectId);
+        push?.remote ?? null, push ? push.branch : null, learn ? 'learn' : guide ? 'guide' : null, autoRun ? 1 : 0, projectId);
       run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, ?, ?, 'you')`, id, stage, now);
       if (workItem) {
         this.relinks.set(id, { item: workItem, prev: get<{ session_id: string | null }>(this.db, 'SELECT session_id FROM work_items WHERE id = ?', workItem)?.session_id ?? null });
@@ -696,19 +734,20 @@ export class SessionManager {
   /**
    * Starts a task's code-review session (review/runner.ts): a child of the task (`parent_id`) on the
    * task's harness, in the task's own worktree, which it doesn't own (`worktree_released`), so
-   * archiving it never frees the worktree or touches the branch. `prompt` is its first.
+   * archiving it never frees the worktree or touches the branch. `prompt` is its first; `model`, the
+   * one it starts on (a workshop's, `WorkshopService.reviewModel`), else its agent's default.
    */
-  async startReviewSession(task: SessionRow, reviewId: string, prompt: string | null): Promise<SessionRow> {
+  async startReviewSession(task: SessionRow, reviewId: string, prompt: string | null, model: string | null = null): Promise<SessionRow> {
     const slug = `${task.slug}-review-${randomBytes(3).toString('hex')}`;
     const id = `${task.project_id}--${slug}`;
     const now = Date.now();
     run(this.db, `INSERT INTO sessions(id, project_id, slug, name, harness, claude_session_id, branch, base_branch, repo_path, branch_reused,
                     worktree_path, worktree_released, tmux_name, hook_token, desired, status, kind, stage, initial_prompt, created_at, last_event_at, plan_mode,
-                    meko_agent_id, parent_id, position)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 1, ?, ?, 'running', 'starting', 'code-review', 'reviewing-code', ?, ?, ?, 0, ?, ?, ?)`,
+                    meko_agent_id, parent_id, position, model)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 1, ?, ?, 'running', 'starting', 'code-review', 'reviewing-code', ?, ?, ?, 0, ?, ?, ?, ?)`,
       id, task.project_id, slug, `Code review of ${task.name}`, task.harness, randomUUID(), task.branch, task.base_branch, task.repo_path,
       task.worktree_path, paneName(task.project_id, slug), randomBytes(24).toString('base64url'), `Review the change on ${task.branch}`, now, now,
-      sessionAgentId({ id, slug, harness: harnessOf(task.harness) }), task.id, task.position);
+      sessionAgentId({ id, slug, harness: harnessOf(task.harness) }), task.id, task.position, model);
     run(this.db, `INSERT INTO session_stages(session_id, stage, entered_at, moved_by) VALUES (?, 'reviewing-code', ?, 'auto')`, id, now);
     this.event(id, 'created', `Started for review ${reviewId} of ${task.name}`);
     this.creating.add(id);
@@ -848,11 +887,14 @@ export class SessionManager {
   /**
    * A new session whose worktree (or PR head) couldn't be had: it's removed, <release> frees its
    * worktree, and it's kept as a failed start, with a notification, since the New session dialog
-   * has closed by now. Returns the error for the caller to throw.
+   * has closed by now. Returns the error for the caller to throw. Not a workshop's host: Try again
+   * would start a plain task, so the notification sends the user back to the tour's own start.
    */
   private failStart(id: string, request: CreateSessionRequest, message: string, release: () => void): HttpError {
     const row = sessionRow(this.db, id);
-    if (row) {
+    if (row?.purpose === 'guide') {
+      this.notifyUser(id, "Couldn't start", `${message} Start the AgentK tour again to retry.`);
+    } else if (row) {
       this.notifyUser(id, "Couldn't start", message);
       this.failed.set(id, { id, projectId: row.project_id, name: row.name, error: message, at: Date.now(), request });
       // The oldest go first; nobody needs dozens.
@@ -863,7 +905,6 @@ export class SessionManager {
     release();
     // Its images go too: Try again says to add them again.
     removePastes(this.core.paths.pastes, id);
-    removeMekoLog(this.core.paths.designs, id);
     if (row?.kind === 'review-pr') removePrDesignFiles(this.core, id);
     // Deleting the row unlinks its work item; the session the item had before gets it back.
     const relink = this.relinks.get(id);
@@ -1075,7 +1116,7 @@ export class SessionManager {
 
   /** The prompt a session's task starts with, for the stage it's in. */
   firstPrompt(row: SessionRow): PromptName {
-    if (row.stage === 'explore') return row.purpose === 'learn' ? 'seed' : 'explore';
+    if (row.stage === 'explore') return row.purpose === 'learn' ? 'seed' : row.purpose === 'guide' ? 'guide' : 'explore';
     if (row.stage === 'reviewing-pr') return 'review-pr';
     if (row.stage !== 'design') return 'code';
     return row.plan_mode ? 'design-plan' : 'design';
@@ -1096,8 +1137,9 @@ export class SessionManager {
         notes: reviewNotes(row),
       }
       : {};
+    // A workshop's host starts on its bundled script, never a repo's or the owner's own version.
     // A PR's .agent-k/stages can't stand in for AgentK's prompts until its code is known to be trusted.
-    const text = render(loadPrompt(this.db, name, repoConfigTrusted(row) ? row.worktree_path : null), {
+    const text = name === 'guide' ? this.core.workshops.guidePrompt(row) : render(loadPrompt(this.db, name, repoConfigTrusted(row) ? row.worktree_path : null), {
       // The images added in the New session dialog go with the task (a review's with its notes: its task is the PR).
       task: row.kind === 'review-pr' ? (row.initial_prompt ?? '') : withAttachedImages(taskWithName(row.name, row.initial_prompt ?? ''), startImages(row)),
       branch: row.branch,
@@ -1197,6 +1239,7 @@ export class SessionManager {
     }
     if (dedicated) lines.push(mekoSaveSystemLine(row.id));
     if (dps.length && row.kind === 'review-pr') lines.push(mekoQuestionSystemLine());
+    if (row.purpose === 'guide') lines.push(guideSystemLine(p?.name ?? row.project_id));
     return lines.join('\n');
   }
 
@@ -1299,6 +1342,8 @@ export class SessionManager {
       row,
       resume: opts.resume,
       prompt: opts.prompt,
+      // Every launch, a resume's too: Claude Code resumed without --model runs on its default.
+      model: row.model ?? null,
       systemPrompt,
       addDirs: review ? [designDir, review.runDir] : [designDir],
       modDir,
@@ -1315,6 +1360,8 @@ export class SessionManager {
     if (sessionRow(this.db, row.id)?.desired !== 'running') throw new HttpError(409, 'This session was archived while it was starting.');
     // Never replace a live Claude (the host refuses to as well).
     if (pane && !pane.dead) throw new HttpError(409, `${agentName(row)} is already running in this session.`);
+    // Stopped for sitting idle: running again from now on, and recovery looks after it again.
+    if (row.idle_stopped_at) this.update(row.id, { idle_stopped_at: null });
     this.awaitingStart.add(row.id);
     // A new Claude process: the last one's mod and measurements are gone with it.
     this.forgetClaude(row.id);
@@ -1352,8 +1399,9 @@ export class SessionManager {
    * is on (Claude takes it when it's next idle), else typed into the TUI. Submissions to one session go one at a time; one
    * that had to wait is refused if the one before it started a turn. `lost` runs if Claude goes
    * (exits, or is relaunched) after a prompt sent between turns counted as sent but before its turn started.
+   * A `hidden` one draws as nothing in Claude's transcript when the mod submits it (a workshop host's events).
    */
-  submit(id: string, text: string, lost?: () => void): Promise<void> {
+  submit(id: string, text: string, lost?: () => void, hidden = false): Promise<void> {
     const prev = this.submitting.get(id);
     const next = (prev ?? Promise.resolve()).then(async () => {
       const r = this.row(id);
@@ -1366,7 +1414,7 @@ export class SessionManager {
         // turn ends, and its UserPromptSubmit says when it starts: the status stays as it is, so a
         // permission prompt still shows as Needs you.
         const midTurn = this.midTurn(id);
-        const prompt = await this.mod.send(id, text);
+        const prompt = await this.mod.send(id, text, hidden);
         if (midTurn) {
           this.mod.hold(id, prompt);
           this.core.changed();
@@ -1449,8 +1497,8 @@ export class SessionManager {
    * Claude's AskUserQuestion calls, held until the user answers them here (`/mod/ask`) or the
    * terminal's dialog does (`/mod/ask/done`); and the design's questions from its
    * design_questions tool (`/mod/questions`); Claude's Meko calls starting and ending
-   * (`/mod/meko`), for the session's dot and, with their content, its Meko call log; and a turn you interrupted (`/mod/turn`), which fires
-   * no `Stop` hook. Also `/tools`: AgentK's session tools, called by `agentk mcp` in a session of any harness.
+   * (`/mod/meko`), for the session's dot; and a turn you interrupted (`/mod/turn`), which fires
+   * no `Stop` hook. Also `/tools`: AgentK's session tools, called by `me_koder mcp` in a session of any harness.
    */
   async onMod(token: string, route: string, body: Record<string, unknown>, signal: AbortSignal): Promise<ModReply> {
     const row = this.byToken(token);
@@ -1505,12 +1553,6 @@ export class SessionManager {
       case '/mod/meko': {
         // Held like the call it shows: only while the mod is on (a session keeps it until relaunched).
         if (this.mod.mekoCall(row.id, body.id, body.state) && this.core.config.claude.mod) this.mekoHold.started(row.id);
-        const scope = { id: row.id, createdAt: row.created_at };
-        // `{ log: true }`: the project keeps a Meko call log, so the call's end carries the call.
-        if (body.state === 'start') return this.core.mekoLog.wants(scope) ? { status: 200, body: { log: true } } : { status: 204 };
-        // Answered once it's written (the mod doesn't wait for the answer). The log keeps the order
-        // the ends came in, a saved reply still being read included.
-        if (body.state === 'end' && body.tool !== undefined) await this.logClaudeMeko(row, body);
         return { status: 204 };
       }
       case '/mod/turn':
@@ -1524,7 +1566,7 @@ export class SessionManager {
         }
         return { status: 204 };
       case '/tools':
-        // AgentK's session tools, from `agentk mcp` in the session (any harness's).
+        // AgentK's session tools, from `me_koder mcp` in the session (any harness's).
         return this.core.tools.call(row, body);
       case '/mod/learn/start':
         // /agentk_learn in the terminal: the answer is the command's output there.
@@ -1659,8 +1701,24 @@ export class SessionManager {
    * continued by itself (`interrupted` stays 0). `background` is the hook's `background_tasks`: it
    * replaces what the session has running in the background, and a turn end without it (the mod's
    * interrupt, an older Claude Code) leaves none, rather than keep a list nothing will update.
+   * Kept in `turnEnds` until it's done.
    */
-  private async endTurn(row: SessionRow, how: 'stop' | 'interrupted', background?: unknown): Promise<void> {
+  private endTurn(row: SessionRow, how: 'stop' | 'interrupted', background?: unknown): Promise<void> {
+    const p = this.handleTurnEnd(row, how, background).finally(() => this.turnEnds.delete(p));
+    this.turnEnds.add(p);
+    return p;
+  }
+
+  /**
+   * Resolves once no turn end is being handled, including ones that start meanwhile: what one awaits
+   * (the diff refresh, a PR poll's git calls, a prompt it sends) is done. Work it leaves running
+   * without awaiting it (the PR poll's sync of the PR's design line) may still be going.
+   */
+  async turnEndsSettled(): Promise<void> {
+    while (this.turnEnds.size) await Promise.allSettled(this.turnEnds);
+  }
+
+  private async handleTurnEnd(row: SessionRow, how: 'stop' | 'interrupted', background?: unknown): Promise<void> {
     const id = row.id;
     void this.captureTranscript(id);
     // Before the plan's early return below: a Stop while a plan waits for approval still says what runs.
@@ -1692,7 +1750,8 @@ export class SessionManager {
     } else {
       this.setStatus(id, 'idle');
     }
-    this.refreshDiff(id).catch(() => undefined);
+    // Alongside what follows, but part of the turn end: its git calls run in the worktree.
+    const diff = this.refreshDiff(id).catch(() => undefined);
     this.ingestUsage(id);
     // Kiro may write the turn to its session file just after its stop hook: read it again shortly.
     if (this.harness(row).caps.usage === 'credits') {
@@ -1702,7 +1761,13 @@ export class SessionManager {
       }, USAGE_REREAD_MS).unref();
       this.rereads.add(t);
     }
-    await this.core.lifecycle.onTurnEnd(id, how === 'interrupted');
+    try {
+      await this.core.lifecycle.onTurnEnd(id, how === 'interrupted');
+    } finally {
+      await diff;
+      // After the diff's refresh, so a workshop's host hears whether the turn changed it.
+      this.core.workshops.turnEnded(id, how === 'interrupted');
+    }
   }
 
   async onHook(token: string, raw: HookPayload): Promise<void> {
@@ -1759,6 +1824,7 @@ export class SessionManager {
         this.update(id, { interrupted: 0 });
         this.setStatus(id, 'working');
         this.core.lifecycle.onTurnStart(id);
+        if (row.purpose === 'guide') this.core.workshops.hostPrompt(row, p.prompt);
         break;
       case 'PreToolUse': {
         const meko = this.harness(row).mekoTool?.(p);
@@ -1813,6 +1879,7 @@ export class SessionManager {
       case 'Stop':
         // OpenCode's plugin marks a turn the user interrupted (Claude Code's comes from the mod, /mod/turn).
         await this.endTurn(row, p.interrupted === true ? 'interrupted' : 'stop', p.background_tasks);
+        if (row.purpose === 'guide') this.core.workshops.hostSaid(row, p.last_assistant_message);
         break;
       case 'BackgroundTasks':
         // OpenCode's plugin, when background work ends between turns.
@@ -1828,7 +1895,9 @@ export class SessionManager {
         this.clearStartup(id);
         // A prompt's sender keeps the session busy until its turn ends, which won't come now.
         this.busy.delete(id);
-        if (this.stopping.has(id)) break;
+        // An exit we caused (an archive, an idle stop, which says so itself) isn't news.
+        this.stopEnds.get(id)?.();
+        if (this.stopping.has(id) || this.idleStopping.has(id) || sessionRow(this.db, id)?.idle_stopped_at) break;
         if (cut) this.update(id, { interrupted: 1 });
         this.setStatus(id, 'exited', p.reason ? `Claude exited (${String(p.reason)})` : 'Claude exited');
         break;
@@ -1881,9 +1950,13 @@ export class SessionManager {
     }
   }
 
-  /** Sessions recovery and reconcile may touch: running, and not being created, launched or stopped. */
+  /**
+   * Sessions recovery and reconcile may touch: running, and not being created, launched or stopped,
+   * nor stopped for sitting idle (stopIdle), which stays stopped until something needs it (`awake`).
+   */
   private recoverable(row: SessionRow): boolean {
-    return row.desired === 'running' && !this.creating.has(row.id) && !this.launching.has(row.id) && !this.stopping.has(row.id);
+    return row.desired === 'running' && !row.idle_stopped_at && !this.creating.has(row.id) && !this.launching.has(row.id) && !this.stopping.has(row.id)
+      && !this.idleStopping.has(row.id);
   }
 
   /** Recovers a session whose pane is gone; after a failure, waits a while before trying again. */
@@ -2058,6 +2131,158 @@ export class SessionManager {
     this.core.log.info(`recovered ${row.id}: ${detail}`);
   }
 
+  // ---- stopping idle agents ----
+
+  /** Input typed into the session's terminal from a screen (terminal.ts): activity, for the idle stop. */
+  typed(id: string): void {
+    this.usedAt.set(id, Date.now());
+  }
+
+  /**
+   * When the session last saw activity: a hook event or a status change (last_event_at), a key
+   * typed into its terminal, or an action that needed its agent (`usedAt`).
+   */
+  private activeAt(row: SessionRow): number {
+    return Math.max(row.last_event_at ?? row.created_at, this.usedAt.get(row.id) ?? 0);
+  }
+
+  /**
+   * The session's agent may be stopped for sitting idle: between turns (idle or recovered, never
+   * waiting on the user), with no activity for `limit` ms, and nothing running, on its way or
+   * waiting for it: background tasks, a prompt being sent or held, a queued gate or Run to merge, a
+   * queued prompt or review comment, a learn step, a discard, a code review, Merge & Close. Never a
+   * code-review session, which its review drives, nor one whose conversation can't be resumed.
+   */
+  private stoppable(row: SessionRow, limit: number, now: number): boolean {
+    const id = row.id;
+    if (row.desired !== 'running' || row.idle_stopped_at || row.kind === 'code-review' || row.stage === 'merge') return false;
+    if ((row.status !== 'idle' && row.status !== 'recovered') || now - this.activeAt(row) < limit) return false;
+    if ([this.creating, this.launching, this.busy, this.submitting, this.unstarted, this.launchPrompt, this.turns, this.planPending, this.awaitingStart].some((s) => s.has(id))) {
+      return false;
+    }
+    if (this.background.get(id)?.length || this.promptsHeld(id) > 0) return false;
+    if (row.queued_gate || row.auto_run || row.discarding || this.core.lifecycle.hasQueued(id) || this.core.lifecycle.approvalQueued(id)) return false;
+    if (get(this.db, "SELECT 1 AS x FROM review_comments WHERE session_id = ? AND state = 'queued'", id)) return false;
+    if (this.core.learn.running(id) || this.core.reviews.running(id)) return false;
+    return this.transcriptExists(row);
+  }
+
+  /**
+   * Stops the agents of sessions idle past `[sessions] idle_stop_hours` (Core's timer, each
+   * minute), one at a time, to free their memory. Each keeps its stage, worktree and conversation,
+   * shows as exited with `idle_stopped_at` set, and starts again with `--resume` when something
+   * needs it (`awake`, `wakeSoon`, or Resume).
+   */
+  async stopIdle(): Promise<void> {
+    const hours = this.core.config.sessions.idleStopHours;
+    if (!hours || this.stoppingIdle) return;
+    this.stoppingIdle = true;
+    try {
+      for (const { id } of sessionRows(this.db)) {
+        // Read again: the stop before this one may have taken a while.
+        const row = sessionRow(this.db, id);
+        if (!row || this.stopping.has(id) || this.idleStopping.has(id) || !this.stoppable(row, hours * HOUR, Date.now())) continue;
+        await this.stopIdleOne(row, hours).catch((e) => this.core.log.error(`stopping the idle agent of ${row.id} failed`, e));
+      }
+    } finally {
+      this.stoppingIdle = false;
+    }
+  }
+
+  private async stopIdleOne(row: SessionRow, hours: number): Promise<void> {
+    const id = row.id;
+    const name = agentName(row);
+    this.idleStopping.add(id);
+    try {
+      // Its last turns reach Meko first, as at an archive.
+      this.ingestUsage(id);
+      await within(this.captureTranscript(id), FINAL_CAPTURE_MS);
+      // Anything since (a prompt, a key, an action, an archive) keeps it running.
+      const now = sessionRow(this.db, id);
+      if (!now || this.stopping.has(id) || !this.stoppable(now, hours * HOUR, Date.now()) || this.activeAt(now) !== this.activeAt(row)) return;
+      this.update(id, { idle_stopped_at: Date.now() });
+      const ended = new Promise<void>((r) => this.stopEnds.set(id, r));
+      await this.core.host.kill(row.tmux_name);
+      await within(ended, STOP_END_MS);
+      this.stopEnds.delete(id);
+      // Archived meanwhile: the archive says how the session ended.
+      if (sessionRow(this.db, id)?.desired !== 'running') return;
+      this.startup.delete(id);
+      this.hookless.delete(id);
+      this.awaitingStart.delete(id);
+      this.contextFill.delete(id);
+      this.forgetClaude(id, `${name} was stopped for sitting idle`);
+      const idle = hours === 1 ? '1 hour' : `${hours} hours`;
+      this.setStatus(id, 'exited', `Stopped after ${idle} idle to free memory. Resume to pick up where it left off.`);
+      this.event(id, 'idle-stopped', `${name} stopped after ${idle} idle`);
+      this.core.log.info(`stopped ${id}'s ${name}: idle for ${idle}`);
+    } finally {
+      this.idleStopping.delete(id);
+    }
+  }
+
+  /**
+   * The session, with its agent started again first when AgentK stopped it for sitting idle, for
+   * an action that sends it a prompt. `why` says what for in its activity ("for Open PR"). Waits up
+   * to `waitMs` for the agent to be up, and refuses (409) when it isn't by then. Counts as activity
+   * either way, so an idle stop can't begin under an action still on its way (one waiting on GitHub).
+   */
+  async awake(row: SessionRow, why: string, waitMs = WAKE_WAIT_MS): Promise<SessionRow> {
+    this.usedAt.set(row.id, Date.now());
+    const w = this.waking.get(row.id) ?? (row.idle_stopped_at && row.desired === 'running' ? this.wake(row.id, why, waitMs) : null);
+    if (!w) return row;
+    await w;
+    return this.row(row.id);
+  }
+
+  /** As `awake`, for AgentK's own queued work: starts the agent and returns at once; what waits goes once it's up. */
+  wakeSoon(id: string, why: string): void {
+    const row = sessionRow(this.db, id);
+    if (!row?.idle_stopped_at || row.desired !== 'running' || this.waking.has(id)) return;
+    this.wake(id, why, WAKE_WAIT_MS).catch((e) => this.core.log.warn(`starting the idle-stopped agent of ${id} again failed`, errMsg(e)));
+  }
+
+  private wake(id: string, why: string, waitMs: number): Promise<void> {
+    const w = (async () => {
+      const until = Date.now() + waitMs;
+      // A stop under way finishes first.
+      while (this.idleStopping.has(id) && Date.now() < until) await sleep(100);
+      if (this.idleStopping.has(id)) throw new HttpError(409, `AgentK is still stopping ${agentName(this.row(id))}. Try again in a moment.`);
+      const row = this.row(id);
+      // A Resume already under way is waited for like this start.
+      if (row.idle_stopped_at && row.desired === 'running' && !this.launching.has(id)) {
+        try {
+          await this.starting(id, () => this.resumeNow(row, why));
+        } catch (e) {
+          this.wakeFailed(id, e);
+          throw e;
+        }
+      }
+      while (sessionRow(this.db, id)?.status === 'starting' && Date.now() < until) await sleep(100);
+      const now = this.row(id);
+      if (now.status === 'starting') throw new HttpError(409, `${agentName(now)} is still starting again after it was stopped for sitting idle. Try again in a moment.`);
+      if (now.status === 'exited') throw new HttpError(409, now.status_detail ?? `${agentName(now)} exited as it started again.`);
+    })();
+    this.waking.set(id, w);
+    void w.catch(() => undefined).finally(() => {
+      if (this.waking.get(id) === w) this.waking.delete(id);
+    });
+    return w;
+  }
+
+  /**
+   * Starting a stopped agent again failed before its launch (its branch is gone, say): the session
+   * says why and becomes an ordinary exited one, which recovery tries again with its own backoff,
+   * rather than every poll trying again unseen.
+   */
+  private wakeFailed(id: string, e: unknown): void {
+    const row = sessionRow(this.db, id);
+    if (!row?.idle_stopped_at || row.desired !== 'running') return;
+    this.recoverRetryAt.set(id, Date.now() + RECOVERY_BACKOFF_MS);
+    this.update(id, { idle_stopped_at: null });
+    this.setStatus(id, 'exited', `Couldn't start ${agentName(row)} again: ${errMsg(e)}. AgentK tries again in 5 minutes, or Resume it now.`);
+  }
+
   // ---- actions ----
 
   /**
@@ -2087,6 +2312,7 @@ export class SessionManager {
       case 'review-cancel': await this.core.reviews.cancel(row.id); break;
       case 'review-retry': await this.core.reviews.retry(row.id); break;
       case 'review-open-anyway': await this.core.reviews.openAnyway(row.id); break;
+      case 'review-send': await this.core.reviews.send(row.id); break;
       default: throw new HttpError(400, `Unknown action ${String(action)}.`);
     }
     return this.get(id);
@@ -2150,7 +2376,7 @@ export class SessionManager {
     if (req.toTop !== undefined && typeof req.toTop !== 'boolean') throw new HttpError(400, 'toTop must be true or false.');
     if (req.autoRun !== undefined && typeof req.autoRun !== 'boolean') throw new HttpError(400, 'autoRun must be true or false.');
     if (req.review !== undefined) {
-      if (!req.review || typeof req.review !== 'object') throw new HttpError(400, 'review must be an object of strategy, rounds and depth.');
+      if (!req.review || typeof req.review !== 'object') throw new HttpError(400, 'review must be an object of strategy, rounds, depth and check.');
       const r = this.row(id);
       if (r.desired === 'archived') throw new HttpError(409, "This session is archived, so its review settings can't change.");
       if (r.kind === 'review-pr' || r.kind === 'code-review') throw new HttpError(409, 'Only a task has code review settings.');
@@ -2251,7 +2477,8 @@ export class SessionManager {
     return this.starting(row.id, () => this.resumeNow(row));
   }
 
-  private async resumeNow(row: SessionRow): Promise<void> {
+  /** `why`, for an agent stopped for sitting idle that's started again for something: what it's for ("for Open PR"). */
+  private async resumeNow(row: SessionRow, why?: string): Promise<void> {
     // Claude's SessionEnd hook fires just before its process ends, so give a pane
     // that is still shutting down a moment before calling it "already running".
     let pane = (await this.core.host.panes()).get(row.tmux_name);
@@ -2276,7 +2503,7 @@ export class SessionManager {
     this.setStartup(row.id, 'launch', { resumed: resume, hasPrompt: !!firstPrompt });
     await this.launch(row, { resume, prompt: firstPrompt });
     this.setStartup(row.id, 'loading');
-    this.event(row.id, 'resumed', 'Resumed');
+    this.event(row.id, 'resumed', why ? `Resumed ${why}` : 'Resumed');
   }
 
   /**
@@ -2321,59 +2548,6 @@ export class SessionManager {
       throw new HttpError(404, `This image isn't in ${where}, or it is too large to preview.`);
     }
     return img;
-  }
-
-  // ---- the Meko call log (mekolog.ts) ----
-
-  /**
-   * One of Claude's Meko calls, as AgentK's mod reports its end (`/mod/meko`), into the session's
-   * Meko call log: a reply too large for Claude's context is read from the file Claude Code saved it
-   * to, the call keeping its place in the log meanwhile. Never rejects.
-   */
-  private logClaudeMeko(row: SessionRow, body: Record<string, unknown>): Promise<void> {
-    const tool = typeof body.tool === 'string' ? mekoTool(body.tool) : null;
-    const scope = { id: row.id, createdAt: row.created_at };
-    if (!tool || !this.core.mekoLog.wants(scope)) return Promise.resolve();
-    const end = Date.now();
-    const ms = typeof body.ms === 'number' && Number.isFinite(body.ms) && body.ms >= 0 ? Math.round(body.ms) : 0;
-    const str = (v: unknown) => (typeof v === 'string' ? v : null);
-    const call = claudeReply(str(body.text), row.transcript_path).then((reply) => ({
-      tool, at: end - ms, ms, ok: body.ok === true, error: str(body.error), args: body.args ?? null,
-      text: reply.text, notice: reply.notice, subagent: body.subagent === true,
-    }));
-    return this.core.mekoLog.recordAgent(scope, call);
-  }
-
-  /** The project's sessions that have a Meko call log, the latest written to first. */
-  mekoLogs(projectId: string): MekoLogInfo[] {
-    if (!projectRow(this.db, projectId)) throw new HttpError(404, 'That project no longer exists.');
-    const out: MekoLogInfo[] = [];
-    for (const r of sessionRows(this.db, projectId)) {
-      const s = r.desired === 'archived' ? null : this.core.mekoLog.stat(r.id);
-      if (s) out.push({ sessionId: r.id, name: r.name, harness: harnessOf(r.harness), ...s });
-    }
-    return out.sort((a, b) => b.updatedAt - a.updatedAt);
-  }
-
-  mekoCalls(id: string, q: { before?: number; limit?: number; tool?: string; by?: MekoCallBy; failed?: boolean }): Promise<MekoCallPage> {
-    return this.core.mekoLog.page(this.row(id).id, q);
-  }
-
-  async mekoCall(id: string, offset: number, callId: string): Promise<MekoCallDetail> {
-    const d = await this.core.mekoLog.detail(this.row(id).id, offset, callId);
-    if (!d) throw new HttpError(404, 'That call is no longer in the session\'s Meko call log.');
-    return d;
-  }
-
-  /** The session's Meko call log file, for a download. */
-  mekoLogFile(id: string): string {
-    const file = mekoLogPath(this.core.paths.designs, this.row(id).id);
-    if (!existsSync(file)) throw new HttpError(404, 'This session has no Meko call log.');
-    return file;
-  }
-
-  clearMekoLog(id: string): void {
-    this.core.mekoLog.clear(this.row(id).id);
   }
 
   async discardCheck(id: string): Promise<DiscardCheck> {
@@ -2426,18 +2600,13 @@ export class SessionManager {
       if (repo && row.kind === 'review-pr' && row.pr_number) await tryGit(repo, 'update-ref', '-d', prRef(row.pr_number));
       rmSync(join(this.core.paths.run, `${row.id}.sh`), { force: true });
       removePastes(this.core.paths.pastes, row.id);
-      // A review session's Meko call log (its passes' gotcha searches) stays with its task, which
-      // archives it when the review is done, so the Meko calls page keeps it until the task goes.
-      if (!child) {
-        removeMekoLog(this.core.paths.designs, row.id);
-        for (const c of all<{ id: string }>(this.db, `SELECT id FROM sessions WHERE parent_id = ? AND kind = 'code-review'`, row.id)) removeMekoLog(this.core.paths.designs, c.id);
-      }
       this.core.questions.forget(row.id);
       this.core.learn.forget(row.id);
       this.busy.delete(row.id);
       this.planPending.delete(row.id);
       this.awaitingStart.delete(row.id);
       this.recoverRetryAt.delete(row.id);
+      this.usedAt.delete(row.id);
       this.mergeInfo.delete(row.id);
       this.diffs.delete(row.id);
       this.forgetClaude(row.id, 'The session was archived');
@@ -2545,7 +2714,6 @@ export class SessionManager {
       // What its harness keeps for it (OpenCode's instructions and usage log): it can't run again.
       this.harness(row).forget?.(row);
       removePastes(this.core.paths.pastes, row.id);
-      removeMekoLog(this.core.paths.designs, row.id);
       this.core.questions.forget(row.id);
       this.core.learn.forget(row.id);
     }
@@ -2591,16 +2759,14 @@ export class SessionManager {
     if (!task || !this.sessionDatapacks(r.project_id).length) return;
     const pid = r.project_id;
     const cwd = sessionRepo(this.db, r) ?? r.worktree_path;
-    const work = withMekoScope(r, () => {
-      this.core.projects.ensureConversation(pid, SEARCH_TIMEOUT_MS).catch(() => undefined); // searchDatapacks reports a failure
-      return runRecall(r.name, task, {
-        issue: (n) => issueText(cwd, n),
-        search: async (q) => {
-          const s = await this.core.projects.searchDatapacks(pid, q, SEARCH_TIMEOUT_MS);
-          if (s.searched && s.failed === s.searched) throw s.error;
-          return s.results;
-        },
-      });
+    this.core.projects.ensureConversation(pid, SEARCH_TIMEOUT_MS).catch(() => undefined); // searchDatapacks reports a failure
+    const work = runRecall(r.name, task, {
+      issue: (n) => issueText(cwd, n),
+      search: async (q) => {
+        const s = await this.core.projects.searchDatapacks(pid, q, SEARCH_TIMEOUT_MS);
+        if (s.searched && s.failed === s.searched) throw s.error;
+        return s.results;
+      },
     });
     work.catch((e) => this.core.log.warn(`the Meko search at start failed for ${r.id}`, errMsg(e)));
     this.recall.start(r.id, work);
@@ -2643,8 +2809,7 @@ export class SessionManager {
     if (!dp || !this.core.mekoStatus.configured) return;
     try {
       const conv = await this.conversationId(r, dp);
-      await withMekoScope(r, () =>
-        this.core.meko.retitleConversation(launchedAgentId(r), dp.id, conv, conversationTitle(r.name, projectRow(this.db, r.project_id)?.name ?? r.project_id)));
+      await this.core.meko.retitleConversation(launchedAgentId(r), dp.id, conv, conversationTitle(r.name, projectRow(this.db, r.project_id)?.name ?? r.project_id));
     } catch (e) {
       this.core.log.warn(`renaming the Meko conversation for ${r.id} failed`, errMsg(e));
     }
@@ -2657,7 +2822,7 @@ export class SessionManager {
    */
   conversationId(r: SessionRow, dp: DatapackRef): Promise<string> {
     const title = conversationTitle(r.name, projectRow(this.db, r.project_id)?.name ?? r.project_id);
-    return withMekoScope(r, () => this.core.meko.ensureConversation(launchedAgentId(r), dp.id, r.claude_session_id, title));
+    return this.core.meko.ensureConversation(launchedAgentId(r), dp.id, r.claude_session_id, title);
   }
 
   /**
@@ -2712,11 +2877,6 @@ export class SessionManager {
       return;
     }
     let changed = read.changed;
-    // The agent's Meko calls its files showed (Kiro's, OpenCode's), into the session's call log.
-    if (read.mekoCalls?.length) {
-      const scope = { id: r.id, createdAt: r.created_at };
-      if (this.core.mekoLog.wants(scope)) for (const c of read.mekoCalls) void this.core.mekoLog.recordAgent(scope, Promise.resolve(c));
-    }
     if (typeof read.contextPercent === 'number') {
       const fill = Math.round(Math.min(100, Math.max(0, read.contextPercent)));
       if (this.contextFill.get(id) !== fill) {

@@ -4,7 +4,7 @@ import type { Core } from './core.js';
 import { get, run } from './db.js';
 import { MAX_DESIGN_HTML, MAX_DESIGN_MARKDOWN, parseDesignLine, sha256Hex, type PrDesignRef } from './design.js';
 import { errMsg } from './log.js';
-import { launchedAgentId, withMekoScope } from './meko.js';
+import { launchedAgentId } from './meko.js';
 import { datapackIdsIn } from './prreview.js';
 import { projectDatapacks, type SessionRow } from './store.js';
 
@@ -61,30 +61,28 @@ export async function fetchPrDesign(core: Core, row: SessionRow, body: string): 
   if (!tries.length) return null;
   const ext = ref.name.endsWith('.html') ? 'html' : 'md';
   const max = ext === 'html' ? MAX_DESIGN_HTML : MAX_DESIGN_MARKDOWN;
-  return withMekoScope(row, async () => {
-    const conv = await core.projects.ensureConversation(row.project_id, PR_DESIGN_TIMEOUT_MS);
-    let failed: unknown = null;
-    let answered = false;
-    for (const dp of tries) {
-      let text: string | null;
-      try {
-        text = await core.meko.getArtifact(ref.sha256, dp.id, launchedAgentId(row), conv, max, PR_DESIGN_TIMEOUT_MS);
-      } catch (e) {
-        core.log.warn(`fetching PR #${row.pr_number}'s design ${ref.name} from ${dp.name} failed for ${row.id}`, errMsg(e));
-        failed = e;
-        continue;
-      }
-      answered = true;
-      if (text === null) continue;
-      if (sha256Hex(text) !== ref.sha256) {
-        core.log.warn(`PR #${row.pr_number}'s design ${ref.name} from ${dp.name} doesn't match its hash; not used`);
-        continue;
-      }
-      return { ref, ext, text };
+  const conv = await core.projects.ensureConversation(row.project_id, PR_DESIGN_TIMEOUT_MS);
+  let failed: unknown = null;
+  let answered = false;
+  for (const dp of tries) {
+    let text: string | null;
+    try {
+      text = await core.meko.getArtifact(ref.sha256, dp.id, launchedAgentId(row), conv, max, PR_DESIGN_TIMEOUT_MS);
+    } catch (e) {
+      core.log.warn(`fetching PR #${row.pr_number}'s design ${ref.name} from ${dp.name} failed for ${row.id}`, errMsg(e));
+      failed = e;
+      continue;
     }
-    if (!answered && failed) throw failed;
-    return null;
-  });
+    answered = true;
+    if (text === null) continue;
+    if (sha256Hex(text) !== ref.sha256) {
+      core.log.warn(`PR #${row.pr_number}'s design ${ref.name} from ${dp.name} doesn't match its hash; not used`);
+      continue;
+    }
+    return { ref, ext, text };
+  }
+  if (!answered && failed) throw failed;
+  return null;
 }
 
 /**

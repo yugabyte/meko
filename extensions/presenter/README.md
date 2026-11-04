@@ -46,7 +46,7 @@ to it. Decks are saved where Meko says: in Meko Cloud when Meko links it (Settin
 this computer, which passes its calls on to Meko Cloud with the link's key. While it links Meko
 Cloud, the decks in its own datapacks (made before the link) keep working beside Meko Cloud's.
 Presenter follows a change of the link at once; a draft made under the other Meko stays listed, and
-opens again once Meko links it again. Presenter's command is `meko_presenter`: `meko_presenter status` says whether it runs. Meko
+opens again once Meko links it again. Presenter's command is `me_presenter` (`meko_presenter` before; Meko moves an install onto the new name when it starts): `me_presenter status` says whether it runs. Meko
 updates it on its own when a new release comes out (unless its **Update automatically** switch on
 the Extensions page is off), waiting while a talk is live; `meko extension update presenter` (or
 Update on the Extensions page) updates it now. A release that fails to start three times is rolled
@@ -57,7 +57,7 @@ and never updates it.
 
 ```sh
 cd extensions/presenter
-npm ci && npm run build && npm link     # puts `meko_presenter` on PATH
+npm ci && npm run build && npm link     # puts `me_presenter` on PATH
 meko extension install presenter        # registers it with this Meko (it asks Meko for its key)
 ```
 

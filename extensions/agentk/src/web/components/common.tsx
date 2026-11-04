@@ -4,7 +4,7 @@ import { KIND_LABELS, KIND_STAGES, START_HINTS, START_STAGES, STAGE_LABELS } fro
 import type { MekoStatus, Session, StartStage } from '../../shared/types';
 import { appUrl } from '../base';
 import {
-  MAX_DEPTH, MAX_ROUNDS, STRATEGIES, reviewRunning, reviewSegmentLabel, reviewSegmentText, reviewStopped, strategyName,
+  MAX_DEPTH, MAX_ROUNDS, STRATEGIES, reviewRunning, reviewSegmentLabel, reviewSegmentText, reviewStopped, reviewWaitsOnYou, strategyName,
   type CodeReviewSummary, type ReviewOverrides, type ReviewSettings, type ReviewStrategySetting,
 } from '../../shared/codereview';
 import { BLINK_UNIT_MS, KNOCK_RUNS, WORKING_RUNS, blinkKeyframes, blinkOffsetMs, totalUnits, type BlinkRun } from '../blink';
@@ -431,7 +431,7 @@ export function InfoPanel({ id, children }: { id: string; children: ReactNode })
 
 /**
  * A checkbox with its ⓘ beside it, outside its label so a tap on it doesn't tick the box, and its
- * explanation under them. `extra` sits in the row after the ⓘ (Log Meko calls' View calls).
+ * explanation under them.
  */
 export function InfoCheck({
   id,
@@ -439,7 +439,6 @@ export function InfoCheck({
   checked,
   disabled,
   onChange,
-  extra,
   children,
 }: {
   id: string;
@@ -447,7 +446,6 @@ export function InfoCheck({
   checked: boolean;
   disabled?: boolean;
   onChange: (on: boolean) => void;
-  extra?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -458,7 +456,6 @@ export function InfoCheck({
           <span>{label}</span>
         </label>
         <InfoButton id={`${id}-info`} label={label} />
-        {extra}
       </div>
       <InfoPanel id={`${id}-info`}>{children}</InfoPanel>
     </div>
@@ -561,14 +558,15 @@ export function StageChip({ session }: { session: Session }) {
 /**
  * The code review's magnifier: blue, its lens pulsing while the review works (still with reduced
  * motion), Meko's m in the lens while the review is in a Meko tool call, the needs-you color with
- * its lens knocking while the review waits on you in its terminal (over the m), and red with a
+ * its lens knocking while the review waits on you in its terminal (over the m) or its findings wait
+ * on you (`triage`), and red with a
  * still lens when it failed or was cancelled. Decorative: the button around it names the review.
  */
 export function ReviewGlass({ review }: { review: CodeReviewSummary }) {
   const running = reviewRunning(review);
   const stopped = reviewStopped(review);
   return (
-    <span className={cx('review-glass', running && 'running', stopped && 'stopped', running && review.mekoCall && !review.waiting && 'meko', running && review.waiting && 'waiting')} aria-hidden="true">
+    <span className={cx('review-glass', running && 'running', stopped && 'stopped', running && review.mekoCall && !review.waiting && 'meko', ((running && review.waiting) || reviewWaitsOnYou(review)) && 'waiting')} aria-hidden="true">
       <svg width="16" height="16" viewBox="0 0 18 18">
         <circle className="lens" cx="7.5" cy="7.5" r="4.2" />
         <circle className="rim" cx="7.5" cy="7.5" r="5.5" />
@@ -608,16 +606,6 @@ export function ReviewSegment({ review, selected, className, tab = false, onOpen
       <ReviewGlass review={review} />
       <span className="review-seg-text">{reviewSegmentText(review)}</span>
     </button>
-  );
-}
-
-/** A note with lines: shown beside a gate to add instructions for AgentK (Open PR with instructions). */
-export function NotesIcon({ size = 14 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M3.5 1.75h6l3 3v9.5h-9z" />
-      <path d="M6 7.5h4M6 10h4M6 12.5h2.5" />
-    </svg>
   );
 }
 
@@ -802,7 +790,7 @@ const ROUND_CHOICES = Array.from({ length: MAX_ROUNDS + 1 }, (_, i) => i);
 const DEPTH_CHOICES = Array.from({ length: MAX_DEPTH }, (_, i) => i + 1);
 
 /**
- * The code review's three settings (strategy, depth, re-review rounds) as selects, each with its
+ * The code review's four settings (strategy, depth, re-review rounds, check) as selects, each with its
  * ⓘ. The global ones always have a value; a project's or a session's (`scoped`) start with
  * "Default (…)", the value they'd inherit, which leaves the setting out (null). `onChange` gets
  * the whole set after one change.
@@ -876,6 +864,19 @@ export function ReviewFields({ id, value, scoped, inherited, disabled, onChange 
               {n}
             </option>
           ))}
+        </select>
+      </Field>
+      <Field
+        label="Check the findings first"
+        info={{
+          for: `${id}-check`,
+          text: "Yes: each round's findings wait for you. Add a note to any of them, or dismiss some, then send them to AgentK. No: AgentK fixes them at once. With Run to merge on, they never wait.",
+        }}
+      >
+        <select id={`${id}-check`} className="input" disabled={disabled} value={value.check == null ? '' : value.check ? 'yes' : 'no'} onChange={(e) => set('check', e.target.value)}>
+          {def(inherited ? (inherited.check ? 'Yes' : 'No') : undefined)}
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
         </select>
       </Field>
     </>

@@ -59,7 +59,7 @@ export class SessionHost {
     private paths: Paths,
     private opts: {
       services?: () => ServiceManager | null;
-      /** Starts a host when no service owns it. By default a detached `agentk host`. */
+      /** Starts a host when no service owns it. By default a detached `me_koder host`. */
       start?: () => Promise<void> | void;
       /** Called when the host's version or whether it's outdated changes (the UI's banner). */
       onHello?: () => void;
@@ -145,7 +145,7 @@ export class SessionHost {
     // A server running as a service without the host's: a host started here would run in the
     // server's service and end, with every Claude in it, at the next server restart or update.
     if (svc?.installed('server')) {
-      throw new Error(`The session host service (${svc.id('host')}) isn't installed. Run: agentk install`);
+      throw new Error(`The session host service (${svc.id('host')}) isn't installed. Run: me_koder install`);
     }
     await (this.opts.start ?? (() => startDetached(this.paths)))();
     if (!(await this.waitUp(10_000))) throw new Error(`The session host didn't start. Check ${join(this.paths.logs, 'host.log')}`);
@@ -154,7 +154,7 @@ export class SessionHost {
 
   private checkProtocol(): void {
     if (this.hello?.outdated) {
-      throw new Error(`The session host (version ${this.hello.version}) is too old for this server. Restart it with: agentk host restart`);
+      throw new Error(`The session host (version ${this.hello.version}) is too old for this server. Restart it with: me_koder host restart`);
     }
   }
 
@@ -293,7 +293,7 @@ export class SessionHost {
   }
 }
 
-/** Starts `agentk host` detached from this process, in its own process group. */
+/** Starts `me_koder host` detached from this process, in its own process group. */
 export function startDetached(paths: Paths): void {
   const here = fileURLToPath(import.meta.url);
   const cli = join(dirname(here), here.endsWith('.ts') ? 'cli.ts' : 'cli.js');

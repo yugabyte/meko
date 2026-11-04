@@ -128,7 +128,7 @@ func TestSendsCountsOnly(t *testing.T) {
 		{At: now0.Add(-3 * time.Hour), Tool: "hush_tool", AgentID: "hush-bot", OK: true},
 		{At: now0.Add(-24 * time.Hour), Tool: "memory_add", AgentID: "meko_cli", OK: true},
 	} {
-		if err := r.st.AddCall(ctx, c); err != nil {
+		if err := r.st.AddCall(ctx, c, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -239,7 +239,7 @@ func TestSwitches(t *testing.T) {
 	if st, _ := dev.State(ctx); !st.Enabled || st.Sends {
 		t.Errorf("dev state: %+v", st)
 	}
-	if got := r.sender(true).Endpoint(); got != DefaultURL {
+	if got := r.sender(true).Endpoint(); got != "https://diagnostics.meko.yugabyte.com" {
 		t.Errorf("a release sends to %q", got)
 	}
 

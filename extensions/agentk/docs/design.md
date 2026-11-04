@@ -22,6 +22,7 @@ The design is split by area. Read this page first, then the part you need:
 | [Code review](design/code-review.md) | The review AgentK runs before a task's PR opens: the agent-k reviewer's passes, sweeps and scorers in a review session joined to the task's tab, its strategies and settings, re-review rounds, Meko's gotchas, and the `me_ak_review:` line |
 | [The work queue](design/work-queue.md) | The list of what you're working on across projects: items, their links and one session each, the sync from GitHub review requests and a Slack list of yours, and finding sessions by a pasted link |
 | [GitHub links, Ask AgentK and finding a session](design/palette.md) | Starting from a pasted GitHub link, Ask AgentK (and its Do all) and finding a session by what it's about in the command palette |
+| [Workshops: the AgentK tour](design/workshops.md) | Bundled tours: the demo repo AgentK builds with no remote, its gotchas datapack, the host session that walks the user through, what it hears from the other sessions, and the fresh install's start |
 | [AgentK's session tools](design/tools.md) | The `agentk_sessions` MCP server and skill every session gets, on any harness, to open projects, start sessions and move them between stages |
 | [Datapacks](design/datapacks.md) | Meko datapacks: dedicated and shared, pins, invites, adding files to the knowledge base |
 | [Sharing a project](design/sharing.md) | Sharing a project's datapack with teammates and reviewers |
@@ -29,7 +30,7 @@ The design is split by area. Read this page first, then the part you need:
 | [Token usage](design/token-usage.md) | Reading transcripts, totals and costs, Meko's savings |
 | [Usage stats](design/usage-stats.md) | The anonymous usage report |
 | [Access and security](design/security.md) | Meko as the front door (local or remote access with no login, TLS), the socket AgentK listens on, origin checks, the handoff of AgentK's old web settings |
-| [Surviving crashes, restarts and updates](design/recovery.md) | Recovery, auto-continue, one server per home |
+| [Surviving crashes, restarts and updates](design/recovery.md) | Recovery, auto-continue, stopping idle agents, one server per home |
 | [Releases and updates](design/releases.md) | Release builds, installing through Meko, Meko's updates and rollback |
 
 Below: [Decisions so far](#decisions-so-far) · [Tech stack](#tech-stack) · [Milestones](#milestones) ·
@@ -41,7 +42,7 @@ Below: [Decisions so far](#decisions-so-far) · [Tech stack](#tech-stack) · [Mi
 |---|---|
 | Session UI | Embed the real Claude Code TUI (xterm.js over WebSocket). Don't rebuild Claude's interface. |
 | Agents | A session runs on Claude Code, OpenCode or Kiro CLI, picked when it starts (default in Settings). None is required: AgentK installs and runs with any one, and says what to install when there's none. OpenCode's hooks are AgentK's own plugin, loaded only into AgentK's sessions through OpenCode's inline config. Everything Claude-specific sits behind one adapter per CLI; features only Claude Code has (the mod, Artifact designs, the 5-hour and weekly limits) stay with it; the rail shows Kiro's plan credits instead. Codex and Cursor CLI later. |
-| Process host | AgentK's own session host (`agentk host`): one Node process that holds every Claude in a pty, in its own background service (a systemd user unit on Linux, a LaunchAgent on macOS), so the server can restart or update without touching sessions. No tmux. |
+| Process host | AgentK's own session host (`me_koder host`): one Node process that holds every Claude in a pty, in its own background service (a systemd user unit on Linux, a LaunchAgent on macOS), so the server can restart or update without touching sessions. No tmux. |
 | Open project | Pick a repo from a list of the git repos under `~/code`. The folder is configurable, and you can clone a repo into it from a URL or start a new one there. |
 | Local state | SQLite (`state.db` in AgentK's home, `~/.meko/extensions/agentk` in Meko's data folder by default), WAL mode, schema versioned with `PRAGMA user_version`. |
 | Working copy | Each session gets its own git worktree on its own branch. When it ends, a clean worktree waits, build outputs and all, for the next session on the repo. |
@@ -55,9 +56,10 @@ Below: [Decisions so far](#decisions-so-far) · [Tech stack](#tech-stack) · [Mi
 | Network | Served by the Meko on this computer at `/ext/agentk/` on its port: from other devices over HTTPS (remote access), or from this computer only (local access), with no login either way; `meko ui stop` closes the port. AgentK itself listens only on a unix socket. |
 | Other terminal sessions | Not adopted. Only sessions created by AgentK are shown. |
 | Crash behaviour | After a host reboot, the server automatically brings back every open project and session with `claude --resume`. Sessions that were mid-turn are told to continue. |
+| Idle agents | A session's agent idle for 24 hours (Settings › General) is stopped to free its memory, and started again with `--resume` on Resume, a key typed into its terminal, an action that sends it a prompt, or AgentK's own work for it. Recovery leaves it stopped. |
 | Token usage | Tracked per session and per project (per model and per day too), read from Claude Code transcripts including subagents, with an estimated cost at API list prices. Meko calls are counted from the same transcripts (Kiro's and OpenCode's from their own logs), with an estimate of what Meko searches saved. |
-| Usage stats | Each install sends anonymous counts (projects, sessions, PRs, commits, file types, tokens by model) once a day, hourly in a new install's first day, to a collector the AgentK team runs as a separate service, and from release installs also to YugabyteDB's call home service (diagnostics.yugabyte.com, where yugabyted reports). On by default; one checkbox in Settings › General turns off both. |
-| Code review | Before a task's PR opens, AgentK reviews the change on this computer with the agent-k reviewer's algorithm (Sagittarius 3.0 by default: five passes, then a scorer per finding that drops one only by refuting it; or Sirius 1.0, one pass), in a review session of its own shown as part of the task's tab, on the task's harness. The task fixes what it finds, and the PR says how it went (`me_ak_review:`). Strategy, re-review rounds and depth are set globally, per project and per session. |
+| Usage stats | Each release install sends anonymous counts (projects, sessions, PRs, commits, file types, tokens by model) once a day, hourly in a new install's first day, to YugabyteDB's call home service. On by default; one checkbox in Settings › General turns it off. |
+| Code review | Before a task's PR opens, AgentK reviews the change on this computer with the agent-k reviewer's algorithm (Sagittarius 3.0 by default: five passes, then a scorer per finding that drops one only by refuting it; or Sirius 1.0, one pass), in a review session of its own shown as part of the task's tab, on the task's harness. Each round's findings wait for the user to add notes or dismiss some (unless Run to merge is on, or the check is turned off), then the task fixes the rest, and the PR says how it went (`me_ak_review:`). Strategy, re-review rounds, depth and the check are set globally, per project and per session. |
 | Task lifecycle | Explore → Design → Code → Review & PR (AgentK) → Merge & Close, with three human gates. A task starts at Explore, Design or Code, and you can move it between stages by hand; a Review a PR session has none of it. More ADLC stages plug in later. |
 | Host OS | Linux devservers, and Macs on Apple Silicon (macOS 14 or newer) while you're logged in to the desktop. Intel Macs and headless Macs aren't supported. |
 | Distribution | Public GitHub repo. GitHub Actions for CI and releases, date-based versions (`0.YYYYMMDD.N`), tarball releases that Meko installs and updates (with its rollback). |
@@ -76,7 +78,7 @@ Below: [Decisions so far](#decisions-so-far) · [Tech stack](#tech-stack) · [Mi
 | Integrations | Meko MCP over HTTP (optional) and its REST API for sharing, Claude Code hooks, git worktrees | Meko holds projects' datapacks when it's on. The hooks and git are thin adapters. |
 | Release | GitHub Actions, date-based versions, artifact attestations | Versioning and supply-chain checks with no extra tooling. |
 
-*Escape hatch:* `ssh host -t agentk attach fix-retry-backoff` attaches to any session from
+*Escape hatch:* `ssh host -t me_koder attach fix-retry-backoff` attaches to any session from
 iTerm (`Ctrl+\` detaches).
 
 ## Milestones
