@@ -1,7 +1,7 @@
 name: Meko release
 
-# Meko (backend/) releases on its own train, beside AgentK's (agentk-release.yml). Versions are
-# 0.<UTC date YYYYMMDD>.<n>, tagged meko-v<version>. A push to main that changes backend/ cuts a
+# Meko (src/meko) releases on its own train, beside AgentK's (agentk-release.yml). Versions are
+# 0.<UTC date YYYYMMDD>.<n>, tagged meko-v<version>. A push to main that changes src/meko cuts a
 # release when it contains meko feat/fix/perf/deps commits (naming meko, alone or in a list such as
 # agentk,meko) since the last Meko tag and the tests pass. The release scripts are the repo root's
 # scripts/release/*.sh --product meko. Meko's releases are the repo's "latest": their install.sh is
@@ -12,7 +12,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'backend/**'
+      - 'src/meko/**'
       - 'scripts/release/**'
       - '.github/workflows/meko-release.yml'
   workflow_dispatch:
@@ -67,6 +67,9 @@ jobs:
               *) echo "$DISPATCH_TAG isn't a Meko release tag (meko-v<version>)"; exit 1 ;;
             esac
             git rev-parse -q --verify "refs/tags/$DISPATCH_TAG" >/dev/null || { echo "no such tag: $DISPATCH_TAG"; exit 1; }
+            # This workflow builds from src/meko; older tags have Meko in backend/.
+            git cat-file -e "$DISPATCH_TAG:src/meko/go.mod" 2>/dev/null ||
+              { echo "$DISPATCH_TAG is from before Meko moved to src/meko and can't be rebuilt"; exit 1; }
             { echo "release=true"; echo "rebuild=true"; echo "tag=$DISPATCH_TAG"; echo "version=${DISPATCH_TAG#meko-v}"; echo "ref=$DISPATCH_TAG"; } >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -87,7 +90,7 @@ jobs:
     timeout-minutes: 30
     defaults:
       run:
-        working-directory: backend
+        working-directory: src/meko
     steps:
       - uses: actions/checkout@v7
         with:
@@ -95,19 +98,19 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@v7
         with:
-          go-version-file: backend/go.mod
+          go-version-file: src/meko/go.mod
           cache-dependency-path: |
-            backend/go.mod
-            backend/go.sum
+            src/meko/go.mod
+            src/meko/go.sum
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: backend/memory_engine/package-lock.json
+          cache-dependency-path: src/meko/memory_engine/package-lock.json
       - name: Cache the embedding model
         uses: actions/cache@v6
         with:
-          path: backend/memory_engine/.models
+          path: src/meko/memory_engine/.models
           key: embedding-model-all-MiniLM-L6-v2-751bff3-q8
       # Normally 2 minutes, npm installs included.
       - run: make test
@@ -130,14 +133,14 @@ jobs:
     timeout-minutes: 40
     defaults:
       run:
-        working-directory: backend
+        working-directory: src/meko
     env:
       VERSION: ${{ needs.plan.outputs.version }}
       ARCH: ${{ matrix.arch }}
       CC: /opt/rh/gcc-toolset-13/root/usr/bin/gcc
     steps:
       - name: Install build toolchain
-        # Before checkout: backend/ doesn't exist yet.
+        # Before checkout: src/meko doesn't exist yet.
         working-directory: .
         # Normally under a minute; a slow mirror would otherwise hold the release group.
         timeout-minutes: 10
@@ -160,7 +163,7 @@ jobs:
         timeout-minutes: 10
         run: |
           set -eu
-          dir=$(sh ../scripts/release/fetch-node.sh "$NODE_VERSION" "/tmp" "linux-$ARCH")
+          dir=$(sh ../../scripts/release/fetch-node.sh "$NODE_VERSION" "/tmp" "linux-$ARCH")
           echo "NODE_DIR=$dir" >> "$GITHUB_ENV"
           echo "$dir/bin" >> "$GITHUB_PATH"
 
@@ -172,10 +175,10 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version-file: backend/go.mod
+          go-version-file: src/meko/go.mod
           cache-dependency-path: |
-            backend/go.mod
-            backend/go.sum
+            src/meko/go.mod
+            src/meko/go.sum
 
       - name: Build
         # Normally under 30s, npm installs included.
@@ -197,7 +200,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: meko-tarball-linux-${{ matrix.arch }}
-          path: backend/out/*.tar.gz
+          path: src/meko/out/*.tar.gz
           if-no-files-found: error
 
   # macOS on Apple Silicon, for macOS 14 and newer.
@@ -208,7 +211,7 @@ jobs:
     timeout-minutes: 40
     defaults:
       run:
-        working-directory: backend
+        working-directory: src/meko
     env:
       ARCH: arm64
       VERSION: ${{ needs.plan.outputs.version }}
@@ -225,7 +228,7 @@ jobs:
         timeout-minutes: 10
         run: |
           set -eu
-          dir=$(sh ../scripts/release/fetch-node.sh "$NODE_VERSION" "$RUNNER_TEMP" "darwin-$ARCH")
+          dir=$(sh ../../scripts/release/fetch-node.sh "$NODE_VERSION" "$RUNNER_TEMP" "darwin-$ARCH")
           echo "NODE_DIR=$dir" >> "$GITHUB_ENV"
           echo "$dir/bin" >> "$GITHUB_PATH"
 
@@ -237,10 +240,10 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version-file: backend/go.mod
+          go-version-file: src/meko/go.mod
           cache-dependency-path: |
-            backend/go.mod
-            backend/go.sum
+            src/meko/go.mod
+            src/meko/go.sum
 
       - name: Build
         # Normally under 30s, npm installs included.
@@ -261,7 +264,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: meko-tarball-darwin-arm64
-          path: backend/out/*.tar.gz
+          path: src/meko/out/*.tar.gz
           if-no-files-found: error
 
   publish:
@@ -293,12 +296,12 @@ jobs:
         working-directory: dist-release
         run: |
           sha256sum *.tar.gz > SHA256SUMS
-          cp ../backend/scripts/install.sh install.sh
+          cp ../src/meko/scripts/install.sh install.sh
           cat SHA256SUMS
 
       - name: Sign SHA256SUMS
         # Meko installs a release only when a line of SHA256SUMS.sig verifies with one of its keys
-        # (backend/internal/update/keys). The key is a secret of the release environment, which only
+        # (src/meko/internal/update/keys). The key is a secret of the release environment, which only
         # main can use; RELEASE_SIGNING_KEY_OLD is set only while a new key replaces it.
         working-directory: dist-release
         env:
@@ -328,7 +331,7 @@ jobs:
         # checkout: a rebuild checks out an older tag, which may lack a newer key.
         run: |
           set -eu
-          keys=backend/internal/update/keys
+          keys=src/meko/internal/update/keys
           sigs=dist-release/SHA256SUMS.sig
           id=$(head -n 1 "$sigs" | cut -d ' ' -f 1)
           tmp=$(mktemp -d)

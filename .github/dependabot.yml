@@ -8,18 +8,18 @@
 # `deps(meko): ...` (Go modules) and `deps(meko/memory-engine): ...` (the memory engine's
 # production npm packages, which its tarballs bundle), so they cut a Meko release
 # (meko-release.yml); the memory engine's dev-only bumps are `chore(meko/memory-engine): ...`.
-# The web UI's (backend/web_ui) are `deps(meko/web-ui): ...` for its dependencies (react,
+# The web UI's (src/meko/web_ui) are `deps(meko/web-ui): ...` for its dependencies (react,
 # react-dom, lucide-react), which Vite bundles into the web_ui/dist that Meko's release
 # serves, so they cut a Meko release; and `chore(meko/web-ui): ...` for its devDependencies (the
 # Vite and Tailwind build, TypeScript, types, Vitest and happy-dom), which run only at build and
 # test time and ship with the next Meko release rather than cutting one each. A grouped PR with
 # both kinds (react with @types/react) takes the `deps` prefix.
 # No `include: scope`: it would add `(deps)`, giving `deps(agentk)(deps): ...`.
-# extensions/agentk/test/unit/dependabot.test.ts checks this against both scripts.
+# src/extensions/agentk/test/unit/dependabot.test.ts checks this against both scripts.
 version: 2
 updates:
   - package-ecosystem: npm
-    directory: /extensions/agentk
+    directory: /src/extensions/agentk
     schedule:
       interval: weekly
       day: monday
@@ -62,9 +62,9 @@ updates:
         dependency-type: development
         update-types: [minor, patch]
 
-  # Meko's Go modules. CI's Backend job builds and tests each PR.
+  # Meko's Go modules. CI's Meko job builds and tests each PR.
   - package-ecosystem: gomod
-    directory: /backend
+    directory: /src/meko
     schedule:
       interval: weekly
       day: monday
@@ -84,7 +84,7 @@ updates:
 
   # Meko's memory engine (Node). Its dependencies are pinned exactly, and Dependabot keeps them so.
   - package-ecosystem: npm
-    directory: /backend/memory_engine
+    directory: /src/meko/memory_engine
     schedule:
       interval: weekly
       day: monday
@@ -111,7 +111,7 @@ updates:
 
   # Meko's web UI (React, Vite, Tailwind). Its dependencies are pinned exactly, and Dependabot keeps them so.
   - package-ecosystem: npm
-    directory: /backend/web_ui
+    directory: /src/meko/web_ui
     schedule:
       interval: weekly
       day: monday

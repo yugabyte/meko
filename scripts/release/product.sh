@@ -1,13 +1,13 @@
 # Sourced by the release scripts in this folder. The repo releases three products from one
 # history, each with its own tags, versions and notes:
 #
-#   agentk  AgentK (extensions/agentk): tags agentk-v<version>, and v<version> before
+#   agentk  AgentK (src/extensions/agentk): tags agentk-v<version>, and v<version> before
 #           releases were tagged by product (installed AgentKs from before read only those, so
 #           the newest v… release, which reads both, stays: prune-releases.sh never deletes it)
-#   meko    Meko (backend/): tags meko-v<version>
+#   meko    Meko (src/meko): tags meko-v<version>
 #   presenter
-#           Presenter (extensions/presenter): tags presenter-v<version>, whose tarballs Meko installs
-#           and updates (meko extension install, meko extension update)
+#           Presenter (src/extensions/presenter): tags presenter-v<version>, whose tarballs Meko
+#           installs and updates (meko extension install, meko extension update)
 #
 # Takes `--product agentk|meko|presenter` (default agentk) out of the script's arguments and sets:
 #

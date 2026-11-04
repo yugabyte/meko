@@ -27,8 +27,8 @@ If one does, show it to the user and offer to comment on it or update it instead
 | Feature | Something new, or a change in behavior users will see | `Feature` | `enhancement` |
 | Task | Planned work, a chore or a checklist (a release step, a setting, a cleanup) | `Task` | none |
 
-Add a product label for each product the issue is about: `meko` (Meko, `backend/`), `agentk`
-(`extensions/agentk`), `presenter` (`extensions/presenter`). An issue about only the shared root
+Add a product label for each product the issue is about: `meko` (Meko, `src/meko`), `agentk`
+(`src/extensions/agentk`), `presenter` (`src/extensions/presenter`). An issue about only the shared root
 (CI, `scripts/`, root docs) takes none. Forms can't set these, so issues filed on the web get
 theirs when someone triages them; add a missing one when you come across it.
 
@@ -58,7 +58,7 @@ When you know more than a reporter would, add it after the form's sections (see 
 #314):
 
 - **Why**: the cause, with code pointers: the file and the function or symbol
-  (`extensions/agentk/src/server/harness/opencode.ts`, `normalizeOpenCode`). Line numbers go stale.
+  (`src/extensions/agentk/src/server/harness/opencode.ts`, `normalizeOpenCode`). Line numbers go stale.
 - **Workaround**, **Tests** (what would prove it fixed), **Out of scope**, **Open question**.
 
 Write plain, specific sentences. "Done when" items are outcomes someone can check. Logs and
