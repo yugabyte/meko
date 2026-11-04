@@ -166,6 +166,41 @@ func TestExtensionActions(t *testing.T) {
 	}
 }
 
+// A failed Install or Start leaves the card once the extension is installed or running anyway, as
+// after meko extension install from a terminal; a failure nothing has overtaken stays.
+func TestFailedJobOvertaken(t *testing.T) {
+	var mu sync.Mutex
+	names := []string{}
+	failInstall := func(_ context.Context, _, action string, _ io.Writer) error {
+		return errors.New("me_koder " + action + " failed: exit status 1")
+	}
+	base, _ := startWeb(t, config.AccessLocal, filepath.Join(shortTemp(t), "gone.sock"),
+		func(w *Web) {
+			w.Run = failInstall
+			w.Installed = func() []string { mu.Lock(); defer mu.Unlock(); return names }
+		})
+	if code, _ := post(t, base+"/api/v1/extensions/agentk/install", nil); code != http.StatusAccepted {
+		t.Fatalf("install: %d", code)
+	}
+	if r := waitJob(t, base); r.Job.State != JobFailed || r.Installed {
+		t.Fatalf("failed install: %+v", r)
+	}
+	mu.Lock()
+	names = []string{"agentk"} // meko extension install, from a terminal
+	mu.Unlock()
+	if r := agentkRow(t, base); !r.Installed || r.Job != nil {
+		t.Errorf("installed from a terminal: %+v", r)
+	}
+
+	// A failed start of one that still isn't running stays.
+	if code, _ := post(t, base+"/api/v1/extensions/agentk/start", nil); code != http.StatusAccepted {
+		t.Fatalf("start: %d", code)
+	}
+	if r := waitJob(t, base); r.Job.State != JobFailed || r.Job.Action != "start" {
+		t.Errorf("failed start: %+v", r.Job)
+	}
+}
+
 // An installed extension whose release Meko installed shows its version and can be updated; one Meko
 // didn't install (a build from source) can't.
 func TestExtensionListShowsReleasesMekoUpdates(t *testing.T) {
