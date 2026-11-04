@@ -2,27 +2,21 @@
 
 Part of the [AgentK design](../design.md).
 
-Each install sends a small report of counts once a day (every hour in its first day) to a
-collector run by the AgentK team, so we know how many installs are active and how much work
-goes through them. Release installs also send it to YugabyteDB's call home service
-(described below), which is to replace the AgentK team's collector. That collector is a
-separate service (`services/ak-local-call-home` in yugabyte/agent-k). What it receives is
-`CallHomeReport` in `src/shared/types.ts`, and [`docs/call-home-report.schema.json`](../call-home-report.schema.json)
-is the same contract as a JSON Schema. The collector keeps an identical copy
-(`internal/report/contract/call-home-report.schema.json`), and its tests tie that copy to its
-types, enums, patterns and caps; change both together. A unit test here checks the reports the
-server builds against the schema. `schema` in the report goes up when a
-field changes meaning or is removed; adding a field doesn't change it. The collector stores an
-enum value, model id, extension or version it doesn't know as `other`, and drops (only counting)
-fields it doesn't know, rather than refusing the report, so an install that is ahead of it still
-reports.
+Each release install sends a small report of counts once a day (every hour in its first day) to
+YugabyteDB's call home service (described below), so we know how many installs are active and how
+much work goes through them. Releases from before also sent it to a collector the AgentK team ran
+(`services/ak-local-call-home` in yugabyte/agent-k); they keep doing so until they update, and
+nothing here sends there now. What goes out is `CallHomeReport` in `src/shared/types.ts`, and
+[`docs/call-home-report.schema.json`](../call-home-report.schema.json) is the same contract as a
+JSON Schema. A unit test here checks the reports the server builds against the schema. `schema` in
+the report goes up when a field changes meaning or is removed; adding a field doesn't change it.
 
 **What's in it** (`src/server/callhome.ts`, `buildReport`):
 
 - *The install:* a random `installId` (made on first use, kept in `kv`; one per AgentK home, so
   hosts sharing a home count once), the version, the update channel (always `stable`: Meko installs AgentK's updates by its own channel), platform, CPU, Node and
   Claude Code versions (`claude --version`; `''` when it can't be read; Kiro CLI's too, as `kiro`, while Kiro is on, and OpenCode's, as `opencode`, while it's on; our version or
-  Node's, when the collector wouldn't keep it, such as a `git describe` build or a Node nightly, is
+  Node's, when the schema wouldn't take it, such as a `git describe` build or a Node nightly, is
   cut to its leading numbers, else `0.0.0`), `access: meko` (the Meko on this computer serves AgentK; older versions sent `local` or `remote`), the service manager, whether there's a Meko (and where its key comes from:
   `config`, `env`, `claude`, `local` for the Meko on this computer, or `none`; and the
   sharing: `api` when AgentK can share through Meko's API, `none` when there's no Meko or its API URL
@@ -58,8 +52,7 @@ reports.
   or declined; and the tokens the review sessions (`kind = 'code-review'`) spent on the day, with
   their price in whole cents (`usdCents`) and Kiro's credits when there were some. Left out of a day
   with neither. Nothing from a finding (its file, line or comment) is sent. There's no all-time
-  total: the review is newer than the first report's 30 days. AgentK's collector drops the field
-  until its own schema has it.
+  total: the review is newer than the first report's 30 days.
 - *File types* are counts per file extension: files changed, lines added and deleted, from merged
   PRs and direct pushes. When a PR is merged, one `gh pr view <url> --json
   commits,additions,deletions,files` call adds its size to the `merged` event's payload; for a
@@ -96,50 +89,44 @@ account number) are sent as `other`.
 
 **Sending.** An hourly check (the first one 10 to 60 minutes after start, at random, so a release
 doesn't make every install report at once) sends a report when the last one went out 23 hours ago
-or more (`kv` `call_home_last_sent`), so restarts and updates don't send again. A new install
-reports sooner and more often, so the collector sees it on the day it starts: until a day after
-its first report (`kv` `call_home_first_sent`, the time of the check that sent it), the first
+or more (`kv` `yb_call_home_last_sent`), so restarts and updates don't send again. A new install
+reports sooner and more often, so it's seen on the day it starts: until a day after
+its first report (`kv` `yb_call_home_first_sent`, the time of the check that sent it), the first
 check comes 1 to 5 minutes after start (or when the next report is due, if that's later, so a
 restart doesn't skip one), and a report goes out when the last one is 55 minutes old, so at every
 hourly check. Reports are stamped with the check's time, so the time a send takes doesn't push
-the next one past its check. Installs that reported before `call_home_first_sent` was
-kept have none and stay daily. A report over the collector's 64 KB (a busy install's 30-day first report, with every day's file types and models
-full) drops its oldest days until it fits, since the collector would refuse it every hour from then
-on. It POSTs the JSON
-to the collector's report URL, as given, with a 15-second timeout; a failure is logged once and tried again an hour
-later, and nothing else waits on it. The collector upserts each day on `(installId, day)`, so a
-resend changes nothing and a missed day is filled in by the next report. The URL is
-`[call_home] url`, or else the one release builds carry: a `CALL_HOME_URL` file next to `VERSION`,
-written by `scripts/package-release.sh` from the `CALL_HOME_URL` repo variable, so it never
-appears in the repo. Dev servers and tests have neither, so they send nothing. Node's `fetch`
+the next one past its check. Installs that reported before `yb_call_home_first_sent` was
+kept have none and stay daily. The keys are named `yb_` from when reports also went to AgentK's
+own collector, whose `call_home_last_sent` and `call_home_first_sent` stay in `kv` unread. A report
+over 64 KB (`MAX_REPORT_BYTES`: a busy install's 30-day first report, with every day's file types
+and models full) drops its oldest days until it fits. It POSTs the JSON with a 15-second timeout;
+a failure is logged once and tried again an hour later, and nothing else waits on it. Each report
+carries the last 7 days, so a day a failed send missed goes out with the next one. Node's `fetch`
 ignores `HTTPS_PROXY`, so an install behind a proxy doesn't report.
 
-**YugabyteDB's call home service.** The same report also goes to `YB_DIAGNOSTICS_URL` (in
+**YugabyteDB's call home service.** Reports go to `YB_DIAGNOSTICS_URL` (in
 `src/server/callhome.ts`), Meko's address for the call home service yugabyted and YugabyteDB's
 other products report to: a host of its own serving the same app (`diagnostics_v2` in
-yugabyte/yugabyte-growth). This is the call home that stays when AgentK's own collector is retired.
-A second `CallHomeService` (target `yugabyte`) sends it on its own schedule, the same as above but
-kept apart (`kv` `yb_call_home_last_sent`, `yb_call_home_first_sent`; the install id and first day
-are shared), so one service being down never holds back the other. The body is yugabyted's
+yugabyte/yugabyte-growth). The body is yugabyted's
 envelope with the report as its payload (`YbCallHome` in `src/shared/types.ts`):
 `{callhome_type: "agentk", command: "heartbeat", timestamp, install_id, version, payload}`. The
 service routes on `callhome_type` to its `agentk` table. `timestamp` is UTC with microseconds and
 no zone (`2026-11-09T17:05:32.123000`), the only form it parses. It answers 200 even when it
 couldn't store a row, so check a change to the envelope by finding the row in BigQuery. Only release
-installs (with `AK_APP_DIR`) send there, unless `[call_home] diagnostics_url` names another URL.
+installs (with `AK_APP_DIR`) send, unless `[call_home] diagnostics_url` names another URL; dev
+servers and tests have neither, so they send nothing. The setting keeps that name rather than
+Meko's `[call_home] url`, which named AgentK's collector's report URL here: a `config.toml` that
+still has `url` would otherwise send the envelope to the collector. An old `url` is ignored, and
+dropped from the file at its next save.
 
 **Turning it off.** It's on by default. The **Send anonymous usage stats to YugabyteDB** checkbox
 on Settings › General writes
-`[call_home] enabled = false`; from then on no report is built or sent to either service, without a restart.
+`[call_home] enabled = false`; from then on no report is built or sent, without a restart.
 `YB_DISABLE_CALLHOME` set to a true word (`true`, `t`, `yes`, `y`, `1`) in the server's own environment,
-yugabyted's switch, turns off both too, and the checkbox then shows off and disabled, naming it
+yugabyted's switch, turns it off too, and the checkbox then shows off and disabled, naming it
 (`Settings.callHomeOffBy`). Under the systemd or launchd service the server's environment is the
 unit's or the plist's, not the shell's that ran `me_koder start`, so a shell `export` doesn't reach it:
 use the checkbox or `[call_home] enabled` there.
 
-**Downloads** aren't sent from here: the collector reads every release asset's download count
-from the GitHub API each hour, so a pruned release loses at most an hour of downloads.
-
-**The collector's side of the contract.** `POST /v1/report` takes the report with no auth and
-answers 2xx (anything else counts as a failure); it should cap the body at 64 KB, limit reports per
-`installId` per day, check the schema, and store no IP addresses.
+**Downloads** aren't sent from here: GitHub counts each release asset's downloads, and a pruned
+release's count goes with it.

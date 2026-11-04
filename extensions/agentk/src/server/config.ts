@@ -75,12 +75,11 @@ export interface Config {
    */
   sessions: { idleStopHours: number };
   /**
-   * Anonymous usage stats (callhome.ts). enabled: send the report (daily; hourly in an install's first day). url: where to POST it
-   * (the collector's full report URL); empty uses the one release builds carry (CALL_HOME_URL next to VERSION), and with neither
-   * nothing is sent. The same report also goes to YugabyteDB's call home service: diagnosticsUrl, or else
-   * YB_DIAGNOSTICS_URL (callhome.ts) from release installs only. enabled (or YB_DISABLE_CALLHOME) turns off both.
+   * Anonymous usage stats (callhome.ts). enabled: send the report (daily; hourly in an install's first day) to YugabyteDB's
+   * call home service (YB_DISABLE_CALLHOME turns it off too). diagnosticsUrl: where to POST it; empty is YB_DIAGNOSTICS_URL
+   * (callhome.ts) from release installs only, so a dev server sends nothing.
    */
-  callHome: { enabled: boolean; url: string; diagnosticsUrl: string };
+  callHome: { enabled: boolean; diagnosticsUrl: string };
   /**
    * resolveConflicts: when a PR in Review & PR conflicts with its base, AgentK asks Claude to resolve the conflicts
    * (false leaves them to the user). Set in Settings → General; an edit to config.toml takes effect after a restart.
@@ -159,7 +158,7 @@ export const DEFAULT_CONFIG: Config = {
   opencode: { command: 'opencode', enabled: true, disableTracking: false },
   worktrees: { idlePerRepo: 3, idleDays: 14 },
   sessions: { idleStopHours: 24 },
-  callHome: { enabled: true, url: '', diagnosticsUrl: '' },
+  callHome: { enabled: true, diagnosticsUrl: '' },
   pr: { resolveConflicts: true },
   askAgentk: { enabled: true, model: 'sonnet', timeoutSeconds: 45 },
   tools: { enabled: true },
