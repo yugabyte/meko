@@ -397,9 +397,6 @@ func toolDeleteDatapack(ctx context.Context, t *tools, f toolFlags, stdin io.Rea
 
 func toolAdd(ctx context.Context, t *tools, f toolFlags, stdin io.Reader, stdout io.Writer) error {
 	text := f.text
-	if (text == "" || text == "-") && atPrompt {
-		return errors.New(`give the memory's text: add_memory "<text>"`)
-	}
 	if text == "" || text == "-" {
 		b, err := io.ReadAll(stdin)
 		if err != nil {

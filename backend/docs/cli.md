@@ -43,13 +43,13 @@ agents (MCP and the REST API, on 7778), and what to run next.
 
 | `meko-cli` | What it does |
 |---|---|
-| `meko-cli` | A prompt (`meko-cli default>`) that takes the commands below, one a line, plus `use <datapack>` (later `search`, `add_memory`, `upload` and `upload_status` lines use it unless they name another; a `delete_datapack` of it goes back to the default), `help` and `exit`. There's no history or line editing yet, and Ctrl-C leaves. Given a file or pipe instead of a terminal, it runs the lines as a script and exits with the first failing line's code |
+| `meko-cli` | List its commands. It has no prompt: it runs the one command it's given, so a script runs it once per command, with `--datapack` on each |
 | `meko-cli datapacks` | List the datapacks by name, with their descriptions (while Meko Cloud is linked, its datapacks and this computer's); `--json` adds each one's id |
 | `meko-cli create_datapack <name>` | Create a datapack (in the linked Meko Cloud while it's linked) |
 | `meko-cli delete_datapack <name\|id> [--force]` | Delete a datapack and everything in it, for good. It asks first; `--force` doesn't |
 | `meko-cli export [<name\|id>] [-o FILE] [--force]` | Write one of this computer's datapacks (default: the default one; name one while Meko Cloud is linked) to one zip: memories, collective memories, conversations, knowledge files and artifacts with their embeddings and file contents, and the call log. It won't replace a file unless `--force` |
 | `meko-cli search "<question>" [--source S] [--limit N]` | Search memories, the knowledge base and past conversations (`context_search`); `--source memory`, `knowledge_base` or `conversation` searches one (default `auto`, all three), and `--limit` caps the results per source (default 8) |
-| `meko-cli add_memory "<text>"` | Save a memory, word for word; `-` or no text reads stdin (not at the prompt) |
+| `meko-cli add_memory "<text>"` | Save a memory, word for word; `-` or no text reads stdin |
 | `meko-cli upload <file>... [--no-wait]` | Add PDF, text, Markdown, JSON, CSV, XML or HTML files (up to 50 MiB) to the knowledge base, and wait until they're indexed |
 | `meko-cli upload_status <key>` | How an uploaded file is doing |
 

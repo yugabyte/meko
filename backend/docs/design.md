@@ -41,16 +41,13 @@ and `meko-cli` (`~/.local/bin/meko-cli`, a link to the same binary that `meko in
 that a release's serve makes for an install from before it once the release is past probation)
 works with what Meko keeps, through the running server, and with the linked Meko Cloud's datapacks ([cloud.md](cloud.md#meko-cli)):
 `datapacks`, `create_datapack`, `delete_datapack`, `export`, `search`, `add_memory`, `upload` and
-`upload_status`. Alone, `meko-cli` is a prompt (`shell.go`): it
-reads one command a line, split as a shell would, and runs each as `meko-cli <line>`; `use <datapack>`
-fills in `--datapack` for the commands that take it, and a confirmation (`delete_datapack`'s) reads
-the next line from the same buffer. From a pipe it runs the lines as a script. Given one of
-`meko-cli`'s commands, `meko` runs nothing and names the `meko-cli` command instead (exit 2). Run as
+`upload_status`. Like `meko`, it runs one command a run and, alone, prints its commands. It has no
+prompt: a script runs `meko-cli` once per command, naming the datapack with `--datapack` on each.
+Given one of `meko-cli`'s commands, `meko` runs nothing and names the `meko-cli` command instead (exit 2). Run as
 `mekosh`, the binary runs nothing and names the `meko-cli` command (exit 2).
 
 Each command's help comes from one table (`help.go`: its group, summary, usage and examples, and its
-flag set's flags), which `meko --help`, `meko help <cmd>`, `<cmd> --help` (exit 0) and the prompt's
-`help` all print. `install`, `start`, `stop`, `restart` and `status` print a summary
+flag set's flags), which `meko --help`, `meko help <cmd>` and `<cmd> --help` (exit 0) all print. `install`, `start`, `stop`, `restart` and `status` print a summary
 (`report.go`): a row per step marked `✓`, `!` or `✗`, the links (`Humans (web UI)` on the web
 listener, `Agents (MCP, API)` on the API listener), and the commands to run next; the extensions
 print their own rows ([install.md](install.md#the-summary-rows)). `status` is that checklist;
