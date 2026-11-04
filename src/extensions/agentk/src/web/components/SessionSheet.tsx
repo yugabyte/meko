@@ -80,10 +80,11 @@ export function SheetItem({
 }
 
 /**
- * Archive keeps the branch; Discard deletes the worktree and branch after showing what would be lost
- * (a branch the session started on that existed before it is kept). Discard saves what the session
- * learned to Meko first, unless Don't save learnings is checked (it starts unchecked, except for a
- * learn session, which saved what it learned as it went).
+ * Archive keeps the branch; Discard deletes the worktree and branch (a branch the session started on
+ * that existed before it is kept). One confirmation offers both, with what Discard would lose once the
+ * check is in (Discard waits for it). Discard saves what the session learned to Meko first, unless
+ * Don't save learnings is checked (it starts unchecked, except for a learn or guide session, which
+ * saved what it learned as it went).
  * Archive waits for uncommitted files to be committed (the server refuses it too).
  * Shown in the session sheet on phones; on desktop, opened from the ⋯ menu (`autoOpen`) in the stage bar.
  */
@@ -110,22 +111,24 @@ export function EndSessionButton({
   /** The confirmation closed (Cancel, or the action went). */
   onClosed?: () => void;
 }) {
-  const [step, setStep] = useState<'closed' | 'choose' | 'checking' | 'discard'>('closed');
-  const [skipLearn, setSkipLearn] = useState(session.purpose === 'learn' || session.purpose === 'guide');
+  const learnedAsItWent = session.purpose === 'learn' || session.purpose === 'guide';
+  const [open, setOpen] = useState(autoOpen);
+  const [skipLearn, setSkipLearn] = useState(learnedAsItWent);
   /** What ending the session would leave or lose: undefined while checking, null if the check failed. */
   const [check, setCheck] = useState<DiscardCheck | null | undefined>(undefined);
   const [busy, setBusy] = useState(false);
-  // One check per opening, shared by Archive and Discard; a later opening's check replaces it.
+  // One check per opening; a later opening's check replaces it.
   const pending = useRef<Promise<DiscardCheck | null> | null>(null);
 
   const close = () => {
-    setStep('closed');
+    setOpen(false);
+    pending.current = null;
     onClosed?.();
   };
 
-  const open = () => {
-    setStep('choose');
-    setSkipLearn(false);
+  const show = () => {
+    setOpen(true);
+    setSkipLearn(learnedAsItWent);
     setCheck(undefined);
     const p = api.discardCheck(session.id).catch(() => null);
     pending.current = p;
@@ -146,18 +149,9 @@ export function EndSessionButton({
 
   // Opened from the desktop ⋯ menu: its confirmation at once.
   useEffect(() => {
-    if (autoOpen) open();
+    if (autoOpen) show();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, as it mounts
   }, []);
-
-  const askDiscard = async () => {
-    setStep('checking');
-    const p = pending.current ?? api.discardCheck(session.id).catch(() => null);
-    const c = await p;
-    if (pending.current !== null && pending.current !== p) return; // reopened meanwhile
-    setCheck(c);
-    setStep('discard');
-  };
 
   // Discard waits for the learn step; Discard now stops waiting and leaves it unsaved.
   if (session.discarding) {
@@ -173,69 +167,51 @@ export function EndSessionButton({
       </span>
     );
   }
-  if (step === 'closed') {
+  if (!open) {
     return (
-      <button className={className} disabled={disabled} onClick={open}>
+      <button className={className} disabled={disabled} onClick={show}>
         {label}
       </button>
     );
   }
-  const cancel = (
-    <button className="btn ghost" disabled={busy} onClick={close}>
-      Cancel
-    </button>
-  );
-  if (step !== 'discard') {
-    const uncommitted = check?.uncommittedFiles ?? 0;
-    return (
-      <span className="confirm-inline">
-        <span className="confirm-prompt">End this session?</span>
-        {uncommitted > 0 && (
-          <span className="confirm-warn">{plural(uncommitted, 'uncommitted file')}. Commit first, or Discard.</span>
-        )}
-        <button
-          className="btn primary"
-          disabled={busy || disabled || step === 'checking' || check === undefined || uncommitted > 0}
-          onClick={() => run('archive')}
-        >
-          Archive (keep branch)
-        </button>
-        <button className="btn danger" disabled={busy || disabled || step === 'checking'} onClick={askDiscard}>
-          {step === 'checking' ? <Busy label="Checking" /> : 'Discard…'}
-        </button>
-        {cancel}
-      </span>
-    );
-  }
+  const checking = check === undefined;
+  const uncommitted = check?.uncommittedFiles ?? 0;
   const warnings: string[] = [];
-  if (!check) warnings.push('Could not check for unsaved work.');
-  else {
-    if (check.uncommittedFiles) warnings.push(`${plural(check.uncommittedFiles, 'uncommitted file')} will be lost.`);
-    if (check.unpushedCommits) warnings.push(`${plural(check.unpushedCommits, 'commit')} never pushed will be lost.`);
-  }
+  if (check === null) warnings.push('Could not check for unsaved work.');
+  if (uncommitted) warnings.push(`${plural(uncommitted, 'uncommitted file')}: commit first to Archive, or Discard loses them.`);
+  if (check?.unpushedCommits) warnings.push(`${plural(check.unpushedCommits, 'commit')} never pushed will be lost on Discard.`);
   if (session.prNumber) warnings.push(`PR #${session.prNumber} and the remote branch stay on GitHub.`);
   return (
     <span className="confirm-inline">
       <span className="confirm-prompt">
         {session.branchReused
-          ? `Delete the worktree? Branch ${session.branch} is kept: it existed before this session.`
-          : `Delete the worktree and branch ${session.branch}?`}
+          ? `End this session? Discard deletes the worktree; branch ${session.branch} is kept: it existed before this session.`
+          : `End this session? Discard deletes the worktree and branch ${session.branch}.`}
       </span>
       {warnings.map((w) => (
         <span key={w} className="confirm-warn">
           {w}
         </span>
       ))}
+      <button className="btn primary" disabled={busy || disabled || checking || uncommitted > 0} onClick={() => run('archive')}>
+        Archive (keep branch)
+      </button>
       {learnTo && (
         <label className="check skip-learn" title={`Unchecked, AgentK saves what this session learned to ${learnTo} before discarding it`}>
           <input type="checkbox" checked={skipLearn} disabled={busy} onChange={(e) => setSkipLearn(e.target.checked)} />
           <span>Don't save learnings</span>
         </label>
       )}
-      <button className="btn danger" disabled={busy || disabled} onClick={() => run('discard', learnTo && skipLearn ? { skipLearn: true } : undefined)}>
-        Discard
+      <button
+        className="btn danger"
+        disabled={busy || disabled || checking}
+        onClick={() => run('discard', learnTo && skipLearn ? { skipLearn: true } : undefined)}
+      >
+        {checking ? <Busy label="Checking" /> : 'Discard'}
       </button>
-      {cancel}
+      <button className="btn ghost" disabled={busy} onClick={close}>
+        Cancel
+      </button>
     </span>
   );
 }
