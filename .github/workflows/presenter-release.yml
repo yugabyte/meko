@@ -1,10 +1,10 @@
 name: Presenter release
 
-# Presenter (extensions/presenter) releases on its own train, beside AgentK's and Meko's. Versions
-# are 0.<UTC date YYYYMMDD>.<n>, tagged presenter-v<version>. A push to main that changes
-# extensions/presenter cuts a release when it contains presenter feat/fix/perf/deps commits (naming
-# presenter, alone or in a list such as presenter,meko) since the last Presenter tag and the tests
-# pass. The release scripts are the repo root's scripts/release/*.sh --product presenter.
+# Presenter (src/extensions/presenter) releases on its own train, beside AgentK's and Meko's.
+# Versions are 0.<UTC date YYYYMMDD>.<n>, tagged presenter-v<version>. A push to main that changes
+# src/extensions/presenter cuts a release when it contains presenter feat/fix/perf/deps commits
+# (naming presenter, alone or in a list such as presenter,meko) since the last Presenter tag and the
+# tests pass. The release scripts are the repo root's scripts/release/*.sh --product presenter.
 # A release carries presenter-<version>-<os>-<arch>.tar.gz and SHA256SUMS, no installer: Meko
 # installs and updates them itself (meko extension install presenter, meko extension update
 # presenter). Run the workflow by hand to force a release, or to rebuild the assets of an existing
@@ -17,7 +17,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'extensions/presenter/**'
+      - 'src/extensions/presenter/**'
       - 'scripts/release/**'
       - '.github/workflows/presenter-release.yml'
   workflow_dispatch:
@@ -72,6 +72,10 @@ jobs:
               *) echo "$DISPATCH_TAG isn't a Presenter release tag (presenter-v<version>)"; exit 1 ;;
             esac
             git rev-parse -q --verify "refs/tags/$DISPATCH_TAG" >/dev/null || { echo "no such tag: $DISPATCH_TAG"; exit 1; }
+            # This workflow builds from src/extensions/presenter; older tags have Presenter in
+            # extensions/presenter.
+            git cat-file -e "$DISPATCH_TAG:src/extensions/presenter/package.json" 2>/dev/null ||
+              { echo "$DISPATCH_TAG is from before Presenter moved to src/extensions/presenter and can't be rebuilt"; exit 1; }
             version=${DISPATCH_TAG#presenter-v}
             { echo "release=true"; echo "rebuild=true"; echo "tag=$DISPATCH_TAG"; echo "version=$version"; echo "ref=$DISPATCH_TAG"; } >> "$GITHUB_OUTPUT"
             exit 0
@@ -93,7 +97,7 @@ jobs:
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: extensions/presenter
+        working-directory: src/extensions/presenter
     steps:
       - uses: actions/checkout@v7
         with:
@@ -102,7 +106,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: extensions/presenter/package-lock.json
+          cache-dependency-path: src/extensions/presenter/package-lock.json
       - run: npm ci
         timeout-minutes: 10
       - run: npm run typecheck
@@ -116,7 +120,7 @@ jobs:
     timeout-minutes: 30
     defaults:
       run:
-        working-directory: extensions/presenter
+        working-directory: src/extensions/presenter
     # Plan outputs reach the shell through the environment, never pasted into scripts.
     env:
       VERSION: ${{ needs.plan.outputs.version }}
@@ -130,7 +134,7 @@ jobs:
 
       - name: Download Node ${{ env.NODE_VERSION }} for each platform
         timeout-minutes: 15
-        run: sh ../../scripts/release/fetch-node.sh "$NODE_VERSION" "$RUNNER_TEMP" linux-x64 linux-arm64 darwin-arm64
+        run: sh ../../../scripts/release/fetch-node.sh "$NODE_VERSION" "$RUNNER_TEMP" linux-x64 linux-arm64 darwin-arm64
 
       - uses: actions/checkout@v7
         if: needs.plan.outputs.rebuild == 'true'
@@ -142,7 +146,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: extensions/presenter/package-lock.json
+          cache-dependency-path: src/extensions/presenter/package-lock.json
 
       - run: npm ci
         timeout-minutes: 10
@@ -169,7 +173,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: presenter-tarballs
-          path: extensions/presenter/out/*.tar.gz
+          path: src/extensions/presenter/out/*.tar.gz
           if-no-files-found: error
 
   smoke-macos:
@@ -179,7 +183,7 @@ jobs:
     timeout-minutes: 15
     defaults:
       run:
-        working-directory: extensions/presenter
+        working-directory: src/extensions/presenter
     env:
       VERSION: ${{ needs.plan.outputs.version }}
     steps:
@@ -191,7 +195,7 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: presenter-tarballs
-          path: extensions/presenter/out
+          path: src/extensions/presenter/out
 
       - name: Smoke-test the darwin-arm64 tarball
         run: sh scripts/smoke-release.sh out/presenter-"$VERSION"-darwin-arm64.tar.gz "$VERSION"
@@ -228,7 +232,7 @@ jobs:
 
       - name: Sign SHA256SUMS
         # Meko installs a release only when a line of SHA256SUMS.sig verifies with one of its keys
-        # (backend/internal/update/keys). The key is a secret of the release environment, which only
+        # (src/meko/internal/update/keys). The key is a secret of the release environment, which only
         # main can use; RELEASE_SIGNING_KEY_OLD is set only while a new key replaces it.
         working-directory: dist-release
         env:
@@ -258,7 +262,7 @@ jobs:
         # checkout: a rebuild checks out an older tag, which may lack a newer key.
         run: |
           set -eu
-          keys=backend/internal/update/keys
+          keys=src/meko/internal/update/keys
           sigs=dist-release/SHA256SUMS.sig
           id=$(head -n 1 "$sigs" | cut -d ' ' -f 1)
           tmp=$(mktemp -d)
