@@ -1,10 +1,11 @@
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeEnv, readJsonl, waitFor, type TestEnv } from '../helpers.js';
 import { sessionAgentId } from '../../src/server/meko.js';
 import { all, get } from '../../src/server/db.js';
 import { MEKO_MIN_SHOW_MS } from '../../src/server/mekocalls.js';
+import { exportBuiltinKiroAgent } from '../../src/server/kiro.js';
 
 const lines = (env: TestEnv, file: string) => {
   const f = join(process.env.FAKE_KIRO_DIR!, file);
@@ -57,6 +58,20 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
   });
 
   it("runs a session as AgentK's Kiro agent: system lines at spawn, the Design guard, credits and Kiro's plan, exit and Resume", async () => {
+    // Kiro's export of its built-in agent copies the servers in its MCP config, Meko's token with them;
+    // Meko then replaces that token (#467).
+    mkdirSync(join(process.env.KIRO_HOME!, 'settings'), { recursive: true });
+    const mcp = (token: string) => writeFileSync(join(process.env.KIRO_HOME!, 'settings', 'mcp.json'),
+      JSON.stringify({ mcpServers: { meko: { url: 'http://127.0.0.1:1/mcp', headers: { Authorization: `Bearer ${token}` } } } }));
+    mcp('old-token');
+    expect(await exportBuiltinKiroAgent(env.core.config.kiro.command, env.core.paths)).toBe(true);
+    mcp('new-token');
+
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'create', name: 'agent-k-local/test/demo' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Kiro task', prompt: 'write src.ts now', start: 'design', harness: 'kiro' });
+    expect(s.harness).toBe('kiro');
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle' || st === 'needs_input', 10000, 'first turn to end');
+
     const agent = JSON.parse(readFileSync(join(process.env.KIRO_HOME!, 'agents', 'agentk.json'), 'utf8'));
     // Built from Kiro's built-in default (exported with `agent create --from`), its upgrade bookkeeping left out, with AgentK's session tools.
     expect(agent).toMatchObject({
@@ -67,11 +82,8 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
       allowedTools: [],
     });
     expect(agent).not.toHaveProperty('kiroUpgrade');
-
-    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'create', name: 'agent-k-local/test/demo' } });
-    const s = await env.core.sessions.create(p.id, { name: 'Kiro task', prompt: 'write src.ts now', start: 'design', harness: 'kiro' });
-    expect(s.harness).toBe('kiro');
-    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle' || st === 'needs_input', 10000, 'first turn to end');
+    // Without the export's copy of Meko's server: Kiro loads it from its MCP config, with the token there now.
+    expect(Object.keys(agent.mcpServers)).toEqual(['agentk_sessions']);
 
     const [first] = lines(env, 'argv.jsonl');
     expect(first.args).toEqual(['chat', '--agent', 'agentk', expect.stringContaining('write src.ts now')]);
@@ -115,6 +127,48 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
     await env.core.sessions.action(s.id, 'resume');
     await waitFor(() => lines(env, 'argv.jsonl').length, (n) => n === 2, 10000, 'resume');
     expect(lines(env, 'argv.jsonl')[1].args).toEqual(['chat', '--agent', 'agentk', '--resume-id', row.agent_session_id]);
+  });
+
+  it("runs a code review one step a turn, each after Kiro's /clear and its tier's /model, none refused as busy, and sends steps a restart lost (#467)", async () => {
+    env.core.config.codeReview.models.kiro = { large: 'claude-opus-4.5', mid: '', small: 'claude-haiku-4.5' };
+    writeFileSync(join(process.env.FAKE_KIRO_DIR!, 'review-reports.json'), JSON.stringify({
+      dependents: { state_ledger: [], summary: 'LGTM', findings: [] },
+      claims: { claims: [], summary: 'LGTM', findings: [] },
+      diff: { summary: 'LGTM', findings: [{ file: 'src/a.ts', line: 2, severity: 'blocker', comment: 'Off by one.', gotchas: [] }] },
+    }));
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'none' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Kiro task', prompt: 'hi', start: 'code', harness: 'kiro' });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'the first turn to end');
+    const wt = env.core.sessions.row(s.id).worktree_path;
+    mkdirSync(join(wt, 'src'), { recursive: true });
+    writeFileSync(join(wt, 'src', 'a.ts'), ['export function f(n: number) {', '  return n + 1;', '}', ''].join('\n'));
+
+    // The guide and diff passes don't report the first time: AgentK asks again for both, and the guide
+    // pass then runs until the test lets it go.
+    const fakeFile = (f: string) => join(process.env.FAKE_KIRO_DIR!, f);
+    writeFileSync(fakeFile('review-skip-once'), JSON.stringify(['r1s1:guide', 'r1s1:diff']));
+    writeFileSync(fakeFile('review-hold'), JSON.stringify(['r1s1:guide']));
+
+    await env.core.sessions.action(s.id, 'review-run');
+    // AgentK restarts while the asked-again guide pass runs: the diff pass, still to send, is lost with it.
+    await waitFor(() => existsSync(fakeFile('review-held')), Boolean, 30000, 'the guide pass asked again');
+    (env.core.reviews as unknown as { queued: Map<string, unknown> }).queued.clear();
+    rmSync(fakeFile('review-hold'));
+    const done = await waitFor(() => env.core.sessions.get(s.id).codeReview, (r) => r?.state === 'done' || r?.state === 'failed', 30000, 'the review to finish');
+    // The diff pass is still sent, though AgentK had already asked again once: its finding is scored and kept.
+    expect(done).toMatchObject({ state: 'done', counts: { blocker: 1, major: 0, minor: 0 } });
+    // Each step in a turn of its own on its tier's model, and every report taken.
+    const calls = lines(env, 'review-calls.jsonl') as { step: string; model: string; status: number }[];
+    expect(calls.map((c) => [c.step, c.model, c.status])).toEqual([
+      ['r1s1:dependents', 'claude-opus-4.5', 200], ['r1s1:history', 'claude-opus-4.5', 200], ['r1s1:claims', 'claude-opus-4.5', 200],
+      ['r1s1:guide', 'claude-opus-4.5', 200], ['r1s1:diff', 'claude-haiku-4.5', 200], ['r1c1', 'claude-haiku-4.5', 200],
+    ]);
+    // The first step started the review session on its model; each after it cleared the conversation first.
+    expect(lines(env, 'commands.jsonl').map((c) => (c as { command: string }).command)).toEqual([
+      '/clear', '/model claude-haiku-4.5', '/clear', '/model claude-opus-4.5', '/clear', '/model claude-opus-4.5',
+      '/clear', '/model claude-opus-4.5', '/clear', '/model claude-opus-4.5', '/clear', '/model claude-haiku-4.5',
+      '/clear', '/model claude-haiku-4.5',
+    ]);
   });
 
   it("shows Meko's m while Kiro calls Meko, and records its calls for the counts", async () => {

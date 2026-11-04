@@ -191,7 +191,7 @@ session manager, projects and Ask AgentK call a session's adapter rather than as
 runs on. The adapter says how to prepare its files and settle what a launch needs first
 (`prepare`, `beforeLaunch`: Claude Code's folder trust, Kiro's agent file), which folders to trust
 and what its trust dialog looks like (`trustFolder`, `trustPrompt`, Claude Code only), its command line
-(`launcher`, which also takes `LaunchInput.tools`: launch with [AgentK's session tools](tools.md), and `LaunchInput.review`: a [code review](code-review.md)'s read-only subagents, one per model tier, as Claude Code's `--agents` and OpenCode's `agent` config; Kiro, whose `HARNESS_CAPS.reviewSteps` is `turns`, runs each step as a prompt of its own after `/clear`), its hooks (`normalize`, `deny`, `context`, `editedPaths`, and `mekoTool` for a CLI without the mod: which events open and close a Meko call for the dot's m), its conversation on disk
+(`launcher`, which also takes `LaunchInput.tools`: launch with [AgentK's session tools](tools.md), and `LaunchInput.review`: a [code review](code-review.md)'s read-only subagents, one per model tier, as Claude Code's `--agents` and OpenCode's `agent` config; Kiro, whose `HARNESS_CAPS.reviewSteps` is `turns`, runs each step as a turn of its own, after `/clear` once the one before ends), its hooks (`normalize`, `deny`, `context`, `editedPaths`, and `mekoTool` for a CLI without the mod: which events open and close a Meko call for the dot's m), its conversation on disk
 (`canResume`, and `findConversation` for a CLI that picks its own id), the files a session's
 progress shows in (`activityFiles`, for the hookless fallback), whether a prompt sent between turns
 started its turn when its hook never came (`transcriptMark`, `promptStarted`, Claude Code only: see
@@ -442,7 +442,14 @@ same hooks but names their events as Claude Code does (`SessionStart` for `agent
 **The `agentk` agent.** AgentK writes `~/.kiro/agents/agentk.json` (`KIRO_HOME` honoured) built
 from the user's default agent (`chat.defaultAgent` in `~/.kiro/settings/cli.json`; Meko's
 `meko-default` after its setup), else Kiro's built-in one, which AgentK exports once with `kiro-cli
-agent create --from kiro_default` into the run folder (`run/kiro-default.json`). The base keeps its
+agent create --from kiro_default` into the run folder (`run/kiro-default.json`). That export copies
+the servers in Kiro's MCP config (`settings/mcp.json`) into the agent's `mcpServers`, headers and
+all, as they were then; the built-in agent has none of its own. A server in an agent's `mcpServers`
+wins over the MCP config's of the same name, even with `includeMcpJson`, so the copy would keep a
+Meko token Meko has since replaced, and every Kiro session would get 401 from Meko (#467; Kiro then
+tries OAuth, and its log says Dynamic Client Registration was rejected). So AgentK reads the export
+without its `mcpServers` while it has `includeMcpJson: true` (`builtinKiroAgent`), and Kiro reads
+the MCP config at each start. The base keeps its
 tools, MCP servers, resources and hooks; AgentK adds its own after them: `hook.sh` on every event it
 follows and `context.sh` on `agentSpawn`, `kiro-guard.sh` on `preToolUse` for `fs_write` (Kiro's
 `write` tool), `hook.sh` on `preToolUse` for each Meko server (`@<name>`, Kiro's matcher for an MCP

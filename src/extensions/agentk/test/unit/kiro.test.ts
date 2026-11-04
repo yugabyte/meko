@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { agentkHooks, kiroArgs, kiroMekoTool, normalizeKiro } from '../../src/server/harness/kiro.js';
-import { agentkAgent, findKiroSession, parseKiroMekoCalls, parseKiroModels, parseKiroPlan, parseKiroTurns, readKiroAgent, readKiroRun, writeKiroAgent } from '../../src/server/kiro.js';
+import { agentkAgent, builtinKiroAgent, findKiroSession, parseKiroMekoCalls, parseKiroModels, parseKiroPlan, parseKiroTurns, readKiroAgent, readKiroRun, writeKiroAgent } from '../../src/server/kiro.js';
 import { kiroMekoGaps, kiroMekoServerNames } from '../../src/server/mekokiro.js';
 import { getPaths } from '../../src/server/paths.js';
 import { tempDir } from '../helpers.js';
@@ -47,6 +47,20 @@ describe("Kiro's agentk agent", () => {
     expect(readKiroAgent('agentk-ask', home)).toBeNull();
     writeFileSync(join(home, 'agents', 'mine.json'), JSON.stringify({ name: 'my-agent', tools: ['read'] }));
     expect(readKiroAgent('my-agent', home)).toEqual({ name: 'my-agent', tools: ['read'] });
+  });
+});
+
+describe("Kiro's built-in agent, as AgentK exported it", () => {
+  it("leaves out the copy of Kiro's MCP config the export took, so Kiro reads Meko's current token (#467)", () => {
+    const paths = getPaths(tempDir('akl-kiro-'));
+    mkdirSync(paths.run, { recursive: true });
+    const exported = { name: 'agentk-base', tools: ['*'], includeMcpJson: true, mcpServers: { meko: { url: 'http://127.0.0.1:1/mcp', headers: { Authorization: 'Bearer test-token' } } } };
+    writeFileSync(join(paths.run, 'kiro-default.json'), JSON.stringify(exported));
+    expect(builtinKiroAgent(paths)).toEqual({ ...exported, mcpServers: {} });
+    // An agent that doesn't load the MCP config keeps its own servers: they're all it has.
+    const own = { ...exported, includeMcpJson: false };
+    writeFileSync(join(paths.run, 'kiro-default.json'), JSON.stringify(own));
+    expect(builtinKiroAgent(paths)).toEqual(own);
   });
 });
 

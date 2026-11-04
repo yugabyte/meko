@@ -60,6 +60,16 @@ const SCORE_BATCH = 5;
 /** How many times AgentK asks again for the steps a turn left unreported, before it goes on without them. */
 const ASK_AGAIN = 1;
 
+/** One step of a sweep or of scoring: its name, the tier it runs on, and the prompt file it reads. */
+interface ReviewStep {
+  name: string;
+  tier: Tier;
+  file: string;
+}
+
+/** What the review session is told for a step. */
+const readStep = (file: string) => `Read ${claudePath(file)} and do what it says.`;
+
 /** The most of a linked GitHub issue's text written for the passes. */
 const ISSUE_MAX_BYTES = 64 * 1024;
 
@@ -177,6 +187,12 @@ const json = <T>(s: string | null, fallback: T): T => {
 export class CodeReviews {
   /** Reviews being moved on now, so a turn end and a tool call never advance one twice at once. */
   private advancing = new Map<string, Promise<void>>();
+  /**
+   * In a harness without subagents (`turns`), the steps of a review's sweep or scoring still to send,
+   * one per turn, after the step running now. Kept in memory: after a restart, the review session's
+   * next turn end (or `recover`, when it's idle) sends the steps that haven't reported (`turnEnded`).
+   */
+  private queued = new Map<string, ReviewStep[]>();
 
   constructor(private core: Core) {}
 
@@ -714,23 +730,17 @@ export class CodeReviews {
   /**
    * Gives the review session its steps: in a harness with subagents, one prompt that runs each as
    * a fresh subagent on its tier, listed in batches of `v.batch` when it's set; in one without
-   * (`turns`), each step as a prompt of its own after clearing the conversation, the model for its
-   * tier set first when one is configured.
+   * (`turns`), the first step now and each of the rest at the end of the turn before it (`turnEnded`).
    */
-  private async sendSteps(r: ReviewRow, task: SessionRow, name: 'code-review-sweep' | 'code-review-score', steps: { name: string; tier: Tier; file: string }[], v: { what: string; tool: string; batch?: number }): Promise<void> {
+  private async sendSteps(r: ReviewRow, task: SessionRow, name: 'code-review-sweep' | 'code-review-score', steps: ReviewStep[], v: { what: string; tool: string; batch?: number }): Promise<void> {
     const harness = harnessOf(task.harness);
-    const read = (file: string) => `Read ${claudePath(file)} and do what it says.`;
     if (HARNESS_CAPS[harness].reviewSteps === 'turns') {
-      const session = await this.ensureSession(r, task, null);
-      const models = this.core.config.codeReview.models[harness];
-      for (const s of steps) {
-        await this.core.sessions.submit(session.id, '/clear');
-        if (models[s.tier]) await this.core.sessions.submit(session.id, `/model ${models[s.tier]}`);
-        await this.core.sessions.submit(session.id, read(s.file));
-      }
+      const [first, ...rest] = steps;
+      this.queued.set(r.id, rest);
+      if (first) await this.sendStep(r, first);
       return;
     }
-    const list = stepList(steps.map((s) => ({ name: s.name, agent: REVIEW_AGENTS[s.tier], prompt: read(s.file) })), v.batch);
+    const list = stepList(steps.map((s) => ({ name: s.name, agent: REVIEW_AGENTS[s.tier], prompt: readStep(s.file) })), v.batch);
     const session = sessionRow(this.db, r.session_id ?? '');
     const text = this.core.sessions.prompt(session ?? task, name, { steps: list, what: v.what, reportTool: v.tool, task: task.name, branch: task.branch, base: task.base_branch });
     if (!session || session.desired !== 'running') {
@@ -740,14 +750,32 @@ export class CodeReviews {
     await this.core.sessions.submit(session.id, text);
   }
 
-  /** The review session, started now (with `prompt` as its first) when the review has none running. */
-  private async ensureSession(r: ReviewRow, task: SessionRow, prompt: string | null): Promise<SessionRow> {
+  /**
+   * One step as a turn of its own, in a harness without subagents: a new review session starts on
+   * it, on its tier's model when one is configured; a running one has its conversation cleared and
+   * its model set first, with the agent's own commands, which start no turn.
+   */
+  private async sendStep(r: ReviewRow, s: ReviewStep): Promise<void> {
+    const task = this.core.sessions.row(r.task_id);
+    const model = this.core.config.codeReview.models[harnessOf(task.harness)][s.tier];
+    const cur = r.session_id ? sessionRow(this.db, r.session_id) : undefined;
+    if (cur?.desired !== 'running') {
+      await this.ensureSession(r, task, readStep(s.file), model);
+      return;
+    }
+    await this.core.sessions.command(cur.id, '/clear');
+    if (model) await this.core.sessions.command(cur.id, `/model ${model}`);
+    await this.core.sessions.submit(cur.id, readStep(s.file));
+  }
+
+  /** The review session, started now (with `prompt` as its first, on `model` if given) when the review has none running. */
+  private async ensureSession(r: ReviewRow, task: SessionRow, prompt: string | null, model?: string): Promise<SessionRow> {
     const cur = r.session_id ? sessionRow(this.db, r.session_id) : undefined;
     if (cur?.desired === 'running') {
       if (prompt) await this.core.sessions.submit(cur.id, prompt);
       return cur;
     }
-    const row = await this.core.sessions.startReviewSession(task, r.id, prompt, this.core.workshops.reviewModel(task));
+    const row = await this.core.sessions.startReviewSession(task, r.id, prompt, model || this.core.workshops.reviewModel(task));
     this.set(r.id, { session_id: row.id });
     return row;
   }
@@ -849,7 +877,8 @@ export class CodeReviews {
   async onTurnEnd(row: SessionRow, interrupted: boolean): Promise<boolean> {
     if (row.kind === 'code-review') {
       const r = this.bySession(row.id);
-      if (r && (r.state === 'sweeping' || r.state === 'scoring')) this.kick(r.id, () => this.stepsEnded(r.id, interrupted));
+      if (r && (r.state === 'sweeping' || r.state === 'scoring')) this.kick(r.id, () => this.turnEnded(r.id, interrupted));
+      else if (r) this.queued.delete(r.id);
       return true;
     }
     const r = this.latest(row.id);
@@ -879,7 +908,32 @@ export class CodeReviews {
     this.kick(r.id, () => this.nextRound(r.id));
   }
 
-  /** The review session's turn ended: every step reported, or ask again once for the missing ones. */
+  /**
+   * The review session's turn ended. In a harness without subagents (`turns`), the next queued step
+   * goes, and once none is left the steps are done (`stepsEnded`). An interrupt drops the steps
+   * still queued, and the review waits. A turn that ends with no queue at all (after an interrupt, or
+   * a restart, which loses it) sends the steps that haven't reported, without counting that as the
+   * review's one ask again, since some of them were never sent.
+   */
+  private async turnEnded(id: string, interrupted: boolean): Promise<void> {
+    const r = this.mustReview(id);
+    const turns = HARNESS_CAPS[harnessOf(this.core.sessions.row(r.task_id).harness)].reviewSteps === 'turns';
+    const queue = this.queued.get(id);
+    if (turns && !interrupted && !queue && !this.taskMovedOn(r)) {
+      await this.sendUnreported(id);
+      return;
+    }
+    const [next, ...rest] = queue ?? [];
+    if (next && !interrupted && !this.taskMovedOn(r)) {
+      this.queued.set(id, rest);
+      await this.sendStep(r, next);
+      return;
+    }
+    this.queued.delete(id);
+    await this.stepsEnded(id, interrupted);
+  }
+
+  /** The review session's steps are done: every step reported, or ask again once for the missing ones. */
   private async stepsEnded(id: string, interrupted: boolean): Promise<void> {
     const r = this.mustReview(id);
     if (this.taskMovedOn(r)) return;
@@ -1268,15 +1322,25 @@ export class CodeReviews {
       const cur = this.mustReview(r.id);
       if (cur.state === 'describing') return this.describe(r.id);
       if (cur.state === 'preparing') return this.beginRound(r.id);
-      if (cur.state === 'scoring') {
-        const done = new Set(this.steps(r.id, `r${cur.round}c`).map((s) => Number(s.step.slice(`r${cur.round}c`.length))));
-        const missing = json<Candidate[]>(cur.candidates_json, []).map((_, i) => i + 1).filter((n) => !done.has(n));
-        return missing.length ? this.sendScores(r.id, missing) : this.finishRound(r.id);
-      }
-      const done = new Set(this.steps(r.id, `r${cur.round}s${cur.sweep}:`).map((s) => s.step.split(':')[1]));
-      const missing = strategyFor(cur.strategy).passes.map((p) => p.name).filter((n) => !done.has(n));
-      return missing.length ? this.sendSweep(r.id, missing) : this.sweepDone(r.id);
+      return this.sendUnreported(r.id);
     });
+  }
+
+  /**
+   * Sends the current sweep's or scoring's steps that haven't reported, or moves on when none is
+   * left, without counting it as asking again (`asked`): a Retry, or a review on a harness without
+   * subagents whose steps still to send were lost (`turnEnded`).
+   */
+  private async sendUnreported(id: string): Promise<void> {
+    const cur = this.mustReview(id);
+    if (cur.state === 'scoring') {
+      const done = new Set(this.steps(id, `r${cur.round}c`).map((s) => Number(s.step.slice(`r${cur.round}c`.length))));
+      const missing = json<Candidate[]>(cur.candidates_json, []).map((_, i) => i + 1).filter((n) => !done.has(n));
+      return missing.length ? this.sendScores(id, missing) : this.finishRound(id);
+    }
+    const done = new Set(this.steps(id, `r${cur.round}s${cur.sweep}:`).map((s) => s.step.split(':')[1]));
+    const missing = strategyFor(cur.strategy).passes.map((p) => p.name).filter((n) => !done.has(n));
+    return missing.length ? this.sendSweep(id, missing) : this.sweepDone(id);
   }
 
   /** The `review-open-anyway` action: the PR prompt goes without a `me_ak_review:` line. */
@@ -1330,7 +1394,7 @@ export class CodeReviews {
         });
         continue;
       }
-      if (session.status === 'idle' || session.status === 'recovered') this.kick(r.id, () => this.stepsEnded(r.id, false));
+      if (session.status === 'idle' || session.status === 'recovered') this.kick(r.id, () => this.turnEnded(r.id, false));
     }
   }
 
