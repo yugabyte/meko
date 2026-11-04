@@ -70,10 +70,11 @@ curl -s http://127.0.0.1:7778/api/v1/datapacks -H "Authorization: Bearer $(meko 
 
 ## Link to Meko Cloud
 
-Link Meko to [Meko Cloud](https://cloud.mekodata.ai/) with an API key you make there:
+Link Meko to [Meko Cloud](https://cloud.mekodata.ai/) by signing in with your browser, or with an
+API key you make there:
 
 ```sh
-meko cloud_link          # asks for the key, or reads it from stdin; --off unlinks
+meko cloud_link          # sign in with your browser, or enter a key; reads a piped key; --off unlinks
 ```
 
 Or use the web UI's Settings › Meko Cloud.

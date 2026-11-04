@@ -3,6 +3,7 @@ package cloudlink
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
@@ -27,8 +28,12 @@ type Service struct {
 	Moved func(ctx context.Context, before, after State) agents.Moves
 	// List asks a REST API URL for the key's datapacks (ListDatapacks, when nil); tests swap it out.
 	List func(ctx context.Context, apiURL, key string) ([]Datapack, error)
+	// SignInClient makes a sign-in's requests (signin.go); nil is a plain client.
+	SignInClient *http.Client
 
 	mu sync.Mutex
+	// signIns is the web UI's sign-in in progress (signin.go).
+	signIns signIns
 	// state is the link as last read or saved, so a call that asks about it (every tools/call while
 	// linked) doesn't read the secret store, which on macOS runs a program each time. gen counts the
 	// changes saved, so a call that read the link before one can't use it after (remote.go).
@@ -170,6 +175,35 @@ func originOf(u string) string {
 	return p.Scheme + "://" + p.Host
 }
 
+// withURLs is the link a change would make, but for its key: the saved URLs with the change's, and
+// the saved key only while linked.
+func withURLs(cur State, u Update) (Link, error) {
+	next := cur.Link
+	if !cur.Linked {
+		next.Key = ""
+	}
+	var err error
+	if u.URL != nil {
+		if next.URL, err = normalURL(u.URL, "MCP server URL"); err != nil {
+			return Link{}, err
+		}
+		if next.URL == DefaultURL {
+			next.URL = ""
+		}
+	}
+	if u.WebURL != nil {
+		if next.WebURL, err = normalURL(u.WebURL, "web app URL"); err != nil {
+			return Link{}, err
+		}
+	}
+	if u.APIURL != nil {
+		if next.APIURL, err = normalURL(u.APIURL, "API URL"); err != nil {
+			return Link{}, err
+		}
+	}
+	return next, nil
+}
+
 // Link checks a change and saves it: a new server or key must answer, a typed web app or API URL
 // must lead to an API that answers like Meko's, and a saved key goes only where it already goes or
 // to Meko Cloud. Nothing is saved when it's refused (an *Error) or a check fails.
@@ -190,27 +224,9 @@ func (s *Service) link(ctx context.Context, u Update) (Status, bool, error) {
 	if err != nil {
 		return Status{}, false, err
 	}
-	next := cur.Link
-	if !cur.Linked {
-		next.Key = ""
-	}
-	if u.URL != nil {
-		if next.URL, err = normalURL(u.URL, "MCP server URL"); err != nil {
-			return Status{}, false, err
-		}
-		if next.URL == DefaultURL {
-			next.URL = ""
-		}
-	}
-	if u.WebURL != nil {
-		if next.WebURL, err = normalURL(u.WebURL, "web app URL"); err != nil {
-			return Status{}, false, err
-		}
-	}
-	if u.APIURL != nil {
-		if next.APIURL, err = normalURL(u.APIURL, "API URL"); err != nil {
-			return Status{}, false, err
-		}
+	next, err := withURLs(cur, u)
+	if err != nil {
+		return Status{}, false, err
 	}
 	typedKey := u.Key != nil && strings.TrimSpace(*u.Key) != ""
 	if typedKey {

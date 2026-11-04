@@ -180,8 +180,8 @@ pickers keep theirs. The logos are files in `src/web/public/`, never
 loaded from elsewhere: `harness-claude.svg` is Clawd, Claude Code's mascot, redrawn cell for cell
 from `png/clawd.png` in [dashboard-icons](https://github.com/homarr-labs/dashboard-icons)
 (Apache-2.0), `harness-opencode.svg` is OpenCode's own favicon (`favicon-v3.svg` in its MIT repo, on
-its dark tile), and `harness-kiro.svg` is Kiro's own `https://kiro.dev/icon.svg`. All are marks on
-their own color that read in either theme.
+its dark tile), and `harness-kiro.svg` is Kiro's own `https://kiro.dev/icon.svg`. Each is its owner's mark, used to
+show which agent a session runs on, on its own color so it reads in either theme.
 
 ## The adapter
 

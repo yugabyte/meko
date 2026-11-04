@@ -1,23 +1,82 @@
 // Settings › Meko Cloud at /settings/meko-cloud: the Meko Cloud (or another Meko server) this Meko's
-// extensions use, and its API key. Meko checks a new server or key before saving it, and tells the
-// running extensions; Unlink sends them back to this Meko. Agents stay on this Meko, which sends their
-// calls to Meko Cloud while it's linked: a change moves back the agents a Meko from before connected
-// to Meko Cloud itself, and the page says which moved (or couldn't).
+// extensions use. Signing in with the browser links it: Meko's server starts the sign-in, Meko Cloud
+// sends the browser back to /settings/meko-cloud/callback (this page), and the server makes an API
+// key and links with it. An API key can be pasted instead. Meko checks a new server or key before
+// saving it, and tells the running extensions; Unlink sends them back to this Meko. Agents stay on
+// this Meko, which sends their calls to Meko Cloud while it's linked: a change moves back the agents a
+// Meko from before connected to Meko Cloud itself, and the page says which moved (or couldn't).
 
 import { useEffect, useState, type FormEvent } from "react";
+import { ExternalLink } from "lucide-react";
 import { api } from "../lib/api";
 import { notifyCloudChanged } from "../lib/cloud";
-import { httpHost, mekoWebUrl } from "../lib/mekourls";
+import { httpHost, mekoKeyLinks, mekoWebUrl } from "../lib/mekourls";
 import type { AgentMoves, MekoCloud, MekoCloudUpdate } from "../lib/types";
 import { MekoGetKey } from "../components/MekoGetKey";
 import { Badge, Button, Card, Code, ErrorNote, Field, Input, Loading, Spinner } from "../components/ui";
 
+const PAGE = "/settings/meko-cloud";
+const CALLBACK = `${PAGE}/callback`;
+
+// What a link change did, shown under the form: a line that it worked, what it did to the agents, or
+// why it failed.
+interface Outcome {
+  saved?: string;
+  moves?: { text: string; failed: boolean } | null;
+  error?: Error;
+}
+
+// The sign-in Meko Cloud sent the browser back with, finished once by its state: React may run an
+// effect twice.
+let finishing: { state: string; done: Promise<MekoCloud> } | null = null;
+
+// What the address says when Meko Cloud sent the browser back here: null on the page itself. Read
+// while rendering, before the effect takes the code out of the address, so a second run of the
+// effect (React's StrictMode) sees the same sign-in rather than an address without one.
+type Back = { code: string; state: string } | { refused: string } | null;
+
+function readBack(): Back {
+  if (window.location.pathname !== CALLBACK) return null;
+  const q = new URLSearchParams(window.location.search);
+  const code = q.get("code");
+  const state = q.get("state");
+  const refused = q.get("error");
+  if (!refused && code && state) return { code, state };
+  return { refused: (q.get("error_description") || refused || "it sent no sign-in code back").replace(/\.$/, "") };
+}
+
 export function MekoCloudPage() {
   const [cloud, setCloud] = useState<MekoCloud>();
   const [loadError, setLoadError] = useState<Error>();
+  const [outcome, setOutcome] = useState<Outcome>();
+  const [back] = useState(readBack);
   useEffect(() => {
-    api.mekoCloud().then(setCloud, setLoadError);
-  }, []);
+    if (!back) {
+      api.mekoCloud().then(setCloud, setLoadError);
+      return;
+    }
+    // Back from signing in at Meko Cloud: take the code out of the address, then finish.
+    if (window.location.pathname === CALLBACK) history.replaceState(null, "", PAGE);
+    if ("refused" in back) {
+      setOutcome({ error: new Error(`Meko Cloud didn't sign you in: ${back.refused}. Nothing was saved.`) });
+      api.mekoCloud().then(setCloud, setLoadError);
+      return;
+    }
+    if (finishing?.state !== back.state) {
+      finishing = { state: back.state, done: api.finishMekoCloudSignIn(back.code, back.state) };
+    }
+    finishing.done.then(
+      (c) => {
+        setCloud(c);
+        setOutcome({ saved: "Signed in and linked. The running extensions use it now.", moves: movesLine(c.agents) });
+        notifyCloudChanged();
+      },
+      (err: Error) => {
+        setOutcome({ error: err });
+        api.mekoCloud().then(setCloud, setLoadError);
+      },
+    );
+  }, [back]);
   return (
     <div className="max-w-2xl space-y-4">
       <div className="space-y-1">
@@ -28,7 +87,13 @@ export function MekoCloudPage() {
           projects through it.
         </p>
       </div>
-      {cloud ? <LinkForm cloud={cloud} onSaved={setCloud} /> : loadError ? <ErrorNote error={loadError} /> : <Loading />}
+      {cloud ? (
+        <LinkForm cloud={cloud} onSaved={setCloud} initial={outcome} />
+      ) : loadError ? (
+        <ErrorNote error={loadError} />
+      ) : (
+        <Loading />
+      )}
       <p className="text-xs text-muted-foreground">
         On a computer without a browser, <Code>meko cloud_link</Code> does the same. A datapack's Connect page connects
         agents.
@@ -37,20 +102,28 @@ export function MekoCloudPage() {
   );
 }
 
-function LinkForm({ cloud, onSaved }: { cloud: MekoCloud; onSaved: (c: MekoCloud) => void }) {
+function LinkForm({ cloud, onSaved, initial }: { cloud: MekoCloud; onSaved: (c: MekoCloud) => void; initial?: Outcome }) {
   const [url, setUrl] = useState(cloud.url);
   const [key, setKey] = useState("");
   const [webUrl, setWebUrl] = useState(cloud.web_url);
   const [apiUrl, setApiUrl] = useState(cloud.api_url);
   const [own, setOwn] = useState(Boolean(cloud.url || cloud.web_url || cloud.api_url));
-  // The host a save would switch to, asked about once before it's saved.
+  const [paste, setPaste] = useState(false);
+  // The host a save or sign-in would switch to, asked about once before it goes ahead.
   const [confirmHost, setConfirmHost] = useState<string | null>(null);
   const [confirmUnlink, setConfirmUnlink] = useState(false);
-  const [busy, setBusy] = useState<"save" | "unlink" | null>(null);
-  const [error, setError] = useState<Error>();
-  const [saved, setSaved] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"save" | "unlink" | "signin" | null>(null);
+  const [error, setError] = useState<Error | undefined>(initial?.error);
+  const [saved, setSaved] = useState<string | null>(initial?.saved ?? null);
   // What the last link change did to the agents, when it moved one or failed to.
-  const [moves, setMoves] = useState<{ text: string; failed: boolean } | null>(null);
+  const [moves, setMoves] = useState<{ text: string; failed: boolean } | null>(initial?.moves ?? null);
+
+  useEffect(() => {
+    if (!initial) return;
+    setError(initial.error);
+    setSaved(initial.saved ?? null);
+    setMoves(initial.moves ?? null);
+  }, [initial]);
 
   const show = (c: MekoCloud) => {
     onSaved(c);
@@ -63,29 +136,59 @@ function LinkForm({ cloud, onSaved }: { cloud: MekoCloud; onSaved: (c: MekoCloud
   const typedUrl = url.trim().replace(/\/+$/, "") || cloud.default_url;
   const currentHost = httpHost(cloud.effective_url);
   const keyLinksBase = mekoWebUrl(typedUrl, webUrl, cloud);
+  const signup = mekoKeyLinks(keyLinksBase)?.signup;
 
-  const save = async (e: FormEvent) => {
-    e.preventDefault();
+  // The URL fields that changed, for a link or a sign-in.
+  const urlChanges = (): MekoCloudUpdate => {
     const next: MekoCloudUpdate = {};
     if (url.trim() !== cloud.url) next.url = url.trim();
     if (webUrl.trim() !== cloud.web_url) next.web_url = webUrl.trim();
     if (apiUrl.trim() !== cloud.api_url) next.api_url = apiUrl.trim();
-    if (key.trim()) next.api_key = key.trim();
-    if (cloud.linked && !Object.keys(next).length) return;
-    // Datapacks live on one Meko: moving to another server leaves existing projects' behind.
+    return next;
+  };
+
+  // Datapacks live on one Meko: moving to another server leaves existing projects' behind, so a switch
+  // is confirmed with a second press. True when it still needs that press.
+  const needsConfirm = (next: MekoCloudUpdate) => {
     const newHost = httpHost(typedUrl);
     if (cloud.linked && next.url !== undefined && newHost && newHost !== currentHost && confirmHost !== newHost) {
       setConfirmHost(newHost);
-      return;
+      return true;
     }
-    setBusy("save");
+    return false;
+  };
+
+  const begin = (what: "save" | "unlink" | "signin") => {
+    setBusy(what);
     setError(undefined);
     setSaved(null);
     setMoves(null);
+  };
+
+  const signIn = async () => {
+    const next = urlChanges();
+    if (needsConfirm(next)) return;
+    begin("signin");
+    try {
+      const { authorize_url } = await api.startMekoCloudSignIn(next);
+      window.location.assign(authorize_url);
+    } catch (err) {
+      setError(err as Error);
+      setBusy(null);
+    }
+  };
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    const next = urlChanges();
+    if (key.trim()) next.api_key = key.trim();
+    if (cloud.linked && !Object.keys(next).length) return;
+    if (needsConfirm(next)) return;
+    begin("save");
     try {
       const c = await api.linkMekoCloud(next);
       show(c);
-      setMoves(movesLine(c.agents, "back to this Meko"));
+      setMoves(movesLine(c.agents));
       notifyCloudChanged();
       setConfirmHost(null);
       setSaved("Linked. The running extensions use it now.");
@@ -97,14 +200,11 @@ function LinkForm({ cloud, onSaved }: { cloud: MekoCloud; onSaved: (c: MekoCloud
   };
 
   const unlink = async () => {
-    setBusy("unlink");
-    setError(undefined);
-    setSaved(null);
-    setMoves(null);
+    begin("unlink");
     try {
       const c = await api.unlinkMekoCloud();
       show(c);
-      setMoves(movesLine(c.agents, "back to this Meko"));
+      setMoves(movesLine(c.agents));
       notifyCloudChanged();
       setConfirmUnlink(false);
       setSaved("Unlinked. The extensions use this Meko now.");
@@ -133,34 +233,83 @@ function LinkForm({ cloud, onSaved }: { cloud: MekoCloud; onSaved: (c: MekoCloud
           </>
         )}
       </div>
+      <div className="space-y-2">
+        <p className="text-sm text-muted-foreground">
+          {cloud.linked
+            ? "Sign in again for a new key, or to link another account."
+            : "Sign in to the Meko Cloud account your agents should use. Meko keeps an API key for this computer, never your password."}
+        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            type="button"
+            variant={cloud.linked ? "outline" : "primary"}
+            disabled={busy !== null}
+            onClick={() => void signIn()}
+          >
+            {busy === "signin" ? <Spinner className={cloud.linked ? undefined : "text-primary-foreground"} /> : null}
+            {busy === "signin"
+              ? "Opening Meko Cloud…"
+              : confirmHost && !paste
+                ? "Switch and sign in"
+                : cloud.linked
+                  ? "Sign in again"
+                  : "Sign in with Meko Cloud"}
+          </Button>
+          {!cloud.linked && signup && (
+            <span className="text-sm text-muted-foreground">
+              No Meko Cloud account?{" "}
+              <a
+                className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
+                href={signup}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Sign up <ExternalLink className="size-3.5" />
+              </a>
+            </span>
+          )}
+        </div>
+      </div>
       <form className="space-y-4" onSubmit={save}>
-        {!cloud.linked && (
-          <MekoGetKey
-            webUrl={keyLinksBase}
-            fallback={`Fill in the web app URL below to get links to sign up and make a key on ${httpHost(typedUrl) ?? "this Meko"}.`}
-          />
-        )}
-        <Field
-          label="API key"
-          hint={
-            cloud.linked
-              ? "Type a new key to replace the saved one. The key is never shown."
-              : "Paste the key you generated in Meko Cloud."
-          }
-        >
-          <Input
-            id="meko-cloud-key"
-            type="password"
-            autoComplete="off"
-            className="font-mono"
-            placeholder={cloud.linked ? `••••••••${cloud.key_hint ?? ""}` : "mko_tkn_…"}
-            value={key}
-            onChange={(e) => setKey(e.target.value)}
-          />
-        </Field>
         <button
           type="button"
           className="text-xs font-medium text-primary hover:underline"
+          aria-expanded={paste}
+          onClick={() => setPaste(!paste)}
+        >
+          {paste ? "▾" : "▸"} Or paste an API key
+        </button>
+        {paste && (
+          <div className="space-y-4">
+            {!cloud.linked && (
+              <MekoGetKey
+                webUrl={keyLinksBase}
+                fallback={`Fill in the web app URL below to get links to sign up and make a key on ${httpHost(typedUrl) ?? "this Meko"}.`}
+              />
+            )}
+            <Field
+              label="API key"
+              hint={
+                cloud.linked
+                  ? "Type a new key to replace the saved one. The key is never shown."
+                  : "Paste the key you generated in Meko Cloud."
+              }
+            >
+              <Input
+                id="meko-cloud-key"
+                type="password"
+                autoComplete="off"
+                className="font-mono"
+                placeholder={cloud.linked ? `••••••••${cloud.key_hint ?? ""}` : "mko_tkn_…"}
+                value={key}
+                onChange={(e) => setKey(e.target.value)}
+              />
+            </Field>
+          </div>
+        )}
+        <button
+          type="button"
+          className="block text-xs font-medium text-primary hover:underline"
           aria-expanded={own}
           onClick={() => setOwn(!own)}
         >
@@ -211,15 +360,17 @@ function LinkForm({ cloud, onSaved }: { cloud: MekoCloud; onSaved: (c: MekoCloud
         {confirmHost && (
           <p className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm" role="alert">
             Existing projects' datapacks live on {currentHost ?? "the current server"}, not on {confirmHost}, so they won't
-            be found after the switch. Press Switch to switch anyway.
+            be found after the switch. Press {paste ? "Switch" : "Switch and sign in"} to switch anyway.
           </p>
         )}
         {error && <ErrorNote error={error} />}
         <div className="flex flex-wrap items-center gap-2">
-          <Button type="submit" variant="primary" disabled={busy !== null}>
-            {busy === "save" ? <Spinner className="text-primary-foreground" /> : null}
-            {busy === "save" ? "Checking…" : confirmHost ? "Switch" : cloud.linked ? "Check and save" : "Check and link"}
-          </Button>
+          {(paste || (cloud.linked && own)) && (
+            <Button type="submit" variant="primary" disabled={busy !== null}>
+              {busy === "save" ? <Spinner className="text-primary-foreground" /> : null}
+              {busy === "save" ? "Checking…" : confirmHost ? "Switch" : cloud.linked ? "Check and save" : "Check and link"}
+            </Button>
+          )}
           {cloud.linked &&
             (confirmUnlink ? (
               <>
@@ -260,11 +411,11 @@ function LinkForm({ cloud, onSaved }: { cloud: MekoCloud; onSaved: (c: MekoCloud
   );
 }
 
-// One line for what a link change did to the agents: the ones it moved (where says where to), then
-// the ones it couldn't move and why; null when it changed none (or the server is older).
-function movesLine(agents: AgentMoves | undefined, where: string): { text: string; failed: boolean } | null {
+// One line for what a link change did to the agents: the ones it moved back to this Meko, then the
+// ones it couldn't move and why; null when it changed none (or the server is older).
+function movesLine(agents: AgentMoves | undefined): { text: string; failed: boolean } | null {
   const parts: string[] = [];
-  if (agents?.moved?.length) parts.push(`Moved ${names(agents.moved.map((a) => a.title))} ${where}`);
+  if (agents?.moved?.length) parts.push(`Moved ${names(agents.moved.map((a) => a.title))} back to this Meko`);
   for (const f of agents?.failed ?? []) parts.push(`Couldn't move ${f.title}: ${f.error}`);
   return parts.length ? { text: parts.join(". "), failed: Boolean(agents?.failed?.length) } : null;
 }

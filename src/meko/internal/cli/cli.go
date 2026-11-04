@@ -219,6 +219,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		fs.StringVar(&cl.webURL, "web-url", "", "its web app's URL (default: worked out from --url)")
 		fs.StringVar(&cl.apiURL, "api-url", "", "its REST API's URL (default: the web app's plus /api/v1)")
 		fs.BoolVar(&cl.off, "off", false, "unlink: the extensions use this Meko")
+		fs.BoolVar(&cl.noBrowser, "no-browser", false, "signing in, print the sign-in address rather than open a browser")
 	}
 	if cmd == "logs" {
 		fs.BoolVar(&c.follow, "f", false, "follow the logs")
@@ -299,6 +300,10 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	fs.Visit(func(fl *flag.Flag) { cl.set[fl.Name] = true })
 	if cl.off && (cl.set["url"] || cl.set["web-url"] || cl.set["api-url"]) {
 		fmt.Fprintln(stderr, "meko cloud_link: --off takes no URLs")
+		return exitUsage
+	}
+	if cl.off && cl.noBrowser {
+		fmt.Fprintln(stderr, "meko cloud_link: --off and --no-browser don't go together")
 		return exitUsage
 	}
 	if cmd == "extension update" && c.all && (t.text != "" || c.auto != "") {
