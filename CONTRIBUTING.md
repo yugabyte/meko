@@ -5,8 +5,8 @@ easiest way to change it is with one.
 
 ## Use AgentK
 
-The best way to contribute is with [AgentK](extensions/agentk/README.md), the agentic coder in this
-repo:
+The best way to contribute is with [AgentK](src/extensions/agentk/README.md), the agentic coder in
+this repo:
 
 1. [Install Meko](README.md#install), then AgentK: `meko extension install agentk`.
 2. In AgentK, open a project on your clone of this repo.
@@ -18,10 +18,10 @@ repo:
 
 Point Claude Code, Codex, OpenCode, Kiro, Cursor or another agent at the repo and say what you
 want. It starts from [AGENTS.md](AGENTS.md), which maps the repo and leads to each part's own guide
-with its build, test and lint commands: [backend/AGENTS.md](backend/AGENTS.md) for Meko,
-[extensions/agentk/AGENTS.md](extensions/agentk/AGENTS.md) for AgentK and
-[extensions/presenter/AGENTS.md](extensions/presenter/AGENTS.md) for Presenter. The Meko datapacks
-that hold the repo's context are listed in [MEKO.md](MEKO.md).
+with its build, test and lint commands: [src/meko/AGENTS.md](src/meko/AGENTS.md) for Meko,
+[src/extensions/agentk/AGENTS.md](src/extensions/agentk/AGENTS.md) for AgentK and
+[src/extensions/presenter/AGENTS.md](src/extensions/presenter/AGENTS.md) for Presenter. The Meko
+datapacks that hold the repo's context are listed in [MEKO.md](MEKO.md).
 
 ## The rules
 

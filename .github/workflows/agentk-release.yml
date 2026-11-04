@@ -9,9 +9,9 @@ name: AgentK release
 # release tag and the tests pass. The release scripts are the repo
 # root's scripts/release/*.sh --product agentk.
 # Run the workflow by hand to force a release, or to rebuild the assets of an existing tag (one
-# from after the move to extensions/agentk).
+# from after the move to src/extensions/agentk).
 #
-# AgentK lives in extensions/agentk: jobs that run its scripts or npm work there.
+# AgentK lives in src/extensions/agentk: jobs that run its scripts or npm work there.
 
 on:
   push:
@@ -23,7 +23,7 @@ on:
         type: boolean
         default: false
       tag:
-        description: Rebuild assets for this existing agentk-v or v tag instead (one from after the move to extensions/agentk)
+        description: Rebuild assets for this existing agentk-v or v tag instead (one from after the move to src/extensions/agentk)
         required: false
 
 # Read-only by default: only publish, which runs none of the dependency installs or tests,
@@ -46,7 +46,7 @@ jobs:
     timeout-minutes: 10
     defaults:
       run:
-        working-directory: extensions/agentk
+        working-directory: src/extensions/agentk
     outputs:
       release: ${{ steps.p.outputs.release }}
       rebuild: ${{ steps.p.outputs.rebuild }}
@@ -73,16 +73,17 @@ jobs:
               *) echo "$DISPATCH_TAG isn't an AgentK release tag (agentk-v<version> or v<version>)"; exit 1 ;;
             esac
             git rev-parse -q --verify "refs/tags/$DISPATCH_TAG" >/dev/null || { echo "no such tag: $DISPATCH_TAG"; exit 1; }
-            # This workflow builds from extensions/agentk; older tags have AgentK at the repo root.
-            git cat-file -e "$DISPATCH_TAG:extensions/agentk/package.json" 2>/dev/null ||
-              { echo "$DISPATCH_TAG is from before AgentK moved to extensions/agentk and can't be rebuilt"; exit 1; }
+            # This workflow builds from src/extensions/agentk; older tags have AgentK in extensions/agentk
+            # or at the repo root.
+            git cat-file -e "$DISPATCH_TAG:src/extensions/agentk/package.json" 2>/dev/null ||
+              { echo "$DISPATCH_TAG is from before AgentK moved to src/extensions/agentk and can't be rebuilt"; exit 1; }
             version=${DISPATCH_TAG#agentk-v}
             version=${version#v}
             { echo "release=true"; echo "rebuild=true"; echo "tag=$DISPATCH_TAG"; echo "version=$version"; echo "ref=$DISPATCH_TAG"; } >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if sh ../../scripts/release/release-notes.sh --product agentk > /dev/null || [ "${FORCE:-false}" = "true" ]; then
-            version=$(sh ../../scripts/release/next-version.sh --product agentk)
+          if sh ../../../scripts/release/release-notes.sh --product agentk > /dev/null || [ "${FORCE:-false}" = "true" ]; then
+            version=$(sh ../../../scripts/release/next-version.sh --product agentk)
             echo "Releasing $version"
             { echo "release=true"; echo "rebuild=false"; echo "tag=agentk-v$version"; echo "version=$version"; echo "ref=$GITHUB_SHA"; } >> "$GITHUB_OUTPUT"
           else
@@ -98,7 +99,7 @@ jobs:
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: extensions/agentk
+        working-directory: src/extensions/agentk
     steps:
       - uses: actions/checkout@v7
         with:
@@ -107,7 +108,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: extensions/agentk/package-lock.json
+          cache-dependency-path: src/extensions/agentk/package-lock.json
       - timeout-minutes: 5
         run: |
           sudo apt-get -o Acquire::Retries=3 update
@@ -144,14 +145,14 @@ jobs:
     timeout-minutes: 40
     defaults:
       run:
-        working-directory: extensions/agentk
+        working-directory: src/extensions/agentk
     # Plan outputs reach the shell through the environment, never pasted into scripts.
     env:
       VERSION: ${{ needs.plan.outputs.version }}
       ARCH: ${{ matrix.arch }}
     steps:
       - name: Install build toolchain
-        # Before checkout: extensions/agentk doesn't exist yet.
+        # Before checkout: src/extensions/agentk doesn't exist yet.
         working-directory: .
         # Normally under a minute; a slow mirror would otherwise hold the release group.
         timeout-minutes: 10
@@ -174,7 +175,7 @@ jobs:
         timeout-minutes: 10
         run: |
           set -eu
-          dir=$(sh ../../scripts/release/fetch-node.sh "$NODE_VERSION" "/tmp" "linux-$ARCH")
+          dir=$(sh ../../../scripts/release/fetch-node.sh "$NODE_VERSION" "/tmp" "linux-$ARCH")
           echo "NODE_DIR=$dir" >> "$GITHUB_ENV"
           echo "$dir/bin" >> "$GITHUB_PATH"
 
@@ -227,7 +228,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: tarball-linux-${{ matrix.arch }}
-          path: extensions/agentk/out/*.tar.gz
+          path: src/extensions/agentk/out/*.tar.gz
           if-no-files-found: error
 
   # macOS on Apple Silicon. No container: the runner's Xcode clang builds node-pty.
@@ -238,7 +239,7 @@ jobs:
     timeout-minutes: 40
     defaults:
       run:
-        working-directory: extensions/agentk
+        working-directory: src/extensions/agentk
     env:
       ARCH: arm64
       VERSION: ${{ needs.plan.outputs.version }}
@@ -254,7 +255,7 @@ jobs:
         timeout-minutes: 10
         run: |
           set -eu
-          dir=$(sh ../../scripts/release/fetch-node.sh "$NODE_VERSION" "$RUNNER_TEMP" "darwin-$ARCH")
+          dir=$(sh ../../../scripts/release/fetch-node.sh "$NODE_VERSION" "$RUNNER_TEMP" "darwin-$ARCH")
           echo "NODE_DIR=$dir" >> "$GITHUB_ENV"
           echo "$dir/bin" >> "$GITHUB_PATH"
 
@@ -307,7 +308,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: tarball-darwin-arm64
-          path: extensions/agentk/out/*.tar.gz
+          path: src/extensions/agentk/out/*.tar.gz
           if-no-files-found: error
 
   publish:
@@ -339,12 +340,12 @@ jobs:
         working-directory: dist-release
         run: |
           sha256sum *.tar.gz > SHA256SUMS
-          cp ../extensions/agentk/scripts/install.sh install.sh
+          cp ../src/extensions/agentk/scripts/install.sh install.sh
           cat SHA256SUMS
 
       - name: Sign SHA256SUMS
         # Meko installs a release only when a line of SHA256SUMS.sig verifies with one of its keys
-        # (backend/internal/update/keys). The key is a secret of the release environment, which only
+        # (src/meko/internal/update/keys). The key is a secret of the release environment, which only
         # main can use; RELEASE_SIGNING_KEY_OLD is set only while a new key replaces it.
         working-directory: dist-release
         env:
@@ -374,7 +375,7 @@ jobs:
         # checkout: a rebuild checks out an older tag, which may lack a newer key.
         run: |
           set -eu
-          keys=backend/internal/update/keys
+          keys=src/meko/internal/update/keys
           sigs=dist-release/SHA256SUMS.sig
           id=$(head -n 1 "$sigs" | cut -d ' ' -f 1)
           tmp=$(mktemp -d)
