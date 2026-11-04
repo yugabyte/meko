@@ -40,6 +40,22 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
     expect(first.args.slice(0, 5)).toEqual(['chat', '--agent', 'agentk', '--model', 'claude-sonnet-4.5']);
   });
 
+  it("follows Kiro 3.0's sessions, and leaves the agent file as Kiro upgraded it", async () => {
+    // Kiro 3.0 sends Claude Code's event names, and upgrades the agent's file in place.
+    writeFileSync(join(process.env.FAKE_KIRO_DIR!, 'kiro3'), '');
+    const file = join(process.env.KIRO_HOME!, 'agents', 'agentk.json');
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'none' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Kiro 3', prompt: 'hi', start: 'code', harness: 'kiro' });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'the first turn to end');
+    expect(env.core.sessions.row(s.id).agent_session_id).toBe(lines(env, 'spawn.jsonl')[0].sessionId);
+    const upgraded = readFileSync(file, 'utf8');
+    expect(JSON.parse(upgraded)).toHaveProperty('kiroUpgrade');
+    // Another session's launch doesn't write AgentK's over it: the first would reload it and lose the agent.
+    const t = await env.core.sessions.create(p.id, { name: 'Kiro 3 again', prompt: 'hi', start: 'code', harness: 'kiro' });
+    await waitFor(() => env.core.sessions.get(t.id).status, (st) => st === 'idle', 10000, 'the second turn to end');
+    expect(readFileSync(file, 'utf8')).toBe(upgraded);
+  });
+
   it("runs a session as AgentK's Kiro agent: system lines at spawn, the Design guard, credits and Kiro's plan, exit and Resume", async () => {
     const agent = JSON.parse(readFileSync(join(process.env.KIRO_HOME!, 'agents', 'agentk.json'), 'utf8'));
     // Built from Kiro's built-in default (exported with `agent create --from`), its upgrade bookkeeping left out, with AgentK's session tools.

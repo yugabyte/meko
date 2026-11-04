@@ -1,4 +1,4 @@
-import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { agentkHooks, kiroArgs, kiroMekoTool, normalizeKiro } from '../../src/server/harness/kiro.js';
@@ -50,6 +50,51 @@ describe("Kiro's agentk agent", () => {
   });
 });
 
+describe("Kiro's agentk agent after Kiro 3.0 upgraded it", () => {
+  const hooks = { agentSpawn: [{ command: "'/ak/run/hook.sh'", timeout_ms: 5000 }], preToolUse: [{ matcher: 'fs_write', command: "'/ak/run/kiro-guard.sh'", timeout_ms: 5000 }] };
+  const servers = { agentk_sessions: { command: '/ak/node', args: ['/ak/mcpmain.js'] } };
+  const a = { ...agentkAgent({ name: 'base', tools: ['*'] }, hooks), mcpServers: servers };
+  // As `kiro-cli agent upgrade` (Kiro 3.0) rewrites a file: a list of named hooks, fs_write widened to write.
+  const upgrade = (agent: Record<string, unknown>, h = hooks) => ({
+    ...agent, tools: ['*'],
+    hooks: Object.entries(h).flatMap(([trigger, list]) => list.map((x: { matcher?: string; command: string }, i: number) => ({
+      name: `${trigger}-${i}`, trigger, ...(x.matcher ? { matcher: x.matcher === 'fs_write' ? 'write' : x.matcher } : {}),
+      action: { type: 'command', command: x.command }, timeout: 5,
+    }))),
+    permissions: { rules: [{ capability: 'fs_read', match: ['./**'], effect: 'allow' }] },
+    kiroUpgrade: { revision: 2, fingerprint: 'sha256:1', source: 'sha256:2' },
+  });
+  it.each([
+    // Writing AgentK's over it again would knock running sessions off the agent.
+    ["Kiro's upgrade of AgentK's last write is kept", upgrade(a), false],
+    ['another AgentK home\'s agent (its own script paths) is written over',
+      upgrade(a, { ...hooks, agentSpawn: [{ command: "'/dev-home/run/hook.sh'", timeout_ms: 5000 }] }), true],
+    ["an older release's agent (other hooks) is written over", upgrade(a, { agentSpawn: hooks.agentSpawn, preToolUse: [] }), true],
+    ['an agent with other MCP servers is written over', upgrade({ ...a, mcpServers: {} }), true],
+    ["one that isn't AgentK's is written over", upgrade({ ...a, description: 'Mine' }), true],
+    ['a missing file is written', null, true],
+  ])('%s', (_, onDisk, writes) => {
+    const home = tempDir('akl-kiro-');
+    const written = join(tempDir('akl-run-'), 'run', 'kiro-agentk.json');
+    const file = join(home, 'agents', 'agentk.json');
+    expect(writeKiroAgent(a, home, written)).toBe(true);
+    if (onDisk) writeFileSync(file, JSON.stringify(onDisk));
+    else rmSync(file);
+    expect(writeKiroAgent(a, home, written)).toBe(writes);
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(writes ? a : onDisk);
+  });
+
+  it("is written over when AgentK's own agent changed", () => {
+    const home = tempDir('akl-kiro-');
+    const written = join(tempDir('akl-run-'), 'run', 'kiro-agentk.json');
+    expect(writeKiroAgent(a, home, written)).toBe(true);
+    writeFileSync(join(home, 'agents', 'agentk.json'), JSON.stringify(upgrade(a)));
+    const b = { ...a, resources: ['skill:///ak/SKILL.md'] };
+    expect(writeKiroAgent(b, home, written)).toBe(true);
+    expect(JSON.parse(readFileSync(join(home, 'agents', 'agentk.json'), 'utf8'))).toEqual(b);
+  });
+});
+
 describe("a Kiro session's command line", () => {
   it.each([
     ['a new session with its first prompt, never after "--" (Kiro drops it there)', { conversation: null, trustTools: false, prompt: 'do it' }, ['do it']],
@@ -69,7 +114,13 @@ describe("Kiro's hook events as AgentK's", () => {
     [{ hook_event_name: 'userPromptSubmit', session_id: 'k-1', prompt: 'hi' }, { hook_event_name: 'UserPromptSubmit', agent_session_id: 'k-1', prompt: 'hi' }],
     [{ hook_event_name: 'postToolUse', tool_name: 'write', tool_input: { path: 'a.ts' } }, { hook_event_name: 'PostToolUse', tool_name: 'write', tool_input: { path: 'a.ts' } }],
     [{ hook_event_name: 'stop', session_id: 'k-1', assistant_response: 'Done.' }, { hook_event_name: 'Stop', agent_session_id: 'k-1', assistant_response: 'Done.' }],
-    [{ hook_event_name: 'SessionStart', session_id: 'k-1' }, null],
+    // Kiro 3.0 sends Claude Code's names for the same events.
+    [{ hook_event_name: 'SessionStart', session_id: 'x' }, { hook_event_name: 'SessionStart', agent_session_id: 'x' }],
+    [{ hook_event_name: 'UserPromptSubmit', session_id: 'x', prompt: 'hi' }, { hook_event_name: 'UserPromptSubmit', agent_session_id: 'x', prompt: 'hi' }],
+    [{ hook_event_name: 'PreToolUse', tool_name: '@meko/memory_search' }, { hook_event_name: 'PreToolUse', tool_name: '@meko/memory_search' }],
+    [{ hook_event_name: 'PostToolUse', tool_name: 'write' }, { hook_event_name: 'PostToolUse', tool_name: 'write' }],
+    [{ hook_event_name: 'Stop', session_id: 'x' }, { hook_event_name: 'Stop', agent_session_id: 'x' }],
+    [{ hook_event_name: 'SessionEnd', session_id: 'k-1' }, null],
   ])('%j', (raw, event) => {
     expect(normalizeKiro(raw)).toEqual(event);
   });

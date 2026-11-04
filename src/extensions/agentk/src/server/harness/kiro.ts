@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { HARNESS_CAPS } from '../../shared/harnesses.js';
 import { kiroAsker } from '../askagentk.js';
 import { contextScriptPath, hookScriptPath } from '../claude.js';
@@ -7,7 +8,7 @@ import type { Config } from '../config.js';
 import { run } from '../db.js';
 import type { HookPayload } from '../hooks.js';
 import {
-  AGENTK_AGENT, agentkAgent, builtinKiroAgent, exportBuiltinKiroAgent, findKiroSession, kiroDefaultAgentName, kiroGuardScriptPath,
+  AGENTK_AGENT, agentkAgent, builtinKiroAgent, exportBuiltinKiroAgent, findKiroSession, kiroDefaultAgentName, kiroGuardScriptPath, kiroHome,
   kiroSessionFile, kiroSessionLog, kiroTurns, parseKiroModels, readKiroAgent, writeKiroAgent, writeKiroGuardScript, type KiroHooks,
 } from '../kiro.js';
 import { kiroMekoServerNames } from '../mekokiro.js';
@@ -29,12 +30,18 @@ const MODELS_TIMEOUT_MS = 15_000;
 const UPDATE_TIMEOUT_MS = 5 * 60 * 1000;
 /** Kiro's file-writing tool, by the name its hook matchers take (Kiro 2.32 calls it `write` and keeps this alias). */
 const WRITE_TOOLS = ['write', 'fs_write'];
+/** The copy of the `agentk` agent AgentK last wrote, in its run folder (`writeKiroAgent`'s `written`). */
+const KIRO_AGENT_WRITTEN = 'kiro-agentk.json';
 /** Hook commands must never hold Kiro up for long. */
 const HOOK_TIMEOUT_MS = 5000;
 
-/** Kiro's hook events as AgentK's (Claude Code's hook names). */
+/**
+ * Kiro's hook events as AgentK's (Claude Code's hook names). Kiro 2 sends its triggers' names
+ * (`agentSpawn`); Kiro 3.0 sends Claude Code's (`SessionStart`) for the same triggers.
+ */
 const EVENTS: Record<string, string> = {
   agentSpawn: 'SessionStart', userPromptSubmit: 'UserPromptSubmit', preToolUse: 'PreToolUse', postToolUse: 'PostToolUse', stop: 'Stop',
+  SessionStart: 'SessionStart', UserPromptSubmit: 'UserPromptSubmit', PreToolUse: 'PreToolUse', PostToolUse: 'PostToolUse', Stop: 'Stop',
 };
 
 /**
@@ -71,7 +78,7 @@ export function writeAgentkAgent(paths: Paths, cfg: Config): boolean {
     ? { name: TOOLS_SERVER, server: kiroToolsServer(paths), skill: claudePath(skillPath(paths)) }
     : null;
   const hooks = agentkHooks(paths, kiroMekoServerNames(base.mcpServers));
-  return writeKiroAgent(agentkAgent(base, hooks, { mekoCapture: cfg.meko.captureTranscripts, tools }));
+  return writeKiroAgent(agentkAgent(base, hooks, { mekoCapture: cfg.meko.captureTranscripts, tools }), kiroHome(), join(paths.run, KIRO_AGENT_WRITTEN));
 }
 
 /**

@@ -2,7 +2,8 @@ import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import type { KiroPlan } from '../shared/types.js';
 import type { Paths } from './paths.js';
 import { writeScript } from './scriptfile.js';
@@ -78,14 +79,16 @@ export function kiroDefaultAgentName(home = kiroHome()): string | null {
   return typeof name === 'string' && name.trim() ? name.trim() : null;
 }
 
+/** Whether an agent's config is one AgentK wrote (its description says so). */
+const ours = (a: Json | null) =>
+  !!a && typeof a.description === 'string' && (a.description.includes(MARK) || a.description.includes(OLD_MARK));
+
 /**
  * A global agent's config by its name: `<name>.json` in Kiro's agents folder, else the file there
  * whose `name` it is. Never one AgentK wrote.
  */
 export function readKiroAgent(name: string, home = kiroHome()): Json | null {
   const dir = join(home, 'agents');
-  const ours = (a: Json | null) =>
-    !!a && typeof a.description === 'string' && (a.description.includes(MARK) || a.description.includes(OLD_MARK));
   const direct = readJson(join(dir, `${name}.json`));
   if (direct && !ours(direct)) return direct;
   let files: string[];
@@ -200,21 +203,68 @@ function writeAtomic(file: string, text: string): void {
   renameSync(tmp, file);
 }
 
+function readText(file: string): string | null {
+  try {
+    return readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The hooks an agent runs, as sorted `trigger matcher command` lines: from Kiro 2's `hooks` (lists
+ * by trigger) or Kiro 3.0's (a list of named hooks, each with its trigger and its `action`). Kiro
+ * 3.0's upgrade widens the `fs_write` matcher to `write`, so they count as one.
+ */
+function hookLines(hooks: unknown): string[] {
+  const lines: string[] = [];
+  const add = (trigger: unknown, h: unknown) => {
+    if (!isObject(h)) return;
+    const command = isObject(h.action) ? h.action.command : h.command;
+    const matcher = h.matcher === 'fs_write' ? 'write' : h.matcher ?? '';
+    lines.push(JSON.stringify([trigger, matcher, command]));
+  };
+  if (Array.isArray(hooks)) for (const h of hooks) add(isObject(h) ? h.trigger : null, h);
+  else if (isObject(hooks)) for (const [trigger, list] of Object.entries(hooks)) if (Array.isArray(list)) for (const h of list) add(trigger, h);
+  return lines.sort();
+}
+
+/**
+ * Whether an agent file runs what `agent` would, in the parts AgentK owns, whichever format it's
+ * in: the same hooks (with this home's script paths) and the same MCP servers.
+ */
+function runsAsWritten(file: Json, agent: Json): boolean {
+  return isDeepStrictEqual(hookLines(file.hooks), hookLines(agent.hooks)) && isDeepStrictEqual(file.mcpServers ?? {}, agent.mcpServers ?? {});
+}
+
 /**
  * Writes a global agent file AgentK owns, only when its content changed (so a running Kiro isn't
  * made to reload it for nothing). True when it wrote. Throws when the folder can't be written.
+ *
+ * With `written` (a file of AgentK's own that keeps a copy of what it last wrote), a file that
+ * differs is left alone while AgentK would still write what that copy holds and the file is still
+ * AgentK's agent running the same hooks and MCP servers: Kiro 3.0 upgrades an agent file in place
+ * to its own format (`kiro-cli agent upgrade`), and writing AgentK's again over it would have every
+ * running session reload it, and fall back to Kiro's default agent without AgentK's hooks and
+ * tools. Another AgentK home's agent (other script paths), or an older release's (other hooks), is
+ * written over.
  */
-export function writeKiroAgent(agent: Json, home = kiroHome()): boolean {
+export function writeKiroAgent(agent: Json, home = kiroHome(), written?: string): boolean {
   const dir = join(home, 'agents');
   const file = join(dir, `${String(agent.name)}.json`);
   const text = `${JSON.stringify(agent, null, 2)}\n`;
-  try {
-    if (readFileSync(file, 'utf8') === text) return false;
-  } catch {
-    /* not there yet */
+  const now = readText(file);
+  if (now === text) return false;
+  if (written && now !== null && readText(written) === text) {
+    const kept = readJson(file);
+    if (kept && ours(kept) && runsAsWritten(kept, agent)) return false;
   }
   mkdirSync(dir, { recursive: true });
   writeAtomic(file, text);
+  if (written) {
+    mkdirSync(dirname(written), { recursive: true });
+    writeAtomic(written, text);
+  }
   return true;
 }
 

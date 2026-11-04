@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Stand-in for the `kiro-cli` CLI in integration tests. A session runs as the agent it's given
 // (`chat --agent <name>`, read from $KIRO_HOME/agents) and fires that agent's inline hooks the way
-// Kiro 2.x does (the event as JSON on stdin; a preToolUse hook's exit 2 denies the call, its
-// stderr the reason); it keeps a session file like Kiro's ($KIRO_HOME/sessions/cli/<id>.json) with
+// Kiro 2.x does (the event as JSON on stdin; a preToolUse hook's exit 2 denies the call, its stderr
+// the reason), or as 3.0 does (`kiro3` below); it keeps a session file like Kiro's ($KIRO_HOME/sessions/cli/<id>.json) with
 // each finished turn's usage, and its log (<id>.jsonl) of prompts and Meko calls' results, and turns
 // each stdin line into a turn. Everything it does is recorded
 // in $FAKE_KIRO_DIR.
@@ -89,7 +89,24 @@ for (let i = 0; i < args.length; i++) {
   if (valued.has(args[i])) i++;
   else if (i > 0 && !args[i].startsWith('-')) prompt = args[i];
 }
-const agent = JSON.parse(readFileSync(join(home, 'agents', `${opt('--agent')}.json`), 'utf8'));
+const agentFile = join(home, 'agents', `${opt('--agent')}.json`);
+const agent = JSON.parse(readFileSync(agentFile, 'utf8'));
+// Like Kiro 3.0, when the test put `kiro3` in the fake's dir: it upgrades the agent's file in place
+// as `kiro-cli agent upgrade` does (its hooks a list of named hooks, `fs_write` widened to `write`,
+// its own bookkeeping added), and its hooks get Claude Code's event names.
+const kiro3 = existsSync(join(dir, 'kiro3'));
+const EVENT_NAMES = { agentSpawn: 'SessionStart', userPromptSubmit: 'UserPromptSubmit', preToolUse: 'PreToolUse', postToolUse: 'PostToolUse', stop: 'Stop' };
+if (kiro3 && !agent.kiroUpgrade) {
+  const hooks = Object.entries(agent.hooks ?? {}).flatMap(([trigger, list]) => list.map((h, i) => ({
+    name: `${trigger}-${i}`, trigger, ...(h.matcher ? { matcher: h.matcher === 'fs_write' ? 'write' : h.matcher } : {}),
+    action: { type: 'command', command: h.command }, timeout: (h.timeout_ms ?? 30000) / 1000,
+  })));
+  writeFileSync(agentFile, JSON.stringify({ ...agent, hooks, kiroUpgrade: { revision: 2, fingerprint: 'sha256:0', source: 'sha256:0' } }, null, 2));
+}
+// The agent's hooks for an event, from Kiro 2's format or 3.0's.
+const hooksFor = (event) => Array.isArray(agent.hooks)
+  ? agent.hooks.filter((h) => h.trigger === event).map((h) => ({ matcher: h.matcher, command: h.action.command }))
+  : agent.hooks?.[event] ?? [];
 const sessions = join(home, 'sessions', 'cli');
 mkdirSync(sessions, { recursive: true });
 // Like Kiro: --resume-id continues that session, --resume the newest in this folder, else a new one.
@@ -117,10 +134,10 @@ log('argv.jsonl', { args, cwd: process.cwd(), env: { MEKO_AGENT_ID: process.env.
 function hook(event, extra = {}) {
   let out = '';
   let denied = null;
-  for (const h of agent.hooks?.[event] ?? []) {
+  for (const h of hooksFor(event)) {
     const server = h.matcher?.startsWith('@') && String(extra.tool_name ?? '').startsWith(`${h.matcher}/`);
     if (h.matcher && h.matcher !== '*' && !server && !(h.matcher === extra.tool_name || (h.matcher === 'fs_write' && extra.tool_name === 'write'))) continue;
-    const input = JSON.stringify({ hook_event_name: event, cwd: process.cwd(), session_id: sessionId, ...extra });
+    const input = JSON.stringify({ hook_event_name: kiro3 ? EVENT_NAMES[event] : event, cwd: process.cwd(), session_id: sessionId, ...extra });
     const r = spawnSync('sh', ['-c', h.command], { input });
     out += r.stdout?.toString() ?? '';
     if (event === 'preToolUse' && r.status === 2) denied = r.stderr?.toString().trim() ?? '';
