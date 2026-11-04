@@ -456,11 +456,15 @@ trust_tools` is a flag on AgentK's launch instead, `--trust-tools=*` (every tool
 so a chat someone starts as `agentk` themselves still asks; not `--trust-all-tools`, which makes Kiro
 ask on screen whether to go on, with **No, exit** first, and the next prompt AgentK types would pick
 it. Meko's capture hooks (`kiro-handler.js`) are left out
-while `[meko] capture_transcripts` is off. The file is written only when it changes from what AgentK
-last wrote (a copy kept in the run folder, `run/kiro-agentk.json`): Kiro 3.0 upgrades the file in
-place to its own format, and writing AgentK's over that again would make every running Kiro session
-reload it and fall back to Kiro's default agent, without AgentK's hooks or session tools. It's
-written at server start (only where `kiro-cli --version` answers: AgentK never makes a `~/.kiro` of
+while `[meko] capture_transcripts` is off. The file is written only when it changes. Kiro 3.0
+upgrades it in place to its own format (`kiro-cli agent upgrade`: its hooks become a list of named
+hooks with `fs_write` widened to `write`, and it adds `permissions` and `kiroUpgrade`), and writing
+AgentK's over that again would make every running Kiro session reload it and fall back to Kiro's
+default agent, without AgentK's hooks or session tools. So a file that differs is left alone while
+AgentK would still write what it last wrote (a copy kept in the run folder, `run/kiro-agentk.json`)
+and the file is still AgentK's agent with the same hooks (trigger, matcher, command) and MCP
+servers; another AgentK home's agent (other script paths, such as `npm run dev`'s) or an older
+release's (other hooks) is written over. It's written at server start (only where `kiro-cli --version` answers: AgentK never makes a `~/.kiro` of
 its own), before every launch, and after **Set up Kiro with this Meko**; `uninstall` removes it. Its description says it's
 AgentK's, and `readKiroAgent` never takes it as a base. Kiro uses a workspace agent of the same
 name (`<worktree>/.kiro/agents/*.json` named `agentk`) over this one, and the agent loads a

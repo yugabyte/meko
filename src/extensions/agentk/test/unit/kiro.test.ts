@@ -35,7 +35,7 @@ describe("Kiro's agentk agent", () => {
     });
   });
 
-  it('is written only when it changed (from what AgentK last wrote, once Kiro upgraded it), and never read back as the base agent', () => {
+  it('is written only when it changed, and never read back as the base agent', () => {
     const home = tempDir('akl-kiro-');
     const a = agentkAgent({ name: 'base', tools: ['*'] }, {});
     expect(writeKiroAgent(a, home)).toBe(true);
@@ -47,27 +47,51 @@ describe("Kiro's agentk agent", () => {
     expect(readKiroAgent('agentk-ask', home)).toBeNull();
     writeFileSync(join(home, 'agents', 'mine.json'), JSON.stringify({ name: 'my-agent', tools: ['read'] }));
     expect(readKiroAgent('my-agent', home)).toEqual({ name: 'my-agent', tools: ['read'] });
+  });
+});
 
-    // With the copy of what AgentK last wrote, the file stays as Kiro upgraded it while AgentK would write the same.
-    const file = join(home, 'agents', 'agentk.json');
+describe("Kiro's agentk agent after Kiro 3.0 upgraded it", () => {
+  const hooks = { agentSpawn: [{ command: "'/ak/run/hook.sh'", timeout_ms: 5000 }], preToolUse: [{ matcher: 'fs_write', command: "'/ak/run/kiro-guard.sh'", timeout_ms: 5000 }] };
+  const servers = { agentk_sessions: { command: '/ak/node', args: ['/ak/mcpmain.js'] } };
+  const a = { ...agentkAgent({ name: 'base', tools: ['*'] }, hooks), mcpServers: servers };
+  // As `kiro-cli agent upgrade` (Kiro 3.0) rewrites a file: a list of named hooks, fs_write widened to write.
+  const upgrade = (agent: Record<string, unknown>, h = hooks) => ({
+    ...agent, tools: ['*'],
+    hooks: Object.entries(h).flatMap(([trigger, list]) => list.map((x: { matcher?: string; command: string }, i: number) => ({
+      name: `${trigger}-${i}`, trigger, ...(x.matcher ? { matcher: x.matcher === 'fs_write' ? 'write' : x.matcher } : {}),
+      action: { type: 'command', command: x.command }, timeout: 5,
+    }))),
+    permissions: { rules: [{ capability: 'fs_read', match: ['./**'], effect: 'allow' }] },
+    kiroUpgrade: { revision: 2, fingerprint: 'sha256:1', source: 'sha256:2' },
+  });
+  it.each([
+    // Writing AgentK's over it again would knock running sessions off the agent.
+    ["Kiro's upgrade of AgentK's last write is kept", upgrade(a), false],
+    ['another AgentK home\'s agent (its own script paths) is written over',
+      upgrade(a, { ...hooks, agentSpawn: [{ command: "'/dev-home/run/hook.sh'", timeout_ms: 5000 }] }), true],
+    ["an older release's agent (other hooks) is written over", upgrade(a, { agentSpawn: hooks.agentSpawn, preToolUse: [] }), true],
+    ['an agent with other MCP servers is written over', upgrade({ ...a, mcpServers: {} }), true],
+    ["one that isn't AgentK's is written over", upgrade({ ...a, description: 'Mine' }), true],
+    ['a missing file is written', null, true],
+  ])('%s', (_, onDisk, writes) => {
+    const home = tempDir('akl-kiro-');
     const written = join(tempDir('akl-run-'), 'run', 'kiro-agentk.json');
-    rmSync(file);
+    const file = join(home, 'agents', 'agentk.json');
     expect(writeKiroAgent(a, home, written)).toBe(true);
-    // Kiro 3.0 upgrades the file in place: writing AgentK's over it again would knock running sessions off the agent.
-    const upgraded = `${JSON.stringify({ ...a, kiroUpgrade: { revision: 2 } })}\n`;
-    writeFileSync(file, upgraded);
-    expect(writeKiroAgent(a, home, written)).toBe(false);
-    expect(readFileSync(file, 'utf8')).toBe(upgraded);
-    // A change of AgentK's is written.
-    const b = agentkAgent({ name: 'base', tools: ['read'] }, {});
+    if (onDisk) writeFileSync(file, JSON.stringify(onDisk));
+    else rmSync(file);
+    expect(writeKiroAgent(a, home, written)).toBe(writes);
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(writes ? a : onDisk);
+  });
+
+  it("is written over when AgentK's own agent changed", () => {
+    const home = tempDir('akl-kiro-');
+    const written = join(tempDir('akl-run-'), 'run', 'kiro-agentk.json');
+    expect(writeKiroAgent(a, home, written)).toBe(true);
+    writeFileSync(join(home, 'agents', 'agentk.json'), JSON.stringify(upgrade(a)));
+    const b = { ...a, resources: ['skill:///ak/SKILL.md'] };
     expect(writeKiroAgent(b, home, written)).toBe(true);
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(b);
-    // So is the file again once it's gone, or no longer AgentK's.
-    rmSync(file);
-    expect(writeKiroAgent(b, home, written)).toBe(true);
-    writeFileSync(file, JSON.stringify({ name: 'agentk', tools: ['read'] }));
-    expect(writeKiroAgent(b, home, written)).toBe(true);
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(b);
+    expect(JSON.parse(readFileSync(join(home, 'agents', 'agentk.json'), 'utf8'))).toEqual(b);
   });
 });
 

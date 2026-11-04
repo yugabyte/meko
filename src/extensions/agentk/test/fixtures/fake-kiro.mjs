@@ -92,10 +92,21 @@ for (let i = 0; i < args.length; i++) {
 const agentFile = join(home, 'agents', `${opt('--agent')}.json`);
 const agent = JSON.parse(readFileSync(agentFile, 'utf8'));
 // Like Kiro 3.0, when the test put `kiro3` in the fake's dir: it upgrades the agent's file in place
-// (its own bookkeeping added), and its hooks get Claude Code's event names.
+// as `kiro-cli agent upgrade` does (its hooks a list of named hooks, `fs_write` widened to `write`,
+// its own bookkeeping added), and its hooks get Claude Code's event names.
 const kiro3 = existsSync(join(dir, 'kiro3'));
 const EVENT_NAMES = { agentSpawn: 'SessionStart', userPromptSubmit: 'UserPromptSubmit', preToolUse: 'PreToolUse', postToolUse: 'PostToolUse', stop: 'Stop' };
-if (kiro3 && !agent.kiroUpgrade) writeFileSync(agentFile, JSON.stringify({ ...agent, kiroUpgrade: { revision: 2 } }, null, 2));
+if (kiro3 && !agent.kiroUpgrade) {
+  const hooks = Object.entries(agent.hooks ?? {}).flatMap(([trigger, list]) => list.map((h, i) => ({
+    name: `${trigger}-${i}`, trigger, ...(h.matcher ? { matcher: h.matcher === 'fs_write' ? 'write' : h.matcher } : {}),
+    action: { type: 'command', command: h.command }, timeout: (h.timeout_ms ?? 30000) / 1000,
+  })));
+  writeFileSync(agentFile, JSON.stringify({ ...agent, hooks, kiroUpgrade: { revision: 2, fingerprint: 'sha256:0', source: 'sha256:0' } }, null, 2));
+}
+// The agent's hooks for an event, from Kiro 2's format or 3.0's.
+const hooksFor = (event) => Array.isArray(agent.hooks)
+  ? agent.hooks.filter((h) => h.trigger === event).map((h) => ({ matcher: h.matcher, command: h.action.command }))
+  : agent.hooks?.[event] ?? [];
 const sessions = join(home, 'sessions', 'cli');
 mkdirSync(sessions, { recursive: true });
 // Like Kiro: --resume-id continues that session, --resume the newest in this folder, else a new one.
@@ -123,7 +134,7 @@ log('argv.jsonl', { args, cwd: process.cwd(), env: { MEKO_AGENT_ID: process.env.
 function hook(event, extra = {}) {
   let out = '';
   let denied = null;
-  for (const h of agent.hooks?.[event] ?? []) {
+  for (const h of hooksFor(event)) {
     const server = h.matcher?.startsWith('@') && String(extra.tool_name ?? '').startsWith(`${h.matcher}/`);
     if (h.matcher && h.matcher !== '*' && !server && !(h.matcher === extra.tool_name || (h.matcher === 'fs_write' && extra.tool_name === 'write'))) continue;
     const input = JSON.stringify({ hook_event_name: kiro3 ? EVENT_NAMES[event] : event, cwd: process.cwd(), session_id: sessionId, ...extra });
