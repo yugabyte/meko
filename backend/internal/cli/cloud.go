@@ -25,7 +25,7 @@ import (
 // cloudFlags are meko cloud_link's.
 type cloudFlags struct {
 	url, webURL, apiURL string
-	off                 bool
+	off, noBrowser      bool
 	set                 map[string]bool // the flags given, so --url "" (Meko Cloud's) differs from no --url
 }
 
@@ -42,8 +42,9 @@ func cloudStore(l paths.Layout, cfg config.Config) (cloudlink.Store, error) {
 	return cloudlink.Store{File: cloudlink.File(l.Config), Secrets: s}, nil
 }
 
-// runCloudLink links Meko Cloud, or another Meko server, for the extensions: the key from stdin, or
-// typed at a hidden prompt; --off unlinks. With a server running it goes through it (the admin
+// runCloudLink links Meko Cloud, or another Meko server, for the extensions: on a terminal by signing
+// in with the browser or with a key typed at a hidden prompt, as the person picks; otherwise with the
+// key from stdin. --off unlinks. With a server running it goes through it (the admin
 // token), so the running extensions hear of it at once; otherwise it saves the link itself, and they
 // read it when they next ask Meko.
 func runCloudLink(l paths.Layout, f cloudFlags, in io.Reader, stdout, stderr io.Writer) int {
@@ -63,6 +64,7 @@ func runCloudLink(l paths.Layout, f cloudFlags, in io.Reader, stdout, stderr io.
 		return fail(stderr, err)
 	}
 	var u cloudlink.Update
+	keyName := "" // the key a sign-in made, named in an error if the link then fails
 	if !f.off {
 		if f.set["url"] {
 			u.URL = &f.url
@@ -73,20 +75,41 @@ func runCloudLink(l paths.Layout, f cloudFlags, in io.Reader, stdout, stderr io.
 		if f.set["api-url"] {
 			u.APIURL = &f.apiURL
 		}
-		prompt := "Meko Cloud API key: "
-		if cur.Linked {
-			prompt = "Meko Cloud API key (Enter keeps the saved one): "
+		signIn, answers, cerr := chooseSignIn(in, stderr)
+		if cerr != nil {
+			return fail(stderr, cerr)
 		}
-		key, rerr := readSecret(in, stderr, prompt)
-		if rerr != nil {
-			return fail(stderr, rerr)
+		if signIn {
+			// The change is pinned to the server signed in to, so the key goes nowhere else.
+			pinned, mcpURL, serr := (&cloudlink.Service{Store: store}).SignInTarget(u)
+			if serr != nil {
+				return fail(stderr, withoutPeriod(serr))
+			}
+			u = pinned
+			minted, serr := signInWithBrowser(mcpURL, f.noBrowser, answers, stderr)
+			if serr != nil {
+				return fail(stderr, withoutPeriod(serr))
+			}
+			u.Key, keyName = &minted.Key, minted.Name
+		} else {
+			prompt := "Meko Cloud API key: "
+			if cur.Linked {
+				prompt = "Meko Cloud API key (Enter keeps the saved one): "
+			}
+			key, rerr := readSecret(answers, stderr, prompt)
+			if rerr != nil {
+				return fail(stderr, rerr)
+			}
+			u.Key = &key
 		}
-		u.Key = &key
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), cloudTimeout)
 	defer cancel()
 	st, err := applyCloud(ctx, l, store, f.off, u)
 	if err != nil {
+		if keyName != "" {
+			err = withoutPeriod(cloudlink.KeyLeft(err, keyName))
+		}
 		return fail(stderr, err)
 	}
 	if st.Linked {
@@ -137,6 +160,9 @@ func applyCloud(ctx context.Context, l paths.Layout, store cloudlink.Store, off 
 	}
 	return st, err
 }
+
+// withoutPeriod is a message from cloudlink as the CLI's last line, which ends without a period.
+func withoutPeriod(err error) error { return errors.New(strings.TrimSuffix(err.Error(), ".")) }
 
 // cloudLine names a linked link's server and key hint.
 func cloudLine(st cloudlink.Status) string {

@@ -258,6 +258,7 @@ test("linking says which agents moved back to this Meko and which couldn't", asy
     }),
   });
   await render(<MekoCloudPage />);
+  await click("▸ Or paste an API key");
   await type("meko-cloud-key", "test-token");
   await act(async () => document.querySelector("form")!.requestSubmit());
 

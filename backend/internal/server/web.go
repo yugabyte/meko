@@ -77,6 +77,7 @@ func (s *Server) registerWeb(v1 *echo.Group) {
 	v1.POST("/update/check", s.updateCheck)
 	v1.POST("/update/apply", s.updateApply)
 	s.registerCloud(v1)
+	s.registerCloudSignIn(v1)
 	s.e.Any(extRootRoute, s.extensionRoot)
 	s.e.Any(extRoute, s.extension)
 }

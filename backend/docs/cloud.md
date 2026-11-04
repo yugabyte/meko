@@ -19,6 +19,8 @@ every extension the same way (`internal/cloudlink`).
 | **Extensions reach Meko Cloud through this Meko's own `/api/v1`**: `meko token --json` says whether it's linked and its web app, never the key, and that this Meko routes by id (`datapack_routing`). A route that takes a datapack and that Meko Cloud has too serves this Meko's and passes any other id on with the key, and the routes only Meko Cloud has (sharing) are passed on by name ([below](#passing-a-request-on-to-meko-cloud)). There's no `/api/v1/cloud` | The key stays in Meko's secret store: no extension, agent or agent config holds it. Extensions don't record which Meko a datapack is on (AgentK's projects keep only its id), so the id must route REST as it routes `/mcp`. A pass-through of every path to Meko Cloud (`/api/v1/cloud/…`, which older Mekos have) would send a datapack made here before the link to Meko Cloud, which doesn't have it; keeping one beside this rule would make two REST APIs, so there's none. A Cloud-only route is named one by one, so a mistyped path never reaches Meko Cloud with the key. Replies lose the credentials no caller of a client-token route should get (below). |
 | **The URLs go in `cloud.toml` beside `config.toml` (0600), and the key in the secret store** as `meko_cloud_key` ([install.md](install.md#secrets)) | `cloud.toml` is a file Meko writes itself, as `web.toml` is, so `config.toml` stays the user's. The key never sits in a file of its own outside the secret store, and never reaches a log or a reply. The CLI reads both without the server, so `meko token --json` works while Meko is stopped. `cloud.toml` existing means the link was set, linked (`linked = true`) or unlinked since. |
 | **Set in the web UI (Settings › Meko Cloud, `/settings/meko-cloud`) or with `meko cloud_link`** | The page is for a person at a browser; `meko cloud_link` is for a computer without one (with local access, a headless server's web UI can't be reached from another computer) and for an extension handing over a key. |
+| **Linked by signing in with the browser, or with an API key** ([below](#signing-in)): Meko signs in to the MCP server the link names as the `@yugabytedb/meko-mcp` installer's "Sign in with browser" does (the MCP authorization spec, then `POST /api-keys`), and links with the key it makes as with a typed one | A person signs in the way they always do (Google, LinkedIn, or email and password) rather than making a key in Meko Cloud's web app and pasting it. Signing in with an email and password through Meko Cloud's own login was the alternative: it can't sign in an account that uses Google or LinkedIn. Keeping Meko Cloud's sign-in session rather than a key was another: the link's every use takes a key, and a session would need refreshing. Pasting a key stays, for a key made by hand and for an extension handing one over. |
+| **Only the key a sign-in makes is kept**, and a key that's replaced, or that a failed check leaves behind, stays in the account | The access token, PKCE verifier and registered client live in memory for the sign-in. Meko Cloud has no route to delete a key, so an error names a key it leaves, and the user revokes old keys in Meko Cloud's Settings. Meko Cloud decides how long a key lasts. |
 | **A change is checked before it's saved**: a new server or key with an MCP `initialize` handshake carrying the key (10 s, `CheckMCP`); a web app or API URL that was typed, when it moves the API URL, by asking its `/datapacks/incoming-shares` without the key, which must answer in Meko's `{data}` or `{error: {code}}` envelope (`CheckAPI`) | A link that doesn't work isn't saved, and a mistyped API host never gets the key. No ping follows the handshake: a stateless server on the MCP Go SDK, as Meko's own is, refuses a ping that carries no protocol version. |
 | **A saved key goes only where it already goes, or to Meko Cloud** (`Service.Link`): a change of the MCP, web app or API URL to another origin without the key typed again is refused, before anything is sent | Otherwise anyone who reaches the web UI could point the link at their own server and read the key off the check, or off an extension's next call. |
 | **Meko Cloud's MCP URL is saved as empty**, and its web app and API URLs are worked out (`https://cloud.mekodata.ai`, plus `/api/v1`); another server's web app must be set | The same rule AgentK's `mekoWebUrl` had. A server whose web app isn't known has no datapack links or sharing until it's set, which the page says. |
@@ -47,8 +49,13 @@ every extension the same way (`internal/cloudlink`).
   own origin. On the API listener they take only the admin token (`adminOnly`), for `meko
   cloud_link`; an agent's client token gets 403, so it can't read the link's state or redirect
   the key.
-- `meko cloud_link [--url U] [--web-url W] [--api-url A]` reads the key from stdin, or asks for it
-  on a terminal with echo off (Enter keeps a saved one), and links; `--off` unlinks. With a server
+- `POST /api/v1/settings/meko-cloud/sign-in {url?, web_url?, api_url?}` starts the web UI's sign-in
+  and answers `{authorize_url}`, where the browser goes to sign in; `POST
+  …/sign-in/finish {code, state}` finishes it and answers as `PUT` does
+  ([below](#signing-in)). Only on the web listener, for the owner.
+- `meko cloud_link [--url U] [--web-url W] [--api-url A] [--no-browser]`, on a terminal, asks
+  whether to sign in with the browser (the default) or enter an API key (asked for with echo off;
+  Enter keeps a saved one), and links; piped, it reads the key from stdin. `--off` unlinks. With a server
   running it goes through the API listener (admin token), so the running extensions are told;
   otherwise it saves the link itself, and they read it when they next ask. `meko status` shows
   the link when there is one (`✓ Meko Cloud      linked to <url> (key …abcd)`), and
@@ -59,6 +66,49 @@ every extension the same way (`internal/cloudlink`).
   it moved any (`Moved Claude Code and Kiro CLI back to Meko on this computer; their sessions
   already running need a restart`) and one for each it couldn't (`Couldn't move Kiro CLI: <why>; run
   meko agent connect kiro`).
+
+## Signing in
+
+Meko signs in to the MCP server the link names (Meko Cloud's, or the one typed under *Your own Meko
+server*) as the `@yugabytedb/meko-mcp` installer does (`internal/cloudlink`'s `oauth.go`):
+
+1. **Discovery:** a `POST` of `initialize` with no credential, whose 401 names the resource metadata in
+   `WWW-Authenticate`; then `/.well-known/oauth-protected-resource<path>` and the authorization server's
+   `/.well-known/oauth-authorization-server` (or `openid-configuration`), for its authorize, token and
+   registration endpoints and the scope. A server that has none "doesn't offer sign-in": paste a key.
+2. **Registration** of a public client (`client_name` "Meko") for the redirect URI, then the browser
+   to the authorize endpoint with PKCE (S256), a random `state`, the scope and the resource. Meko
+   Cloud asks the person to allow access, then to sign in.
+3. **The code**, back at the redirect URI, is traded for an access token with the verifier, and the
+   token for a key: `POST <MCP server's origin and path, less /mcp>/api-keys {name}`, the name
+   `Meko on <host name> <UTC time>`. Meko Cloud's 429 (the account has as many keys as it can), 403
+   `account_not_provisioned` (a login with no Meko Cloud account, such as Google for an account made
+   with email) and a 404 (a server that makes no keys this way) each say what to do.
+4. **The key is linked** through `Service.Link` as a typed key: the MCP check, the save, the agents'
+   move and the extensions told, as for a pasted one, pinned to the server signed in to. A check
+   that refuses the key leaves it in the account, and the error names it; any other failure (the
+   secret store, the data folder) is an internal error, whose log line names it.
+
+Every request takes at most 30 s and its reply 1 MiB, and every address (the authorization server
+the metadata names, its endpoints, and any redirect) must be https but one on this computer. No
+error, reply or log holds the code, token, verifier or key.
+
+- **The web UI** (`Service.StartSignIn`, `FinishSignIn`): the server registers the client and keeps
+  the sign-in (its state, verifier and the link's URLs, pinned to the server it signs in to) in
+  memory for 10 minutes, one at a time; a new one replaces it, and a finish with its own state uses
+  it up (one with another state is refused and leaves it waiting). The key is linked to the server
+  signed in to, even if the saved link changed meanwhile. The redirect URI is the web listener's own address
+  as the browser reached it, plus `/settings/meko-cloud/callback`: a page of the web UI, not an
+  `/api/v1` route, since Meko Cloud's redirect is another site's request, which the web listener's
+  routes refuse (`SameSite`) and its pages don't. The page takes the code out of the address and
+  POSTs it from Meko's own origin. Meko Cloud takes a remote-access `https://<host>:<port>` redirect
+  URI as well as a loopback one. The registered client is kept for each server and redirect URI, so
+  signing in again registers none.
+- **`meko cloud_link`** does it in its own process: it listens on `http://127.0.0.1:<random>/callback`
+  for 5 minutes, opens the browser (`--no-browser` prints the address only), and links with the key
+  through the running server's `PUT` (or by itself), as with a typed key. A browser on another
+  computer (over SSH) can't reach that callback: the address it ended on, pasted at the prompt, does
+  the same. With the web UI off, signing in still works.
 
 ## /mcp while linked
 
