@@ -17,5 +17,9 @@ src/extensions/agentk/src/mod/agentk/tsconfig.json
 # Meko build output, and the embedding model the Go tests keep between runs.
 src/meko/bin/
 src/meko/memory_engine/.models/
+# Where Meko and the extensions were before the source moved under src/: a checkout from before
+# keeps its untracked build output (bin/meko, the embedding models, node_modules) there.
+/backend/
+/extensions/
 # Scratch files agents leave beside the skills (drafts, notes): never part of the repo.
 .claude/tmp/

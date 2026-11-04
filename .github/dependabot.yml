@@ -62,7 +62,7 @@ updates:
         dependency-type: development
         update-types: [minor, patch]
 
-  # Meko's Go modules. CI's Backend job builds and tests each PR.
+  # Meko's Go modules. CI's Meko job builds and tests each PR.
   - package-ecosystem: gomod
     directory: /src/meko
     schedule:
