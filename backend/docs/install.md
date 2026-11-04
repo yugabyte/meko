@@ -128,14 +128,88 @@ release scripts with `--product meko`:
 | Tag | `agentk-v0.YYYYMMDD.N` (`v0.…` before) | `meko-v0.YYYYMMDD.N` | `presenter-v0.YYYYMMDD.N` |
 | Title | its tag | its tag | its tag |
 | Releases on | feat/fix/perf/deps subjects other than those naming only `meko` or `presenter` | feat/fix/perf/deps subjects naming `meko`, alone or in a list (`feat(agentk,meko): …`) | feat/fix/perf/deps subjects naming `presenter`, alone or in a list |
-| Assets | AgentK tarballs, `SHA256SUMS`, and a stub `install.sh` that tells an older Meko, which looks for it, to update first | Meko tarballs, `SHA256SUMS`, Meko's `install.sh` | `presenter-<version>-<os>-<arch>.tar.gz` (holding `bin/me_presenter`, and `bin/meko_presenter`, its name before, as a link), `SHA256SUMS`; no installer: Meko installs them |
+| Assets | AgentK tarballs, `SHA256SUMS`, `SHA256SUMS.sig`, and a stub `install.sh` that tells an older Meko, which looks for it, to update first | Meko tarballs, `SHA256SUMS`, `SHA256SUMS.sig`, Meko's `install.sh` | `presenter-<version>-<os>-<arch>.tar.gz` (holding `bin/me_presenter`, and `bin/meko_presenter`, its name before, as a link), `SHA256SUMS`, `SHA256SUMS.sig`; no installer: Meko installs them |
 | Latest | `--latest=false` | `--latest` | `--latest=false` |
 | Pruning | newest 5 per lane of its own tags | newest 5 `meko-v` releases | newest 5 `presenter-v` releases |
 
 Plan, then `make test`, then the three builds (each packaged and smoke-tested), then publish:
-`SHA256SUMS`, the release with notes from `release-notes.sh --product meko`, provenance attestation,
-and pruning. Meko picks each product's releases by its own tag prefixes and tarball names, so an
-AgentK or Presenter release is never taken for Meko's, nor the other way round.
+`SHA256SUMS` and its signature ([below](#signed-releases)), the release with notes from
+`release-notes.sh --product meko`, provenance attestation, and pruning. Meko picks each product's
+releases by its own tag prefixes and tarball names, so an AgentK or Presenter release is never taken
+for Meko's, nor the other way round.
+
+### Signed releases
+
+Each release workflow signs its `SHA256SUMS` with an Ed25519 key that only a run from `main` can
+use, and Meko checks that signature before it trusts the checksums. A release built from another
+branch, or published by hand, can't carry a signature that verifies.
+
+- **The key** is the secret `RELEASE_SIGNING_KEY` of the repo's GitHub Environment `release`,
+  whose deployment-branch rule allows only `main`. Each publish job says `environment: release`.
+  A run dispatched from another branch can edit its workflow, but not the environment's rule, so
+  GitHub never hands it the key, and the release fails at the publish job. Changing the rule takes
+  a repo admin. The environment must exist before a workflow names it: GitHub makes one that
+  doesn't exist on the spot, with no branch rule. A maintainer made the key on their own machine
+  and keeps its backup in the team's password manager; only the public key is in the repo.
+- **Signing** ("Sign SHA256SUMS", after "Write SHA256SUMS") writes `SHA256SUMS.sig`, one line for
+  each key the environment holds: `<key id> <base64 signature>`. The key id is the first 8 bytes,
+  in hex, of the sha256 of the raw 32-byte public key, and the signature is the 64-byte Ed25519
+  signature of `SHA256SUMS`'s bytes, made with `openssl pkeyutl -sign -rawin`. The step is inline
+  in each workflow, not a script in `scripts/release/`, because a rebuild checks out an older tag.
+- **The check before publishing** ("Check the signature against Meko's keys") verifies the first
+  line, which is always `RELEASE_SIGNING_KEY`'s, with the `.pub` of the same key id, and fails the
+  release when none matches: a secret that isn't the key Meko has would otherwise publish releases
+  every Meko refuses. It reads the keys from the workflow's own commit (`$GITHUB_SHA`, with
+  `git show`), not from the checkout, since a rebuild's older tag may lack a newer key.
+- **Meko's keys** are `backend/internal/update/keys/*.pub` (PEM), built into it with `go:embed`.
+  Staging (`update.App.Stage`, for Meko and its extensions alike) downloads `SHA256SUMS.sig` when
+  the release has one, checks it (`VerifySumsSignature`), then the checksum:
+
+  | `SHA256SUMS.sig` | Meko |
+  |---|---|
+  | A line by one of its keys verifies, and none fails | installs it |
+  | A line by one of its keys doesn't verify, or the file is malformed | refuses it, whatever the setting |
+  | Missing, or every line is by a key it doesn't know | refuses it with `[update] require_signature` (the default); with `require_signature = false`, installs it with a warning |
+
+  A key it doesn't know counts as no signature: someone forging a release could leave the file out
+  anyway, and it keeps a Meko too old for a newer key able to update with the setting off.
+  `require_signature = false` (or `MEKO_UPDATE_REQUIRE_SIGNATURE=false`) is for releases made
+  before signing, with `meko extension install --version`, and for a fork in `[update] repo`. The
+  one-line install (`install.sh`) checks only the checksum.
+- **Checking a release by hand**, with OpenSSL 3 (1.1.1 and macOS's LibreSSL have no `-rawin`):
+
+  ```sh
+  cut -d ' ' -f 2 SHA256SUMS.sig | head -n 1 | openssl base64 -d -A -out sig.bin
+  openssl pkeyutl -verify -pubin -inkey backend/internal/update/keys/release-2026.pub -rawin \
+    -in SHA256SUMS -sigfile sig.bin
+  sha256sum -c --ignore-missing SHA256SUMS   # shasum -a 256 -c on macOS
+  ```
+
+  The first line's key id names the key: `openssl pkey -pubin -in <key>.pub -outform DER | tail -c 32
+  | openssl dgst -sha256 -r | cut -c1-16` prints a `.pub`'s.
+- The provenance attestation stays as it was, for `gh attestation verify`; Meko doesn't read it.
+
+#### Changing the key
+
+Releases are signed with both keys while installed Mekos learn the new one. Each step's order
+matters: a Meko that knows neither key on a release can't update without the setting off.
+
+1. A maintainer makes a new pair on their own machine (`openssl genpkey -algorithm ed25519 -out
+   release-signing.pem`, then `openssl pkey -in release-signing.pem -pubout -out
+   release-<year>.pub`) and backs the private key up. A PR adds `keys/release-<year>.pub`, so its
+   Meko release trusts both keys.
+2. In the `release` environment, `RELEASE_SIGNING_KEY_OLD` gets the old private key and
+   `RELEASE_SIGNING_KEY` the new one. Every release now has two lines, the new key's first, and
+   every Meko, old or new, accepts it.
+3. After 90 days (installs with automatic updates off can lag), delete `RELEASE_SIGNING_KEY_OLD`,
+   and a PR drops the old `.pub`. A Meko older than step 1's release then says the release is
+   signed with a key it doesn't know: the one-line install, or
+   `MEKO_UPDATE_REQUIRE_SIGNATURE=false meko update` once, brings it up to date.
+
+For a **leaked key**, step 1's PR also drops the leaked `.pub`, its release is still signed with
+both keys (installed Mekos know only the leaked one), and `RELEASE_SIGNING_KEY_OLD` is deleted
+right after it. An install trusts the leaked key until it updates: within hours with automatic
+updates. A **lost key** with no backup allows no overlap, so installed Mekos recover as in step 3.
 
 ## The service
 
@@ -267,8 +341,8 @@ follows on stderr.
   as it is, unless `--version` names a release, which is installed over it. Otherwise, or then,
   Meko picks the newest release with this platform's `<name>-<version>-<os>-<arch>.tar.gz` and
   `SHA256SUMS` (skipping its `bad-versions`), or the one `--version` names (even one rolled back),
-  and installs it as Meko installs itself (`update.App`): checked against
-  `SHA256SUMS`, unpacked, `bin/<command> version --json` checked to name the version (an AgentK
+  and installs it as Meko installs itself (`update.App`): `SHA256SUMS`'s signature checked
+  ([Signed releases](#signed-releases)), the tarball checked against `SHA256SUMS`, unpacked, `bin/<command> version --json` checked to name the version (an AgentK
   release from before `--json` prints the bare version, which counts) and the catalog's `CheckArgs`
   run (AgentK's `selftest`), into `<data>/extensions/<name>/app/<version>` (owner-only,
   `App.Private`: folders and programs 0700, files 0600, as everything in the data folder), with
@@ -422,7 +496,8 @@ A release install's app folder:
   so does **Update** on the web UI's Status page, through the running server's own updater
   ([web.md](web.md)): under the service, `serve` exits 0 as for an automatic update; started by
   hand, it execs the new `app/current/bin/meko` in its own place once it has stopped.
-  Staging downloads the tarball and `SHA256SUMS` beside the installed versions, checks the checksum,
+  Staging downloads the tarball, `SHA256SUMS` and `SHA256SUMS.sig` beside the installed versions,
+  checks the signature ([Signed releases](#signed-releases)), then the checksum,
   unpacks it (refusing entries or links outside its folder), and runs the new
   `bin/meko version --json`, which must name the version: a binary that can't run here never
   becomes current. Then `update-pending.json` records `{from, to, schema, attempts}`, `app/current`
@@ -440,7 +515,7 @@ A release install's app folder:
 - While an update is on probation, deleting a knowledge file leaves its bytes on disk
   (`memory.Options.KeepDeletedFiles`): a rollback restores rows from before the update, and they
   must still find their files. The sweep at a start after the update is done removes them.
-- `[update] channel = "off"` stops the scheduled checks (Check now and Update on the Status page still work, as `meko update` does); `[update] repo` (or `MEKO_UPDATE_REPO`, default `yugabyte/meko`: `update.DefaultRepo`) points at a fork.
+- `[update] channel = "off"` stops the scheduled checks (Check now and Update on the Status page still work, as `meko update` does); `[update] repo` (or `MEKO_UPDATE_REPO`, default `yugabyte/meko`: `update.DefaultRepo`) points at a fork, whose releases Meko's keys didn't sign, so it also needs `[update] require_signature = false` (or `MEKO_UPDATE_REQUIRE_SIGNATURE=false`). With that setting off, a release with no signature, or one by a key Meko doesn't know, installs with a warning once it's staged: a `!` row in `meko update`, `meko extension install` and `meko extension update`, and in the Extensions page's job output, and a WARN in `meko.log` for every one `serve` installs (Meko's own updates, and the extensions' automatic updates and Extensions page actions). A release refused at a later check gets no warning.
 
 ## Secrets
 
@@ -470,14 +545,16 @@ Changing the store doesn't move secrets: the client token is made again.
 - `internal/secrets`: the file store's permissions; the Keychain store against a fake `security`
   that logs its arguments (the secret never appears), its error message, and on macOS a real
   Keychain file of the test's own.
-- `internal/update`: release picking, staging against a fake GitHub API, checksum and binary
+- `internal/update`: release picking, staging against a fake GitHub API, the signature (good, bad,
+  by an unknown key, missing, with `require_signature` on and off; malformed files; Meko's own keys
+  parsing; a signature `openssl` made, where it has `-rawin`), checksum and binary
   checks, unsafe tarballs, switching, three failed starts then rollback, a clean stop not counting,
   probation and pruning; the web UI's install (restarting once switched, nothing newer, a failed
   one) and its lock against the scheduled checks.
 - `internal/store`: `RestoreBackup` undoes a real upgrade.
 - `internal/cli`: `install` with a fake service manager, start, stop and restart through it,
   extensions run on start and stop but not restart or `--keep-extensions`, `uninstall` and
-  `--purge`, `extension install` with an installed `agent-k-local` (an AgentK from before the rename) and from a fake release,
+  `--purge`, `extension install` with an installed `agent-k-local` (an AgentK from before the rename) and from a fake release (signed with a test key, and an unsigned one refused, then installed with the setting off),
   `extension list` (states, damaged, a slow status) and `extension delete` (keeping or purging the
   data, a refused or failing one, a damaged one and its refused purge, a release still in use, an
   unknown one), `meko update` running the new meko's

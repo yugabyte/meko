@@ -157,7 +157,7 @@ Config precedence: flags > `MEKO_*` env > `config.toml` > defaults. An unknown k
 | `[knowledge_base] max_distance` | | 0.6 | `context_search`'s cutoff for knowledge-base results ([knowledge.md](knowledge.md)). |
 | `[web_ui] dir` | `MEKO_WEB_UI_DIR` | found | The built web UI ([web-ui.md](web-ui.md)). |
 | `[secrets] store` | `MEKO_SECRETS` | `keychain` on macOS, else `file` | [install.md](install.md#secrets). |
-| `[update] channel`, `auto`, `interval_hours`, `repo` | `MEKO_UPDATE_CHANNEL`, `_AUTO`, `_REPO` | `stable`, true, 6, this repo | [install.md](install.md#updates-and-rollback). |
+| `[update] channel`, `auto`, `interval_hours`, `repo`, `require_signature` | `MEKO_UPDATE_CHANNEL`, `_AUTO`, `_REPO`, `_REQUIRE_SIGNATURE` | `stable`, true, 6, this repo, true | [install.md](install.md#updates-and-rollback); `require_signature`: [signed releases](install.md#signed-releases). |
 | `[call_home] enabled`, `url` | `MEKO_CALL_HOME`, `MEKO_CALL_HOME_URL`, `YB_DISABLE_CALLHOME` | on, from a release install | [callhome.md](callhome.md). |
 
 ## Storage

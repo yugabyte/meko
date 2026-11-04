@@ -10,6 +10,7 @@ package update
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -58,6 +59,16 @@ type Client struct {
 	Token string // GitHub token; empty works only for a public repo
 	API   string // https://api.github.com; tests point it elsewhere
 	HTTP  *http.Client
+	// AllowUnsigned stages a release whose SHA256SUMS isn't signed by one of Keys (no
+	// SHA256SUMS.sig, or only lines by other keys), telling Notice, instead of refusing it:
+	// [update] require_signature = false. A signature that doesn't verify is refused either way.
+	AllowUnsigned bool
+	// Keys are the public keys a release's SHA256SUMS.sig is checked with; nil is Meko's own
+	// (keys/*.pub). Tests set their own.
+	Keys []ed25519.PublicKey
+	// Notice is told, once Stage has staged it, of a release staged without a signature check; nil
+	// drops it.
+	Notice func(string)
 }
 
 // NewClient is a client for repo, signed in with GITHUB_TOKEN or else gh's token, if either is

@@ -182,9 +182,11 @@ func (w *webListener) updateExtension(ctx context.Context, name string, out io.W
 		return err
 	}
 	upd, cancel := context.WithTimeout(ctx, extensions.InstallTimeout)
+	var notices unsignedNotices
 	runs, err := extensions.Update(upd, extensions.UpdateOptions{Root: w.l.Root, Home: home,
-		Client: newReleaseClient(cfg.Update.Repo), Out: out}, name)
+		Client: releaseClient(cfg.Update, func(s string) { notices.add(s); unsignedLog(w.log)(s) }), Out: out}, name)
 	cancel()
+	notices.print(out)
 	w.reconnect(name) // a restarted server's socket is asked for again
 	if err != nil || !runs || !extensions.Known[name].WebUI {
 		return err

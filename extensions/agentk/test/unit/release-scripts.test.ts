@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash, createPublicKey, generateKeyPairSync, verify, type KeyObject } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -348,5 +349,141 @@ cp "${srv}/\${url##*/}" .
     const r = fetchNode(['linux-x64']);
     expect(r.status).not.toBe(0);
     expect(r.stdout).toBe('');
+  });
+});
+
+// A release workflow's step, cut out of it: its run block, dedented.
+function stepRun(workflow: string, name: string): string {
+  const lines = readFileSync(fileURLToPath(new URL(`../../../../.github/workflows/${workflow}`, import.meta.url)), 'utf8').split('\n');
+  const start = lines.indexOf(`      - name: ${name}`);
+  expect(start, name).toBeGreaterThan(-1);
+  const run = lines.findIndex((l, i) => i > start && /^\s+run: \|$/.test(l));
+  const indent = /^\s*/.exec(lines[run + 1]!)![0];
+  const body: string[] = [];
+  for (const l of lines.slice(run + 1)) {
+    if (l.trim() && !l.startsWith(indent)) break;
+    body.push(l.slice(indent.length));
+  }
+  return body.join('\n');
+}
+
+// Whether this machine's openssl signs Ed25519 (OpenSSL 3's pkeyutl -rawin); macOS's LibreSSL and
+// OpenSSL 1.1.1 don't, and CI's Ubuntu does.
+const rawin = (() => {
+  const dir = tempDir('akl-openssl-');
+  try {
+    execFileSync('openssl', ['genpkey', '-algorithm', 'ed25519', '-out', join(dir, 'k.pem')], { stdio: 'ignore' });
+    writeFileSync(join(dir, 'm'), 'm');
+    execFileSync('openssl', ['pkeyutl', '-sign', '-inkey', join(dir, 'k.pem'), '-rawin', '-in', join(dir, 'm'), '-out', join(dir, 's')], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
+
+// A generated Ed25519 key: its private PEM (the secret), public PEM (a keys/*.pub) and key id.
+function releaseKey(): { secret: string; pub: string; id: string; key: KeyObject } {
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+  const der = publicKey.export({ type: 'spki', format: 'der' });
+  return {
+    secret: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+    pub: publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+    id: createHash('sha256').update(der.subarray(-32)).digest('hex').slice(0, 16),
+    key: publicKey,
+  };
+}
+
+// Each release workflow signs SHA256SUMS with the release environment's key, checks the signature
+// against Meko's keys before anything is published, and uploads SHA256SUMS.sig with the rest.
+describe.each(['agentk-release.yml', 'meko-release.yml', 'presenter-release.yml'])('%s’s signature', (name) => {
+  const text = readFileSync(fileURLToPath(new URL(`../../../../.github/workflows/${name}`, import.meta.url)), 'utf8');
+  const publish = text.slice(text.indexOf('\n  publish:\n'));
+  const steps = jobs(name).find((job) => job.some((s) => s[0] === '      - name: Sign SHA256SUMS'))!;
+  const stepAt = (n: string) => steps.findIndex((s) => s[0] === `      - name: ${n}`);
+  const sign = stepRun(name, 'Sign SHA256SUMS');
+  const check = stepRun(name, "Check the signature against Meko's keys");
+  const sums = 'abc  x.tar.gz\n';
+
+  // Runs the sign step in dist-release/ with these keys, then the check step at the repo's root.
+  const runSign = (keys: string[]) => {
+    mkdirSync(join(repo, 'dist-release'), { recursive: true });
+    writeFileSync(join(repo, 'dist-release', 'SHA256SUMS'), sums);
+    return spawnSync('sh', ['-c', sign], {
+      cwd: join(repo, 'dist-release'), encoding: 'utf8',
+      env: { ...process.env, RELEASE_SIGNING_KEY: keys[0] ?? '', RELEASE_SIGNING_KEY_OLD: keys[1] ?? '' },
+    });
+  };
+  const runCheck = () => spawnSync('sh', ['-c', check], {
+    cwd: repo, encoding: 'utf8', env: { ...process.env, GITHUB_SHA: git('rev-parse', 'HEAD').trim() },
+  });
+  // Commits these public keys as Meko's, backend/internal/update/keys/<name>.pub.
+  const commitKeys = (pubs: Record<string, string>) => {
+    mkdirSync(join(repo, 'backend/internal/update/keys'), { recursive: true });
+    for (const [n, pem] of Object.entries(pubs)) writeFileSync(join(repo, 'backend/internal/update/keys', `${n}.pub`), pem);
+    git('add', 'backend');
+    commit('chore(meko): release keys');
+  };
+  const sigLines = () => readFileSync(join(repo, 'dist-release', 'SHA256SUMS.sig'), 'utf8').trimEnd().split('\n');
+
+  it('signs in the publish job, with the release environment, before the release is created', () => {
+    expect(publish).toMatch(/^ {4}environment: release$/m);
+    expect(stepAt('Write SHA256SUMS')).toBeGreaterThan(-1);
+    expect(stepAt('Sign SHA256SUMS')).toBe(stepAt('Write SHA256SUMS') + 1);
+    expect(stepAt("Check the signature against Meko's keys")).toBe(stepAt('Sign SHA256SUMS') + 1);
+    expect(stepAt('Create the release')).toBeGreaterThan(stepAt("Check the signature against Meko's keys"));
+    expect(code(steps[stepAt('Sign SHA256SUMS')]!)).toContain('RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}');
+  });
+
+  it('uploads SHA256SUMS.sig with a new release and with a rebuild', () => {
+    for (const n of ['Create the release', 'Replace assets on an existing release']) {
+      expect(code(steps[stepAt(n)]!), n).toMatch(/dist-release\/SHA256SUMS dist-release\/SHA256SUMS\.sig/);
+    }
+  });
+
+  it('refuses to sign with no key', () => {
+    const r = runSign([]);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain('RELEASE_SIGNING_KEY is empty');
+  });
+
+  it.skipIf(!rawin)('writes a line per key that Node verifies, and checks the first against Meko’s keys', () => {
+    const a = releaseKey();
+    const b = releaseKey();
+    expect(runSign([a.secret]).status).toBe(0);
+    const [line] = sigLines();
+    const [id, b64] = line!.split(' ');
+    expect(id).toBe(a.id);
+    expect(verify(null, Buffer.from(sums), createPublicKey(a.pub), Buffer.from(b64!, 'base64'))).toBe(true);
+
+    commitKeys({ a: a.pub, other: releaseKey().pub });
+    expect(runCheck().status).toBe(0);
+
+    // During a key change: two lines, the new key's first. A leaked old key's .pub is gone from
+    // main while its line is still written, which the check allows.
+    expect(runSign([b.secret, a.secret]).status).toBe(0);
+    expect(sigLines().map((l) => l.split(' ')[0])).toEqual([b.id, a.id]);
+    git('rm', '-q', 'backend/internal/update/keys/a.pub');
+    commitKeys({ b: b.pub });
+    expect(runCheck().status).toBe(0);
+  });
+
+  it.skipIf(!rawin)('fails the release when the secret isn’t one of Meko’s keys, or the signature was changed', () => {
+    const a = releaseKey();
+    commitKeys({ other: releaseKey().pub });
+    expect(runSign([a.secret]).status).toBe(0);
+    let r = runCheck();
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain(`RELEASE_SIGNING_KEY (key id ${a.id}) isn't one of Meko's keys`);
+
+    commitKeys({ a: a.pub });
+    const [id, b64] = sigLines()[0]!.split(' ');
+    const sig = Buffer.from(b64!, 'base64');
+    sig[0] ^= 1;
+    writeFileSync(join(repo, 'dist-release', 'SHA256SUMS.sig'), `${id} ${sig.toString('base64')}\n`);
+    r = runCheck();
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("SHA256SUMS.sig doesn't verify with backend/internal/update/keys/a.pub");
   });
 });

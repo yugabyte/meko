@@ -5,7 +5,10 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -67,10 +70,33 @@ func packageTarball(t *testing.T, pkg, command, version, body string) []byte {
 	return buf.Bytes()
 }
 
-// fakeRelease is a release to serve: its tag, and the package and version of the tarball it carries.
+// fakeRelease is a release to serve: its tag, and the package and version of the tarball it carries,
+// with its SHA256SUMS signed by testReleaseKey unless unsigned.
 type fakeRelease struct {
 	tag, pkg, version string
 	tgz               []byte
+	unsigned          bool
+}
+
+// testReleasePub and testReleaseKey sign the releases the CLI's tests serve; their clients trust
+// only it.
+var testReleasePub, testReleaseKey = func() (ed25519.PublicKey, ed25519.PrivateKey) {
+	pub, k, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	return pub, k
+}()
+
+// testClient is a release client for the fake GitHub API srv, trusting testReleaseKey.
+func testClient(srv *httptest.Server) *update.Client {
+	return &update.Client{Repo: "o/r", API: srv.URL, HTTP: srv.Client(), Keys: []ed25519.PublicKey{testReleasePub}}
+}
+
+// signSums is testReleaseKey's SHA256SUMS.sig for sums, as the release workflows write it.
+func signSums(sums string) string {
+	return update.KeyID(testReleasePub) + " " +
+		base64.StdEncoding.EncodeToString(ed25519.Sign(testReleaseKey, []byte(sums))) + "\n"
 }
 
 // serveReleases serves a GitHub API with rels for this platform (and Meko's own, with no tarball
@@ -84,10 +110,14 @@ func serveReleases(t *testing.T, rels ...fakeRelease) {
 			list := make([]update.Release, 0, 1+len(rels))
 			list = append(list, update.Release{Tag: "meko-v0.20261031.0", Assets: []update.Asset{{Name: "install.sh"}}})
 			for i, rel := range rels {
-				list = append(list, update.Release{Tag: rel.tag, URL: srv.URL + "/page/" + rel.tag, Assets: []update.Asset{
+				assets := []update.Asset{
 					{Name: update.PackageTarball(rel.pkg, rel.version, goos, arch), BrowserURL: fmt.Sprintf("%s/tar/%d", srv.URL, i)},
 					{Name: update.Sums, BrowserURL: fmt.Sprintf("%s/sums/%d", srv.URL, i)},
-				}})
+				}
+				if !rel.unsigned {
+					assets = append(assets, update.Asset{Name: update.SumsSig, BrowserURL: fmt.Sprintf("%s/sig/%d", srv.URL, i)})
+				}
+				list = append(list, update.Release{Tag: rel.tag, URL: srv.URL + "/page/" + rel.tag, Assets: assets})
 			}
 			_ = json.NewEncoder(w).Encode(list)
 			return
@@ -97,17 +127,24 @@ func serveReleases(t *testing.T, rels ...fakeRelease) {
 			_, _ = w.Write(rels[i].tgz)
 			return
 		}
-		if _, err := fmt.Sscanf(r.URL.Path, "/sums/%d", &i); err == nil && i < len(rels) {
+		sums := func(i int) string {
 			h := sha256.Sum256(rels[i].tgz)
-			_, _ = fmt.Fprintf(w, "%s  %s\n", hex.EncodeToString(h[:]),
+			return fmt.Sprintf("%s  %s\n", hex.EncodeToString(h[:]),
 				update.PackageTarball(rels[i].pkg, rels[i].version, goos, arch))
+		}
+		if _, err := fmt.Sscanf(r.URL.Path, "/sums/%d", &i); err == nil && i < len(rels) {
+			_, _ = fmt.Fprint(w, sums(i))
+			return
+		}
+		if _, err := fmt.Sscanf(r.URL.Path, "/sig/%d", &i); err == nil && i < len(rels) {
+			_, _ = fmt.Fprint(w, signSums(sums(i)))
 			return
 		}
 		http.NotFound(w, r)
 	}))
 	t.Cleanup(srv.Close)
 	old := newReleaseClient
-	newReleaseClient = func(string) *update.Client { return &update.Client{Repo: "o/r", API: srv.URL, HTTP: srv.Client()} }
+	newReleaseClient = func(string) *update.Client { return testClient(srv) }
 	t.Cleanup(func() { newReleaseClient = old })
 }
 
@@ -279,6 +316,34 @@ func TestInstallExtensionInstallsAgentKsRelease(t *testing.T) {
 	want(t, "extension install --version again", code, 0, out+errs, "  ✓ Release         AgentK "+newest)
 	if reg, _ = extensions.Load(dir); reg.Entries["agentk"].Auto() {
 		t.Errorf("the switch came back on: %+v", reg.Entries["agentk"])
+	}
+}
+
+// A release with no SHA256SUMS.sig isn't installed by default, and the error names the setting that
+// installs it anyway; with MEKO_UPDATE_REQUIRE_SIGNATURE=false it installs, with a warning row.
+func TestInstallExtensionRequiresASignature(t *testing.T) {
+	const v = "0.20261030.0"
+	dir, port := setup(t)
+	noRealExtensions(t)
+	code, out, errs := run("start", "--data-dir", dir, "--port", port)
+	want(t, "start", code, 0, out+errs, "is running")
+	rel := agentkRelease(t, "agentk-v"+v, v)
+	rel.unsigned = true
+	serveReleases(t, rel)
+	code, out, errs = run("extension", "install", "agentk", "--data-dir", dir)
+	want(t, "unsigned", code, 1, out+errs,
+		"agentk-v"+v+" isn't signed (it has no SHA256SUMS.sig): [update] require_signature = false installs it anyway")
+	app := extensions.Known["agentk"].App(dir, "agentk")
+	if app.Current() != "" {
+		t.Fatalf("an unsigned release was installed: %q", app.Current())
+	}
+	t.Setenv("MEKO_UPDATE_REQUIRE_SIGNATURE", "false")
+	code, out, errs = run("extension", "install", "agentk", "--data-dir", dir)
+	want(t, "unsigned, not required", code, 0, out+errs, "  ! Release         agentk-v"+v+
+		" isn't signed (it has no SHA256SUMS.sig): installing it without that check, "+
+		"as [update] require_signature = false says\n")
+	if app.Current() != v {
+		t.Errorf("current %q", app.Current())
 	}
 }
 

@@ -77,8 +77,10 @@ findings by severity: **blocker** (breaks a rule below, loses data, or opens a s
 - [ ] The service files keep their stop timeout above serve's own shutdown (35 s), exit 75 stays
       "don't restart" for systemd and a launchd-run serve waits for the folder instead, and the CLI
       uses a service only for the data folder it runs. Releases stay outside the data folder.
-- [ ] An update is checked before it's switched to (checksum, then the staged `meko version --json`),
-      and anything that changes the database's schema keeps rollback working: `Migrate` backs the
+- [ ] An update is checked before it's switched to (`SHA256SUMS`'s signature, the checksum, then the
+      staged `meko version --json`): a signature that doesn't verify is always refused, and no change
+      stages a release around `update.App.Stage` or makes an unsigned one install by default. A change
+      to `keys/*.pub` follows install.md's "Changing the key" order. Anything that changes the database's schema keeps rollback working: `Migrate` backs the
       file up, and `store.RestoreBackup` can put it back.
 - [ ] A release keeps working offline: the tarball bundles the models, the embedder and the reranker
       (`MEKO_MODELS_OFFLINE`), and
