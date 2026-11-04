@@ -257,7 +257,8 @@ Everything AgentK does, by area. The [README](../README.md) has the short versio
   the prompt. On a Mac, ⌘← and ⌘→ go to the start and end of the line, ⌥← and ⌥→ move by a word,
   and ⌘⌫ deletes to the start of the line. On Linux and Windows, Ctrl+Backspace deletes a word.
 - **Light or dark terminal:** the terminals are dark by default; Settings → General → Terminal
-  colors makes them light or has them follow the app's theme, remembered per browser.
+  colors makes them light or has them follow the app's theme, remembered per browser. New sessions,
+  and Kiro's theme, start with the colors last picked in any browser.
 - **Paste images and files for Claude:** paste a screenshot or a file into the terminal, or drop
   files on it, and Claude gets them with your next message, even when AgentK runs on another
   machine. Images pasted into the New session dialog's first prompt go with it when the session starts.

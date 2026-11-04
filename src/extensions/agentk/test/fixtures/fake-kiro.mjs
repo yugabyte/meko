@@ -125,7 +125,13 @@ const save = () => writeFileSync(file, JSON.stringify(state));
 const record = (kind, data) => appendFileSync(join(sessions, `${sessionId}.jsonl`), JSON.stringify({ version: 'v1', kind, data }) + '\n');
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 save();
-log('argv.jsonl', { args, cwd: process.cwd(), env: { MEKO_AGENT_ID: process.env.MEKO_AGENT_ID, AK_SESSION: process.env.AK_SESSION } });
+// Like Kiro at its start, it asks the terminal for its background color (OSC 11), though with 2 s to
+// answer where Kiro gives 0.2 s, and records the color it got.
+const asked = process.stdin.isTTY
+  ? spawnSync('/bin/sh', ['-c', `old=$(stty -g < /dev/tty) && stty -echo raw min 0 time 20 < /dev/tty && printf '\\033]11;?\\007' > /dev/tty && dd bs=256 count=1 < /dev/tty 2>/dev/null; stty "$old" < /dev/tty`], { encoding: 'latin1' }).stdout
+  : '';
+const background = /rgb:[0-9a-f/]+/.exec(asked)?.[0] ?? null;
+log('argv.jsonl', { args, cwd: process.cwd(), background, env: { MEKO_AGENT_ID: process.env.MEKO_AGENT_ID, AK_SESSION: process.env.AK_SESSION, KIRO_TERMINAL_THEME: process.env.KIRO_TERMINAL_THEME } });
 
 /**
  * Runs the agent's hooks for an event (matcher '*', the tool's name, or `@<server>` for an MCP

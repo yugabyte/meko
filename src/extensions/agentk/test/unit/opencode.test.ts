@@ -52,7 +52,7 @@ describe("an OpenCode session's command line", () => {
     const row = { id: 's1', worktree_path: '/w', agent_session_id: null } as SessionRow;
     const spec = h.launcher(paths, structuredClone(DEFAULT_CONFIG), {
       row, resume: false, prompt: 'hi', model: null, systemPrompt: 'This OpenCode session is managed by AgentK.', addDirs: ['/designs/s1'], modDir: null, planMode: false,
-      env: { AK_SESSION: 's1' }, unsetEnv: [], untrusted: true, tools: false,
+      env: { AK_SESSION: 's1' }, termTheme: 'dark', unsetEnv: [], untrusted: true, tools: false,
     });
     expect(spec.env).toMatchObject({ AK_SESSION: 's1', AK_OPENCODE_SOURCE: 'startup', OPENCODE_DISABLE_PROJECT_CONFIG: '1' });
     // Meko is off here: no Meko server for it.
@@ -68,7 +68,7 @@ describe("an OpenCode session's command line", () => {
     // The session tools: their MCP server, their skill's folder, and an ask before each tool that changes something.
     const trusted = h.launcher(paths, structuredClone(DEFAULT_CONFIG), {
       row, resume: false, prompt: 'hi', model: null, systemPrompt: '', addDirs: ['/designs/s1'], modDir: null, planMode: false,
-      env: {}, unsetEnv: [], untrusted: false, tools: true,
+      env: {}, termTheme: 'dark', unsetEnv: [], untrusted: false, tools: true,
     });
     expect(JSON.parse(trusted.env.OPENCODE_CONFIG_CONTENT)).toMatchObject({
       mcp: { agentk_sessions: { type: 'local', command: expect.arrayContaining([process.execPath, expect.stringMatching(/mcpmain\.ts$/)]) } },
@@ -84,7 +84,7 @@ describe("an OpenCode session's command line", () => {
     const paths = getPaths(tempDir('akl-oc-'));
     const launch = (model: string | null) => JSON.parse(openCodeHarness({ paths, log: silentLogger, changed: () => undefined }).launcher(paths, structuredClone(DEFAULT_CONFIG), {
       row: { id: 's1', worktree_path: '/w', agent_session_id: null } as SessionRow, resume: false, prompt: null, model, systemPrompt: '', addDirs: [],
-      modDir: null, planMode: false, env: {}, unsetEnv: [], untrusted: false, tools: false,
+      modDir: null, planMode: false, env: {}, termTheme: 'dark', unsetEnv: [], untrusted: false, tools: false,
     }).env.OPENCODE_CONFIG_CONTENT);
     expect(launch('anthropic/claude-sonnet-4-5').model).toBe('anthropic/claude-sonnet-4-5');
     expect(launch(null)).not.toHaveProperty('model');
@@ -98,7 +98,7 @@ describe("an OpenCode session's command line", () => {
     const paths = getPaths(tempDir('akl-oc-'));
     const spec = openCodeHarness({ paths, log: silentLogger, changed: () => undefined }).launcher(paths, structuredClone(DEFAULT_CONFIG), {
       row: { id: 's1', worktree_path: '/w', agent_session_id: null } as SessionRow, resume: false, prompt: null, model: null, systemPrompt: '', addDirs: [],
-      modDir: null, planMode: false, env: {}, unsetEnv: [], untrusted: false, tools: false,
+      modDir: null, planMode: false, env: {}, termTheme: 'dark', unsetEnv: [], untrusted: false, tools: false,
       review: { runDir: '/run/reviews/r1', agents: [
         { name: 'agentk-review-large', tier: 'large', description: 'A step.', prompt: 'Do the step.', model: 'anthropic/big' },
         { name: 'agentk-review-small', tier: 'small', description: 'A step.', prompt: 'Do the step.', model: '' },
@@ -119,7 +119,7 @@ describe("an OpenCode session's command line", () => {
     cfg.opencode.disableTracking = off;
     const spec = openCodeHarness({ paths, log: silentLogger, changed: () => undefined }).launcher(paths, cfg, {
       row: { id: 's1', worktree_path: '/w', agent_session_id: null } as SessionRow, resume: false, prompt: null, model: null, systemPrompt: '', addDirs: [],
-      modDir: null, planMode: false, env: {}, unsetEnv: [], untrusted: false, tools: false,
+      modDir: null, planMode: false, env: {}, termTheme: 'dark', unsetEnv: [], untrusted: false, tools: false,
     });
     const ask = openCodeAsker.command(cfg, paths.run).env ?? {};
     for (const env of [spec.env, ask]) {

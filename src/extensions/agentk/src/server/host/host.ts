@@ -8,6 +8,7 @@ import { listenPrivate, socketId } from '../hooks.js';
 import { BEAT_MS, InstanceBusyError, InstanceLock, type InstanceDeps } from '../instance.js';
 import { errMsg, silentLogger, type Logger } from '../log.js';
 import type { Paths } from '../paths.js';
+import { oscColor, type TermColors } from '../../shared/termcolors.js';
 import {
   clampCols, clampRows, encodeFrame, FRAME_CONTROL, FRAME_DATA, FrameReader, lineReader, MAX_REQUEST, parseControl, PROTOCOL,
   type HostControl, type HostRequest, type PaneState, type ViewerControl,
@@ -87,6 +88,15 @@ class Viewer {
   }
 }
 
+/** Colors from a request, or null unless both are `#rrggbb`. */
+function validColors(c: unknown): TermColors | null {
+  if (!c || typeof c !== 'object') return null;
+  const { foreground, background } = c as Record<string, unknown>;
+  return typeof foreground === 'string' && typeof background === 'string' && oscColor(foreground) && oscColor(background)
+    ? { foreground, background }
+    : null;
+}
+
 class Pane {
   proc: pty.IPty | null = null;
   readonly term: HeadlessTerminal;
@@ -105,6 +115,8 @@ class Pane {
   /** Modes the screen copy doesn't carry: mouse encoding (1005, 1006, 1015) and a hidden cursor. */
   private mouseEncoding: number | null = null;
   private cursorHidden = false;
+  /** The colors the program running now was started with, for its color queries; null: none given. */
+  colors: TermColors | null = null;
 
   /**
    * A clean screen for a program started again, the modes tracked beside it included. Queued
@@ -124,9 +136,21 @@ class Pane {
     this.rows = rows;
     this.term = new Terminal({ cols, rows, scrollback, allowProposedApi: true });
     this.term.loadAddon(this.serializer as unknown as Parameters<HeadlessTerminal['loadAddon']>[0]);
-    // The program's queries (device attributes, cursor position, colors) are answered here, once,
-    // whether or not anyone is watching. Viewers' own answers are dropped by the browser.
+    // The program's queries (device attributes, cursor position) are answered here, once, whether
+    // or not anyone is watching. Viewers' own answers are dropped by the browser.
     this.term.onData((d) => this.proc?.write(d));
+    // The headless terminal doesn't answer color queries (OSC 10 foreground, 11 background), so
+    // they're answered here with the colors the program was started with, as xterm.js answers
+    // them. `10;?;?` asks for both, as in xterm. A color the program sets isn't answered.
+    for (const ident of [10, 11]) {
+      this.term.parser.registerOscHandler(ident, (data) => {
+        const asks = data.split(';');
+        if (!asks.includes('?')) return false;
+        const answer = asks.map((a, i) => (a === '?' ? this.colorAnswer(ident + i) : '')).join('');
+        if (answer) this.proc?.write(answer);
+        return true;
+      });
+    }
     const track = (on: boolean) => (params: (number | number[])[]) => {
       for (const p of params) {
         if (p === 1005 || p === 1006 || p === 1015) this.mouseEncoding = on ? p : this.mouseEncoding === p ? null : this.mouseEncoding;
@@ -136,6 +160,13 @@ class Pane {
     };
     this.term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, track(true));
     this.term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, track(false));
+  }
+
+  /** The answer to a query for OSC color `ident` (10 or 11), or '' without colors. */
+  private colorAnswer(ident: number): string {
+    const hex = ident === 10 ? this.colors?.foreground : ident === 11 ? this.colors?.background : undefined;
+    const c = hex ? oscColor(hex) : null;
+    return c ? `\x1b]${ident};${c}\x1b\\` : '';
   }
 
   state(): PaneState {
@@ -295,6 +326,7 @@ export async function startHost(o: HostOptions): Promise<HostHandle> {
     }
     const pane = p;
     pane.proc = proc;
+    pane.colors = validColors(r.colors);
     let exited!: () => void;
     pane.exited = new Promise<void>((r) => (exited = r));
     pane.dead = false;

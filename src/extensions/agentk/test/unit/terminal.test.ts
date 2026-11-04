@@ -60,6 +60,25 @@ describe('terminal socket', () => {
     }
   });
 
+  it("keeps the browser's terminal colors for the sessions started next, from the query and on a change", async () => {
+    await host.spawn('x', home, ['/bin/sh', '-c', 'sleep 5']);
+    const themes: string[] = [];
+    const core = Object.assign(coreFor(), { setTermTheme: (t: string) => themes.push(t) }) as unknown as Core;
+    const ws = fakeSocket();
+    const other = fakeSocket();
+    attachTerminal(core, ws as unknown as WebSocket, 's1', { cols: '80', rows: '24', theme: 'light' });
+    try {
+      for (const theme of ['dark', 'blue', 7, null]) ws.emit('message', Buffer.from(JSON.stringify({ type: 'theme', theme })), false);
+      // Only dark or light: anything else changes nothing.
+      expect(themes).toEqual(['light', 'dark']);
+      attachTerminal(core, other as unknown as WebSocket, 's1', { theme: 'sepia' });
+      expect(themes).toEqual(['light', 'dark']);
+    } finally {
+      other.close();
+      ws.close();
+    }
+  });
+
   it('shows a new viewer the screen as it is, and passes typing to the program', async () => {
     await host.spawn('x', home, ['/bin/sh', '-c', 'printf "ready\\n"; read line; printf "got %s\\n" "$line"; sleep 5']);
     await waitFor(() => host.capture('x'), (t) => t.includes('ready'));

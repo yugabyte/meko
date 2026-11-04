@@ -484,6 +484,17 @@ sessions' conversations under the same folder. Resume and recovery run `--resume
 with no conversation of its own starts again with its first prompt, never `--resume` (Kiro's newest
 in the folder, which can be an earlier session's).
 
+**Colors.** Kiro 3.0 picks its theme once, at its start: the one picked with its `/theme`, else
+`KIRO_TERMINAL_THEME` (`dark`, `light`, `safe`), else a guess from `COLORFGBG`, then an OSC 11 query
+to the terminal (0.2 s for the answer), then the terminal's variables (`ITERM_PROFILE` and others),
+then the system (macOS in light mode reads as light). With nothing answering the query, a Mac in light
+mode gave AgentK's dark terminal Kiro's light theme: its prompt bars on `#EEEEEE` with the
+terminal's own near-white text. So AgentK starts Kiro with `KIRO_TERMINAL_THEME` set to the terminal
+colors sessions start with (`LaunchInput.termTheme`, `Core.termTheme`: the ones a browser last
+reported, dark before any did; [The app](app.md)), and the session host answers the query with them
+too. A theme picked with `/theme` in Kiro still wins, and a running session keeps its colors until
+it starts again.
+
 **Status.** Kiro fires no hook when it waits for a permission answer, when you interrupt a turn,
 or when it exits. A session waiting on a permission prompt shows as working until you answer in the
 terminal; an interrupted turn ends with the next turn's `stop`; an exit is found by reconcile's dead

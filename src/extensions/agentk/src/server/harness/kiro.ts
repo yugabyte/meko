@@ -179,7 +179,9 @@ export function kiroHarness(deps: { log: Logger; changed: () => void; readVersio
         worktree: l.row.worktree_path,
         command: cfg.kiro.command,
         args: kiroArgs({ conversation: l.resume ? kiroConversation(l.row) : null, trustTools: cfg.kiro.trustTools, prompt: l.prompt, model: l.model }),
-        env: l.env,
+        // Kiro picks its theme once, at its start, from this before its guesses (COLORFGBG, then
+        // asking the terminal, then the terminal's variables, then the OS). Its own /theme still wins.
+        env: { ...l.env, KIRO_TERMINAL_THEME: l.termTheme },
         unsetEnv: l.unsetEnv,
       };
     },

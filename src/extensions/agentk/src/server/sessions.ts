@@ -32,6 +32,7 @@ import { kindOf } from '../shared/stages.js';
 import { expandBranchPrefix } from '../shared/branches.js';
 import { noOverrides, readOverrides } from '../shared/codereview.js';
 import { agentName, checkModel, harnessOf } from '../shared/harnesses.js';
+import { TERM_COLORS } from '../shared/termcolors.js';
 import type { Harness } from './harness/index.js';
 import type { TranscriptMark } from './harness/types.js';
 import { writeLauncher } from './launcher.js';
@@ -1338,6 +1339,7 @@ export class SessionManager {
     // A code-review session reads its steps' prompts from its review's run folder, and always has
     // AgentK's MCP server: its steps report through it, whatever `[tools] enabled` says.
     const review = row.kind === 'code-review' ? this.core.reviews.launchForSession(row) : null;
+    const termTheme = this.core.termTheme();
     const script = writeLauncher(this.core.paths, h.launcher(this.core.paths, this.core.config, {
       row,
       resume: opts.resume,
@@ -1349,6 +1351,7 @@ export class SessionManager {
       modDir,
       planMode: row.stage === 'design' && !!row.plan_mode,
       env: this.env(row),
+      termTheme,
       unsetEnv: SESSION_ENV_UNSET,
       untrusted,
       // The session tools act on other sessions: not for a PR head whose code isn't trusted (the route refuses it too).
@@ -1369,7 +1372,8 @@ export class SessionManager {
     if (opts.prompt) this.launchPrompt.add(row.id);
     else this.launchPrompt.delete(row.id);
     try {
-      await this.core.host.spawn(row.tmux_name, claudePath(row.worktree_path), ['/bin/sh', script]);
+      // The program's color queries get the terminal colors it starts with.
+      await this.core.host.spawn(row.tmux_name, claudePath(row.worktree_path), ['/bin/sh', script], TERM_COLORS[termTheme]);
     } catch (e) {
       this.awaitingStart.delete(row.id);
       throw e;

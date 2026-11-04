@@ -6,6 +6,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { homedir, hostname, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { HARNESS_CAPS, type HarnessId } from '../shared/harnesses.js';
+import { parseTermTheme, type TermTheme } from '../shared/termcolors.js';
 import type { AppState, HarnessStatus, MekoKeySource, MekoStatus, ServerEvent, TokenUsage, UpdateStatus } from '../shared/types.js';
 import * as github from './github.js';
 import { TranscriptCapture, mekoPluginKeys } from './capture.js';
@@ -119,6 +120,8 @@ const LOCAL_MEKO_EVERY_MS = 60_000;
 const LOCAL_MEKO_RECHECK_MS = 30_000;
 /** state.db's kv: AgentK handed Meko its own Meko Cloud key, so its own sources are never read again. */
 const MEKO_HANDED_OVER_KEY = 'meko-link-handed-over';
+/** state.db's kv: the terminal colors a browser last reported (`dark` or `light`), which sessions start with. */
+const TERM_THEME_KEY = 'term-theme';
 
 /**
  * Which Meko account a Meko is, for whether a change forgets the account's invites: the Meko on
@@ -447,6 +450,19 @@ export class Core extends EventEmitter {
   /** The open projects with their sessions, as Ask AgentK and the session tools see them (their GitHub repo not read yet). */
   actionProjects(): ActionProject[] {
     return projectRows(this.db).map((r) => ({ id: r.id, name: r.name, repoPath: r.repo_path, sessions: this.sessions.listForProject(r.id) }));
+  }
+
+  /**
+   * The terminal colors sessions start with: the ones a browser last reported (`setTermTheme`),
+   * dark (the default) before any did. A CLI picks its theme once, at its start.
+   */
+  termTheme(): TermTheme {
+    return parseTermTheme(kvGet(this.db, TERM_THEME_KEY)) ?? 'dark';
+  }
+
+  /** A browser's terminal colors (Settings → General → Terminal colors), for the sessions started next. */
+  setTermTheme(theme: TermTheme): void {
+    if (theme !== this.termTheme()) kvSet(this.db, TERM_THEME_KEY, theme);
   }
 
   /** The machine's short host name: what the rail shows when `[server] name` is unset. */

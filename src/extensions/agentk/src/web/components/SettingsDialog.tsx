@@ -595,16 +595,19 @@ function GeneralTab({ auto, typed }: { auto: AutoSettings; typed: MutableRefObje
   );
 }
 
-/** The terminals' colors: kept in this browser as soon as one is picked, not on the server. */
+/**
+ * The terminals' colors: kept in this browser as soon as one is picked, and reported to the server,
+ * which starts new sessions with the colors last picked in any browser.
+ */
 function TerminalColors() {
   const [pref, setPref] = useState(termThemePref);
   return (
     <Field
       label="Terminal colors"
-      hint="Kept in this browser."
+      hint="Kept in this browser. New sessions start with the colors last picked in any browser."
       info={{
         for: 'set-term-theme',
-        text: 'Applies at once to every terminal in this browser. Claude Code has its own colors too: run /theme in a session to match.',
+        text: 'Applies at once to every terminal in this browser, and to sessions started from now on: Kiro takes its theme from them. Claude Code has its own colors too: run /theme in a session to match.',
       }}
     >
       <select
