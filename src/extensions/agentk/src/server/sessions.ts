@@ -1718,6 +1718,11 @@ export class SessionManager {
     while (this.turnEnds.size) await Promise.allSettled(this.turnEnds);
   }
 
+  /** True while a turn end is being handled. */
+  turnEndsBusy(): boolean {
+    return this.turnEnds.size > 0;
+  }
+
   private async handleTurnEnd(row: SessionRow, how: 'stop' | 'interrupted', background?: unknown): Promise<void> {
     const id = row.id;
     void this.captureTranscript(id);

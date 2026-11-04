@@ -818,11 +818,12 @@ export class Core extends EventEmitter {
     await this.closeHooks();
     // Let the last turns reach Meko; one cut off here catches up when the server starts again. Kiro's
     // and OpenCode's one-shot runs already going (the plan read, deleting a run's session) get as long
-    // to end, and so do turn ends still being handled (the diff refresh, a PR poll's git calls); one
-    // slower than that is left to finish on its own, as nothing kills it.
+    // to end, and so do turn ends still being handled and the sessions' lifecycle steps (the diff
+    // refresh, a PR poll's git calls, a queued prompt); one slower than that is left to finish on its
+    // own, as nothing kills it.
     await Promise.all([
       this.capture.settled(STOP_CAPTURE_MS),
-      within(this.sessions.turnEndsSettled(), STOP_CAPTURE_MS),
+      within(this.workSettled(), STOP_CAPTURE_MS),
       within(this.kiroPlan.settled().then(kiroDeletesSettled), STOP_CAPTURE_MS),
       within(openCodeDeletesSettled(), STOP_CAPTURE_MS),
     ]);
@@ -830,6 +831,14 @@ export class Core extends EventEmitter {
     this.sessions.stop();
     await this.meko.close();
     this.localReader.clear();
+  }
+
+  /** Turn ends and lifecycle steps, until neither is left: each can start the other (a turn end's PR poll, a step's prompt). */
+  private async workSettled(): Promise<void> {
+    do {
+      await this.sessions.turnEndsSettled();
+      await this.lifecycle.settled();
+    } while (this.sessions.turnEndsBusy() || this.lifecycle.busy());
   }
 
   private async bindHooks(): Promise<void> {

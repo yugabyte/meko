@@ -40,7 +40,9 @@ host runs, and Meko's pruning skips a locked folder ([Releases](releases.md)). T
 server works with hosts of its own protocol back to `MIN_PROTOCOL`; an older one has to be
 restarted (`me_koder host restart`), which the server's log says. `me_koder host stop`
 ends every session in the host, and refuses while the server for this home runs: it would start
-the host again at once and resume them all. With the server stopped, they resume when it starts.
+the host again at once and resume them all. A host that stops sends each Claude SIGHUP and waits
+up to 3 s (`CLOSE_WAIT_MS`) for them to exit before it lets go of its lease, so a new host never
+runs beside Claudes still writing their last lines; one slower than that is left running. With the server stopped, they resume when it starts.
 `me_koder stop` stops both, the server first, and `me_koder start` starts them again.
 Installed services stop through systemd (`systemctl --user stop`) or launchd (`bootout`), since
 both restart a process that is only killed or exits on its own. Then it checks the server's lease:

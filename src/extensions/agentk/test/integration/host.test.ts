@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pty from 'node-pty';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { startHost, type HostHandle } from '../../src/server/host/host.js';
+import { CLOSE_WAIT_MS, startHost, type HostHandle } from '../../src/server/host/host.js';
 import { MIN_PROTOCOL, type HostControl } from '../../src/server/host/protocol.js';
 import { HostRequestError, NoHostError, SessionHost, type HostStream } from '../../src/server/hostclient.js';
 import { getPaths, type Paths } from '../../src/server/paths.js';
@@ -205,6 +205,41 @@ describe('session host (real ptys)', () => {
     await handle.close();
     handle = null;
     expect(existsSync(paths.hostLock)).toBe(false);
+  });
+
+  it('waits on close for the programs it ended to exit, at most CLOSE_WAIT_MS, and leaves one that ignores SIGHUP running', { timeout: 20000 }, async () => {
+    // Like a Claude still writing after SIGHUP (its last transcript lines): this one writes 300 ms later.
+    const node = (name: string, onHup: string) => {
+      const ready = join(home, `${name}.ready`);
+      const script = `const fs = require('node:fs'); process.on('SIGHUP', () => { ${onHup} }); fs.writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setInterval(() => undefined, 1000);`;
+      return { argv: [process.execPath, '-e', script], ready };
+    };
+    const after = join(home, 'after-hup');
+    const slow = node('slow', `setTimeout(() => { fs.writeFileSync(${JSON.stringify(after)}, 'x'); process.exit(0); }, 300);`);
+    await host.spawn('ak-slow', home, slow.argv);
+    await waitFor(() => existsSync(slow.ready), (x) => x, 10000, 'the program to start');
+    // A second close (a SIGTERM during a stop request's) waits for the first one's end too.
+    const first = handle!.close();
+    await handle!.close();
+    handle = null;
+    expect(existsSync(after)).toBe(true);
+    expect(existsSync(paths.hostLock)).toBe(false);
+    await first;
+
+    handle = await startHost({ paths, version: '1.2.3' });
+    const deaf = node('deaf', '/* ignored */');
+    await host.spawn('ak-deaf', home, deaf.argv);
+    const pid = Number(await waitFor(() => (existsSync(deaf.ready) ? readFileSync(deaf.ready, 'utf8') : ''), (x) => !!x, 10000, 'the program to start'));
+    const t0 = Date.now();
+    await handle.close();
+    handle = null;
+    try {
+      expect(Date.now() - t0).toBeGreaterThanOrEqual(CLOSE_WAIT_MS - 100);
+      expect(Date.now() - t0).toBeLessThan(CLOSE_WAIT_MS + 2000);
+      expect(() => process.kill(pid, 0)).not.toThrow();
+    } finally {
+      process.kill(pid, 'SIGKILL');
+    }
   });
 
   it('takes only "nothing listening" for no host: a host that is slow to answer is never started again', async () => {
