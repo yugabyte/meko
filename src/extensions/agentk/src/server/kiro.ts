@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { KiroPlan } from '../shared/types.js';
 import type { Paths } from './paths.js';
 import { writeScript } from './scriptfile.js';
@@ -78,14 +78,16 @@ export function kiroDefaultAgentName(home = kiroHome()): string | null {
   return typeof name === 'string' && name.trim() ? name.trim() : null;
 }
 
+/** Whether an agent's config is one AgentK wrote (its description says so). */
+const ours = (a: Json | null) =>
+  !!a && typeof a.description === 'string' && (a.description.includes(MARK) || a.description.includes(OLD_MARK));
+
 /**
  * A global agent's config by its name: `<name>.json` in Kiro's agents folder, else the file there
  * whose `name` it is. Never one AgentK wrote.
  */
 export function readKiroAgent(name: string, home = kiroHome()): Json | null {
   const dir = join(home, 'agents');
-  const ours = (a: Json | null) =>
-    !!a && typeof a.description === 'string' && (a.description.includes(MARK) || a.description.includes(OLD_MARK));
   const direct = readJson(join(dir, `${name}.json`));
   if (direct && !ours(direct)) return direct;
   let files: string[];
@@ -200,21 +202,37 @@ function writeAtomic(file: string, text: string): void {
   renameSync(tmp, file);
 }
 
+function readText(file: string): string | null {
+  try {
+    return readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Writes a global agent file AgentK owns, only when its content changed (so a running Kiro isn't
  * made to reload it for nothing). True when it wrote. Throws when the folder can't be written.
+ *
+ * With `written` (a file of AgentK's own that keeps a copy of what it last wrote), "changed" means
+ * changed from that copy: Kiro 3.0 upgrades an agent file in place to its own format, and writing
+ * AgentK's again over it would have every running session reload it, and fall back to Kiro's
+ * default agent without AgentK's hooks and tools. So the file stays as Kiro left it while it's
+ * still AgentK's and AgentK would write the same.
  */
-export function writeKiroAgent(agent: Json, home = kiroHome()): boolean {
+export function writeKiroAgent(agent: Json, home = kiroHome(), written?: string): boolean {
   const dir = join(home, 'agents');
   const file = join(dir, `${String(agent.name)}.json`);
   const text = `${JSON.stringify(agent, null, 2)}\n`;
-  try {
-    if (readFileSync(file, 'utf8') === text) return false;
-  } catch {
-    /* not there yet */
-  }
+  const now = readText(file);
+  if (now === text) return false;
+  if (written && now !== null && readText(written) === text && ours(readJson(file))) return false;
   mkdirSync(dir, { recursive: true });
   writeAtomic(file, text);
+  if (written) {
+    mkdirSync(dirname(written), { recursive: true });
+    writeAtomic(written, text);
+  }
   return true;
 }
 

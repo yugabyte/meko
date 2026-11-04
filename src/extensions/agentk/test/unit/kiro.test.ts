@@ -1,4 +1,4 @@
-import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { agentkHooks, kiroArgs, kiroMekoTool, normalizeKiro } from '../../src/server/harness/kiro.js';
@@ -35,7 +35,7 @@ describe("Kiro's agentk agent", () => {
     });
   });
 
-  it('is written only when it changed, and never read back as the base agent', () => {
+  it('is written only when it changed (from what AgentK last wrote, once Kiro upgraded it), and never read back as the base agent', () => {
     const home = tempDir('akl-kiro-');
     const a = agentkAgent({ name: 'base', tools: ['*'] }, {});
     expect(writeKiroAgent(a, home)).toBe(true);
@@ -47,6 +47,27 @@ describe("Kiro's agentk agent", () => {
     expect(readKiroAgent('agentk-ask', home)).toBeNull();
     writeFileSync(join(home, 'agents', 'mine.json'), JSON.stringify({ name: 'my-agent', tools: ['read'] }));
     expect(readKiroAgent('my-agent', home)).toEqual({ name: 'my-agent', tools: ['read'] });
+
+    // With the copy of what AgentK last wrote, the file stays as Kiro upgraded it while AgentK would write the same.
+    const file = join(home, 'agents', 'agentk.json');
+    const written = join(tempDir('akl-run-'), 'run', 'kiro-agentk.json');
+    rmSync(file);
+    expect(writeKiroAgent(a, home, written)).toBe(true);
+    // Kiro 3.0 upgrades the file in place: writing AgentK's over it again would knock running sessions off the agent.
+    const upgraded = `${JSON.stringify({ ...a, kiroUpgrade: { revision: 2 } })}\n`;
+    writeFileSync(file, upgraded);
+    expect(writeKiroAgent(a, home, written)).toBe(false);
+    expect(readFileSync(file, 'utf8')).toBe(upgraded);
+    // A change of AgentK's is written.
+    const b = agentkAgent({ name: 'base', tools: ['read'] }, {});
+    expect(writeKiroAgent(b, home, written)).toBe(true);
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(b);
+    // So is the file again once it's gone, or no longer AgentK's.
+    rmSync(file);
+    expect(writeKiroAgent(b, home, written)).toBe(true);
+    writeFileSync(file, JSON.stringify({ name: 'agentk', tools: ['read'] }));
+    expect(writeKiroAgent(b, home, written)).toBe(true);
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(b);
   });
 });
 
@@ -69,7 +90,13 @@ describe("Kiro's hook events as AgentK's", () => {
     [{ hook_event_name: 'userPromptSubmit', session_id: 'k-1', prompt: 'hi' }, { hook_event_name: 'UserPromptSubmit', agent_session_id: 'k-1', prompt: 'hi' }],
     [{ hook_event_name: 'postToolUse', tool_name: 'write', tool_input: { path: 'a.ts' } }, { hook_event_name: 'PostToolUse', tool_name: 'write', tool_input: { path: 'a.ts' } }],
     [{ hook_event_name: 'stop', session_id: 'k-1', assistant_response: 'Done.' }, { hook_event_name: 'Stop', agent_session_id: 'k-1', assistant_response: 'Done.' }],
-    [{ hook_event_name: 'SessionStart', session_id: 'k-1' }, null],
+    // Kiro 3.0 sends Claude Code's names for the same events.
+    [{ hook_event_name: 'SessionStart', session_id: 'x' }, { hook_event_name: 'SessionStart', agent_session_id: 'x' }],
+    [{ hook_event_name: 'UserPromptSubmit', session_id: 'x', prompt: 'hi' }, { hook_event_name: 'UserPromptSubmit', agent_session_id: 'x', prompt: 'hi' }],
+    [{ hook_event_name: 'PreToolUse', tool_name: '@meko/memory_search' }, { hook_event_name: 'PreToolUse', tool_name: '@meko/memory_search' }],
+    [{ hook_event_name: 'PostToolUse', tool_name: 'write' }, { hook_event_name: 'PostToolUse', tool_name: 'write' }],
+    [{ hook_event_name: 'Stop', session_id: 'x' }, { hook_event_name: 'Stop', agent_session_id: 'x' }],
+    [{ hook_event_name: 'SessionEnd', session_id: 'k-1' }, null],
   ])('%j', (raw, event) => {
     expect(normalizeKiro(raw)).toEqual(event);
   });

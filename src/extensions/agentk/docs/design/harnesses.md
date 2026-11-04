@@ -250,7 +250,8 @@ session of another.
 session from its token, so `onHook` normalizes the payload with the session's adapter
 (`normalize()`) before the status machine sees it. Kiro's `agentSpawn`, `userPromptSubmit`,
 `preToolUse`, `postToolUse` and `stop` become `SessionStart`, `UserPromptSubmit`, `PreToolUse`,
-`PostToolUse` and `Stop`, and Kiro's `session_id` moves to `agent_session_id` (Claude's `session_id`
+`PostToolUse` and `Stop` (Kiro 3.0 sends those Claude Code names itself, which are taken as they
+are), and Kiro's `session_id` moves to `agent_session_id` (Claude's `session_id`
 is AgentK's key for the session's Meko conversation, `claude_session_id`, which stays as it was
 for every harness). OpenCode's plugin turns OpenCode 2's hooks and events into OpenCode 1's event
 names (`chat.message` for its `prompt` hook, `session.idle` for its `session.execution.*`, and so
@@ -435,7 +436,8 @@ plugin in `~/.opencode/` itself, which OpenCode always reads, would still load.
 Checked against kiro-cli 2.32.0. Its default engine runs only the selected agent's inline hooks,
 each given the event as JSON on stdin (`hook_event_name`, `cwd`, `session_id`, and `tool_name`,
 `tool_input` for tools); a `preToolUse` hook that exits 2 denies the call, with every tool trusted
-too; `agentSpawn`'s stdout goes into the model's context.
+too; `agentSpawn`'s stdout goes into the model's context. Kiro CLI 3.0 (its `kas` 3.0.0) runs the
+same hooks but names their events as Claude Code does (`SessionStart` for `agentSpawn`, and so on).
 
 **The `agentk` agent.** AgentK writes `~/.kiro/agents/agentk.json` (`KIRO_HOME` honoured) built
 from the user's default agent (`chat.defaultAgent` in `~/.kiro/settings/cli.json`; Meko's
@@ -454,9 +456,12 @@ trust_tools` is a flag on AgentK's launch instead, `--trust-tools=*` (every tool
 so a chat someone starts as `agentk` themselves still asks; not `--trust-all-tools`, which makes Kiro
 ask on screen whether to go on, with **No, exit** first, and the next prompt AgentK types would pick
 it. Meko's capture hooks (`kiro-handler.js`) are left out
-while `[meko] capture_transcripts` is off. The file is written only when it changes, at server start
-(only where `kiro-cli --version` answers: AgentK never makes a `~/.kiro` of its own), before every
-launch, and after **Set up Kiro with this Meko**; `uninstall` removes it. Its description says it's
+while `[meko] capture_transcripts` is off. The file is written only when it changes from what AgentK
+last wrote (a copy kept in the run folder, `run/kiro-agentk.json`): Kiro 3.0 upgrades the file in
+place to its own format, and writing AgentK's over that again would make every running Kiro session
+reload it and fall back to Kiro's default agent, without AgentK's hooks or session tools. It's
+written at server start (only where `kiro-cli --version` answers: AgentK never makes a `~/.kiro` of
+its own), before every launch, and after **Set up Kiro with this Meko**; `uninstall` removes it. Its description says it's
 AgentK's, and `readKiroAgent` never takes it as a base. Kiro uses a workspace agent of the same
 name (`<worktree>/.kiro/agents/*.json` named `agentk`) over this one, and the agent loads a
 workspace's `.kiro/settings/mcp.json`, with no flag to skip either; so a session on a public repo's
