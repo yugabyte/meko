@@ -151,7 +151,8 @@ var mekoCommands = []command{
 		}},
 	{name: "cloud_link", group: "Connect", summary: "Link Meko Cloud, or unlink it",
 		usage: "meko cloud_link [flags]", examples: []example{
-			{"meko cloud_link", "link Meko Cloud for the extensions: asks for the API key, or reads it from stdin"},
+			{"meko cloud_link", "link Meko Cloud for the extensions: sign in with your browser, or enter an API key"},
+			{"echo \"$KEY\" | meko cloud_link", "link with the API key on stdin"},
 			{"meko cloud_link --off", "unlink it: the extensions use this Meko"},
 			{"meko cloud_link --url https://meko.example.com/mcp", "link another Meko server"},
 		}},

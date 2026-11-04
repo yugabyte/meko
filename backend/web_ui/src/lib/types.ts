@@ -635,6 +635,11 @@ export interface MekoCloudUpdate {
   api_key?: string;
 }
 
+// POST /settings/meko-cloud/sign-in: where the browser goes to sign in to Meko Cloud.
+export interface MekoCloudSignIn {
+  authorize_url: string;
+}
+
 // Context Gaps: the datapack's searches Meko answered poorly, grouped by question.
 // empty: the search found nothing. weak: it found only memories, each scoring below 0.75.
 export type GapQuality = "empty" | "weak";

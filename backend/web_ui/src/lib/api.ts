@@ -39,6 +39,7 @@ import type {
   MemoryMap,
   MemoryPage,
   MekoCloud,
+  MekoCloudSignIn,
   MekoCloudUpdate,
   Metrics,
   Passage,
@@ -201,6 +202,12 @@ export const api = {
   mekoCloud: () => request<MekoCloud>("GET", "/settings/meko-cloud"),
   linkMekoCloud: (u: MekoCloudUpdate) => request<MekoCloud>("PUT", "/settings/meko-cloud", u),
   unlinkMekoCloud: () => request<MekoCloud>("DELETE", "/settings/meko-cloud"),
+  // Signing in to Meko Cloud in the browser: start answers where to send the browser, and Meko Cloud
+  // sends it back to /settings/meko-cloud/callback, whose code and state finish links.
+  startMekoCloudSignIn: (u: MekoCloudUpdate) =>
+    request<MekoCloudSignIn>("POST", "/settings/meko-cloud/sign-in", u),
+  finishMekoCloudSignIn: (code: string, state: string) =>
+    request<MekoCloud>("POST", "/settings/meko-cloud/sign-in/finish", { code, state }),
 
   // The agents installed on this computer and whether each reaches Meko (or the linked Meko Cloud).
   agents: () => request<Agents>("GET", "/agents"),

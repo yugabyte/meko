@@ -2,11 +2,14 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -125,5 +128,116 @@ func TestCloudRoutesOnTheWebListener(t *testing.T) {
 	code, _ = send(t, http.MethodDelete, web+cloudRoute, "", map[string]string{"Origin": "http://example.com"})
 	if code != 403 {
 		t.Fatalf("another site's page: %d", code)
+	}
+}
+
+// fakeSignIn is Meko Cloud's browser sign-in, as small as Meko's checks allow: discovery, client
+// registration, an /authorize that signs in at once, /token and /api-keys (docs/cloud.md).
+func fakeSignIn(t *testing.T) string {
+	t.Helper()
+	var base string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/mcp", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	})
+	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(w, `{"authorization_endpoint":%q,"token_endpoint":%q,"registration_endpoint":%q}`,
+			base+"/authorize", base+"/token", base+"/register")
+	})
+	mux.HandleFunc("/register", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"client_id":"client-1"}`)
+	})
+	mux.HandleFunc("/authorize", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		//nolint:gosec // G710: a test fake of Meko Cloud, sending the browser back as Meko Cloud does
+		http.Redirect(w, r, q.Get("redirect_uri")+"?code=the-code&state="+url.QueryEscape(q.Get("state")),
+			http.StatusFound)
+	})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"access_token":"the-token"}`)
+	})
+	mux.HandleFunc("/api-keys", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"api_key":"`+cloudKey+`","name":"Meko on test"}`)
+	})
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+	base = ts.URL
+	return base
+}
+
+// The web UI signs in to Meko Cloud on the web listener: the sign-in comes back to the UI's own
+// callback page, served to Meko Cloud's redirect (another site's), whose POST finishes it. The API
+// listener has no sign-in routes.
+func TestCloudSignInRoutes(t *testing.T) {
+	cloudURL := fakeSignIn(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(Options{Info: Info{Version: "test"}, Port: tcpPort(t, ln), Logger: slog.New(slog.DiscardHandler),
+		Cloud: cloudService(t), Web: &Web{Access: config.AccessLocal},
+		UI: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ui") })})
+	go func() { _ = s.Serve(ln) }()
+	t.Cleanup(func() { _ = s.Shutdown(context.Background()) })
+	web := fmt.Sprintf("http://127.0.0.1:%d", tcpPort(t, ln))
+	own := map[string]string{"Origin": web}
+
+	code, b := send(t, http.MethodPost, web+cloudRoute+"/sign-in", `{"url":"`+cloudURL+`/mcp"}`,
+		map[string]string{"Origin": "http://example.com"})
+	if code != 403 {
+		t.Fatalf("another site's page starts a sign-in: %d %s", code, b)
+	}
+	code, b = send(t, http.MethodPost, web+cloudRoute+"/sign-in", `{"url":"http://meko.example.com/mcp"}`, own)
+	if code != 400 || !strings.Contains(b, "needs https") {
+		t.Fatalf("a plain-http server: %d %s", code, b)
+	}
+	code, b = send(t, http.MethodPost, web+cloudRoute+"/sign-in", `{"url":"`+cloudURL+`/mcp","web_url":"`+cloudURL+`"}`,
+		own)
+	var started struct {
+		Data struct {
+			AuthorizeURL string `json:"authorize_url"`
+		} `json:"data"`
+	}
+	if err = json.Unmarshal([]byte(b), &started); code != 200 || err != nil {
+		t.Fatalf("start: %d %s", code, b)
+	}
+	authorize, _ := url.Parse(started.Data.AuthorizeURL)
+	if got := authorize.Query().Get("redirect_uri"); got != web+"/settings/meko-cloud/callback" {
+		t.Fatalf("redirect_uri %q", got)
+	}
+
+	// Meko Cloud sends the browser back: the page is served to another site's redirect.
+	req, _ := http.NewRequest(http.MethodGet, started.Data.AuthorizeURL, nil)
+	_, _, h := body(t, req)
+	back, _ := url.Parse(h.Get("Location"))
+	req, _ = http.NewRequest(http.MethodGet, back.String(), nil)
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	if code, b, _ = body(t, req); code != 200 || b != "ui" {
+		t.Fatalf("the callback page: %d %q", code, b)
+	}
+	finish := `{"code":"the-code","state":"` + back.Query().Get("state") + `"}`
+	code, b = send(t, http.MethodPost, web+cloudRoute+"/sign-in/finish", finish, own)
+	if code != 200 || !strings.Contains(b, `"linked":true`) || !strings.Contains(b, `"key_hint":"wxyz"`) ||
+		strings.Contains(b, cloudKey) || strings.Contains(b, "the-token") {
+		t.Fatalf("finish: %d %s", code, b)
+	}
+	code, b = send(t, http.MethodPost, web+cloudRoute+"/sign-in/finish", finish, own)
+	if code != 400 || !strings.Contains(b, "expired") {
+		t.Fatalf("finishing twice: %d %s", code, b)
+	}
+
+	api, err := Listen(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2 := New(Options{Info: Info{Version: "test"}, Port: tcpPort(t, api), Token: token, ClientToken: clientToken,
+		Logger: slog.New(slog.DiscardHandler), Cloud: cloudService(t)})
+	go func() { _ = s2.Serve(api) }()
+	t.Cleanup(func() { _ = s2.Shutdown(context.Background()) })
+	code, _ = send(t, http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d", tcpPort(t, api))+cloudRoute+"/sign-in", `{}`,
+		map[string]string{"Authorization": "Bearer " + token})
+	if code != 404 {
+		t.Fatalf("sign-in on the API listener: %d", code)
 	}
 }

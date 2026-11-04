@@ -78,6 +78,9 @@ func fakeCloud(t *testing.T) string {
 			_, _ = w.Write([]byte(`{"data":[]}`))
 			return
 		}
+		if fakeSignIn(w, r) {
+			return
+		}
 		if a := r.Header.Get("Authorization"); a != "Bearer "+testCloudKey && a != "Bearer "+testCloudKey2 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -86,6 +89,40 @@ func fakeCloud(t *testing.T) string {
 	}))
 	t.Cleanup(ts.Close)
 	return ts.URL
+}
+
+// fakeCloudMints is the key fakeCloud's /api-keys makes for a sign-in: testCloudKey2 unless set.
+var fakeCloudMints atomic.Value
+
+// fakeSignIn serves fakeCloud's browser sign-in (docs/cloud.md): discovery, client registration, an
+// /authorize that signs in at once and sends the browser back with a code, /token and /api-keys.
+func fakeSignIn(w http.ResponseWriter, r *http.Request) bool {
+	base := "http://" + r.Host
+	switch r.URL.Path {
+	case "/.well-known/oauth-authorization-server":
+		meta := `{"authorization_endpoint":"` + base + `/authorize","token_endpoint":"` + base +
+			`/token","registration_endpoint":"` + base + `/register"}`
+		_, _ = w.Write([]byte(meta)) //nolint:gosec // G705: a test fake's JSON
+	case "/register":
+		_, _ = w.Write([]byte(`{"client_id":"client-1"}`))
+	case "/authorize":
+		q := r.URL.Query()
+		//nolint:gosec // G710: a test fake of Meko Cloud, sending the browser back as Meko Cloud does
+		http.Redirect(w, r, q.Get("redirect_uri")+"?code=the-code&state="+url.QueryEscape(q.Get("state")),
+			http.StatusFound)
+	case "/token":
+		_, _ = w.Write([]byte(`{"access_token":"the-token"}`))
+	case "/api-keys":
+		key, _ := fakeCloudMints.Load().(string)
+		if key == "" {
+			key = testCloudKey2
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"api_key":"` + key + `","name":"Meko on test"}`))
+	default:
+		return false
+	}
+	return true
 }
 
 type tokenJSON struct {
@@ -159,6 +196,115 @@ func TestCloudLink(t *testing.T) {
 	if c := readCloudToken(t, dir); c.Error == "" || c.Set || c.Linked {
 		t.Fatalf("an unreadable link: %+v", c)
 	}
+}
+
+// asTerminal makes meko cloud_link take its input as a person's at a terminal, and openBrowser call
+// browse with each address it's asked to open.
+func asTerminal(t *testing.T, browse func(string)) {
+	t.Helper()
+	term, open := terminalIn, openBrowser
+	terminalIn = func(io.Reader) bool { return true }
+	openBrowser = func(u string) error {
+		if browse != nil {
+			browse(u)
+		}
+		return nil
+	}
+	t.Cleanup(func() { terminalIn, openBrowser = term, open })
+}
+
+// followTo is a browser that signs in at once: it follows the sign-in address to the callback.
+func followTo(t *testing.T) func(string) {
+	return func(u string) {
+		res, err := http.Get(u) //nolint:gosec,noctx // the test's own fake Cloud
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		_ = res.Body.Close()
+	}
+}
+
+// On a terminal, meko cloud_link asks how to link: signing in with the browser (Enter) makes a key
+// and links with it, as the Meko installer does; 2 takes a key. A browser on another computer
+// finishes by pasting the address it ended on, and a key the link then refuses is named, since
+// Meko Cloud can't delete it.
+func TestCloudLinkSignIn(t *testing.T) {
+	dir, _ := setup(t)
+	t.Setenv("MEKO_SECRETS", "file")
+	cloud := fakeCloud(t)
+	asTerminal(t, followTo(t))
+
+	withStdin(t, "\n")
+	code, out, errs := run("cloud_link", "--data-dir", dir, "--url", cloud+"/mcp", "--web-url", cloud)
+	want(t, "sign in with the browser", code, 0, out+errs, "Linked to "+cloud+"/mcp (key …abcd)")
+	want(t, "the choice", code, 0, errs, "1) Sign in with your browser\n  2) Enter an API key\n")
+	want(t, "the browser", code, 0, errs, "Opened your browser to sign in to Meko Cloud.")
+	if strings.Contains(out+errs, "the-code") || strings.Contains(out+errs, "the-token") ||
+		strings.Contains(out+errs, testCloudKey2) {
+		t.Fatalf("the output holds a credential:\n%s%s", out, errs)
+	}
+	if c := readCloudToken(t, dir); c.Account != (cloudlink.Link{URL: cloud + "/mcp", Key: testCloudKey2}).Account() {
+		t.Fatalf("linked with the minted key? %+v", c)
+	}
+
+	withStdin(t, "2\n"+testCloudKey+"\n")
+	code, out, errs = run("cloud_link", "--data-dir", dir)
+	want(t, "enter a key", code, 0, out+errs, "Linked to "+cloud+"/mcp (key …wxyz)")
+
+	withStdin(t, "3\n")
+	code, _, errs = run("cloud_link", "--data-dir", dir)
+	want(t, "neither", code, 1, errs, "choose 1 to sign in with your browser, or 2 to enter an API key")
+
+	withStdin(t, "\n")
+	code, _, errs = run("cloud_link", "--data-dir", dir, "--url", "not a url")
+	want(t, "a bad URL, signing in", code, 1, errs, "isn't a URL. It should look like https://meko.example.com\n")
+
+	// The browser is elsewhere: its redirect never reaches this computer, and its address is pasted.
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	stdin = pr
+	t.Cleanup(func() { stdin = os.Stdin })
+	go func() { _, _ = io.WriteString(pw, "1\n") }()
+	asTerminal(t, func(u string) {
+		c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		res, err := c.Get(u) //nolint:noctx,gosec // G704: the test's own fake Cloud
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		_ = res.Body.Close()
+		go func() { _, _ = io.WriteString(pw, res.Header.Get("Location")+"\n") }()
+	})
+	code, out, errs = run("cloud_link", "--data-dir", dir)
+	want(t, "a pasted address", code, 0, out+errs, "Linked to "+cloud+"/mcp (key …abcd)")
+	want(t, "the paste prompt", code, 0, errs, "paste the address it ended on here")
+
+	// A key the link refuses stays in the account, and the error names it.
+	fakeCloudMints.Store("mko_tkn_refused_0000")
+	t.Cleanup(func() { fakeCloudMints.Store("") })
+	asTerminal(t, followTo(t))
+	withStdin(t, "1\n")
+	code, _, errs = run("cloud_link", "--data-dir", dir)
+	want(t, "a refused key", code, 1, errs, `The key Meko made, "Meko on test", is still in your Meko Cloud account`)
+	fakeCloudMints.Store("")
+
+	// --no-browser prints the address; nobody signs in, so it times out.
+	wait := signInWait
+	signInWait = 100 * time.Millisecond
+	t.Cleanup(func() { signInWait = wait })
+	opened := false
+	asTerminal(t, func(string) { opened = true })
+	withStdin(t, "\n")
+	code, _, errs = run("cloud_link", "--data-dir", dir, "--no-browser")
+	want(t, "--no-browser", code, 1, errs,
+		"Open this address in a browser to sign in to Meko Cloud:\n  "+cloud+"/authorize?")
+	want(t, "no sign-in", code, 1, errs, "timed out after 100ms waiting for the sign-in")
+	if opened {
+		t.Fatal("--no-browser opened the browser")
+	}
+	code, _, errs = run("cloud_link", "--data-dir", dir, "--off", "--no-browser")
+	want(t, "--off --no-browser", code, exitUsage, errs, "--off and --no-browser don't go together")
 }
 
 // meko-cli datapacks lists the datapacks /mcp lists: this Meko's while unlinked, and the linked Meko
