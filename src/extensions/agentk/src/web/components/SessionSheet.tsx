@@ -111,9 +111,7 @@ export function EndSessionButton({
   /** The confirmation closed (Cancel, or the action went). */
   onClosed?: () => void;
 }) {
-  const learnedAsItWent = session.purpose === 'learn' || session.purpose === 'guide';
   const [open, setOpen] = useState(autoOpen);
-  const [skipLearn, setSkipLearn] = useState(learnedAsItWent);
   /** What ending the session would leave or lose: undefined while checking, null if the check failed. */
   const [check, setCheck] = useState<DiscardCheck | null | undefined>(undefined);
   const [busy, setBusy] = useState(false);
@@ -128,7 +126,6 @@ export function EndSessionButton({
 
   const show = () => {
     setOpen(true);
-    setSkipLearn(learnedAsItWent);
     setCheck(undefined);
     const p = api.discardCheck(session.id).catch(() => null);
     pending.current = p;
@@ -174,6 +171,32 @@ export function EndSessionButton({
       </button>
     );
   }
+  return <EndConfirm session={session} learnTo={learnTo} check={check} busy={busy} disabled={disabled} onRun={run} onCancel={close} />;
+}
+
+/**
+ * EndSessionButton's confirmation: Archive and Discard side by side. Mounted afresh at each opening,
+ * so Don't save learnings starts as its initializer says every time: checked only for a learn or guide
+ * session, which saved what it learned as it went.
+ */
+function EndConfirm({
+  session,
+  learnTo,
+  check,
+  busy,
+  disabled,
+  onRun,
+  onCancel,
+}: {
+  session: Session;
+  learnTo: string | null;
+  check: DiscardCheck | null | undefined;
+  busy: boolean;
+  disabled?: boolean;
+  onRun: (a: SessionAction, req?: CloseSessionRequest) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [skipLearn, setSkipLearn] = useState(session.purpose === 'learn' || session.purpose === 'guide');
   const checking = check === undefined;
   const uncommitted = check?.uncommittedFiles ?? 0;
   const warnings: string[] = [];
@@ -193,7 +216,7 @@ export function EndSessionButton({
           {w}
         </span>
       ))}
-      <button className="btn primary" disabled={busy || disabled || checking || uncommitted > 0} onClick={() => run('archive')}>
+      <button className="btn primary" disabled={busy || disabled || checking || uncommitted > 0} onClick={() => onRun('archive')}>
         Archive (keep branch)
       </button>
       {learnTo && (
@@ -205,11 +228,11 @@ export function EndSessionButton({
       <button
         className="btn danger"
         disabled={busy || disabled || checking}
-        onClick={() => run('discard', learnTo && skipLearn ? { skipLearn: true } : undefined)}
+        onClick={() => onRun('discard', learnTo && skipLearn ? { skipLearn: true } : undefined)}
       >
         {checking ? <Busy label="Checking" /> : 'Discard'}
       </button>
-      <button className="btn ghost" disabled={busy} onClick={close}>
+      <button className="btn ghost" disabled={busy} onClick={onCancel}>
         Cancel
       </button>
     </span>

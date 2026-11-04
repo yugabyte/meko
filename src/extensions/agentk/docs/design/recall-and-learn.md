@@ -74,7 +74,8 @@ own, and a step that ended done since the session got to Merge & Close stands fo
 
 **Skipping it.** The session's ⋯ menu (the ⋯ sheet on a phone) has **Merge & Close without saving
 learnings** beside the Merge & Close gate, and Discard's confirmation has a **Don't save learnings**
-checkbox, unchecked by default; both are offered when the project has a dedicated datapack and Meko
+checkbox, unchecked by default (checked for a learn or guide session, which saved what it learned
+as it went); both are offered when the project has a dedicated datapack and Meko
 is on. Either way the action's `CloseSessionRequest` carries `skipLearn` (400 when it isn't a boolean), no
 learn step runs, and the timeline says so (`learn-skipped`, once, and not for **Discard now**,
 whose step is recorded as interrupted). Merge & Close writes the choice to `sessions.skip_learn`
@@ -263,7 +264,7 @@ start brings it back.
   the step ends (`afterLearn`). The file is removed, and the user told, only once the session is
   closing (or kept), so a close that fails leaves it for the next turn's end to try again, and only
   a new summary closes a kept session later. The PR window's first day is the same day `months`
-  back, or that month's last day when it has fewer (never a day in the month after). Discarding a learn session by hand starts
+  back, or that month's last day when it has fewer (never a day in the month after). Discarding a learn (or guide) session by hand starts
   with **Don't save learnings** checked, for the same reason. Its Explore gate reads **Learning the
   project** in place of **Move on…**; it can still be moved from the stage bar, and then it no
   longer closes by itself.

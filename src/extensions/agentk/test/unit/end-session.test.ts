@@ -24,8 +24,11 @@ describe('EndSessionButton', () => {
     expect(html).toMatch(/<button class="btn danger" disabled=""><span class="busy">Checking/);
     expect(html).not.toContain('Discard…');
     expect(html).toMatch(/<input type="checkbox"\/><span>Don&#x27;t save learnings/);
-    // A learn session saved what it learned as it went.
-    expect(render({ purpose: 'learn' }, true)).toMatch(/<input type="checkbox" checked=""\/><span>Don&#x27;t save learnings/);
+    // A learn or guide session saved what it learned as it went. The confirmation mounts afresh at
+    // every opening, so this initializer is what each one starts from.
+    for (const purpose of ['learn', 'guide'] as const) {
+      expect(render({ purpose }, true)).toMatch(/<input type="checkbox" checked=""\/><span>Don&#x27;t save learnings/);
+    }
   });
 
   it('says a Discard waits for the learn step, and offers to discard now', () => {
