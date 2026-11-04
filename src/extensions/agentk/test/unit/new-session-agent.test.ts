@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HARNESS_CAPS } from '../../src/shared/harnesses.js';
 import type { CreateSessionRequest, HarnessMekoState, HarnessStatus, MekoStatus, Project, Settings } from '../../src/shared/types.js';
-import { NewSessionDialog } from '../../src/web/components/NewSessionDialog.js';
+import { NewSessionDialog, reviewSummary } from '../../src/web/components/NewSessionDialog.js';
 import { AgentSettings, CodeReviewSettings, HarnessBar, MekoLinks } from '../../src/web/components/SettingsDialog.js';
 import { connectToMeko, setUpWithMeko } from '../../src/web/mekoagents.js';
 import { defaultAgentChoice } from '../../src/web/util.js';
@@ -316,5 +316,35 @@ describe("the New session dialog's Model choice", () => {
     const h = html([status('opencode', { isDefault: true })], { harness: 'opencode' });
     expect(options(h)).toEqual(['*', ' other']);
     expect(h).toContain('Reading OpenCode');
+  });
+});
+
+describe("the New session dialog's Code review", () => {
+  const html = (initial: Partial<CreateSessionRequest> = {}) =>
+    renderToStaticMarkup(createElement(NewSessionDialog, {
+      project, ghLogin: null, harnesses: [status('claude')], initial: { name: 'x', repoPath: '/code/other', ...initial },
+      onClose: () => undefined, onCreated: () => undefined,
+    }));
+
+  it('is collapsed inside Advanced, with a line in place of its settings', () => {
+    const h = html();
+    expect(h).toMatch(/id="ns-review-toggle"[^>]*aria-expanded="false"/);
+    expect(h).toContain('Default</span>');
+    expect(h).not.toContain('id="ns-review-strategy"');
+  });
+
+  it('opens on a retry that asked for settings of its own', () => {
+    const h = html({ review: { depth: 3 } });
+    expect(h).toMatch(/id="ns-review-toggle"[^>]*aria-expanded="true"/);
+    expect(h).toContain('id="ns-review-strategy"');
+  });
+
+  it("names, closed, the settings the task's review runs with", () => {
+    const global = { strategy: 'sagittarius-3.0', rounds: 1, depth: 1, check: false } as const;
+    expect(reviewSummary(null, {}, {})).toBe('Default');
+    expect(reviewSummary(null, {}, { depth: 2 })).toBe('Changed');
+    expect(reviewSummary(global, {}, {})).toBe('Sagittarius 3.0 · depth 1 · 1 re-review');
+    expect(reviewSummary(global, { rounds: 2 }, { depth: 3 })).toBe('Sagittarius 3.0 · depth 3 · 2 re-reviews');
+    expect(reviewSummary(global, {}, { strategy: 'off' })).toBe('Off');
   });
 });

@@ -2007,6 +2007,12 @@ textarea.input {
   gap: 10px;
   padding: 4px 16px 10px;
 }
+/* New session's Code review, inside Advanced: collapsed like it, with a line of its own. */
+.ns-review-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
 .ns-review {
   display: flex;
   flex-direction: column;

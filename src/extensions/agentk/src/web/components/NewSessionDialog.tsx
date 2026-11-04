@@ -9,10 +9,21 @@ import { useTouch } from '../hooks/useMedia';
 import { cx, learnScopeHint, noAgent, repoFolder, slugify } from '../util';
 import { AttachPrPicker } from './AttachPrPicker';
 import { AgentPicker, Busy, Dialog, ErrorText, Field, LEARN_LABEL, ReviewFields, StartPicker, type StartChoice } from './common';
-import { noOverrides, readOverrides, type ReviewOverrides } from '../../shared/codereview';
+import { noOverrides, readOverrides, resolveReview, strategyName, type ReviewOverrides, type ReviewSettings } from '../../shared/codereview';
 import { inheritedReview, useReviewDefaults } from '../reviewdefaults';
 import { HeldImages } from './HeldImages';
 import { ReviewPrPicker } from './ReviewPrPicker';
+
+/**
+ * Advanced's closed Code review line: the settings the task's review runs with, or "Default" while
+ * they're the project's and the global ones aren't known yet.
+ */
+export function reviewSummary(global: ReviewSettings | null, project: ReviewOverrides, task: ReviewOverrides): string {
+  if (!global) return noOverrides(task) ? 'Default' : 'Changed';
+  const r = resolveReview(global, project, task);
+  if (r.strategy === 'off') return 'Off';
+  return `${strategyName(r.strategy)} · depth ${r.depth} · ${r.rounds} re-review${r.rounds === 1 ? '' : 's'}`;
+}
 
 /** A review's default name, from its PR. */
 const reviewName = (pr: ReviewablePr) => `Review #${pr.number} ${pr.title}`.slice(0, 100).trim();
@@ -80,6 +91,8 @@ export function NewSessionDialog({
   // The task's own code review settings (CreateSessionRequest.review), over the project's.
   const [reviewOver, setReviewOver] = useState<ReviewOverrides>(() => readOverrides(initial?.review));
   const reviewDefaults = useReviewDefaults();
+  // Advanced's Code review is collapsed too, unless a retry asked for settings of its own.
+  const [reviewOpen, setReviewOpen] = useState(() => !noOverrides(readOverrides(initial?.review)));
   // A learn session saves to the project's dedicated datapack, so it needs one and Meko on. It seeds a
   // new datapack, so it's offered only when the dialog opens on it (`learnFirst`) or retries one,
   // never in a plain New session on a datapack that already knows the project.
@@ -861,16 +874,37 @@ export function NewSessionDialog({
                 </>
               )}
               {!review && !learn && (
-                <fieldset className="ns-review">
-                  <legend className="label">Code review</legend>
-                  <ReviewFields
-                    id="ns-review"
-                    scoped
-                    inherited={inheritedReview(reviewDefaults, project.settings.codeReview ?? {})}
-                    value={reviewOver}
-                    onChange={setReviewOver}
-                  />
-                </fieldset>
+                <div className="ns-review-section">
+                  <button
+                    type="button"
+                    id="ns-review-toggle"
+                    className="advanced-toggle"
+                    aria-expanded={reviewOpen}
+                    aria-controls="ns-review-body"
+                    onClick={() => setReviewOpen((v) => !v)}
+                  >
+                    <span className="advanced-caret" aria-hidden="true">
+                      {reviewOpen ? '▾' : '▸'}
+                    </span>
+                    <b>Code review</b>
+                    {!reviewOpen && (
+                      <span className="advanced-summary mono">
+                        {reviewSummary(reviewDefaults, project.settings.codeReview ?? {}, reviewOver)}
+                      </span>
+                    )}
+                  </button>
+                  {reviewOpen && (
+                    <fieldset className="ns-review" id="ns-review-body" aria-labelledby="ns-review-toggle">
+                      <ReviewFields
+                        id="ns-review"
+                        scoped
+                        inherited={inheritedReview(reviewDefaults, project.settings.codeReview ?? {})}
+                        value={reviewOver}
+                        onChange={setReviewOver}
+                      />
+                    </fieldset>
+                  )}
+                </div>
               )}
             </div>
           )}
