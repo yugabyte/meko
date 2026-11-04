@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -36,9 +35,6 @@ func TestEveryCommandHasHelp(t *testing.T) {
 			listed := strings.Contains(usage.String(), "\n  "+fmt.Sprintf("%-22s", c.name))
 			if listed == (c.hidden || c.subcommands) {
 				t.Errorf("%s %s: listed in --help %v, hidden %v", prog, c.name, listed, c.hidden)
-			}
-			if c.promptOnly {
-				continue
 			}
 			var out, errb bytes.Buffer
 			code := runProg(prog, append(strings.Fields(c.name), "--help"), &out, &errb)
@@ -89,11 +85,32 @@ func TestUsage(t *testing.T) {
 	want(t, "help for an unknown command", code, exitUsage, errs, `unknown command "frobnicate"`)
 
 	code, out, _ = runSh("--help")
-	want(t, "meko-cli --help", code, 0, out, "Usage: meko-cli [<command> [flags]]")
-	code, out, _ = runSh("help", "use")
-	want(t, "meko-cli help use", code, 0, out, "Examples, at the meko-cli prompt:")
-	code, _, errs = runSh("use", "research")
-	want(t, "use outside the prompt", code, exitUsage, errs, "use works only at the prompt")
+	want(t, "meko-cli --help", code, 0, out, "\nUsage: meko-cli <command> [flags]\n")
+	// meko-cli runs one command a run: alone it prints its help and reads nothing, a pipe included.
+	piped := strings.NewReader("datapacks\n")
+	old := stdin
+	stdin = piped
+	t.Cleanup(func() { stdin = old })
+	code, alone, errs := runSh()
+	if code != 0 || alone != out || errs != "" {
+		t.Errorf("meko-cli alone: exit %d, %q, %q; want its --help %q", code, alone, errs, out)
+	}
+	if piped.Len() != len("datapacks\n") {
+		t.Errorf("meko-cli alone read %d bytes of stdin", len("datapacks\n")-piped.Len())
+	}
+	for _, gone := range []string{"\n  use ", "\n  exit ", "\n  help ", "prompt"} {
+		if strings.Contains(out, gone) {
+			t.Errorf("meko-cli --help still has %q:\n%s", gone, out)
+		}
+	}
+	code, out, _ = runSh("help", "search")
+	want(t, "meko-cli help search", code, 0, out, "meko-cli search: search memories")
+	for _, cmd := range []string{"use", "exit", "quit"} {
+		code, _, errs = runSh(cmd, "research")
+		want(t, "meko-cli "+cmd, code, exitUsage, errs, "meko-cli: unknown command \""+cmd+"\"\n")
+	}
+	code, _, errs = runSh("--data-dir", t.TempDir())
+	want(t, "meko-cli with only --data-dir", code, exitUsage, errs, "meko-cli: unknown command \"--data-dir\"\n")
 	code, _, errs = runSh("start")
 	want(t, "meko-cli start", code, exitUsage, errs, "meko-cli: start is a meko command: meko start\n")
 }
@@ -168,58 +185,27 @@ func TestMainPicksTheProgramByName(t *testing.T) {
 	if out.Len() != 0 {
 		t.Errorf("as mekosh, output %q", out.String())
 	}
-}
-
-func TestSplitWords(t *testing.T) {
-	for line, words := range map[string][]string{
-		"search \"how do releases work\" --limit 3\n": {"search", "how do releases work", "--limit", "3"},
-		`add_memory 'it''s' "a \"b\" \$c \d"`:         {"add_memory", "its", `a "b" $c \d`},
-		`upload my\ notes.md`:                         {"upload", "my notes.md"},
-		"   \t\n":                                     nil,
-		"# a comment":                                 nil,
-		"datapacks # and a comment":                   {"datapacks"},
-		`search a#b ""`:                               {"search", "a#b", ""},
+	// mekosh took --data-dir before the command; the meko-cli command it names takes it after, so it runs.
+	for args, cmd := range map[string]string{
+		"--data-dir /x search q":  "meko-cli search q --data-dir /x",
+		"--data-dir=/x datapacks": "meko-cli datapacks --data-dir=/x",
+		"-data-dir /x":            "meko-cli",
+		"search q --data-dir /x":  "meko-cli search q --data-dir /x",
+		"--help":                  "meko-cli --help",
 	} {
-		got, err := splitWords(line)
-		if err != nil || !reflect.DeepEqual(got, words) {
-			t.Errorf("splitWords(%q) = %q, %v; want %q", line, got, err, words)
-		}
+		errb.Reset()
+		code = Main("/home/me/.local/bin/mekosh", strings.Fields(args), &out, &errb)
+		want(t, "mekosh "+args, code, exitUsage, errb.String(), "mekosh is meko-cli now: "+cmd+"\n")
 	}
-	if _, err := splitWords(`search "unclosed`); err == nil || !strings.Contains(err.Error(), `unclosed " quote`) {
-		t.Errorf("an unclosed quote: %v", err)
-	}
+	// The named command runs: with no server, datapacks says so rather than "unknown command".
+	code, _, errs := runSh(mekoshArgs([]string{"--data-dir", shortDir(t), "datapacks"})...)
+	want(t, "the command mekosh names", code, exitNotRunning, errs, "isn't running")
 }
 
 func TestShellQuote(t *testing.T) {
 	if got := shellQuote([]string{"meko-cli", "search", "it's here", "--limit", "3", ""}); got !=
 		`meko-cli search 'it'\''s here' --limit 3 ''` {
 		t.Errorf("shellQuote = %s", got)
-	}
-}
-
-func TestPromptArgs(t *testing.T) {
-	for _, c := range []struct {
-		words             []string
-		datapack, dataDir string
-		want              []string
-	}{
-		{[]string{"search", "q"}, "research", "", []string{"search", "q", "--datapack", "research"}},
-		{[]string{"search", "q", "--datapack=other"}, "research", "", []string{"search", "q", "--datapack=other"}},
-		{[]string{"search", "q", "-datapack", "other"}, "research", "", []string{"search", "q", "-datapack", "other"}},
-		{[]string{"datapacks"}, "research", "/d", []string{"datapacks", "--data-dir", "/d"}},
-		{[]string{"add_memory", "x"}, "", "", []string{"add_memory", "x"}},
-		{[]string{"upload", "a.md"}, "cloud:c0ffee00", "", []string{"upload", "a.md", "--datapack", "cloud:c0ffee00"}},
-		// A word that names a flag isn't one unless it starts with -.
-		{[]string{"search", "datapack"}, "research", "", []string{"search", "datapack", "--datapack", "research"}},
-		{[]string{"add_memory", "data-dir"}, "", "/d", []string{"add_memory", "data-dir", "--data-dir", "/d"}},
-		// help's argument is the command to explain: it takes nothing from the prompt.
-		{[]string{"help"}, "research", "/d", []string{"help"}},
-		{[]string{"help", "search"}, "research", "/d", []string{"help", "search"}},
-		{[]string{"--help"}, "", "/d", []string{"--help"}},
-	} {
-		if got := promptArgs(c.words, c.datapack, c.dataDir); !reflect.DeepEqual(got, c.want) {
-			t.Errorf("promptArgs(%q, %q, %q) = %q, want %q", c.words, c.datapack, c.dataDir, got, c.want)
-		}
 	}
 }
 

@@ -389,16 +389,14 @@ func TestCloudDatapacks(t *testing.T) {
 	code, _, errs = runSh("export", "--data-dir", dir)
 	want(t, "export with no name, linked", code, 1, errs, "name this computer's datapack to export")
 
-	// The prompt: use finds Cloud's datapack, later lines go there, and deleting it goes back to the
-	// default.
-	withStdin(t, "use team-notes\nadd_memory \"kept from the prompt\"\nuse\ndelete_datapack team-notes\ny\nuse\n")
-	code, out, errs = runSh("--data-dir", dir)
-	want(t, "the prompt's use", code, 0, out+errs, "Using datapack team-notes\nAdded memory ")
-	want(t, "the prompt's delete_datapack", code, 0, out, "This deletes datapack team-notes and "+
+	// delete_datapack of Cloud's datapack, by name: it asks, then deletes it there.
+	withStdin(t, "y\n")
+	code, out, _ = runSh("delete_datapack", "--data-dir", dir, "team-notes")
+	want(t, "delete_datapack of Cloud's datapack", code, 0, out, "This deletes datapack team-notes and "+
 		"everything in it (memories, conversations, artifacts) for good\nDelete it? [y/N] \n"+
-		"Deleted datapack team-notes\nUsing the default datapack\nUsing the default datapack\n")
+		"Deleted datapack team-notes\n")
 	if _, out, _ = runSh("datapacks", "--data-dir", cloudDir); strings.Contains(out, "team-notes") {
-		t.Fatalf("the prompt's delete_datapack left it in Cloud:\n%s", out)
+		t.Fatalf("delete_datapack left it in Cloud:\n%s", out)
 	}
 
 	// With Meko Cloud down, this Meko's datapacks still work, export by name included.

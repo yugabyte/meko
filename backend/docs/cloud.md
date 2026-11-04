@@ -247,7 +247,7 @@ web app isn't known). `GET /datapacks` sorts them by name with this Meko's.
 ([api.md](api.md#cli)), so while Meko Cloud is linked they work on its datapacks and this Meko's, as
 an agent's do: `datapacks` lists both, a name is looked up among both (`datapack_search`'s first
 page), `create_datapack` makes one in Meko Cloud, and `upload` goes to the knowledge base of the
-datapack's side. Their messages never say which side a datapack is on (`Using datapack team-notes`). `meko-cli` never
+datapack's side. Their messages never say which side a datapack is on (`Deleted datapack team-notes`). `meko-cli` never
 reads the key. `export` works only on this Meko's datapacks, linked or not, since its route is
 Meko's own: it passes an id to `GET /api/v1/datapacks/:id/export`, and a name to
 `GET /api/v1/datapacks/export?name=`, which looks it up among this Meko's alone, so an export never

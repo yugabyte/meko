@@ -29,13 +29,12 @@ const docsURL = "https://mekodata.ai/docs/cli"
 
 // command is one command's help: the group meko --help (or meko-cli --help) lists it under, a one-line
 // summary, its usage line and examples. Its flags come from its flag set. A hidden command runs but
-// isn't listed; a promptOnly one is meko-cli's, and only at its prompt. A command of two words (meko
-// extension list) is a subcommand of the first, whose own row (subcommands, with no group) isn't
-// listed: its help lists its subcommands.
+// isn't listed. A command of two words (meko extension list) is a subcommand of the first, whose own
+// row (subcommands, with no group) isn't listed: its help lists its subcommands.
 type command struct {
-	name, group, summary, usage     string
-	examples                        []example
-	hidden, promptOnly, subcommands bool
+	name, group, summary, usage string
+	examples                    []example
+	hidden, subcommands         bool
 }
 
 type example struct{ cmd, note string }
@@ -201,7 +200,7 @@ var mekoCommands = []command{
 		}},
 }
 
-var mekoCLIGroups = []string{"Datapacks", "Memory and knowledge", "At the prompt only"}
+var mekoCLIGroups = []string{"Datapacks", "Memory and knowledge"}
 
 var mekoCLICommands = []command{
 	{name: "datapacks", group: "Datapacks", summary: "List the datapacks",
@@ -232,7 +231,7 @@ var mekoCLICommands = []command{
 	{name: "add_memory", group: "Memory and knowledge", summary: "Save a memory, word for word",
 		usage: `meko-cli add_memory "<text>" [flags]`, examples: []example{
 			{`meko-cli add_memory "CI runs on Linux and macOS"`, "save it to the default datapack"},
-			{"git log -1 --format=%B | meko-cli add_memory", "read the text from stdin (not at the prompt)"},
+			{"git log -1 --format=%B | meko-cli add_memory", "read the text from stdin"},
 		}},
 	{name: "upload", group: "Memory and knowledge", summary: "Add files to the knowledge base",
 		usage: "meko-cli upload <file>... [flags]", examples: []example{
@@ -243,15 +242,6 @@ var mekoCLICommands = []command{
 		usage: "meko-cli upload_status <key> [flags]", examples: []example{
 			{"meko-cli upload_status <key>", "the key upload printed"},
 		}},
-	{name: "use", group: "At the prompt only", promptOnly: true, summary: "Set the datapack later commands use",
-		usage: "use [<name|id>]", examples: []example{
-			{"use research", "search, add_memory, upload and upload_status use research unless a line names another"},
-			{"use", "print the datapack in use"},
-		}},
-	{name: "help", group: "At the prompt only", promptOnly: true, summary: "This list, or help <command>",
-		usage: "help [<command>]", examples: []example{{"help search", "search's examples and flags"}}},
-	{name: "exit", group: "At the prompt only", promptOnly: true, summary: "Leave (also quit, or Ctrl-D)",
-		usage: "exit", examples: []example{{"exit", "leave the prompt"}}},
 }
 
 // commandsOf are prog's commands.
@@ -264,9 +254,6 @@ func commandsOf(prog string) []command {
 
 // lookup finds prog's command called name.
 func lookup(prog, name string) (command, bool) {
-	if prog == progMekoCLI && name == "quit" {
-		name = "exit"
-	}
 	for _, c := range commandsOf(prog) {
 		if c.name == name {
 			return c, true
@@ -320,7 +307,7 @@ func printUsage(w io.Writer, prog string, start bool) {
 	if prog == progMekoCLI {
 		groups = mekoCLIGroups
 		fmt.Fprint(w, "meko-cli works with what Meko keeps: datapacks, memories, files and conversations\n"+
-			"Run it alone for a prompt, or give it one command\n\nUsage: meko-cli [<command> [flags]]\n")
+			"\nUsage: meko-cli <command> [flags]\n")
 	} else {
 		fmt.Fprint(w, "The universal, self-learning context engine for agentic applications\n\n")
 		if start {
@@ -350,11 +337,7 @@ func printUsage(w io.Writer, prog string, start bool) {
 func printCommandHelp(w io.Writer, prog string, c command, fs *flag.FlagSet) {
 	r, n := utf8.DecodeRuneInString(c.summary)
 	fmt.Fprintf(w, "%s %s: %c%s\n\nUsage: %s\n", prog, c.name, unicode.ToLower(r), c.summary[n:], c.usage)
-	if prog == progMekoCLI && c.promptOnly {
-		fmt.Fprintf(w, "\nExamples, at the meko-cli prompt:\n")
-	} else {
-		fmt.Fprintf(w, "\nExamples:\n")
-	}
+	fmt.Fprintf(w, "\nExamples:\n")
 	tw := tabwriter.NewWriter(w, 0, 0, 4, ' ', 0)
 	for _, e := range c.examples {
 		fmt.Fprintf(tw, "  %s\t%s\n", e.cmd, e.note)
@@ -452,7 +435,7 @@ func printFlags(w io.Writer, fs *flag.FlagSet) {
 func nearest(prog, name string) string {
 	best, bestD := "", 3
 	for _, c := range commandsOf(prog) {
-		if c.hidden || c.promptOnly {
+		if c.hidden {
 			continue
 		}
 		if len(name) >= 3 && strings.HasPrefix(c.name, name) {
