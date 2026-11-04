@@ -94,6 +94,16 @@ export function serviceFailure(svc: ServiceManager, message: string, logsDir: st
   );
 }
 
+/**
+ * The install's last words when AgentK uses the Meko on this computer, with no Meko Cloud link:
+ * projects' memory then stays on this computer, out of the team's reach.
+ */
+function warnUnlinked(): void {
+  ui.warn('Meko Cloud', 'not linked');
+  ui.note("For best results and sharing with your team: link Meko Cloud in Meko's web UI (Settings › Meko Cloud), or run meko cloud_link");
+  ui.blank();
+}
+
 /** Installs and (re)starts both background services. Returns false when skipped. */
 function installServices(paths: Paths): boolean {
   const svc = hostServices();
@@ -126,15 +136,16 @@ function installServices(paths: Paths): boolean {
     if (e instanceof ServiceError) throw new ServiceError(serviceFailure(svc, e.message, paths.logs), { cause: e });
     throw e;
   }
+  // Only what needs a look: services that run, and start at login, go without saying.
   for (const s of SERVICES) {
     const st = svc.state(s);
-    if (st.running) ui.ok(svc.id(s), 'running');
-    else ui.warn(svc.id(s), `${st.text}. Check: ${svc.statusHint(s)}`);
+    if (!st.running) ui.warn(svc.id(s), `${st.text}. Check: ${svc.statusHint(s)}`);
   }
   const boot = svc.bootCheck();
-  if (boot.ok) ui.ok(boot.label, boot.detail);
-  else ui.warn(boot.label, boot.detail);
-  if (boot.note) ui.note(boot.note);
+  if (!boot.ok) {
+    ui.warn(boot.label, boot.detail);
+    if (boot.note) ui.note(boot.note);
+  }
   return true;
 }
 
@@ -164,6 +175,11 @@ export interface InstallMekoDeps {
   /** Hands Meko a Meko Cloud key to keep as its link (`handOverMekoKey`: `meko cloud_link`). */
   link: (l: OwnMekoLink) => Promise<{ ok: true } | { ok: false; error: string }>;
   ui: Pick<typeof ui, 'ok' | 'warn' | 'note' | 'section'>;
+  /**
+   * Called when AgentK uses the Meko on this computer, not linked to Meko Cloud: the installer ends
+   * with a warning to link it (`warnUnlinked`).
+   */
+  unlinked?: () => void;
 }
 
 function hostOf(url: string): string {
@@ -292,7 +308,7 @@ export async function installMeko(cfg: Config, o: { keyArg?: string; urlArg?: st
   d.ui.ok('Meko', label);
   // The Meko on this computer, with its own token: the only server `meko token` is the key for.
   const onLocal = !!local && meko.url === local.url && meko.apiKey === local.token;
-  if (!cloud?.apiKey && label.startsWith('on this computer') && d.canAsk) d.ui.note(`To keep projects' memory in Meko Cloud instead: ${linkHint}`);
+  if (!cloud?.apiKey && label.startsWith('on this computer')) d.unlinked?.();
 
   // --no-meko never set Meko up for the agents, and still doesn't.
   const ensureInClaude = o.noMeko ? undefined : d.ensureInClaude;
@@ -450,7 +466,9 @@ export async function runInstall(args: string[]): Promise<void> {
     const setup = { canAsk, installDeps: values['install-deps'], noInstallDeps: values['no-install-deps'] };
     const urlArg = values['meko-url'];
     if (urlArg !== undefined && !/^https?:\/\/[^\s]+$/.test(urlArg)) throw new InstallError(`--meko-url takes Meko's MCP URL, like http://127.0.0.1:7778/mcp (got "${urlArg}").`);
+    let unlinked = false;
     await installMeko(cfg, { keyArg: values['meko-key'], urlArg, noMeko: values['no-meko'] }, {
+      unlinked: () => (unlinked = true),
       ask,
       canAsk,
       check: checkMeko,
@@ -458,9 +476,11 @@ export async function runInstall(args: string[]): Promise<void> {
       link: (l) => handOverMekoKey(cfg.meko.home || null, l),
       ensureInKiro: !agents.includes('kiro') ? undefined : async (url, apiKey, onLocal) => {
         const gaps = async () => kiroMekoGaps();
+        // Its output is kept, and shown only if it fails (ensureMekoSetup).
+        const output: string[] = [];
         await ensureMekoSetup(
           { url, apiKey, client: 'kiro', local: onLocal ? { home: cfg.meko.home || null } : null, ...setup },
-          { gaps, latest: () => latestMekoSetup(), run: (pkg) => runMekoSetup(pkg, { url, apiKey, client: 'kiro' }), ask, say, warn: (l, t) => ui.warn(l, t) },
+          { gaps, latest: () => latestMekoSetup(), run: (pkg) => runMekoSetup(pkg, { url, apiKey, client: 'kiro', log: (l) => output.push(l) }), output: () => output, ask, say, warn: (l, t) => ui.warn(l, t) },
         );
       },
       ensureInClaude: !agents.includes('claude') ? undefined : async (url, apiKey, keyFromEnv, onLocal) => {
@@ -476,9 +496,10 @@ export async function runInstall(args: string[]): Promise<void> {
             ...(await claudeTokenGaps(c, url, apiKey, tryMekoToken)),
           ];
         };
+        const output: string[] = [];
         await ensureMekoSetup(
           { url, apiKey, local: onLocal ? { home: cfg.meko.home || null } : null, ...setup },
-          { gaps, latest: () => latestMekoSetup(), run: (pkg) => runMekoSetup(pkg, { url, apiKey }), ask, say, warn: (l, t) => ui.warn(l, t) },
+          { gaps, latest: () => latestMekoSetup(), run: (pkg) => runMekoSetup(pkg, { url, apiKey, log: (l) => output.push(l) }), output: () => output, ask, say, warn: (l, t) => ui.warn(l, t) },
         );
       },
       ui,
@@ -495,8 +516,6 @@ export async function runInstall(args: string[]): Promise<void> {
       ui.warn('Database', `${tildify(moved)} (moved off ${fsType(dirname(db))}: SQLite locking is unreliable on network filesystems)`);
       cfg.state.dbPath = moved;
       db = moved;
-    } else {
-      ui.ok('Database', tildify(db));
     }
 
     welcomeTour(cfg, fresh);
@@ -508,19 +527,14 @@ export async function runInstall(args: string[]): Promise<void> {
     if (move && 'plan' in move) ui.note(`AgentK's home moves to ${tildify(move.plan.to)} once the server has started: every session ends and resumes there.`);
     else if (move) ui.warn('Home', `stays in ${tildify(paths.home)} for now: ${move.skip}`);
 
-    // 7. Services
-    ui.section('Services');
+    // 7. Services: rows only for what needs a look (the summary's "AgentK is running" says the rest).
     let running = false;
     if (values['no-service']) {
       ui.warn('Services', 'skipped (--no-service). Start the server with: me_koder serve');
     } else if (installServices(paths)) {
       const probe = await waitForServer(paths);
-      if (probe.ok) {
-        ui.ok('Server', `answering (version ${probe.version})`);
-        running = true;
-      } else {
-        ui.warn('Server', `not answering yet (${probe.error}). See: me_koder logs`);
-      }
+      if (probe.ok) running = true;
+      else ui.warn('Server', `not answering yet (${probe.error}). See: me_koder logs`);
     }
 
     // 8. Where to open it
@@ -536,7 +550,7 @@ export async function runInstall(args: string[]): Promise<void> {
         ui.note('Opened it in your browser, where the AgentK tour starts.');
       }
     } else {
-      ui.text(style.bold('Done.'));
+      ui.text(style.bold(running ? 'Done. AgentK is running.' : 'Done.'));
       ui.blank();
       ui.row('Browser', meko.meko?.webOff
         ? "Meko's web UI is off: turn it on with meko ui start, then open AgentK with me_koder ui"
@@ -544,9 +558,11 @@ export async function runInstall(args: string[]): Promise<void> {
           ? 'the Meko on this computer is too old to serve AgentK: update it with meko update'
           : "Meko isn't running: start it with meko start, then open AgentK with me_koder ui");
     }
+    if (meko.meko?.webUrl) ui.row('Open', 'me_koder ui');
     ui.row('Status', 'me_koder status');
     ui.row('Logs', 'me_koder logs -f');
     ui.blank();
+    if (unlinked) warnUnlinked();
   } catch (e) {
     if (e instanceof InstallError || e instanceof ServiceError || e instanceof PrivateDirError) {
       process.stderr.write('\n');

@@ -293,8 +293,8 @@ func printStatusShort(l paths.Layout, st server.StatusReply, exts func() extensi
 			case !s.Running:
 				k, state = stepFail, "not running"
 			}
-			if s.Line != "" && !s.TimedOut {
-				state += ", " + s.Line
+			if !s.TimedOut {
+				k, state = extensionState(extensionTitle(n), k, state, s.Line, ", %s")
 			}
 			r.step(k, extensionTitle(n), state)
 		}
@@ -341,6 +341,24 @@ func extensionTitle(name string) string {
 		return c.Title
 	}
 	return name
+}
+
+// extensionState is an extension's row in status, its mark and state, from its status command's
+// first line. A line that starts with a mark, as the extensions' own headline does ("✓ AgentK 0.2
+// is running (pid 7, up 2h)"), gives the row its mark (a server that runs but doesn't answer is
+// "!" though it exits 0) and its state: the line without the mark and the extension's title. Any
+// other line is added to state (running or not running) through format, and k (from the exit
+// code) stays.
+func extensionState(title string, k stepKind, state, line, format string) (stepKind, string) {
+	for mark, kind := range map[string]stepKind{"✓ ": stepOK, "! ": stepWarn, "✗ ": stepFail} {
+		if rest, ok := strings.CutPrefix(line, mark); ok {
+			return kind, strings.TrimPrefix(rest, title+" ")
+		}
+	}
+	if line == "" {
+		return k, state
+	}
+	return k, state + fmt.Sprintf(format, line)
 }
 
 // printStatusVerbose is status --verbose: everything the server and this install say.
@@ -450,8 +468,8 @@ func printSetup(l paths.Layout, exts func() extensionResults, stdout io.Writer) 
 		case !s.Running:
 			state = "not running"
 		}
-		if s.Line != "" && !s.TimedOut {
-			state += " (" + s.Line + ")"
+		if !s.TimedOut {
+			_, state = extensionState(extensionTitle(n), stepOK, state, s.Line, " (%s)")
 		}
 		fmt.Fprintf(stdout, "  Extension:     %s, %s\n", n, state)
 	}

@@ -88,6 +88,18 @@ describe("installer: Meko's Meko Cloud link, or the Meko on this computer", () =
     expect(c.meko).toEqual(DEFAULT_CONFIG.meko);
   });
 
+  // The install then ends with "! Meko Cloud  not linked" and how to link it.
+  it('says Meko Cloud is not linked only when it uses the Meko on this computer', async () => {
+    for (const [cloud, want] of [[UNSET, true], [LINKED, false], [THROUGH, false]] as const) {
+      let unlinked = false;
+      const { d, said } = deps({ local: true, cloud });
+      d.unlinked = () => (unlinked = true);
+      await installMeko(cfg(), { noMeko: false }, d);
+      expect(unlinked).toBe(want);
+      expect(said.some((s) => s.includes('Meko Cloud instead'))).toBe(false);
+    }
+  });
+
   it('hands a key it is given to Meko, and takes a copy of the local Meko\'s token for the local Meko', async () => {
     const c = cfg();
     c.meko.apiKey = 'mko_tkn_old';

@@ -68,7 +68,7 @@ describe('the commands Meko runs', () => {
     expect(statSync(getPaths(home).webSock).isSocket()).toBe(true);
     expect(statSync(join(home, 'run')).mode & 0o077).toBe(0);
     const status = presenter('status');
-    expect([status.code, status.out]).toEqual([0, expect.stringMatching(/Server: running \(pid \d+\)/)]);
+    expect([status.code, status.out]).toEqual([0, expect.stringMatching(/^✓ Presenter \S+ is running \(pid \d+, up \d+s\)\n {2}✓ Server {10}healthy\n/)]);
     expect(presenter('stop').out).toContain('Presenter stopped');
     expect(existsSync(join(home, 'run', 'server.pid'))).toBe(false);
   });

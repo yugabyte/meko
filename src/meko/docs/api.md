@@ -426,7 +426,8 @@ agent's own client token mustn't be able to set off for another agent.
 
 `meko agent list` prints a row per installed agent and where agents connect; `--json` prints the
 route's `data`. `meko agent connect <agent>` prints `Connected Kiro CLI to Meko`, a note when there's
-one, and that running sessions need a restart; alone, it prints the name, URL, header and token any
+one, and what to run next: starting a new session of the agent (ones already running need a
+restart), after `meko start` when Meko isn't running, then the steps not set up yet; alone, it prints the name, URL, header and token any
 MCP client needs, this Meko's, linked to Meko Cloud or not, and `meko agent connect <agent>` for
 each agent installed. `meko agent disconnect
 <agent>` prints `Disconnected Claude Code from Meko`. They act in the CLI's own process, reading the

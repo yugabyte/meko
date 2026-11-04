@@ -8,10 +8,19 @@ Meko has two commands, one binary under two names, as PostgreSQL has `postgres` 
 runs Meko, and `meko-cli` works with what it keeps. `meko --help` and `meko-cli --help` list them, and
 `<command> --help` gives each one's examples and flags. `meko` alone (or `meko --help`) opens with
 what to type next, in bold on a terminal, for the state Meko is in: `meko install` on a computer
-without it, `meko start` when it's set up but stopped, `meko ui` and `meko agent connect` when it's
-running. `install`, `start`, `stop` and `status` print a
+without it, `meko start` when it's set up but stopped, and when it's running `meko ui` and the
+steps not set up yet. `install`, `start`, `stop` and `status` print a
 short summary: a row per step marked ✓, ! or ✗, the links for people (the web UI, on 7777) and for
-agents (MCP and the REST API, on 7778), and what to run next.
+agents (MCP and the REST API, on 7778), and what to run next. What to run next (`meko install`,
+`meko start`, `meko --help` and `meko agent connect <agent>`) offers only what isn't set up yet,
+and leaves out a step whose state it can't read. In order: `meko ui` (`meko ui start` while the web
+UI is off), using Meko in an agent (`meko agent connect claude`, or the first agent installed when
+Claude Code isn't), learning from your conversations (`meko memory-extractor use claude`, when
+Claude Code is installed), sharing through Meko Cloud (`meko cloud_link`), and AgentK (`meko
+extension install agentk`, or `meko ui /ext/agentk/` once it's there). `meko start` adds `meko-cli`,
+and `install` and `start` end with `meko status`. `meko agent connect <agent>` opens with starting a
+new session of that agent (after `meko start` while Meko isn't running), in place of `meko ui` and
+the connect step.
 
 | `meko` | What it does |
 |---|---|

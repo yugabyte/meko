@@ -276,8 +276,8 @@ func startHere(w io.Writer) {
 	var cmds [][2]string
 	if up, _ := running(l.Lock); up {
 		title = "Meko is running. Next:"
-		cmds = [][2]string{{"meko ui", "open the web UI"},
-			{"meko agent connect claude", "connect Claude Code to it (or codex, kiro, opencode, cursor)"}}
+		c, _ := newClient(l)
+		cmds = nextSteps(readNextState(l, c), nextHelp)
 	} else if _, err = os.Stat(l.Root); err == nil {
 		title = "Meko is set up but not running. Start it with:"
 		cmds = [][2]string{{"meko start", "start Meko, then meko ui opens the web UI"}}
@@ -310,7 +310,7 @@ func printUsage(w io.Writer, prog string, start bool) {
 		fmt.Fprint(w, "meko-cli works with what Meko keeps: datapacks, memories, files and conversations\n"+
 			"\nUsage: meko-cli <command> [flags]\n")
 	} else {
-		fmt.Fprint(w, "The universal, self-learning context engine for agentic applications\n\n")
+		fmt.Fprint(w, "The Context Engine for Agentic Applications\n\n")
 		if start {
 			startHere(w)
 		}

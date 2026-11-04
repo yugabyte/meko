@@ -40,6 +40,13 @@ describe('health probe', () => {
     expect(await waiting).toEqual({ ok: true, version: '1.2.3' });
   });
 
+  it("reads the server's pid and start time, and goes without them from a server before them", async () => {
+    const s = createServer((_req, res) => res.end(JSON.stringify({ ok: true, version: '1.2.4', pid: 42, startedAt: '2026-11-03T10:00:00.000Z' })));
+    server = s;
+    await new Promise<void>((resolve) => s.listen(paths.webSock, () => resolve()));
+    expect(await probeLocal(paths)).toEqual({ ok: true, version: '1.2.4', pid: 42, startedAt: '2026-11-03T10:00:00.000Z' });
+  });
+
   it('says the server is not running when nothing listens on its socket', async () => {
     expect(await probeLocal(paths)).toMatchObject({ ok: false, error: expect.stringMatching(/ENOENT|ECONNREFUSED/) });
     expect((await waitForServer(paths, 600)).ok).toBe(false);

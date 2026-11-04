@@ -152,10 +152,14 @@ func runAgentConnect(l paths.Layout, name string, stdout, stderr io.Writer) int 
 	for _, n := range r.Notes {
 		fmt.Fprintln(stdout, n)
 	}
-	fmt.Fprintln(stdout, "Its new sessions have Meko's tools; ones already running need a restart")
-	if t.Kind == agents.KindLocal && !a.running {
-		fmt.Fprintln(stdout, "Meko isn't running: start it with meko start")
+	var c *client
+	if a.running {
+		c, _ = newClient(l)
 	}
+	s := readNextState(l, c)
+	s.running = a.running
+	s.agent, _ = agents.Lookup(name)
+	newReport(stdout).next(nextSteps(s, nextConnect))
 	return exitOK
 }
 

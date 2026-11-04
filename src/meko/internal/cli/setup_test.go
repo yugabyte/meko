@@ -305,7 +305,10 @@ func TestInstallExtensionSetsUpAnInstalledAgentK(t *testing.T) {
 	ak := filepath.Join(home, ".local", "bin", "agent-k-local")
 	log := fakeExtension(t, ak)
 	code, out, errs = run("extension", "install", "agentk", "--data-dir", dir)
-	want(t, "extension install", code, 0, out+errs, "AgentK uses this Meko")
+	want(t, "extension install", code, 0, out+errs, "setting it up to use this Meko")
+	if strings.Contains(out, "start and stop it") {
+		t.Errorf("extension install says how meko start and stop run it:\n%s", out)
+	}
 	wantArgs := "install --meko-url http://127.0.0.1:" + port + "/mcp --meko-key " + strings.TrimSpace(tok) +
 		" --non-interactive\n"
 	if got := readLog(t, log); got != wantArgs {
