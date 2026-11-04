@@ -51,7 +51,7 @@ lands without a release. Use exactly one of these nine types:
 | `feat` | yes | New user-visible behavior |
 | `fix` | yes | Bug fixes, including build or packaging fixes that change what ships |
 | `perf` | yes | Faster, same behavior |
-| `deps` | yes | Dependency bumps that ship (Dependabot's npm and Go PRs use it too: `deps(agentk)`, `deps(meko)`, `deps(meko/memory-engine)`, `deps(meko/web-ui)`; their dev-only bumps in backend/ use `chore`) |
+| `deps` | yes | Dependency bumps that ship (Dependabot's npm and Go PRs use it too: `deps(agentk)`, `deps(meko)`, `deps(meko/memory-engine)`, `deps(meko/web-ui)`; their dev-only bumps in src/meko use `chore`) |
 | `ci` | no | Workflows, Dependabot config, GitHub Actions bumps |
 | `test` | no | Tests only |
 | `docs` | no | Markdown docs: README, CONTRIBUTING, AGENTS, REVIEW, `docs/` |
@@ -73,10 +73,10 @@ The rest of the subject:
 
   | Component | Where |
   |---|---|
-  | `agentk` | AgentK, `extensions/agentk` |
-  | `meko` | Meko, `backend/` |
-  | `presenter` | Presenter, `extensions/presenter` (its own train, `presenter-release.yml`) |
-  | `repo` | The shared root: `.github/`, `scripts/`, root docs, `.claude/` |
+  | `agentk` | AgentK, `src/extensions/agentk` |
+  | `meko` | Meko, `src/meko` |
+  | `presenter` | Presenter, `src/extensions/presenter` (its own train, `presenter-release.yml`) |
+  | `repo` | The shared root: `.github/`, `scripts/`, `assets/`, root docs, `.claude/` |
 
   A root file that belongs to one component (`agentk-release.yml` builds AgentK) takes that
   component, not `repo`. The list is `COMPONENTS` in `scripts/check-title.sh`; a new extension
@@ -86,8 +86,8 @@ The rest of the subject:
   `fix(agentk/meko,meko/cli): …`. It releases every product it names, so name a component only
   when the change alters what it ships; one that only touches another (AgentK's tests reading a
   root script) takes the one it ships in. Meko's release workflow runs only on pushes that change
-  `backend/**`, `scripts/release/**` or `.github/workflows/meko-release.yml` (Presenter's:
-  `extensions/presenter/**`, `scripts/release/**` or its workflow), so a `meko` in a title whose
+  `src/meko/**`, `scripts/release/**` or `.github/workflows/meko-release.yml` (Presenter's:
+  `src/extensions/presenter/**`, `scripts/release/**` or its workflow), so a `meko` in a title whose
   PR changes none of them waits for the next push that does.
 - `/<area>` is optional: one lowercase name (letters, digits, dashes) for the part of the
   component it touches, e.g. `agentk/web`, `agentk/server`, `agentk/meko` (AgentK's Meko

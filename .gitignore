@@ -12,10 +12,10 @@ state.db
 state.db-*
 *.bak-*
 # Laid beside the mod by Claude Code when it loads it from here (claude --plugin-dir src/mod/agentk).
-extensions/agentk/src/mod/agentk/.claude-plugin/types/
-extensions/agentk/src/mod/agentk/tsconfig.json
-# Meko backend build output, and the embedding model the Go tests keep between runs.
-backend/bin/
-backend/memory_engine/.models/
+src/extensions/agentk/src/mod/agentk/.claude-plugin/types/
+src/extensions/agentk/src/mod/agentk/tsconfig.json
+# Meko build output, and the embedding model the Go tests keep between runs.
+src/meko/bin/
+src/meko/memory_engine/.models/
 # Scratch files agents leave beside the skills (drafts, notes): never part of the repo.
 .claude/tmp/
