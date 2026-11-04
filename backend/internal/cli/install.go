@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -25,6 +26,37 @@ import (
 
 // newReleaseClient reads a repo's GitHub releases; tests replace it.
 var newReleaseClient = update.NewClient
+
+// releaseClient is the client for [update]'s repo, checking each release's signature as
+// require_signature says; notice is told of a release staged without that check.
+func releaseClient(cfg config.Update, notice func(string)) *update.Client {
+	c := newReleaseClient(cfg.Repo)
+	c.AllowUnsigned, c.Notice = !cfg.RequireSignature, notice
+	return c
+}
+
+// unsignedNotices keeps the notices of releases staged without a signature check, to print as
+// warning rows once the steps (and their dots) are done.
+type unsignedNotices struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (n *unsignedNotices) add(s string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.lines = append(n.lines, s)
+}
+
+// print prints the notices kept so far on w, as warning rows, and forgets them.
+func (n *unsignedNotices) print(w io.Writer) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for _, l := range n.lines {
+		spin.Row(w, spin.Warn, spin.Color(w), "Release", l)
+	}
+	n.lines = nil
+}
 
 // runningRelease finds the release install the running binary belongs to; tests replace it.
 var runningRelease = update.Running
@@ -356,7 +388,7 @@ func installExtension(ctx context.Context, l paths.Layout, name string, o extIns
 		if !lock.TryLock() {
 			return update.ErrLocked
 		}
-		cmd, err = installRelease(ctx, l, cfg.Update.Repo, name, o.version, home, stdout)
+		cmd, err = installRelease(ctx, l, cfg.Update, name, o.version, home, stdout)
 		lock.Unlock()
 		if err != nil {
 			return err
@@ -409,15 +441,16 @@ func readClientToken(l paths.Layout, cfg config.Config) (string, error) {
 
 // installRelease installs a Managed extension from its newest release (its bad versions skipped),
 // or from the release of version, into its app folder, as Meko's own installs go: the tarball for
-// this platform checked against SHA256SUMS, unpacked, its binary checked to run here, app/current
+// this platform checked against SHA256SUMS and its signature, unpacked, its binary checked to run here, app/current
 // pointed at it, and ~/.local/bin/<command> at app/current unless that's another data folder's. It
 // returns the link, or app/current's command when there's none.
-func installRelease(ctx context.Context, l paths.Layout, repo, name, version, home string,
+func installRelease(ctx context.Context, l paths.Layout, upd config.Update, name, version, home string,
 	stdout io.Writer) (string, error) {
 	cat := extensions.Known[name]
 	dl, cancel := context.WithTimeout(ctx, extensions.InstallTimeout)
 	defer cancel()
-	c := newReleaseClient(repo)
+	var notices unsignedNotices
+	c := releaseClient(upd, notices.add)
 	looking := spin.Wait(stdout, "Looking for "+cat.Title+"'s releases")
 	rels, err := c.Releases(dl)
 	looking.Clear()
@@ -451,6 +484,7 @@ func installRelease(ctx context.Context, l paths.Layout, repo, name, version, ho
 		return "", err
 	}
 	installing.Done(fmt.Sprintf("%s %s (%s), downloaded and checked", cat.Title, ver, rel.Tag))
+	notices.print(stdout)
 	if err := app.Repoint(ver); err != nil {
 		return "", err
 	}

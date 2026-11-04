@@ -44,7 +44,10 @@ Part of the [AgentK design](../design.md).
   Meko picks the tarball for its platform, and skips releases with no build for it. Releases
   since macOS support always include the macOS build: publishing waits for it. A hand-run rebuild
   takes only tags from after the move to `extensions/agentk`. Each release also includes
-  `SHA256SUMS`, a build provenance attestation and `install.sh`, which only says that Meko installs
+  `SHA256SUMS`, its signature `SHA256SUMS.sig` (made with the release environment's key, which
+  only `main` can use; Meko refuses a release whose signature doesn't verify, and by default one
+  with none: the backend's `docs/install.md`, "Signed releases"), a build provenance attestation
+  and `install.sh`, which only says that Meko installs
   AgentK (`meko extension install agentk`): the Mekos from before Meko installed AgentK ran the
   newest release's `install.sh`, and an older AgentK's own instructions still name it. Release tarballs carry the usage stats collector's URL (`CALL_HOME_URL`, from the repo variable of that name) when it's set ([Usage stats](usage-stats.md)). Afterwards, AgentK's releases beyond the newest 5 in each lane (`stable`, or the
   prerelease identifier such as `beta`, per tag prefix) are deleted, except the newest `v…` one;
@@ -154,7 +157,7 @@ sees of it:
    **Update automatically** off for AgentK until that switch is set; AgentK keeps that one key when
    it saves its config.
 2. **The update.** `POST /api/v1/extensions/agentk/update` starts Meko's job: it downloads the
-   tarball and checks it against `SHA256SUMS`, unpacks it next to the current version, checks that
+   tarball, checks `SHA256SUMS`'s signature and then the tarball against `SHA256SUMS`, unpacks it next to the current version, checks that
    it runs (`agentk version --json`, `agentk selftest`), writes its record
    (`app/update-pending.json`) and points `app/current` at it, then runs `agentk restart`. That
    restarts only the server's service, and waits up to 100 s for the server to answer as the

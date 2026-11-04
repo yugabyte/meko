@@ -80,6 +80,7 @@ func presenterReleases(t *testing.T, version string, tgz []byte) {
 	goos, arch := update.Platform()
 	name := update.PackageTarball("presenter", version, goos, arch)
 	h := sha256.Sum256(tgz)
+	sums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(h[:]), name)
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -89,19 +90,22 @@ func presenterReleases(t *testing.T, version string, tgz []byte) {
 				{Tag: "agentk-v0.20261030.0", Assets: []update.Asset{{Name: "install.sh"}}},
 				{Tag: "presenter-v" + version, Assets: []update.Asset{
 					{Name: name, BrowserURL: srv.URL + "/tar"}, {Name: update.Sums, BrowserURL: srv.URL + "/sums"},
+					{Name: update.SumsSig, BrowserURL: srv.URL + "/sig"},
 				}},
 			})
 		case "/tar":
 			_, _ = w.Write(tgz)
 		case "/sums":
-			_, _ = fmt.Fprintf(w, "%s  %s\n", hex.EncodeToString(h[:]), name)
+			_, _ = fmt.Fprint(w, sums)
+		case "/sig":
+			_, _ = fmt.Fprint(w, signSums(sums))
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	t.Cleanup(srv.Close)
 	old := newReleaseClient
-	newReleaseClient = func(string) *update.Client { return &update.Client{Repo: "o/r", API: srv.URL, HTTP: srv.Client()} }
+	newReleaseClient = func(string) *update.Client { return testClient(srv) }
 	t.Cleanup(func() { newReleaseClient = old })
 }
 

@@ -590,7 +590,7 @@ func startUpdates(ctx context.Context, app update.App, release string, l paths.L
 	var once sync.Once
 	service := os.Getenv("MEKO_SERVICE") != ""
 	u := &update.Updater{
-		App: app, Version: release, Client: newReleaseClient(cfg.Update.Repo), DataDir: l.Root,
+		App: app, Version: release, Client: releaseClient(cfg.Update, unsignedLog(log)), DataDir: l.Root,
 		Interval: time.Duration(cfg.Update.IntervalHours * float64(time.Hour)), FirstCheck: time.Minute,
 		Auto: cfg.Update.Auto && service, Schema: schema, Log: log, Channel: cfg.Update.Channel,
 		Service: service, Context: ctx,
@@ -603,12 +603,18 @@ func startUpdates(ctx context.Context, app update.App, release string, l paths.L
 	return u, ""
 }
 
+// unsignedLog logs the notice of a release staged without a signature check.
+func unsignedLog(log *slog.Logger) func(string) {
+	return func(s string) { log.Warn("a release was staged without a signature check", "notice", s) }
+}
+
 // startExtensionUpdates runs the extensions' update checks for a Meko that doesn't update itself (a
 // build from source, or one whose updater couldn't be set up), as startUpdates does with Meko's.
 func startExtensionUpdates(ctx context.Context, l paths.Layout, cfg config.Config, log *slog.Logger,
 	web *webListener) {
-	u := &update.Updater{ExtensionsOnly: true, Version: version.Version, Client: newReleaseClient(cfg.Update.Repo),
-		DataDir: l.Root, Interval: time.Duration(cfg.Update.IntervalHours * float64(time.Hour)),
+	u := &update.Updater{ExtensionsOnly: true, Version: version.Version,
+		Client: releaseClient(cfg.Update, unsignedLog(log)), DataDir: l.Root,
+		Interval:   time.Duration(cfg.Update.IntervalHours * float64(time.Hour)),
 		FirstCheck: time.Minute, Log: log, Channel: cfg.Update.Channel, Context: ctx}
 	web.watchUpdates(u)
 	if cfg.Update.Channel != update.ChannelOff {

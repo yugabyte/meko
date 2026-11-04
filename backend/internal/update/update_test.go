@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -107,8 +109,20 @@ func tarballOf(t *testing.T, pkg, name, version string) []byte {
 
 func sum(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
 
-// releaseServer serves a GitHub API with one Meko release of version for this platform.
+// testReleasePub and testReleaseKey sign the fake releases these tests serve; their clients trust
+// only it.
+var testReleasePub, testReleaseKey, _ = ed25519.GenerateKey(rand.Reader)
+
+// releaseServer serves a GitHub API with one Meko release of version for this platform, its sums
+// signed by testReleaseKey.
 func releaseServer(t *testing.T, version string, tgz []byte, sums string) *Client {
+	t.Helper()
+	return signedReleaseServer(t, version, tgz, sums, sigLine(testReleaseKey, sums))
+}
+
+// signedReleaseServer is releaseServer's release with sig as its SHA256SUMS.sig, or none when sig
+// is empty.
+func signedReleaseServer(t *testing.T, version string, tgz []byte, sums, sig string) *Client {
 	t.Helper()
 	goos, arch := Platform()
 	name := TarballName(version, goos, arch)
@@ -116,9 +130,11 @@ func releaseServer(t *testing.T, version string, tgz []byte, sums string) *Clien
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/repos/o/r/releases":
-			_ = json.NewEncoder(w).Encode([]Release{{Tag: TagPrefix + version, URL: srv.URL + "/page", Assets: []Asset{
-				{Name: name, URL: srv.URL + "/asset/tar"}, {Name: Sums, URL: srv.URL + "/asset/sums"},
-			}}})
+			assets := []Asset{{Name: name, URL: srv.URL + "/asset/tar"}, {Name: Sums, URL: srv.URL + "/asset/sums"}}
+			if sig != "" {
+				assets = append(assets, Asset{Name: SumsSig, URL: srv.URL + "/asset/sig"})
+			}
+			_ = json.NewEncoder(w).Encode([]Release{{Tag: TagPrefix + version, URL: srv.URL + "/page", Assets: assets}})
 		case "/asset/tar":
 			if r.Header.Get("Authorization") != "Bearer tok" {
 				http.Error(w, "no", http.StatusNotFound)
@@ -127,12 +143,14 @@ func releaseServer(t *testing.T, version string, tgz []byte, sums string) *Clien
 			_, _ = w.Write(tgz)
 		case "/asset/sums":
 			_, _ = io.WriteString(w, sums)
+		case "/asset/sig":
+			_, _ = io.WriteString(w, sig)
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return &Client{Repo: "o/r", Token: "tok", API: srv.URL, HTTP: srv.Client()}
+	return &Client{Repo: "o/r", Token: "tok", API: srv.URL, HTTP: srv.Client(), Keys: []ed25519.PublicKey{testReleasePub}}
 }
 
 // realPath is path with its symlinks resolved, as Of reports it: on macOS the temp folder is under
@@ -363,18 +381,21 @@ func TestNamedAppStagesAnExtensionsRelease(t *testing.T) {
 				{Tag: "presenter-v0.20261025.0", Assets: []Asset{{Name: Sums}}}, // no tarball for this platform
 				{Tag: "presenter-v" + next, Assets: []Asset{
 					{Name: name, BrowserURL: srv.URL + "/tar"}, {Name: Sums, BrowserURL: srv.URL + "/sums"},
+					{Name: SumsSig, BrowserURL: srv.URL + "/sig"},
 				}},
 			})
 		case "/tar":
 			_, _ = w.Write(tgz)
 		case "/sums":
 			_, _ = io.WriteString(w, sum(tgz)+"  "+name+"\n")
+		case "/sig":
+			_, _ = io.WriteString(w, sigLine(testReleaseKey, sum(tgz)+"  "+name+"\n"))
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	t.Cleanup(srv.Close)
-	c := &Client{Repo: "o/r", API: srv.URL, HTTP: srv.Client()}
+	c := &Client{Repo: "o/r", API: srv.URL, HTTP: srv.Client(), Keys: []ed25519.PublicKey{testReleasePub}}
 	rels, err := c.Releases(context.Background())
 	if err != nil {
 		t.Fatal(err)

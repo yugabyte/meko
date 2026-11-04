@@ -43,7 +43,9 @@ func runUpdateExtension(l paths.Layout, name string, f extUpdateFlags, stdout, s
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), extensions.InstallTimeout)
 	defer cancel()
-	o := extensions.UpdateOptions{Root: l.Root, Home: home, Client: newReleaseClient(cfg.Update.Repo),
+	var notices unsignedNotices
+	defer notices.print(stdout)
+	o := extensions.UpdateOptions{Root: l.Root, Home: home, Client: releaseClient(cfg.Update, notices.add),
 		Check: f.check, Out: stdout}
 	if !f.all {
 		if _, err := extensions.Update(ctx, o, name); err != nil {

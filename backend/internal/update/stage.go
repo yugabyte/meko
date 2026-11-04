@@ -19,8 +19,10 @@ import (
 )
 
 // Stage downloads a release of the app's program into the app folder: the tarball and SHA256SUMS,
-// the checksum checked, unpacked beside the installed versions and checked to run here (its
-// `<name> version --json` must name the version), as app/<version>. Nothing in use changes.
+// SHA256SUMS's signature checked (SHA256SUMS.sig, with the client's keys; one staged without it is
+// told to the client's Notice once staged), then the checksum,
+// unpacked beside the installed versions and checked to run here (its `<name> version --json` must
+// name the version), as app/<version>. Nothing in use changes.
 func (a App) Stage(ctx context.Context, c *Client, rel Release, version string) error {
 	goos, arch := Platform()
 	name := PackageTarball(a.pkg(), version, goos, arch)
@@ -38,16 +40,26 @@ func (a App) Stage(ctx context.Context, c *Client, rel Release, version string) 
 	}
 	defer func() { _ = os.RemoveAll(dl) }()
 	tarball, sums := filepath.Join(dl, name), filepath.Join(dl, Sums)
-	if err := c.Download(ctx, tarAsset, tarball); err != nil {
+	if err = c.Download(ctx, tarAsset, tarball); err != nil {
 		return err
 	}
-	if err := c.Download(ctx, sumAsset, sums); err != nil {
+	if err = c.Download(ctx, sumAsset, sums); err != nil {
 		return err
 	}
-	if err := VerifySum(tarball, sums); err != nil {
+	notice, err := c.checkSignature(ctx, rel, sums)
+	if err != nil {
 		return err
 	}
-	return a.Unpack(tarball, version)
+	if err = VerifySum(tarball, sums); err != nil {
+		return err
+	}
+	if err = a.Unpack(tarball, version); err != nil {
+		return err
+	}
+	if notice != "" && c.Notice != nil {
+		c.Notice(notice)
+	}
+	return nil
 }
 
 // VerifySum checks file against its line in a SHA256SUMS file.

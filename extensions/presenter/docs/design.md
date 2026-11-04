@@ -151,10 +151,11 @@ Presenter releases on its own train (`.github/workflows/presenter-release.yml`, 
 `presenter-v<version>`, `scripts/release/*.sh --product presenter`). It has no native modules, so
 one job builds it once and packages `presenter-<version>-<os>-<arch>.tar.gz` for linux-x64,
 linux-arm64 and darwin-arm64 (`scripts/package-release.sh`), each with its own Node; a release
-carries those and `SHA256SUMS`, and no installer.
+carries those, `SHA256SUMS` and its signature `SHA256SUMS.sig` (the release environment's key,
+which only `main` can use: the backend's `docs/install.md`, "Signed releases"), and no installer.
 
 Meko installs and updates them (`meko extension install presenter`, `meko extension update
-presenter`, the Extensions page): it unpacks a release into `<home>/app/<version>`, checks that
+presenter`, the Extensions page): it checks the signature and the checksum, unpacks a release into `<home>/app/<version>`, checks that
 `bin/meko_presenter version --json` names it, and points `app/current` and
 `~/.local/bin/meko_presenter` at it. The command is `meko_presenter`, and the extension `presenter`
 (its folder, tags, tarballs and pages). `bin/meko_presenter` is the launcher

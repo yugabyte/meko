@@ -159,21 +159,27 @@ func TestUpdateAndSecretsSettings(t *testing.T) {
 	path := filepath.Join(dir, "config.toml")
 	c, err := Load(path, func(string) string { return "" }, Overrides{})
 	if err != nil || c.Update.Channel != "stable" || !c.Update.Auto || c.Update.IntervalHours != 6 ||
-		c.Update.Repo != update.DefaultRepo || c.Secrets.Store != "" {
+		c.Update.Repo != update.DefaultRepo || !c.Update.RequireSignature || c.Secrets.Store != "" {
 		t.Fatalf("defaults %+v %+v, %v", c.Update, c.Secrets, err)
 	}
-	toml := "[update]\nauto = false\ninterval_hours = 1\n[secrets]\nstore = \"file\"\n"
+	toml := "[update]\nauto = false\ninterval_hours = 1\nrequire_signature = false\n[secrets]\nstore = \"file\"\n"
 	if err = os.WriteFile(path, []byte(toml), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env := map[string]string{"MEKO_UPDATE_CHANNEL": "off", "MEKO_UPDATE_REPO": "me/fork"}
 	c, err = Load(path, func(k string) string { return env[k] }, Overrides{})
 	if err != nil || c.Update.Auto || c.Update.IntervalHours != 1 || c.Update.Channel != "off" ||
-		c.Update.Repo != "me/fork" || c.Secrets.Store != "file" {
+		c.Update.Repo != "me/fork" || c.Update.RequireSignature || c.Secrets.Store != "file" {
 		t.Fatalf("got %+v %+v, %v", c.Update, c.Secrets, err)
 	}
+	env = map[string]string{"MEKO_UPDATE_REQUIRE_SIGNATURE": "true"}
+	c, err = Load(path, func(k string) string { return env[k] }, Overrides{})
+	if err != nil || !c.Update.RequireSignature {
+		t.Fatalf("env over file: %+v, %v", c.Update, err)
+	}
 	for _, bad := range []map[string]string{
-		{"MEKO_UPDATE_CHANNEL": "beta"}, {"MEKO_UPDATE_AUTO": "maybe"}, {"MEKO_SECRETS": "vault"},
+		{"MEKO_UPDATE_CHANNEL": "beta"}, {"MEKO_UPDATE_AUTO": "maybe"}, {"MEKO_UPDATE_REQUIRE_SIGNATURE": "maybe"},
+		{"MEKO_SECRETS": "vault"},
 	} {
 		if _, err := Load(path, func(k string) string { return bad[k] }, Overrides{}); err == nil {
 			t.Errorf("%v was taken", bad)

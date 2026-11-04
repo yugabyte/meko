@@ -131,6 +131,10 @@ type Update struct {
 	// Repo is the GitHub repo releases come from (default yugabyte/meko). Also
 	// MEKO_UPDATE_REPO.
 	Repo string `toml:"repo"`
+	// RequireSignature refuses a release whose SHA256SUMS isn't signed by one of Meko's release keys
+	// (default true). With false, such a release installs with a notice. A signature that doesn't
+	// verify is refused either way. Also MEKO_UPDATE_REQUIRE_SIGNATURE.
+	RequireSignature bool `toml:"require_signature"`
 }
 
 // Secrets is the [secrets] table: where the client token and other secrets are kept.
@@ -178,8 +182,9 @@ type Log struct {
 // Default is the configuration with nothing set.
 func Default() Config {
 	return Config{Server: Server{Port: DefaultPort, Auth: AuthToken}, Log: Log{Level: "info"},
-		Web:      Web{Port: DefaultWebPort, Access: AccessLocal, Enabled: true},
-		Update:   Update{Channel: "stable", Auto: true, IntervalHours: 6, Repo: "yugabyte/meko"},
+		Web: Web{Port: DefaultWebPort, Access: AccessLocal, Enabled: true},
+		Update: Update{Channel: "stable", Auto: true, IntervalHours: 6, Repo: "yugabyte/meko",
+			RequireSignature: true},
 		CallHome: CallHome{Enabled: true}}
 }
 
@@ -256,6 +261,13 @@ func Load(path string, env func(string) string, o Overrides) (Config, error) {
 	}
 	if v := env("MEKO_UPDATE_REPO"); v != "" {
 		c.Update.Repo = v
+	}
+	if v := env("MEKO_UPDATE_REQUIRE_SIGNATURE"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("MEKO_UPDATE_REQUIRE_SIGNATURE=%q isn't true or false", v)
+		}
+		c.Update.RequireSignature = b
 	}
 	if v := env("MEKO_SECRETS"); v != "" {
 		c.Secrets.Store = v

@@ -76,25 +76,27 @@ func serveMekoRelease(t *testing.T, next string, tgz []byte) {
 	h := sha256.Sum256(tgz)
 	goos, arch := update.Platform()
 	name := update.TarballName(next, goos, arch)
+	sums := hex.EncodeToString(h[:]) + "  " + name + "\n"
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/repos/o/r/releases":
 			_ = json.NewEncoder(w).Encode([]update.Release{{Tag: update.TagPrefix + next, Assets: []update.Asset{
-				{Name: name, BrowserURL: srv.URL + "/tar"}, {Name: update.Sums, BrowserURL: srv.URL + "/sums"}}}})
+				{Name: name, BrowserURL: srv.URL + "/tar"}, {Name: update.Sums, BrowserURL: srv.URL + "/sums"},
+				{Name: update.SumsSig, BrowserURL: srv.URL + "/sig"}}}})
 		case "/tar":
 			_, _ = w.Write(tgz)
 		case "/sums":
-			_, _ = io.WriteString(w, hex.EncodeToString(h[:])+"  "+name+"\n")
+			_, _ = io.WriteString(w, sums)
+		case "/sig":
+			_, _ = io.WriteString(w, signSums(sums))
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	t.Cleanup(srv.Close)
 	oldClient := newReleaseClient
-	newReleaseClient = func(string) *update.Client {
-		return &update.Client{Repo: "o/r", API: srv.URL, HTTP: srv.Client()}
-	}
+	newReleaseClient = func(string) *update.Client { return testClient(srv) }
 	t.Cleanup(func() { newReleaseClient = oldClient })
 }
 

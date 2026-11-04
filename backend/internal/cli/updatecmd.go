@@ -69,7 +69,8 @@ func updateMeko(l paths.Layout, check bool, stdout, stderr io.Writer) (string, i
 		return "", fail(stderr, update.ErrLocked)
 	}
 	defer lock.Unlock()
-	u := &update.Updater{App: app, Version: ver, Client: newReleaseClient(cfg.Update.Repo), DataDir: l.Root,
+	var notices unsignedNotices
+	u := &update.Updater{App: app, Version: ver, Client: releaseClient(cfg.Update, notices.add), DataDir: l.Root,
 		Schema: schema, Log: slog.New(slog.DiscardHandler), Lock: lock,
 		Extensions: func(rels []update.Release) map[string]update.ExtensionState { return extensions.Check(l.Root, rels) }}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -94,6 +95,7 @@ func updateMeko(l paths.Layout, check bool, stdout, stderr io.Writer) (string, i
 		return "", fail(stderr, err)
 	}
 	installing.Done("meko " + next + " installed")
+	notices.print(stdout)
 	if up, _ := running(l.Lock); !up {
 		fmt.Fprintf(stdout, "Installed meko %s; it runs at the next meko start\n", next)
 		return app.CurrentExe(), exitOK
