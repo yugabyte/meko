@@ -36,6 +36,11 @@ const MAX_PENDING = 4 * 1024 * 1024;
 const PASTE_ENTER_MS = 300;
 const DEFAULT_COLS = 200;
 const DEFAULT_ROWS = 50;
+/**
+ * How long closing waits for the programs it ended to exit. Each gets SIGHUP and may still write
+ * (a Claude its last transcript lines) before it exits; one slower than this is left running.
+ */
+export const CLOSE_WAIT_MS = 3000;
 
 export interface HostOptions {
   paths: Paths;
@@ -52,7 +57,11 @@ export interface HostOptions {
 }
 
 export interface HostHandle {
-  /** Ends every pane and stops listening. */
+  /**
+   * Ends every pane and stops listening, then waits up to CLOSE_WAIT_MS for the programs it ended
+   * (and any a `stop` request ended) to exit before letting go of the lease. A later call returns
+   * the first one's promise.
+   */
   close(): Promise<void>;
 }
 
@@ -83,6 +92,8 @@ class Pane {
   readonly term: HeadlessTerminal;
   private readonly serializer = new SerializeAddon();
   dead = false;
+  /** Resolves when the program running now exits (a new one for each start). */
+  exited: Promise<void> = Promise.resolve();
   exitStatus: number | null = null;
   pid = 0;
   cols: number;
@@ -188,6 +199,8 @@ export async function startHost(o: HostOptions): Promise<HostHandle> {
   const startedAt = Date.now();
   const panes = new Map<string, Pane>();
   const sockets = new Set<Socket>();
+  /** The exits of programs ended here and not gone yet, which closing waits for. */
+  const ending = new Set<Promise<void>>();
 
   // A quick refusal for a host that answers; the lease below is what keeps a second one out.
   if (await answers(o.paths.hostSock)) throw new HostRunningError(`a session host is already running on ${o.paths.hostSock}`);
@@ -282,6 +295,8 @@ export async function startHost(o: HostOptions): Promise<HostHandle> {
     }
     const pane = p;
     pane.proc = proc;
+    let exited!: () => void;
+    pane.exited = new Promise<void>((r) => (exited = r));
     pane.dead = false;
     pane.exitStatus = null;
     pane.pid = proc.pid;
@@ -289,6 +304,7 @@ export async function startHost(o: HostOptions): Promise<HostHandle> {
       if (pane.proc === proc) output(pane, d);
     });
     proc.onExit(({ exitCode, signal }) => {
+      exited();
       if (pane.proc !== proc) return;
       pane.dead = true;
       pane.exitStatus = signal ? 128 + signal : exitCode;
@@ -306,6 +322,9 @@ export async function startHost(o: HostOptions): Promise<HostHandle> {
     const proc = p.proc;
     p.proc = null;
     if (proc && !p.dead) {
+      const gone = p.exited;
+      ending.add(gone);
+      void gone.then(() => ending.delete(gone));
       try {
         proc.kill('SIGHUP');
       } catch {
@@ -464,26 +483,41 @@ export async function startHost(o: HostOptions): Promise<HostHandle> {
   writeFileSync(o.paths.hostState, JSON.stringify({ pid: process.pid, version: o.version, appDir: o.appDir ?? null, protocol: PROTOCOL, startedAt }) + '\n');
   log.info(`session host ${o.version} listening on ${o.paths.hostSock}`);
 
-  let closed = false;
+  // Every call gets the first one's promise: a SIGTERM during a stop request's close must not exit
+  // before the programs it ended are gone and the lease is released.
+  let closing: Promise<void> | null = null;
   const host: HostHandle = {
-    async close() {
-      if (closed) return;
-      closed = true;
-      clearInterval(beat);
-      if (!stopping) for (const name of [...panes.keys()]) kill(name, 'stopped');
-      await new Promise<void>((r) => {
-        server.close(() => r());
-        for (const s of sockets) s.destroy();
-      });
-      // Only our own files: another host may have taken the socket since.
-      if (socketId(o.paths.hostSock) === sockFile) rmSync(o.paths.hostSock, { force: true });
-      try {
-        if ((JSON.parse(readFileSync(o.paths.hostState, 'utf8')) as { pid?: number; startedAt?: number }).startedAt === startedAt) rmSync(o.paths.hostState, { force: true });
-      } catch {
-        /* gone already */
-      }
-      lock.release();
+    close() {
+      closing ??= closeOnce();
+      return closing;
     },
+  };
+  const closeOnce = async (): Promise<void> => {
+    clearInterval(beat);
+    if (!stopping) for (const name of [...panes.keys()]) kill(name, 'stopped');
+    await new Promise<void>((r) => {
+      server.close(() => r());
+      for (const s of sockets) s.destroy();
+    });
+    // The programs just sent SIGHUP may still be writing (a Claude's last lines, its SessionEnd
+    // hook): the lease goes only once they're gone, so a new host never runs beside them.
+    if (ending.size) {
+      let timer: NodeJS.Timeout | undefined;
+      const left = await Promise.race([
+        Promise.allSettled([...ending]).then(() => 0),
+        new Promise<number>((r) => (timer = setTimeout(() => r(ending.size), CLOSE_WAIT_MS))),
+      ]);
+      clearTimeout(timer);
+      if (left) log.warn(`${left} program(s) still running ${CLOSE_WAIT_MS / 1000} s after their panes were ended; leaving them`);
+    }
+    // Only our own files: another host may have taken the socket since.
+    if (socketId(o.paths.hostSock) === sockFile) rmSync(o.paths.hostSock, { force: true });
+    try {
+      if ((JSON.parse(readFileSync(o.paths.hostState, 'utf8')) as { pid?: number; startedAt?: number }).startedAt === startedAt) rmSync(o.paths.hostState, { force: true });
+    } catch {
+      /* gone already */
+    }
+    lock.release();
   };
   const beat = setInterval(() => {
     if (lock.beat()) return;

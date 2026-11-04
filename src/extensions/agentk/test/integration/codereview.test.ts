@@ -1,15 +1,15 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// GitHub is mocked (no PR is found; one set on a session by hand reads as open, with `gh.body`); git,
-// the session host and the fake claude are real.
-const gh = vi.hoisted(() => ({ body: '' }));
+// GitHub is mocked (no PR is found; one set on a session by hand reads as open, with `gh.body`,
+// after `gh.statusMs`); git, the session host and the fake claude are real.
+const gh = vi.hoisted(() => ({ body: '', statusMs: 0 }));
 vi.mock('../../src/server/github.js', async (orig) => {
   const real = await orig<typeof import('../../src/server/github.js')>();
   return {
     ...real, findPr: async () => null, viewerLogin: async () => 'me', repoVisibility: async () => 'private',
-    prStatus: async (_cwd: string, number: number) => ({
+    prStatus: async (_cwd: string, number: number) => (await new Promise((r) => setTimeout(r, gh.statusMs)), {
       number, url: `https://github.com/acme/demo-repo/pull/${number}`, title: 'feat(demo): add f', body: gh.body, state: 'OPEN', reviews: [],
       statusCheckRollup: [], reviewDecision: '', mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', headRefOid: 'abc123',
     }),
@@ -34,6 +34,7 @@ const LEDGERS = {
 describe('code review before the PR (real session host + git, fake claude running the review steps)', { timeout: 60000 }, () => {
   let env: TestEnv;
   beforeEach(async () => {
+    gh.statusMs = 0;
     env = await makeEnv({ review: true });
   });
   afterEach(async () => {
@@ -724,7 +725,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
       expect(all(env.core.db, `SELECT 1 FROM session_events WHERE session_id = ? AND text LIKE '%wait on you%'`, s.id)).toEqual([]);
     });
 
-    it('blocks the merge in Review & PR as yours until you send them', async () => {
+    it('blocks the merge in Review & PR as yours until you send them, and the PR poll sending them starts ends before the server stops', async () => {
       const s = await task({ review: { strategy: 'sirius-1.0', check: true } });
       run(env.core.db, `UPDATE sessions SET stage = 'review', pr_number = 7, pr_url = 'https://github.com/acme/demo-repo/pull/7' WHERE id = ?`, s.id);
       fake('review-reports.json', { all: { summary: 'LGTM', findings: [one(2, 'blocker', 'Off by one.')] } });
@@ -735,10 +736,20 @@ describe('code review before the PR (real session host + git, fake claude runnin
       const waits = "The code review's findings wait on you: send them to AgentK or dismiss them.";
       expect(info).toMatchObject({ canMerge: false, hard: [waits], yours: [waits] });
       expect(info.blockers).not.toContain('The code review is still running.');
+      // Sending them polls the PR, which compares the branch with its head (abc123, no commit here)
+      // and so fetches the PR from origin: the repo has none, but even a failed fetch writes
+      // FETCH_HEAD. A slow GitHub keeps that poll going past the fix prompt.
+      await env.core.lifecycle.settled();
+      const fetchHead = join(env.repo, '.git', 'FETCH_HEAD');
+      rmSync(fetchHead, { force: true });
+      gh.statusMs = 1000;
       await env.core.sessions.action(s.id, 'review-send');
       const fix = await waitFor(() => prompts(s.claudeSessionId).at(-1)!, (p) => p.includes('round 1'), 30000, 'the fix prompt');
       expect(fix).toContain('Off by one.');
       expect(env.core.lifecycle.mergeInfo(env.core.sessions.row(s.id), st).yours).toEqual([]);
+      // The server waits for that poll as it stops, so its fetch never writes into a removed repo.
+      await env.core.stop();
+      expect(existsSync(fetchHead)).toBe(true);
     });
   });
 

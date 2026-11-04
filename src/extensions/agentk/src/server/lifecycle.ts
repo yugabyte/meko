@@ -290,6 +290,20 @@ export class Lifecycle {
     this.timer = null;
   }
 
+  /** True while any session has a step (`serial`) queued or running. */
+  busy(): boolean {
+    return this.chains.size > 0;
+  }
+
+  /**
+   * Resolves once no session has a step queued or running, including ones queued meanwhile: a PR
+   * poll started without waiting for it (its git fetch), a queued prompt's delivery. `Core.stop`
+   * waits for it.
+   */
+  async settled(): Promise<void> {
+    while (this.chains.size) await Promise.allSettled([...this.chains.values()]);
+  }
+
   // ---- design ----
 
   /**

@@ -145,8 +145,11 @@ It binds the socket under a temporary name and renames it into place, removes it
 only if the file is still its own, and every 10 seconds binds it again if the file was removed or
 replaced (see [One server per home](recovery.md#one-server-per-home)). The server handles a hook
 event after answering it, so a server that is stopping waits up to 5 seconds for turn ends still
-being handled (what they await: the diff refresh, a PR poll's git calls, a prompt they send; not
-the PR poll's sync of the PR's design line, which it leaves running).
+being handled (what they await: the diff refresh, a PR poll's git calls, a prompt they send) and
+for the sessions' lifecycle steps queued or running (`serial`: a PR poll started without waiting
+for it, such as the one sending a code review's findings starts, or a queued prompt's delivery),
+until neither is left, since each can start the other. Not the PR poll's sync of the PR's design
+line, which it leaves running.
 
 **Interrupted turns.** Claude Code fires no `Stop` hook for a turn you interrupt (Ctrl+C or Esc), so
 AgentK's mod reports it (`/mod/turn`) and the server ends the turn as a `Stop` would
