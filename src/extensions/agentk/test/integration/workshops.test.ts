@@ -27,6 +27,20 @@ describe('the AgentK tour (a bundled workshop; real session host + git, fake cla
     const conv = env.core.sessions.get(sessionId).claudeSessionId;
     return readJsonl<{ args: string[] }>(join(env.fakeDir, 'argv.jsonl')).find((a) => a.args.includes(conv))?.args.at(-1) ?? '';
   };
+  /**
+   * Like the user typing into the host, then the host's turn: sent while the host is idle, and
+   * again until it goes in. AgentK sends the host its events too (GuideEvents): typed during their
+   * turn, the fake Claude would run both turns at once, and a prompt that waited for theirs to go
+   * in is refused (submit's 409).
+   */
+  const say = async (hostId: string, text: string) => {
+    // The idle check and the submit run in one tick, so no events prompt can go in between them.
+    await waitFor(() => env.core.sessions.get(hostId).status !== 'idle' ? false : env.core.sessions.submit(hostId, text).then(() => true, (e: unknown) => {
+      if ((e as { status?: number }).status === 409 && /another prompt/.test(String(e))) return false;
+      throw e;
+    }), (sent) => sent, 20000, `the host to take "${text}"`);
+    await waitFor(() => env.core.sessions.get(hostId).status, (s) => s === 'idle', 10000, "host's turn");
+  };
   /** Meko's datapack ids are UUIDs, which MEKO.md's rows need. */
   const GOTCHAS_ID = '0f6b1c1e-0000-4000-8000-00000000a001';
   const DEDICATED_ID = '0f6b1c1e-0000-4000-8000-00000000a002';
@@ -121,11 +135,10 @@ describe('the AgentK tour (a bundled workshop; real session host + git, fake cla
     expect(env.core.sessions.row(task.id).model).toBeNull();
     expect(env.mekoApi.calls.some((c) => c.path.endsWith('/upload-url'))).toBe(false);
     // Anything but a go leaves it waiting.
-    await env.core.sessions.submit(host.id, 'What happens next?');
-    await waitFor(() => env.core.sessions.get(host.id).status, (s) => s === 'idle', 10000, "host's turn");
+    await say(host.id, 'What happens next?');
     expect(reviews()).toHaveLength(1);
 
-    await env.core.sessions.submit(host.id, 'go');
+    await say(host.id, 'go');
     await waitFor(reviews, (rs) => rs.length === 2, 20000, 'the review with the gotchas');
     expect(reviews()[1]).toMatchObject({ by: 'auto', purpose: 'demand', strategy: 'sirius-1.0', hand_off: 1 });
     expect(env.mekoApi.calls.find((c) => c.path.endsWith('/upload-url'))?.path).toBe(`/datapacks/${GOTCHAS_ID}/knowledge-bases/upload-url`);
@@ -153,10 +166,9 @@ describe('the AgentK tour (a bundled workshop; real session host + git, fake cla
     // A last line of "That's the end of Level 1" archives the level's session; the phrase anywhere else leaves it.
     const fix = join(env.core.sessions.row(task.id).worktree_path, 'src', 'fix.js');
     writeFileSync(fix, '// the level\'s fix, not committed\n');
-    await env.core.sessions.submit(host.id, "SAY:I'll say That's the end of Level 1 once you've played the fix.\\nPlay it now.");
-    await waitFor(() => env.core.sessions.get(host.id).status, (s) => s === 'idle', 10000, "host's turn");
+    await say(host.id, "SAY:I'll say That's the end of Level 1 once you've played the fix.\\nPlay it now.");
     expect(env.core.sessions.row(task.id).desired).toBe('running');
-    await env.core.sessions.submit(host.id, "SAY:Meko caught the trap.\\nThat's the end of Level 1.");
+    await say(host.id, "SAY:Meko caught the trap.\\nThat's the end of Level 1.");
     await waitFor(() => env.core.sessions.row(task.id).desired, (d) => d === 'archived', 10000, 'the level closed');
     expect(env.core.sessions.row(host.id).desired).toBe('running');
     expect(env.core.sessions.row(elsewhere.id).desired).toBe('running');
