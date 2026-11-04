@@ -2551,10 +2551,12 @@ export type SessionAction =
 // change or reset); the client should show the login screen rather than reconnect. The
 // server pings every 30 s and drops sockets that don't answer.
 //
-// /ws/term/:sessionId[?cols=&rows=&screen=&browser=&claim=1]: `cols` and `rows` are the
+// /ws/term/:sessionId[?cols=&rows=&screen=&browser=&theme=&claim=1]: `cols` and `rows` are the
 // browser terminal's size. A session is live on one screen at a time (src/server/screens.ts):
 // `screen` is the page's id (one per page load), `browser` the browser's (to name "another tab in
 // this browser"), and `claim=1` asks for the session as the socket opens (the terminal is on screen).
+// `theme` (`dark` or `light`) is the browser's resolved terminal colors, which the server keeps
+// (`Core.setTermTheme`) for the sessions started next, as it does a later `theme` message.
 // Only the screen that has the session gets output and sends input and its size to Claude.
 // Client → server JSON TermClientMessage (text frames). server → client: binary frames are raw
 // terminal output (the screen as it is first, then what follows); text frames are JSON
@@ -2589,7 +2591,9 @@ export type TermClientMessage =
   /** This screen stopped showing it: a request is dropped; the screen that has it counts as away. */
   | { type: 'hide' }
   /** Move to this screen: take the session now. */
-  | { type: 'move' };
+  | { type: 'move' }
+  /** This browser's terminal colors changed (Settings → General → Terminal colors): sessions start with them. */
+  | { type: 'theme'; theme: 'dark' | 'light' };
 
 /** How long the screen that has a session keeps it, unused, from another screen that asks. */
 export const SCREEN_IDLE_MS = 10_000;

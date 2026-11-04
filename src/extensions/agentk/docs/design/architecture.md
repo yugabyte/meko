@@ -49,7 +49,10 @@ reaches Claude Code.
 **The session host** (`src/server/host/`) runs each session's launcher in a pty with node-pty
 (`TERM=xterm-256color`, `COLORTERM=truecolor`), and keeps a pane whose process exited, with its
 exit status, until it is started again or ended. It answers the program's terminal queries
-(device attributes, cursor position, colors) itself from its headless xterm, so Claude gets one
+(device attributes, cursor position) itself from its headless xterm, and its color queries (OSC 10
+foreground, 11 background, which the headless xterm doesn't answer) with the colors the server
+started it with (`spawn`'s `colors`: the terminal colors a browser last reported, `Core.termTheme`;
+a host from before them ignores the field and answers none), so Claude gets one
 answer whether or not anyone is watching; the viewers' own answers are dropped (a browser's, and a
 real terminal's with `me_koder attach`). Sessions don't inherit this install's `AK_HOME`,
 `AK_APP_DIR` or `AK_VERSION`, so a checkout run inside one never takes them as its own. A pane counts

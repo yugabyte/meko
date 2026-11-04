@@ -7,6 +7,7 @@ import {
   type HelloReply, type HostControl, type HostRequest, type PaneState, type ViewerControl,
 } from './host/protocol.js';
 import type { Paths } from './paths.js';
+import type { TermColors } from '../shared/termcolors.js';
 import { hostServices, type ServiceManager } from './service.js';
 
 export interface PaneInfo {
@@ -179,10 +180,13 @@ export class SessionHost {
     return out;
   }
 
-  /** Starts `argv` in pane `name` (new, or in place of a dead one). Refused while the pane is live. */
-  async spawn(name: string, cwd: string, argv: string[]): Promise<void> {
+  /**
+   * Starts `argv` in pane `name` (new, or in place of a dead one). Refused while the pane is live.
+   * `colors` answer the program's color queries (OSC 10/11).
+   */
+  async spawn(name: string, cwd: string, argv: string[], colors?: TermColors): Promise<void> {
     await this.ensureServer();
-    await this.request({ op: 'spawn', name, cwd, argv });
+    await this.request({ op: 'spawn', name, cwd, argv, ...(colors ? { colors } : {}) });
   }
 
   async kill(name: string): Promise<void> {

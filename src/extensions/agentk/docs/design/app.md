@@ -81,6 +81,14 @@ light, xterm.js raises any color with less than 4.5:1 contrast against the backg
 (`minimumContrastRatio`), since Claude Code picks some colors from its own theme (`/theme` in
 Claude Code switches it).
 
+A session's CLI picks its own theme once, at its start, often before any browser is watching, so
+each terminal also tells the server its colors: as it connects (`theme=` on `/ws/term/:id`) and
+when they change (a `theme` message). The server keeps the latest (`state.db`'s kv `term-theme`,
+`Core.termTheme`, dark before any browser reported), and sessions start with those colors: the session
+host answers a program's color queries (OSC 10/11) with them, and Kiro is told them
+(`KIRO_TERMINAL_THEME`). With several browsers on different colors, the last to report wins. A
+change applies to sessions started (or resumed) after it.
+
 ![The AgentK window: the project rail, session tabs, the stage bar and a live Claude terminal](../screenshots/workbench.png)
 
 Session states, shown with a dot on each session (on its tab, or in the rail) and on its project:

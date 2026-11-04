@@ -1,5 +1,6 @@
 import type { WebSocket } from 'ws';
 import { isPassiveReport } from '../shared/termreports.js';
+import { parseTermTheme } from '../shared/termcolors.js';
 import type { ScreenState, TermClientMessage, TermServerMessage } from '../shared/types.js';
 import type { Core } from './core.js';
 import type { HostStream } from './hostclient.js';
@@ -36,6 +37,8 @@ export interface TermQuery {
   screen?: unknown;
   browser?: unknown;
   claim?: unknown;
+  /** This browser's terminal colors, `dark` or `light`, which sessions started next take. */
+  theme?: unknown;
 }
 
 /**
@@ -198,11 +201,17 @@ export function attachTerminal(
   };
 
   const b = shared.board;
+  // The latest browser's terminal colors are the ones the next session starts with, whichever screen has this one.
+  const reportTheme = (v: unknown) => {
+    const theme = parseTermTheme(v);
+    if (theme) core.setTermTheme(theme);
+  };
 
   function handle(m: TermClientMessage) {
     if (m.type === 'show') return b.show(screen);
     if (m.type === 'hide') return b.hide(screen);
     if (m.type === 'move') return b.move(screen);
+    if (m.type === 'theme') return reportTheme(m.theme);
     if (m.type === 'resize') {
       if (!Number.isFinite(m.cols) || !Number.isFinite(m.rows)) return;
       cols = clampCols(m.cols);
@@ -248,6 +257,7 @@ export function attachTerminal(
   core.log.info(
     `${prefix}: attached at ${cols && rows ? `${cols}x${rows}` : 'no size'}${client.ip ? ` from ${client.ip}` : ''} (${(client.userAgent ?? 'no user agent').slice(0, 160)})`,
   );
+  reportTheme(query.theme);
   // A page from before screens (no id) always asks, as every viewer used to take the session.
   b.join(screen, query.claim === '1' || !idOf(query.screen));
 }

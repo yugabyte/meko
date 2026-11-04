@@ -261,6 +261,8 @@ class SessionTerminal {
       this.term.options.minimumContrastRatio = o.minimumContrastRatio;
       // Highlight the matches again in the new theme's colors, keeping the current one.
       if (this.find.open) this.refind();
+      // Sessions started from now on take these colors (their programs pick a theme at start).
+      this.send({ type: 'theme', theme });
     });
     this.setTyping(false);
     // Capture, so a swipe is ours before xterm sees it.
@@ -787,7 +789,7 @@ class SessionTerminal {
     const claimed = this.showing() && !this.lost;
     const claim = claimed ? '&claim=1' : '';
     const ws = new WebSocket(
-      wsUrl(`/ws/term/${encodeURIComponent(this.sessionId)}?cols=${cols}&rows=${rows}&screen=${PAGE_ID}&browser=${BROWSER_ID}${claim}`),
+      wsUrl(`/ws/term/${encodeURIComponent(this.sessionId)}?cols=${cols}&rows=${rows}&screen=${PAGE_ID}&browser=${BROWSER_ID}&theme=${currentTermTheme()}${claim}`),
     );
     // Until the server says otherwise (a server from before screens never does).
     this.screen = 'here';

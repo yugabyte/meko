@@ -2,9 +2,10 @@
 // `data-term-theme="light"` on <html> switches the CSS around the terminal (tabs, key bar) too.
 
 import type { ITheme } from '@xterm/xterm';
+import { TERM_COLORS, type TermTheme } from '../shared/termcolors';
 
+export type { TermTheme };
 export type TermThemePref = 'dark' | 'light' | 'app';
-export type TermTheme = 'dark' | 'light';
 
 const KEY = 'ak-term-theme';
 
@@ -15,10 +16,9 @@ export const TERM_THEME_LABEL: Record<TermThemePref, string> = {
 };
 
 const DARK: ITheme = {
-  background: '#101412',
-  foreground: '#D5DDD8',
-  cursor: '#D5DDD8',
-  cursorAccent: '#101412',
+  ...TERM_COLORS.dark,
+  cursor: TERM_COLORS.dark.foreground,
+  cursorAccent: TERM_COLORS.dark.background,
   selectionBackground: '#2E3B55',
   black: '#1A1F1C',
   red: '#F07366',
@@ -40,10 +40,9 @@ const DARK: ITheme = {
 
 // "White" is a mid gray here, as in other light terminal themes: text drawn white must still show.
 const LIGHT: ITheme = {
-  background: '#FAFBFA',
-  foreground: '#1F2622',
-  cursor: '#1F2622',
-  cursorAccent: '#FAFBFA',
+  ...TERM_COLORS.light,
+  cursor: TERM_COLORS.light.foreground,
+  cursorAccent: TERM_COLORS.light.background,
   selectionBackground: '#C9D7F7',
   black: '#2B332E',
   red: '#C4312A',

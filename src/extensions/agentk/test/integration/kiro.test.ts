@@ -40,6 +40,16 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
     expect(first.args.slice(0, 5)).toEqual(['chat', '--agent', 'agentk', '--model', 'claude-sonnet-4.5']);
   });
 
+  it('starts Kiro with the terminal colors a browser last reported', async () => {
+    env.core.setTermTheme('light');
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'none' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Kiro on light', prompt: 'hi', start: 'code', harness: 'kiro' });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'the first turn to end');
+    const [first] = lines(env, 'argv.jsonl');
+    expect(first.env.KIRO_TERMINAL_THEME).toBe('light');
+    expect(first.background).toBe('rgb:fafa/fbfb/fafa');
+  });
+
   it("follows Kiro 3.0's sessions, and leaves the agent file as Kiro upgraded it", async () => {
     // Kiro 3.0 sends Claude Code's event names, and upgrades the agent's file in place.
     writeFileSync(join(process.env.FAKE_KIRO_DIR!, 'kiro3'), '');
@@ -80,6 +90,9 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
     expect(first.args[3]).not.toContain('design_questions');
     const row = env.core.sessions.row(s.id);
     expect(first.env.MEKO_AGENT_ID).toBe(sessionAgentId(row));
+    // AgentK's terminal colors, dark before any browser reported them: told, and answered when Kiro asks the terminal.
+    expect(first.env.KIRO_TERMINAL_THEME).toBe('dark');
+    expect(first.background).toBe('rgb:1010/1414/1212');
     expect(row.meko_agent_id).toMatch(/^kiro:kiro-task-[0-9a-f]{8}$/);
     // Kiro has no system-prompt flag: the session's lines come from its context hook at spawn.
     expect(lines(env, 'spawn.jsonl')[0].context).toMatch(/^This Kiro session is managed by AgentK\. Project: Demo\. Task: Kiro task\./);

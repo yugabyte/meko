@@ -5,6 +5,8 @@
  * line and the connection then carries frames both ways (see `encodeFrame`).
  */
 
+import type { TermColors } from '../../shared/termcolors.js';
+
 /** Bumped when a request or a frame changes in a way an older peer can't read. */
 export const PROTOCOL = 1;
 /** The oldest host protocol this server still works with. A host older than that must be restarted. */
@@ -22,8 +24,11 @@ export interface PaneState {
 export type HostRequest =
   | { op: 'hello' }
   | { op: 'list' }
-  /** Starts `argv` in a new pane, or in place of a dead one; never replaces a live pane. */
-  | { op: 'spawn'; name: string; cwd: string; argv: string[]; cols?: number; rows?: number }
+  /**
+   * Starts `argv` in a new pane, or in place of a dead one; never replaces a live pane. `colors`
+   * answer the program's color queries (OSC 10/11); a host from before them ignores the field.
+   */
+  | { op: 'spawn'; name: string; cwd: string; argv: string[]; cols?: number; rows?: number; colors?: TermColors }
   | { op: 'kill'; name: string }
   /** Raw input, as typed. */
   | { op: 'write'; name: string; data: string }

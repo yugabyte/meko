@@ -1,5 +1,6 @@
 import type { HarnessCaps, HarnessId } from '../../shared/harnesses.js';
 import type { HarnessStatus } from '../../shared/types.js';
+import type { TermTheme } from '../../shared/termcolors.js';
 
 /** A harness's status as its CLI gives it: everything but Meko's connection (`HarnessStatus.meko`). */
 export type CliStatus = Omit<HarnessStatus, 'meko'>;
@@ -38,6 +39,8 @@ export interface LaunchInput {
   planMode: boolean;
   /** AgentK's session variables (AK_*, MEKO_*). */
   env: Record<string, string>;
+  /** The terminal colors the session starts with (`Core.termTheme`), for a CLI that can be told them. */
+  termTheme: TermTheme;
   unsetEnv: string[];
   /** The session works on a PR head whose code isn't trusted (headtrust.ts): leave out the repo's own config. */
   untrusted: boolean;

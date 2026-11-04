@@ -129,6 +129,27 @@ describe('session host (real ptys)', () => {
     expect(await waitFor(() => (existsSync(out) ? readFileSync(out, 'utf8') : ''), (s) => s.length >= 6)).toMatch(/^\x1b\[\?/);
   });
 
+  it('answers the color queries (OSC 10/11) of a program started with colors, and only those', async () => {
+    const ask = (name: string, query: string, bytes: number) => {
+      const out = join(home, name);
+      return host
+        .spawn(name, home, ['/bin/sh', '-c', `stty raw -echo; printf '${query}'; dd bs=1 count=${bytes} of=${out} 2>/dev/null; sleep 30`], { foreground: '#D5DDD8', background: '#101412' })
+        .then(() => out);
+    };
+    const read = (out: string, length: number) => waitFor(() => (existsSync(out) ? readFileSync(out, 'utf8') : ''), (s) => s.length >= length);
+    const bg = '\x1b]11;rgb:1010/1414/1212\x1b\\';
+    const fg = '\x1b]10;rgb:d5d5/dddd/d8d8\x1b\\';
+    expect(await read(await ask('ak-bg', '\\033]11;?\\007', bg.length), bg.length)).toBe(bg);
+    expect(await read(await ask('ak-fg', '\\033]10;?\\033\\\\', fg.length), fg.length)).toBe(fg);
+    // Both at once, as xterm takes them.
+    expect(await read(await ask('ak-both', '\\033]10;?;?\\007', fg.length + bg.length), fg.length + bg.length)).toBe(fg + bg);
+
+    // Started without colors (a server from before them), it answers nothing: the next answer is device attributes'.
+    const out = join(home, 'none');
+    await host.spawn('ak-none', home, ['/bin/sh', '-c', `stty raw -echo; printf '\\033]11;?\\007\\033[c'; dd bs=1 count=3 of=${out} 2>/dev/null; sleep 30`]);
+    expect(await read(out, 3)).toBe('\x1b[?');
+  });
+
   it('shows a new viewer the screen as it is, then what follows; the newest viewer sets the size until another is used', async () => {
     await host.spawn('ak-v', home, ['/bin/sh', '-c', 'printf "before\\n"; stty raw -echo; while :; do read -r -n 1 c 2>/dev/null || c=$(dd bs=1 count=1 2>/dev/null); printf "typed:%s\\n" "$c"; done']);
     await waitFor(() => host.capture('ak-v'), (t) => t.includes('before'));
