@@ -11,9 +11,9 @@
 
 # AgentK
 
-The agentic coder for ADLC. AgentK lets you manage many projects and [Claude Code](https://claude.com/claude-code),
-[OpenCode](https://opencode.ai) or [Kiro CLI](https://kiro.dev/cli/) sessions at once, with [Meko](https://mekodata.ai) as the shared context layer so designs, transcripts, and what each session learned flow into 
-datapacks your whole team and their agents can build on.
+The agentic coder for ADLC. AgentK lets you run parallel coding sessions that take a task from
+design to merged PR, with [Meko](https://mekodata.ai) as the shared context engine, so designs and
+what each session learned flow into datapacks your whole team and their agents can build on.
 
 It's self-hosted on your devserver (headless), your Mac or a Mac mini, and you use it from a browser or
 your phone.
@@ -96,12 +96,3 @@ AgentK has no login. With Meko's remote access (the default over SSH), anyone wh
 - [Features](docs/features.md) and [install details](docs/install.md)
 - [Design](docs/design.md): how AgentK works, one file per area
 - [Contributing](../../CONTRIBUTING.md), and [AGENTS.md](AGENTS.md) for AgentK's commands and map
-
-## License
-
-[Apache-2.0](../../LICENSE)
-
-The Claude Code, OpenCode and Kiro logos in `src/web/public/` are their owners' marks, used to show
-which agent a session runs on. The Claude Code mascot is drawn from
-[dashboard-icons](https://github.com/homarr-labs/dashboard-icons) (Apache-2.0), and OpenCode's is its
-favicon from [its repo](https://github.com/anomalyco/opencode) (MIT).
