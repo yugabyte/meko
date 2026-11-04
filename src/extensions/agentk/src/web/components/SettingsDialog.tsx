@@ -873,8 +873,9 @@ export function AgentSettings({
       {id === 'kiro' && enabled && (
         <InfoCheck id="set-kiro-trust" label="Let Kiro run any tool without asking" checked={s.kiroTrustTools} onChange={(on) => onChange({ kiroTrustTools: on })}>
           Kiro tells AgentK nothing while it waits for a permission answer, so the session looks busy until you answer in its
-          terminal. On, Kiro runs every tool, shell commands included, without asking, in AgentK's sessions only. Applies when a
-          session next starts or resumes.
+          terminal. On, Kiro runs every tool, shell commands included, without asking, in AgentK's sessions. Applies when a
+          session next starts or resumes. On Kiro 3.0, turning it off also makes sessions already running ask again, and AgentK
+          stops following them until they're restarted.
         </InfoCheck>
       )}
     </div>

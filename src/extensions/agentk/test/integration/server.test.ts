@@ -152,6 +152,22 @@ describe('HTTP API: origin checks, projects', () => {
     expect(env.core.state().harnesses.find((h) => h.id === 'kiro')?.version).toBe('2.0.0');
   });
 
+  it("writes Kiro 3.0's agentk-trusted as trust_tools turns on in Settings, and removes it at once as it turns off", async () => {
+    env.core.updateConfig((c) => {
+      c.kiro.enabled = true;
+    });
+    mkdirSync(process.env.FAKE_KIRO_DIR!, { recursive: true });
+    writeFileSync(join(process.env.FAKE_KIRO_DIR!, 'version'), 'kiro-cli 3.0.0\n');
+    await env.core.harnesses.refresh(env.core.config, true);
+    const trusted = join(process.env.KIRO_HOME!, 'agents', 'agentk-trusted.json');
+    const put = (on: boolean) => app.inject({ method: 'PUT', url: '/api/settings', payload: { kiroTrustTools: on } });
+    expect((await put(true)).statusCode).toBe(200);
+    await waitFor(() => existsSync(trusted), Boolean, 10000, 'agentk-trusted to be written');
+    // Not at the next launch: a chat started as agentk-trusted by hand must stop trusting now.
+    expect((await put(false)).statusCode).toBe(200);
+    await waitFor(() => existsSync(trusted), (there) => !there, 10000, 'agentk-trusted to be removed');
+  });
+
   it("Check again reads Meko's list of agents: a harness Meko hasn't connected isn't offered, and says why", async () => {
     env.core.updateConfig((c) => {
       c.kiro.enabled = true;

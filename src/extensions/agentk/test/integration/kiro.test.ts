@@ -67,6 +67,38 @@ describe('sessions on Kiro (real session host + git, fake kiro-cli)', () => {
     expect(readFileSync(file, 'utf8')).toBe(upgraded);
   });
 
+  it('trusts every tool on Kiro 3.0 by agentk-trusted, which Kiro leaves as written, and stops when trust_tools is off', async () => {
+    // Kiro 3.0's engine ignores --trust-tools: a rule in the agent file allows every tool instead.
+    writeFileSync(join(process.env.FAKE_KIRO_DIR!, 'kiro3'), '');
+    writeFileSync(join(process.env.FAKE_KIRO_DIR!, 'version'), 'kiro-cli 3.0.0\n');
+    await env.core.harnesses.refresh(env.core.config, true);
+    env.core.updateConfig((c) => {
+      c.kiro.trustTools = true;
+    });
+    const trusted = join(process.env.KIRO_HOME!, 'agents', 'agentk-trusted.json');
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'Demo', datapack: { mode: 'none' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Kiro 3 trusted', prompt: 'hi', start: 'code', harness: 'kiro' });
+    await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'the first turn to end');
+    expect(lines(env, 'argv.jsonl')[0].args.slice(0, 4)).toEqual(['chat', '--agent', 'agentk-trusted', '--trust-tools=*']);
+    const agent = JSON.parse(readFileSync(trusted, 'utf8'));
+    expect(agent.permissions.rules).toContainEqual({ capability: 'all', effect: 'allow' });
+    expect(agent).not.toHaveProperty('kiroUpgrade');
+    // AgentK's hooks ran from it: the session followed its turn.
+    expect(env.core.sessions.row(s.id).agent_session_id).toBe(lines(env, 'spawn.jsonl')[0].sessionId);
+    // agentk itself still grants nothing its base doesn't.
+    expect(JSON.parse(readFileSync(join(process.env.KIRO_HOME!, 'agents', 'agentk.json'), 'utf8')).permissions?.rules ?? [])
+      .not.toContainEqual({ capability: 'all', effect: 'allow' });
+
+    env.core.updateConfig((c) => {
+      c.kiro.trustTools = false;
+    });
+    const t = await env.core.sessions.create(p.id, { name: 'Kiro 3 asks', prompt: 'hi', start: 'code', harness: 'kiro' });
+    await waitFor(() => env.core.sessions.get(t.id).status, (st) => st === 'idle', 10000, 'the second turn to end');
+    expect(lines(env, 'argv.jsonl')[1].args.slice(0, 3)).toEqual(['chat', '--agent', 'agentk']);
+    expect(lines(env, 'argv.jsonl')[1].args).not.toContain('--trust-tools=*');
+    expect(existsSync(trusted)).toBe(false);
+  });
+
   it("runs a session as AgentK's Kiro agent: system lines at spawn, the Design guard, credits and Kiro's plan, exit and Resume", async () => {
     // Kiro's export of its built-in agent copies the servers in its MCP config, Meko's token with them;
     // Meko then replaces that token (#467).

@@ -28,7 +28,7 @@ repo (the PR's clone, changeable to another clone of it); the base and branch co
 **A public repo's PR.** Anyone can open a PR on a public repo, so a review of one runs without
 the repo's own config: Claude Code loads only your user settings (none of the PR's `.claude/`
 settings, hooks, status line or `.mcp.json` servers), and the PR's `.agent-k/stages/` prompts aren't
-used. On Kiro, a PR that brings its own `agentk` agent or MCP servers can't be reviewed. A private
+used. On Kiro, a PR that brings its own `agentk` agent (or `agentk-trusted`, with `[kiro] trust_tools` on Kiro 3.0) or MCP servers can't be reviewed. A private
 or internal repo's PR runs as any session does. See [Code from public repos](security.md#code-from-public-repos).
 
 **Starting.** `CreateSessionRequest.pr` names the PR (`{ repo: 'owner/name', number }`), with

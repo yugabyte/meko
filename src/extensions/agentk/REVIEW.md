@@ -72,7 +72,11 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       screen-reader labels too. Anything AgentK
       writes in the user's Kiro home (the `agentk` agent) is marked as AgentK's, inert without
       AgentK's variables, grants nothing the user's own agent doesn't (trust goes on AgentK's
-      launch), and is removed by `uninstall`. A Kiro session reads and resumes only its own
+      launch), and is removed by `uninstall`. The one exception is `agentk-trusted`, which allows
+      every tool: it's there only while `[kiro] trust_tools` is on with Kiro 3.0 or later (whose
+      engine ignores `--trust-tools`), only AgentK's launches use it, and it's removed as soon as
+      that's turned off in Settings (`prepare` runs when a harness's settings change), else at the
+      next Kiro launch or server start. A version read that gives nothing never removes it. A Kiro session reads and resumes only its own
       conversation: worktrees are pooled, and Kiro keeps earlier sessions' under the same folder.
       Nothing is written to the user's OpenCode config: AgentK's plugin and Meko server reach only
       AgentK's sessions, through their environment (`OPENCODE_CONFIG_CONTENT`, `OPENCODE_CONFIG`), and

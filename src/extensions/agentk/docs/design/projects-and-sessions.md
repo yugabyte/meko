@@ -78,7 +78,7 @@ idle_stop_hours = 24      # a session's agent idle this long is stopped, and res
 [kiro]
 # command = "kiro-cli"       # how Kiro CLI is run
 # enabled = false            # don't offer Kiro for new sessions; on by default (offered once `kiro-cli --version` answers 2.32.0 or later)
-# trust_tools = true         # Kiro sessions start with every tool trusted (--trust-tools=*), so Kiro never asks; off by default
+# trust_tools = true         # Kiro sessions start with every tool trusted (--trust-tools=*; on Kiro 3.0 as the agentk-trusted agent), so Kiro never asks; off by default
 
 [call_home]
 # enabled = false            # stop sending anonymous usage stats (Settings › General); on by default

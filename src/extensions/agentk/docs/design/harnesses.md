@@ -224,7 +224,7 @@ agent choice and sign-in check:
 
 | | Claude Code | OpenCode | Kiro |
 |---|---|---|---|
-| Launch | `claude --settings … --session-id/--resume … [--model <model>] …` | `opencode --standalone [--session=<id>] [--prompt=<prompt>]` with `OPENCODE_CONFIG_CONTENT` (the session's `model` there: no `--model` in the TUI), and `OPENCODE_CLI_CONFIG_CONTENT` for session tabs off | `kiro-cli chat --agent agentk [--trust-tools=*] [--model <model>] [--resume-id <id>] [prompt]` |
+| Launch | `claude --settings … --session-id/--resume … [--model <model>] …` | `opencode --standalone [--session=<id>] [--prompt=<prompt>]` with `OPENCODE_CONFIG_CONTENT` (the session's `model` there: no `--model` in the TUI), and `OPENCODE_CLI_CONFIG_CONTENT` for session tabs off | `kiro-cli chat --agent agentk\|agentk-trusted [--trust-tools=*] [--model <model>] [--resume-id <id>] [prompt]` |
 | Hooks | `run/hooks.json` via `--settings` | AgentK's plugin, `run/opencode/agentk-plugin-<hash>/` | the `agentk` agent's inline hooks |
 | System prompt | `--append-system-prompt` | an `instructions` file written at each launch | printed by the context hook at every `agentSpawn` |
 | Design guard | JSON deny | the plugin throws the reason | `kiro-guard.sh`: exit 2, the reason on stderr |
@@ -462,7 +462,28 @@ grants nothing its base doesn't, so outside AgentK it behaves as the user's own 
 trust_tools` is a flag on AgentK's launch instead, `--trust-tools=*` (every tool trusted for that run),
 so a chat someone starts as `agentk` themselves still asks; not `--trust-all-tools`, which makes Kiro
 ask on screen whether to go on, with **No, exit** first, and the next prompt AgentK types would pick
-it. Meko's capture hooks (`kiro-handler.js`) are left out
+it (skipped only by a Kiro-wide setting, `chat.disableTrustAllConfirmation`, which AgentK doesn't
+change). Kiro 3.0's engine ignores `--trust-tools` whatever its value, and has no flag that applies
+a permission rule. So on Kiro 3.0 or later (by the version read before each launch,
+`kiroTrustByAgent`) a launch with `trust_tools` runs as a second agent, `agentk-trusted`: `agentk`
+with Kiro 3.0's rule that allows every tool, `{"capability": "all", "effect": "allow"}`, after the
+base's own `permissions` rules. Kiro settles a call by a matching deny, then an ask, before an allow,
+so the user's own deny and ask rules, and Kiro's own (`.kiroignore`), still hold. The flag stays on
+that launch too, for a Kiro 3.0 that runs its older engine (`chat.agentEngine`). AgentK writes
+`agentk-trusted.json` only while `trust_tools` is on with such a Kiro, and removes it (when it's still
+AgentK's) once that's no longer so: as soon as `trust_tools` is turned off in Settings (which runs a
+harness's `prepare` whenever its settings change), and at the next launch or server start for a Kiro
+read as older than 3.0. A session still running as it then falls back to Kiro's default agent and
+asks again, without AgentK's hooks until it's restarted. The version used is the last one any read
+gave (`kiroTrustByAgent`), read for a launch even while Kiro is turned off for new sessions (its
+sessions still resume); with none yet, or after reads that failed, the file is left as it is and a
+launch runs as it while it's there, so a failed `kiro-cli --version` never knocks running sessions off
+it. Putting the
+rule in `agentk.json` instead would let a chat started as `agentk` outside AgentK run everything,
+and every toggle would rewrite the file running sessions use. Kiro 3.0.0 leaves a file that already
+has `permissions` as it is ("out of sync" to `kiro-cli agent upgrade`), so `agentk-trusted.json`
+keeps AgentK's format; should a later Kiro upgrade it and drop the rule, `writeKiroAgent` writes it
+again (`runsAsWritten` also compares whether every tool is allowed). Meko's capture hooks (`kiro-handler.js`) are left out
 while `[meko] capture_transcripts` is off. The file is written only when it changes. Kiro 3.0
 upgrades it in place to its own format (`kiro-cli agent upgrade`: its hooks become a list of named
 hooks with `fs_write` widened to `write`, and it adds `permissions` and `kiroUpgrade`), and writing
@@ -472,9 +493,9 @@ AgentK would still write what it last wrote (a copy kept in the run folder, `run
 and the file is still AgentK's agent with the same hooks (trigger, matcher, command) and MCP
 servers; another AgentK home's agent (other script paths, such as `npm run dev`'s) or an older
 release's (other hooks) is written over. It's written at server start (only where `kiro-cli --version` answers: AgentK never makes a `~/.kiro` of
-its own), before every launch, and after **Set up Kiro with this Meko**; `uninstall` removes it. Its description says it's
+its own), before every launch, and after **Set up Kiro with this Meko**; `uninstall` removes it and `agentk-trusted`. Its description says it's
 AgentK's, and `readKiroAgent` never takes it as a base. Kiro uses a workspace agent of the same
-name (`<worktree>/.kiro/agents/*.json` named `agentk`) over this one, and the agent loads a
+name (`<worktree>/.kiro/agents/*.json` named `agentk`, or `agentk-trusted` for a trusted launch) over this one, and the agent loads a
 workspace's `.kiro/settings/mcp.json`, with no flag to skip either; so a session on a public repo's
 PR head ([Code from public repos](security.md#code-from-public-repos)) refuses to start on Kiro while
 its worktree has either (`kiroWorkspaceConfig()` in `headtrust.ts`, checked in the launcher).

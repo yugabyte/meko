@@ -87,7 +87,8 @@ and the code review's reports are pre-allowed: `mcp__agentk_sessions__list` (and
 nothing their own agent doesn't, and `--trust-tools=<list>` would trust only that list. OpenCode allows
 every tool unless its config says otherwise, so a session's config sets `ask` for each write tool
 (`agentk_sessions_<tool>`: OpenCode names an MCP tool `<server>_<tool>`). With
-`[kiro] trust_tools`, Kiro runs every tool without asking, these included. Every action is written
+`[kiro] trust_tools`, Kiro runs every tool without asking, these included (on Kiro 3.0 the session runs
+as `agentk-trusted`, which allows every tool: [harnesses.md](harnesses.md)). Every action is written
 as a `tools` event on the calling session (what it came to) and on the session it started or changed
 ("Moved to Code by the agent in Lead").
 

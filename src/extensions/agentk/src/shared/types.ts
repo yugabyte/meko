@@ -1899,7 +1899,7 @@ export interface Settings {
   opencodeDisableTracking: boolean;
   /** `[kiro] enabled`: offer Kiro for new sessions when its CLI answers. */
   kiroEnabled: boolean;
-  /** `[kiro] trust_tools`: Kiro sessions start with every tool trusted (`--trust-tools=*`), so Kiro runs any tool without asking. */
+  /** `[kiro] trust_tools`: Kiro sessions start with every tool trusted (`--trust-tools=*`; on Kiro 3.0 as `agentk-trusted`), so Kiro runs any tool without asking. */
   kiroTrustTools: boolean;
   /** `[work_queue] github`: the work queue's sync pulls in the PRs asking for your review (Settings › Work queue). */
   workQueueGithub: boolean;
