@@ -214,6 +214,11 @@ on: a new branch from a base, an existing branch, or an open pull request's bran
 them on one line (`meko · from main · ak/fix-retry-backoff`, `meko · on hsunder/foo`,
 or `meko · PR #123 · hsunder/foo`).
 
+- **Code review.** The task's own review settings (strategy, depth, re-review rounds, check the
+  findings first), each starting at **Default**, the project's. Collapsed by default inside
+  Advanced, with one line naming what the review will run (`Sagittarius 3.0 · depth 1 · 1
+  re-review`, or `Off`); **Try again** opens it when the failed start asked for settings of its
+  own. Not offered for Review a PR or Learn the project.
 - **Agent** and **Model.** The agent shows once more than one is available; the model shows with any
   agent: **Default** (the agent's own), one on its list, or **Other…** with a name typed. A model
   other than Default is named in Advanced's closed line, and **Try again** keeps it. See
