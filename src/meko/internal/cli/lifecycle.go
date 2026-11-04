@@ -144,16 +144,6 @@ func printRunning(l paths.Layout, title string, kind nextFor, stdout io.Writer) 
 	r.next(nextSteps(s, kind))
 }
 
-// agentKRegistered reports whether meko start and stop run AgentK.
-func agentKRegistered(l paths.Layout) bool {
-	reg, err := extensions.Load(l.Root)
-	if err != nil {
-		return false
-	}
-	_, ok := reg.Entries["agentk"]
-	return ok
-}
-
 // errServiceFlags: the service runs serve with only --data-dir, so it reads the port and log level
 // from config.toml; start and restart can't pass them on.
 var errServiceFlags = errors.New("a service runs Meko here, and it reads config.toml: set [server] port " +
