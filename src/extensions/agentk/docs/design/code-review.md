@@ -140,8 +140,18 @@ as the cloud's separate processes do (`HARNESS_CAPS.reviewSteps`):
   subagents must run inside it: Claude Code backgrounds a subagent by default, which ends the turn
   before any step reports, so a Claude Code review session launches with
   `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`.
-- `turns` (Kiro): each step is a prompt of its own, after `/clear` and, when the tier has a model,
-  `/model`. Kiro's sessions share one agent file, which has AgentK's MCP server only while
+- `turns` (Kiro): each step is a turn of its own. The first starts the review session (on its
+  tier's model, when one is set); each later one goes when the turn before ends, after `/clear`
+  and, when the tier has a model, `/model`. Those are Kiro's own commands, which start no turn and
+  fire no hook, so AgentK types them with `SessionManager.command`, which doesn't mark the session
+  working: sent as prompts, they left it working with no turn to end, and the step's prompt after
+  them was refused as busy (#467). The steps still to send are kept in memory (`CodeReviews.queued`);
+  the runner checks for missing reports, and asks again once for them, only after the last step's
+  turn. An interrupt drops the steps still to send, and the review waits. A restart loses them too.
+  So when a review session's turn ends with no steps kept for it (the next turn after an interrupt,
+  or any turn after a restart; `recover` does it at once for an idle session), AgentK sends the
+  steps that haven't reported, as a Retry does (`sendUnreported`), without counting that as the one
+  ask again, since some of those steps were never sent. Kiro's sessions share one agent file, which has AgentK's MCP server only while
   `[tools] enabled` is on, so a Kiro review needs the session tools on; without them no step can
   report, and the review fails for Retry or Open anyway.
 

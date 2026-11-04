@@ -736,7 +736,8 @@ export class SessionManager {
    * Starts a task's code-review session (review/runner.ts): a child of the task (`parent_id`) on the
    * task's harness, in the task's own worktree, which it doesn't own (`worktree_released`), so
    * archiving it never frees the worktree or touches the branch. `prompt` is its first; `model`, the
-   * one it starts on (a workshop's, `WorkshopService.reviewModel`), else its agent's default.
+   * one it starts on (on a harness without subagents, the first step's tier's model when one is set;
+   * else a workshop's, `WorkshopService.reviewModel`), else its agent's default.
    */
   async startReviewSession(task: SessionRow, reviewId: string, prompt: string | null, model: string | null = null): Promise<SessionRow> {
     const slug = `${task.slug}-review-${randomBytes(3).toString('hex')}`;
@@ -1406,11 +1407,8 @@ export class SessionManager {
    * A `hidden` one draws as nothing in Claude's transcript when the mod submits it (a workshop host's events).
    */
   submit(id: string, text: string, lost?: () => void, hidden = false): Promise<void> {
-    const prev = this.submitting.get(id);
-    const next = (prev ?? Promise.resolve()).then(async () => {
-      const r = this.row(id);
-      if (r.desired !== 'running') throw new HttpError(409, 'This session is archived.');
-      if (prev && r.status === 'working') throw new HttpError(409, 'AgentK is working on another prompt. Try again when the turn ends.');
+    return this.inTurn(id, async (r, waited) => {
+      if (waited && r.status === 'working') throw new HttpError(409, 'AgentK is working on another prompt. Try again when the turn ends.');
       // Where the transcript ends before the prompt can reach it.
       const unstarted: Unstarted = { text, lost: lost ?? (() => undefined), mark: this.harness(r).transcriptMark?.(r) ?? null };
       if (this.modLive(id)) {
@@ -1439,6 +1437,30 @@ export class SessionManager {
       // Unless its turn started meanwhile (its hooks set the status), or Claude went first and the
       // prompt was reported lost (the session is exited, not working).
       if (this.unstarted.get(id) === unstarted) this.setStatus(id, 'working');
+    });
+  }
+
+  /**
+   * Types one of the agent's own commands into its terminal between turns (Kiro's `/clear` and
+   * `/model`, before each step of a code review): in turn with the session's prompts, but it starts
+   * no turn, so the session isn't marked working and the prompt after it isn't refused as busy.
+   */
+  command(id: string, text: string): Promise<void> {
+    return this.inTurn(id, async (r) => {
+      await this.core.host.submit(r.tmux_name, text);
+    });
+  }
+
+  /**
+   * Runs `fn` once the session's earlier submissions are done, with its row and whether it had to
+   * wait for one; refused once the session is archived.
+   */
+  private inTurn(id: string, fn: (r: SessionRow, waited: boolean) => Promise<void>): Promise<void> {
+    const prev = this.submitting.get(id);
+    const next = (prev ?? Promise.resolve()).then(async () => {
+      const r = this.row(id);
+      if (r.desired !== 'running') throw new HttpError(409, 'This session is archived.');
+      await fn(r, !!prev);
     });
     const tail = next.catch(() => undefined);
     this.submitting.set(id, tail);

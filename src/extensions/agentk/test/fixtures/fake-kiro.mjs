@@ -4,7 +4,9 @@
 // Kiro 2.x does (the event as JSON on stdin; a preToolUse hook's exit 2 denies the call, its stderr
 // the reason), or as 3.0 does (`kiro3` below); it keeps a session file like Kiro's ($KIRO_HOME/sessions/cli/<id>.json) with
 // each finished turn's usage, and its log (<id>.jsonl) of prompts and Meko calls' results, and turns
-// each stdin line into a turn. Everything it does is recorded
+// each stdin line into a turn, except Kiro's own `/clear` and `/model <id>`, which start none and
+// run no hook, as Kiro's don't. A code review's step reports through AgentK's tools route
+// (`reviewStep`). Everything it does is recorded
 // in $FAKE_KIRO_DIR.
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -40,11 +42,14 @@ if (args[0] === 'chat' && args.includes('--list-models')) {
   process.exit(0);
 }
 mkdirSync(dir, { recursive: true });
-// Like `kiro-cli agent create <name> --from kiro_default --directory <dir>`: Kiro's built-in default.
+// Like `kiro-cli agent create <name> --from kiro_default --directory <dir>`: Kiro's built-in default,
+// with a copy of the servers in Kiro's MCP config as they are now, as Kiro 3.0 exports it.
 if (args[0] === 'agent' && args[1] === 'create') {
   const out = args[args.indexOf('--directory') + 1];
+  const mcp = join(home, 'settings', 'mcp.json');
+  const mcpServers = existsSync(mcp) ? JSON.parse(readFileSync(mcp, 'utf8')).mcpServers ?? {} : {};
   writeFileSync(join(out, `${args[2]}.json`), JSON.stringify({
-    name: args[2], description: 'Default agent', prompt: 'You are Kiro.', mcpServers: {}, tools: ['*'], allowedTools: [],
+    name: args[2], description: 'Default agent', prompt: 'You are Kiro.', mcpServers, tools: ['*'], allowedTools: [],
     resources: ['file://AGENTS.md'], includeMcpJson: true, kiroUpgrade: { revision: 2 },
   }));
   process.exit(0);
@@ -180,7 +185,54 @@ function mekoCall(query, ms, how) {
   hook('postToolUse', { tool_name: '@meko/memory_search', tool_input: { __tool_use_purpose: 'Look it up.', ...input }, tool_response: { items: [{ Json: reply }] } });
 }
 
+/**
+ * Like a Kiro code-review session's turn on one step (AgentK's code review, `turns` mode): the step's
+ * file names its report tool and step id, and the agent reports through AgentK's tools route: the
+ * pass's report from `review-reports.json` in the fake's dir (default LGTM), or a confirmed score,
+ * unless the step is listed in `review-skip` there (or in `review-skip-once`, the first time only).
+ * Every call goes to `review-calls.jsonl`, with the model the session was on.
+ */
+function reviewStep(file) {
+  const body = readFileSync(file, 'utf8');
+  const step = /"step": "([^"]+)"/.exec(body)?.[1];
+  const tool = /call `([^`]+)` once/.exec(body)?.[1]?.split('/').pop();
+  const read = (f, d) => (existsSync(join(dir, f)) ? JSON.parse(readFileSync(join(dir, f), 'utf8')) : d);
+  const skip = read('review-skip', []);
+  const once = read('review-skip-once', []);
+  const reports = read('review-reports.json', {});
+  if (!step || !tool || skip.includes(step)) return;
+  if (once.includes(step)) {
+    writeFileSync(join(dir, 'review-skip-once'), JSON.stringify(once.filter((s) => s !== step)));
+    return;
+  }
+  // A step in `review-hold` waits, its turn running, until the test removes that file (`review-held` says it's waiting).
+  if (read('review-hold', []).includes(step)) {
+    writeFileSync(join(dir, 'review-held'), step);
+    while (existsSync(join(dir, 'review-hold'))) sleep(20);
+  }
+  const input = tool === 'review_score'
+    ? { step, score: { read: ['src/a.ts:1-5'], refutation: '', verdict: 'confirmed', confidence: 90, reason: 'Read it; it holds.' } }
+    : { step, report: reports[step.split(':')[1]] ?? { summary: 'LGTM', findings: [] } };
+  const r = spawnSync('curl', ['-s', '-w', '\n%{http_code}', '--unix-socket', process.env.AK_HOOK_SOCK, '-H', `X-AK-Token: ${process.env.AK_HOOK_TOKEN}`,
+    '-H', 'Content-Type: application/json', '--data-binary', '@-', 'http://agentk/tools'], { input: JSON.stringify({ v: 1, tool, input }) });
+  const out = r.stdout.toString().trim().split('\n');
+  log('review-calls.jsonl', { step, tool, model, status: Number(out.at(-1)), text: out.slice(0, -1).join('\n') });
+}
+
+// The model the session is on: --model, then each /model command.
+let model = opt('--model');
+
 function turn(text) {
+  // Kiro's own commands start no turn: no hook runs, and nothing reaches the conversation.
+  if (text === '/clear') {
+    log('commands.jsonl', { command: text });
+    return;
+  }
+  if (text.startsWith('/model ')) {
+    model = text.slice('/model '.length).trim();
+    log('commands.jsonl', { command: text });
+    return;
+  }
   record('Prompt', { message_id: randomUUID(), content: [{ kind: 'text', data: text }], meta: { timestamp: Math.floor(Date.now() / 1000) } });
   hook('userPromptSubmit', { prompt: text });
   // "meko <ms> [empty|refused]": a Meko search (see mekoCall); "then <ms>": the turn goes on that long after it.
@@ -199,6 +251,8 @@ function turn(text) {
       hook('postToolUse', { tool_name: 'write', tool_input: input, tool_response: { success: true } });
     }
   }
+  const step = /Read (\S+) and do what it says\./.exec(text);
+  if (step) reviewStep(step[1]);
   const turns = state.session_state.conversation_metadata.user_turn_metadatas;
   turns.push({
     end_timestamp: new Date(Date.now() + turns.length).toISOString(), model: 'auto', input_token_count: 0, output_token_count: 0,

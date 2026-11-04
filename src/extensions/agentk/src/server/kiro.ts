@@ -108,9 +108,16 @@ export function readKiroAgent(name: string, home = kiroHome()): Json | null {
  * Kiro's built-in default agent as `kiro-cli agent create --from kiro_default` writes it (kept in
  * the run folder), or, before that has run, the parts of it AgentK's sessions need: every tool, the
  * user's MCP servers, and the project files it reads.
+ *
+ * The export copies the servers in Kiro's MCP config (`settings/mcp.json`) into its `mcpServers`,
+ * headers and all, as they were then; the built-in agent has none of its own. An agent's own server
+ * wins over the MCP config's of the same name, so a copy would keep a Meko token Meko has since
+ * replaced (#467). They're left out while it loads the MCP config, which Kiro reads at each start.
  */
 export function builtinKiroAgent(paths: Paths): Json {
-  return readJson(join(paths.run, 'kiro-default.json')) ?? {
+  const exported = readJson(join(paths.run, 'kiro-default.json'));
+  if (exported) return exported.includeMcpJson === true ? { ...exported, mcpServers: {} } : exported;
+  return {
     tools: ['*'],
     allowedTools: [],
     resources: ['file://AmazonQ.md', 'file://AGENTS.md', 'file://README.md', 'skill://.kiro/skills/*/SKILL.md'],
