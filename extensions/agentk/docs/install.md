@@ -22,7 +22,12 @@ meko extension install agentk
 unpacks it into its data folder, then runs AgentK's setup, which offers to install anything that's
 missing (git, gh, and Claude Code, OpenCode or Kiro CLI when none is there: it asks which, or pass
 `meko extension install agentk -- --agent opencode` or `-- --agent kiro`) and to set up Meko for
-each agent, asking first. Then it prints the address to open.
+each agent, asking first (Meko's own setup runs quietly: its output shows only if it fails). Then
+it prints the address to open, and `me_koder ui`, `status` and `logs`. Its rows say only what
+needs a look: services that run and start at login go without one. On macOS the services are
+LaunchAgents: they start when you log in and stop when you log out, and sessions pause while the
+Mac sleeps. When AgentK uses the Meko on
+this computer, with no Meko Cloud link, it ends with `! Meko Cloud  not linked` and how to link it.
 
 ## Who can open it
 
@@ -83,7 +88,7 @@ your phone can connect.
 | Command | What it does |
 |---|---|
 | `me_koder ui` | Open AgentK in your browser through Meko (`open` on macOS, `xdg-open` on Linux); with no display to open it on, such as over SSH, it prints the URL |
-| `me_koder status` | Services, the URL Meko serves it at, sessions, and whether the server answers; exits 3 when no server runs this home |
+| `me_koder status` | Shaped like `meko status`: a headline (`✓ AgentK <version> is running (pid, up)`, which `meko status` shows in its AgentK row), a row each for the server (`healthy`), the session host and its sessions, and the services, then the web UI's URL, the home and the log; exits 3 when no server runs this home |
 | `me_koder stop` / `start` | Stop the server and the session host, ending every session, and start them again (sessions resume). The services also start again at the next login |
 | `me_koder restart` | Restart the web server only (sessions keep running), and wait until it answers; Meko runs it after installing an update |
 | `me_koder logs -f` | Follow the server log (`logs/server.log` in AgentK's home) |

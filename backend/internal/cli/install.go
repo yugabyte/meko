@@ -165,16 +165,7 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 			serviceStartTimeout, m.StatusHint()))
 	}
 	r.step(stepOK, "Server", fmt.Sprintf("running at http://127.0.0.1:%d (pid %d)", st.Port, st.PID))
-	next := [][2]string{{"meko ui", "open the web UI"}, {"meko status", "check on Meko at any time"}}
-	if noUI {
-		next[0] = [2]string{"meko ui start", "turn the web UI on, when you want it"}
-	}
-	if !agentKRegistered(l) {
-		next = append(next, [2]string{"meko extension install agentk", "add AgentK, your coding team"})
-	}
-	next = append(next, [2]string{"meko agent connect claude",
-		"connect Claude Code to Meko (or codex, kiro, opencode, cursor)"})
-	printRunning(l, "is installed and running", next, stdout)
+	printRunning(l, "is installed and running", nextInstall, stdout)
 	return exitOK
 }
 
@@ -426,7 +417,6 @@ func installExtension(ctx context.Context, l paths.Layout, name string, o extIns
 	if err := reg.Save(); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "%s uses this Meko, and meko start and meko stop start and stop it too\n", cat.Title)
 	return nil
 }
 

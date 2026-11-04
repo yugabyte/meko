@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
@@ -76,12 +75,7 @@ func runStart(l paths.Layout, o startOptions, stdout, stderr io.Writer) int {
 	code := startMeko(l, o, stdout, stderr)
 	if code == exitOK {
 		runExtensions(l, "start", stdout, stderr)
-		printRunning(l, "is running", [][2]string{
-			{"meko ui", "open the web UI"},
-			{"meko status", "check on Meko at any time"},
-			{"meko-cli", "search and add to what Meko keeps"},
-			{"meko agent connect claude", "connect Claude Code to Meko (or codex, kiro, opencode, cursor)"},
-		}, stdout)
+		printRunning(l, "is running", nextStart, stdout)
 	}
 	return code
 }
@@ -113,9 +107,8 @@ func waitWebListening(ctx context.Context, c *client) (server.StatusReply, error
 }
 
 // printRunning is the end of start's and install's summary: the memory engine's and web listener's
-// rows, a box of links titled "Meko <version> <title>", the commands to run next, and AgentK's
-// callout.
-func printRunning(l paths.Layout, title string, next [][2]string, stdout io.Writer) {
+// rows, a box of links titled "Meko <version> <title>", and the commands to run next (nextSteps).
+func printRunning(l paths.Layout, title string, kind nextFor, stdout io.Writer) {
 	r := newReport(stdout)
 	c, err := newClient(l)
 	if err != nil {
@@ -144,13 +137,11 @@ func printRunning(l paths.Layout, title string, next [][2]string, stdout io.Writ
 		}
 	}
 	r.box(fmt.Sprintf("Meko %s %s", st.Version, title), linkRows(st, l.Root))
-	r.next(next)
-	switch {
-	case agentKRegistered(l):
-		fmt.Fprintln(stdout, "\nTry AgentK, your coding team: meko ui /ext/agentk/")
-	case !slices.ContainsFunc(next, func(c [2]string) bool { return strings.HasPrefix(c[0], "meko extension install") }):
-		fmt.Fprintln(stdout, "\nAdd AgentK, your coding team: meko extension install agentk")
+	s := readNextState(l, c)
+	if st.Web != nil {
+		s.webOff = !st.Web.Enabled
 	}
+	r.next(nextSteps(s, kind))
 }
 
 // agentKRegistered reports whether meko start and stop run AgentK.

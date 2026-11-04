@@ -139,7 +139,9 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   });
 
   // ---- health ----
-  app.get('/healthz', async () => ({ ok: true, version: core.version }));
+  // pid and startedAt are for `me_koder status`'s headline ("running (pid 7, up 2h4m0s)").
+  const startedAt = new Date(Date.now() - process.uptime() * 1000).toISOString();
+  app.get('/healthz', async () => ({ ok: true, version: core.version, pid: process.pid, startedAt }));
 
   // ---- state, repos, datapacks ----
   app.get('/api/state', async () => core.state());

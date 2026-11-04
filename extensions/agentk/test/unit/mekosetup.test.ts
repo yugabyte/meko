@@ -166,6 +166,32 @@ describe('the install step for Meko in Claude Code', () => {
     expect(unattended.calls).toContain("say     Running Meko's setup (@yugabytedb/meko-mcp 9.9.9 from npm)");
   });
 
+  it("keeps the setup's output to itself when it works, and shows it when it fails", async () => {
+    for (const code of [0, 1]) {
+      const said: string[] = [];
+      const done = ensureMekoSetup(
+        { url: 'u', apiKey: 'k', canAsk: true, installDeps: false, noInstallDeps: false },
+        {
+          gaps: async () => ['x'], latest: async () => PKG, run: async () => code, output: () => ['Marketplace install skipped', 'Restart Claude Code'],
+          ask: async () => 'y', say: (t) => said.push(t), warn: () => undefined,
+        },
+      );
+      // A gap still there fails the setup whatever its exit code, so its output is shown.
+      await expect(done).rejects.toThrow(/didn't finish/);
+      expect(said).toEqual(["    Running Meko's setup (@yugabytedb/meko-mcp 9.9.9 from npm)", '      Marketplace install skipped', '      Restart Claude Code']);
+    }
+    const said: string[] = [];
+    let ran = false;
+    await ensureMekoSetup(
+      { url: 'u', apiKey: 'k', canAsk: true, installDeps: false, noInstallDeps: false },
+      {
+        gaps: async () => (ran ? [] : ['x']), latest: async () => PKG, run: async () => ((ran = true), 0), output: () => ['Marketplace install skipped'],
+        ask: async () => 'y', say: (t) => said.push(t), warn: () => undefined,
+      },
+    );
+    expect(said).toEqual(["    Running Meko's setup (@yugabytedb/meko-mcp 9.9.9 from npm)"]);
+  });
+
   it("names the local Meko's token in the command to run by hand", async () => {
     const step = ensureMekoSetup(
       { url: 'http://127.0.0.1:7778/mcp', apiKey: 'k', canAsk: false, installDeps: false, noInstallDeps: true, local: { home: '/home/u/.meko' } },

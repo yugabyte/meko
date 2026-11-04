@@ -4,7 +4,8 @@ import { basename, join } from 'node:path';
 import type { Paths } from './paths.js';
 import type { ServiceManager } from './service.js';
 
-export type Probe = { ok: true; version: string } | { ok: false; error: string };
+/** What /healthz says: the server's version, and its pid and start time (not from a server before them). */
+export type Probe = { ok: true; version: string; pid?: number; startedAt?: string } | { ok: false; error: string };
 
 /** Asks the local server for /healthz on its socket (`Paths.webSock`). */
 export function probeLocal(paths: Paths, timeoutMs = 3000): Promise<Probe> {
@@ -17,8 +18,15 @@ export function probeLocal(paths: Paths, timeoutMs = 3000): Promise<Probe> {
         res.on('data', (c: string) => (body += c));
         res.on('end', () => {
           try {
-            const j = JSON.parse(body) as { ok?: boolean; version?: string };
-            resolve(j.ok ? { ok: true, version: j.version ?? '?' } : { ok: false, error: `unexpected reply: ${body.slice(0, 80)}` });
+            const j = JSON.parse(body) as { ok?: boolean; version?: string; pid?: unknown; startedAt?: unknown };
+            resolve(j.ok
+              ? {
+                ok: true,
+                version: j.version ?? '?',
+                ...(typeof j.pid === 'number' ? { pid: j.pid } : {}),
+                ...(typeof j.startedAt === 'string' ? { startedAt: j.startedAt } : {}),
+              }
+              : { ok: false, error: `unexpected reply: ${body.slice(0, 80)}` });
           } catch {
             resolve({ ok: false, error: `HTTP ${res.statusCode}` });
           }

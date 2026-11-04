@@ -2628,7 +2628,7 @@ export type TermServerMessage =
 // /ext/agentk/ with the prefix stripped: Meko decides who gets in, so every request on the socket is
 // let in. Writes and WebSocket upgrades still refuse a cross-origin `Origin`.
 //
-// GET    /healthz                              → { ok: true, version }
+// GET    /healthz                              → { ok: true, version, pid, startedAt }
 // GET    /api/state                            → AppState
 // GET    /api/repos                            → ReposResponse
 // GET    /api/repos/branches?path=             → RepoBranches   (400 unless the path is a scanned repo or a project's)

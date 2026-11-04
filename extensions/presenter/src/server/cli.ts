@@ -4,7 +4,7 @@
 // _busy, which says whether a talk is live).
 
 import { execFileSync, spawn } from 'node:child_process';
-import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { createConnection } from 'node:net';
 import { dirname, join } from 'node:path';
@@ -14,6 +14,7 @@ import { DeckStore } from './decks.js';
 import { Jobs } from './jobs.js';
 import { MekoClient } from './meko.js';
 import { getPaths, MEKO_COMMANDS, refuseOtherMeko, withLocalBin, type Paths } from './paths.js';
+import { runs, statusLines } from './status.js';
 import { forMekoSummary, summaryRow } from './summary.js';
 import { Runs } from './runs.js';
 import { broadcast, buildServer, findWebDir, type Core } from './server.js';
@@ -196,13 +197,16 @@ async function busy(paths: Paths): Promise<void> {
 
 async function status(paths: Paths): Promise<void> {
   const pid = runningPid(paths);
-  const up = await socketAnswers(paths.webSock);
-  console.log(`Presenter ${version()}`);
-  console.log(`Home: ${paths.home}`);
-  console.log(`Server: ${pid && up ? `running (pid ${pid}), serving ${paths.webSock}` : 'not running'}`);
-  console.log('Pages: /ext/presenter/ on Meko\'s web listener (meko ui /ext/presenter/)');
-  console.log(`Claude Code: ${onPath('claude') ? 'installed' : 'not found: install it to build decks'}`);
-  if (!pid || !up) process.exitCode = 3;
+  let startedAt: number | null = null;
+  try {
+    // The server writes its pid file as it starts.
+    if (pid) startedAt = statSync(paths.pid).mtimeMs;
+  } catch {
+    // gone since
+  }
+  const facts = { version: version(), pid, startedAt, answers: await socketAnswers(paths.webSock), claude: onPath('claude'), home: paths.home, now: Date.now() };
+  for (const line of statusLines(facts)) console.log(line);
+  if (!runs(facts)) process.exitCode = 3;
 }
 
 /**

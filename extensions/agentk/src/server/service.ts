@@ -413,12 +413,7 @@ export class LaunchdServices implements ServiceManager {
   }
 
   bootCheck(): BootCheck {
-    return {
-      ok: true,
-      label: 'Starts',
-      detail: 'when you log in to this Mac',
-      note: 'It stops when you log out, and sessions pause while the Mac sleeps.',
-    };
+    return { ok: true, label: 'Starts', detail: 'when you log in to this Mac' };
   }
 
   statusHint(s: Service): string {

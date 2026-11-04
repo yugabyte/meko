@@ -235,6 +235,11 @@ export async function ensureMekoSetup(
     gaps: () => Promise<string[]>;
     latest: () => Promise<MekoSetupPackage>;
     run: (pkg: MekoSetupPackage) => Promise<number>;
+    /**
+     * The setup's own output, when `run` keeps it rather than print it: shown only when the setup
+     * fails, so a setup that works leaves the install output tidy.
+     */
+    output?: () => string[];
     ask: (question: string, def: string) => Promise<string>;
     say: (text: string) => void;
     warn: (label: string, text: string) => void;
@@ -257,12 +262,18 @@ export async function ensureMekoSetup(
   } else {
     if (!o.canAsk) throw new MekoSetupError(`Meko isn't set up for ${agent}. Rerun with --install-deps to set it up, or run: ${manual}`);
     if (/^n/i.test(await d.ask(`Run ${what}${kiro ? ' for Kiro' : ''}? (Y/n)`, 'y'))) throw new MekoSetupError(`Meko isn't set up for ${agent}. Run: ${manual}`);
+    if (d.output) d.say(`    Running ${what}`);
   }
+  const showOutput = () => {
+    for (const line of d.output?.() ?? []) d.say(`      ${line}`);
+  };
   const code = await d.run(pkg).catch((e: unknown) => {
+    showOutput();
     throw new MekoSetupError(`Meko's setup couldn't run (${e instanceof Error ? e.message : String(e)}). Run it yourself: ${manual}`);
   });
   const left = await d.gaps();
   if (code !== 0 || left.length) {
+    showOutput();
     throw new MekoSetupError(`Meko's setup didn't finish.${left.length ? ` Still: ${left.join(' ')}` : ''} See its output above, or run it yourself: ${manual}`);
   }
   return 'set-up';

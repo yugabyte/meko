@@ -60,7 +60,7 @@ func TestDestroyHelpNamesWithExtensions(t *testing.T) {
 func TestUsage(t *testing.T) {
 	t.Setenv(paths.HomeEnv, t.TempDir()) // meko's usage looks at the data folder to say where to start
 	code, out, _ := run()
-	if !strings.HasPrefix(out, "The universal, self-learning context engine for agentic applications\n\n") {
+	if !strings.HasPrefix(out, "The Context Engine for Agentic Applications\n\n") {
 		t.Errorf("meko --help doesn't open with Meko's tagline:\n%s", out)
 	}
 	want(t, "no command", code, 0, out, "Usage: meko <command> [flags]")

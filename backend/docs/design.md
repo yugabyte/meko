@@ -49,7 +49,9 @@ Given one of `meko-cli`'s commands, `meko` runs nothing and names the `meko-cli`
 Each command's help comes from one table (`help.go`: its group, summary, usage and examples, and its
 flag set's flags), which `meko --help`, `meko help <cmd>` and `<cmd> --help` (exit 0) all print. `install`, `start`, `stop`, `restart` and `status` print a summary
 (`report.go`): a row per step marked `✓`, `!` or `✗`, the links (`Humans (web UI)` on the web
-listener, `Agents (MCP, API)` on the API listener), and the commands to run next; the extensions
+listener, `Agents (MCP, API)` on the API listener), and the commands to run next (`next.go`, which
+leaves out what's already set up, an agent connected, memory extraction on or Meko Cloud linked,
+and once AgentK is installed offers opening it in place of installing it); the extensions
 print their own rows ([install.md](install.md#the-summary-rows)). `status` is that checklist;
 `status --verbose` has everything, and `status --json` the server's status reply.
 

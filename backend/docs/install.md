@@ -264,7 +264,11 @@ each one. The contract is the extension's own CLI: `<command> start`, `stop` and
 its uninstall (`Catalog.UninstallArgs`; AgentK's is `uninstall --purge --delete-worktrees
 --non-interactive`) for `meko destroy --with-extensions`. `status` exits 0 only while the
 extension runs (AgentK and Presenter exit 3 when stopped), and its first line is shown in `meko
-status`'s row. Meko runs every extension's `status` at once and gives each 3 s
+status`'s row. A first line that starts with a mark (`✓`, `!` or `✗`), the extensions' own headline
+(`✓ AgentK 0.20261103.13 is running (pid 39527, up 2h4m0s)`), is shown without the mark and the
+extension's title (`✓ AgentK   0.20261103.13 is running (pid 39527, up 2h4m0s)`), and its mark is the
+row's: a server that runs but doesn't answer exits 0 and is a `!`. Any other line is shown after
+`running` or `not running`, with the exit code's mark. Meko runs every extension's `status` at once and gives each 3 s
 (`extensions.StatusTimeout`); an update's check of whether the extension runs (`Entry.Status`)
 waits up to 15 s. Every command Meko runs of an extension
 (those, its installer and `me_koder install`) gets `MEKO_HOME` naming Meko's data folder, so the

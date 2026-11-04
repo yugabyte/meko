@@ -28,6 +28,8 @@ import { BEAT_MS, EXIT_BUSY, heldLease, InstanceBusyError, InstanceLock } from '
 import { HEALTHY_MS, pruneSnapshots, snapshotBeforeMigrating, switchedAway, updatedFrom, Updates } from './updates.js';
 import { probeLocalMeko } from './mekolocal.js';
 import { forMekoSummary, stopRowText, summaryRow } from './summary.js';
+import { formatStatus, serverRuns, type StatusFacts } from './statusview.js';
+import { style } from './tty.js';
 import {
   checkMove, finishMove, HomeMove, MEKO_COMMANDS, mekoDirOf, moveHome, readJournal, refuseOtherMeko, rememberMekoHome, stopAll, tmpHomeWarning,
 } from './movehome.js';
@@ -317,40 +319,53 @@ async function status(): Promise<void> {
   // that's only slow to answer must still be told from a stopped one (the lease, below).
   const probing = probeLocal(paths, STATUS_PROBE_MS);
   const web = await webUrl(paths, cfg);
-  console.log(`AgentK ${version()}`);
-  console.log(`home:     ${paths.home}`);
-  console.log(`database: ${dbPath(paths, cfg)}`);
-  console.log(`url:      ${web.url ?? `none (${web.why})`}`);
   // Only this home's services: another install on the account has its own.
   const svc = servicesFor(paths.home);
-  if (svc) {
-    for (const s of ['server', 'host'] as const) console.log(`${svc.id(s).padEnd(32)} ${svc.installed(s) ? svc.state(s).text : 'not installed'}`);
-  } else if (hostServices()) {
-    console.log('services: none for this home (the installed services run another one)');
-  }
-  const host = new SessionHost(paths, { services: () => null });
-  const up = await host.serverRunning().catch((e) => {
-    console.log(`host:     not answering (${errMsg(e)})`);
-    return null;
-  });
-  if (up) {
-    const panes = await host.panes().catch((e) => {
-      console.log(`sessions: couldn't list them (${errMsg(e)})`);
-      return null;
-    });
-    console.log(`host:     version ${host.hello?.version}, pid ${host.hello?.pid}`);
-    if (panes) console.log(`sessions: ${panes.size} (${[...panes.values()].filter((p) => !p.dead).length} running)`);
-  } else if (up === false) {
-    console.log('host:     not running');
+  const services: StatusFacts['services'] = svc
+    ? {
+      kind: svc.kind,
+      units: (['server', 'host'] as const).map((s) => {
+        const installed = svc.installed(s);
+        const st = installed ? svc.state(s) : { running: false, text: 'not installed' };
+        return { id: svc.id(s), installed, running: st.running, text: st.text };
+      }),
+    }
+    : hostServices() ? 'other' : null;
+  const client = new SessionHost(paths, { services: () => null });
+  let host: StatusFacts['host'];
+  try {
+    if (await client.serverRunning()) {
+      const panes = await client.panes().catch(() => null);
+      host = {
+        up: true,
+        pid: client.hello?.pid,
+        ...(panes ? { sessions: panes.size, running: [...panes.values()].filter((p) => !p.dead).length } : {}),
+      };
+    } else {
+      host = { up: false };
+    }
+  } catch (e) {
+    host = { error: errMsg(e) };
   }
   const probe = await probing;
-  console.log(`server:   ${probe.ok ? `responding (version ${probe.version})` : `not responding (${probe.error})`}`);
-  console.log(`logs:     ${join(paths.logs, 'server.log')}`);
+  const facts: StatusFacts = {
+    version: version(),
+    probe,
+    leasePid: heldLease(paths.lock)?.pid ?? null,
+    host,
+    services,
+    webUrl: web.url ?? null,
+    webWhy: web.why,
+    home: paths.home,
+    logs: join(paths.logs, 'server.log'),
+    now: Date.now(),
+  };
+  const paint = { ok: style.green, warn: style.yellow, fail: style.red };
+  for (const line of formatStatus(facts, (k, m) => paint[k](m))) console.log(line);
   // Meko reads the exit code (meko status, and an update deciding whether to restart AgentK): 3 when
   // no server runs this home, as Presenter's. One holding the lease that was only slow to answer runs.
-  if (!probe.ok && !heldLease(paths.lock)) process.exitCode = 3;
+  if (!serverRuns(facts)) process.exitCode = 3;
 }
-
 
 /** `host`, `host stop` and `host restart`. */
 async function host(args: string[]): Promise<void> {
