@@ -406,7 +406,7 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       changes need no new tests.
 - [ ] **Docs are updated in the same change** (see the table in AGENTS.md): the part of
       `docs/design/` that covers the change (and the contents table in `docs/design.md` for a new
-      part), `docs/features.md`, `docs/install.md`, `README.md` (kept short: only major features and the basic install), `AGENTS.md` (AgentK's,
+      part), `docs/features.md`, `docs/install.md`, `README.md` (kept short: the major features, the requirements, the basic install and the common commands), `AGENTS.md` (AgentK's,
       `src/server/AGENTS.md` or `src/web/AGENTS.md`, or the repo root's for the repo layout), `REVIEW.md` and `src/shared/types.ts`. Stale
       docs are a major finding. Screenshots in `docs/screenshots/` are retaken separately, not
       with every UI change, so don't flag a change for leaving them out of date.

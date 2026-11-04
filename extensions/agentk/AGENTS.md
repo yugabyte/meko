@@ -210,7 +210,7 @@ Docs are part of the change. Update them **in the same commit** as the code:
 | When you change… | Update |
 |---|---|
 | Behavior, architecture, lifecycle, security or data model | The part of `docs/design/` that covers it (a new part gets a row in the contents table of `docs/design.md`) |
-| Features, requirements, install steps | `docs/features.md` (every feature) and `docs/install.md` (install details and every command), and `README.md` when it changes a major feature, the install commands or a common command: the README stays short (the repo root's README is Meko's, and points here) |
+| Features, requirements, install steps | `docs/features.md` (every feature) and `docs/install.md` (install details and every command), and `README.md` when it changes anything the README states (a major feature, the requirements, the install steps, linking Meko Cloud, who can open AgentK, or a common command): the README stays short (the repo root's README is Meko's, and points here) |
 | Dev setup, checks | **Commands** above |
 | Release process, Dependabot's rules | [docs/design/releases.md](docs/design/releases.md) |
 | Module layout, invariants, commands, conventions | `AGENTS.md`: this one, or `src/server/AGENTS.md` or `src/web/AGENTS.md` for a module there (the repo root's for the repo layout and repo-wide rules) |
