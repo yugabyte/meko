@@ -469,7 +469,7 @@ export function NewSessionDialog({
 
   return (
     <Dialog
-      title={`New session in ${project.name}`}
+      title="New session"
       onClose={onClose}
       footer={
         <>

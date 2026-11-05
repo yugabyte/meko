@@ -33,6 +33,12 @@ function agents(harnesses: HarnessStatus[], harness?: HarnessStatus['id']) {
   );
 }
 
+describe("the New session dialog's title", () => {
+  it("is New session, without the project's name", () => {
+    expect(render([status('claude')]).match(/<h2>(.*?)<\/h2>/)?.[1]).toBe('New session');
+  });
+});
+
 describe("the New session dialog's Agent choice", () => {
   it.each([
     ['is left out while only Claude Code is available', [status('claude'), status('kiro', { available: false })], undefined, []],
