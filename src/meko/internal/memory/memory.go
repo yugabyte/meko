@@ -340,7 +340,7 @@ func (s *Service) EngineStatus(ctx context.Context) EngineStatus {
 				return EngineStatus{State: "restarting", Reason: c.LastError}
 			}
 		}
-		return EngineStatus{State: "starting", Reason: "not answering yet"}
+		return EngineStatus{State: "starting"}
 	}
 	return EngineStatus{State: h.State, Reason: h.Error, Embedder: &h.Embedder, Reranker: h.Reranker}
 }

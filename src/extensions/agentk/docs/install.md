@@ -89,7 +89,7 @@ your phone can connect.
 | Command | What it does |
 |---|---|
 | `me_koder ui` | Open AgentK in your browser through Meko (`open` on macOS, `xdg-open` on Linux); with no display to open it on, such as over SSH, it prints the URL |
-| `me_koder status` | Shaped like `meko status`: a headline (`✓ AgentK <version> is running (pid, up)`, which `meko status` shows in its AgentK row), a row each for the server (`healthy`), the session host and its sessions, and the services, then the web UI's URL, the home and the log; exits 3 when no server runs this home |
+| `me_koder status` | Shaped like `meko status`: a headline (`✓ AgentK <version> is running (pid, up)`, which `meko status` shows in its AgentK row), a row each for the server (`healthy`), the session host and its sessions, and the services, then the web UI's URL, the home and the log in a box titled `AgentK <version>`, as `meko status` draws its links; exits 3 when no server runs this home |
 | `me_koder stop` / `start` | Stop the server and the session host, ending every session, and start them again (sessions resume). The services also start again at the next login |
 | `me_koder restart` | Restart the web server only (sessions keep running), and wait until it answers; Meko runs it after installing an update |
 | `me_koder logs -f` | Follow the server log (`logs/server.log` in AgentK's home) |

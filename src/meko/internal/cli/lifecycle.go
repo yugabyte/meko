@@ -107,7 +107,8 @@ func waitWebListening(ctx context.Context, c *client) (server.StatusReply, error
 }
 
 // printRunning is the end of start's and install's summary: the memory engine's and web listener's
-// rows, a box of links titled "Meko <version> <title>", and the commands to run next (nextSteps).
+// rows, a box of links titled "Meko <version> <title>" (install's has no title after the version),
+// and the commands to run next (nextSteps).
 func printRunning(l paths.Layout, title string, kind nextFor, stdout io.Writer) {
 	r := newReport(stdout)
 	c, err := newClient(l)
@@ -136,7 +137,7 @@ func printRunning(l paths.Layout, title string, kind nextFor, stdout io.Writer) 
 			r.step(stepWarn, "Web UI", "starting (meko ui waits for it)")
 		}
 	}
-	r.box(fmt.Sprintf("Meko %s %s", st.Version, title), linkRows(st, l.Root))
+	r.box(strings.TrimSpace(fmt.Sprintf("Meko %s %s", st.Version, title)), linkRows(st, cloudRow(l)))
 	s := readNextState(l, c)
 	if st.Web != nil {
 		s.webOff = !st.Web.Enabled

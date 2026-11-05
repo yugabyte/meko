@@ -19,9 +19,11 @@ import (
 )
 
 // destroyOptions are destroy's flags: force asks nothing, withExtensions removes the extensions'
-// data too (each extension's own uninstall).
+// data too (each extension's own uninstall). uninstall is meko uninstall --purge's destroy: Meko's
+// commands and service go next, so the extensions' data goes with Meko's once it's asked (unless
+// force keeps it), and nothing is said of what destroy alone leaves.
 type destroyOptions struct {
-	force, withExtensions bool
+	force, withExtensions, uninstall bool
 }
 
 // extensionData is one extension with data in the data folder: registered in extensions.json, or a
@@ -43,12 +45,16 @@ func runDestroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr i
 // Only a folder that looks like Meko's is removed. Without extension data the folder is renamed
 // away while the lock is held, so a start at the same moment finds either all of it or none of it,
 // and then removed. With extension data it asks whether to remove that too (or follows
-// o.withExtensions; force alone keeps it): removing runs each extension's own uninstall first, then
-// removes the folder as above; keeping moves everything else aside under the lock instead
-// (removeKeepingExtensions), so an extension running from its folder (AgentK's sessions) never
-// loses it. A symlinked data folder loses the folder it points to and then the link. A missing or
-// empty folder is nothing to remove, and is left as it is (a link to it too).
+// o.withExtensions; force alone keeps it; o.uninstall removes it with Meko's, unasked): removing
+// runs each extension's own uninstall first, then removes the folder as above; keeping moves
+// everything else aside under the lock instead (removeKeepingExtensions), so an extension running
+// from its folder (AgentK's sessions) never loses it. A symlinked data folder loses the folder it
+// points to and then the link. A missing or empty folder is nothing to remove, and is left as it is
+// (a link to it too).
 func destroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.Writer) (int, bool) {
+	if o.uninstall && !o.force {
+		o.withExtensions = true
+	}
 	link := ""
 	fi, err := os.Lstat(l.Root)
 	switch {
@@ -81,17 +87,10 @@ func destroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.W
 		}
 		return destroyOnlyExtensions(l, exts, o, in, stdout, stderr), !o.withExtensions
 	}
-	up, err := running(l.Lock)
-	if err != nil {
-		return fail(stderr, err), false
-	}
 	fmt.Fprintf(stdout, "This removes Meko's data in %s (%s) for good: every datapack, memory and "+
 		"conversation, the config, the client token and the logs\n", l.Root,
 		humanSize(paths.DirSize(l.Root, l.Extensions)))
 	listExtensionData(exts, o, stdout)
-	if up {
-		fmt.Fprintln(stdout, "Meko is running, so it's stopped first")
-	}
 	answers := newAnswerReader(in)
 	if !o.force && !confirm(answers, stdout, "Destroy it? [y/N] ") {
 		fmt.Fprintln(stderr, "Nothing was removed")
@@ -124,11 +123,13 @@ func destroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.W
 			return fail(stderr, fmt.Errorf("%w. %s", err, nothing)), false
 		}
 	}
+	// Stopped through its service, the server has nothing to say; one run by hand says how it stopped.
+	stillUp, _ := running(l.Lock)
 	msg, err := stopServer(l)
 	if err != nil {
 		return fail(stderr, fmt.Errorf("%w. %s", err, nothing)), false
 	}
-	if up {
+	if stillUp {
 		fmt.Fprintln(stdout, msg)
 	}
 	if keep {
@@ -159,6 +160,9 @@ func destroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.W
 			"extension install agentk to point AgentK at the new Meko")
 	} else {
 		fmt.Fprintf(stdout, "Removed %s\n", l.Root)
+	}
+	if o.uninstall {
+		return exitOK, keep
 	}
 	if m != nil {
 		fmt.Fprintf(stdout, "The %s service is still installed, and starts Meko on an empty data folder at the "+
@@ -251,6 +255,9 @@ func listExtensionData(exts []extensionData, o destroyOptions, stdout io.Writer)
 		}
 	}
 	switch {
+	case o.uninstall && !o.force:
+		fmt.Fprintln(stdout, "Destroying it uninstalls them too and deletes their data: AgentK's sessions and "+
+			"worktrees, with any uncommitted work in them")
 	case o.withExtensions:
 		fmt.Fprintln(stdout, "--with-extensions uninstalls them and deletes their data too: AgentK's "+
 			"sessions and worktrees, with any uncommitted work in them")
@@ -289,7 +296,7 @@ func uninstallExtensions(l paths.Layout, exts []extensionData, purge bool, stdou
 				"uninstall can't run; any service it installed stays\n", cat.Title)
 			continue
 		}
-		fmt.Fprintf(stdout, "Uninstalling %s (%s %s)\n", cat.Title, cmd, strings.Join(args, " "))
+		fmt.Fprintf(stdout, "Uninstalling %s\n", cat.Title)
 		if err := (extensions.Entry{Command: cmd}).Uninstall(l.Root, args, stdout, stderr); err != nil {
 			return fmt.Errorf("uninstalling %s failed: %w. Nothing of Meko's was removed", cat.Title, err)
 		}

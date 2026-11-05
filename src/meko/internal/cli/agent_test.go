@@ -267,7 +267,9 @@ func TestCloudLinkMovesAgentsBack(t *testing.T) {
 	connected := readFile(t, kiroFile(t))
 	withStdin(t, testCloudKey+"\n")
 	code, out, errs = run("cloud_link", "--data-dir", dir, "--url", cloud+"/mcp", "--web-url", cloud)
-	if code != 0 || errs != "" || out != "Linked to "+cloud+"/mcp (key …wxyz)\n" {
+	if code != 0 || errs != "" ||
+		!strings.HasPrefix(out, "✓ Linked to "+cloud+"/mcp (key …wxyz)\n\nNext:\n  meko start ") ||
+		strings.Contains(out, "cloud_link") {
 		t.Fatalf("cloud_link with no server: %d %q %q", code, out, errs)
 	}
 	if k := readFile(t, kiroFile(t)); k != connected {

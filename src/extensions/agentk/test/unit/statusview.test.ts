@@ -23,16 +23,20 @@ function facts(o: Partial<StatusFacts> = {}): StatusFacts {
 }
 
 describe("me_koder status, shaped like meko status", () => {
-  it('opens with a marked headline, then a row per part, then the links', () => {
+  it('opens with a marked headline, then a row per part, then the links in a box like Meko\'s', () => {
     expect(formatStatus(facts())).toEqual([
       '✓ AgentK 0.20261103.13 is running (pid 39527, up 2h4m0s)',
       '  ✓ Server          healthy',
       '  ✓ Session host    running (pid 39531), 0 sessions',
       '  ✓ Service         launchd',
       '',
-      '  Web UI   http://127.0.0.1:7777/ext/agentk/',
-      '  Home     /home/alice/.meko/extensions/agentk',
-      '  Logs     /home/alice/.meko/extensions/agentk/logs/server.log',
+      '┌──────────────────────────────────────────────────────────────┐',
+      '│ AgentK 0.20261103.13                                         │',
+      '├──────────────────────────────────────────────────────────────┤',
+      '│ Web UI   http://127.0.0.1:7777/ext/agentk/                   │',
+      '│ Home     /home/alice/.meko/extensions/agentk                 │',
+      '│ Logs     /home/alice/.meko/extensions/agentk/logs/server.log │',
+      '└──────────────────────────────────────────────────────────────┘',
     ]);
   });
 
@@ -75,7 +79,7 @@ describe("me_koder status, shaped like meko status", () => {
     expect(lines[0]).toBe('✓ AgentK 0.20261103.13 is running (pid 39527)');
     expect(lines).toContain('  ! Session host    not answering (EACCES)');
     expect(lines).toContain('  ! Service         launchd: com.yugabyte.me_koder.host not installed');
-    expect(lines).toContain("  Web UI   none (Meko isn't running: start it with meko start)");
+    expect(lines.some((l) => l.startsWith("│ Web UI   none (Meko isn't running: start it with meko start)"))).toBe(true);
     expect(formatStatus(facts({ services: 'other' }))).toContain('  ! Service         none for this home (the installed services run another one)');
     expect(formatStatus(facts({ services: null })).some((l) => l.includes('Service'))).toBe(false);
   });

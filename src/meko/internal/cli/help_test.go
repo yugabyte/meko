@@ -292,14 +292,15 @@ func TestLinkMekoCLI(t *testing.T) {
 	}
 }
 
-// meko alone starts with what to type next: install on a computer that has no Meko, start when it's
-// set up but stopped.
+// meko alone ends with what to type next, after its commands: install on a computer that has no
+// Meko, start when it's set up but stopped.
 func TestMekoAloneSaysWhereToStart(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "meko")
 	t.Setenv(paths.HomeEnv, dir)
 	var out bytes.Buffer
 	if code := Run(nil, &out, &out); code != exitOK ||
-		!strings.Contains(out.String(), "\n\nNew here? Start with:\n  meko install") {
+		!strings.Contains(out.String(), "Docs: "+docsURL+"\n\nNew here? Start with:\n  meko install") ||
+		!strings.HasPrefix(out.String(), "The Context Engine for Agentic Applications\n\nUsage: meko ") {
 		t.Errorf("no Meko yet: exit %d\n%s", code, out.String())
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {

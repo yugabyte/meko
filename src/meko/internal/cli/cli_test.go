@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/yugabyte/meko/src/meko/internal/agents"
+	"github.com/yugabyte/meko/src/meko/internal/callhome"
 	"github.com/yugabyte/meko/src/meko/internal/config"
 	"github.com/yugabyte/meko/src/meko/internal/extensions"
 	"github.com/yugabyte/meko/src/meko/internal/paths"
@@ -234,7 +235,9 @@ func TestStatusAsksTheExtensionsAtOnce(t *testing.T) {
 	}
 	want(t, "status", code, 0, out, "  ✓ AgentK          running, AgentK 1.0\n"+
 		"  ! Presenter       didn't answer in 2s (me_presenter status)\n")
-	want(t, "status's links", code, 0, out, "  Agents (MCP, API)   http://127.0.0.1:"+port+"/mcp\n")
+	want(t, "status's links", code, 0, out, "│ Agents (MCP, API)   http://127.0.0.1:"+port+"/mcp ")
+	want(t, "status's Cloud", code, 0, out, "│ Cloud               Not linked ")
+	want(t, "status's next steps", code, 0, out, "More detail: meko status --verbose\n\nNext:\n  meko ui ")
 
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
 	want(t, "status --verbose", code, 0, out, "  Extension:     agentk, running (AgentK 1.0)\n"+
@@ -254,16 +257,21 @@ func TestStartStatusStop(t *testing.T) {
 	want(t, "status's auth", code, 0, out, "Auth:          token")
 	want(t, "status's service", code, 0, out, "Service:       none (meko install sets one up)")
 	want(t, "status's updates", code, 0, out, "Updates:       none (a build from source)")
-	want(t, "status's usage stats", code, 0, out, "Usage stats:   on, but a build from source sends none")
+	if strings.Contains(out, "Usage stats") {
+		t.Errorf("status --verbose shows usage stats:\n%s", out)
+	}
+	if u := statusUsageStats(t, dir); !u.Enabled || u.Sends {
+		t.Errorf("a build from source's usage stats: %+v", u)
+	}
 
 	code, _, errs = run("serve", "--data-dir", dir, "--port", strconv.Itoa(freePort(t)))
 	want(t, "second serve", code, exitLocked, errs, "already running for "+dir)
 
 	code, out, _ = run("status", "--data-dir", dir)
-	want(t, "short status", code, 0, out, " is running (pid ")
+	want(t, "short status's box", code, 0, out, "\n│ Meko dev is running (pid ")
 	want(t, "short status's service", code, 0, out, "  ! Service         none (meko install sets one up)\n")
-	want(t, "short status's link for agents", code, 0, out, "  Agents (MCP, API)   http://127.0.0.1:"+port+"/mcp\n")
-	want(t, "short status's link for people", code, 0, out, "  Humans (web UI)     http://127.0.0.1:")
+	want(t, "short status's link for agents", code, 0, out, "│ Agents (MCP, API)   http://127.0.0.1:"+port+"/mcp ")
+	want(t, "short status's link for people", code, 0, out, "│ Humans (web UI)     http://127.0.0.1:")
 	want(t, "short status's way to more", code, 0, out, "More detail: meko status --verbose\n")
 	code, out, _ = run("status", "--data-dir", dir, "--json")
 	var reply struct {
@@ -371,8 +379,9 @@ func TestUsageStatsGoToTheConfiguredURL(t *testing.T) {
 	t.Setenv(testCallHomeFirstCheckEnv, "100ms")
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
-	code, out, _ = run("status", "--data-dir", dir, "--verbose")
-	want(t, "status", code, 0, out, "Usage stats:   on (sent to "+srv.URL+"/)")
+	if u := statusUsageStats(t, dir); !u.Enabled || !u.Sends || u.URL != srv.URL+"/" {
+		t.Errorf("usage stats: %+v", u)
+	}
 	select {
 	case b := <-got:
 		var e struct {
@@ -399,8 +408,22 @@ func TestStatusSaysWhatTurnedUsageStatsOff(t *testing.T) {
 	t.Setenv("YB_DISABLE_CALLHOME", "true")
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
-	code, out, _ = run("status", "--data-dir", dir, "--verbose")
-	want(t, "status", code, 0, out, "Usage stats:   off (turned off by YB_DISABLE_CALLHOME)")
+	if u := statusUsageStats(t, dir); u.Enabled || u.By != "YB_DISABLE_CALLHOME" {
+		t.Errorf("usage stats: %+v", u)
+	}
+}
+
+// statusUsageStats is status --json's usage stats.
+func statusUsageStats(t *testing.T, dir string) callhome.State {
+	t.Helper()
+	code, out, errs := run("status", "--data-dir", dir, "--json")
+	var st struct {
+		UsageStats *callhome.State `json:"usage_stats"`
+	}
+	if err := json.Unmarshal([]byte(out), &st); code != 0 || err != nil || st.UsageStats == nil {
+		t.Fatalf("status --json: %d %v %q %q", code, err, out, errs)
+	}
+	return *st.UsageStats
 }
 
 func TestStalePidFileDoesntBlockStart(t *testing.T) {
@@ -811,7 +834,7 @@ func TestDestroyAsksThenStopsAndRemoves(t *testing.T) {
 		withStdin(t, answer)
 		code, out, errs = run("destroy", "--data-dir", dir)
 		want(t, "destroy answered "+strconv.Quote(answer), code, 1, errs, "Nothing was removed\n")
-		want(t, "destroy's question", code, 1, out, "Meko is running, so it's stopped first\nDestroy it? [y/N] ")
+		want(t, "destroy's question", code, 1, out, "the logs\nDestroy it? [y/N] ")
 		want(t, "destroy's summary", code, 1, out, "This removes Meko's data in "+dir+" (")
 		code, out, _ = run("status", "--data-dir", dir)
 		want(t, "status after a declined destroy", code, 0, out, " is running (pid ")

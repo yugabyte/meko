@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/yugabyte/meko/src/meko/internal/agents"
 	"github.com/yugabyte/meko/src/meko/internal/config"
 	"github.com/yugabyte/meko/src/meko/internal/extensions"
 	"github.com/yugabyte/meko/src/meko/internal/paths"
@@ -58,6 +59,9 @@ func (n *unsignedNotices) print(w io.Writer) {
 	n.lines = nil
 }
 
+// installCommand installs Meko's newest release, as the README and docs/install.md give it.
+const installCommand = "curl -fsSL https://mekodata.ai/install.sh | sh"
+
 // runningRelease finds the release install the running binary belongs to; tests replace it.
 var runningRelease = update.Running
 
@@ -93,7 +97,7 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 			return fail(stderr, err)
 		}
 		exe = app.CurrentExe()
-		fmt.Fprintf(stdout, "Installing Meko %s in %s…\n", ver, app.Dir(ver))
+		fmt.Fprintln(stdout, "Installing Meko")
 		if bin := filepath.Dir(link); onPath(bin) {
 			r.step(stepOK, "Commands", "meko and meko-cli, in "+bin)
 		} else {
@@ -151,7 +155,7 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 	if err := m.Install(service.Spec{Exe: exe, DataDir: l.Root, ServiceLog: l.ServiceLog, Host: host}); err != nil {
 		return fail(stderr, err)
 	}
-	r.step(stepOK, "Service", fmt.Sprintf("%s (%s), starts at login and restarts on failure", m.Kind(), m.File()))
+	r.step(stepOK, "Service", m.Kind()+", starts at login and restarts on failure")
 	if sd, ok := m.(*service.Systemd); ok {
 		if ok, detail, note := sd.Linger(); ok {
 			r.step(stepOK, "Boot", detail)
@@ -165,7 +169,7 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 			serviceStartTimeout, m.StatusHint()))
 	}
 	r.step(stepOK, "Server", fmt.Sprintf("running at http://127.0.0.1:%d (pid %d)", st.Port, st.PID))
-	printRunning(l, "is installed and running", nextInstall, stdout)
+	printRunning(l, "", nextInstall, stdout)
 	return exitOK
 }
 
@@ -252,8 +256,9 @@ func onPath(dir string) bool {
 
 // runUninstall removes the service, the meko command and the release installs. The data stays
 // unless purge, which first destroys it as meko destroy does (asking, unless o.force; the
-// extensions go too with o.withExtensions or when told so), with the client token wherever it's
-// kept. Extensions stay installed unless that destroy removed them.
+// extensions go too unless o.force keeps them), with the client token wherever it's kept, and then
+// disconnects the agents that sent that token (disconnectAgents). Extensions stay installed unless
+// that destroy removed them. It ends saying how to install Meko again.
 func runUninstall(l paths.Layout, purge bool, o destroyOptions, stdout, stderr io.Writer) int {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -268,6 +273,9 @@ func runUninstall(l paths.Layout, purge bool, o destroyOptions, stdout, stderr i
 		}
 	}
 	if purge {
+		// Found while the data folder still says what this Meko's token is.
+		disconnect := connectedAgents(l)
+		o.uninstall = true
 		code, kept := destroy(l, o, stdin, stdout, stderr)
 		if code != exitOK {
 			return code
@@ -275,6 +283,7 @@ func runUninstall(l paths.Layout, purge bool, o destroyOptions, stdout, stderr i
 		if !kept {
 			exts = nil
 		}
+		disconnect(stdout, stderr)
 	}
 	if m, merr := newManager(); merr == nil && m.Installed() && (m.DataDir() == "" || paths.SameDir(m.DataDir(), l.Root)) {
 		if err = m.Remove(); err != nil {
@@ -306,7 +315,6 @@ func runUninstall(l paths.Layout, purge bool, o destroyOptions, stdout, stderr i
 			if err = app.Remove(); err != nil {
 				return fail(stderr, err)
 			}
-			fmt.Fprintf(stdout, "Removed the releases in %s and the meko and meko-cli commands\n", app.Root)
 		}
 	}
 	for _, line := range exts {
@@ -315,7 +323,67 @@ func runUninstall(l paths.Layout, purge bool, o destroyOptions, stdout, stderr i
 	if !purge {
 		fmt.Fprintf(stdout, "Your data is still in %s; meko destroy (or meko uninstall --purge) removes it\n", l.Root)
 	}
+	fmt.Fprintln(stdout, "Meko removed. You can install it again using\n  `"+installCommand+"`")
 	return exitOK
+}
+
+// connectedAgents finds the agents connected to this Meko (their meko server sends its token), and
+// returns what disconnects them once the purge has removed the data folder and the token with it:
+// their meko server would only fail. It only reads: unlike agentManager's readMCPAccess, it makes no
+// data folder or token where there's none (then no agent can send it). The manager has no lock,
+// since the lock is in the data folder the purge removes, and no meko uses it any more. An agent
+// pointing elsewhere (another Meko on this computer, Meko Cloud) isn't connected, so it's left.
+func connectedAgents(l paths.Layout) func(stdout, stderr io.Writer) {
+	none := func(io.Writer, io.Writer) {}
+	if !paths.LooksLikeDataDir(l.Root) {
+		return none
+	}
+	cfg, err := config.Load(l.Config, os.Getenv, config.Overrides{})
+	if err != nil {
+		return none
+	}
+	ct, err := clientTokens(l, cfg)
+	if err != nil {
+		return none
+	}
+	tok, err := ct.Read()
+	if err != nil {
+		return none
+	}
+	port := cfg.Server.Port
+	if up, _ := running(l.Lock); up {
+		if p, perr := readInt(l.Port); perr == nil {
+			port = p
+		}
+	}
+	t := localTarget(mcpAccess{url: fmt.Sprintf("http://127.0.0.1:%d/mcp", port), token: tok})
+	m := &agents.Manager{Target: func() (agents.Target, error) { return t, nil }}
+	list, err := m.List()
+	if err != nil {
+		return none
+	}
+	var names []string
+	for _, r := range list.Agents {
+		if r.State == agents.StateConnected {
+			names = append(names, r.Name)
+		}
+	}
+	return func(stdout, stderr io.Writer) {
+		var done []string
+		for _, n := range names {
+			r, derr := m.Disconnect(context.Background(), n)
+			if derr != nil {
+				fmt.Fprintf(stderr, "meko: %v. Remove its meko MCP server yourself\n", derr)
+				continue
+			}
+			if r.Changed {
+				done = append(done, r.Agent.Title)
+			}
+		}
+		if len(done) > 0 {
+			fmt.Fprintf(stdout, "Disconnected %s from Meko\n", joinAnd(done))
+		}
+	}
 }
 
 // runInstallExtension installs a known extension pointed at this Meko, with Meko's MCP URL and its

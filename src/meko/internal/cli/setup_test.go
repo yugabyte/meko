@@ -486,7 +486,9 @@ func TestStartRefusesFlagsTheServiceWouldIgnore(t *testing.T) {
 	configurePort(t, dir, port)
 	useFakeService(t)
 	code, out, errs := run("install", "--data-dir", dir)
-	want(t, "install", code, 0, out+errs, "is installed and running")
+	want(t, "install", code, 0, out+errs, "  ✓ Service         fake, starts at login and restarts on failure\n")
+	want(t, "install's box", code, 0, out, "│ Meko dev ")
+	want(t, "install's Cloud", code, 0, out, "│ Cloud               Not linked ")
 	code, _, errs = run("restart", "--data-dir", dir, "--log-level", "debug")
 	want(t, "restart --log-level", code, 1, errs, "reads config.toml")
 	code, _, errs = run("stop", "--data-dir", dir)
@@ -568,7 +570,10 @@ func TestUninstallRemovesTheCommands(t *testing.T) {
 		}
 	}
 	code, out, errs := run("uninstall", "--data-dir", dir)
-	want(t, "uninstall", code, 0, out+errs, "and the meko and meko-cli commands")
+	if code != 0 || !strings.HasSuffix(out, "Meko removed. You can install it again using\n"+
+		"  `curl -fsSL https://mekodata.ai/install.sh | sh`\n") {
+		t.Errorf("uninstall doesn't end with how to install again:\n%s%s", out, errs)
+	}
 	for _, link := range []string{progMeko, progMekoCLI, progMekosh} {
 		if _, err := os.Lstat(filepath.Join(bin, link)); !os.IsNotExist(err) { //nolint:gosec // G703: the test's home
 			t.Errorf("uninstall left %s: %v", link, err)
@@ -639,4 +644,39 @@ func TestServeMovesTheLaunchAgentOntoTheLauncher(t *testing.T) {
 	if !strings.Contains(string(b), "exec '"+app.CurrentExe()+"'") {
 		t.Errorf("launcher:\n%s", b)
 	}
+}
+
+// meko uninstall --purge asks once: Meko goes, and the extensions with their data, since nothing
+// would run them; the agents connected to it are disconnected, since its token goes too. It says
+// nothing of what destroy alone leaves (the service, the binary, agents' tokens), names no
+// extension's command line, and ends saying how to install Meko again.
+func TestUninstallPurgeRemovesTheExtensionsToo(t *testing.T) {
+	dir, _ := setup(t)
+	noRealExtensions(t)
+	useFakeService(t)
+	log, _ := withExtensionData(t, dir, false) // a PATH without the machine's extensions, so before the agents'
+	fakeAgents(t, false, "kiro-cli")
+	if code, out, errs := run("agent", "connect", "--data-dir", dir, "kiro"); code != 0 {
+		t.Fatalf("agent connect kiro: %d %s%s", code, out, errs)
+	}
+	withStdin(t, "y\n")
+	code, out, errs := run("uninstall", "--data-dir", dir, "--purge")
+	want(t, "uninstall --purge", code, 0, out+errs, "Destroying it uninstalls them too and deletes their data")
+	want(t, "uninstall --purge", code, 0, out, "Uninstalling AgentK\n")
+	for _, said := range []string{"Also uninstall the extensions", "still installed", "The meko binary is still",
+		"run meko agent connect", "--non-interactive", "Meko isn't running", "stopped first"} {
+		if strings.Contains(out+errs, said) {
+			t.Errorf("uninstall --purge says %q:\n%s%s", said, out, errs)
+		}
+	}
+	want(t, "the extension's uninstall", 0, 0, readLog(t, log),
+		"uninstall --purge --delete-worktrees --non-interactive "+dir+"\n")
+	want(t, "uninstall --purge", code, 0, out, "Disconnected Kiro CLI from Meko\n")
+	if k := readFile(t, kiroFile(t)); strings.Contains(k, "meko") {
+		t.Errorf("Kiro CLI still has Meko's server: %s", k)
+	}
+	if !strings.HasSuffix(out, "Meko removed. You can install it again using\n  `"+installCommand+"`\n") {
+		t.Errorf("uninstall --purge doesn't end with how to install again:\n%s", out)
+	}
+	gone(t, dir)
 }

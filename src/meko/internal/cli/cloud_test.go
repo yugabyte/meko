@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -178,13 +179,19 @@ func TestCloudLink(t *testing.T) {
 	want(t, "start", code, 0, out+errs, "is running")
 	code, out, errs = run("cloud_link", "--data-dir", dir, "--off")
 	want(t, "cloud_link --off through the server", code, 0, out+errs, "Meko Cloud is unlinked")
+	if strings.Contains(out, "Next:") {
+		t.Errorf("unlinking says what to run next:\n%s", out)
+	}
 	if c := readCloudToken(t, dir); c != (cloudToken{Set: true, DatapackRouting: true}) {
 		t.Fatalf("unlinked: %+v", c)
 	}
 	// Linking again with only the key keeps the URLs saved before.
 	withStdin(t, testCloudKey+"\n")
 	code, out, errs = run("cloud_link", "--data-dir", dir)
-	want(t, "cloud_link through the server", code, 0, out+errs, "Linked to "+cloud+"/mcp")
+	want(t, "cloud_link through the server", code, 0, out+errs, "✓ Linked to "+cloud+"/mcp")
+	want(t, "cloud_link's next steps", code, 0, out, "\n\nNext:\n  meko ui ")
+	code, out, _ = run("status", "--data-dir", dir)
+	want(t, "status's Cloud row", code, 0, out, "│ Cloud               "+cloud+" ")
 
 	code, _, errs = run("cloud_link", "--data-dir", dir, "--off", "--url", "x")
 	want(t, "--off with a URL", code, exitUsage, errs, "--off takes no URLs")
@@ -695,5 +702,64 @@ func postFile(t *testing.T, link string, fields map[string]string, name string, 
 	_ = res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode > 299 {
 		t.Fatalf("the upload link answered %d", res.StatusCode)
+	}
+}
+
+// meko cloud_link's choice, read a key at a time on a terminal: the arrows (or k and j) move the
+// mark and wrap, Enter picks it, a number picks its choice at once, Ctrl+C and Ctrl+D cancel, and
+// other keys do nothing.
+func TestPickKeyPress(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		at     int
+		keys   string
+		next   int
+		picked bool
+		err    error
+	}{
+		{"down", 0, "\x1b[B", 1, false, nil},
+		{"down wraps", 1, "\x1b[B", 0, false, nil},
+		{"up wraps", 0, "\x1b[A", 1, false, nil},
+		{"up, application mode", 1, "\x1bOA", 0, false, nil},
+		{"j and k", 0, "j", 1, false, nil},
+		{"k", 1, "k", 0, false, nil},
+		{"Enter picks the mark", 1, "\r", 1, true, nil},
+		{"a newline too", 0, "\n", 0, true, nil},
+		{"2 picks at once", 0, "2", 1, true, nil},
+		{"1 picks at once", 1, "1", 0, true, nil},
+		{"3 isn't a choice", 0, "3", 0, false, nil},
+		{"a lone Escape", 1, "\x1b", 1, false, nil},
+		{"Ctrl+C", 0, "\x03", 0, false, errCanceled},
+		{"Ctrl+D", 1, "\x04", 1, false, errCanceled},
+	} {
+		next, picked, err := pickKeyPress(c.at, 2, []byte(c.keys))
+		if next != c.next || picked != c.picked || !errors.Is(err, c.err) {
+			t.Errorf("%s: %d %v %v, want %d %v %v", c.name, next, picked, err, c.next, c.picked, c.err)
+		}
+	}
+}
+
+// The summary box's Cloud row names the linked web app; a link to another Meko server, whose web app
+// Meko can't know, names its MCP URL instead, and an unlinked Meko says so.
+func TestCloudRow(t *testing.T) {
+	dir, _ := setup(t)
+	t.Setenv("MEKO_SECRETS", "file")
+	cloud := fakeCloud(t)
+	if r := cloudRow(paths.New(dir)); r != [2]string{"Cloud", "Not linked"} {
+		t.Errorf("unlinked: %q", r)
+	}
+	withStdin(t, testCloudKey+"\n")
+	if code, out, errs := run("cloud_link", "--data-dir", dir, "--url", cloud+"/mcp"); code != 0 {
+		t.Fatalf("cloud_link: %d %s%s", code, out, errs)
+	}
+	if r := cloudRow(paths.New(dir)); r != [2]string{"Cloud", cloud + "/mcp (key …wxyz)"} {
+		t.Errorf("linked with no web app: %q", r)
+	}
+	withStdin(t, testCloudKey+"\n")
+	if code, out, errs := run("cloud_link", "--data-dir", dir, "--web-url", cloud); code != 0 {
+		t.Fatalf("cloud_link --web-url: %d %s%s", code, out, errs)
+	}
+	if r := cloudRow(paths.New(dir)); r != [2]string{"Cloud", cloud} {
+		t.Errorf("linked with a web app: %q", r)
 	}
 }

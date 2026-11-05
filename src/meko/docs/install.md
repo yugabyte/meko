@@ -63,11 +63,18 @@ says so and changes nothing, unless given `--reinstall` or another version.
 `~/.local/bin/mekosh` (when they're links into the app folder) and the app folder,
 and keeps the data;
 `--purge` first destroys the data folder as `meko destroy` does (it asks, unless `--force`; it
-takes `--with-extensions` too). Extensions stay installed unless that destroy removed them, and it
-names the ones that stay. `meko destroy` stops the service before the server, so its manager
-doesn't start the server again mid-removal; removes the data folder and the client token (also when
-it's in the Keychain, outside the folder); and says the service is still installed. The releases
-are outside the data folder, so the service can still start Meko on a fresh one.
+takes `--with-extensions` too), with one difference: its one question removes the extensions and
+their data too, since with Meko gone nothing would run them, and only `--force` without
+`--with-extensions` keeps them. Extensions stay installed unless that destroy removed them, and it
+names the ones that stay. A purge then disconnects the agents that were connected to this Meko
+(their `meko` MCP server sent its token, which the purge deleted), found before the destroy and
+removed after it, and says which. Its last line, after the extensions still installed and (without
+`--purge`) where the data stays, says how to install Meko again (`curl -fsSL
+https://mekodata.ai/install.sh | sh`). `meko destroy` stops the service before the server, so its
+manager doesn't start the server again mid-removal; removes the data folder and the client token
+(also when it's in the Keychain, outside the folder); and says the service is still installed,
+which `uninstall --purge`, removing it next, doesn't. The releases are outside the data folder, so
+the service can still start Meko on a fresh one.
 
 ## Release builds
 
@@ -311,7 +318,8 @@ follows on stderr.
   `app/current/bin`: its folder in the data folder, then its home from before it moved there
   (`Catalog.OldHomes`, `~/.agent-k-local`). When a registered command is gone, `meko start` and
   `stop` look for it again this way and save what they find in the registry.
-- `meko destroy` keeps the extensions' data unless told otherwise. With some there (a registered
+- `meko destroy` keeps the extensions' data unless told otherwise (`meko uninstall --purge` removes
+  it with Meko's, above). With some there (a registered
   extension, or a known one's folder), it lists each one's folder and size (Meko's own size leaves
   out `extensions/`) and asks a second question, whether to uninstall the extensions and delete
   their data too (AgentK's sessions and worktrees, with any uncommitted work). `--force` asks

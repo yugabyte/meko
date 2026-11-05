@@ -343,7 +343,7 @@ export async function runInstall(args: string[]): Promise<void> {
         const output: string[] = [];
         await ensureMekoSetup(
           { url, apiKey, client: 'kiro', local, ...setup },
-          { gaps, latest: () => latestMekoSetup(), run: (pkg) => runMekoSetup(pkg, { url, apiKey, client: 'kiro', log: (l) => output.push(l) }), output: () => output, ask, say, warn: (l, t) => ui.warn(l, t) },
+          { gaps, latest: () => latestMekoSetup(), run: (pkg) => runMekoSetup(pkg, { url, apiKey, client: 'kiro', log: (l) => output.push(l) }), output: () => output, ask, say, spin: ui.spin },
         );
       },
       ensureInClaude: !agents.includes('claude') ? undefined : async (url, apiKey) => {
@@ -357,7 +357,7 @@ export async function runInstall(args: string[]): Promise<void> {
         const output: string[] = [];
         await ensureMekoSetup(
           { url, apiKey, local, ...setup },
-          { gaps, latest: () => latestMekoSetup(), run: (pkg) => runMekoSetup(pkg, { url, apiKey, log: (l) => output.push(l) }), output: () => output, ask, say, warn: (l, t) => ui.warn(l, t) },
+          { gaps, latest: () => latestMekoSetup(), run: (pkg) => runMekoSetup(pkg, { url, apiKey, log: (l) => output.push(l) }), output: () => output, ask, say, spin: ui.spin },
         );
       },
       ui,
@@ -529,12 +529,16 @@ export async function runUninstall(args: string[]): Promise<void> {
     process.exitCode = 2;
     return;
   }
-  const { ask, close } = makePrompter(!values['non-interactive']);
+  const asked = !values['non-interactive'];
+  const { ask, close } = makePrompter(asked);
   try {
-    say('This stops AgentK and ends every running session it hosts (Claude Code or Kiro).');
-    if (purge) say(`--purge deletes ${tildify(paths.home)}: config, database, certificates, logs and installed versions.`);
+    // Run by Meko (non-interactive), a purge's explanation is Meko's, which it gave before asking.
+    if (asked || !purge) say('This stops AgentK and ends every running session it hosts (Claude Code or Kiro).');
+    if (purge && asked) say(`--purge deletes ${tildify(paths.home)}: config, database, certificates, logs and installed versions.`);
     const wt = tildify(paths.worktrees);
-    if (deleteWork) {
+    if (purge && !asked) {
+      // Nothing more: Meko said what a purge deletes.
+    } else if (deleteWork) {
       const trees = sessionWorktrees(paths.worktrees);
       const dirty = trees.filter(hasUncommittedWork).length;
       say(`--delete-worktrees also deletes ${trees.length} session worktree${trees.length === 1 ? '' : 's'} in ${wt}` +
@@ -542,7 +546,7 @@ export async function runUninstall(args: string[]): Promise<void> {
     } else if (purge) {
       say(`Session worktrees (${wt}), design files (${tildify(paths.designs)}) and branches are kept; add --delete-worktrees to delete the worktrees and design files too.`);
     } else {
-      say('Worktrees and branches are kept.');
+      say('Git worktrees and branches are kept.');
     }
     const ok = values['non-interactive'] ? 'y' : await ask('Continue? (y/N)', 'n');
     if (!/^y(es)?$/i.test(ok)) {
@@ -574,7 +578,9 @@ export async function runUninstall(args: string[]): Promise<void> {
       if (!kept.length) removeOldHomeLink(paths.home);
       say(kept.length ? `Removed ${tildify(paths.home)} except ${kept.map(tildify).join(' and ')}.` : `Removed ${tildify(paths.home)}.`);
       if (deleteWork) say('Run `git worktree prune` in each repo to forget the deleted worktrees.');
-    } else {
+    } else if (asked || !mekoDirOf(paths.home)) {
+      // Run by Meko, its own last line says where the data stays, but only for a home in its data
+      // folder (`extensions/agentk`): one that hasn't moved there yet is AgentK's to name.
       say(`State kept in ${tildify(paths.home)} (use --purge to delete it).`);
     }
   } finally {

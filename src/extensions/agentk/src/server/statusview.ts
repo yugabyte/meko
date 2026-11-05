@@ -1,6 +1,7 @@
 /**
  * `me_koder status`'s output, from what it found: shaped like `meko status`. A marked headline,
- * then a row per part that runs (the server, the session host, the services), then the links.
+ * then a row per part that runs (the server, the session host, the services), then the links in a
+ * box, as Meko's summary draws them.
  * Meko shows the headline in its own status row, without the mark and "AgentK" (src/meko/docs/install.md),
  * so its marks are always ✓, ! and ✗, whatever the locale.
  */
@@ -84,11 +85,21 @@ export function formatStatus(f: StatusFacts, paint: (k: Kind, mark: string) => s
   }
 
   lines.push('');
-  const links: [string, string][] = [['Web UI', f.webUrl ?? `none (${f.webWhy ?? 'unknown'})`], ['Home', f.home], ['Logs', f.logs]];
-  for (const [label, value] of links) lines.push(`  ${label.padEnd(9)}${value}`);
+  lines.push(...box(`AgentK ${f.version}`, [['Web UI', f.webUrl ?? `none (${f.webWhy ?? 'unknown'})`], ['Home', f.home], ['Logs', f.logs]]));
   if (!runs) {
     lines.push('');
     lines.push('  Start it: me_koder start');
   }
   return lines;
+}
+
+/** A title and label/value rows in a box as wide as its widest line: Meko's summary box (`report.box`). */
+export function box(title: string, rows: [string, string][]): string[] {
+  const len = (t: string) => [...t].length;
+  const labelW = Math.max(0, ...rows.map(([l]) => len(l)));
+  const body = rows.map(([l, v]) => `${l}${' '.repeat(labelW - len(l) + 3)}${v}`);
+  const inner = Math.max(len(title), ...body.map(len));
+  const pad = (t: string) => t + ' '.repeat(inner - len(t));
+  const rule = '─'.repeat(inner + 2);
+  return [`┌${rule}┐`, `│ ${pad(title)} │`, `├${rule}┤`, ...body.map((l) => `│ ${pad(l)} │`), `└${rule}┘`];
 }
