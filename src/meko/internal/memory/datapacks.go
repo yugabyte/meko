@@ -131,6 +131,9 @@ func (s *Service) CreateDatapack(ctx context.Context, name, description string) 
 // name), and an opt-out written before a refusal would drop new turns from search unannounced.
 func (s *Service) UpdateDatapack(ctx context.Context, id string, name, description *string, optOut *bool) (
 	store.Datapack, error) {
+	if err := s.writable(id); err != nil {
+		return store.Datapack{}, err
+	}
 	if name != nil {
 		n := strings.TrimSpace(*name)
 		if err := checkName(n); err != nil {
@@ -158,6 +161,13 @@ func (s *Service) UpdateDatapack(ctx context.Context, id string, name, descripti
 
 // DeleteDatapack deletes a datapack and everything in it, its knowledge files' bytes too.
 func (s *Service) DeleteDatapack(ctx context.Context, id string) error {
+	if err := s.writable(id); err != nil {
+		return err
+	}
+	return s.deleteDatapack(ctx, id)
+}
+
+func (s *Service) deleteDatapack(ctx context.Context, id string) error {
 	s.fileMu.Lock()
 	defer s.fileMu.Unlock()
 	err := s.st.DeleteDatapack(ctx, id)

@@ -15,6 +15,9 @@ var ErrPromoted = errors.New("the memory was promoted")
 // KeepMemories keeps the given learnings as memories (they leave the learnings list) and says how
 // many it kept. Ids that aren't the local user's learnings are skipped.
 func (s *Service) KeepMemories(ctx context.Context, datapack string, ids []string) (int, error) {
+	if err := s.writable(datapack); err != nil {
+		return 0, err
+	}
 	if err := s.needDatapack(ctx, datapack); err != nil {
 		return 0, err
 	}
@@ -42,6 +45,9 @@ type Promotion struct {
 // Promotion returned says what was done before it. A memory copied but not deleted (the undo
 // failed too) is finished by promoting it again.
 func (s *Service) PromoteMemories(ctx context.Context, datapack, agentID string, ids []string) (Promotion, error) {
+	if err := s.writable(datapack); err != nil {
+		return Promotion{}, err
+	}
 	out := Promotion{Inserted: []string{}, Updated: []string{}, NotFound: []string{}}
 	if err := s.needDatapack(ctx, datapack); err != nil {
 		return out, err
@@ -101,6 +107,9 @@ func (s *Service) PromotedMemories(ctx context.Context, datapack string, page, p
 
 // DeletePromoted deletes a promoted memory for good, or returns ErrNotFound.
 func (s *Service) DeletePromoted(ctx context.Context, datapack, id string) error {
+	if err := s.writable(datapack); err != nil {
+		return err
+	}
 	err := s.st.DeletePromoted(ctx, datapack, id)
 	if errors.Is(err, store.ErrNotFound) {
 		return ErrNotFound

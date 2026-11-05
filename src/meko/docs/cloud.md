@@ -309,6 +309,46 @@ exported`). While linked it takes no default (`/mcp`'s is Meko Cloud's), so the 
 named; it asks the link's state (`GET /api/v1/settings/meko-cloud`) only for that, and for the
 note `delete_datapack` adds about the default datapack, which it leaves out while linked.
 
+## Syncing a datapack to Meko Cloud
+
+One of this Meko's datapacks can be moved to the linked Meko Cloud, one at a time and once:
+`POST /datapacks/:id/cloud-sync`, `meko cloud_sync <datapack>`, or Sync to Meko Cloud on the
+datapack's page (`internal/cloudsync`). It's all or nothing, and it's the owner's (the admin token,
+or the web UI); an agent's client token gets 403.
+
+1. **Precheck**: Meko measures the datapack (`store.SyncSize`: memories, collective ones too; the
+   turns Cloud would make searchable, none when it's opted out of conversation search; its files'
+   bytes, all and the largest) and asks Meko Cloud whether that fits the account's plan. The limits
+   are Meko Cloud's, so they're never copied here. One that doesn't fit isn't synced, and the reply
+   says which limit it's over.
+2. **No writes**: while it syncs, every write to the datapack, through `/mcp`, REST, the web UI or
+   the memory extractor, is refused with `DATAPACK_SYNCING` (409; `datapack_syncing` on `/mcp`).
+   Reads work. The guard is in `internal/memory`'s write methods, so no path around it writes.
+3. **Export**: the datapack's export (format 2), whose `datapack.json` has its `placement` (project
+   and folder by name, with their descriptions, or null), from one snapshot.
+4. **Import**: Meko Cloud creates the datapack with the same id and makes it searchable with its own
+   models: vectors aren't sent. The import id is saved (`cloud_sync.jobs`) before anything reaches
+   Meko Cloud, so a sync a stop interrupted is picked up at the next start (`Syncer.Resume`).
+5. **Switch over**: once Meko Cloud says the import is done, the datapack is deleted here. From then
+   on its id isn't this Meko's, so `/mcp` and `/api/v1` send every call on it to Meko Cloud, as for
+   any of its datapacks, and the sidebar shows it with the cloud icon. A failed upload or import
+   cancels the import (Meko Cloud removes what it made) and leaves the datapack here as it was.
+
+Context Gaps' questions about it stay here, under its id, as for any Meko Cloud datapack.
+
+### What Meko Cloud serves for it
+
+These routes are the contract; a Meko Cloud without them is `CLOUD_SYNC_UNSUPPORTED` (409), and
+nothing starts. All take the link's key.
+
+| Route | Body | Reply |
+|---|---|---|
+| `POST /datapacks/import/precheck` | `{datapack_id, memories, searchable_turns, files, file_bytes, largest_file_bytes}` | `{ok, plan, checks: [{check, used, adding, limit, ok, message}]}`: `check` is `datapacks`, `memory_adds`, `kb_storage`, `kb_file_size` or `searchable_turns`, and `limit` -1 is none |
+| `POST /datapacks/import` | `{datapack_id, size_bytes, sha256}` | `{import_id, upload_url, fields}`: a presigned upload, posted fields first and the zip as `file` |
+| `POST /datapacks/import/:import_id/start` | none | 202 once the zip is checked |
+| `GET /datapacks/import/:import_id` | none | `{status: waiting_upload, importing, done or failed, error, web_url}` |
+| `DELETE /datapacks/import/:import_id` | none | the import cancelled, and anything it made removed |
+
 ## What extensions see
 
 `meko token --json` carries `cloud`: whether this Meko is linked, its web app and which account,

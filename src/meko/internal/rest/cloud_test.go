@@ -187,6 +187,12 @@ func TestCloudDatapacks(t *testing.T) {
 	if r := admin("DELETE", "/datapacks/"+cloudDP+"?location=cloud", nil); r.Status != 404 || r.Error.Code != "NOT_FOUND" {
 		t.Fatalf("delete unlinked: %+v", r)
 	}
+	// Syncing a datapack to Meko Cloud is the owner's, and needs the link.
+	wantErr(t, e, "POST", "/datapacks/"+e.DatapackID+"/cloud-sync/precheck", nil, 403, "FORBIDDEN")
+	if r := admin("POST", "/datapacks/"+e.DatapackID+"/cloud-sync", nil); r.Status != 409 ||
+		r.Error.Code != "CLOUD_NOT_LINKED" {
+		t.Fatalf("a sync, unlinked: %+v", r)
+	}
 	// Sharing is Meko Cloud's: unlinked, it says so.
 	wantErr(t, e, "GET", "/datapacks/incoming-shares", nil, 409, "CLOUD_NOT_LINKED")
 	wantErr(t, e, "GET", "/datapacks/"+e.DatapackID+"/member-list", nil, 409, "CLOUD_NOT_LINKED")
@@ -256,6 +262,12 @@ func TestCloudDatapacks(t *testing.T) {
 	wantErr(t, e, "POST", "/datapacks", map[string]any{"name": "x"}, 403, "FORBIDDEN")
 	wantErr(t, e, "POST", "/datapacks", map[string]any{"name": "kept-here", "location": "local"}, 403, "FORBIDDEN")
 	wantErr(t, e, "GET", "/cloud/datapacks", nil, 404, "NOT_FOUND")
+	// A Meko Cloud without the import routes takes no synced datapack, and nothing starts.
+	if r := admin("POST", "/datapacks/"+e.DatapackID+"/cloud-sync/precheck", nil); r.Status != 409 ||
+		r.Error.Code != "CLOUD_SYNC_UNSUPPORTED" {
+		t.Fatalf("a precheck against a Meko Cloud without imports: %+v", r)
+	}
+	wantErr(t, e, "GET", "/datapacks/"+e.DatapackID+"/cloud-sync", nil, 404, "NOT_FOUND")
 	// A project folder here files only this Meko's datapacks, and a new one is Meko Cloud's.
 	if r := admin("POST", "/datapacks", map[string]any{"name": "filed", "folder_id": "f"}); r.Status != 400 ||
 		r.Error.Code != "VALIDATION_ERROR" {

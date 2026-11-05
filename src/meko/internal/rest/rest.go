@@ -18,6 +18,7 @@ import (
 
 	"github.com/yugabyte/meko/src/meko/internal/callhome"
 	"github.com/yugabyte/meko/src/meko/internal/cloudlink"
+	"github.com/yugabyte/meko/src/meko/internal/cloudsync"
 	"github.com/yugabyte/meko/src/meko/internal/envelope"
 	"github.com/yugabyte/meko/src/meko/internal/memory"
 )
@@ -40,7 +41,9 @@ type Options struct {
 	// Cloud is the Meko Cloud link: the routes that take a datapack send one this Meko doesn't have to
 	// the linked Meko Cloud (cloud.go). Nil leaves Meko Cloud out.
 	Cloud *cloudlink.Service
-	Log   *slog.Logger
+	// Sync syncs this Meko's datapacks to the linked Meko Cloud; nil leaves its routes out.
+	Sync *cloudsync.Syncer
+	Log  *slog.Logger
 }
 
 // UsageStats reads and sets whether usage stats are sent (internal/callhome).
@@ -170,6 +173,7 @@ func Register(g *echo.Group, o Options) {
 	a.registerKnowledge(g)
 	a.registerQuestions(g)
 	a.registerProjects(g)
+	a.registerCloudSync(g)
 }
 
 // Errors as Meko Cloud's API replies them.
@@ -251,6 +255,8 @@ func serviceError(c echo.Context, err error) error {
 	case errors.Is(err, memory.ErrStorageFull):
 		// 402, as Meko Cloud answers a plan's limit.
 		return envelope.Fail(c, http.StatusPaymentRequired, "STORAGE_LIMIT_EXCEEDED", err.Error())
+	case errors.Is(err, memory.ErrDatapackSyncing):
+		return envelope.Fail(c, http.StatusConflict, "DATAPACK_SYNCING", err.Error())
 	}
 	return err
 }

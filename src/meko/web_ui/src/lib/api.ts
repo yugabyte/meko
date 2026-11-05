@@ -29,6 +29,8 @@ import type {
   Health,
   KnowledgeActivity,
   Placement,
+  SyncPrecheck,
+  SyncRun,
   Project,
   ProjectDetail,
   ProjectFolder,
@@ -123,6 +125,9 @@ export const api = {
   updateDatapack: (id: string, fields: { name?: string; description?: string }) =>
     request<unknown>("PATCH", `/datapacks/${id}`, fields),
   deleteDatapack: (id: string) => request<unknown>("DELETE", `/datapacks/${id}`),
+  syncPrecheck: (id: string) => request<SyncPrecheck>("POST", `/datapacks/${id}/cloud-sync/precheck`),
+  startSync: (id: string) => request<SyncRun>("POST", `/datapacks/${id}/cloud-sync`),
+  syncStatus: (id: string) => request<SyncRun>("GET", `/datapacks/${id}/cloud-sync`),
 
   projectThemes: () => request<ProjectTheme[]>("GET", "/projects/themes"),
   projects: () => request<{ owned: Project[] }>("GET", "/projects").then((r) => r.owned),

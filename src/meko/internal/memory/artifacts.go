@@ -17,6 +17,9 @@ var ErrTooLarge = errors.New("the file is larger than 5 MiB")
 // already kept.
 func (s *Service) PutArtifact(ctx context.Context, datapack, agentID, filename, contentType string, b []byte) (
 	store.Artifact, error) {
+	if err := s.writable(datapack); err != nil {
+		return store.Artifact{}, err
+	}
 	if len(b) > MaxArtifactBytes {
 		return store.Artifact{}, ErrTooLarge
 	}

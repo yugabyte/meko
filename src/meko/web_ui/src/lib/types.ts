@@ -677,3 +677,30 @@ export interface GapPage {
   searches: number;
   since: string | null;
 }
+
+// Moving one of this Meko's datapacks to the linked Meko Cloud: each of the plan's limits it was
+// checked against (limit -1 is none), and the sync as it stands.
+export interface SyncCheck {
+  check: string; // datapacks, memory_adds, kb_storage, kb_file_size or searchable_turns
+  used: number;
+  adding: number;
+  limit: number;
+  ok: boolean;
+  message?: string;
+}
+
+export interface SyncPrecheck {
+  ok: boolean;
+  plan: string;
+  checks: SyncCheck[];
+}
+
+export interface SyncRun {
+  datapack_id: string;
+  datapack_name: string;
+  state: "syncing" | "done" | "failed";
+  step: "" | "exporting" | "uploading" | "importing";
+  error?: string;
+  precheck?: SyncPrecheck;
+  web_url?: string;
+}
