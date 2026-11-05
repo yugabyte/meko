@@ -3,8 +3,9 @@
  * root-absolute on Meko's origin (not under BASE) with its sign-in, as `mekoupdate.ts` does for
  * updates (`POST /api/v1/agents/:id/connect`, in Meko's `{ data, error }` envelope), then asks AgentK
  * to read Meko's list again (`POST /api/harnesses/refresh`). AgentK's server never posts to Meko.
+ * The page also connects Kiro and OpenCode by itself, once each (`autoConnectToMeko`).
  */
-import type { HarnessId } from '../shared/harnesses';
+import { HARNESS_CAPS, type HarnessId } from '../shared/harnesses';
 import type { HarnessMeko, HarnessStatus } from '../shared/types';
 import { api } from './api';
 
@@ -38,6 +39,27 @@ export async function connectAgent(id: HarnessId): Promise<string[]> {
 export async function connectToMeko(id: HarnessId): Promise<{ notes: string[]; harnesses: HarnessStatus[] }> {
   const notes = await connectAgent(id);
   return { notes, harnesses: await api.refreshHarnesses() };
+}
+
+/**
+ * Connects Kiro or OpenCode to Meko by itself (`HarnessStatus.autoConnect`), once per agent: the server
+ * says whether this page is the one to (`go`, recorded there, so another page, or a later disconnect,
+ * never repeats it), then Connect to Meko's own steps. The toast's line, or null when another page
+ * claimed it or it's no longer due; a failure throws with the fix, and isn't retried.
+ */
+export async function autoConnectToMeko(id: HarnessId): Promise<string | null> {
+  if (!(await api.claimAutoConnect(id)).go) return null;
+  const label = HARNESS_CAPS[id].label;
+  let notes: string[];
+  try {
+    notes = await connectAgent(id);
+  } catch (e) {
+    const why = (e instanceof Error ? e.message : String(e)).replace(/\.$/, '');
+    throw new Error(`Couldn’t connect ${label} to Meko: ${why}. Connect it in Settings › Harness.`, { cause: e });
+  }
+  // Connected: a refresh that fails (AgentK restarting) isn't a failed connect; the next push says it.
+  await api.refreshHarnesses().catch(() => undefined);
+  return [`Connected ${label} to Meko.`, ...notes].join(' ');
 }
 
 /**

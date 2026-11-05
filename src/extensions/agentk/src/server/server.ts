@@ -6,7 +6,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck,
-  ChangedText, EventsClientMessage, HarnessModels, HarnessStatus, KnowledgeUpload, MekoDatapack, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, StagedImage,
+  AutoConnectClaim, ChangedText, EventsClientMessage, HarnessModels, HarnessStatus, KnowledgeUpload, MekoDatapack, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, StagedImage,
   HeldReview, HeldReviewsResult, Workshop, WorkshopStart, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, RunActionsRequest, RunActionsResult, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
   JoinByLinkRequest, JoinByLinkResult, LinkGrant, ShareLink, ShareLinkChange, ShareLinkState,
@@ -713,6 +713,11 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   // Check again (Settings → Harness), and Connect to Meko after the page connected an agent through
   // Meko's own route: a version or Meko list that changed reaches every page through `changed()`.
   app.post('/api/harnesses/refresh', async (): Promise<HarnessStatus[]> => core.refreshHarnesses(true));
+  // The page connecting Kiro or OpenCode to Meko by itself (HarnessStatus.autoConnect): go once per agent.
+  app.post<{ Params: { id: string } }>('/api/harnesses/:id/auto-connect', async (req): Promise<AutoConnectClaim> => {
+    if (!isHarnessId(req.params.id)) throw new HttpError(404, 'There is no such agent.');
+    return { go: await core.claimAutoConnect(req.params.id) };
+  });
   // New session's Model choices for an agent whose list comes from its CLI (OpenCode's, Kiro's).
   app.get<{ Params: { id: string } }>('/api/harnesses/:id/models', async (req): Promise<HarnessModels> => {
     if (!isHarnessId(req.params.id)) throw new HttpError(404, 'There is no such agent.');

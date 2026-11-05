@@ -41,7 +41,9 @@ Everything AgentK does, by area. The [README](../README.md) has the short versio
   `opencode auth login`) and [Kiro CLI](https://kiro.dev/cli/) 2.32 or later (`kiro-cli login`) is
   installed and connected to Meko (Meko owns that connection: **Connect to Meko** in Settings ›
   Harness, or `meko agent connect <agent>`; one Meko doesn't find, or a Meko too old to list agents,
-  isn't held back). Any one
+  isn't held back). AgentK connects Kiro and OpenCode to Meko by itself, once each, the first time
+  a page sees one turned on with no `meko` server or a stale one, and says so in a toast; one you
+  disconnect afterwards stays disconnected. Any one
   alone is enough: with only Kiro, every session runs on Kiro. **Model**, beside it, starts the
   session on another model than the agent's own default (Opus, Sonnet, a model OpenCode or Kiro
   lists, or any name), kept through every resume. Settings › Harness

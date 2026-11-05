@@ -360,8 +360,9 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       only when Claude Code's settings name that server; messages name hosts, never full URLs or tokens.
 - [ ] Meko owns the agents' connections (AGENTS.md invariant 7). AgentK's server only reads `GET
       /api/v1/agents` with the client token (`mekoagents.ts`), on events (startup, Settings open,
-      Check again, after an agent's setup, a change of the local Meko or its link), never on a timer,
-      and never posts to Meko's agent routes; Connect is the page's own call to Meko, with the
+      Check again, after an agent's setup, a change of the local Meko or its link, a page's claim
+      to connect Kiro or OpenCode by itself), never on a timer, and never posts to Meko's agent
+      routes; Connect, and that automatic connect, are the page's own call to Meko, with the
       owner's sign-in. No new check of an agent's `meko` MCP server in AgentK: that's Meko's list.
       Only new sessions are gated (`Harnesses.statusOf`, through `pick` and `defaultFor`), never a
       running or resumed one; a Meko that doesn't answer leaves the last list read in force (kept

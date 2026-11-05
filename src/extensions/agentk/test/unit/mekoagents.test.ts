@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { openDb } from '../../src/server/db.js';
 import { silentLogger } from '../../src/server/log.js';
 import { MekoAgents, mekoMcpGaps, parseMekoAgents, readMekoAgents, type MekoAgentList, type MekoAgentsRead } from '../../src/server/mekoagents.js';
+import { MekoAutoConnect } from '../../src/server/mekoautoconnect.js';
+import type { HarnessMekoState, HarnessStatus } from '../../src/shared/types.js';
 
 const LOCAL = { url: 'http://127.0.0.1:7778/mcp', token: 'test-token' };
 const LIST: MekoAgentList = {
@@ -121,6 +123,39 @@ describe("Meko's list of agents: what AgentK gates on", () => {
     await s.agents.refresh();
     expect([s.agents.current(), s.agents.known(), s.changes()]).toEqual([null, 'old', 2]);
     expect(setup(s.db).agents.current()).toBe(null);
+  });
+});
+
+describe('Connecting Kiro and OpenCode to Meko by itself', () => {
+  const status = (id: HarnessStatus['id'], state: HarnessMekoState | null, o: Partial<HarnessStatus> = {}): Omit<HarnessStatus, 'autoConnect'> => ({
+    id, enabled: true, version: '3.0.0', minVersion: '2.32.0', available: false, checked: true, isDefault: false, updating: false,
+    meko: state ? { state, url: null } : null, ...o,
+  });
+
+  it.each([
+    ['Kiro with no meko server', true, status('kiro', 'none')],
+    ['OpenCode with a stale one', true, status('opencode', 'stale')],
+    ['Claude Code, whose Meko setup is the user\'s', false, status('claude', 'none')],
+    ['one pointing elsewhere, which a connect would replace', false, status('kiro', 'elsewhere')],
+    ['one already connected', false, status('kiro', 'connected')],
+    ["one Meko didn't find", false, status('kiro', 'missing')],
+    ['any while nothing is gated', false, status('kiro', null)],
+    ['one turned off in Settings', false, status('kiro', 'none', { enabled: false })],
+    ['one too old for sessions', false, status('kiro', 'none', { version: '2.0.0' })],
+    ['one whose version was never read', false, status('kiro', 'none', { version: null })],
+  ])('%s: due %s', (_, due, h) => {
+    expect(new MekoAutoConnect(openDb(':memory:')).due(h)).toBe(due);
+  });
+
+  it('lets one page connect an agent once, ever, even after a restart', () => {
+    const db = openDb(':memory:');
+    const auto = new MekoAutoConnect(db);
+    expect([auto.claim(status('kiro', 'none')), auto.claim(status('kiro', 'none'))]).toEqual([true, false]);
+    // Disconnected on purpose later (none again), or after a restart: never automatic again.
+    const after = new MekoAutoConnect(db);
+    expect([after.due(status('kiro', 'none')), after.claim(status('kiro', 'stale'))]).toEqual([false, false]);
+    // Each agent on its own; nothing claimed while it isn't due.
+    expect([after.claim(status('opencode', 'connected')), after.claim(status('opencode', 'none'))]).toEqual([false, true]);
   });
 });
 

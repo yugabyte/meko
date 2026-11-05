@@ -201,6 +201,35 @@ describe('HTTP API: origin checks, projects', () => {
     expect(env.core.state().meko.kiro).toEqual({ gaps: [], capture: [] });
   });
 
+  it('claims connecting Kiro to Meko for a page only while Meko still reports it unconnected, and pushes the claim', async () => {
+    env.core.updateConfig((c) => {
+      c.kiro.enabled = true;
+    });
+    const listing = (state: 'connected' | 'none') => {
+      env.mekoAgents.value = {
+        kind: 'list',
+        list: { target: { kind: 'local', url: 'http://127.0.0.1:7778/mcp' }, agents: [{ name: 'kiro', title: 'Kiro CLI', state, url: state === 'none' ? null : 'http://127.0.0.1:7778/mcp' }] },
+      };
+    };
+    const claim = async (id: string) => {
+      const res = await app.inject({ method: 'POST', url: `/api/harnesses/${id}/auto-connect` });
+      return res.statusCode === 200 ? res.json().go : res.statusCode;
+    };
+    const kiro = async () => ((await app.inject({ method: 'POST', url: '/api/harnesses/refresh' })).json() as HarnessStatus[]).find((h) => h.id === 'kiro');
+    // Connected meanwhile (meko agent connect in a terminal): the claim reads Meko's list first.
+    listing('none');
+    expect(await kiro()).toMatchObject({ autoConnect: true });
+    listing('connected');
+    expect(await claim('kiro')).toBe(false);
+    expect(await kiro()).toMatchObject({ autoConnect: false });
+
+    listing('none');
+    expect(await claim('kiro')).toBe(true);
+    // Pushed to every page, which stop offering it.
+    expect(env.core.state().harnesses.find((h) => h.id === 'kiro')).toMatchObject({ autoConnect: false, available: false });
+    expect(await claim('codex')).toBe(404);
+  });
+
   it('creates a project and a session through the API', async () => {
     const repos = (await app.inject({ url: '/api/repos' })).json();
     expect(repos.repos).toHaveLength(1);

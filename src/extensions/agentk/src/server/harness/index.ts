@@ -4,6 +4,7 @@ import type { ClaudeCode } from '../claudecode.js';
 import type { Config } from '../config.js';
 import type { Logger } from '../log.js';
 import { harnessMeko, type MekoAgentList } from '../mekoagents.js';
+import type { MekoAutoConnect } from '../mekoautoconnect.js';
 import { openCodeHasOwnMeko } from '../opencode.js';
 import type { Paths } from '../paths.js';
 import { HttpError } from '../projects.js';
@@ -27,6 +28,7 @@ export class Harnesses {
   private all: Record<HarnessId, Harness>;
   private mekoList: () => MekoAgentList | null;
   private rereadMeko: () => Promise<void>;
+  private autoConnect: MekoAutoConnect | null;
   /** Each harness's last model list (or the read under way), and what it was read with: a new version or setting reads again. */
   private modelLists = new Map<HarnessId, { at: number; key: string; models: Promise<string[]>; read?: string[] }>();
 
@@ -37,9 +39,12 @@ export class Harnesses {
     meko?: () => MekoAgentList | null;
     /** Reads Meko's list again (`MekoAgents.refresh`), before a new session the list kept would refuse. */
     refreshMeko?: () => Promise<void>;
+    /** The agents AgentK connected to Meko by itself (`HarnessStatus.autoConnect`); left out, none is due. */
+    autoConnect?: MekoAutoConnect;
   }) {
     this.mekoList = deps.meko ?? (() => null);
     this.rereadMeko = deps.refreshMeko ?? (async () => undefined);
+    this.autoConnect = deps.autoConnect ?? null;
     this.all = {
       claude: claudeHarness(deps),
       opencode: openCodeHarness({ paths: deps.paths, log: deps.log, changed: deps.changed, readVersion: deps.openCodeVersion, ownMeko: () => this.openCodeOwnMeko() }),
@@ -62,11 +67,15 @@ export class Harnesses {
     return m && m.state !== 'missing' ? m.state !== 'none' : openCodeHasOwnMeko();
   }
 
-  /** A harness's status: its CLI's, with Meko's connection, which `available` then requires (`mekoGates`). */
+  /**
+   * A harness's status: its CLI's, with Meko's connection, which `available` then requires
+   * (`mekoGates`), and whether the page should connect it to Meko by itself (`autoConnect`).
+   */
   statusOf(h: Harness, cfg: Config): HarnessStatus {
     const s = h.status(cfg);
     const meko = this.mekoOf(h.id);
-    return { ...s, meko, available: s.available && !mekoGates(meko) };
+    const status = { ...s, meko, available: s.available && !mekoGates(meko) };
+    return { ...status, autoConnect: this.autoConnect?.due(status) ?? false };
   }
 
   /** A session's harness (one stored by a newer version reads as Claude Code). */

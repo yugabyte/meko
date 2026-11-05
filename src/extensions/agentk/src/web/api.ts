@@ -1,5 +1,6 @@
 import type { CodeReviewDetail, CodeReviewFinding } from '../shared/codereview';
 import type {
+  AutoConnectClaim,
   AppState,
   Workshop,
   WorkshopStart,
@@ -272,6 +273,7 @@ export const api = {
   mekoKiroSetup: () => post<Settings>('/api/settings/meko/kiro-setup'),
   updateClaude: () => post<ClaudeCodeStatus>('/api/claude/update'),
   refreshHarnesses: () => post<HarnessStatus[]>('/api/harnesses/refresh'),
+  claimAutoConnect: (id: HarnessId) => post<AutoConnectClaim>(`/api/harnesses/${id}/auto-connect`),
   updateHarness: (id: HarnessId) => post<HarnessStatus>(`/api/harnesses/${id}/update`),
   harnessModels: (id: HarnessId) => get<HarnessModels>(`/api/harnesses/${id}/models`),
   update: () => get<UpdateStatus>('/api/update'),

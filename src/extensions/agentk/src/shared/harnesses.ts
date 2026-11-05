@@ -51,6 +51,11 @@ export interface HarnessCaps {
    * its models depend on the providers and plan the user has.
    */
   models: readonly ModelChoice[] | 'cli';
+  /**
+   * AgentK connects it to Meko by itself, once (`autoConnectDue`, `HarnessStatus.autoConnect`): its
+   * `meko` server is a file Meko edits. Not Claude Code, whose Meko setup changes only when the user asks.
+   */
+  autoConnect: boolean;
 }
 
 /** A model New session offers: the name passed to the CLI, and what the picker shows. */
@@ -94,12 +99,12 @@ export function modelLabel(harness: HarnessId, model: string): string {
 export const HARNESS_CAPS: Record<HarnessId, HarnessCaps> = {
   claude: { label: 'Claude Code', short: 'Claude', login: 'claude auth login', mod: true, artifacts: true, usage: 'tokens', labelModels: false,
     userModels: false, minVersion: null, loads: 'its plugins, MCP servers and startup hooks', reviewSteps: 'subagents',
-    models: CLAUDE_MODELS },
+    models: CLAUDE_MODELS, autoConnect: false },
   opencode: { label: 'OpenCode', short: 'OpenCode', login: 'opencode auth login', mod: false, artifacts: false, usage: 'tokens', labelModels: true,
     userModels: true, minVersion: '2.0.0', upgrade: 'opencode upgrade --major', loads: 'its plugins and MCP servers', reviewSteps: 'subagents',
-    models: 'cli' },
+    models: 'cli', autoConnect: true },
   kiro: { label: 'Kiro', short: 'Kiro', login: 'kiro-cli login', mod: false, artifacts: false, usage: 'credits', labelModels: true,
-    userModels: false, minVersion: '2.32.0', loads: 'its agent and MCP servers', reviewSteps: 'turns', models: 'cli' },
+    userModels: false, minVersion: '2.32.0', loads: 'its agent and MCP servers', reviewSteps: 'turns', models: 'cli', autoConnect: true },
 };
 
 /** Why nothing can start when no harness is available: a new session, Ask AgentK, the banner. */
@@ -128,6 +133,16 @@ export function mekoGates(meko: { state: string } | null): boolean {
 /** The agent is ready for sessions but for Meko: on, new enough, and Meko reports it isn't connected (`mekoGates`). */
 export function onlyMekoBlocks(h: { enabled: boolean; version: string | null; minVersion: string | null; meko: { state: string } | null }): boolean {
   return h.enabled && h.version !== null && (!h.minVersion || versionAtLeast(h.version, h.minVersion)) && mekoGates(h.meko);
+}
+
+/**
+ * An agent AgentK connects to Meko by itself, unless it already tried: one it may
+ * (`HarnessCaps.autoConnect`), ready
+ * but for Meko (`onlyMekoBlocks`), and with no `meko` server or a stale one of Meko's own. Never one
+ * pointing elsewhere, which a connect would replace.
+ */
+export function autoConnectDue(h: { id: HarnessId; enabled: boolean; version: string | null; minVersion: string | null; meko: { state: string } | null }): boolean {
+  return HARNESS_CAPS[h.id].autoConnect && onlyMekoBlocks(h) && (h.meko?.state === 'none' || h.meko?.state === 'stale');
 }
 
 /** Whether dotted version `v` is `min` or later (numeric parts; `2.1.10` is after `2.1.9`). */
