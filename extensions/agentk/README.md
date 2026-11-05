@@ -233,7 +233,9 @@ your phone can connect.
   screen has gone 10 seconds without being used, or right away if that screen isn't showing it.
 - **Find in the terminal:** `⌘F` (`Ctrl+Shift+F` on Linux and Windows) in a session's terminal
   searches all of it, scrollback included, highlighting each match, with match case, whole word
-  and regex. **Find in terminal** is also in the session's ⋯ menu (the ⋯ sheet on a phone) and the command palette.
+  and regex. Claude Code runs on the terminal's main screen in sessions (not full screen, even if
+  that's your setting; a session started before this release switches when its agent next
+  starts), so that's up to the session's last 10,000 lines. **Find in terminal** is also in the session's ⋯ menu (the ⋯ sheet on a phone) and the command palette.
 - **Multi-line prompts:** Shift+Enter starts a new line in a session's terminal, and Enter sends
   the prompt. On a Mac, ⌘← and ⌘→ go to the start and end of the line, ⌥← and ⌥→ move by a word,
   and ⌘⌫ deletes to the start of the line. On Linux and Windows, Ctrl+Backspace deletes a word.

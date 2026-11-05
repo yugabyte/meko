@@ -132,7 +132,8 @@ export function pastePath(path: string, bracketed: boolean): string {
 
 /**
  * One mouse-wheel step at a cell (1-based), as an SGR mouse report (sent only while the program
- * tracks the mouse; Claude Code turns SGR reporting on with it). Coordinates are clamped to the terminal.
+ * tracks the mouse; full-screen programs such as OpenCode turn SGR reporting on with it). Coordinates
+ * are clamped to the terminal.
  */
 export function wheelReport(up: boolean, col: number, row: number, cols: number, rows: number): string {
   const clamp = (v: number, max: number) => Math.min(Math.max(1, Math.round(v)), Math.max(1, max));

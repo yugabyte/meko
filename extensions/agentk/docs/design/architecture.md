@@ -42,7 +42,10 @@ flowchart LR
 **Terminal path.** When you open a tab, the browser opens a WebSocket, and the server attaches
 it to the session's pane in the session host over `host.sock`. The host sends the screen as it is
 now first (a full reset, then the screen, its scrollback and the terminal modes, from a headless
-xterm it keeps for every pane), then the output as it comes. Closing the tab ends only that
+xterm it keeps for every pane, with as many lines of scrollback as the browser's, 10,000:
+`TERM_SCROLLBACK`; a host started by an older release keeps its 5,000 until it's restarted, since
+a running host keeps its code), then the output as it comes. A copy bigger than a frame goes in
+several, and a viewer isn't counted as falling behind until the copy has left the host's socket. Closing the tab ends only that
 attach, and Claude keeps running. The host interprets no keys: everything typed, Ctrl+B included,
 reaches Claude Code.
 
@@ -93,7 +96,8 @@ The project's main checkout keeps its path, and paths on other hosts stay under 
 attached, or it was used (typed in or focused). The host resizes the pty to it and tells every
 viewer the size; the others show the pane at that size (a margin or a clipped edge) until they are
 used themselves. When the active viewer leaves, the one used most recently before it takes over.
-Any input counts as use, mouse and focus reports included, since Claude Code turns both on.
+Any input counts as use, mouse and focus reports included, since programs turn them on: Claude Code
+focus reports, and a full-screen program such as OpenCode mouse reports too.
 
 **One screen per session.** Two browsers taking a session's size from each other made the pane
 bounce between their heights, and Claude Code repaints on every resize, so the terminal flickered.
@@ -131,6 +135,8 @@ name it lists them). `Ctrl+\` detaches, and Claude keeps running.
 (a Kiro session as the `agentk` agent, whose inline hooks run the same scripts; an OpenCode session
 with AgentK's plugin, loaded through `OPENCODE_CONFIG_CONTENT`, which posts to the same socket; their
 events are mapped onto Claude Code's by their adapters: see [Agents](harnesses.md)).
+The same file keeps Claude Code on the main screen (`"tui": "default"`), so its output stays in the
+terminal's scrollback for find and scrolling.
 The `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`,
 `Notification`, `Stop` and `SessionEnd` hooks (and the status line relay) post to a unix socket,
 which drives the badges in the rail. Your global Claude settings stay untouched. When `/clear` (or
