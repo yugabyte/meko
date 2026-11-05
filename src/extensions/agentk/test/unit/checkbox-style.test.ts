@@ -31,9 +31,14 @@ describe('checkboxes', () => {
     expect(mediaBlock('(prefers-reduced-motion: no-preference)')).toMatch(/transition/);
   });
 
-  it('fall back to the native box under forced colors', () => {
+  it('fall back to the native box, held still, under forced colors', () => {
     const block = mediaBlock('(forced-colors: active)');
     expect(block).toMatch(/appearance:\s*auto/);
     expect(block).toMatch(/::after\s*\{\s*content:\s*none/);
+    // Each rule that moves the key is reset with its own selector: a lower-specificity reset loses.
+    const resets = [...block.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(([, , body]) => /transform:\s*none/.test(body!)).map(([, sel]) => sel!);
+    const moving = keycapRules().filter(([, body]) => /transform:/.test(body));
+    expect(moving.length).toBeGreaterThan(0);
+    for (const [sel] of moving) expect(resets.some((r) => r.split(/,\s*\n/).map((s) => s.trim()).includes(sel)), sel).toBe(true);
   });
 });

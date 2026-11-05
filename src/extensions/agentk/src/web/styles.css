@@ -364,8 +364,10 @@ textarea.input {
    checked, it's pressed down and lit, with a tick, so it reads by shape as well as color. It's the
    native input restyled, so labels, Space and screen readers work as before. Task lists in
    rendered markdown (.prose) keep the browser's box, and forced colors bring it back everywhere.
-   :where() keeps it as specific as `input`, so a context's own rule (.check input) still
-   places it. */
+   The base rule's :where() gives it no specificity, so a context's own rule (.check input) places
+   the key. The state rules weigh only their pseudo-classes (up to two), more than .check input:
+   they set only the key's own look (border, fill, edge, transform), which no context rule sets.
+   Hover and press apply to an unchecked key only, so neither undoes the checked look. */
 :where(input[type='checkbox']:not(.prose *)) {
   appearance: none;
   position: relative;
@@ -388,10 +390,10 @@ textarea.input {
     center / contain no-repeat;
   opacity: 0;
 }
-:where(input[type='checkbox']:not(.prose *)):hover:not(:disabled) {
+:where(input[type='checkbox']:not(.prose *)):hover:not(:disabled, :checked) {
   border-color: var(--muted);
 }
-:where(input[type='checkbox']:not(.prose *)):active:not(:disabled) {
+:where(input[type='checkbox']:not(.prose *)):active:not(:disabled, :checked) {
   transform: translateY(1px);
   box-shadow: 0 1px 0 color-mix(in srgb, var(--muted) 55%, transparent);
 }
@@ -417,9 +419,13 @@ textarea.input {
       border-color 90ms;
   }
 }
+/* Each rule that moves the key is reset here with its own selector, so it's as specific and wins. */
 @media (forced-colors: active) {
   :where(input[type='checkbox']:not(.prose *)) {
     appearance: auto;
+  }
+  :where(input[type='checkbox']:not(.prose *)):active:not(:disabled, :checked),
+  :where(input[type='checkbox']:not(.prose *)):checked {
     transform: none;
   }
   :where(input[type='checkbox']:not(.prose *))::after {

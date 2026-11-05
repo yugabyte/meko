@@ -101,10 +101,14 @@ never changes), and stay still with reduced motion.
 Every `<input type="checkbox">` is drawn as a keycap, like the busy dots' keys: standing up when
 off, pressed down and lit with a tick when checked. It's the native input restyled in `styles.css`
 (`:where(input[type='checkbox']:not(.prose *))`), so a new checkbox needs no class or component,
-and labels, Space and screen readers work as they always did. Its rules are as specific as
-`input`, so a context's own rule (`.check input`) places it. Task lists in rendered markdown
-(`.prose`) keep the browser's box, as does forced-colors mode. Radio buttons aren't restyled.
-`test/unit/checkbox-style.test.ts` checks it stays shaped by state and still under reduced motion.
+and labels, Space and screen readers work as they always did. The base rule is wrapped in
+`:where()`, so it has no specificity and a context's own rule (`.check input`) places the key;
+the state rules (`:checked`, and `:hover` and `:active` on an unchecked key only) weigh their
+pseudo-classes, more than `.check input`, so a context rule mustn't set the key's border, fill,
+edge or transform. Task lists in rendered markdown (`.prose`) keep the browser's box, as does
+forced-colors mode, which resets each moving rule with its own selector. Radio buttons aren't
+restyled. `test/unit/checkbox-style.test.ts` checks that it's shaped by state, still under
+reduced motion, and still under forced colors.
 
 ## Reloads after an update
 
