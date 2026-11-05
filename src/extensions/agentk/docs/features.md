@@ -239,8 +239,8 @@ Everything AgentK does, by area. The [README](../README.md) has the short versio
   or open another session's PR. Every session gets AgentK's session tools (an MCP server) and a skill
   that says how to use them; the agent asks before each change, as for its other tools, and you can
   turn them off in Settings → General.
-- **A work queue across projects:** keep what you're working on in one ordered list (**Work queue** in
-  the rail): add items by hand with their GitHub, Jira and Slack links, drag them into order (or move
+- **A work queue across projects:** keep what you're working on in one ordered list (the list icon in
+  the rail's footer, or **Work queue** in `⌘K`): add items by hand with their GitHub, Jira and Slack links, drag them into order (or move
   them from each item's menu on a phone), and dismiss them when done (or all at once). Turn on
   **Sync** in Settings › Work queue (it's off until you do) and it pulls in, when you press it and
   every 15 minutes, the PRs waiting for your review and, through your agent's Slack connector, the

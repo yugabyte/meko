@@ -460,7 +460,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
   // has it in `projects` at once (withOpened), so it never waits on the state push.
   const newSessionProject = modal.kind === 'new-session' ? projects.find((p) => p.id === modal.projectId) : undefined;
   const workQueue = useMemo(() => state?.workQueue ?? [], [state]);
-  const queue = useMemo(() => queueSummary(workQueue, projects), [workQueue, projects]);
+  const queue = useMemo(() => queueSummary(workQueue), [workQueue]);
   /** Start session for a work item: New session filled in from it, in the project it fits best, which can be changed there. */
   const startForItem = (item: WorkItem) => {
     const projectId = itemProject(item, projects, currentProject?.id ?? null);

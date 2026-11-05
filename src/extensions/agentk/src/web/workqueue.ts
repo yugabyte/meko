@@ -1,6 +1,6 @@
-// The work queue's helpers: an item's session, its Start session request and project, and the queue's dot. Pure, so it's unit-tested.
+// The work queue's helpers: an item's session, its Start session request and project, and the queue's counts. Pure, so it's unit-tested.
 import type { CreateSessionRequest, ProjectWithSessions, Session, WorkItem, WorkSourceResult, WorkSync } from '../shared/types';
-import { liveSessions, relativeTime, urgentDot, type DotState } from './util';
+import { liveSessions, relativeTime } from './util';
 
 /** The open session of an item, from the state; null when it has none or only a closed one. */
 export function itemSession(item: WorkItem, projects: ProjectWithSessions[]): Session | null {
@@ -48,10 +48,9 @@ export function itemProject(item: WorkItem, projects: ProjectWithSessions[], cur
   return onRepo?.id ?? projects.find((p) => p.id === currentProjectId)?.id ?? projects[0]?.id ?? null;
 }
 
-/** The rail's work queue line: how many items are open and new, and its sessions' most urgent dot. */
-export function queueSummary(items: WorkItem[], projects: ProjectWithSessions[]): { open: number; unplaced: number; dot: DotState } {
-  const sessions = items.map((i) => itemSession(i, projects)).filter((s): s is Session => !!s);
-  return { open: items.length, unplaced: items.filter((i) => i.unplaced).length, dot: urgentDot(sessions) };
+/** The rail's work queue button: how many items are open and how many are new. */
+export function queueSummary(items: WorkItem[]): { open: number; unplaced: number } {
+  return { open: items.length, unplaced: items.filter((i) => i.unplaced).length };
 }
 
 /** The count on the rail's work queue button: up to 99, then 99+. */

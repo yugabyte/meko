@@ -2,8 +2,8 @@
 
 Part of the [AgentK design](../design.md).
 
-One ordered list of what the user is working on, across every project (`/queue`: **Work queue**
-in the rail under Usage, the list icon beside Settings in the rail's footer, and the command palette). Items are added by hand or pulled in by a sync
+One ordered list of what the user is working on, across every project (`/queue`: the list icon
+beside Settings in the rail's footer, and **Work queue** in the command palette). Items are added by hand or pulled in by a sync
 from GitHub and Slack. Each one has links (GitHub, Jira, Slack, any page) and at most one AgentK
 session, whose status dot it shows. The server keeps it in `state.db` (`src/server/workqueue.ts`)
 and pushes the open items in `AppState.workQueue`, so every device shows the same queue.
@@ -63,9 +63,8 @@ replaces the item's own. `Session.workItemId` is read back from it.
   again, which replaces the link.
 
 The item shows its open session's `StatusDot`, name and stage from the state the rail renders, so it
-updates live. The rail's Work queue entry shows its sessions' most urgent dot (`queueSummary()`) and
-how many items are open and new; the list icon in its footer has the open count at its bottom right,
-up to 99 and then 99+ (`queueBadge()`).
+updates live. The list icon in the rail's footer is dotted while synced items are new and has the
+open count at its bottom right, up to 99 and then 99+ (`queueSummary()`, `queueBadge()`).
 
 ## Sync
 

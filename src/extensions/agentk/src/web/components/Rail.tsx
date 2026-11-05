@@ -6,7 +6,7 @@ import { useIsMobile, useTouch } from '../hooks/useMedia';
 import { RAIL_DEFAULT, clampRailWidth, railCollapsedSaved, saveRailCollapsed } from '../rail';
 import type { ThemePref } from '../theme';
 import { queueBadge } from '../workqueue';
-import { aggregateDot, creditsNumber, type DotState, cx, dotState, formatCredits, formatTokens, isMac, joinedPartSelected, kiroPlanLines, reviewBadge, limitLevel, openSessions, relativeTime, repoFolder, sessionTabTitle, totalTokens } from '../util';
+import { aggregateDot, creditsNumber, cx, dotState, formatCredits, formatTokens, isMac, joinedPartSelected, kiroPlanLines, reviewBadge, limitLevel, openSessions, relativeTime, repoFolder, sessionTabTitle, totalTokens } from '../util';
 import { HarnessLogo, ReviewSegment, Ring, StageChip, StatusDot } from './common';
 import { HARNESS_CAPS, type HarnessId } from '../../shared/harnesses';
 
@@ -52,8 +52,8 @@ export function Rail({
   /** The Usage page is showing. */
   usageOpen: boolean;
   onUsage: () => void;
-  /** The work queue's open and new items, and its sessions' most urgent dot. */
-  queue: { open: number; unplaced: number; dot: DotState };
+  /** The work queue's open and new items, for the list icon in the footer. */
+  queue: { open: number; unplaced: number };
   /** The work queue is showing. */
   queueOpen: boolean;
   onQueue: () => void;
@@ -272,21 +272,6 @@ export function Rail({
         >
           <Icon d="M4 20V10 M10 20V4 M16 20v-7 M22 20H2" />
           Usage
-        </button>
-        <button
-          className={cx('rail-add', 'rail-usage', queueOpen && 'sel')}
-          onClick={onQueue}
-          aria-current={queueOpen ? 'page' : undefined}
-          title="What you're working on, across every project"
-        >
-          {queue.dot !== 'idle' ? <StatusDot status={queue.dot} phase="work-queue" /> : <Icon d="M4 6h16 M4 12h16 M4 18h10" />}
-          Work queue
-          {queue.open > 0 && (
-            <span className="rail-queue-count">
-              {queue.unplaced > 0 && <b>{queue.unplaced} new · </b>}
-              {queue.open}
-            </span>
-          )}
         </button>
       </div>
       <div className="rail-foot">
