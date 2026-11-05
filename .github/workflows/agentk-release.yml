@@ -9,9 +9,9 @@ name: AgentK release
 # release tag and the tests pass. The release scripts are the repo
 # root's scripts/release/*.sh --product agentk.
 # Run the workflow by hand to force a release, or to rebuild the assets of an existing tag (one
-# from after the move to extensions/agentk).
+# from after the move to src/extensions/agentk).
 #
-# AgentK lives in extensions/agentk: jobs that run its scripts or npm work there.
+# AgentK lives in src/extensions/agentk: jobs that run its scripts or npm work there.
 
 on:
   push:
@@ -23,7 +23,7 @@ on:
         type: boolean
         default: false
       tag:
-        description: Rebuild assets for this existing agentk-v or v tag instead (one from after the move to extensions/agentk)
+        description: Rebuild assets for this existing agentk-v or v tag instead (one from after the move to src/extensions/agentk)
         required: false
 
 # Read-only by default: only publish, which runs none of the dependency installs or tests,
@@ -46,7 +46,7 @@ jobs:
     timeout-minutes: 10
     defaults:
       run:
-        working-directory: extensions/agentk
+        working-directory: src/extensions/agentk
     outputs:
       release: ${{ steps.p.outputs.release }}
       rebuild: ${{ steps.p.outputs.rebuild }}
@@ -73,16 +73,17 @@ jobs:
               *) echo "$DISPATCH_TAG isn't an AgentK release tag (agentk-v<version> or v<version>)"; exit 1 ;;
             esac
             git rev-parse -q --verify "refs/tags/$DISPATCH_TAG" >/dev/null || { echo "no such tag: $DISPATCH_TAG"; exit 1; }
-            # This workflow builds from extensions/agentk; older tags have AgentK at the repo root.
-            git cat-file -e "$DISPATCH_TAG:extensions/agentk/package.json" 2>/dev/null ||
-              { echo "$DISPATCH_TAG is from before AgentK moved to extensions/agentk and can't be rebuilt"; exit 1; }
+            # This workflow builds from src/extensions/agentk; older tags have AgentK in extensions/agentk
+            # or at the repo root.
+            git cat-file -e "$DISPATCH_TAG:src/extensions/agentk/package.json" 2>/dev/null ||
+              { echo "$DISPATCH_TAG is from before AgentK moved to src/extensions/agentk and can't be rebuilt"; exit 1; }
             version=${DISPATCH_TAG#agentk-v}
             version=${version#v}
             { echo "release=true"; echo "rebuild=true"; echo "tag=$DISPATCH_TAG"; echo "version=$version"; echo "ref=$DISPATCH_TAG"; } >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if sh ../../scripts/release/release-notes.sh --product agentk > /dev/null || [ "${FORCE:-false}" = "true" ]; then
-            version=$(sh ../../scripts/release/next-version.sh --product agentk)
+          if sh ../../../scripts/release/release-notes.sh --product agentk > /dev/null || [ "${FORCE:-false}" = "true" ]; then
+            version=$(sh ../../../scripts/release/next-version.sh --product agentk)
             echo "Releasing $version"
             { echo "release=true"; echo "rebuild=false"; echo "tag=agentk-v$version"; echo "version=$version"; echo "ref=$GITHUB_SHA"; } >> "$GITHUB_OUTPUT"
           else
@@ -98,7 +99,7 @@ jobs:
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: extensions/agentk
+        working-directory: src/extensions/agentk
     steps:
       - uses: actions/checkout@v7
         with:
@@ -107,7 +108,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: extensions/agentk/package-lock.json
+          cache-dependency-path: src/extensions/agentk/package-lock.json
       - timeout-minutes: 5
         run: |
           sudo apt-get -o Acquire::Retries=3 update
@@ -144,16 +145,14 @@ jobs:
     timeout-minutes: 40
     defaults:
       run:
-        working-directory: extensions/agentk
+        working-directory: src/extensions/agentk
     # Plan outputs reach the shell through the environment, never pasted into scripts.
     env:
       VERSION: ${{ needs.plan.outputs.version }}
       ARCH: ${{ matrix.arch }}
-      # The usage stats collector, written into the tarball as CALL_HOME_URL (empty: none).
-      AK_CALL_HOME_URL: ${{ vars.CALL_HOME_URL }}
     steps:
       - name: Install build toolchain
-        # Before checkout: extensions/agentk doesn't exist yet.
+        # Before checkout: src/extensions/agentk doesn't exist yet.
         working-directory: .
         # Normally under a minute; a slow mirror would otherwise hold the release group.
         timeout-minutes: 10
@@ -176,7 +175,7 @@ jobs:
         timeout-minutes: 10
         run: |
           set -eu
-          dir=$(sh ../../scripts/release/fetch-node.sh "$NODE_VERSION" "/tmp" "linux-$ARCH")
+          dir=$(sh ../../../scripts/release/fetch-node.sh "$NODE_VERSION" "/tmp" "linux-$ARCH")
           echo "NODE_DIR=$dir" >> "$GITHUB_ENV"
           echo "$dir/bin" >> "$GITHUB_PATH"
 
@@ -217,8 +216,10 @@ jobs:
           set -eu
           mkdir -p /tmp/smoke
           tar -xzf out/agentk-*.tar.gz -C /tmp/smoke
-          v=$(/tmp/smoke/agentk-*/bin/agentk version)
+          v=$(/tmp/smoke/agentk-*/bin/me_koder version)
           test "$v" = "$VERSION"
+          /tmp/smoke/agentk-*/bin/me_koder selftest
+          # Its name before, which services installed then and older Mekos run.
           /tmp/smoke/agentk-*/bin/agentk selftest
           # The copy under the old name, by the path installs from before the rename to AgentK run.
           tar -xzf out/agent-k-local-*.tar.gz -C /tmp/smoke
@@ -227,7 +228,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: tarball-linux-${{ matrix.arch }}
-          path: extensions/agentk/out/*.tar.gz
+          path: src/extensions/agentk/out/*.tar.gz
           if-no-files-found: error
 
   # macOS on Apple Silicon. No container: the runner's Xcode clang builds node-pty.
@@ -238,11 +239,10 @@ jobs:
     timeout-minutes: 40
     defaults:
       run:
-        working-directory: extensions/agentk
+        working-directory: src/extensions/agentk
     env:
       ARCH: arm64
       VERSION: ${{ needs.plan.outputs.version }}
-      AK_CALL_HOME_URL: ${{ vars.CALL_HOME_URL }}
     steps:
       # The workflow's own commit first, for scripts/release/fetch-node.sh: a tag being rebuilt can
       # be older than the script. A rebuild then checks out its tag for the build.
@@ -255,7 +255,7 @@ jobs:
         timeout-minutes: 10
         run: |
           set -eu
-          dir=$(sh ../../scripts/release/fetch-node.sh "$NODE_VERSION" "$RUNNER_TEMP" "darwin-$ARCH")
+          dir=$(sh ../../../scripts/release/fetch-node.sh "$NODE_VERSION" "$RUNNER_TEMP" "darwin-$ARCH")
           echo "NODE_DIR=$dir" >> "$GITHUB_ENV"
           echo "$dir/bin" >> "$GITHUB_PATH"
 
@@ -296,8 +296,10 @@ jobs:
           smoke="$RUNNER_TEMP/smoke"
           mkdir -p "$smoke"
           tar -xzf out/agentk-*.tar.gz -C "$smoke"
-          v=$("$smoke"/agentk-*/bin/agentk version)
+          v=$("$smoke"/agentk-*/bin/me_koder version)
           test "$v" = "$VERSION"
+          "$smoke"/agentk-*/bin/me_koder selftest
+          # Its name before, which services installed then and older Mekos run.
           "$smoke"/agentk-*/bin/agentk selftest
           # The copy under the old name, by the path installs from before the rename to AgentK run.
           tar -xzf out/agent-k-local-*.tar.gz -C "$smoke"
@@ -306,13 +308,15 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: tarball-darwin-arm64
-          path: extensions/agentk/out/*.tar.gz
+          path: src/extensions/agentk/out/*.tar.gz
           if-no-files-found: error
 
   publish:
     needs: [plan, build, build-macos]
     # Any build failure stops the release, so SHA256SUMS never loses an existing tarball.
     if: always() && needs.build.result == 'success' && needs.build-macos.result == 'success'
+    # The release environment holds the signing key, and only main can use it.
+    environment: release
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -336,8 +340,58 @@ jobs:
         working-directory: dist-release
         run: |
           sha256sum *.tar.gz > SHA256SUMS
-          cp ../extensions/agentk/scripts/install.sh install.sh
+          cp ../src/extensions/agentk/scripts/install.sh install.sh
           cat SHA256SUMS
+
+      - name: Sign SHA256SUMS
+        # Meko installs a release only when a line of SHA256SUMS.sig verifies with one of its keys
+        # (src/meko/internal/update/keys). The key is a secret of the release environment, which only
+        # main can use; RELEASE_SIGNING_KEY_OLD is set only while a new key replaces it.
+        working-directory: dist-release
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+          RELEASE_SIGNING_KEY_OLD: ${{ secrets.RELEASE_SIGNING_KEY_OLD }}
+        run: |
+          set -eu
+          umask 077
+          [ -n "$RELEASE_SIGNING_KEY" ] || { echo "RELEASE_SIGNING_KEY is empty: only a run from main gets the release environment's key" >&2; exit 1; }
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          : > SHA256SUMS.sig
+          for k in "$RELEASE_SIGNING_KEY" "${RELEASE_SIGNING_KEY_OLD:-}"; do
+            [ -n "$k" ] || continue
+            printf '%s\n' "$k" > "$tmp/key.pem"
+            # The key id: the first 8 bytes of the sha256 of the raw public key (its DER's last 32 bytes).
+            openssl pkey -in "$tmp/key.pem" -pubout -outform DER -out "$tmp/pub.der"
+            id=$(tail -c 32 "$tmp/pub.der" | openssl dgst -sha256 -r | cut -c1-16)
+            openssl pkeyutl -sign -inkey "$tmp/key.pem" -rawin -in SHA256SUMS -out "$tmp/sig.bin"
+            printf '%s %s\n' "$id" "$(openssl base64 -A -in "$tmp/sig.bin")" >> SHA256SUMS.sig
+          done
+          cat SHA256SUMS.sig
+
+      - name: Check the signature against Meko's keys
+        # A secret that isn't the key Meko has would publish a release every Meko refuses. The first
+        # line is RELEASE_SIGNING_KEY's. The keys come from this workflow's commit on main, not the
+        # checkout: a rebuild checks out an older tag, which may lack a newer key.
+        run: |
+          set -eu
+          keys=src/meko/internal/update/keys
+          sigs=dist-release/SHA256SUMS.sig
+          id=$(head -n 1 "$sigs" | cut -d ' ' -f 1)
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          head -n 1 "$sigs" | cut -d ' ' -f 2 | openssl base64 -d -A -out "$tmp/sig.bin"
+          for f in $(git ls-tree --name-only "$GITHUB_SHA" "$keys/"); do
+            case $f in *.pub) ;; *) continue ;; esac
+            git show "$GITHUB_SHA:$f" > "$tmp/key.pub"
+            kid=$(openssl pkey -pubin -in "$tmp/key.pub" -outform DER | tail -c 32 | openssl dgst -sha256 -r | cut -c1-16)
+            [ "$kid" = "$id" ] || continue
+            openssl pkeyutl -verify -pubin -inkey "$tmp/key.pub" -rawin -in dist-release/SHA256SUMS -sigfile "$tmp/sig.bin" >/dev/null && exit 0
+            echo "SHA256SUMS.sig doesn't verify with $f" >&2
+            exit 1
+          done
+          echo "RELEASE_SIGNING_KEY (key id $id) isn't one of Meko's keys in $keys: every Meko would refuse this release" >&2
+          exit 1
 
       - name: Create the release
         if: needs.plan.outputs.rebuild == 'false'
@@ -352,14 +406,14 @@ jobs:
           # is the one-line install. Meko installs AgentK from these tarballs; install.sh is a stub
           # that tells an older Meko, which still runs it, to update first.
           gh release create "$TAG" --target "$SHA" --title "$TAG" --notes-file notes.md --latest=false --repo "$GITHUB_REPOSITORY" \
-            dist-release/*.tar.gz dist-release/SHA256SUMS dist-release/install.sh
+            dist-release/*.tar.gz dist-release/SHA256SUMS dist-release/SHA256SUMS.sig dist-release/install.sh
 
       - name: Replace assets on an existing release
         if: needs.plan.outputs.rebuild == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.plan.outputs.tag }}
-        run: gh release upload "$TAG" dist-release/*.tar.gz dist-release/SHA256SUMS dist-release/install.sh --clobber --repo "$GITHUB_REPOSITORY"
+        run: gh release upload "$TAG" dist-release/*.tar.gz dist-release/SHA256SUMS dist-release/SHA256SUMS.sig dist-release/install.sh --clobber --repo "$GITHUB_REPOSITORY"
 
       - name: Attest build provenance
         # Artifact attestations need GitHub Enterprise Cloud for internal repos.

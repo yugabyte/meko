@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- AgentK web server. Written by `me_koder install`; changes are overwritten. -->
+<!-- The session host runs in its own job (@HOST_ID@) so restarting or
+     updating this one never ends a session. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>@SERVER_ID@</string>
+  <!-- service/me_koder in the home execs app/current/bin/me_koder: an update replaces that file, never
+       this one, so macOS doesn't announce AgentK as a new background item each time. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>@AK_HOME@/service/me_koder</string>
+    <string>serve</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>AK_HOME</key>
+    <string>@AK_HOME@</string>
+    <!-- launchd sets no locale; git, gh and Claude need a UTF-8 one. -->
+    <key>LANG</key>
+    <string>en_US.UTF-8</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>2</integer>
+  <key>ExitTimeOut</key>
+  <integer>15</integer>
+  <!-- The server writes its own log (logs/server.log); keep only errors here. -->
+  <key>StandardOutPath</key>
+  <string>/dev/null</string>
+  <key>StandardErrorPath</key>
+  <string>@AK_HOME@/logs/launchd.log</string>
+</dict>
+</plist>

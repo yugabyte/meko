@@ -1,0 +1,27 @@
+[Unit]
+Description=AgentK web server
+Documentation=https://github.com/yugabyte/meko
+# The home can be on a shared (NFS) file system that other hosts mount: run only on the
+# host this was installed on, or every host you log into starts its own server on it.
+ConditionHost=@HOST@
+# The session host runs in its own unit so restarting or updating this one never kills sessions.
+Wants=@HOST_ID@
+After=@HOST_ID@ network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=AK_HOME=@AK_HOME@
+# service/me_koder in the home execs app/current/bin/me_koder (bin/agentk in a release from before).
+ExecStart=@AK_HOME@/service/me_koder serve
+Restart=always
+RestartSec=2
+# 75: another server holds this home (instance.ts); restarting won't help.
+RestartPreventExitStatus=75
+# Only the server process belongs to this unit; it never starts the session host here
+# (it asks the host unit's host to start sessions over its socket).
+KillMode=mixed
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target

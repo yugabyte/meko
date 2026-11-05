@@ -1,0 +1,27 @@
+[Unit]
+Description=Meko
+Documentation=https://github.com/yugabyte/meko/tree/main/src/meko
+# The home can be on a shared (NFS) file system other hosts mount: run only on the host this was
+# installed on.
+ConditionHost={{.Host}}
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=MEKO_SERVICE=systemd
+ExecStart={{arg .Exe}} serve --detached --data-dir {{arg .DataDir}}
+Restart=always
+RestartSec=2
+# 75: another server holds the data folder; restarting won't help.
+RestartPreventExitStatus=75
+# serve stops its own children, in order; only it gets the SIGTERM.
+KillMode=mixed
+# serve drains requests for up to 10 s and stops its children for up to 15 s more.
+TimeoutStopSec=35
+# serve writes its own log (logs/meko.log); this keeps errors from before it starts.
+StandardOutput=null
+StandardError=append:{{path .ServiceLog}}
+
+[Install]
+WantedBy=default.target
