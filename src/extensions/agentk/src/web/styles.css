@@ -4123,6 +4123,60 @@ div[id^='dak-mermaid-'] .label {
 .dl-meta {
   background: var(--diff-hunk-bg);
 }
+/* Wrap lines (the Changes header's toggle): long lines wrap instead of scrolling sideways. Only CSS
+   changes, so turning it on draws no row again. */
+.changes-body.wrap .diff .code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* A hunk's row with ↑ and ↓ (or ↕) for the unchanged lines above it, in the gutter and line-number columns. */
+.diff .gap {
+  padding: 0;
+}
+.gap-btns {
+  display: flex;
+}
+.gap-btn {
+  flex: 1;
+  min-width: 30px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  line-height: 0;
+}
+.gap-btn svg {
+  width: 13px;
+  height: 13px;
+  fill: currentColor;
+}
+.gap-btn:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+.gap-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.gap-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.dl-gap .code {
+  vertical-align: middle;
+}
+/* Icon buttons: 40 px on touch (src/web/AGENTS.md). */
+@media (pointer: coarse) {
+  .gap-btn {
+    min-width: 40px;
+    height: 40px;
+  }
+  .gap-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+}
 .dl-hunk .code,
 .dl-meta .code,
 .dl-note .code {

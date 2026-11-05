@@ -6,7 +6,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck,
-  EventsClientMessage, HarnessModels, HarnessStatus, KnowledgeUpload, MekoDatapack, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, StagedImage,
+  ChangedText, EventsClientMessage, HarnessModels, HarnessStatus, KnowledgeUpload, MekoDatapack, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, StagedImage,
   HeldReview, HeldReviewsResult, Workshop, WorkshopStart, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, RunActionsRequest, RunActionsResult, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
   JoinByLinkRequest, JoinByLinkResult, LinkGrant, ShareLink, ShareLinkChange, ShareLinkState,
@@ -488,6 +488,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       .header('Content-Disposition', 'inline')
       .send(img.data);
   });
+  app.get<{ Params: { id: string }; Querystring: { path?: string; old?: string; commit?: string } }>('/api/sessions/:id/changes/file', async (req): Promise<ChangedText> =>
+    core.sessions.changedText(req.params.id, req.query.path ?? '', req.query.old || null, req.query.commit || undefined));
   // An image pasted into the terminal: the body is the image itself. Its parser lives only in this
   // scope, so no other route takes a body that isn't JSON (and an HTML form can't send image/*).
   await app.register(async (scope) => {

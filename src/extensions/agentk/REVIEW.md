@@ -153,9 +153,11 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       Meko key never reaches the browser; the `application/octet-stream` parser (it and `/files`)
       stays in its own scope, the name is a base name only, and nothing is sent to Meko before the
       user confirms Upload to Meko's question, which names the datapack.
-- [ ] Repo files served to the browser (image previews) are limited to image types inside the
-      worktree, the base commit, or one of the branch's listed commits and its parent, and carry
-      the sandboxing content policy.
+- [ ] Repo files served to the browser are limited to what the Changes panel needs: image
+      previews (`/changes/image`) to image types inside the worktree, the base commit, or one of
+      the branch's listed commits and its parent, with the sandboxing content policy; a file's text
+      (`/changes/file`, JSON) to a file the diff shown changes (never an unchanged, untracked or
+      gitignored one), inside the repo, text only, at most 1 MB.
 - [ ] Agent-generated HTML (Artifact designs) only renders in the sandboxed design frame: no
       `allow-same-origin`, and the frame's content policy still blocks network requests and comes
       first in the frame's document. Markdown designs are sanitized with no forms or styles, by
