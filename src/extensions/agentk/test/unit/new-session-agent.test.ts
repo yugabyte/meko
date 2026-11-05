@@ -33,9 +33,17 @@ function agents(harnesses: HarnessStatus[], harness?: HarnessStatus['id']) {
   );
 }
 
-describe("the New session dialog's title", () => {
-  it("is New session, without the project's name", () => {
-    expect(render([status('claude')]).match(/<h2>(.*?)<\/h2>/)?.[1]).toBe('New session');
+describe("the New session dialog's project line", () => {
+  const projectChoice = { projects: [project], onPick: () => undefined };
+  it.each([
+    ['names a project that isn\'t the one on screen', { elsewhere: true }, true],
+    ["is left out for the project on screen", { elsewhere: false }, false],
+    ['is left out when the Project picker shows', { elsewhere: true, projectChoice }, false],
+  ])('%s', (_, props, shown) => {
+    const html = renderToStaticMarkup(createElement(NewSessionDialog, {
+      project, ghLogin: null, harnesses: [status('claude')], onClose: () => undefined, onCreated: () => undefined, ...props,
+    }));
+    expect(html.includes('id="ns-in-project"') && html.includes('<strong>Demo</strong>')).toBe(shown);
   });
 });
 

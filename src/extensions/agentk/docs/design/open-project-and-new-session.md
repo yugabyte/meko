@@ -150,6 +150,11 @@ datapack is empty, rather than on Design or Review a PR.
 
 ## New session
 
+The dialog's title is just **New session**. When it opens for a project other than the one on
+screen (the rail's **+ New session** under another project, the palette's **New session in …**, or
+a failed start's **Try again**), a line at the top names the project (`elsewhere`), unless the
+**Project** picker of a work item's start shows.
+
 You give it a name, where to start and, optionally, a first prompt. Every task runs on one
 pipeline, Explore → Design → Code → Review & PR → Merge & Close, and **Where do you want to
 start?** picks its first stage: the stages it can start at are pills like the stage bar's steps,

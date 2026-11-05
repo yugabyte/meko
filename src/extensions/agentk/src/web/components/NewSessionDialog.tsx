@@ -54,6 +54,7 @@ export function NewSessionDialog({
   learnFirst = false,
   initial,
   projectChoice,
+  elsewhere = false,
   onClose,
   onCreated,
 }: {
@@ -78,6 +79,11 @@ export function NewSessionDialog({
    * again in the project picked, with what was typed so far.
    */
   projectChoice?: { projects: Project[]; onPick: (projectId: string, draft: CreateSessionRequest) => void };
+  /**
+   * The project isn't the one on screen (opened from the rail, the palette or a failed start's Try
+   * again): the title doesn't name it, so a line does, unless the Project picker shows.
+   */
+  elsewhere?: boolean;
   onClose: () => void;
   onCreated: (s: Session) => void;
 }) {
@@ -492,6 +498,11 @@ export function NewSessionDialog({
           </p>
         )}
         {defaultOff && notConnectedNote}
+        {elsewhere && !projectChoice && (
+          <p className="hint" id="ns-in-project">
+            In <strong>{project.name}</strong>
+          </p>
+        )}
         {projectChoice && (
           <Field label="Project" hint="The session is for a work item, so it can start in any open project.">
             <select

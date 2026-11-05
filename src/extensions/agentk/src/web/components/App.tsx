@@ -739,6 +739,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
             projects,
             onPick: (projectId, draft) => setModal({ kind: 'new-session', projectId, initial: draft, pickProject: true }),
           } : undefined}
+          elsewhere={newSessionProject.id !== currentId}
           ghLogin={state.ghLogin ?? null}
           harnesses={state.harnesses ?? []}
           fresh={modal.kind === 'new-session' && !!modal.fresh}
