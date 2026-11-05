@@ -58,9 +58,10 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       holds), and an approval waits on the server for the turn's end and is dropped if the turn
       changed the design or its questions; the stage never moves to Code mid-turn or while Claude
       holds answers. Status details can quote Claude's own words (`AgentK asks: …`), so code that
-      recognizes a state matches the server's fixed text exactly, not a pattern. Changes to the mod pass `claude plugin validate` and
-      `claude plugin test src/mod/agentk`, and keep to the API of the oldest Claude Code
-      `MIN_MOD_CLAUDE` allows.
+      recognizes a state matches the server's fixed text exactly, not a pattern. Changes to the mods pass `claude plugin validate` and
+      `claude plugin test` (`src/mod/agentk`, `src/mod/agentk-view`), and keep to the API of the oldest Claude Code
+      `MIN_MOD_CLAUDE` allows. Only the view mod can draw the rows of the mod's prompts: Claude Code
+      never shows a plugin the rows of the prompts it submitted itself.
 - [ ] A session's agent is its harness (`Session.harness`): code that launches, reads hooks,
       answers the guard or context hooks, reads a transcript, usage or conversation id, or runs Ask
       AgentK goes through its adapter (`Harness` in `src/server/harness/types.ts`), never straight to

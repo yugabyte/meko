@@ -82,6 +82,10 @@ describe('the AgentK tour (a bundled workshop; real session host + git, fake cla
     expect(first).toContain(`projectId ${p.id}`);
     expect(first).toContain(`${repo}/index.html`);
     expect(first).toContain('adlc/repo/agentk-demo/gotchas');
+    // AgentK's view mod hides the host's events prompts by their first line.
+    const conv = env.core.sessions.get(host.id).claudeSessionId;
+    const launch = readJsonl<{ args: string[]; env: Record<string, string> }>(join(env.fakeDir, 'argv.jsonl')).find((a) => a.args.includes(conv));
+    expect(launch?.env.AK_HIDDEN_PROMPT).toBe('AgentK events:');
 
     // Starting it again goes to the same project and host.
     expect(await env.core.workshops.start(AGENTK_TOUR)).toEqual(r);

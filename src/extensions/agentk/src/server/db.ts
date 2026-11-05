@@ -788,6 +788,10 @@ const MIGRATIONS: string[] = [
   ALTER TABLE projects ADD COLUMN workshop TEXT;
   ALTER TABLE code_reviews ADD COLUMN hand_off INTEGER NOT NULL DEFAULT 1;
   `,
+  // 51: the first line of the prompt the agent's conversation started with, when AgentK passed one at
+  // launch (SessionManager.launch); NULL when it started with none. Passed to every launch as
+  // AK_FIRST_PROMPT, for AgentK's view mod to draw that prompt folded.
+  `ALTER TABLE sessions ADD COLUMN first_prompt TEXT;`,
 ];
 
 export function openDb(path: string): Db {

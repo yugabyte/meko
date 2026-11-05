@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { modDirPath } from '../../src/server/claude.js';
+import { modDirPath, viewDirPath } from '../../src/server/claude.js';
 import { all } from '../../src/server/db.js';
 import { makeEnv, readJsonl, waitFor, type TestEnv } from '../helpers.js';
 
@@ -49,6 +49,27 @@ describe("AgentK's mod in Claude (real session host + git, fake claude)", () => 
     const [first] = launches(env);
     expect(first.args).toEqual(expect.arrayContaining(['--plugin-dir', modDirPath(env.core.paths)]));
     expect(first.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS).toBe('1');
+    // With its view mod, which draws AgentK's prompts folded.
+    expect(existsSync(join(viewDirPath(env.core.paths), 'hooks', 'register.ts'))).toBe(true);
+    expect(first.args).toEqual(expect.arrayContaining(['--plugin-dir', viewDirPath(env.core.paths)]));
+  });
+
+  it("names the first line of the conversation's first prompt for the view mod, at the start and after a relaunch", async () => {
+    env = await makeEnv();
+    const s = await session();
+    const [first] = launches(env);
+    const prompt = first.args[first.args.indexOf('--') + 1];
+    expect(prompt).toBeTruthy();
+    expect(first.env.AK_FIRST_PROMPT).toBe(prompt.split('\n').map((l) => l.trim()).find(Boolean));
+    expect(first.env.AK_HIDDEN_PROMPT).toBe('');
+    expect(env.core.sessions.row(s.id).first_prompt).toBe(first.env.AK_FIRST_PROMPT);
+    await env.core.host.kill(env.core.sessions.row(s.id).tmux_name);
+    await env.core.sessions.reconcile();
+    await waitFor(() => launches(env).length, (n) => n === 2, 10000, 'the relaunch');
+    // Resumed: no prompt passed, and the line its start kept.
+    expect(launches(env)[1].args).toContain('--resume');
+    expect(launches(env)[1].args).not.toContain('--');
+    expect(launches(env)[1].env.AK_FIRST_PROMPT).toBe(first.env.AK_FIRST_PROMPT);
   });
 
   it('sends prompts through the mod while it polls, never typing them, and shows the context fill', async () => {
@@ -159,6 +180,7 @@ describe("AgentK's mod in Claude (real session host + git, fake claude)", () => 
     expect(launches(env)[0].args).toContain(modDirPath(env.core.paths));
     expect(launches(env).at(-1)!.args).not.toContain(modDirPath(env.core.paths));
     expect(launches(env).at(-1)!.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS).toBeUndefined();
+    expect(launches(env).at(-1)!.args).not.toContain(viewDirPath(env.core.paths));
   });
 
   it('forgets the mod when Claude is relaunched, until the new one polls', async () => {

@@ -79,6 +79,8 @@ export interface SessionRow {
   merge_state: string | null;
   seen_review_ids: string;
   initial_prompt: string | null;
+  /** The first line of the prompt the agent's conversation started with, when AgentK passed one (AK_FIRST_PROMPT); NULL otherwise. */
+  first_prompt: string | null;
   auto_continue_at: string;
   last_event_at: number | null;
   created_at: number;

@@ -263,6 +263,15 @@ In the same list, give the key design decisions you made yourself that set the d
  * needn't say the same thing in both. The name is left out when the prompt starts with it, and is
  * the task when there's no prompt.
  */
+/**
+ * A prompt's first line that has text, trimmed. AgentK's view mod (src/mod/agentk-view) reads a
+ * prompt's first line the same way, to tell the session's first prompt (AK_FIRST_PROMPT) and a
+ * workshop host's hidden events (AK_HIDDEN_PROMPT) by it.
+ */
+export function firstLine(text: string): string {
+  return text.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
+}
+
 export function taskWithName(name: string, prompt: string): string {
   const n = name.trim();
   const t = prompt.trim();

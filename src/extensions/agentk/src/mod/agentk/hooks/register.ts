@@ -25,8 +25,10 @@
 //   /mod/turn     a turn the person interrupted (Ctrl+C, Esc), which fires no Stop hook: AgentK ends
 //                 the turn and sends what waited for its end
 //
-// A prompt AgentK marks `hidden` (a workshop host's events) draws as nothing in the transcript, and so
-// does a reply of just "OK" in its turn; the full transcript (ctrl+o) shows both.
+// A reply of just "OK" in the turn of a prompt AgentK marks `hidden` (a workshop host's events) draws
+// as nothing; the full transcript (ctrl+o) shows it. The prompt's own row, and every other prompt of
+// AgentK's, is drawn by AgentK's view mod (src/mod/agentk-view): Claude Code never raises this
+// plugin's `ui.render` hook for the rows of prompts it submitted itself.
 //
 // It must never get in Claude's way: every failure is swallowed (a question is then left to the
 // terminal's dialog), and while the server doesn't hear from the mod it types prompts into the
@@ -61,7 +63,7 @@ interface Link {
 interface Prompt {
   id: string
   text: string
-  /** Drawn as nothing in the transcript (a workshop host's AgentK events); the model reads it as any other. */
+  /** A workshop host's AgentK events: a bare "OK" in its turn draws as nothing (the view mod hides the prompt). */
   hidden?: boolean
 }
 
@@ -79,13 +81,11 @@ let link: Promise<Link | null> | null = null
 let polling = false
 /** The prompts submitted that Claude still holds (it runs each when it's next idle), by id. */
 const held = new Set<string>()
-/** The texts of the hidden prompts submitted: their rows draw as nothing but in the full transcript (ctrl+o). */
-const hiddenTexts = new Set<string>()
-/** A hidden prompt's turn is running: a reply of just "OK" (nothing to say) draws as nothing too. */
+/** A hidden prompt's turn is running: a reply of just "OK" (nothing to say) draws as nothing. */
 let quietTurn = false
 /** Those replies' rows, by row id, so a redraw after the turn keeps them hidden. */
 const quietRows = new Set<string>()
-/** What a hidden row draws. */
+/** What a quiet reply's row draws. */
 const NOTHING = { type: 'Box', props: { display: 'none' } } as const
 
 /** The server's socket and this session's token, or null outside an AgentK session. */
@@ -120,7 +120,6 @@ async function take($: EngineInterface, l: Link, prompts: Prompt[]) {
     const ack = await post($, l, '/mod/ack', { id: p.id, state: 'accepted' }).catch(() => null)
     if (ack?.status !== 204) continue
     held.add(p.id)
-    if (p.hidden) hiddenTexts.add(p.text)
     // Not awaited: it resolves only when the prompt's turn starts (or another plugin refused it),
     // and polling goes on meanwhile.
     void $.prompt.submit({ text: p.text, asUser: true })
@@ -398,14 +397,9 @@ export const register: Register = (on) => {
     return { text: typeof text === 'string' ? text : "AgentK didn't answer. Use Save learnings to Meko in the session's ⋯ menu in AgentK instead." }
   }).catch(() => ({ text: "AgentK didn't answer. Use Save learnings to Meko in the session's ⋯ menu in AgentK instead." }))
 
-  // AgentK's hidden prompts, and a quiet "OK" in their turns, draw as nothing; the full transcript
-  // (ctrl+o) shows them. Registered in a try: a Claude Code without the hook still runs the rest.
+  // A quiet "OK" in a hidden prompt's turn draws as nothing; the full transcript (ctrl+o) shows it.
+  // Registered in a try: a Claude Code without the hook still runs the rest.
   try {
-    on('ui.render', { component: 'UserMessage' }, ($, e, next) => {
-      const p = e.props as { text?: unknown; origin?: { kind?: unknown }; isExpanded?: unknown }
-      if (p.isExpanded || p.origin?.kind !== 'plugin' || typeof p.text !== 'string' || !hiddenTexts.has(p.text)) return next(e)
-      return NOTHING
-    }).catch(($, e, next) => next(e))
     on('ui.render', { component: 'AssistantMessage' }, ($, e, next) => {
       const p = e.props as { text?: unknown }
       if (quietTurn && typeof p.text === 'string' && p.text.trim() === 'OK') quietRows.add(e.requestId)

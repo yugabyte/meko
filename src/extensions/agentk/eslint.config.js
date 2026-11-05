@@ -4,11 +4,11 @@ import globals from 'globals';
 import reactHooks from 'eslint-plugin-react-hooks';
 
 export default tseslint.config(
-  // The mod's .claude-plugin/types are Claude Code's own declarations, laid beside it when it's loaded
-  // from src/mod/agentk (gitignored too).
+  // The mods' .claude-plugin/types are Claude Code's own declarations, laid beside each when it's
+  // loaded from src/mod (gitignored too).
   // A workshop's demo repo (src/workshops/*/repo) is the game's own browser JavaScript, not AgentK's.
   // `npm run dev`'s home (.dev-home, gitignored) holds the mod's copy and any repos opened there.
-  { ignores: ['dist/**', 'node_modules/**', 'coverage/**', 'src/mod/agentk/.claude-plugin/types/**', 'src/workshops/*/repo/**', '.dev-home/**'] },
+  { ignores: ['dist/**', 'node_modules/**', 'coverage/**', 'src/mod/*/.claude-plugin/types/**', 'src/workshops/*/repo/**', '.dev-home/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

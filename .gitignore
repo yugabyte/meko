@@ -11,9 +11,9 @@ state.db
 .DS_Store
 state.db-*
 *.bak-*
-# Laid beside the mod by Claude Code when it loads it from here (claude --plugin-dir src/mod/agentk).
-src/extensions/agentk/src/mod/agentk/.claude-plugin/types/
-src/extensions/agentk/src/mod/agentk/tsconfig.json
+# Laid beside each mod by Claude Code when it loads it from here (claude --plugin-dir src/mod/agentk).
+src/extensions/agentk/src/mod/*/.claude-plugin/types/
+src/extensions/agentk/src/mod/*/tsconfig.json
 # Meko build output, and the embedding model the Go tests keep between runs.
 src/meko/bin/
 src/meko/memory_engine/.models/

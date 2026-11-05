@@ -22,7 +22,7 @@ import { errMsg } from './log.js';
 import { checkStartItem, setItemSession } from './workqueue.js';
 import { AGENTK_AGENT_ID, launchedAgentId, sessionAgentId } from './meko.js';
 import {
-  AUTO_RUN_PROMPTS, autoRunLine, DESIGN_UPKEEP_PROMPTS, designQaLine, designQuestionsLine, designUpkeepLine, designWhere, learnTask, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine,
+  AUTO_RUN_PROMPTS, autoRunLine, DESIGN_UPKEEP_PROMPTS, designQaLine, designQuestionsLine, designUpkeepLine, designWhere, firstLine, learnTask, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine,
   guideSystemLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, reviewDesignLine, taskWithName, withAttachedImages, type PromptName,
 } from './prompts.js';
 import { PR_DESIGN_TIMEOUT_MS, markPrDesignTold, prDesignFile, prDesignSource, removePrDesignFiles } from './prdesign.js';
@@ -1197,6 +1197,10 @@ export class SessionManager {
       // Its local spelling too: Claude Code refuses a mod's $.http.fetch to a socket under /net.
       AK_HOOK_SOCK: claudePath(this.core.paths.hookSock),
       AK_DESIGN_FILE: this.designFile(row),
+      // For AgentK's view mod (src/mod/agentk-view): the first line of the prompt the conversation
+      // started with, which Claude Code draws like typed text, and of a workshop host's hidden events.
+      AK_FIRST_PROMPT: row.first_prompt ?? '',
+      AK_HIDDEN_PROMPT: row.purpose === 'guide' ? firstLine(this.prompt(row, 'guide-event', { events: '' })) : '',
       MEKO_AGENT_ID: launchedAgentId(row),
       MEKO_DATAPACK_ID: dedicated?.id ?? '',
       MEKO_DATAPACK_IDS: dps.map((d) => d.id).join(','),
@@ -1324,6 +1328,14 @@ export class SessionManager {
   async launch(row: SessionRow, opts: { resume: boolean; prompt: string | null; conversation?: Promise<string | null> }): Promise<void> {
     // Read again at every launch: a private repo can be made public.
     row = await this.checkHead(row.id);
+    // A new conversation starts with this prompt, or with none; a resumed one keeps the line its start kept.
+    if (!opts.resume) {
+      const first = opts.prompt ? firstLine(opts.prompt) || null : null;
+      if (row.first_prompt !== first) {
+        this.update(row.id, { first_prompt: first });
+        row = this.row(row.id);
+      }
+    }
     const h = this.harness(row);
     await h.beforeLaunch({ paths: this.core.paths, cfg: this.core.config, log: this.core.log, row, repo: sessionRepo(this.db, row) });
     this.pinDatapack(row);

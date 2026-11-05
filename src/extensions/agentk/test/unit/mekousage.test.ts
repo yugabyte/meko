@@ -166,7 +166,7 @@ describe('Meko calls in transcripts', () => {
     // and 17 (Meko calls), then upgrade again.
     db.exec('DROP TABLE code_review_steps; DROP TABLE code_reviews; DROP TABLE work_item_links; DROP TABLE work_items; DROP TABLE design_answers; DROP TABLE meko_learns; DROP TABLE meko_agentk_calls; DROP TABLE meko_capture_runs; DROP TABLE agentk_asks; DROP TABLE share_contacts; DROP TABLE held_reviews');
     db.exec('ALTER TABLE usage_messages DROP COLUMN credits; ALTER TABLE projects DROP COLUMN workshop');
-    for (const c of ['model', 'idle_stopped_at', 'parent_id', 'review_json', 'auto_run', 'queued_auto', 'purpose', 'position', 'untrusted', 'harness', 'agent_session_id', 'queued_instructions', 'discarding', 'skip_learn', 'queued_gate', 'start_images', 'push_remote', 'push_branch', 'conflict_head', 'conflict_fixes']) db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);
+    for (const c of ['first_prompt', 'model', 'idle_stopped_at', 'parent_id', 'review_json', 'auto_run', 'queued_auto', 'purpose', 'position', 'untrusted', 'harness', 'agent_session_id', 'queued_instructions', 'discarding', 'skip_learn', 'queued_gate', 'start_images', 'push_remote', 'push_branch', 'conflict_head', 'conflict_fixes']) db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);
     for (const c of ['md_hash', 'html_hash', 'source', 'source_told', 'questions', 'questions_source', 'open_questions']) db.exec(`ALTER TABLE designs DROP COLUMN ${c}`);
     for (const c of ['pr_repo', 'pr_title', 'pr_author', 'review_sha', 'pr_head_sha', 'pr_new_commits', 'pr_state', 'pr_remote', 'review_notes']) {
       db.exec(`ALTER TABLE sessions DROP COLUMN ${c}`);

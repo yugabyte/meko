@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  claudeLauncher, hooksSettingsPath, modDirPath, writeHookFiles, writeModFiles, type LaunchSpec,
+  claudeLauncher, hooksSettingsPath, modDirPath, viewDirPath, writeHookFiles, writeModFiles, writeViewFiles, type LaunchSpec,
 } from '../../src/server/claude.js';
 import { versionAtLeast } from '../../src/shared/harnesses.js';
 import { cliVersion } from '../../src/server/harness/version.js';
@@ -178,6 +178,20 @@ describe("AgentK's mod", () => {
     expect(JSON.parse(readFileSync(join(dir, 'hooks', 'hooks.json'), 'utf8'))).toEqual({ modules: ['./register.ts'] });
     expect(readFileSync(join(dir, 'hooks', 'register.ts'), 'utf8')).toMatch(/\/mod\/poll/);
     expect(existsSync(join(dir, 'tests'))).toBe(false);
+  });
+
+  it('has a view mod beside it, copied the same way', () => {
+    const paths = getPaths(join(home, 'ak'));
+    expect(writeViewFiles(paths)).toBe(true);
+    const dir = viewDirPath(paths);
+    expect(dir).toBe(join(paths.run, 'mod', 'agentk-view'));
+    expect(JSON.parse(readFileSync(join(dir, '.claude-plugin', 'plugin.json'), 'utf8')).name).toBe('agentk-view');
+    expect(readFileSync(join(dir, 'hooks', 'register.ts'), 'utf8')).toMatch(/AK_FIRST_PROMPT/);
+    expect(existsSync(join(dir, 'tests'))).toBe(false);
+    // Its own folder: the mod's copy is left alone.
+    expect(existsSync(modDirPath(paths))).toBe(false);
+    expect(writeViewFiles(paths, join(home, 'nowhere'))).toBe(false);
+    expect(existsSync(dir)).toBe(false);
   });
 
   it('writes only the files that changed (Claude reloads the mod on every write), and none left half-written', () => {
