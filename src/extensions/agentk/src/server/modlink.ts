@@ -50,7 +50,10 @@ export interface DroppedPrompt {
 interface Pending {
   id: string;
   text: string;
-  /** The mod draws it as nothing in the transcript (a workshop host's events). */
+  /**
+   * A workshop host's events: the mod hides a bare "OK" in its turn. The prompt's own row is hidden by
+   * AgentK's view mod, by its first line (AK_HIDDEN_PROMPT), not by this.
+   */
   hidden: boolean;
   /** Answered to a poll; waiting for the mod's ack. */
   handed: boolean;
@@ -271,8 +274,9 @@ export class ModLinks {
   /**
    * Sends a prompt through the mod. Resolves with its id once the server has told the mod to submit
    * it (Claude runs it when it's next idle); rejects when the mod doesn't ack it within ACCEPT_MS, or the link
-   * is reset, and then the mod is told not to submit it. A `hidden` one draws as nothing in Claude's
-   * transcript but its full view (ctrl+o).
+   * is reset, and then the mod is told not to submit it. For a `hidden` one (a workshop host's events)
+   * the mod draws a bare "OK" in its turn as nothing; AgentK's view mod hides the prompt's own row by
+   * its first line (AK_HIDDEN_PROMPT).
    */
   send(session: string, text: string, hidden = false): Promise<string> {
     const l = this.link(session);

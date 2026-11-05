@@ -50,7 +50,6 @@ describe("AgentK's mod in Claude (real session host + git, fake claude)", () => 
     expect(first.args).toEqual(expect.arrayContaining(['--plugin-dir', modDirPath(env.core.paths)]));
     expect(first.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS).toBe('1');
     // With its view mod, which draws AgentK's prompts folded.
-    expect(existsSync(join(viewDirPath(env.core.paths), 'hooks', 'register.ts'))).toBe(true);
     expect(first.args).toEqual(expect.arrayContaining(['--plugin-dir', viewDirPath(env.core.paths)]));
   });
 

@@ -53,13 +53,16 @@ test("leaves the person's own prompts, and other plugins', as Claude Code draws 
   expect(await row($, STAGE, { kind: 'plugin', name: 'other', asUser: true })).toEqual(text(STAGE))
 })
 
-test("folds no typed prompt when the conversation didn't start with AgentK's", async ($, on) => {
-  mock.env(on, { AK_FIRST_PROMPT: '' })
-  drawn(on)
-  expect(await row($, FIRST, TYPED)).toEqual(text(FIRST))
-  // AgentK's mod's prompts still fold.
-  expect(await row($, STAGE, AGENTK)).toEqual(text('You are in the Code stage of an AgentK task. … (+4 lines, ctrl+o to expand)'))
-})
+for (const [why, env] of [['empty', { AK_FIRST_PROMPT: '' }], ['unset', {}]] as const) {
+  test(`folds no typed prompt when the conversation didn't start with AgentK's (AK_FIRST_PROMPT ${why})`, async ($, on) => {
+    mock.env(on, env)
+    drawn(on)
+    expect(await row($, FIRST, TYPED)).toEqual(text(FIRST))
+    // AgentK's mod's prompts still fold, and with no AK_HIDDEN_PROMPT none is hidden.
+    expect(await row($, STAGE, AGENTK)).toEqual(text('You are in the Code stage of an AgentK task. … (+4 lines, ctrl+o to expand)'))
+    expect(await row($, EVENTS, AGENTK)).toEqual(text('AgentK events: … (+1 line, ctrl+o to expand)'))
+  })
+}
 
 test("draws a workshop host's hidden events as nothing, but in full with ctrl+o", async ($, on) => {
   mock.env(on, ENV)
@@ -68,11 +71,4 @@ test("draws a workshop host's hidden events as nothing, but in full with ctrl+o"
   expect(await row($, EVENTS, AGENTK, true)).toEqual(text(EVENTS))
   // Typed by the person, the same words show.
   expect(await row($, EVENTS, TYPED)).toEqual(text(EVENTS))
-})
-
-test('draws every row as Claude Code does outside an AgentK session', async ($, on) => {
-  mock.env(on, {})
-  drawn(on)
-  expect(await row($, FIRST, TYPED)).toEqual(text(FIRST))
-  expect(await row($, EVENTS, AGENTK)).toEqual(text('AgentK events: … (+1 line, ctrl+o to expand)'))
 })
