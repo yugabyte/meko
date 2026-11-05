@@ -307,8 +307,8 @@ row in `src/server/summary.ts`.
 otherwise print nothing (`internal/spin`): `Release`, for the release they download, check and unpack
 (`  ✓ Release         AgentK 0.20261030.0 (agentk-v0.20261030.0), downloaded and checked`, or `meko
 <version> installed`), and for `meko update` under the service, `Server`, for the restart. While such a
-step runs on a terminal, its row shows rotating dots (gh's spinner, which `install.sh`'s download
-shows), and so does the listing of the releases, which leaves no row. Off a terminal, as in the
+step runs on a terminal, its row shows rotating cyan dots (gh's spinner, which `install.sh`'s
+download shows; AgentK's `install` steps show the same), and so does the listing of the releases, which leaves no row. Off a terminal, as in the
 Extensions page's jobs, a step prints what it's doing as a plain line when it starts (`Installing
 AgentK <version> (<tag>)`, `Restarting into meko <version>`), so the output isn't empty while it
 downloads, then its finished row. On a failure the row is `✗` with what it was doing, and the error
