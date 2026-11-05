@@ -31,10 +31,10 @@ describe('the work queue page', () => {
     expect(itemProject(item({ links: l }), projects, current)).toBe(want);
   });
 
-  it("shows an item's open session, and the queue's count and most urgent dot", () => {
+  it("shows an item's open session, and the queue's open and new counts", () => {
     const items = [item({ sessionId: 's2' }), item({ id: 'w2', sessionId: 's1', unplaced: true }), item({ id: 'w3', sessionId: 'gone' })];
     expect(itemSession(items[2], projects)).toBeNull();
-    expect(queueSummary(items, projects)).toEqual({ open: 3, unplaced: 1, dot: 'needs_input' });
+    expect(queueSummary(items)).toEqual({ open: 3, unplaced: 1 });
   });
 
   it.each([[1, '1'], [99, '99'], [100, '99+']])('counts %i open items on the rail button as %s', (n, want) => {
