@@ -1,5 +1,5 @@
 // Package spin prints the CLI's summary rows ("  ✓ Server          running"), and the rotating dots a
-// row shows on a terminal while its step runs: gh's spinner, the one install.sh's download shows.
+// row shows on a terminal while its step runs: gh's spinner, cyan, the one install.sh's download shows.
 package spin
 
 import (
@@ -31,6 +31,15 @@ var (
 	Frames   = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
 	Interval = 120 * time.Millisecond
 )
+
+// frame is the dots' i-th frame, cyan when color is set, as gh draws them.
+func frame(i int, color bool) string {
+	f := Frames[i%len(Frames)]
+	if !color {
+		return f
+	}
+	return "\033[36m" + f + "\033[0m"
+}
 
 // animates reports whether w shows the dots: a terminal that draws them; tests replace it.
 var animates = func(w io.Writer) bool { return IsTerminal(w) && os.Getenv("TERM") != "dumb" }
@@ -93,15 +102,16 @@ func Wait(w io.Writer, doing string) *Step { return Start(w, "", doing) }
 
 func (s *Step) run() {
 	s.stop, s.stopped = make(chan struct{}), make(chan struct{})
+	color := Color(s.w)
 	go func() {
 		defer close(s.stopped)
 		t := time.NewTicker(Interval)
 		defer t.Stop()
 		for i := 0; ; i++ {
 			if s.label == "" {
-				fmt.Fprintf(s.w, "\r  %s %s…\033[K", Frames[i%len(Frames)], s.doing)
+				fmt.Fprintf(s.w, "\r  %s %s…\033[K", frame(i, color), s.doing)
 			} else {
-				fmt.Fprintf(s.w, "\r  %s %-15s %s\033[K", Frames[i%len(Frames)], s.label, s.doing)
+				fmt.Fprintf(s.w, "\r  %s %-15s %s\033[K", frame(i, color), s.label, s.doing)
 			}
 			select {
 			case <-s.stop:

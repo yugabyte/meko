@@ -25,7 +25,7 @@ const MARK = {
   fail: () => style.red(utf8 ? '✗' : 'xx'),
 };
 
-/** The dots a running step shows, and how fast they turn: gh's spinner, as Meko's steps show it. */
+/** The dots a running step shows, and how fast they turn: gh's spinner, cyan, as Meko's steps show it. */
 const SPIN_FRAMES = utf8 ? ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'] : ['|', '/', '-', '\\'];
 const SPIN_INTERVAL_MS = 120;
 
@@ -35,12 +35,14 @@ export const pad = (label: string, width = LABEL_WIDTH) => (label.length >= widt
 
 /**
  * A running step's row, "  ⣾ Label         doing", cut to one character short of `columns` (when
- * known) with "…", so it never reaches the last column and wraps.
+ * known) with "…", so it never reaches the last column and wraps. With `color` the dots are cyan,
+ * as gh's are; the cut counts only what shows.
  */
-export function spinRow(frame: string, label: string, doing: string, columns?: number): string {
-  const row = [...`  ${frame} ${pad(label)}${doing}`];
-  if (!columns || row.length < columns) return row.join('');
-  return `${row.slice(0, Math.max(1, columns - 2)).join('')}…`;
+export function spinRow(frame: string, label: string, doing: string, columns?: number, color = false): string {
+  const chars = [...`  ${frame} ${pad(label)}${doing}`];
+  const row = !columns || chars.length < columns ? chars.join('') : `${chars.slice(0, Math.max(1, columns - 2)).join('')}…`;
+  const at = `  ${frame}`;
+  return color && row.startsWith(at) ? `  \x1b[36m${frame}\x1b[0m${row.slice(at.length)}` : row;
 }
 
 const out = (s = '') => process.stdout.write(s + '\n');
@@ -75,7 +77,7 @@ export const ui = {
       return { stop: () => {} };
     }
     let i = 0;
-    const draw = () => process.stdout.write(`\r${spinRow(SPIN_FRAMES[i++ % SPIN_FRAMES.length], label, doing, process.stdout.columns)}\x1b[K`);
+    const draw = () => process.stdout.write(`\r${spinRow(SPIN_FRAMES[i++ % SPIN_FRAMES.length], label, doing, process.stdout.columns, useColor(process.stdout))}\x1b[K`);
     draw();
     const timer = setInterval(draw, SPIN_INTERVAL_MS);
     let stopped = false;

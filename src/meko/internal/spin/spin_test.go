@@ -62,6 +62,16 @@ func TestStepAnimates(t *testing.T) {
 	}
 }
 
+// The dots are cyan where rows are colored, as gh's are, and plain where they aren't.
+func TestFrameColor(t *testing.T) {
+	if got, want := frame(0, true), "\033[36m⣾\033[0m"; got != want {
+		t.Errorf("frame(0, true) = %q, want %q", got, want)
+	}
+	if got := frame(len(Frames)+1, false); got != Frames[1] {
+		t.Errorf("frame(%d, false) = %q, want %q", len(Frames)+1, got, Frames[1])
+	}
+}
+
 // Only a step's first ending counts.
 func TestStepEndsOnce(t *testing.T) {
 	forceAnimation(t)
