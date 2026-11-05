@@ -131,9 +131,11 @@ func (s *Service) CreateDatapack(ctx context.Context, name, description string) 
 // name), and an opt-out written before a refusal would drop new turns from search unannounced.
 func (s *Service) UpdateDatapack(ctx context.Context, id string, name, description *string, optOut *bool) (
 	store.Datapack, error) {
-	if err := s.writable(id); err != nil {
-		return store.Datapack{}, err
+	done, werr := s.writing(id)
+	if werr != nil {
+		return store.Datapack{}, werr
 	}
+	defer done()
 	if name != nil {
 		n := strings.TrimSpace(*name)
 		if err := checkName(n); err != nil {
@@ -151,7 +153,7 @@ func (s *Service) UpdateDatapack(ctx context.Context, id string, name, descripti
 		return d, err
 	}
 	if optOut != nil {
-		if err = s.SetConversationSearchOptOut(ctx, id, *optOut); err != nil {
+		if err = s.setConversationSearchOptOut(ctx, id, *optOut); err != nil {
 			return d, err
 		}
 		d.ConversationSearchOptOut = *optOut
@@ -161,16 +163,20 @@ func (s *Service) UpdateDatapack(ctx context.Context, id string, name, descripti
 
 // DeleteDatapack deletes a datapack and everything in it, its knowledge files' bytes too.
 func (s *Service) DeleteDatapack(ctx context.Context, id string) error {
-	if err := s.writable(id); err != nil {
-		return err
+	done, werr := s.writing(id)
+	if werr != nil {
+		return werr
 	}
-	return s.deleteDatapack(ctx, id)
+	defer done()
+	return s.deleteDatapack(ctx, id, false)
 }
 
-func (s *Service) deleteDatapack(ctx context.Context, id string) error {
+// deleteDatapack deletes a datapack and its files, and its Context Gaps questions unless keepQuestions
+// (a datapack moved to Meko Cloud keeps them here, under its id).
+func (s *Service) deleteDatapack(ctx context.Context, id string, keepQuestions bool) error {
 	s.fileMu.Lock()
 	defer s.fileMu.Unlock()
-	err := s.st.DeleteDatapack(ctx, id)
+	err := s.st.DeleteDatapack(ctx, id, keepQuestions)
 	if errors.Is(err, store.ErrNoDatapack) {
 		return ErrNoDatapack
 	}

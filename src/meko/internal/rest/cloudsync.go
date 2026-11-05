@@ -3,7 +3,9 @@ package rest
 import (
 	"errors"
 	"net/http"
+	"strings"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
 	"github.com/yugabyte/meko/src/meko/internal/cloudlink"
@@ -85,9 +87,16 @@ func (a *api) startSync(c echo.Context) error {
 }
 
 // syncStatus is GET /datapacks/:id/cloud-sync: the datapack's latest sync since Meko started. It's
-// read by id, since a synced datapack is no longer here.
+// read by id, since a synced datapack is no longer here; the owner's, like the sync.
 func (a *api) syncStatus(c echo.Context) error {
-	run, ok := a.Sync.Status(c.Param("id"))
+	if !a.owner(c) {
+		return a.syncOwner(c)
+	}
+	id, err := uuid.Parse(strings.TrimSpace(c.Param("id")))
+	if err != nil {
+		return badRequest(c, "datapack_id must be a UUID")
+	}
+	run, ok := a.Sync.Status(id.String())
 	if !ok {
 		return notFound(c, "no sync of this datapack since Meko started")
 	}

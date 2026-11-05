@@ -207,9 +207,11 @@ func (s *Service) DeleteFolder(ctx context.Context, project, id string) error {
 
 // PlaceDatapack files one of this Meko's datapacks in a folder, moving it from where it was.
 func (s *Service) PlaceDatapack(ctx context.Context, datapack, folder string) error {
-	if err := s.writable(datapack); err != nil {
-		return err
+	done, werr := s.writing(datapack)
+	if werr != nil {
+		return werr
 	}
+	defer done()
 	if strings.TrimSpace(folder) == "" {
 		return fmt.Errorf("%w: folder_id is required", ErrBadRequest)
 	}
@@ -235,9 +237,11 @@ func (s *Service) CreateDatapackIn(ctx context.Context, name, description, folde
 
 // UnplaceDatapack unfiles one of this Meko's datapacks.
 func (s *Service) UnplaceDatapack(ctx context.Context, datapack string) error {
-	if err := s.writable(datapack); err != nil {
-		return err
+	done, werr := s.writing(datapack)
+	if werr != nil {
+		return werr
 	}
+	defer done()
 	if err := s.needDatapack(ctx, datapack); err != nil {
 		return err
 	}

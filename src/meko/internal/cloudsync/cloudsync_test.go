@@ -16,6 +16,7 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/cloudlink"
 	"github.com/yugabyte/meko/src/meko/internal/cloudsync"
 	"github.com/yugabyte/meko/src/meko/internal/memory"
+	"github.com/yugabyte/meko/src/meko/internal/store"
 	"github.com/yugabyte/meko/src/meko/internal/testenv"
 )
 
@@ -28,8 +29,10 @@ type fakeCloud struct {
 	result    string        // what an import ends as: done or failed
 	release   chan struct{} // closed when an import may end
 	started   map[string]bool
-	canceled []string
+	canceled  []string
 	prechecks []map[string]any
+	noCancel  bool // a cancel that can't get through
+	gone      bool // Cloud no longer has the import
 }
 
 func newFakeCloud() *fakeCloud {
@@ -67,6 +70,11 @@ func (f *fakeCloud) Pass(_ context.Context, method, path string, body io.Reader,
 	case method == "POST" && path == "/datapacks/import/imp-1/start":
 		f.started["imp-1"] = true
 		return reply(202, map[string]any{"status": "importing"}), nil
+	case method == "GET" && path == "/datapacks/import/imp-1" && f.gone:
+		return cloudlink.Reply{Status: 404,
+			Body: []byte(`{"data":null,"error":{"code":"NOT_FOUND","message":"import not found"}}`)}, nil
+	case method == "DELETE" && f.noCancel:
+		return cloudlink.Reply{}, errors.New("Meko Cloud is unreachable")
 	case method == "GET" && path == "/datapacks/import/imp-1":
 		select {
 		case <-f.release:
@@ -93,7 +101,7 @@ func setup(t *testing.T) *harness {
 	t.Helper()
 	h := &harness{e: testenv.Start(t, testenv.Options{}), cloud: newFakeCloud()}
 	h.s = &cloudsync.Syncer{Service: h.e.Service, Cloud: h.cloud, Version: "test", TempDir: t.TempDir(),
-		Poll: 5 * time.Millisecond, Timeout: 5 * time.Second,
+		Poll: 5 * time.Millisecond, Timeout: 5 * time.Second, Retry: time.Millisecond,
 		Upload: func(_ context.Context, _ string, _ map[string]string, f *os.File) error {
 			if h.fail != nil {
 				return h.fail
@@ -222,7 +230,7 @@ func TestSyncThatFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	if run := h.wait(t, h.e.DatapackID); run.State != cloudsync.StateFailed ||
-		!strings.Contains(run.Error, "network down") {
+		run.Error != "Uploading it to Meko Cloud failed." {
 		t.Errorf("a failed upload: %+v", run)
 	}
 	if !h.exists(t, h.e.DatapackID) || len(h.cloud.canceled) != 1 {
@@ -258,8 +266,67 @@ func TestResume(t *testing.T) {
 	if err := h.e.Service.SetSyncJob(ctx, h.e.DatapackID, "imp-1"); err != nil {
 		t.Fatal(err)
 	}
+	// As at a start: the datapack is held before anything writes, then resumed.
+	if err := h.e.Service.HoldSyncs(ctx); err != nil {
+		t.Fatal(err)
+	}
 	h.s.Resume(ctx)
 	if run := h.wait(t, h.e.DatapackID); run.State != cloudsync.StateDone || h.exists(t, h.e.DatapackID) {
 		t.Errorf("resumed: %+v", run)
+	}
+}
+
+// The switch-over keeps the datapack's Context Gaps questions, under its id.
+func TestSyncKeepsQuestions(t *testing.T) {
+	h := setup(t)
+	ctx := context.Background()
+	if err := h.e.Store.AddAsk(ctx, store.Ask{DatapackID: h.e.DatapackID, Key: "how do we deploy", At: time.Now(),
+		Query: "How do we deploy?", Quality: "empty", Tool: "context_search"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.s.Start(ctx, h.e.DatapackID); err != nil {
+		t.Fatal(err)
+	}
+	if run := h.wait(t, h.e.DatapackID); run.State != cloudsync.StateDone || h.exists(t, h.e.DatapackID) {
+		t.Fatalf("sync: %+v", run)
+	}
+	if qs, err := h.e.Store.Questions(ctx, h.e.DatapackID); err != nil || len(qs) != 1 {
+		t.Errorf("questions after the sync: %v %v", qs, err)
+	}
+}
+
+// When the cancel can't get through, the datapack stays held and its job saved, since Cloud's import
+// could still finish; the run says so, without this computer's error detail.
+func TestSyncHeldWhenTheCancelFails(t *testing.T) {
+	h := setup(t)
+	h.fail, h.cloud.noCancel = errors.New("network down at /private/var/secret"), true
+	if _, err := h.s.Start(context.Background(), h.e.DatapackID); err != nil {
+		t.Fatal(err)
+	}
+	run := h.wait(t, h.e.DatapackID)
+	if run.State != cloudsync.StateFailed || !strings.Contains(run.Error, "couldn't cancel") ||
+		strings.Contains(run.Error, "/private/var") {
+		t.Errorf("run: %+v", run)
+	}
+	if jobs, _ := h.e.Service.SyncJobs(context.Background()); jobs[h.e.DatapackID] != "imp-1" {
+		t.Errorf("the job was forgotten: %v", jobs)
+	}
+	if _, err := h.e.Service.PutArtifact(context.Background(), h.e.DatapackID, "a", "n.txt", "text/plain",
+		[]byte("x")); !errors.Is(err, memory.ErrDatapackSyncing) {
+		t.Errorf("a write while held: %v", err)
+	}
+}
+
+// An import Meko Cloud no longer has ends the run at once, rather than after the timeout.
+func TestSyncEndsWhenCloudLostTheImport(t *testing.T) {
+	h := setup(t)
+	h.s.Timeout = time.Hour
+	h.cloud.gone = true
+	if _, err := h.s.Start(context.Background(), h.e.DatapackID); err != nil {
+		t.Fatal(err)
+	}
+	if run := h.wait(t, h.e.DatapackID); run.State != cloudsync.StateFailed ||
+		!strings.Contains(run.Error, "import not found") || !h.exists(t, h.e.DatapackID) {
+		t.Errorf("run: %+v", run)
 	}
 }
