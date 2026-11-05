@@ -2602,6 +2602,13 @@ export type TermClientMessage =
 /** How long the screen that has a session keeps it, unused, from another screen that asks. */
 export const SCREEN_IDLE_MS = 10_000;
 
+/**
+ * Lines of scrollback a terminal keeps: the browser's and the session host's alike, so a page that
+ * loads or reconnects gets as much history as one that stayed open (once the host runs a release
+ * with this: a running host keeps the code, and the number, it started with).
+ */
+export const TERM_SCROLLBACK = 10_000;
+
 /** Another screen, named for the one told: its browser and system, and whether it's this same browser. */
 export type ScreenName = { name: string; sameBrowser: boolean };
 

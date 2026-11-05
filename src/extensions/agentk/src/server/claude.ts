@@ -195,6 +195,10 @@ export function writeHookFiles(paths: Paths, opts: { disabledPlugins?: string[] 
   const cmd = { type: 'command', command: script, timeout: 5 };
   const all = [{ hooks: [cmd] }];
   const settings = {
+    // Claude Code's main-screen renderer, whatever the user's own `tui` says (or a rollout flag
+    // picks): its full-screen one draws on the alternate buffer, which has no scrollback, so find in
+    // the terminal, the wheel and swipes would reach only the screen. Their own terminals keep theirs.
+    tui: 'default',
     // The design file lives outside the repo; writing it, and publishing the design as an
     // Artifact (private by default), shouldn't stop for a permission prompt. Edit() rules cover
     // every file-editing tool, Write included; Claude Code ignores Write() rules and warns about them.

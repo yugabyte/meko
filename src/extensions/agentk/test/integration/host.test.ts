@@ -183,6 +183,45 @@ describe('session host (real ptys)', () => {
     await waitFor(() => lastSize(desk), (s) => s?.active === true && s.cols === 120, 5000, 'desktop back');
   });
 
+  it("keeps as many lines of scrollback as the browser, and shows a new viewer all of them", async () => {
+    await host.spawn('ak-long', home, ['/bin/sh', '-c', 'i=1; while [ $i -le 8000 ]; do echo "row $i"; i=$((i+1)); done; echo done-rows; exec cat']);
+    await waitFor(() => host.capture('ak-long'), (t) => t.includes('done-rows'), 10_000, 'rows printed');
+    const v = await viewer(host, 'ak-long');
+    streams.push(v.stream);
+    // 8,000 lines: past the 5,000 the host used to keep, within the browser's TERM_SCROLLBACK.
+    await waitFor(() => v.out, (o) => o.includes('done-rows'), 10_000, 'screen copy');
+    expect(v.out).toMatch(/row 1\r?\n/);
+    expect(v.out).toContain('row 2000');
+  });
+
+  it('sends a screen copy larger than a frame in parts, once, while the program keeps printing', async () => {
+    // 10,000 wide rows of colored text with box characters: a copy of well over MAX_FRAME (8 MB).
+    const prog = `setTimeout(() => {
+      let s = '';
+      for (let i = 1; i <= 10100; i++) {
+        let row = 'wide ' + i + ' ';
+        for (let j = 0; j < 20; j++) row += '\\x1b[38;2;' + ((i * 7 + j) % 256) + ';' + (j * 6) + ';90m' + '─'.repeat(11);
+        s += row + '\\x1b[0m\\r\\n';
+      }
+      process.stdout.write(s + 'done-wide\\r\\n');
+      setInterval(() => process.stdout.write('tick\\r\\n'), 5);
+    }, 300);`;
+    await host.spawn('ak-wide', home, [process.execPath, '-e', prog]);
+    const sizer = await viewer(host, 'ak-wide', { cols: 500, rows: 50 });
+    streams.push(sizer.stream);
+    await waitFor(() => host.capture('ak-wide'), (t) => t.includes('tick'), 30_000, 'rows printed');
+
+    const v = await viewer(host, 'ak-wide');
+    streams.push(v.stream);
+    await waitFor(() => v.out, (o) => o.includes('done-wide') && o.lastIndexOf('tick') > o.indexOf('done-wide'), 30_000, 'screen copy, then output');
+    expect(Buffer.byteLength(v.out)).toBeGreaterThan(8 * 1024 * 1024);
+    expect(v.out).toContain('wide 101 ');
+    // Live output follows the copy instead of making the host send it again and again.
+    await new Promise((r) => setTimeout(r, 1000));
+    expect(v.closed).toBe(false);
+    expect(v.out.split('\x1bc').length - 1).toBe(1);
+  }, 60_000);
+
   it("never makes the program wait on a viewer that stopped reading, and sends it the screen afresh once it reads again", async () => {
     await host.spawn('ak-yes', home, ['/bin/sh', '-c', 'yes']);
     const slow = await viewer(host, 'ak-yes', { cols: 80, rows: 24 });
