@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { HARNESS_CAPS, versionAtLeast } from '../../shared/harnesses.js';
 import { claudeAsker } from '../askagentk.js';
-import { EDIT_TOOLS, REVIEW_DISALLOWED_TOOLS, claudeLauncher, modDirPath, promptInTranscript, statusLineScriptPath, transcriptMarkOf, transcriptPathFor, userStatusLine, writeModFiles } from '../claude.js';
+import { EDIT_TOOLS, REVIEW_DISALLOWED_TOOLS, claudeLauncher, modDirPath, promptInTranscript, statusLineScriptPath, transcriptMarkOf, transcriptPathFor, userStatusLine, viewDirPath, writeModFiles, writeViewFiles } from '../claude.js';
 import type { ClaudeCode } from '../claudecode.js';
 import type { Config } from '../config.js';
 import type { HookPayload } from '../hooks.js';
@@ -31,6 +31,7 @@ export function claudeHarness(deps: { claudeCode: ClaudeCode; log: Logger }): Ha
   };
   // The mod's files are copied at start (prepare); a half-updated install may lack them.
   const modReady = (paths: Paths, cfg: Config) => cfg.claude.mod && existsSync(join(modDirPath(paths), 'hooks', 'register.ts'));
+  const viewReady = (paths: Paths) => existsSync(join(viewDirPath(paths), 'hooks', 'register.ts'));
   const transcript = (row: SessionRow) => sessionTranscript(row, transcriptPathFor);
   return {
     id: 'claude',
@@ -43,6 +44,12 @@ export function claudeHarness(deps: { claudeCode: ClaudeCode; log: Logger }): Ha
         if (!writeModFiles(paths)) deps.log.warn("AgentK's mod for Claude Code is missing from this install; sessions start without it");
       } catch (e) {
         deps.log.warn("couldn't write AgentK's mod for Claude Code; sessions start without it", errMsg(e));
+      }
+      // The view mod only draws: without it, AgentK's prompts show in full.
+      try {
+        if (!writeViewFiles(paths)) deps.log.warn("AgentK's view mod for Claude Code is missing from this install; sessions show AgentK's prompts in full");
+      } catch (e) {
+        deps.log.warn("couldn't write AgentK's view mod for Claude Code; sessions show AgentK's prompts in full", errMsg(e));
       }
       // Reads the Claude Code version now (none while it's turned off), so the first launch doesn't
       // wait for it, and New session and the banners know whether it's there.
@@ -66,7 +73,8 @@ export function claudeHarness(deps: { claudeCode: ClaudeCode; log: Logger }): Ha
     launcher: (paths, cfg, l) => claudeLauncher(paths, {
       sessionId: l.row.id, worktree: l.row.worktree_path, claudeCommand: cfg.claude.command, claudeSessionId: l.row.claude_session_id,
       resume: l.resume, name: l.row.name, model: l.model, planMode: l.planMode, addDirs: l.addDirs,
-      pluginDirs: [...(l.modDir ? [l.modDir] : []), ...(l.tools ? [toolsPluginDir(paths)] : [])],
+      // The view mod with the mod: it draws the prompts the mod submits.
+      pluginDirs: [...(l.modDir ? [l.modDir, ...(viewReady(paths) ? [viewDirPath(paths)] : [])] : []), ...(l.tools ? [toolsPluginDir(paths)] : [])],
       mcpConfigs: l.tools ? [toolsMcpConfigPath(paths)] : [],
       appendSystemPrompt: l.systemPrompt, prompt: l.prompt, unsetEnv: l.unsetEnv, userSettingsOnly: l.untrusted,
       agents: l.review?.agents, disallowedTools: l.review ? REVIEW_DISALLOWED_TOOLS : undefined,

@@ -4,12 +4,14 @@ Part of the [AgentK design](../design.md).
 
 Claude Code runs *mods*: plugins of TypeScript function hooks that run inside the Claude process
 (early access). AgentK ships one, `agentk` (`src/mod/agentk`, a couple of hundred lines), that
-gives the server a way into each session besides the terminal. The server copies it to
-`run/mod/agentk` at startup, writing only files that changed, each through a temp file renamed into
+gives the server a way into each session besides the terminal, and a second one beside it,
+`agentk-view` (`src/mod/agentk-view`), that only draws AgentK's prompts (see *How AgentK's prompts
+look* below). The server copies them to `run/mod/agentk` and `run/mod/agentk-view` at startup, writing only files that changed, each through a temp file renamed into
 place; when a source file is missing or a write fails, it removes the run copy, so sessions start
 without the mod rather than with an old or half-updated one. Claude reloads a `--plugin-dir` mod whenever its files change, so an update reaches running
 sessions without a relaunch, and a plain restart reloads nothing. Every launch adds
-`--plugin-dir run/mod/agentk` and `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`, since hooks modules of
+`--plugin-dir run/mod/agentk`, `--plugin-dir run/mod/agentk-view` (when its copy is there) and
+`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`, since hooks modules of
 installed plugins are otherwise off unless Claude Code's own rollout turns them on. That variable
 only helps while the rollout hasn't decided: when its switch serves off, Claude loads no plugin's
 hooks module whatever the variable says, and AgentK types prompts as before. It does this when:
@@ -110,6 +112,30 @@ within seconds, and the prompts AgentK queues are in the database anyway. Whethe
 is live is in `Session.modLive`: the server pushes a change when the mod is first heard from, on a
 reset, and when a sweep every 2 seconds finds a link gone stale. The UI offers what needs the mod
 (below) only while it's live, and the server checks again on every request.
+
+**How AgentK's prompts look.** AgentK's prompts are long (a stage's steps, Meko's lines), so the
+terminal draws each as its first line, `<first line> … (+N lines, ctrl+o to expand)`, cut at 200
+characters; the full transcript (ctrl+o) shows it whole, and Claude reads it whole: only the row's
+drawing changes. The view mod does it, with a `ui.render` hook on `UserMessage` rows that hands the
+row on with that text, for:
+
+- a prompt AgentK's mod submitted: the row's origin is `{ kind: "plugin", name: "agentk" }`, which
+  the transcript keeps, so a resumed session draws it the same way;
+- the session's first prompt. AgentK passes it on claude's command line, and Claude Code draws that
+  like typed text (origin `composer`), so the server keeps its first line (`sessions.first_prompt`,
+  set at each launch that starts a conversation, NULL when it starts with none) and passes it to
+  every launch, a resume's too, as `AK_FIRST_PROMPT`; a row whose first line is that one is folded.
+
+A prompt whose first line is `AK_HIDDEN_PROMPT` (a workshop host's `AgentK events:`, the first line
+of its `guide-event` prompt; empty for other sessions) draws as nothing
+([Workshops](workshops.md)). Prompts AgentK types into the terminal (no live mod) draw in full.
+Both mods compare a prompt's first line as `firstLine()` in `prompts.ts` reads it: its first line
+with text, trimmed.
+
+It's a mod of its own because Claude Code never raises a plugin's `ui.render` hook for the rows of
+prompts that plugin submitted (measured on 2.1.317): AgentK's mod can't draw its own prompts. A hook
+in a second plugin sees them. A view mod that's missing, or a Claude Code without the hook, leaves
+every row as Claude Code draws it.
 
 **Claude's questions.** The mod's `tool.call` hook on `AskUserQuestion` lets Claude's own dialog
 open in the terminal as always (`next(e)`), and sends the questions to the server too

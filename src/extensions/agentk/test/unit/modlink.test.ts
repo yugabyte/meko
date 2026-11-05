@@ -49,7 +49,7 @@ describe('the link to AgentK\'s mod', () => {
     expect(await next).toBeNull();
   });
 
-  it('marks a hidden prompt for the mod, which draws it as nothing', async () => {
+  it('marks a hidden prompt for the mod, which hides a bare OK in its turn', async () => {
     links.hello('s1');
     void links.send('s1', 'AgentK events:\n- A turn ended', true);
     void links.send('s1', 'Implement the design.');

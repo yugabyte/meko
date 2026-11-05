@@ -22,7 +22,7 @@ import { errMsg } from './log.js';
 import { checkStartItem, setItemSession } from './workqueue.js';
 import { AGENTK_AGENT_ID, launchedAgentId, sessionAgentId } from './meko.js';
 import {
-  AUTO_RUN_PROMPTS, autoRunLine, DESIGN_UPKEEP_PROMPTS, designQaLine, designQuestionsLine, designUpkeepLine, designWhere, learnTask, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine,
+  AUTO_RUN_PROMPTS, autoRunLine, DESIGN_UPKEEP_PROMPTS, designQaLine, designQuestionsLine, designUpkeepLine, designWhere, firstLine, learnTask, loadPrompt, mekoConversationLine, mekoLearnLine, mekoQuestionLine,
   guideSystemLine, mekoQuestionSystemLine, mekoRecallLine, mekoRecallSystemLine, mekoSaveSystemLine, render, reviewDesignLine, taskWithName, withAttachedImages, type PromptName,
 } from './prompts.js';
 import { PR_DESIGN_TIMEOUT_MS, markPrDesignTold, prDesignFile, prDesignSource, removePrDesignFiles } from './prdesign.js';
@@ -1202,6 +1202,10 @@ export class SessionManager {
       // Its local spelling too: Claude Code refuses a mod's $.http.fetch to a socket under /net.
       AK_HOOK_SOCK: claudePath(this.core.paths.hookSock),
       AK_DESIGN_FILE: this.designFile(row),
+      // For AgentK's view mod (src/mod/agentk-view): the first line of the prompt the conversation
+      // started with, which Claude Code draws like typed text, and of a workshop host's hidden events.
+      AK_FIRST_PROMPT: row.first_prompt ?? '',
+      AK_HIDDEN_PROMPT: row.purpose === 'guide' ? firstLine(this.prompt(row, 'guide-event', { events: '' })) : '',
       MEKO_AGENT_ID: launchedAgentId(row),
       MEKO_DATAPACK_ID: dedicated?.id ?? '',
       MEKO_DATAPACK_IDS: dps.map((d) => d.id).join(','),
@@ -1329,6 +1333,9 @@ export class SessionManager {
   async launch(row: SessionRow, opts: { resume: boolean; prompt: string | null; conversation?: Promise<string | null> }): Promise<void> {
     // Read again at every launch: a private repo can be made public.
     row = await this.checkHead(row.id);
+    // A new conversation starts with this prompt, or with none; a resumed one keeps the line its start
+    // kept. The launch's env gets it now; the row keeps it only once nothing still running is in the way.
+    const first = opts.resume ? row.first_prompt : opts.prompt ? firstLine(opts.prompt) || null : null;
     const h = this.harness(row);
     await h.beforeLaunch({ paths: this.core.paths, cfg: this.core.config, log: this.core.log, row, repo: sessionRepo(this.db, row) });
     this.pinDatapack(row);
@@ -1356,7 +1363,7 @@ export class SessionManager {
       addDirs: review ? [designDir, review.runDir] : [designDir],
       modDir,
       planMode: row.stage === 'design' && !!row.plan_mode,
-      env: this.env(row),
+      env: this.env({ ...row, first_prompt: first }),
       termTheme,
       unsetEnv: SESSION_ENV_UNSET,
       untrusted,
@@ -1369,6 +1376,7 @@ export class SessionManager {
     if (sessionRow(this.db, row.id)?.desired !== 'running') throw new HttpError(409, 'This session was archived while it was starting.');
     // Never replace a live Claude (the host refuses to as well).
     if (pane && !pane.dead) throw new HttpError(409, `${agentName(row)} is already running in this session.`);
+    if (row.first_prompt !== first) this.update(row.id, { first_prompt: first });
     // Stopped for sitting idle: running again from now on, and recovery looks after it again.
     if (row.idle_stopped_at) this.update(row.id, { idle_stopped_at: null });
     this.awaitingStart.add(row.id);
@@ -1409,7 +1417,8 @@ export class SessionManager {
    * is on (Claude takes it when it's next idle), else typed into the TUI. Submissions to one session go one at a time; one
    * that had to wait is refused if the one before it started a turn. `lost` runs if Claude goes
    * (exits, or is relaunched) after a prompt sent between turns counted as sent but before its turn started.
-   * A `hidden` one draws as nothing in Claude's transcript when the mod submits it (a workshop host's events).
+   * For a `hidden` one (a workshop host's events) the mod draws a bare "OK" in its turn as nothing; AgentK's
+   * view mod hides the prompt's own row by its first line (AK_HIDDEN_PROMPT), not by this flag.
    */
   submit(id: string, text: string, lost?: () => void, hidden = false): Promise<void> {
     return this.inTurn(id, async (r, waited) => {

@@ -198,12 +198,14 @@ to its own page), and a `learned` event that taught a question adds the same add
 question is now under Taught (the page opens on Open, and its filter isn't in the URL).
 The workshop's own notices (the pause for the user's go, a failed gotchas upload) go with `tell()`.
 The prompt is only the events' lines; GUIDE.md and the host's system line say what to do with them.
-The user doesn't see it: it goes as a hidden prompt (`SessionManager.submit`'s `hidden`, on the mod's
-poll as `hidden: true`), which AgentK's mod draws as nothing in the terminal with Claude Code's
-`ui.render` hook on `UserMessage` rows, by its text; the full transcript (ctrl+o) still shows it. A
-reply of just "OK" in that prompt's turn, which GUIDE.md asks for when nothing needs saying, is
-hidden the same way (`AssistantMessage` rows). Typed into the terminal (no mod) or after Claude
-restarts (the mod's list is in memory), the events show. Sessions in other projects send
+The user doesn't see it: AgentK's view mod (`src/mod/agentk-view`) draws a prompt from AgentK's mod
+whose first line is the host's `AK_HIDDEN_PROMPT` (`AgentK events:`) as nothing in the terminal,
+with Claude Code's `ui.render` hook on `UserMessage` rows; the full transcript (ctrl+o) still
+shows it ([AgentK's mod](mod.md#how-agentks-prompts-look)). A reply of just "OK" in that prompt's turn, which
+GUIDE.md asks for when nothing needs saying, is hidden by AgentK's mod (`AssistantMessage` rows,
+for the prompts it submits with `hidden`: `SessionManager.submit`'s `hidden`, on the mod's poll as
+`hidden: true`). Typed into the terminal (no mod) the events show, and so does such an "OK" after
+Claude restarts (the mod's list is in memory). Sessions in other projects send
 nothing.
 
 The queue goes to the host as one `guide-event` prompt ("AgentK events: …"): a few seconds after the

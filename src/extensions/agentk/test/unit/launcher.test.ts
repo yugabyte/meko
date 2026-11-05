@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  claudeLauncher, hooksSettingsPath, modDirPath, writeHookFiles, writeModFiles, type LaunchSpec,
+  claudeLauncher, hooksSettingsPath, modDirPath, viewDirPath, writeHookFiles, writeModFiles, writeViewFiles, type LaunchSpec,
 } from '../../src/server/claude.js';
 import { versionAtLeast } from '../../src/shared/harnesses.js';
 import { cliVersion } from '../../src/server/harness/version.js';
@@ -172,15 +172,18 @@ describe("AgentK's mod", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  it('is copied to the run folder from the repo, without its tests', () => {
+  it.each([
+    { name: 'agentk', write: writeModFiles, dir: modDirPath, other: viewDirPath },
+    { name: 'agentk-view', write: writeViewFiles, dir: viewDirPath, other: modDirPath },
+  ])('$name is copied to its own folder in the run folder from the repo, without its tests', ({ name, write, dir, other }) => {
     const paths = getPaths(join(home, 'ak'));
-    expect(writeModFiles(paths)).toBe(true);
-    const dir = modDirPath(paths);
-    expect(dir).toBe(join(paths.run, 'mod', 'agentk'));
-    expect(JSON.parse(readFileSync(join(dir, '.claude-plugin', 'plugin.json'), 'utf8')).name).toBe('agentk');
-    expect(JSON.parse(readFileSync(join(dir, 'hooks', 'hooks.json'), 'utf8'))).toEqual({ modules: ['./register.ts'] });
-    expect(readFileSync(join(dir, 'hooks', 'register.ts'), 'utf8')).toMatch(/\/mod\/poll/);
-    expect(existsSync(join(dir, 'tests'))).toBe(false);
+    expect(write(paths)).toBe(true);
+    expect(dir(paths)).toBe(join(paths.run, 'mod', name));
+    expect(JSON.parse(readFileSync(join(dir(paths), '.claude-plugin', 'plugin.json'), 'utf8')).name).toBe(name);
+    expect(JSON.parse(readFileSync(join(dir(paths), 'hooks', 'hooks.json'), 'utf8'))).toEqual({ modules: ['./register.ts'] });
+    expect(existsSync(join(dir(paths), 'tests'))).toBe(false);
+    // The other mod's copy is left alone.
+    expect(existsSync(other(paths))).toBe(false);
   });
 
   it('writes only the files that changed (Claude reloads the mod on every write), and none left half-written', () => {

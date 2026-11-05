@@ -245,15 +245,30 @@ export function writeHookFiles(paths: Paths, opts: { disabledPlugins?: string[] 
 export const MIN_MOD_CLAUDE = '2.1.287';
 
 /**
- * The mod's files, relative to its folder: src/mod/agentk in the repo (tsx, tests), dist/mod/agentk
- * in a build. Its tests stay behind.
+ * The files of AgentK's mod and of its view mod, relative to each one's folder: src/mod/agentk and
+ * src/mod/agentk-view in the repo (tsx, tests), dist/mod/… in a build. Their tests stay behind.
  */
 const MOD_FILES = ['.claude-plugin/plugin.json', 'hooks/hooks.json', 'hooks/register.ts'];
 const MOD_SOURCE = join(dirname(fileURLToPath(import.meta.url)), '..', 'mod', 'agentk');
+const VIEW_SOURCE = join(dirname(fileURLToPath(import.meta.url)), '..', 'mod', 'agentk-view');
 
 /** Where sessions load AgentK's mod from (`--plugin-dir`). */
 export function modDirPath(paths: Paths): string {
   return join(paths.run, 'mod', 'agentk');
+}
+
+/**
+ * Where sessions load AgentK's view mod from (a second `--plugin-dir`, beside the mod): it draws
+ * AgentK's prompts folded, which the mod can't, since Claude Code never shows a plugin the rows of
+ * the prompts it submitted itself.
+ */
+export function viewDirPath(paths: Paths): string {
+  return join(paths.run, 'mod', 'agentk-view');
+}
+
+/** Copies AgentK's view mod to the run folder, as `writeModFiles` copies the mod. */
+export function writeViewFiles(paths: Paths, source = VIEW_SOURCE): boolean {
+  return writeModFiles(paths, source, viewDirPath(paths));
 }
 
 /**
@@ -264,8 +279,7 @@ export function modDirPath(paths: Paths): string {
  * mod (`modDir()` checks for it) rather than with an old or half-updated one. False then; a failed
  * write also throws.
  */
-export function writeModFiles(paths: Paths, source = MOD_SOURCE): boolean {
-  const dest = modDirPath(paths);
+export function writeModFiles(paths: Paths, source = MOD_SOURCE, dest = modDirPath(paths)): boolean {
   const texts: string[] = [];
   for (const f of MOD_FILES) {
     try {
