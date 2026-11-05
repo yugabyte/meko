@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { anchorComment, defaultOpen, DESKTOP_BUDGET, keepUnchanged, parsePatch, pathFilter, PHONE_BUDGET, pickComment, pickRange, reparse, sameLine, showsLine, type RowBudget } from '../../src/web/diff.js';
+import {
+  anchorComment, canExpand, coveringGap, defaultOpen, DESKTOP_BUDGET, expandRows, gapLines, GAP_STEP, keepUnchanged, parsePatch, pathFilter, PHONE_BUDGET, pickComment, pickRange,
+  fitText, reparse, sameLine, showsLine, splitText, type DiffLine, type RowBudget,
+} from '../../src/web/diff.js';
 
 const rows = (patch: string) => parsePatch(patch).map((l) => [l.kind, l.old, l.new, l.text]);
 
@@ -176,5 +179,129 @@ describe('filtering the Files menu', () => {
     expect(shown('WEB/(')).toEqual(['src/web/diff.ts', 'src/web/App.tsx']);
     expect(shown('(diff')).toEqual(files.map((f) => f.path));
     expect(shown('c++')).toContain('docs/c++/notes.md');
+  });
+});
+
+describe('showing the unchanged lines a patch leaves out', () => {
+  // A 61-line file: line 14 became two lines, and line 50 changed. Below line 14 the new side is one line further on.
+  const text = Array.from({ length: 61 }, (_, i) => {
+    const n = i + 1;
+    return n < 14 ? `line ${n}` : n === 14 ? 'LINE 14' : n === 15 ? 'LINE 14b' : n === 51 ? 'line fifty' : `line ${n - 1}`;
+  });
+  const patch = [
+    'diff --git a/f.txt b/f.txt',
+    '@@ -11,7 +11,8 @@ function f() {',
+    ' line 11', ' line 12', ' line 13', '-line 14', '+LINE 14', '+LINE 14b', ' line 15', ' line 16', ' line 17',
+    '@@ -47,7 +48,7 @@',
+    ' line 47', ' line 48', ' line 49', '-line 50', '+line fifty', ' line 51', ' line 52', ' line 53',
+  ].join('\n');
+  const parsed = parsePatch(patch);
+  const gaps = (rows: DiffLine[]) => rows.filter((l) => l.gap).map((l) => [l.text, l.gap]);
+  const newNumbers = (rows: DiffLine[]) => rows.filter((l) => l.new !== null).map((l) => l.new);
+
+  it('gives each hunk a gap row for the lines above it, and one after the last hunk', () => {
+    const rows = expandRows(parsed, null, new Set());
+    expect(gaps(rows)).toEqual([
+      ['@@ -11,7 +11,8 @@ function f() {', { from: 1, to: 10, hidden: 10, top: true, end: false }],
+      ['@@ -47,7 +48,7 @@', { from: 19, to: 47, hidden: 29, top: false, end: false }],
+      // The file's end isn't known until its text is in.
+      ['', { from: 55, to: null, hidden: null, top: false, end: true }],
+    ]);
+    // The patch's other rows are the same objects; its hunk rows became the gap rows.
+    const own = parsed.filter((l) => l.kind !== 'hunk');
+    expect(rows.filter((l) => !l.gap)).toHaveLength(own.length);
+    expect(rows.filter((l) => !l.gap).every((l, k) => l === own[k])).toBe(true);
+  });
+
+  it('shows the next lines under a change (↓) and the lines over the next (↑), numbered on both sides', () => {
+    const down = expandRows(parsed, text, new Set(gapLines({ from: 19, to: 47 }, 'down')));
+    const shown = down.filter((l) => l.kind === 'ctx' && l.new !== null && l.new >= 19 && l.new <= 47);
+    expect(shown.map((l) => [l.old, l.new, l.text])).toEqual(Array.from({ length: GAP_STEP }, (_, k) => [18 + k, 19 + k, `line ${18 + k}`]));
+    expect(gaps(down)[1]).toEqual(['9 hidden lines', { from: 39, to: 47, hidden: 9, top: false, end: false }]);
+
+    const up = expandRows(parsed, text, new Set(gapLines({ from: 19, to: 47 }, 'up')));
+    const i = up.findIndex((l) => l.gap?.from === 19);
+    expect(up[i].gap).toEqual({ from: 19, to: 27, hidden: 9, top: false, end: false });
+    expect(up.slice(i + 1, i + 3).map((l) => [l.old, l.new])).toEqual([[27, 28], [28, 29]]);
+    expect(up[i + GAP_STEP].new).toBe(47);
+    expect(up[i + GAP_STEP + 1].kind).toBe('ctx'); // the hunk's own first line: its header row is gone
+    expect(up[i + GAP_STEP + 1].text).toBe('line 47');
+
+    // A partly shown gap keeps the hunk's function context on the row next to the hunk.
+    const top = expandRows(parsed, text, new Set([10]));
+    expect(gaps(top)[0]).toEqual(['9 hidden lines · function f() {', { from: 1, to: 9, hidden: 9, top: true, end: false }]);
+  });
+
+  it('reads as one run of lines once every gap is shown, with no gap rows left', () => {
+    const all = new Set([...gapLines({ from: 1, to: 10 }, 'all'), ...gapLines({ from: 19, to: 47 }, 'all'), ...gapLines({ from: 55, to: 61 }, 'all')]);
+    const rows = expandRows(parsed, text, all);
+    expect(rows.some((l) => l.kind === 'hunk')).toBe(false);
+    expect(newNumbers(rows)).toEqual(Array.from({ length: 61 }, (_, k) => k + 1));
+    expect(rows.filter((l) => l.kind === 'ctx').every((l) => l.text === text[(l.new as number) - 1])).toBe(true);
+    // A range now runs across what was a hunk's edge.
+    expect(pickRange(rows, 'new', 17, 50)).toMatchObject({ from: 17, to: 50 });
+    expect(pickRange(expandRows(parsed, text, new Set()), 'new', 17, 50)).toMatchObject({ from: 17, to: 18 });
+  });
+
+  it('splits a gap around lines shown in its middle, and knows where the file ends once its text is in', () => {
+    const rows = expandRows(parsed, text, new Set([30, 31]));
+    expect(gaps(rows).map(([, g]) => g)).toEqual([
+      { from: 1, to: 10, hidden: 10, top: true, end: false },
+      { from: 19, to: 29, hidden: 11, top: false, end: false },
+      { from: 32, to: 47, hidden: 16, top: false, end: false },
+      { from: 55, to: 61, hidden: 7, top: false, end: true },
+    ]);
+    expect(gaps(rows)[3][0]).toBe('7 hidden lines');
+    // A comment on line 31 anchors on the shown line.
+    expect(anchorComment(rows, { side: 'new', endLine: 31, excerpt: 'line 30' })).toBe(rows.findIndex((l) => l.new === 31));
+  });
+
+  it('keeps the row of a hunk at line 1, which has nothing above it, and leaves a patch with no hunks alone', () => {
+    const first = parsePatch(['@@ -1,2 +1,2 @@', '-a', '+A', ' b'].join('\n'));
+    const rows = expandRows(first, null, new Set());
+    expect(rows[0]).toBe(first[0]);
+    expect(rows[0].gap).toBeUndefined();
+    expect(gaps(rows)).toEqual([['', { from: 3, to: null, hidden: null, top: false, end: true }]]);
+    const none = parsePatch('Binary files differ');
+    expect(expandRows(none, null, new Set())).toBe(none);
+  });
+
+  it.each([
+    ['an append at the end', ['@@ -8,3 +8,4 @@', ' x', ' y', ' z', '+w']],
+    ['a change on the last line', ['@@ -8,3 +8,3 @@', ' x', ' y', '-z', '+Z']],
+    ['a last line with no newline', ['@@ -8,1 +8,1 @@', '-z', '+Z', '\\ No newline at end of file']],
+  ])('has no gap row after a last hunk that reaches the end of the file: %s', (_, lines) => {
+    expect(expandRows(parsePatch(lines.join('\n')), null, new Set()).filter((l) => l.gap?.end)).toEqual([]);
+  });
+
+  it('finds the gap that hides a range of lines', () => {
+    const rows = expandRows(parsed, null, new Set());
+    expect(coveringGap(rows, 20, 25)).toMatchObject({ from: 19, to: 47 });
+    expect(coveringGap(rows, 100, 101)).toMatchObject({ from: 55, to: null });
+    expect(coveringGap(rows, 9, 12)).toBeNull(); // runs into a hunk
+  });
+
+  it('picks ↕ lines, and ↓ or ↑ lines of a gap shorter than a step', () => {
+    expect(gapLines({ from: 3, to: 5 }, 'all')).toEqual([3, 4, 5]);
+    expect(gapLines({ from: 3, to: 5 }, 'down')).toEqual([3, 4, 5]);
+  });
+
+  it("checks a file's text against its patch, taking CRLF lines without their \\r when the patch has none", () => {
+    expect(fitText(parsed, text)).toBe(text);
+    expect(fitText(parsed, text.map((t) => `${t}\r`))).toEqual(text);
+    expect(fitText(parsed, text.map((t, i) => (i === 11 ? 'edited' : t)))).toBeNull();
+    expect(fitText(parsed, text.slice(0, 40))).toBeNull();
+    expect(splitText('a\nb\n')).toEqual(['a', 'b']);
+    expect(splitText('a\r\nb')).toEqual(['a\r', 'b']);
+    expect(splitText('a\n\n')).toEqual(['a', '']);
+  });
+
+  it('offers arrows only where the patch leaves lines out and is whole', () => {
+    const f = { kind: 'modified' as const, binary: false, truncated: false, patch: patch };
+    expect(canExpand(f)).toBe(true);
+    expect(canExpand({ ...f, kind: 'renamed' })).toBe(true);
+    for (const kind of ['added', 'untracked', 'deleted'] as const) expect(canExpand({ ...f, kind })).toBe(false);
+    expect(canExpand({ ...f, truncated: true })).toBe(false);
+    expect(canExpand({ ...f, binary: true, patch: null })).toBe(false);
   });
 });

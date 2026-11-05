@@ -2028,6 +2028,13 @@ export interface ChangedFile {
   truncated: boolean;
 }
 
+/** A changed file's new side as text, for the Changes panel's ↑ and ↓ (at most 1 MB). */
+export interface ChangedText {
+  text: string;
+  /** The file's patch, diffed again with the text: the panel uses the text only while it's the patch on screen. */
+  patch: string;
+}
+
 /** A session's diff size vs. its base, as the footer shows it. */
 export interface DiffStat {
   /** Changed files, untracked ones included (the Changes panel's count). */
@@ -2796,6 +2803,10 @@ export type TermServerMessage =
 // GET    /api/sessions/:id/discard-check       → DiscardCheck
 // GET    /api/sessions/:id/changes?commit=     → SessionChanges   (commit: one of the branch's commits alone, by full sha)
 // GET    /api/sessions/:id/changes/image?path=&side=old|new&commit= → image bytes (previewable types only)
+// GET    /api/sessions/:id/changes/file?path=&old=&commit= → ChangedText   (a changed file's new side, the worktree's or
+//        the commit's, with its patch diffed again; old: a rename's old path. Only a file that diff changes, inside the
+//        repo, text, at most 1 MB: 400 for a path outside the repo, 404 for a file it doesn't change, one that isn't
+//        there, isn't text or is larger, or a commit that isn't listed; 409 when the worktree is gone)
 // POST   /api/sessions/:id/images  image bytes → PastedImage   (the body is the image, with an image/* Content-Type;
 //        PNG, JPEG, GIF or WebP by its bytes, else 415; at most 20 MB, else 413; 409 for an archived session. Saved
 //        under ~/.agent-k-local/pastes/<session>/ and removed when the session is archived)
