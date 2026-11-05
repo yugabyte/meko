@@ -63,6 +63,8 @@ type Options struct {
 	MemoryEngine func(ctx context.Context) memory.EngineStatus // nil reports no memory engine
 	// UsageStats, if set, says whether usage stats are sent, for status.
 	UsageStats func(ctx context.Context) (callhome.State, error)
+	// Storage, if set, says how full Meko is against its storage limit, for status.
+	Storage func(ctx context.Context) (memory.StorageStatus, error)
 	// MCP, if set, serves /mcp (internal/mcp), with a body limit of MCPBodyLimit.
 	MCP http.Handler
 	// REST, if set, adds the /api/v1 routes meko_ui calls (internal/rest) to the group.
@@ -382,6 +384,8 @@ type StatusReply struct {
 	Auth          string              `json:"auth"` // token, or none
 	UsageStats    *callhome.State     `json:"usage_stats,omitempty"`
 	Web           *WebStatus          `json:"web,omitempty"`
+	// Storage is how much content Meko holds, by kind, and its limit ([storage] max_content_mb).
+	Storage *memory.StorageStatus `json:"storage,omitempty"`
 }
 
 func (s *Server) status(c echo.Context) error {
@@ -401,6 +405,11 @@ func (s *Server) status(c echo.Context) error {
 	if s.opts.UsageStats != nil {
 		if st, err := s.opts.UsageStats(c.Request().Context()); err == nil {
 			reply.UsageStats = &st
+		}
+	}
+	if s.opts.Storage != nil {
+		if st, err := s.opts.Storage(c.Request().Context()); err == nil {
+			reply.Storage = &st
 		}
 	}
 	return envelope.OK(c, reply)

@@ -36,6 +36,7 @@ type Config struct {
 	Web                Web                `toml:"web"`
 	TLS                TLS                `toml:"tls"`
 	CallHome           CallHome           `toml:"call_home"`
+	Storage            Storage            `toml:"storage"`
 }
 
 // Web is the [web] table: the web listener browsers use, for the web UI and the extensions' at
@@ -109,6 +110,22 @@ const (
 type WebUI struct {
 	Dir string `toml:"dir"` // also MEKO_WEB_UI_DIR
 }
+
+// DefaultMaxContentMB is [storage] max_content_mb's default: the content size Meko's search was
+// measured at (make bench), and keeps to.
+const DefaultMaxContentMB = 200
+
+// Storage is the [storage] table.
+type Storage struct {
+	// MaxContentMB is the most content Meko keeps, in MB (MiB): memory text, conversation turns,
+	// knowledge files and artifacts, across every datapack here. A write past it is refused. Search
+	// slows above the default, 200, the size it was measured at; Meko Cloud is for larger datasets.
+	// Read at start, so a change needs meko restart.
+	MaxContentMB int `toml:"max_content_mb"`
+}
+
+// MaxContentBytes is MaxContentMB in bytes.
+func (s Storage) MaxContentBytes() int64 { return int64(s.MaxContentMB) << 20 }
 
 // KnowledgeBase is the [knowledge_base] table.
 type KnowledgeBase struct {
@@ -185,7 +202,7 @@ func Default() Config {
 		Web: Web{Port: DefaultWebPort, Access: AccessLocal, Enabled: true},
 		Update: Update{Channel: "stable", Auto: true, IntervalHours: 6, Repo: "yugabyte/meko",
 			RequireSignature: true},
-		CallHome: CallHome{Enabled: true}}
+		CallHome: CallHome{Enabled: true}, Storage: Storage{MaxContentMB: DefaultMaxContentMB}}
 }
 
 // Overrides are settings given as flags; zero values mean unset.
@@ -312,6 +329,10 @@ func (c Config) validate() error {
 	}
 	if c.Web.Port < 1 || c.Web.Port > 65535 {
 		return fmt.Errorf("web.port %d is out of range: use 1 to 65535", c.Web.Port)
+	}
+	if c.Storage.MaxContentMB < 1 {
+		return fmt.Errorf("storage.max_content_mb %d is out of range: use a whole number of MB, 1 or more",
+			c.Storage.MaxContentMB)
 	}
 	if c.Web.Port == c.Server.Port {
 		return fmt.Errorf("web.port and server.port are both %d: give the web listener a port of its own", c.Web.Port)

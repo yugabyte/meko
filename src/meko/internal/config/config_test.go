@@ -135,6 +135,37 @@ func TestConversationSearchDistance(t *testing.T) {
 	}
 }
 
+func TestStorageLimit(t *testing.T) {
+	dir := t.TempDir()
+	for _, c := range []struct {
+		file    string
+		want    int
+		wantErr string
+	}{
+		{file: "", want: DefaultMaxContentMB},
+		{file: "[storage]\nmax_content_mb = 50\n", want: 50},
+		{file: "[storage]\nmax_content_mb = 1000\n", want: 1000},
+		{file: "[storage]\nmax_content_mb = 0\n", wantErr: "storage.max_content_mb 0 is out of range"},
+		{file: "[storage]\nmax_content_mb = -5\n", wantErr: "storage.max_content_mb -5 is out of range"},
+		{file: "[storage]\nmax_content_mb = \"lots\"\n", wantErr: "config.toml"},
+		{file: "[storage]\nmax_content_mb = 1.5\n", wantErr: "config.toml"},
+	} {
+		path := filepath.Join(dir, "config.toml")
+		if err := os.WriteFile(path, []byte(c.file), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := Load(path, func(string) string { return "" }, Overrides{})
+		switch {
+		case c.wantErr != "" && (err == nil || !strings.Contains(err.Error(), c.wantErr)):
+			t.Errorf("%q: error %v, want one with %q", c.file, err, c.wantErr)
+		case c.wantErr == "" && (err != nil || got.Storage.MaxContentMB != c.want):
+			t.Errorf("%q: %+v %v, want %d", c.file, got.Storage, err, c.want)
+		case c.wantErr == "" && got.Storage.MaxContentBytes() != int64(c.want)<<20:
+			t.Errorf("%q: %d bytes", c.file, got.Storage.MaxContentBytes())
+		}
+	}
+}
+
 func TestAuthMode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	c, err := Load(path, func(string) string { return "" }, Overrides{})

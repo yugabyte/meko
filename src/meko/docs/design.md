@@ -14,9 +14,11 @@ an HTTP server with auth, and a supervisor for child processes. The rest builds 
 | [web-ui.md](web-ui.md) | The web UI served at `/` |
 | [callhome.md](callhome.md) | Usage stats |
 
-Meko is sized for 200 MB of content: the stored data itself (memory text, conversation turns,
-artifact and knowledge-file bytes) across all datapacks, with indexes on top. That's a target the
-design and `make bench` are measured against, not a quota Meko enforces.
+Meko keeps up to 200 MB of content by default: the stored data itself (memory text, conversation
+turns, artifact and knowledge-file bytes) across all its datapacks, with indexes on top. That's the
+size the design and `make bench` are measured at, and search slows past it, so Meko enforces it as a
+limit ([the storage limit](#the-storage-limit)): a write that would go past it is refused. Meko
+Cloud is for larger datasets.
 
 Meko's code is its own. Where it follows Meko Cloud, it keeps Cloud's wire shapes (the
 `{data, error}` envelope, MCP tool names and replies, REST paths), written here from scratch, so
@@ -157,6 +159,7 @@ Config precedence: flags > `MEKO_*` env > `config.toml` > defaults. An unknown k
 | `[memory_engine] node`, `dir` | `MEKO_NODE`, `MEKO_MEMORY_ENGINE_DIR` | found | Node and the built memory engine ([memory-engine.md](memory-engine.md)). |
 | `[conversation_search] max_distance` | | 0.6 | Conversation search's cosine cutoff. |
 | `[knowledge_base] max_distance` | | 0.6 | `context_search`'s cutoff for knowledge-base results ([knowledge.md](knowledge.md)). |
+| `[storage] max_content_mb` | | 200 | The storage limit, in MB: the most content Meko keeps ([the storage limit](#the-storage-limit)). A whole number, 1 or more. Search slows above 200, the size it was measured at; Meko Cloud is for larger datasets. Read at start: `meko restart` applies a change. |
 | `[web_ui] dir` | `MEKO_WEB_UI_DIR` | found | The built web UI ([web-ui.md](web-ui.md)). |
 | `[secrets] store` | `MEKO_SECRETS` | `keychain` on macOS, else `file` | [install.md](install.md#secrets). |
 | `[update] channel`, `auto`, `interval_hours`, `repo`, `require_signature` | `MEKO_UPDATE_CHANNEL`, `_AUTO`, `_REPO`, `_REQUIRE_SIGNATURE` | `stable`, true, 6, this repo, true | [install.md](install.md#updates-and-rollback); `require_signature`: [signed releases](install.md#signed-releases). |
@@ -282,6 +285,28 @@ Two things hold for every searchable table: the FTS5 table has `datapack_id` as 
 filter runs inside MATCH (a join with the filter outside FTS never finished at 200 MB), and the
 `vec0` tables are made when the memory engine first reports its model and dimension.
 
+### The storage limit
+
+Meko keeps at most `[storage] max_content_mb` of content (200 MB by default), so its searches stay
+as fast as `make bench` measured them at that size: at 200 MB a memory search is 771 ms p50
+([memory-engine.md](memory-engine.md#measured)). Past it, a write is refused, and Meko Cloud is the
+place for larger datasets.
+
+| Decision | Why, and what was rejected |
+|---|---|
+| **One limit for the whole install, across its datapacks** | Vector search runs within one datapack (`vec0`'s partition key), but each FTS5 term's list holds every datapack's rows, so keyword search slows with the whole install. `make bench` put its 200 MB in one datapack, so a limit on the total keeps both within what was measured. A limit per datapack was rejected: it doesn't bound keyword search, and more datapacks get around it. While Meko Cloud is linked, its datapacks live there and don't count. |
+| **Content is what callers send** | Memory text and payload (promoted memories' too), a turn's input, output, reasoning, plan and metadata, and artifact and knowledge-file bytes. Payload and metadata count so they can't get around the limit. Indexes, vectors, chunks, memory history, the call log and its contents, and Context Gaps don't. |
+| **`content_usage`, kept by triggers** (`0014_content_usage.sql`) | One row per kind (`memories`, `conversations`, `knowledge`, `artifacts`), filled from the rows when the migration runs and kept by insert, update and delete triggers on `memories`, `promoted_memories`, `messages`, `kb_documents` and `artifacts`. A check reads four integers. The triggers also see the memory engine's writes through the store API and foreign-key cascades (deleting a datapack or a conversation), which fire triggers. Summing every row on each write was rejected (it reads about 200 MB at the limit), and so was a count kept in Go (it misses the cascades and the memory engine's writes). |
+| **Checked in the service before each write, which reserves its bytes** (`memory.Service.reserve`) | `memory_add`, `memory_update` (only when the text grows), `conversation_add_message` (not for a turn sent again with the seed of one stored), `artifact_put` (not for bytes the datapack already keeps) and a knowledge file's upload link. A write holds its bytes from the check until it's done, so writes in flight at once (several agents, or an agent and the extractor) count against the limit together, and a memory add waiting on the memory engine's embedding still holds its room. Promoting, keeping and deleting aren't checked: they add nothing. Checking inside each store transaction was rejected: it puts the policy in `internal/store`, and the memory engine's writes would have to carry the error back across its socket. |
+| **An upload link holds its file's size, once per file** | From `upload-url` until the file is stored, or the link is refused or expires (5 minutes), as Meko Cloud holds an upload against its quota. Links for the same bytes in a datapack (a retried `upload-url`, or the file under another name) hold its size once, and a new link for a file already held needs no more room. A link for a file whose row is already there (a failed one whose bytes are gone) holds nothing. |
+| **The error says what to do** | MCP: `storage_limit_exceeded`; REST: 402 `STORAGE_LIMIT_EXCEEDED`, the status Meko Cloud answers at a plan's limit. The message names the limit and says to delete what isn't needed or link Meko Cloud for larger datasets, or, while Meko Cloud is already linked, to keep new work in a Meko Cloud datapack. It doesn't suggest raising `max_content_mb`, since that brings back slow searches: only this page and the setting's comment say it can be. |
+| **Nothing is deleted to get under it** | An install over the limit (one from before it, or one whose limit was lowered) keeps its data, and writes are refused until enough is deleted. |
+| **The memory extractor waits while Meko is too full to keep a fact** | A run calls only with room for a typical fact (1 KB), or for the one a save last refused when that was larger, so the user's Claude quota isn't spent on facts that can't be kept. Otherwise it records why as its last error and leaves the turns queued, without counting a failed attempt at them, so no turn is given up on for want of room. |
+
+`meko status` shows a Storage row only from 90% of the limit (a warning) and when full (failed);
+`--verbose` always says how much is used, by kind, and `--json` carries `storage` from
+`/api/v1/status` ([api.md](api.md)). The web UI doesn't show it.
+
 ## HTTP server
 
 echo v4. Two listeners share the handlers: the **API listener**, below, for the CLI, MCP clients and
@@ -382,7 +407,16 @@ counts and timings.
 In `make test` on Linux and macOS:
 
 - **config**: precedence of flags, env, file and defaults; a bad `config.toml` gives an error naming
-  the file and line.
+  the file and line; `[storage] max_content_mb` defaults to 200 and refuses 0, a negative number or
+  text.
+- **storage limit**: `content_usage` matches a fresh sum of the rows after every kind of write,
+  including a datapack's and a conversation's cascades, and is filled on an upgrade; writes in flight
+  reserve their bytes; every MCP tool that adds content is refused past the limit while reads,
+  deletes, a promotion, a shorter memory, a turn sent again and the same artifact bytes are not; the
+  error's advice while Meko Cloud is linked; an upload link holds its size until its file is stored,
+  once however many links are asked for it; REST answers 402; the extractor makes no call without
+  room for a fact; `config.toml`'s limit reaches a running
+  server, and `meko status` shows the row only from 90%.
 - **paths**: folder and file permissions; the network-filesystem check refuses an explicit network
   path (faked filesystem type); a parent writable by others (or by a group that isn't the user's)
   is refused; the folder ends 0700; the `/var/tmp` fallback.

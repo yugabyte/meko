@@ -81,6 +81,7 @@ type ticket struct {
 	docType  string
 	hash     string
 	size     int64
+	hold     int64 // the bytes an upload link holds against the storage limit until its file is stored
 	agent    string
 	expires  time.Time
 }
@@ -89,6 +90,47 @@ type ticket struct {
 type tickets struct {
 	mu sync.Mutex
 	m  map[string]*ticket
+	// receiving is what the upload links being used hold, from when their file starts arriving until
+	// it's stored or refused (received).
+	receiving int64
+}
+
+// held is the bytes upload links hold against the storage limit: the live ones', each file once
+// however many links were asked for it, and the ones whose files are arriving.
+func (t *tickets) held() int64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	byFile, now := map[string]int64{}, time.Now()
+	for _, tk := range t.m {
+		if f := tk.datapack + "/" + tk.hash; tk.upload && now.Before(tk.expires) {
+			byFile[f] = max(byFile[f], tk.hold)
+		}
+	}
+	n := t.receiving
+	for _, h := range byFile {
+		n += h
+	}
+	return n
+}
+
+// holding says whether a live upload link already holds a datapack's file (by its SHA-256).
+func (t *tickets) holding(datapack, hash string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	now := time.Now()
+	for _, tk := range t.m {
+		if tk.upload && tk.hold > 0 && tk.datapack == datapack && tk.hash == hash && now.Before(tk.expires) {
+			return true
+		}
+	}
+	return false
+}
+
+// received ends what an upload link taken by take holds.
+func (t *tickets) received(tk *ticket) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.receiving -= tk.hold
 }
 
 func (t *tickets) add(tk *ticket) (string, error) {
@@ -119,7 +161,11 @@ func (t *tickets) take(token string, upload bool) (*ticket, bool) {
 		return nil, false
 	}
 	delete(t.m, token)
-	return tk, time.Now().Before(tk.expires)
+	live := time.Now().Before(tk.expires)
+	if live && upload {
+		t.receiving += tk.hold // until received: the file's bytes are arriving
+	}
+	return tk, live
 }
 
 // waiting is the live upload link for a datapack's key, if any.
@@ -223,11 +269,13 @@ func (s *Service) UploadURL(ctx context.Context, r UploadRequest) (UploadOffer, 
 	}
 	existing, err := s.st.DocumentByHash(ctx, r.DatapackID, hash)
 	key := s.documentKey(r.DatapackID, hash, r.Filename)
+	hold := r.Size
 	switch {
 	case err == nil && existing.Status == store.DocFailed && !s.files.Has(r.DatapackID, hash):
 		// It failed because its bytes are gone: they're needed again, under its key. Once they
-		// arrive, the document is queued again (AddDocument requeues a FAILED one).
-		key = existing.Key
+		// arrive, the document is queued again (AddDocument requeues a FAILED one). Its row already
+		// counts its size, so its link holds nothing more.
+		key, hold = existing.Key, 0
 	case err == nil:
 		if existing.Status == store.DocFailed {
 			if _, _, err = s.st.AddDocument(ctx, existing); err != nil {
@@ -240,9 +288,18 @@ func (s *Service) UploadURL(ctx context.Context, r UploadRequest) (UploadOffer, 
 	case !errors.Is(err, store.ErrNotFound):
 		return UploadOffer{}, err
 	}
+	// A file a live link already holds (a retried upload-url, or the same file under another name) needs
+	// no more room: its links hold its size once.
+	release := func() {}
+	if hold > 0 && !s.tickets.holding(r.DatapackID, hash) {
+		if release, err = s.reserve(ctx, hold); err != nil {
+			return UploadOffer{}, err
+		}
+	}
 	tk := &ticket{upload: true, datapack: r.DatapackID, key: key, filename: r.Filename, docType: docType, hash: hash,
-		size: r.Size, agent: r.AgentID}
+		size: r.Size, hold: hold, agent: r.AgentID}
 	token, err := s.tickets.add(tk)
+	release() // the link holds the size now
 	if err != nil {
 		return UploadOffer{}, err
 	}
@@ -258,6 +315,8 @@ func (s *Service) ReceiveUpload(ctx context.Context, token string, r io.Reader) 
 	if !ok {
 		return ErrTicket
 	}
+	// Its size stays held until the document's row counts it, or the file is refused.
+	defer s.tickets.received(tk)
 	rec, err := s.files.Receive(tk.datapack, r, tk.size)
 	if errors.Is(err, knowledge.ErrTooLarge) {
 		return fmt.Errorf("%w: the file is larger than the %d bytes its upload link was asked for",
