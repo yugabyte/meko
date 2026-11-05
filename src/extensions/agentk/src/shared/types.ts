@@ -1153,6 +1153,16 @@ export interface HarnessStatus {
   isDefault: boolean;
   /** Its update command is running (POST /api/harnesses/:id/update). */
   updating: boolean;
+  /**
+   * The page connects it to Meko by itself (`autoConnectDue`), claiming the try first (POST
+   * /api/harnesses/:id/auto-connect): AgentK hasn't tried before for this agent.
+   */
+  autoConnect: boolean;
+}
+
+/** POST /api/harnesses/:id/auto-connect: `go` once per agent, for the page that asked first, while it's still due. */
+export interface AutoConnectClaim {
+  go: boolean;
 }
 
 export type HarnessMekoState = 'connected' | 'stale' | 'elsewhere' | 'none' | 'missing';
@@ -2848,6 +2858,10 @@ export type TermServerMessage =
 //                                                           Outside /api, a write from another origin is refused)
 // POST   /api/harnesses/refresh                → HarnessStatus[]   (Check again in Settings: reads the version of every harness
 //        that's turned on again now (one that's off isn't read), and Meko's list of agents; a change is pushed to every page)
+// POST   /api/harnesses/:id/auto-connect       → AutoConnectClaim   (the page connecting Kiro or OpenCode to Meko by itself
+//        (`HarnessStatus.autoConnect`): reads Meko's list of agents again, then answers `go: true` once per agent,
+//        recorded in state.db, while it's still due; the page then posts Meko's connect route and POST /api/harnesses/refresh.
+//        404 for an unknown agent)
 // GET    /api/harnesses/:id/models             → HarnessModels   (the models New session offers for a harness whose list
 //        comes from its CLI (`HarnessCaps.models` `cli`: `opencode models`, `kiro-cli chat --list-models`), read at most
 //        every 10 minutes; an empty list when it can't be read, the harness is off, or its list is fixed (Claude Code's))

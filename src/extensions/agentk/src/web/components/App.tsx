@@ -2,12 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { AGENTK_TOUR, type AppState, type CreateSessionRequest, type DatapackInvite, type FailedStart, type Project, type ProjectWithSessions, type Session, type WorkItem } from '../../shared/types';
 import type { HarnessId } from '../../shared/harnesses';
 import { api, ApiError, errorMessage } from '../api';
-import { appUrl } from '../base';
+import { appUrl, BASE } from '../base';
 import { approveDesign, settleApprovals, settleRevisions } from '../design-answers';
 import { useEvents, type InviteEvent, type NotifyEvent } from '../hooks/useEvents';
 import { useIsMobile } from '../hooks/useMedia';
 import { useReload } from '../hooks/useReload';
 import { installPrompting } from '../installapp';
+import { autoConnectToMeko } from '../mekoagents';
 import { navigate, useRoute } from '../router';
 import { notifyLeader } from '../notifyLeader';
 import { railHiddenSaved, railWidthSaved, saveRailHidden, saveRailWidth, sessionTabsShown, useRailSessions } from '../rail';
@@ -424,6 +425,21 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
     setToast(msg);
     hideToastLater();
   }, [hideToastLater]);
+
+  // Kiro and OpenCode connect to Meko by themselves, once each (HarnessStatus.autoConnect): the server
+  // lets one page do it. Only behind Meko: under `npm run dev` Meko's route isn't on this origin.
+  const autoConnectTried = useRef(new Set<HarnessId>());
+  const autoConnectIds = (state?.harnesses ?? []).filter((h) => h.autoConnect).map((h) => h.id).join(' ');
+  useEffect(() => {
+    if (BASE === '/' || !autoConnectIds) return;
+    for (const id of autoConnectIds.split(' ') as HarnessId[]) {
+      if (autoConnectTried.current.has(id)) continue;
+      autoConnectTried.current.add(id);
+      autoConnectToMeko(id)
+        .then((line) => line && showToast(line))
+        .catch((e) => showToast(errorMessage(e)));
+    }
+  }, [autoConnectIds, showToast]);
 
   // One PATCH: the server moves the project to that index and renumbers the rest.
   const moveProject = async (id: string, index: number) => {

@@ -92,7 +92,8 @@ MCP server reaches it (`GET /api/v1/agents`, `meko agent list`), and connects or
 (`meko agent connect <id>`, its web UI's Agents card). AgentK's server reads that list
 (`MekoAgents` in `src/server/mekoagents.ts`) on Meko's API listener, the origin of the local Meko's
 MCP URL, with its client token (`localMeko()`), at startup, when Settings opens, on **Check again**,
-after an agent's Meko setup, when the local Meko or its Meko Cloud link changes, and before a new
+after an agent's Meko setup, when the local Meko or its Meko Cloud link changes, before a page's
+claim to connect Kiro or OpenCode by itself (below), and before a new
 session (or Ask AgentK) that the list kept would refuse an agent for its connection, so `meko agent
 connect` in a terminal counts at once; nothing polls. Reads run one at a time, and one asked for
 while another runs reads again after it, so the read after a Connect never answers with the list
@@ -122,6 +123,28 @@ Harness is the page's own call to Meko's web route, root-absolute on Meko's orig
 as updates are (`connectAgent()` in `src/web/mekoagents.ts`: `POST /api/v1/agents/<id>/connect`, in
 Meko's `{ data, error }` envelope), followed by **Check again**'s `POST /api/harnesses/refresh`,
 which reads Meko's list again. Meko's notes (a server it replaced) show under the row.
+
+**Connecting Kiro and OpenCode by itself.** The page also connects Kiro and OpenCode
+(`HarnessCaps.autoConnect` in `src/shared/harnesses.ts`) without a click, once per agent, ever: the first time
+it sees one turned on, new enough and with a `meko` server Meko reports `none` or `stale`
+(`autoConnectDue`, which `HarnessStatus.autoConnect` gives the page). It asks the server first
+(`POST /api/harnesses/:id/auto-connect`: Meko's list read again, then `go: true` for the first ask
+only, recorded in state.db's kv, `meko-auto-connect`, by `MekoAutoConnect` in
+`src/server/mekoautoconnect.ts`), then runs Connect to Meko's own steps (`autoConnectToMeko()` in
+`src/web/mekoagents.ts`, from an effect in `App.tsx`) and says the result in a toast ("Connected
+Kiro to Meko.", or Meko's error and "Connect it in Settings › Harness."). Why this way:
+- The page, not the server: Meko's connect route is the owner's, and the server's client token is
+  refused (`OWNER_ONLY`). The server running `meko agent connect` would sidestep that.
+- Not Claude Code, whose Meko setup is the user's and changes only when they ask; Kiro's and
+  OpenCode's `meko` server is one file Meko edits, with no sign-in.
+- `none` and `stale` only: a stale server is Meko's own entry, while one `elsewhere` is the user's,
+  which a connect would replace.
+- Once ever: several open pages connect it once, a user who later runs `meko agent disconnect`
+  stays disconnected, and a failed try isn't retried (Connect to Meko is the retry).
+- Not in `me_koder install`: one way to do it, and the install opens the page.
+
+Until a page has opened, Ask AgentK and the session tools still refuse an unconnected one. Under
+`npm run dev` (no `<base>`) the page doesn't try, since Meko's route isn't on its origin.
 
 **No agent is required.** AgentK installs and runs with any one of them, or more; nothing assumes
 `claude` is there. At start the server writes AgentK's own hook files (`writeHookFiles`: the

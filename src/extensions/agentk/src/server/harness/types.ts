@@ -2,8 +2,8 @@ import type { HarnessCaps, HarnessId } from '../../shared/harnesses.js';
 import type { HarnessStatus } from '../../shared/types.js';
 import type { TermTheme } from '../../shared/termcolors.js';
 
-/** A harness's status as its CLI gives it: everything but Meko's connection (`HarnessStatus.meko`). */
-export type CliStatus = Omit<HarnessStatus, 'meko'>;
+/** A harness's status as its CLI gives it: everything but Meko's connection (`HarnessStatus.meko`, `autoConnect`). */
+export type CliStatus = Omit<HarnessStatus, 'meko' | 'autoConnect'>;
 import type { Asker } from '../askagentk.js';
 import type { Config } from '../config.js';
 import type { Db } from '../db.js';

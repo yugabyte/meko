@@ -37,6 +37,7 @@ import { KnowledgeService } from './knowledge.js';
 import { WorkshopService } from './workshops.js';
 import { MekoClient } from './meko.js';
 import { MekoAgents, mekoMcpGaps, readMekoAgents, type MekoAgentsRead } from './mekoagents.js';
+import { MekoAutoConnect } from './mekoautoconnect.js';
 import { MekoQuestions } from './mekoquestions.js';
 import { MekoClaudeWatch } from './mekoclaude.js';
 import {
@@ -198,6 +199,8 @@ export class Core extends EventEmitter {
   readonly claudeMeko: MekoClaudeWatch;
   /** Meko's list of the agents on this computer, which new sessions are gated on (mekoagents.ts). */
   readonly mekoAgents: MekoAgents;
+  /** The agents AgentK connected to Meko by itself, once each (`HarnessStatus.autoConnect`). */
+  readonly autoConnect: MekoAutoConnect;
   /** Meko's Context Gaps (the questions it couldn't answer), on the Meko on this computer while AgentK uses it. */
   readonly mekoQuestions: MekoQuestions;
   readonly callHome: CallHomeService;
@@ -271,6 +274,7 @@ export class Core extends EventEmitter {
     this.hostFull = hostname();
     this.updateStatus = () => ({ current: this.version, justUpdatedFrom: null, lastUpdatedFrom: null });
     this.claudeCode = new ClaudeCode({ config: () => this.cfg, changed: () => this.claudeChanged() });
+    this.autoConnect = new MekoAutoConnect(this.db);
     this.mekoAgents = new MekoAgents({ db: this.db, read: o.mekoAgents ?? (() => readMekoAgents(localMeko().meko)), changed: () => this.changed(), log: this.log });
     // Meko's Context Gaps are on the Meko AgentK's calls go to: the one on this computer, its own datapacks' and,
     // while it passes calls on to a linked Meko Cloud, Meko Cloud's. Not with an older Meko that handed out Cloud's key.
@@ -284,7 +288,7 @@ export class Core extends EventEmitter {
     });
     this.harnesses = new Harnesses({
       claudeCode: this.claudeCode, paths: this.paths, log: this.log, changed: () => this.changed(), kiroVersion: o.kiroVersion, openCodeVersion: o.openCodeVersion,
-      meko: () => this.mekoAgents.current(), refreshMeko: () => this.mekoAgents.refresh(),
+      meko: () => this.mekoAgents.current(), refreshMeko: () => this.mekoAgents.refresh(), autoConnect: this.autoConnect,
     });
     this.projects = new ProjectService(this);
     this.worktrees = new WorktreePool(this);
@@ -445,6 +449,18 @@ export class Core extends EventEmitter {
     this.kiroMekoAt = null;
     this.openCodeMekoAt = null;
     return this.harnesses.status(this.cfg);
+  }
+
+  /**
+   * Whether the asking page connects an agent to Meko by itself (`HarnessStatus.autoConnect`): Meko's
+   * list read again first, so one connected meanwhile (`meko agent connect`) isn't connected again,
+   * then true once per agent, ever. A claim is pushed, so other pages stop offering it.
+   */
+  async claimAutoConnect(id: HarnessId): Promise<boolean> {
+    await this.mekoAgents.refresh();
+    const go = this.autoConnect.claim(this.harnesses.statusOf(this.harnesses.of(id), this.cfg));
+    if (go) this.changed();
+    return go;
   }
 
   /** The open projects with their sessions, as Ask AgentK and the session tools see them (their GitHub repo not read yet). */
