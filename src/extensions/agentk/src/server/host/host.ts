@@ -9,6 +9,7 @@ import { BEAT_MS, InstanceBusyError, InstanceLock, type InstanceDeps } from '../
 import { errMsg, silentLogger, type Logger } from '../log.js';
 import type { Paths } from '../paths.js';
 import { oscColor, type TermColors } from '../../shared/termcolors.js';
+import { TERM_SCROLLBACK } from '../../shared/types.js';
 import {
   clampCols, clampRows, encodeFrame, FRAME_CONTROL, FRAME_DATA, FrameReader, lineReader, MAX_REQUEST, parseControl, PROTOCOL,
   type HostControl, type HostRequest, type PaneState, type ViewerControl,
@@ -33,6 +34,11 @@ const { SerializeAddon } = serialize;
 const MAX_BUFFERED = 1024 * 1024;
 /** Output held for a viewer while its screen is being copied; past this it starts over. */
 const MAX_PENDING = 4 * 1024 * 1024;
+/**
+ * A screen copy goes in frames of at most this many UTF-16 units (3 MB of UTF-8 at most), well
+ * under MAX_FRAME: 10,000 lines of wide, colored rows come to several times that.
+ */
+const COPY_PART = 1024 * 1024;
 /** Pause between a paste and the Enter that submits it, so Claude takes the paste first. */
 const PASTE_ENTER_MS = 300;
 const DEFAULT_COLS = 200;
@@ -49,7 +55,7 @@ export interface HostOptions {
   /** The app directory the host runs from (kept by the updater while the host runs). */
   appDir?: string | null;
   log?: Logger;
-  /** Lines of scrollback kept per pane. */
+  /** Lines of scrollback kept per pane (TERM_SCROLLBACK, the browser's, by default). */
   scrollback?: number;
   /** Called after a `stop` request has ended every pane, or once another host took the lease (the CLI exits there). */
   onStop?: () => void;
@@ -78,13 +84,33 @@ class Viewer {
   /** Output held while this viewer's screen copy is made (null when not copying). */
   pending: Buffer[] | null = null;
   pendingBytes = 0;
+  /** Bytes of the last screen copy still on their way: not counted as falling behind until the socket drains. */
+  copyBytes = 0;
   closed = false;
 
   constructor(readonly sock: Socket) {}
 
-  write(frame: Buffer): void {
-    if (this.closed) return;
-    this.sock.write(frame);
+  write(frame: Buffer): boolean {
+    if (this.closed) return true;
+    return this.sock.write(frame);
+  }
+
+  /** Sends a screen copy in frames under MAX_FRAME, never splitting a surrogate pair. */
+  writeCopy(copy: string): void {
+    let bytes = 0;
+    let drained = true;
+    for (let i = 0; i < copy.length; ) {
+      let end = Math.min(i + COPY_PART, copy.length);
+      const last = copy.charCodeAt(end - 1);
+      if (end < copy.length && last >= 0xd800 && last <= 0xdbff) end--;
+      const frame = encodeFrame(FRAME_DATA, copy.slice(i, end));
+      bytes += frame.length;
+      drained = this.write(frame);
+      i = end;
+    }
+    if (drained || this.closed) return;
+    if (!this.copyBytes) this.sock.once('drain', () => (this.copyBytes = 0));
+    this.copyBytes = bytes;
   }
 }
 
@@ -226,7 +252,7 @@ const HOST_ONLY_ENV = new Set(['TMUX', 'TMUX_PANE', 'AK_HOME', 'AK_APP_DIR', 'AK
  */
 export async function startHost(o: HostOptions): Promise<HostHandle> {
   const log = o.log ?? silentLogger;
-  const scrollback = o.scrollback ?? 5000;
+  const scrollback = o.scrollback ?? TERM_SCROLLBACK;
   const startedAt = Date.now();
   const panes = new Map<string, Pane>();
   const sockets = new Set<Socket>();
@@ -279,7 +305,7 @@ export async function startHost(o: HostOptions): Promise<HostHandle> {
       const held = v.pending ?? [];
       v.pending = null;
       v.pendingBytes = 0;
-      v.write(encodeFrame(FRAME_DATA, p.snapshot()));
+      v.writeCopy(p.snapshot());
       for (const f of held) v.write(f);
     });
   };
@@ -299,7 +325,7 @@ export async function startHost(o: HostOptions): Promise<HostHandle> {
       v.write(frame);
       // A viewer that can't keep up: stop sending until it drains, then send it the screen
       // afresh. The program never waits on a viewer.
-      if (v.sock.writableLength > MAX_BUFFERED) {
+      if (v.sock.writableLength > MAX_BUFFERED + v.copyBytes) {
         v.lagging = true;
         v.sock.once('drain', () => {
           v.lagging = false;

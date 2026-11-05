@@ -42,7 +42,10 @@ flowchart LR
 **Terminal path.** When you open a tab, the browser opens a WebSocket, and the server attaches
 it to the session's pane in the session host over `host.sock`. The host sends the screen as it is
 now first (a full reset, then the screen, its scrollback and the terminal modes, from a headless
-xterm it keeps for every pane), then the output as it comes. Closing the tab ends only that
+xterm it keeps for every pane, with as many lines of scrollback as the browser's, 10,000:
+`TERM_SCROLLBACK`; a host started by an older release keeps its 5,000 until it's restarted, since
+a running host keeps its code), then the output as it comes. A copy bigger than a frame goes in
+several, and a viewer isn't counted as falling behind until the copy has left the host's socket. Closing the tab ends only that
 attach, and Claude keeps running. The host interprets no keys: everything typed, Ctrl+B included,
 reaches Claude Code.
 
@@ -96,7 +99,8 @@ The project's main checkout keeps its path, and paths on other hosts stay under 
 attached, or it was used (typed in or focused). The host resizes the pty to it and tells every
 viewer the size; the others show the pane at that size (a margin or a clipped edge) until they are
 used themselves. When the active viewer leaves, the one used most recently before it takes over.
-Any input counts as use, mouse and focus reports included, since Claude Code turns both on.
+Any input counts as use, mouse and focus reports included, since programs turn them on: Claude Code
+focus reports, and a full-screen program such as OpenCode mouse reports too.
 
 **One screen per session.** Two browsers taking a session's size from each other made the pane
 bounce between their heights, and Claude Code repaints on every resize, so the terminal flickered.
@@ -134,6 +138,8 @@ name it lists them). `Ctrl+\` detaches, and Claude keeps running.
 (a Kiro session as the `agentk` agent, whose inline hooks run the same scripts; an OpenCode session
 with AgentK's plugin, loaded through `OPENCODE_CONFIG_CONTENT`, which posts to the same socket; their
 events are mapped onto Claude Code's by their adapters: see [Agents](harnesses.md)).
+The same file keeps Claude Code on the main screen (`"tui": "default"`), so its output stays in the
+terminal's scrollback for find and scrolling.
 The `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`,
 `Notification`, `Stop` and `SessionEnd` hooks (and the status line relay) post to a unix socket,
 which drives the badges in the rail. Your global Claude settings stay untouched. When `/clear` (or
@@ -159,7 +165,7 @@ AgentK's mod reports it (`/mod/turn`) and the server ends the turn as a `Stop` w
 (`SessionManager.endTurn`): the session is idle again, the activity log says *You interrupted the
 turn*, and what waited for the turn's end goes at once (review comments, a queued Open PR or
 approval, review prompts). It isn't a turn Claude died in, so it's never continued by itself
-(`interrupted` stays 0). It didn't do what it was sent for either: in Review & PR a review, CI or
+(`interrupted` stays 0). It didn't do what it was sent for either: in Pull Request a review, CI or
 conflicts prompt the turn got stays sent, and the findings stay *addressing* (so a queued merge
 waits), until the next turn ends; a Review a PR session's update summary stays sent the same way.
 Without the mod, the session shows as working until the next turn ends.

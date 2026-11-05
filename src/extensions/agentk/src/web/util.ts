@@ -2,7 +2,7 @@ import { HARNESS_CAPS, harnessOf, type HarnessId } from '../shared/harnesses';
 import type { SyntheticEvent } from 'react';
 import { INSTRUCTIONS_MAX, LEARN_WARN_FILES, LEARN_WARN_PRS, STAGE_LABELS, type LearnScope } from '../shared/types';
 import { mekoDatapackPath } from '../shared/mekourls';
-import { YOU_CANCELLED, countsText, isStrategySetting, reviewHolds, reviewRunning, reviewSettled, reviewWaitsOnYou, type CodeReviewDetail, type CodeReviewFinding, type CodeReviewSummary, type ReviewOverrides } from '../shared/codereview';
+import { YOU_CANCELLED, countsText, isStrategySetting, resolveReview, reviewHolds, reviewRunning, reviewSettled, reviewWaitsOnYou, type CodeReviewDetail, type CodeReviewFinding, type CodeReviewSummary, type ReviewOverrides, type ReviewSettings } from '../shared/codereview';
 import { stepOf } from '../shared/stages';
 import type { ClaudeCodeStatus, HarnessStatus, KiroPlan, LearnProgress, MekoFirstTurn, MekoGaps, MekoLearning, MekoStatus, ModelUsage, Project, ProjectWithSessions, ReviewingPr, Session, SessionStatus, Stage, TokenUsage } from '../shared/types';
 
@@ -251,16 +251,16 @@ const LEARNING_SHOWS: ReadonlySet<SessionStatus> = new Set(['idle', 'recovered',
 /** The statuses a queued gate shows over: Claude between turns. Anything else says more. */
 const QUEUED_SHOWS: ReadonlySet<SessionStatus> = new Set(['idle', 'recovered']);
 
-/** The statuses Review & PR waiting on the user shows Needs you over: Claude there, in a turn or not. */
+/** The statuses Pull Request waiting on the user shows Needs you over: Claude there, in a turn or not. */
 const YOURS_SHOWS: ReadonlySet<SessionStatus> = new Set(['idle', 'recovered', 'working']);
 
-/** The dot's words for a task whose code review findings wait on the user, outside Review & PR's blockers. */
+/** The dot's words for a task whose code review findings wait on the user, outside Pull Request's blockers. */
 const REVIEW_WAITS_TITLE = "The code review's findings wait on you.";
 
 type DotFields = Pick<Session, 'status' | 'learning' | 'queued' | 'background' | 'mekoCall' | 'stage' | 'waitsOnYou'> & Partial<Pick<Session, 'codeReview' | 'idleStoppedAt'>>;
 
 /**
- * The session is in Review & PR and a merge blocker only the user can clear stands
+ * The session is in Pull Request and a merge blocker only the user can clear stands
  * (`Session.waitsOnYou`), or its code review's findings wait on the user (in Code too).
  */
 function waitsOnYou(s: Pick<DotFields, 'stage' | 'waitsOnYou' | 'codeReview'>): boolean {
@@ -268,7 +268,7 @@ function waitsOnYou(s: Pick<DotFields, 'stage' | 'waitsOnYou' | 'codeReview'>): 
 }
 
 /**
- * What a session's dot shows: Needs you while Review & PR or the code review's findings wait on the user, over idle, recovered
+ * What a session's dot shows: Needs you while Pull Request or the code review's findings wait on the user, over idle, recovered
  * and working; then `Session.learning` over idle, recovered and working, then `Session.queued` over
  * idle and recovered, then `Session.background` over idle and recovered, then `Session.mekoCall`
  * over working; an exited session whose agent AgentK stopped for sitting idle is `stopped`, under
@@ -689,6 +689,8 @@ export interface GateButton {
   label: string;
   reason: string | null;
   title: string;
+  /** A press queues the gate for the turn's end (mid-turn), rather than passing it now. */
+  queues?: boolean;
 }
 
 /**
@@ -702,16 +704,36 @@ export function demoReviewGate(session: Session): GateButton | null {
   return { label: 'Run code review', reason: run.wait, title: run.wait ?? "Run AgentK's code review on the change as it is now" };
 }
 
-/** The Open PR gate in Code. Mid-turn, a press queues the PR prompt for the turn's end. Mirrors the server's checks. */
-export function openPrGate(session: Session): GateButton {
-  const gate = (reason: string | null, title = 'Commit, push and open a pull request'): GateButton => ({ label: 'Open PR', reason, title: reason ?? title });
+/**
+ * The Open PR gate in Code. It reads Review Changes when the press starts AgentK's code review first
+ * (`reviews`, by default `Session.openPrReview` `new`; the Open PR dialog passes what its own Code
+ * review fields make of it). Mid-turn, a press queues the PR prompt for the turn's end. Mirrors the
+ * server's checks.
+ */
+export function openPrGate(session: Session, reviews = session.openPrReview === 'new'): GateButton {
+  const name = reviews ? 'Review Changes' : 'Open PR';
+  const does = reviews ? "Run AgentK's code review, then commit, push and open a pull request" : 'Commit, push and open a pull request';
+  const gate = (reason: string | null): GateButton => ({ label: name, reason, title: reason ?? does });
   if (exitedForGood(session)) return gate('Claude has exited. Resume the session first.');
   if (!session.busy && (session.status === 'working' || session.status === 'starting' || session.midTurn)) {
-    return { label: 'Open PR after this turn', reason: null, title: 'AgentK is mid-turn: the PR prompt goes when the turn ends' };
+    const title = reviews ? 'AgentK is mid-turn: the code review starts when the turn ends' : 'AgentK is mid-turn: the PR prompt goes when the turn ends';
+    return { label: `${name} after this turn`, reason: null, title, queues: true };
   }
   if (session.status === 'needs_input') return gate('AgentK is waiting on you in the terminal. Answer it first.');
   if (session.promptsHeld > 0) return gate('AgentK has prompts from you to take first. Open the PR once it has.');
   return gate(null);
+}
+
+/**
+ * Whether Open PR starts the code review with the strategy the Open PR dialog's Code review fields
+ * give (`form`, saved as the session's own before the PR goes): only while it could start one
+ * (`Session.openPrReview` not null); with the session's own strategy unchanged, or the global
+ * settings not read yet, what the server said.
+ */
+export function openPrReviews(session: Pick<Session, 'openPrReview' | 'review'>, form: ReviewOverrides, global: ReviewSettings | null, project: ReviewOverrides): boolean {
+  if (session.openPrReview === null) return false;
+  if ((form.strategy ?? null) === (session.review?.strategy ?? null) || !global) return session.openPrReview === 'new';
+  return resolveReview(global, project, form).strategy !== 'off';
 }
 
 /**
@@ -786,8 +808,8 @@ export function reviewGatesPr(s: Pick<Session, 'stage' | 'codeReview'>): boolean
 }
 
 /**
- * The task's code review can be run now (the `review-run` action): a task in Code, or in Review &
- * PR once its PR is found, with no review running. `ready`: AgentK can take a prompt now (between
+ * The task's code review can be run now (the `review-run` action): a task in Code, or in Pull
+ * Request once its PR is found, with no review running. `ready`: AgentK can take a prompt now (between
  * turns, not waiting on the user or exited), as the server checks; until then it's offered disabled,
  * with `wait` saying what it waits for.
  */
@@ -811,12 +833,12 @@ export function onDemandControls(s: Pick<Session, 'stage' | 'codeReview'>): { ca
 }
 
 /**
- * The step a session shows in the stage bar and its chip: Review & PR while its code review holds
+ * The step a session shows in the stage bar and its chip: Code Review while its code review holds
  * the Open PR (the session stays in Code, where the review runs: docs/design/code-review.md), else
  * its stage's step.
  */
 export function shownStep(s: Pick<Session, 'stage' | 'codeReview'>): Stage {
-  return reviewGatesPr(s) ? 'review' : stepOf(s.stage);
+  return reviewGatesPr(s) ? 'reviewing-code' : stepOf(s.stage);
 }
 
 /** A session's stage in its chip: the step it shows (shownStep). */
@@ -883,7 +905,7 @@ export function sessionTabTitle(s: Session): string {
 
 /**
  * A session's dot in words, for its tab's tooltip: the long learning text, what the user is to
- * clear in Review & PR, what a queued gate waits on, or what's running in the background. The queued dot shows between turns, when a
+ * clear in Pull Request, what a queued gate waits on, or what's running in the background. The queued dot shows between turns, when a
  * queued Open PR is already going (the pill's "goes when the turn ends" is for mid-turn).
  */
 export function dotTitle(s: Session): string {

@@ -42,7 +42,7 @@ import { DESIGN_READY, checkOpensPr } from './lifecycle.js';
 import { askAnswers, parseAsk } from './asks.js';
 import {
   STORED_TASK_KIND, dedicatedDatapack, parseSettings, projectDatapacks, projectRow, sessionDatapack, sessionRepo, sessionRow, sessionRows, slugify, toSession,
-  type MergeInfo, type SessionRow, type SessionRuntime,
+  type MergeInfo, type ReviewSteps, type SessionRow, type SessionRuntime,
 } from './store.js';
 import { paneName, sleep, type PaneInfo } from './hostclient.js';
 import { ZERO_USAGE, sessionUsage, usageBySession } from './usage.js';
@@ -128,7 +128,7 @@ export function workflowLine(kind: SessionKind, stage: Stage): string {
   if (kind === 'review-pr') {
     return "This is a Review a PR session: the user is reviewing someone else's pull request and you assist them. Don't review it on your own; answer what they ask. Don't push to the PR's branch or post on GitHub unless they ask. The user ends the session from the AgentK UI.";
   }
-  const stages = 'Stages: Explore → Design → Code → Review & PR → Merge & Close; the user moves the session between stages, and approves the design, opening the PR, and merging, from the AgentK UI.';
+  const stages = 'Stages: Explore → Design → Code → Pull Request → Merge & Close; the user moves the session between stages, and approves the design, opening the PR, and merging, from the AgentK UI.';
   if (stage !== 'explore') return stages;
   return `${stages} It's in Explore now: investigate, answer questions, build POCs and run experiments in this worktree, and push experimental branches when useful. AgentK runs no design approval, PR, review or merge until the user moves it on.`;
 }
@@ -223,8 +223,8 @@ export function startImages(row: SessionRow): string[] {
   }
 }
 
-/** A learn session's brief (`CreateSessionRequest.learn`), checked: 400 for anything off. */
-function checkLearn(b: unknown): LearnBrief {
+/** A learn session's brief (`CreateSessionRequest.learn`, or a workshop level's `learn`), checked: 400 for anything off. */
+export function checkLearn(b: unknown): LearnBrief {
   const o = (b !== null && typeof b === 'object' ? b : {}) as Partial<Record<keyof LearnBrief, unknown>>;
   if (o.about != null && typeof o.about !== 'string') throw new HttpError(400, "The learn session's about must be text.");
   if (o.where != null && typeof o.where !== 'string') throw new HttpError(400, "The learn session's where must be text.");
@@ -417,6 +417,11 @@ export class SessionManager {
     };
   }
 
+  /** What Open PR does about a task's code review, and whether the stage bar skips its Code Review step: for the state only, not runtime(), which busy checks call. */
+  private reviewSteps(row: SessionRow): ReviewSteps {
+    return { openPrReview: this.core.reviews.openPrReview(row), reviewStepSkipped: this.core.reviews.stepSkipped(row) };
+  }
+
   /** Replaces what the session's agent has running in the background (Session.background) with a hook's `background_tasks`. */
   private setBackground(id: string, raw: unknown): void {
     const tasks = backgroundTasks(raw);
@@ -454,12 +459,12 @@ export class SessionManager {
     this.loadUsage();
     return sessionRows(this.db, projectId)
       .filter((r) => r.desired === 'running')
-      .map((r) => toSession(this.db, r, this.runtime(r.id), this.core.questions.get(r).open, this.core.learn.progress(r.id)));
+      .map((r) => toSession(this.db, r, this.runtime(r.id), this.core.questions.get(r).open, this.core.learn.progress(r.id), this.reviewSteps(r)));
   }
 
   get(id: string): Session {
     const row = this.row(id);
-    return toSession(this.db, row, this.runtime(id), this.core.questions.get(row).open, this.core.learn.progress(id));
+    return toSession(this.db, row, this.runtime(id), this.core.questions.get(row).open, this.core.learn.progress(id), this.reviewSteps(row));
   }
 
   row(id: string): SessionRow {
@@ -524,7 +529,7 @@ export class SessionManager {
     run(this.db, 'INSERT INTO session_events(session_id, project_id, kind, text, payload_json, at) VALUES (?, ?, ?, ?, ?, ?)',
       id, r.project_id, kind, text, payload === undefined ? null : JSON.stringify(payload), Date.now());
     // A workshop's host hears what happens in its project's other sessions.
-    this.core.workshops.noted(r, kind, text);
+    this.core.workshops.noted(r, kind, text, payload);
   }
 
   setStage(id: string, stage: Stage, by: 'you' | 'auto', opts: { event?: boolean } = {}): void {

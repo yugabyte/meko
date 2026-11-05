@@ -226,7 +226,7 @@ timer).
   (`whenTyped` in `src/web/terminals.ts`; the key itself doesn't go out). An action that sends the
   agent a prompt starts it first and waits for it, up to 60 s (`SessionManager.awake`), then runs
   as it would have: a move that sends a prompt or instructions (a move that sends nothing, or one to
-  Review & PR that only picks up the PR, leaves it stopped), Approve design, answers to the design,
+  Pull Request that only picks up the PR, leaves it stopped), Approve design, answers to the design,
   Open PR, Run to merge, Update to latest, Run code review, a code review's Retry and Open anyway,
   Save learnings, and the learn step of Merge & Close and Discard, whose wait counts against the
   step's own timeout. The page's gates don't block on a stopped agent, and a stopped session that

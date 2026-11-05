@@ -14,10 +14,13 @@ import { paneName } from '../../src/server/hostclient.js';
 import { tempDir } from '../helpers.js';
 
 describe('the hooks settings file', () => {
-  it('allows editing designs, publishing Artifacts, reading pasted images, listing sessions and reporting code review steps with the session tools, with Edit() rules only for edits', () => {
+  it('keeps Claude on the main screen, and allows editing designs, publishing Artifacts, reading pasted images, listing sessions and reporting code review steps with the session tools, with Edit() rules only for edits', () => {
     const paths = getPaths(join(tempDir('akl-hooks-'), 'ak'));
     writeHookFiles(paths);
-    const allow: string[] = JSON.parse(readFileSync(hooksSettingsPath(paths), 'utf8')).permissions.allow;
+    const settings = JSON.parse(readFileSync(hooksSettingsPath(paths), 'utf8'));
+    // Passed with --settings, it outranks a user's "tui": "fullscreen", so the scrollback holds the whole session.
+    expect(settings.tui).toBe('default');
+    const allow: string[] = settings.permissions.allow;
     // Claude Code ignores Write() rules and warns about them at every session start; Edit() covers Write.
     // The session tools that change something ask first; a code review's reports only report.
     expect(allow).toEqual([`Edit(/${paths.designs}/**)`, 'Artifact', `Read(/${paths.pastes}/**)`, 'mcp__agentk_sessions__list',

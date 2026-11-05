@@ -5,15 +5,19 @@ import { readOverrides, type ReviewOverrides } from '../shared/codereview.js';
 import { defaultProjectDatapackName, freeDatapackName } from '../shared/datapacks.js';
 import { HARNESS_CAPS, harnessOf, isHarnessId, type HarnessId } from '../shared/harnesses.js';
 import { isGotchasDatapack, parseMekoMd } from '../shared/mekomd.js';
-import type { DiffStat, Workshop, WorkshopStart } from '../shared/types.js';
+import { mekoGapsPath } from '../shared/mekourls.js';
+import type { DiffStat, LearnBrief, Workshop, WorkshopStart } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, kvGet, kvSet, run } from './db.js';
 import { commitDemoRepo, demoBranch, type GitIdent } from './git.js';
 import type { KnowledgeResult } from './knowledge.js';
 import { errMsg } from './log.js';
+import { localMeko } from './mekolocal.js';
+import { sessionMekoLine } from './mekousage.js';
 import { expandHome } from './paths.js';
 import { HttpError, isDatapackLimit } from './projects.js';
-import { projectRow, projectRows, sessionRow, type SessionRow } from './store.js';
+import { checkLearn } from './sessions.js';
+import { dedicatedDatapack, projectRow, projectRows, sessionDatapack, sessionRow, type SessionRow } from './store.js';
 
 /**
  * Workshops bundled with AgentK (docs/design/workshops.md): each is a folder of `src/workshops/`
@@ -30,6 +34,17 @@ export const WORKSHOPS_SOURCE = join(dirname(fileURLToPath(import.meta.url)), '.
 const TOUR_STARTED_KEY = 'tour-started';
 /** The kv key, with `:<project id>`, that says a workshop project's gotchas are indexed in Meko (the datapack's id). */
 const GOTCHAS_IN_KEY = 'workshop-gotchas';
+
+/**
+ * One session a level's host starts: its prompt file, the name the host gives it, and `learn`, whether
+ * AgentK runs the learn step on it by itself once its first turn ends (Level 2's question session).
+ */
+export interface LevelPrompt {
+  /** The session's name, which is how AgentK knows it; null for a level with one unnamed prompt. */
+  name: string | null;
+  file: string;
+  learn: boolean;
+}
 
 /** A workshop's `workshop.json`, checked. */
 export interface WorkshopBundle {
@@ -65,7 +80,15 @@ export interface WorkshopBundle {
    * With `gotchasAfterFirst`, that first review runs while the gotchas datapack is still empty and
    * keeps its findings; AgentK then adds the gotchas to Meko and reviews again (`firstLookDone`).
    */
-  levels: { id: string; title: string; prompt: string; needs: string[]; review: { branch: string; gotchasAfterFirst: boolean } | null }[];
+  /**
+   * `prompt`: a prompt file, or a list of `{ name, file, learn }` for a level with more than one
+   * session. `learn`: the brief of Learn the project, which the project home's offer opens with.
+   */
+  levels: {
+    id: string; title: string; prompts: LevelPrompt[]; needs: string[];
+    review: { branch: string; gotchasAfterFirst: boolean } | null;
+    learn: LearnBrief | null;
+  }[];
   /** The bundle's folder. */
   root: string;
 }
@@ -107,13 +130,34 @@ export function readWorkshop(id: string, root = WORKSHOPS_SOURCE): WorkshopBundl
     levels: levels.map((l) => {
       const review = l.review as Record<string, unknown> | null | undefined;
       return {
-        id: str(l.id, 'a level id'), title: str(l.title, 'a level title'), prompt: str(l.prompt, 'a level prompt'),
+        id: str(l.id, 'a level id'), title: str(l.title, 'a level title'), prompts: levelPromptsOf(l.prompt),
         needs: Array.isArray(l.needs) ? l.needs.filter((n): n is string => typeof n === 'string') : [],
         review: review ? { branch: str(review.branch, 'a level review branch'), gotchasAfterFirst: review.gotchasAfterFirst === true } : null,
+        learn: l.learn == null ? null : learnBriefOf(l.learn),
       };
     }),
     root: dir,
   };
+}
+
+/** A level's `prompt`: one file, or a list of named sessions' files. */
+function levelPromptsOf(v: unknown): LevelPrompt[] {
+  if (typeof v === 'string') return [{ name: null, file: str(v, 'a level prompt'), learn: false }];
+  if (!Array.isArray(v) || !v.length) throw new Error('a level prompt is missing');
+  const out = (v as Record<string, unknown>[]).map((p) => ({
+    name: str(p?.name, 'a level prompt name').trim(), file: str(p?.file, 'a level prompt file'), learn: p?.learn === true,
+  }));
+  if (new Set(out.map((p) => p.name.toLowerCase())).size !== out.length) throw new Error("a level's prompts share a name");
+  return out;
+}
+
+/** A level's Learn the project brief, checked as a learn session's is. */
+function learnBriefOf(v: unknown): LearnBrief {
+  try {
+    return checkLearn(v);
+  } catch (e) {
+    throw new Error(`a level's learn brief is wrong: ${errMsg(e)}`, { cause: e });
+  }
 }
 
 /** Every workshop under <root> whose workshop.json reads, by id. */
@@ -133,11 +177,11 @@ export function listBundles(root = WORKSHOPS_SOURCE): WorkshopBundle[] {
   });
 }
 
-/** A level's prompt, as the host passes it to start_sessions. */
-export function levelPrompt(b: WorkshopBundle, levelId: string): string {
+/** A level's prompts, as the host passes them to start_sessions, each with the session's name. */
+export function levelPrompts(b: WorkshopBundle, levelId: string): { name: string | null; text: string; learn: boolean }[] {
   const l = b.levels.find((x) => x.id === levelId);
   if (!l) throw new Error(`no level ${levelId}`);
-  return readFileSync(join(b.root, l.prompt), 'utf8').trim();
+  return l.prompts.map((p) => ({ name: p.name, text: readFileSync(join(b.root, p.file), 'utf8').trim(), learn: p.learn }));
 }
 
 /** What GUIDE.md's placeholders take. */
@@ -147,11 +191,18 @@ export interface GuideVars {
   meko: 'on' | 'off';
   harness: string;
   gotchas: string;
+  /** The project's dedicated datapack's name, or `none`: what Level 2's Learn the project fills. */
+  datapack: string;
 }
 
-/** The host's first prompt: GUIDE.md with its placeholders filled in, each level's prompt under {{levels}}. */
+const fenced = (text: string) => `\`\`\`\n${text}\n\`\`\``;
+
+/** The host's first prompt: GUIDE.md with its placeholders filled in, each level's prompts under {{levels}}. */
 export function renderGuide(b: WorkshopBundle, vars: GuideVars): string {
-  const levels = b.levels.map((l, i) => `### Level ${i + 1} (${l.id}): ${l.title}\n\n\`\`\`\n${levelPrompt(b, l.id)}\n\`\`\``).join('\n\n');
+  const levels = b.levels.map((l, i) => {
+    const prompts = levelPrompts(b, l.id).map((p) => (p.name ? `#### Session "${p.name}"\n\n${fenced(p.text)}` : fenced(p.text)));
+    return [`### Level ${i + 1} (${l.id}): ${l.title}`, ...prompts].join('\n\n');
+  }).join('\n\n');
   const all: Record<string, string> = { ...vars, levels };
   return readFileSync(join(b.root, b.guide), 'utf8').replace(/\{\{(\w+)\}\}/g, (m, k: string) => all[k] ?? m).trim();
 }
@@ -208,6 +259,8 @@ export class WorkshopService {
   private starting = new Map<string, Promise<WorkshopStart>>();
   /** The level sessions whose gotchas are going into Meko after the user's go, until their review starts. */
   private going = new Set<string>();
+  /** Level sessions whose learn step AgentK is starting (`learnLevel`), until it has started or failed to. */
+  private learning = new Set<string>();
 
   constructor(private core: Core, private root = WORKSHOPS_SOURCE) {
     this.events = new GuideEvents(core);
@@ -217,7 +270,10 @@ export class WorkshopService {
   list(): Workshop[] {
     return listBundles(this.root).map((b) => {
       const p = this.projectOf(b.id);
-      return { id: b.id, title: b.title, summary: b.summary, projectId: p, hostId: p ? hostOf(this.core, p)?.id ?? null : null };
+      return {
+        id: b.id, title: b.title, summary: b.summary, projectId: p, hostId: p ? hostOf(this.core, p)?.id ?? null : null,
+        learn: b.levels.find((l) => l.learn)?.learn ?? null,
+      };
     });
   }
 
@@ -258,18 +314,92 @@ export class WorkshopService {
    * An activity event (SessionManager.event): its host hears of it, and a level's session gets its
    * code review once its worktree is made (`created`), before its own first turn is done.
    */
-  noted(row: SessionRow, kind: string, text: string | null): void {
-    this.events.noted(row, kind, text);
-    if (kind === 'created') void this.reviewLevel(row.id);
+  noted(row: SessionRow, kind: string, text: string | null, payload?: unknown): void {
+    this.events.noted(row, kind, text, payload);
+    if (kind !== 'created') return;
+    void this.reviewLevel(row.id);
+    this.closeEarlier(row);
+  }
+
+  /**
+   * A level's later session (its prompts are in order, by name: "Ask again" after "Ask about the
+   * game") replaces the earlier ones: the host starts it only once the user has read them and said
+   * so, and AgentK archives them then, so the user has one session of the level on screen. Archive,
+   * as at a level's end; one still saving what it learned, or about to (`saving`), stays open.
+   */
+  private closeEarlier(row: SessionRow): void {
+    if (row.kind === 'code-review' || row.purpose) return;
+    const workshop = projectRow(this.core.db, row.project_id)?.workshop;
+    if (!workshop) return;
+    let b: WorkshopBundle;
+    try {
+      b = readWorkshop(workshop, this.root);
+    } catch {
+      return;
+    }
+    const name = row.name.trim().toLowerCase();
+    for (const l of b.levels) {
+      const at = l.prompts.findIndex((p) => p.name?.toLowerCase() === name);
+      if (at <= 0) continue;
+      const earlier = new Set(l.prompts.slice(0, at).map((p) => p.name!.toLowerCase()));
+      const open = all<SessionRow>(this.core.db,
+        `SELECT * FROM sessions WHERE project_id = ? AND desired = 'running' AND kind != 'code-review' AND purpose IS NULL AND id != ?`,
+        row.project_id, row.id).filter((s) => earlier.has(s.name.trim().toLowerCase()) && !this.saving(s.id));
+      for (const s of open) {
+        this.core.sessions.archive(s, { keepBranch: true })
+          .catch((e: unknown) => this.core.log.warn(`archiving ${s.id} for the next session of its workshop level failed`, errMsg(e)));
+      }
+    }
   }
 
   /**
    * A session's turn ended (SessionManager's turn end, after the diff's refresh): its host hears of
-   * it, and a level's session whose review couldn't start at its creation gets it now.
+   * it, a level's session whose review couldn't start at its creation gets it now, and a level's
+   * question session (`learn` on its prompt) gets its learn step.
    */
   turnEnded(id: string, interrupted: boolean): void {
     this.events.turnEnded(id, interrupted);
-    if (!interrupted) void this.reviewLevel(id);
+    if (interrupted) return;
+    void this.reviewLevel(id);
+    void this.learnLevel(id);
+  }
+
+  /**
+   * The learn step on a level's question session (a prompt with `learn`, by the session's name), once,
+   * after its first turn: AgentK saves what it worked out and marks the question Meko couldn't answer
+   * taught, while the user watches. The step reads the open questions on Context Gaps itself, once,
+   * when it starts: Meko isn't polled for them.
+   */
+  private async learnLevel(id: string): Promise<void> {
+    const row = sessionRow(this.core.db, id);
+    if (!row || row.kind === 'code-review' || row.purpose || row.desired !== 'running' || this.learning.has(id)) return;
+    const workshop = projectRow(this.core.db, row.project_id)?.workshop;
+    const dp = sessionDatapack(this.core.db, row);
+    if (!workshop || dp?.role !== 'dedicated' || !this.core.mekoStatus.configured) return;
+    let b: WorkshopBundle;
+    try {
+      b = readWorkshop(workshop, this.root);
+    } catch {
+      return;
+    }
+    const name = row.name.trim().toLowerCase();
+    if (!b.levels.some((l) => l.prompts.some((p) => p.learn && p.name?.toLowerCase() === name))) return;
+    if (get(this.core.db, 'SELECT 1 AS x FROM meko_learns WHERE session_id = ? LIMIT 1', id)) return;
+    this.learning.add(id);
+    try {
+      await this.core.learn.start(row, 'manual');
+      this.events.tell(row.project_id, `AgentK is saving what ${row.name} learned to Meko (${dp.name}).`);
+    } catch (e) {
+      this.core.log.warn(`the learn step on ${id} for its workshop level didn't start`, errMsg(e));
+      this.events.tell(row.project_id, `AgentK couldn't save what ${row.name} learned: ${errMsg(e)} The user can press Save learnings to Meko in its menu.`);
+    } finally {
+      this.learning.delete(id);
+    }
+  }
+
+  /** A learn step runs on the session, or AgentK is starting one: archiving it would cut the save short. */
+  private saving(id: string): boolean {
+    return this.learning.has(id) || this.core.learn.running(id);
   }
 
   /**
@@ -329,25 +459,26 @@ export class WorkshopService {
   /**
    * What the host said as its turn ended (its Stop's `last_assistant_message`): a last line of
    * "That's the end of Level N" archives that level's sessions, so the user has nothing left to
-   * tidy. Archive, not Discard: a worktree with uncommitted changes (the level's fixes) is kept.
+   * tidy: every open session in the workshop's project but the host and code reviews, since one
+   * level runs at a time. Archive, not Discard: a worktree with uncommitted changes (the level's
+   * fixes) is kept. A session still saving what it learned stays open, since Archive would cut the
+   * save short; the user archives it once it's done.
    */
   hostSaid(row: SessionRow, text: string | undefined): void {
     const last = text?.trim().split('\n').pop() ?? '';
     const n = row.purpose === 'guide' ? /^\W*that['’]s the end of level (\d+)\W*$/i.exec(last)?.[1] : undefined;
     const p = n ? projectRow(this.core.db, row.project_id) : undefined;
     if (!p?.workshop) return;
-    let branch: string | undefined;
     try {
-      branch = readWorkshop(p.workshop, this.root).levels[Number(n) - 1]?.review?.branch;
+      if (!readWorkshop(p.workshop, this.root).levels[Number(n) - 1]) return;
     } catch {
       return;
     }
-    if (!branch) return;
     const ids = all<{ id: string }>(this.core.db,
-      `SELECT id FROM sessions WHERE project_id = ? AND desired = 'running' AND branch = ? AND kind != 'code-review' AND purpose IS NOT 'guide'`,
-      row.project_id, branch);
+      `SELECT id FROM sessions WHERE project_id = ? AND desired = 'running' AND kind != 'code-review' AND purpose IS NOT 'guide'`,
+      row.project_id);
     for (const { id } of ids) {
-      const s = sessionRow(this.core.db, id);
+      const s = this.saving(id) ? null : sessionRow(this.core.db, id);
       if (s) this.core.sessions.archive(s, { keepBranch: true }).catch((e: unknown) => this.core.log.warn(`archiving ${id} at the end of its workshop level failed`, errMsg(e)));
     }
   }
@@ -416,6 +547,7 @@ export class WorkshopService {
     return renderGuide(b, {
       projectId: p.id, repo: p.repo_path, meko: this.core.mekoStatus.configured ? 'on' : 'off',
       harness: HARNESS_CAPS[harnessOf(row.harness)].label, gotchas: this.gotchasOf(p.id)?.name ?? 'none',
+      datapack: dedicatedDatapack(this.core.db, p.id)?.name ?? 'none',
     });
   }
 
@@ -537,8 +669,11 @@ export class WorkshopService {
   }
 }
 
-/** The activity events a host hears about from the other sessions in its project. */
-const FOLLOWED_KINDS = new Set(['created', 'stage', 'review', 'design', 'archived', 'discarded', 'exited']);
+/**
+ * The activity events a host hears about from the other sessions in its project: `learn-done` is a
+ * learn session's summary, `learned` a learn step's result.
+ */
+const FOLLOWED_KINDS = new Set(['created', 'stage', 'review', 'design', 'archived', 'discarded', 'exited', 'learn-done', 'learned']);
 /** How long after an event the host gets it when it's between turns, so a burst goes as one prompt. */
 export const GUIDE_SETTLE_MS = 3000;
 /** The most events one prompt carries; older ones are dropped first. */
@@ -560,11 +695,23 @@ export class GuideEvents {
 
   constructor(private core: Core, private settleMs = GUIDE_SETTLE_MS) {}
 
-  /** From SessionManager.event: an activity event of <row>. */
-  noted(row: SessionRow, kind: string, text: string | null): void {
+  /**
+   * From SessionManager.event: an activity event of <row>. A learn step that taught Meko a question
+   * adds the link to Meko's Context Gaps page, where it's now under Taught.
+   */
+  noted(row: SessionRow, kind: string, text: string | null, payload?: unknown): void {
     if (!text || !FOLLOWED_KINDS.has(kind)) return;
     const host = this.hostFor(row);
-    if (host) this.queue(host.id, `${row.name}: ${text}`);
+    if (!host) return;
+    const taught = kind === 'learned' && payload && typeof payload === 'object' ? Number((payload as { taught?: unknown }).taught) || 0 : 0;
+    if (!taught) {
+      this.queue(host.id, `${row.name}: ${text}`);
+      return;
+    }
+    void this.gapsLink(row).then((link) => {
+      const where = link ? `; ${taught === 1 ? 'that question is' : 'those questions are'} now under Taught on Meko's Context Gaps: ${link}` : '';
+      this.queue(host.id, `${row.name}: ${text}${where}`);
+    });
   }
 
   /** A session's turn ended: a followed one's is an event; the host's own lets what waited go. */
@@ -582,7 +729,38 @@ export class GuideEvents {
     const before = this.diffs.get(id);
     this.diffs.set(id, key);
     const changed = before !== undefined && before !== key ? `; the change is now ${diffText(stat)}` : '';
-    this.queue(host.id, `${row.name}: ${interrupted ? 'the user interrupted its turn' : "AgentK's turn ended"}${changed}`);
+    const line = `${row.name}: ${interrupted ? 'the user interrupted its turn' : "AgentK's turn ended"}${changed}`;
+    const meko = sessionMekoLine(this.core.db, id);
+    if (!meko) {
+      this.queue(host.id, line);
+      return;
+    }
+    // With Meko's questions of its own, where they are: the user sees them captured on Context Gaps.
+    void this.ownGaps(row).then((gaps) => this.queue(host.id, `${line}. ${meko}${gaps}`));
+  }
+
+  /** "; 1 question Meko couldn't answer is on its Context Gaps: <link>", or the link alone; empty with no list. */
+  private async ownGaps(row: SessionRow): Promise<string> {
+    const link = await this.gapsLink(row);
+    if (!link) return '';
+    const dp = sessionDatapack(this.core.db, row);
+    const conversation = dp ? await this.core.sessions.conversationId(row, dp).catch(() => null) : null;
+    const own = dp && conversation ? ((await this.core.mekoQuestions.openQuestions(dp.id, conversation)) ?? []).filter((q) => q.own).length : 0;
+    return own
+      ? `; ${own} ${own === 1 ? 'question' : 'questions'} it asked Meko couldn't answer ${own === 1 ? 'is' : 'are'} on Meko's Context Gaps: ${link}`
+      : `; Meko's Context Gaps: ${link}`;
+  }
+
+  /**
+   * The full address of the session's datapack's Context Gaps in the web UI of the Meko on this
+   * computer (its tab, which sends a Meko Cloud datapack on to its own page), or null with no list to show.
+   */
+  private async gapsLink(row: SessionRow): Promise<string | null> {
+    const dp = sessionDatapack(this.core.db, row);
+    const web = localMeko().meko?.webUrl?.replace(/\/+$/, '');
+    if (!dp || dp.role !== 'dedicated' || !web) return null;
+    const counts = await this.core.mekoQuestions.openCounts(dp.id).catch(() => null);
+    return counts ? `${web}${mekoGapsPath(dp.id)}` : null;
   }
 
   /** A notice of the workshop's own (its gotchas' upload) for the project's host. */

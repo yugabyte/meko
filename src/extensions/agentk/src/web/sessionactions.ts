@@ -157,12 +157,14 @@ export function sessionActions(s: Session, ctx: SessionActionContext): SessionAc
   if (s.stage === 'code' && !ctx.noPr) {
     const queued = s.queued === 'open-pr';
     const reason = queued ? null : openPrGate(s).reason;
+    // Review Changes when the press starts AgentK's code review first, as the gate says.
+    const gate = s.openPrReview === 'new' ? 'Review Changes' : 'Open PR';
     // While the code review holds Open PR, its gate has no instructions button; the palette keeps it.
     add({
       id: 'open-pr', group: 'stage',
-      label: queued ? 'Instructions for the queued Open PR' : 'Open PR with instructions',
-      palette: queued ? ['Instructions for the queued Open PR of ', name] : ['Open PR for ', name, ' with instructions'],
-      hint: reason ?? busyWait, keywords: 'open pr pull request instructions notes draft', opens: true,
+      label: queued ? 'Instructions for the queued Open PR' : `${gate} with instructions`,
+      palette: queued ? ['Instructions for the queued Open PR of ', name] : [`${gate} for `, name, ' with instructions'],
+      hint: reason ?? busyWait, keywords: 'open pr pull request review changes code review instructions notes draft', opens: true,
       disabled: blocked || !!reason, on: reviewGatesPr(s) ? ['palette'] : ALL,
     });
   }

@@ -58,9 +58,9 @@ an error is logged. The list stays on this machine: it's not in the usage report
 can't be read, the dialog shows no suggestions.
 
 **Sharing with a PR's reviewers.** Once a session has a PR, its ⋯ menu (the ⋯ sheet on a
-phone) has **Share with reviewers** in Review & PR, while the project has a dedicated datapack and Meko
+phone) has **Share with reviewers** in Pull Request, while the project has a dedicated datapack and Meko
 is on. It opens the Share dialog with a **Reviewers on the
-project's open PRs** section above the email form: for each open PR of the project's running sessions (in Review & PR or Merge & Close),
+project's open PRs** section above the email form: for each open PR of the project's running sessions (in Pull Request or Merge & Close),
 each in its own session's repo, the people asked to review and the people who have reviewed,
 without bots, the PR's author or you, and the teams asked (whose members are invited by email);
 the session's own PR comes first, and a person on several PRs is listed once

@@ -9,8 +9,11 @@ Everything AgentK does, by area. The [README](../README.md) has the short versio
   local demo project with no remote (nothing is fetched or pushed), and a host session that walks
   you through. In Level 1 AgentK runs its code review on a teammate's fix waiting on a branch,
   and the demo's gotchas datapack in Meko catches a trap the code alone doesn't show, marked
-  **Caught with Meko** with the gotcha's sentence. Take it any time from **Take the AgentK tour**
-  on the empty screen or **Start the AgentK tour** in the command palette. More levels follow.
+  **Caught with Meko** with the gotcha's sentence. In Level 2 Learn the project fills the demo's
+  empty datapack, a fresh session answers a question from Meko (the host says what Meko saved), and
+  what Meko couldn't answer shows on Meko's Context Gaps until AgentK's learn step teaches it, so
+  the next session answers that from Meko too. Take it any time from **Take the AgentK tour** on the
+  empty screen or **Start the AgentK tour** in the command palette. More levels follow.
 
 ## Projects and sessions
 
@@ -28,7 +31,7 @@ Everything AgentK does, by area. The [README](../README.md) has the short versio
   **Advanced** a session can work in another of your repos, on a new branch you name, or pick up
   existing work: an **existing branch** (its open PR is linked), or one of your open **pull
   requests**, a fork's included when the fork is one of the repo's remotes. AgentK then builds on
-  what's there instead of branching from it, and picks the PR up at Review & PR.
+  what's there instead of branching from it, and picks the PR up at Pull Request.
   The foot of the rail shows who you are and which server you're on (`you@dev-box`), so windows
   on different machines are easy to tell apart; give the server your own name in Settings.
 - **One git worktree and one Claude session per task.** The real Claude Code terminal UI is shown
@@ -63,7 +66,7 @@ Everything AgentK does, by area. The [README](../README.md) has the short versio
   (or turn on **Let Kiro run any tool**). OpenCode works like Kiro there, but says when it needs
   you. While your open sessions run on more than one agent, each session's tab
   and row in the rail shows its agent's logo (turn that off in Settings › Harness).
-- **Start where you want:** every task runs on one pipeline, Explore → Design → Code → Review & PR →
+- **Start where you want:** every task runs on one pipeline, Explore → Design → Code → Pull Request →
   Merge & Close, and a new session asks where to start: *Explore* for investigating, POCs and
   experiments, *Design* (the default) for the full lifecycle below, or *Code* for small tasks that
   go straight to code. Or pick *Review a PR* (below). A task moves between stages, forward or back,
@@ -90,7 +93,7 @@ Everything AgentK does, by area. The [README](../README.md) has the short versio
 
 ## Design, code review and PRs
 
-- **Task lifecycle:** (Explore →) Design → Code → Review & PR (AgentK) → Merge & Close. Complex designs are
+- **Task lifecycle:** (Explore →) Design → Code → Pull Request (AgentK) → Merge & Close. Complex designs are
   published as native Artifacts with diagrams and shown right next to the terminal; simple ones are
   markdown, with Mermaid diagrams drawn (zoom them with − and +). The design's open questions are listed beside it, each
   with AgentK's options and recommendation picked to start: pick another, or write a custom answer, then send them for
@@ -102,15 +105,19 @@ Everything AgentK does, by area. The [README](../README.md) has the short versio
   while it codes and addresses reviews; each version goes to Meko, and the PR names the latest one.
   Before a PR opens, AgentK has the task write the PR's title and description, with its Meko lines,
   which the review checks the change against and the PR opens with; meanwhile, and while the review
-  runs, the task shows in Review & PR. Then AgentK reviews the change on your computer with the cloud reviewer's algorithm
+  runs, the task shows in Code Review. Then AgentK reviews the change on your computer with the cloud reviewer's algorithm
   (Sagittarius 3.0: five specialist passes and a scorer per finding; or the quicker Sirius 1.0), in a
   review session shown as a magnifier on the task's tab, which opens the review's terminal while its passes run and its findings once they wait on you, the task is fixing them or the review is done. The findings also open by themselves beside the task's terminal while the review runs or they wait on you, and once the review reads LGTM the magnifier goes (the session's ⋯ menu still opens its findings). Each round's findings wait for you first: add a note to any of them, or dismiss some with a note, then **Send to AgentK**, and the task fixes the rest (with Run to merge on, or **Check the findings first** set to No, they go to it at once). The PR
   says how it went (`me_ak_review:2 blockers,1 major addressed;Sagittarius3.0`, or `me_ak_review:LGTM;Sirius1.0`); findings you dismissed aren't counted. Strategy,
   re-review rounds, depth and Check the findings first are in Settings, the project's settings and each session's own.
-  You can also run the review whenever you like, in Code or on the open PR in Review & PR: with
+  You can also run the review whenever you like, in Code or on the open PR in Pull Request: with
   **Run code review** in the session's ⋯ menu (the ⋯ sheet on a phone), from the command palette,
   or with **Review again** on its findings (which also has Cancel and Retry for it). One run in Code is the one Open PR uses, so the PR
   opens without reviewing again.
+  The Code gate says what its press does: **Review Changes** when it starts the code review first,
+  **Open PR** when it doesn't (the review is off, or one already ran). The stage bar's **Code Review**
+  step, between Code and Pull Request, shows the review as it runs, and – in a dashed circle when
+  none runs before the PR.
   You approve the design, opening the PR, and Merge & Close, which merges the PR and
   cleans up the branches, leaving the worktree for the next session. Pressed early, they wait:
   **Open PR after this turn** goes when AgentK's turn ends, and **Merge when ready** merges once CI
@@ -257,7 +264,9 @@ Everything AgentK does, by area. The [README](../README.md) has the short versio
   question), and which are idle, with browser notifications.
 - **Find in the terminal:** `⌘F` (`Ctrl+Shift+F` on Linux and Windows) in a session's terminal
   searches all of it, scrollback included, highlighting each match, with match case, whole word
-  and regex. **Find in terminal** is also in the session's ⋯ menu (the ⋯ sheet on a phone) and the command palette.
+  and regex. Claude Code runs on the terminal's main screen in sessions (not full screen, even if
+  that's your setting; a session started before this release switches when its agent next
+  starts), so that's up to the session's last 10,000 lines. **Find in terminal** is also in the session's ⋯ menu (the ⋯ sheet on a phone) and the command palette.
 - **Multi-line prompts:** Shift+Enter starts a new line in a session's terminal, and Enter sends
   the prompt. On a Mac, ⌘← and ⌘→ go to the start and end of the line, ⌥← and ⌥→ move by a word,
   and ⌘⌫ deletes to the start of the line. On Linux and Windows, Ctrl+Backspace deletes a word.

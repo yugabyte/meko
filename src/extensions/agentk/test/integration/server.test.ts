@@ -76,6 +76,24 @@ describe('HTTP API: origin checks, projects', () => {
     expect(readFileSync(env.core.paths.config, 'utf8')).toMatch(/\[sessions\]\s+idle_stop_hours = 0/);
   });
 
+  it('pushes the state when the code review strategy changes, so Open PR and the Code Review step follow it', async () => {
+    const p = await env.core.projects.create({ repoPath: env.repo, name: 'One', datapack: { mode: 'none' } });
+    const s = await env.core.sessions.create(p.id, { name: 'Fix it', prompt: 'do it', start: 'code' });
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle' && !x.busy, 10000, 'first turn');
+    const put = (codeReviewStrategy: string) => app.inject({ method: 'PUT', url: '/api/settings', payload: { codeReviewStrategy } });
+    let changes = 0;
+    env.core.on('change', () => changes++);
+    expect((await put('off')).statusCode).toBe(200);
+    expect(changes).toBeGreaterThan(0);
+    expect(env.core.sessions.get(s.id)).toMatchObject({ openPrReview: 'off' });
+    expect(env.core.sessions.get(s.id).skippedStages).toContain('reviewing-code');
+    changes = 0;
+    expect((await put('sirius-1.0')).statusCode).toBe(200);
+    expect(changes).toBeGreaterThan(0);
+    expect(env.core.sessions.get(s.id)).toMatchObject({ openPrReview: 'new' });
+    expect(env.core.sessions.get(s.id).skippedStages).not.toContain('reviewing-code');
+  });
+
   it("saves the Slack list's link trimmed, refuses anything else, and clears it", async () => {
     const put = (workQueueSlackList: unknown) => app.inject({ method: 'PUT', url: '/api/settings', payload: { workQueueSlackList } });
     const link = 'https://acme.slack.com/lists/T0ACME/F0LIST1';

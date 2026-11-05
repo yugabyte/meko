@@ -39,7 +39,7 @@ import type { LearnBrief, MoveTarget } from '../shared/types.js';
  * and {{outcomeHow}} (how to say what was done with each); the PR prompt then gets the `me_ak_review:` line (`meAkReviewFooter`).
  * `code-review-fix` also gets {{why}} (whether an Open PR or the user ran the review: `fixWhy`) and {{after}} (what follows the
  * fixes: `fixAfterLine`, added at the end of a repo's own version without it). A review the user ran also sends its last
- * round's findings as `code-review-fix`, and in Review & PR, `code-review-push` (with {{strategy}} and {{round}}) asks the task
+ * round's findings as `code-review-fix`, and in Pull Request, `code-review-push` (with {{strategy}} and {{round}}) asks the task
  * to push the fixes once a re-review found nothing more.
  */
 export type PromptName =
@@ -548,7 +548,7 @@ export function prDescriptionUseLine(file: string): string {
 /**
  * What a code review's fix prompt (`code-review-fix`) says follows the fixes: in Code, a re-review
  * (`review-again`), or, for the last round of a review the user ran, the user's Open PR later
- * (`open-later`); in Review & PR, a re-review before one push (`hold-push`), or the push (`push`).
+ * (`open-later`); in Pull Request, a re-review before one push (`hold-push`), or the push (`push`).
  */
 export type FixAfter = 'review-again' | 'open-later' | 'hold-push' | 'push';
 

@@ -475,6 +475,18 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
   // A New session dialog whose project was closed meanwhile closes. One for a project just opened
   // has it in `projects` at once (withOpened), so it never waits on the state push.
   const newSessionProject = modal.kind === 'new-session' ? projects.find((p) => p.id === modal.projectId) : undefined;
+  /**
+   * Learn the project from a project's home: in a workshop's project, the dialog opens filled in with
+   * the workshop's brief (`Workshop.learn`), so the user only presses Start.
+   */
+  const openLearn = (p: Project) => {
+    const plain = () => setModal({ kind: 'new-session', projectId: p.id, learn: true });
+    if (!p.workshop) return plain();
+    api.workshops().then((ws) => {
+      const learn = ws.find((w) => w.id === p.workshop)?.learn;
+      setModal(learn ? { kind: 'new-session', projectId: p.id, learn: true, initial: { name: '', learn } } : { kind: 'new-session', projectId: p.id, learn: true });
+    }, plain);
+  };
   const workQueue = useMemo(() => state?.workQueue ?? [], [state]);
   const queue = useMemo(() => queueSummary(workQueue), [workQueue]);
   /** Start session for a work item: New session filled in from it, in the project it fits best, which can be changed there. */
@@ -670,7 +682,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
             ghLogin={state.ghLogin ?? null}
             onMenu={openDrawer}
             onBack={() => goProject(currentProject)}
-            onLearn={() => setModal({ kind: 'new-session', projectId: currentProject.id, learn: true })}
+            onLearn={() => openLearn(currentProject)}
             onError={showToast}
           />
         ) : currentProject ? (

@@ -205,9 +205,9 @@ export function ProjectHomeView({
                 )}
               </div>
             )}
-            {mekoConfigured && dedicated && home && !home.learnSessionOpen && dedicated.memoryCount === 0 && dedicated.knowledgeCount === 0 && (
+            {mekoConfigured && dedicated && home?.learnOffered && (
               <div className="dp-none">
-                <span className="muted">This datapack is empty.</span>
+                <span className="muted">{dedicated.memoryCount === 0 && dedicated.knowledgeCount === 0 ? 'This datapack is empty.' : "Meko hasn't learned this project yet."}</span>
                 <button className="btn small" id="home-learn" onClick={onLearn}>
                   Learn the project
                 </button>

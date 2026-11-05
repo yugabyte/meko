@@ -4,7 +4,7 @@ import { heldSummary } from './heldreviews.js';
 import type {
   StartupState,
   TokenUsage,
-  AskRequest, BackgroundTask, CiState, CloseStep, DatapackRef, DiffStat, LearnProgress, Project, ProjectSettings, QueuedGate, ReviewState, ReviewingPr, Session, SessionStatus, Stage, StoredKind,
+  AskRequest, BackgroundTask, CiState, CloseStep, DatapackRef, DiffStat, LearnProgress, OpenPrReview, Project, ProjectSettings, QueuedGate, ReviewState, ReviewingPr, Session, SessionStatus, Stage, StoredKind,
 } from '../shared/types.js';
 import { KIND_STAGES, REVIEWER_LABELS } from '../shared/types.js';
 import { kindOf, skippedSteps, stepOf } from '../shared/stages.js';
@@ -282,6 +282,16 @@ export interface SessionRuntime {
   codeReview: CodeReviewSummary | null;
 }
 
+/** A task's code review as its stage bar shows it (review/runner.ts). */
+export interface ReviewSteps {
+  /** What Open PR does about the task's code review (`CodeReviews.openPrReview`). */
+  openPrReview: OpenPrReview;
+  /** The stage bar's Code Review step is skipped (`CodeReviews.stepSkipped`). */
+  reviewStepSkipped: boolean;
+}
+
+const NO_REVIEW_STEPS: ReviewSteps = { openPrReview: null, reviewStepSkipped: false };
+
 /** A session's own code review settings, from `review_json`. */
 export function sessionReview(r: Pick<SessionRow, 'review_json'>): ReviewOverrides {
   if (!r.review_json) return {};
@@ -306,7 +316,7 @@ export function closeStep(stage: Stage, s: { learning: boolean; merged: boolean;
   return s.inTurn ? 'turn' : 'cleanup';
 }
 
-export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestions: number, learnProgress: LearnProgress | null): Session {
+export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestions: number, learnProgress: LearnProgress | null, steps: ReviewSteps = NO_REVIEW_STEPS): Session {
   const design = get<{ updated_at: number; source: string | null; source_told: string | null }>(db, 'SELECT updated_at, source, source_told FROM designs WHERE session_id = ?', r.id);
   return {
     id: r.id,
@@ -341,7 +351,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     queuedInstructions: r.queued_gate === 'open-pr' ? r.queued_instructions : null,
     autoRun: !!r.auto_run,
     busy: rt.busy,
-    skippedStages: skippedStages(db, r),
+    skippedStages: steps.reviewStepSkipped ? [...skippedStages(db, r), 'reviewing-code'] : skippedStages(db, r),
     hasDesign: !!design,
     designUpdatedAt: design?.updated_at ?? null,
     diffStat: rt.diffStat,
@@ -352,6 +362,7 @@ export function toSession(db: Db, r: SessionRow, rt: SessionRuntime, openQuestio
     parentId: r.parent_id,
     codeReview: rt.codeReview,
     review: sessionReview(r),
+    openPrReview: steps.openPrReview,
     usage: rt.usage,
     contextPercent: rt.contextPercent,
     modLive: rt.modLive,
@@ -410,7 +421,7 @@ function reviewingPr(r: SessionRow, design: { source: string | null; source_told
  */
 function skippedStages(db: Db, r: SessionRow): Stage[] {
   const kind = kindOf(r.kind);
-  if (r.desired !== 'running' || (KIND_STAGES[kind] as Stage[]).indexOf(stepOf(r.stage)) <= 0) return [];
+  if (r.desired !== 'running' || (r.stage !== 'done' && (KIND_STAGES[kind] as Stage[]).indexOf(stepOf(r.stage)) <= 0)) return [];
   const visited = all<{ stage: Stage }>(db, 'SELECT DISTINCT stage FROM session_stages WHERE session_id = ?', r.id);
   return skippedSteps(kind, r.stage, visited.map((x) => x.stage));
 }
