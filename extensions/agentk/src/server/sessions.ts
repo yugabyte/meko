@@ -222,8 +222,8 @@ export function startImages(row: SessionRow): string[] {
   }
 }
 
-/** A learn session's brief (`CreateSessionRequest.learn`), checked: 400 for anything off. */
-function checkLearn(b: unknown): LearnBrief {
+/** A learn session's brief (`CreateSessionRequest.learn`, or a workshop level's `learn`), checked: 400 for anything off. */
+export function checkLearn(b: unknown): LearnBrief {
   const o = (b !== null && typeof b === 'object' ? b : {}) as Partial<Record<keyof LearnBrief, unknown>>;
   if (o.about != null && typeof o.about !== 'string') throw new HttpError(400, "The learn session's about must be text.");
   if (o.where != null && typeof o.where !== 'string') throw new HttpError(400, "The learn session's where must be text.");
@@ -523,7 +523,7 @@ export class SessionManager {
     run(this.db, 'INSERT INTO session_events(session_id, project_id, kind, text, payload_json, at) VALUES (?, ?, ?, ?, ?, ?)',
       id, r.project_id, kind, text, payload === undefined ? null : JSON.stringify(payload), Date.now());
     // A workshop's host hears what happens in its project's other sessions.
-    this.core.workshops.noted(r, kind, text);
+    this.core.workshops.noted(r, kind, text, payload);
   }
 
   setStage(id: string, stage: Stage, by: 'you' | 'auto', opts: { event?: boolean } = {}): void {

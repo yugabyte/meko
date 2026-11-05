@@ -608,7 +608,14 @@ export class ProjectService {
     const learnSessionOpen = !!dedicated && !!get(this.db,
       `SELECT 1 AS x FROM sessions WHERE project_id = ? AND purpose = 'learn' AND status != 'archived'
          AND (meko_datapack_id IS NULL OR meko_datapack_id = ?) LIMIT 1`, id, dedicated.id);
-    return { project, datapacks, learnSessionOpen, activity, usage: projectUsage(this.db, id), mekoGaps: await mekoGaps };
+    const dp = dedicated ? datapacks.find((d) => d.id === dedicated.id) : undefined;
+    const empty = dp?.memoryCount === 0 && dp.knowledgeCount === 0;
+    // A workshop's level may save a memory before its Learn the project level: there, the offer also
+    // shows on a datapack that isn't empty, until a learn session has run on it.
+    const learnRan = !!dedicated && !!project.workshop && !!get(this.db,
+      `SELECT 1 AS x FROM sessions WHERE project_id = ? AND purpose = 'learn' AND (meko_datapack_id IS NULL OR meko_datapack_id = ?) LIMIT 1`, id, dedicated.id);
+    const learnOffered = on && !!dp && !learnSessionOpen && (project.workshop ? (empty || !learnRan) && dp.memoryCount !== null : empty);
+    return { project, datapacks, learnSessionOpen, learnOffered, activity, usage: projectUsage(this.db, id), mekoGaps: await mekoGaps };
   }
 
   async search(id: string, query: string): Promise<SearchResult[]> {
