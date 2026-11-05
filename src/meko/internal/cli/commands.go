@@ -256,6 +256,10 @@ func printStatusShort(l paths.Layout, st server.StatusReply, exts func() extensi
 	if st.Auth == config.AuthNone {
 		r.step(stepWarn, "Auth", "none: every user and program on this machine can read and write your memories")
 	}
+	cl := cloudStatusLine(l)
+	if k, text, show := storageStep(st.Storage, strings.HasPrefix(cl, "linked")); show {
+		r.step(k, "Storage", text)
+	}
 	if m := serviceOf(l); m == nil {
 		r.step(stepWarn, "Service", "none (meko install sets one up)")
 	} else if m.Running() {
@@ -275,7 +279,7 @@ func printStatusShort(l paths.Layout, st server.StatusReply, exts func() extensi
 			}
 		}
 	}
-	switch cl := cloudStatusLine(l); {
+	switch {
 	case strings.HasPrefix(cl, "linked"):
 		r.step(stepOK, "Meko Cloud", cl)
 	case strings.HasPrefix(cl, "can't"):
@@ -394,6 +398,11 @@ func printStatusVerbose(l paths.Layout, st server.StatusReply, exts func() exten
 	if u := st.UsageStats; u != nil {
 		fmt.Fprintln(stdout, "  Usage stats:   "+usageStatsLine(*u))
 	}
+	if s := st.Storage; s != nil {
+		fmt.Fprintf(stdout, "  Storage:       %s of %s used (memories %s, conversations %s, knowledge %s, artifacts %s)\n",
+			humanSize(s.UsedBytes), limitSize(s.LimitBytes), humanSize(s.Memories), humanSize(s.Conversations),
+			humanSize(s.Knowledge), humanSize(s.Artifacts))
+	}
 	if len(st.Children) == 0 {
 		fmt.Fprintf(stdout, "  Children:      none\n")
 	}
@@ -405,6 +414,36 @@ func printStatusVerbose(l paths.Layout, st server.StatusReply, exts func() exten
 		fmt.Fprintln(stdout, line)
 	}
 	printSetup(l, exts, stdout)
+}
+
+// storageWarnAt is the share of the storage limit from which status's checklist shows a Storage row.
+const storageWarnAt = 0.9
+
+// storageStep is the checklist's Storage row: none while there's room, a warning from storageWarnAt
+// of the limit, failed when Meko is full (writes are refused). linked says Meko Cloud is linked.
+func storageStep(s *memory.StorageStatus, linked bool) (stepKind, string, bool) {
+	if s == nil || s.LimitBytes <= 0 {
+		return stepOK, "", false
+	}
+	used := fmt.Sprintf("%s of %s", humanSize(s.UsedBytes), limitSize(s.LimitBytes))
+	switch {
+	case s.UsedBytes >= s.LimitBytes && linked:
+		return stepFail, "full, " + used + ": delete what you don't need, or keep larger datasets in Meko Cloud", true
+	case s.UsedBytes >= s.LimitBytes:
+		return stepFail, "full, " + used + ": delete what you don't need, or run meko cloud_link for larger datasets",
+			true
+	case float64(s.UsedBytes) >= storageWarnAt*float64(s.LimitBytes):
+		return stepWarn, used + " used", true
+	}
+	return stepOK, "", false
+}
+
+// limitSize is the storage limit as config.toml sets it, in whole MB.
+func limitSize(n int64) string {
+	if n%(1<<20) == 0 {
+		return fmt.Sprintf("%d MB", n>>20)
+	}
+	return humanSize(n)
 }
 
 // usageStatsLine says whether usage stats are sent, where, and what turned them off.

@@ -236,7 +236,8 @@ var restConversation = func() string {
 // "detail"}) by its code. A missing datapack (datapack_access_denied, not_found) is a 404 NOT_FOUND,
 // as on every route. A code ending in _failed is the tool's own failure (its failCode, Meko Cloud's
 // as Meko's), a 500 here, whose cause the server's log has, or a 502 CLOUD_CALL_FAILED from Meko
-// Cloud; memory_engine_unavailable is a 503. Any other is a 400 with the tool's code.
+// Cloud; memory_engine_unavailable is a 503, and storage_limit_exceeded the 402 every route answers
+// past the storage limit. Any other is a 400 with the tool's code.
 func toolReply(c echo.Context, name, text string, cloud bool) error {
 	var e struct {
 		Error  any    `json:"error"`
@@ -256,6 +257,8 @@ func toolReply(c echo.Context, name, text string, cloud bool) error {
 		return envelope.Fail(c, http.StatusInternalServerError, "INTERNAL_ERROR", e.Detail)
 	case code == "memory_engine_unavailable":
 		return envelope.Fail(c, http.StatusServiceUnavailable, code, e.Detail)
+	case code == "storage_limit_exceeded":
+		return envelope.Fail(c, http.StatusPaymentRequired, "STORAGE_LIMIT_EXCEEDED", e.Detail)
 	case code == "":
 		code = "TOOL_ERROR"
 	}

@@ -20,6 +20,18 @@ func (s *Service) PutArtifact(ctx context.Context, datapack, agentID, filename, 
 	if len(b) > MaxArtifactBytes {
 		return store.Artifact{}, ErrTooLarge
 	}
+	release, err := s.reserve(ctx, int64(len(b)))
+	if err != nil {
+		// The same bytes again add nothing, so they're kept (found) even when Meko is full.
+		has, herr := s.st.HasArtifact(ctx, datapack, b)
+		if herr != nil {
+			return store.Artifact{}, herr
+		}
+		if !has {
+			return store.Artifact{}, err
+		}
+	}
+	defer release()
 	a, _, err := s.st.PutArtifact(ctx, datapack, agentID, filename, contentType, b)
 	if errors.Is(err, store.ErrNoDatapack) {
 		return a, ErrNoDatapack

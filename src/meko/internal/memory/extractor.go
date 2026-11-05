@@ -40,6 +40,9 @@ const (
 	extractMaxAttempts     = 5    // a turn that failed this often leaves the queue
 	extractMaxFailures     = 3    // calls failing in a row end a run: the harness itself is likely down
 	extractQueryChars      = 2000 // of the turns' text, to find the existing memories
+	// extractRoom is the room a run needs before it calls: a typical fact and its metadata, a few
+	// times over.
+	extractRoom = 1 << 10
 )
 
 // Settings keys.
@@ -310,7 +313,8 @@ func (s *Service) RunExtractor(ctx context.Context) {
 		case <-s.extractKick:
 		case <-time.After(set.Interval):
 		}
-		if _, err := s.ExtractPending(ctx); err != nil && !errors.Is(err, ErrExtractorOff) && ctx.Err() == nil {
+		_, err = s.ExtractPending(ctx)
+		if err != nil && !errors.Is(err, ErrExtractorOff) && !errors.Is(err, ErrStorageFull) && ctx.Err() == nil {
 			s.log.Warn("memory extraction failed; the turns stay queued", "error", err)
 		}
 	}
@@ -320,7 +324,9 @@ func (s *Service) RunExtractor(ctx context.Context) {
 // until its queue is empty, a call per extractTurns of its turns. A failed call leaves its turns
 // queued (a turn that failed extractMaxAttempts times leaves) and the run goes on to the next
 // conversation, unless extractMaxFailures calls fail in a row. Its error is only for what stops the
-// whole run: the store, the memory engine, or the extractor being off.
+// whole run: the store, the memory engine, the extractor being off (ErrExtractorOff), or Meko being
+// full (ErrStorageFull): too full to keep what a call would find, before the first call, or full
+// when a save is refused partway, leaving its turns queued.
 func (s *Service) ExtractPending(ctx context.Context) (ExtractRun, error) {
 	s.extractMu.Lock()
 	defer s.extractMu.Unlock()
@@ -331,6 +337,13 @@ func (s *Service) ExtractPending(ctx context.Context) (ExtractRun, error) {
 	}
 	if set.Harness == "" {
 		return run, ErrExtractorOff
+	}
+	// A Meko too full to keep what a call finds makes no call, so the user's quota isn't spent: a run
+	// needs room for a typical fact, or for the one a save last refused (s.extractNeed). The turns stay
+	// queued for when there's room.
+	if err = s.room(ctx, s.extractNeed); err != nil {
+		s.finishRun(ctx, run, err.Error())
+		return run, err
 	}
 	convs, err := s.st.QueuedConversations(ctx, extractConversations)
 	if err != nil {
@@ -354,6 +367,7 @@ func (s *Service) ExtractPending(ctx context.Context) (ExtractRun, error) {
 				break
 			}
 			if err != nil {
+				s.noteFull(err)
 				s.finishRun(ctx, run, err.Error())
 				return run, err
 			}
@@ -366,8 +380,18 @@ func (s *Service) ExtractPending(ctx context.Context) (ExtractRun, error) {
 			break
 		}
 	}
+	s.extractNeed = extractRoom
 	s.finishRun(ctx, run, run.LastError)
 	return run, nil
+}
+
+// noteFull remembers the room a refused save needed, so no run calls again until there's that much
+// (with ExtractPending's extractMu held).
+func (s *Service) noteFull(err error) {
+	var full *StorageFullError
+	if errors.As(err, &full) {
+		s.extractNeed = max(extractRoom, full.Need)
+	}
 }
 
 // finishRun records when the extractor last ran, its last error ("" clears it), and adds what it
@@ -458,6 +482,9 @@ func (s *Service) extractConversation(ctx context.Context, h Harness, conv int64
 	// A save that fails partway keeps the turns queued: the next call's facts are checked against
 	// the memories this one saved, as against any other.
 	saved, err := s.saveExtracted(ctx, dp, turns, facts)
+	if errors.Is(err, ErrStorageFull) {
+		return saved, 0, err // the turns stay queued, and it isn't held against them as a failed attempt
+	}
 	if err != nil {
 		return fail(saved, err)
 	}

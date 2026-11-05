@@ -84,6 +84,15 @@ func (s *Store) PutArtifact(ctx context.Context, datapack, agentID, filename, co
 	return a, n == 1, tx.Commit()
 }
 
+// HasArtifact says whether the datapack already keeps these bytes.
+func (s *Store) HasArtifact(ctx context.Context, datapack string, b []byte) (bool, error) {
+	sum := sha256.Sum256(b)
+	var n int
+	err := s.r.QueryRowContext(ctx, "SELECT count(*) FROM artifacts WHERE datapack_id = ? AND content_hash = ?",
+		datapack, hex.EncodeToString(sum[:])).Scan(&n)
+	return n > 0, err
+}
+
 // GetArtifact is a file of the datapack with its bytes, by its hash, or ErrNotFound. Reading it
 // records when it was last read.
 func (s *Store) GetArtifact(ctx context.Context, datapack, hash string) (Artifact, error) {

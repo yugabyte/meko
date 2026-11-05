@@ -184,6 +184,22 @@ func (s *Service) AddMessage(ctx context.Context, r AddMessage) (AddedMessage, e
 			}
 		}
 	}
+	release, err := s.reserve(ctx, int64(len(r.Input)+len(r.Output)+len(r.Reasoning))+jsonSize(r.Plan)+
+		jsonSize(r.Metadata))
+	if err != nil {
+		// A turn sent again (the same seed) adds nothing: it's answered as stored even when Meko is full.
+		if r.Seed == "" {
+			return AddedMessage{}, err
+		}
+		has, herr := s.st.HasMessage(ctx, c.DatapackID, c.ID, messageID(r.Seed))
+		if herr != nil {
+			return AddedMessage{}, herr
+		}
+		if !has {
+			return AddedMessage{}, err
+		}
+	}
+	defer release()
 	queue, err := s.queueExtraction(ctx, c.DatapackID)
 	if err != nil {
 		return AddedMessage{}, err

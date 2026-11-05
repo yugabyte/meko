@@ -172,6 +172,8 @@ func serviceError(err error) error {
 		return fail("memory_engine_unavailable", err.Error())
 	case errors.Is(err, memory.ErrBadRequest):
 		return fail("bad_request", strings.TrimPrefix(err.Error(), memory.ErrBadRequest.Error()+": "))
+	case errors.Is(err, memory.ErrStorageFull):
+		return fail("storage_limit_exceeded", err.Error())
 	}
 	return err
 }
