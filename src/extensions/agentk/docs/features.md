@@ -9,8 +9,11 @@ Everything AgentK does, by area. The [README](../README.md) has the short versio
   local demo project with no remote (nothing is fetched or pushed), and a host session that walks
   you through. In Level 1 AgentK runs its code review on a teammate's fix waiting on a branch,
   and the demo's gotchas datapack in Meko catches a trap the code alone doesn't show, marked
-  **Caught with Meko** with the gotcha's sentence. Take it any time from **Take the AgentK tour**
-  on the empty screen or **Start the AgentK tour** in the command palette. More levels follow.
+  **Caught with Meko** with the gotcha's sentence. In Level 2 Learn the project fills the demo's
+  empty datapack, a fresh session answers a question from Meko (the host says what Meko saved), and
+  what Meko couldn't answer shows on Meko's Context Gaps until AgentK's learn step teaches it, so
+  the next session answers that from Meko too. Take it any time from **Take the AgentK tour** on the
+  empty screen or **Start the AgentK tour** in the command palette. More levels follow.
 
 ## Projects and sessions
 

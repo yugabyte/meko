@@ -6,7 +6,7 @@ import { all, get, kvGet } from '../../src/server/db.js';
 import { NO_PR_IN_WORKSHOP } from '../../src/server/lifecycle.js';
 import { parseMekoMd } from '../../src/shared/mekomd.js';
 import { AGENTK_TOUR } from '../../src/shared/types.js';
-import { makeEnv, noMeko, readJsonl, waitFor, type ApiCall, type TestEnv } from '../helpers.js';
+import { fakeMekoQuestions, makeEnv, noMeko, readJsonl, useLocalMeko, waitFor, type ApiCall, type TestEnv } from '../helpers.js';
 
 const gitIn = (dir: string, ...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
 
@@ -185,6 +185,80 @@ describe('the AgentK tour (a bundled workshop; real session host + git, fake cla
     await env.core.sessions.action(replay.id, 'review-run');
     await waitFor(replayed, (rs) => rs.length === 2 && rs[1].state === 'done', 20000, 'Run code review');
     expect(prompts(env.core.sessions.get(replay.id).claudeSessionId).some((t) => t.includes("write the PR's title and description"))).toBe(false);
+  });
+
+  it("Level 2: offers Learn the project with the tour's brief, runs the learn step after the question session's turn, and gives the host the Meko line and Context Gaps links", async () => {
+    uuids();
+    const gaps = await fakeMekoQuestions();
+    try {
+      await useLocalMeko(env, gaps.url);
+      env.local.meko = { ...env.local.meko!, webUrl: 'http://meko.test/' };
+      await env.core.refreshMeko();
+      Object.assign(env.meko, { ensureConversation: async (_agent: string, _dp: string, key: string) => `conv-${key}` });
+      const r = await env.core.workshops.start(AGENTK_TOUR);
+      const host = env.core.sessions.get(r.sessionId);
+      await waitFor(() => env.core.sessions.get(host.id).status, (s) => s === 'idle', 10000, "host's first turn");
+      const events = () => prompts(host.claudeSessionId).filter((t) => t.startsWith('AgentK events:')).join('\n');
+
+      // The dialog opens with the tour's brief; the home offers it, though Level 1 may have saved a memory there (3 in the fake).
+      expect(env.core.workshops.list()[0].learn).toMatchObject({ about: expect.stringContaining('Snake'), months: 0 });
+      expect((await env.core.projects.home(r.projectId)).learnOffered).toBe(true);
+      // The host's script names the project's own datapack, which Learn fills.
+      expect(firstPrompt(host.id)).toContain(env.core.projects.get(r.projectId).datapacks[0].name);
+
+      // The question session: Meko can't answer one of its questions, which Context Gaps lists for its conversation.
+      const out = await env.core.tools.call(env.core.sessions.row(host.id), {
+        tool: 'start_sessions', input: { sessions: [{ name: 'Ask about the game', prompt: 'MEKO_SEARCH Answer the two questions.', stage: 'explore' }] },
+      });
+      expect((out.body as { text: string }).text).toContain('Ask about the game');
+      const ask = env.core.sessions.listForProject(r.projectId).find((s) => s.name === 'Ask about the game')!;
+      gaps.datapacks.set(DEDICATED_ID, [{ key: 'untested rules', query: 'Which rules have no test', askedBy: [`conv-${ask.claudeSessionId}`] }]);
+      // Its first turn ends: the host hears the Meko line and where the question is, and AgentK runs the learn step by itself, once.
+      const link = `http://meko.test/datapacks/${DEDICATED_ID}/gaps`;
+      await waitFor(events, (t) => t.includes("Ask about the game: AgentK's turn ended. Meko: 1 lookup"), 20000, 'the Meko line');
+      expect(events()).toContain(`1 question it asked Meko couldn't answer is on Meko's Context Gaps: ${link}`);
+      await waitFor(events, (t) => t.includes('AgentK is saving what Ask about the game learned to Meko'), 20000, 'the learn step');
+      const learns = () => all<{ trigger: string }>(env.core.db, 'SELECT trigger FROM meko_learns WHERE session_id = ?', ask.id);
+      await waitFor(learns, (l) => l.length === 1, 10000, 'learn row');
+      expect(learns()).toEqual([{ trigger: 'manual' }]);
+      await waitFor(() => prompts(ask.claudeSessionId).join('\n'), (t) => t.includes('Save what this session learned to Meko'), 10000, 'the learn prompt');
+      await waitFor(() => env.core.sessions.get(ask.id).status, (s) => s === 'idle', 10000, "the learn step's turn");
+      expect(learns()).toHaveLength(1);
+
+      // A learn step that taught the question: the host gets the link again, to see it under Taught.
+      env.core.sessions.event(ask.id, 'learned', "Saved 1 memory and corrected 0 in the demo; taught Meko 1 question it couldn't answer", { saves: 1, taught: 1 });
+      await waitFor(events, (t) => t.includes(`that question is now under Taught on Meko's Context Gaps: ${link}`), 20000, 'the taught link');
+
+      // "Ask again" has no learn step after its turn.
+      await env.core.tools.call(env.core.sessions.row(host.id), {
+        tool: 'start_sessions', input: { sessions: [{ name: 'Ask again', prompt: 'Answer again.', stage: 'explore' }] },
+      });
+      const again = env.core.sessions.listForProject(r.projectId).find((s) => s.name === 'Ask again')!;
+      // It replaces the level's earlier session: the host starts it on the user's go, and AgentK closes that one.
+      await waitFor(() => env.core.sessions.row(ask.id).desired, (d) => d === 'archived', 10000, '"Ask about the game" closed');
+      await waitFor(events, (t) => t.includes("Ask again: AgentK's turn ended"), 20000, "the second session's turn");
+      expect(all(env.core.db, 'SELECT 1 FROM meko_learns WHERE session_id = ?', again.id)).toEqual([]);
+
+      // Once a learn session ran on the datapack, the home stops offering it.
+      const learn = await env.core.sessions.create(r.projectId, { name: 'Learn the game', prompt: '', learn: { about: 'A game', where: '', months: 0 } });
+      expect((await env.core.projects.home(r.projectId)).learnOffered).toBe(false);
+
+      // The end of Level 2 archives every open session in the project but the host.
+      // A session still saving what it learned stays open at the level's end: Archive would cut the save short.
+      const running = env.core.learn.running.bind(env.core.learn);
+      const saving = vi.spyOn(env.core.learn, 'running').mockImplementation((id) => id === again.id || running(id));
+      await say(host.id, "SAY:Meko learned it.\\nThat's the end of Level 2.");
+      await waitFor(() => env.core.sessions.row(learn.id).desired, (d) => d === 'archived', 10000, 'the level closed');
+      expect(env.core.sessions.row(again.id).desired).toBe('running');
+      expect(env.core.sessions.row(host.id).desired).toBe('running');
+      saving.mockRestore();
+      // Once a learn session has run, the offer stays off while the datapack has memories, and comes back on an empty one.
+      expect((await env.core.projects.home(r.projectId)).learnOffered).toBe(false);
+      env.meko.describeDatapack = (async () => ({ memoryCount: 0, knowledgeCount: 0, grant: 'owner', ownerName: 'Test', ownerEmail: 'test@example.com' })) as typeof env.meko.describeDatapack;
+      expect((await env.core.projects.home(r.projectId)).learnOffered).toBe(true);
+    } finally {
+      await gaps.close();
+    }
   });
 
   it("deletes the datapacks it made when the demo can't be built, and opens no project", async () => {

@@ -19,6 +19,20 @@
   "codeReview": { "strategy": "sirius-1.0" },
   "reviewModels": { "claude": "sonnet" },
   "levels": [
-    { "id": "1-review", "title": "AgentK reviews a change, with Meko", "prompt": "levels/1-review.md", "needs": ["meko"], "review": { "branch": "demo/score-fix", "gotchasAfterFirst": true } }
+    { "id": "1-review", "title": "Improve code review quality with Meko", "prompt": "levels/1-review.md", "needs": ["meko"], "review": { "branch": "demo/score-fix", "gotchasAfterFirst": true } },
+    {
+      "id": "2-learn",
+      "title": "Save tokens and increase quality by continuously learning and improving the context in Meko",
+      "prompt": [
+        { "name": "Ask about the game", "file": "levels/2-ask.md", "learn": true },
+        { "name": "Ask again", "file": "levels/2-again.md" }
+      ],
+      "needs": ["meko"],
+      "learn": {
+        "about": "A small Snake game that runs in a web page, the demo of the AgentK tour. Its rules are plain functions in src/game.js, drawn by src/ui.js.",
+        "where": "README.md, AGENTS.md, src/game.js and src/ui.js.",
+        "months": 0
+      }
+    }
   ]
 }

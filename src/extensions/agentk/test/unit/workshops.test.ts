@@ -3,10 +3,10 @@ import { mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { PROMPT_MAX } from '../../src/server/actions.js';
-import { buildDemoRepo, demoMekoMd, freeFolder, levelPrompt, listBundles, readWorkshop, renderGuide } from '../../src/server/workshops.js';
+import { buildDemoRepo, demoMekoMd, freeFolder, levelPrompts, listBundles, readWorkshop, renderGuide } from '../../src/server/workshops.js';
 import { parseMekoMd } from '../../src/shared/mekomd.js';
 import { AGENTK_TOUR } from '../../src/shared/types.js';
 
@@ -35,7 +35,9 @@ describe('the bundled workshops', () => {
     expect(bundles.map((b) => b.id)).toContain(AGENTK_TOUR);
     for (const b of bundles) {
       expect(readWorkshop(b.id)).toEqual(b);
-      for (const l of b.levels) expect(levelPrompt(b, l.id).length, `${b.id} ${l.id}`).toBeLessThanOrEqual(PROMPT_MAX);
+      for (const l of b.levels) {
+        for (const p of levelPrompts(b, l.id)) expect(p.text.length, `${b.id} ${l.id} ${p.name ?? ''}`).toBeLessThanOrEqual(PROMPT_MAX);
+      }
       for (const br of b.repo.branches) expect(statSync(join(b.root, br.patch)).isFile()).toBe(true);
       if (b.gotchas) expect(statSync(join(b.root, b.gotchas.file)).isFile()).toBe(true);
       // The game opens from disk (file://), where browsers refuse module scripts and fetch; no dot-file
@@ -49,10 +51,48 @@ describe('the bundled workshops', () => {
 
   it("renders the host's script with every placeholder filled and each level's prompt in it", () => {
     for (const b of bundles) {
-      const text = renderGuide(b, { projectId: 'p1', repo: '/code/demo', meko: 'on', harness: 'Claude Code', gotchas: 'adlc/repo/demo/gotchas' });
+      const text = renderGuide(b, { projectId: 'p1', repo: '/code/demo', meko: 'on', harness: 'Claude Code', gotchas: 'adlc/repo/demo/gotchas', datapack: 'adlc/proj/demo/init' });
       expect(text).not.toMatch(/\{\{\w+\}\}/);
-      for (const l of b.levels) expect(text).toContain(levelPrompt(b, l.id));
+      for (const l of b.levels) {
+        for (const p of levelPrompts(b, l.id)) {
+          expect(text).toContain(p.text);
+          // A named session's prompt goes under its name, which the host starts it with.
+          if (p.name) expect(text).toContain(`#### Session "${p.name}"`);
+        }
+      }
     }
+  });
+
+  it("keeps Level 2's answer fixed: the demo's tests cover neither running into itself nor a full board", () => {
+    const b = readWorkshop(AGENTK_TOUR);
+    const tests = readFileSync(join(b.root, b.repo.dir, 'test', 'game.test.js'), 'utf8');
+    const names = [...tests.matchAll(/^test\('([^']+)'/gm)].map((m) => m[1]);
+    expect(names.length).toBeGreaterThan(0);
+    for (const n of names) expect(n).not.toMatch(/(runs?|running|hits?|hitting) into itself|hitting itself|own body|full board|no food|board is full/i);
+    // The rules are there: the tests just don't cover them.
+    const game = readFileSync(join(b.root, b.repo.dir, 'src', 'game.js'), 'utf8');
+    expect(game).toMatch(/none when the board is full/);
+    expect(game).toMatch(/the game ends on a wall or itself/);
+  });
+
+  it('reads a level prompt list and a learn brief, and refuses bad ones', () => {
+    const root = tmp();
+    const write = (levels: unknown[]) => {
+      mkdirSync(join(root, 'demo'), { recursive: true });
+      writeFileSync(join(root, 'demo', 'workshop.json'), JSON.stringify({
+        id: 'demo', title: 'Demo', summary: 's', guide: 'GUIDE.md',
+        repo: { dir: 'repo', folder: 'demo', author: { name: 'A', email: 'a@example.com' }, date: '2026-01-01T00:00:00Z', message: 'm', branches: [] },
+        levels,
+      }));
+      return () => readWorkshop('demo', root);
+    };
+    expect(write([{ id: 'a', title: 'A', prompt: 'levels/a.md' }])().levels[0]).toMatchObject({ prompts: [{ name: null, file: 'levels/a.md', learn: false }], learn: null });
+    expect(write([{ id: 'a', title: 'A', prompt: [{ name: 'One', file: 'one.md', learn: true }, { name: 'Two', file: 'two.md' }], learn: { about: 'A game', where: 'src', months: 0 } }])().levels[0])
+      .toMatchObject({ prompts: [{ name: 'One', learn: true }, { name: 'Two', learn: false }], learn: { about: 'A game', where: 'src', months: 0 } });
+    expect(write([{ id: 'a', title: 'A', prompt: [] }])).toThrow(/prompt is missing/);
+    expect(write([{ id: 'a', title: 'A', prompt: [{ name: 'One', file: 'one.md' }, { name: 'one', file: 'two.md' }] }])).toThrow(/share a name/);
+    expect(write([{ id: 'a', title: 'A', prompt: 'a.md', learn: { about: '', months: 0 } }])).toThrow(/learn brief/);
+    expect(write([{ id: 'a', title: 'A', prompt: 'a.md', learn: { about: 'x', months: 999 } }])).toThrow(/learn brief/);
   });
 
   it('builds the demo: main with the bug and MEKO.md, the teammate\'s fix on its branch, and no gotchas in the repo', async () => {

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { all, get, openDb, run, schemaVersion } from '../../src/server/db.js';
-import { classifyResult, mekoCallOf, mekoCalls, mekoStarts, mekoTool, parseMekoCalls, parseMekoResults, serverMekoTool, toolCounts } from '../../src/server/mekousage.js';
+import { aboutTokens, classifyResult, mekoCallOf, mekoCalls, mekoStarts, mekoTool, parseMekoCalls, parseMekoResults, serverMekoTool, sessionMekoLine, toolCounts } from '../../src/server/mekousage.js';
 import { searchSaving } from '../../src/server/mekosavings.js';
 import { recordPreload } from '../../src/server/recall.js';
 import { ingestSessionUsage, parseTurnMark, projectUsage, recordMekoCalls, usageOverview } from '../../src/server/usage.js';
@@ -233,6 +233,24 @@ describe('what Meko saved', () => {
     expect(o.byProject[0]).toMatchObject({ meko: pu.meko, cost: pu.cost });
     expect(o.cost).toEqual(pu.cost);
   });
+
+  it("gives a workshop's host one session's Meko line, with the saving the Usage page counts, and none without Meko", () => {
+    const { dir, db } = setup();
+    expect(sessionMekoLine(db, 's1')).toBe('');
+    expect(sessionMekoLine(db, 'gone')).toBe('');
+    const main = join(dir, 'c.jsonl');
+    const at = (s: number) => new Date(Date.UTC(2026, 8, 29, 12, 0, s)).toISOString();
+    writeFileSync(main,
+      call('m1', [['s-found', 'mcp__meko__memory_search'], ['s-empty', 'mcp__meko__context_search']], { at: at(0) }) +
+      result('s-found', found) + result('s-empty', wrapped({ results: [] })) + reply('m2', at(1)) + reply('m3', at(2)));
+    ingestSessionUsage(db, 's1', main);
+    const saved = projectUsage(db, 'p').meko.savings.tokens;
+    expect(saved).toBeGreaterThan(10_000);
+    expect(sessionMekoLine(db, 's1')).toBe(`Meko: 2 lookups, 1 found something, 1 found nothing; est. ≈ ${Math.round(saved / 1000)}k tokens saved`);
+  });
+
+  it.each([[0, '≈ 0'], [999, '≈ 999'], [1_250, '≈ 1.3k'], [24_400, '≈ 24k'], [999_499, '≈ 999k'], [999_500, '≈ 1M'], [1_240_000, '≈ 1.2M']])(
+    'says %i tokens as %s, never 1000k', (n, text) => expect(aboutTokens(n)).toBe(text));
 
   it("leaves a search with no context (Kiro's, OpenCode's) out of the savings, but counts it as found", () => {
     const { db } = setup();

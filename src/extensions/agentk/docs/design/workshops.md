@@ -3,8 +3,10 @@
 A workshop is a guided walk through AgentK, bundled with it: a script for a **host** session and the
 demo repo it's played in. The first is the AgentK tour (`agentk-101`), whose Level 1 has AgentK run
 its code review on a teammate's change, where Meko's gotchas catch a trap the code alone
-doesn't show. It needs no network and never touches GitHub. Levels 2 to 4 (learning a project, a
-feature with a design, sharing) come later; each is mostly new text in the bundle.
+doesn't show, and whose Level 2 has Learn the project fill the demo's datapack, a fresh session
+answer from it, and AgentK's learn step teach Meko what that session found it didn't know. It needs
+no network and never touches GitHub. Levels 3 and 4 (a feature with a design, sharing) come later;
+each is mostly new text in the bundle.
 
 ## The bundle
 
@@ -13,8 +15,8 @@ server as the session tools' skill is: `WORKSHOPS_SOURCE` in `src/server/worksho
 
 | File | What it holds |
 |---|---|
-| `workshop.json` | id, title, summary, the host's script (`guide`), the demo repo (`repo`: its files' folder, the folder name in the repos folder, the made-up author and date of main's one commit and its message, and each branch's patch), the gotchas (`file`, the gotchas datapack's `datapack` name and what's in it), the code review's settings (`codeReview`) and the model its review sessions start on for each agent (`reviewModels`), and the levels (id, title, prompt file, what each needs). `readWorkshop` checks it. |
-| `GUIDE.md` | The host's first prompt. Placeholders: `{{projectId}}`, `{{repo}}` (the demo repo's path), `{{meko}}` (`on` or `off`), `{{harness}}`, `{{gotchas}}` (the gotchas datapack's name, from the demo's MEKO.md, or `none`) and `{{levels}}` (each level's prompt, fenced, for the host to pass to `start_sessions` word for word). |
+| `workshop.json` | id, title, summary, the host's script (`guide`), the demo repo (`repo`: its files' folder, the folder name in the repos folder, the made-up author and date of main's one commit and its message, and each branch's patch), the gotchas (`file`, the gotchas datapack's `datapack` name and what's in it), the code review's settings (`codeReview`) and the model its review sessions start on for each agent (`reviewModels`), and the levels (id, title, what each needs, and `prompt`: one prompt file, or a list of `{ name, file, learn }` for a level with more than one session; Level 2's `learn` is Learn the project's brief). `readWorkshop` checks it, the brief as a learn session's (`checkLearn`). |
+| `GUIDE.md` | The host's first prompt. Placeholders: `{{projectId}}`, `{{repo}}` (the demo repo's path), `{{meko}}` (`on` or `off`), `{{harness}}`, `{{gotchas}}` (the gotchas datapack's name, from the demo's MEKO.md, or `none`), `{{datapack}}` (the project's dedicated datapack's name, or `none`) and `{{levels}}` (each level's prompts, fenced, a named one under `#### Session "<name>"`, for the host to pass to `start_sessions` word for word, with that name). |
 | `levels/*.md` | The prompt of each session the host starts, under the session tools' `PROMPT_MAX` (8,000 characters). |
 | `repo/` | The demo's files on main: a small Snake game with no build, plain scripts (no ES modules and no `fetch`, so `index.html` opens from disk, where browsers refuse both), rules in `src/game.js` (on a `Game` global, `module.exports` for `node --test`) apart from the drawing in `src/ui.js`, no dot-files (a `.gitignore` there would apply to AgentK's own repo). |
 | `branches/*.patch` | A teammate's change, as `git format-patch` wrote it, by a made-up author. |
@@ -22,8 +24,8 @@ server as the session tools' skill is: `WORKSHOPS_SOURCE` in `src/server/worksho
 
 `test/unit/workshops.test.ts` builds the demo in a temp folder and checks that the patch applies, the
 bug is on main and the teammate's fix on its branch, MEKO.md is on both, and the gotchas and dot-files
-aren't; that no game file is a module or fetches; and that GUIDE.md renders with every placeholder
-filled.
+aren't; that no game file is a module or fetches; that GUIDE.md renders with every placeholder
+filled; and that the demo's tests still leave Level 2's answer untested (below).
 
 ### Level 1's trap
 
@@ -44,6 +46,35 @@ first look it gives the go (`POST /api/workshops/:id/go`, a 409 when the user al
 waits for the review proper, so the gotchas are indexed. Its own reviews use the project's Sirius 1.0 and stop
 where the findings wait on the user. Run it whenever the patch or `gotchas.md` changes, and put its
 result in the PR. The tour itself shows the same contrast once: the first look, then the review.
+
+### Level 2: learning the project
+
+The project's dedicated datapack starts empty (the gotchas are in their own datapack). The host
+sends the user to the project home's **Learn the project**: in a workshop's project the dialog opens
+with the level's `learn` brief (`Workshop.learn` from `GET /api/workshops`, as the dialog's
+`initial.learn`), so the user only presses Start, and the home offers it while the datapack is
+empty, as everywhere, and also while no learn session has run on it (`ProjectHome.learnOffered`),
+since a Level 1 session may have saved a memory there. It reads "Meko hasn't learned this project
+yet." then, in place of "This datapack is empty.". The brief points Learn at `src/` and the docs, with no PRs.
+
+The host then starts "Ask about the game" (`levels/2-ask.md`), which asks how the game is run and
+tested (Learn covers it) and which rules have no test (it doesn't: the demo's tests leave running
+into itself and a full board untested, and the unit test keeps it so). The prompt tells Claude not
+to save to Meko itself: a fact Claude saves with `memory_add` is one the learn step leaves out, and
+only facts the learn step writes mark a Context Gaps question taught. Its prompt in `workshop.json`
+has `learn: true`, so when that session's first turn ends, not interrupted, AgentK runs the learn
+step on it by itself (`learnLevel`: the session found by its name, once per session), as Save
+learnings does. The step reads the open questions on Context Gaps once, as it starts: Meko isn't
+polled for them, so a question Meko lists only later stays open. "Ask again" (`levels/2-again.md`) then
+asks the second question alone, and answers it from Meko. The host starts it only on the user's go,
+once they've read the first answer, and AgentK archives "Ask about the game" as "Ask again" is
+created (`closeEarlier`: a level's prompts are in order, and a later one's session replaces the
+earlier ones still open, unless one is saving what it learned or AgentK is starting that step). The host's script has it wait
+for the user after each result, and ask whether they've read "Ask again" before it ends the level. A host whose learn step can't start is
+told why, and that Save learnings in the session's menu does the same.
+
+There's no measuring script: if Learn already saved the untested rules, the host says Meko knew,
+and skips the rest.
 
 ## Starting one
 
@@ -137,8 +168,9 @@ SessionKind, and no stage rules of its own.
   review** in the Code gate runs it again.
 - A level ends when the host ends a turn with "That's the end of Level N" as its reply's last line
   (its script's wrap-up says it last): the host's `Stop` carries the reply (`last_assistant_message`,
-  Claude Code), and `WorkshopService.hostSaid` archives that level's sessions (the project's tasks
-  on its review branch), so the user has nothing to archive. Archive, not Discard: the host's words
+  Claude Code), and `WorkshopService.hostSaid` archives that level's sessions (every open session
+  in the project but the host and code reviews, since one level runs at a time), so the user has
+  nothing to archive. One still saving what it learned stays open: Archive would cut the save short. Archive, not Discard: the host's words
   never throw work away, so a worktree with the level's uncommitted fixes is kept, as Archive keeps
   one, and the branch stays. A host on a harness whose Stop has no reply leaves them for the user.
 - A replay of a level (a new session on its branch once the last one closed) gets its review by
@@ -152,9 +184,18 @@ SessionKind, and no stage rules of its own.
 
 `GuideEvents` in `workshops.ts`. `SessionManager.event()`, where every activity event is recorded,
 hands each one to `noted()`; for a session in a workshop's project that isn't the host or a code
-review's own session, the kinds `created`, `stage`, `review`, `design`, `archived`, `discarded` and
-`exited` are queued for the project's open host, as "<session>: <text>". Each such session's turn
-end is queued too (`turnEnded`, after the diff's refresh), saying when the turn changed the diff.
+review's own session, the kinds `created`, `stage`, `review`, `design`, `archived`, `discarded`,
+`exited`, `learn-done` (a learn session's summary) and `learned` (a learn step's result) are queued
+for the project's open host, as "<session>: <text>". Each such session's turn end is queued too
+(`turnEnded`, after the diff's refresh), saying when the turn changed the diff, and, for a session
+that used Meko, its Meko line (`sessionMekoLine` in `mekousage.ts`: what AgentK passed it at its
+start, its lookups and what they found, and the estimated tokens saved, by the Usage page's formula):
+the host quotes the saving, which the UI shows only per project. With a Context Gaps list for the
+datapack (Meko on this computer), the line ends with how many of the session's own questions Meko
+couldn't answer and the full address of the datapack's Context Gaps page in Meko's web UI
+(`localMeko().meko.webUrl` and `mekoGapsPath`, whose tab sends a linked Meko Cloud's datapack on
+to its own page), and a `learned` event that taught a question adds the same address, where the
+question is now under Taught (the page opens on Open, and its filter isn't in the URL).
 The workshop's own notices (the pause for the user's go, a failed gotchas upload) go with `tell()`.
 The prompt is only the events' lines; GUIDE.md and the host's system line say what to do with them.
 The user doesn't see it: it goes as a hidden prompt (`SessionManager.submit`'s `hidden`, on the mod's

@@ -106,6 +106,8 @@ export interface Workshop {
   projectId: string | null;
   /** That project's open host session, or null. */
   hostId: string | null;
+  /** The brief its project home's Learn the project opens with (a level's `learn`), or null. */
+  learn: LearnBrief | null;
 }
 
 /** The AgentK tour: the workshop a fresh install starts by itself, and the empty state and palette offer. */
@@ -1846,6 +1848,12 @@ export interface ProjectHome {
    * away from doesn't count), so the home doesn't offer another for it while it's empty.
    */
   learnSessionOpen: boolean;
+  /**
+   * The home offers Learn the project, while no learn session is open on the dedicated datapack:
+   * while it's empty (no memories, no knowledge), and in a workshop's project also while no learn
+   * session has run on it at all, since a level's session may have saved a memory there first.
+   */
+  learnOffered: boolean;
   activity: ActivityItem[];
   usage: ProjectUsage;
   /** Open questions on Meko's Context Gaps, while AgentK uses the Meko on this computer and it answers (null otherwise). */

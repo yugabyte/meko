@@ -265,14 +265,16 @@ interface CallRow {
 const SEARCH_LIST = [...SEARCH_TOOLS].map((t) => `'${t}'`).join(', ');
 
 /**
- * Every Meko call, for one project or all of them, plus a `seed` row for each session that AgentK's
+ * Every Meko call, for one project, one session or all of them, plus a `seed` row for each session that AgentK's
  * search at start passed something to. A seed is credited like a search made by the session's first
  * response: its context (less the seed itself, which a search's context doesn't hold yet), model, and
  * the responses after it. A seed waits for that first response. A found search with no context
  * (Kiro's and OpenCode's: their agents don't say it) gets no `later`, so the savings leave it out.
  */
-export function mekoCalls(db: Db, projectId?: string): CallRow[] {
-  const where = projectId ? ' WHERE s.project_id = ?' : '';
+export function mekoCalls(db: Db, projectId?: string, sessionId?: string): CallRow[] {
+  const conds = [...(projectId ? ['s.project_id = ?'] : []), ...(sessionId ? ['s.id = ?'] : [])];
+  const args = [...(projectId ? [projectId] : []), ...(sessionId ? [sessionId] : [])];
+  const where = conds.length ? ` WHERE ${conds.join(' AND ')}` : '';
   return all<CallRow>(db,
     `SELECT s.project_id, c.session_id, c.tool, c.kind, c.outcome, c.result_chars, c.input_chars, c.model, c.context_tokens, c.at,
        CASE WHEN c.outcome = 'found' AND c.tool IN (${SEARCH_LIST}) AND c.context_tokens IS NOT NULL THEN
@@ -290,7 +292,7 @@ export function mekoCalls(db: Db, projectId?: string): CallRow[] {
          AND f.message_id = (SELECT m.message_id FROM usage_messages m WHERE m.session_id = p.session_id AND m.agent IS NULL
                              ORDER BY m.at, m.message_id LIMIT 1)
      ${where ? `${where} AND` : 'WHERE'} p.outcome = 'found'`,
-    ...(projectId ? [CARRY_TURNS, projectId, CARRY_TURNS, projectId] : [CARRY_TURNS, CARRY_TURNS]));
+    CARRY_TURNS, ...args, CARRY_TURNS, ...args);
 }
 
 const tokensOf = (chars: number | null) => Math.round((chars ?? 0) / 4);
@@ -591,4 +593,32 @@ export function mekoBy(rows: CallRow[], key: (r: CallRow) => string): Map<string
 /** The per-session counts shown in the project home's session table. */
 export function sessionMeko(u: MekoUsage | undefined): SessionUsage['meko'] {
   return { lookups: u?.lookups ?? 0, found: u?.found ?? 0, saves: u?.saves ?? 0 };
+}
+
+/** About <n> tokens, as a person reads it: "≈ 900", "≈ 24k", "≈ 1.2M". */
+export function aboutTokens(n: number): string {
+  const r = Math.max(0, Math.round(n));
+  // From 999,500 up, the thousands would round to 1000k.
+  if (r >= 999_500) return `≈ ${(r / 1e6).toFixed(1).replace(/\.0$/, '')}M`;
+  if (r >= 1e4) return `≈ ${Math.round(r / 1e3)}k`;
+  if (r >= 1e3) return `≈ ${(r / 1e3).toFixed(1).replace(/\.0$/, '')}k`;
+  return `≈ ${r}`;
+}
+
+/**
+ * What Meko did for one session so far, for a workshop's host (GuideEvents): AgentK's search at
+ * start, Claude's lookups and what they found, and the estimated tokens saved, by the formula the
+ * Usage page uses. Empty when the session made no Meko lookup and got nothing at start.
+ */
+export function sessionMekoLine(db: Db, sessionId: string): string {
+  const rows = mekoCalls(db, undefined, sessionId);
+  const u = summarizeMeko(rows);
+  const seeded = rows.some((r) => r.kind === 'seed');
+  if (!seeded && !u.lookups) return '';
+  const parts = [
+    ...(seeded ? ['AgentK passed it what Meko knew at its start'] : []),
+    ...(u.lookups ? [`${u.lookups} ${u.lookups === 1 ? 'lookup' : 'lookups'}, ${u.found} found something, ${u.empty} found nothing`] : []),
+    `est. ${aboutTokens(u.savings.tokens)} tokens saved`,
+  ];
+  return `Meko: ${parts.join('; ')}`;
 }
