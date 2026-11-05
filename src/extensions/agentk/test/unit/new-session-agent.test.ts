@@ -33,6 +33,20 @@ function agents(harnesses: HarnessStatus[], harness?: HarnessStatus['id']) {
   );
 }
 
+describe("the New session dialog's project line", () => {
+  const projectChoice = { projects: [project], onPick: () => undefined };
+  it.each([
+    ['names a project that isn\'t the one on screen', { elsewhere: true }, true],
+    ["is left out for the project on screen", { elsewhere: false }, false],
+    ['is left out when the Project picker shows', { elsewhere: true, projectChoice }, false],
+  ])('%s', (_, props, shown) => {
+    const html = renderToStaticMarkup(createElement(NewSessionDialog, {
+      project, ghLogin: null, harnesses: [status('claude')], onClose: () => undefined, onCreated: () => undefined, ...props,
+    }));
+    expect(html.includes('id="ns-in-project"') && html.includes('<strong>Demo</strong>')).toBe(shown);
+  });
+});
+
 describe("the New session dialog's Agent choice", () => {
   it.each([
     ['is left out while only Claude Code is available', [status('claude'), status('kiro', { available: false })], undefined, []],
