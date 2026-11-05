@@ -360,6 +360,78 @@ textarea.input {
   grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
   gap: 12px;
 }
+/* Every checkbox is a keycap like the busy dots' keys (.dots-key): off, it stands on its edge;
+   checked, it's pressed down and lit, with a tick, so it reads by shape as well as color. It's the
+   native input restyled, so labels, Space and screen readers work as before. Task lists in
+   rendered markdown (.prose) keep the browser's box, and forced colors bring it back everywhere.
+   The base rule's :where() gives it no specificity, so a context's own rule (.check input) places
+   the key. The state rules weigh only their pseudo-classes (up to two), more than .check input:
+   they set only the key's own look (border, fill, edge, transform), which no context rule sets.
+   Hover and press apply to an unchecked key only, so neither undoes the checked look. */
+:where(input[type='checkbox']:not(.prose *)) {
+  appearance: none;
+  position: relative;
+  flex: none;
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--surface);
+  box-shadow: 0 2px 0 color-mix(in srgb, var(--muted) 55%, transparent);
+  cursor: pointer;
+}
+:where(input[type='checkbox']:not(.prose *))::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  background: var(--accent-ink);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 10'%3E%3Cpath d='M1.5 5.3l3 3L10.5 1.7' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  opacity: 0;
+}
+:where(input[type='checkbox']:not(.prose *)):hover:not(:disabled, :checked) {
+  border-color: var(--muted);
+}
+:where(input[type='checkbox']:not(.prose *)):active:not(:disabled, :checked) {
+  transform: translateY(1px);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--muted) 55%, transparent);
+}
+:where(input[type='checkbox']:not(.prose *)):checked {
+  background: var(--accent);
+  border-color: var(--accent);
+  transform: translateY(1.5px);
+  box-shadow: 0 0.5px 0 color-mix(in srgb, var(--accent) 55%, black);
+}
+:where(input[type='checkbox']:not(.prose *)):checked::after {
+  opacity: 1;
+}
+:where(input[type='checkbox']:not(.prose *)):disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+@media (prefers-reduced-motion: no-preference) {
+  :where(input[type='checkbox']:not(.prose *)) {
+    transition:
+      transform 90ms,
+      box-shadow 90ms,
+      background-color 90ms,
+      border-color 90ms;
+  }
+}
+/* Each rule that moves the key is reset here with its own selector, so it's as specific and wins. */
+@media (forced-colors: active) {
+  :where(input[type='checkbox']:not(.prose *)) {
+    appearance: auto;
+  }
+  :where(input[type='checkbox']:not(.prose *)):active:not(:disabled, :checked),
+  :where(input[type='checkbox']:not(.prose *)):checked {
+    transform: none;
+  }
+  :where(input[type='checkbox']:not(.prose *))::after {
+    content: none;
+  }
+}
 .check {
   display: flex;
   gap: 8px;
@@ -367,7 +439,7 @@ textarea.input {
   cursor: pointer;
 }
 .check input {
-  margin-top: 3px;
+  margin-top: 1px;
 }
 .seg {
   display: inline-flex;
@@ -2703,6 +2775,10 @@ textarea.input {
   accent-color: var(--accent);
   flex: none;
 }
+/* The keycap is taller than the radios beside it. */
+.dq-opt input[type='checkbox'] {
+  margin-top: 1px;
+}
 .dq-opt-text {
   display: flex;
   flex-direction: column;
@@ -2797,7 +2873,8 @@ textarea.input {
     min-height: 40px;
     align-items: center;
   }
-  .dq-opt input {
+  .dq-opt input,
+  .dq-opt input[type='checkbox'] {
     margin-top: 0;
     width: 18px;
     height: 18px;
