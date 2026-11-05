@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -166,17 +167,20 @@ func TestExtensionActions(t *testing.T) {
 	}
 }
 
-// A failed Install or Start leaves the card once the extension is installed or running anyway, as
-// after meko extension install from a terminal; a failure nothing has overtaken stays.
+// A failed Install or Start leaves the card once the extension is installed and running anyway, as
+// after meko extension install from a terminal. One that's registered but doesn't answer keeps it:
+// an install fails after registering when the extension never answers on its socket.
 func TestFailedJobOvertaken(t *testing.T) {
 	var mu sync.Mutex
 	names := []string{}
-	failInstall := func(_ context.Context, _, action string, _ io.Writer) error {
+	register := func(n ...string) { mu.Lock(); defer mu.Unlock(); names = n }
+	fail := func(_ context.Context, _, action string, _ io.Writer) error {
 		return errors.New("me_koder " + action + " failed: exit status 1")
 	}
-	base, _ := startWeb(t, config.AccessLocal, filepath.Join(shortTemp(t), "gone.sock"),
+	sock := filepath.Join(shortTemp(t), "agentk.sock")
+	base, _ := startWeb(t, config.AccessLocal, sock,
 		func(w *Web) {
-			w.Run = failInstall
+			w.Run = fail
 			w.Installed = func() []string { mu.Lock(); defer mu.Unlock(); return names }
 		})
 	if code, _ := post(t, base+"/api/v1/extensions/agentk/install", nil); code != http.StatusAccepted {
@@ -185,19 +189,29 @@ func TestFailedJobOvertaken(t *testing.T) {
 	if r := waitJob(t, base); r.Job.State != JobFailed || r.Installed {
 		t.Fatalf("failed install: %+v", r)
 	}
-	mu.Lock()
-	names = []string{"agentk"} // meko extension install, from a terminal
-	mu.Unlock()
-	if r := agentkRow(t, base); !r.Installed || r.Job != nil {
+
+	// Registered, but not answering: the install's own failure, so it stays.
+	register("agentk")
+	if r := agentkRow(t, base); !r.Installed || r.Available || r.Job == nil || r.Job.State != JobFailed {
+		t.Errorf("registered, not answering: %+v", r)
+	}
+
+	// Installed from a terminal and running.
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := agentkRow(t, base); !r.Installed || !r.Available || r.Job != nil {
 		t.Errorf("installed from a terminal: %+v", r)
 	}
 
-	// A failed start of one that still isn't running stays.
+	// A failed start of one that isn't running stays.
+	_ = ln.Close()
 	if code, _ := post(t, base+"/api/v1/extensions/agentk/start", nil); code != http.StatusAccepted {
 		t.Fatalf("start: %d", code)
 	}
-	if r := waitJob(t, base); r.Job.State != JobFailed || r.Job.Action != "start" {
-		t.Errorf("failed start: %+v", r.Job)
+	if r := waitJob(t, base); r.Available || r.Job.State != JobFailed || r.Job.Action != "start" {
+		t.Errorf("failed start: %+v", r)
 	}
 }
 
