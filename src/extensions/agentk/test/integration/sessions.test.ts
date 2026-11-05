@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { makeEnv, pinFiles, pinnedDatapack, readJsonl, sessionPinFile, waitFor, type TestEnv } from '../helpers.js';
+import { TEST_MEKO_URL, makeEnv, pinFiles, pinnedDatapack, readJsonl, sessionPinFile, waitFor, type TestEnv } from '../helpers.js';
 import { AGENTK_AGENT_ID, legacyAgentId, sessionAgentId } from '../../src/server/meko.js';
 import { PIN_KEEP_MS } from '../../src/server/projects.js';
 import { postHook } from '../hook-client.js';
@@ -148,7 +148,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     expect(captures[0]).toMatchObject({
       args: ['checkpoint'],
       input: { transcript_path: join(env.fakeDir, `${s.claudeSessionId}.jsonl`) },
-      env: { MEKO_MCP_URL: 'https://mcp.mekodata.ai/mcp', MEKO_API_KEY: 'test-key' },
+      env: { MEKO_MCP_URL: TEST_MEKO_URL, MEKO_API_KEY: 'test-key' },
     });
     const capturedBeforeArchive = captureLog(env).length;
     // Capture is on: sessions keep the Meko plugin.
@@ -745,7 +745,7 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
     { what: 'months not whole', learn: { about: 'x', where: '', months: 1.5 }, error: /whole number/ },
     { what: 'a review', learn: { about: 'x', where: '', months: 1 }, kind: 'review-pr', error: /leave out the PR/ },
     { what: 'no dedicated datapack', learn: { about: 'x', where: '', months: 1 }, noDatapack: true, error: /has none/ },
-    { what: 'Meko off', learn: { about: 'x', where: '', months: 1 }, mekoOff: true, error: /there's no Meko/ },
+    { what: 'Meko off', learn: { about: 'x', where: '', months: 1 }, mekoOff: true, error: /Meko isn't running on this computer/ },
   ] as const)('refuses a learn session with $what', async (c) => {
     const p = 'noDatapack' in c
       ? await env.core.projects.create({ repoPath: env.repo, name: 'Bare', datapack: { mode: 'none' } })

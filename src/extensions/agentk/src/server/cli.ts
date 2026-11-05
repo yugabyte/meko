@@ -154,7 +154,7 @@ async function startServer(paths: Paths, cfg: Config, v: string, lock: InstanceL
   const db = openDb(dbFile);
   for (const f of pruneSnapshots(paths, dbFile)) log.info(`removed ${f}, a database copy of a version no longer installed`);
   let core: Core | null = null;
-  const meko = new MekoClient(() => resolveMeko(core?.config ?? cfg), v);
+  const meko = new MekoClient(() => resolveMeko(), v);
   const mekoCaptureScript = cfg.meko.captureTranscripts ? findMekoCaptureScript() : null;
   if (!cfg.meko.captureTranscripts) log.info('session transcripts are not sent to Meko (meko.capture_transcripts is off)');
   else if (!mekoCaptureScript) log.warn('the meko-agent-skills plugin was not found; session transcripts will not be captured to Meko');
@@ -472,8 +472,7 @@ Usage: me_koder <command>
 
   serve         Run the server (the background service runs this for you)
   install       Configure this host, set up Meko for Claude Code if needed (asks first; --install-deps
-                to skip asking; AgentK uses Meko's Meko Cloud link, else the Meko running on this
-                computer; --meko-key, with --meko-url for another server, links one in Meko), and install
+                to skip asking; AgentK uses the Meko running on this computer), and install
                 the background services (systemd or launchd). Browsers reach AgentK through the Meko on
                 this computer, at /ext/agentk/
   uninstall     Stop and remove the background services (--purge also deletes AgentK's home, in Meko's

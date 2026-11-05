@@ -32,16 +32,14 @@ describe('MekoApi', () => {
     expect(e).toMatchObject({ status: 409, code: 'CONFLICT', message: 'bob@example.com is already a member' });
   });
 
-  it('says when Meko answers 404, so Meko can be read again, and only then', async () => {
-    const f = fakeMekoApi();
-    let told = 0;
-    f.api.onNotFound = () => told++;
-    f.handle(() => ({ status: 409, body: { error: { code: 'CONFLICT', message: 'taken' } } }));
-    await expect(f.api.incomingShares()).rejects.toMatchObject({ status: 409 });
-    expect(told).toBe(0);
-    f.handle(() => ({ status: 404, body: { error: { code: 'NOT_FOUND', message: 'Not Found' } } }));
-    await expect(f.api.incomingShares()).rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' });
-    expect(told).toBe(1);
+  it("says there's no Meko, with no request, while none runs on this computer", async () => {
+    const calls: string[] = [];
+    const none = new MekoApi(() => ({ baseUrl: null, apiKey: '' }), (async (u: string | URL | Request) => {
+      calls.push(String(u));
+      return new Response(null, { status: 204 });
+    }) as typeof fetch);
+    await expect(none.incomingShares()).rejects.toMatchObject({ code: 'NO_MEKO', message: "Meko isn't running on this computer. Start it with meko start." });
+    expect(calls).toEqual([]);
   });
 
   it('passes on a refused key as an error', async () => {
@@ -83,20 +81,16 @@ describe('MekoApi', () => {
     await expect(f.api.requestUpload('dp', 'a.md', Buffer.from('a'))).rejects.toMatchObject({ code: 'BAD_REPLY' });
   });
 
-  it("posts only over https, unless Meko's own API is on http or the link is on its origin, and words the storage's refusal without its URL", async () => {
+  it("posts only over https, or over http to Meko's own origin, and words the storage's refusal without its URL", async () => {
     const up = (url: string) => ({ url, fields: [['policy', 'p'] as [string, string]], key: 'k', alreadyUploaded: false });
     const f = fakeMekoApi();
     await expect(f.api.postPresigned(up('http://minio.test/b?X-Amz-Signature=s'), 'a.md', Buffer.from('a'))).rejects.toMatchObject({ code: 'BAD_REPLY' });
     await expect(f.api.postPresigned(up('not a url'), 'a.md', Buffer.from('a'))).rejects.toMatchObject({ code: 'BAD_REPLY' });
     expect(f.calls).toEqual([]);
-    const local = fakeMekoApi('http://localhost:8080/api/v1');
-    local.handle(() => ({ status: 204 }));
-    await local.api.postPresigned(up('http://minio.test/b'), 'a.md', Buffer.from('a'));
-    expect(local.calls.map((c) => c.path)).toEqual(['http://minio.test/b']);
-    // The Meko on this computer is on http while it reaches Meko Cloud, but Meko Cloud's storage isn't;
-    // a link on that Meko's own origin is for one of its own datapacks.
+    // The Meko on this computer is on http, but the storage it hands out for Meko Cloud's datapacks
+    // isn't; a link on that Meko's own origin is for one of its own datapacks.
     const calls: string[] = [];
-    const through = new MekoApi(() => ({ baseUrl: 'http://127.0.0.1:7778/api/v1', apiKey: 'k', storageHttp: false }),
+    const through = new MekoApi(() => ({ baseUrl: 'http://127.0.0.1:7778/api/v1', apiKey: 'k' }),
       (async (u: string | URL | Request) => {
         calls.push(String(u));
         return new Response(null, { status: 204 });
@@ -137,11 +131,6 @@ describe('MekoApi', () => {
     f.handle(() => ok({ share_link: { status: 'active', token: 't', grant: 'maintainer' } }));
     await expect(f.api.shareLink('d')).rejects.toMatchObject({ code: 'BAD_REPLY' });
     await expect(f.api.redeemShareLink('t')).rejects.toMatchObject({ code: 'BAD_REPLY' });
-  });
-
-  it('says so when asked to share with no API URL', async () => {
-    const api = new MekoApi(() => ({ baseUrl: null, apiKey: 'k' }));
-    await expect(api.share('d', 'a@b.c', 'viewer')).rejects.toThrow(/API URL/);
   });
 
   it('reports an unreachable Meko and a timeout', async () => {

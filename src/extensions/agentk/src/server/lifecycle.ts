@@ -1433,7 +1433,7 @@ export class Lifecycle {
     });
     const conv = await Promise.race([lookup, late]).finally(() => clearTimeout(timer));
     const design = this.prDesignRef(row);
-    return mekoPrFooter(mekoHost(this.core.config), dp, conv, design && designLine(design));
+    return mekoPrFooter(mekoHost(), dp, conv, design && designLine(design));
   }
 
   /**

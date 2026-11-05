@@ -595,7 +595,7 @@ export class SessionManager {
     }
     if (learn) {
       if (kind === 'review-pr' || req.pr != null) throw new HttpError(400, "A learn session learns the project's own repo: leave out the PR.");
-      if (!this.core.mekoStatus.configured) throw new HttpError(400, "A learn session saves what it learns to Meko, and there's no Meko. Start Meko on this computer (meko start), or link Meko Cloud in Meko's web UI (Settings › Meko Cloud), first.");
+      if (!this.core.mekoStatus.configured) throw new HttpError(400, "A learn session saves what it learns to Meko, and Meko isn't running on this computer. Start it with meko start first.");
       // Only that there is one: whether we can still write to it is Meko's to say, at each save, as for every session's saves.
       if (!dedicatedDatapack(this.db, projectId)) {
         throw new HttpError(400, "A learn session saves what it learns to the project's dedicated datapack, and this project has none. Add one on the project's home first.");

@@ -294,7 +294,7 @@ export class MekoClient {
     return id;
   }
 
-  /** Cheap authenticated round trip to Meko: checks a URL and key (the installer, under a Meko too old to keep the link). */
+  /** Cheap authenticated round trip to Meko: checks its URL and key. */
   async check(): Promise<void> {
     await this.request(true, (c) => c.ping({ timeout: CHECK_TIMEOUT_MS }));
   }
@@ -487,19 +487,6 @@ function pickScore(it: Json): number | null {
     if (typeof it[k] === 'number') return it[k] as number;
   }
   return null;
-}
-
-/** Standalone credential check for the installer. */
-export async function checkMeko(url: string, apiKey: string): Promise<{ ok: true } | { ok: false; error: string }> {
-  const c = new MekoClient(() => ({ url, apiKey }));
-  try {
-    await c.check();
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
-  } finally {
-    await c.close();
-  }
 }
 
 /** What trying a token on a Meko server found: the datapacks its account sees, or why not. */

@@ -474,14 +474,9 @@ func TestCloudDatapacks(t *testing.T) {
 		t.Fatalf("REST's create didn't make it in Cloud:\n%s", out)
 	}
 	// REST with the client token, as extensions call it: /api/v1 serves this Meko's datapacks and
-	// passes Meko Cloud's on to it, and /api/v1/cloud is gone. AgentK's knowledge upload works on
-	// each side: the upload link comes from the Meko that has the datapack, and its status reads
-	// completed there.
+	// passes Meko Cloud's on to it. AgentK's knowledge upload works on each side: the upload link
+	// comes from the Meko that has the datapack, and its status reads completed there.
 	tok := strings.TrimSpace(clientTok)
-	base := "http://127.0.0.1:" + port + "/api/v1"
-	if status, body := restAs(t, tok, http.MethodGet, base+"/cloud/datapacks", nil); status != 404 {
-		t.Fatalf("/api/v1/cloud/datapacks: %d %s", status, body)
-	}
 	for _, side := range []struct{ name, id, port string }{{"this Meko", dpHere, port}, {"Cloud", dp, cloudPort}} {
 		kb := "http://127.0.0.1:" + port + "/api/v1/datapacks/" + side.id + "/knowledge-bases"
 		file := []byte("# Releases\n\nReleases on " + side.name + " are cut on Mondays.\n")

@@ -6,7 +6,7 @@ import { all, get, kvGet } from '../../src/server/db.js';
 import { NO_PR_IN_WORKSHOP } from '../../src/server/lifecycle.js';
 import { parseMekoMd } from '../../src/shared/mekomd.js';
 import { AGENTK_TOUR } from '../../src/shared/types.js';
-import { makeEnv, readJsonl, waitFor, type ApiCall, type TestEnv } from '../helpers.js';
+import { makeEnv, noMeko, readJsonl, waitFor, type ApiCall, type TestEnv } from '../helpers.js';
 
 const gitIn = (dir: string, ...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
 
@@ -200,9 +200,7 @@ describe('the AgentK tour (a bundled workshop; real session host + git, fake cla
   });
 
   it("starts without Meko: no datapacks and no MEKO.md, and the host's script says Meko is off", async () => {
-    env.core.updateConfig((c) => {
-      c.meko.apiKey = '';
-    });
+    await noMeko(env);
     const r = await env.core.workshops.start(AGENTK_TOUR);
     const p = env.core.projects.get(r.projectId);
     expect(p.datapacks).toEqual([]);

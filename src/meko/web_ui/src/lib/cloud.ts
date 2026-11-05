@@ -4,6 +4,7 @@
 
 import { useEffect } from "react";
 import { api } from "./api";
+import type { Route } from "./route";
 import type { Datapack } from "./types";
 import { useLoad, type Loaded } from "./useLoad";
 
@@ -47,6 +48,18 @@ export function rowLink(d: Datapack): RowLink {
   if (d.web_url === undefined || d.web_url?.startsWith("/")) return { kind: "here" };
   if (d.web_url === null || d.web_url === "") return { kind: "none" };
   return { kind: "web", url: d.web_url };
+}
+
+// Where one of this UI's datapack addresses goes when the listing opens that datapack in Meko Cloud's
+// web app: extensions link every datapack at /datapacks/<id>, whichever side has it. Its Context Gaps
+// go to this UI's page for a Meko Cloud datapack's (/gaps/<id>), any other tab to the row's web_url.
+// Null while it opens here, or the listing doesn't have it (yet).
+export function sentOn(route: Route, rows: Datapack[] | undefined): { route: Route } | { url: string } | null {
+  if (route.view || !route.datapackId) return null;
+  const d = rows?.find((r) => r.datapack_id === route.datapackId);
+  const link = d ? rowLink(d) : null;
+  if (link?.kind !== "web") return null;
+  return route.tab === "gaps" ? { route: { tab: "gaps", view: "cloud-gaps", datapackId: route.datapackId } } : { url: link.url };
 }
 
 // Whether a datapack's name holds the sidebar's Find a datapack query, ignoring case; an empty

@@ -80,7 +80,7 @@ func (l Link) EffectiveAPIURL() string {
 }
 
 // WebURL is the web app that goes with an MCP URL: Meko Cloud's for Meko Cloud, else "" (another
-// server's web app can't be known). An override always wins. AgentK's mekoWebUrl does the same.
+// server's web app can't be known). An override always wins.
 func WebURL(mcpURL, override string) string {
 	if o := strings.TrimRight(strings.TrimSpace(override), "/"); o != "" {
 		return o

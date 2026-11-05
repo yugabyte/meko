@@ -98,3 +98,23 @@ test("linking or unlinking Meko Cloud loads the list again", async () => {
   await act(async () => notifyCloudChanged());
   expect(urls.filter((u) => u === "/api/v1/datapacks").length).toBe(before + 1);
 });
+
+test("a Meko Cloud datapack's address here goes on to Meko Cloud's web app, as extensions link it", async () => {
+  serve(() => Response.json({ data: BOTH, error: null }));
+  const replace = vi.spyOn(window.location, "replace").mockImplementation(() => {});
+  await open(`/datapacks/${CLOUD}`);
+  expect(replace).toHaveBeenCalledWith(`https://cloud.example.com/datapacks/${CLOUD}`);
+  replace.mockRestore();
+});
+
+test("a Meko Cloud datapack's Context Gaps address goes to this UI's page for them", async () => {
+  serve(() => Response.json({ data: BOTH, error: null }));
+  await open(`/datapacks/${CLOUD}/gaps`);
+  expect(window.location.pathname).toBe(`/gaps/${CLOUD}`);
+});
+
+test("this Meko's own datapack stays here", async () => {
+  serve(() => Response.json({ data: BOTH, error: null }));
+  await open(`/datapacks/${HERE}/gaps`);
+  expect(window.location.pathname).toBe(`/datapacks/${HERE}/gaps`);
+});

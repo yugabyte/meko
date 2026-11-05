@@ -16,30 +16,15 @@ export interface LocalMeko {
 }
 
 /**
- * The Meko Cloud link Meko keeps for its extensions (`cloud` in `meko token --json`, Meko's
- * docs/cloud.md). `set`: Meko has had a link, linked or since unlinked; until then AgentK may hand
- * it a key of its own, once.
- *
- * Meko keeps the key and reaches Meko Cloud for its extensions itself (its `/mcp`, and its REST API
- * under `/api/v1`, or `/api/v1/cloud` before it routed datapacks by id): its `cloud` says only whether
- * it's linked (`linked`, set only from such a Meko), the web app and whether it routes by id
- * (`routed`), and `url`, `apiKey` and `apiUrl` are ''. An older Meko handed out the key: linked, its
- * `url` and `apiKey` are set, and AgentK calls Meko Cloud with them; unlinked, they're ''.
+ * What AgentK needs of the Meko Cloud link Meko keeps (`cloud` in `meko token --json`, Meko's
+ * docs/cloud.md). Meko keeps the key and passes calls on to Meko Cloud itself, so AgentK doesn't
+ * know or ask whether it's linked. `account` names the account behind it without its key ('' while
+ * unlinked): a new one is another account, whose invites aren't AgentK's. `webUrl` is the web app
+ * Meko names for share links ('' when none).
  */
 export interface MekoCloudLink {
-  set: boolean;
-  url: string;
-  apiKey: string;
+  account: string;
   webUrl: string;
-  apiUrl: string;
-  linked?: boolean;
-  /** The linked account, named without its key (Meko's `account`): a new key is another account. */
-  account?: string;
-  /**
-   * Meko's `/api/v1` serves its own datapacks and sends any other id to Meko Cloud, and it has no
-   * `/api/v1/cloud` (Meko's `datapack_routing`).
-   */
-  routed?: true;
 }
 
 /**
@@ -57,20 +42,15 @@ export interface LocalMekoProbe {
 
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
 
-/** Meko's `cloud`, or undefined when it isn't one (an older Meko has none) or Meko couldn't read it. */
+/**
+ * Meko's `cloud`, or undefined when it isn't one (an older Meko has none) or Meko couldn't read it. An
+ * older Meko's link, which handed out its key, has no `linked`, and reads as no account.
+ */
 function cloudOf(v: unknown): MekoCloudLink | undefined {
   if (!v || typeof v !== 'object' || typeof (v as { set?: unknown }).set !== 'boolean' || (v as { error?: unknown }).error) return undefined;
   const c = v as Record<string, unknown>;
-  if (typeof c.linked === 'boolean' && !('api_key' in c)) {
-    const webUrl = c.linked && /^https?:\/\//.test(str(c.web_url)) ? str(c.web_url) : '';
-    return {
-      set: c.set as boolean, url: '', apiKey: '', webUrl, apiUrl: '', linked: c.linked, account: c.linked ? str(c.account) : '',
-      ...(c.datapack_routing === true ? { routed: true as const } : {}),
-    };
-  }
-  const url = /^https?:\/\//.test(str(c.url)) ? str(c.url) : '';
-  const apiKey = url ? str(c.api_key) : '';
-  return { set: c.set as boolean, url: apiKey ? url : '', apiKey, webUrl: apiKey ? str(c.web_url) : '', apiUrl: apiKey ? str(c.api_url) : '' };
+  const linked = c.linked === true;
+  return { account: linked ? str(c.account) : '', webUrl: linked && /^https?:\/\//.test(str(c.web_url)) ? str(c.web_url) : '' };
 }
 
 const TIMEOUT_MS = 5000;
@@ -133,53 +113,18 @@ export function originOf(url: string): string | null {
 }
 
 /**
- * Meko is linked to Meko Cloud and reaches it for AgentK itself: through its `/mcp`, and its REST
- * API (`MekoCloudLink`). False under an older Meko, which handed out the key.
+ * Meko's REST API on the Meko on this computer: `/api/v1` on its MCP URL's origin, its API listener.
+ * It serves its datapacks and passes the rest on to Meko Cloud while it's linked. Null with no Meko.
  */
-export function linkedThroughMeko(cloud: MekoCloudLink | undefined): boolean {
-  return cloud?.linked === true;
-}
-
-/**
- * A Meko Cloud API key (`mko_tkn_…`). The local Meko's client token is hex, so it's never one.
- */
-export function isMekoCloudKey(key: string): boolean {
-  return key.startsWith('mko_tkn_');
-}
-
-/**
- * A key and URL are a copy of the local Meko's: its token, or a key for its URL's origin. Meko's
- * setup for Claude Code writes the token into Claude Code's settings, older installs stored it in
- * config.toml, and `meko extension install` passes both. A copy goes stale when Meko moves to
- * another port or gets a new token, so AgentK uses the live pair instead (`resolveMekoWithSource`),
- * and never hands a copy to Meko as a Meko Cloud key. A Meko Cloud key is never a copy, even on the
- * local Meko's URL: a setup run against the local Meko without a key leaves MEKO_MCP_URL there next
- * to the Meko Cloud key the user had (`ownMekoKey` gives it Meko Cloud's URL).
- */
-export function isLocalMeko(local: LocalMeko | null, url: string, key: string): boolean {
-  if (!local || !key) return false;
-  if (key === local.token) return true;
-  return !isMekoCloudKey(key) && originOf(url) !== null && originOf(url) === originOf(local.url);
+export function mekoApiBase(local: LocalMeko | null): string | null {
+  const origin = local ? originOf(local.url) : null;
+  return origin ? `${origin}/api/v1` : null;
 }
 
 let last: LocalMekoProbe = { state: 'none', meko: null };
-let handedOver = false;
-
-/**
- * AgentK has handed Meko its own Meko Cloud key (mekohandover.ts, kept in state.db's kv): from then
- * on AgentK's own sources are never used, even while `meko` can't be asked.
- */
-export function mekoLinkHandedOver(): boolean {
-  return handedOver;
-}
-
-export function setMekoLinkHandedOver(v: boolean): void {
-  handedOver = v;
-}
-
 /**
  * The Meko on this computer and its Meko Cloud link, as last read by a `LocalMekoReader`. Config's
- * key resolution reads both (`resolveMekoWithSource`); it's one per process, like the environment
+ * resolution reads both (`resolveMeko`); it's one per process, like the environment
  * that resolution also reads.
  */
 export function localMeko(): LocalMekoProbe {

@@ -10,14 +10,9 @@ the most recently used first (see [Token usage](token-usage.md)). Its chart stac
 stats.
 
 **Share** sits in the project's header: it shares the whole project, through its dedicated
-datapack, and opens the Share dialog. While AgentK can't share (`MekoStatus.sharing` false) it
-opens a dialog instead (`MekoLinkDialog` with `sharing`). On the Meko on this computer, which has no
-share routes, that's **Share through Meko Cloud**, with **Sign up for Meko Cloud ↗** (Meko Cloud's sign-up
-in a new tab, as Meko's own Invite points to Meko Cloud) and **Link Meko Cloud** (Meko's Meko Cloud
-page). On another Meko whose API URL isn't known (a self-hosted Meko with no web app or API URL set),
-that's **Set Meko's web app URL**, which links to the same page. This check comes before the
-datapack's, since a datapack added there couldn't be shared either. With no Meko it says how to set
-one up first (**Set up Meko**, which links to Meko's Meko Cloud page), and for a project without a
+datapack, and opens the Share dialog whenever there's a Meko; a Meko that doesn't share (one not
+linked to Meko Cloud) says so in the dialog, in its own words. With no Meko it says how to set
+one up first (**Set up Meko**, which says what's wrong with the Meko on this computer), and for a project without a
 dedicated datapack it offers **Add a dedicated datapack**. Meko itself refuses a share from someone who isn't the owner or a
 maintainer. See [Sharing a project](sharing.md).
 

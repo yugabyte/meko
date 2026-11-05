@@ -280,11 +280,9 @@ judges searches itself. Earlier versions kept their own list, from the agents' t
 `state.db`; migration 45 dropped it (its marks, and each search's query and how poor its answer
 was): Meko's list starts empty.
 
-AgentK talks to it while its Meko calls go to the Meko on this computer (`MekoQuestions` in
-`mekoquestions.ts`, on Meko's API listener with the client token, as `mekoagents.ts` reads the
-agents). That includes a linked Meko Cloud's datapacks: Meko passes every `/mcp` call on to Meko
-Cloud and keeps their questions too, and its list says so (`location: "cloud"`). Not with an older
-Meko that handed out Meko Cloud's key, whose agents' searches go to Meko Cloud directly. Anything
+AgentK asks the Meko on this computer (`MekoQuestions` in `mekoquestions.ts`, on its `/api/v1` with
+the client token, as `mekoagents.ts` reads the agents). That includes a linked Meko Cloud's
+datapacks: Meko passes every `/mcp` call on to Meko Cloud and keeps their questions too. Anything
 Meko doesn't answer, or a Meko too old to keep questions (a 404), is no list; nothing that needs it
 fails.
 

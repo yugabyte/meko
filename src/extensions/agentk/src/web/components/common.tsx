@@ -321,7 +321,7 @@ export function DatapackName({
 }: {
   id: string;
   name: string;
-  meko: Pick<MekoStatus, 'webUrl' | 'source'>;
+  meko: Pick<MekoStatus, 'configured'>;
   className?: string;
 }) {
   const href = mekoDatapackUrl(meko, id);
