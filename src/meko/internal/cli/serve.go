@@ -238,10 +238,15 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	}
 	sup := supervisor.New(log)
 	noMemoryEngine := startMemoryEngine(sup, l, cfg, internalToken, log)
+	var cloud *cloudlink.Service // set below, before anything serves
 	svc := memory.New(st, memoryengine.NewClient(l.MemoryEngineSock, internalToken), memory.Options{
 		UserID: userID, Log: log, NoMemoryEngine: noMemoryEngine, MaxDistance: cfg.ConversationSearch.MaxDistance,
 		KBMaxDistance: cfg.KnowledgeBase.MaxDistance, FilesDir: l.KnowledgeFiles,
-		BaseURL: fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.Port),
+		MaxContentBytes: cfg.Storage.MaxContentBytes(), BaseURL: fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.Port),
+		CloudLinked: func() bool {
+			linked, err := cloud.IsLinked()
+			return err == nil && linked
+		},
 		// On probation after an update: a rollback restores the database, and its rows need their files.
 		KeepDeletedFiles: func() bool {
 			if !isRelease {
@@ -347,7 +352,6 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	agentsMgr := &agents.Manager{Lock: agentsLock(l), Target: func() (agents.Target, error) { return local, nil }}
 	// The Meko Cloud link: the web UI and meko cloud_link change it; /mcp then offers its tools, the
 	// agents an older Meko connected to it come back here, and the running extensions hear.
-	var cloud *cloudlink.Service
 	cloud = &cloudlink.Service{Store: cloudSt, Check: cloudlink.CheckMCP, CheckAPI: cloudlink.CheckAPI,
 		List: cloudlink.ListDatapacks,
 		Changed: func(ctx context.Context) {
@@ -365,16 +369,16 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	mcpHandler := mcp.NewHandler(mcpOpts)
 	web.newOpts = func(wcfg config.Config) server.Options {
 		return server.Options{Info: info, Port: wcfg.Web.Port, Auth: cfg.Server.Auth, Logger: log,
-			Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, MCP: mcpHandler,
-			REST: registerREST, Upload: upload, Download: download, UI: ui, Cloud: cloud,
+			Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, Storage: svc.Storage,
+			MCP: mcpHandler, REST: registerREST, Upload: upload, Download: download, UI: ui, Cloud: cloud,
 			Agents: agentsMgr, Web: &server.Web{Access: wcfg.Web.Access, Extensions: web.Proxies, Installed: web.Installed,
 				Run: web.RunExtension, ExtensionUpdates: web.ExtensionUpdates, CheckExtensions: web.CheckExtensions,
 				SetAutoUpdate: web.SetAutoUpdate, Jobs: web.jobs, Updates: updates}}
 	}
 	srv := server.New(server.Options{
 		Info: info, Port: cfg.Server.Port, Token: token, ClientToken: clientToken, Auth: cfg.Server.Auth, Logger: log,
-		Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, MCP: mcpHandler,
-		REST: registerREST, Upload: upload, Download: download, Cloud: cloud, Agents: agentsMgr,
+		Children: sup.Statuses, MemoryEngine: svc.EngineStatus, UsageStats: usage.State, Storage: svc.Storage,
+		MCP: mcpHandler, REST: registerREST, Upload: upload, Download: download, Cloud: cloud, Agents: agentsMgr,
 		WebStatus: web.Status, ReloadWeb: web.Reload,
 	})
 	served := make(chan error, 1)
@@ -395,9 +399,8 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 		moveBackOnce(followCtx, st, cloud, log)
 	}()
 	go cloud.CloudTools(followCtx)
-	// The extensions still running from before this start read the link again: an update or a rollback
-	// may have changed how they reach Meko Cloud through this Meko (meko token --json's
-	// datapack_routing), and nothing else tells them.
+	// The extensions still running from before this start read Meko again: an update or a rollback may
+	// have changed its port, token or link, and nothing else tells them.
 	go web.notify(followCtx, "cloud")
 	log.Info("Meko started", "url", fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.Port),
 		"pid", pid, "data_dir", l.Root, "version", version.Version, "auth", cfg.Server.Auth)

@@ -29,6 +29,12 @@ shown by `meko memory-extractor status`, the Status page and `GET /settings/memo
 says what failed and never what the harness wrote, which can quote the turns: the harness's own error
 (such as "Not logged in"), its exit status, or a fixed reason.
 
+Near its storage limit ([design.md](design.md#the-storage-limit)), a run calls only with room for a
+typical fact (1 KB), or for the fact a save last refused when that was larger, so the user's quota
+isn't spent on facts that couldn't be kept. Otherwise it records that Meko is full as its last error
+and leaves the turns queued. A run that fills Meko partway stops the same way, and the turns it
+couldn't save stay queued without counting as a failed attempt.
+
 ## Decisions
 
 | Decision | Why |

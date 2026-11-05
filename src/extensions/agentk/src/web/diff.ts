@@ -7,7 +7,25 @@ export interface DiffLine {
   text: string;
   old: number | null;
   new: number | null;
+  /** On a hunk row (or the row after the last hunk): the unchanged lines above it the patch leaves out, which ↑ and ↓ show. */
+  gap?: Gap;
 }
+
+/** Unchanged lines of a file's new side that its patch leaves out, from `expandRows`. */
+export interface Gap {
+  /** The hidden lines, `from` to `to`; `to` is null after the last hunk while the file's length isn't known. */
+  from: number;
+  to: number | null;
+  /** How many are hidden; null while `to` is. */
+  hidden: number | null;
+  /** Nothing above it (it starts at line 1), so it has no ↓. */
+  top: boolean;
+  /** Nothing below it (the end of the file), so it has no ↑. */
+  end: boolean;
+}
+
+/** Unchanged lines one ↑ or ↓ shows. */
+export const GAP_STEP = 20;
 
 /**
  * Unified diff → display lines with old/new line numbers. The git file headers are dropped.
@@ -47,6 +65,118 @@ export function parsePatch(patch: string): DiffLine[] {
     }
   }
   return out;
+}
+
+/** Whether a file's patch leaves lines out that ↑ and ↓ can show: not when it's the whole file, or cut short. */
+export function canExpand(f: { kind: ChangeKind; binary: boolean; truncated: boolean; patch: string | null }): boolean {
+  return (f.kind === 'modified' || f.kind === 'renamed') && !f.binary && !f.truncated && f.patch !== null;
+}
+
+/** A file's text as lines, as a patch numbers them: split at `\n` only (a `\r` stays in its line), no line after the last newline. */
+export function splitText(text: string): string[] {
+  const lines = text.split('\n');
+  if (lines[lines.length - 1] === '') lines.pop();
+  return lines;
+}
+
+/**
+ * `text` as the patch's new side has it, or null when it isn't that side: every unchanged and added
+ * row must be its line there. Git diffs the worktree after its clean conversion, so a file kept with
+ * CRLF endings on disk (`.gitattributes` `eol=crlf`, `core.autocrlf`) has no `\r` in its patch: then
+ * its lines are taken without their `\r`.
+ */
+export function fitText(rows: DiffLine[], text: string[]): string[] | null {
+  const fits = (t: string[]) => rows.every((l) => (l.kind !== 'ctx' && l.kind !== 'add') || (l.new !== null && t[l.new - 1] === l.text));
+  if (fits(text)) return text;
+  const bare = text.map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l));
+  return fits(bare) ? bare : null;
+}
+
+const HUNK_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)$/;
+
+/**
+ * A file's rows with the unchanged lines in `shown` (new-side line numbers, from `text`, the file's
+ * new side) put in place, and a gap row for each run of lines still hidden: the hunk's own row above
+ * its hunk, with the hidden count and the hunk's function context once part of its gap shows, and a
+ * row after the last hunk. A gap that's fully shown loses its row, so the hunks around it read as
+ * one; a hunk with no gap above it (one at line 1) keeps its row as it is. Shown lines take their old
+ * numbers from the hunk below them (or above, after the last), since unchanged lines between two
+ * hunks shift by the same amount. `rows` unchanged when the patch has no hunks.
+ */
+export function expandRows(rows: DiffLine[], text: string[] | null, shown: ReadonlySet<number>): DiffLine[] {
+  const lines = [...shown].sort((a, b) => a - b);
+  const out: DiffLine[] = [];
+  let at = 0;
+  let newEnd = 1, oldEnd = 1, hunks = 0;
+
+  /** The gap of lines from `from` to `to` (null: to the file's end), shifted by `delta`, above `header` (none after the last hunk). */
+  const gap = (from: number, to: number | null, delta: number, header: DiffLine | null, context: string) => {
+    const last = to ?? (text ? text.length : null);
+    const inGap = text ? lines.filter((n) => n >= from && (last === null || n <= last) && n <= text.length) : [];
+    let lastHidden: DiffLine | null = null;
+    const hiddenRow = (a: number, b: number | null) => {
+      const hidden = b === null ? null : b - a + 1;
+      const label = !inGap.length && header ? header.text : hidden === null ? '' : `${hidden.toLocaleString()} hidden ${hidden === 1 ? 'line' : 'lines'}`;
+      lastHidden = { kind: 'hunk', text: label, old: null, new: null, gap: { from: a, to: b, hidden, top: a === 1, end: !header && b === last } };
+      out.push(lastHidden);
+    };
+    let next = from;
+    for (const n of inGap) {
+      if (n > next) hiddenRow(next, n - 1);
+      out.push({ kind: 'ctx', text: (text as string[])[n - 1], old: n + delta, new: n });
+      next = n + 1;
+    }
+    if (last === null || next <= last) hiddenRow(next, last);
+    else if (header && !inGap.length) out.push(header);
+    // Once its header row's text gives way to a count, the gap's last row (the nearest the hunk) keeps its function context.
+    const near = lastHidden as DiffLine | null;
+    if (near && inGap.length && context) near.text += ` · ${context}`;
+  };
+
+  /** Whether the last hunk reaches the end of the new side: no gap after it then. */
+  let atEnd = false;
+  rows.forEach((l, i) => {
+    // A no-newline note after a new-side line marks the file's last line.
+    if (l.kind === 'note' && (rows[i - 1]?.kind === 'add' || rows[i - 1]?.kind === 'ctx')) atEnd = true;
+    const h = l.kind === 'hunk' ? HUNK_RE.exec(l.text) : null;
+    if (!h) return;
+    const o = Number(h[1]), ol = h[2] === undefined ? 1 : Number(h[2]);
+    const n = Number(h[3]), nl = h[4] === undefined ? 1 : Number(h[4]);
+    // A side with no lines names the line before the hunk.
+    const oldFirst = ol === 0 ? o + 1 : o, newFirst = nl === 0 ? n + 1 : n;
+    out.push(...rows.slice(at, i));
+    gap(newEnd, newFirst - 1, oldFirst - newFirst, l, h[5]);
+    at = i + 1;
+    newEnd = newFirst + nl;
+    oldEnd = oldFirst + ol;
+    hunks++;
+    atEnd = false;
+  });
+  if (!hunks) return rows;
+  const tail = rows.slice(at);
+  out.push(...tail);
+  // Git gives a hunk as much context after its changes as before them, unless the file ends first.
+  const isChange = (l: DiffLine) => l.kind === 'add' || l.kind === 'del';
+  const ctx = (ls: DiffLine[]) => ls.filter((l) => l.kind === 'ctx').length;
+  const first = tail.findIndex(isChange), last = tail.findLastIndex(isChange);
+  if (!atEnd && !(first >= 0 && ctx(tail.slice(last + 1)) < ctx(tail.slice(0, first)))) gap(newEnd, null, oldEnd - newEnd, null, '');
+  return out;
+}
+
+/** The new-side lines ↑, ↓ or ↕ shows of a gap: the next GAP_STEP under the lines above it, the last GAP_STEP above the ones below, or all of it. */
+export function gapLines(g: { from: number; to: number }, how: 'up' | 'down' | 'all'): number[] {
+  const a = how === 'up' ? Math.max(g.from, g.to - GAP_STEP + 1) : g.from;
+  const b = how === 'down' ? Math.min(g.to, g.from + GAP_STEP - 1) : g.to;
+  return Array.from({ length: Math.max(0, b - a + 1) }, (_, k) => a + k);
+}
+
+/** The gap row whose hidden lines hold all of lines `from` to `to`, if any (a comment's lines, say). */
+export function coveringGap(rows: DiffLine[], from: number, to: number): Gap | null {
+  for (const l of rows) {
+    const g = l.gap;
+    if (g && g.from <= from && (g.to === null || to <= g.to)) return g;
+  }
+  return null;
 }
 
 /** How many diff rows the Changes panel draws at a time. */

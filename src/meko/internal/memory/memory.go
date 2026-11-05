@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yugabyte/meko/src/meko/internal/config"
 	"github.com/yugabyte/meko/src/meko/internal/knowledge"
 	"github.com/yugabyte/meko/src/meko/internal/memoryengine"
 	"github.com/yugabyte/meko/src/meko/internal/store"
@@ -46,6 +47,11 @@ type Service struct {
 	extractMu      sync.Mutex // one extraction run at a time
 	testHarness    Harness
 	testAnswerer   Answerer
+	maxContent     int64 // the storage limit, in bytes (storage.go)
+	roomMu         sync.Mutex
+	reserved       int64 // what writes in flight hold of the limit, under roomMu
+	cloudLinked    func() bool
+	extractNeed    int64 // the room an extraction run needs before it calls, under extractMu
 }
 
 // Options configure a Service.
@@ -73,6 +79,10 @@ type Options struct {
 	// start's sweep: while an update is on probation, a rollback restores the database from before
 	// it, and its rows must still find their bytes.
 	KeepDeletedFiles func() bool
+	// MaxContentBytes is the storage limit ([storage] max_content_mb, in bytes); 0 means the default.
+	MaxContentBytes int64
+	// CloudLinked, if set, says whether Meko Cloud is linked, for the storage limit's error.
+	CloudLinked func() bool
 }
 
 // New is the service over st and the memory engine eng.
@@ -83,12 +93,16 @@ func New(st *store.Store, eng *memoryengine.Client, o Options) *Service {
 	if o.KBMaxDistance <= 0 {
 		o.KBMaxDistance = DefaultKBMaxDistance
 	}
+	if o.MaxContentBytes <= 0 {
+		o.MaxContentBytes = config.Default().Storage.MaxContentBytes()
+	}
 	return &Service{st: st, eng: eng, userID: o.UserID, log: o.Log, noMemoryEngine: o.NoMemoryEngine,
 		child: o.MemoryEngineChild, maxDistance: o.MaxDistance, kbMaxDistance: o.KBMaxDistance,
 		kick: make(chan struct{}, 1), indexKick: make(chan struct{}, 1), files: knowledge.NewFiles(o.FilesDir),
 		tickets: &tickets{m: map[string]*ticket{}}, baseURL: strings.TrimSuffix(o.BaseURL, "/"),
 		keepDeleted: o.KeepDeletedFiles, extractKick: make(chan struct{}, 1), testHarness: o.ExtractorHarness,
-		testAnswerer: o.Answerer}
+		testAnswerer: o.Answerer, maxContent: o.MaxContentBytes, cloudLinked: o.CloudLinked,
+		extractNeed: extractRoom}
 }
 
 // UserID is the install's local user, the user_id on every memory.
@@ -141,6 +155,15 @@ func (s *Service) AddMemory(ctx context.Context, r AddMemory) ([]memoryengine.Ad
 	if len(msgs) == 0 {
 		msgs = []memoryengine.Message{{Role: "user", Content: r.Text}}
 	}
+	n := jsonSize(r.Metadata) * int64(len(msgs))
+	for _, m := range msgs {
+		n += int64(len(m.Content))
+	}
+	release, err := s.reserve(ctx, n)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	added, err := s.eng.Add(ctx, memoryengine.AddRequest{
 		DatapackID: r.DatapackID, UserID: s.userID, AgentID: r.AgentID, ConversationID: r.ConversationID,
 		Messages: msgs, Metadata: r.Metadata,
@@ -175,8 +198,18 @@ func (s *Service) UpdateMemory(ctx context.Context, datapack, id, text string) e
 	if err := s.promoted(ctx, datapack, id); err != nil {
 		return err
 	}
-	if _, err := s.own(ctx, datapack, id); err != nil {
+	rec, err := s.own(ctx, datapack, id)
+	if err != nil {
 		return err
+	}
+	// Only a longer text needs room: a shorter one is let through when Meko is full.
+	old, _ := rec.Payload["data"].(string)
+	if grow := int64(len(text) - len(old)); grow > 0 {
+		release, rerr := s.reserve(ctx, grow)
+		if rerr != nil {
+			return rerr
+		}
+		defer release()
 	}
 	return s.memoryEngineErr(s.eng.Update(ctx, datapack, id, text))
 }

@@ -65,6 +65,7 @@ import type {
   Session,
   SessionAction,
   SessionChanges,
+  ChangedText,
   Settings,
   SettingsUpdate,
   SetDedicatedDatapackRequest,
@@ -228,6 +229,11 @@ export const api = {
   codeReview: (id: string) => get<CodeReviewDetail>(`/api/sessions/${enc(id)}/code-review`),
   setFinding: (id: string, key: string, b: FindingChoiceRequest) => request<CodeReviewFinding>('PATCH', `/api/sessions/${enc(id)}/code-review/findings/${enc(key)}`, b),
   changes: (id: string, commit?: string | null) => get<SessionChanges>(`/api/sessions/${enc(id)}/changes${commit ? `?commit=${enc(commit)}` : ''}`),
+  /** A changed file's new side as text, with its patch diffed again, for showing the lines its patch leaves out. */
+  changedText: (id: string, path: string, oldPath: string | null, commit?: string | null) =>
+    get<ChangedText>(
+      `/api/sessions/${enc(id)}/changes/file?path=${enc(path)}${oldPath ? `&old=${enc(oldPath)}` : ''}${commit ? `&commit=${enc(commit)}` : ''}`,
+    ),
   baseBranches: (id: string) => get<string[]>(`/api/sessions/${enc(id)}/base-branches`),
   /** URL of one side of a changed image; `v` busts the cache when the diff is refetched. */
   changeImageUrl: (id: string, path: string, side: ChangeSide, v: number, commit?: string | null) =>

@@ -17,11 +17,14 @@ the report goes up when a field changes meaning or is removed; adding a field do
   hosts sharing a home count once), the version, the update channel (always `stable`: Meko installs AgentK's updates by its own channel), platform, CPU, Node and
   Claude Code versions (`claude --version`; `''` when it can't be read; Kiro CLI's too, as `kiro`, while Kiro is on, and OpenCode's, as `opencode`, while it's on; our version or
   Node's, when the schema wouldn't take it, such as a `git describe` build or a Node nightly, is
-  cut to its leading numbers, else `0.0.0`), `access: meko` (the Meko on this computer serves AgentK; older versions sent `local` or `remote`), the service manager, whether there's a Meko (and where its key comes from:
-  `config`, `env`, `claude`, `local` for the Meko on this computer, or `none`; and the
-  sharing: `api` when AgentK can share through Meko's API, `none` when there's no Meko or its API URL
-  isn't known), and the UTC day of the first
-  report.
+  cut to its leading numbers, else `0.0.0`), `access: meko` (the Meko on this computer serves AgentK; older versions sent `local` or `remote`), the service manager, whether there's a Meko (`keySource`: `meko` for the Meko on this computer,
+  linked to Meko Cloud or not, or `none`; and `sharing`: `api` whenever there's a Meko, since that
+  Meko says itself whether it shares, else `none`), and the UTC day of the first report. Older
+  versions sent other key sources, and `meko` meant something else in them: `meko` was Meko Cloud
+  through Meko's link, `local` the Meko on this computer unlinked, and `config`, `env` and `claude`
+  a key of AgentK's own; their `sharing` was `none` while no API URL was known, which included the
+  unlinked Meko on this computer. Read across versions, `meko` and `local` together are "a Meko on
+  this computer".
 - *All-time totals:* projects (current, deleted, with a dedicated datapack, shared datapacks
   attached, distinct repos), sessions (by kind, by the agent they run on (`byHarness`), open ones by stage; a task counts as `explore`,
   `plan` or `quick` by the stage it started in, Explore, Design or Code), what shipped (merged PRs,

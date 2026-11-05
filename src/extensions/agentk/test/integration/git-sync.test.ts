@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { gitRepo, tempDir } from '../helpers.js';
 import { BranchGoneError, addWorktree, checkBranchName, listBaseBranches, restoreWorktree } from '../../src/server/git.js';
-import { SUGGEST_MIN_AHEAD, UnknownCommitError, changedImage, changes, diffStat, suggestBase } from '../../src/server/changes.js';
+import { NotChangedError, SUGGEST_MIN_AHEAD, TEXT_EXPAND_MAX, UnknownCommitError, changedImage, changedText, changes, diffStat, suggestBase } from '../../src/server/changes.js';
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 /** git refuses to fetch into a branch being rebased or bisected from 2.38 on. */
@@ -307,6 +307,47 @@ describe('changes vs. the base (real git)', () => {
     symlinkSync(join(home, 'secret.png'), join(wt, 'link.png'));
     for (const [path, side] of [['README.md', 'new'], ['../secret.png', 'new'], ['img/../../secret.png', 'old'], [join(home, 'secret.png'), 'new'], ['link.png', 'new']] as const) {
       await expect(changedImage(wt, 'main', path, side), `${path} (${side})`).rejects.toThrow(/not a previewable image/);
+    }
+  });
+
+  it("serves a changed file's new side as text, with the patch changes() gives it, and only changed text files in the repo", async () => {
+    const lines = (n: number, edit = '') => Array.from({ length: n }, (_, i) => `line ${i + 1}${i === 9 ? edit : ''}`).join('\n') + '\n';
+    writeFileSync(join(wt, 'long.txt'), lines(40, ' (committed)'));
+    git(wt, 'mv', 'old name.txt', 'new name.txt');
+    writeFileSync(join(wt, 'new name.txt'), 'one\ntwo\nthree\nfour\nfive\nsix\n');
+    git(wt, 'add', '-A');
+    git(wt, 'commit', '-q', '-m', 'long file');
+    const sha = git(wt, 'rev-parse', 'HEAD');
+    writeFileSync(join(wt, 'long.txt'), lines(40, ' (uncommitted)'));
+
+    const all = (await changes(wt, 'main'))!;
+    const patchOf = (c: typeof all, path: string) => c.files.find((f) => f.path === path)?.patch;
+    expect(await changedText(wt, 'main', 'long.txt', null)).toEqual({ text: lines(40, ' (uncommitted)'), patch: patchOf(all, 'long.txt') });
+    expect(await changedText(wt, 'main', 'new name.txt', 'old name.txt')).toMatchObject({ patch: patchOf(all, 'new name.txt') });
+    const one = (await changes(wt, 'main', new Set(), sha))!;
+    expect(await changedText(wt, 'main', 'long.txt', null, sha)).toEqual({ text: lines(40, ' (committed)'), patch: patchOf(one, 'long.txt') });
+    await expect(changedText(wt, 'main', 'long.txt', null, git(wt, 'rev-parse', 'main'))).rejects.toBeInstanceOf(UnknownCommitError);
+
+    // Only files the diff changes: not an unchanged one, an untracked or gitignored one, or a pathspec.
+    writeFileSync(join(wt, '.gitignore'), '.env\n');
+    writeFileSync(join(wt, '.env'), 'TOKEN=test-token\n');
+    writeFileSync(join(wt, 'untracked.txt'), 'x\n');
+    for (const path of ['README.md', '.env', 'untracked.txt', '*.txt', ':(glob)**']) {
+      await expect(changedText(wt, 'main', path, null), path).rejects.toBeInstanceOf(NotChangedError);
+    }
+
+    // Not text, or too large to show more of.
+    writeFileSync(join(wt, 'long.txt'), Buffer.from([0x61, 0, 0x62]));
+    expect(await changedText(wt, 'main', 'long.txt', null)).toBeNull();
+    writeFileSync(join(wt, 'long.txt'), 'x'.repeat(TEXT_EXPAND_MAX + 1));
+    expect(await changedText(wt, 'main', 'long.txt', null)).toBeNull();
+
+    // Never a path out of the repo, or a symlink that leads out of it.
+    writeFileSync(join(home, 'secret.txt'), 'secret\n');
+    unlinkSync(join(wt, 'long.txt'));
+    symlinkSync(join(home, 'secret.txt'), join(wt, 'long.txt'));
+    for (const path of ['../secret.txt', 'a/../../secret.txt', join(home, 'secret.txt'), 'long.txt']) {
+      await expect(changedText(wt, 'main', path, null), path).rejects.toThrow(/not a file in this repo/);
     }
   });
 

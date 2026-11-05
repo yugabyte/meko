@@ -2,7 +2,7 @@ import type { HarnessId } from '../shared/harnesses.js';
 import type { HarnessMeko, MekoStatus } from '../shared/types.js';
 import { kvDelete, kvGet, kvSet, type Db } from './db.js';
 import { errMsg, type Logger } from './log.js';
-import { originOf, type LocalMeko } from './mekolocal.js';
+import { mekoApiBase, type LocalMeko } from './mekolocal.js';
 import { mekoUrlHost } from './mekosetup.js';
 
 /**
@@ -68,11 +68,11 @@ type Fetch = (url: string, init: { headers: Record<string, string>; signal: Abor
 
 /** Reads the list from the Meko running on this computer (`local`: its MCP URL, whose origin is its API listener, and client token). */
 export async function readMekoAgents(local: LocalMeko | null, fetchImpl: Fetch = fetch): Promise<MekoAgentsRead> {
-  const origin = local ? originOf(local.url) : null;
-  if (!local || !origin) return { kind: 'failed', error: "Meko isn't running on this computer" };
+  const base = mekoApiBase(local);
+  if (!local || !base) return { kind: 'failed', error: "Meko isn't running on this computer" };
   let res: Awaited<ReturnType<Fetch>>;
   try {
-    res = await fetchImpl(`${origin}/api/v1/agents`, { headers: { Authorization: `Bearer ${local.token}` }, signal: AbortSignal.timeout(TIMEOUT_MS) });
+    res = await fetchImpl(`${base}/agents`, { headers: { Authorization: `Bearer ${local.token}` }, signal: AbortSignal.timeout(TIMEOUT_MS) });
   } catch (e) {
     return { kind: 'failed', error: errMsg(e) };
   }

@@ -5,9 +5,13 @@ import {
   type SessionChanges,
 } from '../../shared/types';
 import { ApiError, api, errorMessage } from '../api';
-import { anchorComment, defaultOpen, DESKTOP_BUDGET, keepUnchanged, pathFilter, PHONE_BUDGET, pickComment, reparse, sameItems, showsLine, sideLine, type DiffLine } from '../diff';
+import {
+  anchorComment, canExpand, coveringGap, defaultOpen, DESKTOP_BUDGET, expandRows, gapLines, GAP_STEP, keepUnchanged, pathFilter, PHONE_BUDGET,
+  fitText, pickComment, reparse, sameItems, showsLine, sideLine, splitText, type DiffLine, type Gap,
+} from '../diff';
 import { matches, MOBILE_QUERY, useTouch, watchSideways } from '../hooks/useMedia';
 import { useRangeDrag, type CommentPick } from '../hooks/useRangeDrag';
+import { diffWrapToggle } from '../toggle';
 import { agentName, cx, idleStopped, relativeTime } from '../util';
 import { Busy, ConfirmButton } from './common';
 import { SidePanel } from './SidePanel';
@@ -56,7 +60,25 @@ interface SectionActions {
   save: (text: string) => Promise<void>;
   cancel: () => void;
   section: (path: string, el: HTMLElement | null) => void;
+  /** Shows more of a file's unchanged lines: those ↑, ↓ or ↕ on `gap`'s row picks. */
+  expand: (path: string, gap: Gap, how: GapHow) => void;
 }
+
+type GapHow = 'up' | 'down' | 'all';
+
+/** A file's unchanged lines shown beyond its patch, for the patch, and the commit shown, they were opened on. */
+interface Opening {
+  patch: string;
+  commit: string | null;
+  /** The file's new side, once fetched. */
+  text: string[] | null;
+  /** 'loading', 'ready', or why no more of the file can be shown. */
+  state: string;
+  /** The new-side lines shown beyond the patch. */
+  lines: ReadonlySet<number>;
+}
+
+const NO_LINES: ReadonlySet<number> = new Set();
 
 /** Whether two files' comment threads hold the same comments after the same rows. */
 function sameThreads(a: Map<number, ReviewComment[]>, b: Map<number, ReviewComment[]>): boolean {
@@ -105,6 +127,21 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
   const [toggled, setToggled] = useState<Map<string, boolean>>(new Map());
   /** Rows shown of each large diff the user asked to see (the rest show none until asked). */
   const [rowsShown, setRowsShown] = useState<Map<string, number>>(new Map());
+  /**
+   * Unchanged lines shown beyond each file's patch (↑ and ↓ on its hunk rows). The ref is written
+   * first, so two opens in one render (two comments' lines) see each other's.
+   */
+  const openingsRef = useRef(new Map<string, Opening>());
+  const [openings, setOpenings] = useState(openingsRef.current);
+  const putOpenings = (m: Map<string, Opening>) => {
+    openingsRef.current = m;
+    setOpenings(m);
+  };
+  /** What to show of a file once its text comes in, by the opening that's fetching it. */
+  const pendingLines = useRef(new Map<Opening, ((text: string[]) => number[])[]>());
+  /** Comments whose lines the panel opened by itself, by id and patch, so it tries each once (until Refresh). */
+  const autoOpened = useRef(new Set<string>());
+  const wrap = diffWrapToggle.use();
   const sections = useRef(new Map<string, HTMLElement>());
   const body = useRef<HTMLDivElement>(null);
   /** The file last jumped to; short files at the end can't scroll to the top, so position alone can't tell. */
@@ -165,7 +202,8 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
 
   /** Parsed rows by patch text, kept across refetches so a file whose patch didn't change keeps its rows. */
   const byPatch = useRef(new Map<string, DiffLine[]>());
-  const parsed = useMemo(() => {
+  /** Each file's rows as its patch has them. */
+  const raw = useMemo(() => {
     byPatch.current = reparse(byPatch.current, files);
     const m = new Map<string, DiffLine[]>();
     for (const f of files) {
@@ -174,6 +212,37 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
     }
     return m;
   }, [files]);
+
+  const shownSha = data?.commit?.sha ?? null;
+  /** A file's opening, while it was opened on the patch and view shown. */
+  const liveOpening = useCallback(
+    (f: ChangedFile) => {
+      const o = openings.get(f.path);
+      return o && o.patch === f.patch && o.commit === shownSha ? o : undefined;
+    },
+    [openings, shownSha],
+  );
+  /** Each file's rows with the unchanged lines opened beyond its patch, and its gap rows; kept while neither changes. */
+  const merged = useRef(new Map<string, { rows: DiffLine[]; open: Opening | undefined; out: DiffLine[] }>());
+  const parsed = useMemo(() => {
+    const m = new Map<string, DiffLine[]>();
+    const kept = new Map<string, { rows: DiffLine[]; open: Opening | undefined; out: DiffLine[] }>();
+    for (const f of files) {
+      const rows = raw.get(f.path);
+      if (!rows) continue;
+      if (!canExpand(f)) {
+        m.set(f.path, rows);
+        continue;
+      }
+      const open = liveOpening(f);
+      const prev = merged.current.get(f.path);
+      const out = prev && prev.rows === rows && prev.open === open ? prev.out : expandRows(rows, open?.text ?? null, open?.lines ?? NO_LINES);
+      kept.set(f.path, { rows, open, out });
+      m.set(f.path, out);
+    }
+    merged.current = kept;
+    return m;
+  }, [files, raw, liveOpening]);
 
   // A comment's sides are the base and the worktree, so comments belong to the full diff only:
   // they follow the diff on screen, not the pick still loading.
@@ -214,6 +283,23 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
     [editor, parsed],
   );
 
+  // A comment that ends on a line only an opening showed (before a reload, or a new patch) opens it
+  // again, once, from where the comment starts or its gap does: judged by its last line, not by where
+  // it anchors, since its text may match another row, and a range can start in a hunk.
+  useEffect(() => {
+    for (const c of visible) {
+      const f = c.side === 'new' ? files.find((x) => x.path === c.path) : undefined;
+      const rows = f && canExpand(f) ? parsed.get(c.path) : undefined;
+      if (!f || !rows || showsLine(rows, 'new', c.endLine)) continue;
+      const g = coveringGap(rows, c.endLine, c.endLine);
+      const key = `${c.id}\0${f.patch}`;
+      if (!g || autoOpened.current.has(key)) continue;
+      autoOpened.current.add(key);
+      const from = Math.max(c.line, g.from);
+      handlers.current?.open(c.path, () => Array.from({ length: c.endLine - from + 1 }, (_, k) => from + k));
+    }
+  }, [visible, parsed, files]);
+
   const countByPath = useMemo(() => {
     const m = new Map<string, number>();
     for (const c of comments) if (c.state !== 'sent') m.set(c.path, (m.get(c.path) ?? 0) + 1);
@@ -221,14 +307,76 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
   }, [comments]);
 
   const openByDefault = useMemo(
-    () => defaultOpen(files, (path) => parsed.get(path)?.length ?? 0, (path) => placed.at.has(path) || placed.outdated.has(path), budget),
-    [files, parsed, placed, budget],
+    // The patch's own rows: lines opened in one file never close another.
+    () => defaultOpen(files, (path) => raw.get(path)?.length ?? 0, (path) => placed.at.has(path) || placed.outdated.has(path), budget),
+    [files, raw, placed, budget],
   );
 
   const isOpen = (path: string) => toggled.get(path) ?? openByDefault.has(path);
   const setOpen = (path: string, open: boolean) => setToggled((t) => new Map(t).set(path, open));
-  /** How many of a file's rows to render: all of a small diff, and of a large one what the user asked for. */
-  const rowLimit = (path: string, rows: number) => (rows <= budget.large ? rows : Math.min(rows, rowsShown.get(path) ?? 0));
+  /** How many of a file's rows to render: all of a small diff (by its patch's rows), and of a large one what the user asked for. */
+  const rowLimit = (path: string, rows: number) => ((raw.get(path)?.length ?? 0) <= budget.large ? rows : Math.min(rows, rowsShown.get(path) ?? 0));
+
+  const putOpening = (path: string, o: Opening) => putOpenings(new Map(openingsRef.current).set(path, o));
+  /**
+   * Shows more of a file's unchanged lines, those `pick` names from its text: at once when the text is
+   * in, else once it's fetched. The server sends the file's patch, diffed again, with its text: one
+   * that isn't the patch on screen means the file changed since its diff was read, and the diff is
+   * fetched again; a text whose lines aren't the patch's (`fitText`) isn't used.
+   */
+  const openLines = (path: string, pick: (text: string[]) => number[]) => {
+    const f = files.find((x) => x.path === path);
+    const rows = raw.get(path);
+    if (!f || f.patch === null || !rows || !canExpand(f)) return;
+    const apply = (o: Opening, text: string[], picks: ((text: string[]) => number[])[]) => {
+      const lines = new Set(o.lines);
+      for (const p of picks) for (const n of p(text)) lines.add(n);
+      const added = lines.size - o.lines.size;
+      // A large diff draws only the rows the user asked for (none until Show diff): the new rows come on
+      // top of those, so none drop out of view, and one still waiting on Show diff stays so.
+      if (added && rows.length > budget.large) setRowsShown((m) => (m.get(path) ? new Map(m).set(path, (m.get(path) ?? 0) + added) : m));
+      putOpening(path, { ...o, text, state: 'ready', lines });
+    };
+    const cur = openingsRef.current.get(path);
+    const live = cur && cur.patch === f.patch && cur.commit === shownSha ? cur : undefined;
+    if (live?.text) return apply(live, live.text, [pick]);
+    if (live?.state === 'loading') {
+      pendingLines.current.get(live)?.push(pick);
+      return;
+    }
+    if (live) return; // It failed; Refresh tries again.
+    const loading: Opening = { patch: f.patch, commit: shownSha, text: null, state: 'loading', lines: NO_LINES };
+    pendingLines.current.set(loading, [pick]);
+    putOpening(path, loading);
+    const done = () => {
+      const picks = pendingLines.current.get(loading) ?? [];
+      pendingLines.current.delete(loading);
+      return openingsRef.current.get(path) === loading ? picks : null;
+    };
+    api
+      .changedText(session.id, path, f.oldPath, shownSha)
+      .then((got) => {
+        const picks = done();
+        if (!picks) return;
+        if (got.patch !== f.patch) {
+          putOpening(path, { ...loading, state: 'This file changed since its diff was read. Try again once the diff is read again.' });
+          setTick((t) => t + 1);
+          return;
+        }
+        const text = fitText(rows, splitText(got.text));
+        if (!text) putOpening(path, { ...loading, state: 'This file’s text doesn’t match its diff, so no more of it can be shown.' });
+        else apply(loading, text, picks);
+      })
+      .catch((e) => {
+        if (done()) putOpening(path, { ...loading, state: errorMessage(e) });
+      });
+  };
+  const refresh = () => {
+    // Files that couldn't show more lines, and comments whose lines didn't open, get another try.
+    putOpenings(new Map([...openingsRef.current].filter(([, o]) => o.state === 'ready' || o.state === 'loading')));
+    autoOpened.current.clear();
+    setTick((t) => t + 1);
+  };
   const showMore = (path: string, rows: number) => setRowsShown((m) => new Map(m).set(path, Math.min(rows, (m.get(path) ?? 0) + budget.page)));
 
   const jump = (path: string) => {
@@ -340,8 +488,10 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
     api.updateSession(session.id, { baseBranch: branch }).catch((e) => setNote(errorMessage(e)));
   };
   const suggested = !fixedBase && !data?.commit ? data?.suggestedBase : null;
-  const handlers = useRef<SectionActions | null>(null);
+  const handlers = useRef<(SectionActions & { open: typeof openLines }) | null>(null);
   handlers.current = {
+    open: openLines,
+    expand: (path, g, how) => openLines(path, (text) => gapLines({ from: g.from, to: g.to ?? text.length }, how)),
     toggle: (path) => setOpen(path, !isOpen(path)),
     more: showMore,
     comment: startComment,
@@ -365,6 +515,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
       save: (text) => h().save(text),
       cancel: () => h().cancel(),
       section: (path, el) => h().section(path, el),
+      expand: (path, g, how) => h().expand(path, g, how),
     };
   }, []);
   const commitSha = data?.commit?.sha;
@@ -417,7 +568,17 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
             {sending ? <Busy label="Sending" /> : `Send ${plural(drafts, 'comment')}`}
           </button>
         )}
-        <button className="btn small" disabled={loading} onClick={() => setTick((t) => t + 1)}>
+        {files.length > 0 && (
+          <button
+            className={cx('btn small', wrap && 'on')}
+            aria-pressed={wrap}
+            title="Wrap long lines instead of scrolling them sideways"
+            onClick={() => diffWrapToggle.save(!wrap)}
+          >
+            Wrap lines
+          </button>
+        )}
+        <button className="btn small" disabled={loading} onClick={refresh}>
           {loading ? <Busy label="Loading" /> : 'Refresh'}
         </button>
         <button className="icon-btn panel-close" onClick={onClose} aria-label="Close changes">
@@ -454,7 +615,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
           {note && <span>{note}</span>}
         </div>
       )}
-      <div className="design-body changes-body" ref={body} tabIndex={-1}>
+      <div className={cx('design-body changes-body', wrap && 'wrap')} ref={body} tabIndex={-1}>
         {error ? (
           <p className="error-text">{error}</p>
         ) : !data ? (
@@ -494,13 +655,13 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
               </p>
             ) : touch ? (
               <p className="muted small chg-hint">
-                Use <b>Files</b> to move between files. Tap <b>+</b> beside a line to comment on it; hold it and drag, or tap <b>+</b>
-                on another line before you type, to cover a range.
+                Use <b>Files</b> to move between files, and ↑ or ↓ on a hunk to see more of the file. Tap <b>+</b> beside a line to
+                comment on it; hold it and drag, or tap <b>+</b> on another line before you type, to cover a range.
               </p>
             ) : (
               <p className="muted small chg-hint">
-                Use <b>Files</b> or press <kbd>[</kbd> and <kbd>]</kbd> to move between files. Click <b>+</b> beside a line to
-                comment on it; drag it, or shift-click another line, to cover a range.
+                Use <b>Files</b> or press <kbd>[</kbd> and <kbd>]</kbd> to move between files, and ↑ or ↓ on a hunk to see more of
+                the file. Click <b>+</b> beside a line to comment on it; drag it, or shift-click another line, to cover a range.
               </p>
             )}
             {files.map((f, n) => {
@@ -508,6 +669,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
               // A comment's editor is passed only to its own file, and only in All changes (a commit's shows above).
               const ed = !data.commit && editor?.path === f.path ? editor : null;
               const outdated = placed.outdated.get(f.path);
+              const opening = liveOpening(f);
               return (
                 <FileSection
                   key={f.path}
@@ -527,6 +689,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
                   readOnly={!!data.commit}
                   imageUrl={imageUrl}
                   imageVersion={f.binary ? fetchedAt : 0}
+                  expandNote={opening && opening.state !== 'ready' ? opening.state : null}
                   draft={draftText}
                   actions={actions}
                 />
@@ -1058,6 +1221,7 @@ const FileSection = memo(function FileSection({
   readOnly,
   imageUrl,
   imageVersion,
+  expandNote,
   draft,
   actions,
 }: {
@@ -1085,6 +1249,8 @@ const FileSection = memo(function FileSection({
   imageUrl: (side: ChangeSide, path: string, v: number) => string;
   /** When an image's previews were last fetched (they reload with it); 0 for text files, so a refetch leaves them alone. */
   imageVersion: number;
+  /** While more of the file's lines are being fetched, 'loading'; why they can't be shown; else null. */
+  expandNote: string | null;
   draft: RefObject<string>;
   actions: SectionActions;
 }) {
@@ -1118,6 +1284,8 @@ const FileSection = memo(function FileSection({
             limit={limit}
             page={page}
             onMore={() => actions.more(path, lines?.length ?? 0)}
+            onExpand={(g, how) => actions.expand(path, g, how)}
+            expandNote={expandNote}
             renderAfter={(i) => {
               const cs = threads?.get(i);
               const here = editor !== null && !editor.id && editorAt === i;
@@ -1138,6 +1306,38 @@ const FileSection = memo(function FileSection({
   );
 });
 
+const ARROW: Record<GapHow, string> = {
+  up: 'M8 3l4.5 5h-3v5h-3V8h-3z',
+  down: 'M8 13l4.5-5h-3V3h-3v5h-3z',
+  all: 'M8 1l3.5 4H9v2H7V5H4.5zM8 15l3.5-4H9V9H7v2H4.5z',
+};
+
+/**
+ * A gap row's arrows: ↓ shows the next GAP_STEP lines under the change above, ↑ the GAP_STEP lines
+ * over the change below, and ↕ all of a gap that has no more than that left.
+ */
+function GapButtons({ gap, busy, onExpand }: { gap: Gap; busy: boolean; onExpand: (gap: Gap, how: GapHow) => void }) {
+  const all = gap.hidden !== null && gap.hidden <= GAP_STEP;
+  const hows: GapHow[] = all ? ['all'] : [...(gap.top ? [] : ['down' as const]), ...(gap.end ? [] : ['up' as const])];
+  const label = (how: GapHow) =>
+    how === 'all'
+      ? `Show the ${gap.hidden === 1 ? 'hidden line' : `${gap.hidden} hidden lines`}`
+      : how === 'down'
+        ? `Show the next ${GAP_STEP} lines`
+        : `Show the ${GAP_STEP} lines above the next change`;
+  return (
+    <span className="gap-btns">
+      {hows.map((how) => (
+        <button key={how} className="gap-btn" disabled={busy} title={label(how)} aria-label={label(how)} onClick={() => onExpand(gap, how)}>
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d={ARROW[how]} />
+          </svg>
+        </button>
+      ))}
+    </span>
+  );
+}
+
 export function FileDiff({
   file,
   imageUrl,
@@ -1145,6 +1345,8 @@ export function FileDiff({
   limit,
   page,
   onMore,
+  onExpand,
+  expandNote = null,
   renderAfter,
   picked,
   onComment,
@@ -1158,6 +1360,10 @@ export function FileDiff({
   page: number;
   /** Shows the next `page` rows. */
   onMore: () => void;
+  /** Shows more of the unchanged lines a gap row hides; undefined draws gap rows as plain hunk rows. */
+  onExpand?: (gap: Gap, how: GapHow) => void;
+  /** 'loading' while the file's text is fetched, or why no more of it can be shown. */
+  expandNote?: string | null;
   /** Comment threads (or the editor) shown under row i, or null. */
   renderAfter: (i: number) => ReactNode;
   /** The range a new comment is being written for. */
@@ -1196,28 +1402,42 @@ export function FileDiff({
               const after = renderAfter(i);
               return (
                 <Fragment key={i}>
-                  <tr className={cx(`dl-${l.kind}`, inPick && 'picked', pickEnd && 'pick-end')} data-i={i}>
-                    <td className="cg">
-                      {n !== null && onComment && (
-                        <button
-                          className="cmt-add"
-                          tabIndex={-1}
-                          title="Comment on this line (drag or shift-click to cover a range)"
-                          aria-label={`Comment on ${linesLabel(side, n, n)}`}
-                          onPointerDown={(e) => drag.start(e, i)}
-                          onContextMenu={drag.menu}
-                          onClick={(e) => {
-                            if (!drag.swallow()) onComment(i, { shift: e.shiftKey });
-                          }}
-                        >
-                          +
-                        </button>
-                      )}
-                    </td>
-                    <td className="ln">{l.old ?? ''}</td>
-                    <td className="ln">{l.new ?? ''}</td>
-                    <td className="sign">{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ''}</td>
-                    <td className="code">{l.text}</td>
+                  <tr className={cx(`dl-${l.kind}`, l.gap && onExpand && 'dl-gap', inPick && 'picked', pickEnd && 'pick-end')} data-i={i}>
+                    {l.gap && onExpand ? (
+                      <>
+                        <td className="gap" colSpan={3}>
+                          {(expandNote === null || expandNote === 'loading') && (
+                            <GapButtons gap={l.gap} busy={expandNote === 'loading'} onExpand={onExpand} />
+                          )}
+                        </td>
+                        <td className="sign" />
+                        <td className="code">{expandNote === 'loading' ? <Busy label="Loading" /> : expandNote ?? l.text}</td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="cg">
+                          {n !== null && onComment && (
+                            <button
+                              className="cmt-add"
+                              tabIndex={-1}
+                              title="Comment on this line (drag or shift-click to cover a range)"
+                              aria-label={`Comment on ${linesLabel(side, n, n)}`}
+                              onPointerDown={(e) => drag.start(e, i)}
+                              onContextMenu={drag.menu}
+                              onClick={(e) => {
+                                if (!drag.swallow()) onComment(i, { shift: e.shiftKey });
+                              }}
+                            >
+                              +
+                            </button>
+                          )}
+                        </td>
+                        <td className="ln">{l.old ?? ''}</td>
+                        <td className="ln">{l.new ?? ''}</td>
+                        <td className="sign">{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ''}</td>
+                        <td className="code">{l.text}</td>
+                      </>
+                    )}
                   </tr>
                   {after && (
                     <tr className="cmt-row">

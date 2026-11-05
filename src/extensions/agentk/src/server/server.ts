@@ -6,7 +6,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import type { WebSocket } from 'ws';
 import type {
   AttachDatapackRequest, CreateProjectRequest, CreateSessionRequest, DatapackPeople, DesignDoc, DiscardCheck, InviteCheck,
-  AutoConnectClaim, EventsClientMessage, HarnessModels, HarnessStatus, KnowledgeUpload, MekoDatapack, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, StagedImage,
+  AutoConnectClaim, ChangedText, EventsClientMessage, HarnessModels, HarnessStatus, KnowledgeUpload, MekoDatapack, MoveSessionRequest, PastedImage, ReviewComment, SendCommentsResult, ServerEvent, SessionChanges, SessionAction, Settings, SettingsUpdate, SetDedicatedDatapackRequest, StagedImage,
   HeldReview, HeldReviewsResult, Workshop, WorkshopStart, ShareContact, ShareDatapackRequest, ShareDatapackResult, ShareFailure, UpdateProjectRequest, UpdateSessionRequest, CloneRepoRequest, PrReviewers, RepoInfo, ReviewablePrs, TaskPrs,
   AskAgentkRequest, AskAgentkResult, LinkPlan, RunActionsRequest, RunActionsResult, SessionMatch, StartFromLinkRequest, StartFromLinkResult,
   JoinByLinkRequest, JoinByLinkResult, LinkGrant, ShareLink, ShareLinkChange, ShareLinkState,
@@ -241,8 +241,13 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     sharing(req.params.id, () => core.invites.api.revoke(req.params.id, req.params.inviteId)).then(() => peopleAfter(req.params.id)));
 
   // ---- share links (Meko's: one per datapack; anyone signed in who opens it joins) ----
+  /**
+   * Share links are on the web app Meko names (`cloud.web_url`): Meko Cloud's while it's linked to
+   * it. With none named (Meko unlinked, or linked to a server whose web app isn't set) there's no
+   * link to build or to take a token from, as the palette's `joinEntry` finds too.
+   */
   const noWebUrl = (what: string) =>
-    new HttpError(409, `Meko's web app URL isn't known, so AgentK can't ${what}. Set it in Meko's web UI (Settings › Meko Cloud).`);
+    new HttpError(409, `Meko names no web app for share links, so AgentK can't ${what}. Link Meko Cloud, or set its web app, in Meko's web UI (Settings › Meko Cloud).`);
   /** For the browser: the link on Meko's web app while it's on. The token goes nowhere else, the log included. */
   const shareLinkOut = (l: ShareLinkRow, webUrl: string): ShareLink => ({
     active: l.active,
@@ -253,7 +258,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   });
   app.get<{ Params: { id: string } }>('/api/meko/datapacks/:id/share-link', async (req): Promise<ShareLinkState> => {
     shareable(req.params.id);
-    const webUrl = resolveMekoWebUrl(core.config);
+    const webUrl = resolveMekoWebUrl();
     if (!webUrl) return { link: null, unavailable: 'no-web-url' };
     try {
       return { link: shareLinkOut(await core.invites.api.shareLink(req.params.id), webUrl) };
@@ -277,7 +282,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
     else if (keys === 'reset' && b.reset === true) [change, what] = [{ reset: true }, 'reset'];
     else throw new HttpError(400, 'Make one change: turn the link on with a role, turn it off, change its role, or reset it.');
     shareable(req.params.id);
-    const webUrl = resolveMekoWebUrl(core.config);
+    const webUrl = resolveMekoWebUrl();
     if (!webUrl) throw noWebUrl('share by link');
     return sharing(req.params.id, async () => {
       let link = await core.invites.api.setShareLink(req.params.id, change);
@@ -289,7 +294,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   });
   app.post<{ Body: JoinByLinkRequest }>('/api/meko/share-links/join', async (req): Promise<JoinByLinkResult> => {
     core.invites.requireSharing('join datapacks by link');
-    const webUrl = resolveMekoWebUrl(core.config);
+    const webUrl = resolveMekoWebUrl();
     if (!webUrl) throw noWebUrl('join datapacks by link');
     // Only a link on our own Meko's web app: a look-alike link's token never reaches Meko.
     const token = shareLinkToken(typeof req.body?.url === 'string' ? req.body.url : '', webUrl);
@@ -483,6 +488,8 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
       .header('Content-Disposition', 'inline')
       .send(img.data);
   });
+  app.get<{ Params: { id: string }; Querystring: { path?: string; old?: string; commit?: string } }>('/api/sessions/:id/changes/file', async (req): Promise<ChangedText> =>
+    core.sessions.changedText(req.params.id, req.query.path ?? '', req.query.old || null, req.query.commit || undefined));
   // An image pasted into the terminal: the body is the image itself. Its parser lives only in this
   // scope, so no other route takes a body that isn't JSON (and an HTML form can't send image/*).
   await app.register(async (scope) => {
@@ -697,7 +704,7 @@ export async function buildServer(core: Core, opts: ServerOptions): Promise<Fast
   // Outside /api, so the same-origin rule is checked here; all it does is read Meko again.
   app.post<{ Body: { what?: unknown } }>('/_meko/changed', async (req, reply) => {
     if (!sameOrigin(req)) return reply.code(403).send({ error: 'Cross-origin request refused.' });
-    if (req.body?.what === 'cloud') void core.refreshMeko().catch((e: unknown) => core.log.warn('reading Meko\'s Meko Cloud link failed', errMsg(e)));
+    if (req.body?.what === 'cloud') void core.refreshMeko().catch((e: unknown) => core.log.warn('reading Meko again failed', errMsg(e)));
     return reply.code(204).send();
   });
 

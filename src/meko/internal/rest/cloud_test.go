@@ -187,10 +187,9 @@ func TestCloudDatapacks(t *testing.T) {
 	if r := admin("DELETE", "/datapacks/"+cloudDP+"?location=cloud", nil); r.Status != 404 || r.Error.Code != "NOT_FOUND" {
 		t.Fatalf("delete unlinked: %+v", r)
 	}
-	// Sharing is Meko Cloud's: unlinked, it says so. /api/v1/cloud is gone.
+	// Sharing is Meko Cloud's: unlinked, it says so.
 	wantErr(t, e, "GET", "/datapacks/incoming-shares", nil, 409, "CLOUD_NOT_LINKED")
 	wantErr(t, e, "GET", "/datapacks/"+e.DatapackID+"/member-list", nil, 409, "CLOUD_NOT_LINKED")
-	wantErr(t, e, "GET", "/cloud/datapacks", nil, 404, "NOT_FOUND")
 	made := obj(okData(t, e, "POST", "/datapacks", map[string]any{"name": "made-here", "location": "cloud"}, 201))
 	if id, _ := made["datapack_id"].(string); !dpExists(e, id) || made["location"] != nil ||
 		made["web_url"] != "/datapacks/"+id {

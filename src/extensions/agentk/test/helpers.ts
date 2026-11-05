@@ -14,7 +14,6 @@ import { MekoApi } from '../src/server/mekoapi.js';
 import type { MekoAgentsRead } from '../src/server/mekoagents.js';
 import type { MekoTools } from '../src/server/mekosettings.js';
 import type { LocalMekoProbe } from '../src/server/mekolocal.js';
-import type { OwnMekoLink } from '../src/server/mekohandover.js';
 import { getPaths } from '../src/server/paths.js';
 import { startHost, type HostHandle } from '../src/server/host/host.js';
 import { SessionHost } from '../src/server/hostclient.js';
@@ -157,6 +156,11 @@ export function stubMekoTools() {
   return { tools, calls, state };
 }
 
+/** The MCP URL of the Meko a test env's Core uses (the stub answers its calls; nothing listens there). */
+export const TEST_MEKO_URL = 'http://127.0.0.1:7778/mcp';
+/** The Meko Cloud account the test env's Meko is linked to (Meko's `cloud.account`). */
+export const TEST_ACCOUNT = 'test-account0000';
+
 export interface TestEnv {
   home: string;
   repo: string;
@@ -164,16 +168,12 @@ export interface TestEnv {
   meko: ReturnType<typeof stubMeko>;
   mekoApi: ReturnType<typeof fakeMekoApi>;
   mekoTools: ReturnType<typeof stubMekoTools>;
-  /** What the Meko on this computer answers when Core reads it (none at first); never the real `meko`. */
-  local: LocalMekoProbe;
   /**
-   * AgentK's own key handed to Meko (`meko cloud_link`), recorded instead of run: each call's link,
-   * and what it answers (`handOverError` refuses; else Meko's link becomes it, as Meko's would).
+   * What the Meko on this computer answers when Core reads it (one running at `TEST_MEKO_URL` with
+   * the token `test-key`, linked to Meko Cloud as `TEST_ACCOUNT`, at first: AgentK's Meko); never
+   * the real `meko`.
    */
-  handOvers: OwnMekoLink[];
-  handOverError: { value: string | null };
-  /** While set, a handover waits for it before answering (as Meko's checks take a while). */
-  handOverHold: { value: Promise<void> | null };
+  local: LocalMekoProbe;
   /** What Meko's list of agents (GET /api/v1/agents) answers when Core reads it: no answer at first, so nothing is gated. */
   mekoAgents: { value: MekoAgentsRead };
   fakeDir: string;
@@ -243,7 +243,6 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
   cfg.kiro.enabled = !!opts.kiro;
   cfg.opencode.command = FAKE_OPENCODE;
   cfg.opencode.enabled = !!opts.opencode;
-  cfg.meko.apiKey = 'test-key';
   cfg.meko.captureTranscripts = opts.capture !== false;
   if (!opts.review) cfg.codeReview.strategy = 'off';
   cfg.codeReview.check = false;
@@ -251,10 +250,7 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
   const meko = stubMeko();
   const mekoApi = fakeMekoApi();
   const mekoTools = stubMekoTools();
-  const local: LocalMekoProbe = { state: 'none', meko: null };
-  const handOvers: OwnMekoLink[] = [];
-  const handOverError: { value: string | null } = { value: null };
-  const handOverHold: { value: Promise<void> | null } = { value: null };
+  const local: LocalMekoProbe = { state: 'running', meko: { url: TEST_MEKO_URL, token: 'test-key' }, cloud: { account: TEST_ACCOUNT, webUrl: 'https://cloud.mekodata.ai' } };
   const mekoAgents: { value: MekoAgentsRead } = { value: { kind: 'failed', error: "Meko isn't running on this computer" } };
   let hostHandle: HostHandle | null = null;
   const host = new SessionHost(paths, {
@@ -273,17 +269,12 @@ export async function makeEnv(opts: { start?: boolean; capture?: boolean; kiro?:
     host, services: () => null, log: silentLogger, timers: false, mekoApi: mekoApi.api, mekoTools: mekoTools.tools,
     localMeko: async () => ({ ...local }),
     mekoAgents: async () => mekoAgents.value,
-    mekoHandOver: async (_home, link) => {
-      handOvers.push(link);
-      await handOverHold.value;
-      if (handOverError.value) return { ok: false, error: handOverError.value };
-      local.cloud = { set: true, url: link.url, apiKey: link.apiKey, webUrl: link.webUrl || 'https://cloud.mekodata.ai', apiUrl: link.apiUrl || 'https://cloud.mekodata.ai/api/v1' };
-      return { ok: true };
-    },
   });
+  // Core reads the Meko on this computer at its start; one not started reads it here.
   if (opts.start !== false) await core.start();
+  else await core.refreshMeko();
   return {
-    home, repo, core, meko, mekoApi, mekoTools, local, handOvers, handOverError, handOverHold, mekoAgents, fakeDir, killHost,
+    home, repo, core, meko, mekoApi, mekoTools, local, mekoAgents, fakeDir, killHost,
     async cleanup() {
       await core.stop().catch(() => undefined);
       await killHost();
@@ -423,12 +414,23 @@ export async function fakeMekoQuestions() {
   };
 }
 
-/** Makes `env` use the Meko on this computer, at `url` (the fake's), as AgentK does once it has no key of its own. */
+/** Makes `env` use the Meko on this computer at `url` (the fake's), with the token `local-token`. */
 export async function useLocalMeko(env: TestEnv, url: string): Promise<void> {
-  env.core.updateConfig((c) => {
-    c.meko.apiKey = '';
-  });
   env.local.state = 'running';
   env.local.meko = { url: `${url}/mcp`, token: 'local-token' };
+  await env.core.refreshMeko();
+}
+
+/** Makes `env` use its usual Meko again (`TEST_MEKO_URL`, `test-key`) after `noMeko` or `useLocalMeko`. */
+export async function testMeko(env: TestEnv): Promise<void> {
+  env.local.state = 'running';
+  env.local.meko = { url: TEST_MEKO_URL, token: 'test-key' };
+  await env.core.refreshMeko();
+}
+
+/** Makes `env` have no Meko: none running on this computer (`state`: stopped, by default, or not there). */
+export async function noMeko(env: TestEnv, state: 'stopped' | 'none' = 'stopped'): Promise<void> {
+  env.local.state = state;
+  env.local.meko = null;
   await env.core.refreshMeko();
 }

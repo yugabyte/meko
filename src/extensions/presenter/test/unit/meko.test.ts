@@ -85,8 +85,6 @@ describe('where Meko is', () => {
       { state: 'running', local: { url: LOCAL.url, token: LOCAL.token } }],
     ['the link, while the Meko on this computer runs', { ...LOCAL, running: true, cloud: LINKED },
       { state: 'running', local: { url: LOCAL.url, token: LOCAL.token }, cloud: { linked: true, webUrl: LINKED.web_url } }],
-    ['the link from a Meko that routes datapacks by id', { ...LOCAL, running: true, cloud: { ...LINKED, datapack_routing: true } },
-      { state: 'running', local: { url: LOCAL.url, token: LOCAL.token }, cloud: { linked: true, webUrl: LINKED.web_url, routed: true } }],
     ['an unlinked link', { ...LOCAL, running: true, cloud: { set: true, linked: false, web_url: '' } },
       { state: 'running', local: { url: LOCAL.url, token: LOCAL.token }, cloud: { linked: false, webUrl: '' } }],
     ['an older Meko\'s link with its key, while the Meko on this computer is stopped', { ...LOCAL, running: false, cloud: LINK },
@@ -107,13 +105,11 @@ describe('where Meko is', () => {
   const unlinked: MekoProbe = { ...local, cloud: { linked: false, webUrl: '' } };
   const direct: MekoProbe = { ...local, cloud: { linked: true, webUrl: LINK.web_url, direct: { url: LINK.url, apiKey: 'cloud-key', apiUrl: LINK.api_url } } };
   const LOCAL_CREDS = { url: 'http://127.0.0.1:7790/mcp', key: 't', apiUrl: 'http://127.0.0.1:7790/api/v1', kind: 'local' };
-  const CLOUD_CREDS = { url: 'http://127.0.0.1:7790/mcp', key: 't', apiUrl: 'http://127.0.0.1:7790/api/v1/cloud', kind: 'cloud', cloudHost: 'cloud.meko.example' };
+  const CLOUD_CREDS = { url: 'http://127.0.0.1:7790/mcp', key: 't', apiUrl: 'http://127.0.0.1:7790/api/v1', kind: 'cloud', cloudHost: 'cloud.meko.example' };
   const DIRECT_CREDS = { url: LINK.url, key: 'cloud-key', apiUrl: LINK.api_url, kind: 'cloud' };
-  const ROUTED_CREDS = { ...CLOUD_CREDS, apiUrl: 'http://127.0.0.1:7790/api/v1', routed: true };
 
   it.each<[string, MekoProbe[], unknown]>([
-    ['uses Meko Cloud through the Meko on this computer, with its token, when Meko links it', [linked], CLOUD_CREDS],
-    ['keeps REST on the Meko on this computer\'s /api/v1 when it routes datapacks by id', [{ ...local, cloud: { linked: true, webUrl: LINKED.web_url, routed: true } }], ROUTED_CREDS],
+    ['uses Meko Cloud through the Meko on this computer, with its token and its /api/v1, when Meko links it', [linked], CLOUD_CREDS],
     ['finds none when Meko links Meko Cloud but its server is stopped', [{ ...linked, state: 'stopped', local: null }], null],
     ['uses Meko Cloud itself, with its own REST host, when an older Meko hands out the link\'s key', [direct], DIRECT_CREDS],
     ['uses the Meko on this computer when unlinked', [linked, unlinked], LOCAL_CREDS],
@@ -210,7 +206,7 @@ describe('Meko Cloud\'s REST API', () => {
   ])('through the Meko on this computer, %s', async (_n, status, body, want) => {
     const api = await listen((_req, res) => void res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body)));
     const url = await mcp();
-    const m = new MekoClient(async () => ({ state: 'ready', creds: { url, key: 'local-token', apiUrl: `${api}/api/v1/cloud`, kind: 'cloud', cloudHost: 'cloud.meko.example' } }), 'test');
+    const m = new MekoClient(async () => ({ state: 'ready', creds: { url, key: 'local-token', apiUrl: `${api}/api/v1`, kind: 'cloud', cloudHost: 'cloud.meko.example' } }), 'test');
     try {
       expect(await m.at()).toEqual({ kind: 'cloud', host: 'cloud.meko.example' });
       await expect(m.listArtifacts('dp1', 'deck.json')).rejects.toThrow(want);
@@ -219,29 +215,7 @@ describe('Meko Cloud\'s REST API', () => {
     }
   });
 
-  it('finds the Meko on this computer again after its REST API answers 404, as when it updated under Presenter', async () => {
-    const api = await listen((req, res) => {
-      if (req.url!.startsWith('/api/v1/cloud/')) {
-        return void res.writeHead(404, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'Not Found' } }));
-      }
-      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: { items: [], has_more: false } }));
-    });
-    const url = await mcp();
-    let finds = 0;
-    // The Meko before the update passed REST on under /api/v1/cloud; the new one routes by id.
-    const m = new MekoClient(async () => ({ state: 'ready', creds: finds++ === 0
-      ? { url, key: 'local-token', apiUrl: `${api}/api/v1/cloud`, kind: 'cloud', cloudHost: 'cloud.meko.example' }
-      : { url, key: 'local-token', apiUrl: `${api}/api/v1`, kind: 'cloud', cloudHost: 'cloud.meko.example', routed: true } }), 'test');
-    try {
-      await expect(m.listArtifacts('dp1', 'deck.json')).rejects.toThrow(/^Not Found$/);
-      expect(await m.listArtifacts('dp1', 'deck.json')).toEqual([]);
-      expect(finds).toBe(2);
-    } finally {
-      await m.close();
-    }
-  });
-
-  it('reads which datapacks the Meko on this computer serves itself, only when it routes by id', async () => {
+  it('reads which datapacks the Meko on this computer serves itself, only while it reaches Meko Cloud through that Meko', async () => {
     let asked = 0;
     const api = await listen((req, res) => {
       asked++;
@@ -253,8 +227,9 @@ describe('Meko Cloud\'s REST API', () => {
       ] }));
     });
     const url = await mcp();
-    const routed = new MekoClient(async () => ({ state: 'ready', creds: { url, key: 'local-token', apiUrl: `${api}/api/v1`, kind: 'cloud', cloudHost: 'cloud.meko.example', routed: true } }), 'test');
-    const before = new MekoClient(async () => ({ state: 'ready', creds: { url, key: 'local-token', apiUrl: `${api}/api/v1/cloud`, kind: 'cloud', cloudHost: 'cloud.meko.example' } }), 'test');
+    const routed = new MekoClient(async () => ({ state: 'ready', creds: { url, key: 'local-token', apiUrl: `${api}/api/v1`, kind: 'cloud', cloudHost: 'cloud.meko.example' } }), 'test');
+    // An older Meko that handed out the link's key: Presenter calls Meko Cloud itself.
+    const before = new MekoClient(async () => ({ state: 'ready', creds: { url, key: 'cloud-key', apiUrl: `${api}/api/v1`, kind: 'cloud' } }), 'test');
     try {
       expect(await routed.localIds()).toEqual(new Set(['here-1']));
       // Kept a while: every edit to a deck asks.

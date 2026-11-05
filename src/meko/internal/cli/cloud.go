@@ -195,10 +195,9 @@ func cloudStatusLine(l paths.Layout) string {
 
 // cloudToken is meko token --json's cloud: whether the extensions' Meko is linked to Meko Cloud,
 // never its key. Linked, they reach Meko Cloud through this Meko, which holds the key: its /mcp and
-// its /api/v1 serve this Meko's datapacks and send the rest to Meko Cloud (datapack_routing), and
-// they link to its web app at web_url. set says whether the link
-// was ever set: until it is, an extension may hand Meko a key of its own (AgentK does, once, with
-// meko cloud_link). With error, it couldn't be read, and an extension keeps what it last read.
+// its /api/v1 serve this Meko's datapacks and send the rest to Meko Cloud, and they link to its web
+// app at web_url. set says whether the link was ever set. With error, it couldn't be read, and an
+// extension keeps what it last read.
 type cloudToken struct {
 	Set    bool   `json:"set"`
 	Linked bool   `json:"linked"`
@@ -206,8 +205,9 @@ type cloudToken struct {
 	// Account names the linked account without its key (AccountOf), so an extension knows a new key
 	// is another account; "" while unlinked.
 	Account string `json:"account"`
-	// DatapackRouting says this Meko's /api/v1 routes a datapack by its id, so extensions call it
-	// rather than /api/v1/cloud, which an older Meko has and this one doesn't.
+	// DatapackRouting is always true. Only AgentK and Presenter releases from before every datapack
+	// was routed by id read it: without it they call /api/v1/cloud, which this Meko doesn't have.
+	// Current releases ignore it; it stays until those older ones are gone.
 	DatapackRouting bool `json:"datapack_routing,omitempty"`
 	// Error, when set, is why the link couldn't be read; the rest is then empty.
 	Error string `json:"error,omitempty"`

@@ -33,8 +33,8 @@ function DatapackLine({ detected }: { detected: DetectedDatapack }) {
     case 'no-meko':
       return (
         <>
-          Meko isn’t set up, so the project opens without a datapack. Start Meko on this computer (meko start), or link Meko Cloud
-          in Meko’s web UI (Settings › Meko Cloud), to give projects one.
+          Meko isn’t running on this computer, so the project opens without a datapack. Start it with meko start to give
+          projects one.
         </>
       );
     case 'none':

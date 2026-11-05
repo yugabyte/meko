@@ -37,18 +37,16 @@ answers whether or not Meko's server runs:
 
 | Meko says | Presenter uses |
 |---|---|
-| `cloud.linked` and `cloud.datapack_routing` | Meko Cloud and the Meko on this computer's own datapacks, through that Meko: its `url` and `token` for MCP and REST at the same origin's `/api/v1`, which serve a datapack that Meko has (one made there before the link) and pass any other id on to Meko Cloud. Presenter never sees the link's key. Meko Cloud is named by `cloud.web_url`'s host. With Meko's server stopped, no Meko |
-| `cloud.linked` alone (a Meko from before it routed by id) | Meko Cloud, through the Meko on this computer: its `url` and `token` for MCP, which Meko passes on to Meko Cloud, and REST at the same origin's `/api/v1/cloud`, which Meko passes on to Meko Cloud's REST API |
+| `cloud.linked` | Meko Cloud and the Meko on this computer's own datapacks, through that Meko: its `url` and `token` for MCP and REST at the same origin's `/api/v1`, which serve a datapack that Meko has (one made there before the link) and pass any other id on to Meko Cloud. Presenter never sees the link's key. Meko Cloud is named by `cloud.web_url`'s host. With Meko's server stopped, no Meko |
 | `cloud` unlinked or never set, or no `cloud` (a Meko from before the link) | The Meko on this computer: its `url` and `token`, REST at the same origin's `/api/v1` |
 | `cloud` with `url` and `api_key` (an older Meko, which handed out the link's key) | Meko Cloud itself: MCP at `cloud.url`, REST at `cloud.api_url` (another host than the MCP one), the link's key. With no `api_url`, no Meko: the error says to link again |
 | `cloud.error`, or `meko` failed or is gone, after a link was read | The link last read, kept in memory only, so a slow `meko` or a locked Keychain never moves decks |
 | The same before any link was read (a start, or right after Meko's notice) | No Meko, rather than the one on this computer, for the same reason |
 
-When the link changes, and at each start of Meko's server (an update or a rollback may move its REST
-base, `datapack_routing`), Meko posts `{"what":"cloud"}` to `/_meko/changed` on Presenter's socket;
+When the link changes, and at each start of Meko's server (an update or a rollback may change its
+port, token or link), Meko posts `{"what":"cloud"}` to `/_meko/changed` on Presenter's socket;
 the client drops its connection, its conversation and the link it last read, and the next call finds
-Meko again. A 404 from the Meko on this computer's REST API does the same, at most every 30 s, for a
-rollback to a Meko that doesn't post it. One connection is made at a time, so the client and the credentials it reports are
+Meko again. One connection is made at a time, so the client and the credentials it reports are
 always one Meko's. Each Claude run asks `meko token --json` again and reconnects when the URL or key
 changed (the local Meko on a new port, a new client token), then gets that Meko's URL and key (the
 key through `PRESENTER_MEKO_KEY`). A deck's id is its datapack's, which exists in one Meko only, so
@@ -56,12 +54,12 @@ each draft records the Meko it belongs to, read before Meko is asked to make or 
 before Presenter kept it is the current Meko's when that Meko lists its datapack, else the Meko on
 this computer's. A Meko Cloud draft named by another host (its MCP host, from when Presenter held the
 link's key) becomes the current Meko Cloud's when that one lists its datapack. While the Meko on this
-computer links Meko Cloud and routes by id, it lists its own datapacks with Meko Cloud's, so "the Meko
+computer links Meko Cloud, it lists its own datapacks with Meko Cloud's, so "the Meko
 that lists it" no longer tells them apart: `localIds` reads its `GET /api/v1/datapacks`, where a row
 whose `web_url` is a path (`/datapacks/<id>`) is its own, kept 30 s since every edit asks. A deck in
 one of those is the Meko on this computer's: tagged so when made from an untagged draft or loaded,
 served beside Meko Cloud's decks, and retagged when an earlier Presenter tagged it as Meko Cloud's
-(which it did under a Meko that listed both sides before it routed by id), so it still opens once
+(which it did under an earlier Meko), so it still opens once
 Meko Cloud is unlinked; unlinked, the Meko on this computer listing it retags it too. While its list
 can't be read, its own drafts aren't greyed out, and editing one says why it can't be checked. New decks are made in Meko Cloud and tagged as its own. The decks list shows another Meko's drafts greyed out, with what brings them back
 (unlink Meko Cloud, or link that Meko Cloud again). Editing, saving and Claude's jobs refuse them,

@@ -2,11 +2,11 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
-import type { BackgroundTask, ChangeSide, CloseSessionRequest, DiffStat, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, LearnBrief, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
+import type { BackgroundTask, ChangedText, ChangeSide, CloseSessionRequest, DiffStat, CreateSessionRequest, DatapackRef, DiscardCheck, FailedStart, LearnBrief, MoveSessionRequest, PastedImage, Session, SessionChanges, SessionAction, SessionKind, SessionStatus, Stage, StagedImage, StartStage, StartupState, StartupStep, TokenUsage, UpdateSessionRequest } from '../shared/types.js';
 import { LEARN_MONTHS_DEFAULT, LEARN_MONTHS_MAX, LEARN_TEXT_MAX, SESSION_NAME_MAX, START_STAGES, STAGE_LABELS } from '../shared/types.js';
 import type { Core } from './core.js';
 import { all, get, run, tx } from './db.js';
-import { changedImage, changes, diffBase, diffStat, suggestBase, UnknownCommitError } from './changes.js';
+import { changedImage, changedText, changes, diffBase, NotChangedError, diffStat, suggestBase, UnknownCommitError } from './changes.js';
 import {
   BranchGoneError, addReviewWorktree, addWorktree, baseExists, checkedOutAt, commitsBeyond, defaultBranch, discardChanges, ensureFirstCommit, existingBranch, fastForward, isMainRepo,
   fetchPrHead, git, gitRaw, isIdleWorktree, listBaseBranches, prLocalBranch, prRef, remoteFor, remoteOf, remoteRepo, removeWorktree, restoreWorktree, reuseWorktree, trackSource, tryGit, uncommittedCount, unpushedCount,
@@ -595,7 +595,7 @@ export class SessionManager {
     }
     if (learn) {
       if (kind === 'review-pr' || req.pr != null) throw new HttpError(400, "A learn session learns the project's own repo: leave out the PR.");
-      if (!this.core.mekoStatus.configured) throw new HttpError(400, "A learn session saves what it learns to Meko, and there's no Meko. Start Meko on this computer (meko start), or link Meko Cloud in Meko's web UI (Settings › Meko Cloud), first.");
+      if (!this.core.mekoStatus.configured) throw new HttpError(400, "A learn session saves what it learns to Meko, and Meko isn't running on this computer. Start it with meko start first.");
       // Only that there is one: whether we can still write to it is Meko's to say, at each save, as for every session's saves.
       if (!dedicatedDatapack(this.db, projectId)) {
         throw new HttpError(400, "A learn session saves what it learns to the project's dedicated datapack, and this project has none. Add one on the project's home first.");
@@ -2579,6 +2579,28 @@ export class SessionManager {
       throw new HttpError(404, `This image isn't in ${where}, or it is too large to preview.`);
     }
     return img;
+  }
+
+  /**
+   * A changed file's new side as text, and its patch diffed again, for the Changes panel to show the
+   * lines its patch leaves out. Only a file the diff shown changes.
+   */
+  async changedText(id: string, path: string, oldPath: string | null, commit?: string): Promise<ChangedText> {
+    const row = this.row(id);
+    if (!existsSync(row.worktree_path) || !this.ownsWorktree(row)) throw new HttpError(409, 'This session\'s worktree is gone, so there are no changes to show.');
+    let got: ChangedText | null;
+    try {
+      got = await changedText(row.worktree_path, row.base_branch, path, oldPath, commit);
+    } catch (e) {
+      if (e instanceof UnknownCommitError) throw new HttpError(404, GONE_COMMIT);
+      if (e instanceof NotChangedError) throw new HttpError(404, `${path} isn't one of the files ${commit ? 'this commit' : 'this session'} changed, so it isn't shown here.`);
+      throw new HttpError(400, 'Only files inside this session\'s repo can be shown.');
+    }
+    if (!got) {
+      const where = commit ? 'this commit' : 'the worktree';
+      throw new HttpError(404, `This file isn't in ${where}, isn't text, or is too large to show more of.`);
+    }
+    return got;
   }
 
   async discardCheck(id: string): Promise<DiscardCheck> {

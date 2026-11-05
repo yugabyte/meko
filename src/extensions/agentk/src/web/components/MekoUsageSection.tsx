@@ -63,7 +63,7 @@ export function MekoUsageSection({
 function GapsLine({ gaps }: { gaps: MekoGaps }) {
   const line = gapsLine(gaps);
   return (
-    <a className="meko-gaps" href={mekoGapsPath(gaps.datapackId, gaps.cloud)} target="_blank" rel="noopener noreferrer">
+    <a className="meko-gaps" href={mekoGapsPath(gaps.datapackId)} target="_blank" rel="noopener noreferrer">
       <span className="meko-gaps-text">
         {line
           ? <><b>{line.count}</b> Meko couldn't answer <span className="muted">· {line.split}</span></>

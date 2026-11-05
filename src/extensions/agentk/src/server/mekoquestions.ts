@@ -1,15 +1,14 @@
 import type { MekoGaps } from '../shared/types.js';
 import { errMsg, type Logger } from './log.js';
-import { originOf, type LocalMeko } from './mekolocal.js';
+import { mekoApiBase, type LocalMeko } from './mekolocal.js';
 
 /**
  * Meko's Context Gaps: the searches Meko found nothing, or nothing relevant, for, which Meko keeps
  * per datapack as questions (its docs/api.md). Meko judges every search itself; AgentK only reads
  * the questions and marks them, on the Meko on this computer's API listener with the client token
- * (`GET`, `POST …/mark`, `DELETE …/asks` under `/api/v1/datapacks/:id/questions`), while AgentK's
- * Meko calls go to it (`meko`: null otherwise, as with an older Meko that handed out Meko Cloud's
- * key). That covers a linked Meko Cloud's datapacks too: their searches pass through this Meko, which
- * keeps their questions, and its list says so (`location`). The project home's line
+ * (`GET`, `POST …/mark`, `DELETE …/asks` under `/api/v1/datapacks/:id/questions`; `meko`: null
+ * while none runs). That covers a linked Meko Cloud's datapacks too: their searches pass through this
+ * Meko, which keeps their questions. The project home's line
  * counts the open ones and links to them, a learn step answers them, and a learn session's searches while it seeds are
  * forgotten. Nothing here fails what calls it: a Meko that's down, or too old to keep questions
  * (404), is no list.
@@ -49,7 +48,7 @@ export class MekoQuestions {
   async openCounts(datapackId: string): Promise<MekoGaps | null> {
     const data = await this.request('GET', datapackId, '', { state: 'open' });
     if (!isRecord(data) || !isRecord(data.open)) return null;
-    return { datapackId, cloud: data.location === 'cloud', empty: count(data.open.empty), weak: count(data.open.weak) };
+    return { datapackId, empty: count(data.open.empty), weak: count(data.open.weak) };
   }
 
   /**
@@ -96,10 +95,10 @@ export class MekoQuestions {
   /** Meko's `data` (null for a 204), or undefined when there's no Meko to ask or the call failed. */
   private async request(method: string, datapackId: string, path: string, query: Record<string, string>, body?: unknown): Promise<unknown> {
     const local = this.o.meko();
-    const origin = local ? originOf(local.url) : null;
-    if (!local || !origin) return undefined;
+    const base = mekoApiBase(local);
+    if (!local || !base) return undefined;
     const qs = new URLSearchParams(query).toString();
-    const url = `${origin}/api/v1/datapacks/${encodeURIComponent(datapackId)}/questions${path}${qs ? `?${qs}` : ''}`;
+    const url = `${base}/datapacks/${encodeURIComponent(datapackId)}/questions${path}${qs ? `?${qs}` : ''}`;
     try {
       const res = await (this.o.fetch ?? fetch)(url, {
         method,

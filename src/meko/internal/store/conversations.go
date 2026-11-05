@@ -200,6 +200,16 @@ func (s *Store) DeleteConversation(ctx context.Context, datapack, id string) err
 	return nil
 }
 
+// HasMessage says whether a datapack's conversation (datapack "" for one in no datapack) already has
+// the turn id.
+func (s *Store) HasMessage(ctx context.Context, datapack, conversation, id string) (bool, error) {
+	var n int
+	err := s.r.QueryRowContext(ctx, "SELECT count(*) FROM messages m JOIN conversations c ON c.rowid = "+
+		"m.conversation_rowid WHERE COALESCE(c.datapack_id, '') = ? AND c.id = ? AND m.id = ?",
+		datapack, conversation, id).Scan(&n)
+	return n > 0, err
+}
+
 // AddMessage adds a turn to a conversation, with the chunks to embed for conversation search
 // (none if it isn't to be searchable). A turn with an id the conversation already has isn't added
 // again: the stored one comes back, with created false.

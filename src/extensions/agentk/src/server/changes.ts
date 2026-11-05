@@ -248,19 +248,8 @@ export async function changedImage(worktree: string, base: string, path: string,
   const type = previewImageType(path);
   if (!type || !safeRelative(path)) throw new Error('not a previewable image in this repo');
   if (side === 'new' && !commit) {
-    const full = join(worktree, path);
-    let real: string;
-    try {
-      real = realpathSync(full);
-    } catch {
-      return null;
-    }
-    // A symlink must not lead out of the worktree.
-    const root = realpathSync(worktree);
-    if (real !== root && !real.startsWith(root + sep)) throw new Error('not a previewable image in this repo');
-    const st = statSync(real);
-    if (!st.isFile() || st.size > IMAGE_PREVIEW_MAX) return null;
-    return { type, data: readFileSync(real) };
+    const data = worktreeFile(worktree, path, IMAGE_PREVIEW_MAX, 'not a previewable image in this repo');
+    return data && { type, data };
   }
   const mb = await diffBase(worktree, base);
   if (!mb) return null;
@@ -273,6 +262,65 @@ export async function changedImage(worktree: string, base: string, path: string,
   const size = Number(await tryGit(worktree, 'cat-file', '-s', spec));
   if (!size || size > IMAGE_PREVIEW_MAX) return null;
   return { type, data: await gitBuffer(worktree, 'cat-file', 'blob', spec) };
+}
+
+/**
+ * A file in the worktree, at most `max` bytes: null when it's missing, not a file or larger. Throws
+ * `refusal` when a symlink leads out of the worktree.
+ */
+function worktreeFile(worktree: string, path: string, max: number, refusal: string): Buffer | null {
+  let real: string;
+  try {
+    real = realpathSync(join(worktree, path));
+  } catch {
+    return null;
+  }
+  const root = realpathSync(worktree);
+  if (real !== root && !real.startsWith(root + sep)) throw new Error(refusal);
+  const st = statSync(real);
+  if (!st.isFile() || st.size > max) return null;
+  return readFileSync(real);
+}
+
+/** Largest file the Changes panel shows more unchanged lines of. */
+export const TEXT_EXPAND_MAX = 1024 * 1024;
+
+/** Thrown for a path that isn't one of the files the diff shown changes. */
+export class NotChangedError extends Error {}
+
+/**
+ * A changed file's new side as text, for the Changes panel to show the unchanged lines its patch
+ * leaves out, with the file's patch diffed again now (as `changes()` makes it), so the panel can
+ * tell whether the file changed since its diff was read: the worktree's copy (uncommitted edits
+ * included) vs. the merge base, or, given `commit`, the file as that commit left it vs. its parent.
+ * Only a file that diff changes is served (NotChangedError otherwise: untracked and unchanged
+ * files, gitignored ones included, never are); a rename's `oldPath` lets git pair it as `changes()`
+ * did. Null when that side doesn't exist, is larger than TEXT_EXPAND_MAX or isn't text (holds a
+ * NUL byte); throws on a path outside the repo, or an unknown commit (UnknownCommitError).
+ */
+export async function changedText(
+  worktree: string, base: string, path: string, oldPath: string | null, commit?: string,
+): Promise<{ text: string; patch: string } | null> {
+  if (!safeRelative(path) || (oldPath !== null && !safeRelative(oldPath))) throw new Error('not a file in this repo');
+  const mb = await diffBase(worktree, base);
+  if (!mb) return null;
+  const one = commit ? await commitRange(worktree, await branchCommits(worktree, mb.sha), commit) : null;
+  const range = one ? [one.from, one.to] : [mb.sha];
+  const paths = oldPath !== null && oldPath !== path ? [oldPath, path] : [path];
+  // Literal pathspecs: a path is a file name, never a pattern or a `:(magic)` spec.
+  const out = await gitRaw(worktree, '--literal-pathspecs', ...DIFF_CONFIG, 'diff', ...DIFF_OPTS, ...range, '--', ...paths);
+  const [patch] = matchPatches([{ path, oldPath }], splitPatch(out));
+  if (!patch) throw new NotChangedError(path);
+  let data: Buffer | null;
+  if (!one) {
+    data = worktreeFile(worktree, path, TEXT_EXPAND_MAX, 'not a file in this repo');
+  } else {
+    const spec = `${one.to}:${path.split(sep).join('/')}`;
+    const size = Number(await tryGit(worktree, 'cat-file', '-s', spec));
+    data = !size || size > TEXT_EXPAND_MAX ? null : await gitBuffer(worktree, 'cat-file', 'blob', spec);
+  }
+  if (!data || data.includes(0)) return null;
+  return { text: data.toString('utf8'), patch };
 }
 
 /** Splits `git diff` output into one chunk per file, at each `diff --git ` line. */

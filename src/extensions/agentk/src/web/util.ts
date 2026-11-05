@@ -379,24 +379,12 @@ export function slugify(s: string): string {
 }
 
 /**
- * A datapack's page in the Meko web app. While AgentK uses the Meko on this computer, that Meko's
- * own page on this origin, root-absolute: a web URL set for it can only be on its own (loopback)
- * origin, which a browser using remote access can't open. Else the known web app's (Meko Cloud's);
- * null when there's none.
+ * A datapack's page in the web UI of the Meko on this computer, on this origin, root-absolute (so it
+ * works over remote access too), which opens a Meko Cloud datapack in Meko Cloud's web app; null
+ * while there's no Meko.
  */
-export function mekoDatapackUrl(meko: Pick<MekoStatus, 'webUrl' | 'source'>, datapackId: string): string | null {
-  if (meko.source === 'local') return mekoDatapackPath(datapackId);
-  return meko.webUrl ? `${meko.webUrl}${mekoDatapackPath(datapackId)}` : null;
-}
-
-/** An http(s) URL's host, lowercased; null for anything else (never a `javascript:` link). */
-export function httpHost(url: string): string | null {
-  try {
-    const u = new URL(url);
-    return u.protocol === 'https:' || u.protocol === 'http:' ? u.host.toLowerCase() : null;
-  } catch {
-    return null;
-  }
+export function mekoDatapackUrl(meko: Pick<MekoStatus, 'configured'>, datapackId: string): string | null {
+  return meko.configured ? mekoDatapackPath(datapackId) : null;
 }
 
 export function isMac(): boolean {

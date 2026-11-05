@@ -159,7 +159,7 @@ describe('a deck in its datapack', () => {
     meko.where = { kind: 'local', host: '127.0.0.1:7778' };
     const mislabeled = await decks.create({ title: 'Mislabeled', brief: emptyBrief(), sources: { content: [], template: null, animations: [] } });
     await decks.save(untagged.id);
-    // Linked, through a Meko that routes by id: it lists its own datapacks with Meko Cloud's.
+    // Linked, through the Meko on this computer: it lists its own datapacks with Meko Cloud's.
     meko.where = cloud;
     meko.here = new Set([untagged.id, mislabeled.id]);
     expect((await decks.list()).filter((d) => d.elsewhere)).toEqual([]);
@@ -189,7 +189,7 @@ describe('a deck in its datapack', () => {
     const cloud: MekoAt = { kind: 'cloud', host: 'cloud.meko.example' };
     const decks = new DeckStore(getPaths(join(dir, 'home')), meko);
     const d = await decks.create({ title: 'Mislabeled', brief: emptyBrief(), sources: { content: [], template: null, animations: [] } });
-    // A Meko that listed both sides before it routed by id led an earlier Presenter to tag it so.
+    // An earlier Meko led an earlier Presenter to tag it so.
     const stateFile = join(dir, 'home', 'decks', d.id, 'state.json');
     writeFileSync(stateFile, JSON.stringify({ ...JSON.parse(readFileSync(stateFile, 'utf8')), meko: cloud }));
     const fresh = new DeckStore(getPaths(join(dir, 'home')), meko);

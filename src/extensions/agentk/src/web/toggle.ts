@@ -1,4 +1,4 @@
-// On/off settings kept in this browser (Settings › General and Harness): stored only while they differ from
+// On/off settings kept in this browser (Settings › General and Harness, the Changes panel's Wrap lines): stored only while they differ from
 // their default, and applied as they're ticked, here and in the browser's other tabs.
 import { useEffect, useState } from 'react';
 
@@ -61,3 +61,6 @@ export function browserToggle(key: string, byDefault: boolean): BrowserToggle {
 
 /** Whether session tabs and rail rows show their agent's logo while open sessions use two agents. On by default. */
 export const harnessLogosToggle = browserToggle('ak-harness-logos', true);
+
+/** Whether the Changes panel wraps long code lines instead of scrolling them sideways (its Wrap lines). Off by default. */
+export const diffWrapToggle = browserToggle('ak-diff-wrap', false);

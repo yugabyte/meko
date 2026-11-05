@@ -203,8 +203,30 @@ is closer to the branch (a fork's own `<base>` can lag the upstream one the bran
 Each file has a kind (A, M, D, R, U), its line counts, an *uncommitted* tag when it has uncommitted
 edits, and a collapsible diff, which scrolls sideways in its own box (where scrollbars are drawn over
 content, macOS's and phones', a diff wider than the panel leaves room under its last row for it:
-`markOverlayScrollbars()`, `watchSideways()`). Single-file diffs are cut at 256 KB and the whole panel at 4 MB;
+`markOverlayScrollbars()`, `watchSideways()`), or wraps its long lines while the header's **Wrap
+lines** is on (off by default, kept in this browser: `diffWrapToggle` in `src/web/toggle.ts`; it
+only sets a class on the panel's body, so no row is drawn again). Single-file diffs are cut at 256 KB and the whole panel at 4 MB;
 past that only line counts are shown.
+Each hunk's row also holds arrows for the unchanged lines git left out above it, as on GitHub, and a
+row after the last hunk does the same for the lines below it, unless that hunk reaches the end of
+the file (its context after the changes is shorter than before them, or it ends with git's
+no-newline note): ↓ shows the next 20 lines under the change above, ↑ the 20 over the change below,
+and ↕ the rest of a gap with 20 or fewer left (`GAP_STEP`). The first click on a file fetches its
+new side once (`GET /api/sessions/:id/changes/file`, `changedText()` in `changes.ts`: the worktree's
+copy, or in a commit's view the commit's), and every later click is drawn in the browser. Only a
+file the diff shown changes is served (not an unchanged, untracked or gitignored one), inside the
+repo, text only, up to 1 MB. The server diffs the file again as it reads it and sends that patch
+too: when it isn't the patch on screen, the file changed since its diff was read, so the panel says
+so and fetches the diff again. The text is used only when every unchanged and added row is its line
+there (`fitText()`, which takes a CRLF file's lines without their `\r`, since git diffs the
+worktree after its clean conversion). `expandRows()` in `src/web/diff.ts` merges the shown lines
+into the file's rows as unchanged lines numbered on both sides (the old number from the hunk's
+offset), splits a gap around them, and drops a hunk's row once its gap is all shown, so comments and
+ranges work on them like any other line. Shown lines belong to the patch, and the view, they were
+opened on: a new patch for the file starts it over. A comment that ends on a line only an opening
+showed opens it again by itself (after a reload, say), from where the comment or its gap starts. Added, untracked, deleted and binary files, and diffs cut
+at 256 KB, have no arrows. Opened lines don't count in the row budget below, so opening lines in one
+file never closes another, and a large diff still waiting on **Show diff** stays so.
 The panel lists at most 1,000 files (`MAX_FILES`, `capFiles()` in `changes.ts`): the files with
 review comments, so no comment loses its file, then the first by path. The header's file count and
 line counts still cover every file, and a note says how many are listed (*Showing 1,000 of 52,341
@@ -254,7 +276,7 @@ branch's commits alone: the commits since the merge base, newest first (at most 
 `MAX_COMMITS`, `branchCommits()` in `changes.ts`), with short sha, subject and age, filtered by
 typing. A commit is compared with its first parent (git's empty tree for a root commit), without
 uncommitted or untracked files. Only a commit that menu lists is accepted (`?commit=<full sha>` on
-`/changes` and `/changes/image`), so nothing typed reaches git; one that's gone (amended or
+`/changes`, `/changes/image` and `/changes/file`), so nothing typed reaches git; one that's gone (amended or
 rebased) is a 404, and the panel goes back to All changes with a note. A commit's view takes no
 comments, since a comment's sides are the base and the worktree: its rows have no **+**, its
 comments aren't shown, and a comment being written stays open above the files, to finish or cancel.

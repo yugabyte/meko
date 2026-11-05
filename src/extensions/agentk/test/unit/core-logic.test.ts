@@ -3,12 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  DEFAULT_CONFIG, DEFAULT_MEKO_URL, loadConfig, mekoHost, mekoStorageHttp, mekoWebUrl, mekoWebUrlWarning, readClaudeSettingsEnv, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl,
-  ownMekoKey, resolveMekoWithSource, saveConfig,
+  DEFAULT_CONFIG, loadConfig, mekoConfigured, mekoHost, resolveMeko, resolveMekoApiUrl, resolveMekoWebUrl, saveConfig,
 } from '../../src/server/config.js';
 import { forgetContact, listContacts, recordShares } from '../../src/server/contacts.js';
-import { mekoCloudAccount, shortHost } from '../../src/server/core.js';
-import { LocalMekoReader, setMekoLinkHandedOver, type LocalMekoProbe } from '../../src/server/mekolocal.js';
+import { shortHost } from '../../src/server/core.js';
+import { LocalMekoReader, type LocalMekoProbe } from '../../src/server/mekolocal.js';
+import { MekoApi } from '../../src/server/mekoapi.js';
 import { all, kvGet, openDb, run, schemaVersion, snapshotDb } from '../../src/server/db.js';
 import { githubRepo, prettyRemote } from '../../src/server/git.js';
 import { ciState, ciSummary, isLogin, isTrustedAuthor, parseReviewDetails, reviewDetailsQuery } from '../../src/server/github.js';
@@ -62,14 +62,14 @@ describe('config and db', () => {
     const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
     const cfg = structuredClone(DEFAULT_CONFIG);
     cfg.repos.depth = 2;
-    cfg.meko.apiKey = 'k';
+    cfg.meko.captureTranscripts = true;
     saveConfig(paths, cfg);
     const text = readFileSync(paths.config, 'utf8');
     expect(text).toMatch(/^# AgentK configuration/);
     expect(text).toContain('depth = 2');
-    expect(text).toContain('api_key = "k"');
+    expect(text).toContain('capture_transcripts = true');
     expect(text.slice(text.indexOf('\n\n'))).not.toMatch(/port|roots|\[server\]|\[tmux\]/);
-    expect(loadConfig(paths)).toEqual({ ...DEFAULT_CONFIG, repos: { ...DEFAULT_CONFIG.repos, depth: 2 }, meko: { ...DEFAULT_CONFIG.meko, apiKey: 'k' } });
+    expect(loadConfig(paths)).toEqual({ ...DEFAULT_CONFIG, repos: { ...DEFAULT_CONFIG.repos, depth: 2 }, meko: { ...DEFAULT_CONFIG.meko, captureTranscripts: true } });
     saveConfig(paths, structuredClone(DEFAULT_CONFIG));
     expect(loadConfig(paths)).toEqual(DEFAULT_CONFIG);
   });
@@ -124,42 +124,11 @@ describe('config and db', () => {
     expect(shortHost('.weird')).toBe('.weird');
   });
 
-  it('finds the Meko web app for known MCP hosts only', () => {
-    expect(mekoWebUrl('https://mcp.mekodata.ai/mcp')).toBe('https://cloud.mekodata.ai');
-    expect(mekoWebUrl('https://MCP.mekodata.ai/mcp/')).toBe('https://cloud.mekodata.ai');
-    expect(mekoWebUrl('http://localhost:8000/mcp')).toBeNull();
-    expect(mekoWebUrl('not a url')).toBeNull();
-    expect(mekoWebUrl('http://localhost:8000/mcp', ' https://meko.example.com/ ')).toBe('https://meko.example.com');
-    const cfg = structuredClone(DEFAULT_CONFIG);
-    cfg.meko.webUrl = 'https://meko.internal';
-    expect(resolveMekoWebUrl(cfg)).toBe('https://meko.internal');
-  });
-
-  it("names the Meko server's host for PR descriptions: the web app's, else the MCP server's", () => {
-    const cfg = structuredClone(DEFAULT_CONFIG);
-    expect(mekoHost(cfg)).toBe('cloud.mekodata.ai');
-    cfg.meko.url = 'http://meko.example.com:8000/mcp';
-    expect(mekoHost(cfg)).toBe('meko.example.com'); // no web app known for a self-hosted MCP server
-    cfg.meko.webUrl = 'https://app.meko.example.com:8443/';
-    expect(mekoHost(cfg)).toBe('app.meko.example.com');
-    cfg.meko.webUrl = 'not a url';
-    cfg.meko.url = 'also not a url';
-    expect(mekoHost(cfg)).toBe('cloud.mekodata.ai');
-  });
-
-  it('links a datapack by id', () => {
+  it("links a datapack to Meko's own page on this origin, whichever side has it, and nowhere with no Meko", () => {
     const id = 'eb5ba952-643a-4610-a662-a54a39c82a90';
-    const cloud = `https://cloud.mekodata.ai/datapacks/${id}`;
-    expect(mekoDatapackUrl({ webUrl: 'https://cloud.mekodata.ai', source: 'meko' }, id)).toBe(cloud);
-    expect(mekoDatapackUrl({ webUrl: 'https://cloud.mekodata.ai', source: 'config' }, id)).toBe(cloud);
-    // The Meko on this computer: its own page, on the origin that serves AgentK, even with a web URL
-    // set for it (only its own loopback origin is kept, which remote access can't open).
-    expect(mekoDatapackUrl({ webUrl: null, source: 'local' }, id)).toBe(`/datapacks/${id}`);
-    expect(mekoDatapackUrl({ webUrl: 'http://127.0.0.1:7778', source: 'local' }, id)).toBe(`/datapacks/${id}`);
-    expect(mekoDatapackUrl({ webUrl: null, source: 'local' }, 'a/b c')).toBe('/datapacks/a%2Fb%20c');
-    for (const source of ['meko', 'config', 'env', 'claude', null] as const) {
-      expect(mekoDatapackUrl({ webUrl: null, source }, id)).toBeNull();
-    }
+    expect(mekoDatapackUrl({ configured: true }, id)).toBe(`/datapacks/${id}`);
+    expect(mekoDatapackUrl({ configured: true }, 'a/b c')).toBe('/datapacks/a%2Fb%20c');
+    expect(mekoDatapackUrl({ configured: false }, id)).toBeNull();
   });
 
   it("deletes the Meko call logs AgentK kept itself once, and nothing else in a session's folder", () => {
@@ -1033,236 +1002,91 @@ describe('Claude folder trust', () => {
   });
 });
 
-describe('Meko credentials', () => {
-  const keys = ['MEKO_MCP_URL', 'MEKO_API_KEY', 'MEKO_WEB_URL', 'MEKO_API_URL', 'CLAUDE_CONFIG_DIR'] as const;
-  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+describe('the Meko AgentK uses', () => {
+  const local = { url: 'http://127.0.0.1:7778/mcp', token: 'local-token' };
+  let reader: LocalMekoReader | null = null;
   afterEach(() => {
-    for (const k of keys) {
-      if (saved[k] === undefined) delete process.env[k];
-      else process.env[k] = saved[k];
-    }
+    reader?.clear();
+    reader = null;
   });
-  const claudeSettings = (v: unknown) => {
-    const dir = mkdtempSync(join(tmpdir(), 'akl-claude-'));
-    writeFileSync(join(dir, 'settings.json'), JSON.stringify(v));
-    process.env.CLAUDE_CONFIG_DIR = dir;
-  };
-  const clearEnv = () => {
-    for (const k of ['MEKO_MCP_URL', 'MEKO_API_KEY', 'MEKO_WEB_URL'] as const) delete process.env[k];
+  const read = async (probes: LocalMekoProbe[]) => {
+    reader = new LocalMekoReader(async () => probes.shift()!);
+    for (let n = probes.length; n > 0; n--) await reader.refresh();
   };
 
-  it('treats an old config.toml that saved the default URL as unset, and ignores Meko turned off', () => {
-    clearEnv();
-    claudeSettings({ env: { MEKO_MCP_URL: 'https://mcp.example.dev/mcp', MEKO_API_KEY: 'dev-key' } });
-    const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
-    mkdirSync(paths.home, { recursive: true });
-    writeFileSync(paths.config, `[meko]\nenabled = false\nurl = "${DEFAULT_MEKO_URL}"\napi_key = ""\n`);
-    const cfg = loadConfig(paths);
-    expect(cfg.meko.url).toBe('');
-    expect(resolveMeko(cfg)).toEqual({ url: 'https://mcp.example.dev/mcp', apiKey: 'dev-key' });
-    saveConfig(paths, cfg);
-    expect(readFileSync(paths.config, 'utf8')).not.toMatch(/url|enabled/);
+  it('is the Meko running on this computer, linked to Meko Cloud or not, and none while none runs', async () => {
+    await read([{ state: 'running', meko: local, cloud: { account: '', webUrl: '' } }]);
+    expect(resolveMeko()).toEqual({ url: local.url, apiKey: 'local-token' });
+    expect(mekoConfigured()).toBe(true);
+    expect([resolveMekoApiUrl(), resolveMekoWebUrl(), mekoHost()]).toEqual(['http://127.0.0.1:7778/api/v1', null, '127.0.0.1']);
+    // Linked: the same Meko, its REST API the same; only the web app it names for share links is new.
+    await read([{ state: 'running', meko: local, cloud: { account: '3f1c09a4be7d5e21', webUrl: 'https://cloud.mekodata.ai' } }]);
+    expect(resolveMeko()).toEqual({ url: local.url, apiKey: 'local-token' });
+    expect([resolveMekoApiUrl(), resolveMekoWebUrl(), mekoHost()]).toEqual(['http://127.0.0.1:7778/api/v1', 'https://cloud.mekodata.ai', 'cloud.mekodata.ai']);
+    // Stopped: no Meko.
+    await read([{ state: 'stopped', meko: null }]);
+    expect(resolveMeko()).toEqual({ url: '', apiKey: '' });
+    expect([mekoConfigured(), resolveMekoApiUrl()]).toEqual([false, null]);
   });
 
-  it('takes the URL that goes with the key', () => {
-    clearEnv();
-    claudeSettings({ env: { MEKO_MCP_URL: 'https://settings.example/mcp', MEKO_API_KEY: 'settings-key' } });
-    const cfg = structuredClone(DEFAULT_CONFIG);
-    expect(resolveMeko(cfg)).toEqual({ url: 'https://settings.example/mcp', apiKey: 'settings-key' });
-    process.env.MEKO_API_KEY = 'env-key';
-    expect(resolveMeko(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: 'env-key' });
-    process.env.MEKO_MCP_URL = 'https://env.example/mcp';
-    expect(resolveMeko(cfg)).toEqual({ url: 'https://env.example/mcp', apiKey: 'env-key' });
-    cfg.meko.apiKey = 'config-key';
-    expect(resolveMeko(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: 'config-key' });
-    cfg.meko.url = 'https://config.example/mcp';
-    expect(resolveMeko(cfg)).toEqual({ url: 'https://config.example/mcp', apiKey: 'config-key' });
-    cfg.meko.apiKey = '';
-    expect(resolveMeko(cfg)).toEqual({ url: 'https://config.example/mcp', apiKey: 'env-key' });
-    // A later source with a URL and no key of its own: its URL goes with the earlier key.
-    clearEnv();
-    claudeSettings({ env: { MEKO_MCP_URL: 'https://self-hosted.example/mcp' } });
-    process.env.MEKO_API_KEY = 'env-key';
-    expect(resolveMeko(structuredClone(DEFAULT_CONFIG))).toEqual({ url: 'https://self-hosted.example/mcp', apiKey: 'env-key' });
+  it("uploads to an unlinked Meko's own /api/v1, as the tour's gotchas go (#472)", async () => {
+    await read([{ state: 'running', meko: local, cloud: { account: '', webUrl: '' } }]);
+    const calls: string[] = [];
+    const api = new MekoApi(() => ({ baseUrl: resolveMekoApiUrl(), apiKey: resolveMeko().apiKey }), (async (u: string | URL | Request, init?: RequestInit) => {
+      calls.push(`${init?.method ?? 'GET'} ${String(u)} ${(init?.headers as Record<string, string> | undefined)?.Authorization ?? ''}`.trim());
+      return String(u).endsWith('/upload-url')
+        ? Response.json({ data: { url: 'http://127.0.0.1:7778/api/v1/knowledge-uploads/t', fields: { key: 'k' }, key: 'k', already_uploaded: false } })
+        : new Response(null, { status: 204 });
+    }) as typeof fetch);
+    const up = await api.requestUpload('dp-gotchas', 'gotchas.md', Buffer.from('# Gotchas'));
+    await api.postPresigned(up, 'gotchas.md', Buffer.from('# Gotchas'));
+    expect(calls).toEqual([
+      'POST http://127.0.0.1:7778/api/v1/datapacks/dp-gotchas/knowledge-bases/upload-url Bearer local-token',
+      'POST http://127.0.0.1:7778/api/v1/knowledge-uploads/t',
+    ]);
   });
 
-  it('says where the key came from, falling back to the Meko on this computer with its own URL', async () => {
-    clearEnv();
-    claudeSettings({ env: { MEKO_API_KEY: 'settings-key' } });
-    const cfg = structuredClone(DEFAULT_CONFIG);
-    expect(resolveMekoWithSource(cfg).keySource).toBe('claude');
-    process.env.MEKO_API_KEY = 'env-key';
-    expect(resolveMekoWithSource(cfg).keySource).toBe('env');
-    cfg.meko.apiKey = 'config-key';
-    expect(resolveMekoWithSource(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: 'config-key', keySource: 'config' });
-    claudeSettings({});
-    clearEnv();
-    cfg.meko.apiKey = '';
-    expect(resolveMekoWithSource(cfg).keySource).toBeNull();
-    const reader = new LocalMekoReader(async () => ({ state: 'running', meko: { url: 'http://127.0.0.1:7778/mcp', token: 'local-token' } }));
-    try {
-      expect(await reader.refresh()).toBe(true);
-      expect(await reader.refresh()).toBe(false);
-      // Another source's URL never takes the local token.
-      cfg.meko.url = 'https://config.example/mcp';
-      expect(resolveMekoWithSource(cfg)).toEqual({ url: 'http://127.0.0.1:7778/mcp', apiKey: 'local-token', keySource: 'local' });
-      // Any key wins over it.
-      process.env.MEKO_API_KEY = 'env-key';
-      expect(resolveMekoWithSource(cfg)).toEqual({ url: 'https://config.example/mcp', apiKey: 'env-key', keySource: 'env' });
-      clearEnv();
-      // Except a copy of it, which Meko's setup for Claude Code writes, or an older install stored:
-      // its token on another port, or another token on its URL. The live pair is used.
-      const local = { url: 'http://127.0.0.1:7778/mcp', apiKey: 'local-token', keySource: 'local' };
-      claudeSettings({ env: { MEKO_MCP_URL: 'http://127.0.0.1:7700/mcp', MEKO_API_KEY: 'local-token' } });
-      expect(resolveMekoWithSource(cfg)).toEqual(local);
-      claudeSettings({});
-      cfg.meko.url = 'http://127.0.0.1:7778/mcp';
-      cfg.meko.apiKey = 'older-local-token';
-      expect(resolveMekoWithSource(cfg)).toEqual(local);
-      // A Meko Cloud key is never a copy: a setup run against the local Meko without a key leaves its
-      // URL next to the key, which goes with Meko Cloud's URL instead, running or not.
-      cfg.meko.apiKey = 'mko_tkn_cloud';
-      expect(resolveMekoWithSource(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: 'mko_tkn_cloud', keySource: 'config' });
-      reader.clear();
-      expect(ownMekoKey(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: 'mko_tkn_cloud', keySource: 'config' });
-      await reader.refresh();
-      cfg.meko.apiKey = 'older-local-token';
-      // Its token goes to no web app or API URL but its own.
-      cfg.meko.webUrl = 'https://meko.example.com';
-      cfg.meko.apiUrl = 'https://meko.example.com/api/v1';
-      expect([resolveMekoWebUrl(cfg), resolveMekoApiUrl(cfg)]).toEqual([null, null]);
-      cfg.meko.webUrl = 'http://127.0.0.1:7778';
-      cfg.meko.apiUrl = '';
-      expect([resolveMekoWebUrl(cfg), resolveMekoApiUrl(cfg)]).toEqual(['http://127.0.0.1:7778', 'http://127.0.0.1:7778/api/v1']);
-    } finally {
-      reader.clear();
-    }
-  });
-
-  it("uses Meko's Meko Cloud link once Meko owns it, and nothing of AgentK's own after", async () => {
-    clearEnv();
-    claudeSettings({});
-    const cfg = structuredClone(DEFAULT_CONFIG);
-    cfg.meko.apiKey = 'config-key';
-    process.env.MEKO_API_KEY = 'env-key';
-    const local = { url: 'http://127.0.0.1:7778/mcp', token: 'local-token' };
-    const linked = { set: true, url: 'https://meko.example.com/mcp', apiKey: 'meko-key', webUrl: 'https://meko.example.com', apiUrl: 'https://meko.example.com/api/v1' };
-    const probes: LocalMekoProbe[] = [
+  it("keeps the link last read while `meko` can't be asked or can't read it", async () => {
+    const linked = { account: '3f1c09a4be7d5e21', webUrl: 'https://cloud.mekodata.ai' };
+    await read([
       { state: 'running', meko: local, cloud: linked },
-      // `meko` failing keeps the link last read, and so does Meko failing to read it.
       { state: 'failed', meko: null },
       { state: 'running', meko: local, cloudUnreadable: true },
-      { state: 'running', meko: local, cloud: { set: true, url: '', apiKey: '', webUrl: '', apiUrl: '' } },
-      // Never set: AgentK's own key stands in until it's handed over.
-      { state: 'running', meko: local, cloud: { set: false, url: '', apiKey: '', webUrl: '', apiUrl: '' } },
-      { state: 'failed', meko: null },
-    ];
-    const reader = new LocalMekoReader(async () => probes.shift()!);
+    ]);
+    expect(resolveMekoWebUrl()).toBe('https://cloud.mekodata.ai');
+    expect(resolveMeko()).toEqual({ url: local.url, apiKey: 'local-token' });
+  });
+
+  it("ignores AgentK's own Meko keys from before: config.toml's, the environment's and Claude Code's settings'", async () => {
+    const keys = ['MEKO_MCP_URL', 'MEKO_API_KEY', 'MEKO_WEB_URL', 'MEKO_API_URL', 'CLAUDE_CONFIG_DIR'] as const;
+    const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    const dir = mkdtempSync(join(tmpdir(), 'akl-claude-'));
+    writeFileSync(join(dir, 'settings.json'), JSON.stringify({ env: { MEKO_MCP_URL: 'https://mcp.mekodata.ai/mcp', MEKO_API_KEY: 'mko_tkn_claude' } }));
+    Object.assign(process.env, { CLAUDE_CONFIG_DIR: dir, MEKO_MCP_URL: 'https://mcp.mekodata.ai/mcp', MEKO_API_KEY: 'mko_tkn_env', MEKO_API_URL: 'https://cloud.mekodata.ai/api/v1' });
     try {
-      await reader.refresh();
-      expect(resolveMekoWithSource(cfg)).toEqual({ url: 'https://meko.example.com/mcp', apiKey: 'meko-key', keySource: 'meko' });
-      expect([resolveMekoWebUrl(cfg), resolveMekoApiUrl(cfg)]).toEqual(['https://meko.example.com', 'https://meko.example.com/api/v1']);
-      await reader.refresh();
-      expect(resolveMekoWithSource(cfg).keySource).toBe('meko');
-      await reader.refresh();
-      expect(resolveMekoWithSource(cfg).keySource).toBe('meko');
-      await reader.refresh();
-      expect(resolveMekoWithSource(cfg)).toEqual({ url: local.url, apiKey: 'local-token', keySource: 'local' });
-      await reader.refresh();
-      expect(resolveMekoWithSource(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: 'config-key', keySource: 'config' });
-      // Handed over, AgentK's own sources are never read again, even while `meko` can't be asked.
-      setMekoLinkHandedOver(true);
-      await reader.refresh();
-      expect(resolveMekoWithSource(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: '', keySource: null });
-      // A Meko that keeps the key reaches Meko Cloud for AgentK: its own URL and token, REST on its
-      // own /api/v1, which routes datapacks by id, and datapack links to the link's web app. One from
-      // before it routed by id passes REST on under /api/v1/cloud. Stopped, there's no Meko to use.
-      const through = { set: true, url: '', apiKey: '', webUrl: 'https://cloud.mekodata.ai', apiUrl: '', linked: true };
-      probes.push({ state: 'running', meko: local, cloud: { ...through, routed: true as const } },
-        { state: 'running', meko: local, cloud: through }, { state: 'stopped', meko: null, cloud: through });
-      await reader.refresh();
-      expect(resolveMekoWithSource(cfg)).toEqual({ url: local.url, apiKey: 'local-token', keySource: 'meko' });
-      expect([resolveMekoWebUrl(cfg), resolveMekoApiUrl(cfg)]).toEqual(['https://cloud.mekodata.ai', 'http://127.0.0.1:7778/api/v1']);
-      // Upload links to Meko Cloud must be https: this Meko is on http, Meko Cloud's storage isn't.
-      expect(mekoStorageHttp(cfg)).toBe(false);
-      await reader.refresh();
-      expect(resolveMekoApiUrl(cfg)).toBe('http://127.0.0.1:7778/api/v1/cloud');
-      await reader.refresh();
-      expect(resolveMekoWithSource(cfg)).toEqual({ url: DEFAULT_MEKO_URL, apiKey: '', keySource: null });
+      const paths = getPaths(mkdtempSync(join(tmpdir(), 'akl-cfg-')));
+      mkdirSync(paths.home, { recursive: true });
+      writeFileSync(paths.config, '[meko]\nurl = "https://mcp.mekodata.ai/mcp"\napi_key = "mko_tkn_config"\nweb_url = "https://cloud.mekodata.ai"\napi_url = "https://cloud.mekodata.ai/api/v1"\ncapture_transcripts = true\n');
+      const cfg = loadConfig(paths);
+      expect(cfg.meko).toEqual({ ...DEFAULT_CONFIG.meko, captureTranscripts: true });
+      // A save keeps them, unread: a rollback to a release that read them restores only state.db,
+      // and they may be the only copy of a key never linked in Meko.
+      saveConfig(paths, cfg);
+      expect(loadConfig(paths).meko).toEqual({ ...DEFAULT_CONFIG.meko, captureTranscripts: true });
+      expect(readFileSync(paths.config, 'utf8')).toMatch(/api_key = "mko_tkn_config"[\s\S]*api_url = "https:\/\/cloud\.mekodata\.ai\/api\/v1"/);
+      cfg.meko.captureTranscripts = false;
+      saveConfig(paths, cfg);
+      expect(readFileSync(paths.config, 'utf8')).toContain('api_key = "mko_tkn_config"');
+      await read([{ state: 'stopped', meko: null }]);
+      expect(resolveMeko()).toEqual({ url: '', apiKey: '' });
+      // An older Meko's link, which handed out its key, is no account and no web app of AgentK's.
+      await read([{ state: 'running', meko: local }]);
+      expect(resolveMeko()).toEqual({ url: local.url, apiKey: 'local-token' });
     } finally {
-      setMekoLinkHandedOver(false);
-      reader.clear();
-      clearEnv();
+      for (const k of keys) {
+        if (saved[k] === undefined) delete process.env[k];
+        else process.env[k] = saved[k];
+      }
     }
-  });
-
-  it("finds Meko's API: config, then MEKO_API_URL, then the web app plus /api/v1", () => {
-    clearEnv();
-    delete process.env.MEKO_API_URL;
-    claudeSettings({});
-    const cfg = structuredClone(DEFAULT_CONFIG);
-    expect(resolveMekoApiUrl(cfg)).toBe('https://cloud.mekodata.ai/api/v1');
-    cfg.meko.url = 'http://localhost:8000/mcp';
-    expect(resolveMekoApiUrl(cfg)).toBeNull();
-    cfg.meko.webUrl = 'https://meko.example.com';
-    expect(resolveMekoApiUrl(cfg)).toBe('https://meko.example.com/api/v1');
-    process.env.MEKO_API_URL = 'https://api.example.com/v1/';
-    expect(resolveMekoApiUrl(cfg)).toBe('https://api.example.com/v1');
-    cfg.meko.apiUrl = 'https://config-api.example.com/api/v1';
-    expect(resolveMekoApiUrl(cfg)).toBe('https://config-api.example.com/api/v1');
-    delete process.env.MEKO_API_URL;
-  });
-
-  it('warns when Meko is on but its web app is not known', async () => {
-    clearEnv();
-    delete process.env.MEKO_API_URL;
-    claudeSettings({});
-    const cfg = structuredClone(DEFAULT_CONFIG);
-    cfg.meko.apiKey = 'config-key';
-    expect(mekoWebUrlWarning(cfg)).toBeNull();
-    cfg.meko.url = 'https://user:secret@meko.example.com/mcp';
-    expect(mekoWebUrlWarning(cfg)).toMatch(/web app for meko\.example\.com isn't known, so datapack links and sharing are off/);
-    expect(mekoWebUrlWarning(cfg)).not.toContain('secret');
-    cfg.meko.apiUrl = 'https://meko.example.com/api/v1';
-    expect(mekoWebUrlWarning(cfg)).toMatch(/so datapack links are off/);
-    cfg.meko.webUrl = 'https://meko.example.com';
-    expect(mekoWebUrlWarning(cfg)).toBeNull();
-    cfg.meko.webUrl = '';
-    cfg.meko.apiUrl = '';
-    // The Meko on this computer: its datapacks link to its own web UI, but it doesn't share.
-    cfg.meko.apiKey = '';
-    const reader = new LocalMekoReader(async () => ({ state: 'running', meko: { url: 'http://127.0.0.1:7778/mcp', token: 'local-token' } }));
-    try {
-      await reader.refresh();
-      expect(resolveMekoWithSource(cfg).keySource).toBe('local');
-      expect(mekoWebUrlWarning(cfg)).toBe(
-        "sharing is off: the Meko on this computer (127.0.0.1:7778) doesn't share datapacks. Link it to Meko Cloud in Meko's web UI, under Settings › Meko Cloud",
-      );
-      // An API URL on its own origin (kept before Meko owns the link) turns sharing on: nothing to say.
-      cfg.meko.apiUrl = 'http://127.0.0.1:7778/api/v1';
-      expect(resolveMekoApiUrl(cfg)).toBe('http://127.0.0.1:7778/api/v1');
-      expect(mekoWebUrlWarning(cfg)).toBeNull();
-      cfg.meko.apiUrl = '';
-    } finally {
-      reader.clear();
-    }
-    expect(mekoWebUrlWarning(cfg)).toBeNull();
-  });
-
-  it("survives a Claude Code settings file whose env isn't an object", () => {
-    clearEnv();
-    for (const env of [null, ['x'], 'text']) {
-      claudeSettings({ env });
-      expect(readClaudeSettingsEnv()).toEqual({});
-      expect(resolveMekoWebUrl(structuredClone(DEFAULT_CONFIG))).toBe('https://cloud.mekodata.ai');
-    }
-    claudeSettings(null);
-    expect(readClaudeSettingsEnv()).toEqual({});
-  });
-});
-
-describe('mekoCloudAccount', () => {
-  it("is Meko's account for a link's MCP URL and key (src/meko/internal/cloudlink Link.Account)", () => {
-    expect(mekoCloudAccount('https://mcp.example.com/mcp', 'mko_tkn_x')).toBe('8adf4764ab826787');
   });
 });

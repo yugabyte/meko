@@ -307,7 +307,7 @@ export class ProjectService {
    * shows when it's asked: its error is passed on.
    */
   private needMeko(otherwise: string): void {
-    if (!this.core.mekoStatus.configured) throw new HttpError(409, `Meko isn't set up, so ${otherwise}. Start Meko on this computer (meko start), or link Meko Cloud in Meko's web UI (Settings › Meko Cloud).`, 'MEKO_OFF');
+    if (!this.core.mekoStatus.configured) throw new HttpError(409, `Meko isn't running on this computer, so ${otherwise}. Start it with meko start.`, 'MEKO_OFF');
   }
 
   /**

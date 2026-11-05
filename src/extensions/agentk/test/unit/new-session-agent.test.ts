@@ -150,7 +150,7 @@ describe('Settings › Harness', () => {
   });
 
   const meko = (o: Partial<MekoStatus> = {}): MekoStatus => ({
-    configured: true, url: 'https://mcp.mekodata.ai/mcp', source: 'meko', webUrl: null, sharing: true, local: 'running', agentList: 'read',
+    configured: true, url: 'https://mcp.mekodata.ai/mcp', webUrl: null, local: 'running', agentList: 'read',
     claude: { gaps: [], capture: [], unchecked: [], checking: false }, kiro: { gaps: [], capture: [] }, opencode: { own: false }, ...o,
   });
   it("keeps an agent's explanations behind a closed ⓘ, outside its checkbox's label, opening under the row", () => {
@@ -170,7 +170,7 @@ describe('Settings › Harness', () => {
       ['set-opencode', 'set-opencode-check', 'set-opencode-update', 'set-opencode-meko', 'set-opencode-tracking']],
     ['Kiro on another Meko', 'kiro' as const, meko({ kiro: { gaps: ['x'], capture: ['x'] } }),
       ['set-kiro', 'set-kiro-check', 'set-kiro-update', 'set-kiro-meko', 'set-kiro-meko-setup', 'set-kiro-trust']],
-    ['no Meko', 'claude' as const, meko({ configured: false, url: null, source: null }), ['set-claude', 'set-claude-check', 'set-claude-update']],
+    ['no Meko', 'claude' as const, meko({ configured: false, url: null }), ['set-claude', 'set-claude-check', 'set-claude-update']],
   ])("%s: the agent's panel says whether its sessions reach AgentK's Meko, with Meko's setup when they don't", (_, id, m, shown) => {
     expect(controls(id, {}, {}, null, m)).toEqual(shown);
   });
@@ -208,7 +208,7 @@ describe('Settings › Harness', () => {
 });
 
 describe('Settings › General', () => {
-  const localMeko: MekoStatus = { configured: true, url: 'http://127.0.0.1:7778/mcp', source: 'local', webUrl: null, sharing: false, local: 'running', claude: { gaps: [], capture: [], unchecked: [], checking: false }, kiro: null, opencode: null, agentList: 'unread' };
+  const localMeko: MekoStatus = { configured: true, url: 'http://127.0.0.1:7778/mcp', webUrl: null, local: 'running', claude: { gaps: [], capture: [], unchecked: [], checking: false }, kiro: null, opencode: null, agentList: 'unread' };
   const links = (html: string) =>
     [...html.matchAll(/<a[^>]*id="(set-meko-[\w-]+)"[^>]*href="([^"]+)"/g)].map(([, id, href]) => `${id} ${href}`);
 

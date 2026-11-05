@@ -191,11 +191,28 @@ func (s *Server) extensionInfo(name string, installed bool) ExtensionInfo {
 	if p := s.proxy(name); p != nil {
 		row.Path, row.Available = p.Path(), p.Available()
 	}
+	if overtaken(row) {
+		row.Job = nil
+	}
 	row.RolledBack = []string{}
 	if installed && s.opts.Web.ExtensionUpdates != nil {
 		row.ExtensionUpdate = s.opts.Web.ExtensionUpdates(name)
 	}
 	return row
+}
+
+// overtaken reports whether row's failed job no longer says how the extension is: something
+// outside the Extensions page (meko extension install, me_koder start) did what the job couldn't.
+// The job is in memory until the next one, so without this a failed Install would stay on the card
+// of an extension installed from a terminal until Meko restarts. Only a running extension
+// overtakes one: an install can fail after registering it (it never answered on its socket, or a
+// registered one's own install failed again), and that failure must still show.
+func overtaken(row ExtensionInfo) bool {
+	j := row.Job
+	if j == nil || j.State != JobFailed || !row.Installed || !row.Available {
+		return false
+	}
+	return j.Action == "install" || j.Action == "start"
 }
 
 func (s *Server) extensionList(c echo.Context) error {

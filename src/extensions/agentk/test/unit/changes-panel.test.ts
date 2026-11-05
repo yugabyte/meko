@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChangedFile } from '../../src/shared/types.js';
 import { FileDiff, FilePath } from '../../src/web/components/ChangesPanel.js';
-import { parsePatch } from '../../src/web/diff.js';
+import { expandRows, parsePatch } from '../../src/web/diff.js';
 import { watchSideways } from '../../src/web/hooks/useMedia.js';
 import { LONG_PRESS_MS, RangeDrag, type CommentPick, type Drag } from '../../src/web/hooks/useRangeDrag.js';
 
@@ -54,6 +54,41 @@ describe('a picked range', () => {
       '<tr class="dl-add picked" data-i="3">',
       '<tr class="dl-add picked pick-end" data-i="4">',
     ]);
+  });
+});
+
+describe('gap rows', () => {
+  const mod = { ...file, path: 'mod.txt', kind: 'modified', added: 1, removed: 1 } as ChangedFile;
+  // Lines 1–30 hidden above the hunk; lines 1–10 above a hunk that starts at 11.
+  const patch = (start: number) => [`@@ -${start},3 +${start},3 @@ ctx`, ' a', '-b', '+B', ' c'].join('\n');
+  const html = (start: number, note: string | null = null, expands = true) => {
+    const rows = expandRows(parsePatch(patch(start)), null, new Set());
+    return renderToStaticMarkup(createElement(FileDiff, {
+      file: mod, lines: rows, limit: rows.length, page: 2000, onMore: () => {}, onExpand: expands ? () => {} : undefined, expandNote: note, onComment: () => {},
+      picked: null, imageUrl: () => '', renderAfter: () => null,
+    }));
+  };
+
+  it('puts ↑ on a gap above the first hunk, ↕ on a short one, and ↓ after the last hunk', () => {
+    const big = html(31);
+    expect(big.match(/aria-label="[^"]+"/g)).toEqual([
+      'aria-label="Show the 20 lines above the next change"',
+      'aria-label="Comment on line 31"', 'aria-label="Comment on removed line 32"', 'aria-label="Comment on line 32"', 'aria-label="Comment on line 33"',
+      'aria-label="Show the next 20 lines"',
+    ]);
+    expect(big).toContain('<tr class="dl-hunk dl-gap" data-i="0"><td class="gap" colSpan="3">');
+    expect(big).toContain('<td class="code">@@ -31,3 +31,3 @@ ctx</td>');
+    expect(html(11)).toContain('aria-label="Show the 10 hidden lines"');
+  });
+
+  it('disables the arrows while the file loads, shows why it can\'t when it fails, and draws plain hunk rows without onExpand', () => {
+    expect(html(31, 'loading')).toMatch(/<button class="gap-btn" disabled=""/);
+    const failed = html(31, 'This file is too large.');
+    expect(failed).not.toContain('gap-btn');
+    expect(failed).toContain('<td class="code">This file is too large.</td>');
+    const plain = html(31, null, false);
+    expect(plain).not.toContain('gap-btn');
+    expect(plain).toContain('<tr class="dl-hunk" data-i="0"><td class="cg"></td>');
   });
 });
 

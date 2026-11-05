@@ -9,9 +9,10 @@ You need Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon, and a codin
 [Kiro CLI](https://kiro.dev/cli/) 2.32 or later, or more than one.
 You also need [Meko](https://mekodata.ai) on this computer: it serves AgentK to your browser, at
 `/ext/agentk/` on its own port (7777), and decides who can reach it. Meko also gives projects datapacks (shared
-memory) and lets you share projects. For datapacks, AgentK uses Meko Cloud once you link it in Meko's
-web UI (Settings › Meko Cloud, which links to Meko Cloud's sign-up and login pages to make a key; or
-`meko cloud_link` on a computer without a browser), and otherwise the Meko on this computer. Install Meko, and then Meko installs AgentK:
+memory) and lets you share projects. AgentK uses the Meko on this computer, which keeps your datapacks
+there, or in Meko Cloud once you link it in Meko's web UI (Settings › Meko Cloud, which links to Meko
+Cloud's sign-up and login pages to make a key; or `meko cloud_link` on a computer without a browser).
+Sharing needs Meko Cloud. Install Meko, and then Meko installs AgentK:
 
 ```sh
 curl -fsSL https://mekodata.ai/install.sh | sh

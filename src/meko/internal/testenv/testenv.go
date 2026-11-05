@@ -66,6 +66,8 @@ type Options struct {
 	ExtractorHarness memory.Harness
 	// Answerer, if set, writes search answers instead of a real CLI.
 	Answerer memory.Answerer
+	// MaxContentBytes, if set, is the storage limit instead of the default ([storage] max_content_mb).
+	MaxContentBytes int64
 	// Credential, if set, is the REST routes' credential check instead of the server's, for a
 	// request with credentials the API listener doesn't give (a session, local access).
 	Credential func(echo.Context) string
@@ -151,7 +153,13 @@ func Start(t *testing.T, o Options) *Env {
 	url := fmt.Sprintf("http://127.0.0.1:%d", port)
 	svc := memory.New(st, memoryengine.NewClient(l.MemoryEngineSock, internal), memory.Options{UserID: userID, Log: log,
 		FilesDir: l.KnowledgeFiles, BaseURL: url, ExtractorHarness: o.ExtractorHarness,
-		Answerer: o.Answerer})
+		Answerer: o.Answerer, MaxContentBytes: o.MaxContentBytes, CloudLinked: func() bool {
+			if o.MCPCloud == nil {
+				return false
+			}
+			linked, err := o.MCPCloud.IsLinked()
+			return err == nil && linked
+		}})
 	// The sweep that embeds turns and knowledge-base chunks, and the indexer, as serve runs them.
 	sweep, stopSweep := context.WithCancel(context.Background())
 	swept := make(chan struct{}, 2)
@@ -188,7 +196,7 @@ func Start(t *testing.T, o Options) *Env {
 	srv := server.New(server.Options{
 		Info: server.Info{Version: "test", DataDir: root, PID: os.Getpid(), StartedAt: time.Now()},
 		Port: port, Token: AdminToken, ClientToken: ClientToken, Auth: o.Auth, Logger: log,
-		MemoryEngine: svc.EngineStatus, UsageStats: usage.State,
+		MemoryEngine: svc.EngineStatus, UsageStats: usage.State, Storage: svc.Storage,
 		MCP:    mcp.NewHandler(mcpOpts),
 		REST:   func(g *echo.Group) { rest.Register(g, restOpts) },
 		Upload: upload, Download: download,

@@ -248,6 +248,9 @@ func serviceError(c echo.Context, err error) error {
 		return envelope.Fail(c, http.StatusConflict, "CONFLICT", "A datapack with that name already exists.")
 	case errors.Is(err, memory.ErrBadRequest):
 		return badRequest(c, strings.TrimPrefix(err.Error(), memory.ErrBadRequest.Error()+": "))
+	case errors.Is(err, memory.ErrStorageFull):
+		// 402, as Meko Cloud answers a plan's limit.
+		return envelope.Fail(c, http.StatusPaymentRequired, "STORAGE_LIMIT_EXCEEDED", err.Error())
 	}
 	return err
 }
