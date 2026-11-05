@@ -590,28 +590,6 @@ export function gapsLine(c: Pick<MekoGaps, 'empty' | 'weak'>): { count: string; 
 /** The status detail the server sets when a design waits for approval (`DESIGN_READY` in lifecycle.ts). */
 const DESIGN_READY = 'Design ready for your approval';
 
-/**
- * The Design gate in the stage bar: Design Review, which opens the design (`reviewTarget`) and
- * never approves itself, since only the panel can send the answers with the approval.
- */
-export function designGate(session: Session): GateButton {
-  const reason = session.hasDesign ? null : 'AgentK hasn’t proposed a design yet.';
-  const title = session.designQuestions.open
-    ? 'Review the design and answer its open questions, then approve it there'
-    : 'Review the design, then approve it there';
-  return { label: 'Design Review', reason, title: reason ?? title };
-}
-
-/**
- * What Design Review does: open the design panel on its questions (open questions, or a change to
- * one of AgentK's decisions waiting) or on the design, or, with the panel already open, bring the
- * panel's approve button into view (`approve`).
- */
-export function reviewTarget(openQuestions: number, changing: boolean, panelOpen: boolean): 'questions' | 'design' | 'approve' {
-  if (panelOpen) return 'approve';
-  return openQuestions > 0 || changing ? 'questions' : 'design';
-}
-
 /** The panel header's approve button's label: with open questions, it takes the user to answer them first. */
 export function approveLabel(openQuestions: number): string {
   return openQuestions ? 'Answer & approve' : 'Approve design';
@@ -851,9 +829,12 @@ export function stageWords(s: Session): string {
   return runsToMerge(s) ? `${STAGE_LABELS[s.stage]} · Run to merge` : STAGE_LABELS[s.stage];
 }
 
-/** Whether the stage bar's gate has Run to merge's box (StageBar in ProjectView.tsx). */
+/**
+ * Whether the stage bar's gate has Run to merge's box (StageBar in ProjectView.tsx). Not in Design:
+ * there it's in the design panel, beside its Approve.
+ */
 export function runToMergeShown(session: Session): boolean {
-  return session.stage === 'code' || session.stage === 'review' || (session.stage === 'design' && session.hasDesign);
+  return session.stage === 'code' || session.stage === 'review';
 }
 
 const facts = (n: number) => `${n} ${n === 1 ? 'fact' : 'facts'}`;

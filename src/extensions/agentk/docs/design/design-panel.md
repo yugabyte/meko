@@ -109,21 +109,15 @@ recommendation, keeping the text. A change to one of AgentK's decisions keeps th
 begun against (`against`), and is dropped once the decision is no longer that: sent and recorded,
 or revised by AgentK.
 
-The approval goes from the panel, never from the stage bar. The stage bar's gate (and the ⋯
-sheet's) is **Design Review** (`designGate()`; disabled before there's a design, and, like every
-gate, while the session is busy or another action from the view is out): it opens the
-panel on the questions while any are open, or while a change to one of AgentK's decisions waits in
-this browser (`changingDecisions()`, which `approveDesign()` refuses, since its request can't carry
-it), and on the design otherwise; with the panel already open it brings the panel's approve button
-into view and focuses it (`reviewTarget()`, the panel's `approveAt`): the questions' footer
-**Approve with answers** (**Cancel approval** while one waits, or the footer itself while the
-button is disabled: `reviewFocus()`; its line gives Approve's reason before Send for revision's)
-while they're on screen, else the header's **Approve design** (or, while it's disabled, the line
-under the header that says why: busy, or `designApprovalBlocker()`, shown whenever the header's
-Approve is closed, as a phone has no tooltips), or, with open questions on the Design tab, the
-questions. Only a bump made while the panel is up counts, never one it mounted with from another
-session's panel. A gate that only showed the questions did nothing when they were already on
-screen, which on a phone they usually are. With open questions the header's **Approve design** reads **Answer & approve** and takes you to
+The approval goes from the panel, never from the stage bar. In Design the stage bar has no gate
+button of its own: **Design doc** (with the count of open questions while there are any) stays in
+view through the whole stage and opens the panel, which holds **Run to merge** beside whichever
+approve button is on screen: the header's, or, while the header leaves its own out (the questions
+on screen with open ones or a change to a decision, always so on the wide full page), the
+questions' footer's **Approve with answers** (or **Cancel approval**), never both (DesignPanel
+passes `onAutoRun` to `DesignQuestions` only when `headerApproves()` is false). Only an approval waiting for the turn's end shows in the bar (with **Cancel approval**).
+The bar used to carry a **Design Review** gate with its own **Run to merge** box beside Design doc,
+which only opened the same panel, so it was removed as a duplicate. With open questions the header's **Approve design** reads **Answer & approve** and takes you to
 them, and the approval goes from their footer, **Approve with answers** (the header leaves its
 button out while the questions are on screen, or can't be shown because the design couldn't be
 read, and does the same, reading **Answer & approve**, while a change to one of AgentK's decisions

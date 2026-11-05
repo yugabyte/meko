@@ -286,7 +286,7 @@ export function SessionSheet({
   session: Session;
   /** A task's code-review session: no Archive or discard. */
   child?: boolean;
-  /** The stage bar with its gate (Design Review, Open PR, Merge & Close). */
+  /** The stage bar with its gate (Open PR, Merge & Close). */
   stage: ReactNode;
   /** The session's actions on the sheet, in order. */
   items: SessionActionItem[];

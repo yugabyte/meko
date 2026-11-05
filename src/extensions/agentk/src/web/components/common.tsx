@@ -28,7 +28,7 @@ export function HarnessLogo({ harness }: { harness: string }) {
 }
 
 /**
- * Run to merge (`Session.autoRun`) beside a gate: Design Review, Open PR and Merge & Close. It
+ * Run to merge (`Session.autoRun`) beside a gate: the design panel's Approve, Open PR and Merge & Close. It
  * saves as it changes (`onChange`, `PATCH /api/sessions/:id`), and is held while that's out.
  */
 export function RunToMergeCheck({ session, disabled = false, onChange }: { session: Session; disabled?: boolean; onChange: (on: boolean) => Promise<void> }) {

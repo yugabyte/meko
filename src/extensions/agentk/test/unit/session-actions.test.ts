@@ -91,12 +91,14 @@ describe('sessionActions', () => {
     expect(item(stopped, 'review-retry')?.primary).toBe(false);
   });
 
-  it('keeps Design doc in the bar while the design has open questions', () => {
+  it('keeps Design doc in the bar throughout Design, with its open questions counted', () => {
     const asking = session({ stage: 'design', hasDesign: true, designQuestions: { open: 2 } as Session['designQuestions'] });
     expect(ids(asking, 'menu')).not.toContain('design');
     expect(item(asking, 'design')).toMatchObject({ count: '2 open questions', on: ['sheet'] });
+    // With nothing to answer it stays in the bar too: Design has no other way to the design there.
     const answered = session({ stage: 'design', hasDesign: true });
-    expect(ids(answered, 'menu')).toContain('design');
+    expect(ids(answered, 'menu')).not.toContain('design');
+    expect(item(answered, 'design')).toMatchObject({ count: undefined, on: ['sheet'] });
     expect(ids(session({ stage: 'code', hasDesign: true, designQuestions: { open: 2 } as Session['designQuestions'] }), 'menu')).toContain('design');
   });
 

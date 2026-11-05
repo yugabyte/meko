@@ -2914,9 +2914,6 @@ a.icon-btn {
   font-size: 12px;
   color: var(--muted);
 }
-.design-blocked:focus {
-  outline: none;
-}
 .design-updated {
   border-radius: 4px;
   padding: 0 4px;

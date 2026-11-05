@@ -20,7 +20,7 @@ import { useIsMobile } from '../hooks/useMedia';
 import { navigate } from '../router';
 import { actionsOn, sessionActions, sessionMenuKeys, type SessionActionId } from '../sessionactions';
 import { disposeTerminal, getTerminal } from '../terminals';
-import { closingText, cx, demoReviewGate, dotState, designGate, findingsAutoOpen, idleStopped, isMac, isReviewChild, joinedPartSelected, reviewBadge, reviewGatesPr, reviewOpens, reviewParent, shownStep, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, reviewTarget, runToMergeShown, runToMergeTitle, sessionTabTitle, sidewaysWheel, totalTokens, updateShowing, usageTitle } from '../util';
+import { closingText, cx, demoReviewGate, dotState, findingsAutoOpen, idleStopped, isMac, isReviewChild, joinedPartSelected, reviewBadge, reviewGatesPr, reviewOpens, reviewParent, shownStep, formatCredits, formatTokens, mergeGate, offersLearn, openPrGate, queuedText, repoFolder, runToMergeShown, runToMergeTitle, sessionTabTitle, sidewaysWheel, totalTokens, updateShowing, usageTitle } from '../util';
 import { AskSheet } from './AskSheet';
 import { HeldReviewsSheet } from './HeldReviewsSheet';
 import { Busy, Check, ContextRing, DatapackName, Dialog, Elapsed, HarnessLogo, ReviewSegment, RunToMergeCheck, RunToMergeMark, StageChip, StatusDot } from './common';
@@ -153,10 +153,8 @@ export function ProjectView({
   const [ending, setEnding] = useState(false);
   // Code review settings… from the ⋯ menu.
   const [reviewSettings, setReviewSettings] = useState(false);
-  // Bumped to show the design's questions (Design Review, or Approve pressed with questions open).
+  // Bumped to show the design's questions (Approve pressed with questions open).
   const [questionsAt, setQuestionsAt] = useState(0);
-  // Bumped to bring the open design panel's approve button into view (Design Review).
-  const [approveAt, setApproveAt] = useState(0);
   const [sharing, setSharing] = useState(false);
   // The questions Claude is asking, opened from the bar above the terminal or the ⋯ sheet.
   const [asking, setAsking] = useState(false);
@@ -180,7 +178,6 @@ export function ProjectView({
     setAsking(false);
     setHeldOpen(false);
     setQuestionsAt(0);
-    setApproveAt(0);
     // A review's findings open beside its terminal, on a desktop; a phone opens them from the ⋯ sheet.
     if (child && !mobile) setPanel('findings');
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only when another session comes on screen
@@ -212,10 +209,7 @@ export function ProjectView({
   }, [menuAt]);
   // Showing the questions is for the panel open now: one opened later starts on the design.
   useEffect(() => {
-    if (panel !== 'design') {
-      setQuestionsAt(0);
-      setApproveAt(0);
-    }
+    if (panel !== 'design') setQuestionsAt(0);
   }, [panel]);
   // During Design, show the design as soon as it's written, and again whenever it's revised.
   const designAt = session?.stage === 'design' ? session.designUpdatedAt : null;
@@ -276,19 +270,6 @@ export function ProjectView({
       setActingOn(null);
     }
   };
-  // Design Review: the design, on its questions when there are any to answer; with the panel open
-  // already, its approve button. The approval itself goes from the panel, with the answers.
-  const openDesignReview = () => {
-    if (!session) return;
-    setSheet(false);
-    const target = reviewTarget(session.designQuestions.open, changingDecisions(session.id), panel === 'design');
-    if (target === 'approve') {
-      setApproveAt((n) => n + 1);
-      return;
-    }
-    setPanel('design');
-    if (target === 'questions') setQuestionsAt((n) => n + 1);
-  };
   // Run to merge's checkbox beside the gates (StageBar) and the design panel's Approve.
   const setAutoRun = async (on: boolean) => {
     if (!session) return;
@@ -307,7 +288,6 @@ export function ProjectView({
   const filesText = `${changedFiles.toLocaleString()} ${changedFiles === 1 ? 'file' : 'files'}`;
   const dedicated = project.datapacks.find((d) => d.role === 'dedicated');
   const sharedCount = project.datapacks.filter((d) => d.role === 'shared').length;
-  const canDesign = !!session && (session.hasDesign || session.stage === 'design');
   const openQuestions = session?.stage === 'design' ? session.designQuestions.open : 0;
   const rv = session?.reviewingPr ?? null;
   // On a phone the gate lives in the ⋯ sheet; a dot on ⋯ says when it's waiting on you (or Claude asks something).
@@ -539,10 +519,8 @@ export function ProjectView({
         <StageBar
           session={session}
           onAct={act}
-          onReview={openDesignReview}
           onOpenCodeReview={session && !child ? () => openFindings(session) : undefined}
           onOpenReviewTerminal={session && !child ? () => openReviewTerminal(session) : undefined}
-          designOpen={panel === 'design'}
           onAutoRun={setAutoRun}
           onMove={onMove}
           onHeld={() => setHeldOpen(true)}
@@ -568,13 +546,16 @@ export function ProjectView({
             </>
           ) : (
             <>
-              {/* While the design has open questions, Design doc and its count stay in view. */}
-              {canDesign && openQuestions > 0 && (
+              {/* In Design, Design doc stays in view (with its open questions' count): the design is
+                  reviewed and approved in its panel. */}
+              {session?.stage === 'design' && (
                 <button className={cx('btn small', panel === 'design' && 'on')} onClick={() => toggle('design')}>
                   Design doc
-                  <span className="count-badge" title={`${openQuestions} open questions`} aria-label={`, ${openQuestions} open questions`}>
-                    {openQuestions}
-                  </span>
+                  {openQuestions > 0 && (
+                    <span className="count-badge" title={`${openQuestions} open questions`} aria-label={`, ${openQuestions} open questions`}>
+                      {openQuestions}
+                    </span>
+                  )}
                 </button>
               )}
               {session?.status === 'exited' && (
@@ -619,7 +600,6 @@ export function ProjectView({
             session={session}
             datapacks={project.datapacks}
             showQuestions={questionsAt}
-            approveAt={approveAt}
             onClose={() => setPanel(null)}
             onApprove={() => act('approve-design')}
             onAutoRun={setAutoRun}
@@ -666,7 +646,6 @@ export function ProjectView({
             <StageBar
               session={session}
               onAct={act}
-              onReview={openDesignReview}
               onOpenCodeReview={!child ? () => {
                 setSheet(false);
                 openFindings(session);
@@ -675,7 +654,6 @@ export function ProjectView({
                 setSheet(false);
                 openReviewTerminal(session);
               } : undefined}
-              designOpen={panel === 'design'}
               onAutoRun={setAutoRun}
               onMove={(preset) => {
                 setSheet(false);
@@ -897,10 +875,8 @@ function reviewGate(
 function StageBar({
   session,
   onAct,
-  onReview,
   onOpenCodeReview,
   onOpenReviewTerminal,
-  designOpen = false,
   onAutoRun,
   onMove,
   onHeld,
@@ -912,15 +888,11 @@ function StageBar({
 }: {
   session: Session | null;
   onAct: (a: SessionAction, req?: CloseSessionRequest) => Promise<void>;
-  /** Design Review: opens the design panel, or brings its approve button into view (`reviewTarget`). */
-  onReview: () => void;
   /** Shows the task's code review findings; left out on the review's own screen. */
   onOpenCodeReview?: () => void;
   /** Shows the task's review session's terminal, while it waits on you; left out on the review's own screen. */
   onOpenReviewTerminal?: () => void;
-  /** The design panel is open. */
-  designOpen?: boolean;
-  /** Turns Run to merge on or off (its checkbox beside Design Review, Open PR and Merge & Close). */
+  /** Turns Run to merge on or off (its checkbox beside Open PR and Merge & Close). */
   onAutoRun: (on: boolean) => Promise<void>;
   onMove: (preset?: MovePreset) => void;
   /** Opens the reviews held for the user. */
@@ -984,12 +956,12 @@ function StageBar({
         </button>
       );
       break;
-    case 'design': {
-      const runToMerge = noPr ? null : <RunToMergeCheck session={session} disabled={blocked} onChange={onAutoRun} />;
+    case 'design':
+      // No gate of its own: the design is reviewed and approved (with Run to merge beside Approve)
+      // in its panel, opened by Design doc. Only an approval waiting for the turn's end shows here.
       if (session.approvalQueued) {
         gate = (
           <span className="gate-group">
-            {runToMerge}
             <span className="gate-pill" title="The approval goes to AgentK when its turn ends, unless the turn changes the design">
               ✓ Approved: goes when the turn ends
             </span>
@@ -998,21 +970,8 @@ function StageBar({
             </button>
           </span>
         );
-        break;
       }
-      // Design Review only opens the design: the approval goes from the panel, with the answers.
-      const review = designGate(session);
-      reason = review.reason;
-      gate = (
-        <span className="gate-group">
-          {session.hasDesign && runToMerge}
-          <button className="gate" disabled={blocked || !!reason} title={review.title} aria-expanded={designOpen} onClick={onReview}>
-            {review.label}
-          </button>
-        </span>
-      );
       break;
-    }
     case 'code': {
       if (reviewGatesPr(session) && session.codeReview) {
         gate = reviewGate(session.codeReview, blocked, onAct, onOpenCodeReview, onOpenReviewTerminal, midTurn);
