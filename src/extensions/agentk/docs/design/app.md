@@ -376,8 +376,8 @@ in the accent colour and project names in bold, so they don't read as commands. 
 these use Ctrl, so the terminal doesn't get Ctrl+K, Ctrl+1–9 or Ctrl+Tab; every other key passes
 through to the terminal whenever it has focus, except the find shortcut and the editing keys below. To copy from the terminal, drag across the text and
 press `Ctrl+C` (`⌘C`), which
-copies rather than interrupting Claude while text is selected. While a program running full screen
-has the mouse (OpenCode), a plain drag goes to it; Shift-drag (Option-drag on a Mac) selects in the browser
+copies rather than interrupting Claude while text is selected. While Claude has the mouse (it runs
+full screen), a plain drag goes to Claude; Shift-drag (Option-drag on a Mac) selects in the browser
 instead. Text a program copies itself (OSC 52) goes on the clipboard too. Clipboard access
 needs HTTPS or localhost.
 
@@ -417,16 +417,9 @@ typing mode (it would bring up the keyboard); Esc in the terminal still goes to 
 while the bar is open (Copied, a notice) goes just under the bar, clear of the overlay at the
 bottom. The bar's state is the terminal's, so it survives switching sessions, and clicks on it
 never reach the terminal, so searching a session open on another screen doesn't move it here.
-Claude Code sessions run on the main screen whatever the user's own `tui` setting says (AgentK's
-`--settings` file sets `"tui": "default"`; a session started before that switches at its next
-launch, and `--resume` prints the whole conversation again), so the scrollback holds the session's
-last 10,000 lines (`TERM_SCROLLBACK`; older ones are dropped) and stepping scrolls the terminal to
-each match, as in any terminal. A page that loads or reconnects gets the session host's copy,
-which keeps 10,000 lines too once the host runs a release with this; a host started before keeps
-5,000 until it's restarted (`me_koder host restart`, which restarts every session's agent). While a program runs
-full screen (the alternate buffer: OpenCode, or one you start yourself) there's no scrollback, and
-the bar says it searches only the screen. A phrase across a line break Claude Code made itself
-isn't found.
+While the agent runs full screen (the alternate buffer: OpenCode, Claude Code's full-screen mode)
+there's no scrollback, and the bar says it searches only the screen. A phrase across a line break
+Claude Code made itself isn't found.
 
 **The projects pane's width, and hiding it.** In the wide layout, dragging the pane's right edge
 (or the arrow keys on it) sets its width, from 180 to 480 px; a double-click on the edge goes back
@@ -579,8 +572,8 @@ the row, an attach key picks images and files for Claude and closes the row once
 box (it grows with its text to about a fifth of the visible screen, then scrolls) whose text goes
 in as one bracketed paste (with any Escape characters removed), then any held images and files (see
 Keyboard; those pasted into the box are held above it), then Enter; Send works with them alone,
-and if the terminal isn't connected, the text and the held files stay. Swiping scrolls through mouse-wheel reports to a program running full screen while it has the mouse
-(OpenCode), and through the terminal's own scrollback otherwise (Claude Code, on the main screen). The steps are sent together once a frame, a flick keeps
+and if the terminal isn't connected, the text and the held files stay. Swiping scrolls through mouse-wheel reports to Claude Code while it has the mouse
+(it runs full screen), and through the terminal's own scrollback otherwise. The steps are sent together once a frame, a flick keeps
 coasting and slows down until it stops or a new touch lands, and the terminal on screen draws with
 WebGL (fetched only on touch screens; it falls back to the DOM renderer if WebGL is missing, loses
 its context, or sizes its canvas wrongly). In select mode (it puts the keyboard away) a drag
