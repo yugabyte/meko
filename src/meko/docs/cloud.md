@@ -316,6 +316,11 @@ One of this Meko's datapacks can be moved to the linked Meko Cloud, one at a tim
 datapack's page (`internal/cloudsync`). It's all or nothing, and it's the owner's (the admin token,
 or the web UI); an agent's client token gets 403.
 
+It's **off until the owner turns on Cloud Sync** in Settings (`PUT /settings/cloud-sync {enabled}`,
+saved as `cloud_sync.enabled`): until then the button isn't shown and the precheck and the sync are
+409 `CLOUD_SYNC_OFF`. Turning it on doesn't link Meko Cloud; a sync while unlinked asks for the API
+key, in Settings › Meko Cloud, before anything else.
+
 1. **Precheck**: Meko measures the datapack (`store.SyncSize`: memories, collective ones too; the
    turns Cloud would make searchable, none when it's opted out of conversation search; its files'
    bytes, all and the largest) and asks Meko Cloud whether that fits the account's plan. The limits

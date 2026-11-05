@@ -1,11 +1,12 @@
 // Moves this datapack to the linked Meko Cloud: first whether it fits the plan, each limit shown,
 // then the sync, all or nothing. Once it's done, the datapack is gone from this computer and lives
-// in Meko Cloud, where every call on it goes.
+// in Meko Cloud, where every call on it goes. With no Meko Cloud link yet, it asks for the API key.
 
 import { useEffect, useState } from "react";
-import { Check, Cloud, ExternalLink, X } from "lucide-react";
-import { api } from "../lib/api";
+import { Check, Cloud, ExternalLink, KeyRound, X } from "lucide-react";
+import { ApiError, api } from "../lib/api";
 import { bytes, count } from "../lib/format";
+import { MEKO_CLOUD, navigate } from "../lib/route";
 import type { Datapack, SyncCheck, SyncRun } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
 import { Dialog } from "./Dialog";
@@ -62,6 +63,12 @@ export function CloudSyncDialog({
   const checks = run?.precheck?.checks ?? precheck.data?.checks ?? [];
   const fits = (run?.precheck ?? precheck.data)?.ok ?? false;
   const name = datapack.datapack_name;
+  // Meko Cloud isn't linked: the API key comes first, in Settings › Meko Cloud.
+  const needsKey = precheck.error instanceof ApiError && precheck.error.code === "CLOUD_NOT_LINKED";
+  const addKey = () => {
+    onClose();
+    navigate(MEKO_CLOUD);
+  };
 
   return (
     <Dialog
@@ -82,6 +89,15 @@ export function CloudSyncDialog({
             )}
             <Button variant="primary" onClick={onSynced}>
               Done
+            </Button>
+          </>
+        ) : needsKey ? (
+          <>
+            <Button variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={addKey}>
+              <KeyRound className="size-4" /> Add API key
             </Button>
           </>
         ) : (
@@ -108,7 +124,12 @@ export function CloudSyncDialog({
             and agents reach it in Meko Cloud with no change on their side. If anything goes wrong, it stays here as it
             is.
           </p>
-          {precheck.error && <ErrorNote error={precheck.error} />}
+          {needsKey && (
+            <p className="text-sm">
+              First link Meko Cloud with your API key, so Meko knows which account to move it to. Then sync it again.
+            </p>
+          )}
+          {precheck.error && !needsKey && <ErrorNote error={precheck.error} />}
           {!precheck.data && !precheck.error && (
             <p className="flex items-center gap-2 text-sm text-muted-foreground">
               <Spinner className="size-3.5" /> Checking it fits your Meko Cloud plan…

@@ -151,3 +151,23 @@ func (s *Service) SetSyncJob(ctx context.Context, datapack, importID string) err
 	}
 	return s.st.SetSetting(ctx, keySyncJobs, string(b))
 }
+
+// keyCloudSync is the settings key of "Cloud Sync": "1" on, anything else off. Off by default, so a
+// datapack can be synced to Meko Cloud only once the owner turns it on in Settings.
+const keyCloudSync = "cloud_sync.enabled"
+
+// CloudSyncEnabled says whether syncing datapacks to Meko Cloud is turned on.
+func (s *Service) CloudSyncEnabled(ctx context.Context) bool {
+	v, _, err := s.st.Setting(ctx, keyCloudSync)
+	return err == nil && v == "1"
+}
+
+// SetCloudSyncEnabled turns syncing datapacks to Meko Cloud on or off. Turning it off doesn't stop a
+// sync already under way.
+func (s *Service) SetCloudSyncEnabled(ctx context.Context, on bool) error {
+	v := "0"
+	if on {
+		v = "1"
+	}
+	return s.st.SetSetting(ctx, keyCloudSync, v)
+}

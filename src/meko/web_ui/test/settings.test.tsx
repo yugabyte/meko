@@ -127,9 +127,35 @@ test("Keep call contents turns on with keep alone, and clearing asks first", asy
   expect(document.body.textContent).toContain("None kept now.");
 });
 
-test("the cards come in order: Meko Cloud, Claude Code, Access, Calls, then anonymous usage stats", async () => {
+test("the cards come in order: Meko Cloud, Cloud Sync, Claude Code, Access, Calls, then anonymous usage stats", async () => {
   serve({});
   await render();
   const headings = [...document.querySelectorAll("h3")].map((h) => h.textContent);
-  expect(headings).toEqual(["Meko Cloud", "Uses your Claude Code", "Access", "Calls", "Anonymous usage stats"]);
+  expect(headings).toEqual([
+    "Meko Cloud",
+    "Cloud Sync",
+    "Uses your Claude Code",
+    "Access",
+    "Calls",
+    "Anonymous usage stats",
+  ]);
+});
+
+test("Cloud Sync is off until it's turned on, and asks for the API key while Meko Cloud isn't linked", async () => {
+  let on = false;
+  serve({
+    "GET /api/v1/settings/cloud-sync": () => ({ data: { enabled: on } }),
+    "PUT /api/v1/settings/cloud-sync": () => ((on = true), { data: { enabled: true } }),
+    "GET /api/v1/settings/meko-cloud": () => ({ data: { linked: false } }),
+  });
+  await render();
+  expect(toggle("Enable Cloud Sync").getAttribute("aria-checked")).toBe("false");
+  expect(document.body.textContent).not.toContain("API key");
+  await act(async () => toggle("Enable Cloud Sync").click());
+  expect(sent.find((c) => c.method === "PUT")).toMatchObject({
+    url: "/api/v1/settings/cloud-sync",
+    body: JSON.stringify({ enabled: true }),
+  });
+  expect(toggle("Enable Cloud Sync").getAttribute("aria-checked")).toBe("true");
+  expect(document.body.textContent).toContain("asks for your Meko Cloud API key");
 });

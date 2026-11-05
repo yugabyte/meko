@@ -18,6 +18,8 @@ import (
 // Meko's own routes, never sent on to Meko Cloud.
 
 func (a *api) registerCloudSync(g *echo.Group) {
+	g.GET("/settings/cloud-sync", a.cloudSyncSetting)
+	g.PUT("/settings/cloud-sync", a.setCloudSyncSetting)
 	if a.Sync == nil {
 		return
 	}
@@ -29,6 +31,41 @@ func (a *api) registerCloudSync(g *echo.Group) {
 func (a *api) syncOwner(c echo.Context) error {
 	return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN",
 		"Only Meko's owner can sync a datapack to Meko Cloud: the web UI, or meko cloud_sync.")
+}
+
+// cloudSyncSetting is GET /settings/cloud-sync: {enabled}, whether datapacks can be synced to Meko
+// Cloud. Off until the owner turns it on.
+func (a *api) cloudSyncSetting(c echo.Context) error {
+	return envelope.OK(c, map[string]bool{"enabled": a.Service.CloudSyncEnabled(ctx(c))})
+}
+
+// setCloudSyncSetting is PUT /settings/cloud-sync {enabled}, for the owner only.
+func (a *api) setCloudSyncSetting(c echo.Context) error {
+	if !a.owner(c) {
+		return envelope.Fail(c, http.StatusForbidden, "FORBIDDEN", "Only Meko's owner can change this, in Settings.")
+	}
+	var body struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if ok, err := bind(c, &body); !ok {
+		return err
+	}
+	if body.Enabled == nil {
+		return badRequest(c, "enabled is true or false")
+	}
+	if err := a.Service.SetCloudSyncEnabled(ctx(c), *body.Enabled); err != nil {
+		return err
+	}
+	return a.cloudSyncSetting(c)
+}
+
+// syncOff refuses a precheck or a sync while Cloud Sync is off.
+func (a *api) syncOff(c echo.Context) (bool, error) {
+	if a.Service.CloudSyncEnabled(ctx(c)) {
+		return false, nil
+	}
+	return true, envelope.Fail(c, http.StatusConflict, "CLOUD_SYNC_OFF",
+		"Cloud Sync is off: turn it on in Settings to sync a datapack to Meko Cloud.")
 }
 
 // syncError replies to a sync that couldn't start or a precheck that couldn't run.
@@ -57,6 +94,9 @@ func (a *api) syncPrecheck(c echo.Context) error {
 	if !a.owner(c) {
 		return a.syncOwner(c)
 	}
+	if off, err := a.syncOff(c); off {
+		return err
+	}
 	id, ok, err := a.pathDatapack(c)
 	if !ok {
 		return err
@@ -74,6 +114,9 @@ func (a *api) syncPrecheck(c echo.Context) error {
 func (a *api) startSync(c echo.Context) error {
 	if !a.owner(c) {
 		return a.syncOwner(c)
+	}
+	if off, err := a.syncOff(c); off {
+		return err
 	}
 	id, ok, err := a.pathDatapack(c)
 	if !ok {

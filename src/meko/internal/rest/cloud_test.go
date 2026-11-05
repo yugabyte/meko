@@ -187,8 +187,25 @@ func TestCloudDatapacks(t *testing.T) {
 	if r := admin("DELETE", "/datapacks/"+cloudDP+"?location=cloud", nil); r.Status != 404 || r.Error.Code != "NOT_FOUND" {
 		t.Fatalf("delete unlinked: %+v", r)
 	}
-	// Syncing a datapack to Meko Cloud is the owner's, and needs the link.
+	// Syncing a datapack to Meko Cloud is the owner's, is off until the owner turns it on, and needs
+	// the link.
 	wantErr(t, e, "POST", "/datapacks/"+e.DatapackID+"/cloud-sync/precheck", nil, 403, "FORBIDDEN")
+	if st := obj(okData(t, e, "GET", "/settings/cloud-sync", nil, 200)); st["enabled"] != false {
+		t.Fatalf("Cloud Sync on by default: %v", st)
+	}
+	for _, path := range []string{"/cloud-sync/precheck", "/cloud-sync"} {
+		if r := admin("POST", "/datapacks/"+e.DatapackID+path, nil); r.Status != 409 || r.Error.Code != "CLOUD_SYNC_OFF" {
+			t.Fatalf("%s with Cloud Sync off: %+v", path, r)
+		}
+	}
+	wantErr(t, e, "PUT", "/settings/cloud-sync", map[string]any{"enabled": true}, 403, "FORBIDDEN")
+	if r := admin("PUT", "/settings/cloud-sync", map[string]any{}); r.Status != 400 {
+		t.Fatalf("no enabled: %+v", r)
+	}
+	if r := admin("PUT", "/settings/cloud-sync", map[string]any{"enabled": true}); r.Status != 200 ||
+		obj(r.Data)["enabled"] != true {
+		t.Fatalf("turned on: %+v", r)
+	}
 	if r := admin("POST", "/datapacks/"+e.DatapackID+"/cloud-sync", nil); r.Status != 409 ||
 		r.Error.Code != "CLOUD_NOT_LINKED" {
 		t.Fatalf("a sync, unlinked: %+v", r)
