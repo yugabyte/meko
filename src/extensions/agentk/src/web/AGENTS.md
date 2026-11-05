@@ -96,6 +96,16 @@ API, from its first note whenever a label appears (`transform` and `box-shadow` 
 never changes), and stay still with reduced motion.
 `test/unit/busy-labels.test.ts` flags a static label like "Saving…" in a component.
 
+## Checkboxes
+
+Every `<input type="checkbox">` is drawn as a keycap, like the busy dots' keys: standing up when
+off, pressed down and lit with a tick when checked. It's the native input restyled in `styles.css`
+(`:where(input[type='checkbox']:not(.prose *))`), so a new checkbox needs no class or component,
+and labels, Space and screen readers work as they always did. Its rules are as specific as
+`input`, so a context's own rule (`.check input`) places it. Task lists in rendered markdown
+(`.prose`) keep the browser's box, as does forced-colors mode. Radio buttons aren't restyled.
+`test/unit/checkbox-style.test.ts` checks it stays shaped by state and still under reduced motion.
+
 ## Reloads after an update
 
 An open page reloads itself when the server comes back on another version (`reload.ts`), unless
