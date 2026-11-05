@@ -115,6 +115,11 @@ export interface CallFilter {
 }
 
 // GET /settings/call-contents: whether calls' contents are kept, for how long, and what's kept now.
+// GET /settings/cloud-sync: whether datapacks can be synced to Meko Cloud; off until it's turned on.
+export interface CloudSyncSetting {
+  enabled: boolean;
+}
+
 export interface CallContents {
   keep: boolean;
   retention_days: number;

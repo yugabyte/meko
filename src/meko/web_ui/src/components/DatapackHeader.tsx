@@ -1,13 +1,13 @@
-// A datapack's name, description and tabs, with export, edit, sync to Meko Cloud (while it's linked)
-// and delete.
+// A datapack's name, description and tabs, with export, edit, sync to Meko Cloud (once Cloud Sync is
+// on in Settings) and delete.
 
 import { useState } from "react";
 import { Cloud, Download, Pencil, Trash2, UserPlus } from "lucide-react";
 import { api } from "../lib/api";
-import { useCloudLinked } from "../lib/cloud";
 import { saveBlob } from "../lib/download";
 import { href, navigate, type Tab } from "../lib/route";
 import type { Datapack } from "../lib/types";
+import { useLoad } from "../lib/useLoad";
 import { CloudBanner } from "./CloudBanner";
 import { CloudSyncDialog } from "./CloudSyncDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -53,7 +53,7 @@ export function DatapackHeader({
   };
   const [inviting, setInviting] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const linked = !!useCloudLinked().data;
+  const cloudSync = !!useLoad(() => api.cloudSync(), []).data?.enabled;
   return (
     <header className="border-b bg-card px-4 pt-4 sm:px-8 sm:pt-6">
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
@@ -74,7 +74,7 @@ export function DatapackHeader({
           <Button size="sm" variant="ghost" onClick={() => setEditing(true)} title="Edit name and description">
             <Pencil className="size-3.5" /> <span className="hidden sm:inline">Edit</span>
           </Button>
-          {linked && (
+          {cloudSync && (
             <Button
               size="sm"
               variant="ghost"

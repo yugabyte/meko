@@ -11,6 +11,7 @@ import type {
   ArtifactList,
   AuthStatus,
   CallContents,
+  CloudSyncSetting,
   CallDetail,
   CallFilter,
   CallPage,
@@ -198,6 +199,8 @@ export const api = {
   },
   call: (id: number) => request<CallDetail>("GET", `/calls/${id}`),
   // "Keep call contents", the owner only to change; clearing keeps the calls.
+  cloudSync: () => request<CloudSyncSetting>("GET", "/settings/cloud-sync"),
+  setCloudSync: (enabled: boolean) => request<CloudSyncSetting>("PUT", "/settings/cloud-sync", { enabled }),
   callContents: () => request<CallContents>("GET", "/settings/call-contents"),
   setCallContents: (keep: boolean) => request<CallContents>("PUT", "/settings/call-contents", { keep }),
   clearCallContents: () => request<CallContents>("DELETE", "/calls/contents"),

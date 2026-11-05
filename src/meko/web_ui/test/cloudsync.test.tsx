@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 // The Sync to Meko Cloud dialog against a faked /api/v1: a datapack that doesn't fit the plan can't
-// be synced and says which limit it's over; one that fits is synced, then offers Meko Cloud's link.
+// be synced and says which limit it's over; one that fits is synced, then offers Meko Cloud's link;
+// with no Meko Cloud link, it asks for the API key instead.
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -17,14 +18,17 @@ const DP: Datapack = { datapack_id: ID, datapack_name: "invoices", description: 
 let root: Root | undefined;
 let sent: string[];
 
-function serve(pc: SyncPrecheck) {
+function serve(pc: SyncPrecheck | { code: string; message: string }) {
   sent = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
       const key = `${init?.method ?? "GET"} ${url}`;
       sent.push(key);
-      if (key === `POST /api/v1/datapacks/${ID}/cloud-sync/precheck`) return Response.json({ data: pc, error: null });
+      if (key === `POST /api/v1/datapacks/${ID}/cloud-sync/precheck`) {
+        if ("code" in pc) return Response.json({ data: null, error: pc }, { status: 409 });
+        return Response.json({ data: pc, error: null });
+      }
       if (key === `POST /api/v1/datapacks/${ID}/cloud-sync`) {
         return Response.json({ data: { datapack_id: ID, datapack_name: "invoices", state: "done", step: "",
           web_url: "https://cloud.example/datapacks/x" }, error: null }, { status: 202 });
@@ -73,4 +77,15 @@ test("one that fits is synced, then offers Meko Cloud's link", async () => {
   expect(document.querySelector<HTMLAnchorElement>('a[href="https://cloud.example/datapacks/x"]')).not.toBeNull();
   await act(async () => button("Done")!.click());
   expect(onSynced).toHaveBeenCalled();
+});
+
+test("with no Meko Cloud link, it asks for the API key and syncs nothing", async () => {
+  serve({ code: "CLOUD_NOT_LINKED", message: "Meko Cloud isn't linked" });
+  await render();
+  expect(document.body.textContent).toContain("link Meko Cloud with your API key");
+  expect(button("Add API key")).toBeTruthy();
+  expect(button("Sync to Meko Cloud")).toBeUndefined();
+  await act(async () => button("Add API key")!.click());
+  expect(window.location.pathname).toBe("/settings/meko-cloud");
+  expect(sent).not.toContain(`POST /api/v1/datapacks/${ID}/cloud-sync`);
 });
