@@ -110,10 +110,10 @@ export function openCodeHarness(deps: {
    * AgentK's Meko for a launch: the config file with its MCP server, while Meko is on and OpenCode
    * has no `meko` server of its own (`ownMeko`); else null (and the file removed).
    */
-  const mekoConfig = (paths: Paths, cfg: Config): string | null => {
+  const mekoConfig = (paths: Paths): string | null => {
     try {
-      if (mekoConfigured(cfg) && !ownMeko()) {
-        const { url, apiKey } = resolveMeko(cfg);
+      if (mekoConfigured() && !ownMeko()) {
+        const { url, apiKey } = resolveMeko();
         return writeOpenCodeMeko(paths, url, apiKey);
       }
       removeOpenCodeMeko(paths);
@@ -135,7 +135,7 @@ export function openCodeHarness(deps: {
     launcher(paths, cfg, l) {
       const conv = l.resume ? conversation(paths, l.row) : null;
       const instructions = writeOpenCodeInstructions(paths, l.row.id, l.systemPrompt);
-      const meko = mekoConfig(paths, cfg);
+      const meko = mekoConfig(paths);
       return {
         sessionId: l.row.id,
         worktree: l.row.worktree_path,

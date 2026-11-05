@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../../src/server/server.js';
 import { MekoError } from '../../src/server/meko.js';
 import { run } from '../../src/server/db.js';
-import { gitRepo, makeEnv, pinFiles, pinnedDatapack, readJsonl, waitFor, type TestEnv } from '../helpers.js';
+import { TEST_MEKO_URL, gitRepo, makeEnv, noMeko, pinFiles, pinnedDatapack, readJsonl, waitFor, type TestEnv } from '../helpers.js';
 
 
 describe('projects without a datapack, and without Meko', () => {
@@ -16,16 +16,12 @@ describe('projects without a datapack, and without Meko', () => {
     await env.cleanup();
   });
 
-  /** No key, and (as in every test env) no Meko running on this computer: Meko isn't set up. */
-  const turnMekoOff = async () => {
-    env.core.updateConfig((c) => {
-      c.meko.apiKey = '';
-    });
-  };
+  /** No Meko running on this computer: there's no Meko. */
+  const turnMekoOff = () => noMeko(env);
 
-  it('says no Meko is installed here, with a key too, and pushes the change once `meko` is found', async () => {
-    // The test env has a key, and no `meko` on this computer.
-    expect(env.core.mekoStatus.configured).toBe(true);
+  it('says no Meko is installed here, and pushes the change once `meko` is found', async () => {
+    await noMeko(env, 'none');
+    expect(env.core.mekoStatus.configured).toBe(false);
     expect(env.core.state().meko.local).toBe('none');
     const onChange = vi.fn();
     env.core.on('change', onChange);
@@ -135,32 +131,27 @@ describe('projects without a datapack, and without Meko', () => {
 
       await turnMekoOff();
       const state = (await call('GET', '/api/state')).json();
-      expect(state.meko).toMatchObject({ configured: false, sharing: false });
+      expect(state.meko).toMatchObject({ configured: false });
+      expect(state.meko).not.toHaveProperty('sharing');
+      expect(state.meko).not.toHaveProperty('source');
       expect((await call('POST', '/api/invites/check')).json()).toEqual({ datapacks: [], invites: [], closed: [] });
       expect((await call('GET', '/api/meko/datapacks')).json()).toEqual([]);
 
-      // On again once Meko Cloud is linked in Meko: opening Settings reads it.
-      env.local.cloud = { set: true, url: 'https://mcp.mekodata.ai/mcp', apiKey: 'mko_tkn_brand_new_key', webUrl: 'https://cloud.mekodata.ai', apiUrl: 'https://cloud.mekodata.ai/api/v1' };
+      // On again once Meko runs on this computer: opening Settings reads it.
+      Object.assign(env.local, { state: 'running', meko: { url: TEST_MEKO_URL, token: 'test-key' } });
       await call('GET', '/api/settings');
-      expect((await call('GET', '/api/state')).json().meko).toMatchObject({ configured: true, source: 'meko', url: 'https://mcp.mekodata.ai/mcp', sharing: true });
+      expect((await call('GET', '/api/state')).json().meko).toMatchObject({ configured: true, url: TEST_MEKO_URL });
     });
 
-    it('follows the Meko on this computer as it starts, moves and stops, and drops a stored copy of its token', async () => {
+    it('follows the Meko on this computer as it starts, moves and stops, linked or not', async () => {
       const local = { url: 'http://127.0.0.1:7778/mcp', token: 'local-token-1234' };
-      // An older install stored the local Meko's URL and token.
-      env.core.updateConfig((c) => {
-        c.meko.url = local.url;
-        c.meko.apiKey = local.token;
-      });
-      Object.assign(env.local, { state: 'running', meko: local });
+      Object.assign(env.local, { state: 'running', meko: local, cloud: { account: '', webUrl: '' } });
+      await call('GET', '/api/settings');
       const resets = () => env.meko.calls.filter((c) => c.name === 'reset').length;
       const r0 = resets();
       await call('GET', '/api/settings');
-      // The Meko on this computer doesn't share, and the page is told so.
-      expect((await call('GET', '/api/state')).json().meko).toMatchObject({ source: 'local', url: local.url, sharing: false });
-      expect(env.core.config.meko).toMatchObject({ url: '', apiKey: '' });
+      expect((await call('GET', '/api/state')).json().meko).toMatchObject({ configured: true, url: local.url, webUrl: null });
       expect(resets()).toBe(r0);
-      expect(env.core.mekoStatus.configured).toBe(true);
 
       // Restarted on another port: reconnects there, keeping the invites and shares it knows (the same account).
       const forget = vi.spyOn(env.core.invites, 'forgetAccount');
@@ -173,7 +164,7 @@ describe('projects without a datapack, and without Meko', () => {
       // Stopped: no Meko, and sessions still start.
       Object.assign(env.local, { state: 'stopped', meko: null });
       await call('GET', '/api/settings');
-      expect(env.core.state().meko).toMatchObject({ source: null, local: 'stopped' });
+      expect(env.core.state().meko).toMatchObject({ url: null, local: 'stopped' });
       expect(env.core.mekoStatus.configured).toBe(false);
       const p = await env.core.projects.create({ repoPath: env.repo, name: 'Plain', datapack: { mode: 'none' } });
       const s = await env.core.sessions.create(p.id, { name: 'Work', kind: 'quick' });
@@ -182,14 +173,23 @@ describe('projects without a datapack, and without Meko', () => {
       // Started again: the same account, so neither the stop nor the start forgot its invites.
       Object.assign(env.local, { state: 'running', meko: local });
       await call('GET', '/api/settings');
-      expect(env.core.mekoStatus).toMatchObject({ source: 'local', url: local.url });
+      expect(env.core.mekoStatus).toMatchObject({ configured: true, url: local.url });
       expect(forget).not.toHaveBeenCalled();
 
-      // An API URL on its own origin, kept from before Meko owns the link, lets it share after all.
-      env.core.updateConfig((c) => {
-        c.meko.apiUrl = 'http://127.0.0.1:7778/api/v1';
-      });
-      expect((await call('GET', '/api/state')).json().meko).toMatchObject({ source: 'local', sharing: true });
+      // Linked to Meko Cloud: the same URL and token, another account behind them, whose web app
+      // names the share links. Its invites aren't the unlinked Meko's: they're forgotten.
+      env.local.cloud = { account: '3f1c09a4be7d5e21', webUrl: 'https://cloud.mekodata.ai' };
+      await call('GET', '/api/settings');
+      expect((await call('GET', '/api/state')).json().meko).toMatchObject({ configured: true, url: local.url, webUrl: 'https://cloud.mekodata.ai' });
+      expect(forget).toHaveBeenCalledTimes(1);
+      // Linked to another account: forgotten again. Unlinked: and again.
+      env.local.cloud = { account: '0123456789abcdef', webUrl: 'https://cloud.mekodata.ai' };
+      await call('GET', '/api/settings');
+      expect(forget).toHaveBeenCalledTimes(2);
+      env.local.cloud = { account: '', webUrl: '' };
+      await call('GET', '/api/settings');
+      expect(forget).toHaveBeenCalledTimes(3);
+      expect(env.core.mekoStatus).toMatchObject({ configured: true, url: local.url, webUrl: null });
     });
   });
 });

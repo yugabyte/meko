@@ -1,10 +1,8 @@
-import { resolveMekoWithSource } from './config.js';
-import { localMeko } from './mekolocal.js';
+import { resolveMeko } from './config.js';
 import type { Core } from './core.js';
 import { errMsg } from './log.js';
 import { tryMekoToken, type TokenTry } from './meko.js';
 import { latestMekoSetup, manualMekoSetup, mekoClaudeGaps, readClaudeMeko, runMekoSetup, type MekoSetupClient } from './mekosetup.js';
-import type { MekoKeySource } from '../shared/types.js';
 import { claudeUserDir } from './claude.js';
 import { kiroMekoGaps } from './mekokiro.js';
 import { HttpError } from './projects.js';
@@ -49,14 +47,13 @@ export const defaultMekoTools: MekoTools = {
   tryToken: tryMekoToken,
 };
 
-/** The command to run Meko's setup by hand: with `meko token` only for the Meko on this computer. */
-function manualFor(core: Core, meko: { url: string; keySource: MekoKeySource | null }, client: MekoSetupClient): string {
-  const onThisMeko = meko.keySource === 'local' || (meko.keySource === 'meko' && meko.url === localMeko().meko?.url);
-  return manualMekoSetup(meko.url, client, onThisMeko ? { home: core.mekoHome() } : null);
+/** The command to run Meko's setup by hand, with the Meko on this computer's `meko token`. */
+function manualFor(core: Core, url: string, client: MekoSetupClient): string {
+  return manualMekoSetup(url, client, { home: core.mekoHome() });
 }
 
 /** Why a setup can't run: there's no Meko to set up with. */
-const NO_MEKO = "Meko isn't set up: start Meko on this computer (meko start), or link Meko Cloud in Meko's web UI (Settings › Meko Cloud).";
+const NO_MEKO = "Meko isn't running on this computer: start it with meko start.";
 
 /**
  * Runs Meko's setup for Claude Code with AgentK's Meko, only while what Meko's capture needs is
@@ -64,7 +61,7 @@ const NO_MEKO = "Meko isn't set up: start Meko on this computer (meko start), or
  * AgentK keeps no key of its own: Meko owns the link.
  */
 export async function setUpClaudeMeko(core: Core, tools: MekoTools): Promise<boolean> {
-  const meko = resolveMekoWithSource(core.config);
+  const meko = resolveMeko();
   if (!meko.apiKey) throw new HttpError(400, NO_MEKO);
   await core.claudeMeko.refresh(true);
   if (!core.claudeMeko.status.capture.length) return false;
@@ -74,7 +71,7 @@ export async function setUpClaudeMeko(core: Core, tools: MekoTools): Promise<boo
       core.log.info(`meko setup: ${line}`);
       tail.push(line);
       if (tail.length > 5) tail.shift();
-    }, manualFor(core, meko, 'claude-code'));
+    }, manualFor(core, meko.url, 'claude-code'));
   } catch (e) {
     const why = errMsg(e).replace(/([^.!?])$/, '$1.');
     throw new HttpError(502, `${why}${tail.length ? ` Last output: ${tail.join(' / ')}` : ''}`);
@@ -91,7 +88,7 @@ export async function setUpClaudeMeko(core: Core, tools: MekoTools): Promise<boo
  * Kiro keeps its key in its own file.
  */
 export async function setUpKiroMeko(core: Core, tools: MekoTools): Promise<boolean> {
-  const meko = resolveMekoWithSource(core.config);
+  const meko = resolveMeko();
   if (!meko.apiKey) throw new HttpError(400, NO_MEKO);
   if (!kiroMekoGaps().length) return false;
   const tail: string[] = [];
@@ -100,7 +97,7 @@ export async function setUpKiroMeko(core: Core, tools: MekoTools): Promise<boole
       core.log.info(`meko setup (kiro): ${line}`);
       tail.push(line);
       if (tail.length > 5) tail.shift();
-    }, manualFor(core, meko, 'kiro'));
+    }, manualFor(core, meko.url, 'kiro'));
   } catch (e) {
     const why = errMsg(e).replace(/([^.!?])$/, '$1.');
     throw new HttpError(502, `${why}${tail.length ? ` Last output: ${tail.join(' / ')}` : ''}`);

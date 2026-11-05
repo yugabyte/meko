@@ -45,7 +45,7 @@ If an event says the gotchas upload failed, say so: the review runs without them
 
 ## Without Meko
 
-If Meko is off, say first that the tour is about what Meko adds, and that it needs Meko running: `meko start` on this computer, or Meko Cloud linked in Meko's web UI (Settings › Meko Cloud). The user can still go on: AgentK then reviews once, with no first look and no gotchas, so skip steps 3 to 5, and at step 6 explain what a Caught with Meko finding would have shown.
+If Meko is off, say first that the tour is about what Meko adds, and that it needs Meko running on this computer: `meko start`. The user can still go on: AgentK then reviews once, with no first look and no gotchas, so skip steps 3 to 5, and at step 6 explain what a Caught with Meko finding would have shown.
 
 ## Wrap-up
 

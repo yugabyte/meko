@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CONFIG, type Config } from '../../src/server/config.js';
 import { silentLogger } from '../../src/server/log.js';
 import type { TokenTry } from '../../src/server/meko.js';
 import { CLAUDE_MEKO_TTL_MS, MekoClaudeWatch, claudeTokenGaps } from '../../src/server/mekoclaude.js';
@@ -16,21 +15,19 @@ const OK = (datapacks: string[]): TokenTry => ({ ok: true, datapacks });
 
 /** A watch over stand-ins: AgentK on Meko Cloud with key `agentk`, two projects' datapacks. */
 function setup(o: { claude?: ClaudeMeko; tokens?: Record<string, TokenTry>; own?: string[] | Error; key?: string; available?: boolean } = {}) {
-  const cfg: Config = structuredClone(DEFAULT_CONFIG);
-  cfg.meko.apiKey = o.key ?? 'agentk';
   const tried: string[] = [];
   let now = 1_000_000;
   let changes = 0;
   let ownCalls = 0;
   const t = {
-    cfg,
+    meko: { url: CLOUD, apiKey: o.key ?? 'agentk' },
     claude: o.claude ?? claude(),
     tokens: o.tokens ?? {},
     own: o.own ?? ['dp1', 'dp2'],
     available: o.available ?? true,
   };
   const watch = new MekoClaudeWatch({
-    config: () => t.cfg,
+    meko: () => t.meko,
     available: () => t.available,
     read: () => t.claude,
     projectDatapacks: () => [{ id: 'dp1', name: 'adlc/proj/repo/one' }, { id: 'dp2', name: 'adlc/proj/repo/two' }, { id: 'gone', name: 'adlc/proj/repo/gone' }],
@@ -136,7 +133,7 @@ describe("Claude Code's Meko: the watch", () => {
   it("checks again when AgentK's key or the project datapacks change", async () => {
     const s = setup({ claude: claude({ settings: 'mine' }), tokens: { mine: OK(['dp1', 'dp2']) } });
     await s.watch.refresh();
-    s.t.cfg.meko.apiKey = 'agentk-new';
+    s.t.meko.apiKey = 'agentk-new';
     await s.watch.refresh();
     expect(s.tried).toEqual(['mine', 'mine']);
   });
@@ -155,7 +152,7 @@ describe("Claude Code's Meko: the watch", () => {
     const calls: string[] = [];
     s.t.tokens.mine = OK(['dp1', 'dp2']);
     const slow = new MekoClaudeWatch({
-      config: () => s.t.cfg,
+      meko: () => s.t.meko,
       available: () => true,
       read: () => s.t.claude,
       projectDatapacks: () => [],

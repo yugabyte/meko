@@ -5,7 +5,7 @@ import {
   type CallHomeKind, type FileTypeCount, type MekoUsage, type Stage, type CallHomeDay, type CallHomeInstall, type CallHomeMeko,
   type CallHomeReport, type CallHomeTokens, type YbCallHome,
 } from '../shared/types.js';
-import { mekoConfigured, resolveMekoApiUrl, resolveMekoWithSource, type Config } from './config.js';
+import { mekoConfigured, type Config } from './config.js';
 import { openCodeCommand } from './opencode.js';
 import { all, get, kvGet, kvSet, type Db } from './db.js';
 import { readFileTypes, sumFileTypes } from './filetypes.js';
@@ -489,7 +489,7 @@ export async function installFacts(o: InstallInputs): Promise<CallHomeInstall> {
   const claudeCode = await probeVersion(probe, o.config.claude.command, ['--version'], /(\d+\.\d+\.\d+)/);
   const kiro = o.config.kiro.enabled ? await probeVersion(probe, o.config.kiro.command, ['--version'], /(\d+\.\d+\.\d+)/) : '';
   const opencode = o.config.opencode.enabled ? await probeVersion(probe, openCodeCommand(o.config.opencode.command), ['--version'], /(\d+\.\d+\.\d+)/) : '';
-  const meko = mekoConfigured(o.config);
+  const meko = mekoConfigured();
   return {
     version: reportVersion(o.version),
     // Meko installs AgentK's updates by its own [update] channel, which AgentK doesn't read.
@@ -504,8 +504,8 @@ export async function installFacts(o: InstallInputs): Promise<CallHomeInstall> {
     service: serviceKind(),
     meko: {
       enabled: meko,
-      keySource: (meko && resolveMekoWithSource(o.config).keySource) || 'none',
-      sharing: meko && resolveMekoApiUrl(o.config) ? 'api' : 'none',
+      keySource: meko ? 'meko' : 'none',
+      sharing: meko ? 'api' : 'none',
     },
     firstDay: o.firstDay,
   };

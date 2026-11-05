@@ -115,10 +115,10 @@ meko extension install agentk -- --agent kiro      # options after -- go to `me_
 #     --install-deps
 #  2. asks for your repos folder (default ~/code), and stops when there's no `meko` command: the
 #     Meko on this computer serves AgentK to browsers (at /ext/agentk/) and signs people in
-#  3. Meko: uses Meko's Meko Cloud link, else the Meko running on this computer, and stores neither
-#     (no key is asked for: --meko-key, with --meko-url, links one in Meko; a key AgentK kept before
-#     is handed to Meko once; --no-meko is ignored) and offers to run Meko's setup for Claude Code if
-#     its plugin, MCP server or key is missing (declining is a warning)
+#  3. Meko: uses the Meko running on this computer, and stores nothing of it (no key is asked for;
+#     --meko-url and --meko-key, which Meko passes, go unused; --no-meko skips the next step) and
+#     offers to run Meko's setup for Claude Code if its plugin, MCP server or key is missing
+#     (declining is a warning)
 #  4. picks the database location (local disk for an older home still on NFS), writes config.toml
 #     (with the Meko data folder the home is in); on an older home, says it moves into
 #     Meko's data folder once the server has started

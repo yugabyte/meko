@@ -1,16 +1,13 @@
 // Meko Cloud's addresses, the Meko web app that goes with an MCP server URL, and Meko's own pages.
 // Shared by the server (which links datapacks and shares through the web app) and the web UI.
 
-/** Meko Cloud's MCP server, used when a key from before Meko kept the link names no other. */
-export const DEFAULT_MEKO_URL = 'https://mcp.mekodata.ai/mcp';
-/** Meko Cloud's web app, which goes with DEFAULT_MEKO_URL. */
-export const DEFAULT_MEKO_WEB_URL = 'https://cloud.mekodata.ai';
 /**
- * Signing up for Meko Cloud, then landing on its Settings, where the API key is made: the Sign up
- * link of Meko's own Meko Cloud page (`mekoKeyLinks()` in Meko's web UI). Share offers it while
- * AgentK uses the Meko on this computer and can't share (`MekoStatus.sharing`).
+ * Meko Cloud's MCP server: the one Meko's plugin for Claude Code uses when Claude Code's settings
+ * name none (`mekosetup.ts`).
  */
-export const MEKO_CLOUD_SIGNUP_URL = `${DEFAULT_MEKO_WEB_URL}/signup?return_to=${encodeURIComponent('/settings')}`;
+export const DEFAULT_MEKO_URL = 'https://mcp.mekodata.ai/mcp';
+/** Meko Cloud's web app: the host PR descriptions name when Meko names no web app and none runs here (`mekoHost`). */
+export const DEFAULT_MEKO_WEB_URL = 'https://cloud.mekodata.ai';
 
 /**
  * Where browsers find AgentK: the Meko on this computer serves it at this path on its web listener,
@@ -30,18 +27,19 @@ export const MEKO_ACCOUNT_PATH = '/account';
 
 /**
  * A datapack's page in the web UI of the Meko on this computer (its overview tab), on the same
- * origin as AgentK. Datapack names link to it while AgentK uses that Meko.
+ * origin as AgentK. Datapack names link to it: that web UI opens a Meko Cloud datapack in Meko
+ * Cloud's web app.
  */
 export function mekoDatapackPath(datapackId: string): string {
   return `/datapacks/${encodeURIComponent(datapackId)}`;
 }
 
 /**
- * A datapack's Context Gaps in that web UI, the questions Meko couldn't answer: its tab, or for the
- * linked Meko Cloud's (`cloud`), whose other pages are Meko Cloud's web app's, a page of their own.
+ * A datapack's Context Gaps in that web UI, the questions Meko couldn't answer: its tab, which that
+ * web UI sends on to its page of their own for a Meko Cloud datapack.
  */
-export function mekoGapsPath(datapackId: string, cloud = false): string {
-  return cloud ? `/gaps/${encodeURIComponent(datapackId)}` : `${mekoDatapackPath(datapackId)}/gaps`;
+export function mekoGapsPath(datapackId: string): string {
+  return `${mekoDatapackPath(datapackId)}/gaps`;
 }
 
 /**
@@ -49,19 +47,6 @@ export function mekoGapsPath(datapackId: string, cloud = false): string {
  * (the README's install line). The banner shown while there's no Meko here gives it.
  */
 export const MEKO_INSTALL_COMMAND = 'curl -fsSL https://mekodata.ai/install.sh | sh';
-
-/**
- * The Meko web app that goes with an MCP URL: Meko Cloud's for Meko Cloud, else null (a local or
- * self-hosted server, whose web app can't be known). An explicit override always wins.
- */
-export function mekoWebUrl(mcpUrl: string, override = ''): string | null {
-  if (override.trim()) return override.trim().replace(/\/+$/, '');
-  try {
-    return new URL(mcpUrl).hostname === new URL(DEFAULT_MEKO_URL).hostname ? DEFAULT_MEKO_WEB_URL : null;
-  } catch {
-    return null;
-  }
-}
 
 /** A datapack's share link: the web app's own `/share/{token}` page, where Meko signs the person in and joins them. */
 export function shareLinkUrl(webUrl: string, token: string): string {

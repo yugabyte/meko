@@ -103,6 +103,12 @@ export function navigate(r: Route): void {
   window.dispatchEvent(new Event(EVENT));
 }
 
+// Like navigate, but in place of the address open now, so Back doesn't return to it.
+export function redirect(r: Route): void {
+  history.replaceState(null, "", href(r));
+  window.dispatchEvent(new Event(EVENT));
+}
+
 // Calls on after every navigation, back and forward included, even one to the page already open.
 // on must be stable (a state setter, or a useCallback).
 export function useNavigated(on: () => void): void {

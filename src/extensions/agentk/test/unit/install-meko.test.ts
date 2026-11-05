@@ -1,48 +1,28 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CONFIG, DEFAULT_MEKO_URL, type Config } from '../../src/server/config.js';
+import { DEFAULT_CONFIG, type Config } from '../../src/server/config.js';
 import { installMeko, settleAgents, type InstallMekoDeps } from '../../src/server/install.js';
 import type { MekoCloudLink } from '../../src/server/mekolocal.js';
 import { MekoSetupError } from '../../src/server/mekosetup.js';
 
 const LOCAL = { url: 'http://127.0.0.1:7778/mcp', token: 'local-token' };
-const UNSET: MekoCloudLink = { set: false, url: '', apiKey: '', webUrl: '', apiUrl: '' };
-const LINKED: MekoCloudLink = { set: true, url: DEFAULT_MEKO_URL, apiKey: 'mko_tkn_linked', webUrl: 'https://cloud.mekodata.ai', apiUrl: 'https://cloud.mekodata.ai/api/v1' };
-/** A link from a Meko that keeps the key and reaches Meko Cloud itself. */
-const THROUGH: MekoCloudLink = { set: true, url: '', apiKey: '', webUrl: 'https://cloud.mekodata.ai', apiUrl: '', linked: true };
+const UNLINKED: MekoCloudLink = { account: '', webUrl: '' };
+const LINKED: MekoCloudLink = { account: '3f1c09a4be7d5e21', webUrl: 'https://cloud.mekodata.ai' };
 
 /**
- * The installer's Meko step with scripted answers, recording what it did. `cloud` is the link
- * `meko token --json` reports (undefined: a Meko too old to keep one); `linkError` refuses a
- * `meko cloud_link`.
+ * The installer's Meko step with stand-ins, recording what it did. `local`: a Meko runs on this
+ * computer; `cloud`: the link `meko token --json` reports.
  */
-function deps(o: {
-  answers?: string[]; canAsk?: boolean; checkError?: string; linkError?: string; setupError?: string; agents?: ('claude' | 'kiro')[];
-  local?: boolean; cloud?: MekoCloudLink;
-} = {}) {
+function deps(o: { setupError?: string; agents?: ('claude' | 'kiro')[]; local?: boolean; cloud?: MekoCloudLink } = {}) {
   const agents = o.agents ?? ['claude'];
   const said: string[] = [];
-  const answers = [...(o.answers ?? [])];
   const calls: string[] = [];
   const d: InstallMekoDeps = {
-    canAsk: o.canAsk ?? true,
-    ask: async (q, def) => {
-      calls.push(`ask ${q}`);
-      return answers.length ? answers.shift()! : def;
-    },
-    check: async (url, key) => {
-      calls.push(`check ${url} ${key}`);
-      return o.checkError ? { ok: false, error: o.checkError } : { ok: true };
-    },
-    link: async (l) => {
-      calls.push(`link ${l.url} ${l.apiKey}${l.webUrl ? ` ${l.webUrl}` : ''}`);
-      return o.linkError ? { ok: false, error: o.linkError } : { ok: true };
-    },
-    ensureInClaude: !agents.includes('claude') ? undefined : async (url, key, keyFromEnv, local) => {
-      calls.push(`claude ${url} ${key}${keyFromEnv ? ' (key from env)' : ''}${local ? ' (local)' : ''}`);
+    ensureInClaude: !agents.includes('claude') ? undefined : async (url, key) => {
+      calls.push(`claude ${url} ${key}`);
       if (o.setupError) throw new MekoSetupError(o.setupError);
     },
-    ensureInKiro: !agents.includes('kiro') ? undefined : async (url, key, local) => {
-      calls.push(`kiro ${url} ${key}${local ? ' (local)' : ''}`);
+    ensureInKiro: !agents.includes('kiro') ? undefined : async (url, key) => {
+      calls.push(`kiro ${url} ${key}`);
       if (o.setupError) throw new MekoSetupError(o.setupError);
     },
     probe: async () => ({ state: o.local ? 'running' : 'none', meko: o.local ? LOCAL : null, ...(o.cloud ? { cloud: o.cloud } : {}) }),
@@ -55,10 +35,6 @@ function deps(o: {
         said.push(`warn ${l} ${t}`);
         return true;
       },
-      note: (t) => {
-        said.push(`note ${t}`);
-        return true;
-      },
       section: () => true,
     },
   };
@@ -67,139 +43,30 @@ function deps(o: {
 
 const cfg = (): Config => structuredClone(DEFAULT_CONFIG);
 
-describe("installer: Meko's Meko Cloud link, or the Meko on this computer", () => {
-  it('asks for no key, and goes on without Meko when there is no link and no Meko on this computer', async () => {
-    const { d, said, calls } = deps({ cloud: UNSET });
-    expect(await installMeko(cfg(), { noMeko: false }, d)).toBe(false);
+describe('installer: the Meko on this computer', () => {
+  it('asks for no key, and goes on without Meko when none runs on this computer', async () => {
+    const { d, said, calls } = deps();
+    expect(await installMeko({ noMeko: false }, d)).toBe(false);
     expect(calls).toEqual([]);
-    expect(said.join('\n')).toMatch(/warn Meko not set up: no Meko Cloud link, and no Meko running on this computer.*meko cloud_link/);
+    expect(said).toEqual(['warn Meko not running on this computer: AgentK uses it once it runs (meko start).']);
   });
 
   it.each([
-    ['the Meko on this computer', { local: true, cloud: UNSET }, `claude ${LOCAL.url} local-token (local)`, /ok Meko on this computer \(127\.0\.0\.1:7778\)/],
-    ["Meko's link", { local: true, cloud: LINKED }, `claude ${DEFAULT_MEKO_URL} mko_tkn_linked`, /ok Meko Meko Cloud, linked in Meko \(mcp\.mekodata\.ai\)/],
-    ["Meko's link through the Meko on this computer", { local: true, cloud: THROUGH }, `claude ${LOCAL.url} local-token (local)`, /ok Meko Meko Cloud, linked in Meko \(cloud\.mekodata\.ai\)/],
-  ])('uses %s and stores nothing', async (_, o, claude, line) => {
-    const c = cfg();
-    const { d, said, calls } = deps(o);
-    expect(await installMeko(c, { noMeko: false }, d)).toBe(true);
-    expect(calls).toEqual([claude]);
-    expect(said.join('\n')).toMatch(line);
-    expect(c.meko).toEqual(DEFAULT_CONFIG.meko);
+    ['unlinked', UNLINKED],
+    ['linked to Meko Cloud', LINKED],
+  ])('uses the Meko on this computer, %s, the same way, and says nothing of Meko Cloud', async (_, cloud) => {
+    const { d, said, calls } = deps({ local: true, cloud });
+    expect(await installMeko({ noMeko: false }, d)).toBe(true);
+    expect(calls).toEqual([`claude ${LOCAL.url} local-token`]);
+    expect(said[0]).toBe('ok Meko on this computer (127.0.0.1:7778)');
+    expect(said.join('\n')).not.toMatch(/Meko Cloud|linked/);
   });
 
-  // The install then ends with "! Meko Cloud  not linked" and how to link it.
-  it('says Meko Cloud is not linked only when it uses the Meko on this computer', async () => {
-    for (const [cloud, want] of [[UNSET, true], [LINKED, false], [THROUGH, false]] as const) {
-      let unlinked = false;
-      const { d, said } = deps({ local: true, cloud });
-      d.unlinked = () => (unlinked = true);
-      await installMeko(cfg(), { noMeko: false }, d);
-      expect(unlinked).toBe(want);
-      expect(said.some((s) => s.includes('Meko Cloud instead'))).toBe(false);
-    }
-  });
-
-  it('hands a key it is given to Meko, and takes a copy of the local Meko\'s token for the local Meko', async () => {
-    const c = cfg();
-    c.meko.apiKey = 'mko_tkn_old';
-    const given = deps({ local: true, cloud: UNSET });
-    expect(await installMeko(c, { keyArg: 'mko_tkn_given', urlArg: 'https://meko.example.com/mcp', noMeko: false }, given.d)).toBe(true);
-    expect(given.calls).toEqual(['link https://meko.example.com/mcp mko_tkn_given', 'claude https://meko.example.com/mcp mko_tkn_given']);
-    // The given key isn't stored, and the old one stays for a rollback.
-    expect(c.meko.apiKey).toBe('mko_tkn_old');
-    // What `meko extension install agentk` passes.
-    const copy = deps({ local: true, cloud: UNSET });
-    expect(await installMeko(cfg(), { keyArg: 'local-token', urlArg: LOCAL.url, noMeko: false }, copy.d)).toBe(true);
-    expect(copy.calls).toEqual([`claude ${LOCAL.url} local-token (local)`]);
-    expect(copy.said.some((l) => l.startsWith('warn --meko-key'))).toBe(false);
-    // Any other key for a server on this computer is set aside, saying so.
-    const loopback = deps({ local: true, cloud: UNSET });
-    expect(await installMeko(cfg(), { keyArg: 'mko_tkn_x', urlArg: 'http://127.0.0.1:9000/mcp', noMeko: false }, loopback.d)).toBe(true);
-    expect(loopback.calls).toEqual([`claude ${LOCAL.url} local-token (local)`]);
-    expect(loopback.said.join('\n')).toMatch(/warn --meko-key not linked: 127\.0\.0\.1:9000 is on this computer/);
-  });
-
-  it("hands AgentK's own key to a Meko that never had a link, and keeps it when Meko won't take it", async () => {
-    const c = cfg();
-    c.meko.apiKey = 'mko_tkn_own';
-    c.meko.webUrl = 'https://cloud.mekodata.ai';
-    const ok = deps({ local: true, cloud: UNSET });
-    expect(await installMeko(c, { noMeko: false }, ok.d)).toBe(true);
-    expect(ok.calls).toEqual([`link ${DEFAULT_MEKO_URL} mko_tkn_own https://cloud.mekodata.ai`, `claude ${DEFAULT_MEKO_URL} mko_tkn_own`]);
-    // Left in config.toml, for a rollback to the release before; the server never reads it again.
-    expect(c.meko).toMatchObject({ apiKey: 'mko_tkn_own', webUrl: 'https://cloud.mekodata.ai' });
-
-    const kept = cfg();
-    kept.meko.apiKey = 'mko_tkn_own';
-    const refused = deps({ local: true, cloud: UNSET, linkError: '401 Unauthorized', canAsk: false });
-    expect(await installMeko(kept, { noMeko: false }, refused.d)).toBe(true);
-    expect(refused.calls).toEqual([`link ${DEFAULT_MEKO_URL} mko_tkn_own`, `claude ${DEFAULT_MEKO_URL} mko_tkn_own`]);
-    expect(refused.said.join('\n')).toMatch(/warn Meko Cloud Meko didn't take AgentK's key \(401 Unauthorized\)/);
-    expect(kept.meko.apiKey).toBe('mko_tkn_own');
-
-    // A Meko that keeps the key takes it, and the agents use the Meko on this computer.
-    const through = deps({ local: true, cloud: { ...UNSET, linked: false } });
-    expect(await installMeko(cfg(), { keyArg: 'mko_tkn_given', noMeko: false }, through.d)).toBe(true);
-    expect(through.calls).toEqual([`link ${DEFAULT_MEKO_URL} mko_tkn_given`, `claude ${LOCAL.url} local-token (local)`]);
-
-    // Once Meko has had a link (unlinked since), AgentK's own key isn't offered.
-    const unlinked = deps({ local: true, cloud: { ...UNSET, set: true } });
-    expect(await installMeko(kept, { noMeko: false }, unlinked.d)).toBe(true);
-    expect(unlinked.calls).toEqual([`claude ${LOCAL.url} local-token (local)`]);
-  });
-
-  it("hands Meko a Meko Cloud key found next to the local Meko's URL, with Meko Cloud's URL", async () => {
-    // What a setup run against the local Meko without a key leaves: its URL next to the Meko Cloud key.
-    const c = cfg();
-    c.meko.url = LOCAL.url;
-    c.meko.apiKey = 'mko_tkn_own';
-    const { d, calls } = deps({ local: true, cloud: UNSET });
-    expect(await installMeko(c, { noMeko: false }, d)).toBe(true);
-    expect(calls).toEqual([`link ${DEFAULT_MEKO_URL} mko_tkn_own`, `claude ${DEFAULT_MEKO_URL} mko_tkn_own`]);
-    // Not dropped as a copy of the local Meko's token.
-    expect(c.meko).toMatchObject({ url: LOCAL.url, apiKey: 'mko_tkn_own' });
-  });
-
-  it('stops on a given key Meko refuses with no one to ask, and goes on without it when someone says so', async () => {
-    const opts = { keyArg: 'mko_tkn_bad', noMeko: false };
-    await expect(installMeko(cfg(), opts, deps({ canAsk: false, local: true, cloud: UNSET, linkError: '401' }).d)).rejects.toThrow(/Meko didn't link .*: 401. Fix the key/);
-    const there = deps({ local: true, cloud: UNSET, linkError: '401', answers: ['y'] });
-    expect(await installMeko(cfg(), opts, there.d)).toBe(true);
-    expect(there.calls).toEqual([`link ${DEFAULT_MEKO_URL} mko_tkn_bad`, 'ask Continue without it? (y/N)', `claude ${LOCAL.url} local-token (local)`]);
-    // --no-meko: no stop, and the agents aren't set up.
-    const noMeko = deps({ canAsk: false, local: true, cloud: UNSET, linkError: '401' });
-    expect(await installMeko(cfg(), { ...opts, noMeko: true }, noMeko.d)).toBe(true);
-    expect(noMeko.calls).toEqual([`link ${DEFAULT_MEKO_URL} mko_tkn_bad`]);
-  });
-
-  it('keeps a key itself, checked, under a Meko too old to keep the link', async () => {
-    const c = cfg();
-    const given = deps({ local: true });
-    expect(await installMeko(c, { keyArg: 'mko_tkn_given', noMeko: false }, given.d)).toBe(true);
-    expect(given.calls).toEqual([`check ${DEFAULT_MEKO_URL} mko_tkn_given`, `claude ${DEFAULT_MEKO_URL} mko_tkn_given`]);
-    expect(c.meko.apiKey).toBe('mko_tkn_given');
-    await expect(installMeko(cfg(), { keyArg: 'mko_tkn_bad', noMeko: false }, deps({ canAsk: false, checkError: 'invalid token' }).d))
-      .rejects.toThrow(/Meko check failed .*: invalid token/);
-    process.env.MEKO_API_KEY = 'mko_tkn_env';
-    try {
-      const fromEnv = deps({ canAsk: false });
-      const withClaude = cfg();
-      expect(await installMeko(withClaude, { noMeko: false }, fromEnv.d)).toBe(true);
-      expect(fromEnv.calls).toEqual([`check ${DEFAULT_MEKO_URL} mko_tkn_env`, `claude ${DEFAULT_MEKO_URL} mko_tkn_env (key from env)`]);
-      expect(withClaude.meko.apiKey).toBe('');
-      // Only Kiro: nothing puts it in Claude Code's settings, and the service has no MEKO_*
-      // environment, so config.toml keeps it. The same when Meko refuses the handover.
-      const kiroOnly = cfg();
-      expect(await installMeko(kiroOnly, { noMeko: false }, deps({ canAsk: false, agents: ['kiro'] }).d)).toBe(true);
-      expect(kiroOnly.meko.apiKey).toBe('mko_tkn_env');
-      const refusedKiroOnly = cfg();
-      const refusedDeps = deps({ canAsk: false, agents: ['kiro'], local: true, cloud: UNSET, linkError: '401' });
-      expect(await installMeko(refusedKiroOnly, { noMeko: false }, refusedDeps.d)).toBe(true);
-      expect(refusedKiroOnly.meko.apiKey).toBe('mko_tkn_env');
-    } finally {
-      delete process.env.MEKO_API_KEY;
-    }
+  it("doesn't set Meko up for the agents with --no-meko, and says Meko can't be turned off", async () => {
+    const { d, said, calls } = deps({ local: true, cloud: UNLINKED });
+    expect(await installMeko({ noMeko: true }, d)).toBe(true);
+    expect(calls).toEqual([]);
+    expect(said[0]).toMatch(/^warn --no-meko Meko can't be turned off any more/);
   });
 
   it.each([
@@ -207,13 +74,13 @@ describe("installer: Meko's Meko Cloud link, or the Meko on this computer", () =
     ['only Kiro', ['kiro' as const], 'ok Meko in Kiro'],
   ])('sets Meko up in the agents that are installed: %s', async (_, agents, line) => {
     const { d, said } = deps({ agents, local: true, cloud: LINKED });
-    expect(await installMeko(cfg(), { noMeko: false }, d)).toBe(true);
+    expect(await installMeko({ noMeko: false }, d)).toBe(true);
     expect(said.filter((l) => l.startsWith('ok Meko in')).map((l) => l.slice(0, line.length))).toEqual([line]);
   });
 
   it("only warns when Meko's setup for Claude Code is declined", async () => {
-    const { d, said } = deps({ canAsk: false, local: true, cloud: LINKED, setupError: "Meko isn't set up for Claude Code. Run: npx …" });
-    expect(await installMeko(cfg(), { noMeko: false }, d)).toBe(true);
+    const { d, said } = deps({ local: true, cloud: LINKED, setupError: "Meko isn't set up for Claude Code. Run: npx …" });
+    expect(await installMeko({ noMeko: false }, d)).toBe(true);
     expect(said.join('\n')).toMatch(/warn Meko in Claude Meko isn't set up for Claude Code\. Run: npx … AgentK uses Meko/);
     expect(said.some((s) => s.startsWith('ok Meko in Claude'))).toBe(false);
   });

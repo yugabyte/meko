@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import type { MekoClaudeStatus } from '../shared/types.js';
-import { resolveMeko, type Config } from './config.js';
 import { errMsg, type Logger } from './log.js';
 import type { TokenTry } from './meko.js';
 import { claudeSettingsToken, mekoClaudeGaps, mekoUrlHost, type ClaudeMeko } from './mekosetup.js';
@@ -76,7 +75,8 @@ function hash(s: string): string {
 }
 
 export interface MekoClaudeWatchDeps {
-  config: () => Config;
+  /** AgentK's Meko (`resolveMeko`): its MCP URL and token, empty with no Meko. */
+  meko: () => { url: string; apiKey: string };
   /** Claude Code is available for sessions (turned on and installed): nothing to check without it. */
   available: () => boolean;
   /** What Meko's capture needs in Claude Code, as its files say now. */
@@ -136,7 +136,7 @@ export class MekoClaudeWatch {
   private async run(force: boolean): Promise<void> {
     const now = this.o.now?.() ?? Date.now();
     for (const [k, r] of this.results) if (now - r.at >= CLAUDE_MEKO_TTL_MS) this.results.delete(k);
-    const { url, apiKey } = resolveMeko(this.o.config());
+    const { url, apiKey } = this.o.meko();
     if (!apiKey || !this.o.available()) {
       this.results.clear();
       this.own = null;

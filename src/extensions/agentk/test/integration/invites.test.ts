@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServerEvent } from '../../src/shared/types.js';
 import type { MekoDatapackRow } from '../../src/server/meko.js';
-import { makeEnv, type ApiCall, type TestEnv } from '../helpers.js';
+import { makeEnv, noMeko, type ApiCall, type TestEnv } from '../helpers.js';
 
 const OWN: MekoDatapackRow = {
   id: 'dp-own', name: 'adlc/proj/demo-repo/mine', grant: 'owner', createdAt: null, ownerName: 'Me', ownerEmail: 'me@example.com',
@@ -267,10 +267,8 @@ describe('datapacks shared with us', () => {
 
     waiting = [incoming('inv-2', 'dp-b', 'adlc/proj/demo-repo/b', 'viewer')];
     await env.core.invites.sync();
-    env.core.updateConfig((c) => {
-      c.meko.url = 'https://meko.example.com/mcp';
-    });
-    await expect(env.core.invites.decline('dp-b')).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/API URL isn't known/) });
+    await noMeko(env);
+    await expect(env.core.invites.decline('dp-b')).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/Meko isn't running on this computer/) });
     expect(() => env.core.invites.later('nope')).toThrow(/no longer waiting/);
   });
 

@@ -301,21 +301,21 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
 - [ ] Meko isn't polled. A Meko failure shows as the error of the action that needed it (or a
       logged warning for background work) and never kills a running session or blocks work that
       doesn't need Meko (a project with No datapack, sessions). No Meko (`MekoStatus.configured`
-      false: no Meko Cloud link, and no Meko running on this computer) means no Meko calls at all; the one
+      false: no Meko running on this computer) means no Meko calls at all; the one
       thing done then is looking for the Meko on this computer every minute (`meko token --json`
       in `Core.refreshMeko`, a local command with a 5 s timeout, one at a time, never a Meko
       call, and only while there's no Meko, or no `meko` on this computer: `lookForLocalMeko`, so
       the install banner goes once Meko is installed). Reading the local Meko again otherwise happens only on
       events (startup, Settings open, Meko's `POST /_meko/changed`, a failed connection at most
-      every 30 s), and a change on the same server reconnects without forgetting the account's
-      invites (`mekoChanged` is for switching servers).
-- [ ] Meko owns the Meko Cloud link. AgentK has no route or UI that sets or shows a Meko key, and
-      reads its own old sources (`ownMekoKey`: `[meko]` keys, `MEKO_*`, Claude Code's settings) only
-      to hand a key to Meko once (`mekohandover.ts`, the key on stdin) or under a Meko whose `meko
-      token --json` has no `cloud`. Never a copy of the local Meko's token, and never falling back to
-      the local Meko while a key of its own hasn't reached Meko. Its `[meko]` keys in
-      `config.toml` are never cleared on handover (a rollback restores only `state.db`), and the
-      handover never holds up a start.
+      every 30 s). A new port or token reconnects without forgetting the account's invites; a change
+      of the account behind that Meko (its link's `account`: linked, unlinked or relinked) forgets
+      them (`mekoChanged`), even on the same URL and token.
+- [ ] Meko owns the Meko Cloud link, and AgentK uses only the Meko on this computer. AgentK has no
+      route or UI that sets or shows a Meko key, reads no key of its own (`[meko]` keys, `MEKO_*`,
+      Claude Code's settings), and has no code that branches on whether Meko is linked, local or
+      Meko Cloud: REST goes to that Meko's `/api/v1` (`mekoApiBase`), datapack links to its own
+      pages, and what it can't do is its error to give. Its link's `account` is read only as an
+      opaque marker of the account behind it, and its `web_url` only for share links.
       The one poll is following a knowledge-base upload's
       indexing (`KnowledgeService` in `knowledge.ts`): only after the file was posted to Meko's
       storage under the key `upload-url` gave (never for one Meko already had), every 5 s for a
@@ -371,13 +371,14 @@ hole), **major** (wrong behavior users will hit), **minor** (clarity, style, sma
       there's no result or no server, and there's no search with Meko off or no datapacks. What it
       gives Claude stays short (capped items and total).
 - [ ] Tests don't touch the real `~/.claude.json`, Meko, or GitHub. Meko's REST API goes through
-      `fakeMekoApi()` in `test/helpers.ts`, Meko's setup for the agents through `stubMekoTools()`, and the key handover through `makeEnv`'s `mekoHandOver` stub (`handOvers`).
+      `fakeMekoApi()` in `test/helpers.ts`, Meko's setup for the agents through `stubMekoTools()`, and the Meko on this computer through `makeEnv`'s `local` (`noMeko`, `testMeko`, `useLocalMeko`).
 - [ ] Share invites: a project opened from an invite accepts it in Meko before writing anything
       locally, the first invite sync doesn't notify about shares that already existed, and each
-      share notifies once (one joined here by its share link gets no notification or banner). While Meko's API URL isn't
-      known the share and invite routes answer 409 saying to set the web app URL, and the invite sync
-      skips Meko's invites. A share link's token is never logged or stored, and joining by a pasted
-      link sends its token to Meko only for a link on the configured web app, and only when picked.
+      share notifies once (one joined here by its share link gets no notification or banner). With no Meko running the
+      share and invite routes answer 409 saying to run `meko start`; a Meko that doesn't share (a 409,
+      such as `CLOUD_NOT_LINKED`) is its own error to show, and no invites for the sync, quietly. A
+      share link's token is never logged or stored, and joining by a pasted link sends its token to
+      Meko only for a link on the web app Meko names (none while it names none), and only when picked.
 - [ ] Nothing that identifies a person or their work goes into the usage stats report
       (`callhome.ts`): only counts, enums, versions, plain model ids and file extensions. A new
       field is added to `CallHomeReport` and `docs/call-home-report.schema.json` together, and

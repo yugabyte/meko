@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { makeEnv, readJsonl, waitFor, type TestEnv } from '../helpers.js';
+import { makeEnv, noMeko, readJsonl, waitFor, type TestEnv } from '../helpers.js';
 import { all } from '../../src/server/db.js';
 import { sessionAgentId } from '../../src/server/meko.js';
 import { openCodeMekoFile, openCodePluginPath, openCodeSessionDir } from '../../src/server/opencode.js';
@@ -103,9 +103,7 @@ describe('sessions on OpenCode (real session host + git, fake opencode running A
     expect(resumed.env.AK_OPENCODE_SOURCE).toBe('resume');
 
     // Turning Meko off removes the file with its key at once, not at OpenCode's next launch.
-    env.core.updateConfig((c) => {
-      c.meko.apiKey = '';
-    });
+    await noMeko(env);
     expect(existsSync(openCodeMekoFile(env.core.paths))).toBe(false);
     // A closed project's sessions never run again: their OpenCode folders go with it.
     await env.core.projects.delete(p.id);

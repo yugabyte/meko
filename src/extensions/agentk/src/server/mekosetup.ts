@@ -104,17 +104,6 @@ export function claudeSettingsToken(c: ClaudeMeko, url: string): string | null {
   return c.settings.token && sameMekoUrl(settingsUrl(c), url) ? c.settings.token : null;
 }
 
-/**
- * The installer's own check on the key it was given in its environment (MEKO_API_KEY, not typed):
- * it isn't stored in config.toml, so once AgentK runs as a service (with no MEKO_* environment) it
- * takes the key from Claude Code's settings. A different key there would become AgentK's.
- */
-export function envKeyGap(c: ClaudeMeko, apiKey: string, keyFromEnv: boolean): string[] {
-  return keyFromEnv && c.settings.token && c.settings.token !== apiKey
-    ? ["Claude Code's settings hold a different MEKO_API_KEY, which AgentK would use instead of this one once it runs as a service."]
-    : [];
-}
-
 export interface MekoSetupPackage {
   version: string;
   tarball: string;

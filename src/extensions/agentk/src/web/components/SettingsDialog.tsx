@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type MutableRefObject, type ReactNode } from 'react';
 import {
-  MAX_IDLE_STOP_HOURS, WORK_SYNC_MINUTES_MAX, type HarnessMekoState, type HarnessStatus, type MekoKeySource, type MekoStatus, type Settings, type SettingsUpdate, type UpdateStatus,
+  MAX_IDLE_STOP_HOURS, WORK_SYNC_MINUTES_MAX, type HarnessMekoState, type HarnessStatus, type MekoStatus, type Settings, type SettingsUpdate, type UpdateStatus,
 } from '../../shared/types';
 import { HARNESS_CAPS, HARNESS_IDS, onlyMekoBlocks, type HarnessId } from '../../shared/harnesses';
 import { MEKO_ACCOUNT_PATH, MEKO_CLOUD_PATH } from '../../shared/mekourls';
@@ -12,7 +12,7 @@ import { installing, mekoUpdates, refreshMekoUpdate, takeRow, updateFailed, useM
 import type { MekoAuth } from '../signin';
 import { setTermThemePref, termThemePref, TERM_THEME_LABEL, type TermThemePref } from '../termtheme';
 import { harnessLogosToggle } from '../toggle';
-import { claudeUpdateText, cx, defaultAgentChoice, httpHost, relativeTime } from '../util';
+import { claudeUpdateText, cx, defaultAgentChoice, relativeTime } from '../util';
 import { AgentLabel, AgentPicker, Busy, Dialog, ErrorText, Field, InfoButton, InfoCheck, InfoPanel, ReviewFields } from './common';
 import { setReviewDefaults } from '../reviewdefaults';
 
@@ -882,29 +882,12 @@ export function AgentSettings({
   );
 }
 
-/** Where AgentK's Meko key comes from, after "AgentK uses". */
-const SOURCE_TEXT: Record<MekoKeySource, string> = {
-  meko: 'Meko Cloud',
-  local: 'the Meko on this computer',
-  config: 'its own Meko key from config.toml',
-  env: 'its own Meko key from MEKO_API_KEY',
-  claude: 'its own Meko key from Claude Code’s settings',
-};
-
-/**
- * What to do while AgentK uses a key of its own: Meko refused it, or keeps no link yet (too old, or
- * the key is for a server on this computer).
- */
-const OWN_KEY_FIX = 'Link Meko Cloud on Meko’s Meko Cloud page to move it there (update Meko first if it has no such page).';
-
 /**
  * Settings › General's ways to Meko's own pages: the Meko Cloud link (Meko keeps it for AgentK and
  * its other extensions) and, on a Meko from before it dropped its login, the account that signs
  * people in to both. A newer Meko has no account page: its status has no username.
  */
 export function MekoLinks({ meko, auth }: { meko: MekoStatus; auth: MekoAuth | null }) {
-  // Meko Cloud reached through the Meko on this computer is named by its web app, not that Meko's URL.
-  const host = httpHost((meko.source === 'meko' && meko.webUrl) || meko.url || '');
   return (
     <div className="field" id="set-meko-links">
       <div className="info-row">
@@ -912,11 +895,7 @@ export function MekoLinks({ meko, auth }: { meko: MekoStatus; auth: MekoAuth | n
         <InfoButton id="set-meko-info" label="Meko" />
       </div>
       <span className="hint">
-        {meko.source
-          ? `AgentK uses ${SOURCE_TEXT[meko.source]}${host && meko.source !== 'local' ? ` (${host})` : ''}.${
-              meko.source !== 'meko' && meko.source !== 'local' ? ` ${OWN_KEY_FIX}` : ''
-            }`
-          : 'Meko isn’t set up: start Meko on this computer (meko start), or link Meko Cloud.'}
+        {meko.configured ? 'AgentK uses the Meko on this computer.' : 'Meko isn’t running on this computer: start it with meko start.'}
       </span>
       <InfoPanel id="set-meko-info">
         {auth?.access === 'remote' && auth.username ? 'Meko signs you in to AgentK.' : auth?.access === 'local' ? 'Meko opens AgentK on this computer without a sign-in.' : 'Meko opens AgentK without a sign-in.'} Who can

@@ -89,8 +89,8 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > `meko_design:<name>;<hash>` when the task has a design in Meko (see
 > [The design after approval](lifecycle.md#the-design-after-approval)), and `meko_conversation_id:<id>`. The name is for people reading the PR; AgentK reads only the id
 > (`datapackIdsIn()`, which also takes the line without a name, as PRs opened before it was added end).
-> The host is the Meko web app's (`cloud.mekodata.ai` for Meko Cloud), or the MCP server's when a
-> self-hosted Meko's web app isn't set (`mekoHost()` in `config.ts`). The conversation id comes from `conversation_create` keyed by the session's
+> The host is the web app's that Meko names (`cloud.mekodata.ai` while it's linked to Meko Cloud),
+> else the Meko on this computer's (`mekoHost()` in `config.ts`). The conversation id comes from `conversation_create` keyed by the session's
 > Claude session id, the same key the plugin's hooks use, so it names the conversation that holds
 > the session (created and titled after the session if it doesn't exist yet, even with capture
 > off). If Meko fails or doesn't answer within 10 seconds (connecting included), the PR goes out
@@ -104,112 +104,76 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > fresh entry when they start, so it re-checks after a moment). If the prompt still appears (for a
 > new, resumed or recovered session), the session shows *needs you* with an explanation.
 
-> **Meko: Meko's Meko Cloud link, or the Meko on this computer.** Datapacks are how a project
-> keeps track of its work, and sharing a project goes through its datapack. Meko owns the Meko
-> Cloud link: the Meko Cloud (or other Meko server) its extensions use, and its API key, kept by
-> Meko (`cloud.toml` and Meko's secret store; Meko's `docs/cloud.md`), set in Meko's web UI
-> (**Settings › Meko Cloud**, `/settings/meko-cloud`) or with `meko cloud_link`. AgentK uses that
-> link when Meko has one, and else the Meko running on this computer; it can't be turned off. Meko
-> keeps the link's key: while it's linked, AgentK reaches Meko Cloud through the Meko on this
-> computer, with that Meko's URL and token. Its `/mcp` and its REST API under `/api/v1`, which
-> AgentK's sharing and uploads use (`resolveMekoApiUrl`), serve a datapack that Meko has (one made
-> there before the link) and pass any other id on to Meko Cloud; sharing goes to Meko Cloud, but for
-> a datapack still on that Meko, which it answers itself with a 409 `DATAPACK_LOCAL`. A Meko from
-> before it routed by id (no `cloud.datapack_routing` in `meko token --json`) passes REST on under
-> `/api/v1/cloud`. AgentK reads Meko again when it says so (`POST /_meko/changed`, also sent at each
-> start of Meko's server, so an update under AgentK is heard) and after a 404 from its REST API (at
-> most every 30 s), which covers a rollback to a Meko that doesn't send it.
-> An upload link on that Meko's own origin (`http://127.0.0.1:…`, for one of its own datapacks) may be
-> plain http (`MekoApi.postPresigned`). Links to datapacks go to the link's web app (`cloud.web_url`).
-> An older Meko handed out the key instead (`cloud.api_key`, with `url` and `api_url`), and under one
-> AgentK still calls Meko Cloud with it itself. Meko is *set up* when there's either
-> (`MekoStatus.configured`; `MekoStatus.source` says which, `'meko'` or `'local'`, and `url` names
-> the server AgentK calls). Linked, with the Meko on this computer stopped, there's no Meko to use. With neither, AgentK still works without
-> datapacks: it doesn't talk to Meko, projects get no datapack, and sessions get no datapack, pin
-> or Meko lines in their prompt (even a project that has a datapack).
+> **Meko: the Meko on this computer.** Datapacks are how a project keeps track of its work, and
+> sharing a project goes through its datapack. AgentK uses the Meko running on this computer, and
+> nothing else; it can't be turned off. It doesn't know or ask whether that Meko is linked to Meko
+> Cloud: Meko owns the link (the Meko Cloud, or other Meko server, its extensions use, and its API
+> key, in `cloud.toml` and Meko's secret store; Meko's `docs/cloud.md`), set in Meko's web UI
+> (**Settings › Meko Cloud**, `/settings/meko-cloud`) or with `meko cloud_link`. AgentK calls that
+> Meko's `/mcp` with its URL and client token, and its REST API at `/api/v1` on the same origin
+> (`mekoApiBase` in `mekolocal.ts`, `resolveMekoApiUrl`), for sharing, uploads, Context Gaps and the
+> agents' list. That Meko serves a datapack it has and, while it's linked, passes any other id on to
+> Meko Cloud. It refuses what it can't do with an error that says what to do, and AgentK shows it:
+> sharing while unlinked is a 409 `CLOUD_NOT_LINKED` ("link it in Settings › Meko Cloud"), and
+> sharing a datapack still on that Meko is a 409 `DATAPACK_LOCAL`. So Share is offered whenever
+> there's a Meko. An upload link may be plain http only on that Meko's own origin (one of its own
+> datapacks); any other must be https (`MekoApi.postPresigned`). Datapack names link to that Meko's
+> own page for them (`/datapacks/<id>` on the origin that serves AgentK: `mekoDatapackUrl()` in
+> `src/web/util.ts`), and the Context Gaps line to `/datapacks/<id>/gaps`; Meko's web UI sends a
+> Meko Cloud datapack on to Meko Cloud's web app, and its gaps to its own `/gaps/<id>` page. Share
+> links are on the web app Meko names (`cloud.web_url`, Meko Cloud's while it's linked), else Meko
+> Cloud's. Meko is *set up* while that Meko runs (`MekoStatus.configured`, with `url` its MCP URL).
+> With none, AgentK still works without datapacks: it doesn't talk to Meko, projects get no
+> datapack, and sessions get no datapack, pin or Meko lines in their prompt (even a project that
+> has a datapack).
 >
-> AgentK reads both from Meko with `meko token --json` and `MEKO_HOME` set to the Meko data folder
-> that holds AgentK's home (`<meko>/extensions/agentk`, `mekoDirOf`), else the one `[meko] home`
-> names (a home the move hasn't reached yet), else `meko`'s own default (a dev home set with
-> `AK_HOME`) (`probeLocalMeko` in `mekolocal.ts`): the local Meko's MCP URL and client token, and
-> `cloud`, the link (`MekoCloudLink`: whether it's set and linked, and its web app; an older Meko's
-> also has its URLs and key). It asks rather than reading Meko's files: on
-> macOS the secrets are in the Keychain, and whether Meko runs is a lock only `meko` checks. The
-> answer is kept in memory (`LocalMekoReader`) and never written to `config.toml`, so a new port,
-> token or link is picked up without a reinstall. A read that can't ask `meko` (it failed or took
-> too long), or whose link Meko couldn't read (`cloud.error`: a bad `cloud.toml`, a locked
-> Keychain), keeps the link last read. It's read at server start (before sessions are recovered),
-> when Settings opens (which waits up to 1.5 s for it), when Meko says the link changed (`POST
-> /_meko/changed` `{what: 'cloud'}` on AgentK's socket, which Meko sends after every change), once
-> more when connecting fails (at most every 30 s), and every minute while there's no Meko at all
-> or no `meko` on this computer (Meko normally starts AgentK, so it's up first). A read that changes
-> what AgentK shows (the Meko, the key's source, the web app or API URL) shows it at once, and a new
-> API URL syncs invites again. One that changes the Meko it connects to reconnects
-> (`Core.refreshMeko`), and so does linking or unlinking, which keeps the local Meko's URL and token
-> but changes the Meko behind them: on the same account (the local Meko on any port or token, Meko
-> Cloud through it with the same web app, or the same server with the same key) it keeps the
-> invites and shares AgentK knows, and on another it forgets them (`Core.mekoChanged`). A spell with no Meko at all (the local Meko stopped) isn't a change of
-> account: AgentK compares with the last account it used (`mekoAccountOf`). The local token goes only to the local Meko, with its own URL; a
-> key that's a copy of it (its token, or any key for its URL's origin: Meko's setup for Claude
-> Code writes one into Claude Code's settings, older installs and `meko extension install agentk`
-> stored one in `config.toml`) is the local Meko too, with the live URL and token, so a copy never
-> goes stale (`isLocalMeko`). A Meko Cloud key (`mko_tkn_…`; the local token is hex) is never a
-> copy, even next to the local Meko's URL: Meko's setup run against the local Meko without a key
-> leaves exactly that in Claude Code's settings, its URL beside the Meko Cloud key the user had. Such
-> a key never takes a URL on this computer (`ownMekoKey`), whether the local Meko runs or not: it
-> goes with the next source's URL, else Meko Cloud's, so it's used, and handed to Meko, as below,
-> rather than dropped. The copy in `config.toml` is dropped at start and by the installer;
-> the one in Claude Code's settings is left for Claude Code. Claude Code's own Meko setup, in its
-> settings, is the user's and is changed only when they ask (see *Claude Code on AgentK's Meko*
-> below).
+> AgentK reads it with `meko token --json` and `MEKO_HOME` set to the Meko data folder that holds
+> AgentK's home (`<meko>/extensions/agentk`, `mekoDirOf`), else the one `[meko] home` names (a home
+> the move hasn't reached yet), else `meko`'s own default (a dev home set with `AK_HOME`)
+> (`probeLocalMeko` in `mekolocal.ts`): the Meko's MCP URL and client token, and of its link
+> (`cloud`, `MekoCloudLink`) only the account behind it (`account`, '' while unlinked) and the web
+> app it names for share links. It asks rather than reading Meko's files: on macOS the secrets are
+> in the Keychain, and whether Meko runs is a lock only `meko` checks. The answer is kept in memory
+> (`LocalMekoReader`) and never written to `config.toml`, so a new port, token or link is picked up
+> without a reinstall. A read that can't ask `meko` (it failed or took too long), or whose link
+> Meko couldn't read (`cloud.error`: a bad `cloud.toml`, a locked Keychain), keeps the link last
+> read. It's read at server start (before sessions are recovered), when Settings opens (which waits
+> up to 1.5 s for it), when Meko says something changed (`POST /_meko/changed` `{what: 'cloud'}` on
+> AgentK's socket, which Meko sends after every change to the link and at each start of its
+> server), once more when connecting fails (at most every 30 s), and every minute while there's no
+> Meko or no `meko` on this computer (Meko normally starts AgentK, so it's up first). A read that
+> changes what AgentK shows (whether there's a Meko, its URL, the web app) shows it at once. One
+> that changes the Meko it connects to (it started, stopped, has a new port or token, or another
+> account behind it) reconnects (`Core.refreshMeko`); the first read at start connects nothing yet.
+> On the same account it keeps the invites and shares AgentK knows; on another (Meko linked,
+> unlinked, or linked to another account) it forgets them (`Core.mekoChanged`). A spell with no Meko
+> at all (the Meko stopped) isn't a change of account: AgentK compares with the last account it used
+> (`mekoAccountOf`). Claude Code's own Meko setup, in its settings, is the user's and is changed only
+> when they ask (see *Claude Code on AgentK's Meko* below).
 >
-> - **Before Meko kept the link:** AgentK kept a key itself: `[meko] url`, `api_key`, `web_url` and
->   `api_url` in `config.toml`, else `MEKO_API_KEY` (with `MEKO_MCP_URL`, `MEKO_WEB_URL`,
->   `MEKO_API_URL`), else Claude Code's settings' `env` (`ownMekoKey` in `config.ts`). While Meko has
->   never had a link (`cloud.set` false), AgentK hands that key to Meko, once, with `meko cloud_link`,
->   the URLs as arguments and the key on stdin (`mekohandover.ts`), never a copy of the local Meko's
->   token or a key for a server on this computer. It runs in the background (`Core.startHandOver`),
->   since Meko checks the key with Meko Cloud first, so a start isn't held up. Once Meko takes it,
->   AgentK records the handover in `state.db`'s kv (`meko-link-handed-over`), reads Meko again, and
->   from then on never reads any of those sources again, `MEKO_API_KEY` included, even while `meko`
->   can't be asked. The `config.toml` keys stay where they were: a rollback to the release before
->   (which restores only `state.db`) still finds them, rather than falling back to the local Meko. A
->   key Meko refuses is logged, kept, and not offered again until the next start. Under a Meko too old
->   to keep a link (`meko token --json` without `cloud`), or until the handover succeeds, AgentK
->   keeps using its own key: a Meko Cloud user is never moved to the local Meko unasked, which would
->   split a project's memories across two servers with different datapack ids.
-> - **At install:** the installer asks for no key. It uses Meko's link when there is one, else the
->   Meko on this computer, and stores neither. `--meko-key` (with `--meko-url` for a server other
->   than Meko Cloud) hands a key to Meko with `meko cloud_link`; what `meko extension install agentk`
->   passes, the local Meko's URL and token, is just the local Meko. AgentK's own key from before is
->   handed over as the server does. A given key Meko refuses stops the install with no one to ask,
->   and asks whether to go on without it otherwise; AgentK's own key that Meko refuses is kept, with a
->   warning. A `--meko-key` for a server on this computer isn't linked, with a warning (a copy of the
->   local Meko's token can't be told apart while it's stopped). AgentK's own key stays in
->   `config.toml`, for a rollback. A key from the installer's own `MEKO_API_KEY` that AgentK keeps
->   using (Meko refused it, or is too old) is stored in `config.toml` when there's no Claude Code to
->   hold it in its settings, since the service has no `MEKO_*` environment. Under a Meko too old to
->   keep the link, a given key is checked and stored in `config.toml` and AgentK's own key is
->   checked, as before. With neither a link nor a Meko here, it
->   goes on with a warning and the server uses the local Meko once it runs. `--no-meko` no longer
->   turns Meko off (it warns so): it only keeps a failure from stopping the install and skips Meko's
->   setup for the agents. With only a local Meko, datapack names link to that Meko's own page for
->   them (`/datapacks/<id>` on the origin that serves AgentK: `mekoDatapackUrl()` in
->   `src/web/util.ts`), but sharing stays off until Meko Cloud is linked, and the server log says
->   so. With a Meko, it checks that Meko is set up for Claude Code: the `meko-agent-skills` plugin installed and enabled, a `MEKO_API_KEY`
->   in Claude Code's settings (sessions don't inherit the installer's environment), and the `meko`
->   MCP server registered, both on this Meko server, with tokens it accepts (they may differ from
->   AgentK's key; the installer deliberately stops at accepted, and the server checks datapacks once
->   it runs). If anything is missing or wrong it offers, after showing what will change, to run
->   Meko's own setup (`@yugabytedb/meko-mcp --client claude-code`), fetched from npm, checked
->   against the registry's integrity hash and run with the bundled Node, with the key passed in the
->   environment. Declining it (or, without `--install-deps`, not being asked) is a warning with the
->   command to run yourself; Settings › Harness › Claude Code can run it later. For the Meko on this
->   computer (its live URL and token, not just any server on this computer, which `meko token` isn't
->   the key for) that command reads the key in the user's shell, `--api-key "$(meko token)"` (with
->   `MEKO_HOME=<folder>` when AgentK knows Meko's data folder), since nothing else gives the package
->   a key there; for Meko Cloud it carries none (the package reads `MEKO_API_KEY`, or signs in
->   through the browser) (`manualMekoSetup`).
+> - **Keys of AgentK's own, from before:** AgentK no longer reads a Meko key of its own:
+>   `[meko] url`, `api_key`, `web_url` and `api_url` in `config.toml` are ignored, though a save keeps
+>   them in the file (`oldMekoKeys`: a rollback to a release that read them restores only `state.db`,
+>   and one may be the only copy of a key never linked in Meko), and so are `MEKO_API_KEY`, `MEKO_MCP_URL`, `MEKO_WEB_URL`, `MEKO_API_URL` and Claude Code's
+>   settings' `env`. It hands nothing to Meko: a key that was never linked is linked in Meko's web UI
+>   or with `meko cloud_link`.
+> - **At install:** the installer asks for no key, and uses the Meko on this computer, storing
+>   nothing of it. `--meko-url` and `--meko-key` are still taken, and unused: `meko extension install
+>   agentk` passes them with Meko's own URL and token, and refuses an AgentK whose files don't
+>   mention `--meko-url` (`tooOld` in Meko's `internal/cli/install.go`). With no Meko running, it goes
+>   on with a warning and the server uses that Meko once it runs. `--no-meko` doesn't turn Meko off
+>   (it warns so): it skips Meko's setup for the agents. With a Meko, it checks that Meko is set up
+>   for Claude Code: the `meko-agent-skills` plugin installed and enabled, a `MEKO_API_KEY` in Claude
+>   Code's settings (sessions don't inherit the installer's environment), and the `meko` MCP server
+>   registered, both on this Meko, with tokens it accepts (they may differ from AgentK's; the
+>   installer deliberately stops at accepted, and the server checks datapacks once it runs). If
+>   anything is missing or wrong it offers, after showing what will change, to run Meko's own setup
+>   (`@yugabytedb/meko-mcp --client claude-code`), fetched from npm, checked against the registry's
+>   integrity hash and run with the bundled Node, with the token passed in the environment. Declining
+>   it (or, without `--install-deps`, not being asked) is a warning with the command to run yourself;
+>   Settings › Harness › Claude Code can run it later. That command reads the token in the user's
+>   shell, `--api-key "$(meko token)"` (with `MEKO_HOME=<folder>` when AgentK knows Meko's data
+>   folder), since nothing else gives the package a key there (`manualMekoSetup`).
 > - **At project creation:** the dedicated datapack is an existing one, a new one, or **No
 >   datapack** (`DatapackChoice` `{ mode: 'none' }`), the only one while there's no Meko. The
 >   Open project dialog has no datapack box: the project name finds it (`adlc/proj/<repo>/<project>`,
@@ -227,10 +191,9 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 > - **If Meko isn't installed:** while there's no `meko` on this computer (`MekoStatus.local` is
 >   `none`), a banner that can't be dismissed says so and gives the command that installs it (the
 >   latest release's installer, `MEKO_INSTALL_COMMAND` in `src/shared/mekourls.ts`), with **Copy**.
->   It shows with a Meko Cloud link too: Meko runs on every computer AgentK does. AgentK looks for
->   `meko` every minute meanwhile, and the banner goes once it's found, running or not. With a key,
->   AgentK then stops looking, so `meko` removed later brings the banner back only at the next read
->   (a restart, Settings opening, or Meko's notice of a change to the link).
+>   AgentK looks for `meko` every minute meanwhile, and the banner goes once it's found, running or
+>   not. Once a Meko runs, AgentK stops looking, so `meko` removed later brings the banner back only
+>   at the next read (a restart, Settings opening, or Meko's notice of a change).
 > - **If Meko goes down:** AgentK doesn't poll Meko or show a banner for it; being down is rare.
 >   The one exception is looking for the Meko on this computer every minute while there's no Meko
 >   at all or no `meko` (`meko token --json`, a local command, never a Meko call). An
@@ -240,11 +203,11 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   disk, so they catch up once it's back (when transcript capture is on). A project can still be
 >   created with **No datapack** and get one later.
 > - **In Settings:** the Meko Cloud link is set on Meko's own page, not AgentK's. AgentK's Settings
->   › General has a **Meko** section that says which Meko AgentK uses (`MekoStatus.source`), with
+>   › General has a **Meko** section that says AgentK uses the Meko on this computer, with
 >   **Meko Cloud ↗** (`/settings/meko-cloud`) as a plain link on Meko's origin (`MEKO_CLOUD_PATH`),
 >   and **Account ↗** (`/account`, `MEKO_ACCOUNT_PATH`) only when Meko's status names a username,
->   which only a Meko that still has a login does (its password, two-step sign-in and Sign out). **Set up Meko** on a project's home (while there's no Meko) says what to do
->   and links to the same page. Meko's page checks a new server or key before saving it (a MCP
+>   which only a Meko that still has a login does (its password, two-step sign-in and Sign out). **Set up Meko** on a project's home (while there's no Meko) says what's wrong
+>   with the Meko on this computer, and opens Meko. Meko's page checks a new server or key before saving it (a MCP
 >   handshake with the key, and a typed web app or API URL must answer like Meko's API), sends a
 >   saved key only where it already goes or to Meko Cloud (otherwise it must be typed again), asks
 >   before switching hosts (existing projects' datapacks stay on the old one), and offers **Unlink**,
@@ -333,12 +296,12 @@ case (`isKnowledgeFile()` in `src/shared/knowledge.ts`).
   valid 5 minutes) and the document's `key`, or `already_uploaded` with the key and no URL when the
   datapack has the same bytes ("already there", nothing more sent). `MekoApi.postPresigned()` then
   posts the signed fields and the file, last, to that URL **without Meko's key**, only over https
-  (or http when Meko's own API URL is http, a self-hosted Meko's storage), and waits up to
+  (or http to Meko's own origin, for one of its own datapacks), and waits up to
   2 minutes. Meko records every URL it issues and indexes the file once it lands, so there's no
   call back (Meko's `upload-complete` takes only a signed-in browser). Meko lets only the
   datapack's owner and maintainers upload. Refusals come back in words that say what to do
-  (`uploadError()`): a 403 asks the owner for maintainer access; a 401 (or a key without write
-  scope) points at Meko's Settings › Meko Cloud; a 404 without Meko's envelope means a Meko without the route (add
+  (`uploadError()`): a 403 asks the owner for maintainer access; a 401 (or a token without write
+  scope) says to run `meko restart`; a 404 without Meko's envelope means a Meko without the route (add
   the file in Meko's web app, or have that Meko updated); a 404 in it, a datapack Meko doesn't have
   (check the project's datapack); Meko's own message for 400 (a type it doesn't take, or a file
   over the plan's per-file cap) and for 402 (no room left on the plan), as a 413; a 503
