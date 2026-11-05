@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { LearnProgress, ReviewingPr, Session } from '../../src/shared/types.js';
-import { closingText, designGate, elapsedText, headerApproves, learnStepText, mergeGate, openPrGate, queuedText, reviewTarget, updateShowing } from '../../src/web/util.js';
+import { closingText, designGate, elapsedText, headerApproves, learnStepText, mergeGate, openPrGate, openPrReviews, queuedText, reviewTarget, updateShowing } from '../../src/web/util.js';
+import type { ReviewSettings } from '../../src/shared/codereview.js';
 import { closeStep } from '../../src/server/store.js';
 
 const session = (over: Partial<Session> = {}) =>
   ({
-    status: 'idle', busy: false, midTurn: false, promptsHeld: 0, queued: null,
+    status: 'idle', busy: false, midTurn: false, promptsHeld: 0, queued: null, openPrReview: null,
     canMerge: false, mergeQueueable: false, mergeBlockers: [], ...over,
   }) as Session;
 
@@ -20,10 +21,48 @@ describe('openPrGate', () => {
     }
   });
 
+  it('reads Review Changes when the press starts the code review first', () => {
+    expect(openPrGate(session({ openPrReview: 'new' }))).toEqual({
+      label: 'Review Changes', reason: null, title: "Run AgentK's code review, then commit, push and open a pull request",
+    });
+    expect(openPrGate(session({ openPrReview: 'new', status: 'working' }))).toEqual({
+      label: 'Review Changes after this turn', reason: null, title: 'AgentK is mid-turn: the code review starts when the turn ends', queues: true,
+    });
+    expect(openPrGate(session({ openPrReview: 'new', status: 'exited' }))).toMatchObject({ label: 'Review Changes', reason: 'Claude has exited. Resume the session first.' });
+    // Review settings Off, or a review that runs, holds the PR or goes out with it: no review starts.
+    for (const openPrReview of ['off', null] as const) expect(openPrGate(session({ openPrReview })).label).toBe('Open PR');
+    expect(openPrGate(session({ openPrReview: 'off' }), true).label).toBe('Review Changes');
+  });
+
   it('is closed when Claude exited, waits on the user with no turn behind it, or holds prompts', () => {
     expect(openPrGate(session({ status: 'exited' }))).toMatchObject({ label: 'Open PR', reason: 'Claude has exited. Resume the session first.' });
     expect(openPrGate(session({ status: 'needs_input' })).reason).toBe('AgentK is waiting on you in the terminal. Answer it first.');
     expect(openPrGate(session({ promptsHeld: 1 })).reason).toMatch(/prompts from you/);
+  });
+});
+
+describe('openPrReviews', () => {
+  const global = { strategy: 'sagittarius-3.0', rounds: 1, depth: 1, check: true } as ReviewSettings;
+  const off = { ...global, strategy: 'off' } as ReviewSettings;
+  const s = (openPrReview: Session['openPrReview'], review: Session['review'] = {}) => ({ openPrReview, review }) as Session;
+
+  it("follows the server while the dialog's strategy is the session's own", () => {
+    expect(openPrReviews(s('new'), {}, global, {})).toBe(true);
+    expect(openPrReviews(s('off'), {}, global, {})).toBe(false);
+    expect(openPrReviews(s('new', { strategy: 'sirius-1.0' }), { strategy: 'sirius-1.0', rounds: 2 }, off, {})).toBe(true);
+  });
+
+  it("follows the dialog's strategy over the project's and the global ones once it changes", () => {
+    expect(openPrReviews(s('new'), { strategy: 'off' }, global, {})).toBe(false);
+    expect(openPrReviews(s('off', { strategy: 'off' }), {}, global, {})).toBe(true);
+    expect(openPrReviews(s('off', { strategy: 'off' }), {}, global, { strategy: 'off' })).toBe(false);
+    expect(openPrReviews(s('off'), { strategy: 'sirius-1.0' }, off, {})).toBe(true);
+    // The global settings not read yet: what the server said.
+    expect(openPrReviews(s('off'), { strategy: 'sirius-1.0' }, null, {})).toBe(false);
+  });
+
+  it('never starts one while Open PR can\'t (a review runs, holds the PR or goes out with it)', () => {
+    expect(openPrReviews(s(null), { strategy: 'sirius-1.0' }, global, {})).toBe(false);
   });
 });
 

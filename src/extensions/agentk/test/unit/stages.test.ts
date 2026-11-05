@@ -28,12 +28,12 @@ describe('stage moves', () => {
       }
     }
     expect(moveError({ kind: 'task', stage: 'design' }, 'design')).toBe('Nothing to change: this session is already in Design.');
-    // The PR stage is already Review & PR.
-    expect(moveError({ kind: 'task', stage: 'pr' }, 'review')).toBe('Nothing to change: this session is already in Review & PR.');
+    // The PR stage is already Pull Request.
+    expect(moveError({ kind: 'task', stage: 'pr' }, 'review')).toBe('Nothing to change: this session is already in Pull Request.');
     expect(moveError({ kind: 'task', stage: 'pr' }, 'code')).toBeNull();
   });
 
-  it('opens the move dialog on the next step, or back on Code from Review & PR', () => {
+  it('opens the move dialog on the next step, or back on Code from Pull Request', () => {
     expect(defaultTarget('explore')).toBe('design');
     expect(defaultTarget('design')).toBe('code');
     expect(defaultTarget('code')).toBe('review');
@@ -63,7 +63,7 @@ describe('stage moves', () => {
     expect(moveEffect({ stage: 'explore', prNumber: null }, 'code')).toBe('AgentK implements what this session has worked out so far.');
     expect(moveEffect({ stage: 'explore', prNumber: null }, 'code', true)).toBe('AgentK implements the task you typed.');
     expect(moveEffect({ stage: 'review', prNumber: 12 }, 'code')).toBe(
-      'The session keeps its worktree, branch and conversation. PR #12 stays open. AgentK stops handling its reviews and CI until you come back to Review & PR.');
+      'The session keeps its worktree, branch and conversation. PR #12 stays open. AgentK stops handling its reviews and CI until you come back to Pull Request.');
     expect(moveEffect({ stage: 'code', prNumber: null }, 'explore')).toBe('AgentK runs no design, PR or merge while the session is in Explore.');
     expect(moveEffect({ stage: 'explore', prNumber: null }, 'review')).toMatch(/^AgentK picks up the branch's open PR/);
   });
@@ -85,6 +85,8 @@ describe('stage moves', () => {
     // Moved back to Explore from Design: nothing before it.
     expect(skippedSteps('task', 'explore', ['design', 'explore'])).toEqual([]);
     expect(skippedSteps('task', 'done', ['code', 'pr', 'review', 'merge', 'done'])).toEqual(['explore', 'design']);
+    // Never Code Review, which no task enters: CodeReviews.stepSkipped decides it.
+    expect(skippedSteps('task', 'review', ['explore', 'design', 'code', 'pr', 'review'])).toEqual([]);
   });
 });
 

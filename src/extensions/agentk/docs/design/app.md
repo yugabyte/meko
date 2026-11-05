@@ -51,15 +51,20 @@ host name up to its first dot; the tooltip adds the full host name. When space i
 version moves below it first, then the user name is cut off before the server name.
 
 **The stage bar and the session's ⋯.** On a desktop, under the tabs, one row holds the session's
-stages (each one it can move to is a button) and its gate: **Run to merge** and the next-stage
-button (Move on…, Design Review, Open PR, Merge & Close; a Review a PR session's Update to latest
+stages (each one it can move to is a button; a task's are 0 Explore to 5 Merge & Close, with Code
+Review, never a move target, between Code and Pull Request, and a skipped step, Code Review too
+when no review runs before the PR, drawn as – in a dashed circle; when the row is still too narrow
+after the ⋯ wraps below, the steps' names shorten with an ellipsis, Explore's only once the
+others can't shorten further, and the current one's never) and its gate: **Run to merge** and the next-stage
+button (Move on…, Design Review, Open PR or **Review Changes** when the press starts the code review
+first, Merge & Close; a Review a PR session's Update to latest
 and Close review), or the state that stands in for it (a queued gate with Cancel, an approval
 waiting for the turn's end, Opening PR, Closing, Done, or a code review holding Open PR with its own
 buttons). Beside it stay only what needs you: **N reviews for you**, **Resume** while the agent has
 exited, **Design doc** with its count while the design has open questions, and a discard waiting on
 its learn step. Everything else is in the ⋯ menu at the row's right end: the task's code review,
 **Run code review**, **Code review settings** (a dialog), the design, the PR on GitHub, **Open PR
-with instructions**, **Merge & Close without saving learnings**, **Share with reviewers**, **Save
+with instructions** (**Review Changes with instructions**, as the gate reads), **Merge & Close without saving learnings**, **Share with reviewers**, **Save
 learnings to Meko**, **Move to another stage**, **Find in terminal**, **Rename session**, **Move to
 top**, the work item, **Project home**, and **Archive or discard…**, which opens
 Archive's confirmation in the row. One list says which actions a session has, when, and why one
@@ -95,10 +100,10 @@ Session states, shown with a dot on each session (on its tab, or in the rail) an
 
 - **Working:** the dot's halo blinks
 - **Needs you:** a permission prompt or a question. The diamond knocks three times short and once
-  long, then pauses. It also shows in Review & PR while a merge blocker only you can clear stands
+  long, then pauses. It also shows in Pull Request while a merge blocker only you can clear stands
   (`Session.waitsOnYou`: a held review, CI or merge conflicts AgentK handed over, or with Run to
   merge any blocker that doesn't clear by itself; see *Waiting on you* in
-  [the task lifecycle](lifecycle.md)), and in Code or Review & PR while a code review's findings
+  [the task lifecycle](lifecycle.md)), and in Code or Pull Request while a code review's findings
   wait on you ([Findings that wait on you](code-review.md#findings-that-wait-on-you)), over idle, recovered and working, and over learning, queued,
   Meko and running in the background (`dotState()`); the tab's tooltip names what to clear
 - **Idle**, waiting for your next prompt

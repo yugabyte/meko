@@ -11,6 +11,7 @@ import { HARNESS_CAPS, harnessOf, type HarnessId } from '../../shared/harnesses.
 import { isGotchasDatapack, parseMekoMd } from '../../shared/mekomd.js';
 import { parseGithubRef } from '../../shared/github-refs.js';
 import { shortRemote } from '../../shared/datapacks.js';
+import type { OpenPrReview } from '../../shared/types.js';
 import { globalReview } from '../config.js';
 import type { Core } from '../core.js';
 import { all, get, run, tx } from '../db.js';
@@ -97,7 +98,7 @@ interface ReviewRow {
   lead: string | null;
   /** 'pr': an Open PR started it; 'demand': the user ran it (`review-run`), and it sends no PR prompt. */
   purpose: 'pr' | 'demand';
-  /** Where it runs: Code, or Review & PR on the open PR. */
+  /** Where it runs: Code, or Pull Request on the open PR. */
   stage: 'code' | 'review';
   /** 1 once the task left Code after it finished with its PR prompt unsent: Open PR doesn't reuse it. */
   stale: number;
@@ -111,7 +112,7 @@ interface ReviewRow {
 /** The running states: a review in one of them holds the task's Open PR. */
 const RUNNING: CodeReviewState[] = ['describing', 'preparing', 'sweeping', 'scoring', 'triage', 'fixing'];
 
-/** How a fix prompt ends: in Code or Review & PR, with a re-review to follow (`more`) or not. */
+/** How a fix prompt ends: in Code or Pull Request, with a re-review to follow (`more`) or not. */
 const fixAfter = (stage: 'code' | 'review', more: boolean): FixAfter => (stage === 'review' ? (more ? 'hold-push' : 'push') : more ? 'review-again' : 'open-later');
 
 /** A stopped review holds the task's Open PR (`reviewHolds`): never one the user ran. */
@@ -181,7 +182,7 @@ const json = <T>(s: string | null, fallback: T): T => {
  * scoring, then the task fixes the findings (re-review rounds) or opens the PR with the
  * `me_ak_review:` line. A review in a running state holds the task's Open PR; a failed one, or one the
  * user cancelled, holds it for the user's Retry or Open anyway (one cancelled because the task left
- * Code doesn't: `reviewHolds`). The user can also run one (`runNow`), in Code or in Review & PR: it
+ * Code doesn't: `reviewHolds`). The user can also run one (`runNow`), in Code or in Pull Request: it
  * sends no PR prompt, and Open PR then sends the PR with its line rather than reviewing again.
  */
 export class CodeReviews {
@@ -302,7 +303,7 @@ export class CodeReviews {
     return !!r && RUNNING.includes(r.state);
   }
 
-  /** The task's latest review runs, and it started in `stage` (a merge waits for one in Review & PR). */
+  /** The task's latest review runs, and it started in `stage` (a merge waits for one in Pull Request). */
   runningIn(taskId: string, stage: 'code' | 'review'): boolean {
     const r = this.latest(taskId);
     return !!r && r.stage === stage && RUNNING.includes(r.state);
@@ -324,7 +325,7 @@ export class CodeReviews {
   // ---- starting ----
 
   /**
-   * Open PR (or a move to Review & PR with work to push) on a task: true when a review now holds it
+   * Open PR (or a move to Pull Request with work to push) on a task: true when a review now holds it
    * (one just started, or one already running), false when the PR prompt may go (review Off, not a
    * task). A finished review whose PR prompt didn't go sends it now (unless a queued Open PR, `queued`,
    * is withdrawn meanwhile), one the user ran included, with the strategy Off too; a stopped one
@@ -364,6 +365,7 @@ export class CodeReviews {
       } else await this.finish(last.id, opts.queued);
       return true;
     }
+    // openPrReview() and stepSkipped() tell the page what this does: keep them in step.
     const settings = this.settingsFor(task);
     if (settings.strategy === 'off') return false;
     await this.start(task, settings, opts);
@@ -382,8 +384,46 @@ export class CodeReviews {
   }
 
   /**
+   * What Open PR does about the task's code review (`Session.openPrReview`): `new` when it starts one
+   * (the test openPr() makes before start()), `off` when it would but the review settings are Off,
+   * null when it can't: not a task in Code, or a review runs, holds the PR (Retry or Open anyway), or
+   * is done and goes out with the PR (`unsent`). Keep it in step with openPr().
+   */
+  openPrReview(task: SessionRow): OpenPrReview {
+    return task.stage === 'code' ? this.atOpenPr(task) : null;
+  }
+
+  /**
+   * The stage bar's Code Review step is skipped (`Session.skippedStages`): before the PR (Explore,
+   * Design, Code), Open PR would neither start a review nor send one (atOpenPr `off`); once the PR
+   * prompt went (`pr`, `review`, `merge`, `done`), the latest one went with no finished Code review:
+   * none done whose `finished_at` is since the task last entered Code (Open anyway sets it on a
+   * stopped one, which reviewed nothing; one from an earlier PR prompt, before a move back to Code,
+   * isn't this one's). Only for a running session, as the other skipped steps (store.ts).
+   */
+  stepSkipped(task: SessionRow): boolean {
+    if (task.kind === 'code-review' || task.kind === 'review-pr' || task.desired !== 'running') return false;
+    if (task.stage === 'explore' || task.stage === 'design' || task.stage === 'code') return this.atOpenPr(task) === 'off';
+    if (task.stage !== 'pr' && task.stage !== 'review' && task.stage !== 'merge' && task.stage !== 'done') return false;
+    return !get<{ one: number }>(
+      this.db,
+      `SELECT 1 AS one FROM code_reviews WHERE task_id = ? AND stage = 'code' AND state = 'done' AND finished_at IS NOT NULL
+         AND finished_at >= COALESCE((SELECT MAX(entered_at) FROM session_stages WHERE session_id = ? AND stage = 'code'), 0) LIMIT 1`,
+      task.id, task.id,
+    );
+  }
+
+  /** openPrReview() whatever the task's stage: what an Open PR from Code would do now. */
+  private atOpenPr(task: SessionRow): OpenPrReview {
+    if (task.kind === 'code-review' || task.kind === 'review-pr' || task.desired !== 'running') return null;
+    const last = this.latest(task.id);
+    if (last && (RUNNING.includes(last.state) || holds(last) || unsent(last))) return null;
+    return this.settingsFor(task).strategy === 'off' ? 'off' : 'new';
+  }
+
+  /**
    * Refuses while a stopped review holds the task's Open PR for Retry or Open anyway. One cancelled
-   * because the task left Code doesn't: the next Open PR (or move to Review & PR) starts a new one.
+   * because the task left Code doesn't: the next Open PR (or move to Pull Request) starts a new one.
    */
   checkNotHeld(taskId: string): void {
     if (holds(this.latest(taskId))) throw new HttpError(409, 'The code review stopped. Retry it, or open the PR anyway.');
@@ -391,7 +431,7 @@ export class CodeReviews {
 
   /**
    * The `review-run` action: the task's code review runs now, at the user's request, in Code (the
-   * task writes its PR description first, as for Open PR) or in Review & PR (on the open PR, with its
+   * task writes its PR description first, as for Open PR) or in Pull Request (on the open PR, with its
    * title and description). With the strategy Off it runs the default one. It sends no PR prompt:
    * Open PR sends the PR with its line later.
    *
@@ -405,7 +445,7 @@ export class CodeReviews {
     const describe = o.describe !== false && !projectRow(this.core.db, task.project_id)?.workshop;
     if (task.kind === 'code-review' || task.kind === 'review-pr') throw new HttpError(409, 'Only a task has a code review.');
     if (task.desired !== 'running') throw new HttpError(409, 'This session is archived.');
-    if (task.stage !== 'code' && task.stage !== 'review') throw new HttpError(409, 'The code review runs in Code, or in Review & PR once the PR is open.');
+    if (task.stage !== 'code' && task.stage !== 'review') throw new HttpError(409, 'The code review runs in Code, or in Pull Request once the PR is open.');
     if (task.stage === 'review' && !task.pr_number) throw new HttpError(409, "AgentK hasn't found the PR yet. Try again once it has.");
     const last = this.latest(task.id);
     if (last && RUNNING.includes(last.state)) throw new HttpError(409, 'A code review is already running.');
@@ -444,7 +484,7 @@ export class CodeReviews {
     const describe = stage === 'code' && opts.describe !== false;
     // An earlier review's session goes: the task's tab shows only the latest.
     const prev = this.latest(task.id);
-    // In Review & PR the PR has its title and description already: the first round starts at once.
+    // In Pull Request the PR has its title and description already: the first round starts at once.
     run(this.db, `INSERT INTO code_reviews(id, task_id, strategy, rounds, depth, state, instructions, by, lead, purpose, stage, hand_off, created_at, updated_at)
                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, task.id, settings.strategy, settings.rounds, settings.depth, describe ? 'describing' : 'preparing',
     opts.instructions || null, opts.by, opts.lead || null, purpose, stage, opts.handOff === false ? 0 : 1, now, now);
@@ -567,7 +607,7 @@ export class CodeReviews {
     const trusted = repoConfigTrusted(task);
     const datapacks = trusted && this.core.mekoStatus.configured ? this.datapacks(wt, paths) : [];
     const repo = sessionRepo(this.db, task);
-    // In Review & PR, the open PR's own title and description.
+    // In Pull Request, the open PR's own title and description.
     const prDescription = r.stage === 'review' ? await this.core.lifecycle.prText(task) : this.readDescription(task);
     return {
       diff,
@@ -1090,7 +1130,7 @@ export class CodeReviews {
       if (r.lead) this.set(id, { lead: null });
       if (more) return;
     } else if (r.stage === 'review' && r.round > 1 && await this.core.lifecycle.unpushedToPr(task)) {
-      // Fixes from earlier rounds wait uncommitted: in Review & PR they're pushed once, now that a re-review found nothing.
+      // Fixes from earlier rounds wait uncommitted: in Pull Request they're pushed once, now that a re-review found nothing.
       await this.core.lifecycle.sendReviewPush(task, { strategy: strategyName(r.strategy), round: r.round });
     }
     this.set(id, { state: 'done' });
@@ -1106,7 +1146,7 @@ export class CodeReviews {
     const r = this.latest(taskId);
     if (r?.state !== 'triage') throw new HttpError(409, 'No code review findings wait on you.');
     const task = this.core.sessions.row(taskId);
-    if (task.desired !== 'running' || task.stage !== r.stage) throw new HttpError(409, `The code review ran in ${r.stage === 'code' ? 'Code' : 'Review & PR'}. Move the session back there first.`);
+    if (task.desired !== 'running' || task.stage !== r.stage) throw new HttpError(409, `The code review ran in ${r.stage === 'code' ? 'Code' : 'Pull Request'}. Move the session back there first.`);
     this.kick(r.id, async () => {
       const cur = this.mustReview(r.id);
       if (cur.state !== 'triage') return;
@@ -1168,7 +1208,7 @@ export class CodeReviews {
   /**
    * The review is done: the PR prompt goes, with the line and the last round's findings when it had
    * some. `queued`: for a queued Open PR, which a Cancel or Run to merge stopping still withdraws.
-   * One the user ran sends no PR prompt: in Code, Open PR sends it later (openPr); in Review & PR,
+   * One the user ran sends no PR prompt: in Code, Open PR sends it later (openPr); in Pull Request,
    * its line goes in the PR's description.
    */
   private async finish(id: string, queued = false): Promise<void> {
@@ -1245,7 +1285,7 @@ export class CodeReviews {
   }
 
   /**
-   * A move took the task out of a stage (or a move to Review & PR found it outside Code): its review
+   * A move took the task out of a stage (or a move to Pull Request found it outside Code): its review
    * from that stage, running or stopped, holds nothing now (Retry and Open anyway are Code's). It's
    * cancelled as left and its session goes, so the next Open PR or move starts a new review on the
    * change as it is. A finished Code review whose PR prompt hasn't gone turns stale: Open PR reviews
@@ -1307,12 +1347,12 @@ export class CodeReviews {
     const r = this.latest(taskId);
     if (!r || (r.state !== 'failed' && r.state !== 'cancelled')) throw new HttpError(409, 'There is no stopped code review to retry.');
     if (r.purpose === 'demand' && sessionRow(this.db, taskId)?.stage !== r.stage) {
-      throw new HttpError(409, `That code review ran in ${r.stage === 'code' ? 'Code' : 'Review & PR'}. Run the code review again here instead.`);
+      throw new HttpError(409, `That code review ran in ${r.stage === 'code' ? 'Code' : 'Pull Request'}. Run the code review again here instead.`);
     }
     const dir = this.runDir(r);
     const resumable = existsSync(join(dir, 'base.md')) && existsSync(join(dir, 'context.json'));
     // Stopped before round 1 had the task's PR description: the task is asked for it again first
-    // (not in Review & PR, where the PR has one).
+    // (not in Pull Request, where the PR has one).
     const describe = !resumable && r.round === 1 && r.stage === 'code' && !existsSync(this.core.sessions.prDescriptionPath(this.core.sessions.row(taskId)));
     const state = resumable ? (json<Candidate[]>(r.candidates_json, []).length && this.steps(r.id, `r${r.round}c`).length ? 'scoring' : 'sweeping') : describe ? 'describing' : 'preparing';
     this.set(r.id, { state, detail: null, asked: 0 });

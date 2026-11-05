@@ -172,9 +172,9 @@ kept in memory, at most 30 lines; after a restart the host reads where things st
 ## No PR in the demo
 
 A workshop's project (`Project.workshop`) opens no PR: its repo has no remote, and Open PR has no
-remote check, so its push and `gh pr create` would fail and leave the session in Review & PR with
+remote check, so its push and `gh pr create` would fail and leave the session in Pull Request with
 Merge unavailable. The server refuses Open PR, Run to merge (on a session and at a session's start)
-and a move to Review & PR there with a 409 (`checkOpensPr` in `lifecycle.ts`; the session tools'
+and a move to Pull Request there with a 409 (`checkOpensPr` in `lifecycle.ts`; the session tools'
 `open_pr` and `move_session` go through the same calls). In the UI, the Code gate shows "No PR in
 the demo" and **Run code review** (the `review-run` action, while `canRunReview` offers it;
 `demoReviewGate` in `src/web/util.ts`) where Open PR and Run to merge would be; while a review's

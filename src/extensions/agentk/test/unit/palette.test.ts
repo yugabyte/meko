@@ -116,7 +116,7 @@ describe("AgentK's proposed actions", () => {
   it('says a session runs to merge in its Go to hint', () => {
     const on = [{ ...projects[0], sessions: [{ id: 's1', name: 'Dark mode', stage: 'review', autoRun: true }] }] as unknown as ProjectWithSessions[];
     const [go] = askEntries([{ type: 'go', view: 'session', projectId: 'p1', sessionId: 's1' }], on);
-    expect(go.hint).toBe('agent-k-local · Review & PR · Run to merge');
+    expect(go.hint).toBe('agent-k-local · Pull Request · Run to merge');
   });
 
   it('offers Do all for two or more steps of one instruction, leaving out the go actions', () => {

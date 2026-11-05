@@ -7,16 +7,16 @@ describe('stageChipText', () => {
   const review = (state: CodeReviewSummary['state'], detail: string | null, onDemand = false) => ({ state, detail, onDemand }) as CodeReviewSummary;
   it.each([
     ['code', null, null, 'Code'],
-    ['code', 'describing', null, 'Review & PR'],
-    ['code', 'sweeping', null, 'Review & PR'],
-    ['code', 'triage', null, 'Review & PR'],
-    ['code', 'fixing', null, 'Review & PR'],
-    ['code', 'failed', 'no review pass reported', 'Review & PR'],
-    ['code', 'cancelled', 'you cancelled it', 'Review & PR'],
+    ['code', 'describing', null, 'Code Review'],
+    ['code', 'sweeping', null, 'Code Review'],
+    ['code', 'triage', null, 'Code Review'],
+    ['code', 'fixing', null, 'Code Review'],
+    ['code', 'failed', 'no review pass reported', 'Code Review'],
+    ['code', 'cancelled', 'you cancelled it', 'Code Review'],
     // Cancelled by leaving Code: it doesn't hold the next Open PR, which starts a new review.
     ['code', 'cancelled', REVIEW_LEFT_CODE, 'Code'],
     ['code', 'done', null, 'Code'],
-    ['review', 'done', null, 'Review & PR'],
+    ['review', 'done', null, 'Pull Request'],
     // One the user ran holds nothing: the task stays in Code with its Open PR.
     ['code', 'sweeping', 'on demand', 'Code'],
     ['code', 'failed', 'on demand', 'Code'],
@@ -38,8 +38,8 @@ describe('canRunReview', () => {
     ['while one runs', s({ codeReview: review('sweeping') }), { offered: false, ready: false, wait: null }],
     ['while its findings wait on you', s({ codeReview: review('triage') }), { offered: false, ready: false, wait: null }],
     ['while one waits for fixes', s({ codeReview: review('fixing') }), { offered: false, ready: false, wait: null }],
-    ['in Review & PR with its PR', s({ stage: 'review', prNumber: 7 }), { offered: true, ready: true, wait: null }],
-    ['in Review & PR before the PR is found', s({ stage: 'review' }), { offered: false, ready: false, wait: null }],
+    ['in Pull Request with its PR', s({ stage: 'review', prNumber: 7 }), { offered: true, ready: true, wait: null }],
+    ['in Pull Request before the PR is found', s({ stage: 'review' }), { offered: false, ready: false, wait: null }],
     ['in Design', s({ stage: 'design' }), { offered: false, ready: false, wait: null }],
     ['on a Review a PR session', s({ kind: 'review-pr', stage: 'reviewing-pr' }), { offered: false, ready: false, wait: null }],
   ] as const)('%s: %j', (_, session, want) => {

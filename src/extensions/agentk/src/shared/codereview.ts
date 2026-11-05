@@ -252,7 +252,7 @@ export interface CodeReviewSummary {
    * and a stopped one holds nothing. An Open PR while it runs takes it over (false from then on).
    */
   onDemand: boolean;
-  /** Where it runs: in Code, or in Review & PR on the open PR. Leaving that stage cancels it. */
+  /** Where it runs: in Code, or in Pull Request on the open PR. Leaving that stage cancels it. */
   stage: 'code' | 'review';
   /** A first look (a workshop's, before its gotchas are in Meko): its findings stay with it, never sent to the task. */
   firstLook?: boolean;
@@ -365,8 +365,8 @@ export const DESCRIBE_LOST = "the task's agent exited before taking the ask for 
 
 /** Why a review stopped when its task left Code: it doesn't hold the next Open PR, which starts a new review. */
 export const REVIEW_LEFT_CODE = 'the task left Code';
-/** Why a review run in Review & PR stopped when its task left that stage. */
-export const REVIEW_LEFT_REVIEW = 'the task left Review & PR';
+/** Why a review run in Pull Request stopped when its task left that stage. */
+export const REVIEW_LEFT_REVIEW = 'the task left Pull Request';
 /** Why a review stopped when the user cancelled it (the `review-cancel` action). */
 export const YOU_CANCELLED = 'you cancelled it';
 
