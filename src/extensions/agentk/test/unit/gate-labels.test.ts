@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { LearnProgress, ReviewingPr, Session } from '../../src/shared/types.js';
-import { closingText, designGate, elapsedText, headerApproves, learnStepText, mergeGate, openPrGate, openPrReviews, queuedText, reviewTarget, updateShowing } from '../../src/web/util.js';
+import { closingText, elapsedText, headerApproves, learnStepText, mergeGate, openPrGate, openPrReviews, queuedText, runToMergeShown, updateShowing } from '../../src/web/util.js';
 import type { ReviewSettings } from '../../src/shared/codereview.js';
 import { closeStep } from '../../src/server/store.js';
 
@@ -124,31 +124,15 @@ describe('headerApproves', () => {
   });
 });
 
-describe('designGate', () => {
-  const design = (open: number, over: Partial<Session> = {}) =>
-    session({ stage: 'design', desired: 'running', hasDesign: true, designQuestions: { open }, ...over });
-  it('reads Design Review and only opens the design, so mid-turn doesn’t hold it up', () => {
-    expect(designGate(design(2, { status: 'working' }))).toEqual({
-      label: 'Design Review',
-      reason: null,
-      title: 'Review the design and answer its open questions, then approve it there',
-    });
-  });
-  it('waits for a design', () => {
-    const reason = 'AgentK hasn’t proposed a design yet.';
-    expect(designGate(design(0, { hasDesign: false }))).toEqual({ label: 'Design Review', reason, title: reason });
-  });
-});
-
-describe('reviewTarget', () => {
-  it.each<[string, number, boolean, boolean, 'questions' | 'design' | 'approve']>([
-    ['opens the questions while some are open', 2, false, false, 'questions'],
-    ['opens the questions while a change to a decision waits', 0, true, false, 'questions'],
-    ['opens the design with nothing to answer', 0, false, false, 'design'],
-    // Otherwise the click would change nothing: the panel brings up its approve button.
-    ['brings up the approve button with the panel open', 2, false, true, 'approve'],
-  ])('%s', (_, open, changing, panelOpen, target) => {
-    expect(reviewTarget(open, changing, panelOpen)).toBe(target);
+describe('runToMergeShown', () => {
+  it.each<[string, Partial<Session>, boolean]>([
+    ['in Code', { stage: 'code' }, true],
+    ['in Pull Request', { stage: 'review' }, true],
+    // In Design, Run to merge is in the design panel, beside its Approve: the bar has no box to explain.
+    ['not in Design, even with a design', { stage: 'design', hasDesign: true }, false],
+    ['not in Explore', { stage: 'explore' }, false],
+  ])('%s', (_, over, shown) => {
+    expect(runToMergeShown(session(over))).toBe(shown);
   });
 });
 

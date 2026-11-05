@@ -353,6 +353,31 @@ describe('the key design decisions on the Questions tab', () => {
   });
 });
 
+describe("Run to merge in the questions' footer", () => {
+  const session = { id: 'foot-rtm', stage: 'design', desired: 'running', approvalQueued: false, asking: null, busy: false, autoRun: false, hasDesign: true } as unknown as Session;
+  const doc: DesignDoc = { markdown: '# D', html: null, artifactUrl: null, updatedAt: 1, questions: [question({ id: 'q1', options: opts('A', 'B') })], questionsSource: 'file', fromPr: null };
+  const foot = (html: string) => html.slice(html.indexOf('class="dq-foot"'));
+  const onAutoRun = () => Promise.resolve();
+
+  afterEach(() => clearDrafts(session.id));
+
+  it('sits beside Approve with answers when the panel hands it over', () => {
+    const html = foot(renderToStaticMarkup(createElement(DesignQuestions, { session, doc, onAutoRun })));
+    expect(html).toContain('Run to merge');
+    expect(html.indexOf('Run to merge')).toBeLessThan(html.indexOf('Approve with answers'));
+  });
+
+  it('sits beside Cancel approval while an approval waits for the turn to end', () => {
+    const html = foot(renderToStaticMarkup(createElement(DesignQuestions, { session: { ...session, approvalQueued: true }, doc, onAutoRun })));
+    expect(html).toContain('Run to merge');
+    expect(html).toContain('Cancel approval');
+  });
+
+  it("is left out while the panel's header shows its own", () => {
+    expect(foot(renderToStaticMarkup(createElement(DesignQuestions, { session, doc })))).not.toContain('Run to merge');
+  });
+});
+
 describe('answers in the browser', () => {
   const store = question({ id: 'store', options: opts('Datapack', 'Repo'), recommended: 1 });
   const pick = question({ id: 'pick', options: opts('A', 'B') });

@@ -25,7 +25,6 @@ export function DesignPanel({
   onApprove,
   onAutoRun,
   showQuestions = 0,
-  approveAt = 0,
   page = false,
   datapacks,
 }: {
@@ -38,11 +37,6 @@ export function DesignPanel({
   onAutoRun: (on: boolean) => Promise<void>;
   /** Changes when the questions should be shown (Approve pressed elsewhere with open questions). */
   showQuestions?: number;
-  /**
-   * Changes when the approve button should be brought into view (the stage bar's Design Review
-   * with the panel open): the questions' footer while they show, else the header's.
-   */
-  approveAt?: number;
   page?: boolean;
 }) {
   const [doc, setDoc] = useState<DesignDoc | null>(null);
@@ -56,8 +50,6 @@ export function DesignPanel({
     setDecisionsAt((n) => (decisions ? n + 1 : 0));
   };
   const qcol = useRef<HTMLElement>(null);
-  const headerApprove = useRef<HTMLButtonElement>(null);
-  const headerBlocked = useRef<HTMLParagraphElement>(null);
   const mobile = useIsMobile();
   const { working, landed } = useDesignWorking(session);
 
@@ -114,25 +106,9 @@ export function DesignPanel({
   // The header's Approve, and why it's closed: said under the header too, as a phone has no tooltips.
   const headerShown = headerApproves(session, questions, changing);
   const approveBlocker = headerShown && !toAnswer ? (session.busy ? SESSION_BUSY : designApprovalBlocker(session)) : null;
-  // While the questions show, DesignQuestions takes it; with questions to answer on the Design tab,
-  // they're shown first; else the header's Approve, or why it's closed. With the design not read,
-  // nothing to bring up. Only a bump made while this panel is up: not one it mounted with (from
-  // another session's panel), nor the reset to 0 after it.
-  const seenApprove = useRef(approveAt);
-  useEffect(() => {
-    const bumped = approveAt > seenApprove.current;
-    seenApprove.current = approveAt;
-    if (!bumped || questions === 'shown') return;
-    if (questions === 'hidden' && toAnswer) {
-      toQuestions();
-      return;
-    }
-    const target = approveBlocker ? headerBlocked.current : headerApprove.current;
-    target?.scrollIntoView({ block: 'nearest' });
-    target?.focus();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only on the bump, with the view as it is then
-  }, [approveAt]);
-
+  // Run to merge sits beside whichever Approve is on screen: the header's, or, while the header leaves
+  // its out (the questions on screen with open ones or a change to a decision), the questions' footer's.
+  const footRunToMerge = headerShown ? undefined : onAutoRun;
   const docView = (
     <>
       {frame && !error ? (
@@ -205,7 +181,6 @@ export function DesignPanel({
         {headerShown && <RunToMergeCheck session={session} disabled={session.busy} onChange={onAutoRun} />}
         {headerShown && (
           <button
-            ref={headerApprove}
             className="btn small primary"
             // With open questions (or a change to one of AgentK's decisions) it only shows them; the
             // approval goes from their footer, with the answers.
@@ -243,7 +218,7 @@ export function DesignPanel({
         )}
       </div>
       {approveBlocker && (
-        <p ref={headerBlocked} className="design-blocked" role="status" tabIndex={-1}>
+        <p className="design-blocked" role="status">
           {approveBlocker}
         </p>
       )}
@@ -254,7 +229,7 @@ export function DesignPanel({
             <div className="design-qcol-hd">
               Questions{waiting > 0 && <span className="count-badge">{waiting}</span>}
             </div>
-            <DesignQuestions session={session} doc={doc!} datapacks={datapacks} showDecisions={decisionsAt} approveAt={approveAt} />
+            <DesignQuestions session={session} doc={doc!} datapacks={datapacks} showDecisions={decisionsAt} onAutoRun={footRunToMerge} />
           </aside>
         </div>
       ) : (
@@ -262,7 +237,7 @@ export function DesignPanel({
       )}
       {tabs && tab === 'questions' && (
         <div className="dq-view" role="tabpanel">
-          <DesignQuestions session={session} doc={doc!} datapacks={datapacks} showDecisions={decisionsAt} approveAt={approveAt} />
+          <DesignQuestions session={session} doc={doc!} datapacks={datapacks} showDecisions={decisionsAt} onAutoRun={footRunToMerge} />
         </div>
       )}
       {tabs && tab === 'design' && (open > 0 || (session.stage === 'design' && made > 0)) && (

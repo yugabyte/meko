@@ -56,12 +56,12 @@ Review, never a move target, between Code and Pull Request, and a skipped step, 
 when no review runs before the PR, drawn as – in a dashed circle; when the row is still too narrow
 after the ⋯ wraps below, the steps' names shorten with an ellipsis, Explore's only once the
 others can't shorten further, and the current one's never) and its gate: **Run to merge** and the next-stage
-button (Move on…, Design Review, Open PR or **Review Changes** when the press starts the code review
-first, Merge & Close; a Review a PR session's Update to latest
+button (Move on…, Open PR or **Review Changes** when the press starts the code review
+first, Merge & Close; none in Design, where **Design doc** opens the panel that approves; a Review a PR session's Update to latest
 and Close review), or the state that stands in for it (a queued gate with Cancel, an approval
 waiting for the turn's end, Opening PR, Closing, Done, or a code review holding Open PR with its own
 buttons). Beside it stay only what needs you: **N reviews for you**, **Resume** while the agent has
-exited, **Design doc** with its count while the design has open questions, and a discard waiting on
+exited, **Design doc** in Design (with its open questions' count), and a discard waiting on
 its learn step. Everything else is in the ⋯ menu at the row's right end: the task's code review,
 **Run code review**, **Code review settings** (a dialog), the design, the PR on GitHub, **Open PR
 with instructions** (**Review Changes with instructions**, as the gate reads), **Merge & Close without saving learnings**, **Share with reviewers**, **Save
@@ -549,7 +549,7 @@ With the setting off, the app bar holds the project's sessions as tabs, between 
 can switch sessions without opening the drawer (each tab shows its status and stage; a swipe scrolls them, with no scrollbar); with it on, the drawer
 lists them instead and the app bar names the session and its project, with the session's status dot, and puts
 a dot on the drawer button while another session in the project needs you. The stage bar
-with its gate button (Design Review, Open PR, Merge & Close), the actions of the desktop's ⋯ menu
+with its gate button (Open PR, Merge & Close), the actions of the desktop's ⋯ menu
 (from the same list, as rows) and the footer details move into a ⋯ sheet, leaving the screen to the
 terminal; a dot on ⋯ marks a gate that is ready for you, and the sheet says why a closed gate is
 closed. The sheet closes with the × at its top right, a

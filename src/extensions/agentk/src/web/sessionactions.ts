@@ -9,7 +9,7 @@ import { agentName, canRunReview, isReviewChild, mergeGate, onDemandControls, op
 /**
  * Where an action shows: the desktop ⋯ menu (`SessionMenu.tsx`), the phone's ⋯ sheet
  * (`SessionSheet.tsx`) or the ⌘K palette (`CommandPalette.tsx`). What the desktop bar keeps in
- * view (the gate, held reviews, Resume, Design doc while it has open questions) isn't on `menu`.
+ * view (the gate, held reviews, Resume, Design doc in Design) isn't on `menu`.
  */
 export type Surface = 'menu' | 'sheet' | 'palette';
 
@@ -142,11 +142,11 @@ export function sessionActions(s: Session, ctx: SessionActionContext): SessionAc
 
   if (!child && (s.hasDesign || s.stage === 'design')) {
     const open = s.stage === 'design' ? s.designQuestions.open : 0;
-    // While the design has open questions, the desktop bar keeps its Design doc button.
+    // In Design, the desktop bar keeps its Design doc button.
     add({
       id: 'design', group: 'stage', label: 'Design doc', opens: true,
       count: open > 0 ? (open === 1 ? '1 open question' : `${open} open questions`) : undefined,
-      on: open > 0 ? ['sheet'] : ['menu', 'sheet'],
+      on: s.stage === 'design' ? ['sheet'] : ['menu', 'sheet'],
     });
   }
   if (s.prUrl) {
