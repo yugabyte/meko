@@ -89,7 +89,7 @@ func extractInput(existing []string, context, turns []store.ExtractionTurn, now 
 	b.WriteString("\nNew turns:\n")
 	for i, t := range turns {
 		fmt.Fprintf(&b, "[turn %d] (%s)\nUser: %s\nAssistant (context only): %s\n\n", i,
-			t.CreatedAt.UTC().Format("2006-01-02"), clip(t.Input, extractUserChars), clip(t.Output, extractReplyChars))
+			turnDate(t).Format("2006-01-02"), clip(t.Input, extractUserChars), clip(t.Output, extractReplyChars))
 	}
 	return b.String()
 }
@@ -108,4 +108,12 @@ func clip(text string, n int) string {
 // trivial is a user message with nothing to remember: a few words of go-ahead or thanks.
 func trivial(input string) bool {
 	return len([]rune(strings.TrimSpace(input))) < 12
+}
+
+// turnDate is when a turn was said: its session date when a replayed transcript gives one.
+func turnDate(t store.ExtractionTurn) time.Time {
+	if !t.SessionDate.IsZero() {
+		return t.SessionDate
+	}
+	return t.CreatedAt.UTC()
 }
