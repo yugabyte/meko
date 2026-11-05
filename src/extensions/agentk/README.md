@@ -43,7 +43,7 @@ your phone.
 - **Many tasks at once.** Each task gets its own git worktree, branch and agent session (Claude
   Code, OpenCode or Kiro CLI), with the real terminal in your browser. Sessions keep running when
   you close the page.
-- **From idea to merged PR.** Every task runs on Explore → Design → Code → Review & PR → Merge &
+- **From idea to merged PR.** Every task runs on Explore → Design → Code → Pull Request → Merge &
   Close. You approve the design, opening the PR and the merge, or let **Run to merge** do it all.
 - **Code review on your computer.** AgentK reviews each change before the PR opens, and whenever you
   ask. You check the findings, and AgentK fixes the ones you keep.

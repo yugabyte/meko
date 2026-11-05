@@ -36,6 +36,14 @@ describe('sessionActions', () => {
     expect(item(session({ stage: 'design' }), 'review-run')).toBeUndefined();
   });
 
+  it('names Open PR with instructions as the gate does: Review Changes when the press starts the code review', () => {
+    expect(item(session(), 'open-pr')).toMatchObject({ label: 'Open PR with instructions', palette: ['Open PR for ', { session: 'Fix login' }, ' with instructions'] });
+    expect(item(session({ openPrReview: 'new' }), 'open-pr')).toMatchObject({
+      label: 'Review Changes with instructions', palette: ['Review Changes for ', { session: 'Fix login' }, ' with instructions'],
+    });
+    expect(item(session({ openPrReview: 'new', queued: 'open-pr' }), 'open-pr')).toMatchObject({ label: 'Instructions for the queued Open PR' });
+  });
+
   it('keeps what the desktop bar shows off the menu: Resume, the gate, held reviews', () => {
     const exited = session({ status: 'exited' });
     expect(ids(exited, 'sheet')[0]).toBe('resume');
@@ -64,7 +72,7 @@ describe('sessionActions', () => {
 
   it.each([
     ['Code, holding Open PR: the gate has Send', review({ state: 'triage' }), 'code', false],
-    ['Review & PR: no gate shows it', review({ state: 'triage', stage: 'review' }), 'review', true],
+    ['Pull Request: no gate shows it', review({ state: 'triage', stage: 'review' }), 'review', true],
     ['a review you ran', review({ state: 'triage', onDemand: true }), 'code', true],
   ] as const)('offers Send the findings while they wait on you (%s)', (_, r, stage, onMenu) => {
     const waiting = session({ stage, codeReview: r });

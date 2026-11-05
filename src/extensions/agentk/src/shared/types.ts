@@ -39,7 +39,7 @@ export interface StartupState {
 export type Stage = 'explore' | 'design' | 'code' | 'pr' | 'review' | 'merge' | 'done' | 'reviewing-pr' | 'reviewing-code';
 
 /**
- * What a session is: a task, which runs on Explore → Design → Code → Review & PR → Merge & Close
+ * What a session is: a task, which runs on Explore → Design → Code → Pull Request → Merge & Close
  * from the stage it starts at, a Review a PR (someone else's PR), which has one stage, or a
  * code-review session: AgentK's code review of a task's change, a child of the task
  * (`Session.parentId`) that AgentK starts at Open PR and shows only as part of the task's tab.
@@ -60,7 +60,7 @@ export const KIND_LABELS: Record<SessionKind, string> = {
   'code-review': 'Code review',
 };
 
-/** Where a new task session starts. It gets to Review & PR only through Open PR or a move. */
+/** Where a new task session starts. It gets to Pull Request only through Open PR or a move. */
 export type StartStage = 'explore' | 'design' | 'code';
 
 export const START_STAGES: StartStage[] = ['explore', 'design', 'code'];
@@ -169,29 +169,33 @@ export const START_EXAMPLES: Record<StartStage | 'review-pr' | 'learn', { name: 
 
 /**
  * The steps shown in the stage bar for each kind, in order. `pr` (opening the PR) shows as part of
- * the Review & PR step (see stepOf in `stages.ts`), and `done` is terminal and not shown. A task's
- * steps are numbered from 0, so Explore is 0 and Design 1.
+ * the Pull Request step (see stepOf in `stages.ts`), and `done` is terminal and not shown. A task's
+ * steps are numbered from 0, so Explore is 0, Design 1 and Merge & Close 5. A task's Code Review
+ * (`reviewing-code`) is a step only, never its stage: the task stays in `code` while its review runs
+ * (`shownStep()` in `src/web/util.ts`), and the step is skipped when no review runs before the PR
+ * (`Session.skippedStages`).
  */
 export const KIND_STAGES: Record<SessionKind, Exclude<Stage, 'done' | 'pr'>[]> = {
-  task: ['explore', 'design', 'code', 'review', 'merge'],
+  task: ['explore', 'design', 'code', 'reviewing-code', 'review', 'merge'],
   'review-pr': ['reviewing-pr'],
   'code-review': ['reviewing-code'],
 };
 
 /**
- * `pr` and `review` are one step in the UI, so they share a label. Its "Review" is the PR's
- * (reviews, CI, conflicts); the code review runs in Code, before it.
+ * `pr` and `review` are one step in the UI, so they share a label: the PR's reviews, CI and
+ * conflicts. AgentK's code review is the Code Review step before it (`reviewing-code`, also a review
+ * session's own stage).
  */
 export const STAGE_LABELS: Record<Stage, string> = {
   explore: 'Explore',
   design: 'Design',
   code: 'Code',
-  pr: 'Review & PR',
-  review: 'Review & PR',
+  pr: 'Pull Request',
+  review: 'Pull Request',
   merge: 'Merge & Close',
   done: 'Done',
   'reviewing-pr': 'Reviewing PR',
-  'reviewing-code': 'Code review',
+  'reviewing-code': 'Code Review',
 };
 
 export type ReviewState =
@@ -715,7 +719,7 @@ export interface Project {
   /**
    * The bundled workshop that opened it (`Workshop.id`), or null for a project the user opened. A
    * workshop's project is on a demo repo AgentK built with no remote, so it opens no PR: Open PR,
-   * Run to merge and a move to Review & PR are refused there, and its Code gate offers Run code
+   * Run to merge and a move to Pull Request are refused there, and its Code gate offers Run code
    * review instead.
    */
   workshop: string | null;
@@ -799,8 +803,8 @@ export interface Session {
    * failing CI or merge conflicts AgentK handed over after its attempts on this head, or conflicts
    * while Resolve merge conflicts on PRs is off; and with Run to merge every other blocker that doesn't
    * clear by itself, except a question in the terminal (the status says it), changes requested while
-   * AgentK addresses a review, and failing CI or conflicts AgentK still has attempts for. In Review &
-   * PR the session's dot shows Needs you while there's one (`dotState()`).
+   * AgentK addresses a review, and failing CI or conflicts AgentK still has attempts for. In Pull
+   * Request the session's dot shows Needs you while there's one (`dotState()`).
    */
   waitsOnYou: string[];
   /** A gate pressed early, waiting to go (kept in state.db across restarts); null when none. */
@@ -816,7 +820,9 @@ export interface Session {
   busy: boolean;
   /**
    * Steps before the current one that the session never went through, e.g. Explore and Design for a
-   * task started at Code. The stage bar shows them as skipped.
+   * task started at Code, and a task's Code Review step (`reviewing-code`) when no code review runs
+   * before its PR: before the PR, its review settings are Off (`openPrReview` `off`); after, the PR
+   * went without one. The stage bar shows them as skipped.
    */
   skippedStages: Stage[];
   hasDesign: boolean;
@@ -880,6 +886,13 @@ export interface Session {
   codeReview: CodeReviewSummary | null;
   /** The session's own code review settings, over its project's and the global ones; `{}` keeps them. */
   review: ReviewOverrides;
+  /**
+   * What Open PR does about the code review, for a task in Code: `new`, it starts one first (the
+   * gate reads Review Changes); `off`, it would, but the review settings are Off; null, it can't (not
+   * a task in Code, or a review is running, holds the PR, or is done and goes out with the PR).
+   * `CodeReviews.openPrReview()` on the server, which mirrors `openPr()`.
+   */
+  openPrReview: OpenPrReview;
   usage: TokenUsage;
   /**
    * How full Claude's context window is, in percent, as AgentK's mod last measured it (after each
@@ -2400,7 +2413,7 @@ export interface UpdateSessionRequest {
   review?: ReviewOverrides;
   /**
    * Turns Run to merge (Session.autoRun) on or off. On in Design waits for the approval; in Code it
-   * queues Open PR, and in Review & PR the merge.
+   * queues Open PR, and in Pull Request the merge.
    */
   autoRun?: boolean;
 }
@@ -2483,7 +2496,10 @@ export interface CreateSessionRequest {
   workItemId?: string;
 }
 
-/** The stages a session can be moved to by hand. `review` is the Review & PR step. */
+/** What Open PR does about a task's code review (`Session.openPrReview`). */
+export type OpenPrReview = 'new' | 'off' | null;
+
+/** The stages a session can be moved to by hand. `review` is the Pull Request step. */
 export type MoveTarget = 'explore' | 'design' | 'code' | 'review';
 
 /** The most characters of instructions a move or Open PR takes (`MoveSessionRequest`, `OpenPrRequest`). */
@@ -2494,7 +2510,7 @@ export interface MoveSessionRequest {
   stage: MoveTarget;
   /**
    * Send the new stage's prompt. Left out, it follows promptByDefault, as the move dialog leaves it;
-   * kept for pages from before the dialog dropped its checkbox. Ignored for Review & PR, which
+   * kept for pages from before the dialog dropped its checkbox. Ignored for Pull Request, which
    * picks up the branch's open PR, or, when there's work to push, does what Open PR does: with the
    * code review on, the session goes to Code and the review sends the PR prompt when it's done;
    * else the PR prompt goes now.
@@ -2539,7 +2555,7 @@ export type SessionAction =
   /** Save what the session learned to its project's dedicated datapack (the learn step); 409 while Claude is busy or one runs. */
   | 'learn'
   /**
-   * A task's code review, run now in Code or Review & PR (with the strategy Off, the default one).
+   * A task's code review, run now in Code or Pull Request (with the strategy Off, the default one).
    * It sends no PR prompt: Open PR later sends the PR with its line instead of reviewing again.
    */
   | 'review-run'
@@ -2758,7 +2774,7 @@ export type TermServerMessage =
 //        history in common with the session's; 409 for a review, a session with a PR, or one whose worktree is gone.
 //        toTop moves it first in its project's list; 400 when it isn't a boolean, 409 for an archived session.
 //        autoRun turns Run to merge on or off: on in Design waits for the approval, in Code it queues Open PR (sent now
-//        when AgentK is at its prompt) and in Review & PR the merge, which then stays queued through any blocker; off
+//        when AgentK is at its prompt) and in Pull Request the merge, which then stays queued through any blocker; off
 //        drops the gate it queued. 400 when it isn't a boolean, 409 for an archived session, a review, Explore, Merge &
 //        Close, a design in plan mode, or while the merge is being requested)
 // GET    /api/sessions/:id/base-branches       → string[]   (the branches the session's base can be: local, origin's
@@ -2783,7 +2799,7 @@ export type TermServerMessage =
 //        an optional CloseSessionRequest (400 for a skipLearn that isn't a boolean): skipLearn skips the learn step they
 //        run first. A discard that runs one answers with the session still running (Session.discarding) and discards it
 //        when the step ends; asked again with skipLearn, it discards now). review-run starts a task's code review now, in
-//        Code or Review & PR (409 for a session that isn't a task, in another stage, in Review & PR before the PR is found or
+//        Code or Pull Request (409 for a session that isn't a task, in another stage, in Pull Request before the PR is found or
 //        while the last one's fixes wait to be taken, while one runs, and while AgentK is mid-turn, waiting on the user or
 //        exited). review-cancel stops a task's running code review
 //        (409 when none runs); review-retry reviews again, reusing the steps already reported, and review-open-anyway sends
@@ -2795,9 +2811,9 @@ export type TermServerMessage =
 // POST   /api/sessions/:id/move MoveSessionRequest → Session   (400 for a stage the session can't move to, a
 //        missing task, or instructions that aren't text or are too long; 409 while AgentK is mid-turn, in Merge & Close,
 //        or a prompt (the stage's, or the user's instructions) is due and Claude is waiting or exited, and for a move to
-//        Review & PR with work to push, while prompts from the user wait or a stopped code review holds the PR in Code
+//        Pull Request with work to push, while prompts from the user wait or a stopped code review holds the PR in Code
 //        (Retry it, or Open anyway), whether the review is on or off now, as for Open PR; 502 when its prompt couldn't be sent: the move stays made, except a PR prompt's, which
-//        goes back to where it was. A move to Review & PR that the code review takes over answers with the session
+//        goes back to where it was. A move to Pull Request that the code review takes over answers with the session
 //        in Code, the review running)
 // GET    /api/sessions/:id/design              → DesignDoc
 // POST   /api/sessions/:id/design/answers DesignAnswersRequest → 204   (sends them for AgentK to revise the design,
@@ -2837,7 +2853,7 @@ export type TermServerMessage =
 // DELETE /api/sessions/:id/comments/:cid       → 204               (drafts only)
 // POST   /api/sessions/:id/comments/send       → SendCommentsResult
 // GET    /api/sessions/:id/held-reviews        → HeldReview[]   (held for the user, oldest first)
-// POST   /api/sessions/:id/held-reviews HeldReviewsRequest → HeldReviewsResult   (send to AgentK in Review & PR, or dismiss)
+// POST   /api/sessions/:id/held-reviews HeldReviewsRequest → HeldReviewsResult   (send to AgentK in Pull Request, or dismiss)
 // GET    /api/settings                         → Settings   (reads the Meko on this computer and its Meko Cloud link again first,
 //                                                           waiting 1.5 s at most, and Meko's list of agents in the
 //                                                           background. The link is Meko's: its web UI's

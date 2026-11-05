@@ -106,14 +106,14 @@ class QueueWithdrawn extends Error {
 /** A queued gate as the activity log names it. */
 const GATE_NAMES: Record<QueuedGate, string> = { 'open-pr': 'Open PR', merge: 'merge' };
 
-/** The merge blocker while a code review the user ran in Review & PR runs, or its fixes wait to be taken. */
+/** The merge blocker while a code review the user ran in Pull Request runs, or its fixes wait to be taken. */
 const CODE_REVIEW_RUNNING = 'The code review is still running.';
 const CODE_REVIEW_WAITS = "The code review's findings wait on you: send them to AgentK or dismiss them.";
 
 /** The status detail while a markdown or Artifact design waits for approval. */
 export const DESIGN_READY = 'Design ready for your approval';
 
-/** Merge blockers AgentK works on by itself in Review & PR (the CI and merge conflict watchers). */
+/** Merge blockers AgentK works on by itself in Pull Request (the CI and merge conflict watchers). */
 const CI_FAILING = 'CI is failing.';
 const CONFLICTING = 'The branch has merge conflicts.';
 /** The merge blocker for a question in the terminal, which already notified the user as Needs you. */
@@ -209,15 +209,15 @@ async function lacksLocalCommits(repo: string, branch: string, st: github.PrStat
 
 /**
  * A workshop's project (`Project.workshop`) is on a demo repo with no remote, so it opens no PR:
- * Open PR, Run to merge and a move to Review & PR are refused there (409), rather than leave the
- * session in Review & PR with nothing to push to.
+ * Open PR, Run to merge and a move to Pull Request are refused there (409), rather than leave the
+ * session in Pull Request with nothing to push to.
  */
 export function checkOpensPr(db: Db, row: Pick<SessionRow, 'project_id'>): void {
   if (projectRow(db, row.project_id)?.workshop) throw new HttpError(409, NO_PR_IN_WORKSHOP);
 }
 
 /**
- * The task lifecycle: Design → Code → Review & PR → Merge & Close (merge, then cleanup).
+ * The task lifecycle: Design → Code → Pull Request → Merge & Close (merge, then cleanup).
  * Gates (approve design, open PR, merge) come from the user; everything else
  * is driven by hook events and by polling GitHub from the server, so waiting
  * on reviews and CI costs no Claude tokens.
@@ -240,7 +240,7 @@ export class Lifecycle {
   /**
    * PR prompts Claude took but exited before running (prLost), to send again once Claude is back
    * with no prompt of its own (claudeBack): the stage it went back to and what went with it. In
-   * memory only: after a restart, Open PR (or a move to Review & PR) sends it.
+   * memory only: after a restart, Open PR (or a move to Pull Request) sends it.
    */
   private lostPrs = new Map<string, PrSend & { back: Stage }>();
   /** Sessions whose cleanup is running, so an overlapping poll doesn't start a second one. */
@@ -442,7 +442,7 @@ export class Lifecycle {
   }
 
   /**
-   * At the end of a turn after the design was approved (Code, Review & PR, Merge & Close): picks up
+   * At the end of a turn after the design was approved (Code, Pull Request, Merge & Close): picks up
    * a change to the markdown design file, which saves a new version to Meko and points the PR at
    * it. Nothing waits for the user: it's only noted in the activity log.
    */
@@ -882,7 +882,7 @@ export class Lifecycle {
     if (sent.reviewLine !== undefined) this.core.reviews.markUnsent(id);
     this.lostPrs.set(id, sent);
     const name = agentName(row);
-    const press = sent.back === 'code' ? 'Open PR' : 'a move to Review & PR';
+    const press = sent.back === 'code' ? 'Open PR' : 'a move to Pull Request';
     this.sessions.event(id, 'pr', `${name} exited before taking the PR prompt; it goes again once ${name} is back`);
     this.sessions.notifyUser(id, 'PR prompt not taken', `${name} exited before taking the PR prompt. It goes again once ${name} is back (Resume the session if it shows as exited), or ${press} sends it.`);
   }
@@ -941,7 +941,7 @@ export class Lifecycle {
     } catch (e) {
       // The user pressed Open PR while this waited on GitHub and Meko: theirs goes, with its instructions.
       if (e instanceof QueueWithdrawn) return false;
-      const how = sent.back === 'code' ? 'Press Open PR to send it.' : 'Move the session to Review & PR to send it.';
+      const how = sent.back === 'code' ? 'Press Open PR to send it.' : 'Move the session to Pull Request to send it.';
       this.warn(id, 'Sending the PR prompt again', e);
       this.sessions.event(id, 'pr', `The PR prompt didn't go again: ${errMsg(e)}. ${how}`);
       this.sessions.notifyUser(id, 'Open PR not sent', `The PR prompt couldn't be sent again (${errMsg(e)}). ${how}`);
@@ -952,7 +952,7 @@ export class Lifecycle {
   /**
    * Drops a PR prompt the last Claude didn't take, saying why in the activity log: another prompt's
    * turn started first, a move, Run to merge stopping (its own), or it couldn't go when Claude came
-   * back. Open PR (or a move to Review & PR) sends it then. A null `why` drops it unsaid (archive).
+   * back. Open PR (or a move to Pull Request) sends it then. A null `why` drops it unsaid (archive).
    */
   dropLostPr(id: string, why: string | null): void {
     const sent = this.lostPrs.get(id);
@@ -960,7 +960,7 @@ export class Lifecycle {
     if (!sent || !row) return;
     this.lostPrs.delete(id);
     if (why === null) return;
-    const how = sent.back === 'code' ? 'Press Open PR to send it' : 'Move the session to Review & PR to send it';
+    const how = sent.back === 'code' ? 'Press Open PR to send it' : 'Move the session to Pull Request to send it';
     this.sessions.event(id, 'pr', `The PR prompt ${agentName(row)} didn't take won't go again: ${why}. ${how}.`);
   }
 
@@ -975,7 +975,7 @@ export class Lifecycle {
    * A task's code review asks it to fix a round's findings (review/runner.ts): before the next
    * round, or, for a review the user ran, after its last. An Open PR's review in Code sends it now
    * (the gate holds the task), and its turn's end starts the next round. One the user ran, one in
-   * Review & PR, and one whose findings waited on the user (`queued`, from `triage`) queue it
+   * Pull Request, and one whose findings waited on the user (`queued`, from `triage`) queue it
    * (`local-review`): it goes once the task is between turns (the user may be working with it), and
    * the end of the turn that took it starts the next round (past an interrupt too, except for an
    * Open PR's review, which then waits for Review now or the next turn's end). `moved`: a move's
@@ -1000,21 +1000,21 @@ export class Lifecycle {
     else await this.sessions.submit(row.id, text);
   }
 
-  /** In Review & PR, a code review's re-review found nothing more: the task pushes the earlier rounds' fixes (through the queue). */
+  /** In Pull Request, a code review's re-review found nothing more: the task pushes the earlier rounds' fixes (through the queue). */
   async sendReviewPush(task: SessionRow, o: { strategy: string; round: number }): Promise<void> {
     const row = this.sessions.row(task.id);
-    if (row.stage !== 'review' || row.desired !== 'running') throw new Error('the task left Review & PR');
+    if (row.stage !== 'review' || row.desired !== 'running') throw new Error('the task left Pull Request');
     this.queueCodeReview(row.id, this.sessions.prompt(row, 'code-review-push', { strategy: o.strategy, round: o.round }));
   }
 
-  /** Queues a code review's prompt in Review & PR, and sends it now when the task is between turns. */
+  /** Queues a code review's prompt in Pull Request, and sends it now when the task is between turns. */
   private queueCodeReview(id: string, text: string): void {
     this.enqueue(id, 'local-review', { text });
     void this.serial(id, () => this.deliverNext(id)).catch((e) => this.warn(id, "Sending the code review's prompt", e));
   }
 
   /**
-   * A code review's findings began or stopped waiting on the user: in Review & PR the merge blockers
+   * A code review's findings began or stopped waiting on the user: in Pull Request the merge blockers
    * are read again (outside the session's serial queue, which a review never runs in).
    */
   codeReviewWaitsChanged(id: string): void {
@@ -1070,7 +1070,7 @@ export class Lifecycle {
     }
   }
 
-  /** The open PR's title and description, for a code review run in Review & PR to read; null when GitHub can't say. */
+  /** The open PR's title and description, for a code review run in Pull Request to read; null when GitHub can't say. */
   async prText(row: SessionRow): Promise<string | null> {
     if (!row.pr_number) return null;
     try {
@@ -1160,7 +1160,7 @@ export class Lifecycle {
   }
 
   /**
-   * After the PR is found, or a code review the user ran in Review & PR is done: a task whose code
+   * After the PR is found, or a code review the user ran in Pull Request is done: a task whose code
    * review finished has the review's `me_ak_review:` line in the description, written in by AgentK
    * when Claude left it out. Never throws.
    */
@@ -1200,7 +1200,7 @@ export class Lifecycle {
     if (task != null && typeof task !== 'string') throw new HttpError(400, 'The task must be text.');
     const instructions = checkInstructions(req?.instructions);
     // An agent stopped for sitting idle starts again only for a move that sends it something: its
-    // prompt or the user's instructions. A move to Review & PR decides in moveToReview.
+    // prompt or the user's instructions. A move to Pull Request decides in moveToReview.
     if (row.idle_stopped_at && stage !== 'review' && !moveBlockedIn(row.stage) && !moveError(row, stage)
       && (instructions || (offersPrompt(row.stage, stage) && (prompt ?? promptByDefault(row.stage, stage))))) {
       await this.sessions.awake(row, `for the move to ${STAGE_LABELS[stage]}`);
@@ -1235,7 +1235,7 @@ export class Lifecycle {
       this.dropLostPr(id, moved);
     };
     if (instructions) this.checkPromptable(cur);
-    // A move within Review & PR was refused above (moveError).
+    // A move within Pull Request was refused above (moveError).
     if (stage === 'review') {
       // Off before the PR is picked up, which would queue its merge; back on if the move is refused.
       const wasOn = this.autoRunOff(id);
@@ -1283,7 +1283,7 @@ export class Lifecycle {
   }
 
   /**
-   * A move to Review & PR: picks up the branch's open PR when there's nothing to push (the branch
+   * A move to Pull Request: picks up the branch's open PR when there's nothing to push (the branch
    * tip is in the PR and the worktree is clean), or else does what Open PR does: the code review
    * first, when it runs (reviewBeforePr), else the PR prompt. The user's `instructions` go after the
    * PR prompt, or with the `moved` line once a PR is picked up.
@@ -1307,7 +1307,7 @@ export class Lifecycle {
     check(cur);
     // Anything but picking up the PR alone sends the agent a prompt, or starts the review that does.
     if (!adopt || !pr || instructions) {
-      cur = await this.sessions.awake(cur, 'for the move to Review & PR');
+      cur = await this.sessions.awake(cur, 'for the move to Pull Request');
       check(cur);
     }
     this.checkBetweenTurns(cur);
@@ -1347,7 +1347,7 @@ export class Lifecycle {
       await this.sessions.submit(row.id, `${this.movedLine(this.sessions.row(row.id))}\n\n${this.instructionsPrompt(cur, instructions)}`);
     } catch (e) {
       this.sessions.setBusy(row.id, false);
-      throw new HttpError(502, `Moved to Review & PR, but couldn't send your instructions to Claude: ${errMsg(e)}. Ask AgentK in the terminal.`);
+      throw new HttpError(502, `Moved to Pull Request, but couldn't send your instructions to Claude: ${errMsg(e)}. Ask AgentK in the terminal.`);
     }
   }
 
@@ -1357,7 +1357,7 @@ export class Lifecycle {
   }
 
   /**
-   * A move to Review & PR with work to push, on a task whose code review runs: as with Open PR, the
+   * A move to Pull Request with work to push, on a task whose code review runs: as with Open PR, the
    * review goes first, in Code (from Explore or Design too, past the design approval), and sends the
    * PR prompt when it's done. moveToReview has checked what Open PR checks.
    */
@@ -1393,14 +1393,14 @@ export class Lifecycle {
   }
 
   /**
-   * Leaving Review & PR by hand, between turns: the PR stays open and queued review, conflict and CI prompts
+   * Leaving Pull Request by hand, between turns: the PR stays open and queued review, conflict and CI prompts
    * wait for the session to come back (deliverNext only sends in Review). Prompts marked sent
    * belong to a turn that's over, as onTurnEnd would have decided had the session stayed.
    */
   private leaveReview(id: string): void {
     const q = this.queue(id);
     for (const n of QUEUE_ORDER) if (q[n]?.state === 'sent') delete q[n];
-    // A code review's prompt belongs to the review, which leaving Review & PR cancels.
+    // A code review's prompt belongs to the review, which leaving Pull Request cancels.
     delete q['local-review'];
     this.setQueue(id, q);
     if (!reviewQueued(q) && this.sessions.row(id).review_state === 'addressing') {
@@ -1973,7 +1973,7 @@ export class Lifecycle {
 
   /**
    * The user's decision on held reviews: send them to Claude with the `review-held` prompt, which
-   * only Review & PR does, or dismiss them. Then a fresh look
+   * only Pull Request does, or dismiss them. Then a fresh look
    * at the PR, so the merge blocker they were goes.
    */
   async decideHeldReviews(id: string, body: unknown): Promise<HeldReviewsResult> {
@@ -1982,7 +1982,7 @@ export class Lifecycle {
       const row = this.sessions.row(id);
       if (!row.pr_number) throw new HttpError(409, 'This session has no PR, so it has no held reviews.');
       if (req.action === 'send' && (row.stage !== 'review' || row.desired !== 'running')) {
-        throw new HttpError(409, 'Held reviews go to AgentK in Review & PR. Move the session back there first, or dismiss them.');
+        throw new HttpError(409, 'Held reviews go to AgentK in Pull Request. Move the session back there first, or dismiss them.');
       }
       const done = decideHeld(this.db, id, row.pr_number, req.ids, req.action === 'send' ? 'sent' : 'dismissed');
       if (!done.length) throw new HttpError(409, 'Those reviews were already sent or dismissed.');
@@ -2493,7 +2493,7 @@ export class Lifecycle {
 
   /**
    * Turns Run to merge on or off (`PATCH /api/sessions/:id`). On in Design waits for the approval;
-   * in Code it queues Open PR (sent now when Claude is at its prompt), and in Review & PR the merge.
+   * in Code it queues Open PR (sent now when Claude is at its prompt), and in Pull Request the merge.
    * Off drops the gate it queued. On sends a code review's findings that wait on the user (`triage`) as they are.
    */
   async setAutoRun(row: SessionRow, on: boolean): Promise<void> {
@@ -2577,7 +2577,7 @@ export class Lifecycle {
     this.queueGate(id, 'open-pr', 'Run to merge: the PR opens when this turn ends', '', true);
   }
 
-  /** In Review & PR with Run to merge on, the merge stays queued until it goes (takeQueuedMerge). */
+  /** In Pull Request with Run to merge on, the merge stays queued until it goes (takeQueuedMerge). */
   private armMerge(id: string): void {
     const row = sessionRow(this.db, id);
     if (!row?.auto_run || row.stage !== 'review' || row.queued_gate || this.merging.has(id) || row.desired !== 'running') return;

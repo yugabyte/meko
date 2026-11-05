@@ -95,7 +95,7 @@ paste, then Enter). A prompt is never sent both ways:
   a Resume or a recovery whose launch had none), or is dropped (logged) when anything comes first
   (see [Queued gates](lifecycle.md#queued-gates)). A send whose prompt is reported lost while it's
   still being typed neither marks the session working nor counts a review's PR as sent. The resend
-  is kept in memory; after a server restart, Open PR (or a move to Review & PR) sends the prompt.
+  is kept in memory; after a server restart, Open PR (or a move to Pull Request) sends the prompt.
   The case seen was Claude Code moving the conversation into its
   background sessions (a TUI that exits with background tasks running: a `continued-in` line in
   the transcript) just as the PR prompt arrived. Sessions launch with

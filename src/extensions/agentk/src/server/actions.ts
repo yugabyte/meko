@@ -232,7 +232,7 @@ export async function runActions(core: Core, actions: AskAgentkAction[], by: Act
 }
 
 /**
- * Where a move left a session, in words: a move to Review & PR that a code review took over leaves it
+ * Where a move left a session, in words: a move to Pull Request that a code review took over leaves it
  * in Code until the review sends the PR prompt (Lifecycle.reviewBeforePr).
  */
 function movedTo(asked: MoveTarget, s: Pick<Session, 'stage'>): string {

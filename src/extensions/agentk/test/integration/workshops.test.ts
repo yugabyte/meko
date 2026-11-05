@@ -156,7 +156,7 @@ describe('the AgentK tour (a bundled workshop; real session host + git, fake cla
     await waitFor(() => env.core.sessions.get(elsewhere.id).status, (s) => s === 'idle', 10000, 'other turn');
     expect(prompts(host.claudeSessionId).some((t) => t.includes('Elsewhere'))).toBe(false);
 
-    // The demo has no GitHub repo: Open PR, Run to merge and a move to Review & PR are refused.
+    // The demo has no GitHub repo: Open PR, Run to merge and a move to Pull Request are refused.
     const row = env.core.sessions.row(task.id);
     await expect(env.core.lifecycle.openPr(row)).rejects.toMatchObject({ status: 409, message: NO_PR_IN_WORKSHOP });
     await expect(env.core.lifecycle.setAutoRun(row, true)).rejects.toMatchObject({ status: 409 });

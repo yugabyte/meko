@@ -34,7 +34,7 @@ export function startupSteps(s: Pick<Session, 'harness' | 'kind' | 'startup'>): 
 /** The stages a session can be moved to by hand, in stage bar order. */
 export const MOVE_TARGETS: MoveTarget[] = ['explore', 'design', 'code', 'review'];
 
-/** The stage bar's step for a stage: opening the PR is part of Review & PR. */
+/** The stage bar's step for a stage: opening the PR is part of Pull Request. */
 export function stepOf(stage: Stage): Stage {
   return stage === 'pr' ? 'review' : stage;
 }
@@ -52,7 +52,7 @@ export function moveTargets(kind: StoredKind | SessionKind): MoveTarget[] {
   return MOVE_TARGETS.filter((t) => (KIND_STAGES[kindOf(kind)] as Stage[]).includes(t));
 }
 
-/** Where the move dialog starts unless a stage is picked: the next step on, or back to Code from Review & PR. */
+/** Where the move dialog starts unless a stage is picked: the next step on, or back to Code from Pull Request. */
 export function defaultTarget(current: Stage): MoveTarget {
   const step = stepOf(current);
   if (step === 'explore') return 'design';
@@ -68,13 +68,13 @@ export function moveError(from: { kind: StoredKind | SessionKind; stage: Stage }
   return null;
 }
 
-/** True when the move changes the stage bar's step (from the PR stage, Review & PR doesn't). */
+/** True when the move changes the stage bar's step (from the PR stage, Pull Request doesn't). */
 export function movesStep(from: Stage, to: MoveTarget): boolean {
   return stepOf(from) !== to;
 }
 
 /**
- * Whether a move offers to send the new stage's prompt. Review & PR decides by itself (the PR
+ * Whether a move offers to send the new stage's prompt. Pull Request decides by itself (the PR
  * prompt goes out only when there's work to push).
  */
 export function offersPrompt(from: Stage, to: MoveTarget): boolean {
@@ -85,7 +85,7 @@ export function offersPrompt(from: Stage, to: MoveTarget): boolean {
 export function promptByDefault(from: Stage, to: MoveTarget): boolean {
   if (!offersPrompt(from, to)) return false;
   if (to === 'design') return true;
-  // Back from Review & PR, the user usually has something specific in mind: they type it.
+  // Back from Pull Request, the user usually has something specific in mind: they type it.
   return to === 'code' && (from === 'explore' || from === 'design');
 }
 
@@ -104,15 +104,19 @@ export function moveEffect(from: { stage: Stage; prNumber: number | null }, to: 
   else if (to === 'explore') out.push('AgentK runs no design, PR or merge while the session is in Explore.');
   else out.push('The session keeps its worktree, branch and conversation.');
   if (from.prNumber && (from.stage === 'pr' || from.stage === 'review')) {
-    out.push(`PR #${from.prNumber} stays open. AgentK stops handling its reviews and CI until you come back to Review & PR.`);
+    out.push(`PR #${from.prNumber} stays open. AgentK stops handling its reviews and CI until you come back to Pull Request.`);
   }
   return out.join(' ');
 }
 
-/** Steps before the current one that the session never entered (the stage bar shows them as skipped). */
+/**
+ * Steps before the current one that the session never entered (the stage bar shows them as
+ * skipped). Not a task's Code Review, which is never a task's stage: the server decides it from the
+ * task's code reviews (`CodeReviews.stepSkipped`).
+ */
 export function skippedSteps(kind: SessionKind, stage: Stage, visited: Stage[]): Stage[] {
   const steps: Stage[] = KIND_STAGES[kind];
   const seen = new Set(visited.map(stepOf));
   const idx = stage === 'done' ? steps.length : steps.indexOf(stepOf(stage));
-  return steps.slice(0, Math.max(idx, 0)).filter((s) => !seen.has(s));
+  return steps.slice(0, Math.max(idx, 0)).filter((s) => !seen.has(s) && !(kind === 'task' && s === 'reviewing-code'));
 }

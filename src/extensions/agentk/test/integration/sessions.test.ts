@@ -553,7 +553,8 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
   it('designs outside plan mode, guards the repo, and moves to Code when the design is approved', async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Design me', prompt: 'DESIGN_MD it' });
-    expect(s).toMatchObject({ kind: 'plan', stage: 'design', skippedStages: ['explore'] });
+    // The code review is off here (makeEnv), so the Code Review step is skipped ahead of time.
+    expect(s).toMatchObject({ kind: 'plan', stage: 'design', skippedStages: ['explore', 'reviewing-code'] });
     const designDir = join(env.core.paths.designs, s.id);
     const first = (await waitFor(() => argvLog(env), (l) => l.length > 0, 10000, 'launch'))[0].args;
     expect(first).not.toContain('--permission-mode');
@@ -660,12 +661,12 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
   it('runs a task started at Explore with no design, PR or merge gates until it moves on', async () => {
     const p = await newProject();
     const s = await env.core.sessions.create(p.id, { name: 'Look around', prompt: 'why is it slow', start: 'explore' });
-    expect(s).toMatchObject({ kind: 'plan', stage: 'explore', skippedStages: [] });
+    expect(s).toMatchObject({ kind: 'plan', stage: 'explore', skippedStages: ['reviewing-code'] });
     expect(existsSync(s.worktreePath)).toBe(true);
     await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'first turn');
     const args = argvLog(env)[0].args;
     const system = args[args.indexOf('--append-system-prompt') + 1];
-    expect(system).toContain('Stages: Explore → Design → Code → Review & PR → Merge & Close;');
+    expect(system).toContain('Stages: Explore → Design → Code → Pull Request → Merge & Close;');
     expect(system).toContain("It's in Explore now");
     // The name heads the task, so the first prompt needn't repeat it.
     expect(args.at(-1)).toMatch(/Explore stage of an AgentK task[\s\S]*Task: Look around\n\nwhy is it slow/);
@@ -758,14 +759,14 @@ describe('projects and sessions (real session host + git, fake claude)', () => {
   it('starts a task at Code, stores it as plan, keeps the old types and skipDesign working, and refuses an unknown kind or start', async () => {
     const p = await newProject();
     const code = await env.core.sessions.create(p.id, { name: 'Quick one', prompt: 'hi', start: 'code' });
-    expect(code).toMatchObject({ kind: 'plan', stage: 'code', skippedStages: ['explore', 'design'] });
+    expect(code).toMatchObject({ kind: 'plan', stage: 'code', skippedStages: ['explore', 'design', 'reviewing-code'] });
     // Stored and sent under an old type's name, so an older release (after a rollback) and a page
     // from before start stages (until it reloads) can still index their stage lists with it.
     expect(env.core.sessions.row(code.id).kind).toBe('plan');
     await waitFor(() => argvLog(env), (l) => l.length > 0, 10000, 'launch');
     const args = argvLog(env)[0].args;
     const system = args[args.indexOf('--append-system-prompt') + 1];
-    expect(system).toContain('Stages: Explore → Design → Code → Review & PR → Merge & Close;');
+    expect(system).toContain('Stages: Explore → Design → Code → Pull Request → Merge & Close;');
     expect(system).not.toContain("It's in Explore now");
     const stageOf = async (req: Partial<CreateSessionRequest>) => (await env.core.sessions.create(p.id, { prompt: 'hi', ...req } as CreateSessionRequest)).stage;
     expect(await stageOf({ name: 'Old explore', kind: 'explore' })).toBe('explore');

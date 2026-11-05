@@ -740,7 +740,7 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (review_id, step)
   );
   `,
-  // 44: code_reviews.lead: the `moved` line for a review a move to Review & PR started from Explore or
+  // 44: code_reviews.lead: the `moved` line for a review a move to Pull Request started from Explore or
   // Design (Lifecycle.reviewBeforePr), sent before the review's first prompt to the task (the ask for
   // the PR description, since that was added; its fixes or the PR prompt before) and cleared once that
   // has gone; NULL for none.
@@ -764,7 +764,7 @@ const MIGRATIONS: string[] = [
   `,
   // 46: code reviews run on demand (the review-run action; review/runner.ts). purpose: 'pr' for one
   // an Open PR started, 'demand' for one the user ran (it sends no PR prompt, and a stopped one holds
-  // nothing). stage: where it runs, 'code' or 'review' (Review & PR); leaving that stage cancels it.
+  // nothing). stage: where it runs, 'code' or 'review' (Pull Request); leaving that stage cancels it.
   // stale: 1 once its task left Code after it finished with its PR prompt unsent, so Open PR doesn't
   // reuse it.
   `

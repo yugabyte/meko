@@ -139,7 +139,7 @@ export function AttachPrPicker({
         </div>
       </div>
       <span className="hint">
-        AgentK works on the PR's branch, against its base, and picks the PR up when the session moves to Review &amp; PR.{' '}
+        AgentK works on the PR's branch, against its base, and picks the PR up when the session moves to Pull Request.{' '}
         <button type="button" className="link-btn" onClick={() => setReload((n) => n + 1)}>
           Refresh
         </button>

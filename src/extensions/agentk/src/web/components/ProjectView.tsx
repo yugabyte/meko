@@ -947,10 +947,10 @@ function StageBar({
   }
   const kind = kindOf(session.kind);
   const stages: Stage[] = KIND_STAGES[kind];
-  // A task whose code review holds its Open PR shows in Review & PR, while it stays in Code.
+  // A task whose code review holds its Open PR shows in Code Review, while it stays in Code.
   const step = shownStep(session);
   const idx = session.stage === 'done' ? stages.length : stages.indexOf(step);
-  // A task's steps are numbered from 0 (Explore), so Design is 1 and Merge & Close 4.
+  // A task's steps are numbered from 0 (Explore), so Design is 1 and Merge & Close 5.
   const first = kind === 'task' ? 0 : 1;
   // Other stages the session can be moved to open the move dialog: not its own stage (a move there
   // changes nothing), which differs from the step it shows while a code review holds its Open PR.
@@ -1127,6 +1127,8 @@ function StageBar({
         <div className="stages" aria-label="Stages">
           {stages.map((st, i) => {
             const skipped = session.skippedStages.includes(st);
+            // A task's Code Review step is skipped ahead of time too: no review runs before the PR.
+            const skippedTitle = st !== 'reviewing-code' ? 'Skipped' : i > idx ? 'No code review: the review settings are Off' : 'Skipped: the PR opened without a code review';
             const cls = cx('stg', i < idx && !skipped && 'done', skipped && 'skipped', i === idx && 'cur');
             const inner = (
               <>
@@ -1138,7 +1140,7 @@ function StageBar({
               </>
             );
             return (
-              <span key={st} className="stg-item">
+              <span key={st} className={cx('stg-item', i === idx && 'cur')}>
                 {i > 0 && <span className={cx('stg-sep', i <= idx && 'done')} />}
                 {i !== idx && targets.includes(st) ? (
                   <button
@@ -1152,7 +1154,7 @@ function StageBar({
                     {inner}
                   </button>
                 ) : (
-                  <span className={cls} aria-current={i === idx ? 'step' : undefined} title={skipped ? 'Skipped' : undefined}>
+                  <span className={cls} aria-current={i === idx ? 'step' : undefined} title={skipped ? skippedTitle : undefined}>
                     {inner}
                   </span>
                 )}

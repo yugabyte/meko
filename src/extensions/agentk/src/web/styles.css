@@ -1438,7 +1438,13 @@ textarea.input {
   flex: 1;
   min-width: 0;
 }
+/* Explore takes no share of the room (no separator before it): it keeps its name until the other
+   steps' names can't shorten any further, then shortens too. */
 .stg-item:first-child {
+  flex: 0 1 auto;
+}
+/* The current step keeps its whole name: its item is as wide as its content. */
+.stg-item.cur {
   flex: none;
 }
 .stg {
@@ -1448,8 +1454,17 @@ textarea.input {
   color: var(--muted);
   padding: 0 4px;
   white-space: nowrap;
+  /* A narrow window shortens the steps' names rather than letting them overlap: Explore's last
+     (.stg-item:first-child), and never the current step's (.stg-item.cur). */
+  min-width: 0;
+}
+.stg-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .stg .n {
+  flex: none;
   width: 18px;
   height: 18px;
   border-radius: 50%;

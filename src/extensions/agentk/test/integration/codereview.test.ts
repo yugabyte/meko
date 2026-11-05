@@ -253,16 +253,22 @@ describe('code review before the PR (real session host + git, fake claude runnin
     const failed = await waitFor(() => env.core.sessions.get(s.id), (x) => x.codeReview?.state === 'failed', 30000, 'the review to fail');
     expect(failed.stage).toBe('code');
     expect(failed.codeReview!.detail).toBe('no review pass reported');
+    // It holds the PR: Open PR starts nothing, and the bar is on its Code Review step.
+    expect(failed).toMatchObject({ openPrReview: null });
+    expect(failed.skippedStages).not.toContain('reviewing-code');
     await expect(env.core.sessions.action(s.id, 'open-pr')).rejects.toThrow(/Retry it, or open the PR anyway/);
-    // A move to Review & PR is refused alike: it would open the PR past the stopped review. So it is
+    // A move to Pull Request is refused alike: it would open the PR past the stopped review. So it is
     // with the review turned off since, as Open PR is.
     await expect(env.core.sessions.move(s.id, { stage: 'review' })).rejects.toThrow(/Retry it, or open the PR anyway/);
     env.core.projects.update(s.projectId, { settings: { codeReview: { strategy: 'off' } } });
     await expect(env.core.sessions.move(s.id, { stage: 'review' })).rejects.toThrow(/Retry it, or open the PR anyway/);
     expect(env.core.sessions.get(s.id).stage).toBe('code');
+    expect(env.core.sessions.get(s.id).skippedStages).not.toContain('reviewing-code');
     await env.core.sessions.action(s.id, 'review-open-anyway');
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 10000, 'the PR prompt');
     expect(await prPrompt(s.claudeSessionId)).not.toContain('me_ak_review');
+    // The PR went without a finished review: Code Review was skipped.
+    expect(env.core.sessions.get(s.id)).toMatchObject({ openPrReview: null, skippedStages: ['explore', 'design', 'reviewing-code'] });
   });
 
   it('runs the review for Run to merge\'s Open PR too, and the PR goes when it\'s done', async () => {
@@ -271,6 +277,8 @@ describe('code review before the PR (real session host + git, fake claude runnin
     const done = await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the review');
     expect(done.codeReview).toMatchObject({ strategy: 'sirius-1.0', state: 'done' });
     expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM;Sirius1.0');
+    // The PR went with the review: Code Review is done, not skipped.
+    expect(env.core.sessions.get(s.id).skippedStages).toEqual(['explore', 'design']);
   });
 
   describe("a review that finishes while the task's turn runs", () => {
@@ -342,7 +350,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
       expect(all<{ by: string }>(env.core.db, 'SELECT by FROM code_reviews WHERE task_id = ?', s.id)[0].by).toBe('you');
     });
 
-    it('sends it at a move to Review & PR between turns, once the queued Open PR was withdrawn', async () => {
+    it('sends it at a move to Pull Request between turns, once the queued Open PR was withdrawn', async () => {
       const s = await task({ review: { strategy: 'sirius-1.0' } });
       userTurnAtFinish(s.id);
       await env.core.sessions.action(s.id, 'open-pr');
@@ -424,7 +432,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
     expect(finished()).not.toBeNull();
   });
 
-  it('reviews the change in Code when the session is moved to Review & PR by hand, then sends the PR prompt with the move\'s instructions', async () => {
+  it('reviews the change in Code when the session is moved to Pull Request by hand, then sends the PR prompt with the move\'s instructions', async () => {
     const s = await task({ start: 'explore', review: { strategy: 'sirius-1.0' } });
     await env.core.sessions.move(s.id, { stage: 'review', instructions: 'Mention the demo.' });
     // The review holds the PR, in Code, as for Open PR.
@@ -441,7 +449,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
     expect(all<{ stage: string }>(env.core.db, 'SELECT stage FROM session_stages WHERE session_id = ? ORDER BY rowid', s.id).map((r) => r.stage)).toEqual(['explore', 'code', 'pr']);
   });
 
-  it('starts a new review on a move to Review & PR from outside Code, past one that failed in Code', async () => {
+  it('starts a new review on a move to Pull Request from outside Code, past one that failed in Code', async () => {
     const s = await task({ review: { strategy: 'sirius-1.0' } });
     fake('review-skip', ['r1s1:all']);
     await env.core.sessions.action(s.id, 'open-pr');
@@ -489,7 +497,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
       expect(done.codeReview).toMatchObject({ round: 2, state: 'done' });
     });
 
-    it('is cancelled by a move out of Code, and a move back to Review & PR starts a new review', async () => {
+    it('is cancelled by a move out of Code, and a move back to Pull Request starts a new review', async () => {
       const s = await interruptedFix();
       const first = env.core.sessions.get(s.id).codeReview!.id;
       await env.core.sessions.move(s.id, { stage: 'explore', prompt: false });
@@ -522,9 +530,15 @@ describe('code review before the PR (real session host + git, fake claude runnin
       expect(fix).toContain('[1:1] `src/a.ts:2` **blocker**: Off by one.');
       await waitFor(() => env.core.sessions.get(s.id).status, (st) => st === 'idle', 10000, 'the fix turn');
       expect(prompts(s.claudeSessionId).some((p) => p.includes('Open a pull request'))).toBe(false);
+      // Done and waiting to go out with the PR, the review Off meanwhile: Open PR reviews nothing, and
+      // Code Review isn't skipped.
+      const waiting = env.core.sessions.get(s.id);
+      expect(waiting.openPrReview).toBeNull();
+      expect(waiting.skippedStages).not.toContain('reviewing-code');
 
       await env.core.sessions.action(s.id, 'open-pr');
       await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 10000, 'the PR prompt');
+      expect(env.core.sessions.get(s.id).skippedStages).not.toContain('reviewing-code');
       const pr = await prPrompt(s.claudeSessionId);
       expect(pr).toContain('me_ak_review:1 blocker addressed;Sagittarius3.0');
       expect(pr).not.toContain('Off by one.');
@@ -550,7 +564,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
       expect(env.core.lifecycle.codeReviewPending(s.id)).toBe(false);
     });
 
-    it('is taken over by a move to Review & PR while it runs, with the strategy Off, and the PR goes when it is done', async () => {
+    it('is taken over by a move to Pull Request while it runs, with the strategy Off, and the PR goes when it is done', async () => {
       const s = await task();
       env.core.projects.update(s.projectId, { settings: { codeReview: { strategy: 'off' } } });
       await env.core.sessions.action(s.id, 'review-run');
@@ -585,18 +599,18 @@ describe('code review before the PR (real session host + git, fake claude runnin
       await env.core.sessions.action(s.id, 'review-cancel');
       expect(env.core.sessions.get(s.id).codeReview).toMatchObject({ state: 'cancelled', onDemand: true });
       await expect(env.core.sessions.action(s.id, 'review-open-anyway')).rejects.toThrow(/no stopped code review/);
-      // Run again, to the end: leaving Code makes it stale, so a move back to Review & PR reviews again.
+      // Run again, to the end: leaving Code makes it stale, so a move back to Pull Request reviews again.
       await described(s, 1);
       await env.core.sessions.action(s.id, 'review-run');
       await waitFor(() => env.core.sessions.get(s.id), (x) => x.codeReview?.state === 'done' && x.status === 'idle', 30000, 'the review to finish');
       await env.core.sessions.move(s.id, { stage: 'design', prompt: false });
-      await expect(env.core.sessions.action(s.id, 'review-run')).rejects.toThrow(/runs in Code, or in Review & PR/);
+      await expect(env.core.sessions.action(s.id, 'review-run')).rejects.toThrow(/runs in Code, or in Pull Request/);
       await env.core.sessions.move(s.id, { stage: 'review' });
       await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after a new review');
       expect(reviews(s.id).map((r) => r.purpose)).toEqual(['demand', 'demand', 'pr']);
     });
 
-    it('runs in Review & PR on the PR, queues its fixes, pushes once after the last round, puts its line in the PR, and holds the merge meanwhile', async () => {
+    it('runs in Pull Request on the PR, queues its fixes, pushes once after the last round, puts its line in the PR, and holds the merge meanwhile', async () => {
       const s = await task({ review: { rounds: 1 } });
       gh.body = 'Adds f.';
       run(env.core.db, `UPDATE sessions SET stage = 'review', pr_number = 7, pr_url = 'https://github.com/acme/demo-repo/pull/7' WHERE id = ?`, s.id);
@@ -625,7 +639,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
       await waitFor(() => env.core.lifecycle.codeReviewPending(s.id), (p) => !p, 10000, 'the push turn to end');
     });
 
-    it('is cancelled when the task leaves Review & PR', async () => {
+    it('is cancelled when the task leaves Pull Request', async () => {
       const s = await task({ review: { strategy: 'sirius-1.0' } });
       run(env.core.db, `UPDATE sessions SET stage = 'review', pr_number = 7, pr_url = 'https://github.com/acme/demo-repo/pull/7' WHERE id = ?`, s.id);
       fake('review-skip', ['r1s1:all']);
@@ -647,7 +661,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
       const held = await waiting(s.id);
       expect(held).toMatchObject({ stage: 'code', codeReview: { round: 1, counts: { blocker: 1, major: 1, minor: 0 } } });
       const asked = prompts(s.claudeSessionId).length;
-      // Open PR, or a move to Review & PR, keeps it waiting: only Send moves it on.
+      // Open PR, or a move to Pull Request, keeps it waiting: only Send moves it on.
       await env.core.sessions.action(s.id, 'open-pr');
       await env.core.sessions.move(s.id, { stage: 'review' });
       expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'code', codeReview: { state: 'triage' } });
@@ -725,7 +739,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
       expect(all(env.core.db, `SELECT 1 FROM session_events WHERE session_id = ? AND text LIKE '%wait on you%'`, s.id)).toEqual([]);
     });
 
-    it('blocks the merge in Review & PR as yours until you send them, and the PR poll sending them starts ends before the server stops', async () => {
+    it('blocks the merge in Pull Request as yours until you send them, and the PR poll sending them starts ends before the server stops', async () => {
       const s = await task({ review: { strategy: 'sirius-1.0', check: true } });
       run(env.core.db, `UPDATE sessions SET stage = 'review', pr_number = 7, pr_url = 'https://github.com/acme/demo-repo/pull/7' WHERE id = ?`, s.id);
       fake('review-reports.json', { all: { summary: 'LGTM', findings: [one(2, 'blocker', 'Off by one.')] } });
@@ -753,11 +767,39 @@ describe('code review before the PR (real session host + git, fake claude runnin
     });
   });
 
-  it('skips the review when the project turns it off', async () => {
+  it('skips the review when the project turns it off, and says so: Open PR, and Code Review skipped', async () => {
     const s = await task();
+    expect(env.core.sessions.get(s.id)).toMatchObject({ openPrReview: 'new', skippedStages: ['explore', 'design'] });
     env.core.projects.update(s.projectId, { settings: { codeReview: { strategy: 'off' } } });
+    expect(env.core.sessions.get(s.id)).toMatchObject({ openPrReview: 'off', skippedStages: ['explore', 'design', 'reviewing-code'] });
+    // The session's own settings go over the project's.
+    await env.core.sessions.edit(s.id, { review: { strategy: 'sirius-1.0' } });
+    expect(env.core.sessions.get(s.id)).toMatchObject({ openPrReview: 'new', skippedStages: ['explore', 'design'] });
+    await env.core.sessions.edit(s.id, { review: {} });
     await env.core.sessions.action(s.id, 'open-pr');
-    expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'pr', codeReview: null });
+    expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'pr', codeReview: null, openPrReview: null, skippedStages: ['explore', 'design', 'reviewing-code'] });
+  });
+
+  it("skips Code Review for a PR prompt that goes without a review, though an earlier one went with one", async () => {
+    const s = await task({ review: { strategy: 'sirius-1.0' } });
+    await env.core.sessions.action(s.id, 'open-pr');
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 30000, 'the PR prompt after the review');
+    await prPrompt(s.claudeSessionId);
+    expect(env.core.sessions.get(s.id).skippedStages).toEqual(['explore', 'design']);
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle' && !x.busy, 10000, 'the PR turn');
+    // Back to Code, with the review Off now: that review was the earlier PR prompt's.
+    await env.core.sessions.move(s.id, { stage: 'code' });
+    await env.core.sessions.edit(s.id, { review: { strategy: 'off' } });
+    expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'code', openPrReview: 'off', skippedStages: ['explore', 'design', 'reviewing-code'] });
+    await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle' && !x.busy, 10000, 'the move');
+    await env.core.sessions.action(s.id, 'open-pr');
+    expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'pr', skippedStages: ['explore', 'design', 'reviewing-code'] });
+    // At Done too, while the session runs (set straight there, so Merge & Close was skipped as well);
+    // an archived one marks no step skipped.
+    run(env.core.db, `UPDATE sessions SET stage = 'done' WHERE id = ?`, s.id);
+    expect(env.core.sessions.get(s.id).skippedStages).toEqual(['explore', 'design', 'merge', 'reviewing-code']);
+    run(env.core.db, `UPDATE sessions SET desired = 'archived' WHERE id = ?`, s.id);
+    expect(env.core.sessions.get(s.id).skippedStages).toEqual([]);
   });
 
   it('says the review waits on you while its session asks in its terminal, and only while its steps run', async () => {
