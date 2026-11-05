@@ -321,20 +321,30 @@ or the web UI); an agent's client token gets 403.
    bytes, all and the largest) and asks Meko Cloud whether that fits the account's plan. The limits
    are Meko Cloud's, so they're never copied here. One that doesn't fit isn't synced, and the reply
    says which limit it's over.
-2. **No writes**: while it syncs, every write to the datapack, through `/mcp`, REST, the web UI or
-   the memory extractor, is refused with `DATAPACK_SYNCING` (409; `datapack_syncing` on `/mcp`).
-   Reads work. The guard is in `internal/memory`'s write methods, so no path around it writes.
+2. **No writes**: the sync starts once the writes already under way have finished, and from then on
+   every write to the datapack, through `/mcp`, REST or the web UI, is refused with
+   `DATAPACK_SYNCING` (409; `datapack_syncing` on `/mcp`). Each of `internal/memory`'s write methods
+   holds the datapack's write gate for its whole length, and the sync takes it exclusively, so no
+   path around it writes. The memory extractor skips the datapack, leaving its turns queued. A sync a
+   stop interrupted holds its datapack from the next start, before anything writes (`HoldSyncs`).
+   Reads work.
 3. **Export**: the datapack's export (format 2), whose `datapack.json` has its `placement` (project
    and folder by name, with their descriptions, or null), from one snapshot.
 4. **Import**: Meko Cloud creates the datapack with the same id and makes it searchable with its own
-   models: vectors aren't sent. The import id is saved (`cloud_sync.jobs`) before anything reaches
-   Meko Cloud, so a sync a stop interrupted is picked up at the next start (`Syncer.Resume`).
+   models: the export carries this Meko's embeddings, which Meko Cloud discards. The import id is
+   saved (`cloud_sync.jobs`) once Meko Cloud has created the import and before the upload, so a sync
+   a stop interrupted is picked up at the next start (`Syncer.Resume`). A stop in between leaves Meko
+   Cloud an import waiting for an upload, which the datapack's next sync replaces.
 5. **Switch over**: once Meko Cloud says the import is done, the datapack is deleted here. From then
    on its id isn't this Meko's, so `/mcp` and `/api/v1` send every call on it to Meko Cloud, as for
    any of its datapacks, and the sidebar shows it with the cloud icon. A failed upload or import
-   cancels the import (Meko Cloud removes what it made) and leaves the datapack here as it was.
+   cancels the import (Meko Cloud removes what it made) and leaves the datapack here as it was. When
+   the cancel can't get through, or the delete here fails after Meko Cloud has it, the datapack stays
+   held and its job saved, so the next start settles it. A failed run shows Meko Cloud's own message,
+   or a generic one for a failure on this computer, whose detail is in the log.
 
-Context Gaps' questions about it stay here, under its id, as for any Meko Cloud datapack.
+Context Gaps' questions about it stay here, under its id, as for any Meko Cloud datapack: the switch
+over deletes the datapack but not them.
 
 ### What Meko Cloud serves for it
 

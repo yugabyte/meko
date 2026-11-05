@@ -129,7 +129,7 @@ export function CloudSyncDialog({
           )}
           {run?.state === "syncing" && (
             <p className="flex items-center gap-2 text-sm">
-              <Spinner className="size-3.5" /> {STEPS[run.step] ?? "Syncing…"} Writes to it wait until it's done.
+              <Spinner className="size-3.5" /> {STEPS[run.step] ?? "Syncing…"} Writes to it are refused until it's done.
             </p>
           )}
           {run?.state === "failed" && !run.precheck && (

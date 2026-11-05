@@ -30,15 +30,18 @@ func runCloudSync(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		name, args = args[0], args[1:]
 	}
-	if err := fs.Parse(args); errors.Is(err, flag.ErrHelp) || name == "" && fs.NArg() == 0 {
+	err := fs.Parse(args)
+	switch {
+	case errors.Is(err, flag.ErrHelp):
 		c, _ := lookup(progMeko, "cloud_sync")
 		printCommandHelp(stdout, progMeko, c, fs)
-		if err == nil {
-			return exitUsage
-		}
 		return exitOK
-	} else if err != nil {
+	case err != nil:
 		fmt.Fprintln(stderr, "See meko cloud_sync --help")
+		return exitUsage
+	case name == "" && fs.NArg() == 0:
+		c, _ := lookup(progMeko, "cloud_sync")
+		printCommandHelp(stdout, progMeko, c, fs)
 		return exitUsage
 	}
 	if name == "" {

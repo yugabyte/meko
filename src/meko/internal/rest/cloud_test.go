@@ -267,7 +267,13 @@ func TestCloudDatapacks(t *testing.T) {
 		r.Error.Code != "CLOUD_SYNC_UNSUPPORTED" {
 		t.Fatalf("a precheck against a Meko Cloud without imports: %+v", r)
 	}
-	wantErr(t, e, "GET", "/datapacks/"+e.DatapackID+"/cloud-sync", nil, 404, "NOT_FOUND")
+	wantErr(t, e, "GET", "/datapacks/"+e.DatapackID+"/cloud-sync", nil, 403, "FORBIDDEN") // an agent's token
+	if r := admin("GET", "/datapacks/"+e.DatapackID+"/cloud-sync", nil); r.Status != 404 {
+		t.Fatalf("no sync yet: %+v", r)
+	}
+	if r := admin("GET", "/datapacks/not-a-uuid/cloud-sync", nil); r.Status != 400 || r.Error.Code != "VALIDATION_ERROR" {
+		t.Fatalf("a status by a non-UUID id: %+v", r)
+	}
 	// A project folder here files only this Meko's datapacks, and a new one is Meko Cloud's.
 	if r := admin("POST", "/datapacks", map[string]any{"name": "filed", "folder_id": "f"}); r.Status != 400 ||
 		r.Error.Code != "VALIDATION_ERROR" {

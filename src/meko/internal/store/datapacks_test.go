@@ -54,7 +54,7 @@ func TestDatapackWrites(t *testing.T) {
 	if c, cerr := s.CountDatapack(ctx, d.ID, "u"); cerr != nil || c.Conversations != 1 || c.Memories != 0 {
 		t.Errorf("counts %+v, %v", c, cerr)
 	}
-	if err = s.DeleteDatapack(ctx, d.ID); err != nil {
+	if err = s.DeleteDatapack(ctx, d.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = s.GetDatapack(ctx, d.ID); !errors.Is(err, ErrNoDatapack) {
@@ -63,12 +63,12 @@ func TestDatapackWrites(t *testing.T) {
 	if _, err = s.GetConversation(ctx, d.ID, "c1"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("its conversation should go with it: %v", err)
 	}
-	if err = s.DeleteDatapack(ctx, d.ID); !errors.Is(err, ErrNoDatapack) {
+	if err = s.DeleteDatapack(ctx, d.ID, false); !errors.Is(err, ErrNoDatapack) {
 		t.Errorf("delete twice: %v", err)
 	}
 
 	// The default, once deleted, is gone for good.
-	if err = s.DeleteDatapack(ctx, def); err != nil {
+	if err = s.DeleteDatapack(ctx, def, false); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.DefaultDatapackID(ctx); err != nil || got != "" {

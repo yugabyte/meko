@@ -54,7 +54,8 @@ type Service struct {
 	cloudLinked     func() bool
 	extractNeed     int64 // the room an extraction run needs before it calls, under extractMu
 	syncMu          sync.Mutex
-	syncing         map[string]bool // datapacks syncing to Meko Cloud, which take no writes (cloudsync.go)
+	syncing         map[string]bool          // datapacks syncing to Meko Cloud, which take no writes (cloudsync.go)
+	gates           map[string]*sync.RWMutex // each datapack's write gate, under syncMu (cloudsync.go)
 }
 
 // Options configure a Service.
@@ -151,9 +152,11 @@ type AddMemory struct {
 
 // AddMemory stores memories verbatim and returns what it added.
 func (s *Service) AddMemory(ctx context.Context, r AddMemory) ([]contextengine.Added, error) {
-	if err := s.writable(r.DatapackID); err != nil {
-		return nil, err
+	done, werr := s.writing(r.DatapackID)
+	if werr != nil {
+		return nil, werr
 	}
+	defer done()
 	if err := s.needDatapack(ctx, r.DatapackID); err != nil {
 		return nil, err
 	}
@@ -201,9 +204,11 @@ func (s *Service) SearchMemories(ctx context.Context, r Search) ([]contextengine
 
 // UpdateMemory replaces a memory of the local user's, or returns ErrPromoted for one promoted.
 func (s *Service) UpdateMemory(ctx context.Context, datapack, id, text string) error {
-	if err := s.writable(datapack); err != nil {
-		return err
+	done, werr := s.writing(datapack)
+	if werr != nil {
+		return werr
 	}
+	defer done()
 	if err := s.promoted(ctx, datapack, id); err != nil {
 		return err
 	}
@@ -225,9 +230,11 @@ func (s *Service) UpdateMemory(ctx context.Context, datapack, id, text string) e
 
 // DeleteMemory deletes a memory of the local user's, or returns ErrPromoted for one promoted.
 func (s *Service) DeleteMemory(ctx context.Context, datapack, id string) error {
-	if err := s.writable(datapack); err != nil {
-		return err
+	done, werr := s.writing(datapack)
+	if werr != nil {
+		return werr
 	}
+	defer done()
 	if err := s.promoted(ctx, datapack, id); err != nil {
 		return err
 	}
@@ -361,9 +368,11 @@ func (s *Service) EngineStatus(ctx context.Context) EngineStatus {
 // optionally only those of one conversation, and says how many it deleted. Each goes through the
 // context engine, which also unlinks it from mem0's entities.
 func (s *Service) DeleteAllMemories(ctx context.Context, datapack, agentID, conversationID string) (int, error) {
-	if err := s.writable(datapack); err != nil {
-		return 0, err
+	done, werr := s.writing(datapack)
+	if werr != nil {
+		return 0, werr
 	}
+	defer done()
 	if err := s.needDatapack(ctx, datapack); err != nil {
 		return 0, err
 	}

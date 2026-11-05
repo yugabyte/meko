@@ -4,21 +4,63 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 
 	"github.com/yugabyte/meko/src/meko/internal/store"
 )
 
 // A datapack syncing to Meko Cloud takes no writes: the sync exports it from one snapshot and then
-// deletes it here, so a write made in between would be lost (internal/cloudsync).
+// deletes it here, so a write made in between would be lost (internal/cloudsync). Every write holds
+// its datapack's gate for its whole length (writing), and BeginSync takes the gate exclusively, so a
+// sync starts only once the writes already under way have finished, and every later one is refused.
 
 // ErrDatapackSyncing is a write to a datapack that's syncing to Meko Cloud.
 var ErrDatapackSyncing = errors.New("this datapack is syncing to Meko Cloud: try again once it's in Meko Cloud")
 
-// BeginSync stops writes to a datapack, or returns ErrDatapackSyncing when a sync already holds it.
-func (s *Service) BeginSync(id string) error {
+// gate is a datapack's write gate.
+func (s *Service) gate(id string) *sync.RWMutex {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
+	if s.gates == nil {
+		s.gates = map[string]*sync.RWMutex{}
+	}
+	g, ok := s.gates[id]
+	if !ok {
+		g = &sync.RWMutex{}
+		s.gates[id] = g
+	}
+	return g
+}
+
+// Syncing says whether a datapack is syncing to Meko Cloud.
+func (s *Service) Syncing(id string) bool {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	return s.syncing[CanonicalID(id)]
+}
+
+// writing holds a datapack's gate for a write, or returns ErrDatapackSyncing. done releases it. A
+// write never calls another guarded write while it holds the gate: a sync waiting for the gate would
+// leave the nested one waiting too.
+func (s *Service) writing(id string) (done func(), err error) {
+	g := s.gate(CanonicalID(id))
+	g.RLock()
+	if s.Syncing(id) {
+		g.RUnlock()
+		return nil, ErrDatapackSyncing
+	}
+	return g.RUnlock, nil
+}
+
+// BeginSync stops writes to a datapack, once the writes already under way have finished, or returns
+// ErrDatapackSyncing when a sync already holds it.
+func (s *Service) BeginSync(id string) error {
 	id = CanonicalID(id)
+	g := s.gate(id)
+	g.Lock()
+	defer g.Unlock()
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
 	if s.syncing[id] {
 		return ErrDatapackSyncing
 	}
@@ -26,6 +68,21 @@ func (s *Service) BeginSync(id string) error {
 		s.syncing = map[string]bool{}
 	}
 	s.syncing[id] = true
+	return nil
+}
+
+// HoldSyncs stops writes to every datapack whose sync a stop interrupted, before anything else can
+// write (the memory extractor among them); the sync's Resume takes it from there.
+func (s *Service) HoldSyncs(ctx context.Context) error {
+	jobs, err := s.SyncJobs(ctx)
+	if err != nil {
+		return err
+	}
+	for id := range jobs {
+		if err = s.BeginSync(id); err != nil && !errors.Is(err, ErrDatapackSyncing) {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -37,24 +94,15 @@ func (s *Service) EndSync(id string) {
 }
 
 // FinishSync deletes a datapack Meko Cloud has taken, then lets its id take writes again: there's
-// nothing left here to write to, so every call on it goes to Meko Cloud.
+// nothing left here to write to, so every call on it goes to Meko Cloud. Its Context Gaps questions
+// stay, under its id, as for any Meko Cloud datapack.
 func (s *Service) FinishSync(ctx context.Context, id string) error {
-	err := s.deleteDatapack(ctx, id)
+	err := s.deleteDatapack(ctx, id, true)
 	if err == nil || errors.Is(err, ErrNoDatapack) {
 		s.EndSync(id)
 		return nil
 	}
 	return err
-}
-
-// writable is ErrDatapackSyncing for a datapack syncing to Meko Cloud.
-func (s *Service) writable(id string) error {
-	s.syncMu.Lock()
-	defer s.syncMu.Unlock()
-	if s.syncing[CanonicalID(id)] {
-		return ErrDatapackSyncing
-	}
-	return nil
 }
 
 // SyncSize measures one of this Meko's datapacks for a sync's precheck.

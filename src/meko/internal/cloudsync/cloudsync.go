@@ -7,6 +7,7 @@ package cloudsync
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -112,8 +113,9 @@ type Syncer struct {
 	TempDir string
 	Log     *slog.Logger
 	// Poll is how often Meko Cloud is asked how the import is going; Timeout, how long a sync waits
-	// for it. Zero is 2 seconds and 30 minutes.
-	Poll, Timeout time.Duration
+	// for it; Retry, how long a failed cancel waits before trying again. Zero is 2 seconds, 30
+	// minutes and 2 seconds.
+	Poll, Timeout, Retry time.Duration
 	// Upload posts the export to Meko Cloud's upload link; nil is an HTTP multipart POST.
 	Upload func(ctx context.Context, link string, fields map[string]string, file *os.File) error
 
@@ -163,8 +165,9 @@ func (s *Syncer) Start(ctx context.Context, id string) (Run, error) {
 		return Run{}, err
 	}
 	s.keep(run)
+	out := *run // copied before the sync can change it
 	go s.sync(context.WithoutCancel(ctx), run)
-	return *run, nil
+	return out, nil
 }
 
 // Status is a datapack's latest sync, if it had one since this Meko started.
@@ -188,7 +191,8 @@ func (s *Syncer) Resume(ctx context.Context) {
 		return
 	}
 	for id, importID := range jobs {
-		if err = s.Service.BeginSync(id); err != nil {
+		// HoldSyncs stopped its writes at start already; a sync can't be running for it yet.
+		if err = s.Service.BeginSync(id); err != nil && !errors.Is(err, memory.ErrDatapackSyncing) {
 			continue
 		}
 		run := &Run{DatapackID: id, State: StateSyncing, Step: "importing", StartedAt: time.Now().UTC()}
@@ -199,7 +203,7 @@ func (s *Syncer) Resume(ctx context.Context) {
 		go func() {
 			st, serr := s.importStatus(ctx, importID)
 			if serr == nil && st.Status == cloudWaiting {
-				s.fail(ctx, run, importID, errors.New("the upload stopped when Meko did"))
+				s.fail(ctx, run, importID, shown("The upload stopped when Meko did.", nil))
 				return
 			}
 			s.finish(ctx, run, importID)
@@ -216,7 +220,7 @@ func (s *Syncer) sync(ctx context.Context, run *Run) {
 	defer func() { _ = os.RemoveAll(dir) }()
 	f, sum, size, err := s.export(ctx, dir, run.DatapackID)
 	if err != nil {
-		s.fail(ctx, run, "", fmt.Errorf("exporting it: %w", err))
+		s.fail(ctx, run, "", shown("Exporting it failed.", err))
 		return
 	}
 	defer func() { _ = f.Close() }()
@@ -232,7 +236,9 @@ func (s *Syncer) sync(ctx context.Context, run *Run) {
 		s.fail(ctx, run, "", err)
 		return
 	}
-	// Saved before anything reaches Meko Cloud, so a stop from here on is resumed, not forgotten.
+	// Saved before the upload, so a stop from here on is resumed, not forgotten. A stop between the
+	// POST above and this leaves Meko Cloud an import waiting for an upload, which it replaces when
+	// this datapack's next sync asks for one.
 	if err = s.Service.SetSyncJob(ctx, run.DatapackID, offer.ImportID); err != nil {
 		s.fail(ctx, run, offer.ImportID, err)
 		return
@@ -242,7 +248,7 @@ func (s *Syncer) sync(ctx context.Context, run *Run) {
 		upload = postFile
 	}
 	if err = upload(ctx, offer.Upload, offer.Fields, f); err != nil {
-		s.fail(ctx, run, offer.ImportID, fmt.Errorf("uploading it: %w", err))
+		s.fail(ctx, run, offer.ImportID, shown("Uploading it to Meko Cloud failed.", err))
 		return
 	}
 	if err = s.call(ctx, http.MethodPost, pathImport+"/"+url.PathEscape(offer.ImportID)+"/start", nil,
@@ -266,7 +272,12 @@ func (s *Syncer) finish(ctx context.Context, run *Run, importID string) {
 	deadline := time.Now().Add(timeout)
 	for {
 		st, err := s.importStatus(ctx, importID)
+		var refused *CloudError
 		switch {
+		case errors.As(err, &refused) && refused.Status/100 == 4:
+			// Meko Cloud doesn't have this import (any more): waiting won't change that.
+			s.fail(ctx, run, importID, err)
+			return
 		case err != nil && time.Now().After(deadline):
 			s.fail(ctx, run, importID, err)
 			return
@@ -274,9 +285,10 @@ func (s *Syncer) finish(ctx context.Context, run *Run, importID string) {
 			// Meko Cloud unreachable for a moment: the import goes on there, so ask again.
 		case st.Status == cloudDone:
 			if err = s.Service.FinishSync(ctx, run.DatapackID); err != nil {
-				// Meko Cloud has it, and this Meko still serves its copy: keep the job, so the next
-				// start tries the delete again.
-				s.setError(run, fmt.Errorf("deleting it here failed, though Meko Cloud has it: %w", err))
+				// Meko Cloud has it, and this Meko still serves its copy: keep the job and the hold on
+				// writes (a write here would be lost), so the next start tries the delete again.
+				s.end(run, StateFailed, "Meko Cloud has it, but deleting it on this computer failed. "+
+					"Restart Meko to finish the sync.", err)
 				return
 			}
 			_ = s.Service.SetSyncJob(ctx, run.DatapackID, "")
@@ -289,11 +301,11 @@ func (s *Syncer) finish(ctx context.Context, run *Run, importID string) {
 			if msg == "" {
 				msg = "Meko Cloud couldn't import it"
 			}
-			s.fail(ctx, run, "", errors.New(msg)) // Meko Cloud removed what it made
+			s.fail(ctx, run, "", shown(msg, nil)) // Meko Cloud removed what it made
 			_ = s.Service.SetSyncJob(ctx, run.DatapackID, "")
 			return
 		case time.Now().After(deadline):
-			s.fail(ctx, run, importID, errors.New("the import took too long in Meko Cloud"))
+			s.fail(ctx, run, importID, shown("The import took too long in Meko Cloud.", nil))
 			return
 		}
 		select {
@@ -317,19 +329,89 @@ func (s *Syncer) importStatus(ctx context.Context, importID string) (importState
 }
 
 // fail ends a run that didn't make it: Meko Cloud's import, if there is one, is canceled (Meko
-// Cloud removes what it made), and the datapack takes writes again, unchanged.
+// Cloud removes what it made), and the datapack takes writes again, unchanged. When the cancel itself
+// can't get through, the job and the hold on writes stay, since Cloud's import could still finish:
+// the next start cancels it, or finishes the sync if Cloud did.
 func (s *Syncer) fail(ctx context.Context, run *Run, importID string, err error) {
 	if importID != "" {
-		if cerr := s.call(ctx, http.MethodDelete, pathImport+"/"+url.PathEscape(importID), nil, nil); cerr != nil {
-			s.warn("couldn't cancel a datapack's import in Meko Cloud", run.DatapackID, cerr)
+		if cerr := s.cancel(ctx, importID); cerr != nil {
+			s.warn("couldn't cancel a datapack's import in Meko Cloud; it's held until Meko restarts",
+				run.DatapackID, cerr)
+			s.end(run, StateFailed, publicMessage(err)+" Meko couldn't cancel the import in Meko Cloud, so "+
+				"the datapack takes no writes until Meko restarts and settles it.", err)
+			return
 		}
-		_ = s.Service.SetSyncJob(ctx, run.DatapackID, "")
+		if serr := s.Service.SetSyncJob(ctx, run.DatapackID, ""); serr != nil {
+			s.warn("couldn't forget a canceled import", run.DatapackID, serr)
+		}
 	}
 	s.Service.EndSync(run.DatapackID)
+	s.end(run, StateFailed, publicMessage(err), err)
+}
+
+// cancel cancels an import in Meko Cloud, a few times over a short while; one Meko Cloud doesn't
+// have is canceled already.
+func (s *Syncer) cancel(ctx context.Context, importID string) error {
+	var err error
+	for attempt := range 3 {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(cmp.Or(s.Retry, 2*time.Second)):
+			}
+		}
+		err = s.call(ctx, http.MethodDelete, pathImport+"/"+url.PathEscape(importID), nil, nil)
+		var refused *CloudError
+		if err == nil || errors.As(err, &refused) && refused.Status == http.StatusNotFound {
+			return nil
+		}
+	}
+	return err
+}
+
+// end records how a run ended. msg is what the CLI and the web UI show; err, with its detail,
+// goes to the log only.
+func (s *Syncer) end(r *Run, state, msg string, err error) {
 	s.mu.Lock()
-	run.State, run.Step, run.Error, run.EndedAt = StateFailed, "", err.Error(), time.Now().UTC()
+	r.State, r.Step, r.Error, r.EndedAt = state, "", msg, time.Now().UTC()
 	s.mu.Unlock()
-	s.warn("a datapack's sync to Meko Cloud failed; it's still here", run.DatapackID, err)
+	if err != nil {
+		s.warn("a datapack's sync to Meko Cloud failed", r.DatapackID, err)
+	}
+}
+
+// shownError is a failure with a message for people; its cause goes to the log.
+type shownError struct {
+	msg   string
+	cause error
+}
+
+func (e *shownError) Error() string {
+	if e.cause == nil {
+		return e.msg
+	}
+	return e.msg + " " + e.cause.Error()
+}
+
+func (e *shownError) Unwrap() error { return e.cause }
+
+func shown(msg string, cause error) error { return &shownError{msg: msg, cause: cause} }
+
+// publicMessage is what a failed sync shows: Meko Cloud's own message, a message written for people,
+// or, for anything that went wrong on this computer, a generic line (the detail is in the log).
+func publicMessage(err error) string {
+	var sh *shownError
+	var refused *CloudError
+	switch {
+	case errors.As(err, &sh):
+		return sh.msg
+	case errors.As(err, &refused) && refused.Message != "":
+		return "Meko Cloud: " + refused.Message
+	case errors.Is(err, ErrUnsupported), errors.Is(err, ErrNotLinked):
+		return err.Error()
+	}
+	return "Something went wrong on this computer while syncing it; Meko's log has the details."
 }
 
 func (s *Syncer) export(ctx context.Context, dir, id string) (*os.File, string, int64, error) {
@@ -415,13 +497,6 @@ func (s *Syncer) step(r *Run, step string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r.Step = step
-}
-
-func (s *Syncer) setError(r *Run, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	r.Error = err.Error()
-	s.warn("a synced datapack is still here", r.DatapackID, err)
 }
 
 func (s *Syncer) warn(msg, id string, err error) {
