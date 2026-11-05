@@ -127,11 +127,15 @@ test("a row from an older server, with no web_url at all, opens here", async () 
   expect(link("alpha").getAttribute("href")).toBe(`/datapacks/${HERE}/overview`);
 });
 
-test("rows say nothing about where a datapack lives, and no request names a location", async () => {
+test("only a Meko Cloud row says where it lives, with its cloud icon, and no request names a location", async () => {
   await render();
   const nav = document.querySelector("nav")!.textContent ?? "";
   expect(nav).not.toContain("this computer");
-  expect(nav).not.toContain("in Meko Cloud");
+  const rows = [...document.querySelectorAll("nav a, nav [aria-disabled]")];
+  expect(rows.filter((r) => r.textContent?.includes("in Meko Cloud")).map((r) => r.textContent)).toEqual([
+    "beta, shared with you, in Meko Cloud: opens in a new tab",
+  ]);
+  expect(rows.find((r) => r.textContent?.startsWith("beta"))?.getAttribute("title")).toBe("Opens in Meko Cloud");
   expect(urls).toContain("/api/v1/settings/meko-cloud");
   expect(urls.filter((u) => u.includes("location"))).toEqual([]);
 });

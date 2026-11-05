@@ -549,6 +549,9 @@ type DatapackExtractionChange struct {
 // SetDatapackExtraction applies a change and returns the settings it leaves.
 func (s *Service) SetDatapackExtraction(ctx context.Context, datapack string, c DatapackExtractionChange) (
 	store.DatapackExtraction, error) {
+	if err := s.writable(datapack); err != nil {
+		return store.DatapackExtraction{}, err
+	}
 	d, err := s.DatapackExtraction(ctx, datapack)
 	if err != nil {
 		return d, err

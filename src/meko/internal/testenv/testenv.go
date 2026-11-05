@@ -20,6 +20,7 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/auth"
 	"github.com/yugabyte/meko/src/meko/internal/callhome"
 	"github.com/yugabyte/meko/src/meko/internal/cloudlink"
+	"github.com/yugabyte/meko/src/meko/internal/cloudsync"
 	"github.com/yugabyte/meko/src/meko/internal/config"
 	"github.com/yugabyte/meko/src/meko/internal/mcp"
 	"github.com/yugabyte/meko/src/meko/internal/memory"
@@ -192,6 +193,9 @@ func Start(t *testing.T, o Options) *Env {
 		Tool: func(ctx context.Context, cred, name string, args map[string]any) (string, error) {
 			return mcp.Call(ctx, mcpOpts, cred, name, args)
 		}}
+	if o.Cloud != nil {
+		restOpts.Sync = &cloudsync.Syncer{Service: svc, Cloud: o.Cloud, Version: "test", Log: log}
+	}
 	upload, download := rest.Tickets(restOpts)
 	srv := server.New(server.Options{
 		Info: server.Info{Version: "test", DataDir: root, PID: os.Getpid(), StartedAt: time.Now()},
