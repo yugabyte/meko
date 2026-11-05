@@ -26,7 +26,7 @@ type ExtractionTurn struct {
 	Output            string
 	CreatedAt         time.Time
 	// SessionDate is the turn's metadata.session_date, the date a replayed transcript says it was
-	// said (Cloud's backdating key); zero when absent or not a time.
+	// said (Cloud's backdating key), in the offset it was written with; zero when absent or not a time.
 	SessionDate time.Time
 	Attempts    int
 }
@@ -107,7 +107,7 @@ func extractionTurns(ctx context.Context, q reader, cols, from string, args ...a
 		}
 		t.CreatedAt, _ = time.Parse(timeLayout, created)
 		if ts, ok := parseTime(session); ok {
-			t.SessionDate = ts.UTC()
+			t.SessionDate = ts
 		}
 		out = append(out, t)
 	}

@@ -15,12 +15,14 @@ memory-extractor use claude` turns it on.
 3. **Prepare.** Turns with nothing to remember (under 12 characters: "ok", "thanks") leave the queue
    without a call. The rest go in one call per conversation: today's date, the 20 memories of the
    datapack nearest the turns (the embedder finds them), the 4 turns before as context, and the new
-   turns numbered, the user's text cut to its first and last characters past 4,000, each reply to 300.
+   turns numbered, each with its date (its `metadata.session_date`, in that date's own offset, when
+   a replayed transcript gives one; otherwise when it was stored), the user's text cut to its first and last characters past 4,000, each reply to 300.
 4. **Extract.** The CLI returns `{"memory": [{"text", "turn"}]}`, its JSON schema enforced.
 5. **Save.** A fact within 0.9 cosine of any of the 5 memories nearest it is dropped; the rest are
    added through the memory engine as the turn's conversation's agent, with `source` `extract` (the
    memories table's provenance column; `add` for every other memory) and `meko_message_id`, the turn,
-   in their metadata. The turns leave the queue.
+   in their metadata; a turn with a `session_date` also backdates its memories' `created_at` to it.
+   The turns leave the queue.
 
 A failed call (not signed in, a timeout, a reply without the JSON) leaves its turns queued with
 `attempts` and `last_error`, and the run goes on to the next conversation; 3 failing in a row end it,

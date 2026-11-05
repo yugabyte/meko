@@ -280,7 +280,7 @@ func TestMemoryExtractorSessionDate(t *testing.T) {
 	}
 	if _, err = e.Service.AddMessage(ctx, memory.AddMessage{ConversationID: conv.ID, AgentID: "claude_code:x",
 		DatapackID: e.DatapackID, Input: "I bought five tops at H&M last weekend for the trip.", Seed: "0",
-		Metadata: map[string]any{"session_date": "2023-05-20T02:21:00+00:00"}}); err != nil {
+		Metadata: map[string]any{"session_date": "2023-05-20T22:00:00-07:00"}}); err != nil {
 		t.Fatal(err)
 	}
 	h.answer = func(string) ([]memory.ExtractedFact, error) {
@@ -293,7 +293,7 @@ func TestMemoryExtractorSessionDate(t *testing.T) {
 		t.Errorf("the call doesn't date the turn by its session:\n%s", input)
 	}
 	found, err := e.Service.SearchMemories(ctx, memory.Search{DatapackID: e.DatapackID, Query: "H&M tops", Limit: 5})
-	if err != nil || len(found) != 1 || !strings.HasPrefix(found[0].CreatedAt, "2023-05-20") {
-		t.Errorf("memory %+v, %v: want created_at on 2023-05-20", found, err)
+	if err != nil || len(found) != 1 || found[0].CreatedAt != "2023-05-21T05:00:00.000Z" {
+		t.Errorf("memory %+v, %v: want created_at at the session's instant, 2023-05-21T05:00Z", found, err)
 	}
 }
