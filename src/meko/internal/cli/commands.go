@@ -15,10 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"text/tabwriter"
 	"time"
 
-	"github.com/yugabyte/meko/src/meko/internal/callhome"
 	"github.com/yugabyte/meko/src/meko/internal/config"
 	"github.com/yugabyte/meko/src/meko/internal/extensions"
 	"github.com/yugabyte/meko/src/meko/internal/memory"
@@ -233,17 +231,18 @@ func runStatus(l paths.Layout, o statusOptions, stdout, stderr io.Writer) int {
 	case o.verbose:
 		printStatusVerbose(l, st, exts, stdout)
 	default:
-		printStatusShort(l, st, exts, stdout)
+		printStatusShort(l, c, st, exts, stdout)
 	}
 	return exitOK
 }
 
-// printStatusShort is status's checklist: the memory engine, the service, updates, the Meko Cloud
-// link and the extensions, each a row, then the links.
-func printStatusShort(l paths.Layout, st server.StatusReply, exts func() extensionResults, stdout io.Writer) {
+// printStatusShort is status's checklist: the memory engine, the service, updates and the
+// extensions, each a row (and the Meko Cloud link, when it can't be read; otherwise it's the box's
+// Cloud row), then the links in a box titled with how Meko runs, as install's summary has them, and
+// the commands to run next.
+func printStatusShort(l paths.Layout, c *client, st server.StatusReply, exts func() extensionResults,
+	stdout io.Writer) {
 	r := newReport(stdout)
-	r.headline(stepOK, fmt.Sprintf("Meko %s is running (pid %d, up %s)", st.Version, st.PID,
-		(time.Duration(st.UptimeSeconds)*time.Second).String()))
 	k, text := memoryEngineStep(st.MemoryEngine)
 	r.step(k, "Memory engine", text)
 	switch {
@@ -279,10 +278,7 @@ func printStatusShort(l paths.Layout, st server.StatusReply, exts func() extensi
 			}
 		}
 	}
-	switch {
-	case strings.HasPrefix(cl, "linked"):
-		r.step(stepOK, "Meko Cloud", cl)
-	case strings.HasPrefix(cl, "can't"):
+	if strings.HasPrefix(cl, "can't") {
 		r.step(stepWarn, "Meko Cloud", cl)
 	}
 	if res := exts(); res.err != nil {
@@ -303,13 +299,14 @@ func printStatusShort(l paths.Layout, st server.StatusReply, exts func() extensi
 			r.step(k, extensionTitle(n), state)
 		}
 	}
-	fmt.Fprintln(stdout)
-	tw := tabwriter.NewWriter(stdout, 0, 0, 3, ' ', 0)
-	for _, row := range linkRows(st, l.Root) {
-		fmt.Fprintf(tw, "  %s\t%s\n", row[0], row[1])
-	}
-	_ = tw.Flush()
+	r.box(fmt.Sprintf("Meko %s is running (pid %d, up %s)", st.Version, st.PID,
+		(time.Duration(st.UptimeSeconds)*time.Second).String()), linkRows(st, cloudRow(l)))
 	fmt.Fprintln(stdout, "\nMore detail: meko status --verbose")
+	s := readNextState(l, c)
+	if st.Web != nil {
+		s.webOff = !st.Web.Enabled
+	}
+	r.next(nextSteps(s, nextUse))
 }
 
 // memoryEngineStep is the memory engine's row: done when ready, failed when it failed, else a warning
@@ -328,15 +325,13 @@ func memoryEngineStep(e memory.EngineStatus) (stepKind, string) {
 	return stepWarn, text
 }
 
-// linkRows are where people and agents reach Meko, and its data folder.
-func linkRows(st server.StatusReply, root string) [][2]string {
+// linkRows are where people and agents reach Meko, and the Meko Cloud it's linked to (cloud).
+func linkRows(st server.StatusReply, cloud [2]string) [][2]string {
 	var rows [][2]string
 	if w := st.Web; w != nil && w.URL != "" && w.Enabled {
 		rows = append(rows, [2]string{"Humans (web UI)", w.URL + " (" + webAccessNote(w) + ")"})
 	}
-	return append(rows,
-		[2]string{"Agents (MCP, API)", fmt.Sprintf("http://127.0.0.1:%d/mcp", st.Port)},
-		[2]string{"Data", root})
+	return append(rows, [2]string{"Agents (MCP, API)", fmt.Sprintf("http://127.0.0.1:%d/mcp", st.Port)}, cloud)
 }
 
 // extensionTitle is how a known extension is named to people (AgentK), else its name.
@@ -393,10 +388,7 @@ func printStatusVerbose(l paths.Layout, st server.StatusReply, exts func() exten
 		fmt.Fprintln(stdout,
 			"  Auth:          none (every user and program on this machine can read and write your memories)")
 	} else {
-		fmt.Fprintln(stdout, "  Auth:          token (meko token prints it)")
-	}
-	if u := st.UsageStats; u != nil {
-		fmt.Fprintln(stdout, "  Usage stats:   "+usageStatsLine(*u))
+		fmt.Fprintln(stdout, "  Auth:          token (`meko token` prints it)")
 	}
 	if s := st.Storage; s != nil {
 		fmt.Fprintf(stdout, "  Storage:       %s of %s used (memories %s, conversations %s, knowledge %s, artifacts %s)\n",
@@ -444,21 +436,6 @@ func limitSize(n int64) string {
 		return fmt.Sprintf("%d MB", n>>20)
 	}
 	return humanSize(n)
-}
-
-// usageStatsLine says whether usage stats are sent, where, and what turned them off.
-func usageStatsLine(u callhome.State) string {
-	switch {
-	case u.Enabled && u.Sends && u.URL == callhome.DefaultURL:
-		return "on (sent to YugabyteDB daily, hourly in an install's first day)"
-	case u.Enabled && u.Sends:
-		return "on (sent to " + u.URL + ")"
-	case u.Enabled:
-		return "on, but a build from source sends none"
-	case u.By == callhome.OffByWebUI:
-		return "off (turned off in the web UI)"
-	}
-	return "off (turned off by " + u.By + ")"
 }
 
 // printSetup prints how Meko is installed: its service, its updates, the Meko Cloud link and its

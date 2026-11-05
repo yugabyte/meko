@@ -112,13 +112,21 @@ func runCloudLink(l paths.Layout, f cloudFlags, in io.Reader, stdout, stderr io.
 		}
 		return fail(stderr, err)
 	}
+	r := newReport(stdout)
 	if st.Linked {
-		fmt.Fprintln(stdout, "Linked to "+cloudLine(st))
+		r.headline(stepOK, "Linked to "+cloudLine(st))
 	} else {
 		fmt.Fprintln(stdout, "Meko Cloud is unlinked: extensions use this Meko")
 	}
 	for _, line := range moveLines(st.Agents) {
 		fmt.Fprintln(stdout, line)
+	}
+	if st.Linked {
+		var c *client
+		if up, _ := running(l.Lock); up {
+			c, _ = newClient(l)
+		}
+		r.next(nextSteps(readNextState(l, c), nextUse))
 	}
 	return exitOK
 }
@@ -173,24 +181,45 @@ func cloudLine(st cloudlink.Status) string {
 	return line
 }
 
-// cloudStatusLine is meko status's line on the link.
-func cloudStatusLine(l paths.Layout) string {
+// readCloudLink reads the Meko Cloud link as the data folder at l keeps it.
+func readCloudLink(l paths.Layout) (cloudlink.State, error) {
 	cfg, err := config.Load(l.Config, os.Getenv, config.Overrides{})
 	if err != nil {
-		return "can't read it: " + err.Error()
+		return cloudlink.State{}, err
 	}
 	store, err := cloudStore(l, cfg)
 	if err != nil {
-		return "can't read it: " + err.Error()
+		return cloudlink.State{}, err
 	}
-	st, err := store.Load()
+	return store.Load()
+}
+
+// cloudStatusLine is meko status's line on the link.
+func cloudStatusLine(l paths.Layout) string {
+	st, err := readCloudLink(l)
 	if err != nil {
 		return "can't read it: " + err.Error()
 	}
 	if !st.Linked {
-		return "not linked; extensions use this Meko (meko cloud_link links one)"
+		return "not linked"
 	}
 	return "linked to " + cloudLine(cloudlink.StatusOf(st))
+}
+
+// cloudRow is the summary box's Cloud row: the linked Meko Cloud's web app, or for a link with
+// none (another Meko server, with no --web-url) its MCP URL and key hint; or "Not linked".
+func cloudRow(l paths.Layout) [2]string {
+	st, err := readCloudLink(l)
+	switch {
+	case err != nil:
+		return [2]string{"Cloud", "can't read the link: " + err.Error()}
+	case !st.Linked:
+		return [2]string{"Cloud", "Not linked"}
+	}
+	if web := st.Link.EffectiveWebURL(); web != "" {
+		return [2]string{"Cloud", web}
+	}
+	return [2]string{"Cloud", cloudLine(cloudlink.StatusOf(st))}
 }
 
 // cloudToken is meko token --json's cloud: whether the extensions' Meko is linked to Meko Cloud,

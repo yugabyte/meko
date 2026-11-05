@@ -25,9 +25,24 @@ const MARK = {
   fail: () => style.red(utf8 ? '✗' : 'xx'),
 };
 
+/** The dots a running step shows, and how fast they turn: gh's spinner, as Meko's steps show it. */
+const SPIN_FRAMES = utf8 ? ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'] : ['|', '/', '-', '\\'];
+const SPIN_INTERVAL_MS = 120;
+
 const LABEL_WIDTH = 14;
 /** A label padded to `width`, with at least one space after it when it's that long or longer. */
 export const pad = (label: string, width = LABEL_WIDTH) => (label.length >= width ? `${label} ` : label.padEnd(width));
+
+/**
+ * A running step's row, "  ⣾ Label         doing", cut to one character short of `columns` (when
+ * known) with "…", so it never reaches the last column and wraps.
+ */
+export function spinRow(frame: string, label: string, doing: string, columns?: number): string {
+  const row = [...`  ${frame} ${pad(label)}${doing}`];
+  if (!columns || row.length < columns) return row.join('');
+  return `${row.slice(0, Math.max(1, columns - 2)).join('')}…`;
+}
+
 const out = (s = '') => process.stdout.write(s + '\n');
 
 export const ui = {
@@ -48,6 +63,31 @@ export const ui = {
   row: (label: string, value: string) => out(`    ${style.dim(pad(label))}${value}`),
   note: (s: string) => out(`    ${style.dim(s)}`),
   text: (s: string) => out(s),
+  /**
+   * A step that takes a while: on a terminal its row shows rotating dots ("  ⣾ Label         doing")
+   * until `stop` erases it, for the row that says how it went; anywhere else it prints `doing` as
+   * a plain line when it starts, so a log isn't left empty. Meko's steps look the same. The row is
+   * cut to the terminal's width (`spinRow`), since one that wrapped would leave a line per frame.
+   */
+  spin: (label: string, doing: string): { stop: () => void } => {
+    if (!process.stdout.isTTY || process.env.TERM === 'dumb') {
+      out(`    ${doing}`);
+      return { stop: () => {} };
+    }
+    let i = 0;
+    const draw = () => process.stdout.write(`\r${spinRow(SPIN_FRAMES[i++ % SPIN_FRAMES.length], label, doing, process.stdout.columns)}\x1b[K`);
+    draw();
+    const timer = setInterval(draw, SPIN_INTERVAL_MS);
+    let stopped = false;
+    return {
+      stop: () => {
+        if (stopped) return;
+        stopped = true;
+        clearInterval(timer);
+        process.stdout.write('\r\x1b[K');
+      },
+    };
+  },
   /** Prompt text for readline: "  Label         [default] › " */
   prompt: (label: string, def: string) => `  ${pad(label, LABEL_WIDTH + 2)}${def ? style.dim(`[${def}] `) : ''}› `,
 };

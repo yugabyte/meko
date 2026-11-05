@@ -167,9 +167,11 @@ a repo's own stage prompts get them too, and only when the project has datapacks
 >   Code's settings (sessions don't inherit the installer's environment), and the `meko` MCP server
 >   registered, both on this Meko, with tokens it accepts (they may differ from AgentK's; the
 >   installer deliberately stops at accepted, and the server checks datapacks once it runs). If
->   anything is missing or wrong it offers, after showing what will change, to run Meko's own setup
->   (`@yugabytedb/meko-mcp --client claude-code`), fetched from npm, checked against the registry's
->   integrity hash and run with the bundled Node, with the token passed in the environment. Declining
+>   anything is missing or wrong it asks, with no row of what's missing first, to run Meko's own setup
+>   for the agent (`@yugabytedb/meko-mcp --client claude-code`), fetched from npm, checked against the
+>   registry's integrity hash and run with the bundled Node, with the token passed in the environment.
+>   While it runs, its row shows rotating dots (`ui.spin` in `src/server/tty.ts`, Meko's spinner),
+>   which the ✓ row replaces; its output is kept, and shown only if it fails. Declining
 >   it (or, without `--install-deps`, not being asked) is a warning with the command to run yourself;
 >   Settings › Harness › Claude Code can run it later. That command reads the token in the user's
 >   shell, `--api-key "$(meko token)"` (with `MEKO_HOME=<folder>` when AgentK knows Meko's data

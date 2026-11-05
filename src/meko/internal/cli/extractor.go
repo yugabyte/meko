@@ -144,8 +144,28 @@ func extractorUse(ctx context.Context, c *client, harness, model string, every t
 		return err
 	}
 	fmt.Fprintf(stdout, "Memory extraction is on: %s (%s), every %s. Turns saved from now on are extracted; "+
-		"meko memory-extractor run extracts now\n", st.Harness, st.Model, time.Duration(st.IntervalSeconds)*time.Second)
+		"`meko memory-extractor run` extracts now\n", st.Harness, st.Model, everyText(st.IntervalSeconds))
 	return nil
+}
+
+// everyText is an interval in words: "5 minutes", "1 hour", "30 seconds", and "1m30s" when no one
+// unit says it.
+func everyText(seconds int) string {
+	unit := func(n int, one string) string {
+		if n == 1 {
+			return "1 " + one
+		}
+		return fmt.Sprintf("%d %ss", n, one)
+	}
+	switch {
+	case seconds > 0 && seconds%3600 == 0:
+		return unit(seconds/3600, "hour")
+	case seconds > 0 && seconds%60 == 0:
+		return unit(seconds/60, "minute")
+	case seconds < 60:
+		return unit(seconds, "second")
+	}
+	return (time.Duration(seconds) * time.Second).String()
 }
 
 func extractorPrintStatus(ctx context.Context, c *client, asJSON bool, stdout io.Writer) error {
@@ -162,8 +182,7 @@ func extractorPrintStatus(ctx context.Context, c *client, asJSON bool, stdout io
 		fmt.Fprintln(stdout, "Memory extraction is off. Turn it on with: meko memory-extractor use claude")
 		return nil
 	}
-	fmt.Fprintf(stdout, "Memory extraction: on, %s (%s) every %s\n", st.Harness, st.Model,
-		time.Duration(st.IntervalSeconds)*time.Second)
+	fmt.Fprintf(stdout, "Memory extraction: on, %s (%s) every %s\n", st.Harness, st.Model, everyText(st.IntervalSeconds))
 	fmt.Fprintf(stdout, "  Command:   %s\n  Waiting:   %d turns\n  Extracted: %d memories\n", st.Command, st.Queued,
 		st.Extracted)
 	if st.LastRunAt != "" {

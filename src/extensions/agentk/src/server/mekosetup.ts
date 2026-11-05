@@ -231,7 +231,11 @@ export async function ensureMekoSetup(
     output?: () => string[];
     ask: (question: string, def: string) => Promise<string>;
     say: (text: string) => void;
-    warn: (label: string, text: string) => void;
+    /**
+     * Shows the setup running, under the row's label, until `stop` (`ui.spin`): used when its
+     * output is kept (`output`), so nothing else writes to the terminal meanwhile.
+     */
+    spin?: (label: string, doing: string) => { stop: () => void };
   },
 ): Promise<'ready' | 'set-up'> {
   const gaps = await d.gaps();
@@ -239,28 +243,36 @@ export async function ensureMekoSetup(
   const manual = manualMekoSetup(o.url, o.client, o.local);
   const kiro = o.client === 'kiro';
   const agent = kiro ? 'Kiro' : 'Claude Code';
-  // A short word, not the list: the install output stays tidy, and the setup fixes them all.
-  d.warn(kiro ? 'Meko in Kiro' : 'Meko in Claude', 'not set up for this Meko');
+  // No row says what's missing: the question below does, and the setup fixes it all.
   if (o.noInstallDeps) throw new MekoSetupError(`Meko isn't set up for ${agent}. Run: ${manual}`);
   const pkg = await d.latest().catch((e: unknown) => {
     throw new MekoSetupError(`Couldn't look up Meko's setup on npm (${e instanceof Error ? e.message : String(e)}). Run it yourself: ${manual}`);
   });
-  const what = `Meko's setup (${MEKO_SETUP_PACKAGE} ${pkg.version} from npm)`;
-  if (o.installDeps) {
-    d.say(`    Running ${what}`);
-  } else {
+  const what = `Meko's setup for ${agent} (${MEKO_SETUP_PACKAGE} ${pkg.version} from npm)`;
+  if (!o.installDeps) {
     if (!o.canAsk) throw new MekoSetupError(`Meko isn't set up for ${agent}. Rerun with --install-deps to set it up, or run: ${manual}`);
-    if (/^n/i.test(await d.ask(`Run ${what}${kiro ? ' for Kiro' : ''}? (Y/n)`, 'y'))) throw new MekoSetupError(`Meko isn't set up for ${agent}. Run: ${manual}`);
-    if (d.output) d.say(`    Running ${what}`);
+    if (/^n/i.test(await d.ask(`Run ${what}? (Y/n)`, 'y'))) throw new MekoSetupError(`Meko isn't set up for ${agent}. Run: ${manual}`);
   }
+  // A spinner while it runs, which the row that says how it went replaces; its output, when it
+  // streams (no `output`), says it's running, so a line only heads it with --install-deps.
+  let stop = () => {};
+  if (d.output && d.spin) stop = d.spin(kiro ? 'Meko in Kiro' : 'Meko in Claude', `Running ${what}`).stop;
+  else if (o.installDeps || d.output) d.say(`    Running ${what}`);
   const showOutput = () => {
     for (const line of d.output?.() ?? []) d.say(`      ${line}`);
   };
-  const code = await d.run(pkg).catch((e: unknown) => {
-    showOutput();
-    throw new MekoSetupError(`Meko's setup couldn't run (${e instanceof Error ? e.message : String(e)}). Run it yourself: ${manual}`);
-  });
-  const left = await d.gaps();
+  let code: number;
+  let left: string[];
+  try {
+    code = await d.run(pkg).catch((e: unknown) => {
+      stop();
+      showOutput();
+      throw new MekoSetupError(`Meko's setup couldn't run (${e instanceof Error ? e.message : String(e)}). Run it yourself: ${manual}`);
+    });
+    left = await d.gaps();
+  } finally {
+    stop();
+  }
   if (code !== 0 || left.length) {
     showOutput();
     throw new MekoSetupError(`Meko's setup didn't finish.${left.length ? ` Still: ${left.join(' ')}` : ''} See its output above, or run it yourself: ${manual}`);

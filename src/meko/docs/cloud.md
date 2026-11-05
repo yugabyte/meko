@@ -58,9 +58,11 @@ every extension the same way (`internal/cloudlink`).
   whether to sign in with the browser (the default) or enter an API key (asked for with echo off;
   Enter keeps a saved one), and links; piped, it reads the key from stdin. `--off` unlinks. With a server
   running it goes through the API listener (admin token), so the running extensions are told;
-  otherwise it saves the link itself, and they read it when they next ask. `meko status` shows
-  the link when there is one (`✓ Meko Cloud      linked to <url> (key …abcd)`), and
-  `meko status --verbose` says so either way (`Meko Cloud:    linked to …`, or not linked).
+  otherwise it saves the link itself, and they read it when they next ask. A link ends
+  with `✓ Linked to <url> (key …abcd)` and what to run next. `meko status`, `start` and
+  `install` show the link in their box of links (`Cloud`, the linked web app's URL, or `Not
+  linked`), and `meko status --verbose` with its key hint (`Meko Cloud:    linked to …`, or `not
+  linked`).
 - A saved change (`PUT` or `DELETE`) moves back the agents a Meko from before connected to Meko
   Cloud ([below](#agents-stay-on-this-meko)), and its reply adds `agents: {moved: [{name, title}],
   left: [{name, title, url}], failed: [{name, title, error}]}`. `meko cloud_link` prints a line when

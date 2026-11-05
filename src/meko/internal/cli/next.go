@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -19,7 +21,7 @@ type nextFor int
 const (
 	nextInstall nextFor = iota // meko install
 	nextStart                  // meko start
-	nextHelp                   // meko --help, while Meko runs
+	nextUse                    // meko --help (while Meko runs), meko status and meko cloud_link
 	nextConnect                // meko agent connect <agent>
 )
 
@@ -35,6 +37,9 @@ type nextState struct {
 	linked     bool         // Meko Cloud is linked
 	agentK     bool         // AgentK is installed for this Meko
 	agentKRead bool         // the extensions' registry could be read, so agentK says which
+	// agentKOther says me_koder on PATH isn't this Meko's AgentK (another data folder's, which
+	// extension install leaves the ~/.local/bin link on), so it's opened with meko ui /ext/agentk/.
+	agentKOther bool
 }
 
 // nextSteps is the commands to run next, each with what it does, for the command that ends with it.
@@ -49,6 +54,8 @@ func nextSteps(s nextState, kind nextFor) [][2]string {
 			add("meko start", "start Meko")
 		}
 		add(s.agent.Command, "start a new "+s.agent.Title+" session, with Meko's tools (ones already running need a restart)")
+	case kind == nextUse && !s.running: // meko cloud_link with Meko stopped
+		add("meko start", "start Meko")
 	case s.webOff:
 		add("meko ui start", "turn the web UI on, when you want it")
 	default:
@@ -65,8 +72,10 @@ func nextSteps(s nextState, kind nextFor) [][2]string {
 	}
 	switch {
 	case !s.agentKRead:
-	case s.agentK:
+	case s.agentK && s.agentKOther:
 		add("meko ui /ext/agentk/", "open AgentK, the agentic coder for ADLC")
+	case s.agentK:
+		add("me_koder ui", "open AgentK, the agentic coder for ADLC")
 	default:
 		add("meko extension install agentk", "add AgentK, the agentic coder for ADLC")
 	}
@@ -101,8 +110,10 @@ func readNextState(l paths.Layout, c *client) nextState {
 	s := nextState{running: c != nil, connected: true, extracting: true, linked: true}
 	s.agent, _ = agents.Lookup("claude")
 	if reg, err := extensions.Load(l.Root); err == nil {
-		_, s.agentK = reg.Entries["agentk"]
+		var e extensions.Entry
+		e, s.agentK = reg.Entries["agentk"]
 		s.agentKRead = true
+		s.agentKOther = s.agentK && !onPathAs(e.Command)
 	}
 	if m, _, _, err := agentManager(l); err == nil {
 		if list, err := m.List(); err == nil {
@@ -137,4 +148,16 @@ func readNextState(l paths.Layout, c *client) nextState {
 		}
 	}
 	return s
+}
+
+// onPathAs reports whether me_koder on PATH is the file at path, links followed
+// (~/.local/bin/me_koder is a link into a release's app/current).
+func onPathAs(path string) bool {
+	found, err := exec.LookPath("me_koder")
+	if err != nil || path == "" {
+		return false
+	}
+	a, aerr := filepath.EvalSymlinks(found)
+	b, berr := filepath.EvalSymlinks(path)
+	return aerr == nil && berr == nil && a == b
 }
