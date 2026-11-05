@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="backend/assets/meko-logo-white.svg">
-    <img src="backend/assets/meko-logo.svg" width="220" alt="Meko">
+    <source media="(prefers-color-scheme: dark)" srcset="src/meko/assets/meko-logo-white.svg">
+    <img src="src/meko/assets/meko-logo.svg" width="220" alt="Meko">
   </picture>
 </p>
 
@@ -27,8 +27,8 @@ a single binary that has the command line, the server, the MCP tools and the RES
 | Run Meko on my machine | [Install](#install) |
 | Give agents like Claude, Codex, or any MCP client, Meko's context | [Connect an agent](#connect-an-agent) |
 | Link to Meko Cloud | [Link to Meko Cloud](#link-to-meko-cloud) |
-| See every command | [CLI](backend/docs/cli.md) ⋅ [API](backend/docs/api.md#rest-at-apiv1) ⋅ [MCP](backend/docs/api.md#mcp-at-mcp)|
-| Run many coding sessions that share and learn from each other | [AgentK](extensions/agentk/README.md) |
+| See every command | [CLI](src/meko/docs/cli.md) ⋅ [API](src/meko/docs/api.md#rest-at-apiv1) ⋅ [MCP](src/meko/docs/api.md#mcp-at-mcp)|
+| Run many coding sessions that share and learn from each other | [AgentK](src/extensions/agentk/README.md) |
 | Contribute to Meko | [Contributing](#docs-and-contributing) |
 
 ## Install
@@ -70,10 +70,11 @@ curl -s http://127.0.0.1:7778/api/v1/datapacks -H "Authorization: Bearer $(meko 
 
 ## Link to Meko Cloud
 
-Link Meko to [Meko Cloud](https://cloud.mekodata.ai/) with an API key you make there:
+Link Meko to [Meko Cloud](https://cloud.mekodata.ai/) by signing in with your browser, or with an
+API key you make there:
 
 ```sh
-meko cloud_link          # asks for the key, or reads it from stdin; --off unlinks
+meko cloud_link          # sign in with your browser, or enter a key; reads a piped key; --off unlinks
 ```
 
 Or use the web UI's Settings › Meko Cloud.
@@ -93,7 +94,7 @@ Meko Cloud.
 | `meko start` / `stop` / `status` | Start or stop the server, or see whether it's running and its links |
 | `meko ui` | Open the web UI in your browser. It has no login; `meko ui stop` turns it off, and `meko ui start` on |
 | `meko agent connect claude` | Add Meko to Claude Code (or `codex`, `kiro`, `opencode`), for all your projects |
-| `meko memory-extractor use claude` | Extract memories from your conversations with your own Claude Code, every 5 minutes. It's off until you run this or turn it on in the web UI's Settings; `status`, `run` and `off` check, run or stop it. See [memory extraction](backend/docs/memory-extraction.md) |
+| `meko memory-extractor use claude` | Extract memories from your conversations with your own Claude Code, every 5 minutes. It's off until you run this or turn it on in the web UI's Settings; `status`, `run` and `off` check, run or stop it. See [memory extraction](src/meko/docs/memory-extraction.md) |
 | `meko answers use claude` | Have your own Claude Code write an answer from each search's results in the web UI, citing them. Off until you run this or turn it on in Settings; `status` and `off` check or stop it |
 | `meko update` | Install Meko's newest release now, then every extension's |
 | `meko-cli search "<question>"` | Search memories, the knowledge base and past conversations |
@@ -101,11 +102,11 @@ Meko Cloud.
 | `meko-cli upload <file>...` | Add files to the knowledge base |
 
 `meko --help`, `meko-cli --help` and `<command> --help` give the rest. Every command and flag is in
-[`backend/docs/cli.md`](backend/docs/cli.md).
+[`src/meko/docs/cli.md`](src/meko/docs/cli.md).
 
 ## Extensions
 
-**[AgentK](extensions/agentk/README.md)** is the agentic coder built on Meko. It runs many Claude
+**[AgentK](src/extensions/agentk/README.md)** is the agentic coder built on Meko. It runs many Claude
 Code, OpenCode and Kiro CLI sessions from a browser or your phone, takes each task from design to
 merged PR, and keeps each project's designs and learnings in a Meko datapack.
 
@@ -135,7 +136,7 @@ You need Go 1.26 (an older `go` downloads it on first use), a C compiler, and No
 for the memory engine and the web UI.
 
 ```sh
-cd backend
+cd src/meko
 make build memory_engine web_ui  # bin/meko (and bin/meko-cli, a link to it), the memory engine and the web UI
 ./bin/meko start                 # runs in the background: 127.0.0.1:7778, and the web UI on :7777
 ```
@@ -154,9 +155,9 @@ part's own guide and docs.
 PRs need the Contributor License Agreement signed: CLA Assistant's `license/cla` check on your
 first PR links to a page where you sign it once with your GitHub account.
 
-- Meko's docs: [`backend/docs/`](backend/docs)
+- Meko's docs: [`src/meko/docs/`](src/meko/docs)
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
-- AgentK docs: [`extensions/agentk/docs`](extensions/agentk/docs)
+- AgentK docs: [`src/extensions/agentk/docs`](src/extensions/agentk/docs)
 - Questions and ideas: [Meko's Discord](https://mekodata.ai/discord/) or
   [Slack](https://inviter.co/yugabytedb).
 
@@ -164,30 +165,30 @@ first PR links to a page where you sign it once with your GitHub account.
 
 Is your context stored in Meko? Show it in your README.
 
-<a href="https://mekodata.ai"><img src="backend/assets/badges/meko-context.svg" width="112" height="30" alt="Meko context"></a>
-<a href="https://mekodata.ai"><img src="backend/assets/badges/meko-context-dark.svg" width="112" height="30" alt="Meko context"></a>
+<a href="https://mekodata.ai"><img src="assets/badges/meko-context.svg" width="112" height="30" alt="Meko context"></a>
+<a href="https://mekodata.ai"><img src="assets/badges/meko-context-dark.svg" width="112" height="30" alt="Meko context"></a>
 
 The light badge:
 
 ```md
-[![Meko context](https://raw.githubusercontent.com/yugabyte/meko/main/backend/assets/badges/meko-context.svg)](https://mekodata.ai)
+[![Meko context](https://raw.githubusercontent.com/yugabyte/meko/main/assets/badges/meko-context.svg)](https://mekodata.ai)
 ```
 
 ```html
 <a href="https://mekodata.ai">
-  <img width="112" height="30" src="https://raw.githubusercontent.com/yugabyte/meko/main/backend/assets/badges/meko-context.svg" alt="Meko context">
+  <img width="112" height="30" src="https://raw.githubusercontent.com/yugabyte/meko/main/assets/badges/meko-context.svg" alt="Meko context">
 </a>
 ```
 
 The dark badge:
 
 ```md
-[![Meko context](https://raw.githubusercontent.com/yugabyte/meko/main/backend/assets/badges/meko-context-dark.svg)](https://mekodata.ai)
+[![Meko context](https://raw.githubusercontent.com/yugabyte/meko/main/assets/badges/meko-context-dark.svg)](https://mekodata.ai)
 ```
 
 ```html
 <a href="https://mekodata.ai">
-  <img width="112" height="30" src="https://raw.githubusercontent.com/yugabyte/meko/main/backend/assets/badges/meko-context-dark.svg" alt="Meko context">
+  <img width="112" height="30" src="https://raw.githubusercontent.com/yugabyte/meko/main/assets/badges/meko-context-dark.svg" alt="Meko context">
 </a>
 ```
 
@@ -196,8 +197,8 @@ Or one that follows the reader's light or dark theme:
 ```html
 <a href="https://mekodata.ai">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/yugabyte/meko/main/backend/assets/badges/meko-context-dark.svg">
-    <img width="112" height="30" src="https://raw.githubusercontent.com/yugabyte/meko/main/backend/assets/badges/meko-context.svg" alt="Meko context">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/yugabyte/meko/main/assets/badges/meko-context-dark.svg">
+    <img width="112" height="30" src="https://raw.githubusercontent.com/yugabyte/meko/main/assets/badges/meko-context.svg" alt="Meko context">
   </picture>
 </a>
 ```
@@ -208,8 +209,8 @@ The snippets load the badges from this repo's `main` branch on raw.githubusercon
 
 [Apache-2.0](LICENSE)
 
-The Meko logo in `backend/assets/` is Meko's mark, from Meko Cloud's web app, and the badges in
-`backend/assets/badges/` are made from it.
+The Meko logo in `src/meko/assets/` is Meko's mark, from Meko Cloud's web app, and the badges in
+`assets/badges/` are made from it.
 
 <!-- Scarf pixel meko-github-readme: counts README views. -->
 <img referrerpolicy="no-referrer-when-downgrade" src="https://static.scarf.sh/a.png?x-pxid=437e0be7-bfef-40e8-83ca-dd7d4a7ea7da" alt="" width="1" height="1" />

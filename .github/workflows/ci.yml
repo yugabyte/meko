@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       agentk: ${{ steps.scope.outputs.agentk }}
-      backend: ${{ steps.scope.outputs.backend }}
+      meko: ${{ steps.scope.outputs.meko }}
       presenter: ${{ steps.scope.outputs.presenter }}
     steps:
       # A PR runs on GitHub's merge commit, whose first parent is the base branch: two commits
@@ -46,7 +46,7 @@ jobs:
           cat "$RUNNER_TEMP/scope" >> "$GITHUB_OUTPUT"
           cat "$RUNNER_TEMP/scope"
 
-  # AgentK (extensions/agentk).
+  # AgentK (src/extensions/agentk).
   agentk:
     name: AgentK (${{ matrix.os }})
     needs: changes
@@ -57,15 +57,15 @@ jobs:
         os: [ubuntu-latest, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
-    # AgentK lives in extensions/agentk; its package.json and scripts are there.
+    # AgentK lives in src/extensions/agentk; its package.json and scripts are there.
     defaults:
       run:
-        working-directory: extensions/agentk
+        working-directory: src/extensions/agentk
     steps:
       - uses: actions/checkout@v7
 
       # AgentK needs no tmux. Linux gets it only for the tests of moving older installs off
-      # it (extensions/agentk/test/integration/move-off-tmux.test.ts, skipped without tmux); drop
+      # it (src/extensions/agentk/test/integration/move-off-tmux.test.ts, skipped without tmux); drop
       # it with them.
       - name: Install system packages
         if: runner.os == 'Linux'
@@ -77,7 +77,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: extensions/agentk/package-lock.json
+          cache-dependency-path: src/extensions/agentk/package-lock.json
 
       - name: Configure git for tests
         run: |
@@ -96,11 +96,11 @@ jobs:
         env:
           TERM: xterm-256color
 
-  # Meko's Go backend (backend/). cgo builds natively on each platform, so both run here.
-  backend:
-    name: Backend (${{ matrix.os }})
+  # Meko (src/meko). cgo builds natively on each platform, so both run here.
+  meko:
+    name: Meko (${{ matrix.os }})
     needs: changes
-    if: needs.changes.outputs.backend == 'true'
+    if: needs.changes.outputs.meko == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -109,32 +109,32 @@ jobs:
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: backend
+        working-directory: src/meko
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
         with:
-          go-version-file: backend/go.mod
+          go-version-file: src/meko/go.mod
           # go.mod is always there; go.sum only once there are dependencies.
           cache-dependency-path: |
-            backend/go.mod
-            backend/go.sum
+            src/meko/go.mod
+            src/meko/go.sum
 
-      # The memory engine (backend/memory_engine) is TypeScript on Node.
+      # The memory engine (src/meko/memory_engine) is TypeScript on Node.
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: |
-            backend/memory_engine/package-lock.json
-            backend/web_ui/package-lock.json
+            src/meko/memory_engine/package-lock.json
+            src/meko/web_ui/package-lock.json
 
       # The Go end-to-end tests use the real embedding model (about 23 MB, from Hugging Face): keep it.
       - name: Cache the embedding model
         uses: actions/cache@v6
         with:
-          path: backend/memory_engine/.models
+          path: src/meko/memory_engine/.models
           key: models-all-MiniLM-L6-v2-751bff3-q8-ms-marco-MiniLM-L-6-v2-a091443-q8
 
       - run: make build memory_engine
@@ -144,15 +144,15 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.14.0
-          working-directory: backend
+          working-directory: src/meko
 
       - run: go vet -tags sqlite_fts5,sqlite_vec ./...
       - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - run: npm run typecheck
-        working-directory: backend/memory_engine
+        working-directory: src/meko/memory_engine
       - run: make test
 
-  # Presenter (extensions/presenter).
+  # Presenter (src/extensions/presenter).
   presenter:
     name: Presenter (${{ matrix.os }})
     needs: changes
@@ -165,7 +165,7 @@ jobs:
     timeout-minutes: 15
     defaults:
       run:
-        working-directory: extensions/presenter
+        working-directory: src/extensions/presenter
     steps:
       - uses: actions/checkout@v7
 
@@ -173,7 +173,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: extensions/presenter/package-lock.json
+          cache-dependency-path: src/extensions/presenter/package-lock.json
 
       - run: npm ci
       - run: npm run typecheck
@@ -183,11 +183,11 @@ jobs:
 
   # Merging into main requires this check and `PR title` by name: renaming it means updating the
   # branch rules. It passes when every job in needs passed or was skipped, so a new component's
-  # job goes into needs (extensions/agentk/test/unit/ci-scope.test.ts checks).
+  # job goes into needs (src/extensions/agentk/test/unit/ci-scope.test.ts checks).
   gate:
     name: CI gate
     if: always()
-    needs: [changes, agentk, backend, presenter]
+    needs: [changes, agentk, meko, presenter]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
