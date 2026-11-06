@@ -77,12 +77,20 @@ export function ReviewFindings({ session, onClose, onTerminal, onAct, onOpenFile
     if (saveError || saved.includes(false)) return;
     onAct?.('review-send');
   };
-  const openFile = onOpenFile && ((f: CodeReviewFinding) => onOpenFile(f.file, f.line, body.current?.scrollTop ?? 0));
+  // The Changes panel takes this one's place, so not before the choices still being saved are in (a
+  // note's save starts as its box loses focus to this click), nor past one that failed: their
+  // promises and error go with this panel, and Send in the next one wouldn't wait for them. While a
+  // save has failed, the findings' places aren't buttons until it's made again, as Send is disabled.
+  const openFile = onOpenFile && !saveError && (async (f: CodeReviewFinding) => {
+    const saved = await Promise.all([...saving.current]);
+    if (saved.includes(false)) return;
+    onOpenFile(f.file, f.line, body.current?.scrollTop ?? 0);
+  });
   const row = (f: CodeReviewFinding) => (
     <FindingRow
       key={f.key}
       f={f}
-      onOpen={openFile && (() => openFile(f))}
+      onOpen={openFile ? () => void openFile(f) : undefined}
       onChoose={triage === f.round && f.kept ? (c) => choose(f.key, c) : undefined}
       draft={editing?.key === f.key ? editing.draft : null}
       onDraft={(draft) => setEditing(draft === null ? null : { key: f.key, draft })}
