@@ -410,7 +410,17 @@ credited gotchas, each marked **Caught with Meko** with the gotcha's sentence un
 header with **Send N to AgentK** (**Finish review** with every one dismissed, waiting for notes still being saved), and on each of that
 round's kept findings **Add a note** and **Dismiss** (or **Restore**, under Dismissed), each saved as it's made; while the review runs or the task writes the PR description,
 `findingsReviewing()`, it reads **Reviewing** under the findings so far, with a bar along its header
-and no counts), whose **Terminal** button goes to the review's screen while it has one. The findings
+and no counts), whose **Terminal** button goes to the review's screen while it has one. Each
+finding's `file:line` opens the task's Changes panel in the findings' place (also from the review's
+own screen, which shares the task's worktree), on All changes, scrolled to that new-side line and lit
+for a moment (`revealRow` in `src/web/diff.ts`: its row, or the unchanged lines around it opened
+when git left it out; the line is matched by number, since a finding keeps no text, so after fixes
+it can land on a moved line), with a note saying why when it can't show the line (the file or the
+line is no longer in the diff, the file is shown without its diff, or the lines around it couldn't
+be opened; a file that changed while its text was read is tried again on its new diff);
+**← Findings** in its header, which a phone's back button reads too, brings the findings back where
+they were scrolled. The click waits for a note still being saved, and while a save has failed
+the places aren't buttons, so the findings shown again never lose it. The findings
 also open by themselves beside the task's terminal, on a desktop and a phone, as the design does in
 Design (`findingsAutoOpen()` in `src/web/util.ts`, run by `ProjectView`): whenever the task comes on
 screen while they read Reviewing or wait on the user (`triage`), and again as a review moves into

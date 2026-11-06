@@ -7,9 +7,9 @@ import {
 import { ApiError, api, errorMessage } from '../api';
 import {
   anchorComment, canExpand, coveringGap, defaultOpen, DESKTOP_BUDGET, expandRows, gapLines, GAP_STEP, keepUnchanged, pathFilter, PHONE_BUDGET,
-  fitText, pickComment, reparse, sameItems, showsLine, sideLine, splitText, type DiffLine, type Gap,
+  fitText, pickComment, reparse, revealLines, revealRow, sameItems, showsLine, sideLine, splitText, type DiffLine, type Gap,
 } from '../diff';
-import { matches, MOBILE_QUERY, useTouch, watchSideways } from '../hooks/useMedia';
+import { matches, MOBILE_QUERY, useIsMobile, useTouch, watchSideways } from '../hooks/useMedia';
 import { useRangeDrag, type CommentPick } from '../hooks/useRangeDrag';
 import { diffWrapToggle } from '../toggle';
 import { agentName, cx, idleStopped, relativeTime } from '../util';
@@ -110,8 +110,32 @@ function steady(prev: Placed | null, next: Placed): Placed {
 
 const isTyping = (t: EventTarget) => t instanceof HTMLElement && !!t.closest('input, textarea, select, [contenteditable="true"]');
 
-export function ChangesPanel({ session, onClose }: { session: Session; onClose: () => void }) {
+/** A line to show in the Changes panel (a code review finding's): `seq` tells one click from the next on the same line. */
+export interface Reveal {
+  path: string;
+  line: number;
+  seq: number;
+}
+
+/**
+ * An opening's state when the file changed while its text was read: the diff is read again, and a
+ * reveal waiting on the opening tries again on the new patch.
+ */
+const PATCH_CHANGED = 'This file changed since its diff was read. Try again once the diff is read again.';
+
+/** How long a revealed row stays lit (its `revealed` animation in styles.css). */
+const REVEAL_MS = 1600;
+
+export function ChangesPanel({ session, onClose, reveal, onBack }: {
+  session: Session;
+  onClose: () => void;
+  /** A line to scroll to and light up once the diff is in: a code review finding's, clicked in the findings panel. */
+  reveal?: Reveal | null;
+  /** Back to the findings the panel was opened from: ← Findings, in the header and as a phone's back button. */
+  onBack?: () => void;
+}) {
   const touch = useTouch();
+  const mobile = useIsMobile();
   // A phone lays rows out several times slower, so it draws fewer at a time. Read once per panel, so
   // turning a phone sideways or resizing the window doesn't open or close diffs under the user.
   const [budget] = useState(() => (matches(MOBILE_QUERY) ? PHONE_BUDGET : DESKTOP_BUDGET));
@@ -359,7 +383,7 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
         const picks = done();
         if (!picks) return;
         if (got.patch !== f.patch) {
-          putOpening(path, { ...loading, state: 'This file changed since its diff was read. Try again once the diff is read again.' });
+          putOpening(path, { ...loading, state: PATCH_CHANGED });
           setTick((t) => t + 1);
           return;
         }
@@ -405,6 +429,106 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
     const next = d < 0 && inside ? cur : cur + d;
     if (next >= 0 && next < files.length) jump(files[next].path);
   };
+
+  /**
+   * The reveal last done (its `seq`), and the last reveal and patch whose hidden lines were asked
+   * for, so each is tried once per patch.
+   */
+  const revealed = useRef(0);
+  const revealOpened = useRef('');
+  /** The row a reveal scrolls to and lights up. */
+  const [lit, setLit] = useState<{ path: string; row: number; seq: number } | null>(null);
+  // A finding's line: once the full diff is in, open its file, show the line (opening the unchanged
+  // lines around it when git left it out, or enough of a large diff's rows), then scroll to it. Each
+  // reveal runs once; it waits while the diff, a commit's switch back to All changes or the
+  // file's text is loading (again on a new patch, when the file changed meanwhile), and says why
+  // when it can't show the line: the file or the line is no longer in the diff, the file is shown
+  // without its diff, or the lines around it couldn't be opened.
+  useEffect(() => {
+    if (!reveal || revealed.current >= reveal.seq) return;
+    // Findings are about the branch against its base: All changes, not one commit.
+    if (commit !== null) {
+      setCommit(null);
+      return;
+    }
+    if (!data || data.commit) return;
+    const { path, line, seq } = reveal;
+    const f = files.find((x) => x.path === path);
+    if (!f) {
+      revealed.current = seq;
+      setNote(data.omittedFiles > 0 ? `${path} isn’t among the files shown.` : `${path} isn’t changed on this branch any more.`);
+      return;
+    }
+    const rows = parsed.get(path);
+    // Binary, or left out of a very large branch's diff (its line counts still shown).
+    if (!rows) {
+      revealed.current = seq;
+      setNote(`${path} is shown without its diff, so line ${line} can’t be shown.`);
+      jump(path);
+      return;
+    }
+    const at = revealRow(rows, line);
+    if (at && 'gap' in at && canExpand(f)) {
+      const o = liveOpening(f);
+      // Loading, or the file changed while its text was read: its diff is being read again, and a
+      // new patch has no opening yet, so the lines are asked for again below.
+      if (o?.state === 'loading' || o?.state === PATCH_CHANGED) return;
+      const key = `${seq}\0${f.patch}`;
+      if (revealOpened.current !== key && (!o || o.state === 'ready')) {
+        revealOpened.current = key;
+        const g = at.gap;
+        openLines(path, (text) => revealLines({ from: g.from, to: g.to ?? text.length }, line));
+        return;
+      }
+      if (o && o.state !== 'ready') {
+        revealed.current = seq;
+        setNote(`Line ${line} of ${path} couldn’t be shown. ${o.state}`);
+        jump(path);
+        return;
+      }
+    }
+    revealed.current = seq;
+    if (!at || !('row' in at)) {
+      setNote(
+        at
+          ? `Line ${line} of ${path} is among the unchanged lines its diff leaves out, which can’t be shown for this file.`
+          : `Line ${line} of ${path} isn’t in its diff any more.`,
+      );
+      jump(path);
+      return;
+    }
+    lastJump.current = files.indexOf(f);
+    setOpen(path, true);
+    // A large diff draws its rows a page at a time: enough pages to reach the line.
+    if ((raw.get(path)?.length ?? 0) > budget.large) {
+      setRowsShown((m) => ((m.get(path) ?? 0) > at.row ? m : new Map(m).set(path, Math.ceil((at.row + 1) / budget.page) * budget.page)));
+    }
+    setLit({ path, row: at.row, seq });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the helpers it calls are new each render; these say when to look again
+  }, [reveal, data, parsed, commit, liveOpening]);
+  // Scrolled to once its rows are drawn, and again a frame later: files above it that were off
+  // screen (content-visibility) may have been laid out by the first scroll, moving it.
+  useEffect(() => {
+    if (!lit) return;
+    const shown: { el: Element | null } = { el: null };
+    const go = () => {
+      shown.el = sections.current.get(lit.path)?.querySelector(`tr[data-i="${lit.row}"]`) ?? null;
+      shown.el?.scrollIntoView({ block: 'center' });
+      shown.el?.classList.add('revealed');
+    };
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      go();
+      second = requestAnimationFrame(go);
+    });
+    const done = setTimeout(() => setLit(null), REVEAL_MS);
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+      clearTimeout(done);
+      shown.el?.classList.remove('revealed');
+    };
+  }, [lit]);
 
   const startComment = (path: string, i: number, how: CommentPick = {}) => {
     const lines = parsed.get(path);
@@ -581,9 +705,15 @@ export function ChangesPanel({ session, onClose }: { session: Session; onClose: 
         <button className="btn small" disabled={loading} onClick={refresh}>
           {loading ? <Busy label="Loading" /> : 'Refresh'}
         </button>
-        <button className="icon-btn panel-close" onClick={onClose} aria-label="Close changes">
+        {onBack && (
+          <button className="btn small desktop-only" onClick={onBack} title="Back to the code review's findings">
+            ← Findings
+          </button>
+        )}
+        {/* On a phone, the back button reads ← Findings and goes to the findings the panel was opened from. */}
+        <button className="icon-btn panel-close" onClick={onBack && mobile ? onBack : onClose} aria-label={onBack && mobile ? 'Back to findings' : 'Close changes'}>
           <span className="desktop-only">×</span>
-          <span className="mobile-only">← Back</span>
+          <span className="mobile-only">{onBack ? '← Findings' : '← Back'}</span>
         </button>
       </div>
       {data && suggested && (

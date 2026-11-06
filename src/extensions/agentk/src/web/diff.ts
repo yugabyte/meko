@@ -179,6 +179,24 @@ export function coveringGap(rows: DiffLine[], from: number, to: number): Gap | n
   return null;
 }
 
+/**
+ * Where line `line` of a file's new side is in its rows (a code review finding's line): the row
+ * that shows it, else the gap that hides it, else null (past the end, or in no gap the rows know).
+ */
+export function revealRow(rows: DiffLine[], line: number): { row: number } | { gap: Gap } | null {
+  const row = rows.findIndex((l) => sideLine(l, 'new') === line);
+  if (row >= 0) return { row };
+  const gap = coveringGap(rows, line, line);
+  return gap ? { gap } : null;
+}
+
+/** The lines to open around a hidden line to show it with a little context: up to `around` each side, inside its gap. */
+export function revealLines(gap: { from: number; to: number }, line: number, around = 3): number[] {
+  const a = Math.max(gap.from, line - around);
+  const b = Math.min(gap.to, line + around);
+  return Array.from({ length: Math.max(0, b - a + 1) }, (_, k) => a + k);
+}
+
 /** How many diff rows the Changes panel draws at a time. */
 export interface RowBudget {
   /** Diffs open by default until this many rows are shown, so big branches open fast. */
