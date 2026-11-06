@@ -399,12 +399,16 @@ export class CodeReviews {
    * prompt went (`pr`, `review`, `merge`, `done`), the latest one went with no finished Code review:
    * none done whose `finished_at` is since the task last entered Code (Open anyway sets it on a
    * stopped one, which reviewed nothing; one from an earlier PR prompt, before a move back to Code,
-   * isn't this one's). Only for a running session, as the other skipped steps (store.ts).
+   * isn't this one's), and the latest isn't `unsent`: that one's PR prompt is still being typed,
+   * since the stage moves to Pull Request first and `markSent` writes `finished_at` once it's typed
+   * (Lifecycle.sendReviewedPr). Only the latest: `stale` is set on it alone, so an older unsent one
+   * may be another round's. Only for a running session, as the other skipped steps (store.ts).
    */
   stepSkipped(task: SessionRow): boolean {
     if (task.kind === 'code-review' || task.kind === 'review-pr' || task.desired !== 'running') return false;
     if (task.stage === 'explore' || task.stage === 'design' || task.stage === 'code') return this.atOpenPr(task) === 'off';
     if (task.stage !== 'pr' && task.stage !== 'review' && task.stage !== 'merge' && task.stage !== 'done') return false;
+    if (unsent(this.latest(task.id))) return false;
     return !get<{ one: number }>(
       this.db,
       `SELECT 1 AS one FROM code_reviews WHERE task_id = ? AND stage = 'code' AND state = 'done' AND finished_at IS NOT NULL
