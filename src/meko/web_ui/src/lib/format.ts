@@ -36,3 +36,12 @@ export function count(n: number | undefined): string {
 export function duration(ms: number): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`;
 }
+
+/** A stretch of time as a clock reads it: "8s", "2m 05s", "1h 03m". */
+export function clock(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, "0")}s`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}
