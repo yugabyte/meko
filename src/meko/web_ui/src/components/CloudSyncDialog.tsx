@@ -1,18 +1,20 @@
 // Moves this datapack to the linked Meko Cloud: first whether it fits the plan, each limit shown,
-// then the sync, all or nothing. Once it's done, the datapack is gone from this computer and lives
-// in Meko Cloud, where every call on it goes. With no Meko Cloud link yet, it asks for the API key.
+// then the sync, all or nothing, on a live timeline of its steps. Once it's done, the datapack is gone
+// from this computer and lives in Meko Cloud. With no Meko Cloud link yet, it asks for the API key.
 
 import { useEffect, useState } from "react";
 import { Check, Cloud, ExternalLink, KeyRound, X } from "lucide-react";
 import { ApiError, api } from "../lib/api";
-import { bytes, count } from "../lib/format";
+import { bytes, clock, count } from "../lib/format";
+import { syncElapsed } from "../lib/syncTimeline";
 import { MEKO_CLOUD, navigate } from "../lib/route";
 import type { Datapack, SyncCheck, SyncRun } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
 import { Dialog } from "./Dialog";
+import { SyncTimeline } from "./SyncTimeline";
 import { Button, ErrorNote, Spinner } from "./ui";
 
-const POLL_MS = 2000;
+const POLL_MS = 1000;
 
 const CHECKS: Record<string, { label: string; size?: boolean }> = {
   datapacks: { label: "Datapacks" },
@@ -20,12 +22,6 @@ const CHECKS: Record<string, { label: string; size?: boolean }> = {
   kb_storage: { label: "Knowledge file storage", size: true },
   kb_file_size: { label: "Largest file", size: true },
   searchable_turns: { label: "Searchable conversation turns" },
-};
-
-const STEPS: Record<string, string> = {
-  exporting: "Packing it up…",
-  uploading: "Uploading it to Meko Cloud…",
-  importing: "Meko Cloud is importing it…",
 };
 
 export function CloudSyncDialog({
@@ -41,14 +37,32 @@ export function CloudSyncDialog({
   const precheck = useLoad(() => api.syncPrecheck(id), [id]);
   const [run, setRun] = useState<SyncRun>();
   const [error, setError] = useState<Error>();
+  const [now, setNow] = useState(() => Date.now());
+  const syncing = run?.state === "syncing";
+
+  // Opened again while it syncs (closing doesn't stop it): pick the sync up where it is.
+  useEffect(() => {
+    api.syncStatus(id).then(
+      (r) => r.state === "syncing" && setRun((cur) => cur ?? r),
+      () => {}, // none since Meko started
+    );
+  }, [id]);
 
   useEffect(() => {
-    if (run?.state !== "syncing") return;
+    if (!syncing) return;
     const t = setTimeout(() => {
       api.syncStatus(id).then(setRun, (e: Error) => setError(e));
     }, POLL_MS);
     return () => clearTimeout(t);
-  }, [id, run]);
+  }, [id, run, syncing]);
+
+  // The clocks tick between polls.
+  useEffect(() => {
+    setNow(Date.now());
+    if (!syncing) return;
+    const t = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(t);
+  }, [syncing]);
 
   const start = async () => {
     setError(undefined);
@@ -60,6 +74,8 @@ export function CloudSyncDialog({
   };
 
   const done = run?.state === "done";
+  // A run that got past the precheck has a timeline to show.
+  const timeline = run && !run.precheck ? run : undefined;
   const checks = run?.precheck?.checks ?? precheck.data?.checks ?? [];
   const fits = (run?.precheck ?? precheck.data)?.ok ?? false;
   const name = datapack.datapack_name;
@@ -102,8 +118,8 @@ export function CloudSyncDialog({
           </>
         ) : (
           <>
-            <Button variant="ghost" onClick={onClose} disabled={run?.state === "syncing"}>
-              Cancel
+            <Button variant="ghost" onClick={onClose}>
+              {syncing ? "Close" : "Cancel"}
             </Button>
             <Button variant="primary" disabled={!fits || !!run} onClick={start}>
               <Cloud className="size-4" /> Sync to Meko Cloud
@@ -113,10 +129,14 @@ export function CloudSyncDialog({
       }
     >
       {done ? (
-        <p className="text-sm">
-          <b>{name}</b> lives in Meko Cloud now, and it's gone from this computer. Agents keep using it as before: every
-          call on it goes to Meko Cloud.
-        </p>
+        <>
+          <p className="text-sm">
+            <b>{name}</b> lives in Meko Cloud now, and it's gone from this computer. Agents keep using it as before:
+            every call on it goes to Meko Cloud.
+            {run.started_at && ` Synced in ${clock(syncElapsed(run, now))}.`}
+          </p>
+          <SyncTimeline run={run} now={now} />
+        </>
       ) : (
         <>
           <p className="text-sm text-muted-foreground">
@@ -135,7 +155,7 @@ export function CloudSyncDialog({
               <Spinner className="size-3.5" /> Checking it fits your Meko Cloud plan…
             </p>
           )}
-          {checks.length > 0 && (
+          {checks.length > 0 && !timeline && (
             <ul className="space-y-1.5 text-sm">
               {checks.map((c) => (
                 <CheckRow key={c.check} c={c} />
@@ -148,9 +168,10 @@ export function CloudSyncDialog({
               Meko Cloud, to sync it.
             </p>
           )}
-          {run?.state === "syncing" && (
-            <p className="flex items-center gap-2 text-sm">
-              <Spinner className="size-3.5" /> {STEPS[run.step] ?? "Syncing…"} Writes to it are refused until it's done.
+          {timeline && <SyncTimeline run={timeline} now={now} />}
+          {syncing && (
+            <p className="text-xs text-muted-foreground">
+              Writes to it are refused until it's done. You can close this: the sync goes on.
             </p>
           )}
           {run?.state === "failed" && !run.precheck && (

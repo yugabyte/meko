@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -101,6 +102,25 @@ type Run struct {
 	WebURL       string    `json:"web_url,omitempty"`  // the datapack in Meko Cloud's web app, once done
 	StartedAt    time.Time `json:"started_at"`
 	EndedAt      time.Time `json:"ended_at,omitzero"`
+	// Phases is the sync's timeline, in order: exporting, uploading, importing (waiting for Meko
+	// Cloud to take it), Meko Cloud's own steps as it reports them, then finishing (deleting it here).
+	// The last one is open while it runs; a failed run failed in it.
+	Phases []Phase `json:"phases"`
+	// Upload is the export's bytes sent so far, once uploading starts.
+	Upload Progress `json:"upload,omitzero"`
+}
+
+// Phase is one step of a sync's timeline.
+type Phase struct {
+	Name      string    `json:"name"`
+	StartedAt time.Time `json:"started_at"`
+	EndedAt   time.Time `json:"ended_at,omitzero"`
+}
+
+// Progress is how much of something is done.
+type Progress struct {
+	Done  int64 `json:"done"`
+	Total int64 `json:"total"`
 }
 
 // Syncer runs syncs, one per datapack at a time.
@@ -117,7 +137,7 @@ type Syncer struct {
 	// minutes and 2 seconds.
 	Poll, Timeout, Retry time.Duration
 	// Upload posts the export to Meko Cloud's upload link; nil is an HTTP multipart POST.
-	Upload func(ctx context.Context, link string, fields map[string]string, file *os.File) error
+	Upload func(ctx context.Context, link string, fields map[string]string, file io.Reader) error
 
 	mu   sync.Mutex
 	runs map[string]*Run
@@ -153,8 +173,7 @@ func (s *Syncer) Start(ctx context.Context, id string) (Run, error) {
 	if err != nil {
 		return Run{}, err
 	}
-	run := &Run{DatapackID: id, DatapackName: d.Name, State: StateSyncing, Step: "exporting",
-		StartedAt: time.Now().UTC()}
+	run := &Run{DatapackID: id, DatapackName: d.Name, State: StateSyncing, StartedAt: time.Now().UTC()}
 	if !pc.OK {
 		run.State, run.Error, run.Precheck, run.EndedAt = StateFailed, "It doesn't fit your Meko Cloud plan.", &pc,
 			run.StartedAt
@@ -165,7 +184,8 @@ func (s *Syncer) Start(ctx context.Context, id string) (Run, error) {
 		return Run{}, err
 	}
 	s.keep(run)
-	out := *run // copied before the sync can change it
+	s.step(run, "exporting")
+	out, _ := s.Status(id) // copied before the sync can change it
 	go s.sync(context.WithoutCancel(ctx), run)
 	return out, nil
 }
@@ -178,7 +198,9 @@ func (s *Syncer) Status(id string) (Run, bool) {
 	if !ok {
 		return Run{}, false
 	}
-	return *r, true
+	out := *r
+	out.Phases = slices.Clone(r.Phases) // the sync goes on changing its own
+	return out, true
 }
 
 // Resume finishes the syncs a stop interrupted: one Meko Cloud has done deletes its datapack here,
@@ -195,11 +217,12 @@ func (s *Syncer) Resume(ctx context.Context) {
 		if err = s.Service.BeginSync(id); err != nil && !errors.Is(err, memory.ErrDatapackSyncing) {
 			continue
 		}
-		run := &Run{DatapackID: id, State: StateSyncing, Step: "importing", StartedAt: time.Now().UTC()}
+		run := &Run{DatapackID: id, State: StateSyncing, StartedAt: time.Now().UTC()}
 		if d, derr := s.Service.Datapack(ctx, id); derr == nil {
 			run.DatapackName = d.Name
 		}
 		s.keep(run)
+		s.step(run, "importing")
 		go func() {
 			st, serr := s.importStatus(ctx, importID)
 			if serr == nil && st.Status == cloudWaiting {
@@ -247,7 +270,10 @@ func (s *Syncer) sync(ctx context.Context, run *Run) {
 	if upload == nil {
 		upload = postFile
 	}
-	if err = upload(ctx, offer.Upload, offer.Fields, f); err != nil {
+	s.mu.Lock()
+	run.Upload = Progress{Total: size}
+	s.mu.Unlock()
+	if err = upload(ctx, offer.Upload, offer.Fields, &progressReader{r: f, s: s, run: run}); err != nil {
 		s.fail(ctx, run, offer.ImportID, shown("Uploading it to Meko Cloud failed.", err))
 		return
 	}
@@ -284,6 +310,7 @@ func (s *Syncer) finish(ctx context.Context, run *Run, importID string) {
 		case err != nil:
 			// Meko Cloud unreachable for a moment: the import goes on there, so ask again.
 		case st.Status == cloudDone:
+			s.phase(run, "finishing")
 			if err = s.Service.FinishSync(ctx, run.DatapackID); err != nil {
 				// Meko Cloud has it, and this Meko still serves its copy: keep the job and the hold on
 				// writes (a write here would be lost), so the next start tries the delete again.
@@ -294,6 +321,7 @@ func (s *Syncer) finish(ctx context.Context, run *Run, importID string) {
 			_ = s.Service.SetSyncJob(ctx, run.DatapackID, "")
 			s.mu.Lock()
 			run.State, run.Step, run.WebURL, run.EndedAt = StateDone, "", st.WebURL, time.Now().UTC()
+			closePhase(run)
 			s.mu.Unlock()
 			return
 		case st.Status == cloudFailed:
@@ -307,6 +335,8 @@ func (s *Syncer) finish(ctx context.Context, run *Run, importID string) {
 		case time.Now().After(deadline):
 			s.fail(ctx, run, importID, shown("The import took too long in Meko Cloud.", nil))
 			return
+		case st.Step != "":
+			s.phase(run, st.Step) // Meko Cloud's step: reading, creating, memories_and_conversations, ...
 		}
 		select {
 		case <-ctx.Done():
@@ -318,6 +348,7 @@ func (s *Syncer) finish(ctx context.Context, run *Run, importID string) {
 
 type importState struct {
 	Status string `json:"status"`
+	Step   string `json:"step"`
 	Error  string `json:"error"`
 	WebURL string `json:"web_url"`
 }
@@ -375,6 +406,7 @@ func (s *Syncer) cancel(ctx context.Context, importID string) error {
 func (s *Syncer) end(r *Run, state, msg string, err error) {
 	s.mu.Lock()
 	r.State, r.Step, r.Error, r.EndedAt = state, "", msg, time.Now().UTC()
+	closePhase(r)
 	s.mu.Unlock()
 	if err != nil {
 		s.warn("a datapack's sync to Meko Cloud failed", r.DatapackID, err)
@@ -498,10 +530,50 @@ func (s *Syncer) keep(r *Run) {
 	s.runs[r.DatapackID] = r
 }
 
+// step sets the run's step, which also starts that phase.
 func (s *Syncer) step(r *Run, step string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r.Step = step
+	startPhase(r, step)
+}
+
+// phase starts the named phase of the run's timeline, unless it's the one under way.
+func (s *Syncer) phase(r *Run, name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	startPhase(r, name)
+}
+
+func startPhase(r *Run, name string) {
+	if n := len(r.Phases); n > 0 && r.Phases[n-1].Name == name && r.Phases[n-1].EndedAt.IsZero() {
+		return
+	}
+	closePhase(r)
+	r.Phases = append(r.Phases, Phase{Name: name, StartedAt: time.Now().UTC()})
+}
+
+func closePhase(r *Run) {
+	if n := len(r.Phases); n > 0 && r.Phases[n-1].EndedAt.IsZero() {
+		r.Phases[n-1].EndedAt = time.Now().UTC()
+	}
+}
+
+// progressReader counts the export's bytes as the upload reads them, for the run's Upload.
+type progressReader struct {
+	r   io.Reader
+	s   *Syncer
+	run *Run
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if n > 0 {
+		p.s.mu.Lock()
+		p.run.Upload.Done += int64(n)
+		p.s.mu.Unlock()
+	}
+	return n, err
 }
 
 func (s *Syncer) warn(msg, id string, err error) {
@@ -512,32 +584,33 @@ func (s *Syncer) warn(msg, id string, err error) {
 
 // postFile posts the export to a presigned upload link: the fields first, then the file as "file",
 // as Meko Cloud's knowledge-base uploads take it.
-func postFile(ctx context.Context, link string, fields map[string]string, file *os.File) error {
+func postFile(ctx context.Context, link string, fields map[string]string, file io.Reader) error {
 	pr, pw := io.Pipe()
 	mw := multipart.NewWriter(pw)
-	go func() {
-		err := func() error {
-			for k, v := range fields {
-				if err := mw.WriteField(k, v); err != nil {
-					return err
-				}
-			}
-			part, err := mw.CreateFormFile("file", "datapack.zip")
-			if err != nil {
-				return err
-			}
-			if _, err = io.Copy(part, file); err != nil {
-				return err
-			}
-			return mw.Close()
-		}()
-		_ = pw.CloseWithError(err)
-	}()
+	// Built before the writer starts: a request that can't be made leaves nothing blocked on the pipe.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, link, pr)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
+	go func() {
+		werr := func() error {
+			for k, v := range fields {
+				if ferr := mw.WriteField(k, v); ferr != nil {
+					return ferr
+				}
+			}
+			part, perr := mw.CreateFormFile("file", "datapack.zip")
+			if perr != nil {
+				return perr
+			}
+			if _, perr = io.Copy(part, file); perr != nil {
+				return perr
+			}
+			return mw.Close()
+		}()
+		_ = pw.CloseWithError(werr)
+	}()
 	res, err := http.DefaultClient.Do(req) //nolint:gosec // G107: the link Meko Cloud's import gave
 	if err != nil {
 		return err

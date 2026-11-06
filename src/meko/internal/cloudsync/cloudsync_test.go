@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -85,7 +84,7 @@ func (f *fakeCloud) Pass(_ context.Context, method, path string, body io.Reader,
 		case <-f.release:
 			return reply(200, map[string]any{"status": f.result, "web_url": "https://cloud.example/datapacks/x"}), nil
 		default:
-			return reply(200, map[string]any{"status": "importing"}), nil
+			return reply(200, map[string]any{"status": "importing", "step": "knowledge_files"}), nil
 		}
 	case method == "DELETE" && path == "/datapacks/import/imp-1":
 		f.canceled = append(f.canceled, "imp-1")
@@ -107,7 +106,7 @@ func setup(t *testing.T) *harness {
 	h := &harness{e: testenv.Start(t, testenv.Options{}), cloud: newFakeCloud()}
 	h.s = &cloudsync.Syncer{Service: h.e.Service, Cloud: h.cloud, Version: "test", TempDir: t.TempDir(),
 		Poll: 5 * time.Millisecond, Timeout: 5 * time.Second, Retry: time.Millisecond,
-		Upload: func(_ context.Context, _ string, _ map[string]string, f *os.File) error {
+		Upload: func(_ context.Context, _ string, _ map[string]string, f io.Reader) error {
 			if h.fail != nil {
 				return h.fail
 			}
@@ -169,7 +168,7 @@ func TestSyncMovesTheDatapack(t *testing.T) {
 		t.Fatalf("start: %+v %v", run, err)
 	}
 	for range 200 {
-		if r, _ := h.s.Status(d.ID); r.Step == "importing" {
+		if r, _ := h.s.Status(d.ID); len(r.Phases) > 0 && r.Phases[len(r.Phases)-1].Name == "knowledge_files" {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -186,6 +185,20 @@ func TestSyncMovesTheDatapack(t *testing.T) {
 	}
 	if h.exists(t, d.ID) {
 		t.Error("the synced datapack is still here")
+	}
+	// The timeline: each phase in order, all ended, and the whole export counted as uploaded.
+	names := make([]string, 0, len(run.Phases))
+	for _, ph := range run.Phases {
+		names = append(names, ph.Name)
+		if ph.EndedAt.IsZero() || ph.EndedAt.Before(ph.StartedAt) {
+			t.Errorf("phase %s: %v to %v", ph.Name, ph.StartedAt, ph.EndedAt)
+		}
+	}
+	if got := strings.Join(names, ","); got != "exporting,uploading,importing,knowledge_files,finishing" {
+		t.Errorf("phases %s", got)
+	}
+	if run.Upload.Total == 0 || run.Upload.Done != run.Upload.Total || int(run.Upload.Total) != len(h.upload) {
+		t.Errorf("upload %+v of a %d-byte export", run.Upload, len(h.upload))
 	}
 	if jobs, _ := h.e.Service.SyncJobs(ctx); len(jobs) != 0 {
 		t.Errorf("jobs left: %v", jobs)
@@ -234,9 +247,13 @@ func TestSyncThatFails(t *testing.T) {
 	if _, err := h.s.Start(context.Background(), h.e.DatapackID); err != nil {
 		t.Fatal(err)
 	}
-	if run := h.wait(t, h.e.DatapackID); run.State != cloudsync.StateFailed ||
-		run.Error != "Uploading it to Meko Cloud failed." {
+	run := h.wait(t, h.e.DatapackID)
+	if run.State != cloudsync.StateFailed || run.Error != "Uploading it to Meko Cloud failed." {
 		t.Errorf("a failed upload: %+v", run)
+	}
+	// The timeline ends, closed, in the phase that failed.
+	if n := len(run.Phases); n == 0 || run.Phases[n-1].Name != "uploading" || run.Phases[n-1].EndedAt.IsZero() {
+		t.Errorf("a failed upload's phases: %+v", run.Phases)
 	}
 	if !h.exists(t, h.e.DatapackID) || len(h.cloud.canceled) != 1 {
 		t.Errorf("after a failed upload: here %v, canceled %v", h.exists(t, h.e.DatapackID), h.cloud.canceled)

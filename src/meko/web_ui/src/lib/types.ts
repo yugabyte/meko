@@ -708,4 +708,16 @@ export interface SyncRun {
   error?: string;
   precheck?: SyncPrecheck;
   web_url?: string;
+  started_at?: string;
+  ended_at?: string;
+  /** The sync's timeline in order; the last one is open while it runs, and a failed run failed in it. */
+  phases?: SyncPhase[] | null;
+  /** The export's bytes sent so far, once uploading starts. */
+  upload?: { done: number; total: number };
+}
+
+export interface SyncPhase {
+  name: string;
+  started_at: string;
+  ended_at?: string;
 }

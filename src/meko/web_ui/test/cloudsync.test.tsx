@@ -89,3 +89,29 @@ test("with no Meko Cloud link, it asks for the API key and syncs nothing", async
   expect(window.location.pathname).toBe("/settings/meko-cloud");
   expect(sent).not.toContain(`POST /api/v1/datapacks/${ID}/cloud-sync`);
 });
+
+test("a sync under way shows its steps, the upload's progress, and can be closed", async () => {
+  serve({ ok: true, plan: "pro", checks: [{ check: "datapacks", used: 3, adding: 1, limit: -1, ok: true }] });
+  const now = new Date().toISOString();
+  const running = { datapack_id: ID, datapack_name: "invoices", state: "syncing", step: "uploading",
+    started_at: now, upload: { done: 1048576, total: 4194304 }, phases: [
+      { name: "exporting", started_at: now, ended_at: now }, { name: "uploading", started_at: now }] };
+  const inner = fetch as unknown as (url: string, init?: RequestInit) => Promise<Response>;
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) =>
+    init?.method === "POST" && url.endsWith("/cloud-sync")
+      ? Response.json({ data: running, error: null }, { status: 202 })
+      : inner(url, init)));
+  const onClose = vi.fn();
+  const el = document.createElement("div");
+  document.body.append(el);
+  root = createRoot(el);
+  await act(async () => root!.render(<CloudSyncDialog datapack={DP} onClose={onClose} onSynced={() => {}} />));
+  await act(async () => button("Sync to Meko Cloud")!.click());
+  const steps = document.querySelector('ol[aria-label="Sync steps"]')!;
+  expect(steps.querySelector('[data-status="done"]')?.textContent).toContain("Pack it up");
+  expect(steps.querySelector('[aria-current="step"]')?.textContent).toContain("Upload it to Meko Cloud");
+  expect(steps.textContent).toContain("1.0 MB of 4.0 MB");
+  expect(document.body.textContent).toContain("Step 2 of 9");
+  await act(async () => button("Close")!.click());
+  expect(onClose).toHaveBeenCalled();
+});
