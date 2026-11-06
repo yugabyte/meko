@@ -2,9 +2,9 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HARNESS_CAPS } from '../../src/shared/harnesses.js';
-import type { CreateSessionRequest, HarnessMekoState, HarnessStatus, MekoStatus, Project, Settings } from '../../src/shared/types.js';
+import type { CreateSessionRequest, HarnessMekoState, HarnessStatus, MekoStatus, Project, Settings, UpdateStatus } from '../../src/shared/types.js';
 import { NewSessionDialog, reviewSummary } from '../../src/web/components/NewSessionDialog.js';
-import { AgentSettings, CodeReviewSettings, HarnessBar, MekoLinks } from '../../src/web/components/SettingsDialog.js';
+import { AgentSettings, CodeReviewSettings, HarnessBar, SettingsDialog } from '../../src/web/components/SettingsDialog.js';
 import { autoConnectToMeko, connectToMeko, setUpWithMeko } from '../../src/web/mekoagents.js';
 import { defaultAgentChoice } from '../../src/web/util.js';
 
@@ -223,26 +223,15 @@ describe('Settings › Harness', () => {
 
 describe('Settings › General', () => {
   const localMeko: MekoStatus = { configured: true, url: 'http://127.0.0.1:7778/mcp', webUrl: null, local: 'running', claude: { gaps: [], capture: [], unchecked: [], checking: false }, kiro: null, opencode: null, agentList: 'unread' };
-  const links = (html: string) =>
-    [...html.matchAll(/<a[^>]*id="(set-meko-[\w-]+)"[^>]*href="([^"]+)"/g)].map(([, id, href]) => `${id} ${href}`);
+  const update: UpdateStatus = { current: '1.0.0', justUpdatedFrom: null, lastUpdatedFrom: null };
 
-  it("links to Meko's Meko Cloud page, and to no account on a Meko with no login", () => {
-    const html = renderToStaticMarkup(createElement(MekoLinks, { meko: localMeko, auth: { access: 'local', signedIn: true, username: null } }));
-    expect(links(html)).toEqual(['set-meko-cloud /settings/meko-cloud']);
-    // The ⓘ's text opens under the setting, after its status line.
-    expect(html).toMatch(/<span class="hint">AgentK uses the Meko on this computer\.<\/span><div id="set-meko-info" class="info-panel" hidden="">Meko opens AgentK on this computer without a sign-in\./);
-    const remote = renderToStaticMarkup(createElement(MekoLinks, { meko: localMeko, auth: { access: 'remote', signedIn: true, username: null } }));
-    expect(remote).toContain('Meko opens AgentK without a sign-in.');
-  });
-
-  it('links to the account page of a Meko from before it dropped its login', () => {
-    const html = renderToStaticMarkup(createElement(MekoLinks, { meko: localMeko, auth: { access: 'remote', signedIn: true, username: 'ana' } }));
-    expect(links(html)).toEqual(['set-meko-cloud /settings/meko-cloud', 'set-meko-account /account']);
-    expect(html).toContain('Meko signs you in to AgentK.');
-    // With local access, that Meko reports its login's name too, but nobody signs in.
-    const local = renderToStaticMarkup(createElement(MekoLinks, { meko: localMeko, auth: { access: 'local', signedIn: true, username: 'ana' } }));
-    expect(links(local)).toEqual(['set-meko-cloud /settings/meko-cloud', 'set-meko-account /account']);
-    expect(local).toContain('Meko opens AgentK on this computer without a sign-in.');
+  it("has no Meko section: Meko's own pages are reached from Meko", () => {
+    const html = renderToStaticMarkup(createElement(SettingsDialog, {
+      update, meko: localMeko, harnesses: [], twoAgents: false, serverName: 'demo', onClose: () => undefined, onWhatsNew: () => undefined,
+    }));
+    // The tab itself rendered, with its settings kept in this browser.
+    expect(html).toContain('id="set-rail-sessions"');
+    expect(html).not.toMatch(/set-meko-|Meko Cloud|meko-cloud|\/account|Meko on this computer/);
   });
 });
 

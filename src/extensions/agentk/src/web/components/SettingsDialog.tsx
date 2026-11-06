@@ -3,13 +3,11 @@ import {
   MAX_IDLE_STOP_HOURS, WORK_SYNC_MINUTES_MAX, type HarnessMekoState, type HarnessStatus, type MekoStatus, type Settings, type SettingsUpdate, type UpdateStatus,
 } from '../../shared/types';
 import { HARNESS_CAPS, HARNESS_IDS, onlyMekoBlocks, type HarnessId } from '../../shared/harnesses';
-import { MEKO_ACCOUNT_PATH, MEKO_CLOUD_PATH } from '../../shared/mekourls';
 import { api, errorMessage } from '../api';
 import { AUTO_SAVE_IDLE, autoSave, settle, type AutoSaveStatus } from '../autosave';
 import { saveRailSessions, useRailSessions } from '../rail';
 import { UPDATE_MEKO_AGENTS, connectToMeko, connectable, setUpWithMeko } from '../mekoagents';
 import { installing, mekoUpdates, refreshMekoUpdate, takeRow, updateFailed, useMekoUpdate } from '../mekoupdate';
-import type { MekoAuth } from '../signin';
 import { setTermThemePref, termThemePref, TERM_THEME_LABEL, type TermThemePref } from '../termtheme';
 import { harnessLogosToggle } from '../toggle';
 import { claudeUpdateText, cx, defaultAgentChoice, relativeTime } from '../util';
@@ -25,7 +23,6 @@ const TAB_LABEL: Record<Tab, string> = {
 };
 
 export function SettingsDialog({
-  mekoAuth,
   update,
   meko,
   harnesses,
@@ -36,8 +33,6 @@ export function SettingsDialog({
   onClose,
   onWhatsNew,
 }: {
-  /** What Meko, which decides who reaches AgentK, says about this browser (null without Meko). */
-  mekoAuth: MekoAuth | null;
   update: UpdateStatus;
   meko: MekoStatus;
   /** The coding agents sessions can run on (`AppState.harnesses`). */
@@ -101,7 +96,6 @@ export function SettingsDialog({
         <div className="stack">
           <RailSessionsSetting />
           <GeneralTab auto={auto} typed={typed} />
-          <MekoLinks meko={meko} auth={mekoAuth} />
           <UsageStatsCheck />
         </div>
       )}
@@ -878,39 +872,6 @@ export function AgentSettings({
           stops following them until they're restarted.
         </InfoCheck>
       )}
-    </div>
-  );
-}
-
-/**
- * Settings › General's ways to Meko's own pages: the Meko Cloud link (Meko keeps it for AgentK and
- * its other extensions) and, on a Meko from before it dropped its login, the account that signs
- * people in to both. A newer Meko has no account page: its status has no username.
- */
-export function MekoLinks({ meko, auth }: { meko: MekoStatus; auth: MekoAuth | null }) {
-  return (
-    <div className="field" id="set-meko-links">
-      <div className="info-row">
-        <span className="label">Meko</span>
-        <InfoButton id="set-meko-info" label="Meko" />
-      </div>
-      <span className="hint">
-        {meko.configured ? 'AgentK uses the Meko on this computer.' : 'Meko isn’t running on this computer: start it with meko start.'}
-      </span>
-      <InfoPanel id="set-meko-info">
-        {auth?.access === 'remote' && auth.username ? 'Meko signs you in to AgentK.' : auth?.access === 'local' ? 'Meko opens AgentK on this computer without a sign-in.' : 'Meko opens AgentK without a sign-in.'} Who can
-        reach AgentK, and on which port, are set in Meko’s config.toml, in its <code>[web]</code> table.
-      </InfoPanel>
-      <div className="settings-actions">
-        <a className="btn small" id="set-meko-cloud" href={MEKO_CLOUD_PATH}>
-          Meko Cloud ↗
-        </a>
-        {auth?.username && (
-          <a className="btn small" id="set-meko-account" href={MEKO_ACCOUNT_PATH}>
-            Account ↗
-          </a>
-        )}
-      </div>
     </div>
   );
 }
