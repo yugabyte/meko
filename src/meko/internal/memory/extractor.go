@@ -514,8 +514,12 @@ func (s *Service) saveExtracted(ctx context.Context, dp string, turns []store.Ex
 			continue
 		}
 		t := turns[f.Turn]
+		md := map[string]any{MetaSource: SourceExtract, MetaMessageID: t.MessageID}
+		if !t.SessionDate.IsZero() {
+			md["created_at"] = t.SessionDate.UTC().Format(time.RFC3339)
+		}
 		if _, err = s.AddMemory(ctx, AddMemory{DatapackID: dp, AgentID: t.AgentID, ConversationID: t.ConversationID,
-			Text: text, Metadata: map[string]any{MetaSource: SourceExtract, MetaMessageID: t.MessageID}}); err != nil {
+			Text: text, Metadata: md}); err != nil {
 			return saved, err
 		}
 		saved++

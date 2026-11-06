@@ -25,7 +25,10 @@ type ExtractionTurn struct {
 	Input             string
 	Output            string
 	CreatedAt         time.Time
-	Attempts          int
+	// SessionDate is the turn's metadata.session_date, the date a replayed transcript says it was
+	// said (Cloud's backdating key), in the offset it was written with; zero when absent or not a time.
+	SessionDate time.Time
+	Attempts    int
 }
 
 // DatapackExtraction is a datapack's say in memory extraction.
@@ -38,7 +41,7 @@ type DatapackExtraction struct {
 // turnCols reads a turn; queuedCols adds its queue row's attempts.
 const (
 	turnCols = "m.rowid, m.conversation_rowid, m.id, c.id, COALESCE(c.datapack_id, ''), c.agent_id, " +
-		"m.input, m.output, m.created_at"
+		"m.input, m.output, m.created_at, COALESCE(json_extract(m.metadata, '$.session_date'), '')"
 	queuedCols = turnCols + ", q.attempts"
 )
 
@@ -93,8 +96,9 @@ func extractionTurns(ctx context.Context, q reader, cols, from string, args ...a
 	for rows.Next() {
 		var t ExtractionTurn
 		var created string
+		var session string
 		dest := []any{&t.Rowid, &t.ConversationRowid, &t.MessageID, &t.ConversationID, &t.DatapackID, &t.AgentID,
-			&t.Input, &t.Output, &created}
+			&t.Input, &t.Output, &created, &session}
 		if cols == queuedCols {
 			dest = append(dest, &t.Attempts)
 		}
@@ -102,6 +106,9 @@ func extractionTurns(ctx context.Context, q reader, cols, from string, args ...a
 			return nil, err
 		}
 		t.CreatedAt, _ = time.Parse(timeLayout, created)
+		if ts, ok := parseTime(session); ok {
+			t.SessionDate = ts
+		}
 		out = append(out, t)
 	}
 	return out, rows.Err()
