@@ -6,7 +6,7 @@ yugabyted runs YugabyteDB, and its Node memory engine. Its design is [docs/desig
 conversations), [docs/api.md](docs/api.md) (MCP and REST), [docs/knowledge.md](docs/knowledge.md)
 (knowledge files), [docs/install.md](docs/install.md) (release builds, releases, the installer,
 the service, extensions, updates and secrets), [docs/web.md](docs/web.md) (the web listener: access with no login, turning it off, TLS, extensions at `/ext/<name>/`, the handoff from AgentK), [docs/web-ui.md](docs/web-ui.md) (the web UI),
-[docs/cloud.md](docs/cloud.md) (the Meko Cloud link extensions use), [docs/callhome.md](docs/callhome.md) (usage stats) and [docs/cli.md](docs/cli.md) (every command and its flags). The rules for the whole repo are in the root [AGENTS.md](../../AGENTS.md).
+[docs/cloud.md](docs/cloud.md) (the Meko Cloud link extensions use) and [docs/cli.md](docs/cli.md) (every command and its flags). The rules for the whole repo are in the root [AGENTS.md](../../AGENTS.md).
 
 ## Map
 
@@ -46,7 +46,7 @@ the service, extensions, updates and secrets), [docs/web.md](docs/web.md) (the w
 | `internal/logging/` | slog to a rotated JSON file and the terminal. |
 | `internal/version/` | Version and commit, set with `-ldflags`. |
 | `scripts/` | `install.sh` (Meko's installer, published with each release), `package-release.sh` and `smoke-release.sh` (the release build and its check), and their tests. |
-| `docs/` | The design docs, the command reference (`cli.md`), and `docs_test.go`, which checks they carry no status lines, milestones or PR numbers. |
+| `docs/` | The design docs, the command reference (`cli.md`), and `docs_test.go`, which checks they carry no status lines, milestones or PR numbers, and that their relative links (inline or reference definitions) name files that exist. |
 | `memory_engine/scripts/fetch-model.mjs` | Downloads the pinned models (the embedder and the reranker) for a release to bundle, and checks they run offline. |
 
 ## Commands
@@ -114,7 +114,9 @@ Markdown only people read, such as this file and `REVIEW.md`, doesn't run it; `d
 - Knowledge files' bytes live in `knowledgebase-files/`, only through `internal/knowledge`'s
   `Files`; a file and its `kb_documents` row change together under the service's `fileMu`.
 - Usage stats (`internal/callhome`) carry counts, enums and versions only: never a name, text,
-  path, host or token. A new field says what it counts in [docs/callhome.md](docs/callhome.md).
+  path, host or token. What they send is described by the code itself, in
+  [internal/callhome/callhome.go](internal/callhome/callhome.go): a new field says what it counts
+  where it is declared, when its name doesn't.
 - Tests use temporary data folders (short `/tmp` paths: unix sockets have a length limit) and free
   ports, never `~/.meko`, port 7778 or 7777 (the CLI's tests set `MEKO_WEB_PORT` to a free port). They never touch the user's own service, Keychain or
   extensions: the CLI's tests set `HOME`, `MEKO_SECRETS=file`, a fake service manager and a PATH

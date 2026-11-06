@@ -12,7 +12,6 @@ an HTTP server with auth, and a supervisor for child processes. The rest builds 
 | [install.md](install.md) | Release builds, releases, the installer, the login service, extensions, updates, secrets |
 | [web.md](web.md) | The web listener browsers use: local or remote access (no login), turning it off, TLS, extensions at `/ext/<name>/`, the handoff from AgentK |
 | [web-ui.md](web-ui.md) | The web UI served at `/` |
-| [callhome.md](callhome.md) | Usage stats |
 
 Meko keeps up to 200 MB of content by default: the stored data itself (memory text, conversation
 turns, artifact and knowledge-file bytes) across all its datapacks, with indexes on top. That's the
@@ -163,7 +162,7 @@ Config precedence: flags > `MEKO_*` env > `config.toml` > defaults. An unknown k
 | `[web_ui] dir` | `MEKO_WEB_UI_DIR` | found | The built web UI ([web-ui.md](web-ui.md)). |
 | `[secrets] store` | `MEKO_SECRETS` | `keychain` on macOS, else `file` | [install.md](install.md#secrets). |
 | `[update] channel`, `auto`, `interval_hours`, `repo`, `require_signature` | `MEKO_UPDATE_CHANNEL`, `_AUTO`, `_REPO`, `_REQUIRE_SIGNATURE` | `stable`, true, 6, this repo, true | [install.md](install.md#updates-and-rollback); `require_signature`: [signed releases](install.md#signed-releases). |
-| `[call_home] enabled`, `url` | `MEKO_CALL_HOME`, `MEKO_CALL_HOME_URL`, `YB_DISABLE_CALLHOME` | on, from a release install | [callhome.md](callhome.md). |
+| `[call_home] enabled`, `url` | `MEKO_CALL_HOME`, `MEKO_CALL_HOME_URL`, `YB_DISABLE_CALLHOME` | on, from a release install | Usage stats; what they send is in [internal/callhome](../internal/callhome/callhome.go). `enabled = false`, `MEKO_CALL_HOME=false` and `YB_DISABLE_CALLHOME` can only turn them off; `url` sets where they go, and makes a build from source send too. |
 
 ## Storage
 
