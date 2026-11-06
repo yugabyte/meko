@@ -26,6 +26,7 @@ type fakeCloud struct {
 	mu        sync.Mutex
 	fits      bool
 	missing   bool          // no import routes at all
+	oldRoutes bool          // a Meko Cloud from before them: /datapacks/:datapack_id takes the paths
 	result    string        // what an import ends as: done or failed
 	release   chan struct{} // closed when an import may end
 	started   map[string]bool
@@ -53,6 +54,10 @@ func (f *fakeCloud) Pass(_ context.Context, method, path string, body io.Reader,
 	defer f.mu.Unlock()
 	if f.missing {
 		return cloudlink.Reply{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+	}
+	if f.oldRoutes {
+		return cloudlink.Reply{Status: 400,
+			Body: []byte(`{"data":null,"error":{"code":"VALIDATION_ERROR","message":"invalid datapack_id format"}}`)}, nil
 	}
 	switch {
 	case method == "POST" && path == "/datapacks/import/precheck":
@@ -256,6 +261,10 @@ func TestSyncUnsupported(t *testing.T) {
 	h.cloud.missing = true
 	if _, err := h.s.Start(context.Background(), h.e.DatapackID); !errors.Is(err, cloudsync.ErrUnsupported) {
 		t.Errorf("start: %v", err)
+	}
+	h.cloud.missing, h.cloud.oldRoutes = false, true
+	if _, err := h.s.Start(context.Background(), h.e.DatapackID); !errors.Is(err, cloudsync.ErrUnsupported) {
+		t.Errorf("start against a Meko Cloud from before the import routes: %v", err)
 	}
 }
 
