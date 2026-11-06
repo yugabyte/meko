@@ -53,17 +53,34 @@ function which(bin: string): string | null {
 
 type Prompter = (question: string, def: string) => Promise<string>;
 
-function makePrompter(interactive: boolean): { ask: Prompter; close: () => void } {
-  if (!interactive || !process.stdin.isTTY) {
+type Line = { question: (q: string) => Promise<string>; close: () => void };
+
+/**
+ * The install's questions, asked on the terminal. Its readline opens at the first question, not
+ * before: an open readline keeps the terminal in raw mode, and the tools' check (deps.sh) runs
+ * first and reads its own answers from /dev/tty, which in raw mode echo nothing and never end at
+ * Enter. Meko's first install runs this install right after its own picker, so that check's
+ * question is often the first thing asked.
+ */
+export function makePrompter(
+  interactive: boolean,
+  tty = process.stdin.isTTY === true,
+  open: () => Line = () => createInterface({ input: process.stdin, output: process.stdout }),
+): { ask: Prompter; close: () => void } {
+  if (!interactive || !tty) {
     return { ask: async (_q, def) => def, close: () => {} };
   }
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  let rl: Line | undefined;
   return {
     ask: async (q, def) => {
+      rl ??= open();
       const a = (await rl.question(ui.prompt(q, def))).trim();
       return a || def;
     },
-    close: () => rl.close(),
+    close: () => {
+      rl?.close();
+      rl = undefined;
+    },
   };
 }
 

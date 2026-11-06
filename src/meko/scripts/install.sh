@@ -48,6 +48,12 @@ fi
 say() { printf '%s\n' "$*" >&2; }
 # row <mark> <label> <text> [note]: "  ✓ Download        meko 1.2.3 · 121 MB in 6s · checksum verified"
 row() { printf '  %s %-15s %s%s%s%s\n' "$1" "$2" "$3" "$d" "${4:+ · $4}" "$n" >&2; }
+# frame <i>: the i-th frame of the rotating dots, gh's spinner, as meko's rows draw it.
+frame() {
+  case $(($1 % 8)) in
+    0) printf '⣾' ;; 1) printf '⣽' ;; 2) printf '⣻' ;; 3) printf '⢿' ;; 4) printf '⡿' ;; 5) printf '⣟' ;; 6) printf '⣯' ;; *) printf '⣷' ;;
+  esac
+}
 die() {
   [ -n "${spinning:-}" ] && printf '\r\033[K' >&2
   printf '  %s✗%s %s\n' "$r" "$n" "$*" >&2
@@ -154,11 +160,8 @@ if $tty; then
   spinning=1
   i=0
   while kill -0 "$pid" 2>/dev/null; do
-    case $((i % 8)) in
-      0) f=⣾ ;; 1) f=⣽ ;; 2) f=⣻ ;; 3) f=⢿ ;; 4) f=⡿ ;; 5) f=⣟ ;; 6) f=⣯ ;; *) f=⣷ ;;
-    esac
     size=$({ wc -c <"$tmp/$tarball"; } 2>/dev/null | tr -d ' ')
-    printf '\r  %s%s%s %-15s meko %s %s· %s MB%s\033[K' "$bl" "$f" "$n" Download "$version" "$d" "$((${size:-0} / 1000000))" "$n" >&2
+    printf '\r  %s%s%s %-15s meko %s %s· %s MB%s\033[K' "$bl" "$(frame $i)" "$n" Download "$version" "$d" "$((${size:-0} / 1000000))" "$n" >&2
     i=$((i + 1))
     sleep 0.2 2>/dev/null || sleep 1
   done
@@ -176,19 +179,40 @@ size=$(wc -c <"$tmp/$tarball" | tr -d ' ')
 row "$g✓$n" Download "meko $version" "$((size / 1000000)) MB in $(($(date +%s) - began))s · checksum verified"
 
 # ---- unpack into app/<version> ----
-mkdir -p "$app"
+# It takes seconds (some 400 MB, more in a container's home folder), so on a terminal the Install
+# row shows its dots meanwhile; meko install then prints that row in their place.
 staging="$app/.staging.$$"
-rm -rf "$staging"
-mkdir -p "$staging"
-tar -xzf "$tmp/$tarball" -C "$staging"
-[ -x "$staging/meko-$version/bin/meko" ] || die "unexpected tarball layout"
-# A tarball downloaded in a browser would carry macOS's quarantine flag; curl doesn't add it.
-if [ "$platform" = darwin ]; then xattr -dr com.apple.quarantine "$staging" 2>/dev/null || true; fi
 dest="$app/$version"
-rm -rf "$dest.old"
-[ -e "$dest" ] && mv "$dest" "$dest.old"
-mv "$staging/meko-$version" "$dest"
-rm -rf "$staging" "$dest.old"
+unpack() {
+  mkdir -p "$app" && rm -rf "$staging" && mkdir -p "$staging" || return 1
+  tar -xzf "$tmp/$tarball" -C "$staging" || return 1
+  [ -x "$staging/meko-$version/bin/meko" ] || return 2
+  # A tarball downloaded in a browser would carry macOS's quarantine flag; curl doesn't add it.
+  if [ "$platform" = darwin ]; then xattr -dr com.apple.quarantine "$staging" 2>/dev/null || true; fi
+  rm -rf "$dest.old" || return 1
+  if [ -e "$dest" ]; then mv "$dest" "$dest.old" || return 1; fi
+  mv "$staging/meko-$version" "$dest" || return 1
+  rm -rf "$staging" "$dest.old"
+}
+if $tty; then
+  unpack &
+  pid=$!
+  spinning=1
+  i=0
+  while kill -0 "$pid" 2>/dev/null; do
+    printf '\r  %s%s%s %-15s unpacking meko %s\033[K' "$bl" "$(frame $i)" "$n" Install "$version" >&2
+    i=$((i + 1))
+    sleep 0.2 2>/dev/null || sleep 1
+  done
+  if wait "$pid"; then unpacked=0; else unpacked=$?; fi
+  printf '\r\033[K' >&2
+  spinning=""
+elif unpack; then unpacked=0; else unpacked=$?; fi
+case $unpacked in
+  0) ;;
+  2) die "unexpected tarball layout" ;;
+  *) die "unpacking $tarball into $app failed" ;;
+esac
 
 # ---- set up: app/current, the meko command, the client token and the service ----
 # meko install prints the rest of the run: when it began, the version it replaces, whether it's the

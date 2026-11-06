@@ -40,7 +40,9 @@ from a `main` function called on the script's last line, so a download cut short
    dots and the megabytes so far while curl runs in the background.
 5. Unpacks it to `~/.local/share/meko/app/<version>` (`$XDG_DATA_HOME/meko/app`), outside the data
    folder, clearing macOS's quarantine flag in
-   case the tarball came through a browser.
+   case the tarball came through a browser. That takes seconds (some 400 MB unpacked), so on a
+   terminal an `Install` row shows the dots meanwhile (`unpacking meko <version>`), which `meko
+   install`'s own `Install` row then replaces.
 6. Runs that version's `meko install`, which prints the rest of the run on the same grid, with
    `MEKO_INSTALL_STARTED` (when the run began, for "installed in 14s"), `MEKO_INSTALL_FROM` (the
    version it replaces, on an upgrade), `MEKO_INSTALL_FIRST=1` (nothing was installed before, so the
