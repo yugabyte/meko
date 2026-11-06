@@ -279,7 +279,7 @@ func (c *adminMetricsCollector) runProbes(ctx context.Context) {
 			defer wg.Done()
 			samples, err := c.probes[i].read(ctx)
 			if err != nil {
-				slog.Warn("admin metric: refresh failed", "metric", c.probes[i].descs[0].String(), "error", err)
+				slog.Warn("metric refresh failed", "metric", c.probes[i].descs[0].String(), "error", err)
 				return
 			}
 			results[i].samples, results[i].ok = samples, true

@@ -371,6 +371,19 @@ API server: `READY` when every declared component has all replicas ready,
 `READY` and something since failed. It used to be a fixed three-tick walk to
 `READY` regardless of what was running.
 
+### Metrics
+
+Each side exports its own view on `:9464`. The agent's `ycp_agent_*` series say why
+its loop is failing ([`ac-metrics.md`](../amp/controller/architecture/ac-metrics.md)).
+The control plane's `meko_api_ycp_*` series cover the registry: environments by
+kind, type and state, each environment's last heartbeat timestamp, the fleet's
+agent versions, and relayed tasks by status. An agent that has stopped reporting
+cannot export anything, so stale heartbeats can only be alerted on from the
+control plane:
+`time() - max by (env_uuid) (meko_api_ycp_environment_last_heartbeat_timestamp_seconds) > 300`.
+The series are refreshed at most once a minute and every replica reports the whole
+fleet, so aggregate them with `max`, never `sum`.
+
 ## State machine
 
 Environments move through the §7 lifecycle states defined in `internal/api`:

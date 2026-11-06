@@ -621,6 +621,22 @@ func run() error {
 					return bd.Documents, bd.Chunks, byType, nil
 				},
 			})
+		} else {
+			envRepo := repository.NewEnvironmentRepo(systemConn)
+			serverMetrics.WithFleet(metrics.FleetSources{
+				Environments: func(ctx context.Context) ([]metrics.FleetEnvironment, error) {
+					rows, err := envRepo.FleetSnapshot(ctx)
+					if err != nil {
+						return nil, err
+					}
+					out := make([]metrics.FleetEnvironment, len(rows))
+					for i, r := range rows {
+						out[i] = metrics.FleetEnvironment(r)
+					}
+					return out, nil
+				},
+				TasksByStatus: repository.NewEnvironmentTaskRepo(systemConn).CountByStatus,
+			})
 		}
 	}
 
