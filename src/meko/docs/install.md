@@ -98,18 +98,19 @@ safe.
   time: meko extension install agentk` instead. The commands to run next start with opening the
   extension just added, or the web UI.
 
-`meko uninstall` removes the service, `~/.local/bin/meko`, `~/.local/bin/meko-cli`,
-`~/.local/bin/mekosh` (when they're links into the app folder), the app folder and the PATH line
-`meko install` added to a shell's profile (`~/.zshrc`, `~/.bashrc`, `~/.bash_profile`), and keeps
-the data;
-`--purge` first destroys the data folder as `meko destroy` does (it asks, unless `--force`; it
-takes `--with-extensions` too), with one difference: its one question removes the extensions and
-their data too, since with Meko gone nothing would run them, and only `--force` without
-`--with-extensions` keeps them. Extensions stay installed unless that destroy removed them, and it
-names the ones that stay. A purge then disconnects the agents that were connected to this Meko
+`meko uninstall` first removes every installed extension, asking nothing, since with Meko gone
+nothing would run them: each one as `meko extension delete <name>` does (its own uninstall, which
+stops it and removes its services, then the releases Meko installed and its command), keeping its
+data with Meko's. If one fails, nothing of Meko's is removed. Then it removes the service,
+`~/.local/bin/meko`, `~/.local/bin/meko-cli`, `~/.local/bin/mekosh` (when they're links into the
+app folder), the app folder and the PATH line `meko install` added to a shell's profile
+(`~/.zshrc`, `~/.bashrc`, `~/.bash_profile`), and keeps the data;
+`--purge` instead first destroys the data folder as `meko destroy` does, asking once unless
+`--force`, with one difference: the extensions and their data always go with Meko's, with no
+question of their own. A purge then disconnects the agents that were connected to this Meko
 (their `meko` MCP server sent its token, which the purge deleted), found before the destroy and
-removed after it, and says which. Its last line, after the extensions still installed and (without
-`--purge`) where the data stays, says how to install Meko again (`curl -fsSL
+removed after it, and says which. Its last line, after (without `--purge`) where the data stays,
+says how to install Meko again (`curl -fsSL
 https://mekodata.ai/install.sh | sh`). `meko destroy` stops the service before the server, so its
 manager doesn't start the server again mid-removal; removes the data folder and the client token
 (also when it's in the Keychain, outside the folder); and says the service is still installed,
@@ -345,12 +346,12 @@ row in `src/server/summary.ts`.
 
 `meko update`, `meko extension update` and `meko extension install` print the rows of the steps that
 otherwise print nothing (`internal/spin`): `Release`, for the release they download, check and unpack
-(`  ✓ Release         AgentK 0.20261030.0 (agentk-v0.20261030.0), downloaded and checked`, or `meko
+(`  ✓ Release         AgentK 0.20261030.0, downloaded and checked`, or `meko
 <version> installed`), and for `meko update` under the service, `Server`, for the restart. While such a
 step runs on a terminal, its row shows rotating blue dots (gh's spinner, which `install.sh`'s
 download shows; AgentK's `install` steps show the same), and so does the listing of the releases, which leaves no row. Off a terminal, as in the
 Extensions page's jobs, a step prints what it's doing as a plain line when it starts (`Installing
-AgentK <version> (<tag>)`, `Restarting into meko <version>`), so the output isn't empty while it
+AgentK <version>`, `Restarting into meko <version>`), so the output isn't empty while it
 downloads, then its finished row. On a failure the row is `✗` with what it was doing, and the error
 follows on stderr.
 
@@ -365,12 +366,12 @@ commands to run next. A `Web UI` row shows only when the web UI is off or not li
 ### Colors
 
 Meko's rows and `install.sh` share one palette (`internal/spin`, repeated in the script), by role,
-written as base ANSI colors, which every terminal theme tunes for its own background, so the output
-reads on a white terminal as on a black one:
+so the output reads on a white terminal as on a black one. Blue is picked for the terminal's
+background; the rest are base ANSI colors, which every terminal theme tunes for its own background:
 
 | Role | Code | Used for |
 |---|---|---|
-| Mark, command, link | `34` blue; links also `4` underlined and an OSC 8 link | `◆` `?` `❯` `→`, the dots, commands in hints and in Next, URLs |
+| Mark, command, link | On a dark background `#79aeff` (256 colors: `111`; 16: `94`), on a light one `#1f5fd1` (`26`; `34`); links also `4` underlined and an OSC 8 link | `◆` `?` `❯` `→`, the dots, commands in hints and in Next, URLs |
 | Done | `32` green | `✓`, and the headline's `●` |
 | Warning | `1;33` bold yellow (bold, since some themes draw yellow pale on white) | `!` |
 | Failed | `31` red | `✗` |
@@ -380,7 +381,19 @@ reads on a white terminal as on a black one:
 
 White (`37`, `97`) and the bright colors (`90`–`97`) are never text on the terminal's own
 background, since a light theme draws them pale or not at all; only the call to action, which sets
-its own background, is white (`spin`'s `TestPaletteReadsOnWhiteTerminals` checks both files).
+its own background, is white (`spin`'s `TestPaletteReadsOnWhiteTerminals` checks both files), and
+bright blue (`94`) is used only on a dark background with 16 colors.
+
+The background is `MEKO_TERM_BG` (`dark` or `light`) when it's set, else the last field of
+`COLORFGBG` (which some terminals set), else what the terminal answers when asked for its
+background color (OSC 11, sent with a DA1 query every terminal answers, so the read ends at once,
+within a quarter of a second), else dark (`spin.Background`). The 24-bit blues are used when
+`COLORTERM` is `truecolor` or `24bit`; otherwise the 256-color ones, which nearly every terminal
+has whatever its `TERM` says (SSH usually drops `COLORTERM`); only the consoles and old terminals
+(`TERM` `linux`, `vt…`, `ansi`, `cons25`, `sun`) get the theme's own `94` or `34`, which some
+themes draw purple. `install.sh` finds the background once and exports `MEKO_TERM_BG`, so `meko
+install` doesn't ask again, and `meko` sets it for the commands it runs, so an extension's install
+(AgentK's `blueCode`, which reads only the variables) draws the same blue.
 Colors, links and dots are written only when the output is a terminal, `NO_COLOR` is unset and
 `TERM` isn't `dumb`; otherwise the same rows are plain.
 
@@ -388,8 +401,8 @@ Colors, links and dots are written only when the output is a terminal, `NO_COLOR
   `app/current/bin`: its folder in the data folder, then its home from before it moved there
   (`Catalog.OldHomes`, `~/.agent-k-local`). When a registered command is gone, `meko start` and
   `stop` look for it again this way and save what they find in the registry.
-- `meko destroy` keeps the extensions' data unless told otherwise (`meko uninstall --purge` removes
-  it with Meko's, above). With some there (a registered
+- `meko destroy` keeps the extensions' data unless told otherwise (`meko uninstall` removes the
+  extensions, and with `--purge` their data, with Meko's, above). With some there (a registered
   extension, or a known one's folder), it lists each one's folder and size (Meko's own size leaves
   out `extensions/`) and asks a second question, whether to uninstall the extensions and delete
   their data too (AgentK's sessions and worktrees, with any uncommitted work). `--force` asks

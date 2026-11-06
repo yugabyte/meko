@@ -35,24 +35,22 @@ type extensionData struct {
 
 // runDestroy stops the server and removes the data folder, after asking (unless force).
 func runDestroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.Writer) int {
-	code, _ := destroy(l, o, in, stdout, stderr)
-	return code
+	return destroy(l, o, in, stdout, stderr)
 }
 
-// destroy stops the server and removes the data folder, after asking (unless force). It also
-// reports whether it kept the extensions' data.
+// destroy stops the server and removes the data folder, after asking (unless force).
 //
 // Only a folder that looks like Meko's is removed. Without extension data the folder is renamed
 // away while the lock is held, so a start at the same moment finds either all of it or none of it,
 // and then removed. With extension data it asks whether to remove that too (or follows
-// o.withExtensions; force alone keeps it; o.uninstall removes it with Meko's, unasked): removing
+// o.withExtensions; force alone keeps it; o.uninstall always removes it with Meko's, unasked): removing
 // runs each extension's own uninstall first, then removes the folder as above; keeping moves
 // everything else aside under the lock instead (removeKeepingExtensions), so an extension running
 // from its folder (AgentK's sessions) never loses it. A symlinked data folder loses the folder it
 // points to and then the link. A missing or empty folder is nothing to remove, and is left as it is
 // (a link to it too).
-func destroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.Writer) (int, bool) {
-	if o.uninstall && !o.force {
+func destroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.Writer) int {
+	if o.uninstall {
 		o.withExtensions = true
 	}
 	link := ""
@@ -60,13 +58,13 @@ func destroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.W
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		fmt.Fprintf(stdout, "Nothing to remove: there's no data folder at %s\n", l.Root)
-		return exitOK, false
+		return exitOK
 	case err != nil:
-		return fail(stderr, err), false
+		return fail(stderr, err)
 	case fi.Mode()&fs.ModeSymlink != 0:
 		target, lerr := filepath.EvalSymlinks(l.Root)
 		if lerr != nil {
-			return fail(stderr, fmt.Errorf("the data folder %s is a symlink that can't be followed: %w", l.Root, lerr)), false
+			return fail(stderr, fmt.Errorf("the data folder %s is a symlink that can't be followed: %w", l.Root, lerr))
 		}
 		link, l = l.Root, paths.New(target)
 	}
@@ -74,18 +72,18 @@ func destroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.W
 	// nothing to remove rather than a folder that isn't Meko's.
 	if entries, rerr := os.ReadDir(l.Root); rerr == nil && len(entries) == 0 {
 		fmt.Fprintf(stdout, "Nothing to remove: the data folder %s is empty\n", l.Root)
-		return exitOK, false
+		return exitOK
 	}
 	exts, err := findExtensionData(l)
 	if err != nil {
-		return fail(stderr, err), false
+		return fail(stderr, err)
 	}
 	if !paths.LooksLikeDataDir(l.Root) {
 		if len(exts) == 0 {
 			return fail(stderr, fmt.Errorf("%s doesn't look like Meko's data folder (it has no meko.db, which "+
-				"only a server makes), so it wasn't removed", l.Root)), false
+				"only a server makes), so it wasn't removed", l.Root))
 		}
-		return destroyOnlyExtensions(l, exts, o, in, stdout, stderr), !o.withExtensions
+		return destroyOnlyExtensions(l, exts, o, in, stdout, stderr)
 	}
 	fmt.Fprintf(stdout, "This removes Meko's data in %s (%s) for good: every datapack, memory and "+
 		"conversation, the config, the client token and the logs\n", l.Root,
@@ -94,7 +92,7 @@ func destroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.W
 	answers := newAnswerReader(in)
 	if !o.force && !confirm(answers, stdout, "Destroy it? [y/N] ") {
 		fmt.Fprintln(stderr, "Nothing was removed")
-		return exitError, false
+		return exitError
 	}
 	removeExts := o.withExtensions
 	if len(exts) > 0 && !removeExts && !o.force {
@@ -112,7 +110,7 @@ func destroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.W
 	nothing := "Nothing was removed"
 	if removeExts {
 		if err = uninstallExtensions(l, exts, true, stdout, stderr); err != nil {
-			return fail(stderr, err), false
+			return fail(stderr, err)
 		}
 		nothing = "The extensions were uninstalled and their data deleted already, but nothing of Meko's was removed"
 	}
@@ -120,14 +118,14 @@ func destroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.W
 	m := serviceOf(l)
 	if m != nil {
 		if err = m.Stop(); err != nil {
-			return fail(stderr, fmt.Errorf("%w. %s", err, nothing)), false
+			return fail(stderr, fmt.Errorf("%w. %s", err, nothing))
 		}
 	}
 	// Stopped through its service, the server has nothing to say; one run by hand says how it stopped.
 	stillUp, _ := running(l.Lock)
 	msg, err := stopServer(l)
 	if err != nil {
-		return fail(stderr, fmt.Errorf("%w. %s", err, nothing)), false
+		return fail(stderr, fmt.Errorf("%w. %s", err, nothing))
 	}
 	if stillUp {
 		fmt.Fprintln(stdout, msg)
@@ -144,14 +142,14 @@ func destroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.W
 		}
 	}
 	if err != nil {
-		return fail(stderr, err), false
+		return fail(stderr, err)
 	}
 	if cterr == nil {
 		if err = ct.Delete(); err != nil {
-			return fail(stderr, fmt.Errorf("removed %s, but not its client token: %w", l.Root, err)), false
+			return fail(stderr, fmt.Errorf("removed %s, but not its client token: %w", l.Root, err))
 		}
 		if err = ct.Store.Delete(cloudlink.SecretName); err != nil {
-			return fail(stderr, fmt.Errorf("removed %s, but not its Meko Cloud key: %w", l.Root, err)), false
+			return fail(stderr, fmt.Errorf("removed %s, but not its Meko Cloud key: %w", l.Root, err))
 		}
 	}
 	if keep {
@@ -162,7 +160,7 @@ func destroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.W
 		fmt.Fprintf(stdout, "Removed %s\n", l.Root)
 	}
 	if o.uninstall {
-		return exitOK, keep
+		return exitOK
 	}
 	if m != nil {
 		fmt.Fprintf(stdout, "The %s service is still installed, and starts Meko on an empty data folder at the "+
@@ -173,7 +171,7 @@ func destroy(l paths.Layout, o destroyOptions, in io.Reader, stdout, stderr io.W
 	}
 	fmt.Fprintln(stdout, "If you connected an agent to Meko, its token no longer works: after meko start, "+
 		"run meko agent connect <agent> again (meko agent list shows which)")
-	return exitOK, keep
+	return exitOK
 }
 
 // destroyOnlyExtensions handles a data folder that holds extension data but no meko.db (AgentK

@@ -262,6 +262,21 @@ function checkTools(args: string[]): void {
 }
 
 /**
+ * The repos folder the install was given, made when it isn't there yet (with its parents), since
+ * AgentK clones into it. It says whether it made it, or why it couldn't.
+ */
+export function reposFolder(root: string): { created: boolean; error?: string } {
+  const dir = expandHome(root);
+  if (existsSync(dir)) return { created: false };
+  try {
+    mkdirSync(dir, { recursive: true });
+    return { created: true };
+  } catch (e) {
+    return { created: false, error: (e as Error).message };
+  }
+}
+
+/**
  * A fresh install starts the AgentK tour at the server's first start (`[welcome] tour`); an upgrade
  * or a reinstall doesn't, and keeps the user's projects as they are.
  */
@@ -380,8 +395,9 @@ export async function runInstall(args: string[]): Promise<void> {
       ui,
     });
     ui.ok('Agents', agents.map((id) => `${HARNESS_CAPS[id].label} ${versions[id]}`).join(', ') + ` (new sessions start on ${HARNESS_CAPS[cfg.agents.default].label})`);
-    if (existsSync(expandHome(reposRoot))) ui.ok('Repos folder', reposRoot);
-    else ui.warn('Repos folder', `${reposRoot} doesn't exist yet`);
+    const repos = reposFolder(reposRoot);
+    if (repos.error) ui.warn('Repos folder', `${reposRoot} doesn't exist, and couldn't be created: ${repos.error}`);
+    else ui.ok('Repos folder', repos.created ? `${reposRoot} (created)` : reposRoot);
 
     // 6. Keep SQLite off network filesystems
     let db = dbPath(paths, cfg);

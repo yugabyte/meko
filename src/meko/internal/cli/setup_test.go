@@ -182,31 +182,37 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	if got := readFile(t, bashrc); got != "alias ll='ls -l'\n" {
 		t.Errorf(".bashrc after uninstall: %q", got)
 	}
-	want(t, "uninstall", code, 0, out, "Extension agentk is still installed")
+	// It removes the extensions first, asking nothing, as meko extension delete does: their own
+	// uninstall keeps their data, as Meko's stays.
+	want(t, "uninstall's extensions", code, 0, out, "Removed AgentK\n")
+	if got := readLog(t, log); !strings.HasSuffix(got, "uninstall --non-interactive\n") {
+		t.Errorf("extension ran %q", got)
+	}
+	if reg, _ = extensions.Load(dir); len(reg.Entries) != 0 {
+		t.Errorf("uninstall left extensions registered: %v", reg.Entries)
+	}
 	want(t, "uninstall", code, 0, out, "Your data is still in "+dir+"; meko destroy")
 	if _, err := os.Stat(paths.New(dir).DB); err != nil {
 		t.Errorf("uninstall deleted the data: %v", err)
+	}
+	reg.Entries["agentk"] = extensions.Entry{Command: ext, InstalledByMeko: true}
+	if err := reg.Save(); err != nil {
+		t.Fatal(err)
 	}
 	stdin = strings.NewReader("n\n")
 	t.Cleanup(func() { stdin = os.Stdin })
 	code, _, errs = run("uninstall", "--data-dir", dir, "--purge")
 	want(t, "uninstall --purge, declined", code, 1, errs, "Nothing was removed")
-	// --force keeps the extensions' data (the registry here) and says the extension is still installed.
-	code, out, _ = run("uninstall", "--data-dir", dir, "--purge", "--force")
-	want(t, "uninstall --purge --force", code, 0, out, "kept the extensions' data in it")
-	want(t, "uninstall --purge --force", code, 0, out, "Extension agentk is still installed")
-	if _, err := os.Stat(paths.New(dir).DB); !os.IsNotExist(err) {
-		t.Errorf("meko.db is still there: %v", err)
-	}
 	// A service for this data folder goes too, though the purge removed the folder before it's looked at.
+	// --force asks nothing, and the extensions and their data go with Meko's, with no question of their own.
 	if err := os.WriteFile(f.file, []byte(dir), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	code, out, _ = run("uninstall", "--data-dir", dir, "--purge", "--force", "--with-extensions")
-	want(t, "uninstall --purge --force --with-extensions", code, 0, out, "Removed "+dir)
-	want(t, "uninstall --purge --force --with-extensions", code, 0, out, "Removed the fake service")
-	if strings.Contains(out, "still installed") {
-		t.Errorf("uninstall said a removed extension is still installed:\n%s", out)
+	code, out, _ = run("uninstall", "--data-dir", dir, "--purge", "--force")
+	want(t, "uninstall --purge --force", code, 0, out, "Removed "+dir)
+	want(t, "uninstall --purge --force", code, 0, out, "Removed the fake service")
+	if strings.Contains(out, "still installed") || strings.Contains(out, "kept the extensions") {
+		t.Errorf("uninstall --purge kept the extensions:\n%s", out)
 	}
 	if got := readLog(t, log); !strings.HasSuffix(got, "uninstall --purge --delete-worktrees --non-interactive\n") {
 		t.Errorf("extension ran %q", got)
@@ -324,7 +330,7 @@ func TestInstallExtensionSetsUpAnInstalledAgentK(t *testing.T) {
 	ak := filepath.Join(home, ".local", "bin", "agent-k-local")
 	log := fakeExtension(t, ak)
 	code, out, errs = run("extension", "install", "agentk", "--data-dir", dir)
-	want(t, "extension install", code, 0, out+errs, "setting it up to use this Meko")
+	want(t, "extension install", code, 0, out+errs, "  ✓ AgentK is installed\n")
 	if strings.Contains(out, "start and stop it") {
 		t.Errorf("extension install says how meko start and stop run it:\n%s", out)
 	}

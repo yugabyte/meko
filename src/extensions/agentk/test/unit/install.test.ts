@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, sta
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { makePrompter, opensBrowser, purgeHome, removeDb, serviceFailure, sessionWorktrees, welcomeTour } from '../../src/server/install.js';
+import { makePrompter, opensBrowser, reposFolder, purgeHome, removeDb, serviceFailure, sessionWorktrees, welcomeTour } from '../../src/server/install.js';
 import { DEFAULT_CONFIG } from '../../src/server/config.js';
 import { ensurePrivateDir, parseDfMountPoint, parseMountType } from '../../src/server/fstype.js';
 import { pad } from '../../src/server/tty.js';
@@ -235,5 +235,24 @@ describe('makePrompter', () => {
     const never = () => { throw new Error('opened a readline'); };
     expect(await makePrompter(true, false, never).ask('Repos folder', '~/code')).toBe('~/code');
     expect(await makePrompter(false, true, never).ask('Repos folder', '~/code')).toBe('~/code');
+  });
+});
+
+// The install makes the repos folder it was given when it isn't there, since AgentK clones into it.
+describe('reposFolder', () => {
+  it('makes a missing folder with its parents, and leaves one that exists', () => {
+    const base = mkdtempSync(join(tmpdir(), 'akl-repos-'));
+    try {
+      const dir = join(base, 'a', 'code');
+      expect(reposFolder(dir)).toEqual({ created: true });
+      expect(statSync(dir).isDirectory()).toBe(true);
+      expect(reposFolder(dir)).toEqual({ created: false });
+      writeFileSync(join(base, 'file'), '');
+      const r = reposFolder(join(base, 'file', 'code'));
+      expect(r.created).toBe(false);
+      expect(r.error).toMatch(/ENOTDIR|EEXIST/);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });

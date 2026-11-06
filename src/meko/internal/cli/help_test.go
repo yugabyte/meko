@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/yugabyte/meko/src/meko/internal/paths"
+	"github.com/yugabyte/meko/src/meko/internal/spin"
 	"github.com/yugabyte/meko/src/meko/internal/update"
 )
 
@@ -235,15 +236,16 @@ func TestReport(t *testing.T) {
 	// with the commands below it.
 	b.Reset()
 	r.color = true
+	t.Setenv(spin.BackgroundEnv, "dark") // never ask the developer's terminal
 	r.running("Meko 1.0 is running", "")
 	r.links([]linkRow{{"Agents", "http://127.0.0.1:7778/mcp", ""}})
 	r.next([][2]string{{"meko ui", "open the web UI"}, {"meko status", "check on Meko · meko uninstall removes it"}})
 	if want := "\n  \033[32m●\033[0m \033[1mMeko 1.0 is running\033[0m\n" +
-		"\n  \033[2mAgents\033[0m  \033]8;;http://127.0.0.1:7778/mcp\033\\" +
-		"\033[4;34mhttp://127.0.0.1:7778/mcp\033[0m\033]8;;\033\\\n" +
+		"\n  \033[2mAgents\033[0m  " + spin.Link("http://127.0.0.1:7778/mcp", true) + "\n" +
 		"\nNext:\n" +
 		" \033[1;97;44m meko ui \033[0m       open the web UI\n" +
-		"  \033[34mmeko status\033[0m    check on Meko\033[2m · meko uninstall removes it\033[0m\n"; b.String() != want {
+		"  " + spin.Blue("meko status", true) + "    check on Meko" +
+		"\033[2m · meko uninstall removes it\033[0m\n"; b.String() != want {
 		t.Errorf("printed in color %q\nwant %q", b.String(), want)
 	}
 	if strings.Contains(b.String(), "│") {

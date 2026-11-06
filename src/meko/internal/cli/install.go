@@ -267,37 +267,29 @@ func onPath(dir string) bool {
 	return false
 }
 
-// runUninstall removes the service, the meko command, the release installs, and the line meko
-// install added to a shell's profile to put the command on the PATH. The data stays
-// unless purge, which first destroys it as meko destroy does (asking, unless o.force; the
-// extensions go too unless o.force keeps them), with the client token wherever it's kept, and then
-// disconnects the agents that sent that token (disconnectAgents). Extensions stay installed unless
-// that destroy removed them. It ends saying how to install Meko again.
+// runUninstall removes the extensions, then the service, the meko command, the release installs,
+// and the line meko install added to a shell's profile to put the command on the PATH. It asks
+// nothing about the extensions: with Meko gone nothing would run them. Without purge each one is
+// removed as meko extension delete does (its services, releases and command), and its data stays
+// with Meko's; the first that fails stops it, before anything of Meko's is removed. With purge it
+// first destroys the data folder as meko destroy does, the extensions' data with it (asking once,
+// unless o.force), and then disconnects the agents that sent its token (disconnectAgents). It ends
+// saying how to install Meko again.
 func runUninstall(l paths.Layout, purge bool, o destroyOptions, stdout, stderr io.Writer) int {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fail(stderr, err)
 	}
-	// Read before a purge removes the data folder, which holds the extension list.
-	var exts []string
-	if reg, rerr := extensions.Load(l.Root); rerr == nil {
-		for _, n := range reg.Names() {
-			exts = append(exts, fmt.Sprintf("Extension %s is still installed: %s uninstall removes it", n,
-				reg.Entries[n].Command))
-		}
-	}
 	if purge {
 		// Found while the data folder still says what this Meko's token is.
 		disconnect := connectedAgents(l)
 		o.uninstall = true
-		code, kept := destroy(l, o, stdin, stdout, stderr)
-		if code != exitOK {
+		if code := destroy(l, o, stdin, stdout, stderr); code != exitOK {
 			return code
 		}
-		if !kept {
-			exts = nil
-		}
 		disconnect(stdout, stderr)
+	} else if code := removeExtensions(l, stdout, stderr); code != exitOK {
+		return code
 	}
 	if m, merr := newManager(); merr == nil && m.Installed() && (m.DataDir() == "" || paths.SameDir(m.DataDir(), l.Root)) {
 		if err = m.Remove(); err != nil {
@@ -338,13 +330,42 @@ func runUninstall(l paths.Layout, purge bool, o destroyOptions, stdout, stderr i
 	if err != nil {
 		fmt.Fprintf(stderr, "meko: can't remove the PATH line meko install added: %v\n", err)
 	}
-	for _, line := range exts {
-		fmt.Fprintln(stdout, line)
-	}
 	if !purge {
 		fmt.Fprintf(stdout, "Your data is still in %s; meko destroy (or meko uninstall --purge) removes it\n", l.Root)
 	}
 	fmt.Fprintln(stdout, "Meko removed. You can install it again using\n  `"+installCommand+"`")
+	return exitOK
+}
+
+// removeExtensions removes every installed extension for uninstall, keeping its data: each one
+// registered, or with a release Meko installed. It holds the update lock meanwhile.
+func removeExtensions(l paths.Layout, stdout, stderr io.Writer) int {
+	exts, err := findExtensionData(l)
+	if err != nil {
+		return fail(stderr, err)
+	}
+	lock := update.NewLock(l.Root)
+	if len(exts) > 0 {
+		if !lock.TryLock() {
+			return fail(stderr, update.ErrLocked)
+		}
+		defer lock.Unlock()
+	}
+	for _, e := range exts {
+		cat := extensions.Known[e.name]
+		if _, serr := os.Stat(cat.App(l.Root, e.name).Root); !e.registered && (!cat.Managed || serr != nil) {
+			continue // only its data is left, which stays
+		}
+		if err := removeExtension(l, e, false, stdout, stderr); err != nil {
+			return fail(stderr, fmt.Errorf("couldn't remove %s: %w. Meko is still installed: run meko uninstall "+
+				"again once that's fixed", extensionTitle(e.name), err))
+		}
+		if e.dir != "" {
+			fmt.Fprintf(stdout, "Removed %s; its data stays in %s\n", extensionTitle(e.name), e.dir)
+		} else {
+			fmt.Fprintf(stdout, "Removed %s\n", extensionTitle(e.name))
+		}
+	}
 	return exitOK
 }
 
@@ -482,7 +503,7 @@ func installExtension(ctx context.Context, l paths.Layout, name string, o extIns
 		return fmt.Errorf("the installed %s predates --meko-url, which pointing it at this Meko "+
 			"needs: update it (the Update button in AgentK), then run this again", cat.Title)
 	}
-	fmt.Fprintf(stdout, "%s is installed (%s): setting it up to use this Meko\n", cat.Title, cmd)
+	fmt.Fprintf(stdout, "  %s %s is installed\n", spin.Mark(spin.OK, spin.Color(stdout)), cat.Title)
 	env := extensions.CommandEnv(l.Root, cmd)
 	if err = runAttached(ctx, cmd, append([]string{"install"}, args...), env, stdin, stdout, stderr); err != nil {
 		return fmt.Errorf("%s install failed: %w", cat.Command, err)
@@ -539,7 +560,8 @@ func installRelease(ctx context.Context, l paths.Layout, upd config.Update, name
 	}
 	app := cat.App(l.Root, name)
 	goos, arch := update.Platform()
-	rel, ver, ok := update.Release{}, version, false
+	var rel update.Release
+	ver, ok := version, false
 	if version == "" {
 		rel, ver, ok = update.PickPackage(rels, cat.TagPrefixes, name, goos, arch, app.BadVersions())
 	} else {
@@ -553,7 +575,7 @@ func installRelease(ctx context.Context, l paths.Layout, upd config.Update, name
 		}
 		return "", fmt.Errorf("%s for %s-%s was found in %s", what, goos, arch, c.Repo)
 	}
-	installing := spin.Start(stdout, "Release", fmt.Sprintf("installing %s %s (%s)", cat.Title, ver, rel.Tag))
+	installing := spin.Start(stdout, "Release", fmt.Sprintf("installing %s %s", cat.Title, ver))
 	// Owner-only, like the rest of the data folder; the extension's own folder may not be there yet.
 	if err := os.MkdirAll(filepath.Dir(app.Root), 0o700); err != nil {
 		installing.Fail()
@@ -563,7 +585,7 @@ func installRelease(ctx context.Context, l paths.Layout, upd config.Update, name
 		installing.Fail()
 		return "", err
 	}
-	installing.Done(fmt.Sprintf("%s %s (%s), downloaded and checked", cat.Title, ver, rel.Tag))
+	installing.Done(fmt.Sprintf("%s %s, downloaded and checked", cat.Title, ver))
 	notices.print(stdout)
 	if err := app.Repoint(ver); err != nil {
 		return "", err

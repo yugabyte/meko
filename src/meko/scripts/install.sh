@@ -35,12 +35,64 @@ no_service=false
 non_interactive=false
 started=$(date +%s)
 
+# The terminal's background, dark or light, as meko's rows find it (internal/spin/background.go):
+# MEKO_TERM_BG, else COLORFGBG's last field, else the terminal's answer when asked for its
+# background color (OSC 11, then DA1, which every terminal answers, so the read ends), else dark.
+term_bg() {
+  case ${MEKO_TERM_BG:-} in dark|light) echo "$MEKO_TERM_BG"; return ;; esac
+  case ${COLORFGBG:-} in
+    *\;*)
+      case ${COLORFGBG##*;} in
+        7|9|1[0-5]) echo light; return ;;
+        [0-9]|[0-9][0-9]) echo dark; return ;;
+      esac ;;
+  esac
+  query_bg || echo dark
+}
+query_bg() {
+  old=$(stty -g </dev/tty 2>/dev/null) || return 1
+  stty -icanon -echo min 0 time 1 </dev/tty 2>/dev/null || return 1
+  printf '\033]11;?\033\\\033[c' >/dev/tty
+  reply="" empty=0
+  while [ $empty -lt 3 ]; do
+    part=$(dd bs=64 count=1 </dev/tty 2>/dev/null)
+    if [ -z "$part" ]; then empty=$((empty + 1)); continue; fi
+    reply=$reply$part
+    case $reply in *"[?"*c) break ;; esac
+  done
+  stty "$old" </dev/tty 2>/dev/null
+  case $reply in *rgb*:*/*/*) ;; *) return 1 ;; esac
+  rgb=${reply#*rgb}; rgb=${rgb#a}; rgb=${rgb#:}
+  red=${rgb%%/*}; rest=${rgb#*/}; green=${rest%%/*}; blue=${rest#*/}; blue=${blue%%[!0-9a-fA-F]*}
+  lum=0
+  for w in "299 $red" "587 $green" "114 $blue"; do
+    h=${w#* }; h=$(printf '%.2s' "$h$h")
+    case $h in [0-9a-fA-F][0-9a-fA-F]) ;; *) return 1 ;; esac
+    lum=$((lum + ${w%% *} * 0x$h))
+  done
+  if [ $((lum / 1000)) -lt 128 ]; then echo dark; else echo light; fi
+}
+
 # The palette meko's rows use (internal/spin): base ANSI colors, which light and dark terminal
-# themes each tune for their own background, and bold rather than white for emphasis.
+# themes each tune for their own background, and bold rather than white for emphasis. The blue of
+# marks, links and dots is picked for the background: #79aeff on dark, #1f5fd1 on light, or without
+# 24-bit color (COLORTERM, which SSH usually drops) the nearest of the 256 colors, which nearly every
+# terminal has; only the consoles and old terminals with 16 colors get the theme's own blue.
 if [ -t 2 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != dumb ]; then
   tty=true
   b=$(printf '\033[1m'); d=$(printf '\033[2m'); g=$(printf '\033[32m'); r=$(printf '\033[31m')
-  bl=$(printf '\033[34m'); n=$(printf '\033[0m')
+  n=$(printf '\033[0m')
+  MEKO_TERM_BG=$(term_bg)
+  export MEKO_TERM_BG
+  case ${COLORTERM:-} in
+    truecolor|24bit) depth=24 ;;
+    *) case ${TERM:-} in linux*|vt*|ansi*|cons25*|sun*) depth=16 ;; *) depth=256 ;; esac ;;
+  esac
+  case $MEKO_TERM_BG:$depth in
+    dark:24) blue_code='38;2;121;174;255' ;; dark:256) blue_code='38;5;111' ;; dark:16) blue_code=94 ;;
+    light:24) blue_code='38;2;31;95;209' ;; light:256) blue_code='38;5;26' ;; *) blue_code=34 ;;
+  esac
+  bl=$(printf '\033[%sm' "$blue_code")
 else
   tty=false
   b=''; d=''; g=''; r=''; bl=''; n=''

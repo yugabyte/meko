@@ -10,13 +10,33 @@ function paint(code: string, s: string, stream: NodeJS.WriteStream = process.std
   return useColor(stream) ? `\x1b[${code}m${s}\x1b[0m` : s;
 }
 
+/**
+ * The blue of the dots and links, picked for the terminal's background as Meko's rows pick it
+ * (src/meko/internal/spin/background.go): #79aeff on dark, #1f5fd1 on light, or the nearest of the
+ * 256 colors without 24-bit color (the theme's own blue on a terminal with only 16). The background is MEKO_TERM_BG, which Meko's installer and
+ * `meko extension install` pass on, else COLORFGBG's last field, else dark: AgentK doesn't ask the
+ * terminal itself.
+ */
+export function blueCode(env: NodeJS.ProcessEnv = process.env): string {
+  let bg = env.MEKO_TERM_BG === 'light' || env.MEKO_TERM_BG === 'dark' ? env.MEKO_TERM_BG : '';
+  if (!bg) {
+    const n = Number((env.COLORFGBG ?? '').split(';').pop());
+    bg = env.COLORFGBG?.includes(';') && Number.isInteger(n) && (n === 7 || (n >= 9 && n <= 15)) ? 'light' : 'dark';
+  }
+  // Without COLORTERM (which SSH usually drops) the 256-color blue, which nearly every terminal has;
+  // only the consoles and old terminals with 16 colors get the theme's own blue.
+  const sixteen = /^(linux|vt|ansi|cons25|sun)/.test(env.TERM ?? '');
+  const depth = env.COLORTERM === 'truecolor' || env.COLORTERM === '24bit' ? 0 : sixteen ? 2 : 1;
+  return (bg === 'dark' ? ['38;2;121;174;255', '38;5;111', '94'] : ['38;2;31;95;209', '38;5;26', '34'])[depth];
+}
+
 export const style = {
   bold: (s: string) => paint('1', s),
   dim: (s: string) => paint('2', s),
   green: (s: string) => paint('32', s),
   yellow: (s: string) => paint('33', s),
   red: (s: string) => paint('31', s),
-  blue: (s: string) => paint('34', s),
+  blue: (s: string) => paint(blueCode(), s),
 };
 
 const MARK = {
@@ -25,7 +45,7 @@ const MARK = {
   fail: () => style.red(utf8 ? '✗' : 'xx'),
 };
 
-/** The dots a running step shows, and how fast they turn: gh's spinner, blue, as Meko's steps show it. */
+/** The dots a running step shows, and how fast they turn: gh's spinner, in Meko's blue (`blueCode`). */
 const SPIN_FRAMES = utf8 ? ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'] : ['|', '/', '-', '\\'];
 const SPIN_INTERVAL_MS = 120;
 
@@ -35,14 +55,15 @@ export const pad = (label: string, width = LABEL_WIDTH) => (label.length >= widt
 
 /**
  * A running step's row, "  ⣾ Label         doing", cut to one character short of `columns` (when
- * known) with "…", so it never reaches the last column and wraps. With `color` the dots are blue,
- * as Meko's are (its palette: src/meko/docs/install.md, "Colors"); the cut counts only what shows.
+ * known) with "…", so it never reaches the last column and wraps. With `color` the dots are blue
+ * (`blueCode`), as Meko's are (its palette: src/meko/docs/install.md, "Colors"); the cut counts only
+ * what shows.
  */
 export function spinRow(frame: string, label: string, doing: string, columns?: number, color = false): string {
   const chars = [...`  ${frame} ${pad(label)}${doing}`];
   const row = !columns || chars.length < columns ? chars.join('') : `${chars.slice(0, Math.max(1, columns - 2)).join('')}…`;
   const at = `  ${frame}`;
-  return color && row.startsWith(at) ? `  \x1b[34m${frame}\x1b[0m${row.slice(at.length)}` : row;
+  return color && row.startsWith(at) ? `  \x1b[${blueCode()}m${frame}\x1b[0m${row.slice(at.length)}` : row;
 }
 
 const out = (s = '') => process.stdout.write(s + '\n');

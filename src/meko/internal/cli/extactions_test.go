@@ -171,7 +171,7 @@ func TestRunExtensionInstallsWithoutATerminal(t *testing.T) {
 	}
 	got := b.String()
 	if tok == "" || strings.Contains(got, tok) || !strings.Contains(got, "--meko-key [hidden] --non-interactive") ||
-		!strings.Contains(got, "AgentK is installed (") || strings.Contains(got, "start and stop it") {
+		!strings.Contains(got, "✓ AgentK is installed\n") || strings.Contains(got, "start and stop it") {
 		t.Errorf("output %q", got)
 	}
 	if reg, _ := extensions.Load(dir); reg.Entries["agentk"].Command != ak {
