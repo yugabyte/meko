@@ -462,6 +462,11 @@ func (s *Syncer) call(ctx context.Context, method, path string, body, out any) e
 	case rep.Status == http.StatusNotFound && (jerr != nil || env.Error == nil || env.Error.Code != "NOT_FOUND" ||
 		path == pathPrecheck):
 		return ErrUnsupported
+	// A Meko Cloud from before the import routes sends the precheck to its /datapacks/:datapack_id
+	// routes, whose check refuses the id "import" with this 400.
+	case path == pathPrecheck && rep.Status == http.StatusBadRequest && jerr == nil && env.Error != nil &&
+		env.Error.Code == "VALIDATION_ERROR" && env.Error.Message == "invalid datapack_id format":
+		return ErrUnsupported
 	case jerr == nil && env.Error != nil:
 		return &CloudError{Status: rep.Status, Code: env.Error.Code, Message: env.Error.Message}
 	case rep.Status/100 != 2 || jerr != nil:
