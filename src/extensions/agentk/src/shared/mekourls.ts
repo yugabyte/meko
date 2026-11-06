@@ -15,15 +15,8 @@ export const DEFAULT_MEKO_WEB_URL = 'https://cloud.mekodata.ai';
  */
 export const AGENTK_PATH = '/ext/agentk/';
 
-/**
- * Meko's own pages, on the same web listener as AgentK (absolute paths on Meko's origin): its main
- * page, the Meko Cloud link it keeps for its extensions, and, on a Meko from before it dropped its
- * login, the account (password, two-step sign-in) that signed people in to both. The projects
- * pane's Meko "m" links to the main page, and AgentK's Settings › General to the other two.
- */
+/** Meko's main page, on the same web listener as AgentK: the projects pane's Meko "m" links to it. */
 export const MEKO_HOME_PATH = '/';
-export const MEKO_CLOUD_PATH = '/settings/meko-cloud';
-export const MEKO_ACCOUNT_PATH = '/account';
 
 /**
  * A datapack's page in the web UI of the Meko on this computer (its overview tab), on the same

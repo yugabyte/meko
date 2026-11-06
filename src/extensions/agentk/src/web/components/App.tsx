@@ -12,7 +12,6 @@ import { autoConnectToMeko } from '../mekoagents';
 import { navigate, useRoute } from '../router';
 import { notifyLeader } from '../notifyLeader';
 import { railHiddenSaved, railWidthSaved, saveRailHidden, saveRailWidth, sessionTabsShown, useRailSessions } from '../rail';
-import type { MekoAuth } from '../signin';
 import { harnessLogosToggle } from '../toggle';
 import { pruneTerminals } from '../terminals';
 import { useTheme } from '../theme';
@@ -138,8 +137,7 @@ if (typeof window !== 'undefined') {
   if (document.hasFocus()) notifier.claim();
 }
 
-/** `mekoAuth`: what Meko, which decides who reaches AgentK, says about this browser (null without Meko). */
-export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
+export function App() {
   const route = useRoute();
   const [theme, cycleTheme] = useTheme();
   const [modal, setModal] = useState<Modal>({ kind: 'none' });
@@ -798,7 +796,7 @@ export function App({ mekoAuth }: { mekoAuth: MekoAuth | null }) {
       )}
       {renameSession && <RenameSessionDialog key={renameSession.id} session={renameSession} onClose={() => setModal({ kind: 'none' })} />}
       {modal.kind === 'settings' && (
-        <SettingsDialog mekoAuth={mekoAuth} update={state.update} meko={state.meko} harnesses={state.harnesses ?? []} twoAgents={twoAgents} serverName={state.serverName} initialTab={modal.tab} initialAgent={modal.agent} onClose={() => setModal({ kind: 'none' })} onWhatsNew={(from, to) => setModal({ kind: 'whats-new', from, to, opener: 'settings' })} />
+        <SettingsDialog update={state.update} meko={state.meko} harnesses={state.harnesses ?? []} twoAgents={twoAgents} serverName={state.serverName} initialTab={modal.tab} initialAgent={modal.agent} onClose={() => setModal({ kind: 'none' })} onWhatsNew={(from, to) => setModal({ kind: 'whats-new', from, to, opener: 'settings' })} />
       )}
       {modal.kind === 'whats-new' && (
         <WhatsNewDialog

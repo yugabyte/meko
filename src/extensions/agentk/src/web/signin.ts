@@ -3,7 +3,7 @@
  * signs people in, with remote access; a newer one has no login, and always says signed in. These
  * call Meko's own routes, root-absolute rather than under BASE. Under `npm run dev` there's no Meko,
  * so they fail: then a refused request is shown as an error and retried as before. Signing out, on
- * a Meko with a login, is on its account page (Settings › General links to it), not in AgentK.
+ * a Meko with a login, is on its account page, not in AgentK.
  */
 
 /** What Meko says about this browser (`GET /api/v1/auth/status`). */

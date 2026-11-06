@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import '@xterm/xterm/css/xterm.css';
 import './styles.css';
 import { BASE } from './base';
-import { Root } from './components/Root';
+import { App } from './components/App';
 import { markOverlayScrollbars, trackAppHeight } from './hooks/useMedia';
 import { watchInstall } from './installapp';
 import { watchTermTheme } from './termtheme';
@@ -21,6 +21,6 @@ if ('serviceWorker' in navigator && window.isSecureContext) {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <Root />
+    <App />
   </StrictMode>,
 );

@@ -202,7 +202,7 @@ Everything AgentK does, by area. The [README](../README.md) has the short versio
   team is. A project datapack shared with you shows a banner and a notification, and opens as a new
   project with the repo and name filled in; a share link pasted into Ask AgentK joins it and opens
   it the same way. The Meko server and key are Meko's, linked in its web UI (Settings › Meko Cloud),
-  for your own Meko server too; AgentK's Settings › General links there (and, behind an older Meko that still has a login, to its account page).
+  for your own Meko server too.
   When Claude Code isn't connected to Meko, is set up for another Meko server, or holds a token
   that can't see the projects' datapacks there, a banner says so and offers to set Claude Code up
   with AgentK's Meko (Settings › Harness shows each agent's Meko);
