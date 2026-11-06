@@ -1504,20 +1504,12 @@ textarea.input {
     min-height: 36px;
   }
 }
+/* The steps and the lines between them are flex items of .stages themselves, so the room is
+   shared out in one pass: the steps' names take it first, the shortest whole first (a step grows
+   1000 times faster than a line, up to its full name), and what's left goes to the lines in equal
+   parts. So every line is the same length, and a narrow window shortens the longest names. */
 .stg-item {
-  display: flex;
-  align-items: center;
-  flex: 1;
-  min-width: 0;
-}
-/* Explore takes no share of the room (no separator before it): it keeps its name until the other
-   steps' names can't shorten any further, then shortens too. */
-.stg-item:first-child {
-  flex: 0 1 auto;
-}
-/* The current step keeps its whole name: its item is as wide as its content. */
-.stg-item.cur {
-  flex: none;
+  display: contents;
 }
 .stg {
   display: flex;
@@ -1526,9 +1518,10 @@ textarea.input {
   color: var(--muted);
   padding: 0 4px;
   white-space: nowrap;
-  /* A narrow window shortens the steps' names rather than letting them overlap: Explore's last
-     (.stg-item:first-child), and never the current step's (.stg-item.cur). */
-  min-width: 0;
+  flex: 1000 1 0;
+  max-width: max-content;
+  /* Room for the number's circle, the least a step shortens to. */
+  min-width: 26px;
 }
 .stg-label {
   min-width: 0;
@@ -1554,6 +1547,8 @@ textarea.input {
 .stg.cur {
   color: var(--ink);
   font-weight: 600;
+  /* The current step keeps its whole name. */
+  flex: none;
 }
 .stg.cur .n {
   border-color: var(--accent);
@@ -5980,11 +5975,16 @@ div[id^='dak-mermaid-'] .label {
     flex-wrap: wrap;
     row-gap: 6px;
   }
+  /* Each step stays one box with the line before it, so .stages wraps only between steps. */
   .stg-item {
+    display: flex;
+    align-items: center;
     flex: none;
   }
   .stg {
+    flex: none;
     padding: 0 1px;
+    min-width: 0;
   }
   .stg-label {
     display: none;

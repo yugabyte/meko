@@ -1099,7 +1099,7 @@ function StageBar({
               </>
             );
             return (
-              <span key={st} className={cx('stg-item', i === idx && 'cur')}>
+              <span key={st} className="stg-item">
                 {i > 0 && <span className={cx('stg-sep', i <= idx && 'done')} />}
                 {i !== idx && targets.includes(st) ? (
                   <button
