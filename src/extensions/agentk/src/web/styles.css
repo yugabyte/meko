@@ -298,12 +298,15 @@ code,
   color: var(--muted);
   box-shadow: none;
 }
-/* A toggle that's on: down and lit, like a checked box. Some toggles set only aria-pressed. */
+/* A toggle that's on: lit, and down like a checked box (a ghost one stays flat). Some toggles set
+   only aria-pressed. */
 .btn:is(.on, [aria-pressed='true']) {
   background: var(--accent-soft);
   border-color: var(--accent);
   color: var(--accent);
   --key-edge: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.btn:is(.on, [aria-pressed='true']):not(.ghost) {
   transform: translateY(1.5px);
   box-shadow: 0 0.5px 0 var(--key-edge);
 }
@@ -315,7 +318,7 @@ code,
 }
 /* While down, the key still covers the spot it left (2 px above it), so a press near its top edge
    doesn't slide it out from under the pointer: no hover flicker, and the release lands on it. */
-.btn:is(.on, [aria-pressed='true'])::before,
+.btn:is(.on, [aria-pressed='true']):not(.ghost)::before,
 :is(.btn, .gate):active:not(:disabled, .ghost, .on, [aria-pressed='true'])::before {
   content: '';
   position: absolute;
@@ -464,7 +467,7 @@ textarea.input {
   }
   :where(input[type='checkbox']:not(.prose *)):active:not(:disabled, :checked),
   :where(input[type='checkbox']:not(.prose *)):checked,
-  .btn:is(.on, [aria-pressed='true']),
+  .btn:is(.on, [aria-pressed='true']):not(.ghost),
   :is(.btn, .gate):active:not(:disabled, .ghost, .on, [aria-pressed='true']) {
     transform: none;
   }
@@ -6027,6 +6030,8 @@ div[id^='dak-mermaid-'] .label {
   .stages {
     flex: 1 1 auto;
     padding: 6px 10px;
+    /* No scroll box here, so no room for the gate's edge to undo (see .stages above). */
+    margin-bottom: 0;
     overflow: visible;
     flex-wrap: wrap;
     row-gap: 6px;

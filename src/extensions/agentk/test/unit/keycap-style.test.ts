@@ -14,7 +14,7 @@ const KEYS = [
   {
     name: 'buttons',
     is: (sel: string) => /\.(btn|gate)(?![\w-])/.test(sel),
-    on: (sel: string) => sel === ".btn:is(.on, [aria-pressed='true'])",
+    on: (sel: string) => sel === ".btn:is(.on, [aria-pressed='true']):not(.ghost)",
   },
 ];
 type Key = (typeof KEYS)[number];

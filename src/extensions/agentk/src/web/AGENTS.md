@@ -116,7 +116,7 @@ lost). Each key's state reads by shape as well as color.
   buttons aren't restyled.
 - **Buttons:** `.btn` (every variant but `.ghost`, which stays flat) and the stage bar's `.gate`.
   Each variant sets only `--key-edge`, the edge's color; a toggle that's on (`.btn.on`, or
-  `aria-pressed="true"`) stays down. `.btn` and `.gate` are `position: relative` for the hit area,
+  `aria-pressed="true"`) stays down, unless it's a ghost, which takes the on colors but stays flat. `.btn` and `.gate` are `position: relative` for the hit area,
   so a context rule mustn't set their `box-shadow`, `transform` or `position`. Icon buttons, link
   buttons, `.seg` segments, tabs and the rail's rows stay flat. The edge is outside the button's
   box, so a box that clips (a scroll box) needs 2 px of room under a button at its bottom, as
