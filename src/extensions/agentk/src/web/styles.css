@@ -247,7 +247,10 @@ code,
 }
 
 /* ---------- Buttons & inputs ---------- */
+/* .btn and the stage bar's .gate are keys, like the checkboxes (see the keys block below): each
+   stands on a --key-edge, sinks in one move when pressed, and a toggle that's on stays down. */
 .btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -259,6 +262,8 @@ code,
   white-space: nowrap;
   text-decoration: none;
   color: var(--ink);
+  --key-edge: color-mix(in srgb, var(--muted) 55%, transparent);
+  box-shadow: 0 2px 0 var(--key-edge);
 }
 .btn:hover:not(:disabled) {
   border-color: var(--muted);
@@ -277,22 +282,47 @@ code,
   border-color: var(--accent);
   color: var(--accent-ink);
   font-weight: 600;
+  --key-edge: color-mix(in srgb, var(--accent) 55%, black);
 }
 .btn.danger {
   background: var(--bad);
   border-color: var(--bad);
   color: var(--bad-ink);
   font-weight: 600;
+  --key-edge: color-mix(in srgb, var(--bad) 55%, black);
 }
+/* A ghost button (Cancel beside a primary one) stays flat: no edge, no press. */
 .btn.ghost {
   background: transparent;
   border-color: transparent;
   color: var(--muted);
+  box-shadow: none;
 }
-.btn.on {
+/* A toggle that's on: lit, and down like a checked box (a ghost one stays flat). Some toggles set
+   only aria-pressed. */
+.btn:is(.on, [aria-pressed='true']) {
   background: var(--accent-soft);
   border-color: var(--accent);
   color: var(--accent);
+  --key-edge: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.btn:is(.on, [aria-pressed='true']):not(.ghost) {
+  transform: translateY(1.5px);
+  box-shadow: 0 0.5px 0 var(--key-edge);
+}
+/* Pressed: straight down to the depth of a toggle that's on, so a press that turns one on is one
+   move. A toggle already down doesn't move until it's released. */
+:is(.btn, .gate):active:not(:disabled, .ghost, .on, [aria-pressed='true']) {
+  transform: translateY(1.5px);
+  box-shadow: 0 0.5px 0 var(--key-edge);
+}
+/* While down, the key still covers the spot it left (2 px above it), so a press near its top edge
+   doesn't slide it out from under the pointer: no hover flicker, and the release lands on it. */
+.btn:is(.on, [aria-pressed='true']):not(.ghost)::before,
+:is(.btn, .gate):active:not(:disabled, .ghost, .on, [aria-pressed='true'])::before {
+  content: '';
+  position: absolute;
+  inset: -3px -1px -1px;
 }
 .btn.block {
   width: 100%;
@@ -367,7 +397,10 @@ textarea.input {
    The base rule's :where() gives it no specificity, so a context's own rule (.check input) places
    the key. The state rules weigh only their pseudo-classes (up to two), more than .check input:
    they set only the key's own look (border, fill, edge, transform), which no context rule sets.
-   Hover and press apply to an unchecked key only, so neither undoes the checked look. */
+   Hover and press apply to an unchecked key only, so neither undoes the checked look. A press goes
+   straight to the checked depth, so checking a box is one move, and while the key is down a
+   ::before covers the spot it left, as on the buttons (.btn). The transition and forced-colors
+   blocks below hold the buttons' rules too. */
 :where(input[type='checkbox']:not(.prose *)) {
   appearance: none;
   position: relative;
@@ -394,8 +427,14 @@ textarea.input {
   border-color: var(--muted);
 }
 :where(input[type='checkbox']:not(.prose *)):active:not(:disabled, :checked) {
-  transform: translateY(1px);
-  box-shadow: 0 1px 0 color-mix(in srgb, var(--muted) 55%, transparent);
+  transform: translateY(1.5px);
+  box-shadow: 0 0.5px 0 color-mix(in srgb, var(--muted) 55%, transparent);
+}
+:where(input[type='checkbox']:not(.prose *)):checked::before,
+:where(input[type='checkbox']:not(.prose *)):active:not(:disabled, :checked)::before {
+  content: '';
+  position: absolute;
+  inset: -3px -1px -1px;
 }
 :where(input[type='checkbox']:not(.prose *)):checked {
   background: var(--accent);
@@ -411,7 +450,9 @@ textarea.input {
   cursor: default;
 }
 @media (prefers-reduced-motion: no-preference) {
-  :where(input[type='checkbox']:not(.prose *)) {
+  :where(input[type='checkbox']:not(.prose *)),
+  .btn,
+  .gate {
     transition:
       transform 90ms,
       box-shadow 90ms,
@@ -419,13 +460,15 @@ textarea.input {
       border-color 90ms;
   }
 }
-/* Each rule that moves the key is reset here with its own selector, so it's as specific and wins. */
+/* Each rule that moves a key is reset here with its own selector, so it's as specific and wins. */
 @media (forced-colors: active) {
   :where(input[type='checkbox']:not(.prose *)) {
     appearance: auto;
   }
   :where(input[type='checkbox']:not(.prose *)):active:not(:disabled, :checked),
-  :where(input[type='checkbox']:not(.prose *)):checked {
+  :where(input[type='checkbox']:not(.prose *)):checked,
+  .btn:is(.on, [aria-pressed='true']):not(.ghost),
+  :is(.btn, .gate):active:not(:disabled, .ghost, .on, [aria-pressed='true']) {
     transform: none;
   }
   :where(input[type='checkbox']:not(.prose *))::after {
@@ -1399,6 +1442,10 @@ textarea.input {
   align-items: center;
   font-size: 12px;
   overflow-x: auto;
+  /* Room for the gate's key edge, which the scroll box would clip; the margin keeps the row's
+     layout as it was. */
+  padding-bottom: 2px;
+  margin-bottom: -2px;
 }
 /* Never wider than the row, so a long confirmation wraps instead of running off the edge. */
 .stage-actions {
@@ -1610,7 +1657,9 @@ textarea.input {
   gap: 8px;
   align-items: center;
 }
+/* A key, like .btn.primary (see Buttons & inputs). */
 .gate {
+  position: relative;
   background: var(--accent);
   color: var(--accent-ink);
   border: 0;
@@ -1620,6 +1669,8 @@ textarea.input {
   white-space: nowrap;
   cursor: pointer;
   font-size: 12px;
+  --key-edge: color-mix(in srgb, var(--accent) 55%, black);
+  box-shadow: 0 2px 0 var(--key-edge);
 }
 .gate:disabled {
   opacity: 0.45;
@@ -5976,6 +6027,8 @@ div[id^='dak-mermaid-'] .label {
   .stages {
     flex: 1 1 auto;
     padding: 6px 10px;
+    /* No scroll box here, so no room for the gate's edge to undo (see .stages above). */
+    margin-bottom: 0;
     overflow: visible;
     flex-wrap: wrap;
     row-gap: 6px;

@@ -96,19 +96,36 @@ API, from its first note whenever a label appears (`transform` and `box-shadow` 
 never changes), and stay still with reduced motion.
 `test/unit/busy-labels.test.ts` flags a static label like "Saving…" in a component.
 
-## Checkboxes
+## Keys: checkboxes and buttons
 
-Every `<input type="checkbox">` is drawn as a keycap, like the busy dots' keys: standing up when
-off, pressed down and lit with a tick when checked. It's the native input restyled in `styles.css`
-(`:where(input[type='checkbox']:not(.prose *))`), so a new checkbox needs no class or component,
-and labels, Space and screen readers work as they always did. The base rule is wrapped in
-`:where()`, so it has no specificity and a context's own rule (`.check input`) places the key;
-the state rules (`:checked`, and `:hover` and `:active` on an unchecked key only) weigh their
-pseudo-classes, more than `.check input`, so a context rule mustn't set the key's border, fill,
-edge or transform. Task lists in rendered markdown (`.prose`) keep the browser's box, as does
-forced-colors mode, which resets each moving rule with its own selector. Radio buttons aren't
-restyled. `test/unit/checkbox-style.test.ts` checks that it's shaped by state, still under
-reduced motion, and still under forced colors.
+Checkboxes and buttons are drawn as keycaps, like the busy dots' keys: a key stands on an edge
+(a `box-shadow`), sinks when pressed (a `transform`), and stays down while it's on. A press goes
+straight to the on depth, so a press that checks a box or turns a toggle on is one move, and while
+a key is down a transparent `::before` covers the 2 px above it, the spot it left, so a press near
+its top edge doesn't slide it out from under the pointer (the hover flickered, and the click was
+lost). Each key's state reads by shape as well as color.
+
+- **Checkboxes:** every `<input type="checkbox">`, standing up when off, down and lit with a tick
+  when checked. It's the native input restyled in `styles.css`
+  (`:where(input[type='checkbox']:not(.prose *))`), so a new checkbox needs no class or component,
+  and labels, Space and screen readers work as they always did. The base rule is wrapped in
+  `:where()`, so it has no specificity and a context's own rule (`.check input`) places the key;
+  the state rules (`:checked`, and `:hover` and `:active` on an unchecked key only) weigh their
+  pseudo-classes, more than `.check input`, so a context rule mustn't set the key's border, fill,
+  edge or transform. Task lists in rendered markdown (`.prose`) keep the browser's box. Radio
+  buttons aren't restyled.
+- **Buttons:** `.btn` (every variant but `.ghost`, which stays flat) and the stage bar's `.gate`.
+  Each variant sets only `--key-edge`, the edge's color; a toggle that's on (`.btn.on`, or
+  `aria-pressed="true"`) stays down, unless it's a ghost, which takes the on colors but stays flat. `.btn` and `.gate` are `position: relative` for the hit area,
+  so a context rule mustn't set their `box-shadow`, `transform` or `position`. Icon buttons, link
+  buttons, `.seg` segments, tabs and the rail's rows stay flat. The edge is outside the button's
+  box, so a box that clips (a scroll box) needs 2 px of room under a button at its bottom, as
+  `.stages` has for the gate.
+
+Forced-colors mode brings the checkbox's native box back and holds every key still: it resets each
+rule that moves one with that rule's own selector. Transitions run only without reduced motion.
+`test/unit/keycap-style.test.ts` checks that keys are shaped by state, move once to the on depth,
+keep their hit area while down, and are still under reduced motion and forced colors.
 
 ## Reloads after an update
 
