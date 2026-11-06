@@ -429,7 +429,8 @@ describe('code review before the PR (real session host + git, fake claude runnin
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 10000, 'the PR prompt again');
     expect(await prPrompt(s.claudeSessionId)).toContain('me_ak_review:LGTM;Sirius1.0');
     expect(prompts(s.claudeSessionId).filter((p) => p.includes('Open a pull request'))).toHaveLength(1);
-    expect(finished()).not.toBeNull();
+    // Written once the prompt is typed, after the stage moved to Pull Request (Lifecycle.sendPr).
+    await waitFor(finished, (f) => f !== null, 10000, "the review's finish");
   });
 
   it('reviews the change in Code when the session is moved to Pull Request by hand, then sends the PR prompt with the move\'s instructions', async () => {
@@ -536,8 +537,23 @@ describe('code review before the PR (real session host + git, fake claude runnin
       expect(waiting.openPrReview).toBeNull();
       expect(waiting.skippedStages).not.toContain('reviewing-code');
 
-      await env.core.sessions.action(s.id, 'open-pr');
+      // The stage moves to Pull Request before the PR prompt is typed (Lifecycle.sendPr): hold the
+      // typing, and Code Review isn't skipped meanwhile either.
+      let release!: () => void;
+      const held = new Promise<void>((r) => { release = r; });
+      const submit = env.core.host.submit.bind(env.core.host);
+      vi.spyOn(env.core.host, 'submit').mockImplementation(async (name, text) => {
+        if (text.includes('Open a pull request')) await held;
+        return submit(name, text);
+      });
+      // Open PR answers once the prompt is typed: not awaited while the typing is held.
+      const opened = env.core.sessions.action(s.id, 'open-pr');
       await waitFor(() => env.core.sessions.get(s.id), (x) => x.stage === 'pr', 10000, 'the PR prompt');
+      expect(env.core.sessions.get(s.id).skippedStages).not.toContain('reviewing-code');
+      release();
+      await opened;
+      await waitFor(() => all<{ f: number | null }>(env.core.db, 'SELECT finished_at AS f FROM code_reviews WHERE task_id = ?', s.id)[0].f, (f) => f !== null, 10000, "the review's finish");
+      vi.mocked(env.core.host.submit).mockRestore();
       expect(env.core.sessions.get(s.id).skippedStages).not.toContain('reviewing-code');
       const pr = await prPrompt(s.claudeSessionId);
       expect(pr).toContain('me_ak_review:1 blocker addressed;Sagittarius3.0');
