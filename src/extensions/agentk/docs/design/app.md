@@ -53,9 +53,10 @@ version moves below it first, then the user name is cut off before the server na
 **The stage bar and the session's ⋯.** On a desktop, under the tabs, one row holds the session's
 stages (each one it can move to is a button; a task's are 0 Explore to 5 Merge & Close, with Code
 Review, never a move target, between Code and Pull Request, and a skipped step, Code Review too
-when no review runs before the PR, drawn as – in a dashed circle; when the row is still too narrow
-after the ⋯ wraps below, the steps' names shorten with an ellipsis, Explore's only once the
-others can't shorten further, and the current one's never) and its gate: **Run to merge** and the next-stage
+when no review runs before the PR, drawn as – in a dashed circle; the lines between the steps
+are all the same length, the room the names leave split equally between them; when the row is
+still too narrow after the ⋯ wraps below and the lines are at their shortest, the longest names
+shorten with an ellipsis first, and the current one's never) and its gate: **Run to merge** and the next-stage
 button (Move on…, Open PR or **Review Changes** when the press starts the code review
 first, Merge & Close; none in Design, where **Design doc** opens the panel that approves; a Review a PR session's Update to latest
 and Close review), or the state that stands in for it (a queued gate with Cancel, an approval
