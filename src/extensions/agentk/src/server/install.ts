@@ -401,7 +401,7 @@ export async function runInstall(args: string[]): Promise<void> {
     if (meko.meko?.webUrl) {
       ui.text(style.bold(running ? 'Done. AgentK is running:' : 'Done. AgentK will be at:'));
       ui.blank();
-      ui.text(`    ${style.cyan(`${meko.meko.webUrl}${AGENTK_PATH}`)}`);
+      ui.text(`    ${style.blue(`${meko.meko.webUrl}${AGENTK_PATH}`)}`);
       ui.blank();
       // A new user lands in the tour; over SSH or with no display there's nothing to open here.
       if (opensBrowser({ fresh, interactive, running }) && (await openBrowser(`${meko.meko.webUrl}${AGENTK_PATH}`))) {

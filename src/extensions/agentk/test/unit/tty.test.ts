@@ -18,10 +18,10 @@ describe("a running step's row", () => {
     expect(spinRow('⣾', 'Meko in Claude', 'x'.repeat(60), 80)).toBe(`  ⣾ Meko in Claude ${'x'.repeat(60)}`);
   });
 
-  it('has cyan dots when colored, as gh draws them, and is cut by what shows', () => {
-    expect(spinRow('⣾', 'Meko', 'Running', 80, true)).toBe('  \x1b[36m⣾\x1b[0m Meko          Running');
+  it('has blue dots when colored, as Meko draws them, and is cut by what shows', () => {
+    expect(spinRow('⣾', 'Meko', 'Running', 80, true)).toBe('  \x1b[34m⣾\x1b[0m Meko          Running');
     const row = spinRow('⣾', 'Meko in Claude', doing, 80, true);
-    expect(row.startsWith("  \x1b[36m⣾\x1b[0m Meko in Claude Running Meko's setup")).toBe(true);
-    expect([...row.replace('\x1b[36m', '').replace('\x1b[0m', '')].length).toBe(79);
+    expect(row.startsWith("  \x1b[34m⣾\x1b[0m Meko in Claude Running Meko's setup")).toBe(true);
+    expect([...row.replace('\x1b[34m', '').replace('\x1b[0m', '')].length).toBe(79);
   });
 });

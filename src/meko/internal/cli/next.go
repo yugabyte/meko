@@ -76,7 +76,7 @@ func nextSteps(s nextState, kind nextFor) [][2]string {
 		add("meko cloud_link", "share with your team through Meko Cloud")
 	}
 	switch {
-	case !s.agentKRead, s.added != "":
+	case !s.agentKRead, s.added == "agentk": // just added: opening it came first
 	case s.agentK:
 		add(openExtension("agentk", s.agentKOther))
 	default:

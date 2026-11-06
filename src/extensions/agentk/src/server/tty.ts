@@ -16,7 +16,7 @@ export const style = {
   green: (s: string) => paint('32', s),
   yellow: (s: string) => paint('33', s),
   red: (s: string) => paint('31', s),
-  cyan: (s: string) => paint('36', s),
+  blue: (s: string) => paint('34', s),
 };
 
 const MARK = {
@@ -25,7 +25,7 @@ const MARK = {
   fail: () => style.red(utf8 ? '✗' : 'xx'),
 };
 
-/** The dots a running step shows, and how fast they turn: gh's spinner, cyan, as Meko's steps show it. */
+/** The dots a running step shows, and how fast they turn: gh's spinner, blue, as Meko's steps show it. */
 const SPIN_FRAMES = utf8 ? ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'] : ['|', '/', '-', '\\'];
 const SPIN_INTERVAL_MS = 120;
 
@@ -35,14 +35,14 @@ export const pad = (label: string, width = LABEL_WIDTH) => (label.length >= widt
 
 /**
  * A running step's row, "  ⣾ Label         doing", cut to one character short of `columns` (when
- * known) with "…", so it never reaches the last column and wraps. With `color` the dots are cyan,
- * as gh's are; the cut counts only what shows.
+ * known) with "…", so it never reaches the last column and wraps. With `color` the dots are blue,
+ * as Meko's are (its palette: src/meko/docs/install.md, "Colors"); the cut counts only what shows.
  */
 export function spinRow(frame: string, label: string, doing: string, columns?: number, color = false): string {
   const chars = [...`  ${frame} ${pad(label)}${doing}`];
   const row = !columns || chars.length < columns ? chars.join('') : `${chars.slice(0, Math.max(1, columns - 2)).join('')}…`;
   const at = `  ${frame}`;
-  return color && row.startsWith(at) ? `  \x1b[36m${frame}\x1b[0m${row.slice(at.length)}` : row;
+  return color && row.startsWith(at) ? `  \x1b[34m${frame}\x1b[0m${row.slice(at.length)}` : row;
 }
 
 const out = (s = '') => process.stdout.write(s + '\n');

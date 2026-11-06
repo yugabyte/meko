@@ -13,8 +13,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yugabyte/meko/src/meko/internal/config"
 	"github.com/yugabyte/meko/src/meko/internal/extensions"
 	"github.com/yugabyte/meko/src/meko/internal/paths"
+	"github.com/yugabyte/meko/src/meko/internal/service"
 	"github.com/yugabyte/meko/src/meko/internal/spin"
 )
 
@@ -213,6 +215,46 @@ func removePathLines(home string) ([]string, error) {
 		changed = append(changed, p)
 	}
 	return changed, nil
+}
+
+// checkAPIPort fails install, before anything is written, when another program holds the API port:
+// the service would be written and then fail to start. A port a Meko server holds is fine: this
+// data folder's (install restarts it), or the installed service's other data folder's (installing
+// the service moves it to this one). The web port isn't checked, since Meko takes it over from an
+// AgentK on this computer.
+func checkAPIPort(l paths.Layout, m service.Manager, home string, r report, stderr io.Writer) int {
+	cfg, err := config.Load(l.Config, os.Getenv, config.Overrides{})
+	if err != nil {
+		return fail(stderr, err)
+	}
+	port := cfg.Server.Port
+	if mekoHolds(l, m, port) {
+		return exitOK
+	}
+	if err := portFree(port); err != nil {
+		portInUse(r, port, homeRel(l.Config, home))
+		return fail(stderr, fmt.Errorf("port %d is in use: %w", port, err))
+	}
+	return exitOK
+}
+
+// mekoHolds reports whether a Meko server that install replaces listens on port: this data
+// folder's, or the one the installed service runs.
+func mekoHolds(l paths.Layout, m service.Manager, port int) bool {
+	dirs := []string{l.Root}
+	if m.Installed() && m.DataDir() != "" {
+		dirs = append(dirs, m.DataDir())
+	}
+	for _, d := range dirs {
+		dl := paths.New(d)
+		if up, _ := running(dl.Lock); !up {
+			continue
+		}
+		if p, err := readInt(dl.Port); err == nil && p == port {
+			return true
+		}
+	}
+	return false
 }
 
 // portFree reports, as an error, another program listening on port on this computer; tests replace it.

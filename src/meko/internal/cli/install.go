@@ -85,6 +85,20 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 		return fail(stderr, err)
 	}
 	run := installRun(os.Getenv)
+	// The service's checks come before anything is written, so a failure leaves nothing half-done:
+	// install.sh, run again, finds app/current at the version it would install and stops there.
+	var m service.Manager
+	if !noService {
+		if m, err = newManager(); err != nil {
+			return fail(stderr, err)
+		}
+		if err = m.Preflight(); err != nil {
+			return fail(stderr, err)
+		}
+		if code := checkAPIPort(l, m, home, r, stderr); code != exitOK {
+			return code
+		}
+	}
 	if app, ver, ok := runningRelease(); ok {
 		if err = app.Repoint(ver); err != nil {
 			return fail(stderr, err)
@@ -127,23 +141,19 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 			"file": "secrets in it, readable only by you"}[ct.Store.Kind()]
 	}
 	r.step(stepOK, "Data", spin.Note(homeRel(l.Root, home), dataNote, r.color))
-	if err = setWebAccess(l, access, noUI, home, stdout); err != nil {
+	if err = setWebAccess(l, access, noUI, home); err != nil {
 		return fail(stderr, err)
 	}
 	if noService {
+		if noUI {
+			r.step(stepOK, "Web UI", fmt.Sprintf("%s, in %s", webOffNote, homeRel(config.WebFile(l.Config), home)))
+		}
 		r.step(stepWarn, "Service", "none (--no-service): start Meko with meko start")
 		r.next([][2]string{
 			{"meko start", "start Meko"},
 			{"meko status", "check on Meko at any time"},
 		})
 		return exitOK
-	}
-	m, err := newManager()
-	if err != nil {
-		return fail(stderr, err)
-	}
-	if err := m.Preflight(); err != nil {
-		return fail(stderr, err)
 	}
 	if other := m.DataDir(); m.Installed() && other != "" && other != l.Root {
 		fmt.Fprintf(stdout, "The service ran the data folder %s; it now runs %s\n", other, l.Root)
@@ -152,15 +162,6 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 	if up, _ := running(l.Lock); up && serviceOf(l) == nil {
 		if code := stopMeko(l, stdout, stderr); code != exitOK {
 			return code
-		}
-	}
-	// Another program on the API port would leave the service failing to start: say so before it's
-	// written, so nothing is left half-done. The web port isn't checked, since Meko takes it over
-	// from an AgentK on this computer.
-	if up, _ := running(l.Lock); !up {
-		if err := portFree(cfg.Server.Port); err != nil {
-			portInUse(r, cfg.Server.Port, homeRel(l.Config, home))
-			return fail(stderr, fmt.Errorf("port %d is in use: %w", cfg.Server.Port, err))
 		}
 	}
 	host, _ := os.Hostname()
@@ -204,8 +205,8 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 // config.toml sets one: with access, or, unless an AgentK is on this computer (whose own access Meko
 // takes over when it hands over its port), with the default AgentK had: remote over SSH or on Linux
 // with no display, local otherwise. The summary's Web UI link row says which. With noUI it turns
-// the web UI off there too (config.SetWebEnabled), and says so in a row.
-func setWebAccess(l paths.Layout, access string, noUI bool, home string, stdout io.Writer) error {
+// the web UI off there too (config.SetWebEnabled), which the summary's Web UI row says.
+func setWebAccess(l paths.Layout, access string, noUI bool, home string) error {
 	if noUI {
 		if err := config.SetWebEnabled(l.Config, false); errors.Is(err, config.ErrWebEnabledSet) {
 			return errors.New("config.toml sets [web] enabled, which --no-ui would change: change it there instead")
@@ -213,31 +214,23 @@ func setWebAccess(l paths.Layout, access string, noUI bool, home string, stdout 
 			return err
 		}
 	}
-	if _, err := addWebAccess(l, access, home); err != nil {
-		return err
-	}
-	if noUI {
-		newReport(stdout).step(stepOK, "Web UI", fmt.Sprintf("%s, in %s", webOffNote, config.WebFile(l.Config)))
-	}
-	return nil
+	return addWebAccess(l, access, home)
 }
 
-// addWebAccess is setWebAccess's access: the one it wrote, or "" when it wrote none.
-func addWebAccess(l paths.Layout, access, home string) (string, error) {
+// addWebAccess writes setWebAccess's access, unless web.toml or config.toml sets one, or an AgentK
+// on this computer will hand its own over.
+func addWebAccess(l paths.Layout, access, home string) error {
 	if access == "" {
 		if cat := extensions.Known["agentk"]; cat.Find("agentk", home, l.Root) != "" {
-			return "", nil
+			return nil
 		}
 		access = config.AccessLocal
 		if headless() {
 			access = config.AccessRemote
 		}
 	}
-	added, err := config.AddWeb(l.Config, config.Web{Access: access}, config.TLS{})
-	if err != nil || !added {
-		return "", err
-	}
-	return access, nil
+	_, err := config.AddWeb(l.Config, config.Web{Access: access}, config.TLS{})
+	return err
 }
 
 // headless reports whether this looks like a machine reached from elsewhere: an SSH session, or Linux

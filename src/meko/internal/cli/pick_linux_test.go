@@ -212,3 +212,71 @@ func (s *syncWriter) String() string {
 	defer s.mu.Unlock()
 	return s.b.String()
 }
+
+// When ~/.local/bin isn't on the PATH, install asks on the terminal whether to add it to the shell's
+// profile: yes or Enter adds the line and says how to use it now, no names the line to add. Off a
+// terminal, for a shell other than zsh or bash, or with --non-interactive (ask false), it asks
+// nothing and names the line.
+func TestInstallRowOffersThePath(t *testing.T) {
+	line := `export PATH="$HOME/.local/bin:$PATH"`
+	for _, c := range []struct {
+		name, shell, typed string
+		ask, added         bool
+		shows              []string
+	}{
+		{"yes", "/bin/bash", "y\n", true, true, []string{
+			"  ! Install         meko in ~/.local/bin · not on your PATH\n",
+			"  ? Add ~/.local/bin to your PATH in ~/.bashrc? [Y/n] ",
+			"  ✓ PATH            added to ~/.bashrc · open a new terminal, or run . ~/.bashrc\n"}},
+		{"Enter", "/bin/bash", "\n", true, true, []string{"  ✓ PATH            added to ~/.bashrc"}},
+		{"no", "/bin/bash", "n\n", true, false, []string{
+			"    Add " + line + " to your shell's profile to run meko by its name\n"}},
+		{"zsh", "/usr/bin/zsh", "Y\n", true, false, []string{"in ~/.zshrc? [Y/n] "}},
+		{"fish", "/usr/bin/fish", "", true, false, []string{
+			"  ! Install         meko in ~/.local/bin · not on your PATH: add " + line + " to your shell's profile\n"}},
+		{"--non-interactive", "/bin/bash", "", false, false, []string{"not on your PATH: add " + line}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("SHELL", c.shell)
+			t.Setenv("PATH", "/usr/bin:/bin")
+			t.Setenv("NO_COLOR", "1")
+			var shown syncWriter
+			typing, term := openPTYTo(t, &shown)
+			old := openTTY
+			openTTY = func() (*os.File, error) { return os.OpenFile(term.Name(), os.O_RDWR, 0) }
+			defer func() { openTTY = old }()
+			done := make(chan struct{})
+			go func() {
+				installRow(newReport(term), home+"/.local/bin", home, c.ask)
+				close(done)
+			}()
+			if c.typed != "" {
+				time.Sleep(100 * time.Millisecond)
+				if _, err := typing.WriteString(c.typed); err != nil {
+					t.Fatal(err)
+				}
+			}
+			<-done
+			time.Sleep(50 * time.Millisecond)
+			out := strings.ReplaceAll(shown.String(), "\r\n", "\n")
+			for _, s := range c.shows {
+				if !strings.Contains(out, s) {
+					t.Errorf("no %q in:\n%s", s, out)
+				}
+			}
+			profile := home + "/.bashrc"
+			if c.shell == "/usr/bin/zsh" {
+				profile = home + "/.zshrc"
+			}
+			b, _ := os.ReadFile(profile) //nolint:gosec // G304: the test's own file
+			if want := c.added || c.shell == "/usr/bin/zsh"; strings.Contains(string(b), line) != want {
+				t.Errorf("%s holds %q, want the line: %v", profile, b, want)
+			}
+			if !c.ask && strings.Contains(out, "[Y/n]") {
+				t.Errorf("asked with ask false:\n%s", out)
+			}
+		})
+	}
+}

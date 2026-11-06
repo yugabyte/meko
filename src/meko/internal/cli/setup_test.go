@@ -167,8 +167,21 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 		t.Errorf("extension ran %q (restart and --keep-extensions must leave it alone)", got)
 	}
 
+	// The line meko install added to a shell's profile goes too, and the rest of the profile stays.
+	bashrc := filepath.Join(os.Getenv("HOME"), ".bashrc")
+	//nolint:gosec // G703: the test's own HOME
+	if err := os.WriteFile(bashrc, []byte("alias ll='ls -l'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := addPathLine(bashrc, `export PATH="$HOME/.local/bin:$PATH"`); err != nil {
+		t.Fatal(err)
+	}
 	code, out, _ = run("uninstall", "--data-dir", dir)
 	want(t, "uninstall", code, 0, out, "Removed the fake service")
+	want(t, "uninstall's PATH line", code, 0, out, "Removed the PATH line meko install added to ~/.bashrc\n")
+	if got := readFile(t, bashrc); got != "alias ll='ls -l'\n" {
+		t.Errorf(".bashrc after uninstall: %q", got)
+	}
 	want(t, "uninstall", code, 0, out, "Extension agentk is still installed")
 	want(t, "uninstall", code, 0, out, "Your data is still in "+dir+"; meko destroy")
 	if _, err := os.Stat(paths.New(dir).DB); err != nil {
@@ -257,7 +270,10 @@ func TestInstallWithoutTheWebUI(t *testing.T) {
 	configurePort(t, dir, port)
 	useFakeService(t)
 	code, out, errs := run("install", "--data-dir", dir, "--no-ui", "--access", "local")
-	want(t, "install --no-ui", code, 0, out+errs, "  ✓ Web UI          off (meko ui start turns it on), in ")
+	want(t, "install --no-ui", code, 0, out+errs, "  ! Web UI          off (meko ui start turns it on)\n")
+	if n := strings.Count(out, "Web UI          "); n != 1 {
+		t.Errorf("install --no-ui printed %d Web UI rows:\n%s", n, out)
+	}
 	want(t, "install --no-ui's next steps", code, 0, out, "meko ui start")
 	cfg, err := config.Load(paths.New(dir).Config, func(string) string { return "" }, config.Overrides{})
 	if err != nil || cfg.Web.Enabled || cfg.Web.Access != config.AccessLocal {

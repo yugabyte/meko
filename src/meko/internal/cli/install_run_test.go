@@ -11,6 +11,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/yugabyte/meko/src/meko/internal/config"
+	"github.com/yugabyte/meko/src/meko/internal/paths"
 )
 
 // install.sh's variables say when the run began, what it upgrades from, and whether it's the first
@@ -106,6 +109,13 @@ func TestInstallRefusesAPortInUse(t *testing.T) {
 	f := useFakeService(t)
 	code, out, errs := run("install", "--data-dir", dir)
 	want(t, "install", code, exitError, out, "  ✗ Server          port "+port+" is in use by another program\n")
+	// Nothing was written before the check: no rows of the steps before it, no web.toml, no token.
+	if strings.Contains(out, "✓ Data") {
+		t.Errorf("install wrote the data folder before the port check:\n%s", out)
+	}
+	if _, err := os.Stat(config.WebFile(paths.New(dir).Config)); !os.IsNotExist(err) {
+		t.Errorf("web.toml was written: %v", err)
+	}
 	want(t, "install's way out", code, exitError, out, "Nothing was left half-done: running the installer again is safe\n")
 	want(t, "install's error", code, exitError, errs, "meko: port "+port+" is in use")
 	if f.spec.DataDir != "" || len(f.calls) != 0 {
@@ -177,5 +187,32 @@ func TestWaitEngine(t *testing.T) {
 	}
 	if !strings.HasPrefix(b.String(), "  ✓ Memory engine   ready in 0.") {
 		t.Errorf("ready on the second ask: %q", b.String())
+	}
+}
+
+// A port held by a Meko server install replaces isn't another program's: this data folder's, or
+// the one the installed service runs, which installing the service moves to the new folder.
+func TestMekoHoldsItsOwnPort(t *testing.T) {
+	dirA, port := setup(t)
+	noRealExtensions(t)
+	configurePort(t, dirA, port)
+	f := useFakeService(t)
+	if code, out, errs := run("install", "--data-dir", dirA); code != 0 {
+		t.Fatalf("install: %d %s%s", code, out, errs)
+	}
+	p, _ := strconv.Atoi(port)
+	dirB, _ := setup(t)
+	if !mekoHolds(paths.New(dirB), f, p) {
+		t.Error("the installed service's server on the port isn't counted as Meko's")
+	}
+	if !mekoHolds(paths.New(dirA), f, p) {
+		t.Error("this data folder's server on the port isn't counted as Meko's")
+	}
+	if mekoHolds(paths.New(dirB), f, p+1) {
+		t.Error("another port counted as Meko's")
+	}
+	other := &fakeService{file: filepath.Join(t.TempDir(), "none")}
+	if mekoHolds(paths.New(dirB), other, p) {
+		t.Error("a port counted as Meko's with no service and no server for this folder")
 	}
 }

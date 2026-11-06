@@ -72,10 +72,14 @@ safe.
   `meko uninstall` removes the line.
 - It makes the client token (in the secret store) and sets up the login service (below), stopping
   a server started by hand on the same data folder first. `--no-service` skips the service. Before
-  it writes the service, it checks that no other program holds the API port (`[server] port`, 7778
-  by default): if one does, its `Server` row is `✗` with how to find the program or move Meko, and
-  nothing is written, so running it again is safe. The web port isn't checked, since Meko takes it
-  over from an AgentK on this computer. The `Server` row shows the dots until the service's server
+  it writes anything (`app/current`, the commands, the data folder, the service), it runs the
+  service manager's checks and checks that no other program holds the API port (`[server] port`,
+  7778 by default): if one does, its `Server` row is `✗` with how to find the program or move Meko,
+  and nothing is written, so running the installer again is safe (it would otherwise find
+  `app/current` at the new version and stop as up to date). A Meko server on that port doesn't
+  count: this data folder's, or the one the installed service runs, which installing the service
+  moves to this folder. The web port isn't checked, since Meko takes it over from an AgentK on this
+  computer. The `Server` row shows the dots until the service's server
   answers (`started in 0.9s`, or `restarted` over a running one or an upgrade).
 - It writes the web listener's access to `web.toml` when neither it nor `config.toml` sets one:
   `--access local|remote`, or by AgentK's old rule (remote over SSH or on Linux with no display,
