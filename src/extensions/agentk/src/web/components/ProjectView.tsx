@@ -26,7 +26,7 @@ import { HeldReviewsSheet } from './HeldReviewsSheet';
 import { Busy, Check, ContextRing, DatapackName, Dialog, Elapsed, HarnessLogo, ReviewSegment, RunToMergeCheck, RunToMergeMark, StageChip, StatusDot } from './common';
 import { ReviewFindings } from './ReviewFindings';
 import { DESCRIBE_LOST, countsText, reviewDoneText, reviewHolds, reviewRunning, reviewSegmentText, type CodeReviewSummary } from '../../shared/codereview';
-import { ChangesPanel } from './ChangesPanel';
+import { ChangesPanel, type Reveal } from './ChangesPanel';
 import { DesignPanel } from './DesignPanel';
 import { EmptyProject } from './EmptyProject';
 import type { MovePreset } from './MoveSessionDialog';
@@ -134,10 +134,39 @@ export function ProjectView({
   const mobile = useIsMobile();
   // One side panel at a time.
   const [panel, setPanel] = useState<'design' | 'changes' | 'findings' | null>(null);
-  const toggle = (p: 'design' | 'changes' | 'findings') => setPanel((o) => (o === p ? null : p));
+  // A finding's line, shown in the Changes panel opened from the findings, and how far the findings
+  // were scrolled, for ← Findings; then that scroll, brought back with the findings.
+  const [reveal, setReveal] = useState<Reveal | null>(null);
+  const [changesFrom, setChangesFrom] = useState<{ scroll: number } | null>(null);
+  const [findingsScroll, setFindingsScroll] = useState<number | null>(null);
+  const revealSeq = useRef(0);
+  const toggle = (p: 'design' | 'changes' | 'findings') => {
+    // Changes opened by hand starts on no finding, and has no way back to them.
+    setReveal(null);
+    setChangesFrom(null);
+    setPanel((o) => (o === p ? null : p));
+  };
   // A task's code-review session (its part of the task's tab) and the task it reviews.
   const child = session && isReviewChild(session) ? session : null;
   const parent = session ? reviewParent(project.sessions, session) : undefined;
+  // The changes the findings are about: the task's, also on its review's screen (it shares the
+  // task's worktree and has no diff of its own).
+  const changesOf = child ? parent : session;
+  const openFile = (path: string, line: number, scroll: number) => {
+    setReveal({ path, line, seq: ++revealSeq.current });
+    setChangesFrom({ scroll });
+    setPanel('changes');
+  };
+  const backToFindings = () => {
+    setFindingsScroll(changesFrom?.scroll ?? null);
+    setReveal(null);
+    setChangesFrom(null);
+    setPanel('findings');
+  };
+  // The scroll goes to the findings opened by ← Findings only.
+  useEffect(() => {
+    if (panel !== 'findings') setFindingsScroll(null);
+  }, [panel]);
   // The review's screen (its terminal, its findings beside it) while its steps run (or it failed); its
   // findings beside the task's terminal while the task fixes a round's findings and once it's done.
   const openReviewTerminal = (task: Session) => {
@@ -171,6 +200,9 @@ export function ProjectView({
   const tabsRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     setPanel(null);
+    setReveal(null);
+    setChangesFrom(null);
+    setFindingsScroll(null);
     setSheet(false);
     setEnding(false);
     setReviewSettings(false);
@@ -605,7 +637,15 @@ export function ProjectView({
             onAutoRun={setAutoRun}
           />
         )}
-        {session && panel === 'changes' && <ChangesPanel key={`changes-${session.id}`} session={session} onClose={() => setPanel(null)} />}
+        {session && panel === 'changes' && (
+          <ChangesPanel
+            key={`changes-${session.id}`}
+            session={changesFrom && changesOf ? changesOf : session}
+            onClose={() => setPanel(null)}
+            reveal={reveal}
+            onBack={changesFrom ? backToFindings : undefined}
+          />
+        )}
         {session && panel === 'findings' && (child || session.codeReview) && (
           <ReviewFindings
             key={`findings-${session.id}`}
@@ -613,6 +653,8 @@ export function ProjectView({
             onClose={() => setPanel(null)}
             onTerminal={!child && session.codeReview?.sessionId ? () => openReviewTerminal(session) : undefined}
             onAct={!child && !acting ? (a) => void act(a) : undefined}
+            onOpenFile={changesOf ? openFile : undefined}
+            initialScroll={findingsScroll}
           />
         )}
       </div>

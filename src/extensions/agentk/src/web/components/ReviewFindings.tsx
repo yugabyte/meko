@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { DISMISSED_BY_YOU, MAX_FINDING_NOTE, reviewWaitsOnYou, strategyName, type CodeReviewDetail, type CodeReviewFinding } from '../../shared/codereview';
 import type { FindingChoiceRequest, Session, SessionAction } from '../../shared/types';
 import { api, ApiError, errorMessage } from '../api';
@@ -15,9 +15,10 @@ import { SidePanel } from './SidePanel';
  * prompt, not the panel). Fetched again whenever the review moves on. While the review runs it reads
  * Reviewing, under the findings so far, with a bar along its header and no counts yet. While a
  * round's findings wait on the user (`triage`), each of that round's kept findings takes a note or
- * a dismissal (saved as it's made), and the header sends them to AgentK (`review-send`).
+ * a dismissal (saved as it's made), and the header sends them to AgentK (`review-send`). A finding's
+ * `file:line`, with `onOpenFile`, opens the task's Changes panel on that line.
  */
-export function ReviewFindings({ session, onClose, onTerminal, onAct }: {
+export function ReviewFindings({ session, onClose, onTerminal, onAct, onOpenFile, initialScroll }: {
   session: Session;
   onClose: () => void;
   /** Shows the review session's terminal: beside the task, while the review has one. */
@@ -28,7 +29,15 @@ export function ReviewFindings({ session, onClose, onTerminal, onAct }: {
    * which the Code gate doesn't show. Absent while an action is under way.
    */
   onAct?: (a: SessionAction) => void;
+  /**
+   * Shows a finding's line in the task's Changes panel, in place of this one, with how far the
+   * findings were scrolled, which `initialScroll` brings back on the way back.
+   */
+  onOpenFile?: (path: string, line: number, scroll: number) => void;
+  /** How far to scroll the findings once they're drawn: where they were left for the Changes panel. */
+  initialScroll?: number | null;
 }) {
+  const body = useRef<HTMLDivElement>(null);
   const [detail, setDetail] = useState<CodeReviewDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -68,10 +77,12 @@ export function ReviewFindings({ session, onClose, onTerminal, onAct }: {
     if (saveError || saved.includes(false)) return;
     onAct?.('review-send');
   };
+  const openFile = onOpenFile && ((f: CodeReviewFinding) => onOpenFile(f.file, f.line, body.current?.scrollTop ?? 0));
   const row = (f: CodeReviewFinding) => (
     <FindingRow
       key={f.key}
       f={f}
+      onOpen={openFile && (() => openFile(f))}
       onChoose={triage === f.round && f.kept ? (c) => choose(f.key, c) : undefined}
       draft={editing?.key === f.key ? editing.draft : null}
       onDraft={(draft) => setEditing(draft === null ? null : { key: f.key, draft })}
@@ -98,6 +109,13 @@ export function ReviewFindings({ session, onClose, onTerminal, onAct }: {
       live = false;
     };
   }, [session.id, key]);
+  // Back from the Changes panel: the findings where they were left, once, as soon as they're drawn.
+  const scrollTo = useRef(initialScroll ?? null);
+  useLayoutEffect(() => {
+    if (!detail || scrollTo.current === null || !body.current) return;
+    body.current.scrollTop = scrollTo.current;
+    scrollTo.current = null;
+  }, [detail]);
 
   return (
     <SidePanel name="review" label="Review findings" className="design-panel review-panel">
@@ -151,7 +169,7 @@ export function ReviewFindings({ session, onClose, onTerminal, onAct }: {
           )}
         </div>
       )}
-      <div className="review-body">
+      <div className="review-body" ref={body}>
         {error && <p className="error">{error}</p>}
         {saveError && <p className="error">{saveError}</p>}
         {!detail && !error && reviewing && <p className="muted"><Busy label="Reviewing" /></p>}
@@ -208,13 +226,15 @@ export function ReviewFindings({ session, onClose, onTerminal, onAct }: {
 }
 
 /**
- * One finding. `onChoose`: it belongs to the round that waits on the user, who can give it a note
+ * One finding. `onOpen`: its `file:line` opens the task's Changes panel on that line. `onChoose`: it belongs to the round that waits on the user, who can give it a note
  * (saved when the note loses focus) or dismiss it (and restore it), with the note as the reason.
  * `draft`: the note being written, or null when its box is closed; held by the panel, since a
  * dismissal moves the row to another list (`onDraft` opens, updates and closes it).
  */
-function FindingRow({ f, onChoose, draft, onDraft }: {
+export function FindingRow({ f, onOpen, onChoose, draft, onDraft }: {
   f: CodeReviewFinding;
+  /** Shows its line in the Changes panel: its `file:line` is then a button. */
+  onOpen?: () => void;
   onChoose?: (c: FindingChoiceRequest) => Promise<boolean>;
   draft: string | null;
   onDraft: (draft: string | null) => void;
@@ -238,7 +258,13 @@ function FindingRow({ f, onChoose, draft, onDraft }: {
     <li className={`rv-finding${(f.kept || f.pending) && !dismissed ? '' : ' dropped'}`}>
       <div className="rv-head">
         <span className={`rv-sev ${f.severity}`}>{f.severity}</span>
-        <span className="mono rv-where">{f.file}:{f.line}</span>
+        {onOpen ? (
+          <button className="link-btn mono rv-where" onClick={onOpen} title="Show this line in Changes">
+            {f.file}:{f.line}
+          </button>
+        ) : (
+          <span className="mono rv-where">{f.file}:{f.line}</span>
+        )}
         <span className="rv-kept">{status}</span>
       </div>
       <p className="rv-comment">{f.comment}</p>

@@ -1,6 +1,9 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { DESCRIBE_INTERRUPTED, REVIEW_LEFT_CODE, type CodeReviewDetail, type CodeReviewFinding, type CodeReviewSummary } from '../../src/shared/codereview';
 import type { Session } from '../../src/shared/types';
+import { FindingRow } from '../../src/web/components/ReviewFindings.js';
 import { canRunReview, findingGroups, findingsAutoOpen, findingsCountsText, findingsReviewing, reviewBadge, stageChipText, withOverride } from '../../src/web/util.js';
 
 describe('stageChipText', () => {
@@ -170,5 +173,20 @@ describe('reviewBadge', () => {
     expect(reviewBadge(shown)).toBe(shown.codeReview);
     expect(reviewBadge(task({}))).toBeNull();
     expect(reviewBadge({ codeReview: null } as Session)).toBeNull();
+  });
+});
+
+describe("a finding's file:line", () => {
+  const finding = {
+    key: '1:0', round: 1, sweep: 1, file: 'src/a.ts', line: 42, severity: 'major', comment: 'Off by one.', passes: ['bugs'],
+    gotchas: [], credits: [], verdict: null, confidence: null, reason: null, kept: true, dropped: null, outcome: null,
+  } as unknown as CodeReviewFinding;
+  const render = (onOpen?: () => void) => renderToStaticMarkup(createElement(FindingRow, { f: finding, onOpen, draft: null, onDraft: () => {} }));
+
+  it('is a button that shows the line in Changes when the panel can open them, and plain text otherwise', () => {
+    expect(render(() => {})).toContain('<button class="link-btn mono rv-where" title="Show this line in Changes">src/a.ts:42</button>');
+    const plain = render();
+    expect(plain).toContain('<span class="mono rv-where">src/a.ts:42</span>');
+    expect(plain).not.toContain('<button');
   });
 });

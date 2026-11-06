@@ -2027,6 +2027,15 @@ textarea.input {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+/* A finding's file:line that opens the Changes panel on it. */
+button.rv-where {
+  text-align: left;
+}
+@media (pointer: coarse) {
+  button.rv-where {
+    min-height: 36px;
+  }
+}
 .rv-kept {
   margin-left: auto;
   font-size: 11px;
@@ -4509,6 +4518,24 @@ div[id^='dak-mermaid-'] .label {
 }
 .diff tr.picked {
   box-shadow: inset 3px 0 0 var(--accent);
+}
+/* A code review finding's line, revealed from the findings panel (REVEAL_MS in ChangesPanel.tsx):
+   outlined while it's lit, its background fading back from the accent; steady with reduced motion. */
+.diff tr.revealed {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .diff tr.revealed {
+    background: var(--accent-soft);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .diff tr.revealed {
+    animation: row-revealed 1.6s ease-out;
+  }
+  @keyframes row-revealed {
+    from { background: var(--accent-soft); }
+  }
 }
 /* Holding a + to drag a range (useRangeDrag) mustn't open the callout or select text on a phone. */
 .cmt-add {

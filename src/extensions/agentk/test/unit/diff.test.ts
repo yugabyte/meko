@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   anchorComment, canExpand, coveringGap, defaultOpen, DESKTOP_BUDGET, expandRows, gapLines, GAP_STEP, keepUnchanged, parsePatch, pathFilter, PHONE_BUDGET, pickComment, pickRange,
-  fitText, reparse, sameLine, showsLine, splitText, type DiffLine, type RowBudget,
+  fitText, reparse, revealLines, revealRow, sameLine, showsLine, splitText, type DiffLine, type RowBudget,
 } from '../../src/web/diff.js';
 
 const rows = (patch: string) => parsePatch(patch).map((l) => [l.kind, l.old, l.new, l.text]);
@@ -279,6 +279,30 @@ describe('showing the unchanged lines a patch leaves out', () => {
     expect(coveringGap(rows, 20, 25)).toMatchObject({ from: 19, to: 47 });
     expect(coveringGap(rows, 100, 101)).toMatchObject({ from: 55, to: null });
     expect(coveringGap(rows, 9, 12)).toBeNull(); // runs into a hunk
+  });
+
+  it("finds a finding's line: its row, or the gap that hides it", () => {
+    const rows = expandRows(parsed, null, new Set());
+    const at = (line: number) => {
+      const r = revealRow(rows, line);
+      return r && 'row' in r ? [rows[r.row].kind, rows[r.row].new] : r;
+    };
+    expect(at(14)).toEqual(['add', 14]); // added
+    expect(at(12)).toEqual(['ctx', 12]); // unchanged, in a hunk
+    expect(at(51)).toEqual(['add', 51]); // not the removed line 50's row, nor 51's old number
+    expect(at(5)).toMatchObject({ gap: { from: 1, to: 10 } }); // before the first hunk
+    expect(at(30)).toMatchObject({ gap: { from: 19, to: 47 } }); // between hunks
+    expect(at(80)).toMatchObject({ gap: { from: 55, to: null } }); // after the last, its end not yet known
+    const whole = expandRows(parsed, text, new Set(text.map((_, i) => i + 1)));
+    expect(revealRow(whole, 30)).toMatchObject({ row: expect.any(Number) });
+    expect(revealRow(whole, 80)).toBeNull(); // past the end of the file
+  });
+
+  it('opens a few lines around a hidden line, inside its gap', () => {
+    expect(revealLines({ from: 19, to: 47 }, 30)).toEqual([27, 28, 29, 30, 31, 32, 33]);
+    expect(revealLines({ from: 19, to: 47 }, 20)).toEqual([19, 20, 21, 22, 23]);
+    expect(revealLines({ from: 1, to: 2 }, 2)).toEqual([1, 2]);
+    expect(revealLines({ from: 55, to: 61 }, 80)).toEqual([]);
   });
 
   it('picks ↕ lines, and ↓ or ↑ lines of a gap shorter than a step', () => {
