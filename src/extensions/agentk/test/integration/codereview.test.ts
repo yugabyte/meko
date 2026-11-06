@@ -810,6 +810,11 @@ describe('code review before the PR (real session host + git, fake claude runnin
     await waitFor(() => env.core.sessions.get(s.id), (x) => x.status === 'idle' && !x.busy, 10000, 'the move');
     await env.core.sessions.action(s.id, 'open-pr');
     expect(env.core.sessions.get(s.id)).toMatchObject({ stage: 'pr', skippedStages: ['explore', 'design', 'reviewing-code'] });
+    // An older review left done and unsent behind a newer one (cancelled here) isn't this PR's: only
+    // the latest unsent one is a PR prompt still being typed.
+    run(env.core.db, 'UPDATE code_reviews SET finished_at = NULL WHERE task_id = ?', s.id);
+    run(env.core.db, `INSERT INTO code_reviews (id, task_id, strategy, rounds, depth, state, created_at, updated_at) VALUES ('newer', ?, 'sirius-1.0', 1, 1, 'cancelled', ?, ?)`, s.id, Date.now() + 1000, Date.now() + 1000);
+    expect(env.core.sessions.get(s.id).skippedStages).toEqual(['explore', 'design', 'reviewing-code']);
     // At Done too, while the session runs (set straight there, so Merge & Close was skipped as well);
     // an archived one marks no step skipped.
     run(env.core.db, `UPDATE sessions SET stage = 'done' WHERE id = ?`, s.id);

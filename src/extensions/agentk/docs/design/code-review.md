@@ -103,9 +103,10 @@ PR with instructions, which follows its own Code review fields (`openPrReviews()
 `CodeReviews.stepSkipped()` marks the stage bar's Code Review step skipped (`Session.skippedStages`):
 on `off` before the PR, and once the latest PR prompt went with no done Code review whose
 `finished_at` is set since the task last entered Code (Open anyway sets it on a stopped one, and a
-review from an earlier PR prompt, before a move back to Code, isn't this one's), nor one done, not
-stale and with no `finished_at` yet: its PR prompt is still being typed, since `Lifecycle.sendPr`
-moves the stage to Pull Request first and `markSent` writes `finished_at` once the prompt went.
+review from an earlier PR prompt, before a move back to Code, isn't this one's), unless the latest review is
+done, not stale and with no `finished_at` yet (`unsent`): its PR prompt is still being typed, since
+`Lifecycle.sendPr` moves the stage to Pull Request first and `markSent` writes `finished_at` once
+the prompt went. Only the latest counts there, since `stale` is set on it alone.
 Both are read only for the state, not in `runtime()`.
 
 **The PR description.** Before the first round the review is `describing`: AgentK asks the task
