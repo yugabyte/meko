@@ -119,11 +119,27 @@ func TestQuestions(t *testing.T) {
 		t.Errorf("after pruning: %+v", qs)
 	}
 
-	// Deleting the datapack deletes its questions and their asks.
+	// Deleting the datapack deletes its questions and their asks, unless it was moved to Meko Cloud,
+	// whose datapacks keep their questions here.
 	if err = s.AddAsk(ctx, asks[0]); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.DeleteDatapack(ctx, d.ID); err != nil {
+	moved, err := s.CreateDatapack(ctx, "moved", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := asks[0]
+	kept.DatapackID = moved.ID
+	if err = s.AddAsk(ctx, kept); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.DeleteDatapack(ctx, moved.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if qs, _ = s.Questions(ctx, moved.ID); len(qs) != 1 {
+		t.Errorf("a datapack moved to Meko Cloud lost its questions: %+v", qs)
+	}
+	if err = s.DeleteDatapack(ctx, d.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ = s.Asks(ctx, d.ID); len(got) != 0 {

@@ -442,6 +442,11 @@ func (s *Service) extractConversation(ctx context.Context, h Harness, conv int64
 		}
 	}
 	dp := queued[0].DatapackID
+	// A datapack syncing to Meko Cloud takes no memories: its turns stay queued, with no attempt
+	// counted and no call made, for if the sync fails; if it succeeds they go with the datapack.
+	if dp != "" && s.Syncing(dp) {
+		return 0, 0, nil
+	}
 	var d store.DatapackExtraction
 	if dp != "" {
 		if d, err = s.st.GetDatapackExtraction(ctx, dp); err != nil {
@@ -549,6 +554,11 @@ type DatapackExtractionChange struct {
 // SetDatapackExtraction applies a change and returns the settings it leaves.
 func (s *Service) SetDatapackExtraction(ctx context.Context, datapack string, c DatapackExtractionChange) (
 	store.DatapackExtraction, error) {
+	done, werr := s.writing(datapack)
+	if werr != nil {
+		return store.DatapackExtraction{}, werr
+	}
+	defer done()
 	d, err := s.DatapackExtraction(ctx, datapack)
 	if err != nil {
 		return d, err

@@ -21,6 +21,7 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/auth"
 	"github.com/yugabyte/meko/src/meko/internal/callhome"
 	"github.com/yugabyte/meko/src/meko/internal/cloudlink"
+	"github.com/yugabyte/meko/src/meko/internal/cloudsync"
 	"github.com/yugabyte/meko/src/meko/internal/config"
 	"github.com/yugabyte/meko/src/meko/internal/extensions"
 	"github.com/yugabyte/meko/src/meko/internal/logging"
@@ -282,6 +283,11 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	// Usage stats to YugabyteDB's call home service: from release installs, or to [call_home] url.
 	usage := callhome.New(callhome.Options{Store: st, Config: cfg.CallHome, Release: isRelease,
 		Facts: installFacts(l, cfg, svc), Tools: mcp.ToolNames(), Log: log, FirstCheck: testCallHomeFirstCheck})
+	// A datapack whose sync to Meko Cloud a stop interrupted takes no writes from here on, before the
+	// extractor or anything else can write to it; the sync's Resume, below, finishes or undoes it.
+	if err := svc.HoldSyncs(ctx); err != nil {
+		log.Warn("couldn't read the syncs to Meko Cloud a stop interrupted", "error", err)
+	}
 	// Embeds turns for conversation search and knowledge-base chunks as they arrive, and any the
 	// memory engine missed while down; indexes knowledge files; keeps the call log to its retention;
 	// and sends the usage stats.
@@ -366,6 +372,10 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	mcpOpts.Cloud = cloud
 	// The routes that take a datapack send one this Meko doesn't have to the linked Meko Cloud.
 	restOpts.Cloud = cloud
+	// A datapack synced to Meko Cloud is deleted here once Cloud has it; a sync a stop interrupted is
+	// picked up again.
+	restOpts.Sync = &cloudsync.Syncer{Service: svc, Cloud: cloud, Version: version.Version, Log: log}
+	restOpts.Sync.Resume(ctx)
 	mcpHandler := mcp.NewHandler(mcpOpts)
 	web.newOpts = func(wcfg config.Config) server.Options {
 		return server.Options{Info: info, Port: wcfg.Web.Port, Auth: cfg.Server.Auth, Logger: log,

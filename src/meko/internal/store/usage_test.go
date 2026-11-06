@@ -121,11 +121,11 @@ func TestContentUsageFollowsWrites(t *testing.T) {
 	sameUsage(t, s, "document deleted")
 
 	// Deleting a datapack takes everything in it off, through the cascades.
-	if err = s.DeleteDatapack(ctx, "a"); err != nil {
+	if err = s.DeleteDatapack(ctx, "a", false); err != nil {
 		t.Fatal(err)
 	}
 	sameUsage(t, s, "datapack a deleted")
-	if err = s.DeleteDatapack(ctx, "b"); err != nil {
+	if err = s.DeleteDatapack(ctx, "b", false); err != nil {
 		t.Fatal(err)
 	}
 	if u := sameUsage(t, s, "every datapack deleted"); u.Total() != 0 {

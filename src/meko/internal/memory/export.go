@@ -56,6 +56,9 @@ const exportPage = 500
 //   - artifacts.jsonl, and artifacts/<sha256>.<ext>: the same for artifacts.
 //   - call_log.jsonl: the datapack's calls.
 //
+// datapack.json's placement is the project and folder it's filed in, by name with their
+// descriptions, or null when it's Unfiled: a Meko Cloud sync files it there.
+//
 // Ids and dates are kept, and an embedding is null where the sweep hasn't embedded it yet. Every
 // read goes through one snapshot of the database, so writes made while it runs neither drop nor
 // repeat a row. Knowledge files' bytes are on disk, outside the snapshot: one deleted while it runs
@@ -118,6 +121,10 @@ func (s *Service) export(ctx context.Context, st *store.Store, datapack, version
 		return err
 	}
 	calls, err := st.Calls(ctx, datapack, time.Time{})
+	if err != nil {
+		return err
+	}
+	placement, err := exportPlacement(ctx, st, datapack)
 	if err != nil {
 		return err
 	}
@@ -328,7 +335,7 @@ func (s *Service) export(ctx context.Context, st *store.Store, datapack, version
 			"counts": map[string]int{"memories": counts[exportMemories], "collective_memories": counts[exportCollective],
 				"conversations": counts[exportConvs], "knowledge_files": counts[exportKnowledge],
 				"artifacts": counts[exportArtifacts], "calls": counts[exportCallLog]},
-			"datapack": d})
+			"datapack": d, "placement": placement})
 	}); err != nil {
 		return err
 	}
@@ -377,4 +384,32 @@ func pages(read func(offset int) (int, error)) error {
 			return err
 		}
 	}
+}
+
+// exportPlacement is where a datapack is filed, for datapack.json: nil when it's Unfiled.
+func exportPlacement(ctx context.Context, st *store.Store, datapack string) (map[string]string, error) {
+	ps, err := st.Placements(ctx, []string{datapack})
+	if err != nil {
+		return nil, err
+	}
+	pl, ok := ps[datapack]
+	if !ok {
+		return nil, nil
+	}
+	p, err := st.Project(ctx, pl.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	folders, err := st.Folders(ctx, pl.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{"project_name": p.Name, "project_description": p.Description,
+		"folder_name": pl.FolderName, "folder_description": ""}
+	for _, f := range folders {
+		if f.ID == pl.FolderID {
+			out["folder_description"] = f.Description
+		}
+	}
+	return out, nil
 }

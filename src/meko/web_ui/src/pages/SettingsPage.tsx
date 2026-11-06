@@ -1,4 +1,4 @@
-// Meko's settings, in this order: the way to the Meko Cloud link; memory extraction and Search's
+// Meko's settings, in this order: the way to the Meko Cloud link; Cloud Sync; memory extraction and Search's
 // answers, which run the user's own Claude Code (each turned on after one test call); who can reach
 // Meko; keeping calls' contents and the way to the Calls page; and anonymous usage stats.
 
@@ -6,15 +6,14 @@ import { useState, type ReactNode } from "react";
 import { Cloud, ListTree } from "lucide-react";
 import { api } from "../lib/api";
 import { bytes, dateTime } from "../lib/format";
-import { CALLS, href, navigate, type Route } from "../lib/route";
+import { CALLS, MEKO_CLOUD, href, navigate, type Route } from "../lib/route";
 import type { AuthStatus, UsageStats } from "../lib/types";
 import { useLoad } from "../lib/useLoad";
+import { CloudSyncCard } from "../components/CloudSyncCard";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Button, Card, ErrorNote, Spinner, Toggle } from "../components/ui";
 
 const HARNESS = "claude";
-
-const MEKO_CLOUD = { tab: "overview" as const, view: "meko-cloud" as const };
 
 const LINK_CLASS =
   "inline-flex h-7 items-center gap-1.5 rounded-lg border bg-card px-2 text-xs font-medium hover:bg-accent";
@@ -36,6 +35,7 @@ export function SettingsPage({ auth }: { auth: AuthStatus }) {
         </p>
         <PageLink to={MEKO_CLOUD} icon={<Cloud className="size-3.5" />} label="Meko Cloud" />
       </Card>
+      <CloudSyncCard />
       <ClaudeFeatures />
       <AccessCard auth={auth} />
       <CallContentsCard />

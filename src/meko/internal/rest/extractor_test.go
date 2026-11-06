@@ -261,3 +261,42 @@ func TestMemoryExtractor(t *testing.T) {
 	}
 	wantErr(t, e, "POST", settings+"/run", nil, 409, "EXTRACTOR_OFF")
 }
+
+// A datapack syncing to Meko Cloud is skipped by extraction: no call is made, its turns stay queued
+// with no attempt counted, and the run goes on; once the sync ends they're extracted as usual.
+func TestExtractorSkipsASyncingDatapack(t *testing.T) {
+	h := &fakeHarness{}
+	fakeClaude(t)
+	e := testenv.Start(t, testenv.Options{ExtractorHarness: h})
+	ctx := context.Background()
+	const settings = "/settings/memory-extractor"
+	if r := asAdmin(t, e, settings, map[string]any{"harness": "claude"}); r.Status != 200 {
+		t.Fatalf("set up: %+v", r)
+	}
+	h.reset()
+	conv, err := e.Service.CreateConversation(ctx, memory.CreateConversation{AgentID: "claude_code:x",
+		DatapackID: e.DatapackID, SessionID: "s", Title: "setup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Service.AddMessage(ctx, memory.AddMessage{ConversationID: conv.ID, AgentID: "claude_code:x",
+		DatapackID: e.DatapackID, Input: "We deploy with helm on GKE in us-west1, never kubectl apply.",
+		Output: "Noted, I'll keep that in mind for this project.", Seed: "1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = e.Service.BeginSync(e.DatapackID); err != nil {
+		t.Fatal(err)
+	}
+	run := obj(okData(t, e, "POST", settings+"/run", nil, 200))
+	if _, _, n := h.last(); n != 0 || num(run["failed"]) != 0 || run["last_error"] != nil && run["last_error"] != "" {
+		t.Fatalf("a syncing datapack's turns were sent: %d calls, run %v", n, run)
+	}
+	if st := obj(okData(t, e, "GET", settings, nil, 200)); num(st["queued"]) != 1 {
+		t.Fatalf("its turn left the queue: %v", st)
+	}
+	e.Service.EndSync(e.DatapackID)
+	okData(t, e, "POST", settings+"/run", nil, 200)
+	if _, _, n := h.last(); n != 1 {
+		t.Errorf("after the sync ended, %d calls, want 1", n)
+	}
+}

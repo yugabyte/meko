@@ -110,7 +110,7 @@ func (s *Store) UpdateDatapack(ctx context.Context, id string, name, description
 
 // DeleteDatapack deletes a datapack and everything in it (memories, entities, history,
 // conversations, and their vectors), or returns ErrNoDatapack.
-func (s *Store) DeleteDatapack(ctx context.Context, id string) error {
+func (s *Store) DeleteDatapack(ctx context.Context, id string, keepQuestions bool) error {
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -126,9 +126,12 @@ func (s *Store) DeleteDatapack(ctx context.Context, id string) error {
 		}
 		return rerr
 	}
-	// Its questions have no foreign key to it (0011_questions.sql); their asks go with them.
-	if _, err = tx.ExecContext(ctx, "DELETE FROM questions WHERE datapack_id = ?", id); err != nil {
-		return err
+	// Its questions have no foreign key to it (0011_questions.sql), so a datapack moved to Meko Cloud
+	// keeps them; otherwise they, and their asks, go with it.
+	if !keepQuestions {
+		if _, err = tx.ExecContext(ctx, "DELETE FROM questions WHERE datapack_id = ?", id); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
