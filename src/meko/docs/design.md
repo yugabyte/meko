@@ -49,11 +49,13 @@ Given one of `meko-cli`'s commands, `meko` runs nothing and names the `meko-cli`
 
 Each command's help comes from one table (`help.go`: its group, summary, usage and examples, and its
 flag set's flags), which `meko --help`, `meko help <cmd>` and `<cmd> --help` (exit 0) all print. `install`, `start`, `stop`, `restart` and `status` print a summary
-(`report.go`): a row per step marked `✓`, `!` or `✗`, the links (`Humans (web UI)` on the web
-listener, `Agents (MCP, API)` on the API listener), and the commands to run next (`next.go`, which
+(`report.go`): a row per step marked `✓`, `!` or `✗`, a `● Meko <version> is running` headline,
+the links as plain aligned rows (`Web UI` on the web listener, `Agents` on the API listener,
+`Cloud`), and the commands to run next (`next.go`, the first shown as the call to action, which
 leaves out what's already set up, an agent connected, memory extraction on or Meko Cloud linked,
 and once AgentK is installed offers opening it in place of installing it); the extensions
-print their own rows ([install.md](install.md#the-summary-rows)). `status` is that checklist;
+print their own rows ([install.md](install.md#the-summary-rows)), and the colors are one palette
+that reads on light and dark terminals ([install.md](install.md#colors)). `status` is that checklist;
 `status --verbose` has everything, and `status --json` the server's status reply.
 
 Every command takes `--data-dir` (default `~/.meko`, or `MEKO_HOME`). [cli.md](cli.md) lists them
@@ -64,7 +66,7 @@ all; the ones that run the server:
 | `serve` | Runs the server in the foreground. What `start`, launchd and systemd run. |
 | `start` | With the login service installed, starts it ([install.md](install.md)). Otherwise starts `serve` in the background in its own session (setsid), waits until `/api/v1/status` (with the admin token) reports the new server's pid, and prints the URL. If that doesn't happen within 10 s, it stops the server (SIGTERM, then SIGKILL) and prints `logs/start.log`. Already running: says so and exits 0. Then starts the extensions, and waits up to 10 s for the web listener (which binds after their handoff) before it prints the links. |
 | `stop` | Stops the extensions, then the service, or sends SIGTERM to the pid in `run/meko.pid` and waits up to 30 s (longer than the server's 10 s drain plus 15 s for its children) before SIGKILL. Not running: says so and exits 0. |
-| `status` | Running or not, with a row each for the memory engine, the service, updates and the extensions (and the Meko Cloud link when it can't be read), then the links in a box titled with the version, pid and uptime (people's web UI, agents' MCP URL, and the Meko Cloud it's linked to), then what to run next, from `/api/v1/status`. Each extension's row is its `<command> status`, all of them run at once while the server is asked, each cut off after 3 s (`extensions.StatusTimeout`; a `!` row, "didn't answer in 3s"); `--verbose` adds the version, port, uptime, data folder, models, certificate, auth mode and children, `--json` the reply itself (usage stats included). Exits 3 when not running. |
+| `status` | Running or not, with a row each for the memory engine, the service, updates and the extensions (and the Meko Cloud link when it can't be read), then a headline with the version, pid and uptime and the link rows (people's web UI, agents' MCP URL, and the Meko Cloud it's linked to), then what to run next, from `/api/v1/status`. Each extension's row is its `<command> status`, all of them run at once while the server is asked, each cut off after 3 s (`extensions.StatusTimeout`; a `!` row, "didn't answer in 3s"); `--verbose` adds the version, port, uptime, data folder, models, certificate, auth mode and children, `--json` the reply itself (usage stats included). Exits 3 when not running. |
 | `version` | Version, commit, Go version, SQLite and sqlite-vec versions (`--json` for installers and updates). |
 | `destroy` | Removes the data folder for good (below). |
 

@@ -21,23 +21,33 @@ func TestNextSteps(t *testing.T) {
 	connect := [2]string{"meko agent connect claude", "use Meko in Claude Code (or codex, kiro, opencode, cursor)"}
 	learn := [2]string{"meko memory-extractor use claude", "learn memories from your conversations, through Claude Code"}
 	share := [2]string{"meko cloud_link", "share with your team through Meko Cloud"}
-	addAgentK := [2]string{"meko extension install agentk", "add AgentK, the agentic coder for ADLC"}
-	openAgentK := [2]string{"me_koder ui", "open AgentK, the agentic coder for ADLC"}
-	cli := [2]string{"meko-cli", "search and add to what Meko keeps"}
+	addAgentK := [2]string{"meko extension install agentk", "add AgentK, which runs coding agents from task to merged PR"}
+	openAgentK := [2]string{"me_koder ui", "open AgentK"}
 	status := [2]string{"meko status", "check on Meko at any time"}
+	statusInstall := [2]string{"meko status", "check on Meko at any time · meko uninstall removes it"}
 	for _, c := range []struct {
 		name string
 		s    nextState
 		kind nextFor
 		want [][2]string
 	}{
-		{"install, nothing set up", fresh, nextInstall, [][2]string{ui, connect, learn, share, addAgentK, status}},
-		{"install, everything set up", done, nextInstall, [][2]string{ui, openAgentK, status}},
-		{"start", done, nextStart, [][2]string{ui, openAgentK, cli, status}},
+		{"install, nothing set up", fresh, nextInstall, [][2]string{ui, connect, learn, share, addAgentK, statusInstall}},
+		{"install, everything set up", done, nextInstall, [][2]string{ui, openAgentK, statusInstall}},
+		{"install, AgentK just added in the picker: it comes first", func() nextState {
+			s := fresh
+			s.agentK, s.added = true, "agentk"
+			return s
+		}(), nextInstall, [][2]string{openAgentK, connect, learn, share, statusInstall}},
+		{"install, Presenter just added", func() nextState {
+			s := done
+			s.added = "presenter"
+			return s
+		}(), nextInstall, [][2]string{{"meko ui /ext/presenter/", "open Presenter"}, statusInstall}},
+		{"start", done, nextStart, [][2]string{ui, openAgentK, status}},
 		{"help", fresh, nextUse, [][2]string{ui, connect, learn, share, addAgentK}},
 		{"web UI off", nextState{webOff: true, agent: claude, connected: true, claude: true, extracting: true,
 			linked: true, agentKRead: true}, nextInstall, [][2]string{
-			{"meko ui start", "turn the web UI on, when you want it"}, addAgentK, status}},
+			{"meko ui start", "turn the web UI on, when you want it"}, addAgentK, statusInstall}},
 		{"no Claude Code: connect another agent, and no extraction", nextState{running: true, agent: kiro,
 			linked: true, agentK: true, agentKRead: true}, nextUse, [][2]string{ui,
 			{"meko agent connect kiro", "use Meko in Kiro CLI (or claude, codex, opencode, cursor)"}, openAgentK}},
@@ -53,7 +63,7 @@ func TestNextSteps(t *testing.T) {
 			{"meko start", "start Meko"}, openAgentK}},
 		{"me_koder runs another Meko's AgentK", nextState{running: true, agent: claude, connected: true, claude: true,
 			extracting: true, linked: true, agentK: true, agentKRead: true, agentKOther: true}, nextUse, [][2]string{ui,
-			{"meko ui /ext/agentk/", "open AgentK, the agentic coder for ADLC"}}},
+			{"meko ui /ext/agentk/", "open AgentK"}}},
 		{"the extensions' registry unread: no AgentK step", nextState{running: true, agent: claude, connected: true,
 			extracting: true, linked: true}, nextUse, [][2]string{ui}},
 	} {

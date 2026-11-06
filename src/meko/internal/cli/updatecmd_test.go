@@ -63,7 +63,7 @@ func TestUpdateRestartsMekoThroughTheService(t *testing.T) {
 	configurePort(t, dir, port)
 	f := useFakeService(t)
 	code, out, errs := run("install", "--data-dir", dir)
-	want(t, "install", code, 0, out+errs, "  ✓ Server          running at http://127.0.0.1:"+port)
+	want(t, "install", code, 0, out+errs, "  ✓ Server          started in ")
 	releaseInstall(t, updateOld, updateNext)
 
 	var o, e bytes.Buffer

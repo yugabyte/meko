@@ -130,8 +130,11 @@ func TestInstallRunsTheServiceAndExtensionsFollowMeko(t *testing.T) {
 	configurePort(t, dir, port)
 	f := useFakeService(t)
 	code, out, errs := run("install", "--data-dir", dir)
-	want(t, "install", code, 0, out+errs, "  ✓ Server          running at http://127.0.0.1:"+port)
+	want(t, "install", code, 0, out+errs, "  ✓ Server          started in ")
+	want(t, "install's agents link", code, 0, out, "\n  Agents  http://127.0.0.1:"+port+"/mcp · MCP and API\n")
 	want(t, "install's next steps", code, 0, out, "meko extension install agentk")
+	want(t, "install's way out", code, 0, out,
+		"  meko status                      check on Meko at any time · meko uninstall removes it\n")
 	if f.spec.DataDir != dir || f.spec.ServiceLog != paths.New(dir).ServiceLog || f.spec.Exe == "" {
 		t.Errorf("spec %+v", f.spec)
 	}
@@ -486,9 +489,10 @@ func TestStartRefusesFlagsTheServiceWouldIgnore(t *testing.T) {
 	configurePort(t, dir, port)
 	useFakeService(t)
 	code, out, errs := run("install", "--data-dir", dir)
-	want(t, "install", code, 0, out+errs, "  ✓ Service         fake, starts at login and restarts on failure\n")
-	want(t, "install's box", code, 0, out, "│ Meko dev ")
-	want(t, "install's Cloud", code, 0, out, "│ Cloud               Not linked ")
+	want(t, "install", code, 0, out+errs,
+		"  ✓ Service         starts at login, restarts on failure · stop it with meko stop\n")
+	want(t, "install's headline", code, 0, out, "\n  ● Meko dev is running\n")
+	want(t, "install's Cloud", code, 0, out, "\n  Cloud   not linked\n")
 	code, _, errs = run("restart", "--data-dir", dir, "--log-level", "debug")
 	want(t, "restart --log-level", code, 1, errs, "reads config.toml")
 	code, _, errs = run("stop", "--data-dir", dir)

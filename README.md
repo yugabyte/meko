@@ -39,6 +39,8 @@ On Linux (x64 or arm64) or macOS 14 or newer on Apple Silicon:
 curl -fsSL https://mekodata.ai/install.sh | sh
 ```
 
+Run it again to upgrade. A first install ends by offering the extensions, such as AgentK.
+
 Add a memory and search:
 ```sh
 meko-cli add_memory "Elementary, my dear Watson"

@@ -43,6 +43,7 @@ var Known = map[string]Catalog{
 		Title: "AgentK",
 		Description: "Runs Claude Code, OpenCode and Kiro sessions across your projects, from task to merged PR, " +
 			"with Meko as their shared memory.",
+		Summary: "runs coding agents across your projects, from task to merged PR",
 		Command: "me_koder",
 		// Its names before: agentk, and agent-k-local before the rename to AgentK. Its releases still
 		// carry both, as links to me_koder; Rename moves an install onto the new name.
@@ -77,6 +78,7 @@ var Known = map[string]Catalog{
 		Title: "Presenter",
 		Description: "Builds presentations that branch with the room from your datapacks: Claude drafts the story " +
 			"map and the slides, and you pick each path live.",
+		Summary:       "presentations that branch with the room, built from your datapacks",
 		Command:       "me_presenter",
 		OldCommands:   []string{"meko_presenter"},
 		TagPrefixes:   []string{"presenter-v"},
@@ -104,6 +106,7 @@ func KnownNames() []string {
 type Catalog struct {
 	Title       string
 	Description string   // what it does, in a sentence, for the web UI's Extensions page
+	Summary     string   // what it does, in a few lowercase words, for meko install's picker
 	Command     string   // the program's name, looked for on PATH and in ~/.local/bin
 	OldCommands []string // names it had before, looked for after Command
 	TagPrefixes []string // its release tags, newest naming first

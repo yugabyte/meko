@@ -191,7 +191,7 @@ func TestCloudLink(t *testing.T) {
 	want(t, "cloud_link through the server", code, 0, out+errs, "✓ Linked to "+cloud+"/mcp")
 	want(t, "cloud_link's next steps", code, 0, out, "\n\nNext:\n  meko ui ")
 	code, out, _ = run("status", "--data-dir", dir)
-	want(t, "status's Cloud row", code, 0, out, "│ Cloud               "+cloud+" ")
+	want(t, "status's Cloud row", code, 0, out, "\n  Cloud   "+cloud+"\n")
 
 	code, _, errs = run("cloud_link", "--data-dir", dir, "--off", "--url", "x")
 	want(t, "--off with a URL", code, exitUsage, errs, "--off takes no URLs")
@@ -739,27 +739,27 @@ func TestPickKeyPress(t *testing.T) {
 	}
 }
 
-// The summary box's Cloud row names the linked web app; a link to another Meko server, whose web app
+// The summary's Cloud row names the linked web app; a link to another Meko server, whose web app
 // Meko can't know, names its MCP URL instead, and an unlinked Meko says so.
 func TestCloudRow(t *testing.T) {
 	dir, _ := setup(t)
 	t.Setenv("MEKO_SECRETS", "file")
 	cloud := fakeCloud(t)
-	if r := cloudRow(paths.New(dir)); r != [2]string{"Cloud", "Not linked"} {
+	if r := cloudRow(paths.New(dir)); r != (linkRow{label: "Cloud", note: "not linked"}) {
 		t.Errorf("unlinked: %q", r)
 	}
 	withStdin(t, testCloudKey+"\n")
 	if code, out, errs := run("cloud_link", "--data-dir", dir, "--url", cloud+"/mcp"); code != 0 {
 		t.Fatalf("cloud_link: %d %s%s", code, out, errs)
 	}
-	if r := cloudRow(paths.New(dir)); r != [2]string{"Cloud", cloud + "/mcp (key …wxyz)"} {
+	if r := cloudRow(paths.New(dir)); r != (linkRow{label: "Cloud", note: cloud + "/mcp (key …wxyz)"}) {
 		t.Errorf("linked with no web app: %q", r)
 	}
 	withStdin(t, testCloudKey+"\n")
 	if code, out, errs := run("cloud_link", "--data-dir", dir, "--web-url", cloud); code != 0 {
 		t.Fatalf("cloud_link --web-url: %d %s%s", code, out, errs)
 	}
-	if r := cloudRow(paths.New(dir)); r != [2]string{"Cloud", cloud} {
+	if r := cloudRow(paths.New(dir)); r != (linkRow{label: "Cloud", url: cloud}) {
 		t.Errorf("linked with a web app: %q", r)
 	}
 }

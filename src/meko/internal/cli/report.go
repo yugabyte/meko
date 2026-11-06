@@ -4,14 +4,14 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"text/tabwriter"
 	"unicode/utf8"
 
 	"github.com/yugabyte/meko/src/meko/internal/spin"
 )
 
 // The summary install, start, stop, restart and status print: a row per step, marked done (✓), a
-// warning (!) or failed (✗); a box of links; and the commands to run next. Extensions print their
+// warning (!) or failed (✗); a ● headline and the links, as plain aligned rows; and the commands to
+// run next. Extensions print their
 // start and stop rows in the same format when Meko runs them with extensions.SummaryEnv set
 // (docs/install.md, "The summary rows"). The marks and the row format are package spin's, whose
 // steps show the same rows with rotating dots while they run.
@@ -44,33 +44,53 @@ func (r report) headline(k stepKind, text string) {
 	fmt.Fprintf(r.w, "%s %s\n", r.mark(k), text)
 }
 
-// box prints a title and label/value rows in a box as wide as its widest line.
-func (r report) box(title string, rows [][2]string) {
-	labelW := 0
-	for _, row := range rows {
-		labelW = max(labelW, utf8.RuneCountInString(row[0]))
-	}
-	lines := make([]string, len(rows))
-	inner := utf8.RuneCountInString(title)
-	for i, row := range rows {
-		lines[i] = row[0] + strings.Repeat(" ", labelW-utf8.RuneCountInString(row[0])+3) + row[1]
-		inner = max(inner, utf8.RuneCountInString(lines[i]))
-	}
-	pad := func(s string) string { return s + strings.Repeat(" ", inner-utf8.RuneCountInString(s)) }
-	rule := strings.Repeat("─", inner+2)
-	fmt.Fprintf(r.w, "\n┌%s┐\n│ %s │\n├%s┤\n", rule, pad(title), rule)
-	for _, l := range lines {
-		fmt.Fprintf(r.w, "│ %s │\n", pad(l))
-	}
-	fmt.Fprintf(r.w, "└%s┘\n", rule)
+// running prints the headline of a running Meko, after a blank line: "  ● Meko 1.2 is running · pid
+// 7, up 2h", its text bold and its note dim.
+func (r report) running(text, note string) {
+	fmt.Fprintf(r.w, "\n  %s %s\n", spin.Green("●", r.color), spin.Note(spin.Bold(text, r.color), note, r.color))
 }
 
-// next prints the commands to run next, each with what it does.
+// linkRow is a line of links: where people or agents reach Meko. url is "" for a row that has only
+// a note ("Cloud    not linked").
+type linkRow struct{ label, url, note string }
+
+// links prints the link rows, after a blank line, their labels dim and aligned, and each URL at
+// the end of its line's value, where it copies cleanly: blue, underlined and an OSC 8 link on a
+// terminal.
+func (r report) links(rows []linkRow) {
+	labelW := 0
+	for _, row := range rows {
+		labelW = max(labelW, utf8.RuneCountInString(row.label))
+	}
+	fmt.Fprintln(r.w)
+	for _, row := range rows {
+		label := spin.Dim(row.label, r.color) + strings.Repeat(" ", labelW-utf8.RuneCountInString(row.label))
+		if row.url == "" {
+			fmt.Fprintf(r.w, "  %s  %s\n", label, row.note)
+			continue
+		}
+		fmt.Fprintf(r.w, "  %s  %s\n", label, spin.Note(spin.Link(row.url, r.color), row.note, r.color))
+	}
+}
+
+// next prints the commands to run next, each with what it does: the first as the call to action
+// and the rest blue on a terminal, and what follows a " · " in what it does dim.
 func (r report) next(cmds [][2]string) {
 	fmt.Fprintf(r.w, "\nNext:\n")
-	tw := tabwriter.NewWriter(r.w, 0, 0, 4, ' ', 0)
+	cmdW := 0
 	for _, c := range cmds {
-		fmt.Fprintf(tw, "  %s\t%s\n", c[0], c[1])
+		cmdW = max(cmdW, utf8.RuneCountInString(c[0]))
 	}
-	_ = tw.Flush()
+	for i, c := range cmds {
+		pad := strings.Repeat(" ", cmdW-utf8.RuneCountInString(c[0])+4)
+		what, note, _ := strings.Cut(c[1], " · ")
+		what = spin.Note(what, note, r.color)
+		switch {
+		case i == 0 && r.color:
+			// Its blue starts a column early, so its text lines up with the commands below it.
+			fmt.Fprintf(r.w, " %s%s%s\n", spin.CTA(c[0], true), pad[1:], what)
+		default:
+			fmt.Fprintf(r.w, "  %s%s%s\n", spin.Blue(c[0], r.color), pad, what)
+		}
+	}
 }

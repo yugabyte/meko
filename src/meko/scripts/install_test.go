@@ -16,26 +16,13 @@ import (
 
 const version = "0.20261022.3"
 
-// fakeGh answers the gh calls install.sh makes from a folder of release assets.
+// fakeGh is a gh that's signed in and records being run: the installer never runs it.
 const fakeGh = `#!/bin/sh
-case "$1 $2" in
-  "auth status") [ -z "$FAKE_GH_SIGNED_OUT" ] ;;
-  "api "*) echo "$FAKE_TAG" ;;
-  "release download")
-    tag=$3; shift 3
-    dir=""; pats=""
-    while [ $# -gt 0 ]; do
-      case $1 in --dir) dir=$2; shift 2 ;; --pattern) pats="$pats $2"; shift 2 ;; *) shift ;; esac
-    done
-    [ "$tag" = "$FAKE_TAG" ] || exit 1
-    for p in $pats; do cp "$FAKE_ASSETS/$p" "$dir/" || exit 1; done ;;
-  *) echo "fake gh: $*" >&2; exit 1 ;;
-esac
+echo "$*" >> "$FAKE_GH_LOG"
 `
 
-// fakeCurl answers install.sh's curl calls without gh: the latest release's redirect and the
-// asset downloads, logging each call's arguments. FAKE_CURL_404 answers 404, as GitHub does
-// for a private repo without a token.
+// fakeCurl answers install.sh's curl calls: the latest release's redirect and the asset
+// downloads, logging each call's arguments. FAKE_CURL_404 answers 404.
 const fakeCurl = `#!/bin/sh
 echo "$*" >> "$FAKE_CURL_LOG"
 [ -z "$FAKE_CURL_404" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
@@ -51,15 +38,16 @@ esac
 `
 
 type env struct {
-	home, app, assets, args, curlLog string
-	vars                             []string
+	home, app, assets, args, curlLog, ghLog string
+	vars                                    []string
 }
 
 func setup(t *testing.T, sums func(tarball []byte) string) env {
 	t.Helper()
 	root := t.TempDir()
 	e := env{home: filepath.Join(root, "home"), assets: filepath.Join(root, "assets"),
-		args: filepath.Join(root, "meko-args"), curlLog: filepath.Join(root, "curl-log")}
+		args: filepath.Join(root, "meko-args"), curlLog: filepath.Join(root, "curl-log"),
+		ghLog: filepath.Join(root, "gh-log")}
 	e.app = filepath.Join(e.home, ".local", "share", "meko", "app")
 	bin := filepath.Join(root, "bin")
 	for _, d := range []string{e.home, e.assets, bin} {
@@ -75,8 +63,8 @@ func setup(t *testing.T, sums func(tarball []byte) string) env {
 	if err := os.WriteFile(filepath.Join(bin, "curl"), []byte(fakeCurl), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	// The release's meko records how it was run.
-	meko := "#!/bin/sh\necho \"$*\" > " + e.args + "\n"
+	// The release's meko records how it was run, and what the installer told it.
+	meko := "#!/bin/sh\necho \"$*\" > " + e.args + "\nenv | grep '^MEKO_INSTALL_' | sort > " + e.args + ".env\n"
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
@@ -104,7 +92,7 @@ func setup(t *testing.T, sums func(tarball []byte) string) env {
 		t.Fatal(err)
 	}
 	e.vars = []string{"HOME=" + e.home, "PATH=" + bin + ":/usr/bin:/bin", "FAKE_TAG=meko-v" + version,
-		"FAKE_ASSETS=" + e.assets, "FAKE_CURL_LOG=" + e.curlLog,
+		"FAKE_ASSETS=" + e.assets, "FAKE_CURL_LOG=" + e.curlLog, "FAKE_GH_LOG=" + e.ghLog,
 		"MEKO_TEST_UNAME_S=Linux", "MEKO_TEST_UNAME_M=x86_64", "NO_COLOR=1"}
 	return e
 }
@@ -128,8 +116,12 @@ func (e env) run(t *testing.T, extra []string, args ...string) (int, string) {
 func TestInstallUnpacksTheNewestReleaseAndRunsItsInstall(t *testing.T) {
 	e := setup(t, goodSums)
 	code, out := e.run(t, nil, "--no-service")
-	if code != 0 || !strings.Contains(out, "checksum verified") {
+	if code != 0 || !strings.Contains(out, "  ✓ Download        meko "+version+" · 0 MB in ") ||
+		!strings.Contains(out, " · checksum verified\n") {
 		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	if !strings.Contains(out, "  ◆ meko  "+version+" · Linux · x64\n    Installs into your home folder, no sudo\n") {
+		t.Errorf("no header:\n%s", out)
 	}
 	if _, err := os.Stat(filepath.Join(e.app, version, "bin", "meko")); err != nil {
 		t.Fatalf("not unpacked: %v", err)
@@ -137,7 +129,15 @@ func TestInstallUnpacksTheNewestReleaseAndRunsItsInstall(t *testing.T) {
 	if b, _ := os.ReadFile(e.args); string(b) != "install --no-service\n" { //nolint:gosec // G304: test file
 		t.Errorf("meko ran with %q", b)
 	}
-	// As meko install would: then the installer says it's there and changes nothing.
+	// meko install is told it's the first install, that it may ask, and when the run began.
+	told, _ := os.ReadFile(e.args + ".env") //nolint:gosec // G304: test file
+	for _, want := range []string{"MEKO_INSTALL_ASK=1\n", "MEKO_INSTALL_FIRST=1\n", "MEKO_INSTALL_FROM=\n",
+		"MEKO_INSTALL_STARTED=1"} {
+		if !strings.Contains(string(told), want) {
+			t.Errorf("meko install wasn't told %q:\n%s", want, told)
+		}
+	}
+	// As meko install would: then the installer says it's up to date, and changes nothing.
 	if err := os.Symlink(version, filepath.Join(e.app, "current")); err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestInstallUnpacksTheNewestReleaseAndRunsItsInstall(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, out = e.run(t, nil)
-	if code != 0 || !strings.Contains(out, "already installed") {
+	if code != 0 || out != "  ✓ Meko "+version+" is up to date · --reinstall sets it up again\n" {
 		t.Fatalf("again: exit %d:\n%s", code, out)
 	}
 	if _, err := os.Stat(e.args); !os.IsNotExist(err) {
@@ -157,43 +157,83 @@ func TestInstallUnpacksTheNewestReleaseAndRunsItsInstall(t *testing.T) {
 	}
 }
 
-func TestInstallDownloadsAnonymouslyWithoutGhOrToken(t *testing.T) {
+// Run again with a newer release out, the installer upgrades: its header names both versions, and
+// meko install is told what it replaces, and that it isn't the first install.
+func TestInstallUpgradesAnOlderRelease(t *testing.T) {
 	e := setup(t, goodSums)
-	code, out := e.run(t, []string{"FAKE_GH_SIGNED_OUT=1"}, "--no-service")
-	if code != 0 || !strings.Contains(out, "checksum verified") {
+	old := filepath.Join(e.app, "0.20261001.1", "bin")
+	if err := os.MkdirAll(old, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	//nolint:gosec // G306: a test script
+	if err := os.WriteFile(filepath.Join(old, "meko"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("0.20261001.1", filepath.Join(e.app, "current")); err != nil {
+		t.Fatal(err)
+	}
+	code, out := e.run(t, nil, "--non-interactive")
+	if code != 0 || !strings.Contains(out, "  ◆ meko  0.20261001.1 → "+version+" · Linux · x64\n\n") ||
+		strings.Contains(out, "no sudo") {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
-	if b, _ := os.ReadFile(e.args); string(b) != "install --no-service\n" { //nolint:gosec // G304: test file
+	if b, _ := os.ReadFile(e.args); string(b) != "install\n" { //nolint:gosec // G304: test file
 		t.Errorf("meko ran with %q", b)
 	}
+	told, _ := os.ReadFile(e.args + ".env") //nolint:gosec // G304: test file
+	for _, want := range []string{"MEKO_INSTALL_ASK=0\n", "MEKO_INSTALL_FIRST=\n", "MEKO_INSTALL_FROM=0.20261001.1\n"} {
+		if !strings.Contains(string(told), want) {
+			t.Errorf("meko install wasn't told %q:\n%s", want, told)
+		}
+	}
+}
+
+// The installer downloads with curl alone, with no sign-in: never gh, even signed in, never the API
+// and never a token, even with GITHUB_TOKEN set.
+func TestInstallDownloadsAnonymouslyWithCurl(t *testing.T) {
+	e := setup(t, goodSums)
+	for _, args := range [][]string{{"--no-service"}, {"--version", version, "--reinstall"}} {
+		code, out := e.run(t, []string{"GITHUB_TOKEN=test-token"}, args...)
+		if code != 0 || !strings.Contains(out, "checksum verified") {
+			t.Fatalf("%v: exit %d:\n%s", args, code, out)
+		}
+	}
+	if b, err := os.ReadFile(e.ghLog); err == nil { //nolint:gosec // G304: test file
+		t.Errorf("gh ran:\n%s", b)
+	}
 	log, _ := os.ReadFile(e.curlLog) //nolint:gosec // G304: test file
-	if strings.Contains(string(log), "api.github.com") || strings.Contains(string(log), "Authorization") {
-		t.Errorf("an anonymous install should use neither the API nor a token:\n%s", log)
+	if strings.Contains(string(log), "api.github.com") || strings.Contains(string(log), "Authorization") ||
+		strings.Contains(string(log), "test-token") {
+		t.Errorf("the downloads should use neither the API nor a token:\n%s", log)
 	}
 	if !strings.Contains(string(log), "https://github.com/yugabyte/meko/releases/latest") {
 		t.Errorf("the version should come from the latest release's redirect:\n%s", log)
 	}
 }
 
-func TestInstallSendsGithubTokenWhenGhIsSignedOut(t *testing.T) {
+// A failed download says what failed, and that running again is safe, with no sign-in hint.
+func TestInstallSaysWhenADownloadFails(t *testing.T) {
 	e := setup(t, goodSums)
-	code, out := e.run(t, []string{"FAKE_GH_SIGNED_OUT=1", "GITHUB_TOKEN=tok"}, "--version", version)
-	if code != 0 || !strings.Contains(out, "checksum verified") {
-		t.Fatalf("exit %d:\n%s", code, out)
+	code, out := e.run(t, []string{"FAKE_CURL_404=1"})
+	if code == 0 || !strings.Contains(out, "could not find a Meko release in yugabyte/meko") {
+		t.Errorf("no release: exit %d:\n%s", code, out)
 	}
-	log, _ := os.ReadFile(e.curlLog) //nolint:gosec // G304: test file
-	if n := strings.Count(string(log), "-H Authorization: Bearer tok"); n != 2 {
-		t.Errorf("both downloads should send the token, %d did:\n%s", n, log)
+	code, out = e.run(t, []string{"FAKE_CURL_404=1"}, "--version", version)
+	if code == 0 || !strings.Contains(out, "  ✗ the download of meko-"+version+"-linux-x64.tar.gz failed\n") ||
+		!strings.Contains(out, "running the installer again is safe\n") || strings.Contains(out, "gh auth") {
+		t.Errorf("--version: exit %d:\n%s", code, out)
 	}
 }
 
-func TestInstallNamesSigningInWhenAnAnonymousDownloadFails(t *testing.T) {
+// Off a terminal, the run has no colors, no dots and no carriage returns, only plain lines.
+func TestInstallIsPlainOffATerminal(t *testing.T) {
 	e := setup(t, goodSums)
-	for _, args := range [][]string{nil, {"--version", version}} {
-		code, out := e.run(t, []string{"FAKE_GH_SIGNED_OUT=1", "FAKE_CURL_404=1"}, args...)
-		if code == 0 || !strings.Contains(out, "gh auth login") {
-			t.Errorf("%v: exit %d:\n%s", args, code, out)
-		}
+	code, out := e.run(t, []string{"NO_COLOR="}, "--no-service")
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	if strings.ContainsAny(out, "\r\033") || strings.Contains(out, "⣾") {
+		t.Errorf("escape codes or dots in:\n%q", out)
 	}
 }
 
@@ -225,12 +265,12 @@ func TestInstallHelpPrintsTheHeaderOnly(t *testing.T) {
 			t.Fatalf("%s: exit %d:\n%s", flag, code, out)
 		}
 		for _, want := range []string{"curl -fsSL https://mekodata.ai/install.sh | sh", "--version <X.Y.Z>",
-			"--reinstall", "--no-service", "--non-interactive", "GITHUB_TOKEN"} {
+			"--reinstall", "--no-service", "--non-interactive", "NO_COLOR"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("%s: no %q in:\n%s", flag, want, out)
 			}
 		}
-		if strings.Contains(out, "#") || strings.Contains(out, "set -eu") {
+		if strings.Contains(out, "#") || strings.Contains(out, "set -eu") || strings.Contains(out, "GITHUB_TOKEN") {
 			t.Errorf("%s: printed past the header or kept its #:\n%s", flag, out)
 		}
 		if _, err := os.Stat(e.app); !os.IsNotExist(err) {

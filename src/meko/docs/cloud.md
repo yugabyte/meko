@@ -60,7 +60,7 @@ every extension the same way (`internal/cloudlink`).
   running it goes through the API listener (admin token), so the running extensions are told;
   otherwise it saves the link itself, and they read it when they next ask. A link ends
   with `✓ Linked to <url> (key …abcd)` and what to run next. `meko status`, `start` and
-  `install` show the link in their box of links (`Cloud`, the linked web app's URL, or `Not
+  `install` show the link in their link rows (`Cloud`, the linked web app's URL, or `not
   linked`), and `meko status --verbose` with its key hint (`Meko Cloud:    linked to …`, or `not
   linked`).
 - A saved change (`PUT` or `DELETE`) moves back the agents a Meko from before connected to Meko

@@ -235,8 +235,8 @@ func TestStatusAsksTheExtensionsAtOnce(t *testing.T) {
 	}
 	want(t, "status", code, 0, out, "  ✓ AgentK          running, AgentK 1.0\n"+
 		"  ! Presenter       didn't answer in 2s (me_presenter status)\n")
-	want(t, "status's links", code, 0, out, "│ Agents (MCP, API)   http://127.0.0.1:"+port+"/mcp ")
-	want(t, "status's Cloud", code, 0, out, "│ Cloud               Not linked ")
+	want(t, "status's links", code, 0, out, "\n  Agents  http://127.0.0.1:"+port+"/mcp · MCP and API\n")
+	want(t, "status's Cloud", code, 0, out, "\n  Cloud   not linked\n")
 	want(t, "status's next steps", code, 0, out, "More detail: meko status --verbose\n\nNext:\n  meko ui ")
 
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
@@ -268,10 +268,13 @@ func TestStartStatusStop(t *testing.T) {
 	want(t, "second serve", code, exitLocked, errs, "already running for "+dir)
 
 	code, out, _ = run("status", "--data-dir", dir)
-	want(t, "short status's box", code, 0, out, "\n│ Meko dev is running (pid ")
+	want(t, "short status's headline", code, 0, out, "\n  ● Meko dev is running · pid ")
 	want(t, "short status's service", code, 0, out, "  ! Service         none (meko install sets one up)\n")
-	want(t, "short status's link for agents", code, 0, out, "│ Agents (MCP, API)   http://127.0.0.1:"+port+"/mcp ")
-	want(t, "short status's link for people", code, 0, out, "│ Humans (web UI)     http://127.0.0.1:")
+	want(t, "short status's link for agents", code, 0, out, "\n  Agents  http://127.0.0.1:"+port+"/mcp · MCP and API\n")
+	want(t, "short status's link for people", code, 0, out, "\n  Web UI  http://127.0.0.1:")
+	if strings.Contains(out, "│") {
+		t.Errorf("short status draws a box:\n%s", out)
+	}
 	want(t, "short status's way to more", code, 0, out, "More detail: meko status --verbose\n")
 	code, out, _ = run("status", "--data-dir", dir, "--json")
 	var reply struct {
@@ -837,7 +840,7 @@ func TestDestroyAsksThenStopsAndRemoves(t *testing.T) {
 		want(t, "destroy's question", code, 1, out, "the logs\nDestroy it? [y/N] ")
 		want(t, "destroy's summary", code, 1, out, "This removes Meko's data in "+dir+" (")
 		code, out, _ = run("status", "--data-dir", dir)
-		want(t, "status after a declined destroy", code, 0, out, " is running (pid ")
+		want(t, "status after a declined destroy", code, 0, out, " is running · pid ")
 	}
 
 	withStdin(t, "Yes\n")
