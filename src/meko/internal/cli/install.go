@@ -121,25 +121,40 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 	if release {
 		// An upgrade with a service is on probation until it has run a while: a new version that
 		// keeps failing to start is rolled back, its database with it (serve, update.App.Started).
-		if cur := app.Current(); !noService && cur != "" && cur != ver {
+		cur := app.Current()
+		if !noService && cur != "" && cur != ver {
 			if _, serr := os.Stat(app.Exe(cur)); serr == nil {
 				in.from = cur
+			}
+		}
+		// Finishing a setup that went on probation and didn't answer in time: the probation stays,
+		// so serve can still roll back to the version before it.
+		keep := false
+		if !noService && cur == ver && app.SetupPending() == ver {
+			if p, perr := app.ReadPending(); perr == nil && p != nil && p.To == ver {
+				if _, serr := os.Stat(app.Exe(p.From)); serr == nil {
+					in.from, keep, probation = p.From, true, true
+				}
 			}
 		}
 		if err = app.MarkSetup(ver, run.first); err != nil {
 			return failed("Install", callhome.StepInstall, err)
 		}
 		in.written = true
-		if in.from != "" {
+		switch {
+		case keep:
+		case in.from != "":
 			schema, _, perr := store.Peek(context.Background(), l.DB)
 			if perr != nil {
 				schema = 0 // unreadable: a rollback can't put a copy back, but still runs the old version
 			}
 			err = app.Switch(in.from, ver, schema)
 			probation = err == nil
-		} else if err = app.Repoint(ver); err == nil {
+		default:
 			// Installing by hand supersedes an update on probation.
-			err = app.ClearPending()
+			if err = app.Repoint(ver); err == nil {
+				err = app.ClearPending()
+			}
 		}
 		if err != nil {
 			return failed("Install", callhome.StepInstall, err)
@@ -204,7 +219,8 @@ func runInstall(l paths.Layout, noService bool, access string, noUI bool, stdout
 	// A server run by hand holds the data folder, and the service's own couldn't start.
 	if up, _ := running(l.Lock); up && serviceOf(l) == nil {
 		if code := stopMeko(l, stdout, stderr); code != exitOK {
-			return code
+			return failed("Server", callhome.StepService, errors.New("the Meko server started by hand on this "+
+				"data folder didn't stop: stop it with meko stop"))
 		}
 	}
 	host, _ := os.Hostname()

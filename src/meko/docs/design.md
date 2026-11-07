@@ -116,7 +116,7 @@ of input means no; a no exits 1), or doesn't ask with `--force`.
 
 ```
 ~/.meko/                     0700
-  config.toml                optional; Meko never writes it
+  config.toml                optional; Meko writes only the port meko install picks
   web.toml, cloud.toml       what Meko chose itself: how browsers reach it (web.md), the
                              Meko Cloud link's URLs (cloud.md; its key is a secret)
   meko.db, meko.db-wal       0600; the only database

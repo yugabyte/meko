@@ -420,6 +420,26 @@ func SetPickedPort(path string, port int) error {
 	return paths.WriteFile(path, []byte(text))
 }
 
+// ClearPickedPort removes the port meko install picked (SetPickedPort) from config.toml at path, its
+// comment with it, so Meko is back on the default port; the rest of the file stays. A config.toml
+// with no such port is left as it is.
+func ClearPickedPort(path string) error {
+	b, err := os.ReadFile(path) //nolint:gosec // G304: the data folder's config.toml
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(b), "\n")
+	i := pickedPortLine(lines)
+	if i < 0 {
+		return nil
+	}
+	lines = append(lines[:i-1], lines[i+1:]...)
+	return paths.WriteFile(path, []byte(strings.Join(lines, "\n")))
+}
+
 // serverHeader is the index of the [server] header line, or -1.
 func serverHeader(lines []string) int {
 	for i, l := range lines {

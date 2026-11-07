@@ -14,6 +14,7 @@ import (
 
 	"github.com/yugabyte/meko/src/meko/internal/agents"
 	"github.com/yugabyte/meko/src/meko/internal/cloudlink"
+	"github.com/yugabyte/meko/src/meko/internal/config"
 	"github.com/yugabyte/meko/src/meko/internal/paths"
 	"github.com/yugabyte/meko/src/meko/internal/store"
 )
@@ -423,14 +424,19 @@ func TestAgentsMoveToOnePort(t *testing.T) {
 
 // Agents follow Meko to another port: at a start on a port other than the one they were connected
 // to (meko install moved it, or someone changed [server] port), an agent at exactly the old port's
-// URL is connected to the new one.
+// URL is connected to the new one. With none recorded yet, the old port is the default: install
+// may have moved Meko off it in the run that brought this release.
 func TestAgentsFollowThePort(t *testing.T) {
 	dir, port := setup(t)
 	fakeAgents(t, false, "kiro-cli")
 	_, tok, _ := run("token", "--data-dir", dir)
 	tok = strings.TrimSpace(tok)
+	kiroAt(t, "http://127.0.0.1:"+strconv.Itoa(config.DefaultPort)+"/mcp", tok)
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
+	waitFor(t, "Kiro CLI moved off the default port", func() bool {
+		return strings.Contains(readFile(t, kiroFile(t)), `"http://127.0.0.1:`+port+`/mcp"`)
+	})
 	waitFor(t, "the port recorded", func() bool {
 		_, v, _ := store.Peek(context.Background(), paths.New(dir).DB, keyAgentsPort)
 		return v[keyAgentsPort] == port

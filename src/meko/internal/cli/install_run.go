@@ -282,15 +282,15 @@ var portFree = func(port int) error {
 }
 
 // portInUse prints install's failed Server row for a port other programs hold, with how to find
-// the one on port, or to move Meko.
-func portInUse(r report, msg string, port int, config string) {
+// the one on port, and how to move Meko.
+func portInUse(r report, msg string, port int, move string) {
 	r.step(stepFail, "Server", msg)
 	find := fmt.Sprintf("lsof -nP -iTCP:%d -sTCP:LISTEN", port)
 	if runtime.GOOS == "linux" {
 		find = fmt.Sprintf("ss -ltnp 'sport = :%d'", port)
 	}
 	fmt.Fprintf(r.w, "\n    %s%s\n", spin.Dim("See what holds it    ", r.color), spin.Blue(find, r.color))
-	fmt.Fprintf(r.w, "    %sset [server] port in %s\n", spin.Dim("Or move Meko         ", r.color), config)
+	fmt.Fprintf(r.w, "    %s%s\n", spin.Dim("Or move Meko         ", r.color), move)
 }
 
 // addLater is what a first install says in place of the picker, where it can't ask.

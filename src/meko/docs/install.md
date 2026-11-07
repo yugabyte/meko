@@ -97,11 +97,16 @@ safe.
     (`config.SetPickedPort`, which keeps the rest of the file): a `! Port  7777 is in use by another
     program · Meko uses 7778, set in ~/.meko/config.toml` row. `[server] port` is a setting every
     release reads, so a rollback keeps it. A port install picked is nobody's choice either, so it
-    moves again if it's taken later. The agents Meko connected follow at the server's start
-    (`followPort`, [below](#the-port-the-agents-use)).
+    moves again if it's taken later, and goes back out of `config.toml` (`config.ClearPickedPort`,
+    a `✓ Port  back on 7777` row) at an install that finds the default port free again. The agents
+    Meko connected follow at the server's start (`followPort`,
+    [below](#the-port-the-agents-use)).
   - If someone chose it (`MEKO_PORT`, or a `[server] port` in `config.toml` without install's
-    comment above it), or the 20 after it are taken too, the `Server` row is `✗` with how to find
-    the program or move Meko, and nothing is written.
+    comment above it), if an AgentK is on this computer (one from before Meko served it holds 7777
+    until it's updated, and Meko should then take 7777 over rather than move off it), or if the 20
+    after it are taken too, the `Server` row is `✗` with how to find the program and how to move
+    Meko (`change or unset MEKO_PORT` when that chose it, since it overrides `config.toml`; else
+    `set [server] port in ~/.meko/config.toml`), and nothing is written.
 - It writes `app/setup-pending` (the version, and `first` on a first install) once its checks
   pass, and removes it once the server answers (with `--no-service`, at the end). Until then,
   running the installer again finishes the setup instead of stopping as up to date.
@@ -109,8 +114,10 @@ safe.
   new version on probation as an automatic update does (`update.App.Switch`, with the database's
   schema read without writing to it, `store.Peek`), in place of pointing `app/current` at it. A new
   version that fails to start three times is rolled back by `serve`, its database with it
-  ([below](#updates-and-rollback)). Otherwise (a first install, or the same version again) it points
-  `app/current` at its version and clears an update on probation.
+  ([below](#updates-and-rollback)). Run again to finish such an upgrade's setup (its server didn't
+  answer in time, so `setup-pending` and the update on probation both name the version), it keeps
+  the probation and waits as on it. Otherwise (a first install, or the same version again) it
+  points `app/current` at its version and clears an update on probation.
 - The `Server` row shows the dots until the service's server answers (`started in 0.9s`, or
   `restarted` over a running one or an upgrade). It stops waiting when the server can't start
   (`waitStarted`): once `logs/service.log`, the service's stderr, has two of `serve`'s `meko: …`
@@ -122,7 +129,8 @@ safe.
   since `serve` rolls it back at its fourth start: when the old version answers, the rows are
   `✗ Server  meko <new> didn't start: …` and `! Rolled back  meko <old> is running again · with its
   data as it was`.
-- Every failure ends the same way (`installing.fail`): a `✗` row for the step, then "Nothing was
+- Every failure past its arguments' check ends the same way (`installing.fail`), stopping a server
+  started by hand that won't stop included: a `✗` row for the step, then "Nothing was
   left half-done: running the installer again is safe" when nothing was written yet, or "Fix it,
   then run the installer again to finish the setup" (`meko install`, run by hand), and a link to
   the bug form unless it's a cause install explains (a taken port, the service manager). The error
@@ -170,7 +178,10 @@ another port, because install picked a free one or someone changed `[server] por
 agents whose `meko` server is at exactly `http://127.0.0.1:<old port>/mcp` to this one
 (`followPort`, an exact `agents.Manager.Move`, as the move to one port does), so one pointed by hand
 at another Meko on this computer stays. It records the new port once no agent failed, so a failed
-one is tried again at the next start. The first start records its port with nothing to move.
+one is tried again at the next start. With no port recorded yet (the first start of a release with
+`followPort`), the agents' port is taken to be the default, 7777: install may have moved Meko off it
+in the run that brought this release, and the move is exact, so only agents at exactly
+`http://127.0.0.1:7777/mcp` follow.
 AgentK and Presenter read Meko's URL again when it starts. An agent session that was running keeps
 the old URL until it's restarted, and so does an MCP setup Meko didn't write.
 

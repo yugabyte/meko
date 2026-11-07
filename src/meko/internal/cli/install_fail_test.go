@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -55,9 +56,23 @@ func callHomeReports(t *testing.T) func() []callhome.FailureEnvelope {
 	}
 }
 
+// defaultPortTaken has install's check find the default port taken, whatever holds it on this
+// machine: a test must never move a Meko onto the real 7777.
+func defaultPortTaken(t *testing.T) {
+	t.Helper()
+	old := portFree
+	portFree = func(port int) error {
+		if port == config.DefaultPort {
+			return errors.New("in use")
+		}
+		return old(port)
+	}
+	t.Cleanup(func() { portFree = old })
+}
+
 // testRelease makes a release install whose versions are folders with a bin/meko, runs this test
-// as its version running, and points app/current at current ("" for none).
-func testRelease(t *testing.T, running, current string, versions ...string) update.App {
+// as its version 0.2.0, and points app/current at current ("" for none).
+func testRelease(t *testing.T, current string, versions ...string) update.App {
 	t.Helper()
 	app := update.App{Root: filepath.Join(t.TempDir(), "app")}
 	for _, v := range versions {
@@ -74,7 +89,7 @@ func testRelease(t *testing.T, running, current string, versions ...string) upda
 		}
 	}
 	old := runningRelease
-	runningRelease = func() (update.App, string, bool) { return app, running, true }
+	runningRelease = func() (update.App, string, bool) { return app, "0.2.0", true }
 	t.Cleanup(func() { runningRelease = old })
 	return app
 }
@@ -85,6 +100,7 @@ func TestInstallPicksAFreePort(t *testing.T) {
 	dir, _ := setup(t)
 	noRealExtensions(t)
 	t.Setenv("MEKO_PORT", "") // the default port, in effect: nobody chose it
+	defaultPortTaken(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +166,7 @@ func TestInstallSaysWhyTheServerDidntStart(t *testing.T) {
 	dir, _ := setup(t)
 	noRealExtensions(t)
 	reports := callHomeReports(t)
-	app := testRelease(t, "0.2.0", "", "0.2.0")
+	app := testRelease(t, "", "0.2.0")
 	f := &fakeService{file: filepath.Join(t.TempDir(), "meko.service")}
 	old := newManager
 	newManager = func() (service.Manager, error) { return brokenService{f}, nil }
@@ -197,7 +213,7 @@ func TestInstallSaysAnUpgradeRolledBack(t *testing.T) {
 	configurePort(t, dir, port)
 	reports := callHomeReports(t)
 	// This test's server says it's "dev": as if serve had rolled back to it.
-	app := testRelease(t, "0.2.0", "dev", "dev", "0.2.0")
+	app := testRelease(t, "dev", "dev", "0.2.0")
 	useFakeService(t)
 	t.Setenv(envInstallFrom, "dev")
 
@@ -225,7 +241,7 @@ func TestInstallFinishesItsSetup(t *testing.T) {
 	dir, port := setup(t)
 	noRealExtensions(t)
 	configurePort(t, dir, port)
-	app := testRelease(t, "0.2.0", "0.2.0", "0.2.0")
+	app := testRelease(t, "0.2.0", "0.2.0")
 	if err := app.MarkSetup("0.2.0", false); err != nil {
 		t.Fatal(err)
 	}
@@ -265,3 +281,128 @@ var errNoSession = &preflightError{"no login session: install with --no-service"
 type preflightError struct{ s string }
 
 func (e *preflightError) Error() string { return e.s }
+
+// The port nobody chose is left alone while an AgentK is on this computer: one from before Meko
+// served it holds that port until it's updated, and Meko takes the port over then rather than
+// moving off it.
+func TestInstallLeavesAnAgentKsPortAlone(t *testing.T) {
+	dir, _ := setup(t)
+	noRealExtensions(t)
+	t.Setenv("MEKO_PORT", "")
+	defaultPortTaken(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	taken := tcpPort(t, ln)
+	l := paths.New(dir)
+	if err = l.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	if err = config.SetPickedPort(l.Config, taken); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(os.Getenv("HOME"), ".local", "bin")
+	if err = os.MkdirAll(bin, 0o700); err != nil { //nolint:gosec // G703: the test's own HOME
+		t.Fatal(err)
+	}
+	//nolint:gosec // G306: a test script
+	if err = os.WriteFile(filepath.Join(bin, "agentk"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f := useFakeService(t)
+	code, out, _ := run("install", "--data-dir", dir)
+	want(t, "install", code, exitError, out,
+		"  ✗ Server          port "+strconv.Itoa(taken)+" is in use by another program")
+	want(t, "install's way out", code, exitError, out, "    Or move Meko         set [server] port in ")
+	if len(f.calls) != 0 {
+		t.Errorf("the service was touched: %v", f.calls)
+	}
+}
+
+// A port install picked goes back out of config.toml once the default port is free again: Meko
+// returns to it (and the agents follow it there).
+func TestInstallGoesBackToTheDefaultPort(t *testing.T) {
+	dir, _ := setup(t)
+	noRealExtensions(t)
+	t.Setenv("MEKO_PORT", "")
+	old := portFree
+	portFree = func(int) error { return nil } // the default port is free: nothing is started on it
+	t.Cleanup(func() { portFree = old })
+	l := paths.New(dir)
+	if err := l.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.SetPickedPort(l.Config, config.DefaultPort+1); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs := run("install", "--data-dir", dir, "--no-service")
+	want(t, "install", code, 0, out+errs, "  ✓ Port            back on "+strconv.Itoa(config.DefaultPort)+" · ")
+	cfg, err := config.Load(l.Config, func(string) string { return "" }, config.Overrides{})
+	if err != nil || cfg.Server.Port != config.DefaultPort {
+		t.Errorf("config.toml's port: %d, %v", cfg.Server.Port, err)
+	}
+}
+
+// Running the installer again over an upgrade on probation whose server didn't answer in time
+// keeps the probation, so serve can still roll back to the version before it.
+func TestInstallFinishingAnUpgradeKeepsItsProbation(t *testing.T) {
+	dir, port := setup(t)
+	noRealExtensions(t)
+	configurePort(t, dir, port)
+	app := testRelease(t, "dev", "dev", "0.2.0")
+	if err := app.Switch("dev", "0.2.0", 1); err != nil { // the first run's
+		t.Fatal(err)
+	}
+	if err := app.MarkSetup("0.2.0", false); err != nil {
+		t.Fatal(err)
+	}
+	useFakeService(t)
+	code, out, errs := run("install", "--data-dir", dir)
+	// This test's server says it's "dev": as if serve had rolled back to it, which it still can.
+	want(t, "install", code, exitError, out+errs, "  ! Rolled back     meko dev is running again")
+	if p, err := app.ReadPending(); err != nil || p == nil || p.From != "dev" || p.To != "0.2.0" {
+		t.Errorf("the probation was cleared: %+v %v", p, err)
+	}
+}
+
+// A database that's there but can't be read can't say the web UI didn't turn usage stats off, so
+// no failure report goes.
+func TestInstallFailureReportNeedsAReadableDatabase(t *testing.T) {
+	dir, _ := setup(t)
+	reports := callHomeReports(t)
+	l := paths.New(dir)
+	if err := l.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(l.DB, []byte("not a database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sendInstallFailure(l, true, callhome.Failure{Step: callhome.StepData, Kind: callhome.KindError})
+	if got := reports(); len(got) != 0 {
+		t.Errorf("sent with an unreadable database: %+v", got)
+	}
+	if err := os.Remove(l.DB); err != nil {
+		t.Fatal(err)
+	}
+	sendInstallFailure(l, true, callhome.Failure{Step: callhome.StepData, Kind: callhome.KindError})
+	if got := reports(); len(got) != 1 {
+		t.Errorf("no database yet: %d reports, want 1", len(got))
+	}
+}
+
+// A failed start reads the end of what service.log gained, not its start, when more than
+// maxLogRead came.
+func TestLinesSinceReadsTheLatest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "service.log")
+	line := strings.Repeat("x", 99) + "\n"
+	body := strings.Repeat(line, maxLogRead/len(line)+100) + "meko: the latest\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lines := linesSince(path, 0)
+	if len(lines) == 0 || lines[len(lines)-1] != "meko: the latest" {
+		t.Errorf("last line: %q", lines[max(0, len(lines)-1):])
+	}
+}

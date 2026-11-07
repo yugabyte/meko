@@ -331,3 +331,37 @@ func TestSameDir(t *testing.T) {
 		}
 	}
 }
+
+// A start on probation keeps the context engine on its old file names while they're still to
+// move, so the first start past probation can still move them (MoveRenamed); without old files,
+// or once moved, it's l itself.
+func TestBeforeRenames(t *testing.T) {
+	l := New(filepath.Join(shortDir(t), "data"))
+	if got := l.BeforeRenames(); got != l {
+		t.Errorf("nothing to move: %+v", got)
+	}
+	oldLog, oldDir := filepath.Join(l.LogDir, "memory_engine.log"), filepath.Join(l.Root, "memory_engine")
+	if err := os.MkdirAll(oldDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Ensure(); err != nil { // makes an empty context-engine/
+		t.Fatal(err)
+	}
+	if err := WriteFile(oldLog, []byte("old line\n")); err != nil {
+		t.Fatal(err)
+	}
+	p := l.BeforeRenames()
+	if p.ContextEngineLog != oldLog || p.ContextEngineDir != oldDir {
+		t.Fatalf("on probation: %s %s", p.ContextEngineLog, p.ContextEngineDir)
+	}
+	if err := WriteFile(filepath.Join(p.ContextEngineDir, "state.json"), []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+	l.MoveRenamed() // the first start past probation
+	if _, err := os.Stat(filepath.Join(l.ContextEngineDir, "state.json")); err != nil {
+		t.Errorf("the probation's state didn't move: %v", err)
+	}
+	if got := l.BeforeRenames(); got != l {
+		t.Errorf("after the move: %+v", got)
+	}
+}

@@ -487,3 +487,35 @@ func TestSetPickedPort(t *testing.T) {
 		t.Error("MEKO_PORT isn't a chosen port")
 	}
 }
+
+// Install's pick goes back out of config.toml, its comment with it, once the default port is free
+// again; the rest of the file, and a port the user chose, stay.
+func TestClearPickedPort(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := ClearPickedPort(path); err != nil {
+		t.Errorf("no file: %v", err)
+	}
+	before := "[server]\nauth = \"token\"\n[log]\nlevel = \"info\"\n"
+	if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetPickedPort(path, 7778); err != nil {
+		t.Fatal(err)
+	}
+	if err := ClearPickedPort(path); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != before { //nolint:gosec // G304: the test's own file
+		t.Errorf("after: %q, want %q", b, before)
+	}
+	mine := "[server]\nport = 9001\n"
+	if err := os.WriteFile(path, []byte(mine), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ClearPickedPort(path); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != mine { //nolint:gosec // G304: the test's own file
+		t.Errorf("the user's port was removed: %q", b)
+	}
+}

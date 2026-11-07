@@ -14,6 +14,7 @@ import (
 
 	"github.com/yugabyte/meko/src/meko/internal/callhome"
 	"github.com/yugabyte/meko/src/meko/internal/config"
+	"github.com/yugabyte/meko/src/meko/internal/extensions"
 	"github.com/yugabyte/meko/src/meko/internal/paths"
 	"github.com/yugabyte/meko/src/meko/internal/server"
 	"github.com/yugabyte/meko/src/meko/internal/service"
@@ -88,7 +89,8 @@ func knownFailure(kind string) bool {
 // sendInstallFailure sends a failed install's step and error class to call home, where the usage
 // stats would go: from a release install or to [call_home] url, unless config.toml, the
 // environment or the web UI's setting (read from the database, which no server may be running
-// to answer for) turned them off. It waits at most callhome.FailureTimeout and says nothing.
+// to answer for) turned them off, or the database is there but can't be read. It waits at most
+// callhome.FailureTimeout and says nothing.
 var sendInstallFailure = func(l paths.Layout, release bool, f callhome.Failure) {
 	cfg, err := config.Load(l.Config, os.Getenv, config.Overrides{})
 	if err != nil || !cfg.CallHome.Enabled {
@@ -102,9 +104,9 @@ var sendInstallFailure = func(l paths.Layout, release bool, f callhome.Failure) 
 		return
 	}
 	ctx := context.Background()
-	_, settings, _ := store.Peek(ctx, l.DB, store.KeyInstallID, callhome.KeyEnabled)
-	if settings[callhome.KeyEnabled] == "false" {
-		return
+	_, settings, err := store.Peek(ctx, l.DB, store.KeyInstallID, callhome.KeyEnabled)
+	if err != nil || settings[callhome.KeyEnabled] == "false" {
+		return // a database that can't be read can't say the web UI didn't turn usage stats off
 	}
 	id := settings[store.KeyInstallID]
 	if id == "" {
@@ -118,27 +120,43 @@ const portScan = 20
 
 // pickPort makes sure Meko's port is free before anything else is written: the server would
 // otherwise fail to start once the service is. A port a Meko server that install replaces holds
-// is fine (mekoHolds). Another program's is the user's to sort out if they chose the port
-// (config.PortChosen); otherwise install takes the first free port of the portScan after it,
-// writes it to config.toml (config.SetPickedPort) and says so. Agents connected to the old port
-// follow at the server's start (followPort). m is nil with --no-service.
+// is fine (mekoHolds). Another program's is the user's to sort out when they chose the port
+// (config.PortChosen), or when an AgentK is on this computer: one from before Meko served it holds
+// the default port until it's updated, and Meko should then take that port over, not move off it.
+// Otherwise install takes the first free port of the portScan after it, writes it to config.toml
+// (config.SetPickedPort) and says so; agents connected to the old port follow at the server's start
+// (followPort). A port install picked goes back to the default once that's free again
+// (config.ClearPickedPort). m is nil with --no-service.
 func pickPort(l paths.Layout, m service.Manager, home string, r report) *installFailure {
 	cfg, err := config.Load(l.Config, os.Getenv, config.Overrides{})
 	if err != nil {
 		return &installFailure{label: "Server", step: callhome.StepChecks, kind: callhome.KindError, err: err}
 	}
 	port := cfg.Server.Port
-	if mekoHolds(l, m, port) || portFree(port) == nil {
-		return nil
-	}
 	cfgPath := homeRel(l.Config, home)
 	chosen, err := config.PortChosen(l.Config, os.Getenv)
 	if err != nil {
 		return &installFailure{label: "Server", step: callhome.StepChecks, kind: callhome.KindError, err: err}
 	}
-	if chosen {
-		portInUse(r, fmt.Sprintf("port %d is in use by another program (an AgentK from before Meko served it, "+
-			"or another)", port), port, cfgPath)
+	defaultFree := mekoHolds(l, m, config.DefaultPort) || portFree(config.DefaultPort) == nil
+	if !chosen && port != config.DefaultPort && defaultFree {
+		if err = config.ClearPickedPort(l.Config); err != nil {
+			return &installFailure{label: "Port", step: callhome.StepChecks, kind: callhome.KindError, err: err}
+		}
+		r.step(stepOK, "Port", fmt.Sprintf("back on %d", config.DefaultPort)+
+			spin.Dim(fmt.Sprintf(" · %d, which install picked, is out of %s", port, cfgPath), r.color))
+		return nil
+	}
+	if mekoHolds(l, m, port) || portFree(port) == nil {
+		return nil
+	}
+	inUse := fmt.Sprintf("port %d is in use by another program (an AgentK from before Meko served it, or another)", port)
+	switch {
+	case os.Getenv("MEKO_PORT") != "":
+		portInUse(r, inUse, port, "change or unset MEKO_PORT")
+		return &installFailure{step: callhome.StepChecks, kind: callhome.KindPortInUse, printed: true}
+	case chosen || extensions.Known["agentk"].Find("agentk", home, l.Root) != "":
+		portInUse(r, inUse, port, "set [server] port in "+cfgPath)
 		return &installFailure{step: callhome.StepChecks, kind: callhome.KindPortInUse, printed: true}
 	}
 	for p := port + 1; p <= port+portScan && p <= 65535; p++ {
@@ -156,7 +174,8 @@ func pickPort(l paths.Layout, m service.Manager, home string, r report) *install
 			spin.Dim(fmt.Sprintf(" · Meko uses %d, set in %s", p, cfgPath), r.color))
 		return nil
 	}
-	portInUse(r, fmt.Sprintf("ports %d to %d are all in use by other programs", port, port+portScan), port, cfgPath)
+	portInUse(r, fmt.Sprintf("ports %d to %d are all in use by other programs", port, port+portScan), port,
+		"set [server] port in "+cfgPath)
 	return &installFailure{step: callhome.StepChecks, kind: callhome.KindNoFreePort, printed: true}
 }
 
@@ -209,21 +228,27 @@ func fileSize(path string) int64 {
 	return fi.Size()
 }
 
-// linesSince is the lines of the file at path after offset from (all of it if it's shorter now),
-// without the empty ones.
+// maxLogRead is the most of service.log a failed start reads: its end.
+const maxLogRead = 1 << 20
+
+// linesSince is the lines of the file at path after offset from (all of it if it's shorter now, and
+// only its last maxLogRead bytes if more came), without the empty ones.
 func linesSince(path string, from int64) []string {
 	f, err := os.Open(path) //nolint:gosec // G304: the data folder's own log
 	if err != nil {
 		return nil
 	}
 	defer func() { _ = f.Close() }()
-	if fi, serr := f.Stat(); serr == nil && fi.Size() < from {
-		from = 0
+	if fi, serr := f.Stat(); serr == nil {
+		if fi.Size() < from {
+			from = 0 // a new file
+		}
+		from = max(from, fi.Size()-maxLogRead) // the latest lines, when more than that came
 	}
 	if _, err = f.Seek(from, io.SeekStart); err != nil {
 		return nil
 	}
-	b, err := io.ReadAll(io.LimitReader(f, 1<<20))
+	b, err := io.ReadAll(io.LimitReader(f, maxLogRead))
 	if err != nil {
 		return nil
 	}

@@ -115,6 +115,8 @@ func TestInstallRefusesAPortInUse(t *testing.T) {
 	want(t, "install", code, exitError, out, "  ✗ Server          port "+port+
 		" is in use by another program (an AgentK from before Meko served it, or another)\n")
 	want(t, "install's way to find it", code, exitError, out, "    See what holds it    ")
+	// MEKO_PORT overrides config.toml, so the way out is the variable.
+	want(t, "install's way to move it", code, exitError, out, "    Or move Meko         change or unset MEKO_PORT\n")
 	// Nothing was written before the check: no rows of the steps before it, no web.toml, no token.
 	if strings.Contains(out, "✓ Data") {
 		t.Errorf("install wrote the data folder before the port check:\n%s", out)
