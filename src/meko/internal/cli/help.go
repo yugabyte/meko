@@ -91,9 +91,9 @@ var mekoCommands = []command{
 		}},
 	{name: "logs", group: "Run", summary: "Show Meko's logs",
 		usage: "meko logs [flags]", examples: []example{
-			{"meko logs", "the last 50 lines of the server's and the memory engine's logs"},
+			{"meko logs", "the last 50 lines of the server's and the context engine's logs"},
 			{"meko logs -f", "follow them"},
-			{"meko logs --memory-engine -n 200", "the memory engine's last 200 lines"},
+			{"meko logs --context-engine -n 200", "the context engine's last 200 lines"},
 		}},
 	{name: "update", group: "Run", summary: "Install Meko's newest release, then the extensions'",
 		usage: "meko update [flags]", examples: []example{

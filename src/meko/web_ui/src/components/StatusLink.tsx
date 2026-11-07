@@ -1,4 +1,4 @@
-// The sidebar's link to the Status page, with a dot for the memory engine's state: green when
+// The sidebar's link to the Status page, with a dot for the context engine's state: green when
 // ready, amber while it starts, red when it failed, grey when the server didn't say.
 
 import { useEffect } from "react";
@@ -27,7 +27,7 @@ export function StatusLink({ active }: { active: boolean }) {
     return () => clearInterval(t);
   }, [reload]);
   // A failed poll greys the dot rather than leaving the last good colour on it.
-  const state = status.error ? undefined : status.data?.memory_engine.state;
+  const state = status.error ? undefined : status.data?.context_engine?.state;
   const to = { tab: "overview" as const, view: "status" as const };
   return (
     <a
@@ -41,7 +41,7 @@ export function StatusLink({ active }: { active: boolean }) {
       <Activity className={cx("size-4 shrink-0", active && "text-primary")} />
       Status
       <span
-        title={state ? `Memory engine: ${state}` : "Status unknown"}
+        title={state ? `Context engine: ${state}` : "Status unknown"}
         className={cx("ml-auto size-2 rounded-full", state ? (DOT[state] ?? "bg-warning") : "bg-muted-foreground/40")}
       />
     </a>

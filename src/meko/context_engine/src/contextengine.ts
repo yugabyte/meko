@@ -1,4 +1,4 @@
-// The memory engine's memory operations: one mem0 Memory per datapack, with Meko's providers, and
+// The context engine's memory operations: one mem0 Memory per datapack, with Meko's providers, and
 // the reply shapes prod Meko gives (snake_case keys, the event at the top level, ids lifted out of
 // metadata, the score Meko computes and the cosine as raw_similarity_score).
 import { Memory } from "mem0ai/oss";
@@ -8,7 +8,7 @@ import { ACTOR_KEY, MEM0_OVERFETCH, PROVIDERS } from "./providers.js";
 import type { LocalReranker } from "./reranker.js";
 import { mekoScore, type ScoreDetails } from "./scoring.js";
 
-/** A failure with an HTTP status and a code, for the memory engine API to reply with. */
+/** A failure with an HTTP status and a code, for the context engine API to reply with. */
 export class HttpError extends Error {
   constructor(
     readonly status: number,
@@ -72,12 +72,12 @@ export const MAX_EMBED = 256;
 export const MAX_RERANK = 200;
 /**
  * Most datapacks whose mem0 Memory is kept. The least recently used is dropped past it, so a
- * deleted datapack's (which no call reaches again) doesn't stay until the memory engine restarts. A
+ * deleted datapack's (which no call reaches again) doesn't stay until the context engine restarts. A
  * Memory holds no data of its own: a dropped one is rebuilt on its datapack's next call.
  */
 export const MAX_DATAPACKS = 256;
 
-export class MemoryEngine {
+export class ContextEngine {
   private readonly memories = new Map<string, Memory>();
 
   constructor(

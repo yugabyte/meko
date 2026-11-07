@@ -19,7 +19,7 @@ memory-extractor use claude` turns it on.
    a replayed transcript gives one; otherwise when it was stored), the user's text cut to its first and last characters past 4,000, each reply to 300.
 4. **Extract.** The CLI returns `{"memory": [{"text", "turn"}]}`, its JSON schema enforced.
 5. **Save.** A fact within 0.9 cosine of any of the 5 memories nearest it is dropped; the rest are
-   added through the memory engine as the turn's conversation's agent, with `source` `extract` (the
+   added through the context engine as the turn's conversation's agent, with `source` `extract` (the
    memories table's provenance column; `add` for every other memory) and `meko_message_id`, the turn,
    in their metadata; a turn with a `session_date` also backdates its memories' `created_at` to it.
    The turns leave the queue.

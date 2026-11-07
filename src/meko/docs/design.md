@@ -6,7 +6,7 @@ an HTTP server with auth, and a supervisor for child processes. The rest builds 
 
 | Doc | What |
 |---|---|
-| [memory-engine.md](memory-engine.md) | The store API, the Node memory engine (mem0), memories and conversations |
+| [context-engine.md](context-engine.md) | The store API, the Node context engine (mem0), memories and conversations |
 | [api.md](api.md) | MCP at `/mcp`, REST at `/api/v1`, the client token, the call log, the CLI's tool commands |
 | [knowledge.md](knowledge.md) | Knowledge files: uploads, ingestion, hybrid search with a reranker |
 | [install.md](install.md) | Release builds, releases, the installer, the login service, extensions, updates, secrets |
@@ -31,8 +31,8 @@ flowchart LR
   cli["meko start"] -->|"spawns detached, or starts the login service"| serve["meko serve"]
   serve -->|"7777: agents and the CLI on 127.0.0.1, browsers local or remote (web.md)"| web["/healthz, /api/v1, /mcp, / (the web UI), /ext/agentk/"]
   serve -->|"owns"| db[("meko.db (SQLite)")]
-  serve -->|"starts, watches, restarts"| memory_engine["Node memory engine"]
-  memory_engine -->|"store API, unix socket"| serve
+  serve -->|"starts, watches, restarts"| context_engine["Node context engine"]
+  context_engine -->|"store API, unix socket"| serve
   status["meko status / stop"] -->|"/api/v1/status, pid file"| serve
 ```
 
@@ -62,9 +62,9 @@ all; the ones that run the server:
 | Command | What it does |
 |---|---|
 | `serve` | Runs the server in the foreground. What `start`, launchd and systemd run. |
-| `start` | With the login service installed, starts it ([install.md](install.md)). Otherwise starts `serve` in the background in its own session (setsid), waits until `/api/v1/status` (with the admin token) reports the new server's pid, and prints the URL. If that doesn't happen within 10 s, it stops the server (SIGTERM, then SIGKILL) and prints `logs/start.log`. Already running: says so and exits 0. Then starts the extensions, waits up to a minute for the memory engine to be ready (`engineWait`; its row shows the dots meanwhile, then `ready in …` or `! still loading`), then up to 10 s more for the port while it's being taken again (remote access turned on or off) before it prints the links. |
+| `start` | With the login service installed, starts it ([install.md](install.md)). Otherwise starts `serve` in the background in its own session (setsid), waits until `/api/v1/status` (with the admin token) reports the new server's pid, and prints the URL. If that doesn't happen within 10 s, it stops the server (SIGTERM, then SIGKILL) and prints `logs/start.log`. Already running: says so and exits 0. Then starts the extensions, waits up to a minute for the context engine to be ready (`engineWait`; its row shows the dots meanwhile, then `ready in …` or `! still loading`), then up to 10 s more for the port while it's being taken again (remote access turned on or off) before it prints the links. |
 | `stop` | Stops the extensions, then the service, or sends SIGTERM to the pid in `run/meko.pid` and waits up to 30 s (longer than the server's 10 s drain plus 15 s for its children) before SIGKILL. Not running: says so and exits 0. |
-| `status` | Running or not, with a row each for the memory engine, the service, updates and the extensions (and the Meko Cloud link when it can't be read), then a headline with the version, pid and uptime and the link rows (people's web UI, agents' MCP URL, and the Meko Cloud it's linked to), then what to run next, from `/api/v1/status`. Each extension's row is its `<command> status`, all of them run at once while the server is asked, each cut off after 3 s (`extensions.StatusTimeout`; a `!` row, "didn't answer in 3s"); `--verbose` adds the version, port, uptime, data folder, models, certificate, auth mode and children, `--json` the reply itself (usage stats included). Exits 3 when not running. |
+| `status` | Running or not, with a row each for the context engine, the service, updates and the extensions (and the Meko Cloud link when it can't be read), then a headline with the version, pid and uptime and the link rows (people's web UI, agents' MCP URL, and the Meko Cloud it's linked to), then what to run next, from `/api/v1/status`. Each extension's row is its `<command> status`, all of them run at once while the server is asked, each cut off after 3 s (`extensions.StatusTimeout`; a `!` row, "didn't answer in 3s"); `--verbose` adds the version, port, uptime, data folder, models, certificate, auth mode and children, `--json` the reply itself (usage stats included). Exits 3 when not running. |
 | `version` | Version, commit, Go version, SQLite and sqlite-vec versions (`--json` for installers and updates). |
 | `destroy` | Removes the data folder for good (below). |
 
@@ -123,10 +123,10 @@ of input means no; a no exits 1), or doesn't ask with `--force`.
   meko.db.bak-<version>      the copy made before a migration (below)
   client.token               the client token (api.md), unless it's in the Keychain
   run/                       pid, port, lock, admin token, unix sockets, children's pids (0600)
-  logs/                      meko.log (rotated), memory_engine.log and service.log (appended),
+  logs/                      meko.log (rotated), context-engine.log and service.log (appended),
                              start.log (rewritten at each start)
   models/                    model files, when downloaded (a build from source)
-  memory_engine/             mem0's own config folder
+  context-engine/            mem0's own config folder
   knowledgebase-files/       knowledge files' bytes, <datapack>/<sha256> (knowledge.md)
   secrets/                   the file secret store (install.md)
   update.json                the last update check
@@ -155,7 +155,7 @@ Config precedence: flags > `MEKO_*` env > `config.toml` > defaults. An unknown k
 | `[web] access`, `name`, `enabled`; `[tls] cert`, `key` | `MEKO_WEB_ACCESS` | `"local"` | How browsers reach Meko ([web.md](web.md#settings)). What Meko chose itself (`meko install`, the handoff from AgentK, `meko ui start` and `stop`) is in `web.toml`, which these keys in `config.toml` override. |
 | `[server] auth` | `MEKO_AUTH` | `"token"` | `"none"` lifts the credential on `/mcp` and the data routes ([api.md](api.md)). |
 | `[log] level` | `MEKO_LOG_LEVEL`, `--log-level` | `"info"` | |
-| `[memory_engine] node`, `dir` | `MEKO_NODE`, `MEKO_MEMORY_ENGINE_DIR` | found | Node and the built memory engine ([memory-engine.md](memory-engine.md)). |
+| `[context_engine] node`, `dir` | `MEKO_NODE`, `MEKO_CONTEXT_ENGINE_DIR` | found | Node and the built context engine ([context-engine.md](context-engine.md)). |
 | `[conversation_search] max_distance` | | 0.6 | Conversation search's cosine cutoff. |
 | `[knowledge_base] max_distance` | | 0.6 | `context_search`'s cutoff for knowledge-base results ([knowledge.md](knowledge.md)). |
 | `[storage] max_content_mb` | | 200 | The storage limit, in MB: the most content Meko keeps ([the storage limit](#the-storage-limit)). A whole number, 1 or more. Search slows above 200, the size it was measured at; Meko Cloud is for larger datasets. Read at start: `meko restart` applies a change. |
@@ -244,8 +244,8 @@ newer than the binary knows is refused with a message saying so.
 | Migration | What | Described in |
 |---|---|---|
 | `0001_init.sql` | `settings`, `datapacks` | Below |
-| `0002_memory.sql` | Memories, entities, history | [memory-engine.md](memory-engine.md#storage) |
-| `0003_conversations.sql` | Conversations, turns, their chunks | [memory-engine.md](memory-engine.md#storage) |
+| `0002_memory.sql` | Memories, entities, history | [context-engine.md](context-engine.md#storage) |
+| `0003_conversations.sql` | Conversations, turns, their chunks | [context-engine.md](context-engine.md#storage) |
 | `0004_call_log.sql` | The call log | [api.md](api.md#the-call-log) |
 | `0005_learnings_artifacts.sql` | Learnings, promoted memories, provenance, artifacts | [api.md](api.md#learnings-promotion-and-artifacts) |
 | `0006_knowledge.sql` | Knowledge files and the knowledge base's chunks | [knowledge.md](knowledge.md#storage-0006_knowledgesql) |
@@ -282,21 +282,21 @@ CREATE TABLE memories (
 
 Two things hold for every searchable table: the FTS5 table has `datapack_id` as a column so the
 filter runs inside MATCH (a join with the filter outside FTS never finished at 200 MB), and the
-`vec0` tables are made when the memory engine first reports its model and dimension.
+`vec0` tables are made when the context engine first reports its model and dimension.
 
 ### The storage limit
 
 Meko keeps at most `[storage] max_content_mb` of content (200 MB by default), so its searches stay
 as fast as `make bench` measured them at that size: at 200 MB a memory search is 771 ms p50
-([memory-engine.md](memory-engine.md#measured)). Past it, a write is refused, and Meko Cloud is the
+([context-engine.md](context-engine.md#measured)). Past it, a write is refused, and Meko Cloud is the
 place for larger datasets.
 
 | Decision | Why, and what was rejected |
 |---|---|
 | **One limit for the whole install, across its datapacks** | Vector search runs within one datapack (`vec0`'s partition key), but each FTS5 term's list holds every datapack's rows, so keyword search slows with the whole install. `make bench` put its 200 MB in one datapack, so a limit on the total keeps both within what was measured. A limit per datapack was rejected: it doesn't bound keyword search, and more datapacks get around it. While Meko Cloud is linked, its datapacks live there and don't count. |
 | **Content is what callers send** | Memory text and payload (promoted memories' too), a turn's input, output, reasoning, plan and metadata, and artifact and knowledge-file bytes. Payload and metadata count so they can't get around the limit. Indexes, vectors, chunks, memory history, the call log and its contents, and Context Gaps don't. |
-| **`content_usage`, kept by triggers** (`0014_content_usage.sql`) | One row per kind (`memories`, `conversations`, `knowledge`, `artifacts`), filled from the rows when the migration runs and kept by insert, update and delete triggers on `memories`, `promoted_memories`, `messages`, `kb_documents` and `artifacts`. A check reads four integers. The triggers also see the memory engine's writes through the store API and foreign-key cascades (deleting a datapack or a conversation), which fire triggers. Summing every row on each write was rejected (it reads about 200 MB at the limit), and so was a count kept in Go (it misses the cascades and the memory engine's writes). |
-| **Checked in the service before each write, which reserves its bytes** (`memory.Service.reserve`) | `memory_add`, `memory_update` (only when the text grows), `conversation_add_message` (not for a turn sent again with the seed of one stored), `artifact_put` (not for bytes the datapack already keeps) and a knowledge file's upload link. A write holds its bytes from the check until it's done, so writes in flight at once (several agents, or an agent and the extractor) count against the limit together, and a memory add waiting on the memory engine's embedding still holds its room. Promoting, keeping and deleting aren't checked: they add nothing. Checking inside each store transaction was rejected: it puts the policy in `internal/store`, and the memory engine's writes would have to carry the error back across its socket. |
+| **`content_usage`, kept by triggers** (`0014_content_usage.sql`) | One row per kind (`memories`, `conversations`, `knowledge`, `artifacts`), filled from the rows when the migration runs and kept by insert, update and delete triggers on `memories`, `promoted_memories`, `messages`, `kb_documents` and `artifacts`. A check reads four integers. The triggers also see the context engine's writes through the store API and foreign-key cascades (deleting a datapack or a conversation), which fire triggers. Summing every row on each write was rejected (it reads about 200 MB at the limit), and so was a count kept in Go (it misses the cascades and the context engine's writes). |
+| **Checked in the service before each write, which reserves its bytes** (`memory.Service.reserve`) | `memory_add`, `memory_update` (only when the text grows), `conversation_add_message` (not for a turn sent again with the seed of one stored), `artifact_put` (not for bytes the datapack already keeps) and a knowledge file's upload link. A write holds its bytes from the check until it's done, so writes in flight at once (several agents, or an agent and the extractor) count against the limit together, and a memory add waiting on the context engine's embedding still holds its room. Promoting, keeping and deleting aren't checked: they add nothing. Checking inside each store transaction was rejected: it puts the policy in `internal/store`, and the context engine's writes would have to carry the error back across its socket. |
 | **An upload link holds its file's size, once per file** | From `upload-url` until the file is stored, or the link is refused or expires (5 minutes), as Meko Cloud holds an upload against its quota. Links for the same bytes in a datapack (a retried `upload-url`, or the file under another name) hold its size once, and a new link for a file already held needs no more room. A link for a file whose row is already there (a failed one whose bytes are gone) holds nothing. |
 | **The error says what to do** | MCP: `storage_limit_exceeded`; REST: 402 `STORAGE_LIMIT_EXCEEDED`, the status Meko Cloud answers at a plan's limit. The message names the limit and says to delete what isn't needed or link Meko Cloud for larger datasets, or, while Meko Cloud is already linked, to keep new work in a Meko Cloud datapack. It doesn't suggest raising `max_content_mb`, since that brings back slow searches: only this page and the setting's comment say it can be. |
 | **Nothing is deleted to get under it** | An install over the limit (one from before it, or one whose limit was lowered) keeps its data, and writes are refused until enough is deleted. |
@@ -316,7 +316,7 @@ echo v4, on one port for the CLI, MCP clients, the extensions and browsers ([web
   on success (`internal/envelope`). HTTP errors below 500 keep their status; anything else is logged
   and the caller gets a generic 500.
 - `GET /healthz` needs no auth (status and version only). `GET /api/v1/status` (uptime, data folder,
-  the memory engine, auth mode, usage stats) and `GET /api/v1/version` take the admin token.
+  the context engine, auth mode, usage stats) and `GET /api/v1/version` take the admin token.
   `/mcp` and the rest of `/api/v1` ([api.md](api.md)) build on it.
 - Middleware, in order: request id, recover, access log (slog), Host and Origin checks, auth, then
   a 1 MB body limit on the `/api/v1` group. It's on the group, not global, because echo's global
@@ -342,7 +342,7 @@ echo v4, on one port for the CLI, MCP clients, the extensions and browsers ([web
 
 ## Supervisor
 
-A small, generic process manager (`internal/supervisor`). Its child is the memory engine; its tests
+A small, generic process manager (`internal/supervisor`). Its child is the context engine; its tests
 use a stub child.
 
 - A child spec has: name, command, args, env, working folder, log file, a health check (a unix
@@ -352,25 +352,25 @@ use a stub child.
   itself exited first. Its stdout and stderr go to `logs/<name>.log`.
 - Restarts back off exponentially (1 s doubling to 60 s), and `Restarts` counts only those made. If
   a child crashes 5 times in 10 minutes it's marked failed, and the server keeps running without
-  it: features that need it return a clear "memory engine unavailable" error, and `status` shows
+  it: features that need it return a clear "context engine unavailable" error, and `status` shows
   why.
 - Each child's pid and process group are recorded in `run/children/`, so `stop` can kill a hung
-  server's children ([memory-engine.md](memory-engine.md#key-decisions)).
+  server's children ([context-engine.md](context-engine.md#key-decisions)).
 - Children get their sockets and a per-start token through env (`MEKO_STORE_SOCKET`,
-  `MEKO_MEMORY_ENGINE_SOCKET`, `MEKO_INTERNAL_TOKEN`). The sockets sit in `run/` (0700) and are 0600.
+  `MEKO_CONTEXT_ENGINE_SOCKET`, `MEKO_INTERNAL_TOKEN`). The sockets sit in `run/` (0700) and are 0600.
 
-### Go and the memory engine
+### Go and the context engine
 
 The link is HTTP/JSON over unix sockets, one each way. Go serves the store API on `run/store.sock`,
-and the memory engine serves its own API (add, search, embed, rerank) on `run/mem_eng.sock`. Both
+and the context engine serves its own API (add, search, embed, rerank) on `run/ctx_eng.sock`. Both
 sides speak the same protocol, the link can be tested with curl, and nothing has to multiplex two
 directions over one pipe, which stdio JSON-RPC would require. It only goes over the internal
 sockets, never the TCP port.
 
 The store API mirrors mem0-ts's two storage interfaces, `VectorStore` and `HistoryManager`, which
 is everything mem0-ts needs from a database. mem0's collection name maps to a datapack:
-`<datapack id>` to `memories`, and `<datapack id>_entities` to `entities`. The routes, the memory
-engine's API and the memory engine itself are in [memory-engine.md](memory-engine.md).
+`<datapack id>` to `memories`, and `<datapack id>_entities` to `entities`. The routes, the context
+engine's API and the context engine itself are in [context-engine.md](context-engine.md).
 
 ## Logging
 
@@ -383,9 +383,9 @@ counts and timings.
 - Go 1.26 (`go.mod`'s `go` line is a hard minimum; an older `go` downloads it unless
   `GOTOOLCHAIN=local`). `CGO_ENABLED=1`, `-tags sqlite_fts5,sqlite_vec`. On RHEL 8 that needs
   `CC=/opt/rh/gcc-toolset-13/root/usr/bin/gcc`.
-- `make build`, `make test` (builds the memory engine, then `go test -race ./...` and the memory
+- `make build`, `make test` (builds the context engine, then `go test -race ./...` and the context
   engine's tests),
-  `make lint` (`go vet`, gofmt, golangci-lint, `tsc` on the memory engine and the web UI).
+  `make lint` (`go vet`, gofmt, golangci-lint, `tsc` on the context engine and the web UI).
 - The `meko` CI job (in `.github/workflows/ci.yml`) runs on ubuntu-latest and macos-15 when a PR
   changes `src/meko/**` other than Markdown only people read (`scripts/ci-scope.sh`; `docs/` counts,
   since `docs/docs_test.go` checks it), and on every push to `main`. A failure there fails

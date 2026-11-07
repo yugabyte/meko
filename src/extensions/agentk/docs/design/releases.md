@@ -57,7 +57,7 @@ Part of the [AgentK design](../design.md).
   without `feat`/`fix`/`perf`/`deps` commits, or with a **tag** (`agentk-v…` or `v…`) to rebuild the
   assets of an existing release.
 - **Dependencies.** Dependabot (`.github/dependabot.yml`) checks AgentK's npm packages and GitHub
-  Actions every Monday (and Meko's Go modules, memory engine and web UI packages: see
+  Actions every Monday (and Meko's Go modules, context engine and web UI packages: see
   `src/meko/AGENTS.md`) and assigns its PRs to the maintainer. Packages that must move together
   (fastify, react, xterm, vite, typescript with typescript-eslint, eslint) come in one PR per
   family, majors included. Other minor and patch bumps come grouped (runtime, dev, actions), and

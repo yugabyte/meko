@@ -1,10 +1,10 @@
-// The memory engine API on run/mem_eng.sock: HTTP/JSON with the per-start internal token, in the same
+// The context engine API on run/ctx_eng.sock: HTTP/JSON with the per-start internal token, in the same
 // {data, error} envelope as the Go server. Only the Go server calls it.
 import { timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 
-import { HttpError, type MemoryEngine } from "./memoryengine.js";
+import { HttpError, type ContextEngine } from "./contextengine.js";
 import type { EmbedderInfo } from "./embedder.js";
 import type { RerankerInfo } from "./reranker.js";
 import { StoreError } from "./storeclient.js";
@@ -20,7 +20,7 @@ export interface Health {
   reranker?: RerankerInfo & { state: "loading" | "ready" | "error"; error?: string };
 }
 
-type Handler = (memoryEngine: MemoryEngine, body: any) => Promise<unknown>;
+type Handler = (contextEngine: ContextEngine, body: any) => Promise<unknown>;
 
 const routes: Record<string, Handler> = {
   "/v1/add": (e, b) => e.add(b),
@@ -34,7 +34,7 @@ const routes: Record<string, Handler> = {
 export function startServer(
   socket: string,
   token: string,
-  memoryEngine: MemoryEngine,
+  contextEngine: ContextEngine,
   health: () => Health,
   log: (msg: string, fields?: Record<string, unknown>) => void,
 ): Promise<http.Server> {
@@ -65,10 +65,10 @@ export function startServer(
       if (!handler || req.method !== "POST") return fail(res, 404, "NOT_FOUND", "no such route");
       const h = health();
       if (h.state !== "ready") {
-        return fail(res, 503, "MEMORY_ENGINE_NOT_READY", h.error ?? "the memory engine is still starting");
+        return fail(res, 503, "CONTEXT_ENGINE_NOT_READY", h.error ?? "the context engine is still starting");
       }
       const body = await readJSON(req);
-      reply(res, 200, { data: await handler(memoryEngine, body) });
+      reply(res, 200, { data: await handler(contextEngine, body) });
     } catch (e) {
       if (e instanceof HttpError) return fail(res, e.status, e.code, e.message);
       // The store's refusals (no such datapack, a bad filter) name no memory text: pass them on.
@@ -76,14 +76,14 @@ export function startServer(
       // Never echo or log an internal error's message: it can carry memory text. The store's own
       // codes are safe to log.
       log("request failed", { route: path, error: e instanceof StoreError ? e.code : (e as Error).name });
-      fail(res, 500, "INTERNAL_ERROR", "the memory engine couldn't complete the request");
+      fail(res, 500, "INTERNAL_ERROR", "the context engine couldn't complete the request");
     } finally {
       if (path !== "/healthz") log("request", { route: path, status: res.statusCode, ms: Date.now() - started });
     }
   });
 
   return new Promise((resolve, reject) => {
-    fs.rmSync(socket, { force: true }); // a killed memory engine's socket
+    fs.rmSync(socket, { force: true }); // a killed context engine's socket
     server.once("error", reject);
     server.listen(socket, () => {
       fs.chmodSync(socket, 0o600);

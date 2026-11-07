@@ -60,10 +60,10 @@ type Options struct {
 	ClientToken string
 	// Auth is config.AuthToken, or config.AuthNone to let /mcp and the data routes take requests
 	// with no credential.
-	Auth         string
-	Logger       *slog.Logger
-	Children     func() []supervisor.Status
-	MemoryEngine func(ctx context.Context) memory.EngineStatus // nil reports no memory engine
+	Auth          string
+	Logger        *slog.Logger
+	Children      func() []supervisor.Status
+	ContextEngine func(ctx context.Context) memory.EngineStatus // nil reports no context engine
 	// UsageStats, if set, says whether usage stats are sent, for status.
 	UsageStats func(ctx context.Context) (callhome.State, error)
 	// Storage, if set, says how full Meko is against its storage limit, for status.
@@ -136,9 +136,9 @@ func New(opts Options) *Server {
 	if opts.Auth == "" {
 		opts.Auth = config.AuthToken
 	}
-	if opts.MemoryEngine == nil {
-		opts.MemoryEngine = func(context.Context) memory.EngineStatus {
-			return memory.EngineStatus{State: "unavailable", Reason: "no memory engine in this server"}
+	if opts.ContextEngine == nil {
+		opts.ContextEngine = func(context.Context) memory.EngineStatus {
+			return memory.EngineStatus{State: "unavailable", Reason: "no context engine in this server"}
 		}
 	}
 	e := echo.New()
@@ -160,7 +160,7 @@ func New(opts Options) *Server {
 
 	e.GET("/healthz", s.healthz)
 	v1 := e.Group("/api/v1", middleware.BodyLimit(BodyLimit))
-	// The same reply as status for the web UI's status page: what it says (versions, the memory
+	// The same reply as status for the web UI's status page: what it says (versions, the context
 	// engine's state, the data folder) is the local user's own.
 	v1.GET("/server", s.status)
 	v1.GET("/status", s.status)
@@ -459,7 +459,7 @@ type StatusReply struct {
 	StartedAt     time.Time           `json:"started_at"`
 	UptimeSeconds int64               `json:"uptime_seconds"`
 	Children      []supervisor.Status `json:"children"`
-	MemoryEngine  memory.EngineStatus `json:"memory_engine"`
+	ContextEngine memory.EngineStatus `json:"context_engine"`
 	Auth          string              `json:"auth"` // token, or none
 	UsageStats    *callhome.State     `json:"usage_stats,omitempty"`
 	Web           *WebStatus          `json:"web,omitempty"`
@@ -476,7 +476,7 @@ func (s *Server) status(c echo.Context) error {
 	reply := StatusReply{
 		Version: i.Version, PID: i.PID, Port: s.opts.Port, DataDir: i.DataDir, StartedAt: i.StartedAt,
 		UptimeSeconds: int64(time.Since(i.StartedAt).Seconds()), Children: children,
-		MemoryEngine: s.opts.MemoryEngine(c.Request().Context()), Auth: s.opts.Auth,
+		ContextEngine: s.opts.ContextEngine(c.Request().Context()), Auth: s.opts.Auth,
 	}
 	if s.opts.WebStatus != nil {
 		reply.Web = s.opts.WebStatus()

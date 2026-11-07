@@ -103,7 +103,7 @@ func hungServe(mode string) {
 	if err := l.Ensure(); err != nil {
 		os.Exit(2)
 	}
-	if mode == "hang-with-child" { // a child in its own process group, recorded as serve records the memory engine
+	if mode == "hang-with-child" { // a child in its own process group, recorded as serve records the context engine
 		child := exec.Command("sleep", "3600")
 		child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if err := child.Start(); err != nil {
@@ -113,7 +113,7 @@ func hungServe(mode string) {
 		if err != nil {
 			os.Exit(2)
 		}
-		if err := paths.WriteFile(filepath.Join(l.ChildrenDir, "memory_engine"), []byte(rec)); err != nil {
+		if err := paths.WriteFile(filepath.Join(l.ChildrenDir, "context-engine"), []byte(rec)); err != nil {
 			os.Exit(2)
 		}
 	}
@@ -241,8 +241,8 @@ func TestStatusAsksTheExtensionsAtOnce(t *testing.T) {
 	want(t, "status's next steps", code, 0, out, "More detail: meko status --verbose\n\nNext:\n  meko ui ")
 
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
-	want(t, "status --verbose", code, 0, out, "  Extension:     agentk, running (AgentK 1.0)\n"+
-		"  Extension:     present, didn't answer in 2s (meko present status)\n")
+	want(t, "status --verbose", code, 0, out, "  Extension:      agentk, running (AgentK 1.0)\n"+
+		"  Extension:      present, didn't answer in 2s (meko present status)\n")
 }
 
 func TestStartStatusStop(t *testing.T) {
@@ -254,10 +254,10 @@ func TestStartStatusStop(t *testing.T) {
 	want(t, "second start", code, 0, out, "already running")
 
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
-	want(t, "status", code, 0, out, "Children:      none")
-	want(t, "status's auth", code, 0, out, "Auth:          token")
-	want(t, "status's service", code, 0, out, "Service:       none (meko install sets one up)")
-	want(t, "status's updates", code, 0, out, "Updates:       none (a build from source)")
+	want(t, "status", code, 0, out, "Children:       none")
+	want(t, "status's auth", code, 0, out, "Auth:           token")
+	want(t, "status's service", code, 0, out, "Service:        none (meko install sets one up)")
+	want(t, "status's updates", code, 0, out, "Updates:        none (a build from source)")
 	if strings.Contains(out, "Usage stats") {
 		t.Errorf("status --verbose shows usage stats:\n%s", out)
 	}
@@ -368,7 +368,7 @@ func TestStatusWarnsWhenAuthIsOff(t *testing.T) {
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
-	want(t, "status", code, 0, out, "Auth:          none (every user and program on this machine")
+	want(t, "status", code, 0, out, "Auth:           none (every user and program on this machine")
 }
 
 func TestUsageStatsGoToTheConfiguredURL(t *testing.T) {
@@ -538,7 +538,7 @@ func TestStopKillsAServerThatIgnoresSIGTERM(t *testing.T) {
 
 // stop's SIGKILL path also kills the children a hung server recorded, in their own groups.
 // startHungServe starts a serve that hangs after recording a child in its own process group, as
-// serve records the memory engine, and returns it and the child's pid.
+// serve records the context engine, and returns it and the child's pid.
 func startHungServe(t *testing.T, dir string) (*exec.Cmd, int) {
 	t.Helper()
 	l := paths.New(dir)
@@ -554,7 +554,7 @@ func startHungServe(t *testing.T, dir string) (*exec.Cmd, int) {
 	go func() { _ = cmd.Wait() }()
 	var child int
 	for deadline := time.Now().Add(10 * time.Second); child == 0; time.Sleep(50 * time.Millisecond) {
-		if b, err := os.ReadFile(filepath.Join(l.ChildrenDir, "memory_engine")); err == nil {
+		if b, err := os.ReadFile(filepath.Join(l.ChildrenDir, "context-engine")); err == nil {
 			_, _ = fmt.Sscanf(string(b), "%d", &child)
 		}
 		if time.Now().After(deadline) {
@@ -582,7 +582,7 @@ func waitGone(t *testing.T, dir string, child int, after string) {
 			t.Fatalf("the child outlived %s", after)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(paths.New(dir).ChildrenDir, "memory_engine")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(paths.New(dir).ChildrenDir, "context-engine")); !os.IsNotExist(err) {
 		t.Errorf("the child's record outlived %s: %v", after, err)
 	}
 }
@@ -617,63 +617,63 @@ func TestServeKillsAKilledServersChildren(t *testing.T) {
 	if !waitUnlocked(paths.New(dir).Lock, 5*time.Second) {
 		t.Fatal("the killed serve's lock wasn't released")
 	}
-	t.Setenv("MEKO_MEMORY_ENGINE_DIR", t.TempDir()) // no memory engine, so no new record
+	t.Setenv("MEKO_CONTEXT_ENGINE_DIR", t.TempDir()) // no context engine, so no new record
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
 	waitGone(t, dir, child, "the next serve's start")
 }
 
-// serve starts the memory engine (with the test embedder), status reports it ready, and stop stops it.
-func TestServeRunsTheMemoryEngine(t *testing.T) {
-	memoryEngineDir, err := filepath.Abs(filepath.Join("..", "..", "memory_engine"))
+// serve starts the context engine (with the test embedder), status reports it ready, and stop stops it.
+func TestServeRunsTheContextEngine(t *testing.T) {
+	contextEngineDir, err := filepath.Abs(filepath.Join("..", "..", "context_engine"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = os.Stat(filepath.Join(memoryEngineDir, "dist", "main.js")); err != nil {
+	if _, err = os.Stat(filepath.Join(contextEngineDir, "dist", "main.js")); err != nil {
 		if os.Getenv("CI") != "" {
 			t.Fatal(err)
 		}
-		t.Skip("the memory engine isn't built (make test builds it)")
+		t.Skip("the context engine isn't built (make test builds it)")
 	}
 	dir, port := setup(t)
-	t.Setenv("MEKO_MEMORY_ENGINE_DIR", memoryEngineDir)
+	t.Setenv("MEKO_CONTEXT_ENGINE_DIR", contextEngineDir)
 	t.Setenv(testEmbedderEnv, "hash")
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
 		_, out, _ = run("status", "--data-dir", dir, "--verbose")
-		if strings.Contains(out, "Memory engine: ready, test hash (384 dims)") &&
-			strings.Contains(out, "memory_engine running") {
+		if strings.Contains(out, "Context engine: ready, test hash (384 dims)") &&
+			strings.Contains(out, "context-engine running") {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the memory engine never got ready:\n%s", out)
+			t.Fatalf("the context engine never got ready:\n%s", out)
 		}
 	}
 	l := paths.New(dir)
-	b, err := os.ReadFile(filepath.Join(l.ChildrenDir, "memory_engine"))
+	b, err := os.ReadFile(filepath.Join(l.ChildrenDir, "context-engine"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var memoryEnginePid int
-	_, _ = fmt.Sscanf(string(b), "%d", &memoryEnginePid)
+	var contextEnginePid int
+	_, _ = fmt.Sscanf(string(b), "%d", &contextEnginePid)
 	code, out, _ = run("stop", "--data-dir", dir)
 	want(t, "stop", code, 0, out, "  ✓ Server          stopped\n")
-	if memoryEnginePid == 0 || syscall.Kill(memoryEnginePid, 0) == nil {
-		t.Errorf("the memory engine (pid %d) outlived stop", memoryEnginePid)
+	if contextEnginePid == 0 || syscall.Kill(contextEnginePid, 0) == nil {
+		t.Errorf("the context engine (pid %d) outlived stop", contextEnginePid)
 	}
-	for _, p := range []string{l.StoreSock, l.MemoryEngineSock, filepath.Join(l.ChildrenDir, "memory_engine")} {
+	for _, p := range []string{l.StoreSock, l.ContextEngineSock, filepath.Join(l.ChildrenDir, "context-engine")} {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
 			t.Errorf("%s left behind", p)
 		}
 	}
 }
 
-// withMemoryEngine has the servers a test starts run the built memory engine, with the hashing
-// embedder; it skips the test when the memory engine isn't built (outside CI).
-func withMemoryEngine(t *testing.T) {
+// withContextEngine has the servers a test starts run the built context engine, with the hashing
+// embedder; it skips the test when the context engine isn't built (outside CI).
+func withContextEngine(t *testing.T) {
 	t.Helper()
-	dir, err := filepath.Abs(filepath.Join("..", "..", "memory_engine"))
+	dir, err := filepath.Abs(filepath.Join("..", "..", "context_engine"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -681,29 +681,29 @@ func withMemoryEngine(t *testing.T) {
 		if os.Getenv("CI") != "" {
 			t.Fatal(err)
 		}
-		t.Skip("the memory engine isn't built (make test builds it)")
+		t.Skip("the context engine isn't built (make test builds it)")
 	}
-	t.Setenv("MEKO_MEMORY_ENGINE_DIR", dir)
+	t.Setenv("MEKO_CONTEXT_ENGINE_DIR", dir)
 	t.Setenv(testEmbedderEnv, "hash")
 }
 
-// startReady starts a server and waits until its memory engine is ready.
+// startReady starts a server and waits until its context engine is ready.
 func startReady(t *testing.T, dir, port string) {
 	t.Helper()
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
-		if _, out, _ = run("status", "--data-dir", dir, "--verbose"); strings.Contains(out, "Memory engine: ready") {
+		if _, out, _ = run("status", "--data-dir", dir, "--verbose"); strings.Contains(out, "Context engine: ready") {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the memory engine never got ready:\n%s", out)
+			t.Fatalf("the context engine never got ready:\n%s", out)
 		}
 	}
 }
 
 func TestSearchAddAndDatapacks(t *testing.T) {
-	withMemoryEngine(t)
+	withContextEngine(t)
 	t.Setenv("MEKO_SECRETS", "file") // a name missing here reads the Meko Cloud link
 	dir, port := setup(t)
 	code, _, errs := runSh("search", "--data-dir", dir, "anything")
@@ -715,7 +715,7 @@ func TestSearchAddAndDatapacks(t *testing.T) {
 
 	code, out, errs = runSh("datapacks", "--data-dir", dir)
 	want(t, "datapacks", code, 0, out+errs, "default   Created by Meko on first start.\n")
-	const note = "the build cache is in memory_engine/.models"
+	const note = "the build cache is in context_engine/.models"
 	code, out, errs = runSh("add_memory", "--data-dir", dir, note, "--datapack", "default")
 	want(t, "add_memory", code, 0, out+errs, "Added memory ")
 	code, out, errs = runSh("search", "--data-dir", dir, note, "--limit", "3")
@@ -1238,7 +1238,7 @@ func TestUI(t *testing.T) {
 	code, _, errs = run("ui", "--no-open", "--data-dir", dir)
 	want(t, "ui --no-open", code, exitUsage, errs, "Run meko ui --help for its flags")
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
-	want(t, "status's web line", code, 0, out, "Humans:        "+web+" (web UI), local, from this computer")
+	want(t, "status's web line", code, 0, out, "Humans:         "+web+" (web UI), local, from this computer")
 	code, out, _ = run("token", "--data-dir", dir, "--json")
 	want(t, "token --json's web URL", code, 0, out, `"web_url":"`+web+`"`)
 	code, _, errs = run("setup_link", "--data-dir", dir)
@@ -1335,27 +1335,27 @@ func TestSuggestedName(t *testing.T) {
 // export writes a datapack's JSON to the file the server names, here or at -o, by name, id or the
 // default; it won't replace a file unless --force, and an unknown name exits 1.
 func TestExport(t *testing.T) {
-	memoryEngineDir, err := filepath.Abs(filepath.Join("..", "..", "memory_engine"))
+	contextEngineDir, err := filepath.Abs(filepath.Join("..", "..", "context_engine"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = os.Stat(filepath.Join(memoryEngineDir, "dist", "main.js")); err != nil {
+	if _, err = os.Stat(filepath.Join(contextEngineDir, "dist", "main.js")); err != nil {
 		if os.Getenv("CI") != "" {
 			t.Fatal(err)
 		}
-		t.Skip("the memory engine isn't built (make test builds it)")
+		t.Skip("the context engine isn't built (make test builds it)")
 	}
 	dir, port := setup(t)
-	t.Setenv("MEKO_MEMORY_ENGINE_DIR", memoryEngineDir)
+	t.Setenv("MEKO_CONTEXT_ENGINE_DIR", contextEngineDir)
 	t.Setenv(testEmbedderEnv, "hash")
 	code, out, errs := run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
-		if _, out, _ = run("status", "--data-dir", dir, "--verbose"); strings.Contains(out, "Memory engine: ready") {
+		if _, out, _ = run("status", "--data-dir", dir, "--verbose"); strings.Contains(out, "Context engine: ready") {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the memory engine never got ready:\n%s", out)
+			t.Fatalf("the context engine never got ready:\n%s", out)
 		}
 	}
 	code, out, errs = runSh("add_memory", "--data-dir", dir, "releases ship on Tuesdays")

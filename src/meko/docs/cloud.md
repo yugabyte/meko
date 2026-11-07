@@ -60,7 +60,7 @@ every extension the same way (`internal/cloudlink`).
   otherwise it saves the link itself, and they read it when they next ask. A link ends
   with `✓ Linked to <url> (key …abcd)` and what to run next. `meko status`, `start` and
   `install` show the link in their link rows (`Cloud`, the linked web app's URL, or `not
-  linked`), and `meko status --verbose` with its key hint (`Meko Cloud:    linked to …`, or `not
+  linked`), and `meko status --verbose` with its key hint (`Meko Cloud:     linked to …`, or `not
   linked`).
 - A saved change (`PUT` or `DELETE`) moves back the agents a Meko from before connected to Meko
   Cloud ([below](#agents-stay-on-this-meko)), and its reply adds `agents: {moved: [{name, title}],
@@ -259,7 +259,7 @@ MCP tools on the kept session, each within 30 s but the listing's 10 s):
   - a missing datapack (`datapack_access_denied`, `not_found`) is a 404 `NOT_FOUND`;
   - the tool's own failure (a code ending in `_failed`) is a 500, or a 502 `CLOUD_CALL_FAILED`
     from Meko Cloud;
-  - `memory_engine_unavailable` is a 503;
+  - `context_engine_unavailable` is a 503;
   - the rest are 400s with the tool's code.
 - **The arguments sent to Meko Cloud's tools:** only those listed, since Meko Cloud refuses an
   argument it doesn't know. `conversation_id` defaults to a fixed id derived from `meko-rest`, since

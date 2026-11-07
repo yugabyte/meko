@@ -156,7 +156,7 @@ func TestInstallFromTheInstaller(t *testing.T) {
 	}
 }
 
-// The memory engine's row waits while the engine loads: it says how long it took once it's ready,
+// The context engine's row waits while the engine loads: it says how long it took once it's ready,
 // and that it's still loading after engineWait.
 func TestWaitEngine(t *testing.T) {
 	var calls atomic.Int32
@@ -166,7 +166,7 @@ func TestWaitEngine(t *testing.T) {
 		if calls.Add(1) > atomic.LoadInt32(&readyAfter) {
 			state = "ready"
 		}
-		_, _ = w.Write([]byte(`{"data":{"version":"1.0","port":1,"memory_engine":{"state":"` + state + `"}}}`))
+		_, _ = w.Write([]byte(`{"data":{"version":"1.0","port":1,"context_engine":{"state":"` + state + `"}}}`))
 	}))
 	defer srv.Close()
 	c := &client{base: srv.URL, http: srv.Client()}
@@ -178,7 +178,7 @@ func TestWaitEngine(t *testing.T) {
 	if err := waitEngine(c, &b); err != nil {
 		t.Fatal(err)
 	}
-	if want := "  ! Memory engine   still loading · meko status says when it's ready\n"; b.String() != want {
+	if want := "  ! Context engine  still loading · meko status says when it's ready\n"; b.String() != want {
 		t.Errorf("never ready: %q, want %q", b.String(), want)
 	}
 
@@ -189,7 +189,7 @@ func TestWaitEngine(t *testing.T) {
 	if err := waitEngine(c, &b); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(b.String(), "  ✓ Memory engine   ready in 0.") {
+	if !strings.HasPrefix(b.String(), "  ✓ Context engine  ready in 0.") {
 		t.Errorf("ready on the second ask: %q", b.String())
 	}
 }

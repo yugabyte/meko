@@ -25,7 +25,7 @@ const DefaultPort = 7777
 type Config struct {
 	Server             Server             `toml:"server"`
 	Log                Log                `toml:"log"`
-	MemoryEngine       MemoryEngine       `toml:"memory_engine"`
+	ContextEngine      ContextEngine      `toml:"context_engine"`
 	ConversationSearch ConversationSearch `toml:"conversation_search"`
 	Secrets            Secrets            `toml:"secrets"`
 	Update             Update             `toml:"update"`
@@ -184,11 +184,11 @@ const (
 	AuthNone  = "none"
 )
 
-// MemoryEngine is the [memory_engine] table: where the memory engine and its Node are. Empty means the usual
-// places (internal/memoryengine).
-type MemoryEngine struct {
+// ContextEngine is the [context_engine] table: where the context engine and its Node are. Empty means the usual
+// places (internal/contextengine).
+type ContextEngine struct {
 	Node string `toml:"node"` // also MEKO_NODE
-	Dir  string `toml:"dir"`  // the built memory engine; also MEKO_MEMORY_ENGINE_DIR
+	Dir  string `toml:"dir"`  // the built context engine; also MEKO_CONTEXT_ENGINE_DIR
 }
 
 // Log is the [log] table.
@@ -262,7 +262,7 @@ func Load(path string, env func(string) string, o Overrides) (Config, error) {
 		c.Log.Level = v
 	}
 	if v := env("MEKO_NODE"); v != "" {
-		c.MemoryEngine.Node = v
+		c.ContextEngine.Node = v
 	}
 	if v := env("MEKO_UPDATE_CHANNEL"); v != "" {
 		c.Update.Channel = v
@@ -287,8 +287,8 @@ func Load(path string, env func(string) string, o Overrides) (Config, error) {
 	if v := env("MEKO_SECRETS"); v != "" {
 		c.Secrets.Store = v
 	}
-	if v := env("MEKO_MEMORY_ENGINE_DIR"); v != "" {
-		c.MemoryEngine.Dir = v
+	if v := env("MEKO_CONTEXT_ENGINE_DIR"); v != "" {
+		c.ContextEngine.Dir = v
 	}
 	if v := env("MEKO_WEB_UI_DIR"); v != "" {
 		c.WebUI.Dir = v

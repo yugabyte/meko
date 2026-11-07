@@ -50,7 +50,7 @@ func startWith(t *testing.T, authMode string) (*Server, string, *bytes.Buffer) {
 		Auth:        authMode,
 		Logger:      slog.New(slog.NewJSONHandler(&logs, nil)),
 		Children: func() []supervisor.Status {
-			return []supervisor.Status{{Name: "memory_engine", State: supervisor.Running}}
+			return []supervisor.Status{{Name: "context-engine", State: supervisor.Running}}
 		},
 	})
 	go func() { _ = s.Serve(ln) }()
@@ -330,7 +330,7 @@ func TestServerStatusForClients(t *testing.T) {
 	}
 	code, env := get(t, base+"/api/v1/server", map[string]string{"Authorization": "Bearer " + clientToken}, "")
 	m, _ := env.Data.(map[string]any)
-	if code != 200 || m["version"] != "test" || m["memory_engine"] == nil {
+	if code != 200 || m["version"] != "test" || m["context_engine"] == nil {
 		t.Errorf("client token: %d %+v", code, env)
 	}
 }

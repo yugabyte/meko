@@ -67,7 +67,7 @@ func fakeClaude(t *testing.T) string {
 	if err := os.WriteFile(claude, []byte("#!/bin/sh\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH")) // the memory engine's Node too
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH")) // the context engine's Node too
 	return claude
 }
 

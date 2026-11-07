@@ -65,7 +65,7 @@ func (s *Store) KeepMemories(ctx context.Context, datapack, userID string, ids [
 // CopyToPromoted copies one of the user's learnings into promoted_memories, keeping every column
 // but the lemmatized text, and into the knowledge base as a chunk with the memory's own vector, or
 // returns ErrNotFound (no such learning: missing, someone else's, or already kept). The memory
-// itself stays until the caller deletes it through the memory engine. A learning already copied by
+// itself stays until the caller deletes it through the context engine. A learning already copied by
 // a promotion that didn't get to delete it returns that copy, so promoting it again finishes the
 // job.
 func (s *Store) CopyToPromoted(ctx context.Context, datapack, userID, id, promotedBy string) (Promoted, error) {

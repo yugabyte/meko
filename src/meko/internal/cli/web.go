@@ -665,10 +665,10 @@ func printWeb(stdout io.Writer, w *server.WebStatus) {
 		return
 	}
 	if !w.Enabled {
-		fmt.Fprintf(stdout, "  Humans:        web UI %s\n", webOffNote)
+		fmt.Fprintf(stdout, "  Humans:         web UI %s\n", webOffNote)
 		return
 	}
-	fmt.Fprintf(stdout, "  Humans:        %s (web UI), %s\n", w.URL, webAccessNote(w))
+	fmt.Fprintf(stdout, "  Humans:         %s (web UI), %s\n", w.URL, webAccessNote(w))
 	switch {
 	case !w.Listening && w.Error != "":
 		fmt.Fprintf(stdout, "                 not listening: %s\n", w.Error)
@@ -680,6 +680,6 @@ func printWeb(stdout io.Writer, w *server.WebStatus) {
 		if w.SelfSigned {
 			kind = "self-signed"
 		}
-		fmt.Fprintf(stdout, "  Certificate:   %s, SHA-256 %s\n", kind, w.Fingerprint)
+		fmt.Fprintf(stdout, "  Certificate:    %s, SHA-256 %s\n", kind, w.Fingerprint)
 	}
 }

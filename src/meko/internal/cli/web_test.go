@@ -65,7 +65,7 @@ func TestHandoff(t *testing.T) {
 	want(t, "start", code, 0, out+errs, "is running")
 	waitFor(t, "the web listener", func() bool {
 		_, status, _ := run("status", "--data-dir", dir, "--verbose")
-		return strings.Contains(status, "Certificate:   self-signed, SHA-256 "+pair.Fingerprint)
+		return strings.Contains(status, "Certificate:    self-signed, SHA-256 "+pair.Fingerprint)
 	})
 	c, err := config.Load(paths.New(dir).Config, func(string) string { return "" }, config.Overrides{})
 	if err != nil || c.Web.Access != config.AccessRemote {

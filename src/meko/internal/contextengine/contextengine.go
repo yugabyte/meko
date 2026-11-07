@@ -1,7 +1,7 @@
-// Package memoryengine runs and calls Meko's memory engine: mem0 in a Node child process
-// (src/meko/memory_engine) that serve supervises. It finds the Node binary and the built memory engine, builds the
-// child's spec, and is the Go client of the memory engine's API on run/mem_eng.sock.
-package memoryengine
+// Package contextengine runs and calls Meko's context engine: mem0 in a Node child process
+// (src/meko/context_engine) that serve supervises. It finds the Node binary and the built context engine, builds the
+// child's spec, and is the Go client of the context engine's API on run/ctx_eng.sock.
+package contextengine
 
 import (
 	"bytes"
@@ -23,16 +23,16 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/supervisor"
 )
 
-// Name is the memory engine's child name in status and its log file's.
-const Name = "memory_engine"
+// Name is the context engine's child name in status and its log file's.
+const Name = "context-engine"
 
-// MinNode is the oldest Node the memory engine runs on.
+// MinNode is the oldest Node the context engine runs on.
 var MinNode = [3]int{22, 13, 0}
 
-// Options say where the memory engine and its Node are. Empty means look in the usual places.
+// Options say where the context engine and its Node are. Empty means look in the usual places.
 type Options struct {
 	Node string // the node binary
-	Dir  string // the built memory engine: the folder holding package.json and dist/main.js
+	Dir  string // the built context engine: the folder holding package.json and dist/main.js
 	// TestEmbedder, for tests only, swaps the model for a deterministic hashing embedder.
 	TestEmbedder string
 	// Models is a folder of model files shipped with the release (models/ beside bin/), which the
@@ -61,19 +61,19 @@ func FindModels() string {
 	return abs
 }
 
-// Errors the memory engine client returns.
+// Errors the context engine client returns.
 var (
-	// ErrUnavailable: no memory engine is answering (not found, not started, crashed, stopped).
-	ErrUnavailable = errors.New("the memory engine isn't running")
+	// ErrUnavailable: no context engine is answering (not found, not started, crashed, stopped).
+	ErrUnavailable = errors.New("the context engine isn't running")
 )
 
-// NotReadyError: the memory engine runs but can't serve yet (loading its model) or at all (an error it
+// NotReadyError: the context engine runs but can't serve yet (loading its model) or at all (an error it
 // reports, such as a changed embedding model).
 type NotReadyError struct{ Message string }
 
 func (e *NotReadyError) Error() string { return e.Message }
 
-// APIError is a failure the memory engine reported for one request.
+// APIError is a failure the context engine reported for one request.
 type APIError struct {
 	Status        int
 	Code, Message string
@@ -99,7 +99,7 @@ func FindNode(o Options) (string, error) {
 		}
 	}
 	lastErr := errors.New("no node binary found. Install Node " + versionString(MinNode) +
-		" or newer, or set [memory_engine] node in config.toml or MEKO_NODE")
+		" or newer, or set [context_engine] node in config.toml or MEKO_NODE")
 	for _, c := range candidates {
 		if _, err := os.Stat(c); err != nil {
 			continue
@@ -110,7 +110,7 @@ func FindNode(o Options) (string, error) {
 			continue
 		}
 		if older(v, MinNode) {
-			lastErr = fmt.Errorf("%s is Node %s; the memory engine needs %s or newer",
+			lastErr = fmt.Errorf("%s is Node %s; the context engine needs %s or newer",
 				c, versionString(v), versionString(MinNode))
 			continue
 		}
@@ -147,8 +147,8 @@ func older(v, minimum [3]int) bool {
 
 func versionString(v [3]int) string { return fmt.Sprintf("%d.%d.%d", v[0], v[1], v[2]) }
 
-// FindDir picks the built memory engine: o.Dir if set, else <bin>/../memory_engine (the source tree's layout,
-// where make build puts bin/meko next to memory_engine/). It must hold dist/main.js.
+// FindDir picks the built context engine: o.Dir if set, else <bin>/../context_engine (the source tree's layout,
+// where make build puts bin/meko next to context_engine/). It must hold dist/main.js.
 func FindDir(o Options) (string, error) {
 	dir := o.Dir
 	if dir == "" {
@@ -156,29 +156,29 @@ func FindDir(o Options) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		dir = filepath.Join(filepath.Dir(exe), "..", "memory_engine")
+		dir = filepath.Join(filepath.Dir(exe), "..", "context_engine")
 	}
 	dir, err := filepath.Abs(dir)
 	if err != nil {
 		return "", err
 	}
 	if _, err := os.Stat(filepath.Join(dir, "dist", "main.js")); err != nil {
-		return "", fmt.Errorf("the memory engine isn't built in %s (run make memory_engine), or set [memory_engine] dir in "+
-			"config.toml or MEKO_MEMORY_ENGINE_DIR", dir)
+		return "", fmt.Errorf("the context engine isn't built in %s (run make context_engine), or set "+
+			"[context_engine] dir in config.toml or MEKO_CONTEXT_ENGINE_DIR", dir)
 	}
 	return dir, nil
 }
 
-// Spec is the memory engine's child spec: node dist/main.js in the memory engine's folder, with the sockets, the
+// Spec is the context engine's child spec: node dist/main.js in the context engine's folder, with the sockets, the
 // internal token and the data folder's paths in its environment, healthy once its API answers.
 func Spec(node, dir string, l paths.Layout, token string, o Options) supervisor.Spec {
 	env := []string{
-		"MEKO_MEMORY_ENGINE_SOCKET=" + l.MemoryEngineSock,
+		"MEKO_CONTEXT_ENGINE_SOCKET=" + l.ContextEngineSock,
 		"MEKO_STORE_SOCKET=" + l.StoreSock,
 		"MEKO_INTERNAL_TOKEN=" + token,
-		"MEKO_MEMORY_ENGINE_STATE_DIR=" + l.MemoryEngineDir,
+		"MEKO_CONTEXT_ENGINE_STATE_DIR=" + l.ContextEngineDir,
 		"MEM0_TELEMETRY=false",
-		"MEM0_DIR=" + l.MemoryEngineDir,
+		"MEM0_DIR=" + l.ContextEngineDir,
 	}
 	if o.Models != "" {
 		// The release's own copy: read only, and nothing is fetched (it works offline).
@@ -187,16 +187,16 @@ func Spec(node, dir string, l paths.Layout, token string, o Options) supervisor.
 		env = append(env, "MEKO_MODELS_DIR="+l.ModelsDir)
 	}
 	if o.TestEmbedder != "" {
-		env = append(env, "MEKO_MEMORY_ENGINE_TEST_EMBEDDER="+o.TestEmbedder)
+		env = append(env, "MEKO_CONTEXT_ENGINE_TEST_EMBEDDER="+o.TestEmbedder)
 	}
-	c := NewClient(l.MemoryEngineSock, token)
+	c := NewClient(l.ContextEngineSock, token)
 	return supervisor.Spec{
 		Name:    Name,
 		Path:    node,
 		Args:    []string{filepath.Join(dir, "dist", "main.js")},
 		Env:     env,
 		Dir:     dir,
-		LogFile: l.MemoryEngineLog,
+		LogFile: l.ContextEngineLog,
 		PidFile: filepath.Join(l.ChildrenDir, Name),
 		Health: func(ctx context.Context) error {
 			_, err := c.Health(ctx)
@@ -206,13 +206,13 @@ func Spec(node, dir string, l paths.Layout, token string, o Options) supervisor.
 	}
 }
 
-// Client calls the memory engine's API.
+// Client calls the context engine's API.
 type Client struct {
 	token string
 	http  *http.Client
 }
 
-// NewClient is a client for the memory engine listening on socket.
+// NewClient is a client for the context engine listening on socket.
 func NewClient(socket, token string) *Client {
 	return &Client{token: token, http: &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -221,7 +221,7 @@ func NewClient(socket, token string) *Client {
 	}}}
 }
 
-// Embedder is the model the memory engine runs.
+// Embedder is the model the context engine runs.
 type Embedder struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
@@ -229,7 +229,7 @@ type Embedder struct {
 }
 
 // Reranker is the knowledge base's reranking model and its state: loading, ready, or error (with
-// why). The memory engine is ready without it.
+// why). The context engine is ready without it.
 type Reranker struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
@@ -237,7 +237,7 @@ type Reranker struct {
 	Error    string `json:"error,omitempty"`
 }
 
-// Health is what the memory engine says about itself: loading (its model), ready, or error (with
+// Health is what the context engine says about itself: loading (its model), ready, or error (with
 // why).
 type Health struct {
 	State    string    `json:"state"`
@@ -246,8 +246,8 @@ type Health struct {
 	Reranker *Reranker `json:"reranker,omitempty"`
 }
 
-// Health asks the memory engine how it is. It fails with ErrUnavailable if nothing accepts the connection,
-// and with ctx's error if the memory engine accepts it but doesn't answer before ctx ends.
+// Health asks the context engine how it is. It fails with ErrUnavailable if nothing accepts the connection,
+// and with ctx's error if the context engine accepts it but doesn't answer before ctx ends.
 func (c *Client) Health(ctx context.Context) (Health, error) {
 	var h Health
 	err := c.call(ctx, http.MethodGet, "/healthz", nil, &h)
@@ -265,7 +265,7 @@ func (c *Client) call(ctx context.Context, method, path string, body, out any) e
 	} else {
 		rd = bytes.NewReader(nil)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, "http://memory-engine"+path, rd)
+	req, err := http.NewRequestWithContext(ctx, method, "http://context-engine"+path, rd)
 	if err != nil {
 		return err
 	}
@@ -284,10 +284,10 @@ func (c *Client) call(ctx context.Context, method, path string, body, out any) e
 		Error *envelope.Error `json:"error"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
-		return fmt.Errorf("the memory engine answered %s with no JSON", resp.Status)
+		return fmt.Errorf("the context engine answered %s with no JSON", resp.Status)
 	}
 	if env.Error != nil {
-		if env.Error.Code == "MEMORY_ENGINE_NOT_READY" {
+		if env.Error.Code == "CONTEXT_ENGINE_NOT_READY" {
 			return &NotReadyError{Message: env.Error.Message}
 		}
 		return &APIError{Status: resp.StatusCode, Code: env.Error.Code, Message: env.Error.Message}
@@ -386,7 +386,7 @@ func (c *Client) Delete(ctx context.Context, datapack, id string) error {
 // MaxEmbed is the most texts one Embed call takes.
 const MaxEmbed = 256
 
-// Embed embeds texts with the memory engine's model, as a search's query is: ahead of background work.
+// Embed embeds texts with the context engine's model, as a search's query is: ahead of background work.
 func (c *Client) Embed(ctx context.Context, texts []string) ([][]float32, error) {
 	return c.embed(ctx, texts, false)
 }
