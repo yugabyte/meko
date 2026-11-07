@@ -54,7 +54,9 @@ export function kiroGuardScriptPath(paths: Paths): string {
  */
 const KIRO_GUARD_SCRIPT = `#!/bin/sh
 # Written by Kode. Asks the server whether a Kiro file write may go ahead.
-: "\${KODE_HOOK_TOKEN:=\${AK_HOOK_TOKEN:-}}" "\${KODE_HOOK_SOCK:=\${AK_HOOK_SOCK:-}}" # AK_*: sessions launched before Kode was called Kode
+# AK_*: their names in a session launched before Kode was called Kode.
+[ -n "\${KODE_HOOK_TOKEN:-}" ] || KODE_HOOK_TOKEN=\${AK_HOOK_TOKEN:-}
+[ -n "\${KODE_HOOK_SOCK:-}" ] || KODE_HOOK_SOCK=\${AK_HOOK_SOCK:-}
 [ -n "$KODE_HOOK_TOKEN" ] && [ -S "$KODE_HOOK_SOCK" ] || { cat >/dev/null; exit 0; }
 reason=$(curl -sf --max-time 3 --unix-socket "$KODE_HOOK_SOCK" \\
   -H "X-AK-Token: $KODE_HOOK_TOKEN" -H "Content-Type: application/json" \\
