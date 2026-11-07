@@ -3022,6 +3022,48 @@ a.icon-btn {
   overflow-y: auto;
   padding: 16px 20px 32px;
 }
+/* The page a design is about to fill, while AgentK writes the first one (DesignSkeleton). */
+.design-skel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 900px;
+  margin-top: 20px;
+}
+.design-skel-line,
+.design-skel-box {
+  display: block;
+  height: 12px;
+  border-radius: 4px;
+  background: var(--sunk);
+}
+.design-skel-line.title {
+  width: 45%;
+  height: 20px;
+  margin-bottom: 4px;
+}
+.design-skel-line.short {
+  width: 62%;
+}
+.design-skel-box {
+  height: 140px;
+  margin: 8px 0;
+  border: 1px solid var(--rule);
+  background: transparent;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .design-skel-line,
+  .design-skel-box {
+    background-image: linear-gradient(90deg, transparent 0, color-mix(in srgb, var(--surface) 70%, transparent) 50%, transparent 100%);
+    background-size: 200% 100%;
+    background-repeat: no-repeat;
+    animation: design-skel 1.6s ease-in-out infinite;
+  }
+  @keyframes design-skel {
+    from { background-position: 150% 0; }
+    to { background-position: -50% 0; }
+  }
+}
 .prose {
   line-height: 1.6;
   font-size: 14px;
