@@ -97,7 +97,7 @@ func tarballOf(t *testing.T, pkg, name, version string) []byte {
 		}
 	}
 	add("bin/"+name, fakeMeko(version, false), 0o755)
-	add("memory_engine/dist/main.js", "// memory engine\n", 0o644)
+	add("context_engine/dist/main.js", "// context engine\n", 0o644)
 	if err := tw.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestUpdaterStagesChecksAndSwitches(t *testing.T) {
 	if a.Current() != next {
 		t.Fatalf("current %q", a.Current())
 	}
-	if _, err := os.Stat(filepath.Join(a.Dir(next), "memory_engine", "dist", "main.js")); err != nil {
+	if _, err := os.Stat(filepath.Join(a.Dir(next), "context_engine", "dist", "main.js")); err != nil {
 		t.Errorf("unpacked: %v", err)
 	}
 	if got, ver, ok := Of(a.CurrentExe()); !ok || ver != next || got.Root != realPath(t, a.Root) {
@@ -517,10 +517,10 @@ func TestPrivateAppUnpacksOwnerOnly(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := map[string]os.FileMode{"bin": 0o755, "bin/me_presenter": 0o755, "VERSION": 0o644,
-			"memory_engine/dist/main.js": 0o644}
+			"context_engine/dist/main.js": 0o644}
 		if private {
 			want = map[string]os.FileMode{"bin": 0o700, "bin/me_presenter": 0o700, "VERSION": 0o600,
-				"memory_engine/dist/main.js": 0o600}
+				"context_engine/dist/main.js": 0o600}
 		}
 		for p, mode := range want {
 			fi, err := os.Stat(filepath.Join(a.Dir(v), p))

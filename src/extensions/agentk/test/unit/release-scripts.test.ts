@@ -307,7 +307,7 @@ describe.each(['agentk-release.yml', 'meko-release.yml', 'presenter-release.yml'
   const all = jobs(name);
 
   it('give every step that downloads a timeout of its own', () => {
-    const downloading = all.flat().filter((s) => /\b(curl|fetch-node\.sh|dnf install|apt-get|npm ci|make (test|memory_engine|web_ui))\b/.test(code(s)));
+    const downloading = all.flat().filter((s) => /\b(curl|fetch-node\.sh|dnf install|apt-get|npm ci|make (test|context_engine|web_ui))\b/.test(code(s)));
     expect(downloading.length).toBeGreaterThan(0);
     for (const s of downloading) expect(s.join('\n'), s[0]).toMatch(/^\s+(- )?timeout-minutes: \d+$/m);
   });

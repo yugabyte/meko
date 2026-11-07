@@ -215,13 +215,13 @@ func TestReport(t *testing.T) {
 	if r.color {
 		t.Error("color on a buffer")
 	}
-	r.step(stepWarn, "Memory engine", "starting")
+	r.step(stepWarn, "Context engine", "starting")
 	r.running("Meko 1.0 is running", "pid 7, up 2h")
 	r.links([]linkRow{{"Web UI", "http://127.0.0.1:7777", "local, from this computer"},
 		{"Agents", "http://127.0.0.1:7778/mcp", "MCP and API"}, {"Cloud", "", "not linked"}})
 	r.next([][2]string{{"meko ui", "open the web UI"},
 		{"meko status", "check on Meko at any time · meko uninstall removes it"}})
-	if want := "  ! Memory engine   starting\n" +
+	if want := "  ! Context engine  starting\n" +
 		"\n  ● Meko 1.0 is running · pid 7, up 2h\n" +
 		"\n  Web UI  http://127.0.0.1:7777 · local, from this computer\n" +
 		"  Agents  http://127.0.0.1:7778/mcp · MCP and API\n" +

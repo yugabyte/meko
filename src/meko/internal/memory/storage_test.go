@@ -10,7 +10,7 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/store"
 )
 
-// storageService is a service over a fresh store, with no memory engine, and a limit of limit bytes.
+// storageService is a service over a fresh store, with no context engine, and a limit of limit bytes.
 func storageService(t *testing.T, limit int64, linked bool) (*Service, string) {
 	t.Helper()
 	ctx := context.Background()

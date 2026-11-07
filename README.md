@@ -133,16 +133,16 @@ me_koder ui                       # opens AgentK in your browser
 ## Build from source
 
 You need Go 1.26 (an older `go` downloads it on first use), a C compiler, and Node 22.13 or newer
-for the memory engine and the web UI.
+for the context engine and the web UI.
 
 ```sh
 cd src/meko
-make build memory_engine web_ui  # bin/meko (and bin/meko-cli, a link to it), the memory engine and the web UI
-./bin/meko start                 # runs in the background: 127.0.0.1:7778, and the web UI on :7777
+make build context_engine web_ui  # bin/meko (and bin/meko-cli, a link to it), the context engine and the web UI
+./bin/meko start                  # runs in the background: 127.0.0.1:7778, and the web UI on :7777
 ```
 
 The first start downloads the embedding model (23 MB), and `meko-cli` calls fail with
-`MEMORY_ENGINE_NOT_READY` until `meko status` shows the memory engine ready. On RHEL 8, set
+`CONTEXT_ENGINE_NOT_READY` until `meko status` shows the context engine ready. On RHEL 8, set
 `CC=/opt/rh/gcc-toolset-13/root/usr/bin/gcc` before building.
 
 ## Docs and contributing

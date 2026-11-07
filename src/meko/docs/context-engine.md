@@ -1,4 +1,4 @@
-# Meko backend: memory engine and conversations
+# Meko backend: context engine and conversations
 
 Memories and conversations work end to end on the local store, as Meko Cloud's do. The core they
 run on is in [design.md](design.md); MCP and REST put them on the wire ([api.md](api.md)).
@@ -8,11 +8,11 @@ run on is in [design.md](design.md); MCP and REST put them on the wire ([api.md]
 - **Conversations:** created idempotently per session, turns stored with a dedupe key, and turns
   indexed for conversation search, `context_search`'s conversation bucket.
 
-The memory engine is mem0's TypeScript library in a Node child process that `serve` supervises. It
-embeds with a local model and makes no LLM calls. Every database call stays in Go: the memory
+The context engine is mem0's TypeScript library in a Node child process that `serve` supervises. It
+embeds with a local model and makes no LLM calls. Every database call stays in Go: the context
 engine stores through the store API. The service layer MCP and REST call is `internal/memory`.
 
-The memory engine builds on public upstream mem0 (`mem0ai` on npm, Apache-2.0). Where Meko follows
+The context engine builds on public upstream mem0 (`mem0ai` on npm, Apache-2.0). Where Meko follows
 Meko Cloud, this doc states the behavior; the code is written from scratch.
 
 ## Not built yet
@@ -25,19 +25,19 @@ Meko Cloud, this doc states the behavior; the code is written from scratch.
 
 | Decision | Why |
 |---|---|
-| **Public `mem0ai`, pinned exactly (3.3.1)**, with Meko's providers registered by wrapping the exported factories' `create` methods before `new Memory()` | mem0 builds providers by name in fixed switch statements but looks the factories up at call time, so no fork or patch is needed. `memory_engine/test` checks the seam. The memory engine calls only `add`, `search`, `update` and `delete` on `Memory`, so a bump needs checking against those; 3.3's `add()` drops `actor_id` from the metadata it's given, which the next row works around. |
-| **`zod` overridden to 4.x** (`overrides` in `memory_engine/package.json`), though `mem0ai` 3.3.1 asks for `^3.24.1` | Every `zod` below 4.6.6 has a memory-exhaustion advisory and 3.x has no patched release. `mem0ai` uses `zod` only to check its config on add and search, with APIs 4.x keeps (`z.record` with both a key and a value schema). Drop the override once `mem0ai` asks for 4.x. |
-| **A verbatim add's speaker travels as `meko_actor_id`**, which `MekoStore.insert` stores as `actor_id` | mem0 3.3 drops `actor_id` from the metadata `add()` is given, as it drops the user, agent and run ids, and never sets it on a verbatim add. The memory engine sets the key from the message's `name` only, so a caller's metadata can't claim a speaker. |
-| **Meko Cloud's scoring, in our own code** | Upstream divides every memory by the most any memory in the results could reach; Meko divides each by what it earned, and returns the cosine as `raw_similarity_score`. The memory engine asks mem0's search for its score parts (`explain: true`) and rescores. |
+| **Public `mem0ai`, pinned exactly (3.3.1)**, with Meko's providers registered by wrapping the exported factories' `create` methods before `new Memory()` | mem0 builds providers by name in fixed switch statements but looks the factories up at call time, so no fork or patch is needed. `context_engine/test` checks the seam. The context engine calls only `add`, `search`, `update` and `delete` on `Memory`, so a bump needs checking against those; 3.3's `add()` drops `actor_id` from the metadata it's given, which the next row works around. |
+| **`zod` overridden to 4.x** (`overrides` in `context_engine/package.json`), though `mem0ai` 3.3.1 asks for `^3.24.1` | Every `zod` below 4.6.6 has a memory-exhaustion advisory and 3.x has no patched release. `mem0ai` uses `zod` only to check its config on add and search, with APIs 4.x keeps (`z.record` with both a key and a value schema). Drop the override once `mem0ai` asks for 4.x. |
+| **A verbatim add's speaker travels as `meko_actor_id`**, which `MekoStore.insert` stores as `actor_id` | mem0 3.3 drops `actor_id` from the metadata `add()` is given, as it drops the user, agent and run ids, and never sets it on a verbatim add. The context engine sets the key from the message's `name` only, so a caller's metadata can't claim a speaker. |
+| **Meko Cloud's scoring, in our own code** | Upstream divides every memory by the most any memory in the results could reach; Meko divides each by what it earned, and returns the cosine as `raw_similarity_score`. The context engine asks mem0's search for its score parts (`explain: true`) and rescores. |
 | **Keyword scores are true BM25** (FTS5's `bm25()`, negated) | The scale mem0's BM25 sigmoid was tuned for. |
-| **Embedder: `Xenova/all-MiniLM-L6-v2` (384 dims, q8, pinned to commit `751bff3` of its Hugging Face repo) on transformers.js, in a worker thread; locked at first start** | 23 MB, offline once downloaded (a release bundles it), and the runtime the knowledge base's cross-encoder runs on too ([knowledge.md](knowledge.md)). mem0-ts has no local transformers.js embedder, so the memory engine adds one. Changing the model needs re-embedding, which isn't built, so a memory engine reporting another model is refused. |
-| **No LLM:** mem0 always builds one, so the memory engine registers a `none` provider that throws; `/v1/add` takes verbatim adds only | Extraction runs in the Go server through the user's own agent CLI, which adds what it finds verbatim ([memory-extraction.md](memory-extraction.md)). |
+| **Embedder: `Xenova/all-MiniLM-L6-v2` (384 dims, q8, pinned to commit `751bff3` of its Hugging Face repo) on transformers.js, in a worker thread; locked at first start** | 23 MB, offline once downloaded (a release bundles it), and the runtime the knowledge base's cross-encoder runs on too ([knowledge.md](knowledge.md)). mem0-ts has no local transformers.js embedder, so the context engine adds one. Changing the model needs re-embedding, which isn't built, so a context engine reporting another model is refused. |
+| **No LLM:** mem0 always builds one, so the context engine registers a `none` provider that throws; `/v1/add` takes verbatim adds only | Extraction runs in the Go server through the user's own agent CLI, which adds what it finds verbatim ([memory-extraction.md](memory-extraction.md)). |
 | **Verbatim adds link no entities** | As in Cloud and upstream mem0: entities are linked for extracted memories (and on a text update). Search still queries the entity store and scores the boost. |
 | **Conversation and message ids are Cloud's**: a 32-hex `session_id` is the id, any other is the first 32 hex of its SHA-256, none is random; a message id is the first 32 hex of the seed's SHA-256 | AgentK passes stable session ids and already derives the same fallback, and Cloud's ids keep a move to Cloud lossless. Ids are unique per datapack, and the first agent owns the conversation: another agent creating one with the same session id is refused (`ErrAgentMismatch`) rather than handed a conversation it can't add to. |
 | **Conversation search with a MiniLM cutoff**: 1024-character windows overlapping by 256, the 10 nearest outside the caller's conversation, hits within cosine distance 0.6, and a thread of the top 3 conversations' most recent searchable turns (50 in all, oldest first) | With MiniLM a paraphrase measured 0.52 from its turn and unrelated turns 0.98 and more. `[conversation_search] max_distance` changes it. Hits aren't reranked (`rerank_score` is null): the reranker serves the knowledge base only. |
-| **The memory engine is plain `tsc` output with its `node_modules`**, `legacy-peer-deps`, and a stub package for better-sqlite3 | mem0ai lists every store it supports as a peer, and npm installs non-optional peers, native better-sqlite3 among them. Only better-sqlite3 is imported statically and missing, so a stub (`memory_engine/stubs/better-sqlite3`) replaces it; no bundler is needed. |
-| **Meko finds its own Node**: `[memory_engine] node` (or `MEKO_NODE`), then `<bin>/../node/bin/node` (a release bundles it, [install.md](install.md)), then `node` on PATH, 22.13 or newer | An explicit setting replaces the search. Nothing checks whose Node it finds: AgentK's own is avoided by packaging (meko isn't installed in AgentK's app folder). |
-| **`stop` reaches the children**: the supervisor records each child's pid and process group in `run/children/`, and `stop` (after killing a hung serve) and a new `serve` kill recorded groups whose leader still has that pgid and the recorded start time (boot id and start ticks on Linux, the kernel's start time on macOS); `stop` does it holding the data folder's lock | A pid reused since (after a crash or a reboot) is never hit, and a server starting at the same moment keeps its new memory engine. The memory engine also exits on its own when its parent changes or `store.sock` goes away. |
+| **The context engine is plain `tsc` output with its `node_modules`**, `legacy-peer-deps`, and a stub package for better-sqlite3 | mem0ai lists every store it supports as a peer, and npm installs non-optional peers, native better-sqlite3 among them. Only better-sqlite3 is imported statically and missing, so a stub (`context_engine/stubs/better-sqlite3`) replaces it; no bundler is needed. |
+| **Meko finds its own Node**: `[context_engine] node` (or `MEKO_NODE`), then `<bin>/../node/bin/node` (a release bundles it, [install.md](install.md)), then `node` on PATH, 22.13 or newer | An explicit setting replaces the search. Nothing checks whose Node it finds: AgentK's own is avoided by packaging (meko isn't installed in AgentK's app folder). |
+| **`stop` reaches the children**: the supervisor records each child's pid and process group in `run/children/`, and `stop` (after killing a hung serve) and a new `serve` kill recorded groups whose leader still has that pgid and the recorded start time (boot id and start ticks on Linux, the kernel's start time on macOS); `stop` does it holding the data folder's lock | A pid reused since (after a crash or a reboot) is never hit, and a server starting at the same moment keeps its new context engine. The context engine also exits on its own when its parent changes or `store.sock` goes away. |
 
 ## Layout
 
@@ -47,14 +47,14 @@ flowchart LR
     svc["internal/memory"]
     storeapi["internal/storeapi on run/store.sock"]
     store[("internal/store: meko.db")]
-    eng["internal/memoryengine client"]
+    eng["internal/contextengine client"]
     sup["internal/supervisor"]
     svc --> store
     svc --> eng
     storeapi --> store
   end
-  subgraph node["src/meko/memory_engine (Node)"]
-    api["memory engine API on run/mem_eng.sock"]
+  subgraph node["src/meko/context_engine (Node)"]
+    api["context engine API on run/ctx_eng.sock"]
     mem0["mem0ai Memory, Meko scoring"]
     prov["providers: store, history, embedder, none LLM"]
     worker["worker threads: embedder, cross-encoder"]
@@ -66,12 +66,12 @@ flowchart LR
 ```
 
 - Both sockets are 0600 in the 0700 `run/` folder and need the per-start internal token (a Bearer
-  token, separate from the admin token, passed to the memory engine in its environment). Neither is
+  token, separate from the admin token, passed to the context engine in its environment). Neither is
   on the TCP port. A data folder whose socket paths would pass 103 bytes (macOS's limit) is refused.
-- Go never holds a write transaction while it waits on the memory engine, which calls back into the
+- Go never holds a write transaction while it waits on the context engine, which calls back into the
   store API and needs the single writer.
-- `/api/v1/status` reports the memory engine: `state` (starting, loading, ready, error, restarting,
-  failed, unavailable), `reason`, the embedder and the reranker. When the memory engine doesn't
+- `/api/v1/status` reports the context engine: `state` (starting, loading, ready, error, restarting,
+  failed, unavailable), `reason`, the embedder and the reranker. When the context engine doesn't
   answer, the supervisor's state of its child says whether it's starting, restarting after a crash,
   or failed. `meko status` prints it.
 - Get, update and delete reach only the local user's memories, as search and list do.
@@ -79,12 +79,15 @@ flowchart LR
 ### In the data folder
 
 ```
-run/store.sock, run/mem_eng.sock   the two APIs
-run/children/memory_engine         "<pid> <pgid>" while the memory engine runs
-logs/memory_engine.log             the memory engine's JSON lines: ids, counts, timings, never text
+run/store.sock, run/ctx_eng.sock   the two APIs
+run/children/context-engine        "<pid> <pgid>" while the context engine runs
+logs/context-engine.log            the context engine's JSON lines: ids, counts, timings, never text
 models/                            the models, downloaded on first start (a build from source)
-memory_engine/                     mem0's own config folder (MEM0_DIR)
+context-engine/                    mem0's own config folder (MEM0_DIR)
 ```
+
+`serve`, once its release is past probation, renames `logs/memory_engine.log` and `memory_engine/`
+to these names while the new name is free (`paths.Layout.MoveRenamed`).
 
 ## Storage
 
@@ -114,7 +117,7 @@ In `0002_memory.sql` (memories, entities, history) and `0003_conversations.sql`,
 - Vector tables `memories_vec`, `entities_vec` and `message_chunks_vec` (and the knowledge base's
   `kb_chunks_vec`):
   `vec0(datapack_id TEXT partition key, <metadata columns>, embedding float[D] distance_metric=cosine)`,
-  keyed by the owner's rowid. They're made at the memory engine's first hello, when D is known (and
+  keyed by the owner's rowid. They're made at the context engine's first hello, when D is known (and
   the model recorded in `settings`), with a delete trigger on each owner table, since vec0 takes no
   foreign keys: every delete, a datapack's cascade included, takes its vectors along.
 
@@ -127,16 +130,16 @@ In `0002_memory.sql` (memories, entities, history) and `0003_conversations.sql`,
 | `POST .../keyword-search` | `keywordSearch` | Memories only; scores are `-bm25()`. |
 | `GET`, `PUT`, `DELETE .../vectors/:id`, `POST .../list` | `get`, `update`, `delete`, `list` | Scoped to the datapack; `get` of a missing id is `null`. |
 | `DELETE /v1/collections/:c` | `deleteCol` | Refused. |
-| `POST /v1/history/:datapack`, `GET /v1/history/:datapack/:memory` | history | `reset` is refused in the memory engine. |
-| `POST /v1/memory_engine/hello` | memory engine start | Records the model and makes the vector tables, accepts the same model, refuses another (`MODEL_CHANGED`). |
+| `POST /v1/history/:datapack`, `GET /v1/history/:datapack/:memory` | history | `reset` is refused in the context engine. |
+| `POST /v1/context_engine/hello` | context engine start | Records the model and makes the vector tables, accepts the same model, refuses another (`MODEL_CHANGED`). |
 
 Filters follow mem0's grammar: equality, `*`, lists as `in`, `eq ne gt gte lt lte in nin contains
 icontains`, and `AND`/`OR`/`NOT` (or `$and`/`$or`/`$not`), compiled to SQL over the columns or
 `json_extract` on the payload, every value bound.
 
-## The memory engine (`src/meko/memory_engine`)
+## The context engine (`src/meko/context_engine`)
 
-TypeScript on Node 22, built with `tsc` to `dist/`. `make memory_engine` runs `npm ci` and the build.
+TypeScript on Node 22, built with `tsc` to `dist/`. `make context_engine` runs `npm ci` and the build.
 
 | File | What |
 |---|---|
@@ -144,10 +147,10 @@ TypeScript on Node 22, built with `tsc` to `dist/`. `make memory_engine` runs `n
 | `src/app.ts` | The embedder, the providers, the API, then the hello; exits when the Go server goes. It retries a failed model load or hello with backoff (1 s up to 60 s, staying `loading` and saying why); only another model already in the store (`MODEL_CHANGED`) leaves it in `error`. It sets umask 077, so the model cache and mem0's config are the user's only. |
 | `src/providers.ts` | `MekoStore`, `MekoHistory`, `NoLLM` and `register()`, which wraps mem0's factories. |
 | `src/embedder.ts`, `src/embedworker.ts` | The worker-thread embedder (mean-pooled, normalized, batches of 32), and a hashing embedder for tests (set only by the CLI's tests, never by an environment variable of the shipped binary). |
-| `src/rerankworker.ts` | The knowledge base's cross-encoder ([knowledge.md](knowledge.md#memory-engine)). |
-| `src/memoryengine.ts` | One mem0 `Memory` per datapack, the 256 most recently used kept (a dropped one is rebuilt on its next call); verbatim add (role, actor, conversation), search (mem0's candidate pool rescored, Cloud's reply shape), update, delete, embed. |
+| `src/rerankworker.ts` | The knowledge base's cross-encoder ([knowledge.md](knowledge.md#context-engine)). |
+| `src/contextengine.ts` | One mem0 `Memory` per datapack, the 256 most recently used kept (a dropped one is rebuilt on its next call); verbatim add (role, actor, conversation), search (mem0's candidate pool rescored, Cloud's reply shape), update, delete, embed. |
 | `src/scoring.ts` | Meko's score: `min((semantic + bm25 + boost) / (1 + [bm25 > 0] + 0.5·[boost > 0]), 1)`. |
-| `src/server.ts` | The API on `mem_eng.sock`: `GET /healthz`, `POST /v1/add`, `/v1/search`, `/v1/update`, `/v1/delete`, `/v1/embed`, `/v1/rerank`. It logs routes, statuses and timings only, never an error's message. |
+| `src/server.ts` | The API on `ctx_eng.sock`: `GET /healthz`, `POST /v1/add`, `/v1/search`, `/v1/update`, `/v1/delete`, `/v1/embed`, `/v1/rerank`. It logs routes, statuses and timings only, never an error's message. |
 
 Search asks mem0 for `max(limit × 16, 240)` results with their score parts. mem0 asks the store for
 4× that many candidates and keeps its own top results, so the store provider returns only a quarter
@@ -163,9 +166,9 @@ nearest memories and 240 keyword hits for the default limit of 10).
 - A turn is searchable when its input or output has 40 characters or more, its conversation has a
   datapack, the datapack hasn't opted out, and the caller didn't ask to skip it; the reply's
   `conversation_search_skipped` names which of the last three kept a substantive turn out (a short
-  turn is left out silently, as in Cloud). Adding a turn never waits on the memory engine: its
+  turn is left out silently, as in Cloud). Adding a turn never waits on the context engine: its
   chunks are stored unembedded, and `RunEmbedder` (started by `serve`) embeds them right away, and
-  every 30 s catches any the memory engine missed while down (logged at debug while the memory
+  every 30 s catches any the context engine missed while down (logged at debug while the context
   engine is down or loading, as a warning for any other failure).
 - Opting out also keeps turns that were still waiting for their vectors out of search: the store
   drops a chunk whose datapack opted out when its vector arrives. A chunk's rowid is never reused
@@ -185,7 +188,7 @@ On an 8-core Linux x64 machine, with MiniLM q8 on transformers.js:
   cosine 0.81) 0.90, above AgentK's 0.75 recall cut.
 - At 200 MB of content in one datapack (`make bench`: 50 MB of memories, about 210k, and 150 MB of
   turns, about 225k chunks, with random vectors and Zipf-distributed words; searches through the
-  real memory engine and model):
+  real context engine and model):
 
   | Search | p50 | p95 |
   |---|---|---|
@@ -217,18 +220,18 @@ In `make test` on Linux and macOS (CI caches the models):
   opt-out (a waiting chunk dropped when its vector arrives), chunk rowids never reused, reading a
   conversation's newest turns.
 - **storeapi**: the token, each route's shapes and refusals, the hello.
-- **memory engine** (`tsx --test`, with a fake store): the factory override, Meko scoring, Cloud's
+- **context engine** (`tsx --test`, with a fake store): the factory override, Meko scoring, Cloud's
   reply shape, verbatim adds with role and actor and no entities, refusing extraction, update,
   delete; search rescoring all of mem0's candidates; the start-up retrying a failed load or hello
   and stopping at another model; the API refusing a body that isn't a JSON object, a malformed
   message and a non-numeric limit, and answering an oversized body with its 413.
-- **end to end** (the real memory engine): add, get, list, search, update, delete; the memory
-  engine down and back; a memory engine with another model refused; with MiniLM, a paraphrase found
+- **end to end** (the real context engine): add, get, list, search, update, delete; the context
+  engine down and back; a context engine with another model refused; with MiniLM, a paraphrase found
   with a 0–1 score and its cosine, an identifier above 0.75, and conversation search's cutoff; turns
-  waiting for the memory engine; no memory text in `memory_engine.log`; `serve` starting the memory
+  waiting for the context engine; no memory text in `context-engine.log`; `serve` starting the context
   engine and `stop` stopping it, and `stop` killing a hung serve's recorded children, and `stop` and
   the next `serve` killing those of a serve killed from outside; a recorded pid now held by another
-  group leader left alone; get, update and delete refusing another user's memory; a crashed memory
+  group leader left alone; get, update and delete refusing another user's memory; a crashed context
   engine's status. For conversations: another agent's session refused, each
   `conversation_search_skipped` reason, and the thread (three conversations, 50 turns, the newest of
   a conversation past 1000 turns, oldest first, the cutoff from the options).

@@ -1,10 +1,10 @@
-// Downloads the memory engine's pinned models (the embedder and the reranker) into a folder, for a
+// Downloads the context engine's pinned models (the embedder and the reranker) into a folder, for a
 // release to ship them:
 //
 //   node scripts/fetch-model.mjs <dir>       (after npm run build)
 //
 // The folder is laid out as transformers.js caches a pinned revision
-// (<dir>/<model>/<revision>/<file>), which the memory engine reads with MEKO_MODELS_DIR and
+// (<dir>/<model>/<revision>/<file>), which the context engine reads with MEKO_MODELS_DIR and
 // MEKO_MODELS_OFFLINE=1. Each model is loaded and run once here, then loaded again with remote
 // models off, so a folder that wouldn't work offline fails the build. transformers.js 4.3 looks for
 // a model's tokenizer files at the "main" revision, whatever revision it then loads (pipeline() for

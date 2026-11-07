@@ -173,7 +173,7 @@ func TestCloudLink(t *testing.T) {
 		t.Fatalf("token --json shows the key: %s", js)
 	}
 	code, out, _ = run("status", "--data-dir", dir, "--verbose")
-	want(t, "status", code, exitNotRunning, out, "Meko Cloud:    linked to "+cloud+"/mcp (key …wxyz)")
+	want(t, "status", code, exitNotRunning, out, "Meko Cloud:     linked to "+cloud+"/mcp (key …wxyz)")
 
 	code, out, errs = run("start", "--data-dir", dir, "--port", port)
 	want(t, "start", code, 0, out+errs, "is running")
@@ -365,7 +365,7 @@ func TestDatapacksLinked(t *testing.T) {
 // meko-cli's commands, an agent's MCP session with the client token, REST's creates and the client
 // token's REST calls all reach it, and unlinking leaves this Meko's own datapacks alone.
 func TestCloudDatapacks(t *testing.T) {
-	withMemoryEngine(t)
+	withContextEngine(t)
 	t.Setenv("MEKO_SECRETS", "file")
 	dir, port := setup(t)
 	startReady(t, dir, port)

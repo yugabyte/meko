@@ -44,7 +44,7 @@ type cmdFlags struct {
 	keepExtensions, noService, noUI, purge, check, follow, force, noOpen, withExtensions bool
 	verbose                                                                              bool
 	lines                                                                                int
-	server, memoryEngine, service                                                        bool
+	server, contextEngine, service                                                       bool
 	access                                                                               string
 	all                                                                                  bool
 	auto, version                                                                        string
@@ -224,7 +224,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 		fs.BoolVar(&c.follow, "follow", false, "follow the logs")
 		fs.IntVar(&c.lines, "n", 50, "how many lines to show")
 		fs.BoolVar(&c.server, "server", false, "only the server's log (meko.log)")
-		fs.BoolVar(&c.memoryEngine, "memory-engine", false, "only the memory engine's log (memory_engine.log)")
+		fs.BoolVar(&c.contextEngine, "context-engine", false, "only the context engine's log (context-engine.log)")
 		fs.BoolVar(&c.service, "service", false, "only the service's stderr (service.log)")
 	}
 	if cmd == "search" || cmd == "add_memory" || cmd == "upload" || cmd == "upload_status" {
@@ -335,7 +335,7 @@ func runProg(prog string, args []string, stdout, stderr io.Writer) int {
 	case "agent disconnect":
 		return runAgentDisconnect(l, t.text, stdout, stderr)
 	case "logs":
-		return runLogs(l, logsOptions{follow: c.follow, lines: c.lines, server: c.server, memoryEngine: c.memoryEngine,
+		return runLogs(l, logsOptions{follow: c.follow, lines: c.lines, server: c.server, contextEngine: c.contextEngine,
 			service: c.service, json: t.json}, stdout)
 	case "ui":
 		return runUI(l, t.text, !c.noOpen, stdout, stderr)

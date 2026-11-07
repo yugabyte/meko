@@ -1,4 +1,4 @@
-// A stand-in for the Go server's store API, in memory, for the memory engine's own tests: enough of each
+// A stand-in for the Go server's store API, in memory, for the context engine's own tests: enough of each
 // route's behavior (equality filters, cosine search, term-count keyword scores) to drive mem0. The
 // real store API is tested in Go (internal/storeapi).
 import fs from "node:fs";
@@ -101,7 +101,7 @@ export async function startFakeStore(): Promise<FakeStore> {
         fake.history.push(...body.entries);
         return send({ added: body.entries.length });
       }
-      if (url === "/v1/memory_engine/hello") return send({ ok: true });
+      if (url === "/v1/context_engine/hello") return send({ ok: true });
       send(null, 404, { code: "NOT_FOUND", message: "no route" });
     });
   });

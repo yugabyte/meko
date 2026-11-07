@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yugabyte/meko/src/meko/internal/memoryengine"
+	"github.com/yugabyte/meko/src/meko/internal/contextengine"
 )
 
 func TestIDs(t *testing.T) {
@@ -53,7 +53,7 @@ func TestChunkAndSubstantive(t *testing.T) {
 
 const longTurn = "We decided the vector index lives in sqlite-vec with the datapack as its partition key."
 
-func TestConversationsThroughTheMemoryEngine(t *testing.T) {
+func TestConversationsThroughTheContextEngine(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t, hashEmbedder)
 	go h.svc.RunEmbedder(ctx)
@@ -156,29 +156,29 @@ func TestConversationsThroughTheMemoryEngine(t *testing.T) {
 	}
 }
 
-// Turns added while the memory engine is down wait, and are embedded once it's back.
-func TestTurnsWaitForTheMemoryEngine(t *testing.T) {
+// Turns added while the context engine is down wait, and are embedded once it's back.
+func TestTurnsWaitForTheContextEngine(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t, hashEmbedder)
 	c, err := h.svc.CreateConversation(ctx, CreateConversation{DatapackID: h.dp, SessionID: "s", Title: "t"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.stopMemoryEngine()
+	h.stopContextEngine()
 	if _, err = h.svc.AddMessage(ctx, AddMessage{ConversationID: c.ID, DatapackID: h.dp,
 		Input: "Where does the vector index live?", Output: longTurn}); err != nil {
-		t.Fatalf("adding a turn needs no memory engine: %v", err)
+		t.Fatalf("adding a turn needs no context engine: %v", err)
 	}
-	if err = h.svc.EmbedPending(ctx); !errors.Is(err, memoryengine.ErrUnavailable) {
-		t.Errorf("embedding with no memory engine: %v", err)
+	if err = h.svc.EmbedPending(ctx); !errors.Is(err, contextengine.ErrUnavailable) {
+		t.Errorf("embedding with no context engine: %v", err)
 	}
-	h.startMemoryEngine()
+	h.startContextEngine()
 	if err = h.svc.EmbedPending(ctx); err != nil {
 		t.Fatal(err)
 	}
 	res, err := h.svc.SearchConversations(ctx, h.dp, "", "where does the vector index live")
 	if err != nil || len(res.Hits) == 0 {
-		t.Errorf("after the memory engine came back: %+v %v", res, err)
+		t.Errorf("after the context engine came back: %+v %v", res, err)
 	}
 }
 
@@ -274,7 +274,7 @@ func TestConversationThread(t *testing.T) {
 	}
 
 	// The cutoff comes from Options.
-	strict := New(h.st, memoryengine.NewClient(h.l.MemoryEngineSock, h.token),
+	strict := New(h.st, contextengine.NewClient(h.l.ContextEngineSock, h.token),
 		Options{UserID: h.userID, MaxDistance: 1e-6})
 	if res, err := strict.SearchConversations(ctx, h.dp, "", query); err != nil || len(res.Hits) != 0 {
 		t.Errorf("hits past a 1e-6 cutoff: %+v %v", res.Hits, err)

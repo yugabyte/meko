@@ -433,7 +433,7 @@ export interface SearchAnswer {
   model: string;
 }
 
-// A source is null when it wasn't searched, as while the memory engine is starting.
+// A source is null when it wasn't searched, as while the context engine is starting.
 export interface ContextSearch {
   results: {
     memory: MemoryHit[] | null;
@@ -443,7 +443,7 @@ export interface ContextSearch {
   token_savings?: { tokens_saved: number; total_tokens: number };
 }
 
-// GET /api/v1/server: the server and its memory engine.
+// GET /api/v1/server: the server and its context engine.
 export interface ServerStatus {
   version: string;
   pid: number;
@@ -452,7 +452,9 @@ export interface ServerStatus {
   started_at: string;
   uptime_seconds: number;
   auth: string;
-  memory_engine: {
+  // Missing from a server of another version than this page's (an older one called it
+  // memory_engine), as while a tab outlives an update or a rollback.
+  context_engine?: {
     state: string;
     reason?: string;
     embedder?: { provider: string; model: string; dims: number };

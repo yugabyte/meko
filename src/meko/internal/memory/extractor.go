@@ -15,7 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/yugabyte/meko/src/meko/internal/agents"
-	"github.com/yugabyte/meko/src/meko/internal/memoryengine"
+	"github.com/yugabyte/meko/src/meko/internal/contextengine"
 	"github.com/yugabyte/meko/src/meko/internal/store"
 )
 
@@ -324,7 +324,7 @@ func (s *Service) RunExtractor(ctx context.Context) {
 // until its queue is empty, a call per extractTurns of its turns. A failed call leaves its turns
 // queued (a turn that failed extractMaxAttempts times leaves) and the run goes on to the next
 // conversation, unless extractMaxFailures calls fail in a row. Its error is only for what stops the
-// whole run: the store, the memory engine, the extractor being off (ErrExtractorOff), or Meko being
+// whole run: the store, the context engine, the extractor being off (ErrExtractorOff), or Meko being
 // full (ErrStorageFull): too full to keep what a call would find, before the first call, or full
 // when a save is refused partway, leaving its turns queued.
 func (s *Service) ExtractPending(ctx context.Context) (ExtractRun, error) {
@@ -580,7 +580,7 @@ func (s *Service) SetDatapackExtraction(ctx context.Context, datapack string, c 
 }
 
 // duplicate says whether any of the memories is within extractDuplicate cosine of the new fact.
-func duplicate(near []memoryengine.Memory) bool {
+func duplicate(near []contextengine.Memory) bool {
 	for _, m := range near {
 		if m.RawSimilarityScore != nil && *m.RawSimilarityScore >= extractDuplicate {
 			return true

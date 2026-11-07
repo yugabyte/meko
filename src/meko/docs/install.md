@@ -120,42 +120,42 @@ the service can still start Meko on a fresh one.
 ## Release builds
 
 `src/meko/scripts/package-release.sh <version> <arch> <node-dir> <out-dir>`, run on the platform
-the tarball is for after `make build VERSION=<version>`, `make memory_engine`, `make web_ui` and
-`(cd memory_engine && npm prune --omit=dev)`:
+the tarball is for after `make build VERSION=<version>`, `make context_engine`, `make web_ui` and
+`(cd context_engine && npm prune --omit=dev)`:
 
 ```
 meko-<version>/
   bin/meko                     the CLI and server (cgo: SQLite and sqlite-vec compiled in)
   node/bin/node, node/LICENSE  Meko's own Node (22.18.0, checked against nodejs.org's SHASUMS256)
-  memory_engine/package.json, dist/, node_modules/, stubs/
+  context_engine/package.json, dist/, node_modules/, stubs/
   web_ui/dist/                 the built web UI, served at / on the web listener (web-ui.md)
   models/                      the pinned models: the embedder and the reranker
   VERSION, LICENSE
 ```
 
-- `memory_engine/node_modules` is trimmed to the platform: onnxruntime-node keeps only its own
+- `context_engine/node_modules` is trimmed to the platform: onnxruntime-node keeps only its own
   `bin/napi-v*/<os>/<arch>` and no CUDA or TensorRT providers, `onnxruntime-web` goes (the Node
   build of transformers.js bundles what it needs of it), and so do sharp's WebAssembly and musl
   builds. `stubs/` is there because npm links `file:` dependencies into `node_modules`.
-- `make memory_engine` installs with `ONNXRUNTIME_NODE_INSTALL=skip`: onnxruntime-node's install script
+- `make context_engine` installs with `ONNXRUNTIME_NODE_INSTALL=skip`: onnxruntime-node's install script
   would otherwise download a 270 MB CUDA provider on linux-x64, which also timed out on CI runners.
-- `models/` is fetched by the tarball's own Node through the trimmed memory engine
-  (`memory_engine/scripts/fetch-model.mjs`): the embedder (all-MiniLM-L6-v2) and the knowledge
+- `models/` is fetched by the tarball's own Node through the trimmed context engine
+  (`context_engine/scripts/fetch-model.mjs`): the embedder (all-MiniLM-L6-v2) and the knowledge
   base's reranker (ms-marco-MiniLM-L-6-v2), 47 MB together. The script runs each one, then loads
   it again with remote models off, so a folder that wouldn't work offline fails the build. It's
   transformers.js's cache layout for the pinned revisions, plus copies of each model's JSON files at
   the unrevisioned path: transformers.js 4.3 looks for a model's tokenizer files at the `main`
   revision whatever revision it loads (`pipeline()` for the embedder, `AutoTokenizer` for the
   reranker), so offline it would find none.
-- `serve` finds `<bin>/../models` (`memoryengine.FindModels`) and passes it to the memory engine with
+- `serve` finds `<bin>/../models` (`contextengine.FindModels`) and passes it to the context engine with
   `MEKO_MODELS_OFFLINE=1`, which sets transformers.js's `allowRemoteModels = false` in both
   workers: a release never downloads a model, and the first start works offline. A build from source still downloads into
   the data folder's `models/`.
 - Measured on linux-x64 without the reranker: the tarball was 118 MB;
-  unpacked, Node 117 MB, the memory engine 194 MB (onnxruntime-node 45 MB), the embedder 24 MB and
+  unpacked, Node 117 MB, the context engine 194 MB (onnxruntime-node 45 MB), the embedder 24 MB and
   `meko` 24 MB. The reranker adds about 23 MB.
 - `scripts/smoke-release.sh <tarball> <version>` unpacks a tarball, checks `meko version --json`,
-  starts it on a fresh data folder, waits for the memory engine, saves a memory, finds it, checks that
+  starts it on a fresh data folder, waits for the context engine, saves a memory, finds it, checks that
   nothing was downloaded into `models/`, checks that the web listener (on the port after the API
   listener's, never 7777) serves the web UI at the address `meko ui --no-open` prints, and stops.
 
@@ -301,8 +301,8 @@ With the service installed, `meko start` starts it, `meko stop` stops it (a SIGT
 only see it started again), and `meko restart` restarts it. Without it, they start a detached
 `serve` and signal it.
 
-`meko logs [-f] [-n 50] [--server|--memory-engine|--service] [--json]` shows the last lines of
-`meko.log` and `memory_engine.log` merged by time, each prefixed with its source, rendering JSON lines as
+`meko logs [-f] [-n 50] [--server|--context-engine|--service] [--json]` shows the last lines of
+`meko.log` and `context-engine.log` merged by time, each prefixed with its source, rendering JSON lines as
 `time LEVEL msg key=value`. `-f` follows them and reopens a file that shrinks or is replaced
 (rotated).
 
@@ -355,7 +355,7 @@ AgentK <version>`, `Restarting into meko <version>`), so the output isn't empty 
 downloads, then its finished row. On a failure the row is `✗` with what it was doing, and the error
 follows on stderr.
 
-`meko install`, `meko start` and `meko status` end alike: the memory engine's row (start and install
+`meko install`, `meko start` and `meko status` end alike: the context engine's row (start and install
 show the dots while it loads, for at most a minute, then `ready in 2.4s`, or `! still loading ·
 meko status says when it's ready`), a `● Meko <version> is running` headline (with `· installed in
 14s` or `· upgraded in 11s` after the installer, and the pid and uptime in status), then the links
@@ -668,10 +668,10 @@ Changing the store doesn't move secrets: the client token is made again.
   a terminal, a bad checksum, AgentK's flags refused, and Intel Macs and macOS 13 refused.
 - `internal/cli/install_run_test.go` and `pick_linux_test.go`: the PATH line added once and
   removed, a held API port failing before the service is written, the headline's elapsed time and
-  the picker's line off a terminal, an upgrade's rows, the memory engine's wait and its timeout, and
+  the picker's line off a terminal, an upgrade's rows, the context engine's wait and its timeout, and
   the extension picker on a pseudo-terminal (skip, Ctrl+C, a failed install, an installed AgentK
   left out).
-- The memory engine: offline loading never downloads, for the embedder and the reranker.
+- The context engine: offline loading never downloads, for the embedder and the reranker.
 - Each release build runs `scripts/smoke-release.sh` on its own platform.
 
 Not covered automatically: a real launchd or systemd service (`meko install` writes the user's own

@@ -98,9 +98,9 @@ const notes = (product = 'agentk') => spawnSync('sh', [NOTES, '--product', produ
 const checkTitle = (title: string) => spawnSync('sh', [CHECK, '--no-length', title], { encoding: 'utf8' });
 
 describe('dependabot config', () => {
-  it("covers AgentK's npm, Meko's Go modules, memory engine and web UI, and GitHub Actions, assigns every PR, and sets its commit prefixes", () => {
+  it("covers AgentK's npm, Meko's Go modules, context engine and web UI, and GitHub Actions, assigns every PR, and sets its commit prefixes", () => {
     expect(updates().map((u) => `${u.ecosystem} ${u.directory}`).sort()).toEqual(
-      ['github-actions /', 'gomod /src/meko', `npm ${AGENTK}`, 'npm /src/meko/memory_engine', `npm ${WEB_UI}`]);
+      ['github-actions /', 'gomod /src/meko', `npm ${AGENTK}`, 'npm /src/meko/context_engine', `npm ${WEB_UI}`]);
     for (const u of updates()) {
       expect(u.assignees, u.directory).not.toEqual([]);
       // Without an explicit prefix Dependabot guesses one from the repo's history.
@@ -173,8 +173,8 @@ describe('dependabot config', () => {
   it.each([
     ['/', false, 'bump actions/checkout from 4 to 5'],
     ['/src/meko', false, 'bump github.com/labstack/echo/v4 from 4.16.0 to 4.17.0'],
-    ['/src/meko/memory_engine', false, 'bump mem0ai from 3.1.2 to 3.1.3'],
-    ['/src/meko/memory_engine', true, 'bump tsx from 4.23.15 to 4.23.16'],
+    ['/src/meko/context_engine', false, 'bump mem0ai from 3.1.2 to 3.1.3'],
+    ['/src/meko/context_engine', true, 'bump tsx from 4.23.15 to 4.23.16'],
     [WEB_UI, false, 'bump lucide-react from 0.545.0 to 0.546.0'],
     [WEB_UI, true, 'bump happy-dom from 21.0.2 to 21.0.4'],
   ])('does not release AgentK for a bump in %s (dev %s) on its own', (dir, dev, what) => {
@@ -182,12 +182,12 @@ describe('dependabot config', () => {
     expect(notes().status).toBe(3);
   });
 
-  // Meko bundles its Go modules, the memory engine's production packages and the web UI's
+  // Meko bundles its Go modules, the context engine's production packages and the web UI's
   // dependencies (built into web_ui/dist); dev-only tools ship with its next release.
   it.each([
     ['/src/meko', false, 'bump github.com/labstack/echo/v4 from 4.16.0 to 4.17.0', true],
-    ['/src/meko/memory_engine', false, 'bump mem0ai from 3.1.2 to 3.1.3', true],
-    ['/src/meko/memory_engine', true, 'bump tsx from 4.23.15 to 4.23.16', false],
+    ['/src/meko/context_engine', false, 'bump mem0ai from 3.1.2 to 3.1.3', true],
+    ['/src/meko/context_engine', true, 'bump tsx from 4.23.15 to 4.23.16', false],
     [WEB_UI, false, 'bump lucide-react from 0.545.0 to 0.546.0', true],
     [WEB_UI, true, 'bump happy-dom from 21.0.2 to 21.0.4', false],
     ['/', false, 'bump actions/checkout from 4 to 5', false],

@@ -88,7 +88,7 @@ func (r *rig) sender(release bool) *Sender {
 		Facts: func(context.Context) Install {
 			return Install{Version: "0.20261109.1", Commit: "abc1234", Platform: "linux", Arch: "amd64", Go: "go1.26.0",
 				Service: "systemd", Auth: "token", Secrets: "file", Update: Update{Channel: "stable", Auto: true},
-				MemoryEngine: "ready", Extensions: map[string]bool{"agentk": true}}
+				ContextEngine: "ready", Extensions: map[string]bool{"agentk": true}}
 		}})
 }
 

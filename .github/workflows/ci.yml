@@ -121,23 +121,23 @@ jobs:
             src/meko/go.mod
             src/meko/go.sum
 
-      # The memory engine (src/meko/memory_engine) is TypeScript on Node.
+      # The context engine (src/meko/context_engine) is TypeScript on Node.
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: |
-            src/meko/memory_engine/package-lock.json
+            src/meko/context_engine/package-lock.json
             src/meko/web_ui/package-lock.json
 
       # The Go end-to-end tests use the real embedding model (about 23 MB, from Hugging Face): keep it.
       - name: Cache the embedding model
         uses: actions/cache@v6
         with:
-          path: src/meko/memory_engine/.models
+          path: src/meko/context_engine/.models
           key: models-all-MiniLM-L6-v2-751bff3-q8-ms-marco-MiniLM-L-6-v2-a091443-q8
 
-      - run: make build memory_engine
+      - run: make build context_engine
       - run: ./bin/meko version
 
       - name: Lint
@@ -149,7 +149,7 @@ jobs:
       - run: go vet -tags sqlite_fts5,sqlite_vec ./...
       - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - run: npm run typecheck
-        working-directory: src/meko/memory_engine
+        working-directory: src/meko/context_engine
       - run: make test
 
   # Presenter (src/extensions/presenter).

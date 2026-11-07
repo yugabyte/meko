@@ -25,7 +25,7 @@ func TestHarnessSetup(t *testing.T) {
 		}})
 	elsewhere := fakeClaude(t)
 	for _, settings := range []string{"/settings/memory-extractor", "/settings/answers"} {
-		t.Setenv("PATH", "/usr/bin:/bin")           // the memory engine is running: it needs no Node now
+		t.Setenv("PATH", "/usr/bin:/bin")           // the context engine is running: it needs no Node now
 		for _, cred := range []string{"", "none"} { // "" keeps the client token's
 			as = cred
 			wantErr(t, e, "PUT", settings, map[string]any{"harness": "claude"}, 403, "FORBIDDEN")

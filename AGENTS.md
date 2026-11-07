@@ -14,7 +14,7 @@ keep current.
 
 | Path | What it is |
 |---|---|
-| `src/meko/` | Meko: the `meko` CLI and server, a Go module of its own (`github.com/yugabyte/meko/src/meko`) with its `Makefile`, docs and CI job (`meko` in `.github/workflows/ci.yml`), its Node memory engine in `src/meko/memory_engine`, and its web UI in `src/meko/web_ui`. |
+| `src/meko/` | Meko: the `meko` CLI and server, a Go module of its own (`github.com/yugabyte/meko/src/meko`) with its `Makefile`, docs and CI job (`meko` in `.github/workflows/ci.yml`), its Node context engine in `src/meko/context_engine`, and its web UI in `src/meko/web_ui`. |
 | `src/extensions/agentk/` | AgentK: its code, tests, scripts, packaging and docs, with its own `package.json`. |
 | `src/extensions/presenter/` | Presenter: interactive, branching presentations built from datapacks. Its server, its pages (served by Meko at `/ext/presenter/`), tests and docs, with its own `package.json`. Releases on its own train, whose tarballs Meko installs and updates. |
 | `assets/badges/` | The "meko context" badge, light and dark, that other projects' READMEs load from `main` by URL (the root README's Badges section), so the two files stay at this path, outside `src/`, and keep their names. Each is the first path of Meko's logo (`src/meko/assets/meko-logo.svg`) (the letters "meko", without "By yugabyteDB"), 13.5 px tall, then "context" outlined to paths from Inter Medium 12 px, on one baseline at y = 19.75, 10 px padding and a 6 px gap; 112×30, corners 3.5 px. Light: `#F1F3F5` fill, `#DCE0E5` border, `#121017` wordmark, `#4B5563` text. Dark: `#1C1B20`, `#34323A`, white, `#A1A1AA`. Remake them this way if the logo changes. |

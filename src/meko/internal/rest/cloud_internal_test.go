@@ -10,7 +10,7 @@ import (
 )
 
 // A tool's error reply maps to a status by its code: a missing datapack is a 404, the tool's own
-// failure (a _failed code) a 500 here or a 502 from Meko Cloud, a memory engine that's down a 503, and
+// failure (a _failed code) a 500 here or a 502 from Meko Cloud, a context engine that's down a 503, and
 // the rest a 400 with the tool's code.
 func TestToolReply(t *testing.T) {
 	for _, c := range []struct {
@@ -24,7 +24,7 @@ func TestToolReply(t *testing.T) {
 		{`{"error":"datapack_not_found","detail":"x"}`, true, 404, "NOT_FOUND"},
 		{`{"error":"search_failed","detail":"Meko couldn't complete the call."}`, false, 500, "INTERNAL_ERROR"},
 		{`{"error":"search_failed","detail":"x"}`, true, 502, "CLOUD_CALL_FAILED"},
-		{`{"error":"memory_engine_unavailable","detail":"x"}`, false, 503, "memory_engine_unavailable"},
+		{`{"error":"context_engine_unavailable","detail":"x"}`, false, 503, "context_engine_unavailable"},
 		{`{"error":"invalid_force_source","detail":"x"}`, false, 400, "invalid_force_source"},
 	} {
 		rec := httptest.NewRecorder()
