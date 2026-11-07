@@ -74,7 +74,7 @@ Link Meko to [Meko Cloud](https://cloud.mekodata.ai/) by signing in with your br
 API key you make there:
 
 ```sh
-meko cloud_link          # sign in with your browser, or enter a key; reads a piped key; --off unlinks
+meko cloud-link          # sign in with your browser, or enter a key; reads a piped key; --off unlinks
 ```
 
 Or use the web UI's Settings › Meko Cloud.

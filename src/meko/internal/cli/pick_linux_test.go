@@ -49,7 +49,7 @@ func openPTYTo(t *testing.T, shown io.Writer) (typing, term *os.File) {
 	return m, s
 }
 
-// On a real terminal, meko cloud_link's picker takes a number at once and swallows the Enter typed
+// On a real terminal, meko cloud-link's picker takes a number at once and swallows the Enter typed
 // after it out of habit, so the key prompt next reads what's typed for it, not an empty line; the
 // arrows and Enter pick too, and the terminal is left as it was.
 func TestPickKeyOnATerminal(t *testing.T) {

@@ -22,7 +22,7 @@ import (
 	"github.com/yugabyte/meko/src/meko/internal/secrets"
 )
 
-// cloudFlags are meko cloud_link's.
+// cloudFlags are meko cloud-link's.
 type cloudFlags struct {
 	url, webURL, apiURL string
 	off, noBrowser      bool
@@ -263,7 +263,7 @@ func cloudTokenOf(st cloudlink.State) cloudToken {
 }
 
 // readSecret reads one line: typed at prompt with echo off on a terminal, else from the input as
-// it is (a pipe: echo "$KEY" | meko cloud_link).
+// it is (a pipe: echo "$KEY" | meko cloud-link).
 func readSecret(in io.Reader, prompt io.Writer, text string) (string, error) {
 	f, ok := in.(*os.File)
 	if !ok || !interactiveFile(f) {

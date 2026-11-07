@@ -147,7 +147,7 @@ agents should read it before changing code there.
    holds a lock on that folder while the host runs.
 7. **Meko is the Meko on this computer; a project has at most one dedicated datapack.** It can't be
    turned off, and AgentK doesn't know or ask whether it's linked to Meko Cloud: no code branches on
-   local or Meko Cloud. Meko owns the link (its web UI's Settings › Meko Cloud, `meko cloud_link`)
+   local or Meko Cloud. Meko owns the link (its web UI's Settings › Meko Cloud, `meko cloud-link`)
    and its key, and its `/mcp` and its `/api/v1` (on the same origin, `mekoApiBase`) serve its own
    datapacks and pass any other id on to Meko Cloud while it's linked; what it can't do (sharing
    while unlinked) it refuses with an error that says what to do, which AgentK shows. AgentK reads

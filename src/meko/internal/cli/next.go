@@ -21,7 +21,7 @@ type nextFor int
 const (
 	nextInstall nextFor = iota // meko install
 	nextStart                  // meko start
-	nextUse                    // meko --help (while Meko runs), meko status and meko cloud_link
+	nextUse                    // meko --help (while Meko runs), meko status and meko cloud-link
 	nextConnect                // meko agent connect <agent>
 )
 
@@ -63,7 +63,7 @@ func nextSteps(s nextState, kind nextFor) [][2]string {
 			add("meko start", "start Meko")
 		}
 		add(s.agent.Command, "start a new "+s.agent.Title+" session, with Meko's tools (ones already running need a restart)")
-	case kind == nextUse && !s.running: // meko cloud_link with Meko stopped
+	case kind == nextUse && !s.running: // meko cloud-link with Meko stopped
 		add("meko start", "start Meko")
 	case s.webOff:
 		add("meko ui start", "turn the web UI on, when you want it")
@@ -77,7 +77,7 @@ func nextSteps(s nextState, kind nextFor) [][2]string {
 		add("meko memory-extractor use claude", "learn memories from your conversations, through Claude Code")
 	}
 	if !s.linked {
-		add("meko cloud_link", "share with your team through Meko Cloud")
+		add("meko cloud-link", "share with your team through Meko Cloud")
 	}
 	switch {
 	case !s.agentKRead, s.added == "agentk": // just added: opening it came first

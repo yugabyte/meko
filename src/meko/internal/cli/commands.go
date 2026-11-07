@@ -424,7 +424,7 @@ func storageStep(s *memory.StorageStatus, linked bool) (stepKind, string, bool) 
 	case s.UsedBytes >= s.LimitBytes && linked:
 		return stepFail, "full, " + used + ": delete what you don't need, or keep larger datasets in Meko Cloud", true
 	case s.UsedBytes >= s.LimitBytes:
-		return stepFail, "full, " + used + ": delete what you don't need, or run meko cloud_link for larger datasets",
+		return stepFail, "full, " + used + ": delete what you don't need, or run meko cloud-link for larger datasets",
 			true
 	case float64(s.UsedBytes) >= storageWarnAt*float64(s.LimitBytes):
 		return stepWarn, used + " used", true

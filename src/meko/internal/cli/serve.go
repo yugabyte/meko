@@ -350,7 +350,7 @@ func Serve(ctx context.Context, o ServeOptions) (err error) {
 	local := agents.Target{Kind: agents.KindLocal, URL: fmt.Sprintf("http://127.0.0.1:%d/mcp", cfg.Server.Port),
 		Token: clientToken}
 	agentsMgr := &agents.Manager{Lock: agentsLock(l), Target: func() (agents.Target, error) { return local, nil }}
-	// The Meko Cloud link: the web UI and meko cloud_link change it; /mcp then offers its tools, the
+	// The Meko Cloud link: the web UI and meko cloud-link change it; /mcp then offers its tools, the
 	// agents an older Meko connected to it come back here, and the running extensions hear.
 	cloud = &cloudlink.Service{Store: cloudSt, Check: cloudlink.CheckMCP, CheckAPI: cloudlink.CheckAPI,
 		List: cloudlink.ListDatapacks,
