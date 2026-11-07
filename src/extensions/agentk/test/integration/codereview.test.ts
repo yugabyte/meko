@@ -667,35 +667,10 @@ describe('code review before the PR (real session host + git, fake claude runnin
 
   describe('findings that wait on you (check)', () => {
     const one = (line: number, severity: string, comment: string) => ({ file: 'src/a.ts', line, severity, comment, gotchas: [] });
-    // On a timeout, what the review's session was asked last and what it answered say where it stopped.
-    const waiting = (id: string) => waitFor(() => env.core.sessions.get(id), (x) => x.codeReview?.state === 'triage', 30000, 'the findings to wait on you')
-      .catch(async (e: Error) => {
-        const pane = all<{ tmux_name: string }>(env.core.db, 'SELECT tmux_name FROM sessions WHERE parent_id = ?', id).at(-1)?.tmux_name;
-        const screen = pane ? await env.core.host.capture(pane).catch((x: Error) => `no capture: ${x.message}`) : '';
-        e.message += `\nthe review session's screen: ${JSON.stringify(screen.slice(-3000))}`;
-        const stdin = existsSync(join(env.fakeDir, 'stdin.log')) ? readFileSync(join(env.fakeDir, 'stdin.log'), 'utf8') : '';
-        e.message += `\nthe fakes' terminal input: ${stdin.slice(-6000)}`;
-        try {
-          const reviewRow = all(env.core.db, 'SELECT state, asked, detail FROM code_reviews WHERE task_id = ? ORDER BY rowid DESC LIMIT 1', id);
-          const childRow = all(env.core.db, 'SELECT status, status_detail, interrupted, desired FROM sessions WHERE parent_id = ?', id);
-          e.message += `\nthe review's row: ${JSON.stringify(reviewRow)}; its session's row: ${JSON.stringify(childRow)}; a turn end is being handled: ${env.core.sessions.turnEndsBusy()}`;
-        } catch (x) {
-          e.message += `\nno rows: ${String(x)}`;
-        }
-        const child = all<{ id: string; claude_session_id: string }>(env.core.db, 'SELECT id, claude_session_id FROM sessions WHERE parent_id = ?', id).at(-1);
-        const asked = child ? prompts(child.claude_session_id).slice(-2) : [];
-        const session = child ? env.core.sessions.get(child.id) : null;
-        const events = child ? all(env.core.db, 'SELECT kind, text, at FROM session_events WHERE session_id = ? ORDER BY at DESC LIMIT 8', child.id) : [];
-        const started = existsSync(join(env.fakeDir, 'review-starts.jsonl')) ? readFileSync(join(env.fakeDir, 'review-starts.jsonl'), 'utf8') : '';
-        e.message += `\nthe review session: ${JSON.stringify({ status: session?.status, events, at: Date.now() })}\nits calls started: ${started}`;
-        const calls = existsSync(join(env.fakeDir, 'review-calls.jsonl')) ? readFileSync(join(env.fakeDir, 'review-calls.jsonl'), 'utf8') : '';
-        throw new Error(`${e.message}\nthe review session was asked last: ${JSON.stringify(asked)}\nits tool calls: ${calls}`);
-      });
+    const waiting = (id: string) => waitFor(() => env.core.sessions.get(id), (x) => x.codeReview?.state === 'triage', 30000, 'the findings to wait on you');
     const keyAt = (id: string, line: number) => env.core.reviews.detail(id).findings.find((f) => f.line === line)!.key;
 
     it("holds a round's findings for your notes and dismissals, through Open PR, then sends the rest with the notes", async () => {
-      mkdirSync(env.fakeDir, { recursive: true });
-      fake('debug', '');
       const s = await task({ review: { rounds: 1, check: true } });
       fake('review-reports.json', { ...LEDGERS, diff: { summary: 'LGTM', findings: [one(2, 'blocker', 'Off by one.'), one(4, 'major', 'Rename it.')] } });
       await env.core.sessions.action(s.id, 'open-pr');

@@ -366,12 +366,7 @@ async function turn(text) {
   }
   if (text.includes('MEKO_SEARCH')) await mekoSearch();
   if (text.includes('ASK_USER') && modOn) await askUser();
-  if (text.includes('kode-review-')) {
-    await reviewSteps(text).catch((e) => {
-      appendFileSync(join(dir, 'review-starts.jsonl'), JSON.stringify({ error: String(e?.stack ?? e) }) + '\n');
-      throw e;
-    });
-  }
+  if (text.includes('kode-review-')) await reviewSteps(text);
   respond();
   // BACKGROUND: the turn ends with a shell and a subagent still running in the background, as
   // Claude Code's Stop reports them.
@@ -391,8 +386,7 @@ async function turn(text) {
 // `review-reports.json` in the fake's dir maps a pass name to its report (default LGTM), and
 // `review-scores.json` a step id to its score (default confirmed at 90); a `review-skip` file lists
 // steps to leave unreported, and `review-skip-once` steps to leave unreported only the first time
-// they're asked for. Every call and its answer go to `review-calls.jsonl`, and each call as it starts
-// to `review-starts.jsonl`.
+// they're asked for. Every call and its answer go to `review-calls.jsonl`.
 async function reviewSteps(text) {
   const read = (f, d) => {
     try {
@@ -404,14 +398,7 @@ async function reviewSteps(text) {
   const skip = read('review-skip', []);
   const once = read('review-skip-once', []);
   for (const m of text.matchAll(/Read (\S+) and do what it says\./g)) {
-    appendFileSync(join(dir, 'review-starts.jsonl'), JSON.stringify({ file: m[1], at: Date.now() }) + '\n');
-    let file;
-    try {
-      file = readFileSync(m[1], 'utf8');
-    } catch (e) {
-      appendFileSync(join(dir, 'review-starts.jsonl'), JSON.stringify({ file: m[1], error: String(e) }) + '\n');
-      throw e;
-    }
+    const file = readFileSync(m[1], 'utf8');
     const step = /"step": "([^"]+)"/.exec(file)?.[1];
     const tool = /call `([^`]+)` once/.exec(file)?.[1]?.split('__').pop();
     if (!step || !tool || skip.includes(step)) continue;
@@ -422,7 +409,6 @@ async function reviewSteps(text) {
     const input = tool === 'review_score'
       ? { step, score: read('review-scores.json', {})[step] ?? { read: ['src/a.ts:1-5'], refutation: '', verdict: 'confirmed', confidence: 90, reason: 'Read it; it holds.' } }
       : { step, report: read('review-reports.json', {})[step.split(':')[1]] ?? { summary: 'LGTM', findings: [] } };
-    appendFileSync(join(dir, 'review-starts.jsonl'), JSON.stringify({ step, tool, at: Date.now() }) + '\n');
     const r = await modPost('/tools', { v: 1, tool, input }).catch((e) => ({ status: 0, text: String(e) }));
     appendFileSync(join(dir, 'review-calls.jsonl'), JSON.stringify({ step, tool, status: r.status, text: r.text }) + '\n');
   }
@@ -501,10 +487,17 @@ if (prompt) await turn(prompt);
 
 let buf = '';
 let inPaste = false;
-process.stdin.on('data', async (chunk) => {
-  if (process.env.FAKE_CLAUDE_DEBUG || existsSync(join(dir, 'debug'))) appendFileSync(join(dir, 'stdin.log'), JSON.stringify({ t: Date.now(), chunk }) + '\n');
+// The start of a paste marker a read ended in, carried over to the next read.
+let partial = '';
+process.stdin.on('data', async (read) => {
+  if (process.env.FAKE_CLAUDE_DEBUG || existsSync(join(dir, 'debug'))) appendFileSync(join(dir, 'stdin.log'), JSON.stringify({ t: Date.now(), chunk: read }) + '\n');
   // Like Claude's TUI, a bracketed paste is one input: newlines inside it don't submit.
-  // The tty may split a paste across reads, so track the paste state across chunks.
+  // The tty may split a paste across reads, so track the paste state across chunks; a read can
+  // end inside a marker too (macOS reads 1,024 bytes at a time), so its start waits for the rest.
+  let chunk = partial + read;
+  // eslint-disable-next-line no-control-regex
+  partial = /\x1b(\[(2(0[01]?)?)?)?$/.exec(chunk)?.[0] ?? '';
+  chunk = chunk.slice(0, chunk.length - partial.length);
   // eslint-disable-next-line no-control-regex
   for (const part of chunk.split(/(\x1b\[20[01]~)/)) {
     if (part === '\x1b[200~') inPaste = true;
