@@ -694,6 +694,7 @@ describe('code review before the PR (real session host + git, fake claude runnin
     const keyAt = (id: string, line: number) => env.core.reviews.detail(id).findings.find((f) => f.line === line)!.key;
 
     it("holds a round's findings for your notes and dismissals, through Open PR, then sends the rest with the notes", async () => {
+      mkdirSync(env.fakeDir, { recursive: true });
       fake('debug', '');
       const s = await task({ review: { rounds: 1, check: true } });
       fake('review-reports.json', { ...LEDGERS, diff: { summary: 'LGTM', findings: [one(2, 'blocker', 'Off by one.'), one(4, 'major', 'Rename it.')] } });
